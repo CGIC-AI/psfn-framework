@@ -20,6 +20,7 @@ import {
 } from '../../../shared/contracts/episodic-memory.js';
 import {
   normalizeEpisodeClaimTransferInput,
+  normalizeEpisodeLifecycleStatus,
   normalizeEpisodeMessageClaimWriteInput,
   normalizeEpisodicDiagnosticsNow,
   summarizeEpisodicMaintenanceDiagnostics,
@@ -145,8 +146,11 @@ const EPISODE_LINEAGE_RELATIONS = new Set<EpisodeLineageRelation>([
   'updates',
 ]);
 const MESSAGE_CLAIM_STATUSES = new Set<EpisodeMessageClaimStatus>(['active', 'transferred']);
+// Candidate episodes are live memory (the only record of the day until the
+// nightly sleep cycle consolidates or confirms them), so list/search surfaces
+// include them alongside canonical episodes.
 const ACTIVE_CANONICAL_EPISODE_FILTER = `
-  (status IS NULL OR status = 'canonical')
+  (status IS NULL OR status IN ('canonical', 'candidate'))
   AND (canonical_episode_id IS NULL OR canonical_episode_id = id)
   AND merged_into_episode_id IS NULL
   AND superseded_by_episode_id IS NULL
@@ -406,8 +410,10 @@ export class PostgresEpisodicStore implements EpisodicStorePort {
 
   async createEpisode(input: EpisodeCreateInput): Promise<Episode> {
     const now = this.now().toISOString();
+    const lifecycleStatus = normalizeEpisodeLifecycleStatus(input.lifecycleStatus);
+    const { lifecycleStatus: _lifecycleStatus, ...episodeFields } = input;
     const episode = parseEpisode({
-      ...input,
+      ...episodeFields,
       schemaVersion: EPISODIC_CONTRACT_VERSION,
       id: input.id ?? this.idFactory(),
       createdAt: input.createdAt ?? now,
@@ -450,7 +456,7 @@ export class PostgresEpisodicStore implements EpisodicStorePort {
       episode.schemaVersion,
       episode.title,
       episode.landmark,
-      'canonical',
+      lifecycleStatus,
       episode.id,
       null,
       null,
@@ -489,41 +495,36 @@ export class PostgresEpisodicStore implements EpisodicStorePort {
       updatedAt: input.updatedAt ?? now,
     });
 
+    // Lifecycle columns (status, canonical/merged/superseded links) are
+    // intentionally NOT touched here: a content update must never silently
+    // promote a candidate to canonical or resurrect a folded episode.
     await executeQuery(this.pool, `
       UPDATE l01_episodes
       SET
         schema_version = $2,
         title = $3,
         landmark = $4,
-        status = $5,
-        canonical_episode_id = $6,
-        merged_into_episode_id = $7,
-        superseded_by_episode_id = $8,
-        thread_id = $9,
-        channel_id = $10,
-        started_at = $11,
-        ended_at = $12,
-        participant_contact_ids = $13::jsonb,
-        salience_score = $14,
-        salience_json = $15::jsonb,
-        affect_json = $16::jsonb,
-        themes = $17::jsonb,
-        artifact_refs = $18::jsonb,
-        provenance_refs = $19::jsonb,
-        scope_json = $20::jsonb,
-        consent_flags = $21::jsonb,
-        episode_json = $22::jsonb,
-        updated_at = $23
+        thread_id = $5,
+        channel_id = $6,
+        started_at = $7,
+        ended_at = $8,
+        participant_contact_ids = $9::jsonb,
+        salience_score = $10,
+        salience_json = $11::jsonb,
+        affect_json = $12::jsonb,
+        themes = $13::jsonb,
+        artifact_refs = $14::jsonb,
+        provenance_refs = $15::jsonb,
+        scope_json = $16::jsonb,
+        consent_flags = $17::jsonb,
+        episode_json = $18::jsonb,
+        updated_at = $19
       WHERE id = $1
     `, [
       episode.id,
       episode.schemaVersion,
       episode.title,
       episode.landmark,
-      'canonical',
-      episode.id,
-      null,
-      null,
       episode.threadId ?? null,
       episode.channelId ?? null,
       episode.startedAt,
@@ -561,6 +562,27 @@ export class PostgresEpisodicStore implements EpisodicStorePort {
     `, [sourceId, targetId, this.now().toISOString()]);
     if (result.rowCount === 0) {
       throw new Error(`episode "${sourceId}" does not exist`);
+    }
+  }
+
+  /**
+   * Sleep-cycle confirmation: candidate -> canonical. Fails closed for
+   * unknown or non-live episodes; idempotent when already canonical.
+   */
+  async confirmEpisodeCanonical(episodeId: string): Promise<void> {
+    const normalizedId = parseRequiredText(episodeId, 'episode id');
+    const result = await executeQuery(this.pool, `
+      UPDATE l01_episodes
+      SET status = 'canonical', updated_at = $2
+      WHERE id = $1
+        AND merged_into_episode_id IS NULL
+        AND superseded_by_episode_id IS NULL
+    `, [normalizedId, this.now().toISOString()]);
+    if (result.rowCount === 0) {
+      if (!(await this.getEpisode(normalizedId))) {
+        throw new Error(`episode "${normalizedId}" does not exist`);
+      }
+      throw new Error(`episode "${normalizedId}" is no longer live and cannot be confirmed canonical`);
     }
   }
 
@@ -614,6 +636,12 @@ export class PostgresEpisodicStore implements EpisodicStorePort {
 
     const where = [ACTIVE_CANONICAL_EPISODE_FILTER];
     const params: Array<string | number> = [];
+    if (options.lifecycleStatus !== undefined) {
+      const lifecycleStatus = normalizeEpisodeLifecycleStatus(options.lifecycleStatus);
+      where.push(lifecycleStatus === 'candidate'
+        ? "status = 'candidate'"
+        : "(status IS NULL OR status = 'canonical')");
+    }
     if (from !== undefined) {
       params.push(from);
       where.push(`ended_at >= $${params.length}`);

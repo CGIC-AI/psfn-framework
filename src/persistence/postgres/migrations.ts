@@ -475,6 +475,10 @@ export const POSTGRES_MEMORY_MIGRATIONS = [
   `,
   `CREATE INDEX IF NOT EXISTS idx_memory_links_id1 ON memory_links(id1);`,
   `CREATE INDEX IF NOT EXISTS idx_memory_links_id2 ON memory_links(id2);`,
+  // Sleep-cycle consolidation (m58.1): fast scan of live candidate episodes
+  // awaiting the nightly candidate-then-consolidate pass. The status CHECK on
+  // l01_episodes already admits 'candidate'.
+  `CREATE INDEX IF NOT EXISTS idx_l01_episodes_lifecycle_candidate ON l01_episodes(started_at, ended_at) WHERE status = 'candidate';`,
   `
   CREATE TABLE IF NOT EXISTS contact_profiles (
     contact_id TEXT PRIMARY KEY,

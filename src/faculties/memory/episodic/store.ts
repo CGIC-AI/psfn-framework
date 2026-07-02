@@ -13,6 +13,20 @@ import {
   type EpisodeProvenanceRef,
 } from '../../../shared/contracts/episodic-memory.js';
 
+/**
+ * Episode lifecycle status for the candidate-then-consolidate model.
+ *
+ * - `candidate`: near-real-time synthesis output awaiting the nightly
+ *   sleep-cycle pass. Candidates stay fully live for retrieval (they are the
+ *   only record of the day until the sleep cycle runs).
+ * - `canonical`: confirmed by a sleep cycle, produced by consolidation, or a
+ *   legacy episode predating candidate tracking (stored as NULL).
+ *
+ * Merged/superseded episodes are tracked by their own columns and are never
+ * live regardless of lifecycle status.
+ */
+export type EpisodeLifecycleStatus = 'candidate' | 'canonical';
+
 export type EpisodeCreateInput = Omit<
   Episode,
   'schemaVersion' | 'id' | 'createdAt' | 'updatedAt'
@@ -20,6 +34,8 @@ export type EpisodeCreateInput = Omit<
   id?: string;
   createdAt?: string;
   updatedAt?: string;
+  /** Defaults to 'canonical'; near-real-time synthesis passes 'candidate'. */
+  lifecycleStatus?: EpisodeLifecycleStatus;
 };
 
 export type EpisodeUpdateInput = Omit<
@@ -237,6 +253,11 @@ export interface EpisodeListOptions {
 export interface EpisodeTimeSearchOptions extends EpisodeListOptions {
   from?: string;
   to?: string;
+  /**
+   * Restrict to one lifecycle status. 'canonical' includes legacy episodes
+   * stored without an explicit status. Omitted => all live episodes.
+   */
+  lifecycleStatus?: EpisodeLifecycleStatus;
 }
 
 export interface EpisodeArcListOptions {
@@ -257,6 +278,12 @@ export interface EpisodicStorePort {
   updateEpisode(input: EpisodeUpdateInput): EpisodicStoreResult<Episode>;
   /** Folds an episode into a canonical target: it stops appearing in list/search results but remains retrievable by id. */
   markEpisodeMerged(episodeId: string, mergedIntoEpisodeId: string): EpisodicStoreResult<void>;
+  /**
+   * Sleep-cycle confirmation: promotes a live candidate episode to canonical.
+   * Idempotent for already-canonical live episodes; fails closed when the
+   * episode does not exist or is no longer live (merged/superseded).
+   */
+  confirmEpisodeCanonical(episodeId: string): EpisodicStoreResult<void>;
   getEpisode(id: string): EpisodicStoreResult<Episode | undefined>;
   getEpisodesByIds(ids: readonly string[]): EpisodicStoreResult<Episode[]>;
   listEpisodes(options?: EpisodeListOptions): EpisodicStoreResult<Episode[]>;
@@ -378,6 +405,7 @@ const CANDIDATE_DECISION_STATUSES = new Set<EpisodeCandidateDecisionStatus>([
   'needs_review',
 ]);
 const MESSAGE_CLAIM_STATUSES = new Set<EpisodeMessageClaimStatus>(['active', 'transferred']);
+const EPISODE_LIFECYCLE_STATUSES = new Set<EpisodeLifecycleStatus>(['candidate', 'canonical']);
 const EPISODE_LINEAGE_RELATIONS = new Set<EpisodeLineageRelation>([
   'canonicalizes',
   'merges',
@@ -885,6 +913,26 @@ export function normalizeEpisodeClaimTransferInput(
   };
 }
 
+export function normalizeEpisodeLifecycleStatus(
+  value: EpisodeLifecycleStatus | undefined,
+): EpisodeLifecycleStatus {
+  if (value === undefined) return 'canonical';
+  if (!EPISODE_LIFECYCLE_STATUSES.has(value)) {
+    throw new Error(`episode lifecycleStatus is not supported: ${String(value)}`);
+  }
+  return value;
+}
+
+/**
+ * SQL predicate for one lifecycle status. Legacy rows store NULL and count
+ * as canonical; merged/superseded rows are excluded by the live filters.
+ */
+function lifecycleStatusPredicate(status: EpisodeLifecycleStatus): string {
+  return status === 'candidate'
+    ? "status = 'candidate'"
+    : "(status IS NULL OR status = 'canonical')";
+}
+
 function normalizeWatermarkScope(scope: EpisodicProcessingWatermarkScope): EpisodicProcessingWatermarkScope {
   return {
     processor: parseRequiredText(scope.processor, 'processor'),
@@ -950,8 +998,10 @@ export class EpisodicStore implements EpisodicStorePort {
 
   createEpisode(input: EpisodeCreateInput): Episode {
     const now = this.now().toISOString();
+    const lifecycleStatus = normalizeEpisodeLifecycleStatus(input.lifecycleStatus);
+    const { lifecycleStatus: _lifecycleStatus, ...episodeFields } = input;
     const episode = parseEpisode({
-      ...input,
+      ...episodeFields,
       schemaVersion: EPISODIC_CONTRACT_VERSION,
       id: input.id ?? this.idFactory(),
       createdAt: input.createdAt ?? now,
@@ -966,11 +1016,12 @@ export class EpisodicStore implements EpisodicStorePort {
         started_at,
         ended_at,
         salience_score,
+        status,
         episode_json,
         created_at,
         updated_at
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       episode.id,
       episode.threadId ?? null,
@@ -978,12 +1029,34 @@ export class EpisodicStore implements EpisodicStorePort {
       episode.startedAt,
       episode.endedAt,
       episode.salience.score,
+      lifecycleStatus,
       serializeEpisode(episode),
       episode.createdAt,
       episode.updatedAt,
     );
 
     return episode;
+  }
+
+  /**
+   * Sleep-cycle confirmation: candidate -> canonical. Fails closed for
+   * unknown or non-live episodes; idempotent when already canonical.
+   */
+  confirmEpisodeCanonical(episodeId: string): void {
+    const normalizedId = parseRequiredText(episodeId, 'episode id');
+    const result = this.db.prepare(`
+      UPDATE l01_episodes
+      SET status = 'canonical', updated_at = ?
+      WHERE id = ?
+        AND merged_into_episode_id IS NULL
+        AND superseded_by_episode_id IS NULL
+    `).run(this.now().toISOString(), normalizedId);
+    if (result.changes === 0) {
+      if (!this.getEpisode(normalizedId)) {
+        throw new Error(`episode "${normalizedId}" does not exist`);
+      }
+      throw new Error(`episode "${normalizedId}" is no longer live and cannot be confirmed canonical`);
+    }
   }
 
   updateEpisode(input: EpisodeUpdateInput): Episode {
@@ -1073,6 +1146,12 @@ export class EpisodicStore implements EpisodicStorePort {
 
     const where: string[] = ['merged_into_episode_id IS NULL', 'superseded_by_episode_id IS NULL'];
     const params: Array<string | number> = [];
+    if (options.lifecycleStatus !== undefined) {
+      if (!EPISODE_LIFECYCLE_STATUSES.has(options.lifecycleStatus)) {
+        throw new Error(`episode lifecycleStatus is not supported: ${String(options.lifecycleStatus)}`);
+      }
+      where.push(lifecycleStatusPredicate(options.lifecycleStatus));
+    }
     if (from !== undefined) {
       where.push('ended_at >= ?');
       params.push(from);

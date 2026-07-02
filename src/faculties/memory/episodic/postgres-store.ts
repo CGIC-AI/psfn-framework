@@ -1325,10 +1325,10 @@ export class PostgresEpisodicStore implements EpisodicStorePort {
       WHERE id = $1
       LIMIT 1
     `, [normalizedId]);
-    const row = result.rows[0];
-    if (!row) {
+    if (result.rows.length === 0) {
       throw new Error(`${field} references unknown episode "${normalizedId}"`);
     }
+    const row = result.rows[0];
     if (row.merged_into_episode_id !== null || row.superseded_by_episode_id !== null) {
       throw new Error(`${field} references episode "${normalizedId}" which is no longer live`);
     }

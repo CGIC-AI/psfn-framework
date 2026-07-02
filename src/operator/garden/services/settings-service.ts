@@ -43,6 +43,8 @@ import {
   listStreamingTtsProviders,
 } from '../../../primitives/voice/connectors/tts/index.js';
 import type {
+  AdminChannelEnvelopeData,
+  AdminChannelEnvelopeRow,
   AdminSettingsData,
   AdminSettingsDivergence,
   AdminSettingsStatus,
@@ -53,6 +55,9 @@ import type {
   SettingsValidationError,
   SettingsConfigEditors,
 } from './types.js';
+import { parseContextEnvelopeSection } from '../../../channels/backplane/config.js';
+import { validateChannelEnvelopeLabel } from '../../../system/trust/context-envelope.js';
+import { resolveChannelEnvelopeClassification } from '../../../system/trust/policy.js';
 
 const IMPORT_ROUTE_MODE_VALUES = new Set(IMPORT_PROCESSING_ROUTE_MODE_VALUES);
 const SESSION_RESTART_BEHAVIOR_VALUES_SET = new Set(SESSION_RESTART_BEHAVIOR_VALUES);
@@ -841,6 +846,115 @@ export class AdminSettingsDataService implements AdminSettingsService {
       }
       const status = this.updateDivergences(mutationResult.refreshedKeys, mutationResult.divergences);
       return this.buildSuccessfulSaveResult('Settings updated', status);
+    } catch (error) {
+      return { ok: false, message: toErrorMessage(error) };
+    }
+  }
+
+  // ── Garden channel Context Envelope view (E3.2) ──
+
+  /**
+   * Splits the channels.json root into (root, scoped) taking the optional
+   * `channels` wrapper into account, mirroring loadRuntimeChannelsConfig.
+   */
+  private loadChannelsOwnerScopes(): {
+    root: Record<string, unknown>;
+    scopedRoot: Record<string, unknown>;
+    hasWrapper: boolean;
+  } {
+    const root = this.deps.configStore.loadChannelsOwnerFile();
+    const hasWrapper = isRecord(root.channels);
+    const scopedRoot = hasWrapper ? root.channels as Record<string, unknown> : root;
+    return { root, scopedRoot, hasWrapper };
+  }
+
+  /**
+   * Channel list for the Garden CHANNELS view: every channel owning a
+   * channels.json envelope label or an exact operator override, classified
+   * through the contract precedence (channel-owned label > operator override
+   * > derived default) against the freshly loaded owner files.
+   */
+  getChannelEnvelopeData(): AdminChannelEnvelopeData {
+    const { scopedRoot } = this.loadChannelsOwnerScopes();
+    const labels = parseContextEnvelopeSection(scopedRoot).channels;
+    const trustPolicy = this.deps.configStore.loadTrustPolicy();
+
+    const channelIds = new Set<string>([
+      ...Object.keys(labels),
+      ...Object.keys(trustPolicy.channelClassification.visibilityOverrides.exact),
+    ]);
+
+    const channels: AdminChannelEnvelopeRow[] = [...channelIds]
+      .sort((a, b) => a.localeCompare(b))
+      .map((channelId) => {
+        const label = Object.hasOwn(labels, channelId) ? labels[channelId] : undefined;
+        const classification = resolveChannelEnvelopeClassification(channelId, undefined, {
+          ...(label ? { label } : {}),
+          trustPolicy,
+        });
+        return {
+          channelId,
+          privacy: classification.privacy,
+          broadcast: classification.broadcast,
+          contactTracking: classification.contactTracking,
+          source: classification.source,
+          needsReview: classification.needsReview,
+          hasLabel: label !== undefined,
+          ...(label ? { label } : {}),
+        };
+      });
+
+    return {
+      channels,
+      prefixOverrides: { ...trustPolicy.channelClassification.visibilityOverrides.prefix },
+      privatePrefixes: [...trustPolicy.channelClassification.privatePrefixes],
+      broadcastPrefixes: [...trustPolicy.channelClassification.broadcastPrefixes],
+    };
+  }
+
+  /**
+   * Upserts (label object) or removes (null) one channel-owned envelope label
+   * through the owner-file path with full fail-closed validation.
+   */
+  saveChannelEnvelopeLabel(channelIdRaw: string, label: unknown): ConfigUpdateResult {
+    const channelId = channelIdRaw.trim();
+    if (!channelId) {
+      return { ok: false, message: 'channelId must be a non-empty string' };
+    }
+
+    try {
+      const { root, scopedRoot, hasWrapper } = this.loadChannelsOwnerScopes();
+      const currentChannels = parseContextEnvelopeSection(scopedRoot).channels;
+      const nextChannels: Record<string, unknown> = { ...currentChannels };
+
+      if (label === null || label === undefined) {
+        if (!Object.prototype.hasOwnProperty.call(nextChannels, channelId)) {
+          return { ok: false, message: `No channel-owned envelope label exists for '${channelId}'` };
+        }
+        delete nextChannels[channelId];
+      } else {
+        nextChannels[channelId] = validateChannelEnvelopeLabel(
+          label,
+          `contextEnvelope.channels.${channelId}`,
+        );
+      }
+
+      const nextScopedRoot: Record<string, unknown> = {
+        ...scopedRoot,
+        contextEnvelope: { channels: nextChannels },
+      };
+      const nextRoot: Record<string, unknown> = hasWrapper
+        ? { ...root, channels: nextScopedRoot }
+        : nextScopedRoot;
+      // saveChannelsOwnerFile re-validates the contextEnvelope section fail-closed.
+      this.deps.configStore.saveChannelsOwnerFile(nextRoot);
+      invalidatePromptCacheAfterOwnerMutation(this.deps.config, 'owner-file:channels');
+      return {
+        ok: true,
+        message: label === null || label === undefined
+          ? `Channel envelope label removed for ${channelId}`
+          : `Channel envelope label saved for ${channelId}`,
+      };
     } catch (error) {
       return { ok: false, message: toErrorMessage(error) };
     }

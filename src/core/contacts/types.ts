@@ -26,6 +26,14 @@ export interface ContactChannelIdentity {
 }
 
 export interface ContactChannelLink extends ContactChannelIdentity {
+  /**
+   * @deprecated E3.2 (Context Envelope contract, docs/context-envelope.md):
+   * per-contact privacy labels are provenance EVIDENCE only. They must never
+   * feed channel classification or policy gating — channel privacy is owned
+   * by channels.json contextEnvelope labels, operator trust-policy overrides,
+   * and derived defaults. Rows are retained for history; removal of the
+   * column is a later cleanup bead.
+   */
   privacyLevel: ChannelPrivacyLevel;
   firstSeen?: string;
   lastSeen?: string;
@@ -36,10 +44,19 @@ export interface ContactConversationChannel {
   channelId: string;
   firstSeen: string;
   lastSeen: string;
+  /**
+   * @deprecated E3.2 (Context Envelope contract, docs/context-envelope.md):
+   * provenance evidence only — never a classification or gating input.
+   * Retained for history; column removal is a later cleanup bead.
+   */
   privacyLevel?: ChannelPrivacyLevel;
 }
 
 export interface ContactIdentityLinkOptions {
+  /**
+   * @deprecated E3.2: recorded as provenance evidence on the contact row
+   * only; never consulted by channel classification (docs/context-envelope.md).
+   */
   privacyLevel?: ChannelPrivacyLevel;
 }
 
@@ -100,6 +117,10 @@ export interface ContactIdentityLinkVerificationInput {
   nonce: string;
   expiresAt: string;
   signature: string;
+  /**
+   * @deprecated E3.2: provenance evidence recorded on the resulting channel
+   * link only; never a classification or gating input (docs/context-envelope.md).
+   */
   privacyLevel?: ChannelPrivacyLevel;
 }
 

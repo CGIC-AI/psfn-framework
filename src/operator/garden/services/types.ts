@@ -93,6 +93,12 @@ import type {
 } from '../../../core/contacts/types.js';
 import type { ChannelVisibility, SensitivityLevel, TrustLevel } from '../../../system/trust/types.js';
 import type {
+  ChannelEnvelopeLabel,
+  ChannelPrivacy,
+  ContactTrackingMode,
+} from '../../../system/trust/context-envelope.js';
+import type { ChannelClassificationSource } from '../../../system/trust/policy.js';
+import type {
   CapabilityTierConfig,
 } from '../../../system/config/capability-tier-config.js';
 import type { ChargePolicyConfig } from '../../../system/config/charge-policy-config.js';
@@ -1233,6 +1239,34 @@ export interface AdminSettingsService {
   updateSettings(body: string): ConfigUpdateResult;
   getSubConfigJson(key: string): string | null;
   saveSubConfigJson(key: string, json: string): ConfigUpdateResult;
+  getChannelEnvelopeData(): AdminChannelEnvelopeData;
+  saveChannelEnvelopeLabel(channelId: string, label: unknown): ConfigUpdateResult;
+}
+
+/**
+ * Garden channel list row (E3.2): the resolved Context Envelope classification
+ * for one channel plus its owning source tier and review state.
+ */
+export interface AdminChannelEnvelopeRow {
+  channelId: string;
+  privacy: ChannelPrivacy;
+  broadcast: boolean;
+  contactTracking: ContactTrackingMode;
+  source: ChannelClassificationSource;
+  /** Migration-seeded fail-closed label awaiting operator review (warning badge). */
+  needsReview: boolean;
+  /** True when channels.json carries an owned label for this channel. */
+  hasLabel: boolean;
+  label?: ChannelEnvelopeLabel;
+}
+
+export interface AdminChannelEnvelopeData {
+  channels: AdminChannelEnvelopeRow[];
+  /** Operator trust-policy prefix overrides (informational; tier 2). */
+  prefixOverrides: Record<string, string>;
+  /** Demoted derived-default prefix heuristics (informational; tier 3). */
+  privatePrefixes: string[];
+  broadcastPrefixes: string[];
 }
 
 export interface AdminContactListData {

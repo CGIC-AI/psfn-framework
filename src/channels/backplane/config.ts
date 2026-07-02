@@ -129,7 +129,12 @@ export function createDefaultChannelContextEnvelopeConfig(): ChannelContextEnvel
   return { channels: {} };
 }
 
-function parseContextEnvelopeSection(
+/**
+ * Fail-closed parser for the channels.json `contextEnvelope` section.
+ * Exported (E3.2) so Garden channel views and the one-time channel-envelope
+ * migration validate against exactly the same rules as runtime load.
+ */
+export function parseContextEnvelopeSection(
   scopedRoot: Record<string, unknown>,
 ): ChannelContextEnvelopeConfig {
   const section = parseSectionObject(scopedRoot, 'contextEnvelope');
@@ -358,6 +363,12 @@ export function saveChannelsOwnerFile(
   if (!isRecord(nextConfig)) {
     throw new Error('channels.json must contain a JSON object at the root');
   }
+
+  // E3.2: owner-file validation on save — the contextEnvelope section is the
+  // channel-owned classification authority, so writes that would fail the
+  // runtime load validation are rejected fail-closed instead of persisted.
+  const scopedRoot = parseSectionObject(nextConfig, 'channels') ?? nextConfig;
+  parseContextEnvelopeSection(scopedRoot);
 
   const filePath = join(dataDir, CHANNELS_FILE_NAME);
   writeJsonAtomic(filePath, nextConfig);

@@ -8,7 +8,7 @@ import type { MessagePromptOverride, ResponseStyle, SubstrateMessage } from '../
 import type { CoreSubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
 import type { RuntimeMode } from '../tool-wiring-validator.js';
 import type { EventBridge } from '../event-bridge.js';
-import type { LLMProviderPort, MemoryExtractor, MemoryProvider } from '../contracts.js';
+import type { LLMProviderPort, MemoryExtractor, MemoryProvider, WikiRetrievalPort } from '../contracts.js';
 import type { SatellitePresencePort } from '../satellite-adapter-port.js';
 import type { SkillsRuntime } from '../../../faculties/skills/runtime.js';
 import type { TurnToolSummary } from '../../../faculties/skills/reflection-nudge.js';
@@ -149,6 +149,7 @@ export interface TurnExecutionAdapterOptions {
   systemPrompt: string;
   memoryProvider: MemoryProvider | null;
   memoryExtractor: MemoryExtractor | null;
+  wikiRetrieval: WikiRetrievalPort | null;
   skillsRuntime: SkillsRuntime | null;
   evaluateReflectionNudge: (toolSummary: TurnToolSummary) => string | null;
   emotionSelfModelRuntime: EmotionSelfModelRuntime;
@@ -178,6 +179,7 @@ export function createTurnExecutionRuntimeAdapter(
     promptCacheRuntime: options.promptCacheRuntime,
     memoryProvider: options.memoryProvider,
     memoryExtractor: options.memoryExtractor,
+    wikiRetrieval: options.wikiRetrieval,
     skillsRuntime: options.skillsRuntime,
     evaluateReflectionNudge: (toolSummary) => options.evaluateReflectionNudge(toolSummary),
     emotionSelfModelRuntime: options.emotionSelfModelRuntime,

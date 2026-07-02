@@ -2,7 +2,7 @@
 // Shared interfaces used by agent, session, memory, gateway, and REPL modules.
 // This module is intentionally dependency-light to avoid circular imports.
 
-import type { CompletionPurpose, LLMRequestMetadata, LLMContext, LLMResponse, StreamCallbacks, TurnID } from '../../shared/contracts/runtime.js';
+import type { CompletionPurpose, CorrelationMetadata, LLMRequestMetadata, LLMContext, LLMResponse, StreamCallbacks, TurnID } from '../../shared/contracts/runtime.js';
 import type { TrustLevel } from '../../system/trust/types.js';
 import type { ChannelMeta } from '../../system/trust/policy.js';
 import type { TurnMemorySnapshot } from '../turns/snapshot.js';
@@ -37,6 +37,22 @@ export interface EmbeddingProviderPort {
   embed(text: string): Promise<Float32Array>;
   embedBatch(texts: string[]): Promise<Float32Array[]>;
   readonly dims: number;
+}
+
+/**
+ * E8.3: supplemental wiki RAG surface consumed by turn execution. Held on the
+ * agent as an optional provider (null until wired); pre-turn assembly calls it
+ * AFTER memory context is resolved and appends the returned block as its own
+ * labeled section. Implementations fail closed (return '') rather than throw.
+ */
+export interface WikiRetrievalPort {
+  retrieveContextBlock(request: {
+    channelId: string;
+    queryText: string;
+    isDirectMessage: boolean | undefined;
+    focusActive: boolean;
+    correlation?: Partial<CorrelationMetadata>;
+  }): Promise<string>;
 }
 
 export interface RetrievalVADInput {

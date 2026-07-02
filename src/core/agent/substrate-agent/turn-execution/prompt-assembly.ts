@@ -157,6 +157,7 @@ export async function assembleTurnPrompt(input: {
   preTurnInternalState: InternalState;
   emotionAppraisalChain: readonly EmotionAppraisalEntry[];
   memoryContextBlock: string;
+  wikiContextBlock: string;
   scratchpadBlock: string;
   turnBudgetCharacteristics: ContextBudgetTurnCharacteristics;
   continuitySubjectKey: string | undefined;
@@ -185,6 +186,7 @@ export async function assembleTurnPrompt(input: {
     preTurnInternalState,
     emotionAppraisalChain,
     memoryContextBlock,
+    wikiContextBlock,
     scratchpadBlock,
     turnBudgetCharacteristics,
     continuitySubjectKey,
@@ -483,6 +485,20 @@ export async function assembleTurnPrompt(input: {
       producer: sessionScope?.producer ?? 'session.context-builder',
       ...(sessionScope?.scopeKey ? { scopeKey: sessionScope.scopeKey } : {}),
       renderedText: sessionBlock.content,
+    }));
+  }
+  // E8.3: supplemental wiki RAG block, appended to the plan AFTER all memory
+  // session blocks so it renders below memory context and never displaces it.
+  // The block is already bounded to its own config-owned token cap by the wiki
+  // retrieval service; here it is only positioned, never re-budgeted against
+  // memory.
+  if (wikiContextBlock.trim().length > 0) {
+    planBlocks.push(createPromptPlanBlock({
+      id: 'wiki.retrieval',
+      layer: 'session',
+      volatility: 'turn',
+      producer: 'wiki.retrieval-service',
+      renderedText: wikiContextBlock,
     }));
   }
   const systemContextPromptBlock = buildSystemContextPromptBlock(context.messages);

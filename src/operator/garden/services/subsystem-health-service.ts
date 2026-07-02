@@ -161,6 +161,11 @@ const EVENT_LANE_DEFINITIONS: readonly EventLaneDefinition[] = [
     label: 'Concern candidate review gate',
     description: 'Follow-up candidate review; gated on pending count + turn interval (jpvd.4).',
   },
+  {
+    id: 'wiki_projection_rag',
+    label: 'Wiki projection + RAG lane',
+    description: 'Wiki pgvector projection sync and supplemental chat RAG (E8.3); fails closed for search, never blocks writes, and is deterministically gated (skips carry a reason).',
+  },
 ];
 
 /**
@@ -375,6 +380,43 @@ export class AdminSubsystemHealthDataService implements AdminSubsystemHealthServ
             ['proposed', trimNumber(payload.proposed)],
             ['conflicts', trimNumber(payload.conflicts)],
             ['deduped', trimNumber(payload.deduped)],
+          ]),
+        });
+      }),
+    );
+
+    // E8.3: wiki pgvector projection sync outcomes. A failed embedding/write
+    // fails closed for semantic search but never blocks the wiki write.
+    this.unsubscribers.push(
+      eventBus.on('wiki.projection.sync', (payload) => {
+        this.record('wiki_projection_rag', {
+          at: trimNumber(payload.timestamp) ?? this.now(),
+          outcome: payload.outcome === 'failed' ? 'failed' : 'ran',
+          reason: payload.outcome === 'failed' ? 'projection_sync_failed' : 'projection_synced',
+          ...(payload.error ? { error: payload.error } : {}),
+          counts: collectCounts([
+            ['chunks', trimNumber(payload.chunkCount)],
+          ]),
+        });
+      }),
+    );
+
+    // E8.3: supplemental wiki RAG retrieval outcomes/skips for chat turns.
+    this.unsubscribers.push(
+      eventBus.on('wiki.retrieval', (payload) => {
+        this.record('wiki_projection_rag', {
+          at: trimNumber(payload.timestamp) ?? this.now(),
+          outcome: payload.outcome === 'skipped'
+            ? 'skipped'
+            : payload.outcome === 'degraded'
+              ? 'degraded'
+              : 'ran',
+          ...(payload.reason ? { reason: payload.reason } : {}),
+          ...(payload.error ? { error: payload.error } : {}),
+          counts: collectCounts([
+            ['candidates', trimNumber(payload.candidateCount)],
+            ['selected', trimNumber(payload.selectedCount)],
+            ['tokens', trimNumber(payload.tokenCount)],
           ]),
         });
       }),

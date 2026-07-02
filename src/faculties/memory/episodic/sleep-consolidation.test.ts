@@ -705,6 +705,80 @@ describe('SleepCycleEpisodeConsolidator candidate consolidation (m58.1)', () => 
     expect(await store.listEpisodes()).toHaveLength(1);
     expect(activeClaimKeyDuplicates()).toEqual([]);
   });
+
+  it('re-points arc memberships when consolidation supersedes candidates (m58.2)', async () => {
+    const store = makeStore();
+    // An earlier canonical episode already linked by an arc to one of the
+    // candidates that consolidation will fold away tonight.
+    await store.createEpisode(candidateInput(
+      'earlier-canon',
+      '2026-06-08T20:00:00.000Z',
+      '2026-06-08T21:00:00.000Z',
+      { lifecycleStatus: 'canonical' },
+    ));
+    await seedClaimedCandidate(
+      store,
+      candidateInput('c-1', '2026-06-10T16:00:00.000Z', '2026-06-10T16:20:00.000Z'),
+      ['msg-1'],
+    );
+    await seedClaimedCandidate(
+      store,
+      candidateInput('c-2', '2026-06-10T16:25:00.000Z', '2026-06-10T16:50:00.000Z'),
+      ['msg-2'],
+    );
+    const arc = await store.writeEpisodeArc({
+      sourceEpisodeId: 'earlier-canon',
+      targetEpisodeId: 'c-1',
+      arcKind: 'same_theme',
+      salience: 0.6,
+      confidence: 0.8,
+      themes: ['the ongoing thread'],
+      spanRefs: [],
+      artifactRefs: [],
+      provenanceRefs: [],
+    });
+
+    const llm = complete((systemPrompt) => {
+      if (!systemPrompt.includes('memory-consolidation stage')) {
+        throw new Error(`unexpected non-grouping call: ${systemPrompt.slice(0, 60)}`);
+      }
+      return groupingResponse([{
+        candidate_ids: ['c-1', 'c-2'],
+        title: 'One consolidated stretch',
+        landmark: 'The whole stretch was one conversation.',
+        themes: ['the ongoing thread'],
+        salience: 0.7,
+      }]);
+    });
+    const consolidator = new SleepCycleEpisodeConsolidator(
+      store,
+      { getRecentMessages: () => [] },
+      { complete: llm },
+      { now: () => RUN_AT },
+    );
+
+    const result = await consolidator.run({ sessionId: 'discord:main' });
+    expect(result.consolidatedEpisodesCreated).toBe(1);
+    expect(result.candidatesSuperseded).toBe(2);
+
+    // The superseded candidates hold no live arc memberships; the thread
+    // now reaches the consolidated episode instead of dangling.
+    expect(await store.listEpisodeArcsForEpisode('c-1')).toHaveLength(0);
+    expect(await store.listEpisodeArcsForEpisode('c-2')).toHaveLength(0);
+    const canonArcs = await store.listEpisodeArcsForEpisode('earlier-canon');
+    expect(canonArcs.map(entry => entry.id)).toEqual([arc.id]);
+    expect(canonArcs[0].sourceEpisodeId).toBe('earlier-canon');
+    const consolidatedId = canonArcs[0].targetEpisodeId;
+    expect(consolidatedId).not.toBe('c-1');
+    const consolidated = await store.getEpisode(consolidatedId);
+    expect(consolidated?.title).toBe('One consolidated stretch');
+    expect((await store.listEpisodeArcsForEpisode(consolidatedId)).map(entry => entry.id)).toEqual([arc.id]);
+
+    // The membership change is audited with consolidation provenance.
+    const audit = await store.listEpisodeArcAudit({ arcId: arc.id });
+    expect(audit.map(entry => entry.action)).toEqual(['repointed']);
+    expect(audit[0].actor).toBe('consolidation_repoint');
+  });
 });
 
 describe('buildMergeChains', () => {

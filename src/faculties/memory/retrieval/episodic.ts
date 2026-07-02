@@ -18,6 +18,11 @@ export type EpisodicRetrievalStore = Pick<
   'listEpisodes' | 'getEpisode' | 'listEpisodeArcsForEpisode'
 >;
 
+export type EpisodicArcMembershipStore = Pick<
+  EpisodicStorePort,
+  'listEpisodeArcsForEpisode' | 'getEpisodesByIds'
+>;
+
 export type EpisodicTimelineStore = Pick<
   EpisodicStorePort,
   'searchByTime' | 'listEpisodes' | 'getEpisode' | 'listEpisodeArcsForEpisode'
@@ -299,6 +304,54 @@ export async function retrieveEpisodicTimeline(
     compareEpisodesChronological(left.episode, right.episode)
     || sourceOrder(left.source) - sourceOrder(right.source)
   ));
+}
+
+export interface EpisodeArcMembership {
+  arc: EpisodeArc;
+  /** Resolved member episodes (arc source and target) in chronological order. */
+  members: Episode[];
+}
+
+export interface EpisodeArcMembershipOptions {
+  arcKind?: EpisodeArcKind;
+  limit?: number;
+}
+
+/**
+ * Lists the arcs one episode belongs to, with every member episode
+ * resolved — the "which threads is this memory part of" surface that the
+ * recall-expansion tool (z6z) consumes. Fails closed when an arc references
+ * an unavailable episode: a dangling arc member is a store invariant
+ * violation (consolidation re-points memberships), never data to skip.
+ */
+export async function listEpisodeArcMemberships(
+  store: EpisodicArcMembershipStore,
+  episodeId: string,
+  options: EpisodeArcMembershipOptions = {},
+): Promise<EpisodeArcMembership[]> {
+  const arcs = (await store.listEpisodeArcsForEpisode(episodeId, {
+    direction: 'both',
+    ...(options.arcKind ? { arcKind: options.arcKind } : {}),
+    ...(options.limit !== undefined ? { limit: options.limit } : {}),
+  })).map(arc => parseEpisodeArc(cloneEpisodeArc(arc)));
+
+  const memberIds = [...new Set(arcs.flatMap(arc => [arc.sourceEpisodeId, arc.targetEpisodeId]))];
+  if (memberIds.length === 0) return [];
+  const episodesById = new Map(
+    (await store.getEpisodesByIds(memberIds)).map(episode => [episode.id, parseEpisode(cloneEpisode(episode))]),
+  );
+
+  return arcs.map((arc) => {
+    const members = [arc.sourceEpisodeId, arc.targetEpisodeId].map((memberId) => {
+      const member = episodesById.get(memberId);
+      if (!member) {
+        throw new Error(`episode arc "${arc.id}" references unavailable episode "${memberId}"`);
+      }
+      return cloneEpisode(member);
+    });
+    members.sort(compareEpisodesChronological);
+    return { arc, members };
+  });
 }
 
 export function cloneEpisodicRetrievalChain(chain: EpisodicRetrievalChain): EpisodicRetrievalChain {

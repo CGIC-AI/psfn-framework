@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest';
 import {
   DEFAULT_FREE_TIME_CONFIG,
   DEFAULT_TEMPORAL_WAKEUP_CONFIG,
+  DEFAULT_WEIGHTED_THOUGHT_OUTREACH_CONFIG,
   loadSchedulerSeedDefaults,
   SCHEDULER_SEED_FILE_NAME,
 } from './scheduler-config.js';
@@ -103,6 +104,7 @@ describe('scheduler config seed defaults', () => {
         ...config,
         temporalWakeup: DEFAULT_TEMPORAL_WAKEUP_CONFIG,
         freeTime: DEFAULT_FREE_TIME_CONFIG,
+        weightedThoughtOutreach: DEFAULT_WEIGHTED_THOUGHT_OUTREACH_CONFIG,
       });
     });
   });

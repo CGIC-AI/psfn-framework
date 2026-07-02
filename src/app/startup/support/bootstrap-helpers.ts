@@ -294,6 +294,24 @@ export function hydrateCanonicalStartupConfig(
       idle: { ...persistedScheduler.freeTime.idle },
       budget: { ...persistedScheduler.freeTime.budget },
     },
+    weightedThoughtOutreach: {
+      enabled: persistedScheduler.weightedThoughtOutreach.enabled,
+      checkIntervalMs: persistedScheduler.weightedThoughtOutreach.checkIntervalMs,
+      nudgeThreshold: persistedScheduler.weightedThoughtOutreach.nudgeThreshold,
+      maxNudgesPerRun: persistedScheduler.weightedThoughtOutreach.maxNudgesPerRun,
+      lifecycle: {
+        classes: {
+          time_sensitive: { ...persistedScheduler.weightedThoughtOutreach.lifecycle.classes.time_sensitive },
+          standard: { ...persistedScheduler.weightedThoughtOutreach.lifecycle.classes.standard },
+          trivial: { ...persistedScheduler.weightedThoughtOutreach.lifecycle.classes.trivial },
+        },
+        reinforcement: { ...persistedScheduler.weightedThoughtOutreach.lifecycle.reinforcement },
+        accumulatedWeightCap: persistedScheduler.weightedThoughtOutreach.lifecycle.accumulatedWeightCap,
+        contradictionDampeningFactor: persistedScheduler.weightedThoughtOutreach.lifecycle.contradictionDampeningFactor,
+        declineDampeningFactor: persistedScheduler.weightedThoughtOutreach.lifecycle.declineDampeningFactor,
+        relevanceFloor: persistedScheduler.weightedThoughtOutreach.lifecycle.relevanceFloor,
+      },
+    },
   };
   config.maintenanceIntervalMs = schedulerConfig.salienceDecayIntervalMs;
   const chargePolicyConfig = configStore.loadStartupChargePolicy();

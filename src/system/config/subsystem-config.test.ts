@@ -398,6 +398,22 @@ describe('subsystem config round-trip', () => {
         budget: {
           maxTurns: 6,
           maxChargeUnits: 8,
+      weightedThoughtOutreach: {
+        enabled: false,
+        checkIntervalMs: 300_000,
+        nudgeThreshold: 1,
+        maxNudgesPerRun: 1,
+        lifecycle: {
+          classes: {
+            time_sensitive: { baseWeight: 0.5, halflifeMs: 21_600_000 },
+            standard: { baseWeight: 0.35, halflifeMs: 86_400_000 },
+            trivial: { baseWeight: 0.2, halflifeMs: 259_200_000 },
+          },
+          reinforcement: { repeatBoost: 0.5, emotionalChargeWeight: 0.75 },
+          accumulatedWeightCap: 3,
+          contradictionDampeningFactor: 0.6,
+          declineDampeningFactor: 0.5,
+          relevanceFloor: 0.05,
         },
       },
     };

@@ -761,6 +761,36 @@ export const POSTGRES_INTENTION_MIGRATIONS = [
   `,
   `CREATE INDEX IF NOT EXISTS idx_behavioral_pattern_events_contact ON behavioral_pattern_events(contact_id, created_at DESC);`,
   `CREATE INDEX IF NOT EXISTS idx_behavioral_pattern_events_outcome ON behavioral_pattern_events(contact_id, outcome_score DESC NULLS LAST, outcome_observed_at DESC NULLS LAST);`,
+  // Weighted-thought lifecycle (Charter 6.24, bead 1xb.4). Accumulated weight
+  // and lastReinforcedAt persist so decay is deterministic across restart;
+  // decay is computed at read time (no in-memory-only accumulator, 9vi.13).
+  `
+  CREATE TABLE IF NOT EXISTS weighted_thoughts (
+    id TEXT PRIMARY KEY,
+    content TEXT NOT NULL,
+    source TEXT NOT NULL,
+    thought_class TEXT NOT NULL DEFAULT 'standard',
+    contact_id TEXT,
+    base_weight DOUBLE PRECISION NOT NULL,
+    context_multipliers JSONB NOT NULL DEFAULT '{}'::jsonb,
+    accumulated_weight DOUBLE PRECISION NOT NULL,
+    reinforcement_count INTEGER NOT NULL DEFAULT 0,
+    decay_halflife_ms DOUBLE PRECISION NOT NULL,
+    created_at TEXT NOT NULL,
+    last_reinforced_at TEXT NOT NULL,
+    provenance JSONB NOT NULL DEFAULT '{}'::jsonb,
+    nudge_state TEXT NOT NULL DEFAULT 'pending',
+    last_nudged_at TEXT,
+    decline_count INTEGER NOT NULL DEFAULT 0,
+    CHECK (thought_class IN ('time_sensitive', 'standard', 'trivial')),
+    CHECK (nudge_state IN ('pending', 'nudged', 'accepted', 'declined')),
+    CHECK (base_weight >= 0),
+    CHECK (accumulated_weight >= 0),
+    CHECK (decay_halflife_ms > 0)
+  );
+  `,
+  `CREATE INDEX IF NOT EXISTS idx_weighted_thoughts_active ON weighted_thoughts(nudge_state, accumulated_weight DESC, last_reinforced_at DESC, id);`,
+  `CREATE INDEX IF NOT EXISTS idx_weighted_thoughts_contact ON weighted_thoughts(contact_id, nudge_state, accumulated_weight DESC, id);`,
 ];
 
 export const POSTGRES_AUDIT_MIGRATIONS = [

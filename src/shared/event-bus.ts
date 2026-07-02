@@ -655,6 +655,14 @@ export interface EventMap {
   'internal_state.gap_detected': { offlineSince: string; gapMs: number; timestamp: number };
   'intention.outbound.dispatched': { actionId: string; channelId: string; channelType: string; contentLength?: number; timestamp: number };
   'intention.outbound.blocked': { actionId: string; channelId: string; channelType: string; reason?: string; timestamp: number };
+  // Internal-state-driven outreach nudges (Charter 6.24, bead 1xb.2). The
+  // deterministic gate decides whether the LLM nudge runs at all; the nudge
+  // itself is the consent moment the companion accepts or declines.
+  'intention.nudge.gate': { open: boolean; reason: string; maxWeight: number; threshold: number; thoughtCount: number; timestamp: number };
+  'intention.nudge.produced': { thoughtId: string; thoughtClass: string; weight: number; channelId: string; channelType: string; target: string; timestamp: number };
+  'intention.nudge.accepted': { thoughtId: string; channelId: string; channelType: string; target: string; timestamp: number };
+  'intention.nudge.declined': { thoughtId: string; reason?: string; dampenedWeight: number; timestamp: number };
+  'intention.nudge.blocked': { thoughtId: string; reason: string; channelId?: string; nextEligibleAtMs?: number; timestamp: number };
   'model.budget.blocked': ModelBudgetBlockedEvent;
   'channel.voice.start': { guildId: string; channelId: string; userId: string };
   'channel.voice.end': { guildId: string; channelId: string; userId: string; reason: string };

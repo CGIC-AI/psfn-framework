@@ -15,6 +15,7 @@ const GARDEN_CLIENT_ROUTES = new Set([
   '/contacts',
   '/evals/emotion-sidecar',
   '/episodic-memory',
+  '/graph-proposals',
   '/identity',
   '/images',
   '/memory',

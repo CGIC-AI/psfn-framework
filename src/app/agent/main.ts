@@ -34,8 +34,14 @@ import { createAgentPersistenceRuntime } from '../../persistence/runtime-factory
 import {
   resolveOutreachOutboxLedgerPath,
   resolvePendingContactApprovalsPath,
+  resolveSocialGraphProposalsPath,
+  resolveSocialGraphBuilderWatermarkPath,
 } from '../../persistence/layout.js';
 import { createFilePendingContactApprovalStore } from '../../core/contacts/pending-contact-approvals.js';
+import {
+  createFileSocialGraphProposalStore,
+  createFileSocialGraphBuilderWatermarkStore,
+} from '../../faculties/memory/social-graph/proposals.js';
 import { createContactTrackingGate } from '../../core/contacts/tracking-gate.js';
 import { rehydratePersistedInternalState } from '../../core/self-model/internal-state-persistence.js';
 import { ModuleLoader } from '../../system/modules/loader.js';
@@ -160,6 +166,17 @@ async function main(): Promise<void> {
   // gateway notification path with a system-derived sender.
   const pendingContactApprovals = createFilePendingContactApprovalStore(
     resolvePendingContactApprovalsPath(pathSnapshot.companionDataDir),
+  );
+
+  // ── Social-graph builder worker stores (E4.2) ──
+  // Durable, file-backed proposal queue + advisory watermark cursor for the
+  // background graph-builder worker. Shared between the scheduler task (writer)
+  // and the Garden review surface (reader/decider).
+  const socialGraphProposalStore = createFileSocialGraphProposalStore(
+    resolveSocialGraphProposalsPath(pathSnapshot.companionDataDir),
+  );
+  const socialGraphWatermarkStore = createFileSocialGraphBuilderWatermarkStore(
+    resolveSocialGraphBuilderWatermarkPath(pathSnapshot.companionDataDir),
   );
   const contactTrackingGate = createContactTrackingGate({
     channelLabels: channelsConfig.contextEnvelope.channels,
@@ -289,6 +306,9 @@ async function main(): Promise<void> {
     db,
     backupConfig,
     pathSnapshot,
+    contactStore,
+    socialGraphProposalStore,
+    socialGraphWatermarkStore,
   });
 
   const moduleLoader = new ModuleLoader({
@@ -422,6 +442,7 @@ async function main(): Promise<void> {
     outreachOutbox,
     episodicStore,
     pendingContactApprovals,
+    socialGraphProposals: socialGraphProposalStore,
     card,
     shardManager,
     cardVersionStore,

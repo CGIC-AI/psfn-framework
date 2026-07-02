@@ -704,6 +704,15 @@ export function resolveChargeLedgerPath(companionDataDir: string): string {
   return join(resolveCompanionStateDir(companionDataDir), 'charge-ledger.jsonl');
 }
 
+// ── Social-graph builder (E4.2) ──
+export function resolveSocialGraphProposalsPath(companionDataDir: string): string {
+  return join(resolveCompanionStateDir(companionDataDir), 'social-graph-proposals.json');
+}
+
+export function resolveSocialGraphBuilderWatermarkPath(companionDataDir: string): string {
+  return join(resolveCompanionStateDir(companionDataDir), 'social-graph-builder-watermark.json');
+}
+
 export function resolveFatigueLedgerPath(companionDataDir: string): string {
   return join(resolveCompanionStateDir(companionDataDir), 'fatigue-ledger.jsonl');
 }

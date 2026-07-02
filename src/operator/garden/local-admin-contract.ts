@@ -70,6 +70,8 @@ import { AdminConcernDataService } from './services/concern-service.js';
 import { AdminContactsDataService } from './services/contacts-service.js';
 import { createAdminPendingContactsService } from './services/pending-contacts-service.js';
 import { createAdminRoomsService } from './services/rooms-service.js';
+import { createAdminGraphProposalsService } from './services/graph-proposals-service.js';
+import type { SocialGraphProposalStore } from '../../faculties/memory/social-graph/proposals.js';
 import { AdminDashboardDataService } from './services/dashboard-service.js';
 import { AdminEpisodicMemoryDataService } from './services/episodic-memory-service.js';
 import { AdminGroupMemoryDataService } from './services/group-memory-diagnostics-service.js';
@@ -120,6 +122,8 @@ export interface InProcessGardenAdminContractOptions {
   companionAuthorIds?: readonly string[];
   /** Pending contact approvals queue (E3.4 contact-tracking policy gate). */
   pendingContactApprovals?: PendingContactApprovalStore | null;
+  /** Social-graph edge proposals emitted by the graph-builder worker (E4.2). */
+  socialGraphProposals?: SocialGraphProposalStore | null;
 }
 
 export function createInProcessGardenAdminContract(
@@ -263,6 +267,12 @@ export function createInProcessGardenAdminContract(
     rooms: createAdminRoomsService({
       contactStore: options.contactStore ?? null,
     }),
+    graphProposals: options.socialGraphProposals
+      ? createAdminGraphProposalsService({
+        proposalStore: options.socialGraphProposals,
+        contactStore: options.contactStore ?? null,
+      })
+      : null,
     concerns: options.concernStore
       ? new AdminConcernDataService(options.concernStore)
       : null,

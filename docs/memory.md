@@ -285,6 +285,12 @@ Each sleeptime run emits a `memory.sleeptime.cadence` telemetry event (scope, tu
 
 Open question (not implemented): whether group sleeptime should defer entirely to rest-window / nightly consolidation rather than running interval batches during active hours. Interval batching is the conservative choice landed here.
 
+### Social-graph builder worker (E4.2, memory-agent lane)
+
+A background job (`SocialGraphBuilderWorker`, `src/faculties/memory/social-graph/`) proposes social-graph edges from accumulated room evidence. It runs on the same background-maintenance posture as sleeptime/salience-decay (scheduler eligibility gate) and is NEVER inline in the chat path. It is purely heuristic (no LLM call, so no model charge) and reads NEW room-scoped memories since its own advisory watermark. Three evidence classes: repeated co-presence of two tracked contacts across N room sessions (→ `acquaintance`, ~0.5), overheard interactions naming two tracked people (→ typed per `inferRelationshipTypeFromFact` else acquaintance, ~0.6), and named-relationship facts like "my sister Iki" (→ fine-typed, symmetric kinds undirected/bidirectional and asymmetric kinds single-direction with the inverse table deferred to E4.3, ~0.7).
+
+Proposals are NOT live edges: they land in a durable, file-backed proposal store (`social-graph-proposals.json` under companion-data `state/`), strictly out of the live graph until an operator accepts them in Garden (`/graph-proposals`). Acceptance writes the edge through the normal `upsertSocialRelationshipEdge` path (optionally with an operator-adjusted type); rejection persists and blocks re-proposal of the same evidence. Idempotency and rejection-blocking are keyed by an evidence-set hash, so re-running from the same watermark produces no duplicates. A proposal that conflicts with a differently-typed live edge is never auto-resolved — it lands in a `conflict` review state and the operator edge is untouched. Untracked speakers (no contact row, per E3.4) can never enter the graph. Cadence knobs are owned by `scheduler.json` under `socialGraphBuilder` (`intervalMs`, `coPresenceMinSessions`, `coPresenceWindowMinutes`, `scanMemoryLimit`). Each run emits a `memory.social_graph.builder` telemetry event (scanned / proposed / conflicts / skipped-untracked / deduped) — Law 31: results are operator-visible, never silent.
+
 If embeddings change materially, re-embed and validate the store before trusting retrieval quality. Operational steps live in [`docs/operations.md`](./operations.md).
 
 ## Files And Code To Trust

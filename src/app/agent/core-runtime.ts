@@ -66,6 +66,7 @@ import {
 } from '../../core/identity/prompt-state-port.js';
 import type { CharacterCardVersionStore } from '../../core/identity/card-versioning.js';
 import type { SubstrateAgent } from '../../core/agent/substrate-agent.js';
+import type { ContactTrackingGate } from '../../core/contacts/tracking-gate.js';
 import {
   createPromptGenerationFailureAlertHandler,
   isPromptGenerationFailureAlertConfigured,
@@ -106,6 +107,8 @@ export interface AgentCoreRuntimeOptions {
   identityCoolingOff?: ReturnType<typeof createIdentityCoolingOffManagerFromEnv>;
   primaryUserId?: string;
   primaryTelegramUserId?: string;
+  /** Contact-tracking policy gate (E3.4). Absent gate behaves as 'auto' everywhere. */
+  contactTrackingGate?: ContactTrackingGate | null;
 }
 
 export interface AgentCoreRuntime {
@@ -146,6 +149,7 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
     primaryTelegramUserId,
     intentionProviders,
   } = options;
+  const contactTrackingGate = options.contactTrackingGate ?? null;
   const db = options.db ?? null;
   const episodicStore = options.episodicStore ?? (() => {
     if (config.persistenceBackend === 'postgres') {
@@ -212,6 +216,7 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
     emotionRuntime,
     observerEvalSidecar,
     appCache,
+    contactTrackingGate,
   });
   agentLoop.scratchpadProvider = memoryStore;
   agentLoop.setCapabilityRuntime(capabilityRuntime);
@@ -343,6 +348,9 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
     contactStore,
     episodicStore,
     concernCandidateSink: automatedConcernRuntime.extractionSink,
+    isAutoContactCreationAllowed: contactTrackingGate
+      ? (channelId: string) => contactTrackingGate.isAutoContactCreationAllowed(channelId)
+      : null,
   });
   const promptState = createPromptStatePort({
     layers: promptStore,

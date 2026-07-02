@@ -10,6 +10,7 @@ const GARDEN_CLIENT_ROUTES = new Set([
   '/charge-budget',
   '/chat',
   '/confirmations',
+  '/contact-approvals',
   '/contacts',
   '/evals/emotion-sidecar',
   '/episodic-memory',

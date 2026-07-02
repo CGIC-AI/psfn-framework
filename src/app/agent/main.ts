@@ -31,7 +31,12 @@ import {
   wireHeartbeatRuntime,
 } from '../startup/composition/parity.js';
 import { createAgentPersistenceRuntime } from '../../persistence/runtime-factory.js';
-import { resolveOutreachOutboxLedgerPath } from '../../persistence/layout.js';
+import {
+  resolveOutreachOutboxLedgerPath,
+  resolvePendingContactApprovalsPath,
+} from '../../persistence/layout.js';
+import { createFilePendingContactApprovalStore } from '../../core/contacts/pending-contact-approvals.js';
+import { createContactTrackingGate } from '../../core/contacts/tracking-gate.js';
 import { rehydratePersistedInternalState } from '../../core/self-model/internal-state-persistence.js';
 import { ModuleLoader } from '../../system/modules/loader.js';
 import { DEFAULT_GATEWAY_TOOL_METADATA_COVERAGE } from '../../core/agent/tool-wiring-validator.js';
@@ -148,6 +153,33 @@ async function main(): Promise<void> {
     persistenceBackend,
   });
 
+  // ── Contact-tracking policy gate (E3.4) ──
+  // Per-channel contactTracking labels come from channels.json contextEnvelope
+  // (default 'auto'). Approval-mode channels enqueue new speakers into a
+  // durable pending-approval queue; the operator notification goes through the
+  // gateway notification path with a system-derived sender.
+  const pendingContactApprovals = createFilePendingContactApprovalStore(
+    resolvePendingContactApprovalsPath(pathSnapshot.companionDataDir),
+  );
+  const contactTrackingGate = createContactTrackingGate({
+    channelLabels: channelsConfig.contextEnvelope.channels,
+    pendingApprovals: pendingContactApprovals,
+    notifyOperatorPendingContact: async (entry) => {
+      await gateway.notifyNtfy({
+        sender: { kind: 'system', provenance: 'system.contacts.pending_approval' },
+        title: 'PSFN contact approval required',
+        priority: 4,
+        message: [
+          `New speaker awaiting contact approval: ${entry.displayName}`,
+          `Channel: ${entry.channel} (${entry.channelId})`,
+          `First seen: ${entry.firstSeenAt}`,
+          'Review in admin: /contact-approvals',
+        ].join('\n'),
+      });
+    },
+    logger: log,
+  });
+
   // ── Load identity (mounted read-only in container) ──
 
   const {
@@ -171,6 +203,7 @@ async function main(): Promise<void> {
     intentionRuntime: persistedIntentionRuntime,
     intentionProviders,
     capabilityRuntime,
+    contactTrackingGate,
   });
   const {
     safeguardAuditTrail,
@@ -388,6 +421,7 @@ async function main(): Promise<void> {
     postTurnActions,
     outreachOutbox,
     episodicStore,
+    pendingContactApprovals,
     card,
     shardManager,
     cardVersionStore,

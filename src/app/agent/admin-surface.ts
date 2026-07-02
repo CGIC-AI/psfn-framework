@@ -8,6 +8,7 @@ import type { CharacterCardVersionStore } from '../../core/identity/card-version
 import type { CharacterCardV2 } from '../../core/identity/types.js';
 import type { PostTurnActionRuntime } from '../../core/agent/post-turn-action-runtime.js';
 import type { OutreachOutboxStore } from '../../core/intention/outreach-outbox.js';
+import type { PendingContactApprovalStore } from '../../core/contacts/pending-contact-approvals.js';
 import type { AgentCoreRuntime } from './core-runtime.js';
 import type { EventBus } from '../../shared/event-bus.js';
 import type { Scheduler } from '../../core/scheduler/scheduler.js';
@@ -36,6 +37,8 @@ export interface StartOptionalAdminTransportServerOptions {
   postTurnActions: PostTurnActionRuntime;
   outreachOutbox?: OutreachOutboxStore | null;
   episodicStore?: EpisodicStorePort | null;
+  /** Pending contact approvals queue (E3.4 contact-tracking policy gate). */
+  pendingContactApprovals?: PendingContactApprovalStore | null;
   card: CharacterCardV2;
   shardManager: ShardExecutionPort;
   cardVersionStore: CharacterCardVersionStore;
@@ -83,6 +86,7 @@ export async function startOptionalAdminTransportServer(
     shardManager: options.shardManager,
     eventBus: options.eventBus,
     contactStore: options.coreRuntime.contactStore,
+    pendingContactApprovals: options.pendingContactApprovals ?? null,
     concernStore: options.coreRuntime.intentionRuntime.concernStore,
     characterCard: options.card,
     config: adminConfig,

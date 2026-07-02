@@ -10,6 +10,8 @@ import {
   prefixedParamPath,
 } from './route-matchers.js';
 import { buildAdminContactRoutes } from './routes/contact-routes.js';
+import { buildAdminContactApprovalRoutes } from './api-routes-contact-approvals.js';
+import type { AdminPendingContactsService } from './services/pending-contacts-service.js';
 import { buildAdminConcernRoutes } from './routes/concern-routes.js';
 import { buildAdminIdentityRoutes } from './routes/identity-routes.js';
 import { buildAdminImageRoutes } from './routes/image-routes.js';
@@ -191,6 +193,7 @@ export function buildAdminApiRoutes(options: {
   memoryService: AdminMemoryService;
   sessionService: AdminSessionService;
   contactsService: AdminContactsService;
+  pendingContactsService?: AdminPendingContactsService | null;
   concernService?: AdminConcernService | null;
   settingsService: AdminSettingsService;
   identityService: AdminIdentityService;
@@ -227,6 +230,7 @@ export function buildAdminApiRoutes(options: {
     memoryService,
     sessionService,
     contactsService,
+    pendingContactsService,
     concernService,
     settingsService,
     identityService,
@@ -616,6 +620,9 @@ export function buildAdminApiRoutes(options: {
     },
     ...buildAdminSessionRoutes({ sessionService, withBody }),
     ...buildAdminContactRoutes({ contactsService, withBody }),
+    ...(pendingContactsService
+      ? buildAdminContactApprovalRoutes({ pendingContactsService })
+      : []),
     ...buildAdminConcernRoutes({ concernService, withBody }),
     ...buildAdminSettingsRoutes({ settingsService, appendAuditTimelineEntry, withBody }),
     ...buildAdminIdentityRoutes({ identityService, appendAuditTimelineEntry, withBody }),

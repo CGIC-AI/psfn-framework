@@ -193,6 +193,12 @@
       "pattern": "identity-proper-name"
     },
     {
+      "path": "src/app/agent/main.ts",
+      "contains": "PSFN contact approval required",
+      "reason": "Pending contact approval notifications use project-branded operator titles.",
+      "pattern": "identity-proper-name"
+    },
+    {
       "path": "src/boundary/gateway/postgres-audit.ts",
       "contains": "applicationName: options.applicationName ?? 'psfn-gateway-audit'",
       "reason": "Gateway audit persistence uses a project-scoped PostgreSQL application_name label.",

@@ -46,6 +46,7 @@ import type {
 } from '../../../faculties/memory/memory-store-port.js';
 import { createCoreMemoryStorePort } from '../../../faculties/memory/memory-store-port.js';
 import type { ContactStorePort } from '../../../core/contacts/contact-store-port.js';
+import type { ContactTrackingGate } from '../../../core/contacts/tracking-gate.js';
 import { ShardManager } from '../../../faculties/shards/manager.js';
 import { ShardFoldReviewController } from '../../../faculties/shards/fold-review.js';
 import {
@@ -219,6 +220,8 @@ export interface SubstrateAgentCompositionOptions {
   streamRuntimeOptions?: SubstrateAgentOptions['streamRuntimeOptions'];
   streamTransport?: SubstrateAgentOptions['streamTransport'];
   appCache?: AppCache;
+  /** Contact-tracking policy gate (E3.4). Absent gate behaves as 'auto' everywhere. */
+  contactTrackingGate?: ContactTrackingGate | null;
 }
 
 export function composeSubstrateAgent(options: SubstrateAgentCompositionOptions): SubstrateAgent {
@@ -241,6 +244,7 @@ export function composeSubstrateAgent(options: SubstrateAgentCompositionOptions)
       ...(options.streamRuntimeOptions ? { streamRuntimeOptions: options.streamRuntimeOptions } : {}),
       ...(options.streamTransport ? { streamTransport: options.streamTransport } : {}),
       ...(options.appCache ? { appCache: options.appCache } : {}),
+      ...(options.contactTrackingGate ? { contactTrackingGate: options.contactTrackingGate } : {}),
     },
   );
 }
@@ -317,6 +321,8 @@ export interface MemoryRuntimeOptions {
   contactStore?: ContactStorePort | null;
   episodicStore?: EpisodicRetrievalStore | null;
   concernCandidateSink?: ConcernCandidateExtractionSink | null;
+  /** Contact-tracking policy gate predicate (E3.4); absent behaves as 'auto'. */
+  isAutoContactCreationAllowed?: ((channelId: string) => boolean) | null;
 }
 
 export function wireMemoryRuntime(options: MemoryRuntimeOptions): MemoryExtractor {
@@ -343,6 +349,14 @@ export function wireMemoryRuntime(options: MemoryRuntimeOptions): MemoryExtracto
 	      options.sessionManager,
 	    );
 
+  const extractorFormationOptions = {
+    ...(options.concernCandidateSink
+      ? { emitConcernCandidates: options.concernCandidateSink }
+      : {}),
+    ...(options.isAutoContactCreationAllowed
+      ? { isAutoContactCreationAllowed: options.isAutoContactCreationAllowed }
+      : {}),
+  };
   const memoryExtractor = options.config
     ? new MemoryExtractor(
       options.llmProvider,
@@ -354,9 +368,7 @@ export function wireMemoryRuntime(options: MemoryRuntimeOptions): MemoryExtracto
       options.promptRegistry ?? null,
       options.sessionStore ?? null,
       options.contactStore ?? null,
-      options.concernCandidateSink
-        ? { emitConcernCandidates: options.concernCandidateSink }
-        : undefined,
+      extractorFormationOptions,
     )
     : new MemoryExtractor(
       options.llmProvider,
@@ -368,9 +380,7 @@ export function wireMemoryRuntime(options: MemoryRuntimeOptions): MemoryExtracto
       options.promptRegistry ?? null,
       options.sessionStore ?? null,
       options.contactStore ?? null,
-      options.concernCandidateSink
-        ? { emitConcernCandidates: options.concernCandidateSink }
-        : undefined,
+      extractorFormationOptions,
     );
   options.sessionManager.setPreCompactionExtractionHandler(async ({
     channelId,

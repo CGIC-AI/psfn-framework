@@ -87,6 +87,35 @@ Derived from the fraction of recent speakers resolvable to contacts
 | `approval` | new contacts require operator approval before tracking |
 | `role_gated` | **reserved**: validates as config, but any code path asked to operate in this mode fails closed (`assertContactTrackingModeImplemented`) until the large-audience epic implements it |
 
+**Approval mode (implemented in E3.4,
+`src/core/contacts/tracking-gate.ts`).** Mode resolution is a direct
+exact-channel-id read of the `contextEnvelope.channels.<channelId>.contactTracking`
+label with an `auto` default — deliberately not a classification pipeline. In an
+`approval` channel a NEW speaker does **not** auto-upsert a contact:
+
+- The speaker stays **untracked** — transcript/text-prefix attribution only; no
+  contact record, no profile, no per-person memory extraction (the mention-only
+  contact path is gated too), no social-graph entity. Room-scoped facts may
+  still record `sourceSpeakerName` (attribution truth) with zero contact-keyed
+  rows.
+- A durable pending-contact request is enqueued
+  (`companion-data/.../contacts/pending-approvals.json`) capturing name,
+  channel, channel user id, first-seen, and a small sample of message previews
+  **from that channel only** (no cross-channel or DM content in the payload).
+- The first sighting produces an operator notification through the existing
+  gateway notification path (`notify.ntfy`, system-derived sender
+  `system.contacts.pending_approval`) — charter 9.6. Subsequent messages update
+  the entry without re-notifying.
+- Operator decisions live in the Garden **Contact Approvals** view
+  (`/api/admin/contact-approvals`): **approve** creates the contact through the
+  normal channel-identity upsert path (subsequent messages resolve normally);
+  **deny** persists — the speaker stays untracked and is never re-enqueued;
+  **reset** removes the record so the speaker's next message re-proposes (the
+  only re-proposal path besides an explicit operator re-request).
+
+Already-tracked contacts in approval channels resolve exactly as before; `auto`
+channels are byte-identical to pre-gate behavior.
+
 ## Owner-file schemas
 
 ### channels.json (channel-owned labels)
@@ -230,5 +259,6 @@ E3.1 stopped at the contract. Remaining wiring:
   `ChannelVisibility` and the transitional `broadcast` visibility value**.
 - Decouple response style from privacy (`RESPONSE_STYLE_BY_VISIBILITY` retired) per the
   delivery-guidance rule.
-- Wire `contactTracking` modes (`auto` default, `approval` flow; `role_gated` stays
-  fail-closed).
+- ~~Wire `contactTracking` modes~~ — **done in E3.4** (`auto` default, `approval`
+  flow with durable pending queue + Garden approvals view; `role_gated` stays
+  fail-closed at use).

@@ -2,7 +2,8 @@ import type { AgentMessage } from '@mariozechner/pi-agent-core';
 import type { AssistantMessage, TextContent, ToolResultMessage } from '@mariozechner/pi-ai';
 import type { SessionManager } from '../../session/manager.js';
 import type { AgentResponse, MessagePromptOverrideMode, SubstrateMessage, TurnID, TurnRecord, TurnRecordToolCall, TurnUsage } from '../../../shared/contracts/runtime.js';
-import { normalizeChannelVisibility, type TrustLevel } from '../../../system/trust/types.js';
+import type { TrustLevel } from '../../../system/trust/types.js';
+import { normalizeChannelPrivacy } from '../../../system/trust/context-envelope.js';
 import type { ChannelMeta } from '../../../system/trust/policy.js';
 import type { TurnSnapshot } from '../../turns/snapshot.js';
 import type { TurnObservabilityRecord } from '../../turns/observability.js';
@@ -28,7 +29,7 @@ const REASONING_CONTAMINATION_PATTERNS = [
 ];
 
 function resolveSessionChannelMeta(message: SubstrateMessage): ChannelMeta | undefined {
-  const privacyLevel = normalizeChannelVisibility(message.routing?.channelPrivacy);
+  const privacyLevel = normalizeChannelPrivacy(message.routing?.channelPrivacy);
   if (message.isDirectMessage === undefined && !privacyLevel) return undefined;
   return {
     ...(message.isDirectMessage !== undefined ? { isDirectMessage: message.isDirectMessage } : {}),

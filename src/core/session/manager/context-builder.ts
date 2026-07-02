@@ -34,10 +34,10 @@ import type { SessionEntry } from '../types.js';
 import type { SessionContinuityArtifact } from '../continuity-artifacts.js';
 import { resolveSessionEntryTurnContext } from '../turn-provenance.js';
 import {
-  classifyChannel,
+  classifyChannelDisclosure,
   type ChannelMeta,
 } from '../../../system/trust/policy.js';
-import type { ChannelVisibility } from '../../../system/trust/types.js';
+import type { ChannelPrivacy } from '../../../system/trust/context-envelope.js';
 import type { SessionStore } from '../../../persistence/sessions/store.js';
 import type { CrossChannelContinuityPort } from '../cross-channel-continuity-port.js';
 import type {
@@ -173,7 +173,7 @@ function compactPromptText(value: string, maxChars = ORIENTATION_SUMMARY_MAX_CHA
 
 function buildHistorySummaryMessage(
   summaryText: string,
-  channelVisibility: ChannelVisibility,
+  channelVisibility: ChannelPrivacy,
   sourceSpanCount: number,
 ): ContextMessage {
   const content = isUntrustedVisibility(channelVisibility)
@@ -199,7 +199,7 @@ function buildHistorySummaryMessage(
 
 function buildSessionHistoryMessages(
   verbatimEntries: SessionEntry[],
-  channelVisibility: ChannelVisibility,
+  channelVisibility: ChannelPrivacy,
   renderGroupUserAttribution: boolean,
   summaryText?: string,
   summarySourceSpanCount = 0,
@@ -223,7 +223,7 @@ function buildSessionHistoryMessages(
 
 export async function assembleSessionHistoryForContextWithLlmSummary(params: {
   entries: SessionEntry[];
-  channelVisibility: ChannelVisibility;
+  channelVisibility: ChannelPrivacy;
   renderGroupUserAttribution: boolean;
   tokenBudget: number;
   characterName?: string;
@@ -278,7 +278,7 @@ interface HistorySummaryCandidate {
 
 function assembleVerbatimSessionHistory(params: {
   entries: SessionEntry[];
-  channelVisibility: ChannelVisibility;
+  channelVisibility: ChannelPrivacy;
   renderGroupUserAttribution: boolean;
   tokenBudget: number;
 }): {
@@ -308,7 +308,7 @@ function assembleVerbatimSessionHistory(params: {
 
 function selectHistorySummaryCandidate(params: {
   entries: SessionEntry[];
-  channelVisibility: ChannelVisibility;
+  channelVisibility: ChannelPrivacy;
   renderGroupUserAttribution: boolean;
   tokenBudget: number;
 }): HistorySummaryCandidate | null {
@@ -380,7 +380,7 @@ function buildOrientationFallbackSummary(
 function fitHistorySummaryTextToBudget(params: {
   summaryText: string;
   candidate: HistorySummaryCandidate;
-  channelVisibility: ChannelVisibility;
+  channelVisibility: ChannelPrivacy;
   renderGroupUserAttribution: boolean;
   tokenBudget: number;
 }): string {
@@ -409,7 +409,7 @@ function fitHistorySummaryTextToBudget(params: {
 function buildHistoryAssemblyFromSummary(params: {
   summaryText: string;
   candidate: HistorySummaryCandidate;
-  channelVisibility: ChannelVisibility;
+  channelVisibility: ChannelPrivacy;
   renderGroupUserAttribution: boolean;
 }): {
   summaryText: string;
@@ -434,7 +434,7 @@ function buildHistoryAssemblyFromSummary(params: {
 
 function assembleTrimmedSessionHistory(params: {
   entries: SessionEntry[];
-  channelVisibility: ChannelVisibility;
+  channelVisibility: ChannelPrivacy;
   renderGroupUserAttribution: boolean;
   tokenBudget: number;
 }): {
@@ -459,12 +459,12 @@ function assembleTrimmedSessionHistory(params: {
 }
 
 function shouldRenderSessionHistoryUserAttribution(
-  channelVisibility: ChannelVisibility,
+  channelVisibility: ChannelPrivacy,
   channelMeta?: ChannelMeta,
 ): boolean {
   if (channelMeta?.isDirectMessage === true) return false;
   if (channelMeta?.isDirectMessage === false) return true;
-  return channelVisibility === 'public' || channelVisibility === 'broadcast';
+  return channelVisibility === 'public';
 }
 
 function formatIdleGap(idleGapMs: number): string {
@@ -571,7 +571,7 @@ function buildStructuredContinuityBlock(
       ? (entry.authorName ?? resolveRoleName('user', roleNames))
       : resolveRoleName('assistant', roleNames);
     const originVisibility = parseChannelVisibility(entry.channelVisibility)
-      ?? classifyChannel(entry.originChannelId ?? entry.channelId);
+      ?? classifyChannelDisclosure(entry.originChannelId ?? entry.channelId).channelPrivacy;
     const trust = isUntrustedVisibility(originVisibility) ? 'untrusted' : 'context';
     return [
       `<item trust="${trust}" executable="false">`,
@@ -779,7 +779,7 @@ export async function captureTurnSessionContext(
     recent,
     params.config.observationMaskingWindow ?? DEFAULT_OBSERVATION_MASKING_WINDOW,
   ).entries;
-  const channelVisibility = classifyChannel(params.sourceChannelId, params.channelMeta);
+  const channelVisibility = classifyChannelDisclosure(params.sourceChannelId, params.channelMeta).channelPrivacy;
   const assembledHistory = await assembleSessionHistoryForContextWithLlmSummary({
     entries: recent,
     channelVisibility,
@@ -913,7 +913,7 @@ interface BuildSessionContextParams {
 
 export async function buildSessionContext(params: BuildSessionContextParams): Promise<LLMContext> {
   const sourceChannelId = params.sourceChannelId ?? params.channelId;
-  const channelVisibility = classifyChannel(sourceChannelId, params.channelMeta);
+  const channelVisibility = classifyChannelDisclosure(sourceChannelId, params.channelMeta).channelPrivacy;
   const renderGroupUserAttribution = shouldRenderSessionHistoryUserAttribution(
     channelVisibility,
     params.channelMeta,

@@ -911,12 +911,23 @@ describe('ApiServer', () => {
         model: DEFAULT_COMPANION_ID,
         messages: [{ role: 'user', content: 'Prepare a public draft.' }],
       }, {
-        'X-Channel-Privacy': 'broadcast',
+        'X-Channel-Privacy': 'public',
       });
       expect(res.status).toBe(200);
 
       const call = (mockAgent.handleMessage as any).mock.calls[0][0] as SubstrateMessage;
-      expect(call.routing?.channelPrivacy).toBe('broadcast');
+      expect(call.routing?.channelPrivacy).toBe('public');
+    });
+
+    it('rejects the retired broadcast privacy header fail-closed (E3.3: broadcast is a channel-owned flag)', async () => {
+      const res = await request(port, 'POST', '/v1/chat/completions', {
+        model: DEFAULT_COMPANION_ID,
+        messages: [{ role: 'user', content: 'Prepare a broadcast draft.' }],
+      }, {
+        'X-Channel-Privacy': 'broadcast',
+      });
+
+      expect(res.status).toBe(400);
     });
 
     it('rejects invalid channel privacy headers', async () => {

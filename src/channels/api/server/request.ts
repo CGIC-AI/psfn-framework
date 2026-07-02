@@ -4,7 +4,7 @@ import type {
   MessagePromptOverride,
   ResponseStyle,
 } from '../../../shared/contracts/runtime.js';
-import { isChannelVisibility, type ChannelVisibility } from '../../../system/trust/types.js';
+import { isChannelPrivacy, type ChannelPrivacy } from '../../../system/trust/context-envelope.js';
 import { readJsonBodyWithLimit } from '../../backplane/http/primitives.js';
 import type { ApiRuntimeChatRequest, ChatCompletionRequest } from '../types.js';
 import {
@@ -33,7 +33,7 @@ export interface TurnRoutingOverrides {
 
 export interface ChannelPrivacyResolution {
   ok: true;
-  value?: ChannelVisibility;
+  value?: ChannelPrivacy;
 }
 
 export interface ChannelPrivacyError {
@@ -141,7 +141,7 @@ export function resolveChannelPrivacy(req: IncomingMessage): ChannelPrivacyResol
   if (!rawValue) {
     return { ok: true };
   }
-  if (!isChannelVisibility(rawValue)) {
+  if (!isChannelPrivacy(rawValue)) {
     return {
       ok: false,
       error: 'X-Channel-Privacy must be one of: private, invite_only, public, broadcast',

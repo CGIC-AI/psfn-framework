@@ -1,7 +1,8 @@
 import type { ContextManifest } from '../../core/session/context-manifest.js';
 import type { CompanionPresenceMetadata, EmbodimentPresenceMetadata } from '../../core/agent/presence-metadata.js';
 import type { CredentialReference } from '../../boundary/custody/credential-vault.js';
-import type { ChannelVisibility, TrustLevel } from '../../system/trust/types.js';
+import type { TrustLevel } from '../../system/trust/types.js';
+import type { ChannelPrivacy } from '../../system/trust/context-envelope.js';
 import type { TurnID } from '../../core/turns/types.js';
 import type { ModelContextBudgetConfig } from '../context-budget-contracts.js';
 import type {
@@ -179,7 +180,7 @@ export interface CorrelationMetadata extends LLMRequestMetadata {
   callType: ObservabilityCallType;
   purpose: string;
   viewerTrustLevel?: TrustLevel;
-  viewerChannelVisibility?: ChannelVisibility;
+  viewerChannelPrivacy?: ChannelPrivacy;
   viewerIsDirectMessage?: boolean;
   embodimentContext?: EmbodimentPresenceMetadata;
 }
@@ -215,7 +216,7 @@ export interface MessageRoutingMetadata {
   wyoming?: WyomingRoutingMetadata;
   satellite?: SatelliteRoutingMetadata;
   broadcast?: BroadcastRoutingMetadata;
-  channelPrivacy?: ChannelVisibility;
+  channelPrivacy?: ChannelPrivacy;
   modelOverride?: MessageModelOverride;
   promptOverride?: MessagePromptOverride;
   responseStyle?: ResponseStyle;

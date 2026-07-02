@@ -36,7 +36,9 @@ export function defaultPrivacyForChannel(channel: ContactChannel): ChannelPrivac
     return 'private';
   }
   if (normalized === 'twitter' || normalized === 'rss' || normalized === 'broadcast') {
-    return 'broadcast';
+    // E3.3: broadcast is an envelope flag, not a privacy value; the
+    // provenance-only default records the structural class.
+    return 'public';
   }
   return 'invite_only';
 }

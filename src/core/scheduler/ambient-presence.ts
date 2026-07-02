@@ -1,7 +1,7 @@
 import type { EventBus } from '../../shared/event-bus.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import type { EpisodicProcessingRestWindowConfig } from '../../system/config/scheduler-config.js';
-import { classifyChannel } from '../../system/trust/policy.js';
+import { classifyChannelDisclosure } from '../../system/trust/policy.js';
 import type { StartupSessionMetadata } from '../session/manager.js';
 import { isInternalSessionId } from '../session/session-id.js';
 import type { SessionEntry } from '../session/types.js';
@@ -136,8 +136,9 @@ export function evaluateAmbientPresenceEligibility(
     return { allowed: false, reason: 'internal_session', nowMs, sessionId };
   }
 
-  const visibility = classifyChannel(sessionId);
-  if (visibility === 'public' || visibility === 'broadcast') {
+  // E3.3: public structural access is the privacy boundary; broadcast
+  // surfaces are always 'public', so the pair check is subsumed.
+  if (classifyChannelDisclosure(sessionId).channelPrivacy === 'public') {
     return { allowed: false, reason: 'privacy_boundary', nowMs, sessionId };
   }
 

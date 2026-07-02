@@ -8,8 +8,7 @@
   "visibilityAllowed": {
     "private": ["public", "personal", "intimate", "confidential"],
     "invite_only": ["public", "personal"],
-    "public": ["public"],
-    "broadcast": ["public"]
+    "public": ["public"]
   },
   "audienceScopeThresholds": {
     "fewMax": 10,

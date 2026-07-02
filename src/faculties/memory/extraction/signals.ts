@@ -1,6 +1,6 @@
 import type { SessionEntry } from '../../../core/session/types.js';
 import type { TurnID } from '../../../shared/contracts/runtime.js';
-import type { ChannelVisibility } from '../../../system/trust/types.js';
+import type { ChannelPrivacy } from '../../../system/trust/context-envelope.js';
 import type { ExtractedFact } from '../types.js';
 import { clamp } from './config.js';
 import type {
@@ -487,7 +487,7 @@ function jaccardSimilarity(left: string[], right: string[]): number {
 
 export function applyChannelImportanceCaps(
   fact: ExtractedFact,
-  channelVisibility: ChannelVisibility,
+  channelVisibility: ChannelPrivacy,
 ): ExtractedFact {
   if (fact.type === 'boundary') return fact;
   if (channelVisibility !== 'public') return fact;
@@ -498,7 +498,7 @@ export function applyChannelImportanceCaps(
 export function buildExtractionSourceRef(
   channelId: string,
   entries: SessionEntry[],
-  channelVisibility: ChannelVisibility,
+  channelVisibility: ChannelPrivacy,
   triggerReason?: string,
   turnId?: TurnID,
   logicalSessionId?: string,

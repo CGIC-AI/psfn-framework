@@ -897,6 +897,8 @@ export class AdminSettingsDataService implements AdminSettingsService {
           privacy: classification.privacy,
           broadcast: classification.broadcast,
           contactTracking: classification.contactTracking,
+          deliveryStyle: classification.deliveryStyle,
+          deliveryStyleSource: classification.deliveryStyleSource,
           source: classification.source,
           needsReview: classification.needsReview,
           hasLabel: label !== undefined,

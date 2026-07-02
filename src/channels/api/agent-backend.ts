@@ -21,7 +21,7 @@ import type { SubstrateAgent } from '../../core/agent/substrate-agent.js';
 import type { EventBus } from '../../shared/event-bus.js';
 import { createEventBusSensorIngestPort, type SensorIngestPort } from '../../shared/telemetry/sensor-ingest-port.js';
 import type { SessionManager } from '../../core/session/manager.js';
-import { isChannelVisibility, type ChannelVisibility } from '../../system/trust/types.js';
+import { isChannelPrivacy, type ChannelPrivacy } from '../../system/trust/context-envelope.js';
 import type {
   ApiChatCompletionCancelRpcParams,
   ApiChatCompletionCancelRpcResult,
@@ -87,7 +87,7 @@ interface TurnRoutingOverrides {
 
 interface ChannelPrivacyResolution {
   ok: true;
-  value?: ChannelVisibility;
+  value?: ChannelPrivacy;
 }
 
 interface ChannelPrivacyError {
@@ -613,7 +613,7 @@ export class AgentApiBackend {
     messages: ChatCompletionRequest['messages'],
     authorId: string,
     authorName: string,
-    channelPrivacy?: ChannelVisibility,
+    channelPrivacy?: ChannelPrivacy,
   ): void {
     const count = this.sessionManager.getMessageCount(channelId);
     if (count > 0) return;
@@ -661,7 +661,7 @@ export class AgentApiBackend {
     if (!rawValue) {
       return { ok: true };
     }
-    if (!isChannelVisibility(rawValue)) {
+    if (!isChannelPrivacy(rawValue)) {
       return {
         ok: false,
         error: 'X-Channel-Privacy must be one of: private, invite_only, public, broadcast',
@@ -939,7 +939,7 @@ export class AgentApiBackend {
     authorName: string;
     headers: ApiRpcHeaders;
     overrides: TurnRoutingOverrides;
-    channelPrivacy?: ChannelVisibility;
+    channelPrivacy?: ChannelPrivacy;
     canonicalContactId?: string;
     satellite?: SatelliteRoutingMetadata;
     attachments?: Attachment[];

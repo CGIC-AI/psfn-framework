@@ -60,21 +60,21 @@ describe('ContactStore social graph', () => {
     const publicVisible = store.listSocialRelationshipEdges({
       contactId: alice.id,
       viewerTrustLevel: 'public',
-      viewerChannelVisibility: 'private',
+      viewerChannelPrivacy: 'private',
     });
     expect(publicVisible).toHaveLength(0);
 
     const regularVisible = store.listSocialRelationshipEdges({
       contactId: alice.id,
       viewerTrustLevel: 'regular',
-      viewerChannelVisibility: 'private',
+      viewerChannelPrivacy: 'private',
     });
     expect(regularVisible).toHaveLength(2);
 
     const trustedVisible = store.listSocialRelationshipEdges({
       contactId: alice.id,
       viewerTrustLevel: 'trusted',
-      viewerChannelVisibility: 'private',
+      viewerChannelPrivacy: 'private',
     });
     expect(trustedVisible).toHaveLength(2);
     expect(trustedVisible.map(edge => edge.relationshipType).sort()).toEqual(['family', 'friend']);
@@ -142,7 +142,7 @@ describe('ContactStore social graph', () => {
     const mergedEdges = store.listSocialRelationshipEdges({
       contactId: target.id,
       viewerTrustLevel: 'trusted',
-      viewerChannelVisibility: 'private',
+      viewerChannelPrivacy: 'private',
     });
     expect(mergedEdges).toHaveLength(1);
     expect(mergedEdges[0]?.confidence).toBe(0.85);
@@ -150,7 +150,7 @@ describe('ContactStore social graph', () => {
 
     const relatedContacts = store.listRelatedContacts(target.id, {
       viewerTrustLevel: 'trusted',
-      viewerChannelVisibility: 'private',
+      viewerChannelPrivacy: 'private',
     });
     expect(relatedContacts.map(contact => contact.id)).toEqual([third.id]);
   });

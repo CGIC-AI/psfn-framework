@@ -92,7 +92,7 @@ describe('AdminSettingsDataService channel envelope surface', () => {
     const announcements = data.channels[3];
     expect(announcements).toMatchObject({ privacy: 'public', broadcast: true, source: 'channel_label' });
 
-    expect(data.prefixOverrides).toEqual({ 'ops:': 'private' });
+    expect(data.prefixOverrides).toEqual({ 'ops:': { privacy: 'private', broadcast: false } });
     expect(data.broadcastPrefixes).toContain('twitter:');
   });
 

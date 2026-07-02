@@ -142,7 +142,7 @@ describe('session search tools', () => {
         purpose: 'agent.turn.prompt',
         channelId: 'api:public-search',
         viewerTrustLevel: 'regular',
-        viewerChannelVisibility: 'public',
+        viewerChannelPrivacy: 'public',
       },
       () => tool.execute('session-search-1', { query: 'Project Orion' }),
     );
@@ -196,7 +196,7 @@ describe('session search tools', () => {
         purpose: 'agent.turn.prompt',
         channelId: 'api:public-search',
         viewerTrustLevel: 'regular',
-        viewerChannelVisibility: 'public',
+        viewerChannelPrivacy: 'public',
       },
       () => tool.execute('session-search-cogsec', { query: 'CogSec' }),
     );
@@ -248,7 +248,7 @@ describe('session search tools', () => {
         purpose: 'agent.turn.prompt',
         channelId: 'api:private-search',
         viewerTrustLevel: 'primary',
-        viewerChannelVisibility: 'private',
+        viewerChannelPrivacy: 'private',
       },
       () => tool.execute('session-search-2', {
         query: 'Pegasus',
@@ -297,7 +297,7 @@ describe('session search tools', () => {
         purpose: 'agent.turn.prompt',
         channelId: 'api:alias-search',
         viewerTrustLevel: 'primary',
-        viewerChannelVisibility: 'private',
+        viewerChannelPrivacy: 'private',
       },
       () => tool.execute('session-search-3', { keyword: 'Matrix verification' }),
     );
@@ -343,7 +343,7 @@ describe('session search tools', () => {
         purpose: 'agent.turn.prompt',
         channelId: sourceChannelId,
         viewerTrustLevel: 'primary',
-        viewerChannelVisibility: 'private',
+        viewerChannelPrivacy: 'private',
       },
       () => tool.execute('session-search-routes', { query: 'Route audit needle', limit: 5 }),
     );
@@ -433,7 +433,7 @@ describe('session search tools', () => {
         purpose: 'agent.turn.prompt',
         channelId: 'api:public-search',
         viewerTrustLevel: 'regular',
-        viewerChannelVisibility: 'public',
+        viewerChannelPrivacy: 'public',
       },
       () => tool.execute('session-grep-1', { pattern: 'Orion launch date' }),
     );
@@ -507,7 +507,7 @@ describe('session search tools', () => {
         purpose: 'agent.turn.prompt',
         channelId: 'api:public-search',
         viewerTrustLevel: 'regular',
-        viewerChannelVisibility: 'public',
+        viewerChannelPrivacy: 'public',
       },
       () => tool.execute('session-grep-cogsec', { pattern: 'CogSec' }),
     );
@@ -564,7 +564,7 @@ describe('session search tools', () => {
         purpose: 'agent.turn.prompt',
         channelId: sourceChannelId,
         viewerTrustLevel: 'primary',
-        viewerChannelVisibility: 'private',
+        viewerChannelPrivacy: 'private',
       },
       () => tool.execute('session-grep-routes', { pattern: 'Grep route needle' }),
     );
@@ -604,7 +604,7 @@ describe('session search tools', () => {
         purpose: 'agent.turn.prompt',
         channelId: 'api:public-search',
         viewerTrustLevel: 'regular',
-        viewerChannelVisibility: 'public',
+        viewerChannelPrivacy: 'public',
       },
       () => tool.execute('session-grep-2', { pattern: 'Orion' }),
     );

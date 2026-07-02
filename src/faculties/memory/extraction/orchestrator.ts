@@ -10,7 +10,7 @@ import {
   getDefaultPromptText,
 } from '../../../core/identity/prompt-registry.js';
 import { injectPromptRuntimeTokens } from '../../../core/identity/prompt-runtime.js';
-import { classifyChannel } from '../../../system/trust/policy.js';
+import { classifyChannelDisclosure } from '../../../system/trust/policy.js';
 import { extractBoundaryFactsFromEntries } from '../boundary-log.js';
 import { extractExplicitPreferenceFactsFromEntries } from './preference.js';
 import type { MemoryStorePort } from '../memory-store-port.js';
@@ -183,7 +183,7 @@ export async function runExtractionOrchestration(options: ExtractionRunOptions):
     const requestId = latestTurnContext?.requestId ?? `memory-extraction:${options.channelId}:${options.triggerReason}`;
     await options.emitExtractionStart(options.channelId, options.triggerReason, turnId);
 
-    const channelVisibility = classifyChannel(options.channelId);
+    const channelVisibility = classifyChannelDisclosure(options.channelId).channelPrivacy;
     if (!options.canonicalContactId) {
       const preLlmGate = evaluateExtractionPreLlmGate(recentEntries);
       if (!preLlmGate.allowed) {

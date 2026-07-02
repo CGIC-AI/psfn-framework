@@ -3313,13 +3313,15 @@ describe('AdminServer JSON API routes', () => {
         channelPrivacy: [{
           channel: 'discord',
           channelId: '1313001762793197678',
-          privacyLevel: 'broadcast',
+          // E3.3: retired 'broadcast' privacy vocabulary is rejected; the
+          // provenance-only per-contact field takes ChannelPrivacy values.
+          privacyLevel: 'public',
         }],
       }),
       authHeaders,
     );
     expect(directChannelRes.status).toBe(200);
-    expect(contactStore.getConversationChannelPrivacy(contact.id, 'discord', '1313001762793197678')).toBe('broadcast');
+    expect(contactStore.getConversationChannelPrivacy(contact.id, 'discord', '1313001762793197678')).toBe('public');
 
     const patchRes = await request(
       port,
@@ -3345,7 +3347,7 @@ describe('AdminServer JSON API routes', () => {
     expect(auditPayload.mutationAudits.some(entry => (
       entry.field === 'channel_privacy'
       && entry.actor === 'admin:api'
-      && entry.newValue?.includes('"privacyLevel":"broadcast"')
+      && entry.newValue?.includes('"privacyLevel":"public"')
     ))).toBe(true);
 
     const badPatch = await request(
@@ -4382,7 +4384,6 @@ describe('AdminServer JSON API routes', () => {
         private: ['public', 'personal', 'intimate', 'confidential'],
         invite_only: ['public', 'personal'],
         public: ['public'],
-        broadcast: ['public'],
       },
       channelClassification: {
         privatePrefixes: ['custom:'],
@@ -4390,7 +4391,8 @@ describe('AdminServer JSON API routes', () => {
         defaultVisibility: 'public',
         visibilityOverrides: {
           exact: {
-            'custom:exact-room': 'broadcast',
+            // E3.3: broadcast overrides are the explicit envelope pair.
+            'custom:exact-room': { privacy: 'public', broadcast: true },
           },
           prefix: {
             'custom:': 'private',

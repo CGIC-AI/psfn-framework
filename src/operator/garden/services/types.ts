@@ -91,8 +91,9 @@ import type {
   SocialGraphEntitySource,
   SocialRelationshipKind,
 } from '../../../core/contacts/types.js';
-import type { ChannelVisibility, SensitivityLevel, TrustLevel } from '../../../system/trust/types.js';
+import type { SensitivityLevel, TrustLevel } from '../../../system/trust/types.js';
 import type {
+  ChannelDeliveryStyle,
   ChannelEnvelopeLabel,
   ChannelPrivacy,
   ContactTrackingMode,
@@ -1096,9 +1097,9 @@ export interface AdminContinuityProvenanceView {
   turnId: string;
   continuityUserId: string;
   sourceChannelId: string;
-  sourceVisibility: ChannelVisibility;
+  sourceVisibility: ChannelPrivacy;
   currentChannelId: string;
-  currentVisibility: ChannelVisibility;
+  currentVisibility: ChannelPrivacy;
   carriedAcrossChannels: boolean;
 }
 
@@ -1252,6 +1253,9 @@ export interface AdminChannelEnvelopeRow {
   privacy: ChannelPrivacy;
   broadcast: boolean;
   contactTracking: ContactTrackingMode;
+  /** Resolved delivery style (channel label or derived default; E3.3). */
+  deliveryStyle: ChannelDeliveryStyle;
+  deliveryStyleSource: 'channel_label' | 'derived_default';
   source: ChannelClassificationSource;
   /** Migration-seeded fail-closed label awaiting operator review (warning badge). */
   needsReview: boolean;
@@ -1263,7 +1267,7 @@ export interface AdminChannelEnvelopeRow {
 export interface AdminChannelEnvelopeData {
   channels: AdminChannelEnvelopeRow[];
   /** Operator trust-policy prefix overrides (informational; tier 2). */
-  prefixOverrides: Record<string, string>;
+  prefixOverrides: Record<string, { privacy: ChannelPrivacy; broadcast: boolean }>;
   /** Demoted derived-default prefix heuristics (informational; tier 3). */
   privatePrefixes: string[];
   broadcastPrefixes: string[];

@@ -1,18 +1,21 @@
-// E3.2 — envelope-keyed channel classification tests.
+// E3.2/E3.3 — envelope-keyed channel classification tests.
 // Covers the contract precedence (channel-owned label > operator override >
 // derived default), the executed broadcast split, the demotion of prefix
 // heuristics to derived-default inputs, and continuity/mirroring equivalence
-// for equivalently-labeled channels. Contract: docs/context-envelope.md.
+// for equivalently-labeled channels. E3.3 deleted the transitional single-axis
+// ChannelVisibility projection: the {channelPrivacy, broadcast} pair IS the
+// classification. Contract: docs/context-envelope.md.
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
-  classifyChannel,
+  classifyChannelDisclosure,
   classifyChannelEnvelope,
   channelsShareContinuity,
   getAllowedSensitivities,
   getVisibilityDisclosureCeiling,
   resolveChannelEnvelopeClassification,
   visibilitiesShareContinuity,
+  type ChannelDisclosureContext,
 } from './policy.js';
 import {
   getDefaultTrustPolicy,
@@ -40,6 +43,11 @@ function policyWithOverrides(overrides: Partial<TrustPolicyConfig['channelClassi
   };
 }
 
+const PRIVATE_PAIR: ChannelDisclosureContext = { channelPrivacy: 'private', broadcast: false };
+const INVITE_ONLY_PAIR: ChannelDisclosureContext = { channelPrivacy: 'invite_only', broadcast: false };
+const PUBLIC_PAIR: ChannelDisclosureContext = { channelPrivacy: 'public', broadcast: false };
+const BROADCAST_PAIR: ChannelDisclosureContext = { channelPrivacy: 'public', broadcast: true };
+
 beforeEach(() => {
   resetRuntimeTrustPolicy();
   resetRuntimeChannelEnvelopeLabels();
@@ -53,7 +61,7 @@ afterEach(() => {
 describe('classifyChannelEnvelope precedence', () => {
   it('resolves the channel-owned label above operator overrides and derived defaults', () => {
     setRuntimeTrustPolicy(policyWithOverrides({
-      exact: { 'discord:friends-room': 'public' },
+      exact: { 'discord:friends-room': { privacy: 'public', broadcast: false } },
     }));
     setRuntimeChannelEnvelopeLabels({
       'discord:friends-room': { privacy: 'invite_only' },
@@ -65,14 +73,14 @@ describe('classifyChannelEnvelope precedence', () => {
       broadcast: false,
       source: 'channel_label',
     });
-    expect(classifyChannel('discord:friends-room')).toBe('invite_only');
+    expect(classifyChannelDisclosure('discord:friends-room')).toEqual(INVITE_ONLY_PAIR);
   });
 
   it('lets a channel-owned label beat the broadcast prefix heuristic (demoted to derived tier)', () => {
     setRuntimeChannelEnvelopeLabels({
       'twitter:main': { privacy: 'private' },
     });
-    expect(classifyChannel('twitter:main')).toBe('private');
+    expect(classifyChannelDisclosure('twitter:main')).toEqual(PRIVATE_PAIR);
     expect(classifyChannelEnvelope('twitter:main').source).toBe('channel_label');
   });
 
@@ -80,10 +88,10 @@ describe('classifyChannelEnvelope precedence', () => {
     setRuntimeChannelEnvelopeLabels({
       'api:session-9': { privacy: 'public' },
     });
-    expect(classifyChannel('api:session-9', { privacyLevel: 'private' })).toBe('public');
+    expect(classifyChannelDisclosure('api:session-9', { privacyLevel: 'private' })).toEqual(PUBLIC_PAIR);
   });
 
-  it('executes the broadcast split for channel labels: public + broadcast flag projects to broadcast', () => {
+  it('executes the broadcast split for channel labels: public + broadcast flag is the classification', () => {
     setRuntimeChannelEnvelopeLabels({
       'social:announcements': { privacy: 'public', broadcast: true },
     });
@@ -93,7 +101,7 @@ describe('classifyChannelEnvelope precedence', () => {
       broadcast: true,
       source: 'channel_label',
     });
-    expect(classifyChannel('social:announcements')).toBe('broadcast');
+    expect(classifyChannelDisclosure('social:announcements')).toEqual(BROADCAST_PAIR);
   });
 
   it('treats a bare broadcast=true label as a public broadcast surface (contract rule)', () => {
@@ -114,12 +122,12 @@ describe('classifyChannelEnvelope precedence', () => {
     const envelope = classifyChannelEnvelope('twitter:dm-mirror');
     expect(envelope.broadcast).toBe(false);
     expect(envelope.privacy).toBe('public');
-    expect(classifyChannel('twitter:dm-mirror')).toBe('public');
+    expect(classifyChannelDisclosure('twitter:dm-mirror')).toEqual(PUBLIC_PAIR);
   });
 
-  it('maps operator broadcast overrides through the envelope migration pair', () => {
+  it('resolves operator broadcast overrides as the envelope pair', () => {
     setRuntimeTrustPolicy(policyWithOverrides({
-      exact: { 'room:megaphone': 'broadcast' },
+      exact: { 'room:megaphone': { privacy: 'public', broadcast: true } },
     }));
     const envelope = classifyChannelEnvelope('room:megaphone');
     expect(envelope).toMatchObject({
@@ -127,18 +135,18 @@ describe('classifyChannelEnvelope precedence', () => {
       broadcast: true,
       source: 'operator_override',
     });
-    expect(classifyChannel('room:megaphone')).toBe('broadcast');
+    expect(classifyChannelDisclosure('room:megaphone')).toEqual(BROADCAST_PAIR);
   });
 
   it('keeps longest-prefix operator override resolution', () => {
     setRuntimeTrustPolicy(policyWithOverrides({
       prefix: {
-        'room:': 'public',
-        'room:staff': 'private',
+        'room:': { privacy: 'public', broadcast: false },
+        'room:staff': { privacy: 'private', broadcast: false },
       },
     }));
-    expect(classifyChannel('room:staff-only')).toBe('private');
-    expect(classifyChannel('room:lobby')).toBe('public');
+    expect(classifyChannelDisclosure('room:staff-only')).toEqual(PRIVATE_PAIR);
+    expect(classifyChannelDisclosure('room:lobby')).toEqual(PUBLIC_PAIR);
   });
 
   it('surfaces contactTracking and needsReview from the channel label without gating on them', () => {
@@ -148,7 +156,7 @@ describe('classifyChannelEnvelope precedence', () => {
     const envelope = classifyChannelEnvelope('room:new-place');
     expect(envelope.contactTracking).toBe('approval');
     expect(envelope.needsReview).toBe(true);
-    expect(classifyChannel('room:new-place')).toBe('invite_only');
+    expect(classifyChannelDisclosure('room:new-place')).toEqual(INVITE_ONLY_PAIR);
   });
 
   it('defaults contactTracking to auto when unlabeled', () => {
@@ -156,17 +164,44 @@ describe('classifyChannelEnvelope precedence', () => {
   });
 });
 
+describe('deliveryStyle resolution at classification (E3.3)', () => {
+  it('uses the channel-owned deliveryStyle label when present', () => {
+    setRuntimeChannelEnvelopeLabels({
+      'room:styled': { privacy: 'public', deliveryStyle: 'expressive' },
+    });
+    const envelope = classifyChannelEnvelope('room:styled');
+    expect(envelope.deliveryStyle).toBe('expressive');
+    expect(envelope.deliveryStyleSource).toBe('channel_label');
+  });
+
+  it('derives the default style once from the final pair (private → expressive, else concise)', () => {
+    expect(classifyChannelEnvelope('dm:alice', { isDirectMessage: true })).toMatchObject({
+      deliveryStyle: 'expressive',
+      deliveryStyleSource: 'derived_default',
+    });
+    expect(classifyChannelEnvelope('room:townsquare')).toMatchObject({
+      deliveryStyle: 'concise',
+      deliveryStyleSource: 'derived_default',
+    });
+    // Broadcast ⇒ public ⇒ concise.
+    expect(classifyChannelEnvelope('twitter:main')).toMatchObject({
+      deliveryStyle: 'concise',
+      deliveryStyleSource: 'derived_default',
+    });
+  });
+});
+
 describe('derived-default tier (byte-parity with the pre-envelope hierarchy)', () => {
   it('classifies direct messages private', () => {
-    expect(classifyChannel('dm:alice', { isDirectMessage: true })).toBe('private');
+    expect(classifyChannelDisclosure('dm:alice', { isDirectMessage: true })).toEqual(PRIVATE_PAIR);
     expect(classifyChannelEnvelope('dm:alice', { isDirectMessage: true }).source).toBe('derived_default');
   });
 
   it('keeps demoted prefix heuristics as derived inputs for unlabeled channels', () => {
-    expect(classifyChannel('api:session-1')).toBe('private');
-    expect(classifyChannel('internal:heartbeat')).toBe('private');
-    expect(classifyChannel('subagent:worker-1')).toBe('private');
-    expect(classifyChannel('twitter:main')).toBe('broadcast');
+    expect(classifyChannelDisclosure('api:session-1')).toEqual(PRIVATE_PAIR);
+    expect(classifyChannelDisclosure('internal:heartbeat')).toEqual(PRIVATE_PAIR);
+    expect(classifyChannelDisclosure('subagent:worker-1')).toEqual(PRIVATE_PAIR);
+    expect(classifyChannelDisclosure('twitter:main')).toEqual(BROADCAST_PAIR);
     expect(classifyChannelEnvelope('twitter:main')).toMatchObject({
       privacy: 'public',
       broadcast: true,
@@ -184,11 +219,13 @@ describe('derived-default tier (byte-parity with the pre-envelope hierarchy)', (
   });
 
   it('still honors adapter-declared ChannelMeta privacy inside the derived tier', () => {
-    expect(classifyChannel('room:somewhere', { privacyLevel: 'public' })).toBe('public');
-    expect(classifyChannelEnvelope('room:somewhere', { privacyLevel: 'broadcast' })).toMatchObject({
-      privacy: 'public',
-      broadcast: true,
-    });
+    expect(classifyChannelDisclosure('room:somewhere', { privacyLevel: 'public' })).toEqual(PUBLIC_PAIR);
+    expect(classifyChannelDisclosure('room:somewhere', { privacyLevel: 'private' })).toEqual(PRIVATE_PAIR);
+    // E3.3: adapters declare ChannelPrivacy only — ChannelMeta can never set
+    // the broadcast flag; a broadcast classification comes from labels,
+    // operator overrides, or the demoted broadcastPrefixes heuristic.
+    expect(classifyChannelEnvelope('room:somewhere', { privacyLevel: 'public' }).broadcast).toBe(false);
+    expect(classifyChannelDisclosure('social:somewhere')).toEqual(BROADCAST_PAIR);
   });
 });
 
@@ -196,20 +233,20 @@ describe('derived-default tier (byte-parity with the pre-envelope hierarchy)', (
 // src/core/agent/substrate-agent/runtime-context.test.ts: a contact store
 // labeling a conversation channel 'private' neither surfaces
 // channelPrivacyLevel on the resolved author context nor changes
-// classifyChannel's output for that channel.
+// classifyChannelEnvelope's output for that channel.
 
 describe('continuity and mirroring equivalence for equivalently-labeled channels', () => {
   it('classifies a labeled invite_only channel identically to a derived invite_only channel across the continuity gates', () => {
     setRuntimeChannelEnvelopeLabels({
       'labeled:room': { privacy: 'invite_only' },
     });
-    const labeled = classifyChannel('labeled:room');
-    const derived = classifyChannel('room:derived-default');
-    expect(labeled).toBe('invite_only');
-    expect(derived).toBe('invite_only');
+    const labeled = classifyChannelDisclosure('labeled:room');
+    const derived = classifyChannelDisclosure('room:derived-default');
+    expect(labeled).toEqual(INVITE_ONLY_PAIR);
+    expect(derived).toEqual(INVITE_ONLY_PAIR);
 
-    // visibilitiesShareContinuity consumes exactly the classification output.
-    for (const target of ['private', 'invite_only', 'public', 'broadcast'] as const) {
+    // visibilitiesShareContinuity consumes exactly the classification pair.
+    for (const target of [PRIVATE_PAIR, INVITE_ONLY_PAIR, PUBLIC_PAIR, BROADCAST_PAIR]) {
       expect(visibilitiesShareContinuity(labeled, target)).toBe(visibilitiesShareContinuity(derived, target));
       expect(visibilitiesShareContinuity(target, labeled)).toBe(visibilitiesShareContinuity(target, derived));
     }
@@ -228,22 +265,30 @@ describe('continuity and mirroring equivalence for equivalently-labeled channels
 
   it('keeps invite_only continuity direction exactly as the old semi_private semantics', () => {
     // From the contract's continuity table (docs/context-envelope.md).
-    expect(visibilitiesShareContinuity('private', 'invite_only')).toBe(false);
-    expect(visibilitiesShareContinuity('invite_only', 'private')).toBe(true);
-    expect(visibilitiesShareContinuity('invite_only', 'invite_only')).toBe(true);
-    expect(visibilitiesShareContinuity('invite_only', 'public')).toBe(false);
-    expect(visibilitiesShareContinuity('public', 'invite_only')).toBe(true);
-    expect(visibilitiesShareContinuity('broadcast', 'invite_only')).toBe(true);
+    expect(visibilitiesShareContinuity(PRIVATE_PAIR, INVITE_ONLY_PAIR)).toBe(false);
+    expect(visibilitiesShareContinuity(INVITE_ONLY_PAIR, PRIVATE_PAIR)).toBe(true);
+    expect(visibilitiesShareContinuity(INVITE_ONLY_PAIR, INVITE_ONLY_PAIR)).toBe(true);
+    expect(visibilitiesShareContinuity(INVITE_ONLY_PAIR, PUBLIC_PAIR)).toBe(false);
+    expect(visibilitiesShareContinuity(PUBLIC_PAIR, INVITE_ONLY_PAIR)).toBe(true);
+    expect(visibilitiesShareContinuity(BROADCAST_PAIR, INVITE_ONLY_PAIR)).toBe(true);
+  });
+
+  it('gates a broadcast pair exactly like the public row across the continuity surfaces', () => {
+    for (const other of [PRIVATE_PAIR, INVITE_ONLY_PAIR, PUBLIC_PAIR, BROADCAST_PAIR]) {
+      expect(visibilitiesShareContinuity(BROADCAST_PAIR, other)).toBe(visibilitiesShareContinuity(PUBLIC_PAIR, other));
+      expect(visibilitiesShareContinuity(other, BROADCAST_PAIR)).toBe(visibilitiesShareContinuity(other, PUBLIC_PAIR));
+    }
+    expect(getVisibilityDisclosureCeiling(BROADCAST_PAIR)).toBe(getVisibilityDisclosureCeiling(PUBLIC_PAIR));
   });
 
   it('treats a labeled public+broadcast channel identically to a prefix-derived broadcast channel', () => {
     setRuntimeChannelEnvelopeLabels({
       'labeled:megaphone': { privacy: 'public', broadcast: true },
     });
-    const labeled = classifyChannel('labeled:megaphone');
-    const derived = classifyChannel('twitter:main');
-    expect(labeled).toBe('broadcast');
-    expect(derived).toBe('broadcast');
+    const labeled = classifyChannelDisclosure('labeled:megaphone');
+    const derived = classifyChannelDisclosure('twitter:main');
+    expect(labeled).toEqual(BROADCAST_PAIR);
+    expect(derived).toEqual(BROADCAST_PAIR);
     expect(getVisibilityDisclosureCeiling(labeled)).toBe(getVisibilityDisclosureCeiling(derived));
     expect(channelsShareContinuity('labeled:megaphone', 'twitter:main')).toBe(true);
   });

@@ -2,7 +2,8 @@
 // The internal-turn kind, the one-on-one speaking_with binding, and the
 // channel type/visibility variables for one turn.
 
-import type { ChannelVisibility, TrustLevel } from '../../../../system/trust/types.js';
+import type { TrustLevel } from '../../../../system/trust/types.js';
+import type { ChannelPrivacy } from '../../../../system/trust/context-envelope.js';
 
 export function buildTurnBindingPromptVariables(input: {
   internalTurn: boolean;
@@ -11,7 +12,8 @@ export function buildTurnBindingPromptVariables(input: {
   resolvedUserName: string;
   trustLevel: TrustLevel;
   channelType: string | undefined;
-  visibility: ChannelVisibility;
+  /** ChannelPrivacy projection of the turn envelope (broadcast is {{runtime_broadcast}}). */
+  visibility: ChannelPrivacy;
 }): Record<string, string> {
   return {
     runtime_internal_turn_kind: input.internalTurn ? (input.taskKind ?? 'background') : '',

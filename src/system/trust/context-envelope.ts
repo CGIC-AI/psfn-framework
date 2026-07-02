@@ -14,12 +14,14 @@
 // Trust (4 tiers) and sensitivity (4 levels) are referenced, NOT redefined —
 // the pre-envelope gap was missing dimensions, not missing granularity.
 //
-// This module is the E3.1 CONTRACT: pure types, guards, config validation, and
-// derivation helpers. Nothing here is wired into gating. E3.2 wires the
-// channels.json/trust-policy.json owners into classification; E3.3 attaches
-// the envelope to ConversationScope and re-keys the policy gates.
-
-import type { ChannelVisibility } from './types.js';
+// This module is the canonical envelope vocabulary: pure types, guards,
+// config validation, and derivation helpers. E3.2 wired the
+// channels.json/trust-policy.json owners into classification; E3.3 attached
+// the envelope to ConversationScope and re-keyed the policy gates onto
+// { channelPrivacy, broadcast }. The transitional single-axis
+// ChannelVisibility type is deleted; only the persisted-data read decoder
+// (decodeStoredChannelVisibility in ./types.ts) still understands the retired
+// stored vocabulary.
 
 // ── channelPrivacy ──
 
@@ -157,6 +159,38 @@ export function deriveAudienceKnowledge(input: {
   return 'anonymous';
 }
 
+// ── deliveryStyle ──
+
+/**
+ * Channel-owned delivery/length style (charter delivery-guidance rule):
+ * length/delivery knobs only — never persona or tone prose. E3.3 decouples
+ * response style from privacy: a channels.json label may pin the style, and
+ * the retired privacy→style mapping survives only as the derived default
+ * applied once at classification (deriveDefaultDeliveryStyle).
+ */
+export type ChannelDeliveryStyle = 'concise' | 'expressive';
+
+export const CHANNEL_DELIVERY_STYLES: readonly ChannelDeliveryStyle[] = ['concise', 'expressive'];
+
+export function isChannelDeliveryStyle(value: unknown): value is ChannelDeliveryStyle {
+  return typeof value === 'string' && (CHANNEL_DELIVERY_STYLES as readonly string[]).includes(value);
+}
+
+/**
+ * Derived-default delivery style for a classified channel. This is the ONLY
+ * place the retired privacy→style coupling survives, applied once at
+ * classification so unlabeled channels keep their pre-E3.3 behavior
+ * (private → expressive; everything else, including broadcast surfaces,
+ * → concise). Channel-owned labels and operator response-style overrides
+ * always win over this default.
+ */
+export function deriveDefaultDeliveryStyle(pair: {
+  channelPrivacy: ChannelPrivacy;
+  broadcast: boolean;
+}): ChannelDeliveryStyle {
+  return pair.channelPrivacy === 'private' && !pair.broadcast ? 'expressive' : 'concise';
+}
+
 // ── contactTracking ──
 
 /**
@@ -213,15 +247,77 @@ export function isContextEnvelope(value: unknown): value is ContextEnvelope {
 }
 
 /**
- * ConversationScope attachment seam (E3.3).
+ * ConversationScope attachment seam (executed in E3.3).
  *
- * E3.3 extends ConversationScope (src/core/session/conversation-scope.ts)
- * with `readonly envelope: ContextEnvelope`, resolved once per turn at
- * session-manager ingress alongside the scope itself. This carrier interface
- * is the documented seam; nothing implements it in E3.1.
+ * ConversationScope (src/core/session/conversation-scope.ts) carries
+ * `readonly envelope: ContextEnvelope`, resolved once per turn at
+ * session-manager ingress alongside the scope itself.
  */
 export interface ContextEnvelopeCarrier {
   readonly envelope: ContextEnvelope;
+}
+
+/**
+ * Full envelope derivation at scope-resolution time (E3.3).
+ *
+ * Inputs are the interim derivation sources the contract names
+ * (docs/context-envelope.md): channel classification ({channelPrivacy,
+ * broadcast} from classifyChannelEnvelope), conversation topology
+ * (dm → audienceScope 'one'), the recent-speaker window, and contact
+ * resolvability of that window.
+ *
+ * Fail-closed rules:
+ * - group audienceKnowledge with an unknown/empty resolvability input is
+ *   'anonymous', never 'all_known';
+ * - dm audienceKnowledge is 'all_known' only when the DM partner is a
+ *   genuinely resolved contact (dmContactResolved), else derived from the
+ *   window (empty window → 'anonymous').
+ */
+export function deriveScopeContextEnvelope(input: {
+  classification: { channelPrivacy: ChannelPrivacy; broadcast: boolean };
+  kind: 'dm' | 'group';
+  /** True when the DM partner resolved to a genuine canonical contact. */
+  dmContactResolved?: boolean;
+  recentSpeakerCount: number;
+  /** Recent speakers resolvable to contacts; absent fails closed to 0. */
+  resolvedSpeakerContactCount?: number;
+  /** Bounded roster hint when the channel adapter can enumerate members. */
+  memberCountHint?: number;
+  thresholds: AudienceScopeThresholds;
+}): ContextEnvelope {
+  const { classification, thresholds } = input;
+  if (input.kind === 'dm') {
+    return {
+      channelPrivacy: classification.channelPrivacy,
+      broadcast: classification.broadcast,
+      audienceScope: 'one',
+      audienceKnowledge: input.dmContactResolved === true
+        ? 'all_known'
+        : deriveAudienceKnowledge({
+          recentSpeakerCount: input.recentSpeakerCount,
+          resolvedContactCount: Math.min(
+            input.resolvedSpeakerContactCount ?? 0,
+            input.recentSpeakerCount,
+          ),
+        }),
+    };
+  }
+  // Interim roster bound: memberCountHint when the adapter supplied one, else
+  // the distinct recent-speaker count. E4.1 seam: the ContactChannelActivity
+  // room-roster query slots in here as the knownRosterSize source.
+  const knownRosterSize = input.memberCountHint ?? input.recentSpeakerCount;
+  return {
+    channelPrivacy: classification.channelPrivacy,
+    broadcast: classification.broadcast,
+    audienceScope: deriveAudienceScope({ topology: 'group', knownRosterSize }, thresholds),
+    audienceKnowledge: deriveAudienceKnowledge({
+      recentSpeakerCount: input.recentSpeakerCount,
+      resolvedContactCount: Math.min(
+        input.resolvedSpeakerContactCount ?? 0,
+        input.recentSpeakerCount,
+      ),
+    }),
+  };
 }
 
 // ── Per-channel owner-file labels (channels.json `contextEnvelope.channels`) ──
@@ -241,6 +337,12 @@ export interface ChannelEnvelopeLabel {
   readonly privacy?: ChannelPrivacy;
   readonly broadcast?: boolean;
   readonly contactTracking?: ContactTrackingMode;
+  /**
+   * Channel-owned delivery/length style (E3.3). Absent means the derived
+   * default applies (deriveDefaultDeliveryStyle). Delivery only — persona and
+   * tone prose remain forbidden substrate content (charter rule).
+   */
+  readonly deliveryStyle?: ChannelDeliveryStyle;
   readonly needsReview?: boolean;
 }
 
@@ -249,8 +351,8 @@ export function validateChannelEnvelopeLabel(raw: unknown, field: string): Chann
     throw new Error(`Invalid channel envelope label: ${field} must be an object`);
   }
   const source = raw as Record<string, unknown>;
-  const unknownKeys = Object.keys(source)
-    .filter(key => key !== 'privacy' && key !== 'broadcast' && key !== 'contactTracking' && key !== 'needsReview');
+  const supportedKeys = ['privacy', 'broadcast', 'contactTracking', 'deliveryStyle', 'needsReview'];
+  const unknownKeys = Object.keys(source).filter(key => !supportedKeys.includes(key));
   if (unknownKeys.length > 0) {
     throw new Error(`Invalid channel envelope label: ${field} has unsupported keys: ${unknownKeys.join(', ')}`);
   }
@@ -262,6 +364,7 @@ export function validateChannelEnvelopeLabel(raw: unknown, field: string): Chann
     privacy?: ChannelPrivacy;
     broadcast?: boolean;
     contactTracking?: ContactTrackingMode;
+    deliveryStyle?: ChannelDeliveryStyle;
     needsReview?: boolean;
   } = {};
 
@@ -287,6 +390,14 @@ export function validateChannelEnvelopeLabel(raw: unknown, field: string): Chann
     }
     label.contactTracking = source.contactTracking;
   }
+  if (source.deliveryStyle !== undefined) {
+    if (!isChannelDeliveryStyle(source.deliveryStyle)) {
+      throw new Error(
+        `Invalid channel envelope label: ${field}.deliveryStyle must be one of: ${CHANNEL_DELIVERY_STYLES.join(', ')}`,
+      );
+    }
+    label.deliveryStyle = source.deliveryStyle;
+  }
   if (source.needsReview !== undefined) {
     if (typeof source.needsReview !== 'boolean') {
       throw new Error(`Invalid channel envelope label: ${field}.needsReview must be a boolean`);
@@ -304,14 +415,25 @@ export function validateChannelEnvelopeLabel(raw: unknown, field: string): Chann
   return label;
 }
 
-// ── Migration map: ChannelVisibility → envelope vocabulary ──
+// ── Migration map: retired ChannelVisibility vocabulary → envelope pair ──
+
+/**
+ * Retired single-axis visibility vocabulary as it may still appear in
+ * PERSISTED data and pre-E3.3 owner files. This union exists ONLY for the
+ * read/migration boundary (decodeStoredChannelVisibility, the trust-policy
+ * load migration, and the one-time channel-envelope migration command).
+ * Runtime code never produces these values; 'broadcast' is a flag and
+ * 'semi_private' was renamed to 'invite_only'.
+ */
+export type LegacyChannelVisibility = 'private' | 'invite_only' | 'public' | 'broadcast';
 
 /**
  * Documented migration map from the retired single-axis visibility model to
  * the envelope's {channelPrivacy, broadcast} pair. The semi_private →
  * invite_only leg was executed in E3.1 as a pure vocabulary rename; the
- * broadcast → (public + broadcast flag) leg is executed when E3.2/E3.3 re-key
- * classification and gating.
+ * broadcast → (public + broadcast flag) leg was executed at classification
+ * inputs in E3.2 and completed at the gates in E3.3 (the ChannelVisibility
+ * type itself is deleted).
  *
  *   private      → { channelPrivacy: 'private',     broadcast: false }
  *   invite_only  → { channelPrivacy: 'invite_only', broadcast: false }  (was semi_private)
@@ -319,7 +441,7 @@ export function validateChannelEnvelopeLabel(raw: unknown, field: string): Chann
  *   broadcast    → { channelPrivacy: 'public',      broadcast: true  }
  */
 export const CHANNEL_VISIBILITY_ENVELOPE_MIGRATION: Record<
-  ChannelVisibility,
+  LegacyChannelVisibility,
   { channelPrivacy: ChannelPrivacy; broadcast: boolean }
 > = {
   private: { channelPrivacy: 'private', broadcast: false },

@@ -8,11 +8,13 @@ import type {
 import type { ApiHealthResponse } from '../../../channels/api/types.js';
 import type { CapabilityTier } from '../../../system/config/runtime-config-contracts.js';
 import type { TrustLevel } from '../../../system/trust/types.js';
-import { normalizeChannelVisibility } from '../../../system/trust/types.js';
+import { normalizeChannelPrivacy } from '../../../system/trust/context-envelope.js';
+import { decodeStoredChannelVisibility } from '../../../system/trust/types.js';
 import {
+  buildContextEnvelopePromptState,
   buildResponseStylePromptState,
   buildTrustPromptState,
-  classifyChannel,
+  classifyChannelEnvelope,
   type ChannelMeta,
 } from '../../../system/trust/policy.js';
 import type { ContactStorePort } from '../../contacts/contact-store-port.js';
@@ -156,7 +158,7 @@ function isInternalJournalChannel(channelId: string): boolean {
 }
 
 function resolveMessageChannelMeta(message: Pick<SubstrateMessage, 'isDirectMessage' | 'routing'>): ChannelMeta | undefined {
-  const privacyLevel = normalizeChannelVisibility(message.routing?.channelPrivacy);
+  const privacyLevel = normalizeChannelPrivacy(message.routing?.channelPrivacy);
   if (message.isDirectMessage === undefined && !privacyLevel) return undefined;
   return {
     ...(message.isDirectMessage !== undefined ? { isDirectMessage: message.isDirectMessage } : {}),
@@ -196,7 +198,7 @@ export function buildPromptTemplateVariables(input: {
   modelId: string;
   fallbackCharacterName: string;
 }): { templateVariables: Record<string, string>; runtimeCharacterName: string } {
-  const visibility = classifyChannel(input.message.channelId, resolveMessageChannelMeta(input.message));
+  const visibility = classifyChannelEnvelope(input.message.channelId, resolveMessageChannelMeta(input.message)).privacy;
   const runtimeCharacterName = resolveRuntimeCharacterName(
     input.characterPromptVariables,
     input.fallbackCharacterName,
@@ -277,7 +279,7 @@ export function buildDynamicPromptTemplateVariables(
   // turns. When inactive, every runtime_speaking_with_* token is blank so
   // persisted/custom prompt layers that still reference them prune cleanly.
   const speakingWithActive = !internalTurn && input.conversationScope.kind === 'dm';
-  const visibility = classifyChannel(input.message.channelId, resolveMessageChannelMeta(input.message));
+  const visibility = classifyChannelEnvelope(input.message.channelId, resolveMessageChannelMeta(input.message)).privacy;
   const now = input.now ?? new Date();
   const analysisWorkbenchAvailable = input.analysisWorkbenchAvailable === true;
   const emotionSnapshot = input.internalState ? toEmotionSnapshotFromInternalState(input.internalState) : null;
@@ -318,6 +320,17 @@ export function buildDynamicPromptTemplateVariables(
       channelType: input.channelType,
       visibility,
     }),
+    // Context Envelope macros (E3.3): bare values only, frozen from the
+    // scope envelope resolved at session-manager ingress. Blank on internal
+    // turns so channel-family sections prune, matching runtime_channel_*.
+    ...(internalTurn
+      ? {
+        runtime_channel_privacy: '',
+        runtime_audience_scope: '',
+        runtime_audience_knowledge: '',
+        runtime_broadcast: '',
+      }
+      : buildContextEnvelopePromptState(input.conversationScope.envelope)),
     ...buildToolingPromptVariables({
       capabilityTier: input.capabilityTier,
       analysisWorkbenchAvailable,
@@ -686,6 +699,9 @@ export async function resolveAuthorContext(input: {
       // empty fallback keys) byte-identical.
       const reflectionScopeHint = isReflectionChannel ? input.message.routing?.reflectionScope : undefined;
       if (reflectionScopeHint?.kind === 'group') {
+        // The constructor derives a fail-closed envelope for this
+        // continuity-key helper scope; the turn pipeline resolves the
+        // authoritative room scope at session-manager ingress.
         const roomScope = createGroupConversationScope({
           channelId: reflectionScopeHint.roomId,
           ...(reflectionScopeHint.roomName ? { roomName: reflectionScopeHint.roomName } : {}),
@@ -845,8 +861,10 @@ export async function resolveAuthorContext(input: {
     // per-contact value is never read back into classification — channel
     // privacy is owned by channels.json labels, operator overrides, and
     // derived defaults (docs/context-envelope.md).
-    const observedChannelPrivacy = normalizeChannelVisibility(input.message.routing?.channelPrivacy)
-      ?? normalizeChannelVisibility(
+    const observedChannelPrivacy = normalizeChannelPrivacy(input.message.routing?.channelPrivacy)
+      // Stored per-contact privacy is a persisted value: decode the retired
+      // vocabulary through the read boundary (provenance evidence only).
+      ?? decodeStoredChannelVisibility(
         await input.contactStore.getConversationChannelPrivacy(
           canonicalContactKey,
           channel,

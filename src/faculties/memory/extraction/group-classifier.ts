@@ -11,7 +11,7 @@ import {
   type GroupMemoryMode,
   type GroupMemorySettings,
 } from '../../../system/config/group-memory-config.js';
-import type { ChannelVisibility } from '../../../system/trust/types.js';
+import type { ChannelPrivacy } from '../../../system/trust/context-envelope.js';
 import type { ChannelType } from '../../../shared/contracts/runtime.js';
 import { isRecord } from '../../../shared/utils/types.js';
 
@@ -53,7 +53,7 @@ export type GroupMemoryClassificationReason =
 export interface GroupMemoryChannelTopology {
   kind?: GroupMemoryTopologyKind;
   source?: GroupMemoryTopologySource;
-  channelVisibility?: ChannelVisibility;
+  channelVisibility?: ChannelPrivacy;
 }
 
 export interface GroupMemoryRecentParticipant {

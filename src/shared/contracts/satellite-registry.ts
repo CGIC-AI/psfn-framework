@@ -1,4 +1,4 @@
-import type { ChannelVisibility } from '../../system/trust/types.js';
+import type { ChannelPrivacy } from '../../system/trust/context-envelope.js';
 
 export const SATELLITE_REGISTRY_FILE_NAME = 'satellites.json';
 
@@ -83,7 +83,7 @@ export interface SatelliteDefaultIdentityConfig {
   authorId: string;
   authorName: string;
   canonicalContactId: string;
-  channelPrivacy: ChannelVisibility;
+  channelPrivacy: ChannelPrivacy;
 }
 
 export interface SatelliteEndpointTransportConfig {

@@ -23,7 +23,7 @@ import { detectInternalOriginForUserAttribution } from './entry-attribution.js';
 import type { SessionSearchHit } from '../../persistence/sessions/transcript-projection-port.js';
 import type { EventBus } from '../../shared/event-bus.js';
 import type { InternalRoleEnvelopeLedger } from '../internal-role-envelopes/types.js';
-import { classifyChannel, type ChannelMeta } from '../../system/trust/policy.js';
+import { classifyChannelEnvelope, type ChannelMeta } from '../../system/trust/policy.js';
 import { countTokens } from '../../primitives/llm/tokens.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import {
@@ -632,7 +632,7 @@ export class SessionManager {
     const originChannelId = this.resolveOriginChannelId(channelId, resolvedChannelId);
     const sourceChannelId = originChannelId ?? resolvedChannelId;
     const meta = options.channelMeta ?? (isDirectMessage != null ? { isDirectMessage } : undefined);
-    const channelVisibility = classifyChannel(sourceChannelId, meta);
+    const channelVisibility = classifyChannelEnvelope(sourceChannelId, meta).privacy;
     const timestamp = Date.now();
     const turnMetadata = options.turnId
       ? buildSessionMetadataWithTurn(options.metadata, {
@@ -758,7 +758,7 @@ export class SessionManager {
     const originChannelId = this.resolveOriginChannelId(channelId, resolvedChannelId);
     const sourceChannelId = originChannelId ?? resolvedChannelId;
     const meta = options.channelMeta ?? (isDirectMessage != null ? { isDirectMessage } : undefined);
-    const channelVisibility = classifyChannel(sourceChannelId, meta);
+    const channelVisibility = classifyChannelEnvelope(sourceChannelId, meta).privacy;
     const timestamp = Date.now();
     const turnMetadata = options.turnId
       ? buildSessionMetadataWithTurn(options.metadata, {
@@ -846,7 +846,7 @@ export class SessionManager {
     const originChannelId = this.resolveOriginChannelId(channelId, resolvedChannelId);
     const sourceChannelId = originChannelId ?? resolvedChannelId;
     const meta = options.channelMeta ?? (isDirectMessage != null ? { isDirectMessage } : undefined);
-    const channelVisibility = classifyChannel(sourceChannelId, meta);
+    const channelVisibility = classifyChannelEnvelope(sourceChannelId, meta).privacy;
     const timestamp = Date.now();
     const turnMetadata = options.turnId
       ? buildSessionMetadataWithTurn(options.metadata, {
@@ -948,7 +948,7 @@ export class SessionManager {
         await runAutoCompaction({
           channelId: resolvedChannelId,
           recent,
-          channelVisibility: classifyChannel(resolvedChannelId, params.channelMeta),
+          channelVisibility: classifyChannelEnvelope(resolvedChannelId, params.channelMeta).privacy,
           systemTokens,
           compactionPromptText: params.compactionPromptText
             ?? this.resolveCompactionPromptText(baseCompactionPrompt),
@@ -990,7 +990,7 @@ export class SessionManager {
     const originChannelId = this.resolveOriginChannelId(channelId, resolvedChannelId);
     const sourceChannelId = originChannelId ?? resolvedChannelId;
     const meta = options.channelMeta ?? (isDirectMessage != null ? { isDirectMessage } : undefined);
-    const channelVisibility = classifyChannel(sourceChannelId, meta);
+    const channelVisibility = classifyChannelEnvelope(sourceChannelId, meta).privacy;
     const timestamp = Date.now();
     const turnMetadata = options.turnId
       ? buildSessionMetadataWithTurn(options.metadata, {
@@ -1073,7 +1073,7 @@ export class SessionManager {
   private mirrorMessageToActiveSessions(params: {
     continuityKey?: string;
     sourceChannelId: string;
-    sourceVisibility: import('../../system/trust/types.js').ChannelVisibility;
+    sourceVisibility: import('../../system/trust/context-envelope.js').ChannelPrivacy;
     sourceRole: 'user' | 'assistant';
     sourceAuthorName?: string;
     content: string;
@@ -1275,6 +1275,13 @@ export class SessionManager {
     channelMeta?: ChannelMeta;
     userId?: string;
     contact?: ConversationScopeContact;
+    /** Precomputed speaker window (single scan per turn); absent rescans. */
+    recentSpeakers?: readonly ConversationScopeSpeaker[];
+    /**
+     * Recent speakers resolvable to contacts (E3.3 envelope derivation input,
+     * supplied by turn ingress). Absent fails closed to 0 resolved.
+     */
+    resolvedSpeakerContactCount?: number;
   }): ConversationScope {
     return this.resolveConversationScopeForResolvedChannel(
       this.resolveSessionChannelId(input.channelId),
@@ -1288,15 +1295,32 @@ export class SessionManager {
       channelMeta?: ChannelMeta;
       userId?: string;
       contact?: ConversationScopeContact;
+      recentSpeakers?: readonly ConversationScopeSpeaker[];
+      resolvedSpeakerContactCount?: number;
     },
   ): ConversationScope {
     return resolveConversationScopeFromMetadata({
       channelId: resolvedChannelId,
       isDirectMessage: input.channelMeta?.isDirectMessage,
+      ...(input.channelMeta ? { channelMeta: input.channelMeta } : {}),
       ...(input.contact ? { contact: input.contact } : {}),
       ...(input.userId ? { participantId: input.userId } : {}),
-      recentSpeakers: this.scanRecentConversationSpeakers(resolvedChannelId),
+      ...(input.resolvedSpeakerContactCount !== undefined
+        ? { resolvedSpeakerContactCount: input.resolvedSpeakerContactCount }
+        : {}),
+      recentSpeakers: input.recentSpeakers
+        ?? this.scanRecentConversationSpeakers(resolvedChannelId),
     });
+  }
+
+  /**
+   * Distinct recent user-role speakers in the session window (max 5) for a
+   * channel. Public so turn ingress can scan ONCE, resolve speaker→contact
+   * resolvability against the contact store, and feed both back into
+   * resolveConversationScope (E3.3 envelope derivation).
+   */
+  getRecentConversationSpeakers(channelId: string): ConversationScopeSpeaker[] {
+    return this.scanRecentConversationSpeakers(this.resolveSessionChannelId(channelId));
   }
 
   /**

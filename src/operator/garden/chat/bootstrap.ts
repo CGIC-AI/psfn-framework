@@ -758,7 +758,9 @@ export class AdminChatBootstrapService {
       return 'private';
     }
     if (normalizedChannel === 'twitter' || normalizedChannel === 'rss' || normalizedChannel === 'broadcast') {
-      return 'broadcast';
+      // E3.3: broadcast is an envelope flag; provenance defaults record the
+      // structural class only.
+      return 'public';
     }
     return 'invite_only';
   }

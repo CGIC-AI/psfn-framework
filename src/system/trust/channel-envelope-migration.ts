@@ -15,18 +15,19 @@ import {
   CHANNEL_VISIBILITY_ENVELOPE_MIGRATION,
   type ChannelEnvelopeLabel,
   type ChannelPrivacy,
+  type LegacyChannelVisibility,
 } from './context-envelope.js';
-import { decodeStoredChannelVisibility, type ChannelVisibility } from './types.js';
 
 /** Everything the enumeration phase learned about one channel id. */
 export interface ChannelEnvelopeObservation {
   channelId: string;
   /**
    * Persisted channel-visibility stamps for this channel (already decoded via
-   * decodeStoredChannelVisibility at ingestion — legacy 'semi_private'
-   * spellings never reach the planner).
+   * decodeObservedVisibility at ingestion — legacy 'semi_private' spellings
+   * never reach the planner; retired 'broadcast' stamps are preserved here so
+   * the seed keeps the broadcast flag through the documented split).
    */
-  storedVisibilities: ChannelVisibility[];
+  storedVisibilities: LegacyChannelVisibility[];
   /** Adapter-known direct-message topology, when the source records it. */
   isDirectMessage?: boolean;
   /** Enumeration provenance, e.g. 'contact_channel_activity', 'session_journal'. */
@@ -65,7 +66,7 @@ interface PrivacyPair {
   broadcast: boolean;
 }
 
-function pairFromVisibility(visibility: ChannelVisibility): PrivacyPair {
+function pairFromVisibility(visibility: LegacyChannelVisibility): PrivacyPair {
   const mapped = CHANNEL_VISIBILITY_ENVELOPE_MIGRATION[visibility];
   return { privacy: mapped.channelPrivacy, broadcast: mapped.broadcast };
 }
@@ -236,7 +237,14 @@ export function planChannelEnvelopeMigration(input: {
  * Ingestion helper: decode a persisted channel-visibility stamp (session
  * journals, contact rows) for planner input. Legacy 'semi_private' decodes to
  * 'invite_only'; anything unrecognized is dropped (reported by callers).
+ * Unlike the runtime read decoder, the retired 'broadcast' stamp is
+ * PRESERVED so the migration seeds the broadcast flag through the documented
+ * split (this command is the migration boundary for that vocabulary).
  */
-export function decodeObservedVisibility(value: unknown): ChannelVisibility | undefined {
-  return decodeStoredChannelVisibility(value);
+export function decodeObservedVisibility(value: unknown): LegacyChannelVisibility | undefined {
+  if (value === 'semi_private') return 'invite_only';
+  if (value === 'private' || value === 'invite_only' || value === 'public' || value === 'broadcast') {
+    return value;
+  }
+  return undefined;
 }

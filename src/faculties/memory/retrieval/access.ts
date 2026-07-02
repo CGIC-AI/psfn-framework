@@ -1,8 +1,8 @@
 import {
   isHighIntimacySensitivityLevel,
-  type ChannelVisibility,
   type TrustLevel,
 } from '../../../system/trust/types.js';
+import type { ChannelPrivacy } from '../../../system/trust/context-envelope.js';
 import {
   evaluateMemoryPolicy,
   type ChannelMeta,
@@ -150,7 +150,9 @@ export function evaluateRetrievalAccessDecision(
   memory: Pick<PurrMemory, 'sensitivity' | 'contactId' | 'consentFlags' | 'tags' | 'provenance' | 'scopeRef' | 'scopeTags'>,
   options: {
     trustLevel: TrustLevel;
-    channelVisibility: ChannelVisibility;
+    /** Context Envelope disclosure pair (E3.3 re-key). */
+    channelPrivacy: ChannelPrivacy;
+    broadcast: boolean;
     channelMeta?: ChannelMeta;
     canonicalContactId?: string;
     operatorApproval?: boolean;
@@ -170,7 +172,8 @@ export function evaluateRetrievalAccessDecision(
 
   const policy = evaluateMemoryPolicy({
     trustLevel: options.trustLevel,
-    channelVisibility: options.channelVisibility,
+    channelPrivacy: options.channelPrivacy,
+    broadcast: options.broadcast,
     memorySensitivity: memory.sensitivity,
     consentFlags: memory.consentFlags,
     disclosureBoundary: resolveDisclosureBoundaryDirective(memory, options.channelMeta),
@@ -183,6 +186,7 @@ export function evaluateRetrievalAccessDecision(
   if (
     policy.reasonTag === 'trust.ceiling_exceeded'
     || policy.reasonTag === 'visibility.channel_restricted'
+    || policy.reasonTag === 'visibility.broadcast_restricted'
   ) {
     return {
       allowed: false,
@@ -205,7 +209,9 @@ export function summarizeWithheldMemories<T extends Pick<PurrMemory, 'id' | 'sen
   memories: readonly T[],
   options: {
     trustLevel: TrustLevel;
-    channelVisibility: ChannelVisibility;
+    /** Context Envelope disclosure pair (E3.3 re-key). */
+    channelPrivacy: ChannelPrivacy;
+    broadcast: boolean;
     channelMeta?: ChannelMeta;
     canonicalContactId?: string;
     operatorApproval?: boolean;

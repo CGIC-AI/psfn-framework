@@ -69,6 +69,7 @@ import {
 } from './turn-execution/post-turn-scheduling.js';
 import { hasVisionTurnInputs } from './vision-attachments.js';
 import type { SessionEntry } from '../../session/types.js';
+import type { ConversationScopeSpeaker } from '../../session/conversation-scope.js';
 
 const log = createComponentLogger('SubstrateAgent');
 
@@ -134,6 +135,15 @@ export interface TurnExecutionRuntime {
     purpose: string,
   ) => CorrelationMetadata;
   resolveAuthorContext: (message: SubstrateMessage) => Promise<ResolvedAuthorContext>;
+  /**
+   * E3.3 envelope derivation input: how many of the recent-speaker window's
+   * distinct speakers resolve to contacts. Fail closed: lookup failures count
+   * as unresolved, never resolved.
+   */
+  countResolvableSpeakerContacts: (
+    message: SubstrateMessage,
+    speakers: readonly ConversationScopeSpeaker[],
+  ) => Promise<number>;
   emitTurnStage: (
     message: SubstrateMessage,
     turnStartMs: number,
@@ -560,7 +570,7 @@ export async function handleMessageForTurn(
   const {
     authorContext,
     channelMeta,
-    channelVisibility,
+    contextEnvelope,
     broadcastVisibilityScope,
     viewerRequestContext,
     baseVisionToolRequestContext,
@@ -791,7 +801,7 @@ export async function handleMessageForTurn(
     let safeResponseText = noReplyDecision ? '' : responseText;
     let broadcastSafetyMeta: AgentResponse['metadata']['broadcastSafety'] | undefined;
 
-    if (channelVisibility === 'broadcast') {
+    if (contextEnvelope.broadcast) {
       const visibilityScope = broadcastVisibilityScope ?? 'public_only';
       const classification = classifyBroadcastDraft(responseText);
       const operatorApproval = visibilityScope === 'approved_private_context';

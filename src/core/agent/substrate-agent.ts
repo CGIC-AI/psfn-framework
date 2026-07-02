@@ -17,7 +17,7 @@ import { getRunChargeContext, runWithChargeContext } from '../../shared/telemetr
 import { createMemoryAppCache } from '../../shared/cache/memory-cache.js';
 import type { AppCache } from '../../shared/cache/types.js';
 import type { SessionManager } from '../session/manager.js';
-import type { ConversationScope } from '../session/conversation-scope.js';
+import type { ConversationScope, ConversationScopeSpeaker } from '../session/conversation-scope.js';
 import { formatAttributedSystemContent } from '../session/entry-attribution.js';
 import {
   INTENTION_FOLLOW_UP_AUTHOR_ID,
@@ -123,6 +123,7 @@ import {
   resolveActiveConcernsRuntimeData as resolveActiveConcernsRuntimeDataForTurn,
   resolveContinuitySubjectKey,
   resolveAuthorContext as resolveAuthorContextForTurn,
+  resolveIdentityChannel as resolveIdentityChannelForTurn,
   type CompanionSubstrateHealthContext,
   type ResolvedAuthorContext,
   type UserRuntimeProfile,
@@ -926,6 +927,10 @@ export class SubstrateAgent {
           taskKind,
         ),
         resolveAuthorContext: (turnMessage) => this.resolveAuthorContext(turnMessage),
+        countResolvableSpeakerContacts: (turnMessage, speakers) => this.countResolvableSpeakerContacts(
+          turnMessage,
+          speakers,
+        ),
         resolveChannelType: (turnMessage) => resolveChannelTypeForRuntime(turnMessage, this.channelRegistry),
         ensureModel: (turnMessage) => this.ensureModel(turnMessage),
         captureTurnPromptSnapshot: (ctx) => this.captureTurnPromptSnapshot(ctx),
@@ -1393,5 +1398,36 @@ export class SubstrateAgent {
       companionDisplayName: this.characterName,
       ...(this.contactTrackingGate ? { contactTracking: this.contactTrackingGate } : {}),
     });
+  }
+
+  /**
+   * E3.3 envelope derivation input: count the recent-speaker window entries
+   * that resolve to contacts through the same channel-identity path the turn
+   * uses for its author. Fail closed: no contact store, an empty window, or a
+   * failed lookup contributes zero resolved speakers (the envelope derivation
+   * then classifies audienceKnowledge as anonymous/partially_known, never
+   * all_known).
+   */
+  private async countResolvableSpeakerContacts(
+    message: SubstrateMessage,
+    speakers: readonly ConversationScopeSpeaker[],
+  ): Promise<number> {
+    if (!this.contactStore || speakers.length === 0) return 0;
+    const identityChannel = resolveIdentityChannelForTurn(message);
+    let resolved = 0;
+    for (const speaker of speakers) {
+      try {
+        const contact = await this.contactStore.getByChannelIdentity(identityChannel, speaker.authorId);
+        if (contact) resolved += 1;
+      } catch (error) {
+        log.warn('Speaker contact resolvability lookup failed; counting speaker as unresolved (fail closed)', {
+          channelId: message.channelId,
+          identityChannel,
+          speakerAuthorId: speaker.authorId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+    return resolved;
   }
 }

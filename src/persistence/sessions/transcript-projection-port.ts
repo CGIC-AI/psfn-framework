@@ -8,7 +8,7 @@ export interface SessionSearchHit {
   authorName?: string;
   content: string;
   timestamp: number;
-  channelVisibility: import('../../system/trust/types.js').ChannelVisibility;
+  channelVisibility: import('../../system/trust/context-envelope.js').ChannelPrivacy;
   score: number;
   snippet: string;
 }

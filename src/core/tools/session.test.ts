@@ -592,7 +592,7 @@ class InMemoryTranscriptSearch {
         purpose: 'agent.turn.prompt',
         channelId: 'api:public-search',
         viewerTrustLevel: 'regular',
-        viewerChannelVisibility: 'public',
+        viewerChannelPrivacy: 'public',
       },
       () => tool.execute('session-search', {
         action: 'search',
@@ -617,7 +617,7 @@ class InMemoryTranscriptSearch {
         purpose: 'agent.turn.prompt',
         channelId: 'api:public-search',
         viewerTrustLevel: 'regular',
-        viewerChannelVisibility: 'public',
+        viewerChannelPrivacy: 'public',
       },
       () => tool.execute('session-grep', {
         action: 'grep',

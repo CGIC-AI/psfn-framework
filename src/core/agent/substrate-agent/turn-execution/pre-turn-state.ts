@@ -1,8 +1,9 @@
 import type { CorrelationMetadata, SubstrateMessage, TurnID } from '../../../../shared/contracts/runtime.js';
 import type { ContextBudgetTurnCharacteristics } from '../../../../shared/context-budget.js';
 import { resolveBroadcastVisibilityScope, type BroadcastVisibilityScope } from '../../../../system/trust/broadcast-safety.js';
-import { classifyChannel, getVisibilityDisclosureCeiling, type ChannelMeta } from '../../../../system/trust/policy.js';
-import { normalizeChannelVisibility, type ChannelVisibility, type TrustLevel } from '../../../../system/trust/types.js';
+import { getVisibilityDisclosureCeiling, type ChannelMeta } from '../../../../system/trust/policy.js';
+import { normalizeChannelPrivacy, type ChannelPrivacy, type ContextEnvelope } from '../../../../system/trust/context-envelope.js';
+import type { TrustLevel } from '../../../../system/trust/types.js';
 import type { MemoryScopeQuery, RetrievalCallerContext, RetrievalModeInput } from '../../../../faculties/memory/types.js';
 import type { ContextManifestMemorySeed } from '../../../session/context-manifest.js';
 import { formatAttributedSystemContent } from '../../../session/entry-attribution.js';
@@ -31,9 +32,10 @@ const MEMORY_RETRIEVAL_QUERY_MAX_CHARS = 6_000;
 
 export interface PreparedTurnIdentityState {
   authorContext: ResolvedAuthorContext;
-  resolvedChannelPrivacy?: ChannelVisibility;
+  resolvedChannelPrivacy?: ChannelPrivacy;
   channelMeta: ChannelMeta;
-  channelVisibility: ChannelVisibility;
+  /** The turn's Context Envelope (identical object to conversationScope.envelope). */
+  contextEnvelope: ContextEnvelope;
   broadcastVisibilityScope: BroadcastVisibilityScope | null;
   viewerRequestContext: Partial<CorrelationMetadata>;
   baseVisionToolRequestContext: {
@@ -176,7 +178,7 @@ export async function prepareTurnIdentityState(input: {
   // E3.2: only adapter-declared routing privacy (X-Channel-Privacy header,
   // satellite registry) reaches ChannelMeta. Per-contact conversation-channel
   // privacy is provenance evidence and never gates (docs/context-envelope.md).
-  const resolvedChannelPrivacy = normalizeChannelVisibility(message.routing?.channelPrivacy);
+  const resolvedChannelPrivacy = normalizeChannelPrivacy(message.routing?.channelPrivacy);
   if (resolvedChannelPrivacy && message.routing?.channelPrivacy !== resolvedChannelPrivacy) {
     message.routing = {
       ...(message.routing ?? {}),
@@ -190,14 +192,7 @@ export async function prepareTurnIdentityState(input: {
       : {}),
     ...(resolvedChannelPrivacy ? { privacyLevel: resolvedChannelPrivacy } : {}),
   };
-  const channelVisibility = classifyChannel(message.channelId, channelMeta);
   const broadcastVisibilityScope = resolveBroadcastVisibilityScope(message.channelId, channelMeta);
-  const viewerRequestContext: Partial<CorrelationMetadata> = {
-    viewerTrustLevel: authorContext.trustLevel,
-    viewerChannelVisibility: channelVisibility,
-    ...(message.isDirectMessage !== undefined ? { viewerIsDirectMessage: message.isDirectMessage } : {}),
-    ...(canonicalEmbodimentContext ? { embodimentContext: canonicalEmbodimentContext } : {}),
-  };
   const baseVisionToolRequestContext = {
     userMessageText: message.content,
     imageAttachmentUrls: collectVisionTurnImageUrls(message),
@@ -272,13 +267,28 @@ export async function prepareTurnIdentityState(input: {
     isDirectMessage: channelMeta.isDirectMessage,
     contactIsMachineIntelligence: authorContext.speakingWithIsMachineIntelligence,
   });
+  // E3.3 envelope derivation inputs: scan the recent-speaker window ONCE and
+  // resolve how many speakers are resolvable to contacts, then hand both to
+  // the single scope resolution so ConversationScope.envelope is derived at
+  // ingress. Group reflection turns fail closed (no contact lookups through
+  // the internal transport channel).
+  const scopeChannelId = reflectionScopeHint?.kind === 'group'
+    ? reflectionScopeHint.roomId
+    : message.channelId;
+  const recentSpeakers = runtime.sessionManager.getRecentConversationSpeakers(scopeChannelId);
+  const resolvedSpeakerContactCount = reflectionScopeHint?.kind === 'group'
+    ? undefined
+    : await runtime.countResolvableSpeakerContacts(message, recentSpeakers);
   const conversationScope = reflectionScopeHint?.kind === 'group'
     ? runtime.sessionManager.resolveConversationScope({
       channelId: reflectionScopeHint.roomId,
+      recentSpeakers,
     })
     : runtime.sessionManager.resolveConversationScope({
       channelId: message.channelId,
       channelMeta,
+      recentSpeakers,
+      ...(resolvedSpeakerContactCount !== undefined ? { resolvedSpeakerContactCount } : {}),
       ...(continuitySubjectKey ? { userId: continuitySubjectKey } : {}),
       ...(canonicalContactMayBind && authorContext.canonicalContactKey
         ? {
@@ -290,11 +300,18 @@ export async function prepareTurnIdentityState(input: {
         : {}),
     });
 
+  const viewerRequestContext: Partial<CorrelationMetadata> = {
+    viewerTrustLevel: authorContext.trustLevel,
+    viewerChannelPrivacy: conversationScope.envelope.channelPrivacy,
+    ...(message.isDirectMessage !== undefined ? { viewerIsDirectMessage: message.isDirectMessage } : {}),
+    ...(canonicalEmbodimentContext ? { embodimentContext: canonicalEmbodimentContext } : {}),
+  };
+
   return {
     authorContext,
     ...(resolvedChannelPrivacy ? { resolvedChannelPrivacy } : {}),
     channelMeta,
-    channelVisibility,
+    contextEnvelope: conversationScope.envelope,
     broadcastVisibilityScope,
     viewerRequestContext,
     baseVisionToolRequestContext,
@@ -442,7 +459,6 @@ export async function computePreTurnState(input: {
   );
   const emotionAppraisalChain = runtime.emotionSelfModelRuntime.getEmotionAppraisalChain(emotionSessionId);
   const turnSnapshotCapturedAt = Date.now();
-  const observerEvalChannelVisibility = classifyChannel(message.channelId, channelMeta);
   const observerEvalLifecycleState = await dispatchObserverEvalTurn({
     sidecarRuntime: runtime.observerEvalSidecar,
     logger: log,
@@ -473,7 +489,7 @@ export async function computePreTurnState(input: {
         contentLength: message.content.length,
         attachmentCount: message.attachments?.length ?? 0,
         hasVisionInput: bypassMemoryForVisionTurn,
-        sensitivity: getVisibilityDisclosureCeiling(observerEvalChannelVisibility),
+        sensitivity: getVisibilityDisclosureCeiling(conversationScope.envelope),
       },
       provenance: {
         seam: 'substrate-agent.pre-turn.emotion-observed',

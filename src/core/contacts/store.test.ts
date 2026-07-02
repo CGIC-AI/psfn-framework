@@ -716,11 +716,13 @@ describe('ContactStore', () => {
       store.recordChannelActivity(contact.id, 'discord', '1313001762793197678', 'private');
 
       expect(store.setChannelPrivacy(contact.id, 'discord', 'privacy-user', 'private', 'admin:api')).toBe(true);
+      // E3.3: 'broadcast' is retired from the privacy vocabulary; the
+      // provenance-only per-contact field accepts ChannelPrivacy values.
       expect(store.setConversationChannelPrivacy(
         contact.id,
         'discord',
         '1313001762793197678',
-        'broadcast',
+        'public',
         'admin:api',
       )).toBe(true);
 
@@ -732,7 +734,7 @@ describe('ContactStore', () => {
         field: 'channel_privacy',
       });
       expect(entries[0].oldValue).toContain('"privacyLevel":"private"');
-      expect(entries[0].newValue).toContain('"privacyLevel":"broadcast"');
+      expect(entries[0].newValue).toContain('"privacyLevel":"public"');
       expect(entries[0].newValue).toContain('"channelId":"1313001762793197678"');
       expect(entries[1]).toMatchObject({
         contactId: contact.id,

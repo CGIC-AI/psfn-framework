@@ -146,7 +146,7 @@ const postgresContactSocialGraphOperations: PostgresContactOperationMap = {
     const limit = normalizeLimit(query.limit, 100, 1, 100);
     const allowed = new Set(getAllowedSensitivities(
       normalizeViewerTrustLevel(query.viewerTrustLevel),
-      normalizeViewerVisibility(query.viewerChannelVisibility),
+      { channelPrivacy: normalizeViewerVisibility(query.viewerChannelPrivacy), broadcast: false },
     ));
     const rows = query.contactId
       ? await queryRows<SocialGraphEntityRow>(

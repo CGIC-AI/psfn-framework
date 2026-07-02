@@ -8,7 +8,8 @@ import {
   type EpisodeProvenanceRef,
   type EpisodeSpanRef,
 } from '../../../shared/contracts/episodic-memory.js';
-import { trustAtLeast, type ChannelVisibility, type TrustLevel } from '../../../system/trust/types.js';
+import { trustAtLeast, type TrustLevel } from '../../../system/trust/types.js';
+import type { ChannelDisclosureContext } from '../../../system/trust/policy.js';
 import type { EpisodicStorePort } from '../episodic/store.js';
 import type { MemoryScopeQuery } from '../types.js';
 
@@ -43,7 +44,7 @@ export interface EpisodicRetrievalInput {
   contextText: string;
   channelId: string;
   trustLevel: TrustLevel;
-  channelVisibility: ChannelVisibility;
+  channelDisclosure: ChannelDisclosureContext;
   canonicalContactId?: string;
   scopeQuery?: MemoryScopeQuery;
   scanLimit?: number;
@@ -57,7 +58,7 @@ export interface EpisodicTimelineInput {
   to?: string;
   channelId: string;
   trustLevel: TrustLevel;
-  channelVisibility: ChannelVisibility;
+  channelDisclosure: ChannelDisclosureContext;
   canonicalContactId?: string;
   scopeQuery?: MemoryScopeQuery;
   limit?: number;
@@ -228,7 +229,7 @@ export async function retrieveEpisodicTimeline(
     contextText: '',
     channelId: input.channelId,
     trustLevel: input.trustLevel,
-    channelVisibility: input.channelVisibility,
+    channelDisclosure: input.channelDisclosure,
     ...(input.canonicalContactId ? { canonicalContactId: input.canonicalContactId } : {}),
     ...(input.scopeQuery ? { scopeQuery: input.scopeQuery } : {}),
   };
@@ -536,7 +537,8 @@ function isEpisodeVisibleForTurn(episode: Episode, input: EpisodicRetrievalInput
     return false;
   }
 
-  return input.channelVisibility !== 'broadcast' && trustAtLeast(input.trustLevel, 'trusted');
+  // E3.3: the retired 'broadcast' visibility check is now the envelope flag.
+  return !input.channelDisclosure.broadcast && trustAtLeast(input.trustLevel, 'trusted');
 }
 
 function episodeMatchesScopeQuery(episode: Episode, scopeQuery: MemoryScopeQuery | undefined): boolean {

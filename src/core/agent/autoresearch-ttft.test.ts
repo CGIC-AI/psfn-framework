@@ -114,6 +114,7 @@ function makeMockSessionManager(): SessionManager {
     getRecentMessages: vi.fn().mockReturnValue([]),
     getRoleEnvelopeRefsForEntries: vi.fn().mockReturnValue([]),
     resolveSessionChannelId: vi.fn((channelId: string) => channelId),
+    getRecentConversationSpeakers: () => [],
     resolveConversationScope: vi.fn((input: {
       channelId: string;
       channelMeta?: { isDirectMessage?: boolean };

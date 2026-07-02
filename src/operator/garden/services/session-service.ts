@@ -35,10 +35,11 @@ import {
 } from '../../../core/session/compaction-audit.js';
 import { resolveSessionEntryRoleEnvelopePreview } from '../../../core/session/turn-provenance.js';
 import {
-  classifyChannel,
+  classifyChannelDisclosure,
   visibilitiesShareContinuity,
 } from '../../../system/trust/policy.js';
-import type { ChannelVisibility } from '../../../system/trust/types.js';
+import { decodeStoredChannelVisibility } from '../../../system/trust/types.js';
+import type { ChannelPrivacy } from '../../../system/trust/context-envelope.js';
 import type {
   AdminContinuityProvenanceView,
   AdminCogSecCaseDraftView,
@@ -653,9 +654,10 @@ export class AdminSessionDataService implements AdminSessionService {
     const channelId = messages.length > 0
       ? messages[0]!.channelId
       : (sessionActivity?.channelId ?? sessionId);
-    const currentVisibility: ChannelVisibility = messages[0]?.channelVisibility
-      ? (messages[0]!.channelVisibility as ChannelVisibility)
-      : classifyChannel(channelId);
+    // Stored entry visibility decodes through the read-boundary decoder
+    // (legacy 'semi_private'/'broadcast' records map onto ChannelPrivacy).
+    const currentVisibility: ChannelPrivacy = decodeStoredChannelVisibility(messages[0]?.channelVisibility)
+      ?? classifyChannelDisclosure(channelId).channelPrivacy;
     const roleEnvelopePreviews = messages.flatMap((entry) => {
       const preview = resolveSessionEntryRoleEnvelopePreview(entry);
       return preview ? [{ sessionEntryId: entry.id, preview }] : [];
@@ -702,7 +704,7 @@ export class AdminSessionDataService implements AdminSessionService {
 function buildContinuityProvenanceViews(
   turnId: string,
   currentChannelId: string,
-  currentVisibility: ChannelVisibility,
+  currentVisibility: ChannelPrivacy,
   continuityEntries: readonly SessionEntry[],
 ): AdminContinuityProvenanceView[] {
   const provenance: AdminContinuityProvenanceView[] = [];
@@ -717,8 +719,8 @@ function buildContinuityProvenanceViews(
     const carriedAcrossChannels = continuity.sourceChannelId !== currentChannelId;
     const sourceVisibility = continuity.sourceVisibility;
     const visibilityCompatible = visibilitiesShareContinuity(
-      sourceVisibility,
-      currentVisibility,
+      { channelPrivacy: sourceVisibility, broadcast: false },
+      { channelPrivacy: currentVisibility, broadcast: false },
     );
 
     provenance.push({

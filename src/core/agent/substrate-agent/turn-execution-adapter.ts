@@ -23,6 +23,7 @@ import type { ChannelMeta } from '../../../system/trust/policy.js';
 import type { InternalState } from '../../self-model/state.js';
 import type { MetacognitiveFlag } from '../../self-model/metacognition.js';
 import type { ContextBudgetTurnCharacteristics } from '../../../shared/context-budget.js';
+import type { ConversationScopeSpeaker } from '../../session/conversation-scope.js';
 import type { ImageVisionReviewer } from '../../../primitives/images/types.js';
 import type { ObserverEvalSidecarRuntime } from '../../eval/observer-sidecar/types.js';
 import type { FatigueBudgetPort } from '../fatigue/fatigue-budget.js';
@@ -34,6 +35,10 @@ interface TurnExecutionAdapterCallbacks {
     taskKind?: string,
   ) => ContextBudgetTurnCharacteristics;
   resolveAuthorContext: (message: SubstrateMessage) => Promise<ResolvedAuthorContext>;
+  countResolvableSpeakerContacts: (
+    message: SubstrateMessage,
+    speakers: readonly ConversationScopeSpeaker[],
+  ) => Promise<number>;
   resolveChannelType: (message: SubstrateMessage) => string | undefined;
   ensureModel: (message?: SubstrateMessage) => void;
   captureTurnPromptSnapshot: (ctx: ComposeContext) => import('../../turns/snapshot.js').TurnPromptSnapshot;
@@ -183,6 +188,8 @@ export function createTurnExecutionRuntimeAdapter(
       .buildTurnCorrelation(message, callType, turnId, requestId),
     withCorrelationPurpose: (correlation, purpose) => options.turnSupportRuntime.withCorrelationPurpose(correlation, purpose),
     resolveAuthorContext: (message) => options.callbacks.resolveAuthorContext(message),
+    countResolvableSpeakerContacts: (message, speakers) => options.callbacks
+      .countResolvableSpeakerContacts(message, speakers),
     emitTurnStage: (
       message,
       turnStartMs,

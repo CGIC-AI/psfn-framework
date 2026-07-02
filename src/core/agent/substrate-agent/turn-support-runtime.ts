@@ -2,7 +2,8 @@ import type { AgentMessage } from '@mariozechner/pi-agent-core';
 import { createComponentLogger } from '../../../shared/logger.js';
 import type { EventBus, EventMap } from '../../../shared/event-bus.js';
 import type { SessionManager } from '../../session/manager.js';
-import { normalizeChannelVisibility, type TrustLevel } from '../../../system/trust/types.js';
+import type { TrustLevel } from '../../../system/trust/types.js';
+import { normalizeChannelPrivacy } from '../../../system/trust/context-envelope.js';
 import type { AgentResponse, CorrelationMetadata, InferredPostTurnAction, IntentionalNoReplyMetadata, MessagePromptOverrideMode, ObservabilityCallType, SubstrateMessage, TurnID, TurnRecord, TurnUsage } from '../../../shared/contracts/runtime.js';
 import type { TurnObservabilityRecord } from '../../turns/observability.js';
 import type { TurnSnapshot } from '../../turns/snapshot.js';
@@ -103,7 +104,7 @@ function normalizePostTurnDrainTimeoutMs(value: number | undefined): number {
 }
 
 function resolveSessionChannelMeta(message: SubstrateMessage): ChannelMeta | undefined {
-  const privacyLevel = normalizeChannelVisibility(message.routing?.channelPrivacy);
+  const privacyLevel = normalizeChannelPrivacy(message.routing?.channelPrivacy);
   if (message.isDirectMessage === undefined && !privacyLevel) return undefined;
   return {
     ...(message.isDirectMessage !== undefined ? { isDirectMessage: message.isDirectMessage } : {}),

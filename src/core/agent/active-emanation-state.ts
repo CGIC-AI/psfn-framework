@@ -5,7 +5,7 @@ import type {
   SatellitePresenceMetadata,
 } from './presence-metadata.js';
 import { isRecord } from '../../shared/utils/types.js';
-import { normalizeChannelVisibility, type ChannelVisibility } from '../../system/trust/types.js';
+import { normalizeChannelPrivacy, type ChannelPrivacy } from '../../system/trust/context-envelope.js';
 
 export interface ActiveEmanationStateResolution {
   presence?: CompanionPresenceMetadata;
@@ -45,9 +45,9 @@ function readBoolean(record: Record<string, unknown>, keys: string[]): boolean |
   return undefined;
 }
 
-function readChannelPrivacy(record: Record<string, unknown>, keys: string[]): ChannelVisibility | undefined {
+function readChannelPrivacy(record: Record<string, unknown>, keys: string[]): ChannelPrivacy | undefined {
   for (const key of keys) {
-    const value = normalizeChannelVisibility(record[key]);
+    const value = normalizeChannelPrivacy(record[key]);
     if (value) return value;
   }
   return undefined;

@@ -237,7 +237,7 @@ const GLOBAL_PROMPT_RUNTIME_MACRO_HINTS: PromptRuntimeMacroHint[] = [
   createPromptRuntimeMacroHint('global_aliases', '{{visual_description}}', 'static', CHARACTER_CARD_PRODUCER, 'Character card visual description extension field.', 'Silver eyes and a weathered jacket.', ['extensions_visual_description']),
   createPromptRuntimeMacroHint('global_aliases', '{{channel_id}}', 'session_stable', SESSION_BASE_PRODUCER, 'Resolved channel/session identifier.', 'discord:dm:123456789'),
   createPromptRuntimeMacroHint('global_aliases', '{{channel_type}}', 'session_stable', SESSION_BASE_PRODUCER, 'Resolved channel type.', 'discord_text'),
-  createPromptRuntimeMacroHint('global_aliases', '{{channel_visibility}}', 'session_stable', SESSION_BASE_PRODUCER, 'Resolved channel visibility classification.', 'private'),
+  createPromptRuntimeMacroHint('global_aliases', '{{channel_visibility}}', 'session_stable', SESSION_BASE_PRODUCER, 'Resolved channelPrivacy classification for the session channel (private | invite_only | public; broadcast is {{runtime_broadcast}}).', 'private'),
   createPromptRuntimeMacroHint('global_aliases', '{{trust_level}}', 'session_stable', SESSION_BASE_PRODUCER, 'Current trust tier for the author/context.', 'primary'),
   createPromptRuntimeMacroHint('global_aliases', '{{canonical_contact_id}}', 'session_stable', SESSION_BASE_PRODUCER, 'Canonical contact identity key for the current author when resolved.', 'contact-1234'),
   createPromptRuntimeMacroHint('global_aliases', '{{model}}', 'session_stable', SESSION_BASE_PRODUCER, 'Current active model identifier.', 'moonshotai/kimi-k2.5'),
@@ -287,7 +287,11 @@ const RUNTIME_STATE_PROMPT_RUNTIME_MACRO_HINTS: PromptRuntimeMacroHint[] = [
   runtimeStateTurnHint('{{runtime_speaking_with_name}}', 'Resolved speaking-partner display name on DM turns; blank on group and internal turns so speaking_with sections prune.', 'Vega'),
   runtimeStateTurnHint('{{runtime_speaking_with_trust_level}}', 'Trust level for the current speaking partner on DM turns; blank on group and internal turns so speaking_with sections prune.', 'trusted'),
   runtimeStateTurnHint('{{runtime_channel_type}}', 'Resolved channel type for the current speaking context when user-facing.', 'discord_text'),
-  runtimeStateTurnHint('{{runtime_channel_visibility}}', 'Resolved channel visibility for the current speaking context when user-facing.', 'private'),
+  runtimeStateTurnHint('{{runtime_channel_visibility}}', 'Resolved channelPrivacy for the current speaking context when user-facing (broadcast is {{runtime_broadcast}}).', 'private'),
+  createPromptRuntimeMacroHint('runtime_state', '{{runtime_channel_privacy}}', 'session_stable', DYNAMIC_TURN_PRODUCER, 'Context Envelope channelPrivacy for the current turn (bare value: private | invite_only | public); blank on internal turns.', 'invite_only'),
+  createPromptRuntimeMacroHint('runtime_state', '{{runtime_broadcast}}', 'session_stable', DYNAMIC_TURN_PRODUCER, 'Context Envelope broadcast flag for the current turn (bare boolean); blank on internal turns.', 'false'),
+  runtimeStateTurnHint('{{runtime_audience_scope}}', 'Context Envelope audienceScope for the current turn (bare value: one | few | many | unbounded); blank on internal turns.', 'few'),
+  runtimeStateTurnHint('{{runtime_audience_knowledge}}', 'Context Envelope audienceKnowledge for the current turn (bare value: all_known | partially_known | anonymous); blank on internal turns.', 'all_known'),
   runtimeStateTurnHint('{{runtime_capability_tier}}', 'Current capability tier used to gate extended tool access.', 'apprentice'),
 ];
 

@@ -5,6 +5,7 @@ export {
   type EpisodeClaimTransferInput,
   type EpisodeClaimTransferResult,
   type EpisodeCreateInput,
+  type EpisodeLifecycleStatus,
   type EpisodeListOptions,
   type EpisodeMessageClaim,
   type EpisodeMessageClaimEntryInput,
@@ -39,7 +40,10 @@ export {
 } from './arc-formation.js';
 export {
   SleepCycleEpisodeConsolidator,
+  buildConsolidatedEpisodeInput,
   buildMergeChains,
+  parseThematicGrouping,
+  type SleepConsolidationFailureEvent,
   type SleepConsolidationSessionReader,
   type SleepCycleConsolidationOptions,
   type SleepCycleConsolidationResult,

@@ -73,6 +73,73 @@ export const DEFAULT_SOCIAL_GRAPH_BUILDER_CADENCE: SocialGraphBuilderCadenceConf
   scanMemoryLimit: 500,
 };
 
+/**
+ * Scheduled morning wake lane (E7.1). Injects an explicit system note at a
+ * configured wall-clock time that establishes the new day: current date/time,
+ * elapsed time since the last partner exchange, and a catch-up summary from
+ * the shared session summarization service.
+ */
+export interface TemporalWakeupMorningConfig {
+  enabled: boolean;
+  /** HH:mm wall-clock wake time (default 08:00). */
+  localTime: string;
+  /** Scheduler cadence timezone for the wake slot. */
+  timezone: 'local' | 'utc';
+  /** Max recent session entries fed to the shared catch-up summarizer. */
+  catchUpEntryLimit: number;
+  /** Token budget for the shared catch-up summary. */
+  catchUpSummaryMaxTokens: number;
+  /**
+   * A full (LLM) wake turn is only invoked when the last partner exchange is
+   * at most this old; staler sessions get the cheap note-only injection.
+   */
+  fullTurnMaxIdleHours: number;
+}
+
+/**
+ * Idle time-of-day refresher lane (E7.1). After a long same-day gap the lane
+ * injects a lighter system note that moves the time-of-day frame forward;
+ * overnight/multi-day textures escalate to the full new-day framing.
+ */
+export interface TemporalWakeupIdleRefresherConfig {
+  enabled: boolean;
+  /** Poll interval for the refresher check (ms). */
+  checkIntervalMs: number;
+  /** Minimum idle gap before a same-day refresher note is eligible. */
+  minIdleMinutes: number;
+  /** Anti-loop spacing between temporal wake-lane notes. */
+  minNoteIntervalMinutes: number;
+}
+
+/**
+ * Temporal wake-up lanes (E7.1). Optional block — defaults apply when absent.
+ * Both lanes emit explicit system notes (charter 6.17); they are refreshers,
+ * never partner activity.
+ */
+export interface TemporalWakeupConfig {
+  enabled: boolean;
+  morningWake: TemporalWakeupMorningConfig;
+  idleRefresher: TemporalWakeupIdleRefresherConfig;
+}
+
+export const DEFAULT_TEMPORAL_WAKEUP_CONFIG: TemporalWakeupConfig = {
+  enabled: true,
+  morningWake: {
+    enabled: true,
+    localTime: '08:00',
+    timezone: 'local',
+    catchUpEntryLimit: 32,
+    catchUpSummaryMaxTokens: 160,
+    fullTurnMaxIdleHours: 72,
+  },
+  idleRefresher: {
+    enabled: true,
+    checkIntervalMs: 900_000,
+    minIdleMinutes: 240,
+    minNoteIntervalMinutes: 240,
+  },
+};
+
 export interface SchedulerRuntimeConfig {
   tickIntervalMs: number;
   heartbeatIntervalMs: number;
@@ -81,6 +148,7 @@ export interface SchedulerRuntimeConfig {
   episodicProcessing: EpisodicProcessingRestWindowConfig;
   sleeptime: SleeptimeCadenceConfig;
   socialGraphBuilder: SocialGraphBuilderCadenceConfig;
+  temporalWakeup: TemporalWakeupConfig;
 }
 
 interface SchedulerRuntimeLoadOptions {
@@ -249,6 +317,80 @@ function validateSocialGraphBuilderConfig(
   };
 }
 
+function toCadenceTimezone(value: unknown, field: string): 'local' | 'utc' {
+  if (value !== 'local' && value !== 'utc') {
+    throw new Error(`Invalid scheduler config: ${field} must be "local" or "utc"`);
+  }
+  return value;
+}
+
+function validateTemporalWakeupConfig(
+  raw: unknown,
+  sourcePath: string,
+): TemporalWakeupConfig {
+  if (raw === undefined) {
+    return {
+      enabled: DEFAULT_TEMPORAL_WAKEUP_CONFIG.enabled,
+      morningWake: { ...DEFAULT_TEMPORAL_WAKEUP_CONFIG.morningWake },
+      idleRefresher: { ...DEFAULT_TEMPORAL_WAKEUP_CONFIG.idleRefresher },
+    };
+  }
+  if (!isRecord(raw)) {
+    throw new Error(`Invalid scheduler config at ${sourcePath}: temporalWakeup must be an object`);
+  }
+  const morningDefaults = DEFAULT_TEMPORAL_WAKEUP_CONFIG.morningWake;
+  const refresherDefaults = DEFAULT_TEMPORAL_WAKEUP_CONFIG.idleRefresher;
+  const morningRaw = raw.morningWake ?? {};
+  const refresherRaw = raw.idleRefresher ?? {};
+  if (!isRecord(morningRaw)) {
+    throw new Error(`Invalid scheduler config at ${sourcePath}: temporalWakeup.morningWake must be an object`);
+  }
+  if (!isRecord(refresherRaw)) {
+    throw new Error(`Invalid scheduler config at ${sourcePath}: temporalWakeup.idleRefresher must be an object`);
+  }
+
+  return {
+    enabled: toBoolean(raw.enabled ?? DEFAULT_TEMPORAL_WAKEUP_CONFIG.enabled, 'temporalWakeup.enabled'),
+    morningWake: {
+      enabled: toBoolean(morningRaw.enabled ?? morningDefaults.enabled, 'temporalWakeup.morningWake.enabled'),
+      localTime: toLocalTime(morningRaw.localTime ?? morningDefaults.localTime, 'temporalWakeup.morningWake.localTime'),
+      timezone: toCadenceTimezone(morningRaw.timezone ?? morningDefaults.timezone, 'temporalWakeup.morningWake.timezone'),
+      catchUpEntryLimit: toPositiveInteger(
+        morningRaw.catchUpEntryLimit ?? morningDefaults.catchUpEntryLimit,
+        'temporalWakeup.morningWake.catchUpEntryLimit',
+        1,
+      ),
+      catchUpSummaryMaxTokens: toPositiveInteger(
+        morningRaw.catchUpSummaryMaxTokens ?? morningDefaults.catchUpSummaryMaxTokens,
+        'temporalWakeup.morningWake.catchUpSummaryMaxTokens',
+        1,
+      ),
+      fullTurnMaxIdleHours: toPositiveInteger(
+        morningRaw.fullTurnMaxIdleHours ?? morningDefaults.fullTurnMaxIdleHours,
+        'temporalWakeup.morningWake.fullTurnMaxIdleHours',
+        1,
+      ),
+    },
+    idleRefresher: {
+      enabled: toBoolean(refresherRaw.enabled ?? refresherDefaults.enabled, 'temporalWakeup.idleRefresher.enabled'),
+      checkIntervalMs: toInterval(
+        refresherRaw.checkIntervalMs ?? refresherDefaults.checkIntervalMs,
+        'temporalWakeup.idleRefresher.checkIntervalMs',
+      ),
+      minIdleMinutes: toPositiveInteger(
+        refresherRaw.minIdleMinutes ?? refresherDefaults.minIdleMinutes,
+        'temporalWakeup.idleRefresher.minIdleMinutes',
+        1,
+      ),
+      minNoteIntervalMinutes: toPositiveInteger(
+        refresherRaw.minNoteIntervalMinutes ?? refresherDefaults.minNoteIntervalMinutes,
+        'temporalWakeup.idleRefresher.minNoteIntervalMinutes',
+        1,
+      ),
+    },
+  };
+}
+
 function validateSchedulerConfig(raw: unknown, sourcePath: string): SchedulerRuntimeConfig {
   if (!isRecord(raw)) {
     throw new Error(`Invalid scheduler config at ${sourcePath}: expected object`);
@@ -262,6 +404,7 @@ function validateSchedulerConfig(raw: unknown, sourcePath: string): SchedulerRun
     episodicProcessing: validateEpisodicProcessingConfig(raw.episodicProcessing, sourcePath),
     sleeptime: validateSleeptimeConfig(raw.sleeptime, sourcePath),
     socialGraphBuilder: validateSocialGraphBuilderConfig(raw.socialGraphBuilder, sourcePath),
+    temporalWakeup: validateTemporalWakeupConfig(raw.temporalWakeup, sourcePath),
   };
 }
 

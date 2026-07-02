@@ -402,6 +402,7 @@
               turn={selectedTurn}
               metrics={selectedTurnMetrics}
               selectedChannelEvents={selectedChannelEvents}
+              turns={turns}
             />
           {/if}
         </div>

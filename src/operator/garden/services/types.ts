@@ -53,10 +53,12 @@ import type { SubstrateConfig } from '../../../system/config/runtime-config-cont
 import type {
   ContextMessage,
   LLMProviderWireMessage,
+  LLMSystemPromptTransport,
   PromptSectionTelemetry,
   ToolSchema,
   TurnRecord,
 } from '../../../shared/contracts/runtime.js';
+import type { PromptPlan } from '../../../core/agent/substrate-agent/turn-execution/prompt-plan.js';
 import type {
   RunChargeLedgerData,
   RunChargeLedgerQuery,
@@ -998,9 +1000,37 @@ export interface AdminPromptLoomToolActivityData {
   toolResults: TurnRecord['toolCalls'];
 }
 
+/**
+ * The Loom's Provider Wire projection (E2.3): the serialized provider payload
+ * (system prompt + messages + tool definitions) exactly as shipped.
+ *
+ * - source 'prompt_plan': derived from the persisted PromptPlan via
+ *   serializePromptPlanForProvider — byte-equal to the wire by construction.
+ * - source 'recorded_snapshot': the recorded provider-wire capture. Used for
+ *   legacy pre-plan records (legacy=true) and, fail-open-never, when a plan
+ *   exists but the system-role transport was not recorded (legacy=false, so
+ *   the degradation is visible rather than silent).
+ */
+export interface AdminPromptLoomProviderWireData {
+  source: 'prompt_plan' | 'recorded_snapshot';
+  /** true when the turn predates the PromptPlan snapshot ("legacy turn (pre-plan)"). */
+  legacy: boolean;
+  systemRoleTransport: LLMSystemPromptTransport | null;
+  systemPrompt: string | null;
+  messages: LLMProviderWireMessage[];
+  /** Tool definitions exactly as shipped to the provider for this turn. */
+  toolDefinitions: ToolSchema[];
+}
+
 export interface AdminPromptLoomData {
   source: 'turn_snapshot';
   snapshotCapturedAt: number | null;
+  /**
+   * The persisted, schema-versioned PromptPlan the Loom projects (E2.3).
+   * null for legacy records that predate the plan snapshot.
+   */
+  plan: PromptPlan | null;
+  providerWire: AdminPromptLoomProviderWireData;
   historicalSnapshot: AdminPromptLoomHistoricalSnapshotData;
   generatedPrompt: AdminPromptLoomGeneratedPromptData;
   providerPayload: AdminPromptLoomProviderPayloadData;

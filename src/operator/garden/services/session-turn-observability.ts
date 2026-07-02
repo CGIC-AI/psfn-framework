@@ -12,6 +12,7 @@ import type {
   AdminContinuityProvenanceView,
   AdminPromptLoomData,
   AdminPromptLoomHistoricalSnapshotHit,
+  AdminPromptLoomProviderWireData,
   AdminSessionTurnData,
   AdminTurnRetrievalTelemetry,
   AdminTurnSnapshotData,
@@ -21,6 +22,7 @@ import type { ContextMessage, TurnRecord } from '../../../shared/contracts/runti
 import {
   getPromptPlanBlockText,
   renderPromptPlanAssembledPrompt,
+  serializePromptPlanForProvider,
   serializePromptPlanSystemPrompt,
 } from '../../../core/agent/substrate-agent/turn-execution/prompt-plan.js';
 
@@ -246,6 +248,40 @@ function derivePromptLoomPromptStrings(
   };
 }
 
+/**
+ * Provider Wire projection (E2.3). For plan-backed turns the wire view is the
+ * pure serialization OF the persisted plan (serializePromptPlanForProvider),
+ * so the tab content is byte-equal to what shipped by construction. Legacy
+ * pre-plan records (and the never-expected plan-without-transport case) fall
+ * back to the recorded provider-wire capture with an explicit source marker.
+ */
+function buildProviderWireData(
+  snapshot: AdminTurnSnapshotData | null,
+  legacyFinalSystemPrompt: string | null,
+): AdminPromptLoomProviderWireData {
+  const plan = snapshot?.plan ?? null;
+  const transport = snapshot?.promptContext?.providerObservability?.systemRole.transport ?? null;
+  if (plan && transport) {
+    const payload = serializePromptPlanForProvider(plan, transport);
+    return {
+      source: 'prompt_plan',
+      legacy: false,
+      systemRoleTransport: transport,
+      systemPrompt: payload.systemPrompt,
+      messages: payload.providerWireMessages.map(message => ({ ...message })),
+      toolDefinitions: plan.toolDefinitions.map(tool => cloneUnknownValue(tool)),
+    };
+  }
+  return {
+    source: 'recorded_snapshot',
+    legacy: plan === null,
+    systemRoleTransport: transport,
+    systemPrompt: legacyFinalSystemPrompt,
+    messages: cloneProviderMessages(snapshot),
+    toolDefinitions: cloneActiveTools(snapshot),
+  };
+}
+
 function buildPromptLoomData(
   record: TurnRecord,
   snapshot: AdminTurnSnapshotData | null,
@@ -258,6 +294,8 @@ function buildPromptLoomData(
   return {
     source: 'turn_snapshot',
     snapshotCapturedAt: snapshot?.capturedAt ?? null,
+    plan: snapshot?.plan ? cloneUnknownValue(snapshot.plan) : null,
+    providerWire: buildProviderWireData(snapshot, promptStrings.finalSystemPrompt),
     historicalSnapshot: {
       label: HISTORICAL_SNAPSHOT_LABEL,
       removedPromptLayerIds: [...new Set(historicalHits.map(hit => hit.layerId))],

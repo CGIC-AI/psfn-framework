@@ -492,6 +492,39 @@ export interface EventMap {
     compositionalEvaluationBatchCount?: number;
     compositionalFinalistCount?: number;
   } & EventCorrelationFields;
+  /**
+   * E8.3: outcome of a wiki pgvector projection write (store write-hook or a
+   * rebuild pass). The projection is a rebuildable mirror; an embedding or
+   * write failure fails closed for semantic search (`outcome: 'failed'`) while
+   * the canonical workspace document is untouched and the wiki write itself is
+   * never blocked. Feeds the `wiki_projection_rag` subsystem-health lane.
+   */
+  'wiki.projection.sync': {
+    documentId: string;
+    outcome: 'ran' | 'failed';
+    chunkCount: number;
+    error?: string;
+    timestamp: number;
+  };
+  /**
+   * E8.3: outcome of the supplemental wiki RAG retrieval for a chat turn. It is
+   * deterministically gated (config flag, similarity threshold, context class)
+   * and does not run every turn; a closed gate emits `outcome: 'skipped'` with
+   * a reason and spends zero embedding calls. Wiki context never displaces
+   * memory context. Feeds the `wiki_projection_rag` subsystem-health lane.
+   */
+  'wiki.retrieval': {
+    channelId: string;
+    outcome: 'ran' | 'skipped' | 'degraded';
+    reason?: string;
+    contextClass?: 'dm' | 'group' | 'focus';
+    candidateCount?: number;
+    selectedCount?: number;
+    tokenCap?: number;
+    tokenCount?: number;
+    error?: string;
+    timestamp: number;
+  } & EventCorrelationFields;
   'memory.active_context.refresh': {
     channelId: string;
     key: string;

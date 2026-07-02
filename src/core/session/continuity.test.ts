@@ -397,7 +397,7 @@ describe('UserContinuityStore', () => {
       expect(entries).toHaveLength(2);
     });
 
-    it('semi_private channels get no continuity from private channels', () => {
+    it('invite_only channels get no continuity from private channels', () => {
       store.append('user1', {
         channelId: 'api:session1',
         role: 'user',
@@ -406,12 +406,12 @@ describe('UserContinuityStore', () => {
         originChannelId: 'api:session1',
       });
 
-      // From a guild channel (semi_private), should see nothing
+      // From a guild channel (invite_only), should see nothing
       const entries = store.getRecent('user1', 10, undefined, '1234567890');
       expect(entries).toHaveLength(0);
     });
 
-    it('private channels receive lower-sensitivity continuity from semi_private channels', () => {
+    it('private channels receive lower-sensitivity continuity from invite_only channels', () => {
       store.append('user1', {
         channelId: '1234567890',
         role: 'user',
@@ -423,7 +423,7 @@ describe('UserContinuityStore', () => {
       const entries = store.getRecent('user1', 10, undefined, 'api:session1');
       expect(entries).toHaveLength(1);
       expect(entries[0].content).toBe('Guild planning thread');
-      expect(entries[0].channelVisibility).toBe('semi_private');
+      expect(entries[0].channelVisibility).toBe('invite_only');
     });
 
     it('public channels receive only public-ceiling continuity', () => {
@@ -517,8 +517,8 @@ describe('UserContinuityStore', () => {
       expect(entries[0].channelVisibility).toBe('private');
     });
 
-    it('Discord guild messages get semi_private visibility (no DM flag)', () => {
-      // Without pre-stamped visibility, fallback classifyChannel('1234567890') → 'semi_private'
+    it('Discord guild messages get invite_only visibility (no DM flag)', () => {
+      // Without pre-stamped visibility, fallback classifyChannel('1234567890') → 'invite_only'
       store.append('user1', {
         channelId: '1234567890',
         role: 'user',
@@ -528,7 +528,7 @@ describe('UserContinuityStore', () => {
       });
 
       const entries = store.getRecent('user1', 10);
-      expect(entries[0].channelVisibility).toBe('semi_private');
+      expect(entries[0].channelVisibility).toBe('invite_only');
     });
 
     it('DM-flagged current channel allows sharing from private-stamped Discord DM entries', () => {
@@ -656,7 +656,7 @@ describe('SessionManager with continuity', () => {
     expect(ctx.systemPrompt).not.toContain('<source>sillytavern:ch2</source>');
   });
 
-  it('buildContext includes lower-sensitivity semi_private continuity in private channels', async () => {
+  it('buildContext includes lower-sensitivity invite_only continuity in private channels', async () => {
     const mgr = new SessionManager(sessionStore, config);
     mgr.continuityStore = continuityStore;
 
@@ -856,7 +856,7 @@ describe('SessionManager with continuity', () => {
     expect(continuity[0].channelVisibility).toBe('private');
   });
 
-  it('records Discord guild messages as semi_private visibility', () => {
+  it('records Discord guild messages as invite_only visibility', () => {
     const mgr = new SessionManager(sessionStore, config);
     mgr.continuityStore = continuityStore;
 
@@ -865,7 +865,7 @@ describe('SessionManager with continuity', () => {
 
     const continuity = continuityStore.getRecent('user1', 10);
     expect(continuity).toHaveLength(1);
-    expect(continuity[0].channelVisibility).toBe('semi_private');
+    expect(continuity[0].channelVisibility).toBe('invite_only');
   });
 
   it('records explicit channel privacy overrides into continuity visibility', () => {

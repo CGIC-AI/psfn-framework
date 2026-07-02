@@ -682,7 +682,7 @@ describe('createMemoryTool', () => {
       date: '2026-03-30',
       channel_id: 'api:test',
       trust_level: 'trusted',
-      channel_visibility: 'semi_private',
+      channel_visibility: 'invite_only',
       canonical_contact_id: 'contact:primary',
       limit: 4,
     });

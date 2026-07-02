@@ -1,6 +1,7 @@
 import type { Pool, PoolClient } from 'pg';
 import { classifyChannel } from '../../system/trust/policy.js';
 import type { ChannelVisibility } from '../../system/trust/types.js';
+import { decodeStoredChannelVisibility } from '../../system/trust/types.js';
 import {
   createPostgresPool,
   ensurePostgresSchema,
@@ -84,15 +85,9 @@ function normalizeChannelVisibility(
   value: string | undefined,
   channelId: string,
 ): ChannelVisibility {
-  switch (value) {
-    case 'private':
-    case 'semi_private':
-    case 'public':
-    case 'broadcast':
-      return value;
-    default:
-      return classifyChannel(channelId);
-  }
+  // Stored rows may predate the E3.1 vocabulary rename; the shared decoder
+  // maps legacy 'semi_private' to 'invite_only'.
+  return decodeStoredChannelVisibility(value) ?? classifyChannel(channelId);
 }
 
 function normalizeTimestamp(value: number): number {

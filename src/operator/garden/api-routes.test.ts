@@ -3226,7 +3226,7 @@ describe('AdminServer JSON API routes', () => {
       relationshipType: 'friend',
     });
     contactStore.linkChannelIdentity(contact.id, 'discord', 'api-contact-user', {
-      privacyLevel: 'semi_private',
+      privacyLevel: 'invite_only',
     });
     contactStore.recordChannelActivity(contact.id, 'discord', '1313001762793197678');
     const contactEntity = contactStore.getSocialGraphEntityByContactId(contact.id)!;
@@ -4380,7 +4380,7 @@ describe('AdminServer JSON API routes', () => {
       },
       visibilityAllowed: {
         private: ['public', 'personal', 'intimate', 'confidential'],
-        semi_private: ['public', 'personal'],
+        invite_only: ['public', 'personal'],
         public: ['public'],
         broadcast: ['public'],
       },

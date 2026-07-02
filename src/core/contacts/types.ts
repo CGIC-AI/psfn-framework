@@ -148,7 +148,7 @@ export interface ContactMutationAuditQuery {
 
 export const CHANNEL_PRIVACY_LEVELS: ChannelPrivacyLevel[] = [
   'private',
-  'semi_private',
+  'invite_only',
   'public',
   'broadcast',
 ];

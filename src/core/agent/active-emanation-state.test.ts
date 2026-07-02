@@ -73,7 +73,7 @@ describe('ActiveEmanationAuthority', () => {
         companionId: TEST_COMPANION_ID,
         embodimentId: 'speaker',
         satelliteId: 'office',
-        channelPrivacy: 'semi_private',
+        channelPrivacy: 'invite_only',
       },
     }, {
       sourceKey: 'conn-b:session-b',
@@ -104,7 +104,7 @@ describe('ActiveEmanationAuthority', () => {
         embodimentId: 'speaker',
         emanationId: 'speaker-voice',
         satelliteId: 'office',
-        channelPrivacy: 'semi_private',
+        channelPrivacy: 'invite_only',
       },
     }, {
       sourceKey: 'conn-b:session-b',
@@ -116,7 +116,7 @@ describe('ActiveEmanationAuthority', () => {
       companionId: TEST_COMPANION_ID,
       embodimentId: 'speaker',
       satelliteId: 'office',
-      channelPrivacy: 'semi_private',
+      channelPrivacy: 'invite_only',
       isPrimary: true,
     });
 

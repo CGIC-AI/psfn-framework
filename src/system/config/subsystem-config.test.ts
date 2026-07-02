@@ -339,9 +339,13 @@ describe('subsystem config round-trip', () => {
       },
       visibilityAllowed: {
         private: ['public', 'personal', 'intimate', 'confidential'],
-        semi_private: ['public', 'personal'],
+        invite_only: ['public', 'personal'],
         public: ['public'],
         broadcast: ['public'],
+      },
+      audienceScopeThresholds: {
+        fewMax: 8,
+        manyMax: 80,
       },
       channelClassification: {
         privatePrefixes: ['custom:'],
@@ -374,14 +378,14 @@ describe('subsystem config round-trip', () => {
       },
       visibilityAllowed: {
         private: ['public', 'personal', 'intimate', 'confidential'],
-        semi_private: ['public', 'personal'],
+        invite_only: ['public', 'personal'],
         public: ['public'],
         broadcast: ['public'],
       },
       channelClassification: {
         privatePrefixes: ['api:', 'sillytavern:', 'openwebui:', 'shard:', 'internal:'],
         broadcastPrefixes: ['twitter:', 'social:'],
-        defaultVisibility: 'semi_private',
+        defaultVisibility: 'invite_only',
         visibilityOverrides: {
           exact: {},
           prefix: {},
@@ -410,14 +414,14 @@ describe('subsystem config round-trip', () => {
       },
       visibilityAllowed: {
         private: ['public', 'personal', 'intimate', 'confidential'],
-        semi_private: ['public'],
+        invite_only: ['public'],
         public: ['public'],
         broadcast: ['public'],
       },
       channelClassification: {
         privatePrefixes: ['custom:'],
         broadcastPrefixes: ['social:'],
-        defaultVisibility: 'semi_private',
+        defaultVisibility: 'invite_only',
         visibilityOverrides: {
           exact: {},
           prefix: {},
@@ -426,8 +430,147 @@ describe('subsystem config round-trip', () => {
     };
     writeFileSync(join(dataDir, TRUST_POLICY_FILE_NAME), JSON.stringify(custom, null, 2), 'utf-8');
 
-    expect(loadTrustPolicyConfig(dataDir)).toEqual(custom);
+    expect(loadTrustPolicyConfig(dataDir)).toEqual({
+      ...custom,
+      // Absent audienceScopeThresholds resolve to the documented defaults.
+      audienceScopeThresholds: { fewMax: 10, manyMax: 100 },
+    });
     expect(readJsonFile(join(dataDir, TRUST_POLICY_FILE_NAME))).toEqual(custom);
+  });
+
+  it('migrates legacy semi_private trust-policy vocabulary to invite_only', () => {
+    const dataDir = makeDataDir('psfn-trust-policy-vocab-');
+    const legacy = {
+      trustCeiling: {
+        primary: ['public', 'personal', 'intimate', 'confidential'],
+        trusted: ['public', 'personal'],
+        regular: ['public', 'personal'],
+        public: ['public'],
+      },
+      visibilityAllowed: {
+        private: ['public', 'personal', 'intimate', 'confidential'],
+        semi_private: ['public', 'personal'],
+        public: ['public'],
+        broadcast: ['public'],
+      },
+      channelClassification: {
+        privatePrefixes: ['custom:'],
+        broadcastPrefixes: ['social:'],
+        defaultVisibility: 'semi_private',
+        visibilityOverrides: {
+          exact: { 'custom:room': 'semi_private' },
+          prefix: { 'legacy:': 'semi_private' },
+        },
+      },
+    };
+    writeFileSync(join(dataDir, TRUST_POLICY_FILE_NAME), JSON.stringify(legacy, null, 2), 'utf-8');
+
+    const loaded = loadTrustPolicyConfig(dataDir);
+
+    expect(loaded.visibilityAllowed.invite_only).toEqual(['public', 'personal']);
+    expect(Object.keys(loaded.visibilityAllowed)).not.toContain('semi_private');
+    expect(loaded.channelClassification.defaultVisibility).toBe('invite_only');
+    expect(loaded.channelClassification.visibilityOverrides.exact['custom:room']).toBe('invite_only');
+    expect(loaded.channelClassification.visibilityOverrides.prefix['legacy:']).toBe('invite_only');
+
+    // The migration is persisted so the retired vocabulary never survives on disk.
+    const persisted = readJsonFile<{
+      visibilityAllowed: Record<string, string[]>;
+      channelClassification: { defaultVisibility: string };
+    }>(join(dataDir, TRUST_POLICY_FILE_NAME));
+    expect(Object.keys(persisted.visibilityAllowed)).not.toContain('semi_private');
+    expect(persisted.channelClassification.defaultVisibility).toBe('invite_only');
+  });
+
+  it('fails closed when trust-policy defines both semi_private and invite_only', () => {
+    const dataDir = makeDataDir('psfn-trust-policy-vocab-conflict-');
+    const conflicted = {
+      trustCeiling: {
+        primary: ['public', 'personal', 'intimate', 'confidential'],
+        trusted: ['public', 'personal'],
+        regular: ['public', 'personal'],
+        public: ['public'],
+      },
+      visibilityAllowed: {
+        private: ['public', 'personal', 'intimate', 'confidential'],
+        semi_private: ['public', 'personal'],
+        invite_only: ['public'],
+        public: ['public'],
+        broadcast: ['public'],
+      },
+      channelClassification: {
+        privatePrefixes: [],
+        broadcastPrefixes: [],
+        defaultVisibility: 'invite_only',
+        visibilityOverrides: { exact: {}, prefix: {} },
+      },
+    };
+    writeFileSync(join(dataDir, TRUST_POLICY_FILE_NAME), JSON.stringify(conflicted, null, 2), 'utf-8');
+
+    expect(() => loadTrustPolicyConfig(dataDir)).toThrow(/semi_private and invite_only/);
+  });
+
+  it('rejects saving trust-policy with the retired semi_private vocabulary', () => {
+    const dataDir = makeDataDir('psfn-trust-policy-vocab-save-');
+    const legacy = {
+      trustCeiling: {
+        primary: ['public', 'personal', 'intimate', 'confidential'],
+        trusted: ['public', 'personal'],
+        regular: ['public', 'personal'],
+        public: ['public'],
+      },
+      visibilityAllowed: {
+        private: ['public', 'personal', 'intimate', 'confidential'],
+        semi_private: ['public', 'personal'],
+        public: ['public'],
+        broadcast: ['public'],
+      },
+      channelClassification: {
+        privatePrefixes: [],
+        broadcastPrefixes: [],
+        defaultVisibility: 'semi_private',
+        visibilityOverrides: { exact: {}, prefix: {} },
+      },
+    };
+
+    expect(() => saveTrustPolicyConfig(dataDir, legacy)).toThrow();
+  });
+
+  it('validates audienceScopeThresholds fail-closed', () => {
+    const dataDir = makeDataDir('psfn-trust-policy-thresholds-');
+    const base = {
+      trustCeiling: {
+        primary: ['public', 'personal', 'intimate', 'confidential'],
+        trusted: ['public', 'personal'],
+        regular: ['public', 'personal'],
+        public: ['public'],
+      },
+      visibilityAllowed: {
+        private: ['public', 'personal', 'intimate', 'confidential'],
+        invite_only: ['public', 'personal'],
+        public: ['public'],
+        broadcast: ['public'],
+      },
+      channelClassification: {
+        privatePrefixes: [],
+        broadcastPrefixes: [],
+        defaultVisibility: 'invite_only',
+        visibilityOverrides: { exact: {}, prefix: {} },
+      },
+    };
+
+    expect(() => saveTrustPolicyConfig(dataDir, {
+      ...base,
+      audienceScopeThresholds: { fewMax: 0, manyMax: 100 },
+    })).toThrow(/fewMax/);
+    expect(() => saveTrustPolicyConfig(dataDir, {
+      ...base,
+      audienceScopeThresholds: { fewMax: 10, manyMax: 10 },
+    })).toThrow(/manyMax/);
+    expect(() => saveTrustPolicyConfig(dataDir, {
+      ...base,
+      audienceScopeThresholds: { fewMax: 10, manyMax: 100, extra: true },
+    })).toThrow(/unsupported keys/);
   });
 
   it('round-trips capability-tier.json without drift', () => {

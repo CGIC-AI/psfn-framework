@@ -10,7 +10,12 @@ export type TrustMutationSource = 'manual' | 'behavior_drift' | 'autonomous';
 export type SensitivityLevel = 'public' | 'personal' | 'intimate' | 'confidential';
 export type HighIntimacySensitivityLevel = Extract<SensitivityLevel, 'intimate' | 'confidential'>;
 
-export type ChannelVisibility = 'private' | 'semi_private' | 'public' | 'broadcast';
+// Transitional single-axis channel vocabulary. E3.1 renamed 'semi_private' to
+// 'invite_only' (no alias). 'broadcast' remains a visibility value ONLY until
+// E3.2/E3.3 execute the documented split into { channelPrivacy: 'public',
+// broadcast: true } — see src/system/trust/context-envelope.ts and
+// docs/context-envelope.md for the envelope contract and migration map.
+export type ChannelVisibility = 'private' | 'invite_only' | 'public' | 'broadcast';
 
 export type ConsentRedactionBehavior = 'delete' | 'abstract';
 export type MemoryRedactionOperation = 'auto' | 'delete' | 'abstract';
@@ -30,7 +35,7 @@ export const LOW_TIER_TRUST_LEVELS: readonly LowTierTrustLevel[] = ['regular', '
 export const HIGH_INTIMACY_SENSITIVITY_LEVELS: readonly HighIntimacySensitivityLevel[] = ['intimate', 'confidential'];
 
 export const SENSITIVITY_LEVELS: readonly SensitivityLevel[] = ['public', 'personal', 'intimate', 'confidential'];
-export const CHANNEL_VISIBILITIES: readonly ChannelVisibility[] = ['private', 'semi_private', 'public', 'broadcast'];
+export const CHANNEL_VISIBILITIES: readonly ChannelVisibility[] = ['private', 'invite_only', 'public', 'broadcast'];
 
 export const VALID_SENSITIVITY_LEVELS: SensitivityLevel[] = ['public', 'personal', 'intimate', 'confidential'];
 export const VALID_CONSENT_REDACTION_BEHAVIORS: ConsentRedactionBehavior[] = ['delete', 'abstract'];
@@ -97,6 +102,19 @@ export function isChannelVisibility(value: unknown): value is ChannelVisibility 
 
 export function normalizeChannelVisibility(value: unknown): ChannelVisibility | undefined {
   return isChannelVisibility(value) ? value : undefined;
+}
+
+/**
+ * Decoder for PERSISTED channel-visibility values only (session provenance,
+ * transcript projections, contact rows, journal records written before the
+ * E3.1 vocabulary rename). Maps the retired 'semi_private' literal to
+ * 'invite_only' per the documented migration map (docs/context-envelope.md).
+ * This is a stored-data decode rule, NOT an accepted input alias: config and
+ * API surfaces reject 'semi_private' outright.
+ */
+export function decodeStoredChannelVisibility(value: unknown): ChannelVisibility | undefined {
+  if (value === 'semi_private') return 'invite_only';
+  return normalizeChannelVisibility(value);
 }
 
 export function sensitivityOrd(level: SensitivityLevel): number {

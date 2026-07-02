@@ -49,7 +49,7 @@ class InMemoryTranscriptSearch {
     role: 'user' | 'assistant' | 'system' | 'tool';
     content: string;
     timestamp: number;
-    channelVisibility: 'private' | 'semi_private' | 'public' | 'broadcast';
+    channelVisibility: 'private' | 'invite_only' | 'public' | 'broadcast';
   }> = [];
 
   record(entry: {
@@ -57,7 +57,7 @@ class InMemoryTranscriptSearch {
     role: 'user' | 'assistant' | 'system' | 'tool';
     content: string;
     timestamp: number;
-    channelVisibility: 'private' | 'semi_private' | 'public' | 'broadcast';
+    channelVisibility: 'private' | 'invite_only' | 'public' | 'broadcast';
   }): void {
     this.entries.push(entry);
   }

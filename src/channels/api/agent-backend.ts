@@ -664,7 +664,7 @@ export class AgentApiBackend {
     if (!isChannelVisibility(rawValue)) {
       return {
         ok: false,
-        error: 'X-Channel-Privacy must be one of: private, semi_private, public, broadcast',
+        error: 'X-Channel-Privacy must be one of: private, invite_only, public, broadcast',
       };
     }
     return { ok: true, value: rawValue };

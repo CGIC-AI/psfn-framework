@@ -212,14 +212,14 @@ describe('AdminChatBootstrapService', () => {
       channelId: '1313001762793197678',
       firstSeen: new Date().toISOString(),
       lastSeen: new Date().toISOString(),
-      privacyLevel: 'semi_private',
+      privacyLevel: 'invite_only',
     }];
 
     const setConversationChannelPrivacy = vi.fn((
       _contactId: string,
       _channel: string,
       _channelId: string,
-      privacyLevel: 'private' | 'semi_private' | 'public' | 'broadcast',
+      privacyLevel: 'private' | 'invite_only' | 'public' | 'broadcast',
     ) => {
       if (contact.conversationChannels) {
         contact.conversationChannels[0].privacyLevel = privacyLevel;

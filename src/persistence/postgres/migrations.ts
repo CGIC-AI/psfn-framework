@@ -501,7 +501,7 @@ export const POSTGRES_CONTACT_MIGRATIONS = [
     contact_id TEXT NOT NULL REFERENCES contacts(id) ON DELETE CASCADE,
     channel TEXT NOT NULL,
     channel_user_id TEXT NOT NULL,
-    privacy_level TEXT NOT NULL DEFAULT 'semi_private',
+    privacy_level TEXT NOT NULL DEFAULT 'invite_only',
     first_seen TEXT NOT NULL,
     last_seen TEXT NOT NULL,
     PRIMARY KEY (channel, channel_user_id)

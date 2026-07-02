@@ -29,7 +29,7 @@ import {
 function ctx(overrides: Partial<PolicyContext>): PolicyContext {
   return {
     trustLevel: 'regular',
-    channelVisibility: 'semi_private',
+    channelVisibility: 'invite_only',
     memorySensitivity: 'public',
     ...overrides,
   };
@@ -175,7 +175,7 @@ describe('evaluateMemoryPolicy', () => {
   it('regular can access personal but not intimate memories', () => {
     const result = evaluateMemoryPolicy(ctx({
       trustLevel: 'regular',
-      channelVisibility: 'semi_private',
+      channelVisibility: 'invite_only',
       memorySensitivity: 'personal',
     }));
     expect(result.decision).toBe('allow');
@@ -222,10 +222,10 @@ describe('evaluateMemoryPolicy', () => {
     expect(result.layer).toBe('visibility');
   });
 
-  it('semi-private channel blocks intimate/confidential', () => {
+  it('invite-only channel blocks intimate/confidential', () => {
     const intimate = evaluateMemoryPolicy(ctx({
       trustLevel: 'primary',
-      channelVisibility: 'semi_private',
+      channelVisibility: 'invite_only',
       memorySensitivity: 'intimate',
     }));
     expect(intimate.decision).toBe('deny');
@@ -233,17 +233,17 @@ describe('evaluateMemoryPolicy', () => {
 
     const confidential = evaluateMemoryPolicy(ctx({
       trustLevel: 'primary',
-      channelVisibility: 'semi_private',
+      channelVisibility: 'invite_only',
       memorySensitivity: 'confidential',
     }));
     expect(confidential.decision).toBe('deny');
     expect(confidential.layer).toBe('visibility');
   });
 
-  it('semi-private allows personal for primary trust', () => {
+  it('invite-only allows personal for primary trust', () => {
     const result = evaluateMemoryPolicy(ctx({
       trustLevel: 'primary',
-      channelVisibility: 'semi_private',
+      channelVisibility: 'invite_only',
       memorySensitivity: 'personal',
     }));
     expect(result.decision).toBe('allow');
@@ -344,7 +344,7 @@ describe('classifyChannel', () => {
 
     expect(classifyChannel('api:session123')).toBe('private');
     expect(classifyChannel('twitter:timeline')).toBe('broadcast');
-    expect(classifyChannel('1234567890')).toBe('semi_private');
+    expect(classifyChannel('1234567890')).toBe('invite_only');
   });
 
   it('uses explicit privacy metadata for non-broadcast heuristic channels', () => {
@@ -388,9 +388,9 @@ describe('classifyChannel', () => {
     expect(classifyChannel('social:mastodon')).toBe('broadcast');
   });
 
-  it('classifies unknown channels as semi_private (guild default)', () => {
-    expect(classifyChannel('1234567890')).toBe('semi_private');
-    expect(classifyChannel('guild:general')).toBe('semi_private');
+  it('classifies unknown channels as invite_only (guild default)', () => {
+    expect(classifyChannel('1234567890')).toBe('invite_only');
+    expect(classifyChannel('guild:general')).toBe('invite_only');
   });
 
   it('classifies Discord DMs as private when isDirectMessage metadata is set', () => {
@@ -398,16 +398,16 @@ describe('classifyChannel', () => {
     expect(classifyChannel('1234567890', { isDirectMessage: true })).toBe('private');
   });
 
-  it('classifies Discord guild channels as semi_private when isDirectMessage is false', () => {
-    // Numeric Discord channel ID with guild metadata → semi_private
-    expect(classifyChannel('1234567890', { isDirectMessage: false })).toBe('semi_private');
+  it('classifies Discord guild channels as invite_only when isDirectMessage is false', () => {
+    // Numeric Discord channel ID with guild metadata → invite_only
+    expect(classifyChannel('1234567890', { isDirectMessage: false })).toBe('invite_only');
   });
 
-  it('classifies Discord guild channels as semi_private when no metadata', () => {
+  it('classifies Discord guild channels as invite_only when no metadata', () => {
     // No metadata at all — backward compatible default
-    expect(classifyChannel('1234567890')).toBe('semi_private');
-    expect(classifyChannel('1234567890', undefined)).toBe('semi_private');
-    expect(classifyChannel('1234567890', {})).toBe('semi_private');
+    expect(classifyChannel('1234567890')).toBe('invite_only');
+    expect(classifyChannel('1234567890', undefined)).toBe('invite_only');
+    expect(classifyChannel('1234567890', {})).toBe('invite_only');
   });
 });
 
@@ -531,11 +531,11 @@ describe('channelsShareContinuity', () => {
     expect(channelsShareContinuity('api:session1', 'sillytavern:chat')).toBe(true);
   });
 
-  it('lower-ceiling semi_private channels can flow into private channels', () => {
+  it('lower-ceiling invite_only channels can flow into private channels', () => {
     expect(channelsShareContinuity('1234567890', 'api:session1')).toBe(true);
   });
 
-  it('higher-ceiling private channels do not flow into semi_private channels', () => {
+  it('higher-ceiling private channels do not flow into invite_only channels', () => {
     expect(channelsShareContinuity('api:session1', '1234567890')).toBe(false);
   });
 
@@ -547,7 +547,7 @@ describe('channelsShareContinuity', () => {
 describe('getVisibilityDisclosureCeiling', () => {
   it('returns the highest sensitivity allowed for the visibility', () => {
     expect(getVisibilityDisclosureCeiling('private')).toBe('confidential');
-    expect(getVisibilityDisclosureCeiling('semi_private')).toBe('personal');
+    expect(getVisibilityDisclosureCeiling('invite_only')).toBe('personal');
     expect(getVisibilityDisclosureCeiling('public')).toBe('public');
     expect(getVisibilityDisclosureCeiling('broadcast')).toBe('public');
   });
@@ -559,8 +559,8 @@ describe('getAllowedSensitivities', () => {
     expect(allowed).toEqual(['public', 'personal', 'intimate', 'confidential']);
   });
 
-  it('primary + semi_private = public + personal only', () => {
-    const allowed = getAllowedSensitivities('primary', 'semi_private');
+  it('primary + invite_only = public + personal only', () => {
+    const allowed = getAllowedSensitivities('primary', 'invite_only');
     expect(allowed).toEqual(['public', 'personal']);
   });
 

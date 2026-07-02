@@ -7,14 +7,18 @@
   },
   "visibilityAllowed": {
     "private": ["public", "personal", "intimate", "confidential"],
-    "semi_private": ["public", "personal"],
+    "invite_only": ["public", "personal"],
     "public": ["public"],
     "broadcast": ["public"]
+  },
+  "audienceScopeThresholds": {
+    "fewMax": 10,
+    "manyMax": 100
   },
   "channelClassification": {
     "privatePrefixes": ["api:", "sillytavern:", "openwebui:", "shard:", "internal:"],
     "broadcastPrefixes": ["twitter:", "social:"],
-    "defaultVisibility": "semi_private",
+    "defaultVisibility": "invite_only",
     "visibilityOverrides": {
       "exact": {},
       "prefix": {}

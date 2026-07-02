@@ -65,7 +65,7 @@ function makeEntry(id: number, content: string, humanIndex = id % HUMANS.length)
     authorId: human.authorId,
     authorName: human.authorName,
     timestamp: id * 1_000,
-    channelVisibility: 'semi_private',
+    channelVisibility: 'invite_only',
     discordMessageId: `discord-${id}`,
   };
 }

@@ -629,7 +629,7 @@ export interface ContactChannelLink extends ContactChannelIdentity {
   lastSeen?: string;
 }
 
-export type ChannelPrivacyLevel = 'private' | 'semi_private' | 'public' | 'broadcast';
+export type ChannelPrivacyLevel = 'private' | 'invite_only' | 'public' | 'broadcast';
 
 export interface Contact {
   id: string;
@@ -773,7 +773,7 @@ export const RELATIONSHIP_TYPES: RelationshipType[] = [
 ];
 
 export const CHANNEL_PRIVACY_LEVELS: ChannelPrivacyLevel[] = [
-  'private', 'semi_private', 'public', 'broadcast',
+  'private', 'invite_only', 'public', 'broadcast',
 ];
 
 export interface ContactIdentityLinkVerification {

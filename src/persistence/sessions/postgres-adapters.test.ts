@@ -217,7 +217,7 @@ describe('postgres session adapters', () => {
       role: 'user',
       content: 'new projection needle',
       timestamp: 2_000,
-      channelVisibility: 'semi_private',
+      channelVisibility: 'invite_only',
     }]);
 
     expect(adapters.transcriptProjection.countProjectedMessages('api:postgres-replace')).toBe(1);
@@ -227,7 +227,7 @@ describe('postgres session adapters', () => {
     expect(replacementHits[0]).toEqual(expect.objectContaining({
       channelId: 'api:postgres-replace',
       messageId: 2,
-      channelVisibility: 'semi_private',
+      channelVisibility: 'invite_only',
     }));
 
     adapters.transcriptProjection.markProjectionDrift('api:postgres-replace', 'manual drift');

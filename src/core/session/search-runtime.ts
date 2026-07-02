@@ -3,6 +3,7 @@ import type { SessionEntry } from './types.js';
 import type { SourceChannelSessionRoute, SessionRouteResetMode } from './session-routes.js';
 import { classifyChannel, getAllowedSensitivities } from '../../system/trust/policy.js';
 import type { ChannelVisibility, SensitivityLevel, TrustLevel } from '../../system/trust/types.js';
+import { decodeStoredChannelVisibility } from '../../system/trust/types.js';
 import type { TranscriptSearchPort } from '../../persistence/sessions/transcript-search-port.js';
 import { isCogSecTombstoneSessionEntry } from '../cogsec/tombstones.js';
 
@@ -83,22 +84,16 @@ export function resolveSessionSearchHitVisibility(
   input: string | undefined,
   channelId: string,
 ): ChannelVisibility {
-  switch (input) {
-    case 'private':
-    case 'semi_private':
-    case 'public':
-    case 'broadcast':
-      return input;
-    default:
-      return classifyChannel(channelId);
-  }
+  // Search hits come from persisted projections that may predate the E3.1
+  // vocabulary rename; the shared decoder maps 'semi_private' to 'invite_only'.
+  return decodeStoredChannelVisibility(input) ?? classifyChannel(channelId);
 }
 
 function visibilityToSensitivity(visibility: ChannelVisibility): SensitivityLevel {
   switch (visibility) {
     case 'private':
       return 'confidential';
-    case 'semi_private':
+    case 'invite_only':
       return 'personal';
     case 'public':
     case 'broadcast':

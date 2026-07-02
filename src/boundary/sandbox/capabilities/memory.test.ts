@@ -95,7 +95,7 @@ describe('createMemoryCapabilities session_search', () => {
           content: 'guild planning notes',
           snippet: 'guild planning notes',
           timestamp: 2_000,
-          channelVisibility: 'semi_private',
+          channelVisibility: 'invite_only',
           score: -2,
         },
         {

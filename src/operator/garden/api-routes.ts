@@ -22,6 +22,7 @@ import { buildAdminImageRoutes } from './routes/image-routes.js';
 import { buildAdminOverviewRoutes } from './routes/overview-routes.js';
 import { buildAdminPromptRoutes } from './routes/prompt-routes.js';
 import { buildAdminSchedulerRoutes } from './routes/scheduler-routes.js';
+import { buildAdminSubsystemHealthRoutes } from './routes/subsystem-health-routes.js';
 import { buildAdminSessionRoutes } from './routes/session-routes.js';
 import { ADMIN_DYNAMIC_JSON_HEADERS, toSanitizedMessage } from './routes/shared.js';
 import { buildAdminSettingsRoutes } from './routes/settings-routes.js';
@@ -47,6 +48,7 @@ import type {
   AdminSettingsService,
   AdminWikiService,
 } from './services/types.js';
+import type { AdminSubsystemHealthService } from './services/subsystem-health-service.js';
 import type {
   AdminChatBootstrapApi,
   AdminModelDiscoveryApi,
@@ -202,6 +204,7 @@ export function buildAdminApiRoutes(options: {
   roomsService?: AdminRoomsService | null;
   graphProposalsService?: AdminGraphProposalsService | null;
   concernService?: AdminConcernService | null;
+  subsystemHealthService?: AdminSubsystemHealthService | null;
   settingsService: AdminSettingsService;
   identityService: AdminIdentityService;
   promptsService: AdminPromptsService;
@@ -241,6 +244,7 @@ export function buildAdminApiRoutes(options: {
     roomsService,
     graphProposalsService,
     concernService,
+    subsystemHealthService,
     settingsService,
     identityService,
     promptsService,
@@ -644,6 +648,7 @@ export function buildAdminApiRoutes(options: {
     ...buildAdminIdentityRoutes({ identityService, appendAuditTimelineEntry, withBody }),
     ...buildAdminPromptRoutes({ promptsService, withBody }),
     ...buildAdminSchedulerRoutes({ scheduler, withBody }),
+    ...buildAdminSubsystemHealthRoutes({ subsystemHealth: subsystemHealthService }),
     // ── Skills ──
     {
       method: 'GET',

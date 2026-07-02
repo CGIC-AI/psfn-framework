@@ -1,6 +1,6 @@
 import type { IncomingMessage } from 'node:http';
 import { sendCompressedJson, sendJson } from '../../../channels/backplane/http/primitives.js';
-import { exactPath, prefixedParamPath } from '../route-matchers.js';
+import { exactPath, prefixedParamPath, wrappedParamPath } from '../route-matchers.js';
 import { isRecord } from '../../../shared/utils/types.js';
 import { parseAdminJsonBody } from '../request-body.js';
 import type {
@@ -8,7 +8,10 @@ import type {
   AdminSessionRouteResetInput,
   AdminSessionService,
 } from '../services/types.js';
-import { MAX_ADMIN_SESSION_MESSAGE_PAGE_LIMIT } from '../services/session-service.js';
+import {
+  MAX_ADMIN_SESSION_MESSAGE_PAGE_LIMIT,
+  MAX_ADMIN_SESSION_SEARCH_LIMIT,
+} from '../services/session-service.js';
 import { parseRequestUrl } from '../request-url.js';
 import { toSanitizedMessage } from './shared.js';
 import type { AdminApiRoute, AdminBodyReader } from './types.js';
@@ -16,6 +19,7 @@ import type { AdminApiRoute, AdminBodyReader } from './types.js';
 interface ParsedSessionMessageQuery {
   limit?: number;
   beforeId?: number;
+  messagesOnly?: boolean;
 }
 
 function parsePositiveIntegerParam(
@@ -38,6 +42,17 @@ function parsePositiveIntegerParam(
   return { ok: true, value };
 }
 
+function parseBooleanParam(
+  params: URLSearchParams,
+  name: string,
+): { ok: true; value?: boolean } | { ok: false; error: string } {
+  const raw = params.get(name);
+  if (raw === null || raw === '') return { ok: true };
+  if (raw === 'true' || raw === '1') return { ok: true, value: true };
+  if (raw === 'false' || raw === '0') return { ok: true, value: false };
+  return { ok: false, error: `${name} must be a boolean` };
+}
+
 function parseSessionMessageQuery(req: IncomingMessage):
   | { ok: true; value: ParsedSessionMessageQuery }
   | { ok: false; error: string } {
@@ -46,11 +61,14 @@ function parseSessionMessageQuery(req: IncomingMessage):
   if (!limit.ok) return limit;
   const beforeId = parsePositiveIntegerParam(params, 'beforeId');
   if (!beforeId.ok) return beforeId;
+  const messagesOnly = parseBooleanParam(params, 'messagesOnly');
+  if (!messagesOnly.ok) return messagesOnly;
   return {
     ok: true,
     value: {
       ...(limit.value !== undefined ? { limit: limit.value } : {}),
       ...(beforeId.value !== undefined ? { beforeId: beforeId.value } : {}),
+      ...(messagesOnly.value !== undefined ? { messagesOnly: messagesOnly.value } : {}),
     },
   };
 }
@@ -325,6 +343,29 @@ export function buildAdminSessionRoutes(options: {
             }),
           );
         });
+      },
+    },
+    {
+      method: 'GET',
+      match: wrappedParamPath('/api/admin/sessions/', '/search', 'channelId'),
+      handle: (req, res, { channelId }) => {
+        const params = parseRequestUrl(req).searchParams;
+        const query = params.get('q')?.trim() ?? '';
+        if (!query) {
+          sendJson(res, 400, { error: 'q is required' });
+          return;
+        }
+        const limit = parsePositiveIntegerParam(params, 'limit', MAX_ADMIN_SESSION_SEARCH_LIMIT);
+        if (!limit.ok) {
+          sendJson(res, 400, { error: limit.error });
+          return;
+        }
+        sessionService.searchSessionMessages(channelId, query, limit.value).then(
+          payload => sendJson(res, 200, payload),
+          error => sendJson(res, 500, {
+            error: toSanitizedMessage(error, 'Failed to search session messages'),
+          }),
+        );
       },
     },
     {

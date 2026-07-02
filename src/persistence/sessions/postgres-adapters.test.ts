@@ -125,7 +125,9 @@ class FakePostgresPool {
     if (normalized.startsWith('select channel_id, message_id, role,')) {
       const query = String(values[0] ?? '').toLowerCase();
       const tokens = query.split(/\s+/).filter(Boolean);
+      const scopedChannelId = values[2] == null ? null : String(values[2]);
       const matches = this.records
+        .filter(record => scopedChannelId === null || record.channelId === scopedChannelId)
         .filter(record => {
           const haystack = record.content.toLowerCase();
           return tokens.every(token => haystack.includes(token));
@@ -188,6 +190,41 @@ describe('postgres session adapters', () => {
     expect(hits).toHaveLength(1);
     expect(hits[0]?.channelId).toBe('api:postgres-search');
     expect(pool.records).toHaveLength(1);
+  });
+
+  it('scopes keyword search to a single channel when requested', async () => {
+    const sessionsDir = mkdtempSync(join(tmpdir(), 'psfn-pg-session-adapters-scoped-'));
+    dirs.push(sessionsDir);
+    const pool = new FakePostgresPool();
+    const adapters = await createDefaultPostgresSessionAdapters('postgres://unused', {
+      sessionsDir,
+      pool: pool as unknown as Pool,
+    });
+
+    adapters.transcriptProjection.upsertSessionEntry({
+      id: 1,
+      channelId: 'api:scoped-target',
+      role: 'user',
+      content: 'shared scoped needle in target',
+      timestamp: 1_000,
+    });
+    adapters.transcriptProjection.upsertSessionEntry({
+      id: 2,
+      channelId: 'api:scoped-other',
+      role: 'user',
+      content: 'shared scoped needle in other',
+      timestamp: 2_000,
+    });
+
+    const unscoped = await adapters.transcriptSearch.searchByKeywords('scoped needle');
+    expect(unscoped).toHaveLength(2);
+
+    const scoped = await adapters.transcriptSearch.searchByKeywords('scoped needle', 10, {
+      channelId: 'api:scoped-target',
+    });
+    expect(scoped).toHaveLength(1);
+    expect(scoped[0]?.channelId).toBe('api:scoped-target');
+    expect(scoped[0]?.messageId).toBe(1);
   });
 
   it('replaces channels, normalizes visibility, and supports explicit drift lifecycle operations', async () => {

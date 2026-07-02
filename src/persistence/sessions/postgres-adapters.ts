@@ -16,6 +16,7 @@ import type {
   KeywordSearchableTranscriptProjection,
   SessionSearchHit,
   TranscriptProjectionDrift,
+  TranscriptSearchOptions,
 } from './transcript-projection-port.js';
 import type { TurnRecordStorePort } from './turn-record-store-port.js';
 import { createFilesystemTurnRecordStorePort } from './turn-records.js';
@@ -358,11 +359,16 @@ class PostgresTranscriptProjection implements KeywordSearchableTranscriptProject
     await this.writeChain;
   }
 
-  async searchByKeywords(query: string, limit = DEFAULT_SEARCH_LIMIT): Promise<SessionSearchHit[]> {
+  async searchByKeywords(
+    query: string,
+    limit = DEFAULT_SEARCH_LIMIT,
+    options: TranscriptSearchOptions = {},
+  ): Promise<SessionSearchHit[]> {
     const normalizedQuery = query.trim();
     if (!normalizedQuery) return [];
     await this.flushPendingWrites();
     const boundedLimit = normalizeSearchLimit(limit);
+    const scopedChannelId = options.channelId?.trim() || undefined;
     const rows = await queryRows<SearchRow>(
       this.pool,
       `
@@ -384,10 +390,11 @@ class PostgresTranscriptProjection implements KeywordSearchableTranscriptProject
           ) AS snippet
         FROM session_messages_projection
         WHERE search_vector @@ websearch_to_tsquery('simple', $1)
+          AND ($3::text IS NULL OR channel_id = $3)
         ORDER BY score DESC, timestamp DESC, message_id DESC
         LIMIT $2
       `,
-      [normalizedQuery, boundedLimit],
+      [normalizedQuery, boundedLimit, scopedChannelId ?? null],
     );
 
     return rows.map(row => ({

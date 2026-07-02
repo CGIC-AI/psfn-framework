@@ -992,6 +992,29 @@ export interface AdminSessionMessagesData {
 export interface AdminSessionMessagePaginationOptions {
   limit?: number;
   beforeId?: number | null;
+  /**
+   * Skip turn snapshots, compaction audit verification, and role-envelope
+   * previews. Used by pickers (e.g. CogSec row selection) so huge sessions
+   * page cheaply.
+   */
+  messagesOnly?: boolean;
+}
+
+export interface AdminSessionSearchHitView {
+  messageId: number;
+  role: SessionEntry['role'];
+  authorId?: string;
+  authorName?: string;
+  content: string;
+  timestamp: number;
+  snippet: string;
+}
+
+export interface AdminSessionSearchData {
+  sessionId: string;
+  query: string;
+  limit: number;
+  hits: AdminSessionSearchHitView[];
 }
 
 export interface AdminSessionMessagePaginationData {
@@ -1006,6 +1029,7 @@ export interface AdminSessionMessagePaginationData {
 export interface AdminSessionService {
   listSessions(): Promise<AdminSessionListData>;
   getSessionMessages(sessionId: string, options?: AdminSessionMessagePaginationOptions): AdminSessionMessagesData;
+  searchSessionMessages(sessionId: string, query: string, limit?: number): Promise<AdminSessionSearchData>;
   listSessionRoutes(): Promise<AdminSessionRouteListData>;
   resetSourceChannelSession(input: AdminSessionRouteResetInput): Promise<AdminSessionRouteResetData>;
   listCogSecEvents(): Promise<AdminCogSecEventListData>;

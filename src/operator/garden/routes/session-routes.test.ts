@@ -60,6 +60,58 @@ async function invokeRoute(
   };
 }
 
+describe('admin session search routes', () => {
+  function findFirstMatch(service: Partial<AdminSessionService>, path: string) {
+    const routes = makeRoutes(service, undefined);
+    return routes.find(candidate => candidate.method === 'GET' && candidate.match(path));
+  }
+
+  it('routes session search ahead of the generic messages route and forwards query and limit', async () => {
+    const searchSessionMessages = vi.fn().mockResolvedValue({
+      sessionId: 'api:target',
+      query: 'poison',
+      limit: 50,
+      hits: [],
+    });
+    const getSessionMessages = vi.fn();
+    const path = '/api/admin/sessions/api%3Atarget/search';
+    const route = findFirstMatch({ searchSessionMessages, getSessionMessages }, path);
+    if (!route) throw new Error('search route not matched');
+
+    const res = new CapturingResponse();
+    route.handle(
+      { headers: {}, url: `${path}?q=poison&limit=50` } as IncomingMessage,
+      res as unknown as ServerResponse,
+      route.match(path) ?? {},
+    );
+    await res.done;
+
+    expect(res.statusCode).toBe(200);
+    expect(JSON.parse(res.body)).toMatchObject({ sessionId: 'api:target', query: 'poison' });
+    expect(searchSessionMessages).toHaveBeenCalledWith('api:target', 'poison', 50);
+    expect(getSessionMessages).not.toHaveBeenCalled();
+  });
+
+  it('rejects session search without a query before service execution', async () => {
+    const searchSessionMessages = vi.fn();
+    const path = '/api/admin/sessions/api%3Atarget/search';
+    const route = findFirstMatch({ searchSessionMessages }, path);
+    if (!route) throw new Error('search route not matched');
+
+    const res = new CapturingResponse();
+    route.handle(
+      { headers: {}, url: path } as IncomingMessage,
+      res as unknown as ServerResponse,
+      route.match(path) ?? {},
+    );
+    await res.done;
+
+    expect(res.statusCode).toBe(400);
+    expect(JSON.parse(res.body)).toEqual({ error: 'q is required' });
+    expect(searchSessionMessages).not.toHaveBeenCalled();
+  });
+});
+
 describe('admin session CogSec routes', () => {
   it('parses CogSec preview input and forwards the safe remediation contract', async () => {
     const previewCogSecRemediation = vi.fn().mockResolvedValue({

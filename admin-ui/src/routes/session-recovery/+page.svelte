@@ -2,10 +2,14 @@
   import { onMount } from 'svelte';
   import {
     applyCogSecRemediation,
+    getSessionMessages,
     listCogSecEvents,
     listSessionRoutes,
     previewCogSecRemediation,
     resetSourceChannelSession,
+    searchSessionMessages,
+    SESSION_MESSAGE_PAGE_SIZE,
+    SESSION_SEARCH_LIMIT,
   } from '$lib/api/endpoints/sessions';
   import type {
     AdminCogSecEventListData,
@@ -15,7 +19,9 @@
     AdminSessionRouteResetData,
     AdminSessionRouteResetInput,
     AdminSessionRouteView,
+    AdminSessionSearchData,
     ChannelInfo,
+    SessionEntry,
   } from '$lib/types';
 
   let routes = $state<AdminSessionRouteView[]>([]);
@@ -42,6 +48,17 @@
   let cogSecSubmitting = $state(false);
   let cogSecPreview = $state<AdminCogSecRemediationPreviewData | null>(null);
   let cogSecApplyResult = $state<AdminCogSecRemediationApplyData | null>(null);
+
+  let browserMessages = $state<SessionEntry[]>([]);
+  let browserLoadedSessionId = $state('');
+  let browserLoading = $state(false);
+  let browserLoadingOlder = $state(false);
+  let browserHasMoreOlder = $state(false);
+  let browserOldestId = $state<number | null>(null);
+  let browserTotalMessages = $state(0);
+  let browserSearchQuery = $state('');
+  let browserSearching = $state(false);
+  let browserSearchResults = $state<AdminSessionSearchData | null>(null);
 
   const sourceChannelOptions = $derived(
     [...new Set([
@@ -88,6 +105,154 @@
       loading = false;
     }
   }
+
+  interface BrowserRow {
+    id: number;
+    role: string;
+    authorName?: string;
+    timestamp?: string | number;
+    text: string;
+  }
+
+  const selectedMessageIds = $derived.by(() => {
+    const ids = new Set<number>();
+    for (const part of cogSecMessageIds.split(',')) {
+      const trimmed = part.trim();
+      if (!/^\d+$/.test(trimmed)) continue;
+      const parsed = Number.parseInt(trimmed, 10);
+      if (Number.isSafeInteger(parsed) && parsed > 0) ids.add(parsed);
+    }
+    return ids;
+  });
+
+  const browserRows = $derived.by((): BrowserRow[] => {
+    if (browserSearchResults) {
+      return browserSearchResults.hits.map(hit => ({
+        id: hit.messageId,
+        role: hit.role,
+        ...(hit.authorName ? { authorName: hit.authorName } : {}),
+        timestamp: hit.timestamp,
+        text: hit.snippet || hit.content,
+      }));
+    }
+    return browserMessages.map(message => ({
+      id: message.id,
+      role: message.role,
+      ...(message.authorName ? { authorName: message.authorName } : {}),
+      ...(message.timestamp !== undefined ? { timestamp: message.timestamp } : {}),
+      text: message.content,
+    }));
+  });
+
+  function writeMessageIdSelection(ids: Set<number>): void {
+    cogSecMessageIds = [...ids].sort((left, right) => left - right).join(', ');
+  }
+
+  function toggleMessageSelection(id: number): void {
+    const ids = new Set(selectedMessageIds);
+    if (ids.has(id)) {
+      ids.delete(id);
+    } else {
+      ids.add(id);
+    }
+    writeMessageIdSelection(ids);
+  }
+
+  function selectAllShownRows(): void {
+    const ids = new Set(selectedMessageIds);
+    for (const row of browserRows) ids.add(row.id);
+    writeMessageIdSelection(ids);
+  }
+
+  function clearMessageSelection(): void {
+    writeMessageIdSelection(new Set());
+  }
+
+  async function loadBrowserMessages(): Promise<void> {
+    const sessionId = selectedLogicalSessionId.trim();
+    if (!sessionId || browserLoading) return;
+    browserLoading = true;
+    browserLoadedSessionId = sessionId;
+    browserSearchResults = null;
+    browserMessages = [];
+    browserHasMoreOlder = false;
+    browserOldestId = null;
+    browserTotalMessages = 0;
+    try {
+      const data = await getSessionMessages(sessionId, {
+        limit: SESSION_MESSAGE_PAGE_SIZE,
+        messagesOnly: true,
+      });
+      if (selectedLogicalSessionId.trim() !== sessionId) return;
+      browserMessages = data.messages;
+      browserHasMoreOlder = data.pagination.hasMoreOlder;
+      browserOldestId = data.pagination.nextBeforeId;
+      browserTotalMessages = data.pagination.totalMessages;
+    } catch (e) {
+      browserLoadedSessionId = '';
+      error = e instanceof Error ? e.message : 'Failed to load session messages';
+    } finally {
+      browserLoading = false;
+    }
+  }
+
+  async function loadOlderBrowserMessages(): Promise<void> {
+    const sessionId = browserLoadedSessionId;
+    if (!sessionId || browserLoadingOlder || browserOldestId === null) return;
+    browserLoadingOlder = true;
+    try {
+      const data = await getSessionMessages(sessionId, {
+        limit: SESSION_MESSAGE_PAGE_SIZE,
+        beforeId: browserOldestId,
+        messagesOnly: true,
+      });
+      if (browserLoadedSessionId !== sessionId) return;
+      const loadedIds = new Set(browserMessages.map(message => message.id));
+      browserMessages = [
+        ...data.messages.filter(message => !loadedIds.has(message.id)),
+        ...browserMessages,
+      ];
+      browserHasMoreOlder = data.pagination.hasMoreOlder;
+      browserOldestId = data.pagination.nextBeforeId;
+    } catch (e) {
+      error = e instanceof Error ? e.message : 'Failed to load older session messages';
+    } finally {
+      browserLoadingOlder = false;
+    }
+  }
+
+  async function runBrowserSearch(): Promise<void> {
+    const sessionId = selectedLogicalSessionId.trim();
+    const query = browserSearchQuery.trim();
+    if (!sessionId || !query || browserSearching) return;
+    browserSearching = true;
+    try {
+      const results = await searchSessionMessages(sessionId, query, SESSION_SEARCH_LIMIT);
+      if (selectedLogicalSessionId.trim() !== sessionId) return;
+      browserSearchResults = results;
+    } catch (e) {
+      error = e instanceof Error ? e.message : 'Failed to search session messages';
+    } finally {
+      browserSearching = false;
+    }
+  }
+
+  function clearBrowserSearch(): void {
+    browserSearchQuery = '';
+    browserSearchResults = null;
+  }
+
+  $effect(() => {
+    if (recoveryMode !== 'cogsec' || browserLoading) return;
+    const sessionId = selectedLogicalSessionId.trim();
+    if (!sessionId || sessionId === browserLoadedSessionId) return;
+    const timer = setTimeout(() => { void loadBrowserMessages(); }, 400);
+    return () => clearTimeout(timer);
+  });
+
+  onMount(() => {
+    void loadRoutes();
+  });
 
   function parseOptionalPositiveInteger(value: string): number | undefined {
     const trimmed = value.trim();
@@ -178,6 +343,10 @@
       cogSecApplyResult = await applyCogSecRemediation(input);
       cogSecPreview = null;
       cogSecReason = '';
+      cogSecMessageIds = '';
+      cogSecStartEntryId = '';
+      cogSecEndEntryId = '';
+      browserLoadedSessionId = '';
       const cogSecData = await listCogSecEvents();
       cogSecEvents = cogSecData.events;
       await loadRoutes();
@@ -273,6 +442,7 @@
     </div>
 
     <section class="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(320px,420px)]">
+      <div class="flex min-w-0 flex-col gap-4">
       <div class="rounded border border-moss-200 bg-white p-4 shadow-sm">
         <div class="mb-4 flex items-center justify-between gap-3">
           <div>
@@ -327,6 +497,134 @@
             </table>
           </div>
         {/if}
+      </div>
+
+      {#if recoveryMode === 'cogsec'}
+        <div class="rounded border border-moss-200 bg-white p-4 shadow-sm">
+          <div class="flex flex-wrap items-center justify-between gap-3">
+            <div class="min-w-0">
+              <h2 class="text-lg font-semibold">Select Rows to Redact</h2>
+              <p class="truncate font-mono text-xs text-shadow-600">
+                {selectedLogicalSessionId || 'choose a source channel'}
+              </p>
+            </div>
+            <button
+              class="rounded border border-moss-300 px-3 py-2 text-sm font-medium text-moss-800 hover:bg-moss-50 disabled:opacity-50"
+              type="button"
+              disabled={browserLoading || !selectedLogicalSessionId.trim()}
+              onclick={() => { browserLoadedSessionId = ''; void loadBrowserMessages(); }}
+            >
+              Reload
+            </button>
+          </div>
+
+          <form
+            class="mt-3 flex gap-2"
+            onsubmit={(event) => { event.preventDefault(); void runBrowserSearch(); }}
+          >
+            <input
+              class="w-full rounded border border-moss-300 px-3 py-2 text-sm"
+              type="search"
+              bind:value={browserSearchQuery}
+              placeholder="Search the whole session (server-side)..."
+            />
+            <button
+              class="rounded border border-moss-300 px-3 py-2 text-sm font-medium text-moss-800 hover:bg-moss-50 disabled:opacity-50"
+              type="submit"
+              disabled={browserSearching || !browserSearchQuery.trim() || !selectedLogicalSessionId.trim()}
+            >
+              {browserSearching ? 'Searching...' : 'Search'}
+            </button>
+            {#if browserSearchResults}
+              <button
+                class="rounded border border-moss-300 px-3 py-2 text-sm font-medium text-moss-800 hover:bg-moss-50"
+                type="button"
+                onclick={clearBrowserSearch}
+              >
+                Clear
+              </button>
+            {/if}
+          </form>
+
+          <div class="mt-3 flex flex-wrap items-center gap-3 text-sm text-shadow-700">
+            <span><span class="font-semibold">{selectedMessageIds.size}</span> selected</span>
+            <button
+              class="text-moss-800 underline-offset-2 hover:underline disabled:opacity-50"
+              type="button"
+              disabled={browserRows.length === 0}
+              onclick={selectAllShownRows}
+            >
+              Select all shown
+            </button>
+            <button
+              class="text-moss-800 underline-offset-2 hover:underline disabled:opacity-50"
+              type="button"
+              disabled={selectedMessageIds.size === 0}
+              onclick={clearMessageSelection}
+            >
+              Clear selection
+            </button>
+            {#if browserSearchResults}
+              <span class="text-shadow-600">
+                {browserSearchResults.hits.length} hit{browserSearchResults.hits.length === 1 ? '' : 's'} for
+                <span class="font-mono">"{browserSearchResults.query}"</span>
+                (max {browserSearchResults.limit})
+              </span>
+            {:else if browserTotalMessages > 0}
+              <span class="text-shadow-600">
+                {browserMessages.length} of {browserTotalMessages} messages loaded
+              </span>
+            {/if}
+          </div>
+
+          <div class="mt-3 max-h-[28rem] overflow-y-auto rounded border border-moss-100">
+            {#if browserLoading}
+              <p class="p-3 text-sm text-shadow-600">Loading messages...</p>
+            {:else if !selectedLogicalSessionId.trim()}
+              <p class="p-3 text-sm text-shadow-600">Choose a source channel to browse its rows.</p>
+            {:else if browserRows.length === 0}
+              <p class="p-3 text-sm text-shadow-600">
+                {browserSearchResults ? 'No rows matched this search.' : 'No messages loaded for this session.'}
+              </p>
+            {:else}
+              {#if !browserSearchResults && browserHasMoreOlder}
+                <div class="border-b border-moss-100 p-2 text-center">
+                  <button
+                    class="text-sm text-shadow-600 hover:text-moss-800 disabled:cursor-wait"
+                    type="button"
+                    disabled={browserLoadingOlder}
+                    onclick={() => void loadOlderBrowserMessages()}
+                  >
+                    {browserLoadingOlder ? 'Loading older rows...' : 'Load older rows'}
+                  </button>
+                </div>
+              {/if}
+              {#each browserRows as row (row.id)}
+                <label class="flex cursor-pointer items-start gap-3 border-b border-moss-100 px-3 py-2 hover:bg-moss-50 {selectedMessageIds.has(row.id) ? 'bg-wilt-50' : ''}">
+                  <input
+                    class="mt-1 h-4 w-4 shrink-0 rounded border-moss-300"
+                    type="checkbox"
+                    checked={selectedMessageIds.has(row.id)}
+                    onchange={() => toggleMessageSelection(row.id)}
+                  />
+                  <span class="min-w-0 flex-1">
+                    <span class="flex flex-wrap items-center gap-2 text-xs text-shadow-600">
+                      <span class="font-mono font-semibold text-shadow-800">#{row.id}</span>
+                      <span>{row.authorName ?? row.role}</span>
+                      {#if row.timestamp !== undefined}
+                        <span>{formatDate(row.timestamp)}</span>
+                      {/if}
+                    </span>
+                    <span class="mt-0.5 block whitespace-pre-wrap break-words text-sm text-shadow-800 [display:-webkit-box] [-webkit-box-orient:vertical] [-webkit-line-clamp:3] overflow-hidden">
+                      {row.text}
+                    </span>
+                  </span>
+                </label>
+              {/each}
+            {/if}
+          </div>
+        </div>
+      {/if}
       </div>
 
       {#if recoveryMode === 'fresh_lane'}
@@ -441,6 +739,9 @@
             bind:value={cogSecMessageIds}
             placeholder="12, 13, 14"
           />
+          <p class="mt-1 text-xs text-shadow-600">
+            Tick rows in “Select Rows to Redact” to fill this in, or type IDs by hand.
+          </p>
 
           <div class="mt-4 grid gap-3 sm:grid-cols-2">
             <label class="block text-sm font-medium text-shadow-800" for="cogsec-start">

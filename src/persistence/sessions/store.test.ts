@@ -584,6 +584,30 @@ describe('SessionStore', () => {
     expect(hits[0].snippet.toLowerCase()).toContain('kyoto');
   });
 
+  it('scopes FTS keyword search to a single channel when requested', async () => {
+    const searchStore = new SessionStore(dir, { enableSearchIndex: true });
+    searchStore.append({
+      channelId: 'api:alpha',
+      role: 'user',
+      content: 'Kyoto itinerary planning for spring',
+      timestamp: 1_000,
+    });
+    searchStore.append({
+      channelId: 'api:beta',
+      role: 'assistant',
+      content: 'Booked Kyoto train tickets and hotel options',
+      timestamp: 2_000,
+    });
+
+    const scopedHits = await searchStore.searchByKeywords('Kyoto', 10, { channelId: 'api:beta' });
+    expect(scopedHits).toHaveLength(1);
+    expect(scopedHits[0].channelId).toBe('api:beta');
+    expect(scopedHits[0].content).toContain('train tickets');
+
+    const missHits = await searchStore.searchByKeywords('Kyoto', 10, { channelId: 'api:absent' });
+    expect(missHits).toHaveLength(0);
+  });
+
   it('ranks denser FTS matches above sparse matches', async () => {
     const searchStore = new SessionStore(dir, { enableSearchIndex: true });
     searchStore.append({

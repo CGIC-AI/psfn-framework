@@ -124,6 +124,84 @@ describe('AdminSessionDataService', () => {
     });
   });
 
+  it('searches session messages scoped to the requested session only', async () => {
+    const searchDir = mkdtempSync(join(tmpdir(), 'admin-session-search-'));
+    const searchStore = new SessionStore(searchDir, { enableSearchIndex: true });
+    try {
+      const targetChannelId = 'api:search-target';
+      const otherChannelId = 'api:search-other';
+      const targetHitId = searchStore.append({
+        channelId: targetChannelId,
+        role: 'user',
+        content: 'poisoned instruction planted here',
+        timestamp: 1_700_000_000_001,
+      });
+      searchStore.append({
+        channelId: targetChannelId,
+        role: 'assistant',
+        content: 'a clean unrelated response',
+        timestamp: 1_700_000_000_002,
+      });
+      searchStore.append({
+        channelId: otherChannelId,
+        role: 'user',
+        content: 'poisoned instruction in a different session',
+        timestamp: 1_700_000_000_003,
+      });
+
+      const service = new AdminSessionDataService({
+        sessionStore: searchStore,
+        sessionManager: new SessionManager(searchStore, makeConfig({ dataDir: searchDir })),
+        eventBus: new EventBus(),
+      });
+
+      const result = await service.searchSessionMessages(targetChannelId, 'poisoned');
+      expect(result.sessionId).toBe(targetChannelId);
+      expect(result.query).toBe('poisoned');
+      expect(result.hits).toHaveLength(1);
+      expect(result.hits[0]?.messageId).toBe(targetHitId);
+      expect(result.hits[0]?.content).toContain('planted here');
+
+      const blankQuery = await service.searchSessionMessages(targetChannelId, '   ');
+      expect(blankQuery.hits).toEqual([]);
+    } finally {
+      rmSync(searchDir, { recursive: true, force: true });
+    }
+  });
+
+  it('skips turn snapshots, compaction audits, and role-envelope previews in messagesOnly mode', () => {
+    const channelId = 'api:messages-only';
+    const firstMessageId = store.append({
+      channelId,
+      role: 'user',
+      content: 'first message',
+      timestamp: 1_700_000_000_001,
+    });
+    store.append({
+      channelId,
+      role: 'assistant',
+      content: 'second message',
+      timestamp: 1_700_000_000_002,
+    });
+    store.insertCompaction(channelId, 'summary of early rows', firstMessageId);
+
+    const service = new AdminSessionDataService({
+      sessionStore: store,
+      sessionManager: new SessionManager(store, makeConfig({ dataDir: dir })),
+      eventBus: new EventBus(),
+    });
+
+    const full = service.getSessionMessages(channelId);
+    expect(full.compactionAuditViews.length).toBeGreaterThan(0);
+
+    const light = service.getSessionMessages(channelId, { messagesOnly: true });
+    expect(light.messages).toHaveLength(2);
+    expect(light.pagination.totalMessages).toBe(2);
+    expect(light.turns).toEqual([]);
+    expect(light.compactionAuditViews).toEqual([]);
+    expect(light.roleEnvelopePreviews).toEqual([]);
+  });
+
   it('previews and applies CogSec remediation without exposing sealed content in safe event logs', async () => {
     const channelId = 'api:cogsec-admin';
     const dirtyText = 'DIRTY_ADMIN_COGSEC_TEXT';

@@ -54,6 +54,7 @@ import type {
   AdminSessionMessageOntologyView,
   AdminSessionListData,
   AdminSessionMessagesData,
+  AdminSessionSearchData,
   AdminSessionService,
 } from './types.js';
 import {
@@ -69,6 +70,8 @@ import type { SessionEntry } from '../../../core/session/types.js';
 const DEFAULT_ADMIN_TURN_LIMIT = 50;
 export const DEFAULT_ADMIN_SESSION_MESSAGE_PAGE_LIMIT = 100;
 export const MAX_ADMIN_SESSION_MESSAGE_PAGE_LIMIT = 200;
+export const DEFAULT_ADMIN_SESSION_SEARCH_LIMIT = 25;
+export const MAX_ADMIN_SESSION_SEARCH_LIMIT = 100;
 const COGSEC_SAFE_SUMMARY = 'Operator-selected unsafe instruction-like content was sealed and removed from active cognition.';
 const COGSEC_CASE_ID_PATTERN = /^cogsec_[A-Za-z0-9_-]+$/u;
 const COGSEC_CASE_TYPES: ReadonlySet<CogSecCaseType> = new Set([
@@ -135,6 +138,12 @@ function buildMessageOntologyView(entry: AdminSessionMessagesData['messages'][nu
     promptVisibility: 'prompt_visible',
     displayLabel: 'Outward speech',
   };
+}
+
+function normalizeSearchLimit(value: number | undefined): number {
+  if (value === undefined) return DEFAULT_ADMIN_SESSION_SEARCH_LIMIT;
+  if (!Number.isInteger(value) || value <= 0) return DEFAULT_ADMIN_SESSION_SEARCH_LIMIT;
+  return Math.min(value, MAX_ADMIN_SESSION_SEARCH_LIMIT);
 }
 
 function normalizePageLimit(value: number | undefined): number {
@@ -632,9 +641,36 @@ export class AdminSessionDataService implements AdminSessionService {
     };
   }
 
+  async searchSessionMessages(
+    sessionId: string,
+    query: string,
+    limit?: number,
+  ): Promise<AdminSessionSearchData> {
+    const boundedLimit = normalizeSearchLimit(limit);
+    const normalizedQuery = query.trim();
+    const hits = normalizedQuery
+      ? await this.deps.sessionStore.searchByKeywords(normalizedQuery, boundedLimit, { channelId: sessionId })
+      : [];
+    return {
+      sessionId,
+      query: normalizedQuery,
+      limit: boundedLimit,
+      hits: hits.map(hit => ({
+        messageId: hit.messageId,
+        role: hit.role,
+        ...(hit.authorId ? { authorId: hit.authorId } : {}),
+        ...(hit.authorName ? { authorName: hit.authorName } : {}),
+        content: hit.content,
+        timestamp: hit.timestamp,
+        snippet: hit.snippet,
+      })),
+    };
+  }
+
   getSessionMessages(sessionId: string, options: {
     limit?: number;
     beforeId?: number | null;
+    messagesOnly?: boolean;
   } = {}): AdminSessionMessagesData {
     const limit = normalizePageLimit(options.limit);
     const beforeId = normalizeBeforeId(options.beforeId);
@@ -658,29 +694,35 @@ export class AdminSessionDataService implements AdminSessionService {
     // (legacy 'semi_private'/'broadcast' records map onto ChannelPrivacy).
     const currentVisibility: ChannelPrivacy = decodeStoredChannelVisibility(messages[0]?.channelVisibility)
       ?? classifyChannelDisclosure(channelId).channelPrivacy;
-    const roleEnvelopePreviews = messages.flatMap((entry) => {
-      const preview = resolveSessionEntryRoleEnvelopePreview(entry);
-      return preview ? [{ sessionEntryId: entry.id, preview }] : [];
-    });
-    const turns = this.deps.sessionStore
-      .getRecentTurnRecords(sessionId, DEFAULT_ADMIN_TURN_LIMIT)
-      .map((record) => {
-        const turnData = this.turnObservability.buildTurnData(record);
-        return {
-          ...turnData,
-          continuityProvenance: buildContinuityProvenanceViews(
-            record.turnId,
-            record.channelId,
-            currentVisibility,
-            turnData.snapshot?.sessionContext?.continuityEntries ?? [],
-          ),
-        };
+    const roleEnvelopePreviews = options.messagesOnly
+      ? []
+      : messages.flatMap((entry) => {
+        const preview = resolveSessionEntryRoleEnvelopePreview(entry);
+        return preview ? [{ sessionEntryId: entry.id, preview }] : [];
       });
-    const compactionAuditViews = this.deps.sessionStore
-      .getCompactionSummaries(sessionId)
-      .slice()
-      .sort((left, right) => right.id - left.id)
-      .map(summary => this.verifyCompactionSummary(sessionId, summary));
+    const turns = options.messagesOnly
+      ? []
+      : this.deps.sessionStore
+        .getRecentTurnRecords(sessionId, DEFAULT_ADMIN_TURN_LIMIT)
+        .map((record) => {
+          const turnData = this.turnObservability.buildTurnData(record);
+          return {
+            ...turnData,
+            continuityProvenance: buildContinuityProvenanceViews(
+              record.turnId,
+              record.channelId,
+              currentVisibility,
+              turnData.snapshot?.sessionContext?.continuityEntries ?? [],
+            ),
+          };
+        });
+    const compactionAuditViews = options.messagesOnly
+      ? []
+      : this.deps.sessionStore
+        .getCompactionSummaries(sessionId)
+        .slice()
+        .sort((left, right) => right.id - left.id)
+        .map(summary => this.verifyCompactionSummary(sessionId, summary));
     return {
       sessionId,
       channelId,

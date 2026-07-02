@@ -89,6 +89,8 @@ export type {
   AdminSessionRouteResetData,
   AdminSessionRouteResetInput,
   AdminSessionRouteView,
+  AdminSessionSearchData,
+  AdminSessionSearchHitView,
   AdminSessionTurnData,
   AdminPromptLoomData,
   AdminTurnRetrievalTelemetry,

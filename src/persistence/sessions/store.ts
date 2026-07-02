@@ -37,6 +37,7 @@ import {
   type SessionSearchHit,
   supportsKeywordSearch,
   type TranscriptProjectionPort,
+  type TranscriptSearchOptions,
 } from './transcript-projection-port.js';
 import {
   createDefaultSQLiteSessionArchivePort,
@@ -831,9 +832,21 @@ export class SessionStore implements TranscriptSearchPort {
     if (filtered.length <= limit) return filtered;
     return filtered.slice(-limit);
   }
-  async searchByKeywords(query: string, limit = 10): Promise<SessionSearchHit[]> {
+  async searchByKeywords(
+    query: string,
+    limit = 10,
+    options: TranscriptSearchOptions = {},
+  ): Promise<SessionSearchHit[]> {
     if (!this.transcriptSearch) return [];
-    return await this.transcriptSearch.searchByKeywords(query, limit);
+    const requestedChannelId = options.channelId?.trim();
+    if (!requestedChannelId) {
+      return await this.transcriptSearch.searchByKeywords(query, limit);
+    }
+    const scopedChannelId = this.resolveSessionId(requestedChannelId) ?? requestedChannelId;
+    const hits = await this.transcriptSearch.searchByKeywords(query, limit, { channelId: scopedChannelId });
+    // Fail closed: never return out-of-scope rows even if an injected search
+    // backend ignores the channel filter.
+    return hits.filter(hit => hit.channelId === scopedChannelId);
   }
   rebuildSearchIndex(): void {
     this.backfillTranscriptProjectionFromDisk();

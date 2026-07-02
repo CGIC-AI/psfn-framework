@@ -9,13 +9,16 @@ import type {
   AdminSessionRouteListData,
   AdminSessionRouteResetData,
   AdminSessionRouteResetInput,
+  AdminSessionSearchData,
 } from '$lib/types';
 
 export const SESSION_MESSAGE_PAGE_SIZE = 100;
+export const SESSION_SEARCH_LIMIT = 100;
 
 export interface SessionMessagesRequest {
   limit?: number;
   beforeId?: number | null;
+  messagesOnly?: boolean;
 }
 
 export function listSessions(): Promise<AdminSessionListData> {
@@ -33,6 +36,9 @@ export function buildSessionMessagesPath(
   if (request.beforeId !== undefined && request.beforeId !== null) {
     params.set('beforeId', String(request.beforeId));
   }
+  if (request.messagesOnly) {
+    params.set('messagesOnly', 'true');
+  }
   const query = params.toString();
   const path = `/api/admin/sessions/${encodeURIComponent(sessionId)}`;
   return query ? `${path}?${query}` : path;
@@ -43,6 +49,20 @@ export function getSessionMessages(
   request: SessionMessagesRequest = {},
 ): Promise<AdminSessionMessagesData> {
   return apiGet<AdminSessionMessagesData>(buildSessionMessagesPath(sessionId, request));
+}
+
+export function searchSessionMessages(
+  sessionId: string,
+  query: string,
+  limit?: number,
+): Promise<AdminSessionSearchData> {
+  const params = new URLSearchParams({ q: query });
+  if (limit !== undefined) {
+    params.set('limit', String(limit));
+  }
+  return apiGet<AdminSessionSearchData>(
+    `/api/admin/sessions/${encodeURIComponent(sessionId)}/search?${params.toString()}`,
+  );
 }
 
 export function listSessionRoutes(): Promise<AdminSessionRouteListData> {

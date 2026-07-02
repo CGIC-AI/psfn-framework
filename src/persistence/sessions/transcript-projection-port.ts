@@ -19,6 +19,11 @@ export interface TranscriptProjectionDrift {
   markedAt: number;
 }
 
+export interface TranscriptSearchOptions {
+  /** Restrict hits to one projected channel/logical session. */
+  channelId?: string;
+}
+
 export interface TranscriptProjectionPort {
   upsertSessionEntry(entry: SessionEntry, options?: { channelId?: string }): void;
   replaceChannelEntries(channelId: string, entries: readonly SessionEntry[]): void;
@@ -30,7 +35,7 @@ export interface TranscriptProjectionPort {
 }
 
 export interface KeywordSearchableTranscriptProjection extends TranscriptProjectionPort {
-  searchByKeywords(query: string, limit?: number): Promise<SessionSearchHit[]>;
+  searchByKeywords(query: string, limit?: number, options?: TranscriptSearchOptions): Promise<SessionSearchHit[]>;
 }
 
 export function supportsKeywordSearch(

@@ -44,5 +44,14 @@ export function resolveRuntimeSchedulerConfig(
       morningWake: { ...persisted.temporalWakeup.morningWake },
       idleRefresher: { ...persisted.temporalWakeup.idleRefresher },
     },
+    freeTime: {
+      enabled: persisted.freeTime.enabled,
+      minBlockIntervalMinutes: persisted.freeTime.minBlockIntervalMinutes,
+      maxBlocksPerDay: persisted.freeTime.maxBlocksPerDay,
+      seedText: persisted.freeTime.seedText,
+      quietHours: { ...persisted.freeTime.quietHours },
+      idle: { ...persisted.freeTime.idle },
+      budget: { ...persisted.freeTime.budget },
+    },
   };
 }

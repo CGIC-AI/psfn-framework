@@ -381,6 +381,25 @@ describe('subsystem config round-trip', () => {
           minNoteIntervalMinutes: 240,
         },
       },
+      freeTime: {
+        enabled: true,
+        minBlockIntervalMinutes: 240,
+        maxBlocksPerDay: 3,
+        seedText: 'You have some time to yourself.',
+        quietHours: {
+          enabled: true,
+          checkIntervalMs: 900_000,
+        },
+        idle: {
+          enabled: true,
+          checkIntervalMs: 900_000,
+          minIdleMinutes: 180,
+        },
+        budget: {
+          maxTurns: 6,
+          maxChargeUnits: 8,
+        },
+      },
     };
 
     expect(saveSchedulerConfig(dataDir, expected)).toEqual(expected);

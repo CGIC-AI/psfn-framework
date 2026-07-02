@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { describe, expect, it } from 'vitest';
 import {
+  DEFAULT_FREE_TIME_CONFIG,
   DEFAULT_TEMPORAL_WAKEUP_CONFIG,
   loadSchedulerSeedDefaults,
   SCHEDULER_SEED_FILE_NAME,
@@ -101,6 +102,7 @@ describe('scheduler config seed defaults', () => {
       expect(loadSchedulerSeedDefaults({ seedDir })).toEqual({
         ...config,
         temporalWakeup: DEFAULT_TEMPORAL_WAKEUP_CONFIG,
+        freeTime: DEFAULT_FREE_TIME_CONFIG,
       });
     });
   });

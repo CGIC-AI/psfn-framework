@@ -2,7 +2,7 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_TEMPORAL_WAKEUP_CONFIG } from './scheduler-config.js';
+import { DEFAULT_FREE_TIME_CONFIG, DEFAULT_TEMPORAL_WAKEUP_CONFIG } from './scheduler-config.js';
 import { resolveRuntimeSchedulerConfig } from './scheduler-runtime.js';
 
 function writeJson(path: string, value: unknown): void {
@@ -121,6 +121,7 @@ describe('resolveRuntimeSchedulerConfig', () => {
           scanMemoryLimit: 500,
         },
         temporalWakeup: DEFAULT_TEMPORAL_WAKEUP_CONFIG,
+        freeTime: DEFAULT_FREE_TIME_CONFIG,
       });
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -185,6 +186,7 @@ describe('resolveRuntimeSchedulerConfig', () => {
           scanMemoryLimit: 500,
         },
         temporalWakeup: DEFAULT_TEMPORAL_WAKEUP_CONFIG,
+        freeTime: DEFAULT_FREE_TIME_CONFIG,
       });
     } finally {
       rmSync(root, { recursive: true, force: true });

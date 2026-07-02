@@ -166,6 +166,12 @@ const EVENT_LANE_DEFINITIONS: readonly EventLaneDefinition[] = [
     label: 'Wiki projection + RAG lane',
     description: 'Wiki pgvector projection sync and supplemental chat RAG (E8.3); fails closed for search, never blocks writes, and is deterministically gated (skips carry a reason).',
   },
+  {
+    id: 'free_time',
+    label: 'Free-time lanes',
+    description: 'Self-directed free time (E8.1); pre-spend gate skips carry a reason, '
+      + 'block runs carry turns + background-lane charge spend. Charter 8.8/8.9.',
+  },
 ];
 
 /**
@@ -191,6 +197,7 @@ const GATE_EVENT_LANES: ReadonlyArray<{
   { event: 'memory.sleeptime_wiki.gate', lane: 'wiki_pass' },
   { event: 'emotion.appraisal.gate', lane: 'emotion_appraisal' },
   { event: 'intention.concern_candidate.gate', lane: 'concern_candidate_review' },
+  { event: 'scheduler.free_time.gate', lane: 'free_time' },
 ];
 
 interface LaneAccumulator {
@@ -438,6 +445,26 @@ export class AdminSubsystemHealthDataService implements AdminSubsystemHealthServ
         }),
       );
     }
+
+    // Free-time block runs (E8.1): each completed block feeds the same
+    // 'free_time' lane with turns + background-lane charge spend, so recent
+    // blocks and their cost are visible alongside the gate skips (charter 8.9).
+    this.unsubscribers.push(
+      eventBus.on('scheduler.free_time.block', (payload) => {
+        this.record('free_time', {
+          at: trimNumber(payload.timestamp) ?? this.now(),
+          outcome: 'ran',
+          reason: `${payload.lane}:${payload.endReason}`,
+          counts: collectCounts([
+            ['turnsUsed', trimNumber(payload.turnsUsed)],
+            ['spentChargeUnits', trimNumber(payload.spentChargeUnits)],
+            ['maxChargeUnits', trimNumber(payload.maxChargeUnits)],
+            ['activity', payload.activity ? 1 : 0],
+            ['returnSurfaced', payload.returnSurfaced ? 1 : 0],
+          ]),
+        });
+      }),
+    );
   }
 
   private record(laneId: string, event: SubsystemLaneEvent): void {

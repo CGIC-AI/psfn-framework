@@ -84,6 +84,26 @@ function createDeferred<T>() {
   return { promise, resolve, reject };
 }
 
+// The runtime.state seed layer is a REQUIRED render section (E2.5): the real
+// buildDynamicPromptTemplateVariables always produces these tokens, so mocked
+// variable builders must too or the turn fails loudly by design.
+const BASE_TURN_PROMPT_VARIABLES: Record<string, string> = {
+  runtime_last_message_received_present: 'false',
+  runtime_last_message_received_missing: 'true',
+  runtime_last_message_received_weekday: '',
+  runtime_last_message_received_date_human: '',
+  runtime_last_message_received_time_human: '',
+  runtime_last_message_received_timezone: '',
+  runtime_last_message_received_ago: '',
+  runtime_internal_turn_kind: '',
+  runtime_chat_type: 'direct_message',
+  runtime_room_id: 'ch1',
+  runtime_channel_type: 'api',
+  runtime_channel_visibility: 'private',
+  runtime_current_message_author_xml: '<current_message_author name="User" id="user-1" />',
+  runtime_recent_active_participants_xml: '',
+};
+
 function createMessage(id: string, overrides: Partial<SubstrateMessage> = {}): SubstrateMessage {
   return {
     id,
@@ -598,7 +618,7 @@ function createRuntime(params: {
     normalizeTurnPromptOverride: vi.fn(() => ({ mode: 'default' })),
     resolveResponseStyle: vi.fn(() => 'concise'),
     buildPromptTemplateVariables: vi.fn(() => ({})),
-    buildDynamicPromptTemplateVariables: vi.fn(() => ({})),
+    buildDynamicPromptTemplateVariables: vi.fn(() => ({ ...BASE_TURN_PROMPT_VARIABLES })),
     setCurrentSelfModelState: vi.fn(),
     buildRuntimeContext: vi.fn(() => ''),
     buildPromptPrefixCacheKey: vi.fn(() => 'prompt-prefix'),
@@ -2058,6 +2078,7 @@ describe('handleMessageForTurn compaction scheduling', () => {
     runtime.buildScratchpadContextBlock = vi.fn(() => '');
     runtime.getPersonaAdaptation = vi.fn(() => null);
     runtime.buildDynamicPromptTemplateVariables = vi.fn(() => ({
+      ...BASE_TURN_PROMPT_VARIABLES,
       active_timezone: 'America/New_York',
       runtime_current_weekday: 'Wednesday',
       runtime_current_date_human: 'March 18, 2026',
@@ -3006,6 +3027,7 @@ describe('handleMessageForTurn pre-response concurrency', () => {
       expect((runtime.agent.state.tools as Array<{ name?: string }>).some(tool => tool.name === 'selfie_create'))
         .toBe(true);
       return {
+        ...BASE_TURN_PROMPT_VARIABLES,
         runtime_self_image_tool_active: 'true',
       };
     });

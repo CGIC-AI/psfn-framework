@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildEmotionalAffectPromptVariables,
-  buildEmotionalAffectSection,
   mapEmotionToPersonaAffect,
   resolveEmotionalExpressionProfile,
 } from './persona-adaptation.js';
@@ -18,12 +17,14 @@ function makeSnapshot(overrides?: Partial<EmotionStateSnapshot>): EmotionStateSn
 }
 
 describe('emotion/persona-adaptation', () => {
-  it('returns null affect section when emotion state is unavailable', () => {
-    const result = buildEmotionalAffectSection({
+  it('returns blank affect variables when emotion state is unavailable', () => {
+    const variables = buildEmotionalAffectPromptVariables({
       trustLevel: 'primary',
       emotionSnapshot: null,
     });
-    expect(result).toBeNull();
+    expect(variables.runtime_affect_snapshot_present).toBe('false');
+    expect(variables.runtime_affect_mode).toBe('');
+    expect(variables.runtime_affect_warmth).toBe('');
   });
 
   it('resolves emotional expression profile from prompt variables and config with config precedence', () => {
@@ -112,14 +113,14 @@ describe('emotion/persona-adaptation', () => {
     expect(variables.runtime_affect_snapshot_present).toBe('true');
     expect(variables.runtime_affect_mode).toBe('tatemae');
     expect(variables.runtime_affect_mode_label).toBe('tatemae (controlled)');
+    expect(variables.runtime_affect_mode_is_tatemae).toBe('true');
     expect(variables.runtime_affect_guidance_warmth_label).toBeTruthy();
-    expect(variables.runtime_affect_privacy_guidance).toBe('Keep emotional expression surface-level and privacy-safe.');
-
-    const section = buildEmotionalAffectSection({
-      trustLevel: 'trusted',
-      emotionSnapshot: makeSnapshot(),
-    });
-    expect(section).toContain('Trust gate: tatemae (controlled)');
-    expect(section).toContain('Guidance:');
+    // E2.5 purity rule: no prose privacy guidance and no duplicate profile_/
+    // snapshot_vad_ spellings — bare values only, phrasing lives in layers.
+    expect('runtime_affect_privacy_guidance' in variables).toBe(false);
+    expect('runtime_affect_profile_intensity' in variables).toBe(false);
+    expect('runtime_affect_snapshot_vad_valence' in variables).toBe(false);
+    expect(variables.runtime_affect_intensity).toBeTruthy();
+    expect(variables.runtime_affect_valence).toBeTruthy();
   });
 });

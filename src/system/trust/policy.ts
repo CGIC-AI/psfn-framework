@@ -41,8 +41,9 @@ const RESPONSE_STYLE_BY_VISIBILITY: Record<ChannelVisibility, ResponseStyle> = {
 };
 
 export function buildTrustPromptState(trustLevel: TrustLevel): Record<string, string> {
+  // The bare trust tier is the session-stable {{trust_level}} macro; the
+  // duplicate {{runtime_trust_level}} spelling was removed (E2.5).
   return {
-    runtime_trust_level: trustLevel,
     runtime_trust_is_primary: String(trustLevel === 'primary'),
     runtime_trust_is_trusted: String(trustLevel === 'trusted'),
     runtime_trust_is_regular: String(trustLevel === 'regular'),

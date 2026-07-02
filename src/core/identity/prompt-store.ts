@@ -37,7 +37,10 @@ import {
 } from './system-language-contracts.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import { appendJsonLine } from '../../persistence/jsonl.js';
-import { assertStaticPromptLayerMacroVolatility } from './prompt-runtime.js';
+import {
+  assertNoRemovedPromptMacros,
+  assertStaticPromptLayerMacroVolatility,
+} from './prompt-runtime.js';
 import { writeJsonAtomic } from '../../shared/utils/fs.js';
 import { isRecord } from '../../shared/utils/types.js';
 
@@ -545,6 +548,9 @@ export class PromptLayerStore {
     if (params.type === SYSTEM_LANGUAGE_LAYER_TYPE) {
       validateSystemLanguageLayerContent(params.content);
     }
+    // Safety valve (E2.5): reject removed macro aliases at edit time with a
+    // clear message naming the canonical replacement.
+    assertNoRemovedPromptMacros(params.content, params.identifier ?? params.name);
     if (STATIC_PREFIX_VALIDATED_LAYER_TYPES.has(params.type)) {
       assertStaticPromptLayerMacroVolatility(params.content, params.identifier ?? params.name);
     }
@@ -657,6 +663,10 @@ export class PromptLayerStore {
     }
     if (layer.type === SYSTEM_LANGUAGE_LAYER_TYPE && hasContent) {
       validateSystemLanguageLayerContent(nextContent);
+    }
+    if (hasContent) {
+      // Safety valve (E2.5): reject removed macro aliases at edit time.
+      assertNoRemovedPromptMacros(nextContent, layer.identifier ?? layer.name);
     }
     if (hasContent && STATIC_PREFIX_VALIDATED_LAYER_TYPES.has(layer.type)) {
       assertStaticPromptLayerMacroVolatility(nextContent, layer.identifier ?? layer.name);

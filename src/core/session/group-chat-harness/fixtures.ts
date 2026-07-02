@@ -24,8 +24,8 @@ import {
   resolveAuthorContext,
   type ResolvedAuthorContext,
 } from '../../agent/substrate-agent/runtime-context.js';
-import { injectPromptRuntimeTokens } from '../../identity/prompt-runtime.js';
-import { composeDefaultRuntimePromptTemplate } from '../../identity/runtime-prompt-layers.js';
+import { renderFinalPromptSection } from '../../identity/prompt-runtime.js';
+import { getDefaultRuntimePromptSections } from '../../identity/runtime-prompt-layers.js';
 import { resolveConversationScopeFromMetadata } from '../conversation-scope.js';
 import {
   classifyGroupMemoryChannel,
@@ -309,7 +309,6 @@ export function buildDmWithGuestSession(dir: string): GroupChatSessionFixture {
 // Runtime prompt rendering (speaking_with / conversation_state)
 // ---------------------------------------------------------------------------
 
-const DEFAULT_RUNTIME_PROMPT_TEMPLATE = composeDefaultRuntimePromptTemplate();
 /** Injected fixture clock shared by every harness render (determinism anchor). */
 export const FIXTURE_NOW = new Date('2026-07-01T12:00:00Z');
 
@@ -416,7 +415,6 @@ const BASE_DYNAMIC_INPUT = {
   classifyExtendedToolForTurn: () => 'overlay' as const,
   promotedExtendedToolNames: new Set<string>(),
   skillsContext: '',
-  activeConcernsBlock: '',
   behavioralNotesBlock: '',
   config: {},
 };
@@ -481,10 +479,19 @@ export function renderTurnRuntimePrompt(
     ...(options.taskKind ? { taskKind: options.taskKind } : {}),
     ...(options.recentChannelEntries ? { recentChannelEntries: options.recentChannelEntries } : {}),
   });
-  const prompt = injectPromptRuntimeTokens(DEFAULT_RUNTIME_PROMPT_TEMPLATE, {
-    now: FIXTURE_NOW,
-    variables: { ...templateVariables, ...variables },
-  });
+  // Mirror the runtime path (prompt-assembly): each seeded runtime layer is a
+  // final render unit with its required/optional policy (E2.5).
+  const mergedVariables = { ...templateVariables, ...variables };
+  const prompt = getDefaultRuntimePromptSections()
+    .map(section => renderFinalPromptSection(section.content, {
+      now: FIXTURE_NOW,
+      variables: mergedVariables,
+      sectionLabel: section.identifier,
+      required: section.required,
+    }))
+    .map(text => text.trim())
+    .filter(text => text.length > 0)
+    .join('\n\n');
   return { prompt, variables };
 }
 

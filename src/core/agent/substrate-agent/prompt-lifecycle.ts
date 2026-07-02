@@ -2,12 +2,12 @@ import { createHash } from 'node:crypto';
 import type { SubstrateMessage } from '../../../shared/contracts/runtime.js';
 import type { AppCache } from '../../../shared/cache/types.js';
 import type { PromptComposer } from '../../identity/prompt-composer.js';
-import type { ComposeContext } from '../../identity/prompt-types.js';
+import type { ComposeContext, ComposedDynamicSection } from '../../identity/prompt-types.js';
 import {
   getVolatileClockPromptMacroNames,
-  injectPromptRuntimeTokens,
   isStaticVolatilityPromptVariable,
   normalizePromptMacroName,
+  renderFinalPromptSection,
 } from '../../identity/prompt-runtime.js';
 import type {
   PromptCacheBreaker,
@@ -20,6 +20,8 @@ import { buildSnapshotVersionPointer } from '../../turns/snapshot.js';
 export interface PromptSections {
   staticPrefix: string;
   dynamicSuffix: string;
+  /** Per-layer dynamic sections with render policy (E2.5). */
+  dynamicSections: ComposedDynamicSection[];
   staticHash: string;
   sectionCacheability: PromptSectionCacheability[];
 }
@@ -255,6 +257,7 @@ export function composePromptSections(input: {
     return {
       staticPrefix: systemPrompt,
       dynamicSuffix: '',
+      dynamicSections: [],
       staticHash: hashPromptText(systemPrompt),
       sectionCacheability: buildPromptTemplateSectionCacheability({
         staticPrefix: systemPrompt,
@@ -266,9 +269,13 @@ export function composePromptSections(input: {
   // Single composer entrypoint (E2.2): composeSplit's static/dynamic split is
   // the source of the PromptPlan volatility boundaries. No unsplit fallback.
   const split = promptComposer.composeSplit(composeContext);
+  // Boundary guard: injected composer doubles (tests) may predate the E2.5
+  // dynamicSections contract; downstream falls back to the joined template.
+  const composedDynamicSections = (split.dynamicSections as ComposedDynamicSection[] | undefined) ?? [];
   return {
     staticPrefix: split.staticPrefix,
     dynamicSuffix: split.dynamicSuffix,
+    dynamicSections: composedDynamicSections.map(section => ({ ...section })),
     staticHash: split.staticHash,
     sectionCacheability: buildPromptTemplateSectionCacheability({
       staticPrefix: split.staticPrefix,
@@ -286,6 +293,7 @@ export function captureTurnPromptSnapshot(input: {
   return {
     staticPrefixTemplate: sections.staticPrefix,
     dynamicSuffixTemplate: sections.dynamicSuffix,
+    dynamicSuffixSections: sections.dynamicSections,
     staticHash: sections.staticHash,
     versionPointer: buildSnapshotVersionPointer([
       sections.staticHash,
@@ -348,9 +356,14 @@ export function resolveStaticPromptPrefix(input: {
     return cached.renderedPrefix;
   }
 
-  const renderedPrefix = injectPromptRuntimeTokens(input.staticPrefixTemplate, {
+  // The static prefix is a required render unit (E2.5): an unresolved macro
+  // here fails the turn loudly instead of leaking template syntax into the
+  // cached prompt prefix.
+  const renderedPrefix = renderFinalPromptSection(input.staticPrefixTemplate, {
     now: input.now,
     variables: input.variables,
+    sectionLabel: 'static prompt prefix',
+    required: true,
   });
   input.cache.set(input.cacheKey, {
     renderedPrefix,
@@ -432,9 +445,11 @@ export async function resolveStaticPromptPrefixFromAppCache(input: {
     input.onCacheEvent?.({ ...eventBase, event: 'miss' });
   }
 
-  const renderedPrefix = injectPromptRuntimeTokens(input.staticPrefixTemplate, {
+  const renderedPrefix = renderFinalPromptSection(input.staticPrefixTemplate, {
     now: input.now,
     variables: input.variables,
+    sectionLabel: 'static prompt prefix',
+    required: true,
   });
   const record: FrozenPromptPrefixCacheRecord = {
     schemaVersion: 1,

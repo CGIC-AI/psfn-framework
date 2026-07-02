@@ -6,6 +6,7 @@ import { createHash } from 'node:crypto';
 import type {
   CompanionValuesLayerSnapshot,
   ComposeContext,
+  ComposedDynamicSection,
   ComposeSplitResult,
   LayerType,
   NorthStarLayerSnapshot,
@@ -16,7 +17,11 @@ import type { PromptLayerStatePort } from './prompt-state-port.js';
 import { PromptManager } from './prompt-manager.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import { writeJsonAtomic } from '../../shared/utils/fs.js';
-import { assertStaticPromptLayerMacroVolatility } from './prompt-runtime.js';
+import {
+  assertNoRemovedPromptMacros,
+  assertStaticPromptLayerMacroVolatility,
+} from './prompt-runtime.js';
+import { isRequiredRuntimePromptLayer } from './runtime-prompt-layers.js';
 import { wrapPromptSectionXml } from './prompt-sections.js';
 import { SYSTEM_LANGUAGE_LAYER_TYPE } from './system-language.js';
 
@@ -279,7 +284,7 @@ export class PromptComposer {
       : null;
 
     const staticChunks: string[] = [];
-    const dynamicChunks: string[] = [];
+    const dynamicSections: ComposedDynamicSection[] = [];
     const staticLayerIds: string[] = [];
     const dynamicLayerIds: string[] = [];
     const seenStaticLayerIds = new Set<string>();
@@ -293,19 +298,25 @@ export class PromptComposer {
     }
     if (companionValuesSection) {
       // Keep companion reflections dynamic so static-prefix caching does not churn as the journal ages.
-      dynamicChunks.push(companionValuesSection.content);
+      dynamicSections.push({
+        identifier: 'companion.values',
+        required: false,
+        content: companionValuesSection.content,
+      });
     }
 
     for (const prompt of managed.prompts) {
       const sourceLayer = prompt.sourceLayerId ? layerById.get(prompt.sourceLayerId) : undefined;
+      const layerLabel = sourceLayer?.identifier ?? sourceLayer?.name ?? prompt.identifier;
+      // Persisted-layer safety valve (E2.5, fail closed but recoverable): a
+      // persisted layer still referencing a removed macro alias produces a
+      // clear validation error naming the canonical replacement.
+      assertNoRemovedPromptMacros(prompt.content, layerLabel);
       const target = this.resolvePromptSection(sourceLayer);
       if (target === 'static') {
         // Volatility enforcement (fail closed): a turn-volatile macro in a
         // static-class layer would contaminate the byte-stable static prefix.
-        assertStaticPromptLayerMacroVolatility(
-          prompt.content,
-          sourceLayer?.identifier ?? sourceLayer?.name ?? prompt.identifier,
-        );
+        assertStaticPromptLayerMacroVolatility(prompt.content, layerLabel);
         staticChunks.push(prompt.content);
         if (sourceLayer && !seenStaticLayerIds.has(sourceLayer.id)) {
           seenStaticLayerIds.add(sourceLayer.id);
@@ -314,7 +325,13 @@ export class PromptComposer {
         continue;
       }
 
-      dynamicChunks.push(prompt.content);
+      // Required dynamic sections fail the turn loudly on unresolved macros
+      // at render time; optional sections drop with telemetry instead.
+      dynamicSections.push({
+        identifier: layerLabel,
+        required: sourceLayer?.type === 'runtime' && isRequiredRuntimePromptLayer(layerLabel),
+        content: prompt.content,
+      });
       if (sourceLayer && !seenDynamicLayerIds.has(sourceLayer.id)) {
         seenDynamicLayerIds.add(sourceLayer.id);
         dynamicLayerIds.push(sourceLayer.id);
@@ -322,7 +339,7 @@ export class PromptComposer {
     }
 
     const staticPrefix = staticChunks.join('\n\n');
-    const dynamicSuffix = dynamicChunks.join('\n\n');
+    const dynamicSuffix = dynamicSections.map(section => section.content).join('\n\n');
     const text = [staticPrefix, dynamicSuffix]
       .map(section => section.trim())
       .filter(section => section.length > 0)
@@ -335,6 +352,7 @@ export class PromptComposer {
     const result: ComposeSplitResult = {
       staticPrefix,
       dynamicSuffix,
+      dynamicSections,
       staticHash,
       dynamicHash,
       staticLayerIds,

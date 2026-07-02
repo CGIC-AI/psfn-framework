@@ -314,6 +314,25 @@ export function composeDefaultRuntimePromptTemplate(): string {
     .join('\n\n');
 }
 
+export interface DefaultRuntimePromptSection {
+  identifier: string;
+  required: boolean;
+  content: string;
+}
+
+/**
+ * The seeded runtime layers as per-section render units (E2.5). Each section
+ * carries its render policy: required sections fail the turn loudly on
+ * unresolved macros; optional sections drop with telemetry.
+ */
+export function getDefaultRuntimePromptSections(): DefaultRuntimePromptSection[] {
+  return getRuntimePromptLayerDefinitionCache().map(definition => ({
+    identifier: definition.identifier,
+    required: definition.schema.required,
+    content: definition.content,
+  }));
+}
+
 function findExistingRuntimeLayer(
   promptStore: PromptLayerStatePort,
   definition: RuntimePromptLayerDefinition,

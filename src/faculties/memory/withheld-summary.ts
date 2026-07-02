@@ -25,6 +25,7 @@ const MEMORY_WITHHELD_REASON_ORDER: readonly MemoryWithheldReasonTag[] = [
   'consent.allow_recall_denied',
   'trust.ceiling_exceeded',
   'visibility.channel_restricted',
+  'visibility.broadcast_restricted',
 ];
 
 const MEMORY_WITHHELD_REASON_LABELS: Record<MemoryWithheldReasonTag, string> = {
@@ -35,7 +36,8 @@ const MEMORY_WITHHELD_REASON_LABELS: Record<MemoryWithheldReasonTag, string> = {
   'boundary.consent_required': 'explicit consent requirement',
   'consent.allow_recall_denied': 'stored recall denial',
   'trust.ceiling_exceeded': 'trust ceiling',
-  'visibility.channel_restricted': 'channel visibility restriction',
+  'visibility.channel_restricted': 'channel privacy restriction',
+  'visibility.broadcast_restricted': 'broadcast surface restriction',
 };
 
 const MEMORY_WITHHELD_RELEVANCE_BAND_ORDER: readonly MemoryWithheldRelevanceBand[] = [

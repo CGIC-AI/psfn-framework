@@ -872,19 +872,34 @@ describe('SessionManager with continuity', () => {
     const mgr = new SessionManager(sessionStore, config);
     mgr.continuityStore = continuityStore;
 
+    // E3.3: adapters declare ChannelPrivacy only; the explicit 'public'
+    // hint overrides the 'api:' private-prefix derived default.
     mgr.recordUserMessage(
-      'api:admin-broadcast',
-      'Prepare the broadcast draft',
+      'api:admin-announcements',
+      'Prepare the announcement draft',
       'user1',
       'Alice',
       undefined,
       undefined,
-      { channelMeta: { privacyLevel: 'broadcast' } },
+      { channelMeta: { privacyLevel: 'public' } },
     );
 
     const continuity = continuityStore.getRecent('user1', 10);
     expect(continuity).toHaveLength(1);
-    expect(continuity[0].channelVisibility).toBe('broadcast');
+    expect(continuity[0].channelVisibility).toBe('public');
+  });
+
+  it('stamps broadcast-prefix channels with the public privacy projection', () => {
+    const mgr = new SessionManager(sessionStore, config);
+    mgr.continuityStore = continuityStore;
+
+    // E3.3 broadcast split: a broadcast surface is channelPrivacy 'public'
+    // plus the envelope flag; stored visibility stamps carry the privacy.
+    mgr.recordUserMessage('twitter:main', 'Broadcast draft', 'user1', 'Alice', false);
+
+    const continuity = continuityStore.getRecent('user1', 10);
+    expect(continuity).toHaveLength(1);
+    expect(continuity[0].channelVisibility).toBe('public');
   });
 
   it('records assistant DM response as private visibility', () => {

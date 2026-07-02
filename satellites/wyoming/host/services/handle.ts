@@ -5,7 +5,7 @@ import {
   normalizePresenceMetadata,
   resolvePresenceSubjectId,
 } from '../../../../src/core/agent/presence-metadata.js';
-import { normalizeChannelVisibility } from '../../../../src/system/trust/types.js';
+import { normalizeChannelPrivacy } from '../../../../src/system/trust/context-envelope.js';
 import {
   isRecord,
   type WyomingFrame,
@@ -341,7 +341,7 @@ export function createWyomingHandleServiceAdapter(
         ?? routingPresence?.satelliteId
         ?? resolvePresenceSubjectId(routingPresence);
       const channelPrivacy = routingPresence?.channelPrivacy
-        ?? normalizeChannelVisibility(readString(presenceInput, ['channelPrivacy', 'channel_privacy']))
+        ?? normalizeChannelPrivacy(readString(presenceInput, ['channelPrivacy', 'channel_privacy']))
         ?? undefined;
       const satellitePresence = buildSatellitePresenceMetadata({
         siteId: readString(presenceInput, ['site_id', 'siteId']),

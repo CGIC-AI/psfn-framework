@@ -2,7 +2,7 @@ import type { LLMProviderPort } from '../../agent/contracts.js';
 import { countMessageTokens, countTokens } from '../../../primitives/llm/tokens.js';
 import { createComponentLogger } from '../../../shared/logger.js';
 import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
-import type { ChannelVisibility } from '../../../system/trust/types.js';
+import type { ChannelPrivacy } from '../../../system/trust/context-envelope.js';
 import type { EventBus } from '../../../shared/event-bus.js';
 import {
   COMPACTION_SUMMARY_PROMPT_KEY,
@@ -36,7 +36,7 @@ const log = createComponentLogger('CompactionService');
 export interface CompactionParams {
   channelId: string;
   recent: SessionEntry[];
-  channelVisibility: ChannelVisibility;
+  channelVisibility: ChannelPrivacy;
   systemTokens: number;
   compactionPromptText?: string;
   llmProvider: LLMProviderPort;
@@ -198,7 +198,7 @@ export async function summarizeRecentSessionEntries(params: RecentSessionSummary
  */
 export function shouldCompact(params: {
   recent: SessionEntry[];
-  channelVisibility: ChannelVisibility;
+  channelVisibility: ChannelPrivacy;
   systemTokens: number;
   config: SubstrateConfig;
 }): { trigger: boolean; tokenBudget: number; totalTokens: number } {

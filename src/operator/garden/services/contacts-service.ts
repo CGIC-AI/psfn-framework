@@ -162,7 +162,7 @@ export class AdminContactsDataService implements AdminContactsService {
     const contactById = new Map(contacts.map(contact => [contact.id, contact] as const));
     const entities = await contactStore.listSocialGraphEntities({
       viewerTrustLevel: 'primary',
-      viewerChannelVisibility: 'private',
+      viewerChannelPrivacy: 'private',
       limit: Math.max(contacts.length * 4, 100),
     });
     const entityById = new Map(entities.map(entity => [entity.id, entity] as const));
@@ -173,7 +173,7 @@ export class AdminContactsDataService implements AdminContactsService {
     );
     const edges = await contactStore.listSocialRelationshipEdges({
       viewerTrustLevel: 'primary',
-      viewerChannelVisibility: 'private',
+      viewerChannelPrivacy: 'private',
       limit: Math.max(contacts.length * 8, 200),
     });
     const edgesByEntityId = new Map<string, SocialRelationshipEdge[]>();

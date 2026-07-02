@@ -1,8 +1,11 @@
-import type { TrustLevel, ChannelVisibility, SensitivityLevel } from '../../system/trust/types.js';
+import type { TrustLevel, SensitivityLevel } from '../../system/trust/types.js';
+import type { ChannelPrivacy } from '../../system/trust/context-envelope.js';
 
 export type RelationshipType = 'partner' | 'family' | 'friend' | 'acquaintance' | 'stranger' | 'ai_companion';
 export type ContactChannel = string;
-export type ChannelPrivacyLevel = ChannelVisibility;
+// E3.2 demoted per-contact privacy to provenance evidence; E3.3 narrows the
+// value domain to ChannelPrivacy (stored legacy values decode at read time).
+export type ChannelPrivacyLevel = ChannelPrivacy;
 export type SocialGraphEntityKind = 'person';
 export type SocialGraphEntitySource = 'contact' | 'memory' | 'manual' | 'system';
 export type SocialRelationshipKind =
@@ -171,7 +174,6 @@ export const CHANNEL_PRIVACY_LEVELS: ChannelPrivacyLevel[] = [
   'private',
   'invite_only',
   'public',
-  'broadcast',
 ];
 
 export const VALID_RELATIONSHIP_TYPES: RelationshipType[] = [
@@ -221,7 +223,7 @@ export interface SocialGraphEntityUpsertInput {
 
 export interface SocialGraphQueryOptions {
   viewerTrustLevel?: TrustLevel;
-  viewerChannelVisibility?: ChannelPrivacyLevel;
+  viewerChannelPrivacy?: ChannelPrivacyLevel;
   limit?: number;
 }
 

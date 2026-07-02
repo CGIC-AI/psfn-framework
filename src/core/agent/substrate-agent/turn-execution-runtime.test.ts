@@ -291,7 +291,9 @@ function humanAuthorContext(
 }
 
 async function flushAsyncWork() {
-  for (let index = 0; index < 4; index += 1) {
+  // E3.3 added one more pre-turn await (speaker-contact resolvability for the
+  // envelope derivation), so the flush window covers a couple more microtasks.
+  for (let index = 0; index < 8; index += 1) {
     await Promise.resolve();
   }
 }
@@ -518,6 +520,7 @@ function createRuntime(params: {
       scheduleAutoCompactionBetweenTurns: params.scheduleAutoCompactionBetweenTurns,
       getActiveFocusMemoryScopeQuery: vi.fn(() => null),
       getRecentMessages: vi.fn(() => []),
+      getRecentConversationSpeakers: vi.fn(() => []),
       resolveConversationScope: vi.fn((input: {
         channelId: string;
         channelMeta?: { isDirectMessage?: boolean };
@@ -591,6 +594,7 @@ function createRuntime(params: {
       channelId: 'ch1',
     })),
     withCorrelationPurpose: vi.fn((correlation, purpose) => ({ ...correlation, purpose })),
+    countResolvableSpeakerContacts: vi.fn(async () => 0),
     resolveAuthorContext: params.resolveAuthorContext ?? vi.fn(() => ({
       trustLevel: 'regular',
       speakerRole: 'user',
@@ -859,6 +863,7 @@ describe('handleMessageForTurn fatigue enforcement', () => {
       recordUserMessage: vi.fn(() => 1),
       recordAssistantMessage: vi.fn(() => 2),
       fatigueBudget: params.fatigueBudget,
+      countResolvableSpeakerContacts: vi.fn(async () => 0),
       resolveAuthorContext: params.resolveAuthorContext ?? vi.fn(() => machineIntelligenceAuthorContext()),
     });
     return { runtime, buildContext };

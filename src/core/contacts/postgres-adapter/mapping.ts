@@ -10,12 +10,12 @@ import type {
 import { CONTACT_MUTATION_AUDIT_FIELDS } from '../types.js';
 import type { TrustLevel } from '../../../system/trust/types.js';
 import {
-  type ChannelVisibility,
   type SensitivityLevel,
   SENSITIVITY_LEVELS,
   sensitivityOrd,
 } from '../../../system/trust/types.js';
 import { getAllowedSensitivities } from '../../../system/trust/policy.js';
+import type { ChannelPrivacy } from '../../../system/trust/context-envelope.js';
 import {
   defaultPrivacyForChannel,
   normalizePrivacyLevel,
@@ -140,7 +140,7 @@ export function normalizeViewerTrustLevel(value: TrustLevel | undefined): TrustL
   return value ?? 'public';
 }
 
-export function normalizeViewerVisibility(value: ChannelVisibility | undefined): ChannelVisibility {
+export function normalizeViewerVisibility(value: ChannelPrivacy | undefined): ChannelPrivacy {
   return value ?? 'public';
 }
 
@@ -156,7 +156,7 @@ export function edgeVisible(
 ): boolean {
   const allowed = getAllowedSensitivities(
     normalizeViewerTrustLevel(query.viewerTrustLevel),
-    normalizeViewerVisibility(query.viewerChannelVisibility),
+    { channelPrivacy: normalizeViewerVisibility(query.viewerChannelPrivacy), broadcast: false },
   );
   return allowed.includes(edgeSensitivity)
     && allowed.includes(sourceSensitivity)

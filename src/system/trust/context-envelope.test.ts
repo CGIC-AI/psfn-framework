@@ -21,7 +21,7 @@ import {
   validateAudienceScopeThresholds,
   validateChannelEnvelopeLabel,
 } from './context-envelope.js';
-import { CHANNEL_VISIBILITIES, decodeStoredChannelVisibility } from './types.js';
+import { decodeStoredChannelVisibility } from './types.js';
 
 describe('channelPrivacy vocabulary', () => {
   it('accepts exactly the three ratified privacy values', () => {
@@ -174,6 +174,15 @@ describe('channel envelope labels (channels.json contract)', () => {
     expect(validateChannelEnvelopeLabel({ privacy: 'public' }, 'label')).toEqual({ privacy: 'public' });
   });
 
+  it('validates the channel-owned deliveryStyle field (E3.3)', () => {
+    expect(validateChannelEnvelopeLabel({ deliveryStyle: 'concise' }, 'label'))
+      .toEqual({ deliveryStyle: 'concise' });
+    expect(validateChannelEnvelopeLabel({ privacy: 'private', deliveryStyle: 'expressive' }, 'label'))
+      .toEqual({ privacy: 'private', deliveryStyle: 'expressive' });
+    expect(() => validateChannelEnvelopeLabel({ deliveryStyle: 'verbose' }, 'label')).toThrow(/deliveryStyle/);
+    expect(() => validateChannelEnvelopeLabel({ deliveryStyle: true }, 'label')).toThrow(/deliveryStyle/);
+  });
+
   it('fails closed on retired vocabulary, unknown keys, and empty labels', () => {
     expect(() => validateChannelEnvelopeLabel({ privacy: 'semi_private' }, 'label')).toThrow(/privacy/);
     expect(() => validateChannelEnvelopeLabel({ privacy: 'broadcast' }, 'label')).toThrow(/privacy/);
@@ -183,24 +192,36 @@ describe('channel envelope labels (channels.json contract)', () => {
     expect(() => validateChannelEnvelopeLabel({}, 'label')).toThrow(/at least one field/);
     expect(() => validateChannelEnvelopeLabel('private', 'label')).toThrow(/object/);
   });
+
+  it('rejects labels pairing broadcast=true with a non-public privacy', () => {
+    expect(() => validateChannelEnvelopeLabel({ privacy: 'private', broadcast: true }, 'label'))
+      .toThrow(/always 'public'/);
+    expect(() => validateChannelEnvelopeLabel({ privacy: 'invite_only', broadcast: true }, 'label'))
+      .toThrow(/always 'public'/);
+    expect(validateChannelEnvelopeLabel({ privacy: 'public', broadcast: true }, 'label'))
+      .toEqual({ privacy: 'public', broadcast: true });
+  });
 });
 
 describe('migration map and stored-vocabulary decoding', () => {
-  it('maps every transitional visibility to the envelope pair', () => {
+  it('maps every legacy visibility to the envelope pair', () => {
+    // Keyed by LegacyChannelVisibility: the retired 4-value stored vocabulary.
     expect(Object.keys(CHANNEL_VISIBILITY_ENVELOPE_MIGRATION).sort())
-      .toEqual([...CHANNEL_VISIBILITIES].sort());
+      .toEqual(['broadcast', 'invite_only', 'private', 'public']);
     expect(CHANNEL_VISIBILITY_ENVELOPE_MIGRATION.private).toEqual({ channelPrivacy: 'private', broadcast: false });
     expect(CHANNEL_VISIBILITY_ENVELOPE_MIGRATION.invite_only).toEqual({ channelPrivacy: 'invite_only', broadcast: false });
     expect(CHANNEL_VISIBILITY_ENVELOPE_MIGRATION.public).toEqual({ channelPrivacy: 'public', broadcast: false });
     expect(CHANNEL_VISIBILITY_ENVELOPE_MIGRATION.broadcast).toEqual({ channelPrivacy: 'public', broadcast: true });
   });
 
-  it('decodes persisted legacy semi_private as invite_only, everything else strictly', () => {
+  it('decodes persisted legacy vocabulary onto ChannelPrivacy, everything else strictly', () => {
     expect(decodeStoredChannelVisibility('semi_private')).toBe('invite_only');
-    expect(decodeStoredChannelVisibility('invite_only')).toBe('invite_only');
+    expect(decodeStoredChannelVisibility('broadcast')).toBe('public');
     expect(decodeStoredChannelVisibility('private')).toBe('private');
-    expect(decodeStoredChannelVisibility('broadcast')).toBe('broadcast');
+    expect(decodeStoredChannelVisibility('invite_only')).toBe('invite_only');
+    expect(decodeStoredChannelVisibility('public')).toBe('public');
     expect(decodeStoredChannelVisibility('semi-private')).toBeUndefined();
     expect(decodeStoredChannelVisibility(undefined)).toBeUndefined();
+    expect(decodeStoredChannelVisibility(42)).toBeUndefined();
   });
 });

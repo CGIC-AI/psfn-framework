@@ -2,6 +2,8 @@
 // Canonical definitions for the honne/tatemae privacy model.
 // All trust-sensitive surfaces import from here — single source of truth.
 
+import type { ChannelPrivacy } from './context-envelope.js';
+
 export type TrustLevel = 'primary' | 'trusted' | 'regular' | 'public';
 export type HighTierTrustLevel = Extract<TrustLevel, 'primary' | 'trusted'>;
 export type LowTierTrustLevel = Extract<TrustLevel, 'regular' | 'public'>;
@@ -10,12 +12,11 @@ export type TrustMutationSource = 'manual' | 'behavior_drift' | 'autonomous';
 export type SensitivityLevel = 'public' | 'personal' | 'intimate' | 'confidential';
 export type HighIntimacySensitivityLevel = Extract<SensitivityLevel, 'intimate' | 'confidential'>;
 
-// Transitional single-axis channel vocabulary. E3.1 renamed 'semi_private' to
-// 'invite_only' (no alias). 'broadcast' remains a visibility value ONLY until
-// E3.2/E3.3 execute the documented split into { channelPrivacy: 'public',
-// broadcast: true } — see src/system/trust/context-envelope.ts and
-// docs/context-envelope.md for the envelope contract and migration map.
-export type ChannelVisibility = 'private' | 'invite_only' | 'public' | 'broadcast';
+// The transitional single-axis ChannelVisibility type was DELETED in E3.3.
+// Channel disclosure context is the Context Envelope pair
+// { channelPrivacy, broadcast } from ./context-envelope.ts
+// (docs/context-envelope.md). Persisted records written before the split are
+// decoded through decodeStoredChannelVisibility below.
 
 export type ConsentRedactionBehavior = 'delete' | 'abstract';
 export type MemoryRedactionOperation = 'auto' | 'delete' | 'abstract';
@@ -35,7 +36,6 @@ export const LOW_TIER_TRUST_LEVELS: readonly LowTierTrustLevel[] = ['regular', '
 export const HIGH_INTIMACY_SENSITIVITY_LEVELS: readonly HighIntimacySensitivityLevel[] = ['intimate', 'confidential'];
 
 export const SENSITIVITY_LEVELS: readonly SensitivityLevel[] = ['public', 'personal', 'intimate', 'confidential'];
-export const CHANNEL_VISIBILITIES: readonly ChannelVisibility[] = ['private', 'invite_only', 'public', 'broadcast'];
 
 export const VALID_SENSITIVITY_LEVELS: SensitivityLevel[] = ['public', 'personal', 'intimate', 'confidential'];
 export const VALID_CONSENT_REDACTION_BEHAVIORS: ConsentRedactionBehavior[] = ['delete', 'abstract'];
@@ -96,25 +96,28 @@ export function isHighIntimacySensitivityLevel(level: SensitivityLevel): level i
   return (HIGH_INTIMACY_SENSITIVITY_LEVELS as readonly SensitivityLevel[]).includes(level);
 }
 
-export function isChannelVisibility(value: unknown): value is ChannelVisibility {
-  return typeof value === 'string' && (CHANNEL_VISIBILITIES as readonly string[]).includes(value);
-}
-
-export function normalizeChannelVisibility(value: unknown): ChannelVisibility | undefined {
-  return isChannelVisibility(value) ? value : undefined;
-}
-
 /**
  * Decoder for PERSISTED channel-visibility values only (session provenance,
- * transcript projections, contact rows, journal records written before the
- * E3.1 vocabulary rename). Maps the retired 'semi_private' literal to
- * 'invite_only' per the documented migration map (docs/context-envelope.md).
- * This is a stored-data decode rule, NOT an accepted input alias: config and
- * API surfaces reject 'semi_private' outright.
+ * mirror metadata, transcript projections, contact rows, journal records
+ * written before the E3.1 rename / E3.3 broadcast split). Maps the retired
+ * stored vocabulary onto ChannelPrivacy per the documented migration map
+ * (docs/context-envelope.md):
+ *
+ *   'semi_private' → 'invite_only'   (E3.1 rename)
+ *   'broadcast'    → 'public'        (E3.3 split: broadcast is a flag whose
+ *                                     disclosure ceiling IS the public row,
+ *                                     so the privacy projection is lossless
+ *                                     for every stored-data gate)
+ *
+ * This is the read-boundary decode rule, NOT an accepted input alias: config,
+ * API, and model-facing surfaces reject the retired vocabulary outright, and
+ * new writes stamp ChannelPrivacy values only.
  */
-export function decodeStoredChannelVisibility(value: unknown): ChannelVisibility | undefined {
+export function decodeStoredChannelVisibility(value: unknown): ChannelPrivacy | undefined {
   if (value === 'semi_private') return 'invite_only';
-  return normalizeChannelVisibility(value);
+  if (value === 'broadcast') return 'public';
+  if (value === 'private' || value === 'invite_only' || value === 'public') return value;
+  return undefined;
 }
 
 export function sensitivityOrd(level: SensitivityLevel): number {

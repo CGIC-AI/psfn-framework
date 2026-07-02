@@ -16,10 +16,23 @@
 //   precomputed at construction. It is a readonly data property (not a
 //   method) so scope objects stay structuredClone- and JSON-safe.
 //
-// This bead (E1.1) is mechanical threading only: constructing and plumbing the
-// scope changes zero behavior. The dependent beads flip behavior using it:
-// E1.2 core-memory participant binding, E1.3 speaking_with gating,
-// E1.5 emotion scoping, E1.7 reflection scoping.
+// E1.1 introduced the scope as mechanical threading; the dependent beads flip
+// behavior using it: E1.2 core-memory participant binding, E1.3 speaking_with
+// gating, E1.5 emotion scoping, E1.7 reflection scoping. E3.3 attaches the
+// Context Envelope: every scope carries `readonly envelope: ContextEnvelope`
+// (the ContextEnvelopeCarrier seam), derived once at resolution time from
+// channel classification, topology, the recent-speaker window, and contact
+// resolvability (docs/context-envelope.md).
+
+import {
+  deriveScopeContextEnvelope,
+  isContextEnvelope,
+  type AudienceScopeThresholds,
+  type ContextEnvelope,
+} from '../../system/trust/context-envelope.js';
+import { classifyChannelEnvelope } from '../../system/trust/policy.js';
+import { getRuntimeTrustPolicy } from '../../system/trust/runtime-policy.js';
+import type { ChannelMeta } from '../../system/trust/policy.js';
 
 /** Canonical contact binding for a DM scope. */
 export interface ConversationScopeContact {
@@ -40,13 +53,14 @@ export const CONVERSATION_SCOPE_RECENT_SPEAKER_LIMIT = 5;
 export type ConversationScopeKey = `dm:${string}` | `room:${string}`;
 
 interface ConversationScopeBase {
-  // E3.3 seam (Context Envelope contract, docs/context-envelope.md):
-  // ConversationScope gains `readonly envelope: ContextEnvelope`
-  // (src/system/trust/context-envelope.ts — see ContextEnvelopeCarrier),
-  // resolved once per turn at session-manager ingress alongside the scope.
-  // E3.1 deliberately does NOT add the field: the envelope stays a contract
-  // until the operator ratifies it and E3.2 wires owner-file classification.
   readonly channelId: string;
+  /**
+   * The Context Envelope for this conversation (ContextEnvelopeCarrier seam,
+   * executed in E3.3): deterministic pre-prompt disclosure state derived once
+   * at scope resolution from channel classification, topology, the
+   * recent-speaker window, and contact resolvability. Never prompt prose.
+   */
+  readonly envelope: ContextEnvelope;
   /**
    * Distinct recent user-role speakers, most recent session window first
    * (max CONVERSATION_SCOPE_RECENT_SPEAKER_LIMIT). Carried on both kinds so
@@ -114,9 +128,58 @@ function requireChannelId(channelId: string): string {
   return normalized;
 }
 
+function requireEnvelope(envelope: ContextEnvelope): Readonly<ContextEnvelope> {
+  if (!isContextEnvelope(envelope)) {
+    throw new ConversationScopeError('ConversationScope requires a valid ContextEnvelope.');
+  }
+  return Object.freeze({ ...envelope });
+}
+
+/**
+ * Derive the Context Envelope for a conversation at scope-resolution time.
+ *
+ * Composition: {channelPrivacy, broadcast} from classifyChannelEnvelope
+ * (channel label > operator override > derived default), audienceScope from
+ * topology + the interim roster bound (memberCountHint, else the distinct
+ * recent-speaker count — the E4.1 room-roster query will replace this bound),
+ * audienceKnowledge from the fraction of recent speakers resolvable to
+ * contacts. Fail-closed rules live in deriveScopeContextEnvelope.
+ */
+export function deriveConversationScopeEnvelope(input: {
+  channelId: string;
+  kind: 'dm' | 'group';
+  channelMeta?: ChannelMeta;
+  recentSpeakerCount: number;
+  dmContactResolved?: boolean;
+  resolvedSpeakerContactCount?: number;
+  memberCountHint?: number;
+  audienceScopeThresholds?: AudienceScopeThresholds;
+}): ContextEnvelope {
+  const classification = classifyChannelEnvelope(input.channelId, input.channelMeta);
+  return deriveScopeContextEnvelope({
+    classification: { channelPrivacy: classification.privacy, broadcast: classification.broadcast },
+    kind: input.kind,
+    recentSpeakerCount: input.recentSpeakerCount,
+    thresholds: input.audienceScopeThresholds ?? getRuntimeTrustPolicy().audienceScopeThresholds,
+    ...(input.dmContactResolved !== undefined ? { dmContactResolved: input.dmContactResolved } : {}),
+    ...(input.resolvedSpeakerContactCount !== undefined
+      ? { resolvedSpeakerContactCount: input.resolvedSpeakerContactCount }
+      : {}),
+    ...(input.memberCountHint !== undefined ? { memberCountHint: input.memberCountHint } : {}),
+  });
+}
+
 export function createDmConversationScope(input: {
   channelId: string;
   contact: ConversationScopeContact;
+  /**
+   * Context Envelope resolved for the turn (resolveConversationScopeFromMetadata
+   * passes it with full ingress knowledge). When absent — direct constructor
+   * callers outside the turn pipeline — a fail-closed envelope is derived from
+   * channel classification and the speaker window (dm contact resolvability
+   * unknown ⇒ window-derived audienceKnowledge, never all_known by default).
+   */
+  envelope?: ContextEnvelope;
   recentSpeakers?: readonly ConversationScopeSpeaker[];
 }): DmConversationScope {
   const channelId = requireChannelId(input.channelId);
@@ -125,20 +188,30 @@ export function createDmConversationScope(input: {
     throw new ConversationScopeError('DM ConversationScope requires a non-empty contactId.');
   }
   const displayName = input.contact.displayName?.trim();
+  const recentSpeakers = normalizeRecentSpeakers(input.recentSpeakers ?? []);
+  const envelope = input.envelope ?? deriveConversationScopeEnvelope({
+    channelId,
+    kind: 'dm',
+    channelMeta: { isDirectMessage: true },
+    recentSpeakerCount: recentSpeakers.length,
+  });
   return Object.freeze({
     kind: 'dm' as const,
     channelId,
+    envelope: requireEnvelope(envelope),
     contact: Object.freeze({
       contactId,
       ...(displayName ? { displayName } : {}),
     }),
-    recentSpeakers: normalizeRecentSpeakers(input.recentSpeakers ?? []),
+    recentSpeakers,
     key: `dm:${contactId}` as const,
   });
 }
 
 export function createGroupConversationScope(input: {
   channelId: string;
+  /** See createDmConversationScope; absent derives a fail-closed envelope. */
+  envelope?: ContextEnvelope;
   recentSpeakers?: readonly ConversationScopeSpeaker[];
   roomName?: string;
   memberCountHint?: number;
@@ -151,10 +224,18 @@ export function createGroupConversationScope(input: {
       'Group ConversationScope memberCountHint must be a non-negative integer when present.',
     );
   }
+  const recentSpeakers = normalizeRecentSpeakers(input.recentSpeakers ?? []);
+  const envelope = input.envelope ?? deriveConversationScopeEnvelope({
+    channelId,
+    kind: 'group',
+    recentSpeakerCount: recentSpeakers.length,
+    ...(input.memberCountHint !== undefined ? { memberCountHint: input.memberCountHint } : {}),
+  });
   return Object.freeze({
     kind: 'group' as const,
     channelId,
-    recentSpeakers: normalizeRecentSpeakers(input.recentSpeakers ?? []),
+    envelope: requireEnvelope(envelope),
+    recentSpeakers,
     ...(roomName ? { roomName } : {}),
     ...(input.memberCountHint !== undefined ? { memberCountHint: input.memberCountHint } : {}),
     key: `room:${channelId}` as const,
@@ -181,8 +262,19 @@ export function resolveConversationScopeFromMetadata(input: {
   contact?: ConversationScopeContact;
   participantId?: string;
   recentSpeakers?: readonly ConversationScopeSpeaker[];
+  /** Full channel meta for envelope classification; falls back to the DM flag. */
+  channelMeta?: ChannelMeta;
+  /**
+   * Recent speakers resolvable to contacts (turn ingress supplies this from
+   * the contact store). Absent fails closed in the envelope derivation.
+   */
+  resolvedSpeakerContactCount?: number;
+  memberCountHint?: number;
 }): ConversationScope {
   const channelId = requireChannelId(input.channelId);
+  const recentSpeakers = normalizeRecentSpeakers(input.recentSpeakers ?? []);
+  const channelMeta = input.channelMeta
+    ?? (input.isDirectMessage !== undefined ? { isDirectMessage: input.isDirectMessage } : undefined);
   if (input.isDirectMessage === true) {
     const participantId = input.participantId?.trim();
     const contact = input.contact
@@ -190,12 +282,35 @@ export function resolveConversationScopeFromMetadata(input: {
     return createDmConversationScope({
       channelId,
       contact,
-      recentSpeakers: input.recentSpeakers ?? [],
+      envelope: deriveConversationScopeEnvelope({
+        channelId,
+        kind: 'dm',
+        recentSpeakerCount: recentSpeakers.length,
+        // Only a caller-supplied contact is a genuinely resolved canonical
+        // contact; the participant/channel fallbacks above are degraded
+        // identities and fail closed to window-derived knowledge.
+        dmContactResolved: input.contact !== undefined,
+        ...(channelMeta ? { channelMeta } : {}),
+        ...(input.resolvedSpeakerContactCount !== undefined
+          ? { resolvedSpeakerContactCount: input.resolvedSpeakerContactCount }
+          : {}),
+      }),
+      recentSpeakers,
     });
   }
   return createGroupConversationScope({
     channelId,
-    recentSpeakers: input.recentSpeakers ?? [],
+    envelope: deriveConversationScopeEnvelope({
+      channelId,
+      kind: 'group',
+      recentSpeakerCount: recentSpeakers.length,
+      ...(channelMeta ? { channelMeta } : {}),
+      ...(input.resolvedSpeakerContactCount !== undefined
+        ? { resolvedSpeakerContactCount: input.resolvedSpeakerContactCount }
+        : {}),
+      ...(input.memberCountHint !== undefined ? { memberCountHint: input.memberCountHint } : {}),
+    }),
+    recentSpeakers,
   });
 }
 

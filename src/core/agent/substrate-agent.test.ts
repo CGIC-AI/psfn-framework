@@ -7,6 +7,10 @@ import { SubstrateAgent } from './substrate-agent.js';
 import { EventBus } from '../../shared/event-bus.js';
 import type { SessionManager } from '../session/manager.js';
 import { resolveConversationScopeFromMetadata } from '../session/conversation-scope.js';
+import {
+  resetRuntimeChannelEnvelopeLabels,
+  setRuntimeChannelEnvelopeLabels,
+} from '../../system/trust/runtime-channel-labels.js';
 import type { ContextManifest } from '../session/context-manifest.js';
 import type { ContactStore } from '../contacts/store.js';
 import type { ChannelPromptDock } from '../../channels/backplane/types.js';
@@ -290,6 +294,7 @@ function makeMockSessionManager(): SessionManager {
     getRecentMessages: vi.fn().mockReturnValue([]),
     getRoleEnvelopeRefsForEntries: vi.fn().mockReturnValue([]),
     resolveSessionChannelId,
+    getRecentConversationSpeakers: vi.fn(() => []),
     resolveConversationScope: vi.fn((input: {
       channelId: string;
       channelMeta?: { isDirectMessage?: boolean };
@@ -5222,55 +5227,62 @@ describe('SubstrateAgent.handleMessage', () => {
     ]);
   });
 
-  it('applies routed channel privacy to active memory, context building, and outbound broadcast safety', async () => {
-    const config = makeConfig();
-    const eventBus = new EventBus();
-    const sessionManager = makeMockSessionManager();
-    const agent = new SubstrateAgent(
-      eventBus,
-      makeMockLLMProvider(),
-      sessionManager,
-      'test',
-      config,
-    );
-    const getActiveMemoryContext = vi.fn().mockReturnValue(makeActiveMemorySnapshot({
-      channelId: 'api:admin-broadcast',
-      visibilityScope: 'public_only',
-      contextBlock: '',
-    }));
-    agent.memoryProvider = {
-      getActiveMemoryContext,
-      refreshActiveMemoryContext: vi.fn().mockResolvedValue(null),
-    } as unknown as MemoryProvider;
-    mockAssistantResponse('My private number is +1 (555) 123-4567.');
+  it('applies a channel-owned broadcast label to active memory, context building, and outbound broadcast safety', async () => {
+    // E3.3: adapters can no longer declare 'broadcast' via routing privacy —
+    // the flag is channel-owned. Publish a channels.json-style envelope label
+    // and verify the broadcast-safety machinery still gates the turn.
+    setRuntimeChannelEnvelopeLabels({ 'api:admin-broadcast': { broadcast: true } });
+    try {
+      const config = makeConfig();
+      const eventBus = new EventBus();
+      const sessionManager = makeMockSessionManager();
+      const agent = new SubstrateAgent(
+        eventBus,
+        makeMockLLMProvider(),
+        sessionManager,
+        'test',
+        config,
+      );
+      const getActiveMemoryContext = vi.fn().mockReturnValue(makeActiveMemorySnapshot({
+        channelId: 'api:admin-broadcast',
+        visibilityScope: 'public_only',
+        contextBlock: '',
+      }));
+      agent.memoryProvider = {
+        getActiveMemoryContext,
+        refreshActiveMemoryContext: vi.fn().mockResolvedValue(null),
+      } as unknown as MemoryProvider;
+      mockAssistantResponse('My private number is +1 (555) 123-4567.');
 
-    const response = await agent.handleMessage(makeMessage({
-      channelId: 'api:admin-broadcast',
-      channelType: 'api',
-      content: 'Draft a broadcast post',
-      routing: {
-        source: 'api',
-        channelPrivacy: 'broadcast',
-      },
-    }));
+      const response = await agent.handleMessage(makeMessage({
+        channelId: 'api:admin-broadcast',
+        channelType: 'api',
+        content: 'Draft a broadcast post',
+        routing: {
+          source: 'api',
+        },
+      }));
 
-    expect(getActiveMemoryContext).toHaveBeenCalledWith(expect.objectContaining({
-      channelId: 'api:admin-broadcast',
-      channelMeta: { privacyLevel: 'broadcast' },
-    }));
-    const buildCall = (sessionManager.buildContext as any).mock.calls[0];
-    expect(buildCall[5]).toEqual({ privacyLevel: 'broadcast' });
-    expect(response.content).toBe('');
-    expect(response.metadata.broadcastSafety).toMatchObject({
-      visibilityScope: 'public_only',
-      approvalRequired: true,
-      operatorApproval: false,
-    });
-    expect(sessionManager.recordAssistantMessage).not.toHaveBeenCalled();
-    expect(sessionManager.appendSystemNote).toHaveBeenCalledWith(
-      'api:admin-broadcast',
-      expect.stringContaining('held for approval'),
-    );
+      expect(getActiveMemoryContext).toHaveBeenCalledWith(expect.objectContaining({
+        channelId: 'api:admin-broadcast',
+        channelMeta: {},
+      }));
+      const buildCall = (sessionManager.buildContext as any).mock.calls[0];
+      expect(buildCall[5]).toEqual({});
+      expect(response.content).toBe('');
+      expect(response.metadata.broadcastSafety).toMatchObject({
+        visibilityScope: 'public_only',
+        approvalRequired: true,
+        operatorApproval: false,
+      });
+      expect(sessionManager.recordAssistantMessage).not.toHaveBeenCalled();
+      expect(sessionManager.appendSystemNote).toHaveBeenCalledWith(
+        'api:admin-broadcast',
+        expect.stringContaining('held for approval'),
+      );
+    } finally {
+      resetRuntimeChannelEnvelopeLabels();
+    }
   });
 
   it('allows risky broadcast drafts when explicit approval token is present', async () => {

@@ -1,8 +1,9 @@
 import type { ContextManifestMemorySeed } from '../../core/session/context-manifest.js';
 import type { ContextBudgetTurnCharacteristics } from '../../shared/context-budget.js';
 import { resolveBroadcastVisibilityScope, type BroadcastVisibilityScope } from '../../system/trust/broadcast-safety.js';
-import { classifyChannel, type ChannelMeta } from '../../system/trust/policy.js';
-import type { ChannelVisibility, TrustLevel } from '../../system/trust/types.js';
+import { classifyChannelDisclosure, type ChannelMeta } from '../../system/trust/policy.js';
+import type { TrustLevel } from '../../system/trust/types.js';
+import type { ChannelPrivacy } from '../../system/trust/context-envelope.js';
 import type {
   MemoryScopeQuery,
   RetrievalCallerContext,
@@ -37,7 +38,7 @@ export interface ActiveMemoryContextSnapshot {
   subjectKey: string;
   channelId: string;
   trustLevel: TrustLevel;
-  channelVisibility: ChannelVisibility;
+  channelVisibility: ChannelPrivacy;
   visibilityScope: BroadcastVisibilityScope | 'non_broadcast';
   contextBlock: string;
   contextChars: number;
@@ -67,7 +68,7 @@ export interface ActiveMemoryContextIdentity {
   key: string;
   subjectKey: string;
   trustLevel: TrustLevel;
-  channelVisibility: ChannelVisibility;
+  channelVisibility: ChannelPrivacy;
   visibilityScope: BroadcastVisibilityScope | 'non_broadcast';
 }
 
@@ -104,7 +105,7 @@ export function resolveActiveMemoryContextIdentity(
   >,
 ): ActiveMemoryContextIdentity {
   const trustLevel = request.trustLevel ?? 'regular';
-  const channelVisibility = classifyChannel(request.channelId, request.channelMeta);
+  const channelVisibility = classifyChannelDisclosure(request.channelId, request.channelMeta).channelPrivacy;
   const visibilityScope = resolveBroadcastVisibilityScope(request.channelId, request.channelMeta) ?? 'non_broadcast';
   const contactKey = request.canonicalContactId?.trim();
   const subjectKey = contactKey && contactKey.length > 0

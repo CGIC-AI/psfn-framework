@@ -28,8 +28,8 @@ import {
   runWithChargeContext,
 } from '../../../shared/telemetry/run-charge.js';
 import { makeTestFatiguePolicyConfig } from '../../../test-support/charge-policy.js';
-import { classifyChannel } from '../../../system/trust/policy.js';
-import { normalizeChannelVisibility } from '../../../system/trust/types.js';
+import { classifyChannelDisclosure } from '../../../system/trust/policy.js';
+import { normalizeChannelPrivacy } from '../../../system/trust/context-envelope.js';
 
 afterEach(() => {
   resetRunChargeRollingWindowForTests();
@@ -908,13 +908,15 @@ describe('runtime subject identity', () => {
 
   it('renders routed channel privacy through the prompt-owned runtime layers', () => {
     const message = makeMessage({
-      channelId: 'api:admin-broadcast',
+      channelId: 'api:admin-announcements',
       channelType: 'api',
       authorId: 'admin-user',
       authorName: 'Admin User',
       routing: {
         source: 'api',
-        channelPrivacy: 'broadcast',
+        // E3.3: adapters declare ChannelPrivacy only; broadcast is an
+        // envelope flag owned by labels/overrides/prefixes.
+        channelPrivacy: 'public',
       },
     });
 
@@ -933,7 +935,7 @@ describe('runtime subject identity', () => {
       fallbackCharacterName: 'Companion',
     });
 
-    expect(templateVariables.channel_visibility).toBe('broadcast');
+    expect(templateVariables.channel_visibility).toBe('public');
 
     const renderedRuntimeLayers = renderPromptOwnedRuntimeLayers({
       message,
@@ -966,9 +968,9 @@ describe('runtime subject identity', () => {
 
     expect(renderedRuntimeLayers).toContain('<conversation_state>');
     expect(renderedRuntimeLayers).toContain('<chat_type>group</chat_type>');
-    expect(renderedRuntimeLayers).toContain('<channel_id>api:admin-broadcast</channel_id>');
+    expect(renderedRuntimeLayers).toContain('<channel_id>api:admin-announcements</channel_id>');
     expect(renderedRuntimeLayers).toContain('<channel_type>api</channel_type>');
-    expect(renderedRuntimeLayers).toContain('<channel_visibility>broadcast</channel_visibility>');
+    expect(renderedRuntimeLayers).toContain('<channel_visibility>public</channel_visibility>');
     expect(renderedRuntimeLayers).toContain('<current_message_author name="Admin User" id="admin-user" trust="regular" />');
     expect(renderedRuntimeLayers).not.toContain('<speaking_with>');
   });
@@ -2356,11 +2358,11 @@ describe('runtime subject identity', () => {
     // The contact store labeled this conversation channel 'private', yet the
     // channel still classifies by its own derived default (invite_only) —
     // there is no seam from the resolved author context into ChannelMeta.
-    const routingPrivacy = normalizeChannelVisibility(undefined);
+    const routingPrivacy = normalizeChannelPrivacy(undefined);
     const channelMeta = {
       ...(routingPrivacy ? { privacyLevel: routingPrivacy } : {}),
     };
-    expect(classifyChannel('1313001762793197678', channelMeta)).toBe('invite_only');
+    expect(classifyChannelDisclosure('1313001762793197678', channelMeta)).toEqual({ channelPrivacy: 'invite_only', broadcast: false });
   });
 
   it('labels blocked extended tools clearly in the prompt-owned runtime layers', () => {

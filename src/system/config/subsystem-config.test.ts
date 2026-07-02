@@ -341,7 +341,6 @@ describe('subsystem config round-trip', () => {
         private: ['public', 'personal', 'intimate', 'confidential'],
         invite_only: ['public', 'personal'],
         public: ['public'],
-        broadcast: ['public'],
       },
       audienceScopeThresholds: {
         fewMax: 8,
@@ -353,10 +352,10 @@ describe('subsystem config round-trip', () => {
         defaultVisibility: 'public',
         visibilityOverrides: {
           exact: {
-            'custom:exact-room': 'broadcast',
+            'custom:exact-room': { privacy: 'public', broadcast: true },
           },
           prefix: {
-            'custom:': 'private',
+            'custom:': { privacy: 'private', broadcast: false },
           },
         },
       },
@@ -365,6 +364,40 @@ describe('subsystem config round-trip', () => {
     expect(saveTrustPolicyConfig(dataDir, expected)).toEqual(expected);
     expect(readJsonFile(join(dataDir, TRUST_POLICY_FILE_NAME))).toEqual(expected);
     expect(loadTrustPolicyConfig(dataDir)).toEqual(expected);
+  });
+
+  it('normalizes bare channel-privacy override strings to {privacy, broadcast} pairs', () => {
+    const dataDir = makeDataDir('psfn-trust-policy-bare-override-');
+    const withBareStrings = {
+      trustCeiling: {
+        primary: ['public', 'personal', 'intimate', 'confidential'],
+        trusted: ['public', 'personal'],
+        regular: ['public', 'personal'],
+        public: ['public'],
+      },
+      visibilityAllowed: {
+        private: ['public', 'personal', 'intimate', 'confidential'],
+        invite_only: ['public', 'personal'],
+        public: ['public'],
+      },
+      channelClassification: {
+        privatePrefixes: ['custom:'],
+        broadcastPrefixes: ['social:'],
+        defaultVisibility: 'invite_only',
+        visibilityOverrides: {
+          exact: { 'custom:exact-room': 'public' },
+          prefix: { 'custom:': 'private' },
+        },
+      },
+    };
+
+    const saved = saveTrustPolicyConfig(dataDir, withBareStrings);
+    expect(saved.channelClassification.visibilityOverrides.exact['custom:exact-room'])
+      .toEqual({ privacy: 'public', broadcast: false });
+    expect(saved.channelClassification.visibilityOverrides.prefix['custom:'])
+      .toEqual({ privacy: 'private', broadcast: false });
+    expect(loadTrustPolicyConfig(dataDir).channelClassification.visibilityOverrides.exact['custom:exact-room'])
+      .toEqual({ privacy: 'public', broadcast: false });
   });
 
   it('migrates the known old default trust-policy regular ceiling', () => {
@@ -416,7 +449,6 @@ describe('subsystem config round-trip', () => {
         private: ['public', 'personal', 'intimate', 'confidential'],
         invite_only: ['public'],
         public: ['public'],
-        broadcast: ['public'],
       },
       channelClassification: {
         privatePrefixes: ['custom:'],
@@ -438,7 +470,7 @@ describe('subsystem config round-trip', () => {
     expect(readJsonFile(join(dataDir, TRUST_POLICY_FILE_NAME))).toEqual(custom);
   });
 
-  it('migrates legacy semi_private trust-policy vocabulary to invite_only', () => {
+  it('migrates legacy semi_private/broadcast trust-policy vocabulary at load', () => {
     const dataDir = makeDataDir('psfn-trust-policy-vocab-');
     const legacy = {
       trustCeiling: {
@@ -451,6 +483,7 @@ describe('subsystem config round-trip', () => {
         private: ['public', 'personal', 'intimate', 'confidential'],
         semi_private: ['public', 'personal'],
         public: ['public'],
+        // Legacy broadcast row equal to the public row: dropped at load.
         broadcast: ['public'],
       },
       channelClassification: {
@@ -458,7 +491,7 @@ describe('subsystem config round-trip', () => {
         broadcastPrefixes: ['social:'],
         defaultVisibility: 'semi_private',
         visibilityOverrides: {
-          exact: { 'custom:room': 'semi_private' },
+          exact: { 'custom:room': 'semi_private', 'custom:megaphone': 'broadcast' },
           prefix: { 'legacy:': 'semi_private' },
         },
       },
@@ -469,17 +502,56 @@ describe('subsystem config round-trip', () => {
 
     expect(loaded.visibilityAllowed.invite_only).toEqual(['public', 'personal']);
     expect(Object.keys(loaded.visibilityAllowed)).not.toContain('semi_private');
+    expect(Object.keys(loaded.visibilityAllowed)).not.toContain('broadcast');
     expect(loaded.channelClassification.defaultVisibility).toBe('invite_only');
-    expect(loaded.channelClassification.visibilityOverrides.exact['custom:room']).toBe('invite_only');
-    expect(loaded.channelClassification.visibilityOverrides.prefix['legacy:']).toBe('invite_only');
+    expect(loaded.channelClassification.visibilityOverrides.exact['custom:room'])
+      .toEqual({ privacy: 'invite_only', broadcast: false });
+    expect(loaded.channelClassification.visibilityOverrides.exact['custom:megaphone'])
+      .toEqual({ privacy: 'public', broadcast: true });
+    expect(loaded.channelClassification.visibilityOverrides.prefix['legacy:'])
+      .toEqual({ privacy: 'invite_only', broadcast: false });
 
     // The migration is persisted so the retired vocabulary never survives on disk.
     const persisted = readJsonFile<{
       visibilityAllowed: Record<string, string[]>;
-      channelClassification: { defaultVisibility: string };
+      channelClassification: {
+        defaultVisibility: string;
+        visibilityOverrides: { exact: Record<string, unknown> };
+      };
     }>(join(dataDir, TRUST_POLICY_FILE_NAME));
     expect(Object.keys(persisted.visibilityAllowed)).not.toContain('semi_private');
+    expect(Object.keys(persisted.visibilityAllowed)).not.toContain('broadcast');
     expect(persisted.channelClassification.defaultVisibility).toBe('invite_only');
+    expect(persisted.channelClassification.visibilityOverrides.exact['custom:megaphone'])
+      .toEqual({ privacy: 'public', broadcast: true });
+  });
+
+  it('fails closed when a legacy broadcast visibility row differs from the public row', () => {
+    const dataDir = makeDataDir('psfn-trust-policy-broadcast-row-diff-');
+    const divergent = {
+      trustCeiling: {
+        primary: ['public', 'personal', 'intimate', 'confidential'],
+        trusted: ['public', 'personal'],
+        regular: ['public', 'personal'],
+        public: ['public'],
+      },
+      visibilityAllowed: {
+        private: ['public', 'personal', 'intimate', 'confidential'],
+        invite_only: ['public', 'personal'],
+        public: ['public'],
+        // Dropping this silently would change gating; the load must throw.
+        broadcast: ['public', 'personal'],
+      },
+      channelClassification: {
+        privatePrefixes: [],
+        broadcastPrefixes: [],
+        defaultVisibility: 'invite_only',
+        visibilityOverrides: { exact: {}, prefix: {} },
+      },
+    };
+    writeFileSync(join(dataDir, TRUST_POLICY_FILE_NAME), JSON.stringify(divergent, null, 2), 'utf-8');
+
+    expect(() => loadTrustPolicyConfig(dataDir)).toThrow(/broadcast.*differs from.*public/);
   });
 
   it('fails closed when trust-policy defines both semi_private and invite_only', () => {
@@ -536,6 +608,32 @@ describe('subsystem config round-trip', () => {
     expect(() => saveTrustPolicyConfig(dataDir, legacy)).toThrow();
   });
 
+  it('rejects saving trust-policy with the retired broadcast visibility row', () => {
+    const dataDir = makeDataDir('psfn-trust-policy-broadcast-save-');
+    const legacy = {
+      trustCeiling: {
+        primary: ['public', 'personal', 'intimate', 'confidential'],
+        trusted: ['public', 'personal'],
+        regular: ['public', 'personal'],
+        public: ['public'],
+      },
+      visibilityAllowed: {
+        private: ['public', 'personal', 'intimate', 'confidential'],
+        invite_only: ['public', 'personal'],
+        public: ['public'],
+        broadcast: ['public'],
+      },
+      channelClassification: {
+        privatePrefixes: [],
+        broadcastPrefixes: [],
+        defaultVisibility: 'invite_only',
+        visibilityOverrides: { exact: {}, prefix: {} },
+      },
+    };
+
+    expect(() => saveTrustPolicyConfig(dataDir, legacy)).toThrow(/unsupported keys: broadcast/);
+  });
+
   it('validates audienceScopeThresholds fail-closed', () => {
     const dataDir = makeDataDir('psfn-trust-policy-thresholds-');
     const base = {
@@ -549,7 +647,6 @@ describe('subsystem config round-trip', () => {
         private: ['public', 'personal', 'intimate', 'confidential'],
         invite_only: ['public', 'personal'],
         public: ['public'],
-        broadcast: ['public'],
       },
       channelClassification: {
         privatePrefixes: [],

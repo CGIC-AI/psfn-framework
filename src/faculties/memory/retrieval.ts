@@ -20,16 +20,17 @@ import type { SubstrateConfig } from '../../system/config/runtime-config-contrac
 import type { EventBus } from '../../shared/event-bus.js';
 import {
   type TrustLevel,
-  type ChannelVisibility,
   isHighTierTrustLevel,
 } from '../../system/trust/types.js';
+import type { ChannelPrivacy } from '../../system/trust/context-envelope.js';
 import type { ContextBudgetConfigLike } from '../../shared/context-budget.js';
 import {
   resolveMemoryRetrievalBudget,
   type ContextBudgetTurnCharacteristics,
 } from '../../shared/context-budget.js';
 import {
-  classifyChannel,
+  classifyChannelDisclosure,
+  type ChannelDisclosureContext,
   type ChannelMeta,
 } from '../../system/trust/policy.js';
 import { resolveBroadcastVisibilityScope } from '../../system/trust/broadcast-safety.js';
@@ -628,7 +629,8 @@ export class MemoryRetriever implements MemoryProvider {
     profile: ContactProfileArtifact | undefined,
     options: {
       trustLevel: TrustLevel;
-      channelVisibility: ChannelVisibility;
+      channelPrivacy: ChannelPrivacy;
+      broadcast: boolean;
       channelMeta?: ChannelMeta;
       canonicalContactId?: string;
       operatorApproval?: boolean;
@@ -689,7 +691,8 @@ export class MemoryRetriever implements MemoryProvider {
     const budget = this.resolveRetrievalBudget(effectiveBudgetTurn);
     const limit = budget.estimatedCount;
     const effectiveTrust = trustLevel ?? 'regular';
-    const channelVisibility = classifyChannel(channelId, channelMeta);
+    const channelDisclosure = classifyChannelDisclosure(channelId, channelMeta);
+    const { channelPrivacy, broadcast } = channelDisclosure;
     const visibilityScope = resolveBroadcastVisibilityScope(channelId, channelMeta) ?? 'non_broadcast';
     const operatorApproval = visibilityScope === 'approved_private_context';
     const roomVisibility = await this.resolveRoomVisibilityContext(channelId, channelMeta, canonicalContactId, undefined);
@@ -698,7 +701,8 @@ export class MemoryRetriever implements MemoryProvider {
       : undefined;
     const profileAccess = await this.resolveContactProfileAccess(rawProfile, {
       trustLevel: effectiveTrust,
-      channelVisibility,
+      channelPrivacy,
+      broadcast,
       channelMeta,
       canonicalContactId,
       operatorApproval,
@@ -780,7 +784,7 @@ export class MemoryRetriever implements MemoryProvider {
         contextText,
         channelId,
         trustLevel: effectiveTrust,
-        channelVisibility,
+        channelDisclosure,
         canonicalContactId,
         scopeQuery: normalizedScopeQuery,
       }));
@@ -792,7 +796,8 @@ export class MemoryRetriever implements MemoryProvider {
       [...retrievalCandidates, ...contactEmotionalMemories, ...proactiveCandidates],
       {
         trustLevel: effectiveTrust,
-        channelVisibility,
+        channelPrivacy,
+        broadcast,
         channelMeta,
         canonicalContactId,
         operatorApproval,
@@ -828,7 +833,7 @@ export class MemoryRetriever implements MemoryProvider {
       versionPointer: buildSnapshotVersionPointer([
         channelId,
         effectiveTrust,
-        channelVisibility,
+        channelPrivacy,
         visibilityScope,
         operatorApproval ? 'approved' : 'default',
         profile?.updatedAt,
@@ -1067,7 +1072,8 @@ export class MemoryRetriever implements MemoryProvider {
     const budget = this.resolveRetrievalBudget(effectiveBudgetTurn);
     const limit = budget.estimatedCount;
     const effectiveTrust = trustLevel ?? 'regular';
-    const channelVisibility = classifyChannel(channelId, channelMeta);
+    const channelDisclosure = classifyChannelDisclosure(channelId, channelMeta);
+    const { channelPrivacy, broadcast } = channelDisclosure;
     const visibilityScope = resolveBroadcastVisibilityScope(channelId, channelMeta) ?? 'non_broadcast';
     const operatorApproval = visibilityScope === 'approved_private_context';
     const roomVisibility = await this.resolveRoomVisibilityContext(
@@ -1077,7 +1083,7 @@ export class MemoryRetriever implements MemoryProvider {
       conversationScope,
     );
     const socialContext = canonicalContactId
-      ? await this.resolveRetrievalSocialContext(canonicalContactId, effectiveTrust, channelVisibility)
+      ? await this.resolveRetrievalSocialContext(canonicalContactId, effectiveTrust, channelPrivacy)
       : undefined;
     const telemetry: RetrievalTelemetry = {
       channelId,
@@ -1085,7 +1091,7 @@ export class MemoryRetriever implements MemoryProvider {
       reason: 'ok',
       retrievalSource: 'embedding',
       trustLevel: effectiveTrust,
-      channelVisibility,
+      channelVisibility: channelPrivacy,
       candidateCount: 0,
       semanticCandidateCount: 0,
       lexicalCandidateCount: 0,
@@ -1110,7 +1116,8 @@ export class MemoryRetriever implements MemoryProvider {
         : undefined;
     const profileAccess = await this.resolveContactProfileAccess(rawProfile, {
       trustLevel: effectiveTrust,
-      channelVisibility,
+      channelPrivacy,
+      broadcast,
       channelMeta,
       canonicalContactId,
       operatorApproval,
@@ -1140,7 +1147,7 @@ export class MemoryRetriever implements MemoryProvider {
           contextText,
         channelId,
         trustLevel: effectiveTrust,
-        channelVisibility,
+        channelDisclosure,
           canonicalContactId,
           scopeQuery: normalizedScopeQuery,
         });
@@ -1161,7 +1168,7 @@ export class MemoryRetriever implements MemoryProvider {
       ? await this.collectEmotionalContinuityMemories(
         canonicalContactId,
         effectiveTrust,
-        channelVisibility,
+        channelDisclosure,
         emptySelectedIds,
         operatorApproval,
         channelMeta,
@@ -1179,7 +1186,8 @@ export class MemoryRetriever implements MemoryProvider {
             contactEmotionalSource,
             {
             trustLevel: effectiveTrust,
-            channelVisibility,
+            channelPrivacy,
+            broadcast,
             channelMeta,
             canonicalContactId,
             operatorApproval,
@@ -1268,7 +1276,8 @@ export class MemoryRetriever implements MemoryProvider {
                   [...contactEmotionalSource, ...proactiveSource],
                   {
                     trustLevel: effectiveTrust,
-                    channelVisibility,
+                    channelPrivacy,
+                    broadcast,
                     channelMeta,
                     canonicalContactId,
                     operatorApproval,
@@ -1329,7 +1338,8 @@ export class MemoryRetriever implements MemoryProvider {
             [...memories, ...contactEmotionalSource, ...proactiveSource],
             {
               trustLevel: effectiveTrust,
-              channelVisibility,
+              channelPrivacy,
+              broadcast,
               channelMeta,
               canonicalContactId,
               operatorApproval,
@@ -1369,7 +1379,8 @@ export class MemoryRetriever implements MemoryProvider {
         }
         const accessDecision = evaluateRetrievalAccessDecision(memory, {
           trustLevel: effectiveTrust,
-          channelVisibility,
+          channelPrivacy,
+          broadcast,
           channelMeta,
           canonicalContactId,
           operatorApproval,
@@ -1430,7 +1441,7 @@ export class MemoryRetriever implements MemoryProvider {
         log.info('Retrieval: all candidates filtered by trust policy', {
           channelId,
           trustLevel: effectiveTrust,
-          channelVisibility,
+          channelPrivacy,
           candidateCount: diagnostics.candidateCount,
           rejectedByRoomVisibility: diagnostics.rejectedByRoomVisibility,
             rejectedByContactScope: diagnostics.rejectedByContactScope,
@@ -1604,7 +1615,7 @@ export class MemoryRetriever implements MemoryProvider {
       log.info('Retrieval trace', {
         channelId,
         trustLevel: effectiveTrust,
-        channelVisibility,
+        channelPrivacy,
         retrievalSource: telemetry.retrievalSource,
         semanticCandidates: telemetry.semanticCandidateCount,
         lexicalCandidates: telemetry.lexicalCandidateCount,
@@ -1638,7 +1649,7 @@ export class MemoryRetriever implements MemoryProvider {
       });
       log.debug('Retrieval decision rationale', {
         trustLevel: effectiveTrust,
-        channelVisibility,
+        channelPrivacy,
         ...diagnostics,
       });
       const selectedIds = new Set(selected.map(item => item.memory.id));
@@ -1646,7 +1657,7 @@ export class MemoryRetriever implements MemoryProvider {
         ? await this.collectEmotionalContinuityMemories(
           canonicalContactId,
           effectiveTrust,
-          channelVisibility,
+          channelDisclosure,
           selectedIds,
           operatorApproval,
           channelMeta,
@@ -1666,7 +1677,8 @@ export class MemoryRetriever implements MemoryProvider {
       const selectedForPrompt = await this.attachEvolutionChains(selected, {
         contextText,
         trustLevel: effectiveTrust,
-        channelVisibility,
+        channelPrivacy,
+        broadcast,
         channelMeta,
         canonicalContactId,
         operatorApproval,
@@ -1754,7 +1766,8 @@ export class MemoryRetriever implements MemoryProvider {
     }
 
     const effectiveTrust = trustLevel ?? 'regular';
-    const channelVisibility = classifyChannel(channelId, channelMeta);
+    const channelDisclosure = classifyChannelDisclosure(channelId, channelMeta);
+    const { channelPrivacy, broadcast } = channelDisclosure;
     const visibilityScope = resolveBroadcastVisibilityScope(channelId, channelMeta) ?? 'non_broadcast';
     const operatorApproval = visibilityScope === 'approved_private_context';
       const roomVisibility = await this.resolveRoomVisibilityContext(channelId, channelMeta, canonicalContactId, undefined);
@@ -1767,7 +1780,8 @@ export class MemoryRetriever implements MemoryProvider {
     const weighted = candidates
       .filter((memory) => evaluateRetrievalAccessDecision(memory, {
         trustLevel: effectiveTrust,
-        channelVisibility,
+        channelPrivacy,
+        broadcast,
         channelMeta,
         canonicalContactId,
         operatorApproval,
@@ -1817,7 +1831,7 @@ export class MemoryRetriever implements MemoryProvider {
     contextText: string;
     channelId: string;
     trustLevel: TrustLevel;
-    channelVisibility: ChannelVisibility;
+    channelDisclosure: ChannelDisclosureContext;
     canonicalContactId?: string;
     scopeQuery?: MemoryScopeQuery;
   }): Promise<EpisodicRetrievalChain[]> {
@@ -1917,7 +1931,7 @@ export class MemoryRetriever implements MemoryProvider {
   private async resolveRetrievalSocialContext(
     canonicalContactId: string,
     trustLevel: TrustLevel,
-    channelVisibility: ChannelVisibility,
+    channelPrivacy: ChannelPrivacy,
   ): Promise<RetrievalSocialContext | undefined> {
     if (!this.contactStore) return undefined;
 
@@ -1936,7 +1950,7 @@ export class MemoryRetriever implements MemoryProvider {
     const edges = await this.contactStore.listSocialRelationshipEdges({
       contactId: canonicalContactId,
       viewerTrustLevel: trustLevel,
-      viewerChannelVisibility: channelVisibility,
+      viewerChannelPrivacy: channelPrivacy,
     });
     const relatedContactsById = new Map<string, RetrievalContactContext>();
     for (const edge of edges) {
@@ -2023,9 +2037,9 @@ export class MemoryRetriever implements MemoryProvider {
   private shouldExpandEvolutionChains(input: {
     contextText: string;
     trustLevel: TrustLevel;
-    channelVisibility: ChannelVisibility;
+    channelPrivacy: ChannelPrivacy;
   }): boolean {
-    return input.channelVisibility === 'private'
+    return input.channelPrivacy === 'private'
       && isHighTierTrustLevel(input.trustLevel)
       && EVOLUTION_CHAIN_USEFUL_HINT.test(input.contextText);
   }
@@ -2035,7 +2049,8 @@ export class MemoryRetriever implements MemoryProvider {
     options: {
       contextText: string;
       trustLevel: TrustLevel;
-      channelVisibility: ChannelVisibility;
+      channelPrivacy: ChannelPrivacy;
+      broadcast: boolean;
       channelMeta?: ChannelMeta;
       canonicalContactId?: string;
       operatorApproval: boolean;
@@ -2060,7 +2075,8 @@ export class MemoryRetriever implements MemoryProvider {
           if (this.isMemoryQuarantined(target)) continue;
           const accessDecision = evaluateRetrievalAccessDecision(target, {
           trustLevel: options.trustLevel,
-          channelVisibility: options.channelVisibility,
+          channelPrivacy: options.channelPrivacy,
+          broadcast: options.broadcast,
           channelMeta: options.channelMeta,
           canonicalContactId: options.canonicalContactId,
           operatorApproval: options.operatorApproval,
@@ -2133,7 +2149,7 @@ export class MemoryRetriever implements MemoryProvider {
   private async collectEmotionalContinuityMemories(
     canonicalContactId: string,
     trustLevel: TrustLevel,
-    channelVisibility: ChannelVisibility,
+    channelDisclosure: ChannelDisclosureContext,
     selectedIds: ReadonlySet<string>,
     operatorApproval = false,
     channelMeta?: ChannelMeta,
@@ -2151,7 +2167,8 @@ export class MemoryRetriever implements MemoryProvider {
       .filter(memory => !selectedIds.has(memory.id))
       .filter((memory) => evaluateRetrievalAccessDecision(memory, {
         trustLevel,
-        channelVisibility,
+        channelPrivacy: channelDisclosure.channelPrivacy,
+        broadcast: channelDisclosure.broadcast,
         channelMeta,
         canonicalContactId,
         operatorApproval,

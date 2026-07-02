@@ -11,7 +11,8 @@ import type {
   ObservabilityCallType,
   TurnID,
 } from '../../../shared/contracts/runtime.js';
-import type { ChannelVisibility, SensitivityLevel, TrustLevel } from '../../../system/trust/types.js';
+import type { SensitivityLevel, TrustLevel } from '../../../system/trust/types.js';
+import type { ChannelPrivacy } from '../../../system/trust/context-envelope.js';
 
 export type ObserverEvalReadonly<T> =
   T extends (...args: readonly unknown[]) => unknown
@@ -37,7 +38,7 @@ export interface ObserverEvalTurnIdentity {
 export interface ObserverEvalSourceMetadata {
   routingSource: ObserverEvalRoutingSource;
   isDirectMessage: boolean;
-  channelPrivacy?: ChannelVisibility;
+  channelPrivacy?: ChannelPrivacy;
 }
 
 export interface ObserverEvalEmotionSnapshot {

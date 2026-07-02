@@ -11,7 +11,8 @@ import {
   type TemporalTurnWindow,
 } from '../../shared/context-budget.js';
 import { formatActiveDate } from '../../shared/time/active-timezone.js';
-import type { ChannelVisibility, TrustLevel } from '../../system/trust/types.js';
+import type { TrustLevel } from '../../system/trust/types.js';
+import type { ChannelPrivacy } from '../../system/trust/context-envelope.js';
 import { decodeStoredChannelVisibility } from '../../system/trust/types.js';
 import type { ChannelMeta } from '../../system/trust/policy.js';
 import { COMPACTION_REFUSAL_PATTERNS, matchesRefusalPatterns } from '../../system/security/refusal-patterns.js';
@@ -135,7 +136,8 @@ export interface MirrorEntryMetadata {
   sourceChannelId: string;
   sourceRole: 'user' | 'assistant';
   sourceAuthorName?: string;
-  sourceVisibility: ChannelVisibility;
+  /** Stored-value decode domain: ChannelPrivacy (legacy 'broadcast' -> 'public'). */
+  sourceVisibility: ChannelPrivacy;
   trustLevel: TrustLevel;
   mirroredAt: number;
   truncated: boolean;
@@ -964,14 +966,17 @@ export function appendCompactionMetadataBlocks(summary: string, blocks: string[]
   return `${trimmedSummary}\n\n${normalizedBlocks.join('\n\n')}`;
 }
 
-export function parseChannelVisibility(value?: string): ChannelVisibility | undefined {
+export function parseChannelVisibility(value?: string): ChannelPrivacy | undefined {
   // Parses persisted visibility labels; the shared decoder maps records
-  // written before the E3.1 vocabulary rename ('semi_private') to 'invite_only'.
+  // written before the E3.1 rename / E3.3 broadcast split onto ChannelPrivacy
+  // ('semi_private' -> 'invite_only', 'broadcast' -> 'public').
   return decodeStoredChannelVisibility(value);
 }
 
-export function isUntrustedVisibility(visibility: ChannelVisibility): boolean {
-  return visibility === 'public' || visibility === 'broadcast';
+export function isUntrustedVisibility(privacy: ChannelPrivacy): boolean {
+  // Public structural access is untrusted context; broadcast surfaces are
+  // always 'public', so the retired broadcast check is subsumed.
+  return privacy === 'public';
 }
 
 export function wrapUntrustedContext(content: string, source: 'public' = 'public'): string {

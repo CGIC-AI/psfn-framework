@@ -371,7 +371,7 @@ describe('Wyoming handle service adapter', () => {
             embodiment_id: 'speaker',
             satellite_id: 'office',
             companion_id: TEST_COMPANION_ID,
-            channelPrivacy: 'semi_private',
+            channelPrivacy: 'invite_only',
           },
           presence_handoff: true,
           handoff_from_embodiment_id: 'display',
@@ -382,19 +382,19 @@ describe('Wyoming handle service adapter', () => {
     expect(handleMessage).toHaveBeenLastCalledWith(expect.objectContaining<Partial<SubstrateMessage>>({
       routing: {
         source: 'wyoming',
-        channelPrivacy: 'semi_private',
+        channelPrivacy: 'invite_only',
         presence: expect.objectContaining({
           kind: 'embodiment',
           embodimentId: 'speaker',
           satelliteId: 'office',
-          channelPrivacy: 'semi_private',
+          channelPrivacy: 'invite_only',
         }),
         wyoming: expect.objectContaining({
           presence: expect.objectContaining({
             kind: 'embodiment',
             embodimentId: 'speaker',
             satelliteId: 'office',
-            channelPrivacy: 'semi_private',
+            channelPrivacy: 'invite_only',
             isPrimary: true,
           }),
         }),

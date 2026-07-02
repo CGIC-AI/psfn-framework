@@ -21,7 +21,8 @@ import type {
   SocialGraphEntityRow,
   SocialRelationshipEdgeRow,
 } from './domain-types.js';
-import type { ChannelVisibility, SensitivityLevel, TrustLevel } from '../../../system/trust/types.js';
+import type { SensitivityLevel, TrustLevel } from '../../../system/trust/types.js';
+import type { ChannelPrivacy } from '../../../system/trust/context-envelope.js';
 import { SENSITIVITY_LEVELS, sensitivityOrd } from '../../../system/trust/types.js';
 import { getAllowedSensitivities } from '../../../system/trust/policy.js';
 
@@ -67,7 +68,7 @@ function normalizeViewerTrustLevel(value: TrustLevel | undefined): TrustLevel {
   return value ?? 'public';
 }
 
-function normalizeViewerVisibility(value: ChannelVisibility | undefined): ChannelVisibility {
+function normalizeViewerVisibility(value: ChannelPrivacy | undefined): ChannelPrivacy {
   return value ?? 'public';
 }
 
@@ -160,7 +161,7 @@ function edgeVisible(
 ): boolean {
   const allowed = getAllowedSensitivities(
     normalizeViewerTrustLevel(query.viewerTrustLevel),
-    normalizeViewerVisibility(query.viewerChannelVisibility),
+    { channelPrivacy: normalizeViewerVisibility(query.viewerChannelPrivacy), broadcast: false },
   );
   return allowed.includes(edgeSensitivity)
     && allowed.includes(sourceSensitivity)
@@ -328,7 +329,7 @@ export function listSocialGraphEntities(
   const limit = Number.isFinite(query.limit) ? Math.max(1, Math.min(Math.floor(query.limit!), 100)) : 100;
   const allowed = new Set(getAllowedSensitivities(
     normalizeViewerTrustLevel(query.viewerTrustLevel),
-    normalizeViewerVisibility(query.viewerChannelVisibility),
+    { channelPrivacy: normalizeViewerVisibility(query.viewerChannelPrivacy), broadcast: false },
   ));
 
   const rows = query.contactId
@@ -416,7 +417,7 @@ export function upsertSocialRelationshipEdge(
       entityId: normalizedEndpoints.sourceEntityId,
       relationshipType,
       viewerTrustLevel: 'primary',
-      viewerChannelVisibility: 'private',
+      viewerChannelPrivacy: 'private',
     }).find(edge => edge.id === existing.id)!;
   }
 
@@ -454,7 +455,7 @@ export function upsertSocialRelationshipEdge(
     entityId: normalizedEndpoints.sourceEntityId,
     relationshipType,
     viewerTrustLevel: 'primary',
-    viewerChannelVisibility: 'private',
+    viewerChannelPrivacy: 'private',
   }).find(edge => edge.id === id)!;
 }
 

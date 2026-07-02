@@ -28,11 +28,14 @@ import { toErrorMessage } from '../../shared/utils/errors.js';
 import { normalizeToolArguments } from '../../shared/tool-argument-normalization.js';
 import { getRequestContext } from '../../primitives/llm/request-context.js';
 import {
-  CHANNEL_VISIBILITIES,
   TRUST_LEVELS,
-  type ChannelVisibility,
   type TrustLevel,
 } from '../../system/trust/types.js';
+import {
+  CHANNEL_PRIVACY_VALUES,
+  type ChannelPrivacy,
+} from '../../system/trust/context-envelope.js';
+import { classifyChannelDisclosure } from '../../system/trust/policy.js';
 import {
   retrieveEpisodicTimeline,
   type EpisodicTimelineEntry,
@@ -331,8 +334,8 @@ interface MemoryToolParams {
   channelId?: string;
   trust_level?: TrustLevel;
   trustLevel?: TrustLevel;
-  channel_visibility?: ChannelVisibility;
-  channelVisibility?: ChannelVisibility;
+  channel_visibility?: ChannelPrivacy;
+  channelVisibility?: ChannelPrivacy;
   canonical_contact_id?: string;
   canonicalContactId?: string;
   formation_vad?: MemoryFormationVAD;
@@ -349,7 +352,9 @@ type TimelineVisibilityResult =
     ok: true;
     channelId: string;
     trustLevel: TrustLevel;
-    channelVisibility: ChannelVisibility;
+    channelVisibility: ChannelPrivacy;
+    /** Broadcast flag from channel classification (viewer context carries privacy only). */
+    broadcast: boolean;
     canonicalContactId?: string;
   }
   | { ok: false; error: string };
@@ -372,7 +377,8 @@ interface MemoryVisibilityFilter {
 
 interface MemoryAccessOptions {
   trustLevel: TrustLevel;
-  channelVisibility: ChannelVisibility;
+  channelPrivacy: ChannelPrivacy;
+  broadcast: boolean;
   canonicalContactId?: string;
 }
 
@@ -448,7 +454,7 @@ function resolveMemoryVisibility(
     action,
   );
   const visibilityResult = normalizeTimelineChannelVisibility(
-    params.channel_visibility ?? params.channelVisibility ?? requestContext?.viewerChannelVisibility,
+    params.channel_visibility ?? params.channelVisibility ?? requestContext?.viewerChannelPrivacy,
     action,
   );
   const canonicalContactId = normalizeOptionalToolString(params.canonical_contact_id)
@@ -469,6 +475,7 @@ function resolveMemoryVisibility(
     channelId,
     trustLevel: trustLevelResult.value,
     channelVisibility: visibilityResult.value,
+    broadcast: classifyChannelDisclosure(channelId).broadcast,
     ...(canonicalContactId ? { canonicalContactId } : {}),
   };
 }
@@ -499,7 +506,7 @@ function normalizeTimelineTrustLevel(
 function normalizeTimelineChannelVisibility(
   value: unknown,
   action: MemoryVisibilityAction,
-): { ok: true; value: ChannelVisibility } | { ok: false; error: string } {
+): { ok: true; value: ChannelPrivacy } | { ok: false; error: string } {
   const normalized = normalizeOptionalToolString(value);
   if (!normalized) {
     return {
@@ -507,12 +514,12 @@ function normalizeTimelineChannelVisibility(
       error: `Error: channel_visibility is required for action=${action} when no request context visibility is available`,
     };
   }
-  if ((CHANNEL_VISIBILITIES as readonly string[]).includes(normalized)) {
-    return { ok: true, value: normalized as ChannelVisibility };
+  if ((CHANNEL_PRIVACY_VALUES as readonly string[]).includes(normalized)) {
+    return { ok: true, value: normalized as ChannelPrivacy };
   }
   return {
     ok: false,
-    error: `Error: invalid channel_visibility "${normalized}" for action=${action}. Must be one of: ${CHANNEL_VISIBILITIES.join(', ')}`,
+    error: `Error: invalid channel_visibility "${normalized}" for action=${action}. Must be one of: ${CHANNEL_PRIVACY_VALUES.join(', ')}`,
   };
 }
 
@@ -1349,9 +1356,9 @@ export function createMemoryTool(
         }),
       ),
       channel_visibility: Type.Optional(
-        Type.Unsafe<ChannelVisibility>({
+        Type.Unsafe<ChannelPrivacy>({
           type: 'string',
-          enum: [...CHANNEL_VISIBILITIES],
+          enum: [...CHANNEL_PRIVACY_VALUES],
           description: 'For action=census, action=exists, or action=timeline, current channel visibility. Usually supplied by runtime context.',
         }),
       ),
@@ -1510,7 +1517,8 @@ export function createMemoryTool(
             const memories = await listFilteredMemories(memoryStore, filter);
             const partition = partitionVisibleMemories(memories, {
               trustLevel: visibility.trustLevel,
-              channelVisibility: visibility.channelVisibility,
+              channelPrivacy: visibility.channelVisibility,
+              broadcast: visibility.broadcast,
               ...(visibility.canonicalContactId ? { canonicalContactId: visibility.canonicalContactId } : {}),
             });
             return textResult(formatMemoryCensusResult(partition));
@@ -1538,7 +1546,8 @@ export function createMemoryTool(
             const matchingMemories = filterTopicMatches(memories, query);
             const partition = partitionVisibleMemories(matchingMemories, {
               trustLevel: visibility.trustLevel,
-              channelVisibility: visibility.channelVisibility,
+              channelPrivacy: visibility.channelVisibility,
+              broadcast: visibility.broadcast,
               ...(visibility.canonicalContactId ? { canonicalContactId: visibility.canonicalContactId } : {}),
             });
             return textResult(formatMemoryExistsResult(partition));
@@ -1566,7 +1575,10 @@ export function createMemoryTool(
               ...(range.to ? { to: range.to } : {}),
               channelId: visibility.channelId,
               trustLevel: visibility.trustLevel,
-              channelVisibility: visibility.channelVisibility,
+              channelDisclosure: {
+                channelPrivacy: visibility.channelVisibility,
+                broadcast: visibility.broadcast,
+              },
               ...(visibility.canonicalContactId ? { canonicalContactId: visibility.canonicalContactId } : {}),
               limit,
             });

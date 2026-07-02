@@ -85,7 +85,7 @@ function resolvePolicyChannelType(input: {
   if (input.message.channelId.includes('companion')) {
     return 'companion_room';
   }
-  if (input.channelMeta.privacyLevel === 'public' || input.channelMeta.privacyLevel === 'broadcast') {
+  if (input.channelMeta.privacyLevel === 'public') {
     return 'public_group';
   }
   if (input.channelType === 'discord' || input.channelType === 'telegram') {

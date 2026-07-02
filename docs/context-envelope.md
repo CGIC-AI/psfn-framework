@@ -1,13 +1,16 @@
 # Context Envelope Contract (E3.1)
 
-Status: **contract ratified; classification re-keyed (E3.2)** — this document is the
-operator-review surface for the Context Envelope. E3.1 landed the types, owner-file
-schemas, and the `semi_private → invite_only` vocabulary rename. **E3.2 executed the
-classification re-keying**: `classifyChannel` now consumes channels.json
-`contextEnvelope` labels as the top-precedence source, the broadcast split is executed
-at classification inputs, per-contact privacy fields are demoted to provenance
-evidence, and the one-time `migrate:channel-envelope` command seeds channel records.
-E3.3 attaches the envelope to `ConversationScope` and re-keys the policy gates.
+Status: **executed (E3.1–E3.4)** — this document is the operator-review surface for
+the Context Envelope. E3.1 landed the types, owner-file schemas, and the
+`semi_private → invite_only` rename. E3.2 executed the classification re-keying over
+channels.json labels. E3.4 implemented contact-tracking approval mode. **E3.3 executed
+the envelope semantics**: the full envelope is derived once per turn at
+session-manager ingress and attached as `ConversationScope.envelope`, every policy
+gate consumes the `{channelPrivacy, broadcast}` pair, the transitional
+`ChannelVisibility` type and the `broadcast` visibility value are deleted (the
+stored-data read decoder is the only surviving consumer of the retired vocabulary),
+and response style is decoupled from privacy via channel-owned `deliveryStyle`
+labels.
 
 Canonical code: `src/system/trust/context-envelope.ts`.
 
@@ -131,6 +134,7 @@ channels are byte-identical to pre-gate behavior.
         "privacy": "invite_only",      // ChannelPrivacy — retired vocabulary rejected
         "broadcast": false,             // optional boolean
         "contactTracking": "auto",     // auto | approval | role_gated
+        "deliveryStyle": "concise",    // optional (E3.3): concise | expressive
         "needsReview": false            // optional; migration-seeded review flag (E3.2)
       }
     }
@@ -142,6 +146,9 @@ channels are byte-identical to pre-gate behavior.
 - Every present label must define at least one field; unknown keys fail closed.
 - `broadcast: true` with a non-`public` `privacy` is rejected (a broadcast surface is
   always `public`); a label carrying only `broadcast: true` implies `public`.
+- `deliveryStyle` (E3.3) pins the channel's delivery/length style. Absent means the
+  derived default applies (private → expressive, else concise — applied once at
+  classification). Delivery only; persona/tone prose remains forbidden (charter rule).
 - `needsReview` (E3.2) marks a migration-seeded fail-closed label awaiting operator
   confirmation. It renders as a Garden warning badge and never changes gating.
 - Validated at load (`loadRuntimeChannelsConfig` → `parseContextEnvelopeSection`) AND
@@ -158,21 +165,26 @@ channels are byte-identical to pre-gate behavior.
   "visibilityAllowed": {
     "private":     ["public", "personal", "intimate", "confidential"],
     "invite_only": ["public", "personal"],      // was "semi_private"
-    "public":      ["public"],
-    "broadcast":   ["public"]                    // transitional; folds into public+flag in E3.3
+    "public":      ["public"]                    // broadcast row retired (E3.3)
   },
   "audienceScopeThresholds": { "fewMax": 10, "manyMax": 100 },  // optional; defaults shown
-  "channelClassification": { ... }               // overrides now use invite_only
+  "channelClassification": {
+    // overrides accept a ChannelPrivacy string (broadcast: false) or the
+    // explicit pair object { "privacy": "public", "broadcast": true }
+    ...
+  }
 }
 ```
 
-- Existing owner files that still say `semi_private` are migrated **once at load**
-  (`migrateLegacyTrustPolicyVocabulary`) and persisted; a file defining both spellings
-  fails closed. `saveTrustPolicyConfig` (Garden writes) rejects the retired vocabulary
-  outright.
-- **E3.3 target shape (documented, not executed):** `visibilityAllowed` becomes keyed by
-  the three `ChannelPrivacy` values; the broadcast row disappears because broadcast is a
-  flag whose disclosure ceiling is the `public` row (plus the approval-token gate).
+- **E3.3 executed:** `visibilityAllowed` is keyed by the three `ChannelPrivacy` values;
+  the broadcast row is gone because broadcast is a flag whose disclosure ceiling IS the
+  `public` row (plus the approval-token gate in `broadcast-safety.ts`).
+- Legacy owner files migrate **once at load** (`migrateLegacyTrustPolicyVocabulary`):
+  `semi_private` keys/values rename to `invite_only`; a `visibilityAllowed.broadcast`
+  row identical to the `public` row is dropped (a differing row fails closed —
+  dropping it would silently change gating); override values of `"broadcast"` become
+  `{ "privacy": "public", "broadcast": true }`. `saveTrustPolicyConfig` (Garden
+  writes) rejects the retired vocabulary outright.
 
 ## Precedence
 
@@ -194,8 +206,8 @@ The prefix lists are no longer operator-tier authority: E3.2 demoted them to
 derived-default inputs and made them SEED data for channel records — the one-time
 `npm run migrate:channel-envelope` command derives channel-owned labels from them
 (plus persisted evidence) so labeled channels never consult heuristics again. The
-transitional `classifyChannel` (4-value `ChannelVisibility`, deleted in E3.3) is a
-pure projection: `broadcast ? 'broadcast' : privacy`.
+transitional `classifyChannel` projection is **deleted (E3.3)**: the pair from
+`classifyChannelEnvelope` / `classifyChannelDisclosure` is the classification.
 
 **Per-contact privacy fields are demoted (E3.2)**: `ContactChannelLink.privacyLevel`
 and `ContactConversationChannel.privacyLevel` are provenance evidence only. The
@@ -222,15 +234,19 @@ and left in trust-policy.json, not duplicated.
 | `private` | `{ channelPrivacy: 'private', broadcast: false }` | name unchanged |
 | `semi_private` | `{ channelPrivacy: 'invite_only', broadcast: false }` | **executed in E3.1** (pure rename, no alias) |
 | `public` | `{ channelPrivacy: 'public', broadcast: false }` | name unchanged |
-| `broadcast` | `{ channelPrivacy: 'public', broadcast: true }` | **executed in E3.2 at classification inputs** (labels, overrides, meta, prefix seeds); the `ChannelVisibility` value itself is deleted in E3.3 |
+| `broadcast` | `{ channelPrivacy: 'public', broadcast: true }` | **executed** (E3.2 classification inputs; E3.3 deleted the `ChannelVisibility` value and re-keyed the gates) |
 
 Code artifact: `CHANNEL_VISIBILITY_ENVELOPE_MIGRATION` in `context-envelope.ts`.
 
-Stored-data rule: persisted records written before the rename (session provenance, mirror
-metadata, transcript projections, contact rows, legacy journals) decode
-`semi_private → invite_only` through one shared decoder
-(`decodeStoredChannelVisibility`). This is a read-boundary decode for old data only —
-config, API, and model-facing surfaces reject `semi_private` outright.
+Stored-data rule: persisted records written before the rename/split (session
+provenance, mirror metadata, transcript projections, contact rows, legacy journals)
+decode through one shared read-boundary decoder (`decodeStoredChannelVisibility`):
+`semi_private → invite_only` and `broadcast → public` (lossless for every stored-data
+gate, because a broadcast surface's allowed-sensitivity row IS the public row). New
+writes stamp `ChannelPrivacy` values only; config, API, and model-facing surfaces
+reject the retired vocabulary outright. The one-time `migrate:channel-envelope`
+planner keeps its own ingestion decoder that PRESERVES retired `broadcast` stamps so
+seeded labels carry the broadcast flag through the split.
 
 ## Continuity direction
 
@@ -253,20 +269,36 @@ it inherits the `public` row).
 The substrate may carry **length/delivery** knobs — "don't yap"-class guidance such as
 the concise/expressive response style — but **never persona or tone prose**. "Be
 helpful" is forbidden substrate content: if the companion is an asshole, the substrate
-must not sand that off. Response style must be **decoupled from privacy**: today
-`resolveChannelResponseStyle` derives a default style from visibility; the contract
-declares that coupling retired, and E3.3 moves style resolution to channel/operator
-configuration with no privacy input. All envelope gating remains deterministic and
-pre-prompt; the envelope itself never becomes prompt text.
+must not sand that off. Response style is **decoupled from privacy (executed, E3.3)**:
+`RESPONSE_STYLE_BY_VISIBILITY` is retired; style resolves as operator overrides >
+channel-owned `deliveryStyle` label > channel-type heuristics > the derived default
+applied once at classification (`deriveDefaultDeliveryStyle`: private → expressive,
+else concise — live behavior unchanged out of the box). All envelope gating remains
+deterministic and pre-prompt; the envelope itself never becomes prompt text — the
+prompt sees only bare-value macros (`runtime_channel_privacy`,
+`runtime_audience_scope`, `runtime_audience_knowledge`, `runtime_broadcast`).
 
-## ConversationScope attachment seam (E3.3)
+## ConversationScope attachment (executed, E3.3)
 
-`ConversationScope` (`src/core/session/conversation-scope.ts`) gains
-`readonly envelope: ContextEnvelope`, resolved once per turn at session-manager ingress
-alongside the scope itself (the seam interface is `ContextEnvelopeCarrier`). The scope
-already carries the derivation inputs: `kind` ('dm'/'group') for topology,
-`memberCountHint` for roster size, `recentSpeakers` for the knowledge fraction. E3.1
-adds only the documented seam; no field, no wiring.
+`ConversationScope` (`src/core/session/conversation-scope.ts`) carries
+`readonly envelope: ContextEnvelope`, resolved once per turn at session-manager
+ingress alongside the scope itself (`ContextEnvelopeCarrier`). Derivation
+(`deriveScopeContextEnvelope` + `deriveConversationScopeEnvelope`):
+
+- `{channelPrivacy, broadcast}` from `classifyChannelEnvelope`;
+- `audienceScope`: dm → `one`; group → thresholds over the interim roster bound
+  (`memberCountHint` when the adapter supplies one, else the distinct recent-speaker
+  count — the E4.1 room-roster query replaces this bound);
+- `audienceKnowledge`: fraction of the recent-speaker window resolvable to contacts
+  (turn ingress counts resolvability through the contact store). Fail closed: an
+  empty/unknown window is `anonymous` for groups; a DM is `all_known` only when its
+  partner is a genuinely resolved canonical contact.
+
+Withheld-reason mapping through the gate re-key: `visibility.channel_restricted` is
+kept for the channelPrivacy-keyed denial (identical semantics; the reason string now
+cites the `channelPrivacy` value); `visibility.broadcast_restricted` is new and cites
+the broadcast dimension (the retired broadcast-row denial). All other tags are
+unchanged.
 
 ## Explicitly LATER (out of scope for E3.x)
 
@@ -294,14 +326,18 @@ These belong to the large-audience epic; the envelope vocabulary reserves their 
   contact resolution using the config-owned thresholds (the derivation helpers are
   contract-complete in `context-envelope.ts`).
 
-**E3.3 — envelope-keyed gating**
-- Attach `envelope: ContextEnvelope` to `ConversationScope` (the documented seam).
-- Re-key `visibilityAllowed`, `getAllowedSensitivities`,
-  `getVisibilityDisclosureCeiling`, and `visibilitiesShareContinuity` from
-  `ChannelVisibility` to `{ channelPrivacy, broadcast }`, then **remove
-  `ChannelVisibility` and the transitional `broadcast` visibility value**.
-- Decouple response style from privacy (`RESPONSE_STYLE_BY_VISIBILITY` retired) per the
-  delivery-guidance rule.
+**E3.3 — envelope-keyed gating (DONE)**
+- `envelope: ContextEnvelope` attached to `ConversationScope`, derived once per turn
+  at session-manager ingress; frozen into the turn variable namespace as bare-value
+  macros.
+- `visibilityAllowed`, `getAllowedSensitivities`, `getVisibilityDisclosureCeiling`,
+  `visibilitiesShareContinuity`, `channelsShareContinuity`, and `evaluateMemoryPolicy`
+  re-keyed onto `{ channelPrivacy, broadcast }`; **`ChannelVisibility` and the
+  transitional `broadcast` visibility value are deleted** (read-boundary decoder
+  excepted).
+- Response style decoupled from privacy (`RESPONSE_STYLE_BY_VISIBILITY` retired;
+  channel-owned `deliveryStyle` labels; derived default applied once at
+  classification).
 - ~~Wire `contactTracking` modes~~ — **done in E3.4** (`auto` default, `approval`
   flow with durable pending queue + Garden approvals view; `role_gated` stays
   fail-closed at use).

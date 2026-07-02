@@ -4,7 +4,7 @@ import {
   DERIVED_DETAIL_LOSS_NOTE,
 } from '../../../shared/authenticity-provenance.js';
 import type { ChannelMeta } from '../../../system/trust/policy.js';
-import type { ChannelVisibility } from '../../../system/trust/types.js';
+import type { ChannelPrivacy } from '../../../system/trust/context-envelope.js';
 import type { UserContinuityStore } from '../continuity.js';
 import type { SessionEntry } from '../types.js';
 import {
@@ -120,7 +120,7 @@ function provenanceForEntry(
   return directUserProvenance(entry);
 }
 
-function shouldRenderGroupUserAttribution(visibility: ChannelVisibility): boolean {
+function shouldRenderGroupUserAttribution(visibility: ChannelPrivacy): boolean {
   return visibility !== 'private';
 }
 
@@ -228,7 +228,7 @@ export function getMergedContinuity(params: {
 
 export function entriesToMessages(
   entries: SessionEntry[],
-  defaultVisibility: ChannelVisibility,
+  defaultVisibility: ChannelPrivacy,
   includeTrustTags: boolean = true,
   preserveLeadingAssistant: boolean = false,
   renderGroupUserAttribution: boolean = true,

@@ -13,9 +13,9 @@ import { parseBooleanEnv } from '../../shared/utils/env.js';
 import { writeJsonAtomic } from '../../shared/utils/fs.js';
 import { isRecord } from '../../shared/utils/types.js';
 import {
-  normalizeChannelVisibility,
-  type ChannelVisibility,
-} from '../../system/trust/types.js';
+  normalizeChannelPrivacy,
+  type ChannelPrivacy,
+} from '../../system/trust/context-envelope.js';
 import {
   validateChannelEnvelopeLabel,
   type ChannelEnvelopeLabel,
@@ -65,7 +65,7 @@ export interface ExternalChannelProfileConfig {
   authorId?: string;
   authorName?: string;
   canonicalContactId?: string;
-  channelPrivacy?: ChannelVisibility;
+  channelPrivacy?: ChannelPrivacy;
 }
 
 export interface PsfnAmicaChannelConfig {
@@ -308,10 +308,13 @@ function parseExternalChannelProfile(
   const canonicalContactId = parseConfiguredString(value.canonicalContactId, `${fieldName}.canonicalContactId`);
   const channelPrivacyRaw = parseConfiguredString(value.channelPrivacy, `${fieldName}.channelPrivacy`);
   const channelPrivacy = channelPrivacyRaw
-    ? normalizeChannelVisibility(channelPrivacyRaw)
+    ? normalizeChannelPrivacy(channelPrivacyRaw)
     : undefined;
   if (channelPrivacyRaw && !channelPrivacy) {
-    throw new Error(`${fieldName}.channelPrivacy must be one of: private, invite_only, public, broadcast`);
+    throw new Error(
+      `${fieldName}.channelPrivacy must be one of: private, invite_only, public `
+      + "(broadcast is a channels.json contextEnvelope label, not a privacy value)",
+    );
   }
 
   const profile: ExternalChannelProfileConfig = {

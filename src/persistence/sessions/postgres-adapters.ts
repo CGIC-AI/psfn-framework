@@ -1,6 +1,6 @@
 import type { Pool, PoolClient } from 'pg';
-import { classifyChannel } from '../../system/trust/policy.js';
-import type { ChannelVisibility } from '../../system/trust/types.js';
+import { classifyChannelDisclosure } from '../../system/trust/policy.js';
+import type { ChannelPrivacy } from '../../system/trust/context-envelope.js';
 import { decodeStoredChannelVisibility } from '../../system/trust/types.js';
 import {
   createPostgresPool,
@@ -55,7 +55,7 @@ interface ProjectionRecord {
   authorName?: string;
   content: string;
   timestamp: number;
-  channelVisibility: ChannelVisibility;
+  channelVisibility: ChannelPrivacy;
 }
 
 export interface PostgresTranscriptProjectionOptions {
@@ -84,10 +84,10 @@ function normalizeSearchLimit(limit: number | undefined): number {
 function normalizeChannelVisibility(
   value: string | undefined,
   channelId: string,
-): ChannelVisibility {
+): ChannelPrivacy {
   // Stored rows may predate the E3.1 vocabulary rename; the shared decoder
   // maps legacy 'semi_private' to 'invite_only'.
-  return decodeStoredChannelVisibility(value) ?? classifyChannel(channelId);
+  return decodeStoredChannelVisibility(value) ?? classifyChannelDisclosure(channelId).channelPrivacy;
 }
 
 function normalizeTimestamp(value: number): number {

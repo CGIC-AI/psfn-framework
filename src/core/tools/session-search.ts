@@ -5,8 +5,8 @@ import type { AgentTool, AgentToolResult } from '@mariozechner/pi-agent-core';
 import type { LLMProviderPort } from '../agent/contracts.js';
 import type { SessionEntry, JournalEntry } from '../session/types.js';
 import { getRequestContext } from '../../primitives/llm/request-context.js';
-import type { ChannelVisibility, TrustLevel } from '../../system/trust/types.js';
-import { normalizeChannelVisibility } from '../../system/trust/types.js';
+import type { TrustLevel } from '../../system/trust/types.js';
+import { normalizeChannelPrivacy, type ChannelPrivacy } from '../../system/trust/context-envelope.js';
 import type { TranscriptSearchPort } from '../../persistence/sessions/transcript-search-port.js';
 import {
   canViewerAccessSessionHit,
@@ -34,7 +34,7 @@ export interface SessionGrepHitResult {
   messageId: number;
   role: SessionEntry['role'];
   timestamp: number;
-  channelVisibility: ChannelVisibility;
+  channelVisibility: ChannelPrivacy;
   authorName?: string;
   filePath: string;
   lineNumber: number;
@@ -101,8 +101,8 @@ function normalizeOptionalTrustLevel(value: unknown): TrustLevel | undefined {
   }
 }
 
-function normalizeOptionalChannelVisibility(value: unknown): ChannelVisibility | undefined {
-  return normalizeChannelVisibility(value);
+function normalizeOptionalChannelVisibility(value: unknown): ChannelPrivacy | undefined {
+  return normalizeChannelPrivacy(value);
 }
 
 function resolveViewerContextFromRequest(): SessionSearchViewerContext {
@@ -111,7 +111,7 @@ function resolveViewerContextFromRequest(): SessionSearchViewerContext {
     ? requestContext.channelId.trim()
     : undefined;
   const trustLevel = normalizeOptionalTrustLevel(requestContext?.viewerTrustLevel);
-  const channelVisibility = normalizeOptionalChannelVisibility(requestContext?.viewerChannelVisibility);
+  const channelVisibility = normalizeOptionalChannelVisibility(requestContext?.viewerChannelPrivacy);
   return {
     ...(channelId ? { channelId } : {}),
     ...(trustLevel ? { trustLevel } : {}),

@@ -28,8 +28,7 @@ import {
   SATELLITE_TRANSPORT_MODES,
 } from '../../shared/contracts/satellite-registry.js';
 import type { ApiAuthPrincipal } from './http/auth.js';
-import type { ChannelVisibility } from '../../system/trust/types.js';
-import { normalizeChannelVisibility } from '../../system/trust/types.js';
+import { normalizeChannelPrivacy, type ChannelPrivacy } from '../../system/trust/context-envelope.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
 import { isRecord } from '../../shared/utils/types.js';
 
@@ -70,7 +69,7 @@ export interface ResolvedSatelliteClaim {
   channelId: string;
   authorId: string;
   authorName: string;
-  channelPrivacy: ChannelVisibility;
+  channelPrivacy: ChannelPrivacy;
   canonicalContactId: string;
   satellite: SatelliteRoutingMetadata;
 }
@@ -170,9 +169,9 @@ function parseMobility(value: unknown, fieldName: string): SatelliteMobility {
   return parsed;
 }
 
-function parseChannelPrivacy(value: unknown, fieldName: string): ChannelVisibility {
+function parseChannelPrivacy(value: unknown, fieldName: string): ChannelPrivacy {
   const raw = parseConfiguredString(value, fieldName);
-  const parsed = normalizeChannelVisibility(raw);
+  const parsed = normalizeChannelPrivacy(raw);
   if (!parsed) {
     throw new Error(`${fieldName} must be one of: private, invite_only, public, broadcast`);
   }

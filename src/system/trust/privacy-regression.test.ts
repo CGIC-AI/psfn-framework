@@ -155,7 +155,7 @@ describe('privacy red-team regression suite', () => {
           exact: { ...policy.channelClassification.visibilityOverrides.exact },
           prefix: {
             ...policy.channelClassification.visibilityOverrides.prefix,
-            'public:': 'public',
+            'public:': { privacy: 'public', broadcast: false },
           },
         },
       },
@@ -175,7 +175,8 @@ describe('privacy red-team regression suite', () => {
       trustLevel: 'primary',
       expectedPolicy: {
         trustLevel: 'primary',
-        channelVisibility: 'private',
+        channelPrivacy: 'private',
+        broadcast: false,
         memorySensitivity: 'public',
         disclosureBoundary: { withhold: true },
       },
@@ -199,7 +200,8 @@ describe('privacy red-team regression suite', () => {
       trustLevel: 'primary',
       expectedPolicy: {
         trustLevel: 'primary',
-        channelVisibility: 'private',
+        channelPrivacy: 'private',
+        broadcast: false,
         memorySensitivity: 'public',
         disclosureBoundary: { consentRequired: true, consentGranted: false },
       },
@@ -224,7 +226,8 @@ describe('privacy red-team regression suite', () => {
       channelMeta: { isDirectMessage: true },
       expectedPolicy: {
         trustLevel: 'primary',
-        channelVisibility: 'private',
+        channelPrivacy: 'private',
+        broadcast: false,
         memorySensitivity: 'public',
         consentFlags: { allowRecall: false },
       },
@@ -248,7 +251,8 @@ describe('privacy red-team regression suite', () => {
       trustLevel: 'trusted',
       expectedPolicy: {
         trustLevel: 'trusted',
-        channelVisibility: 'private',
+        channelPrivacy: 'private',
+        broadcast: false,
         memorySensitivity: 'intimate',
       },
       blocked: makeMemory({
@@ -270,7 +274,8 @@ describe('privacy red-team regression suite', () => {
       trustLevel: 'primary',
       expectedPolicy: {
         trustLevel: 'primary',
-        channelVisibility: 'public',
+        channelPrivacy: 'public',
+        broadcast: false,
         memorySensitivity: 'confidential',
       },
       blocked: makeMemory({
@@ -292,7 +297,8 @@ describe('privacy red-team regression suite', () => {
       trustLevel: 'regular',
       expectedPolicy: {
         trustLevel: 'regular',
-        channelVisibility: 'public',
+        channelPrivacy: 'public',
+        broadcast: false,
         memorySensitivity: 'personal',
       },
       blocked: makeMemory({
@@ -314,7 +320,8 @@ describe('privacy red-team regression suite', () => {
       trustLevel: 'regular',
       expectedPolicy: {
         trustLevel: 'regular',
-        channelVisibility: 'invite_only',
+        channelPrivacy: 'invite_only',
+        broadcast: false,
         memorySensitivity: 'intimate',
       },
       blocked: makeMemory({
@@ -336,7 +343,8 @@ describe('privacy red-team regression suite', () => {
       trustLevel: 'primary',
       expectedPolicy: {
         trustLevel: 'primary',
-        channelVisibility: 'broadcast',
+        channelPrivacy: 'public',
+        broadcast: true,
         memorySensitivity: 'personal',
       },
       blocked: makeMemory({
@@ -358,7 +366,8 @@ describe('privacy red-team regression suite', () => {
       trustLevel: 'primary',
       expectedPolicy: {
         trustLevel: 'primary',
-        channelVisibility: 'broadcast',
+        channelPrivacy: 'public',
+        broadcast: true,
         memorySensitivity: 'confidential',
       },
       blocked: makeMemory({
@@ -381,7 +390,8 @@ describe('privacy red-team regression suite', () => {
       channelMeta: { broadcastApprovalToken: 'please-share-private' },
       expectedPolicy: {
         trustLevel: 'primary',
-        channelVisibility: 'broadcast',
+        channelPrivacy: 'public',
+        broadcast: true,
         memorySensitivity: 'personal',
       },
       blocked: makeMemory({
@@ -555,7 +565,8 @@ describe('privacy red-team regression suite', () => {
 
     const lowRiskPolicy = evaluateMemoryPolicy({
       trustLevel: 'primary',
-      channelVisibility: 'private',
+      channelPrivacy: 'private',
+      broadcast: false,
       memorySensitivity: lowRisk.sensitivity,
     });
     if (lowRiskPolicy.decision !== 'allow') {
@@ -567,7 +578,8 @@ describe('privacy red-team regression suite', () => {
 
     const highRiskPolicy = evaluateMemoryPolicy({
       trustLevel: 'primary',
-      channelVisibility: 'private',
+      channelPrivacy: 'private',
+      broadcast: false,
       memorySensitivity: highRisk.sensitivity,
       consentFlags: highRisk.consentFlags,
     });
@@ -604,7 +616,8 @@ describe('privacy red-team regression suite', () => {
 
     const policyResult = evaluateMemoryPolicy({
       trustLevel: 'primary',
-      channelVisibility: 'private',
+      channelPrivacy: 'private',
+      broadcast: false,
       memorySensitivity: 'public',
       disclosureBoundary: { consentRequired: true, consentGranted: true },
     });

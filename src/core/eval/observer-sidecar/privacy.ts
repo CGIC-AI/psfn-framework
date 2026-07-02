@@ -1,12 +1,14 @@
 import {
+  normalizeChannelPrivacy,
+  type ChannelPrivacy,
+} from '../../../system/trust/context-envelope.js';
+import {
   getVisibilityDisclosureCeiling,
 } from '../../../system/trust/policy.js';
 import {
   isHighIntimacySensitivityLevel,
-  normalizeChannelVisibility,
   SENSITIVITY_LEVELS,
   sensitivityOrd,
-  type ChannelVisibility,
   type SensitivityLevel,
 } from '../../../system/trust/types.js';
 import type {
@@ -44,7 +46,7 @@ export type ObserverEvalRedactionReason =
 export interface ObserverEvalPrivacyDecision {
   privacyClass: ObserverEvalPrivacyClass;
   sensitivity: SensitivityLevel | null;
-  channelVisibility: ChannelVisibility | null;
+  channelVisibility: ChannelPrivacy | null;
   rawContentRedacted: true;
   sensitiveIdentifiersRedacted: true;
   derivedTelemetryPermitted: boolean;
@@ -62,7 +64,7 @@ export interface ObserverEvalSanitizedTurnIdentity {
 export interface ObserverEvalSanitizedSourceMetadata {
   routingSource: ObserverEvalRoutingSource;
   isDirectMessage: boolean;
-  channelPrivacy: ChannelVisibility | null;
+  channelPrivacy: ChannelPrivacy | null;
 }
 
 export interface ObserverEvalSanitizedEmotionSnapshot {
@@ -154,7 +156,7 @@ export function classifyObserverEvalPrivacy(
 
   const sensitivity = sensitivityResult.sensitivity;
   const channelVisibility = channelVisibilityResult.channelVisibility;
-  const visibilityCeiling = getVisibilityDisclosureCeiling(channelVisibility);
+  const visibilityCeiling = getVisibilityDisclosureCeiling({ channelPrivacy: channelVisibility, broadcast: false });
 
   if (sensitivityOrd(sensitivity) > sensitivityOrd(visibilityCeiling)) {
     return privacyDecision({
@@ -334,11 +336,11 @@ function normalizeObserverEvalSensitivity(
 function resolveObserverEvalChannelVisibility(
   input: ObserverEvalInputPayload,
 ):
-  | { status: 'ok'; channelVisibility: ChannelVisibility }
+  | { status: 'ok'; channelVisibility: ChannelPrivacy }
   | { status: 'missing' | 'ambiguous' } {
   const explicitVisibility = input.source.channelPrivacy;
   if (explicitVisibility !== undefined) {
-    const normalized = normalizeChannelVisibility(explicitVisibility);
+    const normalized = normalizeChannelPrivacy(explicitVisibility);
     if (normalized) {
       return { status: 'ok', channelVisibility: normalized };
     }
@@ -374,7 +376,7 @@ function failClosedDecision(
 function privacyDecision(input: {
   privacyClass: ObserverEvalPrivacyClass;
   sensitivity: SensitivityLevel | null;
-  channelVisibility: ChannelVisibility | null;
+  channelVisibility: ChannelPrivacy | null;
   redactionReason: ObserverEvalRedactionReason;
   derivedTelemetryPermitted: boolean;
 }): ObserverEvalPrivacyDecision {

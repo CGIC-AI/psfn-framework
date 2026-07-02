@@ -6,7 +6,8 @@ import {
   getVisibilityDisclosureCeiling,
   visibilitiesShareContinuity,
 } from '../../../system/trust/policy.js';
-import type { ChannelVisibility, TrustLevel } from '../../../system/trust/types.js';
+import type { TrustLevel } from '../../../system/trust/types.js';
+import type { ChannelPrivacy } from '../../../system/trust/context-envelope.js';
 import {
   DEFAULT_SESSION_MIRROR_ACTIVE_WINDOW_MS,
   DEFAULT_SESSION_MIRROR_MAX_CHARS,
@@ -52,7 +53,7 @@ export function mirrorMessageToActiveSessions(params: {
   crossChannelContinuity: CrossChannelContinuityPort;
   continuityKey?: string;
   sourceChannelId: string;
-  sourceVisibility: ChannelVisibility;
+  sourceVisibility: ChannelPrivacy;
   sourceRole: 'user' | 'assistant';
   sourceAuthorName?: string;
   content: string;
@@ -82,7 +83,8 @@ export function mirrorMessageToActiveSessions(params: {
   });
   if (targets.length === 0) return;
 
-  const sourceSensitivity = getVisibilityDisclosureCeiling(params.sourceVisibility);
+  const sourceDisclosure = { channelPrivacy: params.sourceVisibility, broadcast: false };
+  const sourceSensitivity = getVisibilityDisclosureCeiling(sourceDisclosure);
   const roleNames = { charName: params.characterName };
   const sourceSpeaker = params.sourceRole === 'assistant'
     ? resolveRoleName('assistant', roleNames)
@@ -90,11 +92,12 @@ export function mirrorMessageToActiveSessions(params: {
 
   for (const target of targets) {
     if (!isSessionMirroringEnabledForChannel(params.config, target.channelId)) continue;
-    if (!visibilitiesShareContinuity(params.sourceVisibility, target.channelVisibility)) continue;
+    if (!visibilitiesShareContinuity(sourceDisclosure, { channelPrivacy: target.channelVisibility, broadcast: false })) continue;
 
     const policy = evaluateMemoryPolicy({
       trustLevel: params.trustLevel,
-      channelVisibility: target.channelVisibility,
+      channelPrivacy: target.channelVisibility,
+      broadcast: false,
       memorySensitivity: sourceSensitivity,
     });
     if (policy.decision !== 'allow') continue;

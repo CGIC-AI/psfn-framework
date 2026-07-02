@@ -12,7 +12,6 @@ const DEFAULT_POLICY: TrustPolicyConfig = {
     private: ['public', 'personal', 'intimate', 'confidential'],
     invite_only: ['public', 'personal'],
     public: ['public'],
-    broadcast: ['public'],
   },
   audienceScopeThresholds: DEFAULT_AUDIENCE_SCOPE_THRESHOLDS,
   channelClassification: {

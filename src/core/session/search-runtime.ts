@@ -1,8 +1,9 @@
 import type { LLMProviderPort } from '../agent/contracts.js';
 import type { SessionEntry } from './types.js';
 import type { SourceChannelSessionRoute, SessionRouteResetMode } from './session-routes.js';
-import { classifyChannel, getAllowedSensitivities } from '../../system/trust/policy.js';
-import type { ChannelVisibility, SensitivityLevel, TrustLevel } from '../../system/trust/types.js';
+import { classifyChannelDisclosure, getAllowedSensitivities } from '../../system/trust/policy.js';
+import type { SensitivityLevel, TrustLevel } from '../../system/trust/types.js';
+import type { ChannelPrivacy } from '../../system/trust/context-envelope.js';
 import { decodeStoredChannelVisibility } from '../../system/trust/types.js';
 import type { TranscriptSearchPort } from '../../persistence/sessions/transcript-search-port.js';
 import { isCogSecTombstoneSessionEntry } from '../cogsec/tombstones.js';
@@ -26,7 +27,7 @@ export interface SessionSearchViewerContext {
   channelId?: string;
   isDirectMessage?: boolean;
   trustLevel?: TrustLevel;
-  channelVisibility?: ChannelVisibility;
+  channelVisibility?: ChannelPrivacy;
 }
 
 export interface SessionSearchRouteLabel {
@@ -47,7 +48,7 @@ export interface SessionSearchHitResult {
   messageId: number;
   role: SessionEntry['role'];
   timestamp: number;
-  channelVisibility: ChannelVisibility;
+  channelVisibility: ChannelPrivacy;
   score: number;
   snippet: string;
   sessionRoute?: SessionSearchRouteLabel;
@@ -83,34 +84,34 @@ export function resolveSessionSearchViewerTrustLevel(input?: TrustLevel): TrustL
 export function resolveSessionSearchHitVisibility(
   input: string | undefined,
   channelId: string,
-): ChannelVisibility {
+): ChannelPrivacy {
   // Search hits come from persisted projections that may predate the E3.1
-  // vocabulary rename; the shared decoder maps 'semi_private' to 'invite_only'.
-  return decodeStoredChannelVisibility(input) ?? classifyChannel(channelId);
+  // rename / E3.3 broadcast split; the shared decoder maps the retired
+  // vocabulary onto ChannelPrivacy.
+  return decodeStoredChannelVisibility(input) ?? classifyChannelDisclosure(channelId).channelPrivacy;
 }
 
-function visibilityToSensitivity(visibility: ChannelVisibility): SensitivityLevel {
+function visibilityToSensitivity(visibility: ChannelPrivacy): SensitivityLevel {
   switch (visibility) {
     case 'private':
       return 'confidential';
     case 'invite_only':
       return 'personal';
     case 'public':
-    case 'broadcast':
       return 'public';
   }
 }
 
 export function resolveSessionSearchViewerVisibility(
   viewer: SessionSearchViewerContext | undefined,
-): ChannelVisibility {
+): ChannelPrivacy {
   if (viewer?.channelVisibility) {
     return viewer.channelVisibility;
   }
   if (viewer?.channelId) {
-    return classifyChannel(viewer.channelId, {
+    return classifyChannelDisclosure(viewer.channelId, {
       isDirectMessage: viewer.isDirectMessage,
-    });
+    }).channelPrivacy;
   }
   return 'public';
 }
@@ -125,7 +126,7 @@ export function canViewerAccessSessionHit(
   const trustLevel = resolveSessionSearchViewerTrustLevel(viewer?.trustLevel);
   const viewerVisibility = resolveSessionSearchViewerVisibility(viewer);
   const allowedSensitivities = new Set(
-    getAllowedSensitivities(trustLevel, viewerVisibility),
+    getAllowedSensitivities(trustLevel, { channelPrivacy: viewerVisibility, broadcast: false }),
   );
   const hitVisibility = resolveSessionSearchHitVisibility(hit.channelVisibility, hit.channelId);
   return allowedSensitivities.has(visibilityToSensitivity(hitVisibility));

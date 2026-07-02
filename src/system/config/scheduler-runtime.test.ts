@@ -30,6 +30,7 @@ const MEMORY_LANE_BLOCKS = {
     refinementWindowHours: 36,
     adjacencyGapMinutes: 45,
     maxRefinementsPerRun: 8,
+    maxConsolidationsPerRun: 6,
   },
   arcFormation: {
     passIntervalDays: 6,

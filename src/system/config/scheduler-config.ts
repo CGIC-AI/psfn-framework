@@ -97,6 +97,12 @@ export interface SleepConsolidationConfig {
   adjacencyGapMinutes: number;
   /** Cap on LLM refinement calls per run. */
   maxRefinementsPerRun: number;
+  /**
+   * Cap on multi-candidate clusters sent through LLM thematic-grouping
+   * consolidation per run. Deterministic singleton confirmations are free
+   * and are not bounded by this.
+   */
+  maxConsolidationsPerRun: number;
 }
 
 /**
@@ -392,6 +398,11 @@ function validateSleepConsolidationConfig(
     refinementWindowHours: toPositiveInteger(raw.refinementWindowHours, 'sleepConsolidation.refinementWindowHours', 1),
     adjacencyGapMinutes: toPositiveInteger(raw.adjacencyGapMinutes, 'sleepConsolidation.adjacencyGapMinutes', 1),
     maxRefinementsPerRun: toPositiveInteger(raw.maxRefinementsPerRun, 'sleepConsolidation.maxRefinementsPerRun', 1),
+    maxConsolidationsPerRun: toPositiveInteger(
+      raw.maxConsolidationsPerRun,
+      'sleepConsolidation.maxConsolidationsPerRun',
+      1,
+    ),
   };
 }
 

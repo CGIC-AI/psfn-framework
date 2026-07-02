@@ -1,6 +1,7 @@
 import Database from 'better-sqlite3';
 import { describe, expect, it, vi } from 'vitest';
 import type { LLMProviderPort } from '../agent/contracts.js';
+import { EventBus, type DeterministicGateEvent } from '../../shared/event-bus.js';
 import { createConcernStorePort } from './concern-store-port.js';
 import { ActiveConcernStore } from './concerns.js';
 import {
@@ -175,6 +176,37 @@ describe('automated concern candidates', () => {
     expect(worker.notifyTurnCompleted()).toBe(false);
     expect(worker.notifyTurnCompleted()).toBe(false);
     expect(complete).not.toHaveBeenCalled();
+  });
+
+  it('emits a typed concern-review gate event on skip and on run (jpvd.4)', () => {
+    const eventBus = new EventBus();
+    const events: DeterministicGateEvent[] = [];
+    eventBus.on('intention.concern_candidate.gate', (event) => { events.push(event); });
+    const queue = new ConcernCandidateQueue();
+    const worker = new ConcernCandidateWorker({
+      queue,
+      reviewer: new ConcernCandidateReviewer({ complete: vi.fn() } as unknown as LLMProviderPort),
+      concernStore: makeConcernStore(),
+      eventBus,
+      reviewTurnInterval: 1,
+    });
+
+    // One pending candidate => count gate closed, byte-identical decision.
+    queue.enqueueMany([makeCandidate('solo')]);
+    expect(worker.reviewPending()).toMatchObject({ status: 'skipped', reason: 'insufficient_candidates' });
+    expect(events).toEqual([
+      expect.objectContaining({
+        lane: 'concern_candidate_review',
+        outcome: 'skipped',
+        reason: 'insufficient_candidates',
+        inputs: { pendingCount: 1 },
+      }),
+    ]);
+
+    // Two pending => gate opens, emits a 'ran' event.
+    queue.enqueueMany([makeCandidate('second')]);
+    expect(worker.reviewPending()).toMatchObject({ status: 'started' });
+    expect(events[1]).toMatchObject({ outcome: 'ran', reason: 'open', inputs: { pendingCount: 2 } });
   });
 
   it('launches review asynchronously once the deterministic turn check sees more than one candidate', async () => {

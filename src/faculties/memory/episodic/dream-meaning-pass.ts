@@ -7,8 +7,15 @@ import {
 import type { Episode } from '../../../shared/contracts/episodic-memory.js';
 import { resolveKnownEpisodeId } from './episode-ids.js';
 import type { EpisodicStorePort } from './store.js';
+import type { DeterministicGateEvent } from '../../../shared/event-bus.js';
+import {
+  evaluateDeterministicGate,
+  type DeterministicGateDefinition,
+} from '../../../shared/gating/deterministic-gate.js';
 
 const log = createComponentLogger('DreamMeaningPass');
+
+const DREAM_MEANING_GATE_LANE = 'dream_meaning';
 
 /**
  * The dream pass runs as HER — through the agent loop with the main chat
@@ -29,6 +36,8 @@ export interface DreamMeaningPassOptions {
   maxEpisodesPerPass?: number;
   /** Upper bound on reflection turns; she may end earlier. */
   maxTurns?: number;
+  /** Typed gate telemetry sink (jpvd.4); wired to the event bus by composition. */
+  onGateEvent?: (event: DeterministicGateEvent) => void;
 }
 
 export interface DreamMeaningPassRunInput {
@@ -151,6 +160,9 @@ export class DreamMeaningPass {
   private readonly reviewWindowMs: number;
   private readonly maxEpisodesPerPass: number;
   private readonly maxTurns: number;
+  private readonly onGateEvent: ((event: DeterministicGateEvent) => void) | null;
+  private readonly cadenceGate: DeterministicGateDefinition;
+  private readonly episodesGate: DeterministicGateDefinition;
 
   constructor(store: EpisodicStorePort, agent: DreamPassAgent, options: DreamMeaningPassOptions = {}) {
     this.store = store;
@@ -160,6 +172,35 @@ export class DreamMeaningPass {
     this.reviewWindowMs = options.reviewWindowMs ?? DEFAULT_REVIEW_WINDOW_MS;
     this.maxEpisodesPerPass = options.maxEpisodesPerPass ?? DEFAULT_MAX_EPISODES_PER_PASS;
     this.maxTurns = options.maxTurns ?? DEFAULT_MAX_TURNS;
+    this.onGateEvent = options.onGateEvent ?? null;
+    // Cadence gate: a nightly review only re-opens once the interval elapses.
+    this.cadenceGate = {
+      lane: DREAM_MEANING_GATE_LANE,
+      openWhenAny: [{ input: 'msSinceLastRun', comparator: 'gte', threshold: this.passIntervalMs }],
+      closedReason: 'cadence',
+    };
+    // Episodes gate: at least one reviewed episode still lacks a meaning.
+    this.episodesGate = {
+      lane: DREAM_MEANING_GATE_LANE,
+      openWhenAny: [{ input: 'episodesWithoutMeaning', comparator: 'gte', threshold: 1 }],
+      closedReason: 'no_episodes',
+    };
+  }
+
+  private emitGateEvent(
+    sessionId: string,
+    outcome: 'ran' | 'skipped',
+    reason: string,
+    inputs: Record<string, number | string>,
+  ): void {
+    this.onGateEvent?.({
+      lane: DREAM_MEANING_GATE_LANE,
+      outcome,
+      reason,
+      inputs,
+      timestamp: this.now().getTime(),
+      sessionId,
+    });
   }
 
   async run(input: DreamMeaningPassRunInput): Promise<DreamMeaningPassRunResult> {
@@ -170,7 +211,14 @@ export class DreamMeaningPass {
     };
     const watermark = await this.store.getProcessingWatermark(watermarkScope);
     const lastRunAtMs = watermark?.lastProcessedAt ? Date.parse(watermark.lastProcessedAt) : Number.NaN;
-    if (Number.isFinite(lastRunAtMs) && nowMs - lastRunAtMs < this.passIntervalMs) {
+    // Cadence gate (jpvd.4): without a baseline the interval is treated as
+    // elapsed (first pass runs).
+    const msSinceLastRun = Number.isFinite(lastRunAtMs)
+      ? nowMs - lastRunAtMs
+      : Number.MAX_SAFE_INTEGER;
+    const cadence = evaluateDeterministicGate(this.cadenceGate, { msSinceLastRun });
+    if (!cadence.open) {
+      this.emitGateEvent(input.sessionId, 'skipped', cadence.reason, cadence.inputs);
       return {
         ran: false,
         skippedReason: 'cadence',
@@ -190,7 +238,12 @@ export class DreamMeaningPass {
       .sort((left, right) => left.startedAt.localeCompare(right.startedAt))
       .slice(0, this.maxEpisodesPerPass);
 
-    if (episodes.length === 0) {
+    // Episodes gate (jpvd.4): new consolidated episodes still needing a meaning.
+    const episodesGate = evaluateDeterministicGate(this.episodesGate, {
+      episodesWithoutMeaning: episodes.length,
+    });
+    if (!episodesGate.open) {
+      this.emitGateEvent(input.sessionId, 'skipped', episodesGate.reason, episodesGate.inputs);
       return {
         ran: false,
         skippedReason: 'no_episodes',
@@ -200,6 +253,7 @@ export class DreamMeaningPass {
         endedEarly: false,
       };
     }
+    this.emitGateEvent(input.sessionId, 'ran', 'open', { episodesWithoutMeaning: episodes.length });
 
     const knownIds = new Set(episodes.map(episode => episode.id));
     const collected = new Map<string, string>();

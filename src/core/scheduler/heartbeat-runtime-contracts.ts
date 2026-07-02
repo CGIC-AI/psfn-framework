@@ -8,6 +8,7 @@ import type {
   EpisodeSynthesisLaneConfig,
   EpisodicProcessingRestWindowConfig,
   NearTurnMemoryCadenceConfig,
+  OrientationRewriteGateConfig,
 } from '../../system/config/scheduler-config.js';
 import type { EventBus } from '../../shared/event-bus.js';
 import type { LLMProviderPort } from '../agent/contracts.js';
@@ -179,6 +180,7 @@ export interface HeartbeatRuntimeOptions {
   > | null;
   episodicDiagnosticsStore?: Pick<EpisodicStorePort, 'getMaintenanceDiagnostics'> | null;
   episodicProcessingRestWindow?: EpisodicProcessingRestWindowConfig;
+  orientationRewriteGate?: OrientationRewriteGateConfig;
   intentionAppraisalEnabled?: boolean;
   postTurnActions?: PostTurnActionRuntime;
   vaultAutoPublisher?: { publishReflection(input: {

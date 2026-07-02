@@ -113,6 +113,28 @@ export interface SleepConsolidationConfig {
 }
 
 /**
+ * Deterministic gate for the nightly core-memory orientation-block rewrite
+ * (jpvd.4). The orient rewrite is the heaviest nightly sleeptime LLM pass; it
+ * must not fire on quiet nights when nothing has changed since the last
+ * rewrite. Skipping is the common case — the gate opens only on evidence of
+ * change. Rest-window scheduler lane only.
+ */
+export interface OrientationRewriteGateConfig {
+  /**
+   * New conversational turns since the last rewrite required to reorient.
+   * Below this (and not stale-with-activity) the rewrite is skipped with zero
+   * LLM spend.
+   */
+  minNewEntriesSinceRewrite: number;
+  /**
+   * Days since the last rewrite after which any new activity (>= 1 new turn)
+   * re-opens the gate, so orientation still refreshes periodically in
+   * low-volume relationships without rewriting from an empty transcript.
+   */
+  refreshAfterQuietDays: number;
+}
+
+/**
  * Cross-day arc weaving tuning (rest-window scheduler lane only).
  */
 export interface ArcFormationConfig {
@@ -282,6 +304,7 @@ export interface SchedulerRuntimeConfig {
   nearTurnMemory: NearTurnMemoryCadenceConfig;
   episodeSynthesis: EpisodeSynthesisLaneConfig;
   sleepConsolidation: SleepConsolidationConfig;
+  orientationRewrite: OrientationRewriteGateConfig;
   arcFormation: ArcFormationConfig;
   socialGraphBuilder: SocialGraphBuilderCadenceConfig;
   temporalWakeup: TemporalWakeupConfig;
@@ -469,6 +492,35 @@ function validateSleepConsolidationConfig(
     maxConsolidationsPerRun: toPositiveInteger(
       raw.maxConsolidationsPerRun,
       'sleepConsolidation.maxConsolidationsPerRun',
+      1,
+    ),
+  };
+}
+
+export const DEFAULT_ORIENTATION_REWRITE_GATE: OrientationRewriteGateConfig = {
+  minNewEntriesSinceRewrite: 4,
+  refreshAfterQuietDays: 7,
+};
+
+function validateOrientationRewriteGateConfig(
+  raw: unknown,
+  sourcePath: string,
+): OrientationRewriteGateConfig {
+  if (raw === undefined) {
+    return { ...DEFAULT_ORIENTATION_REWRITE_GATE };
+  }
+  if (!isRecord(raw)) {
+    throw new Error(`Invalid scheduler config at ${sourcePath}: orientationRewrite must be an object`);
+  }
+  return {
+    minNewEntriesSinceRewrite: toPositiveInteger(
+      raw.minNewEntriesSinceRewrite ?? DEFAULT_ORIENTATION_REWRITE_GATE.minNewEntriesSinceRewrite,
+      'orientationRewrite.minNewEntriesSinceRewrite',
+      1,
+    ),
+    refreshAfterQuietDays: toPositiveInteger(
+      raw.refreshAfterQuietDays ?? DEFAULT_ORIENTATION_REWRITE_GATE.refreshAfterQuietDays,
+      'orientationRewrite.refreshAfterQuietDays',
       1,
     ),
   };
@@ -731,6 +783,7 @@ function validateSchedulerConfig(raw: unknown, sourcePath: string): SchedulerRun
     nearTurnMemory: validateNearTurnMemoryConfig(raw.nearTurnMemory, sourcePath),
     episodeSynthesis: validateEpisodeSynthesisConfig(raw.episodeSynthesis, sourcePath),
     sleepConsolidation: validateSleepConsolidationConfig(raw.sleepConsolidation, sourcePath),
+    orientationRewrite: validateOrientationRewriteGateConfig(raw.orientationRewrite, sourcePath),
     arcFormation: validateArcFormationConfig(raw.arcFormation, sourcePath),
     socialGraphBuilder: validateSocialGraphBuilderConfig(raw.socialGraphBuilder, sourcePath),
     temporalWakeup: validateTemporalWakeupConfig(raw.temporalWakeup, sourcePath),

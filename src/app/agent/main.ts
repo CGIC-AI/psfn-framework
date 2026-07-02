@@ -405,6 +405,11 @@ async function main(): Promise<void> {
         });
       });
     },
+    onRefinementGate: (event) => {
+      eventBus.emit('memory.sleep_consolidation.refinement_gate', event).catch((error: unknown) => {
+        log.warn('Sleep-consolidation refinement gate event emit failed', { error: String(error) });
+      });
+    },
   });
   const arcWeaver = new EpisodeArcWeaver(episodicStore, llmProvider, {
     passIntervalMs: schedulerConfig.arcFormation.passIntervalDays * DAY_MS,
@@ -424,7 +429,13 @@ async function main(): Promise<void> {
     },
     personaPreamble,
   });
-  const dreamMeaningPass = new DreamMeaningPass(episodicStore, agentLoop);
+  const dreamMeaningPass = new DreamMeaningPass(episodicStore, agentLoop, {
+    onGateEvent: (event) => {
+      eventBus.emit('memory.dream_meaning.gate', event).catch((error: unknown) => {
+        log.warn('Dream-meaning gate event emit failed', { error: String(error) });
+      });
+    },
+  });
   intentionRuntime.behavioralPatternTracker.setPromotionHook(
     createBehavioralPatternMemoryPromotionHook(memoryWriter),
   );
@@ -732,6 +743,7 @@ async function main(): Promise<void> {
       episodicDiagnosticsStore: episodicStore,
       postTurnActions,
       episodicProcessingRestWindow: schedulerConfig.episodicProcessing,
+      orientationRewriteGate: schedulerConfig.orientationRewrite,
       nearTurnMemoryCadence: schedulerConfig.nearTurnMemory,
       episodeSynthesis: schedulerConfig.episodeSynthesis,
       episodicWatermarkStore: episodicStore,

@@ -136,6 +136,54 @@ const EVENT_LANE_DEFINITIONS: readonly EventLaneDefinition[] = [
     label: 'Social-graph builder',
     description: 'Background social-graph edge-proposal worker (E4.2).',
   },
+  {
+    id: 'orientation_rewrite',
+    label: 'Orientation rewrite gate',
+    description: 'Nightly core-memory orient rewrite; gated on evidence of change (jpvd.4).',
+  },
+  {
+    id: 'dream_meaning',
+    label: 'Dream meaning gate',
+    description: 'Nightly first-person meaning pass; gated on cadence + new episodes (jpvd.4).',
+  },
+  {
+    id: 'sleep_consolidation_refinement',
+    label: 'Sleep-consolidation refinement gate',
+    description: 'Bounded LLM episode cleanup; gated on unrefined-episode count (jpvd.4).',
+  },
+  {
+    id: 'emotion_appraisal',
+    label: 'Emotion appraisal gate',
+    description: 'Chain-of-emotion appraisal; gated on turn cadence or VAD movement (jpvd.4).',
+  },
+  {
+    id: 'concern_candidate_review',
+    label: 'Concern candidate review gate',
+    description: 'Follow-up candidate review; gated on pending count + turn interval (jpvd.4).',
+  },
+];
+
+/**
+ * Deterministic pre-LLM gate lanes (jpvd.4): every one emits the shared
+ * `DeterministicGateEvent` shape, so a single generic subscriber feeds them.
+ * The extraction pre-LLM gate uses the same primitive but keeps surfacing its
+ * skips through the existing `memory.extraction.end` telemetry (the extractor
+ * has no direct event-bus handle), so it is not listed here.
+ */
+const GATE_EVENT_LANES: ReadonlyArray<{
+  readonly event:
+    | 'memory.orientation_rewrite.gate'
+    | 'memory.dream_meaning.gate'
+    | 'memory.sleep_consolidation.refinement_gate'
+    | 'emotion.appraisal.gate'
+    | 'intention.concern_candidate.gate';
+  readonly lane: string;
+}> = [
+  { event: 'memory.orientation_rewrite.gate', lane: 'orientation_rewrite' },
+  { event: 'memory.dream_meaning.gate', lane: 'dream_meaning' },
+  { event: 'memory.sleep_consolidation.refinement_gate', lane: 'sleep_consolidation_refinement' },
+  { event: 'emotion.appraisal.gate', lane: 'emotion_appraisal' },
+  { event: 'intention.concern_candidate.gate', lane: 'concern_candidate_review' },
 ];
 
 interface LaneAccumulator {
@@ -152,6 +200,15 @@ function collectCounts(entries: Array<[string, number | undefined]>): Record<str
   const counts: Record<string, number> = {};
   for (const [key, value] of entries) {
     if (value !== undefined) counts[key] = value;
+  }
+  return counts;
+}
+
+/** Keep only the finite numeric gate inputs; string inputs are labels, not counts. */
+function numericInputCounts(inputs: Record<string, number | string>): Record<string, number> {
+  const counts: Record<string, number> = {};
+  for (const [key, value] of Object.entries(inputs)) {
+    if (typeof value === 'number' && Number.isFinite(value)) counts[key] = value;
   }
   return counts;
 }
@@ -322,6 +379,21 @@ export class AdminSubsystemHealthDataService implements AdminSubsystemHealthServ
         });
       }),
     );
+
+    // Deterministic pre-LLM gate lanes (jpvd.4): uniform shape, one subscriber.
+    for (const { event, lane } of GATE_EVENT_LANES) {
+      this.unsubscribers.push(
+        eventBus.on(event, (payload) => {
+          const skipped = payload.outcome === 'skipped';
+          this.record(lane, {
+            at: trimNumber(payload.timestamp) ?? this.now(),
+            outcome: skipped ? 'skipped' : 'ran',
+            ...(payload.reason ? { reason: payload.reason } : {}),
+            counts: numericInputCounts(payload.inputs),
+          });
+        }),
+      );
+    }
   }
 
   private record(laneId: string, event: SubsystemLaneEvent): void {
@@ -447,3 +519,4 @@ function outcomeToStatus(outcome: SubsystemLaneOutcome): SubsystemLaneStatus {
 // Compile-time guards: keep these aligned with the event bus payload types.
 export type _EnsureNearTurnPayload = EventMap['memory.near_turn.cadence'];
 export type _EnsureGatePayload = EventMap['memory.episode_synthesis.gate'];
+export type _EnsureDeterministicGatePayload = EventMap['memory.orientation_rewrite.gate'];

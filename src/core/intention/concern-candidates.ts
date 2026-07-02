@@ -10,6 +10,10 @@ import type {
 import type { ExtractedFact, MemoryFormationVAD, PurrMemory } from '../../faculties/memory/types.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import { isRecord } from '../../shared/utils/types.js';
+import {
+  evaluateDeterministicGate,
+  type DeterministicGateDefinition,
+} from '../../shared/gating/deterministic-gate.js';
 import type { ConcernStorePort } from './concern-store-port.js';
 import {
   MAX_ACTIVE_CONCERNS,
@@ -23,6 +27,28 @@ const log = createComponentLogger('ConcernCandidates');
 
 const DEFAULT_REVIEW_TURN_INTERVAL = 3;
 const DEFAULT_MAX_REVIEW_BATCH = 7;
+const CONCERN_REVIEW_LANE = 'concern_candidate_review';
+
+/**
+ * Concern-candidate review gates (jpvd.4), expressed on the shared primitive
+ * with byte-identical decisions. The pending gate needs > 1 pending candidate
+ * (a single item is reviewed later, when it has company); the turn gate is the
+ * cadence trigger. `already_running` stays a concurrency guard, not a
+ * deterministic gate.
+ */
+const CONCERN_REVIEW_PENDING_GATE: DeterministicGateDefinition = {
+  lane: CONCERN_REVIEW_LANE,
+  openWhenAny: [{ input: 'pendingCount', comparator: 'gt', threshold: 1 }],
+  closedReason: 'insufficient_candidates',
+};
+
+function buildConcernReviewTurnGate(reviewTurnInterval: number): DeterministicGateDefinition {
+  return {
+    lane: CONCERN_REVIEW_LANE,
+    openWhenAny: [{ input: 'turnsSinceReviewCheck', comparator: 'gte', threshold: reviewTurnInterval }],
+    closedReason: 'turn_interval',
+  };
+}
 const MAX_CANDIDATE_TEXT_CHARS = 500;
 const MAX_CONTEXT_MESSAGES = 12;
 const MAX_RELATED_MEMORIES = 8;
@@ -592,6 +618,7 @@ export class ConcernCandidateWorker {
   private readonly reviewTurnInterval: number;
   private readonly maxReviewBatch: number;
   private readonly now: () => Date;
+  private readonly turnGate: DeterministicGateDefinition;
   private turnsSinceReviewCheck = 0;
   private inFlight: Promise<ConcernCandidateWorkerRunResult> | null = null;
 
@@ -602,11 +629,19 @@ export class ConcernCandidateWorker {
     );
     this.maxReviewBatch = Math.max(2, Math.floor(options.maxReviewBatch ?? DEFAULT_MAX_REVIEW_BATCH));
     this.now = options.now ?? (() => new Date());
+    this.turnGate = buildConcernReviewTurnGate(this.reviewTurnInterval);
   }
 
   notifyTurnCompleted(): boolean {
     this.turnsSinceReviewCheck += 1;
-    if (this.turnsSinceReviewCheck < this.reviewTurnInterval) {
+    // Turn-interval cadence trigger (jpvd.4). The per-turn wait is a trigger,
+    // not a meaningful skip, so it does not emit a gate event (that would flood
+    // the health lane every turn); the review-time gate below carries the
+    // observable decision.
+    const turnGate = evaluateDeterministicGate(this.turnGate, {
+      turnsSinceReviewCheck: this.turnsSinceReviewCheck,
+    });
+    if (!turnGate.open) {
       return false;
     }
     this.turnsSinceReviewCheck = 0;
@@ -619,9 +654,12 @@ export class ConcernCandidateWorker {
     if (this.inFlight) {
       return { status: 'skipped', reason: 'already_running', pendingCount };
     }
-    if (pendingCount <= 1) {
+    const pendingGate = evaluateDeterministicGate(CONCERN_REVIEW_PENDING_GATE, { pendingCount });
+    if (!pendingGate.open) {
+      this.emitGateEvent('skipped', pendingGate.reason, { pendingCount });
       return { status: 'skipped', reason: 'insufficient_candidates', pendingCount };
     }
+    this.emitGateEvent('ran', pendingGate.reason, { pendingCount });
     this.inFlight = this.runReview()
       .catch((error) => {
         log.warn('Concern candidate review failed', { error: String(error) });
@@ -635,6 +673,23 @@ export class ConcernCandidateWorker {
 
   async waitForInFlight(): Promise<ConcernCandidateWorkerRunResult | null> {
     return this.inFlight ?? Promise.resolve(null);
+  }
+
+  private emitGateEvent(
+    outcome: 'ran' | 'skipped',
+    reason: string,
+    inputs: Record<string, number | string>,
+  ): void {
+    const emitted = this.options.eventBus?.emit('intention.concern_candidate.gate', {
+      lane: CONCERN_REVIEW_LANE,
+      outcome,
+      reason,
+      inputs,
+      timestamp: this.now().getTime(),
+    });
+    void Promise.resolve(emitted).catch((error: unknown) => {
+      log.warn('Concern candidate gate event emit failed', { error: String(error) });
+    });
   }
 
   private async runReview(): Promise<ConcernCandidateWorkerRunResult> {

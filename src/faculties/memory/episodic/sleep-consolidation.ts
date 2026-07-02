@@ -10,6 +10,11 @@ import type {
   EpisodeSalience,
 } from '../../../shared/contracts/episodic-memory.js';
 import { resolveKnownEpisodeId } from './episode-ids.js';
+import type { DeterministicGateEvent } from '../../../shared/event-bus.js';
+import {
+  evaluateDeterministicGate,
+  type DeterministicGateDefinition,
+} from '../../../shared/gating/deterministic-gate.js';
 import type {
   EpisodeCreateInput,
   EpisodeUpdateInput,
@@ -17,6 +22,19 @@ import type {
 } from './store.js';
 
 const log = createComponentLogger('SleepConsolidation');
+
+const SLEEP_CONSOLIDATION_REFINEMENT_LANE = 'sleep_consolidation_refinement';
+
+/**
+ * Refinement gate (jpvd.4): the bounded LLM cleanup only fires when at least
+ * one in-window episode still lacks refinement. Expressed on the shared
+ * primitive so the decision + event match the other recurring passes.
+ */
+const REFINEMENT_GATE: DeterministicGateDefinition = {
+  lane: SLEEP_CONSOLIDATION_REFINEMENT_LANE,
+  openWhenAny: [{ input: 'unrefinedEpisodeCount', comparator: 'gte', threshold: 1 }],
+  closedReason: 'no_unrefined_episodes',
+};
 
 export interface SleepConsolidationSessionReader {
   getRecentMessages(channelId: string, limit: number): SessionEntry[];
@@ -54,6 +72,8 @@ export interface SleepCycleConsolidationOptions {
   onConsolidationFailure?: (event: SleepConsolidationFailureEvent) => void;
   /** Shared persona preamble service (E6.1); soft persona framing before the consolidation task prompts. */
   personaPreamble?: PersonaPreamblePort | null;
+  /** Typed refinement gate telemetry (jpvd.4); wired to the event bus by composition. */
+  onRefinementGate?: (event: DeterministicGateEvent) => void;
 }
 
 export interface SleepCycleConsolidationRunInput {
@@ -580,6 +600,7 @@ export class SleepCycleEpisodeConsolidator {
   private readonly maxTranscriptCharsPerEpisode: number;
   private readonly onConsolidationFailure: ((event: SleepConsolidationFailureEvent) => void) | null;
   private readonly personaPreamble: PersonaPreamblePort | null;
+  private readonly onRefinementGate: ((event: DeterministicGateEvent) => void) | null;
 
   constructor(
     store: EpisodicStorePort,
@@ -600,6 +621,7 @@ export class SleepCycleEpisodeConsolidator {
     this.maxTranscriptCharsPerEpisode = options.maxTranscriptCharsPerEpisode ?? DEFAULT_MAX_TRANSCRIPT_CHARS;
     this.onConsolidationFailure = options.onConsolidationFailure ?? null;
     this.personaPreamble = options.personaPreamble ?? null;
+    this.onRefinementGate = options.onRefinementGate ?? null;
   }
 
   async run(input: SleepCycleConsolidationRunInput): Promise<SleepCycleConsolidationResult> {
@@ -716,6 +738,16 @@ export class SleepCycleEpisodeConsolidator {
       .sort((left, right) => right.startedAt.localeCompare(left.startedAt))
       .slice(0, this.maxRefinementsPerRun);
 
+    // Refinement gate (jpvd.4): the bounded LLM cleanup only fires when there
+    // is an unrefined in-window episode to clean up. Emit the decision either
+    // way so the refinement lane shows why it did or did not spend tokens.
+    const refinementGate = evaluateDeterministicGate(REFINEMENT_GATE, {
+      unrefinedEpisodeCount: refinementQueue.length,
+    });
+    this.emitRefinementGate(input.sessionId, refinementGate.open ? 'ran' : 'skipped', refinementGate.reason, {
+      unrefinedEpisodeCount: refinementQueue.length,
+    });
+
     const refinementAudit: Array<Record<string, unknown>> = [];
 
     for (const episode of refinementQueue) {
@@ -796,6 +828,22 @@ export class SleepCycleEpisodeConsolidator {
     });
 
     return result;
+  }
+
+  private emitRefinementGate(
+    sessionId: string,
+    outcome: 'ran' | 'skipped',
+    reason: string,
+    inputs: Record<string, number | string>,
+  ): void {
+    this.onRefinementGate?.({
+      lane: SLEEP_CONSOLIDATION_REFINEMENT_LANE,
+      outcome,
+      reason,
+      inputs,
+      timestamp: this.now().getTime(),
+      sessionId,
+    });
   }
 
   /**

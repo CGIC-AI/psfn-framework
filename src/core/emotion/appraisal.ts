@@ -2,8 +2,15 @@ import { isRecord } from '../../shared/utils/types.js';
 import type { LLMProviderPort } from '../agent/contracts.js';
 import type { CompletionPurpose, ContextMessage, LLMResponse } from '../../shared/contracts/runtime.js';
 import { createComponentLogger } from '../../shared/logger.js';
+import type { DeterministicGateEvent } from '../../shared/event-bus.js';
+import {
+  evaluateDeterministicGate,
+  type DeterministicGateDefinition,
+} from '../../shared/gating/deterministic-gate.js';
 import type { EmotionStateSnapshot, VADVector } from './state.js';
 import { cloneInternalState, type InternalState } from '../self-model/state.js';
+
+const EMOTION_APPRAISAL_GATE_LANE = 'emotion_appraisal';
 
 const log = createComponentLogger('EmotionAppraisal');
 
@@ -66,6 +73,8 @@ export interface EmotionAppraisalConfig {
   maxMessageChars?: number;
   maxSummaryChars?: number;
   systemPrompt?: string;
+  /** Typed gate telemetry sink (jpvd.4); wired to the event bus by composition. */
+  onGateEvent?: (event: DeterministicGateEvent) => void;
 }
 
 interface SessionAppraisalState {
@@ -303,6 +312,8 @@ export class EmotionAppraisal {
   private readonly maxMessageChars: number;
   private readonly maxSummaryChars: number;
   private readonly systemPrompt: string;
+  private readonly onGateEvent: ((event: DeterministicGateEvent) => void) | null;
+  private readonly appraisalGate: DeterministicGateDefinition;
   private readonly sessionState = new Map<string, SessionAppraisalState>();
 
   constructor(config: EmotionAppraisalConfig | undefined) {
@@ -312,6 +323,17 @@ export class EmotionAppraisal {
     this.llmProvider = config.llmProvider as CompletionProviderWithOptions;
     this.turnCadence = normalizeTurnCadence(config.turnCadence);
     this.vadDeltaThreshold = normalizeVadDeltaThreshold(config.vadDeltaThreshold);
+    this.onGateEvent = config.onGateEvent ?? null;
+    // Appraisal fires on either the turn cadence OR a large enough VAD movement
+    // (jpvd.4). Deterministic and free; a closed gate spends zero LLM tokens.
+    this.appraisalGate = {
+      lane: EMOTION_APPRAISAL_GATE_LANE,
+      openWhenAny: [
+        { input: 'turnsSinceLast', comparator: 'gte', threshold: this.turnCadence },
+        { input: 'vadDelta', comparator: 'gte', threshold: this.vadDeltaThreshold },
+      ],
+      closedReason: 'no_movement',
+    };
     this.recentMessageCount = normalizePositiveInteger(
       config.recentMessageCount,
       'Emotion appraisal recentMessageCount',
@@ -379,10 +401,19 @@ export class EmotionAppraisal {
     const turnsSinceLast = state.turnsSinceLast + 1;
     state.turnsSinceLast = turnsSinceLast;
 
-    const shouldTriggerPeriodic = turnsSinceLast >= this.turnCadence;
     const telemetryTrusted = !internalState || internalState.emotional.telemetry.status === 'trusted';
     const shouldTriggerVadShift = telemetryTrusted && delta >= this.vadDeltaThreshold;
-    if (!shouldTriggerPeriodic && !shouldTriggerVadShift) {
+    // Route the periodic/vad-shift decision through the shared primitive
+    // (jpvd.4). Untrusted telemetry can never trigger the vad-shift signal, so
+    // feed a sub-threshold sentinel; the emitted input carries the real delta.
+    const roundedDelta = Number(delta.toFixed(4));
+    const gateInputs = { turnsSinceLast, vadDelta: roundedDelta };
+    const gate = evaluateDeterministicGate(this.appraisalGate, {
+      turnsSinceLast,
+      vadDelta: telemetryTrusted ? delta : -1,
+    });
+    if (!gate.open) {
+      this.emitGateEvent(sessionId, 'skipped', gate.reason, gateInputs, now);
       return {
         appraised: false,
         turnsSinceLast,
@@ -391,6 +422,7 @@ export class EmotionAppraisal {
     }
 
     const trigger: EmotionAppraisalTrigger = shouldTriggerVadShift ? 'vad_shift' : 'periodic';
+    this.emitGateEvent(sessionId, 'ran', trigger, gateInputs, now);
     const context: LLMContextLike = {
       systemPrompt: this.systemPrompt,
       messages: [
@@ -445,6 +477,23 @@ export class EmotionAppraisal {
       turnsSinceLast: 0,
       delta,
     };
+  }
+
+  private emitGateEvent(
+    sessionId: string,
+    outcome: 'ran' | 'skipped',
+    reason: string,
+    inputs: Record<string, number | string>,
+    timestamp: number,
+  ): void {
+    this.onGateEvent?.({
+      lane: EMOTION_APPRAISAL_GATE_LANE,
+      outcome,
+      reason,
+      inputs,
+      timestamp,
+      sessionId,
+    });
   }
 
   private getOrCreateSessionState(sessionId: string): SessionAppraisalState {

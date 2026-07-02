@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { createComponentLogger } from '../../shared/logger.js';
+import type { DeterministicGateEvent } from '../../shared/event-bus.js';
 import type { MessageSender } from '../../system/lifecycle/notifications.js';
 import { inferSessionChannelType } from '../session/session-id.js';
 import {
@@ -117,6 +118,16 @@ export function wireHeartbeatPostTurnRuntime(
       memoryWriter: runtimeOptions.memoryWriter,
       promptRegistry: runtimeOptions.promptRegistry ?? null,
       restWindow: runtimeOptions.episodicProcessingRestWindow,
+      ...(runtimeOptions.orientationRewriteGate
+        ? { orientationRewriteGate: runtimeOptions.orientationRewriteGate }
+        : {}),
+      ...(telemetryEventBus
+        ? {
+          onGateEvent: (event: DeterministicGateEvent): void => {
+            telemetryEventBus.emit('memory.orientation_rewrite.gate', event);
+          },
+        }
+        : {}),
       sleepConsolidator: runtimeOptions.sleepConsolidator,
       arcWeaver: runtimeOptions.arcWeaver,
       dreamMeaningPass: runtimeOptions.dreamMeaningPass,

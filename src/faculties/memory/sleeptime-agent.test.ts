@@ -259,6 +259,10 @@ describe('SleeptimeMemoryAgent', () => {
         sessionManager,
         coreMemoryStore,
         memoryWriter,
+        // This test exercises the rewrite path against a freshly-created core
+        // memory store (updatedAt ~ now), so lower the orientation-gate floor
+        // to let the two transcript turns count as evidence of change.
+        orientationRewriteGate: { minNewEntriesSinceRewrite: 1, refreshAfterQuietDays: 1 },
       }));
 
       await agent.execute(makeSleeptimeAction({
@@ -648,6 +652,9 @@ describe('SleeptimeMemoryAgent', () => {
         sessionManager,
         coreMemoryStore,
         memoryWriter,
+        // Fresh core-memory store (updatedAt ~ now); lower the orientation-gate
+        // floor so the two transcript turns open the gate for this path test.
+        orientationRewriteGate: { minNewEntriesSinceRewrite: 1, refreshAfterQuietDays: 1 },
       }));
       const agentLoop = {
         waitForIdle: vi.fn().mockImplementation(() => new Promise<void>(() => {})),

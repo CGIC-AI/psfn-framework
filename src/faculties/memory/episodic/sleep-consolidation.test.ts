@@ -242,6 +242,35 @@ describe('SleepCycleEpisodeConsolidator', () => {
     expect(complete).toHaveBeenCalledTimes(1);
   });
 
+  it('emits a typed refinement gate event for ran and skipped (jpvd.4)', async () => {
+    const store = makeStore();
+    await store.createEpisode(episodeInput('once', '2026-06-10T01:00:00.000Z', '2026-06-10T01:30:00.000Z'));
+    const complete = vi.fn(async () => refinementResponse());
+    const reader = {
+      getRecentMessages: () => [
+        entry(1, '2026-06-10T01:05:00.000Z', 'user', 'big news today'),
+        entry(2, '2026-06-10T01:06:00.000Z', 'assistant', 'tell me everything'),
+      ],
+    };
+    const events: Array<{ outcome: string; reason: string; inputs: Record<string, number | string> }> = [];
+    const consolidator = new SleepCycleEpisodeConsolidator(store, reader, { complete }, {
+      now: () => NOW,
+      onRefinementGate: (event) => events.push({
+        outcome: event.outcome,
+        reason: event.reason,
+        inputs: event.inputs,
+      }),
+    });
+
+    await consolidator.run({ sessionId: 'discord:main' }); // one unrefined => ran
+    await consolidator.run({ sessionId: 'discord:main' }); // already refined => skipped
+
+    expect(events).toEqual([
+      { outcome: 'ran', reason: 'open', inputs: { unrefinedEpisodeCount: 1 } },
+      { outcome: 'skipped', reason: 'no_unrefined_episodes', inputs: { unrefinedEpisodeCount: 0 } },
+    ]);
+  });
+
   it('lets a brief intimate moment score high salience', async () => {
     const store = makeStore();
     await store.createEpisode(episodeInput('crying', '2026-06-10T05:05:00.000Z', '2026-06-10T05:08:00.000Z', {

@@ -113,6 +113,39 @@ describe('EmotionAppraisal', () => {
     expect(appraisal.getChain('session-a')).toHaveLength(1);
   });
 
+  it('emits a typed appraisal gate event on skip and on run (jpvd.4)', async () => {
+    const { provider } = makeMockProvider(['Periodic appraisal summary']);
+    const events: Array<{ outcome: string; reason: string; inputs: Record<string, number | string> }> = [];
+    const appraisal = new EmotionAppraisal({
+      llmProvider: provider,
+      turnCadence: 2,
+      vadDeltaThreshold: 0.9,
+      onGateEvent: (event) => events.push({
+        outcome: event.outcome,
+        reason: event.reason,
+        inputs: event.inputs,
+      }),
+    });
+    const snapshot = () => makeSnapshot({ vad: { valence: 0.1, arousal: 0.1, dominance: 0.1 } });
+
+    await appraisal.maybeAppraise({
+      sessionId: 'session-g',
+      currentEmotion: snapshot(),
+      recentMessages: [{ role: 'user', content: 'hi' }],
+    });
+    await appraisal.maybeAppraise({
+      sessionId: 'session-g',
+      currentEmotion: snapshot(),
+      recentMessages: [{ role: 'user', content: 'hi again' }],
+    });
+
+    expect(events).toHaveLength(2);
+    expect(events[0]).toMatchObject({ outcome: 'skipped', reason: 'no_movement' });
+    expect(events[0].inputs.turnsSinceLast).toBe(1);
+    expect(events[1]).toMatchObject({ outcome: 'ran', reason: 'periodic' });
+    expect(events[1].inputs.turnsSinceLast).toBe(2);
+  });
+
   it('triggers appraisal immediately on significant VAD shift', async () => {
     const { provider } = makeMockProvider(['Shift appraisal summary']);
     const appraisal = new EmotionAppraisal({

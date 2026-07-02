@@ -305,6 +305,10 @@ describe('subsystem config round-trip', () => {
         direct: { cadenceTurns: 3 },
         group: { minIntervalMinutes: 15, minNewEntries: 8 },
       },
+      orientationRewrite: {
+        minNewEntriesSinceRewrite: 4,
+        refreshAfterQuietDays: 7,
+      },
       episodeSynthesis: {
         timerIntervalMinutes: 30,
         turnThreshold: 24,

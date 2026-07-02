@@ -6,6 +6,7 @@ import type {
   CompletionPurpose,
   ContextMessage,
   LLMProviderObservability,
+  LLMSystemPromptCacheBoundaries,
   LLMUsageDetails,
   ModelThinkingEffort,
   ObservabilityCallType,
@@ -70,6 +71,8 @@ export interface LLMChatParams extends GatewayCorrelationParams {
   pin?: boolean;
   messages: ContextMessage[];
   systemPrompt: string;
+  /** PromptPlan cachePlan boundaries for systemPrompt (E2.4); hash-verified before use. */
+  promptCacheBoundaries?: LLMSystemPromptCacheBoundaries;
   stream?: boolean;
   maxTokens?: number;
   contextWindow?: number;
@@ -89,6 +92,8 @@ export interface LLMCompleteParams extends GatewayCorrelationParams {
   pin?: boolean;
   messages: ContextMessage[];
   systemPrompt: string;
+  /** PromptPlan cachePlan boundaries for systemPrompt (E2.4); hash-verified before use. */
+  promptCacheBoundaries?: LLMSystemPromptCacheBoundaries;
   purpose: CompletionPurpose;
   maxTokens?: number;
   contextWindow?: number;

@@ -49,6 +49,7 @@ import {
 } from './stream-adapter.js';
 import { createActiveEmanationSatellitePresencePort } from './satellite-adapter-port.js';
 import { installAgentToolSchedulerPatch } from './agent-loop-patch.js';
+import { PromptCacheTurnRuntime } from './substrate-agent/turn-execution/prompt-cache-runtime.js';
 import { convertToLlm, type InternalWhisperMessage } from './messages.js';
 import { MESSAGE_CLASSES } from './message-classes.js';
 import { createEventBridge, type EventBridge } from './event-bridge.js';
@@ -244,6 +245,7 @@ export class SubstrateAgent {
   private gatedToolCache = new WeakMap<AgentTool<any>, AgentTool<any>>();
   private readonly appCache: AppCache;
   private reflectionNudge = new ReflectionNudgeTracker();
+  private readonly promptCacheRuntime = new PromptCacheTurnRuntime();
   private readonly turnSupportRuntime: TurnSupportRuntime;
   private readonly toolRuntimeFacade: ToolRuntimeFacade;
   private readonly satellitePresencePort = createActiveEmanationSatellitePresencePort();
@@ -398,6 +400,8 @@ export class SubstrateAgent {
           ...payload,
         });
       },
+    }, {
+      resolvePromptCacheBoundaries: (systemPrompt) => this.promptCacheRuntime.resolveBoundariesFor(systemPrompt),
     });
 
     this.installRuntimeHooks();
@@ -906,6 +910,7 @@ export class SubstrateAgent {
       observerEvalSidecar: this.observerEvalSidecar,
       turnSupportRuntime: this.turnSupportRuntime,
       toolRuntimeFacade: this.toolRuntimeFacade,
+      promptCacheRuntime: this.promptCacheRuntime,
       callbacks: {
         resolveTaskKind: (turnMessage) => resolveTaskKindForRuntime(turnMessage, this.channelRegistry),
         buildTurnBudgetCharacteristics: (turnMessage, taskKind) => buildTurnBudgetCharacteristicsForRuntime(

@@ -1,5 +1,6 @@
 import { EventStream, type AssistantMessage } from '@mariozechner/pi-ai';
 import type { AgentContext, AgentLoopConfig, AgentMessage, AgentTool, StreamFn } from '@mariozechner/pi-agent-core';
+import type { LLMSystemPromptCacheBoundaries } from '../../shared/contracts/runtime.js';
 import {
   createToolCallExecutionGuard,
   executeToolCallsWithScheduler,
@@ -18,6 +19,8 @@ type AgentLoopErrorEvent = {
 
 type LiveToolAgentContext = AgentContext & {
   getTools?: () => AgentTool<any>[] | undefined;
+  /** PromptPlan cachePlan boundaries for systemPrompt (E2.4); forwarded to the stream transport. */
+  promptCacheBoundaries?: LLMSystemPromptCacheBoundaries;
 };
 
 export function agentLoopWithScheduler(
@@ -260,6 +263,7 @@ async function streamAssistantResponse(
     systemPrompt: context.systemPrompt,
     messages: llmMessages,
     tools: resolveCurrentTools(context),
+    ...(context.promptCacheBoundaries ? { promptCacheBoundaries: context.promptCacheBoundaries } : {}),
   };
 
   const response = await streamFn(config.model, llmContext, {

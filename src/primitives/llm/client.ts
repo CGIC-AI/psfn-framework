@@ -11,6 +11,7 @@ import type {
   CompletionPurpose,
   CorrelationMetadata,
   LLMContext,
+  LLMSystemPromptCacheBoundaries,
   LLMUsageCostDetails,
   LLMUsageDetails,
   LLMPromptCacheObservability,
@@ -19,6 +20,7 @@ import type {
   LLMResponse,
   LLMProviderWireMessage,
   ModelBudgetBlockedEvent,
+  PromptCacheRetention,
   StreamCallbacks,
   ToolCall,
 } from '../../shared/contracts/runtime.js';
@@ -38,7 +40,18 @@ import {
 import { createComponentLogger } from '../../shared/logger.js';
 import { FallbackRunner } from './fallback.js';
 import type { ImportPolicyAuditRecord, RoutingCandidate, RoutingPurpose } from './routing.js';
-import { evaluateImportPolicy, resolveRoutingCandidates } from './routing.js';
+import {
+  applyGlobalPromptCachePolicy,
+  evaluateImportPolicy,
+  resolveGlobalPromptCachePolicy,
+  resolveRoutingCandidates,
+} from './routing.js';
+import {
+  createSystemPromptCacheControlPayloadTransformer,
+  resolvePromptCacheMechanism,
+  verifySystemPromptCacheBoundaries,
+  type PromptCachePayloadReport,
+} from './prompt-cache.js';
 import { resolveRegisteredModel, resolveSystemRoleCapabilityMetadata } from './models.js';
 import {
   EligibilityDeniedError,
@@ -308,6 +321,7 @@ export class LLMClient {
       systemPrompt: context.systemPrompt,
       messages: context.messages,
       ...(context.tools?.length ? { tools: context.tools } : {}),
+      ...(context.promptCacheBoundaries ? { promptCacheBoundaries: context.promptCacheBoundaries } : {}),
       modelHint: {
         model: hintModel,
         provider: candidate.provider,
@@ -406,6 +420,109 @@ export class LLMClient {
       scope,
       sessionId,
     };
+  }
+
+  /**
+   * Model-agnostic provider cache engagement (E2.4): applied when the
+   * models.json registry-wide promptCaching policy is enabled. Mutates the
+   * request options with the params the resolved provider actually supports
+   * (cacheRetention / sessionId / cache_control onPayload transformer) and
+   * returns the promptCaching observability reflecting what was applied.
+   * Returns null when the flag is off — zero wire change.
+   */
+  private applyModelAgnosticPromptCache(input: {
+    candidate: RoutingCandidate;
+    model: Model<any>;
+    systemPrompt: string;
+    boundaries: LLMSystemPromptCacheBoundaries | undefined;
+    correlation: ResolvedCorrelationMetadata | undefined;
+    requestOptions: LLMRequestOptions;
+  }): LLMPromptCacheObservability | null {
+    const { candidate, model, requestOptions } = input;
+    if (candidate.promptCacheEnabled !== true) return null;
+
+    const retention: PromptCacheRetention = candidate.promptCacheRetention ?? 'short';
+    const scope = candidate.promptCacheScope ?? 'channel';
+    // candidate.model is the requested (registry-identity) model id — e.g.
+    // 'anthropic/claude-sonnet-4.5' on OpenRouter — which is the stable
+    // discriminator even when a proxy route rewrites the backend model id.
+    const mechanism = resolvePromptCacheMechanism({
+      provider: candidate.provider,
+      modelId: candidate.model,
+      api: typeof (model as { api?: unknown }).api === 'string' ? (model as { api: string }).api : undefined,
+    });
+    if (retention === 'none') {
+      return {
+        configured: true,
+        engaged: false,
+        retention,
+        scope,
+        mechanism,
+        reason: 'disabled',
+        ...(candidate.promptCacheStrategy ? { strategy: candidate.promptCacheStrategy } : {}),
+      };
+    }
+
+    const sessionId = scope === 'request'
+      ? input.correlation?.requestId
+      : input.correlation?.channelId;
+    if (requestOptions.cacheRetention === undefined) {
+      requestOptions.cacheRetention = retention;
+    }
+    if (requestOptions.sessionId === undefined && sessionId) {
+      requestOptions.sessionId = sessionId;
+    }
+
+    const observability: LLMPromptCacheObservability = {
+      configured: true,
+      engaged: true,
+      retention,
+      scope,
+      mechanism,
+      ...(candidate.promptCacheStrategy ? { strategy: candidate.promptCacheStrategy } : {}),
+      ...(sessionId ? { sessionId } : {}),
+    };
+
+    const boundaries = input.boundaries;
+    if (
+      boundaries
+      && (mechanism === 'anthropic_cache_control' || mechanism === 'openrouter_cache_control_passthrough')
+    ) {
+      if (!verifySystemPromptCacheBoundaries(input.systemPrompt, boundaries)) {
+        log.warn('Prompt cache boundaries did not match the serialized system prompt; skipping cache breakpoints', {
+          provider: candidate.provider,
+          model: String(model.id),
+          mechanism,
+          staticPrefixChars: boundaries.staticPrefixChars,
+          sessionStablePrefixChars: boundaries.sessionStablePrefixChars,
+          systemPromptChars: input.systemPrompt.length,
+        });
+        return observability;
+      }
+      observability.boundaries = {
+        staticPrefixChars: boundaries.staticPrefixChars,
+        sessionStablePrefixChars: boundaries.sessionStablePrefixChars,
+      };
+      const report: PromptCachePayloadReport = { appliedBreakpoints: 0 };
+      const transformer = createSystemPromptCacheControlPayloadTransformer({
+        mechanism,
+        boundaries,
+        retention,
+        report,
+      });
+      const existingOnPayload = requestOptions.onPayload;
+      requestOptions.onPayload = async (payload, payloadModel) => {
+        const transformed = transformer(payload, payloadModel);
+        if (report.appliedBreakpoints > 0) {
+          observability.appliedBreakpoints = report.appliedBreakpoints;
+        }
+        const next = transformed ?? payload;
+        const chained = await existingOnPayload?.(next, payloadModel);
+        return chained ?? (transformed !== undefined ? next : undefined);
+      };
+    }
+
+    return observability;
   }
 
   private enforceImportRoutingPolicy(purpose: RoutingPurpose, candidate: RoutingCandidate): void {
@@ -520,6 +637,7 @@ export class LLMClient {
       candidate.promptCacheStrategy ?? '',
       candidate.promptCacheRetention ?? '',
       candidate.promptCacheScope ?? '',
+      candidate.promptCacheEnabled ? 'cache_enabled' : '',
       candidate.requestBaseUrl ?? '',
       candidate.requestApiKeyEnv ?? '',
       candidate.openRouterZdrOnly ? 'zdr' : '',
@@ -611,7 +729,12 @@ export class LLMClient {
       if (baseCandidate.importRouteMode) hinted.importRouteMode = baseCandidate.importRouteMode;
     }
 
-    return this.withOpenRouterPreferences(hinted);
+    // The registry-wide promptCaching policy is model-agnostic: hinted
+    // candidates engage it exactly like roster-resolved candidates.
+    return applyGlobalPromptCachePolicy(
+      this.withOpenRouterPreferences(hinted),
+      resolveGlobalPromptCachePolicy(this.config),
+    );
   }
 
   private findRegistryModelEntry(provider: string, model: string) {
@@ -736,6 +859,7 @@ export class LLMClient {
     model: Model<any>,
     context: PiContext,
     correlation: ResolvedCorrelationMetadata | undefined,
+    promptCachingOverride?: LLMPromptCacheObservability,
   ): LLMProviderObservability {
     const systemRole = resolveSystemRoleCapabilityMetadata(model);
     return {
@@ -747,7 +871,7 @@ export class LLMClient {
       backendApi: model.api,
       ...(model.baseUrl ? { backendBaseUrl: model.baseUrl } : {}),
       systemRole,
-      promptCaching: this.buildPromptCacheObservability(candidate, correlation),
+      promptCaching: promptCachingOverride ?? this.buildPromptCacheObservability(candidate, correlation),
       providerWireMessages: this.toProviderWireMessages(context, systemRole),
     };
   }
@@ -1056,7 +1180,21 @@ export class LLMClient {
           }
           const { model, apiKey } = this.getModelAndKey(candidateTarget);
           const requestOptions = this.buildRequestOptions(candidateTarget, apiKey, { correlation });
-          const providerObservability = this.buildProviderObservability(candidateTarget, model, piContext, correlation);
+          const promptCaching = this.applyModelAgnosticPromptCache({
+            candidate: candidateTarget,
+            model,
+            systemPrompt: piContext.systemPrompt ?? '',
+            boundaries: context.promptCacheBoundaries,
+            correlation,
+            requestOptions,
+          });
+          const providerObservability = this.buildProviderObservability(
+            candidateTarget,
+            model,
+            piContext,
+            correlation,
+            promptCaching ?? undefined,
+          );
 
           return withRetry(async () => {
             const eventStream = streamSimple(
@@ -1295,7 +1433,21 @@ export class LLMClient {
           signal: options.signal,
           correlation,
         });
-        const providerObservability = this.buildProviderObservability(candidateTarget, model, piContext, correlation);
+        const promptCaching = this.applyModelAgnosticPromptCache({
+          candidate: candidateTarget,
+          model,
+          systemPrompt: piContext.systemPrompt ?? '',
+          boundaries: context.promptCacheBoundaries,
+          correlation,
+          requestOptions,
+        });
+        const providerObservability = this.buildProviderObservability(
+          candidateTarget,
+          model,
+          piContext,
+          correlation,
+          promptCaching ?? undefined,
+        );
 
         const request = async () => {
           try {

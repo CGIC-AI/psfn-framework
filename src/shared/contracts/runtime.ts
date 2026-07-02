@@ -632,6 +632,12 @@ export interface LLMContext {
   correlation?: CorrelationMetadata;
   manifest?: ContextManifest;
   systemPromptSections?: PromptSectionTelemetry[];
+  /**
+   * PromptPlan cachePlan boundaries for `systemPrompt` (E2.4). Only attached
+   * when the models.json promptCaching policy is enabled; consumers verify the
+   * prefix hashes before applying provider cache breakpoints.
+   */
+  promptCacheBoundaries?: LLMSystemPromptCacheBoundaries;
 }
 
 export interface LLMUsageCostDetails {
@@ -696,6 +702,25 @@ export type PromptCacheStrategy = 'openai_responses';
 export type PromptCacheRetention = 'none' | 'short' | 'long';
 export type PromptCacheScope = 'channel' | 'request';
 
+/**
+ * Provider cache engagement mechanism resolved per request (E2.4):
+ * - anthropic_cache_control: cache_control breakpoints at PromptPlan cachePlan
+ *   boundaries on the anthropic-messages API.
+ * - openrouter_cache_control_passthrough: cache_control breakpoints embedded in
+ *   the OpenAI-completions system message parts; OpenRouter forwards them to
+ *   Anthropic backends.
+ * - openai_prompt_cache_key: prompt_cache_key / prompt_cache_retention params
+ *   on the OpenAI responses API.
+ * - implicit_prefix: no request-level knob exists for the provider; the
+ *   engagement is the byte-stable static prefix itself (OpenRouter open
+ *   models, local runners).
+ */
+export type PromptCacheMechanism =
+  | 'anthropic_cache_control'
+  | 'openrouter_cache_control_passthrough'
+  | 'openai_prompt_cache_key'
+  | 'implicit_prefix';
+
 export interface LLMPromptCacheObservability {
   configured: boolean;
   engaged: boolean;
@@ -704,6 +729,43 @@ export interface LLMPromptCacheObservability {
   scope?: PromptCacheScope;
   sessionId?: string;
   reason?: 'disabled' | 'missing_channel_id';
+  /** Mechanism actually applied to the provider request (E2.4). */
+  mechanism?: PromptCacheMechanism;
+  /** cache_control breakpoints applied to the serialized system prompt. */
+  appliedBreakpoints?: number;
+  /** PromptPlan cachePlan boundaries projected onto the serialized system prompt. */
+  boundaries?: {
+    staticPrefixChars: number;
+    sessionStablePrefixChars: number;
+  };
+  /** Provider-reported cache usage for the turn, when the provider returns it. */
+  usage?: {
+    cacheReadTokens: number;
+    cacheWriteTokens: number;
+  };
+  /** Per-turn static-prefix stability check against the previous turn on the same scope. */
+  prefixStability?: {
+    checked: boolean;
+    stable?: boolean;
+    firstObservation?: boolean;
+    scopeKey?: string;
+    changedBlockIds?: string[];
+  };
+}
+
+/**
+ * PromptPlan cachePlan boundaries projected onto the serialized provider
+ * system prompt (char offsets + content hashes). Carried as plain data on
+ * LLMContext so the provider client — local or across the gateway RPC — can
+ * verify the prefix bytes before applying provider cache breakpoints.
+ * Fail-closed: a hash mismatch means the boundaries are stale and no
+ * breakpoints are applied.
+ */
+export interface LLMSystemPromptCacheBoundaries {
+  staticPrefixChars: number;
+  staticPrefixHash: string;
+  sessionStablePrefixChars: number;
+  sessionStablePrefixHash: string;
 }
 
 export interface LLMProviderObservability {
@@ -867,10 +929,33 @@ export interface ModelRegistryEntry {
   metadata?: Record<string, unknown>;
 }
 
+/**
+ * Registry-wide provider prompt-caching policy (models.json owner, E2.4).
+ *
+ * `enabled` is the master switch and seeds OFF: the operator flips it to true
+ * after verifying cache engagement on a test channel. When disabled, no
+ * provider request carries any cache parameter (zero wire change). When
+ * enabled, per-provider serializers engage the mechanism the pi-ai layer
+ * actually supports (Anthropic cache_control breakpoints at PromptPlan
+ * boundaries, OpenRouter anthropic cache_control passthrough, OpenAI
+ * responses prompt_cache_key; byte-stable-prefix-only providers get telemetry
+ * without wire changes).
+ *
+ * `retention` ('none' | 'short' | 'long', default 'short') and `scope`
+ * ('channel' | 'request', default 'channel') tune cache lifetime and the
+ * session key used by providers with session-based caching.
+ */
+export interface ModelRegistryPromptCachingPolicy {
+  enabled: boolean;
+  retention?: PromptCacheRetention;
+  scope?: PromptCacheScope;
+}
+
 export interface CanonicalModelRegistry {
   schemaVersion: 1;
   models: ModelRegistryEntry[];
   budgetPolicy?: ModelRegistryBudgetPolicy;
+  promptCaching?: ModelRegistryPromptCachingPolicy;
 }
 
 export interface ModelUsageLedgerRecord {

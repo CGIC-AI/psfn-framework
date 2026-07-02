@@ -212,6 +212,26 @@ function formatCurrentTurnUserContentForPrompt(
   });
 }
 
+function accumulateProviderCacheUsage(
+  messages: AgentMessage[],
+): { cacheReadTokens: number; cacheWriteTokens: number } | null {
+  let cacheReadTokens = 0;
+  let cacheWriteTokens = 0;
+  let assistantMessages = 0;
+  for (const message of messages) {
+    if (message.role !== 'assistant') continue;
+    // Loose read: runtime-fallback and test-fixture assistant messages may
+    // omit usage even though the wire type declares it.
+    const usage = (message as { usage?: AssistantMessage['usage'] }).usage;
+    if (!usage) continue;
+    assistantMessages += 1;
+    cacheReadTokens += Number.isFinite(usage.cacheRead) ? usage.cacheRead : 0;
+    cacheWriteTokens += Number.isFinite(usage.cacheWrite) ? usage.cacheWrite : 0;
+  }
+  if (assistantMessages === 0) return null;
+  return { cacheReadTokens, cacheWriteTokens };
+}
+
 function readAssistantReasoning(message: AssistantMessage | null): string | undefined {
   if (!message || !Array.isArray(message.content)) return undefined;
   const reasoningBlocks: string[] = [];
@@ -893,9 +913,25 @@ export async function invokeAgentForTurn(input: {
     });
 
   }
+  // Provider-reported prompt-cache usage (E2.4): recorded into the turn's
+  // promptCaching observability so telemetry reflects what the provider
+  // actually served from cache.
+  const providerCacheUsage = accumulateProviderCacheUsage(mutableState.turnMessages);
+  if (providerCacheUsage && turnSnapshot.promptContext?.providerObservability) {
+    turnSnapshot.promptContext.providerObservability.promptCaching = {
+      ...turnSnapshot.promptContext.providerObservability.promptCaching,
+      usage: providerCacheUsage,
+    };
+  }
   observability.emitObservedTurnStage('prompt', {
     durationMs: Date.now() - promptStageStart,
     ttftMs: streamFirstTokenAt - startTime,
+    ...(providerCacheUsage
+      ? {
+        cacheReadTokens: providerCacheUsage.cacheReadTokens,
+        cacheWriteTokens: providerCacheUsage.cacheWriteTokens,
+      }
+      : {}),
     ...(runtimeContradictionDiagnostic
       ? {
         runtimeContradictionRetry: true,

@@ -10,6 +10,7 @@ import { buildSystemContextPromptBlock } from '../../../../primitives/llm/messag
 import type { PiChatMessage } from '../../../../primitives/llm/message-conversion.js';
 import {
   buildCurrentDatetimeProximityAnchor,
+  computePromptPlanCachePrefixes,
   createPromptPlan,
   createPromptPlanBlock,
   DATETIME_ANCHOR_BLOCK_ID,
@@ -19,6 +20,8 @@ import {
   type PromptPlan,
   type PromptPlanBlock,
 } from './prompt-plan.js';
+import { resolveGlobalPromptCachePolicy } from '../../../../primitives/llm/routing.js';
+import { resolvePromptCacheMechanism } from '../../../../primitives/llm/prompt-cache.js';
 import { runWithRequestContext } from '../../../../primitives/llm/request-context.js';
 import { countTokens } from '../../../../primitives/llm/tokens.js';
 import { resolveSystemRoleCapabilityMetadata } from '../../../../primitives/llm/models.js';
@@ -26,6 +29,7 @@ import type { ContextBudgetTurnCharacteristics } from '../../../../shared/contex
 import type {
   CorrelationMetadata,
   FatigueEnforcementMetadata,
+  LLMPromptCacheObservability,
   MessagePromptOverrideMode,
   ObservabilityCallType,
   SubstrateMessage,
@@ -458,6 +462,98 @@ export async function assembleTurnPrompt(input: {
     piMessages,
     providerWireMessages,
   } = serializePromptPlanForProvider(plan, providerSystemRole.transport);
+
+  // ── Provider prompt-cache engagement + prefix-stability telemetry (E2.4) ──
+  // The models.json promptCaching policy is the master switch (default off =
+  // zero wire change). When on, the cachePlan boundaries are projected onto
+  // the serialized system prompt and registered so the LLM client can place
+  // provider cache breakpoints; the static region's byte-stability is checked
+  // against the previous turn on the same scope regardless of the flag —
+  // an unstable static prefix silently defeats every provider prefix cache
+  // and is an alert, not a stat.
+  const promptCachePolicy = resolveGlobalPromptCachePolicy(runtime.config);
+  const cachePrefixes = computePromptPlanCachePrefixes(plan);
+  runtime.promptCacheRuntime.clearTurnDirective();
+  const promptCaching: LLMPromptCacheObservability = {
+    configured: promptCachePolicy !== null,
+    engaged: false,
+  };
+  if (!cachePrefixes.ok) {
+    // Serializer contract violation: the static region did not serialize to a
+    // byte-exact prefix of the system prompt. Surface it and never apply
+    // misaligned breakpoints.
+    const projectionFailurePayload = {
+      channelId: message.channelId,
+      turnId: turnSnapshot.turnId,
+      requestId: turnSnapshot.requestId,
+      scopeKey: conversationScope.key,
+      reason: cachePrefixes.reason,
+      staticBoundary: plan.cachePlan.staticBoundary,
+      sessionStableBoundary: plan.cachePlan.sessionStableBoundary,
+    };
+    log.warn('Prompt plan cache prefixes violated the serializer byte-prefix contract', projectionFailurePayload);
+    runtime.emitTelemetry('prompt.cache.prefix_projection_failed', projectionFailurePayload);
+  }
+  if (promptCachePolicy) {
+    promptCaching.retention = promptCachePolicy.retention;
+    promptCaching.scope = promptCachePolicy.scope;
+    promptCaching.mechanism = resolvePromptCacheMechanism({
+      provider: providerModel.provider,
+      modelId: providerModel.id,
+      api: providerModel.api,
+    });
+    if (promptCachePolicy.retention === 'none') {
+      promptCaching.reason = 'disabled';
+    } else {
+      promptCaching.engaged = true;
+      if (cachePrefixes.ok) {
+        const directive = runtime.promptCacheRuntime.registerTurnDirective({
+          systemPrompt: providerSystemPrompt,
+          staticPrefixText: cachePrefixes.staticPrefixText,
+          sessionStablePrefixText: cachePrefixes.sessionStablePrefixText,
+        });
+        promptCaching.boundaries = {
+          staticPrefixChars: directive.boundaries.staticPrefixChars,
+          sessionStablePrefixChars: directive.boundaries.sessionStablePrefixChars,
+        };
+      }
+    }
+  }
+  if (promptOverride.mode === 'default') {
+    const stability = runtime.promptCacheRuntime.checkPrefixStability({
+      scopeKey: conversationScope.key,
+      turnId: String(turnSnapshot.turnId),
+      plan,
+    });
+    promptCaching.prefixStability = {
+      checked: true,
+      stable: stability.stable,
+      firstObservation: stability.firstObservation,
+      scopeKey: stability.scopeKey,
+      ...(stability.changedBlocks
+        ? { changedBlockIds: stability.changedBlocks.map(change => change.id) }
+        : {}),
+    };
+    if (!stability.stable) {
+      const instabilityPayload = {
+        channelId: message.channelId,
+        scopeKey: stability.scopeKey,
+        turnId: turnSnapshot.turnId,
+        requestId: turnSnapshot.requestId,
+        previousTurnId: stability.previousTurnId ?? null,
+        previousStaticHash: stability.previousStaticHash ?? null,
+        currentStaticHash: stability.currentStaticHash,
+        staticBoundary: plan.cachePlan.staticBoundary,
+        changedBlocks: stability.changedBlocks ?? [],
+        promptCachingConfigured: promptCachePolicy !== null,
+      };
+      log.warn('Prompt static-prefix instability: static region changed between turns on the same scope', instabilityPayload);
+      runtime.emitTelemetry('prompt.cache.prefix_instability', instabilityPayload);
+    }
+  } else {
+    promptCaching.prefixStability = { checked: false };
+  }
+
   const contextMessageCount = context.messages.length;
   turnSnapshot.capturedAt = Date.now();
   turnSnapshot.plan = plan;
@@ -592,10 +688,7 @@ export async function assembleTurnPrompt(input: {
       backendApi: providerModel.api,
       ...(providerModel.baseUrl ? { backendBaseUrl: providerModel.baseUrl } : {}),
       systemRole: providerSystemRole,
-      promptCaching: {
-        configured: false,
-        engaged: false,
-      },
+      promptCaching,
       providerWireMessages,
     },
   };

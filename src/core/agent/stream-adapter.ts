@@ -388,6 +388,9 @@ function buildTransportContext(
     systemPrompt: llmContext.systemPrompt,
     messages: llmContext.messages,
     ...(llmContext.tools?.length ? { tools: llmContext.tools } : {}),
+    ...(llmContext.promptCacheBoundaries
+      ? { promptCacheBoundaries: llmContext.promptCacheBoundaries }
+      : {}),
     modelHint: buildTransportModelHint(candidate, requestOptions),
     ...(requestContext ? { correlation: requestContext as CorrelationMetadata } : {}),
   };

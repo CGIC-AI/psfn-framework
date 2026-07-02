@@ -49,6 +49,7 @@ const llmDescriptors: Array<AuditedMethodDescriptor<any, unknown>> = [
             systemPrompt: params.systemPrompt,
             messages: params.messages,
             ...(params.tools?.length ? { tools: params.tools } : {}),
+            ...(params.promptCacheBoundaries ? { promptCacheBoundaries: params.promptCacheBoundaries } : {}),
             ...(modelHint ? { modelHint } : {}),
             correlation,
           },
@@ -114,6 +115,7 @@ const llmDescriptors: Array<AuditedMethodDescriptor<any, unknown>> = [
           {
             systemPrompt: params.systemPrompt,
             messages: params.messages,
+            ...(params.promptCacheBoundaries ? { promptCacheBoundaries: params.promptCacheBoundaries } : {}),
             ...(modelHint ? { modelHint } : {}),
             correlation,
           },

@@ -398,6 +398,8 @@ describe('subsystem config round-trip', () => {
         budget: {
           maxTurns: 6,
           maxChargeUnits: 8,
+        },
+      },
       weightedThoughtOutreach: {
         enabled: false,
         checkIntervalMs: 300_000,

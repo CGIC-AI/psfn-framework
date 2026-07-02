@@ -75,6 +75,12 @@ export interface EditableSettings {
   memoryRetrievalBudgetPct?: number;
   moodCongruenceWeight?: number;
   adaptiveContextBudgetsEnabled?: boolean;
+  wikiRetrievalEnabled?: boolean;
+  wikiRetrievalChatTokenCap?: number;
+  wikiRetrievalGroupTokenCap?: number;
+  wikiRetrievalFocusTokenCap?: number;
+  wikiRetrievalSimilarityThreshold?: number;
+  wikiRetrievalGroupSimilarityThreshold?: number;
   sessionMirrorEnabled?: boolean;
   sessionMirrorMaxChars?: number;
   sessionMirrorActiveWindowMs?: number;
@@ -204,6 +210,12 @@ export const RUNTIME_SETTINGS_KEYS = [
   'memoryRetrievalBudgetPct',
   'moodCongruenceWeight',
   'adaptiveContextBudgetsEnabled',
+  'wikiRetrievalEnabled',
+  'wikiRetrievalChatTokenCap',
+  'wikiRetrievalGroupTokenCap',
+  'wikiRetrievalFocusTokenCap',
+  'wikiRetrievalSimilarityThreshold',
+  'wikiRetrievalGroupSimilarityThreshold',
   'sessionMirrorEnabled',
   'sessionMirrorMaxChars',
   'sessionMirrorActiveWindowMs',

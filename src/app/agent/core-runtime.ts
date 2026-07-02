@@ -269,7 +269,15 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
     searchQueryJson: createWebSearchQueryJson(llmProvider),
   });
   registerFilesystemTools(agentLoop, new GatewayFilesystemOps(gatewayOps), { gatewayMode: true });
-  wireWikiRuntime(agentLoop, pathSnapshot.workspaceRoot);
+  const wikiRuntime = await wireWikiRuntime(agentLoop, pathSnapshot.workspaceRoot, {
+    ...(config.postgresDatabaseUrl?.trim() ? { databaseUrl: config.postgresDatabaseUrl.trim() } : {}),
+    embedding: gateway,
+    eventBus,
+    getConfig: () => config,
+  });
+  // E8.3: attach the supplemental wiki RAG provider (null when the projection
+  // is unavailable); pre-turn assembly consults it AFTER memory context.
+  agentLoop.wikiRetrieval = wikiRuntime.retrievalService;
   const imageVisionReviewer = new DefaultImageVisionReviewer(config, {
     binaryFetcher: gateway.webFetchBinary.bind(gateway),
     llmProvider,

@@ -108,6 +108,12 @@ export interface SubstrateConfig {
   memoryRetrievalBudgetPct?: number;
   moodCongruenceWeight?: number;
   adaptiveContextBudgetsEnabled?: boolean;
+  wikiRetrievalEnabled?: boolean;
+  wikiRetrievalChatTokenCap?: number;
+  wikiRetrievalGroupTokenCap?: number;
+  wikiRetrievalFocusTokenCap?: number;
+  wikiRetrievalSimilarityThreshold?: number;
+  wikiRetrievalGroupSimilarityThreshold?: number;
   extractionInterval: number;
   maintenanceIntervalMs: number;
   defaultContextWindow: number;

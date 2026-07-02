@@ -39,7 +39,7 @@ import {
 } from '../deferred-tool-handoff.js';
 import type { EventBridge } from '../event-bridge.js';
 import type { RuntimeMode } from '../tool-wiring-validator.js';
-import type { LLMProviderPort, MemoryExtractor, MemoryProvider } from '../contracts.js';
+import type { LLMProviderPort, MemoryExtractor, MemoryProvider, WikiRetrievalPort } from '../contracts.js';
 import type { FatigueBudgetPort } from '../fatigue/fatigue-budget.js';
 import {
   attachRecordedFatigueEvent,
@@ -94,6 +94,8 @@ export interface TurnExecutionRuntime {
   promptCacheRuntime: PromptCacheTurnRuntime;
   memoryProvider: MemoryProvider | null;
   memoryExtractor: MemoryExtractor | null;
+  /** E8.3: supplemental wiki RAG provider; null until the projection is wired. */
+  wikiRetrieval: WikiRetrievalPort | null;
   skillsRuntime: SkillsRuntime | null;
   evaluateReflectionNudge: (toolSummary: TurnToolSummary) => string | null;
   emotionSelfModelRuntime: EmotionSelfModelRuntime;
@@ -599,6 +601,7 @@ export async function handleMessageForTurn(
   let contextMessageCount = 0;
   let memoryContextChars = 0;
   let memoryContextBlock = '';
+  let wikiContextBlock = '';
   let turnSnapshot: TurnSnapshot | undefined;
   let turnMessages: AgentMessage[] = [];
   let responseModel = runtime.agent.state.model.id;
@@ -729,6 +732,7 @@ export async function handleMessageForTurn(
       turnSnapshot.fatigue = fatigueDecision.metadata;
     }
     memoryContextBlock = preTurnState.memoryContextBlock;
+    wikiContextBlock = preTurnState.wikiContextBlock;
     memoryContextChars = preTurnState.memoryContextChars;
     const autoloadOutcome = runtime.preloadExtendedToolsForTurn(message, taskKind, turnCorrelationBase);
     runtime.applyActiveToolsToAgentForTurn(
@@ -753,6 +757,7 @@ export async function handleMessageForTurn(
       preTurnInternalState: preTurnState.preTurnInternalState,
       emotionAppraisalChain: preTurnState.emotionAppraisalChain,
       memoryContextBlock,
+      wikiContextBlock,
       scratchpadBlock: preTurnState.scratchpadBlock,
       turnBudgetCharacteristics,
       continuitySubjectKey,

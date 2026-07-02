@@ -28,7 +28,7 @@ import type { CapabilityTier, CoreSubstrateConfig, SubstrateConfig } from '../..
 import type { ContactStorePort } from '../contacts/contact-store-port.js';
 import type { ContactTrackingGate } from '../contacts/tracking-gate.js';
 import type { ImageVisionReviewer } from '../../primitives/images/types.js';
-import type { LLMProviderPort, MemoryProvider, MemoryExtractor, ScratchpadProvider } from './contracts.js';
+import type { LLMProviderPort, MemoryProvider, MemoryExtractor, ScratchpadProvider, WikiRetrievalPort } from './contracts.js';
 import type { TrustLevel } from '../../system/trust/types.js';
 import {
   resolveChannelResponseStyle,
@@ -295,6 +295,8 @@ export class SubstrateAgent {
   // Pluggable memory — null until memory system is wired
   memoryProvider: MemoryProvider | null = null;
   memoryExtractor: MemoryExtractor | null = null;
+  // E8.3: supplemental wiki RAG — null until the pgvector projection is wired.
+  wikiRetrieval: WikiRetrievalPort | null = null;
   scratchpadProvider: ScratchpadProvider | null = null;
   activeConcernProvider: ActiveConcernContextProvider | null = null;
   pendingFollowUpProvider: PendingFollowUpContextProvider | null = null;
@@ -922,6 +924,7 @@ export class SubstrateAgent {
       systemPrompt: this.systemPrompt,
       memoryProvider: this.memoryProvider,
       memoryExtractor: this.memoryExtractor,
+      wikiRetrieval: this.wikiRetrieval,
       skillsRuntime: this.skillsRuntime,
       evaluateReflectionNudge: (toolSummary) => this.reflectionNudge.evaluate(toolSummary),
       emotionSelfModelRuntime: this.emotionSelfModelRuntime,

@@ -69,6 +69,80 @@ export const MEMORY_RETRIEVAL_MIN_TOKENS_FLOOR_DEFAULT = 1_000;
 export const SESSION_HISTORY_BUDGET_PCT_RANGE: PercentageRange = { min: 1, max: 80 };
 export const MEMORY_RETRIEVAL_BUDGET_PCT_RANGE: PercentageRange = { min: 1, max: 50 };
 
+// E8.3: supplemental wiki RAG caps. Wiki context is bounded per context class
+// and allocated independently of (and after) the memory budget, so wiki never
+// displaces memory. The enable flag defaults OFF so live chat behavior is
+// unchanged until an operator opts in; the semantic index + wiki tool search
+// are always available regardless of this flag.
+export const WIKI_RETRIEVAL_ENABLED_DEFAULT = false;
+export const WIKI_RETRIEVAL_CHAT_TOKEN_CAP_DEFAULT = 1_000;
+export const WIKI_RETRIEVAL_GROUP_TOKEN_CAP_DEFAULT = 400;
+export const WIKI_RETRIEVAL_FOCUS_TOKEN_CAP_DEFAULT = 2_000;
+export const WIKI_RETRIEVAL_SIMILARITY_THRESHOLD_DEFAULT = 0.6;
+export const WIKI_RETRIEVAL_GROUP_SIMILARITY_THRESHOLD_DEFAULT = 0.78;
+
+export const WIKI_RETRIEVAL_TOKEN_CAP_RANGE = { min: 0, max: 16_000 } as const;
+export const WIKI_RETRIEVAL_SIMILARITY_THRESHOLD_RANGE = { min: 0, max: 1 } as const;
+
+export interface WikiRetrievalSettings {
+  enabled: boolean;
+  chatTokenCap: number;
+  groupTokenCap: number;
+  focusTokenCap: number;
+  similarityThreshold: number;
+  groupSimilarityThreshold: number;
+}
+
+export interface WikiRetrievalConfigLike {
+  wikiRetrievalEnabled?: boolean;
+  wikiRetrievalChatTokenCap?: number;
+  wikiRetrievalGroupTokenCap?: number;
+  wikiRetrievalFocusTokenCap?: number;
+  wikiRetrievalSimilarityThreshold?: number;
+  wikiRetrievalGroupSimilarityThreshold?: number;
+}
+
+function clampNumber(value: number | undefined, fallback: number, min: number, max: number): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return fallback;
+  return Math.max(min, Math.min(max, value));
+}
+
+export function resolveWikiRetrievalSettings(config: WikiRetrievalConfigLike): WikiRetrievalSettings {
+  return {
+    enabled: config.wikiRetrievalEnabled ?? WIKI_RETRIEVAL_ENABLED_DEFAULT,
+    chatTokenCap: Math.floor(clampNumber(
+      config.wikiRetrievalChatTokenCap,
+      WIKI_RETRIEVAL_CHAT_TOKEN_CAP_DEFAULT,
+      WIKI_RETRIEVAL_TOKEN_CAP_RANGE.min,
+      WIKI_RETRIEVAL_TOKEN_CAP_RANGE.max,
+    )),
+    groupTokenCap: Math.floor(clampNumber(
+      config.wikiRetrievalGroupTokenCap,
+      WIKI_RETRIEVAL_GROUP_TOKEN_CAP_DEFAULT,
+      WIKI_RETRIEVAL_TOKEN_CAP_RANGE.min,
+      WIKI_RETRIEVAL_TOKEN_CAP_RANGE.max,
+    )),
+    focusTokenCap: Math.floor(clampNumber(
+      config.wikiRetrievalFocusTokenCap,
+      WIKI_RETRIEVAL_FOCUS_TOKEN_CAP_DEFAULT,
+      WIKI_RETRIEVAL_TOKEN_CAP_RANGE.min,
+      WIKI_RETRIEVAL_TOKEN_CAP_RANGE.max,
+    )),
+    similarityThreshold: clampNumber(
+      config.wikiRetrievalSimilarityThreshold,
+      WIKI_RETRIEVAL_SIMILARITY_THRESHOLD_DEFAULT,
+      WIKI_RETRIEVAL_SIMILARITY_THRESHOLD_RANGE.min,
+      WIKI_RETRIEVAL_SIMILARITY_THRESHOLD_RANGE.max,
+    ),
+    groupSimilarityThreshold: clampNumber(
+      config.wikiRetrievalGroupSimilarityThreshold,
+      WIKI_RETRIEVAL_GROUP_SIMILARITY_THRESHOLD_DEFAULT,
+      WIKI_RETRIEVAL_SIMILARITY_THRESHOLD_RANGE.min,
+      WIKI_RETRIEVAL_SIMILARITY_THRESHOLD_RANGE.max,
+    ),
+  };
+}
+
 export const SESSION_HISTORY_ESTIMATED_TOKENS_PER_MESSAGE = 256;
 export const MEMORY_RETRIEVAL_ESTIMATED_TOKENS_PER_ITEM = 170;
 

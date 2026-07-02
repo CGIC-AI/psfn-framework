@@ -70,6 +70,12 @@ export interface PreTurnComputationResult {
   memoryContextBlock: string;
   memoryContextChars: number;
   memoryManifestSeed?: ContextManifestMemorySeed;
+  /**
+   * E8.3: supplemental wiki RAG block. Empty unless wiki retrieval is wired,
+   * enabled, and the deterministic gate fires. Always within its own token cap
+   * and assembled into the prompt AFTER memory context, never displacing it.
+   */
+  wikiContextBlock: string;
   scratchpadBlock: string;
 }
 
@@ -590,6 +596,19 @@ export async function computePreTurnState(input: {
     ? ''
     : activeMemoryContext?.contextBlock ?? '';
   const memoryContextChars = memoryContextBlock.length;
+  // E8.3: supplemental wiki RAG resolved AFTER memory context above. Memory
+  // content/budget is already fixed at this point, so wiki can never displace
+  // it; wiki carries its own bounded, config-owned token cap and fails closed
+  // to '' on any error. Skipped on vision-bypass turns and when unwired.
+  const wikiContextBlock = runtime.wikiRetrieval && !bypassMemoryForVisionTurn
+    ? await runtime.wikiRetrieval.retrieveContextBlock({
+      channelId: message.channelId,
+      queryText: memoryRetrievalContextText,
+      isDirectMessage: channelMeta.isDirectMessage,
+      focusActive: focusMemoryScopeQuery != null,
+      correlation: turnCorrelationBase,
+    })
+    : '';
   const scratchpadBlock = runtime.buildScratchpadContextBlock();
   observability.emitObservedTurnStage('memory', {
     durationMs: Date.now() - memoryStageStart,
@@ -613,6 +632,7 @@ export async function computePreTurnState(input: {
     memoryContextBlock,
     memoryContextChars,
     ...(activeMemoryContext?.manifestSeed ? { memoryManifestSeed: activeMemoryContext.manifestSeed } : {}),
+    wikiContextBlock,
     scratchpadBlock,
   };
 }

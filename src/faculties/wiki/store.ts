@@ -51,6 +51,15 @@ const SOURCE_CLASSES_REQUIRING_PROVENANCE = new Set<WikiSourceClass>([
 
 interface WikiStoreOptions {
   now?: () => Date;
+  /**
+   * E8.3: fired after a document is committed to the canonical workspace, so a
+   * pgvector projection can mirror it. The hook receives whatever was written
+   * and must be side-effect-only from the store's perspective: it runs after
+   * the write has durably landed and must never throw back into the write path
+   * (projection failures fail closed for search, never block wiki writes). It
+   * tolerates concurrent writers because it only projects the committed doc.
+   */
+  onUpsert?: (document: WikiDocument) => void;
 }
 
 function toPosix(path: string): string {
@@ -238,6 +247,7 @@ export class WikiStore implements WikiStorePort {
   private readonly documentsDir: string;
   private readonly metadataDir: string;
   private readonly now: () => Date;
+  private readonly onUpsert?: (document: WikiDocument) => void;
 
   constructor(workspacePath: string, options: WikiStoreOptions = {}) {
     this.workspaceRoot = resolveWorkspaceRoot(workspacePath);
@@ -245,6 +255,7 @@ export class WikiStore implements WikiStorePort {
     this.documentsDir = join(this.wikiRoot, WIKI_DOCUMENTS_DIRNAME);
     this.metadataDir = join(this.wikiRoot, WIKI_METADATA_DIRNAME);
     this.now = options.now ?? (() => new Date());
+    this.onUpsert = options.onUpsert;
   }
 
   getRootInfo() {
@@ -309,7 +320,18 @@ export class WikiStore implements WikiStorePort {
     this.ensureDirs();
     writeFileSync(bodyPath, body, 'utf-8');
     writeJsonAtomic(this.metadataPath(id), metadata);
-    return { ...metadata, body };
+    const document: WikiDocument = { ...metadata, body };
+    if (this.onUpsert) {
+      // Projection is a best-effort mirror: never let a projection error escape
+      // into the write path. The canonical workspace document is already
+      // committed above.
+      try {
+        this.onUpsert(document);
+      } catch {
+        // Fail closed for search only; the write itself has succeeded.
+      }
+    }
+    return document;
   }
 
   search(input: WikiSearchInput): WikiSearchResult {

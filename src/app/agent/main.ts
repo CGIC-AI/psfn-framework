@@ -18,6 +18,8 @@ import {
   registerTemporalWakeupTasks,
   TEMPORAL_WAKEUP_MORNING_TASK_NAME,
 } from '../../core/scheduler/temporal-wakeup.js';
+import { registerWeightedThoughtOutreachTask } from '../../core/scheduler/weighted-thought-outreach-lane.js';
+import { createLlmNudgeEvaluator } from '../../core/intention/weighted-thought-nudge-evaluator.js';
 import { HEARTBEAT_SILENT_REFLECTION_TOKEN } from '../../core/scheduler/heartbeat-policy.js';
 import { summarizeRecentSessionEntries } from '../../core/session/manager/compaction-service.js';
 import type { ChannelType } from '../../shared/contracts/runtime.js';
@@ -684,6 +686,33 @@ async function main(): Promise<void> {
       }
       : {}),
   });
+
+  // ── Weighted-thought outreach lane (E?/1xb.2) ──
+  // Internal-state-driven outreach: a weighted thought crossing threshold
+  // produces an LLM nudge the companion accepts or declines; accepted nudges
+  // ride the existing durable-outbox delivery path. Disabled by default
+  // (scheduler.json weightedThoughtOutreach.enabled) and fail-closed on channel
+  // resolution — primary heartbeat DM only until a group-continuation policy
+  // approver is wired.
+  if (persistenceRuntime.weightedThoughtStore) {
+    registerWeightedThoughtOutreachTask({
+      scheduler,
+      eventBus,
+      config: schedulerConfig.weightedThoughtOutreach,
+      quietHours: schedulerConfig.episodicProcessing,
+      store: persistenceRuntime.weightedThoughtStore,
+      nudgeEvaluator: createLlmNudgeEvaluator({
+        llmProvider,
+        characterName: card.data.name,
+      }),
+      channelPolicy: {
+        ...(heartbeatChannelId ? { primaryChannelId: heartbeatChannelId } : {}),
+        primaryChannelType: 'discord',
+      },
+    });
+  } else if (schedulerConfig.weightedThoughtOutreach.enabled) {
+    log.warn('weightedThoughtOutreach enabled but no weighted-thought store is available; lane not registered');
+  }
 
   // Journal auto-publisher (for heartbeat reflections -> markdown journal)
   const journalAutoPublisher = createOptionalJournalAutoPublisher(pathSnapshot.workspaceRoot, config);

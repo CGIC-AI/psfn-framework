@@ -56,6 +56,7 @@ const DEFAULT_MEMORY_EXTRACTION_MIN_CONFIDENCE = 0.6;
 const DEFAULT_MEMORY_EXTRACTION_MIN_NOVELTY = 0.35;
 const DEFAULT_MEMORY_EXTRACTION_EMOTIONAL_INTENSITY_WEIGHT = 0.2;
 const DEFAULT_MEMORY_EXTRACTION_MAX_WRITES = 2;
+const DEFAULT_MEMORY_REFRESH_FAILURE_ALERT_THRESHOLD = 3;
 const DEFAULT_PROFILE_SYNTHESIS_REFRESH_INTERVAL_MS = 6 * 60 * 60 * 1000;
 const DEFAULT_PROFILE_SYNTHESIS_COOLDOWN_MS = 5 * 60 * 1000;
 const DEFAULT_PROFILE_SYNTHESIS_MIN_WRITES = 1;
@@ -310,6 +311,7 @@ function loadConfigForMode(mode: LoadConfigMode, env: NodeJS.ProcessEnv = proces
     memoryExtractionMaxWrites: DEFAULT_MEMORY_EXTRACTION_MAX_WRITES,
     memoryExtractionTelemetryEnabled: true,
     memoryRetrievalTelemetryEnabled: true,
+    memoryRefreshFailureAlertThreshold: DEFAULT_MEMORY_REFRESH_FAILURE_ALERT_THRESHOLD,
     groupMemory: createDefaultGroupMemorySettings(),
     emotionScoping: createDefaultEmotionScopingSettings(),
     profileSynthesisEnabled: true,

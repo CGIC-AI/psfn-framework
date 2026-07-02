@@ -90,6 +90,7 @@ const DIRECT_DEFINED_CONFIG_SETTINGS = [
   'memoryExtractionMaxWrites',
   'memoryExtractionTelemetryEnabled',
   'memoryRetrievalTelemetryEnabled',
+  'memoryRefreshFailureAlertThreshold',
   'groupMemory',
   'emotionScoping',
   'profileSynthesisEnabled',
@@ -186,6 +187,8 @@ function getMemorySettingsSnapshot(config: SubstrateConfig) {
       config.memoryExtractionTelemetryEnabled ?? true,
     memoryRetrievalTelemetryEnabled:
       config.memoryRetrievalTelemetryEnabled ?? true,
+    memoryRefreshFailureAlertThreshold:
+      config.memoryRefreshFailureAlertThreshold ?? null,
     groupMemory: cloneGroupMemorySettings(
       config.groupMemory ?? createDefaultGroupMemorySettings(),
     ),
@@ -220,6 +223,7 @@ function getMemorySettingsSnapshot(config: SubstrateConfig) {
     | 'memoryExtractionMaxWrites'
     | 'memoryExtractionTelemetryEnabled'
     | 'memoryRetrievalTelemetryEnabled'
+    | 'memoryRefreshFailureAlertThreshold'
     | 'groupMemory'
     | 'emotionScoping'
     | 'profileSynthesisEnabled'

@@ -126,6 +126,12 @@ export interface SubstrateConfig {
   memoryExtractionMaxWrites?: number;
   memoryExtractionTelemetryEnabled?: boolean;
   memoryRetrievalTelemetryEnabled?: boolean;
+  /**
+   * Consecutive failed active-memory context refreshes (per context key)
+   * before an operator alert is raised via the system-derived notification
+   * path (E5.5). Owned by settings.json.
+   */
+  memoryRefreshFailureAlertThreshold?: number;
   groupMemory?: GroupMemorySettings;
   emotionScoping?: EmotionScopingSettings;
   profileSynthesisEnabled?: boolean;

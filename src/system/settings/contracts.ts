@@ -96,6 +96,7 @@ export interface EditableSettings {
   memoryExtractionMaxWrites?: number;
   memoryExtractionTelemetryEnabled?: boolean;
   memoryRetrievalTelemetryEnabled?: boolean;
+  memoryRefreshFailureAlertThreshold?: number;
   groupMemory?: GroupMemorySettings;
   emotionScoping?: EmotionScopingSettings;
   profileSynthesisEnabled?: boolean;
@@ -222,6 +223,7 @@ export const RUNTIME_SETTINGS_KEYS = [
   'memoryExtractionMaxWrites',
   'memoryExtractionTelemetryEnabled',
   'memoryRetrievalTelemetryEnabled',
+  'memoryRefreshFailureAlertThreshold',
   'groupMemory',
   'emotionScoping',
   'profileSynthesisEnabled',

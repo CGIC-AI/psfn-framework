@@ -68,6 +68,7 @@ import type { CharacterCardVersionStore } from '../../core/identity/card-version
 import type { SubstrateAgent } from '../../core/agent/substrate-agent.js';
 import type { ContactTrackingGate } from '../../core/contacts/tracking-gate.js';
 import {
+  createActiveMemoryRefreshFailureAlertHandler,
   createPromptGenerationFailureAlertHandler,
   isPromptGenerationFailureAlertConfigured,
 } from '../startup/support/operator-alerts.js';
@@ -220,6 +221,19 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
   });
   agentLoop.scratchpadProvider = memoryStore;
   agentLoop.setCapabilityRuntime(capabilityRuntime);
+  // E5.5: persistent active-memory refresh failure raises an operator alert
+  // through the system-derived gateway notification path. The threshold is
+  // config-owned (settings.json memoryRefreshFailureAlertThreshold) and the
+  // handler factory fails closed on a missing or invalid value.
+  eventBus.on(
+    'memory.active_context.refresh',
+    createActiveMemoryRefreshFailureAlertHandler({
+      notifier: operatorNotifier,
+      companionName: card.data.name,
+      failureThreshold: config.memoryRefreshFailureAlertThreshold,
+      enabled: isPromptGenerationFailureAlertConfigured(process.env),
+    }),
+  );
   agentLoop.registerTool(createSelfStatusTool({
     config,
     getCapabilityTier: () => capabilityRuntime.getTier(),

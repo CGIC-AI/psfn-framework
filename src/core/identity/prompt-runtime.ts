@@ -873,8 +873,8 @@ const PROMPT_RUNTIME_BLOCKS: readonly PromptRuntimeBlockDefinition[] = Object.fr
   {
     id: 'memory.retrieval',
     label: 'Retrieved Memory',
-    description: 'L2 retrieval and proactive recall block selected for the turn.',
-    source: 'turn-execution-runtime:memoryProvider.retrieve',
+    description: 'L2 retrieval block served from the cached active-memory context for the turn.',
+    source: 'turn-execution-runtime:activeMemoryContext',
     schema: REQUIRED_RUNTIME_AWARE_SCHEMA,
     placement: 'system_prompt',
     visibility: 'runtime_generated',

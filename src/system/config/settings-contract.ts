@@ -208,6 +208,7 @@ const SETTINGS_INTEGER_FIELDS = new Set<string>([
   'observationMaskingWindow',
   'compactionEmotionalSalienceThresholdPct',
   'memoryExtractionMaxWrites',
+  'memoryRefreshFailureAlertThreshold',
   'profileSynthesisRefreshIntervalMs',
   'profileSynthesisCooldownMs',
   'profileSynthesisMinWrites',

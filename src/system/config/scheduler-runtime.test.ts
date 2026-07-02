@@ -2,6 +2,7 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { describe, expect, it } from 'vitest';
+import { DEFAULT_TEMPORAL_WAKEUP_CONFIG } from './scheduler-config.js';
 import { resolveRuntimeSchedulerConfig } from './scheduler-runtime.js';
 
 function writeJson(path: string, value: unknown): void {
@@ -97,6 +98,7 @@ describe('resolveRuntimeSchedulerConfig', () => {
           coPresenceWindowMinutes: 1440,
           scanMemoryLimit: 500,
         },
+        temporalWakeup: DEFAULT_TEMPORAL_WAKEUP_CONFIG,
       });
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -184,6 +186,7 @@ describe('resolveRuntimeSchedulerConfig', () => {
           coPresenceWindowMinutes: 1440,
           scanMemoryLimit: 500,
         },
+        temporalWakeup: DEFAULT_TEMPORAL_WAKEUP_CONFIG,
       });
     } finally {
       rmSync(root, { recursive: true, force: true });

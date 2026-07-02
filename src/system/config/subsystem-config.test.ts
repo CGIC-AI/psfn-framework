@@ -311,6 +311,23 @@ describe('subsystem config round-trip', () => {
         coPresenceWindowMinutes: 1440,
         scanMemoryLimit: 500,
       },
+      temporalWakeup: {
+        enabled: true,
+        morningWake: {
+          enabled: true,
+          localTime: '08:00',
+          timezone: 'local',
+          catchUpEntryLimit: 32,
+          catchUpSummaryMaxTokens: 160,
+          fullTurnMaxIdleHours: 72,
+        },
+        idleRefresher: {
+          enabled: true,
+          checkIntervalMs: 900_000,
+          minIdleMinutes: 240,
+          minNoteIntervalMinutes: 240,
+        },
+      },
     };
 
     expect(saveSchedulerConfig(dataDir, expected)).toEqual(expected);

@@ -114,6 +114,23 @@ describe('startup owner-file loaders', () => {
         coPresenceWindowMinutes: 1440,
         scanMemoryLimit: 500,
       },
+      temporalWakeup: {
+        enabled: true,
+        morningWake: {
+          enabled: true,
+          localTime: '08:00',
+          timezone: 'local',
+          catchUpEntryLimit: 32,
+          catchUpSummaryMaxTokens: 160,
+          fullTurnMaxIdleHours: 72,
+        },
+        idleRefresher: {
+          enabled: true,
+          checkIntervalMs: 900_000,
+          minIdleMinutes: 240,
+          minNoteIntervalMinutes: 240,
+        },
+      },
     };
     saveSchedulerConfig(rootDir, scheduler);
 

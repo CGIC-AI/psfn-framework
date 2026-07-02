@@ -12,6 +12,7 @@ import type {
 } from '../types.js';
 import { CHANNEL_PRIVACY_LEVELS } from '../types.js';
 import type { TrustLevel } from '../../../system/trust/types.js';
+import { decodeStoredChannelVisibility } from '../../../system/trust/types.js';
 import type { ContactIdentityVerificationRow } from './domain-types.js';
 
 export const LEGACY_DISCORD_CHANNEL = 'discord';
@@ -37,7 +38,7 @@ export function defaultPrivacyForChannel(channel: ContactChannel): ChannelPrivac
   if (normalized === 'twitter' || normalized === 'rss' || normalized === 'broadcast') {
     return 'broadcast';
   }
-  return 'semi_private';
+  return 'invite_only';
 }
 
 export function normalizePrivacyLevel(
@@ -45,9 +46,9 @@ export function normalizePrivacyLevel(
   channel: ContactChannel,
 ): ChannelPrivacyLevel {
   if (!privacyLevel) return defaultPrivacyForChannel(channel);
-  return CHANNEL_PRIVACY_LEVELS.includes(privacyLevel)
-    ? privacyLevel
-    : defaultPrivacyForChannel(channel);
+  // Stored contact rows may predate the E3.1 vocabulary rename; the shared
+  // decoder maps legacy 'semi_private' to 'invite_only'.
+  return decodeStoredChannelVisibility(privacyLevel) ?? defaultPrivacyForChannel(channel);
 }
 
 export function isValidChannelPrivacyLevel(level: string): level is ChannelPrivacyLevel {

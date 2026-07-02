@@ -13,6 +13,7 @@ import {
   type ChannelMeta,
 } from '../../system/trust/policy.js';
 import type { ChannelVisibility } from '../../system/trust/types.js';
+import { decodeStoredChannelVisibility } from '../../system/trust/types.js';
 import {
   appendJournalEntry,
   buildMessageJournalEntry,
@@ -78,7 +79,8 @@ export function parseContinuityEntryProvenance(metadata?: string): ContinuityEnt
   const kind = provenance.kind;
   const continuityUserId = provenance.continuityUserId;
   const sourceChannelId = provenance.sourceChannelId;
-  const sourceVisibility = provenance.sourceVisibility;
+  // Continuity provenance is persisted; decode legacy 'semi_private' records.
+  const sourceVisibility = decodeStoredChannelVisibility(provenance.sourceVisibility);
   const sourceRole = provenance.sourceRole;
   const recordedAt = provenance.recordedAt;
 
@@ -86,12 +88,7 @@ export function parseContinuityEntryProvenance(metadata?: string): ContinuityEnt
     kind !== 'continuity'
     || typeof continuityUserId !== 'string'
     || typeof sourceChannelId !== 'string'
-    || (
-      sourceVisibility !== 'private'
-      && sourceVisibility !== 'semi_private'
-      && sourceVisibility !== 'public'
-      && sourceVisibility !== 'broadcast'
-    )
+    || sourceVisibility === undefined
     || sourceRole !== 'user'
     && sourceRole !== 'assistant'
     && sourceRole !== 'system'
@@ -293,13 +290,7 @@ export class UserContinuityStore {
 }
 
 function parseChannelVisibility(value?: string): ChannelVisibility | undefined {
-  switch (value) {
-    case 'private':
-    case 'semi_private':
-    case 'public':
-    case 'broadcast':
-      return value;
-    default:
-      return undefined;
-  }
+  // Parses persisted continuity journal labels; the shared decoder maps
+  // records written before the E3.1 vocabulary rename to 'invite_only'.
+  return decodeStoredChannelVisibility(value);
 }

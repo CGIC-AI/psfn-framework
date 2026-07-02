@@ -961,13 +961,13 @@ describe('MemoryRetriever trust-gated filtering', () => {
     expect(result).not.toContain('Alpha only memory');
   });
 
-  it('primary trust + semi_private channel returns public + personal only', async () => {
+  it('primary trust + invite_only channel returns public + personal only', async () => {
     const memories = makeAllSensitivities();
     const store = makeMockStore(memories);
     const embedding = makeMockEmbedding();
     const retriever = new MemoryRetriever(store, embedding, { retrievalLimit: 20 });
 
-    // Numeric channel = semi_private (Discord guild)
+    // Numeric channel = invite_only (Discord guild)
     const result = await retriever.retrieve('test query', '1234567890', 'primary');
 
     expect(result).toContain('Public fact');
@@ -1014,7 +1014,7 @@ describe('MemoryRetriever trust-gated filtering', () => {
     expect(result).toContain('Confidential secret');
   });
 
-  it('primary trust + Discord guild metadata remains semi_private', async () => {
+  it('primary trust + Discord guild metadata remains invite_only', async () => {
     const memories = makeAllSensitivities();
     const store = makeMockStore(memories);
     const embedding = makeMockEmbedding();
@@ -2902,8 +2902,8 @@ describe('MemoryRetriever room-scoped visibility', () => {
 
   it('allows same-room group memories while blocking cross-room and DM memories in a group room', async () => {
     const { contactStore, vegaId } = makeRoomVisibilityContactStore();
-    contactStore.recordChannelActivity(vegaId, 'discord', GROUP_ROOM_X, 'semi_private');
-    contactStore.recordChannelActivity(vegaId, 'discord', GROUP_ROOM_Y, 'semi_private');
+    contactStore.recordChannelActivity(vegaId, 'discord', GROUP_ROOM_X, 'invite_only');
+    contactStore.recordChannelActivity(vegaId, 'discord', GROUP_ROOM_Y, 'invite_only');
     const sameRoomMemory = makeMemory({
       id: 'group-x-memory',
       text: 'Room X decided the deployment window is Friday.',
@@ -2941,7 +2941,7 @@ describe('MemoryRetriever room-scoped visibility', () => {
       'deployment window and launch notes',
       GROUP_ROOM_X,
       'primary',
-      { isDirectMessage: false, privacyLevel: 'semi_private' },
+      { isDirectMessage: false, privacyLevel: 'invite_only' },
       vegaId,
     );
 
@@ -2959,7 +2959,7 @@ describe('MemoryRetriever room-scoped visibility', () => {
 
   it('allows same-room personal memories for regular contacts without trust ceiling rejection', async () => {
     const { contactStore, vegaId } = makeRoomVisibilityContactStore();
-    contactStore.recordChannelActivity(vegaId, 'discord', GROUP_ROOM_X, 'semi_private');
+    contactStore.recordChannelActivity(vegaId, 'discord', GROUP_ROOM_X, 'invite_only');
     const sameRoomPersonalMemory = makeMemory({
       id: 'group-x-personal-memory',
       text: 'Room X heard Vega prefers the quiet rollout plan.',
@@ -2982,7 +2982,7 @@ describe('MemoryRetriever room-scoped visibility', () => {
       'quiet rollout plan',
       GROUP_ROOM_X,
       'regular',
-      { isDirectMessage: false, privacyLevel: 'semi_private' },
+      { isDirectMessage: false, privacyLevel: 'invite_only' },
       vegaId,
     );
 
@@ -2998,7 +2998,7 @@ describe('MemoryRetriever room-scoped visibility', () => {
 
   it('allows participated group memories in the participant DM and blocks non-participated rooms', async () => {
     const { contactStore, vegaId } = makeRoomVisibilityContactStore();
-    contactStore.recordChannelActivity(vegaId, 'discord', GROUP_ROOM_X, 'semi_private');
+    contactStore.recordChannelActivity(vegaId, 'discord', GROUP_ROOM_X, 'invite_only');
     const dmMemory = makeMemory({
       id: 'vega-dm-memory',
       text: 'Vega DM reminder: prefer short deployment summaries.',
@@ -3055,7 +3055,7 @@ describe('MemoryRetriever room-scoped visibility', () => {
 
   it('allows participated group personal memories in the participant DM for regular contacts', async () => {
     const { contactStore, vegaId } = makeRoomVisibilityContactStore();
-    contactStore.recordChannelActivity(vegaId, 'discord', GROUP_ROOM_X, 'semi_private');
+    contactStore.recordChannelActivity(vegaId, 'discord', GROUP_ROOM_X, 'invite_only');
     const participatedGroupMemory = makeMemory({
       id: 'group-x-personal-memory',
       text: 'Room X knows Vega volunteered to own the risky checklist.',
@@ -3135,7 +3135,7 @@ describe('MemoryRetriever room-scoped visibility', () => {
 
   it('withholds same-room memories from retired logical sessions while allowing fresh-route memories', async () => {
     const { contactStore, vegaId } = makeRoomVisibilityContactStore();
-    contactStore.recordChannelActivity(vegaId, 'discord', GROUP_ROOM_X, 'semi_private');
+    contactStore.recordChannelActivity(vegaId, 'discord', GROUP_ROOM_X, 'invite_only');
     const freshLogicalSessionId = `${GROUP_ROOM_X}:session:20260630T120000Z-fresh123`;
     const retiredMemory = makeMemory({
       id: 'retired-room-memory',
@@ -3174,7 +3174,7 @@ describe('MemoryRetriever room-scoped visibility', () => {
       'deployment checklist',
       GROUP_ROOM_X,
       'primary',
-      { isDirectMessage: false, privacyLevel: 'semi_private' },
+      { isDirectMessage: false, privacyLevel: 'invite_only' },
       vegaId,
     );
 
@@ -3192,7 +3192,7 @@ describe('MemoryRetriever room-scoped visibility', () => {
 
   it('carries room-visibility rejections into active context manifest seeds', async () => {
     const { contactStore, vegaId } = makeRoomVisibilityContactStore();
-    contactStore.recordChannelActivity(vegaId, 'discord', GROUP_ROOM_X, 'semi_private');
+    contactStore.recordChannelActivity(vegaId, 'discord', GROUP_ROOM_X, 'invite_only');
     const sameRoomMemory = makeMemory({
       id: 'group-x-memory',
       text: 'Room X selected the blue release train.',
@@ -3220,7 +3220,7 @@ describe('MemoryRetriever room-scoped visibility', () => {
       contextText: 'release train',
       channelId: GROUP_ROOM_X,
       trustLevel: 'primary' as const,
-      channelMeta: { isDirectMessage: false, privacyLevel: 'semi_private' as const },
+      channelMeta: { isDirectMessage: false, privacyLevel: 'invite_only' as const },
       canonicalContactId: vegaId,
     };
 

@@ -40,6 +40,12 @@ export const CONVERSATION_SCOPE_RECENT_SPEAKER_LIMIT = 5;
 export type ConversationScopeKey = `dm:${string}` | `room:${string}`;
 
 interface ConversationScopeBase {
+  // E3.3 seam (Context Envelope contract, docs/context-envelope.md):
+  // ConversationScope gains `readonly envelope: ContextEnvelope`
+  // (src/system/trust/context-envelope.ts — see ContextEnvelopeCarrier),
+  // resolved once per turn at session-manager ingress alongside the scope.
+  // E3.1 deliberately does NOT add the field: the envelope stays a contract
+  // until the operator ratifies it and E3.2 wires owner-file classification.
   readonly channelId: string;
   /**
    * Distinct recent user-role speakers, most recent session window first

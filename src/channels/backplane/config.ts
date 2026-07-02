@@ -16,6 +16,10 @@ import {
   normalizeChannelVisibility,
   type ChannelVisibility,
 } from '../../system/trust/types.js';
+import {
+  validateChannelEnvelopeLabel,
+  type ChannelEnvelopeLabel,
+} from '../../system/trust/context-envelope.js';
 import type { ChannelType } from '../../shared/contracts/runtime.js';
 import {
   createDefaultChannelGroupMemoryConfig,
@@ -69,10 +73,24 @@ export interface PsfnAmicaChannelConfig {
   defaultIdentity?: ExternalChannelProfileConfig;
 }
 
+/**
+ * Channel-owned Context Envelope labels (E3.1 contract,
+ * docs/context-envelope.md). channels.json owns per-channel
+ * { privacy, broadcast, contactTracking }; these labels are the
+ * highest-precedence source for a channel's envelope:
+ *   channel-owned label > operator trust-policy override > derived default.
+ * E3.1 validates and carries this section; E3.2 wires it into classification.
+ */
+export interface ChannelContextEnvelopeConfig {
+  /** Exact channel-id keyed envelope labels. */
+  channels: Record<string, ChannelEnvelopeLabel>;
+}
+
 export interface RuntimeChannelsConfig {
   discord: DiscordChannelConfig;
   telegram: TelegramChannelConfig;
   psfnAmica: PsfnAmicaChannelConfig;
+  contextEnvelope: ChannelContextEnvelopeConfig;
 }
 
 export interface RuntimeChannelsConfigOverrides {
@@ -106,6 +124,41 @@ const DEFAULT_DISCORD_CHANNEL_CONFIG: DiscordChannelConfig = {
 const DEFAULT_PSFN_AMICA_CHANNEL_CONFIG: PsfnAmicaChannelConfig = {
   enabled: false,
 };
+
+export function createDefaultChannelContextEnvelopeConfig(): ChannelContextEnvelopeConfig {
+  return { channels: {} };
+}
+
+function parseContextEnvelopeSection(
+  scopedRoot: Record<string, unknown>,
+): ChannelContextEnvelopeConfig {
+  const section = parseSectionObject(scopedRoot, 'contextEnvelope');
+  if (!section) return createDefaultChannelContextEnvelopeConfig();
+
+  const unknownKeys = Object.keys(section).filter(key => key !== 'channels');
+  if (unknownKeys.length > 0) {
+    throw new Error(`channels.json.contextEnvelope has unsupported keys: ${unknownKeys.join(', ')}`);
+  }
+
+  const channelsRaw = section.channels;
+  if (channelsRaw === undefined) return createDefaultChannelContextEnvelopeConfig();
+  if (!isRecord(channelsRaw)) {
+    throw new Error('channels.json.contextEnvelope.channels must be an object');
+  }
+
+  const channels: Record<string, ChannelEnvelopeLabel> = {};
+  for (const [rawChannelId, rawLabel] of Object.entries(channelsRaw)) {
+    const channelId = rawChannelId.trim();
+    if (!channelId) {
+      throw new Error('channels.json.contextEnvelope.channels keys must be non-empty channel ids');
+    }
+    channels[channelId] = validateChannelEnvelopeLabel(
+      rawLabel,
+      `channels.json.contextEnvelope.channels.${rawChannelId}`,
+    );
+  }
+  return { channels };
+}
 
 function parseBoolean(value: unknown): boolean | undefined {
   if (typeof value === 'boolean') return value;
@@ -253,7 +306,7 @@ function parseExternalChannelProfile(
     ? normalizeChannelVisibility(channelPrivacyRaw)
     : undefined;
   if (channelPrivacyRaw && !channelPrivacy) {
-    throw new Error(`${fieldName}.channelPrivacy must be one of: private, semi_private, public, broadcast`);
+    throw new Error(`${fieldName}.channelPrivacy must be one of: private, invite_only, public, broadcast`);
   }
 
   const profile: ExternalChannelProfileConfig = {
@@ -350,6 +403,9 @@ export function loadRuntimeChannelsConfig(
   const rawConfig = loadChannelsOwnerFile(dataDir);
   const root = isRecord(rawConfig) ? rawConfig : {};
   const scopedRoot = parseSectionObject(root, 'channels') ?? root;
+  // Context Envelope labels are validated fail-closed at load (E3.1 contract);
+  // classification consumes them in E3.2.
+  const contextEnvelope = parseContextEnvelopeSection(scopedRoot);
   const discordConfig = parseSectionObject(scopedRoot, 'discord') ?? {};
   const psfnAmicaConfig = parseSectionObject(scopedRoot, 'psfnAmica') ?? {};
   if (Object.keys(psfnAmicaConfig).length > 0 && !Object.hasOwn(psfnAmicaConfig, 'enabled')) {
@@ -486,6 +542,7 @@ export function loadRuntimeChannelsConfig(
         path: webhookPath,
       },
     },
+    contextEnvelope,
   };
 }
 

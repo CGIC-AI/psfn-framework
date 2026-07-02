@@ -405,7 +405,7 @@ describe('loadRuntimeChannelsConfig', () => {
             authorId: 'primary-user',
             authorName: 'Primary User',
             canonicalContactId: 'contact-primary-user',
-            channelPrivacy: 'semi_private',
+            channelPrivacy: 'invite_only',
           },
         },
       }));
@@ -418,7 +418,7 @@ describe('loadRuntimeChannelsConfig', () => {
           authorId: 'primary-user',
           authorName: 'Primary User',
           canonicalContactId: 'contact-primary-user',
-          channelPrivacy: 'semi_private',
+          channelPrivacy: 'invite_only',
         },
       });
       expect(buildExternalChannelProfiles(config)).toEqual({
@@ -426,7 +426,7 @@ describe('loadRuntimeChannelsConfig', () => {
           authorId: 'primary-user',
           authorName: 'Primary User',
           canonicalContactId: 'contact-primary-user',
-          channelPrivacy: 'semi_private',
+          channelPrivacy: 'invite_only',
         },
       });
     } finally {
@@ -444,7 +444,7 @@ describe('loadRuntimeChannelsConfig', () => {
             authorId: 'primary-user',
             authorName: 'Primary User',
             canonicalContactId: 'contact-primary-user',
-            channelPrivacy: 'semi_private',
+            channelPrivacy: 'invite_only',
           },
         },
       }));
@@ -630,6 +630,111 @@ describe('loadRuntimeChannelsConfig', () => {
       }));
       const falseyConfig = loadRuntimeChannelsConfig(dataDir, {});
       expect(falseyConfig.telegram.enabled).toBe(false);
+    } finally {
+      rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  it('defaults contextEnvelope to an empty channel-label map', () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'psfn-channel-config-'));
+    try {
+      const config = loadRuntimeChannelsConfig(dataDir, {});
+      expect(config.contextEnvelope).toEqual({ channels: {} });
+    } finally {
+      rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  it('parses per-channel contextEnvelope labels from channels.json', () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'psfn-channel-config-'));
+    try {
+      writeFileSync(join(dataDir, 'channels.json'), JSON.stringify({
+        contextEnvelope: {
+          channels: {
+            'discord:friends-room': {
+              privacy: 'invite_only',
+              broadcast: false,
+              contactTracking: 'auto',
+            },
+            'twitter:main': {
+              privacy: 'public',
+              broadcast: true,
+            },
+          },
+        },
+      }));
+
+      const config = loadRuntimeChannelsConfig(dataDir, {});
+      expect(config.contextEnvelope.channels['discord:friends-room']).toEqual({
+        privacy: 'invite_only',
+        broadcast: false,
+        contactTracking: 'auto',
+      });
+      expect(config.contextEnvelope.channels['twitter:main']).toEqual({
+        privacy: 'public',
+        broadcast: true,
+      });
+    } finally {
+      rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  it('accepts the reserved role_gated contactTracking mode as config', () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'psfn-channel-config-'));
+    try {
+      writeFileSync(join(dataDir, 'channels.json'), JSON.stringify({
+        contextEnvelope: {
+          channels: {
+            'discord:big-room': { contactTracking: 'role_gated' },
+          },
+        },
+      }));
+
+      const config = loadRuntimeChannelsConfig(dataDir, {});
+      expect(config.contextEnvelope.channels['discord:big-room']).toEqual({
+        contactTracking: 'role_gated',
+      });
+    } finally {
+      rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  it('fails closed on retired or invalid contextEnvelope vocabulary', () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'psfn-channel-config-'));
+    try {
+      writeFileSync(join(dataDir, 'channels.json'), JSON.stringify({
+        contextEnvelope: {
+          channels: {
+            'discord:room': { privacy: 'semi_private' },
+          },
+        },
+      }));
+      expect(() => loadRuntimeChannelsConfig(dataDir, {})).toThrow(/privacy/);
+
+      writeFileSync(join(dataDir, 'channels.json'), JSON.stringify({
+        contextEnvelope: {
+          channels: {
+            'discord:room': { privacy: 'broadcast' },
+          },
+        },
+      }));
+      expect(() => loadRuntimeChannelsConfig(dataDir, {})).toThrow(/privacy/);
+
+      writeFileSync(join(dataDir, 'channels.json'), JSON.stringify({
+        contextEnvelope: {
+          channels: {
+            'discord:room': {},
+          },
+        },
+      }));
+      expect(() => loadRuntimeChannelsConfig(dataDir, {})).toThrow(/at least one field/);
+
+      writeFileSync(join(dataDir, 'channels.json'), JSON.stringify({
+        contextEnvelope: {
+          thresholds: { fewMax: 10 },
+        },
+      }));
+      expect(() => loadRuntimeChannelsConfig(dataDir, {})).toThrow(/unsupported keys/);
     } finally {
       rmSync(dataDir, { recursive: true, force: true });
     }

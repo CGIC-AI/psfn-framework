@@ -283,7 +283,7 @@ describe('observer eval privacy boundary', () => {
       source: {
         routingSource: 'api',
         isDirectMessage: false,
-        channelPrivacy: 'semi_private',
+        channelPrivacy: 'invite_only',
       },
       metadata: {
         trustLevel: 'trusted',
@@ -301,8 +301,8 @@ describe('observer eval privacy boundary', () => {
     expect(logSafeInput.privacy).toMatchObject({
       privacyClass: 'restricted',
       sensitivity: 'personal',
-      channelVisibility: 'semi_private',
-      redactionReason: 'semi_private_channel_metadata_only',
+      channelVisibility: 'invite_only',
+      redactionReason: 'invite_only_channel_metadata_only',
     });
     expect(logSafeInput.provenance.correlation).toEqual({
       callType: 'chat',

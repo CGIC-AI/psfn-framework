@@ -85,7 +85,7 @@
 
   const PRIVACY_BADGE_STYLES: Record<string, { bg: string; text: string; label: string }> = {
     private:      { bg: 'background-color: #4A7C59', text: 'color: white', label: 'Private' },
-    semi_private: { bg: 'background-color: #8B7355', text: 'color: white', label: 'Semi-Private' },
+    invite_only: { bg: 'background-color: #8B7355', text: 'color: white', label: 'Invite-Only' },
     public:       { bg: 'background-color: #4A5C8B', text: 'color: white', label: 'Public' },
     broadcast:    { bg: 'background-color: #C44569', text: 'color: white', label: 'Broadcast' },
   };

@@ -145,7 +145,7 @@ describe('group memory range planning', () => {
       makeEntry(2, {
         authorId: 'human-2',
         authorName: 'Human Two',
-        channelVisibility: 'semi_private',
+        channelVisibility: 'invite_only',
         discordMessageId: 'discord-msg-2',
         metadata: JSON.stringify({ source: 'fixture' }),
       }),
@@ -173,7 +173,7 @@ describe('group memory range planning', () => {
       authorId: 'human-2',
       authorName: 'Human Two',
       timestamp: 2_000,
-      channelVisibility: 'semi_private',
+      channelVisibility: 'invite_only',
       discordMessageId: 'discord-msg-2',
       metadata: JSON.stringify({ source: 'fixture' }),
     });

@@ -174,7 +174,7 @@ function parseChannelPrivacy(value: unknown, fieldName: string): ChannelVisibili
   const raw = parseConfiguredString(value, fieldName);
   const parsed = normalizeChannelVisibility(raw);
   if (!parsed) {
-    throw new Error(`${fieldName} must be one of: private, semi_private, public, broadcast`);
+    throw new Error(`${fieldName} must be one of: private, invite_only, public, broadcast`);
   }
   return parsed;
 }

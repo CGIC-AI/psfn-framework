@@ -456,7 +456,7 @@ describe('contact tools', () => {
       expect(text).toContain('Contacts (2)');
       expect(text).toContain(`${grace.id}: Grace [trusted/friend]`);
       expect(text).toContain('channels=api:grace-api[private]');
-      expect(text).toContain('discord:grace-discord[semi_private]');
+      expect(text).toContain('discord:grace-discord[invite_only]');
       expect(text).toContain('Met at conf');
       expect(text).toContain('Hank [regular/acquaintance]');
       expect(text).toContain('Pass contactId from this list to action=lookup, action=set_trust, or action=note');

@@ -409,7 +409,7 @@ function collectProjectionSignals(input: ObserverEvalSanitizedInputPayload): Pro
   const directScore = input.source.isDirectMessage ? 1 : 0;
   const privateChannelScore = input.source.channelPrivacy === 'private'
     ? 1
-    : input.source.channelPrivacy === 'semi_private'
+    : input.source.channelPrivacy === 'invite_only'
       ? 0.6
       : 0;
 

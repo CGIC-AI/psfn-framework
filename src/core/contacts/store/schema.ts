@@ -14,7 +14,7 @@ function hasTable(db: Database.Database, tableName: string): boolean {
 
 function ensureChannelPrivacyColumn(db: Database.Database): void {
   if (!hasColumn(db, 'contact_channel_ids', 'privacy_level')) {
-    db.exec("ALTER TABLE contact_channel_ids ADD COLUMN privacy_level TEXT NOT NULL DEFAULT 'semi_private'");
+    db.exec("ALTER TABLE contact_channel_ids ADD COLUMN privacy_level TEXT NOT NULL DEFAULT 'invite_only'");
   }
 }
 
@@ -81,7 +81,7 @@ export function initializeContactStoreSchema(db: Database.Database): void {
       contact_id TEXT NOT NULL,
       channel TEXT NOT NULL,
       channel_user_id TEXT NOT NULL,
-      privacy_level TEXT NOT NULL DEFAULT 'semi_private',
+      privacy_level TEXT NOT NULL DEFAULT 'invite_only',
       first_seen TEXT NOT NULL,
       last_seen TEXT NOT NULL,
       PRIMARY KEY (channel, channel_user_id),

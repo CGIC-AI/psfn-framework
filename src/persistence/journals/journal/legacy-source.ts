@@ -1,15 +1,9 @@
 import { createHash } from 'node:crypto';
+import { decodeStoredChannelVisibility } from '../../../system/trust/types.js';
 import type {
   LegacyChatSourceRecord,
   ParsedLegacyChatSource,
 } from './types.js';
-
-const VALID_CHANNEL_VISIBILITIES = new Set([
-  'private',
-  'semi_private',
-  'public',
-  'broadcast',
-]);
 
 function parseLegacyTimestamp(value: unknown): number | null {
   if (typeof value === 'number' && Number.isFinite(value)) {
@@ -70,9 +64,9 @@ function normalizeLegacyRole(value: unknown): 'user' | 'assistant' | 'system' {
 
 function normalizeLegacyChannelVisibility(value: unknown): string | undefined {
   if (typeof value !== 'string') return undefined;
-  const normalized = value.trim();
-  if (!VALID_CHANNEL_VISIBILITIES.has(normalized)) return undefined;
-  return normalized;
+  // Legacy journal records predate the E3.1 vocabulary rename; the shared
+  // decoder maps 'semi_private' to 'invite_only'.
+  return decodeStoredChannelVisibility(value.trim());
 }
 
 function normalizeLegacyMetadata(value: unknown): string | undefined {

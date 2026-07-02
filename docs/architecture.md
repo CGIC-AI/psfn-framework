@@ -103,6 +103,7 @@ See [`docs/memory.md`](./memory.md) for the memory contract.
 ### Trust, safeguards, and capabilities
 
 - Trust policy is loaded from `trust-policy.json`.
+- Channel privacy vocabulary is `private | invite_only | public` plus a `broadcast` flag; the Context Envelope contract (dimensions, derivation, precedence, migration) is documented in [context-envelope.md](./context-envelope.md).
 - Eligibility gates and capability tiers are enforced before privileged tools run.
 - Safeguards audit cooling-off, restart protection, and external communication rate limits.
 

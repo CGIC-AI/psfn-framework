@@ -704,7 +704,7 @@ export class AdminChatBootstrapService {
     }
 
     if (contact.discordUserId) {
-      addIdentity('discord', contact.discordUserId, 'semi_private');
+      addIdentity('discord', contact.discordUserId, 'invite_only');
     }
 
     return links;
@@ -760,6 +760,6 @@ export class AdminChatBootstrapService {
     if (normalizedChannel === 'twitter' || normalizedChannel === 'rss' || normalizedChannel === 'broadcast') {
       return 'broadcast';
     }
-    return 'semi_private';
+    return 'invite_only';
   }
 }

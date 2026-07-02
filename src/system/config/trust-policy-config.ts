@@ -7,6 +7,11 @@ import type {
 import {
   loadRequiredJson,
 } from './load-or-seed.js';
+import {
+  DEFAULT_AUDIENCE_SCOPE_THRESHOLDS,
+  validateAudienceScopeThresholds,
+  type AudienceScopeThresholds,
+} from '../trust/context-envelope.js';
 import { writeJsonAtomic } from '../../shared/utils/fs.js';
 import { isRecord } from '../../shared/utils/types.js';
 import { createComponentLogger } from '../../shared/logger.js';
@@ -17,11 +22,18 @@ const log = createComponentLogger('TrustPolicyConfig');
 
 const TRUST_LEVELS: TrustLevel[] = ['primary', 'trusted', 'regular', 'public'];
 const SENSITIVITY_LEVELS: SensitivityLevel[] = ['public', 'personal', 'intimate', 'confidential'];
-const VISIBILITY_LEVELS: ChannelVisibility[] = ['private', 'semi_private', 'public', 'broadcast'];
+const VISIBILITY_LEVELS: ChannelVisibility[] = ['private', 'invite_only', 'public', 'broadcast'];
+const LEGACY_SEMI_PRIVATE = 'semi_private';
 
 export interface TrustPolicyConfig {
   trustCeiling: Record<TrustLevel, readonly SensitivityLevel[]>;
   visibilityAllowed: Record<ChannelVisibility, readonly SensitivityLevel[]>;
+  /**
+   * Config-owned audienceScope derivation thresholds (Context Envelope
+   * contract, docs/context-envelope.md). Optional in the owner file; the
+   * documented defaults apply when absent.
+   */
+  audienceScopeThresholds: AudienceScopeThresholds;
   channelClassification: {
     privatePrefixes: string[];
     broadcastPrefixes: string[];
@@ -93,6 +105,66 @@ function visibilityOverrideMap(value: unknown, field: string): Record<string, Ch
   return out;
 }
 
+/**
+ * One-time owner-file vocabulary migration for the E3.1 rename
+ * (semi_private → invite_only). Applies BEFORE validation so existing
+ * deployments keep starting; anything ambiguous (both spellings present)
+ * fails closed. The broadcast → (public + broadcast flag) envelope migration
+ * is documented in docs/context-envelope.md and is NOT executed here.
+ */
+export function migrateLegacyTrustPolicyVocabulary(raw: unknown): {
+  raw: unknown;
+  migrated: boolean;
+} {
+  if (!isRecord(raw)) return { raw, migrated: false };
+  let migrated = false;
+  const next: Record<string, unknown> = { ...raw };
+
+  if (isRecord(raw.visibilityAllowed) && Object.hasOwn(raw.visibilityAllowed, LEGACY_SEMI_PRIVATE)) {
+    if (Object.hasOwn(raw.visibilityAllowed, 'invite_only')) {
+      throw new Error(
+        'Invalid trust policy: visibilityAllowed defines both semi_private and invite_only; '
+        + 'remove the retired semi_private key',
+      );
+    }
+    const { [LEGACY_SEMI_PRIVATE]: legacyAllowed, ...rest } = raw.visibilityAllowed;
+    next.visibilityAllowed = { ...rest, invite_only: legacyAllowed };
+    migrated = true;
+  }
+
+  if (isRecord(raw.channelClassification)) {
+    const classification: Record<string, unknown> = { ...raw.channelClassification };
+    if (classification.defaultVisibility === LEGACY_SEMI_PRIVATE) {
+      classification.defaultVisibility = 'invite_only';
+      migrated = true;
+    }
+    if (isRecord(classification.visibilityOverrides)) {
+      const overrides: Record<string, unknown> = { ...classification.visibilityOverrides };
+      for (const scope of ['exact', 'prefix'] as const) {
+        if (!isRecord(overrides[scope])) continue;
+        const entries = { ...(overrides[scope] as Record<string, unknown>) };
+        let scopeMigrated = false;
+        for (const [key, value] of Object.entries(entries)) {
+          if (value === LEGACY_SEMI_PRIVATE) {
+            entries[key] = 'invite_only';
+            scopeMigrated = true;
+          }
+        }
+        if (scopeMigrated) {
+          overrides[scope] = entries;
+          migrated = true;
+        }
+      }
+      classification.visibilityOverrides = overrides;
+    }
+    if (migrated) {
+      next.channelClassification = classification;
+    }
+  }
+
+  return { raw: migrated ? next : raw, migrated };
+}
+
 function validateTrustPolicy(raw: unknown, sourcePath: string): TrustPolicyConfig {
   if (!isRecord(raw)) {
     throw new Error(`Invalid trust policy at ${sourcePath}: expected object`);
@@ -131,9 +203,14 @@ function validateTrustPolicy(raw: unknown, sourcePath: string): TrustPolicyConfi
   }
   const visibilityOverrides = visibilityOverridesRaw as Record<string, unknown> | undefined;
 
+  const audienceScopeThresholds = raw.audienceScopeThresholds === undefined
+    ? DEFAULT_AUDIENCE_SCOPE_THRESHOLDS
+    : validateAudienceScopeThresholds(raw.audienceScopeThresholds, 'audienceScopeThresholds');
+
   return {
     trustCeiling,
     visibilityAllowed,
+    audienceScopeThresholds,
     channelClassification: {
       privatePrefixes: uniqueStringList(raw.channelClassification.privatePrefixes, 'channelClassification.privatePrefixes'),
       broadcastPrefixes: uniqueStringList(raw.channelClassification.broadcastPrefixes, 'channelClassification.broadcastPrefixes'),
@@ -183,12 +260,12 @@ function isKnownOldDefaultTrustPolicy(config: TrustPolicyConfig): boolean {
     && sensitivityListEquals(config.trustCeiling.regular, ['public'])
     && sensitivityListEquals(config.trustCeiling.public, ['public'])
     && sensitivityListEquals(config.visibilityAllowed.private, ['public', 'personal', 'intimate', 'confidential'])
-    && sensitivityListEquals(config.visibilityAllowed.semi_private, ['public', 'personal'])
+    && sensitivityListEquals(config.visibilityAllowed.invite_only, ['public', 'personal'])
     && sensitivityListEquals(config.visibilityAllowed.public, ['public'])
     && sensitivityListEquals(config.visibilityAllowed.broadcast, ['public'])
     && stringListEquals(config.channelClassification.privatePrefixes, ['api:', 'sillytavern:', 'openwebui:', 'shard:', 'internal:'])
     && stringListEquals(config.channelClassification.broadcastPrefixes, ['twitter:', 'social:'])
-    && config.channelClassification.defaultVisibility === 'semi_private'
+    && config.channelClassification.defaultVisibility === 'invite_only'
     && visibilityMapEquals(config.channelClassification.visibilityOverrides.exact, {})
     && visibilityMapEquals(config.channelClassification.visibilityOverrides.prefix, {});
 }
@@ -218,19 +295,31 @@ export function loadTrustPolicyConfig(
 ): TrustPolicyConfig {
   const seedDir = options.seedDir ?? process.env.CONFIG_DIR ?? './config';
   const dataPath = join(dataDir, TRUST_POLICY_FILE_NAME);
+  const vocabularyMigration = { migrated: false };
   const loaded = loadRequiredJson({
     dataPath,
     examplePath: join(seedDir, TRUST_POLICY_SEED_FILE_NAME),
-    validate: validateTrustPolicy,
+    validate: (raw, sourcePath) => {
+      const vocabulary = migrateLegacyTrustPolicyVocabulary(raw);
+      vocabularyMigration.migrated = vocabulary.migrated;
+      return validateTrustPolicy(vocabulary.raw, sourcePath);
+    },
   });
   const migrated = migrateKnownOldDefaultTrustPolicy(loaded);
-  if (migrated.migrated) {
+  if (migrated.migrated || vocabularyMigration.migrated) {
     writeJsonAtomic(dataPath, migrated.config);
-    log.info('Migrated known old trust-policy default regular ceiling', {
-      dataPath,
-      from: ['public'],
-      to: ['public', 'personal'],
-    });
+    if (vocabularyMigration.migrated) {
+      log.info('Migrated trust-policy channel vocabulary (semi_private -> invite_only)', {
+        dataPath,
+      });
+    }
+    if (migrated.migrated) {
+      log.info('Migrated known old trust-policy default regular ceiling', {
+        dataPath,
+        from: ['public'],
+        to: ['public', 'personal'],
+      });
+    }
   }
   return migrated.config;
 }

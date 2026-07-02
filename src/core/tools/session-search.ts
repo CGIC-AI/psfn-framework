@@ -6,6 +6,7 @@ import type { LLMProviderPort } from '../agent/contracts.js';
 import type { SessionEntry, JournalEntry } from '../session/types.js';
 import { getRequestContext } from '../../primitives/llm/request-context.js';
 import type { ChannelVisibility, TrustLevel } from '../../system/trust/types.js';
+import { normalizeChannelVisibility } from '../../system/trust/types.js';
 import type { TranscriptSearchPort } from '../../persistence/sessions/transcript-search-port.js';
 import {
   canViewerAccessSessionHit,
@@ -101,15 +102,7 @@ function normalizeOptionalTrustLevel(value: unknown): TrustLevel | undefined {
 }
 
 function normalizeOptionalChannelVisibility(value: unknown): ChannelVisibility | undefined {
-  switch (value) {
-    case 'private':
-    case 'semi_private':
-    case 'public':
-    case 'broadcast':
-      return value;
-    default:
-      return undefined;
-  }
+  return normalizeChannelVisibility(value);
 }
 
 function resolveViewerContextFromRequest(): SessionSearchViewerContext {

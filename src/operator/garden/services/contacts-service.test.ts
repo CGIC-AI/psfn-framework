@@ -41,7 +41,7 @@ describe('AdminContactsDataService', () => {
     const { db, contactStore, service } = createServiceHarness();
     try {
       const contact = contactStore.upsert({ displayName: 'Primary User' });
-      contactStore.recordChannelActivity(contact.id, 'psfn-amica', 'psfn-amica:test:stale-channel', 'semi_private');
+      contactStore.recordChannelActivity(contact.id, 'psfn-amica', 'psfn-amica:test:stale-channel', 'invite_only');
       contactStore.recordChannelActivity(contact.id, 'psfn-amica', 'psfn-amica:test:active-channel', 'private');
 
       const result = await service.deleteConversationChannel(

@@ -30,7 +30,7 @@ export type ObserverEvalRedactionReason =
   | 'public_metadata_only'
   | 'direct_message_metadata_only'
   | 'private_channel_metadata_only'
-  | 'semi_private_channel_metadata_only'
+  | 'invite_only_channel_metadata_only'
   | 'personal_sensitivity_metadata_only'
   | 'closed_sensitivity_metadata_only'
   | 'channel_visibility_restricted_metadata_only'
@@ -196,12 +196,12 @@ export function classifyObserverEvalPrivacy(
     });
   }
 
-  if (channelVisibility === 'semi_private') {
+  if (channelVisibility === 'invite_only') {
     return privacyDecision({
       privacyClass: 'restricted',
       sensitivity,
       channelVisibility,
-      redactionReason: 'semi_private_channel_metadata_only',
+      redactionReason: 'invite_only_channel_metadata_only',
       derivedTelemetryPermitted: true,
     });
   }

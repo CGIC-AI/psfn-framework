@@ -560,7 +560,7 @@ describe('ApiServer', () => {
             authorId: 'admin-user',
             authorName: 'Vega',
             canonicalContactId: 'contact-vega',
-            channelPrivacy: 'semi_private',
+            channelPrivacy: 'invite_only',
           },
         },
       });
@@ -584,7 +584,7 @@ describe('ApiServer', () => {
               name: 'Vega',
             },
             canonicalContactId: 'contact-vega',
-            channelPrivacy: 'semi_private',
+            channelPrivacy: 'invite_only',
           },
         },
       });
@@ -2445,7 +2445,7 @@ describe('ApiServer with auth', () => {
       externalChannelProfiles: {
         'psfn-amica': {
           canonicalContactId: 'contact-primary-user',
-          channelPrivacy: 'semi_private',
+          channelPrivacy: 'invite_only',
         },
       },
     });
@@ -2482,7 +2482,7 @@ describe('ApiServer with auth', () => {
       externalChannelProfiles: {
         'psfn-amica': {
           canonicalContactId: 'contact-primary-user',
-          channelPrivacy: 'semi_private',
+          channelPrivacy: 'invite_only',
         },
       },
     });
@@ -2508,7 +2508,7 @@ describe('ApiServer with auth', () => {
     expect(call.authorName).toBe('Primary User');
     expect(call.routing?.source).toBe('psfn-amica');
     expect(call.routing?.canonicalContactId).toBe('contact-primary-user');
-    expect(call.routing?.channelPrivacy).toBe('semi_private');
+    expect(call.routing?.channelPrivacy).toBe('invite_only');
   });
 
   it('routes registry-backed satellite claims with effective speech and vision capabilities', async () => {
@@ -2581,7 +2581,7 @@ describe('ApiServer with auth', () => {
           authorId: 'primary-user',
           authorName: 'Primary User',
           canonicalContactId: 'contact-primary-user',
-          channelPrivacy: 'semi_private',
+          channelPrivacy: 'invite_only',
         },
       },
     });
@@ -2605,7 +2605,7 @@ describe('ApiServer with auth', () => {
     expect(call.authorName).toBe('Primary User');
     expect(call.routing?.source).toBe('psfn-amica');
     expect(call.routing?.canonicalContactId).toBe('contact-primary-user');
-    expect(call.routing?.channelPrivacy).toBe('semi_private');
+    expect(call.routing?.channelPrivacy).toBe('invite_only');
   });
 
   it('fails closed for psfn-amica claims when the PSFN-side profile is missing', async () => {

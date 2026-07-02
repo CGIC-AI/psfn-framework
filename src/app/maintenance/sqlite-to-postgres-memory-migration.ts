@@ -16,6 +16,7 @@ import {
   POSTGRES_MEMORY_MIGRATIONS,
   POSTGRES_REFLECTION_MIGRATIONS,
 } from '../../persistence/postgres/migrations.js';
+import { decodeStoredChannelVisibility } from '../../system/trust/types.js';
 
 const MIGRATION_TABLES = [
   'l2_memories',
@@ -1497,7 +1498,9 @@ async function upsertContactChannelIds(
       contactId,
       channel,
       channelUserId,
-      getString(row, 'privacy_level') ?? 'semi_private',
+      // Legacy SQLite rows predate the E3.1 vocabulary rename; decode
+      // 'semi_private' to 'invite_only' while copying.
+      decodeStoredChannelVisibility(getString(row, 'privacy_level')) ?? 'invite_only',
       firstSeen,
       lastSeen,
     ]);

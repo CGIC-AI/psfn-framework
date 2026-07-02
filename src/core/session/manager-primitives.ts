@@ -12,6 +12,7 @@ import {
 } from '../../shared/context-budget.js';
 import { formatActiveDate } from '../../shared/time/active-timezone.js';
 import type { ChannelVisibility, TrustLevel } from '../../system/trust/types.js';
+import { decodeStoredChannelVisibility } from '../../system/trust/types.js';
 import type { ChannelMeta } from '../../system/trust/policy.js';
 import { COMPACTION_REFUSAL_PATTERNS, matchesRefusalPatterns } from '../../system/security/refusal-patterns.js';
 import {
@@ -964,15 +965,9 @@ export function appendCompactionMetadataBlocks(summary: string, blocks: string[]
 }
 
 export function parseChannelVisibility(value?: string): ChannelVisibility | undefined {
-  switch (value) {
-    case 'private':
-    case 'semi_private':
-    case 'public':
-    case 'broadcast':
-      return value;
-    default:
-      return undefined;
-  }
+  // Parses persisted visibility labels; the shared decoder maps records
+  // written before the E3.1 vocabulary rename ('semi_private') to 'invite_only'.
+  return decodeStoredChannelVisibility(value);
 }
 
 export function isUntrustedVisibility(visibility: ChannelVisibility): boolean {
@@ -996,12 +991,9 @@ export function parseMirrorMetadata(value?: string): MirrorEntryMetadata | null 
     const parsed = JSON.parse(value) as Partial<MirrorEntryMetadata>;
     if (parsed.type !== 'mirror') return null;
     if (parsed.sourceRole !== 'user' && parsed.sourceRole !== 'assistant') return null;
-    if (
-      parsed.sourceVisibility !== 'private'
-      && parsed.sourceVisibility !== 'semi_private'
-      && parsed.sourceVisibility !== 'public'
-      && parsed.sourceVisibility !== 'broadcast'
-    ) {
+    // Mirror metadata is persisted; decode legacy 'semi_private' records.
+    const sourceVisibility = decodeStoredChannelVisibility(parsed.sourceVisibility);
+    if (!sourceVisibility) {
       return null;
     }
     if (
@@ -1020,7 +1012,7 @@ export function parseMirrorMetadata(value?: string): MirrorEntryMetadata | null 
       sourceChannelId: parsed.sourceChannelId,
       sourceRole: parsed.sourceRole,
       sourceAuthorName: typeof parsed.sourceAuthorName === 'string' ? parsed.sourceAuthorName : undefined,
-      sourceVisibility: parsed.sourceVisibility,
+      sourceVisibility,
       trustLevel: parsed.trustLevel,
       mirroredAt: parsed.mirroredAt,
       truncated: parsed.truncated === true,

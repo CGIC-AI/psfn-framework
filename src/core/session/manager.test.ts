@@ -2148,7 +2148,7 @@ describe('SessionManager', () => {
     expect(mirrors).toHaveLength(0);
   });
 
-  it('mirrors lower-sensitivity semi_private activity into private sessions', () => {
+  it('mirrors lower-sensitivity invite_only activity into private sessions', () => {
     const config = makeConfig({
       sessionMirrorEnabled: true,
       sessionMirrorActiveWindowMs: 60_000,

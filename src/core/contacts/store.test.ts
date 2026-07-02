@@ -425,7 +425,7 @@ describe('ContactStore', () => {
         INSERT INTO contact_channel_ids (
           contact_id, channel, channel_user_id, privacy_level, first_seen, last_seen
         ) VALUES (?, ?, ?, ?, ?, ?)
-      `).run('owner-legacy', 'discord', PRIMARY_USER_ID, 'semi_private', now, now);
+      `).run('owner-legacy', 'discord', PRIMARY_USER_ID, 'invite_only', now, now);
 
       expect(store.setTrustLevel('owner-legacy', 'primary', 'admin:api')).toBe(true);
       expect(store.getById('owner-legacy')?.trustLevel).toBe('primary');
@@ -712,7 +712,7 @@ describe('ContactStore', () => {
 
     it('records linked identity and conversation channel privacy mutations', () => {
       const contact = store.upsert({ displayName: 'Privacy Audit Target' });
-      expect(store.linkChannelIdentity(contact.id, 'discord', 'privacy-user', { privacyLevel: 'semi_private' })).toBe('linked');
+      expect(store.linkChannelIdentity(contact.id, 'discord', 'privacy-user', { privacyLevel: 'invite_only' })).toBe('linked');
       store.recordChannelActivity(contact.id, 'discord', '1313001762793197678', 'private');
 
       expect(store.setChannelPrivacy(contact.id, 'discord', 'privacy-user', 'private', 'admin:api')).toBe(true);
@@ -739,7 +739,7 @@ describe('ContactStore', () => {
         actor: 'admin:api',
         field: 'channel_privacy',
       });
-      expect(entries[1].oldValue).toContain('"privacyLevel":"semi_private"');
+      expect(entries[1].oldValue).toContain('"privacyLevel":"invite_only"');
       expect(entries[1].newValue).toContain('"privacyLevel":"private"');
       expect(entries[1].newValue).toContain('"userId":"privacy-user"');
     });
@@ -864,7 +864,7 @@ describe('ContactStore', () => {
         INSERT INTO contact_channel_ids (
           contact_id, channel, channel_user_id, privacy_level, first_seen, last_seen
         ) VALUES (?, ?, ?, ?, ?, ?)
-      `).run('primary-owner', 'discord', PRIMARY_USER_ID, 'semi_private', now, now);
+      `).run('primary-owner', 'discord', PRIMARY_USER_ID, 'invite_only', now, now);
 
       db.prepare(`
         INSERT INTO contacts (
@@ -1156,7 +1156,7 @@ describe('ContactStore', () => {
   describe('deleteConversationChannel', () => {
     it('removes a specific persisted conversation channel', () => {
       const contact = store.upsert({ displayName: 'Conversation User' });
-      store.recordChannelActivity(contact.id, 'psfn-amica', 'psfn-amica:short-check', 'semi_private');
+      store.recordChannelActivity(contact.id, 'psfn-amica', 'psfn-amica:short-check', 'invite_only');
       store.recordChannelActivity(contact.id, 'psfn-amica', 'psfn-amica:lab:pi5', 'private');
 
       const result = store.deleteConversationChannel(contact.id, 'psfn-amica', 'psfn-amica:short-check');

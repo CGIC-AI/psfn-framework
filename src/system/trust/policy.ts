@@ -35,7 +35,7 @@ export interface ChannelMeta {
 
 const RESPONSE_STYLE_BY_VISIBILITY: Record<ChannelVisibility, ResponseStyle> = {
   private: 'expressive',
-  semi_private: 'concise',
+  invite_only: 'concise',
   public: 'concise',
   broadcast: 'concise',
 };

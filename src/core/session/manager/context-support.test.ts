@@ -94,7 +94,7 @@ describe('entriesToMessages', () => {
     const messages = entriesToMessages([
       makeEntry({
         channelId: 'discord:kube',
-        channelVisibility: 'semi_private',
+        channelVisibility: 'invite_only',
         role: 'user',
         content: 'first group message',
         authorId: 'vega-id',
@@ -103,14 +103,14 @@ describe('entriesToMessages', () => {
       makeEntry({
         id: 2,
         channelId: 'discord:kube',
-        channelVisibility: 'semi_private',
+        channelVisibility: 'invite_only',
         role: 'user',
         content: 'second group message',
         authorId: 'iku-id',
         authorName: 'Iku',
         timestamp: 1_700_000_000_100,
       }),
-    ], 'semi_private');
+    ], 'invite_only');
 
     expect(messages).toHaveLength(1);
     expect(messages[0]).toMatchObject({

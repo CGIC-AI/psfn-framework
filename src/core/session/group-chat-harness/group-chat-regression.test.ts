@@ -181,6 +181,64 @@ describe('group-chat regression harness', () => {
       expect(variables.runtime_chat_type).toBe('direct_message');
       expect(variables.runtime_recent_active_participants_xml).toBe('');
     });
+
+    // E4.4: a live high-confidence edge between two currently listed
+    // participants surfaces one compact rel line inside conversation_state.
+    it('renders a participant_relationships line for an edge between present participants (E4.4)', () => {
+      const { prompt, variables } = renderTurnRuntimePrompt(
+        makeGroupTurnMessage(CAROL),
+        CAROL,
+        'api',
+        {
+          recentChannelEntries: makeGroupRoomRecentEntries(),
+          recentSpeakers: [
+            { authorId: CAROL.authorId, name: CAROL.name },
+            { authorId: ALICE.authorId, name: ALICE.name },
+            { authorId: BOB.authorId, name: BOB.name },
+          ],
+          resolvedSpeakerContactCount: 3,
+          participantRelationshipEdges: [{
+            aName: ALICE.name,
+            bName: BOB.name,
+            relationshipType: 'sibling',
+            sensitivity: 'personal',
+            confidence: 0.9,
+            updatedAt: '2026-06-01T00:00:00.000Z',
+          }],
+        },
+      );
+      expectBlock(prompt, 'participant_relationships');
+      expect(prompt).toContain('<rel a="Alice" b="Bob" type="sibling" />');
+      expect(variables.runtime_participant_relationships_count).toBe('1');
+    });
+
+    // E4.4 gate: the same edge marked intimate is NEVER rendered in a room.
+    it('never renders an intimate edge in a room (E4.4 sensitivity gate)', () => {
+      const { prompt, variables } = renderTurnRuntimePrompt(
+        makeGroupTurnMessage(CAROL),
+        CAROL,
+        'api',
+        {
+          recentChannelEntries: makeGroupRoomRecentEntries(),
+          recentSpeakers: [
+            { authorId: CAROL.authorId, name: CAROL.name },
+            { authorId: ALICE.authorId, name: ALICE.name },
+            { authorId: BOB.authorId, name: BOB.name },
+          ],
+          resolvedSpeakerContactCount: 3,
+          participantRelationshipEdges: [{
+            aName: ALICE.name,
+            bName: BOB.name,
+            relationshipType: 'sibling',
+            sensitivity: 'intimate',
+            confidence: 0.9,
+            updatedAt: '2026-06-01T00:00:00.000Z',
+          }],
+        },
+      );
+      expectNoBlock(prompt, 'participant_relationships');
+      expect(variables.runtime_participant_relationships_count).toBe('0');
+    });
   });
 
   // -------------------------------------------------------------------------

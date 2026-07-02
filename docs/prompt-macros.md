@@ -2,7 +2,7 @@
 
 This is the operator reference for runtime prompt macros (template variables) and the rules that keep companion prompts operator-tunable.
 
-GENERATED FILE: the macro tables below are regenerated from the live manifest with `npm run docs:prompt-macros` (source: `scripts/generate-prompt-macros-doc.ts`, manifest: `PROMPT_RUNTIME_MACRO_HINTS` in `src/core/identity/prompt-runtime.ts`). Edit the generator, not the tables. Registered macro names: 177.
+GENERATED FILE: the macro tables below are regenerated from the live manifest with `npm run docs:prompt-macros` (source: `scripts/generate-prompt-macros-doc.ts`, manifest: `PROMPT_RUNTIME_MACRO_HINTS` in `src/core/identity/prompt-runtime.ts`). Edit the generator, not the tables. Registered macro names: 183.
 
 ## The macro manifest (single source of truth)
 
@@ -104,7 +104,7 @@ The `speaking_with` macros (`{{runtime_speaking_with_name}}`, `{{runtime_speakin
 | `{{visual_description}}` (aliases: `{{extensions_visual_description}}`) | static | `character-macro-map:buildCharacterMacroMap` | Character card visual description extension field. |
 | `{{channel_id}}` | session_stable | `runtime-context:buildPromptTemplateVariables` | Resolved channel/session identifier. |
 | `{{channel_type}}` | session_stable | `runtime-context:buildPromptTemplateVariables` | Resolved channel type. |
-| `{{channel_visibility}}` | session_stable | `runtime-context:buildPromptTemplateVariables` | Resolved channel visibility classification. |
+| `{{channel_visibility}}` | session_stable | `runtime-context:buildPromptTemplateVariables` | Resolved channelPrivacy classification for the session channel (private \| invite_only \| public; broadcast is {{runtime_broadcast}}). |
 | `{{trust_level}}` | session_stable | `runtime-context:buildPromptTemplateVariables` | Current trust tier for the author/context. |
 | `{{canonical_contact_id}}` | session_stable | `runtime-context:buildPromptTemplateVariables` | Canonical contact identity key for the current author when resolved. |
 | `{{model}}` | session_stable | `runtime-context:buildPromptTemplateVariables` | Current active model identifier. |
@@ -153,10 +153,16 @@ The `speaking_with` macros (`{{runtime_speaking_with_name}}`, `{{runtime_speakin
 | `{{runtime_current_message_author_local_time}}` | turn | `runtime-context:buildDynamicPromptTemplateVariables` | Current local clock time for the current message author when timezone is known. |
 | `{{runtime_recent_active_participants_xml}}` | turn | `runtime-context:buildDynamicPromptTemplateVariables` | Compact recent active participant XML for group turns, capped at five deduped authors. |
 | `{{runtime_recent_active_participants_count}}` | turn | `runtime-context:buildDynamicPromptTemplateVariables` | Count of recent active participant entries rendered for group turns. |
+| `{{runtime_participant_relationships_xml}}` | turn | `runtime-context:buildDynamicPromptTemplateVariables` | Compact participant-relationship XML for group turns: live high-confidence edges between currently listed participants, envelope-gated and capped at five. Blank (absent) on DM/internal turns, anonymous/broadcast audiences, or when no edge qualifies. |
+| `{{runtime_participant_relationships_count}}` | turn | `runtime-context:buildDynamicPromptTemplateVariables` | Count of participant-relationship lines rendered for the current group turn. |
 | `{{runtime_speaking_with_name}}` | turn | `runtime-context:buildDynamicPromptTemplateVariables` | Resolved speaking-partner display name on DM turns; blank on group and internal turns so speaking_with sections prune. |
 | `{{runtime_speaking_with_trust_level}}` | turn | `runtime-context:buildDynamicPromptTemplateVariables` | Trust level for the current speaking partner on DM turns; blank on group and internal turns so speaking_with sections prune. |
 | `{{runtime_channel_type}}` | turn | `runtime-context:buildDynamicPromptTemplateVariables` | Resolved channel type for the current speaking context when user-facing. |
-| `{{runtime_channel_visibility}}` | turn | `runtime-context:buildDynamicPromptTemplateVariables` | Resolved channel visibility for the current speaking context when user-facing. |
+| `{{runtime_channel_visibility}}` | turn | `runtime-context:buildDynamicPromptTemplateVariables` | Resolved channelPrivacy for the current speaking context when user-facing (broadcast is {{runtime_broadcast}}). |
+| `{{runtime_channel_privacy}}` | session_stable | `runtime-context:buildDynamicPromptTemplateVariables` | Context Envelope channelPrivacy for the current turn (bare value: private \| invite_only \| public); blank on internal turns. |
+| `{{runtime_broadcast}}` | session_stable | `runtime-context:buildDynamicPromptTemplateVariables` | Context Envelope broadcast flag for the current turn (bare boolean); blank on internal turns. |
+| `{{runtime_audience_scope}}` | turn | `runtime-context:buildDynamicPromptTemplateVariables` | Context Envelope audienceScope for the current turn (bare value: one \| few \| many \| unbounded); blank on internal turns. |
+| `{{runtime_audience_knowledge}}` | turn | `runtime-context:buildDynamicPromptTemplateVariables` | Context Envelope audienceKnowledge for the current turn (bare value: all_known \| partially_known \| anonymous); blank on internal turns. |
 | `{{runtime_capability_tier}}` | turn | `runtime-context:buildDynamicPromptTemplateVariables` | Current capability tier used to gate extended tool access. |
 
 ### Trust

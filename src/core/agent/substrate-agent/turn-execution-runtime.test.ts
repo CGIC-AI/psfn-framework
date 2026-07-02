@@ -102,6 +102,7 @@ const BASE_TURN_PROMPT_VARIABLES: Record<string, string> = {
   runtime_channel_visibility: 'private',
   runtime_current_message_author_xml: '<current_message_author name="User" id="user-1" />',
   runtime_recent_active_participants_xml: '',
+  runtime_participant_relationships_xml: '',
 };
 
 function createMessage(id: string, overrides: Partial<SubstrateMessage> = {}): SubstrateMessage {
@@ -595,6 +596,7 @@ function createRuntime(params: {
     })),
     withCorrelationPurpose: vi.fn((correlation, purpose) => ({ ...correlation, purpose })),
     countResolvableSpeakerContacts: vi.fn(async () => 0),
+    resolveParticipantRelationships: vi.fn(async () => []),
     resolveAuthorContext: params.resolveAuthorContext ?? vi.fn(() => ({
       trustLevel: 'regular',
       speakerRole: 'user',
@@ -864,6 +866,7 @@ describe('handleMessageForTurn fatigue enforcement', () => {
       recordAssistantMessage: vi.fn(() => 2),
       fatigueBudget: params.fatigueBudget,
       countResolvableSpeakerContacts: vi.fn(async () => 0),
+      resolveParticipantRelationships: vi.fn(async () => []),
       resolveAuthorContext: params.resolveAuthorContext ?? vi.fn(() => machineIntelligenceAuthorContext()),
     });
     return { runtime, buildContext };

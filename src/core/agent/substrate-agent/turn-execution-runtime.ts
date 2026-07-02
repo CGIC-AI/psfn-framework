@@ -49,7 +49,7 @@ import {
 } from '../fatigue/runtime-enforcement.js';
 import type { AdaptiveToolRuntimeState } from '../adaptive-tools-telemetry.js';
 import type { EmotionSelfModelRuntime } from './emotion-self-model-runtime.js';
-import type { ResolvedAuthorContext, UserRuntimeProfile } from './runtime-context.js';
+import type { ParticipantRelationshipEdgeInput, ResolvedAuthorContext, UserRuntimeProfile } from './runtime-context.js';
 import type { AutoloadTurnOutcome } from './adaptive-tools-runtime.js';
 import type {
   BackgroundContinuationCompletionSignal,
@@ -144,6 +144,16 @@ export interface TurnExecutionRuntime {
     message: SubstrateMessage,
     speakers: readonly ConversationScopeSpeaker[],
   ) => Promise<number>;
+  /**
+   * E4.4 orchestrator fetch: pre-prompt lookup of live, high-confidence
+   * relationship edges between currently listed participants. Group turns only;
+   * fails closed to an empty set. The producer renders; this never renders.
+   */
+  resolveParticipantRelationships: (
+    message: SubstrateMessage,
+    conversationScope: import('../../session/conversation-scope.js').ConversationScope,
+    trustLevel: TrustLevel,
+  ) => Promise<ParticipantRelationshipEdgeInput[]>;
   emitTurnStage: (
     message: SubstrateMessage,
     turnStartMs: number,
@@ -205,6 +215,7 @@ export interface TurnExecutionRuntime {
     emotionAppraisalChain: readonly import('../../emotion/appraisal.js').EmotionAppraisalEntry[],
     currentUserRuntimeProfile: UserRuntimeProfile | undefined,
     conversationScope: import('../../session/conversation-scope.js').ConversationScope,
+    participantRelationshipEdges: readonly ParticipantRelationshipEdgeInput[],
   ) => Record<string, string>;
   setCurrentSelfModelState: (
     state: InternalState,

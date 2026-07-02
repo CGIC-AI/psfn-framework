@@ -9,8 +9,10 @@ import {
 import {
   CHANNEL_PRIVACY_VALUES,
   DEFAULT_AUDIENCE_SCOPE_THRESHOLDS,
+  DEFAULT_PARTICIPANT_RELATIONSHIP_CONFIDENCE_THRESHOLD,
   isChannelPrivacy,
   validateAudienceScopeThresholds,
+  validateParticipantRelationshipConfidenceThreshold,
   type AudienceScopeThresholds,
   type ChannelPrivacy,
 } from '../trust/context-envelope.js';
@@ -52,6 +54,12 @@ export interface TrustPolicyConfig {
    * documented defaults apply when absent.
    */
   audienceScopeThresholds: AudienceScopeThresholds;
+  /**
+   * E4.4: minimum edge confidence for compact participant-relationship exposure
+   * in conversation_state. Optional in the owner file; the documented default
+   * (0.7) applies when absent.
+   */
+  participantRelationshipConfidenceThreshold: number;
   channelClassification: {
     privatePrefixes: string[];
     broadcastPrefixes: string[];
@@ -305,10 +313,18 @@ function validateTrustPolicy(raw: unknown, sourcePath: string): TrustPolicyConfi
     ? DEFAULT_AUDIENCE_SCOPE_THRESHOLDS
     : validateAudienceScopeThresholds(raw.audienceScopeThresholds, 'audienceScopeThresholds');
 
+  const participantRelationshipConfidenceThreshold = raw.participantRelationshipConfidenceThreshold === undefined
+    ? DEFAULT_PARTICIPANT_RELATIONSHIP_CONFIDENCE_THRESHOLD
+    : validateParticipantRelationshipConfidenceThreshold(
+      raw.participantRelationshipConfidenceThreshold,
+      'participantRelationshipConfidenceThreshold',
+    );
+
   return {
     trustCeiling,
     visibilityAllowed,
     audienceScopeThresholds,
+    participantRelationshipConfidenceThreshold,
     channelClassification: {
       privatePrefixes: uniqueStringList(raw.channelClassification.privatePrefixes, 'channelClassification.privatePrefixes'),
       broadcastPrefixes: uniqueStringList(raw.channelClassification.broadcastPrefixes, 'channelClassification.broadcastPrefixes'),

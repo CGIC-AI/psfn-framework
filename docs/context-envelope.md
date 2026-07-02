@@ -300,6 +300,59 @@ cites the `channelPrivacy` value); `visibility.broadcast_restricted` is new and 
 the broadcast dimension (the retired broadcast-row denial). All other tags are
 unchanged.
 
+## Participant relationships in conversation_state (E4.4)
+
+A group turn may expose a compact, hard-capped view of how the CURRENTLY LISTED
+participants (the `<=5` recentSpeakers set) relate to each other, so the
+companion can address a room of known people coherently. This is deterministic,
+pre-prompt, and envelope-gated — never prompt prose.
+
+Rendered form (bare-value macro `runtime_participant_relationships_xml`, appended
+inside `conversation_state`):
+
+```xml
+<participant_relationships>
+<rel a="Vega" b="Iki" type="sibling" />
+</participant_relationships>
+```
+
+Source of truth: only live, APPROVED social-graph edges
+(`listSocialRelationshipEdges`) between two entities that BOTH resolve to
+currently listed participants. E4.2 relationship *proposals* are a separate
+store and are never read here.
+
+**Gate (deterministic, pre-prompt, ALL must pass):**
+
+1. **Group turn only.** A DM has one participant, so a DM turn renders no
+   `participant_relationships` block at all (pointless and privacy-risky).
+2. **Audience is resolvable.** Never rendered when
+   `audienceKnowledge === 'anonymous'`.
+3. **Not a broadcast surface.** Never rendered when `broadcast` is set.
+4. **Confidence bar.** Edge `confidence >= participantRelationshipConfidenceThreshold`
+   (config-owned in `trust-policy.json`, default `0.7`). Enforced by the
+   orchestrator's bounded query (`minConfidence`).
+5. **Sensitivity rule (rooms).** Only `public`/`personal` edge sensitivity is
+   rendered in a room. **`intimate`/`confidential` edges are NEVER rendered in
+   rooms**, regardless of viewer trust. (This composes with — and is stricter
+   than — the store's own `visibilityAllowed` viewer filter, so it holds even if
+   operator policy widens a room's allowed sensitivities.)
+
+**Hard caps:** at most 5 lines; deterministic selection by confidence
+descending, then most-recent evidence (`updatedAt`) descending, then stable name
+order; the block is **absent entirely when empty** (no empty XML shell — the
+macro is blank and the seed layer prunes it).
+
+**Async boundary (orchestrator fetches, producer renders).** The edge lookup is
+one bounded pre-prompt query run where the orchestrator gathers turn inputs
+(`SubstrateAgent.resolveParticipantRelationships`, awaited in `assembleTurnPrompt`):
+it resolves each present participant to its social-graph entity and lists edges
+once (not a per-pair fan-out), failing closed to an empty set. The
+conversation-state producer
+(`buildConversationStatePromptVariables`) applies the gate above to the
+pre-fetched candidates and renders — it never fetches (E2.6 no-self-fetching
+rule). Bare-value macros only: `runtime_participant_relationships_xml` and
+`runtime_participant_relationships_count`.
+
 ## Explicitly LATER (out of scope for E3.x)
 
 - **Role gating** — `contactTracking: 'role_gated'` semantics (reserved vocabulary only).

@@ -14,7 +14,7 @@ import type { SkillsRuntime } from '../../../faculties/skills/runtime.js';
 import type { TurnToolSummary } from '../../../faculties/skills/reflection-nudge.js';
 import type { TrustLevel } from '../../../system/trust/types.js';
 import type { EmotionSelfModelRuntime } from './emotion-self-model-runtime.js';
-import type { ResolvedAuthorContext, UserRuntimeProfile } from './runtime-context.js';
+import type { ParticipantRelationshipEdgeInput, ResolvedAuthorContext, UserRuntimeProfile } from './runtime-context.js';
 import type { TurnExecutionRuntime } from './turn-execution-runtime.js';
 import type { PromptCacheTurnRuntime } from './turn-execution/prompt-cache-runtime.js';
 import type { TurnSupportRuntime } from './turn-support-runtime.js';
@@ -39,6 +39,11 @@ interface TurnExecutionAdapterCallbacks {
     message: SubstrateMessage,
     speakers: readonly ConversationScopeSpeaker[],
   ) => Promise<number>;
+  resolveParticipantRelationships: (
+    message: SubstrateMessage,
+    conversationScope: import('../../session/conversation-scope.js').ConversationScope,
+    trustLevel: TrustLevel,
+  ) => Promise<ParticipantRelationshipEdgeInput[]>;
   resolveChannelType: (message: SubstrateMessage) => string | undefined;
   ensureModel: (message?: SubstrateMessage) => void;
   captureTurnPromptSnapshot: (ctx: ComposeContext) => import('../../turns/snapshot.js').TurnPromptSnapshot;
@@ -75,6 +80,7 @@ interface TurnExecutionAdapterCallbacks {
     emotionAppraisalChain: readonly import('../../emotion/appraisal.js').EmotionAppraisalEntry[],
     currentUserRuntimeProfile: UserRuntimeProfile | undefined,
     conversationScope: import('../../session/conversation-scope.js').ConversationScope,
+    participantRelationshipEdges: readonly ParticipantRelationshipEdgeInput[],
   ) => Record<string, string>;
   setCurrentSelfModelState: (
     state: InternalState,
@@ -190,6 +196,8 @@ export function createTurnExecutionRuntimeAdapter(
     resolveAuthorContext: (message) => options.callbacks.resolveAuthorContext(message),
     countResolvableSpeakerContacts: (message, speakers) => options.callbacks
       .countResolvableSpeakerContacts(message, speakers),
+    resolveParticipantRelationships: (message, conversationScope, trustLevel) => options.callbacks
+      .resolveParticipantRelationships(message, conversationScope, trustLevel),
     emitTurnStage: (
       message,
       turnStartMs,
@@ -253,6 +261,7 @@ export function createTurnExecutionRuntimeAdapter(
       emotionAppraisalChain,
       currentUserRuntimeProfile,
       conversationScope,
+      participantRelationshipEdges,
     ) => options.callbacks.buildDynamicPromptTemplateVariables(
       message,
       resolvedUserName,
@@ -270,6 +279,7 @@ export function createTurnExecutionRuntimeAdapter(
       emotionAppraisalChain,
       currentUserRuntimeProfile,
       conversationScope,
+      participantRelationshipEdges,
     ),
     setCurrentSelfModelState: (
       state,

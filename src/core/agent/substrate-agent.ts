@@ -34,6 +34,7 @@ import {
   resolveChannelResponseStyle,
   type ChannelMeta,
 } from '../../system/trust/policy.js';
+import { getRuntimeTrustPolicy } from '../../system/trust/runtime-policy.js';
 import type { ChannelPromptRegistryPort } from '../../channels/backplane/registry-port.js';
 import {
   type PromptComposer,
@@ -125,6 +126,7 @@ import {
   resolveAuthorContext as resolveAuthorContextForTurn,
   resolveIdentityChannel as resolveIdentityChannelForTurn,
   type CompanionSubstrateHealthContext,
+  type ParticipantRelationshipEdgeInput,
   type ResolvedAuthorContext,
   type UserRuntimeProfile,
 } from './substrate-agent/runtime-context.js';
@@ -931,6 +933,11 @@ export class SubstrateAgent {
           turnMessage,
           speakers,
         ),
+        resolveParticipantRelationships: (turnMessage, scope, trustLevel) => this.resolveParticipantRelationships(
+          turnMessage,
+          scope,
+          trustLevel,
+        ),
         resolveChannelType: (turnMessage) => resolveChannelTypeForRuntime(turnMessage, this.channelRegistry),
         ensureModel: (turnMessage) => this.ensureModel(turnMessage),
         captureTurnPromptSnapshot: (ctx) => this.captureTurnPromptSnapshot(ctx),
@@ -975,6 +982,7 @@ export class SubstrateAgent {
           emotionAppraisalChain,
           currentUserRuntimeProfile,
           conversationScope,
+          participantRelationshipEdges,
         ) => this.buildDynamicPromptTemplateVariables(
           turnMessage,
           resolvedUserName,
@@ -992,6 +1000,7 @@ export class SubstrateAgent {
           emotionAppraisalChain,
           currentUserRuntimeProfile,
           conversationScope,
+          participantRelationshipEdges,
         ),
         setCurrentSelfModelState: (state, snapshotRef, metacognitiveFlags) => {
           this.currentInternalState = state;
@@ -1229,6 +1238,7 @@ export class SubstrateAgent {
     emotionAppraisalChain: readonly EmotionAppraisalEntry[],
     currentUserRuntimeProfile: UserRuntimeProfile | undefined,
     conversationScope: ConversationScope,
+    participantRelationshipEdges: readonly ParticipantRelationshipEdgeInput[],
   ): Record<string, string> {
     const recentMessages = this.sessionManager.getRecentMessages(message.channelId, 32);
     const latestPriorMessage = [...recentMessages]
@@ -1291,6 +1301,7 @@ export class SubstrateAgent {
       lastMessageReceivedAtMs: latestPriorMessage?.timestamp ?? null,
       recentChannelEntries: recentMessages,
       currentUserRuntimeProfile,
+      participantRelationshipEdges,
       analysisWorkbenchAvailable,
       internalStateContinuityGap: this.internalStateContinuityGap,
       config: this.config as Record<string, unknown>,
@@ -1429,5 +1440,94 @@ export class SubstrateAgent {
       }
     }
     return resolved;
+  }
+
+  /**
+   * E4.4 orchestrator fetch: gather live, high-confidence social-relationship
+   * edges BETWEEN currently listed participants (the <=5 recentSpeakers set) so
+   * the conversation-state producer can render a compact participant_relationships
+   * block. The producer never fetches — this async pre-prompt step runs the
+   * bounded query and hands candidates through.
+   *
+   * Only group turns are eligible (a DM has one participant). Fail closed: no
+   * contact store, no resolved participants, or a lookup error yields an empty
+   * set (the block is then absent entirely). The confidence threshold is
+   * config-owned (trust-policy.json → participantRelationshipConfidenceThreshold,
+   * default 0.7) and applied as the query's minConfidence; the room
+   * sensitivity rule (public/personal only) is enforced deterministically in
+   * the producer gate. One bounded list call, not a per-pair fan-out.
+   */
+  private async resolveParticipantRelationships(
+    message: SubstrateMessage,
+    conversationScope: ConversationScope,
+    trustLevel: TrustLevel,
+  ): Promise<ParticipantRelationshipEdgeInput[]> {
+    if (conversationScope.kind !== 'group') return [];
+    const store = this.contactStore;
+    if (!store) return [];
+    const speakers = conversationScope.recentSpeakers;
+    if (speakers.length < 2) return [];
+
+    const identityChannel = resolveIdentityChannelForTurn(message);
+    const threshold = getRuntimeTrustPolicy().participantRelationshipConfidenceThreshold;
+
+    // Resolve each currently listed participant to its social-graph entity id
+    // (authorId -> contact -> entity). Display uses the present speaker name.
+    const nameByEntityId = new Map<string, string>();
+    try {
+      for (const speaker of speakers) {
+        const contact = await store.getByChannelIdentity(identityChannel, speaker.authorId);
+        if (!contact) continue;
+        const entity = await store.getSocialGraphEntityByContactId(contact.id);
+        if (!entity) continue;
+        if (!nameByEntityId.has(entity.id)) {
+          nameByEntityId.set(entity.id, speaker.name);
+        }
+      }
+    } catch (error) {
+      log.warn('Participant relationship entity resolution failed; rendering no relationships (fail closed)', {
+        channelId: message.channelId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return [];
+    }
+    if (nameByEntityId.size < 2) return [];
+
+    let edges;
+    try {
+      edges = await store.listSocialRelationshipEdges({
+        viewerTrustLevel: trustLevel,
+        viewerChannelPrivacy: conversationScope.envelope.channelPrivacy,
+        minConfidence: threshold,
+      });
+    } catch (error) {
+      log.warn('Participant relationship edge listing failed; rendering no relationships (fail closed)', {
+        channelId: message.channelId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return [];
+    }
+
+    const candidates: ParticipantRelationshipEdgeInput[] = [];
+    const seen = new Set<string>();
+    for (const edge of edges) {
+      const aName = nameByEntityId.get(edge.sourceEntityId);
+      const bName = nameByEntityId.get(edge.targetEntityId);
+      // Both endpoints must be currently listed participants.
+      if (!aName || !bName || edge.sourceEntityId === edge.targetEntityId) continue;
+      if (edge.confidence < threshold) continue;
+      const dedupeKey = `${edge.sourceEntityId} ${edge.targetEntityId} ${edge.relationshipType}`;
+      if (seen.has(dedupeKey)) continue;
+      seen.add(dedupeKey);
+      candidates.push({
+        aName,
+        bName,
+        relationshipType: edge.relationshipType,
+        sensitivity: edge.sensitivity,
+        confidence: edge.confidence,
+        updatedAt: edge.updatedAt,
+      });
+    }
+    return candidates;
   }
 }

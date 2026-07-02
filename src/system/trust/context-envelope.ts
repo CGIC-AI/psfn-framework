@@ -78,6 +78,21 @@ export const DEFAULT_AUDIENCE_SCOPE_THRESHOLDS: AudienceScopeThresholds = {
   manyMax: 100,
 };
 
+/**
+ * Minimum edge confidence for a social-relationship edge to be eligible for
+ * compact participant-relationship exposure in conversation_state (E4.4). Edges
+ * below this bar are never rendered. Config-owned in trust-policy.json; the
+ * documented default applies when absent.
+ */
+export const DEFAULT_PARTICIPANT_RELATIONSHIP_CONFIDENCE_THRESHOLD = 0.7;
+
+export function validateParticipantRelationshipConfidenceThreshold(raw: unknown, field: string): number {
+  if (typeof raw !== 'number' || !Number.isFinite(raw) || raw < 0 || raw > 1) {
+    throw new Error(`Invalid trust policy: ${field} must be a number between 0 and 1`);
+  }
+  return raw;
+}
+
 export function validateAudienceScopeThresholds(raw: unknown, field: string): AudienceScopeThresholds {
   if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
     throw new Error(`Invalid audience thresholds: ${field} must be an object`);

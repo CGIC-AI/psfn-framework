@@ -58,6 +58,7 @@ import {
 } from './runtime-context-sections/datetime.js';
 import {
   buildConversationStatePromptVariables,
+  type ParticipantRelationshipEdgeInput,
   type UserRuntimeProfile,
 } from './runtime-context-sections/conversation-state.js';
 import { buildTurnBindingPromptVariables } from './runtime-context-sections/turn-binding.js';
@@ -88,7 +89,7 @@ import { buildSatelliteEndpointContextBlock } from './runtime-context-sections/s
 // The section producers moved into ./runtime-context-sections/ (E2.6). This
 // module stays the public entry point for the names other modules consume.
 export { buildContinuityGapPromptVariables, toEmotionSnapshotFromInternalState };
-export type { UserRuntimeProfile };
+export type { UserRuntimeProfile, ParticipantRelationshipEdgeInput };
 export { resolveAppearanceContextFromTemplateVariables } from './runtime-context-sections/self-presentation.js';
 
 const SCRATCHPAD_PROMPT_SCAN_LIMIT = 64;
@@ -259,6 +260,7 @@ export interface DynamicPromptTemplateVariablesInput {
   recentChannelEntries?: readonly SessionEntry[];
   currentUserRuntimeProfile?: UserRuntimeProfile;
   recentActiveParticipantRuntimeProfiles?: readonly UserRuntimeProfile[];
+  participantRelationshipEdges?: readonly ParticipantRelationshipEdgeInput[];
   analysisWorkbenchAvailable?: boolean;
   internalStateContinuityGap?: InternalStateContinuityGap | null;
   config: Record<string, unknown>;
@@ -304,6 +306,7 @@ export function buildDynamicPromptTemplateVariables(
       recentChannelEntries: input.recentChannelEntries,
       currentUserRuntimeProfile: input.currentUserRuntimeProfile,
       recentActiveParticipantRuntimeProfiles: input.recentActiveParticipantRuntimeProfiles,
+      participantRelationshipEdges: input.participantRelationshipEdges,
     }),
     ...buildContinuityGapPromptVariables(input.internalStateContinuityGap),
     ...buildChargePromptVariables({

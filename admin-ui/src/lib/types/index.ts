@@ -998,6 +998,54 @@ export interface SchedulerMutationResult {
   message: string;
 }
 
+// Subsystem health (background lanes)
+export type SubsystemLaneOutcome = 'ran' | 'skipped' | 'degraded' | 'failed';
+
+export type SubsystemLaneStatus =
+  | 'ok'
+  | 'skipped'
+  | 'degraded'
+  | 'failed'
+  | 'stale'
+  | 'paused'
+  | 'never';
+
+export type SubsystemLaneSource = 'event_bus' | 'scheduler';
+
+export interface SubsystemLaneEvent {
+  at: number;
+  outcome: SubsystemLaneOutcome;
+  reason?: string;
+  error?: string;
+  counts?: Record<string, number>;
+}
+
+export interface SubsystemLaneHealth {
+  id: string;
+  label: string;
+  description: string;
+  source: SubsystemLaneSource;
+  sinceProcessStart: boolean;
+  status: SubsystemLaneStatus;
+  lastEventAt: number | null;
+  lastOutcome: SubsystemLaneOutcome | null;
+  lastReason: string | null;
+  lastError: string | null;
+  counts: Record<string, number>;
+  observedEventCount: number;
+  recent: SubsystemLaneEvent[];
+  intervalMs?: number;
+  lastRunAt?: number | null;
+  nextRunDueAt?: number | null;
+  deniedReason?: string | null;
+}
+
+export interface SubsystemHealthSnapshot {
+  processStartedAt: number;
+  generatedAt: number;
+  lanes: SubsystemLaneHealth[];
+}
+
 // Skills
 export type SkillRequirements = SkillEntry['requires'];
 

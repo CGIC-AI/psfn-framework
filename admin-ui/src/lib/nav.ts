@@ -57,6 +57,7 @@ export const navGroups: NavGroup[] = [
     { id: 'session-recovery', path: '/session-recovery', defaultLabel: 'Session Recovery', icon: '\u{26A0}\u{FE0F}' },
     { id: 'evals-emotion-sidecar', path: '/evals/emotion-sidecar', defaultLabel: 'Evals', icon: '\u{1F4CA}' },
     { id: 'confirmations', path: '/confirmations', defaultLabel: 'Confirmations', icon: '\u{1F512}' },
+    { id: 'subsystem-health', path: '/subsystem-health', defaultLabel: 'Subsystem Health', icon: '\u{1FAC0}' },
     { id: 'telemetry', path: '/telemetry', defaultLabel: 'Events & Audit', icon: '\u{1F4A7}' },
   ]),
   navGroup('configure', 'Configure Garden', [

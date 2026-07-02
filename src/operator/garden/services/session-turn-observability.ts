@@ -27,7 +27,7 @@ import {
 } from '../../../core/agent/substrate-agent/turn-execution/prompt-plan.js';
 
 /**
- * Truncation-point inventory (bead psfn-framework-u9jo.2).
+ * Truncation-point inventory (bead u9jo.2).
  *
  * Every point between the assembled prompt and the rendered Loom view where
  * content could shrink, with its classification:

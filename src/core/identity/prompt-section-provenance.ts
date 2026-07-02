@@ -5,7 +5,7 @@ import type {
 } from '../../shared/contracts/runtime.js';
 
 /**
- * Interim per-block producer + scope registry (bead psfn-framework-u9jo.3).
+ * Interim per-block producer + scope registry (bead u9jo.3).
  *
  * Scope keys are implicit in the current runtime: DM/contact-scoped blocks are
  * keyed off the resolved canonical contact key, room/channel-scoped blocks off

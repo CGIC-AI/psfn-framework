@@ -369,6 +369,23 @@ async function main(): Promise<void> {
     maxEntriesPerEpisode: schedulerConfig.episodeSynthesis.maxEntriesPerEpisode,
     minConversationalEntries: schedulerConfig.episodeSynthesis.minConversationalEntries,
     minSingleEntryChars: schedulerConfig.episodeSynthesis.minSingleEntryChars,
+    // Contextual topic cutting (E5.4): JSON-owned flag; the provider is the
+    // same gateway-backed LLM port the other episodic passes use. Disabled
+    // flag => deterministic cuts unchanged; enabled without a provider fails
+    // closed at construction.
+    topicSegmentation: {
+      enabled: schedulerConfig.episodeSynthesis.topicSegmentationEnabled,
+      llmProvider,
+      onEvent: (event) => {
+        eventBus.emit('memory.episode_synthesis.segmentation', event).catch((error) => {
+          log.warn('Episode-synthesis segmentation telemetry emit failed', {
+            sessionId: event.sessionId,
+            outcome: event.outcome,
+            error: String(error),
+          });
+        });
+      },
+    },
   });
   const sleepConsolidator = new SleepCycleEpisodeConsolidator(episodicStore, sessionManager, llmProvider, {
     reviewWindowMs: schedulerConfig.sleepConsolidation.reviewWindowDays * DAY_MS,

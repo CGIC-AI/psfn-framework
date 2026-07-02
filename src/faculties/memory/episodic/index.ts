@@ -48,13 +48,23 @@ export {
 export {
   EpisodicSynthesizer,
   sessionEntryClaimKey,
+  type EpisodeSegmentationEvent,
   type EpisodicSynthesisOptions,
   type EpisodicSynthesisProcessingWatermark,
   type EpisodicSynthesisRunInput,
   type EpisodicSynthesisRunResult,
   type EpisodicSynthesisWatermarkScope,
   type EpisodicSynthesisSessionReader,
+  type EpisodicTopicSegmentationOptions,
 } from './synthesis.js';
+export {
+  TOPIC_SEGMENTATION_SYSTEM_PROMPT,
+  parseTopicSegments,
+  proposeTopicSegments,
+  type TopicSegment,
+  type TopicSegmentStatus,
+  type TopicSegmentationRequest,
+} from './topic-segmentation.js';
 export type {
   Episode,
   EpisodeAffect,

@@ -82,6 +82,13 @@ export interface EpisodeSynthesisLaneConfig {
   minConversationalEntries: number;
   /** Salience minimum: single-entry character floor for one-entry groups. */
   minSingleEntryChars: number;
+  /**
+   * Contextual topic cutting (E5.4): LLM topic segmentation inside the
+   * deterministic chunk bounds, with trailing holdback for unfinished topics.
+   * Optional key with an explicit false default so existing operator files
+   * keep validating; when false the deterministic cuts are unchanged.
+   */
+  topicSegmentationEnabled: boolean;
 }
 
 /**
@@ -431,6 +438,9 @@ function validateEpisodeSynthesisConfig(
       1,
     ),
     minSingleEntryChars: toPositiveInteger(raw.minSingleEntryChars, 'episodeSynthesis.minSingleEntryChars', 1),
+    topicSegmentationEnabled: raw.topicSegmentationEnabled === undefined
+      ? false
+      : toBoolean(raw.topicSegmentationEnabled, 'episodeSynthesis.topicSegmentationEnabled'),
   };
 }
 

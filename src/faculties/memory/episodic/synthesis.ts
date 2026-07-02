@@ -1,6 +1,8 @@
 import { createHash } from 'node:crypto';
+import type { LLMProviderPort } from '../../../core/agent/contracts.js';
 import type { SessionEntry } from '../../../core/session/types.js';
 import { resolveSessionEntryTurnContext } from '../../../core/session/turn-provenance.js';
+import { createComponentLogger } from '../../../shared/logger.js';
 import type {
   Episode,
   EpisodeAffect,
@@ -20,9 +22,38 @@ import type {
   EpisodicProcessingWatermarkScope,
   EpisodicStorePort,
 } from './store.js';
+import { proposeTopicSegments, type TopicSegment } from './topic-segmentation.js';
+
+const log = createComponentLogger('EpisodicSynthesis');
 
 export interface EpisodicSynthesisSessionReader {
   getRecentMessages(channelId: string, limit: number): SessionEntry[];
+}
+
+/**
+ * Typed segmentation outcome per gated chunk (E5.4). Failures are visible,
+ * never silent: a malformed proposal emits `outcome: 'failed'` and the run
+ * writes/claims nothing for that chunk (watermark not advanced past it).
+ */
+export interface EpisodeSegmentationEvent {
+  sessionId: string;
+  channelId: string;
+  outcome: 'segmented' | 'failed';
+  chunkEntryCount: number;
+  segmentCount: number;
+  heldBackEntryCount: number;
+  error?: string;
+  timestamp: number;
+}
+
+export interface EpisodicTopicSegmentationOptions {
+  /** JSON-owned enable flag (scheduler.json episodeSynthesis.topicSegmentationEnabled). */
+  enabled: boolean;
+  /** Required when enabled — segmentation never silently degrades to deterministic cuts. */
+  llmProvider?: Pick<LLMProviderPort, 'complete'> | null;
+  /** Segmentation telemetry sink; wired to the runtime event bus by composition. */
+  onEvent?: (event: EpisodeSegmentationEvent) => void;
+  now?: () => number;
 }
 
 export interface EpisodicSynthesisOptions {
@@ -35,6 +66,11 @@ export interface EpisodicSynthesisOptions {
   minConversationalEntries?: number;
   /** Salience minimum: single-entry character floor for one-entry groups. */
   minSingleEntryChars?: number;
+  /**
+   * Contextual topic cutting inside deterministic chunk bounds (E5.4).
+   * Absent or disabled => deterministic behavior is byte-identical.
+   */
+  topicSegmentation?: EpisodicTopicSegmentationOptions;
 }
 
 export interface EpisodicSynthesisRunInput {
@@ -50,6 +86,13 @@ export interface EpisodicSynthesisRunResult {
   createdEpisodes: Episode[];
   skippedEpisodeIds: string[];
   linkedArcs: EpisodeArc[];
+  /**
+   * Entries held back as an unfinished trailing topic (not claimed, no
+   * episode); they roll into the next pass. Always 0 in deterministic mode.
+   */
+  heldBackEntryCount: number;
+  /** Chunks whose segmentation output failed schema validation (fail closed). */
+  segmentationFailedChunkCount: number;
 }
 
 export interface EpisodicSynthesisWatermarkScope {
@@ -70,6 +113,21 @@ export interface EpisodicSynthesisProcessingWatermark extends EpisodicSynthesisW
 
 interface EpisodeGroup {
   entries: SessionEntry[];
+}
+
+interface SynthesisRunState {
+  durableWatermark: EpisodicProcessingWatermark | undefined;
+  createdEpisodes: Episode[];
+  skippedEpisodeIds: string[];
+  linkedArcs: EpisodeArc[];
+  /** Candidates materialized this run; capped by maxEpisodesPerRun. */
+  candidatesProcessed: number;
+}
+
+interface SegmentationRunOutcome {
+  heldBackEntryCount: number;
+  segmentationFailedChunkCount: number;
+  candidateEpisodeCount: number;
 }
 
 interface ThemeScore {
@@ -813,6 +871,10 @@ export class EpisodicSynthesizer {
   private readonly maxEntriesPerEpisode: number;
   private readonly minConversationalEntries: number;
   private readonly minSingleEntryChars: number;
+  private readonly segmentationEnabled: boolean;
+  private readonly segmentationProvider: Pick<LLMProviderPort, 'complete'> | null;
+  private readonly onSegmentationEvent?: (event: EpisodeSegmentationEvent) => void;
+  private readonly segmentationNow: () => number;
   private readonly processingWatermarks = new Map<string, EpisodicSynthesisProcessingWatermark>();
 
   constructor(
@@ -854,6 +916,20 @@ export class EpisodicSynthesizer {
       options.minSingleEntryChars,
       MIN_SINGLE_ENTRY_CHARS,
     );
+    const segmentation = options.topicSegmentation;
+    this.segmentationEnabled = segmentation?.enabled === true;
+    this.segmentationProvider = segmentation?.llmProvider ?? null;
+    if (this.segmentationEnabled && !this.segmentationProvider) {
+      // Fail closed at composition time: an enabled flag without a provider
+      // must never silently degrade to deterministic-only cutting.
+      throw new Error(
+        'EpisodicSynthesizer topic segmentation is enabled but no LLM provider was supplied',
+      );
+    }
+    if (segmentation?.onEvent) {
+      this.onSegmentationEvent = segmentation.onEvent;
+    }
+    this.segmentationNow = segmentation?.now ?? (() => Date.now());
   }
 
   getProcessingWatermark(
@@ -875,7 +951,7 @@ export class EpisodicSynthesizer {
       .filter(isConversational)
       .sort(compareEntries);
     const watermarkScope = this.buildProcessingWatermarkScope(input, rawEntries[0]?.channelId ?? input.sessionId);
-    let durableWatermark = await this.store.getProcessingWatermark(watermarkScope);
+    const durableWatermark = await this.store.getProcessingWatermark(watermarkScope);
     if (durableWatermark) this.rememberProcessingWatermark(durableWatermark);
 
     const lookbackEntries = this.applyWatermarkLookback(rawEntries, durableWatermark);
@@ -884,122 +960,251 @@ export class EpisodicSynthesizer {
     const entries = await this.filterClaimedEntries(lookbackEntries);
     const claimedEntriesSkipped = lookbackEntries.length - entries.length;
 
-    const groups = groupEntries(entries, {
+    const salientGroups = groupEntries(entries, {
       gapSplitMs: this.gapSplitMs,
       maxEntriesPerEpisode: this.maxEntriesPerEpisode,
       minConversationalEntries: this.minConversationalEntries,
       minSingleEntryChars: this.minSingleEntryChars,
-    }).slice(-this.maxEpisodesPerRun);
-    const createdEpisodes: Episode[] = [];
-    const skippedEpisodeIds: string[] = [];
-    const linkedArcs: EpisodeArc[] = [];
+    });
+    const state: SynthesisRunState = {
+      durableWatermark,
+      createdEpisodes: [],
+      skippedEpisodeIds: [],
+      linkedArcs: [],
+      candidatesProcessed: 0,
+    };
+    let candidateEpisodeCount: number;
+    let heldBackEntryCount = 0;
+    let segmentationFailedChunkCount = 0;
 
-    for (const group of groups) {
-      const episodeInput = buildEpisodeInput(input.sessionId, group);
-      const existing = await this.store.getEpisode(episodeInput.id);
-      let episode: Episode;
-      let created = false;
-      let decision: CandidateDecisionResult;
-      if (existing) {
-        episode = existing;
-        skippedEpisodeIds.push(existing.id);
-        decision = {
-          status: 'superseded',
-          action: 'discard',
-          reason: 'candidate span already covered by canonical episode id',
-          canonicalEpisode: episode,
-        };
-      } else {
-        const consolidationTarget = await this.resolveConsolidationTarget(episodeInput, createdEpisodes);
-        if (consolidationTarget) {
-          episode = await this.store.updateEpisode(
-            mergeEpisodeWithCandidate(consolidationTarget.episode, episodeInput),
-          );
-          const currentRunIndex = createdEpisodes.findIndex(candidate => candidate.id === episode.id);
-          if (currentRunIndex >= 0) {
-            createdEpisodes[currentRunIndex] = episode;
-          }
-          skippedEpisodeIds.push(episode.id);
-          decision = {
-            status: 'merged',
-            action: 'extend',
-            reason: 'candidate span deterministically overlapped an active canonical episode',
-            canonicalEpisode: episode,
-            sourceEpisode: consolidationTarget.episode,
-            score: consolidationTarget,
-          };
-        } else {
-          episode = await this.store.createEpisode(episodeInput);
-          created = true;
-          createdEpisodes.push(episode);
-          decision = {
-            status: 'canonical',
-            action: 'create',
-            reason: 'candidate span did not match an active canonical episode',
-            canonicalEpisode: episode,
-          };
-        }
-      }
-
-      // Claim the group's source messages for the surviving episode before
-      // recording downstream artifacts; a claim conflict aborts the run.
-      await this.store.claimEpisodeMessages({
-        episodeId: episode.id,
-        sessionId: input.sessionId,
-        claims: group.entries.map(entry => ({
-          claimKey: sessionEntryClaimKey(entry),
-          turnId: getTurnId(entry),
-          channelId: entry.channelId,
-        })),
-      });
-
-      const candidateDecision = await this.persistCandidateDecisionAndWatermark(
-        input,
-        episodeInput,
-        decision,
-        durableWatermark,
-      );
-      durableWatermark = await this.updateWatermarkDecisionArtifacts(
-        input,
-        episodeInput,
-        decision,
-        durableWatermark,
-        candidateDecision,
-      );
-
-      if (created) {
-        const priorCandidates = await this.resolvePriorCandidates(episode, createdEpisodes);
-        const related = findRelatedSource(episode, priorCandidates);
-        if (!related) continue;
-        linkedArcs.push(await this.store.writeEpisodeArc(
-          buildArcInput(related.episode, episode, related.overlap),
-        ));
-        await this.store.writeEpisodeLineage({
-          id: stableId('episode-lineage', [related.episode.id, episode.id, candidateDecision.id]),
-          sourceEpisodeId: related.episode.id,
-          targetEpisodeId: episode.id,
-          relation: 'derived_from',
-          confidence: normalizeBoundedUnit(Math.max(0.45, Math.min(0.9, 0.55 + related.overlap * 0.1))),
-          reason: 'new canonical episode linked to a related prior episode during synthesis',
-          sourceRef: candidateDecision.id,
-          provenanceRefs: episode.provenanceRefs,
-          lineageJson: {
-            schemaVersion: 1,
-            candidateDecisionId: candidateDecision.id,
-            relatedThemeOverlap: related.overlap,
-          },
-        });
+    if (this.segmentationEnabled) {
+      const outcome = await this.runSegmentedGroups(input, salientGroups, state);
+      candidateEpisodeCount = outcome.candidateEpisodeCount;
+      heldBackEntryCount = outcome.heldBackEntryCount;
+      segmentationFailedChunkCount = outcome.segmentationFailedChunkCount;
+    } else {
+      const groups = salientGroups.slice(-this.maxEpisodesPerRun);
+      candidateEpisodeCount = groups.length;
+      for (const group of groups) {
+        await this.processCandidateGroup(input, group, state);
       }
     }
 
     return {
       consideredEntries: entries.length,
       claimedEntriesSkipped,
-      candidateEpisodeCount: groups.length,
-      createdEpisodes,
-      skippedEpisodeIds,
-      linkedArcs,
+      candidateEpisodeCount,
+      createdEpisodes: state.createdEpisodes,
+      skippedEpisodeIds: state.skippedEpisodeIds,
+      linkedArcs: state.linkedArcs,
+      heldBackEntryCount,
+      segmentationFailedChunkCount,
     };
+  }
+
+  /**
+   * Contextual topic cutting (E5.4). Deterministic chunk bounds stay the
+   * outer limits; within each gated chunk the LLM proposes contiguous topic
+   * segments. Chunks process oldest-first under the maxEpisodesPerRun budget;
+   * anything not processed stays unclaimed with the watermark behind it, so
+   * it remains visible to the next pass.
+   */
+  private async runSegmentedGroups(
+    input: EpisodicSynthesisRunInput,
+    groups: readonly EpisodeGroup[],
+    state: SynthesisRunState,
+  ): Promise<SegmentationRunOutcome> {
+    if (!this.segmentationProvider) {
+      throw new Error('EpisodicSynthesizer topic segmentation ran without an LLM provider');
+    }
+    let heldBackEntryCount = 0;
+    let candidateEpisodeCount = 0;
+
+    for (let groupIndex = 0; groupIndex < groups.length; groupIndex++) {
+      if (state.candidatesProcessed >= this.maxEpisodesPerRun) break;
+      const group = groups[groupIndex];
+      const isFinalGroup = groupIndex === groups.length - 1;
+      const channelId = group.entries[0].channelId;
+
+      let segments: TopicSegment[];
+      try {
+        segments = await proposeTopicSegments(this.segmentationProvider, {
+          sessionId: input.sessionId,
+          channelId,
+          entries: group.entries,
+        });
+      } catch (error) {
+        // Fail closed: no episode is written for this chunk, nothing from it
+        // is claimed, and the run stops so the watermark never advances past
+        // the chunk — its turns stay visible to the next pass.
+        const message = error instanceof Error ? error.message : String(error);
+        this.emitSegmentationEvent({
+          sessionId: input.sessionId,
+          channelId,
+          outcome: 'failed',
+          chunkEntryCount: group.entries.length,
+          segmentCount: 0,
+          heldBackEntryCount: 0,
+          error: message,
+        });
+        log.warn('Topic segmentation failed closed; chunk left for the next pass', {
+          sessionId: input.sessionId,
+          channelId,
+          chunkEntryCount: group.entries.length,
+          error: message,
+        });
+        return { heldBackEntryCount, segmentationFailedChunkCount: 1, candidateEpisodeCount };
+      }
+
+      let heldForChunk = 0;
+      const segmentGroups: EpisodeGroup[] = [];
+      for (let segmentIndex = 0; segmentIndex < segments.length; segmentIndex++) {
+        const segment = segments[segmentIndex];
+        const segmentEntries = group.entries.slice(segment.startIndex, segment.endIndex + 1);
+        const isTrailingOpenTopic = isFinalGroup
+          && segmentIndex === segments.length - 1
+          && segment.status === 'open';
+        if (isTrailingOpenTopic) {
+          // Trailing holdback: the unfinished topic's turns are neither
+          // claimed nor episodized; they roll into the next pass and join
+          // the next episode if the topic continues. A deterministic bound
+          // after a non-final chunk already closes its trailing topic.
+          heldForChunk = segmentEntries.length;
+          continue;
+        }
+        segmentGroups.push({ entries: segmentEntries });
+      }
+      heldBackEntryCount += heldForChunk;
+      this.emitSegmentationEvent({
+        sessionId: input.sessionId,
+        channelId,
+        outcome: 'segmented',
+        chunkEntryCount: group.entries.length,
+        segmentCount: segments.length,
+        heldBackEntryCount: heldForChunk,
+      });
+
+      for (const segmentGroup of segmentGroups) {
+        if (state.candidatesProcessed >= this.maxEpisodesPerRun) break;
+        const salient = isSalientGroup(segmentGroup.entries, {
+          minConversationalEntries: this.minConversationalEntries,
+          minSingleEntryChars: this.minSingleEntryChars,
+        });
+        if (!salient) continue;
+        candidateEpisodeCount++;
+        await this.processCandidateGroup(input, segmentGroup, state);
+      }
+    }
+
+    return { heldBackEntryCount, segmentationFailedChunkCount: 0, candidateEpisodeCount };
+  }
+
+  private emitSegmentationEvent(event: Omit<EpisodeSegmentationEvent, 'timestamp'>): void {
+    if (!this.onSegmentationEvent) return;
+    this.onSegmentationEvent({ ...event, timestamp: this.segmentationNow() });
+  }
+
+  private async processCandidateGroup(
+    input: EpisodicSynthesisRunInput,
+    group: EpisodeGroup,
+    state: SynthesisRunState,
+  ): Promise<void> {
+    state.candidatesProcessed++;
+    const episodeInput = buildEpisodeInput(input.sessionId, group);
+    const existing = await this.store.getEpisode(episodeInput.id);
+    let episode: Episode;
+    let created = false;
+    let decision: CandidateDecisionResult;
+    if (existing) {
+      episode = existing;
+      state.skippedEpisodeIds.push(existing.id);
+      decision = {
+        status: 'superseded',
+        action: 'discard',
+        reason: 'candidate span already covered by canonical episode id',
+        canonicalEpisode: episode,
+      };
+    } else {
+      const consolidationTarget = await this.resolveConsolidationTarget(episodeInput, state.createdEpisodes);
+      if (consolidationTarget) {
+        episode = await this.store.updateEpisode(
+          mergeEpisodeWithCandidate(consolidationTarget.episode, episodeInput),
+        );
+        const currentRunIndex = state.createdEpisodes.findIndex(candidate => candidate.id === episode.id);
+        if (currentRunIndex >= 0) {
+          state.createdEpisodes[currentRunIndex] = episode;
+        }
+        state.skippedEpisodeIds.push(episode.id);
+        decision = {
+          status: 'merged',
+          action: 'extend',
+          reason: 'candidate span deterministically overlapped an active canonical episode',
+          canonicalEpisode: episode,
+          sourceEpisode: consolidationTarget.episode,
+          score: consolidationTarget,
+        };
+      } else {
+        episode = await this.store.createEpisode(episodeInput);
+        created = true;
+        state.createdEpisodes.push(episode);
+        decision = {
+          status: 'canonical',
+          action: 'create',
+          reason: 'candidate span did not match an active canonical episode',
+          canonicalEpisode: episode,
+        };
+      }
+    }
+
+    // Claim the group's source messages for the surviving episode before
+    // recording downstream artifacts; a claim conflict aborts the run.
+    await this.store.claimEpisodeMessages({
+      episodeId: episode.id,
+      sessionId: input.sessionId,
+      claims: group.entries.map(entry => ({
+        claimKey: sessionEntryClaimKey(entry),
+        turnId: getTurnId(entry),
+        channelId: entry.channelId,
+      })),
+    });
+
+    const candidateDecision = await this.persistCandidateDecisionAndWatermark(
+      input,
+      episodeInput,
+      decision,
+      state.durableWatermark,
+    );
+    state.durableWatermark = await this.updateWatermarkDecisionArtifacts(
+      input,
+      episodeInput,
+      decision,
+      state.durableWatermark,
+      candidateDecision,
+    );
+
+    if (created) {
+      const priorCandidates = await this.resolvePriorCandidates(episode, state.createdEpisodes);
+      const related = findRelatedSource(episode, priorCandidates);
+      if (!related) return;
+      state.linkedArcs.push(await this.store.writeEpisodeArc(
+        buildArcInput(related.episode, episode, related.overlap),
+      ));
+      await this.store.writeEpisodeLineage({
+        id: stableId('episode-lineage', [related.episode.id, episode.id, candidateDecision.id]),
+        sourceEpisodeId: related.episode.id,
+        targetEpisodeId: episode.id,
+        relation: 'derived_from',
+        confidence: normalizeBoundedUnit(Math.max(0.45, Math.min(0.9, 0.55 + related.overlap * 0.1))),
+        reason: 'new canonical episode linked to a related prior episode during synthesis',
+        sourceRef: candidateDecision.id,
+        provenanceRefs: episode.provenanceRefs,
+        lineageJson: {
+          schemaVersion: 1,
+          candidateDecisionId: candidateDecision.id,
+          relatedThemeOverlap: related.overlap,
+        },
+      });
+    }
   }
 
   private async filterClaimedEntries(entries: readonly SessionEntry[]): Promise<SessionEntry[]> {

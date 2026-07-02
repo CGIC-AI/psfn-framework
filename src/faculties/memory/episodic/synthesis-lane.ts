@@ -330,6 +330,8 @@ export class EpisodeSynthesisLane {
       createdEpisodes: synthesis.createdEpisodes.length,
       skippedEpisodes: synthesis.skippedEpisodeIds.length,
       linkedArcs: synthesis.linkedArcs.length,
+      heldBackEntries: synthesis.heldBackEntryCount,
+      segmentationFailedChunks: synthesis.segmentationFailedChunkCount,
     });
   }
 

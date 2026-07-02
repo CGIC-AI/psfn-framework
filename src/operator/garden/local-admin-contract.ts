@@ -85,6 +85,7 @@ import {
 } from './services/observer-eval-sidecar-service.js';
 import { AdminPromptsDataService } from './services/prompts-service.js';
 import { AdminSchedulerService } from './services/scheduler-service.js';
+import { AdminSubsystemHealthDataService } from './services/subsystem-health-service.js';
 import { AdminSessionDataService } from './services/session-service.js';
 import { AdminSettingsDataService } from './services/settings-service.js';
 import { AdminShardFoldReviewDataService } from './services/shard-fold-review-service.js';
@@ -180,6 +181,11 @@ export function createInProcessGardenAdminContract(
     eventBus: options.eventBus,
     stateProvider: options.adaptiveToolsStateProvider ?? null,
     toolHealthProvider: options.toolHealthProvider ?? null,
+  });
+  const schedulerService = new AdminSchedulerService(options.scheduler, options.config.dataDir);
+  const subsystemHealth = new AdminSubsystemHealthDataService({
+    eventBus: options.eventBus,
+    scheduler: schedulerService,
   });
 
   return {
@@ -308,7 +314,8 @@ export function createInProcessGardenAdminContract(
       },
       companionValuesLayerProvider: () => valuesJournal.buildCompanionDerivedLayer(),
     }),
-    scheduler: new AdminSchedulerService(options.scheduler, options.config.dataDir),
+    scheduler: schedulerService,
+    subsystemHealth,
     skills: options.skillsRuntime ?? null,
     confirmations: options.confirmationQueueApi ?? null,
     values: valuesJournal,

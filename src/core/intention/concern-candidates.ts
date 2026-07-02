@@ -15,6 +15,10 @@ import {
   type DeterministicGateDefinition,
 } from '../../shared/gating/deterministic-gate.js';
 import type { ConcernStorePort } from './concern-store-port.js';
+import type {
+  ConcernRouteDispatcher,
+  ConcernRouteRequest,
+} from './concern-route-handoff.js';
 import {
   MAX_ACTIVE_CONCERNS,
   isConcernAttentionStatus,
@@ -124,6 +128,10 @@ export interface ConcernCandidateApplyOutcome {
   reason: string;
   concernId?: string;
   routeTarget?: ConcernCandidateRouteTarget;
+  /** Substrate that accepted the routed handoff (when action=route succeeded). */
+  routeSubstrate?: string;
+  /** Durable id created in the destination substrate (when routed). */
+  routeRef?: string;
 }
 
 export interface ConcernCandidateReviewResult {
@@ -463,6 +471,13 @@ export interface ApplyConcernCandidateReviewOptions {
   concernStore: ConcernStorePort;
   candidates: readonly ConcernCandidate[];
   decisions: readonly ConcernCandidateReviewDecision[];
+  /**
+   * Optional durable-substrate dispatcher. When provided, action=route
+   * decisions hand off to the configured substrate handler (or produce an
+   * explicit blocked outcome). When absent, routes stay an intake-only
+   * acknowledgement (legacy behavior).
+   */
+  routeDispatcher?: ConcernRouteDispatcher;
   now?: () => Date;
 }
 
@@ -478,6 +493,7 @@ export async function applyConcernCandidateReview(
       concernStore: options.concernStore,
       candidate,
       decision,
+      ...(options.routeDispatcher ? { routeDispatcher: options.routeDispatcher } : {}),
       now: options.now,
     }));
   }
@@ -488,6 +504,7 @@ async function applyConcernCandidateDecision(input: {
   concernStore: ConcernStorePort;
   candidate: ConcernCandidate;
   decision: ConcernCandidateReviewDecision;
+  routeDispatcher?: ConcernRouteDispatcher;
   now?: () => Date;
 }): Promise<ConcernCandidateApplyOutcome> {
   switch (input.decision.action) {
@@ -505,14 +522,30 @@ async function applyConcernCandidateDecision(input: {
         status: 'deferred',
         reason: input.decision.reason,
       };
-    case 'route':
+    case 'route': {
+      const routeTarget = input.decision.routeTarget ?? 'other';
+      if (!input.routeDispatcher) {
+        return {
+          candidateId: input.candidate.id,
+          action: 'route',
+          status: 'routed',
+          routeTarget,
+          reason: input.decision.reason,
+        };
+      }
+      const outcome = await input.routeDispatcher.dispatch(
+        buildCandidateRouteRequest(input.candidate, input.decision, routeTarget),
+      );
       return {
         candidateId: input.candidate.id,
         action: 'route',
-        status: 'routed',
-        routeTarget: input.decision.routeTarget ?? 'other',
-        reason: input.decision.reason,
+        status: outcome.disposition === 'routed' ? 'routed' : 'blocked',
+        routeTarget,
+        reason: outcome.reason,
+        routeSubstrate: outcome.substrate,
+        ...(outcome.targetRef ? { routeRef: outcome.targetRef } : {}),
       };
+    }
     case 'merge':
       if (input.decision.targetConcernId) {
         const merged = await input.concernStore.transitionConcernStatus(input.decision.targetConcernId, {
@@ -604,11 +637,32 @@ async function createConcernFromCandidate(input: {
   }
 }
 
+function buildCandidateRouteRequest(
+  candidate: ConcernCandidate,
+  decision: ConcernCandidateReviewDecision,
+  routeTarget: ConcernCandidateRouteTarget,
+): ConcernRouteRequest {
+  return {
+    target: routeTarget,
+    source: 'candidate_review',
+    title: candidate.title,
+    summary: candidate.summary,
+    priority: decision.priority ?? candidate.priorityHint,
+    reason: decision.reason,
+    evidenceRefs: candidate.evidenceRefs,
+    channelId: candidate.channelId,
+    ...(candidate.contactId ? { contactId: candidate.contactId } : {}),
+    ...(decision.dueAt ?? candidate.dueAt ? { dueAt: decision.dueAt ?? candidate.dueAt } : {}),
+    candidateId: candidate.id,
+  };
+}
+
 export interface ConcernCandidateWorkerOptions {
   queue: ConcernCandidateQueue;
   reviewer: ConcernCandidateReviewer;
   concernStore: ConcernStorePort;
   eventBus?: EventBus | null;
+  routeDispatcher?: ConcernRouteDispatcher;
   reviewTurnInterval?: number;
   maxReviewBatch?: number;
   now?: () => Date;
@@ -700,6 +754,7 @@ export class ConcernCandidateWorker {
         concernStore: this.options.concernStore,
         candidates,
         decisions: review.decisions,
+        ...(this.options.routeDispatcher ? { routeDispatcher: this.options.routeDispatcher } : {}),
         now: this.now,
       });
       await this.options.eventBus?.emit('intention.concern_candidate.reviewed', {
@@ -736,6 +791,8 @@ export interface CreateAutomatedConcernRuntimeOptions {
   now?: () => Date;
   /** Shared persona preamble service (E6.1); soft persona framing before the concern-review task prompt. */
   personaPreamble?: PersonaPreamblePort | null;
+  /** Durable-substrate dispatcher for action=route decisions (etj1). */
+  routeDispatcher?: ConcernRouteDispatcher;
 }
 
 export function createAutomatedConcernRuntime(
@@ -750,6 +807,7 @@ export function createAutomatedConcernRuntime(
     reviewer,
     concernStore: options.concernStore,
     eventBus: options.eventBus,
+    ...(options.routeDispatcher ? { routeDispatcher: options.routeDispatcher } : {}),
     ...(options.reviewTurnInterval ? { reviewTurnInterval: options.reviewTurnInterval } : {}),
     ...(options.now ? { now: options.now } : {}),
   });

@@ -58,6 +58,7 @@ import {
   wireIntentionRuntimeStores,
 } from '../../core/intention/runtime-wiring.js';
 import { createAutomatedConcernRuntime } from '../../core/intention/concern-candidates.js';
+import { createDefaultConcernRouteDispatcher } from './concern-route-wiring.js';
 import { createIdentityCoolingOffManagerFromEnv } from '../../system/capabilities/safeguards.js';
 import { composeSystemPromptTemplate } from '../../core/identity/loader.js';
 import {
@@ -355,11 +356,16 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
   const intentionBehavioralHooks = createIntentionBehavioralPatternHooks(
     intentionRuntime.behavioralPatternTracker,
   );
+  const concernRouteDispatcher = createDefaultConcernRouteDispatcher({
+    companionDataDir: pathSnapshot.companionDataDir,
+    eventBus,
+  });
   const automatedConcernRuntime = createAutomatedConcernRuntime({
     eventBus,
     llmProvider,
     concernStore: intentionRuntime.concernStore,
     personaPreamble,
+    routeDispatcher: concernRouteDispatcher,
   });
   const memoryExtractor = wireMemoryRuntime({
     agentLoop,

@@ -14,6 +14,7 @@ import type { MemoryStorePort } from '../../faculties/memory/memory-store-port.j
 import { Scheduler } from '../../core/scheduler/scheduler.js';
 import { registerAmbientPresenceTask } from '../../core/scheduler/ambient-presence.js';
 import { registerConcernGroomingTask } from '../../core/intention/concern-grooming.js';
+import { createDefaultConcernRouteDispatcher } from './concern-route-wiring.js';
 import type { ConcernStorePort } from '../../core/intention/concern-store-port.js';
 import type { ContactStorePort } from '../../core/contacts/contact-store-port.js';
 import {
@@ -208,6 +209,10 @@ export function buildAgentSchedulerRuntime(
       scheduler,
       concernStore: options.concernStore,
       eventBus: options.eventBus,
+      routeDispatcher: createDefaultConcernRouteDispatcher({
+        companionDataDir: options.pathSnapshot.companionDataDir,
+        eventBus: options.eventBus,
+      }),
     });
   }
 

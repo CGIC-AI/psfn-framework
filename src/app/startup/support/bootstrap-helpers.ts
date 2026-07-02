@@ -270,10 +270,13 @@ export function hydrateCanonicalStartupConfig(
     salienceDecayIntervalMs: persistedScheduler.salienceDecayIntervalMs,
     artifactLifecycle: { ...persistedScheduler.artifactLifecycle },
     episodicProcessing: { ...persistedScheduler.episodicProcessing },
-    sleeptime: {
-      direct: { ...persistedScheduler.sleeptime.direct },
-      group: { ...persistedScheduler.sleeptime.group },
+    nearTurnMemory: {
+      direct: { ...persistedScheduler.nearTurnMemory.direct },
+      group: { ...persistedScheduler.nearTurnMemory.group },
     },
+    episodeSynthesis: { ...persistedScheduler.episodeSynthesis },
+    sleepConsolidation: { ...persistedScheduler.sleepConsolidation },
+    arcFormation: { ...persistedScheduler.arcFormation },
     socialGraphBuilder: { ...persistedScheduler.socialGraphBuilder },
     temporalWakeup: {
       enabled: persistedScheduler.temporalWakeup.enabled,

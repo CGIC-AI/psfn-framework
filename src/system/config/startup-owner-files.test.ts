@@ -104,9 +104,31 @@ describe('startup owner-file loaders', () => {
         timeZone: 'local',
         inactivityThresholdMinutes: 60,
       },
-      sleeptime: {
+      nearTurnMemory: {
         direct: { cadenceTurns: 3 },
         group: { minIntervalMinutes: 15, minNewEntries: 8 },
+      },
+      episodeSynthesis: {
+        timerIntervalMinutes: 30,
+        turnThreshold: 24,
+        minRelevantTurns: 10,
+        transcriptMessageLimit: 96,
+        maxEpisodesPerRun: 6,
+        gapSplitMinutes: 45,
+        maxEntriesPerEpisode: 14,
+        minConversationalEntries: 2,
+        minSingleEntryChars: 120,
+      },
+      sleepConsolidation: {
+        reviewWindowDays: 60,
+        refinementWindowHours: 36,
+        adjacencyGapMinutes: 45,
+        maxRefinementsPerRun: 8,
+      },
+      arcFormation: {
+        passIntervalDays: 6,
+        reviewWindowDays: 30,
+        minConfidence: 0.5,
       },
       socialGraphBuilder: {
         intervalMs: 1_800_000,

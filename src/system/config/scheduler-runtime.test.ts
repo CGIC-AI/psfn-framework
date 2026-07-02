@@ -9,6 +9,35 @@ function writeJson(path: string, value: unknown): void {
   writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`, 'utf-8');
 }
 
+const MEMORY_LANE_BLOCKS = {
+  nearTurnMemory: {
+    direct: { cadenceTurns: 3 },
+    group: { minIntervalMinutes: 15, minNewEntries: 8 },
+  },
+  episodeSynthesis: {
+    timerIntervalMinutes: 30,
+    turnThreshold: 24,
+    minRelevantTurns: 10,
+    transcriptMessageLimit: 96,
+    maxEpisodesPerRun: 6,
+    gapSplitMinutes: 45,
+    maxEntriesPerEpisode: 14,
+    minConversationalEntries: 2,
+    minSingleEntryChars: 120,
+  },
+  sleepConsolidation: {
+    reviewWindowDays: 60,
+    refinementWindowHours: 36,
+    adjacencyGapMinutes: 45,
+    maxRefinementsPerRun: 8,
+  },
+  arcFormation: {
+    passIntervalDays: 6,
+    reviewWindowDays: 30,
+    minConfidence: 0.5,
+  },
+} as const;
+
 describe('resolveRuntimeSchedulerConfig', () => {
   it('requires object-form options with a dataDir', () => {
     expect(() => resolveRuntimeSchedulerConfig('invalid' as unknown as {
@@ -25,24 +54,6 @@ describe('resolveRuntimeSchedulerConfig', () => {
     mkdirSync(seedDir, { recursive: true });
 
     try {
-      writeJson(join(seedDir, 'scheduler.seed.json'), {
-        tickIntervalMs: 60_000,
-        heartbeatIntervalMs: 1_800_000,
-        salienceDecayIntervalMs: 300_000,
-        artifactLifecycle: {
-          scratchpadRetentionDays: 14,
-          generatedMediaRetentionDays: 30,
-          workspaceTempRetentionDays: 14,
-          cleanupBatchSize: 128,
-        },
-        episodicProcessing: {
-          enabled: true,
-          startLocalTime: '00:00',
-          endLocalTime: '09:00',
-          timeZone: 'local',
-          inactivityThresholdMinutes: 60,
-        },
-      });
       writeJson(join(dataDir, 'scheduler.json'), {
         tickIntervalMs: 45_000,
         heartbeatIntervalMs: 900_000,
@@ -60,10 +71,7 @@ describe('resolveRuntimeSchedulerConfig', () => {
           timeZone: 'America/New_York',
           inactivityThresholdMinutes: 45,
         },
-        sleeptime: {
-          direct: { cadenceTurns: 3 },
-          group: { minIntervalMinutes: 15, minNewEntries: 8 },
-        },
+        ...MEMORY_LANE_BLOCKS,
       });
 
       const resolved = resolveRuntimeSchedulerConfig({
@@ -88,10 +96,7 @@ describe('resolveRuntimeSchedulerConfig', () => {
           timeZone: 'America/New_York',
           inactivityThresholdMinutes: 45,
         },
-        sleeptime: {
-          direct: { cadenceTurns: 3 },
-          group: { minIntervalMinutes: 15, minNewEntries: 8 },
-        },
+        ...MEMORY_LANE_BLOCKS,
         socialGraphBuilder: {
           intervalMs: 1_800_000,
           coPresenceMinSessions: 3,
@@ -113,24 +118,6 @@ describe('resolveRuntimeSchedulerConfig', () => {
     mkdirSync(seedDir, { recursive: true });
 
     try {
-      writeJson(join(seedDir, 'scheduler.seed.json'), {
-        tickIntervalMs: 60_000,
-        heartbeatIntervalMs: 1_800_000,
-        salienceDecayIntervalMs: 300_000,
-        artifactLifecycle: {
-          scratchpadRetentionDays: 14,
-          generatedMediaRetentionDays: 30,
-          workspaceTempRetentionDays: 14,
-          cleanupBatchSize: 128,
-        },
-        episodicProcessing: {
-          enabled: true,
-          startLocalTime: '00:00',
-          endLocalTime: '09:00',
-          timeZone: 'local',
-          inactivityThresholdMinutes: 60,
-        },
-      });
       writeJson(join(dataDir, 'scheduler.json'), {
         tickIntervalMs: 10_000,
         heartbeatIntervalMs: 20_000,
@@ -148,10 +135,7 @@ describe('resolveRuntimeSchedulerConfig', () => {
           timeZone: 'UTC',
           inactivityThresholdMinutes: 15,
         },
-        sleeptime: {
-          direct: { cadenceTurns: 3 },
-          group: { minIntervalMinutes: 15, minNewEntries: 8 },
-        },
+        ...MEMORY_LANE_BLOCKS,
       });
 
       const resolved = resolveRuntimeSchedulerConfig({
@@ -176,10 +160,7 @@ describe('resolveRuntimeSchedulerConfig', () => {
           timeZone: 'UTC',
           inactivityThresholdMinutes: 15,
         },
-        sleeptime: {
-          direct: { cadenceTurns: 3 },
-          group: { minIntervalMinutes: 15, minNewEntries: 8 },
-        },
+        ...MEMORY_LANE_BLOCKS,
         socialGraphBuilder: {
           intervalMs: 1_800_000,
           coPresenceMinSessions: 3,

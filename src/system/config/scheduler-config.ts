@@ -25,28 +25,90 @@ export interface EpisodicProcessingRestWindowConfig {
 }
 
 /**
- * Direct (1:1 / DM) sleeptime cadence. Preserves the historical per-N-turns
- * posture; `cadenceTurns` is now JSON-owned instead of a hardcoded constant.
+ * Direct (1:1 / DM) near-turn memory cadence. Preserves the historical
+ * per-N-turns posture; `cadenceTurns` is JSON-owned instead of a hardcoded
+ * constant.
  */
-export interface SleeptimeDirectCadenceConfig {
+export interface NearTurnMemoryDirectCadenceConfig {
   cadenceTurns: number;
 }
 
 /**
- * Group-scope sleeptime cadence. Instead of firing every N turns (which in a
- * busy multi-person room is near-continuous background LLM work), group scopes
- * use watermark/interval batching: a run is only eligible once at least
- * `minNewEntries` new conversational turns have accumulated AND at least
+ * Group-scope near-turn memory cadence. Instead of firing every N turns
+ * (which in a busy multi-person room is near-continuous background work),
+ * group scopes use watermark/interval batching: a run is only eligible once at
+ * least `minNewEntries` new conversational turns have accumulated AND at least
  * `minIntervalMinutes` of wall-clock time has elapsed since the last run.
  */
-export interface SleeptimeGroupCadenceConfig {
+export interface NearTurnMemoryGroupCadenceConfig {
   minIntervalMinutes: number;
   minNewEntries: number;
 }
 
-export interface SleeptimeCadenceConfig {
-  direct: SleeptimeDirectCadenceConfig;
-  group: SleeptimeGroupCadenceConfig;
+/**
+ * Cadence for the lightweight near-turn memory lane (extraction trigger
+ * evaluation, active-memory review refresh, concern-candidate derivation).
+ * This lane replaces the old turn-based "sleeptime" cadence; heavy passes
+ * (sleep consolidation, arc weaving, dream meaning) are scheduler-owned and
+ * run only inside the episodicProcessing rest window.
+ */
+export interface NearTurnMemoryCadenceConfig {
+  direct: NearTurnMemoryDirectCadenceConfig;
+  group: NearTurnMemoryGroupCadenceConfig;
+}
+
+/**
+ * Candidate-episode synthesis lane: deterministic trigger gate plus synthesis
+ * tuning knobs. The lane fires on a timer OR a turn threshold (whichever comes
+ * first) and then applies two deterministic gates (new-messages watermark and
+ * a minimum relevant-turn count) before any processing happens.
+ */
+export interface EpisodeSynthesisLaneConfig {
+  /** Scheduler timer cadence for gate evaluation (minutes). */
+  timerIntervalMinutes: number;
+  /** Turn count per session that forces a gate evaluation before the timer. */
+  turnThreshold: number;
+  /** Minimum companion-relevant turns required before synthesis runs. */
+  minRelevantTurns: number;
+  /** Max session entries considered per synthesis run. */
+  transcriptMessageLimit: number;
+  /** Max candidate episodes materialized per run. */
+  maxEpisodesPerRun: number;
+  /** Conversation gap that splits candidate episodes (minutes). */
+  gapSplitMinutes: number;
+  /** Max session entries folded into one candidate episode. */
+  maxEntriesPerEpisode: number;
+  /** Salience minimum: conversational entries required for a group to count. */
+  minConversationalEntries: number;
+  /** Salience minimum: single-entry character floor for one-entry groups. */
+  minSingleEntryChars: number;
+}
+
+/**
+ * Nightly sleep-cycle episode consolidation tuning (rest-window scheduler
+ * lane only).
+ */
+export interface SleepConsolidationConfig {
+  /** How far back the deterministic nightly pass reviews episodes (days). */
+  reviewWindowDays: number;
+  /** How far back the bounded LLM cleanup reviews episodes (hours). */
+  refinementWindowHours: number;
+  /** Same-scope episodes closer than this are one sitting and merge (minutes). */
+  adjacencyGapMinutes: number;
+  /** Cap on LLM refinement calls per run. */
+  maxRefinementsPerRun: number;
+}
+
+/**
+ * Cross-day arc weaving tuning (rest-window scheduler lane only).
+ */
+export interface ArcFormationConfig {
+  /** Minimum time between arc-formation passes (days). */
+  passIntervalDays: number;
+  /** How far back the pass looks for related episodes (days). */
+  reviewWindowDays: number;
+  /** Confidence floor below which proposed arcs are rejected (0..1). */
+  minConfidence: number;
 }
 
 /**
@@ -146,7 +208,10 @@ export interface SchedulerRuntimeConfig {
   salienceDecayIntervalMs: number;
   artifactLifecycle: ArtifactLifecyclePolicyConfig;
   episodicProcessing: EpisodicProcessingRestWindowConfig;
-  sleeptime: SleeptimeCadenceConfig;
+  nearTurnMemory: NearTurnMemoryCadenceConfig;
+  episodeSynthesis: EpisodeSynthesisLaneConfig;
+  sleepConsolidation: SleepConsolidationConfig;
+  arcFormation: ArcFormationConfig;
   socialGraphBuilder: SocialGraphBuilderCadenceConfig;
   temporalWakeup: TemporalWakeupConfig;
 }
@@ -251,36 +316,96 @@ function validateEpisodicProcessingConfig(
   };
 }
 
-function validateSleeptimeConfig(
+function toUnitInterval(value: unknown, field: string): number {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0 || value > 1) {
+    throw new Error(`Invalid scheduler config: ${field} must be a number between 0 and 1`);
+  }
+  return value;
+}
+
+function validateNearTurnMemoryConfig(
   raw: unknown,
   sourcePath: string,
-): SleeptimeCadenceConfig {
+): NearTurnMemoryCadenceConfig {
   if (!isRecord(raw)) {
-    throw new Error(`Invalid scheduler config at ${sourcePath}: sleeptime must be an object`);
+    throw new Error(`Invalid scheduler config at ${sourcePath}: nearTurnMemory must be an object`);
   }
   if (!isRecord(raw.direct)) {
-    throw new Error(`Invalid scheduler config at ${sourcePath}: sleeptime.direct must be an object`);
+    throw new Error(`Invalid scheduler config at ${sourcePath}: nearTurnMemory.direct must be an object`);
   }
   if (!isRecord(raw.group)) {
-    throw new Error(`Invalid scheduler config at ${sourcePath}: sleeptime.group must be an object`);
+    throw new Error(`Invalid scheduler config at ${sourcePath}: nearTurnMemory.group must be an object`);
   }
 
   return {
     direct: {
-      cadenceTurns: toPositiveInteger(raw.direct.cadenceTurns, 'sleeptime.direct.cadenceTurns', 1),
+      cadenceTurns: toPositiveInteger(raw.direct.cadenceTurns, 'nearTurnMemory.direct.cadenceTurns', 1),
     },
     group: {
       minIntervalMinutes: toPositiveInteger(
         raw.group.minIntervalMinutes,
-        'sleeptime.group.minIntervalMinutes',
+        'nearTurnMemory.group.minIntervalMinutes',
         1,
       ),
       minNewEntries: toPositiveInteger(
         raw.group.minNewEntries,
-        'sleeptime.group.minNewEntries',
+        'nearTurnMemory.group.minNewEntries',
         1,
       ),
     },
+  };
+}
+
+function validateEpisodeSynthesisConfig(
+  raw: unknown,
+  sourcePath: string,
+): EpisodeSynthesisLaneConfig {
+  if (!isRecord(raw)) {
+    throw new Error(`Invalid scheduler config at ${sourcePath}: episodeSynthesis must be an object`);
+  }
+  return {
+    timerIntervalMinutes: toPositiveInteger(raw.timerIntervalMinutes, 'episodeSynthesis.timerIntervalMinutes', 1),
+    turnThreshold: toPositiveInteger(raw.turnThreshold, 'episodeSynthesis.turnThreshold', 1),
+    minRelevantTurns: toPositiveInteger(raw.minRelevantTurns, 'episodeSynthesis.minRelevantTurns', 1),
+    transcriptMessageLimit: toPositiveInteger(raw.transcriptMessageLimit, 'episodeSynthesis.transcriptMessageLimit', 1),
+    maxEpisodesPerRun: toPositiveInteger(raw.maxEpisodesPerRun, 'episodeSynthesis.maxEpisodesPerRun', 1),
+    gapSplitMinutes: toPositiveInteger(raw.gapSplitMinutes, 'episodeSynthesis.gapSplitMinutes', 1),
+    maxEntriesPerEpisode: toPositiveInteger(raw.maxEntriesPerEpisode, 'episodeSynthesis.maxEntriesPerEpisode', 1),
+    minConversationalEntries: toPositiveInteger(
+      raw.minConversationalEntries,
+      'episodeSynthesis.minConversationalEntries',
+      1,
+    ),
+    minSingleEntryChars: toPositiveInteger(raw.minSingleEntryChars, 'episodeSynthesis.minSingleEntryChars', 1),
+  };
+}
+
+function validateSleepConsolidationConfig(
+  raw: unknown,
+  sourcePath: string,
+): SleepConsolidationConfig {
+  if (!isRecord(raw)) {
+    throw new Error(`Invalid scheduler config at ${sourcePath}: sleepConsolidation must be an object`);
+  }
+  return {
+    reviewWindowDays: toPositiveInteger(raw.reviewWindowDays, 'sleepConsolidation.reviewWindowDays', 1),
+    refinementWindowHours: toPositiveInteger(raw.refinementWindowHours, 'sleepConsolidation.refinementWindowHours', 1),
+    adjacencyGapMinutes: toPositiveInteger(raw.adjacencyGapMinutes, 'sleepConsolidation.adjacencyGapMinutes', 1),
+    maxRefinementsPerRun: toPositiveInteger(raw.maxRefinementsPerRun, 'sleepConsolidation.maxRefinementsPerRun', 1),
+  };
+}
+
+function validateArcFormationConfig(
+  raw: unknown,
+  sourcePath: string,
+): ArcFormationConfig {
+  if (!isRecord(raw)) {
+    throw new Error(`Invalid scheduler config at ${sourcePath}: arcFormation must be an object`);
+  }
+  return {
+    passIntervalDays: toPositiveInteger(raw.passIntervalDays, 'arcFormation.passIntervalDays', 1),
+    reviewWindowDays: toPositiveInteger(raw.reviewWindowDays, 'arcFormation.reviewWindowDays', 1),
+    minConfidence: toUnitInterval(raw.minConfidence, 'arcFormation.minConfidence'),
   };
 }
 
@@ -395,6 +520,14 @@ function validateSchedulerConfig(raw: unknown, sourcePath: string): SchedulerRun
   if (!isRecord(raw)) {
     throw new Error(`Invalid scheduler config at ${sourcePath}: expected object`);
   }
+  if (raw.sleeptime !== undefined) {
+    throw new Error(
+      `Invalid scheduler config at ${sourcePath}: the "sleeptime" cadence key was removed. `
+      + 'The lightweight turn-based lane is now "nearTurnMemory"; heavy sleeptime passes are '
+      + 'scheduler-owned via "episodicProcessing", "sleepConsolidation", and "arcFormation". '
+      + 'Rename the key and remove any heavy-pass expectations from turn cadence.',
+    );
+  }
 
   return {
     tickIntervalMs: toInterval(raw.tickIntervalMs, 'tickIntervalMs'),
@@ -402,7 +535,10 @@ function validateSchedulerConfig(raw: unknown, sourcePath: string): SchedulerRun
     salienceDecayIntervalMs: toInterval(raw.salienceDecayIntervalMs, 'salienceDecayIntervalMs'),
     artifactLifecycle: validateArtifactLifecycleConfig(raw.artifactLifecycle, sourcePath),
     episodicProcessing: validateEpisodicProcessingConfig(raw.episodicProcessing, sourcePath),
-    sleeptime: validateSleeptimeConfig(raw.sleeptime, sourcePath),
+    nearTurnMemory: validateNearTurnMemoryConfig(raw.nearTurnMemory, sourcePath),
+    episodeSynthesis: validateEpisodeSynthesisConfig(raw.episodeSynthesis, sourcePath),
+    sleepConsolidation: validateSleepConsolidationConfig(raw.sleepConsolidation, sourcePath),
+    arcFormation: validateArcFormationConfig(raw.arcFormation, sourcePath),
     socialGraphBuilder: validateSocialGraphBuilderConfig(raw.socialGraphBuilder, sourcePath),
     temporalWakeup: validateTemporalWakeupConfig(raw.temporalWakeup, sourcePath),
   };

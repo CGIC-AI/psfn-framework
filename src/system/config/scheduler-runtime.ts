@@ -29,10 +29,13 @@ export function resolveRuntimeSchedulerConfig(
     salienceDecayIntervalMs: persisted.salienceDecayIntervalMs,
     artifactLifecycle: { ...persisted.artifactLifecycle },
     episodicProcessing: { ...persisted.episodicProcessing },
-    sleeptime: {
-      direct: { ...persisted.sleeptime.direct },
-      group: { ...persisted.sleeptime.group },
+    nearTurnMemory: {
+      direct: { ...persisted.nearTurnMemory.direct },
+      group: { ...persisted.nearTurnMemory.group },
     },
+    episodeSynthesis: { ...persisted.episodeSynthesis },
+    sleepConsolidation: { ...persisted.sleepConsolidation },
+    arcFormation: { ...persisted.arcFormation },
     socialGraphBuilder: { ...persisted.socialGraphBuilder },
     temporalWakeup: {
       enabled: persisted.temporalWakeup.enabled,

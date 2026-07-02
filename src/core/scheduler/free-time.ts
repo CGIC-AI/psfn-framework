@@ -610,8 +610,11 @@ export function registerFreeTimeTasks(options: FreeTimeRuntimeOptions): void {
     return;
   }
 
-  const quietState: FreeTimeLaneCadenceState = { blocksToday: 0 };
-  const idleState: FreeTimeLaneCadenceState = { blocksToday: 0 };
+  // One SHARED cadence state across both lanes: the min-block-interval and
+  // daily-block cap bound total free-time spend, not per-lane spend. Scheduler
+  // tick execution is sequential, so a block in one lane updates this state
+  // before the other lane's gate is evaluated in the same tick.
+  const sharedState: FreeTimeLaneCadenceState = { blocksToday: 0 };
 
   if (options.config.quietHours.enabled) {
     options.scheduler.register({
@@ -619,7 +622,7 @@ export function registerFreeTimeTasks(options: FreeTimeRuntimeOptions): void {
       name: FREE_TIME_QUIET_HOURS_TASK_NAME,
       type: 'every',
       intervalMs: Math.max(1_000, options.config.quietHours.checkIntervalMs),
-      handler: makeLaneHandler(options, 'quiet_hours', quietState),
+      handler: makeLaneHandler(options, 'quiet_hours', sharedState),
       eligibility: { requiredTokens: ['memory.write'] },
       state: 'idle',
     }, { skipFirstRun: true });
@@ -631,7 +634,7 @@ export function registerFreeTimeTasks(options: FreeTimeRuntimeOptions): void {
       name: FREE_TIME_IDLE_TASK_NAME,
       type: 'every',
       intervalMs: Math.max(1_000, options.config.idle.checkIntervalMs),
-      handler: makeLaneHandler(options, 'idle', idleState),
+      handler: makeLaneHandler(options, 'idle', sharedState),
       eligibility: { requiredTokens: ['memory.write'] },
       state: 'idle',
     }, { skipFirstRun: true });

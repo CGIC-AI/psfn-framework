@@ -36,6 +36,7 @@ import type { MemoryWriteOptions, MemoryWriter, WriteResult } from './writer.js'
 import type { SleepCycleEpisodeConsolidator } from './episodic/sleep-consolidation.js';
 import type { EpisodeArcWeaver } from './episodic/arc-formation.js';
 import type { DreamMeaningPass } from './episodic/dream-meaning-pass.js';
+import type { SleeptimeWikiPass } from '../wiki/sleeptime-wiki-pass.js';
 import type { EpisodicMaintenanceDiagnostics } from './episodic/store.js';
 import {
   buildConflictingMemoryReviewInput,
@@ -104,6 +105,7 @@ type SleeptimeMemoryWriter = Pick<MemoryWriter, 'write'>;
 type SleeptimeEpisodeConsolidator = Pick<SleepCycleEpisodeConsolidator, 'run'>;
 type SleeptimeArcWeaver = Pick<EpisodeArcWeaver, 'run'>;
 type SleeptimeDreamMeaningPass = Pick<DreamMeaningPass, 'run'>;
+type SleeptimeWikiPassRunner = Pick<SleeptimeWikiPass, 'run'>;
 type SleeptimeMaintenanceStore = Pick<
   MemoryStorePort,
   'upsertMemoryMaintenanceReview' | 'getById' | 'getMemoryMaintenanceDiagnostics'
@@ -162,6 +164,12 @@ export interface SleeptimeMemoryAgentOptions {
   sleepConsolidator?: SleeptimeEpisodeConsolidator | null;
   arcWeaver?: SleeptimeArcWeaver | null;
   dreamMeaningPass?: SleeptimeDreamMeaningPass | null;
+  /**
+   * Sleeptime wiki update pass (E8.2). Runs AFTER episodes/memories settle
+   * (after consolidation/arcs/dream) with its own deterministic gate and
+   * watermark; independent of the orient rewrite gate.
+   */
+  sleeptimeWikiPass?: SleeptimeWikiPassRunner | null;
   memoryMaintenanceStore?: SleeptimeMaintenanceStore | null;
   episodicDiagnosticsStore?: SleeptimeEpisodicDiagnosticsStore | null;
 }
@@ -458,6 +466,7 @@ export class SleeptimeMemoryAgent {
   private readonly sleepConsolidator: SleeptimeEpisodeConsolidator | null;
   private readonly arcWeaver: SleeptimeArcWeaver | null;
   private readonly dreamMeaningPass: SleeptimeDreamMeaningPass | null;
+  private readonly sleeptimeWikiPass: SleeptimeWikiPassRunner | null;
   private readonly memoryMaintenanceStore: SleeptimeMaintenanceStore | null;
   private readonly episodicDiagnosticsStore: SleeptimeEpisodicDiagnosticsStore | null;
 
@@ -491,6 +500,7 @@ export class SleeptimeMemoryAgent {
     this.sleepConsolidator = options.sleepConsolidator ?? null;
     this.arcWeaver = options.arcWeaver ?? null;
     this.dreamMeaningPass = options.dreamMeaningPass ?? null;
+    this.sleeptimeWikiPass = options.sleeptimeWikiPass ?? null;
     this.memoryMaintenanceStore = options.memoryMaintenanceStore ?? null;
     this.episodicDiagnosticsStore = options.episodicDiagnosticsStore ?? null;
   }
@@ -590,6 +600,17 @@ export class SleeptimeMemoryAgent {
 
     const dreamMeaning = this.dreamMeaningPass
       ? await this.dreamMeaningPass.run({
+        sessionId,
+        sourceMessageId: action.sourceMessageId,
+      })
+      : null;
+
+    // Sleeptime wiki update pass (E8.2): runs here, AFTER episodes/memories
+    // settle, with its OWN deterministic gate + watermark. It is independent of
+    // the orient-rewrite gate below, so quiet-orientation nights that still
+    // produced wiki-shaped world knowledge are not skipped.
+    const wikiPass = this.sleeptimeWikiPass
+      ? await this.sleeptimeWikiPass.run({
         sessionId,
         sourceMessageId: action.sourceMessageId,
       })
@@ -712,6 +733,7 @@ export class SleeptimeMemoryAgent {
       ...(sleepConsolidation ? { sleepConsolidation } : {}),
       ...(arcFormation?.ran ? { arcFormation } : {}),
       ...(dreamMeaning?.ran ? { dreamMeaning } : {}),
+      ...(wikiPass?.ran ? { wikiPass } : {}),
       ...(memoryMaintenanceDiagnostics ? { memoryMaintenanceDiagnostics } : {}),
       ...(episodicMaintenanceDiagnostics ? { episodicMaintenanceDiagnostics } : {}),
     });

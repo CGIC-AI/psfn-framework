@@ -131,6 +131,7 @@ export function wireHeartbeatPostTurnRuntime(
       sleepConsolidator: runtimeOptions.sleepConsolidator,
       arcWeaver: runtimeOptions.arcWeaver,
       dreamMeaningPass: runtimeOptions.dreamMeaningPass,
+      sleeptimeWikiPass: runtimeOptions.sleeptimeWikiPass,
       memoryMaintenanceStore: runtimeOptions.memoryMaintenanceStore,
       episodicDiagnosticsStore: runtimeOptions.episodicDiagnosticsStore,
     })

@@ -13,6 +13,8 @@ import { EpisodicSynthesizer } from '../../faculties/memory/episodic/index.js';
 import { SleepCycleEpisodeConsolidator } from '../../faculties/memory/episodic/sleep-consolidation.js';
 import { EpisodeArcWeaver } from '../../faculties/memory/episodic/arc-formation.js';
 import { DreamMeaningPass } from '../../faculties/memory/episodic/dream-meaning-pass.js';
+import { SleeptimeWikiPass } from '../../faculties/wiki/sleeptime-wiki-pass.js';
+import { WikiStore } from '../../faculties/wiki/store.js';
 import { ProactiveOutboundDispatcher } from '../../core/intention/proactive-outbound.js';
 import {
   registerTemporalWakeupTasks,
@@ -436,6 +438,23 @@ async function main(): Promise<void> {
       });
     },
   });
+  // Sleeptime wiki update pass (E8.2): schema-bound background synthesis (not the
+  // agent loop) with its own deterministic gate + watermark. Curates durable,
+  // non-private world knowledge into the wiki after episodes/memories settle.
+  const sleeptimeWikiPass = new SleeptimeWikiPass({
+    llmProvider,
+    wikiStore: new WikiStore(pathSnapshot.workspaceRoot),
+    episodicStore,
+    memoryStore,
+    config: schedulerConfig.wikiPass,
+    promptRegistry: promptState.registry,
+    personaPreamble,
+    onGateEvent: (event) => {
+      eventBus.emit('memory.sleeptime_wiki.gate', event).catch((error: unknown) => {
+        log.warn('Sleeptime wiki gate event emit failed', { error: String(error) });
+      });
+    },
+  });
   intentionRuntime.behavioralPatternTracker.setPromotionHook(
     createBehavioralPatternMemoryPromotionHook(memoryWriter),
   );
@@ -737,6 +756,7 @@ async function main(): Promise<void> {
       sleepConsolidator,
       arcWeaver,
       dreamMeaningPass,
+      sleeptimeWikiPass,
       proactiveOutbound,
       outreachOutbox,
       memoryMaintenanceStore: memoryStore,

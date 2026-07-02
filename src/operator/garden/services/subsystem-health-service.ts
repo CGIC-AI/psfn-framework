@@ -175,6 +175,7 @@ const GATE_EVENT_LANES: ReadonlyArray<{
     | 'memory.orientation_rewrite.gate'
     | 'memory.dream_meaning.gate'
     | 'memory.sleep_consolidation.refinement_gate'
+    | 'memory.sleeptime_wiki.gate'
     | 'emotion.appraisal.gate'
     | 'intention.concern_candidate.gate';
   readonly lane: string;
@@ -182,6 +183,7 @@ const GATE_EVENT_LANES: ReadonlyArray<{
   { event: 'memory.orientation_rewrite.gate', lane: 'orientation_rewrite' },
   { event: 'memory.dream_meaning.gate', lane: 'dream_meaning' },
   { event: 'memory.sleep_consolidation.refinement_gate', lane: 'sleep_consolidation_refinement' },
+  { event: 'memory.sleeptime_wiki.gate', lane: 'wiki_pass' },
   { event: 'emotion.appraisal.gate', lane: 'emotion_appraisal' },
   { event: 'intention.concern_candidate.gate', lane: 'concern_candidate_review' },
 ];

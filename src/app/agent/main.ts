@@ -402,6 +402,11 @@ async function main(): Promise<void> {
         });
       });
     },
+    onRefinementGate: (event) => {
+      eventBus.emit('memory.sleep_consolidation.refinement_gate', event).catch((error: unknown) => {
+        log.warn('Sleep-consolidation refinement gate event emit failed', { error: String(error) });
+      });
+    },
   });
   const arcWeaver = new EpisodeArcWeaver(episodicStore, llmProvider, {
     passIntervalMs: schedulerConfig.arcFormation.passIntervalDays * DAY_MS,

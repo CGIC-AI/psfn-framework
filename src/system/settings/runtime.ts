@@ -74,6 +74,12 @@ const DIRECT_DEFINED_CONFIG_SETTINGS = [
   'memoryRetrievalBudgetPct',
   'moodCongruenceWeight',
   'adaptiveContextBudgetsEnabled',
+  'wikiRetrievalEnabled',
+  'wikiRetrievalChatTokenCap',
+  'wikiRetrievalGroupTokenCap',
+  'wikiRetrievalFocusTokenCap',
+  'wikiRetrievalSimilarityThreshold',
+  'wikiRetrievalGroupSimilarityThreshold',
   'sessionMirrorEnabled',
   'sessionMirrorMaxChars',
   'sessionMirrorActiveWindowMs',
@@ -138,6 +144,14 @@ function getContextSettingsSnapshot(config: SubstrateConfig) {
       config.moodCongruenceWeight ?? DEFAULT_MOOD_CONGRUENCE_WEIGHT,
     adaptiveContextBudgetsEnabled:
       config.adaptiveContextBudgetsEnabled ?? false,
+    wikiRetrievalEnabled: config.wikiRetrievalEnabled ?? false,
+    wikiRetrievalChatTokenCap: config.wikiRetrievalChatTokenCap ?? 1000,
+    wikiRetrievalGroupTokenCap: config.wikiRetrievalGroupTokenCap ?? 400,
+    wikiRetrievalFocusTokenCap: config.wikiRetrievalFocusTokenCap ?? 2000,
+    wikiRetrievalSimilarityThreshold:
+      config.wikiRetrievalSimilarityThreshold ?? 0.6,
+    wikiRetrievalGroupSimilarityThreshold:
+      config.wikiRetrievalGroupSimilarityThreshold ?? 0.78,
     sessionMirrorEnabled: config.sessionMirrorEnabled ?? true,
     sessionMirrorMaxChars: config.sessionMirrorMaxChars ?? 220,
     sessionMirrorActiveWindowMs:
@@ -160,6 +174,12 @@ function getContextSettingsSnapshot(config: SubstrateConfig) {
     | 'memoryRetrievalBudgetPct'
     | 'moodCongruenceWeight'
     | 'adaptiveContextBudgetsEnabled'
+    | 'wikiRetrievalEnabled'
+    | 'wikiRetrievalChatTokenCap'
+    | 'wikiRetrievalGroupTokenCap'
+    | 'wikiRetrievalFocusTokenCap'
+    | 'wikiRetrievalSimilarityThreshold'
+    | 'wikiRetrievalGroupSimilarityThreshold'
     | 'sessionMirrorEnabled'
     | 'sessionMirrorMaxChars'
     | 'sessionMirrorActiveWindowMs'

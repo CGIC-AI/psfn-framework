@@ -165,6 +165,7 @@ const SETTINGS_OWNER_SUBSYSTEM_BY_FIELD = new Map<string, SettingsSubsystemId>([
 
 export const SETTINGS_BOOLEAN_FIELDS = new Set<string>([
   'adaptiveContextBudgetsEnabled',
+  'wikiRetrievalEnabled',
   'sessionMirrorEnabled',
   'importProcessingStrictPolicy',
   'webFetchAllowHttp',
@@ -197,6 +198,9 @@ const SETTINGS_INTEGER_FIELDS = new Set<string>([
   'extractionMaxTokens',
   'sessionHistoryBudgetPct',
   'memoryRetrievalBudgetPct',
+  'wikiRetrievalChatTokenCap',
+  'wikiRetrievalGroupTokenCap',
+  'wikiRetrievalFocusTokenCap',
   'sessionMirrorMaxChars',
   'sessionMirrorActiveWindowMs',
   'continuityMessageLimit',
@@ -234,6 +238,8 @@ const SETTINGS_NUMBER_FIELDS = new Set<string>([
   'memoryExtractionMinNovelty',
   'moodCongruenceWeight',
   'memoryExtractionEmotionalIntensityWeight',
+  'wikiRetrievalSimilarityThreshold',
+  'wikiRetrievalGroupSimilarityThreshold',
   'profileSynthesisMinImportance',
   'profileSynthesisMinConfidence',
   'profileSynthesisMinNovelty',
@@ -287,6 +293,11 @@ const EXTRA_NUMERIC_RANGES = new Map<string, { min?: number; max?: number }>([
   ['episodicProcessingInactivityThresholdMinutes', { min: 1 }],
   ['moodCongruenceWeight', { min: 0, max: 1 }],
   ['memoryExtractionEmotionalIntensityWeight', { min: 0, max: 1 }],
+  ['wikiRetrievalChatTokenCap', { min: 0, max: 16_000 }],
+  ['wikiRetrievalGroupTokenCap', { min: 0, max: 16_000 }],
+  ['wikiRetrievalFocusTokenCap', { min: 0, max: 16_000 }],
+  ['wikiRetrievalSimilarityThreshold', { min: 0, max: 1 }],
+  ['wikiRetrievalGroupSimilarityThreshold', { min: 0, max: 1 }],
 ]);
 
 function resolveFieldType(field: string): SettingsFieldType {

@@ -414,6 +414,21 @@ export interface EventMap {
     error?: string;
     timestamp: number;
   } & EventCorrelationFields;
+  /**
+   * A foreground turn proceeded without a fresh active-memory context (E5.5).
+   * Degradation is explicit, never silent: the turn serves the last-good
+   * context (possibly empty) and the background refresh catches up next pass.
+   */
+  'memory.active_context.turn_degraded': {
+    channelId: string;
+    key: string;
+    reason: 'not_ready' | 'refresh_failed' | 'stale';
+    refreshStatus: 'refreshing' | 'degraded' | null;
+    turnId: string;
+    requestId: string;
+    lastRefreshError?: string;
+    timestamp: number;
+  } & EventCorrelationFields;
   'broadcast.pre_send.classified': {
     channelId: string;
     risky: boolean;

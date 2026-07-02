@@ -5,6 +5,11 @@ import { getVisibilityDisclosureCeiling, type ChannelMeta } from '../../../../sy
 import { normalizeChannelPrivacy, type ChannelPrivacy, type ContextEnvelope } from '../../../../system/trust/context-envelope.js';
 import type { TrustLevel } from '../../../../system/trust/types.js';
 import type { MemoryScopeQuery, RetrievalCallerContext, RetrievalModeInput } from '../../../../faculties/memory/types.js';
+import type {
+  ActiveMemoryContextRequest,
+  ActiveMemoryContextSnapshot,
+} from '../../../../faculties/memory/active-context.js';
+import type { MemoryProvider } from '../../contracts.js';
 import type { ContextManifestMemorySeed } from '../../../session/context-manifest.js';
 import { formatAttributedSystemContent } from '../../../session/entry-attribution.js';
 import {
@@ -129,6 +134,49 @@ function buildMemoryRetrievalContextText(
     return queryText;
   }
   return queryText.slice(0, MEMORY_RETRIEVAL_QUERY_MAX_CHARS);
+}
+
+interface TurnActiveMemorySurface {
+  getActiveMemoryContext: (request: ActiveMemoryContextRequest) => ActiveMemoryContextSnapshot | null;
+  refreshActiveMemoryContext: (request: ActiveMemoryContextRequest) => Promise<ActiveMemoryContextSnapshot | null>;
+}
+
+/**
+ * E5.5: the turn hot path serves only the cached active-memory context and
+ * schedules a background refresh. The blocking legacy `retrieve()` fallback is
+ * retired, so a memory provider wired into turn execution MUST expose the
+ * active-context surface. A provider without it is a wiring bug and fails
+ * closed instead of silently producing empty memory forever.
+ */
+function requireTurnActiveMemorySurface(memoryProvider: MemoryProvider | null): TurnActiveMemorySurface | null {
+  if (!memoryProvider) return null;
+  const getActiveMemoryContext = typeof memoryProvider.getActiveMemoryContext === 'function'
+    ? memoryProvider.getActiveMemoryContext.bind(memoryProvider)
+    : undefined;
+  const refreshActiveMemoryContext = typeof memoryProvider.refreshActiveMemoryContext === 'function'
+    ? memoryProvider.refreshActiveMemoryContext.bind(memoryProvider)
+    : undefined;
+  if (!getActiveMemoryContext || !refreshActiveMemoryContext) {
+    throw new Error(
+      'Turn execution memory provider must implement getActiveMemoryContext and refreshActiveMemoryContext: '
+      + 'the blocking legacy retrieval fallback is retired from the turn hot path (E5.5, fail closed)',
+    );
+  }
+  return { getActiveMemoryContext, refreshActiveMemoryContext };
+}
+
+/**
+ * Classifies why a turn is proceeding without a fresh active-memory context.
+ * `ready` snapshots are healthy (serving last-good while the background lane
+ * refreshes is the designed steady state) and produce no degradation signal.
+ */
+function resolveActiveMemoryTurnDegradedReason(
+  snapshot: ActiveMemoryContextSnapshot | null,
+): 'not_ready' | 'refresh_failed' | 'stale' | null {
+  if (!snapshot) return 'not_ready';
+  if (snapshot.refreshStatus === 'degraded') return 'refresh_failed';
+  if (snapshot.refreshStatus === 'refreshing') return 'stale';
+  return null;
 }
 
 export async function prepareTurnIdentityState(input: {
@@ -368,6 +416,7 @@ export async function computePreTurnState(input: {
   } = input;
 
   const memoryProvider = runtime.memoryProvider;
+  const activeMemorySurface = requireTurnActiveMemorySurface(memoryProvider);
   const bypassMemoryForVisionTurn = hasVisionTurnInputs(message);
   const promptSnapshot = runtime.captureTurnPromptSnapshot({ channelType, taskKind });
   // Single session-context derivation for the turn (E2.2): captured once here,
@@ -395,34 +444,41 @@ export async function computePreTurnState(input: {
     ...(temporalRetrievalCallerContext ? { callerContext: temporalRetrievalCallerContext } : {}),
     ...(temporalRetrievalMode ? { retrievalMode: temporalRetrievalMode } : {}),
   };
-  const activeMemoryContext = memoryProvider && !bypassMemoryForVisionTurn
-    && typeof memoryProvider.getActiveMemoryContext === 'function'
-    ? memoryProvider.getActiveMemoryContext(activeMemoryRequest)
+  const activeMemoryContext = activeMemorySurface && !bypassMemoryForVisionTurn
+    ? activeMemorySurface.getActiveMemoryContext(activeMemoryRequest)
     : null;
-  const legacyMemoryContextBlock = memoryProvider
-    && !bypassMemoryForVisionTurn
-    && typeof memoryProvider.getActiveMemoryContext !== 'function'
-    ? await memoryProvider.retrieve(
-      memoryRetrievalContextText,
-      message.channelId,
-      trustLevel,
-      channelMeta,
-      authorContext.canonicalContactKey,
-      undefined,
-      turnBudgetCharacteristics,
-      undefined,
-      focusMemoryScopeQuery ?? undefined,
-      temporalRetrievalCallerContext,
-      temporalRetrievalMode,
-      conversationScope,
-    )
-    : '';
-  const refreshActiveMemoryContext = (
-    memoryProvider
-    && !bypassMemoryForVisionTurn
-    && typeof memoryProvider.refreshActiveMemoryContext === 'function'
-  )
-    ? memoryProvider.refreshActiveMemoryContext.bind(memoryProvider)
+  // E5.5: degraded state is explicit, never silent. When the turn proceeds
+  // without a fresh active context (cold start, failed refresh, or a refresh
+  // still in flight from an earlier pass) a typed event records why. The turn
+  // itself continues on the last-good context: the background refresh catches
+  // up next pass, and remembering a turn late is acceptable in this design.
+  const activeMemoryDegradedReason = activeMemorySurface && !bypassMemoryForVisionTurn
+    ? resolveActiveMemoryTurnDegradedReason(activeMemoryContext)
+    : null;
+  if (activeMemoryDegradedReason) {
+    void runtime.eventBus.emit('memory.active_context.turn_degraded', {
+      channelId: message.channelId,
+      key: activeMemoryContext?.key ?? 'unresolved',
+      reason: activeMemoryDegradedReason,
+      refreshStatus: activeMemoryContext?.refreshStatus === 'degraded'
+        || activeMemoryContext?.refreshStatus === 'refreshing'
+        ? activeMemoryContext.refreshStatus
+        : null,
+      turnId,
+      requestId,
+      ...(activeMemoryContext?.lastRefreshError ? { lastRefreshError: activeMemoryContext.lastRefreshError } : {}),
+      timestamp: Date.now(),
+    }).catch((emitError: unknown) => {
+      log.debug('Failed to emit active memory turn degradation event', {
+        channelId: message.channelId,
+        turnId,
+        requestId,
+        error: toErrorMessage(emitError),
+      });
+    });
+  }
+  const refreshActiveMemoryContext = activeMemorySurface && !bypassMemoryForVisionTurn
+    ? activeMemorySurface.refreshActiveMemoryContext
     : undefined;
   const activeMemoryRefreshScheduled = refreshActiveMemoryContext !== undefined;
   if (refreshActiveMemoryContext) {
@@ -528,7 +584,7 @@ export async function computePreTurnState(input: {
   });
   const memoryContextBlock = bypassMemoryForVisionTurn
     ? ''
-    : activeMemoryContext?.contextBlock ?? legacyMemoryContextBlock;
+    : activeMemoryContext?.contextBlock ?? '';
   const memoryContextChars = memoryContextBlock.length;
   const scratchpadBlock = runtime.buildScratchpadContextBlock();
   observability.emitObservedTurnStage('memory', {

@@ -4386,6 +4386,8 @@ describe('AdminServer JSON API routes', () => {
         passIntervalDays: 6,
         reviewWindowDays: 30,
         minConfidence: 0.5,
+        maxArcsPerRun: 12,
+        maxEpisodesPerRun: 60,
       },
     });
     const expectedSkills = saveSkillsConfig(tempDir, {

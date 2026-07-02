@@ -275,6 +275,19 @@ export const POSTGRES_MEMORY_MIGRATIONS = [
   `CREATE INDEX IF NOT EXISTS idx_l01_episode_arcs_artifact_refs_gin ON l01_episode_arcs USING GIN (artifact_refs);`,
   `CREATE INDEX IF NOT EXISTS idx_l01_episode_arcs_provenance_refs_gin ON l01_episode_arcs USING GIN (provenance_refs);`,
   `
+  CREATE TABLE IF NOT EXISTS l01_episode_arc_audit (
+    id TEXT PRIMARY KEY,
+    arc_id TEXT NOT NULL REFERENCES l01_episode_arcs(id) ON DELETE CASCADE,
+    action TEXT NOT NULL,
+    actor TEXT NOT NULL,
+    reason TEXT NOT NULL,
+    details_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL,
+    CHECK (action IN ('written', 'repointed', 'removed'))
+  );
+  `,
+  `CREATE INDEX IF NOT EXISTS idx_l01_episode_arc_audit_arc ON l01_episode_arc_audit(arc_id, created_at ASC);`,
+  `
   CREATE TABLE IF NOT EXISTS l01_episode_lineage (
     id TEXT PRIMARY KEY,
     source_episode_id TEXT NOT NULL REFERENCES l01_episodes(id) ON DELETE CASCADE,

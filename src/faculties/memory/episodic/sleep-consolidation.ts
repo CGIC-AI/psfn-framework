@@ -932,6 +932,8 @@ export class SleepCycleEpisodeConsolidator {
       consolidatedEpisodeId: consolidated.id,
       sourceEpisodeIds: transfer.supersededEpisodeIds,
       transferredClaims: transfer.transferredClaims.length,
+      repointedArcs: transfer.repointedArcIds.length,
+      removedArcs: transfer.removedArcIds.length,
       title: group.title,
     });
     return consolidated;

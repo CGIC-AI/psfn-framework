@@ -1,6 +1,13 @@
 export {
   EpisodicStore,
+  type EpisodeArcAuditAction,
+  type EpisodeArcAuditEntry,
+  type EpisodeArcAuditListOptions,
   type EpisodeArcListOptions,
+  type EpisodeArcMutationAudit,
+  type EpisodeArcRemoveInput,
+  type EpisodeArcRepointInput,
+  type EpisodeArcRepointResult,
   type EpisodeArcWriteInput,
   type EpisodeClaimTransferInput,
   type EpisodeClaimTransferResult,

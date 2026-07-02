@@ -22,6 +22,24 @@ export interface ArcFormationOptions {
   maxEpisodesPerRun?: number;
   /** Confidence floor below which proposed arcs are rejected (0..1). */
   minConfidence?: number;
+  /** Typed fail-closed outcomes (rejected proposals, failed judgments); wired to the event bus by composition. */
+  onEvent?: (event: ArcFormationOutcomeEvent) => void;
+}
+
+/**
+ * Typed fail-closed signal from the arc-formation pass. A malformed or
+ * low-confidence proposal is rejected individually (never partially
+ * applied); a failed judgment rejects the whole pass output. Neither is
+ * ever swallowed silently.
+ */
+export interface ArcFormationOutcomeEvent {
+  sessionId: string;
+  outcome: 'proposal_rejected' | 'judgment_failed';
+  reason: string;
+  /** Proposal label, when the proposal parsed far enough to have one. */
+  label?: string;
+  confidence?: number;
+  timestamp: number;
 }
 
 export interface ArcFormationRunInput {
@@ -59,6 +77,11 @@ const ARC_JUDGMENT_SYSTEM_PROMPT = [
   'You weave episodic memories of a long-lived companion into narrative arcs.',
   'You receive a chronological list of episodes (id, dates, title, landmark, themes).',
   'Identify arcs: sequences of two or more episodes that belong to one ongoing story across days or weeks — a project being worked on, a recurring conversation theme, a developing relationship thread, a problem and its later resolution.',
+  'Arcs are threads about ONE subject across time, not summaries of one day:',
+  '- a book discussed on Monday and again on Wednesday is one arc about that book, even with unrelated episodes in between;',
+  '- episodes in an arc are usually NOT adjacent — skip over unrelated episodes freely and link only the ones that share the thread;',
+  '- prefer "same_theme" or "recurrence" for a subject that keeps coming back, "continuation" for one effort progressing, "causal"/"resolution" when a later episode follows from or settles an earlier one, "contrast" when a later episode reverses an earlier stance;',
+  '- one episode may belong to several arcs when it genuinely serves several threads.',
   'Return strict JSON only:',
   '{',
   '  "arcs": [',
@@ -189,6 +212,7 @@ export class EpisodeArcWeaver {
   private readonly maxArcsPerRun: number;
   private readonly maxEpisodesPerRun: number;
   private readonly minConfidence: number;
+  private readonly onEvent: ((event: ArcFormationOutcomeEvent) => void) | null;
 
   constructor(
     store: EpisodicStorePort,
@@ -207,6 +231,7 @@ export class EpisodeArcWeaver {
       throw new Error('ArcFormationOptions.minConfidence must be a number between 0 and 1');
     }
     this.minConfidence = minConfidence;
+    this.onEvent = options.onEvent ?? null;
   }
 
   async run(input: ArcFormationRunInput): Promise<ArcFormationRunResult> {
@@ -228,9 +253,14 @@ export class EpisodeArcWeaver {
       };
     }
 
+    // Candidates are excluded by design: the nightly consolidation pass may
+    // supersede them, and arcs must link the CONSOLIDATED shape of memory.
+    // Any candidate worth an arc becomes canonical first and is picked up on
+    // a later pass.
     const episodes = (await this.store.searchByTime({
       from: toIsoInstant(nowMs - this.reviewWindowMs),
       to: toIsoInstant(nowMs),
+      lifecycleStatus: 'canonical',
       limit: this.maxEpisodesPerRun,
     })).sort((left, right) => left.startedAt.localeCompare(right.startedAt));
 
@@ -255,6 +285,14 @@ export class EpisodeArcWeaver {
         sessionId: input.sessionId,
         dropped: rejectedProposals,
       });
+      for (const reason of rejectedProposals) {
+        this.emitEvent({
+          sessionId: input.sessionId,
+          outcome: 'proposal_rejected',
+          reason,
+          timestamp: nowMs,
+        });
+      }
     }
 
     const episodesById = new Map(episodes.map(episode => [episode.id, episode]));
@@ -269,6 +307,14 @@ export class EpisodeArcWeaver {
       }
       if (proposal.confidence < this.minConfidence) {
         result.rejectedArcs += 1;
+        this.emitEvent({
+          sessionId: input.sessionId,
+          outcome: 'proposal_rejected',
+          reason: `confidence ${String(proposal.confidence)} is below the minConfidence floor ${String(this.minConfidence)}`,
+          label: proposal.label,
+          confidence: proposal.confidence,
+          timestamp: nowMs,
+        });
         continue;
       }
       const ordered = [...proposal.episodeIds].sort((left, right) => {
@@ -295,6 +341,10 @@ export class EpisodeArcWeaver {
             ...source.provenanceRefs,
             ...target.provenanceRefs,
           ].slice(0, 16),
+          audit: {
+            actor: 'arc_formation_pass',
+            reason: proposal.reason || `arc proposal "${proposal.label}"`,
+          },
         });
         result.writtenArcs += 1;
       }
@@ -352,11 +402,22 @@ export class EpisodeArcWeaver {
       );
       return parseProposedArcs(response.content, new Set(episodes.map(episode => episode.id)));
     } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
       log.warn('Arc judgment failed; no arcs written this pass', {
         sessionId: input.sessionId,
-        error: error instanceof Error ? error.message : String(error),
+        error: reason,
+      });
+      this.emitEvent({
+        sessionId: input.sessionId,
+        outcome: 'judgment_failed',
+        reason,
+        timestamp: this.now().getTime(),
       });
       return { proposals: [], rejectedProposals: [] };
     }
+  }
+
+  private emitEvent(event: ArcFormationOutcomeEvent): void {
+    this.onEvent?.(event);
   }
 }

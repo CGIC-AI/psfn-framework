@@ -328,6 +328,8 @@ describe('subsystem config round-trip', () => {
         passIntervalDays: 6,
         reviewWindowDays: 30,
         minConfidence: 0.5,
+        maxArcsPerRun: 12,
+        maxEpisodesPerRun: 60,
       },
       socialGraphBuilder: {
         intervalMs: 1_800_000,

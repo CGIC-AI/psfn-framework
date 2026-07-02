@@ -136,6 +136,16 @@ interface StoredMessageClaimRow {
   reason: string | null;
 }
 
+interface StoredArcAuditRow {
+  id: string;
+  arc_id: string;
+  action: string;
+  actor: string;
+  reason: string;
+  details_json: unknown;
+  created_at: string;
+}
+
 class FakeEpisodicPool {
   readonly episodes = new Map<string, StoredEpisodeRow>();
   readonly arcs = new Map<string, StoredArcRow>();
@@ -143,6 +153,7 @@ class FakeEpisodicPool {
   readonly candidateDecisions = new Map<string, StoredCandidateDecisionRow>();
   readonly lineages = new Map<string, StoredEpisodeLineageRow>();
   readonly messageClaims = new Map<string, StoredMessageClaimRow>();
+  readonly arcAudit = new Map<string, StoredArcAuditRow>();
   readonly queries: Array<{ text: string; values: readonly unknown[] }> = [];
 
   async connect(): Promise<{ query: FakeEpisodicPool['query']; release: () => void }> {
@@ -186,6 +197,14 @@ class FakeEpisodicPool {
         row.superseded_by_episode_id = targetId;
       }
       return queryResult([], 'UPDATE');
+    }
+
+    if (normalized.startsWith("update l01_episodes set status = 'merged'")) {
+      const row = this.episodes.get(String(values[0] ?? ''));
+      if (!row) return queryResult([], 'UPDATE');
+      row.status = 'merged';
+      row.merged_into_episode_id = String(values[1] ?? '');
+      return queryResult([{}], 'UPDATE');
     }
 
     if (normalized.startsWith("update l01_episodes set status = 'canonical'")) {
@@ -377,6 +396,109 @@ class FakeEpisodicPool {
     if (normalized.startsWith('select id, arc_json from l01_episode_arcs')) {
       return queryResult(this.filterArcRows(normalized, values));
     }
+
+    if (normalized.startsWith('select id, arc_json, source_episode_id, target_episode_id, status, superseded_by_arc_id from l01_episode_arcs where id =')) {
+      const row = this.arcs.get(String(values[0] ?? ''));
+      return queryResult(row
+        ? [{
+          id: row.id,
+          arc_json: row.arc_json,
+          source_episode_id: row.source_episode_id,
+          target_episode_id: row.target_episode_id,
+          status: row.status,
+          superseded_by_arc_id: row.superseded_by_arc_id,
+        }]
+        : []);
+    }
+
+    if (normalized.startsWith('select id, arc_json, source_episode_id, target_episode_id, status, superseded_by_arc_id from l01_episode_arcs where (source_episode_id =')) {
+      const episodeId = String(values[0] ?? '');
+      const rows = [...this.arcs.values()]
+        .filter(isActiveArc)
+        .filter(row => row.source_episode_id === episodeId || row.target_episode_id === episodeId)
+        .sort((left, right) => (
+          left.updated_at.localeCompare(right.updated_at)
+          || left.id.localeCompare(right.id)
+        ))
+        .map(row => ({
+          id: row.id,
+          arc_json: row.arc_json,
+          source_episode_id: row.source_episode_id,
+          target_episode_id: row.target_episode_id,
+          status: row.status,
+          superseded_by_arc_id: row.superseded_by_arc_id,
+        }));
+      return queryResult(rows);
+    }
+
+    if (normalized.startsWith('select id from l01_episode_arcs where id <>')) {
+      const excludedId = String(values[0] ?? '');
+      const source = String(values[1] ?? '');
+      const target = String(values[2] ?? '');
+      const duplicate = [...this.arcs.values()]
+        .filter(isActiveArc)
+        .find(row => (
+          row.id !== excludedId
+          && (
+            (row.source_episode_id === source && row.target_episode_id === target)
+            || (row.source_episode_id === target && row.target_episode_id === source)
+          )
+        ));
+      return queryResult(duplicate ? [{ id: duplicate.id }] : []);
+    }
+
+    if (normalized.startsWith("update l01_episode_arcs set status = 'superseded'")) {
+      const row = this.arcs.get(String(values[0] ?? ''));
+      if (!row) return queryResult([], 'UPDATE');
+      row.status = 'superseded';
+      row.superseded_by_arc_id = values[1] === null || values[1] === undefined ? null : String(values[1]);
+      row.updated_at = String(values[2] ?? '');
+      return queryResult([{}], 'UPDATE');
+    }
+
+    if (normalized.startsWith('update l01_episode_arcs set source_episode_id =')) {
+      const row = this.arcs.get(String(values[0] ?? ''));
+      if (!row) return queryResult([], 'UPDATE');
+      row.source_episode_id = String(values[1] ?? '');
+      row.target_episode_id = String(values[2] ?? '');
+      row.arc_json = values[3];
+      row.updated_at = String(values[4] ?? '');
+      return queryResult([{}], 'UPDATE');
+    }
+
+    if (normalized.startsWith('insert into l01_episode_arc_audit')) {
+      const row: StoredArcAuditRow = {
+        id: String(values[0] ?? ''),
+        arc_id: String(values[1] ?? ''),
+        action: String(values[2] ?? ''),
+        actor: String(values[3] ?? ''),
+        reason: String(values[4] ?? ''),
+        details_json: values[5],
+        created_at: String(values[6] ?? ''),
+      };
+      if (!this.arcs.has(row.arc_id)) {
+        throw new Error(`insert or update on table "l01_episode_arc_audit" violates foreign key constraint (${row.arc_id})`);
+      }
+      this.arcAudit.set(row.id, row);
+      return queryResult([], 'INSERT');
+    }
+
+    if (normalized.startsWith('select * from l01_episode_arc_audit')) {
+      let cursor = 0;
+      let rows = [...this.arcAudit.values()];
+      if (normalized.includes('arc_id =')) {
+        const arcId = String(values[cursor++] ?? '');
+        rows = rows.filter(row => row.arc_id === arcId);
+      }
+      const limit = Number(values[cursor++] ?? rows.length);
+      return queryResult(rows
+        .sort((left, right) => (
+          left.created_at.localeCompare(right.created_at)
+          || left.id.localeCompare(right.id)
+        ))
+        .slice(0, limit));
+    }
+
 
     if (normalized.startsWith('with requested(episode_id) as') && normalized.includes('join l01_episode_arcs arcs')) {
       return queryResult(this.filterBatchArcRows(normalized, values));
@@ -1135,5 +1257,153 @@ describe('PostgresEpisodicStore', () => {
       targetEpisodeId: 'candidate-1',
       reason: 'nightly consolidation',
     })).rejects.toThrow('transferEpisodeMessageClaims requires at least one source episode');
+  });
+});
+
+describe('PostgresEpisodicStore arc membership (m58.2)', () => {
+  function makeSequencedStore(pool: FakeEpisodicPool): PostgresEpisodicStore {
+    let sequence = 0;
+    return new PostgresEpisodicStore(pool as unknown as Pool, {
+      now: () => new Date('2026-06-10T08:00:00.000Z'),
+      idFactory: () => `generated-${++sequence}`,
+    });
+  }
+
+  function arcInput(sourceEpisodeId: string, targetEpisodeId: string, overrides: Partial<EpisodeArcWriteInput> = {}): EpisodeArcWriteInput {
+    return {
+      sourceEpisodeId,
+      targetEpisodeId,
+      arcKind: 'same_theme',
+      salience: 0.6,
+      confidence: 0.8,
+      themes: ['the ongoing book discussion'],
+      spanRefs: [],
+      artifactRefs: [],
+      provenanceRefs: [],
+      ...overrides,
+    };
+  }
+
+  async function seedEpisodes(store: PostgresEpisodicStore, ids: readonly string[]): Promise<void> {
+    let day = 1;
+    for (const id of ids) {
+      await store.createEpisode(baseEpisode({
+        id,
+        startedAt: `2026-06-0${day}T09:00:00.000Z`,
+        endedAt: `2026-06-0${day}T09:30:00.000Z`,
+        spanRefs: [{ spanId: `span-${id}` }],
+        provenanceRefs: [{ kind: 'l0_span', refId: `span-${id}` }],
+      }));
+      day += 1;
+    }
+  }
+
+  it('audits arc writes and supports queryable audit history', async () => {
+    const pool = new FakeEpisodicPool();
+    const store = makeSequencedStore(pool);
+    await seedEpisodes(store, ['a', 'b']);
+
+    const written = await store.writeEpisodeArc(arcInput('a', 'b', {
+      audit: { actor: 'arc_formation_pass', reason: 'same theme across days' },
+    }));
+
+    const audit = await store.listEpisodeArcAudit({ arcId: written.id });
+    expect(audit).toHaveLength(1);
+    expect(audit[0].action).toBe('written');
+    expect(audit[0].actor).toBe('arc_formation_pass');
+    expect(audit[0].detailsJson.sourceEpisodeId).toBe('a');
+  });
+
+  it('removes arc memberships with audit and fails closed on double removal', async () => {
+    const pool = new FakeEpisodicPool();
+    const store = makeSequencedStore(pool);
+    await seedEpisodes(store, ['a', 'b']);
+    const written = await store.writeEpisodeArc(arcInput('a', 'b'));
+
+    await store.removeEpisodeArc({
+      arcId: written.id,
+      actor: 'operator',
+      reason: 'not the same thread after all',
+    });
+
+    expect(await store.listEpisodeArcsForEpisode('a')).toHaveLength(0);
+    const audit = await store.listEpisodeArcAudit({ arcId: written.id });
+    expect(audit.map(entry => entry.action)).toEqual(['removed']);
+    await expect(store.removeEpisodeArc({
+      arcId: written.id,
+      actor: 'operator',
+      reason: 'again',
+    })).rejects.toThrow('already retired');
+    await expect(store.removeEpisodeArc({
+      arcId: 'missing-arc',
+      actor: 'operator',
+      reason: 'nope',
+    })).rejects.toThrow('unknown arc "missing-arc"');
+  });
+
+  it('re-points arc memberships, retiring self-loops and duplicates', async () => {
+    const pool = new FakeEpisodicPool();
+    const store = makeSequencedStore(pool);
+    await seedEpisodes(store, ['a', 'b', 'c']);
+    const movable = await store.writeEpisodeArc(arcInput('a', 'b'));
+    const survivor = await store.writeEpisodeArc(arcInput('c', 'b'));
+    const selfLoop = await store.writeEpisodeArc(arcInput('a', 'c'));
+
+    const result = await store.repointEpisodeArcMemberships({
+      fromEpisodeId: 'a',
+      toEpisodeId: 'c',
+      actor: 'consolidation_repoint',
+      reason: 'a superseded by c',
+    });
+
+    expect(result.repointedArcIds).toEqual([]);
+    expect([...result.removedArcIds].sort()).toEqual([movable.id, selfLoop.id].sort());
+    const remaining = await store.listEpisodeArcsForEpisode('c');
+    expect(remaining.map(entry => entry.id)).toEqual([survivor.id]);
+    const movableAudit = await store.listEpisodeArcAudit({ arcId: movable.id });
+    expect(movableAudit[0].detailsJson.cause).toBe('repoint_duplicate');
+    const loopAudit = await store.listEpisodeArcAudit({ arcId: selfLoop.id });
+    expect(loopAudit[0].detailsJson.cause).toBe('repoint_self_loop');
+  });
+
+  it('re-points arcs during claim transfer so superseded sources never dangle', async () => {
+    const pool = new FakeEpisodicPool();
+    const store = makeSequencedStore(pool);
+    await seedEpisodes(store, ['candidate-1', 'other', 'consolidated']);
+    await store.claimEpisodeMessages({
+      episodeId: 'candidate-1',
+      claims: [{ claimKey: 'discord:general:m1' }],
+    });
+    const arcToOther = await store.writeEpisodeArc(arcInput('candidate-1', 'other'));
+
+    const result = await store.transferEpisodeMessageClaims({
+      sourceEpisodeIds: ['candidate-1'],
+      targetEpisodeId: 'consolidated',
+      reason: 'nightly consolidation',
+    });
+
+    expect(result.repointedArcIds).toEqual([arcToOther.id]);
+    expect(result.removedArcIds).toEqual([]);
+    expect(await store.listEpisodeArcsForEpisode('candidate-1')).toHaveLength(0);
+    const consolidatedArcs = await store.listEpisodeArcsForEpisode('consolidated');
+    expect(consolidatedArcs.map(entry => entry.id)).toEqual([arcToOther.id]);
+    expect(consolidatedArcs[0].sourceEpisodeId).toBe('consolidated');
+    const audit = await store.listEpisodeArcAudit({ arcId: arcToOther.id });
+    expect(audit[0].action).toBe('repointed');
+    expect(audit[0].actor).toBe('consolidation_repoint');
+  });
+
+  it('re-points arcs when an episode is merged away', async () => {
+    const pool = new FakeEpisodicPool();
+    const store = makeSequencedStore(pool);
+    await seedEpisodes(store, ['a', 'b', 'c']);
+    const written = await store.writeEpisodeArc(arcInput('a', 'c'));
+
+    await store.markEpisodeMerged('a', 'b');
+
+    expect(await store.listEpisodeArcsForEpisode('a')).toHaveLength(0);
+    const arcsOnB = await store.listEpisodeArcsForEpisode('b');
+    expect(arcsOnB.map(entry => entry.id)).toEqual([written.id]);
+    expect(arcsOnB[0].sourceEpisodeId).toBe('b');
   });
 });

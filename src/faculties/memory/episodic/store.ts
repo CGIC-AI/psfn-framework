@@ -52,7 +52,59 @@ export type EpisodeArcWriteInput = Omit<
   id?: string;
   createdAt?: string;
   updatedAt?: string;
+  /**
+   * Who/why for the arc-audit trail. Optional on write (legacy callers);
+   * every mutation surface below requires it.
+   */
+  audit?: EpisodeArcMutationAudit;
 };
+
+/**
+ * Arc-membership mutations are audited: who (a provenance actor string such
+ * as 'arc_formation_pass' or 'consolidation_repoint'), when, and why.
+ */
+export interface EpisodeArcMutationAudit {
+  actor: string;
+  reason: string;
+}
+
+export type EpisodeArcAuditAction = 'written' | 'repointed' | 'removed';
+
+export interface EpisodeArcAuditEntry {
+  id: string;
+  arcId: string;
+  action: EpisodeArcAuditAction;
+  actor: string;
+  reason: string;
+  detailsJson: Record<string, unknown>;
+  createdAt: string;
+}
+
+export interface EpisodeArcAuditListOptions {
+  arcId?: string;
+  limit?: number;
+}
+
+export interface EpisodeArcRemoveInput {
+  arcId: string;
+  actor: string;
+  reason: string;
+}
+
+export interface EpisodeArcRepointInput {
+  /** Episode whose arc memberships move (typically a superseded/merged source). */
+  fromEpisodeId: string;
+  /** Live episode that takes over the memberships (typically the consolidated target). */
+  toEpisodeId: string;
+  actor: string;
+  reason: string;
+}
+
+export interface EpisodeArcRepointResult {
+  repointedArcIds: string[];
+  /** Arcs retired because re-pointing made them self-loops or duplicates. */
+  removedArcIds: string[];
+}
 
 export type EpisodicProcessingWatermarkStatus = 'active' | 'reconciling' | 'blocked' | 'complete';
 export type EpisodicReconciliationStatus = 'pending' | 'clean' | 'needs_review' | 'blocked';
@@ -243,6 +295,10 @@ export interface EpisodeClaimTransferResult {
   targetEpisodeId: string;
   supersededEpisodeIds: string[];
   transferredClaims: EpisodeMessageClaim[];
+  /** Arc memberships moved from superseded sources onto the target. */
+  repointedArcIds: string[];
+  /** Arcs retired during re-pointing (self-loops/duplicates); never deleted. */
+  removedArcIds: string[];
 }
 
 export interface EpisodeListOptions {
@@ -290,6 +346,21 @@ export interface EpisodicStorePort {
   searchByTime(options?: EpisodeTimeSearchOptions): EpisodicStoreResult<Episode[]>;
   searchByThread(threadId: string, options?: EpisodeListOptions): EpisodicStoreResult<Episode[]>;
   writeEpisodeArc(input: EpisodeArcWriteInput): EpisodicStoreResult<EpisodeArc>;
+  /**
+   * Retires one active arc (an episode "leaves" the arc). The row is kept
+   * with status 'superseded' plus an audit entry — never deleted. Fails
+   * closed for unknown or already-retired arcs.
+   */
+  removeEpisodeArc(input: EpisodeArcRemoveInput): EpisodicStoreResult<void>;
+  /**
+   * Atomically moves every active arc membership of `fromEpisodeId` onto
+   * `toEpisodeId` (consolidation supersession must not leave dangling arc
+   * members). Re-pointed arcs that become self-loops or duplicates of an
+   * existing active arc are retired instead. Every touched arc gets an
+   * audit entry. The target episode must exist and be live.
+   */
+  repointEpisodeArcMemberships(input: EpisodeArcRepointInput): EpisodicStoreResult<EpisodeArcRepointResult>;
+  listEpisodeArcAudit(options?: EpisodeArcAuditListOptions): EpisodicStoreResult<EpisodeArcAuditEntry[]>;
   listEpisodeArcsForEpisode(
     episodeId: string,
     options?: EpisodeArcListOptions,
@@ -332,6 +403,23 @@ interface EpisodeRow {
 interface EpisodeArcRow {
   id: string;
   arc_json: string;
+}
+
+interface EpisodeArcStateRow extends EpisodeArcRow {
+  source_episode_id: string;
+  target_episode_id: string;
+  status: string | null;
+  superseded_by_arc_id: string | null;
+}
+
+interface EpisodeArcAuditRow {
+  id: string;
+  arc_id: string;
+  action: string;
+  actor: string;
+  reason: string;
+  details_json: string;
+  created_at: string;
 }
 
 interface ProcessingWatermarkRow {
@@ -405,6 +493,12 @@ const CANDIDATE_DECISION_STATUSES = new Set<EpisodeCandidateDecisionStatus>([
   'needs_review',
 ]);
 const MESSAGE_CLAIM_STATUSES = new Set<EpisodeMessageClaimStatus>(['active', 'transferred']);
+const ARC_AUDIT_ACTIONS = new Set<EpisodeArcAuditAction>(['written', 'repointed', 'removed']);
+/**
+ * SQL predicate for arcs that are live memberships. Legacy rows store NULL
+ * status and count as canonical; retired arcs are kept but excluded.
+ */
+const ACTIVE_ARC_PREDICATE = "(status IS NULL OR status = 'canonical') AND superseded_by_arc_id IS NULL";
 const EPISODE_LIFECYCLE_STATUSES = new Set<EpisodeLifecycleStatus>(['candidate', 'canonical']);
 const EPISODE_LINEAGE_RELATIONS = new Set<EpisodeLineageRelation>([
   'canonicalizes',
@@ -450,6 +544,8 @@ function createEpisodicSchema(db: Database.Database): void {
       source_episode_id TEXT NOT NULL,
       target_episode_id TEXT NOT NULL,
       arc_kind TEXT NOT NULL,
+      status TEXT,
+      superseded_by_arc_id TEXT,
       salience_score REAL NOT NULL,
       confidence REAL NOT NULL,
       arc_json TEXT NOT NULL,
@@ -465,6 +561,20 @@ function createEpisodicSchema(db: Database.Database): void {
       ON l01_episode_arcs(target_episode_id, updated_at DESC);
     CREATE INDEX IF NOT EXISTS idx_l01_episode_arcs_kind
       ON l01_episode_arcs(arc_kind, updated_at DESC);
+
+    CREATE TABLE IF NOT EXISTS l01_episode_arc_audit (
+      id TEXT PRIMARY KEY,
+      arc_id TEXT NOT NULL,
+      action TEXT NOT NULL,
+      actor TEXT NOT NULL,
+      reason TEXT NOT NULL,
+      details_json TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      CHECK (action IN ('written', 'repointed', 'removed')),
+      FOREIGN KEY (arc_id) REFERENCES l01_episode_arcs(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_l01_episode_arc_audit_arc
+      ON l01_episode_arc_audit(arc_id, created_at ASC);
 
     CREATE TABLE IF NOT EXISTS l01_processing_watermarks (
       id TEXT PRIMARY KEY,
@@ -717,6 +827,32 @@ function mapMessageClaimRow(row: EpisodeMessageClaimRow): EpisodeMessageClaim {
   };
 }
 
+function mapArcAuditRow(row: EpisodeArcAuditRow): EpisodeArcAuditEntry {
+  const action = row.action as EpisodeArcAuditAction;
+  if (!ARC_AUDIT_ACTIONS.has(action)) {
+    throw new Error(`malformed persisted episode arc audit "${row.id}": unsupported action`);
+  }
+  return {
+    id: row.id,
+    arcId: row.arc_id,
+    action,
+    actor: row.actor,
+    reason: row.reason,
+    detailsJson: parseRecordJson(row.details_json, `episode arc audit "${row.id}" detailsJson`),
+    createdAt: row.created_at,
+  };
+}
+
+export function normalizeEpisodeArcMutationAudit(
+  audit: EpisodeArcMutationAudit,
+  label: string,
+): EpisodeArcMutationAudit {
+  return {
+    actor: parseRequiredText(audit.actor, `${label}.actor`),
+    reason: parseRequiredText(audit.reason, `${label}.reason`),
+  };
+}
+
 function parseRequiredText(value: string, field: string): string {
   const trimmed = value.trim();
   if (trimmed.length === 0) {
@@ -927,6 +1063,10 @@ export function normalizeEpisodeLifecycleStatus(
  * SQL predicate for one lifecycle status. Legacy rows store NULL and count
  * as canonical; merged/superseded rows are excluded by the live filters.
  */
+function isActiveArcStateRow(row: Pick<EpisodeArcStateRow, 'status' | 'superseded_by_arc_id'>): boolean {
+  return (row.status === null || row.status === 'canonical') && row.superseded_by_arc_id === null;
+}
+
 function lifecycleStatusPredicate(status: EpisodeLifecycleStatus): string {
   return status === 'candidate'
     ? "status = 'candidate'"
@@ -975,6 +1115,14 @@ export class EpisodicStore implements EpisodicStorePort {
     if (!names.has('superseded_by_episode_id')) {
       this.db.exec('ALTER TABLE l01_episodes ADD COLUMN superseded_by_episode_id TEXT');
     }
+    const arcColumns = this.db.prepare("SELECT name FROM pragma_table_info('l01_episode_arcs')").all() as Array<{ name: string }>;
+    const arcNames = new Set(arcColumns.map(column => column.name));
+    if (!arcNames.has('status')) {
+      this.db.exec('ALTER TABLE l01_episode_arcs ADD COLUMN status TEXT');
+    }
+    if (!arcNames.has('superseded_by_arc_id')) {
+      this.db.exec('ALTER TABLE l01_episode_arcs ADD COLUMN superseded_by_arc_id TEXT');
+    }
   }
 
   markEpisodeMerged(episodeId: string, mergedIntoEpisodeId: string): void {
@@ -986,14 +1134,24 @@ export class EpisodicStore implements EpisodicStorePort {
     if (!this.getEpisode(targetId)) {
       throw new Error(`merge target episode "${targetId}" does not exist`);
     }
-    const result = this.db.prepare(`
-      UPDATE l01_episodes
-      SET status = 'merged', merged_into_episode_id = ?, updated_at = ?
-      WHERE id = ?
-    `).run(targetId, this.now().toISOString(), sourceId);
-    if (result.changes === 0) {
-      throw new Error(`episode "${sourceId}" does not exist`);
-    }
+    const nowIso = this.now().toISOString();
+    const merge = this.db.transaction(() => {
+      const result = this.db.prepare(`
+        UPDATE l01_episodes
+        SET status = 'merged', merged_into_episode_id = ?, updated_at = ?
+        WHERE id = ?
+      `).run(targetId, nowIso, sourceId);
+      if (result.changes === 0) {
+        throw new Error(`episode "${sourceId}" does not exist`);
+      }
+      // A merged-away episode is no longer live; its arc memberships follow
+      // it onto the merge target instead of dangling.
+      this.repointArcsForEpisode(sourceId, targetId, {
+        actor: 'consolidation_repoint',
+        reason: `episode "${sourceId}" merged into "${targetId}"`,
+      }, nowIso);
+    });
+    merge();
   }
 
   createEpisode(input: EpisodeCreateInput): Episode {
@@ -1194,50 +1352,244 @@ export class EpisodicStore implements EpisodicStorePort {
   writeEpisodeArc(input: EpisodeArcWriteInput): EpisodeArc {
     this.assertEpisodeExists(input.sourceEpisodeId, 'episodeArc.sourceEpisodeId');
     this.assertEpisodeExists(input.targetEpisodeId, 'episodeArc.targetEpisodeId');
+    const audit = input.audit
+      ? normalizeEpisodeArcMutationAudit(input.audit, 'episodeArc.audit')
+      : undefined;
 
     const now = this.now().toISOString();
+    const { audit: _audit, ...arcFields } = input;
     const arc = parseEpisodeArc({
-      ...input,
+      ...arcFields,
       schemaVersion: EPISODIC_CONTRACT_VERSION,
       id: input.id ?? this.idFactory(),
       createdAt: input.createdAt ?? now,
       updatedAt: input.updatedAt ?? input.createdAt ?? now,
     });
 
-    this.db.prepare(`
-      INSERT INTO l01_episode_arcs (
-        id,
-        source_episode_id,
-        target_episode_id,
-        arc_kind,
-        salience_score,
-        confidence,
-        arc_json,
-        created_at,
-        updated_at
-      )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT(id) DO UPDATE SET
-        source_episode_id = excluded.source_episode_id,
-        target_episode_id = excluded.target_episode_id,
-        arc_kind = excluded.arc_kind,
-        salience_score = excluded.salience_score,
-        confidence = excluded.confidence,
-        arc_json = excluded.arc_json,
-        updated_at = excluded.updated_at
-    `).run(
-      arc.id,
-      arc.sourceEpisodeId,
-      arc.targetEpisodeId,
-      arc.arcKind,
-      arc.salience,
-      arc.confidence,
-      serializeEpisodeArc(arc),
-      arc.createdAt,
-      arc.updatedAt,
-    );
+    const write = this.db.transaction(() => {
+      this.db.prepare(`
+        INSERT INTO l01_episode_arcs (
+          id,
+          source_episode_id,
+          target_episode_id,
+          arc_kind,
+          status,
+          salience_score,
+          confidence,
+          arc_json,
+          created_at,
+          updated_at
+        )
+        VALUES (?, ?, ?, ?, 'canonical', ?, ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+          source_episode_id = excluded.source_episode_id,
+          target_episode_id = excluded.target_episode_id,
+          arc_kind = excluded.arc_kind,
+          status = excluded.status,
+          salience_score = excluded.salience_score,
+          confidence = excluded.confidence,
+          arc_json = excluded.arc_json,
+          updated_at = excluded.updated_at
+      `).run(
+        arc.id,
+        arc.sourceEpisodeId,
+        arc.targetEpisodeId,
+        arc.arcKind,
+        arc.salience,
+        arc.confidence,
+        serializeEpisodeArc(arc),
+        arc.createdAt,
+        arc.updatedAt,
+      );
+      if (audit) {
+        this.insertArcAudit(arc.id, 'written', audit, {
+          sourceEpisodeId: arc.sourceEpisodeId,
+          targetEpisodeId: arc.targetEpisodeId,
+          arcKind: arc.arcKind,
+          themes: arc.themes,
+          confidence: arc.confidence,
+        }, now);
+      }
+    });
+    write();
 
     return arc;
+  }
+
+  /**
+   * Retires one active arc; the row and its audit history are kept forever.
+   */
+  removeEpisodeArc(input: EpisodeArcRemoveInput): void {
+    const arcId = parseRequiredText(input.arcId, 'removeEpisodeArc.arcId');
+    const audit = normalizeEpisodeArcMutationAudit(input, 'removeEpisodeArc');
+    const nowIso = this.now().toISOString();
+
+    const remove = this.db.transaction(() => {
+      const row = this.getArcStateRow(arcId);
+      if (!row) {
+        throw new Error(`removeEpisodeArc references unknown arc "${arcId}"`);
+      }
+      if (!isActiveArcStateRow(row)) {
+        throw new Error(`arc "${arcId}" is already retired and cannot be removed again`);
+      }
+      this.retireArc(arcId, null, nowIso);
+      this.insertArcAudit(arcId, 'removed', audit, {
+        sourceEpisodeId: row.source_episode_id,
+        targetEpisodeId: row.target_episode_id,
+      }, nowIso);
+    });
+    remove();
+  }
+
+  /**
+   * Moves every active arc membership of one episode onto another, retiring
+   * arcs that would become self-loops or duplicates. Atomic, audited.
+   */
+  repointEpisodeArcMemberships(input: EpisodeArcRepointInput): EpisodeArcRepointResult {
+    const fromEpisodeId = parseRequiredText(input.fromEpisodeId, 'repoint.fromEpisodeId');
+    const toEpisodeId = parseRequiredText(input.toEpisodeId, 'repoint.toEpisodeId');
+    const audit = normalizeEpisodeArcMutationAudit(input, 'repoint');
+    if (fromEpisodeId === toEpisodeId) {
+      throw new Error('arc memberships cannot be re-pointed onto the same episode');
+    }
+    const nowIso = this.now().toISOString();
+
+    const repoint = this.db.transaction(() => {
+      this.assertEpisodeExists(fromEpisodeId, 'repoint.fromEpisodeId');
+      this.assertLiveEpisode(toEpisodeId, 'repoint.toEpisodeId');
+      return this.repointArcsForEpisode(fromEpisodeId, toEpisodeId, audit, nowIso);
+    });
+    return repoint();
+  }
+
+  listEpisodeArcAudit(options: EpisodeArcAuditListOptions = {}): EpisodeArcAuditEntry[] {
+    const where: string[] = [];
+    const params: Array<string | number> = [];
+    if (options.arcId !== undefined) {
+      where.push('arc_id = ?');
+      params.push(parseRequiredText(options.arcId, 'arcId'));
+    }
+    const whereClause = where.length > 0 ? `WHERE ${where.join(' AND ')}` : '';
+    const rows = this.db.prepare(`
+      SELECT *
+      FROM l01_episode_arc_audit
+      ${whereClause}
+      ORDER BY created_at ASC, id ASC
+      LIMIT ?
+    `).all(...params, normalizeLimit(options.limit)) as EpisodeArcAuditRow[];
+    return rows.map(mapArcAuditRow);
+  }
+
+  /**
+   * Within-transaction helper shared by the public repoint surface and by
+   * supersession/merge paths: no arc membership may silently dangle on an
+   * episode that stops being live.
+   */
+  private repointArcsForEpisode(
+    fromEpisodeId: string,
+    toEpisodeId: string,
+    audit: EpisodeArcMutationAudit,
+    nowIso: string,
+  ): EpisodeArcRepointResult {
+    const result: EpisodeArcRepointResult = { repointedArcIds: [], removedArcIds: [] };
+    const rows = this.db.prepare(`
+      SELECT id, arc_json, source_episode_id, target_episode_id, status, superseded_by_arc_id
+      FROM l01_episode_arcs
+      WHERE (source_episode_id = ? OR target_episode_id = ?) AND ${ACTIVE_ARC_PREDICATE}
+      ORDER BY updated_at ASC, id ASC
+    `).all(fromEpisodeId, fromEpisodeId) as EpisodeArcStateRow[];
+
+    for (const row of rows) {
+      const newSource = row.source_episode_id === fromEpisodeId ? toEpisodeId : row.source_episode_id;
+      const newTarget = row.target_episode_id === fromEpisodeId ? toEpisodeId : row.target_episode_id;
+      const previous = {
+        sourceEpisodeId: row.source_episode_id,
+        targetEpisodeId: row.target_episode_id,
+      };
+
+      if (newSource === newTarget) {
+        this.retireArc(row.id, null, nowIso);
+        this.insertArcAudit(row.id, 'removed', audit, {
+          cause: 'repoint_self_loop',
+          previous,
+          movedToEpisodeId: toEpisodeId,
+        }, nowIso);
+        result.removedArcIds.push(row.id);
+        continue;
+      }
+
+      const duplicate = this.db.prepare(`
+        SELECT id
+        FROM l01_episode_arcs
+        WHERE id <> ?
+          AND (
+            (source_episode_id = ? AND target_episode_id = ?)
+            OR (source_episode_id = ? AND target_episode_id = ?)
+          )
+          AND ${ACTIVE_ARC_PREDICATE}
+        LIMIT 1
+      `).get(row.id, newSource, newTarget, newTarget, newSource) as { id: string } | undefined;
+      if (duplicate) {
+        this.retireArc(row.id, duplicate.id, nowIso);
+        this.insertArcAudit(row.id, 'removed', audit, {
+          cause: 'repoint_duplicate',
+          previous,
+          duplicateOfArcId: duplicate.id,
+          movedToEpisodeId: toEpisodeId,
+        }, nowIso);
+        result.removedArcIds.push(row.id);
+        continue;
+      }
+
+      const arc = parseEpisodeArc({
+        ...parseArcJson(row.arc_json, row.id),
+        sourceEpisodeId: newSource,
+        targetEpisodeId: newTarget,
+        updatedAt: nowIso,
+      });
+      this.db.prepare(`
+        UPDATE l01_episode_arcs
+        SET source_episode_id = ?, target_episode_id = ?, arc_json = ?, updated_at = ?
+        WHERE id = ?
+      `).run(newSource, newTarget, serializeEpisodeArc(arc), nowIso, row.id);
+      this.insertArcAudit(row.id, 'repointed', audit, {
+        previous,
+        next: { sourceEpisodeId: newSource, targetEpisodeId: newTarget },
+      }, nowIso);
+      result.repointedArcIds.push(row.id);
+    }
+
+    return result;
+  }
+
+  private retireArc(arcId: string, supersededByArcId: string | null, nowIso: string): void {
+    this.db.prepare(`
+      UPDATE l01_episode_arcs
+      SET status = 'superseded', superseded_by_arc_id = ?, updated_at = ?
+      WHERE id = ?
+    `).run(supersededByArcId, nowIso, arcId);
+  }
+
+  private insertArcAudit(
+    arcId: string,
+    action: EpisodeArcAuditAction,
+    audit: EpisodeArcMutationAudit,
+    details: Record<string, unknown>,
+    createdAt: string,
+  ): void {
+    this.db.prepare(`
+      INSERT INTO l01_episode_arc_audit (id, arc_id, action, actor, reason, details_json, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).run(this.idFactory(), arcId, action, audit.actor, audit.reason, json(details), createdAt);
+  }
+
+  private getArcStateRow(arcId: string): EpisodeArcStateRow | undefined {
+    return this.db.prepare(`
+      SELECT id, arc_json, source_episode_id, target_episode_id, status, superseded_by_arc_id
+      FROM l01_episode_arcs
+      WHERE id = ?
+      LIMIT 1
+    `).get(arcId) as EpisodeArcStateRow | undefined;
   }
 
   getEpisodeArc(id: string): EpisodeArc | undefined {
@@ -1255,7 +1607,7 @@ export class EpisodicStore implements EpisodicStorePort {
     const normalizedEpisodeId = parseRequiredText(episodeId, 'episodeId');
     const direction = options.direction ?? 'both';
 
-    const where: string[] = [];
+    const where: string[] = [ACTIVE_ARC_PREDICATE];
     const params: Array<string | number> = [];
     if (direction === 'incoming') {
       where.push('target_episode_id = ?');
@@ -1298,7 +1650,9 @@ export class EpisodicStore implements EpisodicStorePort {
         ? 'arcs.source_episode_id = requested.episode_id'
         : '(arcs.source_episode_id = requested.episode_id OR arcs.target_episode_id = requested.episode_id)';
 
-    const where: string[] = [];
+    const where: string[] = [
+      "(arcs.status IS NULL OR arcs.status = 'canonical') AND arcs.superseded_by_arc_id IS NULL",
+    ];
     const params: Array<string | number> = [...normalizedEpisodeIds];
     if (options.arcKind !== undefined) {
       where.push('arcs.arc_kind = ?');
@@ -1756,9 +2110,35 @@ export class EpisodicStore implements EpisodicStorePort {
         WHERE id IN (${sourcePlaceholders})
       `).run(normalized.targetEpisodeId, transferredAt, ...normalized.sourceEpisodeIds);
 
-      return activeClaims.map(claim => claim.claim_key).sort();
+      // Superseded sources must not keep live arc memberships: re-point
+      // every arc onto the consolidated target in the same transaction.
+      const repointAudit: EpisodeArcMutationAudit = {
+        actor: 'consolidation_repoint',
+        reason: normalized.reason,
+      };
+      const repointedArcIds: string[] = [];
+      const removedArcIds: string[] = [];
+      for (const sourceEpisodeId of normalized.sourceEpisodeIds) {
+        const repointed = this.repointArcsForEpisode(
+          sourceEpisodeId,
+          normalized.targetEpisodeId,
+          repointAudit,
+          transferredAt,
+        );
+        repointedArcIds.push(...repointed.repointedArcIds);
+        removedArcIds.push(...repointed.removedArcIds);
+      }
+
+      // An arc re-pointed for one source and then retired for a later source
+      // (e.g. it collapsed between two superseded siblings) counts as removed.
+      const removedSet = new Set(removedArcIds);
+      return {
+        transferredClaimKeys: activeClaims.map(claim => claim.claim_key).sort(),
+        repointedArcIds: repointedArcIds.filter(id => !removedSet.has(id)),
+        removedArcIds,
+      };
     });
-    const transferredClaimKeys = transfer();
+    const { transferredClaimKeys, repointedArcIds, removedArcIds } = transfer();
 
     const transferredClaims = transferredClaimKeys.length > 0
       ? this.listEpisodeMessageClaims({
@@ -1772,6 +2152,8 @@ export class EpisodicStore implements EpisodicStorePort {
       targetEpisodeId: normalized.targetEpisodeId,
       supersededEpisodeIds: normalized.sourceEpisodeIds,
       transferredClaims,
+      repointedArcIds,
+      removedArcIds,
     };
   }
 

@@ -407,6 +407,18 @@ async function main(): Promise<void> {
     passIntervalMs: schedulerConfig.arcFormation.passIntervalDays * DAY_MS,
     reviewWindowMs: schedulerConfig.arcFormation.reviewWindowDays * DAY_MS,
     minConfidence: schedulerConfig.arcFormation.minConfidence,
+    maxArcsPerRun: schedulerConfig.arcFormation.maxArcsPerRun,
+    maxEpisodesPerRun: schedulerConfig.arcFormation.maxEpisodesPerRun,
+    // Fail-closed arc-formation outcomes are typed events, never silence.
+    onEvent: (event) => {
+      eventBus.emit('memory.arc_formation.outcome', event).catch((error: unknown) => {
+        log.warn('Arc-formation outcome event emit failed', {
+          sessionId: event.sessionId,
+          outcome: event.outcome,
+          error: String(error),
+        });
+      });
+    },
   });
   const dreamMeaningPass = new DreamMeaningPass(episodicStore, agentLoop);
   intentionRuntime.behavioralPatternTracker.setPromotionHook(

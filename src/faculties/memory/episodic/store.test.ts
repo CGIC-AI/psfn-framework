@@ -627,3 +627,268 @@ describe('EpisodicStore', () => {
     })).toThrow('transfer.sourceEpisodeIds references episode "candidate-1" which is no longer live');
   });
 });
+
+describe('EpisodicStore arc membership (m58.2)', () => {
+  let db: Database.Database | undefined;
+
+  afterEach(() => {
+    db?.close();
+    db = undefined;
+  });
+
+  function makeArcStore(): EpisodicStore {
+    db = new Database(':memory:');
+    let sequence = 0;
+    return new EpisodicStore(db, {
+      now: () => new Date('2026-06-10T08:00:00.000Z'),
+      idFactory: () => `generated-${++sequence}`,
+    });
+  }
+
+  function episode(id: string, startedAt: string, endedAt: string): EpisodeCreateInput {
+    return {
+      id,
+      title: `Episode ${id}`,
+      landmark: `What happened during ${id}.`,
+      startedAt,
+      endedAt,
+      threadId: 'thread-alpha',
+      channelId: 'discord:general',
+      participantContactIds: ['contact:vega'],
+      salience: { score: 0.6 },
+      affect: { labels: ['neutral'] },
+      themes: ['books'],
+      spanRefs: [{ spanId: `span-${id}` }],
+      artifactRefs: [],
+      provenanceRefs: [{ kind: 'l0_span', refId: `span-${id}` }],
+    };
+  }
+
+  function seedEpisodes(store: EpisodicStore, ids: readonly string[]): void {
+    let hour = 9;
+    for (const id of ids) {
+      store.createEpisode(episode(
+        id,
+        `2026-06-0${1 + (hour % 5)}T${String(hour).padStart(2, '0')}:00:00.000Z`,
+        `2026-06-0${1 + (hour % 5)}T${String(hour).padStart(2, '0')}:30:00.000Z`,
+      ));
+      hour += 1;
+    }
+  }
+
+  function arc(sourceEpisodeId: string, targetEpisodeId: string, overrides: Partial<import('./store.js').EpisodeArcWriteInput> = {}) {
+    return {
+      sourceEpisodeId,
+      targetEpisodeId,
+      arcKind: 'same_theme' as const,
+      salience: 0.6,
+      confidence: 0.8,
+      themes: ['the ongoing book discussion'],
+      spanRefs: [],
+      artifactRefs: [],
+      provenanceRefs: [],
+      ...overrides,
+    };
+  }
+
+  it('records a written audit entry when an arc is created with audit', () => {
+    const store = makeArcStore();
+    seedEpisodes(store, ['a', 'b']);
+
+    const written = store.writeEpisodeArc(arc('a', 'b', {
+      audit: { actor: 'arc_formation_pass', reason: 'same theme across days' },
+    }));
+
+    const audit = store.listEpisodeArcAudit({ arcId: written.id });
+    expect(audit).toHaveLength(1);
+    expect(audit[0].action).toBe('written');
+    expect(audit[0].actor).toBe('arc_formation_pass');
+    expect(audit[0].reason).toBe('same theme across days');
+    expect(audit[0].detailsJson.sourceEpisodeId).toBe('a');
+    expect(audit[0].detailsJson.targetEpisodeId).toBe('b');
+  });
+
+  it('fails closed when audit actor or reason is empty', () => {
+    const store = makeArcStore();
+    seedEpisodes(store, ['a', 'b']);
+    expect(() => store.writeEpisodeArc(arc('a', 'b', {
+      audit: { actor: '', reason: 'x' },
+    }))).toThrow('episodeArc.audit.actor must be non-empty');
+    const written = store.writeEpisodeArc(arc('a', 'b'));
+    expect(() => store.removeEpisodeArc({ arcId: written.id, actor: 'operator', reason: '' }))
+      .toThrow('removeEpisodeArc.reason must be non-empty');
+    expect(() => store.repointEpisodeArcMemberships({
+      fromEpisodeId: 'a',
+      toEpisodeId: 'b',
+      actor: '',
+      reason: 'x',
+    })).toThrow('repoint.actor must be non-empty');
+  });
+
+  it('removes an arc membership with an audit trail and keeps the row retrievable', () => {
+    const store = makeArcStore();
+    seedEpisodes(store, ['a', 'b']);
+    const written = store.writeEpisodeArc(arc('a', 'b'));
+
+    store.removeEpisodeArc({
+      arcId: written.id,
+      actor: 'arc_formation_pass',
+      reason: 'episode no longer belongs to this thread',
+    });
+
+    // Membership queries stop returning the arc; the row itself survives.
+    expect(store.listEpisodeArcsForEpisode('a')).toHaveLength(0);
+    expect(store.listEpisodeArcsForEpisodes(['a', 'b'])).toHaveLength(0);
+    expect(store.getEpisodeArc(written.id)?.id).toBe(written.id);
+
+    const audit = store.listEpisodeArcAudit({ arcId: written.id });
+    expect(audit.map(entry => entry.action)).toEqual(['removed']);
+    expect(audit[0].actor).toBe('arc_formation_pass');
+
+    // Fail closed on double-removal and unknown arcs.
+    expect(() => store.removeEpisodeArc({
+      arcId: written.id,
+      actor: 'operator',
+      reason: 'again',
+    })).toThrow(`arc "${written.id}" is already retired`);
+    expect(() => store.removeEpisodeArc({
+      arcId: 'missing-arc',
+      actor: 'operator',
+      reason: 'nope',
+    })).toThrow('removeEpisodeArc references unknown arc "missing-arc"');
+  });
+
+  it('re-points arc memberships onto another episode with audit history', () => {
+    const store = makeArcStore();
+    seedEpisodes(store, ['a', 'b', 'c']);
+    const written = store.writeEpisodeArc(arc('a', 'b'));
+
+    const result = store.repointEpisodeArcMemberships({
+      fromEpisodeId: 'b',
+      toEpisodeId: 'c',
+      actor: 'consolidation_repoint',
+      reason: 'candidate folded into consolidated episode',
+    });
+
+    expect(result.repointedArcIds).toEqual([written.id]);
+    expect(result.removedArcIds).toEqual([]);
+    expect(store.listEpisodeArcsForEpisode('b')).toHaveLength(0);
+    const arcsOnC = store.listEpisodeArcsForEpisode('c');
+    expect(arcsOnC).toHaveLength(1);
+    expect(arcsOnC[0].sourceEpisodeId).toBe('a');
+    expect(arcsOnC[0].targetEpisodeId).toBe('c');
+    // The persisted contract JSON follows the membership change.
+    expect(store.getEpisodeArc(written.id)?.targetEpisodeId).toBe('c');
+
+    const audit = store.listEpisodeArcAudit({ arcId: written.id });
+    expect(audit.map(entry => entry.action)).toEqual(['repointed']);
+    expect(audit[0].actor).toBe('consolidation_repoint');
+    expect(audit[0].detailsJson.previous).toEqual({ sourceEpisodeId: 'a', targetEpisodeId: 'b' });
+    expect(audit[0].detailsJson.next).toEqual({ sourceEpisodeId: 'a', targetEpisodeId: 'c' });
+  });
+
+  it('retires arcs that become self-loops or duplicates during re-pointing', () => {
+    const store = makeArcStore();
+    seedEpisodes(store, ['a', 'b', 'c']);
+    const loopArc = store.writeEpisodeArc(arc('a', 'b'));
+    const duplicateSurvivor = store.writeEpisodeArc(arc('c', 'b'));
+    const duplicateVictim = store.writeEpisodeArc(arc('a', 'c'));
+
+    // Re-pointing a -> c makes loopArc(a->b) become c->b (duplicate of
+    // duplicateSurvivor) and duplicateVictim(a->c) a self-loop.
+    const result = store.repointEpisodeArcMemberships({
+      fromEpisodeId: 'a',
+      toEpisodeId: 'c',
+      actor: 'consolidation_repoint',
+      reason: 'a superseded by c',
+    });
+
+    expect(result.repointedArcIds).toEqual([]);
+    expect([...result.removedArcIds].sort()).toEqual([duplicateVictim.id, loopArc.id].sort());
+    const remaining = store.listEpisodeArcsForEpisode('c');
+    expect(remaining.map(entry => entry.id)).toEqual([duplicateSurvivor.id]);
+
+    const loopAudit = store.listEpisodeArcAudit({ arcId: loopArc.id });
+    expect(loopAudit[0].action).toBe('removed');
+    expect(loopAudit[0].detailsJson.cause).toBe('repoint_duplicate');
+    expect(loopAudit[0].detailsJson.duplicateOfArcId).toBe(duplicateSurvivor.id);
+    const victimAudit = store.listEpisodeArcAudit({ arcId: duplicateVictim.id });
+    expect(victimAudit[0].detailsJson.cause).toBe('repoint_self_loop');
+  });
+
+  it('fails closed when re-pointing onto a missing or non-live episode', () => {
+    const store = makeArcStore();
+    seedEpisodes(store, ['a', 'b', 'c']);
+    store.markEpisodeMerged('b', 'c');
+
+    expect(() => store.repointEpisodeArcMemberships({
+      fromEpisodeId: 'a',
+      toEpisodeId: 'missing',
+      actor: 'operator',
+      reason: 'x',
+    })).toThrow('repoint.toEpisodeId references unknown episode "missing"');
+    expect(() => store.repointEpisodeArcMemberships({
+      fromEpisodeId: 'a',
+      toEpisodeId: 'b',
+      actor: 'operator',
+      reason: 'x',
+    })).toThrow('repoint.toEpisodeId references episode "b" which is no longer live');
+    expect(() => store.repointEpisodeArcMemberships({
+      fromEpisodeId: 'a',
+      toEpisodeId: 'a',
+      actor: 'operator',
+      reason: 'x',
+    })).toThrow('arc memberships cannot be re-pointed onto the same episode');
+  });
+
+  it('re-points arcs when consolidation supersedes candidates via claim transfer', () => {
+    const store = makeArcStore();
+    seedEpisodes(store, ['candidate-1', 'candidate-2', 'other']);
+    store.createEpisode(episode('consolidated', '2026-06-02T09:00:00.000Z', '2026-06-02T10:30:00.000Z'));
+    store.claimEpisodeMessages({
+      episodeId: 'candidate-1',
+      claims: [{ claimKey: 'discord:general:m1' }],
+    });
+    const arcToOther = store.writeEpisodeArc(arc('candidate-1', 'other'));
+    const arcBetweenSources = store.writeEpisodeArc(arc('candidate-1', 'candidate-2'));
+
+    const result = store.transferEpisodeMessageClaims({
+      sourceEpisodeIds: ['candidate-1', 'candidate-2'],
+      targetEpisodeId: 'consolidated',
+      reason: 'nightly consolidation',
+    });
+
+    // candidate-1's outward arc follows it onto the consolidated episode;
+    // the arc between the two superseded sources collapses to a self-loop
+    // and is retired. Nothing dangles on a superseded episode.
+    expect(result.repointedArcIds).toEqual([arcToOther.id]);
+    expect(result.removedArcIds).toEqual([arcBetweenSources.id]);
+    expect(store.listEpisodeArcsForEpisode('candidate-1')).toHaveLength(0);
+    expect(store.listEpisodeArcsForEpisode('candidate-2')).toHaveLength(0);
+    const consolidatedArcs = store.listEpisodeArcsForEpisode('consolidated');
+    expect(consolidatedArcs.map(entry => entry.id)).toEqual([arcToOther.id]);
+    expect(consolidatedArcs[0].sourceEpisodeId).toBe('consolidated');
+    expect(consolidatedArcs[0].targetEpisodeId).toBe('other');
+
+    const audit = store.listEpisodeArcAudit({ arcId: arcToOther.id });
+    expect(audit[0].action).toBe('repointed');
+    expect(audit[0].actor).toBe('consolidation_repoint');
+    expect(audit[0].reason).toBe('nightly consolidation');
+  });
+
+  it('re-points arcs when an episode is merged away', () => {
+    const store = makeArcStore();
+    seedEpisodes(store, ['a', 'b', 'c']);
+    const written = store.writeEpisodeArc(arc('a', 'c'));
+
+    store.markEpisodeMerged('a', 'b');
+
+    expect(store.listEpisodeArcsForEpisode('a')).toHaveLength(0);
+    const arcsOnB = store.listEpisodeArcsForEpisode('b');
+    expect(arcsOnB.map(entry => entry.id)).toEqual([written.id]);
+    expect(arcsOnB[0].sourceEpisodeId).toBe('b');
+    const audit = store.listEpisodeArcAudit({ arcId: written.id });
+    expect(audit[0].action).toBe('repointed');
+    expect(audit[0].actor).toBe('consolidation_repoint');
+  });
+});

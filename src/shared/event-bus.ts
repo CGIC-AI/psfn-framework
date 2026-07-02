@@ -210,6 +210,17 @@ export interface EventMap {
     error: string;
     timestamp: number;
   };
+  // Arc-formation pass rejected a proposal or failed a judgment (m58.2).
+  // Malformed LLM arc proposals fail closed per proposal — never partially
+  // applied, never swallowed silently.
+  'memory.arc_formation.outcome': {
+    sessionId: string;
+    outcome: 'proposal_rejected' | 'judgment_failed';
+    reason: string;
+    label?: string;
+    confidence?: number;
+    timestamp: number;
+  };
   // Social-graph builder worker completion (E4.2). Law 31: results are visible,
   // never silent — Garden renders the proposal queue and these counts.
   'memory.social_graph.builder': {

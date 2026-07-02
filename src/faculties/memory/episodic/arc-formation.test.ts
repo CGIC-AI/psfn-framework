@@ -1,7 +1,11 @@
 import Database from 'better-sqlite3';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { EpisodicStore, type EpisodeCreateInput } from './store.js';
-import { EpisodeArcWeaver, parseProposedArcs } from './arc-formation.js';
+import {
+  EpisodeArcWeaver,
+  parseProposedArcs,
+  type ArcFormationOutcomeEvent,
+} from './arc-formation.js';
 
 const NOW = new Date('2026-06-10T08:00:00.000Z');
 
@@ -174,6 +178,136 @@ describe('EpisodeArcWeaver', () => {
     expect(result.writtenArcs).toBe(1);
     const day1Arcs = await store.listEpisodeArcsForEpisode('day1', { direction: 'outgoing' });
     expect(day1Arcs.map(arc => arc.targetEpisodeId)).toEqual(['day2']);
+  });
+
+  it('links same-theme canonical episodes across non-adjacent days into one arc', async () => {
+    const store = makeStore();
+    // The book discussed on day 1 and again on day 3, with unrelated
+    // episodes in between: the thread is about the book, not about a day.
+    await store.createEpisode(episodeInput('book-monday', '2026-06-01T20:00:00.000Z', '2026-06-01T21:00:00.000Z', {
+      themes: ['the left hand of darkness', 'books'],
+    }));
+    await store.createEpisode(episodeInput('errands', '2026-06-02T10:00:00.000Z', '2026-06-02T10:30:00.000Z', {
+      themes: ['groceries'],
+    }));
+    await store.createEpisode(episodeInput('weather', '2026-06-02T18:00:00.000Z', '2026-06-02T18:20:00.000Z', {
+      themes: ['weather'],
+    }));
+    await store.createEpisode(episodeInput('book-wednesday', '2026-06-03T20:00:00.000Z', '2026-06-03T21:00:00.000Z', {
+      themes: ['the left hand of darkness', 'books'],
+    }));
+
+    const complete = vi.fn(async () => arcResponse([{
+      episode_ids: ['book-monday', 'book-wednesday'],
+      kind: 'same_theme',
+      label: 'the ongoing left hand of darkness discussion',
+      confidence: 0.9,
+      reason: 'the same book discussion resumes two days later',
+    }]));
+    const weaver = new EpisodeArcWeaver(store, { complete }, { now: () => NOW });
+
+    const result = await weaver.run({ sessionId: 'discord:main' });
+
+    expect(result.ran).toBe(true);
+    expect(result.writtenArcs).toBe(1);
+    const arcs = await store.listEpisodeArcsForEpisode('book-monday', { direction: 'outgoing' });
+    expect(arcs).toHaveLength(1);
+    expect(arcs[0].targetEpisodeId).toBe('book-wednesday');
+    expect(arcs[0].arcKind).toBe('same_theme');
+    expect(arcs[0].themes).toEqual(['the ongoing left hand of darkness discussion']);
+    // The unrelated day-2 episodes stay out of the thread.
+    expect(await store.listEpisodeArcsForEpisode('errands')).toHaveLength(0);
+    expect(await store.listEpisodeArcsForEpisode('weather')).toHaveLength(0);
+
+    // Arc writes carry arc-formation provenance in the audit trail.
+    const audit = await store.listEpisodeArcAudit({ arcId: arcs[0].id });
+    expect(audit).toHaveLength(1);
+    expect(audit[0].action).toBe('written');
+    expect(audit[0].actor).toBe('arc_formation_pass');
+    expect(audit[0].reason).toBe('the same book discussion resumes two days later');
+  });
+
+  it('excludes candidate episodes from arc formation entirely', async () => {
+    const store = makeStore();
+    await seedWeekOfEpisodes(store);
+    await store.createEpisode(episodeInput('cand-1', '2026-06-09T20:00:00.000Z', '2026-06-09T21:00:00.000Z', {
+      lifecycleStatus: 'candidate',
+    }));
+    await store.createEpisode(episodeInput('cand-2', '2026-06-09T21:30:00.000Z', '2026-06-09T22:00:00.000Z', {
+      lifecycleStatus: 'candidate',
+    }));
+
+    const complete = vi.fn(async (request: { messages: Array<{ content: string }> }) => {
+      // Candidates must never reach the judgment prompt: they may be
+      // superseded by that night's consolidation pass.
+      expect(request.messages[0].content).not.toContain('cand-1');
+      expect(request.messages[0].content).not.toContain('cand-2');
+      return arcResponse([{
+        episode_ids: ['day1', 'cand-1'],
+        kind: 'continuation',
+        label: 'should be rejected',
+        confidence: 0.9,
+        reason: 'references a candidate',
+      }]);
+    });
+    const weaver = new EpisodeArcWeaver(store, { complete }, { now: () => NOW });
+
+    const result = await weaver.run({ sessionId: 'discord:main' });
+
+    expect(result.ran).toBe(true);
+    expect(result.reviewedEpisodes).toBe(4);
+    // A proposal referencing a candidate id is rejected as unknown.
+    expect(result.rejectedArcs).toBe(1);
+    expect(result.writtenArcs).toBe(0);
+    expect(await store.listEpisodeArcsForEpisode('cand-1')).toHaveLength(0);
+  });
+
+  it('emits typed outcome events for rejected proposals and failed judgments', async () => {
+    const store = makeStore();
+    await seedWeekOfEpisodes(store);
+    const events: ArcFormationOutcomeEvent[] = [];
+
+    const complete = vi.fn(async () => arcResponse([
+      {
+        episode_ids: ['day1', 'not-a-real-episode'],
+        kind: 'continuation',
+        label: 'hallucinated thread',
+        confidence: 0.9,
+        reason: 'made up',
+      },
+      {
+        episode_ids: ['day2', 'day3'],
+        kind: 'same_theme',
+        label: 'weak hunch',
+        confidence: 0.2,
+        reason: 'low confidence',
+      },
+    ]));
+    const weaver = new EpisodeArcWeaver(store, { complete }, {
+      now: () => NOW,
+      onEvent: event => events.push(event),
+    });
+    await weaver.run({ sessionId: 'discord:main' });
+
+    expect(events).toHaveLength(2);
+    expect(events[0].outcome).toBe('proposal_rejected');
+    expect(events[0].reason).toMatch(/unknown episode id "not-a-real-episode"/);
+    expect(events[1].outcome).toBe('proposal_rejected');
+    expect(events[1].reason).toMatch(/below the minConfidence floor/);
+    expect(events[1].label).toBe('weak hunch');
+    expect(events[1].confidence).toBe(0.2);
+
+    const failureEvents: ArcFormationOutcomeEvent[] = [];
+    const failingWeaver = new EpisodeArcWeaver(
+      store,
+      { complete: vi.fn(async () => ({ content: 'garbage' }) as { content: string }) },
+      { now: () => NOW, passIntervalMs: 0, onEvent: event => failureEvents.push(event) },
+    );
+    await failingWeaver.run({ sessionId: 'discord:main' });
+
+    expect(failureEvents).toHaveLength(1);
+    expect(failureEvents[0].outcome).toBe('judgment_failed');
+    expect(failureEvents[0].reason).toMatch(/no JSON object/);
   });
 
   it('does not duplicate arcs that already exist between two episodes', async () => {

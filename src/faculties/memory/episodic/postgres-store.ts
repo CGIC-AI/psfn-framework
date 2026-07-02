@@ -19,6 +19,7 @@ import {
   type EpisodeProvenanceRef,
 } from '../../../shared/contracts/episodic-memory.js';
 import {
+  normalizeEpisodeArcMutationAudit,
   normalizeEpisodeClaimTransferInput,
   normalizeEpisodeLifecycleStatus,
   normalizeEpisodeMessageClaimWriteInput,
@@ -26,7 +27,14 @@ import {
   summarizeEpisodicMaintenanceDiagnostics,
 } from './store.js';
 import type {
+  EpisodeArcAuditAction,
+  EpisodeArcAuditEntry,
+  EpisodeArcAuditListOptions,
   EpisodeArcListOptions,
+  EpisodeArcMutationAudit,
+  EpisodeArcRemoveInput,
+  EpisodeArcRepointInput,
+  EpisodeArcRepointResult,
   EpisodeArcWriteInput,
   EpisodeCandidateDecision,
   EpisodeCandidateDecisionListOptions,
@@ -64,6 +72,23 @@ interface PostgresEpisodeRow {
 interface PostgresEpisodeArcRow {
   id: string;
   arc_json: unknown;
+}
+
+interface PostgresEpisodeArcStateRow extends PostgresEpisodeArcRow {
+  source_episode_id: string;
+  target_episode_id: string;
+  status: string | null;
+  superseded_by_arc_id: string | null;
+}
+
+interface PostgresEpisodeArcAuditRow {
+  id: string;
+  arc_id: string;
+  action: string;
+  actor: string;
+  reason: string;
+  details_json: unknown;
+  created_at: string;
 }
 
 interface PostgresProcessingWatermarkRow {
@@ -161,6 +186,7 @@ const ACTIVE_CANONICAL_ARC_FILTER = `
   AND merged_into_arc_id IS NULL
   AND superseded_by_arc_id IS NULL
 `;
+const ARC_AUDIT_ACTIONS = new Set<EpisodeArcAuditAction>(['written', 'repointed', 'removed']);
 
 export function createPostgresEpisodicStore(
   databaseUrl: string,
@@ -356,6 +382,26 @@ function mapMessageClaimRow(row: PostgresEpisodeMessageClaimRow): EpisodeMessage
 
 function json(value: unknown): string {
   return JSON.stringify(value);
+}
+
+function mapArcAuditRow(row: PostgresEpisodeArcAuditRow): EpisodeArcAuditEntry {
+  const action = row.action as EpisodeArcAuditAction;
+  if (!ARC_AUDIT_ACTIONS.has(action)) {
+    throw new Error(`malformed persisted episode arc audit "${row.id}": unsupported action`);
+  }
+  return {
+    id: row.id,
+    arcId: row.arc_id,
+    action,
+    actor: row.actor,
+    reason: row.reason,
+    detailsJson: parseRecordPayload(row.details_json, `episode arc audit "${row.id}" detailsJson`),
+    createdAt: new Date(row.created_at).toISOString(),
+  };
+}
+
+function isActivePostgresArcRow(row: Pick<PostgresEpisodeArcStateRow, 'status' | 'superseded_by_arc_id'>): boolean {
+  return (row.status === null || row.status === 'canonical') && row.superseded_by_arc_id === null;
 }
 
 function parseOptionalText(value: string | undefined, field: string): string | undefined {
@@ -555,14 +601,23 @@ export class PostgresEpisodicStore implements EpisodicStorePort {
     if (!target) {
       throw new Error(`merge target episode "${targetId}" does not exist`);
     }
-    const result = await executeQuery(this.pool, `
-      UPDATE l01_episodes
-      SET status = 'merged', merged_into_episode_id = $2, updated_at = $3
-      WHERE id = $1
-    `, [sourceId, targetId, this.now().toISOString()]);
-    if (result.rowCount === 0) {
-      throw new Error(`episode "${sourceId}" does not exist`);
-    }
+    const nowIso = this.now().toISOString();
+    await withPostgresClient(this.pool, async (client) => {
+      const result = await client.query(`
+        UPDATE l01_episodes
+        SET status = 'merged', merged_into_episode_id = $2, updated_at = $3
+        WHERE id = $1
+      `, [sourceId, targetId, nowIso]);
+      if (result.rowCount === 0) {
+        throw new Error(`episode "${sourceId}" does not exist`);
+      }
+      // A merged-away episode is no longer live; its arc memberships follow
+      // it onto the merge target instead of dangling.
+      await this.repointArcsForEpisode(client, sourceId, targetId, {
+        actor: 'consolidation_repoint',
+        reason: `episode "${sourceId}" merged into "${targetId}"`,
+      }, nowIso);
+    });
   }
 
   /**
@@ -685,17 +740,22 @@ export class PostgresEpisodicStore implements EpisodicStorePort {
   async writeEpisodeArc(input: EpisodeArcWriteInput): Promise<EpisodeArc> {
     await this.assertEpisodeExists(input.sourceEpisodeId, 'episodeArc.sourceEpisodeId');
     await this.assertEpisodeExists(input.targetEpisodeId, 'episodeArc.targetEpisodeId');
+    const audit = input.audit
+      ? normalizeEpisodeArcMutationAudit(input.audit, 'episodeArc.audit')
+      : undefined;
 
     const now = this.now().toISOString();
+    const { audit: _audit, ...arcFields } = input;
     const arc = parseEpisodeArc({
-      ...input,
+      ...arcFields,
       schemaVersion: EPISODIC_CONTRACT_VERSION,
       id: input.id ?? this.idFactory(),
       createdAt: input.createdAt ?? now,
       updatedAt: input.updatedAt ?? input.createdAt ?? now,
     });
 
-    await executeQuery(this.pool, `
+    await withPostgresClient(this.pool, async (client) => {
+      await client.query(`
       INSERT INTO l01_episode_arcs (
         id,
         schema_version,
@@ -736,28 +796,219 @@ export class PostgresEpisodicStore implements EpisodicStorePort {
         provenance_refs = EXCLUDED.provenance_refs,
         arc_json = EXCLUDED.arc_json,
         updated_at = EXCLUDED.updated_at
-    `, [
-      arc.id,
-      arc.schemaVersion,
-      arc.sourceEpisodeId,
-      arc.targetEpisodeId,
-      arc.arcKind,
-      'canonical',
-      arc.id,
-      null,
-      null,
-      arc.salience,
-      arc.confidence,
-      json(arc.themes),
-      json(arc.spanRefs),
-      json(arc.artifactRefs),
-      json(arc.provenanceRefs),
-      serializeEpisodeArc(arc),
-      arc.createdAt,
-      arc.updatedAt,
-    ]);
+      `, [
+        arc.id,
+        arc.schemaVersion,
+        arc.sourceEpisodeId,
+        arc.targetEpisodeId,
+        arc.arcKind,
+        'canonical',
+        arc.id,
+        null,
+        null,
+        arc.salience,
+        arc.confidence,
+        json(arc.themes),
+        json(arc.spanRefs),
+        json(arc.artifactRefs),
+        json(arc.provenanceRefs),
+        serializeEpisodeArc(arc),
+        arc.createdAt,
+        arc.updatedAt,
+      ]);
+      if (audit) {
+        await this.insertArcAudit(client, arc.id, 'written', audit, {
+          sourceEpisodeId: arc.sourceEpisodeId,
+          targetEpisodeId: arc.targetEpisodeId,
+          arcKind: arc.arcKind,
+          themes: arc.themes,
+          confidence: arc.confidence,
+        }, now);
+      }
+    });
 
     return arc;
+  }
+
+  /**
+   * Retires one active arc; the row and its audit history are kept forever.
+   */
+  async removeEpisodeArc(input: EpisodeArcRemoveInput): Promise<void> {
+    const arcId = parseRequiredText(input.arcId, 'removeEpisodeArc.arcId');
+    const audit = normalizeEpisodeArcMutationAudit(input, 'removeEpisodeArc');
+    const nowIso = this.now().toISOString();
+
+    await withPostgresClient(this.pool, async (client) => {
+      const result = await client.query<PostgresEpisodeArcStateRow>(`
+        SELECT id, arc_json, source_episode_id, target_episode_id, status, superseded_by_arc_id
+        FROM l01_episode_arcs
+        WHERE id = $1
+        LIMIT 1
+      `, [arcId]);
+      if (result.rows.length === 0) {
+        throw new Error(`removeEpisodeArc references unknown arc "${arcId}"`);
+      }
+      const row = result.rows[0];
+      if (!isActivePostgresArcRow(row)) {
+        throw new Error(`arc "${arcId}" is already retired and cannot be removed again`);
+      }
+      await this.retireArc(client, arcId, null, nowIso);
+      await this.insertArcAudit(client, arcId, 'removed', audit, {
+        sourceEpisodeId: row.source_episode_id,
+        targetEpisodeId: row.target_episode_id,
+      }, nowIso);
+    });
+  }
+
+  /**
+   * Moves every active arc membership of one episode onto another, retiring
+   * arcs that would become self-loops or duplicates. Atomic, audited.
+   */
+  async repointEpisodeArcMemberships(input: EpisodeArcRepointInput): Promise<EpisodeArcRepointResult> {
+    const fromEpisodeId = parseRequiredText(input.fromEpisodeId, 'repoint.fromEpisodeId');
+    const toEpisodeId = parseRequiredText(input.toEpisodeId, 'repoint.toEpisodeId');
+    const audit = normalizeEpisodeArcMutationAudit(input, 'repoint');
+    if (fromEpisodeId === toEpisodeId) {
+      throw new Error('arc memberships cannot be re-pointed onto the same episode');
+    }
+    const nowIso = this.now().toISOString();
+
+    return withPostgresClient(this.pool, async (client) => {
+      await this.assertEpisodeExists(fromEpisodeId, 'repoint.fromEpisodeId', client);
+      await this.assertLiveEpisode(toEpisodeId, 'repoint.toEpisodeId', client);
+      return this.repointArcsForEpisode(client, fromEpisodeId, toEpisodeId, audit, nowIso);
+    });
+  }
+
+  async listEpisodeArcAudit(options: EpisodeArcAuditListOptions = {}): Promise<EpisodeArcAuditEntry[]> {
+    const where: string[] = [];
+    const params: Array<string | number> = [];
+    if (options.arcId !== undefined) {
+      params.push(parseRequiredText(options.arcId, 'arcId'));
+      where.push(`arc_id = $${params.length}`);
+    }
+    params.push(normalizeLimit(options.limit));
+    const limitIndex = params.length;
+    const whereClause = where.length > 0 ? `WHERE ${where.join(' AND ')}` : '';
+    const rows = await queryRows<PostgresEpisodeArcAuditRow>(this.pool, `
+      SELECT *
+      FROM l01_episode_arc_audit
+      ${whereClause}
+      ORDER BY created_at ASC, id ASC
+      LIMIT $${limitIndex}
+    `, params);
+    return rows.map(mapArcAuditRow);
+  }
+
+  /**
+   * Within-transaction helper shared by the public repoint surface and by
+   * supersession/merge paths: no arc membership may silently dangle on an
+   * episode that stops being live.
+   */
+  private async repointArcsForEpisode(
+    client: PoolClient,
+    fromEpisodeId: string,
+    toEpisodeId: string,
+    audit: EpisodeArcMutationAudit,
+    nowIso: string,
+  ): Promise<EpisodeArcRepointResult> {
+    const result: EpisodeArcRepointResult = { repointedArcIds: [], removedArcIds: [] };
+    const rows = (await client.query<PostgresEpisodeArcStateRow>(`
+      SELECT id, arc_json, source_episode_id, target_episode_id, status, superseded_by_arc_id
+      FROM l01_episode_arcs
+      WHERE (source_episode_id = $1 OR target_episode_id = $1) AND ${ACTIVE_CANONICAL_ARC_FILTER}
+      ORDER BY updated_at ASC, id ASC
+    `, [fromEpisodeId])).rows;
+
+    for (const row of rows) {
+      const newSource = row.source_episode_id === fromEpisodeId ? toEpisodeId : row.source_episode_id;
+      const newTarget = row.target_episode_id === fromEpisodeId ? toEpisodeId : row.target_episode_id;
+      const previous = {
+        sourceEpisodeId: row.source_episode_id,
+        targetEpisodeId: row.target_episode_id,
+      };
+
+      if (newSource === newTarget) {
+        await this.retireArc(client, row.id, null, nowIso);
+        await this.insertArcAudit(client, row.id, 'removed', audit, {
+          cause: 'repoint_self_loop',
+          previous,
+          movedToEpisodeId: toEpisodeId,
+        }, nowIso);
+        result.removedArcIds.push(row.id);
+        continue;
+      }
+
+      const duplicates = (await client.query<{ id: string }>(`
+        SELECT id
+        FROM l01_episode_arcs
+        WHERE id <> $1
+          AND (
+            (source_episode_id = $2 AND target_episode_id = $3)
+            OR (source_episode_id = $3 AND target_episode_id = $2)
+          )
+          AND ${ACTIVE_CANONICAL_ARC_FILTER}
+        LIMIT 1
+      `, [row.id, newSource, newTarget])).rows;
+      if (duplicates.length > 0) {
+        const duplicate = duplicates[0];
+        await this.retireArc(client, row.id, duplicate.id, nowIso);
+        await this.insertArcAudit(client, row.id, 'removed', audit, {
+          cause: 'repoint_duplicate',
+          previous,
+          duplicateOfArcId: duplicate.id,
+          movedToEpisodeId: toEpisodeId,
+        }, nowIso);
+        result.removedArcIds.push(row.id);
+        continue;
+      }
+
+      const arc = parseEpisodeArc({
+        ...parseArcJson(row.arc_json, row.id),
+        sourceEpisodeId: newSource,
+        targetEpisodeId: newTarget,
+        updatedAt: nowIso,
+      });
+      await client.query(`
+        UPDATE l01_episode_arcs
+        SET source_episode_id = $2, target_episode_id = $3, arc_json = $4::jsonb, updated_at = $5
+        WHERE id = $1
+      `, [row.id, newSource, newTarget, serializeEpisodeArc(arc), nowIso]);
+      await this.insertArcAudit(client, row.id, 'repointed', audit, {
+        previous,
+        next: { sourceEpisodeId: newSource, targetEpisodeId: newTarget },
+      }, nowIso);
+      result.repointedArcIds.push(row.id);
+    }
+
+    return result;
+  }
+
+  private async retireArc(
+    client: PoolClient,
+    arcId: string,
+    supersededByArcId: string | null,
+    nowIso: string,
+  ): Promise<void> {
+    await client.query(`
+      UPDATE l01_episode_arcs
+      SET status = 'superseded', superseded_by_arc_id = $2, updated_at = $3
+      WHERE id = $1
+    `, [arcId, supersededByArcId, nowIso]);
+  }
+
+  private async insertArcAudit(
+    client: PoolClient,
+    arcId: string,
+    action: EpisodeArcAuditAction,
+    audit: EpisodeArcMutationAudit,
+    details: Record<string, unknown>,
+    createdAt: string,
+  ): Promise<void> {
+    await client.query(`
+      INSERT INTO l01_episode_arc_audit (id, arc_id, action, actor, reason, details_json, created_at)
+      VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7)
+    `, [this.idFactory(), arcId, action, audit.actor, audit.reason, json(details), createdAt]);
   }
 
   async listEpisodeArcsForEpisode(
@@ -1248,7 +1499,7 @@ export class PostgresEpisodicStore implements EpisodicStorePort {
     const normalized = normalizeEpisodeClaimTransferInput(input);
     const transferredAt = normalizeInstant(normalized.transferredAt, 'transferredAt') ?? this.now().toISOString();
 
-    const transferredClaimKeys = await withPostgresClient(this.pool, async (client) => {
+    const transferOutcome = await withPostgresClient(this.pool, async (client) => {
       await this.assertLiveEpisode(normalized.targetEpisodeId, 'transfer.targetEpisodeId', client);
       for (const sourceEpisodeId of normalized.sourceEpisodeIds) {
         await this.assertLiveEpisode(sourceEpisodeId, 'transfer.sourceEpisodeIds', client);
@@ -1290,21 +1541,50 @@ export class PostgresEpisodicStore implements EpisodicStorePort {
         WHERE id = ANY($3::text[])
       `, [normalized.targetEpisodeId, transferredAt, normalized.sourceEpisodeIds]);
 
-      return activeClaims.map(claim => claim.claim_key).sort();
+      // Superseded sources must not keep live arc memberships: re-point
+      // every arc onto the consolidated target in the same transaction.
+      const repointAudit: EpisodeArcMutationAudit = {
+        actor: 'consolidation_repoint',
+        reason: normalized.reason,
+      };
+      const repointedArcIds: string[] = [];
+      const removedArcIds: string[] = [];
+      for (const sourceEpisodeId of normalized.sourceEpisodeIds) {
+        const repointed = await this.repointArcsForEpisode(
+          client,
+          sourceEpisodeId,
+          normalized.targetEpisodeId,
+          repointAudit,
+          transferredAt,
+        );
+        repointedArcIds.push(...repointed.repointedArcIds);
+        removedArcIds.push(...repointed.removedArcIds);
+      }
+
+      // An arc re-pointed for one source and then retired for a later source
+      // (e.g. it collapsed between two superseded siblings) counts as removed.
+      const removedSet = new Set(removedArcIds);
+      return {
+        transferredClaimKeys: activeClaims.map(claim => claim.claim_key).sort(),
+        repointedArcIds: repointedArcIds.filter(id => !removedSet.has(id)),
+        removedArcIds,
+      };
     });
 
-    const transferredClaims = transferredClaimKeys.length > 0
+    const transferredClaims = transferOutcome.transferredClaimKeys.length > 0
       ? await this.listEpisodeMessageClaims({
         episodeId: normalized.targetEpisodeId,
-        claimKeys: transferredClaimKeys,
+        claimKeys: transferOutcome.transferredClaimKeys,
         status: 'active',
-        limit: Math.min(MAX_LIMIT, transferredClaimKeys.length),
+        limit: Math.min(MAX_LIMIT, transferOutcome.transferredClaimKeys.length),
       })
       : [];
     return {
       targetEpisodeId: normalized.targetEpisodeId,
       supersededEpisodeIds: normalized.sourceEpisodeIds,
       transferredClaims,
+      repointedArcIds: transferOutcome.repointedArcIds,
+      removedArcIds: transferOutcome.removedArcIds,
     };
   }
 

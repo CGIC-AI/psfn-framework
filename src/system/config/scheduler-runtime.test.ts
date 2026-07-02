@@ -37,6 +37,8 @@ const MEMORY_LANE_BLOCKS = {
     passIntervalDays: 6,
     reviewWindowDays: 30,
     minConfidence: 0.5,
+    maxArcsPerRun: 12,
+    maxEpisodesPerRun: 60,
   },
 } as const;
 

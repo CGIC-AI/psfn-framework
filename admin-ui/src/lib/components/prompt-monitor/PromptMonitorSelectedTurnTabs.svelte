@@ -1,13 +1,17 @@
 <script lang="ts">
   import type { GardenEventEnvelope } from '$lib/events/envelope';
   import {
+    buildStaticPrefixHashTimeline,
+    diffPromptPlanBlocks,
     formatPromptMonitorStageLabel,
     PROMPT_MONITOR_STAGE_ORDER,
+    resolvePromptMonitorPlan,
     resolvePromptMonitorPromptLoom,
     type PromptMonitorMetrics,
     type PromptMonitorTurn,
+    type PromptPlanBlockDiffEntry,
   } from '$lib/events/prompt-monitor';
-  import type { AdminPromptSectionCacheability } from '$lib/types';
+  import type { AdminPromptPlanBlock, AdminPromptSectionCacheability } from '$lib/types';
   import PromptMonitorMemoryList from './PromptMonitorMemoryList.svelte';
   import PromptMonitorMessageList from './PromptMonitorMessageList.svelte';
   import PromptMonitorSectionTelemetryList from './PromptMonitorSectionTelemetryList.svelte';
@@ -17,11 +21,14 @@
 
   type SelectedTurnTab =
     | 'summary'
+    | 'blocks'
     | 'prompt'
     | 'context'
     | 'tools'
     | 'exact'
     | 'provider'
+    | 'cache'
+    | 'diff'
     | 'timeline'
     | 'raw';
 
@@ -29,35 +36,114 @@
     turn: PromptMonitorTurn;
     metrics?: PromptMonitorMetrics | null;
     selectedChannelEvents?: GardenEventEnvelope[];
+    /** Recent turns for the same session: feeds the turn-diff baseline picker and the static-hash timeline. */
+    turns?: PromptMonitorTurn[];
   }
 
   let {
     turn,
     metrics = null,
     selectedChannelEvents = [],
+    turns = [],
   }: Props = $props();
 
   const selectedTurnTabs = [
     { id: 'summary', label: 'Summary', description: 'Route, prompt, timing, and outcome triage' },
+    { id: 'blocks', label: 'Blocks', description: 'Ordered PromptPlan blocks with producer, scope, volatility, and token estimates' },
     { id: 'prompt', label: 'Prompt Assembly', description: 'Templates, rendered blocks, assembled prompt, and model context' },
     { id: 'context', label: 'Context & Memory', description: 'Session inputs, memory retrievals, withholds, and metadata' },
-    { id: 'tools', label: 'Tools', description: 'Active schemas and adaptive activation state' },
+    { id: 'tools', label: 'Tools', description: 'Shipped tool definitions (plan-backed) and adaptive activation state' },
     { id: 'exact', label: 'Exact Payload', description: 'Exact provider input, tools, response, memory capture, and tool activity' },
-    { id: 'provider', label: 'Provider Wire', description: 'Provider routing, system-role transport, payload, and response' },
+    { id: 'provider', label: 'Provider Wire', description: 'Serialized provider payload from the PromptPlan, routing, and response' },
+    { id: 'cache', label: 'Cache', description: 'Volatility regions, cache boundaries, static-prefix hash timeline, and provider cache telemetry' },
+    { id: 'diff', label: 'Turn Diff', description: 'Block-level plan diff between this turn and a baseline turn' },
     { id: 'timeline', label: 'Timeline', description: 'Stage order, elapsed time, and stage payloads' },
     { id: 'raw', label: 'Raw Events', description: 'Record, snapshot, stage telemetry, and live bus envelopes' },
   ] satisfies Array<{ id: SelectedTurnTab; label: string; description: string }>;
 
   let activeTab = $state<SelectedTurnTab>('summary');
   let lastTurnId = $state<string | null>(null);
+  let diffBaselineTurnId = $state<string | null>(null);
   const promptLoom = $derived(resolvePromptMonitorPromptLoom(turn));
+  const plan = $derived(resolvePromptMonitorPlan(turn));
+  const isLegacyTurn = $derived(plan === null);
+  const LEGACY_TURN_LABEL = 'Legacy turn (pre-plan): this record predates the PromptPlan snapshot; views degrade to recorded strings.';
 
   $effect(() => {
     if (lastTurnId !== turn.turnId) {
       lastTurnId = turn.turnId;
       activeTab = 'summary';
+      diffBaselineTurnId = null;
     }
   });
+
+  // ── Turn-diff affordance (E2.3) ──
+  const diffCandidates = $derived(turns.filter(candidate => candidate.turnId !== turn.turnId));
+  // Default baseline: the previous (next-older) turn in the session ledger.
+  const defaultDiffBaseline = $derived.by(() => {
+    const index = turns.findIndex(candidate => candidate.turnId === turn.turnId);
+    if (index >= 0 && index + 1 < turns.length) return turns[index + 1];
+    return diffCandidates[0] ?? null;
+  });
+  const diffBaselineTurn = $derived(
+    diffCandidates.find(candidate => candidate.turnId === diffBaselineTurnId) ?? defaultDiffBaseline,
+  );
+  const diffBaselinePlan = $derived(diffBaselineTurn ? resolvePromptMonitorPlan(diffBaselineTurn) : null);
+  const blockDiff = $derived(diffPromptPlanBlocks(diffBaselinePlan, plan));
+
+  // ── Cache projection (E2.3) ──
+  const staticHashTimeline = $derived(buildStaticPrefixHashTimeline(turns));
+  const cacheRegions = $derived.by(() => {
+    if (!plan) return [];
+    const { staticBoundary, sessionStableBoundary } = plan.cachePlan;
+    return [
+      { name: 'static', blocks: plan.blocks.slice(0, staticBoundary) },
+      { name: 'session_stable', blocks: plan.blocks.slice(staticBoundary, sessionStableBoundary) },
+      { name: 'turn', blocks: plan.blocks.slice(sessionStableBoundary) },
+    ] as Array<{ name: 'static' | 'session_stable' | 'turn'; blocks: AdminPromptPlanBlock[] }>;
+  });
+  const providerCacheTelemetry = $derived(
+    turn.snapshot?.promptContext?.providerObservability?.promptCaching ?? null,
+  );
+
+  function regionTokens(blocks: readonly AdminPromptPlanBlock[]): number {
+    return blocks.reduce((sum, block) => sum + block.tokensEst, 0);
+  }
+
+  function volatilityTone(volatility: string): string {
+    switch (volatility) {
+      case 'static':
+        return 'border-moss-300 bg-moss-50 text-moss-800';
+      case 'session_stable':
+        return 'border-gold-300 bg-gold-50 text-shadow-900';
+      case 'turn':
+        return 'border-wilt-300 bg-wilt-50 text-wilt-800';
+      default:
+        return 'border-bark-300 bg-bark-100 text-shadow-700';
+    }
+  }
+
+  function diffStatusTone(status: PromptPlanBlockDiffEntry['status']): string {
+    switch (status) {
+      case 'added':
+        return 'border-moss-300 bg-moss-50 text-moss-800';
+      case 'removed':
+        return 'border-wilt-300 bg-wilt-50 text-wilt-800';
+      case 'changed':
+        return 'border-gold-300 bg-gold-50 text-shadow-900';
+      default:
+        return 'border-bark-300 bg-bark-100 text-shadow-700';
+    }
+  }
+
+  function formatBytesDelta(entry: PromptPlanBlockDiffEntry): string {
+    if (entry.status === 'added') return `+${entry.bytesAfter ?? 0} bytes`;
+    if (entry.status === 'removed') return `-${entry.bytesBefore ?? 0} bytes`;
+    if (entry.bytesDelta == null) return '—';
+    if (entry.bytesDelta === 0) return `±0 bytes (${entry.bytesAfter ?? 0} total, content changed)`;
+    const sign = entry.bytesDelta > 0 ? '+' : '';
+    return `${sign}${entry.bytesDelta} bytes (${entry.bytesBefore ?? 0} → ${entry.bytesAfter ?? 0})`;
+  }
 
   function toTimestamp(value: number | string | undefined): number | null {
     if (typeof value === 'number' && Number.isFinite(value)) return value;
@@ -167,13 +253,6 @@
 
   function formatStageName(value: string | null | undefined): string {
     return value ? formatPromptMonitorStageLabel(value) : '—';
-  }
-
-  function providerWireMessages(currentTurn: PromptMonitorTurn): Array<{ role: string; content: string }> {
-    return currentTurn.snapshot?.promptContext?.providerObservability?.providerWireMessages.map(message => ({
-      role: `${humanizeToken(message.role)} · ${humanizeToken(message.source)}`,
-      content: message.content,
-    })) ?? [];
   }
 
   function cacheabilityFor(
@@ -463,6 +542,53 @@
           />
         </div>
       </div>
+    {:else if activeTab === 'blocks'}
+      {#if !plan}
+        <div class="rounded-xl border border-gold-300 bg-gold-50 p-4 text-sm text-shadow-800">
+          <p class="font-medium text-shadow-900">Legacy turn (pre-plan)</p>
+          <p class="mt-1">{LEGACY_TURN_LABEL}</p>
+          <p class="mt-1">
+            Recorded prompt strings for this turn are available in the
+            <span class="font-medium">Prompt Assembly</span> and <span class="font-medium">Exact Payload</span> tabs.
+          </p>
+        </div>
+      {:else}
+        <div class="rounded-xl border border-bark-200 bg-white p-3 text-xs text-shadow-700">
+          <span class="font-medium text-shadow-900">PromptPlan v{plan.schemaVersion}:</span>
+          {plan.blocks.length} ordered blocks · {regionTokens(plan.blocks)} tokens (est.) ·
+          cache boundaries static&lt;{plan.cachePlan.staticBoundary} · session_stable&lt;{plan.cachePlan.sessionStableBoundary}.
+          These are the exact ordered blocks the provider system prompt was serialized from.
+        </div>
+        <div class="space-y-3">
+          {#each plan.blocks as block, index (block.id)}
+            <div class="rounded-xl border border-bark-200 bg-white p-4">
+              <div class="flex flex-wrap items-center gap-2">
+                <span class="rounded-full border border-bark-300 bg-white px-2 py-0.5 text-xs text-shadow-700">#{index + 1}</span>
+                <span class="font-mono text-sm font-medium text-shadow-900">{block.id}</span>
+                <span class={`rounded-full border px-2 py-0.5 text-xs font-medium uppercase tracking-wide ${volatilityTone(block.volatility)}`}>
+                  {block.volatility.replace('_', ' ')}
+                </span>
+                <span class="rounded-full border border-bark-300 bg-bark-50 px-2 py-0.5 text-xs text-shadow-700">{block.layer}</span>
+                <span class="rounded-full border border-bark-300 bg-bark-50 px-2 py-0.5 text-xs text-shadow-700">
+                  {block.tokensEst} tokens (est.)
+                </span>
+              </div>
+              <p class="mt-2 text-xs text-shadow-600">
+                producer <span class="font-mono">{block.producer}</span>
+                · scope <span class="font-mono">{block.scopeKey ?? '—'}</span>
+              </p>
+              <div class="mt-2 text-sm">
+                <PromptMonitorTextBlock
+                  title="Rendered Text"
+                  value={block.renderedText}
+                  emptyText="Block rendered empty text."
+                  maxHeightClass="max-h-72"
+                />
+              </div>
+            </div>
+          {/each}
+        </div>
+      {/if}
     {:else if activeTab === 'prompt'}
       <div class="grid grid-cols-1 gap-4 xl:grid-cols-2">
         <div class="rounded-xl border border-bark-200 bg-white p-4">
@@ -735,11 +861,22 @@
         exactly as shown (name, description, input schema). REPL-only helpers (e.g.
         <span class="font-mono">grep</span>, <span class="font-mono">memory_search</span>) run only inside the
         <span class="font-mono">analysis_workbench</span> sandbox and are not part of this provider-visible catalog.
+        {#if plan}
+          This view is <span class="font-medium">plan-backed</span>: the definitions come from
+          <span class="font-mono">plan.toolDefinitions</span>, the exact set serialized to the provider.
+        {:else}
+          <span class="font-medium">Legacy turn (pre-plan):</span> definitions come from the recorded
+          tool-context snapshot.
+        {/if}
       </div>
       <div class="grid grid-cols-1 gap-4 xl:grid-cols-2">
         <PromptMonitorToolList
-          title="Active Tool Schemas (direct, provider-visible)"
-          tools={turn.snapshot?.toolContext?.activeTools ?? []}
+          title={plan && plan.toolDefinitions.length > 0
+            ? 'Shipped Tool Definitions (plan-backed, provider-visible)'
+            : 'Active Tool Schemas (recorded snapshot, provider-visible)'}
+          tools={plan && plan.toolDefinitions.length > 0
+            ? plan.toolDefinitions
+            : turn.snapshot?.toolContext?.activeTools ?? []}
         />
 
         <div class="rounded-xl border border-bark-200 bg-white p-4">
@@ -1081,6 +1218,47 @@
         </div>
       </div>
 
+      <div class="rounded-xl border border-bark-200 bg-white p-4">
+        <div class="flex flex-wrap items-center gap-2">
+          <h3 class="font-medium text-shadow-900">Serialized Provider Payload</h3>
+          <span class="rounded-full border border-bark-300 bg-bark-50 px-2 py-0.5 text-xs font-medium uppercase tracking-wide text-shadow-700">
+            {promptLoom.providerWire.source === 'prompt_plan' ? 'from PromptPlan' : 'recorded snapshot'}
+          </span>
+          {#if promptLoom.providerWire.legacy}
+            <span class="rounded-full border border-gold-300 bg-gold-50 px-2 py-0.5 text-xs font-medium uppercase tracking-wide text-shadow-900">
+              legacy turn (pre-plan)
+            </span>
+          {/if}
+          {#if promptLoom.providerWire.systemRoleTransport}
+            <span class="rounded-full border border-bark-300 bg-white px-2 py-0.5 text-xs text-shadow-700">
+              transport: {promptLoom.providerWire.systemRoleTransport}
+            </span>
+          {/if}
+        </div>
+        <p class="mt-1 text-xs text-shadow-600">
+          {#if promptLoom.providerWire.source === 'prompt_plan'}
+            System prompt, message array, and tool definitions serialized from the persisted PromptPlan —
+            byte-equal to what shipped to the provider (single assembly path).
+          {:else}
+            {LEGACY_TURN_LABEL} The payload below is the recorded provider-wire capture.
+          {/if}
+        </p>
+        <div class="mt-3 space-y-3 text-sm">
+          <PromptMonitorTextBlock
+            title="System Prompt (as shipped)"
+            value={promptLoom.providerWire.systemPrompt}
+            emptyText="No serialized system prompt recorded."
+            maxHeightClass="max-h-[28rem]"
+          />
+          <PromptMonitorTextBlock
+            title={`Tool Definitions (${promptLoom.providerWire.toolDefinitions.length}, as shipped)`}
+            value={formatJson(promptLoom.providerWire.toolDefinitions)}
+            emptyText="No tool definitions shipped this turn."
+            maxHeightClass="max-h-[24rem]"
+          />
+        </div>
+      </div>
+
       <p class="text-xs text-shadow-600">
         Provider wire messages carry the full, untruncated content sent to the provider. If the
         message set looks shorter than the raw session history, that reflects the real
@@ -1088,8 +1266,11 @@
       </p>
       <div class="grid grid-cols-1 gap-4 xl:grid-cols-2">
         <PromptMonitorMessageList
-          title={`Provider Wire Messages (${providerWireMessages(turn).length})`}
-          messages={providerWireMessages(turn)}
+          title={`Provider Wire Messages (${promptLoom.providerWire.messages.length})`}
+          messages={promptLoom.providerWire.messages.map(message => ({
+            role: `${humanizeToken(message.role)} · ${humanizeToken(message.source)}`,
+            content: message.content,
+          }))}
           emptyText="No provider-wire message snapshot recorded."
         />
 
@@ -1128,6 +1309,208 @@
             />
           </div>
         </div>
+      </div>
+    {:else if activeTab === 'cache'}
+      {#if !plan}
+        <div class="rounded-xl border border-gold-300 bg-gold-50 p-4 text-sm text-shadow-800">
+          <p class="font-medium text-shadow-900">Legacy turn (pre-plan)</p>
+          <p class="mt-1">{LEGACY_TURN_LABEL} No cache plan is recorded for this turn.</p>
+        </div>
+      {:else}
+        <div class="rounded-xl border border-bark-200 bg-white p-4">
+          <h3 class="font-medium text-shadow-900">Volatility Regions</h3>
+          <p class="mt-1 text-xs text-shadow-600">
+            Ordered cache regions from the plan's cachePlan: blocks[0..{plan.cachePlan.staticBoundary}) are
+            static, blocks[{plan.cachePlan.staticBoundary}..{plan.cachePlan.sessionStableBoundary}) are
+            session-stable, the rest re-render every turn.
+          </p>
+          <div class="mt-3 space-y-3">
+            {#each cacheRegions as region (region.name)}
+              <div class="rounded-lg border border-bark-200 bg-bark-50 p-3">
+                <div class="flex flex-wrap items-center gap-2">
+                  <span class={`rounded-full border px-2 py-0.5 text-xs font-medium uppercase tracking-wide ${volatilityTone(region.name)}`}>
+                    {region.name.replace('_', ' ')}
+                  </span>
+                  <span class="text-sm text-shadow-700">
+                    {region.blocks.length} block{region.blocks.length === 1 ? '' : 's'} · {regionTokens(region.blocks)} tokens (est.)
+                  </span>
+                </div>
+                {#if region.blocks.length === 0}
+                  <p class="mt-2 text-sm text-shadow-600">No blocks in this region.</p>
+                {:else}
+                  <div class="mt-2 flex flex-wrap gap-2">
+                    {#each region.blocks as block (block.id)}
+                      <span class="rounded-full border border-bark-300 bg-white px-2 py-0.5 font-mono text-xs text-shadow-800" title={`producer ${block.producer} · scope ${block.scopeKey ?? '—'} · ${block.tokensEst} tokens (est.)`}>
+                        {block.id}
+                      </span>
+                    {/each}
+                  </div>
+                {/if}
+              </div>
+            {/each}
+          </div>
+        </div>
+      {/if}
+
+      <div class="grid grid-cols-1 gap-4 xl:grid-cols-2">
+        <div class="rounded-xl border border-bark-200 bg-white p-4">
+          <h3 class="font-medium text-shadow-900">Static-Prefix Hash Timeline</h3>
+          <p class="mt-1 text-xs text-shadow-600">
+            Static hash across the loaded recent turns (oldest first). A stable hash means the frozen
+            static prefix stayed byte-identical turn over turn.
+          </p>
+          {#if staticHashTimeline.length === 0}
+            <p class="mt-3 text-sm text-shadow-600">No turns loaded for this session.</p>
+          {:else}
+            <div class="mt-3 space-y-2">
+              {#each staticHashTimeline as entry (entry.turnId)}
+                <div class="flex flex-wrap items-center justify-between gap-2 rounded-lg border px-3 py-2
+                  {entry.turnId === turn.turnId ? 'border-gold-400 bg-gold-50' : 'border-bark-200 bg-white'}">
+                  <div class="min-w-0">
+                    <p class="truncate font-mono text-sm text-shadow-900">{truncateValue(entry.turnId, 24)}</p>
+                    <p class="mt-0.5 font-mono text-xs text-shadow-600">{truncateValue(entry.staticHash, 24)}</p>
+                  </div>
+                  <span class={`shrink-0 rounded-full border px-2 py-0.5 text-xs font-medium ${
+                    entry.changedFromPrevious === null
+                      ? 'border-bark-300 bg-bark-100 text-shadow-600'
+                      : entry.changedFromPrevious
+                        ? 'border-wilt-300 bg-wilt-50 text-wilt-700'
+                        : 'border-moss-300 bg-moss-50 text-moss-700'
+                  }`}>
+                    {entry.changedFromPrevious === null
+                      ? 'no prior hash'
+                      : entry.changedFromPrevious
+                        ? 'hash changed'
+                        : 'hash stable'}
+                  </span>
+                </div>
+              {/each}
+            </div>
+          {/if}
+        </div>
+
+        <div class="rounded-xl border border-bark-200 bg-white p-4">
+          <h3 class="font-medium text-shadow-900">Provider Cache Telemetry</h3>
+          <p class="mt-1 text-xs text-shadow-600">
+            Provider cache hit/miss telemetry lands in E2.4. Whatever cache fields the runtime already
+            records for this turn are rendered below, absent-tolerant.
+          </p>
+          <div class="mt-3 text-sm">
+            <PromptMonitorTextBlock
+              title="promptCaching (recorded)"
+              value={formatJson(providerCacheTelemetry)}
+              emptyText="No provider cache telemetry recorded for this turn (placeholder until E2.4)."
+              maxHeightClass="max-h-64"
+            />
+          </div>
+        </div>
+      </div>
+    {:else if activeTab === 'diff'}
+      <div class="rounded-xl border border-bark-200 bg-white p-4">
+        <div class="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h3 class="font-medium text-shadow-900">Turn Diff (block-level)</h3>
+            <p class="mt-1 text-xs text-shadow-600">
+              Compares the selected turn's PromptPlan blocks against a baseline turn: which blocks
+              appeared, disappeared, or changed (id-level, with a changed-bytes indicator per block).
+            </p>
+          </div>
+          <label class="flex items-center gap-2 text-sm text-shadow-700">
+            <span>Baseline</span>
+            <select
+              class="rounded-lg border border-bark-300 bg-white px-2 py-1.5 font-mono text-sm text-shadow-900"
+              value={diffBaselineTurn?.turnId ?? ''}
+              onchange={(event) => diffBaselineTurnId = (event.currentTarget as HTMLSelectElement).value || null}
+              disabled={diffCandidates.length === 0}
+            >
+              {#if diffCandidates.length === 0}
+                <option value="">no other turns loaded</option>
+              {/if}
+              {#each diffCandidates as candidate (candidate.turnId)}
+                <option value={candidate.turnId}>
+                  {candidate.turnId}{candidate.turnId === defaultDiffBaseline?.turnId ? ' (previous)' : ''}
+                </option>
+              {/each}
+            </select>
+          </label>
+        </div>
+
+        {#if !plan}
+          <div class="mt-3 rounded-lg border border-gold-300 bg-gold-50 p-3 text-sm text-shadow-800">
+            <p class="font-medium text-shadow-900">Legacy turn (pre-plan)</p>
+            <p class="mt-1">{LEGACY_TURN_LABEL} Block-level diffing needs a PromptPlan on both turns.</p>
+          </div>
+        {:else if !diffBaselineTurn}
+          <p class="mt-3 text-sm text-shadow-600">
+            No other turns are loaded for this session, so there is nothing to diff against.
+          </p>
+        {:else if !diffBaselinePlan}
+          <div class="mt-3 rounded-lg border border-gold-300 bg-gold-50 p-3 text-sm text-shadow-800">
+            <p class="font-medium text-shadow-900">Baseline is a legacy turn (pre-plan)</p>
+            <p class="mt-1">
+              Turn <span class="font-mono">{truncateValue(diffBaselineTurn.turnId, 24)}</span> predates the
+              PromptPlan snapshot; pick a plan-backed baseline to diff.
+            </p>
+          </div>
+        {:else}
+          <div class="mt-4 grid grid-cols-2 gap-3 text-sm sm:grid-cols-5">
+            <div class="rounded-lg border border-bark-200 bg-white p-3">
+              <p class="text-shadow-600">Added</p>
+              <p class="mt-1 font-serif text-2xl {blockDiff.addedCount > 0 ? 'text-moss-700' : 'text-shadow-900'}">{blockDiff.addedCount}</p>
+            </div>
+            <div class="rounded-lg border border-bark-200 bg-white p-3">
+              <p class="text-shadow-600">Removed</p>
+              <p class="mt-1 font-serif text-2xl {blockDiff.removedCount > 0 ? 'text-wilt-600' : 'text-shadow-900'}">{blockDiff.removedCount}</p>
+            </div>
+            <div class="rounded-lg border border-bark-200 bg-white p-3">
+              <p class="text-shadow-600">Changed</p>
+              <p class="mt-1 font-serif text-2xl {blockDiff.changedCount > 0 ? 'text-shadow-900' : 'text-shadow-900'}">{blockDiff.changedCount}</p>
+            </div>
+            <div class="rounded-lg border border-bark-200 bg-white p-3">
+              <p class="text-shadow-600">Unchanged</p>
+              <p class="mt-1 font-serif text-2xl text-shadow-900">{blockDiff.unchangedCount}</p>
+            </div>
+            <div class="rounded-lg border p-3 {blockDiff.staticRegionChangedCount === 0 ? 'border-moss-300 bg-moss-50' : 'border-wilt-300 bg-wilt-50'}">
+              <p class="text-shadow-600">Static Region Changed</p>
+              <p class="mt-1 font-serif text-2xl {blockDiff.staticRegionChangedCount === 0 ? 'text-moss-700' : 'text-wilt-600'}">
+                {blockDiff.staticRegionChangedCount}
+              </p>
+            </div>
+          </div>
+          <p class="mt-2 text-xs text-shadow-600">
+            {#if blockDiff.staticRegionChangedCount === 0}
+              Static region is byte-stable against the baseline: zero changed static blocks.
+            {:else}
+              Static region changed against the baseline — the frozen prefix cache line was broken.
+            {/if}
+          </p>
+
+          <div class="mt-4 space-y-2">
+            {#each blockDiff.entries as entry (entry.id)}
+              <div class="rounded-lg border border-bark-200 bg-white px-3 py-2">
+                <div class="flex flex-wrap items-center gap-2">
+                  <span class={`rounded-full border px-2 py-0.5 text-xs font-medium uppercase tracking-wide ${diffStatusTone(entry.status)}`}>
+                    {entry.status}
+                  </span>
+                  <span class="font-mono text-sm font-medium text-shadow-900">{entry.id}</span>
+                  {#if entry.volatility}
+                    <span class={`rounded-full border px-2 py-0.5 text-xs font-medium uppercase tracking-wide ${volatilityTone(entry.volatility)}`}>
+                      {entry.volatility.replace('_', ' ')}
+                    </span>
+                  {/if}
+                  {#if entry.layer}
+                    <span class="rounded-full border border-bark-300 bg-bark-50 px-2 py-0.5 text-xs text-shadow-700">{entry.layer}</span>
+                  {/if}
+                  <span class="ml-auto font-mono text-xs text-shadow-600">{formatBytesDelta(entry)}</span>
+                </div>
+                <p class="mt-1 text-xs text-shadow-600">
+                  producer <span class="font-mono">{entry.producer ?? '—'}</span>
+                  · scope <span class="font-mono">{entry.scopeKey ?? '—'}</span>
+                </p>
+              </div>
+            {/each}
+          </div>
+        {/if}
       </div>
     {:else if activeTab === 'timeline'}
       <div class="rounded-xl border border-bark-200 bg-white p-4">

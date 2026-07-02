@@ -427,6 +427,20 @@ export interface AdminTurnProviderSystemRoleData {
   usesOutOfBandSystemPrompt: boolean;
 }
 
+/**
+ * Provider prompt-cache telemetry mirror, rendered absent-tolerant in the
+ * Loom Cache tab. E2.4 populates hit/miss fields; render whatever exists.
+ */
+export interface AdminTurnPromptCachingObservabilityData {
+  configured: boolean;
+  engaged: boolean;
+  strategy?: string;
+  retention?: string;
+  scope?: string;
+  sessionId?: string;
+  reason?: string;
+}
+
 export interface AdminTurnProviderObservabilityData {
   routeKind: string;
   requestedProvider: string;
@@ -436,6 +450,7 @@ export interface AdminTurnProviderObservabilityData {
   backendApi: string;
   backendBaseUrl?: string;
   systemRole: AdminTurnProviderSystemRoleData;
+  promptCaching?: AdminTurnPromptCachingObservabilityData;
   providerWireMessages: AdminTurnProviderWireMessage[];
 }
 

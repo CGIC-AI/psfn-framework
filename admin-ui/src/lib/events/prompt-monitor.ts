@@ -446,6 +446,33 @@ function joinPlanBlockTexts(blocks: readonly AdminPromptPlanBlock[]): string {
     .join('\n\n');
 }
 
+const DATETIME_ANCHOR_BLOCK_ID = 'runtime.current_datetime';
+
+/**
+ * Mirror of stripCurrentDatetimePromptBlocks (turn-execution/prompt-plan.ts):
+ * stale datetime anchors are stripped fail-closed before the plan's own
+ * ordered anchor block is appended last. Kept regex-identical so the live-bus
+ * fallback serialization matches the server projection byte-for-byte.
+ */
+function stripCurrentDatetimeBlocksView(text: string): string {
+  return text
+    .replace(/<runtime\.current_datetime(?:\s+[^>]*)?>\s*[\s\S]*?<\/runtime\.current_datetime>/g, '')
+    .replace(/<current_datetime>\s*[\s\S]*?<\/current_datetime>/g, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+/** Mirror of serializePromptPlanSystemPrompt for the live-bus fallback. */
+function serializePlanSystemPromptView(plan: AdminPromptPlanData): string {
+  const anchorBlock = plan.blocks.find(block => block.id === DATETIME_ANCHOR_BLOCK_ID);
+  const body = stripCurrentDatetimeBlocksView(
+    joinPlanBlockTexts(plan.blocks.filter(block => block.id !== DATETIME_ANCHOR_BLOCK_ID)),
+  );
+  const anchor = anchorBlock?.renderedText.trim() ?? '';
+  if (!anchor) return body;
+  return body ? `${body}\n\n${anchor}` : anchor;
+}
+
 interface PromptLoomPlanStrings {
   renderedStaticPrefix: string | null;
   renderedDynamicSuffix: string | null;
@@ -467,9 +494,6 @@ function derivePromptLoomPlanStrings(
 ): PromptLoomPlanStrings {
   const plan = snapshot?.plan;
   if (plan) {
-    const anchorBlock = plan.blocks.find(block => block.id === 'runtime.current_datetime');
-    const body = joinPlanBlockTexts(plan.blocks.filter(block => block.id !== 'runtime.current_datetime'));
-    const anchor = anchorBlock?.renderedText.trim() ?? '';
     return {
       renderedStaticPrefix: getPlanBlockText(plan, 'static_prefix') ?? '',
       renderedDynamicSuffix: getPlanBlockText(plan, 'dynamic_suffix') ?? '',
@@ -479,7 +503,7 @@ function derivePromptLoomPlanStrings(
       assembledPrompt: joinPlanBlockTexts(
         plan.blocks.filter(block => block.layer === 'prompt_stack' || block.layer === 'runtime'),
       ),
-      finalSystemPrompt: anchor ? (body ? `${body}\n\n${anchor}` : anchor) : body,
+      finalSystemPrompt: serializePlanSystemPromptView(plan),
       contextMessages: clonePromptContextMessagesForLoom(plan.messages),
     };
   }
@@ -496,6 +520,33 @@ function derivePromptLoomPlanStrings(
   };
 }
 
+/**
+ * Live-bus fallback Provider Wire view. The recorded provider-wire capture is
+ * byte-equal to the plan serialization at runtime (E2.2 single assembly path),
+ * so the fallback serves the capture with an explicit 'recorded_snapshot'
+ * source marker; the persisted-record path serves the plan-derived wire.
+ */
+function buildProviderWireFromSnapshot(
+  snapshot: AdminTurnSnapshotData | null,
+  planStrings: PromptLoomPlanStrings,
+): AdminPromptLoomData['providerWire'] {
+  const plan = snapshot?.plan ?? null;
+  const toolDefinitions = plan
+    ? plan.toolDefinitions.map(tool => ({ ...tool, inputSchema: cloneJsonObject(tool.inputSchema) }))
+    : snapshot?.toolContext?.activeTools.map(tool => ({
+      ...tool,
+      inputSchema: cloneJsonObject(tool.inputSchema),
+    })) ?? [];
+  return {
+    source: 'recorded_snapshot',
+    legacy: plan === null,
+    systemRoleTransport: snapshot?.promptContext?.providerObservability?.systemRole?.transport ?? null,
+    systemPrompt: planStrings.finalSystemPrompt,
+    messages: cloneProviderMessagesForLoom(snapshot?.promptContext?.providerObservability?.providerWireMessages),
+    toolDefinitions,
+  } as AdminPromptLoomData['providerWire'];
+}
+
 function buildPromptLoomFromTurn(turn: PromptMonitorTurn): AdminPromptLoomData {
   const snapshot = turn.snapshot;
   const promptContext = snapshot?.promptContext;
@@ -507,6 +558,8 @@ function buildPromptLoomFromTurn(turn: PromptMonitorTurn): AdminPromptLoomData {
   return {
     source: 'turn_snapshot',
     snapshotCapturedAt: snapshot?.capturedAt ?? null,
+    plan: (snapshot?.plan ? cloneJsonSafe(snapshot.plan) : null) as AdminPromptLoomData['plan'],
+    providerWire: buildProviderWireFromSnapshot(snapshot, planStrings),
     historicalSnapshot: {
       label: HISTORICAL_SNAPSHOT_LABEL,
       removedPromptLayerIds: [...new Set(historicalHits.map(hit => hit.layerId))],
@@ -559,6 +612,168 @@ function buildPromptLoomFromTurn(turn: PromptMonitorTurn): AdminPromptLoomData {
 
 export function resolvePromptMonitorPromptLoom(turn: PromptMonitorTurn): AdminPromptLoomData {
   return turn.promptLoom ? clonePromptLoom(turn.promptLoom) : buildPromptLoomFromTurn(turn);
+}
+
+/**
+ * The turn's PromptPlan as the Loom projects it: prefer the API-served loom
+ * plan, fall back to the live-bus snapshot plan. null → legacy pre-plan turn.
+ */
+export function resolvePromptMonitorPlan(turn: PromptMonitorTurn): AdminPromptPlanData | null {
+  const plan = turn.promptLoom?.plan ?? turn.snapshot?.plan ?? null;
+  return plan ? (cloneJsonSafe(plan) as AdminPromptPlanData) : null;
+}
+
+// ── Turn-diff affordance (E2.3): block-level diff between two plans ──
+
+export type PromptPlanBlockDiffStatus = 'added' | 'removed' | 'changed' | 'unchanged';
+
+export interface PromptPlanBlockDiffEntry {
+  id: string;
+  status: PromptPlanBlockDiffStatus;
+  layer: AdminPromptPlanBlock['layer'] | null;
+  volatility: AdminPromptPlanBlock['volatility'] | null;
+  producer: string | null;
+  scopeKey: string | null;
+  /** UTF-8 byte sizes of the rendered block text (changed-bytes indicator). */
+  bytesBefore: number | null;
+  bytesAfter: number | null;
+  bytesDelta: number | null;
+}
+
+export interface PromptPlanBlockDiff {
+  /** false when either side lacks a plan (legacy pre-plan turn). */
+  comparable: boolean;
+  entries: PromptPlanBlockDiffEntry[];
+  addedCount: number;
+  removedCount: number;
+  changedCount: number;
+  unchangedCount: number;
+  /** Non-unchanged blocks whose volatility is 'static' (should be 0 for a quiet consecutive pair). */
+  staticRegionChangedCount: number;
+}
+
+const PLAN_TEXT_ENCODER = new TextEncoder();
+
+function planBlockBytes(block: AdminPromptPlanBlock): number {
+  return PLAN_TEXT_ENCODER.encode(block.renderedText).length;
+}
+
+/**
+ * Block-level diff between two turns' plans: which blocks appeared,
+ * disappeared, or changed (id-level identity, byte-size indicator per block).
+ * Entries follow the after-plan block order; removed blocks are appended in
+ * their before-plan order.
+ */
+export function diffPromptPlanBlocks(
+  before: AdminPromptPlanData | null | undefined,
+  after: AdminPromptPlanData | null | undefined,
+): PromptPlanBlockDiff {
+  if (!before || !after) {
+    return {
+      comparable: false,
+      entries: [],
+      addedCount: 0,
+      removedCount: 0,
+      changedCount: 0,
+      unchangedCount: 0,
+      staticRegionChangedCount: 0,
+    };
+  }
+  const beforeById = new Map(before.blocks.map(block => [block.id, block]));
+  const afterIds = new Set(after.blocks.map(block => block.id));
+  const entries: PromptPlanBlockDiffEntry[] = [];
+
+  for (const afterBlock of after.blocks) {
+    const beforeBlock = beforeById.get(afterBlock.id);
+    if (!beforeBlock) {
+      entries.push({
+        id: afterBlock.id,
+        status: 'added',
+        layer: afterBlock.layer,
+        volatility: afterBlock.volatility,
+        producer: afterBlock.producer,
+        scopeKey: afterBlock.scopeKey ?? null,
+        bytesBefore: null,
+        bytesAfter: planBlockBytes(afterBlock),
+        bytesDelta: null,
+      });
+      continue;
+    }
+    const bytesBefore = planBlockBytes(beforeBlock);
+    const bytesAfter = planBlockBytes(afterBlock);
+    entries.push({
+      id: afterBlock.id,
+      status: beforeBlock.renderedText === afterBlock.renderedText ? 'unchanged' : 'changed',
+      layer: afterBlock.layer,
+      volatility: afterBlock.volatility,
+      producer: afterBlock.producer,
+      scopeKey: afterBlock.scopeKey ?? null,
+      bytesBefore,
+      bytesAfter,
+      bytesDelta: bytesAfter - bytesBefore,
+    });
+  }
+  for (const beforeBlock of before.blocks) {
+    if (afterIds.has(beforeBlock.id)) continue;
+    entries.push({
+      id: beforeBlock.id,
+      status: 'removed',
+      layer: beforeBlock.layer,
+      volatility: beforeBlock.volatility,
+      producer: beforeBlock.producer,
+      scopeKey: beforeBlock.scopeKey ?? null,
+      bytesBefore: planBlockBytes(beforeBlock),
+      bytesAfter: null,
+      bytesDelta: null,
+    });
+  }
+
+  return {
+    comparable: true,
+    entries,
+    addedCount: entries.filter(entry => entry.status === 'added').length,
+    removedCount: entries.filter(entry => entry.status === 'removed').length,
+    changedCount: entries.filter(entry => entry.status === 'changed').length,
+    unchangedCount: entries.filter(entry => entry.status === 'unchanged').length,
+    staticRegionChangedCount: entries.filter(
+      entry => entry.volatility === 'static' && entry.status !== 'unchanged',
+    ).length,
+  };
+}
+
+// ── Cache projection: static-prefix hash timeline across recent turns ──
+
+export interface PromptMonitorStaticHashTimelineEntry {
+  turnId: string;
+  latestEventAt: number;
+  staticHash: string | null;
+  /** null when this or every earlier turn lacks a recorded hash. */
+  changedFromPrevious: boolean | null;
+}
+
+export function buildStaticPrefixHashTimeline(
+  turns: readonly PromptMonitorTurn[],
+  limit: number = 12,
+): PromptMonitorStaticHashTimelineEntry[] {
+  const ascending = [...turns]
+    .sort((left, right) => left.latestEventAt - right.latestEventAt)
+    .slice(-Math.max(1, limit));
+  let previousHash: string | null = null;
+  return ascending.map(turn => {
+    const staticHash = readString(turn.snapshot?.prompt?.staticHash);
+    const changedFromPrevious = staticHash !== null && previousHash !== null
+      ? staticHash !== previousHash
+      : null;
+    if (staticHash !== null) {
+      previousHash = staticHash;
+    }
+    return {
+      turnId: turn.turnId,
+      latestEventAt: turn.latestEventAt,
+      staticHash,
+      changedFromPrevious,
+    };
+  });
 }
 
 function readSnapshotEnvelopeData(

@@ -74,6 +74,36 @@ export interface WikiSearchResult {
   matches: WikiSearchMatch[];
 }
 
+/**
+ * E8.3: a semantic (pgvector projection) search match. Carries the same
+ * document provenance as text search plus a similarity score, so callers can
+ * distinguish semantically-retrieved reference knowledge and cite the source.
+ */
+export interface WikiSemanticSearchMatch {
+  id: string;
+  title: string;
+  sourceClass: WikiSourceClass;
+  sensitivity: SensitivityLevel;
+  path: string;
+  score: number;
+  preview: string;
+}
+
+export interface WikiSemanticSearchResult {
+  query: string;
+  count: number;
+  matches: WikiSemanticSearchMatch[];
+  /** True when the semantic index was unavailable and search failed closed. */
+  degraded: boolean;
+}
+
+/**
+ * Text-query semantic search over the wiki projection. Composes embedding +
+ * pgvector similarity search; fails closed (returns `degraded: true` with no
+ * matches) rather than throwing, so the tool's plain text search still works.
+ */
+export type WikiSemanticSearchFn = (query: string, limit: number) => Promise<WikiSemanticSearchResult>;
+
 export interface WikiStorePort {
   getRootInfo(): {
     workspaceRoot: string;

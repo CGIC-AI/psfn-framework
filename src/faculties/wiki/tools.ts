@@ -10,12 +10,22 @@ import { VALID_SENSITIVITY_LEVELS } from '../../system/trust/types.js';
 import {
   WIKI_SOURCE_CLASSES,
   type WikiDocumentUpsertInput,
+  type WikiSemanticSearchFn,
   type WikiSourceClass,
   type WikiStorePort,
 } from './types.js';
 
-const WIKI_ACTIONS = ['list', 'read', 'search', 'write', 'import'] as const;
+const WIKI_ACTIONS = ['list', 'read', 'search', 'semantic_search', 'write', 'import'] as const;
 type WikiAction = typeof WIKI_ACTIONS[number];
+
+export interface WikiToolDeps {
+  /**
+   * Optional semantic (pgvector projection) search. When absent, the wiki tool
+   * still offers plain text search; action=semantic_search then fails closed
+   * with guidance rather than silently downgrading.
+   */
+  semanticSearch?: WikiSemanticSearchFn;
+}
 
 interface WikiToolParams {
   action?: WikiAction;
@@ -85,6 +95,7 @@ function resolveWikiCapabilityRequirement(params: Record<string, unknown>): Capa
     case 'list':
     case 'read':
     case 'search':
+    case 'semantic_search':
       return 'identity.read';
     case 'write':
     case 'import':
@@ -94,13 +105,16 @@ function resolveWikiCapabilityRequirement(params: Record<string, unknown>): Capa
   }
 }
 
-export function createWikiTool(store: WikiStorePort): AgentTool<any> {
+export function createWikiTool(store: WikiStorePort, deps: WikiToolDeps = {}): AgentTool<any> {
+  const semanticSearch = deps.semanticSearch;
   const tool: AgentTool<any> = {
     name: 'wiki',
     label: 'wiki',
     description:
       'Internal runtime-owned knowledge-base for durable reference documents and personal knowledge notes. '
-      + 'Use action=list|read|search|write|import. This is separate from L0/L0.1/L2 memory, scratchpad, journal, and Obsidian/Vault. '
+      + 'Use action=list|read|search|semantic_search|write|import. search is exact/substring text search; '
+      + 'semantic_search finds conceptually related documents via the pgvector projection and returns similarity scores. '
+      + 'This is separate from L0/L0.1/L2 memory, scratchpad, journal, and Obsidian/Vault. '
       + 'Imports require source_class and provenance_refs so external notes never masquerade as lived memory.',
     parameters: Type.Object({
       action: Type.Optional(Type.Union(
@@ -121,7 +135,7 @@ export function createWikiTool(store: WikiStorePort): AgentTool<any> {
       })),
       query: Type.Optional(Type.String({
         minLength: 1,
-        description: 'Text query for action=search.',
+        description: 'Query text for action=search (substring/text) or action=semantic_search (vector similarity).',
       })),
       limit: Type.Optional(Type.Integer({
         minimum: 1,
@@ -188,6 +202,22 @@ export function createWikiTool(store: WikiStorePort): AgentTool<any> {
               }),
               boundary: 'Search results are wiki/reference knowledge, not lived memory.',
             }, null, 2));
+          case 'semantic_search': {
+            const query = requireString(params.query, 'query');
+            if (!semanticSearch) {
+              return textResultWithError(
+                'wiki semantic_search is unavailable (no pgvector projection wired); use action=search for text search.',
+                true,
+              );
+            }
+            const limit = normalizeLimit(params.limit) ?? 10;
+            const result = await semanticSearch(query, limit);
+            return textResult(JSON.stringify({
+              action: 'semantic_search',
+              ...result,
+              boundary: 'Semantic matches are wiki/reference knowledge, not lived memory.',
+            }, null, 2));
+          }
           case 'write':
           case 'import': {
             const document = store.upsert(buildUpsertInput(params, action === 'import'));

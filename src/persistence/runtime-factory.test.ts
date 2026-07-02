@@ -30,6 +30,8 @@ const runtimeFactoryMocks = vi.hoisted(() => ({
   connectPostgresReflectionMirror: vi.fn(async () => runtimeFactoryMocks.postgresReflectionMirror),
   postgresInternalStateStore: { kind: 'postgres-internal-state-store' },
   connectPostgresInternalStateStore: vi.fn(async () => runtimeFactoryMocks.postgresInternalStateStore),
+  postgresParticipantTrendStore: { kind: 'postgres-participant-trend-store' },
+  connectPostgresParticipantTrendStore: vi.fn(async () => runtimeFactoryMocks.postgresParticipantTrendStore),
   createSqliteEpisodicStore: vi.fn(function EpisodicStore() {
     return runtimeFactoryMocks.sqliteEpisodicStore;
   }),
@@ -76,6 +78,12 @@ vi.mock('./journals/reflection-metacognition-journal.js', () => ({
 vi.mock('./postgres/internal-state-store.js', () => ({
   PostgresInternalStateStore: {
     connect: runtimeFactoryMocks.connectPostgresInternalStateStore,
+  },
+}));
+
+vi.mock('./postgres/participant-trend-store.js', () => ({
+  PostgresParticipantTrendStore: {
+    connect: runtimeFactoryMocks.connectPostgresParticipantTrendStore,
   },
 }));
 
@@ -148,6 +156,7 @@ describe('createAgentPersistenceRuntime', () => {
       intentionRuntime: runtimeFactoryMocks.postgresIntentionRuntime as IntentionRuntimeWiring,
       intentionProviders: runtimeFactoryMocks.postgresIntentionRuntime as IntentionRuntimeProviders,
       internalStateStore: runtimeFactoryMocks.postgresInternalStateStore,
+      participantTrendStore: runtimeFactoryMocks.postgresParticipantTrendStore,
     });
     expect(runtimeFactoryMocks.createSqliteCompanionStore).not.toHaveBeenCalled();
     expect(runtimeFactoryMocks.createPostgresMemoryStore).toHaveBeenCalledWith(

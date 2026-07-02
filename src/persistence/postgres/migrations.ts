@@ -780,6 +780,24 @@ export const POSTGRES_INTERNAL_STATE_MIGRATIONS = [
   `,
 ];
 
+export const POSTGRES_PARTICIPANT_TREND_MIGRATIONS = [
+  `
+  CREATE TABLE IF NOT EXISTS participant_emotion_trends (
+    room_key TEXT NOT NULL,
+    participant_key TEXT NOT NULL,
+    vad JSONB NOT NULL,
+    discrete JSONB NOT NULL DEFAULT '{}'::jsonb,
+    interaction_count INTEGER NOT NULL DEFAULT 0,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (room_key, participant_key)
+  );
+  `,
+  `
+  CREATE INDEX IF NOT EXISTS participant_emotion_trends_updated_at_idx
+    ON participant_emotion_trends (updated_at);
+  `,
+];
+
 export const POSTGRES_REFLECTION_MIGRATIONS = [
   `
   CREATE TABLE IF NOT EXISTS reflections (

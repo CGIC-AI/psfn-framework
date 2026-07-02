@@ -46,6 +46,22 @@ describe('Postgres live schema migrations', () => {
     expect(sql).toContain("consent_flags JSONB NOT NULL DEFAULT '{}'::jsonb");
   });
 
+  it('creates the episode message-claim table with a one-live-claim-per-message unique index', () => {
+    const sql = migrationSql(POSTGRES_MEMORY_MIGRATIONS);
+
+    expect(sql).toContain('CREATE TABLE IF NOT EXISTS l01_episode_message_claims');
+    expect(sql).toContain('PRIMARY KEY (episode_id, claim_key)');
+    expect(sql).toContain("CHECK (status IN ('active', 'transferred'))");
+    expect(sql).toContain(
+      'CREATE UNIQUE INDEX IF NOT EXISTS idx_l01_episode_message_claims_active_key '
+      + "ON l01_episode_message_claims(claim_key) WHERE status = 'active';",
+    );
+    // Claims reference episodes, so the episode table must be created first.
+    expect(sql.indexOf('CREATE TABLE IF NOT EXISTS l01_episodes')).toBeLessThan(
+      sql.indexOf('CREATE TABLE IF NOT EXISTS l01_episode_message_claims'),
+    );
+  });
+
   it('upgrades existing contact tables and creates social graph tables for companion DBs', () => {
     const sql = migrationSql(POSTGRES_CONTACT_MIGRATIONS);
 

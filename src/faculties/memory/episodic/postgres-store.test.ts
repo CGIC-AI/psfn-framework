@@ -123,17 +123,42 @@ function isActiveArc(row: StoredArcRow): boolean {
   );
 }
 
+interface StoredMessageClaimRow {
+  episode_id: string;
+  claim_key: string;
+  turn_id: string | null;
+  channel_id: string | null;
+  session_id: string | null;
+  status: string;
+  claimed_at: string;
+  transferred_to_episode_id: string | null;
+  transferred_at: string | null;
+  reason: string | null;
+}
+
 class FakeEpisodicPool {
   readonly episodes = new Map<string, StoredEpisodeRow>();
   readonly arcs = new Map<string, StoredArcRow>();
   readonly watermarks = new Map<string, StoredWatermarkRow>();
   readonly candidateDecisions = new Map<string, StoredCandidateDecisionRow>();
   readonly lineages = new Map<string, StoredEpisodeLineageRow>();
+  readonly messageClaims = new Map<string, StoredMessageClaimRow>();
   readonly queries: Array<{ text: string; values: readonly unknown[] }> = [];
+
+  async connect(): Promise<{ query: FakeEpisodicPool['query']; release: () => void }> {
+    return {
+      query: this.query.bind(this),
+      release: () => {},
+    };
+  }
 
   async query(text: string, values: readonly unknown[] = []): Promise<QueryResult> {
     this.queries.push({ text, values });
     const normalized = normalizeSql(text);
+
+    if (normalized === 'begin' || normalized === 'commit' || normalized === 'rollback') {
+      return queryResult([], normalized.toUpperCase());
+    }
 
     if (normalized.startsWith('insert into l01_episodes')) {
       const row: StoredEpisodeRow = {
@@ -149,6 +174,18 @@ class FakeEpisodicPool {
       };
       this.episodes.set(row.id, row);
       return queryResult([], 'INSERT');
+    }
+
+    if (normalized.startsWith("update l01_episodes set status = 'superseded'")) {
+      const targetId = String(values[0] ?? '');
+      const sourceIds = Array.isArray(values[2]) ? values[2].map(String) : [];
+      for (const sourceId of sourceIds) {
+        const row = this.episodes.get(sourceId);
+        if (!row) continue;
+        row.status = 'superseded';
+        row.superseded_by_episode_id = targetId;
+      }
+      return queryResult([], 'UPDATE');
     }
 
     if (normalized.startsWith('update l01_episodes set')) {
@@ -267,6 +304,63 @@ class FakeEpisodicPool {
     if (normalized.startsWith('select id from l01_episodes where id =')) {
       const row = this.episodes.get(String(values[0] ?? ''));
       return queryResult(row ? [{ id: row.id }] : []);
+    }
+
+    if (normalized.startsWith('select id, merged_into_episode_id, superseded_by_episode_id from l01_episodes where id =')) {
+      const row = this.episodes.get(String(values[0] ?? ''));
+      return queryResult(row
+        ? [{
+          id: row.id,
+          merged_into_episode_id: row.merged_into_episode_id,
+          superseded_by_episode_id: row.superseded_by_episode_id,
+        }]
+        : []);
+    }
+
+    if (normalized.startsWith('insert into l01_episode_message_claims')) {
+      const row: StoredMessageClaimRow = {
+        episode_id: String(values[0] ?? ''),
+        claim_key: String(values[1] ?? ''),
+        turn_id: values[2] === null || values[2] === undefined ? null : String(values[2]),
+        channel_id: values[3] === null || values[3] === undefined ? null : String(values[3]),
+        session_id: values[4] === null || values[4] === undefined ? null : String(values[4]),
+        status: 'active',
+        claimed_at: String(values[5] ?? ''),
+        transferred_to_episode_id: null,
+        transferred_at: null,
+        reason: values.length > 6 && values[6] !== null && values[6] !== undefined ? String(values[6]) : null,
+      };
+      const rowKey = `${row.episode_id}${row.claim_key}`;
+      if (this.messageClaims.has(rowKey)) {
+        throw new Error(`duplicate key value violates unique constraint "l01_episode_message_claims_pkey" (${rowKey})`);
+      }
+      const activeHolder = [...this.messageClaims.values()].find(claim => (
+        claim.claim_key === row.claim_key && claim.status === 'active'
+      ));
+      if (activeHolder) {
+        throw new Error('duplicate key value violates unique constraint "idx_l01_episode_message_claims_active_key"');
+      }
+      this.messageClaims.set(rowKey, row);
+      return queryResult([], 'INSERT');
+    }
+
+    if (normalized.startsWith("update l01_episode_message_claims set status = 'transferred'")) {
+      const targetId = String(values[0] ?? '');
+      const transferredAt = String(values[1] ?? '');
+      const reason = values[2] === null || values[2] === undefined ? null : String(values[2]);
+      const sourceIds = new Set(Array.isArray(values[3]) ? values[3].map(String) : []);
+      for (const claim of this.messageClaims.values()) {
+        if (claim.status !== 'active' || !sourceIds.has(claim.episode_id)) continue;
+        claim.status = 'transferred';
+        claim.transferred_to_episode_id = targetId;
+        claim.transferred_at = transferredAt;
+        claim.reason = reason;
+      }
+      return queryResult([], 'UPDATE');
+    }
+
+    if (normalized.startsWith('select * from l01_episode_message_claims')) {
+      return queryResult(this.filterMessageClaimRows(normalized, values));
     }
 
     if (normalized.startsWith('select id, episode_json from l01_episodes')) {
@@ -414,6 +508,42 @@ class FakeEpisodicPool {
       && (row.thread_id ?? '') === threadId
       && (row.session_id ?? '') === sessionId
     ));
+  }
+
+  private filterMessageClaimRows(normalized: string, values: readonly unknown[]): StoredMessageClaimRow[] {
+    if (normalized.includes("where status = 'active'")) {
+      const ids = Array.isArray(values[0]) ? values[0].map(String) : [];
+      const idSet = new Set(ids);
+      const byEpisode = normalized.includes('episode_id = any');
+      return [...this.messageClaims.values()].filter(claim => (
+        claim.status === 'active'
+        && idSet.has(byEpisode ? claim.episode_id : claim.claim_key)
+      ));
+    }
+
+    let cursor = 0;
+    let rows = [...this.messageClaims.values()];
+    if (normalized.includes('episode_id = $')) {
+      const episodeId = String(values[cursor++] ?? '');
+      rows = rows.filter(claim => claim.episode_id === episodeId);
+    }
+    if (normalized.includes('claim_key = any')) {
+      const raw = values[cursor++];
+      const claimKeys = new Set(Array.isArray(raw) ? raw.map(String) : []);
+      rows = rows.filter(claim => claimKeys.has(claim.claim_key));
+    }
+    if (normalized.includes('status = $')) {
+      const status = String(values[cursor++] ?? '');
+      rows = rows.filter(claim => claim.status === status);
+    }
+    const limit = Number(values[cursor++] ?? rows.length);
+    return rows
+      .sort((left, right) => (
+        left.claimed_at.localeCompare(right.claimed_at)
+        || left.episode_id.localeCompare(right.episode_id)
+        || left.claim_key.localeCompare(right.claim_key)
+      ))
+      .slice(0, limit);
   }
 
   private filterCandidateDecisionRows(normalized: string, values: readonly unknown[]): StoredCandidateDecisionRow[] {
@@ -873,5 +1003,130 @@ describe('PostgresEpisodicStore', () => {
     await expect(store.writeEpisodeArc(baseArc({
       targetEpisodeId: 'missing-episode',
     }))).rejects.toThrow('episodeArc.targetEpisodeId references unknown episode "missing-episode"');
+  });
+
+  it('claims source messages once per live episode and rejects conflicting claims', async () => {
+    const pool = new FakeEpisodicPool();
+    const store = makeStore(pool);
+    await store.createEpisode(baseEpisode({ id: 'episode-1' }));
+    await store.createEpisode(baseEpisode({ id: 'episode-2' }));
+
+    const claims = await store.claimEpisodeMessages({
+      episodeId: 'episode-1',
+      sessionId: 'discord:general',
+      claims: [
+        { claimKey: 'l0-message:discord:general:1', turnId: 'turn-1', channelId: 'discord:general' },
+        { claimKey: 'l0-message:discord:general:2', turnId: 'turn-2', channelId: 'discord:general' },
+      ],
+    });
+    expect(claims).toHaveLength(2);
+    expect(claims.every(claim => claim.status === 'active' && claim.episodeId === 'episode-1')).toBe(true);
+
+    // Idempotent for the claiming episode.
+    await expect(store.claimEpisodeMessages({
+      episodeId: 'episode-1',
+      claims: [{ claimKey: 'l0-message:discord:general:1' }],
+    })).resolves.toHaveLength(1);
+
+    // Fails closed for any other episode.
+    await expect(store.claimEpisodeMessages({
+      episodeId: 'episode-2',
+      claims: [{ claimKey: 'l0-message:discord:general:1' }],
+    })).rejects.toThrow('source message "l0-message:discord:general:1" is already claimed by episode "episode-1"');
+    await expect(store.claimEpisodeMessages({
+      episodeId: 'missing-episode',
+      claims: [{ claimKey: 'l0-message:discord:general:3' }],
+    })).rejects.toThrow('claim.episodeId references unknown episode "missing-episode"');
+
+    await expect(store.listEpisodeMessageClaims({
+      claimKeys: ['l0-message:discord:general:1', 'l0-message:discord:general:2'],
+      status: 'active',
+    })).resolves.toHaveLength(2);
+  });
+
+  it('transfers claims to a consolidated episode and supersedes the candidates without deletion', async () => {
+    const pool = new FakeEpisodicPool();
+    const store = makeStore(pool);
+    await store.createEpisode(baseEpisode({ id: 'candidate-1' }));
+    await store.createEpisode(baseEpisode({ id: 'candidate-2' }));
+    await store.createEpisode(baseEpisode({ id: 'consolidated' }));
+
+    await store.claimEpisodeMessages({
+      episodeId: 'candidate-1',
+      claims: [
+        { claimKey: 'l0-message:discord:general:1', turnId: 'turn-1' },
+        { claimKey: 'l0-message:discord:general:2', turnId: 'turn-2' },
+      ],
+    });
+    await store.claimEpisodeMessages({
+      episodeId: 'candidate-2',
+      claims: [{ claimKey: 'l0-message:discord:general:3', turnId: 'turn-3' }],
+    });
+
+    const result = await store.transferEpisodeMessageClaims({
+      sourceEpisodeIds: ['candidate-1', 'candidate-2'],
+      targetEpisodeId: 'consolidated',
+      reason: 'nightly consolidation into a thematic episode',
+    });
+
+    expect(result.targetEpisodeId).toBe('consolidated');
+    expect(result.supersededEpisodeIds).toEqual(['candidate-1', 'candidate-2']);
+    expect(result.transferredClaims.map(claim => claim.claimKey).sort()).toEqual([
+      'l0-message:discord:general:1',
+      'l0-message:discord:general:2',
+      'l0-message:discord:general:3',
+    ]);
+    expect(result.transferredClaims.every(claim => (
+      claim.episodeId === 'consolidated' && claim.status === 'active'
+    ))).toBe(true);
+
+    // Candidates keep transferred claim history and stay retrievable by id.
+    const history = await store.listEpisodeMessageClaims({ episodeId: 'candidate-1' });
+    expect(history).toHaveLength(2);
+    expect(history.every(claim => (
+      claim.status === 'transferred'
+      && claim.transferredToEpisodeId === 'consolidated'
+      && claim.reason === 'nightly consolidation into a thematic episode'
+    ))).toBe(true);
+    await expect(store.getEpisode('candidate-1')).resolves.toBeDefined();
+
+    // Superseded candidates disappear from live listings.
+    const live = await store.listEpisodes({ limit: 10 });
+    expect(live.map(episode => episode.id)).toEqual(['consolidated']);
+
+    // The consolidated episode now owns the claims; nobody else may take them.
+    await expect(store.claimEpisodeMessages({
+      episodeId: 'candidate-1',
+      claims: [{ claimKey: 'l0-message:discord:general:1' }],
+    })).rejects.toThrow('source message "l0-message:discord:general:1" is already claimed by episode "consolidated"');
+
+    // Re-transferring a superseded candidate fails closed.
+    await expect(store.transferEpisodeMessageClaims({
+      sourceEpisodeIds: ['candidate-1'],
+      targetEpisodeId: 'consolidated',
+      reason: 'nightly consolidation',
+    })).rejects.toThrow('transfer.sourceEpisodeIds references episode "candidate-1" which is no longer live');
+  });
+
+  it('fails closed on invalid claim transfers', async () => {
+    const pool = new FakeEpisodicPool();
+    const store = makeStore(pool);
+    await store.createEpisode(baseEpisode({ id: 'candidate-1' }));
+
+    await expect(store.transferEpisodeMessageClaims({
+      sourceEpisodeIds: ['candidate-1'],
+      targetEpisodeId: 'missing-episode',
+      reason: 'nightly consolidation',
+    })).rejects.toThrow('transfer.targetEpisodeId references unknown episode "missing-episode"');
+    await expect(store.transferEpisodeMessageClaims({
+      sourceEpisodeIds: ['candidate-1'],
+      targetEpisodeId: 'candidate-1',
+      reason: 'nightly consolidation',
+    })).rejects.toThrow('an episode cannot receive claims transferred from itself');
+    await expect(store.transferEpisodeMessageClaims({
+      sourceEpisodeIds: [],
+      targetEpisodeId: 'candidate-1',
+      reason: 'nightly consolidation',
+    })).rejects.toThrow('transferEpisodeMessageClaims requires at least one source episode');
   });
 });

@@ -113,12 +113,21 @@ describe('EpisodicSynthesizer', () => {
     const second = await synthesizer.run({ sessionId: 'terminal:daily' });
 
     expect(first.createdEpisodes).toHaveLength(1);
+    // The first run claimed both messages, so the second run drops them
+    // before grouping and re-processes nothing at all.
+    expect(second.claimedEntriesSkipped).toBe(2);
+    expect(second.consideredEntries).toBe(0);
+    expect(second.candidateEpisodeCount).toBe(0);
     expect(second.createdEpisodes).toEqual([]);
-    expect(second.skippedEpisodeIds).toEqual([first.createdEpisodes[0].id]);
+    expect(second.skippedEpisodeIds).toEqual([]);
     expect(store.listEpisodes()).toHaveLength(1);
+    expect(store.listEpisodeMessageClaims({ status: 'active' }).map(claim => claim.claimKey).sort()).toEqual([
+      'l0-message:terminal:daily:1',
+      'l0-message:terminal:daily:2',
+    ]);
   });
 
-  it('extends an overlapping canonical episode instead of creating a sliding-window duplicate', async () => {
+  it('extends an overlapping canonical episode when claims are absent (legacy defense in depth)', async () => {
     const store = makeStore();
     let entries = [
       entry(1, '2026-04-01T10:00:00.000Z', 'user', 'Discuss project atlas testing and linting.'),
@@ -129,6 +138,9 @@ describe('EpisodicSynthesizer', () => {
     });
 
     const first = await synthesizer.run({ sessionId: 'terminal:daily' });
+    // Simulate a pre-claiming database: the overlap-merge heuristic must
+    // still stop sliding-window duplicates when no claims exist.
+    db?.exec('DELETE FROM l01_episode_message_claims');
     entries = [
       ...entries,
       entry(3, '2026-04-01T10:04:00.000Z', 'user', 'Project atlas linting should include the boundary regression test.'),
@@ -213,6 +225,15 @@ describe('EpisodicSynthesizer', () => {
       latestProcessedAt: '2026-04-01T10:04:00.000Z',
     });
     expect(diagnostics.oldestQueueAgeMs).toBe(6 * 60 * 1000);
+
+    // The merged pass re-established claims on the canonical episode.
+    const activeClaims = store.listEpisodeMessageClaims({ status: 'active' });
+    expect(activeClaims.every(claim => claim.episodeId === first.createdEpisodes[0].id)).toBe(true);
+    expect(activeClaims.map(claim => claim.claimKey).sort()).toEqual([
+      'l0-message:terminal:daily:1',
+      'l0-message:terminal:daily:2',
+      'l0-message:terminal:daily:3',
+    ]);
   });
 
   it('classifies richer arc kinds from canonical episode evidence', async () => {
@@ -292,7 +313,7 @@ describe('EpisodicSynthesizer', () => {
     }
   });
 
-  it('reuses a canonical episode when a rest boundary shifts across an overlapping turn', async () => {
+  it('never re-covers claimed turns when a rest boundary shifts; the unclaimed tail is held back', async () => {
     const store = makeStore();
     let entries = [
       entry(1, '2026-04-01T10:00:00.000Z', 'user', 'Review atlas planner test failures and lint output.'),
@@ -310,23 +331,85 @@ describe('EpisodicSynthesizer', () => {
     const second = await synthesizer.run({ sessionId: 'terminal:daily' });
 
     expect(first.createdEpisodes).toHaveLength(1);
+    // The claimed turn is dropped from the window; the lone unclaimed tail
+    // entry is not yet salient on its own, so nothing is re-processed.
+    expect(second.claimedEntriesSkipped).toBe(1);
     expect(second.createdEpisodes).toEqual([]);
-    expect(second.skippedEpisodeIds).toEqual([first.createdEpisodes[0].id]);
+    expect(second.skippedEpisodeIds).toEqual([]);
 
     const episodes = store.searchByThread('terminal:daily');
     expect(episodes).toHaveLength(1);
     expect(episodes[0]).toMatchObject({
       id: first.createdEpisodes[0].id,
       startedAt: '2026-04-01T10:00:00.000Z',
-      endedAt: '2026-04-01T10:04:00.000Z',
+      endedAt: '2026-04-01T10:02:00.000Z',
     });
-    expect(episodes[0].spanRefs.map(ref => ref.startTurnId)).toEqual([
-      '00000000-0000-7000-a000-000000000001',
-      '00000000-0000-7000-a000-000000000002',
+    // The tail entry remains unclaimed and available for a later pass.
+    expect(store.listEpisodeMessageClaims({
+      claimKeys: ['l0-message:terminal:daily:3'],
+    })).toEqual([]);
+  });
+
+  it('skips claimed turns on a second pass instead of producing a partially overlapping episode (16:51/16:52 regression)', async () => {
+    const store = makeStore();
+    // First pass: seven messages from 16:45 to 16:51 become one episode.
+    let entries = [
+      entry(1, '2026-04-01T16:45:00.000Z', 'user', 'Garden irrigation valve calibration for the raised beds needs a schedule.'),
+      entry(2, '2026-04-01T16:46:00.000Z', 'assistant', 'Irrigation valve calibration schedule drafted for the raised beds.'),
+      entry(3, '2026-04-01T16:47:00.000Z', 'user', 'Include the drip line pressure readings in the calibration.'),
+      entry(4, '2026-04-01T16:48:00.000Z', 'assistant', 'Drip line pressure readings folded into the calibration plan.'),
+      entry(5, '2026-04-01T16:49:00.000Z', 'user', 'Also check the rain sensor bypass wiring before calibration.'),
+      entry(6, '2026-04-01T16:50:00.000Z', 'assistant', 'Rain sensor bypass wiring check added ahead of calibration.'),
+      entry(7, '2026-04-01T16:51:00.000Z', 'user', 'Great, lock in the irrigation calibration plan as discussed.'),
+    ];
+    const synthesizer = new EpisodicSynthesizer(store, {
+      getRecentMessages: () => entries,
+    });
+
+    const first = await synthesizer.run({ sessionId: 'terminal:daily' });
+    expect(first.createdEpisodes).toHaveLength(1);
+    const firstEpisode = first.createdEpisodes[0];
+    expect(firstEpisode.startedAt).toBe('2026-04-01T16:45:00.000Z');
+    expect(firstEpisode.endedAt).toBe('2026-04-01T16:51:00.000Z');
+
+    // One minute later a second pass re-scans a window that partially
+    // overlaps the first episode plus two new messages on an unrelated
+    // topic, so the theme-gated overlap-merge heuristic would not fire and
+    // the old behavior produced a second episode re-covering 16:45-16:51.
+    entries = [
+      ...entries,
+      entry(8, '2026-04-01T16:52:00.000Z', 'user', 'Switching topics: birthday cake flavors for the weekend party?'),
+      entry(9, '2026-04-01T16:52:30.000Z', 'assistant', 'Chocolate hazelnut and lemon curd both work for the weekend party.'),
+    ];
+    const second = await synthesizer.run({ sessionId: 'terminal:daily' });
+
+    expect(second.claimedEntriesSkipped).toBe(7);
+    expect(second.consideredEntries).toBe(2);
+    expect(second.createdEpisodes).toHaveLength(1);
+    const secondEpisode = second.createdEpisodes[0];
+    expect(secondEpisode.startedAt).toBe('2026-04-01T16:52:00.000Z');
+    expect(secondEpisode.endedAt).toBe('2026-04-01T16:52:30.000Z');
+
+    // No live episode overlaps another live episode's claimed messages.
+    const firstClaims = store.listEpisodeMessageClaims({ episodeId: firstEpisode.id, status: 'active' });
+    const secondClaims = store.listEpisodeMessageClaims({ episodeId: secondEpisode.id, status: 'active' });
+    expect(firstClaims.map(claim => claim.claimKey).sort()).toEqual(
+      [1, 2, 3, 4, 5, 6, 7].map(id => `l0-message:terminal:daily:${id}`),
+    );
+    expect(secondClaims.map(claim => claim.claimKey).sort()).toEqual([
+      'l0-message:terminal:daily:8',
+      'l0-message:terminal:daily:9',
     ]);
-    expect(episodes[0].provenanceRefs).toEqual(expect.arrayContaining([
-      expect.objectContaining({ kind: 'turn', refId: '00000000-0000-7000-a000-000000000003' }),
-    ]));
+
+    // DB-level invariant: no source message is actively claimed twice.
+    const duplicates = db?.prepare(`
+      SELECT claim_key
+      FROM l01_episode_message_claims
+      WHERE status = 'active'
+      GROUP BY claim_key
+      HAVING COUNT(*) > 1
+    `).all();
+    expect(duplicates).toEqual([]);
   });
 
   it('synthesizes a month-long trip plan as linked bounded episodes instead of one aggregate memory', async () => {

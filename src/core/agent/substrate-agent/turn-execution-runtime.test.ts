@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { EventBus } from '../../../shared/event-bus.js';
+import { EventBus, type EventMap } from '../../../shared/event-bus.js';
 import { DEFAULT_COMPANION_ID } from '../../identity/companion-naming.js';
 import { PromptRuntimeLayoutStore, resolvePromptRuntimeLayoutPath } from '../../identity/prompt-runtime.js';
 import { getVisionToolRequestContext } from '../../../primitives/images/request-context.js';
@@ -2632,7 +2632,9 @@ describe('handleMessageForTurn pre-response concurrency', () => {
         proactiveCandidates: [],
         versionPointer: 'memory-v1',
       }));
-      const retrieve = vi.fn(async () => {
+      // E5.5: retrieval events now surface from the background active-context
+      // refresh; the turn hot path never blocks on retrieve().
+      const refreshActiveMemoryContext = vi.fn(async () => {
         await eventBus.emit('memory.retrieval', {
           turnId: activeTurnId,
           channelId: 'ch1',
@@ -2640,7 +2642,7 @@ describe('handleMessageForTurn pre-response concurrency', () => {
           count: 2,
           selectedTypes: { reflection: 2 },
         });
-        return 'memories';
+        return null;
       });
       const buildContext = vi.fn(async () => ({
         systemPrompt: 'System prompt',
@@ -2699,7 +2701,8 @@ describe('handleMessageForTurn pre-response concurrency', () => {
         buildTurnBudgetCharacteristics: vi.fn(() => ({ messageText: 'what time is it?' })),
         memoryProvider: {
           captureTurnMemorySnapshot,
-          retrieve,
+          getActiveMemoryContext: vi.fn(() => null),
+          refreshActiveMemoryContext,
           retrieveProactiveRecall: vi.fn(async () => ''),
         } as unknown as TurnExecutionRuntime['memoryProvider'],
       });
@@ -2821,6 +2824,186 @@ describe('handleMessageForTurn pre-response concurrency', () => {
       .resolves.toMatchObject({ content: 'assistant reply', channelId: 'ch1' });
     expect(buildContext).toHaveBeenCalledTimes(1);
     expect(buildContext.mock.calls[0]?.[2]).toBe('previously recalled memory');
+  });
+
+  it('fails closed when the memory provider lacks the active-context surface instead of blocking on legacy retrieve', async () => {
+    const eventBus = new EventBus();
+    const retrieve = vi.fn(async () => 'legacy blocking memories');
+    const buildContext = vi.fn(async () => ({
+      systemPrompt: 'System prompt',
+      messages: [],
+      manifest: undefined,
+    }));
+    const runtime = createRuntime({
+      eventBus,
+      sessionManager: {} as SessionManager,
+      buildContext,
+      scheduleAutoCompactionBetweenTurns: vi.fn(async () => undefined),
+      awaitPendingAutoCompaction: vi.fn(async () => undefined),
+      recordUserMessage: vi.fn(() => 1),
+      recordAssistantMessage: vi.fn(() => 2),
+      memoryProvider: {
+        retrieve,
+      } as unknown as TurnExecutionRuntime['memoryProvider'],
+    });
+
+    await expect(handleMessageForTurn(runtime, createMessage('msg-legacy-only-provider')))
+      .rejects.toThrow(/blocking legacy retrieval fallback is retired/);
+    expect(retrieve).not.toHaveBeenCalled();
+    expect(buildContext).not.toHaveBeenCalled();
+  });
+
+  it('emits a typed not_ready degradation event when the turn proceeds without an active memory context', async () => {
+    const eventBus = new EventBus();
+    const degradedEvents: Array<EventMap['memory.active_context.turn_degraded']> = [];
+    eventBus.on('memory.active_context.turn_degraded', event => {
+      degradedEvents.push(event);
+    });
+    const buildContext = vi.fn(async () => ({
+      systemPrompt: 'System prompt',
+      messages: [],
+      manifest: undefined,
+    }));
+    const runtime = createRuntime({
+      eventBus,
+      sessionManager: {} as SessionManager,
+      buildContext,
+      scheduleAutoCompactionBetweenTurns: vi.fn(async () => undefined),
+      awaitPendingAutoCompaction: vi.fn(async () => undefined),
+      recordUserMessage: vi.fn(() => 1),
+      recordAssistantMessage: vi.fn(() => 2),
+      memoryProvider: {
+        getActiveMemoryContext: vi.fn(() => null),
+        refreshActiveMemoryContext: vi.fn(async () => null),
+      } as unknown as TurnExecutionRuntime['memoryProvider'],
+    });
+
+    await expect(handleMessageForTurn(runtime, createMessage('msg-degraded-not-ready')))
+      .resolves.toMatchObject({ content: 'assistant reply', channelId: 'ch1' });
+    await flushAsyncWork();
+
+    expect(degradedEvents).toHaveLength(1);
+    expect(degradedEvents[0]).toMatchObject({
+      channelId: 'ch1',
+      key: 'unresolved',
+      reason: 'not_ready',
+      refreshStatus: null,
+    });
+    // The turn proceeds on the last-good (here: empty) context.
+    expect(buildContext.mock.calls[0]?.[2]).toBe('');
+  });
+
+  it('emits refresh_failed and serves the last-good context when the active memory snapshot is degraded', async () => {
+    const eventBus = new EventBus();
+    const degradedEvents: Array<EventMap['memory.active_context.turn_degraded']> = [];
+    eventBus.on('memory.active_context.turn_degraded', event => {
+      degradedEvents.push(event);
+    });
+    const buildContext = vi.fn(async () => ({
+      systemPrompt: 'System prompt',
+      messages: [],
+      manifest: undefined,
+    }));
+    const runtime = createRuntime({
+      eventBus,
+      sessionManager: {} as SessionManager,
+      buildContext,
+      scheduleAutoCompactionBetweenTurns: vi.fn(async () => undefined),
+      awaitPendingAutoCompaction: vi.fn(async () => undefined),
+      recordUserMessage: vi.fn(() => 1),
+      recordAssistantMessage: vi.fn(() => 2),
+      memoryProvider: {
+        getActiveMemoryContext: vi.fn(() => ({
+          key: 'active-memory:degraded-key',
+          subjectKey: 'contact:contact-1',
+          channelId: 'ch1',
+          trustLevel: 'regular',
+          channelVisibility: 'private',
+          visibilityScope: 'non_broadcast',
+          contextBlock: 'last-good memory block',
+          contextChars: 'last-good memory block'.length,
+          selectedMemoryIds: ['mem-1'],
+          generatedAt: Date.now(),
+          lastRefreshStartedAt: Date.now(),
+          refreshStatus: 'degraded',
+          versionPointer: 'active-memory-v1',
+          lastRefreshError: 'embedding backend unavailable',
+        })),
+        refreshActiveMemoryContext: vi.fn(async () => null),
+      } as unknown as TurnExecutionRuntime['memoryProvider'],
+    });
+
+    await expect(handleMessageForTurn(runtime, createMessage('msg-degraded-refresh-failed')))
+      .resolves.toMatchObject({ content: 'assistant reply', channelId: 'ch1' });
+    await flushAsyncWork();
+
+    expect(degradedEvents).toHaveLength(1);
+    expect(degradedEvents[0]).toMatchObject({
+      channelId: 'ch1',
+      key: 'active-memory:degraded-key',
+      reason: 'refresh_failed',
+      refreshStatus: 'degraded',
+      lastRefreshError: 'embedding backend unavailable',
+    });
+    expect(buildContext.mock.calls[0]?.[2]).toBe('last-good memory block');
+  });
+
+  it('emits stale when the served snapshot is still refreshing from an earlier pass and stays silent when ready', async () => {
+    const eventBus = new EventBus();
+    const degradedEvents: Array<EventMap['memory.active_context.turn_degraded']> = [];
+    eventBus.on('memory.active_context.turn_degraded', event => {
+      degradedEvents.push(event);
+    });
+    const makeSnapshot = (refreshStatus: 'refreshing' | 'ready') => ({
+      key: 'active-memory:refresh-lag-key',
+      subjectKey: 'contact:contact-1',
+      channelId: 'ch1',
+      trustLevel: 'regular',
+      channelVisibility: 'private',
+      visibilityScope: 'non_broadcast',
+      contextBlock: 'still useful memory block',
+      contextChars: 'still useful memory block'.length,
+      selectedMemoryIds: ['mem-1'],
+      generatedAt: Date.now(),
+      lastRefreshStartedAt: Date.now(),
+      refreshStatus,
+      versionPointer: 'active-memory-v1',
+    });
+    const getActiveMemoryContext = vi.fn(() => makeSnapshot('refreshing'));
+    const runtime = createRuntime({
+      eventBus,
+      sessionManager: {} as SessionManager,
+      buildContext: vi.fn(async () => ({
+        systemPrompt: 'System prompt',
+        messages: [],
+        manifest: undefined,
+      })),
+      scheduleAutoCompactionBetweenTurns: vi.fn(async () => undefined),
+      awaitPendingAutoCompaction: vi.fn(async () => undefined),
+      recordUserMessage: vi.fn(() => 1),
+      recordAssistantMessage: vi.fn(() => 2),
+      memoryProvider: {
+        getActiveMemoryContext,
+        refreshActiveMemoryContext: vi.fn(async () => null),
+      } as unknown as TurnExecutionRuntime['memoryProvider'],
+    });
+
+    await handleMessageForTurn(runtime, createMessage('msg-degraded-stale'));
+    await flushAsyncWork();
+
+    expect(degradedEvents).toHaveLength(1);
+    expect(degradedEvents[0]).toMatchObject({
+      key: 'active-memory:refresh-lag-key',
+      reason: 'stale',
+      refreshStatus: 'refreshing',
+    });
+
+    getActiveMemoryContext.mockImplementation(() => makeSnapshot('ready'));
+    await handleMessageForTurn(runtime, createMessage('msg-degraded-ready'));
+    await flushAsyncWork();
+
+    // A ready snapshot is the healthy steady state: no degradation event.
+    expect(degradedEvents).toHaveLength(1);
   });
 
   it('bypasses generic memory retrieval for live image turns', async () => {

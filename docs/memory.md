@@ -243,6 +243,12 @@ When memories are withheld, the retriever can return withheld summaries instead 
 
 Episodic retrieval is landmark-first. A cue such as a wedding cake question should select the cake/bakery episode chain and its raw references, not the entire wedding-planning history and not one giant wedding memory. If no episodic landmarks match, normal L2 retrieval behavior remains intact.
 
+### Turn Hot Path (Active Memory Context, E5.5)
+
+Foreground turns never block on retrieval. The turn serves the cached active-memory context and schedules a background refresh; the refreshed context lands on a later pass, so remembering something a turn late is acceptable and by design. There is no blocking legacy fallback: a memory provider wired into turn execution must expose the active-context surface or startup of the turn fails closed.
+
+Degraded state is explicit, never silent. When a turn proceeds without a fresh active context, a typed `memory.active_context.turn_degraded` event records the reason (`not_ready` on cold start, `refresh_failed` after a failed refresh, `stale` while a refresh from an earlier pass is still in flight). Persistent refresh failure — consecutive `degraded` refresh phases for the same context key crossing the settings.json-owned `memoryRefreshFailureAlertThreshold` — raises an operator alert through the gateway's system-derived ntfy notification path; a successful refresh resets the counter and re-arms the alert.
+
 ## Trust And Privacy
 
 Memory access is not just similarity-based.

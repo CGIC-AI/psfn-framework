@@ -285,6 +285,15 @@ export function hydrateCanonicalStartupConfig(
       morningWake: { ...persistedScheduler.temporalWakeup.morningWake },
       idleRefresher: { ...persistedScheduler.temporalWakeup.idleRefresher },
     },
+    freeTime: {
+      enabled: persistedScheduler.freeTime.enabled,
+      minBlockIntervalMinutes: persistedScheduler.freeTime.minBlockIntervalMinutes,
+      maxBlocksPerDay: persistedScheduler.freeTime.maxBlocksPerDay,
+      seedText: persistedScheduler.freeTime.seedText,
+      quietHours: { ...persistedScheduler.freeTime.quietHours },
+      idle: { ...persistedScheduler.freeTime.idle },
+      budget: { ...persistedScheduler.freeTime.budget },
+    },
   };
   config.maintenanceIntervalMs = schedulerConfig.salienceDecayIntervalMs;
   const chargePolicyConfig = configStore.loadStartupChargePolicy();

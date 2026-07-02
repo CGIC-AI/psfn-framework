@@ -114,11 +114,11 @@ describe('social-graph bidirectional consistency + edge hygiene (E4.3)', () => {
 
       const managerEdge = store.listSocialRelationshipEdges({
         entityId: a, relationshipType: 'manager',
-        viewerTrustLevel: 'primary', viewerChannelVisibility: 'private',
+        viewerTrustLevel: 'primary', viewerChannelPrivacy: 'private',
       })[0];
       const reportEdge = store.listSocialRelationshipEdges({
         entityId: a, relationshipType: 'direct_report',
-        viewerTrustLevel: 'primary', viewerChannelVisibility: 'private',
+        viewerTrustLevel: 'primary', viewerChannelPrivacy: 'private',
       })[0];
 
       expect(managerEdge.confidence).toBe(0.9);
@@ -175,7 +175,7 @@ describe('social-graph bidirectional consistency + edge hygiene (E4.3)', () => {
       expect(rows).toHaveLength(2);
       const child = store.listSocialRelationshipEdges({
         entityId: b, relationshipType: 'child',
-        viewerTrustLevel: 'primary', viewerChannelVisibility: 'private',
+        viewerTrustLevel: 'primary', viewerChannelPrivacy: 'private',
       })[0];
       expect(child).toBeDefined();
       expect(child.evidenceMemoryIds).toEqual(['ev']);

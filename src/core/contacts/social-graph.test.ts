@@ -181,7 +181,7 @@ describe('ContactStore social graph', () => {
     const edges = store.listSocialRelationshipEdges({
       contactId: target.id,
       viewerTrustLevel: 'primary',
-      viewerChannelVisibility: 'private',
+      viewerChannelPrivacy: 'private',
     });
     const parentEdge = edges.find(edge => edge.relationshipType === 'parent');
     const childEdge = edges.find(edge => edge.relationshipType === 'child');

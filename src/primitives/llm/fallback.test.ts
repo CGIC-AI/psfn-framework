@@ -81,7 +81,7 @@ describe('FallbackRunner', () => {
 
   it('cooldowns unreachable candidates and defers them on subsequent runs', async () => {
     let now = 0;
-    const runner = new FallbackRunner({ rateLimitCooldownMs: 1000, now: () => now });
+    const runner = new FallbackRunner({ connectivityCooldownMs: 1000, now: () => now });
 
     const firstRunSeen: string[] = [];
     await runner.run(

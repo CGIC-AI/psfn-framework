@@ -86,6 +86,31 @@ into `companion-data` only if no companion card exists.
 
 Mutable owner JSON stays on PVCs, not in ConfigMaps.
 
+## Host Port Exposure
+
+Services render as ClusterIP by default. On a single-node k3s host, set:
+
+```yaml
+hostPorts:
+  gatewayApi:
+    enabled: true
+    port: 10053
+    sourceCIDRs:
+      - 192.168.1.230/32
+  garden:
+    enabled: true
+    port: 10054
+    sourceCIDRs:
+      - 192.168.1.230/32
+```
+
+This binds the Gateway API and Garden/admin UI directly on the node while
+keeping Gateway RPC, agent admin transport, Postgres, Redis, and LiteLLM
+cluster-internal. Use it only when those node ports are reserved for PSFN; the
+old systemd app services must remain stopped to avoid port and Discord login
+conflicts. When `networkPolicy.enabled=true`, set `sourceCIDRs` to the operator
+workstation or trusted subnet that should reach the node-facing port.
+
 ## Database
 
 Default greenfield mode renders `pgvector/pgvector:0.8.1-pg17` pinned to:

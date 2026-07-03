@@ -65,6 +65,12 @@ spec:
           ports:
             - name: http-api
               containerPort: {{ .Values.ports.gatewayApi }}
+              {{- if .Values.hostPorts.gatewayApi.enabled }}
+              hostPort: {{ .Values.hostPorts.gatewayApi.port }}
+              {{- with .Values.hostPorts.gatewayApi.hostIP }}
+              hostIP: {{ . | quote }}
+              {{- end }}
+              {{- end }}
             - name: gateway-rpc
               containerPort: {{ .Values.ports.gatewayRpc }}
           env:
@@ -332,6 +338,12 @@ spec:
           ports:
             - name: http-garden
               containerPort: {{ .Values.ports.garden }}
+              {{- if .Values.hostPorts.garden.enabled }}
+              hostPort: {{ .Values.hostPorts.garden.port }}
+              {{- with .Values.hostPorts.garden.hostIP }}
+              hostIP: {{ . | quote }}
+              {{- end }}
+              {{- end }}
           env:
             {{- include "psfn.commonEnv" . | nindent 12 }}
             - name: ADMIN_HOST

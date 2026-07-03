@@ -40,6 +40,16 @@ spec:
       ports:
         - port: {{ .Values.ports.gatewayApi }}
           protocol: TCP
+    {{- if and .Values.hostPorts.gatewayApi.enabled .Values.hostPorts.gatewayApi.sourceCIDRs }}
+    - from:
+        {{- range .Values.hostPorts.gatewayApi.sourceCIDRs }}
+        - ipBlock:
+            cidr: {{ . | quote }}
+        {{- end }}
+      ports:
+        - port: {{ .Values.ports.gatewayApi }}
+          protocol: TCP
+    {{- end }}
     - from:
         - podSelector:
             matchLabels:
@@ -180,6 +190,16 @@ spec:
       ports:
         - port: {{ .Values.ports.garden }}
           protocol: TCP
+    {{- if and .Values.hostPorts.garden.enabled .Values.hostPorts.garden.sourceCIDRs }}
+    - from:
+        {{- range .Values.hostPorts.garden.sourceCIDRs }}
+        - ipBlock:
+            cidr: {{ . | quote }}
+        {{- end }}
+      ports:
+        - port: {{ .Values.ports.garden }}
+          protocol: TCP
+    {{- end }}
   egress:
     - to:
         - namespaceSelector:

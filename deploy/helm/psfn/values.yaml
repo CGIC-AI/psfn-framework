@@ -55,6 +55,18 @@ ports:
   redis: 6379
   liteLlm: 4000
 
+hostPorts:
+  gatewayApi:
+    enabled: false
+    port: 10053
+    hostIP: ""
+    sourceCIDRs: []
+  garden:
+    enabled: false
+    port: 10054
+    hostIP: ""
+    sourceCIDRs: []
+
 workloads:
   gateway:
     replicaCount: 1

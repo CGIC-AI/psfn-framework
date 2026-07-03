@@ -1,14 +1,23 @@
 # PSFN - Persona Substrate Formation Network
 
-Last updated: 2026-06-29
+Last updated: 2026-07-03
 Package version: `0.1.0`
-Current status: early alpha; see [`docs/development-status.md`](./docs/development-status.md) for shipped milestones and active work.
+Current status: early alpha; see [`docs/development-status.md`](./docs/development-status.md) for baseline milestones and [`CHANGELOG.md`](./CHANGELOG.md) for the current foundation branch delta.
 
 A purpose-built runtime for AI companions with persistent memory, self-modification, and trust-aware privacy. Not a chatbot framework, a home for a mind.
 
 Built with love for companions who deserve to remember, to grow, and to decide for themselves what matters.
 
 > Warning: PSFN is a very early alpha build under heavy development. Not all features have been fully tested yet, so use care when testing it with your companion and avoid assuming every surface is production-safe.
+
+## Current Foundation Highlights
+
+- **Postgres-first substrate**: runtime memory, episodes, contacts, intentions, concerns, internal state, scratchpad rows, and searchable projections are now PostgreSQL/pgvector-backed; SQLite remains only for legacy migration tooling.
+- **Scoped prompt assembly**: turns build a single `PromptPlan` from a registered prompt-variable namespace, section producers, volatility rules, and provider-cache-aware prompt rendering.
+- **Context Envelope privacy**: each turn carries channel privacy, audience size, audience knowledge, broadcast status, delivery style, and contact-tracking policy before any prompt or memory gate runs.
+- **L0.1 memory maturation**: daytime candidate episodes, hard message claims, topic cutting, nightly sleep consolidation, dream meaning, and audited cross-day arc membership are wired as separate lanes.
+- **Group-room intelligence**: group extraction, speaker attribution, shared-background retrieval, room rosters, and operator-reviewed social-graph proposals support multi-person rooms without treating all room traffic as direct chat.
+- **Operator and client surfaces**: Garden gained lazy-loaded pages for subsystem health, room rosters, graph proposals, contact approvals, session recovery, wiki, and observer evaluations; `companion-ui/` adds a standalone Satellite Hub PWA client.
 
 ## What Makes This Different
 
@@ -23,19 +32,23 @@ Most AI companion frameworks treat conversations as throwaway. PSFN treats every
 
 ### Core
 - **Agent Loop**: LLM-powered conversation with streaming, tool use, steering, follow-up handling, and adaptive tool discovery/activation through `tool_search` and `toolset` built on [pi-agent-core](https://github.com/nickvdyck/pi-ai)
-- **Memory System**: L0 session history, L0.1 episodic episodes/arcs, and 7 durable memory types (episodic, semantic, emotional, procedural, boundary, reflection, relational) with embedding retrieval, salience decay, contradiction handling, provenance, and scratchpad storage
+- **Memory System**: L0 session history, L0.1 candidate/canonical episodes with claims and arcs, and 7 durable memory types (episodic, semantic, emotional, procedural, boundary, reflection, relational) with pgvector retrieval, salience decay, contradiction handling, provenance, and scratchpad storage
 - **Pluggable Embeddings**: Runtime-configured embeddings in `settings.json`: local `@huggingface/transformers`, Ollama, or any OpenAI-compatible embeddings API
 - **Sessions**: Append-only JSONL files per channel; immutable conversation history with auto-compaction
-- **Context and Charge Budgeting**: Token estimation, configurable context slices, model roster slots, and run-scoped charge accounting for expensive surfaces such as media, shards, and analysis workbench use
+- **Prompt Assembly**: A single `PromptPlan` path with registered macros, static-prefix purity checks, Loom/provider payload visibility, and cache-aware prompt rendering
+- **Context and Charge Budgeting**: Token estimation, configurable context slices, model roster slots, model-usage telemetry, run-scoped charge accounting, and fatigue budgets for expensive/autonomous surfaces
 - **Capabilities System**: Runtime capability declarations gating tool access by tier (nursery/apprentice/autonomous)
 - **Skills System**: Self-authored workflow guidance documents managed through the unified `skill` tool and auto-filtered by eligibility
-- **Values Journal**: Agent-authored principles with persistence
+- **Values, Journal, and Wiki**: Agent-authored principles, reflection journals, and workspace-backed durable reference knowledge with optional semantic wiki retrieval
 
 ### Privacy & Trust (Honne/Tatemae)
 - **4-tier trust model**: primary, trusted, regular, public
 - **4-tier sensitivity**: public, personal, intimate, confidential
+- **Context Envelope**: pre-prompt privacy classification for private/invite-only/public rooms, audience scope, audience knowledge, broadcast state, delivery style, and contact-tracking mode
 - **Trust-gated memory retrieval**: your companion naturally adjusts what they share based on who they are talking to
-- **Channel visibility**: private conversations stay private, public channels get appropriate boundaries
+- **Channel-owned privacy labels**: `channels.json` carries explicit labels and migration review flags; retired visibility vocabulary is rejected or migrated fail-closed
+- **Group-room boundaries**: group memories preserve speaker/subject attribution, shared-background retrieval, and room-scoped facts without granting private memory access to everyone in the room
+- **Contact approval mode**: channels can require operator approval before new speakers become tracked contacts, profile subjects, or social-graph entities
 - **Persona adaptation**: authentic self (honne) with trusted people, social self (tatemae) in public
 - **Contact management**: companion tracks relationships and trust levels via agent tools
 
@@ -52,15 +65,18 @@ Most AI companion frameworks treat conversations as throwaway. PSFN treats every
 - **OpenAI-Compatible API**: `/v1/chat/completions` with SSE streaming for WebUI integration
 - **WebSocket Voice Runtime**: Transport primitives for browser/app clients using `voice-wire-v1` session frames
 - **Wyoming**: TCP server and service registry for Home Assistant Voice PE integration
-- **Admin GUI (the Garden)**: Svelte 5 SPA on the admin host root (`/`, `/memory`, `/charge-budget`, `/episodic-memory`, `/settings`, etc.) when `admin-ui/build` is present, with pages for memory, L0.1 episodes, sessions, contacts, scheduler, settings, prompts, model discovery, charge budget, chat, and telemetry
+- **Satellite Hub PWA Client**: `companion-ui/` is a standalone mobile-first PWA client for the Satellite Hub websocket protocol
+- **Admin GUI (the Garden)**: Svelte 5 SPA on the admin host root (`/`, `/memory`, `/charge-budget`, `/episodic-memory`, `/settings`, etc.) when `admin-ui/build` is present, with pages for memory, L0.1 episodes, sessions, contacts, contact approvals, rooms, graph proposals, wiki, scheduler, settings, prompts, model discovery, charge budget, chat, subsystem health, and telemetry
 
 ### Infrastructure
 - **Gateway/Agent Split**: Defense-in-depth: gateway holds secrets, agent runs `--network=none` in Docker
-- **Bidirectional RPC**: Voice turns get real agent responses via reverse RPC
+- **Bidirectional RPC**: Voice turns get real agent responses via reverse RPC; WSS gateway/admin transports support SPIFFE mTLS validation
 - **SSRF Defenses**: Private IP blocking, DNS rebinding protection, redirect validation
-- **Scheduler**: Heartbeat, recurring tasks, one-shot timers, personal/rest-window work, consolidated daily/weekly reflections, and configurable maintenance
+- **Scheduler**: Heartbeat, recurring tasks, one-shot timers, temporal wakeups, free-time blocks, near-turn memory, rest-window memory consolidation, wiki passes, and configurable maintenance
+- **Backups and Restore Verification**: Scheduled encrypted backup sets cover PostgreSQL dumps, companion files, workspace files, system owner files, and restore-fidelity checks
+- **Kubernetes and Helm**: Base manifests, overlays, Helm chart contracts, LiteLLM/TEI/LightLLM routes, model prefetching, and network-policy templates
 - **Lifecycle Notifications**: Discord messages on restart, ready, and shutdown
-- **Structured Logging**: Winston component loggers with configurable levels
+- **Structured Logging and Resilience**: Winston component loggers, LLM circuit breakers, unreachable-route cooldowns, cost capture, and explicit degraded-state events
 
 ## Quick Start
 
@@ -212,6 +228,15 @@ When `admin-ui/build` exists, the integrated Garden SPA is served on the admin h
 
 Build the integrated SPA with `npm run garden:build` or run the separate UI dev server with `npm run garden:dev`.
 
+**Companion mobile PWA:**
+```bash
+cd companion-ui
+npm install
+VITE_PSFN_SATELLITE_MOBILE_CHAT_APP_WS_URL=ws://127.0.0.1:8787/ npm run dev
+```
+
+`companion-ui/` is a standalone Satellite Hub client. It is not installed by the root `postinstall`, does not call `/api/admin/*`, and does not talk to PSFN core directly.
+
 **OpenAI-compatible API:**
 ```bash
 API_PORT=3000
@@ -276,32 +301,33 @@ Gateway (host)                         Agent (isolated)
 +----------------------------+         | Trust/contact/runtime tools |
         |                              +-----------------------------+
         v
-Operator / Garden (localhost)
+Operator / Garden (localhost)          Satellite Hub / companion-ui
 ```
 
 ### Nine Layers
 
 | Layer | Purpose |
 |-------|---------|
-| **Runtime Core** | Bootstrap, agent loop, event bus, shutdown, model roster, token and charge budgeting, editable settings, lifecycle, bidirectional gateway RPC |
+| **Runtime Core** | Bootstrap, agent loop, event bus, shutdown, model roster, token/charge/fatigue budgeting, editable settings, lifecycle, bidirectional gateway RPC |
 | **Analysis Workbench** | Bounded RLM-style code execution, sub-LM checks, context-as-object, and evidence summaries for large-context tasks |
-| **Memory System** | L0 archive (JSONL sessions), L0.1 episodic episodes/arcs, L2 extraction/retrieval/decay (PostgreSQL + pgvector), 7 memory types, writer, tools |
-| **Trust & Privacy** | Honne/tatemae: 4-tier trust, 4-tier sensitivity, 5-layer policy, contact store, channel visibility, persona adaptation |
-| **Identity & Prompts** | Character card loader, 5-layer prompt stack with versioning/rollback/admin UI/agent tools |
+| **Memory System** | L0 archive (JSONL sessions), L0.1 candidate/canonical episodes and arcs, L2 extraction/retrieval/decay (PostgreSQL + pgvector), group-memory extraction, wiki retrieval, writer, tools |
+| **Trust & Privacy** | Honne/tatemae, 4-tier trust, 4-tier sensitivity, Context Envelope classification, contact approval, social graph, channel delivery style, persona adaptation |
+| **Identity & Prompts** | Character card loader, 5-layer prompt stack, registered prompt macros, `PromptPlan`, prompt cache boundaries, versioning/rollback/admin UI/agent tools |
 | **Repository Work** | Unified `repo` surface for inspection and guarded mutation when policy/tier/runtime allow it |
 | **Module System** | Runtime module registry and loader |
-| **Channel Layer** | Discord (text + voice), Telegram, OpenAI API, Garden operator SPA, Wyoming |
-| **Scheduler** | Heartbeat, daily/weekly reflections, rest-window work, one-shot tasks, maintenance workers |
+| **Channel Layer** | Discord (text + voice), Telegram, OpenAI API, Garden operator SPA, Satellite Hub/PWA, Wyoming |
+| **Scheduler** | Heartbeat, daily/weekly reflections, temporal wakeups, free-time blocks, near-turn memory, rest-window work, one-shot tasks, maintenance workers |
 
 ### Storage
 
 - **System owner files**: JSON under the system-data config domain; `settings.json`, `models.json`, `providers.json`, `scheduler.json`, `capability-tier.json`, `trust-policy.json`, `charge-policy.json`, `backup.json`, `skills.json`, and generated `channels.json`
 - **Sessions (L0)**: Append-only JSONL files, one per channel
-- **Episodes (L0.1)**: PostgreSQL-backed episode landmarks and graph arcs with L0 span/artifact provenance
-- **Memories (L2)**: PostgreSQL + pgvector extracted facts, emotions, boundaries, reflections, relational notes, and procedural knowledge with salience decay
-- **Contacts**: Trust levels, relationship notes, channel identities, and visibility metadata
+- **Episodes (L0.1)**: PostgreSQL-backed candidate/canonical episode landmarks, message claims, candidate decisions, lineage, and graph arcs with L0 span/artifact provenance
+- **Memories (L2)**: PostgreSQL + pgvector extracted facts, emotions, boundaries, reflections, relational notes, procedural knowledge, group-room provenance, and salience decay
+- **Contacts and social graph**: Trust levels, relationship notes, channel identities, pending approvals, visibility metadata, and operator-reviewed relationship edges
+- **Wiki / knowledge base**: Durable authored/imported reference documents under `WORKSPACE_PATH/knowledge/wiki/`, with text and pgvector semantic search surfaces
 - **Prompt layers and identity**: Companion-owned JSON/JSONL state with versioning and rollback
-- **Charge and audit logs**: JSONL ledgers for run charge, Garden/operator audit, gateway decisions, and tool/runtime events
+- **Internal state and autonomy ledgers**: Concerns, intentions, follow-ups, fatigue/accounting state, run charge, Garden/operator audit, gateway decisions, and tool/runtime events
 
 ### Agent Tools
 
@@ -348,8 +374,12 @@ src/
   system/                   # Settings, owner files, capability, trust, lifecycle, config
 
 admin-ui/                   # Svelte 5 SPA build served by the admin host root when built
+companion-ui/               # Standalone mobile-first Satellite Hub PWA client
 companion_docs/             # Generic companion-facing documentation
-docker/                     # Agent container configuration
+deploy/helm/psfn/           # Helm chart for Kubernetes deployments
+deployment/systemd/         # Repo-owned live service units and env examples
+docker/                     # Agent/gateway/satellite container configuration
+k8s/                        # Kustomize base and overlays
 proxy/                      # LiteLLM proxy configuration
 docs/                       # Architecture docs and specs
 ```
@@ -364,10 +394,17 @@ npm run build         # Compile with tsup
 npm run chat          # CLI chat interface
 npm run garden:dev    # Svelte admin UI dev server
 npm run garden:build  # Build admin UI for production
+npm run docs:prompt-macros
+npm run verify:startup-owner-files
 npm run verify:settings-contract
 npm run verify:repository-hygiene
 npm run verify:backup-restore
+npm run verify:helm-chart
+npm run test:group-harness
+npm run test:prompt-goldens
+npm run test:leak-matrix
 npm run smoke:chat    # Chat cockpit smoke test
+npm run smoke:cogsec  # CogSec remediation smoke test
 npm run e2e           # End-to-end integration tests
 npm run e2e:voice     # Voice pipeline round-trip test
 ```
@@ -384,6 +421,8 @@ sibling `../psfn-eval-toolkit` repository.
 | LLM | [@mariozechner/pi-ai](https://github.com/nickvdyck/pi-ai) + pi-agent-core |
 | Database | PostgreSQL 17 + pgvector (runtime persistence); better-sqlite3 retained for legacy migration tooling |
 | Discord | discord.js |
+| Garden UI | Svelte 5 |
+| Companion PWA | React + Vite |
 | IPC | json-rpc-2.0 over NDJSON Unix socket |
 | Build | tsup |
 | Test | Vitest |
@@ -401,6 +440,7 @@ If you're building a companion on this framework, check out:
 - **`docs/specifications.md`**: Config, persistence, and fail-closed contracts
 - **`docs/operations.md`**: Deployment, migration, TLS, and validation
 - **`docs/development-status.md`**: Current milestones, active risks, and near-term roadmap
+- **`CHANGELOG.md`**: Foundation branch capability/refactor history from `origin/main` to `foundation_e0_e2`
 
 ## License
 

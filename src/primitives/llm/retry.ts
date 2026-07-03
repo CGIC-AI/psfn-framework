@@ -17,8 +17,16 @@ export interface RetryAttempt {
   error: Error;
 }
 
+export interface RetryDecision {
+  attempt: number;
+  maxRetries: number;
+  error: Error;
+}
+
 export interface RetryOptions {
   isRetryable?: (error: Error) => boolean;
+  shouldRetry?: (decision: RetryDecision) => boolean;
+  shouldRecordFailure?: (error: Error) => boolean;
   onRetry?: (attempt: RetryAttempt) => void | Promise<void>;
   sleep?: (delayMs: number) => Promise<void>;
   circuitBreaker?: {
@@ -142,12 +150,19 @@ export async function withRetry<T>(
         return await fn();
       } catch (error) {
         const err = toError(error);
-        const canRetry = retryAttempt < resolved.maxRetries && isRetryable(err);
+        const attempt = retryAttempt + 1;
+        const retryable = isRetryable(err);
+        const shouldRetry = options?.shouldRetry?.({
+          attempt,
+          maxRetries: resolved.maxRetries,
+          error: err,
+        }) ?? true;
+        const canRetry = retryAttempt < resolved.maxRetries && retryable && shouldRetry;
         if (!canRetry) throw err;
 
         const delayMs = backoffDelay(resolved.baseDelayMs, retryAttempt);
         await options?.onRetry?.({
-          attempt: retryAttempt + 1,
+          attempt,
           maxRetries: resolved.maxRetries,
           delayMs,
           error: err,
@@ -165,7 +180,7 @@ export async function withRetry<T>(
     key: options.circuitBreaker.key,
     ...(options.circuitBreaker.method ? { method: options.circuitBreaker.method } : {}),
     operation: run,
-    shouldRecordFailure: isRetryable,
+    shouldRecordFailure: options.shouldRecordFailure ?? isRetryable,
     onTransition: options.circuitBreaker.onTransition,
   });
 }

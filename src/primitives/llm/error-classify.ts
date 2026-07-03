@@ -2,6 +2,7 @@ export type LLMErrorCategory =
   | 'abort'
   | 'context_overflow'
   | 'rate_limit'
+  | 'connection_unavailable'
   | 'timeout'
   | 'auth'
   | 'empty_response'
@@ -48,6 +49,17 @@ const RATE_LIMIT_PATTERNS = [
   'tokens per minute',
   'over capacity',
   'temporarily overloaded',
+] as const;
+
+const CONNECTION_UNAVAILABLE_PATTERNS = [
+  'api connection error',
+  'connection error',
+  'cannot connect to host',
+  'connect call failed',
+  'connection refused',
+  'destination host unreachable',
+  'no route to host',
+  'network is unreachable',
 ] as const;
 
 const TIMEOUT_PATTERNS = [
@@ -134,6 +146,13 @@ export function classifyLLMError(error: unknown): LLMErrorClassification {
 
   if (statusCode === 429 || includesAny(text, RATE_LIMIT_PATTERNS)) {
     return { category: 'rate_limit', retryable: true, ...(statusCode !== undefined ? { statusCode } : {}) };
+  }
+
+  const connectionUnavailableCode = code === 'ECONNREFUSED'
+    || code === 'EHOSTUNREACH'
+    || code === 'ENETUNREACH';
+  if (connectionUnavailableCode || includesAny(text, CONNECTION_UNAVAILABLE_PATTERNS)) {
+    return { category: 'connection_unavailable', retryable: true, ...(statusCode !== undefined ? { statusCode } : {}) };
   }
 
   const timeoutStatus = statusCode === 408 || statusCode === 504;

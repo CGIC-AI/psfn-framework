@@ -110,17 +110,23 @@ export class FallbackRunner {
     const classification = classifyLLMError(err);
     const isLastAttempt = attempt >= orderedCandidates.length;
 
-    if (classification.category === 'rate_limit') {
+    if (classification.category === 'rate_limit' || classification.category === 'connection_unavailable') {
       const nextCooldownUntil = this.markCooldown(candidate);
-      log.warn('Rate limit hit; marking candidate cooldown', {
-        purpose,
-        model: candidate.model,
-        provider: candidate.provider,
-        cooldownMs: this.cooldownMs,
-        cooldownUntil: new Date(nextCooldownUntil).toISOString(),
-        attempt,
-        ...correlationFields,
-      });
+      log.warn(
+        classification.category === 'rate_limit'
+          ? 'Rate limit hit; marking candidate cooldown'
+          : 'Candidate connectivity failure; marking candidate cooldown',
+        {
+          purpose,
+          category: classification.category,
+          model: candidate.model,
+          provider: candidate.provider,
+          cooldownMs: this.cooldownMs,
+          cooldownUntil: new Date(nextCooldownUntil).toISOString(),
+          attempt,
+          ...correlationFields,
+        },
+      );
     }
 
     if (explicitNonRecoverable || classification.category === 'abort' || classification.category === 'context_overflow') {

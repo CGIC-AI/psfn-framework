@@ -2376,6 +2376,111 @@ describe('LLMClient model budget gates and usage metering', () => {
     ]);
   });
 
+  it('fails over from unreachable ChatGPTN without retrying the same stream candidate', async () => {
+    const config = makeConfig({
+      primaryModel: 'ChatGPTN',
+      primaryProvider: 'litellm',
+      modelRoster: {
+        chat: { model: 'ChatGPTN', provider: 'litellm', maxTokens: 4096, contextWindow: 128_000 },
+        background: { model: 'deepseek/deepseek-v3.2', provider: 'openrouter', maxTokens: 8192 },
+      },
+      modelRegistry: {
+        schemaVersion: 1,
+        models: [
+          {
+            id: 'chatgptn-primary',
+            rank: 10,
+            identity: {
+              provider: 'litellm',
+              model: 'ChatGPTN',
+              source: { type: 'litellm' },
+            },
+            purposes: [{ purpose: 'chat', primary: true }],
+            capabilities: {
+              maxOutputTokens: 4096,
+              contextWindow: 128_000,
+            },
+            tuning: {
+              maxOutputTokens: 4096,
+            },
+          },
+          {
+            id: 'openai-nano-fallback',
+            rank: 20,
+            identity: {
+              provider: 'openrouter',
+              model: 'openai/gpt-5.4-nano',
+              source: { type: 'openrouter' },
+            },
+            purposes: [{ purpose: 'chat', primary: false }],
+            capabilities: {
+              maxOutputTokens: 2048,
+              contextWindow: 128_000,
+            },
+            tuning: {
+              maxOutputTokens: 2048,
+            },
+          },
+        ],
+      },
+    });
+    const client = new LLMClient(config, {
+      litellmBaseUrl: 'http://litellm.test/v1',
+    });
+
+    mocks.streamSimple.mockImplementation((model: { id: string }) => (async function* streamByModel() {
+      if (model.id === 'ChatGPTN') {
+        throw new Error(
+          '500 litellm.InternalServerError: OpenAIException - Connection error. '
+          + 'Cannot connect to host 192.168.1.43:8000 ssl:default',
+        );
+      }
+
+      yield {
+        type: 'done',
+        message: {
+          model: model.id,
+          usage: { input: 8, output: 4 },
+          content: [{ type: 'text', text: 'Recovered on nano.' }],
+        },
+        reason: 'stop',
+      };
+    })());
+
+    const response = await client.stream({
+      systemPrompt: 'System',
+      messages: [{ role: 'user', content: 'Hello there' }],
+      correlation: {
+        turnId: 'turn-unreachable-primary-1',
+        requestId: 'req-unreachable-primary-1',
+        channelId: 'channel-unreachable-primary-1',
+        callType: 'chat',
+        originType: 'chat',
+        originStage: 'agent.turn.prompt',
+      },
+    });
+    const secondResponse = await client.stream({
+      systemPrompt: 'System',
+      messages: [{ role: 'user', content: 'Second hello' }],
+      correlation: {
+        turnId: 'turn-unreachable-primary-2',
+        requestId: 'req-unreachable-primary-2',
+        channelId: 'channel-unreachable-primary-1',
+        callType: 'chat',
+        originType: 'chat',
+        originStage: 'agent.turn.prompt',
+      },
+    });
+
+    expect(response.content).toBe('Recovered on nano.');
+    expect(secondResponse.content).toBe('Recovered on nano.');
+    expect(mocks.streamSimple.mock.calls.map(call => (call[0] as { id: string }).id)).toEqual([
+      'ChatGPTN',
+      'openrouter/openai/gpt-5.4-nano',
+      'openrouter/openai/gpt-5.4-nano',
+    ]);
+  });
+
   it('falls back without streaming leading provider template artifacts from the primary model', async () => {
     const config = makeConfig({
       primaryModel: 'ChatGPTN',

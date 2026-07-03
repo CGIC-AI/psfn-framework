@@ -90,6 +90,7 @@ import {
   type CircuitBreakerTransition,
   SlidingWindowCircuitBreaker,
 } from '../../shared/resilience/circuit-breaker.js';
+import { classifyLLMError } from './error-classify.js';
 
 const log = createComponentLogger('LLMClient');
 const LLM_CIRCUIT_BREAKER_WINDOW_MS = 60_000;
@@ -1335,6 +1336,7 @@ export class LLMClient {
               method: 'llm.stream',
               onTransition: transition => this.logCircuitBreakerTransition(transition),
             },
+            shouldRetry: ({ error }) => shouldRetryWithinCandidate(error),
             onRetry: ({ attempt, maxRetries, delayMs, error }) => {
               log.warn('LLM stream failed, retrying', {
                 model: String(model.id),
@@ -1481,6 +1483,7 @@ export class LLMClient {
             method: 'llm.complete',
             onTransition: transition => this.logCircuitBreakerTransition(transition),
           },
+          shouldRetry: ({ error }) => shouldRetryWithinCandidate(error),
           onRetry: ({ attempt, maxRetries, delayMs, error }) => {
             log.warn('LLM complete failed, retrying', {
               model: String(model.id),
@@ -1696,6 +1699,10 @@ export class LLMClient {
 
 function isAbortError(error: Error): boolean {
   return error.name === 'AbortError' || /aborted|abort|cancelled|canceled/i.test(error.message);
+}
+
+function shouldRetryWithinCandidate(error: Error): boolean {
+  return classifyLLMError(error).category !== 'connection_unavailable';
 }
 
 

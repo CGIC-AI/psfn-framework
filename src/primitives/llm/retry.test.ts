@@ -54,6 +54,33 @@ describe('withRetry', () => {
     expect(sleep).not.toHaveBeenCalled();
   });
 
+  it('can skip same-operation retries while still recording retryable circuit failures', async () => {
+    const breaker = new SlidingWindowCircuitBreaker({
+      failureThreshold: 1,
+      windowMs: 60_000,
+      cooldownMs: 30_000,
+    });
+    const fn = vi.fn<() => Promise<string>>()
+      .mockRejectedValue(new Error('500 Cannot connect to host 192.168.1.43:8000'));
+    const sleep = vi.fn(async (_ms: number) => {});
+
+    await expect(
+      withRetry(fn, { maxRetries: 3, baseDelayMs: 10 }, {
+        sleep,
+        shouldRetry: () => false,
+        circuitBreaker: {
+          breaker,
+          key: 'llm.stream::litellm::ChatGPTN',
+          method: 'llm.stream',
+        },
+      }),
+    ).rejects.toThrow('Cannot connect to host');
+
+    expect(fn).toHaveBeenCalledTimes(1);
+    expect(sleep).not.toHaveBeenCalled();
+    expect(breaker.snapshot('llm.stream::litellm::ChatGPTN').state).toBe('open');
+  });
+
   it('opens a circuit after exhausted retryable failures and short-circuits later calls', async () => {
     const breaker = new SlidingWindowCircuitBreaker({
       failureThreshold: 2,

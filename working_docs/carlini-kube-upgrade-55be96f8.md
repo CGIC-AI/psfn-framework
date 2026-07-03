@@ -76,6 +76,29 @@ Expected for the conservative migration:
 }
 ```
 
+## Optional Scheduler Flips
+
+After Carlini had already booted successfully on the conservative migration,
+the operator opted in to these scheduler settings on 2026-07-03:
+
+- `episodeSynthesis.topicSegmentationEnabled`: `true`.
+- `temporalWakeup.morningWake.timing`: `habit`.
+- `weightedThoughtOutreach.enabled`: `true`.
+
+Apply these in the live `scheduler.json` owner file, create a timestamped backup
+beside the file, then restart only the agent deployment:
+
+```bash
+sudo k3s kubectl -n psfn rollout restart deploy/psfn-agent
+sudo k3s kubectl -n psfn rollout status deploy/psfn-agent --timeout=300s
+```
+
+Validation after the opt-in should show the three values above, no `sleeptime`
+key, `TemporalWakeup` resolving with `timingMode:"habit"`, Carlini ready, and
+the normal health/model/database/cache smoke checks passing. This opt-in does
+not require a new image build or Helm upgrade when only the live owner file
+changes.
+
 ## Build And Deploy Sequence
 
 Local preflight:

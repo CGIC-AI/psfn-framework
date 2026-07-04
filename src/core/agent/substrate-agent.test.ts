@@ -21,6 +21,10 @@ import { parseSessionEmotionState } from '../emotion/session-metadata.js';
 import { DEFAULT_COMPANION_ID } from '../identity/companion-naming.js';
 import { MESSAGE_CLASSES } from './message-classes.js';
 import { buildDeferredToolHandoffMessage } from './deferred-tool-handoff.js';
+import {
+  notePendingPaidDeliverable,
+  runWithPaidDeliverableTracking,
+} from '../../shared/paid-deliverable-tracking.js';
 
 const TEST_COMPANION_NAME = 'Companion';
 const TEST_SYSTEM_PROMPT = `You are ${TEST_COMPANION_NAME}.`;
@@ -516,6 +520,46 @@ describe('SubstrateAgent construction', () => {
     expect(agent.memoryProvider).toBeNull();
     expect(agent.memoryExtractor).toBeNull();
     expect(agent.contactStore).toBeNull();
+  });
+
+  it('registers a response_control tool that rejects no_reply while a paid deliverable is pending', async () => {
+    const config = makeConfig();
+    const eventBus = new EventBus();
+    const llmClient = makeMockLLMProvider();
+    const sessionManager = makeMockSessionManager();
+
+    const agent = new SubstrateAgent(
+      eventBus, llmClient, sessionManager, 'System prompt', config,
+    );
+
+    const responseControlTool = agent.getToolCatalog().core
+      .find((tool) => tool.name === 'response_control');
+    expect(responseControlTool).toBeDefined();
+
+    // Pending paid deliverable: the registered tool must reject the no-reply
+    // before any decision is recorded (fail-closed paid-attachment guard).
+    const guardedResult = await runWithPaidDeliverableTracking(async () => {
+      notePendingPaidDeliverable({
+        surface: 'paidImageGeneration',
+        toolName: 'selfie_create',
+        toolCallId: 'call-selfie-live-1',
+        identifier: 'req-selfie-live-1',
+        artifactCount: 1,
+      });
+      return await responseControlTool!.execute('call-no-reply-1', { action: 'no_reply' });
+    });
+    expect((guardedResult.details as { isError?: boolean }).isError).toBe(true);
+    expect((guardedResult.content[0] as { text: string }).text).toContain('pending delivery');
+    expect((guardedResult.content[0] as { text: string }).text).toContain('req-selfie-live-1');
+
+    // Without a pending deliverable the guard passes through to the real
+    // recording callback, which fails closed on the missing turn correlation.
+    const passThroughResult = await runWithPaidDeliverableTracking(async () => (
+      await responseControlTool!.execute('call-no-reply-2', { action: 'no_reply' })
+    ));
+    expect((passThroughResult.details as { isError?: boolean }).isError).toBe(true);
+    expect((passThroughResult.content[0] as { text: string }).text)
+      .toContain('no-reply sentinel was not accepted');
   });
 
   it('accepts memory and contact providers', () => {

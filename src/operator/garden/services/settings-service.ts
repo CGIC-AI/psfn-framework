@@ -11,6 +11,7 @@ import {
   SETTINGS_VALIDATION,
 } from '../../../system/settings.js';
 import type { ConfigStorePort } from '../../../system/config/config-store.js';
+import type { ChargePolicyConfig } from '../../../system/config/charge-policy-config.js';
 import {
   applyProvidersRuntimeConfig,
 } from '../../../system/config/providers-config.js';
@@ -52,6 +53,7 @@ import type {
   AdminVoiceProviderData,
   AdminVoiceProviderOption,
   ConfigUpdateResult,
+  EffectiveChargeQuotaState,
   SettingsValidationError,
   SettingsConfigEditors,
 } from './types.js';
@@ -791,12 +793,35 @@ export class AdminSettingsDataService implements AdminSettingsService {
   async getSettingsData(): Promise<AdminSettingsData> {
     const runtimeConfig = splitSettingsByDomain(this.deps.configStore.loadRuntimeSettings()).runtime;
     runtimeConfig.sessionRestartBehavior ??= 'reuse_latest_session';
+    const editors = this.loadSettingsConfigEditors();
     return {
       config: runtimeConfig,
       env: this.getEnvInfo(),
-      editors: this.loadSettingsConfigEditors(),
+      editors,
       voiceProviders: this.loadVoiceProviderData(),
       status: this.buildSettingsStatus(),
+      effectiveChargeQuota: this.buildEffectiveChargeQuotaState(editors.chargePolicy),
+    };
+  }
+
+  /**
+   * Compares the on-disk charge-policy owner file against the quotas the
+   * running process loaded at startup (config.chargePolicy). A divergence means
+   * a restart is required before the on-disk edit takes effect — the exact
+   * failure mode psfn-framework-9bgk traced. Effective is null when the runtime
+   * carries no loaded charge policy.
+   */
+  private buildEffectiveChargeQuotaState(
+    onDisk: ChargePolicyConfig,
+  ): EffectiveChargeQuotaState {
+    const onDiskChargeQuotaByLane = onDisk.runChargeQuotaByLane;
+    const effectiveChargeQuotaByLane = this.deps.config.chargePolicy?.runChargeQuotaByLane ?? null;
+    const restartRequired = effectiveChargeQuotaByLane !== null
+      && JSON.stringify(effectiveChargeQuotaByLane) !== JSON.stringify(onDiskChargeQuotaByLane);
+    return {
+      effectiveChargeQuotaByLane,
+      onDiskChargeQuotaByLane,
+      restartRequired,
     };
   }
 

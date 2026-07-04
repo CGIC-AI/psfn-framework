@@ -1271,12 +1271,26 @@ export interface AdminSettingsStatus {
   divergences: AdminSettingsDivergence[];
 }
 
+/**
+ * Effective (startup-loaded) vs on-disk charge quota lanes. `restartRequired`
+ * is true when the owner file on disk diverges from the quotas the running
+ * process loaded at startup, so the operator knows a restart is needed before
+ * an edit takes effect. `effectiveChargeQuotaByLane` is null when the runtime
+ * has no loaded charge policy (e.g. Garden started without one).
+ */
+export interface EffectiveChargeQuotaState {
+  effectiveChargeQuotaByLane: ChargePolicyConfig['runChargeQuotaByLane'] | null;
+  onDiskChargeQuotaByLane: ChargePolicyConfig['runChargeQuotaByLane'];
+  restartRequired: boolean;
+}
+
 export interface AdminSettingsData {
   config: EditableSettings;
   env: EnvInfo;
   editors: SettingsConfigEditors;
   voiceProviders: AdminVoiceProviderData;
   status: AdminSettingsStatus;
+  effectiveChargeQuota: EffectiveChargeQuotaState;
 }
 
 export interface SettingsValidationError {

@@ -45,6 +45,14 @@ runtime:
   characterCardPath: /app/companion-data/companion.json
   modelCacheDir: /app/models/transformers
 
+bootstrap:
+  # First-ever-install opt-in ONLY. When true, the seed init container copies
+  # /app/config/*.seed.json into system-data for any missing owner file.
+  # Leave false so absent owner files fail closed at startup with the runtime's
+  # loadRequiredJson error instead of silently running on seed defaults. See
+  # src/system/config/load-or-seed.ts: "Runtime config must not seed itself".
+  seedOwnerFiles: false
+
 ports:
   gatewayApi: 10053
   gatewayRpc: 10054

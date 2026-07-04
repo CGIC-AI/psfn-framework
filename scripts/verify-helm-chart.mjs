@@ -170,6 +170,35 @@ assertNotIncludes(gardenDeployment, 'name: wait-for-postgres', 'Garden direct Po
 assertIncludes(gardenDeployment, 'name: workspace', 'Garden workspace PVC volume mount');
 assertIncludes(gardenDeployment, 'mountPath: /app/workspace', 'Garden workspace PVC mount path');
 
+// Owner-file seeding is fail-closed by default: the seed init container creates
+// runtime dirs and the companion.json bootstrap, but must NOT copy *.seed.json
+// owner files into system-data unless bootstrap.seedOwnerFiles is explicitly
+// opted in. Runtime config must not seed itself (psfn-framework-9bgk).
+assertIncludes(rendered, 'name: seed-runtime-files', 'seed init container present');
+assertIncludes(rendered, 'mkdir -p', 'seed init container creates runtime dirs');
+assertIncludes(
+  rendered,
+  'cp /seed/companion.json /app/companion-data/companion.json',
+  'companion.json bootstrap copy retained',
+);
+assertNotIncludes(
+  rendered,
+  '/app/config/*.seed.json',
+  'owner-file seeding disabled by default (fail closed)',
+);
+
+const seededRender = render(['--set', 'bootstrap.seedOwnerFiles=true']);
+assertIncludes(
+  seededRender,
+  'for src in /app/config/*.seed.json; do',
+  'owner-file seeding opt-in via bootstrap.seedOwnerFiles=true',
+);
+assertIncludes(
+  seededRender,
+  'target="/app/system-data/${base%.seed.json}.json"',
+  'owner-file seeding targets system-data owner files when opted in',
+);
+
 const liteLlmConfig = findDocumentByKindName(rendered, 'ConfigMap', 'psfn-litellm-config');
 assertIncludes(liteLlmConfig, 'model_name: "openrouter/*"', 'LiteLLM OpenRouter wildcard config');
 assertIncludes(liteLlmConfig, 'api_key: "os.environ/OPENROUTER_API_KEY"', 'LiteLLM provider key env reference');

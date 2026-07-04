@@ -425,6 +425,11 @@ group: cert-manager.io
         {{ .Values.runtime.tempDir }} \
         {{ .Values.runtime.backupsDir }} \
         {{ .Values.runtime.modelCacheDir }}
+      {{- if .Values.bootstrap.seedOwnerFiles }}
+      # bootstrap.seedOwnerFiles opt-in: seed missing owner files on a
+      # first-ever install ONLY. Runtime config must not seed itself
+      # (src/system/config/load-or-seed.ts); with this disabled, absent owner
+      # files fail closed at startup via loadRequiredJson.
       for src in {{ .Values.runtime.configDir }}/*.seed.json; do
         [ -e "$src" ] || continue
         base="$(basename "$src")"
@@ -433,6 +438,7 @@ group: cert-manager.io
           cp "$src" "$target"
         fi
       done
+      {{- end }}
       if [ ! -e {{ .Values.runtime.characterCardPath }} ] && [ -e /seed/companion.json ]; then
         cp /seed/companion.json {{ .Values.runtime.characterCardPath }}
       fi

@@ -65,6 +65,7 @@ import { rehydratePersistedInternalState } from '../../core/self-model/internal-
 import { ModuleLoader } from '../../system/modules/loader.js';
 import { DEFAULT_GATEWAY_TOOL_METADATA_COVERAGE } from '../../core/agent/tool-wiring-validator.js';
 import { registerGatewayMessageHandlers } from './gateway-message-handlers.js';
+import { OutboundReplyDeduper } from '../../system/lifecycle/outbound-reply-dedupe.js';
 import { ObservedGroupMemoryScheduler } from '../../faculties/memory/extraction/group-observed-scheduler.js';
 import { JsonGroupMemoryWatermarkStore } from '../../faculties/memory/extraction/group-ranges.js';
 import { createWyomingSatelliteRoutingPort } from '../../../satellites/wyoming/host/routing.js';
@@ -621,6 +622,11 @@ async function main(): Promise<void> {
   const gatewaySender = {
     send: (channelId: string, content: string) => gateway.discordSend(channelId, content),
   };
+  // Shared outbound-reply dedupe guard (psfn-framework-mdxu): the inbound
+  // Discord reply pump records every delivered reply here, and the
+  // deferred-tool-handoff continuation consults it to suppress a duplicate of a
+  // reply the operator already received one turn earlier.
+  const outboundReplyGuard = new OutboundReplyDeduper();
   // First proactive-outreach slice: only the configured primary heartbeat DM
   // is an approved target. Contact-graph channel resolution arrives with the
   // durable outbox (1xb.2).
@@ -854,6 +860,7 @@ async function main(): Promise<void> {
       dreamMeaningPass,
       sleeptimeWikiPass,
       proactiveOutbound,
+      outboundReplyGuard,
       outreachOutbox,
       memoryMaintenanceStore: memoryStore,
       episodicDiagnosticsStore: episodicStore,
@@ -888,6 +895,7 @@ async function main(): Promise<void> {
     log,
     trackSessionActivity,
     observedGroupMemoryScheduler,
+    outboundReplyGuard,
   });
 
   await eventBus.emit('system.init', {});

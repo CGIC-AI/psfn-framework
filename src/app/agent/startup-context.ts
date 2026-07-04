@@ -26,6 +26,7 @@ import {
   loadSatelliteRegistryConfig,
 } from '../../channels/backplane/satellite-registry.js';
 import { setRuntimeChannelEnvelopeLabels } from '../../system/trust/runtime-channel-labels.js';
+import { CHARGE_POLICY_FILE_NAME } from '../../system/config/charge-policy-config.js';
 import {
   buildRuntimeChannelsConfigOverrides,
 } from '../startup/support/bootstrap-helpers.js';
@@ -100,7 +101,7 @@ export function prepareAgentStartupContext(input: {
   const coreConfig = sanitizeCoreSubstrateConfig(config);
   logAgentStartupHydrationDiagnostics(input.log, startupHydration.diagnostics);
 
-  const { pathSnapshot, trustPolicyConfig, schedulerConfig } = startupHydration;
+  const { pathSnapshot, trustPolicyConfig, schedulerConfig, chargePolicyConfig } = startupHydration;
   input.log.info('Loaded trust policy configuration', {
     exactOverrideCount: Object.keys(
       trustPolicyConfig.channelClassification.visibilityOverrides.exact,
@@ -108,6 +109,10 @@ export function prepareAgentStartupContext(input: {
     prefixOverrideCount: Object.keys(
       trustPolicyConfig.channelClassification.visibilityOverrides.prefix,
     ).length,
+  });
+  input.log.info('Loaded charge policy quotas', {
+    runChargeQuotaByLane: chargePolicyConfig.runChargeQuotaByLane,
+    sourcePath: `${pathSnapshot.systemDataDir}/${CHARGE_POLICY_FILE_NAME}`,
   });
   const runtimeChannelsOverrides = buildRuntimeChannelsConfigOverrides(
     config,

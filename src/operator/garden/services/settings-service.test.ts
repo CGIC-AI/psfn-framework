@@ -808,6 +808,47 @@ describe('AdminSettingsDataService', () => {
     }));
   });
 
+  it('surfaces effective vs on-disk charge quotas with a restart-required indicator (psfn-framework-9bgk)', async () => {
+    const root = makeTempDir();
+    const config = buildConfig(root);
+    const service = buildService(config);
+
+    const seed = loadChargePolicyConfig(root);
+
+    // Operator edits the owner file on disk to raise the interactive quota.
+    const editedOnDisk = {
+      ...seed,
+      runChargeQuotaByLane: { ...seed.runChargeQuotaByLane, interactive: 100 },
+    };
+    const saveResult = service.saveSubConfigJson('charge-policy', JSON.stringify(editedOnDisk));
+    expect(saveResult.ok).toBe(true);
+
+    // The running process still carries the stale quota it loaded at startup.
+    const staleQuotaByLane = { ...seed.runChargeQuotaByLane, interactive: 24 };
+    config.chargePolicy = { ...seed, runChargeQuotaByLane: staleQuotaByLane };
+
+    const diverged = await service.getSettingsData();
+    expect(diverged.effectiveChargeQuota).toEqual({
+      effectiveChargeQuotaByLane: staleQuotaByLane,
+      onDiskChargeQuotaByLane: editedOnDisk.runChargeQuotaByLane,
+      restartRequired: true,
+    });
+
+    // Once the runtime is restarted (effective == on-disk), no restart is required.
+    config.chargePolicy = { ...seed, runChargeQuotaByLane: editedOnDisk.runChargeQuotaByLane };
+    const aligned = await service.getSettingsData();
+    expect(aligned.effectiveChargeQuota.restartRequired).toBe(false);
+
+    // With no loaded charge policy the effective lanes are null and no restart is flagged.
+    delete config.chargePolicy;
+    const unloaded = await service.getSettingsData();
+    expect(unloaded.effectiveChargeQuota).toEqual({
+      effectiveChargeQuotaByLane: null,
+      onDiskChargeQuotaByLane: editedOnDisk.runChargeQuotaByLane,
+      restartRequired: false,
+    });
+  });
+
   it('round-trips providers through providers.json owner-file saves and refreshes runtime routing', async () => {
     const root = makeTempDir();
     const refreshModelsSpy = vi.fn();

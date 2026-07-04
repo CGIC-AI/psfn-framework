@@ -24,7 +24,8 @@ repo-owned entrypoints: `dist/gateway-main.js`, `dist/agent-main.js`, and
 - A NetworkPolicy-capable CNI if you expect NetworkPolicies to be enforced.
   Stock k3s flannel does not enforce NetworkPolicy by itself.
 - A PSFN app image built from `docker/Dockerfile.agent`. The image now carries
-  `/app/config/*.seed.json` for seed-once owner-file bootstrap.
+  `/app/config/*.seed.json` for opt-in first-install owner-file bootstrap
+  (`bootstrap.seedOwnerFiles`, default `false`).
 
 Local image build:
 
@@ -79,10 +80,19 @@ CHARACTER_CARD_PATH=/app/companion-data/companion.json
 ```
 
 `system-data`, `companion-data`, `workspace`, `runtime`, and `model-cache` are
-PVC-backed. The seed init container copies `/app/config/*.seed.json` into
-`system-data` only when the target owner file is missing. It never overwrites
-Garden-edited owner files. A starter `companion.json` ConfigMap is copied once
-into `companion-data` only if no companion card exists.
+PVC-backed. The seed init container creates the runtime directories and, only
+when `bootstrap.seedOwnerFiles=true`, copies `/app/config/*.seed.json` into
+`system-data` for any missing owner file. It never overwrites Garden-edited
+owner files. A starter `companion.json` ConfigMap is copied once into
+`companion-data` only if no companion card exists.
+
+`bootstrap.seedOwnerFiles` defaults to `false`. With it disabled, absent owner
+files fail closed at startup with the runtime's `loadRequiredJson` error rather
+than silently running on seed defaults — the runtime must not seed itself
+(`src/system/config/load-or-seed.ts`). Set it to `true` for a first-ever
+install to consciously opt in to seeding, then leave it `false` (or unset) for
+all subsequent upgrades so a stale seed can never mask a missing/mis-migrated
+owner file.
 
 Mutable owner JSON stays on PVCs, not in ConfigMaps.
 

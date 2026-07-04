@@ -33,6 +33,7 @@ import { runShutdownSequence } from '../startup/support/shutdown-helpers.js';
 import { createSignalShutdownHandler, registerProcessErrorHandlers } from '../startup/support/signal-shutdown.js';
 import { resolveGatewayApiSurfaceBindings, startOptionalGatewayApiServer } from './api-surface.js';
 import { loadSatelliteRegistryConfig } from '../../channels/backplane/satellite-registry.js';
+import { CHARGE_POLICY_FILE_NAME } from '../../system/config/charge-policy-config.js';
 import { ensurePersonalFilesLayout } from '../../persistence/layout.js';
 
 const log = createComponentLogger('Gateway');
@@ -92,6 +93,10 @@ async function main(): Promise<void> {
     prefixOverrideCount: Object.keys(
       startupHydration.trustPolicyConfig.channelClassification.visibilityOverrides.prefix,
     ).length,
+  });
+  log.info('Loaded charge policy quotas', {
+    runChargeQuotaByLane: startupHydration.chargePolicyConfig.runChargeQuotaByLane,
+    sourcePath: `${startupHydration.pathSnapshot.systemDataDir}/${CHARGE_POLICY_FILE_NAME}`,
   });
   if (!bootstrap.diagnostics.workspacePathProvided) {
     log.warn('WORKSPACE_PATH not set, defaulting to runtime layout workspace path', {

@@ -44,6 +44,7 @@ import type { PostTurnActionRuntime } from '../agent/post-turn-action-runtime.js
 import type { InternalState } from '../self-model/state.js';
 import type { MemoryExtractor } from '../agent/contracts.js';
 import type { PromptRegistryStatePort } from '../identity/prompt-state-port.js';
+import type { OutboundReplyGuardPort } from '../../system/lifecycle/outbound-reply-dedupe.js';
 
 export const DEFERRED_HEARTBEAT_ACTION_KIND = 'heartbeat.run_template';
 
@@ -176,6 +177,13 @@ export interface HeartbeatRuntimeOptions {
   /** Sleeptime wiki update pass (E8.2): runs inside the sleeptime stack after settling. */
   sleeptimeWikiPass?: Pick<SleeptimeWikiPass, 'run'> | null;
   proactiveOutbound?: Pick<ProactiveOutboundDispatcher, 'dispatch'> | null;
+  /**
+   * Shared outbound-reply dedupe guard. When present, the deferred-tool-handoff
+   * continuation consults it before delivering its reply and suppresses (with a
+   * loud WARN) a message identical to one already delivered to the channel by
+   * the primary turn — preventing the double-reply loop (psfn-framework-mdxu).
+   */
+  outboundReplyGuard?: OutboundReplyGuardPort | null;
   outreachOutbox?: OutreachOutboxStore | null;
   memoryMaintenanceStore?: Pick<
     MemoryStorePort,

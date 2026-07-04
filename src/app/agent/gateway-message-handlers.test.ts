@@ -74,6 +74,10 @@ function createHarness(overrides?: {
   observeMessage?: (message: SubstrateMessage) => Promise<void>;
   waitForIdle?: () => Promise<void>;
   observedGroupMemoryScheduler?: ObservedGroupMemorySchedulerPort;
+  outboundReplyGuard?: {
+    noteDelivered: ReturnType<typeof vi.fn>;
+    evaluate: ReturnType<typeof vi.fn>;
+  };
 }) {
   let onHandleMessage:
     | ((message: SubstrateMessage) => Promise<AgentResponse>)
@@ -137,6 +141,9 @@ function createHarness(overrides?: {
     ...(overrides?.observedGroupMemoryScheduler
       ? { observedGroupMemoryScheduler: overrides.observedGroupMemoryScheduler }
       : {}),
+    ...(overrides?.outboundReplyGuard
+      ? { outboundReplyGuard: overrides.outboundReplyGuard }
+      : {}),
   });
 
   if (!onHandleMessage || !onDiscordMessage) {
@@ -151,6 +158,7 @@ function createHarness(overrides?: {
     log,
     trackSessionActivity,
     observedGroupMemoryScheduler: overrides?.observedGroupMemoryScheduler,
+    outboundReplyGuard: overrides?.outboundReplyGuard,
     onHandleMessage,
     onDiscordMessage,
   };
@@ -290,6 +298,60 @@ describe('registerGatewayMessageHandlers', () => {
     await vi.waitFor(() => {
       expect(harness.gateway.discordSend).toHaveBeenCalledWith('discord:general', 'discord response');
     });
+  });
+
+  it('records a delivered discord reply with the outbound reply guard (psfn-framework-mdxu)', async () => {
+    const outboundReplyGuard = {
+      noteDelivered: vi.fn(),
+      evaluate: vi.fn(() => null),
+    };
+    const harness = createHarness({
+      handleMessage: async () => makeResponse('primary reply text'),
+      outboundReplyGuard,
+    });
+    const message = makeMessage({
+      id: 'discord-msg-42',
+      channelId: 'discord:general',
+      channelType: 'discord',
+      routing: undefined,
+    });
+
+    await harness.onDiscordMessage(message);
+
+    await vi.waitFor(() => {
+      expect(harness.gateway.discordSend).toHaveBeenCalledWith('discord:general', 'primary reply text');
+    });
+    expect(outboundReplyGuard.noteDelivered).toHaveBeenCalledWith({
+      channelId: 'discord:general',
+      content: 'primary reply text',
+      sourceTurnId: 'discord-msg-42',
+      senderKind: 'discord_inbound_reply',
+    });
+  });
+
+  it('does not record an empty (suppressed) discord reply with the outbound reply guard', async () => {
+    const outboundReplyGuard = {
+      noteDelivered: vi.fn(),
+      evaluate: vi.fn(() => null),
+    };
+    const harness = createHarness({
+      handleMessage: async () => makeResponse('   '),
+      outboundReplyGuard,
+    });
+    const message = makeMessage({
+      id: 'discord-msg-43',
+      channelId: 'discord:general',
+      channelType: 'discord',
+      routing: undefined,
+    });
+
+    await harness.onDiscordMessage(message);
+
+    await vi.waitFor(() => {
+      expect(harness.agentLoop.handleMessage).toHaveBeenCalledWith(message);
+    });
+    expect(harness.gateway.discordSend).not.toHaveBeenCalled();
+    expect(outboundReplyGuard.noteDelivered).not.toHaveBeenCalled();
   });
 
   it('returns from discord notification receipt before backend turn work finishes', async () => {

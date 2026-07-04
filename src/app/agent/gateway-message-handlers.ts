@@ -5,6 +5,7 @@ import type { SatelliteRoutingPort } from '../../core/agent/satellite-adapter-po
 import type { ObservedGroupMemoryScheduleDecision } from '../../faculties/memory/extraction/group-observed-scheduler.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
 import { resolveCompanionIdFromConfig } from '../../core/identity/companion-runtime.js';
+import type { OutboundReplyGuardPort } from '../../system/lifecycle/outbound-reply-dedupe.js';
 
 const DUPLICATE_MESSAGE_WINDOW_MS = 2 * 60_000;
 const AGENT_BUSY_PATTERN = /already processing a prompt/i;
@@ -65,6 +66,12 @@ export interface GatewayMessageHandlersDeps {
   log: GatewayMessageLogger;
   trackSessionActivity: (message: SubstrateMessage) => void;
   observedGroupMemoryScheduler?: ObservedGroupMemorySchedulerPort;
+  /**
+   * Records primary replies delivered to Discord so replay-prone senders (the
+   * deferred-tool-handoff continuation) can detect and suppress a duplicate of
+   * an already-delivered reply. See `outbound-reply-dedupe.ts`.
+   */
+  outboundReplyGuard?: OutboundReplyGuardPort;
 }
 
 export function registerGatewayMessageHandlers(deps: GatewayMessageHandlersDeps): void {
@@ -78,6 +85,7 @@ export function registerGatewayMessageHandlers(deps: GatewayMessageHandlersDeps)
     log,
     trackSessionActivity,
     observedGroupMemoryScheduler,
+    outboundReplyGuard,
   } = deps;
 
   const inFlightHandleMessages = new Map<string, Promise<AgentResponse>>();
@@ -180,6 +188,15 @@ export function registerGatewayMessageHandlers(deps: GatewayMessageHandlersDeps)
           const response = await promptWhenIdle(message);
           if (response.content.trim()) {
             await gateway.discordSend(message.channelId, response.content);
+            // Record the primary reply so a later replay-prone turn (the
+            // deferred-tool-handoff continuation) can recognise and suppress a
+            // duplicate of what the operator already received.
+            outboundReplyGuard?.noteDelivered({
+              channelId: message.channelId,
+              content: response.content,
+              sourceTurnId: message.id,
+              senderKind: 'discord_inbound_reply',
+            });
           }
           for (const attachment of response.attachments ?? []) {
             await gateway.discordSendMedia(message.channelId, attachment);

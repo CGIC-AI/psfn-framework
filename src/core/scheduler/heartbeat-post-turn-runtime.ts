@@ -832,7 +832,37 @@ export function wireHeartbeatPostTurnRuntime(
       const response = await agentLoop.handleMessage(buildDeferredToolHandoffMessage(action.id, payload));
       const responseText = response.content.trim();
       if (responseText && !payload.turn.channelId.startsWith('internal:')) {
-        await sender.send(payload.turn.channelId, responseText);
+        // Primary mechanism fix for psfn-framework-mdxu: this continuation turn
+        // runs a fresh LLM turn and can regenerate text near-identical to the
+        // reply the primary turn already delivered ("I replay after a tool
+        // failure"). It shares no dedupe state with the inbound reply pump, so
+        // without this check the operator receives the same message twice, one
+        // turn apart. Defer to the already-delivered reply instead of blindly
+        // re-emitting — loudly, never silently.
+        const duplicate = runtimeOptions.outboundReplyGuard?.evaluate({
+          channelId: payload.turn.channelId,
+          content: responseText,
+        });
+        if (duplicate) {
+          log.warn('Suppressed duplicate deferred-tool-handoff reply; identical text already delivered to channel', {
+            actionId: action.id,
+            dedupeKey: action.dedupeKey,
+            channelId: payload.turn.channelId,
+            sourceMessageId: action.sourceMessageId,
+            priorSourceTurnId: duplicate.priorSourceTurnId,
+            priorSenderKind: duplicate.priorSenderKind,
+            priorReplyAgeMs: duplicate.ageMs,
+            contentHash: duplicate.hash,
+          });
+        } else {
+          await sender.send(payload.turn.channelId, responseText);
+          runtimeOptions.outboundReplyGuard?.noteDelivered({
+            channelId: payload.turn.channelId,
+            content: responseText,
+            sourceTurnId: action.sourceMessageId || payload.turn.turnId,
+            senderKind: 'deferred_tool_handoff',
+          });
+        }
       }
 
       executionState.executed = true;

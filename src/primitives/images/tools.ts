@@ -13,6 +13,7 @@ import {
   assertChargeSurfaceAvailable,
   chargeSurface,
 } from '../../shared/telemetry/run-charge.js';
+import { notePendingPaidDeliverable } from '../../shared/paid-deliverable-tracking.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
 import { tagToolWithReversibility } from '../../system/capabilities/safeguards.js';
 import {
@@ -100,8 +101,18 @@ export interface ImageReferenceResolver {
   resolveForTool(selector: ImageReferenceSelector): Promise<ResolvedImageReference | null>;
 }
 
+function resolveGenerationId(result: ImageGenerationResult): string | undefined {
+  const fromRequest = result.requestId?.trim();
+  if (fromRequest) {
+    return fromRequest;
+  }
+  const fromFileName = result.images.find((image) => image.fileName?.trim())?.fileName?.trim();
+  return fromFileName || undefined;
+}
+
 function formatResult(result: ImageGenerationResult): string {
   const imageCount = result.images.length;
+  const generationId = resolveGenerationId(result);
   return JSON.stringify({
     status: 'image_generated',
     provider: result.provider,
@@ -110,9 +121,15 @@ function formatResult(result: ImageGenerationResult): string {
     imageCount,
     fallbackUsed: result.fallbackUsed,
     ...(result.fallbackReason ? { fallbackReason: result.fallbackReason } : {}),
+    ...(generationId ? { generationId } : {}),
+    attachmentPending: true,
     delivery: imageCount === 1
-      ? 'The generated image is available as a chat attachment.'
-      : 'The generated images are available as chat attachments.',
+      ? 'This image is a pending chat attachment. It will be delivered to the user ONLY when you send your next reply this turn. '
+        + 'Send a reply (even one short line) so it reaches them; if you end the turn with no reply, this paid image will NOT be delivered. '
+        + 'Reference it by its fileName below.'
+      : 'These images are pending chat attachments. They will be delivered to the user ONLY when you send your next reply this turn. '
+        + 'Send a reply (even one short line) so they reach them; if you end the turn with no reply, these paid images will NOT be delivered. '
+        + 'Reference them by the fileNames below.',
     images: result.images.map((image, index) => ({
       index: index + 1,
       ...(image.contentType ? { contentType: image.contentType } : {}),
@@ -378,7 +395,11 @@ function preflightPaidImageGeneration(input: {
   });
 }
 
-function chargePaidImageGeneration(result: ImageGenerationResult, action: 'generate' | 'edit'): void {
+function chargePaidImageGeneration(
+  result: ImageGenerationResult,
+  action: 'generate' | 'edit',
+  source: { toolName: string; toolCallId?: string },
+): void {
   if (result.provider !== 'fal') {
     return;
   }
@@ -389,6 +410,17 @@ function chargePaidImageGeneration(result: ImageGenerationResult, action: 'gener
       ...(result.model ? { model: result.model } : {}),
       imageCount: result.images.length,
     },
+  });
+  // Fal is a paid external surface: a successful generation always incurred real
+  // spend and produced a user-facing artifact. Register it as an undelivered
+  // paid deliverable so the turn cannot silently end in no-reply and drop it.
+  const generationId = resolveGenerationId(result);
+  notePendingPaidDeliverable({
+    surface: 'paidImageGeneration',
+    toolName: source.toolName,
+    ...(source.toolCallId ? { toolCallId: source.toolCallId } : {}),
+    ...(generationId ? { identifier: generationId } : {}),
+    artifactCount: result.images.length,
   });
 }
 
@@ -470,6 +502,7 @@ async function executeMediaGenerate(
   ops: ImageOperations,
   reviewer: ImageVisionReviewer | undefined,
   params: MediaToolParams,
+  toolCallId: string,
 ): Promise<AgentToolResult<MediaToolResultDetails>> {
   const prompt = normalizePrompt(params.prompt);
   if (!prompt) {
@@ -509,7 +542,7 @@ async function executeMediaGenerate(
       useTurbo: params.use_turbo,
       sourceToolName: 'media',
     });
-    chargePaidImageGeneration(result, 'generate');
+    chargePaidImageGeneration(result, 'generate', { toolName: 'media', toolCallId });
     const review = await reviewGeneratedImages(reviewer, {
       imageUrls: result.images.map((image) => image.url),
       imageLocalPaths: result.images.map((image) => image.localPath?.trim() ?? ''),
@@ -532,6 +565,7 @@ async function executeMediaEdit(
   ops: ImageOperations,
   reviewer: ImageVisionReviewer | undefined,
   params: MediaToolParams,
+  toolCallId: string,
   referenceResolver?: ImageReferenceResolver,
 ): Promise<AgentToolResult<MediaToolResultDetails>> {
   const prompt = normalizePrompt(params.prompt);
@@ -583,7 +617,7 @@ async function executeMediaEdit(
       sourceToolName: 'media',
       ...(reference ? { referenceImageIds: [reference.id] } : {}),
     });
-    chargePaidImageGeneration(result, 'edit');
+    chargePaidImageGeneration(result, 'edit', { toolName: 'media', toolCallId });
     const review = await reviewGeneratedImages(reviewer, {
       imageUrls: result.images.map((image) => image.url),
       imageLocalPaths: result.images.map((image) => image.localPath?.trim() ?? ''),
@@ -719,14 +753,14 @@ export function createMediaTool(
       })),
     }),
     execute: async (
-      _toolCallId: string,
+      toolCallId: string,
       params: MediaToolParams,
     ): Promise<AgentToolResult<MediaToolResultDetails>> => {
       switch (params.action) {
         case 'generate':
-          return await executeMediaGenerate(ops, reviewer, params);
+          return await executeMediaGenerate(ops, reviewer, params, toolCallId);
         case 'edit':
-          return await executeMediaEdit(ops, reviewer, params, options?.referenceResolver);
+          return await executeMediaEdit(ops, reviewer, params, toolCallId, options?.referenceResolver);
         case 'analyze':
           return await executeMediaAnalyze(reviewer, params);
         default:
@@ -790,7 +824,7 @@ function createImageGenerationTool(
     description: buildImageCreateDescription(selfImage),
     parameters: Type.Object(parameterShape),
     execute: async (
-      _toolCallId: string,
+      toolCallId: string,
       params: {
         prompt: string;
         provider?: 'auto' | 'fal' | 'comfyui';
@@ -955,7 +989,10 @@ function createImageGenerationTool(
               sourceToolName: toolName,
             });
         }
-        chargePaidImageGeneration(result, mode === 'edit' ? 'edit' : 'generate');
+        chargePaidImageGeneration(result, mode === 'edit' ? 'edit' : 'generate', {
+          toolName,
+          toolCallId,
+        });
         const review = await reviewGeneratedImages(reviewer, {
           imageUrls: result.images.map((image) => image.url),
           imageLocalPaths: result.images.map((image) => image.localPath?.trim() ?? ''),

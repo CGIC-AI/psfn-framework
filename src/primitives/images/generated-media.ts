@@ -304,6 +304,42 @@ async function writeGeneratedImageGalleryMetadata(params: {
   writeJsonAtomic(`${localPath}${GENERATED_IMAGE_META_SUFFIX}`, base);
 }
 
+export interface ChargedImageDeliverableSummary {
+  toolName: string;
+  toolCallId?: string;
+  requestId?: string;
+  imageCount: number;
+}
+
+/**
+ * Identify paid (fal-provider) image deliverables present in a turn's messages.
+ * Free local providers (comfyui) are excluded: only charged surfaces represent
+ * spend that must not be silently dropped. Used at turn finalization to detect a
+ * paid artifact that never reached the outbound reply.
+ */
+export function summarizeChargedImageDeliverables(
+  turnMessages: AgentMessage[],
+): ChargedImageDeliverableSummary[] {
+  const summaries: ChargedImageDeliverableSummary[] = [];
+  for (const message of turnMessages) {
+    if (!isToolResultMessage(message)) continue;
+    if (!IMAGE_TOOL_NAMES.has(message.toolName)) continue;
+    if (message.isError === true) continue;
+    const result = resolveImageResultFromDetails(message.details)
+      ?? parseImageGenerationResult(extractToolResultText(message.content));
+    if (!result || result.provider !== 'fal' || result.images.length === 0) {
+      continue;
+    }
+    summaries.push({
+      toolName: message.toolName,
+      ...(message.toolCallId ? { toolCallId: message.toolCallId } : {}),
+      ...(result.requestId ? { requestId: result.requestId } : {}),
+      imageCount: result.images.length,
+    });
+  }
+  return summaries;
+}
+
 export async function collectGeneratedImageAttachments(params: {
   turnMessages: AgentMessage[];
   companionDataDir: string;

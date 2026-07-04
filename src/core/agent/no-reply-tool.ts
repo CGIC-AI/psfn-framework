@@ -7,6 +7,10 @@ import {
   NO_REPLY_DISPOSITION,
   RESPONSE_CONTROL_TOOL_NAME,
 } from '../../shared/agent-response-disposition.js';
+import {
+  listPendingPaidDeliverables,
+  type PendingPaidDeliverable,
+} from '../../shared/paid-deliverable-tracking.js';
 
 const MAX_NO_REPLY_REASON_LENGTH = 500;
 
@@ -33,6 +37,17 @@ export interface IntentionalNoReplyDecisionRequest {
 export type RecordIntentionalNoReplyDecision = (
   input: IntentionalNoReplyDecisionRequest,
 ) => IntentionalNoReplyMetadata | null;
+
+function describePendingPaidDeliverables(pending: readonly PendingPaidDeliverable[]): string {
+  return pending
+    .map((entry) => {
+      const label = entry.identifier ?? entry.toolCallId ?? entry.surface;
+      const count = entry.artifactCount && entry.artifactCount > 1 ? ` x${entry.artifactCount}` : '';
+      const via = entry.toolName ? ` via ${entry.toolName}` : '';
+      return `${label}${count}${via}`;
+    })
+    .join(', ');
+}
 
 function normalizeNoReplyReason(value: unknown): string | undefined {
   if (typeof value !== 'string') return undefined;
@@ -73,6 +88,22 @@ export function createResponseControlTool(
       toolCallId: string,
       params: ResponseControlParams,
     ): Promise<AgentToolResult<{ isError?: boolean; noReply?: boolean; auditId?: string }>> => {
+      // Fail closed: a paid deliverable produced this turn (at minimum a charged
+      // image generation) has not reached the user yet. Honoring no-reply here
+      // would silently drop an artifact they already paid for. Reject the request
+      // and require an explicit reply so the pending attachment rides out with it.
+      const pendingPaidDeliverables = listPendingPaidDeliverables();
+      if (pendingPaidDeliverables.length > 0) {
+        return responseControlResult({
+          ok: false,
+          error:
+            'A paid attachment generated this turn is still pending delivery and has not been sent to the user. '
+            + 'Intentional no-reply is rejected so the paid artifact is not silently dropped. '
+            + 'Send a reply this turn (even one short line) so the pending attachment is delivered with it. '
+            + `Pending paid deliverables: ${describePendingPaidDeliverables(pendingPaidDeliverables)}.`,
+        }, true);
+      }
+
       const decision = recordDecision({
         source: 'response_control_tool',
         toolCallId,

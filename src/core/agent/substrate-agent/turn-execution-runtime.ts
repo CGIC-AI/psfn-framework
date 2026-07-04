@@ -58,6 +58,8 @@ import type {
 import {
   resolveRuntimeLaneClassForTurn,
 } from '../worker-lanes.js';
+import { runWithPaidDeliverableTracking } from '../../../shared/paid-deliverable-tracking.js';
+import { summarizeChargedImageDeliverables } from '../../../primitives/images/generated-media.js';
 import { invokeAgentForTurn, type AgentInvocationMutableState } from './turn-execution/agent-invocation.js';
 import { createTurnExecutionObservability } from './turn-execution/observability.js';
 import { assembleTurnPrompt } from './turn-execution/prompt-assembly.js';
@@ -777,7 +779,11 @@ export async function handleMessageForTurn(
     contextMessageCount = promptAssembly.contextMessageCount;
 
     const promptStageStart = Date.now();
-    const invocationResult = await invokeAgentForTurn({
+    // Establish the turn-scoped paid-deliverable registry around the agent
+    // invocation so charged tools (e.g. paid image generation) can record an
+    // undelivered artifact and the in-turn response_control tool can refuse a
+    // no-reply that would silently drop it.
+    const invocationResult = await runWithPaidDeliverableTracking(() => invokeAgentForTurn({
       runtime,
       message,
       context: promptAssembly.context,
@@ -798,7 +804,7 @@ export async function handleMessageForTurn(
       speakerRole,
       mutableState: invocationState,
       observability,
-    });
+    }));
     turnMessages = invocationResult.turnMessages;
     responseModel = invocationResult.responseModel;
     persistedUserMessageContent = invocationResult.persistedUserMessageContent;
@@ -917,6 +923,30 @@ export async function handleMessageForTurn(
             ...(userSessionEntryId !== null ? { userSessionEntryId } : {}),
           },
         });
+
+    // Fail loud, never silently: if a charged image deliverable was produced this
+    // turn but is not riding out on the reply, surface it. The response_control
+    // guard should prevent the no-reply case; this is the last-resort audit trail.
+    const chargedImageDeliverables = summarizeChargedImageDeliverables(turnMessages);
+    if (chargedImageDeliverables.length > 0) {
+      if (noReplyDecision) {
+        log.warn('Paid image deliverable dropped by intentional no-reply', {
+          channelId: message.channelId,
+          turnId,
+          requestId,
+          noReplyAuditId: noReplyDecision.auditId,
+          noReplySource: noReplyDecision.source,
+          deliverables: chargedImageDeliverables,
+        });
+      } else if (responseAttachments.length === 0) {
+        log.warn('Paid image deliverable was not attached to the outbound reply', {
+          channelId: message.channelId,
+          turnId,
+          requestId,
+          deliverables: chargedImageDeliverables,
+        });
+      }
+    }
 
     if (!broadcastSafetyMeta?.approvalRequired && !noReplyDecision) {
       assistantSessionEntryId = runtime.recordAssistantMessage(

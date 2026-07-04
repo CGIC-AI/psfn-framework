@@ -12,6 +12,10 @@ import {
   resetRunChargeRollingWindowForTests,
   runWithChargeContext,
 } from '../../shared/telemetry/run-charge.js';
+import {
+  listPendingPaidDeliverables,
+  runWithPaidDeliverableTracking,
+} from '../../shared/paid-deliverable-tracking.js';
 import { resolveToolRequiredCapabilities } from '../../system/capabilities/requirements.js';
 import type { ChargePolicyConfig } from '../../system/config/charge-policy-config.js';
 import { makeTestFatiguePolicyConfig } from '../../test-support/charge-policy.js';
@@ -498,6 +502,101 @@ describe('image tools', () => {
     expect(resultText(result)).not.toContain('https://images.example.test/selfie-explicit.png');
     expect(resultText(result)).not.toContain('/tmp/selfie-explicit.png');
     expect(resultText(result)).toContain('Vision review:');
+  });
+
+  it('states the paid image is a pending attachment that requires a reply to deliver', async () => {
+    const ops = {
+      create: vi.fn(async () => ({
+        provider: 'fal' as const,
+        mode: 'create' as const,
+        model: 'fal-ai/nano-banana-2',
+        fallbackUsed: false,
+        requestId: 'req-pending-1',
+        images: [{
+          url: 'https://images.example.test/pending.png',
+          contentType: 'image/png',
+          fileName: 'pending.png',
+          localPath: '/tmp/pending.png',
+        }],
+      })),
+      edit: vi.fn(),
+    };
+
+    const tool = createSelfieTool(ops);
+    const result = await tool.execute('tool-call-pending', {
+      prompt: 'a candid mirror selfie in soft morning light',
+    }) as AgentToolResult<ImageToolResultDetails>;
+
+    const text = resultText(result);
+    expect(text).toContain('"attachmentPending": true');
+    expect(text).toContain('pending chat attachment');
+    expect(text).toContain('will NOT be delivered');
+    expect(text).toContain('"generationId": "req-pending-1"');
+    expect(text).toContain('"fileName": "pending.png"');
+  });
+
+  it('registers a pending paid deliverable for a charged selfie generation', async () => {
+    const ops = {
+      create: vi.fn(async () => ({
+        provider: 'fal' as const,
+        mode: 'create' as const,
+        model: 'fal-ai/nano-banana-2',
+        fallbackUsed: false,
+        requestId: 'req-deliverable-1',
+        images: [{
+          url: 'https://images.example.test/deliverable.png',
+          contentType: 'image/png',
+          fileName: 'deliverable.png',
+          localPath: '/tmp/deliverable.png',
+        }],
+      })),
+      edit: vi.fn(),
+    };
+
+    const tool = createSelfieTool(ops);
+    const pending = await runWithPaidDeliverableTracking(async () => {
+      await tool.execute('tool-call-deliverable', {
+        prompt: 'a candid mirror selfie in soft morning light',
+      });
+      return listPendingPaidDeliverables();
+    });
+
+    expect(pending).toEqual([{
+      surface: 'paidImageGeneration',
+      toolName: 'selfie_create',
+      toolCallId: 'tool-call-deliverable',
+      identifier: 'req-deliverable-1',
+      artifactCount: 1,
+    }]);
+  });
+
+  it('does not register a pending paid deliverable for a free comfyui generation', async () => {
+    const ops = {
+      create: vi.fn(async () => ({
+        provider: 'comfyui' as const,
+        mode: 'create' as const,
+        fallbackUsed: false,
+        requestId: 'req-free-1',
+        images: [{
+          url: 'https://images.example.test/free.png',
+          contentType: 'image/png',
+          fileName: 'free.png',
+          localPath: '/tmp/free.png',
+        }],
+      })),
+      edit: vi.fn(),
+    };
+
+    const tool = createSelfieTool(ops);
+    const pending = await runWithPaidDeliverableTracking(async () => {
+      await tool.execute('tool-call-free', {
+        prompt: 'a candid mirror selfie in soft morning light',
+        provider: 'comfyui',
+      });
+      return listPendingPaidDeliverables();
+    });
+
+    expect(pending).toEqual([]);
   });
 
   it('uses the default reference photo for selfie_create through the edit pipeline', async () => {

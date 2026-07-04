@@ -841,6 +841,74 @@ describe('handleMessageForTurn generated media delivery', () => {
       }),
     }));
   });
+
+  it('drops a paid deliverable and emits no attachments when the turn ends in intentional no-reply', async () => {
+    const eventBus = new EventBus();
+    const companionDataDir = makeTempDir();
+    const localPath = join(companionDataDir, 'no-reply-purr.png');
+    const buildContext = vi.fn(async () => ({
+      systemPrompt: 'System prompt',
+      messages: [],
+      manifest: undefined,
+    }));
+    const noReply: IntentionalNoReplyMetadata = {
+      schemaVersion: 1,
+      disposition: 'intentional_no_reply',
+      source: 'response_control_tool',
+      auditId: 'no-reply:paid-turn:call-media-1',
+      decidedAt: Date.parse('2026-07-04T02:33:00Z'),
+      turnId: '018f0000-0000-7000-9000-000000000003' as IntentionalNoReplyMetadata['turnId'],
+      requestId: 'msg-paid-no-reply',
+      channelId: 'ch1',
+      toolCallId: 'call-media-1',
+    };
+    const recordAssistantMessage = vi.fn(() => 2);
+    const runtime = createRuntime({
+      eventBus,
+      sessionManager: {} as SessionManager,
+      buildContext,
+      scheduleAutoCompactionBetweenTurns: vi.fn(async () => undefined),
+      awaitPendingAutoCompaction: vi.fn(async () => undefined),
+      recordUserMessage: vi.fn(() => 1),
+      recordAssistantMessage,
+      consumeIntentionalNoReplyDecision: vi.fn(() => noReply),
+      configOverrides: {
+        companionDataDir,
+      },
+    });
+    (runtime.agent.prompt as ReturnType<typeof vi.fn>).mockImplementationOnce(async (promptMessage: { content: string }) => {
+      (runtime.agent.state.messages as any[]).push({ role: 'user', content: promptMessage.content });
+      (runtime.agent.state.messages as any[]).push({
+        role: 'toolResult',
+        toolCallId: 'call-media-1',
+        toolName: 'media',
+        isError: false,
+        content: [{ type: 'text', text: 'Generated 1 image.' }],
+        details: {
+          mediaResult: {
+            provider: 'fal',
+            mode: 'create',
+            requestId: 'image-request-1',
+            images: [{
+              url: 'https://images.example.test/purr.png',
+              contentType: 'image/png',
+              fileName: 'purr.png',
+              localPath,
+            }],
+          },
+        },
+      });
+    });
+    runtime.extractResponseText = vi.fn(() => '');
+
+    const response = await handleMessageForTurn(runtime, createMessage('msg-paid-no-reply'));
+
+    // No-reply still suppresses egress; the paid drop is audited (WARN), never silent.
+    expect(response.content).toBe('');
+    expect(response.attachments).toBeUndefined();
+    expect(response.metadata.noReply).toEqual(noReply);
+    expect(recordAssistantMessage).not.toHaveBeenCalled();
+  });
 });
 
 describe('handleMessageForTurn fatigue enforcement', () => {

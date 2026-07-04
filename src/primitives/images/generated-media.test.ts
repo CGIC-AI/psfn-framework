@@ -2,7 +2,10 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { describe, expect, it, afterEach } from 'vitest';
-import { collectGeneratedImageAttachments } from './generated-media.js';
+import {
+  collectGeneratedImageAttachments,
+  summarizeChargedImageDeliverables,
+} from './generated-media.js';
 import { resolveGeneratedImagesDir } from '../../persistence/layout.js';
 
 describe('collectGeneratedImageAttachments', () => {
@@ -257,5 +260,79 @@ describe('collectGeneratedImageAttachments', () => {
     });
 
     expect(attachments).toEqual([]);
+  });
+});
+
+describe('summarizeChargedImageDeliverables', () => {
+  it('summarizes paid fal image tool results', () => {
+    const summaries = summarizeChargedImageDeliverables([
+      {
+        role: 'toolResult',
+        toolName: 'selfie_create',
+        toolCallId: 'call-paid-1',
+        isError: false,
+        details: {
+          imageResult: {
+            provider: 'fal',
+            mode: 'create',
+            requestId: 'req-paid-1',
+            fallbackUsed: false,
+            images: [
+              { url: 'https://images.example.test/a.png', fileName: 'a.png' },
+              { url: 'https://images.example.test/b.png', fileName: 'b.png' },
+            ],
+          },
+        },
+      } as any,
+    ]);
+
+    expect(summaries).toEqual([{
+      toolName: 'selfie_create',
+      toolCallId: 'call-paid-1',
+      requestId: 'req-paid-1',
+      imageCount: 2,
+    }]);
+  });
+
+  it('excludes free comfyui, errored, and non-image results', () => {
+    const summaries = summarizeChargedImageDeliverables([
+      {
+        role: 'toolResult',
+        toolName: 'media',
+        toolCallId: 'call-free',
+        isError: false,
+        details: {
+          mediaResult: {
+            provider: 'comfyui',
+            mode: 'create',
+            fallbackUsed: false,
+            images: [{ url: 'https://images.example.test/free.png', fileName: 'free.png' }],
+          },
+        },
+      } as any,
+      {
+        role: 'toolResult',
+        toolName: 'selfie_create',
+        toolCallId: 'call-errored',
+        isError: true,
+        details: {
+          imageResult: {
+            provider: 'fal',
+            mode: 'create',
+            fallbackUsed: false,
+            images: [{ url: 'https://images.example.test/errored.png', fileName: 'errored.png' }],
+          },
+        },
+      } as any,
+      {
+        role: 'toolResult',
+        toolName: 'scratchpad',
+        toolCallId: 'call-other',
+        isError: false,
+        content: [{ type: 'text', text: 'unrelated' }],
+      } as any,
+    ]);
+
+    expect(summaries).toEqual([]);
   });
 });

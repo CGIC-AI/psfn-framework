@@ -13,6 +13,7 @@ import {
   isBackgroundAppraisalChannel,
   normalizeIntentionFollowUpActionPayload,
   normalizeIntentionReminderActionPayload,
+  buildPostTurnAppraisalTranscript,
   sessionEntriesToIntentionMessages,
   toInferredPostTurnActions,
   type IntentionActionDecision,
@@ -980,5 +981,98 @@ describe('sessionEntriesToIntentionMessages', () => {
       content: 'This is the real partner message.',
       timestamp: 1_700_000_000_100,
     }]);
+  });
+});
+
+describe('buildPostTurnAppraisalTranscript', () => {
+  const turnStartMs = 1_700_000_100_000;
+  const nowMs = 1_700_000_105_000;
+  const priorEntry = {
+    role: 'assistant',
+    content: 'Earlier reply from a previous turn.',
+    timestamp: turnStartMs - 60_000,
+    channelId: 'discord:test',
+  };
+  const currentUserMessage = { content: 'How are you', timestampMs: turnStartMs };
+
+  it('does not duplicate the current exchange when it is already persisted in the window', () => {
+    const transcript = buildPostTurnAppraisalTranscript({
+      recentSessionEntries: [
+        priorEntry,
+        {
+          role: 'user',
+          content: 'How are you',
+          timestamp: turnStartMs,
+          channelId: 'discord:test',
+        },
+        {
+          role: 'assistant',
+          content: 'Quietly good.',
+          timestamp: turnStartMs + 3_000,
+          channelId: 'discord:test',
+        },
+      ],
+      currentUserMessage,
+      currentAssistantReply: 'Quietly good.',
+      nowMs,
+    });
+
+    expect(transcript).toEqual([
+      { role: 'assistant', content: 'Earlier reply from a previous turn.', timestamp: turnStartMs - 60_000 },
+      { role: 'user', content: 'How are you', timestamp: turnStartMs },
+      { role: 'assistant', content: 'Quietly good.', timestamp: nowMs },
+    ]);
+  });
+
+  it('appends the current exchange when persistence has not caught up yet', () => {
+    const transcript = buildPostTurnAppraisalTranscript({
+      recentSessionEntries: [priorEntry],
+      currentUserMessage,
+      currentAssistantReply: 'Quietly good.',
+      nowMs,
+    });
+
+    expect(transcript).toEqual([
+      { role: 'assistant', content: 'Earlier reply from a previous turn.', timestamp: turnStartMs - 60_000 },
+      { role: 'user', content: 'How are you', timestamp: turnStartMs },
+      { role: 'assistant', content: 'Quietly good.', timestamp: nowMs },
+    ]);
+  });
+
+  it('omits the assistant entry when the turn sent no outward reply', () => {
+    const transcript = buildPostTurnAppraisalTranscript({
+      recentSessionEntries: [priorEntry],
+      currentUserMessage,
+      currentAssistantReply: '',
+      nowMs,
+    });
+
+    expect(transcript).toEqual([
+      { role: 'assistant', content: 'Earlier reply from a previous turn.', timestamp: turnStartMs - 60_000 },
+      { role: 'user', content: 'How are you', timestamp: turnStartMs },
+    ]);
+  });
+
+  it('drops window entries with invalid timestamps instead of double-counting them', () => {
+    const transcript = buildPostTurnAppraisalTranscript({
+      recentSessionEntries: [
+        priorEntry,
+        {
+          role: 'user',
+          content: 'How are you',
+          timestamp: Number.NaN,
+          channelId: 'discord:test',
+        },
+      ],
+      currentUserMessage,
+      currentAssistantReply: 'Quietly good.',
+      nowMs,
+    });
+
+    expect(transcript).toEqual([
+      { role: 'assistant', content: 'Earlier reply from a previous turn.', timestamp: turnStartMs - 60_000 },
+      { role: 'user', content: 'How are you', timestamp: turnStartMs },
+      { role: 'assistant', content: 'Quietly good.', timestamp: nowMs },
+    ]);
   });
 });

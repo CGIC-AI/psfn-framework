@@ -14,4 +14,7 @@ export {
   pendingFollowUpsToPostTurnActionCandidates,
   toInferredPostTurnActions,
 } from './appraisal/action-translation.js';
-export { sessionEntriesToIntentionMessages } from './appraisal/formatting.js';
+export {
+  buildPostTurnAppraisalTranscript,
+  sessionEntriesToIntentionMessages,
+} from './appraisal/formatting.js';

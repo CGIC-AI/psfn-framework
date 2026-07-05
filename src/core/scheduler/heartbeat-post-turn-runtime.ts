@@ -41,7 +41,7 @@ import {
   normalizeIntentionOutboundMessageActionPayload,
   normalizeIntentionReminderActionPayload,
   pendingFollowUpsToPostTurnActionCandidates,
-  sessionEntriesToIntentionMessages,
+  buildPostTurnAppraisalTranscript,
   toInferredPostTurnActions,
 } from '../intention/appraisal.js';
 import { MotivationBridge } from '../intention/motivation.js';
@@ -497,20 +497,15 @@ export function wireHeartbeatPostTurnRuntime(
     void (async () => {
       try {
         const recentSessionEntries = runtimeOptions.sessionManager?.getRecentMessages(resolvedSessionId, 12) ?? [];
-        const recentMessages = sessionEntriesToIntentionMessages(recentSessionEntries);
-        recentMessages.push({
-          role: 'user',
-          content: context.message.content,
-          timestamp: context.message.timestamp.getTime(),
+        const recentMessages = buildPostTurnAppraisalTranscript({
+          recentSessionEntries,
+          currentUserMessage: {
+            content: context.message.content,
+            timestampMs: context.message.timestamp.getTime(),
+          },
+          currentAssistantReply: context.response.content.trim(),
+          nowMs: Date.now(),
         });
-        const trimmedResponse = context.response.content.trim();
-        if (trimmedResponse) {
-          recentMessages.push({
-            role: 'assistant',
-            content: trimmedResponse,
-            timestamp: Date.now(),
-          });
-        }
 
         if (context.response.metadata.internalState === undefined) {
           throw new Error('Intention post-turn appraisal requires response.metadata.internalState');

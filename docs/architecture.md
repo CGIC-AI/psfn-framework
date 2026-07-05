@@ -1,8 +1,8 @@
 # Architecture
 
-Last updated: 2026-06-29.
+Last updated: 2026-07-05.
 
-This is the current runtime shape. For the component graph, see [`docs/architecture-diagram.mmd`](./architecture-diagram.mmd). For the post-Sprint 8 source-backed snapshot, see [`docs/sprint-8-architecture-report.md`](./sprint-8-architecture-report.md); for current feature status and active work, see [`docs/development-status.md`](./development-status.md).
+This is the current runtime shape. For the component graph, see [`docs/architecture-diagram.mmd`](./architecture-diagram.mmd). For the end-to-end anatomy of a single chat turn (inbound queueing, in-turn continuations, reply disposition, post-turn lanes), see [`docs/chat-turn-lifecycle.md`](./chat-turn-lifecycle.md). For the post-Sprint 8 source-backed snapshot, see [`docs/sprint-8-architecture-report.md`](./sprint-8-architecture-report.md); for current feature status and active work, see [`docs/development-status.md`](./development-status.md).
 
 ## Canonical Runtime Model
 
@@ -117,7 +117,7 @@ See [`docs/memory.md`](./memory.md) for the memory contract.
 
 - `Scheduler` handles heartbeat/reflection tasks, maintenance, one-shot tasks, backups, and deferred work.
 - Rest/me-time configuration owns sleeptime entirely: heavy passes (sleep consolidation, arc weaving, dream meaning, orientation rewrite) run only from the rest-window scheduler task, never from turn cadence. The lightweight near-turn lane and the gated episode-synthesis lane cover daytime work.
-- Post-turn actions and intention appraisal live outside the main response path but stay in the same audited runtime.
+- Post-turn actions and intention appraisal live outside the main response path but stay in the same audited runtime. Their outputs (whispers/pending follow-ups) re-enter later turns through the agent followUp queue behind the user-facing boundary — see [`docs/chat-turn-lifecycle.md`](./chat-turn-lifecycle.md) §2 and §4.
 
 ## Persistence Topology
 

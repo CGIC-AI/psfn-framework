@@ -37,6 +37,7 @@ When checking behavior, prefer this order:
    - `README.md`
    - `docs/specifications.md`
    - `docs/architecture.md`
+   - `docs/chat-turn-lifecycle.md`
    - `docs/memory.md`
    - `docs/operations.md`
    - `docs/setup.md`

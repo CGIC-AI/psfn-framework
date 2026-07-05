@@ -35,15 +35,20 @@ export function isIntentionalNoReplyResponse(
 export function resolveAgentResponseDisposition(
   response: AgentResponse,
 ): AgentResponseDisposition {
-  if (isIntentionalNoReplyResponse(response)) {
+  const hasText = response.content.trim().length > 0;
+  const hasAttachments = (response.attachments ?? []).length > 0;
+
+  // Last-mile fail-closed guard: authored content always beats a noReply
+  // marker. The runtime only attaches metadata.noReply after blanking the
+  // response, so a response carrying both is a contract violation upstream —
+  // deliver the content rather than silently dropping it (psfn-framework-ay73).
+  if (isIntentionalNoReplyResponse(response) && !hasText && !hasAttachments) {
     return {
       kind: 'intentional_no_reply',
       noReply: response.metadata.noReply,
     };
   }
 
-  const hasText = response.content.trim().length > 0;
-  const hasAttachments = (response.attachments ?? []).length > 0;
   if (hasText || hasAttachments) {
     return { kind: 'send', hasText, hasAttachments };
   }

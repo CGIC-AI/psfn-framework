@@ -201,6 +201,128 @@ describe('scheduled-agent-loop stream result contract', () => {
     expect(events.some((event) => event.type === 'message_end' && event.message?.role === 'assistant')).toBe(false);
   });
 
+  it('marks the user-facing boundary once when internal follow-ups drain into the run', async () => {
+    const streamFn = makeStreamFn('value');
+    const events: any[] = [];
+    const whisperBatches: any[][] = [
+      [{
+        role: 'custom',
+        type: 'internalWhisper',
+        messageClass: 'internalWhisper',
+        content: 'Note to self: vary the reply.',
+        speakerName: 'Whisper',
+        timestamp: Date.now(),
+      }],
+      [{
+        role: 'custom',
+        type: 'systemNote',
+        messageClass: 'systemNote',
+        content: '[SYSTEM: CompletionHandoff] internal note',
+        timestamp: Date.now(),
+      }],
+    ];
+    const config = {
+      ...makeLoopConfig(),
+      getFollowUpMessages: async () => whisperBatches.shift() ?? [],
+    };
+
+    const stream = agentLoopWithScheduler(
+      [{ role: 'user', content: [{ type: 'text', text: 'hello' }] } as any],
+      {
+        systemPrompt: 'system prompt',
+        messages: [],
+        tools: [],
+      } as any,
+      config as any,
+      new AbortController().signal,
+      streamFn as any,
+      { maxParallelToolCalls: 1 },
+    );
+
+    for await (const event of stream) {
+      events.push(event);
+    }
+
+    const boundaryIndexes = events
+      .map((event, index) => (event.type === 'user_facing_boundary' ? index : -1))
+      .filter(index => index >= 0);
+    expect(boundaryIndexes).toHaveLength(1);
+
+    // The boundary must precede the injected whisper and every later
+    // assistant message so bounded extraction excludes continuation text.
+    const firstWhisperEventIndex = events.findIndex(
+      (event) => event.type === 'message_end' && event.message?.role === 'custom',
+    );
+    expect(firstWhisperEventIndex).toBeGreaterThan(boundaryIndexes[0]!);
+
+    const assistantEndIndexes = events
+      .map((event, index) => (
+        event.type === 'message_end' && event.message?.role === 'assistant' ? index : -1
+      ))
+      .filter(index => index >= 0);
+    expect(assistantEndIndexes[0]).toBeLessThan(boundaryIndexes[0]!);
+    expect(assistantEndIndexes.at(-1)).toBeGreaterThan(boundaryIndexes[0]!);
+  });
+
+  it('does not mark the boundary when the drained follow-up batch contains a user message', async () => {
+    const streamFn = makeStreamFn('value');
+    const events: any[] = [];
+    const batches: any[][] = [
+      [{
+        role: 'user',
+        content: [{ type: 'text', text: 'follow-up user message' }],
+        timestamp: Date.now(),
+      }],
+    ];
+    const config = {
+      ...makeLoopConfig(),
+      getFollowUpMessages: async () => batches.shift() ?? [],
+    };
+
+    const stream = agentLoopWithScheduler(
+      [{ role: 'user', content: [{ type: 'text', text: 'hello' }] } as any],
+      {
+        systemPrompt: 'system prompt',
+        messages: [],
+        tools: [],
+      } as any,
+      config as any,
+      new AbortController().signal,
+      streamFn as any,
+      { maxParallelToolCalls: 1 },
+    );
+
+    for await (const event of stream) {
+      events.push(event);
+    }
+
+    expect(events.some((event) => event.type === 'user_facing_boundary')).toBe(false);
+  });
+
+  it('does not mark the boundary for runs without follow-up drains', async () => {
+    const streamFn = makeStreamFn('value');
+    const events: any[] = [];
+
+    const stream = agentLoopWithScheduler(
+      [{ role: 'user', content: [{ type: 'text', text: 'hello' }] } as any],
+      {
+        systemPrompt: 'system prompt',
+        messages: [],
+        tools: [],
+      } as any,
+      makeLoopConfig() as any,
+      new AbortController().signal,
+      streamFn as any,
+      { maxParallelToolCalls: 1 },
+    );
+
+    for await (const event of stream) {
+      events.push(event);
+    }
+
+    expect(events.some((event) => event.type === 'user_facing_boundary')).toBe(false);
+  });
+
   it('stops repeated follow-up continuations with a bounded diagnostic', async () => {
     const streamFn = makeStreamFn('value');
     const events: any[] = [];

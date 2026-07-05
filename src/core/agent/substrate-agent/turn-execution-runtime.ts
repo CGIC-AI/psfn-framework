@@ -820,7 +820,30 @@ export async function handleMessageForTurn(
       turnIntent,
     } = invocationResult;
     const noReplyDecision = runtime.consumeIntentionalNoReplyDecision(turnId);
-    let safeResponseText = noReplyDecision ? '' : responseText;
+    // Intentional silence is only honored when no user-facing reply was
+    // authored. A no_reply issued during internal follow-up continuation
+    // (whisper/system-note steps drained into this run) must not suppress the
+    // reply already written for the user — that silently drops an authored
+    // reply (psfn-framework-ay73). responseText is already bounded to the
+    // user-facing portion of the run via the user-facing boundary index.
+    const honorNoReply = noReplyDecision != null && responseText.trim().length === 0;
+    if (noReplyDecision && !honorNoReply) {
+      log.warn('Intentional no-reply demoted: user-facing reply already authored this turn; delivering the reply', {
+        channelId: message.channelId,
+        turnId,
+        requestId,
+        noReplyAuditId: noReplyDecision.auditId,
+        noReplySource: noReplyDecision.source,
+      });
+      runtime.emitTelemetry('agent.no_reply.demoted', {
+        channelId: message.channelId,
+        turnId,
+        auditId: noReplyDecision.auditId,
+        source: noReplyDecision.source,
+        ...runtime.withCorrelationPurpose(turnCorrelationBase, 'agent.no_reply.demoted'),
+      });
+    }
+    let safeResponseText = honorNoReply ? '' : responseText;
     let broadcastSafetyMeta: AgentResponse['metadata']['broadcastSafety'] | undefined;
 
     if (contextEnvelope.broadcast) {
@@ -909,7 +932,7 @@ export async function handleMessageForTurn(
       turnMessages,
       trustLevel,
     );
-    const responseAttachments = noReplyDecision
+    const responseAttachments = honorNoReply
       ? []
       : await collectTurnResponseAttachments({
           runtime,
@@ -929,7 +952,7 @@ export async function handleMessageForTurn(
     // guard should prevent the no-reply case; this is the last-resort audit trail.
     const chargedImageDeliverables = summarizeChargedImageDeliverables(turnMessages);
     if (chargedImageDeliverables.length > 0) {
-      if (noReplyDecision) {
+      if (honorNoReply) {
         log.warn('Paid image deliverable dropped by intentional no-reply', {
           channelId: message.channelId,
           turnId,
@@ -948,7 +971,7 @@ export async function handleMessageForTurn(
       }
     }
 
-    if (!broadcastSafetyMeta?.approvalRequired && !noReplyDecision) {
+    if (!broadcastSafetyMeta?.approvalRequired && !honorNoReply) {
       assistantSessionEntryId = runtime.recordAssistantMessage(
         message,
         turnId,
@@ -1027,7 +1050,7 @@ export async function handleMessageForTurn(
         ...(Object.keys(responseDiagnostics).length > 0 ? { diagnostics: responseDiagnostics } : {}),
         ...(broadcastSafetyMeta ? { broadcastSafety: broadcastSafetyMeta } : {}),
         ...(responseFatigueMetadata ? { fatigue: responseFatigueMetadata } : {}),
-        ...(noReplyDecision ? { noReply: noReplyDecision } : {}),
+        ...(honorNoReply ? { noReply: noReplyDecision } : {}),
       },
     };
     await schedulePostTurnWork({

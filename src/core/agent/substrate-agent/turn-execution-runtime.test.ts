@@ -722,6 +722,8 @@ describe('handleMessageForTurn intentional no-reply', () => {
       recordAssistantMessage,
       consumeIntentionalNoReplyDecision,
     });
+    // Genuine silence: no user-facing reply text was authored this turn.
+    runtime.extractResponseText = vi.fn(() => '');
 
     const response = await handleMessageForTurn(runtime, createMessage('msg-no-reply'));
 
@@ -735,6 +737,52 @@ describe('handleMessageForTurn intentional no-reply', () => {
         metadata: expect.objectContaining({ noReply }),
       }),
     }));
+  });
+
+  it('demotes a no-reply issued after a user-facing reply was authored and delivers the reply', async () => {
+    const eventBus = new EventBus();
+    const buildContext = vi.fn(async () => ({
+      systemPrompt: 'System prompt',
+      messages: [],
+      manifest: undefined,
+    }));
+    const recordAssistantMessage = vi.fn(() => 2);
+    const noReply: IntentionalNoReplyMetadata = {
+      schemaVersion: 1,
+      disposition: 'intentional_no_reply',
+      source: 'response_control_tool',
+      auditId: 'no-reply:test-turn:tool-call-2',
+      decidedAt: Date.parse('2026-07-04T23:21:44Z'),
+      turnId: '018f0000-0000-7000-9000-000000000002' as IntentionalNoReplyMetadata['turnId'],
+      requestId: 'msg-demoted-no-reply',
+      channelId: 'ch1',
+      toolCallId: 'tool-call-2',
+    };
+    const consumeIntentionalNoReplyDecision = vi.fn(() => noReply);
+    const runtime = createRuntime({
+      eventBus,
+      sessionManager: {
+        buildContext,
+      } as unknown as SessionManager,
+      buildContext,
+      scheduleAutoCompactionBetweenTurns: vi.fn(async () => undefined),
+      awaitPendingAutoCompaction: vi.fn(async () => undefined),
+      recordUserMessage: vi.fn(() => 1),
+      recordAssistantMessage,
+      consumeIntentionalNoReplyDecision,
+    });
+    // The user-facing reply authored before the internal continuation issued
+    // its no_reply — it must be delivered, never silently dropped.
+
+    const response = await handleMessageForTurn(runtime, createMessage('msg-demoted-no-reply'));
+
+    expect(response.content).toBe('assistant reply');
+    expect(response.metadata.noReply).toBeUndefined();
+    expect(recordAssistantMessage).toHaveBeenCalledTimes(1);
+    expect(runtime.emitTelemetry).toHaveBeenCalledWith(
+      'agent.no_reply.demoted',
+      expect.objectContaining({ auditId: noReply.auditId }),
+    );
   });
 });
 

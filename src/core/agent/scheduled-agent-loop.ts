@@ -100,6 +100,7 @@ async function runLoop(
   let firstTurn = true;
   let assistantStepCount = 0;
   let checkInMessageSent = false;
+  let userFacingBoundaryMarked = false;
   const toolExecutionGuard = createToolCallExecutionGuard();
   let pendingMessages = (await config.getSteeringMessages?.()) || [];
 
@@ -187,6 +188,19 @@ async function runLoop(
 
     const followUpMessages = (await config.getFollowUpMessages?.()) || [];
     if (followUpMessages.length > 0) {
+      // Queued follow-ups are internal runtime notes (intention whispers,
+      // system notes) — draining them extends this run past the user-facing
+      // exchange. Mark the boundary once so downstream response extraction
+      // and no-reply scoping treat everything after it as internal
+      // continuation, never as the outward reply (psfn-framework-ay73).
+      // A batch containing a genuine user message stays user-facing.
+      const containsUserMessage = followUpMessages.some(
+        message => (message as { role?: unknown }).role === 'user',
+      );
+      if (!userFacingBoundaryMarked && !containsUserMessage) {
+        userFacingBoundaryMarked = true;
+        stream.push({ type: 'user_facing_boundary' });
+      }
       pendingMessages = followUpMessages;
       continue;
     }

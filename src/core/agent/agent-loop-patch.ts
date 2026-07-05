@@ -59,6 +59,11 @@ export function installAgentToolSchedulerPatch(
     this._state.isStreaming = true;
     this._state.streamMessage = null;
     this._state.error = undefined;
+    // User-facing boundary: index into _state.messages where internal
+    // follow-up continuation begins for this run (null = no internal
+    // continuation). Reset per run; set once when the loop drains queued
+    // internal follow-ups (psfn-framework-ay73).
+    this._state.userFacingBoundaryIndex = null;
 
     const reasoning = this._state.thinkingLevel === 'off' ? undefined : this._state.thinkingLevel;
     const promptCacheBoundaries = promptCacheHooks?.resolvePromptCacheBoundaries?.(
@@ -148,6 +153,13 @@ export function installAgentToolSchedulerPatch(
             this._state.isStreaming = false;
             this._state.streamMessage = null;
             break;
+          case 'user_facing_boundary':
+            if (this._state.userFacingBoundaryIndex == null) {
+              this._state.userFacingBoundaryIndex = this._state.messages.length;
+            }
+            // Internal marker for response extraction; not an agent event
+            // external subscribers know about.
+            continue;
           default:
             break;
         }

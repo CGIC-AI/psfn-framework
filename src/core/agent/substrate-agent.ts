@@ -1089,10 +1089,16 @@ export class SubstrateAgent {
           this.agent.state.model as { contextWindow?: unknown } | undefined,
         ),
         extractResponseText: () => extractResponseTextForRuntime({
-          assistantMessage: getLatestAssistantMessageForRuntime(this.agent.state.messages),
+          assistantMessage: getLatestAssistantMessageForRuntime(
+            this.agent.state.messages,
+            this.getUserFacingBoundaryIndex(),
+          ),
           logger: log,
         }),
-        getLatestAssistantMessage: () => getLatestAssistantMessageForRuntime(this.agent.state.messages),
+        getLatestAssistantMessage: () => getLatestAssistantMessageForRuntime(
+          this.agent.state.messages,
+          this.getUserFacingBoundaryIndex(),
+        ),
       },
     }), message);
 
@@ -1199,6 +1205,19 @@ export class SubstrateAgent {
 
   private hashPromptText(text: string): string {
     return hashPromptTextForTurn(text);
+  }
+
+  /**
+   * Index into agent state messages where internal follow-up continuation
+   * began for the current run, set by the patched agent loop when queued
+   * whispers/system notes drain into a live run. Assistant text past this
+   * index is internal processing, not the outward reply.
+   */
+  private getUserFacingBoundaryIndex(): number | undefined {
+    const boundary = (this.agent.state as { userFacingBoundaryIndex?: unknown }).userFacingBoundaryIndex;
+    return typeof boundary === 'number' && Number.isInteger(boundary) && boundary >= 0
+      ? boundary
+      : undefined;
   }
 
   private buildPromptTemplateVariables(

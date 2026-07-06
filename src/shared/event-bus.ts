@@ -146,7 +146,7 @@ export interface EventMap {
   'agent.completion_handoff': {
     handoff: CompletionHandoffRecord;
     targetChannelId?: string;
-    sessionEntryId?: number;
+    noticeBuffered?: boolean;
     timestamp: number;
   } & EventCorrelationFields;
   'agent.tools.autoload': {

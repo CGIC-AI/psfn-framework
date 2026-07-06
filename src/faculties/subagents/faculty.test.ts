@@ -1,4 +1,5 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
+import { CompletionNoticeBuffer } from '../../core/agent/completion-notices.js';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -343,10 +344,12 @@ describe('SubagentFaculty', () => {
     eventBus.on('agent.completion_handoff', event => {
       events.push(event);
     });
+    const completionNotices = new CompletionNoticeBuffer();
     const faculty = new SubagentFaculty({
       eventBus,
       llmProvider: mockLLM(),
       sessionStore,
+      completionNotices,
       embeddingService: null,
       memoryProvider: null,
       config: TEST_CONFIG,
@@ -365,25 +368,24 @@ describe('SubagentFaculty', () => {
     });
     const replay = await faculty.wait(result.subagentId);
 
-    const entries = sessionStore.getRecent('api:parent', 10);
     expect(replay.subagentId).toBe(result.subagentId);
-    expect(entries).toHaveLength(1);
-    expect(entries[0]).toMatchObject({
-      role: 'system',
-      authorId: 'system:completion-handoff',
-      authorName: 'CompletionHandoff',
-    });
-    expect(parseEntryMetadata(entries[0] ?? {})).toMatchObject({
-      type: 'completion_handoff',
-      status: 'completed',
-      partialResult: false,
-    });
-    expect(entries[0]?.content).toContain('"source": "subagent"');
-    expect(entries[0]?.content).toContain(`"subagentId": "${result.subagentId}"`);
-    expect(entries[0]?.content).toContain('"originatingBeadId": "PSFNLIVE-hlh0"');
-    expect(entries[0]?.content).toContain('policy_gated_companion_authored');
-    expect(entries[0]?.content).toContain('not partner-authored speech');
+    // Handoffs never write session entries; the parent transcript stays clean.
+    expect(sessionStore.getRecent('api:parent', 10)).toHaveLength(0);
+    const notices = completionNotices.peek('api:parent');
+    expect(notices).toHaveLength(1);
+    expect(notices[0]).toMatchObject({ status: 'completed' });
     expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      noticeBuffered: true,
+      handoff: expect.objectContaining({
+        source: 'subagent',
+        task: expect.objectContaining({ subagentId: result.subagentId }),
+        origin: expect.objectContaining({ originatingBeadId: 'PSFNLIVE-hlh0' }),
+        privacy: expect.objectContaining({
+          partnerNotification: 'policy_gated_companion_authored',
+        }),
+      }),
+    });
   });
 
   it('cancels active bounded workers without crossing into shard semantics', async () => {
@@ -444,16 +446,15 @@ describe('SubagentFaculty', () => {
       },
     })).rejects.toThrow('missing required capability');
 
-    const entries = sessionStore.getRecent('api:parent', 10);
-    expect(entries).toHaveLength(1);
-    expect(parseEntryMetadata(entries[0] ?? {})).toMatchObject({
-      type: 'completion_handoff',
-      status: 'blocked',
-      partialResult: false,
-    });
-    expect(entries[0]?.content).toContain('"reason": "missing_capabilities"');
-    expect(entries[0]?.content).toContain('policy_gated_companion_authored');
+    // Blocked handoffs are event-bus records only; no transcript writes.
+    expect(sessionStore.getRecent('api:parent', 10)).toHaveLength(0);
     expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      handoff: expect.objectContaining({
+        status: 'blocked',
+        blocker: expect.objectContaining({ reason: 'missing_capabilities' }),
+      }),
+    });
   });
 
   it('delegates Wyoming sessions through subagent lifecycle without shard ids', async () => {
@@ -516,9 +517,8 @@ describe('SubagentFaculty', () => {
     });
     expect(visibleTranscriptEntries[0]?.content).toBe('status check');
     expect(visibleTranscriptEntries[1]?.content).toBe('wyoming delegated response');
-    expect(handoffEntries).toHaveLength(1);
-    expect(handoffEntries[0]?.content).toContain('"source": "subagent"');
-    expect(handoffEntries[0]?.content).toContain('policy_gated_companion_authored');
+    // Handoffs no longer appear in the delegated transcript.
+    expect(handoffEntries).toHaveLength(0);
     expect(result.gatewayRouting).toEqual({
       schemaVersion: 1,
       companionId: 'companion',

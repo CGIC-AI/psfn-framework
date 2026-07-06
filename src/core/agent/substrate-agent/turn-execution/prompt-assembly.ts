@@ -53,6 +53,7 @@ import { detectTurnObservabilityWarnings } from '../../../turns/observability-wa
 import type { TurnSnapshot } from '../../../turns/snapshot.js';
 import { buildFatiguePromptAlert } from '../../fatigue/runtime-enforcement.js';
 import type { ResolvedAuthorContext, UserRuntimeProfile } from '../runtime-context.js';
+import { renderBackgroundCompletionsBlock } from '../../completion-notices.js';
 import type { TurnExecutionObservability } from './observability.js';
 
 const log = createComponentLogger('SubstrateAgent');
@@ -511,6 +512,21 @@ export async function assembleTurnPrompt(input: {
       producer: sessionContextScope?.producer ?? 'session.context-builder',
       ...(sessionContextScope?.scopeKey ? { scopeKey: sessionContextScope.scopeKey } : {}),
       renderedText: systemContextPromptBlock,
+    }));
+  }
+  // Ephemeral background-completion notices: compact, render-once, and placed
+  // in the system prompt (never among the recent chat messages). Draining here
+  // is what enforces the once-only contract.
+  const completionNoticesBlock = renderBackgroundCompletionsBlock(
+    runtime.completionNotices.drain(runtime.resolveSessionChannelId(message.channelId)),
+  );
+  if (completionNoticesBlock) {
+    planBlocks.push(createPromptPlanBlock({
+      id: 'background_completions',
+      layer: 'provider',
+      volatility: 'turn',
+      producer: 'agent.completion-notices',
+      renderedText: completionNoticesBlock,
     }));
   }
   // The canonical clock ships as an ordered turn-volatile block, rendered from

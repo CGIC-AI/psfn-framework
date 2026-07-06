@@ -57,12 +57,13 @@ import { toErrorMessage } from '../../shared/utils/errors.js';
 import { textResultWithError } from '../../core/tools/results.js';
 import {
   buildCompletionHandoffDedupeKey,
-  emitCompletionHandoffToSessionStore,
+  emitCompletionHandoff,
   safeEmitCompletionHandoffError,
   summarizeCompletionText,
   type CompletionHandoffInput,
   type CompletionHandoffRef,
 } from '../../core/agent/completion-handoff.js';
+import type { CompletionNoticeBuffer } from '../../core/agent/completion-notices.js';
 import type {
   ShardFoldReviewController,
   ShardFoldReviewRecord,
@@ -151,6 +152,8 @@ export interface ShardManagerDeps {
   eventBus: EventBus;
   llmProvider: LLMProviderPort;
   sessionStore: SessionStore;
+  /** Buffer for compact companion-facing completion notices (never session-persisted). */
+  completionNotices?: CompletionNoticeBuffer | null;
   sessionManager?: SessionManager | null;
   embeddingService: EmbeddingProviderPort | null;
   memoryProvider: MemoryProvider | null;
@@ -839,11 +842,11 @@ export class ShardManager implements ShardExecutionPort, SubagentExecutionPort {
   ): Promise<void> {
     if (!targetChannelId?.trim()) return;
     try {
-      await emitCompletionHandoffToSessionStore({
+      await emitCompletionHandoff({
         eventBus: this.deps.eventBus,
-        sessionStore: this.deps.sessionStore,
         targetChannelId,
         handoff,
+        ...(this.deps.completionNotices ? { notices: this.deps.completionNotices } : {}),
       });
     } catch (error) {
       this.auditTrail?.append('shard.completion_handoff.failed', {

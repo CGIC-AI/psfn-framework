@@ -275,9 +275,6 @@ export function buildAgentSchedulerRuntime(
     agentLoop: options.agentLoop,
     eligibilityGate: options.eligibilityGate,
     persistencePath: resolvePostTurnActionQueuePath(options.pathSnapshot.companionDataDir),
-    completionHandoff: {
-      sessionManager: options.sessionManager,
-    },
   });
   options.eventBus.on('agent.turn.end', ({ message, response }) => {
     const captured = options.sessionManager.recordCompressionFailureFromResponse(

@@ -3,13 +3,12 @@ import { existsSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import type { InferredPostTurnAction } from '../../../shared/contracts/runtime.js';
 import type { EventBus } from '../../../shared/event-bus.js';
 import type { Scheduler } from '../../../core/scheduler/scheduler.js';
-import type { SessionManager } from '../../../core/session/manager.js';
 import {
   POST_TURN_SUBAGENT_SPAWN_ACTION_KIND,
 } from '../../../core/agent/post-turn-action-runtime.js';
 import {
   buildCompletionHandoffDedupeKey,
-  emitCompletionHandoffToSessionManager,
+  emitCompletionHandoff as emitCompletionHandoffRecord,
   extractOriginIds,
   safeEmitCompletionHandoffError,
   type CompletionHandoffInput,
@@ -124,9 +123,6 @@ export interface WirePostTurnActionRuntimeOptions {
   baseRetryDelayMs?: number;
   maxRetryDelayMs?: number;
   persistencePath?: string;
-  completionHandoff?: {
-    sessionManager: Pick<SessionManager, 'getRecentMessages' | 'recordSystemMessage'>;
-  };
 }
 
 const DEFAULT_TASK_ID = 'post-turn-action-executor';
@@ -159,7 +155,6 @@ export function wirePostTurnActionRuntime(
     baseRetryDelayMs = 750,
     maxRetryDelayMs = 30_000,
     persistencePath,
-    completionHandoff,
   } = options;
 
   const handlers = new Map<string, Map<PostTurnActionHandler, RegisteredPostTurnActionHandler>>();
@@ -571,9 +566,6 @@ export function wirePostTurnActionRuntime(
       subagentSpawn?: PostTurnActionHandlerResult['subagentSpawn'];
     },
   ): void => {
-    if (!completionHandoff) {
-      return;
-    }
     const originIds = extractOriginIds(entry.action.payload);
     const subagentId = input.subagentSpawn?.subagentId;
     const subagentOutputRefs: CompletionHandoffInput['outputRefs'] = subagentId
@@ -613,9 +605,12 @@ export function wirePostTurnActionRuntime(
         input.blocker?.reason,
       ]),
     };
-    emitCompletionHandoffToSessionManager({
+    // Telemetry/journal record only. Deferred post-turn actions are runtime
+    // bookkeeping: they must never write into session transcripts and never
+    // surface companion-facing notices (subagent/shard results arrive through
+    // their own faculties).
+    emitCompletionHandoffRecord({
       eventBus,
-      sessionManager: completionHandoff.sessionManager,
       targetChannelId: entry.action.channelId,
       handoff,
     }).catch((error) => {

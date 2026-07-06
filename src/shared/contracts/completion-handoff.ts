@@ -95,7 +95,8 @@ export interface CompletionHandoffEmission {
   emitted: boolean;
   handoff: CompletionHandoffRecord;
   targetChannelId?: string;
-  sessionEntryId?: number | null;
+  /** True when a compact companion-facing notice was buffered for the next turn. */
+  noticeBuffered?: boolean;
   duplicate?: boolean;
   error?: string;
 }

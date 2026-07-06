@@ -17,6 +17,7 @@ import type { EmotionSelfModelRuntime } from './emotion-self-model-runtime.js';
 import type { ParticipantRelationshipEdgeInput, ResolvedAuthorContext, UserRuntimeProfile } from './runtime-context.js';
 import type { TurnExecutionRuntime } from './turn-execution-runtime.js';
 import type { PromptCacheTurnRuntime } from './turn-execution/prompt-cache-runtime.js';
+import { CompletionNoticeBuffer } from '../completion-notices.js';
 import type { TurnSupportRuntime } from './turn-support-runtime.js';
 import type { ToolRuntimeFacade } from './tool-runtime-facade.js';
 import type { ChannelMeta } from '../../../system/trust/policy.js';
@@ -157,6 +158,7 @@ export interface TurnExecutionAdapterOptions {
   turnSupportRuntime: TurnSupportRuntime;
   toolRuntimeFacade: ToolRuntimeFacade;
   promptCacheRuntime: PromptCacheTurnRuntime;
+  completionNotices?: CompletionNoticeBuffer;
   callbacks: TurnExecutionAdapterCallbacks;
 }
 
@@ -177,6 +179,7 @@ export function createTurnExecutionRuntimeAdapter(
     bridge: options.bridge,
     systemPrompt: options.systemPrompt,
     promptCacheRuntime: options.promptCacheRuntime,
+    completionNotices: options.completionNotices ?? new CompletionNoticeBuffer(),
     memoryProvider: options.memoryProvider,
     memoryExtractor: options.memoryExtractor,
     wikiRetrieval: options.wikiRetrieval,

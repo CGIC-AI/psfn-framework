@@ -109,63 +109,6 @@ function readQuarantineSidecar(path: string): Array<{
     });
 }
 
-function createCompletionHandoffSink(): {
-  entries: Array<{
-    id: number;
-    channelId: string;
-    role: 'system';
-    content: string;
-    authorId: string;
-    authorName: string;
-    timestamp: number;
-    metadata?: string | null;
-  }>;
-  manager: {
-    getRecentMessages: ReturnType<typeof vi.fn>;
-    recordSystemMessage: ReturnType<typeof vi.fn>;
-  };
-} {
-  const entries: Array<{
-    id: number;
-    channelId: string;
-    role: 'system';
-    content: string;
-    authorId: string;
-    authorName: string;
-    timestamp: number;
-    metadata?: string | null;
-  }> = [];
-  return {
-    entries,
-    manager: {
-      getRecentMessages: vi.fn((channelId: string, limit: number) => (
-        entries.filter(entry => entry.channelId === channelId).slice(-limit)
-      )),
-      recordSystemMessage: vi.fn((
-        channelId: string,
-        content: string,
-        authorId: string,
-        authorName: string,
-        _isDirectMessage?: boolean,
-        _continuation?: unknown,
-        options?: { metadata?: string },
-      ) => {
-        const id = entries.length + 1;
-        entries.push({
-          id,
-          channelId,
-          role: 'system',
-          content,
-          authorId,
-          authorName,
-          timestamp: Date.now(),
-          metadata: options?.metadata ?? null,
-        });
-        return id;
-      }),
-    },
-  };
-}
 
 describe('wirePostTurnActionRuntime', () => {
   beforeEach(() => {
@@ -1199,8 +1142,7 @@ describe('wirePostTurnActionRuntime', () => {
 
   it('routes post-turn subagent spawn actions through explicit policy and records status', async () => {
     const eventBus = new EventBus();
-    const handoffSink = createCompletionHandoffSink();
-    const handoffEvents: unknown[] = [];
+    const handoffEvents: Array<Record<string, any>> = [];
     eventBus.on('agent.completion_handoff', event => {
       handoffEvents.push(event);
     });
@@ -1215,9 +1157,6 @@ describe('wirePostTurnActionRuntime', () => {
         waitForIdle: vi.fn().mockResolvedValue(undefined),
       },
       intervalMs: 1,
-      completionHandoff: {
-        sessionManager: handoffSink.manager as any,
-      },
     });
     const executeSubagent = vi.fn(async () => ({
       subagentId: 'subagent-1',
@@ -1308,21 +1247,21 @@ describe('wirePostTurnActionRuntime', () => {
         ],
       },
     });
-    expect(handoffSink.entries).toHaveLength(1);
-    expect(handoffSink.entries[0]).toMatchObject({
-      channelId: 'test-channel',
-      role: 'system',
-      authorId: 'system:completion-handoff',
-    });
-    expect(JSON.parse(handoffSink.entries[0]?.metadata ?? '{}')).toMatchObject({
-      type: 'completion_handoff',
-      status: 'completed',
-      partialResult: false,
-    });
-    expect(handoffSink.entries[0]?.content).toContain('"source": "post_turn_action"');
-    expect(handoffSink.entries[0]?.content).toContain('"subagentId": "subagent-1"');
-    expect(handoffSink.entries[0]?.content).toContain('policy_gated_companion_authored');
+    // Bookkeeping handoffs are event-bus records only: no session writes, no
+    // companion-facing notices.
     expect(handoffEvents).toHaveLength(1);
+    expect(handoffEvents[0]).toMatchObject({
+      targetChannelId: 'test-channel',
+      noticeBuffered: false,
+      handoff: expect.objectContaining({
+        source: 'post_turn_action',
+        status: 'completed',
+        task: expect.objectContaining({ subagentId: 'subagent-1' }),
+        privacy: expect.objectContaining({
+          partnerNotification: 'policy_gated_companion_authored',
+        }),
+      }),
+    });
   });
 
   it('rejects malformed post-turn subagent spawn actions without invoking the port', async () => {
@@ -1443,7 +1382,10 @@ describe('wirePostTurnActionRuntime', () => {
 
   it('blocks deferred actions when eligibility denies required capabilities', async () => {
     const eventBus = new EventBus();
-    const handoffSink = createCompletionHandoffSink();
+    const handoffEvents: Array<Record<string, any>> = [];
+    eventBus.on('agent.completion_handoff', event => {
+      handoffEvents.push(event as Record<string, any>);
+    });
     const scheduler = new Scheduler(eventBus, {
       tickIntervalMs: 100,
       heartbeatIntervalMs: 1_000,
@@ -1462,9 +1404,6 @@ describe('wirePostTurnActionRuntime', () => {
       agentLoop,
       eligibilityGate,
       intervalMs: 10,
-      completionHandoff: {
-        sessionManager: handoffSink.manager as any,
-      },
     });
     const handler = vi.fn().mockResolvedValue(undefined);
     runtime.registerHandler('heartbeat.run_template', handler);
@@ -1486,13 +1425,16 @@ describe('wirePostTurnActionRuntime', () => {
     expect(handler).not.toHaveBeenCalled();
     expect(runtime.listQueued()).toHaveLength(0);
     expect(phases).toContain('failed');
-    expect(handoffSink.entries).toHaveLength(1);
-    expect(JSON.parse(handoffSink.entries[0]?.metadata ?? '{}')).toMatchObject({
-      type: 'completion_handoff',
-      status: 'blocked',
-      partialResult: false,
+    expect(handoffEvents).toHaveLength(1);
+    expect(handoffEvents[0]).toMatchObject({
+      noticeBuffered: false,
+      handoff: expect.objectContaining({
+        status: 'blocked',
+        blocker: expect.objectContaining({ reason: 'eligibility_denied' }),
+        privacy: expect.objectContaining({
+          partnerNotification: 'policy_gated_companion_authored',
+        }),
+      }),
     });
-    expect(handoffSink.entries[0]?.content).toContain('"reason": "eligibility_denied"');
-    expect(handoffSink.entries[0]?.content).toContain('policy_gated_companion_authored');
   });
 });

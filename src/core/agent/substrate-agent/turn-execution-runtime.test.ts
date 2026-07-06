@@ -42,6 +42,7 @@ import {
 import type { TurnExecutionRuntime } from './turn-execution-runtime.js';
 import { handleMessageForTurn } from './turn-execution-runtime.js';
 import { PromptCacheTurnRuntime } from './turn-execution/prompt-cache-runtime.js';
+import { CompletionNoticeBuffer } from '../completion-notices.js';
 import type { ResolvedAuthorContext } from './runtime-context.js';
 import { runMoaTurn } from './moa-turn.js';
 import { makeTestFatiguePolicyConfig } from '../../../test-support/charge-policy.js';
@@ -575,6 +576,7 @@ function createRuntime(params: {
     },
     systemPrompt: 'System prompt',
     promptCacheRuntime: new PromptCacheTurnRuntime(),
+    completionNotices: new CompletionNoticeBuffer(),
     memoryProvider: params.memoryProvider ?? null,
     memoryExtractor: null,
     skillsRuntime: null,

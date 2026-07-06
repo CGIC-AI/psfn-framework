@@ -64,6 +64,7 @@ import { invokeAgentForTurn, type AgentInvocationMutableState } from './turn-exe
 import { createTurnExecutionObservability } from './turn-execution/observability.js';
 import { assembleTurnPrompt } from './turn-execution/prompt-assembly.js';
 import type { PromptCacheTurnRuntime } from './turn-execution/prompt-cache-runtime.js';
+import type { CompletionNoticeBuffer } from '../completion-notices.js';
 import { computePreTurnState, prepareTurnIdentityState } from './turn-execution/pre-turn-state.js';
 import {
   collectTurnResponseAttachments,
@@ -94,6 +95,8 @@ export interface TurnExecutionRuntime {
   systemPrompt: string;
   /** Prompt-cache directive holder + prefix-stability tracker (E2.4). */
   promptCacheRuntime: PromptCacheTurnRuntime;
+  /** Ephemeral background-completion notices rendered once into the next prompt. */
+  completionNotices: CompletionNoticeBuffer;
   memoryProvider: MemoryProvider | null;
   memoryExtractor: MemoryExtractor | null;
   /** E8.3: supplemental wiki RAG provider; null until the projection is wired. */

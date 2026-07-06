@@ -16,7 +16,7 @@ import { createComponentLogger } from '../../../../shared/logger.js';
 import { toErrorMessage } from '../../../../shared/utils/errors.js';
 import {
   buildCompletionHandoffDedupeKey,
-  emitCompletionHandoffToSessionManager,
+  emitCompletionHandoff,
   safeEmitCompletionHandoffError,
   type CompletionHandoffInput,
 } from '../../completion-handoff.js';
@@ -128,19 +128,15 @@ async function emitBackgroundContinuationCompletionHandoff(input: {
   };
 
   try {
-    await emitCompletionHandoffToSessionManager({
+    // Companion-facing notice only when the continuation actually produced
+    // something to act on; bookkeeping completions stay on the event bus.
+    const companionRelevant = completionSignal.notifyUser
+      || completionSignal.hasDeliverableContent;
+    await emitCompletionHandoff({
       eventBus: runtime.eventBus,
-      sessionManager: runtime.sessionManager,
       targetChannelId: completionSignal.deliverySessionId,
       handoff,
-      authorId: 'system:background-continuation',
-      authorName: 'BackgroundContinuation',
-      isDirectMessage: message.isDirectMessage,
-      turn: {
-        turnId,
-        requestId,
-        sourceMessageId: message.id,
-      },
+      ...(companionRelevant ? { notices: runtime.completionNotices } : {}),
     });
   } catch (error) {
     log.warn('Background continuation completion handoff failed', {

@@ -33,11 +33,12 @@ import { toErrorMessage } from '../../shared/utils/errors.js';
 import { AGENT_LOOP_MAX_ASSISTANT_STEPS_PER_RUN } from '../../core/agent/turn-limits.js';
 import {
   buildCompletionHandoffDedupeKey,
-  emitCompletionHandoffToSessionStore,
+  emitCompletionHandoff,
   safeEmitCompletionHandoffError,
   summarizeCompletionText,
   type CompletionHandoffInput,
 } from '../../core/agent/completion-handoff.js';
+import type { CompletionNoticeBuffer } from '../../core/agent/completion-notices.js';
 import type { SubagentControlPort } from './port.js';
 import { SubagentTaskRegistry } from './task-registry.js';
 import type {
@@ -116,6 +117,8 @@ export interface SubagentFacultyDeps {
   eventBus: EventBus;
   llmProvider: LLMProvider;
   sessionStore: SessionStore;
+  /** Buffer for compact companion-facing completion notices (never session-persisted). */
+  completionNotices?: CompletionNoticeBuffer | null;
   embeddingService: EmbeddingService | null;
   memoryProvider: MemoryProvider | null;
   config: SubstrateConfig;
@@ -695,11 +698,11 @@ export class SubagentFaculty implements SubagentControlPort {
 
   private async emitHandoff(handoff: CompletionHandoffInput, targetChannelId: string): Promise<void> {
     try {
-      await emitCompletionHandoffToSessionStore({
+      await emitCompletionHandoff({
         eventBus: this.deps.eventBus,
-        sessionStore: this.deps.sessionStore,
         targetChannelId,
         handoff,
+        ...(this.deps.completionNotices ? { notices: this.deps.completionNotices } : {}),
       });
     } catch (error) {
       this.auditTrail?.append('subagent.completion_handoff.failed', {

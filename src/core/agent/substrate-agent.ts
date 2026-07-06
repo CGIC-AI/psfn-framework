@@ -142,6 +142,7 @@ import {
   handleMessageForTurn,
 } from './substrate-agent/turn-execution-runtime.js';
 import { createTurnExecutionRuntimeAdapter } from './substrate-agent/turn-execution-adapter.js';
+import { CompletionNoticeBuffer } from './completion-notices.js';
 import {
   refreshModelFromConfig as refreshModelFromConfigForRuntime,
 } from './substrate-agent/model-runtime.js';
@@ -253,6 +254,7 @@ export class SubstrateAgent {
   private readonly appCache: AppCache;
   private reflectionNudge = new ReflectionNudgeTracker();
   private readonly promptCacheRuntime = new PromptCacheTurnRuntime();
+  readonly completionNotices = new CompletionNoticeBuffer();
   private readonly turnSupportRuntime: TurnSupportRuntime;
   private readonly toolRuntimeFacade: ToolRuntimeFacade;
   private readonly satellitePresencePort = createActiveEmanationSatellitePresencePort();
@@ -932,6 +934,7 @@ export class SubstrateAgent {
       turnSupportRuntime: this.turnSupportRuntime,
       toolRuntimeFacade: this.toolRuntimeFacade,
       promptCacheRuntime: this.promptCacheRuntime,
+      completionNotices: this.completionNotices,
       callbacks: {
         resolveTaskKind: (turnMessage) => resolveTaskKindForRuntime(turnMessage, this.channelRegistry),
         buildTurnBudgetCharacteristics: (turnMessage, taskKind) => buildTurnBudgetCharacteristicsForRuntime(

@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { CompletionNoticeBuffer } from '../../core/agent/completion-notices.js';
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -270,10 +271,12 @@ describe('ShardManager', () => {
     eventBus.on('agent.completion_handoff', event => {
       events.push(event);
     });
+    const completionNotices = new CompletionNoticeBuffer();
     const manager = new ShardManager({
       eventBus,
       llmProvider: mockLLM(),
       sessionStore,
+      completionNotices,
       embeddingService: null,
       memoryProvider: null,
       config: TEST_CONFIG,
@@ -290,18 +293,26 @@ describe('ShardManager', () => {
       },
     });
 
-    const entries = sessionStore.getRecent('api:parent', 10);
-    expect(entries).toHaveLength(1);
-    expect(parseEntryMetadata(entries[0] ?? {})).toMatchObject({
-      type: 'completion_handoff',
+    // Handoffs never write session entries; they surface as one compact
+    // buffered notice plus the structured event-bus record.
+    expect(sessionStore.getRecent('api:parent', 10)).toHaveLength(0);
+    const notices = completionNotices.peek('api:parent');
+    expect(notices).toHaveLength(1);
+    expect(notices[0]).toMatchObject({
       status: 'completed',
-      partialResult: false,
+      summary: 'Shard found the answer.',
     });
-    expect(entries[0]?.content).toContain('"source": "shard"');
-    expect(entries[0]?.content).toContain(`"shardId": "${result.shardId}"`);
-    expect(entries[0]?.content).toContain('"summary": "Shard found the answer."');
-    expect(entries[0]?.content).toContain('policy_gated_companion_authored');
     expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      noticeBuffered: true,
+      handoff: expect.objectContaining({
+        source: 'shard',
+        task: expect.objectContaining({ shardId: result.shardId }),
+        privacy: expect.objectContaining({
+          partnerNotification: 'policy_gated_companion_authored',
+        }),
+      }),
+    });
   });
 
   it('caps explicit multi-turn shard requests at the shared agent loop ceiling', async () => {
@@ -1005,8 +1016,9 @@ describe('ShardManager', () => {
       }),
     ]));
     const sourceEntriesAfter = sessionStore.getRecent(sourceChannelId, 10);
-    expect(sourceEntriesAfter.filter(entry => !isCompletionHandoffEntry(entry))).toEqual(sourceEntriesBefore);
-    expect(sourceEntriesAfter.filter(isCompletionHandoffEntry)).toHaveLength(1);
+    // Handoffs are never session-persisted: the source channel transcript is
+    // untouched by shard completion.
+    expect(sourceEntriesAfter).toEqual(sourceEntriesBefore);
   });
 
   it('audits and persists allow decisions for source-to-shard context-pack sync', async () => {
@@ -1920,9 +1932,8 @@ describe('ShardManager', () => {
       role: 'assistant',
       content: result.content,
     });
-    expect(handoffEntries).toHaveLength(1);
-    expect(handoffEntries[0]?.content).toContain('"source": "shard"');
-    expect(handoffEntries[0]?.content).toContain('policy_gated_companion_authored');
+    // Handoffs are event-bus + notice-buffer only; no session entries.
+    expect(handoffEntries).toHaveLength(0);
   });
 
   it('audits Wyoming delegation start/end with routing identity context', async () => {
@@ -2120,15 +2131,8 @@ describe('ShardManager', () => {
 
     // Active count should be back to 0
     expect(manager.getActiveCount()).toBe(0);
-    const entries = sessionStore.getRecent('api:parent', 10);
-    expect(entries).toHaveLength(1);
-    expect(parseEntryMetadata(entries[0] ?? {})).toMatchObject({
-      type: 'completion_handoff',
-      status: 'failed',
-      partialResult: false,
-    });
-    expect(entries[0]?.content).toContain('"reason": "execution_failed"');
-    expect(entries[0]?.content).toContain('policy_gated_companion_authored');
+    // Failure handoffs stay off the transcript entirely.
+    expect(sessionStore.getRecent('api:parent', 10)).toHaveLength(0);
   });
 });
 

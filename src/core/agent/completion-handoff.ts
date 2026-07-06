@@ -1,6 +1,5 @@
 import { createHash } from 'node:crypto';
 import type { EventBus } from '../../shared/event-bus.js';
-import type { TurnID } from '../../shared/contracts/runtime.js';
 import {
   COMPLETION_HANDOFF_METADATA_TYPE,
   COMPLETION_HANDOFF_SCHEMA_VERSION,
@@ -10,8 +9,7 @@ import {
   type CompletionHandoffRecord,
   type CompletionHandoffRef,
 } from '../../shared/contracts/completion-handoff.js';
-import type { SessionEntry } from '../session/types.js';
-import type { SessionManager } from '../session/manager.js';
+import { buildCompletionNotice, type CompletionNoticeBuffer } from './completion-notices.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
 
 export {
@@ -30,22 +28,18 @@ export type {
   CompletionHandoffStatus,
 } from '../../shared/contracts/completion-handoff.js';
 
-const COMPLETION_HANDOFF_AUTHOR_ID = 'system:completion-handoff';
-const COMPLETION_HANDOFF_AUTHOR_NAME = 'CompletionHandoff';
 const MAX_SUMMARY_CHARS = 700;
-const RECENT_HANDOFF_SCAN_LIMIT = 100;
-
-interface SessionStoreHandoffSink {
-  getRecent(channelId: string, limit: number): SessionEntry[];
-  append(entry: Omit<SessionEntry, 'id'>): number;
-}
-
-type SessionManagerHandoffSink = Pick<
-  SessionManager,
-  'getRecentMessages' | 'recordSystemMessage'
->;
+const MAX_TRACKED_DEDUPE_KEYS = 4096;
 
 const emittedDedupeKeys = new Set<string>();
+
+function rememberDedupeKey(dedupeKey: string): void {
+  emittedDedupeKeys.add(dedupeKey);
+  if (emittedDedupeKeys.size > MAX_TRACKED_DEDUPE_KEYS) {
+    const oldest = emittedDedupeKeys.values().next().value;
+    if (oldest !== undefined) emittedDedupeKeys.delete(oldest);
+  }
+}
 
 export function resetCompletionHandoffDedupeForTests(): void {
   emittedDedupeKeys.clear();
@@ -126,126 +120,50 @@ export function buildCompletionHandoff(input: CompletionHandoffInput): Completio
   };
 }
 
-export async function emitCompletionHandoffToSessionStore(input: {
+/**
+ * Emit a completion handoff.
+ *
+ * The durable record is the `agent.completion_handoff` event-bus emission
+ * (journal/telemetry). Handoffs are NEVER persisted into any session store —
+ * that was the source of transcript pollution that displaced real
+ * conversation. When a completion is companion-relevant, pass `notices` and a
+ * `targetChannelId`: a compact two-line notice is buffered and rendered once
+ * into the next turn's `background_completions` prompt block. Maintenance
+ * bookkeeping must omit `notices` so nothing ever reaches companion context.
+ */
+export async function emitCompletionHandoff(input: {
   eventBus: EventBus;
-  sessionStore: SessionStoreHandoffSink;
-  targetChannelId?: string;
   handoff: CompletionHandoffInput | CompletionHandoffRecord;
+  targetChannelId?: string;
+  notices?: CompletionNoticeBuffer;
 }): Promise<CompletionHandoffEmission> {
   const handoff = isCompletionHandoffRecord(input.handoff)
     ? input.handoff
     : buildCompletionHandoff(input.handoff);
   const targetChannelId = input.targetChannelId?.trim();
-  if (isDuplicateHandoff(handoff.dedupeKey, targetChannelId, (channelId) => input.sessionStore.getRecent(channelId, RECENT_HANDOFF_SCAN_LIMIT))) {
+  if (emittedDedupeKeys.has(handoff.dedupeKey)) {
     return { emitted: false, handoff, ...(targetChannelId ? { targetChannelId } : {}), duplicate: true };
   }
 
-  let sessionEntryId: number | null = null;
-  if (targetChannelId) {
-    sessionEntryId = input.sessionStore.append({
-      channelId: targetChannelId,
-      role: 'system',
-      content: renderCompletionHandoffForContext(handoff),
-      authorId: COMPLETION_HANDOFF_AUTHOR_ID,
-      authorName: COMPLETION_HANDOFF_AUTHOR_NAME,
-      timestamp: handoff.createdAt,
-      originChannelId: handoff.origin.sourceChannelId,
-      channelVisibility: 'private',
-      metadata: buildCompletionHandoffMetadata(handoff),
-    });
+  let noticeBuffered = false;
+  if (input.notices && targetChannelId) {
+    input.notices.register(targetChannelId, buildCompletionNotice(handoff));
+    noticeBuffered = true;
   }
 
-  emittedDedupeKeys.add(handoff.dedupeKey);
+  rememberDedupeKey(handoff.dedupeKey);
   await input.eventBus.emit('agent.completion_handoff', {
     handoff,
     ...(targetChannelId ? { targetChannelId } : {}),
-    ...(sessionEntryId !== null ? { sessionEntryId } : {}),
+    noticeBuffered,
     timestamp: Date.now(),
   });
   return {
     emitted: true,
     handoff,
     ...(targetChannelId ? { targetChannelId } : {}),
-    ...(sessionEntryId !== null ? { sessionEntryId } : {}),
+    noticeBuffered,
   };
-}
-
-export async function emitCompletionHandoffToSessionManager(input: {
-  eventBus: EventBus;
-  sessionManager: SessionManagerHandoffSink;
-  targetChannelId: string;
-  handoff: CompletionHandoffInput | CompletionHandoffRecord;
-  authorId?: string;
-  authorName?: string;
-  isDirectMessage?: boolean;
-  turn?: {
-    turnId: string;
-    requestId: string;
-    sourceMessageId?: string;
-  };
-}): Promise<CompletionHandoffEmission> {
-  const handoff = isCompletionHandoffRecord(input.handoff)
-    ? input.handoff
-    : buildCompletionHandoff(input.handoff);
-  const targetChannelId = input.targetChannelId.trim();
-  if (isDuplicateHandoff(handoff.dedupeKey, targetChannelId, (channelId) => input.sessionManager.getRecentMessages(channelId, RECENT_HANDOFF_SCAN_LIMIT))) {
-    return { emitted: false, handoff, targetChannelId, duplicate: true };
-  }
-
-  const metadata = buildCompletionHandoffMetadata(handoff);
-  const sessionEntryId = input.sessionManager.recordSystemMessage(
-    targetChannelId,
-    renderCompletionHandoffForContext(handoff),
-    input.authorId?.trim() || COMPLETION_HANDOFF_AUTHOR_ID,
-    input.authorName?.trim() || COMPLETION_HANDOFF_AUTHOR_NAME,
-    input.isDirectMessage,
-    undefined,
-    {
-      metadata,
-      ...(input.turn
-        ? {
-            turnId: input.turn.turnId as TurnID,
-            requestId: input.turn.requestId,
-            ...(input.turn.sourceMessageId ? { sourceMessageId: input.turn.sourceMessageId } : {}),
-          }
-        : {}),
-      channelMeta: { privacyLevel: 'private' },
-    },
-  );
-
-  emittedDedupeKeys.add(handoff.dedupeKey);
-  await input.eventBus.emit('agent.completion_handoff', {
-    handoff,
-    targetChannelId,
-    ...(sessionEntryId !== null ? { sessionEntryId } : {}),
-    timestamp: Date.now(),
-  });
-  return {
-    emitted: true,
-    handoff,
-    targetChannelId,
-    sessionEntryId,
-  };
-}
-
-export function renderCompletionHandoffForContext(handoff: CompletionHandoffRecord): string {
-  return [
-    '[SYSTEM: CompletionHandoff]',
-    'Internal structured completion handoff. This is companion-only context, not partner-authored speech and not a partner-facing notification.',
-    JSON.stringify(handoff, null, 2),
-  ].join('\n');
-}
-
-export function buildCompletionHandoffMetadata(handoff: CompletionHandoffRecord): string {
-  return JSON.stringify({
-    type: COMPLETION_HANDOFF_METADATA_TYPE,
-    schemaVersion: COMPLETION_HANDOFF_SCHEMA_VERSION,
-    dedupeKey: handoff.dedupeKey,
-    handoffId: handoff.handoffId,
-    source: handoff.source,
-    status: handoff.status,
-    partialResult: handoff.result.partial,
-  });
 }
 
 export function extractOriginIds(value: unknown): {
@@ -279,45 +197,6 @@ export function safeEmitCompletionHandoffError(error: unknown): string {
 
 function isCompletionHandoffRecord(value: CompletionHandoffInput | CompletionHandoffRecord): value is CompletionHandoffRecord {
   return 'schemaVersion' in value;
-}
-
-function isDuplicateHandoff(
-  dedupeKey: string,
-  targetChannelId: string | undefined,
-  readRecent: (channelId: string) => SessionEntry[],
-): boolean {
-  if (emittedDedupeKeys.has(dedupeKey)) {
-    return true;
-  }
-  if (!targetChannelId) {
-    return false;
-  }
-  return readRecent(targetChannelId).some(entry => entryHasHandoffDedupeKey(entry, dedupeKey));
-}
-
-function entryHasHandoffDedupeKey(entry: Pick<SessionEntry, 'metadata'>, dedupeKey: string): boolean {
-  if (!entry.metadata) {
-    return false;
-  }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(entry.metadata);
-  } catch {
-    return false;
-  }
-  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-    return false;
-  }
-  const metadata = parsed as Record<string, unknown>;
-  const handoff = metadata.type === COMPLETION_HANDOFF_METADATA_TYPE
-    ? metadata
-    : metadata.completionHandoff;
-  return Boolean(
-    handoff
-    && typeof handoff === 'object'
-    && !Array.isArray(handoff)
-    && (handoff as Record<string, unknown>).dedupeKey === dedupeKey,
-  );
 }
 
 function normalizeRefs(refs: readonly CompletionHandoffRef[] | undefined): CompletionHandoffRef[] {

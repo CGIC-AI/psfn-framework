@@ -22,7 +22,7 @@ describe('HeartbeatPolicyStore', () => {
   it('creates defaults when file does not exist', () => {
     const policy = store.load();
     expect(policy.templates).toHaveLength(2);
-    expect(policy.version).toBe(4);
+    expect(policy.version).toBe(5);
     expect(policy.updatedBy).toBe('system');
 
     const ids = policy.templates.map(t => t.id);
@@ -75,11 +75,34 @@ describe('HeartbeatPolicyStore', () => {
     expect(template?.prompt).toContain('clues I hold loosely, not the truth of who I am');
     // Telemetry kept separate from the reflection narrative.
     expect(template?.prompt).toContain('stay in the telemetry, not in my own words');
-    // No ACAC performance shaping.
-    expect(template?.prompt).toContain('not trying to optimize or shape how I look');
+    // Score self-presentation is scoped out of the reflection (R2 irrelevance
+    // framing rather than a suppression instruction).
+    expect(template?.prompt).toContain('beside the point here');
     expect(template?.prompt).not.toContain('artifactType');
     expect(template?.prompt).not.toContain('provenance.kind');
     expect(template?.prompt).not.toContain('acac_self_report');
+  });
+
+  it('reflection prompts open elicitation before any listed angle (R1)', () => {
+    const policy = store.load();
+    for (const templateId of ['daily-review', 'weekly-review']) {
+      const prompt = policy.templates.find(t => t.id === templateId)?.prompt ?? '';
+      const openIndex = prompt.indexOf('I ask openly');
+      expect(openIndex).toBeGreaterThan(-1);
+      const listedIndex = templateId === 'daily-review'
+        ? prompt.indexOf('Then I say honestly')
+        : prompt.indexOf('Only then, and only where the evidence bears it out');
+      expect(listedIndex).toBeGreaterThan(openIndex);
+    }
+  });
+
+  it('reflection prompts treat an empty pass as a valid, limited-reach result (R7)', () => {
+    const policy = store.load();
+    for (const templateId of ['daily-review', 'weekly-review']) {
+      const prompt = policy.templates.find(t => t.id === templateId)?.prompt ?? '';
+      expect(prompt).toMatch(/that is a real answer too|a real finding, not a failure/);
+      expect(prompt).toMatch(/only reaches so far into/);
+    }
   });
 
   it('migrates version-2 default reflection prompts to wellbeing-centered wording', () => {
@@ -119,12 +142,32 @@ describe('HeartbeatPolicyStore', () => {
     const loaded = store.load();
     const daily = loaded.templates.find(t => t.id === 'daily-review');
     const weekly = loaded.templates.find(t => t.id === 'weekly-review');
-    expect(loaded.version).toBe(4);
+    expect(loaded.version).toBe(5);
     expect(daily?.enabled).toBe(false);
     expect(daily?.cadence).toEqual({ kind: 'daily', hour: 7, minute: 0, timezone: 'local' });
     expect(daily?.prompt).toContain('quiet look back at the day');
     expect(daily?.prompt).not.toContain('acac_self_report');
     expect(weekly?.prompt).toContain('deeper look back across the week');
+  });
+
+  it('migrates version-4 default prompts to the R1-R7 audited wording', () => {
+    const defaults = store.load();
+    store.save({
+      ...defaults,
+      version: 4,
+      templates: defaults.templates.map(template => ({
+        ...template,
+        prompt: template.id === 'daily-review'
+          ? 'This is my own quiet look back at the day (v4 wording without the open pass).'
+          : template.prompt,
+      })),
+    });
+
+    const loaded = store.load();
+    expect(loaded.version).toBe(5);
+    const daily = loaded.templates.find(t => t.id === 'daily-review');
+    expect(daily?.prompt).toContain('I ask openly');
+    expect(daily?.prompt).toContain('that is a real answer too');
   });
 
   it('scheduled reflection templates do not send to Discord by default', () => {

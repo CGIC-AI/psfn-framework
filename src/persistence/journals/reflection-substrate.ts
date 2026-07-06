@@ -15,6 +15,14 @@ import { NON_CANONICAL_REFLECTION_SUBSTRATE } from './reflection-journal.js';
 const log = createComponentLogger('ReflectionSubstrate');
 const ISO_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 
+// Guidance wording inside reflection context blocks is part of the
+// self-report instrument (R6, docs/self-eval-prompt-audit.md): version any
+// wording change here instead of editing casually.
+// v2: R2 rewrite — replaced "do not invent a gap or stale absence" and
+// "not as a command to intensify them" suppression phrasing with
+// out-of-scope/descriptive framing.
+export const REFLECTION_CONTEXT_GUIDANCE_VERSION = 2;
+
 export type ReflectionExecutionSource =
   | 'manual'
   | 'scheduled'
@@ -464,8 +472,8 @@ function formatContactRelationalBlock(input: ReflectionContactContextBundleInput
     `- Session continuity: ${primarySession}.`,
     `- ${lastSeenLine}`,
     `- Recent contact status: ${recentStatus}.`,
-    '- Ground the reflection in the live contact, not in a generic silence narrative.',
-    '- If recent contact status is active, do not invent a gap or stale absence.',
+    '- Ground the reflection in the live contact evidence above.',
+    '- Recent contact status is the authoritative presence signal; while it reads active, silence or absence framing is out of scope for this reflection.',
   ];
 
   return lines.join('\n');
@@ -478,7 +486,7 @@ function formatContactAffectBlock(input: ReflectionContactContextBundleInput): s
 
   const lines = [
     '[Reflection Affect Evidence]',
-    'Treat these affect signals as current evidence, not as a command to intensify them.',
+    'Treat these affect signals as fallible current evidence; they describe recent state and carry no instruction about what to feel or express.',
   ];
 
   if (input.currentVAD) {

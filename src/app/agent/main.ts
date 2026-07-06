@@ -647,6 +647,10 @@ async function main(): Promise<void> {
   // session summarization service (summarizeRecentSessionEntries, purpose
   // 'wake_session'); outward messages ride the existing proactive-outbound
   // dispatcher and quiet-hours time gate.
+  // Wake summary budgets and the wake_continuity entry floor are JSON-owned
+  // (scheduler.json temporalWakeup.wakeSummary); thread them into the session
+  // manager so the context builder never falls back to hardcoded budgets.
+  sessionManager.wakeSummaryConfig = { ...schedulerConfig.temporalWakeup.wakeSummary };
   registerTemporalWakeupTasks({
     scheduler,
     sessionManager,

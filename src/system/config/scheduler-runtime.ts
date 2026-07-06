@@ -43,6 +43,7 @@ export function resolveRuntimeSchedulerConfig(
       enabled: persisted.temporalWakeup.enabled,
       morningWake: { ...persisted.temporalWakeup.morningWake },
       idleRefresher: { ...persisted.temporalWakeup.idleRefresher },
+      wakeSummary: { ...persisted.temporalWakeup.wakeSummary },
     },
     freeTime: {
       enabled: persisted.freeTime.enabled,

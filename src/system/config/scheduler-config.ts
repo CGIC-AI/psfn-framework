@@ -287,6 +287,24 @@ export interface TemporalWakeupIdleRefresherConfig {
 }
 
 /**
+ * Wake orientation summary tuning. The context builder's wake_session and
+ * wake_continuity summaries ride the shared session summarizer; their token
+ * budgets and the continuity entry floor are JSON-owned here instead of
+ * hardcoded in the builder.
+ */
+export interface TemporalWakeupWakeSummaryConfig {
+  /** Token budget for the wake_session recent-activity summary. */
+  sessionSummaryMaxTokens: number;
+  /** Token budget for the wake_continuity cross-channel summary. */
+  continuitySummaryMaxTokens: number;
+  /**
+   * Minimum user/assistant cross-channel continuity entries required before
+   * the wake_continuity LLM summary fires; trivial continuity is skipped.
+   */
+  continuityMinEntries: number;
+}
+
+/**
  * Temporal wake-up lanes (E7.1). Optional block — defaults apply when absent.
  * Both lanes emit explicit system notes (charter 6.17); they are refreshers,
  * never partner activity.
@@ -295,6 +313,7 @@ export interface TemporalWakeupConfig {
   enabled: boolean;
   morningWake: TemporalWakeupMorningConfig;
   idleRefresher: TemporalWakeupIdleRefresherConfig;
+  wakeSummary: TemporalWakeupWakeSummaryConfig;
 }
 
 export const DEFAULT_TEMPORAL_WAKEUP_CONFIG: TemporalWakeupConfig = {
@@ -326,6 +345,11 @@ export const DEFAULT_TEMPORAL_WAKEUP_CONFIG: TemporalWakeupConfig = {
     checkIntervalMs: 900_000,
     minIdleMinutes: 240,
     minNoteIntervalMinutes: 240,
+  },
+  wakeSummary: {
+    sessionSummaryMaxTokens: 160,
+    continuitySummaryMaxTokens: 160,
+    continuityMinEntries: 2,
   },
 };
 
@@ -961,6 +985,7 @@ function validateTemporalWakeupConfig(
       enabled: DEFAULT_TEMPORAL_WAKEUP_CONFIG.enabled,
       morningWake: { ...DEFAULT_TEMPORAL_WAKEUP_CONFIG.morningWake },
       idleRefresher: { ...DEFAULT_TEMPORAL_WAKEUP_CONFIG.idleRefresher },
+      wakeSummary: { ...DEFAULT_TEMPORAL_WAKEUP_CONFIG.wakeSummary },
     };
   }
   if (!isRecord(raw)) {
@@ -968,13 +993,18 @@ function validateTemporalWakeupConfig(
   }
   const morningDefaults = DEFAULT_TEMPORAL_WAKEUP_CONFIG.morningWake;
   const refresherDefaults = DEFAULT_TEMPORAL_WAKEUP_CONFIG.idleRefresher;
+  const wakeSummaryDefaults = DEFAULT_TEMPORAL_WAKEUP_CONFIG.wakeSummary;
   const morningRaw = raw.morningWake ?? {};
   const refresherRaw = raw.idleRefresher ?? {};
+  const wakeSummaryRaw = raw.wakeSummary ?? {};
   if (!isRecord(morningRaw)) {
     throw new Error(`Invalid scheduler config at ${sourcePath}: temporalWakeup.morningWake must be an object`);
   }
   if (!isRecord(refresherRaw)) {
     throw new Error(`Invalid scheduler config at ${sourcePath}: temporalWakeup.idleRefresher must be an object`);
+  }
+  if (!isRecord(wakeSummaryRaw)) {
+    throw new Error(`Invalid scheduler config at ${sourcePath}: temporalWakeup.wakeSummary must be an object`);
   }
 
   return {
@@ -1015,6 +1045,23 @@ function validateTemporalWakeupConfig(
       minNoteIntervalMinutes: toPositiveInteger(
         refresherRaw.minNoteIntervalMinutes ?? refresherDefaults.minNoteIntervalMinutes,
         'temporalWakeup.idleRefresher.minNoteIntervalMinutes',
+        1,
+      ),
+    },
+    wakeSummary: {
+      sessionSummaryMaxTokens: toPositiveInteger(
+        wakeSummaryRaw.sessionSummaryMaxTokens ?? wakeSummaryDefaults.sessionSummaryMaxTokens,
+        'temporalWakeup.wakeSummary.sessionSummaryMaxTokens',
+        1,
+      ),
+      continuitySummaryMaxTokens: toPositiveInteger(
+        wakeSummaryRaw.continuitySummaryMaxTokens ?? wakeSummaryDefaults.continuitySummaryMaxTokens,
+        'temporalWakeup.wakeSummary.continuitySummaryMaxTokens',
+        1,
+      ),
+      continuityMinEntries: toPositiveInteger(
+        wakeSummaryRaw.continuityMinEntries ?? wakeSummaryDefaults.continuityMinEntries,
+        'temporalWakeup.wakeSummary.continuityMinEntries',
         1,
       ),
     },

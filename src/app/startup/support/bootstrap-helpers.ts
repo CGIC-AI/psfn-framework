@@ -284,6 +284,7 @@ export function hydrateCanonicalStartupConfig(
       enabled: persistedScheduler.temporalWakeup.enabled,
       morningWake: { ...persistedScheduler.temporalWakeup.morningWake },
       idleRefresher: { ...persistedScheduler.temporalWakeup.idleRefresher },
+      wakeSummary: { ...persistedScheduler.temporalWakeup.wakeSummary },
     },
     freeTime: {
       enabled: persistedScheduler.freeTime.enabled,

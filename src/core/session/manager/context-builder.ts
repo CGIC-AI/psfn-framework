@@ -63,6 +63,10 @@ import {
   entriesToMessages,
 } from './context-support.js';
 import { runAutoCompaction, shouldCompact, summarizeRecentSessionEntries } from './compaction-service.js';
+import {
+  DEFAULT_TEMPORAL_WAKEUP_CONFIG,
+  type TemporalWakeupWakeSummaryConfig,
+} from '../../../system/config/scheduler-config.js';
 import { MASKED_TOOL_OBSERVATION_CONTENT } from '../tool-observation.js';
 import { applyFocusCompactionRanges, type FocusCompactionRange } from '../focus-knowledge.js';
 import { buildPromptSectionTelemetryList } from '../../identity/prompt-sections.js';
@@ -909,6 +913,12 @@ interface BuildSessionContextParams {
   recentSummaryMode?: 'deferred' | 'foreground';
   pendingCompaction?: boolean;
   cogSecEvents?: readonly CogSecEvent[];
+  /**
+   * JSON-owned wake summary budgets and continuity entry floor
+   * (scheduler.json temporalWakeup.wakeSummary). Falls back to the validated
+   * scheduler defaults when composition has not threaded scheduler config.
+   */
+  wakeSummaryConfig?: TemporalWakeupWakeSummaryConfig;
 }
 
 export async function buildSessionContext(params: BuildSessionContextParams): Promise<LLMContext> {
@@ -1090,11 +1100,29 @@ export async function buildSessionContext(params: BuildSessionContextParams): Pr
   // room, not on the internal transport channel the snapshot was keyed to).
   const shouldUseSnapshotOrientation = !isInternalReflectionChannel(params.channelId);
   if (!shouldUseSnapshotOrientation && computedOrientationTelemetry.fired) {
+    const wakeSummaryConfig = params.wakeSummaryConfig ?? DEFAULT_TEMPORAL_WAKEUP_CONFIG.wakeSummary;
     const latestWakeReturnSummary = params.wakeReturnArtifacts.at(0)?.summary.trim();
     const relevantRecentEntries = recentActivityEntries.filter(
       entry => entry.role === 'user' || entry.role === 'assistant',
     );
     const priorRecentEntries = relevantRecentEntries.slice(0, -1);
+    // The session side inherits the >1 relevant-entry check from the fired
+    // gate; the cross-channel continuity side needs its own floor so a single
+    // trivial cross-channel message does not trigger an LLM summary. The floor
+    // gates only the LLM call: without a foreground provider the summarizer's
+    // deterministic fallback is free and stays available.
+    const conversationalContinuityEntries = crossChannel.filter(
+      entry => entry.role === 'user' || entry.role === 'assistant',
+    );
+    const skipContinuityLlmSummary = foregroundRecentSummaryProvider !== undefined
+      && conversationalContinuityEntries.length < wakeSummaryConfig.continuityMinEntries;
+    if (skipContinuityLlmSummary) {
+      log.info('Skipping wake_continuity LLM summary below continuity entry floor', {
+        channelId: params.channelId,
+        continuityEntryCount: conversationalContinuityEntries.length,
+        continuityMinEntries: wakeSummaryConfig.continuityMinEntries,
+      });
+    }
     const [sessionSummary, continuitySummary] = await Promise.all([
       latestWakeReturnSummary
         ? Promise.resolve(latestWakeReturnSummary)
@@ -1104,18 +1132,20 @@ export async function buildSessionContext(params: BuildSessionContextParams): Pr
           characterName: params.characterName,
           llmProvider: foregroundRecentSummaryProvider,
           promptRegistry: params.promptRegistry,
-          maxTokens: 160,
+          maxTokens: wakeSummaryConfig.sessionSummaryMaxTokens,
           purpose: 'wake_session',
         }),
-      summarizeRecentSessionEntries({
-        channelId: params.channelId,
-        entries: crossChannel,
-        characterName: params.characterName,
-        llmProvider: foregroundRecentSummaryProvider,
-        promptRegistry: params.promptRegistry,
-        maxTokens: 160,
-        purpose: 'wake_continuity',
-      }),
+      skipContinuityLlmSummary
+        ? Promise.resolve('')
+        : summarizeRecentSessionEntries({
+          channelId: params.channelId,
+          entries: crossChannel,
+          characterName: params.characterName,
+          llmProvider: foregroundRecentSummaryProvider,
+          promptRegistry: params.promptRegistry,
+          maxTokens: wakeSummaryConfig.continuitySummaryMaxTokens,
+          purpose: 'wake_continuity',
+        }),
     ]);
     computedOrientationTelemetry = buildOrientationNoteTelemetry({
       channelId: params.channelId,

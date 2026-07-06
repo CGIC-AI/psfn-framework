@@ -217,7 +217,10 @@ export interface BeadsBaseParams extends GatewayCorrelationParams {
   actor?: string;
 }
 
-export interface BeadsReadyParams extends BeadsBaseParams {}
+export interface BeadsReadyParams extends BeadsBaseParams {
+  /** Max ready issues returned (default 20, cap 100): the full list is a context firehose. */
+  limit?: number;
+}
 
 export interface BeadsShowParams extends BeadsBaseParams {
   id: string;

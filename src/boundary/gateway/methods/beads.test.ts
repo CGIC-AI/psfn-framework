@@ -153,7 +153,7 @@ describe('registerBeadsMethods', () => {
 
     expect(mockedSpawn).toHaveBeenCalledWith(
       'bd',
-      ['ready', '--json'],
+      ['ready', '-n', '20', '--json'],
       expect.objectContaining({
         cwd: process.cwd(),
         shell: false,

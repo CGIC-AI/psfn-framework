@@ -42,6 +42,20 @@ describe('createResponseControlTool', () => {
     expect(result.content[0]?.text).toContain('"disposition": "intentional_no_reply"');
   });
 
+  it('rejects empty or malformed arguments without recording a no-reply decision', async () => {
+    const record = vi.fn();
+    const tool = createResponseControlTool(record);
+
+    const emptyResult = await tool.execute('tool-call-empty', {} as never);
+    expect(emptyResult.details).toMatchObject({ isError: true });
+    expect(emptyResult.content[0]?.text).toContain('refusing to record a no-reply decision');
+
+    const wrongAction = await tool.execute('tool-call-wrong', { action: 'reply' } as never);
+    expect(wrongAction.details).toMatchObject({ isError: true });
+
+    expect(record).not.toHaveBeenCalled();
+  });
+
   it('fails closed when the sentinel cannot be bound to an active turn', async () => {
     const tool = createResponseControlTool(vi.fn(() => null));
 

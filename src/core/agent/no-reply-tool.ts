@@ -88,6 +88,17 @@ export function createResponseControlTool(
       toolCallId: string,
       params: ResponseControlParams,
     ): Promise<AgentToolResult<{ isError?: boolean; noReply?: boolean; auditId?: string }>> => {
+      // Fail closed on malformed calls: recording an intentional no-reply from
+      // empty/garbled arguments would silently swallow the turn's outward
+      // response. A dropped-args tool call (see bead psfn-framework-gu8m) must
+      // never be able to silence the companion.
+      if (params?.action !== 'no_reply') {
+        return responseControlResult({
+          ok: false,
+          error: 'response_control requires action="no_reply"; refusing to record a no-reply decision from empty or malformed arguments.',
+        }, true);
+      }
+
       // Fail closed: a paid deliverable produced this turn (at minimum a charged
       // image generation) has not reached the user yet. Honoring no-reply here
       // would silently drop an artifact they already paid for. Reject the request

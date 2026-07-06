@@ -54,7 +54,19 @@ export const TOOL_CONFORMANCE_PROBE_REGISTRY: Readonly<Record<string, ToolProbeS
   identity: { kind: 'read_only', action: 'list_layers', args: { action: 'list_layers' } },
 
   // ── Memory family ──
-  memory: { kind: 'read_only', action: 'census', args: { action: 'census' } },
+  memory: {
+    kind: 'read_only',
+    action: 'census',
+    // census runs context-free in admin/post-rollout sweeps, so the probe
+    // supplies the channel scope explicitly (found live by Purrsephone:
+    // the request-context fallback is absent outside a chat turn).
+    args: {
+      action: 'census',
+      channel_id: 'internal:tool-conformance',
+      trust_level: 'primary',
+      channel_visibility: 'private',
+    },
+  },
   scratchpad: { kind: 'read_only', action: 'list', args: { action: 'list' } },
   journal: { kind: 'read_only', action: 'list', args: { action: 'list' } },
 

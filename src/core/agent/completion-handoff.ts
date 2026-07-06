@@ -1,7 +1,6 @@
 import { createHash } from 'node:crypto';
 import type { EventBus } from '../../shared/event-bus.js';
 import {
-  COMPLETION_HANDOFF_METADATA_TYPE,
   COMPLETION_HANDOFF_SCHEMA_VERSION,
   type CompletionHandoffBlocker,
   type CompletionHandoffEmission,

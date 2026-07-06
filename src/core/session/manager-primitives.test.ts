@@ -97,3 +97,81 @@ describe('recent session summary primitives', () => {
     expect(sourceBlock).not.toContain('[Tool result: search_logs (error)]');
   });
 });
+
+describe('temporal session history window floor', () => {
+  const NOW = new Date('2026-07-06T14:10:00Z');
+
+  function dialogueEntry(id: number, role: 'user' | 'assistant', timestamp: number): SessionEntry {
+    return {
+      id,
+      channelId: 'discord:room-1',
+      role,
+      content: `${role} message ${id}`,
+      authorId: role === 'user' ? 'user-1' : 'assistant',
+      authorName: role === 'user' ? 'V' : 'P',
+      timestamp,
+      channelVisibility: 'private',
+    } as SessionEntry;
+  }
+
+  it('backfills pre-window entries so a temporal cue never strips recent conversation', async () => {
+    const { applyTemporalSessionHistoryWindow, TEMPORAL_WINDOW_MIN_CONVERSATIONAL_ENTRIES } =
+      await import('./manager-primitives.js');
+    const nowMs = NOW.getTime();
+    // 20 exchanges last night (before the same-day boundary), 1 exchange this morning.
+    const oldEntries = Array.from({ length: 20 }, (_, i) =>
+      dialogueEntry(i + 1, i % 2 === 0 ? 'user' : 'assistant', nowMs - 12 * 60 * 60 * 1000 + i * 1000));
+    const freshEntries = [
+      dialogueEntry(100, 'user', nowMs - 60_000),
+      dialogueEntry(101, 'assistant', nowMs - 55_000),
+    ];
+    const result = applyTemporalSessionHistoryWindow(
+      [...oldEntries, ...freshEntries],
+      // "today" is a temporal cue -> same_day window.
+      { messageText: "I'm off today so let's stay like this" },
+      NOW,
+    );
+    const conversational = result.filter(e => e.role === 'user' || e.role === 'assistant');
+    expect(conversational.length).toBeGreaterThanOrEqual(TEMPORAL_WINDOW_MIN_CONVERSATIONAL_ENTRIES);
+    // Most recent entries always retained, in chronological order.
+    expect(result.at(-1)?.id).toBe(101);
+    const ids = result.map(e => e.id);
+    expect([...ids].sort((a, b) => a - b)).toEqual(ids);
+  });
+
+  it('applies the temporal filter unchanged when enough conversation is in-window', async () => {
+    const { applyTemporalSessionHistoryWindow } = await import('./manager-primitives.js');
+    const nowMs = NOW.getTime();
+    const inWindow = Array.from({ length: 16 }, (_, i) =>
+      dialogueEntry(i + 1, i % 2 === 0 ? 'user' : 'assistant', nowMs - 60 * 60 * 1000 + i * 1000));
+    const old = [dialogueEntry(500, 'user', nowMs - 3 * 24 * 60 * 60 * 1000)];
+    const result = applyTemporalSessionHistoryWindow(
+      [...old, ...inWindow],
+      { messageText: 'what did we do today?' },
+      NOW,
+    );
+    expect(result.map(e => e.id)).not.toContain(500);
+    expect(result).toHaveLength(16);
+  });
+});
+
+describe('non-conversational session entry classification', () => {
+  it('classifies legacy completion_handoff rows as non-conversational', async () => {
+    const { isNonConversationalSessionEntry } = await import('./manager-primitives.js');
+    expect(isNonConversationalSessionEntry({
+      metadata: JSON.stringify({
+        type: 'completion_handoff',
+        schemaVersion: 1,
+        dedupeKey: 'abc',
+        handoffId: 'handoff:abc',
+        source: 'post_turn_action',
+        status: 'completed',
+        partialResult: false,
+      }),
+    })).toBe(true);
+    expect(isNonConversationalSessionEntry({ metadata: undefined })).toBe(false);
+    expect(isNonConversationalSessionEntry({
+      metadata: JSON.stringify({ type: 'mirror' }),
+    })).toBe(false);
+  });
+});

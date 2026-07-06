@@ -77,7 +77,41 @@ function makePromptComposer(dynamicSuffix: string): PromptComposer {
 }
 
 describe('Sprint 8 chat hygiene regressions', () => {
-  it('keeps temporal turns anchored to same-day history while dropping prior-day context', () => {
+  it('keeps temporal turns anchored to same-day history once enough same-day conversation exists', () => {
+    // With a rich same-day window the temporal filter drops prior-day context.
+    const now = new Date('2026-04-18T12:00:00.000-04:00');
+    const sameDayEntries = Array.from({ length: 12 }, (_, index) => makeEntry({
+      id: 10 + index,
+      role: index % 2 === 0 ? 'user' : 'assistant',
+      content: `same-day exchange ${index}`,
+      timestamp: Date.parse('2026-04-18T08:15:00.000-04:00') + index * 1000,
+    }));
+    const filtered = applyTemporalSessionHistoryWindow([
+      makeEntry({
+        id: 1,
+        content: 'Late last night we discussed the deadline.',
+        timestamp: Date.parse('2026-04-17T23:50:00.000-04:00'),
+      }),
+      ...sameDayEntries,
+      makeEntry({
+        id: 99,
+        content: 'what time is it right now?',
+        timestamp: now.getTime(),
+      }),
+    ], {
+      messageText: 'what time is it right now?',
+    }, now);
+
+    expect(filtered.map(entry => entry.id)).not.toContain(1);
+    expect(filtered.at(-1)?.content).toBe('what time is it right now?');
+  });
+
+  it('backfills last night\'s conversation when a temporal cue lands right after a date boundary', () => {
+    // Live regression (2026-07-06): a temporal cue in the first morning message
+    // collapsed context to a single exchange, and the companion re-answered her
+    // own previous reply. Continuity now has a floor; the canonical
+    // runtime.current_datetime anchor — not history truncation — owns
+    // time-of-day correctness.
     const now = new Date('2026-04-18T12:00:00.000-04:00');
     const filtered = applyTemporalSessionHistoryWindow([
       makeEntry({
@@ -101,6 +135,7 @@ describe('Sprint 8 chat hygiene regressions', () => {
     }, now);
 
     expect(filtered.map(entry => entry.content)).toEqual([
+      'Late last night we discussed the deadline.',
       'Earlier this morning we checked the schedule.',
       'what time is it right now?',
     ]);

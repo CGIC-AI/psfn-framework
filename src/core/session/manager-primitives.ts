@@ -173,6 +173,24 @@ function isEntryWithinTemporalWindow(
   return nowMs - entry.timestamp <= recentHours * 60 * 60 * 1000;
 }
 
+/**
+ * Minimum conversational (user/assistant) entries the temporal window must
+ * retain. A casual temporal cue in a message ("today", "just now") narrows the
+ * window for retrieval purposes, but it must never strip the immediate
+ * conversation: with no floor, a same-day filter right after a date boundary
+ * reduced a live turn's context to a single exchange and the companion
+ * re-answered her own previous reply.
+ */
+export const TEMPORAL_WINDOW_MIN_CONVERSATIONAL_ENTRIES = 12;
+
+/**
+ * Backfill reaches at most this far into the past. The floor exists to keep
+ * conversational continuity across a date boundary (last night's exchange is
+ * still "the conversation"), not to drag week-old content back into a
+ * temporally anchored turn.
+ */
+export const TEMPORAL_WINDOW_BACKFILL_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+
 export function applyTemporalSessionHistoryWindow(
   entries: readonly SessionEntry[],
   turnBudgetCharacteristics?: ContextBudgetTurnCharacteristics,
@@ -184,7 +202,35 @@ export function applyTemporalSessionHistoryWindow(
   }
 
   const nowMs = now.getTime();
-  return entries.filter(entry => isEntryWithinTemporalWindow(entry, temporalWindow, nowMs));
+  const filtered = entries.filter(entry => isEntryWithinTemporalWindow(entry, temporalWindow, nowMs));
+  const conversationalCount = filtered.filter(isConversationalDialogueEntry).length;
+  if (conversationalCount >= TEMPORAL_WINDOW_MIN_CONVERSATIONAL_ENTRIES) {
+    return filtered;
+  }
+
+  // Backfill the most recent pre-window entries (bounded by the backfill age
+  // cap) until the floor is met, so temporal narrowing never severs the live
+  // conversation at a date boundary.
+  const backfillCutoff = nowMs - TEMPORAL_WINDOW_BACKFILL_MAX_AGE_MS;
+  const kept = new Set(filtered);
+  const backfilled: SessionEntry[] = [...filtered];
+  let missing = TEMPORAL_WINDOW_MIN_CONVERSATIONAL_ENTRIES - conversationalCount;
+  for (let index = entries.length - 1; index >= 0 && missing > 0; index--) {
+    const entry = entries[index];
+    if (kept.has(entry)) continue;
+    if (!Number.isFinite(entry.timestamp) || entry.timestamp < backfillCutoff) continue;
+    backfilled.push(entry);
+    kept.add(entry);
+    if (isConversationalDialogueEntry(entry)) {
+      missing -= 1;
+    }
+  }
+  return backfilled.sort((a, b) => a.timestamp - b.timestamp || a.id - b.id);
+}
+
+function isConversationalDialogueEntry(entry: SessionEntry): boolean {
+  return (entry.role === 'user' || entry.role === 'assistant')
+    && !isNonConversationalSessionEntry(entry);
 }
 
 interface RetryConfig {
@@ -228,6 +274,11 @@ function parseMetadataEnvelope(metadata: string | undefined): SessionMetadataEnv
 export function isNonConversationalSessionEntry(entry: Pick<SessionEntry, 'metadata'>): boolean {
   const envelope = parseMetadataEnvelope(entry.metadata);
   if (!envelope) return false;
+  // Legacy CompletionHandoff bookkeeping rows (no longer written, but still
+  // present in stores/backups until purged) are runtime metadata, never
+  // conversation. Excluding them here keeps window collection, token
+  // accounting, and prompt conversion consistent.
+  if (envelope.type === 'completion_handoff') return true;
   const lane = envelope.sessionLane;
   if (!isRecord(lane)) return false;
 

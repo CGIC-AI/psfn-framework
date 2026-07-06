@@ -14,9 +14,7 @@ import {
   normalizeSessionEntryAttribution,
 } from '../entry-attribution.js';
 import {
-  formatToolObservationForContext,
   MASKED_TOOL_OBSERVATION_CONTENT,
-  parseToolObservationMetadata,
   type ToolObservationMetadata,
 } from '../tool-observation.js';
 import {
@@ -259,13 +257,6 @@ export function entriesToMessages(
       } else {
         content = formatAttributedSystemContent(entry.content, attribution.authorName);
       }
-    } else if (entry.role === 'tool') {
-      const parsedToolObservation = parseToolObservationMetadata(entry.metadata);
-      if (!parsedToolObservation) {
-        throw new Error(`Tool session entry ${entry.channelId}:${entry.id} is missing tool observation metadata`);
-      }
-      toolObservation = parsedToolObservation;
-      content = formatToolObservationForContext(entry.content, toolObservation);
     } else if (attribution.role === 'system') {
       content = formatAttributedSystemContent(entry.content, attribution.authorName);
     } else if (role === 'user' && renderGroupUserAttribution && shouldRenderGroupUserAttribution(visibility)) {

@@ -1271,9 +1271,10 @@ describe('hydrateCanonicalStartupConfig', () => {
       sidecarId: 'observer-eval-test-persona',
       deploymentTarget: 'test_persona' as const,
       adapter: {
-        kind: 'emosim' as const,
-        emosimRoot: join(rootDir, 'vendor', 'emo_sim'),
-        pythonExecutable: 'python3',
+        kind: 'emosim_server' as const,
+        serverUrl: 'http://emosim.test:17342',
+        sessionLabel: 'psfn-observer-eval-test',
+        agentName: 'observer',
         timeoutMs: 4000,
         includeWorldState: true,
       },
@@ -1320,8 +1321,10 @@ describe('hydrateCanonicalStartupConfig', () => {
         ...createDefaultObserverEvalSidecarSettings(),
         enabled: true,
         adapter: {
-          kind: 'emosim',
-          emosimRoot: join(rootDir, 'vendor', 'emo_sim'),
+          kind: 'emosim_server',
+          serverUrl: 'http://emosim.test:17342',
+          sessionLabel: 'psfn-observer-eval-test',
+          agentName: 'observer',
           includeWorldState: false,
         },
         persistence: {

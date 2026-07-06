@@ -61,6 +61,8 @@ export function createDefaultObserverEvalSidecarSettings(): ObserverEvalSidecarS
     },
     adapter: {
       kind: 'disabled',
+      sessionLabel: 'psfn-observer-eval',
+      agentName: 'psfn-companion',
       includeWorldState: false,
     },
     persistence: {

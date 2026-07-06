@@ -8,6 +8,7 @@ This chart renders the first PSFN Kubernetes/k3s topology for one companion:
 - bundled Postgres + pgvector StatefulSet, or external Postgres Secret reference
 - bundled Redis StatefulSet for app cache, or external Redis Secret reference
 - bundled LiteLLM Deployment/Service for provider routing, or external LiteLLM URL
+- optional emo_sim observer-eval engine Deployment/Service/PVC (`emosim.enabled`)
 - PVC-backed system-data, companion-data, workspace, runtime, and model-cache roots
 - cert-manager Issuer/Certificate resources for internal SPIFFE mTLS
 - default-deny NetworkPolicies for gateway/agent/garden/Postgres/Redis/LiteLLM flows
@@ -228,6 +229,32 @@ The bundled LiteLLM config is a replaceable ConfigMap. The default config
 contains an OpenRouter wildcard route and reads secrets from environment
 variables, not ConfigMaps. Use `liteLlm.config.existingConfigMap` when you need a
 custom LiteLLM config.
+
+## emo_sim Observer-Eval Engine (optional)
+
+`emosim.enabled=true` deploys the long-lived emo_sim emotion-simulation server
+consumed by the observer eval sidecar
+(`observerEvalSidecar.adapter.kind=emosim_server` in `settings.json`), as a
+single-replica Recreate Deployment with a `/state` PVC so one persistent
+session accumulates temporal emotion state across turns and restarts.
+
+Build the image from `docker/Dockerfile.emosim` with an emo_sim checkout as
+the build context (see the Dockerfile header for the exact command) and set
+`emosim.image.repository`/`emosim.image.tag`.
+
+The sidecar's `settings.json` should point at the ClusterIP service:
+
+```text
+http://<release>-emosim:17342
+```
+
+Security: the emo_sim API is UNAUTHENTICATED by upstream design. The chart
+exposes it only as a ClusterIP service and, when `networkPolicy.enabled=true`,
+restricts ingress to agent pods on the HTTP port and denies all egress. Never
+expose ports 17341/17342 outside the cluster.
+
+Simulation pacing (`--timescale`, `--drivescale`, `--tick`) is controlled via
+`emosim.extraArgs` without an image rebuild.
 
 ## Redis Prompt Cache
 

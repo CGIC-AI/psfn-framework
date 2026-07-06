@@ -1,7 +1,8 @@
 import { createDefaultObserverEvalSidecarSettings } from '../../../system/config/runtime-config-contracts.js';
 import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
 import { createObserverEmotionCrosswalk } from './crosswalk.js';
-import { runEmoSimProjectedStimulus } from './emosim-adapter.js';
+import { runEmoSimProjectedStimulus, type EmoSimRunner } from './emosim-adapter.js';
+import { createEmoSimServerRunner } from './emosim-server-adapter.js';
 import {
   createObserverEvalComparisonMetrics,
   createPostgresObserverEvalSidecarStore,
@@ -39,18 +40,32 @@ function createObserverEvalSidecarPort(
   settings: ObserverEvalSidecarConfig,
   persistence: ObserverEvalSidecarPersistencePort | null,
 ): ObserverEvalSidecarPort | null {
-  if (settings.enabled !== true || settings.adapter?.kind !== 'emosim') {
+  if (settings.enabled !== true || settings.adapter?.kind !== 'emosim_server') {
     return null;
   }
-  const emosimRoot = settings.adapter.emosimRoot?.trim();
-  if (!emosimRoot) {
-    return null;
+  const serverUrl = settings.adapter.serverUrl?.trim();
+  const sessionLabel = settings.adapter.sessionLabel?.trim();
+  const agentName = settings.adapter.agentName?.trim();
+  if (!serverUrl || !sessionLabel || !agentName) {
+    // Startup config validation (validateObserverEvalSidecarStartupConfig and
+    // the settings normalizer) already fails closed on these; reaching this
+    // point means the sidecar was constructed without validated settings.
+    throw new Error(
+      'observerEvalSidecar.adapter requires serverUrl, sessionLabel, and agentName for kind=emosim_server',
+    );
   }
 
   return new EmoSimObserverEvalSidecar({
     config: settings,
     persistence,
-    emosimRoot,
+    // One runner per sidecar: it caches the contract check and the persistent
+    // session bootstrap across observations.
+    runner: createEmoSimServerRunner({
+      serverUrl,
+      sessionLabel,
+      agentName,
+      ...(settings.adapter.timeoutMs !== undefined ? { timeoutMs: settings.adapter.timeoutMs } : {}),
+    }),
   });
 }
 
@@ -71,7 +86,7 @@ function createObserverEvalSidecarPersistence(
 interface EmoSimObserverEvalSidecarOptions {
   config: ObserverEvalSidecarConfig;
   persistence: ObserverEvalSidecarPersistencePort | null;
-  emosimRoot: string;
+  runner: EmoSimRunner;
 }
 
 class EmoSimObserverEvalSidecar implements ObserverEvalSidecarPort {
@@ -96,15 +111,7 @@ class EmoSimObserverEvalSidecar implements ObserverEvalSidecarPort {
       includeWorldState: this.options.config.adapter?.includeWorldState ?? false,
     });
     const emosim = projection.ok
-      ? await runEmoSimProjectedStimulus(projection.adapterInput, {
-        emoSimRoot: this.options.emosimRoot,
-        ...(this.options.config.adapter?.pythonExecutable
-          ? { pythonExecutable: this.options.config.adapter.pythonExecutable }
-          : {}),
-        ...(this.options.config.adapter?.timeoutMs !== undefined
-          ? { timeoutMs: this.options.config.adapter.timeoutMs }
-          : {}),
-      })
+      ? await runEmoSimProjectedStimulus(projection.adapterInput, { runner: this.options.runner })
       : undefined;
     const crosswalk = projection.ok && emosim?.ok
       ? createObserverEmotionCrosswalk({

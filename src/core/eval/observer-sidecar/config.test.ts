@@ -1,7 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs';
-import { join } from 'node:path';
-import { tmpdir } from 'node:os';
-import { afterEach, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { createDefaultObserverEvalSidecarSettings } from '../../../system/config/runtime-config-contracts.js';
 import {
   createObserverEvalSidecarRuntimeFromConfig,
@@ -9,17 +6,6 @@ import {
   toObserverEvalPersistenceDeployment,
 } from './config.js';
 import type { ObserverEvalInputPayload } from './types.js';
-
-const tempDirs: string[] = [];
-
-afterEach(() => {
-  while (tempDirs.length > 0) {
-    const dir = tempDirs.pop();
-    if (dir) {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  }
-});
 
 describe('createObserverEvalSidecarRuntimeFromConfig', () => {
   it('keeps the observer detached when the sidecar is disabled', () => {
@@ -31,16 +17,19 @@ describe('createObserverEvalSidecarRuntimeFromConfig', () => {
     expect(runtime.observer).toBeNull();
   });
 
-  it('attaches an EmoSim observer for enabled sidecar settings', async () => {
-    const emoSimRoot = mkdtempSync(join(tmpdir(), 'psfn-emosim-missing-'));
-    tempDirs.push(emoSimRoot);
+  it('attaches an EmoSim server observer for enabled sidecar settings', async () => {
     const runtime = createObserverEvalSidecarRuntimeFromConfig({
       observerEvalSidecar: {
         ...createDefaultObserverEvalSidecarSettings(),
         enabled: true,
         adapter: {
-          kind: 'emosim',
-          emosimRoot: emoSimRoot,
+          kind: 'emosim_server',
+          // Port 9 (discard) is never a live emo_sim server; the observation
+          // must surface a server-unreachable failure without blocking.
+          serverUrl: 'http://127.0.0.1:9',
+          sessionLabel: 'psfn-observer-eval-test',
+          agentName: 'observer',
+          timeoutMs: 250,
           includeWorldState: false,
         },
         persistence: {
@@ -54,7 +43,22 @@ describe('createObserverEvalSidecarRuntimeFromConfig', () => {
     expect(runtime.config?.enabled).toBe(true);
     expect(runtime.observer).not.toBeNull();
     await expect(runtime.observer?.observeTurn(makeObserverInput())).rejects.toThrow(
-      'EmoSim statemashine.py was not found',
+      /EmoSim server request GET \/api\/model (failed|timed out)/,
+    );
+  });
+
+  it('fails closed when enabled emosim_server settings are missing required adapter fields', () => {
+    expect(() => createObserverEvalSidecarRuntimeFromConfig({
+      observerEvalSidecar: {
+        ...createDefaultObserverEvalSidecarSettings(),
+        enabled: true,
+        adapter: {
+          kind: 'emosim_server',
+          includeWorldState: false,
+        },
+      },
+    })).toThrow(
+      'observerEvalSidecar.adapter requires serverUrl, sessionLabel, and agentName for kind=emosim_server',
     );
   });
 

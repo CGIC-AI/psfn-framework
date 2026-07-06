@@ -69,6 +69,21 @@ app.kubernetes.io/component: {{ .component }}
 {{- printf "%s:%s@%s" $image.repository $image.tag $image.digest -}}
 {{- end -}}
 
+{{- define "psfn.emosimImage" -}}
+{{- $image := .Values.emosim.image -}}
+{{- $repository := required "emosim.image.repository is required when emosim.enabled=true" $image.repository -}}
+{{- $tag := default "" $image.tag -}}
+{{- $digest := default "" $image.digest -}}
+{{- if and (not $tag) (not $digest) -}}
+{{- fail "emosim.image.tag or emosim.image.digest is required when emosim.enabled=true" -}}
+{{- end -}}
+{{- if $digest -}}
+{{- printf "%s:%s@%s" $repository $tag $digest -}}
+{{- else -}}
+{{- printf "%s:%s" $repository $tag -}}
+{{- end -}}
+{{- end -}}
+
 {{- define "psfn.liteLlmImage" -}}
 {{- $image := .Values.liteLlm.image -}}
 {{- $repository := required "liteLlm.image.repository is required when liteLlm.enabled=true and liteLlm.mode=internal" $image.repository -}}
@@ -157,6 +172,10 @@ app.kubernetes.io/component: {{ .component }}
 
 {{- define "psfn.redisServiceName" -}}
 {{- printf "%s-redis" (include "psfn.fullname" .) -}}
+{{- end -}}
+
+{{- define "psfn.emosimServiceName" -}}
+{{- printf "%s-emosim" (include "psfn.fullname" .) -}}
 {{- end -}}
 
 {{- define "psfn.liteLlmServiceName" -}}

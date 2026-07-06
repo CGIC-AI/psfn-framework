@@ -744,6 +744,51 @@ check_provider_routing() {
     "$requested_provider" "$actual_provider" "$actual_model" "$recorded_at_ms"
 }
 
+check_emosim_service() {
+  # Optional: only validated when the emosim deployment exists in the
+  # namespace (emosim.enabled=true in the chart). The check asserts the
+  # observer-sidecar contract surface: /api/model must expose 17 appraisal
+  # dims and 48 emotions.
+  if ! run_kubectl -n "$NAMESPACE" get deploy psfn-emosim >/dev/null 2>&1; then
+    printf 'emosim deployment not present; skipping optional emosim check\n'
+    return 0
+  fi
+
+  local output
+  if ! output="$(run_kubectl -n "$NAMESPACE" rollout status deploy/psfn-emosim "--timeout=${ROLLOUT_TIMEOUT}" 2>&1)"; then
+    printf '%s\n' "$output"
+    return 1
+  fi
+  printf '%s\n' "$output"
+
+  local model_json
+  if ! model_json="$(run_kubectl -n "$NAMESPACE" exec deploy/psfn-emosim -- python -c 'import urllib.request,sys; sys.stdout.write(urllib.request.urlopen("http://127.0.0.1:17342/api/model", timeout=10).read().decode())' 2>&1)"; then
+    printf 'emosim /api/model request failed: %s\n' "$model_json"
+    return 1
+  fi
+
+  printf '%s' "$model_json" | node -e '
+const fs = require("node:fs");
+const raw = fs.readFileSync(0, "utf8");
+let payload;
+try {
+  payload = JSON.parse(raw);
+} catch (error) {
+  console.error(`emosim /api/model returned invalid JSON: ${error.message}`);
+  process.exit(1);
+}
+const dims = Array.isArray(payload.appraisal_dims) ? payload.appraisal_dims.length : 0;
+const emotions = payload.emotions && typeof payload.emotions === "object"
+  ? Object.keys(payload.emotions).length
+  : 0;
+if (dims !== 17 || emotions !== 48) {
+  console.error(`emosim model contract mismatch: appraisal_dims=${dims} (want 17) emotions=${emotions} (want 48)`);
+  process.exit(1);
+}
+console.log(`emosim /api/model contract ok: appraisal_dims=${dims} emotions=${emotions}`);
+'
+}
+
 check_zero_bookkeeping_writes() {
   local sql
   sql="select count(*) from session_messages_projection where author_name in ('CompletionHandoff','BackgroundContinuation');"
@@ -892,6 +937,7 @@ main() {
   run_check "agent log scan" check_agent_logs
   run_check "provider routing" check_provider_routing
   run_check "zero bookkeeping writes" check_zero_bookkeeping_writes
+  run_check "emosim service (optional)" check_emosim_service
   if [[ "$SMOKE" == true ]]; then
     run_check "gateway chat smoke" check_gateway_smoke
   fi

@@ -1,15 +1,17 @@
 import { describe, expect, it } from 'vitest';
 import {
-  createPythonEmoSimRunner,
   EMOSIM_ADAPTER_INPUT_SCHEMA_VERSION,
   EMOSIM_ADAPTER_OUTPUT_SCHEMA_VERSION,
   EMOSIM_ADAPTER_VERSION,
   EMOSIM_APPRAISAL_DIMS,
   EMOSIM_EMOTION_VECTOR,
   EMOSIM_INTEGRATION_SURFACE,
+  EMOSIM_KICKS_SEMANTICS,
+  EMOSIM_SERVER_TICK_POLICY,
   EMOSIM_SNAPSHOT_FORMAT,
   EMOSIM_TIMESTEP_POLICY,
   EMOSIM_WORLD_SNAPSHOT_FORMAT,
+  EmoSimSidecarUnavailableError,
   parseEmoSimAdapterInput,
   parseEmoSimAdapterOutput,
   runEmoSimProjectedStimulus,
@@ -85,10 +87,13 @@ describe('EmoSim observer sidecar adapter', () => {
   });
 
   it('returns invalid-input instead of throwing for malformed adapter input', async () => {
-    const result = await runEmoSimProjectedStimulus({
-      ...makeInput(),
-      schemaVersion: 2,
-    });
+    const result = await runEmoSimProjectedStimulus(
+      {
+        ...makeInput(),
+        schemaVersion: 2,
+      },
+      { runner: { run: async () => makeOutput(makeInput()) } },
+    );
 
     expect(result).toMatchObject({
       ok: false,
@@ -100,18 +105,39 @@ describe('EmoSim observer sidecar adapter', () => {
     });
   });
 
-  it('reports missing EmoSim runtime as sidecar-unavailable', async () => {
-    const missingRunner = createPythonEmoSimRunner({
-      emoSimRoot: '/tmp/psfn-framework-missing-emosim-runtime',
-    });
+  it('maps an unreachable EmoSim server to sidecar-unavailable/server-unreachable', async () => {
+    const unreachableRunner = {
+      run: async () => {
+        throw new EmoSimSidecarUnavailableError(
+          'server-unreachable',
+          'EmoSim server request GET /api/model failed: fetch failed',
+          { serverUrl: 'http://127.0.0.1:1' },
+        );
+      },
+    };
 
-    const result = await runEmoSimProjectedStimulus(makeInput(), { runner: missingRunner });
+    const result = await runEmoSimProjectedStimulus(makeInput(), { runner: unreachableRunner });
 
     expect(result).toMatchObject({
       ok: false,
       error: {
         code: 'sidecar-unavailable',
-        reason: 'missing-runtime',
+        reason: 'server-unreachable',
+        recoverable: true,
+      },
+    });
+  });
+
+  it('maps a runner output that fails schema validation to incompatible-runtime', async () => {
+    const result = await runEmoSimProjectedStimulus(makeInput(), {
+      runner: { run: async () => ({ unexpected: true }) },
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: {
+        code: 'sidecar-unavailable',
+        reason: 'incompatible-runtime',
         recoverable: true,
       },
     });
@@ -198,15 +224,15 @@ function makeOutput(input: EmoSimAdapterInput): EmoSimAdapterOutput {
       integrationSurface: EMOSIM_INTEGRATION_SURFACE,
       appraisalDimensions: [...EMOSIM_APPRAISAL_DIMS],
       emotionVector: [...EMOSIM_EMOTION_VECTOR],
-      timestepPolicy: EMOSIM_TIMESTEP_POLICY,
+      timestepPolicy: EMOSIM_SERVER_TICK_POLICY,
       snapshotFormat: EMOSIM_SNAPSHOT_FORMAT,
       worldSnapshotFormat: EMOSIM_WORLD_SNAPSHOT_FORMAT,
-      timeScale: 1,
-      decay: {
-        moodHalfLifeSeconds: 25,
-        maxStepDtSeconds: 0.25,
-        residueMultiplier: 6,
-        emotionHalfLivesSeconds: makeEmotionVector(30),
+      kicksSemantics: EMOSIM_KICKS_SEMANTICS,
+      timeScale: 120,
+      session: {
+        sessionId: 'emosim-session-fixture',
+        sessionLabel: 'psfn-observer-eval',
+        agentName: 'observer',
       },
       emotionSpecs: makeEmotionSpecs(),
     },

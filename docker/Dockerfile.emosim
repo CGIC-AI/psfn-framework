@@ -1,0 +1,46 @@
+# emo_sim observer-eval engine — long-lived server for the PSFN observer
+# sidecar (observerEvalSidecar.adapter.kind=emosim_server).
+#
+# The emo_sim source is NOT vendored in this repository. The build context is
+# a checkout of the sibling emo_sim repo; this Dockerfile only packages it.
+#
+# Build (off-node arm64 cross-build for the k3s Pi, from the framework repo):
+#   docker buildx build --platform linux/arm64 \
+#     -f docker/Dockerfile.emosim \
+#     -t localhost/psfn-emosim:<TAG> \
+#     --output type=docker \
+#     ~/emo_sim
+#
+# emo_sim is pure Python stdlib (requires-python >= 3.10, zero dependencies).
+#
+# Networking / security contract:
+# - server.py binds 127.0.0.1 by default and its API is UNAUTHENTICATED by
+#   upstream design. Inside the pod it must bind 0.0.0.0 so the ClusterIP
+#   service can reach it; the Helm chart exposes it ONLY as a ClusterIP
+#   service guarded by NetworkPolicy. Never expose these ports outside the
+#   cluster.
+# - Ports: 17342 HTTP JSON API (+ dashboard), 17341 TCP JSON-lines push.
+#
+# State: sessions persist under /state (atomic snapshot every 5s, restart
+# recovery with wall-clock downtime catch-up). /state is a PVC in k8s.
+FROM python:3.12-slim
+
+RUN groupadd --gid 999 emosim \
+    && useradd --uid 999 --gid 999 --create-home --home-dir /home/emosim emosim \
+    && mkdir -p /app /state \
+    && chown -R emosim:emosim /app /state
+
+WORKDIR /app
+
+# Build context is the emo_sim checkout itself.
+COPY --chown=emosim:emosim . /app/
+
+USER emosim
+
+VOLUME ["/state"]
+
+EXPOSE 17341 17342
+
+# Extra flags (e.g. --timescale, --drivescale, --tick) come from the container
+# args so the Helm values control simulation pacing without an image rebuild.
+ENTRYPOINT ["python", "server.py", "--host=0.0.0.0", "--statedir=/state"]

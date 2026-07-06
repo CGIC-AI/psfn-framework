@@ -1,4 +1,3 @@
-import type Database from 'better-sqlite3';
 import type { Pool, PoolClient } from 'pg';
 import type { EmbeddingProviderPort } from '../../core/agent/contracts.js';
 import {
@@ -10,14 +9,15 @@ import {
 import { POSTGRES_MEMORY_MIGRATIONS } from '../../persistence/postgres/migrations.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
 
-interface MemoryTextRow {
-  id: string;
-  text: string;
-}
-
 interface RetrievalRow {
   memory_id: string;
   distance: number;
+}
+
+export interface RetrievalValidationDatabase {
+  prepare(sql: string): {
+    all(...params: readonly unknown[]): RetrievalRow[];
+  };
 }
 
 interface PostgresMemoryTextRow {
@@ -125,45 +125,6 @@ function toPostgresEmbeddingLiteral(embedding: Float32Array): string {
   return `[${Array.from(embedding, value => Number(value)).join(',')}]`;
 }
 
-function loadRowsForMigration(
-  db: Database.Database,
-  includeDeleted: boolean,
-): MemoryTextRow[] {
-  const whereClause = includeDeleted ? '' : 'WHERE m.deleted_at IS NULL';
-  return db.prepare(`
-    SELECT m.id, m.text
-    FROM l2_memories m
-    LEFT JOIN l2_memory_embeddings e ON e.memory_id = m.id
-    ${whereClause}
-    ORDER BY m.id ASC
-  `).all() as MemoryTextRow[];
-}
-
-function writeReembeddedBatch(
-  db: Database.Database,
-  rows: readonly MemoryTextRow[],
-  embeddings: readonly Float32Array[],
-): void {
-  const deleteStmt = db.prepare(`
-    DELETE FROM l2_memory_embeddings
-    WHERE memory_id = ?
-  `);
-  const insertStmt = db.prepare(`
-    INSERT INTO l2_memory_embeddings (memory_id, embedding)
-    VALUES (?, ?)
-  `);
-
-  const tx = db.transaction(() => {
-    for (let idx = 0; idx < rows.length; idx++) {
-      const row = rows[idx];
-      const embedding = embeddings[idx];
-      deleteStmt.run(row.id);
-      insertStmt.run(row.id, toEmbeddingBuffer(embedding));
-    }
-  });
-  tx();
-}
-
 async function loadPostgresRowsForMigration(
   pool: Pool,
   includeDeleted: boolean,
@@ -219,24 +180,6 @@ function summarizeValidation(
   };
 }
 
-function createValidationErrorReport(
-  queries: readonly RetrievalValidationQuery[],
-  topK: number,
-  error: unknown,
-): RetrievalValidationReport {
-  return {
-    status: 'error',
-    topK,
-    queryCount: queries.length,
-    expectedQueryCount: queries.filter(query => (query.expectedMemoryIds?.length ?? 0) > 0).length,
-    hitRate: null,
-    meanReciprocalRank: null,
-    meanTopSimilarity: null,
-    details: [],
-    error: toErrorMessage(error),
-  };
-}
-
 function createSkippedValidationReport(): RetrievalValidationReport {
   return {
     status: 'skipped',
@@ -251,7 +194,7 @@ function createSkippedValidationReport(): RetrievalValidationReport {
 }
 
 export async function runRetrievalValidation(
-  db: Database.Database,
+  db: RetrievalValidationDatabase,
   embeddingService: EmbeddingProviderPort,
   queries: readonly RetrievalValidationQuery[],
   topK: number = DEFAULT_VALIDATION_TOP_K,
@@ -323,157 +266,6 @@ export async function runRetrievalValidation(
   }
 
   return summarizeValidation(details, normalizedTopK);
-}
-
-async function runValidationSafely(
-  db: Database.Database,
-  embeddingService: EmbeddingProviderPort,
-  queries: readonly RetrievalValidationQuery[] | undefined,
-  topK: number,
-): Promise<RetrievalValidationReport | undefined> {
-  if (!queries || queries.length === 0) return undefined;
-  try {
-    return await runRetrievalValidation(db, embeddingService, queries, topK);
-  } catch (error) {
-    return createValidationErrorReport(queries, topK, error);
-  }
-}
-
-export async function migrateMemoryEmbeddings(
-  db: Database.Database,
-  embeddingService: EmbeddingProviderPort,
-  options: EmbeddingMigrationOptions = {},
-): Promise<EmbeddingMigrationResult> {
-  const batchSize = normalizePositiveInt(
-    options.batchSize,
-    DEFAULT_BATCH_SIZE,
-    'batchSize',
-  );
-  const parallelism = normalizePositiveInt(
-    options.parallelism,
-    DEFAULT_PARALLELISM,
-    'parallelism',
-  );
-  const validationTopK = normalizePositiveInt(
-    options.validationTopK,
-    DEFAULT_VALIDATION_TOP_K,
-    'validationTopK',
-  );
-
-  const includeDeleted = options.includeDeleted ?? false;
-  const continueOnError = options.continueOnError ?? true;
-  const startTime = Date.now();
-  const rows = loadRowsForMigration(db, includeDeleted);
-  const batches = chunk(rows, batchSize);
-
-  let processed = 0;
-  let updated = 0;
-  let failed = 0;
-  const failures: ReembedFailure[] = [];
-
-  const preValidation = await runValidationSafely(
-    db,
-    embeddingService,
-    options.validationQueries,
-    validationTopK,
-  );
-
-  if (rows.length > 0) {
-    let nextBatch = 0;
-    const workerCount = Math.min(parallelism, batches.length);
-
-    const runWorker = async (): Promise<void> => {
-      for (;;) {
-        const batchIndex = nextBatch++;
-        if (batchIndex >= batches.length) return;
-
-        const batch = batches[batchIndex];
-
-        try {
-          const embeddings = await embeddingService.embedBatch(batch.map(row => row.text));
-          if (embeddings.length !== batch.length) {
-            throw new Error(
-              `Embedding service returned ${embeddings.length} embeddings for ${batch.length} records`,
-            );
-          }
-
-          if (Number.isFinite(embeddingService.dims) && embeddingService.dims > 0) {
-            for (const embedding of embeddings) {
-              if (embedding.length !== embeddingService.dims) {
-                throw new Error(
-                  `Embedding dimension ${embedding.length} does not match configured ${embeddingService.dims}`,
-                );
-              }
-            }
-          }
-
-          writeReembeddedBatch(db, batch, embeddings);
-          processed += batch.length;
-          updated += batch.length;
-          options.onProgress?.({
-            total: rows.length,
-            processed,
-            updated,
-            failed,
-            batchIndex: batchIndex + 1,
-            batchCount: batches.length,
-          });
-        } catch (error) {
-          const message = toErrorMessage(error);
-          processed += batch.length;
-          failed += batch.length;
-          for (const row of batch) {
-            failures.push({
-              memoryId: row.id,
-              error: message,
-            });
-          }
-          options.onProgress?.({
-            total: rows.length,
-            processed,
-            updated,
-            failed,
-            batchIndex: batchIndex + 1,
-            batchCount: batches.length,
-          });
-
-          if (!continueOnError) {
-            throw new Error(`Failed embedding migration batch ${batchIndex + 1}: ${message}`);
-          }
-        }
-      }
-    };
-
-    await Promise.all(
-      Array.from({ length: workerCount }, async () => {
-        await runWorker();
-      }),
-    );
-  }
-
-  const postValidation = await runValidationSafely(
-    db,
-    embeddingService,
-    options.validationQueries,
-    validationTopK,
-  );
-
-  return {
-    total: rows.length,
-    processed,
-    updated,
-    failed,
-    batchSize,
-    parallelism,
-    durationMs: Date.now() - startTime,
-    failures,
-    validation: preValidation && postValidation
-      ? {
-        pre: preValidation,
-        post: postValidation,
-      }
-    : undefined,
-  };
 }
 
 export async function migratePostgresMemoryEmbeddings(

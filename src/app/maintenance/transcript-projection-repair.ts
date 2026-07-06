@@ -39,13 +39,13 @@ export interface TranscriptProjectionRepairCommandOptions {
 
 export interface TranscriptProjectionRepairCommandReport extends TranscriptProjectionRepairReport {
   dataDir: string;
-  persistenceBackend: SubstrateConfig['persistenceBackend'] | 'sqlite';
+  persistenceBackend: SubstrateConfig['persistenceBackend'];
   sessionsDir: string;
 }
 
 interface TranscriptProjectionRepairTarget {
   dataDir: string;
-  persistenceBackend: SubstrateConfig['persistenceBackend'] | 'sqlite';
+  persistenceBackend: SubstrateConfig['persistenceBackend'];
   sessionsDir: string;
   transcriptProjection: TranscriptProjectionPort;
   integrityProvider: SessionIntegrityProvider | null;

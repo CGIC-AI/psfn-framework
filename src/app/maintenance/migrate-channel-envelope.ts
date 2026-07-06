@@ -10,7 +10,6 @@
 
 import '../../shared/utils/load-dotenv.js';
 import { resolve } from 'node:path';
-import Database from 'better-sqlite3';
 import { createPostgresPool } from '../../persistence/postgres.js';
 import { loadConfig } from '../../system/config/load-config.js';
 import { resolveConfiguredSystemDataDir, resolveSessionsDir } from '../../persistence/layout.js';
@@ -28,7 +27,7 @@ import { toErrorMessage } from '../../shared/utils/errors.js';
 import { hydrateSecretBearingConfig } from '../startup/support/bootstrap-helpers.js';
 import { applyGatewayTlsConfig } from '../../boundary/gateway/tls.js';
 
-type ContactsBackend = 'postgres' | 'sqlite';
+type ContactsBackend = 'postgres';
 
 interface CliOptions {
   apply: boolean;
@@ -37,7 +36,6 @@ interface CliOptions {
   sessionsDir?: string;
   backend?: ContactsBackend;
   postgresUrl?: string;
-  sqlitePath?: string;
   skipContacts: boolean;
 }
 
@@ -55,10 +53,9 @@ function printUsage(): void {
   console.log('  --apply                  Write seeded labels to channels.json (default: report only).');
   console.log('  --json                   Emit the full plan as JSON.');
   console.log('  --sessions-dir <path>    Override the session journals directory.');
-  console.log('  --backend <postgres|sqlite>');
+  console.log('  --backend <postgres>');
   console.log('                           Override the configured contacts persistence backend.');
   console.log('  --postgres-url <url>     Override configured PostgreSQL URL.');
-  console.log('  --sqlite-path <path>     Override configured SQLite database path.');
   console.log('  --skip-contacts          Skip contact-row enumeration (sessions only).');
   console.log('  -h, --help               Show this help message.');
 }
@@ -70,8 +67,8 @@ function requireNext(argv: string[], index: number, arg: string): string {
 }
 
 function parseBackend(value: string): ContactsBackend {
-  if (value === 'postgres' || value === 'sqlite') return value;
-  throw new Error('--backend must be postgres or sqlite');
+  if (value === 'postgres') return value;
+  throw new Error('--backend must be postgres');
 }
 
 function parseArgs(argv: string[]): CliOptions {
@@ -113,11 +110,6 @@ function parseArgs(argv: string[]): CliOptions {
       i += 1;
       continue;
     }
-    if (arg === '--sqlite-path') {
-      options.sqlitePath = requireNext(argv, i, arg);
-      i += 1;
-      continue;
-    }
     throw new Error(`Unknown argument: ${arg}`);
   }
   return options;
@@ -143,27 +135,6 @@ async function fetchPostgresContactActivityRows(postgresUrl: string): Promise<Co
   }
 }
 
-function fetchSqliteContactActivityRows(sqlitePath: string): ContactActivityRow[] {
-  const path = sqlitePath.trim();
-  if (!path) {
-    throw new Error('Contacts enumeration requires --sqlite-path or config.databasePath (or pass --skip-contacts)');
-  }
-  const db = new Database(path, { readonly: true, fileMustExist: true });
-  try {
-    const table = db.prepare(
-      "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'contact_channel_activity'",
-    ).get();
-    if (!table) return [];
-    const rows = db.prepare('SELECT channel_id, privacy_level FROM contact_channel_activity').all() as Array<{
-      channel_id: unknown;
-      privacy_level: unknown;
-    }>;
-    return rows.map(row => ({ channelId: row.channel_id, privacyLevel: row.privacy_level }));
-  } finally {
-    db.close();
-  }
-}
-
 async function main(): Promise<void> {
   const options = parseArgs(process.argv.slice(2));
   if (options.showHelp) {
@@ -186,9 +157,7 @@ async function main(): Promise<void> {
   const contactScan = options.skipContacts
     ? undefined
     : observationsFromContactActivityRows(
-      (options.backend ?? (config.persistenceBackend === 'postgres' ? 'postgres' : 'sqlite')) === 'postgres'
-        ? await fetchPostgresContactActivityRows(options.postgresUrl ?? config.postgresDatabaseUrl ?? '')
-        : fetchSqliteContactActivityRows(options.sqlitePath ?? config.databasePath),
+      await fetchPostgresContactActivityRows(options.postgresUrl ?? config.postgresDatabaseUrl ?? ''),
     );
 
   const trustPolicy = loadTrustPolicyConfig(systemDataDir);

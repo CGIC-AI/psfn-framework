@@ -1,5 +1,4 @@
 import { randomUUID } from 'node:crypto';
-import type Database from 'better-sqlite3';
 import type { Pool, PoolClient, QueryResultRow } from 'pg';
 import type { SessionEntry } from '../../core/session/types.js';
 import {
@@ -116,13 +115,6 @@ export interface MemoryParticipantNameRepairStore {
     updates: readonly MemoryParticipantNameRepairUpdate[],
     context: MemoryParticipantNameRepairApplyContext,
   ): Promise<number>;
-}
-
-interface SqliteMemoryParticipantNameRepairRow {
-  id: string;
-  text: string;
-  superseded_by: string | null;
-  deleted_at: number | null;
 }
 
 interface PostgresMemoryParticipantNameRepairRow extends QueryResultRow {
@@ -326,86 +318,6 @@ export async function runMemoryParticipantNameRepair(
     sourceRef,
     sourceType,
   };
-}
-
-export function createSqliteMemoryParticipantNameRepairStore(
-  db: Database.Database,
-): MemoryParticipantNameRepairStore {
-  return {
-    async listCandidateMemories({ includeArchived, limit }) {
-      const archivedClause = includeArchived
-        ? '1 = 1'
-        : 'superseded_by IS NULL AND deleted_at IS NULL';
-      const rows = db.prepare(`
-        SELECT id, text, superseded_by, deleted_at
-        FROM l2_memories
-        WHERE (${archivedClause})
-          AND (${SQL_CANDIDATE_PREDICATE})
-        ORDER BY extracted_at DESC, id DESC
-        LIMIT ?
-      `).all(limit) as SqliteMemoryParticipantNameRepairRow[];
-      return rows.map(row => ({
-        id: row.id,
-        text: row.text,
-        supersededBy: row.superseded_by,
-        deletedAt: row.deleted_at,
-      }));
-    },
-
-    async applyParticipantNameRepair(updates, context) {
-      if (updates.length === 0) return 0;
-      const archivedClause = context.includeArchived
-        ? ''
-        : ' AND superseded_by IS NULL AND deleted_at IS NULL';
-      const updateStmt = db.prepare(`
-        UPDATE l2_memories
-        SET text = ?
-        WHERE id = ?
-          AND text = ?
-          ${archivedClause}
-      `);
-      const insertPatchEvent = db.prepare(`
-        INSERT INTO l2_memory_patch_events (
-          id, memory_id, source_ref, source_type, provenance_json, reason,
-          patch_json, previous_json, next_json, created_at
-        )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `);
-      const transaction = db.transaction((planned: readonly MemoryParticipantNameRepairUpdate[]) => {
-        let updated = 0;
-        for (const update of planned) {
-          const result = updateStmt.run(update.afterText, update.memoryId, update.beforeText);
-          if (result.changes !== 1) continue;
-          const event = createPatchEventParams(update, context);
-          insertPatchEvent.run(
-            event.id,
-            event.memoryId,
-            event.sourceRef,
-            event.sourceType,
-            event.provenanceJson,
-            event.reason,
-            event.patchJson,
-            event.previousJson,
-            event.nextJson,
-            event.createdAt,
-          );
-          updated += 1;
-        }
-        return updated;
-      });
-      return transaction(updates);
-    },
-  };
-}
-
-export async function repairSqliteMemoryParticipantNames(
-  db: Database.Database,
-  options: MemoryParticipantNameRepairOptions,
-): Promise<MemoryParticipantNameRepairReport> {
-  return await runMemoryParticipantNameRepair(
-    createSqliteMemoryParticipantNameRepairStore(db),
-    options,
-  );
 }
 
 export function createPostgresMemoryParticipantNameRepairStore(

@@ -6,7 +6,7 @@ import type { SubstrateConfig } from '../../system/config/runtime-config-contrac
 import { SessionStore } from '../../persistence/sessions/store.js';
 import { SessionManager } from '../session/manager.js';
 import { runWithRequestContext } from '../../primitives/llm/request-context.js';
-import { createSessionGrepTool, createSessionSearchTool } from './session-search.js';
+import { createSessionTool } from './session.js';
 
 function makeConfig(overrides: Partial<SubstrateConfig> = {}): SubstrateConfig {
   return {
@@ -108,6 +108,19 @@ describe('session search tools', () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
+  function makeTool(
+    llmProvider: any,
+    runRipgrep?: Parameters<typeof createSessionTool>[0]['runRipgrep'],
+  ): ReturnType<typeof createSessionTool> {
+    return createSessionTool({
+      manager,
+      llmProvider,
+      sessionsDir: join(dir, 'sessions'),
+      dataDir: dir,
+      ...(runRipgrep ? { runRipgrep } : {}),
+    });
+  }
+
   it('session_search uses the indexed transcript path and gates hits by caller privacy', async () => {
     store.append({
       channelId: 'api:public-session',
@@ -134,7 +147,7 @@ describe('session search tools', () => {
         stopReason: 'stop',
       })),
     } as any;
-    const tool = createSessionSearchTool(manager, llmProvider);
+    const tool = makeTool(llmProvider);
 
     const result = await runWithRequestContext(
       {
@@ -144,7 +157,7 @@ describe('session search tools', () => {
         viewerTrustLevel: 'regular',
         viewerChannelPrivacy: 'public',
       },
-      () => tool.execute('session-search-1', { query: 'Project Orion' }),
+      () => tool.execute('session-search-1', { action: 'search', query: 'Project Orion' }),
     );
     const payload = JSON.parse(toolText(result)) as {
       totalHits: number;
@@ -188,7 +201,7 @@ describe('session search tools', () => {
         stopReason: 'stop',
       })),
     } as any;
-    const tool = createSessionSearchTool(manager, llmProvider);
+    const tool = makeTool(llmProvider);
 
     const result = await runWithRequestContext(
       {
@@ -198,7 +211,7 @@ describe('session search tools', () => {
         viewerTrustLevel: 'regular',
         viewerChannelPrivacy: 'public',
       },
-      () => tool.execute('session-search-cogsec', { query: 'CogSec' }),
+      () => tool.execute('session-search-cogsec', { action: 'search', query: 'CogSec' }),
     );
     const payload = JSON.parse(toolText(result)) as {
       totalHits: number;
@@ -240,7 +253,7 @@ describe('session search tools', () => {
         stopReason: 'stop',
       })),
     } as any;
-    const tool = createSessionSearchTool(manager, llmProvider);
+    const tool = makeTool(llmProvider);
 
     const result = await runWithRequestContext(
       {
@@ -251,6 +264,7 @@ describe('session search tools', () => {
         viewerChannelPrivacy: 'private',
       },
       () => tool.execute('session-search-2', {
+        action: 'search',
         query: 'Pegasus',
         channelId: 'api:alpha',
         summarize: true,
@@ -270,26 +284,11 @@ describe('session search tools', () => {
     expect(llmProvider.complete).toHaveBeenCalledTimes(1);
   });
 
-  it('session_search accepts keyword as an alias for query', async () => {
-    store.append({
-      channelId: 'api:alias-test',
-      role: 'assistant',
-      content: 'Matrix verification note for alias coverage.',
-      timestamp: 5_000,
-      channelVisibility: 'private',
-    });
-
+  it('session_search requires a non-empty query through the canonical surface', async () => {
     const llmProvider = {
-      complete: vi.fn(async () => ({
-        content: 'Alias summary should not be used.',
-        toolCalls: [],
-        model: 'mock',
-        inputTokens: 1,
-        outputTokens: 1,
-        stopReason: 'stop',
-      })),
+      complete: vi.fn(),
     } as any;
-    const tool = createSessionSearchTool(manager, llmProvider);
+    const tool = makeTool(llmProvider);
 
     const result = await runWithRequestContext(
       {
@@ -299,18 +298,11 @@ describe('session search tools', () => {
         viewerTrustLevel: 'primary',
         viewerChannelPrivacy: 'private',
       },
-      () => tool.execute('session-search-3', { keyword: 'Matrix verification' }),
+      () => tool.execute('session-search-3', { action: 'search' }),
     );
-    const payload = JSON.parse(toolText(result)) as {
-      totalHits: number;
-      hits: Array<{ channelId: string; snippet: string }>;
-    };
 
-    expect(payload.totalHits).toBe(1);
-    expect(payload.hits).toHaveLength(1);
-    expect(payload.hits[0]?.channelId).toBe('api:alias-test');
-    expect(payload.hits[0]?.snippet).toContain('Matrix');
-    expect(payload.hits[0]?.snippet).toContain('verification');
+    expect(toolText(result)).toContain('session_search requires a non-empty query.');
+    expect((result.details as { isError?: boolean }).isError).toBe(true);
     expect(llmProvider.complete).not.toHaveBeenCalled();
   });
 
@@ -335,7 +327,7 @@ describe('session search tools', () => {
         stopReason: 'stop',
       })),
     } as any;
-    const tool = createSessionSearchTool(manager, llmProvider);
+    const tool = makeTool(llmProvider);
 
     const result = await runWithRequestContext(
       {
@@ -345,7 +337,7 @@ describe('session search tools', () => {
         viewerTrustLevel: 'primary',
         viewerChannelPrivacy: 'private',
       },
-      () => tool.execute('session-search-routes', { query: 'Route audit needle', limit: 5 }),
+      () => tool.execute('session-search-routes', { action: 'search', query: 'Route audit needle', limit: 5 }),
     );
     const payload = JSON.parse(toolText(result)) as {
       hits: Array<{
@@ -422,10 +414,7 @@ describe('session search tools', () => {
       ],
       truncated: false,
     }));
-    const tool = createSessionGrepTool({
-      sessionsDir: join(dir, 'sessions'),
-      runRipgrep,
-    });
+    const tool = makeTool({ complete: vi.fn() } as any, runRipgrep);
 
     const result = await runWithRequestContext(
       {
@@ -435,7 +424,7 @@ describe('session search tools', () => {
         viewerTrustLevel: 'regular',
         viewerChannelPrivacy: 'public',
       },
-      () => tool.execute('session-grep-1', { pattern: 'Orion launch date' }),
+      () => tool.execute('session-grep-1', { action: 'grep', pattern: 'Orion launch date' }),
     );
     const payload = JSON.parse(toolText(result)) as {
       truncated: boolean;
@@ -496,10 +485,7 @@ describe('session search tools', () => {
       ],
       truncated: false,
     }));
-    const tool = createSessionGrepTool({
-      sessionsDir: join(dir, 'sessions'),
-      runRipgrep,
-    });
+    const tool = makeTool({ complete: vi.fn() } as any, runRipgrep);
 
     const result = await runWithRequestContext(
       {
@@ -509,7 +495,7 @@ describe('session search tools', () => {
         viewerTrustLevel: 'regular',
         viewerChannelPrivacy: 'public',
       },
-      () => tool.execute('session-grep-cogsec', { pattern: 'CogSec' }),
+      () => tool.execute('session-grep-cogsec', { action: 'grep', pattern: 'CogSec' }),
     );
     const payload = JSON.parse(toolText(result)) as {
       scannedMatchCount: number;
@@ -552,11 +538,7 @@ describe('session search tools', () => {
       ],
       truncated: false,
     }));
-    const tool = createSessionGrepTool({
-      sessionsDir: join(dir, 'sessions'),
-      runRipgrep,
-      sessionRouteState: manager,
-    });
+    const tool = makeTool({ complete: vi.fn() } as any, runRipgrep);
 
     const result = await runWithRequestContext(
       {
@@ -566,7 +548,7 @@ describe('session search tools', () => {
         viewerTrustLevel: 'primary',
         viewerChannelPrivacy: 'private',
       },
-      () => tool.execute('session-grep-routes', { pattern: 'Grep route needle' }),
+      () => tool.execute('session-grep-routes', { action: 'grep', pattern: 'Grep route needle' }),
     );
     const payload = JSON.parse(toolText(result)) as {
       hits: Array<{
@@ -591,12 +573,9 @@ describe('session search tools', () => {
   });
 
   it('session_grep reports runner failures as tool errors', async () => {
-    const tool = createSessionGrepTool({
-      sessionsDir: join(dir, 'sessions'),
-      runRipgrep: vi.fn(async () => {
-        throw new Error('rg executable not found');
-      }),
-    });
+    const tool = makeTool({ complete: vi.fn() } as any, vi.fn(async () => {
+      throw new Error('rg executable not found');
+    }));
 
     const result = await runWithRequestContext(
       {
@@ -606,7 +585,7 @@ describe('session search tools', () => {
         viewerTrustLevel: 'regular',
         viewerChannelPrivacy: 'public',
       },
-      () => tool.execute('session-grep-2', { pattern: 'Orion' }),
+      () => tool.execute('session-grep-2', { action: 'grep', pattern: 'Orion' }),
     );
 
     expect(toolText(result)).toContain('session_grep failed: rg executable not found');

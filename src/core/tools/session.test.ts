@@ -10,12 +10,7 @@ import {
 } from '../../system/lifecycle/notifications.js';
 import { SessionStore } from '../../persistence/sessions/store.js';
 import { SessionManager } from '../session/manager.js';
-import {
-  createSessionListTool,
-  createSessionNewTool,
-  createSessionResumeTool,
-  createSessionTool,
-} from './session.js';
+import { createSessionTool, type UnifiedSessionToolOptions } from './session.js';
 import { runWithRequestContext } from '../../primitives/llm/request-context.js';
 
 function makeConfig(overrides: Partial<SubstrateConfig> = {}): SubstrateConfig {
@@ -52,15 +47,20 @@ function toolText(result: { content: Array<{ type: string; text: string }> }): s
   return result.content.map(entry => entry.text).join('');
 }
 
-describe('session_new tool', () => {
-  it('exposes expected metadata', () => {
-    const tool = createSessionNewTool({ dataDir: '/tmp' });
-    expect(tool.name).toBe('session_new');
-    expect(tool.label).toBe('session_new');
-    expect(tool.description.toLowerCase()).toContain('session');
-    expect(tool.parameters).toBeDefined();
+function makeSessionToolForNewAction(
+  dataDir: string,
+  overrides: Partial<UnifiedSessionToolOptions> = {},
+): ReturnType<typeof createSessionTool> {
+  return createSessionTool({
+    manager: {} as SessionManager,
+    llmProvider: { complete: vi.fn() } as any,
+    sessionsDir: join(dataDir, 'sessions'),
+    dataDir,
+    ...overrides,
   });
+}
 
+describe('session tool action=new', () => {
   it('creates a new session and switches active context', async () => {
     const dataDir = mkdtempSync(join(tmpdir(), 'session-new-tool-'));
     try {
@@ -72,8 +72,7 @@ describe('session_new tool', () => {
 
       const seeded: string[] = [];
       const setActiveSession = vi.fn();
-      const tool = createSessionNewTool({
-        dataDir,
+      const tool = makeSessionToolForNewAction(dataDir, {
         now: () => 1_700_000_000_123,
         idFactory: () => 'api:session-test-01',
         seedSession: (sessionId) => {
@@ -82,7 +81,7 @@ describe('session_new tool', () => {
         setActiveSession,
       });
 
-      const result = await tool.execute('call-1', {});
+      const result = await tool.execute('call-1', { action: 'new' });
       const details = result.details as {
         action: string;
         previousSessionId: string | null;
@@ -113,13 +112,13 @@ describe('session_new tool', () => {
   it('accepts previous session hint via metadata', async () => {
     const dataDir = mkdtempSync(join(tmpdir(), 'session-new-tool-metadata-'));
     try {
-      const tool = createSessionNewTool({
-        dataDir,
+      const tool = makeSessionToolForNewAction(dataDir, {
         now: () => 1_700_000_000_500,
         idFactory: () => 'api:session-test-02',
       });
 
       const result = await tool.execute('call-2', {
+        action: 'new',
         metadata: {
           previousSessionId: 'api:hinted-session',
           previousChannelType: 'api',
@@ -145,8 +144,7 @@ describe('session_new tool', () => {
     const dataDir = mkdtempSync(join(tmpdir(), 'session-new-tool-background-'));
     try {
       const setActiveSession = vi.fn();
-      const tool = createSessionNewTool({
-        dataDir,
+      const tool = makeSessionToolForNewAction(dataDir, {
         now: () => 1_700_000_000_900,
         idFactory: () => 'api:session-test-bg',
         setActiveSession,
@@ -157,7 +155,7 @@ describe('session_new tool', () => {
           callType: 'background',
           purpose: 'agent.background.continuation',
         },
-        () => tool.execute('call-bg-1', {}),
+        () => tool.execute('call-bg-1', { action: 'new' }),
       );
 
       expect(toolText(result as any)).toContain('session action="new" is unavailable during background continuation execution');
@@ -170,10 +168,20 @@ describe('session_new tool', () => {
   });
 });
 
-describe('session list/resume tools', () => {
+describe('session tool list/resume actions', () => {
   let dir: string;
   let store: SessionStore;
   let manager: SessionManager;
+
+  function makeTool(overrides: Partial<UnifiedSessionToolOptions> = {}): ReturnType<typeof createSessionTool> {
+    return createSessionTool({
+      manager,
+      llmProvider: { complete: vi.fn() } as any,
+      sessionsDir: join(dir, 'sessions'),
+      dataDir: dir,
+      ...overrides,
+    });
+  }
 
   beforeEach(() => {
     dir = mkdtempSync(join(tmpdir(), 'psfn-session-tools-'));
@@ -208,8 +216,8 @@ describe('session list/resume tools', () => {
     });
 
     manager.setActiveContextSession('api:b-session');
-    const tool = createSessionListTool(manager, { dataDir: dir });
-    const result = await tool.execute('list-1', { limit: 10 });
+    const tool = makeTool();
+    const result = await tool.execute('list-1', { action: 'list', limit: 10 });
     const payload = JSON.parse(toolText(result)) as {
       activeSessionId: string | null;
       count: number;
@@ -240,8 +248,8 @@ describe('session list/resume tools', () => {
   });
 
   it('session_resume rejects unknown session IDs', async () => {
-    const tool = createSessionResumeTool(manager, { dataDir: dir });
-    const result = await tool.execute('resume-1', { sessionId: 'api:missing' });
+    const tool = makeTool();
+    const result = await tool.execute('resume-1', { action: 'resume', sessionId: 'api:missing' });
 
     expect(toolText(result)).toContain('Session not found: api:missing');
     expect((result.details as { isError?: boolean }).isError).toBe(true);
@@ -262,8 +270,8 @@ describe('session list/resume tools', () => {
     });
     manager.setActiveContextSession('api:session-one');
 
-    const tool = createSessionResumeTool(manager, { dataDir: dir, now: () => 9_999 });
-    const result = await tool.execute('resume-2', { sessionId: 'api:session-two' });
+    const tool = makeTool({ now: () => 9_999 });
+    const result = await tool.execute('resume-2', { action: 'resume', sessionId: 'api:session-two' });
     const payload = JSON.parse(toolText(result)) as {
       resumed: boolean;
       previousSessionId: string | null;
@@ -299,13 +307,13 @@ describe('session list/resume tools', () => {
     });
     manager.setActiveContextSession('api:session-one');
 
-    const tool = createSessionResumeTool(manager, { dataDir: dir, now: () => 10_001 });
+    const tool = makeTool({ now: () => 10_001 });
     const result = await runWithRequestContext(
       {
         callType: 'background',
         purpose: 'deferred_tool_handoff',
       },
-      () => tool.execute('resume-bg-1', { sessionId: 'api:session-two' }),
+      () => tool.execute('resume-bg-1', { action: 'resume', sessionId: 'api:session-two' }),
     );
 
     expect(toolText(result)).toContain('session action="resume" is unavailable during background continuation execution');

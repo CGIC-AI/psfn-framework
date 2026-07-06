@@ -67,6 +67,7 @@ import { MASKED_TOOL_OBSERVATION_CONTENT } from '../tool-observation.js';
 import { applyFocusCompactionRanges, type FocusCompactionRange } from '../focus-knowledge.js';
 import { buildPromptSectionTelemetryList } from '../../identity/prompt-sections.js';
 import { formatActiveDateTimeIso } from '../../../shared/time/active-timezone.js';
+import { escapeXmlText } from '../../../shared/utils/escaping.js';
 import { classifyIdleGapTexture, type IdleGapTexture } from '../../scheduler/time-texture.js';
 import type { CogSecEvent } from '../../cogsec/events.js';
 import {
@@ -500,13 +501,6 @@ function formatIsoDuration(durationMs: number): string {
     seconds > 0 || (days === 0 && hours === 0 && minutes === 0) ? `${seconds}S` : '',
   ].filter(part => part.length > 0).join('');
   return `P${datePart}${timeParts ? `T${timeParts}` : ''}`;
-}
-
-function escapeXmlText(value: string): string {
-  return value
-    .replaceAll('&', '&amp;')
-    .replaceAll('<', '&lt;')
-    .replaceAll('>', '&gt;');
 }
 
 function xmlElement(tag: string, value: string | undefined): string {

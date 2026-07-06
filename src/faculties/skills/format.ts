@@ -4,17 +4,7 @@ import type {
   SkillFormatResult,
   SkillSkipRecord,
 } from './types.js';
-
-function escapeXmlText(value: string): string {
-  return value
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;');
-}
-
-function escapeXmlAttribute(value: string): string {
-  return escapeXmlText(value).replace(/"/g, '&quot;');
-}
+import { escapeXmlAttribute, escapeXmlText } from '../../shared/utils/escaping.js';
 
 function sortSkillsForPrompt(entries: SkillEntry[]): SkillEntry[] {
   return [...entries].sort((left, right) => {

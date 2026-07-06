@@ -6,6 +6,10 @@ import type {
   CogSecResultCounters,
 } from './events.js';
 import type { CogSecPersonaConformanceEventRecord } from './persona-conformance.js';
+import {
+  escapeXmlAttributeWithApostrophe as escapeXmlAttribute,
+  escapeXmlText,
+} from '../../shared/utils/escaping.js';
 
 export interface CogSecSafeLogFilter {
   channelIds?: readonly string[];
@@ -184,19 +188,6 @@ export function listOperatorVisibleCogSecEvents(
   filter: CogSecSafeLogFilter = {},
 ): CogSecOperatorVisibleEvent[] {
   return applySafeLogFilter(events, filter).map(toOperatorVisibleCogSecEvent);
-}
-
-function escapeXmlText(value: string): string {
-  return value
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;');
-}
-
-function escapeXmlAttribute(value: string): string {
-  return escapeXmlText(value)
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&apos;');
 }
 
 function formatActions(actions: readonly CogSecAction[]): string {

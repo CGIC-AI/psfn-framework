@@ -2,7 +2,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { CogSecForensicArchive } from './forensic-archive.js';
+import { assertInsideRoot, CogSecForensicArchive } from './forensic-archive.js';
 import { resolveCogSecForensicArchiveDir } from '../../persistence/layout.js';
 
 let tempRoot: string | null = null;
@@ -105,5 +105,23 @@ describe('CogSecForensicArchive', () => {
       kind: 'l0_rows',
       payload: [],
     })).toThrow(/caseId/u);
+  });
+
+  it('rejects traversal artifact paths outside the forensic archive root', () => {
+    const root = makeTempRoot();
+    const archiveDir = resolveCogSecForensicArchiveDir(root);
+
+    expect(() => assertInsideRoot(archiveDir, join(archiveDir, '..', 'evil.json'))).toThrow(
+      'CogSec forensic path escaped archive root',
+    );
+  });
+
+  it('rejects sibling-prefix artifact directories outside the forensic archive root', () => {
+    const root = makeTempRoot();
+    const archiveDir = resolveCogSecForensicArchiveDir(root);
+
+    expect(() => assertInsideRoot(archiveDir, join(`${archiveDir}Extra`, 'artifact.json'))).toThrow(
+      'CogSec forensic path escaped archive root',
+    );
   });
 });

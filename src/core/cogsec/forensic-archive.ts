@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
+import { isStrictSubpath } from '../../persistence/layout.js';
 import { isRecord } from '../../shared/utils/types.js';
 
 export const COGSEC_FORENSIC_ARTIFACT_VERSION = 1 as const;
@@ -112,10 +113,10 @@ function parseRef(ref: string): { caseId: string; artifactId: string } {
   };
 }
 
-function assertInsideRoot(rootDir: string, filePath: string): void {
+export function assertInsideRoot(rootDir: string, filePath: string): void {
   const root = resolve(rootDir);
   const target = resolve(filePath);
-  if (target !== root && !target.startsWith(`${root}/`)) {
+  if (target !== root && !isStrictSubpath(target, root)) {
     throw new Error('CogSec forensic path escaped archive root');
   }
 }

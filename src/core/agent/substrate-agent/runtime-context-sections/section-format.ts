@@ -3,19 +3,14 @@
 // in this directory builds on these; none of them read global state.
 
 import { unwrapSingleWrappedPromptSection } from '../../../identity/prompt-sections.js';
+import { escapeXmlAttribute } from '../../../../shared/utils/escaping.js';
+
+export { escapeXmlAttribute };
 
 export function trimNonEmptyString(value: unknown): string | undefined {
   if (typeof value !== 'string') return undefined;
   const trimmed = value.trim();
   return trimmed || undefined;
-}
-
-export function escapeXmlAttribute(value: string): string {
-  return value
-    .replace(/&/gu, '&amp;')
-    .replace(/"/gu, '&quot;')
-    .replace(/</gu, '&lt;')
-    .replace(/>/gu, '&gt;');
 }
 
 export function formatXmlEmptyElement(tag: string, attributes: Record<string, string>): string {

@@ -15,8 +15,8 @@ import {
 } from '../../core/intention/concerns.js';
 import type { ConcernStorePort } from '../../core/intention/concern-store-port.js';
 import {
-  createCreateConcernTool,
-  createListConcernsTool,
+  executeCreateConcernAction,
+  executeListConcernsAction,
 } from '../../core/intention/tools.js';
 import {
   executeValuesAddAction,
@@ -321,7 +321,7 @@ export function createOrientTool(
       })),
     }),
     execute: async (
-      toolCallId: string,
+      _toolCallId: string,
       params: OrientToolParams,
       _signal?: AbortSignal,
     ): Promise<AgentToolResult<{ isError?: boolean }>> => {
@@ -363,8 +363,8 @@ export function createOrientTool(
         }
 
         if (action === 'create_concern') {
-          return createCreateConcernTool(requireConcernStore(options.concernStore)).execute(
-            toolCallId,
+          return executeCreateConcernAction(
+            requireConcernStore(options.concernStore),
             {
               text: params.text ?? '',
               priority: params.priority,
@@ -382,8 +382,8 @@ export function createOrientTool(
         }
 
         if (action === 'list_concerns') {
-          return createListConcernsTool(requireConcernStore(options.concernStore)).execute(
-            toolCallId,
+          return executeListConcernsAction(
+            requireConcernStore(options.concernStore),
             {
               contactId: params.contactId,
               includeResolved: params.includeResolved,

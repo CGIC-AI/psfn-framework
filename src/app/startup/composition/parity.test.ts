@@ -581,6 +581,10 @@ describe('wireHeartbeatRuntime', () => {
       const firstDeliberationCall = valuesDeliberationCalls[0]?.[0] as
         | {
           messages?: Array<{ content?: string }>;
+        }
+        | undefined;
+      const firstDeliberationOptions = valuesDeliberationCalls[0]?.[2] as
+        | {
           correlation?: { callType?: string; originType?: string; originStage?: string; channelId?: string };
         }
         | undefined;
@@ -589,7 +593,7 @@ describe('wireHeartbeatRuntime', () => {
       );
       expect(firstDeliberationCall?.messages?.[0]?.content).toContain('[Reflection Self Evidence]');
       expect(firstDeliberationCall?.messages?.[0]?.content).not.toContain(`snapshot_ref: ${narrative.snapshotRef}`);
-      expect(firstDeliberationCall?.correlation).toMatchObject({
+      expect(firstDeliberationOptions?.correlation).toMatchObject({
         callType: 'scheduled',
         originType: 'scheduled',
         originStage: 'heartbeat.deliberation.evidence',

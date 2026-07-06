@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import type { AgentToolResult } from '@mariozechner/pi-agent-core';
 import {
   chargeSurface,
@@ -332,17 +332,75 @@ describe('createSelfStatusTool', () => {
     });
   });
 
+  it('returns bounded diagnostics from the diagnostics action only', async () => {
+    const getDiagnosticsSnapshot = vi.fn(async query => ({
+      schemaVersion: 1 as const,
+      generatedAt: 1_700_000_120_000,
+      window: {
+        sinceMs: 1_700_000_060_000,
+        untilMs: 1_700_000_120_000,
+        windowMs: 60_000,
+        limit: 5,
+        includeFileLogs: false,
+        logsDir: query.logsDir ?? '/app/logs',
+      },
+      sources: [],
+      agentLog: { status: 'available' as const, counts: { warn: 1, error: 0, total: 1 }, records: [] },
+      fileLogs: { status: 'unavailable' as const, reason: 'file log diagnostics disabled for this request' },
+      toolValidationFailures: { status: 'available' as const, total: 0, byTool: [] },
+      lifecycle: { status: 'available' as const, events: [] },
+      rollout: { status: 'unavailable' as const, reason: 'requires kube surface (x5rt.4)' },
+      pods: { status: 'unavailable' as const, reason: 'requires kube surface (x5rt.4)' },
+      backup: {
+        status: 'available' as const,
+        counts: { success: 0, failure: 0, total: 0 },
+        lastSuccess: null,
+        lastFailure: null,
+        recent: [],
+      },
+    }));
+    const tool = createSelfStatusTool(makeRuntime({
+      logsDir: '/runtime/logs',
+      getDiagnosticsSnapshot,
+    }));
+
+    const payload = parseResult(await tool.execute('self-status-diagnostics', {
+      action: 'diagnostics',
+      windowMs: 60_000,
+      limit: 5,
+      includeFileLogs: false,
+    }));
+
+    expect(payload.agentLog.counts.warn).toBe(1);
+    expect(payload.rollout).toEqual({
+      status: 'unavailable',
+      reason: 'requires kube surface (x5rt.4)',
+    });
+    expect(getDiagnosticsSnapshot).toHaveBeenCalledWith(expect.objectContaining({
+      logsDir: '/runtime/logs',
+      windowMs: 60_000,
+      limit: 5,
+      includeFileLogs: false,
+    }));
+  });
+
   it('renders safe tool catalog metadata for prompt/tool surfaces', () => {
     const tool = createSelfStatusTool(makeRuntime());
     const catalogEntry = buildRuntimeToolCatalogEntry(tool, 'core');
 
-    expect(tool.description).toContain('safe structured snapshot');
+    expect(tool.description).toContain('safe structured runtime self-status or diagnostics');
     expect(JSON.stringify(tool.parameters)).toContain('Message content is never returned');
     expect(catalogEntry.schema).toMatchObject({
-      actions: [{
-        name: 'snapshot',
-        requiredCapabilities: ['internal.read'],
-      }],
+      actions: expect.arrayContaining([
+        {
+          name: 'snapshot',
+          requiredCapabilities: ['internal.read'],
+        },
+        {
+          name: 'diagnostics',
+          requiredCapabilities: ['internal.read'],
+        },
+      ]),
       requiredCapabilities: ['internal.read'],
       reversibility: 'reversible',
       canonical: {

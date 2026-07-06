@@ -36,6 +36,7 @@ import type {
   AdminContactsService,
   AdminConcernService,
   AdminDashboardService,
+  AdminDiagnosticsService,
   AdminEpisodicMemoryService,
   AdminGroupMemoryService,
   AdminImagesService,
@@ -58,6 +59,7 @@ import type {
   ConfirmationQueueAdminApi,
 } from './admin-contract.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
+import type { RuntimeDiagnosticsQuery } from '../../shared/diagnostics/runtime-diagnostics.js';
 import type {
   AdminAuditActionType,
   AdminAuditActor,
@@ -183,9 +185,58 @@ function parseOptionalNonNegativeNumber(
   return { ok: true, value };
 }
 
+function parseOptionalNonNegativeQueryNumber(
+  value: string | null,
+  field: string,
+): { ok: true; value?: number } | { ok: false; error: string } {
+  if (value === null) return { ok: true };
+  const trimmed = value.trim();
+  if (!trimmed) return { ok: true };
+  const parsed = Number(trimmed);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    return { ok: false, error: `Invalid ${field} query parameter. Expected a non-negative number.` };
+  }
+  return { ok: true, value: parsed };
+}
+
+function parseOptionalBooleanQuery(
+  value: string | null,
+  field: string,
+): { ok: true; value?: boolean } | { ok: false; error: string } {
+  if (value === null) return { ok: true };
+  const normalized = value.trim().toLowerCase();
+  if (!normalized) return { ok: true };
+  if (normalized === 'true') return { ok: true, value: true };
+  if (normalized === 'false') return { ok: true, value: false };
+  return { ok: false, error: `Invalid ${field} query parameter. Expected true or false.` };
+}
+
+function parseDiagnosticsQuery(req: IncomingMessage): { ok: true; value: RuntimeDiagnosticsQuery } | { ok: false; error: string } {
+  const url = parseRequestUrl(req, '/api/admin/diagnostics');
+  const windowMs = parseOptionalNonNegativeQueryNumber(url.searchParams.get('windowMs'), 'windowMs');
+  if (!windowMs.ok) return windowMs;
+  const sinceMs = parseOptionalNonNegativeQueryNumber(url.searchParams.get('sinceMs'), 'sinceMs');
+  if (!sinceMs.ok) return sinceMs;
+  const limit = toPositiveIntegerQueryNumber(url.searchParams.get('limit'), 'limit');
+  if (!limit.ok) return limit;
+  const includeFileLogs = parseOptionalBooleanQuery(url.searchParams.get('includeFileLogs'), 'includeFileLogs');
+  if (!includeFileLogs.ok) return includeFileLogs;
+
+  return {
+    ok: true,
+    value: {
+      ...(windowMs.value !== undefined ? { windowMs: windowMs.value } : {}),
+      ...(sinceMs.value !== undefined ? { sinceMs: sinceMs.value } : {}),
+      ...(limit.value !== undefined ? { limit: limit.value } : {}),
+      ...(includeFileLogs.value !== undefined ? { includeFileLogs: includeFileLogs.value } : {}),
+    },
+  };
+}
+
 export function buildAdminApiRoutes(options: {
   config: SubstrateConfig;
   dashboardService: AdminDashboardService;
+  diagnosticsService?: AdminDiagnosticsService | null;
   imagesService: AdminImagesService;
   auditHistoryService?: AdminAuditHistoryService | null;
   chargeLedgerService?: AdminChargeLedgerService | null;
@@ -226,6 +277,7 @@ export function buildAdminApiRoutes(options: {
   const {
     config,
     dashboardService,
+    diagnosticsService,
     imagesService,
     auditHistoryService,
     chargeLedgerService,
@@ -444,6 +496,25 @@ export function buildAdminApiRoutes(options: {
               error: `Failed to load adaptive tools data: ${toSanitizedMessage(error, 'unknown error')}`,
             });
           },
+        );
+      },
+    },
+    {
+      method: 'GET',
+      match: exactPath('/api/admin/diagnostics'),
+      handle: (req, res) => {
+        if (!diagnosticsService) {
+          sendJson(res, 503, { error: 'Diagnostics backend unavailable' });
+          return;
+        }
+        const parsed = parseDiagnosticsQuery(req);
+        if (!parsed.ok) {
+          sendJson(res, 400, { error: parsed.error });
+          return;
+        }
+        diagnosticsService.getDiagnostics(parsed.value).then(
+          payload => sendJson(res, 200, payload, ADMIN_DYNAMIC_JSON_HEADERS),
+          error => sendJson(res, 500, { error: toSanitizedMessage(error, 'Failed to load diagnostics') }),
         );
       },
     },

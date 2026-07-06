@@ -3,6 +3,10 @@ import type { AgentMessage, AgentTool } from '@mariozechner/pi-agent-core';
 import type { ToolResultMessage } from '@mariozechner/pi-ai';
 import { isInternalWhisperMessage, isSystemNoteMessage } from './messages.js';
 import type { ToolConcurrencyMeta, WirableTool } from './tool-wiring-validator.js';
+import {
+  isToolValidationFailureError,
+  recordToolValidationFailure,
+} from '../../shared/diagnostics/runtime-diagnostics.js';
 
 export interface ToolCallSchedulerOptions {
   maxParallelToolCalls: number;
@@ -314,6 +318,16 @@ async function executeSingleToolCall(
     });
     isError = toolResultDetailsFlagError(result);
   } catch (error) {
+    if (isToolValidationFailureError(error)) {
+      recordToolValidationFailure({
+        toolName: toolCall.name,
+        reason: error instanceof Error ? error.message : String(error),
+      });
+      options.onTelemetry?.('agent.tools.validation.failed', {
+        toolName: toolCall.name,
+        toolCallId: toolCall.id,
+      });
+    }
     cancelled = context.signal?.aborted === true
       || (error instanceof Error && /abort(ed)?/i.test(error.message));
     result = {

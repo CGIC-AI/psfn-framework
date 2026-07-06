@@ -516,6 +516,34 @@ function createTestServices(): GardenAdminDomainServices {
         },
       })),
     },
+    diagnostics: {
+      getDiagnostics: vi.fn(async () => ({
+        schemaVersion: 1,
+        generatedAt: 1_780_000_000_000,
+        window: {
+          sinceMs: 1_779_996_400_000,
+          untilMs: 1_780_000_000_000,
+          windowMs: 3_600_000,
+          limit: 20,
+          includeFileLogs: false,
+          logsDir: '/app/logs',
+        },
+        sources: [],
+        agentLog: { status: 'available', counts: { warn: 0, error: 0, total: 0 }, records: [] },
+        fileLogs: { status: 'unavailable', reason: 'file log diagnostics disabled for this request' },
+        toolValidationFailures: { status: 'available', total: 0, byTool: [] },
+        lifecycle: { status: 'available', events: [] },
+        rollout: { status: 'unavailable', reason: 'requires kube surface (x5rt.4)' },
+        pods: { status: 'unavailable', reason: 'requires kube surface (x5rt.4)' },
+        backup: {
+          status: 'available',
+          counts: { success: 0, failure: 0, total: 0 },
+          lastSuccess: null,
+          lastFailure: null,
+          recent: [],
+        },
+      })),
+    },
     auditHistory: {
       appendGardenEntry: vi.fn(),
       getAuditHistory: vi.fn(async () => ({

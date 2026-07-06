@@ -74,6 +74,7 @@ import { createAdminRoomsService } from './services/rooms-service.js';
 import { createAdminGraphProposalsService } from './services/graph-proposals-service.js';
 import type { SocialGraphProposalStore } from '../../faculties/memory/social-graph/proposals.js';
 import { AdminDashboardDataService } from './services/dashboard-service.js';
+import { AdminDiagnosticsDataService } from './services/diagnostics-service.js';
 import { AdminEpisodicMemoryDataService } from './services/episodic-memory-service.js';
 import { AdminGroupMemoryDataService } from './services/group-memory-diagnostics-service.js';
 import { AdminIdentityDataService } from './services/identity-service.js';
@@ -126,6 +127,8 @@ export interface InProcessGardenAdminContractOptions {
   pendingContactApprovals?: PendingContactApprovalStore | null;
   /** Social-graph edge proposals emitted by the graph-builder worker (E4.2). */
   socialGraphProposals?: SocialGraphProposalStore | null;
+  /** Runtime log directory for bounded diagnostics reads. Defaults to /app/logs when absent. */
+  logsDir?: string;
 }
 
 export function createInProcessGardenAdminContract(
@@ -208,6 +211,10 @@ export function createInProcessGardenAdminContract(
       eventBus: options.eventBus,
       adaptiveToolsService: adaptiveTools,
       resolveLastActiveSessionId,
+    }),
+    diagnostics: new AdminDiagnosticsDataService({
+      eventBus: options.eventBus,
+      ...(options.logsDir ? { logsDir: options.logsDir } : {}),
     }),
     images: new AdminImagesDataService({
       config: options.config,

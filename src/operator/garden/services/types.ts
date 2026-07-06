@@ -73,6 +73,10 @@ import type {
   ModelUsageQuery,
 } from '../../../shared/telemetry/model-usage.js';
 import type {
+  RuntimeDiagnosticsQuery,
+  RuntimeDiagnosticsSnapshot,
+} from '../../../shared/diagnostics/runtime-diagnostics.js';
+import type {
   PostTurnActionQueueStatus,
   PostTurnActionStatusRecord,
 } from '../../../core/agent/post-turn-action-runtime.js';
@@ -202,6 +206,10 @@ export interface AdminDashboardData {
 
 export interface AdminDashboardService {
   getDashboardData(options?: { costWindow?: DashboardCostWindow }): Promise<AdminDashboardData>;
+}
+
+export interface AdminDiagnosticsService {
+  getDiagnostics(query?: RuntimeDiagnosticsQuery): Promise<RuntimeDiagnosticsSnapshot>;
 }
 
 export interface AdminConcernListData {

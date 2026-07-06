@@ -32,6 +32,7 @@ import {
   composeSessionRuntimeAsync,
   composeSubstrateAgent,
   type FatigueBudgetComposition,
+  wireDiagnosticsRuntime,
   wireCoreMemoryRuntime,
   wireMemoryRuntime,
   wireSelfModelRuntime,
@@ -233,6 +234,7 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
   });
   agentLoop.scratchpadProvider = memoryStore;
   agentLoop.setCapabilityRuntime(capabilityRuntime);
+  wireDiagnosticsRuntime(eventBus);
   // E5.5: persistent active-memory refresh failure raises an operator alert
   // through the system-derived gateway notification path. The threshold is
   // config-owned (settings.json memoryRefreshFailureAlertThreshold) and the
@@ -256,6 +258,7 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
     getMemoryStats: () => memoryStore.getStats(),
     listRecentSessions: (limit) => sessionManager.listRecentSessions(limit),
     getStreamingState: () => agentLoop.isStreaming,
+    logsDir: pathSnapshot.runtimePathLayout.logsDir,
   }), 'core');
 
   const skillsRuntime = wireSkillsRuntime(agentLoop, {

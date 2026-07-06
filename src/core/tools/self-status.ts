@@ -11,6 +11,11 @@ import {
   getRunChargeRollingWindowSnapshot,
   getRunChargeSnapshot,
 } from '../../shared/telemetry/run-charge.js';
+import {
+  buildRuntimeDiagnosticsSnapshot,
+  type RuntimeDiagnosticsQuery,
+  type RuntimeDiagnosticsSnapshot,
+} from '../../shared/diagnostics/runtime-diagnostics.js';
 import type { AdaptiveToolRuntimeState } from '../agent/adaptive-tools-telemetry.js';
 import type { RuntimeToolCatalogSnapshot } from '../agent/tool-catalog.js';
 import type { ObserverEvalSidecarHealthSnapshot } from '../eval/observer-sidecar/types.js';
@@ -47,10 +52,17 @@ export interface SelfStatusToolRuntime {
   getMemoryStats?: () => Promise<MemoryStoreStats>;
   listRecentSessions?: (limit?: number) => SessionActivitySummary[];
   getStreamingState?: () => boolean;
+  logsDir?: string;
+  getDiagnosticsSnapshot?: (query: RuntimeDiagnosticsQuery) => RuntimeDiagnosticsSnapshot | Promise<RuntimeDiagnosticsSnapshot>;
 }
 
 interface SelfStatusParams {
+  action?: 'snapshot' | 'diagnostics';
   recentChannelLimit?: number;
+  windowMs?: number;
+  sinceMs?: number;
+  limit?: number;
+  includeFileLogs?: boolean;
 }
 
 function unavailable(reason: string): SectionUnavailable {
@@ -441,24 +453,80 @@ export async function buildSelfStatusSnapshot(
   };
 }
 
+export async function buildSelfDiagnosticsSnapshot(
+  runtime: SelfStatusToolRuntime,
+  params: SelfStatusParams = {},
+): Promise<Record<string, unknown>> {
+  const query: RuntimeDiagnosticsQuery = {
+    ...(runtime.now ? { now: runtime.now } : {}),
+    ...(runtime.logsDir ? { logsDir: runtime.logsDir } : {}),
+    ...(params.windowMs !== undefined ? { windowMs: params.windowMs } : {}),
+    ...(params.sinceMs !== undefined ? { sinceMs: params.sinceMs } : {}),
+    ...(params.limit !== undefined ? { limit: params.limit } : {}),
+    ...(params.includeFileLogs !== undefined ? { includeFileLogs: params.includeFileLogs } : {}),
+  };
+
+  try {
+    return runtime.getDiagnosticsSnapshot
+      ? await runtime.getDiagnosticsSnapshot(query)
+      : buildRuntimeDiagnosticsSnapshot(query);
+  } catch {
+    return {
+      schemaVersion: 1,
+      generatedAt: runtime.now?.() ?? Date.now(),
+      status: 'error',
+      reason: 'diagnostics provider failed',
+    };
+  }
+}
+
 export function createSelfStatusTool(runtime: SelfStatusToolRuntime): AgentTool<any> {
   return {
     name: 'self_status',
     label: 'self_status',
     description:
-      'Read a safe structured snapshot of current runtime state: capability tier, active tools, charge lanes, channels, heartbeat, uptime, memory counts, and coarse substrate health.',
+      'Read safe structured runtime self-status or diagnostics. The diagnostics action returns bounded, redacted warnings/errors, validation counts, lifecycle events, backup status, and unavailable markers for kube-only data.',
     parameters: Type.Object({
+      action: Type.Optional(Type.Union([
+        Type.Literal('snapshot'),
+        Type.Literal('diagnostics'),
+      ], {
+        description: 'Use diagnostics for redacted recent warning/error and runtime diagnostic data. Defaults to snapshot.',
+      })),
       recentChannelLimit: Type.Optional(Type.Number({
         minimum: 1,
         maximum: 20,
         description: 'Maximum recent channel summaries to include. Message content is never returned.',
+      })),
+      windowMs: Type.Optional(Type.Number({
+        minimum: 1000,
+        maximum: 86_400_000,
+        description: 'Diagnostics lookback window in milliseconds. Bounded to at most 24 hours.',
+      })),
+      sinceMs: Type.Optional(Type.Number({
+        minimum: 0,
+        description: 'Diagnostics lower timestamp bound in Unix milliseconds. Older ranges are clamped to the bounded window.',
+      })),
+      limit: Type.Optional(Type.Number({
+        minimum: 1,
+        maximum: 100,
+        description: 'Maximum diagnostic records per section.',
+      })),
+      includeFileLogs: Type.Optional(Type.Boolean({
+        description: 'Whether diagnostics should include bounded reads from the runtime log directory when present.',
       })),
     }),
     execute: async (
       _toolCallId: string,
       params: SelfStatusParams = {},
     ): Promise<AgentToolResult<Record<string, never>>> => textResult(
-      JSON.stringify(await buildSelfStatusSnapshot(runtime, params), null, 2),
+      JSON.stringify(
+        params.action === 'diagnostics'
+          ? await buildSelfDiagnosticsSnapshot(runtime, params)
+          : await buildSelfStatusSnapshot(runtime, params),
+        null,
+        2,
+      ),
     ),
   };
 }

@@ -8,6 +8,7 @@
 import type { CoreSubstrateConfig, SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
 import type { EventBus } from '../../../shared/event-bus.js';
 import type { AppCache } from '../../../shared/cache/types.js';
+import { wireRuntimeDiagnosticsEventCapture } from '../../../shared/diagnostics/runtime-diagnostics.js';
 import { createEventBusCostTelemetryPort } from '../../../shared/telemetry/cost-telemetry-port.js';
 import { SessionStore, type SessionIntegrityProvider } from '../../../persistence/sessions/store.js';
 import { SessionManager } from '../../../core/session/manager.js';
@@ -284,6 +285,10 @@ export interface SelfModelRuntimeTarget {
 
 export function wireSelfModelRuntime(target: SelfModelRuntimeTarget): void {
   target.setSelfModelRuntimeRequired(true);
+}
+
+export function wireDiagnosticsRuntime(eventBus: EventBus): void {
+  wireRuntimeDiagnosticsEventCapture(eventBus);
 }
 
 export interface CoreMemoryRuntimeOptions {

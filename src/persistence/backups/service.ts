@@ -16,6 +16,7 @@ import { tmpdir } from 'node:os';
 import { basename, isAbsolute, join, relative, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import { createComponentLogger } from '../../shared/logger.js';
+import { recordBackupDiagnosticOutcome } from '../../shared/diagnostics/runtime-diagnostics.js';
 import type { Scheduler } from '../../core/scheduler/scheduler.js';
 import {
   captureCompanionTree,
@@ -669,13 +670,39 @@ export function registerScheduledBackupTask(
             encryption: options.config.encryption,
           });
         } catch (error) {
+          const observedAt = Date.now();
+          const errorMessage = error instanceof Error ? error.message : String(error);
           log.error('Scheduled backup failed', {
-            error: error instanceof Error ? error.message : String(error),
+            error: errorMessage,
+          });
+          recordBackupDiagnosticOutcome({
+            status: 'failure',
+            observedAt,
+            taskId: SCHEDULED_BACKUP_TASK_ID,
+            taskName: SCHEDULED_BACKUP_TASK_NAME,
+            message: errorMessage,
           });
           options.onBackupFailure?.(error);
           throw error;
         }
 
+        recordBackupDiagnosticOutcome({
+          status: 'success',
+          taskId: SCHEDULED_BACKUP_TASK_ID,
+          taskName: SCHEDULED_BACKUP_TASK_NAME,
+          message: 'Scheduled backup completed',
+          backupDir: result.backupDir,
+          details: {
+            sqliteCaptured: result.sqliteCaptured,
+            postgresDumpCaptured: result.postgresDumpCaptured,
+            copiedSessionFiles: result.copiedSessionFiles.length,
+            prunedBackupDirs: result.prunedBackupDirs.length,
+            mirrored: Boolean(result.mirrorDir),
+            restoreVerified: Boolean(result.restoreVerification),
+            postgresRestoreVerified: Boolean(result.postgresRestoreVerification),
+            encrypted: Boolean(result.encryptedBackup),
+          },
+        });
         log.info('Scheduled backup completed', {
           backupDir: result.backupDir,
           sqliteCaptured: result.sqliteCaptured,

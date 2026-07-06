@@ -109,6 +109,7 @@ export async function startOptionalAdminTransportServer(
     cardVersionStore: options.cardVersionStore,
     adaptiveToolsStateProvider: options.coreRuntime.agentLoop,
     toolHealthProvider: createGatewayAdminToolHealthProvider(options.gateway),
+    ...(env.PSFN_LOGS_DIR ? { logsDir: env.PSFN_LOGS_DIR } : {}),
   });
   const adminTransport = new GardenAdminTransportServer({
     endpoint: resolveAdminTransportServerEndpoint(env),

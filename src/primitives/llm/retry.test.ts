@@ -54,6 +54,28 @@ describe('withRetry', () => {
     expect(sleep).not.toHaveBeenCalled();
   });
 
+  it('supports an explicit always-retry isRetryable override', async () => {
+    const fn = vi.fn<() => Promise<string>>()
+      .mockRejectedValueOnce(new Error('401 unauthorized'))
+      .mockRejectedValueOnce(new Error('deliberate non-transport failure'))
+      .mockResolvedValue('ok');
+    const sleep = vi.fn(async (_ms: number) => {});
+    const onRetry = vi.fn((_info: { attempt: number; delayMs: number; error: Error }) => {});
+
+    const result = await withRetry(
+      fn,
+      { maxRetries: 2, baseDelayMs: 10 },
+      { isRetryable: () => true, sleep, onRetry },
+    );
+
+    expect(result).toBe('ok');
+    expect(fn).toHaveBeenCalledTimes(3);
+    expect(onRetry).toHaveBeenNthCalledWith(1, expect.objectContaining({ attempt: 1, delayMs: 10 }));
+    expect(onRetry).toHaveBeenNthCalledWith(2, expect.objectContaining({ attempt: 2, delayMs: 20 }));
+    expect(sleep).toHaveBeenNthCalledWith(1, 10);
+    expect(sleep).toHaveBeenNthCalledWith(2, 20);
+  });
+
   it('can skip same-operation retries while still recording retryable circuit failures', async () => {
     const breaker = new SlidingWindowCircuitBreaker({
       failureThreshold: 1,

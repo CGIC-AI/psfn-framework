@@ -25,8 +25,8 @@ import {
   buildSessionSummarySourceBlock,
   buildCompactionPreservedTagBlock,
   resolveEmotionalSalienceThreshold,
-  withRetry,
 } from '../manager-primitives.js';
+import { withRetry } from '../../../primitives/llm/retry.js';
 import type { PreCompactionExtractionHandler } from './contracts.js';
 import { entriesToMessages } from './context-support.js';
 import { getRequestContext } from '../../../primitives/llm/request-context.js';
@@ -157,7 +157,12 @@ export async function completeSessionSummary(params: SessionSummaryCompletionPar
       'background',
     ),
     { maxRetries: params.maxRetries, baseDelayMs: params.baseDelayMs },
-    params.onRetry ? { onRetry: params.onRetry } : undefined,
+    {
+      // Session-summary retries are unconditional by contract: any completion
+      // failure (not just transport-retryable ones) gets the full retry budget.
+      isRetryable: () => true,
+      ...(params.onRetry ? { onRetry: params.onRetry } : {}),
+    },
   );
   return summaryResponse.content;
 }

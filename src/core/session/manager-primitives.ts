@@ -1,6 +1,5 @@
 import { isRecord } from '../../shared/utils/types.js';
 import { clampUnit } from '../../shared/utils/numeric.js';
-import { sleep } from '../../shared/utils/timing.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type { TurnID } from '../../shared/contracts/runtime.js';
 import type { SessionRoleEnvelopePreview } from '../internal-role-envelopes/projections.js';
@@ -234,15 +233,6 @@ function isConversationalDialogueEntry(entry: SessionEntry): boolean {
     && !isNonConversationalSessionEntry(entry);
 }
 
-interface RetryConfig {
-  maxRetries: number;
-  baseDelayMs: number;
-}
-
-interface RetryCallbacks {
-  onRetry?: (params: { attempt: number; delayMs: number; error: Error }) => Promise<void> | void;
-}
-
 interface SessionMetadataEnvelope {
   sessionLane?: unknown;
   [key: string]: unknown;
@@ -285,36 +275,6 @@ export function isNonConversationalSessionEntry(entry: Pick<SessionEntry, 'metad
 
   const laneMetadata = lane as Partial<InternalSessionLaneMetadata>;
   return laneMetadata.schemaVersion === 1 && laneMetadata.kind === 'internal';
-}
-
-export async function withRetry<T>(
-  task: () => Promise<T>,
-  config: RetryConfig,
-  callbacks?: RetryCallbacks,
-): Promise<T> {
-  const maxRetries = Math.max(0, config.maxRetries);
-  const baseDelayMs = Math.max(0, config.baseDelayMs);
-
-  for (let attempt = 0; ; attempt++) {
-    try {
-      return await task();
-    } catch (error) {
-      if (attempt >= maxRetries) throw error;
-
-      const err = error instanceof Error ? error : new Error(String(error));
-      const retryAttempt = attempt + 1;
-      const delayMs = baseDelayMs * (2 ** attempt);
-      await callbacks?.onRetry?.({
-        attempt: retryAttempt,
-        delayMs,
-        error: err,
-      });
-
-      if (delayMs > 0) {
-        await sleep(delayMs);
-      }
-    }
-  }
 }
 
 export function trimRecentEntriesToTokenBudget(entries: SessionEntry[], tokenBudget: number): SessionEntry[] {

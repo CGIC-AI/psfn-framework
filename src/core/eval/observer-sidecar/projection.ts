@@ -24,9 +24,15 @@ import type { ObserverEvalInputPayload } from './types.js';
 
 export const OBSERVER_APPRAISAL_PROJECTION_SCHEMA_VERSION = 1 as const;
 export const OBSERVER_APPRAISAL_PROJECTION_VERSION =
-  'psfn.observer-sidecar.appraisal-projection.v1' as const;
+  'psfn.observer-sidecar.appraisal-projection.v2' as const;
 export const OBSERVER_APPRAISAL_PROJECTION_CAVEAT =
   'Projection is observer-derived eval telemetry, not ground truth and not live companion state.' as const;
+export const OBSERVER_ATTACHMENT_NEUTRAL_PRIOR_CAVEAT =
+  'attachment (v2) is derived from per-turn affiliative evidence (love/caring/trust-adjacent labels, warm valence) around a 0.45 neutral prior; static relationship metadata (trust level, direct message, resolved contact) is deliberately excluded because it pinned v1 attachment near 0.8 on every turn.' as const;
+export const OBSERVER_SAFETY_NEUTRAL_PRIOR_CAVEAT =
+  'safety (v2) is derived as the inverse of per-turn threat evidence (fear/anger/nervousness labels, negative-valence high-arousal states) around a 0.5 neutral prior; static trust and channel metadata no longer inflate it as they did in v1.' as const;
+export const OBSERVER_AGENCY_OTHER_UNDERDETERMINED_CAVEAT =
+  'agency_other (v2) is underdetermined by sanitized observer inputs: it rests at the 0.5 neutral midpoint for partner-authored (user) turns and moves only with speaker role and other-directed emotion labels (anger/annoyance/gratitude/admiration); the v1 formula emitted a fake-confident constant 0.85.' as const;
 
 export type ObserverAppraisalProjectionSource = 'observer-derived' | 'direct-fixture-appraisal';
 
@@ -153,13 +159,13 @@ interface ProjectionSignals {
   sadnessDiscrete: number;
   concernDiscrete: number;
   angerDiscrete: number;
-  loveDiscrete: number;
+  affiliativeDiscrete: number;
+  otherAgencyDiscrete: number;
   noveltyDiscrete: number;
   aestheticDiscrete: number;
   trustScore: number;
   contactScore: number;
   directScore: number;
-  privateChannelScore: number;
   contentScale: number;
   attachmentScale: number;
   visionScore: number;
@@ -374,7 +380,7 @@ function collectMissingInputs(input: ObserverEvalSanitizedInputPayload): Observe
       feature: 'metadata.contactResolved',
       reason: 'contact_unresolved',
       severity: 'info',
-      detail: 'Contact was not resolved; attachment and certainty contributions are lower.',
+      detail: 'Contact was not resolved; certainty, control, and fairness contributions are lower.',
     });
   }
 
@@ -407,11 +413,6 @@ function collectProjectionSignals(input: ObserverEvalSanitizedInputPayload): Pro
   const trustScore = trustLevelScore(input.metadata.trustLevel);
   const contactScore = input.metadata.contactResolved ? 1 : 0;
   const directScore = input.source.isDirectMessage ? 1 : 0;
-  const privateChannelScore = input.source.channelPrivacy === 'private'
-    ? 1
-    : input.source.channelPrivacy === 'invite_only'
-      ? 0.6
-      : 0;
 
   return {
     snapshot,
@@ -421,17 +422,17 @@ function collectProjectionSignals(input: ObserverEvalSanitizedInputPayload): Pro
     emotionConfidence,
     positiveDiscrete: maxDiscrete(snapshot, ['joy', 'optimism', 'trust', 'satisfaction', 'contentment']),
     negativeDiscrete: maxDiscrete(snapshot, ['sadness', 'anger', 'fear', 'pessimism', 'disgust']),
-    fearDiscrete: maxDiscrete(snapshot, ['fear', 'anxiety', 'concern', 'pessimism']),
+    fearDiscrete: maxDiscrete(snapshot, ['fear', 'anxiety', 'nervousness', 'concern', 'pessimism']),
     sadnessDiscrete: maxDiscrete(snapshot, ['sadness', 'grief', 'disappointment', 'distress']),
     concernDiscrete: maxDiscrete(snapshot, ['concern', 'sympathy', 'empathic pain']),
     angerDiscrete: maxDiscrete(snapshot, ['anger', 'disgust', 'contempt']),
-    loveDiscrete: maxDiscrete(snapshot, ['love', 'trust', 'admiration', 'adoration']),
+    affiliativeDiscrete: maxDiscrete(snapshot, ['love', 'caring', 'trust', 'admiration', 'adoration', 'gratitude']),
+    otherAgencyDiscrete: maxDiscrete(snapshot, ['anger', 'annoyance', 'gratitude', 'admiration']),
     noveltyDiscrete: maxDiscrete(snapshot, ['surprise', 'curiosity', 'confusion', 'interest']),
     aestheticDiscrete: maxDiscrete(snapshot, ['awe', 'beauty', 'admiration', 'aesthetic appreciation']),
     trustScore,
     contactScore,
     directScore,
-    privateChannelScore,
     contentScale: clampUnit(input.metadata.contentLength / 1_200),
     attachmentScale: clampUnit(input.metadata.attachmentCount / 3),
     visionScore: input.metadata.hasVisionInput ? 1 : 0,
@@ -477,6 +478,11 @@ function projectObserverDerivedAppraisal(
       + (signals.sadnessDiscrete * 0.34)
       + (signals.fearDiscrete * 0.12),
   );
+  // Negative valence weighted up by arousal: an agitated negative state is stronger
+  // threat evidence than a flat negative one.
+  const distress = clampUnit(
+    Math.max(0, -signals.vad.valence) * (0.5 + (0.5 * clampUnit(signals.vad.arousal))),
+  );
 
   return {
     ok: true,
@@ -505,10 +511,14 @@ function projectObserverDerivedAppraisal(
         (input.metadata.speakerRole === 'system' ? 0.62 : 0.12)
           + (Math.max(0, signals.vad.dominance) * 0.2),
       ),
+      // v2: agency_other is underdetermined by sanitized inputs. It sits at the 0.5
+      // neutral midpoint for partner-authored (user) turns and moves only with speaker
+      // role and per-turn other-directed emotion labels (other-blame/other-credit),
+      // instead of the v1 static 0.85 built from role + contact + direct-message flags.
       agency_other: clampUnit(
-        (input.metadata.speakerRole === 'user' ? 0.68 : 0.18)
-          + (signals.contactScore * 0.12)
-          + (signals.directScore * 0.05),
+        0.42
+          + (input.metadata.speakerRole === 'user' ? 0.08 : 0)
+          + (signals.otherAgencyDiscrete * 0.3),
       ),
       fairness: clampSigned(
         ((signals.trustScore - 0.5) * 0.42)
@@ -529,12 +539,16 @@ function projectObserverDerivedAppraisal(
           + (signals.fearDiscrete * 0.22)
           + (signals.concernDiscrete * 0.34),
       ),
+      // v2: attachment is per-turn affiliative evidence around a 0.45 neutral prior.
+      // Static relationship metadata (trust level, direct message, resolved contact)
+      // is excluded: in v1 those terms alone summed to a 0.66 floor on live data,
+      // pinning attachment near 0.8 regardless of the turn's actual affect.
       attachment: clampUnit(
-        (signals.directScore * 0.2)
-          + (signals.privateChannelScore * 0.1)
-          + (signals.trustScore * 0.24)
-          + (signals.contactScore * 0.12)
-          + (signals.loveDiscrete * 0.28),
+        0.45
+          + (signals.affiliativeDiscrete * 0.35)
+          + (Math.max(0, signals.mood.valence) * 0.12)
+          + (Math.max(0, signals.vad.valence) * 0.08)
+          - (signals.angerDiscrete * 0.15),
       ),
       beauty: clampUnit(
         (signals.visionScore * 0.24)
@@ -548,12 +562,15 @@ function projectObserverDerivedAppraisal(
           + (arousalMagnitude * 0.2)
           + (signals.appraisalChainScore * 0.08),
       ),
+      // v2: safety is the inverse of per-turn threat evidence around a 0.5 neutral
+      // prior. Static trust and channel metadata are excluded: in v1 they contributed
+      // a 0.70 baseline on live data (stdev 0.061), masking real per-turn threat.
       safety: clampUnit(
-        0.34
-          + (signals.trustScore * 0.24)
-          + (Math.max(signals.directScore, signals.privateChannelScore) * 0.12)
-          + (Math.max(0, valence) * 0.18)
-          - (threat * 0.3),
+        0.5
+          - (signals.fearDiscrete * 0.28)
+          - (signals.angerDiscrete * 0.14)
+          - (distress * 0.3)
+          + (Math.max(0, valence) * 0.12),
       ),
     }, 'observer-derived'),
   };
@@ -620,10 +637,23 @@ function buildDerivedAppraisal(
             OBSERVER_APPRAISAL_PROJECTION_CAVEAT,
             'Direct fixture appraisal is only for tests and eval fixtures.',
           ]
-        : [OBSERVER_APPRAISAL_PROJECTION_CAVEAT],
+        : observerDerivedDimensionCaveats(dimension),
     };
   }
   return { vector, dimensionProvenance, confidence };
+}
+
+function observerDerivedDimensionCaveats(dimension: EmoSimAppraisalDimension): readonly string[] {
+  switch (dimension) {
+    case 'attachment':
+      return [OBSERVER_APPRAISAL_PROJECTION_CAVEAT, OBSERVER_ATTACHMENT_NEUTRAL_PRIOR_CAVEAT];
+    case 'safety':
+      return [OBSERVER_APPRAISAL_PROJECTION_CAVEAT, OBSERVER_SAFETY_NEUTRAL_PRIOR_CAVEAT];
+    case 'agency_other':
+      return [OBSERVER_APPRAISAL_PROJECTION_CAVEAT, OBSERVER_AGENCY_OTHER_UNDERDETERMINED_CAVEAT];
+    default:
+      return [OBSERVER_APPRAISAL_PROJECTION_CAVEAT];
+  }
 }
 
 function provenanceForDimension(
@@ -673,11 +703,16 @@ function provenanceForDimension(
     case 'control':
     case 'fairness':
     case 'agency_self':
-    case 'agency_other':
     case 'self_norm':
+      return [snapshotFeature, metadataFeature, sourceFeature, privacyFeature];
+    // v2: agency_other reads only the emotion snapshot and speaker role.
+    case 'agency_other':
+      return [snapshotFeature, metadataFeature, privacyFeature];
+    // v2: attachment and safety read only per-turn emotion-snapshot evidence;
+    // relationship and channel metadata are deliberately excluded from their formulas.
     case 'attachment':
     case 'safety':
-      return [snapshotFeature, metadataFeature, sourceFeature, privacyFeature];
+      return [snapshotFeature, privacyFeature];
   }
 }
 

@@ -3,6 +3,10 @@ import {
   loadRequiredJson,
   loadSeedJson,
 } from './load-or-seed.js';
+import {
+  assertNoUnknownKeys as assertNoUnknownConfigKeys,
+  assertPositiveInteger,
+} from './validators.js';
 import { writeJsonAtomic } from '../../shared/utils/fs.js';
 import { isRecord } from '../../shared/utils/types.js';
 import {
@@ -51,6 +55,7 @@ interface ChargePolicyLoadOptions {
 }
 
 const MAX_FATIGUE_OVERCHARGE_RESERVE_RESPONSES = 10;
+const CHARGE_POLICY_ERROR_PREFIX = 'Invalid charge policy';
 
 function resolveSeedDir(seedDir?: string): string {
   const resolved = (seedDir ?? process.env.CONFIG_DIR ?? './config').trim();
@@ -65,11 +70,7 @@ function assertNoUnknownKeys(
   allowedKeys: readonly string[],
   fieldPath: string,
 ): void {
-  const allowed = new Set(allowedKeys);
-  const unknown = Object.keys(value).filter(key => !allowed.has(key)).sort();
-  if (unknown.length > 0) {
-    throw new Error(`Invalid charge policy: ${fieldPath} contains unknown keys: ${unknown.join(', ')}`);
-  }
+  assertNoUnknownConfigKeys(value, allowedKeys, fieldPath, { errorPrefix: CHARGE_POLICY_ERROR_PREFIX });
 }
 
 function parseNonNegativeNumber(
@@ -100,16 +101,16 @@ function parseNonNegativeInteger(
 function parsePositiveInteger(
   value: unknown,
   fieldPath: string,
+  options: { max?: number } = {},
 ): number {
-  if (
-    typeof value !== 'number'
-    || !Number.isFinite(value)
-    || !Number.isInteger(value)
-    || value <= 0
-  ) {
-    throw new Error(`Invalid charge policy: ${fieldPath} must be a finite integer > 0`);
-  }
-  return value;
+  return assertPositiveInteger(value, fieldPath, {
+    min: 1,
+    max: options.max,
+    message: ({ fieldLabel }) => `Invalid charge policy: ${fieldLabel} must be a finite integer > 0`,
+    messages: {
+      aboveMax: ({ fieldLabel, max }) => `Invalid charge policy: ${fieldLabel} must be <= ${max}`,
+    },
+  });
 }
 
 function parseBoolean(
@@ -335,12 +336,8 @@ function parseFatigueOverchargeConfig(
   const reserveResponses = parsePositiveInteger(
     raw.reserveResponses,
     `${fieldPath}.reserveResponses`,
+    { max: MAX_FATIGUE_OVERCHARGE_RESERVE_RESPONSES },
   );
-  if (reserveResponses > MAX_FATIGUE_OVERCHARGE_RESERVE_RESPONSES) {
-    throw new Error(
-      `Invalid charge policy: ${fieldPath}.reserveResponses must be <= ${MAX_FATIGUE_OVERCHARGE_RESERVE_RESPONSES}`,
-    );
-  }
   return {
     enabled: parseBoolean(raw.enabled, `${fieldPath}.enabled`),
     reserveResponses,

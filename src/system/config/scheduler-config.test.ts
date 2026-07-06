@@ -9,6 +9,7 @@ import {
   loadSchedulerSeedDefaults,
   SCHEDULER_SEED_FILE_NAME,
 } from './scheduler-config.js';
+import { assertPositiveInteger } from './validators.js';
 
 function writeJson(path: string, value: unknown): void {
   writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`, 'utf-8');
@@ -97,6 +98,27 @@ function withSeedDir(run: (seedDir: string) => void): void {
     rmSync(root, { recursive: true, force: true });
   }
 }
+
+describe('config validators', () => {
+  it('validates positive integer min and max boundaries', () => {
+    const options = { min: 2, max: 4 };
+
+    expect(() => assertPositiveInteger(1, 'sample.field', options)).toThrow(
+      'sample.field must be between 2 and 4',
+    );
+    expect(assertPositiveInteger(2, 'sample.field', options)).toBe(2);
+    expect(assertPositiveInteger(4, 'sample.field', options)).toBe(4);
+    expect(() => assertPositiveInteger(5, 'sample.field', options)).toThrow(
+      'sample.field must be between 2 and 4',
+    );
+    expect(() => assertPositiveInteger(2.5, 'sample.field', options)).toThrow(
+      'sample.field must be a positive integer',
+    );
+    expect(() => assertPositiveInteger('2', 'sample.field', options)).toThrow(
+      'sample.field must be a positive integer',
+    );
+  });
+});
 
 describe('scheduler config seed defaults', () => {
   it('reads seed defaults without requiring a data directory', () => {

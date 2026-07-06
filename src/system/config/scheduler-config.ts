@@ -3,6 +3,7 @@ import {
   loadRequiredJson,
   loadSeedJson,
 } from './load-or-seed.js';
+import { assertPositiveInteger } from './validators.js';
 import { writeJsonAtomic } from '../../shared/utils/fs.js';
 import { isRecord } from '../../shared/utils/types.js';
 
@@ -573,10 +574,10 @@ function toInterval(value: unknown, field: string): number {
 }
 
 function toPositiveInteger(value: unknown, field: string, minimum: number): number {
-  if (typeof value !== 'number' || !Number.isInteger(value) || value < minimum) {
-    throw new Error(`Invalid scheduler config: ${field} must be an integer >= ${minimum}`);
-  }
-  return value;
+  return assertPositiveInteger(value, field, {
+    min: minimum,
+    message: ({ fieldLabel, min }) => `Invalid scheduler config: ${fieldLabel} must be an integer >= ${min}`,
+  });
 }
 
 function toBoolean(value: unknown, field: string): boolean {

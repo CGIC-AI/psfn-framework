@@ -452,6 +452,27 @@ describe('subsystem config round-trip', () => {
     expect(loadSkillsConfig(dataDir)).toEqual(expected);
   });
 
+  it('preserves skills positive integer validation wording', () => {
+    const dataDir = makeDataDir('psfn-skills-config-invalid-');
+    const expected = {
+      enabled: true,
+      directories: ['skills'],
+      extraDirectories: ['history/skills'],
+      maxLoadedSkills: 16,
+      maxSkillChars: 12_000,
+      disabledSkills: ['git-ops'],
+    };
+
+    expect(() => saveSkillsConfig(dataDir, {
+      ...expected,
+      maxLoadedSkills: 1.5,
+    })).toThrow('Invalid skills config: maxLoadedSkills must be an integer');
+    expect(() => saveSkillsConfig(dataDir, {
+      ...expected,
+      maxLoadedSkills: 0,
+    })).toThrow('Invalid skills config: maxLoadedSkills must be between 1 and 512');
+  });
+
   it('round-trips trust-policy.json without drift', () => {
     const dataDir = makeDataDir('psfn-trust-policy-config-');
     const expected = {

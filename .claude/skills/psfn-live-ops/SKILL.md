@@ -78,7 +78,16 @@ helm upgrade → gate):
 ```bash
 npm run ship:kube -- --components agent    # companion-core-only: gateway/garden stay up
 npm run ship:kube -- --components all      # full stack (required when the contract hash changed)
+npm run ship:kube -- --components all --values-overlay <file>  # config enablement rides the same upgrade
 ```
+
+Every ship also refreshes the companion's source checkout (git bundle →
+`/mnt/psfn-nvme/psfn-source`) and round-trips beads
+(`scripts/ops/sync-companion-beads.sh`, bd export/import upsert both ways) —
+her self-view is exactly as fresh as her runtime. Target selection:
+`--host <alias>` / `PSFN_HOST_ALIAS` + `PSFN_NAMESPACE` for non-default
+deployments (e.g. Carlini). The skew guard is live-proven: a boundary/contract
+change on a selective ship fails closed naming the component that would skew.
 
 Selective rollouts are contract-hash guarded: the image bakes a hash of
 `src/shared/contracts` + `src/boundary` into `/app/contract-hash.txt`; the
@@ -138,11 +147,56 @@ in this build" line — always set them. Gateway/garden use strategy Recreate
 (brief downtime instead of the old hostPort deadlock). The agent restarts 2×
 per swap by design (RPC loss) — not a failure signal.
 
+## 3b. Shipping to a NEW target (Carlini or any second deployment)
+
+One-time migrations the first ship to a target must handle — all hit live on
+psfn-shard 2026-07-06:
+
+1. **Strategy SSA conflict**: live deployments created under RollingUpdate
+   reject the chart's `Recreate` ("spec.strategy.rollingUpdate: Forbidden").
+   Pre-patch each app deployment once:
+   `kubectl -n <ns> patch deploy <d> --type=merge -p '{"spec":{"strategy":{"type":"Recreate","rollingUpdate":null}}}'`
+2. **ConfigMap ownership**: anything ever `kubectl replace`d (e.g. litellm
+   config hotfixes) conflicts with helm server-side apply. Make the CHART own
+   the content first (else the upgrade reverts the hotfix!), then
+   `kubectl delete configmap <name>` immediately before the upgrade so helm
+   re-creates and owns it.
+3. **First selective ship is impossible**: live images predate the contract
+   hash → the guard demands `--components all` once. Correct; do it.
+4. **LiteLLM routes**: the `openrouter/*` wildcard does NOT match PSFN's
+   unprefixed model names — every models.json slot needs an explicit route in
+   the chart's litellm config (values.yaml `liteLlm.config.yaml`) or all
+   traffic silently falls back to direct OpenRouter.
+5. **Companion self-management enablement** (values overlay, see
+   `repositoryCheckout` + `beads` values): source checkout arrives via git
+   bundle (`git bundle create` → clone on host → `chown -R 999:999` +
+   host `git config --system --add safe.directory <path>`); beads needs a
+   one-time in-pod `bd init --prefix <prefix>` + `bd import <shared-export>`
+   in `/app/workspace` (DOLT_ROOT_PATH is chart-provided; bd's embedded dolt
+   works on arm64) and `bd metrics off`. Keep `close`/`sync` out of
+   BEADS_ALLOW_ACTIONS until approval flows exist.
+6. **Companion skills** install to `<workspace>/skills/<name>/SKILL.md`
+   (the runtime's managed root; frontmatter needs name + description).
+   `.agents/skills/` is the coding-agent convention dir — the runtime does
+   NOT read it.
+7. **Off-node backups**: install/point `/usr/local/bin/psfn-backup.sh` at the
+   target's live cluster + its NFS share. The pre-cutover trap to never
+   repeat: a timer that keeps dumping a frozen/stale DB looks healthy while
+   backing up nothing — the script must `pg_restore --list` its own dump and
+   fail the unit otherwise. NFS root-squash needs `tar --no-same-owner`.
+
 ## 4. Validate — the gate is not optional
 
 ```bash
-npm run verify:kube-rollout -- --expect-tag 0.1.0-kube-<shortsha> --smoke
+npm run verify:kube-rollout -- --remote --expect-tag 0.1.0-kube-<shortsha> --smoke
 ```
+
+Always pass `--remote` (a local kubectl for another cluster hijacks auto
+mode). `--expect-tag` must match the commit actually SHIPPED, not HEAD.
+The smoke can race the agent's by-design second restart right after a
+full-stack rollout — wait ~90s and rerun before believing a 503. The gate
+includes contract-hash consistency across live pods and auto-detects
+optional services (emosim).
 
 (`scripts/ops/validate-kube-rollout.sh`; runs remote over SSH when kubectl is
 not local.) It encodes: rollout status ×3, pod/image checks, Garden health,
@@ -165,6 +219,9 @@ writes appeared on any channel.
 - Postgres projection cleanup goes through `kubectl exec -i psfn-postgres-0 --
   psql` with the SQL piped on stdin (inline quoting through ssh+kubectl+psql
   is a tarpit).
+- Beads data: NEVER `bd prune` a parent whose children survive — orphaned
+  children FK-break every export/import round-trip (restore a placeholder
+  parent with the original ID to repair, cf. psfn-framework-1z6).
 - LiteLLM: the in-cluster proxy needs **explicit unprefixed model routes**
   (`z-ai/glm-5.2` → `openrouter/z-ai/glm-5.2`); the `openrouter/*` wildcard
   alone does NOT match PSFN's unprefixed requests and everything silently

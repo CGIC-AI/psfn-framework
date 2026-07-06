@@ -1,5 +1,4 @@
-import { existsSync, readFileSync } from 'node:fs';
-import { appendJsonLine } from '../jsonl.js';
+import { appendJsonLine, readJsonLines } from '../jsonl.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import type { ValuesMetacognitiveFlag } from '../../faculties/values/narrative-context-types.js';
 import {
@@ -388,31 +387,15 @@ export class ReflectionMetacognitionJournalStore {
   listRecent(
     options: ReflectionMetacognitionJournalListOptions = {},
   ): ReflectionMetacognitionJournalEntry[] {
-    if (!existsSync(this.filePath)) {
-      return [];
-    }
-    const raw = readFileSync(this.filePath, 'utf-8');
-    if (raw.trim().length === 0) {
-      return [];
-    }
-
-    const entries = raw
-      .split('\n')
-      .map(line => line.trim())
-      .filter(line => line.length > 0)
-      .map((line, index) => {
-        try {
-          return normalizePersistedEntry(JSON.parse(line) as unknown);
-        } catch (error) {
-          log.warn('Skipping unreadable reflection metacognition journal line', {
-            filePath: this.filePath,
-            line: index + 1,
-            error: String(error),
-          });
-          return null;
-        }
-      })
-      .filter((entry): entry is ReflectionMetacognitionJournalEntry => entry !== null);
+    const entries = readJsonLines(this.filePath, normalizePersistedEntry, {
+      onError: ({ line, error }) => {
+        log.warn('Skipping unreadable reflection metacognition journal line', {
+          filePath: this.filePath,
+          line,
+          error: String(error),
+        });
+      },
+    }).entries;
 
     const sorted = sortByOccurredAtDescending(entries);
     if (options.limit === undefined) {

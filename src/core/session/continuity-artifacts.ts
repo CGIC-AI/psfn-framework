@@ -1,8 +1,7 @@
 import { randomUUID } from 'node:crypto';
-import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createComponentLogger } from '../../shared/logger.js';
-import { appendJsonLine } from '../../persistence/jsonl.js';
+import { appendJsonLine, readJsonLines } from '../../persistence/jsonl.js';
 import { sanitizeChannelId } from '../../persistence/sessions/store-primitives.js';
 
 const log = createComponentLogger('SessionContinuityArtifacts');
@@ -209,28 +208,15 @@ export class SessionContinuityArtifactStore {
   ): SessionContinuityArtifact[] {
     const normalizedSessionId = normalizeRequiredText(sessionId, 'sessionId', 512);
     const filePath = this.resolveFilePath(normalizedSessionId);
-    if (!existsSync(filePath)) return [];
-
-    const raw = readFileSync(filePath, 'utf-8');
-    if (!raw.trim()) return [];
-
-    let artifacts = raw
-      .split('\n')
-      .map(line => line.trim())
-      .filter(line => line.length > 0)
-      .map((line, index) => {
-        try {
-          return normalizeEntry(JSON.parse(line) as unknown);
-        } catch (error) {
-          log.warn('Skipping unreadable session continuity artifact line', {
-            sessionId: normalizedSessionId,
-            line: index + 1,
-            error: String(error),
-          });
-          return null;
-        }
-      })
-      .filter((entry): entry is SessionContinuityArtifact => entry !== null)
+    let artifacts = readJsonLines(filePath, normalizeEntry, {
+      onError: ({ line, error }) => {
+        log.warn('Skipping unreadable session continuity artifact line', {
+          sessionId: normalizedSessionId,
+          line,
+          error: String(error),
+        });
+      },
+    }).entries
       .filter(entry => entry.sessionId === normalizedSessionId)
       .sort(compareArtifactsByRecency);
 

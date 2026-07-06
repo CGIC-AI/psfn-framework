@@ -1,8 +1,7 @@
-import { appendFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
-import { dirname } from 'node:path';
 import { CHANNEL_TYPES, type ChannelType } from '../../shared/contracts/runtime.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import { isRecord } from '../../shared/utils/types.js';
+import { appendJsonLine, readJsonLines } from '../../persistence/jsonl.js';
 
 const log = createComponentLogger('OutreachOutbox');
 
@@ -127,28 +126,16 @@ export function createFileOutreachOutboxStore(path: string): OutreachOutboxStore
     }
   };
 
-  if (existsSync(path)) {
-    const lines = readFileSync(path, 'utf-8').split(/\r?\n/);
-    let malformed = 0;
-    for (const line of lines) {
-      if (!line.trim()) continue;
-      try {
-        const record = normalizeRecord(JSON.parse(line));
-        if (record) {
-          remember(record);
-        } else {
-          malformed += 1;
-        }
-      } catch {
-        malformed += 1;
-      }
-    }
-    if (malformed > 0) {
-      log.warn('Ignored malformed outreach outbox ledger records during load', {
-        path,
-        malformed,
-      });
-    }
+  const loaded = readJsonLines(path, normalizeRecord);
+  for (const record of loaded.entries) {
+    remember(record);
+  }
+  const malformed = loaded.skipped + loaded.corrupt;
+  if (malformed > 0) {
+    log.warn('Ignored malformed outreach outbox ledger records during load', {
+      path,
+      malformed,
+    });
   }
 
   return {
@@ -161,8 +148,7 @@ export function createFileOutreachOutboxStore(path: string): OutreachOutboxStore
       if (!record) {
         throw new Error('Invalid outreach outbox record');
       }
-      mkdirSync(dirname(path), { recursive: true });
-      appendFileSync(path, `${JSON.stringify(record)}\n`, 'utf-8');
+      appendJsonLine(path, record);
       remember(record);
       return { ...record, ...(record.metadata ? { metadata: { ...record.metadata } } : {}) };
     },

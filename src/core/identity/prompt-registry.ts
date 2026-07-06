@@ -9,7 +9,7 @@ import {
   statSync,
 } from 'node:fs';
 import { createComponentLogger } from '../../shared/logger.js';
-import { appendJsonLine } from '../../persistence/jsonl.js';
+import { appendJsonLine, readJsonLines } from '../../persistence/jsonl.js';
 import { writeJsonAtomic } from '../../shared/utils/fs.js';
 import { collectRemovedPromptMacroReferences } from './prompt-runtime.js';
 import { buildSubsystemPersonaPromptSeeds } from './persona-preamble-seeds.js';
@@ -402,13 +402,19 @@ export class PromptRegistryStore {
 
   getHistory(): PromptRegistryHistoryEntry[] {
     try {
-      if (!existsSync(this.historyPath)) return [];
-      const raw = readFileSync(this.historyPath, 'utf-8').trim();
-      if (!raw) return [];
-      return raw
-        .split('\n')
-        .filter(Boolean)
-        .map(line => JSON.parse(line) as PromptRegistryHistoryEntry);
+      return readJsonLines<PromptRegistryHistoryEntry>(
+        this.historyPath,
+        raw => raw as PromptRegistryHistoryEntry,
+        {
+          onError: ({ line, error }) => {
+            log.warn('Skipping unreadable prompt registry history line', {
+              historyPath: this.historyPath,
+              line,
+              error: String(error),
+            });
+          },
+        },
+      ).entries;
     } catch {
       return [];
     }

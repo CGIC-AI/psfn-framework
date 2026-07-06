@@ -337,6 +337,17 @@ group: cert-manager.io
 - name: BEADS_ALLOW_ACTIONS
   value: {{ join "," .Values.beads.allowActions | quote }}
 {{- end }}
+{{- /* Deployment provenance for companion self-diagnosis (self_status diagnose). */}}
+- name: PSFN_IMAGE_TAG
+  value: {{ .Values.psfnAppImage.tag | quote }}
+- name: PSFN_HELM_REVISION
+  value: {{ .Release.Revision | quote }}
+- name: PSFN_GIT_COMMIT
+  value: {{ .Values.psfnAppImage.gitCommit | default "" | quote }}
+- name: PSFN_PREVIOUS_GIT_COMMIT
+  value: {{ .Values.psfnAppImage.previousGitCommit | default "" | quote }}
+- name: PSFN_REPOSITORY_DIR
+  value: {{ ternary .Values.repositoryCheckout.mountPath (.Values.runtime.repositoryDir | default "") .Values.repositoryCheckout.enabled | quote }}
 {{- end -}}
 
 {{- define "psfn.providerSecretEnv" -}}

@@ -44,6 +44,13 @@ RUN mkdir -p /run/psfn /app/system-data \
     && chown -R psfn:psfn /app /run/psfn
 USER 999:999
 
+# Build provenance for companion self-diagnosis (self_status action=diagnose).
+# CD should pass the real source commit(s); helm env overrides these at pod
+# level. Empty defaults are reported as "unavailable" (fail-closed).
+ARG PSFN_GIT_COMMIT=""
+ARG PSFN_PREVIOUS_GIT_COMMIT=""
+ENV PSFN_GIT_COMMIT=${PSFN_GIT_COMMIT}
+ENV PSFN_PREVIOUS_GIT_COMMIT=${PSFN_PREVIOUS_GIT_COMMIT}
 ENV NODE_ENV=production
 ENV GATEWAY_SOCKET=/run/psfn/gateway.sock
 

@@ -20,6 +20,7 @@ import type { AdaptiveToolRuntimeState } from '../agent/adaptive-tools-telemetry
 import type { RuntimeToolCatalogSnapshot } from '../agent/tool-catalog.js';
 import type { ObserverEvalSidecarHealthSnapshot } from '../eval/observer-sidecar/types.js';
 import type { RuntimeServiceHealthStatus } from '../../operator/tool-health/types.js';
+import { buildSelfDiagnosisReport, type SelfDiagnosisDeps } from './self-diagnosis.js';
 import { textResult } from './results.js';
 
 const DEFAULT_RECENT_CHANNEL_LIMIT = 8;
@@ -54,10 +55,16 @@ export interface SelfStatusToolRuntime {
   getStreamingState?: () => boolean;
   logsDir?: string;
   getDiagnosticsSnapshot?: (query: RuntimeDiagnosticsQuery) => RuntimeDiagnosticsSnapshot | Promise<RuntimeDiagnosticsSnapshot>;
+  /**
+   * Fail-closed dependency surface for the `diagnose` action. Absent when the
+   * runtime cannot introspect its Kubernetes deployment; the action then reports
+   * an explicit unavailable result instead of guessing.
+   */
+  diagnosis?: SelfDiagnosisDeps;
 }
 
 interface SelfStatusParams {
-  action?: 'snapshot' | 'diagnostics';
+  action?: 'snapshot' | 'diagnose' | 'logs';
   recentChannelLimit?: number;
   windowMs?: number;
   sinceMs?: number;
@@ -480,19 +487,42 @@ export async function buildSelfDiagnosticsSnapshot(
   }
 }
 
+export async function buildSelfStatusResult(
+  runtime: SelfStatusToolRuntime,
+  params: SelfStatusParams = {},
+): Promise<Record<string, unknown>> {
+  if (params.action === 'diagnose') {
+    if (!runtime.diagnosis) {
+      return {
+        schemaVersion: 1,
+        action: 'diagnose',
+        status: 'unavailable',
+        reason: 'self-diagnosis dependencies are not wired into this runtime',
+      };
+    }
+    return buildSelfDiagnosisReport(runtime.diagnosis);
+  }
+  if (params.action === 'logs') {
+    return buildSelfDiagnosticsSnapshot(runtime, params);
+  }
+  return buildSelfStatusSnapshot(runtime, params);
+}
+
 export function createSelfStatusTool(runtime: SelfStatusToolRuntime): AgentTool<any> {
   return {
     name: 'self_status',
     label: 'self_status',
     description:
-      'Read safe structured runtime self-status or diagnostics. The diagnostics action returns bounded, redacted warnings/errors, validation counts, lifecycle events, backup status, and unavailable markers for kube-only data.',
+      'Read a safe structured snapshot of current runtime state: capability tier, active tools, charge lanes, channels, heartbeat, uptime, memory counts, and coarse substrate health. '
+      + 'Use action="diagnose" for a live Kubernetes self-diagnosis (deployment identity and shipped fixes, repository state, tooling availability, storage, model-routing health, policy flags, and tool-surface conformance). '
+      + 'Use action="logs" for bounded, redacted recent warnings/errors, tool validation counts, lifecycle events, and backup status.',
     parameters: Type.Object({
-      action: Type.Optional(Type.Union([
-        Type.Literal('snapshot'),
-        Type.Literal('diagnostics'),
-      ], {
-        description: 'Use diagnostics for redacted recent warning/error and runtime diagnostic data. Defaults to snapshot.',
-      })),
+      action: Type.Optional(Type.Union(
+        [Type.Literal('snapshot'), Type.Literal('diagnose'), Type.Literal('logs')],
+        {
+          description: 'snapshot (default) returns the runtime snapshot; diagnose returns the Kubernetes self-diagnosis report; logs returns redacted recent diagnostics.',
+        },
+      )),
       recentChannelLimit: Type.Optional(Type.Number({
         minimum: 1,
         maximum: 20,
@@ -520,13 +550,7 @@ export function createSelfStatusTool(runtime: SelfStatusToolRuntime): AgentTool<
       _toolCallId: string,
       params: SelfStatusParams = {},
     ): Promise<AgentToolResult<Record<string, never>>> => textResult(
-      JSON.stringify(
-        params.action === 'diagnostics'
-          ? await buildSelfDiagnosticsSnapshot(runtime, params)
-          : await buildSelfStatusSnapshot(runtime, params),
-        null,
-        2,
-      ),
+      JSON.stringify(await buildSelfStatusResult(runtime, params), null, 2),
     ),
   };
 }

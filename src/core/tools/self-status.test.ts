@@ -388,7 +388,7 @@ describe('createSelfStatusTool', () => {
     const tool = createSelfStatusTool(makeRuntime());
     const catalogEntry = buildRuntimeToolCatalogEntry(tool, 'core');
 
-    expect(tool.description).toContain('safe structured runtime self-status or diagnostics');
+    expect(tool.description).toContain('safe structured snapshot of current runtime state');
     expect(JSON.stringify(tool.parameters)).toContain('Message content is never returned');
     expect(catalogEntry.schema).toMatchObject({
       actions: expect.arrayContaining([
@@ -397,7 +397,11 @@ describe('createSelfStatusTool', () => {
           requiredCapabilities: ['internal.read'],
         },
         {
-          name: 'diagnostics',
+          name: 'diagnose',
+          requiredCapabilities: ['internal.read'],
+        },
+        {
+          name: 'logs',
           requiredCapabilities: ['internal.read'],
         },
       ]),

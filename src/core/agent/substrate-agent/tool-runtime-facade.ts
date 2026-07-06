@@ -110,7 +110,7 @@ const MAINTENANCE_CORE_TOOL_POLICIES = new Map<string, MaintenanceCoreToolPolicy
     resolveAction: resolveMaintenanceSessionAction,
   }],
   ['self_status', {
-    allowedActions: ['snapshot', 'diagnostics'],
+    allowedActions: ['snapshot', 'diagnose', 'logs'],
     resolveAction: resolveMaintenanceSelfStatusAction,
   }],
   ['system', {
@@ -222,7 +222,7 @@ function resolveMaintenanceSelfStatusAction(params: Record<string, unknown>): st
   if (!rawAction) {
     return 'snapshot';
   }
-  return rawAction === 'snapshot' || rawAction === 'diagnostics' ? rawAction : null;
+  return rawAction === 'snapshot' || rawAction === 'diagnose' || rawAction === 'logs' ? rawAction : null;
 }
 
 function resolveMaintenanceContactAction(params: Record<string, unknown>): string | null {

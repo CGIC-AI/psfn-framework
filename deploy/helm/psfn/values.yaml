@@ -28,6 +28,13 @@ psfnAppImage:
   tag: 0.1.0-kube
   digest: ""
   pullPolicy: IfNotPresent
+  # Build provenance surfaced to the companion self-diagnosis (self_status
+  # action=diagnose). gitCommit is the source commit this image was built from;
+  # previousGitCommit is the commit of the previously deployed build so the
+  # runtime can list the bead fixes shipped between them. Set both at build/CD
+  # time; empty values are reported as "unavailable" (fail-closed, never guessed).
+  gitCommit: ""
+  previousGitCommit: ""
 
 runtime:
   companionId: companion
@@ -44,6 +51,11 @@ runtime:
   configDir: /app/config
   characterCardPath: /app/companion-data/companion.json
   modelCacheDir: /app/models/transformers
+  # Optional path to an authoritative source checkout mounted into the runtime.
+  # When set (and a real git checkout is present), self-diagnosis distinguishes
+  # it from the image-snapshot repo and derives the "fixes shipped" bead list.
+  # Empty means no authoritative checkout is available (reported as unavailable).
+  repositoryDir: ""
 
 bootstrap:
   # First-ever-install opt-in ONLY. When true, the seed init container copies

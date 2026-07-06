@@ -88,6 +88,11 @@ import {
   resolveScratchpadMirrorPath,
 } from '../../persistence/layout.js';
 import { createSelfStatusTool } from '../../core/tools/self-status.js';
+import {
+  createPostgresModelUsageStoreFromConfig,
+  type PostgresModelUsageStore,
+} from '../../persistence/postgres/model-usage-store.js';
+import type { ModelUsageQueryPort } from '../../shared/telemetry/model-usage.js';
 import { getObserverEvalSidecarHealthSnapshot } from '../../core/eval/observer-sidecar/runtime.js';
 
 export interface AgentCoreRuntimeOptions {
@@ -248,6 +253,17 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
       enabled: isPromptGenerationFailureAlertConfigured(process.env),
     }),
   );
+  // Lazily construct a read-only model-usage query port on first `diagnose`
+  // call. Deferring avoids an idle pool and a startup migration race with the
+  // gateway-side recorder; it fails closed to null on non-postgres backends.
+  let cachedModelUsageStore: PostgresModelUsageStore | null | undefined;
+  const getModelUsageQuery = (): ModelUsageQueryPort | null => {
+    if (cachedModelUsageStore === undefined) {
+      cachedModelUsageStore = createPostgresModelUsageStoreFromConfig(config);
+    }
+    return cachedModelUsageStore;
+  };
+  const runtimePathLayout = pathSnapshot.runtimePathLayout;
   agentLoop.registerTool(createSelfStatusTool({
     config,
     getCapabilityTier: () => capabilityRuntime.getTier(),
@@ -259,6 +275,19 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
     listRecentSessions: (limit) => sessionManager.listRecentSessions(limit),
     getStreamingState: () => agentLoop.isStreaming,
     logsDir: pathSnapshot.runtimePathLayout.logsDir,
+    diagnosis: {
+      env: process.env,
+      paths: {
+        systemDataDir: pathSnapshot.systemDataDir,
+        companionDataDir: pathSnapshot.companionDataDir,
+        workspacePath: pathSnapshot.workspacePath,
+        logsDir: runtimePathLayout.logsDir,
+        tempDir: runtimePathLayout.tempDir,
+        backupsDir: runtimePathLayout.backupsDir,
+      },
+      repoRoot: process.cwd(),
+      getModelUsageQuery,
+    },
   }), 'core');
 
   const skillsRuntime = wireSkillsRuntime(agentLoop, {

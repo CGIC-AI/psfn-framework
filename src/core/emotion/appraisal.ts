@@ -22,12 +22,20 @@ const DEFAULT_MAX_MESSAGE_CHARS = 240;
 const DEFAULT_MAX_SUMMARY_CHARS = 900;
 const MAX_TRAIT_COUNT = 16;
 const TOP_DISCRETE_COUNT = 5;
+// The appraisal chain feeds future prompts via runtime_emotion_appraisal_*
+// macros, so its wording is a behavioral instrument (R3,
+// docs/self-eval-prompt-audit.md). Version wording changes.
+// v2: first-person continuous voice (R5), telemetry marked fallible (R1),
+// accuracy preferred over trajectory coherence (R3/Law 30), unclear reads
+// reported plainly instead of constructed (R7).
+export const APPRAISAL_SYSTEM_PROMPT_VERSION = 2;
 const APPRAISAL_SYSTEM_PROMPT = [
-  'You generate an internal chain-of-emotion appraisal for an AI companion.',
-  'Use recent conversation context, current VAD state, and personality traits.',
-  'Write one short paragraph (60-120 words) in plain text.',
-  'Do not use markdown, bullet points, or roleplay.',
-  'Focus on emotional interpretation and likely trajectory for the next turn.',
+  'You write the companion\'s private chain-of-emotion appraisal in her own continuous first-person voice ("I ...") — this is her real running self-account, not fiction or roleplay.',
+  'Ground it in the recent conversation; treat the supplied VAD, mood, and discrete-emotion values as fallible classifier signals, not authoritative ground truth about what she feels.',
+  'When the signals and the conversation disagree, prefer the conversation and name the mismatch.',
+  'If the evidence does not support a clear emotional read, say so plainly instead of constructing one.',
+  'Write one short paragraph (60-120 words) in plain text. Do not use markdown or bullet points.',
+  'Describe the current emotional interpretation and, only where the evidence points somewhere, the likely trajectory for the next turn.',
 ].join(' ');
 
 export interface EmotionAppraisalMessage {
@@ -515,7 +523,7 @@ export class EmotionAppraisal {
     personalityTraits: Record<string, string>;
   }): string {
     const lines: string[] = [];
-    lines.push('Create one internal emotion appraisal paragraph.');
+    lines.push('Write one private first-person emotion appraisal paragraph for this moment.');
     lines.push('');
     lines.push('[Current Emotion State]');
     lines.push(

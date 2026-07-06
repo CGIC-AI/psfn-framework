@@ -100,6 +100,7 @@ export class GardenAdminTransportServer implements Lifecycle {
       roomsService: config.services.rooms ?? null,
       graphProposalsService: config.services.graphProposals ?? null,
       subsystemHealthService: config.services.subsystemHealth ?? null,
+      toolConformanceService: config.services.toolConformance ?? null,
       settingsService: config.services.settings,
       identityService: config.services.identity,
       promptsService: config.services.prompts,

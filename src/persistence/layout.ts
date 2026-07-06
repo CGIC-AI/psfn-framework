@@ -89,6 +89,7 @@ const PERSONAL_MODULES_DIRNAME = 'modules';
 const PERSONAL_EXPERIMENTS_DIRNAME = 'experiments';
 const PERSONAL_TMP_DIRNAME = 'tmp';
 const COMPANION_STATE_DIRNAME = 'state';
+const SYSTEM_STATE_DIRNAME = 'state';
 const COMPANION_DOCS_DIRNAME = 'docs';
 const COMPANION_WORKSPACE_DIRNAME = 'workspace';
 const COMPANION_IMAGES_DIRNAME = 'images';
@@ -426,6 +427,21 @@ export function resolveConfiguredCompanionDataDir(config: ConfiguredPersistenceD
 
 export function resolveCompanionStateDir(companionDataDir: string): string {
   return join(companionDataDir, COMPANION_STATE_DIRNAME);
+}
+
+/** System-owned runtime/operator state directory (system-data/state). */
+export function resolveSystemStateDir(systemDataDir: string): string {
+  return join(systemDataDir, SYSTEM_STATE_DIRNAME);
+}
+
+/** Latest tool-surface conformance run (system-owned, cross-workstream contract). */
+export function resolveToolConformanceLatestPath(systemDataDir: string): string {
+  return join(resolveSystemStateDir(systemDataDir), 'tool-conformance-latest.json');
+}
+
+/** Bounded JSONL history of the last tool-surface conformance runs. */
+export function resolveToolConformanceHistoryPath(systemDataDir: string): string {
+  return join(resolveSystemStateDir(systemDataDir), 'tool-conformance-history.jsonl');
 }
 
 export function resolveCompanionDocsDir(companionDataDir: string): string {

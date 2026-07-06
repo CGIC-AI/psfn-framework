@@ -263,6 +263,7 @@ async function main(): Promise<void> {
     personaPreamble,
     observerEvalSidecar,
     appCache,
+    toolConformanceRunner,
   } = coreRuntime;
 
   sessionManager.characterName = card.data.name;
@@ -570,6 +571,7 @@ async function main(): Promise<void> {
       observerEvalSidecar,
       memoryExtractor,
       intentionRuntime,
+      toolConformanceRunner,
     },
   });
   if (adminTransport) {

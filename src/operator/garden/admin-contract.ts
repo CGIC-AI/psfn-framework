@@ -44,6 +44,7 @@ import type { AdminPendingContactsService } from './services/pending-contacts-se
 import type { AdminRoomsService } from './services/rooms-service.js';
 import type { AdminGraphProposalsService } from './services/graph-proposals-service.js';
 import type { AdminSubsystemHealthService } from './services/subsystem-health-service.js';
+import type { AdminToolConformanceService } from './services/tool-conformance-service.js';
 
 export interface ConfirmationQueueAdminApi {
   listConfirmationQueue(): Promise<ConfirmationListResult>;
@@ -160,6 +161,7 @@ export interface GardenAdminDomainServices {
   graphProposals?: AdminGraphProposalsService | null;
   concerns?: AdminConcernService | null;
   subsystemHealth?: AdminSubsystemHealthService | null;
+  toolConformance?: AdminToolConformanceService | null;
   settings: AdminSettingsService;
   identity: AdminIdentityService;
   prompts: AdminPromptsService;

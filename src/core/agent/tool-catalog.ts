@@ -82,7 +82,7 @@ function extractActionNames(parameters: unknown): string[] {
   return extractStringLiterals(properties.action);
 }
 
-function extractRequiredParameterNames(parameters: unknown): string[] {
+export function extractRequiredParameterNames(parameters: unknown): string[] {
   if (!isRecord(parameters)) return [];
   const required = (parameters as SchemaLike).required;
   if (!Array.isArray(required)) return [];

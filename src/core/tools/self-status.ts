@@ -21,7 +21,8 @@ import type { RuntimeToolCatalogSnapshot } from '../agent/tool-catalog.js';
 import type { ObserverEvalSidecarHealthSnapshot } from '../eval/observer-sidecar/types.js';
 import type { RuntimeServiceHealthStatus } from '../../operator/tool-health/types.js';
 import { buildSelfDiagnosisReport, type SelfDiagnosisDeps } from './self-diagnosis.js';
-import { textResult } from './results.js';
+import type { ToolConformanceRunResult } from '../agent/tool-conformance/types.js';
+import { textResult, textResultWithError } from './results.js';
 
 const DEFAULT_RECENT_CHANNEL_LIMIT = 8;
 
@@ -61,10 +62,16 @@ export interface SelfStatusToolRuntime {
    * an explicit unavailable result instead of guessing.
    */
   diagnosis?: SelfDiagnosisDeps;
+  /**
+   * Runs the LLM-free tool-surface conformance sweep and returns the aggregated
+   * result as the single tool result. The sweep executes tool handlers directly
+   * and never writes tool observations into a conversational session store.
+   */
+  runConformance?: (trigger: 'manual') => Promise<ToolConformanceRunResult>;
 }
 
 interface SelfStatusParams {
-  action?: 'snapshot' | 'diagnose' | 'logs';
+  action?: 'snapshot' | 'diagnose' | 'logs' | 'conformance';
   recentChannelLimit?: number;
   windowMs?: number;
   sinceMs?: number;
@@ -515,18 +522,19 @@ export function createSelfStatusTool(runtime: SelfStatusToolRuntime): AgentTool<
     description:
       'Read a safe structured snapshot of current runtime state: capability tier, active tools, charge lanes, channels, heartbeat, uptime, memory counts, and coarse substrate health. '
       + 'Use action="diagnose" for a live Kubernetes self-diagnosis (deployment identity and shipped fixes, repository state, tooling availability, storage, model-routing health, policy flags, and tool-surface conformance). '
-      + 'Use action="logs" for bounded, redacted recent warnings/errors, tool validation counts, lifecycle events, and backup status.',
+      + 'Use action="logs" for bounded, redacted recent warnings/errors, tool validation counts, lifecycle events, and backup status. '
+      + 'Use action="conformance" to run a safe, LLM-free tool-surface conformance sweep and return its aggregated result (no session transcript is written).',
     parameters: Type.Object({
       action: Type.Optional(Type.Union(
-        [Type.Literal('snapshot'), Type.Literal('diagnose'), Type.Literal('logs')],
+        [Type.Literal('snapshot'), Type.Literal('diagnose'), Type.Literal('logs'), Type.Literal('conformance')],
         {
-          description: 'snapshot (default) returns the runtime snapshot; diagnose returns the Kubernetes self-diagnosis report; logs returns redacted recent diagnostics.',
+          description: 'snapshot (default) returns the runtime snapshot; diagnose returns the Kubernetes self-diagnosis report; logs returns redacted recent diagnostics; conformance runs the tool-surface sweep.',
         },
       )),
       recentChannelLimit: Type.Optional(Type.Number({
         minimum: 1,
         maximum: 20,
-        description: 'Maximum recent channel summaries to include. Message content is never returned.',
+        description: 'Maximum recent channel summaries to include (snapshot only). Message content is never returned.',
       })),
       windowMs: Type.Optional(Type.Number({
         minimum: 1000,
@@ -549,8 +557,15 @@ export function createSelfStatusTool(runtime: SelfStatusToolRuntime): AgentTool<
     execute: async (
       _toolCallId: string,
       params: SelfStatusParams = {},
-    ): Promise<AgentToolResult<Record<string, never>>> => textResult(
-      JSON.stringify(await buildSelfStatusResult(runtime, params), null, 2),
-    ),
+    ): Promise<AgentToolResult<unknown>> => {
+      if (params.action === 'conformance') {
+        if (!runtime.runConformance) {
+          return textResultWithError('self_status action="conformance" is unavailable: conformance runner is not wired.', true);
+        }
+        const result = await runtime.runConformance('manual');
+        return textResult(JSON.stringify(result, null, 2));
+      }
+      return textResult(JSON.stringify(await buildSelfStatusResult(runtime, params), null, 2));
+    },
   };
 }

@@ -88,6 +88,8 @@ import {
 import { AdminPromptsDataService } from './services/prompts-service.js';
 import { AdminSchedulerService } from './services/scheduler-service.js';
 import { AdminSubsystemHealthDataService } from './services/subsystem-health-service.js';
+import { createAdminToolConformanceService } from './services/tool-conformance-service.js';
+import type { ToolConformanceRunner } from '../../core/agent/tool-conformance/runner.js';
 import { AdminSessionDataService } from './services/session-service.js';
 import { AdminSettingsDataService } from './services/settings-service.js';
 import { AdminShardFoldReviewDataService } from './services/shard-fold-review-service.js';
@@ -117,6 +119,7 @@ export interface InProcessGardenAdminContractOptions {
   confirmationQueueApi?: ConfirmationQueueAdminApi | null;
   adaptiveToolsStateProvider?: AdaptiveToolsStateProvider | null;
   toolHealthProvider?: AdminToolHealthProvider | null;
+  toolConformanceRunner?: ToolConformanceRunner | null;
   postTurnActions?: PostTurnActionRuntime | null;
   outreachOutbox?: OutreachOutboxStore | null;
   observerEvalSidecar?: ObserverEvalSidecarRuntime | null;
@@ -200,6 +203,9 @@ export function createInProcessGardenAdminContract(
     eventBus: options.eventBus,
     scheduler: schedulerService,
   });
+  const toolConformance = options.toolConformanceRunner
+    ? createAdminToolConformanceService(options.toolConformanceRunner)
+    : null;
 
   return {
     dashboard: new AdminDashboardDataService({
@@ -333,6 +339,7 @@ export function createInProcessGardenAdminContract(
     }),
     scheduler: schedulerService,
     subsystemHealth,
+    toolConformance,
     skills: options.skillsRuntime ?? null,
     confirmations: options.confirmationQueueApi ?? null,
     values: valuesJournal,

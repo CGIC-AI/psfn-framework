@@ -58,6 +58,7 @@ export interface StartOptionalAdminTransportServerOptions {
     | 'agentLoop'
     | 'memoryExtractor'
     | 'intentionRuntime'
+    | 'toolConformanceRunner'
   >;
 }
 
@@ -110,6 +111,7 @@ export async function startOptionalAdminTransportServer(
     adaptiveToolsStateProvider: options.coreRuntime.agentLoop,
     toolHealthProvider: createGatewayAdminToolHealthProvider(options.gateway),
     ...(env.PSFN_LOGS_DIR ? { logsDir: env.PSFN_LOGS_DIR } : {}),
+    toolConformanceRunner: options.coreRuntime.toolConformanceRunner,
   });
   const adminTransport = new GardenAdminTransportServer({
     endpoint: resolveAdminTransportServerEndpoint(env),

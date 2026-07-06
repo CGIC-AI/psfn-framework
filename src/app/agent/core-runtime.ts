@@ -93,6 +93,10 @@ import {
   type PostgresModelUsageStore,
 } from '../../persistence/postgres/model-usage-store.js';
 import type { ModelUsageQueryPort } from '../../shared/telemetry/model-usage.js';
+import {
+  createToolConformanceRunner,
+  type ToolConformanceRunner,
+} from '../../core/agent/tool-conformance/runner.js';
 import { getObserverEvalSidecarHealthSnapshot } from '../../core/eval/observer-sidecar/runtime.js';
 
 export interface AgentCoreRuntimeOptions {
@@ -139,6 +143,7 @@ export interface AgentCoreRuntime {
   appCache: AppCache;
   fatigueBudget: FatigueBudgetComposition['fatigueBudget'];
   fatigueLedger: FatigueBudgetComposition['fatigueLedger'];
+  toolConformanceRunner: ToolConformanceRunner;
 }
 
 export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): Promise<AgentCoreRuntime> {
@@ -264,6 +269,13 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
     return cachedModelUsageStore;
   };
   const runtimePathLayout = pathSnapshot.runtimePathLayout;
+  // Tool-surface conformance runner. getToolCatalog is a lazy closure evaluated
+  // at run time, so it reflects the full tool set even though the sweep is
+  // triggered long after this registration point.
+  const toolConformanceRunner = createToolConformanceRunner({
+    getToolCatalog: () => agentLoop.getToolCatalog(),
+    systemDataDir: pathSnapshot.systemDataDir,
+  });
   agentLoop.registerTool(createSelfStatusTool({
     config,
     getCapabilityTier: () => capabilityRuntime.getTier(),
@@ -288,6 +300,7 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
       repoRoot: process.cwd(),
       getModelUsageQuery,
     },
+    runConformance: (trigger) => toolConformanceRunner.run(trigger),
   }), 'core');
 
   const skillsRuntime = wireSkillsRuntime(agentLoop, {
@@ -449,5 +462,6 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
     appCache,
     fatigueBudget: fatigueRuntime.fatigueBudget,
     fatigueLedger: fatigueRuntime.fatigueLedger,
+    toolConformanceRunner,
   };
 }

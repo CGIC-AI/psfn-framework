@@ -332,7 +332,7 @@ describe('createSelfStatusTool', () => {
     });
   });
 
-  it('returns bounded diagnostics from the diagnostics action only', async () => {
+  it('returns bounded diagnostics from the logs action only', async () => {
     const getDiagnosticsSnapshot = vi.fn(async query => ({
       schemaVersion: 1 as const,
       generatedAt: 1_700_000_120_000,
@@ -365,7 +365,7 @@ describe('createSelfStatusTool', () => {
     }));
 
     const payload = parseResult(await tool.execute('self-status-diagnostics', {
-      action: 'diagnostics',
+      action: 'logs',
       windowMs: 60_000,
       limit: 5,
       includeFileLogs: false,
@@ -382,6 +382,29 @@ describe('createSelfStatusTool', () => {
       limit: 5,
       includeFileLogs: false,
     }));
+  });
+
+  it('runs the conformance sweep and returns the aggregated result for action=conformance', async () => {
+    let capturedTrigger: string | undefined;
+    const runtime = {
+      ...makeRuntime(),
+      runConformance: async (trigger: 'manual') => {
+        capturedTrigger = trigger;
+        return { schemaVersion: 1 as const, ranAt: 7, trigger, results: [] };
+      },
+    };
+    const tool = createSelfStatusTool(runtime);
+    const result = await tool.execute('call-1', { action: 'conformance' });
+    expect(capturedTrigger).toBe('manual');
+    expect(parseResult(result)).toEqual({ schemaVersion: 1, ranAt: 7, trigger: 'manual', results: [] });
+    expect((result.details as { isError?: boolean }).isError).toBeFalsy();
+  });
+
+  it('fails closed for action=conformance when the runner is not wired', async () => {
+    const tool = createSelfStatusTool(makeRuntime());
+    const result = await tool.execute('call-1', { action: 'conformance' });
+    expect((result.details as { isError?: boolean }).isError).toBe(true);
+    expect(resultText(result)).toContain('conformance runner is not wired');
   });
 
   it('renders safe tool catalog metadata for prompt/tool surfaces', () => {
@@ -402,6 +425,10 @@ describe('createSelfStatusTool', () => {
         },
         {
           name: 'logs',
+          requiredCapabilities: ['internal.read'],
+        },
+        {
+          name: 'conformance',
           requiredCapabilities: ['internal.read'],
         },
       ]),

@@ -1,6 +1,7 @@
 import { isRecord } from '../../shared/utils/types.js';
 import { existsSync, readFileSync } from 'node:fs';
 import { writeJsonAtomic } from '../../shared/utils/fs.js';
+import { escapeXmlAttribute } from '../../shared/utils/escaping.js';
 
 export const CORE_MEMORY_LABELS = ['persona', 'human', 'goals'] as const;
 export type CoreMemoryLabel = (typeof CORE_MEMORY_LABELS)[number];
@@ -576,14 +577,6 @@ function recordFromSnapshot(snapshot: CoreMemorySnapshot, scope: CoreMemoryScope
 
 function hasAnyBlockContent(snapshot: CoreMemorySnapshot): boolean {
   return CORE_MEMORY_LABELS.some(label => snapshot.blocks[label].content.trim().length > 0);
-}
-
-function escapeXmlAttribute(value: string): string {
-  return value
-    .replace(/&/g, '&amp;')
-    .replace(/"/g, '&quot;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;');
 }
 
 function formatAttributes(attrs: Record<string, string | number | boolean | undefined>): string {

@@ -610,6 +610,12 @@ export function createScheduleTool(options: ScheduleToolOptions): AgentTool<any,
                 ? { wakeConditions: normalizeWakeConditions(params.wake_conditions) }
                 : {}),
             });
+            if (!created) {
+              return textResultWithError(
+                'Pending follow-up was not created because the channel backlog cap is full.',
+                true,
+              );
+            }
             return textResult(JSON.stringify({
               action: 'create_follow_up',
               followUp: mapFollowUp(created),

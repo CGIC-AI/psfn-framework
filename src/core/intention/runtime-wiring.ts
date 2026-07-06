@@ -9,7 +9,7 @@ import type {
 } from './concern-store-port.js';
 import type { ActiveConcernVAD } from './concerns.js';
 import {
-  evaluatePendingFollowUpWakeState,
+  evaluatePendingFollowUpActivationState,
   filterPendingFollowUpsForActiveChannel,
   type PendingFollowUpContextProvider,
   type PendingFollowUp,
@@ -92,7 +92,7 @@ export interface IntentionAppraisalHooks {
   onIntentionFollowUpActivated(input: {
     pendingFollowUpId: string;
     activationReason?: string;
-  }): Promise<void>;
+  }): Promise<boolean>;
 }
 
 export interface IntentionBehavioralPatternHooks {
@@ -218,11 +218,15 @@ export function createIntentionAppraisalHooks(
           ? { wakeConditions: decision.followUp.wakeConditions }
           : {}),
       });
+      if (!followUp) {
+        return undefined;
+      }
       return followUp.id;
     },
     getPendingFollowUpsForResurfacing: async ({
       channelId,
       canonicalContactKey,
+      sourceMessageId,
       isBackgroundTurn,
       now,
       motivationSignals,
@@ -239,7 +243,8 @@ export function createIntentionAppraisalHooks(
         asOf,
       });
       return filterPendingFollowUpsForActiveChannel(pendingFollowUps, channelId)
-        .filter(followUp => evaluatePendingFollowUpWakeState(followUp, {
+        .filter(followUp => followUp.sourceMessageId !== sourceMessageId)
+        .filter(followUp => evaluatePendingFollowUpActivationState(followUp, {
           now,
           isBackgroundTurn,
           ...(motivationSignals ? { motivationSignals } : {}),
@@ -254,9 +259,10 @@ export function createIntentionAppraisalHooks(
       if (!pendingFollowUpStore) {
         throw new Error('PendingFollowUpStorePort is required for follow-up activation');
       }
-      await pendingFollowUpStore.dequeue(pendingFollowUpId, {
+      const activated = await pendingFollowUpStore.dequeue(pendingFollowUpId, {
         ...(activationReason ? { activationReason } : {}),
       });
+      return activated !== null;
     },
   };
 }

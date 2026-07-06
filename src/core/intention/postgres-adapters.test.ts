@@ -369,6 +369,54 @@ class FakeIntentionPool {
     }
 
     if (normalized.startsWith('UPDATE intention_pending_follow_ups')) {
+      if (normalized.includes('SET content = $2')) {
+        const [
+          id,
+          content,
+          priority,
+          timing,
+          channelId,
+          channelType,
+          authorId,
+          authorName,
+          dueAt,
+          contactId,
+          sourceMessageId,
+          contextSummary,
+          wakeConditions,
+        ] = values as [
+          string,
+          string,
+          string,
+          string,
+          string,
+          string,
+          string,
+          string,
+          string,
+          string | null,
+          string | null,
+          string | null,
+          string | null,
+        ];
+        const row = this.pendingFollowUps.get(id);
+        if (!row || row.activated_at !== null) {
+          return { rows: [] };
+        }
+        row.content = content;
+        row.priority = priority;
+        row.timing = timing;
+        row.channel_id = channelId;
+        row.channel_type = channelType;
+        row.author_id = authorId;
+        row.author_name = authorName;
+        row.due_at = dueAt;
+        row.contact_id = contactId;
+        row.source_message_id = sourceMessageId;
+        row.context_summary = contextSummary;
+        row.wake_conditions = wakeConditions;
+        return { rows: [row as Row] };
+      }
       const [id, activatedAt, activationReason] = values as [string, string, string | null];
       const row = this.pendingFollowUps.get(id);
       if (!row || row.activated_at !== null) {
@@ -672,6 +720,54 @@ describe('postgres intention adapters', () => {
     });
     expect(activated?.activatedAt).toBe('2026-03-28T04:00:00.000Z');
     expect(activated?.activationReason).toBe('post_turn_action');
+  });
+
+  it('deduplicates near-identical pending follow-up enqueues through the Postgres port', async () => {
+    const pool = new FakeIntentionPool();
+    let nextId = 0;
+    const ports = createPostgresIntentionPortsFromPool(pool as never, {
+      now: () => new Date('2026-03-28T02:00:00.000Z'),
+      idFactory: () => `follow-up-${++nextId}`,
+    });
+
+    const first = await ports.pendingFollowUpStore.enqueue({
+      content: 'Check in about the medication plan tomorrow.',
+      priority: 'medium',
+      timing: 'soon',
+      channelId: 'api:test',
+      channelType: 'api',
+      authorId: 'system:intention',
+      authorName: 'Whisper',
+      contactId: 'contact-a',
+      sourceMessageId: 'msg-1',
+    });
+    const second = await ports.pendingFollowUpStore.enqueue({
+      content: 'Check in tomorrow about the medication plan.',
+      priority: 'high',
+      timing: 'soon',
+      channelId: 'api:test',
+      channelType: 'api',
+      authorId: 'system:intention',
+      authorName: 'Whisper',
+      contactId: 'contact-a',
+      sourceMessageId: 'msg-2',
+      dueAt: '2026-03-28T04:00:00.000Z',
+    });
+
+    expect(second?.id).toBe(first?.id);
+    await expect(ports.pendingFollowUpStore.list({
+      contactId: 'contact-a',
+      includeExpired: true,
+    })).resolves.toEqual([
+      expect.objectContaining({
+        id: first?.id,
+        content: 'Check in tomorrow about the medication plan.',
+        priority: 'high',
+        dueAt: '2026-03-28T04:00:00.000Z',
+        sourceMessageId: 'msg-2',
+      }),
+    ]);
+    expect(nextId).toBe(1);
   });
 
   it('filters stale pending follow-ups the same way for store and runtime provider access', async () => {

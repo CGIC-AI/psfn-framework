@@ -1,6 +1,7 @@
 import type Database from 'better-sqlite3';
 import { randomUUID } from 'node:crypto';
 import { CHANNEL_TYPES, type ChannelType } from '../../shared/contracts/runtime.js';
+import { createComponentLogger } from '../../shared/logger.js';
 import { channelsShareActiveSessionThread } from '../session/cross-channel-continuity-port.js';
 import type {
   PendingFollowUpQuarantineInput,
@@ -31,6 +32,11 @@ export const PENDING_FOLLOW_UP_WAKE_CONDITIONS = [
   'sustained_negative_mood',
 ] as const;
 export type PendingFollowUpWakeCondition = typeof PENDING_FOLLOW_UP_WAKE_CONDITIONS[number];
+
+export const DEFAULT_PENDING_FOLLOW_UP_BACKLOG_CAP = 5;
+export const DEFAULT_PENDING_FOLLOW_UP_ACTIVATION_DELAY_MS = 5 * 60_000;
+export const PENDING_FOLLOW_UP_DEDUPE_SIMILARITY_THRESHOLD = 0.72;
+export const PENDING_FOLLOW_UP_CAP_SUPERSEDE_SIMILARITY_THRESHOLD = 0.45;
 
 export interface PendingFollowUp {
   id: string;
@@ -98,6 +104,7 @@ export interface PendingFollowUpListOptions {
 export interface PendingFollowUpStoreOptions {
   now?: () => Date;
   idFactory?: () => string;
+  backlogCap?: number;
 }
 
 export interface PendingFollowUpContextProvider {
@@ -131,6 +138,27 @@ export interface PendingFollowUpWakeEvaluation {
   dueAtReached: boolean;
   matchedWakeConditions: PendingFollowUpWakeCondition[];
 }
+
+export interface PendingFollowUpActivationEvaluation extends PendingFollowUpWakeEvaluation {
+  timingDue: boolean;
+}
+
+export type PendingFollowUpEnqueueResolution =
+  | { kind: 'insert'; backlogSize: number }
+  | {
+    kind: 'supersede';
+    existing: PendingFollowUp;
+    similarity: number;
+    backlogSize: number;
+    reason: 'dedupe' | 'backlog_cap';
+  }
+  | {
+    kind: 'drop';
+    closest?: PendingFollowUp;
+    similarity: number;
+    backlogSize: number;
+    reason: 'backlog_cap';
+  };
 
 interface PendingFollowUpRow {
   id: string;
@@ -176,6 +204,7 @@ const PENDING_FOLLOW_UP_STALE_MS_BY_PRIORITY: Record<PendingFollowUpPriority, nu
   medium: 24 * 60 * 60 * 1000,
   high: 48 * 60 * 60 * 1000,
 };
+const log = createComponentLogger('PendingFollowUps');
 
 function compactWhitespace(value: string): string {
   return value.replace(/\s+/g, ' ').trim();
@@ -219,6 +248,11 @@ function normalizeOptionalId(value: string | undefined): string | undefined {
   if (value === undefined) return undefined;
   const normalized = compactWhitespace(value);
   return normalized.length > 0 ? normalized : undefined;
+}
+
+function normalizeOptionalIdOrNull(value: string | null | undefined): string | undefined {
+  if (value === null || value === undefined) return undefined;
+  return normalizeOptionalId(value);
 }
 
 function normalizePriority(value: string): PendingFollowUpPriority {
@@ -299,6 +333,167 @@ function clampListLimit(limit: number | undefined): number {
   const floored = Math.floor(limit);
   if (floored < 1) return 1;
   return Math.min(floored, MAX_LIST_LIMIT);
+}
+
+function normalizeBacklogCap(value: number | undefined): number {
+  if (value === undefined || !Number.isFinite(value)) {
+    return DEFAULT_PENDING_FOLLOW_UP_BACKLOG_CAP;
+  }
+  const floored = Math.floor(value);
+  if (floored < 1) return 1;
+  return floored;
+}
+
+export function resolvePendingFollowUpDueAtForWrite(input: Pick<
+  PendingFollowUpCreateInput,
+  'timing' | 'createdAt' | 'dueAt'
+>, now: Date): string {
+  const timing = normalizeTiming(input.timing);
+  if (input.dueAt) {
+    return normalizeIsoTimestamp(input.dueAt, 'dueAt');
+  }
+  const createdAt = input.createdAt
+    ? normalizeIsoTimestamp(input.createdAt, 'createdAt')
+    : now.toISOString();
+  const createdAtMs = Date.parse(createdAt);
+  const dueAtMs = timing === 'immediate'
+    ? createdAtMs
+    : createdAtMs + DEFAULT_PENDING_FOLLOW_UP_ACTIVATION_DELAY_MS;
+  return new Date(dueAtMs).toISOString();
+}
+
+function normalizeSimilarityText(value: string): string {
+  return compactWhitespace(value.toLowerCase().replace(/[^a-z0-9]+/g, ' '));
+}
+
+function tokenizeSimilarityText(value: string): string[] {
+  const normalized = normalizeSimilarityText(value);
+  if (!normalized) return [];
+  return Array.from(new Set(normalized.split(' ').filter(token => token.length >= 3)));
+}
+
+export function scorePendingFollowUpContentSimilarity(left: string, right: string): number {
+  const normalizedLeft = normalizeSimilarityText(left);
+  const normalizedRight = normalizeSimilarityText(right);
+  if (!normalizedLeft || !normalizedRight) return 0;
+  if (normalizedLeft === normalizedRight) return 1;
+
+  const leftTokens = tokenizeSimilarityText(normalizedLeft);
+  const rightTokens = tokenizeSimilarityText(normalizedRight);
+  if (leftTokens.length === 0 || rightTokens.length === 0) return 0;
+
+  const rightSet = new Set(rightTokens);
+  let intersection = 0;
+  for (const token of leftTokens) {
+    if (rightSet.has(token)) {
+      intersection += 1;
+    }
+  }
+  if (intersection === 0) return 0;
+
+  const dice = (2 * intersection) / (leftTokens.length + rightTokens.length);
+  const containment = intersection / Math.min(leftTokens.length, rightTokens.length);
+  return Math.max(dice, containment);
+}
+
+function normalizeEnqueueInputScope(input: Pick<
+  PendingFollowUpCreateInput,
+  'content' | 'timing' | 'channelId' | 'contactId'
+>): {
+  content: string;
+  timing: PendingFollowUpTiming;
+  channelId: string;
+  contactId?: string;
+} {
+  const content = normalizeRequiredText(input.content, 'content', MAX_TEXT_CHARS);
+  const timing = normalizeTiming(input.timing);
+  const channelId = normalizeRequiredText(input.channelId, 'channelId', MAX_ID_CHARS);
+  const contactId = normalizeOptionalId(input.contactId);
+  return {
+    content,
+    timing,
+    channelId,
+    ...(contactId ? { contactId } : {}),
+  };
+}
+
+export function resolvePendingFollowUpEnqueueResolution(
+  input: Pick<PendingFollowUpCreateInput, 'content' | 'timing' | 'channelId' | 'contactId'>,
+  existingFollowUps: readonly PendingFollowUp[],
+  options: {
+    backlogCap?: number;
+    dedupeThreshold?: number;
+    capSupersedeThreshold?: number;
+  } = {},
+): PendingFollowUpEnqueueResolution {
+  const normalized = normalizeEnqueueInputScope(input);
+  const backlogCap = normalizeBacklogCap(options.backlogCap);
+  const dedupeThreshold = options.dedupeThreshold ?? PENDING_FOLLOW_UP_DEDUPE_SIMILARITY_THRESHOLD;
+  const capSupersedeThreshold = options.capSupersedeThreshold
+    ?? PENDING_FOLLOW_UP_CAP_SUPERSEDE_SIMILARITY_THRESHOLD;
+  const scopedCandidates = existingFollowUps.filter(followUp => (
+    !followUp.activatedAt
+    && followUp.channelId === normalized.channelId
+    && normalizeOptionalIdOrNull(followUp.contactId) === normalized.contactId
+  ));
+  const backlogSize = scopedCandidates.length;
+  const scoredByTiming = scopedCandidates
+    .filter(followUp => followUp.timing === normalized.timing)
+    .map(followUp => ({
+      followUp,
+      similarity: scorePendingFollowUpContentSimilarity(normalized.content, followUp.content),
+    }))
+    .sort((left, right) => (
+      right.similarity - left.similarity
+      || Date.parse(left.followUp.createdAt) - Date.parse(right.followUp.createdAt)
+      || left.followUp.id.localeCompare(right.followUp.id)
+    ));
+  const closestByTiming = scoredByTiming.at(0);
+
+  if (closestByTiming && closestByTiming.similarity >= dedupeThreshold) {
+    return {
+      kind: 'supersede',
+      existing: closestByTiming.followUp,
+      similarity: closestByTiming.similarity,
+      backlogSize,
+      reason: 'dedupe',
+    };
+  }
+
+  if (backlogSize >= backlogCap) {
+    const closest = scopedCandidates
+      .map(followUp => ({
+        followUp,
+        similarity: scorePendingFollowUpContentSimilarity(normalized.content, followUp.content),
+      }))
+      .sort((left, right) => (
+        right.similarity - left.similarity
+        || Date.parse(left.followUp.createdAt) - Date.parse(right.followUp.createdAt)
+        || left.followUp.id.localeCompare(right.followUp.id)
+      ))
+      .at(0);
+    if (closest && closest.similarity >= capSupersedeThreshold) {
+      return {
+        kind: 'supersede',
+        existing: closest.followUp,
+        similarity: closest.similarity,
+        backlogSize,
+        reason: 'backlog_cap',
+      };
+    }
+    return {
+      kind: 'drop',
+      ...(closest ? { closest: closest.followUp } : {}),
+      similarity: closest?.similarity ?? 0,
+      backlogSize,
+      reason: 'backlog_cap',
+    };
+  }
+
+  return {
+    kind: 'insert',
+    backlogSize,
+  };
 }
 
 function normalizeQuarantineReason(value: string): string {
@@ -455,15 +650,30 @@ export function evaluatePendingFollowUpWakeState(
   };
 }
 
+export function evaluatePendingFollowUpActivationState(
+  followUp: Pick<PendingFollowUp, 'timing' | 'dueAt' | 'wakeConditions'>,
+  context: PendingFollowUpWakeContext,
+): PendingFollowUpActivationEvaluation {
+  const wakeState = evaluatePendingFollowUpWakeState(followUp, context);
+  const timingDue = wakeState.dueAtReached || (!followUp.dueAt && followUp.timing === 'immediate');
+  return {
+    ...wakeState,
+    timingDue,
+    eligibleNow: timingDue || wakeState.matchedWakeConditions.length > 0,
+  };
+}
+
 export class PendingFollowUpStore implements PendingFollowUpContextProvider, PendingFollowUpStorePort {
   private readonly db: Database.Database;
   private readonly now: () => Date;
   private readonly idFactory: () => string;
+  private readonly backlogCap: number;
 
   constructor(db: Database.Database, options: PendingFollowUpStoreOptions = {}) {
     this.db = db;
     this.now = options.now ?? (() => new Date());
     this.idFactory = options.idFactory ?? randomUUID;
+    this.backlogCap = normalizeBacklogCap(options.backlogCap);
     this.initializeSchema();
   }
 
@@ -479,7 +689,7 @@ export class PendingFollowUpStore implements PendingFollowUpContextProvider, Pen
     const channelType = normalizeChannelType(input.channelType);
     const authorId = normalizeRequiredText(input.authorId, 'authorId', MAX_ID_CHARS);
     const authorName = normalizeRequiredText(input.authorName, 'authorName', MAX_ID_CHARS);
-    const dueAt = input.dueAt ? normalizeIsoTimestamp(input.dueAt, 'dueAt') : undefined;
+    const dueAt = resolvePendingFollowUpDueAtForWrite({ timing, createdAt, dueAt: input.dueAt }, this.now());
     const contactId = normalizeOptionalId(input.contactId);
     const sourceMessageId = normalizeOptionalId(input.sourceMessageId);
     const contextSummary = normalizeOptionalText(
@@ -531,7 +741,7 @@ export class PendingFollowUpStore implements PendingFollowUpContextProvider, Pen
       channel_type: channelType,
       author_id: authorId,
       author_name: authorName,
-      due_at: dueAt ?? null,
+      due_at: dueAt,
       contact_id: contactId ?? null,
       source_message_id: sourceMessageId ?? null,
       context_summary: contextSummary ?? null,
@@ -541,7 +751,44 @@ export class PendingFollowUpStore implements PendingFollowUpContextProvider, Pen
     return this.requireById(id);
   }
 
-  enqueue(input: PendingFollowUpCreateInput): PendingFollowUp {
+  enqueue(input: PendingFollowUpCreateInput): PendingFollowUp | null {
+    const resolution = resolvePendingFollowUpEnqueueResolution(
+      input,
+      this.list({
+        includeActivated: false,
+        includeExpired: true,
+        limit: MAX_LIST_LIMIT,
+      }),
+      { backlogCap: this.backlogCap },
+    );
+    if (resolution.kind === 'supersede') {
+      const updated = this.update(resolution.existing.id, input);
+      if (!updated) {
+        throw new Error(`Failed to supersede pending follow-up "${resolution.existing.id}" during enqueue`);
+      }
+      log.info('Pending follow-up enqueue superseded existing row', {
+        followUpId: updated.id,
+        reason: resolution.reason,
+        similarity: resolution.similarity,
+        backlogSize: resolution.backlogSize,
+        channelId: updated.channelId,
+        contactId: updated.contactId ?? null,
+        timing: updated.timing,
+      });
+      return updated;
+    }
+    if (resolution.kind === 'drop') {
+      log.info('Pending follow-up enqueue dropped at backlog cap', {
+        reason: resolution.reason,
+        similarity: resolution.similarity,
+        backlogSize: resolution.backlogSize,
+        channelId: input.channelId,
+        contactId: input.contactId ?? null,
+        timing: input.timing,
+        closestFollowUpId: resolution.closest?.id ?? null,
+      });
+      return null;
+    }
     return this.create(input);
   }
 
@@ -554,7 +801,7 @@ export class PendingFollowUpStore implements PendingFollowUpContextProvider, Pen
     const channelType = normalizeChannelType(input.channelType);
     const authorId = normalizeRequiredText(input.authorId, 'authorId', MAX_ID_CHARS);
     const authorName = normalizeRequiredText(input.authorName, 'authorName', MAX_ID_CHARS);
-    const dueAt = input.dueAt ? normalizeIsoTimestamp(input.dueAt, 'dueAt') : undefined;
+    const dueAt = resolvePendingFollowUpDueAtForWrite({ timing, dueAt: input.dueAt }, this.now());
     const contactId = normalizeOptionalId(input.contactId);
     const sourceMessageId = normalizeOptionalId(input.sourceMessageId);
     const contextSummary = normalizeOptionalText(
@@ -591,7 +838,7 @@ export class PendingFollowUpStore implements PendingFollowUpContextProvider, Pen
       channel_type: channelType,
       author_id: authorId,
       author_name: authorName,
-      due_at: dueAt ?? null,
+      due_at: dueAt,
       contact_id: contactId ?? null,
       source_message_id: sourceMessageId ?? null,
       context_summary: contextSummary ?? null,

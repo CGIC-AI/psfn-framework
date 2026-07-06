@@ -45,7 +45,10 @@ import {
   toInferredPostTurnActions,
 } from '../intention/appraisal.js';
 import { MotivationBridge } from '../intention/motivation.js';
-import { isPendingFollowUpExpired } from '../intention/pending-follow-ups.js';
+import {
+  evaluatePendingFollowUpActivationState,
+  isPendingFollowUpExpired,
+} from '../intention/pending-follow-ups.js';
 import { evaluateProactiveOutboundTimeGate } from '../intention/proactive-time-gate.js';
 import { cloneInternalState } from '../self-model/state.js';
 import {
@@ -65,6 +68,7 @@ import type { Scheduler } from './scheduler.js';
 const log = createComponentLogger('HeartbeatPostTurn');
 export const SLEEPTIME_REST_WINDOW_TASK_ID = 'memory.sleeptime.rest-window';
 const SLEEPTIME_REST_WINDOW_POLL_INTERVAL_MS = 5 * 60_000;
+export const INTENTION_FOLLOW_UP_ACTIVATION_MIN_INTERVAL_MS = 5 * 60_000;
 
 interface WireHeartbeatPostTurnRuntimeOptions {
   scheduler: Scheduler;
@@ -92,6 +96,7 @@ export function wireHeartbeatPostTurnRuntime(
   const telemetryEventBus = runtimeOptions.eventBus;
   const deferredToolHandoffPayloads = new Map<string, DeferredToolHandoffPayload>();
   const deferredToolHandoffExecutionState = new Map<string, { activated: boolean; executed: boolean }>();
+  const lastIntentionFollowUpActivationByChannel = new Map<string, number>();
   const shouldUseCompositionalAppraisal = (channelId: string): boolean => (
     evaluateCompositionalPolicyForChannelId({
       policy: runtimeOptions.compositionalPolicy,
@@ -314,6 +319,113 @@ export function wireHeartbeatPostTurnRuntime(
   const hashOutreachContent = (content: string): string => (
     createHash('sha256').update(content).digest('hex')
   );
+
+  const emitIntentionFollowUpGateTelemetry = (
+    phase: 'blocked' | 'activated',
+    detail: Record<string, unknown>,
+  ): void => {
+    if (!telemetryEventBus) {
+      return;
+    }
+    telemetryEventBus.emit('intention.follow_up.activation_gate', {
+      phase,
+      ...detail,
+      timestamp: Date.now(),
+    }).catch((error) => {
+      log.warn('Intention follow-up gate telemetry emit failed', {
+        error: String(error),
+      });
+    });
+  };
+
+  const isIntentionFollowUpActivationBudgetOpen = (
+    channelId: string,
+    nowMs: number,
+  ): boolean => {
+    const lastActivatedAt = lastIntentionFollowUpActivationByChannel.get(channelId);
+    if (
+      lastActivatedAt !== undefined
+      && nowMs - lastActivatedAt < INTENTION_FOLLOW_UP_ACTIVATION_MIN_INTERVAL_MS
+    ) {
+      log.info('Intention follow-up activation blocked by channel budget', {
+        channelId,
+        lastActivatedAt,
+        nowMs,
+        minIntervalMs: INTENTION_FOLLOW_UP_ACTIVATION_MIN_INTERVAL_MS,
+      });
+      emitIntentionFollowUpGateTelemetry('blocked', {
+        reason: 'channel_budget',
+        channelId,
+        lastActivatedAt,
+        nowMs,
+        minIntervalMs: INTENTION_FOLLOW_UP_ACTIVATION_MIN_INTERVAL_MS,
+      });
+      return false;
+    }
+    return true;
+  };
+
+  const resolvePendingFollowUpActivationGate = async (payload: {
+    channelId: string;
+    pendingFollowUpId?: string;
+  }): Promise<boolean> => {
+    if (!payload.pendingFollowUpId) {
+      return true;
+    }
+    const nowMs = Date.now();
+    if (!runtimeOptions.pendingFollowUpStore) {
+      log.warn('Intention follow-up activation blocked because pending store is unavailable', {
+        pendingFollowUpId: payload.pendingFollowUpId,
+        channelId: payload.channelId,
+      });
+      emitIntentionFollowUpGateTelemetry('blocked', {
+        reason: 'pending_store_unavailable',
+        pendingFollowUpId: payload.pendingFollowUpId,
+        channelId: payload.channelId,
+      });
+      return false;
+    }
+    const followUp = await runtimeOptions.pendingFollowUpStore.peek(payload.pendingFollowUpId);
+    if (!followUp || followUp.activatedAt || isPendingFollowUpExpired(followUp, nowMs)) {
+      log.info('Intention follow-up activation blocked by stale pending row', {
+        pendingFollowUpId: payload.pendingFollowUpId,
+        channelId: payload.channelId,
+        missing: !followUp,
+        activatedAt: followUp?.activatedAt ?? null,
+      });
+      emitIntentionFollowUpGateTelemetry('blocked', {
+        reason: 'stale_pending_follow_up',
+        pendingFollowUpId: payload.pendingFollowUpId,
+        channelId: payload.channelId,
+        missing: !followUp,
+        activatedAt: followUp?.activatedAt ?? null,
+      });
+      return false;
+    }
+    const activationState = evaluatePendingFollowUpActivationState(followUp, {
+      now: nowMs,
+      isBackgroundTurn: isBackgroundAppraisalChannel(payload.channelId),
+    });
+    if (!activationState.eligibleNow) {
+      log.info('Intention follow-up activation blocked because timing/wake is not due', {
+        pendingFollowUpId: followUp.id,
+        channelId: payload.channelId,
+        dueAt: followUp.dueAt ?? null,
+        timing: followUp.timing,
+        wakeConditions: followUp.wakeConditions ?? [],
+      });
+      emitIntentionFollowUpGateTelemetry('blocked', {
+        reason: 'not_due',
+        pendingFollowUpId: followUp.id,
+        channelId: payload.channelId,
+        dueAt: followUp.dueAt ?? null,
+        timing: followUp.timing,
+        wakeConditions: followUp.wakeConditions ?? [],
+      });
+      return false;
+    }
+    return true;
+  };
 
   const recordOutreachSessionAudit = (
     action: { id: string; dedupeKey: string; sourceMessageId: string },
@@ -907,15 +1019,48 @@ export function wireHeartbeatPostTurnRuntime(
           if (!payload) {
             throw new Error(`Intention follow-up action "${action.id}" payload is missing required fields`);
           }
+          const nowMs = Date.now();
+          if (!await resolvePendingFollowUpActivationGate(payload)) {
+            return;
+          }
+          if (payload.pendingFollowUpId && !runtimeOptions.onIntentionFollowUpActivated) {
+            log.warn('Intention follow-up activation blocked because activation callback is unavailable', {
+              pendingFollowUpId: payload.pendingFollowUpId,
+              channelId: payload.channelId,
+            });
+            emitIntentionFollowUpGateTelemetry('blocked', {
+              reason: 'activation_callback_unavailable',
+              pendingFollowUpId: payload.pendingFollowUpId,
+              channelId: payload.channelId,
+            });
+            return;
+          }
+          if (!isIntentionFollowUpActivationBudgetOpen(payload.channelId, nowMs)) {
+            return;
+          }
           if (payload.pendingFollowUpId && runtimeOptions.onIntentionFollowUpActivated) {
             const activated = await runtimeOptions.onIntentionFollowUpActivated({
               pendingFollowUpId: payload.pendingFollowUpId,
               activationReason: 'post_turn_action',
             });
             if (activated === false) {
+              log.info('Intention follow-up activation skipped because store activation returned false', {
+                pendingFollowUpId: payload.pendingFollowUpId,
+                channelId: payload.channelId,
+              });
+              emitIntentionFollowUpGateTelemetry('blocked', {
+                reason: 'activation_store_rejected',
+                pendingFollowUpId: payload.pendingFollowUpId,
+                channelId: payload.channelId,
+              });
               return;
             }
           }
+          lastIntentionFollowUpActivationByChannel.set(payload.channelId, nowMs);
+          emitIntentionFollowUpGateTelemetry('activated', {
+            pendingFollowUpId: payload.pendingFollowUpId ?? null,
+            channelId: payload.channelId,
+          });
           agentLoop.followUp?.({
             id: `intention-follow-up:${action.id}`,
             channelId: payload.channelId,

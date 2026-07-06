@@ -1,8 +1,12 @@
 import { randomUUID } from 'node:crypto';
 import type { Pool } from 'pg';
+import { createComponentLogger } from '../../../shared/logger.js';
 import { queryOne, queryRows } from './connection.js';
 import {
+  DEFAULT_PENDING_FOLLOW_UP_BACKLOG_CAP,
   isPendingFollowUpExpired,
+  resolvePendingFollowUpDueAtForWrite,
+  resolvePendingFollowUpEnqueueResolution,
   type PendingFollowUp,
   type PendingFollowUpActivateOptions,
   type PendingFollowUpCreateInput,
@@ -44,6 +48,7 @@ interface PendingFollowUpQuarantineRow {
 
 const MAX_QUARANTINE_REASON_CHARS = 1000;
 const MAX_QUARANTINE_SOURCE_CHARS = 128;
+const log = createComponentLogger('PostgresPendingFollowUps');
 
 function normalizeQuarantineReason(value: string): string {
   const normalized = value.replace(/\s+/g, ' ').trim();
@@ -152,7 +157,7 @@ export class PostgresPendingFollowUpStore implements PendingFollowUpStorePort {
     const channelType = normalizeChannelType(input.channelType);
     const authorId = normalizeRequiredText(input.authorId, 'authorId', MAX_PENDING_ID_CHARS);
     const authorName = normalizeRequiredText(input.authorName, 'authorName', MAX_PENDING_ID_CHARS);
-    const dueAt = input.dueAt ? normalizeIsoTimestamp(input.dueAt, 'dueAt') : undefined;
+    const dueAt = resolvePendingFollowUpDueAtForWrite({ timing, createdAt, dueAt: input.dueAt }, this.now());
     const contactId = normalizeContactId(input.contactId);
     const sourceMessageId = normalizeContactId(input.sourceMessageId);
     const contextSummary = normalizeOptionalText(input.contextSummary, 'contextSummary', MAX_PENDING_SUMMARY_CHARS);
@@ -183,7 +188,7 @@ export class PostgresPendingFollowUpStore implements PendingFollowUpStorePort {
         channelType,
         authorId,
         authorName,
-        dueAt ?? null,
+        dueAt,
         contactId ?? null,
         sourceMessageId ?? null,
         contextSummary ?? null,
@@ -199,7 +204,40 @@ export class PostgresPendingFollowUpStore implements PendingFollowUpStorePort {
     return followUp;
   }
 
-  async enqueue(input: PendingFollowUpCreateInput): Promise<PendingFollowUp> {
+  async enqueue(input: PendingFollowUpCreateInput): Promise<PendingFollowUp | null> {
+    const resolution = resolvePendingFollowUpEnqueueResolution(
+      input,
+      [...this.pendingFollowUpCache.values()],
+      { backlogCap: DEFAULT_PENDING_FOLLOW_UP_BACKLOG_CAP },
+    );
+    if (resolution.kind === 'supersede') {
+      const updated = await this.updateForSupersede(resolution.existing.id, input);
+      if (!updated) {
+        throw new Error(`Failed to supersede pending follow-up "${resolution.existing.id}" during enqueue`);
+      }
+      log.info('Pending follow-up enqueue superseded existing row', {
+        followUpId: updated.id,
+        reason: resolution.reason,
+        similarity: resolution.similarity,
+        backlogSize: resolution.backlogSize,
+        channelId: updated.channelId,
+        contactId: updated.contactId ?? null,
+        timing: updated.timing,
+      });
+      return updated;
+    }
+    if (resolution.kind === 'drop') {
+      log.info('Pending follow-up enqueue dropped at backlog cap', {
+        reason: resolution.reason,
+        similarity: resolution.similarity,
+        backlogSize: resolution.backlogSize,
+        channelId: input.channelId,
+        contactId: input.contactId ?? null,
+        timing: input.timing,
+        closestFollowUpId: resolution.closest?.id ?? null,
+      });
+      return null;
+    }
     return await this.create(input);
   }
 
@@ -373,6 +411,71 @@ export class PostgresPendingFollowUpStore implements PendingFollowUpStorePort {
       params,
     );
     return rows.map(mapQuarantineRow);
+  }
+
+  private async updateForSupersede(
+    id: string,
+    input: PendingFollowUpCreateInput,
+  ): Promise<PendingFollowUp | null> {
+    const normalizedId = normalizeRequiredText(id, 'id', MAX_PENDING_ID_CHARS);
+    const content = normalizeRequiredText(input.content, 'content', MAX_PENDING_TEXT_CHARS);
+    const priority = normalizePendingPriority(input.priority);
+    const timing = normalizeTiming(input.timing);
+    const channelId = normalizeRequiredText(input.channelId, 'channelId', MAX_PENDING_ID_CHARS);
+    const channelType = normalizeChannelType(input.channelType);
+    const authorId = normalizeRequiredText(input.authorId, 'authorId', MAX_PENDING_ID_CHARS);
+    const authorName = normalizeRequiredText(input.authorName, 'authorName', MAX_PENDING_ID_CHARS);
+    const dueAt = resolvePendingFollowUpDueAtForWrite({ timing, dueAt: input.dueAt }, this.now());
+    const contactId = normalizeContactId(input.contactId);
+    const sourceMessageId = normalizeContactId(input.sourceMessageId);
+    const contextSummary = normalizeOptionalText(input.contextSummary, 'contextSummary', MAX_PENDING_SUMMARY_CHARS);
+    const wakeConditions = encodeWakeConditions(input.wakeConditions);
+
+    const row = await queryOne<PendingFollowUpRow>(
+      this.pool,
+      `
+        UPDATE intention_pending_follow_ups
+        SET
+          content = $2,
+          priority = $3,
+          timing = $4,
+          channel_id = $5,
+          channel_type = $6,
+          author_id = $7,
+          author_name = $8,
+          due_at = $9,
+          contact_id = $10,
+          source_message_id = $11,
+          context_summary = $12,
+          wake_conditions = $13
+        WHERE id = $1 AND activated_at IS NULL
+        RETURNING
+          id, content, priority, timing, created_at, channel_id, channel_type,
+          author_id, author_name, due_at, contact_id, source_message_id,
+          context_summary, wake_conditions, activated_at, activation_reason
+      `,
+      [
+        normalizedId,
+        content,
+        priority,
+        timing,
+        channelId,
+        channelType,
+        authorId,
+        authorName,
+        dueAt,
+        contactId ?? null,
+        sourceMessageId ?? null,
+        contextSummary ?? null,
+        wakeConditions,
+      ],
+    );
+    if (!row) {
+      return null;
+    }
+    const followUp = mapPendingFollowUpRow(row);
+    this.pendingFollowUpCache.set(followUp.id, followUp);
+    return followUp;
   }
 
   private async mapRowOrQuarantine(

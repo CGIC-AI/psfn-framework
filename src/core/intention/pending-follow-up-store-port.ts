@@ -28,7 +28,7 @@ export interface PendingFollowUpQuarantineListOptions {
 }
 
 export interface PendingFollowUpStorePort {
-  enqueue(input: PendingFollowUpCreateInput): Awaitable<PendingFollowUp>;
+  enqueue(input: PendingFollowUpCreateInput): Awaitable<PendingFollowUp | null>;
   peek(id: string): Awaitable<PendingFollowUp | null>;
   dequeue(
     id: string,

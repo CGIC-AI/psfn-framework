@@ -221,6 +221,20 @@ if [[ $SKIP_GATE -eq 1 ]]; then
   exit 0
 fi
 
+echo "==> refreshing companion self-management copies (repo checkout + beads)"
+if remote "test -d /mnt/psfn-nvme/psfn-source/.git" 2>/dev/null; then
+  git bundle create "$BUILD_DIR/repo.bundle" HEAD >/dev/null 2>&1
+  scp "$BUILD_DIR/repo.bundle" "${HOST_ALIAS}:/tmp/psfn-repo-refresh.bundle"
+  remote "sudo git -C /mnt/psfn-nvme/psfn-source fetch /tmp/psfn-repo-refresh.bundle HEAD 2>/dev/null     && sudo git -C /mnt/psfn-nvme/psfn-source reset --hard FETCH_HEAD >/dev/null     && sudo chown -R 999:999 /mnt/psfn-nvme/psfn-source && rm -f /tmp/psfn-repo-refresh.bundle"     && echo "    source checkout refreshed to $(git rev-parse --short=8 HEAD)"     || echo "    WARNING: source checkout refresh failed (non-fatal)"
+else
+  echo "    no source checkout on host; skipping repo refresh"
+fi
+if bash "$(dirname "$0")/sync-companion-beads.sh" >/dev/null 2>&1; then
+  echo "    beads round-trip synced"
+else
+  echo "    WARNING: beads sync failed (non-fatal; run scripts/ops/sync-companion-beads.sh manually)"
+fi
+
 echo "==> validation gate"
 GATE_ARGS=(--remote --host "$HOST_ALIAS" --namespace "$NAMESPACE" --smoke)
 if [[ ${#SELECTED[@]} -eq 3 ]]; then

@@ -40,6 +40,13 @@ COPY src/ ./src/
 COPY satellites/ ./satellites/
 COPY admin-ui/ ./admin-ui/
 
+# Contract-surface hash for per-component rollout skew detection: agent and
+# gateway may run different image tags ONLY while this hash matches. The
+# surface is the shared contracts plus the boundary (gateway RPC/policy) layer.
+RUN find src/shared/contracts src/boundary -type f -name '*.ts' ! -name '*.test.ts' \
+      | LC_ALL=C sort | xargs sha256sum | sha256sum | cut -c1-16 > /app/contract-hash.txt \
+    && cat /app/contract-hash.txt
+
 RUN npm run build
 RUN npm run garden:build
 
@@ -71,6 +78,7 @@ COPY --from=production-deps /app/node_modules/ ./node_modules/
 
 COPY --from=postgres-client /opt/postgresql-client/ /opt/postgresql-client/
 COPY --from=build /app/dist/ ./dist/
+COPY --from=build /app/contract-hash.txt ./contract-hash.txt
 COPY --from=build /app/admin-ui/build/ ./admin-ui/build/
 COPY config/*.seed.json ./config/
 COPY config/concern-softening.json ./config/concern-softening.json

@@ -168,6 +168,11 @@ metadata:
     {{- include "psfn.labels" . | nindent 4 }}
 spec:
   replicas: {{ .Values.workloads.agent.replicaCount }}
+  # Recreate guarantees a single live agent instance: a RollingUpdate window
+  # briefly runs two agents against one gateway, risking double-handling of
+  # partner messages. Identity is single-instance by design.
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       {{- include "psfn.componentLabels" (dict "root" . "component" "agent") | nindent 6 }}

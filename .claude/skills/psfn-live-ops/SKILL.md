@@ -72,7 +72,24 @@ fetched by the orchestrator and staged into the scratchpad.
 
 ## 3. Build & deploy contract
 
-Build off-node (emulated arm64; on-Pi builds starve the runtime):
+One command does the whole loop (build → in-image verify → ship → skew-aware
+helm upgrade → gate):
+
+```bash
+npm run ship:kube -- --components agent    # companion-core-only: gateway/garden stay up
+npm run ship:kube -- --components all      # full stack (required when the contract hash changed)
+```
+
+Selective rollouts are contract-hash guarded: the image bakes a hash of
+`src/shared/contracts` + `src/boundary` into `/app/contract-hash.txt`; the
+ship fails closed when a partial rollout would split the agent↔gateway
+contract, and the validation gate independently checks live components agree.
+Agent-only ships avoid the gateway restart entirely (no RPC drop, one
+"I'm back" instead of 2-3). All three app deployments use strategy Recreate —
+the agent too, to guarantee a single live instance.
+
+Manual procedure, if the script cannot be used
+(emulated arm64 off-node; on-Pi builds starve the runtime):
 
 ```bash
 git archive HEAD | tar -x -C <builddir>
@@ -87,12 +104,17 @@ sudo k3s ctr images tag docker.io/library/psfn-framework:<tag> localhost/psfn-fr
 Deploy with the chart **from the same commit** (copy it over if it changed):
 
 ```bash
+# NEVER --reuse-values with a changed chart (nil-pointers on new keys):
+sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml helm get values psfn -n psfn -o yaml > live-values.yaml
 sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml helm upgrade psfn <chartdir> -n psfn \
-  --reuse-values \
+  -f live-values.yaml \
   --set psfnAppImage.tag=0.1.0-kube-<shortsha> \
   --set psfnAppImage.gitCommit=<fullsha> \
   --set psfnAppImage.previousGitCommit=<prev-deployed-sha>
 ```
+
+Per-component tags: `--set workloads.<agent|gateway|garden>.image.tag=<tag>`
+(empty string = follow the shared `psfnAppImage.tag`).
 
 `gitCommit`/`previousGitCommit` feed the companion's `diagnose` "fixes shipped
 in this build" line — always set them. Gateway/garden use strategy Recreate

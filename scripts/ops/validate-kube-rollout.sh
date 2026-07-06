@@ -430,6 +430,45 @@ console.log(`images: ${imageSummaries.join(", ")}`);
 '
 }
 
+check_contract_hash_consistency() {
+  # Per-component image tags are allowed to diverge ONLY while every app pod
+  # carries the same shared-contract hash (baked at image build). Mixed
+  # generations (some images predating the hash file) warn; disagreeing
+  # hashes fail.
+  local deploy hash
+  local -a hashes=()
+  local -a missing=()
+  for deploy in "${APP_DEPLOYS[@]}"; do
+    if hash="$(run_kubectl -n "$NAMESPACE" exec "deploy/${deploy}" -- cat /app/contract-hash.txt 2>/dev/null)"; then
+      hash="$(printf '%s' "$hash" | tr -d '[:space:]')"
+      hashes+=("${deploy}=${hash}")
+    else
+      missing+=("$deploy")
+    fi
+  done
+  if [[ ${#hashes[@]} -eq 0 ]]; then
+    printf 'no app image carries /app/contract-hash.txt (pre-hash generation); skipping
+'
+    return 0
+  fi
+  printf 'contract hashes: %s
+' "${hashes[*]}"
+  if [[ ${#missing[@]} -gt 0 ]]; then
+    printf 'WARNING: components without a contract hash (pre-hash images): %s
+' "${missing[*]}"
+  fi
+  local first="${hashes[0]##*=}" entry
+  for entry in "${hashes[@]}"; do
+    if [[ "${entry##*=}" != "$first" ]]; then
+      printf 'contract hash mismatch across components — per-component tags have split the RPC contract; roll all components to one build
+'
+      return 1
+    fi
+  done
+  printf 'all components agree on contract hash %s
+' "$first"
+}
+
 check_garden_health() {
   local url
   local command
@@ -846,6 +885,7 @@ main() {
 
   run_check "rollout status" check_rollout_status
   run_check "app pods and images" check_app_pods_and_images
+  run_check "contract hash consistency" check_contract_hash_consistency
   run_check "garden health" check_garden_health
   run_check "gateway models" check_gateway_models
   run_check "postgres pgvector and redis" check_postgres_and_redis

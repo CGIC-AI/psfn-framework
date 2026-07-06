@@ -241,190 +241,153 @@ async function runRestartCommandIfRequired(
 }
 
 /**
- * Create the self_restart tool.
+ * Execute the canonical system action=restart behavior.
  * Sends a pre-restart notification, then exits through the configured
  * supervisor/reexec strategy. Unsupported self-managed runtimes fail closed.
  *
  * @param stopFn - async function to cleanly stop the runtime before exit
  */
-export function createRestartTool(
+async function executeRestartAction(
   notifier: LifecycleNotifier,
   stopFn: () => Promise<void>,
-  options: LifecycleToolOptions = {},
-): AgentTool<any> {
+  options: LifecycleToolOptions,
+  params: { reason: string },
+): Promise<AgentToolResult<{ isError?: boolean }>> {
+  const reason = params.reason.trim();
+  if (!reason) {
+    return textResultWithError('Restart blocked: reason is required.', true);
+  }
+  const tier = options.getCapabilityTier?.() ?? 'autonomous';
+  if (options.restartSafeguard) {
+    const decision = options.restartSafeguard.evaluate({
+      toolName: 'self_restart',
+      reason,
+      tier,
+    });
+    if (!decision.allowed) {
+      return textResultWithError(decision.reason, true);
+    }
+  }
+  const restartPlan = resolveLifecycleRestartPlan(options);
+  if (!restartPlan.supported) {
+    return textResultWithError(`Restart blocked: ${restartPlan.reason}`, true);
+  }
+
+  log.info('Self-restart requested', { reason, tier });
+
+  if (options.executionMode === 'deferred') {
+    return textResult('Restart queued. It will run after this turn completes.');
+  }
+
+  // Send pre-restart notification — must complete before we exit
+  await notifier.notifyPreRestart(reason);
+
+  // Schedule clean shutdown + exit after returning the tool result
+  // Use setImmediate so the tool result gets back to the LLM first
+  setImmediate(async () => {
+    try {
+      const restartCommandReady = await runRestartCommandIfRequired(
+        restartPlan,
+        options,
+        notifier,
+        'restart',
+      );
+      if (!restartCommandReady) {
+        return;
+      }
+      await stopFn();
+    } catch (err) {
+      log.error('Error during shutdown', { error: String(err) });
+    }
+    process.exit(restartPlan.exitCode);
+  });
+
   return {
-    name: 'self_restart',
-    description:
-      'Restart yourself. Sends a "brb" message to Discord, cleanly shuts down, ' +
-      'and exits through the configured supervisor or split-wrapper reexec strategy. ' +
-      'Use when you need a fresh start or after configuration changes.',
-    label: 'self_restart',
-    parameters: Type.Object({
-      reason: Type.String({
-        minLength: 1,
-        description: 'Reason for restarting (required, logged to safeguard audit trail).',
-      }),
-    }),
-    execute: async (
-      _toolCallId: string,
-      params: { reason: string },
-      _signal?: AbortSignal,
-    ): Promise<AgentToolResult<{ isError?: boolean }>> => {
-      const reason = params.reason.trim();
-      if (!reason) {
-        return textResultWithError('Restart blocked: reason is required.', true);
-      }
-      const tier = options.getCapabilityTier?.() ?? 'autonomous';
-      if (options.restartSafeguard) {
-        const decision = options.restartSafeguard.evaluate({
-          toolName: 'self_restart',
-          reason,
-          tier,
-        });
-        if (!decision.allowed) {
-          return textResultWithError(decision.reason, true);
-        }
-      }
-      const restartPlan = resolveLifecycleRestartPlan(options);
-      if (!restartPlan.supported) {
-        return textResultWithError(`Restart blocked: ${restartPlan.reason}`, true);
-      }
-
-      log.info('Self-restart requested', { reason, tier });
-
-      if (options.executionMode === 'deferred') {
-        return textResult('Restart queued. It will run after this turn completes.');
-      }
-
-      // Send pre-restart notification — must complete before we exit
-      await notifier.notifyPreRestart(reason);
-
-      // Schedule clean shutdown + exit after returning the tool result
-      // Use setImmediate so the tool result gets back to the LLM first
-      setImmediate(async () => {
-        try {
-          const restartCommandReady = await runRestartCommandIfRequired(
-            restartPlan,
-            options,
-            notifier,
-            'restart',
-          );
-          if (!restartCommandReady) {
-            return;
-          }
-          await stopFn();
-        } catch (err) {
-          log.error('Error during shutdown', { error: String(err) });
-        }
-        process.exit(restartPlan.exitCode);
-      });
-
-      return {
-        content: [{ type: 'text', text: 'Restart initiated. Sending notification and shutting down...' }] satisfies TextContent[],
-        details: {},
-      };
-    },
+    content: [{ type: 'text', text: 'Restart initiated. Sending notification and shutting down...' }] satisfies TextContent[],
+    details: {},
   };
 }
 
 /**
- * Create the self_rebuild tool.
- * Runs `npm run build`, then restarts (same as self_restart but with a build step).
+ * Execute the canonical system action=rebuild behavior.
+ * Runs the configured rebuild command, then restarts (same as restart but with a build step).
  */
-export function createRebuildTool(
+async function executeRebuildAction(
   notifier: LifecycleNotifier,
   stopFn: () => Promise<void>,
-  options: LifecycleToolOptions = {},
-): AgentTool<any> {
+  options: LifecycleToolOptions,
+  params: { reason: string },
+): Promise<AgentToolResult<{ isError?: boolean }>> {
+  const reason = params.reason.trim();
+  if (!reason) {
+    return textResultWithError('Rebuild blocked: reason is required.', true);
+  }
+  const tier = options.getCapabilityTier?.() ?? 'autonomous';
+  if (options.restartSafeguard) {
+    const decision = options.restartSafeguard.evaluate({
+      toolName: 'self_rebuild',
+      reason,
+      tier,
+    });
+    if (!decision.allowed) {
+      return textResultWithError(decision.reason, true);
+    }
+  }
+  const restartPlan = resolveLifecycleRestartPlan(options);
+  if (!restartPlan.supported) {
+    return textResultWithError(`Rebuild blocked: ${restartPlan.reason}`, true);
+  }
+  if (!options.runBuildCommand) {
+    return textResultWithError(
+      'Rebuild blocked: no lifecycle rebuild command is configured; current process was left running.',
+      true,
+    );
+  }
+  const runBuildCommand = options.runBuildCommand;
+  const fullReason = `rebuild: ${reason}`;
+
+  log.info('Self-rebuild requested', { reason, tier });
+
+  if (options.executionMode === 'deferred') {
+    return textResult('Rebuild queued. It will run after this turn completes.');
+  }
+
+  // Send pre-restart notification
+  await notifier.notifyPreRestart(fullReason);
+
+  // Schedule build + shutdown after tool result returns
+  setImmediate(async () => {
+    try {
+      log.info('Running configured rebuild command...');
+      await runBuildCommand();
+      log.info('Build complete, shutting down...');
+    } catch (err) {
+      const errorText = err instanceof Error ? err.message : String(err);
+      log.error('Build failed; aborting restart', { error: errorText });
+      await notifier.notifyShutdown(`rebuild failed: ${errorText.slice(0, 160)}`);
+      return;
+    }
+
+    try {
+      const restartCommandReady = await runRestartCommandIfRequired(
+        restartPlan,
+        options,
+        notifier,
+        'rebuild restart',
+      );
+      if (!restartCommandReady) {
+        return;
+      }
+      await stopFn();
+    } catch (err) {
+      log.error('Error during shutdown', { error: String(err) });
+    }
+    process.exit(restartPlan.exitCode);
+  });
+
   return {
-    name: 'self_rebuild',
-    description:
-      'Rebuild and restart yourself. Runs `npm run build` first, then restarts. ' +
-      'Use after code changes that need recompilation.',
-    label: 'self_rebuild',
-    parameters: Type.Object({
-      reason: Type.String({
-        minLength: 1,
-        description: 'Reason for rebuilding (required, logged to safeguard audit trail).',
-      }),
-    }),
-    execute: async (
-      _toolCallId: string,
-      params: { reason: string },
-      _signal?: AbortSignal,
-    ): Promise<AgentToolResult<{ isError?: boolean }>> => {
-      const reason = params.reason.trim();
-      if (!reason) {
-        return textResultWithError('Rebuild blocked: reason is required.', true);
-      }
-      const tier = options.getCapabilityTier?.() ?? 'autonomous';
-      if (options.restartSafeguard) {
-        const decision = options.restartSafeguard.evaluate({
-          toolName: 'self_rebuild',
-          reason,
-          tier,
-        });
-        if (!decision.allowed) {
-          return textResultWithError(decision.reason, true);
-        }
-      }
-      const restartPlan = resolveLifecycleRestartPlan(options);
-      if (!restartPlan.supported) {
-        return textResultWithError(`Rebuild blocked: ${restartPlan.reason}`, true);
-      }
-      if (!options.runBuildCommand) {
-        return textResultWithError(
-          'Rebuild blocked: no lifecycle rebuild command is configured; current process was left running.',
-          true,
-        );
-      }
-      const runBuildCommand = options.runBuildCommand;
-      const fullReason = `rebuild: ${reason}`;
-
-      log.info('Self-rebuild requested', { reason, tier });
-
-      if (options.executionMode === 'deferred') {
-        return textResult('Rebuild queued. It will run after this turn completes.');
-      }
-
-      // Send pre-restart notification
-      await notifier.notifyPreRestart(fullReason);
-
-      // Schedule build + shutdown after tool result returns
-      setImmediate(async () => {
-        try {
-          log.info('Running configured rebuild command...');
-          await runBuildCommand();
-          log.info('Build complete, shutting down...');
-        } catch (err) {
-          const errorText = err instanceof Error ? err.message : String(err);
-          log.error('Build failed; aborting restart', { error: errorText });
-          await notifier.notifyShutdown(`rebuild failed: ${errorText.slice(0, 160)}`);
-          return;
-        }
-
-        try {
-          const restartCommandReady = await runRestartCommandIfRequired(
-            restartPlan,
-            options,
-            notifier,
-            'rebuild restart',
-          );
-          if (!restartCommandReady) {
-            return;
-          }
-          await stopFn();
-        } catch (err) {
-          log.error('Error during shutdown', { error: String(err) });
-        }
-        process.exit(restartPlan.exitCode);
-      });
-
-      return {
-        content: [{ type: 'text', text: 'Rebuild initiated. Building, then restarting...' }] satisfies TextContent[],
-        details: {},
-      };
-    },
+    content: [{ type: 'text', text: 'Rebuild initiated. Building, then restarting...' }] satisfies TextContent[],
+    details: {},
   };
 }
 
@@ -476,9 +439,9 @@ export function createSystemTool(
       })),
     }),
     execute: async (
-      toolCallId: string,
+      _toolCallId: string,
       params: SystemToolParams = {},
-      signal?: AbortSignal,
+      _signal?: AbortSignal,
     ): Promise<AgentToolResult<{ isError?: boolean }>> => {
       let action: SystemAction;
       try {
@@ -496,20 +459,20 @@ export function createSystemTool(
       }
 
       if (action === 'restart') {
-        const restartTool = createRestartTool(
+        return executeRestartAction(
           options.notifier,
           options.stopFn,
           options,
+          { reason: params.reason ?? '' },
         );
-        return restartTool.execute(toolCallId, { reason: params.reason ?? '' }, signal);
       }
 
-      const rebuildTool = createRebuildTool(
+      return executeRebuildAction(
         options.notifier,
         options.stopFn,
         options,
+        { reason: params.reason ?? '' },
       );
-      return rebuildTool.execute(toolCallId, { reason: params.reason ?? '' }, signal);
     },
   };
 }

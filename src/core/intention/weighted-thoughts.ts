@@ -14,6 +14,7 @@
 // without a separate decay writer.
 
 import type { ChannelType } from '../../shared/contracts/runtime.js';
+import { clampUnit } from '../../shared/utils/numeric.js';
 
 export const THOUGHT_CLASSES = ['time_sensitive', 'standard', 'trivial'] as const;
 export type ThoughtClass = (typeof THOUGHT_CLASSES)[number];
@@ -113,13 +114,6 @@ const LN2 = Math.LN2;
 
 function clampNonNegative(value: number, fallback: number): number {
   return Number.isFinite(value) && value >= 0 ? value : fallback;
-}
-
-function clampUnit(value: number | undefined, fallback: number): number {
-  if (typeof value !== 'number' || !Number.isFinite(value)) return fallback;
-  if (value < 0) return 0;
-  if (value > 1) return 1;
-  return value;
 }
 
 function toIso(nowMs: number): string {

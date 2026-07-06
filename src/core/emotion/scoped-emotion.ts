@@ -4,6 +4,7 @@ import type {
 } from '../session/conversation-scope.js';
 import type { EmotionCarryOverSettings } from '../../system/config/emotion-scoping-config.js';
 import type { EmotionStateSnapshot, VADVector } from './state.js';
+import { clampSigned } from '../../shared/utils/numeric.js';
 
 // ── Scoped emotion primitives (bead E1.5) ──
 //
@@ -37,9 +38,6 @@ import type { EmotionStateSnapshot, VADVector } from './state.js';
 //    different keys (so an unrelated DM sees zero delta);
 //  - group → group: no modifier (rooms are independent).
 
-const CLAMP_MIN = -1;
-const CLAMP_MAX = 1;
-
 export interface EmotionCarryOverModifier {
   /** Signed per-axis VAD nudge captured at switch time (pre-decay). */
   readonly vad: VADVector;
@@ -49,11 +47,6 @@ export interface EmotionCarryOverModifier {
   readonly halfLifeSeconds: number;
   /** Scope key of the group the modifier was carried from (provenance/telemetry). */
   readonly sourceScopeKey: string;
-}
-
-function clampSigned(value: number): number {
-  if (!Number.isFinite(value)) return 0;
-  return Math.max(CLAMP_MIN, Math.min(CLAMP_MAX, value));
 }
 
 function clampMagnitude(value: number, maxMagnitude: number): number {

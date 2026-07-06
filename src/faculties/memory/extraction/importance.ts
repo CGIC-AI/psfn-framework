@@ -1,4 +1,5 @@
 import type { MemoryFormationVAD } from '../types.js';
+import { clampUnit } from '../../../shared/utils/numeric.js';
 import { DEFAULT_EMOTIONAL_INTENSITY_IMPORTANCE_WEIGHT } from './types.js';
 
 export { DEFAULT_EMOTIONAL_INTENSITY_IMPORTANCE_WEIGHT };
@@ -35,9 +36,4 @@ export function applyEmotionalIntensityImportanceMultiplier(
 function signedToUnit(value: number): number {
   if (!Number.isFinite(value)) return 0.5;
   return clampUnit((value + 1) / 2);
-}
-
-function clampUnit(value: number): number {
-  if (!Number.isFinite(value)) return 0;
-  return Math.max(0, Math.min(1, value));
 }

@@ -1,3 +1,5 @@
+import { clampSigned, clampUnit } from '../../../shared/utils/numeric.js';
+
 export const DEFAULT_EMOTIONAL_CONFIDENCE = 0.7;
 export const DEFAULT_SESSION_MOOD_LEARNING_RATE = 0.55;
 export const DEFAULT_CONTACT_EMOTIONAL_TIME_SERIES_LIMIT = 8;
@@ -22,18 +24,8 @@ export interface EmotionalTimeSeriesPoint {
   observedAtMs: number;
 }
 
-function clampUnit(value: number): number {
-  if (!Number.isFinite(value)) return 0;
-  return Math.max(-1, Math.min(1, value));
-}
-
-function clampProbability(value: number): number {
-  if (!Number.isFinite(value)) return DEFAULT_EMOTIONAL_CONFIDENCE;
-  return Math.max(0, Math.min(1, value));
-}
-
 function normalizeConfidence(value: number | undefined): number {
-  return clampProbability(value ?? DEFAULT_EMOTIONAL_CONFIDENCE);
+  return clampUnit(value, DEFAULT_EMOTIONAL_CONFIDENCE);
 }
 
 function normalizeCount(value: number | undefined): number {
@@ -64,7 +56,7 @@ function normalizeTimeSeriesPoint(
   const point = value as Partial<EmotionalTimeSeriesPoint>;
   if (!Number.isFinite(point.valence)) return undefined;
   return {
-    valence: round(clampUnit(point.valence as number)),
+    valence: round(clampSigned(point.valence as number)),
     confidence: round(normalizeConfidence(point.confidence)),
     observedAtMs: normalizeObservedAtMs(point.observedAtMs),
   };
@@ -112,7 +104,7 @@ export function appendEmotionalObservationToTimeSeries(
   limit = DEFAULT_CONTACT_EMOTIONAL_TIME_SERIES_LIMIT,
 ): EmotionalTimeSeriesPoint[] {
   const nextPoint: EmotionalTimeSeriesPoint = {
-    valence: round(clampUnit(observation.valence)),
+    valence: round(clampSigned(observation.valence)),
     confidence: round(normalizeConfidence(observation.confidence)),
     observedAtMs: normalizeObservedAtMs(observation.observedAtMs),
   };
@@ -147,15 +139,15 @@ export function parseMoodSnapshot(
   baseline: Record<string, number> | undefined,
 ): EmotionalSnapshot {
   const baselineRecord = baseline ?? {};
-  const baselineValence = clampUnit(
+  const baselineValence = clampSigned(
     baselineRecord.valenceBaseline,
   );
-  const moodValence = clampUnit(
+  const moodValence = clampSigned(
     baselineRecord.moodValence,
   );
   const moodDrift = Number.isFinite(baselineRecord.moodDrift)
-    ? clampUnit(baselineRecord.moodDrift)
-    : clampUnit(moodValence - baselineValence);
+    ? clampSigned(baselineRecord.moodDrift)
+    : clampSigned(moodValence - baselineValence);
   const moodSamples = normalizeCount(baselineRecord.moodSamples);
   const lastMoodUpdateEpochMs = Number.isFinite(baselineRecord.lastMoodUpdateEpochMs)
     ? Math.max(0, Math.floor(baselineRecord.lastMoodUpdateEpochMs))
@@ -183,8 +175,8 @@ export function computeUpdatedEmotionalBaseline(
 ): Record<string, number> {
   const baselineRecord = { ...(baseline ?? {}) };
   const snapshot = parseMoodSnapshot(baselineRecord);
-  const observedValence = clampUnit(observation.valence);
-  const confidence = clampProbability(observation.confidence ?? DEFAULT_EMOTIONAL_CONFIDENCE);
+  const observedValence = clampSigned(observation.valence);
+  const confidence = clampUnit(observation.confidence, DEFAULT_EMOTIONAL_CONFIDENCE);
   const confidenceWeight = 0.5 + (confidence * 0.5);
   const baselineLearningRate = resolveEmotionalBaselineLearningRate(snapshot.moodSamples) * confidenceWeight;
   const moodLearningRate = DEFAULT_SESSION_MOOD_LEARNING_RATE * confidenceWeight;

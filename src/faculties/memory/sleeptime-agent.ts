@@ -25,6 +25,7 @@ import {
   evaluateDeterministicGate,
   type DeterministicGateDefinition,
 } from '../../shared/gating/deterministic-gate.js';
+import { clampSigned, clampUnit } from '../../shared/utils/numeric.js';
 import type {
   CoreMemoryStorePort,
   MemoryMaintenanceDiagnostics,
@@ -182,20 +183,6 @@ function normalizePositiveInteger(value: number | undefined, fallback: number): 
   }
   const normalized = Math.floor(value);
   return normalized > 0 ? normalized : fallback;
-}
-
-function clampUnit(value: unknown, fallback: number): number {
-  if (typeof value !== 'number' || !Number.isFinite(value)) {
-    return fallback;
-  }
-  return Math.max(0, Math.min(1, value));
-}
-
-function clampSigned(value: unknown, fallback: number): number {
-  if (typeof value !== 'number' || !Number.isFinite(value)) {
-    return fallback;
-  }
-  return Math.max(-1, Math.min(1, value));
 }
 
 function normalizeText(raw: unknown): string {

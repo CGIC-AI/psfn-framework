@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { clampSigned, clampUnit } from '../../shared/utils/numeric.js';
 import type { SensitivityLevel, MemoryType } from '../memory/types.js';
 import {
   VALID_SENSITIVITY_LEVELS,
@@ -177,16 +178,6 @@ export function parseShardMemoryTags(rawTags: unknown): string[] {
     .filter(Boolean);
 }
 
-function clampUnit(value: unknown): number | undefined {
-  if (typeof value !== 'number' || !Number.isFinite(value)) return undefined;
-  return Math.max(0, Math.min(1, value));
-}
-
-function clampSigned(value: unknown): number | undefined {
-  if (typeof value !== 'number' || !Number.isFinite(value)) return undefined;
-  return Math.max(-1, Math.min(1, value));
-}
-
 function normalizeShardMemorySensitivity(value: unknown): SensitivityLevel | undefined {
   if (typeof value !== 'string') return undefined;
   const normalized = value.trim().toLowerCase() as SensitivityLevel;
@@ -284,9 +275,9 @@ export function resolveStagedShardMemoryOutputs(
       candidate: {
         text,
         type: memoryType,
-        importance: clampUnit(record.importance),
-        emotionalValence: clampSigned(record.emotional_valence),
-        confidence: clampUnit(record.confidence),
+        importance: clampUnit(record.importance, undefined),
+        emotionalValence: clampSigned(record.emotional_valence, undefined),
+        confidence: clampUnit(record.confidence, undefined),
         tags: candidateTags,
         sensitivity,
       },
@@ -345,9 +336,9 @@ export function resolveStagedShardMemoryOutputs(
         candidate: {
           text,
           type: memoryType,
-          importance: clampUnit(entry.importance),
-          emotionalValence: clampSigned(entry.emotional_valence),
-          confidence: clampUnit(entry.confidence),
+          importance: clampUnit(entry.importance, undefined),
+          emotionalValence: clampSigned(entry.emotional_valence, undefined),
+          confidence: clampUnit(entry.confidence, undefined),
           tags: candidateTags,
           sensitivity,
         },

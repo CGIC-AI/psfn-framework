@@ -1,4 +1,5 @@
 import { isRecord } from '../../shared/utils/types.js';
+import { clampUnit } from '../../shared/utils/numeric.js';
 import { sleep } from '../../shared/utils/timing.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type { TurnID } from '../../shared/contracts/runtime.js';
@@ -852,11 +853,6 @@ function normalizeTaggedContent(content: string): string {
     return normalized;
   }
   return `${normalized.slice(0, MAX_PRESERVED_SAFETY_TAG_CONTENT_CHARS - 3)}...`;
-}
-
-function clampUnit(value: number): number {
-  if (!Number.isFinite(value)) return 0;
-  return Math.max(0, Math.min(1, value));
 }
 
 export function resolveEmotionalSalienceThreshold(config: SubstrateConfig): number {

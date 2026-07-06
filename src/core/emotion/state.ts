@@ -1,3 +1,5 @@
+import { clampSigned, clampUnit } from '../../shared/utils/numeric.js';
+
 export interface VADVector {
   valence: number;
   arousal: number;
@@ -213,16 +215,6 @@ function positiveOr(value: number | undefined, fallback: number): number {
 function alphaOr(value: number | undefined, fallback: number): number {
   if (!Number.isFinite(value)) return fallback;
   return clampUnit(value as number);
-}
-
-function clampSigned(value: number): number {
-  if (!Number.isFinite(value)) return 0;
-  return Math.max(-1, Math.min(1, value));
-}
-
-function clampUnit(value: number): number {
-  if (!Number.isFinite(value)) return 0;
-  return Math.max(0, Math.min(1, value));
 }
 
 function decayFactor(halfLifeSeconds: number, elapsedSeconds: number): number {

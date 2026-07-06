@@ -1,4 +1,5 @@
 import { isObjectRecord as isRecord } from '../../shared/utils/types.js';
+import { clampUnit } from '../../shared/utils/numeric.js';
 import { createRequire } from 'node:module';
 import type { EmotionObservation, VADVector } from './state.js';
 
@@ -500,9 +501,4 @@ function isSherpaModuleMissing(error: unknown): boolean {
   const code = typeof error.code === 'string' ? error.code : '';
   const message = typeof error.message === 'string' ? error.message : '';
   return code === 'MODULE_NOT_FOUND' && message.includes('sherpa-onnx-node');
-}
-
-function clampUnit(value: number): number {
-  if (!Number.isFinite(value)) return 0;
-  return Math.max(0, Math.min(1, value));
 }

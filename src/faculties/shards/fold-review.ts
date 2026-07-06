@@ -1,4 +1,5 @@
 import { isRecord } from '../../shared/utils/types.js';
+import { clampSigned, clampUnit } from '../../shared/utils/numeric.js';
 import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import type { SensitivityLevel, MemoryType, MemoryProvenance } from '../memory/types.js';
@@ -106,17 +107,6 @@ export interface ShardFoldReviewPort {
   getFoldReview(shardId: string): Promise<ShardFoldReviewRecord | null>;
   resolveFoldReview(params: ShardFoldReviewResolveParams): Promise<ShardFoldReviewRecord | null>;
 }
-
-function clampUnit(value: unknown): number | undefined {
-  if (typeof value !== 'number' || !Number.isFinite(value)) return undefined;
-  return Math.max(0, Math.min(1, value));
-}
-
-function clampSigned(value: unknown): number | undefined {
-  if (typeof value !== 'number' || !Number.isFinite(value)) return undefined;
-  return Math.max(-1, Math.min(1, value));
-}
-
 
 function cloneTaggedOutput(output: ShardTaggedOutput): ShardTaggedOutput {
   return {
@@ -420,9 +410,9 @@ export class ShardFoldReviewController implements ShardFoldReviewPort {
         candidate: {
           text: output.candidate.text,
           type: output.candidate.type,
-          importance: clampUnit(output.candidate.importance),
-          emotionalValence: clampSigned(output.candidate.emotionalValence),
-          confidence: clampUnit(output.candidate.confidence),
+          importance: clampUnit(output.candidate.importance, undefined),
+          emotionalValence: clampSigned(output.candidate.emotionalValence, undefined),
+          confidence: clampUnit(output.candidate.confidence, undefined),
           tags: [...output.candidate.tags],
           sensitivity: output.candidate.sensitivity,
         },

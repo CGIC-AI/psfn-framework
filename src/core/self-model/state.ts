@@ -1,4 +1,5 @@
 import { isRecord } from '../../shared/utils/types.js';
+import { clampUnit } from '../../shared/utils/numeric.js';
 import { createHash } from 'node:crypto';
 import type { EmotionalSnapshot } from '../contacts/store/emotional-baseline.js';
 import { normalizeAcacSnapshot, type AcacSnapshot } from '../emotion/acac.js';
@@ -1149,13 +1150,6 @@ function parseNonNegativeFinite(value: unknown, fieldName: string): number {
     throw new Error(`InternalState field "${fieldName}" must be a finite number >= 0`);
   }
   return roundDecimal(value);
-}
-
-function clampUnit(value: number): number {
-  if (!Number.isFinite(value)) return 0;
-  if (value < 0) return 0;
-  if (value > 1) return 1;
-  return value;
 }
 
 function roundDecimal(value: number, precision = 4): number {

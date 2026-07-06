@@ -1,4 +1,5 @@
 import type { LLMProviderPort } from '../../core/agent/contracts.js';
+import { clampUnit as clampScore01 } from '../../shared/utils/numeric.js';
 
 export const RETRIEVAL_COMPOSITION_BATCH_SIZE = 4;
 export const RETRIEVAL_COMPOSITION_MAX_CANDIDATES = 12;
@@ -56,13 +57,6 @@ export async function composeRetrievalRanking(options: {
     relevanceById,
     finalOrder,
   };
-}
-
-function clampScore01(value: number): number {
-  if (!Number.isFinite(value)) return 0;
-  if (value <= 0) return 0;
-  if (value >= 1) return 1;
-  return value;
 }
 
 const STOPWORDS = new Set([

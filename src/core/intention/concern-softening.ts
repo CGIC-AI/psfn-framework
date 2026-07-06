@@ -9,6 +9,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { isRecord } from '../../shared/utils/types.js';
+import { toErrorMessage } from '../../shared/utils/errors.js';
 
 export const CONCERN_SOFTENING_CONFIG_FILE_NAME = 'concern-softening.json';
 
@@ -26,6 +27,15 @@ export interface ConcernSofteningConfig {
   maxTextChars: number;
   /** Rewrite rules applied in order to whitespace-compacted concern text. */
   rewriteRules: ConcernSofteningRule[];
+}
+
+export interface ConcernSofteningConfigLoadOptions {
+  configDir?: string;
+}
+
+export interface ConcernSofteningStartupValidationResult {
+  ok: boolean;
+  errors: string[];
 }
 
 let concernSofteningConfigCache: ConcernSofteningConfig | null = null;
@@ -80,13 +90,44 @@ export function parseConcernSofteningConfig(value: unknown, sourcePath: string):
   };
 }
 
-function readConcernSofteningConfig(): ConcernSofteningConfig {
-  const configDir = process.env.CONFIG_DIR?.trim() || join(process.cwd(), 'config');
-  const configPath = join(configDir, CONCERN_SOFTENING_CONFIG_FILE_NAME);
+function resolveConcernSofteningConfigPath(options: ConcernSofteningConfigLoadOptions = {}): string {
+  const configDir = options.configDir?.trim() || process.env.CONFIG_DIR?.trim() || join(process.cwd(), 'config');
+  return join(configDir, CONCERN_SOFTENING_CONFIG_FILE_NAME);
+}
+
+export function loadConcernSofteningConfig(
+  options: ConcernSofteningConfigLoadOptions = {},
+): ConcernSofteningConfig {
+  const configPath = resolveConcernSofteningConfigPath(options);
   return parseConcernSofteningConfig(
     JSON.parse(readFileSync(configPath, 'utf-8')) as unknown,
     configPath,
   );
+}
+
+export function verifyConcernSofteningStartupConfig(
+  options: ConcernSofteningConfigLoadOptions = {},
+): ConcernSofteningStartupValidationResult {
+  const configPath = resolveConcernSofteningConfigPath(options);
+  try {
+    loadConcernSofteningConfig(options);
+  } catch (error) {
+    return {
+      ok: false,
+      errors: [
+        `concern-softening static config validation failed at ${configPath}: ${toErrorMessage(error)}`,
+      ],
+    };
+  }
+
+  return {
+    ok: true,
+    errors: [],
+  };
+}
+
+function readConcernSofteningConfig(): ConcernSofteningConfig {
+  return loadConcernSofteningConfig();
 }
 
 /** Load (and cache) the operator-tunable concern softening rules. Fail closed. */

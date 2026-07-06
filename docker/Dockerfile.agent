@@ -67,6 +67,7 @@ COPY --from=postgres-client /opt/postgresql-client/ /opt/postgresql-client/
 COPY --from=build /app/dist/ ./dist/
 COPY --from=build /app/admin-ui/build/ ./admin-ui/build/
 COPY config/*.seed.json ./config/
+COPY config/concern-softening.json ./config/concern-softening.json
 COPY scripts/ops/ ./scripts/ops/
 
 RUN git init /app \

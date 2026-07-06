@@ -177,6 +177,36 @@ describe('resolveStartupPreflightBundle', () => {
     expect(config.maintenanceIntervalMs).toBe(123_000);
   });
 
+  it('fails agent startup when the static concern-softening config is missing', () => {
+    const rootDir = mkdtempSync(join(tmpdir(), 'psfn-startup-preflight-static-config-'));
+    const systemDataDir = join(rootDir, 'system-data');
+    const companionDataDir = join(rootDir, 'companion-data');
+    const legacyDataDir = join(rootDir, 'legacy-data-empty');
+    const configDir = join(rootDir, 'config');
+    mkdirSync(systemDataDir, { recursive: true });
+    mkdirSync(companionDataDir, { recursive: true });
+    mkdirSync(legacyDataDir, { recursive: true });
+    mkdirSync(configDir, { recursive: true });
+    tempDirs.push(rootDir);
+    for (const ownerFile of requiredOwnerFiles) {
+      copyOwnerExample(systemDataDir, ownerFile);
+    }
+    saveSettings(systemDataDir, {});
+    saveSchedulerConfig(systemDataDir, loadSchedulerSeedDefaults());
+
+    const config = makeStartupHydrationConfig(systemDataDir, companionDataDir);
+
+    expect(() => resolveStartupPreflightBundle(config, {
+      entrypoint: RUNTIME_MODE.GATEWAY_AGENT,
+      env: {
+        CONFIG_DIR: configDir,
+        PSFN_RUNTIME_LAYOUT_MODE: 'continuous',
+        DATA_DIR: legacyDataDir,
+      },
+      logger: { warn: vi.fn() },
+    })).toThrow(/Static startup config validation failed:[\s\S]*concern-softening\.json[\s\S]*ENOENT/);
+  });
+
   it('requires explicit WORKSPACE_PATH for production startup preflight', () => {
     const rootDir = mkdtempSync(join(tmpdir(), 'psfn-startup-preflight-production-'));
     const systemDataDir = join(rootDir, 'system-data');

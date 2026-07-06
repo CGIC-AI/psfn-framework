@@ -31,6 +31,7 @@ import type { EmotionAppraisalEntry } from '../../emotion/appraisal.js';
 import type { ActiveConcernContextProvider } from '../../intention/concern-store-port.js';
 import {
   buildActiveConcernsRuntimeData,
+  type ActiveConcern,
   type ActiveConcernRuntimeData,
 } from '../../intention/concerns.js';
 import type { BehavioralPatternContextProvider } from '../../intention/patterns.js';
@@ -430,16 +431,18 @@ export function resolveActiveConcernsRuntimeData(input: {
 }): ActiveConcernRuntimeData | undefined {
   if (!input.activeConcernProvider) return undefined;
 
+  let concerns: readonly ActiveConcern[];
   try {
-    const concerns = input.activeConcernProvider.getActiveConcerns(input.canonicalContactKey);
-    if (concerns.length === 0) return undefined;
-    return buildActiveConcernsRuntimeData(concerns);
+    concerns = input.activeConcernProvider.getActiveConcerns(input.canonicalContactKey);
   } catch (error) {
     input.logger.warn('Active concerns context injection skipped due to provider error', {
       error: toErrorMessage(error),
     });
     return undefined;
   }
+
+  if (concerns.length === 0) return undefined;
+  return buildActiveConcernsRuntimeData(concerns);
 }
 
 export function buildMetacognitiveNotesContextBlock(

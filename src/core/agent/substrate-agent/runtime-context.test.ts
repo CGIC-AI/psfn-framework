@@ -1,4 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { DEFAULT_COMPANION_ID } from '../../identity/companion-naming.js';
 import { injectPromptRuntimeTokens, resolvePromptMacroManifestEntry } from '../../identity/prompt-runtime.js';
 import { TurnPromptVariableNamespace } from '../../identity/prompt-variable-namespace.js';
@@ -20,6 +23,7 @@ import {
   buildScratchpadContextBlock,
   collectContinuityFallbackKeys,
   getPersonaAdaptation,
+  resolveActiveConcernsRuntimeData,
   resolveAuthorContext,
   resolveIdentityChannel,
 } from './runtime-context.js';
@@ -30,8 +34,23 @@ import {
 import { makeTestFatiguePolicyConfig } from '../../../test-support/charge-policy.js';
 import { classifyChannelDisclosure } from '../../../system/trust/policy.js';
 import { normalizeChannelPrivacy } from '../../../system/trust/context-envelope.js';
+import {
+  resetConcernSofteningConfigCacheForTests,
+} from '../../intention/concern-softening.js';
+
+const originalConfigDir = process.env.CONFIG_DIR;
+const tempConfigDirs: string[] = [];
 
 afterEach(() => {
+  for (const dir of tempConfigDirs.splice(0)) {
+    rmSync(dir, { recursive: true, force: true });
+  }
+  if (originalConfigDir === undefined) {
+    delete process.env.CONFIG_DIR;
+  } else {
+    process.env.CONFIG_DIR = originalConfigDir;
+  }
+  resetConcernSofteningConfigCacheForTests();
   resetRunChargeRollingWindowForTests();
 });
 
@@ -170,6 +189,23 @@ const TEST_CHARGE_POLICY = {
   },
   fatigue: makeTestFatiguePolicyConfig(),
 };
+
+function makeRuntimeContextConcern(text = 'Check the missing concern config path.') {
+  return {
+    id: 'concern-config-1',
+    text,
+    priority: 'high' as const,
+    source: 'agent' as const,
+    status: 'active' as const,
+    createdAt: '2026-02-01T10:00:00.000Z',
+    expiresAt: '2026-02-01T11:00:00.000Z',
+    salience: 0.5,
+    sensitivity: 'personal' as const,
+    owner: 'companion' as const,
+    evidenceRefs: [],
+    resolutionEvidenceRefs: [],
+  };
+}
 
 function healthySubsystem(meta: Record<string, unknown> = { checkLatencyMs: 8 }): ApiHealthSubsystemStatus {
   return {
@@ -343,6 +379,44 @@ function buildMinimalRuntimeContextInput() {
     formatTopEmotions: () => '',
   };
 }
+
+describe('active concerns runtime data resolution', () => {
+  it('still skips active-concern provider failures without crashing a turn', () => {
+    const logger = { warn: vi.fn(), debug: vi.fn() };
+    const result = resolveActiveConcernsRuntimeData({
+      activeConcernProvider: {
+        getActiveConcerns: () => {
+          throw new Error('active concern store unavailable');
+        },
+      },
+      canonicalContactKey: 'contact-alex',
+      logger,
+    });
+
+    expect(result).toBeUndefined();
+    expect(logger.warn).toHaveBeenCalledWith(
+      'Active concerns context injection skipped due to provider error',
+      { error: 'active concern store unavailable' },
+    );
+  });
+
+  it('does not swallow static concern-softening config load failures', () => {
+    const missingConfigDir = mkdtempSync(join(tmpdir(), 'psfn-runtime-context-missing-config-'));
+    tempConfigDirs.push(missingConfigDir);
+    process.env.CONFIG_DIR = missingConfigDir;
+    resetConcernSofteningConfigCacheForTests();
+    const logger = { warn: vi.fn(), debug: vi.fn() };
+
+    expect(() => resolveActiveConcernsRuntimeData({
+      activeConcernProvider: {
+        getActiveConcerns: () => [makeRuntimeContextConcern()],
+      },
+      canonicalContactKey: 'contact-alex',
+      logger,
+    })).toThrow(/concern-softening\.json|ENOENT/);
+    expect(logger.warn).not.toHaveBeenCalled();
+  });
+});
 
 describe('runtime subject identity', () => {
   it('resolves internal reflection turns to the companion subject instead of the scheduler', async () => {

@@ -51,10 +51,36 @@ export function validateObserverEvalSidecarStartupConfig(
     );
   }
 
-  if (adapterKind === 'emosim' && !sidecar.adapter.emosimRoot?.trim()) {
-    throw new Error(
-      'observerEvalSidecar.adapter.emosimRoot is required when enabled sidecar uses adapter.kind=emosim',
-    );
+  if (adapterKind === 'emosim_server') {
+    const serverUrl = sidecar.adapter.serverUrl?.trim();
+    if (!serverUrl) {
+      throw new Error(
+        'observerEvalSidecar.adapter.serverUrl is required when enabled sidecar uses adapter.kind=emosim_server',
+      );
+    }
+    let parsed: URL;
+    try {
+      parsed = new URL(serverUrl);
+    } catch {
+      throw new Error(
+        `observerEvalSidecar.adapter.serverUrl (${serverUrl}) must be an absolute http(s) URL`,
+      );
+    }
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+      throw new Error(
+        `observerEvalSidecar.adapter.serverUrl (${serverUrl}) must use http or https`,
+      );
+    }
+    if (!sidecar.adapter.sessionLabel?.trim()) {
+      throw new Error(
+        'observerEvalSidecar.adapter.sessionLabel is required when enabled sidecar uses adapter.kind=emosim_server',
+      );
+    }
+    if (!sidecar.adapter.agentName?.trim()) {
+      throw new Error(
+        'observerEvalSidecar.adapter.agentName is required when enabled sidecar uses adapter.kind=emosim_server',
+      );
+    }
   }
 
   if (sidecar.levers?.enabled && !sidecar.persistence.enabled) {

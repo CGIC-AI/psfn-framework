@@ -229,6 +229,18 @@ function optionalNonEmptyString(value: unknown, fieldPath: string): string | und
   return expectNonEmptyString(value, fieldPath);
 }
 
+function assertHttpUrl(value: string, fieldPath: string): void {
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    throw new Error(`Invalid settings at ${fieldPath}: expected an absolute http(s) URL`);
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    throw new Error(`Invalid settings at ${fieldPath}: expected an http(s) URL`);
+  }
+}
+
 function expectEnumValue<T extends string>(
   value: unknown,
   fieldPath: string,
@@ -375,28 +387,48 @@ function normalizeObserverEvalSidecarSettings(
     OBSERVER_EVAL_SIDECAR_ADAPTER_KIND_SET,
     `one of: ${OBSERVER_EVAL_SIDECAR_ADAPTER_KINDS.join(', ')}`,
   );
-  const emosimRoot = optionalNonEmptyString(adapter.emosimRoot, `${fieldPath}.adapter.emosimRoot`);
-  const pythonExecutable = optionalNonEmptyString(
-    adapter.pythonExecutable,
-    `${fieldPath}.adapter.pythonExecutable`,
+  for (const removedKey of ['emosimRoot', 'pythonExecutable', 'deterministicSeed'] as const) {
+    if (removedKey in adapter) {
+      throw new Error(
+        `Invalid settings at ${fieldPath}.adapter.${removedKey}: the spawn-per-call emosim adapter was removed; `
+        + 'use adapter.kind=emosim_server with adapter.serverUrl instead',
+      );
+    }
+  }
+  const serverUrl = optionalNonEmptyString(adapter.serverUrl, `${fieldPath}.adapter.serverUrl`);
+  const sessionLabel = optionalNonEmptyString(
+    adapter.sessionLabel,
+    `${fieldPath}.adapter.sessionLabel`,
   );
-  const deterministicSeed = optionalNonEmptyString(
-    adapter.deterministicSeed,
-    `${fieldPath}.adapter.deterministicSeed`,
-  );
+  const agentName = optionalNonEmptyString(adapter.agentName, `${fieldPath}.adapter.agentName`);
   const adapterTimeoutMs = adapter.timeoutMs === undefined
     ? undefined
     : expectIntegerInRange(adapter.timeoutMs, `${fieldPath}.adapter.timeoutMs`, 1, 600_000);
 
+  if (serverUrl !== undefined) {
+    assertHttpUrl(serverUrl, `${fieldPath}.adapter.serverUrl`);
+  }
   if (enabled && adapterKind === 'disabled') {
     throw new Error(
       `Invalid settings at ${fieldPath}.adapter.kind: enabled sidecar requires a non-disabled adapter`,
     );
   }
-  if (enabled && adapterKind === 'emosim' && !emosimRoot) {
-    throw new Error(
-      `Invalid settings at ${fieldPath}.adapter.emosimRoot: required when enabled sidecar uses adapter.kind=emosim`,
-    );
+  if (enabled && adapterKind === 'emosim_server') {
+    if (!serverUrl) {
+      throw new Error(
+        `Invalid settings at ${fieldPath}.adapter.serverUrl: required when enabled sidecar uses adapter.kind=emosim_server`,
+      );
+    }
+    if (!sessionLabel) {
+      throw new Error(
+        `Invalid settings at ${fieldPath}.adapter.sessionLabel: required when enabled sidecar uses adapter.kind=emosim_server`,
+      );
+    }
+    if (!agentName) {
+      throw new Error(
+        `Invalid settings at ${fieldPath}.adapter.agentName: required when enabled sidecar uses adapter.kind=emosim_server`,
+      );
+    }
   }
 
   const persistenceEnabled = expectBoolean(
@@ -458,10 +490,10 @@ function normalizeObserverEvalSidecarSettings(
     },
     adapter: {
       kind: adapterKind,
-      ...(emosimRoot ? { emosimRoot } : {}),
-      ...(pythonExecutable ? { pythonExecutable } : {}),
+      ...(serverUrl ? { serverUrl } : {}),
+      ...(sessionLabel ? { sessionLabel } : {}),
+      ...(agentName ? { agentName } : {}),
       ...(adapterTimeoutMs !== undefined ? { timeoutMs: adapterTimeoutMs } : {}),
-      ...(deterministicSeed ? { deterministicSeed } : {}),
       includeWorldState: adapter.includeWorldState === undefined
         ? defaults.adapter.includeWorldState
         : expectBoolean(adapter.includeWorldState, `${fieldPath}.adapter.includeWorldState`),

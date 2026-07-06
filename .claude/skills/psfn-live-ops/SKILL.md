@@ -88,6 +88,23 @@ Agent-only ships avoid the gateway restart entirely (no RPC drop, one
 "I'm back" instead of 2-3). All three app deployments use strategy Recreate —
 the agent too, to guarantee a single live instance.
 
+The observer-eval engine is its own component and image:
+
+```bash
+npm run ship:kube -- --components emosim   # emo_sim engine only (app pods untouched)
+```
+
+It builds `localhost/psfn-emosim` from `docker/Dockerfile.emosim` with a
+clean `~/emo_sim` checkout (`PSFN_EMOSIM_SRC` to override) as the build
+context, tagged by the emo_sim commit. It is pure Python with no TS contract
+surface, so it sits outside the contract-hash guard (`--components all` does
+NOT include it); its runtime contract (17 appraisal dims / 48 emotions) is
+verified in-image at build time and by the gate's optional emosim check.
+The first emosim ship persists `emosim.enabled=true` into the release values,
+so subsequent app-only ships keep the deployment. The sidecar consumes it via
+`settings.json` `observerEvalSidecar.adapter` (kind `emosim_server`,
+`serverUrl` `http://psfn-emosim:17342`).
+
 Manual procedure, if the script cannot be used
 (emulated arm64 off-node; on-Pi builds starve the runtime):
 

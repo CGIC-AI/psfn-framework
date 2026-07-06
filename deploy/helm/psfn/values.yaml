@@ -74,6 +74,8 @@ ports:
   postgres: 5432
   redis: 6379
   liteLlm: 4000
+  emosimHttp: 17342
+  emosimTcp: 17341
 
 hostPorts:
   gatewayApi:
@@ -272,6 +274,30 @@ redis:
       caSecret:
         name: ""
         key: ca.crt
+
+emosim:
+  # Long-lived emo_sim emotion-simulation engine consumed by the observer
+  # eval sidecar (observerEvalSidecar.adapter.kind=emosim_server pointed at
+  # http://<release>-emosim:17342). The emo_sim API is UNAUTHENTICATED by
+  # upstream design: it is exposed ONLY as a ClusterIP service and guarded by
+  # NetworkPolicy (agent pods only). Never expose these ports externally.
+  enabled: false
+  image:
+    # Built from docker/Dockerfile.emosim with an emo_sim checkout as the
+    # build context; see the Dockerfile header for the exact build command.
+    repository: localhost/psfn-emosim
+    tag: 0.1.0
+    digest: ""
+    pullPolicy: IfNotPresent
+  # Extra server flags appended after the fixed entrypoint
+  # (python server.py --host=0.0.0.0 --statedir=/state), e.g.
+  # ["--timescale=120", "--drivescale=1", "--tick=2"].
+  extraArgs: []
+  persistence:
+    # Session snapshots + events.jsonl live here; survives restarts and
+    # provides the wall-clock downtime catch-up on recovery.
+    size: 1Gi
+  resources: {}
 
 liteLlm:
   enabled: true

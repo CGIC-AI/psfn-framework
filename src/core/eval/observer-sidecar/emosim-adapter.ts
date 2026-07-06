@@ -1,18 +1,28 @@
-import { spawn } from 'node:child_process';
-import { existsSync } from 'node:fs';
-import path from 'node:path';
 import { toErrorMessage } from '../../../shared/utils/errors.js';
 import { isRecord } from '../../../shared/utils/types.js';
 
 export const EMOSIM_ADAPTER_INPUT_SCHEMA_VERSION = 1 as const;
-export const EMOSIM_ADAPTER_OUTPUT_SCHEMA_VERSION = 1 as const;
-export const EMOSIM_ADAPTER_VERSION = 'psfn.observer-sidecar.emosim-adapter.v1' as const;
-export const EMOSIM_INTEGRATION_SURFACE = 'emo_sim/statemashine.py' as const;
+export const EMOSIM_ADAPTER_OUTPUT_SCHEMA_VERSION = 2 as const;
+export const EMOSIM_ADAPTER_VERSION = 'psfn.observer-sidecar.emosim-adapter.v2' as const;
+export const EMOSIM_INTEGRATION_SURFACE = 'emo_sim/server.py#http-api.v1' as const;
 export const EMOSIM_SNAPSHOT_FORMAT = 'emosim.engine-snapshot.full-vector.v1' as const;
 export const EMOSIM_WORLD_SNAPSHOT_FORMAT = 'emosim.world-state-dict.full-vector.v1' as const;
+/**
+ * Input-side timestep request. Retained for input schema compatibility; the
+ * long-lived emo_sim server ticks continuously on its own wall clock, so the
+ * requested fixed-step schedule is recorded but not replayed by the runner.
+ */
 export const EMOSIM_TIMESTEP_POLICY = 'fixed-step-seconds.apply-before-tick.v1' as const;
-export const DEFAULT_EMOSIM_ROOT = '/home/ada/emo_sim' as const;
-export const DEFAULT_EMOSIM_PYTHON_EXECUTABLE = 'python3' as const;
+/**
+ * Output-side timestep truth for server mode: one persistent session that the
+ * server ticks continuously between observations, accumulating temporal state.
+ */
+export const EMOSIM_SERVER_TICK_POLICY = 'server-continuous-tick.shared-session.v1' as const;
+/**
+ * The emo_sim server event API does not return per-emotion kick deltas, so
+ * server-mode kicks are derived as max(0, afterStimulus - before) per emotion.
+ */
+export const EMOSIM_KICKS_SEMANTICS = 'derived.nonnegative-before-to-after-stimulus-delta.v1' as const;
 export const DEFAULT_EMOSIM_TIMEOUT_MS = 5_000;
 
 export const EMOSIM_APPRAISAL_DIMS = Object.freeze([
@@ -179,20 +189,22 @@ export interface EmoSimEmotionSpecMetadata {
   halfLifeSeconds: number;
 }
 
+export interface EmoSimServerSessionMetadata {
+  sessionId: string;
+  sessionLabel: string;
+  agentName: string;
+}
+
 export interface EmoSimRuntimeMetadata {
   integrationSurface: typeof EMOSIM_INTEGRATION_SURFACE;
   appraisalDimensions: readonly EmoSimAppraisalDimension[];
   emotionVector: readonly EmoSimEmotionName[];
-  timestepPolicy: typeof EMOSIM_TIMESTEP_POLICY;
+  timestepPolicy: typeof EMOSIM_SERVER_TICK_POLICY;
   snapshotFormat: typeof EMOSIM_SNAPSHOT_FORMAT;
   worldSnapshotFormat: typeof EMOSIM_WORLD_SNAPSHOT_FORMAT;
+  kicksSemantics: typeof EMOSIM_KICKS_SEMANTICS;
   timeScale: number;
-  decay: {
-    moodHalfLifeSeconds: number;
-    maxStepDtSeconds: number;
-    residueMultiplier: number;
-    emotionHalfLivesSeconds: EmoSimEmotionVector;
-  };
+  session: EmoSimServerSessionMetadata;
   emotionSpecs: Record<EmoSimEmotionName, EmoSimEmotionSpecMetadata>;
 }
 
@@ -218,7 +230,7 @@ export interface EmoSimAdapterOutput {
 }
 
 export type EmoSimSidecarUnavailableReason =
-  | 'missing-runtime'
+  | 'server-unreachable'
   | 'incompatible-runtime'
   | 'runtime-error'
   | 'timeout';
@@ -253,14 +265,8 @@ export interface EmoSimRunner {
   run(input: EmoSimAdapterInput): Promise<unknown>;
 }
 
-export interface PythonEmoSimRunnerOptions {
-  emoSimRoot?: string;
-  pythonExecutable?: string;
-  timeoutMs?: number;
-}
-
-export interface RunEmoSimAdapterOptions extends PythonEmoSimRunnerOptions {
-  runner?: EmoSimRunner;
+export interface RunEmoSimAdapterOptions {
+  runner: EmoSimRunner;
 }
 
 export class EmoSimSidecarUnavailableError extends Error {
@@ -301,165 +307,10 @@ const DRIVES_KEYS = Object.freeze([
   'asleep',
 ] as const);
 
-const PYTHON_BRIDGE_SCRIPT = String.raw`
-import json
-import os
-import random
-import sys
-import traceback
-
-def emit_sidecar_error(reason, message):
-    print(json.dumps({"sidecarError": {"reason": reason, "message": message}}))
-
-try:
-    request = json.load(sys.stdin)
-    sys.path.insert(0, os.getcwd())
-    import statemashine as emosim
-
-    expected = request["expected"]
-    input_payload = request["input"]
-    expected_dims = expected["appraisalDimensions"]
-    expected_emotions = expected["emotionVector"]
-
-    if list(emosim.APPRAISAL_DIMS) != expected_dims:
-        emit_sidecar_error(
-            "incompatible-runtime",
-            "statemashine.py APPRAISAL_DIMS does not match the adapter contract",
-        )
-        sys.exit(0)
-
-    if list(emosim.EMOTIONS.keys()) != expected_emotions:
-        emit_sidecar_error(
-            "incompatible-runtime",
-            "statemashine.py EMOTIONS order does not match the adapter contract",
-        )
-        sys.exit(0)
-
-    subject = input_payload["subject"]
-    personality = subject["personality"]
-    engine = emosim.EmotionEngine(
-        emosim.Personality(
-            O=float(personality["O"]),
-            C=float(personality["C"]),
-            E=float(personality["E"]),
-            A=float(personality["A"]),
-            N=float(personality["N"]),
-        ),
-        name=subject["name"],
-        uid=subject["uid"],
-    )
-    deterministic = input_payload["deterministic"]
-    engine.clock0 = float(deterministic["clock0Seconds"])
-    engine.drives_enabled = not bool(deterministic["disableDrives"])
-
-    world = emosim.SocialWorld({subject["name"]: engine}, label="observer-sidecar:" + input_payload["runId"])
-    world.wid = deterministic["seed"]
-    world._rng = random.Random(deterministic["seed"])
-    world.clock0 = float(deterministic["clock0Seconds"])
-    world.autonomy = False
-
-    stimulus_payload = input_payload["stimulus"]
-    stimulus = emosim.Stimulus(
-        label=stimulus_payload["label"],
-        intensity=float(stimulus_payload["intensity"]),
-        importance=float(stimulus_payload["importance"]),
-    )
-    for dim in expected_dims:
-        setattr(stimulus, dim, float(stimulus_payload["appraisal"][dim]))
-
-    def full_emotion_vector(values):
-        return {emotion: float(values.get(emotion, 0.0)) for emotion in expected_emotions}
-
-    def snapshot(engine):
-        snap = engine.snapshot()
-        return {
-            "format": expected["snapshotFormat"],
-            "t": float(snap.t),
-            "dominant": snap.dominant,
-            "mood": {
-                "valence": float(snap.mood_valence),
-                "arousal": float(snap.mood_arousal),
-            },
-            "emotions": full_emotion_vector(snap.intensities),
-            "drives": {
-                "hunger": float(engine.hunger),
-                "thirst": float(engine.thirst),
-                "sleepPressure": float(engine.sleep_pressure),
-                "socialNeed": float(engine.social_need),
-                "stimulationNeed": float(engine.stimulation_need),
-                "esteemNeed": float(engine.esteem_need),
-                "insecurity": float(engine.insecurity),
-                "health": float(engine.health),
-                "asleep": float(engine.asleep),
-            },
-        }
-
-    before = snapshot(engine)
-    kicks = full_emotion_vector(engine.apply_stimulus(stimulus))
-    after_stimulus = snapshot(engine)
-
-    timestep = input_payload["timestep"]
-    for _ in range(int(timestep["steps"])):
-        world.tick(float(timestep["tickSeconds"]))
-
-    after_tick = snapshot(engine)
-    world_state = emosim.world_state_dict(world, full=True)
-    world_state["time"] = deterministic["observedAt"]
-
-    emotion_specs = {
-        emotion: {
-            "valence": float(emosim.EMOTIONS[emotion].valence),
-            "arousal": float(emosim.EMOTIONS[emotion].arousal),
-            "halfLifeSeconds": float(emosim.EMOTIONS[emotion].half_life),
-        }
-        for emotion in expected_emotions
-    }
-
-    output = {
-        "schemaVersion": expected["outputSchemaVersion"],
-        "adapterVersion": expected["adapterVersion"],
-        "runtime": {
-            "integrationSurface": expected["integrationSurface"],
-            "appraisalDimensions": expected_dims,
-            "emotionVector": expected_emotions,
-            "timestepPolicy": expected["timestepPolicy"],
-            "snapshotFormat": expected["snapshotFormat"],
-            "worldSnapshotFormat": expected["worldSnapshotFormat"],
-            "timeScale": float(emosim.TIME_SCALE),
-            "decay": {
-                "moodHalfLifeSeconds": float(emosim.MOOD_HALFLIFE),
-                "maxStepDtSeconds": float(emosim.MAX_STEP_DT),
-                "residueMultiplier": float(emosim.RESIDUE_MULT),
-                "emotionHalfLivesSeconds": {
-                    emotion: float(emosim.EMOTIONS[emotion].half_life)
-                    for emotion in expected_emotions
-                },
-            },
-            "emotionSpecs": emotion_specs,
-        },
-        "input": input_payload,
-        "stimulus": stimulus_payload,
-        "kicks": kicks,
-        "snapshots": {
-            "before": before,
-            "afterStimulus": after_stimulus,
-            "afterTick": after_tick,
-        },
-    }
-    if input_payload["snapshot"]["includeWorldState"]:
-        output["world"] = {
-            "format": expected["worldSnapshotFormat"],
-            "fullEmotionVector": True,
-            "state": world_state,
-        }
-    print(json.dumps(output, sort_keys=True, separators=(",", ":")))
-except Exception:
-    emit_sidecar_error("runtime-error", traceback.format_exc(limit=6))
-`;
 
 export async function runEmoSimProjectedStimulus(
   rawInput: unknown,
-  options: RunEmoSimAdapterOptions = {},
+  options: RunEmoSimAdapterOptions,
 ): Promise<EmoSimAdapterRunResult> {
   let input: EmoSimAdapterInput;
   try {
@@ -473,10 +324,9 @@ export async function runEmoSimProjectedStimulus(
     );
   }
 
-  const runner = options.runner ?? createPythonEmoSimRunner(options);
   let rawOutput: unknown;
   try {
-    rawOutput = await runner.run(input);
+    rawOutput = await options.runner.run(input);
   } catch (error) {
     if (error instanceof EmoSimSidecarUnavailableError) {
       return buildFailure(input, 'sidecar-unavailable', error.reason, error.message, error.details);
@@ -494,21 +344,6 @@ export async function runEmoSimProjectedStimulus(
   } catch (error) {
     return buildFailure(input, 'sidecar-unavailable', 'incompatible-runtime', toErrorMessage(error));
   }
-}
-
-export function createPythonEmoSimRunner(options: PythonEmoSimRunnerOptions = {}): EmoSimRunner {
-  const emoSimRoot = options.emoSimRoot ?? DEFAULT_EMOSIM_ROOT;
-  const pythonExecutable = options.pythonExecutable ?? DEFAULT_EMOSIM_PYTHON_EXECUTABLE;
-  const timeoutMs = normalizeRunnerTimeout(options.timeoutMs);
-
-  return {
-    run: async (input: EmoSimAdapterInput): Promise<unknown> => runPythonBridge(
-      input,
-      emoSimRoot,
-      pythonExecutable,
-      timeoutMs,
-    ),
-  };
 }
 
 export function parseEmoSimAdapterInput(value: unknown): EmoSimAdapterInput {
@@ -569,124 +404,6 @@ export function parseEmoSimAdapterOutput(value: unknown): EmoSimAdapterOutput {
     output.world = normalizeWorldSnapshot(record.world, 'output.world');
   }
   return output;
-}
-
-function runPythonBridge(
-  input: EmoSimAdapterInput,
-  emoSimRoot: string,
-  pythonExecutable: string,
-  timeoutMs: number,
-): Promise<unknown> {
-  const statemashinePath = path.join(emoSimRoot, 'statemashine.py');
-  if (!existsSync(statemashinePath)) {
-    throw new EmoSimSidecarUnavailableError(
-      'missing-runtime',
-      `EmoSim statemashine.py was not found at ${statemashinePath}`,
-      { statemashinePath },
-    );
-  }
-
-  const request = JSON.stringify({
-    input,
-    expected: {
-      adapterVersion: EMOSIM_ADAPTER_VERSION,
-      outputSchemaVersion: EMOSIM_ADAPTER_OUTPUT_SCHEMA_VERSION,
-      integrationSurface: EMOSIM_INTEGRATION_SURFACE,
-      appraisalDimensions: EMOSIM_APPRAISAL_DIMS,
-      emotionVector: EMOSIM_EMOTION_VECTOR,
-      timestepPolicy: EMOSIM_TIMESTEP_POLICY,
-      snapshotFormat: EMOSIM_SNAPSHOT_FORMAT,
-      worldSnapshotFormat: EMOSIM_WORLD_SNAPSHOT_FORMAT,
-    },
-  });
-
-  return new Promise<unknown>((resolve, reject) => {
-    const child = spawn(pythonExecutable, ['-c', PYTHON_BRIDGE_SCRIPT], {
-      cwd: emoSimRoot,
-      stdio: ['pipe', 'pipe', 'pipe'],
-    });
-
-    let stdout = '';
-    let stderr = '';
-    let timedOut = false;
-    let settled = false;
-
-    const settle = (fn: () => void): void => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      fn();
-    };
-
-    const timer = setTimeout(() => {
-      timedOut = true;
-      if (!child.killed) {
-        child.kill('SIGTERM');
-      }
-    }, timeoutMs);
-
-    child.on('error', (error) => {
-      settle(() => {
-        reject(new EmoSimSidecarUnavailableError(
-          'missing-runtime',
-          `Failed to start EmoSim Python runner: ${error.message}`,
-          { pythonExecutable },
-        ));
-      });
-    });
-
-    child.stdout.setEncoding('utf8');
-    child.stderr.setEncoding('utf8');
-    child.stdout.on('data', (chunk: string) => {
-      stdout += chunk;
-    });
-    child.stderr.on('data', (chunk: string) => {
-      stderr += chunk;
-    });
-    child.stdin.end(request);
-
-    child.on('close', (code, signal) => {
-      settle(() => {
-        if (timedOut) {
-          reject(new EmoSimSidecarUnavailableError(
-            'timeout',
-            `EmoSim Python runner timed out after ${timeoutMs}ms`,
-            { timeoutMs },
-          ));
-          return;
-        }
-        if (code !== 0) {
-          reject(new EmoSimSidecarUnavailableError(
-            'runtime-error',
-            compactProcessError('EmoSim Python runner exited nonzero', code, signal, stderr),
-            { exitCode: code, signal },
-          ));
-          return;
-        }
-
-        let parsed: unknown;
-        try {
-          parsed = JSON.parse(stdout);
-        } catch (error) {
-          reject(new EmoSimSidecarUnavailableError(
-            'incompatible-runtime',
-            `EmoSim Python runner did not emit valid JSON: ${toErrorMessage(error)}`,
-          ));
-          return;
-        }
-
-        if (isRecord(parsed) && isRecord(parsed.sidecarError)) {
-          reject(new EmoSimSidecarUnavailableError(
-            normalizeSidecarUnavailableReason(parsed.sidecarError.reason),
-            normalizeOptionalErrorMessage(parsed.sidecarError.message),
-          ));
-          return;
-        }
-
-        resolve(parsed);
-      });
-    });
-  });
 }
 
 function buildFailure(
@@ -832,44 +549,36 @@ function normalizeRuntimeMetadata(value: unknown, field: string): EmoSimRuntimeM
     'timestepPolicy',
     'snapshotFormat',
     'worldSnapshotFormat',
+    'kicksSemantics',
     'timeScale',
-    'decay',
+    'session',
     'emotionSpecs',
   ]);
   return {
     integrationSurface: expectConst(record.integrationSurface, `${field}.integrationSurface`, EMOSIM_INTEGRATION_SURFACE),
     appraisalDimensions: normalizeLiteralArray(record.appraisalDimensions, `${field}.appraisalDimensions`, EMOSIM_APPRAISAL_DIMS),
     emotionVector: normalizeLiteralArray(record.emotionVector, `${field}.emotionVector`, EMOSIM_EMOTION_VECTOR),
-    timestepPolicy: expectConst(record.timestepPolicy, `${field}.timestepPolicy`, EMOSIM_TIMESTEP_POLICY),
+    timestepPolicy: expectConst(record.timestepPolicy, `${field}.timestepPolicy`, EMOSIM_SERVER_TICK_POLICY),
     snapshotFormat: expectConst(record.snapshotFormat, `${field}.snapshotFormat`, EMOSIM_SNAPSHOT_FORMAT),
     worldSnapshotFormat: expectConst(
       record.worldSnapshotFormat,
       `${field}.worldSnapshotFormat`,
       EMOSIM_WORLD_SNAPSHOT_FORMAT,
     ),
+    kicksSemantics: expectConst(record.kicksSemantics, `${field}.kicksSemantics`, EMOSIM_KICKS_SEMANTICS),
     timeScale: normalizeFiniteNumber(record.timeScale, `${field}.timeScale`, { minExclusive: 0 }),
-    decay: normalizeDecayMetadata(record.decay, `${field}.decay`),
+    session: normalizeServerSessionMetadata(record.session, `${field}.session`),
     emotionSpecs: normalizeEmotionSpecs(record.emotionSpecs, `${field}.emotionSpecs`),
   };
 }
 
-function normalizeDecayMetadata(value: unknown, field: string): EmoSimRuntimeMetadata['decay'] {
+function normalizeServerSessionMetadata(value: unknown, field: string): EmoSimServerSessionMetadata {
   const record = expectRecord(value, field);
-  assertKnownKeys(record, field, [
-    'moodHalfLifeSeconds',
-    'maxStepDtSeconds',
-    'residueMultiplier',
-    'emotionHalfLivesSeconds',
-  ]);
+  assertKnownKeys(record, field, ['sessionId', 'sessionLabel', 'agentName']);
   return {
-    moodHalfLifeSeconds: normalizeFiniteNumber(record.moodHalfLifeSeconds, `${field}.moodHalfLifeSeconds`, { minExclusive: 0 }),
-    maxStepDtSeconds: normalizeFiniteNumber(record.maxStepDtSeconds, `${field}.maxStepDtSeconds`, { minExclusive: 0 }),
-    residueMultiplier: normalizeFiniteNumber(record.residueMultiplier, `${field}.residueMultiplier`, { minExclusive: 0 }),
-    emotionHalfLivesSeconds: normalizeEmotionFiniteVector(
-      record.emotionHalfLivesSeconds,
-      `${field}.emotionHalfLivesSeconds`,
-      { minExclusive: 0 },
-    ),
+    sessionId: normalizeNonEmptyString(record.sessionId, `${field}.sessionId`),
+    sessionLabel: normalizeNonEmptyString(record.sessionLabel, `${field}.sessionLabel`),
+    agentName: normalizeNonEmptyString(record.agentName, `${field}.agentName`),
   };
 }
 
@@ -1050,31 +759,6 @@ function normalizeFiniteNumber(value: unknown, field: string, range: NumberRange
   return value;
 }
 
-function normalizeRunnerTimeout(value: number | undefined): number {
-  if (value === undefined) {
-    return DEFAULT_EMOSIM_TIMEOUT_MS;
-  }
-  return normalizeFiniteNumber(value, 'timeoutMs', { min: 1, max: 120_000, integer: true });
-}
-
-function normalizeOptionalErrorMessage(value: unknown): string {
-  return typeof value === 'string' && value.trim()
-    ? value.trim()
-    : 'EmoSim sidecar unavailable';
-}
-
-function normalizeSidecarUnavailableReason(value: unknown): EmoSimSidecarUnavailableReason {
-  switch (value) {
-    case 'missing-runtime':
-    case 'incompatible-runtime':
-    case 'runtime-error':
-    case 'timeout':
-      return value;
-    default:
-      return 'runtime-error';
-  }
-}
-
 function expectRecord(value: unknown, field: string): Record<string, unknown> {
   if (!isRecord(value)) {
     throw new Error(`${field} must be an object`);
@@ -1119,19 +803,3 @@ function assertExactKeys(
   }
 }
 
-function compactProcessError(
-  message: string,
-  code: number | null,
-  signal: NodeJS.Signals | null,
-  stderr: string,
-): string {
-  const details = [
-    `code=${String(code)}`,
-    `signal=${String(signal)}`,
-  ];
-  const stderrSummary = stderr.trim().replace(/\s+/g, ' ').slice(0, 500);
-  if (stderrSummary) {
-    details.push(`stderr=${stderrSummary}`);
-  }
-  return `${message} (${details.join(', ')})`;
-}

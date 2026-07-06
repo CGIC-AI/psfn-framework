@@ -165,6 +165,15 @@ spec:
         - port: {{ .Values.ports.redis }}
           protocol: TCP
     {{- end }}
+    {{- if .Values.emosim.enabled }}
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "psfn.componentLabels" (dict "root" . "component" "emosim") | nindent 14 }}
+      ports:
+        - port: {{ .Values.ports.emosimHttp }}
+          protocol: TCP
+    {{- end }}
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -268,6 +277,32 @@ spec:
       ports:
         - port: {{ .Values.ports.redis }}
           protocol: TCP
+{{- end }}
+{{- if .Values.emosim.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "psfn.fullname" . }}-emosim
+  labels:
+    {{- include "psfn.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "psfn.componentLabels" (dict "root" . "component" "emosim") | nindent 6 }}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "psfn.componentLabels" (dict "root" . "component" "agent") | nindent 14 }}
+      ports:
+        - port: {{ .Values.ports.emosimHttp }}
+          protocol: TCP
+  # The emo_sim engine needs no egress at all; the empty list denies it.
+  egress: []
 {{- end }}
 {{- if and .Values.liteLlm.enabled (eq .Values.liteLlm.mode "internal") }}
 ---

@@ -464,11 +464,11 @@ describe('settings', () => {
           shutdownDrainTimeoutMs: '3000',
         },
         adapter: {
-          kind: 'emosim' as const,
-          emosimRoot: ' /repo/vendor/emo_sim ',
-          pythonExecutable: ' python3 ',
+          kind: 'emosim_server' as const,
+          serverUrl: ' http://emosim.test:17342 ',
+          sessionLabel: ' psfn-observer-eval ',
+          agentName: ' observer ',
           timeoutMs: '4000',
-          deterministicSeed: ' seed-a ',
           includeWorldState: true,
         },
         persistence: {
@@ -501,11 +501,11 @@ describe('settings', () => {
           shutdownDrainTimeoutMs: 3000,
         },
         adapter: {
-          kind: 'emosim',
-          emosimRoot: '/repo/vendor/emo_sim',
-          pythonExecutable: 'python3',
+          kind: 'emosim_server',
+          serverUrl: 'http://emosim.test:17342',
+          sessionLabel: 'psfn-observer-eval',
+          agentName: 'observer',
           timeoutMs: 4000,
-          deterministicSeed: 'seed-a',
           includeWorldState: true,
         },
         persistence: {
@@ -748,18 +748,53 @@ describe('settings', () => {
       })).toThrow('observerEvalSidecar.queue');
     });
 
-    it('fails closed when observer eval sidecar is enabled without an adapter root', () => {
+    it('fails closed when observer eval sidecar is enabled without a server URL', () => {
       const sidecar = {
         ...createDefaultObserverEvalSidecarSettings(),
         enabled: true,
         adapter: {
-          kind: 'emosim' as const,
+          kind: 'emosim_server' as const,
+          sessionLabel: 'psfn-observer-eval',
+          agentName: 'observer',
           includeWorldState: false,
         },
       };
 
       expect(() => normalizeEditableSettings({
         observerEvalSidecar: sidecar,
+      })).toThrow('observerEvalSidecar.adapter.serverUrl');
+    });
+
+    it('fails closed on a non-http observer eval sidecar server URL', () => {
+      const sidecar = {
+        ...createDefaultObserverEvalSidecarSettings(),
+        enabled: true,
+        adapter: {
+          kind: 'emosim_server' as const,
+          serverUrl: 'ftp://emosim.test:17342',
+          sessionLabel: 'psfn-observer-eval',
+          agentName: 'observer',
+          includeWorldState: false,
+        },
+      };
+
+      expect(() => normalizeEditableSettings({
+        observerEvalSidecar: sidecar,
+      })).toThrow('observerEvalSidecar.adapter.serverUrl');
+    });
+
+    it('fails closed on removed spawn-per-call emosim adapter settings', () => {
+      const sidecar = {
+        ...createDefaultObserverEvalSidecarSettings(),
+        adapter: {
+          kind: 'disabled' as const,
+          emosimRoot: '/repo/vendor/emo_sim',
+          includeWorldState: false,
+        },
+      };
+
+      expect(() => normalizeEditableSettings({
+        observerEvalSidecar: sidecar as any,
       })).toThrow('observerEvalSidecar.adapter.emosimRoot');
     });
 
@@ -1130,11 +1165,11 @@ describe('settings', () => {
         sidecarId: 'observer-eval-test-persona',
         deploymentTarget: 'test_persona' as const,
         adapter: {
-          kind: 'emosim' as const,
-          emosimRoot: '/repo/vendor/emo_sim',
-          pythonExecutable: 'python3',
+          kind: 'emosim_server' as const,
+          serverUrl: 'http://emosim.test:17342',
+          sessionLabel: 'psfn-observer-eval-test',
+          agentName: 'observer',
           timeoutMs: 2500,
-          deterministicSeed: 'test-persona-seed',
           includeWorldState: true,
         },
         persistence: {
@@ -2032,8 +2067,10 @@ describe('settings', () => {
         sidecarId: 'observer-eval-live',
         deploymentTarget: 'live',
         adapter: {
-          kind: 'emosim',
-          emosimRoot: '/repo/vendor/emo_sim',
+          kind: 'emosim_server',
+          serverUrl: 'http://emosim.test:17342',
+          sessionLabel: 'psfn-observer-eval',
+          agentName: 'observer',
           includeWorldState: false,
         },
       };

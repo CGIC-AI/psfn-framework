@@ -1046,7 +1046,7 @@ export type ObserverEvalSidecarMode =
 
 export const OBSERVER_EVAL_SIDECAR_ADAPTER_KINDS = [
   'disabled',
-  'emosim',
+  'emosim_server',
 ] as const;
 export type ObserverEvalSidecarAdapterKind =
   typeof OBSERVER_EVAL_SIDECAR_ADAPTER_KINDS[number];
@@ -1064,10 +1064,18 @@ export interface ObserverEvalSidecarQueueSettings {
 
 export interface ObserverEvalSidecarAdapterSettings {
   kind: ObserverEvalSidecarAdapterKind;
-  emosimRoot?: string;
-  pythonExecutable?: string;
+  /**
+   * Base URL of the long-lived emo_sim server (HTTP JSON API), e.g.
+   * http://psfn-emosim:17342. Required when kind=emosim_server and the
+   * sidecar is enabled. The emo_sim API is unauthenticated by design; it
+   * must only be reachable over loopback or a cluster-internal service.
+   */
+  serverUrl?: string;
+  /** Stable emo_sim session label. Found-or-created once; never recreated. */
+  sessionLabel?: string;
+  /** Stable emo_sim human-agent name representing the companion. */
+  agentName?: string;
   timeoutMs?: number;
-  deterministicSeed?: string;
   includeWorldState: boolean;
 }
 

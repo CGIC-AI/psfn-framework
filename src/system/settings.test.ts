@@ -15,6 +15,7 @@ import {
 } from './settings.js';
 import {
   createDefaultCompositionalPolicyConfig,
+  createDefaultObserverEvalSidecarLeverSettings,
   createDefaultObserverEvalSidecarSettings,
   type SubstrateConfig,
 } from './config/runtime-config-contracts.js';
@@ -517,7 +518,49 @@ describe('settings', () => {
           exposeHealth: true,
           exposeTelemetry: false,
         },
+        levers: createDefaultObserverEvalSidecarLeverSettings(),
       });
+    });
+
+    it('fails closed on malformed observer sidecar lever settings', () => {
+      const base = {
+        ...createDefaultObserverEvalSidecarSettings(),
+        persistence: {
+          enabled: true,
+          rootDir: '/repo/runtime/eval/observer-sidecar',
+          retentionDays: 21,
+          maxStoredObservations: 7500,
+        },
+      };
+
+      expect(() => normalizeEditableSettings({
+        observerEvalSidecar: {
+          ...base,
+          levers: {
+            ...createDefaultObserverEvalSidecarLeverSettings(),
+            wouldCheckIn: { enabled: true, valenceThreshold: -3, sustainMs: 1_200_000 },
+          },
+        } as any,
+      })).toThrow(/observerEvalSidecar\.levers\.wouldCheckIn\.valenceThreshold/);
+
+      expect(() => normalizeEditableSettings({
+        observerEvalSidecar: {
+          ...base,
+          levers: 'watch-everything',
+        } as any,
+      })).toThrow(/observerEvalSidecar\.levers/);
+    });
+
+    it('rejects enabled levers without observer sidecar persistence', () => {
+      expect(() => normalizeEditableSettings({
+        observerEvalSidecar: {
+          ...createDefaultObserverEvalSidecarSettings(),
+          levers: {
+            ...createDefaultObserverEvalSidecarLeverSettings(),
+            enabled: true,
+          },
+        } as any,
+      })).toThrow(/lever tracking requires observerEvalSidecar\.persistence\.enabled=true/);
     });
 
     it('normalizes group memory settings as a JSON-owned structured object', () => {

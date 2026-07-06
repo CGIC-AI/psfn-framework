@@ -45,6 +45,35 @@ export function createDefaultCompositionalPolicyConfig(): CompositionalPolicyCon
   };
 }
 
+export function createDefaultObserverEvalSidecarLeverSettings(): NonNullable<ObserverEvalSidecarSettings['levers']> {
+  return {
+    enabled: false,
+    cooldownMs: 21_600_000,
+    wouldMessage: {
+      enabled: true,
+      socialNeedThreshold: 0.7,
+      attachmentIntensityThreshold: 0.5,
+      sustainMs: 1_800_000,
+    },
+    wouldCheckIn: {
+      enabled: true,
+      valenceThreshold: -0.3,
+      sustainMs: 1_200_000,
+    },
+    wouldRest: {
+      enabled: true,
+      sleepPressureThreshold: 0.8,
+      arousalThreshold: 0.8,
+      sustainMs: 1_800_000,
+    },
+    ruminationWatch: {
+      enabled: true,
+      intensityThreshold: 0.4,
+      sustainMs: 2_700_000,
+    },
+  };
+}
+
 export function createDefaultObserverEvalSidecarSettings(): ObserverEvalSidecarSettings {
   return {
     enabled: false,
@@ -72,6 +101,7 @@ export function createDefaultObserverEvalSidecarSettings(): ObserverEvalSidecarS
       exposeHealth: true,
       exposeTelemetry: true,
     },
+    levers: createDefaultObserverEvalSidecarLeverSettings(),
   };
 }
 

@@ -2,12 +2,23 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it } from 'vitest';
-import { createDefaultObserverEvalSidecarSettings } from '../../../system/config/runtime-config-contracts.js';
+import {
+  createDefaultObserverEvalSidecarLeverSettings,
+  createDefaultObserverEvalSidecarSettings,
+} from '../../../system/config/runtime-config-contracts.js';
 import {
   createObserverEvalSidecarRuntimeFromConfig,
+  ObserverEvalLeverStage,
   shouldPropagateObserverEvalObservationError,
   toObserverEvalPersistenceDeployment,
 } from './config.js';
+import type {
+  ObserverEvalSidecarLeverEventInput,
+  ObserverEvalSidecarLeverEventRecord,
+  ObserverEvalSidecarLeverPersistencePort,
+  ObserverEvalSidecarLeverStateEntry,
+} from './persistence.js';
+import type { ObserverLeverSnapshotInput } from './levers.js';
 import type { ObserverEvalInputPayload } from './types.js';
 
 const tempDirs: string[] = [];
@@ -70,6 +81,115 @@ describe('createObserverEvalSidecarRuntimeFromConfig', () => {
     expect(shouldPropagateObserverEvalObservationError(makeObservationError(true), true)).toBe(false);
     expect(shouldPropagateObserverEvalObservationError(makeObservationError(true), false)).toBe(true);
     expect(shouldPropagateObserverEvalObservationError(makeObservationError(false), true)).toBe(true);
+  });
+});
+
+class FakeLeverPersistence implements ObserverEvalSidecarLeverPersistencePort {
+  readonly events: ObserverEvalSidecarLeverEventInput[] = [];
+  savedStates: ObserverEvalSidecarLeverStateEntry[][] = [];
+  failOnRecord = false;
+
+  async recordLeverEvent(input: ObserverEvalSidecarLeverEventInput): Promise<ObserverEvalSidecarLeverEventRecord> {
+    if (this.failOnRecord) {
+      throw new Error('lever persistence exploded');
+    }
+    this.events.push(input);
+    return input as unknown as ObserverEvalSidecarLeverEventRecord;
+  }
+
+  async queryLeverEvents(): Promise<ObserverEvalSidecarLeverEventRecord[]> {
+    return [];
+  }
+
+  async loadLeverState(): Promise<ObserverEvalSidecarLeverStateEntry[]> {
+    return [];
+  }
+
+  async saveLeverState(input: {
+    sidecarId: string;
+    updatedAtMs: number;
+    entries: readonly ObserverEvalSidecarLeverStateEntry[];
+  }): Promise<void> {
+    this.savedStates.push([...input.entries]);
+  }
+
+  async pruneExpiredLeverEvents(nowMs: number) {
+    return { prunedAtMs: nowMs, prunedEventIds: [] as const };
+  }
+}
+
+function makeLeverSnapshot(socialNeed: number): ObserverLeverSnapshotInput {
+  return {
+    t: 0,
+    mood: { valence: 0.2, arousal: 0.1 },
+    dominant: 'Calmness',
+    emotions: { Calmness: 0.3 },
+    drives: { socialNeed, sleepPressure: 0.1 },
+  };
+}
+
+describe('ObserverEvalLeverStage', () => {
+  const NOW = 1_780_000_000_000;
+
+  function makeStage(persistence: FakeLeverPersistence) {
+    return new ObserverEvalLeverStage({
+      settings: { ...createDefaultObserverEvalSidecarLeverSettings(), enabled: true },
+      persistence,
+      sidecarId: 'sidecar-test',
+      retentionDays: 14,
+    });
+  }
+
+  it('records WOULD-ACT events with >= 90 day retention and persists tracker state', async () => {
+    const persistence = new FakeLeverPersistence();
+    const stage = makeStage(persistence);
+
+    await stage.evaluateObservation({
+      runId: 'run-1',
+      observationId: 'obs-1',
+      snapshot: makeLeverSnapshot(0.9),
+      observedAtMs: NOW,
+    });
+    await stage.evaluateObservation({
+      runId: 'run-1',
+      observationId: 'obs-2',
+      snapshot: makeLeverSnapshot(0.9),
+      observedAtMs: NOW + 30 * 60_000,
+    });
+
+    expect(persistence.events.map(event => event.lever)).toEqual(['would_message']);
+    const event = persistence.events[0]!;
+    expect(event.observationId).toBe('obs-2');
+    expect(event.firstCrossingMs).toBe(NOW);
+    expect(event.retention.retainUntilMs - event.firedAtMs).toBeGreaterThanOrEqual(90 * 86_400_000);
+    expect(persistence.savedStates.length).toBe(2);
+  });
+
+  it('never propagates lever failures into the observation path, but records them', async () => {
+    const persistence = new FakeLeverPersistence();
+    persistence.failOnRecord = true;
+    const stage = makeStage(persistence);
+
+    await stage.evaluateObservation({
+      runId: 'run-1',
+      observationId: 'obs-1',
+      snapshot: makeLeverSnapshot(0.9),
+      observedAtMs: NOW,
+    });
+    // Second call would fire an event; recordLeverEvent throws.
+    await expect(stage.evaluateObservation({
+      runId: 'run-1',
+      observationId: 'obs-2',
+      snapshot: makeLeverSnapshot(0.9),
+      observedAtMs: NOW + 30 * 60_000,
+    })).resolves.toBeUndefined();
+
+    const lastStates = persistence.savedStates.at(-1)!;
+    const errored = lastStates.find(entry => {
+      const lastEvaluation = entry.state.lastEvaluation as { error?: string } | undefined;
+      return Boolean(lastEvaluation?.error);
+    });
+    expect(errored).toBeDefined();
   });
 });
 

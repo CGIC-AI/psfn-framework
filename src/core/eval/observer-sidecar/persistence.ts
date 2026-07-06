@@ -20,6 +20,11 @@ import type {
   ObserverEvalSanitizedInputPayload,
   ObserverEvalSanitizedLifecycleStatePayload,
 } from './privacy.js';
+import {
+  OBSERVER_EVAL_LEVER_NAMES,
+  type ObserverEvalLeverName,
+  type ObserverLeverCooldownContext,
+} from './levers.js';
 export {
   OBSERVER_EVAL_COMPARISON_METRICS_VERSION,
   type ObserverEvalSidecarComparisonMetrics,
@@ -161,6 +166,67 @@ export interface ObserverEvalSidecarPruneResult {
   prunedRunIds: readonly string[];
 }
 
+export interface ObserverEvalSidecarLeverEventInput {
+  eventId: string;
+  runId: string;
+  lever: ObserverEvalLeverName;
+  firedAtMs: number;
+  observationId: string;
+  detail: string;
+  stateValues: Record<string, number | string | null>;
+  sustainMs: number;
+  firstCrossingMs: number;
+  cooldown: ObserverLeverCooldownContext;
+  retention: ObserverEvalSidecarRetentionMetadata;
+}
+
+export interface ObserverEvalSidecarLeverEventRecord extends ObserverEvalSidecarLeverEventInput {
+  schemaVersion: typeof OBSERVER_EVAL_SIDECAR_PERSISTENCE_SCHEMA_VERSION;
+  evalOwner: typeof OBSERVER_EVAL_SIDECAR_EVAL_OWNER;
+  authoritative: false;
+  createdAtMs: number;
+  nonAuthoritativeNotice: typeof OBSERVER_EVAL_SIDECAR_NON_AUTHORITATIVE_NOTICE;
+}
+
+export interface ObserverEvalSidecarLeverEventQuery {
+  lever?: ObserverEvalLeverName;
+  runId?: string;
+  sinceMs?: number;
+  untilMs?: number;
+  limit?: number;
+}
+
+export interface ObserverEvalSidecarLeverStateEntry {
+  lever: ObserverEvalLeverName;
+  state: Record<string, unknown>;
+}
+
+export interface ObserverEvalSidecarLeverPruneResult {
+  prunedAtMs: number;
+  prunedEventIds: readonly string[];
+}
+
+/**
+ * Lever persistence surface. Writer: the sidecar pipeline only.
+ * Reader: the Garden admin service only. All rows are eval-owned and carry
+ * authoritative=false (enforced by CHECK constraints and asserted on read).
+ */
+export interface ObserverEvalSidecarLeverPersistencePort {
+  recordLeverEvent(
+    input: ObserverEvalSidecarLeverEventInput,
+  ): Promise<ObserverEvalSidecarLeverEventRecord>;
+  queryLeverEvents(
+    query?: ObserverEvalSidecarLeverEventQuery,
+  ): Promise<ObserverEvalSidecarLeverEventRecord[]>;
+  loadLeverState(sidecarId: string): Promise<ObserverEvalSidecarLeverStateEntry[]>;
+  saveLeverState(input: {
+    sidecarId: string;
+    updatedAtMs: number;
+    entries: readonly ObserverEvalSidecarLeverStateEntry[];
+  }): Promise<void>;
+  pruneExpiredLeverEvents(nowMs: number): Promise<ObserverEvalSidecarLeverPruneResult>;
+}
+
 export interface ObserverEvalSidecarPersistencePort {
   upsertRun(input: ObserverEvalSidecarRunInput): Promise<ObserverEvalSidecarRunRecord>;
   getRun(runId: string): Promise<ObserverEvalSidecarRunRecord | null>;
@@ -235,12 +301,45 @@ interface ObserverEvalObservationRow {
   created_at_ms: number | string;
 }
 
+interface ObserverEvalLeverEventRow {
+  event_id: string;
+  run_id: string;
+  schema_version: number | string;
+  eval_owner: string;
+  authoritative: boolean;
+  lever: string;
+  fired_at_ms: number | string;
+  observation_id: string;
+  detail: string;
+  state_values_json: unknown;
+  sustain_ms: number | string;
+  first_crossing_ms: number | string;
+  cooldown_json: unknown;
+  retention_json: unknown;
+  retain_until_ms: number | string;
+  created_at_ms: number | string;
+}
+
+interface ObserverEvalLeverStateRow {
+  sidecar_id: string;
+  lever: string;
+  schema_version: number | string;
+  eval_owner: string;
+  authoritative: boolean;
+  state_json: unknown;
+  updated_at_ms: number | string;
+}
+
 interface ReturnedObservationIdRow {
   observation_id: string;
 }
 
 interface ReturnedRunIdRow {
   run_id: string;
+}
+
+interface ReturnedLeverEventIdRow {
+  event_id: string;
 }
 
 interface SqlWhere {
@@ -250,7 +349,8 @@ interface SqlWhere {
 
 const storeByDatabaseUrl = new Map<string, PostgresObserverEvalSidecarStore>();
 
-export class PostgresObserverEvalSidecarStore implements ObserverEvalSidecarPersistencePort {
+export class PostgresObserverEvalSidecarStore
+implements ObserverEvalSidecarPersistencePort, ObserverEvalSidecarLeverPersistencePort {
   private readonly ready: Promise<void>;
   private readonly nowMs: () => number;
 
@@ -481,12 +581,149 @@ export class PostgresObserverEvalSidecarStore implements ObserverEvalSidecarPers
           FROM observer_eval_sidecar_observations o
           WHERE o.run_id = r.run_id
         )
+        AND NOT EXISTS (
+          SELECT 1
+          FROM observer_eval_sidecar_lever_events le
+          WHERE le.run_id = r.run_id
+        )
       RETURNING run_id
     `, [prunedAtMs]);
     return {
       prunedAtMs,
       prunedObservationIds: observationRows.map(row => row.observation_id),
       prunedRunIds: runRows.map(row => row.run_id),
+    };
+  }
+
+  async recordLeverEvent(
+    input: ObserverEvalSidecarLeverEventInput,
+  ): Promise<ObserverEvalSidecarLeverEventRecord> {
+    const event = normalizeLeverEventRecord(input, this.nowMs());
+    await this.ready;
+    await executeQuery(this.pool, `
+      INSERT INTO observer_eval_sidecar_lever_events (
+        event_id, run_id, schema_version, eval_owner, authoritative,
+        lever, fired_at_ms, observation_id, detail, state_values_json,
+        sustain_ms, first_crossing_ms, cooldown_json, retention_json,
+        retain_until_ms, created_at_ms
+      )
+      VALUES (
+        $1, $2, $3, $4, $5,
+        $6, $7, $8, $9, $10::jsonb,
+        $11, $12, $13::jsonb, $14::jsonb,
+        $15, $16
+      )
+      ON CONFLICT (event_id) DO UPDATE SET
+        run_id = excluded.run_id,
+        lever = excluded.lever,
+        fired_at_ms = excluded.fired_at_ms,
+        observation_id = excluded.observation_id,
+        detail = excluded.detail,
+        state_values_json = excluded.state_values_json,
+        sustain_ms = excluded.sustain_ms,
+        first_crossing_ms = excluded.first_crossing_ms,
+        cooldown_json = excluded.cooldown_json,
+        retention_json = excluded.retention_json,
+        retain_until_ms = excluded.retain_until_ms
+    `, [
+      event.eventId,
+      event.runId,
+      event.schemaVersion,
+      event.evalOwner,
+      event.authoritative,
+      event.lever,
+      event.firedAtMs,
+      event.observationId,
+      event.detail,
+      JSON.stringify(event.stateValues),
+      event.sustainMs,
+      event.firstCrossingMs,
+      JSON.stringify(event.cooldown),
+      JSON.stringify(event.retention),
+      event.retention.retainUntilMs,
+      event.createdAtMs,
+    ]);
+    return event;
+  }
+
+  async queryLeverEvents(
+    query: ObserverEvalSidecarLeverEventQuery = {},
+  ): Promise<ObserverEvalSidecarLeverEventRecord[]> {
+    await this.ready;
+    const normalizedQuery = normalizeLeverEventQuery(query);
+    const where = buildLeverEventWhere(normalizedQuery);
+    const rows = await queryRows<ObserverEvalLeverEventRow>(this.pool, `
+      SELECT *
+      FROM observer_eval_sidecar_lever_events
+      ${where.clause}
+      ORDER BY fired_at_ms DESC, event_id DESC
+      LIMIT ${normalizedQuery.limit}
+    `, where.values);
+    return rows.map(mapLeverEventRow);
+  }
+
+  async loadLeverState(sidecarId: string): Promise<ObserverEvalSidecarLeverStateEntry[]> {
+    await this.ready;
+    const rows = await queryRows<ObserverEvalLeverStateRow>(this.pool, `
+      SELECT *
+      FROM observer_eval_sidecar_lever_state
+      WHERE sidecar_id = $1
+    `, [normalizeNonEmptyText(sidecarId, 'sidecarId')]);
+    return rows.map(row => {
+      assertNonAuthoritativeRow(
+        row.schema_version,
+        row.eval_owner,
+        row.authoritative,
+        'observer_eval_sidecar_lever_state',
+      );
+      return {
+        lever: normalizeLeverName(row.lever),
+        state: parseRequiredRecord(row.state_json, 'observer_eval_sidecar_lever_state.state_json'),
+      };
+    });
+  }
+
+  async saveLeverState(input: {
+    sidecarId: string;
+    updatedAtMs: number;
+    entries: readonly ObserverEvalSidecarLeverStateEntry[];
+  }): Promise<void> {
+    const sidecarId = normalizeNonEmptyText(input.sidecarId, 'sidecarId');
+    const updatedAtMs = normalizeEpochMs(input.updatedAtMs, 'updatedAtMs');
+    await this.ready;
+    for (const entry of input.entries) {
+      await executeQuery(this.pool, `
+        INSERT INTO observer_eval_sidecar_lever_state (
+          sidecar_id, lever, schema_version, eval_owner, authoritative,
+          state_json, updated_at_ms
+        )
+        VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7)
+        ON CONFLICT (sidecar_id, lever) DO UPDATE SET
+          state_json = excluded.state_json,
+          updated_at_ms = excluded.updated_at_ms
+      `, [
+        sidecarId,
+        normalizeLeverName(entry.lever),
+        OBSERVER_EVAL_SIDECAR_PERSISTENCE_SCHEMA_VERSION,
+        OBSERVER_EVAL_SIDECAR_EVAL_OWNER,
+        false,
+        JSON.stringify(entry.state),
+        updatedAtMs,
+      ]);
+    }
+  }
+
+  async pruneExpiredLeverEvents(nowMs: number): Promise<ObserverEvalSidecarLeverPruneResult> {
+    const prunedAtMs = normalizeEpochMs(nowMs, 'nowMs');
+    await this.ready;
+    const rows = await queryRows<ReturnedLeverEventIdRow>(this.pool, `
+      DELETE FROM observer_eval_sidecar_lever_events
+      WHERE retain_until_ms <= $1
+      RETURNING event_id
+    `, [prunedAtMs]);
+    return {
+      prunedAtMs,
+      prunedEventIds: rows.map(row => row.event_id),
     };
   }
 }
@@ -752,6 +989,145 @@ function mapObservationRow(row: ObserverEvalObservationRow): ObserverEvalSidecar
     retention,
     createdAtMs: normalizeEpochMs(row.created_at_ms, 'created_at_ms'),
     nonAuthoritativeNotice: OBSERVER_EVAL_SIDECAR_NON_AUTHORITATIVE_NOTICE,
+  };
+}
+
+function normalizeLeverEventRecord(
+  input: ObserverEvalSidecarLeverEventInput,
+  nowMs: number,
+): ObserverEvalSidecarLeverEventRecord {
+  const firedAtMs = normalizeEpochMs(input.firedAtMs, 'firedAtMs');
+  const firstCrossingMs = normalizeEpochMs(input.firstCrossingMs, 'firstCrossingMs');
+  if (firstCrossingMs > firedAtMs) {
+    throw new RangeError('firstCrossingMs must be <= firedAtMs');
+  }
+  const retention = normalizeRetention(input.retention);
+  if (retention.retainUntilMs < firedAtMs) {
+    throw new RangeError('lever event retention retainUntilMs must be >= firedAtMs');
+  }
+  return {
+    schemaVersion: OBSERVER_EVAL_SIDECAR_PERSISTENCE_SCHEMA_VERSION,
+    evalOwner: OBSERVER_EVAL_SIDECAR_EVAL_OWNER,
+    authoritative: false,
+    eventId: normalizeNonEmptyText(input.eventId, 'eventId'),
+    runId: normalizeNonEmptyText(input.runId, 'runId'),
+    lever: normalizeLeverName(input.lever),
+    firedAtMs,
+    observationId: normalizeNonEmptyText(input.observationId, 'observationId'),
+    detail: normalizeNonEmptyText(input.detail, 'detail'),
+    stateValues: normalizeLeverStateValues(input.stateValues),
+    sustainMs: nonNegativeInteger(input.sustainMs, 'sustainMs'),
+    firstCrossingMs,
+    cooldown: normalizeLeverCooldownContext(input.cooldown),
+    retention,
+    createdAtMs: normalizeEpochMs(nowMs, 'nowMs'),
+    nonAuthoritativeNotice: OBSERVER_EVAL_SIDECAR_NON_AUTHORITATIVE_NOTICE,
+  };
+}
+
+function mapLeverEventRow(row: ObserverEvalLeverEventRow): ObserverEvalSidecarLeverEventRecord {
+  assertNonAuthoritativeRow(
+    row.schema_version,
+    row.eval_owner,
+    row.authoritative,
+    'observer_eval_sidecar_lever_events',
+  );
+  const retention = normalizeRetention(
+    parseRequiredRecord(
+      row.retention_json,
+      'observer_eval_sidecar_lever_events.retention_json',
+    ) as unknown as ObserverEvalSidecarRetentionMetadata,
+  );
+  return {
+    schemaVersion: OBSERVER_EVAL_SIDECAR_PERSISTENCE_SCHEMA_VERSION,
+    evalOwner: OBSERVER_EVAL_SIDECAR_EVAL_OWNER,
+    authoritative: false,
+    eventId: row.event_id,
+    runId: row.run_id,
+    lever: normalizeLeverName(row.lever),
+    firedAtMs: normalizeEpochMs(row.fired_at_ms, 'fired_at_ms'),
+    observationId: normalizeNonEmptyText(row.observation_id, 'observation_id'),
+    detail: normalizeNonEmptyText(row.detail, 'detail'),
+    stateValues: normalizeLeverStateValues(
+      parseRequiredRecord(
+        row.state_values_json,
+        'observer_eval_sidecar_lever_events.state_values_json',
+      ) as Record<string, number | string | null>,
+    ),
+    sustainMs: nonNegativeInteger(row.sustain_ms, 'sustain_ms'),
+    firstCrossingMs: normalizeEpochMs(row.first_crossing_ms, 'first_crossing_ms'),
+    cooldown: normalizeLeverCooldownContext(
+      parseRequiredRecord(
+        row.cooldown_json,
+        'observer_eval_sidecar_lever_events.cooldown_json',
+      ) as unknown as ObserverLeverCooldownContext,
+    ),
+    retention,
+    createdAtMs: normalizeEpochMs(row.created_at_ms, 'created_at_ms'),
+    nonAuthoritativeNotice: OBSERVER_EVAL_SIDECAR_NON_AUTHORITATIVE_NOTICE,
+  };
+}
+
+function normalizeLeverName(value: unknown): ObserverEvalLeverName {
+  if (typeof value === 'string' && (OBSERVER_EVAL_LEVER_NAMES as readonly string[]).includes(value)) {
+    return value as ObserverEvalLeverName;
+  }
+  throw new Error(`lever is invalid: ${String(value)}`);
+}
+
+function normalizeLeverStateValues(
+  value: Record<string, number | string | null>,
+): Record<string, number | string | null> {
+  const normalized: Record<string, number | string | null> = {};
+  for (const [key, entry] of Object.entries(value)) {
+    if (entry !== null && typeof entry !== 'number' && typeof entry !== 'string') {
+      throw new Error(`stateValues.${key} must be a number, string, or null`);
+    }
+    if (typeof entry === 'number' && !Number.isFinite(entry)) {
+      throw new Error(`stateValues.${key} must be finite when numeric`);
+    }
+    normalized[key] = entry;
+  }
+  return normalized;
+}
+
+function normalizeLeverCooldownContext(value: ObserverLeverCooldownContext): ObserverLeverCooldownContext {
+  // Persisted JSON is untrusted even when the compile-time type says otherwise.
+  const refireReason = value.refireReason as string;
+  if (refireReason !== 'first_fire' && refireReason !== 'condition_reset' && refireReason !== 'cooldown_elapsed') {
+    throw new Error(`cooldown.refireReason is invalid: ${refireReason}`);
+  }
+  return {
+    cooldownMs: nonNegativeInteger(value.cooldownMs, 'cooldown.cooldownMs'),
+    previousFiredAtMs: value.previousFiredAtMs === null
+      ? null
+      : normalizeEpochMs(value.previousFiredAtMs, 'cooldown.previousFiredAtMs'),
+    refireReason,
+  };
+}
+
+function normalizeLeverEventQuery(
+  query: ObserverEvalSidecarLeverEventQuery,
+): Required<Pick<ObserverEvalSidecarLeverEventQuery, 'limit'>> & ObserverEvalSidecarLeverEventQuery {
+  return {
+    ...query,
+    ...(query.lever !== undefined ? { lever: normalizeLeverName(query.lever) } : {}),
+    limit: normalizeLimit(query.limit),
+    ...(query.sinceMs !== undefined ? { sinceMs: normalizeEpochMs(query.sinceMs, 'query.sinceMs') } : {}),
+    ...(query.untilMs !== undefined ? { untilMs: normalizeEpochMs(query.untilMs, 'query.untilMs') } : {}),
+  };
+}
+
+function buildLeverEventWhere(query: ObserverEvalSidecarLeverEventQuery): SqlWhere {
+  const clauses: string[] = [];
+  const values: unknown[] = [];
+  pushWhere(clauses, values, 'lever =', query.lever);
+  pushWhere(clauses, values, 'run_id =', query.runId);
+  pushWhere(clauses, values, 'fired_at_ms >=', query.sinceMs);
+  pushWhere(clauses, values, 'fired_at_ms <=', query.untilMs);
+  return {
+    clause: clauses.length > 0 ? `WHERE ${clauses.join(' AND ')}` : '',
+    values,
   };
 }
 

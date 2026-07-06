@@ -32,6 +32,52 @@ export interface AdminObserverEvalSidecarRunFilters {
   limit?: number;
 }
 
+export type ObserverEvalSidecarLeverName =
+  | 'would_message'
+  | 'would_check_in'
+  | 'would_rest'
+  | 'rumination_watch';
+
+export interface AdminObserverEvalSidecarLeverEventFilters {
+  lever?: ObserverEvalSidecarLeverName | string;
+  runId?: string;
+  sinceMs?: number;
+  untilMs?: number;
+  limit?: number;
+}
+
+export interface AdminObserverEvalSidecarLeverEventView {
+  eventId: string;
+  runId: string;
+  lever: ObserverEvalSidecarLeverName;
+  firedAtMs: number;
+  observationId: string;
+  detail: string;
+  stateValues: Record<string, number | string | null>;
+  sustainMs: number;
+  firstCrossingMs: number;
+  sustainedForMs: number;
+  cooldown: {
+    cooldownMs: number;
+    previousFiredAtMs: number | null;
+    refireReason: 'first_fire' | 'condition_reset' | 'cooldown_elapsed';
+  };
+  retention: ObserverEvalSidecarRetentionMetadata;
+  evalOwner: string;
+  authoritative: false;
+  nonAuthoritativeNotice: string;
+}
+
+export interface AdminObserverEvalSidecarLeverEventListData {
+  events: AdminObserverEvalSidecarLeverEventView[];
+  filters: AdminObserverEvalSidecarLeverEventFilters;
+  pagination: {
+    limit: number;
+    count: number;
+    hasMore: boolean;
+  };
+}
+
 export interface AdminObserverEvalSidecarHealthData {
   status: ObserverEvalSidecarHealthStatus;
   observedAt: number;
@@ -374,6 +420,21 @@ export function queryObserverEvalSidecarRuns(
   const suffix = buildObserverEvalSidecarRunQuery(filters);
   return apiGet<AdminObserverEvalSidecarRunListData>(
     `${OBSERVER_EVAL_SIDECAR_BASE_PATH}/runs${suffix}`,
+  );
+}
+
+export function queryObserverEvalSidecarLeverEvents(
+  filters: AdminObserverEvalSidecarLeverEventFilters = {},
+): Promise<AdminObserverEvalSidecarLeverEventListData> {
+  const params = new URLSearchParams();
+  appendString(params, 'lever', filters.lever);
+  appendString(params, 'runId', filters.runId);
+  appendNumber(params, 'sinceMs', filters.sinceMs);
+  appendNumber(params, 'untilMs', filters.untilMs);
+  appendNumber(params, 'limit', filters.limit);
+  const suffix = params.toString();
+  return apiGet<AdminObserverEvalSidecarLeverEventListData>(
+    `${OBSERVER_EVAL_SIDECAR_BASE_PATH}/lever-events${suffix ? `?${suffix}` : ''}`,
   );
 }
 

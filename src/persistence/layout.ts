@@ -139,7 +139,7 @@ export function resolveRuntimeLayoutMode(
   return RUNTIME_LAYOUT_MODE.CONTINUOUS;
 }
 
-function isStrictSubpath(path: string, root: string): boolean {
+export function isStrictSubpath(path: string, root: string): boolean {
   const relativePath = relative(resolve(root), resolve(path));
   return relativePath.length > 0 && !relativePath.startsWith('..') && !isAbsolute(relativePath);
 }

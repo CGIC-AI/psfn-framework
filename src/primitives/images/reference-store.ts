@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { basename, extname, join, resolve } from 'node:path';
-import { resolveIdentityAssetsDir } from '../../persistence/layout.js';
+import { isStrictSubpath, resolveIdentityAssetsDir } from '../../persistence/layout.js';
 import { writeJsonAtomic } from '../../shared/utils/fs.js';
 import { isRecord } from '../../shared/utils/types.js';
 
@@ -381,10 +381,8 @@ export class ImageReferenceStore {
   }
 
   private resolveReferencePath(fileName: string): string {
-    const safeName = basename(fileName);
-    const candidate = resolve(this.referencesDir, safeName);
-    const root = resolve(this.referencesDir);
-    if (candidate !== root && candidate.startsWith(`${root}/`)) {
+    const candidate = resolve(this.referencesDir, fileName);
+    if (isStrictSubpath(candidate, this.referencesDir)) {
       return candidate;
     }
     throw new Error('Invalid reference photo path');

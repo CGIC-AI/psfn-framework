@@ -1,4 +1,3 @@
-import type Database from 'better-sqlite3';
 import type { ChannelType } from '../../shared/contracts/runtime.js';
 import type { ToolRegistrar } from '../agent/tool-registrar.js';
 import type { IntentionPostTurnHook } from '../agent/substrate-agent.js';
@@ -29,10 +28,6 @@ import {
   type BehavioralPatternContextProvider,
 } from './patterns.js';
 import type { BehavioralPatternStorePort } from './behavioral-pattern-store-port.js';
-import {
-  createSQLiteIntentionRuntimeStores,
-  type SQLiteIntentionRuntimeStores,
-} from './sqlite-adapters.js';
 
 export interface IntentionRuntimeTarget {
   activeConcernProvider: ActiveConcernContextProvider | null;
@@ -375,31 +370,4 @@ export function wireIntentionRuntimeStores(
     pendingFollowUpStore,
     behavioralPatternTracker,
   };
-}
-
-export function wireIntentionRuntime(
-  target: IntentionRuntimeTarget,
-  db: Database.Database,
-): IntentionRuntimeWiring {
-  const {
-    concernProvider,
-    pendingFollowUpProvider,
-    behavioralPatternProvider,
-    concernStore,
-    pendingFollowUpStore,
-    behavioralPatternTracker,
-  }: SQLiteIntentionRuntimeStores = createSQLiteIntentionRuntimeStores(db);
-  return wireIntentionRuntimeStores(
-    target,
-    {
-      concernStore,
-      pendingFollowUpStore,
-      behavioralPatternTracker,
-    },
-    {
-      concernProvider,
-      pendingFollowUpProvider,
-      behavioralPatternProvider,
-    },
-  );
 }

@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { EventBus } from '../../shared/event-bus.js';
 import { Scheduler } from '../scheduler/scheduler.js';
 import { createConcernStorePort } from './concern-store-port.js';
-import { ActiveConcernStore } from './concerns.js';
+import { ActiveConcernStore } from './sqlite-stores/active-concern-store.js';
 import { groomConcernSet, registerConcernGroomingTask } from './concern-grooming.js';
 
 function makeStore() {

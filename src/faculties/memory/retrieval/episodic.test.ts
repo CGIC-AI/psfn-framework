@@ -1,6 +1,9 @@
 import Database from 'better-sqlite3';
 import { afterEach, describe, expect, it } from 'vitest';
-import { EpisodicStore, type EpisodeCreateInput } from '../episodic/store.js';
+import { EpisodicStore } from '../episodic/store.js';
+import {
+  type EpisodeCreateInput,
+} from '../episodic/store-port.js';
 import { listEpisodeArcMemberships } from './episodic.js';
 
 const NOW = new Date('2026-06-10T08:00:00.000Z');

@@ -142,7 +142,6 @@ describe('createAgentPersistenceRuntime', () => {
 
     expect(runtime).toEqual({
       backend: 'postgres',
-      db: null,
       memoryStore: runtimeFactoryMocks.postgresMemoryStore as MemoryStorePort,
       episodicStore: runtimeFactoryMocks.postgresEpisodicStore,
       reflectionStore: {

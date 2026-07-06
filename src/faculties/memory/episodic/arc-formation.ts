@@ -8,7 +8,7 @@ import {
 } from '../../../shared/contracts/episodic-memory.js';
 import { resolveKnownEpisodeId } from './episode-ids.js';
 import { runEpisodicJudgment } from './judgment-runner.js';
-import type { EpisodicStorePort } from './store.js';
+import type { EpisodicStorePort } from './store-port.js';
 
 const log = createComponentLogger('ArcFormation');
 

@@ -14,7 +14,7 @@ import type { AuditEntry } from '../../../boundary/gateway/audit-port.js';
 import type {
   GatewayAuditHistoryPage,
   GatewayAuditHistoryQuery,
-} from '../../../boundary/gateway/audit.js';
+} from '../../../boundary/gateway/audit-port.js';
 import type {
   RunChargeLedger,
   RunChargeLedgerEntry,

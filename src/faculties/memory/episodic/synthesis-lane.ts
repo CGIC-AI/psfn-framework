@@ -7,7 +7,9 @@ import type { MemoryWriteOptions, MemoryWriter } from '../writer.js';
 import type { NearTurnMemoryScopeClassifierPort } from '../near-turn-memory-lane.js';
 import { classifySessionEntryCompanionRelevance } from '../extraction/speaker-routing.js';
 import type { EpisodicSynthesisRunResult, EpisodicSynthesizer } from './synthesis.js';
-import type { EpisodicStorePort } from './store.js';
+import type {
+  EpisodicStorePort,
+} from './store-port.js';
 
 const log = createComponentLogger('EpisodeSynthesisLane');
 

@@ -13,7 +13,10 @@ import { AdminServer } from './server.js';
 import { createInProcessGardenAdminContract } from './local-admin-contract.js';
 import { MemoryStore } from '../../faculties/memory/store.js';
 import { MemoryWriter } from '../../faculties/memory/writer.js';
-import { EpisodicStore, type EpisodeCreateInput } from '../../faculties/memory/episodic/store.js';
+import { EpisodicStore } from '../../faculties/memory/episodic/store.js';
+import {
+  type EpisodeCreateInput,
+} from '../../faculties/memory/episodic/store-port.js';
 import { SessionStore } from '../../persistence/sessions/store.js';
 import { SessionManager } from '../../core/session/manager.js';
 import { Scheduler } from '../../core/scheduler/scheduler.js';
@@ -33,7 +36,7 @@ import {
 } from '../../core/identity/prompt-registry.js';
 import { createPromptStatePort } from '../../core/identity/prompt-state-port.js';
 import { CharacterCardVersionStore } from '../../core/identity/card-versioning.js';
-import { ActiveConcernStore } from '../../core/intention/concerns.js';
+import { ActiveConcernStore } from '../../core/intention/sqlite-stores/active-concern-store.js';
 import { loadSettings } from '../../system/settings.js';
 import { saveCapabilityTierConfig } from '../../system/config/capability-tier-config.js';
 import { loadModelsConfig, saveModelsConfig } from '../../system/config/models-config.js';

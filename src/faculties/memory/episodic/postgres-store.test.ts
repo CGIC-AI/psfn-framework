@@ -8,7 +8,11 @@ import {
   type Episode,
 } from '../../../shared/contracts/episodic-memory.js';
 import { PostgresEpisodicStore } from './postgres-store.js';
-import type { EpisodeArcWriteInput, EpisodeCreateInput, EpisodeUpdateInput } from './store.js';
+import type {
+  EpisodeArcWriteInput,
+  EpisodeCreateInput,
+  EpisodeUpdateInput,
+} from './store-port.js';
 
 interface StoredEpisodeRow {
   id: string;

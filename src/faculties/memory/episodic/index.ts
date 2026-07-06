@@ -1,5 +1,4 @@
 export {
-  EpisodicStore,
   type EpisodeArcAuditAction,
   type EpisodeArcAuditEntry,
   type EpisodeArcAuditListOptions,
@@ -24,7 +23,7 @@ export {
   type EpisodicStoreOptions,
   type EpisodicStorePort,
   type EpisodicStoreResult,
-} from './store.js';
+} from './store-port.js';
 export {
   PostgresEpisodicStore,
   createPostgresEpisodicStore,

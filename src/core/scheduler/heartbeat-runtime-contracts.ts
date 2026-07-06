@@ -28,7 +28,9 @@ import type { SleeptimeWikiPass } from '../../faculties/wiki/sleeptime-wiki-pass
 import type { NearTurnMemoryScopeClassifierPort } from '../../faculties/memory/near-turn-memory-lane.js';
 import type { ProactiveOutboundDispatcher } from '../intention/proactive-outbound.js';
 import type { OutreachOutboxStore } from '../intention/outreach-outbox.js';
-import type { EpisodicStorePort } from '../../faculties/memory/episodic/store.js';
+import type {
+  EpisodicStorePort,
+} from '../../faculties/memory/episodic/store-port.js';
 import type { ReflectionMetacognitionJournalStore } from '../../persistence/journals/reflection-metacognition-journal.js';
 import type { SessionManager } from '../session/manager.js';
 import type { CoreMemoryStore } from '../../faculties/core-memory/store.js';
@@ -40,7 +42,7 @@ import type {
 } from '../intention/appraisal.js';
 import type { PendingFollowUp } from '../intention/pending-follow-ups.js';
 import type { PendingFollowUpStorePort } from '../intention/pending-follow-up-store-port.js';
-import type { CareReminderStore } from '../intention/care-reminders.js';
+import type { CareReminderStorePort } from '../intention/care-reminders.js';
 import type { PostTurnActionRuntime } from '../agent/post-turn-action-runtime.js';
 import type { InternalState } from '../self-model/state.js';
 import type { MemoryExtractor } from '../agent/contracts.js';
@@ -146,7 +148,7 @@ export interface HeartbeatRuntimeOptions {
     nextDueAt?: string;
   } | undefined;
   pendingFollowUpStore?: PendingFollowUpStorePort | null;
-  careReminderStore?: CareReminderStore | null;
+  careReminderStore?: CareReminderStorePort | null;
   onBehavioralPatternOutcome?: (input: {
     channelId: string;
     canonicalContactKey?: string;

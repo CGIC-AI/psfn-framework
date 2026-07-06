@@ -1,10 +1,7 @@
 import Database from 'better-sqlite3';
 import { beforeEach, describe, expect, it } from 'vitest';
-import {
-  ActiveConcernStore,
-  buildActiveConcernsPromptVariables,
-  buildActiveConcernsRuntimeData,
-} from './concerns.js';
+import { ActiveConcernStore } from './sqlite-stores/active-concern-store.js';
+import { buildActiveConcernsPromptVariables, buildActiveConcernsRuntimeData } from './concerns.js';
 import { injectPromptRuntimeTokens } from '../identity/prompt-runtime.js';
 import { getRuntimePromptLayerDefinition } from '../identity/runtime-prompt-layers.js';
 

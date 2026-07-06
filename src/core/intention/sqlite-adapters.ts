@@ -1,14 +1,12 @@
 import type Database from 'better-sqlite3';
-import { ActiveConcernStore } from './concerns.js';
+import { ActiveConcernStore } from './sqlite-stores/active-concern-store.js';
 import {
   createConcernStorePort,
   type ActiveConcernContextProvider,
   type ConcernStorePort,
 } from './concern-store-port.js';
-import {
-  PendingFollowUpStore,
-  type PendingFollowUpContextProvider,
-} from './pending-follow-ups.js';
+import { PendingFollowUpStore } from './sqlite-stores/pending-follow-up-store.js';
+import type { PendingFollowUpContextProvider } from './pending-follow-ups.js';
 import {
   createPendingFollowUpStorePort,
   type PendingFollowUpStorePort,
@@ -17,10 +15,8 @@ import {
   createBehavioralPatternStorePort,
   type BehavioralPatternStorePort,
 } from './behavioral-pattern-store-port.js';
-import {
-  BehavioralPatternTracker,
-  type BehavioralPatternContextProvider,
-} from './patterns.js';
+import { BehavioralPatternTracker } from './sqlite-stores/behavioral-pattern-tracker.js';
+import type { BehavioralPatternContextProvider } from './patterns.js';
 
 export interface SQLiteIntentionRuntimeStores {
   concernProvider: ActiveConcernContextProvider;

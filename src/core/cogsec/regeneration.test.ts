@@ -1,4 +1,5 @@
 import { mkdtempSync, rmSync } from 'node:fs';
+import { createSqliteTranscriptProjection } from '../../persistence/sessions/transcript-projection.js';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import Database from 'better-sqlite3';
@@ -79,7 +80,7 @@ describe('applyCogSecRegeneration', () => {
     const channelId = 'api:cogsec-regeneration';
     const dirtyText = 'DIRTY_REGENERATION_SOURCE_TEXT';
     const cleanText = 'clean recovery source text';
-    const sessionStore = new SessionStore(join(root, 'sessions'), { enableSearchIndex: true });
+    const sessionStore = new SessionStore(join(root, 'sessions'), { transcriptProjection: createSqliteTranscriptProjection(join(join(root, 'sessions'), 'session-search.sqlite')) });
     const eventStore = new CogSecEventStore(join(root, 'cogsec-events.json'), {
       now: () => new Date('2026-07-01T00:00:00.000Z'),
     });
@@ -307,7 +308,7 @@ describe('applyCogSecRegeneration', () => {
     const root = makeTempRoot();
     const caseId = 'cogsec_20260701T000000Z_regen_conformance_fail';
     const channelId = 'api:cogsec-conformance-fail';
-    const sessionStore = new SessionStore(join(root, 'sessions'), { enableSearchIndex: true });
+    const sessionStore = new SessionStore(join(root, 'sessions'), { transcriptProjection: createSqliteTranscriptProjection(join(join(root, 'sessions'), 'session-search.sqlite')) });
     sessionStore.append({
       channelId,
       role: 'assistant',
@@ -379,7 +380,7 @@ describe('applyCogSecRegeneration', () => {
     const root = makeTempRoot();
     const caseId = 'cogsec_20260701T000000Z_regen_fail';
     const channelId = 'api:cogsec-regeneration-fail';
-    const sessionStore = new SessionStore(join(root, 'sessions'), { enableSearchIndex: true });
+    const sessionStore = new SessionStore(join(root, 'sessions'), { transcriptProjection: createSqliteTranscriptProjection(join(join(root, 'sessions'), 'session-search.sqlite')) });
     sessionStore.append({
       channelId,
       role: 'user',

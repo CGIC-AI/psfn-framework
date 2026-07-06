@@ -17,7 +17,9 @@ import type { SubstrateConfig } from '../../system/config/runtime-config-contrac
 import type { SatelliteRegistryConfig } from '../../shared/contracts/satellite-registry.js';
 import type { ChannelGroupMemoryConfig } from '../../system/config/group-memory-config.js';
 import type { ApprovalQueuePort } from '../../system/capabilities/approval-queue-port.js';
-import type { EpisodicStorePort } from '../../faculties/memory/episodic/store.js';
+import type {
+  EpisodicStorePort,
+} from '../../faculties/memory/episodic/store-port.js';
 import { createGatewayConfirmationQueueAdminApi } from '../startup/support/confirmation-queue-admin-api.js';
 import {
   resolveAdminTransportMode,

@@ -20,7 +20,7 @@ import type {
   EpisodeCreateInput,
   EpisodeUpdateInput,
   EpisodicStorePort,
-} from './store.js';
+} from './store-port.js';
 
 const log = createComponentLogger('SleepConsolidation');
 

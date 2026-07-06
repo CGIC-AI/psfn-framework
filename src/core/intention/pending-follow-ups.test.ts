@@ -1,11 +1,7 @@
 import Database from 'better-sqlite3';
 import { describe, expect, it } from 'vitest';
-import {
-  PendingFollowUpStore,
-  createPendingFollowUpStorePort,
-  evaluatePendingFollowUpWakeState,
-  filterPendingFollowUpsForActiveChannel,
-} from './pending-follow-ups.js';
+import { PendingFollowUpStore } from './sqlite-stores/pending-follow-up-store.js';
+import { createPendingFollowUpStorePort, evaluatePendingFollowUpWakeState, filterPendingFollowUpsForActiveChannel } from './pending-follow-ups.js';
 
 describe('PendingFollowUpStore', () => {
   it('creates and lists pending follow-ups by contact scope', () => {

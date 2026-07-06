@@ -7,7 +7,7 @@ import { EventBus } from '../../shared/event-bus.js';
 import { NorthStarStore } from '../../faculties/north-star/store.js';
 import { ReflectionJournalStore } from '../../persistence/journals/reflection-journal.js';
 import { createConcernStorePort } from './concern-store-port.js';
-import { ActiveConcernStore } from './concerns.js';
+import { ActiveConcernStore } from './sqlite-stores/active-concern-store.js';
 import { applyConcernCandidateReview, type ConcernCandidate } from './concern-candidates.js';
 import { groomConcernSet } from './concern-grooming.js';
 import {

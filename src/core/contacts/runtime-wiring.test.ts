@@ -1,7 +1,28 @@
 import Database from 'better-sqlite3';
 import { describe, it, expect } from 'vitest';
 import type { AgentTool } from '@mariozechner/pi-agent-core';
-import { wireContactRuntime, type ContactRuntimeTarget } from './runtime-wiring.js';
+import type Database from 'better-sqlite3';
+import {
+  registerContactRuntime,
+  type ContactRuntimeOptions,
+  type ContactRuntimeTarget,
+} from './runtime-wiring.js';
+import { createSQLiteContactStore } from './sqlite-adapter.js';
+import type { ContactStorePort } from './contact-store-port.js';
+
+// Legacy SQLite convenience wiring, kept test-local until psfn-framework-3c2.5
+// deletes the SQLite contact store and this test file with it.
+async function wireContactRuntime(
+  target: ContactRuntimeTarget,
+  db: Database.Database,
+  primaryUserId?: string,
+  options: ContactRuntimeOptions = {},
+): Promise<ContactStorePort> {
+  const contactStore = createSQLiteContactStore(db, primaryUserId, {
+    exportDir: options.exportDir,
+  });
+  return await registerContactRuntime(target, contactStore, primaryUserId, options);
+}
 
 class FakeTarget implements ContactRuntimeTarget {
   contactStore = null;

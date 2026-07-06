@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { createSqliteTranscriptProjection } from '../../persistence/sessions/transcript-projection.js';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -798,7 +799,7 @@ describe('SessionManager', () => {
 
   it('stores role-envelope previews without leaking hidden body text into history or search', async () => {
     const config = makeConfig();
-    const searchableStore = new SessionStore(dir, { enableSearchIndex: true });
+    const searchableStore = new SessionStore(dir, { transcriptProjection: createSqliteTranscriptProjection(join(dir, 'session-search.sqlite')) });
     const mgr = new SessionManager(searchableStore, config);
     const hiddenBody = 'forensic body that must never enter normal history';
     mgr.recordUserMessage(

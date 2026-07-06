@@ -1,10 +1,7 @@
 import Database from 'better-sqlite3';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import {
-  BehavioralPatternTracker,
-  createBehavioralPatternMemoryPromotionHook,
-  type BehavioralPatternPromotionCandidate,
-} from './patterns.js';
+import { BehavioralPatternTracker } from './sqlite-stores/behavioral-pattern-tracker.js';
+import { createBehavioralPatternMemoryPromotionHook, type BehavioralPatternPromotionCandidate } from './patterns.js';
 import {
   createBehavioralPatternStorePort,
   type BehavioralPatternStorePort,

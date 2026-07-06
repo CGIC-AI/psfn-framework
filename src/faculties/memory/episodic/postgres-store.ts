@@ -25,7 +25,7 @@ import {
   normalizeEpisodeMessageClaimWriteInput,
   normalizeEpisodicDiagnosticsNow,
   summarizeEpisodicMaintenanceDiagnostics,
-} from './store.js';
+} from './store-port.js';
 import type {
   EpisodeArcAuditAction,
   EpisodeArcAuditEntry,
@@ -62,7 +62,7 @@ import type {
   EpisodicReconciliationStatus,
   EpisodicStoreOptions,
   EpisodicStorePort,
-} from './store.js';
+} from './store-port.js';
 
 interface PostgresEpisodeRow {
   id: string;

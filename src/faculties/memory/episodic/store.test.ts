@@ -1,6 +1,9 @@
 import Database from 'better-sqlite3';
 import { afterEach, describe, expect, it } from 'vitest';
-import { EpisodicStore, type EpisodeCreateInput } from './store.js';
+import { EpisodicStore } from './store.js';
+import {
+  type EpisodeCreateInput,
+} from './store-port.js';
 
 describe('EpisodicStore', () => {
   let db: Database.Database | undefined;

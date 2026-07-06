@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { LLMProviderPort } from '../agent/contracts.js';
 import { EventBus, type DeterministicGateEvent } from '../../shared/event-bus.js';
 import { createConcernStorePort } from './concern-store-port.js';
-import { ActiveConcernStore } from './concerns.js';
+import { ActiveConcernStore } from './sqlite-stores/active-concern-store.js';
 import {
   ConcernCandidateQueue,
   ConcernCandidateReviewer,

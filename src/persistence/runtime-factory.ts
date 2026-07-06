@@ -37,7 +37,6 @@ import type { ParticipantTrendStorePort } from '../core/emotion/participant-tren
 
 export interface AgentPersistenceRuntime {
   backend: PersistenceBackend;
-  db: null;
   memoryStore: MemoryStorePort;
   episodicStore: EpisodicStorePort;
   reflectionStore: ReflectionMetacognitionJournalStore;
@@ -71,7 +70,6 @@ export async function createAgentPersistenceRuntime(
   const intentionRuntime = await createPostgresIntentionPorts(databaseUrl);
   return {
     backend: 'postgres',
-    db: null,
     memoryStore: await createPostgresMemoryStore(databaseUrl, options.embeddingDims, {
       notesDir: resolveNotesDir(options.pathSnapshot.companionDataDir),
       scratchpadMirrorPath: resolveScratchpadMirrorPath(options.pathSnapshot.companionDataDir),

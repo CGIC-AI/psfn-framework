@@ -37,7 +37,9 @@ import type { SleepCycleEpisodeConsolidator } from './episodic/sleep-consolidati
 import type { EpisodeArcWeaver } from './episodic/arc-formation.js';
 import type { DreamMeaningPass } from './episodic/dream-meaning-pass.js';
 import type { SleeptimeWikiPass } from '../wiki/sleeptime-wiki-pass.js';
-import type { EpisodicMaintenanceDiagnostics } from './episodic/store.js';
+import type {
+  EpisodicMaintenanceDiagnostics,
+} from './episodic/store-port.js';
 import {
   buildConflictingMemoryReviewInput,
   buildHighImpactLowConfidenceReviewInput,

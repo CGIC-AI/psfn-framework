@@ -1,5 +1,4 @@
-import { existsSync, readFileSync } from 'node:fs';
-import { appendJsonLine } from '../../persistence/jsonl.js';
+import { appendJsonLine, readJsonLines } from '../../persistence/jsonl.js';
 import { resolveInternalRoleEnvelopeLedgerPath } from '../../persistence/layout.js';
 import {
   createInternalRoleEnvelope,
@@ -245,21 +244,15 @@ export class InternalRoleEnvelopeLedgerStore implements InternalRoleEnvelopeLedg
 
   readEntries(channelId: string): InternalRoleEnvelopeLedgerEntry[] {
     const filePath = this.getChannelLedgerPath(channelId);
-    if (!existsSync(filePath)) return [];
-    const raw = readFileSync(filePath, 'utf-8');
-    if (raw.trim().length === 0) return [];
-
-    return raw
-      .split('\n')
-      .map(line => line.trim())
-      .filter(line => line.length > 0)
-      .map((line, index) => {
-        const context = `Internal role envelope ledger ${filePath}:${String(index + 1)}`;
-        try {
-          return parseLedgerEntry(JSON.parse(line), context);
-        } catch (error) {
+    return readJsonLines<InternalRoleEnvelopeLedgerEntry>(
+      filePath,
+      (raw, { line }) => parseLedgerEntry(raw, `Internal role envelope ledger ${filePath}:${String(line)}`),
+      {
+        onError: ({ line, error }) => {
+          const context = `Internal role envelope ledger ${filePath}:${String(line)}`;
           throw new Error(`${context} could not be parsed: ${error instanceof Error ? error.message : String(error)}`);
-        }
-      });
+        },
+      },
+    ).entries;
   }
 }

@@ -1,9 +1,9 @@
-import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { existsSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { createComponentLogger } from '../../shared/logger.js';
 import { formatActiveDateTimeLabel } from '../../shared/time/active-timezone.js';
 import type { EmotionalTimeSeriesPoint } from '../../core/contacts/store/emotional-baseline.js';
-import { appendJsonLine } from '../jsonl.js';
+import { appendJsonLine, readJsonLines } from '../jsonl.js';
 import { sanitizeChannelId } from '../sessions/store-primitives.js';
 import {
   normalizeValuesDeliberationMetadata,
@@ -242,27 +242,15 @@ function readJsonlEntries<T>(
   normalize: (raw: unknown) => T | null,
   warningPrefix: string,
 ): T[] {
-  if (!existsSync(filePath)) return [];
-  const raw = readFileSync(filePath, 'utf-8');
-  if (raw.trim().length === 0) return [];
-
-  return raw
-    .split('\n')
-    .map(line => line.trim())
-    .filter(line => line.length > 0)
-    .map((line, index) => {
-      try {
-        return normalize(JSON.parse(line) as unknown);
-      } catch (error) {
-        log.warn(warningPrefix, {
-          filePath,
-          line: index + 1,
-          error: String(error),
-        });
-        return null;
-      }
-    })
-    .filter((entry): entry is T => entry !== null);
+  return readJsonLines(filePath, normalize, {
+    onError: ({ line, error }) => {
+      log.warn(warningPrefix, {
+        filePath,
+        line,
+        error: String(error),
+      });
+    },
+  }).entries;
 }
 
 function listJsonlFiles(rootDir: string): string[] {

@@ -2,7 +2,6 @@ import {
   existsSync,
   mkdirSync,
   readdirSync,
-  readFileSync,
   rmSync,
   statSync,
 } from 'node:fs';
@@ -16,7 +15,7 @@ import {
   resolveGeneratedImagesDir,
   resolveManagedWorkspaceTempDir,
 } from '../layout.js';
-import { appendJsonLine } from '../jsonl.js';
+import { appendJsonLine, readJsonLines } from '../jsonl.js';
 import { ResearchLibraryStore } from '../../faculties/memory/research-library/store.js';
 
 const log = createComponentLogger('ArtifactLifecycleManager');
@@ -111,14 +110,16 @@ export class ArtifactLifecycleManager {
   }
 
   listRecentRuns(limit: number = 10): ArtifactLifecycleRunRecord[] {
-    if (!existsSync(this.auditPath)) return [];
-    const lines = readFileSync(this.auditPath, 'utf8')
-      .split(/\r?\n/)
-      .map(line => line.trim())
-      .filter(Boolean);
-    return lines
+    return readJsonLines<ArtifactLifecycleRunRecord>(
+      this.auditPath,
+      raw => raw as ArtifactLifecycleRunRecord,
+      {
+        onError: ({ error }) => {
+          throw error instanceof Error ? error : new Error(String(error));
+        },
+      },
+    ).entries
       .slice(-Math.max(1, Math.min(limit, MAX_RECENT_RUNS)))
-      .map((line) => JSON.parse(line) as ArtifactLifecycleRunRecord)
       .reverse();
   }
 

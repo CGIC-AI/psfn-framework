@@ -1,7 +1,6 @@
 import { isRecord } from '../../shared/utils/types.js';
-import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { appendJsonLine } from '../jsonl.js';
+import { appendJsonLine, readJsonLines } from '../jsonl.js';
 import { CHANNEL_TYPES, type ChannelType, type TurnID, type TurnRecord, type TurnRecordMessage, type TurnRecordToolCall, type TurnRecordVersionPointers } from '../../shared/contracts/runtime.js';
 import { sanitizeChannelId } from './store-file-contracts.js';
 import { backfillLegacyTurnId, parseTurnId } from '../../core/turns/id.js';
@@ -451,22 +450,18 @@ function readRecentTurnRecordsFromPath(
   limit: number,
 ): TurnRecord[] {
   if (limit <= 0) return [];
-  if (!existsSync(path)) return [];
-
-  const lines = readFileSync(path, 'utf-8')
-    .split('\n')
-    .map(line => line.trim())
-    .filter(Boolean);
-
-  const records = lines.map((line, index) => {
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(line);
-    } catch {
-      throw new Error(`TurnRecord JSON parse failed at line ${index + 1} for channel ${channelId}`);
-    }
-    return normalizeTurnRecord(parsed, channelId);
-  });
+  const records = readJsonLines<TurnRecord>(
+    path,
+    raw => normalizeTurnRecord(raw, channelId),
+    {
+      onError: ({ line, error }) => {
+        if (error instanceof SyntaxError) {
+          throw new Error(`TurnRecord JSON parse failed at line ${line} for channel ${channelId}`);
+        }
+        throw error instanceof Error ? error : new Error(String(error));
+      },
+    },
+  ).entries;
 
   if (records.length <= limit) return records;
   return records.slice(-limit);

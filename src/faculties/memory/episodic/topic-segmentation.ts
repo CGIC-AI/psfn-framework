@@ -1,6 +1,7 @@
 import type { LLMProviderPort } from '../../../core/agent/contracts.js';
 import type { SessionEntry } from '../../../core/session/types.js';
 import type { PersonaPreamblePort } from '../../../core/identity/persona-preamble.js';
+import { runEpisodicJudgment } from './judgment-runner.js';
 
 /**
  * Contextual topic cutting for candidate-episode synthesis (E5.4).
@@ -172,24 +173,20 @@ export async function proposeTopicSegments(
 
   // E6.1: soft persona framing precedes the strict task instructions and JSON
   // schema; the schema/format sections stay byte-identical.
-  const systemPrompt = personaPreamble
-    ? personaPreamble.prepend('topic_segmentation', TOPIC_SEGMENTATION_SYSTEM_PROMPT)
-    : TOPIC_SEGMENTATION_SYSTEM_PROMPT;
-
-  const response = await llmProvider.complete(
-    {
-      systemPrompt,
-      messages: [{ role: 'user', content: requestPrompt }],
-      correlation: {
-        requestId: `episode-segmentation:${request.sessionId}:${String(first.id)}-${String(last.id)}`,
-        channelId: request.channelId,
-        callType: 'memory',
-        purpose: 'memory.episode_synthesis.segmentation',
-        originType: 'memory',
-        originStage: 'memory.episode_synthesis.topic_cutting',
-      },
+  return runEpisodicJudgment({
+    llmProvider,
+    personaPreamble,
+    personaSubsystem: 'topic_segmentation',
+    systemPrompt: TOPIC_SEGMENTATION_SYSTEM_PROMPT,
+    requestPrompt,
+    correlation: {
+      requestId: `episode-segmentation:${request.sessionId}:${String(first.id)}-${String(last.id)}`,
+      channelId: request.channelId,
+      callType: 'memory',
+      purpose: 'memory.episode_synthesis.segmentation',
+      originType: 'memory',
+      originStage: 'memory.episode_synthesis.topic_cutting',
     },
-    'memory',
-  );
-  return parseTopicSegments(response.content, request.entries.length);
+    parse: content => parseTopicSegments(content, request.entries.length),
+  });
 }

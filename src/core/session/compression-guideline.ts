@@ -1,6 +1,8 @@
 import { existsSync, readFileSync } from 'node:fs';
 import type { LLMProviderPort } from '../agent/contracts.js';
+import type { CorrelationMetadata } from '../../shared/contracts/runtime.js';
 import { createComponentLogger } from '../../shared/logger.js';
+import { getRequestContext } from '../../primitives/llm/request-context.js';
 import { appendJsonLine } from '../../persistence/jsonl.js';
 import { writeJsonAtomic } from '../../shared/utils/fs.js';
 
@@ -600,14 +602,34 @@ export class CompressionGuidelineRuntime {
       })),
       failureSummary: summarizeFailuresForPrompt(failures),
     }, null, 2);
+    const requestContext = getRequestContext();
+    const correlation: CorrelationMetadata = {
+      ...(requestContext?.turnId ? { turnId: requestContext.turnId } : {}),
+      requestId: requestContext?.requestId
+        ? `${requestContext.requestId}:compression-guideline-update`
+        : `compression-guideline-update:${failures[0].channelId}:${this.now()}`,
+      channelId: requestContext?.channelId ?? failures[0].channelId,
+      callType: 'background',
+      purpose: 'session.compression_guideline.update',
+      originType: 'background',
+      originStage: 'session.compression_guideline.update',
+    };
 
     const response = await llmProvider.complete(
       {
         systemPrompt,
         messages: [{ role: 'user', content: userPayload }],
+        correlation,
       },
       'context',
-    );
+    ).catch((error) => {
+      log.warn('Compression guideline update LLM call failed', {
+        error: String(error),
+        reviewedFailureCount: failures.length,
+        ...correlation,
+      });
+      throw error;
+    });
     const proposal = parseGuidelineUpdateProposal(response.content);
     const updatedGuideline = normalizeGuidelineText(proposal.updatedGuideline);
     if (!updatedGuideline) {

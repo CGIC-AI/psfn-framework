@@ -187,45 +187,51 @@ export async function runExtractionOrchestration(options: ExtractionRunOptions):
     await options.emitExtractionStart(options.channelId, options.triggerReason, turnId);
 
     const channelVisibility = classifyChannelDisclosure(options.channelId).channelPrivacy;
-    if (!options.canonicalContactId) {
-      const preLlmGate = evaluateExtractionPreLlmGate(recentEntries);
-      if (!preLlmGate.allowed) {
-        if (options.telemetryEnabled) {
-          log.debug('Skipping extraction LLM for low-signal turn', {
-            channelId: options.channelId,
-            triggerReason: options.triggerReason,
-            reason: preLlmGate.reason,
-            signalScore: preLlmGate.signalScore,
-            signalCount: preLlmGate.signalCount,
-            recentEntryCount: preLlmGate.recentEntryCount,
-            userEntryCount: preLlmGate.userEntryCount,
-          });
-        }
-
-        await options.emitExtractionEnd({
+    // The low-signal pre-LLM gate runs unconditionally, including for tracked
+    // contacts (psfn-framework-2tmg). The former `if (!options.canonicalContactId)`
+    // exemption had no documented rationale (introduced without comment or test
+    // coverage in 3b9a1d85) and bypassed the gate for nearly all real 1:1
+    // traffic, spending extraction LLM calls on filler streaks from known
+    // contacts — exactly the case the gate exists to prevent.
+    const preLlmGate = evaluateExtractionPreLlmGate(recentEntries);
+    if (!preLlmGate.allowed) {
+      if (options.telemetryEnabled) {
+        log.debug('Skipping extraction LLM for low-signal turn', {
           channelId: options.channelId,
-          count: 0,
-          ...(turnId ? { turnId } : {}),
           triggerReason: options.triggerReason,
-          parsedCount: 0,
-          acceptedCount: 0,
-          rejectedCount: 0,
-          writeCount: 0,
-          deduplicatedCount: 0,
-          supersededCount: 0,
-          rejectionBreakdown: createEmptyRejectionBreakdown(),
-          compositionalMode: options.useCompositionalExtraction ? 'chunk_compose' : 'legacy',
-          chunkCount: 0,
-          mergedFactCount: 0,
-          crossChunkDeduplicatedCount: 0,
-          boundaryFactCount: 0,
-          preLlmGateSkipped: true,
-          preLlmGateReason: preLlmGate.reason,
-          preLlmGateSignalScore: preLlmGate.signalScore,
-          preLlmGateSignalCount: preLlmGate.signalCount,
+          ...(options.canonicalContactId ? { triggerContactId: options.canonicalContactId } : {}),
+          reason: preLlmGate.reason,
+          signalScore: preLlmGate.signalScore,
+          signalCount: preLlmGate.signalCount,
+          recentEntryCount: preLlmGate.recentEntryCount,
+          userEntryCount: preLlmGate.userEntryCount,
         });
-        return;
       }
+
+      await options.emitExtractionEnd({
+        channelId: options.channelId,
+        count: 0,
+        ...(turnId ? { turnId } : {}),
+        triggerReason: options.triggerReason,
+        ...(options.canonicalContactId ? { triggerContactId: options.canonicalContactId } : {}),
+        parsedCount: 0,
+        acceptedCount: 0,
+        rejectedCount: 0,
+        writeCount: 0,
+        deduplicatedCount: 0,
+        supersededCount: 0,
+        rejectionBreakdown: createEmptyRejectionBreakdown(),
+        compositionalMode: options.useCompositionalExtraction ? 'chunk_compose' : 'legacy',
+        chunkCount: 0,
+        mergedFactCount: 0,
+        crossChunkDeduplicatedCount: 0,
+        boundaryFactCount: 0,
+        preLlmGateSkipped: true,
+        preLlmGateReason: preLlmGate.reason,
+        preLlmGateSignalScore: preLlmGate.signalScore,
+        preLlmGateSignalCount: preLlmGate.signalCount,
+      });
+      return;
     }
 
 	    const sourceRef = buildExtractionSourceRef(

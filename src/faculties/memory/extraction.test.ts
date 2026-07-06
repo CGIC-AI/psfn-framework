@@ -1550,7 +1550,7 @@ describe('MemoryExtractor canonical profile synthesis', () => {
     const sessionManager = {
       getMessageCount: vi.fn().mockReturnValue(6),
       getRecentMessages: vi.fn().mockReturnValue([
-        { role: 'user', content: 'Hey', authorName: 'PrimaryUser' },
+        { role: 'user', content: 'I started a new job at the studio this week.', authorName: 'PrimaryUser' },
       ]),
     } as any;
 
@@ -1619,7 +1619,7 @@ describe('MemoryExtractor canonical profile synthesis', () => {
     const sessionManager = {
       getMessageCount: vi.fn().mockReturnValue(6),
       getRecentMessages: vi.fn().mockReturnValue([
-        { role: 'user', content: 'Hey', authorName: 'PrimaryUser' },
+        { role: 'user', content: 'I started a new job at the studio this week.', authorName: 'PrimaryUser' },
       ]),
     } as any;
 
@@ -1699,7 +1699,7 @@ describe('MemoryExtractor canonical profile synthesis', () => {
     const sessionManager = {
       getMessageCount: vi.fn().mockReturnValue(6),
       getRecentMessages: vi.fn().mockReturnValue([
-        { role: 'user', content: 'Hey', authorName: 'PrimaryUser' },
+        { role: 'user', content: 'I started a new job at the studio this week.', authorName: 'PrimaryUser' },
       ]),
     } as any;
 
@@ -1775,7 +1775,7 @@ describe('MemoryExtractor canonical profile synthesis', () => {
     const sessionManager = {
       getMessageCount: vi.fn().mockReturnValue(6),
       getRecentMessages: vi.fn().mockReturnValue([
-        { role: 'user', content: 'Hey', authorName: 'PrimaryUser' },
+        { role: 'user', content: 'I started a new job at the studio this week.', authorName: 'PrimaryUser' },
       ]),
     } as any;
 
@@ -1949,7 +1949,7 @@ describe('MemoryExtractor canonical profile synthesis', () => {
     const sessionManager = {
       getMessageCount: vi.fn().mockReturnValue(6),
       getRecentMessages: vi.fn().mockReturnValue([
-        { role: 'user', content: 'Hey', authorName: 'PrimaryUser' },
+        { role: 'user', content: 'I started a new job at the studio this week.', authorName: 'PrimaryUser' },
       ]),
     } as any;
 
@@ -2022,7 +2022,7 @@ describe('MemoryExtractor canonical profile synthesis', () => {
     const sessionManager = {
       getMessageCount: vi.fn().mockReturnValue(6),
       getRecentMessages: vi.fn().mockReturnValue([
-        { role: 'user', content: 'Hey', authorName: 'PrimaryUser' },
+        { role: 'user', content: 'I started a new job at the studio this week.', authorName: 'PrimaryUser' },
       ]),
     } as any;
 

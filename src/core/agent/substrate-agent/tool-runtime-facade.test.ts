@@ -66,6 +66,36 @@ describe('ToolRuntimeFacade maintenance core tool policy', () => {
     expect(() => facade.registerTool(makeTool('selfie_create'), 'extended')).not.toThrow();
   });
 
+  it('rejects widened drift-guard aliases for concerns, north_star, and lifecycle', () => {
+    const { facade } = createFacade(null);
+    expect(() => facade.registerTool(makeTool('create_concern'), 'core')).toThrow(
+      'core tool registration includes retired first-party tool aliases: create_concern->orient',
+    );
+    expect(() => facade.registerTool(makeTool('list_concerns'), 'core')).toThrow(
+      'core tool registration includes retired first-party tool aliases: list_concerns->orient',
+    );
+    expect(() => facade.registerTool(makeTool('resolve_concern'), 'core')).toThrow(
+      'core tool registration includes retired first-party tool aliases: resolve_concern->orient',
+    );
+    for (const alias of [
+      'north_star_list',
+      'north_star_create',
+      'north_star_update',
+      'north_star_delete',
+      'north_star_reorder',
+    ]) {
+      expect(() => facade.registerTool(makeTool(alias), 'extended')).toThrow(
+        `extended tool registration includes retired first-party tool aliases: ${alias}->north_star`,
+      );
+    }
+    expect(() => facade.registerTool(makeTool('self_restart'), 'core')).toThrow(
+      'core tool registration includes retired first-party tool aliases: self_restart->system',
+    );
+    expect(() => facade.registerTool(makeTool('self_rebuild'), 'core')).toThrow(
+      'core tool registration includes retired first-party tool aliases: self_rebuild->system',
+    );
+  });
+
   it('keeps only the reflection allowlist of core tools active for maintenance turns', () => {
     const { facade, agent, emitTelemetry, correlation } = createFacade('reflection');
     facade.registerTool(makeTool('identity'), 'core');

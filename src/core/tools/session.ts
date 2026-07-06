@@ -12,7 +12,7 @@ import {
 import { inferSessionChannelType } from '../session/session-id.js';
 import { getRequestContext } from '../../primitives/llm/request-context.js';
 import { textResult, textResultWithError } from './results.js';
-import { createCompleteFocusTool, createStartFocusTool } from './focus.js';
+import { executeCompleteFocusAction, executeStartFocusAction } from './focus.js';
 import {
   SESSION_CONTINUITY_FACETS,
   SESSION_CONTINUITY_OCCASIONS,
@@ -20,8 +20,8 @@ import {
   type SessionContinuityOccasion,
 } from '../session/continuity-artifacts.js';
 import {
-  createSessionGrepTool,
-  createSessionSearchTool,
+  executeSessionGrepAction,
+  executeSessionSearchAction,
   type SessionGrepToolOptions,
 } from './session-search.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
@@ -304,190 +304,118 @@ function normalizeWakeReturnNextAnchor(value: unknown): string | undefined {
   return normalizeSessionId(value) ?? undefined;
 }
 
-export function createSessionNewTool(options: SessionNewToolOptions): AgentTool<any> {
+async function executeSessionNewAction(
+  options: SessionNewToolOptions,
+  params: SessionNewParams,
+): Promise<AgentToolResult<SessionNewDetails | { isError?: boolean }>> {
   const now = options.now ?? Date.now;
+  if (isBackgroundContinuationContext()) {
+    return rejectBackgroundSessionMutation('new');
+  }
+  const metadata = toMetadata(params.metadata);
+  const previous = resolvePreviousSession(options.dataDir, metadata);
+  const timestamp = now();
+  const newSessionId = normalizeSessionId(
+    options.idFactory?.(timestamp) ?? buildSessionId(timestamp),
+  );
+  if (!newSessionId) {
+    return textResultWithError('session action="new" failed: generated session ID is invalid.', true);
+  }
+
+  const newChannelType = inferSessionChannelType(newSessionId) ?? 'api';
+  try {
+    options.setActiveSession?.(newSessionId);
+    options.seedSession?.(newSessionId);
+    writeLastActiveSession(options.dataDir, {
+      sessionId: newSessionId,
+      channelType: newChannelType,
+      timestamp,
+    });
+  } catch (error) {
+    return textResultWithError(`session action="new" failed: ${toErrorMessage(error)}.`, true);
+  }
+
+  const details: SessionNewDetails = {
+    action: 'new',
+    switched: true,
+    previousSessionId: previous.sessionId,
+    previousChannelType: previous.channelType,
+    newSessionId,
+    newChannelType,
+    timestamp,
+  };
 
   return {
-    name: 'session_new',
-    label: 'session_new',
-    description:
-      'Start a fresh session and switch the active runtime context to that new session. '
-      + 'No required arguments; optional metadata can preserve why the split happened. '
-      + 'Returns previousSessionId and newSessionId so later session_resume calls can use exact IDs.',
-    parameters: Type.Object({
-      metadata: Type.Optional(
-        Type.Record(
-          Type.String(),
-          Type.Unknown(),
-          {
-            description:
-              'Optional metadata. You may include previousSessionId/previousChannelType hints.',
-          },
-        ),
-      ),
-    }),
-    execute: async (
-      _toolCallId: string,
-      params: SessionNewParams,
-      _signal?: AbortSignal,
-    ): Promise<AgentToolResult<SessionNewDetails | { isError?: boolean }>> => {
-      if (isBackgroundContinuationContext()) {
-        return rejectBackgroundSessionMutation('new');
-      }
-      const metadata = toMetadata(params.metadata);
-      const previous = resolvePreviousSession(options.dataDir, metadata);
-      const timestamp = now();
-      const newSessionId = normalizeSessionId(
-        options.idFactory?.(timestamp) ?? buildSessionId(timestamp),
-      );
-      if (!newSessionId) {
-        return textResultWithError('session action="new" failed: generated session ID is invalid.', true);
-      }
-
-      const newChannelType = inferSessionChannelType(newSessionId) ?? 'api';
-      try {
-        options.setActiveSession?.(newSessionId);
-        options.seedSession?.(newSessionId);
-        writeLastActiveSession(options.dataDir, {
-          sessionId: newSessionId,
-          channelType: newChannelType,
-          timestamp,
-        });
-      } catch (error) {
-        return textResultWithError(`session action="new" failed: ${toErrorMessage(error)}.`, true);
-      }
-
-      const details: SessionNewDetails = {
-        action: 'new',
-        switched: true,
-        previousSessionId: previous.sessionId,
-        previousChannelType: previous.channelType,
-        newSessionId,
-        newChannelType,
-        timestamp,
-      };
-
-      return {
-        content: [{
-          type: 'text',
-          text:
-            `session action="new": active context switched to "${newSessionId}"`
-            + `${previous.sessionId ? ` (previous "${previous.sessionId}")` : ''}.`,
-        }] satisfies TextContent[],
-        details,
-      };
-    },
+    content: [{
+      type: 'text',
+      text:
+        `session action="new": active context switched to "${newSessionId}"`
+        + `${previous.sessionId ? ` (previous "${previous.sessionId}")` : ''}.`,
+    }] satisfies TextContent[],
+    details,
   };
 }
 
-export function createSessionListTool(
+async function executeSessionListAction(
   manager: SessionToolManager,
   options: SessionToolOptions,
-): AgentTool<any> {
-  return {
-    name: 'session_list',
-    label: 'session_list',
-    description:
-      'List recent sessions ordered by last activity, including exact sessionId values, message counts, '
-      + 'and latest-message previews. Use this before session_resume when you do not know the exact sessionId.',
-    parameters: Type.Object({
-      limit: Type.Optional(Type.Number({
-        minimum: 1,
-        maximum: MAX_SESSION_LIST_LIMIT,
-        description: `Max sessions to return (default ${DEFAULT_SESSION_LIST_LIMIT}).`,
-      })),
-    }),
-    execute: async (
-      _toolCallId: string,
-      params: { limit?: number },
-      _signal?: AbortSignal,
-    ): Promise<AgentToolResult<Record<string, never>>> => {
-      const limit = normalizeListLimit(params.limit);
-      return textResult(JSON.stringify(buildListPayload(manager, options.dataDir, limit), null, 2));
-    },
-  };
+  params: { limit?: number },
+): Promise<AgentToolResult<Record<string, never>>> {
+  const limit = normalizeListLimit(params.limit);
+  return textResult(JSON.stringify(buildListPayload(manager, options.dataDir, limit), null, 2));
 }
 
-export function createSessionResumeTool(
+async function executeSessionResumeAction(
   manager: SessionToolManager,
   options: SessionToolOptions,
-): AgentTool<any> {
+  params: { sessionId: string },
+): Promise<AgentToolResult<{ isError?: boolean }>> {
   const now = options.now ?? Date.now;
-  return {
-    name: 'session_resume',
-    label: 'session_resume',
-    description:
-      'Resume a prior session by exact sessionId and switch active context so subsequent API/terminal turns continue there. '
-      + 'Requires sessionId; get valid IDs from session_list rather than guessing from preview text.',
-    parameters: Type.Object({
-      sessionId: Type.String({
-        minLength: 1,
-        description: 'Exact session ID to resume.',
-      }),
-    }),
-    execute: async (
-      _toolCallId: string,
-      params: { sessionId: string },
-      _signal?: AbortSignal,
-    ): Promise<AgentToolResult<{ isError?: boolean }>> => {
-      if (isBackgroundContinuationContext()) {
-        return rejectBackgroundSessionMutation('resume');
-      }
-      const requestedSessionId = params.sessionId.trim();
-      if (!requestedSessionId) {
-        return textResultWithError('session action="resume" requires a non-empty sessionId.', true);
-      }
+  if (isBackgroundContinuationContext()) {
+    return rejectBackgroundSessionMutation('resume');
+  }
+  const requestedSessionId = params.sessionId.trim();
+  if (!requestedSessionId) {
+    return textResultWithError('session action="resume" requires a non-empty sessionId.', true);
+  }
 
-      const target = manager.getSessionActivity(requestedSessionId);
-      if (!target) {
-        return textResultWithError(`Session not found: ${requestedSessionId}`, true);
-      }
+  const target = manager.getSessionActivity(requestedSessionId);
+  if (!target) {
+    return textResultWithError(`Session not found: ${requestedSessionId}`, true);
+  }
 
-      const previousSessionId = manager.getActiveContextSession()
-        ?? readLastActiveSession(options.dataDir)?.sessionId
-        ?? null;
-      manager.setActiveContextSession(target.sessionId);
-      writeLastActiveSession(options.dataDir, {
-        sessionId: target.sessionId,
-        channelType: target.channelType,
-        timestamp: now(),
-      });
+  const previousSessionId = manager.getActiveContextSession()
+    ?? readLastActiveSession(options.dataDir)?.sessionId
+    ?? null;
+  manager.setActiveContextSession(target.sessionId);
+  writeLastActiveSession(options.dataDir, {
+    sessionId: target.sessionId,
+    channelType: target.channelType,
+    timestamp: now(),
+  });
 
-      return textResult(JSON.stringify({
-        resumed: true,
-        previousSessionId,
-        session: {
-          sessionId: target.sessionId,
-          channelType: target.channelType ?? null,
-          lastActivityAt: target.lastActivityAt,
-          messageCount: target.messageCount,
-          lastRole: target.lastRole,
-          lastAuthorName: target.lastAuthorName ?? null,
-          lastMessagePreview: target.lastMessagePreview,
-        },
-      }, null, 2));
+  return textResult(JSON.stringify({
+    resumed: true,
+    previousSessionId,
+    session: {
+      sessionId: target.sessionId,
+      channelType: target.channelType ?? null,
+      lastActivityAt: target.lastActivityAt,
+      messageCount: target.messageCount,
+      lastRole: target.lastRole,
+      lastAuthorName: target.lastAuthorName ?? null,
+      lastMessagePreview: target.lastMessagePreview,
     },
-  };
+  }, null, 2));
 }
 
 export function createSessionTool(options: UnifiedSessionToolOptions): AgentTool<any> {
   const now = options.now ?? Date.now;
-  const sessionSearchTool = createSessionSearchTool(
-    options.manager,
-    options.llmProvider,
-    undefined,
-    options.promptRegistry ?? null,
-  );
-  const sessionGrepTool = createSessionGrepTool({
+  const grepOptions: SessionGrepToolOptions = {
     sessionsDir: options.sessionsDir,
     sessionRouteState: options.manager,
     ...(options.runRipgrep ? { runRipgrep: options.runRipgrep } : {}),
-  });
-  const sessionNewTool = createSessionNewTool(options);
-  const sessionListTool = createSessionListTool(options.manager, options);
-  const sessionResumeTool = createSessionResumeTool(options.manager, options);
-  const startFocusTool = createStartFocusTool(options.manager);
-  const completeFocusTool = createCompleteFocusTool(options.manager, options.llmProvider);
+  };
 
   return {
     name: 'session',
@@ -571,33 +499,37 @@ export function createSessionTool(options: UnifiedSessionToolOptions): AgentTool
       )),
     }),
     execute: async (
-      toolCallId: string,
+      _toolCallId: string,
       params: SessionToolParams,
       signal?: AbortSignal,
     ): Promise<AgentToolResult<Record<string, unknown>>> => {
       try {
         switch (normalizeSessionAction(params)) {
           case 'list':
-            return sessionListTool.execute(toolCallId, {
+            return executeSessionListAction(options.manager, options, {
               ...(typeof params.limit === 'number' ? { limit: params.limit } : {}),
-            }, signal);
+            });
           case 'new':
-            return sessionNewTool.execute(toolCallId, {
+            return await executeSessionNewAction(options, {
               ...(params.metadata !== undefined ? { metadata: params.metadata } : {}),
-            }, signal);
+            }) as AgentToolResult<Record<string, unknown>>;
           case 'resume':
-            return sessionResumeTool.execute(toolCallId, {
+            return executeSessionResumeAction(options.manager, options, {
               sessionId: typeof params.sessionId === 'string' ? params.sessionId : '',
-            }, signal);
+            });
           case 'search':
-            return sessionSearchTool.execute(toolCallId, {
+            return executeSessionSearchAction({
+              transcriptSearch: options.manager,
+              llmProvider: options.llmProvider,
+              promptRegistry: options.promptRegistry ?? null,
+            }, {
               query: typeof params.query === 'string' ? params.query : '',
               ...(typeof params.limit === 'number' ? { limit: params.limit } : {}),
               ...(typeof params.channelId === 'string' ? { channelId: params.channelId } : {}),
               ...(typeof params.summarize === 'boolean' ? { summarize: params.summarize } : {}),
-            }, signal);
+            });
           case 'grep':
-            return sessionGrepTool.execute(toolCallId, {
+            return executeSessionGrepAction(grepOptions, {
               pattern: typeof params.pattern === 'string' ? params.pattern : '',
               ...(typeof params.mode === 'string' ? { mode: params.mode } : {}),
               ...(typeof params.caseSensitive === 'boolean' ? { caseSensitive: params.caseSensitive } : {}),
@@ -627,15 +559,15 @@ export function createSessionTool(options: UnifiedSessionToolOptions): AgentTool
             }, null, 2));
           }
           case 'start_focus':
-            return startFocusTool.execute(toolCallId, {
+            return executeStartFocusAction(options.manager, {
               scope: typeof params.scope === 'string' ? params.scope : '',
               ...(typeof params.channelId === 'string' ? { channelId: params.channelId } : {}),
-            }, signal);
+            });
           case 'complete_focus':
-            return completeFocusTool.execute(toolCallId, {
+            return executeCompleteFocusAction(options.manager, options.llmProvider, {
               ...(typeof params.channelId === 'string' ? { channelId: params.channelId } : {}),
               ...(typeof params.conclusion === 'string' ? { conclusion: params.conclusion } : {}),
-            }, signal);
+            });
         }
       } catch (error) {
         return textResultWithError(`session failed: ${toErrorMessage(error)}.`, true);

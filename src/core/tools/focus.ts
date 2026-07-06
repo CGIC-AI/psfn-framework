@@ -1,12 +1,11 @@
-import { Type } from '@sinclair/typebox';
-import type { AgentTool, AgentToolResult } from '@mariozechner/pi-agent-core';
+import type { AgentToolResult } from '@mariozechner/pi-agent-core';
 import type { TextContent } from '@mariozechner/pi-ai';
 import type { LLMProviderPort } from '../agent/contracts.js';
 import { getRequestContext } from '../../primitives/llm/request-context.js';
 import { textResultWithError } from './results.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
 
-interface FocusSessionManager {
+export interface FocusSessionManager {
   getActiveContextSession(): string | null;
   startFocusSession(channelId: string, scope: string): {
     focusId: string;
@@ -158,170 +157,128 @@ function buildDistillationInput(params: {
   return lines.filter((line): line is string => line !== null).join('\n');
 }
 
-export function createStartFocusTool(sessionManager: FocusSessionManager): AgentTool<any> {
-  return {
-    name: 'start_focus',
-    label: 'start_focus',
-    description:
-      'Start a scoped focus session for the current channel. A focus session records scope and supporting evidence'
-      + ' until complete_focus persists distilled knowledge.',
-    parameters: Type.Object({
-      scope: Type.String({
-        minLength: 1,
-        description: 'What this focus session is trying to solve or learn.',
-      }),
-      channelId: Type.Optional(Type.String({
-        minLength: 1,
-        description: 'Optional explicit channel/session id override.',
-      })),
-    }),
-    execute: async (
-      _toolCallId: string,
-      params: { scope: string; channelId?: string },
-      _signal?: AbortSignal,
-    ): Promise<AgentToolResult<Record<string, unknown>>> => {
-      const channelId = resolveTargetChannelId(sessionManager, params.channelId);
-      if (!channelId) {
-        return textResultWithError('start_focus failed: unable to resolve channelId for this turn.', true);
-      }
+export async function executeStartFocusAction(
+  sessionManager: FocusSessionManager,
+  params: { scope: string; channelId?: string },
+): Promise<AgentToolResult<Record<string, unknown>>> {
+  const channelId = resolveTargetChannelId(sessionManager, params.channelId);
+  if (!channelId) {
+    return textResultWithError('start_focus failed: unable to resolve channelId for this turn.', true);
+  }
 
-      try {
-        const started = sessionManager.startFocusSession(channelId, params.scope);
-        const resumedContextText = started.existingProjectContext
-          ? ` Resuming project context with ${started.existingProjectContext.knowledgeBlockCount} prior distilled block`
-            + `${started.existingProjectContext.knowledgeBlockCount === 1 ? '' : 's'}.`
-          : ' Starting a new project context.';
-        return {
-          content: [{
-            type: 'text',
-            text:
-              `start_focus: tracking "${started.scope}" in ${started.channelId}`
-              + ` (focusId=${started.focusId}, from entry ${started.startEntryId}).`
-              + resumedContextText,
-          }] satisfies TextContent[],
-          details: {
-            focusId: started.focusId,
-            channelId: started.channelId,
-            scope: started.scope,
-            startedAt: started.startedAt,
-            startEntryId: started.startEntryId,
-            existingProjectContextBlockCount: started.existingProjectContext?.knowledgeBlockCount ?? 0,
-            existingProjectContextEvidenceCount: started.existingProjectContext?.totalEvidenceCount ?? 0,
-          },
-        };
-      } catch (error) {
-        return textResultWithError(`start_focus failed: ${toErrorMessage(error)}.`, true);
-      }
-    },
-  };
+  try {
+    const started = sessionManager.startFocusSession(channelId, params.scope);
+    const resumedContextText = started.existingProjectContext
+      ? ` Resuming project context with ${started.existingProjectContext.knowledgeBlockCount} prior distilled block`
+        + `${started.existingProjectContext.knowledgeBlockCount === 1 ? '' : 's'}.`
+      : ' Starting a new project context.';
+    return {
+      content: [{
+        type: 'text',
+        text:
+          `start_focus: tracking "${started.scope}" in ${started.channelId}`
+          + ` (focusId=${started.focusId}, from entry ${started.startEntryId}).`
+          + resumedContextText,
+      }] satisfies TextContent[],
+      details: {
+        focusId: started.focusId,
+        channelId: started.channelId,
+        scope: started.scope,
+        startedAt: started.startedAt,
+        startEntryId: started.startEntryId,
+        existingProjectContextBlockCount: started.existingProjectContext?.knowledgeBlockCount ?? 0,
+        existingProjectContextEvidenceCount: started.existingProjectContext?.totalEvidenceCount ?? 0,
+      },
+    };
+  } catch (error) {
+    return textResultWithError(`start_focus failed: ${toErrorMessage(error)}.`, true);
+  }
 }
 
-export function createCompleteFocusTool(
+export async function executeCompleteFocusAction(
   sessionManager: FocusSessionManager,
   llmProvider: LLMProviderPort,
-): AgentTool<any> {
-  return {
-    name: 'complete_focus',
-    label: 'complete_focus',
-    description:
-      'Complete an active focus session by distilling a durable knowledge block with the helper context model'
-      + ' and compacting the raw focus range from future context windows.',
-    parameters: Type.Object({
-      channelId: Type.Optional(Type.String({
-        minLength: 1,
-        description: 'Optional explicit channel/session id override.',
-      })),
-      conclusion: Type.Optional(Type.String({
-        minLength: 1,
-        description: 'Optional completion notes that should be considered while distilling knowledge.',
-      })),
-    }),
-    execute: async (
-      _toolCallId: string,
-      params: { channelId?: string; conclusion?: string },
-      _signal?: AbortSignal,
-    ): Promise<AgentToolResult<Record<string, unknown>>> => {
-      const channelId = resolveTargetChannelId(sessionManager, params.channelId);
-      if (!channelId) {
-        return textResultWithError('complete_focus failed: unable to resolve channelId for this turn.', true);
-      }
+  params: { channelId?: string; conclusion?: string },
+): Promise<AgentToolResult<Record<string, unknown>>> {
+  const channelId = resolveTargetChannelId(sessionManager, params.channelId);
+  if (!channelId) {
+    return textResultWithError('complete_focus failed: unable to resolve channelId for this turn.', true);
+  }
 
-      const focusContext = sessionManager.getFocusSessionContext(channelId);
-      if (!focusContext) {
-        return textResultWithError(`complete_focus failed: no active focus session for "${channelId}".`, true);
-      }
+  const focusContext = sessionManager.getFocusSessionContext(channelId);
+  if (!focusContext) {
+    return textResultWithError(`complete_focus failed: no active focus session for "${channelId}".`, true);
+  }
 
-      const transcript = formatFocusTranscript(focusContext.entries);
-      const evidenceText = formatFocusEvidence(focusContext.evidence);
-      const requestContext = getRequestContext();
-      const systemPrompt = [
-        'You distill investigative work into durable operator knowledge.',
-        'Return plain text only (no markdown code fences).',
-        'Output format:',
-        '1) A one-line title.',
-        '2) Up to 6 short bullet points with concrete findings.',
-        '3) One final "Open questions:" line (or "Open questions: none").',
-        'Do not include speculative claims not supported by the transcript/evidence.',
-      ].join('\n');
+  const transcript = formatFocusTranscript(focusContext.entries);
+  const evidenceText = formatFocusEvidence(focusContext.evidence);
+  const requestContext = getRequestContext();
+  const systemPrompt = [
+    'You distill investigative work into durable operator knowledge.',
+    'Return plain text only (no markdown code fences).',
+    'Output format:',
+    '1) A one-line title.',
+    '2) Up to 6 short bullet points with concrete findings.',
+    '3) One final "Open questions:" line (or "Open questions: none").',
+    'Do not include speculative claims not supported by the transcript/evidence.',
+  ].join('\n');
 
-      const input = buildDistillationInput({
-        scope: focusContext.session.scope,
-        conclusion: params.conclusion,
-        transcript,
-        evidenceText,
-        evidenceCount: focusContext.evidence.length,
-      });
+  const input = buildDistillationInput({
+    scope: focusContext.session.scope,
+    conclusion: params.conclusion,
+    transcript,
+    evidenceText,
+    evidenceCount: focusContext.evidence.length,
+  });
 
-      try {
-        const response = await llmProvider.complete(
-          {
-            systemPrompt,
-            messages: [{ role: 'user', content: input }],
-            correlation: {
-              ...(requestContext?.turnId ? { turnId: requestContext.turnId } : {}),
-              ...(requestContext?.requestId ? { requestId: `${requestContext.requestId}:focus_complete` } : {}),
-              ...(requestContext?.channelId ? { channelId: requestContext.channelId } : {}),
-              callType: 'summary',
-              purpose: 'focus.complete.summary',
-              originType: 'summary',
-              originStage: 'focus.complete.summary',
-              ...(requestContext?.toolName ? { toolName: requestContext.toolName } : {}),
-              ...(requestContext?.toolCallId ? { toolCallId: requestContext.toolCallId } : {}),
-            },
-          },
-          'context',
-        );
-        const distilledKnowledge = compactText(response.content);
-        if (!distilledKnowledge) {
-          return textResultWithError('complete_focus failed: helper model returned an empty summary.', true);
-        }
+  try {
+    const response = await llmProvider.complete(
+      {
+        systemPrompt,
+        messages: [{ role: 'user', content: input }],
+        correlation: {
+          ...(requestContext?.turnId ? { turnId: requestContext.turnId } : {}),
+          ...(requestContext?.requestId ? { requestId: `${requestContext.requestId}:focus_complete` } : {}),
+          ...(requestContext?.channelId ? { channelId: requestContext.channelId } : {}),
+          callType: 'summary',
+          purpose: 'focus.complete.summary',
+          originType: 'summary',
+          originStage: 'focus.complete.summary',
+          ...(requestContext?.toolName ? { toolName: requestContext.toolName } : {}),
+          ...(requestContext?.toolCallId ? { toolCallId: requestContext.toolCallId } : {}),
+        },
+      },
+      'context',
+    );
+    const distilledKnowledge = compactText(response.content);
+    if (!distilledKnowledge) {
+      return textResultWithError('complete_focus failed: helper model returned an empty summary.', true);
+    }
 
-        const completed = sessionManager.completeFocusSession(channelId, distilledKnowledge);
-        return {
-          content: [{
-            type: 'text',
-            text:
-              `complete_focus: persisted knowledge block ${completed.knowledgeBlock.id} for "${completed.scope}".\n`
-              + `Project context now has ${completed.projectContext.knowledgeBlockCount} distilled block`
-              + `${completed.projectContext.knowledgeBlockCount === 1 ? '' : 's'}.\n`
-              + `${distilledKnowledge}`,
-          }] satisfies TextContent[],
-          details: {
-            focusId: completed.focusId,
-            channelId: completed.channelId,
-            scope: completed.scope,
-            rangeStartId: completed.rangeStartId,
-            rangeEndId: completed.rangeEndId,
-            knowledgeBlockId: completed.knowledgeBlock.id,
-            knowledgeCreatedAt: completed.knowledgeBlock.createdAt,
-            evidenceCount: completed.knowledgeBlock.evidenceCount,
-            projectContextBlockCount: completed.projectContext.knowledgeBlockCount,
-            projectContextEvidenceCount: completed.projectContext.totalEvidenceCount,
-          },
-        };
-      } catch (error) {
-        return textResultWithError(`complete_focus failed: ${toErrorMessage(error)}.`, true);
-      }
-    },
-  };
+    const completed = sessionManager.completeFocusSession(channelId, distilledKnowledge);
+    return {
+      content: [{
+        type: 'text',
+        text:
+          `complete_focus: persisted knowledge block ${completed.knowledgeBlock.id} for "${completed.scope}".\n`
+          + `Project context now has ${completed.projectContext.knowledgeBlockCount} distilled block`
+          + `${completed.projectContext.knowledgeBlockCount === 1 ? '' : 's'}.\n`
+          + `${distilledKnowledge}`,
+      }] satisfies TextContent[],
+      details: {
+        focusId: completed.focusId,
+        channelId: completed.channelId,
+        scope: completed.scope,
+        rangeStartId: completed.rangeStartId,
+        rangeEndId: completed.rangeEndId,
+        knowledgeBlockId: completed.knowledgeBlock.id,
+        knowledgeCreatedAt: completed.knowledgeBlock.createdAt,
+        evidenceCount: completed.knowledgeBlock.evidenceCount,
+        projectContextBlockCount: completed.projectContext.knowledgeBlockCount,
+        projectContextEvidenceCount: completed.projectContext.totalEvidenceCount,
+      },
+    };
+  } catch (error) {
+    return textResultWithError(`complete_focus failed: ${toErrorMessage(error)}.`, true);
+  }
 }

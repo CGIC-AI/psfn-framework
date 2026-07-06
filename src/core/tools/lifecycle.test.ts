@@ -1,8 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import {
   createSystemTool,
-  createRestartTool,
-  createRebuildTool,
   DEFERRED_LIFECYCLE_ACTION_KIND,
   inferDeferredLifecycleActions,
   registerDeferredLifecycleRuntime,
@@ -56,10 +54,20 @@ function makeConfig(): SubstrateConfig {
   };
 }
 
-describe('createRestartTool', () => {
+describe('system action=restart', () => {
   let mockNotifier: LifecycleNotifier;
   let mockStopFn: ReturnType<typeof vi.fn>;
   let runRestartCommand: ReturnType<typeof vi.fn>;
+
+  function makeTool(
+    options: Omit<Parameters<typeof createSystemTool>[1] & object, 'notifier' | 'stopFn'> = {},
+  ): ReturnType<typeof createSystemTool> {
+    return createSystemTool(makeConfig(), {
+      notifier: mockNotifier,
+      stopFn: mockStopFn,
+      ...options,
+    });
+  }
 
   beforeEach(() => {
     mockNotifier = {
@@ -71,14 +79,6 @@ describe('createRestartTool', () => {
     runRestartCommand = vi.fn(async () => {});
   });
 
-  it('has correct tool metadata', () => {
-    const tool = createRestartTool(mockNotifier, mockStopFn);
-    expect(tool.name).toBe('self_restart');
-    expect(tool.description).toBeTruthy();
-    expect(tool.label).toBe('self_restart');
-    expect(tool.parameters).toBeDefined();
-  });
-
   it('sends pre-restart notification', async () => {
     // Override process.exit and setImmediate to prevent side effects
     const exitSpy = vi.spyOn(process, 'exit').mockImplementation(() => undefined as never);
@@ -86,8 +86,8 @@ describe('createRestartTool', () => {
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
     globalThis.setImmediate = vi.fn((_fn: unknown) => {}) as unknown as typeof setImmediate;
 
-    const tool = createRestartTool(mockNotifier, mockStopFn);
-    const result = await tool.execute('call-1', { reason: 'apply config' });
+    const tool = makeTool();
+    const result = await tool.execute('call-1', { action: 'restart', reason: 'apply config' });
 
     expect(mockNotifier.notifyPreRestart).toHaveBeenCalledWith('apply config');
     expect(resultText(result)).toContain('Restart initiated');
@@ -102,8 +102,8 @@ describe('createRestartTool', () => {
     const origSetImmediate = globalThis.setImmediate;
     globalThis.setImmediate = vi.fn((_fn: unknown) => {}) as unknown as typeof setImmediate;
 
-    const tool = createRestartTool(mockNotifier, mockStopFn);
-    await tool.execute('call-2', { reason: 'config change' });
+    const tool = makeTool();
+    await tool.execute('call-2', { action: 'restart', reason: 'config change' });
 
     expect(mockNotifier.notifyPreRestart).toHaveBeenCalledWith('config change');
 
@@ -112,8 +112,8 @@ describe('createRestartTool', () => {
   });
 
   it('blocks restart when reason is missing', async () => {
-    const tool = createRestartTool(mockNotifier, mockStopFn);
-    const result = await tool.execute('call-3', { reason: '   ' });
+    const tool = makeTool();
+    const result = await tool.execute('call-3', { action: 'restart', reason: '   ' });
 
     expect(resultText(result)).toContain('reason is required');
     expect((result.details as any).isError).toBe(true);
@@ -127,7 +127,7 @@ describe('createRestartTool', () => {
       cooldownMs: 60_000,
       maxPerHour: 1,
     });
-    const tool = createRestartTool(mockNotifier, mockStopFn, {
+    const tool = makeTool({
       restartSafeguard: safeguard,
       getCapabilityTier: () => 'autonomous',
     });
@@ -136,15 +136,15 @@ describe('createRestartTool', () => {
     const origSetImmediate = globalThis.setImmediate;
     globalThis.setImmediate = vi.fn((_fn: unknown) => {}) as unknown as typeof setImmediate;
 
-    const first = await tool.execute('call-4', { reason: 'first' });
+    const first = await tool.execute('call-4', { action: 'restart', reason: 'first' });
     expect(resultText(first)).toContain('Restart initiated');
 
-    const cooldownBlocked = await tool.execute('call-5', { reason: 'second' });
+    const cooldownBlocked = await tool.execute('call-5', { action: 'restart', reason: 'second' });
     expect(resultText(cooldownBlocked)).toContain('cooldown');
     expect((cooldownBlocked.details as any).isError).toBe(true);
 
     now = 61_000;
-    const hourlyBlocked = await tool.execute('call-6', { reason: 'third' });
+    const hourlyBlocked = await tool.execute('call-6', { action: 'restart', reason: 'third' });
     expect(resultText(hourlyBlocked)).toContain('hourly limit');
     expect((hourlyBlocked.details as any).isError).toBe(true);
 
@@ -160,10 +160,8 @@ describe('createRestartTool', () => {
       return 0 as any;
     }) as typeof setImmediate;
 
-    const tool = createRestartTool(mockNotifier, mockStopFn, {
-      runRestartCommand,
-    });
-    await tool.execute('call-7', { reason: 'mode-aware restart' });
+    const tool = makeTool({ runRestartCommand });
+    await tool.execute('call-7', { action: 'restart', reason: 'mode-aware restart' });
     await new Promise(resolve => setTimeout(resolve, 0));
 
     expect(mockStopFn).toHaveBeenCalledOnce();
@@ -183,7 +181,7 @@ describe('createRestartTool', () => {
       return 0 as any;
     }) as typeof setImmediate;
 
-    const tool = createRestartTool(mockNotifier, mockStopFn, {
+    const tool = makeTool({
       restartContract: {
         strategy: 'reexec',
         source: 'mode-default',
@@ -191,7 +189,7 @@ describe('createRestartTool', () => {
       },
       runRestartCommand,
     });
-    const result = await tool.execute('call-reexec', { reason: 'split wrapper restart' });
+    const result = await tool.execute('call-reexec', { action: 'restart', reason: 'split wrapper restart' });
     await new Promise(resolve => setTimeout(resolve, 0));
 
     expect(resultText(result)).toContain('Restart initiated');
@@ -204,7 +202,7 @@ describe('createRestartTool', () => {
   });
 
   it('fails closed for unsupported restart strategies without stopping the runtime', async () => {
-    const tool = createRestartTool(mockNotifier, mockStopFn, {
+    const tool = makeTool({
       restartContract: {
         strategy: 'unsupported',
         source: 'none',
@@ -212,7 +210,7 @@ describe('createRestartTool', () => {
       runRestartCommand,
     });
 
-    const result = await tool.execute('call-unsupported', { reason: 'unsafe self restart' });
+    const result = await tool.execute('call-unsupported', { action: 'restart', reason: 'unsafe self restart' });
 
     expect(resultText(result)).toContain('Restart blocked');
     expect(resultText(result)).toContain('current process was left running');
@@ -233,7 +231,7 @@ describe('createRestartTool', () => {
       return 0 as any;
     }) as typeof setImmediate;
 
-    const tool = createRestartTool(mockNotifier, mockStopFn, {
+    const tool = makeTool({
       restartContract: {
         strategy: 'command',
         source: 'explicit',
@@ -241,7 +239,7 @@ describe('createRestartTool', () => {
       },
       runRestartCommand,
     });
-    const result = await tool.execute('call-command-fail', { reason: 'supervisor restart' });
+    const result = await tool.execute('call-command-fail', { action: 'restart', reason: 'supervisor restart' });
     await new Promise(resolve => setTimeout(resolve, 0));
 
     expect(resultText(result)).toContain('Restart initiated');
@@ -254,11 +252,21 @@ describe('createRestartTool', () => {
   });
 });
 
-describe('createRebuildTool', () => {
+describe('system action=rebuild', () => {
   let mockNotifier: LifecycleNotifier;
   let mockStopFn: ReturnType<typeof vi.fn>;
   let runRestartCommand: ReturnType<typeof vi.fn>;
   let runBuildCommand: ReturnType<typeof vi.fn>;
+
+  function makeTool(
+    options: Omit<Parameters<typeof createSystemTool>[1] & object, 'notifier' | 'stopFn'> = {},
+  ): ReturnType<typeof createSystemTool> {
+    return createSystemTool(makeConfig(), {
+      notifier: mockNotifier,
+      stopFn: mockStopFn,
+      ...options,
+    });
+  }
 
   beforeEach(() => {
     mockNotifier = {
@@ -271,22 +279,13 @@ describe('createRebuildTool', () => {
     runBuildCommand = vi.fn(async () => {});
   });
 
-  it('has correct tool metadata', () => {
-    const tool = createRebuildTool(mockNotifier, mockStopFn);
-    expect(tool.name).toBe('self_rebuild');
-    expect(tool.description.toLowerCase()).toContain('rebuild');
-    expect(tool.description.toLowerCase()).toContain('build');
-    expect(tool.label).toBe('self_rebuild');
-    expect(tool.parameters).toBeDefined();
-  });
-
   it('sends pre-restart notification with rebuild prefix', async () => {
     const exitSpy = vi.spyOn(process, 'exit').mockImplementation(() => undefined as never);
     const origSetImmediate = globalThis.setImmediate;
     globalThis.setImmediate = vi.fn((_fn: unknown) => {}) as unknown as typeof setImmediate;
 
-    const tool = createRebuildTool(mockNotifier, mockStopFn, { runBuildCommand });
-    const result = await tool.execute('call-3', { reason: 'dependency refresh' });
+    const tool = makeTool({ runBuildCommand });
+    const result = await tool.execute('call-3', { action: 'rebuild', reason: 'dependency refresh' });
 
     expect(mockNotifier.notifyPreRestart).toHaveBeenCalledWith('rebuild: dependency refresh');
     expect(resultText(result)).toContain('Rebuild initiated');
@@ -300,8 +299,8 @@ describe('createRebuildTool', () => {
     const origSetImmediate = globalThis.setImmediate;
     globalThis.setImmediate = vi.fn((_fn: unknown) => {}) as unknown as typeof setImmediate;
 
-    const tool = createRebuildTool(mockNotifier, mockStopFn, { runBuildCommand });
-    await tool.execute('call-4', { reason: 'new module' });
+    const tool = makeTool({ runBuildCommand });
+    await tool.execute('call-4', { action: 'rebuild', reason: 'new module' });
 
     expect(mockNotifier.notifyPreRestart).toHaveBeenCalledWith('rebuild: new module');
 
@@ -321,11 +320,11 @@ describe('createRebuildTool', () => {
       return 0 as any;
     }) as typeof setImmediate;
 
-    const tool = createRebuildTool(mockNotifier, mockStopFn, {
+    const tool = makeTool({
       runBuildCommand,
       runRestartCommand,
     });
-    await tool.execute('call-5', { reason: 'verify build' });
+    await tool.execute('call-5', { action: 'rebuild', reason: 'verify build' });
     await new Promise(r => setTimeout(r, 0));
 
     expect(mockNotifier.notifyShutdown).toHaveBeenCalled();
@@ -338,8 +337,8 @@ describe('createRebuildTool', () => {
   });
 
   it('blocks rebuild when reason is missing', async () => {
-    const tool = createRebuildTool(mockNotifier, mockStopFn);
-    const result = await tool.execute('call-6', { reason: '   ' });
+    const tool = makeTool();
+    const result = await tool.execute('call-6', { action: 'rebuild', reason: '   ' });
 
     expect(resultText(result)).toContain('reason is required');
     expect((result.details as any).isError).toBe(true);
@@ -347,8 +346,8 @@ describe('createRebuildTool', () => {
   });
 
   it('blocks rebuild before notification when no lifecycle build command is configured', async () => {
-    const tool = createRebuildTool(mockNotifier, mockStopFn);
-    const result = await tool.execute('call-no-build-command', { reason: 'verify rebuild' });
+    const tool = makeTool();
+    const result = await tool.execute('call-no-build-command', { action: 'rebuild', reason: 'verify rebuild' });
 
     expect(resultText(result)).toContain('Rebuild blocked');
     expect(resultText(result)).toContain('no lifecycle rebuild command is configured');
@@ -461,12 +460,14 @@ describe('deferred lifecycle execution', () => {
   });
 
   it('queues restart work instead of stopping immediately in deferred mode', async () => {
-    const tool = createRestartTool(mockNotifier, mockStopFn, {
+    const tool = createSystemTool(makeConfig(), {
+      notifier: mockNotifier,
+      stopFn: mockStopFn,
       executionMode: 'deferred',
       runRestartCommand,
     });
 
-    const result = await tool.execute('call-deferred-restart', { reason: 'autonomy rerun' });
+    const result = await tool.execute('call-deferred-restart', { action: 'restart', reason: 'autonomy rerun' });
 
     expect(resultText(result)).toContain('Restart queued');
     expect(mockNotifier.notifyPreRestart).not.toHaveBeenCalled();

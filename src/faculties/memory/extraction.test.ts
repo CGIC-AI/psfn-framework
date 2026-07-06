@@ -1550,7 +1550,7 @@ describe('MemoryExtractor canonical profile synthesis', () => {
     const sessionManager = {
       getMessageCount: vi.fn().mockReturnValue(6),
       getRecentMessages: vi.fn().mockReturnValue([
-        { role: 'user', content: 'Hey', authorName: 'PrimaryUser' },
+        { role: 'user', content: 'I started a new job at the studio this week.', authorName: 'PrimaryUser' },
       ]),
     } as any;
 
@@ -1619,7 +1619,7 @@ describe('MemoryExtractor canonical profile synthesis', () => {
     const sessionManager = {
       getMessageCount: vi.fn().mockReturnValue(6),
       getRecentMessages: vi.fn().mockReturnValue([
-        { role: 'user', content: 'Hey', authorName: 'PrimaryUser' },
+        { role: 'user', content: 'I started a new job at the studio this week.', authorName: 'PrimaryUser' },
       ]),
     } as any;
 
@@ -1699,7 +1699,7 @@ describe('MemoryExtractor canonical profile synthesis', () => {
     const sessionManager = {
       getMessageCount: vi.fn().mockReturnValue(6),
       getRecentMessages: vi.fn().mockReturnValue([
-        { role: 'user', content: 'Hey', authorName: 'PrimaryUser' },
+        { role: 'user', content: 'I started a new job at the studio this week.', authorName: 'PrimaryUser' },
       ]),
     } as any;
 
@@ -1775,7 +1775,7 @@ describe('MemoryExtractor canonical profile synthesis', () => {
     const sessionManager = {
       getMessageCount: vi.fn().mockReturnValue(6),
       getRecentMessages: vi.fn().mockReturnValue([
-        { role: 'user', content: 'Hey', authorName: 'PrimaryUser' },
+        { role: 'user', content: 'I started a new job at the studio this week.', authorName: 'PrimaryUser' },
       ]),
     } as any;
 
@@ -1949,7 +1949,7 @@ describe('MemoryExtractor canonical profile synthesis', () => {
     const sessionManager = {
       getMessageCount: vi.fn().mockReturnValue(6),
       getRecentMessages: vi.fn().mockReturnValue([
-        { role: 'user', content: 'Hey', authorName: 'PrimaryUser' },
+        { role: 'user', content: 'I started a new job at the studio this week.', authorName: 'PrimaryUser' },
       ]),
     } as any;
 
@@ -2022,7 +2022,7 @@ describe('MemoryExtractor canonical profile synthesis', () => {
     const sessionManager = {
       getMessageCount: vi.fn().mockReturnValue(6),
       getRecentMessages: vi.fn().mockReturnValue([
-        { role: 'user', content: 'Hey', authorName: 'PrimaryUser' },
+        { role: 'user', content: 'I started a new job at the studio this week.', authorName: 'PrimaryUser' },
       ]),
     } as any;
 
@@ -2392,5 +2392,139 @@ describe('MemoryExtractor crash recovery markers', () => {
     const prompt = (llmClient.complete as ReturnType<typeof vi.fn>).mock.calls[0][0].systemPrompt as string;
     expect(prompt).toContain('Human participant name: A');
     expect(prompt).not.toContain('Human participant name: Alex Example');
+  });
+});
+
+describe('MemoryExtractor interval watermark coverage', () => {
+  function buildWatermarkEntries(channelId: string, count: number) {
+    return Array.from({ length: count }, (_, index) => {
+      const id = index + 1;
+      const role = index % 2 === 0 ? 'user' : 'assistant';
+      return {
+        id,
+        channelId,
+        role,
+        authorName: role,
+        content: role === 'user'
+          ? `I am planning a Kyoto trip detail ${id} for my vacation.`
+          : `Noted travel detail ${id}.`,
+        timestamp: id * 1_000,
+      };
+    });
+  }
+
+  function buildWatermarkHarness(channelId: string, options: {
+    llmClient?: any;
+    entryCount?: number;
+  } = {}) {
+    const entries = buildWatermarkEntries(channelId, options.entryCount ?? 10);
+    const llmClient = options.llmClient ?? {
+      complete: vi.fn().mockResolvedValue({ content: '<response></response>' }),
+    } as any;
+    const sessionManager = {
+      getMessageCount: vi.fn().mockReturnValue(entries.length),
+      getRecentMessages: vi.fn().mockReturnValue(entries),
+    } as any;
+    const memoryStore = {
+      getMemoriesByChannel: vi.fn().mockReturnValue([]),
+    } as any;
+    const embeddingService = {
+      embed: vi.fn().mockResolvedValue(new Float32Array(8)),
+      embedBatch: vi.fn(),
+      dims: 8,
+    } as any;
+    const eventBus = {
+      emit: vi.fn().mockResolvedValue(undefined),
+    } as any;
+
+    const extractor = new MemoryExtractor(
+      llmClient,
+      sessionManager,
+      memoryStore,
+      embeddingService,
+      eventBus,
+      { extractionInterval: 5 },
+    );
+
+    return { extractor, entries, llmClient, sessionManager, eventBus };
+  }
+
+  it('does not re-send a pre-compaction batch on the next interval trigger', async () => {
+    const channelId = 'api:watermark-compaction';
+    const { extractor, entries, llmClient, sessionManager, eventBus } =
+      buildWatermarkHarness(channelId);
+
+    // Pre-compaction extraction consumes the oldest 8 of 10 messages.
+    await extractor.queueCompactionExtraction(channelId, entries.slice(0, 8));
+    expect(llmClient.complete).toHaveBeenCalledTimes(1);
+
+    // Without watermark coverage the interval trigger (interval=5, lastCount=0,
+    // currentCount=10) would fire immediately and re-send extracted messages.
+    await extractor.maybeExtract(channelId);
+    expect(llmClient.complete).toHaveBeenCalledTimes(1);
+
+    const startReasons = (eventBus.emit as ReturnType<typeof vi.fn>).mock.calls
+      .filter(([name]) => name === 'memory.extraction.start')
+      .map(([, payload]) => payload?.triggerReason);
+    expect(startReasons).toEqual(['pre_compaction']);
+
+    // Five genuinely new messages later, the interval trigger fires again.
+    sessionManager.getMessageCount.mockReturnValue(13);
+    await extractor.maybeExtract(channelId);
+    expect(llmClient.complete).toHaveBeenCalledTimes(2);
+  });
+
+  it('advances coverage only for the consumed range, not the newest unextracted messages', async () => {
+    const channelId = 'api:watermark-partial';
+    const { extractor, entries, llmClient, sessionManager } =
+      buildWatermarkHarness(channelId);
+
+    // Batch covers messages 1-4 only; messages 5-10 remain unextracted.
+    await extractor.queueCompactionExtraction(channelId, entries.slice(0, 4));
+    expect(llmClient.complete).toHaveBeenCalledTimes(1);
+
+    // Watermark moved to 4, so 10 - 4 = 6 >= interval 5: the trigger still
+    // fires for the unconsumed tail instead of skipping it.
+    await extractor.maybeExtract(channelId);
+    expect(llmClient.complete).toHaveBeenCalledTimes(2);
+    expect(sessionManager.getMessageCount).toHaveBeenCalledWith(channelId);
+  });
+
+  it('does not advance the watermark when pre-compaction extraction fails', async () => {
+    const channelId = 'api:watermark-failure';
+    const llmClient = {
+      complete: vi
+        .fn()
+        .mockRejectedValueOnce(new Error('extraction provider unavailable'))
+        .mockResolvedValue({ content: '<response></response>' }),
+    } as any;
+    const { extractor, entries } = buildWatermarkHarness(channelId, { llmClient });
+
+    await expect(
+      extractor.queueCompactionExtraction(channelId, entries.slice(0, 8)),
+    ).rejects.toThrow('Extraction orchestration failed');
+    expect(llmClient.complete).toHaveBeenCalledTimes(1);
+
+    // The failed batch is still covered by the next interval trigger.
+    await extractor.maybeExtract(channelId);
+    expect(llmClient.complete).toHaveBeenCalledTimes(2);
+  });
+
+  it('advances the watermark after crash-recovery extraction covers the backlog', async () => {
+    const channelId = 'api:watermark-recovery';
+    const { extractor, entries, llmClient, eventBus } = buildWatermarkHarness(channelId);
+
+    // Crash recovery re-extracts the whole unextracted backlog.
+    await extractor.queueRetroactiveExtraction(channelId, entries);
+    expect(llmClient.complete).toHaveBeenCalledTimes(1);
+
+    const startReasons = (eventBus.emit as ReturnType<typeof vi.fn>).mock.calls
+      .filter(([name]) => name === 'memory.extraction.start')
+      .map(([, payload]) => payload?.triggerReason);
+    expect(startReasons).toEqual(['crash_recovery']);
+
+    // The recovered range is covered; the interval trigger does not re-send it.
+    await extractor.maybeExtract(channelId);
+    expect(llmClient.complete).toHaveBeenCalledTimes(1);
   });
 });

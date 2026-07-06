@@ -1377,4 +1377,116 @@ describe('runExtractionOrchestration pre-LLM gate', () => {
       preLlmGateReason: 'low_signal',
     }));
   });
+
+  it('skips the extraction LLM for low-signal turns from a tracked contact', async () => {
+    const llmClient = {
+      complete: vi.fn(),
+    } as ExtractionRunOptions['llmClient'];
+    const processFact = vi.fn();
+    const emitExtractionEnd = vi.fn().mockResolvedValue(undefined);
+    const options = buildOptions({
+      llmClient,
+      processFact,
+      canonicalContactId: 'contact-known',
+      triggerReason: 'interval',
+      recoveredEntries: [
+        {
+          id: 1,
+          channelId: 'api:test',
+          role: 'user',
+          content: 'thanks',
+          timestamp: 1,
+        },
+        {
+          id: 2,
+          channelId: 'api:test',
+          role: 'assistant',
+          content: 'Any time.',
+          timestamp: 2,
+        },
+        {
+          id: 3,
+          channelId: 'api:test',
+          role: 'user',
+          content: 'bye',
+          timestamp: 3,
+        },
+      ] as ExtractionRunOptions['recoveredEntries'],
+      emitExtractionEnd,
+    });
+
+    await runExtractionOrchestration(options);
+
+    expect(llmClient.complete).not.toHaveBeenCalled();
+    expect(processFact).not.toHaveBeenCalled();
+    expect(emitExtractionEnd).toHaveBeenCalledWith(expect.objectContaining({
+      channelId: 'api:test',
+      count: 0,
+      triggerReason: 'interval',
+      triggerContactId: 'contact-known',
+      parsedCount: 0,
+      acceptedCount: 0,
+      writeCount: 0,
+      preLlmGateSkipped: true,
+      preLlmGateReason: 'low_signal',
+    }));
+  });
+
+  it('still runs extraction for signal-bearing turns from a tracked contact', async () => {
+    const llmClient = {
+      complete: vi.fn().mockResolvedValue({
+        content: `<response>
+<fact>
+<text>User is planning a move to Lisbon for a new job</text>
+<type>semantic</type>
+<importance>0.9</importance>
+<confidence>0.95</confidence>
+</fact>
+</response>`,
+      }),
+    } as ExtractionRunOptions['llmClient'];
+    const processFact = vi.fn().mockResolvedValue({
+      action: 'created',
+      memory: { id: 'mem-signal-1' },
+    });
+    const emitExtractionEnd = vi.fn().mockResolvedValue(undefined);
+    const options = buildOptions({
+      llmClient,
+      processFact,
+      canonicalContactId: 'contact-known',
+      triggerReason: 'interval',
+      recoveredEntries: [
+        {
+          id: 1,
+          channelId: 'api:test',
+          role: 'user',
+          content: 'I am moving to Lisbon next month for my new job.',
+          timestamp: 1,
+        },
+        {
+          id: 2,
+          channelId: 'api:test',
+          role: 'assistant',
+          content: 'That is a big step, congratulations.',
+          timestamp: 2,
+        },
+      ] as ExtractionRunOptions['recoveredEntries'],
+      emitExtractionEnd,
+    });
+
+    await runExtractionOrchestration(options);
+
+    expect(llmClient.complete).toHaveBeenCalledTimes(1);
+    expect(processFact).toHaveBeenCalledTimes(1);
+    expect(emitExtractionEnd).toHaveBeenCalledWith(expect.objectContaining({
+      channelId: 'api:test',
+      triggerReason: 'interval',
+      triggerContactId: 'contact-known',
+      acceptedCount: 1,
+      writeCount: 1,
+    }));
+    expect(emitExtractionEnd).toHaveBeenCalledWith(expect.not.objectContaining({
+      preLlmGateSkipped: true,
+    }));
+  });
 });

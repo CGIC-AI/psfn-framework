@@ -44,6 +44,7 @@ const ADMIN_AUDIT_HISTORY_SOURCES = ['garden', 'gateway', 'charge'] as const;
 const OBSERVER_EVAL_PRIVACY_CLASSES = ['public', 'private', 'restricted', 'closed', 'fail_closed'] as const;
 const OBSERVER_EVAL_OBSERVATION_STATUSES = ['ok', 'degraded', 'error'] as const;
 const OBSERVER_EVAL_RUN_STATUSES = ['running', 'completed', 'degraded', 'failed'] as const;
+const OBSERVER_EVAL_LEVER_NAMES = ['would_message', 'would_check_in', 'would_rest', 'rumination_watch'] as const;
 
 function toFiniteQueryNumber(
   value: string | null,
@@ -171,6 +172,20 @@ function parseObserverEvalObservationStatusQuery(
   };
 }
 
+function parseObserverEvalLeverQuery(
+  value: string | null,
+): { ok: true; value?: typeof OBSERVER_EVAL_LEVER_NAMES[number] } | { ok: false; error: string } {
+  if (value === null || value.trim() === '') return { ok: true };
+  const normalized = value.trim();
+  if (OBSERVER_EVAL_LEVER_NAMES.includes(normalized as typeof OBSERVER_EVAL_LEVER_NAMES[number])) {
+    return { ok: true, value: normalized as typeof OBSERVER_EVAL_LEVER_NAMES[number] };
+  }
+  return {
+    ok: false,
+    error: `Invalid lever query parameter. Expected one of: ${OBSERVER_EVAL_LEVER_NAMES.join(', ')}.`,
+  };
+}
+
 function parseObserverEvalRunStatusQuery(
   value: string | null,
 ): { ok: true; value?: typeof OBSERVER_EVAL_RUN_STATUSES[number] } | { ok: false; error: string } {
@@ -260,6 +275,34 @@ export function buildAdminOverviewRoutes(options: {
           ? { testRunId: url.searchParams.get('testRunId')!.trim() }
           : {}),
         ...(url.searchParams.get('turnId')?.trim() ? { turnId: url.searchParams.get('turnId')!.trim() } : {}),
+      },
+    };
+  };
+
+  const parseObserverEvalLeverEventQuery = (
+    req: IncomingMessage,
+    routePath: string,
+  ): {
+    ok: true;
+    value: Parameters<NonNullable<AdminObserverEvalSidecarService>['queryLeverEvents']>[0];
+  } | { ok: false; error: string } => {
+    const url = parseRequestUrl(req, routePath);
+    const limit = toPositiveIntegerQueryNumber(url.searchParams.get('limit'), 'limit');
+    if (!limit.ok) return { ok: false, error: limit.error };
+    const sinceMs = toFiniteQueryNumber(url.searchParams.get('sinceMs'), 'sinceMs');
+    if (!sinceMs.ok) return { ok: false, error: sinceMs.error };
+    const untilMs = toFiniteQueryNumber(url.searchParams.get('untilMs'), 'untilMs');
+    if (!untilMs.ok) return { ok: false, error: untilMs.error };
+    const lever = parseObserverEvalLeverQuery(url.searchParams.get('lever'));
+    if (!lever.ok) return { ok: false, error: lever.error };
+    return {
+      ok: true,
+      value: {
+        ...(limit.value !== undefined ? { limit: limit.value } : {}),
+        ...(sinceMs.value !== undefined ? { sinceMs: sinceMs.value } : {}),
+        ...(untilMs.value !== undefined ? { untilMs: untilMs.value } : {}),
+        ...(lever.value !== undefined ? { lever: lever.value } : {}),
+        ...(url.searchParams.get('runId')?.trim() ? { runId: url.searchParams.get('runId')!.trim() } : {}),
       },
     };
   };
@@ -572,6 +615,25 @@ export function buildAdminOverviewRoutes(options: {
         observerEvalSidecarService.exportObservations(parsed.value).then(
           payload => sendJson(res, 200, payload, ADMIN_DYNAMIC_JSON_HEADERS),
           error => handleObserverEvalError(res, error, 'Failed to export observer eval observations'),
+        );
+      },
+    },
+    {
+      method: 'GET',
+      match: exactPath('/api/admin/evals/observer-sidecar/lever-events'),
+      handle: (req, res) => {
+        if (!observerEvalSidecarService) {
+          sendJson(res, 503, { error: OBSERVER_EVAL_SIDECAR_UNAVAILABLE_ERROR });
+          return;
+        }
+        const parsed = parseObserverEvalLeverEventQuery(req, '/api/admin/evals/observer-sidecar/lever-events');
+        if (!parsed.ok) {
+          sendJson(res, 400, { error: parsed.error });
+          return;
+        }
+        observerEvalSidecarService.queryLeverEvents(parsed.value).then(
+          payload => sendJson(res, 200, payload, ADMIN_DYNAMIC_JSON_HEADERS),
+          error => handleObserverEvalError(res, error, 'Failed to load observer eval lever events'),
         );
       },
     },

@@ -1,5 +1,6 @@
 import {
   DEFAULT_UI_THEME_ID,
+  createDefaultObserverEvalSidecarLeverSettings,
   createDefaultObserverEvalSidecarSettings,
   PROMOTED_EXTENDED_TOOL_SLOTS_MAX,
 } from '../config/runtime-config-contracts.js';
@@ -244,6 +245,105 @@ function expectEnumValue<T extends string>(
   return normalized as T;
 }
 
+function expectNumberInRange(
+  value: unknown,
+  fieldPath: string,
+  min: number,
+  max: number,
+): number {
+  const normalized = toNumberInRange(value, min, max);
+  if (normalized === undefined) {
+    throw new Error(`Invalid settings at ${fieldPath}: expected number ${min}..${max}`);
+  }
+  return normalized;
+}
+
+function normalizeObserverEvalSidecarLeverSettings(
+  value: unknown,
+  fieldPath: string,
+  persistenceEnabled: boolean,
+): NonNullable<ObserverEvalSidecarSettings['levers']> {
+  if (value === undefined) {
+    return createDefaultObserverEvalSidecarLeverSettings();
+  }
+  const root = expectRecord(value, fieldPath);
+  const wouldMessage = expectRecord(root.wouldMessage, `${fieldPath}.wouldMessage`);
+  const wouldCheckIn = expectRecord(root.wouldCheckIn, `${fieldPath}.wouldCheckIn`);
+  const wouldRest = expectRecord(root.wouldRest, `${fieldPath}.wouldRest`);
+  const ruminationWatch = expectRecord(root.ruminationWatch, `${fieldPath}.ruminationWatch`);
+
+  const enabled = expectBoolean(root.enabled, `${fieldPath}.enabled`);
+  if (enabled && !persistenceEnabled) {
+    // Lever events are persistence-only telemetry; without the eval-owned
+    // Postgres store there is nowhere non-authoritative to record them.
+    throw new Error(
+      `Invalid settings at ${fieldPath}.enabled: lever tracking requires observerEvalSidecar.persistence.enabled=true`,
+    );
+  }
+
+  return {
+    enabled,
+    cooldownMs: expectIntegerInRange(root.cooldownMs, `${fieldPath}.cooldownMs`, 60_000, 604_800_000),
+    wouldMessage: {
+      enabled: expectBoolean(wouldMessage.enabled, `${fieldPath}.wouldMessage.enabled`),
+      socialNeedThreshold: expectNumberInRange(
+        wouldMessage.socialNeedThreshold,
+        `${fieldPath}.wouldMessage.socialNeedThreshold`,
+        0,
+        1,
+      ),
+      attachmentIntensityThreshold: expectNumberInRange(
+        wouldMessage.attachmentIntensityThreshold,
+        `${fieldPath}.wouldMessage.attachmentIntensityThreshold`,
+        0,
+        1,
+      ),
+      sustainMs: expectIntegerInRange(wouldMessage.sustainMs, `${fieldPath}.wouldMessage.sustainMs`, 0, 604_800_000),
+    },
+    wouldCheckIn: {
+      enabled: expectBoolean(wouldCheckIn.enabled, `${fieldPath}.wouldCheckIn.enabled`),
+      valenceThreshold: expectNumberInRange(
+        wouldCheckIn.valenceThreshold,
+        `${fieldPath}.wouldCheckIn.valenceThreshold`,
+        -1,
+        1,
+      ),
+      sustainMs: expectIntegerInRange(wouldCheckIn.sustainMs, `${fieldPath}.wouldCheckIn.sustainMs`, 0, 604_800_000),
+    },
+    wouldRest: {
+      enabled: expectBoolean(wouldRest.enabled, `${fieldPath}.wouldRest.enabled`),
+      sleepPressureThreshold: expectNumberInRange(
+        wouldRest.sleepPressureThreshold,
+        `${fieldPath}.wouldRest.sleepPressureThreshold`,
+        0,
+        1,
+      ),
+      arousalThreshold: expectNumberInRange(
+        wouldRest.arousalThreshold,
+        `${fieldPath}.wouldRest.arousalThreshold`,
+        0,
+        1,
+      ),
+      sustainMs: expectIntegerInRange(wouldRest.sustainMs, `${fieldPath}.wouldRest.sustainMs`, 0, 604_800_000),
+    },
+    ruminationWatch: {
+      enabled: expectBoolean(ruminationWatch.enabled, `${fieldPath}.ruminationWatch.enabled`),
+      intensityThreshold: expectNumberInRange(
+        ruminationWatch.intensityThreshold,
+        `${fieldPath}.ruminationWatch.intensityThreshold`,
+        0,
+        1,
+      ),
+      sustainMs: expectIntegerInRange(
+        ruminationWatch.sustainMs,
+        `${fieldPath}.ruminationWatch.sustainMs`,
+        0,
+        604_800_000,
+      ),
+    },
+  };
+}
+
 function normalizeObserverEvalSidecarSettings(
   value: unknown,
   fieldPath: string,
@@ -386,6 +486,11 @@ function normalizeObserverEvalSidecarSettings(
       exposeHealth: expectBoolean(garden.exposeHealth, `${fieldPath}.garden.exposeHealth`),
       exposeTelemetry: expectBoolean(garden.exposeTelemetry, `${fieldPath}.garden.exposeTelemetry`),
     },
+    levers: normalizeObserverEvalSidecarLeverSettings(
+      root.levers,
+      `${fieldPath}.levers`,
+      persistenceEnabled,
+    ),
   };
 }
 

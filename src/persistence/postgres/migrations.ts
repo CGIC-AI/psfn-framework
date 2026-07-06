@@ -1058,4 +1058,51 @@ export const POSTGRES_OBSERVER_EVAL_SIDECAR_MIGRATIONS = [
   `CREATE INDEX IF NOT EXISTS idx_observer_eval_sidecar_observations_emosim_gin ON observer_eval_sidecar_observations USING GIN (emosim_output_json);`,
   `CREATE INDEX IF NOT EXISTS idx_observer_eval_sidecar_observations_crosswalk_gin ON observer_eval_sidecar_observations USING GIN (crosswalk_json);`,
   `CREATE INDEX IF NOT EXISTS idx_observer_eval_sidecar_observations_metrics_gin ON observer_eval_sidecar_observations USING GIN (comparison_metrics_json);`,
+  `
+  CREATE TABLE IF NOT EXISTS observer_eval_sidecar_lever_events (
+    event_id TEXT PRIMARY KEY,
+    run_id TEXT NOT NULL REFERENCES observer_eval_sidecar_runs(run_id) ON DELETE CASCADE,
+    schema_version INTEGER NOT NULL DEFAULT 1,
+    eval_owner TEXT NOT NULL DEFAULT 'observer_sidecar_eval',
+    authoritative BOOLEAN NOT NULL DEFAULT FALSE,
+    lever TEXT NOT NULL,
+    fired_at_ms BIGINT NOT NULL,
+    observation_id TEXT NOT NULL,
+    detail TEXT NOT NULL,
+    state_values_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+    sustain_ms BIGINT NOT NULL,
+    first_crossing_ms BIGINT NOT NULL,
+    cooldown_json JSONB NOT NULL,
+    retention_json JSONB NOT NULL,
+    retain_until_ms BIGINT NOT NULL,
+    created_at_ms BIGINT NOT NULL,
+    CHECK (schema_version = 1),
+    CHECK (eval_owner = 'observer_sidecar_eval'),
+    CHECK (authoritative = FALSE),
+    CHECK (lever IN ('would_message', 'would_check_in', 'would_rest', 'rumination_watch')),
+    CHECK (sustain_ms >= 0),
+    CHECK (first_crossing_ms <= fired_at_ms),
+    CHECK (retain_until_ms >= fired_at_ms)
+  );
+  `,
+  `CREATE INDEX IF NOT EXISTS idx_observer_eval_sidecar_lever_events_lever ON observer_eval_sidecar_lever_events(lever, fired_at_ms DESC, event_id DESC);`,
+  `CREATE INDEX IF NOT EXISTS idx_observer_eval_sidecar_lever_events_time ON observer_eval_sidecar_lever_events(fired_at_ms DESC, event_id DESC);`,
+  `CREATE INDEX IF NOT EXISTS idx_observer_eval_sidecar_lever_events_run ON observer_eval_sidecar_lever_events(run_id, fired_at_ms DESC, event_id DESC);`,
+  `CREATE INDEX IF NOT EXISTS idx_observer_eval_sidecar_lever_events_retention ON observer_eval_sidecar_lever_events(retain_until_ms, event_id);`,
+  `
+  CREATE TABLE IF NOT EXISTS observer_eval_sidecar_lever_state (
+    sidecar_id TEXT NOT NULL,
+    lever TEXT NOT NULL,
+    schema_version INTEGER NOT NULL DEFAULT 1,
+    eval_owner TEXT NOT NULL DEFAULT 'observer_sidecar_eval',
+    authoritative BOOLEAN NOT NULL DEFAULT FALSE,
+    state_json JSONB NOT NULL,
+    updated_at_ms BIGINT NOT NULL,
+    PRIMARY KEY (sidecar_id, lever),
+    CHECK (schema_version = 1),
+    CHECK (eval_owner = 'observer_sidecar_eval'),
+    CHECK (authoritative = FALSE),
+    CHECK (lever IN ('would_message', 'would_check_in', 'would_rest', 'rumination_watch'))
+  );
+  `,
 ];

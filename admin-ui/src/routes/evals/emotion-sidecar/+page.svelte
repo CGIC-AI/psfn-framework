@@ -7,9 +7,12 @@
     buildObserverEvalSidecarExportPath,
     getObserverEvalSidecarHealth,
     getObserverEvalSidecarLatest,
+    queryObserverEvalSidecarLeverEvents,
     queryObserverEvalSidecarObservations,
     queryObserverEvalSidecarRuns,
     type AdminObserverEvalSidecarHealthData,
+    type AdminObserverEvalSidecarLeverEventFilters,
+    type AdminObserverEvalSidecarLeverEventView,
     type AdminObserverEvalSidecarObservationFilters,
     type AdminObserverEvalSidecarObservationView,
     type AdminObserverEvalSidecarRunFilters,
@@ -29,11 +32,13 @@
   } from '$lib/evals/observer-sidecar';
   import type { EmotionStateSnapshot } from '../../../../../src/core/emotion/state.js';
 
-  type TabId = 'overview' | 'observations' | 'runs';
+  type TabId = 'overview' | 'observations' | 'runs' | 'levers';
   type DeploymentFilter = '' | 'live' | 'eval' | 'test_persona';
 
   const OBSERVATION_LIMIT_DEFAULT = '100';
   const RUN_LIMIT_DEFAULT = '50';
+  const LEVER_LIMIT_DEFAULT = '100';
+  const LEVER_OPTIONS = ['', 'would_message', 'would_check_in', 'would_rest', 'rumination_watch'] as const;
   const TIME_RANGE_OPTIONS: Array<{ value: ObserverEvalSidecarTimeRange; label: string }> = [
     { value: '15m', label: '15m' },
     { value: '1h', label: '1h' },
@@ -57,6 +62,10 @@
   let latest = $state<AdminObserverEvalSidecarObservationView | null>(null);
   let observations = $state<AdminObserverEvalSidecarObservationView[]>([]);
   let runs = $state<AdminObserverEvalSidecarRunView[]>([]);
+  let leverEvents = $state<AdminObserverEvalSidecarLeverEventView[]>([]);
+  let leverErrorMessage = $state('');
+  let leverFilter = $state('');
+  let leverLimit = $state(LEVER_LIMIT_DEFAULT);
   let loading = $state(true);
   let refreshing = $state(false);
   let errorMessage = $state('');
@@ -107,6 +116,7 @@
     { id: 'overview', label: 'Overview' },
     { id: 'observations', label: 'Observations', count: filteredObservations.length },
     { id: 'runs', label: 'Runs', count: filteredRuns.length },
+    { id: 'levers', label: 'Levers', count: leverEvents.length },
   ]);
 
   function selectTab(tabId: string): void {
@@ -137,6 +147,21 @@
   ): Omit<AdminObserverEvalSidecarObservationFilters, 'limit'> {
     const { limit: _limit, ...latestFilters } = filters;
     return latestFilters;
+  }
+
+  function buildLeverEventFilters(nowMs: number): AdminObserverEvalSidecarLeverEventFilters {
+    const observationFilters = buildObserverEvalSidecarFilters({
+      timeRange,
+      runId,
+      limit: leverLimit,
+    }, nowMs);
+    return {
+      ...(leverFilter.trim() ? { lever: leverFilter.trim() } : {}),
+      ...(observationFilters.runId ? { runId: observationFilters.runId } : {}),
+      ...(observationFilters.sinceMs !== undefined ? { sinceMs: observationFilters.sinceMs } : {}),
+      ...(observationFilters.untilMs !== undefined ? { untilMs: observationFilters.untilMs } : {}),
+      ...(observationFilters.limit !== undefined ? { limit: observationFilters.limit } : {}),
+    };
   }
 
   function buildRunFilters(nowMs: number): AdminObserverEvalSidecarRunFilters {
@@ -182,6 +207,7 @@
         latest = null;
         observations = [];
         runs = [];
+        leverEvents = [];
         return;
       }
 
@@ -194,6 +220,21 @@
       latest = latestData.observation;
       observations = observationsData.observations;
       runs = runsData.runs;
+
+      // Lever events are fetched separately: lever persistence being
+      // unavailable must not blank the observation/run views.
+      leverErrorMessage = '';
+      try {
+        const leverData = await queryObserverEvalSidecarLeverEvents(buildLeverEventFilters(nowMs));
+        if (seq !== requestSeq) return;
+        leverEvents = leverData.events;
+      } catch (leverError) {
+        if (seq !== requestSeq) return;
+        leverEvents = [];
+        leverErrorMessage = leverError instanceof ApiError && leverError.status === 503
+          ? 'Lever event telemetry unavailable.'
+          : leverError instanceof Error ? leverError.message : 'Failed to load lever events.';
+      }
     } catch (error) {
       if (seq !== requestSeq) return;
       if (error instanceof ApiError && error.status === 503) {
@@ -202,6 +243,7 @@
         latest = null;
         observations = [];
         runs = [];
+        leverEvents = [];
       } else {
         errorMessage = error instanceof Error ? error.message : 'Failed to load observer eval sidecar data.';
       }
@@ -234,7 +276,25 @@
     minDivergenceScore = '';
     observationLimit = OBSERVATION_LIMIT_DEFAULT;
     runLimit = RUN_LIMIT_DEFAULT;
+    leverFilter = '';
+    leverLimit = LEVER_LIMIT_DEFAULT;
     void loadData('refresh');
+  }
+
+  function formatDurationMs(ms: number): string {
+    if (!Number.isFinite(ms) || ms < 0) return '-';
+    if (ms < 60_000) return `${Math.round(ms / 1_000)}s`;
+    if (ms < 3_600_000) return `${Math.round(ms / 60_000)}m`;
+    return `${(ms / 3_600_000).toFixed(1)}h`;
+  }
+
+  function leverStateEntries(event: AdminObserverEvalSidecarLeverEventView): Array<{ key: string; value: string }> {
+    return Object.entries(event.stateValues).map(([key, value]) => ({
+      key,
+      value: value === null
+        ? '-'
+        : typeof value === 'number' ? formatObserverEvalSigned(value) : String(value),
+    }));
   }
 
   function formatSnapshotValue(snapshot: EmotionStateSnapshot | null | undefined, axis: keyof EmotionStateSnapshot['vad']): string {
@@ -660,6 +720,85 @@
                 <div><dt class="text-shadow-500">Test run</dt><dd class="font-mono text-shadow-900">{run.testRunId ? shortId(run.testRunId) : '-'}</dd></div>
                 <div><dt class="text-shadow-500">Retention</dt><dd class="text-shadow-900">{labelizeObserverEval(run.retention.retentionClass)}</dd></div>
               </dl>
+            </article>
+          {/each}
+        </section>
+      {/if}
+    {:else if activeTab === 'levers'}
+      <section class="card-garden p-5" aria-label="Lever event filters">
+        <p class="text-sm text-shadow-600">
+          Shadow WOULD-ACT telemetry: when the simulated temporal state says she would have acted.
+          Tracking only; nothing acts on these events.
+        </p>
+        <div class="mt-4 grid gap-3 md:grid-cols-4">
+          <label class="space-y-1 text-sm text-shadow-700">
+            <span class="font-medium">Time</span>
+            <select bind:value={timeRange} class="w-full rounded-lg border border-bark-300 bg-white px-3 py-2">
+              {#each TIME_RANGE_OPTIONS as option}
+                <option value={option.value}>{option.label}</option>
+              {/each}
+            </select>
+          </label>
+          <label class="space-y-1 text-sm text-shadow-700">
+            <span class="font-medium">Lever</span>
+            <select bind:value={leverFilter} class="w-full rounded-lg border border-bark-300 bg-white px-3 py-2">
+              {#each LEVER_OPTIONS as option}
+                <option value={option}>{option ? labelizeObserverEval(option) : 'All levers'}</option>
+              {/each}
+            </select>
+          </label>
+          <label class="space-y-1 text-sm text-shadow-700">
+            <span class="font-medium">Run</span>
+            <input bind:value={runId} class="w-full rounded-lg border border-bark-300 bg-white px-3 py-2" placeholder="run id" />
+          </label>
+          <label class="space-y-1 text-sm text-shadow-700">
+            <span class="font-medium">Limit</span>
+            <input bind:value={leverLimit} inputmode="numeric" class="w-full rounded-lg border border-bark-300 bg-white px-3 py-2" />
+          </label>
+        </div>
+        <div class="mt-4 flex gap-2">
+          <button type="button" onclick={applyFilters} class="rounded-lg border border-gold-300 bg-gold-50 px-3 py-2 text-sm font-medium text-gold-800">Apply</button>
+          <button type="button" onclick={resetFilters} class="rounded-lg border border-bark-300 px-3 py-2 text-sm font-medium text-shadow-700">Reset</button>
+        </div>
+      </section>
+
+      {#if leverErrorMessage}
+        <div class="card-garden border-l-4 border-l-wilt-400 p-4">
+          <p class="text-sm font-medium text-wilt-700">{leverErrorMessage}</p>
+        </div>
+      {:else if leverEvents.length === 0}
+        <div class="card-garden p-6 text-sm text-shadow-600">No lever events match the active filters.</div>
+      {:else}
+        <section class="space-y-3" aria-label="Lever event timeline">
+          {#each leverEvents as event (event.eventId)}
+            <article class="card-garden p-4">
+              <div class="flex items-start justify-between gap-4 flex-wrap">
+                <div>
+                  <h2 class="font-serif text-lg font-semibold text-shadow-900">{labelizeObserverEval(event.lever)}</h2>
+                  <p class="mt-1 text-sm text-shadow-600">{event.detail}</p>
+                </div>
+                <div class="flex flex-wrap gap-2">
+                  <span class="rounded-full border border-bark-300 bg-bark-100 px-2.5 py-1 text-xs font-semibold text-shadow-700">
+                    {formatObserverEvalTimestamp(event.firedAtMs)}
+                  </span>
+                  <span class="rounded-full border border-bark-300 bg-bark-50 px-2.5 py-1 text-xs font-semibold text-shadow-700">
+                    {labelizeObserverEval(event.cooldown.refireReason)}
+                  </span>
+                </div>
+              </div>
+              <dl class="mt-4 grid gap-3 text-sm sm:grid-cols-2 lg:grid-cols-4">
+                <div><dt class="text-shadow-500">Sustained for</dt><dd class="font-mono text-shadow-900">{formatDurationMs(event.sustainedForMs)}</dd></div>
+                <div><dt class="text-shadow-500">Sustain required</dt><dd class="font-mono text-shadow-900">{formatDurationMs(event.sustainMs)}</dd></div>
+                <div><dt class="text-shadow-500">Run</dt><dd class="font-mono text-shadow-900">{shortId(event.runId)}</dd></div>
+                <div><dt class="text-shadow-500">Observation</dt><dd class="font-mono text-shadow-900">{shortId(event.observationId)}</dd></div>
+              </dl>
+              <div class="mt-3 flex flex-wrap gap-2">
+                {#each leverStateEntries(event) as item (item.key)}
+                  <span class="rounded-full border border-bark-300 bg-bark-50 px-2.5 py-1 text-xs text-shadow-700">
+                    {labelizeObserverEval(item.key)}: <span class="font-mono">{item.value}</span>
+                  </span>
+                {/each}
+              </div>
             </article>
           {/each}
         </section>

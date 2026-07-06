@@ -3,6 +3,9 @@ import {
   type ObserverEvalComparisonSummary,
 } from '../../../core/eval/observer-sidecar/metrics.js';
 import type {
+  ObserverEvalSidecarLeverEventQuery,
+  ObserverEvalSidecarLeverEventRecord,
+  ObserverEvalSidecarLeverPersistencePort,
   ObserverEvalSidecarObservationQuery,
   ObserverEvalSidecarObservationRecord,
   ObserverEvalSidecarPersistencePort,
@@ -28,6 +31,7 @@ export const ADMIN_OBSERVER_EVAL_EXPORT_VERSION = 'garden.observer-eval-sidecar.
 
 export interface AdminObserverEvalSidecarObservationFilters extends ObserverEvalSidecarObservationQuery {}
 export interface AdminObserverEvalSidecarRunFilters extends ObserverEvalSidecarRunQuery {}
+export interface AdminObserverEvalSidecarLeverEventFilters extends ObserverEvalSidecarLeverEventQuery {}
 
 export interface AdminObserverEvalSidecarHealthData {
   status: ObserverEvalSidecarHealthSnapshot['status'] | 'unavailable';
@@ -152,6 +156,35 @@ export interface AdminObserverEvalEmoSimView {
   error?: Extract<EmoSimAdapterRunResult, { ok: false }>['error'];
 }
 
+export interface AdminObserverEvalSidecarLeverEventView {
+  eventId: string;
+  runId: string;
+  lever: ObserverEvalSidecarLeverEventRecord['lever'];
+  firedAtMs: number;
+  observationId: string;
+  detail: string;
+  stateValues: Record<string, number | string | null>;
+  sustainMs: number;
+  firstCrossingMs: number;
+  /** Actual sustained duration at fire time (firedAtMs - firstCrossingMs). */
+  sustainedForMs: number;
+  cooldown: ObserverEvalSidecarLeverEventRecord['cooldown'];
+  retention: ObserverEvalSidecarLeverEventRecord['retention'];
+  evalOwner: ObserverEvalSidecarLeverEventRecord['evalOwner'];
+  authoritative: false;
+  nonAuthoritativeNotice: ObserverEvalSidecarLeverEventRecord['nonAuthoritativeNotice'];
+}
+
+export interface AdminObserverEvalSidecarLeverEventListData {
+  events: AdminObserverEvalSidecarLeverEventView[];
+  filters: AdminObserverEvalSidecarLeverEventFilters;
+  pagination: {
+    limit: number;
+    count: number;
+    hasMore: boolean;
+  };
+}
+
 export interface AdminObserverEvalSidecarService {
   getHealth(): Promise<AdminObserverEvalSidecarHealthData>;
   getLatestObservation(
@@ -164,10 +197,14 @@ export interface AdminObserverEvalSidecarService {
   exportObservations(
     filters?: AdminObserverEvalSidecarObservationFilters,
   ): Promise<AdminObserverEvalSidecarExportData>;
+  queryLeverEvents(
+    filters?: AdminObserverEvalSidecarLeverEventFilters,
+  ): Promise<AdminObserverEvalSidecarLeverEventListData>;
 }
 
 export interface AdminObserverEvalSidecarDataServiceOptions {
   persistence?: ObserverEvalSidecarPersistencePort | null;
+  leverEvents?: ObserverEvalSidecarLeverPersistencePort | null;
   getHealthSnapshot?: (() => ObserverEvalSidecarHealthSnapshot | null) | null;
   nowMs?: () => number;
 }
@@ -250,11 +287,35 @@ export class AdminObserverEvalSidecarDataService implements AdminObserverEvalSid
     };
   }
 
+  async queryLeverEvents(
+    filters: AdminObserverEvalSidecarLeverEventFilters = {},
+  ): Promise<AdminObserverEvalSidecarLeverEventListData> {
+    const leverEvents = this.requireLeverPersistence();
+    const normalized = normalizeLeverEventFilters(filters);
+    const rows = await leverEvents.queryLeverEvents(normalized);
+    return {
+      events: rows.slice(0, normalized.limit).map(toLeverEventView),
+      filters: normalized,
+      pagination: {
+        limit: normalized.limit,
+        count: Math.min(rows.length, normalized.limit),
+        hasMore: rows.length > normalized.limit,
+      },
+    };
+  }
+
   private requirePersistence(): ObserverEvalSidecarPersistencePort {
     if (!this.options.persistence) {
       throw new ObserverEvalSidecarApiUnavailableError('Observer eval sidecar persistence unavailable');
     }
     return this.options.persistence;
+  }
+
+  private requireLeverPersistence(): ObserverEvalSidecarLeverPersistencePort {
+    if (!this.options.leverEvents) {
+      throw new ObserverEvalSidecarApiUnavailableError('Observer eval sidecar lever persistence unavailable');
+    }
+    return this.options.leverEvents;
   }
 }
 
@@ -392,6 +453,35 @@ function normalizeRunFilters(
   return {
     ...filters,
     limit: normalizeLimit(filters.limit),
+  };
+}
+
+function normalizeLeverEventFilters(
+  filters: AdminObserverEvalSidecarLeverEventFilters,
+): Required<Pick<AdminObserverEvalSidecarLeverEventFilters, 'limit'>> & AdminObserverEvalSidecarLeverEventFilters {
+  return {
+    ...filters,
+    limit: normalizeLimit(filters.limit),
+  };
+}
+
+function toLeverEventView(record: ObserverEvalSidecarLeverEventRecord): AdminObserverEvalSidecarLeverEventView {
+  return {
+    eventId: record.eventId,
+    runId: record.runId,
+    lever: record.lever,
+    firedAtMs: record.firedAtMs,
+    observationId: record.observationId,
+    detail: record.detail,
+    stateValues: structuredClone(record.stateValues),
+    sustainMs: record.sustainMs,
+    firstCrossingMs: record.firstCrossingMs,
+    sustainedForMs: Math.max(0, record.firedAtMs - record.firstCrossingMs),
+    cooldown: structuredClone(record.cooldown),
+    retention: structuredClone(record.retention),
+    evalOwner: record.evalOwner,
+    authoritative: false,
+    nonAuthoritativeNotice: record.nonAuthoritativeNotice,
   };
 }
 

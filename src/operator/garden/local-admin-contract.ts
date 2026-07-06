@@ -370,6 +370,9 @@ function createObserverEvalSidecarAdminService(input: {
 
   return new AdminObserverEvalSidecarDataService({
     persistence,
+    // The Postgres store implements both the observation and lever ports;
+    // the Garden admin service is the ONLY reader of lever events.
+    leverEvents: persistence,
     getHealthSnapshot: () => getObserverEvalSidecarHealthSnapshot(input.runtime),
   });
 }

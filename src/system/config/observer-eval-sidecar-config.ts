@@ -57,6 +57,13 @@ export function validateObserverEvalSidecarStartupConfig(
     );
   }
 
+  if (sidecar.levers?.enabled && !sidecar.persistence.enabled) {
+    throw new Error(
+      'observerEvalSidecar.levers.enabled requires observerEvalSidecar.persistence.enabled=true; '
+      + 'lever events are persistence-only, non-authoritative telemetry',
+    );
+  }
+
   const persistenceRootDir = sidecar.persistence.rootDir?.trim();
   if (sidecar.persistence.enabled && !persistenceRootDir) {
     throw new Error(

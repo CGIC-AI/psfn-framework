@@ -5,6 +5,7 @@ import type {
   ObserverEvalSidecarAdapterSettings,
   ObserverEvalSidecarDeploymentTarget,
   ObserverEvalSidecarGardenExposureSettings,
+  ObserverEvalSidecarLeverSettings,
   ObserverEvalSidecarMode,
   ObserverEvalSidecarOverflowPolicy,
   ObserverEvalSidecarPersistenceSettings,
@@ -144,6 +145,11 @@ export interface ObserverEvalSidecarConfig {
   adapter?: ObserverEvalSidecarAdapterSettings;
   persistence?: ObserverEvalSidecarPersistenceSettings;
   garden?: ObserverEvalSidecarGardenExposureSettings;
+  /**
+   * Shadow trigger levers (WOULD-ACT telemetry). Tracking only; readable
+   * exclusively through the Garden admin surface.
+   */
+  levers?: ObserverEvalSidecarLeverSettings;
 }
 
 export interface ObserverEvalSidecarPort {

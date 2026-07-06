@@ -1083,6 +1083,39 @@ export interface ObserverEvalSidecarGardenExposureSettings {
   exposeTelemetry: boolean;
 }
 
+/**
+ * Shadow trigger levers over the observer sidecar's simulated emotion state.
+ * TRACKING ONLY: lever events are write-only telemetry for the Garden admin
+ * surface. Nothing in the live companion loop may read or act on them.
+ */
+export interface ObserverEvalSidecarLeverSettings {
+  enabled: boolean;
+  /** Minimum ms between refires of the same lever without a full condition reset. */
+  cooldownMs: number;
+  wouldMessage: {
+    enabled: boolean;
+    socialNeedThreshold: number;
+    attachmentIntensityThreshold: number;
+    sustainMs: number;
+  };
+  wouldCheckIn: {
+    enabled: boolean;
+    valenceThreshold: number;
+    sustainMs: number;
+  };
+  wouldRest: {
+    enabled: boolean;
+    sleepPressureThreshold: number;
+    arousalThreshold: number;
+    sustainMs: number;
+  };
+  ruminationWatch: {
+    enabled: boolean;
+    intensityThreshold: number;
+    sustainMs: number;
+  };
+}
+
 export interface ObserverEvalSidecarSettings {
   enabled: boolean;
   sidecarId: string;
@@ -1092,6 +1125,7 @@ export interface ObserverEvalSidecarSettings {
   adapter: ObserverEvalSidecarAdapterSettings;
   persistence: ObserverEvalSidecarPersistenceSettings;
   garden: ObserverEvalSidecarGardenExposureSettings;
+  levers?: ObserverEvalSidecarLeverSettings;
 }
 
 export interface RuntimeConfigHooks {

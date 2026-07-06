@@ -153,6 +153,22 @@ persistence:
     enabled: true
     size: 8Gi
 
+repositoryCheckout:
+  enabled: false
+  mountPath: /app/repository
+  readOnly: false
+  hostPath:
+    path: ""
+    type: Directory
+  persistentVolumeClaim:
+    claimName: ""
+
+beads:
+  # null preserves the runtime's current fallback behavior: beads tools are
+  # enabled only when the startup code discovers .beads in its existing roots.
+  toolsEnabled: null
+  allowActions: []
+
 secrets:
   create: true
   existingSecret: ""

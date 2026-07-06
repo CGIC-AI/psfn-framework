@@ -36,6 +36,8 @@ metadata:
     {{- include "psfn.labels" . | nindent 4 }}
 spec:
   replicas: {{ .Values.workloads.gateway.replicaCount }}
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       {{- include "psfn.componentLabels" (dict "root" . "component" "gateway") | nindent 6 }}
@@ -133,6 +135,7 @@ spec:
             - name: model-cache
               mountPath: {{ .Values.runtime.modelCacheDir }}
             {{- end }}
+            {{- include "psfn.repositoryCheckoutVolumeMount" . | nindent 12 }}
             - name: gateway-rpc-tls
               mountPath: {{ printf "%s/gateway-rpc" .Values.certificates.mountBasePath }}
               readOnly: true
@@ -272,6 +275,7 @@ spec:
             - name: model-cache
               mountPath: {{ .Values.runtime.modelCacheDir }}
             {{- end }}
+            {{- include "psfn.repositoryCheckoutVolumeMount" . | nindent 12 }}
             - name: gateway-rpc-client-tls
               mountPath: {{ printf "%s/gateway-rpc" .Values.certificates.mountBasePath }}
               readOnly: true
@@ -310,6 +314,8 @@ metadata:
     {{- include "psfn.labels" . | nindent 4 }}
 spec:
   replicas: {{ .Values.workloads.garden.replicaCount }}
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       {{- include "psfn.componentLabels" (dict "root" . "component" "garden") | nindent 6 }}
@@ -392,6 +398,7 @@ spec:
             - name: runtime
               mountPath: {{ .Values.runtime.tempDir }}
               subPath: tmp
+            {{- include "psfn.repositoryCheckoutVolumeMount" . | nindent 12 }}
             - name: admin-transport-client-tls
               mountPath: {{ printf "%s/admin-transport" .Values.certificates.mountBasePath }}
               readOnly: true

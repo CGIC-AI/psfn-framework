@@ -25,7 +25,8 @@ repo-owned entrypoints: `dist/gateway-main.js`, `dist/agent-main.js`, and
   Stock k3s flannel does not enforce NetworkPolicy by itself.
 - A PSFN app image built from `docker/Dockerfile.agent`. The image now carries
   `/app/config/*.seed.json` for opt-in first-install owner-file bootstrap
-  (`bootstrap.seedOwnerFiles`, default `false`).
+  (`bootstrap.seedOwnerFiles`, default `false`), plus pinned `rg` and `bd`
+  CLIs for source search and beads issue workflows.
 
 Local image build:
 
@@ -96,6 +97,46 @@ owner file.
 
 Mutable owner JSON stays on PVCs, not in ConfigMaps.
 
+## Repository Checkout
+
+`/app/workspace` is the personal files PVC, not the application source tree.
+The chart can optionally mount an existing repository checkout at
+`/app/repository` and sets `GIT_REPO_ROOT=/app/repository` only when that mount
+is enabled. The chart does not clone or seed source code.
+
+HostPath example:
+
+```yaml
+repositoryCheckout:
+  enabled: true
+  hostPath:
+    path: /home/psfn/psfn-framework-source
+```
+
+PVC example:
+
+```yaml
+repositoryCheckout:
+  enabled: true
+  persistentVolumeClaim:
+    claimName: psfn-source-checkout
+```
+
+Beads policy env remains unset by default so the runtime keeps its existing
+fallback behavior. To force-enable beads tools for a mounted checkout, set:
+
+```yaml
+beads:
+  toolsEnabled: true
+  allowActions:
+    - ready
+    - show
+    - create
+    - update
+    - close
+    - sync
+```
+
 ## Host Port Exposure
 
 Services render as ClusterIP by default. On a single-node k3s host, set:
@@ -120,6 +161,11 @@ cluster-internal. Use it only when those node ports are reserved for PSFN; the
 old systemd app services must remain stopped to avoid port and Discord login
 conflicts. When `networkPolicy.enabled=true`, set `sourceCIDRs` to the operator
 workstation or trusted subnet that should reach the node-facing port.
+
+The Gateway and Garden Deployments use a Recreate strategy so single-node k3s
+rollouts do not deadlock when both the old and new pods need the same hostPort.
+The agent Deployment keeps the default rolling strategy because it does not bind
+a hostPort.
 
 ## Database
 

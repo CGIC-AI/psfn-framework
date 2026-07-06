@@ -25,6 +25,26 @@
 {{- if and .Values.liteLlm.enabled .Values.secrets.create (not .Values.secrets.existingSecret) (not .Values.secrets.allowMissingRequired) -}}
 {{- $_ := required "secrets.values.liteLlmApiKey is required for liteLlm.enabled=true when secrets.allowMissingRequired=false" .Values.secrets.values.liteLlmApiKey -}}
 {{- end -}}
+{{- if .Values.repositoryCheckout.enabled -}}
+{{- if not .Values.repositoryCheckout.mountPath -}}
+{{- fail "repositoryCheckout.mountPath is required when repositoryCheckout.enabled=true" -}}
+{{- end -}}
+{{- $hasHostPath := ne (default "" .Values.repositoryCheckout.hostPath.path) "" -}}
+{{- $hasPvc := ne (default "" .Values.repositoryCheckout.persistentVolumeClaim.claimName) "" -}}
+{{- if eq $hasHostPath $hasPvc -}}
+{{- fail "repositoryCheckout.enabled=true requires exactly one of repositoryCheckout.hostPath.path or repositoryCheckout.persistentVolumeClaim.claimName" -}}
+{{- end -}}
+{{- if and $hasHostPath (not (has .Values.repositoryCheckout.hostPath.type (list "" "Directory" "DirectoryOrCreate"))) -}}
+{{- fail "repositoryCheckout.hostPath.type must be empty, Directory, or DirectoryOrCreate" -}}
+{{- end -}}
+{{- end -}}
+{{- if .Values.beads.allowActions -}}
+{{- range .Values.beads.allowActions -}}
+{{- if not (has . (list "ready" "show" "create" "update" "close" "sync")) -}}
+{{- fail "beads.allowActions entries must be one of: ready, show, create, update, close, sync" -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
 {{- if and .Values.secrets.create (not .Values.secrets.existingSecret) (not .Values.secrets.allowMissingRequired) -}}
 {{- $_ := required "secrets.values.backupEncryptionKey is required when secrets.allowMissingRequired=false" .Values.secrets.values.backupEncryptionKey -}}
 {{- end -}}

@@ -325,6 +325,18 @@ group: cert-manager.io
     secretKeyRef:
       name: {{ include "psfn.databaseUrlSecretName" . }}
       key: {{ include "psfn.databaseUrlSecretKey" . }}
+{{- if .Values.repositoryCheckout.enabled }}
+- name: GIT_REPO_ROOT
+  value: {{ .Values.repositoryCheckout.mountPath | quote }}
+{{- end }}
+{{- if ne .Values.beads.toolsEnabled nil }}
+- name: BEADS_TOOLS_ENABLED
+  value: {{ .Values.beads.toolsEnabled | quote }}
+{{- end }}
+{{- if .Values.beads.allowActions }}
+- name: BEADS_ALLOW_ACTIONS
+  value: {{ join "," .Values.beads.allowActions | quote }}
+{{- end }}
 {{- end -}}
 
 {{- define "psfn.providerSecretEnv" -}}
@@ -520,5 +532,24 @@ group: cert-manager.io
 - name: identity-seed
   configMap:
     name: {{ include "psfn.fullname" . }}-identity-seed
+{{- end }}
+{{- if .Values.repositoryCheckout.enabled }}
+- name: repository-checkout
+  {{- if .Values.repositoryCheckout.hostPath.path }}
+  hostPath:
+    path: {{ .Values.repositoryCheckout.hostPath.path | quote }}
+    type: {{ default "Directory" .Values.repositoryCheckout.hostPath.type | quote }}
+  {{- else }}
+  persistentVolumeClaim:
+    claimName: {{ .Values.repositoryCheckout.persistentVolumeClaim.claimName | quote }}
+  {{- end }}
+{{- end }}
+{{- end -}}
+
+{{- define "psfn.repositoryCheckoutVolumeMount" -}}
+{{- if .Values.repositoryCheckout.enabled }}
+- name: repository-checkout
+  mountPath: {{ .Values.repositoryCheckout.mountPath | quote }}
+  readOnly: {{ .Values.repositoryCheckout.readOnly }}
 {{- end }}
 {{- end -}}

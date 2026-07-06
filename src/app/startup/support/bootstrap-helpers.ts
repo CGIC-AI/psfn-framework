@@ -293,6 +293,7 @@ export function hydrateCanonicalStartupConfig(
       quietHours: { ...persistedScheduler.freeTime.quietHours },
       idle: { ...persistedScheduler.freeTime.idle },
       budget: { ...persistedScheduler.freeTime.budget },
+      returnNote: { ...persistedScheduler.freeTime.returnNote },
     },
     weightedThoughtOutreach: {
       enabled: persistedScheduler.weightedThoughtOutreach.enabled,

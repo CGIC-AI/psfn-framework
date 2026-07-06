@@ -202,6 +202,9 @@ describe('startup owner-file loaders', () => {
           maxTurns: 6,
           maxChargeUnits: 8,
         },
+        returnNote: {
+          summaryMaxTokens: 160,
+        },
       },
       weightedThoughtOutreach: {
         enabled: false,

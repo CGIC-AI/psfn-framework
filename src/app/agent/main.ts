@@ -771,14 +771,17 @@ async function main(): Promise<void> {
       });
       return { content: response.content };
     },
+    // Shared summarizer, free-time lane identity: distinct purpose/originStage
+    // ('free_time_return') and a freeTime-owned token budget — never borrowed
+    // from the morning-wake catch-up lane.
     summarizeActivity: async ({ channelId, entries }) => summarizeRecentSessionEntries({
       channelId,
       entries,
       characterName: card.data.name,
       llmProvider,
       promptRegistry: promptState.registry,
-      maxTokens: schedulerConfig.temporalWakeup.morningWake.catchUpSummaryMaxTokens,
-      purpose: 'wake_session',
+      maxTokens: schedulerConfig.freeTime.returnNote.summaryMaxTokens,
+      purpose: 'free_time_return',
     }),
   });
   // ── Weighted-thought outreach lane (E?/1xb.2) ──

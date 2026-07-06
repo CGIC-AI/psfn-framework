@@ -63,7 +63,11 @@ export interface CompactionResult {
   compactionSummaryText?: string;
 }
 
-export type RecentSessionSummaryPurpose = 'history_budget' | 'wake_session' | 'wake_continuity';
+export type RecentSessionSummaryPurpose =
+  | 'history_budget'
+  | 'wake_session'
+  | 'wake_continuity'
+  | 'free_time_return';
 
 export interface RecentSessionSummaryParams {
   channelId: string;

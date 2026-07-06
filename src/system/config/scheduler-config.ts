@@ -369,6 +369,16 @@ export interface FreeTimeBudgetConfig {
   maxChargeUnits: number;
 }
 
+/**
+ * "While you were away" return-note tuning. The note's activity summary rides
+ * the shared session summarizer (purpose 'free_time_return'); this owns its
+ * token budget instead of borrowing the morning-wake catch-up budget.
+ */
+export interface FreeTimeReturnNoteConfig {
+  /** Token budget for the free-time return-note activity summary. */
+  summaryMaxTokens: number;
+}
+
 export interface FreeTimeConfig {
   enabled: boolean;
   /** Minimum spacing between free-time blocks, any lane (minutes). */
@@ -383,6 +393,7 @@ export interface FreeTimeConfig {
   quietHours: FreeTimeQuietHoursLaneConfig;
   idle: FreeTimeIdleLaneConfig;
   budget: FreeTimeBudgetConfig;
+  returnNote: FreeTimeReturnNoteConfig;
 }
 
 export const DEFAULT_FREE_TIME_SEED_TEXT =
@@ -411,6 +422,9 @@ export const DEFAULT_FREE_TIME_CONFIG: FreeTimeConfig = {
   budget: {
     maxTurns: 6,
     maxChargeUnits: 8,
+  },
+  returnNote: {
+    summaryMaxTokens: 160,
   },
 };
 
@@ -1027,6 +1041,7 @@ function validateFreeTimeConfig(
       quietHours: { ...DEFAULT_FREE_TIME_CONFIG.quietHours },
       idle: { ...DEFAULT_FREE_TIME_CONFIG.idle },
       budget: { ...DEFAULT_FREE_TIME_CONFIG.budget },
+      returnNote: { ...DEFAULT_FREE_TIME_CONFIG.returnNote },
     };
   }
   if (!isRecord(raw)) {
@@ -1036,6 +1051,7 @@ function validateFreeTimeConfig(
   const quietRaw = raw.quietHours ?? {};
   const idleRaw = raw.idle ?? {};
   const budgetRaw = raw.budget ?? {};
+  const returnNoteRaw = raw.returnNote ?? {};
   if (!isRecord(quietRaw)) {
     throw new Error(`Invalid scheduler config at ${sourcePath}: freeTime.quietHours must be an object`);
   }
@@ -1044,6 +1060,9 @@ function validateFreeTimeConfig(
   }
   if (!isRecord(budgetRaw)) {
     throw new Error(`Invalid scheduler config at ${sourcePath}: freeTime.budget must be an object`);
+  }
+  if (!isRecord(returnNoteRaw)) {
+    throw new Error(`Invalid scheduler config at ${sourcePath}: freeTime.returnNote must be an object`);
   }
 
   return {
@@ -1087,6 +1106,13 @@ function validateFreeTimeConfig(
       maxChargeUnits: toPositiveInteger(
         budgetRaw.maxChargeUnits ?? defaults.budget.maxChargeUnits,
         'freeTime.budget.maxChargeUnits',
+        1,
+      ),
+    },
+    returnNote: {
+      summaryMaxTokens: toPositiveInteger(
+        returnNoteRaw.summaryMaxTokens ?? defaults.returnNote.summaryMaxTokens,
+        'freeTime.returnNote.summaryMaxTokens',
         1,
       ),
     },

@@ -117,6 +117,9 @@
     "budget": {
       "maxTurns": 6,
       "maxChargeUnits": 8
+    },
+    "returnNote": {
+      "summaryMaxTokens": 160
     }
   },
   "weightedThoughtOutreach": {

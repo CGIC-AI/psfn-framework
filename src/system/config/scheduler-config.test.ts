@@ -211,6 +211,37 @@ describe('scheduler config seed defaults', () => {
     });
   });
 
+  it('owns the free-time return-note summary budget with validated defaults (zpgz)', () => {
+    withSeedDir((seedDir) => {
+      expect(DEFAULT_FREE_TIME_CONFIG.returnNote).toEqual({ summaryMaxTokens: 160 });
+
+      writeJson(join(seedDir, SCHEDULER_SEED_FILE_NAME), {
+        ...buildValidSchedulerConfig(),
+        freeTime: { returnNote: { summaryMaxTokens: 96 } },
+      });
+      expect(loadSchedulerSeedDefaults({ seedDir }).freeTime).toEqual({
+        ...DEFAULT_FREE_TIME_CONFIG,
+        returnNote: { summaryMaxTokens: 96 },
+      });
+
+      writeJson(join(seedDir, SCHEDULER_SEED_FILE_NAME), {
+        ...buildValidSchedulerConfig(),
+        freeTime: { returnNote: { summaryMaxTokens: 0 } },
+      });
+      expect(() => loadSchedulerSeedDefaults({ seedDir })).toThrow(
+        'freeTime.returnNote.summaryMaxTokens must be an integer >= 1',
+      );
+
+      writeJson(join(seedDir, SCHEDULER_SEED_FILE_NAME), {
+        ...buildValidSchedulerConfig(),
+        freeTime: { returnNote: 'tiny' },
+      });
+      expect(() => loadSchedulerSeedDefaults({ seedDir })).toThrow(
+        'freeTime.returnNote must be an object',
+      );
+    });
+  });
+
   it('fails closed on malformed rest-window config', () => {
     withSeedDir((seedDir) => {
       const config = buildValidSchedulerConfig();

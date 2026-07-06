@@ -399,6 +399,9 @@ describe('subsystem config round-trip', () => {
           maxTurns: 6,
           maxChargeUnits: 8,
         },
+        returnNote: {
+          summaryMaxTokens: 160,
+        },
       },
       weightedThoughtOutreach: {
         enabled: false,

@@ -61,7 +61,7 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends \
       git=1:2.39.5-0+deb12u3 \
       ripgrep=13.0.0-4+b2 \
-    && npm install -g @beads/bd@1.0.5 \
+    && npm install -g @beads/bd@1.1.0 \
     && npm cache clean --force \
     && rm -rf /var/lib/apt/lists/*
 

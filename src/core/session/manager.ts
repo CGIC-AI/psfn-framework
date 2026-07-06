@@ -1,6 +1,10 @@
 import { randomUUID } from 'node:crypto';
 import type { LLMContext, TurnRecord } from '../../shared/contracts/runtime.js';
 import type { SessionRestartBehavior, SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
+import {
+  DEFAULT_TEMPORAL_WAKEUP_CONFIG,
+  type TemporalWakeupWakeSummaryConfig,
+} from '../../system/config/scheduler-config.js';
 import type { MemoryScopeQuery } from '../../faculties/memory/types.js';
 import type { LLMProviderPort } from '../agent/contracts.js';
 import type {
@@ -281,6 +285,12 @@ export class SessionManager {
   crossChannelContinuity: CrossChannelContinuityPort = createMissingCrossChannelContinuityPort();
   /** Character name from identity card (e.g. 'Companion'). Used for display labels in context. */
   characterName: string | undefined;
+  /**
+   * JSON-owned wake summary budgets and continuity entry floor (scheduler.json
+   * temporalWakeup.wakeSummary). Composition assigns the loaded scheduler
+   * config; the initial value mirrors the validated scheduler defaults.
+   */
+  wakeSummaryConfig: TemporalWakeupWakeSummaryConfig = { ...DEFAULT_TEMPORAL_WAKEUP_CONFIG.wakeSummary };
 
   constructor(
     store: SessionStore,
@@ -1218,6 +1228,7 @@ export class SessionManager {
       turnBudgetCharacteristics,
       compactionMode: 'deferred',
       pendingCompaction: this.pendingAutoCompactions.has(resolvedChannelId),
+      wakeSummaryConfig: this.wakeSummaryConfig,
     });
   }
 

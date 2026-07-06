@@ -284,6 +284,7 @@ export function hydrateCanonicalStartupConfig(
       enabled: persistedScheduler.temporalWakeup.enabled,
       morningWake: { ...persistedScheduler.temporalWakeup.morningWake },
       idleRefresher: { ...persistedScheduler.temporalWakeup.idleRefresher },
+      wakeSummary: { ...persistedScheduler.temporalWakeup.wakeSummary },
     },
     freeTime: {
       enabled: persistedScheduler.freeTime.enabled,
@@ -293,6 +294,7 @@ export function hydrateCanonicalStartupConfig(
       quietHours: { ...persistedScheduler.freeTime.quietHours },
       idle: { ...persistedScheduler.freeTime.idle },
       budget: { ...persistedScheduler.freeTime.budget },
+      returnNote: { ...persistedScheduler.freeTime.returnNote },
     },
     weightedThoughtOutreach: {
       enabled: persistedScheduler.weightedThoughtOutreach.enabled,

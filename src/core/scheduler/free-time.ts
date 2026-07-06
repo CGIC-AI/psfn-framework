@@ -379,7 +379,8 @@ export interface FreeTimeRuntimeOptions {
   resolvePersonaBlock: () => string;
   /**
    * Shared session summarizer for the "while you were away" note. Wire to
-   * summarizeRecentSessionEntries (purpose 'wake_session'). Never bespoke.
+   * summarizeRecentSessionEntries with purpose 'free_time_return' and the
+   * freeTime.returnNote.summaryMaxTokens budget. Never bespoke.
    */
   summarizeActivity?: (input: {
     channelId: string;

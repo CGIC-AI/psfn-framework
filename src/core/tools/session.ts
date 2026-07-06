@@ -3,6 +3,7 @@ import { Type } from '@sinclair/typebox';
 import type { AgentTool, AgentToolResult } from '@mariozechner/pi-agent-core';
 import type { TextContent } from '@mariozechner/pi-ai';
 import type { LLMProviderPort } from '../agent/contracts.js';
+import type { PromptRegistryStatePort } from '../identity/prompt-state-port.js';
 import type { SessionManager } from '../session/manager.js';
 import {
   readLastActiveSession,
@@ -75,6 +76,8 @@ export interface UnifiedSessionToolOptions extends SessionNewToolOptions {
   llmProvider: LLMProviderPort;
   sessionsDir: string;
   runRipgrep?: SessionGrepToolOptions['runRipgrep'];
+  /** Prompt registry backing the action=search summarize=true summary prompt. */
+  promptRegistry?: PromptRegistryStatePort | null;
 }
 
 type SessionToolManager = Pick<
@@ -469,7 +472,12 @@ export function createSessionResumeTool(
 
 export function createSessionTool(options: UnifiedSessionToolOptions): AgentTool<any> {
   const now = options.now ?? Date.now;
-  const sessionSearchTool = createSessionSearchTool(options.manager, options.llmProvider);
+  const sessionSearchTool = createSessionSearchTool(
+    options.manager,
+    options.llmProvider,
+    undefined,
+    options.promptRegistry ?? null,
+  );
   const sessionGrepTool = createSessionGrepTool({
     sessionsDir: options.sessionsDir,
     sessionRouteState: options.manager,

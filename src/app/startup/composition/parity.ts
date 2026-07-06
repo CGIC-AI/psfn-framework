@@ -21,6 +21,7 @@ import { resolveSessionsDir } from '../../../persistence/layout.js';
 import { PromptLayerStore } from '../../../core/identity/prompt-store.js';
 import { PromptComposer } from '../../../core/identity/prompt-composer.js';
 import { PromptRegistryStore } from '../../../core/identity/prompt-registry.js';
+import type { PromptRegistryStatePort } from '../../../core/identity/prompt-state-port.js';
 import { ensureRuntimePromptLayers } from '../../../core/identity/runtime-prompt-layers.js';
 import { ensureTemporalRulesPromptLayer } from '../../../core/identity/temporal-rules-layer.js';
 import {
@@ -196,10 +197,12 @@ export function wireSessionToolsRuntime(
   sessionManager: SessionManager,
   dataDir: string,
   llmProvider: LLMProviderPort,
+  promptRegistry: PromptRegistryStatePort | null = null,
 ): void {
   target.registerTool(createSessionTool({
     manager: sessionManager,
     llmProvider,
+    promptRegistry,
     sessionsDir: resolveSessionsDir(dataDir),
     dataDir,
     setActiveSession: (sessionId) => sessionManager.setActiveContextSession(sessionId),

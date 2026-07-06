@@ -6,6 +6,7 @@ import type { LLMProviderPort } from '../agent/contracts.js';
 import type { SessionEntry, JournalEntry } from '../session/types.js';
 import { getRequestContext } from '../../primitives/llm/request-context.js';
 import type { TrustLevel } from '../../system/trust/types.js';
+import type { PromptRegistryStatePort } from '../identity/prompt-state-port.js';
 import { normalizeChannelPrivacy, type ChannelPrivacy } from '../../system/trust/context-envelope.js';
 import type { TranscriptSearchPort } from '../../persistence/sessions/transcript-search-port.js';
 import {
@@ -329,6 +330,7 @@ export function createSessionSearchTool(
   transcriptSearch: TranscriptSearchPort,
   llmProvider: LLMProviderPort,
   sessionRouteState = asSessionRouteStateProvider(transcriptSearch),
+  promptRegistry: PromptRegistryStatePort | null = null,
 ): AgentTool<any> {
   return {
     name: 'session_search',
@@ -378,6 +380,7 @@ export function createSessionSearchTool(
       const result = await runSessionSearch({
         transcriptSearch,
         llmProvider,
+        promptRegistry,
         query,
         limit: params.limit,
         summarize: params.summarize === true,

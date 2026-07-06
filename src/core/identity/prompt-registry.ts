@@ -19,6 +19,7 @@ const log = createComponentLogger('PromptRegistry');
 export const EXTRACTION_PROMPT_KEY = 'memory.extraction' as const;
 export const COMPACTION_SUMMARY_PROMPT_KEY = 'session.compaction.summary' as const;
 export const RECENT_SESSION_SUMMARY_PROMPT_KEY = 'session.recent.summary' as const;
+export const SESSION_SEARCH_SUMMARY_PROMPT_KEY = 'session.search.summary' as const;
 export const PROFILE_SYNTHESIS_PROMPT_KEY = 'memory.profile.synthesis' as const;
 export const SLEEPTIME_ORIENTATION_PROMPT_KEY = 'memory.sleeptime.orientation' as const;
 export const WIKI_PASS_PROMPT_KEY = 'memory.sleeptime.wiki' as const;
@@ -27,6 +28,7 @@ export type PromptRegistryKey =
   | typeof EXTRACTION_PROMPT_KEY
   | typeof COMPACTION_SUMMARY_PROMPT_KEY
   | typeof RECENT_SESSION_SUMMARY_PROMPT_KEY
+  | typeof SESSION_SEARCH_SUMMARY_PROMPT_KEY
   | typeof PROFILE_SYNTHESIS_PROMPT_KEY
   | typeof SLEEPTIME_ORIENTATION_PROMPT_KEY
   | typeof WIKI_PASS_PROMPT_KEY;
@@ -133,6 +135,17 @@ If there are no new facts worth extracting, respond with an empty response block
 Do not write a transcript, bullet list, or speaker-by-speaker clipped lines. Do not repeat tool results. Omit tool failures unless they changed the conversation; if they matter, mention them once as a brief status.
 
 Return summary text only.`,
+  },
+  {
+    key: SESSION_SEARCH_SUMMARY_PROMPT_KEY,
+    description:
+      'Session transcript search summary prompt used when session action=search runs with summarize=true.',
+    consumers: ['src/core/session/search-runtime.ts'],
+    text: 'You summarize keyword-search matches from archived chat transcripts. '
+      + 'Use only the provided snippets. '
+      + 'Name key topics and channel groupings. '
+      + 'If evidence is sparse or ambiguous, state that explicitly. '
+      + 'Keep the answer concise (3-5 sentences).',
   },
   {
     key: PROFILE_SYNTHESIS_PROMPT_KEY,

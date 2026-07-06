@@ -456,6 +456,16 @@ describe('orientation context surface wiring', () => {
         id: 10,
         channelId: 'api:side',
         originChannelId: 'api:side',
+        role: 'user',
+        content: 'Any update on the prompt registry review?',
+        authorId: 'u2',
+        authorName: 'Sam',
+        timestamp: now - (3 * hourMs),
+      },
+      {
+        id: 11,
+        channelId: 'api:side',
+        originChannelId: 'api:side',
         role: 'assistant',
         content: 'The side channel is waiting on prompt registry review.',
         authorName: 'Companion',
@@ -518,5 +528,142 @@ describe('orientation context surface wiring', () => {
     expect(ctx.systemPrompt).toContain('Before the pause, Vega and Companion chose the shared summary service');
     expect(ctx.systemPrompt).toContain('The side channel was waiting on prompt registry review.');
     expect(ctx.systemPrompt).not.toContain('Before the break we chose the shared summary service. /');
+  });
+});
+
+// ── wake_continuity floor + config-owned wake budgets (psfn-framework-67ka) ──
+
+describe('wake_continuity entry floor', () => {
+  const hourMs = 60 * 60 * 1000;
+
+  function makeWakeFixtures(now: number): {
+    recentEntries: SessionEntry[];
+    continuityEntries: SessionEntry[];
+  } {
+    return {
+      recentEntries: [
+        {
+          id: 1,
+          channelId: 'api:main',
+          role: 'user',
+          content: 'Before the break we chose the shared summary service.',
+          authorId: 'u1',
+          authorName: 'Vega',
+          timestamp: now - (5 * hourMs),
+        },
+        {
+          id: 2,
+          channelId: 'api:main',
+          role: 'assistant',
+          content: 'I queued the prompt registry and context-builder tests.',
+          authorName: 'Companion',
+          timestamp: now - (4 * hourMs),
+        },
+        {
+          id: 3,
+          channelId: 'api:main',
+          role: 'user',
+          content: 'I am back.',
+          authorId: 'u1',
+          authorName: 'Vega',
+          timestamp: now,
+        },
+      ],
+      continuityEntries: [
+        {
+          id: 10,
+          channelId: 'api:side',
+          originChannelId: 'api:side',
+          role: 'assistant',
+          content: 'The side channel is waiting on prompt registry review.',
+          authorName: 'Companion',
+          timestamp: now - (2 * hourMs),
+        },
+      ],
+    };
+  }
+
+  async function buildWakeContext(params: {
+    complete: ReturnType<typeof vi.fn<LLMProviderPort['complete']>>;
+    wakeSummaryConfig?: {
+      sessionSummaryMaxTokens: number;
+      continuitySummaryMaxTokens: number;
+      continuityMinEntries: number;
+    };
+  }): Promise<void> {
+    const now = Date.now();
+    const { recentEntries, continuityEntries } = makeWakeFixtures(now);
+    await buildSessionContext({
+      channelId: 'internal:reflection:daily',
+      systemPrompt: 'System prompt.',
+      coreMemoryBlock: '',
+      memoriesBlock: '',
+      llmProvider: makeSummaryProvider(params.complete),
+      userId: 'u1',
+      continuityFallbackUserIds: [],
+      store: {
+        getRecent: (_channelId: string, _limit: number) => recentEntries,
+        getCompactionSummaries: () => [],
+      } as never,
+      config: makeConfig(),
+      eventBus: null,
+      promptRegistry: null,
+      preCompactionExtractionHandler: null,
+      crossChannelContinuity: {
+        getMerged: () => continuityEntries,
+      },
+      wakeReturnArtifacts: [],
+      characterName: 'Companion',
+      turnSessionContext: {
+        channelId: 'internal:reflection:daily',
+        recentEntries,
+        sourceEntryCount: recentEntries.length,
+        compactionSummaryTexts: [],
+        focusKnowledgeTexts: [],
+        continuityEntries,
+        versionPointer: 'test-snapshot',
+      },
+      recentSummaryMode: 'foreground',
+      ...(params.wakeSummaryConfig ? { wakeSummaryConfig: params.wakeSummaryConfig } : {}),
+    });
+  }
+
+  function makeWakeComplete(): ReturnType<typeof vi.fn<LLMProviderPort['complete']>> {
+    return vi.fn<LLMProviderPort['complete']>().mockImplementation(async () => ({
+      content: 'Summary text.',
+      model: 'test',
+      inputTokens: 0,
+      outputTokens: 0,
+      toolCalls: [],
+      stopReason: 'end_turn',
+    }));
+  }
+
+  it('skips the wake_continuity LLM call when continuity entries are below the default floor', async () => {
+    const complete = makeWakeComplete();
+    await buildWakeContext({ complete });
+
+    // One conversational continuity entry < default floor (2): the
+    // wake_session lane still fires; the wake_continuity lane must not.
+    const originStages = complete.mock.calls.map(([context]) => context.correlation?.originStage);
+    expect(originStages).toContain('session.recent.summary.wake_session');
+    expect(originStages).not.toContain('session.recent.summary.wake_continuity');
+  });
+
+  it('reads the continuity floor and wake budgets from config-owned wakeSummary settings', async () => {
+    const complete = makeWakeComplete();
+    await buildWakeContext({
+      complete,
+      wakeSummaryConfig: {
+        sessionSummaryMaxTokens: 96,
+        continuitySummaryMaxTokens: 80,
+        continuityMinEntries: 1,
+      },
+    });
+
+    // Floor lowered to 1 by config: both wake lanes fire again.
+    const originStages = complete.mock.calls.map(([context]) => context.correlation?.originStage);
+    expect(originStages).toContain('session.recent.summary.wake_session');
+    expect(originStages).toContain('session.recent.summary.wake_continuity');
   });
 });

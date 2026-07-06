@@ -647,6 +647,10 @@ async function main(): Promise<void> {
   // session summarization service (summarizeRecentSessionEntries, purpose
   // 'wake_session'); outward messages ride the existing proactive-outbound
   // dispatcher and quiet-hours time gate.
+  // Wake summary budgets and the wake_continuity entry floor are JSON-owned
+  // (scheduler.json temporalWakeup.wakeSummary); thread them into the session
+  // manager so the context builder never falls back to hardcoded budgets.
+  sessionManager.wakeSummaryConfig = { ...schedulerConfig.temporalWakeup.wakeSummary };
   registerTemporalWakeupTasks({
     scheduler,
     sessionManager,
@@ -771,14 +775,17 @@ async function main(): Promise<void> {
       });
       return { content: response.content };
     },
+    // Shared summarizer, free-time lane identity: distinct purpose/originStage
+    // ('free_time_return') and a freeTime-owned token budget — never borrowed
+    // from the morning-wake catch-up lane.
     summarizeActivity: async ({ channelId, entries }) => summarizeRecentSessionEntries({
       channelId,
       entries,
       characterName: card.data.name,
       llmProvider,
       promptRegistry: promptState.registry,
-      maxTokens: schedulerConfig.temporalWakeup.morningWake.catchUpSummaryMaxTokens,
-      purpose: 'wake_session',
+      maxTokens: schedulerConfig.freeTime.returnNote.summaryMaxTokens,
+      purpose: 'free_time_return',
     }),
   });
   // ── Weighted-thought outreach lane (E?/1xb.2) ──

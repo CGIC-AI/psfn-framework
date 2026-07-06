@@ -131,6 +131,7 @@ describe('scheduler config seed defaults', () => {
           ...DEFAULT_TEMPORAL_WAKEUP_CONFIG.idleRefresher,
           minIdleMinutes: 120,
         },
+        wakeSummary: { ...DEFAULT_TEMPORAL_WAKEUP_CONFIG.wakeSummary },
       });
 
       writeJson(join(seedDir, SCHEDULER_SEED_FILE_NAME), {
@@ -207,6 +208,89 @@ describe('scheduler config seed defaults', () => {
       });
       expect(() => loadSchedulerSeedDefaults({ seedDir })).toThrow(
         'temporalWakeup.morningWake.habit.wakeBandEndHour must be greater than wakeBandStartHour',
+      );
+    });
+  });
+
+  it('owns the wake summary budgets and continuity floor with validated defaults (67ka)', () => {
+    withSeedDir((seedDir) => {
+      expect(DEFAULT_TEMPORAL_WAKEUP_CONFIG.wakeSummary).toEqual({
+        sessionSummaryMaxTokens: 160,
+        continuitySummaryMaxTokens: 160,
+        continuityMinEntries: 2,
+      });
+
+      writeJson(join(seedDir, SCHEDULER_SEED_FILE_NAME), {
+        ...buildValidSchedulerConfig(),
+        temporalWakeup: {
+          wakeSummary: { continuitySummaryMaxTokens: 96, continuityMinEntries: 3 },
+        },
+      });
+      expect(loadSchedulerSeedDefaults({ seedDir }).temporalWakeup.wakeSummary).toEqual({
+        sessionSummaryMaxTokens: 160,
+        continuitySummaryMaxTokens: 96,
+        continuityMinEntries: 3,
+      });
+
+      writeJson(join(seedDir, SCHEDULER_SEED_FILE_NAME), {
+        ...buildValidSchedulerConfig(),
+        temporalWakeup: {
+          wakeSummary: { sessionSummaryMaxTokens: 0 },
+        },
+      });
+      expect(() => loadSchedulerSeedDefaults({ seedDir })).toThrow(
+        'temporalWakeup.wakeSummary.sessionSummaryMaxTokens must be an integer >= 1',
+      );
+
+      writeJson(join(seedDir, SCHEDULER_SEED_FILE_NAME), {
+        ...buildValidSchedulerConfig(),
+        temporalWakeup: {
+          wakeSummary: { continuityMinEntries: 0 },
+        },
+      });
+      expect(() => loadSchedulerSeedDefaults({ seedDir })).toThrow(
+        'temporalWakeup.wakeSummary.continuityMinEntries must be an integer >= 1',
+      );
+
+      writeJson(join(seedDir, SCHEDULER_SEED_FILE_NAME), {
+        ...buildValidSchedulerConfig(),
+        temporalWakeup: {
+          wakeSummary: 'tiny',
+        },
+      });
+      expect(() => loadSchedulerSeedDefaults({ seedDir })).toThrow(
+        'temporalWakeup.wakeSummary must be an object',
+      );
+    });
+  });
+
+  it('owns the free-time return-note summary budget with validated defaults (zpgz)', () => {
+    withSeedDir((seedDir) => {
+      expect(DEFAULT_FREE_TIME_CONFIG.returnNote).toEqual({ summaryMaxTokens: 160 });
+
+      writeJson(join(seedDir, SCHEDULER_SEED_FILE_NAME), {
+        ...buildValidSchedulerConfig(),
+        freeTime: { returnNote: { summaryMaxTokens: 96 } },
+      });
+      expect(loadSchedulerSeedDefaults({ seedDir }).freeTime).toEqual({
+        ...DEFAULT_FREE_TIME_CONFIG,
+        returnNote: { summaryMaxTokens: 96 },
+      });
+
+      writeJson(join(seedDir, SCHEDULER_SEED_FILE_NAME), {
+        ...buildValidSchedulerConfig(),
+        freeTime: { returnNote: { summaryMaxTokens: 0 } },
+      });
+      expect(() => loadSchedulerSeedDefaults({ seedDir })).toThrow(
+        'freeTime.returnNote.summaryMaxTokens must be an integer >= 1',
+      );
+
+      writeJson(join(seedDir, SCHEDULER_SEED_FILE_NAME), {
+        ...buildValidSchedulerConfig(),
+        freeTime: { returnNote: 'tiny' },
+      });
+      expect(() => loadSchedulerSeedDefaults({ seedDir })).toThrow(
+        'freeTime.returnNote must be an object',
       );
     });
   });

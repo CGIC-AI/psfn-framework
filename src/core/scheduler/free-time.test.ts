@@ -1,5 +1,9 @@
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { EventBus } from '../../shared/event-bus.js';
+import type { LLMProviderPort } from '../agent/contracts.js';
+import { summarizeRecentSessionEntries } from '../session/manager/compaction-service.js';
 import { createEligibilityGate } from '../../system/capabilities/eligibility.js';
 import { isInternalSessionId } from '../session/session-id.js';
 import type { SessionEntry } from '../session/types.js';
@@ -39,6 +43,7 @@ function freeTimeConfig(overrides: Partial<FreeTimeConfig> = {}): FreeTimeConfig
     quietHours: { enabled: true, checkIntervalMs: 1_000 },
     idle: { enabled: true, checkIntervalMs: 1_000, minIdleMinutes: 180 },
     budget: { maxTurns: 6, maxChargeUnits: 8 },
+    returnNote: { summaryMaxTokens: 160 },
     ...overrides,
   };
 }
@@ -529,5 +534,59 @@ describe('registerFreeTimeTasks', () => {
     } finally {
       nowSpy.mockRestore();
     }
+  });
+});
+
+// ── Free-time return summary lane (psfn-framework-zpgz) ──
+
+describe('free-time return summary lane', () => {
+  it('summarizeRecentSessionEntries carries the free_time_return purpose into correlation metadata', async () => {
+    const complete = vi.fn(async (context: {
+      correlation?: Record<string, unknown>;
+    }, callType: string) => {
+      // Shared summary completion convention: positional callType 'background',
+      // correlation callType 'summary', lane-specific purpose in originStage.
+      expect(callType).toBe('background');
+      expect(context.correlation).toMatchObject({
+        callType: 'summary',
+        purpose: 'session.recent.summary',
+        originStage: 'session.recent.summary.free_time_return',
+        channelId: 'internal:free-time:quiet-hours',
+      });
+      expect(String(context.correlation?.requestId)).toContain('free_time_return');
+      return {
+        content: 'Wandered the wiki and wrote a poem.',
+        model: 'test',
+        inputTokens: 0,
+        outputTokens: 0,
+        toolCalls: [],
+        stopReason: 'end_turn',
+      };
+    });
+
+    const summary = await summarizeRecentSessionEntries({
+      channelId: 'internal:free-time:quiet-hours',
+      entries: [
+        entry({ role: 'assistant', timestamp: 1_000, content: 'I wrote a poem about sunbeams.' }),
+      ],
+      characterName: 'Companion',
+      llmProvider: { complete } as unknown as LLMProviderPort,
+      promptRegistry: null,
+      maxTokens: 160,
+      purpose: 'free_time_return',
+    });
+
+    expect(complete).toHaveBeenCalledTimes(1);
+    expect(summary).toBe('Wandered the wiki and wrote a poem.');
+  });
+
+  it('agent main wires summarizeActivity with the free_time_return purpose and the freeTime-owned budget', () => {
+    const source = readFileSync(resolve('src/app/agent/main.ts'), 'utf-8');
+    const start = source.indexOf('registerFreeTimeTasks({');
+    expect(start).toBeGreaterThan(-1);
+    const block = source.slice(start, source.indexOf('registerWeightedThoughtOutreachTask', start));
+    expect(block).toContain("purpose: 'free_time_return'");
+    expect(block).toContain('schedulerConfig.freeTime.returnNote.summaryMaxTokens');
+    expect(block).not.toContain('temporalWakeup.morningWake.catchUpSummaryMaxTokens');
   });
 });

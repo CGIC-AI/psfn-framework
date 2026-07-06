@@ -287,6 +287,24 @@ export interface TemporalWakeupIdleRefresherConfig {
 }
 
 /**
+ * Wake orientation summary tuning. The context builder's wake_session and
+ * wake_continuity summaries ride the shared session summarizer; their token
+ * budgets and the continuity entry floor are JSON-owned here instead of
+ * hardcoded in the builder.
+ */
+export interface TemporalWakeupWakeSummaryConfig {
+  /** Token budget for the wake_session recent-activity summary. */
+  sessionSummaryMaxTokens: number;
+  /** Token budget for the wake_continuity cross-channel summary. */
+  continuitySummaryMaxTokens: number;
+  /**
+   * Minimum user/assistant cross-channel continuity entries required before
+   * the wake_continuity LLM summary fires; trivial continuity is skipped.
+   */
+  continuityMinEntries: number;
+}
+
+/**
  * Temporal wake-up lanes (E7.1). Optional block — defaults apply when absent.
  * Both lanes emit explicit system notes (charter 6.17); they are refreshers,
  * never partner activity.
@@ -295,6 +313,7 @@ export interface TemporalWakeupConfig {
   enabled: boolean;
   morningWake: TemporalWakeupMorningConfig;
   idleRefresher: TemporalWakeupIdleRefresherConfig;
+  wakeSummary: TemporalWakeupWakeSummaryConfig;
 }
 
 export const DEFAULT_TEMPORAL_WAKEUP_CONFIG: TemporalWakeupConfig = {
@@ -326,6 +345,11 @@ export const DEFAULT_TEMPORAL_WAKEUP_CONFIG: TemporalWakeupConfig = {
     checkIntervalMs: 900_000,
     minIdleMinutes: 240,
     minNoteIntervalMinutes: 240,
+  },
+  wakeSummary: {
+    sessionSummaryMaxTokens: 160,
+    continuitySummaryMaxTokens: 160,
+    continuityMinEntries: 2,
   },
 };
 
@@ -369,6 +393,16 @@ export interface FreeTimeBudgetConfig {
   maxChargeUnits: number;
 }
 
+/**
+ * "While you were away" return-note tuning. The note's activity summary rides
+ * the shared session summarizer (purpose 'free_time_return'); this owns its
+ * token budget instead of borrowing the morning-wake catch-up budget.
+ */
+export interface FreeTimeReturnNoteConfig {
+  /** Token budget for the free-time return-note activity summary. */
+  summaryMaxTokens: number;
+}
+
 export interface FreeTimeConfig {
   enabled: boolean;
   /** Minimum spacing between free-time blocks, any lane (minutes). */
@@ -383,6 +417,7 @@ export interface FreeTimeConfig {
   quietHours: FreeTimeQuietHoursLaneConfig;
   idle: FreeTimeIdleLaneConfig;
   budget: FreeTimeBudgetConfig;
+  returnNote: FreeTimeReturnNoteConfig;
 }
 
 export const DEFAULT_FREE_TIME_SEED_TEXT =
@@ -411,6 +446,9 @@ export const DEFAULT_FREE_TIME_CONFIG: FreeTimeConfig = {
   budget: {
     maxTurns: 6,
     maxChargeUnits: 8,
+  },
+  returnNote: {
+    summaryMaxTokens: 160,
   },
 };
 
@@ -947,6 +985,7 @@ function validateTemporalWakeupConfig(
       enabled: DEFAULT_TEMPORAL_WAKEUP_CONFIG.enabled,
       morningWake: { ...DEFAULT_TEMPORAL_WAKEUP_CONFIG.morningWake },
       idleRefresher: { ...DEFAULT_TEMPORAL_WAKEUP_CONFIG.idleRefresher },
+      wakeSummary: { ...DEFAULT_TEMPORAL_WAKEUP_CONFIG.wakeSummary },
     };
   }
   if (!isRecord(raw)) {
@@ -954,13 +993,18 @@ function validateTemporalWakeupConfig(
   }
   const morningDefaults = DEFAULT_TEMPORAL_WAKEUP_CONFIG.morningWake;
   const refresherDefaults = DEFAULT_TEMPORAL_WAKEUP_CONFIG.idleRefresher;
+  const wakeSummaryDefaults = DEFAULT_TEMPORAL_WAKEUP_CONFIG.wakeSummary;
   const morningRaw = raw.morningWake ?? {};
   const refresherRaw = raw.idleRefresher ?? {};
+  const wakeSummaryRaw = raw.wakeSummary ?? {};
   if (!isRecord(morningRaw)) {
     throw new Error(`Invalid scheduler config at ${sourcePath}: temporalWakeup.morningWake must be an object`);
   }
   if (!isRecord(refresherRaw)) {
     throw new Error(`Invalid scheduler config at ${sourcePath}: temporalWakeup.idleRefresher must be an object`);
+  }
+  if (!isRecord(wakeSummaryRaw)) {
+    throw new Error(`Invalid scheduler config at ${sourcePath}: temporalWakeup.wakeSummary must be an object`);
   }
 
   return {
@@ -1004,6 +1048,23 @@ function validateTemporalWakeupConfig(
         1,
       ),
     },
+    wakeSummary: {
+      sessionSummaryMaxTokens: toPositiveInteger(
+        wakeSummaryRaw.sessionSummaryMaxTokens ?? wakeSummaryDefaults.sessionSummaryMaxTokens,
+        'temporalWakeup.wakeSummary.sessionSummaryMaxTokens',
+        1,
+      ),
+      continuitySummaryMaxTokens: toPositiveInteger(
+        wakeSummaryRaw.continuitySummaryMaxTokens ?? wakeSummaryDefaults.continuitySummaryMaxTokens,
+        'temporalWakeup.wakeSummary.continuitySummaryMaxTokens',
+        1,
+      ),
+      continuityMinEntries: toPositiveInteger(
+        wakeSummaryRaw.continuityMinEntries ?? wakeSummaryDefaults.continuityMinEntries,
+        'temporalWakeup.wakeSummary.continuityMinEntries',
+        1,
+      ),
+    },
   };
 }
 
@@ -1027,6 +1088,7 @@ function validateFreeTimeConfig(
       quietHours: { ...DEFAULT_FREE_TIME_CONFIG.quietHours },
       idle: { ...DEFAULT_FREE_TIME_CONFIG.idle },
       budget: { ...DEFAULT_FREE_TIME_CONFIG.budget },
+      returnNote: { ...DEFAULT_FREE_TIME_CONFIG.returnNote },
     };
   }
   if (!isRecord(raw)) {
@@ -1036,6 +1098,7 @@ function validateFreeTimeConfig(
   const quietRaw = raw.quietHours ?? {};
   const idleRaw = raw.idle ?? {};
   const budgetRaw = raw.budget ?? {};
+  const returnNoteRaw = raw.returnNote ?? {};
   if (!isRecord(quietRaw)) {
     throw new Error(`Invalid scheduler config at ${sourcePath}: freeTime.quietHours must be an object`);
   }
@@ -1044,6 +1107,9 @@ function validateFreeTimeConfig(
   }
   if (!isRecord(budgetRaw)) {
     throw new Error(`Invalid scheduler config at ${sourcePath}: freeTime.budget must be an object`);
+  }
+  if (!isRecord(returnNoteRaw)) {
+    throw new Error(`Invalid scheduler config at ${sourcePath}: freeTime.returnNote must be an object`);
   }
 
   return {
@@ -1087,6 +1153,13 @@ function validateFreeTimeConfig(
       maxChargeUnits: toPositiveInteger(
         budgetRaw.maxChargeUnits ?? defaults.budget.maxChargeUnits,
         'freeTime.budget.maxChargeUnits',
+        1,
+      ),
+    },
+    returnNote: {
+      summaryMaxTokens: toPositiveInteger(
+        returnNoteRaw.summaryMaxTokens ?? defaults.returnNote.summaryMaxTokens,
+        'freeTime.returnNote.summaryMaxTokens',
         1,
       ),
     },

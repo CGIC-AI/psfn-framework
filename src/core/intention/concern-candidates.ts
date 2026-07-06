@@ -362,6 +362,8 @@ export class ConcernCandidateReviewer {
           requestId: `concern-candidate-review:${candidates.map(candidate => candidate.id).join(',')}`,
           callType: 'background',
           purpose: 'intention.concern_candidate_review',
+          originType: 'background',
+          originStage: 'intention.concern_candidate_review',
           ...(candidates[0]?.channelId ? { channelId: candidates[0].channelId } : {}),
         },
       },

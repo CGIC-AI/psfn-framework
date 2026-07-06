@@ -3,6 +3,9 @@ import type { AnalysisWorkbenchEvidence } from '../../../core/tools/analysis-wor
 import type { SandboxBudgetRef } from './contracts.js';
 import { addEvidence, BUDGET_EXCEEDED_MESSAGE } from './common.js';
 import { chargeSurface } from '../../../shared/telemetry/run-charge.js';
+import { createComponentLogger } from '../../../shared/logger.js';
+
+const log = createComponentLogger('SandboxLLMCapabilities');
 
 export interface LLMCapabilities {
   llm_query: (prompt: string) => Promise<string>;
@@ -102,7 +105,18 @@ export function createLLMCapabilities(options: CreateLLMCapabilitiesOptions): LL
         if (new RegExp(validatePattern).test(lastResult)) {
           return lastResult;
         }
-      } catch {
+      } catch (error) {
+        log.warn('Sandbox llm_query_strict validation regex failed', {
+          error: String(error),
+          requestId: baseRequestId ?? null,
+          channelId: baseChannelId ?? null,
+          turnId: baseTurnId ?? null,
+          toolCallId: baseToolCallId ?? null,
+          toolName: 'llm_query_strict',
+          attempt: attempt + 1,
+          retries,
+          validatePatternLength: validatePattern.length,
+        });
         return lastResult;
       }
     }
@@ -118,7 +132,16 @@ export function createLLMCapabilities(options: CreateLLMCapabilitiesOptions): LL
     );
     try {
       return JSON.parse(result);
-    } catch {
+    } catch (error) {
+      log.warn('Sandbox llm_query_json parse failed', {
+        error: String(error),
+        requestId: baseRequestId ?? null,
+        channelId: baseChannelId ?? null,
+        turnId: baseTurnId ?? null,
+        toolCallId: baseToolCallId ?? null,
+        toolName: 'llm_query_json',
+        resultLength: result.length,
+      });
       return null;
     }
   };

@@ -1,4 +1,9 @@
-import type { CompletionPurpose, ContextMessage } from '../../../shared/contracts/runtime.js';
+import type {
+  CompletionPurpose,
+  ContextMessage,
+  CorrelationMetadata,
+} from '../../../shared/contracts/runtime.js';
+import { getRequestContext } from '../../../primitives/llm/request-context.js';
 import {
   classifyAppraisalTrigger,
   hasDueSoonConcern,
@@ -154,11 +159,24 @@ export class IntentionAppraisal {
       role: 'user',
       content: JSON.stringify(promptPayload, null, 2),
     };
+    const requestContext = getRequestContext();
+    const correlation: CorrelationMetadata = {
+      ...(requestContext?.turnId ? { turnId: requestContext.turnId } : {}),
+      requestId: requestContext?.requestId
+        ? `${requestContext.requestId}:intention-appraisal`
+        : `intention-appraisal:${normalized.sessionId}:${normalized.now}`,
+      channelId: requestContext?.channelId ?? normalized.sessionId,
+      callType: 'background',
+      purpose: 'intention.appraisal',
+      originType: 'background',
+      originStage: `intention.appraisal.${trigger}`,
+    };
 
     try {
       const completion = await this.llmProvider.complete({
         systemPrompt: buildRuntimeAppraisalSystemPrompt(this.systemPrompt, persona),
         messages: [promptMessage],
+        correlation,
       }, completionPurpose);
       const parsed = parseDecisionResponse(completion.content, this.maxDecisions);
       const decisions = parsed.decisions.length > 0

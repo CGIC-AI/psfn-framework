@@ -135,6 +135,23 @@ export interface OrientationRewriteGateConfig {
 }
 
 /**
+ * Deterministic novelty gate for cadence-fired heartbeat reflection templates
+ * (jpvd.4). A scheduled reflection must not fire when nothing new happened in
+ * its scope since the last reflection run of that template — the gate skips
+ * the run with zero LLM spend and typed telemetry. Manual run_template
+ * invocations bypass the gate: an explicit operator/model request is its own
+ * justification.
+ */
+export interface ReflectionNoveltyGateConfig {
+  /**
+   * New scope entries (user/assistant session messages) since the template's
+   * last reflection required for a cadence-fired run to proceed. Below this
+   * the run is skipped with telemetry.
+   */
+  minNewEntries: number;
+}
+
+/**
  * Sleeptime wiki update pass (E8.2). A nightly rest-window lane that reviews the
  * day's newly-canonical episodes and notable durable memories for non-private
  * world knowledge worth creating/updating wiki entries. A deterministic gate
@@ -527,6 +544,7 @@ export interface SchedulerRuntimeConfig {
   episodeSynthesis: EpisodeSynthesisLaneConfig;
   sleepConsolidation: SleepConsolidationConfig;
   orientationRewrite: OrientationRewriteGateConfig;
+  reflectionNovelty: ReflectionNoveltyGateConfig;
   wikiPass: SleeptimeWikiPassConfig;
   arcFormation: ArcFormationConfig;
   socialGraphBuilder: SocialGraphBuilderCadenceConfig;
@@ -760,6 +778,29 @@ function validateOrientationRewriteGateConfig(
     refreshAfterQuietDays: toPositiveInteger(
       raw.refreshAfterQuietDays ?? DEFAULT_ORIENTATION_REWRITE_GATE.refreshAfterQuietDays,
       'orientationRewrite.refreshAfterQuietDays',
+      1,
+    ),
+  };
+}
+
+export const DEFAULT_REFLECTION_NOVELTY_GATE: ReflectionNoveltyGateConfig = {
+  minNewEntries: 1,
+};
+
+function validateReflectionNoveltyGateConfig(
+  raw: unknown,
+  sourcePath: string,
+): ReflectionNoveltyGateConfig {
+  if (raw === undefined) {
+    return { ...DEFAULT_REFLECTION_NOVELTY_GATE };
+  }
+  if (!isRecord(raw)) {
+    throw new Error(`Invalid scheduler config at ${sourcePath}: reflectionNovelty must be an object`);
+  }
+  return {
+    minNewEntries: toPositiveInteger(
+      raw.minNewEntries ?? DEFAULT_REFLECTION_NOVELTY_GATE.minNewEntries,
+      'reflectionNovelty.minNewEntries',
       1,
     ),
   };
@@ -1284,6 +1325,7 @@ function validateSchedulerConfig(raw: unknown, sourcePath: string): SchedulerRun
     episodeSynthesis: validateEpisodeSynthesisConfig(raw.episodeSynthesis, sourcePath),
     sleepConsolidation: validateSleepConsolidationConfig(raw.sleepConsolidation, sourcePath),
     orientationRewrite: validateOrientationRewriteGateConfig(raw.orientationRewrite, sourcePath),
+    reflectionNovelty: validateReflectionNoveltyGateConfig(raw.reflectionNovelty, sourcePath),
     wikiPass: validateSleeptimeWikiPassConfig(raw.wikiPass, sourcePath),
     arcFormation: validateArcFormationConfig(raw.arcFormation, sourcePath),
     socialGraphBuilder: validateSocialGraphBuilderConfig(raw.socialGraphBuilder, sourcePath),

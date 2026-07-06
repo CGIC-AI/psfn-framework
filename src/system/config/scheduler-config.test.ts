@@ -59,6 +59,9 @@ function buildValidSchedulerConfig(): Record<string, unknown> {
       minNewEntriesSinceRewrite: 4,
       refreshAfterQuietDays: 7,
     },
+    reflectionNovelty: {
+      minNewEntries: 1,
+    },
     wikiPass: {
       enabled: true,
       reviewWindowHours: 36,

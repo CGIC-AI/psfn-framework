@@ -1,4 +1,3 @@
-import { randomUUID } from 'node:crypto';
 import { compactMemoryTextForPrompt } from '../../faculties/memory/retrieval/formatting.js';
 import type { Scheduler } from './scheduler.js';
 import type { MessageSender } from '../../system/lifecycle/notifications.js';
@@ -18,7 +17,6 @@ import type {
   ValuesDeliberationMetadata,
 } from '../../faculties/values/store.js';
 import type {
-  CompletionPurpose,
   ContextMessage,
   ObservabilityCallType,
   PostTurnActionCandidate,
@@ -58,7 +56,7 @@ import {
 import type { Contact } from '../contacts/types.js';
 import { isBusyTurnError } from '../../system/lifecycle/turn-contention.js';
 import { runDeliberation } from '../../primitives/llm/deliberation.js';
-import type { DeliberationResult } from '../../primitives/llm/deliberation.js';
+import type { DeliberationResult, DeliberationStageDefinition } from '../../primitives/llm/deliberation.js';
 import {
   buildInternalStateSnapshotRef,
   cloneInternalState,
@@ -80,6 +78,11 @@ import {
 } from './reflection-introspection-policy.js';
 import { runWithRequestContext } from '../../primitives/llm/request-context.js';
 import { injectPromptRuntimeTokens } from '../identity/prompt-runtime.js';
+import {
+  evaluateDeterministicGate,
+  type DeterministicGateDefinition,
+} from '../../shared/gating/deterministic-gate.js';
+import { DEFAULT_REFLECTION_NOVELTY_GATE } from '../../system/config/scheduler-config.js';
 
 const log = createComponentLogger('HeartbeatTemplates');
 
@@ -134,6 +137,12 @@ const RICH_DELIBERATION_TEMPLATE_IDS = new Set(['daily-review', 'weekly-review']
 const DELIBERATION_DEFAULT_INPUT_USD_PER_MILLION_TOKENS = 2;
 const DELIBERATION_DEFAULT_OUTPUT_USD_PER_MILLION_TOKENS = 8;
 const MAX_UNSUPPORTED_CLAIM_FLAGS = 4;
+// jpvd.4 novelty gate for cadence-fired reflection templates: lane id for the
+// typed gate event, watermark processor key, and how many recent session
+// entries the deterministic "new entries since last reflection" count scans.
+const REFLECTION_NOVELTY_GATE_LANE = 'reflection.template.novelty';
+const REFLECTION_NOVELTY_WATERMARK_PROCESSOR = 'reflection_template_novelty';
+const REFLECTION_NOVELTY_ENTRY_SCAN_LIMIT = 50;
 const REFLECTION_PROMPT_TOKENS = {
   persona: '{{reflection_persona}}',
   self: '{{reflection_self}}',
@@ -195,7 +204,6 @@ type ReflectionDeliberationExecutionResult = {
   metadata: ValuesDeliberationMetadata;
   metacognitiveFlags: ReflectionMetacognitiveFlag[];
 };
-type ExperientialReflectionStage = 'evidence' | 'synthesis' | 'contradiction';
 
 class HeartbeatTemplateLoopGuardError extends Error {
   readonly templateId: string;
@@ -343,18 +351,6 @@ function clampUnit(value: number): number {
   return Math.max(0, Math.min(1, value));
 }
 
-function estimateDeliberationCostUsd(
-  inputTokens: number,
-  outputTokens: number,
-  inputUsdPerMillionTokens: number,
-  outputUsdPerMillionTokens: number,
-): number {
-  return (
-    (Math.max(0, inputTokens) * Math.max(0, inputUsdPerMillionTokens))
-    + (Math.max(0, outputTokens) * Math.max(0, outputUsdPerMillionTokens))
-  ) / 1_000_000;
-}
-
 function normalizeFiniteTimestamp(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : undefined;
 }
@@ -456,6 +452,25 @@ function mergeMetacognitiveFlags(
 
 function isExperientialDeliberationTemplate(template: ReflectionTemplate): boolean {
   return RICH_DELIBERATION_TEMPLATE_IDS.has(template.id);
+}
+
+function buildReflectionNoveltyGateDefinition(minNewEntries: number): DeterministicGateDefinition {
+  return {
+    lane: REFLECTION_NOVELTY_GATE_LANE,
+    openWhenAny: [{
+      input: 'newEntriesSinceLastReflection',
+      comparator: 'gte',
+      threshold: minNewEntries,
+    }],
+    closedReason: 'insufficient_new_entries',
+  };
+}
+
+interface ReflectionNoveltyGateOutcome {
+  open: boolean;
+  reason: string;
+  inputs: Record<string, number | string>;
+  scopeKey: string;
 }
 
 function findReflectionTemplateById(
@@ -637,6 +652,165 @@ export function createHeartbeatTemplateRuntime(
       nextCooldownUntil,
       `Template "${templateId}" exceeded rapid-fire burst limits`,
     );
+  };
+
+  const resolveReflectionNoveltyScopeKey = (
+    canonicalContactId: string | undefined,
+    groupScope: { channelId: string } | undefined,
+  ): string => {
+    if (groupScope) return `group:${groupScope.channelId}`;
+    if (canonicalContactId) return `contact:${canonicalContactId}`;
+    return 'substrate';
+  };
+
+  /**
+   * jpvd.4 novelty gate for cadence-fired reflection templates: deterministic
+   * "new scope entries since this template's last reflection" count against a
+   * per-template/scope watermark. Opens with an explicit bypass reason when a
+   * deterministic count is not available (no watermark store, no session
+   * signal, or no live activity stream bound to the scope) — the gate never
+   * guesses, and every consultation is visible through the typed gate event.
+   */
+  const evaluateReflectionNoveltyGate = async (
+    template: ReflectionTemplate,
+    reflectionChannelId: string,
+    canonicalContactId: string | undefined,
+    groupScope: { channelId: string } | undefined,
+  ): Promise<ReflectionNoveltyGateOutcome> => {
+    const scopeKey = resolveReflectionNoveltyScopeKey(canonicalContactId, groupScope);
+    const minNewEntries = runtimeOptions.reflectionNoveltyGate?.minNewEntries
+      ?? DEFAULT_REFLECTION_NOVELTY_GATE.minNewEntries;
+    const baseInputs: Record<string, number | string> = {
+      templateId: template.id,
+      scope: scopeKey,
+      minNewEntries,
+    };
+
+    const watermarkStore = runtimeOptions.episodicWatermarkStore;
+    if (!watermarkStore) {
+      return { open: true, reason: 'no_watermark_store', inputs: baseInputs, scopeKey };
+    }
+    const sessionManager = runtimeOptions.sessionManager;
+    if (!sessionManager?.getRecentMessages) {
+      return { open: true, reason: 'no_activity_signal', inputs: baseInputs, scopeKey };
+    }
+
+    let activitySessionId: string | undefined;
+    if (groupScope) {
+      activitySessionId = groupScope.channelId;
+    } else if (canonicalContactId) {
+      const contact = runtimeOptions.contactStore?.getById
+        ? await runtimeOptions.contactStore.getById(canonicalContactId) as Contact | undefined
+        : undefined;
+      activitySessionId = resolveReflectionContactSessionId(contact ?? null, reflectionChannelId);
+    }
+    // The internal reflection channel is the reflection's own output stream,
+    // not scope activity; counting it would let reflections feed themselves.
+    if (!activitySessionId || activitySessionId === reflectionChannelId) {
+      return { open: true, reason: 'no_activity_signal', inputs: baseInputs, scopeKey };
+    }
+
+    const watermark = await watermarkStore.getProcessingWatermark({
+      processor: REFLECTION_NOVELTY_WATERMARK_PROCESSOR,
+      sourceRef: template.id,
+      channelId: scopeKey,
+    });
+    const watermarkMs = watermark?.lastProcessedAt
+      ? Date.parse(watermark.lastProcessedAt)
+      : Number.NaN;
+
+    const newEntriesSinceLastReflection = sessionManager
+      .getRecentMessages(activitySessionId, REFLECTION_NOVELTY_ENTRY_SCAN_LIMIT)
+      .filter((entry) => {
+        if (entry.role !== 'user' && entry.role !== 'assistant') return false;
+        const timestamp = normalizeFiniteTimestamp((entry as { timestamp?: unknown }).timestamp);
+        if (timestamp === undefined) return false;
+        return !Number.isFinite(watermarkMs) || timestamp > watermarkMs;
+      })
+      .length;
+
+    const decision = evaluateDeterministicGate(
+      buildReflectionNoveltyGateDefinition(minNewEntries),
+      {
+        ...baseInputs,
+        newEntriesSinceLastReflection,
+        ...(Number.isFinite(watermarkMs)
+          ? { lastReflectionAt: new Date(watermarkMs).toISOString() }
+          : {}),
+      },
+    );
+    return { open: decision.open, reason: decision.reason, inputs: decision.inputs as Record<string, number | string>, scopeKey };
+  };
+
+  const emitReflectionNoveltyGateEvent = async (
+    outcome: 'ran' | 'skipped',
+    gate: Pick<ReflectionNoveltyGateOutcome, 'reason' | 'inputs'>,
+    reflectionChannelId: string,
+  ): Promise<void> => {
+    if (!runtimeOptions.eventBus) {
+      return;
+    }
+    try {
+      await runtimeOptions.eventBus.emit('reflection.template.novelty.gate', {
+        lane: REFLECTION_NOVELTY_GATE_LANE,
+        outcome,
+        reason: gate.reason,
+        inputs: gate.inputs,
+        timestamp: Date.now(),
+        channelId: reflectionChannelId,
+      });
+    } catch (error) {
+      log.warn('Failed to emit reflection novelty gate telemetry', {
+        outcome,
+        reason: gate.reason,
+        error: String(error),
+      });
+    }
+  };
+
+  /**
+   * Advance the per-template/scope novelty watermark after a completed
+   * reflection run (any execution source: a manual reflection also consumed
+   * the scope's novelty). Failures are loud but do not fail the delivered
+   * reflection; an unadvanced watermark only makes the next cadence run more
+   * likely to fire.
+   */
+  const advanceReflectionNoveltyWatermark = async (
+    template: ReflectionTemplate,
+    canonicalContactId: string | undefined,
+    groupScope: { channelId: string } | undefined,
+  ): Promise<void> => {
+    const watermarkStore = runtimeOptions.episodicWatermarkStore;
+    if (!watermarkStore) {
+      return;
+    }
+    const scopeKey = resolveReflectionNoveltyScopeKey(canonicalContactId, groupScope);
+    const watermarkScope = {
+      processor: REFLECTION_NOVELTY_WATERMARK_PROCESSOR,
+      sourceRef: template.id,
+      channelId: scopeKey,
+    };
+    try {
+      const existing = await watermarkStore.getProcessingWatermark(watermarkScope);
+      const nowIso = new Date().toISOString();
+      await watermarkStore.upsertProcessingWatermark({
+        ...watermarkScope,
+        ...(existing?.id ? { id: existing.id } : {}),
+        previousWatermarkJson: existing?.nextWatermarkJson ?? {},
+        nextWatermarkJson: {
+          lastReflection: { at: nowIso, templateId: template.id, scope: scopeKey },
+        },
+        status: 'active',
+        reconciliationStatus: 'clean',
+        lastProcessedAt: nowIso,
+      });
+    } catch (error) {
+      log.warn('Reflection novelty watermark advance skipped', {
+        templateId: template.id,
+        scope: scopeKey,
+        error: String(error),
+      });
+    }
   };
 
   let latestMetacognitiveFlags: ReflectionMetacognitiveFlag[] = [];
@@ -1397,7 +1571,7 @@ export function createHeartbeatTemplateRuntime(
   const buildExperientialEvidenceMessages = (
     template: ReflectionTemplate,
     prompt: string,
-  ): { systemPrompt: string; messages: ContextMessage[]; purpose: CompletionPurpose } => ({
+  ): { systemPrompt: string; messages: ContextMessage[] } => ({
     systemPrompt:
       `This is my evidence pass on my "${template.name}" reflection. `
       + 'I gather only what is directly grounded in the reflection context in front of me — '
@@ -1411,14 +1585,13 @@ export function createHeartbeatTemplateRuntime(
         prompt,
       ].join('\n\n'),
     }],
-    purpose: template.deliberation?.voices?.[0] ?? 'background',
   });
 
   const buildExperientialSynthesisMessages = (
     template: ReflectionTemplate,
     prompt: string,
     evidence: string,
-  ): { systemPrompt: string; messages: ContextMessage[]; purpose: CompletionPurpose } => ({
+  ): { systemPrompt: string; messages: ContextMessage[] } => ({
     systemPrompt:
       `This is my synthesis pass on my "${template.name}" reflection. `
       + 'I write a grounded reflection using only the evidence I gathered, in two to five sentences, '
@@ -1434,7 +1607,6 @@ export function createHeartbeatTemplateRuntime(
         evidence,
       ].join('\n\n'),
     }],
-    purpose: template.deliberation?.voices?.[1] ?? template.deliberation?.voices?.[0] ?? 'reasoning',
   });
 
   const buildExperientialContradictionMessages = (
@@ -1442,7 +1614,7 @@ export function createHeartbeatTemplateRuntime(
     prompt: string,
     evidence: string,
     synthesis: string,
-  ): { systemPrompt: string; messages: ContextMessage[]; purpose: CompletionPurpose } => ({
+  ): { systemPrompt: string; messages: ContextMessage[] } => ({
     systemPrompt:
       `This is my contradiction pass on my "${template.name}" reflection — I keep myself honest. `
       + 'I compare my candidate reflection against the grounded evidence. '
@@ -1463,7 +1635,6 @@ export function createHeartbeatTemplateRuntime(
         'Return JSON only.',
       ].join('\n\n'),
     }],
-    purpose: 'reasoning',
   });
 
   const parseExperientialContradictionResponse = (
@@ -1502,6 +1673,41 @@ export function createHeartbeatTemplateRuntime(
     }
   };
 
+  /**
+   * The experiential 3-stage sequence (evidence → synthesis → contradiction)
+   * expressed as a fixed stage config for the shared runDeliberation
+   * primitive, which owns the budget loop, token/cost accounting, stop
+   * reasons, and per-stage correlation.
+   */
+  const buildExperientialDeliberationStages = (
+    template: ReflectionTemplate,
+  ): DeliberationStageDefinition[] => [
+    {
+      name: 'evidence',
+      purpose: template.deliberation?.voices?.[0] ?? 'background',
+      buildTurn: ({ prompt }) => buildExperientialEvidenceMessages(template, prompt),
+    },
+    {
+      name: 'synthesis',
+      purpose: template.deliberation?.voices?.[1] ?? template.deliberation?.voices?.[0] ?? 'reasoning',
+      buildTurn: ({ prompt, stageOutputs }) => buildExperientialSynthesisMessages(
+        template,
+        prompt,
+        stageOutputs.evidence || prompt,
+      ),
+    },
+    {
+      name: 'contradiction',
+      purpose: 'reasoning',
+      buildTurn: ({ prompt, stageOutputs }) => buildExperientialContradictionMessages(
+        template,
+        prompt,
+        stageOutputs.evidence || prompt,
+        stageOutputs.synthesis || stageOutputs.evidence || prompt,
+      ),
+    },
+  ];
+
   const runExperientialTemplateDeliberation = async (
     template: ReflectionTemplate,
     prompt: string,
@@ -1514,160 +1720,46 @@ export function createHeartbeatTemplateRuntime(
       throw new Error('Experiential deliberation requested without llmProvider');
     }
 
-    const startedAt = Date.now();
-    const sessionId = randomUUID();
-    const maxRounds = Math.max(1, Math.min(3, Math.floor(template.deliberation?.maxRounds ?? 3)));
-    const maxTotalTokens = Math.max(256, Math.floor(template.deliberation?.maxTotalTokens ?? 6_000));
-    const maxWallTimeMs = Math.max(250, Math.floor(template.deliberation?.maxWallTimeMs ?? 35_000));
-    const inputUsdPerMillionTokens = template.deliberation?.inputUsdPerMillionTokens
-      ?? DELIBERATION_DEFAULT_INPUT_USD_PER_MILLION_TOKENS;
-    const outputUsdPerMillionTokens = template.deliberation?.outputUsdPerMillionTokens
-      ?? DELIBERATION_DEFAULT_OUTPUT_USD_PER_MILLION_TOKENS;
+    const result = await runDeliberation(llmProvider, prompt, {
+      episode: {
+        kind: 'maintenance_reflection',
+        mode: 'background_bounded',
+      },
+      correlation: buildReflectionDeliberationCorrelation(source, reflectionChannelId, processId),
+      stages: buildExperientialDeliberationStages(template),
+      caps: {
+        maxRounds: Math.max(1, Math.min(3, Math.floor(template.deliberation?.maxRounds ?? 3))),
+        maxTotalTokens: Math.max(256, Math.floor(template.deliberation?.maxTotalTokens ?? 6_000)),
+        maxWallTimeMs: Math.max(250, Math.floor(template.deliberation?.maxWallTimeMs ?? 35_000)),
+      },
+      cost: {
+        inputUsdPerMillionTokens: template.deliberation?.inputUsdPerMillionTokens
+          ?? DELIBERATION_DEFAULT_INPUT_USD_PER_MILLION_TOKENS,
+        outputUsdPerMillionTokens: template.deliberation?.outputUsdPerMillionTokens
+          ?? DELIBERATION_DEFAULT_OUTPUT_USD_PER_MILLION_TOKENS,
+      },
+    });
 
-    let totalInputTokens = 0;
-    let totalOutputTokens = 0;
-    let estimatedCostUsd = 0;
-    let completedRounds = 0;
-    let stopReason: ValuesDeliberationMetadata['stopReason'] = 'max_rounds';
-    let evidence = '';
-    let synthesis = '';
-    let finalReflection = '';
+    const stageOutput = (stageName: string): string =>
+      result.rounds.find(round => round.stage === stageName)?.synthesis ?? '';
+    const evidence = stageOutput('evidence');
+    const synthesis = stageOutput('synthesis');
+    const contradictionRaw = stageOutput('contradiction');
+
+    let finalReflection = synthesis || evidence;
     let metacognitiveFlags: ReflectionMetacognitiveFlag[] = [];
-
-    const runStage = async (
-      stage: ExperientialReflectionStage,
-      builder: () => { systemPrompt: string; messages: ContextMessage[]; purpose: CompletionPurpose },
-    ): Promise<string | null> => {
-      if (Date.now() - startedAt >= maxWallTimeMs) {
-        stopReason = 'time_cap';
-        return null;
-      }
-      if (completedRounds >= maxRounds) {
-        stopReason = 'max_rounds';
-        return null;
-      }
-      if (totalInputTokens + totalOutputTokens >= maxTotalTokens) {
-        stopReason = 'token_cap';
-        return null;
-      }
-
-      const stageStartedAt = Date.now();
-      const { systemPrompt, messages, purpose } = builder();
-      const response = await llmProvider.complete({
-        systemPrompt,
-        messages,
-        correlation: buildReflectionDeliberationCorrelation(
-          source,
-          reflectionChannelId,
-          processId,
-          `heartbeat.deliberation.${stage}`,
-        ),
-      }, purpose);
-      const content = response.content.trim();
-
-      totalInputTokens += response.inputTokens;
-      totalOutputTokens += response.outputTokens;
-      estimatedCostUsd += estimateDeliberationCostUsd(
-        response.inputTokens,
-        response.outputTokens,
-        inputUsdPerMillionTokens,
-        outputUsdPerMillionTokens,
-      );
-      completedRounds += 1;
-
-      const elapsed = Date.now() - startedAt;
-      if (elapsed >= maxWallTimeMs) {
-        stopReason = 'time_cap';
-      } else if (totalInputTokens + totalOutputTokens >= maxTotalTokens) {
-        stopReason = 'token_cap';
-      }
-
-      log.debug('Completed experiential reflection deliberation stage', {
-        templateId: template.id,
-        stage,
-        purpose,
-        durationMs: Date.now() - stageStartedAt,
-        inputTokens: response.inputTokens,
-        outputTokens: response.outputTokens,
-      });
-
-      return content;
-    };
-
-    const evidenceResult = await runStage(
-      'evidence',
-      () => buildExperientialEvidenceMessages(template, prompt),
-    );
-    if (evidenceResult) {
-      evidence = evidenceResult;
-      finalReflection = evidenceResult;
-    }
-
-    const synthesisResult = await runStage(
-      'synthesis',
-      () => buildExperientialSynthesisMessages(template, prompt, evidence || prompt),
-    );
-    if (synthesisResult) {
-      synthesis = synthesisResult;
-      finalReflection = synthesisResult;
-    }
-
-    const contradictionResult = await runStage(
-      'contradiction',
-      () => buildExperientialContradictionMessages(
-        template,
-        prompt,
-        evidence || prompt,
-        synthesis || finalReflection || evidence || prompt,
-      ),
-    );
-    if (contradictionResult) {
+    if (contradictionRaw) {
       const parsedContradiction = parseExperientialContradictionResponse(
-        contradictionResult,
-        synthesis || finalReflection || evidence || prompt,
+        contradictionRaw,
+        synthesis || evidence || prompt,
       );
       metacognitiveFlags = parsedContradiction.metacognitiveFlags;
       finalReflection = parsedContradiction.revisedReflection;
     }
 
-    const totalTokens = totalInputTokens + totalOutputTokens;
-    const maxRoundsReached = stopReason === 'max_rounds';
-    const maxWallTimeReached = stopReason === 'time_cap';
-    const maxTotalTokensReached = stopReason === 'token_cap' && totalTokens >= maxTotalTokens;
-    const maxTokensPerRoundReached = false;
-
     return {
       reflection: finalReflection.trim() || synthesis.trim() || evidence.trim() || prompt.trim(),
-      metadata: {
-        sessionId,
-        stopReason,
-        rounds: completedRounds,
-        totalInputTokens,
-        totalOutputTokens,
-        totalTokens,
-        estimatedCostUsd,
-        durationMs: Math.max(0, Date.now() - startedAt),
-        episode: {
-          id: sessionId,
-          kind: 'maintenance_reflection',
-          mode: 'background_bounded',
-          budget: {
-            maxRounds,
-            maxTotalTokens,
-            maxWallTimeMs,
-          },
-          exit: {
-            reason: stopReason,
-            exhaustedBudget:
-              maxRoundsReached || maxWallTimeReached || maxTotalTokensReached || maxTokensPerRoundReached,
-            maxRoundsReached,
-            maxTotalTokensReached,
-            maxWallTimeReached,
-            maxTokensPerRoundReached,
-            fatigueTapered: false,
-          },
-        },
-      },
+      metadata: toDeliberationMetadata(result),
       metacognitiveFlags,
     };
   };
@@ -1901,6 +1993,37 @@ export function createHeartbeatTemplateRuntime(
         ...(reflectionGroupScope.roomName ? { roomName: reflectionGroupScope.roomName } : {}),
       }
       : undefined;
+
+    // jpvd.4: only cadence-fired runs are novelty-gated. Manual run_template
+    // invocations (including manual runs deferred through the scheduler or
+    // post-turn queue) bypass the gate — an explicit operator/model request is
+    // its own justification.
+    if (requestedSource === 'scheduled') {
+      const noveltyGate = await evaluateReflectionNoveltyGate(
+        template,
+        reflectionChannelId,
+        reflectionCanonicalContactId,
+        reflectionGroupScope,
+      );
+      if (!noveltyGate.open) {
+        log.info('Skipped cadence reflection below novelty watermark', {
+          templateId: template.id,
+          executionSource: source,
+          scope: noveltyGate.scopeKey,
+          reason: noveltyGate.reason,
+          inputs: noveltyGate.inputs,
+        });
+        await emitReflectionNoveltyGateEvent('skipped', noveltyGate, reflectionChannelId);
+        return {
+          templateId: template.id,
+          templateName: template.name,
+          reflection: '',
+          noveltyGateSkipped: true,
+        };
+      }
+      await emitReflectionNoveltyGateEvent('ran', noveltyGate, reflectionChannelId);
+    }
+
     const plannedReflectionMode: 'agent' | 'deliberation' = shouldUseDeliberation(template)
       ? 'deliberation'
       : 'agent';
@@ -2258,6 +2381,12 @@ export function createHeartbeatTemplateRuntime(
     if (!silentInterval && shouldSendToDiscord && heartbeatChannelId) {
       await sender.send(heartbeatChannelId, reflectionText);
     }
+
+    await advanceReflectionNoveltyWatermark(
+      template,
+      reflectionCanonicalContactId,
+      reflectionGroupScope,
+    );
 
     return {
       templateId: template.id,

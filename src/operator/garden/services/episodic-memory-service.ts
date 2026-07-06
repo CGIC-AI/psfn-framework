@@ -4,7 +4,9 @@ import {
   type EpisodeArc,
   type EpisodeArcKind,
 } from '../../../shared/contracts/episodic-memory.js';
-import type { EpisodicStorePort } from '../../../faculties/memory/episodic/store.js';
+import type {
+  EpisodicStorePort,
+} from '../../../faculties/memory/episodic/store-port.js';
 import type {
   AdminEpisodicEpisodeDetailData,
   AdminEpisodicEpisodeListData,

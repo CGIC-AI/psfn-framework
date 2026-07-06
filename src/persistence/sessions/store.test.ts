@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { createSqliteTranscriptProjection } from './transcript-projection.js';
 import { mkdtempSync, rmSync, writeFileSync, readdirSync, existsSync, readFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -561,7 +562,7 @@ describe('SessionStore', () => {
   });
 
   it('indexes appended messages for FTS keyword search across channels', async () => {
-    const searchStore = new SessionStore(dir, { enableSearchIndex: true });
+    const searchStore = new SessionStore(dir, { transcriptProjection: createSqliteTranscriptProjection(join(dir, 'session-search.sqlite')) });
     searchStore.append({
       channelId: 'api:alpha',
       role: 'user',
@@ -585,7 +586,7 @@ describe('SessionStore', () => {
   });
 
   it('scopes FTS keyword search to a single channel when requested', async () => {
-    const searchStore = new SessionStore(dir, { enableSearchIndex: true });
+    const searchStore = new SessionStore(dir, { transcriptProjection: createSqliteTranscriptProjection(join(dir, 'session-search.sqlite')) });
     searchStore.append({
       channelId: 'api:alpha',
       role: 'user',
@@ -609,7 +610,7 @@ describe('SessionStore', () => {
   });
 
   it('ranks denser FTS matches above sparse matches', async () => {
-    const searchStore = new SessionStore(dir, { enableSearchIndex: true });
+    const searchStore = new SessionStore(dir, { transcriptProjection: createSqliteTranscriptProjection(join(dir, 'session-search.sqlite')) });
     searchStore.append({
       channelId: 'rank:strong',
       role: 'assistant',
@@ -631,7 +632,7 @@ describe('SessionStore', () => {
   });
 
   it('backfills existing JSONL transcripts into FTS index on startup', async () => {
-    const noIndexStore = new SessionStore(dir, { disableSearchIndex: true });
+    const noIndexStore = new SessionStore(dir);
     noIndexStore.append({
       channelId: 'api:legacy-search',
       role: 'user',
@@ -639,7 +640,7 @@ describe('SessionStore', () => {
       timestamp: 1_000,
     });
 
-    const reloaded = new SessionStore(dir, { enableSearchIndex: true });
+    const reloaded = new SessionStore(dir, { transcriptProjection: createSqliteTranscriptProjection(join(dir, 'session-search.sqlite')) });
     const hits = await reloaded.searchByKeywords('aurora protocol', 5);
     expect(hits).toHaveLength(1);
     expect(hits[0].channelId).toBe('api:legacy-search');
@@ -661,7 +662,7 @@ describe('SessionStore', () => {
       safeAgentSummary: 'Unsafe instruction-like content was sealed and removed from active cognition.',
     });
 
-    const searchStore = new SessionStore(dir, { enableSearchIndex: true });
+    const searchStore = new SessionStore(dir, { transcriptProjection: createSqliteTranscriptProjection(join(dir, 'session-search.sqlite')) });
     const dirtyId = searchStore.append({
       channelId: 'api:cogsec-l0',
       role: 'user',
@@ -733,7 +734,7 @@ describe('SessionStore', () => {
     expect(updatedEvent?.sealedForensicPayloadRefs).toEqual([result.sealedForensicPayloadRef]);
     expect(updatedEvent?.actions).toEqual(['seal', 'tombstone']);
 
-    const reloaded = new SessionStore(dir, { enableSearchIndex: true });
+    const reloaded = new SessionStore(dir, { transcriptProjection: createSqliteTranscriptProjection(join(dir, 'session-search.sqlite')) });
     expect(reloaded.getRecent('api:cogsec-l0', 10).map(entry => entry.content)).toEqual([
       '[CogSec redaction: cogsec_20260701T000000Z_l0]',
       'clean reply stays visible',
@@ -942,7 +943,7 @@ describe('SessionStore', () => {
   });
 
   it('rebuilds transcript projections from authoritative JSONL archives through the injected port', () => {
-    const noProjectionStore = new SessionStore(dir, { disableSearchIndex: true });
+    const noProjectionStore = new SessionStore(dir);
     noProjectionStore.append({
       channelId: 'api:projection-rebuild',
       role: 'user',
@@ -1012,7 +1013,7 @@ describe('SessionStore', () => {
     ]);
     expect(projectionBackedStore.count('api:projection-failure')).toBe(1);
 
-    const reloaded = new SessionStore(dir, { disableSearchIndex: true });
+    const reloaded = new SessionStore(dir);
     expect(reloaded.getRecent('api:projection-failure', 10)).toEqual([
       expect.objectContaining({
         id: 1,

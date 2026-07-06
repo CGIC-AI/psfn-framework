@@ -39,12 +39,8 @@ import {
   type TranscriptProjectionPort,
   type TranscriptSearchOptions,
 } from './transcript-projection-port.js';
-import {
-  createDefaultSQLiteSessionArchivePort,
-  createDefaultSQLiteTranscriptProjection,
-  createDefaultSQLiteTurnRecordStorePort,
-  DEFAULT_SQLITE_SESSION_SEARCH_INDEX_FILENAME,
-} from './sqlite-adapters.js';
+import { createFilesystemSessionArchivePort } from '../journals/journal/port.js';
+import { createFilesystemTurnRecordStorePort } from './turn-records.js';
 import type { TurnRecordStorePort } from './turn-record-store-port.js';
 import type { TranscriptSearchPort } from './transcript-search-port.js';
 import {
@@ -404,29 +400,18 @@ export class SessionStore implements TranscriptSearchPort {
       ?? createKeyringIntegrityProvider(options.integrityKeyring ?? null);
     this.journalRuntime = new SessionJournalRuntime(
       integrityProvider,
-      options.sessionArchivePort ?? createDefaultSQLiteSessionArchivePort(),
+      options.sessionArchivePort ?? createFilesystemSessionArchivePort(),
     );
     mkdirSync(sessionsDir, { recursive: true });
     if (options.transcriptProjection !== undefined) {
       this.transcriptProjection = options.transcriptProjection;
-    } else if (options.enableSearchIndex && !options.disableSearchIndex) {
-      try {
-        this.transcriptProjection = createDefaultSQLiteTranscriptProjection(
-          options.searchIndexPath ?? join(this.sessionsDir, DEFAULT_SQLITE_SESSION_SEARCH_INDEX_FILENAME),
-        );
-      } catch (error) {
-        log.warn('Transcript projection unavailable; canonical archive remains authoritative and keyword search is disabled', {
-          error: toErrorMessage(error),
-        });
-        this.transcriptProjection = null;
-      }
     }
     if (options.transcriptSearch !== undefined) {
       this.transcriptSearch = options.transcriptSearch;
     } else if (supportsKeywordSearch(this.transcriptProjection)) {
       this.transcriptSearch = this.transcriptProjection;
     }
-    this.turnRecordStore = options.turnRecordStore ?? createDefaultSQLiteTurnRecordStorePort(this.sessionsDir);
+    this.turnRecordStore = options.turnRecordStore ?? createFilesystemTurnRecordStorePort(this.sessionsDir);
     loadChannelIndex(this.channelIndexPath, this.channelIndex);
     this.migrateLegacyFilenames();
     this.primeChannelIndexFromDisk();

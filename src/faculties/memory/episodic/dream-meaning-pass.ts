@@ -6,7 +6,9 @@ import {
 } from '../../../core/agent/worker-lanes.js';
 import type { Episode } from '../../../shared/contracts/episodic-memory.js';
 import { resolveKnownEpisodeId } from './episode-ids.js';
-import type { EpisodicStorePort } from './store.js';
+import type {
+  EpisodicStorePort,
+} from './store-port.js';
 import type { DeterministicGateEvent } from '../../../shared/event-bus.js';
 import {
   evaluateDeterministicGate,

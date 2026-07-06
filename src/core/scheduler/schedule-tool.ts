@@ -10,7 +10,7 @@ import {
   type CareReminderClassification,
   type CareReminderKind,
   type CareReminderSchedule,
-  type CareReminderStore,
+  type CareReminderStorePort,
 } from '../intention/care-reminders.js';
 import {
   PENDING_FOLLOW_UP_PRIORITIES,
@@ -147,7 +147,7 @@ export interface ScheduleToolOptions {
     'enqueue' | 'list' | 'dequeue'
   > | null;
   careReminderStore?: Pick<
-    CareReminderStore,
+    CareReminderStorePort,
     'create' | 'list' | 'markTriggered'
   > | null;
 }

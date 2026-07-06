@@ -1,4 +1,3 @@
-import type Database from 'better-sqlite3';
 import type { BackupRuntimeConfig } from '../../persistence/backups/config.js';
 import {
   SCHEDULED_BACKUP_TASK_ID,
@@ -59,7 +58,6 @@ export interface BuildAgentSchedulerRuntimeOptions {
   memoryStore: MemoryStorePort;
   agentLoop: SubstrateAgent;
   concernStore?: ConcernStorePort | null;
-  db?: Database.Database | null;
   backupConfig: BackupRuntimeConfig;
   pathSnapshot: RuntimePathSnapshot;
   // ── Social-graph builder worker (E4.2) ──
@@ -118,21 +116,13 @@ export function buildAgentSchedulerRuntime(
   });
 
   const postgresDatabaseUrl = options.config.postgresDatabaseUrl?.trim() || '';
-  if (options.config.persistenceBackend === 'postgres' && !postgresDatabaseUrl) {
+  if (!postgresDatabaseUrl) {
     throw new Error(
-      'PostgreSQL scheduled backups require config.postgresDatabaseUrl — refusing to use a SQLite handle as a Postgres fallback',
-    );
-  }
-  if (!options.db && !postgresDatabaseUrl) {
-    throw new Error(
-      'Scheduled backups require a SQLite handle or config.postgresDatabaseUrl — refusing to run without a database backup source',
+      'PostgreSQL scheduled backups require config.postgresDatabaseUrl — refusing to run without a database backup source',
     );
   }
   registerScheduledBackupTask({
     scheduler,
-    ...(options.db
-      ? { db: options.db, databasePath: options.config.databasePath }
-      : {}),
     ...(postgresDatabaseUrl
       ? {
         postgres: {
@@ -179,7 +169,6 @@ export function buildAgentSchedulerRuntime(
   });
   log.info('Scheduled backups enabled', {
     intervalMs: options.backupConfig.intervalMs,
-    sqliteSource: Boolean(options.db),
     postgresSource: Boolean(postgresDatabaseUrl),
     maxRotatingBackups: options.backupConfig.maxRotatingBackups,
     maxWeeklyBackups: options.backupConfig.maxWeeklyBackups,

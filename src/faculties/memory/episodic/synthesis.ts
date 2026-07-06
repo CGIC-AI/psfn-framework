@@ -21,7 +21,7 @@ import type {
   EpisodicProcessingWatermark,
   EpisodicProcessingWatermarkScope,
   EpisodicStorePort,
-} from './store.js';
+} from './store-port.js';
 import { proposeTopicSegments, type TopicSegment } from './topic-segmentation.js';
 import type { PersonaPreamblePort } from '../../../core/identity/persona-preamble.js';
 

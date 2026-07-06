@@ -1,8 +1,6 @@
-import type Database from 'better-sqlite3';
 import type { ToolRegistrar } from '../agent/tool-registrar.js';
 import type { ContactStorePort } from './contact-store-port.js';
 import type { ChannelPrivacyLevel } from './types.js';
-import { createSQLiteContactStore } from './sqlite-adapter.js';
 import { createContactTool } from './tools.js';
 
 export interface ContactRuntimeTarget {
@@ -48,16 +46,4 @@ export async function registerContactRuntime(
   target.registerTool(createContactTool(contactStore));
 
   return contactStore;
-}
-
-export async function wireContactRuntime(
-  target: ContactRuntimeTarget,
-  db: Database.Database,
-  primaryUserId?: string,
-  options: ContactRuntimeOptions = {},
-): Promise<ContactStorePort> {
-  const contactStore = createSQLiteContactStore(db, primaryUserId, {
-    exportDir: options.exportDir,
-  });
-  return await registerContactRuntime(target, contactStore, primaryUserId, options);
 }

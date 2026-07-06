@@ -43,3 +43,20 @@ export interface GatewayAuditStorePort {
   getApprovalEvents(limit?: number): Promise<AuditEntry[]>;
   count(): Promise<number>;
 }
+
+export interface GatewayAuditHistoryQuery {
+  limit?: number;
+  offset?: number;
+  method?: string;
+  decision?: AuditEntry['decision'];
+  sinceMs?: number;
+  untilMs?: number;
+  query?: string;
+}
+
+export interface GatewayAuditHistoryPage {
+  entries: AuditEntry[];
+  total: number;
+  limit: number;
+  offset: number;
+}

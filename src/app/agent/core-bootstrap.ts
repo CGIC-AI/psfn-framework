@@ -1,4 +1,3 @@
-import type Database from 'better-sqlite3';
 import { randomUUID } from 'node:crypto';
 import { EmotionObserver } from '../../core/emotion/observer.js';
 import { EmotionState } from '../../core/emotion/state.js';
@@ -25,7 +24,9 @@ import {
 } from '../../system/capabilities/approval-queue-port.js';
 import type { CoreSubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type { MemoryStorePort } from '../../faculties/memory/memory-store-port.js';
-import type { EpisodicStorePort } from '../../faculties/memory/episodic/store.js';
+import type {
+  EpisodicStorePort,
+} from '../../faculties/memory/episodic/store-port.js';
 import type { ContactStorePort } from '../../core/contacts/contact-store-port.js';
 import type { ContactTrackingGate } from '../../core/contacts/tracking-gate.js';
 import type {
@@ -54,7 +55,6 @@ export interface BootstrapAgentCoreRuntimeOptions {
   pathSnapshot: RuntimePathSnapshot;
   eventBus: EventBus;
   gateway: GatewayClient;
-  db?: Database.Database | null;
   memoryStore: MemoryStorePort;
   episodicStore: EpisodicStorePort;
   contactStore?: ContactStorePort;
@@ -73,7 +73,6 @@ export async function bootstrapAgentCoreRuntime(
     pathSnapshot,
     eventBus,
     gateway,
-    db,
     memoryStore,
     episodicStore,
     contactStore,
@@ -123,7 +122,6 @@ export async function bootstrapAgentCoreRuntime(
     pathSnapshot,
     eventBus,
     gateway,
-    db,
     memoryStore,
     episodicStore,
     contactStore,

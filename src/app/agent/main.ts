@@ -166,7 +166,6 @@ async function main(): Promise<void> {
   });
   const {
     backend: persistenceBackend,
-    db,
     memoryStore: companionMemoryStore,
     episodicStore: companionEpisodicStore,
     reflectionStore,
@@ -232,7 +231,6 @@ async function main(): Promise<void> {
     pathSnapshot,
     eventBus,
     gateway,
-    db,
     memoryStore: companionMemoryStore,
     episodicStore: companionEpisodicStore,
     contactStore: persistedContactStore,
@@ -324,7 +322,6 @@ async function main(): Promise<void> {
     memoryStore,
     agentLoop,
     concernStore: intentionRuntime.concernStore,
-    db,
     backupConfig,
     pathSnapshot,
     contactStore,

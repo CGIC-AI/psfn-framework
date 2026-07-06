@@ -4,9 +4,32 @@ import type { AgentTool } from '@mariozechner/pi-agent-core';
 import {
   createIntentionAppraisalHooks,
   createIntentionBehavioralPatternHooks,
-  wireIntentionRuntime,
+  wireIntentionRuntimeStores,
   type IntentionRuntimeTarget,
+  type IntentionRuntimeWiring,
 } from './runtime-wiring.js';
+import { createSQLiteIntentionRuntimeStores } from './sqlite-adapters.js';
+
+// Legacy SQLite convenience wiring, kept test-local until psfn-framework-3c2.5
+// deletes the SQLite intention stores and this test file with it.
+function wireIntentionRuntime(
+  target: IntentionRuntimeTarget,
+  db: Database.Database,
+): IntentionRuntimeWiring {
+  const {
+    concernProvider,
+    pendingFollowUpProvider,
+    behavioralPatternProvider,
+    concernStore,
+    pendingFollowUpStore,
+    behavioralPatternTracker,
+  } = createSQLiteIntentionRuntimeStores(db);
+  return wireIntentionRuntimeStores(
+    target,
+    { concernStore, pendingFollowUpStore, behavioralPatternTracker },
+    { concernProvider, pendingFollowUpProvider, behavioralPatternProvider },
+  );
+}
 
 class FakeTarget implements IntentionRuntimeTarget {
   activeConcernProvider: IntentionRuntimeTarget['activeConcernProvider'] = null;

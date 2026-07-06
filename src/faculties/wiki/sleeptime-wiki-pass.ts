@@ -46,7 +46,7 @@ import type {
   EpisodicProcessingWatermarkScope,
   EpisodicProcessingWatermarkWriteInput,
   EpisodeTimeSearchOptions,
-} from '../memory/episodic/store.js';
+} from '../memory/episodic/store-port.js';
 import type { MemoryListOptions } from '../memory/memory-store-port.js';
 import type { MemoryType, PurrMemory, SensitivityLevel } from '../memory/types.js';
 import type {

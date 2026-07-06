@@ -7,7 +7,9 @@ import {
   type EpisodeArcKind,
 } from '../../../shared/contracts/episodic-memory.js';
 import { resolveKnownEpisodeId } from './episode-ids.js';
-import type { EpisodicStorePort } from './store.js';
+import type {
+  EpisodicStorePort,
+} from './store-port.js';
 
 const log = createComponentLogger('ArcFormation');
 

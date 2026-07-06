@@ -10,6 +10,8 @@ import type {
   AuditSummaryEntry,
   AuditSummaryHook,
   GatewayAuditStorePort,
+  GatewayAuditHistoryPage,
+  GatewayAuditHistoryQuery,
 } from './audit-port.js';
 
 const DEFAULT_ROTATION_CONFIG: AuditRotationConfig = {
@@ -20,23 +22,6 @@ const DEFAULT_ROTATION_CONFIG: AuditRotationConfig = {
 
 const SIZE_PRUNE_BATCH = 100;
 const MAX_HISTORY_LIMIT = 2_000;
-
-export interface GatewayAuditHistoryQuery {
-  limit?: number;
-  offset?: number;
-  method?: string;
-  decision?: AuditEntry['decision'];
-  sinceMs?: number;
-  untilMs?: number;
-  query?: string;
-}
-
-export interface GatewayAuditHistoryPage {
-  entries: AuditEntry[];
-  total: number;
-  limit: number;
-  offset: number;
-}
 
 export class AuditStore implements GatewayAuditStorePort {
   private readonly db: Database.Database;

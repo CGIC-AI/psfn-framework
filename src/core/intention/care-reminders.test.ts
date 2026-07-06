@@ -1,6 +1,6 @@
 import Database from 'better-sqlite3';
 import { describe, expect, it } from 'vitest';
-import { CareReminderStore } from './care-reminders.js';
+import { CareReminderStore } from './sqlite-stores/care-reminder-store.js';
 
 describe('CareReminderStore', () => {
   it('creates durable care reminders with explicit provenance', () => {

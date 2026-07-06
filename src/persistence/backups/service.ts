@@ -1,5 +1,3 @@
-import BetterSqlite3 from 'better-sqlite3';
-import type Database from 'better-sqlite3';
 import { execFile } from 'node:child_process';
 import {
   copyFileSync,
@@ -45,7 +43,6 @@ import {
   type SystemConfigSnapshotVerificationResult,
 } from './system-config-tree.js';
 import type { BackupRuntimeConfig } from './config.js';
-import { runDatabaseIntegrityCheck } from './startup-checks.js';
 import { applyTieredRetention, type TieredRetentionResult } from './retention.js';
 
 const log = createComponentLogger('BackupService');
@@ -72,8 +69,6 @@ export interface BackupPostgresOptions {
 }
 
 export interface BackupRunOptions {
-  db?: Database.Database | null;
-  databasePath?: string;
   /** When set, a pg_dump custom-format archive of this database is captured. */
   postgres?: BackupPostgresOptions;
   /**
@@ -114,23 +109,6 @@ export interface BackupRunOptions {
   now?: () => number;
 }
 
-export interface BackupRestoreVerificationOptions {
-  databaseBackupPath: string;
-  sessionSnapshotDir: string;
-  expectedSessionFiles?: string[];
-  restoreScratchRootDir?: string;
-  cleanupRestoreDir?: boolean;
-}
-
-export interface BackupRestoreVerificationResult {
-  restoreDir: string;
-  restoredDatabasePath: string;
-  restoredSessionDir: string;
-  restoredSessionFiles: string[];
-  integrityDetails: string[];
-  cleanupRestoreDir: boolean;
-}
-
 export interface PostgresDumpVerificationResult {
   dumpPath: string;
   tocEntryCount: number;
@@ -138,16 +116,12 @@ export interface PostgresDumpVerificationResult {
 
 export interface BackupRunResult {
   backupDir: string;
-  /** Present when a SQLite database was captured. */
-  databaseBackupPath?: string;
   /** Present when a Postgres pg_dump archive was captured. */
   postgresDumpPath?: string;
-  sqliteCaptured: boolean;
   postgresDumpCaptured: boolean;
   sessionSnapshotDir: string;
   copiedSessionFiles: string[];
   prunedBackupDirs: string[];
-  restoreVerification?: BackupRestoreVerificationResult;
   postgresDumpVerification?: PostgresDumpVerificationResult;
   postgresRestoreVerification?: PostgresRestoreVerificationResult;
   companionTree?: CompanionTreeCaptureResult;
@@ -164,8 +138,6 @@ export interface BackupRunResult {
 
 export interface RegisterScheduledBackupTaskOptions {
   scheduler: Scheduler;
-  db?: Database.Database | null;
-  databasePath?: string;
   postgres?: BackupPostgresOptions;
   companionDataDir?: string;
   workspacePath?: string;
@@ -343,76 +315,11 @@ export async function verifyPostgresDumpArchive(
   return { dumpPath, tocEntryCount };
 }
 
-export function verifyBackupRestore(
-  options: BackupRestoreVerificationOptions,
-): BackupRestoreVerificationResult {
-  if (!existsSync(options.databaseBackupPath)) {
-    throw new Error(`Backup database snapshot missing: ${options.databaseBackupPath}`);
-  }
-  if (!existsSync(options.sessionSnapshotDir)) {
-    throw new Error(`Backup session snapshot directory missing: ${options.sessionSnapshotDir}`);
-  }
-
-  const expectedSessionFiles = (
-    options.expectedSessionFiles
-      ? [...options.expectedSessionFiles]
-      : listSessionSnapshotFiles(options.sessionSnapshotDir)
-  ).sort((a, b) => a.localeCompare(b));
-  const restoreScratchRootDir = options.restoreScratchRootDir?.trim() || tmpdir();
-  const cleanupRestoreDir = options.cleanupRestoreDir ?? true;
-  const restoreDir = mkdtempSync(join(restoreScratchRootDir, 'psfn-backup-restore-'));
-  const restoredDatabasePath = join(restoreDir, 'database', basename(options.databaseBackupPath));
-  const restoredSessionDir = join(restoreDir, 'sessions');
-  const restoredSessionFiles: string[] = [];
-
-  try {
-    mkdirSync(join(restoreDir, 'database'), { recursive: true });
-    mkdirSync(restoredSessionDir, { recursive: true });
-
-    copyFileSync(options.databaseBackupPath, restoredDatabasePath);
-
-    for (const file of expectedSessionFiles) {
-      const sourcePath = join(options.sessionSnapshotDir, file);
-      if (!existsSync(sourcePath)) {
-        throw new Error(`Expected session snapshot missing from backup: ${sourcePath}`);
-      }
-      copyFileSync(sourcePath, join(restoredSessionDir, file));
-      restoredSessionFiles.push(file);
-    }
-
-    const restoredDb = new BetterSqlite3(restoredDatabasePath, {
-      readonly: true,
-      fileMustExist: true,
-    });
-    try {
-      const integrity = runDatabaseIntegrityCheck(restoredDb);
-      return {
-        restoreDir,
-        restoredDatabasePath,
-        restoredSessionDir,
-        restoredSessionFiles,
-        integrityDetails: integrity.details,
-        cleanupRestoreDir,
-      };
-    } finally {
-      restoredDb.close();
-    }
-  } finally {
-    if (cleanupRestoreDir && existsSync(restoreDir)) {
-      rmSync(restoreDir, { recursive: true, force: true });
-    }
-  }
-}
-
 export async function runBackupCycle(
   options: BackupRunOptions,
 ): Promise<BackupRunResult> {
-  const sqliteDb = options.db ?? null;
-  if (sqliteDb && !options.databasePath?.trim()) {
-    throw new Error('Backup with a SQLite handle requires databasePath');
-  }
-  if (!sqliteDb && !options.postgres) {
-    throw new Error('Backup requires a SQLite database handle or Postgres dump configuration — refusing to capture a database-less backup');
+  if (!options.postgres) {
+    throw new Error('Backup requires Postgres dump configuration — refusing to capture a database-less backup');
   }
 
   const now = options.now ?? (() => Date.now());
@@ -431,7 +338,6 @@ export async function runBackupCycle(
       options.backupRootDir,
       ...(options.mirrorDir?.trim() ? [options.mirrorDir.trim()] : []),
       options.sessionsDir,
-      ...(options.databasePath?.trim() ? [options.databasePath.trim()] : []),
       ...(options.companionDataDir?.trim() ? [options.companionDataDir.trim()] : []),
       ...(options.workspaceProtectedPaths ?? []),
     ]);
@@ -440,16 +346,7 @@ export async function runBackupCycle(
   try {
     mkdirSync(databaseDir, { recursive: true });
 
-    let databaseBackupPath: string | undefined;
-    if (sqliteDb) {
-      databaseBackupPath = join(databaseDir, basename(options.databasePath!.trim()));
-      await sqliteDb.backup(databaseBackupPath);
-    }
-
-    let postgresDumpPath: string | undefined;
-    if (options.postgres) {
-      postgresDumpPath = await dumpPostgresDatabase(options.postgres, databaseDir);
-    }
+    const postgresDumpPath = await dumpPostgresDatabase(options.postgres, databaseDir);
 
     const copiedSessionFiles = copySessionSnapshotFiles(
       options.sessionsDir,
@@ -515,22 +412,13 @@ export async function runBackupCycle(
       });
     }
 
-    const restoreVerification = options.verifyRestore && databaseBackupPath
-      ? verifyBackupRestore({
-        databaseBackupPath,
-        sessionSnapshotDir,
-        expectedSessionFiles: copiedSessionFiles,
-        cleanupRestoreDir: true,
-      })
-      : undefined;
-
     const postgresDumpVerification = options.verifyRestore && postgresDumpPath
-      ? await verifyPostgresDumpArchive(postgresDumpPath, options.postgres?.pgRestoreBinary)
+      ? await verifyPostgresDumpArchive(postgresDumpPath, options.postgres.pgRestoreBinary)
       : undefined;
 
     const postgresRestoreVerification = options.verifyRestore
       && postgresDumpPath
-      && options.postgres?.restoreVerifyDatabaseUrl
+      && options.postgres.restoreVerifyDatabaseUrl
       ? await verifyPostgresDumpRestore({
         dumpPath: postgresDumpPath,
         scratchDatabaseUrl: options.postgres.restoreVerifyDatabaseUrl,
@@ -605,13 +493,11 @@ export async function runBackupCycle(
 
     return {
       backupDir: finalBackupDir,
-      ...(options.encryption ? {} : { databaseBackupPath, postgresDumpPath }),
-      sqliteCaptured: Boolean(databaseBackupPath),
+      ...(options.encryption ? {} : { postgresDumpPath }),
       postgresDumpCaptured: Boolean(postgresDumpPath),
       sessionSnapshotDir: options.encryption ? finalBackupDir : sessionSnapshotDir,
       copiedSessionFiles,
       prunedBackupDirs: tieredRetention.prunedBackupDirs,
-      restoreVerification,
       postgresDumpVerification,
       postgresRestoreVerification,
       companionTree,
@@ -635,8 +521,8 @@ export async function runBackupCycle(
 export function registerScheduledBackupTask(
   options: RegisterScheduledBackupTaskOptions,
 ): void {
-  if (!options.db && !options.postgres) {
-    throw new Error('Scheduled backups require a SQLite database handle or Postgres dump configuration');
+  if (!options.postgres) {
+    throw new Error('Scheduled backups require Postgres dump configuration');
   }
 
   options.scheduler.register(
@@ -649,8 +535,6 @@ export function registerScheduledBackupTask(
         let result: BackupRunResult;
         try {
           result = await runBackupCycle({
-            db: options.db,
-            databasePath: options.databasePath,
             postgres: options.postgres,
             companionDataDir: options.companionDataDir,
             workspacePath: options.workspacePath,
@@ -693,27 +577,22 @@ export function registerScheduledBackupTask(
           message: 'Scheduled backup completed',
           backupDir: result.backupDir,
           details: {
-            sqliteCaptured: result.sqliteCaptured,
             postgresDumpCaptured: result.postgresDumpCaptured,
             copiedSessionFiles: result.copiedSessionFiles.length,
             prunedBackupDirs: result.prunedBackupDirs.length,
             mirrored: Boolean(result.mirrorDir),
-            restoreVerified: Boolean(result.restoreVerification),
             postgresRestoreVerified: Boolean(result.postgresRestoreVerification),
             encrypted: Boolean(result.encryptedBackup),
           },
         });
         log.info('Scheduled backup completed', {
           backupDir: result.backupDir,
-          sqliteCaptured: result.sqliteCaptured,
           postgresDumpCaptured: result.postgresDumpCaptured,
           copiedSessionFiles: result.copiedSessionFiles.length,
           prunedBackupDirs: result.prunedBackupDirs.length,
           weeklySlots: result.tieredRetention?.weeklyCount,
           monthlySlots: result.tieredRetention?.monthlyCount,
           mirrored: Boolean(result.mirrorDir),
-          restoreVerified: Boolean(result.restoreVerification),
-          restoreIntegrity: result.restoreVerification?.integrityDetails.join('; '),
           postgresDumpTocEntries: result.postgresDumpVerification?.tocEntryCount,
           postgresRestoreVerified: Boolean(result.postgresRestoreVerification),
           postgresRestoredTables: result.postgresRestoreVerification?.restoredTableCount,

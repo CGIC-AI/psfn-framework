@@ -1,9 +1,6 @@
-import type Database from 'better-sqlite3';
 import type { CoreSubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type { EventBus } from '../../shared/event-bus.js';
-import { MemoryStore } from '../../faculties/memory/store.js';
-import { MemoryJournal } from '../../faculties/memory/journal.js';
-import { EpisodicStore, type EpisodicStorePort } from '../../faculties/memory/episodic/index.js';
+import type { EpisodicStorePort } from '../../faculties/memory/episodic/index.js';
 import {
   createMemoryStorePort,
   type CoreMemoryStorePort,
@@ -38,7 +35,7 @@ import {
   wireSelfModelRuntime,
 } from '../startup/composition/composition.js';
 import { wirePromptRuntime, wireCharacterCardRuntime, wireStaticPromptRegistry, wireSettingsRuntime, wireSessionToolsRuntime, buildCharacterPromptVariablesProvider } from '../startup/composition/parity.js';
-import { registerContactRuntime, wireContactRuntime } from '../../core/contacts/runtime-wiring.js';
+import { registerContactRuntime } from '../../core/contacts/runtime-wiring.js';
 import type { ContactRuntimeOptions } from '../../core/contacts/runtime-wiring.js';
 import type { ContactStorePort } from '../../core/contacts/contact-store-port.js';
 import { wireSkillsRuntime } from '../../faculties/skills/runtime-wiring.js';
@@ -55,7 +52,6 @@ import { createWebSearchQueryJson } from '../../boundary/integrations/web/search
 import {
   createIntentionAppraisalHooks,
   createIntentionBehavioralPatternHooks,
-  wireIntentionRuntime,
   wireIntentionRuntimeStores,
 } from '../../core/intention/runtime-wiring.js';
 import { createAutomatedConcernRuntime } from '../../core/intention/concern-candidates.js';
@@ -82,10 +78,7 @@ import { createObserverEvalSidecarRuntimeFromConfig } from '../../core/eval/obse
 import type { ObserverEvalSidecarRuntime } from '../../core/eval/observer-sidecar/types.js';
 import {
   resolveContactsDir,
-  resolveMemoryJournalPath,
-  resolveNotesDir,
   resolvePersonalSkillsDir,
-  resolveScratchpadMirrorPath,
 } from '../../persistence/layout.js';
 import { createSelfStatusTool } from '../../core/tools/self-status.js';
 import {
@@ -104,7 +97,6 @@ export interface AgentCoreRuntimeOptions {
   pathSnapshot: RuntimePathSnapshot;
   eventBus: EventBus;
   gateway: GatewayClient;
-  db?: Database.Database | null;
   memoryStore?: MemoryStorePort;
   episodicStore?: EpisodicStorePort | null;
   contactStore?: ContactStorePort;
@@ -165,12 +157,8 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
     intentionProviders,
   } = options;
   const contactTrackingGate = options.contactTrackingGate ?? null;
-  const db = options.db ?? null;
   const episodicStore = options.episodicStore ?? (() => {
-    if (config.persistenceBackend === 'postgres') {
-      throw new Error('PostgreSQL core runtime requires an injected episodic store');
-    }
-    return db ? new EpisodicStore(db) : null;
+    throw new Error('PostgreSQL core runtime requires an injected episodic store');
   })();
   const invalidatePromptCache = (reason: string): void => {
     config.runtimeHooks?.invalidatePromptPrefixCache?.(reason);
@@ -197,17 +185,7 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
   const memoryStore = options.memoryStore
     ? createMemoryStorePort(options.memoryStore)
     : (() => {
-      if (config.persistenceBackend === 'postgres') {
-        throw new Error('PostgreSQL core runtime requires an injected memory store');
-      }
-      if (!db) {
-        throw new Error('SQLite memory fallback requires an initialized database handle');
-      }
-      return createMemoryStorePort(new MemoryStore(db, gateway.dims, {
-        notesDir: resolveNotesDir(pathSnapshot.companionDataDir),
-        scratchpadMirrorPath: resolveScratchpadMirrorPath(pathSnapshot.companionDataDir),
-        journal: new MemoryJournal(resolveMemoryJournalPath(pathSnapshot.companionDataDir)),
-      }));
+      throw new Error('PostgreSQL core runtime requires an injected memory store');
     })();
 
   const characterPromptVariablesProvider = buildCharacterPromptVariablesProvider(cardVersionStore);
@@ -363,38 +341,23 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
         }
       : {}),
   };
-  const contactStore = options.contactStore
-    ? await registerContactRuntime(agentLoop, options.contactStore, primaryUserId, contactRuntimeOptions)
-    : await (() => {
-      if (config.persistenceBackend === 'postgres') {
-        throw new Error('PostgreSQL core runtime requires an injected contact store');
-      }
-      if (!db) {
-        throw new Error('Contact runtime requires an injected ContactStorePort for non-sqlite backends');
-      }
-      return wireContactRuntime(
-        agentLoop,
-        db,
-        primaryUserId,
-        contactRuntimeOptions,
-      );
-    })();
-  const intentionRuntime = options.intentionRuntime ?? (() => {
-    if (config.persistenceBackend === 'postgres') {
-      throw new Error('PostgreSQL core runtime requires injected intention persistence stores');
-    }
-    if (!db) {
-      throw new Error('Intention runtime requires injected persistence stores for non-sqlite backends');
-    }
-    return wireIntentionRuntime(agentLoop, db);
-  })();
-  if (options.intentionRuntime) {
-    wireIntentionRuntimeStores(agentLoop, options.intentionRuntime, intentionProviders ?? {
-      concernProvider: null,
-      pendingFollowUpProvider: null,
-      behavioralPatternProvider: null,
-    });
+  if (!options.contactStore) {
+    throw new Error('PostgreSQL core runtime requires an injected contact store');
   }
+  const contactStore = await registerContactRuntime(
+    agentLoop,
+    options.contactStore,
+    primaryUserId,
+    contactRuntimeOptions,
+  );
+  const intentionRuntime = options.intentionRuntime ?? (() => {
+    throw new Error('PostgreSQL core runtime requires injected intention persistence stores');
+  })();
+  wireIntentionRuntimeStores(agentLoop, intentionRuntime, intentionProviders ?? {
+    concernProvider: null,
+    pendingFollowUpProvider: null,
+    behavioralPatternProvider: null,
+  });
   const coreMemoryStore = wireCoreMemoryRuntime({
     agentLoop,
     sessionManager,

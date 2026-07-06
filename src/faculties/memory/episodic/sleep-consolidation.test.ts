@@ -1,7 +1,10 @@
 import Database from 'better-sqlite3';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { SessionEntry } from '../../../core/session/types.js';
-import { EpisodicStore, type EpisodeCreateInput } from './store.js';
+import { EpisodicStore } from './store.js';
+import {
+  type EpisodeCreateInput,
+} from './store-port.js';
 import {
   SleepCycleEpisodeConsolidator,
   buildMergeChains,

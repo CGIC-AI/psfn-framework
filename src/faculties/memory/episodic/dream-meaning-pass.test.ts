@@ -1,6 +1,9 @@
 import Database from 'better-sqlite3';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { EpisodicStore, type EpisodeCreateInput } from './store.js';
+import { EpisodicStore } from './store.js';
+import {
+  type EpisodeCreateInput,
+} from './store-port.js';
 import { DreamMeaningPass, parseMeaningContribution } from './dream-meaning-pass.js';
 
 const NOW = new Date('2026-06-10T07:30:00.000Z');

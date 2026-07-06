@@ -10,7 +10,9 @@ import {
 } from '../../../shared/contracts/episodic-memory.js';
 import { trustAtLeast, type TrustLevel } from '../../../system/trust/types.js';
 import type { ChannelDisclosureContext } from '../../../system/trust/policy.js';
-import type { EpisodicStorePort } from '../episodic/store.js';
+import type {
+  EpisodicStorePort,
+} from '../episodic/store-port.js';
 import type { MemoryScopeQuery } from '../types.js';
 
 export type EpisodicRetrievalStore = Pick<

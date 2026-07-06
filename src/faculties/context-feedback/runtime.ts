@@ -1,3 +1,12 @@
+/**
+ * Context feedback is intentionally not composed into the runtime for bead
+ * psfn-framework-ls1k.
+ *
+ * Before wiring this subsystem, it MUST gain a config-owned deterministic gate
+ * covering at minimum: sampling 1-in-N turns, a minimum response length
+ * threshold, and hash-keyed dedup so the same content is not re-scored
+ * repeatedly.
+ */
 import type { PostTurnActionInferer } from '../../core/agent/substrate-agent.js';
 import type { LLMProviderPort } from '../../core/agent/contracts.js';
 import type { PostTurnActionRuntime } from '../../core/agent/post-turn-action-runtime.js';

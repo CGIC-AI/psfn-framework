@@ -289,10 +289,35 @@ liteLlm:
     key: config.yaml
     path: /etc/litellm/config.yaml
     yaml: |-
+      # The wildcard route alone does NOT serve PSFN: the runtime requests
+      # unprefixed model names (e.g. "z-ai/glm-5.2"), which fail the
+      # "openrouter/*" group and silently fall back to direct OpenRouter.
+      # Every model referenced by a models.json slot needs an explicit
+      # unprefixed route here (2026-07-06 incident, bead psfn-framework-oylk).
       model_list:
         - model_name: "openrouter/*"
           litellm_params:
             model: "openrouter/*"
+            api_key: "os.environ/OPENROUTER_API_KEY"
+        - model_name: "z-ai/glm-5.2"
+          litellm_params:
+            model: "openrouter/z-ai/glm-5.2"
+            api_key: "os.environ/OPENROUTER_API_KEY"
+        - model_name: "moonshotai/kimi-k2.6"
+          litellm_params:
+            model: "openrouter/moonshotai/kimi-k2.6"
+            api_key: "os.environ/OPENROUTER_API_KEY"
+        - model_name: "deepseek/deepseek-v4-pro"
+          litellm_params:
+            model: "openrouter/deepseek/deepseek-v4-pro"
+            api_key: "os.environ/OPENROUTER_API_KEY"
+        - model_name: "google/gemini-3.1-flash-lite"
+          litellm_params:
+            model: "openrouter/google/gemini-3.1-flash-lite"
+            api_key: "os.environ/OPENROUTER_API_KEY"
+        - model_name: "openai/gpt-5.4-mini"
+          litellm_params:
+            model: "openrouter/openai/gpt-5.4-mini"
             api_key: "os.environ/OPENROUTER_API_KEY"
       litellm_settings:
         drop_params: true

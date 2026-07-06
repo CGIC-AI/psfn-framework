@@ -60,6 +60,7 @@
     "garden:build": "npm --prefix admin-ui run build",
     "garden:preview": "npm --prefix admin-ui run preview",
     "verify:helm-chart": "node scripts/verify-helm-chart.mjs",
+    "verify:kube-rollout": "bash scripts/ops/validate-kube-rollout.sh",
     "verify:public-sanitize": "node scripts/public-sanitize-check.mjs",
     "verify:identity-literals": "node scripts/identity-literal-scan.mjs",
     "verify:dependency-cycles": "tsx scripts/check-dependency-cycles.ts",

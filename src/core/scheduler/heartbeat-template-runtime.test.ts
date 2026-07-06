@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -1935,5 +1935,277 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
     } finally {
       reflectionJournalPrototype.listRecent = originalListRecent;
     }
+  });
+});
+
+describe('createHeartbeatTemplateRuntime reflection novelty gate', () => {
+  let tempDir: string;
+
+  afterEach(() => {
+    if (tempDir) {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  interface WatermarkScopeInput {
+    processor: string;
+    sourceRef: string;
+    channelId?: string;
+  }
+
+  function buildNoveltyGateHarness(input: { watermarkAt?: string }) {
+    tempDir = mkdtempSync(join(tmpdir(), 'heartbeat-novelty-gate-'));
+
+    const watermarkKey = (scope: WatermarkScopeInput): string =>
+      `${scope.processor}|${scope.sourceRef}|${scope.channelId ?? ''}`;
+    const watermarks = new Map<string, Record<string, unknown>>();
+    if (input.watermarkAt) {
+      const scope = {
+        processor: 'reflection_template_novelty',
+        sourceRef: 'daily-review',
+        channelId: 'contact:contact-1',
+      };
+      watermarks.set(watermarkKey(scope), {
+        ...scope,
+        id: 'wm-existing',
+        previousWatermarkJson: {},
+        nextWatermarkJson: { lastReflection: { at: input.watermarkAt } },
+        artifactsJson: {},
+        status: 'active',
+        reconciliationStatus: 'clean',
+        lastProcessedAt: input.watermarkAt,
+        updatedAt: input.watermarkAt,
+      });
+    }
+    const upsertCalls: Array<Record<string, unknown>> = [];
+    const watermarkStore = {
+      getProcessingWatermark: vi.fn((scope: WatermarkScopeInput) => watermarks.get(watermarkKey(scope))),
+      upsertProcessingWatermark: vi.fn((writeInput: WatermarkScopeInput & Record<string, unknown>) => {
+        upsertCalls.push(writeInput);
+        const stored = {
+          id: 'wm-1',
+          previousWatermarkJson: {},
+          nextWatermarkJson: {},
+          artifactsJson: {},
+          status: 'active',
+          reconciliationStatus: 'clean',
+          updatedAt: String(writeInput.lastProcessedAt ?? ''),
+          ...writeInput,
+        };
+        watermarks.set(watermarkKey(writeInput), stored);
+        return stored;
+      }),
+    };
+
+    const eventBus = new EventBus();
+    const gateEvents: Array<{ lane: string; outcome: string; reason: string; inputs: Record<string, number | string> }> = [];
+    eventBus.on('reflection.template.novelty.gate', (event) => {
+      gateEvents.push(event);
+    });
+
+    const currentContact = {
+      id: 'contact-1',
+      displayName: 'Ari',
+      nickname: 'Ari',
+      trustLevel: 'trusted' as const,
+      relationshipType: 'friend' as const,
+      firstSeen: '2026-01-01T00:00:00.000Z',
+      lastSeen: '2026-03-31T12:00:00.000Z',
+      conversationChannels: [{
+        channel: 'discord',
+        channelId: 'discord:primary-session',
+        firstSeen: '2026-01-01T00:00:00.000Z',
+        lastSeen: '2026-03-31T12:00:00.000Z',
+      }],
+    };
+    const currentInternalState = new InternalStateComputer().computeState({
+      emotionState: {
+        vad: { valence: 0.1, arousal: 0.2, dominance: 0.05 },
+        mood: { valence: 0.15, arousal: 0.25, dominance: 0.1 },
+        discrete: { curiosity: 0.55, calm: 0.45 },
+        confidence: 0.8,
+      },
+      activeConcerns: [],
+      trustLevel: 'trusted',
+      contactId: 'contact-1',
+      sessionMetrics: {
+        userMessageText: 'Recent conversations matter.',
+        responseText: 'Keep continuity with the primary contact.',
+        toolCallCount: 0,
+        recentTurnCount: 2,
+        lastSeenDeltaSeconds: 90,
+      },
+    });
+    const snapshotRef = buildInternalStateSnapshotRef(currentInternalState);
+
+    const complete = vi.fn(async (_context: LLMContext, purpose: string) => ({
+      content: purpose === 'reasoning'
+        ? 'Continuity stays central.'
+        : 'Care keeps the tone steady.',
+      toolCalls: [],
+      model: `mock-${purpose}`,
+      inputTokens: 12,
+      outputTokens: 18,
+      stopReason: 'stop',
+    }));
+    const llmProvider: LLMProviderPort = {
+      stream: vi.fn(async () => ({
+        content: '',
+        toolCalls: [],
+        model: 'mock-stream',
+        inputTokens: 0,
+        outputTokens: 0,
+        stopReason: 'stop',
+      })),
+      complete: complete as unknown as LLMProviderPort['complete'],
+    };
+    const handleMessage = vi.fn(async () => ({ content: 'unused' }));
+
+    const runtime = createHeartbeatTemplateRuntime({
+      scheduler: new Scheduler(new EventBus(), { tickIntervalMs: 100, heartbeatIntervalMs: 1_000 }),
+      agentLoop: {
+        handleMessage,
+        getCurrentInternalState: () => currentInternalState,
+        getCurrentInternalStateSnapshotRef: () => snapshotRef,
+        getCurrentMetacognitiveFlags: () => [],
+      } as any,
+      sender: { send: vi.fn(async () => undefined) },
+      dataDir: tempDir,
+      runtimeOptions: {
+        eventBus,
+        llmProvider: llmProvider as any,
+        reflectionNoveltyGate: { minNewEntries: 1 },
+        episodicWatermarkStore: watermarkStore as any,
+        sessionManager: {
+          resolveSessionChannelId: (channelId: string) => channelId,
+          getRecentMessages: (channelId: string, limit?: number) => (
+            channelId === 'discord:primary-session'
+              ? [
+                {
+                  id: 1,
+                  channelId,
+                  role: 'user' as const,
+                  content: 'We should revisit the recovery plan tomorrow.',
+                  timestamp: 1_700_000_000_000,
+                  authorName: 'Ari',
+                },
+                {
+                  id: 2,
+                  channelId,
+                  role: 'assistant' as const,
+                  content: 'I will keep the thread active.',
+                  timestamp: 1_700_000_000_100,
+                  authorName: 'Companion',
+                },
+              ].slice(0, limit ?? 2)
+              : []
+          ),
+        },
+        contactStore: {
+          getById: async (id: string) => (id === 'contact-1' ? currentContact : undefined),
+          getEmotionalSnapshot: async () => null,
+          getEmotionalTimeSeries: async () => [],
+        },
+      },
+    });
+
+    return { runtime, complete, handleMessage, gateEvents, upsertCalls, watermarkStore };
+  }
+
+  it('skips a cadence-fired reflection with telemetry when no new entries exist since the last reflection', async () => {
+    // Watermark is newer than every session entry: zero new entries in scope.
+    const harness = buildNoveltyGateHarness({
+      watermarkAt: new Date(1_700_000_100_000).toISOString(),
+    });
+
+    await harness.runtime.runDeferredTemplate('daily-review', { requestedSource: 'scheduled' });
+
+    expect(harness.complete).not.toHaveBeenCalled();
+    expect(harness.handleMessage).not.toHaveBeenCalled();
+    expect(harness.gateEvents).toEqual([
+      expect.objectContaining({
+        lane: 'reflection.template.novelty',
+        outcome: 'skipped',
+        reason: 'insufficient_new_entries',
+        inputs: expect.objectContaining({
+          templateId: 'daily-review',
+          scope: 'contact:contact-1',
+          minNewEntries: 1,
+          newEntriesSinceLastReflection: 0,
+        }),
+      }),
+    ]);
+    // A skipped run writes nothing and does not advance the watermark.
+    expect(harness.upsertCalls).toHaveLength(0);
+    expect(existsSync(resolveReflectionMetacognitionJournalPath(tempDir))).toBe(false);
+    expect(existsSync(resolveReflectionJournalPath(tempDir))).toBe(false);
+  });
+
+  it('fires a cadence-fired reflection and advances the watermark when new entries exist', async () => {
+    // Watermark predates the session entries: both count as new.
+    const harness = buildNoveltyGateHarness({
+      watermarkAt: new Date(1_699_000_000_000).toISOString(),
+    });
+
+    await harness.runtime.runDeferredTemplate('daily-review', { requestedSource: 'scheduled' });
+
+    expect(harness.complete).toHaveBeenCalledTimes(3);
+    expect(harness.gateEvents).toEqual([
+      expect.objectContaining({
+        lane: 'reflection.template.novelty',
+        outcome: 'ran',
+        reason: 'open',
+        inputs: expect.objectContaining({
+          templateId: 'daily-review',
+          scope: 'contact:contact-1',
+          newEntriesSinceLastReflection: 2,
+        }),
+      }),
+    ]);
+    expect(harness.upsertCalls).toEqual([
+      expect.objectContaining({
+        processor: 'reflection_template_novelty',
+        sourceRef: 'daily-review',
+        channelId: 'contact:contact-1',
+        id: 'wm-existing',
+        lastProcessedAt: expect.any(String),
+      }),
+    ]);
+    expect(existsSync(resolveReflectionMetacognitionJournalPath(tempDir))).toBe(true);
+  });
+
+  it('runs on first cadence fire when no watermark exists yet', async () => {
+    const harness = buildNoveltyGateHarness({});
+
+    await harness.runtime.runDeferredTemplate('daily-review', { requestedSource: 'scheduled' });
+
+    expect(harness.complete).toHaveBeenCalledTimes(3);
+    expect(harness.gateEvents).toEqual([
+      expect.objectContaining({
+        outcome: 'ran',
+        reason: 'open',
+        inputs: expect.objectContaining({ newEntriesSinceLastReflection: 2 }),
+      }),
+    ]);
+    expect(harness.upsertCalls).toHaveLength(1);
+  });
+
+  it('bypasses the novelty gate for manual run_template invocations', async () => {
+    // Same zero-new-entries setup that skips the cadence path.
+    const harness = buildNoveltyGateHarness({
+      watermarkAt: new Date(1_700_000_100_000).toISOString(),
+    });
+
+    const result = await harness.runtime.runTemplateNow('daily-review', {
+      sendToDiscordOverride: false,
+      deferIfBusy: false,
+    });
+
+    expect(result.reflection).not.toBe('');
+    expect(harness.complete).toHaveBeenCalledTimes(3);
+    // Manual runs are not gate consultations: no gate event either way.
+    expect(harness.gateEvents).toEqual([]);
+    // A manual reflection still consumed the scope's novelty.
+    expect(harness.upsertCalls).toHaveLength(1);
   });
 });

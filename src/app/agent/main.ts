@@ -869,6 +869,7 @@ async function main(): Promise<void> {
       postTurnActions,
       episodicProcessingRestWindow: schedulerConfig.episodicProcessing,
       orientationRewriteGate: schedulerConfig.orientationRewrite,
+      reflectionNoveltyGate: schedulerConfig.reflectionNovelty,
       nearTurnMemoryCadence: schedulerConfig.nearTurnMemory,
       episodeSynthesis: schedulerConfig.episodeSynthesis,
       episodicWatermarkStore: episodicStore,

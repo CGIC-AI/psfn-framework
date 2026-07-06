@@ -258,6 +258,10 @@ export interface EventMap {
   'memory.sleeptime_wiki.gate': DeterministicGateEvent;
   'emotion.appraisal.gate': DeterministicGateEvent;
   'intention.concern_candidate.gate': DeterministicGateEvent;
+  //   - reflection template novelty: cadence-fired heartbeat reflection
+  //     templates, gated on new scope entries since the template's last
+  //     reflection run. Manual run_template invocations bypass the gate.
+  'reflection.template.novelty.gate': DeterministicGateEvent;
   // Social-graph builder worker completion (E4.2). Law 31: results are visible,
   // never silent — Garden renders the proposal queue and these counts.
   'memory.social_graph.builder': {

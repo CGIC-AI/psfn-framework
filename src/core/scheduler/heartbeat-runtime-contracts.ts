@@ -9,6 +9,7 @@ import type {
   EpisodicProcessingRestWindowConfig,
   NearTurnMemoryCadenceConfig,
   OrientationRewriteGateConfig,
+  ReflectionNoveltyGateConfig,
 } from '../../system/config/scheduler-config.js';
 import type { EventBus } from '../../shared/event-bus.js';
 import type { LLMProviderPort } from '../agent/contracts.js';
@@ -164,8 +165,21 @@ export interface HeartbeatRuntimeOptions {
   memoryScopeClassifier?: NearTurnMemoryScopeClassifierPort | null;
   /** Gate + tuning config for the candidate-episode synthesis lane. */
   episodeSynthesis?: EpisodeSynthesisLaneConfig;
-  /** Watermark reader for the episode-synthesis lane's deterministic gates. */
-  episodicWatermarkStore?: Pick<EpisodicStorePort, 'getProcessingWatermark'> | null;
+  /**
+   * Deterministic novelty gate for cadence-fired reflection templates
+   * (scheduler.json `reflectionNovelty`). Manual run_template invocations
+   * bypass the gate.
+   */
+  reflectionNoveltyGate?: ReflectionNoveltyGateConfig;
+  /**
+   * Watermark store for the episode-synthesis lane's deterministic gates and
+   * the reflection-template novelty watermark ("entries since last
+   * reflection" per template/scope).
+   */
+  episodicWatermarkStore?: Pick<
+    EpisodicStorePort,
+    'getProcessingWatermark' | 'upsertProcessingWatermark'
+  > | null;
   /** Companion aliases for deterministic relevance classification. */
   companionNames?: readonly string[];
   /** Companion author ids (e.g. Discord bot id) for mention detection. */
@@ -208,6 +222,12 @@ export interface HeartbeatRunTemplateResult {
   templateName: string;
   reflection: string;
   silent?: boolean;
+  /**
+   * Set when a cadence-fired run was skipped by the reflection novelty gate
+   * (insufficient new scope entries since the template's last reflection).
+   * Manual run_template invocations never carry this flag.
+   */
+  noveltyGateSkipped?: boolean;
   queued?: boolean;
   queuedVia?: 'scheduler' | 'post_turn';
   deferredAction?: PostTurnActionCandidate;

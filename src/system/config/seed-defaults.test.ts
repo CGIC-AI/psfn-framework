@@ -98,4 +98,16 @@ describe('seed defaults', () => {
 
     expect(() => loadRuntimeSettingsSeedDefaults(seedDir)).toThrow('embeddingModel');
   });
+
+  it('preserves seed positive integer field-path wording', () => {
+    const seedDir = makeSeedDir('psfn-seed-defaults-invalid-positive-integer-');
+    writeFileSync(join(seedDir, 'models.seed.json'), readFileSync('config/models.seed.json', 'utf-8'), 'utf-8');
+    const settingsSeed = JSON.parse(readFileSync('config/settings.seed.json', 'utf-8')) as Record<string, unknown>;
+    settingsSeed.embeddingDims = 0;
+    writeFileSync(join(seedDir, 'settings.seed.json'), JSON.stringify(settingsSeed), 'utf-8');
+
+    expect(() => loadRuntimeSettingsSeedDefaults(seedDir)).toThrow(
+      `${join(seedDir, 'settings.seed.json')}.embeddingDims must be a positive integer`,
+    );
+  });
 });

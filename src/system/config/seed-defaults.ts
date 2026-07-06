@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { ShardToolsetConfig, WyomingShardRoutingConfig } from './runtime-config-contracts.js';
+import { assertPositiveInteger } from './validators.js';
 
 export const MODELS_SEED_FILE_NAME = 'models.seed.json';
 export const SETTINGS_SEED_FILE_NAME = 'settings.seed.json';
@@ -96,10 +97,10 @@ function asNonEmptyString(value: unknown, fieldPath: string): string {
 }
 
 function asPositiveInteger(value: unknown, fieldPath: string): number {
-  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0 || !Number.isInteger(value)) {
-    throw new Error(`${fieldPath} must be a positive integer`);
-  }
-  return value;
+  return assertPositiveInteger(value, fieldPath, {
+    min: 1,
+    message: ({ fieldLabel }) => `${fieldLabel} must be a positive integer`,
+  });
 }
 
 function asOptionalString(value: unknown, fieldPath: string): string | undefined {

@@ -1,5 +1,6 @@
 import type { TrustLevel } from '../../system/trust/types.js';
 import type { EmotionStateSnapshot, VADVector } from './state.js';
+import { clamp, clampSigned, clampUnit } from '../../shared/utils/numeric.js';
 
 export interface EmotionalExpressionDisplayRange {
   min: number;
@@ -523,18 +524,4 @@ function asRecord(value: unknown): Record<string, unknown> | null {
 
 function lerp(min: number, max: number, t: number): number {
   return min + ((max - min) * clampUnit(t));
-}
-
-function clampSigned(value: number): number {
-  if (!Number.isFinite(value)) return 0;
-  return Math.max(-1, Math.min(1, value));
-}
-
-function clampUnit(value: number): number {
-  if (!Number.isFinite(value)) return 0;
-  return Math.max(0, Math.min(1, value));
-}
-
-function clamp(value: number, min: number, max: number): number {
-  return Math.max(min, Math.min(max, value));
 }

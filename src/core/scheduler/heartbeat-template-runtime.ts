@@ -3,6 +3,7 @@ import { compactMemoryTextForPrompt } from '../../faculties/memory/retrieval/for
 import type { Scheduler } from './scheduler.js';
 import type { MessageSender } from '../../system/lifecycle/notifications.js';
 import { createComponentLogger } from '../../shared/logger.js';
+import { clampUnit } from '../../shared/utils/numeric.js';
 import type { ActiveConcernSnapshot } from '../intention/appraisal.js';
 import {
   HEARTBEAT_SILENT_REFLECTION_TOKEN,
@@ -336,11 +337,6 @@ function formatMetacognitiveFlagForPrompt(flag: ReflectionMetacognitiveFlag): st
 
 function promptUsesReflectionMacros(prompt: string): boolean {
   return Object.values(REFLECTION_PROMPT_TOKENS).some(token => prompt.includes(token));
-}
-
-function clampUnit(value: number): number {
-  if (!Number.isFinite(value)) return 0;
-  return Math.max(0, Math.min(1, value));
 }
 
 function estimateDeliberationCostUsd(

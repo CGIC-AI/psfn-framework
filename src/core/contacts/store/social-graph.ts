@@ -30,11 +30,7 @@ import type { SensitivityLevel, TrustLevel } from '../../../system/trust/types.j
 import type { ChannelPrivacy } from '../../../system/trust/context-envelope.js';
 import { SENSITIVITY_LEVELS, sensitivityOrd } from '../../../system/trust/types.js';
 import { getAllowedSensitivities } from '../../../system/trust/policy.js';
-
-function clampUnit(value: number | undefined, fallback: number): number {
-  if (!Number.isFinite(value)) return fallback;
-  return Math.max(0, Math.min(1, value ?? fallback));
-}
+import { clampUnit } from '../../../shared/utils/numeric.js';
 
 function normalizeSensitivity(value: unknown, fallback: SensitivityLevel = 'personal'): SensitivityLevel {
   if (typeof value !== 'string') return fallback;

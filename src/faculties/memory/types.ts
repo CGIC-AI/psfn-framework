@@ -4,6 +4,7 @@ import type {
   ConsentRedactionBehavior,
   MemoryRedactionOperation,
 } from '../../system/trust/types.js';
+import { clampSigned, clampUnit } from '../../shared/utils/numeric.js';
 // Re-export for convenience
 export type {
   SensitivityLevel,
@@ -611,16 +612,6 @@ export function computeMemoryScopeMatchStrength(
     strength = Math.max(strength, 0.6);
   }
   return strength;
-}
-
-function clampUnit(value: number, fallback = 0.5): number {
-  if (!Number.isFinite(value)) return fallback;
-  return Math.max(0, Math.min(1, value));
-}
-
-function clampSigned(value: number, fallback = 0): number {
-  if (!Number.isFinite(value)) return fallback;
-  return Math.max(-1, Math.min(1, value));
 }
 
 export function normalizeFormationVAD(

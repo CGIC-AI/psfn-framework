@@ -1,4 +1,5 @@
 import type { EmotionObservation, VADVector } from './state.js';
+import { clampSigned, clampUnit } from '../../shared/utils/numeric.js';
 
 // ── Per-participant emotional trend lines (bead E6.3) ──
 //
@@ -18,11 +19,6 @@ import type { EmotionObservation, VADVector } from './state.js';
 // Idle participants never appear in a turn's author slot, so they are never
 // updated — their trend and any orientation gated on it stay put by construction.
 
-const CLAMP_MIN = -1;
-const CLAMP_MAX = 1;
-const DISCRETE_MIN = 0;
-const DISCRETE_MAX = 1;
-
 /** Below this score a discrete label is dropped from a trend (bounded growth). */
 const DISCRETE_PRUNE_EPSILON = 1e-3;
 /** Hard cap on discrete labels retained per participant trend. */
@@ -39,21 +35,6 @@ export interface ParticipantEmotionTrend {
   readonly interactionCount: number;
   /** Wall-clock ms of the last update (drives staleness + LRU eviction). */
   readonly updatedAtMs: number;
-}
-
-function clampSigned(value: number): number {
-  if (!Number.isFinite(value)) return 0;
-  return Math.max(CLAMP_MIN, Math.min(CLAMP_MAX, value));
-}
-
-function clampUnit(value: number): number {
-  if (!Number.isFinite(value)) return 0;
-  return Math.max(DISCRETE_MIN, Math.min(DISCRETE_MAX, value));
-}
-
-function clampRate(alpha: number): number {
-  if (!Number.isFinite(alpha)) return 0;
-  return Math.max(0, Math.min(1, alpha));
 }
 
 export function neutralParticipantVad(): VADVector {
@@ -139,7 +120,7 @@ export function updateParticipantTrend(
   alpha: number,
   nowMs: number,
 ): ParticipantEmotionTrend {
-  const rate = clampRate(alpha);
+  const rate = clampUnit(alpha);
   const observedVad = normalizeObservationVad(observation);
   const vad: VADVector = {
     valence: clampSigned(previous.vad.valence + (observedVad.valence - previous.vad.valence) * rate),

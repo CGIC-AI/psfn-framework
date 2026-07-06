@@ -35,6 +35,7 @@ import {
 } from '../../system/trust/policy.js';
 import { resolveBroadcastVisibilityScope } from '../../system/trust/broadcast-safety.js';
 import { createComponentLogger } from '../../shared/logger.js';
+import { clampUnit as clampProbability } from '../../shared/utils/numeric.js';
 import type { ContactStorePort } from '../../core/contacts/contact-store-port.js';
 import type { Contact, SocialRelationshipEdge } from '../../core/contacts/types.js';
 import type { ConversationScope } from '../../core/session/conversation-scope.js';
@@ -2295,11 +2296,6 @@ export class MemoryRetriever implements MemoryProvider {
 
 function toErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
-}
-
-function clampProbability(value: number): number {
-  if (!Number.isFinite(value)) return 0;
-  return Math.max(0, Math.min(1, value));
 }
 
 function clampTurnFrequency(value: number): number {

@@ -1,4 +1,5 @@
 import { isObjectRecord as isRecord } from '../../shared/utils/types.js';
+import { clampUnit } from '../../shared/utils/numeric.js';
 import { cloneInternalState, type InternalState } from './state.js';
 import { wrapPromptSectionXml } from '../identity/prompt-sections.js';
 
@@ -587,13 +588,6 @@ function parseNonNegativeFinite(value: number, fieldName: string): number {
     throw new Error(`Metacognitive field "${fieldName}" must be a non-negative finite number`);
   }
   return roundDecimal(value);
-}
-
-function clampUnit(value: number): number {
-  if (!Number.isFinite(value)) return 0;
-  if (value <= 0) return 0;
-  if (value >= 1) return 1;
-  return value;
 }
 
 function roundDecimal(value: number): number {

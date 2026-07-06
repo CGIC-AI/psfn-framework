@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { LLMProviderPort } from '../../core/agent/contracts.js';
 import type { CompletionPurpose, ContextMessage, CorrelationMetadata, ObservabilityCallType } from '../../shared/contracts/runtime.js';
+import { clampUnit } from '../../shared/utils/numeric.js';
 import type { LLMCompletionOptions } from './client.js';
 
 type DeliberationPurpose = Extract<CompletionPurpose, 'background' | 'reasoning'>;
@@ -151,11 +152,6 @@ interface ResolvedDeliberationConfig {
   fatigue: DeliberationFatigueConfig;
   cost: DeliberationCostConfig;
   now: () => number;
-}
-
-function clampUnit(value: number): number {
-  if (!Number.isFinite(value)) return 0;
-  return Math.max(0, Math.min(1, value));
 }
 
 function normalizePurposes(values: DeliberationPurpose[] | undefined): DeliberationPurpose[] {

@@ -1,5 +1,6 @@
 import type { EmotionStateSnapshot } from '../../emotion/state.js';
 import { isRecord } from '../../../shared/utils/types.js';
+import { clamp, clampSigned, clampUnit } from '../../../shared/utils/numeric.js';
 import type {
   EmoSimAdapterInput,
   EmoSimAppraisalDimension,
@@ -451,6 +452,7 @@ function projectObserverDerivedAppraisal(
     (signals.vad.valence * 0.65)
       + (signals.mood.valence * 0.2)
       + ((signals.positiveDiscrete - signals.negativeDiscrete) * 0.15),
+    -1,
   );
   const arousalMagnitude = clampUnit(Math.abs(signals.vad.arousal));
   const novelty = clampUnit(
@@ -494,18 +496,21 @@ function projectObserverDerivedAppraisal(
           + (signals.vad.dominance * 0.18)
           + (gain * 0.14)
           - (loss * 0.14),
+        -1,
       ),
       certainty: clampSigned(
         ((signals.emotionConfidence * 2 - 1) * 0.62)
           + (signals.appraisalChainScore * 0.18)
           + (signals.contactScore * 0.1)
           - ((signals.hasSnapshot ? 0 : 1) * 0.16),
+        -1,
       ),
       control: clampSigned(
         (signals.vad.dominance * 0.56)
           + (signals.contactScore * 0.12)
           + (input.metadata.speakerRole === 'system' ? 0.08 : 0)
           - (threat * 0.14),
+        -1,
       ),
       agency_self: clampUnit(
         (input.metadata.speakerRole === 'system' ? 0.62 : 0.12)
@@ -525,11 +530,13 @@ function projectObserverDerivedAppraisal(
           + (valence * 0.28)
           + (signals.contactScore * 0.08)
           - (threat * 0.1),
+        -1,
       ),
       self_norm: clampSigned(
         (input.metadata.speakerRole === 'system' ? 0.28 : 0.04)
           + (Math.max(0, signals.mood.valence) * 0.1)
           - (Math.max(0, -signals.mood.valence) * 0.1),
+        -1,
       ),
       threat,
       loss,
@@ -931,19 +938,4 @@ function secondsSinceUtcMidnight(timestampMs: number): number {
 
 function safeTimestamp(timestampMs: number): number {
   return Number.isFinite(timestampMs) && timestampMs >= 0 ? timestampMs : 0;
-}
-
-function clampSigned(value: number): number {
-  return clamp(value, -1, 1);
-}
-
-function clampUnit(value: number): number {
-  return clamp(value, 0, 1);
-}
-
-function clamp(value: number, min: number, max: number): number {
-  if (!Number.isFinite(value)) {
-    return min;
-  }
-  return Math.max(min, Math.min(max, value));
 }

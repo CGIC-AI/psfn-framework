@@ -5,6 +5,7 @@ import type {
 } from './crosswalk.js';
 import type { ObserverAppraisalProjectionResult } from './projection.js';
 import type { ObserverEvalPrivacyDecision } from './privacy.js';
+import { clampUnit as clamp01 } from '../../../shared/utils/numeric.js';
 
 export const OBSERVER_EVAL_COMPARISON_METRICS_VERSION =
   'psfn.observer-sidecar.comparison-metrics.v1' as const;
@@ -487,9 +488,4 @@ function normalizeDistance(value: number | null, maxDistance: number): number | 
 function boolScore(value: boolean | null): number | null {
   if (value === null) return null;
   return value ? 1 : 0;
-}
-
-function clamp01(value: number): number {
-  if (!Number.isFinite(value)) return 0;
-  return Math.min(1, Math.max(0, value));
 }

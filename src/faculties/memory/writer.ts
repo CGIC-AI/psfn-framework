@@ -43,6 +43,7 @@ import {
   resolveConsentRedactionBehavior,
 } from './types.js';
 import { createComponentLogger } from '../../shared/logger.js';
+import { clampSigned, clampUnit } from '../../shared/utils/numeric.js';
 import {
   MemoryMaintenanceScheduler,
   type MemoryMaintenanceSchedulerOptions,
@@ -275,16 +276,6 @@ function normalizeSourceContext(input: {
     ),
     provenance: normalizeMemoryProvenance(input.provenance),
   };
-}
-
-function clampUnit(value: number, fallback = 0.5): number {
-  if (!Number.isFinite(value)) return fallback;
-  return Math.max(0, Math.min(1, value));
-}
-
-function clampSigned(value: number, fallback = 0): number {
-  if (!Number.isFinite(value)) return fallback;
-  return Math.max(-1, Math.min(1, value));
 }
 
 function normalizeProvenanceRefs(
@@ -1266,7 +1257,7 @@ export class MemoryWriter {
       }
     }
     if (opts.importance !== undefined) {
-      const importance = clampUnit(opts.importance);
+      const importance = clampUnit(opts.importance, 0.5);
       if (importance !== existing.importance) {
         updates.importance = importance;
         previousValues.importance = existing.importance;
@@ -1276,7 +1267,7 @@ export class MemoryWriter {
       }
     }
     if (opts.confidence !== undefined) {
-      const confidence = clampUnit(opts.confidence);
+      const confidence = clampUnit(opts.confidence, 0.5);
       if (confidence !== existing.confidence) {
         updates.confidence = confidence;
         previousValues.confidence = existing.confidence;

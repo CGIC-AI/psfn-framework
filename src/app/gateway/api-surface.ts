@@ -3,7 +3,7 @@ import type { IncomingMessage } from 'node:http';
 import type { SubstrateMessage } from '../../shared/contracts/runtime.js';
 import type { SatelliteRegistryConfig } from '../../shared/contracts/satellite-registry.js';
 import { ApiServer } from '../../channels/api/server.js';
-import { resolveApiCorsAllowedOrigins } from '../../channels/api/http-policy.js';
+import { clampHttpHeader, resolveApiCorsAllowedOrigins } from '../../channels/api/http-policy.js';
 import {
   hasSatelliteClaimHeaders,
   resolveSatelliteClaim,
@@ -52,12 +52,6 @@ function singleHeader(value: string | string[] | undefined): string | undefined 
   return value;
 }
 
-function clampHeader(value: string | undefined, maxLength: number): string | undefined {
-  const trimmed = value?.trim();
-  if (!trimmed) return undefined;
-  return trimmed.length > maxLength ? trimmed.slice(0, maxLength) : trimmed;
-}
-
 function parseRequestUrl(request: IncomingMessage): URL | null {
   try {
     return new URL(request.url ?? '/', `http://${request.headers.host ?? 'localhost'}`);
@@ -71,7 +65,7 @@ function readQueryParam(request: IncomingMessage, names: string[]): string | und
   if (!url) return undefined;
 
   for (const name of names) {
-    const value = clampHeader(url.searchParams.get(name) ?? undefined, 1024);
+    const value = clampHttpHeader(url.searchParams.get(name) ?? undefined, 1024);
     if (value) return value;
   }
 
@@ -84,9 +78,9 @@ function readHeaderOrQuery(
   queryNames: string[],
   maxLength: number,
 ): string | undefined {
-  const headerValue = clampHeader(singleHeader(request.headers[headerName]), maxLength);
+  const headerValue = clampHttpHeader(singleHeader(request.headers[headerName]), maxLength);
   if (headerValue) return headerValue;
-  return clampHeader(readQueryParam(request, queryNames), maxLength);
+  return clampHttpHeader(readQueryParam(request, queryNames), maxLength);
 }
 
 function buildSatelliteClaimHeaders(
@@ -95,10 +89,10 @@ function buildSatelliteClaimHeaders(
 ): IncomingMessage['headers'] {
   const headers: IncomingMessage['headers'] = { ...request.headers };
   const copy = (headerName: string, queryNames: string[], maxLength: number) => {
-    if (clampHeader(singleHeader(headers[headerName]), maxLength)) return;
+    if (clampHttpHeader(singleHeader(headers[headerName]), maxLength)) return;
     const value = readQueryParam(request, queryNames);
     if (value) {
-      headers[headerName] = clampHeader(value, maxLength);
+      headers[headerName] = clampHttpHeader(value, maxLength);
     }
   };
 
@@ -114,11 +108,11 @@ function buildSatelliteClaimHeaders(
   copy(SATELLITE_CLAIM_HEADERS.clientCertSan, ['client_cert_san'], 512);
 
   const hasSatelliteEnvelope = Boolean(
-    clampHeader(singleHeader(headers[SATELLITE_CLAIM_HEADERS.claimType]), 64)
-    || clampHeader(singleHeader(headers[SATELLITE_CLAIM_HEADERS.satelliteId]), 128)
-    || clampHeader(singleHeader(headers[SATELLITE_CLAIM_HEADERS.endpointId]), 128),
+    clampHttpHeader(singleHeader(headers[SATELLITE_CLAIM_HEADERS.claimType]), 64)
+    || clampHttpHeader(singleHeader(headers[SATELLITE_CLAIM_HEADERS.satelliteId]), 128)
+    || clampHttpHeader(singleHeader(headers[SATELLITE_CLAIM_HEADERS.endpointId]), 128),
   );
-  if (hasSatelliteEnvelope && !clampHeader(singleHeader(headers[SATELLITE_CLAIM_HEADERS.sessionId]), 128)) {
+  if (hasSatelliteEnvelope && !clampHttpHeader(singleHeader(headers[SATELLITE_CLAIM_HEADERS.sessionId]), 128)) {
     headers[SATELLITE_CLAIM_HEADERS.sessionId] = sessionId;
   }
   return headers;

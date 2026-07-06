@@ -15,6 +15,7 @@ import {
   evaluateDeterministicGate,
   type DeterministicGateDefinition,
 } from '../../../shared/gating/deterministic-gate.js';
+import { toIsoInstant } from '../../../shared/utils/timing.js';
 import { runEpisodicJudgment } from './judgment-runner.js';
 import type {
   EpisodeCreateInput,
@@ -179,10 +180,6 @@ const THEMATIC_GROUPING_SYSTEM_PROMPT = [
   'Salience is significance to the relationship and long-term memory (0 to 1); length must not drive the score.',
   'Ground everything in the provided records and transcript excerpt; never invent events.',
 ].join('\n');
-
-function toIsoInstant(ms: number): string {
-  return new Date(ms).toISOString();
-}
 
 function parseInstant(value: string): number {
   return Date.parse(value);

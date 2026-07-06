@@ -6,6 +6,7 @@ import type { AgentTool, AgentToolResult } from '@mariozechner/pi-agent-core';
 import type { VaultOperations } from './ops.js';
 import { textResult, textResultWithError } from '../../../core/tools/results.js';
 import { toErrorMessage } from '../../../shared/utils/errors.js';
+import { truncateToolOutputContent } from '../../../shared/utils/tool-output.js';
 
 const MAX_READ_CHARS = 12_000;
 const VAULT_ACTION_HELP = 'read, write, search, daily';
@@ -83,19 +84,13 @@ function requireNonEmptyString(value: unknown, field: string): string {
   return value;
 }
 
-function truncateContent(content: string): string {
-  return content.length > MAX_READ_CHARS
-    ? content.slice(0, MAX_READ_CHARS) + '\n... (truncated)'
-    : content;
-}
-
 async function executeVaultRead(
   ops: VaultOperations,
   params: VaultToolParams,
 ): Promise<AgentToolResult<{ isError?: boolean }>> {
   const name = requireNonEmptyString(params.name, 'name');
   const result = await ops.read(name);
-  return textResult(`=== ${result.name} ===\n${truncateContent(result.content)}`);
+  return textResult(`=== ${result.name} ===\n${truncateToolOutputContent(result.content, MAX_READ_CHARS)}`);
 }
 
 async function executeVaultWrite(
@@ -136,7 +131,7 @@ async function executeVaultDaily(
 ): Promise<AgentToolResult<{ isError?: boolean }>> {
   const result = await ops.daily(typeof params.content === 'string' ? { content: params.content } : undefined);
   if (result.mode === 'read') {
-    const content = result.content ? truncateContent(result.content) : '(empty)';
+    const content = result.content ? truncateToolOutputContent(result.content, MAX_READ_CHARS) : '(empty)';
     return textResult(`=== Daily Note (${result.date}) ===\n${content}`);
   }
   return textResult(`Appended to daily note (${result.date})`);

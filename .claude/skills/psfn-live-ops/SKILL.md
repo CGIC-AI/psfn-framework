@@ -176,9 +176,11 @@ psfn-shard 2026-07-06:
    works on arm64) and `bd metrics off`. Keep `close`/`sync` out of
    BEADS_ALLOW_ACTIONS until approval flows exist.
 6. **Companion skills** install to `<workspace>/skills/<name>/SKILL.md`
-   (the runtime's managed root; frontmatter needs name + description).
-   `.agents/skills/` is the coding-agent convention dir — the runtime does
-   NOT read it.
+   (the runtime's managed root; frontmatter needs name + description),
+   `chown -R 999:999`. **No restart needed** — the skills faculty rescans at
+   use time (live-verified 2026-07-06: file drop → visible in her next skill
+   scan, pods untouched). `.agents/skills/` is the coding-agent convention
+   dir — the runtime does NOT read it.
 7. **Off-node backups**: install/point `/usr/local/bin/psfn-backup.sh` at the
    target's live cluster + its NFS share. The pre-cutover trap to never
    repeat: a timer that keeps dumping a frozen/stale DB looks healthy while

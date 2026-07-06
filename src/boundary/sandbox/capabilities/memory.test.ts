@@ -71,7 +71,16 @@ describe('createMemoryCapabilities session_search', () => {
 
     expect(result.summary).toContain('Kyoto notes');
     expect(result.hits).toHaveLength(2);
-    expect((llm.complete as ReturnType<typeof vi.fn>).mock.calls[0][1]).toBe('summary');
+    // Shared session-summary completion convention (psfn-framework-7ozg):
+    // positional callType 'background', correlation callType 'summary' with
+    // the session-search purpose/originStage.
+    const [request, positionalCallType] = (llm.complete as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(positionalCallType).toBe('background');
+    expect(request.correlation).toMatchObject({
+      callType: 'summary',
+      purpose: 'session.search.summary',
+      originStage: 'session.search.summary',
+    });
   });
 
   it('filters session_search hits with trust + channel visibility gates before summarization', async () => {

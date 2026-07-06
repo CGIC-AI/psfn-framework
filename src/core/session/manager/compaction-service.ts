@@ -75,7 +75,7 @@ export interface RecentSessionSummaryParams {
   purpose: RecentSessionSummaryPurpose;
 }
 
-interface SessionSummaryCompletionParams {
+export interface SessionSummaryCompletionParams {
   channelId: string;
   sourceText: string;
   llmProvider: LLMProviderPort;
@@ -118,7 +118,16 @@ export function normalizeGeneratedRecentSummaryText(content: string, maxTokens: 
   return '';
 }
 
-async function completeSessionSummary(params: SessionSummaryCompletionParams): Promise<string> {
+/**
+ * Shared session-summary completion primitive. Owns PromptRegistry lookup,
+ * runtime-token injection, retry behavior, request correlation, and
+ * callType/originStage metadata for every session-summary LLM call
+ * (compaction, recent-session, and session-search summaries).
+ *
+ * callType convention: the positional `complete` callType is 'background'
+ * while the correlation metadata carries callType 'summary'.
+ */
+export async function completeSessionSummary(params: SessionSummaryCompletionParams): Promise<string> {
   const summaryPrompt = params.promptText
     ?? params.promptRegistry?.getPrompt(params.promptKey)
     ?? getDefaultPromptText(params.promptKey);

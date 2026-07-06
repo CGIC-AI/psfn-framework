@@ -7,6 +7,7 @@ import {
   EXTRACTION_PROMPT_KEY,
   COMPACTION_SUMMARY_PROMPT_KEY,
   RECENT_SESSION_SUMMARY_PROMPT_KEY,
+  SESSION_SEARCH_SUMMARY_PROMPT_KEY,
   PROFILE_SYNTHESIS_PROMPT_KEY,
   SLEEPTIME_ORIENTATION_PROMPT_KEY,
   WIKI_PASS_PROMPT_KEY,
@@ -77,6 +78,7 @@ describe('PromptRegistryStore', () => {
       WIKI_PASS_PROMPT_KEY,
       COMPACTION_SUMMARY_PROMPT_KEY,
       RECENT_SESSION_SUMMARY_PROMPT_KEY,
+      SESSION_SEARCH_SUMMARY_PROMPT_KEY,
       ...subsystemPersonaPromptKeys().sort((a, b) => a.localeCompare(b)),
     ]);
     expect(seeded.getPrompt(EXTRACTION_PROMPT_KEY)).toBe(getDefaultPromptText(EXTRACTION_PROMPT_KEY));
@@ -126,6 +128,16 @@ describe('PromptRegistryStore', () => {
     expect(prompt).toContain('Do not write a transcript');
     expect(prompt).toContain('Do not repeat tool results');
     expect(prompt).not.toBe(getDefaultPromptText(COMPACTION_SUMMARY_PROMPT_KEY));
+  });
+
+  it('seeds the session search summary prompt scoped to provided snippets', () => {
+    const prompt = getDefaultPromptText(SESSION_SEARCH_SUMMARY_PROMPT_KEY);
+
+    expect(prompt).toContain('keyword-search matches from archived chat transcripts');
+    expect(prompt).toContain('Use only the provided snippets');
+    expect(prompt).toContain('Name key topics and channel groupings');
+    expect(store.getPrompt(SESSION_SEARCH_SUMMARY_PROMPT_KEY)).toBe(prompt);
+    expect(prompt).not.toBe(getDefaultPromptText(RECENT_SESSION_SUMMARY_PROMPT_KEY));
   });
 
   it('updates prompt text and writes history entry', () => {

@@ -7,6 +7,14 @@ import type { ChannelPrivacy } from '../../system/trust/context-envelope.js';
 import { decodeStoredChannelVisibility } from '../../system/trust/types.js';
 import type { TranscriptSearchPort } from '../../persistence/sessions/transcript-search-port.js';
 import { isCogSecTombstoneSessionEntry } from '../cogsec/tombstones.js';
+import { SESSION_SEARCH_SUMMARY_PROMPT_KEY } from '../identity/prompt-registry.js';
+import type { PromptRegistryStatePort } from '../identity/prompt-state-port.js';
+import { completeSessionSummary } from './manager/compaction-service.js';
+import { getRequestContext } from '../../primitives/llm/request-context.js';
+import { createComponentLogger } from '../../shared/logger.js';
+import { toErrorMessage } from '../../shared/utils/errors.js';
+
+const log = createComponentLogger('SessionSearch');
 
 const DEFAULT_SESSION_SEARCH_LIMIT = 8;
 const MAX_SESSION_SEARCH_LIMIT = 25;
@@ -14,14 +22,8 @@ const SESSION_SEARCH_OVERSAMPLE_FACTOR = 4;
 const SESSION_SEARCH_MAX_SUMMARY_MATCHES = 10;
 const SESSION_SEARCH_MAX_SUMMARY_CONTEXT_CHARS = 4000;
 const SESSION_SEARCH_MAX_SNIPPET_CHARS = 220;
-
-const SESSION_SEARCH_SUMMARY_SYSTEM_PROMPT = [
-  'You summarize keyword-search matches from archived chat transcripts.',
-  'Use only the provided snippets.',
-  'Name key topics and channel groupings.',
-  'If evidence is sparse or ambiguous, state that explicitly.',
-  'Keep the answer concise (3-5 sentences).',
-].join(' ');
+/** Correlation channel label when a search is not scoped to one channel. */
+const SESSION_SEARCH_CORRELATION_CHANNEL = 'session-search';
 
 export interface SessionSearchViewerContext {
   channelId?: string;
@@ -205,28 +207,48 @@ export function resolveSessionSearchRouteLabel(
   };
 }
 
-async function summarizeSessionSearch(
-  llmProvider: LLMProviderPort | null | undefined,
-  query: string,
-  hits: SessionSearchHitResult[],
-): Promise<string> {
-  const fallback = fallbackSessionSearchSummary(query, hits);
-  if (hits.length === 0 || !llmProvider) return fallback;
+async function summarizeSessionSearch(params: {
+  llmProvider: LLMProviderPort | null | undefined;
+  promptRegistry: PromptRegistryStatePort | null;
+  channelId: string;
+  query: string;
+  hits: SessionSearchHitResult[];
+}): Promise<string> {
+  const fallback = fallbackSessionSearchSummary(params.query, params.hits);
+  if (params.hits.length === 0 || !params.llmProvider) return fallback;
 
-  const payload = buildSessionSearchSummaryPayload(query, hits);
+  const payload = buildSessionSearchSummaryPayload(params.query, params.hits);
+  const requestContext = getRequestContext();
+  const requestIdBase = requestContext?.requestId
+    ? `${requestContext.requestId}:search-summary`
+    : `search-summary:${params.channelId}:${Date.now()}`;
   try {
-    const response = await llmProvider.complete(
-      {
-        systemPrompt: SESSION_SEARCH_SUMMARY_SYSTEM_PROMPT,
-        messages: [{ role: 'user', content: payload }],
-      },
-      'summary',
-    );
-    const content = typeof response.content === 'string'
-      ? response.content.replace(/\s+/g, ' ').trim()
-      : '';
-    return content || fallback;
-  } catch {
+    // Shared session-summary completion path: PromptRegistry-owned prompt,
+    // runtime-token injection, retry, and correlation metadata all live in
+    // completeSessionSummary (see compaction-service.ts).
+    const summary = await completeSessionSummary({
+      channelId: params.channelId,
+      sourceText: payload,
+      llmProvider: params.llmProvider,
+      promptRegistry: params.promptRegistry,
+      promptKey: SESSION_SEARCH_SUMMARY_PROMPT_KEY,
+      requestIdBase,
+      correlationPurpose: 'session.search.summary',
+      originStage: 'session.search.summary',
+      maxRetries: 1,
+      baseDelayMs: 150,
+    });
+    const normalized = summary.replace(/\s+/g, ' ').trim();
+    return normalized || fallback;
+  } catch (error) {
+    // Non-blocking by contract: search results still return with the
+    // deterministic fallback summary, but the failure is never silent.
+    log.warn('Session search summary failed; using deterministic fallback', {
+      channelId: params.channelId,
+      query: params.query,
+      hitCount: params.hits.length,
+      error: toErrorMessage(error),
+    });
     return fallback;
   }
 }
@@ -234,6 +256,7 @@ async function summarizeSessionSearch(
 export async function runSessionSearch(params: {
   transcriptSearch: TranscriptSearchPort | null | undefined;
   llmProvider?: LLMProviderPort | null;
+  promptRegistry?: PromptRegistryStatePort | null;
   query: string;
   limit?: number;
   summarize?: boolean;
@@ -286,7 +309,13 @@ export async function runSessionSearch(params: {
     });
 
   const summary = params.summarize
-    ? await summarizeSessionSearch(params.llmProvider, normalizedQuery, hits)
+    ? await summarizeSessionSearch({
+      llmProvider: params.llmProvider,
+      promptRegistry: params.promptRegistry ?? null,
+      channelId: scopedChannelId ?? params.viewer?.channelId ?? SESSION_SEARCH_CORRELATION_CHANNEL,
+      query: normalizedQuery,
+      hits,
+    })
     : fallbackSessionSearchSummary(normalizedQuery, hits);
 
   return {

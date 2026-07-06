@@ -350,7 +350,7 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
     confirmationQueue: cardProposalQueue,
   });
   wireSettingsRuntime(agentLoop, config, { registerSystemTool: false });
-  wireSessionToolsRuntime(agentLoop, sessionManager, pathSnapshot.companionDataDir, gateway);
+  wireSessionToolsRuntime(agentLoop, sessionManager, pathSnapshot.companionDataDir, gateway, promptRegistry);
   const contactRuntimeOptions: ContactRuntimeOptions = {
     exportDir: resolveContactsDir(pathSnapshot.companionDataDir),
     ...(primaryTelegramUserId

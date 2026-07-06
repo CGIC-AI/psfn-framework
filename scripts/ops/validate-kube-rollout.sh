@@ -17,7 +17,7 @@ KUBE_MODE_REQUESTED="auto"
 KUBE_MODE=""
 GARDEN_PORT="${GARDEN_PORT:-10054}"
 GATEWAY_PORT="${GATEWAY_PORT:-10053}"
-COMPANION_MODEL_PATTERN="${COMPANION_MODEL_PATTERN:-companion|carlini}"
+COMPANION_MODEL_PATTERN="${COMPANION_MODEL_PATTERN:-purrsephone}"
 SMOKE_TIMEOUT_SECONDS="${SMOKE_TIMEOUT_SECONDS:-180}"
 API_KEY_VALUE=""
 
@@ -519,7 +519,7 @@ const ids = Array.isArray(payload.data)
   : [];
 let pattern;
 try {
-  pattern = new RegExp(process.env.COMPANION_MODEL_PATTERN || "companion|carlini", "i");
+  pattern = new RegExp(process.env.COMPANION_MODEL_PATTERN || "purrsephone", "i");
 } catch (error) {
   console.error(`invalid companion route regex: ${error.message}`);
   process.exit(1);

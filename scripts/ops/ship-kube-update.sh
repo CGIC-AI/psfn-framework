@@ -22,6 +22,7 @@ CACHE_DIR="${PSFN_BUILDX_CACHE:-$HOME/.cache/psfn-buildx}"
 COMPONENTS=""
 SKIP_GATE=0
 DRY_RUN=0
+VALUES_OVERLAY=
 
 usage() {
   sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'
@@ -31,6 +32,7 @@ usage() {
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --components) COMPONENTS="$2"; shift 2 ;;
+    --values-overlay) VALUES_OVERLAY="$2"; shift 2 ;;
     --host) HOST_ALIAS="$2"; shift 2 ;;
     --skip-gate) SKIP_GATE=1; shift ;;
     --dry-run) DRY_RUN=1; shift ;;
@@ -117,6 +119,12 @@ git archive HEAD deploy/helm/psfn | gzip >"$BUILD_DIR/chart.tgz"
 scp "$BUILD_DIR/chart.tgz" "${HOST_ALIAS}:${REMOTE_DIR}/chart-${SHORT_SHA}.tgz"
 remote "cd ${REMOTE_DIR} && rm -rf chart-${SHORT_SHA} && mkdir -p chart-${SHORT_SHA} && tar xzf chart-${SHORT_SHA}.tgz -C chart-${SHORT_SHA}"
 remote "sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml helm get values psfn -n $NAMESPACE -o yaml > ${REMOTE_DIR}/live-values-${SHORT_SHA}.yaml"
+OVERLAY_ARG=""
+if [[ -n "$VALUES_OVERLAY" ]]; then
+  [[ -f "$VALUES_OVERLAY" ]] || { echo "FAIL: values overlay not found: $VALUES_OVERLAY" >&2; exit 1; }
+  scp "$VALUES_OVERLAY" "${HOST_ALIAS}:${REMOTE_DIR}/overlay-${SHORT_SHA}.yaml"
+  OVERLAY_ARG="-f ${REMOTE_DIR}/overlay-${SHORT_SHA}.yaml"
+fi
 
 HELM_SETS=()
 if [[ ${#SELECTED[@]} -eq 3 ]]; then
@@ -137,7 +145,7 @@ else
   fi
 fi
 
-remote "sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml helm upgrade psfn ${REMOTE_DIR}/chart-${SHORT_SHA}/deploy/helm/psfn -n $NAMESPACE -f ${REMOTE_DIR}/live-values-${SHORT_SHA}.yaml $(printf '%s ' "${HELM_SETS[@]}") --timeout 10m" | tail -2
+remote "sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml helm upgrade psfn ${REMOTE_DIR}/chart-${SHORT_SHA}/deploy/helm/psfn -n $NAMESPACE -f ${REMOTE_DIR}/live-values-${SHORT_SHA}.yaml ${OVERLAY_ARG} $(printf '%s ' "${HELM_SETS[@]}") --timeout 10m" | tail -2
 
 echo "==> waiting for selected rollouts"
 for c in "${SELECTED[@]}"; do

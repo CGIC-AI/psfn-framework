@@ -89,6 +89,8 @@ export interface DeliberationVoiceTurn {
 
 export interface DeliberationRound {
   index: number;
+  /** Stage name when the round was produced by a fixed stage sequence. */
+  stage?: string;
   voices: DeliberationVoiceTurn[];
   synthesis: string;
   aggregatorModel?: string;
@@ -99,6 +101,29 @@ export interface DeliberationRound {
   inputTokens: number;
   outputTokens: number;
   durationMs: number;
+}
+
+/** Context handed to a stage builder: the base prompt plus prior stage outputs. */
+export interface DeliberationStageTurnContext {
+  prompt: string;
+  stageIndex: number;
+  /** Trimmed outputs of previously completed stages, keyed by stage name. */
+  stageOutputs: Readonly<Record<string, string>>;
+}
+
+/**
+ * One step of a fixed stage sequence (e.g. evidence → synthesis →
+ * contradiction). Each stage is exactly one completion; the shared budget
+ * loop owns round counting, token/wall-time caps, cost accounting, and
+ * per-stage correlation (`<originStage>.<stage name>`).
+ */
+export interface DeliberationStageDefinition {
+  readonly name: string;
+  readonly purpose: DeliberationPurpose;
+  buildTurn(context: DeliberationStageTurnContext): {
+    systemPrompt: string;
+    messages: ContextMessage[];
+  };
 }
 
 export interface DeliberationResult {
@@ -130,6 +155,12 @@ export interface DeliberationOptions {
   fatigue?: Partial<DeliberationFatigueConfig>;
   cost?: Partial<DeliberationCostConfig>;
   now?: () => number;
+  /**
+   * Fixed stage sequence mode: run each stage exactly once, in order, under
+   * the shared caps (one stage = one round). Mutually exclusive with the
+   * voices/aggregator/fatigue knobs — providing both fails closed.
+   */
+  stages?: readonly DeliberationStageDefinition[];
 }
 
 interface DeliberationVoiceConfig {
@@ -455,11 +486,180 @@ function buildDeliberationEpisodeExit(
   };
 }
 
+function validateDeliberationStages(
+  options: DeliberationOptions,
+): readonly DeliberationStageDefinition[] {
+  const stages = options.stages ?? [];
+  if (stages.length === 0) {
+    throw new Error('Staged deliberation requires at least one stage');
+  }
+
+  const conflictingOptions = [
+    options.voices !== undefined ? 'voices' : null,
+    options.referenceModels !== undefined ? 'referenceModels' : null,
+    options.aggregatorModel !== undefined ? 'aggregatorModel' : null,
+    options.aggregatorPurpose !== undefined ? 'aggregatorPurpose' : null,
+    options.fatigue !== undefined ? 'fatigue' : null,
+  ].filter((name): name is string => name !== null);
+  if (conflictingOptions.length > 0) {
+    throw new Error(
+      `Staged deliberation owns the stage sequence; remove unsupported options: ${conflictingOptions.join(', ')}`,
+    );
+  }
+
+  const seenNames = new Set<string>();
+  for (const stage of stages) {
+    const name = typeof stage.name === 'string' ? stage.name.trim() : '';
+    if (!name) {
+      throw new Error('Staged deliberation stage names must be non-empty strings');
+    }
+    if (seenNames.has(name)) {
+      throw new Error(`Staged deliberation stage name "${name}" is duplicated`);
+    }
+    seenNames.add(name);
+  }
+
+  return stages;
+}
+
+/**
+ * Fixed-stage execution: each stage runs once, in order, under the shared
+ * caps. Budget semantics match the multi-voice loop: pre-checks (wall time,
+ * rounds, total tokens — in that order) skip the remaining stages, and a cap
+ * crossed by a completed stage records its stop reason. A sequence that
+ * finishes without hitting a cap exits as `max_rounds` (budgeted sequence
+ * completed), never `fatigue_taper`.
+ */
+async function runStagedDeliberation(
+  llmProvider: LLMProviderPort,
+  prompt: string,
+  options: DeliberationOptions,
+): Promise<DeliberationResult> {
+  const stages = validateDeliberationStages(options);
+  const config = resolveDeliberationConfig(options);
+  const startedAt = config.now();
+
+  let totalInputTokens = 0;
+  let totalOutputTokens = 0;
+  let estimatedCostUsd = 0;
+  let output = '';
+  let stopReason: DeliberationStopReason | null = null;
+  const stageOutputs: Record<string, string> = {};
+  const noveltyHistory: Set<string>[] = [];
+  const rounds: DeliberationRound[] = [];
+
+  for (const [stageIndex, stage] of stages.entries()) {
+    if (config.now() - startedAt >= config.caps.maxWallTimeMs) {
+      stopReason = 'time_cap';
+      break;
+    }
+    if (rounds.length >= config.caps.maxRounds) {
+      stopReason = 'max_rounds';
+      break;
+    }
+    if (totalInputTokens + totalOutputTokens >= config.caps.maxTotalTokens) {
+      stopReason = 'token_cap';
+      break;
+    }
+
+    const roundStartedAt = config.now();
+    const { systemPrompt, messages } = stage.buildTurn({ prompt, stageIndex, stageOutputs });
+    const response = await completeForDeliberation(
+      llmProvider,
+      { systemPrompt, messages },
+      stage.purpose,
+      buildCompletionOptions(
+        undefined,
+        config.caps.maxTokensPerRound,
+        buildDeliberationCorrelation(
+          config.correlation,
+          stage.name,
+          stage.purpose === 'background' ? 'background' : 'tool',
+        ),
+      ),
+    );
+
+    const content = response.content.trim();
+    totalInputTokens += response.inputTokens;
+    totalOutputTokens += response.outputTokens;
+    estimatedCostUsd += estimateCostUsd(config.cost, response.inputTokens, response.outputTokens);
+    stageOutputs[stage.name] = content;
+
+    const novelty = noveltyAgainstHistory(content, noveltyHistory);
+    noveltyHistory.push(tokenizeForNovelty(content));
+
+    rounds.push({
+      index: rounds.length + 1,
+      stage: stage.name,
+      voices: [{
+        purpose: stage.purpose,
+        content,
+        model: response.model,
+        inputTokens: response.inputTokens,
+        outputTokens: response.outputTokens,
+      }],
+      synthesis: content,
+      novelty,
+      fatigue: 0,
+      continueProbability: 1,
+      inputTokens: response.inputTokens,
+      outputTokens: response.outputTokens,
+      durationMs: config.now() - roundStartedAt,
+    });
+    output = content;
+
+    if (config.now() - startedAt >= config.caps.maxWallTimeMs) {
+      stopReason = 'time_cap';
+    } else if (totalInputTokens + totalOutputTokens >= config.caps.maxTotalTokens) {
+      stopReason = 'token_cap';
+    } else if (
+      config.caps.maxTokensPerRound !== undefined
+      && response.inputTokens + response.outputTokens >= config.caps.maxTokensPerRound
+    ) {
+      stopReason = 'token_cap';
+    }
+  }
+
+  if (!stopReason) {
+    stopReason = 'max_rounds';
+  }
+
+  const endedAt = config.now();
+  const totalTokens = totalInputTokens + totalOutputTokens;
+  const exit = buildDeliberationEpisodeExit(config.caps, stopReason, rounds, totalTokens);
+  return {
+    sessionId: config.sessionId,
+    episode: {
+      id: config.sessionId,
+      kind: config.episode.kind,
+      mode: config.episode.mode,
+      budget: config.caps,
+      exit,
+    },
+    output,
+    stopReason,
+    rounds,
+    voices: stages.map(stage => stage.purpose),
+    caps: config.caps,
+    totalInputTokens,
+    totalOutputTokens,
+    totalTokens,
+    estimatedCostUsd,
+    startedAt,
+    endedAt,
+    durationMs: Math.max(0, endedAt - startedAt),
+  };
+}
+
 export async function runDeliberation(
   llmProvider: LLMProviderPort,
   prompt: string,
   options: DeliberationOptions = {},
 ): Promise<DeliberationResult> {
+  if (options.stages !== undefined) {
+    return runStagedDeliberation(llmProvider, prompt, options);
+  }
+
   const config = resolveDeliberationConfig(options);
   const startedAt = config.now();
 

@@ -1,4 +1,3 @@
-import { randomUUID } from 'node:crypto';
 import { compactMemoryTextForPrompt } from '../../faculties/memory/retrieval/formatting.js';
 import type { Scheduler } from './scheduler.js';
 import type { MessageSender } from '../../system/lifecycle/notifications.js';
@@ -18,7 +17,6 @@ import type {
   ValuesDeliberationMetadata,
 } from '../../faculties/values/store.js';
 import type {
-  CompletionPurpose,
   ContextMessage,
   ObservabilityCallType,
   PostTurnActionCandidate,
@@ -58,7 +56,7 @@ import {
 import type { Contact } from '../contacts/types.js';
 import { isBusyTurnError } from '../../system/lifecycle/turn-contention.js';
 import { runDeliberation } from '../../primitives/llm/deliberation.js';
-import type { DeliberationResult } from '../../primitives/llm/deliberation.js';
+import type { DeliberationResult, DeliberationStageDefinition } from '../../primitives/llm/deliberation.js';
 import {
   buildInternalStateSnapshotRef,
   cloneInternalState,
@@ -195,7 +193,6 @@ type ReflectionDeliberationExecutionResult = {
   metadata: ValuesDeliberationMetadata;
   metacognitiveFlags: ReflectionMetacognitiveFlag[];
 };
-type ExperientialReflectionStage = 'evidence' | 'synthesis' | 'contradiction';
 
 class HeartbeatTemplateLoopGuardError extends Error {
   readonly templateId: string;
@@ -341,18 +338,6 @@ function promptUsesReflectionMacros(prompt: string): boolean {
 function clampUnit(value: number): number {
   if (!Number.isFinite(value)) return 0;
   return Math.max(0, Math.min(1, value));
-}
-
-function estimateDeliberationCostUsd(
-  inputTokens: number,
-  outputTokens: number,
-  inputUsdPerMillionTokens: number,
-  outputUsdPerMillionTokens: number,
-): number {
-  return (
-    (Math.max(0, inputTokens) * Math.max(0, inputUsdPerMillionTokens))
-    + (Math.max(0, outputTokens) * Math.max(0, outputUsdPerMillionTokens))
-  ) / 1_000_000;
 }
 
 function normalizeFiniteTimestamp(value: unknown): number | undefined {
@@ -1397,7 +1382,7 @@ export function createHeartbeatTemplateRuntime(
   const buildExperientialEvidenceMessages = (
     template: ReflectionTemplate,
     prompt: string,
-  ): { systemPrompt: string; messages: ContextMessage[]; purpose: CompletionPurpose } => ({
+  ): { systemPrompt: string; messages: ContextMessage[] } => ({
     systemPrompt:
       `This is my evidence pass on my "${template.name}" reflection. `
       + 'I gather only what is directly grounded in the reflection context in front of me — '
@@ -1411,14 +1396,13 @@ export function createHeartbeatTemplateRuntime(
         prompt,
       ].join('\n\n'),
     }],
-    purpose: template.deliberation?.voices?.[0] ?? 'background',
   });
 
   const buildExperientialSynthesisMessages = (
     template: ReflectionTemplate,
     prompt: string,
     evidence: string,
-  ): { systemPrompt: string; messages: ContextMessage[]; purpose: CompletionPurpose } => ({
+  ): { systemPrompt: string; messages: ContextMessage[] } => ({
     systemPrompt:
       `This is my synthesis pass on my "${template.name}" reflection. `
       + 'I write a grounded reflection using only the evidence I gathered, in two to five sentences, '
@@ -1434,7 +1418,6 @@ export function createHeartbeatTemplateRuntime(
         evidence,
       ].join('\n\n'),
     }],
-    purpose: template.deliberation?.voices?.[1] ?? template.deliberation?.voices?.[0] ?? 'reasoning',
   });
 
   const buildExperientialContradictionMessages = (
@@ -1442,7 +1425,7 @@ export function createHeartbeatTemplateRuntime(
     prompt: string,
     evidence: string,
     synthesis: string,
-  ): { systemPrompt: string; messages: ContextMessage[]; purpose: CompletionPurpose } => ({
+  ): { systemPrompt: string; messages: ContextMessage[] } => ({
     systemPrompt:
       `This is my contradiction pass on my "${template.name}" reflection — I keep myself honest. `
       + 'I compare my candidate reflection against the grounded evidence. '
@@ -1463,7 +1446,6 @@ export function createHeartbeatTemplateRuntime(
         'Return JSON only.',
       ].join('\n\n'),
     }],
-    purpose: 'reasoning',
   });
 
   const parseExperientialContradictionResponse = (
@@ -1502,6 +1484,41 @@ export function createHeartbeatTemplateRuntime(
     }
   };
 
+  /**
+   * The experiential 3-stage sequence (evidence → synthesis → contradiction)
+   * expressed as a fixed stage config for the shared runDeliberation
+   * primitive, which owns the budget loop, token/cost accounting, stop
+   * reasons, and per-stage correlation.
+   */
+  const buildExperientialDeliberationStages = (
+    template: ReflectionTemplate,
+  ): DeliberationStageDefinition[] => [
+    {
+      name: 'evidence',
+      purpose: template.deliberation?.voices?.[0] ?? 'background',
+      buildTurn: ({ prompt }) => buildExperientialEvidenceMessages(template, prompt),
+    },
+    {
+      name: 'synthesis',
+      purpose: template.deliberation?.voices?.[1] ?? template.deliberation?.voices?.[0] ?? 'reasoning',
+      buildTurn: ({ prompt, stageOutputs }) => buildExperientialSynthesisMessages(
+        template,
+        prompt,
+        stageOutputs.evidence || prompt,
+      ),
+    },
+    {
+      name: 'contradiction',
+      purpose: 'reasoning',
+      buildTurn: ({ prompt, stageOutputs }) => buildExperientialContradictionMessages(
+        template,
+        prompt,
+        stageOutputs.evidence || prompt,
+        stageOutputs.synthesis || stageOutputs.evidence || prompt,
+      ),
+    },
+  ];
+
   const runExperientialTemplateDeliberation = async (
     template: ReflectionTemplate,
     prompt: string,
@@ -1514,160 +1531,46 @@ export function createHeartbeatTemplateRuntime(
       throw new Error('Experiential deliberation requested without llmProvider');
     }
 
-    const startedAt = Date.now();
-    const sessionId = randomUUID();
-    const maxRounds = Math.max(1, Math.min(3, Math.floor(template.deliberation?.maxRounds ?? 3)));
-    const maxTotalTokens = Math.max(256, Math.floor(template.deliberation?.maxTotalTokens ?? 6_000));
-    const maxWallTimeMs = Math.max(250, Math.floor(template.deliberation?.maxWallTimeMs ?? 35_000));
-    const inputUsdPerMillionTokens = template.deliberation?.inputUsdPerMillionTokens
-      ?? DELIBERATION_DEFAULT_INPUT_USD_PER_MILLION_TOKENS;
-    const outputUsdPerMillionTokens = template.deliberation?.outputUsdPerMillionTokens
-      ?? DELIBERATION_DEFAULT_OUTPUT_USD_PER_MILLION_TOKENS;
+    const result = await runDeliberation(llmProvider, prompt, {
+      episode: {
+        kind: 'maintenance_reflection',
+        mode: 'background_bounded',
+      },
+      correlation: buildReflectionDeliberationCorrelation(source, reflectionChannelId, processId),
+      stages: buildExperientialDeliberationStages(template),
+      caps: {
+        maxRounds: Math.max(1, Math.min(3, Math.floor(template.deliberation?.maxRounds ?? 3))),
+        maxTotalTokens: Math.max(256, Math.floor(template.deliberation?.maxTotalTokens ?? 6_000)),
+        maxWallTimeMs: Math.max(250, Math.floor(template.deliberation?.maxWallTimeMs ?? 35_000)),
+      },
+      cost: {
+        inputUsdPerMillionTokens: template.deliberation?.inputUsdPerMillionTokens
+          ?? DELIBERATION_DEFAULT_INPUT_USD_PER_MILLION_TOKENS,
+        outputUsdPerMillionTokens: template.deliberation?.outputUsdPerMillionTokens
+          ?? DELIBERATION_DEFAULT_OUTPUT_USD_PER_MILLION_TOKENS,
+      },
+    });
 
-    let totalInputTokens = 0;
-    let totalOutputTokens = 0;
-    let estimatedCostUsd = 0;
-    let completedRounds = 0;
-    let stopReason: ValuesDeliberationMetadata['stopReason'] = 'max_rounds';
-    let evidence = '';
-    let synthesis = '';
-    let finalReflection = '';
+    const stageOutput = (stageName: string): string =>
+      result.rounds.find(round => round.stage === stageName)?.synthesis ?? '';
+    const evidence = stageOutput('evidence');
+    const synthesis = stageOutput('synthesis');
+    const contradictionRaw = stageOutput('contradiction');
+
+    let finalReflection = synthesis || evidence;
     let metacognitiveFlags: ReflectionMetacognitiveFlag[] = [];
-
-    const runStage = async (
-      stage: ExperientialReflectionStage,
-      builder: () => { systemPrompt: string; messages: ContextMessage[]; purpose: CompletionPurpose },
-    ): Promise<string | null> => {
-      if (Date.now() - startedAt >= maxWallTimeMs) {
-        stopReason = 'time_cap';
-        return null;
-      }
-      if (completedRounds >= maxRounds) {
-        stopReason = 'max_rounds';
-        return null;
-      }
-      if (totalInputTokens + totalOutputTokens >= maxTotalTokens) {
-        stopReason = 'token_cap';
-        return null;
-      }
-
-      const stageStartedAt = Date.now();
-      const { systemPrompt, messages, purpose } = builder();
-      const response = await llmProvider.complete({
-        systemPrompt,
-        messages,
-        correlation: buildReflectionDeliberationCorrelation(
-          source,
-          reflectionChannelId,
-          processId,
-          `heartbeat.deliberation.${stage}`,
-        ),
-      }, purpose);
-      const content = response.content.trim();
-
-      totalInputTokens += response.inputTokens;
-      totalOutputTokens += response.outputTokens;
-      estimatedCostUsd += estimateDeliberationCostUsd(
-        response.inputTokens,
-        response.outputTokens,
-        inputUsdPerMillionTokens,
-        outputUsdPerMillionTokens,
-      );
-      completedRounds += 1;
-
-      const elapsed = Date.now() - startedAt;
-      if (elapsed >= maxWallTimeMs) {
-        stopReason = 'time_cap';
-      } else if (totalInputTokens + totalOutputTokens >= maxTotalTokens) {
-        stopReason = 'token_cap';
-      }
-
-      log.debug('Completed experiential reflection deliberation stage', {
-        templateId: template.id,
-        stage,
-        purpose,
-        durationMs: Date.now() - stageStartedAt,
-        inputTokens: response.inputTokens,
-        outputTokens: response.outputTokens,
-      });
-
-      return content;
-    };
-
-    const evidenceResult = await runStage(
-      'evidence',
-      () => buildExperientialEvidenceMessages(template, prompt),
-    );
-    if (evidenceResult) {
-      evidence = evidenceResult;
-      finalReflection = evidenceResult;
-    }
-
-    const synthesisResult = await runStage(
-      'synthesis',
-      () => buildExperientialSynthesisMessages(template, prompt, evidence || prompt),
-    );
-    if (synthesisResult) {
-      synthesis = synthesisResult;
-      finalReflection = synthesisResult;
-    }
-
-    const contradictionResult = await runStage(
-      'contradiction',
-      () => buildExperientialContradictionMessages(
-        template,
-        prompt,
-        evidence || prompt,
-        synthesis || finalReflection || evidence || prompt,
-      ),
-    );
-    if (contradictionResult) {
+    if (contradictionRaw) {
       const parsedContradiction = parseExperientialContradictionResponse(
-        contradictionResult,
-        synthesis || finalReflection || evidence || prompt,
+        contradictionRaw,
+        synthesis || evidence || prompt,
       );
       metacognitiveFlags = parsedContradiction.metacognitiveFlags;
       finalReflection = parsedContradiction.revisedReflection;
     }
 
-    const totalTokens = totalInputTokens + totalOutputTokens;
-    const maxRoundsReached = stopReason === 'max_rounds';
-    const maxWallTimeReached = stopReason === 'time_cap';
-    const maxTotalTokensReached = stopReason === 'token_cap' && totalTokens >= maxTotalTokens;
-    const maxTokensPerRoundReached = false;
-
     return {
       reflection: finalReflection.trim() || synthesis.trim() || evidence.trim() || prompt.trim(),
-      metadata: {
-        sessionId,
-        stopReason,
-        rounds: completedRounds,
-        totalInputTokens,
-        totalOutputTokens,
-        totalTokens,
-        estimatedCostUsd,
-        durationMs: Math.max(0, Date.now() - startedAt),
-        episode: {
-          id: sessionId,
-          kind: 'maintenance_reflection',
-          mode: 'background_bounded',
-          budget: {
-            maxRounds,
-            maxTotalTokens,
-            maxWallTimeMs,
-          },
-          exit: {
-            reason: stopReason,
-            exhaustedBudget:
-              maxRoundsReached || maxWallTimeReached || maxTotalTokensReached || maxTokensPerRoundReached,
-            maxRoundsReached,
-            maxTotalTokensReached,
-            maxWallTimeReached,
-            maxTokensPerRoundReached,
-            fatigueTapered: false,
-          },
-        },
-      },
+      metadata: toDeliberationMetadata(result),
       metacognitiveFlags,
     };
   };

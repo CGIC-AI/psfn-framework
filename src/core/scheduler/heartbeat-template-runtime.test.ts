@@ -271,7 +271,7 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
       });
       const snapshotRef = buildInternalStateSnapshotRef(internalState);
       const metacognitiveFlags = [{ flag: 'continuity', confidence: 0.72 }];
-      const capturedContexts: LLMContext[] = [];
+      const capturedCorrelations: Array<Record<string, unknown> | undefined> = [];
       const llmProvider: LLMProviderPort = {
         stream: vi.fn(async () => ({
           content: '',
@@ -281,8 +281,12 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
           outputTokens: 0,
           stopReason: 'stop',
         })),
-        complete: vi.fn(async (context, purpose) => {
-          capturedContexts.push(context);
+        complete: vi.fn(async (
+          _context: LLMContext,
+          purpose,
+          requestOptions?: { correlation?: Record<string, unknown> },
+        ) => {
+          capturedCorrelations.push(requestOptions?.correlation);
           const content = purpose === 'reasoning'
             ? 'Continuity stays central.'
             : 'Care keeps the tone steady.';
@@ -419,29 +423,21 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
         budget: { maxRounds: 3 },
         exit: { reason: 'max_rounds', maxRoundsReached: true },
       });
-      const evidenceContext = capturedContexts.find((context) => {
-        const correlation = context.correlation;
-        return (
-          correlation?.channelId === 'internal:reflection:weekly-review' &&
-          correlation.originStage === 'heartbeat.deliberation.evidence'
-        );
+      const evidenceCorrelation = capturedCorrelations.find((correlation) => (
+        correlation?.channelId === 'internal:reflection:weekly-review'
+        && correlation.originStage === 'heartbeat.deliberation.evidence'
+      ));
+      expect(evidenceCorrelation).toMatchObject({
+        callType: 'background',
+        originType: 'background',
+        channelId: 'internal:reflection:weekly-review',
+        originStage: 'heartbeat.deliberation.evidence',
       });
-      expect(evidenceContext).toMatchObject({
-        correlation: {
-          callType: 'background',
-          originType: 'background',
-          channelId: 'internal:reflection:weekly-review',
-          originStage: 'heartbeat.deliberation.evidence',
-        },
-      });
-      const contradictionContext = capturedContexts.find((context) => {
-        const correlation = context.correlation;
-        return correlation?.originStage === 'heartbeat.deliberation.contradiction';
-      });
-      expect(contradictionContext).toMatchObject({
-        correlation: {
-          originStage: 'heartbeat.deliberation.contradiction',
-        },
+      const contradictionCorrelation = capturedCorrelations.find(
+        (correlation) => correlation?.originStage === 'heartbeat.deliberation.contradiction',
+      );
+      expect(contradictionCorrelation).toMatchObject({
+        originStage: 'heartbeat.deliberation.contradiction',
       });
     } finally {
       reflectionJournalPrototype.listRecent = originalListRecent;
@@ -494,11 +490,15 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
         outputTokens: 0,
         stopReason: 'stop',
       })),
-      complete: vi.fn(async (context, purpose) => {
+      complete: vi.fn(async (
+        context: LLMContext,
+        purpose,
+        requestOptions?: { correlation?: { originStage?: string; channelId?: string } },
+      ) => {
         capturedPrompts.push(context.messages.map((message) => message.content).join('\n\n'));
         const index = capturedPrompts.length;
-        expect(context.correlation?.originStage).toBe(`heartbeat.deliberation.${index === 1 ? 'evidence' : index === 2 ? 'synthesis' : 'contradiction'}`);
-        expect(context.correlation?.channelId).toBe('internal:reflection:daily-review');
+        expect(requestOptions?.correlation?.originStage).toBe(`heartbeat.deliberation.${index === 1 ? 'evidence' : index === 2 ? 'synthesis' : 'contradiction'}`);
+        expect(requestOptions?.correlation?.channelId).toBe('internal:reflection:daily-review');
         if (index === 1) {
           expect(purpose).toBe('background');
           return {

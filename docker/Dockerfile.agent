@@ -32,6 +32,7 @@ FROM native-toolchain AS build
 
 COPY package*.json ./
 COPY admin-ui/package*.json ./admin-ui/
+COPY patches/ ./patches/
 RUN npm_config_nodedir=/usr/local npm ci
 
 COPY tsconfig.json tsup.config.ts ./
@@ -48,6 +49,7 @@ WORKDIR /app
 
 COPY package*.json ./
 COPY admin-ui/package*.json ./admin-ui/
+COPY patches/ ./patches/
 RUN npm_config_nodedir=/usr/local npm ci --omit=dev \
     && rm -rf /root/.npm /app/admin-ui/node_modules
 

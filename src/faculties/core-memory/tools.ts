@@ -19,9 +19,9 @@ import {
   createListConcernsTool,
 } from '../../core/intention/tools.js';
 import {
-  createValuesAddTool,
-  createValuesListTool,
-  createValuesUpdateTool,
+  executeValuesAddAction,
+  executeValuesListAction,
+  executeValuesUpdateAction,
   type ValuesListParams,
 } from '../values/tools.js';
 import type { ValuesJournalStore } from '../values/store.js';
@@ -335,15 +335,15 @@ export function createOrientTool(
 
       try {
         if (action === 'values_list') {
-          return createValuesListTool(requireValuesJournal(options.valuesJournal)).execute(
-            toolCallId,
+          return executeValuesListAction(
+            requireValuesJournal(options.valuesJournal),
             { limit: params.limit },
           );
         }
 
         if (action === 'values_add') {
-          return createValuesAddTool(requireValuesJournal(options.valuesJournal)).execute(
-            toolCallId,
+          return executeValuesAddAction(
+            requireValuesJournal(options.valuesJournal),
             {
               value: params.value ?? '',
               ...(params.context !== undefined ? { context: params.context } : {}),
@@ -352,8 +352,8 @@ export function createOrientTool(
         }
 
         if (action === 'values_update') {
-          return createValuesUpdateTool(requireValuesJournal(options.valuesJournal)).execute(
-            toolCallId,
+          return executeValuesUpdateAction(
+            requireValuesJournal(options.valuesJournal),
             {
               version: params.version ?? 0,
               value: params.value ?? '',

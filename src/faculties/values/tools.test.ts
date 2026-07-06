@@ -5,11 +5,7 @@ import { tmpdir } from 'node:os';
 import type { AgentToolResult } from '@mariozechner/pi-agent-core';
 import type { TextContent } from '@mariozechner/pi-ai';
 import { ValuesJournalStore } from './store.js';
-import {
-  createValuesAddTool,
-  createValuesListTool,
-  createValuesUpdateTool,
-} from './tools.js';
+import { createOrientTool } from '../core-memory/tools.js';
 
 function resultText(result: AgentToolResult<any>): string {
   return result.content
@@ -18,9 +14,24 @@ function resultText(result: AgentToolResult<any>): string {
     .join('');
 }
 
-describe('values tools', () => {
+describe('orient values actions', () => {
   let tempDir: string;
   let store: ValuesJournalStore;
+
+  function makeTool(): ReturnType<typeof createOrientTool> {
+    const unusedCoreMemoryStore = {
+      append: () => {
+        throw new Error('core-memory store must not be touched by values actions');
+      },
+      replace: () => {
+        throw new Error('core-memory store must not be touched by values actions');
+      },
+      rethink: () => {
+        throw new Error('core-memory store must not be touched by values actions');
+      },
+    };
+    return createOrientTool(unusedCoreMemoryStore, { valuesJournal: store });
+  }
 
   beforeEach(() => {
     tempDir = mkdtempSync(join(tmpdir(), 'values-tools-'));
@@ -32,8 +43,9 @@ describe('values tools', () => {
   });
 
   it('values_add appends a manual values journal entry', async () => {
-    const tool = createValuesAddTool(store);
+    const tool = makeTool();
     const result = await tool.execute('add-1', {
+      action: 'values_add',
       value: 'Protect trust continuity across sessions.',
       context: 'Manual correction after an off-tone response.',
     });
@@ -54,8 +66,9 @@ describe('values tools', () => {
   });
 
   it('values_add fails closed on blank value', async () => {
-    const tool = createValuesAddTool(store);
+    const tool = makeTool();
     const result = await tool.execute('add-blank', {
+      action: 'values_add',
       value: '   ',
     });
 
@@ -80,8 +93,8 @@ describe('values tools', () => {
       createdAt: '2026-03-01T01:00:00.000Z',
     });
 
-    const tool = createValuesListTool(store);
-    const limitedResult = await tool.execute('list-1', { limit: 1 });
+    const tool = makeTool();
+    const limitedResult = await tool.execute('list-1', { action: 'values_list', limit: 1 });
     const limitedPayload = JSON.parse(resultText(limitedResult)) as {
       limit: number;
       count: number;
@@ -91,20 +104,21 @@ describe('values tools', () => {
     expect(limitedPayload.count).toBe(1);
     expect(limitedPayload.entries[0]?.version).toBe(2);
 
-    const invalidResult = await tool.execute('list-invalid', { limit: 0 });
+    const invalidResult = await tool.execute('list-invalid', { action: 'values_list', limit: 0 });
     expect(invalidResult.details.isError).toBe(true);
     expect(resultText(invalidResult)).toContain('values_list failed');
   });
 
   it('values_update appends a revision entry for an existing version', async () => {
-    const addTool = createValuesAddTool(store);
-    await addTool.execute('seed-add', {
+    const tool = makeTool();
+    await tool.execute('seed-add', {
+      action: 'values_add',
       value: 'Speak directly when uncertain.',
       context: 'Initial value.',
     });
 
-    const updateTool = createValuesUpdateTool(store);
-    const result = await updateTool.execute('update-1', {
+    const result = await tool.execute('update-1', {
+      action: 'values_update',
       version: 1,
       value: 'Speak directly and cite uncertainty explicitly.',
       context: 'Refined wording after reflection.',
@@ -126,8 +140,9 @@ describe('values tools', () => {
   });
 
   it('values_update fails closed for unknown source version', async () => {
-    const updateTool = createValuesUpdateTool(store);
-    const result = await updateTool.execute('update-missing', {
+    const tool = makeTool();
+    const result = await tool.execute('update-missing', {
+      action: 'values_update',
       version: 99,
       value: 'Should not persist.',
     });

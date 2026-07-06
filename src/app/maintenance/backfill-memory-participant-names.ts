@@ -1,7 +1,6 @@
 #!/usr/bin/env tsx
 
 import '../../shared/utils/load-dotenv.js';
-import Database from 'better-sqlite3';
 import {
   createPostgresPool,
   ensurePostgresSchema,
@@ -9,7 +8,6 @@ import {
 import { POSTGRES_MEMORY_MIGRATIONS } from '../../persistence/postgres/migrations.js';
 import {
   repairPostgresMemoryParticipantNames,
-  repairSqliteMemoryParticipantNames,
   type MemoryParticipantNameRepairReport,
 } from '../../persistence/repair/memory-participant-name-repair.js';
 import { resolveCompanionNameFromConfig } from '../../core/identity/companion-runtime.js';
@@ -18,7 +16,7 @@ import { toErrorMessage } from '../../shared/utils/errors.js';
 import { hydrateSecretBearingConfig } from '../startup/support/bootstrap-helpers.js';
 import { applyGatewayTlsConfig } from '../../boundary/gateway/tls.js';
 
-type RepairBackend = 'postgres' | 'sqlite';
+type RepairBackend = 'postgres';
 
 interface CliOptions {
   apply: boolean;
@@ -26,7 +24,6 @@ interface CliOptions {
   json: boolean;
   showHelp: boolean;
   backend?: RepairBackend;
-  sqlitePath?: string;
   postgresUrl?: string;
   userName?: string;
   companionName?: string;
@@ -41,10 +38,9 @@ function printUsage(): void {
   console.log('');
   console.log('Options:');
   console.log('  --apply                  Update matching memories. Without this, only report planned changes.');
-  console.log('  --backend <postgres|sqlite>');
+  console.log('  --backend <postgres>');
   console.log('                           Override configured persistence backend.');
   console.log('  --postgres-url <url>     Override configured PostgreSQL URL.');
-  console.log('  --sqlite-path <path>     Override configured SQLite database path.');
   console.log('  --user-name <name>       Resolved human participant name.');
   console.log('  --companion-name <name>  Resolved companion participant name.');
   console.log('  --limit <n>              Max SQL-prefiltered candidate memories to scan (default: 500).');
@@ -68,8 +64,8 @@ function parseLimit(value: string): number {
 }
 
 function parseBackend(value: string): RepairBackend {
-  if (value === 'postgres' || value === 'sqlite') return value;
-  throw new Error('--backend must be postgres or sqlite');
+  if (value === 'postgres') return value;
+  throw new Error('--backend must be postgres');
 }
 
 function parseArgs(argv: string[]): CliOptions {
@@ -100,11 +96,6 @@ function parseArgs(argv: string[]): CliOptions {
     }
     if (arg === '--backend') {
       options.backend = parseBackend(requireNext(argv, i, arg));
-      i += 1;
-      continue;
-    }
-    if (arg === '--sqlite-path') {
-      options.sqlitePath = requireNext(argv, i, arg);
       i += 1;
       continue;
     }
@@ -205,29 +196,6 @@ async function runPostgresRepair(options: CliOptions, reportOptions: {
   }
 }
 
-async function runSqliteRepair(options: CliOptions, reportOptions: {
-  sqlitePath: string;
-  userName?: string;
-  companionName?: string;
-}): Promise<MemoryParticipantNameRepairReport> {
-  const sqlitePath = reportOptions.sqlitePath.trim();
-  if (!sqlitePath) {
-    throw new Error('SQLite participant-name repair requires --sqlite-path or config.databasePath');
-  }
-  const db = new Database(sqlitePath);
-  try {
-    return await repairSqliteMemoryParticipantNames(db, {
-      canonicalContactName: reportOptions.userName,
-      companionName: reportOptions.companionName,
-      dryRun: !options.apply,
-      includeArchived: options.includeArchived,
-      limit: options.limit,
-    });
-  } finally {
-    db.close();
-  }
-}
-
 async function main(): Promise<void> {
   const options = parseArgs(process.argv.slice(2));
   if (options.showHelp) {
@@ -242,21 +210,14 @@ async function main(): Promise<void> {
   });
   await hydrateSecretBearingConfig(config, { env: process.env });
 
-  const backend = options.backend ?? (config.persistenceBackend === 'postgres' ? 'postgres' : 'sqlite');
   const companionName = options.companionName ?? resolveConfiguredCompanionName(config);
   const userName = options.userName;
 
-  const report = backend === 'postgres'
-    ? await runPostgresRepair(options, {
-      postgresUrl: options.postgresUrl ?? config.postgresDatabaseUrl ?? '',
-      userName,
-      companionName,
-    })
-    : await runSqliteRepair(options, {
-      sqlitePath: options.sqlitePath ?? config.databasePath,
-      userName,
-      companionName,
-    });
+  const report = await runPostgresRepair(options, {
+    postgresUrl: options.postgresUrl ?? config.postgresDatabaseUrl ?? '',
+    userName,
+    companionName,
+  });
 
   if (options.json) {
     console.log(JSON.stringify(report, null, 2));

@@ -73,18 +73,6 @@
       "pattern": "identity-proper-name"
     },
     {
-      "path": "scripts/import-voxta-l0.ts",
-      "contains": "PSFN",
-      "reason": "CLI help names the target PSFN session export format.",
-      "pattern": "identity-proper-name"
-    },
-    {
-      "path": "scripts/import-voxta-l0.ts",
-      "contains": "psfn",
-      "reason": "Default importer DB path uses the project-owned psfn database name.",
-      "pattern": "identity-legacy-slug"
-    },
-    {
       "path": "scripts/ops/continuity-watchdog-healthcheck.mjs",
       "contains": "psfn",
       "reason": "Watchdog state file uses the project slug in its filename.",
@@ -391,12 +379,6 @@
       "pattern": "identity-legacy-slug"
     },
     {
-      "path": "src/persistence/importers/profile-attribution.ts",
-      "contains": "psfn.db",
-      "reason": "Profile attribution importer defaults to the project-owned database filename.",
-      "pattern": "identity-legacy-slug"
-    },
-    {
       "path": "src/persistence/layout.ts",
       "contains": "PSFN runtime layout mode",
       "reason": "Layout errors refer to the project runtime mode by name.",
@@ -496,12 +478,6 @@
       "path": "src/app/e2e/runtime-harness.ts",
       "contains": "postgresql://psfn:psfn-local@127.0.0.1:5432/psfn_e2e",
       "reason": "E2E runtime harness default database URL uses a project-scoped local test database identity.",
-      "pattern": "identity-legacy-slug"
-    },
-    {
-      "path": "src/app/maintenance/sqlite-to-postgres-memory-migration.ts",
-      "contains": "applicationName: 'psfn-sqlite-memory-migration'",
-      "reason": "SQLite-to-Postgres migration uses a project-scoped PostgreSQL application_name label.",
       "pattern": "identity-legacy-slug"
     },
     {

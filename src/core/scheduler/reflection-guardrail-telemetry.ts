@@ -1,3 +1,5 @@
+import { clipSnippet, normalizeWhitespace } from '../../shared/utils/snippets.js';
+
 export const REFLECTION_GUARDRAIL_RECENT_CHAT_MAX_AGE_MS = 6 * 60 * 60 * 1000;
 const REFLECTION_CADENCE_DRIFT_RATIO_THRESHOLD = 4;
 const CLAIM_SNIPPET_MAX_CHARS = 180;
@@ -103,7 +105,7 @@ export function detectReflectionGuardrailWarnings(
       severity: 'warning',
       message: 'Reflection asserted silence despite recent live-chat evidence.',
       details: {
-        claimSnippets: staleClaimMatches.map(clipSnippet),
+        claimSnippets: staleClaimMatches.map(match => clipSnippet(match, CLAIM_SNIPPET_MAX_CHARS)),
         recentMessageCount: input.recentMessageCount,
         latestLiveActivityAgeMs: Math.floor(input.latestLiveActivityAgeMs ?? 0),
         ...(input.primarySessionId ? { primarySessionId: input.primarySessionId } : {}),
@@ -173,16 +175,4 @@ function findInactivityClaimMatches(text: string): string[] {
   }
 
   return [...matches];
-}
-
-function clipSnippet(text: string): string {
-  const normalized = normalizeWhitespace(text);
-  if (normalized.length <= CLAIM_SNIPPET_MAX_CHARS) {
-    return normalized;
-  }
-  return `${normalized.slice(0, CLAIM_SNIPPET_MAX_CHARS - 3)}...`;
-}
-
-function normalizeWhitespace(text: string): string {
-  return text.replace(/\s+/g, ' ').trim();
 }

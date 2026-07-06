@@ -14,6 +14,7 @@ import {
   evaluateDeterministicGate,
   type DeterministicGateDefinition,
 } from '../../../shared/gating/deterministic-gate.js';
+import { toIsoInstant } from '../../../shared/utils/timing.js';
 
 const log = createComponentLogger('DreamMeaningPass');
 
@@ -70,10 +71,6 @@ interface MeaningContribution {
   done: boolean;
   /** Entries dropped during validation, with the reason each was dropped. */
   rejections: string[];
-}
-
-function toIsoInstant(ms: number): string {
-  return new Date(ms).toISOString();
 }
 
 function buildOpeningPrompt(episodes: readonly Episode[]): string {

@@ -7,6 +7,7 @@ import {
 import type { TurnRetrievalTelemetryRecord } from './observability.js';
 import type { TurnMemorySnapshot, TurnSnapshot } from './snapshot.js';
 import { getPromptPlanBlockText } from '../agent/substrate-agent/turn-execution/prompt-plan.js';
+import { clipSnippet, normalizeWhitespace } from '../../shared/utils/snippets.js';
 
 const REFLECTION_PROVENANCE_PREFIXES = ['reflection:', 'internal:reflection:', 'values:'] as const;
 const RECENT_LIVE_ACTIVITY_MAX_AGE_MS = 6 * 60 * 60 * 1000;
@@ -332,7 +333,7 @@ function collectValuesLayerClaimMatches(renderedDynamicSuffix: string): ClaimMat
   const matches = findInactivityClaimMatches(normalized);
   return matches.map(match => ({
     source: 'values_layer' as const,
-    snippet: clipSnippet(match),
+    snippet: clipSnippet(match, CLAIM_SNIPPET_MAX_CHARS),
   }));
 }
 
@@ -352,7 +353,7 @@ function collectReflectionMemoryClaimMatches(
 
   return candidates.flatMap(memory => findInactivityClaimMatches(memory.text).map(match => ({
     source: 'reflection_memory' as const,
-    snippet: clipSnippet(match),
+    snippet: clipSnippet(match, CLAIM_SNIPPET_MAX_CHARS),
   })));
 }
 
@@ -390,18 +391,6 @@ function findInactivityClaimMatches(text: string): string[] {
     }
   }
   return [...matches];
-}
-
-function clipSnippet(text: string): string {
-  const normalized = normalizeWhitespace(text);
-  if (normalized.length <= CLAIM_SNIPPET_MAX_CHARS) {
-    return normalized;
-  }
-  return `${normalized.slice(0, CLAIM_SNIPPET_MAX_CHARS - 3)}...`;
-}
-
-function normalizeWhitespace(text: string): string {
-  return text.replace(/\s+/g, ' ').trim();
 }
 
 function readCountRecord(value: unknown): Record<string, number> | null {

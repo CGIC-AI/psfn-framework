@@ -13,6 +13,7 @@ import { completeSessionSummary } from './manager/compaction-service.js';
 import { getRequestContext } from '../../primitives/llm/request-context.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
+import { clipSnippet } from '../../shared/utils/snippets.js';
 
 const log = createComponentLogger('SessionSearch');
 
@@ -138,9 +139,7 @@ export function truncateSessionSearchSnippet(
   content: string,
   maxChars = SESSION_SEARCH_MAX_SNIPPET_CHARS,
 ): string {
-  const normalized = content.replace(/\s+/g, ' ').trim();
-  if (normalized.length <= maxChars) return normalized;
-  return `${normalized.slice(0, maxChars - 3)}...`;
+  return clipSnippet(content, maxChars);
 }
 
 function fallbackSessionSearchSummary(query: string, hits: SessionSearchHitResult[]): string {

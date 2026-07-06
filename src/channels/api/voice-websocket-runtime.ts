@@ -44,6 +44,7 @@ import type {
   VoiceWebSocketRuntime,
   VoiceWebSocketRuntimeContext,
 } from './voice-websocket.js';
+import { clampHttpHeader } from './http-policy.js';
 import type { ApiAuthPrincipal } from '../backplane/http/auth.js';
 
 const log = createComponentLogger('ApiVoiceRuntime');
@@ -281,13 +282,6 @@ function singleHeader(value: string | string[] | undefined): string | undefined 
   return value;
 }
 
-function clampHeader(value: string | undefined, maxLength: number): string | undefined {
-  if (!value) return undefined;
-  const trimmed = value.trim();
-  if (!trimmed) return undefined;
-  return trimmed.length > maxLength ? trimmed.slice(0, maxLength) : trimmed;
-}
-
 function parseRequestUrl(request: IncomingMessage): URL | null {
   try {
     return new URL(request.url ?? '/', `http://${request.headers.host ?? 'localhost'}`);
@@ -301,7 +295,7 @@ function readQueryParam(request: IncomingMessage, names: string[]): string | und
   if (!url) return undefined;
 
   for (const name of names) {
-    const value = clampHeader(url.searchParams.get(name) ?? undefined, 1024);
+    const value = clampHttpHeader(url.searchParams.get(name) ?? undefined, 1024);
     if (value) return value;
   }
 
@@ -314,9 +308,9 @@ function readHeaderOrQuery(
   queryNames: string[],
   maxLength: number,
 ): string | undefined {
-  const headerValue = clampHeader(singleHeader(request.headers[headerName]), maxLength);
+  const headerValue = clampHttpHeader(singleHeader(request.headers[headerName]), maxLength);
   if (headerValue) return headerValue;
-  return clampHeader(readQueryParam(request, queryNames), maxLength);
+  return clampHttpHeader(readQueryParam(request, queryNames), maxLength);
 }
 
 function deriveActor(principal: ApiAuthPrincipal): VoiceActor {

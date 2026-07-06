@@ -3,6 +3,7 @@ import type { AgentTool, AgentToolResult } from '@mariozechner/pi-agent-core';
 import type { JournalOperations } from './ops.js';
 import { textResult, textResultWithError } from '../../../core/tools/results.js';
 import { toErrorMessage } from '../../../shared/utils/errors.js';
+import { truncateToolOutputContent } from '../../../shared/utils/tool-output.js';
 
 const MAX_READ_CHARS = 12_000;
 const JOURNAL_ACTIONS = ['list', 'read', 'write', 'append', 'search'] as const;
@@ -49,12 +50,6 @@ function slugifyTitle(title: string): string {
     throw new Error('title must contain at least one letter or number');
   }
   return slug;
-}
-
-function truncateContent(content: string): string {
-  return content.length > MAX_READ_CHARS
-    ? `${content.slice(0, MAX_READ_CHARS)}\n... (truncated)`
-    : content;
 }
 
 export function createJournalTool(ops: JournalOperations): AgentTool<any> {
@@ -113,7 +108,7 @@ export function createJournalTool(ops: JournalOperations): AgentTool<any> {
           }
           case 'read': {
             const result = await ops.read(resolveNotePath(params));
-            return textResult(`=== ${result.path} ===\n${truncateContent(result.content)}`);
+            return textResult(`=== ${result.path} ===\n${truncateToolOutputContent(result.content, MAX_READ_CHARS)}`);
           }
           case 'write': {
             const result = await ops.write(resolveNotePath(params), requireNonEmpty(params.content, 'content'));

@@ -191,6 +191,7 @@ describe('buildSelfDiagnosisReport', () => {
       ranAt: 1_699_990_000_000,
       results: [
         { toolName: 'self_status', action: 'snapshot', ok: true },
+        { toolName: 'response_control', probeKind: 'schema_only', ok: true },
         { toolName: 'memory', action: 'search', ok: false, classification: 'policy_blocked', error: 'denied' },
       ],
     }));
@@ -251,7 +252,7 @@ describe('buildSelfDiagnosisReport', () => {
     expect(policy.shellExec).toEqual({ value: false, source: 'env' });
 
     const conformance = report.toolConformance as any;
-    expect(conformance).toMatchObject({ status: 'available', recorded: true, total: 2, passCount: 1, failCount: 1 });
+    expect(conformance).toMatchObject({ status: 'available', recorded: true, total: 3, passCount: 2, failCount: 1 });
     expect(conformance.failing[0]).toMatchObject({ toolName: 'memory', action: 'search', classification: 'policy_blocked' });
   });
 

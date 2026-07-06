@@ -464,7 +464,8 @@ function resolvePolicyFlags(deps: SelfDiagnosisDeps): Record<string, unknown> {
 // ── Section 7: tool-surface conformance ──────────────────────────────────────
 interface ConformanceResultEntry {
   toolName: string;
-  action: string;
+  probeKind?: string;
+  action?: string;
   ok: boolean;
   classification?: string;
   error?: string;
@@ -491,8 +492,14 @@ function validateConformance(raw: unknown): { ok: true; ranAt: number; results: 
       return { ok: false, reason: `results[${index}] is not an object` };
     }
     const item = entry as Record<string, unknown>;
-    if (typeof item.toolName !== 'string' || typeof item.action !== 'string' || typeof item.ok !== 'boolean') {
-      return { ok: false, reason: `results[${index}] is missing required toolName/action/ok fields` };
+    if (typeof item.toolName !== 'string' || typeof item.ok !== 'boolean') {
+      return { ok: false, reason: `results[${index}] is missing required toolName/ok fields` };
+    }
+    if (item.action !== undefined && typeof item.action !== 'string') {
+      return { ok: false, reason: `results[${index}].action is not a string` };
+    }
+    if (item.probeKind !== undefined && typeof item.probeKind !== 'string') {
+      return { ok: false, reason: `results[${index}].probeKind is not a string` };
     }
     if (item.classification !== undefined && typeof item.classification !== 'string') {
       return { ok: false, reason: `results[${index}].classification is not a string` };
@@ -502,7 +509,8 @@ function validateConformance(raw: unknown): { ok: true; ranAt: number; results: 
     }
     results.push({
       toolName: item.toolName,
-      action: item.action,
+      ...(item.probeKind !== undefined ? { probeKind: item.probeKind } : {}),
+      ...(item.action !== undefined ? { action: item.action } : {}),
       ok: item.ok,
       ...(item.classification !== undefined ? { classification: item.classification } : {}),
       ...(item.error !== undefined ? { error: item.error } : {}),

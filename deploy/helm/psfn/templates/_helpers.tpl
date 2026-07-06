@@ -352,6 +352,10 @@ group: cert-manager.io
 - name: BEADS_TOOLS_ENABLED
   value: {{ .Values.beads.toolsEnabled | quote }}
 {{- end }}
+{{- /* bd's embedded dolt needs a writable global config root; $HOME resolves
+       under the read-only /app image. Harmless when beads is unused. */}}
+- name: DOLT_ROOT_PATH
+  value: {{ printf "%s/.dolt" .Values.runtime.workspacePath | quote }}
 {{- if .Values.beads.allowActions }}
 - name: BEADS_ALLOW_ACTIONS
   value: {{ join "," .Values.beads.allowActions | quote }}

@@ -1158,6 +1158,43 @@ export class LLMClient {
     });
   }
 
+  /**
+   * gu8m diagnostics: when a streamed response contains tool calls with empty
+   * arguments, emit a structured, provenance-classified warning so incidents are
+   * attributable from logs alone (no live debugger required). Distinguishes:
+   *  - provider_emitted_empty: the model called the tool with no arguments at all
+   *    (no argument fragments arrived anywhere in the stream).
+   *  - stream_parse_dropped: argument fragments DID arrive but a tool call still
+   *    ended empty — the accumulator lost them (the pre-patch failure mode). This
+   *    should not fire once the pi-ai index-routing patch is applied; keeping the
+   *    classifier lets us confirm the fix holds and catch any regression.
+   */
+  private logEmptyToolArgumentProvenance(
+    toolCalls: readonly ToolCall[],
+    argumentFragmentBytes: number,
+    candidate: RoutingCandidate,
+    correlation: ResolvedCorrelationMetadata | undefined,
+  ): void {
+    for (const toolCall of toolCalls) {
+      const provenance = classifyToolArgumentProvenance({
+        args: toolCall.input,
+        argumentFragmentBytes,
+      });
+      // Non-empty args are a genuine schema rejection if they fail downstream — not an
+      // emptiness/loss incident — so the gateway does not warn on them here.
+      if (provenance === 'validation_rejected') continue;
+      log.warn('Tool call arrived with empty arguments', {
+        provenance,
+        toolName: toolCall.name,
+        toolCallId: toolCall.id,
+        argumentFragmentBytes,
+        provider: candidate.provider,
+        model: candidate.model,
+        ...(correlation ? toDiagnosticCorrelationFields(correlation) : {}),
+      });
+    }
+  }
+
   async stream(context: LLMContext, callbacks?: StreamCallbacks): Promise<LLMResponse> {
     const piContext = this.buildPiContext(context);
     const estimatedInputTokens = this.resolveEstimatedBudgetInputTokens(piContext);
@@ -1211,6 +1248,12 @@ export class LLMClient {
             let emittedData = false;
             let emittedTextLength = 0;
             let sawTextDelta = false;
+            // gu8m: total raw tool-argument-fragment bytes observed across the whole
+            // stream. Lets us classify empty final tool arguments as provider_emitted_empty
+            // (no fragments ever arrived) vs stream_parse_dropped (fragments arrived but the
+            // accumulator lost them) — response-level, since the pre-patch bug orphaned
+            // fragments onto a *different* content block than the named call.
+            let toolArgumentFragmentBytes = 0;
 
             try {
               for await (const event of eventStream) {
@@ -1238,6 +1281,14 @@ export class LLMClient {
                     emittedData = true;
                     reasoning += event.delta;
                     break;
+
+                  case 'toolcall_delta': {
+                    const fragment = (event as { delta?: unknown }).delta;
+                    if (typeof fragment === 'string') {
+                      toolArgumentFragmentBytes += fragment.length;
+                    }
+                    break;
+                  }
 
                   case 'toolcall_end':
                     if (firstTokenAtMs === undefined) firstTokenAtMs = Date.now();
@@ -1312,6 +1363,12 @@ export class LLMClient {
 
             if (response) {
               assertUsableProviderResponse(response, candidateTarget);
+              this.logEmptyToolArgumentProvenance(
+                response.toolCalls,
+                toolArgumentFragmentBytes,
+                candidateTarget,
+                correlation,
+              );
               return response;
             }
 
@@ -1835,6 +1892,42 @@ function normalizeSharedRouteKey(value: string | null | undefined): string {
   } catch {
     return normalized.toLowerCase();
   }
+}
+
+/**
+ * Provenance of a tool call's arguments at the point it is diagnosed (empty-args
+ * validation failure, or gateway-side stream inspection). See gu8m.
+ *  - provider_emitted_empty: args empty AND no argument-fragment bytes were streamed
+ *    (the model genuinely called the tool with no arguments).
+ *  - stream_parse_dropped: args empty BUT argument-fragment bytes were streamed
+ *    (fragments were lost during accumulation — the pre-patch failure mode).
+ *  - validation_rejected: args are non-empty (any failure is a real schema mismatch,
+ *    not lost/absent arguments).
+ */
+export type ToolArgumentProvenance =
+  | 'provider_emitted_empty'
+  | 'stream_parse_dropped'
+  | 'validation_rejected';
+
+export function classifyToolArgumentProvenance(input: {
+  args: Record<string, unknown> | undefined | null;
+  argumentFragmentBytes: number;
+}): ToolArgumentProvenance {
+  const isEmpty = !input.args || Object.keys(input.args).length === 0;
+  if (!isEmpty) {
+    return 'validation_rejected';
+  }
+  return input.argumentFragmentBytes > 0 ? 'stream_parse_dropped' : 'provider_emitted_empty';
+}
+
+function toDiagnosticCorrelationFields(
+  correlation: ResolvedCorrelationMetadata,
+): Record<string, string> {
+  const fields: Record<string, string> = {};
+  if (correlation.requestId) fields.requestId = correlation.requestId;
+  if (correlation.turnId) fields.turnId = correlation.turnId;
+  if (correlation.channelId) fields.channelId = correlation.channelId;
+  return fields;
 }
 
 function extractToolCallsFromContentBlocks(blocks?: unknown[]): ToolCall[] {

@@ -167,3 +167,40 @@ Quick diagnostics for "she did not reply":
    for what actually left the system.
 4. `model_usage_events` by `turn_id`: step count per turn. Multi-step turns
    with small incremental input tokens indicate follow-up continuations.
+
+## Streamed tool-call argument accumulation (gu8m)
+
+Symptom: first-party required-action tools (`memory`, `orient`, `journal`,
+`scratchpad`, `toolset`, `notify`, `media`, `subagent`, `web`) intermittently
+executed with empty arguments — tools with a required `action` failed schema
+validation (`must have required property 'action'`), tools with a defaulted
+action silently ran as `list`/`status`. Every affected tool call recorded
+`"arguments": null` at turn-record time (args lost *before* validation).
+
+Root cause was in the vendored provider's streaming accumulator
+(`@mariozechner/pi-ai` `openai-completions.js`, api `openai-completions`, used
+by BOTH OpenRouter-direct and the LiteLLM proxy). It routed streamed tool-call
+argument fragments by "whichever content block is current" and the fragment's
+`id`, ignoring the OpenAI wire `index`. Models that interleave reasoning deltas
+*between* a tool call's name chunk and its argument fragments (z-ai/glm-5.2 with
+interleaved thinking) displaced `currentBlock` to a thinking block; the next
+(id-less) argument fragment then opened a fresh blank tool block, orphaning the
+real arguments while the named call was finalized with `{}`.
+
+Fix (`patches/@mariozechner+pi-ai+0.62.0.patch`, applied on install via
+patch-package): accumulate tool-call fragments keyed by the wire `index`, keep
+tool blocks open across interleaved reasoning/text, and finalize them once the
+stream drains. `pi-ai` is pinned to `0.62.0` so the version-specific patch always
+applies — do not loosen it to a caret range.
+
+Diagnostics: the gateway (`LLMClient.stream`) counts streamed tool-argument
+fragment bytes and, when a tool call still arrives with empty arguments, emits a
+`Tool call arrived with empty arguments` WARN classified by provenance
+(`classifyToolArgumentProvenance`):
+
+- `provider_emitted_empty` — empty args, zero fragment bytes streamed (the model
+  genuinely called with no arguments).
+- `stream_parse_dropped` — empty args but fragment bytes *were* streamed (the
+  pre-patch loss mode; must not recur once the patch is applied).
+- `validation_rejected` — args were non-empty (any downstream failure is a real
+  schema mismatch, not lost/absent arguments).

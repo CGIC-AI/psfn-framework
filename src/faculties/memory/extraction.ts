@@ -54,6 +54,7 @@ import { refreshContactProfile as runProfileRefresh } from './extraction/profile
 import { persistEmotionalStateFromExtraction } from './extraction/emotional.js';
 import { resolveMentionOnlyContactForFact } from './extraction/mention-only-contacts.js';
 import {
+  advanceExtractionWatermarkForCoverage,
   emitExtractionEnd as emitExtractionEndEvent,
   emitExtractionStart as emitExtractionStartEvent,
   evaluateExtractionTrigger,
@@ -208,7 +209,11 @@ export class MemoryExtractor {
     }
 
     const orderedEntries = [...recoveredEntries].sort((left, right) => left.id - right.id);
+    const reusedInFlight = this.hasInFlightExtraction(channelId);
     await this.trackExtraction(channelId, 'crash_recovery', canonicalContactId, orderedEntries);
+    if (!reusedInFlight) {
+      this.advanceIntervalWatermarkAfterCoverage(channelId, 'crash_recovery', orderedEntries);
+    }
   }
 
   async queueCompactionExtraction(
@@ -223,7 +228,11 @@ export class MemoryExtractor {
     }
 
     const orderedEntries = [...compactedEntries].sort((left, right) => left.id - right.id);
+    const reusedInFlight = this.hasInFlightExtraction(channelId);
     await this.trackExtraction(channelId, 'pre_compaction', canonicalContactId, orderedEntries);
+    if (!reusedInFlight) {
+      this.advanceIntervalWatermarkAfterCoverage(channelId, 'pre_compaction', orderedEntries);
+    }
   }
 
   async maybeExtract(channelId: string, canonicalContactId?: string, turnId?: TurnID): Promise<void> {
@@ -533,6 +542,51 @@ export class MemoryExtractor {
         ? { emitConcernCandidates: this.emitConcernCandidates }
         : {}),
     });
+  }
+
+  private hasInFlightExtraction(channelId: string): boolean {
+    return this.inFlightByChannel.has(this.resolveExtractionLogicalSessionId(channelId));
+  }
+
+  /**
+   * Advances the interval watermark after an out-of-band extraction
+   * (pre_compaction / crash_recovery) successfully consumed a batch, so the
+   * next interval trigger does not re-send the same messages
+   * (psfn-framework-xcw8). Callers must only invoke this after the awaited
+   * extraction resolved and only when the batch was actually consumed by this
+   * run (not coalesced into an unrelated in-flight run) — on failure the
+   * watermark stays put so no content is skipped without extraction.
+   */
+  private advanceIntervalWatermarkAfterCoverage(
+    channelId: string,
+    triggerReason: ExtractionTriggerReason,
+    consumedEntries: SessionEntry[],
+  ): void {
+    const logicalSessionId = this.resolveExtractionLogicalSessionId(channelId);
+    if (!this.isExtractionSessionCurrent(channelId, logicalSessionId)) {
+      log.debug('Skipping interval watermark advance for stale extraction session', {
+        channelId,
+        logicalSessionId,
+        triggerReason,
+      });
+      return;
+    }
+
+    const advance = advanceExtractionWatermarkForCoverage(
+      channelId,
+      this.sessionManager,
+      consumedEntries,
+    );
+    if (advance && this.isTelemetryEnabled()) {
+      log.debug('Advanced extraction interval watermark after out-of-band extraction', {
+        channelId,
+        triggerReason,
+        previousCount: advance.previousCount,
+        nextCount: advance.nextCount,
+        coveredUpToMessageId: advance.coveredUpToMessageId,
+        consumedEntryCount: consumedEntries.length,
+      });
+    }
   }
 
   private shouldUseCompositionalExtraction(channelId: string): boolean {

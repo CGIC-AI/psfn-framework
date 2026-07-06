@@ -7,6 +7,7 @@ import {
   type EpisodeArcKind,
 } from '../../../shared/contracts/episodic-memory.js';
 import { resolveKnownEpisodeId } from './episode-ids.js';
+import { runEpisodicJudgment } from './judgment-runner.js';
 import type { EpisodicStorePort } from './store.js';
 
 const log = createComponentLogger('ArcFormation');
@@ -389,41 +390,37 @@ export class EpisodeArcWeaver {
       'Return the arcs JSON only.',
     ].join('\n');
 
-    try {
-      // E6.1: soft persona framing precedes the strict task instructions and JSON schema.
-      const systemPrompt = this.personaPreamble
-        ? this.personaPreamble.prepend('arc_formation', ARC_JUDGMENT_SYSTEM_PROMPT)
-        : ARC_JUDGMENT_SYSTEM_PROMPT;
-      const response = await this.llmProvider.complete(
-        {
-          systemPrompt,
-          messages: [{ role: 'user', content: requestPrompt }],
-          correlation: {
-            requestId: `arc-formation:${input.sessionId}:${String(this.now().getTime())}`,
-            channelId: input.sessionId,
-            callType: 'memory',
-            purpose: 'memory.sleeptime.plan',
-            originType: 'memory',
-            originStage: 'memory.sleeptime.arcs',
-          },
-        },
-        'memory',
-      );
-      return parseProposedArcs(response.content, new Set(episodes.map(episode => episode.id)));
-    } catch (error) {
-      const reason = error instanceof Error ? error.message : String(error);
-      log.warn('Arc judgment failed; no arcs written this pass', {
-        sessionId: input.sessionId,
-        error: reason,
-      });
-      this.emitEvent({
-        sessionId: input.sessionId,
-        outcome: 'judgment_failed',
-        reason,
-        timestamp: this.now().getTime(),
-      });
-      return { proposals: [], rejectedProposals: [] };
-    }
+    // E6.1: soft persona framing precedes the strict task instructions and JSON schema.
+    return runEpisodicJudgment({
+      llmProvider: this.llmProvider,
+      personaPreamble: this.personaPreamble,
+      personaSubsystem: 'arc_formation',
+      systemPrompt: ARC_JUDGMENT_SYSTEM_PROMPT,
+      requestPrompt,
+      correlation: {
+        requestId: `arc-formation:${input.sessionId}:${String(this.now().getTime())}`,
+        channelId: input.sessionId,
+        callType: 'memory',
+        purpose: 'memory.sleeptime.plan',
+        originType: 'memory',
+        originStage: 'memory.sleeptime.arcs',
+      },
+      parse: content => parseProposedArcs(content, new Set(episodes.map(episode => episode.id))),
+      onError: (error) => {
+        const reason = error instanceof Error ? error.message : String(error);
+        log.warn('Arc judgment failed; no arcs written this pass', {
+          sessionId: input.sessionId,
+          error: reason,
+        });
+        this.emitEvent({
+          sessionId: input.sessionId,
+          outcome: 'judgment_failed',
+          reason,
+          timestamp: this.now().getTime(),
+        });
+        return { proposals: [], rejectedProposals: [] };
+      },
+    });
   }
 
   private emitEvent(event: ArcFormationOutcomeEvent): void {

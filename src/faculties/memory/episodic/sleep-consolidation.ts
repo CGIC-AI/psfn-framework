@@ -15,6 +15,7 @@ import {
   evaluateDeterministicGate,
   type DeterministicGateDefinition,
 } from '../../../shared/gating/deterministic-gate.js';
+import { runEpisodicJudgment } from './judgment-runner.js';
 import type {
   EpisodeCreateInput,
   EpisodeUpdateInput,
@@ -1032,25 +1033,22 @@ export class SleepCycleEpisodeConsolidator {
     ].join('\n');
 
     // E6.1: soft persona framing precedes the strict task instructions and JSON schema.
-    const groupingSystemPrompt = this.personaPreamble
-      ? this.personaPreamble.prepend('sleep_thematic_grouping', THEMATIC_GROUPING_SYSTEM_PROMPT)
-      : THEMATIC_GROUPING_SYSTEM_PROMPT;
-    const response = await this.llmProvider.complete(
-      {
-        systemPrompt: groupingSystemPrompt,
-        messages: [{ role: 'user', content: requestPrompt }],
-        correlation: {
-          requestId: `sleep-consolidation:group:${input.sessionId}:${cluster[0].id}`,
-          channelId: cluster[0].channelId ?? input.sessionId,
-          callType: 'memory',
-          purpose: 'memory.sleeptime.plan',
-          originType: 'memory',
-          originStage: 'memory.sleeptime.consolidate',
-        },
+    return runEpisodicJudgment({
+      llmProvider: this.llmProvider,
+      personaPreamble: this.personaPreamble,
+      personaSubsystem: 'sleep_thematic_grouping',
+      systemPrompt: THEMATIC_GROUPING_SYSTEM_PROMPT,
+      requestPrompt,
+      correlation: {
+        requestId: `sleep-consolidation:group:${input.sessionId}:${cluster[0].id}`,
+        channelId: cluster[0].channelId ?? input.sessionId,
+        callType: 'memory',
+        purpose: 'memory.sleeptime.plan',
+        originType: 'memory',
+        originStage: 'memory.sleeptime.consolidate',
       },
-      'memory',
-    );
-    return parseThematicGrouping(response.content, cluster.map(episode => episode.id));
+      parse: content => parseThematicGrouping(content, cluster.map(episode => episode.id)),
+    });
   }
 
   private async hasActiveClaims(episodeId: string): Promise<boolean> {
@@ -1085,32 +1083,28 @@ export class SleepCycleEpisodeConsolidator {
       'Return the refinement JSON only.',
     ].join('\n');
 
-    try {
-      const refinementSystemPrompt = this.personaPreamble
-        ? this.personaPreamble.prepend('sleep_refinement', REFINEMENT_SYSTEM_PROMPT)
-        : REFINEMENT_SYSTEM_PROMPT;
-      const response = await this.llmProvider.complete(
-        {
-          systemPrompt: refinementSystemPrompt,
-          messages: [{ role: 'user', content: requestPrompt }],
-          correlation: {
-            requestId: `sleep-consolidation:${input.sessionId}:${episode.id}`,
-            channelId: episode.channelId ?? input.sessionId,
-            callType: 'memory',
-            purpose: 'memory.sleeptime.plan',
-            originType: 'memory',
-            originStage: 'memory.sleeptime.consolidate',
-          },
-        },
-        'memory',
-      );
-      return parseRefinement(response.content);
-    } catch (error) {
-      log.warn('Episode refinement failed; keeping deterministic fields', {
-        episodeId: episode.id,
-        error: error instanceof Error ? error.message : String(error),
-      });
-      return null;
-    }
+    return runEpisodicJudgment({
+      llmProvider: this.llmProvider,
+      personaPreamble: this.personaPreamble,
+      personaSubsystem: 'sleep_refinement',
+      systemPrompt: REFINEMENT_SYSTEM_PROMPT,
+      requestPrompt,
+      correlation: {
+        requestId: `sleep-consolidation:${input.sessionId}:${episode.id}`,
+        channelId: episode.channelId ?? input.sessionId,
+        callType: 'memory',
+        purpose: 'memory.sleeptime.plan',
+        originType: 'memory',
+        originStage: 'memory.sleeptime.consolidate',
+      },
+      parse: parseRefinement,
+      onError: (error) => {
+        log.warn('Episode refinement failed; keeping deterministic fields', {
+          episodeId: episode.id,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        return null;
+      },
+    });
   }
 }

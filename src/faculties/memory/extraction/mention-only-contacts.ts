@@ -1,5 +1,4 @@
 import type { ContactStorePort } from '../../../core/contacts/contact-store-port.js';
-import { resolvePreferredContactName } from '../../../core/contacts/preferred-name.js';
 import { looksLikeOpaqueIdentifier } from '../../../core/contacts/store/identity-utils.js';
 import type { Contact, RelationshipType } from '../../../core/contacts/types.js';
 import type { MemoryStorePort } from '../memory-store-port.js';
@@ -163,12 +162,14 @@ function isExcludedCandidateName(
 export function extractMentionOnlyContactCandidate(params: {
   fact: ExtractedFact;
   canonicalContactName?: string;
+  canonicalContactNames?: readonly string[];
   companionName?: string;
 }): MentionOnlyContactCandidate | undefined {
   if (params.fact.type !== 'relational') return undefined;
 
   const excludedNames = [
     params.canonicalContactName,
+    ...(params.canonicalContactNames ?? []),
     params.companionName,
   ].filter((value): value is string => Boolean(value?.trim()));
 
@@ -215,15 +216,26 @@ export function extractMentionOnlyContactCandidate(params: {
   return undefined;
 }
 
-function getPreferredContactName(contact: Pick<Contact, 'displayName' | 'nickname'>): string {
-  return resolvePreferredContactName(contact, contact.displayName) ?? contact.displayName;
+function contactNameKeys(contact: Pick<Contact, 'displayName' | 'nickname'>): Set<string> {
+  const keys = new Set<string>();
+  for (const name of [contact.displayName, contact.nickname]) {
+    const key = name ? normalizeNameKey(name) : '';
+    if (key) keys.add(key);
+  }
+  return keys;
+}
+
+function contactNames(contact: Pick<Contact, 'displayName' | 'nickname'> | undefined): string[] {
+  if (!contact) return [];
+  return [contact.displayName, contact.nickname]
+    .filter((value): value is string => Boolean(value?.trim()));
 }
 
 function findExistingMentionOnlyContact(
   contacts: readonly Contact[],
   candidate: MentionOnlyContactCandidate,
 ): Contact | undefined {
-  return contacts.find(contact => normalizeNameKey(getPreferredContactName(contact)) === candidate.normalizedKey);
+  return contacts.find(contact => contactNameKeys(contact).has(candidate.normalizedKey));
 }
 
 function shouldPromoteRelationship(
@@ -238,6 +250,7 @@ function candidateMatchesMemory(
   candidate: MentionOnlyContactCandidate,
   excludedNames: {
     canonicalContactName?: string;
+    canonicalContactNames?: readonly string[];
     companionName?: string;
   },
 ): boolean {
@@ -252,6 +265,7 @@ function candidateMatchesMemory(
       tags: memory.tags,
     },
     canonicalContactName: excludedNames.canonicalContactName,
+    canonicalContactNames: excludedNames.canonicalContactNames,
     companionName: excludedNames.companionName,
   });
   return memoryCandidate?.normalizedKey === candidate.normalizedKey;
@@ -264,6 +278,7 @@ function relinkRecurringMemories(params: {
   canonicalContactId?: string;
   channelMemories: readonly PurrMemory[];
   canonicalContactName?: string;
+  canonicalContactNames?: readonly string[];
   companionName?: string;
 }): Promise<void> {
   return (async () => {
@@ -284,14 +299,23 @@ export async function resolveMentionOnlyContactForFact(
     return undefined;
   }
 
+  const contacts = await params.contactStore.listAll();
+  // Exclude every known name of the canonical contact (display name AND
+  // nickname). Matching only the preferred name once minted a duplicate
+  // channel-less contact whenever the canonical contact had a nickname.
+  const canonicalContact = params.canonicalContactId
+    ? contacts.find(contact => contact.id === params.canonicalContactId)
+    : undefined;
+  const canonicalContactNames = contactNames(canonicalContact);
+
   const candidate = extractMentionOnlyContactCandidate({
     fact: params.fact,
     canonicalContactName: params.canonicalContactName,
+    canonicalContactNames,
     companionName: params.companionName,
   });
   if (!candidate) return undefined;
 
-  const contacts = await params.contactStore.listAll();
   const existing = findExistingMentionOnlyContact(contacts, candidate);
   const channelMemories = await params.memoryStore.getMemoriesByChannel(params.channelId, 50);
 
@@ -313,12 +337,17 @@ export async function resolveMentionOnlyContactForFact(
       canonicalContactId: params.canonicalContactId,
       channelMemories,
       canonicalContactName: params.canonicalContactName,
+      canonicalContactNames,
       companionName: params.companionName,
     });
     return existing;
   }
 
-  const priorMentions = channelMemories.filter(memory => candidateMatchesMemory(memory, candidate, params));
+  const priorMentions = channelMemories.filter(memory => candidateMatchesMemory(memory, candidate, {
+    canonicalContactName: params.canonicalContactName,
+    canonicalContactNames,
+    companionName: params.companionName,
+  }));
   if (priorMentions.length + 1 < 2) {
     return undefined;
   }
@@ -340,6 +369,7 @@ export async function resolveMentionOnlyContactForFact(
     canonicalContactId: params.canonicalContactId,
     channelMemories,
     canonicalContactName: params.canonicalContactName,
+    canonicalContactNames,
     companionName: params.companionName,
   });
 

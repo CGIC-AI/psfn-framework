@@ -35,7 +35,7 @@ describe('extractMentionOnlyContactCandidate', () => {
     const candidate = extractMentionOnlyContactCandidate({
       fact: makeFact("Avery's sister Alex is moving to Seattle", { tags: ['family'] }),
       canonicalContactName: 'Avery',
-      companionName: 'Purrsephone',
+      companionName: 'Aster',
     });
 
     expect(candidate).toEqual({
@@ -49,24 +49,33 @@ describe('extractMentionOnlyContactCandidate', () => {
     const candidate = extractMentionOnlyContactCandidate({
       fact: makeFact("Alex is Avery's friend from college"),
       canonicalContactName: 'Avery',
-      companionName: 'Purrsephone',
+      companionName: 'Aster',
     });
 
     expect(candidate?.name).toBe('Alex');
     expect(candidate?.relationshipType).toBe('friend');
   });
 
+  it('excludes every canonical contact name, not just the preferred one', () => {
+    expect(extractMentionOnlyContactCandidate({
+      fact: makeFact('Rowan told his friends that Aster is his wife'),
+      canonicalContactName: 'Ro',
+      canonicalContactNames: ['Rowan', 'Ro'],
+      companionName: 'Aster',
+    })).toBeUndefined();
+  });
+
   it('excludes canonical user and companion names from fallback matching', () => {
     expect(extractMentionOnlyContactCandidate({
-      fact: makeFact('Purrsephone is Avery\'s companion'),
+      fact: makeFact('Aster is Avery\'s companion'),
       canonicalContactName: 'Avery',
-      companionName: 'Purrsephone',
+      companionName: 'Aster',
     })).toBeUndefined();
 
     expect(extractMentionOnlyContactCandidate({
       fact: makeFact('Avery helped their family with dinner', { tags: ['family'] }),
       canonicalContactName: 'Avery',
-      companionName: 'Purrsephone',
+      companionName: 'Aster',
     })).toBeUndefined();
   });
 });
@@ -98,7 +107,7 @@ describe('resolveMentionOnlyContactForFact', () => {
       channelId: 'api:mention-contact',
       canonicalContactId: primary.id,
       canonicalContactName: primary.displayName,
-      companionName: 'Purrsephone',
+      companionName: 'Aster',
       contactStore,
       memoryStore,
     });
@@ -106,6 +115,58 @@ describe('resolveMentionOnlyContactForFact', () => {
     expect(resolved).toBeDefined();
     expect(resolved!.id).toBe(alex.id);
     expect(contactStore.getById(alex.id)?.relationshipType).toBe('family');
+  });
+
+  it('does not mint a duplicate contact when the canonical contact goes by a nickname', async () => {
+    const primary = contactStore.upsert({
+      displayName: 'Rowan',
+      nickname: 'Ro',
+      discordUserId: PRIMARY_USER_ID,
+    });
+
+    for (const text of [
+      'Rowan told his friends that Aster is his wife',
+      'Rowan is Aster\'s primary contact and partner',
+    ]) {
+      const resolved = await resolveMentionOnlyContactForFact({
+        fact: makeFact(text),
+        channelId: 'discord:main',
+        canonicalContactId: primary.id,
+        canonicalContactName: 'Ro',
+        companionName: 'Aster',
+        contactStore,
+        memoryStore,
+      });
+      expect(resolved).toBeUndefined();
+    }
+
+    expect(contactStore.listAll().filter(contact => contact.displayName === 'Rowan')).toHaveLength(1);
+  });
+
+  it('matches an existing mention-only contact by display name even when it has a nickname', async () => {
+    const primary = contactStore.upsert({
+      displayName: 'Avery',
+      discordUserId: PRIMARY_USER_ID,
+    });
+    const alex = contactStore.upsert({
+      displayName: 'Alex',
+      nickname: 'Lexi',
+      relationshipType: 'acquaintance',
+    });
+
+    const resolved = await resolveMentionOnlyContactForFact({
+      fact: makeFact("Avery's sister Alex is visiting this weekend", { tags: ['family'] }),
+      channelId: 'api:mention-contact',
+      canonicalContactId: primary.id,
+      canonicalContactName: primary.displayName,
+      companionName: 'Aster',
+      contactStore,
+      memoryStore,
+    });
+
+    expect(resolved).toBeDefined();
+    expect(resolved!.id).toBe(alex.id);
+    expect(contactStore.listAll().filter(contact => contact.displayName === 'Alex')).toHaveLength(1);
   });
 });
 
@@ -129,7 +190,7 @@ describe('MemoryExtractor mention-only contacts', () => {
 
     const extractor = new MemoryExtractor(
       { complete: vi.fn() } as any,
-      { characterName: 'Purrsephone' } as any,
+      { characterName: 'Aster' } as any,
       memoryStore,
       {
         embed: vi.fn().mockResolvedValue(makeEmbedding()),
@@ -151,7 +212,7 @@ describe('MemoryExtractor mention-only contacts', () => {
 	      'api:mention-contact',
 	      undefined,
 	      primary.displayName,
-	      'Purrsephone',
+	      'Aster',
 	    );
 
     expect(contactStore.listAll().filter(contact => contact.displayName === 'Alex')).toHaveLength(0);
@@ -167,7 +228,7 @@ describe('MemoryExtractor mention-only contacts', () => {
 	      'api:mention-contact',
 	      undefined,
 	      primary.displayName,
-	      'Purrsephone',
+	      'Aster',
 	    );
 
     const alexContacts = contactStore.listAll().filter(contact => contact.displayName === 'Alex');
@@ -190,7 +251,7 @@ describe('MemoryExtractor mention-only contacts', () => {
 
     const extractor = new MemoryExtractor(
       { complete: vi.fn() } as any,
-      { characterName: 'Purrsephone' } as any,
+      { characterName: 'Aster' } as any,
       memoryStore,
       {
         embed: vi.fn().mockResolvedValue(makeEmbedding()),
@@ -212,7 +273,7 @@ describe('MemoryExtractor mention-only contacts', () => {
 	      'api:mention-contact',
 	      undefined,
 	      primary.displayName,
-	      'Purrsephone',
+	      'Aster',
 	    );
 
     expect(contactStore.listAll().filter(contact => contact.displayName === 'Jordan')).toHaveLength(0);
@@ -233,30 +294,30 @@ describe('MemoryExtractor group-room speaker ownership', () => {
   });
 
   it('writes clear mixed-speaker facts under the source speaker contact', async () => {
-    const mrDragonFox = contactStore.upsert({
-      displayName: 'MrDragonFox',
-      discordUserId: 'discord-mrdragonfox',
+    const marlow = contactStore.upsert({
+      displayName: 'Marlow',
+      discordUserId: 'discord-marlow',
     });
-    const vega = contactStore.upsert({
-      displayName: 'Vega',
-      discordUserId: 'discord-vega',
+    const rowan = contactStore.upsert({
+      displayName: 'Rowan',
+      discordUserId: 'discord-rowan',
     });
     const entries = [
       {
         id: 1,
         channelId: 'discord:kube',
         role: 'user',
-        authorId: 'discord-mrdragonfox',
-        authorName: 'MrDragonFox',
-        content: 'ya i mean if we put her on twitch or yt live or ticktok we need also guardrails',
+        authorId: 'discord-marlow',
+        authorName: 'Marlow',
+        content: 'if we put her on a livestream we need guardrails first',
         timestamp: 1,
       },
       {
         id: 2,
         channelId: 'discord:kube',
         role: 'user',
-        authorId: 'discord-vega',
-        authorName: 'Vega',
+        authorId: 'discord-rowan',
+        authorName: 'Rowan',
         content: 'I can collect the notes after we finish this pass.',
         timestamp: 2,
       },
@@ -266,7 +327,7 @@ describe('MemoryExtractor group-room speaker ownership', () => {
         complete: vi.fn().mockResolvedValue({
           content: `<response>
 <fact>
-<text>MrDragonFox believes that if Carlini is put on Twitch, YouTube, or TikTok live, guardrails are needed.</text>
+<text>Marlow believes that if Aster is put on a livestream, guardrails are needed.</text>
 <type>semantic</type>
 <importance>0.92</importance>
 <confidence>0.95</confidence>
@@ -275,7 +336,7 @@ describe('MemoryExtractor group-room speaker ownership', () => {
         }),
       } as any,
       {
-        characterName: 'Carlini',
+        characterName: 'Aster',
         getRecentMessages: vi.fn().mockReturnValue(entries),
       } as any,
       memoryStore,
@@ -291,11 +352,11 @@ describe('MemoryExtractor group-room speaker ownership', () => {
       contactStore,
     );
 
-    await extractor.extract('discord:kube', vega.id);
+    await extractor.extract('discord:kube', rowan.id);
 
-    expect(memoryStore.getMemoriesByContact(mrDragonFox.id, 10).map(memory => memory.text)).toContain(
-      'MrDragonFox believes that if Carlini is put on Twitch, YouTube, or TikTok live, guardrails are needed.',
+    expect(memoryStore.getMemoriesByContact(marlow.id, 10).map(memory => memory.text)).toContain(
+      'Marlow believes that if Aster is put on a livestream, guardrails are needed.',
     );
-    expect(memoryStore.getMemoriesByContact(vega.id, 10)).toHaveLength(0);
+    expect(memoryStore.getMemoriesByContact(rowan.id, 10)).toHaveLength(0);
   });
 });

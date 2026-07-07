@@ -223,6 +223,21 @@ writes appeared on any channel.
   host `psfn` user). A root-owned rewrite bricks turns with EACCES.
 - Rewrite JSONL atomically (tmp file + rename); refuse to rewrite any file
   with an unparseable line.
+- **Session journals are HMAC-chained** (each entry's signature covers the
+  previous entry's): deleting or editing ANY entry makes the next entry fail
+  `signature_mismatch`, and the renderer wraps it in `<unverified_history>`
+  boilerplate inside her live prompt — the 2026-07-07 "still looping"
+  incident was exactly this, self-inflicted by the prior trash removal
+  (83 broken entries in the Discord journal alone). After ANY session JSONL
+  rewrite, re-sign the chain before bringing the agent back:
+  `runSessionIntegrityRepair` (`npm run session:repair:integrity`). The
+  production image cannot run it (not in dist, no tsx, key is gateway-only
+  env `GATEWAY_SESSION_HMAC_KEY`) — run it from a dev checkout against a
+  copy of `state/sessions`, verify 0 failures + content byte-identical
+  minus `_hmac` fields, then install the modified files + rebuilt
+  `_channel_index.json` atomically and **restart the gateway** (it holds
+  the session store; tail cache keys on file fingerprint but drop in-memory
+  state anyway). Cf. psfn-framework-tswt/-68ou/-g59z.
 - Postgres projection cleanup goes through `kubectl exec -i psfn-postgres-0 --
   psql` with the SQL piped on stdin (inline quoting through ssh+kubectl+psql
   is a tarpit).

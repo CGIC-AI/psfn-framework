@@ -17,7 +17,8 @@ KUBE_MODE_REQUESTED="auto"
 KUBE_MODE=""
 GARDEN_PORT="${GARDEN_PORT:-10054}"
 GATEWAY_PORT="${GATEWAY_PORT:-10053}"
-COMPANION_MODEL_PATTERN="${COMPANION_MODEL_PATTERN:-purrsephone}"
+# Empty = resolve from the live gateway deployment's COMPANION_ID env.
+COMPANION_MODEL_PATTERN="${COMPANION_MODEL_PATTERN:-}"
 SMOKE_TIMEOUT_SECONDS="${SMOKE_TIMEOUT_SECONDS:-180}"
 API_KEY_VALUE=""
 
@@ -239,11 +240,42 @@ run_host_shell() {
   bash -lc "$command"
 }
 
+# Deployments expose their ports either on the node (hostPort, the Pi
+# topology) or only in-cluster behind an Ingress (the Carlini topology).
+# Host-level curls/node fetches are authoritative when a hostPort is bound —
+# they verify node exposure — otherwise the same check runs inside the pod.
+declare -A HOST_PORT_CACHE=()
+deploy_binds_host_port() {
+  local deploy=$1
+  if [[ -z "${HOST_PORT_CACHE[$deploy]+x}" ]]; then
+    HOST_PORT_CACHE[$deploy]="$(run_kubectl -n "$NAMESPACE" get deploy "$deploy" \
+      -o 'jsonpath={.spec.template.spec.containers[*].ports[*].hostPort}' 2>/dev/null | tr -d '[:space:]')"
+  fi
+  [[ -n "${HOST_PORT_CACHE[$deploy]}" ]]
+}
+
+run_pod_node() {
+  local deploy=$1
+  local script=$2
+  local container="${deploy#psfn-}"
+  verbose_log "kubectl exec -i deploy/${deploy} -c ${container} -- node --input-type=module <script>"
+  printf '%s\n' "$script" | run_kubectl -n "$NAMESPACE" exec -i "deploy/${deploy}" -c "$container" -- node --input-type=module
+}
+
 run_host_node_with_api_key() {
   local script=$1
   if [[ -z "$API_KEY_VALUE" ]]; then
     printf 'API key has not been loaded\n'
     return 1
+  fi
+
+  if ! deploy_binds_host_port psfn-gateway; then
+    verbose_log "kubectl exec -i deploy/psfn-gateway -- node --input-type=module <redacted-api-key+script> (no gateway hostPort)"
+    {
+      printf '%s\n' "$API_KEY_VALUE"
+      printf '%s\n' "$script"
+    } | run_kubectl -n "$NAMESPACE" exec -i deploy/psfn-gateway -c gateway -- sh -c 'IFS= read -r API_KEY; export API_KEY; node --input-type=module'
+    return
   fi
 
   if [[ "$KUBE_MODE" == "remote" ]]; then
@@ -475,11 +507,25 @@ check_garden_health() {
   local response
   local http_status
   local body
-  url="http://127.0.0.1:${GARDEN_PORT}/health"
-  command="curl -sS --max-time 10 -w '\\n%{http_code}' $(shell_quote "$url")"
-  if ! response="$(run_host_shell "$command" 2>&1)"; then
-    printf 'garden health curl failed: %s\n' "$response"
-    return 1
+  if deploy_binds_host_port psfn-garden; then
+    url="http://127.0.0.1:${GARDEN_PORT}/health"
+    command="curl -sS --max-time 10 -w '\\n%{http_code}' $(shell_quote "$url")"
+    if ! response="$(run_host_shell "$command" 2>&1)"; then
+      printf 'garden health curl failed: %s\n' "$response"
+      return 1
+    fi
+  else
+    local script
+    script=$(cat <<EOS
+const res = await fetch("http://127.0.0.1:${GARDEN_PORT}/health");
+const body = await res.text();
+process.stdout.write(body + "\n" + res.status);
+EOS
+)
+    if ! response="$(run_pod_node psfn-garden "$script" 2>&1)"; then
+      printf 'garden health in-pod fetch failed (no hostPort bound): %s\n' "$response"
+      return 1
+    fi
   fi
   http_status="${response##*$'\n'}"
   body="${response%$'\n'*}"
@@ -525,6 +571,18 @@ EOF
 
 check_gateway_models() {
   ensure_api_key || return 1
+
+  # No explicit pattern: expect the deployment's own companion id (COMPANION_ID
+  # on the gateway container), so the same gate serves every target.
+  if [[ -z "$COMPANION_MODEL_PATTERN" ]]; then
+    COMPANION_MODEL_PATTERN="$(run_kubectl -n "$NAMESPACE" get deploy psfn-gateway \
+      -o 'jsonpath={.spec.template.spec.containers[0].env[?(@.name=="COMPANION_ID")].value}' 2>/dev/null | tr -d '[:space:]')"
+    if [[ -z "$COMPANION_MODEL_PATTERN" ]]; then
+      printf 'companion pattern not provided and COMPANION_ID not found on the gateway deployment\n'
+      return 1
+    fi
+    verbose_log "companion pattern resolved from deployment: ${COMPANION_MODEL_PATTERN}"
+  fi
 
   local response
   if ! response="$(fetch_gateway_models_response 2>&1)"; then

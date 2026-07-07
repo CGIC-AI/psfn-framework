@@ -85,8 +85,13 @@ Every ship also refreshes the companion's source checkout (git bundle →
 `/mnt/psfn-nvme/psfn-source`) and round-trips beads
 (`scripts/ops/sync-companion-beads.sh`, bd export/import upsert both ways) —
 her self-view is exactly as fresh as her runtime. Target selection:
-`--host <alias>` / `PSFN_HOST_ALIAS` + `PSFN_NAMESPACE` for non-default
-deployments (e.g. Carlini). The skew guard is live-proven: a boundary/contract
+`--host <ssh-dest>` / `PSFN_HOST_ALIAS` + `--namespace` / `PSFN_NAMESPACE` for
+non-default deployments (e.g. Carlini, `o_0@100.96.206.29`, amd64). The script
+probes the target's CPU arch and builds the matching platform, stages under
+the remote user's home (`PSFN_REMOTE_DIR` to override), and forwards the
+target to the beads sync; the companion source-checkout refresh path is
+`PSFN_SOURCE_CHECKOUT` (default the Pi's `/mnt/psfn-nvme/psfn-source`;
+missing dir = refresh skipped). The skew guard is live-proven: a boundary/contract
 change on a selective ship fails closed naming the component that would skew.
 
 Selective rollouts are contract-hash guarded: the image bakes a hash of

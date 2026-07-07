@@ -11,6 +11,7 @@ import {
   normalizeToolObservation,
 } from '../../../core/session/tool-observation.js';
 import { SessionStore } from '../../../persistence/sessions/store.js';
+import { createSqliteTranscriptProjection } from '../../../persistence/sessions/transcript-projection.js';
 import { createTurnId } from '../../../core/turns/id.js';
 import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
 import type { MemoryStorePort } from '../../../faculties/memory/memory-store-port.js';
@@ -126,7 +127,9 @@ describe('AdminSessionDataService', () => {
 
   it('searches session messages scoped to the requested session only', async () => {
     const searchDir = mkdtempSync(join(tmpdir(), 'admin-session-search-'));
-    const searchStore = new SessionStore(searchDir, { enableSearchIndex: true });
+    const searchStore = new SessionStore(searchDir, {
+      transcriptProjection: createSqliteTranscriptProjection(join(searchDir, 'session-search.sqlite')),
+    });
     try {
       const targetChannelId = 'api:search-target';
       const otherChannelId = 'api:search-other';

@@ -19,23 +19,29 @@
 # runtime contract (17 appraisal dims / 48 emotions) is verified in-image at
 # build time and again by the validation gate.
 #
+# Target selection: --host <ssh-dest> / PSFN_HOST_ALIAS, --namespace /
+# PSFN_NAMESPACE. Build platform (arm64/amd64) is probed from the target node,
+# the staging dir defaults to <remote home>/psfn-kube-runtime (override:
+# PSFN_REMOTE_DIR), and the companion source checkout path is
+# PSFN_SOURCE_CHECKOUT (default /mnt/psfn-nvme/psfn-source; absent dir = skip).
+#
 # Bead: psfn-framework-hpx6 (+w05a emosim). Proven procedure from the
 # 2026-07-06 deploys.
 set -euo pipefail
 
 HOST_ALIAS="${PSFN_HOST_ALIAS:-psfn-pi}"
 NAMESPACE="${PSFN_NAMESPACE:-psfn}"
-REMOTE_DIR="/home/psfn/psfn-kube-runtime"
+REMOTE_DIR="${PSFN_REMOTE_DIR:-}"
+SOURCE_CHECKOUT="${PSFN_SOURCE_CHECKOUT:-/mnt/psfn-nvme/psfn-source}"
 IMAGE_NAME="psfn-framework"
 EMOSIM_IMAGE_NAME="psfn-emosim"
-CACHE_DIR="${PSFN_BUILDX_CACHE:-$HOME/.cache/psfn-buildx}"
 COMPONENTS=""
 SKIP_GATE=0
 DRY_RUN=0
 VALUES_OVERLAY=
 
 usage() {
-  sed -n '2,21p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '2,27p' "$0" | sed 's/^# \{0,1\}//'
   exit "${1:-0}"
 }
 
@@ -44,6 +50,7 @@ while [[ $# -gt 0 ]]; do
     --components) COMPONENTS="$2"; shift 2 ;;
     --values-overlay) VALUES_OVERLAY="$2"; shift 2 ;;
     --host) HOST_ALIAS="$2"; shift 2 ;;
+    --namespace) NAMESPACE="$2"; shift 2 ;;
     --skip-gate) SKIP_GATE=1; shift ;;
     --dry-run) DRY_RUN=1; shift ;;
     -h|--help) usage ;;
@@ -77,6 +84,27 @@ if [[ -n "$(git status --porcelain)" ]]; then
   exit 1
 fi
 
+# Probe the target once: build platform must match the node's CPU, and the
+# staging dir lives under the remote user's home (psfn on the Pi, o_0 on
+# Carlini's miniforum01). Fail closed if the host is unreachable.
+REMOTE_ARCH_RAW="$(remote 'uname -m' | tr -d '[:space:]')" \
+  || { echo "FAIL: cannot reach ${HOST_ALIAS} to probe architecture" >&2; exit 1; }
+case "$REMOTE_ARCH_RAW" in
+  aarch64|arm64) ARCH="arm64" ;;
+  x86_64|amd64) ARCH="amd64" ;;
+  *) echo "FAIL: unsupported remote architecture: ${REMOTE_ARCH_RAW}" >&2; exit 1 ;;
+esac
+PLATFORM="linux/${ARCH}"
+if [[ -z "$REMOTE_DIR" ]]; then
+  REMOTE_HOME="$(remote 'echo "$HOME"' | tr -d '[:space:]')"
+  [[ -n "$REMOTE_HOME" ]] || { echo "FAIL: cannot resolve remote home on ${HOST_ALIAS}" >&2; exit 1; }
+  REMOTE_DIR="${REMOTE_HOME}/psfn-kube-runtime"
+fi
+remote "mkdir -p ${REMOTE_DIR}"
+CACHE_DIR="${PSFN_BUILDX_CACHE:-$HOME/.cache/psfn-buildx}"
+[[ "$ARCH" == "arm64" ]] || CACHE_DIR="${CACHE_DIR}-${ARCH}"
+echo "==> target ${HOST_ALIAS} ns=${NAMESPACE} arch=${ARCH} staging=${REMOTE_DIR}"
+
 SHORT_SHA="$(git rev-parse --short=8 HEAD)"
 FULL_SHA="$(git rev-parse HEAD)"
 TAG="0.1.0-kube-${SHORT_SHA}"
@@ -88,15 +116,15 @@ if [[ ${#SELECTED[@]} -gt 0 ]]; then
   echo "==> building ${IMAGE_NAME}:${TAG} (components to roll: ${SELECTED[*]})"
   git archive HEAD | tar -x -C "$BUILD_DIR"
   mkdir -p "$CACHE_DIR"
-  docker buildx build --platform linux/arm64 -f "$BUILD_DIR/docker/Dockerfile.agent" \
+  docker buildx build --platform "$PLATFORM" -f "$BUILD_DIR/docker/Dockerfile.agent" \
     --cache-from "type=local,src=$CACHE_DIR" \
     --cache-to "type=local,dest=$CACHE_DIR,mode=max" \
     -t "${IMAGE_NAME}:${TAG}" --load "$BUILD_DIR"
 
   echo "==> in-image verification"
-  NEW_HASH="$(docker run --rm --platform linux/arm64 --entrypoint cat "${IMAGE_NAME}:${TAG}" /app/contract-hash.txt | tr -d '[:space:]')"
+  NEW_HASH="$(docker run --rm --platform "$PLATFORM" --entrypoint cat "${IMAGE_NAME}:${TAG}" /app/contract-hash.txt | tr -d '[:space:]')"
   [[ -n "$NEW_HASH" ]] || { echo "FAIL: image carries no contract hash" >&2; exit 1; }
-  docker run --rm --platform linux/arm64 --entrypoint sh "${IMAGE_NAME}:${TAG}" -c \
+  docker run --rm --platform "$PLATFORM" --entrypoint sh "${IMAGE_NAME}:${TAG}" -c \
     "grep -q toolCallBlocksByIndex /app/node_modules/@mariozechner/pi-ai/dist/providers/openai-completions.js \
      && test -f /app/config/concern-softening.json && command -v bd >/dev/null && command -v rg >/dev/null" \
     || { echo "FAIL: in-image verification (pi-ai patch / config / bd / rg)" >&2; exit 1; }
@@ -116,11 +144,11 @@ if [[ $SHIP_EMOSIM -eq 1 ]]; then
   echo "==> building ${EMOSIM_IMAGE_NAME}:${EMOSIM_TAG} (from ${EMOSIM_SRC})"
   mkdir -p "$BUILD_DIR/emosim-src"
   git -C "$EMOSIM_SRC" archive HEAD | tar -x -C "$BUILD_DIR/emosim-src"
-  docker buildx build --platform linux/arm64 -f "docker/Dockerfile.emosim" \
+  docker buildx build --platform "$PLATFORM" -f "docker/Dockerfile.emosim" \
     -t "${EMOSIM_IMAGE_NAME}:${EMOSIM_TAG}" --load "$BUILD_DIR/emosim-src"
 
   echo "==> emosim in-image verification (17 appraisal dims / 48 emotions)"
-  docker run --rm --platform linux/arm64 --entrypoint python "${EMOSIM_IMAGE_NAME}:${EMOSIM_TAG}" -c \
+  docker run --rm --platform "$PLATFORM" --entrypoint python "${EMOSIM_IMAGE_NAME}:${EMOSIM_TAG}" -c \
     "import statemashine, sys; sys.exit(0 if (len(statemashine.APPRAISAL_DIMS) == 17 and len(statemashine.EMOTIONS) == 48) else 1)" \
     || { echo "FAIL: emosim in-image contract verification" >&2; exit 1; }
 fi
@@ -151,21 +179,21 @@ fi
 if [[ ${#SELECTED[@]} -gt 0 ]]; then
   echo "==> shipping image to ${HOST_ALIAS}"
   docker save "${IMAGE_NAME}:${TAG}" | gzip >"$BUILD_DIR/image.tar.gz"
-  scp "$BUILD_DIR/image.tar.gz" "${HOST_ALIAS}:${REMOTE_DIR}/psfn-${SHORT_SHA}-arm64.tar.gz"
-  remote "cd ${REMOTE_DIR} && gunzip -f psfn-${SHORT_SHA}-arm64.tar.gz \
-    && sudo k3s ctr images import psfn-${SHORT_SHA}-arm64.tar >/dev/null \
+  scp "$BUILD_DIR/image.tar.gz" "${HOST_ALIAS}:${REMOTE_DIR}/psfn-${SHORT_SHA}-${ARCH}.tar.gz"
+  remote "cd ${REMOTE_DIR} && gunzip -f psfn-${SHORT_SHA}-${ARCH}.tar.gz \
+    && sudo k3s ctr images import psfn-${SHORT_SHA}-${ARCH}.tar >/dev/null \
     && sudo k3s ctr images tag docker.io/library/${IMAGE_NAME}:${TAG} localhost/${IMAGE_NAME}:${TAG} >/dev/null \
-    && rm -f psfn-${SHORT_SHA}-arm64.tar"
+    && rm -f psfn-${SHORT_SHA}-${ARCH}.tar"
 fi
 
 if [[ $SHIP_EMOSIM -eq 1 ]]; then
   echo "==> shipping emosim image to ${HOST_ALIAS}"
   docker save "${EMOSIM_IMAGE_NAME}:${EMOSIM_TAG}" | gzip >"$BUILD_DIR/emosim-image.tar.gz"
-  scp "$BUILD_DIR/emosim-image.tar.gz" "${HOST_ALIAS}:${REMOTE_DIR}/emosim-${EMOSIM_SHA}-arm64.tar.gz"
-  remote "cd ${REMOTE_DIR} && gunzip -f emosim-${EMOSIM_SHA}-arm64.tar.gz \
-    && sudo k3s ctr images import emosim-${EMOSIM_SHA}-arm64.tar >/dev/null \
+  scp "$BUILD_DIR/emosim-image.tar.gz" "${HOST_ALIAS}:${REMOTE_DIR}/emosim-${EMOSIM_SHA}-${ARCH}.tar.gz"
+  remote "cd ${REMOTE_DIR} && gunzip -f emosim-${EMOSIM_SHA}-${ARCH}.tar.gz \
+    && sudo k3s ctr images import emosim-${EMOSIM_SHA}-${ARCH}.tar >/dev/null \
     && sudo k3s ctr images tag docker.io/library/${EMOSIM_IMAGE_NAME}:${EMOSIM_TAG} localhost/${EMOSIM_IMAGE_NAME}:${EMOSIM_TAG} >/dev/null \
-    && rm -f emosim-${EMOSIM_SHA}-arm64.tar"
+    && rm -f emosim-${EMOSIM_SHA}-${ARCH}.tar"
 fi
 
 echo "==> shipping chart and upgrading (helm)"
@@ -222,14 +250,14 @@ if [[ $SKIP_GATE -eq 1 ]]; then
 fi
 
 echo "==> refreshing companion self-management copies (repo checkout + beads)"
-if remote "test -d /mnt/psfn-nvme/psfn-source/.git" 2>/dev/null; then
+if remote "test -d ${SOURCE_CHECKOUT}/.git" 2>/dev/null; then
   git bundle create "$BUILD_DIR/repo.bundle" HEAD >/dev/null 2>&1
   scp "$BUILD_DIR/repo.bundle" "${HOST_ALIAS}:/tmp/psfn-repo-refresh.bundle"
-  remote "sudo git -C /mnt/psfn-nvme/psfn-source fetch /tmp/psfn-repo-refresh.bundle HEAD 2>/dev/null     && sudo git -C /mnt/psfn-nvme/psfn-source reset --hard FETCH_HEAD >/dev/null     && sudo chown -R 999:999 /mnt/psfn-nvme/psfn-source && rm -f /tmp/psfn-repo-refresh.bundle"     && echo "    source checkout refreshed to $(git rev-parse --short=8 HEAD)"     || echo "    WARNING: source checkout refresh failed (non-fatal)"
+  remote "sudo git -C ${SOURCE_CHECKOUT} fetch /tmp/psfn-repo-refresh.bundle HEAD 2>/dev/null     && sudo git -C ${SOURCE_CHECKOUT} reset --hard FETCH_HEAD >/dev/null     && sudo chown -R 999:999 ${SOURCE_CHECKOUT} && rm -f /tmp/psfn-repo-refresh.bundle"     && echo "    source checkout refreshed to $(git rev-parse --short=8 HEAD)"     || echo "    WARNING: source checkout refresh failed (non-fatal)"
 else
   echo "    no source checkout on host; skipping repo refresh"
 fi
-if bash "$(dirname "$0")/sync-companion-beads.sh" >/dev/null 2>&1; then
+if PSFN_HOST_ALIAS="$HOST_ALIAS" PSFN_NAMESPACE="$NAMESPACE" bash "$(dirname "$0")/sync-companion-beads.sh" >/dev/null 2>&1; then
   echo "    beads round-trip synced"
 else
   echo "    WARNING: beads sync failed (non-fatal; run scripts/ops/sync-companion-beads.sh manually)"

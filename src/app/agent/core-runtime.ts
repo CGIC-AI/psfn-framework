@@ -1,4 +1,5 @@
 import type { CoreSubstrateConfig } from '../../system/config/runtime-config-contracts.js';
+import type { PlacesRegistryConfig } from '../../shared/contracts/places-registry.js';
 import type { EventBus } from '../../shared/event-bus.js';
 import type { EpisodicStorePort } from '../../faculties/memory/episodic/index.js';
 import {
@@ -114,6 +115,8 @@ export interface AgentCoreRuntimeOptions {
   primaryTelegramUserId?: string;
   /** Contact-tracking policy gate (E3.4). Absent gate behaves as 'auto' everywhere. */
   contactTrackingGate?: ContactTrackingGate | null;
+  /** Places soft-registry (S10). Absent behaves as an empty registry. */
+  placesRegistryConfig?: PlacesRegistryConfig;
 }
 
 export interface AgentCoreRuntime {
@@ -219,6 +222,7 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
     observerEvalSidecar,
     appCache,
     contactTrackingGate,
+    ...(options.placesRegistryConfig ? { placesRegistryConfig: options.placesRegistryConfig } : {}),
   });
   agentLoop.scratchpadProvider = memoryStore;
   agentLoop.setCapabilityRuntime(capabilityRuntime);

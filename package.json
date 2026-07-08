@@ -42,6 +42,7 @@
     "audit:core-memory-scopes": "tsx src/app/maintenance/audit-core-memory-scopes.ts",
     "audit:prompt-macros": "tsx src/app/maintenance/audit-prompt-layer-macros.ts",
     "docs:prompt-macros": "tsx scripts/generate-prompt-macros-doc.ts",
+    "map:places": "tsx scripts/generate-world-map.ts",
     "prefetch:hf-models": "tsx scripts/prefetch-hf-models.ts",
     "migrate:persistence-layout": "tsx src/app/maintenance/migrate-persistence-layout.ts",
     "migrate:channel-envelope": "tsx src/app/maintenance/migrate-channel-envelope.ts",

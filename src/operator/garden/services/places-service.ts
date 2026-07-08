@@ -18,6 +18,7 @@ import {
   loadPlacesRegistryConfig,
   resolvePlaceById,
 } from '../../../channels/backplane/places-registry.js';
+import { renderPlacesMermaid } from '../../../channels/backplane/places-mermaid.js';
 import {
   loadSatelliteRegistryConfig,
   saveSatelliteRegistryConfig,
@@ -95,6 +96,12 @@ export interface AdminSatelliteRebindResult {
 export interface AdminPlacesService {
   listPlaces(): Promise<AdminPlacesData>;
   rebindSatellite(input: AdminSatelliteRebindInput): Promise<AdminSatelliteRebindResult>;
+  /**
+   * Render the current places registry (+ satellite bindings) as a Mermaid
+   * `flowchart TB`. Read-first like `listPlaces`: both owner files are read
+   * fresh from `dataDir`. DATA only — never routed into prompt content.
+   */
+  renderMermaidMap(): Promise<string>;
 }
 
 function toBoundSatelliteView(satellite: {
@@ -168,6 +175,12 @@ export function createAdminPlacesService(options: { dataDir: string }): AdminPla
   return {
     async listPlaces(): Promise<AdminPlacesData> {
       return buildPlacesData(dataDir);
+    },
+
+    async renderMermaidMap(): Promise<string> {
+      const places = loadPlacesRegistryConfig(dataDir);
+      const satellites = loadSatelliteRegistryConfig(dataDir);
+      return renderPlacesMermaid(places, satellites);
     },
 
     async rebindSatellite(input: AdminSatelliteRebindInput): Promise<AdminSatelliteRebindResult> {

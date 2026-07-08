@@ -38,6 +38,7 @@
     "session:repair:integrity": "tsx src/app/maintenance/session-integrity-repair.ts",
     "migrate:embeddings": "tsx src/app/maintenance/migrate-embeddings.ts",
     "memory:repair:participant-names": "tsx src/app/maintenance/backfill-memory-participant-names.ts",
+    "memory:repair:provenance": "tsx src/app/maintenance/backfill-memory-provenance.ts",
     "audit:core-memory-scopes": "tsx src/app/maintenance/audit-core-memory-scopes.ts",
     "audit:prompt-macros": "tsx src/app/maintenance/audit-prompt-layer-macros.ts",
     "docs:prompt-macros": "tsx scripts/generate-prompt-macros-doc.ts",

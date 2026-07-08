@@ -112,6 +112,8 @@ interface MemoryRow {
   formation_vad: unknown;
   salience: PgNumeric;
   source_ref: string;
+  source_type: string | null;
+  provenance_json: unknown;
   extracted_at: PgNumeric;
   last_accessed: PgNumeric;
   access_count: PgNumeric;
@@ -487,6 +489,11 @@ function toMemoryRow(memory: PurrMemory, embedding?: Float32Array): MemoryRow {
     formation_vad: memory.formationVAD ?? null,
     salience: memory.salience,
     source_ref: memory.sourceRef,
+    source_type: normalizeMemorySourceType(
+      memory.sourceType,
+      inferMemorySourceTypeFromSourceRef(memory.sourceRef),
+    ),
+    provenance_json: normalizeMemoryProvenance(memory.provenance) ?? {},
     extracted_at: memory.extractedAt,
     last_accessed: memory.lastAccessed,
     access_count: memory.accessCount,
@@ -517,6 +524,7 @@ function fromMemoryRow(row: MemoryRow): PurrMemory {
     })
     : undefined;
   const deletedAt = parseOptionalPgNumber(row.deleted_at, 'deleted_at');
+  const provenance = normalizeMemoryProvenance(decodeJsonRecord(row.provenance_json));
   return {
     id: row.id,
     text: row.text,
@@ -527,6 +535,11 @@ function fromMemoryRow(row: MemoryRow): PurrMemory {
     formationVAD: decodeFormationVAD(row.formation_vad),
     salience: parsePgNumber(row.salience, 'salience'),
     sourceRef: row.source_ref,
+    sourceType: normalizeMemorySourceType(
+      row.source_type,
+      inferMemorySourceTypeFromSourceRef(row.source_ref),
+    ),
+    ...(provenance ? { provenance } : {}),
     extractedAt: parsePgNumber(row.extracted_at, 'extracted_at'),
     lastAccessed: parsePgNumber(row.last_accessed, 'last_accessed'),
     accessCount: parsePgNumber(row.access_count, 'access_count'),
@@ -754,7 +767,8 @@ class PostgresMemoryStore implements MemoryStorePort {
     const memoryRows = await queryRows<MemoryRow>(this.pool, `
       SELECT
         id, text, type, importance, confidence, emotional_valence, formation_vad,
-        salience, source_ref, extracted_at, last_accessed, access_count, superseded_by,
+        salience, source_ref, source_type, provenance_json, extracted_at, last_accessed,
+        access_count, superseded_by,
         tags, scope_ref_kind, scope_ref_id, scope_ref_label, scope_tags, provenance_refs,
         retention_class, sensitivity, consent_flags, contact_id, deleted_at, deleted_by,
         delete_reason, embedding::text AS embedding
@@ -892,12 +906,13 @@ class PostgresMemoryStore implements MemoryStorePort {
     await executeQuery(this.pool, `
       INSERT INTO l2_memories (
         id, text, type, importance, confidence, emotional_valence, formation_vad, salience,
-        source_ref, extracted_at, last_accessed, access_count, superseded_by, tags,
+        source_ref, source_type, provenance_json, extracted_at, last_accessed, access_count,
+        superseded_by, tags,
         scope_ref_kind, scope_ref_id, scope_ref_label, scope_tags, provenance_refs,
         retention_class, sensitivity, consent_flags, contact_id, deleted_at, deleted_by,
         delete_reason, embedding
       ) VALUES (
-        $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27::vector
+        $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29::vector
       )
       ON CONFLICT (id) DO UPDATE SET
         text = EXCLUDED.text,
@@ -908,6 +923,8 @@ class PostgresMemoryStore implements MemoryStorePort {
         formation_vad = EXCLUDED.formation_vad,
         salience = EXCLUDED.salience,
         source_ref = EXCLUDED.source_ref,
+        source_type = EXCLUDED.source_type,
+        provenance_json = EXCLUDED.provenance_json,
         extracted_at = EXCLUDED.extracted_at,
         last_accessed = EXCLUDED.last_accessed,
         access_count = EXCLUDED.access_count,
@@ -936,6 +953,8 @@ class PostgresMemoryStore implements MemoryStorePort {
       serializeJsonValue(row.formation_vad),
       row.salience,
       row.source_ref,
+      row.source_type,
+      serializeJsonValue(row.provenance_json),
       row.extracted_at,
       row.last_accessed,
       row.access_count,
@@ -1100,7 +1119,8 @@ class PostgresMemoryStore implements MemoryStorePort {
     const rows = await queryRows<MemoryEmbeddingSearchRow>(this.pool, `
       SELECT
         id, text, type, importance, confidence, emotional_valence, formation_vad,
-        salience, source_ref, extracted_at, last_accessed, access_count, superseded_by,
+        salience, source_ref, source_type, provenance_json, extracted_at, last_accessed,
+        access_count, superseded_by,
         tags, scope_ref_kind, scope_ref_id, scope_ref_label, scope_tags, provenance_refs,
         retention_class, sensitivity, consent_flags, contact_id, deleted_at, deleted_by,
         delete_reason, embedding::text AS embedding,
@@ -1228,7 +1248,8 @@ class PostgresMemoryStore implements MemoryStorePort {
     const rows = await queryRows<MemoryRow>(this.pool, `
       SELECT
         id, text, type, importance, confidence, emotional_valence, formation_vad,
-        salience, source_ref, extracted_at, last_accessed, access_count, superseded_by,
+        salience, source_ref, source_type, provenance_json, extracted_at, last_accessed,
+        access_count, superseded_by,
         tags, scope_ref_kind, scope_ref_id, scope_ref_label, scope_tags, provenance_refs,
         retention_class, sensitivity, consent_flags, contact_id, deleted_at, deleted_by,
         delete_reason, embedding::text AS embedding

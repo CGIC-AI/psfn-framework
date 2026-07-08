@@ -123,11 +123,16 @@ export function resolveFactRouting(
   if (structuredRouting) return structuredRouting;
 
   if (!context.mixedHumanSpeakers) {
-    const speakerName = context.speakers.at(0)?.name;
+    const speaker = context.speakers.at(0);
     return {
       status: 'route',
       ...(triggerContactId ? { contactId: triggerContactId } : {}),
-      ...(speakerName ? { sourceSpeakerName: speakerName } : {}),
+      ...(speaker?.contactId ? { sourceContactId: speaker.contactId } : {}),
+      ...(speaker?.authorId ? { sourceAuthorId: speaker.authorId } : {}),
+      ...(speaker?.name ? { sourceSpeakerName: speaker.name } : {}),
+      ...(speaker && speaker.entries.length > 0
+        ? { addressMode: inferAddressMode(speaker.entries, options) }
+        : {}),
       reason: 'single_speaker_transcript',
     };
   }
@@ -144,10 +149,19 @@ export function resolveFactRouting(
     };
   }
 
+  // Legacy (attribution-less) group routing must still carry the social-graph
+  // evidence fields: the matched speaker IS the source contact, and the address
+  // mode is inferable from that speaker's own entries. Without these, room
+  // memories can never qualify as social-graph evidence (psfn-framework-0zd9).
   return {
     status: 'route',
     contactId: match.speaker.contactId,
+    sourceContactId: match.speaker.contactId,
+    ...(match.speaker.authorId ? { sourceAuthorId: match.speaker.authorId } : {}),
     sourceSpeakerName: match.speaker.name,
+    ...(match.speaker.entries.length > 0
+      ? { addressMode: inferAddressMode(match.speaker.entries, options) }
+      : {}),
     reason: match.reason,
   };
 }

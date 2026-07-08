@@ -84,7 +84,7 @@ Important current-state notes:
 - Safe companion-facing runtime introspection stays on `self_status`; guarded runtime settings and lifecycle actions stay on `system`.
 - `response_control action="no_reply"` is the explicit no-response disposition surface. It is for intentional non-replies, not hidden failure.
 - Generic image generation, editing, and analysis stay on `media`; `selfie_create` stays separate as the first-class self-expression image tool.
-- `journal` is an extended durable markdown note surface for companion-authored notes and longer-lived context that is not typed memory, active orientation, or scratch work.
+- `journal` is a core durable markdown note surface for companion-authored notes and longer-lived context that is not typed memory, active orientation, or scratch work.
 - `shard` is currently a reserved extended registry entry for future long-horizon shard lifecycle control. Shard execution internals, fold-review lineage, and satellite delegation exist, but bounded model-facing worker control is currently `subagent`.
 - Garden's Tools page must reflect the runtime catalog for canonical names only. It may show actions, required parameters, capability requirements, reversibility, interruptibility/concurrency, and bundle membership, but must not present retired aliases as callable tools.
 
@@ -404,7 +404,7 @@ The table below maps current or retired first-party tool names to the canonical 
 | `analysis_workbench` | `analysis_workbench` | always-on | Bounded RLM+REPL analysis for large files, codebases, logs, transcripts, datasets, or evidence sets. Not for routine reasoning, tool discovery, schema confusion, simple lookup, or state changes. |
 | `skill` | `skill` | always-on | Unified surface with `action=list|view|stats|create|update`; skills stay discoverable and managed-skill mutation remains explicit on the same semantic tool. |
 | `vault` | `vault` | extended | Legacy external Obsidian bridge for bounded source read/search/write compatibility; canonical durable reference knowledge belongs in `wiki`. |
-| `journal` | `journal` | extended | Durable markdown journal with `action=list|read|write|append|search`; separate from memory, scratchpad, wiki, and active orientation. |
+| `journal` | `journal` | always-on | Durable markdown journal with `action=list|read|write|append|search`; separate from memory, scratchpad, wiki, and active orientation. |
 | `vault_write` | `vault` | hidden | Historical top-level name; use `vault action="write"` only for the external Obsidian bridge. |
 | `vault_read` | `vault` | hidden | Historical top-level name; use `vault action="read"` only for the external Obsidian bridge. |
 | `vault_search` | `vault` | hidden | Historical top-level name; use `vault action="search"` only for the external Obsidian bridge. |

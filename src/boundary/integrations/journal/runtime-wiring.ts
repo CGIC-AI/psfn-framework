@@ -10,7 +10,7 @@ export function registerJournalTools(
   target: JournalRuntimeTarget,
   journalOps: JournalOperations,
 ): void {
-  target.registerTool(createJournalTool(journalOps), 'extended');
+  target.registerTool(createJournalTool(journalOps), 'core');
 }
 
 export function wireJournalRuntime(

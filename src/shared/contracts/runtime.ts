@@ -18,7 +18,10 @@ import type { GatewayRoutingEnvelope } from '../routing/envelope.js';
 
 // ── Channel-agnostic message types ──
 
-export const CHANNEL_TYPES = ['discord', 'terminal', 'api', 'telegram', 'psfn-amica'] as const;
+// 'companion' is the same-cluster inter-companion lane (sprint 10, W6): peer
+// messages routed by the gateway enter the receiving agent as ordinary inbound
+// channel turns so fatigue/trust apply with zero new mechanism.
+export const CHANNEL_TYPES = ['discord', 'terminal', 'api', 'telegram', 'psfn-amica', 'companion'] as const;
 export type ChannelType = typeof CHANNEL_TYPES[number];
 export type { TurnID } from '../../core/turns/types.js';
 export type { ModelContextBudgetConfig } from '../context-budget-contracts.js';
@@ -206,7 +209,7 @@ export type ReflectionScopeHint =
   | { kind: 'group'; roomId: string; roomName?: string };
 
 export interface MessageRoutingMetadata {
-  source?: 'wyoming' | 'discord' | 'api' | 'psfn-amica' | 'satellite' | 'unknown';
+  source?: 'wyoming' | 'discord' | 'api' | 'psfn-amica' | 'satellite' | 'companion' | 'unknown';
   /**
    * Transport-level response disposition. `observe` messages are recorded as
    * context but must not trigger model response generation or channel egress.

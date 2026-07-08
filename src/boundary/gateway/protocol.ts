@@ -595,6 +595,33 @@ export interface DiscordMessageNotification {
   message: SubstrateMessage;
 }
 
+// ── Inter-companion channel lane (sprint 10, W6) ──
+// Agent → gateway send; gateway → recipient agents as an ordinary inbound
+// channel message notification so the normal turn pipeline (fatigue, trust,
+// extraction) applies with zero new mechanism.
+
+export interface CompanionMessageSendParams {
+  /** `companion-room:<placeId>` or canonical `companion-dm:<a>:<b>`. */
+  channelId: string;
+  content: string;
+  /** Display-only sender name (identity is the connection-bound companionId). */
+  authorName?: string;
+  /** Client-stamped companion identity; verified against the connection binding. */
+  companionId?: string;
+}
+
+export interface CompanionMessageSendResult {
+  channelId: string;
+  messageId: string;
+  deliveredTo: string[];
+  /** Room recipients present at the place but without a live agent connection. */
+  skippedOffline: string[];
+}
+
+export interface CompanionMessageNotification {
+  message: SubstrateMessage;
+}
+
 // ── Method map for typed RPC ──
 
 export interface GatewayMethods {
@@ -606,6 +633,7 @@ export interface GatewayMethods {
   'discord.send': [DiscordSendParams, DiscordSendResult];
   'discord.sendMedia': [DiscordSendMediaParams, DiscordSendMediaResult];
   'discord.typing': [DiscordTypingParams, DiscordTypingResult];
+  'companion.message.send': [CompanionMessageSendParams, CompanionMessageSendResult];
   'web.fetch': [WebFetchParams, WebFetchResult];
   'web.fetch_binary': [WebFetchBinaryParams, WebFetchBinaryResult];
   'web.request_binary': [WebRequestBinaryParams, WebRequestBinaryResult];
@@ -650,6 +678,7 @@ export interface GatewayMethods {
 export interface GatewayNotifications {
   'llm.chunk': LLMChunkNotification;
   'discord.message': DiscordMessageNotification;
+  'companion.message': CompanionMessageNotification;
   'api.stream.delta': ApiStreamDeltaNotification;
 }
 

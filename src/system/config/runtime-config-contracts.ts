@@ -137,6 +137,15 @@ export interface SubstrateConfig {
   databasePath: string;
   persistenceBackend?: PersistenceBackend;
   postgresDatabaseUrl?: string;
+  /**
+   * Optional per-companion Postgres schema (sprint 10, W2 multi-companion
+   * tenancy). When set, the agent's runtime persistence pools pin their
+   * search_path to this schema so all queries run inside it unchanged; the
+   * schema is created on startup if missing. When unset, runtime persistence
+   * uses the default (`public`) schema — byte-identical to single-companion
+   * behavior. Sourced from the `COMPANION_PG_SCHEMA` env var (see load-config).
+   */
+  postgresSchema?: string;
   sessionMessageLimit?: number;
   sessionRestartBehavior?: SessionRestartBehavior;
   continuityMessageLimit?: number;

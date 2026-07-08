@@ -99,6 +99,7 @@ export function createPostgresEpisodicStore(
   const pool = createPostgresPool(databaseUrl, {
     applicationName: 'psfn-episodic-memory',
     allowExitOnIdle: true,
+    schema: options.schema,
   });
   return createPostgresEpisodicStoreFromPool(pool, options);
 }

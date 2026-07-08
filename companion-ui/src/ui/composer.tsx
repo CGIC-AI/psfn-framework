@@ -14,13 +14,17 @@ import { AttachmentMenu } from './context-layers.js';
 export function Composer({
   canSend,
   voiceStopActive,
+  generationStopActive,
   controller,
   onSendText,
+  onStopGeneration,
 }: {
   canSend: boolean;
   voiceStopActive: boolean;
+  generationStopActive: boolean;
   controller: ComposerController;
   onSendText: (text: string) => void;
+  onStopGeneration: () => void;
 }) {
   function submit(event?: FormEvent<HTMLFormElement>) {
     event?.preventDefault();
@@ -97,15 +101,55 @@ export function Composer({
           {controller.micMode === 'dictation' ? 'Dictation' : 'Voice'}
         </button>
       </div>
-      <button
-        className={`send-button ${voiceStopActive ? 'stop-playback' : ''}`}
-        type={voiceStopActive ? 'button' : 'submit'}
-        onClick={voiceStopActive ? controller.stopVoicePlayback : undefined}
-        disabled={!voiceStopActive && (!canSend || !controller.input.trim())}
-        aria-label={voiceStopActive ? 'Stop voice playback' : 'Send message'}
-      >
-        {voiceStopActive ? <CircleStop aria-hidden /> : <Send aria-hidden />}
-      </button>
+      <StopOrSendButton
+        canSend={canSend}
+        generationStopActive={generationStopActive}
+        hasText={Boolean(controller.input.trim())}
+        onStopGeneration={onStopGeneration}
+        onStopVoicePlayback={controller.stopVoicePlayback}
+        voiceStopActive={voiceStopActive}
+      />
     </form>
+  );
+}
+
+/**
+ * Voice playback stop keeps priority; otherwise an in-flight assistant turn
+ * with no drafted text exposes an explicit stop-generation control so users
+ * can interrupt without sending a new message or disconnecting. Drafted text
+ * keeps the send affordance, which already interrupts on send.
+ */
+function StopOrSendButton({
+  canSend,
+  generationStopActive,
+  hasText,
+  onStopGeneration,
+  onStopVoicePlayback,
+  voiceStopActive,
+}: {
+  canSend: boolean;
+  generationStopActive: boolean;
+  hasText: boolean;
+  onStopGeneration: () => void;
+  onStopVoicePlayback: () => void;
+  voiceStopActive: boolean;
+}) {
+  const stopGenerationActive = !voiceStopActive && generationStopActive && !hasText;
+  const stopActive = voiceStopActive || stopGenerationActive;
+  const onStop = voiceStopActive ? onStopVoicePlayback : onStopGeneration;
+  return (
+    <button
+      className={`send-button ${stopActive ? 'stop-playback' : ''}`}
+      type={stopActive ? 'button' : 'submit'}
+      onClick={stopActive ? onStop : undefined}
+      disabled={!stopActive && (!canSend || !hasText)}
+      aria-label={voiceStopActive
+        ? 'Stop voice playback'
+        : stopGenerationActive
+          ? 'Stop generating'
+          : 'Send message'}
+    >
+      {stopActive ? <CircleStop aria-hidden /> : <Send aria-hidden />}
+    </button>
   );
 }

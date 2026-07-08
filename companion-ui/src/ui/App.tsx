@@ -101,6 +101,7 @@ export function App() {
   const companionTalking = Boolean(streamState.liveAssistant)
     || (latestTrace?.operationClass === 'relay_tts' && latestTrace.status === 'active');
   const voiceStopActive = composer.micMode === 'voice' && companionTalking;
+  const generationStopActive = Boolean(streamState.liveAssistant);
 
   async function connect() {
     if (!hubUrl || connecting) return;
@@ -140,6 +141,10 @@ export function App() {
 
   function sendUserText(text: string) {
     storeRef.current?.sendUserText(text, { interrupt: true });
+  }
+
+  function stopGeneration() {
+    storeRef.current?.interrupt();
   }
 
   return (
@@ -195,7 +200,9 @@ export function App() {
       <Composer
         canSend={canSend}
         controller={composer}
+        generationStopActive={generationStopActive}
         onSendText={sendUserText}
+        onStopGeneration={stopGeneration}
         voiceStopActive={voiceStopActive}
       />
 

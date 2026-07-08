@@ -705,6 +705,13 @@ export class PostgresEpisodicStore implements EpisodicStorePort {
       params.push(to);
       where.push(`started_at <= $${params.length}`);
     }
+    if (options.sessionId !== undefined) {
+      // Episodes are scoped by their threadId, which synthesis sets equal to the
+      // session id (buildEpisodeInput); the episode record has no distinct
+      // top-level sessionId field.
+      params.push(parseRequiredText(options.sessionId, 'sessionId'));
+      where.push(`thread_id = $${params.length}`);
+    }
     params.push(normalizeLimit(options.limit));
     const limitIndex = params.length;
     params.push(normalizeOffset(options.offset));

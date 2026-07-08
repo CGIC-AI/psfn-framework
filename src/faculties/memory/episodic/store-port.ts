@@ -307,6 +307,12 @@ export interface EpisodeTimeSearchOptions extends EpisodeListOptions {
    * stored without an explicit status. Omitted => all live episodes.
    */
   lifecycleStatus?: EpisodeLifecycleStatus;
+  /**
+   * Restrict to episodes belonging to one session. Episodes are scoped by
+   * their threadId, which synthesis sets equal to the session id, so this
+   * matches the episode's thread_id. Omitted => episodes from every session.
+   */
+  sessionId?: string;
 }
 
 export interface EpisodeArcListOptions {

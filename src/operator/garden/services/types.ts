@@ -1,1657 +1,236 @@
-import type {
-  CharacterCardHistoryEntry,
-  CharacterCardSnapshot,
-} from '../../../core/identity/card-versioning.js';
-import type { PromptLayerMetadataUpdate } from '../../../core/identity/prompt-store.js';
-import type {
-  PromptRegistryEntry,
-  PromptRegistryHistoryEntry,
-} from '../../../core/identity/prompt-registry.js';
-import type {
-  PromptRuntimeBlockId,
-  PromptRuntimeBlockPlacement,
-  PromptRuntimeBlockSchemaClassification,
-  PromptRuntimeBlockVisibility,
-  PromptRuntimeEditableBlockId,
-  PromptRuntimeMacroHint,
-} from '../../../core/identity/prompt-runtime.js';
-import type { PromptHistoryEntry, PromptLayer } from '../../../core/identity/prompt-types.js';
-import type { CharacterCardV2 } from '../../../core/identity/types.js';
-import type { RuntimePromptLayerSchemaClassification } from '../../../core/identity/runtime-prompt-layers.js';
-import type { EditableSettings } from '../../../system/settings.js';
-import type {
-  ContactProfileArtifact,
-  MemoryLink,
-} from '../../../faculties/memory/memory-store-port.js';
-import type { PurrMemory } from '../../../faculties/memory/types.js';
-import type { SharedBackgroundSource } from '../../../faculties/memory/retrieval/shared-background.js';
-import type {
-  Episode,
-  EpisodeArc,
-  EpisodeArtifactRef,
-  EpisodeProvenanceRef,
-  EpisodeSpanRef,
-} from '../../../shared/contracts/episodic-memory.js';
-import type { SessionEntry } from '../../../core/session/types.js';
-import type {
-  SessionRouteResetMode,
-  SourceChannelSessionRoute,
-} from '../../../core/session/session-routes.js';
-import type {
-  CogSecAffectedMessageRange,
-  CogSecCaseType,
-  CogSecSeverity,
-} from '../../../core/cogsec/events.js';
-import type { CogSecLineagePreview } from '../../../core/cogsec/lineage.js';
-import type {
-  CogSecAgentVisibleEvent,
-  CogSecOperatorVisibleEvent,
-} from '../../../core/cogsec/safe-log.js';
-import type { CogSecL0TombstoneResult } from '../../../persistence/sessions/store.js';
-import type { CogSecRevocationResult } from '../../../core/cogsec/revocation.js';
-import type { CogSecRegenerationResult } from '../../../core/cogsec/regeneration.js';
-import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
-import type {
-  ContextMessage,
-  LLMProviderWireMessage,
-  LLMSystemPromptTransport,
-  PromptSectionTelemetry,
-  ToolSchema,
-  TurnRecord,
-} from '../../../shared/contracts/runtime.js';
-import type { PromptPlan } from '../../../core/agent/substrate-agent/turn-execution/prompt-plan.js';
-import type {
-  RunChargeLedgerData,
-  RunChargeLedgerQuery,
-} from '../../../shared/telemetry/charge-ledger.js';
-import type {
-  FatigueLedgerData,
-  FatigueLedgerQuery,
-} from '../../../shared/telemetry/fatigue-ledger.js';
-import type {
-  ModelUsageData,
-  ModelUsageQuery,
-} from '../../../shared/telemetry/model-usage.js';
-import type {
-  RuntimeDiagnosticsQuery,
-  RuntimeDiagnosticsSnapshot,
-} from '../../../shared/diagnostics/runtime-diagnostics.js';
-import type {
-  PostTurnActionQueueStatus,
-  PostTurnActionStatusRecord,
-} from '../../../core/agent/post-turn-action-runtime.js';
-import type { OutreachOutboxRecord } from '../../../core/intention/outreach-outbox.js';
-import type {
-  ActiveConcern,
-  ActiveConcernListOptions,
-  ActiveConcernStaleResolutionOptions,
-  ActiveConcernTransitionOptions,
-} from '../../../core/intention/concerns.js';
-import type {
-  Contact,
-  ContactIdentityLinkVerification,
-  ContactMutationAuditEntry,
-  ContactMutationAuditQuery,
-  RelationshipType,
-  SocialGraphEntitySource,
-  SocialRelationshipKind,
-} from '../../../core/contacts/types.js';
-import type { SensitivityLevel, TrustLevel } from '../../../system/trust/types.js';
-import type {
-  ChannelDeliveryStyle,
-  ChannelEnvelopeLabel,
-  ChannelPrivacy,
-  ContactTrackingMode,
-} from '../../../system/trust/context-envelope.js';
-import type { ChannelClassificationSource } from '../../../system/trust/policy.js';
-import type {
-  CapabilityTierConfig,
-} from '../../../system/config/capability-tier-config.js';
-import type { ChargePolicyConfig } from '../../../system/config/charge-policy-config.js';
-import type { FatigueTuningReport } from '../../../core/agent/fatigue/adaptive-tuning.js';
-import type { SettingsContractData } from '../../../system/config/settings-contract.js';
-import type { BackupJsonConfig } from '../../../system/config/backup-config.js';
-import type { GroupMemorySettings } from '../../../system/config/group-memory-config.js';
-import type { ModelsRuntimeConfig } from '../../../system/config/models-config.js';
-import type { ProvidersRuntimeConfig } from '../../../system/config/providers-config.js';
-import type { SchedulerRuntimeConfig } from '../../../system/config/scheduler-config.js';
-import type { SkillsRuntimeConfig } from '../../../system/config/skills-config.js';
-import type { TrustPolicyConfig } from '../../../system/config/trust-policy-config.js';
-import type { NorthStarItem, NorthStarScope } from '../../../faculties/north-star/store.js';
-import type {
-  ChannelInfo,
-  CompactionAuditView,
-  DashboardCostWindow,
-  DashboardStats,
-  EnvInfo,
-} from '../types.js';
-import type { ContactConversationChannelView } from './contact-session-linker.js';
-import type { IdentityIntakeReviewState } from '../identity-intake-types.js';
-import type {
-  AdaptiveToolDecisionTelemetry,
-  AdaptiveToolRuntimeState,
-  AdaptiveToolSnapshotTelemetry,
-} from '../../../core/agent/adaptive-tools-telemetry.js';
-import type { RuntimeToolCatalogSnapshot } from '../../../core/agent/tool-catalog.js';
-import type {
-  RuntimeServiceHealth,
-  RuntimeServiceHealthStatus,
-} from '../../tool-health/types.js';
-import type { EventMap } from '../../../shared/event-bus.js';
-import type {
-  GroupMemoryClassificationMode,
-  GroupMemoryClassificationReason,
-  GroupMemoryModeSource,
-  GroupMemoryParticipantWindow,
-  GroupMemoryRecentParticipant,
-  GroupMemoryTopologyResolution,
-} from '../../../faculties/memory/extraction/group-classifier.js';
-import type {
-  GroupMemoryRangeChunk,
-  GroupMemoryWatermarkRecord,
-} from '../../../faculties/memory/extraction/group-ranges.js';
-import type {
-  GroupMemorySalienceReason,
-  GroupMemorySalienceTelemetry,
-} from '../../../faculties/memory/extraction/group-salience.js';
-import type {
-  GroupMemoryBackfillInput,
-  GroupMemoryBackfillResult,
-} from '../../../faculties/memory/extraction/group-backfill.js';
-import type {
-  ObservedMemory,
-  ObservedScoredMemory,
-  TurnMemorySnapshotRecord,
-  TurnRetrievalTelemetryRecord,
-  TurnSessionContextSnapshotRecord,
-  TurnSnapshotRecord,
-  TurnStageTelemetryRecord,
-} from '../../../core/turns/observability.js';
-import type { SessionRoleEnvelopePreview } from '../../../core/internal-role-envelopes/projections.js';
-import type { MessageClass } from '../../../core/agent/message-classes.js';
-import type {
-  AdminMemoryManagedScopeKind,
-  AdminMemoryScopeEvidenceItem,
-} from './memory-scope-evidence.js';
-import type {
-  ShardFoldReviewDecision,
-  ShardFoldReviewRecord,
-  ShardFoldReviewState,
-} from '../../../faculties/shards/fold-review.js';
-import type {
-  ImageReferenceBlob,
-  ImageReferenceListData,
-  ImageReferencePhoto,
-  ImageReferenceUpdateInput,
-  ImageReferenceUploadInput,
-} from '../../../primitives/images/reference-store.js';
-import type { ArtifactLifecycleStatus } from '../../../persistence/artifact-lifecycle/manager.js';
-import type {
-  ResearchLibraryEntryDetail,
-  ResearchLibraryEntrySummary,
-} from '../../../faculties/memory/research-library/types.js';
-import type {
-  WikiDocument,
-  WikiDocumentListEntry,
-  WikiSearchResult,
-} from '../../../faculties/wiki/types.js';
 export type {
   AdminAuditHistoryQuery,
   AdminAuditHistoryService,
 } from './audit-history-service.js';
 
-export interface AdminDashboardData {
-  stats: DashboardStats;
-}
-
-export interface AdminDashboardService {
-  getDashboardData(options?: { costWindow?: DashboardCostWindow }): Promise<AdminDashboardData>;
-}
-
-export interface AdminDiagnosticsService {
-  getDiagnostics(query?: RuntimeDiagnosticsQuery): Promise<RuntimeDiagnosticsSnapshot>;
-}
-
-export interface AdminConcernListData {
-  concerns: ActiveConcern[];
-}
-
-export interface AdminConcernMutationResult {
-  ok: boolean;
-  concerns: ActiveConcern[];
-  message?: string;
-}
-
-export interface AdminConcernService {
-  listConcerns(options?: ActiveConcernListOptions): Promise<AdminConcernListData>;
-  resolveConcern(
-    id: string,
-    options?: { outcome?: string; evidenceRef?: string },
-  ): Promise<AdminConcernMutationResult>;
-  suppressConcern(
-    id: string,
-    options?: { outcome?: string; evidenceRef?: string },
-  ): Promise<AdminConcernMutationResult>;
-  transitionConcern(
-    id: string,
-    options: ActiveConcernTransitionOptions,
-  ): Promise<AdminConcernMutationResult>;
-  resolveStaleConcerns(
-    options?: ActiveConcernStaleResolutionOptions,
-  ): Promise<AdminConcernMutationResult>;
-}
-
-export interface AdminGeneratedImageRootView {
-  kind: 'personal' | 'companion';
-  path: string;
-}
-
-export interface AdminGeneratedImageView {
-  id: string;
-  url: string;
-  rootKind: 'personal' | 'companion';
-  relativePath: string;
-  fileName: string;
-  contentType: string;
-  sizeBytes: number;
-  createdAt: string;
-  updatedAt: string;
-  prompt?: string;
-  provider?: string;
-  mode?: string;
-  model?: string;
-  sourceToolName?: string;
-  requestId?: string;
-  referenceImageIds?: string[];
-  favorite: boolean;
-  tags: string[];
-  meaningfulMoment?: AdminGeneratedImageMeaningfulMoment;
-  conversation?: AdminGeneratedImageConversationLink;
-  companionNoteRefs: AdminGeneratedImageCompanionNoteRef[];
-  artifactRefs: AdminGeneratedImageArtifactRef[];
-}
-
-export interface AdminGeneratedImageConversationLink {
-  channelId?: string;
-  channelType?: string;
-  turnId?: string;
-  requestId?: string;
-  sourceMessageId?: string;
-  userSessionEntryId?: number;
-  assistantSessionEntryId?: number;
-}
-
-export interface AdminGeneratedImageCompanionNoteRef {
-  id: string;
-  label?: string;
-  url?: string;
-}
-
-export interface AdminGeneratedImageArtifactRef {
-  kind: 'generated_image' | 'shared_image' | 'conversation_turn' | 'companion_note' | 'l0_artifact';
-  refId?: string;
-  label?: string;
-  url?: string;
-  localPath?: string;
-}
-
-export interface AdminGeneratedImageMeaningfulMoment {
-  marked: boolean;
-  markedAt: string;
-  note?: string;
-  conversation?: AdminGeneratedImageConversationLink;
-}
-
-export interface AdminGeneratedImageListQuery {
-  tags?: string[];
-  favorite?: boolean;
-  meaningful?: boolean;
-  search?: string;
-}
-
-export interface AdminGeneratedImageUpdateInput {
-  favorite?: boolean;
-  tags?: string[];
-  meaningfulMoment?: {
-    marked: boolean;
-    note?: string;
-  };
-  conversation?: AdminGeneratedImageConversationLink;
-  companionNoteRefs?: AdminGeneratedImageCompanionNoteRef[];
-  artifactRefs?: AdminGeneratedImageArtifactRef[];
-}
-
-export interface AdminGeneratedImageListData {
-  roots: AdminGeneratedImageRootView[];
-  images: AdminGeneratedImageView[];
-}
-
-export interface AdminImageBlob {
-  fileName: string;
-  contentType: string;
-  data: Buffer;
-}
-
-export interface AdminImagesService {
-  listGeneratedImages(query?: AdminGeneratedImageListQuery): Promise<AdminGeneratedImageListData>;
-  getGeneratedImageBlob(id: string): Promise<AdminImageBlob | null>;
-  updateGeneratedImage(id: string, input: AdminGeneratedImageUpdateInput): Promise<AdminGeneratedImageView>;
-  listReferencePhotos(): Promise<ImageReferenceListData>;
-  addReferencePhoto(input: ImageReferenceUploadInput): Promise<ImageReferencePhoto>;
-  updateReferencePhoto(id: string, input: ImageReferenceUpdateInput): Promise<ImageReferencePhoto>;
-  deleteReferencePhoto(id: string): Promise<void>;
-  setDefaultReferencePhoto(id: string): Promise<ImageReferencePhoto>;
-  getReferencePhotoBlob(id: string): Promise<ImageReferenceBlob | null>;
-}
-
-export interface AdminWikiListData {
-  roots: {
-    workspaceRoot: string;
-    wikiRoot: string;
-    documentsDir: string;
-    metadataDir: string;
-  };
-  documents: WikiDocumentListEntry[];
-  boundary: string;
-}
-
-export interface AdminWikiService {
-  listWikiDocuments(): Promise<AdminWikiListData>;
-  getWikiDocument(id: string): Promise<WikiDocument | null>;
-  searchWikiDocuments(query: { query: string; limit?: number }): Promise<WikiSearchResult>;
-}
-
-export interface AdminChargeLedgerService {
-  getChargeLedgerData(query?: RunChargeLedgerQuery & FatigueLedgerQuery): Promise<RunChargeLedgerData & {
-    fatigue?: FatigueLedgerData;
-    fatigueTuning?: FatigueTuningReport;
-  }>;
-}
-
-export interface AdminModelUsageService {
-  getModelUsageData(query?: ModelUsageQuery): Promise<ModelUsageData>;
-}
-
-export interface AdminActionPipeStatus extends PostTurnActionQueueStatus {
-  outreachOutbox?: {
-    recentRecords: OutreachOutboxRecord[];
-  };
-}
-
-export interface AdminActionPipeMutationResult {
-  ok: boolean;
-  message: string;
-  action?: PostTurnActionStatusRecord;
-  status: AdminActionPipeStatus;
-}
-
-export interface AdminActionPipeService {
-  getActionPipeStatus(): Promise<AdminActionPipeStatus>;
-  cancelAction(input: { actionRef: string; reason?: string }): Promise<AdminActionPipeMutationResult>;
-  acknowledgeAction(input: { actionRef: string; detail?: string }): Promise<AdminActionPipeMutationResult>;
-}
-
-export interface AdminShardFoldReviewSummary {
-  shardId: string;
-  channelId: string;
-  task: string;
-  validationPath: string;
-  reviewState: ShardFoldReviewState;
-  createdAt: number;
-  updatedAt: number;
-  lastReviewedAt?: number;
-  pendingMemoryCount: number;
-  pendingArtifactCount: number;
-  blockingReasons: string[];
-  emotionalOrRelational: boolean;
-}
-
-export interface AdminShardFoldReviewListData {
-  reviews: AdminShardFoldReviewSummary[];
-}
-
-export interface AdminShardFoldReviewResolveResult {
-  ok: boolean;
-  review?: ShardFoldReviewRecord;
-  message?: string;
-}
-
-export interface AdminShardFoldReviewService {
-  listShardFoldReviews(): Promise<AdminShardFoldReviewListData>;
-  getShardFoldReview(shardId: string): Promise<ShardFoldReviewRecord | null>;
-  resolveShardFoldReview(input: {
-    shardId: string;
-    decision: ShardFoldReviewDecision;
-    actor?: string;
-    note?: string;
-  }): Promise<AdminShardFoldReviewResolveResult>;
-}
-
-export type AdminAdaptiveToolTelemetryEvent =
-  | {
-    type: 'decision';
-    timestamp: number;
-    payload: AdaptiveToolDecisionTelemetry;
-  }
-  | {
-    type: 'snapshot';
-    timestamp: number;
-    payload: AdaptiveToolSnapshotTelemetry;
-  };
-
-export interface AdminToolFailureEvent {
-  toolName: string;
-  channelId: string;
-  message: string;
-  timestamp: number;
-}
-
-export interface AdminToolAvailabilityView {
-  status: 'active' | 'available' | 'unavailable' | 'not_applicable';
-  detail: string;
-  source?: string;
-}
-
-export interface AdminToolHealthView {
-  name: string;
-  description: string;
-  scope: 'core' | 'extended' | 'conditional';
-  schema?: RuntimeToolCatalogSnapshot['tools'][number]['schema'];
-  health: {
-    status: RuntimeServiceHealthStatus;
-    detail: string;
-  };
-  contexts: {
-    chat: AdminToolAvailabilityView;
-    internalHeartbeat: AdminToolAvailabilityView;
-  };
-  lastFailure?: AdminToolFailureEvent;
-}
-
-export interface AdminToolInventoryGroup {
-  key: string;
-  title: string;
-  detail: string;
-  accent: string;
-  tools: AdminToolHealthView[];
-}
-
-export interface AdminAdaptiveToolsData {
-  state: AdaptiveToolRuntimeState | null;
-  catalog: RuntimeToolCatalogSnapshot | null;
-  serviceHealth: RuntimeServiceHealth[];
-  toolHealth: AdminToolHealthView[];
-  inventory: AdminToolInventoryGroup[];
-  recentFailures: AdminToolFailureEvent[];
-  recentTelemetry: AdminAdaptiveToolTelemetryEvent[];
-}
-
-export interface AdminAdaptiveToolsService {
-  getAdaptiveToolsData(): Promise<AdminAdaptiveToolsData>;
-}
-
-export interface AdminMemoryContactSummary {
-  id: string;
-  displayName: string;
-}
-
-/**
- * Explicit redaction descriptor for a high-intimacy memory body hidden from
- * the Garden admin memory API. The marker is honest: it names the sensitivity
- * level, the original body length, and how to reveal it.
- */
-export interface AdminMemoryBodyRedaction {
-  sensitivity: SensitivityLevel;
-  originalLength: number;
-  reason: 'high_intimacy_sensitivity';
-  revealHint: string;
-}
-
-/**
- * A memory row as served by the Garden admin memory API. Identical to the
- * stored row for public/personal rows or when body access is granted;
- * otherwise `text` carries a redaction marker and `bodyRedacted` is set.
- */
-export type AdminMemoryView = PurrMemory & {
-  bodyRedacted?: boolean;
-  bodyRedaction?: AdminMemoryBodyRedaction;
-};
-
-/** Session-elevation state for reading high-intimacy memory bodies. */
-export interface AdminMemoryElevationStatus {
-  elevated: boolean;
-  expiresAt?: number;
-  ttlMs: number;
-}
-
-export interface AdminMemoryPrivacySummary {
-  activeMemoryCount: number;
-  matchingMemoryCount: number;
-  pageMemoryCount: number;
-  highSensitivityCount: number;
-  consentGatedCount: number;
-  contactLinkedCount: number;
-  scopedCount: number;
-  preferenceCount: number;
-  durablePreferenceCount: number;
-  sensitivityCounts: Record<string, number>;
-}
-
-export interface AdminMemoryListData {
-  memories: AdminMemoryView[];
-  contactsById: Map<string, AdminMemoryContactSummary>;
-  privacySummary: AdminMemoryPrivacySummary;
-  pagination: {
-    limit: number;
-    offset: number;
-    total: number;
-    hasPrevious: boolean;
-    hasNext: boolean;
-  };
-  elevation: AdminMemoryElevationStatus;
-}
-
-export interface AdminMemoryDetailData {
-  memory: AdminMemoryView;
-  linkedContact?: AdminMemoryContactSummary;
-  scopeAssignments: AdminMemoryScopeAssignmentView[];
-  scopeRepair?: AdminMemoryScopeRepairView;
-  elevation: AdminMemoryElevationStatus;
-}
-
-export interface AdminMemorySearchResult {
-  query: string;
-  results: AdminMemoryView[];
-  contactsById: Map<string, AdminMemoryContactSummary>;
-  privacySummary: AdminMemoryPrivacySummary;
-  elevation: AdminMemoryElevationStatus;
-}
-
-/** One shared-background item in the operator/admin view (E4.5). */
-export interface AdminSharedBackgroundItem {
-  /** Body redaction is inherited from the E3.5 admin body gate. */
-  memory: AdminMemoryView;
-  sources: SharedBackgroundSource[];
-  score: number;
-}
-
-/** Operator/admin shared-background query result ("what links A and B"). */
-export interface AdminSharedBackgroundResult {
-  contactAId: string;
-  contactBId: string;
-  contactADisplayName?: string;
-  contactBDisplayName?: string;
-  resolved: boolean;
-  missingContactIds: string[];
-  items: AdminSharedBackgroundItem[];
-  contactsById: Map<string, AdminMemoryContactSummary>;
-  totalCandidates: number;
-  truncated: boolean;
-  limit: number;
-  elevation: AdminMemoryElevationStatus;
-}
-
-export interface MemoryMutationResult {
-  ok: boolean;
-  message?: string;
-}
-
-export interface AdminMemoryLinkResult {
-  ok: boolean;
-  link?: MemoryLink;
-  message?: string;
-}
-
-export interface AdminBulkMutationResult {
-  ok: boolean;
-  count: number;
-  message?: string;
-}
-
-export interface AdminMemoryScopeAssignmentView {
-  kind: AdminMemoryManagedScopeKind;
-  id: string;
-  label?: string;
-  canonicalTag: string;
-  evidence: AdminMemoryScopeEvidenceItem[];
-}
-
-export interface AdminMemoryScopeRepairView {
-  needsRepair: boolean;
-  suggestedScopeRef?: {
-    kind: string;
-    id: string;
-    label?: string;
-  };
-  suggestedScopeTags: string[];
-  notes: string[];
-}
-
-export interface AdminMemoryScopeSummary {
-  kind: AdminMemoryManagedScopeKind;
-  id: string;
-  label?: string;
-  canonicalTag: string;
-  memoryCount: number;
-  needsRepairCount: number;
-}
-
-export interface AdminMemoryScopedMemoryView {
-  memory: AdminMemoryView;
-  evidence: AdminMemoryScopeEvidenceItem[];
-  repair: AdminMemoryScopeRepairView;
-}
-
-export interface AdminMemoryScopeListData {
-  scopes: AdminMemoryScopeSummary[];
-}
-
-export interface AdminMemoryScopeDetailData {
-  scope: AdminMemoryScopeSummary;
-  memories: AdminMemoryScopedMemoryView[];
-  elevation: AdminMemoryElevationStatus;
-}
-
-export interface AdminMemoryScopeMutationResult extends MemoryMutationResult {
-  memory?: AdminMemoryDetailData['memory'];
-  scopeAssignments?: AdminMemoryScopeAssignmentView[];
-  scopeRepair?: AdminMemoryScopeRepairView;
-}
-
-/**
- * Identity of the requesting admin session for body-gate grants. `null`
- * means no session identity could be derived from the request; the gate
- * fail-closes to redacted bodies and refuses new grants for that case.
- */
-export type AdminMemorySessionKey = string | null;
-
-export interface AdminMemoryService {
-  /**
-   * Binds the per-request admin session identity. Body-gate grants
-   * (elevation and reveals) are keyed by this identity so one operator's
-   * grants never leak memory bodies to other concurrent admin sessions.
-   */
-  forSession(sessionKey: AdminMemorySessionKey): AdminMemorySessionService;
-}
-
-export interface AdminMemorySessionService {
-  listMemories(params?: URLSearchParams): Promise<AdminMemoryListData>;
-  getMemoryDetail(id: string): Promise<AdminMemoryDetailData | null>;
-  listManagedScopes(params?: URLSearchParams): Promise<AdminMemoryScopeListData>;
-  getManagedScopeDetail(kind: string, id: string): Promise<AdminMemoryScopeDetailData | null>;
-  searchMemories(query: string): Promise<AdminMemorySearchResult>;
-  /**
-   * Shared-background query (E4.5): the union of memories linking two contacts.
-   * Bodies inherit the E3.5 admin body gate (redacted unless revealed/elevated).
-   */
-  sharedBackground(
-    contactAId: string,
-    contactBId: string,
-    limit?: number,
-  ): Promise<AdminSharedBackgroundResult>;
-  supersedeMemory(id: string): Promise<MemoryMutationResult>;
-  updateMemoryScope(
-    id: string,
-    fields: {
-      scopeRef?: { kind?: string; id?: string; label?: string } | null;
-      scopeTags?: string[];
-      repair?: boolean;
-    },
-  ): Promise<AdminMemoryScopeMutationResult>;
-  linkMemories(id1: string, id2: string, linkType?: string): Promise<AdminMemoryLinkResult>;
-  unlinkMemories(id1: string, id2: string): Promise<MemoryMutationResult>;
-  getMemoryLinks(id: string): Promise<MemoryLink[]>;
-  bulkDelete(ids: string[]): Promise<AdminBulkMutationResult>;
-  bulkUpdate(ids: string[], fields: { memoryType?: string; sensitivity?: string; retentionClass?: string }): Promise<AdminBulkMutationResult>;
-  /** Current session-elevation state for high-intimacy memory bodies. */
-  getBodyElevationStatus(): AdminMemoryElevationStatus;
-  /** Grants TTL-bound access to all high-intimacy memory bodies. Audit-logged. */
-  elevateBodyAccess(): AdminMemoryElevationStatus;
-  /** Ends an active body-access elevation immediately. Audit-logged. */
-  dropBodyElevation(): AdminMemoryElevationStatus;
-  /** Reveals a single memory body (TTL-bound grant for that id). Audit-logged when it uncovers a high-intimacy body. */
-  revealMemory(id: string): Promise<AdminMemoryDetailData | null>;
-}
-
-export interface AdminGroupMemoryClassificationView {
-  mode: GroupMemoryClassificationMode;
-  reason: GroupMemoryClassificationReason;
-  topology: GroupMemoryTopologyResolution;
-  configuredMemoryMode: GroupMemorySettings['memoryMode'];
-  configuredMemoryModeSource: GroupMemoryModeSource;
-  manualOverrideSource?: GroupMemoryModeSource;
-  recentParticipantCount: number;
-  recentParticipantContactIds: string[];
-  recentParticipants: GroupMemoryRecentParticipant[];
-  participantWindow: GroupMemoryParticipantWindow;
-}
-
-export interface AdminGroupMemoryRangeView {
-  headMessageId: number | null;
-  watermarkLagMessageIds: number;
-  plannedChunkCount: number;
-  hasDeferredBacklog: boolean;
-  deferredAfterMessageId?: number;
-  firstChunk?: Pick<
-    GroupMemoryRangeChunk,
-    | 'spanStartMessageId'
-    | 'spanEndMessageId'
-    | 'contextStartMessageId'
-    | 'contextEndMessageId'
-    | 'newEntryCount'
-    | 'overlapEntryCount'
-    | 'estimatedTokens'
-  >;
-}
-
-export interface AdminGroupMemoryCandidateSpanView {
-  startMessageId: number;
-  endMessageId: number;
-  contextStartMessageId: number;
-  contextEndMessageId: number;
-  sourceMessageIds: number[];
-  newSourceMessageIds: number[];
-  contextMessageIds: number[];
-  score: number;
-  reasons: GroupMemorySalienceReason[];
-  contributingAuthorIds: string[];
-  contributingContactIds: string[];
-}
-
-export interface AdminGroupMemorySalienceView {
-  telemetry: GroupMemorySalienceTelemetry;
-  candidateSpans: AdminGroupMemoryCandidateSpanView[];
-}
-
-export type AdminGroupMemoryExtractionTelemetry = EventMap['memory.extraction.end'];
-
-export type AdminGroupMemoryContactProfileStatus =
-  | 'profile_ready'
-  | 'profile_missing'
-  | 'insufficient_source_memories'
-  | 'no_activity';
-
-export interface AdminGroupMemoryContactCoverage {
-  contactId: string;
-  displayName?: string;
-  recentMessageCount: number;
-  sourceMemoryCount: number;
-  subjectMemoryCount: number;
-  routedMemoryCount: number;
-  totalAttributedMemoryCount: number;
-  profileStatus: AdminGroupMemoryContactProfileStatus;
-  profileSourceMemoryCount?: number;
-  profileUpdatedAt?: number;
-  skipReason?: string;
-}
-
-export interface AdminGroupMemoryCoverageView {
-  channelMemoryCount: number;
-  activeMemoryCount: number;
-  highSensitivityMemoryCount: number;
-  perContact: AdminGroupMemoryContactCoverage[];
-}
-
-export interface AdminGroupMemoryChannelDiagnostics {
-  channelId: string;
-  sessionId?: string;
-  channelType: string | null;
-  messageCount: number;
-  lastActivityAt?: number;
-  resolvedConfig: GroupMemorySettings;
-  classification: AdminGroupMemoryClassificationView;
-  watermark: GroupMemoryWatermarkRecord;
-  range: AdminGroupMemoryRangeView;
-  salience: AdminGroupMemorySalienceView | null;
-  lastExtraction: AdminGroupMemoryExtractionTelemetry | null;
-  coverage: AdminGroupMemoryCoverageView;
-  privacy: {
-    rawTranscriptTextIncluded: false;
-    memoryTextIncluded: false;
-  };
-}
-
-export interface AdminGroupMemoryDiagnosticsListData {
-  channels: AdminGroupMemoryChannelDiagnostics[];
-  reasonCounts: Record<string, number>;
-}
-
-export interface AdminGroupMemoryService {
-  listGroupMemoryDiagnostics(): Promise<AdminGroupMemoryDiagnosticsListData>;
-  getGroupMemoryChannelDiagnostics(channelId: string): Promise<AdminGroupMemoryChannelDiagnostics | null>;
-  runGroupMemoryBackfill(
-    channelId: string,
-    input: GroupMemoryBackfillInput,
-  ): Promise<GroupMemoryBackfillResult>;
-}
-
-export interface AdminEpisodicEpisodeListData {
-  episodes: Episode[];
-  pagination: {
-    limit: number;
-    offset: number;
-    total: number;
-    hasPrevious: boolean;
-    hasNext: boolean;
-  };
-  filters: {
-    threadId?: string;
-    from?: string;
-    to?: string;
-  };
-}
-
-export interface AdminEpisodicRelatedArcView {
-  arc: EpisodeArc;
-  direction: 'incoming' | 'outgoing';
-  relatedEpisode: Episode | null;
-}
-
-export interface AdminEpisodicEpisodeProvenanceData {
-  episodeId: string;
-  spanRefs: EpisodeSpanRef[];
-  artifactRefs: EpisodeArtifactRef[];
-  provenanceRefs: EpisodeProvenanceRef[];
-}
-
-export interface AdminEpisodicEpisodeDetailData extends AdminEpisodicEpisodeProvenanceData {
-  episode: Episode;
-  relatedArcs: AdminEpisodicRelatedArcView[];
-  threadEpisodes: Episode[];
-}
-
-export interface AdminEpisodicThreadSummary {
-  threadId: string;
-  episodeCount: number;
-  arcCount: number;
-  startedAt: string;
-  endedAt: string;
-  topThemes: string[];
-  salienceScore: number;
-  latestEpisodeId: string;
-  latestEpisodeTitle: string;
-}
-
-export interface AdminEpisodicThreadListData {
-  threads: AdminEpisodicThreadSummary[];
-}
-
-export interface AdminEpisodicThreadDetailData {
-  thread: AdminEpisodicThreadSummary;
-  episodes: Episode[];
-  arcs: EpisodeArc[];
-  relatedArcs: AdminEpisodicRelatedArcView[];
-}
-
-export interface AdminEpisodicMemoryService {
-  listEpisodes(params?: URLSearchParams): Promise<AdminEpisodicEpisodeListData>;
-  getEpisodeDetail(id: string): Promise<AdminEpisodicEpisodeDetailData | null>;
-  getEpisodeProvenance(id: string): Promise<AdminEpisodicEpisodeProvenanceData | null>;
-  listEpisodeArcs(
-    id: string,
-    params?: URLSearchParams,
-  ): Promise<{ episodeId: string; relatedArcs: AdminEpisodicRelatedArcView[] } | null>;
-  listThreads(params?: URLSearchParams): Promise<AdminEpisodicThreadListData>;
-  getThreadDetail(threadId: string): Promise<AdminEpisodicThreadDetailData | null>;
-}
-
-export interface AdminSessionListData {
-  channels: ChannelInfo[];
-}
-
-export type AdminSessionRouteView = SourceChannelSessionRoute;
-
-export interface AdminSessionRouteListData {
-  routes: AdminSessionRouteView[];
-  channels: ChannelInfo[];
-}
-
-export interface AdminSessionRouteResetInput {
-  sourceChannelId: string;
-  reason: string;
-  actor?: string;
-  mode?: SessionRouteResetMode;
-}
-
-export interface AdminSessionRouteResetData {
-  ok: boolean;
-  message: string;
-  sourceChannelId: string;
-  oldLogicalSessionId: string;
-  newLogicalSessionId: string;
-  route: AdminSessionRouteView;
-  retiredSession: SourceChannelSessionRoute['retiredSessions'][number];
-}
-
-export interface AdminCogSecRemediationInput {
-  caseId?: string;
-  sourceChannelId: string;
-  affectedLogicalSessionIds?: string[];
-  affectedMessageRanges?: CogSecAffectedMessageRange[];
-  messageIds?: number[];
-  startEntryId?: number;
-  endEntryId?: number;
-  type: CogSecCaseType;
-  severity: CogSecSeverity;
-  reason: string;
-  actor?: string;
-  cutEpoch?: boolean;
-}
-
-export interface AdminCogSecCaseDraftView {
-  caseId: string;
-  type: CogSecCaseType;
-  severity: CogSecSeverity;
-  status: 'planned';
-  sourceChannelId: string;
-  affectedLogicalSessionIds: string[];
-  affectedMessageRanges: CogSecAffectedMessageRange[];
-  actor: string;
-  safeSummary: string;
-}
-
-export interface AdminCogSecPreviewCounts {
-  l0Rows: number;
-  projectionRows: number;
-  memories: number;
-  embeddingMemoryRows: number;
-  compactionSummaries: number;
-  externalArtifacts: number;
-  lineageGaps: number;
-}
-
-export interface AdminCogSecEventListData {
-  events: CogSecOperatorVisibleEvent[];
-}
-
-export interface AdminCogSecRemediationPreviewData {
-  ok: boolean;
-  draft: AdminCogSecCaseDraftView;
-  preview: CogSecLineagePreview;
-  counts: AdminCogSecPreviewCounts;
-  existingEvents: CogSecOperatorVisibleEvent[];
-}
-
-export interface AdminCogSecRouteResetResult {
-  sourceChannelId: string;
-  oldLogicalSessionId: string;
-  newLogicalSessionId: string;
-  routeGeneration?: number;
-}
-
-export interface AdminCogSecRemediationApplyData {
-  ok: boolean;
-  message: string;
-  event: CogSecAgentVisibleEvent;
-  operatorEvent: CogSecOperatorVisibleEvent;
-  preview: CogSecLineagePreview;
-  counts: AdminCogSecPreviewCounts;
-  tombstones: CogSecL0TombstoneResult[];
-  revocation: CogSecRevocationResult;
-  regeneration: CogSecRegenerationResult;
-  routeReset?: AdminCogSecRouteResetResult;
-}
-
-export interface AdminSessionMessageOntologyView {
-  sessionEntryId: number;
-  transportRole: SessionEntry['role'];
-  promptRole: 'user' | 'assistant' | 'toolResult' | 'custom';
-  semanticType: 'outwardSpeech' | 'toolResult' | 'systemNote' | 'mirror';
-  messageClass: MessageClass | null;
-  promptVisibility: 'prompt_visible' | 'operator_only';
-  displayLabel: string;
-}
-
-export interface AdminSessionMessagesData {
-  sessionId: string;
-  channelId: string;
-  messages: SessionEntry[];
-  pagination: AdminSessionMessagePaginationData;
-  messageOntologyViews: AdminSessionMessageOntologyView[];
-  roleEnvelopePreviews: AdminSessionRoleEnvelopePreview[];
-  compactionAuditViews: CompactionAuditView[];
-  turns: AdminSessionTurnData[];
-}
-
-export interface AdminSessionMessagePaginationOptions {
-  limit?: number;
-  beforeId?: number | null;
-  /**
-   * Skip turn snapshots, compaction audit verification, and role-envelope
-   * previews. Used by pickers (e.g. CogSec row selection) so huge sessions
-   * page cheaply.
-   */
-  messagesOnly?: boolean;
-}
-
-export interface AdminSessionSearchHitView {
-  messageId: number;
-  role: SessionEntry['role'];
-  authorId?: string;
-  authorName?: string;
-  content: string;
-  timestamp: number;
-  snippet: string;
-}
-
-export interface AdminSessionSearchData {
-  sessionId: string;
-  query: string;
-  limit: number;
-  hits: AdminSessionSearchHitView[];
-}
-
-export interface AdminSessionMessagePaginationData {
-  limit: number;
-  beforeId: number | null;
-  nextBeforeId: number | null;
-  hasMoreOlder: boolean;
-  totalMessages: number;
-  returnedMessages: number;
-}
-
-export interface AdminSessionService {
-  listSessions(): Promise<AdminSessionListData>;
-  getSessionMessages(sessionId: string, options?: AdminSessionMessagePaginationOptions): AdminSessionMessagesData;
-  searchSessionMessages(sessionId: string, query: string, limit?: number): Promise<AdminSessionSearchData>;
-  listSessionRoutes(): Promise<AdminSessionRouteListData>;
-  resetSourceChannelSession(input: AdminSessionRouteResetInput): Promise<AdminSessionRouteResetData>;
-  listCogSecEvents(): Promise<AdminCogSecEventListData>;
-  previewCogSecRemediation(input: AdminCogSecRemediationInput): Promise<AdminCogSecRemediationPreviewData>;
-  applyCogSecRemediation(input: AdminCogSecRemediationInput): Promise<AdminCogSecRemediationApplyData>;
-}
-
-export type AdminObservedMemory = ObservedMemory;
-
-export type AdminObservedScoredMemory = ObservedScoredMemory;
-
-export type AdminTurnStageTelemetry = TurnStageTelemetryRecord;
-
-export type AdminTurnRetrievalTelemetry = TurnRetrievalTelemetryRecord;
-
-export type AdminTurnSessionContextSnapshotData = TurnSessionContextSnapshotRecord;
-
-export type AdminTurnMemorySnapshotData = TurnMemorySnapshotRecord;
-
-export type AdminTurnSnapshotData = TurnSnapshotRecord;
-
-export interface AdminPromptLoomHistoricalSnapshotHit {
-  layerId: string;
-  source: string;
-  sectionId?: string;
-  title?: string;
-}
-
-export interface AdminPromptLoomHistoricalSnapshotData {
-  label: string;
-  removedPromptLayerIds: string[];
-  hits: AdminPromptLoomHistoricalSnapshotHit[];
-}
-
-export interface AdminPromptLoomGeneratedPromptData {
-  renderedStaticPrefix: string | null;
-  renderedDynamicSuffix: string | null;
-  runtimeContext: string | null;
-  memoryContextBlock: string | null;
-  scratchpadContext: string | null;
-  assembledPrompt: string | null;
-  contextMessages: ContextMessage[];
-  inputSections: PromptSectionTelemetry[];
-  runtimeContextSections: PromptSectionTelemetry[];
-  memoryContextSections: PromptSectionTelemetry[];
-  finalSystemSections: PromptSectionTelemetry[];
-}
-
-export interface AdminPromptLoomProviderPayloadData {
-  finalSystemPrompt: string | null;
-  providerMessages: LLMProviderWireMessage[];
-  activeTools: ToolSchema[];
-}
-
-export interface AdminPromptLoomProviderResultData {
-  response: NonNullable<TurnSnapshotRecord['promptContext']>['response'] | null;
-  renderedChatOutput: string | null;
-}
-
-export interface AdminPromptLoomMemoryCaptureData {
-  input: {
-    currentTurnInput: string | null;
-    userMessage?: TurnRecord['userMessage'];
-    assistantMessage?: TurnRecord['assistantMessage'];
-    renderedChatOutput: string | null;
-  };
-  output: {
-    extractedMemoryIds: string[];
-  };
-}
-
-export interface AdminPromptLoomToolActivityData {
-  toolCalls: TurnRecord['toolCalls'];
-  toolResults: TurnRecord['toolCalls'];
-}
-
-/**
- * The Loom's Provider Wire projection (E2.3): the serialized provider payload
- * (system prompt + messages + tool definitions) exactly as shipped.
- *
- * - source 'prompt_plan': derived from the persisted PromptPlan via
- *   serializePromptPlanForProvider — byte-equal to the wire by construction.
- * - source 'recorded_snapshot': the recorded provider-wire capture. Used for
- *   legacy pre-plan records (legacy=true) and, fail-open-never, when a plan
- *   exists but the system-role transport was not recorded (legacy=false, so
- *   the degradation is visible rather than silent).
- */
-export interface AdminPromptLoomProviderWireData {
-  source: 'prompt_plan' | 'recorded_snapshot';
-  /** true when the turn predates the PromptPlan snapshot ("legacy turn (pre-plan)"). */
-  legacy: boolean;
-  systemRoleTransport: LLMSystemPromptTransport | null;
-  systemPrompt: string | null;
-  messages: LLMProviderWireMessage[];
-  /** Tool definitions exactly as shipped to the provider for this turn. */
-  toolDefinitions: ToolSchema[];
-}
-
-export interface AdminPromptLoomData {
-  source: 'turn_snapshot';
-  snapshotCapturedAt: number | null;
-  /**
-   * The persisted, schema-versioned PromptPlan the Loom projects (E2.3).
-   * null for legacy records that predate the plan snapshot.
-   */
-  plan: PromptPlan | null;
-  providerWire: AdminPromptLoomProviderWireData;
-  historicalSnapshot: AdminPromptLoomHistoricalSnapshotData;
-  generatedPrompt: AdminPromptLoomGeneratedPromptData;
-  providerPayload: AdminPromptLoomProviderPayloadData;
-  providerResult: AdminPromptLoomProviderResultData;
-  memoryCapture: AdminPromptLoomMemoryCaptureData;
-  toolActivity: AdminPromptLoomToolActivityData;
-}
-
-export interface AdminSessionRoleEnvelopePreview {
-  sessionEntryId: number;
-  preview: SessionRoleEnvelopePreview;
-}
-
-export interface AdminContinuityProvenanceView {
-  sessionEntryId: number;
-  turnId: string;
-  continuityUserId: string;
-  sourceChannelId: string;
-  sourceVisibility: ChannelPrivacy;
-  currentChannelId: string;
-  currentVisibility: ChannelPrivacy;
-  carriedAcrossChannels: boolean;
-}
-
-export interface AdminSessionTurnData {
-  record: TurnRecord;
-  roleEnvelopeRefs: string[];
-  continuityProvenance: AdminContinuityProvenanceView[];
-  stages: AdminTurnStageTelemetry[];
-  retrievals: AdminTurnRetrievalTelemetry[];
-  snapshot: AdminTurnSnapshotData | null;
-  promptLoom?: AdminPromptLoomData;
-}
-
-export interface AdminIdentityData {
-  card: CharacterCardV2;
-  config: SubstrateConfig;
-  version: number;
-  checksum?: string;
-  history: CharacterCardHistoryEntry[];
-  intakeReview: IdentityIntakeReviewState | null;
-}
-
-export interface ImportResult {
-  ok: boolean;
-  message: string;
-}
-
-export interface IntakeStageResult {
-  ok: boolean;
-  message: string;
-  review?: IdentityIntakeReviewState | null;
-}
-
-export interface IntakeCommitResult {
-  ok: boolean;
-  message: string;
-  review?: IdentityIntakeReviewState | null;
-}
-
-export interface RollbackResult {
-  ok: boolean;
-  message: string;
-  snapshot?: CharacterCardSnapshot;
-}
-
-export interface DiffPreviewResult {
-  ok: boolean;
-  current: CharacterCardV2;
-  target: CharacterCardV2;
-}
-
-export interface FieldUpdateResult {
-  ok: boolean;
-  message: string;
-}
-
-export interface OnboardingActionResult {
-  ok: boolean;
-  message: string;
-  onboardingRequired: boolean;
-  action?: 'keep_starter' | 'edit_identity';
-  updatedFields?: string[];
-}
-
-export interface AdminIdentityService {
-  getIdentityData(): AdminIdentityData;
-  importIdentityCard(body: string): Promise<ImportResult>;
-  stageIdentityIntake(body: string): IntakeStageResult;
-  commitIdentityIntake(body: string): Promise<IntakeCommitResult>;
-  rollbackIdentityCard(body: string): RollbackResult;
-  previewIdentityCardDiff(body: string): DiffPreviewResult;
-  updateIdentityField(body: string): FieldUpdateResult;
-  applyOnboardingAction(body: string): Promise<OnboardingActionResult>;
-}
-
-export interface SettingsConfigEditors {
-  models: ModelsRuntimeConfig;
-  providers: ProvidersRuntimeConfig;
-  channels: Record<string, unknown>;
-  skills: SkillsRuntimeConfig;
-  scheduler: SchedulerRuntimeConfig;
-  trustPolicy: TrustPolicyConfig;
-  capabilities: CapabilityTierConfig;
-  chargePolicy: ChargePolicyConfig;
-  backup: BackupJsonConfig;
-}
-
-export interface AdminVoiceProviderOption {
-  id: string;
-  configured: boolean;
-  requiredTokens: string[];
-}
-
-export interface AdminVoiceProviderData {
-  stt: AdminVoiceProviderOption[];
-  tts: AdminVoiceProviderOption[];
-}
-
-export type AdminSettingsStatusLevel = 'healthy' | 'degraded';
-
-export interface AdminSettingsDivergence {
-  key: 'models' | 'capabilities';
-  state: 'diverged';
-  detail: string;
-  updatedAt: number;
-}
-
-export interface AdminSettingsStatus {
-  status: AdminSettingsStatusLevel;
-  detail: string;
-  divergences: AdminSettingsDivergence[];
-}
-
-/**
- * Effective (startup-loaded) vs on-disk charge quota lanes. `restartRequired`
- * is true when the owner file on disk diverges from the quotas the running
- * process loaded at startup, so the operator knows a restart is needed before
- * an edit takes effect. `effectiveChargeQuotaByLane` is null when the runtime
- * has no loaded charge policy (e.g. Garden started without one).
- */
-export interface EffectiveChargeQuotaState {
-  effectiveChargeQuotaByLane: ChargePolicyConfig['runChargeQuotaByLane'] | null;
-  onDiskChargeQuotaByLane: ChargePolicyConfig['runChargeQuotaByLane'];
-  restartRequired: boolean;
-}
-
-export interface AdminSettingsData {
-  config: EditableSettings;
-  env: EnvInfo;
-  editors: SettingsConfigEditors;
-  voiceProviders: AdminVoiceProviderData;
-  status: AdminSettingsStatus;
-  effectiveChargeQuota: EffectiveChargeQuotaState;
-}
-
-export interface SettingsValidationError {
-  field: string;
-  message: string;
-  code?: string;
-}
-
-export interface ConfigUpdateResult {
-  ok: boolean;
-  message: string;
-  validationErrors?: SettingsValidationError[];
-  status?: AdminSettingsStatus;
-}
-
-export interface AdminSettingsService {
-  getSettingsData(): Promise<AdminSettingsData>;
-  getSettingsContractData(): SettingsContractData;
-  updateSettings(body: string): ConfigUpdateResult;
-  getSubConfigJson(key: string): string | null;
-  saveSubConfigJson(key: string, json: string): ConfigUpdateResult;
-  getChannelEnvelopeData(): AdminChannelEnvelopeData;
-  saveChannelEnvelopeLabel(channelId: string, label: unknown): ConfigUpdateResult;
-}
-
-/**
- * Garden channel list row (E3.2): the resolved Context Envelope classification
- * for one channel plus its owning source tier and review state.
- */
-export interface AdminChannelEnvelopeRow {
-  channelId: string;
-  privacy: ChannelPrivacy;
-  broadcast: boolean;
-  contactTracking: ContactTrackingMode;
-  /** Resolved delivery style (channel label or derived default; E3.3). */
-  deliveryStyle: ChannelDeliveryStyle;
-  deliveryStyleSource: 'channel_label' | 'derived_default';
-  source: ChannelClassificationSource;
-  /** Migration-seeded fail-closed label awaiting operator review (warning badge). */
-  needsReview: boolean;
-  /** True when channels.json carries an owned label for this channel. */
-  hasLabel: boolean;
-  label?: ChannelEnvelopeLabel;
-}
-
-export interface AdminChannelEnvelopeData {
-  channels: AdminChannelEnvelopeRow[];
-  /** Operator trust-policy prefix overrides (informational; tier 2). */
-  prefixOverrides: Record<string, { privacy: ChannelPrivacy; broadcast: boolean }>;
-  /** Demoted derived-default prefix heuristics (informational; tier 3). */
-  privatePrefixes: string[];
-  broadcastPrefixes: string[];
-}
-
-export interface AdminContactListData {
-  contacts: Contact[];
-  profileMap: Map<string, ContactProfileArtifact>;
-  relatedChannelMap: Map<string, ContactConversationChannelView[]>;
-  socialGraphMap: Map<string, AdminContactSocialGraphView>;
-  relationshipScoreMap?: Map<string, AdminContactRelationshipScoreView>;
-  verifications: ContactIdentityLinkVerification[];
-  mutationAudits: ContactMutationAuditEntry[];
-  mutationAuditQuery: ContactMutationAuditQuery;
-}
-
-export interface AdminContactDetailData {
-  contact: Contact;
-  profile?: ContactProfileArtifact;
-  relatedChannels: ContactConversationChannelView[];
-}
-
-export interface ContactUpdateResult {
-  ok: boolean;
-  message: string;
-  contact?: Contact;
-  relatedChannels?: ContactConversationChannelView[];
-}
-
-export interface AdminContactSocialGraphEntityView {
-  id: string;
-  displayName: string;
-  contactId?: string;
-  source: SocialGraphEntitySource;
-  sensitivity: SensitivityLevel;
-  confidence: number;
-  provenanceRefs: string[];
-  createdAt: string;
-  updatedAt: string;
-}
-
-export interface AdminContactSocialGraphNeighborView {
-  entityId: string;
-  contactId?: string;
-  displayName: string;
-  source: SocialGraphEntitySource;
-  sensitivity: SensitivityLevel;
-  confidence: number;
-  provenanceRefs: string[];
-  mentionOnly: boolean;
-  trustLevel?: TrustLevel;
-  relationshipType?: RelationshipType;
-  profileSummary?: string;
-  profileUpdatedAt?: number;
-}
-
-export interface AdminContactSocialGraphConnectionView {
-  edgeId: string;
-  relationshipType: SocialRelationshipKind;
-  directional: boolean;
-  direction: 'incoming' | 'outgoing' | 'undirected';
-  sensitivity: SensitivityLevel;
-  confidence: number;
-  provenanceRefs: string[];
-  evidenceMemoryIds: string[];
-  createdAt: string;
-  updatedAt: string;
-  neighbor: AdminContactSocialGraphNeighborView;
-}
-
-export interface AdminContactSocialGraphView {
-  entity?: AdminContactSocialGraphEntityView;
-  edgeCount: number;
-  neighborCount: number;
-  evidenceCount: number;
-  provenanceCount: number;
-  mentionOnlyNeighborCount: number;
-  connections: AdminContactSocialGraphConnectionView[];
-}
-
-export interface AdminContactRelationshipScoreView {
-  score: number;
-  resolvedTier: string;
-  previousTierThreshold?: number;
-  nextTier?: string;
-  nextTierThreshold?: number;
-  progressToNextTier?: number;
-  updatedAt?: string;
-}
-
-export interface AdminContactRelationshipScoreReader {
-  listContactRelationshipScores(contactIds: readonly string[]): Promise<Map<string, AdminContactRelationshipScoreView>>;
-}
-
-export interface AdminContactsService {
-  listContacts(params?: URLSearchParams): Promise<AdminContactListData>;
-  getContactDetail(contactId: string): Promise<AdminContactDetailData | null>;
-  updateContact(contactId: string, body: string): Promise<ContactUpdateResult>;
-  createContact(body: string): Promise<ContactUpdateResult>;
-  deleteContact(contactId: string): Promise<ContactUpdateResult>;
-  mergeContacts(targetId: string, body: string): Promise<ContactUpdateResult>;
-  unlinkChannelIdentity(contactId: string, body: string): Promise<ContactUpdateResult>;
-  deleteConversationChannel(contactId: string, body: string): Promise<ContactUpdateResult>;
-}
-
-export interface AdminArtifactLifecycleService {
-  getArtifactLifecycleData(): ArtifactLifecycleStatus;
-}
-
-export interface AdminResearchLibraryData {
-  entries: ResearchLibraryEntrySummary[];
-}
-
-export interface AdminResearchLibraryService {
-  listEntries(): AdminResearchLibraryData;
-  getEntry(id: string): ResearchLibraryEntryDetail | null;
-}
-
-export interface AdminPromptListData {
-  layers: PromptLayer[];
-  staticPrompts: PromptRegistryEntry[];
-  runtimeBlocks: AdminPromptRuntimeBlock[];
-  runtimeLayerCoverage: AdminRuntimePromptLayerCoverage;
-  runtimeMacroHints: AdminPromptRuntimeMacroHint[];
-}
-
-export interface AdminPromptRuntimeBlock {
-  id: PromptRuntimeBlockId;
-  label: string;
-  description: string;
-  source: string;
-  schemaClassification: PromptRuntimeBlockSchemaClassification;
-  required: boolean;
-  immutable: boolean;
-  providerManaged: boolean;
-  placement: PromptRuntimeBlockPlacement;
-  visibility: PromptRuntimeBlockVisibility;
-  reorderable: boolean;
-  contentVisible: boolean;
-  companionEditable: boolean;
-  customContent?: string;
-  lockedReason?: string;
-  effectiveOrder: number;
-}
-
-export interface AdminRuntimePromptLayerCoverageEntry {
-  identifier: string;
-  name: string;
-  classification: RuntimePromptLayerSchemaClassification;
-  required: boolean;
-  status: 'valid' | 'missing' | 'disabled' | 'empty';
-  layerId?: string;
-}
-
-export interface AdminRuntimePromptLayerCoverage {
-  ok: boolean;
-  entries: AdminRuntimePromptLayerCoverageEntry[];
-}
-
-export interface AdminPromptRuntimeMacroHint extends PromptRuntimeMacroHint {}
-
-export interface AdminConstitutionImmutableBlock {
-  id: string;
-  title: string;
-  content: string;
-  editable: false;
-}
-
-export interface AdminConstitutionCompanionLayer {
-  id: string;
-  title: string;
-  content: string;
-  provenanceRefs: string[];
-  historyVersions: number[];
-  entryIds: string[];
-  editable: false;
-}
-
-export interface AdminConstitutionMutableLayer extends PromptLayer {
-  editable: boolean;
-  readOnlyReason?: string;
-}
-
-export interface AdminFoundationSection {
-  id: string;
-  title: string;
-  content: string;
-  enabled: boolean;
-  defaultEnabled: boolean;
-}
-
-export interface AdminFoundationPreview {
-  text: string;
-  hash: string;
-}
-
-export interface AdminFoundationSnapshotData {
-  layerId: string;
-  layerName: string;
-  sections: AdminFoundationSection[];
-  preview: AdminFoundationPreview;
-}
-
-export interface AdminConstitutionPreview {
-  text: string;
-  hash: string;
-  staticPrefix: string;
-  dynamicSuffix: string;
-}
-
-export interface AdminConstitutionSnapshotData {
-  immutableBlocks: AdminConstitutionImmutableBlock[];
-  companionLayer: AdminConstitutionCompanionLayer | null;
-  mutableLayers: AdminConstitutionMutableLayer[];
-  preview: AdminConstitutionPreview;
-}
-
-export interface AdminNorthStarItem extends NorthStarItem {
-  scope: NorthStarScope;
-}
-
-export interface AdminNorthStarPreview {
-  text: string;
-  hash: string;
-}
-
-export interface AdminNorthStarSnapshotData {
-  items: AdminNorthStarItem[];
-  limit: number;
-  preview: AdminNorthStarPreview;
-}
-
-export interface AdminPromptDetailData {
-  layer?: PromptLayer;
-  layerHistory?: PromptHistoryEntry[];
-  staticPrompt?: PromptRegistryEntry;
-  staticPromptHistory?: PromptRegistryHistoryEntry[];
-}
-
-export interface PromptUpdateResult {
-  ok: boolean;
-  message: string;
-  layer?: PromptLayer;
-  staticPrompt?: PromptRegistryEntry;
-}
-
-export interface ConstitutionUpdateResult {
-  ok: boolean;
-  message: string;
-  snapshot?: AdminConstitutionSnapshotData;
-}
-
-export interface FoundationUpdateResult {
-  ok: boolean;
-  message: string;
-  snapshot?: AdminFoundationSnapshotData;
-}
-
-export interface NorthStarUpdateResult {
-  ok: boolean;
-  message: string;
-  snapshot?: AdminNorthStarSnapshotData;
-}
-
-export interface RuntimePromptUpdateResult {
-  ok: boolean;
-  message: string;
-  updated?: PromptRuntimeEditableBlockId[];
-}
-
-export interface AdminPromptsService {
-  listPrompts(): AdminPromptListData;
-  getFoundationSnapshot(): AdminFoundationSnapshotData | null;
-  saveFoundationSections(body: string): FoundationUpdateResult;
-  getConstitutionSnapshot(): AdminConstitutionSnapshotData;
-  saveConstitutionMutableLayers(body: string): ConstitutionUpdateResult;
-  getNorthStarSnapshot(): AdminNorthStarSnapshotData | null;
-  saveNorthStarItems(body: string): NorthStarUpdateResult;
-  saveRuntimePromptBlocks(body: string): RuntimePromptUpdateResult;
-  getPromptDetail(layerId: string): AdminPromptDetailData | null;
-  getStaticPromptDetail(key: string): AdminPromptDetailData | null;
-  createPromptLayer(body: string): PromptUpdateResult;
-  updatePromptLayer(body: string): PromptUpdateResult;
-  updatePromptRegistry(body: string): PromptUpdateResult;
-  togglePromptLayer(body: string): PromptUpdateResult;
-  rollbackPromptLayer(body: string): PromptUpdateResult;
-  rollbackPromptRegistry(body: string): PromptUpdateResult;
-  previewPromptLayerDiff(body: string): { oldContent: string; newContent: string } | null;
-  resolvePromptLayerMetadata(params: URLSearchParams): { metadata: PromptLayerMetadataUpdate } | { error: string };
-  reorderPromptLayers(body: string): PromptUpdateResult;
-}
+export type {
+  AdminDashboardData,
+  AdminDashboardService,
+} from './types/dashboard.js';
+
+export type { AdminDiagnosticsService } from './types/diagnostics.js';
+
+export type {
+  AdminConcernListData,
+  AdminConcernMutationResult,
+  AdminConcernService,
+} from './types/concerns.js';
+
+export type {
+  AdminGeneratedImageRootView,
+  AdminGeneratedImageView,
+  AdminGeneratedImageConversationLink,
+  AdminGeneratedImageCompanionNoteRef,
+  AdminGeneratedImageArtifactRef,
+  AdminGeneratedImageMeaningfulMoment,
+  AdminGeneratedImageListQuery,
+  AdminGeneratedImageUpdateInput,
+  AdminGeneratedImageListData,
+  AdminImageBlob,
+  AdminImagesService,
+} from './types/images.js';
+
+export type {
+  AdminWikiListData,
+  AdminWikiService,
+} from './types/wiki.js';
+
+export type {
+  AdminChargeLedgerService,
+  AdminModelUsageService,
+} from './types/runtime-telemetry.js';
+
+export type {
+  AdminActionPipeStatus,
+  AdminActionPipeMutationResult,
+  AdminActionPipeService,
+} from './types/action-pipe.js';
+
+export type {
+  AdminShardFoldReviewSummary,
+  AdminShardFoldReviewListData,
+  AdminShardFoldReviewResolveResult,
+  AdminShardFoldReviewService,
+} from './types/shards.js';
+
+export type {
+  AdminAdaptiveToolTelemetryEvent,
+  AdminToolFailureEvent,
+  AdminToolAvailabilityView,
+  AdminToolHealthView,
+  AdminToolInventoryGroup,
+  AdminAdaptiveToolsData,
+  AdminAdaptiveToolsService,
+} from './types/tools.js';
+
+export type {
+  AdminMemoryContactSummary,
+  AdminMemoryBodyRedaction,
+  AdminMemoryView,
+  AdminMemoryElevationStatus,
+  AdminMemoryPrivacySummary,
+  AdminMemoryListData,
+  AdminMemoryDetailData,
+  AdminMemorySearchResult,
+  AdminSharedBackgroundItem,
+  AdminSharedBackgroundResult,
+  MemoryMutationResult,
+  AdminMemoryLinkResult,
+  AdminBulkMutationResult,
+  AdminMemoryScopeAssignmentView,
+  AdminMemoryScopeRepairView,
+  AdminMemoryScopeSummary,
+  AdminMemoryScopedMemoryView,
+  AdminMemoryScopeListData,
+  AdminMemoryScopeDetailData,
+  AdminMemoryScopeMutationResult,
+  AdminMemorySessionKey,
+  AdminMemoryService,
+  AdminMemorySessionService,
+} from './types/memory.js';
+
+export type {
+  AdminGroupMemoryClassificationView,
+  AdminGroupMemoryRangeView,
+  AdminGroupMemoryCandidateSpanView,
+  AdminGroupMemorySalienceView,
+  AdminGroupMemoryExtractionTelemetry,
+  AdminGroupMemoryContactProfileStatus,
+  AdminGroupMemoryContactCoverage,
+  AdminGroupMemoryCoverageView,
+  AdminGroupMemoryChannelDiagnostics,
+  AdminGroupMemoryDiagnosticsListData,
+  AdminGroupMemoryService,
+} from './types/group-memory.js';
+
+export type {
+  AdminEpisodicEpisodeListData,
+  AdminEpisodicRelatedArcView,
+  AdminEpisodicEpisodeProvenanceData,
+  AdminEpisodicEpisodeDetailData,
+  AdminEpisodicThreadSummary,
+  AdminEpisodicThreadListData,
+  AdminEpisodicThreadDetailData,
+  AdminEpisodicMemoryService,
+} from './types/episodic.js';
+
+export type {
+  AdminObservedMemory,
+  AdminObservedScoredMemory,
+  AdminTurnStageTelemetry,
+  AdminTurnRetrievalTelemetry,
+  AdminTurnSessionContextSnapshotData,
+  AdminTurnMemorySnapshotData,
+  AdminTurnSnapshotData,
+  AdminPromptLoomHistoricalSnapshotHit,
+  AdminPromptLoomHistoricalSnapshotData,
+  AdminPromptLoomGeneratedPromptData,
+  AdminPromptLoomProviderPayloadData,
+  AdminPromptLoomProviderResultData,
+  AdminPromptLoomMemoryCaptureData,
+  AdminPromptLoomToolActivityData,
+  AdminPromptLoomProviderWireData,
+  AdminPromptLoomData,
+} from './types/prompt-loom.js';
+
+export type {
+  AdminSessionRoleEnvelopePreview,
+  AdminContinuityProvenanceView,
+} from './types/continuity.js';
+
+export type {
+  AdminSessionListData,
+  AdminSessionRouteView,
+  AdminSessionRouteListData,
+  AdminSessionRouteResetInput,
+  AdminSessionRouteResetData,
+  AdminCogSecRemediationInput,
+  AdminCogSecCaseDraftView,
+  AdminCogSecPreviewCounts,
+  AdminCogSecEventListData,
+  AdminCogSecRemediationPreviewData,
+  AdminCogSecRouteResetResult,
+  AdminCogSecRemediationApplyData,
+  AdminSessionMessageOntologyView,
+  AdminSessionMessagesData,
+  AdminSessionMessagePaginationOptions,
+  AdminSessionSearchHitView,
+  AdminSessionSearchData,
+  AdminSessionMessagePaginationData,
+  AdminSessionService,
+  AdminSessionTurnData,
+} from './types/sessions.js';
+
+export type {
+  AdminIdentityData,
+  ImportResult,
+  IntakeStageResult,
+  IntakeCommitResult,
+  RollbackResult,
+  DiffPreviewResult,
+  FieldUpdateResult,
+  OnboardingActionResult,
+  AdminIdentityService,
+} from './types/identity.js';
+
+export type {
+  SettingsConfigEditors,
+  AdminVoiceProviderOption,
+  AdminVoiceProviderData,
+  AdminSettingsStatusLevel,
+  AdminSettingsDivergence,
+  AdminSettingsStatus,
+  EffectiveChargeQuotaState,
+  AdminSettingsData,
+  SettingsValidationError,
+  ConfigUpdateResult,
+  AdminSettingsService,
+  AdminChannelEnvelopeRow,
+  AdminChannelEnvelopeData,
+} from './types/settings.js';
+
+export type {
+  AdminContactListData,
+  AdminContactDetailData,
+  ContactUpdateResult,
+  AdminContactSocialGraphEntityView,
+  AdminContactSocialGraphNeighborView,
+  AdminContactSocialGraphConnectionView,
+  AdminContactSocialGraphView,
+  AdminContactRelationshipScoreView,
+  AdminContactRelationshipScoreReader,
+  AdminContactsService,
+} from './types/contacts.js';
+
+export type { AdminArtifactLifecycleService } from './types/artifacts.js';
+
+export type {
+  AdminResearchLibraryData,
+  AdminResearchLibraryService,
+} from './types/research-library.js';
+
+export type {
+  AdminPromptListData,
+  AdminPromptRuntimeBlock,
+  AdminRuntimePromptLayerCoverageEntry,
+  AdminRuntimePromptLayerCoverage,
+  AdminPromptRuntimeMacroHint,
+  AdminConstitutionImmutableBlock,
+  AdminConstitutionCompanionLayer,
+  AdminConstitutionMutableLayer,
+  AdminFoundationSection,
+  AdminFoundationPreview,
+  AdminFoundationSnapshotData,
+  AdminConstitutionPreview,
+  AdminConstitutionSnapshotData,
+  AdminNorthStarItem,
+  AdminNorthStarPreview,
+  AdminNorthStarSnapshotData,
+  AdminPromptDetailData,
+  PromptUpdateResult,
+  ConstitutionUpdateResult,
+  FoundationUpdateResult,
+  NorthStarUpdateResult,
+  RuntimePromptUpdateResult,
+  AdminPromptsService,
+} from './types/prompts.js';

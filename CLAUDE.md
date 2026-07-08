@@ -107,6 +107,8 @@ PSFN uses split persistence topology.
 
 ## Architecture Map
 
+For a detailed, per-module architecture map (module guides, dependency notes, data-flow diagrams, cross-cutting conventions, and a navigation table), see [`docs/CODEBASE_MAP.md`](./docs/CODEBASE_MAP.md) — regenerated 2026-07-08 by the cartographer skill. The summary below is the quick orientation; the map is the deep reference.
+
 Key directories that matter now:
 
 ```text

@@ -1,0 +1,301 @@
+@media (max-width: 720px) {
+  .thread-viewport {
+    padding:
+      calc(max(0.85rem, env(safe-area-inset-top)) + 3.8rem)
+      0.72rem
+      calc(150px + env(safe-area-inset-bottom));
+  }
+
+  .floating-status {
+    right: calc(max(0.78rem, env(safe-area-inset-right)) + 54px);
+    max-width: 116px;
+    overflow: hidden;
+  }
+
+  .floating-status span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .message-bubble {
+    max-width: min(82%, 28rem);
+  }
+
+  .avatar-mark {
+    width: 30px;
+    height: 30px;
+  }
+
+  .composer-shell {
+    width: calc(100vw - 0.9rem);
+    grid-template-columns: 42px minmax(0, 1fr) 48px 46px;
+    gap: 0.42rem;
+    padding: 0.5rem;
+    border-radius: 28px;
+  }
+
+  .composer-shell textarea {
+    min-height: 46px;
+    max-height: 120px;
+  }
+
+  .composer-button {
+    width: 42px;
+    min-width: 42px;
+    height: 42px;
+    min-height: 42px;
+  }
+
+  .send-button {
+    width: 46px;
+    min-width: 46px;
+    height: 46px;
+    min-height: 46px;
+  }
+
+  .mic-control {
+    min-width: 48px;
+  }
+
+  .mic-mode {
+    display: none;
+  }
+
+  .companion-sprite {
+    width: 72px;
+    height: 92px;
+    bottom: calc(max(0.9rem, env(safe-area-inset-bottom)) + 82px);
+  }
+
+  .sprite-face {
+    width: 56px;
+    height: 62px;
+    margin-bottom: 16px;
+  }
+
+  .sprite-ear {
+    top: -14px;
+    width: 18px;
+    height: 22px;
+  }
+
+  .sprite-hair {
+    left: 8px;
+    width: 40px;
+    height: 20px;
+  }
+
+  .sprite-eye {
+    top: 30px;
+    width: 8px;
+    height: 10px;
+  }
+
+  .sprite-eye.left {
+    left: 17px;
+  }
+
+  .sprite-eye.right {
+    right: 17px;
+  }
+
+  .sprite-mouth {
+    top: 45px;
+  }
+
+  .sprite-state {
+    font-size: 0.56rem;
+  }
+
+  .toast-layer {
+    bottom: calc(max(0.9rem, env(safe-area-inset-bottom)) + 78px);
+    width: calc(100vw - 1rem);
+    grid-template-columns: 1fr;
+  }
+
+  .toast-layer.stacked {
+    bottom: calc(max(0.9rem, env(safe-area-inset-bottom)) + 146px);
+  }
+
+  .attachment-tray {
+    bottom: calc(max(0.9rem, env(safe-area-inset-bottom)) + 78px);
+    width: calc(100vw - 1rem);
+    grid-template-columns: 1fr;
+  }
+
+  .context-toast:not(:first-child) {
+    display: none;
+  }
+
+  .overlay-drawer {
+    width: 100vw;
+    border-left: 0;
+    border-right: 0;
+  }
+}
+
+@media (max-width: 420px) {
+  .app-shell::before {
+    inset: 4px;
+    border-radius: 12px;
+  }
+
+  .app-shell::after,
+  .ornament,
+  body::before,
+  body::after {
+    display: none;
+  }
+
+  .floating-button {
+    width: 42px;
+    height: 42px;
+    min-height: 42px;
+  }
+
+  .floating-status {
+    min-height: 30px;
+    padding-inline: 0.48rem;
+    font-size: 0.7rem;
+  }
+
+  .thread-viewport {
+    padding-inline: 0.52rem;
+  }
+
+  .message-row {
+    gap: 0.42rem;
+  }
+
+  .message-bubble {
+    max-width: 86%;
+    padding: 0.68rem 0.74rem;
+  }
+
+  .avatar-mark {
+    display: none;
+  }
+
+  .composer-shell {
+    width: calc(100vw - 0.45rem);
+    grid-template-columns: 40px minmax(0, 1fr) 42px 44px;
+    border-radius: 24px;
+  }
+
+  .composer-button {
+    width: 40px;
+    min-width: 40px;
+    height: 40px;
+    min-height: 40px;
+  }
+
+  .send-button {
+    width: 44px;
+    min-width: 44px;
+    height: 44px;
+    min-height: 44px;
+  }
+
+  .companion-sprite {
+    left: 8px;
+    transform: scale(0.9);
+    transform-origin: left bottom;
+  }
+
+  .sprite-state {
+    display: none;
+  }
+}
+
+@supports not (height: 100dvh) {
+  .app-shell {
+    height: 100vh;
+    min-height: 100vh;
+  }
+}
+
+@media (min-width: 1000px) {
+  .message-list {
+    padding-left: 1.6rem;
+    padding-right: 1.6rem;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 1ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+    transition-duration: 1ms !important;
+  }
+
+  .companion-sprite.animated .sprite-face,
+  .companion-sprite.listening .sprite-aura,
+  .companion-sprite.tool_use .sprite-aura,
+  .companion-sprite.speaking .sprite-mouth {
+    animation: none;
+  }
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes drawerIn {
+  from {
+    transform: translateX(24px);
+    opacity: 0.65;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+
+@keyframes drawerInLeft {
+  from {
+    transform: translateX(-24px);
+    opacity: 0.65;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+
+@keyframes breathe {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-3px);
+  }
+}
+
+@keyframes talk {
+  0%,
+  100% {
+    transform: translateX(-50%) scaleY(0.72);
+  }
+  50% {
+    transform: translateX(-50%) scaleY(1.2);
+  }
+}
+
+@keyframes pulse {
+  0%,
+  100% {
+    opacity: 0.6;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.08);
+  }
+}

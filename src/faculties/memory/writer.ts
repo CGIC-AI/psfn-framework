@@ -5,8 +5,6 @@ import { v7 as uuidv7 } from 'uuid';
 import type { EmbeddingProviderPort } from '../../core/agent/contracts.js';
 import type {
   MemoryEvolutionLink,
-  MemoryEvolutionLinkInput,
-  MemoryEvolutionRelation,
   MemoryStorePort,
 } from './memory-store-port.js';
 import { abstractMemoryText } from './abstraction.js';
@@ -25,21 +23,14 @@ import type {
 } from './types.js';
 import {
   DEDUP_THRESHOLD,
-  DURABLE_PREFERENCE_MEMORY_TAG,
   DURABLE_RETENTION_TAG,
   MEMORY_CONFIG,
-  inferMemorySourceTypeFromSourceRef,
-  inferPreferenceMemoryTags,
   normalizeMemoryScopeRef,
   normalizeMemoryScopeTags,
   VALID_MEMORY_TYPES,
-  getSensitivityWriteThreshold,
-  inferMemoryRetentionClass,
   isDurableMemory,
   normalizeFormationVAD,
   normalizeMemoryTags,
-  normalizeMemoryProvenance,
-  normalizeMemorySourceType,
   resolveConsentRedactionBehavior,
 } from './types.js';
 import { createComponentLogger } from '../../shared/logger.js';
@@ -52,6 +43,29 @@ import {
   evaluateCogSecMemoryCandidacy,
   type CogSecMemoryCandidacyDecision,
 } from '../../core/cogsec/memory-candidacy.js';
+import {
+  buildEvolutionLinkInput,
+  chooseWriteAction,
+  classifyEvolutionDecision,
+  type MemoryEvolutionDecision,
+} from './writer/reconciliation.js';
+import {
+  applyRetentionSemantics,
+  consentFlagsEqual,
+  computeNoveltyFromSimilarities,
+  evaluateSensitivityWritePolicy,
+  mergeConsentFlags,
+  mergeProvenanceRefs,
+  mergeScopeTags,
+  normalizeConsentFlags,
+  normalizeExactDuplicateText,
+  normalizeProvenanceRefs,
+  normalizeSourceContext,
+  normalizeSourceRef,
+  scopeRefEquals,
+  shouldConsiderDuplicateForScope,
+  validateEmbeddingDimensions,
+} from './writer/write-normalization.js';
 
 const log = createComponentLogger('MemoryWriter');
 const IMPORT_BATCH_EMBED_CHUNK_SIZE = 200;
@@ -203,478 +217,6 @@ export interface MemoryRedactionResult {
   abstractedMemoryId?: string;
   abstractedText?: string;
   externalProvenanceRef?: string;
-}
-
-function applyRetentionSemantics(input: {
-  text: string;
-  type: MemoryType;
-  importance: number;
-  tags: readonly string[];
-  retentionClass?: MemoryRetentionClass;
-}): {
-  tags: string[];
-  retentionClass?: MemoryRetentionClass;
-} {
-  const tags = normalizeMemoryTags([
-    ...input.tags,
-    ...inferPreferenceMemoryTags({
-      text: input.text,
-      type: input.type,
-      tags: input.tags,
-    }),
-  ]);
-  const inferred = inferMemoryRetentionClass({
-    type: input.type,
-    importance: input.importance,
-    text: input.text,
-    tags,
-    retentionClass: input.retentionClass,
-  });
-
-  if (inferred === 'durable' && !tags.includes(DURABLE_RETENTION_TAG)) {
-    tags.push(DURABLE_RETENTION_TAG);
-  }
-  if (
-    inferred === 'durable'
-    && tags.includes('preference')
-    && !tags.includes(DURABLE_PREFERENCE_MEMORY_TAG)
-  ) {
-    tags.push(DURABLE_PREFERENCE_MEMORY_TAG);
-  }
-
-  return {
-    tags,
-    retentionClass: inferred === 'durable' ? 'durable' : undefined,
-  };
-}
-
-function normalizeSourceRef(sourceRef: string | undefined, fallback: string): string {
-  const trimmed = sourceRef?.trim();
-  return trimmed && trimmed.length > 0 ? trimmed : fallback;
-}
-
-function normalizeExactDuplicateText(text: string): string {
-  return text.trim().replace(/\s+/g, ' ').toLowerCase();
-}
-
-function normalizeSourceContext(input: {
-  sourceRef: string | undefined;
-  sourceType: MemorySourceType | undefined;
-  provenance: MemoryProvenance | undefined;
-  fallbackRef: string;
-}): {
-  sourceRef: string;
-  sourceType: MemorySourceType;
-  provenance?: MemoryProvenance;
-} {
-  const normalizedSourceRef = normalizeSourceRef(input.sourceRef, input.fallbackRef);
-  return {
-    sourceRef: normalizedSourceRef,
-    sourceType: normalizeMemorySourceType(
-      input.sourceType,
-      inferMemorySourceTypeFromSourceRef(normalizedSourceRef),
-    ),
-    provenance: normalizeMemoryProvenance(input.provenance),
-  };
-}
-
-function normalizeProvenanceRefs(
-  refs: readonly string[] | undefined,
-  fallbackRef?: string,
-): string[] {
-  const out = new Set<string>();
-  for (const raw of refs ?? []) {
-    const normalized = raw.trim();
-    if (normalized.length > 0) out.add(normalized);
-  }
-  const fallback = fallbackRef?.trim();
-  if (fallback && fallback.length > 0) out.add(fallback);
-  return [...out];
-}
-
-function mergeScopeTags(
-  existing: readonly string[] | undefined,
-  incoming: readonly string[] | undefined,
-): string[] {
-  return normalizeMemoryScopeTags([...(existing ?? []), ...(incoming ?? [])]);
-}
-
-function scopeRefEquals(
-  left: MemoryScopeRef | undefined,
-  right: MemoryScopeRef | undefined,
-): boolean {
-  return left?.kind === right?.kind
-    && left?.id === right?.id
-    && left?.label === right?.label;
-}
-
-function shouldConsiderDuplicateForScope(
-  memory: Pick<PurrMemory, 'scopeRef'>,
-  scopeRef: MemoryScopeRef | undefined,
-): boolean {
-  if (!scopeRef) return true;
-  return memory.scopeRef?.kind === scopeRef.kind && memory.scopeRef.id === scopeRef.id;
-}
-
-function mergeProvenanceRefs(
-  existing: readonly string[] | undefined,
-  incoming: readonly string[] | undefined,
-): string[] {
-  const out = new Set<string>();
-  for (const ref of existing ?? []) {
-    const normalized = ref.trim();
-    if (normalized.length > 0) out.add(normalized);
-  }
-  for (const ref of incoming ?? []) {
-    const normalized = ref.trim();
-    if (normalized.length > 0) out.add(normalized);
-  }
-  return [...out];
-}
-
-function normalizeConsentFlags(flags: ConsentFlags | undefined): ConsentFlags | undefined {
-  if (!flags) return undefined;
-  const normalized: ConsentFlags = {};
-  if (flags.allowRecall !== undefined) normalized.allowRecall = flags.allowRecall;
-  if (flags.allowAbstraction !== undefined) normalized.allowAbstraction = flags.allowAbstraction;
-  if (flags.deleteOnRequest !== undefined) normalized.deleteOnRequest = flags.deleteOnRequest;
-  return Object.keys(normalized).length > 0 ? normalized : undefined;
-}
-
-function mergeConsentFlags(
-  existing: ConsentFlags | undefined,
-  incoming: ConsentFlags | undefined,
-): ConsentFlags | undefined {
-  const left = normalizeConsentFlags(existing);
-  const right = normalizeConsentFlags(incoming);
-  if (!left && !right) return undefined;
-
-  const merged: ConsentFlags = {};
-
-  const recallValues = [left?.allowRecall, right?.allowRecall];
-  if (recallValues.includes(false)) {
-    merged.allowRecall = false;
-  } else if (recallValues.includes(true)) {
-    merged.allowRecall = true;
-  }
-
-  const abstractionValues = [left?.allowAbstraction, right?.allowAbstraction];
-  if (abstractionValues.includes(false)) {
-    merged.allowAbstraction = false;
-  } else if (abstractionValues.includes(true)) {
-    merged.allowAbstraction = true;
-  }
-
-  const deleteValues = [left?.deleteOnRequest, right?.deleteOnRequest];
-  if (deleteValues.includes(true)) {
-    merged.deleteOnRequest = true;
-  } else if (deleteValues.includes(false)) {
-    merged.deleteOnRequest = false;
-  }
-
-  return Object.keys(merged).length > 0 ? merged : undefined;
-}
-
-function consentFlagsEqual(left: ConsentFlags | undefined, right: ConsentFlags | undefined): boolean {
-  const a = normalizeConsentFlags(left);
-  const b = normalizeConsentFlags(right);
-  return (
-    a?.allowRecall === b?.allowRecall
-    && a?.allowAbstraction === b?.allowAbstraction
-    && a?.deleteOnRequest === b?.deleteOnRequest
-  );
-}
-
-function computeNoveltyFromSimilarities(similarities: readonly number[]): number {
-  if (similarities.length === 0) return 1;
-  const maxSimilarity = similarities.reduce((max, value) => Math.max(max, clampUnit(value, 0)), 0);
-  return clampUnit(1 - maxSimilarity, 1);
-}
-
-function validateEmbeddingDimensions(
-  embedding: Float32Array,
-  expectedDims: number,
-  operation: string,
-): void {
-  if (embedding.length !== expectedDims) {
-    throw new Error(`Memory writer ${operation} embedding dimension mismatch: expected ${expectedDims}, got ${embedding.length}`);
-  }
-}
-
-type MemoryWritePolicyDecision =
-  | {
-    accepted: true;
-    reason: Extract<MemoryWritePolicyReason, 'default_allow' | 'consent_deny_override'>;
-    minSalience: number;
-    minNovelty: number;
-  }
-  | {
-    accepted: false;
-    reason: Exclude<MemoryWritePolicyReason, 'default_allow' | 'consent_deny_override'>;
-    minSalience: number;
-    minNovelty: number;
-  };
-
-function evaluateSensitivityWritePolicy(input: {
-  sensitivity: SensitivityLevel;
-  salience: number;
-  novelty: number;
-  consentFlags?: ConsentFlags;
-}): MemoryWritePolicyDecision {
-  const threshold = getSensitivityWriteThreshold(input.sensitivity);
-  if (input.consentFlags?.allowRecall === false) {
-    return {
-      accepted: true,
-      reason: 'consent_deny_override',
-      minSalience: threshold.minSalience,
-      minNovelty: threshold.minNovelty,
-    };
-  }
-  if (input.salience < threshold.minSalience) {
-    return {
-      accepted: false,
-      reason: 'salience_below_threshold',
-      minSalience: threshold.minSalience,
-      minNovelty: threshold.minNovelty,
-    };
-  }
-  if (input.novelty < threshold.minNovelty) {
-    return {
-      accepted: false,
-      reason: 'novelty_below_threshold',
-      minSalience: threshold.minSalience,
-      minNovelty: threshold.minNovelty,
-    };
-  }
-  return {
-    accepted: true,
-    reason: 'default_allow',
-    minSalience: threshold.minSalience,
-    minNovelty: threshold.minNovelty,
-  };
-}
-
-type ReconciliationWriteAction = Exclude<WriteResult['action'], 'deduplicated'>;
-
-interface MemoryEvolutionDecision {
-  oldMemory: PurrMemory & { similarity: number };
-  relation: MemoryEvolutionRelation;
-  destructive: boolean;
-  reason: string;
-}
-
-const HIGH_IMPACT_MEMORY_TYPES = new Set<MemoryType>(['boundary', 'emotional', 'relational']);
-const HIGH_IMPACT_TAG_HINTS = new Set([
-  'identity',
-  'profile',
-  'contact',
-  'contact_profile',
-  'core_profile',
-  'core_relationship',
-  'relationship_core',
-  'relationship',
-  'boundary',
-  'consent',
-  'emotion',
-  'emotional',
-  'feeling',
-  'family',
-  'partner',
-]);
-const CURRENT_STATE_TAG_HINTS = new Set(['current', 'current_state', 'current-state', 'latest', 'active']);
-const COMPATIBLE_UPDATE_TAG_HINTS = new Set(['preference', 'likes', 'interest', 'routine', 'tool', 'workspace']);
-const CURRENT_STATE_TEXT_HINT = /\b(current|currently|now|latest|active|moved to|changed to|updated?:|update:|is now|are now|no longer)\b/i;
-const COMPATIBLE_UPDATE_TEXT_HINT = /\b(also|additionally|another|besides|after lunch|in addition|likes both|also likes)\b/i;
-const EXPLICIT_NEGATION_TEXT_HINT = /\b(no longer|not|never|doesn't|does not|isn't|is not|aren't|are not|must not|should not|cannot|can't|won't)\b/i;
-const CONTRASTING_TERM_PAIRS: ReadonlyArray<readonly [string, string]> = [
-  ['on', 'off'],
-  ['enabled', 'disabled'],
-  ['active', 'inactive'],
-  ['available', 'unavailable'],
-  ['open', 'closed'],
-  ['allowed', 'disallowed'],
-  ['yes', 'no'],
-  ['true', 'false'],
-];
-
-function normalizeReconciliationTag(tag: string): string {
-  return tag.trim().toLowerCase().replace(/[^a-z0-9]+/g, '_');
-}
-
-function hasAnyTag(tags: readonly string[] | undefined, hints: ReadonlySet<string>): boolean {
-  for (const raw of tags ?? []) {
-    const normalized = normalizeReconciliationTag(raw);
-    if (hints.has(normalized)) return true;
-  }
-  return false;
-}
-
-function textHasWord(text: string, word: string): boolean {
-  return new RegExp(`\\b${word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i').test(text);
-}
-
-function hasContrastingTerms(incomingText: string, existingText: string): boolean {
-  for (const [left, right] of CONTRASTING_TERM_PAIRS) {
-    if (
-      (textHasWord(incomingText, left) && textHasWord(existingText, right))
-      || (textHasWord(incomingText, right) && textHasWord(existingText, left))
-    ) {
-      return true;
-    }
-  }
-  return false;
-}
-
-function isCurrentStateMemory(input: {
-  text: string;
-  tags: readonly string[];
-}): boolean {
-  return hasAnyTag(input.tags, CURRENT_STATE_TAG_HINTS) || CURRENT_STATE_TEXT_HINT.test(input.text);
-}
-
-function isCompatibleMemoryUpdate(input: {
-  text: string;
-  tags: readonly string[];
-  existing: PurrMemory;
-}): boolean {
-  if (COMPATIBLE_UPDATE_TEXT_HINT.test(input.text)) return true;
-  if (!hasAnyTag(input.tags, COMPATIBLE_UPDATE_TAG_HINTS)) return false;
-  const incomingTags = new Set(input.tags.map(normalizeReconciliationTag));
-  return input.existing.tags
-    .map(normalizeReconciliationTag)
-    .some(tag => incomingTags.has(tag));
-}
-
-function isExplicitContradiction(input: {
-  text: string;
-  existingText: string;
-}): boolean {
-  return EXPLICIT_NEGATION_TEXT_HINT.test(input.text)
-    || hasContrastingTerms(input.text, input.existingText);
-}
-
-function isHighImpactMemory(input: Pick<PurrMemory, 'type' | 'tags' | 'contactId' | 'text'>): boolean {
-  return HIGH_IMPACT_MEMORY_TYPES.has(input.type)
-    || !!input.contactId
-    || hasAnyTag(input.tags, HIGH_IMPACT_TAG_HINTS)
-    || /\b(identity|profile|partner|family|boundary|consent|feeling|emotion|contact)\b/i.test(input.text);
-}
-
-function chooseWriteAction(decisions: readonly MemoryEvolutionDecision[]): ReconciliationWriteAction {
-  if (decisions.some(decision => decision.relation === 'supersedes' && decision.destructive)) return 'superseded';
-  if (decisions.some(decision => decision.relation === 'negates')) return 'negated';
-  if (decisions.some(decision => decision.relation === 'conflicts_with')) return 'conflict';
-  if (decisions.some(decision => decision.relation === 'updates')) return 'updated';
-  return 'created';
-}
-
-function classifyEvolutionDecision(input: {
-  incomingText: string;
-  incomingTags: readonly string[];
-  incomingConfidence: number;
-  incomingType: MemoryType;
-  incomingContactId?: string;
-  oldMemory: PurrMemory & { similarity: number };
-}): MemoryEvolutionDecision | null {
-  const incomingMemoryLike: Pick<PurrMemory, 'type' | 'tags' | 'contactId' | 'text'> = {
-    type: input.incomingType,
-    tags: [...input.incomingTags],
-    contactId: input.incomingContactId,
-    text: input.incomingText,
-  };
-  const currentState = isCurrentStateMemory({
-    text: input.incomingText,
-    tags: input.incomingTags,
-  });
-  const compatibleUpdate = isCompatibleMemoryUpdate({
-    text: input.incomingText,
-    tags: input.incomingTags,
-    existing: input.oldMemory,
-  });
-  const explicitContradiction = isExplicitContradiction({
-    text: input.incomingText,
-    existingText: input.oldMemory.text,
-  });
-  const highImpact = isHighImpactMemory(incomingMemoryLike) || isHighImpactMemory(input.oldMemory);
-  const higherConfidence = input.incomingConfidence > input.oldMemory.confidence;
-
-  if (currentState && higherConfidence) {
-    return {
-      oldMemory: input.oldMemory,
-      relation: 'supersedes',
-      destructive: true,
-      reason: 'memory_writer:current_state_replacement',
-    };
-  }
-
-  if (compatibleUpdate && !explicitContradiction) {
-    return {
-      oldMemory: input.oldMemory,
-      relation: 'updates',
-      destructive: false,
-      reason: 'memory_writer:compatible_update',
-    };
-  }
-
-  if (highImpact) {
-    return {
-      oldMemory: input.oldMemory,
-      relation: explicitContradiction ? 'negates' : 'conflicts_with',
-      destructive: false,
-      reason: explicitContradiction
-        ? 'memory_writer:high_impact_negation_review'
-        : 'memory_writer:high_impact_conflict_review',
-    };
-  }
-
-  if (explicitContradiction) {
-    return {
-      oldMemory: input.oldMemory,
-      relation: higherConfidence ? 'supersedes' : 'conflicts_with',
-      destructive: higherConfidence,
-      reason: higherConfidence
-        ? 'memory_writer:contradiction_replacement'
-        : 'memory_writer:contradiction_conflict',
-    };
-  }
-
-  if (higherConfidence) {
-    return {
-      oldMemory: input.oldMemory,
-      relation: 'supersedes',
-      destructive: true,
-      reason: 'memory_writer:higher_confidence_replacement',
-    };
-  }
-
-  return null;
-}
-
-function buildEvolutionLinkInput(input: {
-  memory: PurrMemory;
-  decision: MemoryEvolutionDecision;
-  sourceRef: string;
-  sourceType: MemorySourceType;
-  provenance?: MemoryProvenance;
-  incomingProvenanceRefs: readonly string[];
-}): MemoryEvolutionLinkInput {
-  return {
-    sourceMemoryId: input.memory.id,
-    targetMemoryId: input.decision.oldMemory.id,
-    relation: input.decision.relation,
-    confidence: clampUnit(
-      Math.max(input.memory.confidence, input.decision.oldMemory.confidence),
-      input.memory.confidence,
-    ),
-    reason: input.decision.reason,
-    sourceRef: input.sourceRef,
-    sourceType: input.sourceType,
-    provenanceRefs: mergeProvenanceRefs(
-      [`memory:${input.memory.id}`, `memory:${input.decision.oldMemory.id}`],
-      input.incomingProvenanceRefs,
-    ),
-    provenance: input.provenance,
-  };
 }
 
 export class MemoryWriter {

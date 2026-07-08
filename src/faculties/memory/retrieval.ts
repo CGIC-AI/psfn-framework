@@ -15,40 +15,27 @@ import type {
   RetrievalModeInput,
 } from './types.js';
 import { MEMORY_CONFIG } from './types.js';
-import type { ContextManifestMemorySeed } from '../../core/session/context-manifest.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type { EventBus } from '../../shared/event-bus.js';
-import {
-  type TrustLevel,
-  isHighTierTrustLevel,
-} from '../../system/trust/types.js';
+import type { TrustLevel } from '../../system/trust/types.js';
 import type { ChannelPrivacy } from '../../system/trust/context-envelope.js';
-import type { ContextBudgetConfigLike } from '../../shared/context-budget.js';
-import {
-  resolveMemoryRetrievalBudget,
-  type ContextBudgetTurnCharacteristics,
+import type {
+  ContextBudgetConfigLike,
+  ContextBudgetTurnCharacteristics,
 } from '../../shared/context-budget.js';
-import {
-  classifyChannelDisclosure,
-  type ChannelDisclosureContext,
-  type ChannelMeta,
-} from '../../system/trust/policy.js';
+import { classifyChannelDisclosure, type ChannelMeta } from '../../system/trust/policy.js';
 import { resolveBroadcastVisibilityScope } from '../../system/trust/broadcast-safety.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import { clampUnit as clampProbability } from '../../shared/utils/numeric.js';
 import type { ContactStorePort } from '../../core/contacts/contact-store-port.js';
-import type { Contact, SocialRelationshipEdge } from '../../core/contacts/types.js';
 import type { ConversationScope } from '../../core/session/conversation-scope.js';
-import type { EmotionalSnapshot } from '../../core/contacts/store/emotional-baseline.js';
 import type { TurnMemorySnapshot } from '../../core/turns/snapshot.js';
 import {
   normalizeCostTelemetryPort,
   type CostTelemetryInput,
   type CostTelemetryPort,
 } from '../../shared/telemetry/cost-telemetry-port.js';
-import { getRequestContext } from '../../primitives/llm/request-context.js';
 import {
-  buildSnapshotVersionPointer,
   cloneContactProfileArtifact,
   cloneEmotionalSnapshot,
   cloneMemory,
@@ -57,11 +44,6 @@ import {
 import { isInternalMemoryArtifact } from './internal-artifacts.js';
 import {
   cloneMemoryWithheldSummary,
-  createEmptyMemoryWithheldSummary,
-  incrementMemoryWithheldRelevanceBand,
-  incrementMemoryWithheldReason,
-  resolveMemoryWithheldRelevanceBand,
-  serializeMemoryWithheldSummary,
   type MemoryWithheldSummary,
 } from './withheld-summary.js';
 import {
@@ -75,17 +57,22 @@ import {
   type RetrievalRoomVisibilityContext,
 } from './retrieval/access.js';
 import {
-  ACTIVE_MEMORY_ENTRY_LIMIT_MULTIPLIER,
-  ACTIVE_MEMORY_ENTRY_MIN_LIMIT,
-  ACTIVE_MEMORY_MISS_DECAY,
-  ACTIVE_MEMORY_MISS_LIMIT,
+  type ContactProfileAccessResult,
+  resolveContactProfileAccess as resolveContactProfileAccessWithDeps,
+  resolveRoomVisibilityContext as resolveRoomVisibilityContextWithDeps,
+} from './retrieval/access-context.js';
+import {
   cloneActiveMemorySnapshot,
-  type ActiveMemoryEntry,
   type ActiveMemoryRefreshLoop,
   type ActiveMemoryRefreshTarget,
   type ActiveMemoryState,
 } from './retrieval/active-state.js';
 import {
+  finalizeRetrievalPromptBlock as finalizeRetrievalPromptBlockWithActiveContext,
+  invalidateActiveMemoryContexts as invalidateActiveMemoryContextsWithDeps,
+} from './retrieval/active-context-refresh.js';
+import {
+  resolveMemoryRetrieverBudget,
   resolveGuaranteedSelectionFloor,
   selectWithinRelevanceAndTokenBudget,
 } from './retrieval/budget.js';
@@ -96,10 +83,6 @@ import {
 import {
   applyCompositionalRetrievalRanking as applyCompositionalRetrievalRankingWithPolicy,
 } from './retrieval/compositional.js';
-import {
-  renderProactiveRecall,
-  renderPromptBlock,
-} from './retrieval/formatting.js';
 import type {
   ActiveMemoryContextInvalidationRequest,
   ActiveMemoryContextInvalidationResult,
@@ -110,38 +93,27 @@ import {
   resolveActiveMemoryContextIdentity,
 } from './active-context.js';
 import {
-  cloneRetrievalCallerContext,
-  cloneRetrievalModeInput,
-  serializeRetrievalModes,
-} from './retrieval/modes.js';
-import {
   cloneEpisodicRetrievalChain,
   collectEpisodicChainProvenanceRefs,
   countEpisodicChainEpisodes,
-  retrieveEpisodicChains,
   type EpisodicRetrievalChain,
   type EpisodicRetrievalStore,
 } from './retrieval/episodic.js';
 import {
-  computeProactiveRecallWeight,
-  selectWeightedMemory,
-} from './retrieval/proactive.js';
+  resolveEpisodicChains as resolveEpisodicChainsWithDeps,
+} from './retrieval/episodic-resolution.js';
+import {
+  retrieveProactiveRecall as retrieveProactiveRecallWithDeps,
+} from './retrieval/proactive-recall.js';
 import {
   applyScoreGuarantee,
-  clamp,
   collectSelectedProvenanceRefs,
   computeRetrievalScore,
   countSelectedMemoryTypes,
   resolveMoodCongruenceWeight,
   SCORE_GUARANTEE_FLOOR,
   SCORE_GUARANTEE_MIN_K,
-  tokenizeForExplicitMatch,
 } from './retrieval/scoring.js';
-import {
-  mergeRetrievalContactContext,
-  normalizeRelationCue,
-  querySuggestsContactFocus,
-} from './retrieval/social.js';
 import {
   computeSharedBackground,
   SHARED_BACKGROUND_DEFAULT_LIMIT,
@@ -156,6 +128,28 @@ import {
   applyWithheldSummaryTelemetry,
   buildManifestSeedFromTelemetry,
 } from './retrieval/telemetry.js';
+import {
+  emitRetrievalTelemetry as emitRetrievalTelemetryWithDeps,
+} from './retrieval/telemetry-emission.js';
+import {
+  filterQuarantinedEpisodicChains,
+  filterQuarantinedMemories,
+  isMemoryQuarantined,
+  type MemorySessionQuarantineFilter,
+} from './retrieval/session-quarantine.js';
+import {
+  applySocialContextRankingAdjustments,
+  attachEvolutionChains,
+  buildSelectedContactContext,
+  collectContactEmotionalMemories,
+  collectEmotionalContinuityMemories,
+  collectProactiveRecallCandidates,
+  resolveEmotionalSnapshot,
+  resolveRetrievalSocialContext,
+} from './retrieval/social-context.js';
+import {
+  captureTurnMemorySnapshot as captureTurnMemorySnapshotWithDeps,
+} from './retrieval/turn-snapshot.js';
 import type {
   RetrievalContactContext,
   RetrievalDecisionDiagnostics,
@@ -164,41 +158,6 @@ import type {
   ScoredMemory,
 } from './retrieval/types.js';
 const log = createComponentLogger('Retrieval');
-const EVOLUTION_CHAIN_SELECTED_LIMIT = 3;
-const EVOLUTION_CHAIN_PER_MEMORY_LIMIT = 3;
-const EVOLUTION_CHAIN_USEFUL_HINT = /\b(history|lineage|changed|change|updated|update|previous|old|correction|corrected|conflict|contradict|superseded|why)\b/i;
-
-interface ContactProfileAccessResult {
-  profile?: ContactProfileArtifact;
-  withheldSummary?: MemoryWithheldSummary;
-  withheldSourceMemoryIds: string[];
-}
-
-function buildRoomVisibilityContext(
-  channelId: string,
-  channelMeta: ChannelMeta | undefined,
-  canonicalContact: Contact | undefined,
-  conversationScope: ConversationScope | undefined,
-): RetrievalRoomVisibilityContext {
-  const canonicalContactRoomIds = new Set<string>();
-  for (const conversation of canonicalContact?.conversationChannels ?? []) {
-    const roomId = conversation.channelId.trim();
-    if (roomId.length > 0) canonicalContactRoomIds.add(roomId);
-  }
-
-  // The turn ConversationScope is plumbed through as an available input
-  // (E1 epic); the gating fields below intentionally keep deriving from
-  // channelMeta and the canonical contact until a dependent bead flips the
-  // room-visibility gate to consume the scope.
-  return {
-    currentChannelId: channelId,
-    ...(channelMeta?.isDirectMessage !== undefined
-      ? { currentIsDirectMessage: channelMeta.isDirectMessage }
-      : {}),
-    ...(canonicalContactRoomIds.size > 0 ? { canonicalContactRoomIds } : {}),
-    ...(conversationScope ? { conversationScope } : {}),
-  };
-}
 
 type RetrievalIntegrityErrorStage =
   | 'retrieve'
@@ -234,14 +193,6 @@ export interface MemoryRetrieverConfig {
   proactiveRecallProbability?: number;
   proactiveRecallMinTurnsBetween?: number;
 }
-
-export interface MemorySessionQuarantineFilter {
-  isSessionRetiredOrQuarantined(logicalSessionId: string): boolean;
-  getRetiredLogicalSessionIds?(): ReadonlySet<string>;
-}
-
-type MemoryQuarantineCandidate = Pick<PurrMemory, 'id' | 'sourceRef' | 'provenance' | 'provenanceRefs'>
-  & { similarity?: number };
 
 function isSubstrateConfig(config: MemoryRetrieverConfig | SubstrateConfig | undefined): config is SubstrateConfig {
   return !!config && typeof config === 'object' && 'defaultContextWindow' in config;
@@ -360,22 +311,8 @@ export class MemoryRetriever implements MemoryProvider {
 
   private resolveRetrievalBudget(
     turnBudgetCharacteristics?: ContextBudgetTurnCharacteristics,
-  ): ReturnType<typeof resolveMemoryRetrievalBudget> {
-    if (this.runtimeConfig) {
-      return resolveMemoryRetrievalBudget(this.runtimeConfig, {
-        ...(turnBudgetCharacteristics ? { turn: turnBudgetCharacteristics } : {}),
-      });
-    }
-
-    return resolveMemoryRetrievalBudget(
-      this.fallbackBudgetConfig ?? {
-        defaultContextWindow: 128_000,
-        modelRoster: {},
-      },
-      {
-        ...(turnBudgetCharacteristics ? { turn: turnBudgetCharacteristics } : {}),
-      },
-    );
+  ): ReturnType<typeof resolveMemoryRetrieverBudget> {
+    return resolveMemoryRetrieverBudget(this.runtimeConfig, this.fallbackBudgetConfig, turnBudgetCharacteristics);
   }
 
   getActiveMemoryContext(request: ActiveMemoryContextRequest): ActiveMemoryContextSnapshot | null {
@@ -388,45 +325,11 @@ export class MemoryRetriever implements MemoryProvider {
   invalidateActiveMemoryContexts(
     request: ActiveMemoryContextInvalidationRequest,
   ): ActiveMemoryContextInvalidationResult {
-    const memoryIds = new Set((request.memoryIds ?? []).map(id => id.trim()).filter(Boolean));
-    const sessionChannelIds = new Set((request.sessionChannelIds ?? []).map(id => id.trim()).filter(Boolean));
-    const invalidatedKeys: string[] = [];
-    let invalidatedMemoryEntryCount = 0;
-
-    for (const [key, state] of this.activeMemoryContexts.entries()) {
-      const keyParts = key.split('|');
-      const sessionMatches = state.snapshot.channelId && sessionChannelIds.has(state.snapshot.channelId)
-        ? true
-        : [...sessionChannelIds].some(sessionId => keyParts.includes(`session:${sessionId}`));
-      const selectedMemoryMatches = state.snapshot.selectedMemoryIds.some(id => memoryIds.has(id));
-      const activeEntryMatches = [...state.entries.keys()].some(id => memoryIds.has(id));
-      if (!sessionMatches && !selectedMemoryMatches && !activeEntryMatches) continue;
-
-      invalidatedMemoryEntryCount += [...state.entries.keys()]
-        .filter(id => memoryIds.has(id)).length;
-      invalidatedKeys.push(key);
-      this.activeMemoryContexts.delete(key);
-    }
-
-    if (invalidatedKeys.length > 0) {
-      void this.eventBus?.emit('memory.active_context.invalidate', {
-        reason: request.reason,
-        memoryIds: [...memoryIds],
-        sessionChannelIds: [...sessionChannelIds],
-        invalidatedKeys: [...invalidatedKeys],
-        timestamp: Date.now(),
-      }).catch((error: unknown) => {
-        log.debug('Failed to emit active memory invalidation event', {
-          error: toErrorMessage(error),
-        });
-      });
-    }
-
-    return {
-      invalidatedContextCount: invalidatedKeys.length,
-      invalidatedMemoryEntryCount,
-      invalidatedKeys,
-    };
+    return invalidateActiveMemoryContextsWithDeps(request, {
+      activeMemoryContexts: this.activeMemoryContexts,
+      eventBus: this.eventBus,
+      toErrorMessage,
+    });
   }
 
   refreshActiveMemoryContext(request: ActiveMemoryContextRequest): Promise<ActiveMemoryContextSnapshot | null> {
@@ -567,106 +470,13 @@ export class MemoryRetriever implements MemoryProvider {
     canonicalContactId: string | undefined,
     conversationScope: ConversationScope | undefined,
   ): Promise<RetrievalRoomVisibilityContext> {
-    const canonicalContact = canonicalContactId && this.contactStore
-      ? await this.contactStore.getById(canonicalContactId)
-      : undefined;
-    return buildRoomVisibilityContext(channelId, channelMeta, canonicalContact, conversationScope);
-  }
-
-  private getRetiredLogicalSessionIds(): ReadonlySet<string> {
-    return this.sessionQuarantineFilter?.getRetiredLogicalSessionIds?.() ?? new Set<string>();
-  }
-
-  private isRetiredSessionId(logicalSessionId: string | undefined): boolean {
-    const normalized = logicalSessionId?.trim();
-    if (!normalized || !this.sessionQuarantineFilter) return false;
-    return this.sessionQuarantineFilter.isSessionRetiredOrQuarantined(normalized);
-  }
-
-  private referenceTargetsRetiredSession(reference: string | undefined): boolean {
-    const normalized = reference?.trim();
-    if (!normalized || !this.sessionQuarantineFilter) return false;
-    if (this.isRetiredSessionId(normalized)) return true;
-    for (const retiredId of this.getRetiredLogicalSessionIds()) {
-      const sessionId = retiredId.trim();
-      if (!sessionId) continue;
-      if (normalized === `session:${sessionId}`) return true;
-      if (this.hasDelimitedSessionReference(normalized, sessionId)) return true;
-    }
-    return false;
-  }
-
-  private hasDelimitedSessionReference(reference: string, sessionId: string): boolean {
-    const marker = `session:${sessionId}`;
-    const index = reference.indexOf(marker);
-    if (index < 0) return false;
-    const before = index === 0 ? '' : reference[index - 1];
-    const after = reference[index + marker.length] ?? '';
-    const beforeDelimited = index === 0 || before === '|' || before === ',' || before === ' ' || before === '#';
-    const afterDelimited = after === '' || after === '|' || after === ',' || after === ' ' || after === '#';
-    return beforeDelimited && afterDelimited;
-  }
-
-  private isMemoryQuarantined(memory: MemoryQuarantineCandidate): boolean {
-    if (!this.sessionQuarantineFilter) return false;
-    if (this.isRetiredSessionId(memory.provenance?.sessionId)) return true;
-    if (this.referenceTargetsRetiredSession(memory.sourceRef)) return true;
-    return (memory.provenanceRefs ?? []).some(ref => this.referenceTargetsRetiredSession(ref));
-  }
-
-  private summarizeQuarantinedMemories<T extends MemoryQuarantineCandidate>(
-    memories: readonly T[],
-  ): { summary?: MemoryWithheldSummary; withheldIds: string[] } {
-    const summary = createEmptyMemoryWithheldSummary();
-    const withheldIds = new Set<string>();
-    const seenIds = new Set<string>();
-    for (const memory of memories) {
-      if (seenIds.has(memory.id)) continue;
-      seenIds.add(memory.id);
-      if (!this.isMemoryQuarantined(memory)) continue;
-      incrementMemoryWithheldReason(summary, 'session_quarantine.blocked');
-      incrementMemoryWithheldRelevanceBand(
-        summary,
-        resolveMemoryWithheldRelevanceBand(memory.similarity),
-      );
-      withheldIds.add(memory.id);
-    }
-    return {
-      ...(summary.totalCount > 0 ? { summary } : {}),
-      withheldIds: [...withheldIds],
-    };
-  }
-
-  private filterQuarantinedMemories<T extends MemoryQuarantineCandidate>(
-    memories: readonly T[],
-  ): { memories: T[]; summary?: MemoryWithheldSummary; withheldIds: string[] } {
-    if (!this.sessionQuarantineFilter || memories.length === 0) {
-      return { memories: [...memories], withheldIds: [] };
-    }
-    const summary = createEmptyMemoryWithheldSummary();
-    const withheldIds = new Set<string>();
-    const filtered: T[] = [];
-    const seenIds = new Set<string>();
-    for (const memory of memories) {
-      if (this.isMemoryQuarantined(memory)) {
-        if (!seenIds.has(memory.id)) {
-          seenIds.add(memory.id);
-          incrementMemoryWithheldReason(summary, 'session_quarantine.blocked');
-          incrementMemoryWithheldRelevanceBand(
-            summary,
-            resolveMemoryWithheldRelevanceBand(memory.similarity),
-          );
-          withheldIds.add(memory.id);
-        }
-        continue;
-      }
-      filtered.push(memory);
-    }
-    return {
-      memories: filtered,
-      ...(summary.totalCount > 0 ? { summary } : {}),
-      withheldIds: [...withheldIds],
-    };
+    return resolveRoomVisibilityContextWithDeps({
+      contactStore: this.contactStore,
+      channelId,
+      channelMeta,
+      canonicalContactId,
+      conversationScope,
+    });
   }
 
   private async resolveContactProfileAccess(
@@ -681,39 +491,13 @@ export class MemoryRetriever implements MemoryProvider {
       roomVisibility?: RetrievalRoomVisibilityContext;
     },
   ): Promise<ContactProfileAccessResult> {
-    if (!profile) {
-      return { withheldSourceMemoryIds: [] };
-    }
-
-    const sourceMemoryIds = profile.sourceMemoryIds
-      .map(id => id.trim())
-      .filter(Boolean);
-    if (sourceMemoryIds.length === 0 || typeof this.memoryStore.getById !== 'function') {
-      return { profile: cloneContactProfileArtifact(profile), withheldSourceMemoryIds: [] };
-    }
-
-      const sourceMemories = (
-        await Promise.all(sourceMemoryIds.map(id => this.memoryStore.getById(id)))
-      )
-        .filter((memory): memory is PurrMemory => Boolean(memory))
-        .map(memory => ({ ...memory, similarity: 1 }));
-      if (sourceMemories.length === 0) {
-        return { profile: cloneContactProfileArtifact(profile), withheldSourceMemoryIds: [] };
-      }
-
-      const quarantine = this.summarizeQuarantinedMemories(sourceMemories);
-      const { summary, withheldIds } = summarizeWithheldMemories(sourceMemories, options);
-      const withheldSummary = mergeMemoryWithheldSummaries(quarantine.summary, summary);
-      const blockedIds = [...new Set([...quarantine.withheldIds, ...withheldIds])];
-      if (blockedIds.length === 0) {
-        return { profile: cloneContactProfileArtifact(profile), withheldSourceMemoryIds: [] };
-      }
-
-      return {
-        withheldSummary,
-        withheldSourceMemoryIds: blockedIds,
-      };
-    }
+    return resolveContactProfileAccessWithDeps({
+      memoryStore: this.memoryStore,
+      sessionQuarantineFilter: this.sessionQuarantineFilter,
+      profile,
+      options,
+    });
+  }
 
   async captureTurnMemorySnapshot(
     contextText: string,
@@ -726,194 +510,46 @@ export class MemoryRetriever implements MemoryProvider {
     callerContext?: RetrievalCallerContext,
     retrievalMode?: RetrievalModeInput,
   ): Promise<TurnMemorySnapshot> {
-    const normalizedScopeQuery = normalizeMemoryScopeQuery(scopeQuery);
-    const effectiveBudgetTurn = turnBudgetCharacteristics ?? {
-      channelId,
-      ...(channelMeta?.isDirectMessage !== undefined ? { isDirectMessage: channelMeta.isDirectMessage } : {}),
-      messageText: contextText,
-    };
-    const budget = this.resolveRetrievalBudget(effectiveBudgetTurn);
-    const limit = budget.estimatedCount;
-    const effectiveTrust = trustLevel ?? 'regular';
-    const channelDisclosure = classifyChannelDisclosure(channelId, channelMeta);
-    const { channelPrivacy, broadcast } = channelDisclosure;
-    const visibilityScope = resolveBroadcastVisibilityScope(channelId, channelMeta) ?? 'non_broadcast';
-    const operatorApproval = visibilityScope === 'approved_private_context';
-    const roomVisibility = await this.resolveRoomVisibilityContext(channelId, channelMeta, canonicalContactId, undefined);
-    const rawProfile = canonicalContactId
-      ? await this.memoryStore.getContactProfile(canonicalContactId)
-      : undefined;
-    const profileAccess = await this.resolveContactProfileAccess(rawProfile, {
-      trustLevel: effectiveTrust,
-      channelPrivacy,
-      broadcast,
-      channelMeta,
-      canonicalContactId,
-      operatorApproval,
-      roomVisibility,
-    });
-    const profile = profileAccess.profile;
-      const emotionalSnapshot = canonicalContactId
-        ? await this.resolveEmotionalSnapshot(canonicalContactId)
-        : undefined;
-      let quarantineWithheldSummary: MemoryWithheldSummary | undefined;
-      const quarantineWithheldIds: string[] = [];
-      const applyQuarantineResult = <T extends MemoryQuarantineCandidate>(result: {
-        memories: T[];
-        summary?: MemoryWithheldSummary;
-        withheldIds: string[];
-      }): T[] => {
-        quarantineWithheldSummary = mergeMemoryWithheldSummaries(
-          quarantineWithheldSummary,
-          result.summary,
-        );
-        quarantineWithheldIds.push(...result.withheldIds);
-        return result.memories;
-      };
-      let contactEmotionalMemories = canonicalContactId
-        ? await this.collectContactEmotionalMemories(canonicalContactId)
-        : [];
-      contactEmotionalMemories = applyQuarantineResult(
-        this.filterQuarantinedMemories(contactEmotionalMemories),
-      );
-
-      let semanticCandidates: Array<PurrMemory & { similarity: number }> = [];
-      let lexicalCandidates: Array<PurrMemory & { similarity: number }> = [];
-
-    if (contextText.trim().length > 0) {
-      const embedding = await this.embeddingService.embed(contextText);
-      const candidateLimit = Math.max(40, limit * 4);
-      semanticCandidates = await this.memoryStore.searchByEmbedding(
-        embedding,
-        this.retrievalThreshold,
-        candidateLimit,
-        normalizedScopeQuery,
-      );
-        semanticCandidates = semanticCandidates
-          .filter(memory => !isInternalMemoryArtifact(memory))
-          .map(cloneScoredMemory);
-        semanticCandidates = applyQuarantineResult(
-          this.filterQuarantinedMemories(semanticCandidates),
-        );
-        if (semanticCandidates.length === 0) {
-          lexicalCandidates = (await this.memoryStore
-            .searchByText(contextText, candidateLimit, normalizedScopeQuery))
-            .filter(memory => !isInternalMemoryArtifact(memory))
-            .map(cloneScoredMemory);
-          lexicalCandidates = applyQuarantineResult(
-            this.filterQuarantinedMemories(lexicalCandidates),
-          );
-        }
-        const recentLexicalCandidates = await collectRecentLexicalMemoryCandidates({
-          memoryStore: this.memoryStore,
-        contextText,
-        existingIds: new Set([
-          ...semanticCandidates.map(memory => memory.id),
-          ...lexicalCandidates.map(memory => memory.id),
-        ]),
-          scopeQuery: normalizedScopeQuery,
-        });
-        semanticCandidates = mergeScoredMemoryCandidates(semanticCandidates, recentLexicalCandidates);
-        semanticCandidates = applyQuarantineResult(
-          this.filterQuarantinedMemories(semanticCandidates),
-        );
-      }
-
-      const proactiveCandidates = applyQuarantineResult(this.filterQuarantinedMemories(await this.collectProactiveRecallCandidates(
-        channelId,
-        canonicalContactId,
-      )))
-        .map(cloneMemory);
-      const episodicChains = this.filterQuarantinedEpisodicChains(await this.resolveEpisodicChains({
-        contextText,
-        channelId,
-        trustLevel: effectiveTrust,
-        channelDisclosure,
-        canonicalContactId,
-        scopeQuery: normalizedScopeQuery,
-      }));
-    const retrievalCandidates = semanticCandidates.length > 0 ? semanticCandidates : lexicalCandidates;
-    const {
-      summary: candidateWithheldSummary,
-      withheldIds: withheldCandidateIds,
-    } = summarizeWithheldMemories(
-      [...retrievalCandidates, ...contactEmotionalMemories, ...proactiveCandidates],
+    return captureTurnMemorySnapshotWithDeps(
       {
-        trustLevel: effectiveTrust,
-        channelPrivacy,
-        broadcast,
+        contextText,
+        channelId,
+        trustLevel,
         channelMeta,
         canonicalContactId,
-        operatorApproval,
-        roomVisibility,
+        turnBudgetCharacteristics,
+        scopeQuery,
+        callerContext,
+        retrievalMode,
+      },
+      {
+        memoryStore: this.memoryStore,
+        embeddingService: this.embeddingService,
+        retrievalThreshold: this.retrievalThreshold,
+        resolveRetrievalBudget: turn => this.resolveRetrievalBudget(turn),
+        resolveRoomVisibilityContext: (roomChannelId, roomChannelMeta, roomCanonicalContactId) => (
+          this.resolveRoomVisibilityContext(roomChannelId, roomChannelMeta, roomCanonicalContactId, undefined)
+        ),
+        resolveContactProfileAccess: (profile, options) => this.resolveContactProfileAccess(profile, options),
+        resolveEmotionalSnapshot: contactId => resolveEmotionalSnapshot(this.contactStore, contactId),
+        collectContactEmotionalMemories: contactId => collectContactEmotionalMemories(this.memoryStore, contactId),
+        collectProactiveRecallCandidates: (proactiveChannelId, proactiveContactId) => (
+          collectProactiveRecallCandidates(this.memoryStore, proactiveChannelId, proactiveContactId)
+        ),
+        resolveEpisodicChains: episodicInput => this.resolveEpisodicChains(episodicInput),
+        filterQuarantinedMemories: memories => filterQuarantinedMemories(this.sessionQuarantineFilter, memories),
+        filterQuarantinedEpisodicChains: chains => (
+          filterQuarantinedEpisodicChains(this.sessionQuarantineFilter, chains)
+        ),
       },
     );
-      const withheldSummary = mergeMemoryWithheldSummaries(
-        quarantineWithheldSummary,
-        candidateWithheldSummary,
-        profileAccess.withheldSummary,
-      );
-      const withheldIds = [...new Set([
-        ...quarantineWithheldIds,
-        ...withheldCandidateIds,
-        ...profileAccess.withheldSourceMemoryIds,
-    ])];
-
-    return {
-      channelId,
-      ...(profile ? { profile: cloneContactProfileArtifact(profile) } : {}),
-      ...(emotionalSnapshot ? { emotionalSnapshot: cloneEmotionalSnapshot(emotionalSnapshot) } : {}),
-      contactEmotionalMemories: contactEmotionalMemories.map(cloneMemory),
-      semanticCandidates,
-      lexicalCandidates,
-      episodicChains: episodicChains.map(cloneEpisodicRetrievalChain),
-      proactiveCandidates,
-      ...(withheldSummary ? { withheldSummary } : {}),
-      ...(withheldIds.length > 0 ? { withheldCandidateIds: withheldIds } : {}),
-      ...(callerContext ? { callerContext: cloneRetrievalCallerContext(callerContext) } : {}),
-      ...((retrievalMode ?? callerContext?.retrievalMode) !== undefined
-        ? { retrievalMode: cloneRetrievalModeInput(retrievalMode ?? callerContext?.retrievalMode) }
-        : {}),
-      versionPointer: buildSnapshotVersionPointer([
-        channelId,
-        effectiveTrust,
-        channelPrivacy,
-        visibilityScope,
-        operatorApproval ? 'approved' : 'default',
-        profile?.updatedAt,
-        emotionalSnapshot?.lastMoodUpdateEpochMs,
-        contactEmotionalMemories.map(memory => memory.id).join(','),
-        semanticCandidates.map(memory => `${memory.id}:${memory.similarity.toFixed(4)}`).join(','),
-        lexicalCandidates.map(memory => `${memory.id}:${memory.similarity.toFixed(4)}`).join(','),
-        episodicChains.map(chain => `${chain.rootEpisodeId}:${chain.score.toFixed(4)}:${chain.episodes.map(episode => episode.id).join(',')}`).join(','),
-        proactiveCandidates.map(memory => memory.id).join(','),
-        serializeMemoryWithheldSummary(withheldSummary),
-        serializeRetrievalModes(callerContext, retrievalMode),
-      ]),
-    };
-  }
-
-  private cloneScoredPromptMemory(input: ScoredMemory): ScoredMemory {
-    return {
-      ...input,
-      memory: cloneScoredMemory(input.memory),
-      privacyBreakdown: { ...input.privacyBreakdown },
-      ...(input.evolutionChain
-        ? {
-          evolutionChain: input.evolutionChain.map(link => ({
-            ...link,
-            memory: cloneMemory(link.memory),
-          })),
-        }
-        : {}),
-    };
   }
 
   private finalizeRetrievalPromptBlock(input: {
     activeContextTarget?: ActiveMemoryRefreshTarget;
     profile?: ContactProfileArtifact;
     selectedForPrompt?: ScoredMemory[];
-    emotionalSnapshot?: EmotionalSnapshot;
+    emotionalSnapshot?: TurnMemorySnapshot['emotionalSnapshot'];
     emotionalContinuityMemories?: PurrMemory[];
     withheldSummary?: MemoryWithheldSummary;
     socialContext?: RetrievalSocialContext;
@@ -921,168 +557,23 @@ export class MemoryRetriever implements MemoryProvider {
     episodicChains?: EpisodicRetrievalChain[];
     telemetry: RetrievalTelemetry;
   }): string {
-    const block = renderPromptBlock(input.profile, input.selectedForPrompt ?? [], {
-      emotionalSnapshot: input.emotionalSnapshot,
-      emotionalContinuityMemories: input.emotionalContinuityMemories,
-      withheldSummary: input.withheldSummary,
-      socialContext: input.socialContext,
-      contactContextById: input.contactContextById,
-      episodicChains: input.episodicChains,
-    });
-
-    if (!input.activeContextTarget) {
-      return block;
-    }
-
-    return this.applyActiveMemoryContextRefresh({
-      target: input.activeContextTarget,
-      profile: input.profile,
-      selectedForPrompt: input.selectedForPrompt ?? [],
-      emotionalSnapshot: input.emotionalSnapshot,
-      emotionalContinuityMemories: input.emotionalContinuityMemories ?? [],
-      withheldSummary: input.withheldSummary,
-      socialContext: input.socialContext,
-      contactContextById: input.contactContextById,
-      episodicChains: input.episodicChains ?? [],
+    return finalizeRetrievalPromptBlockWithActiveContext({
+      ...input,
       manifestSeed: buildManifestSeedFromTelemetry(input.telemetry),
-    }).contextBlock;
-  }
-
-  private applyActiveMemoryContextRefresh(input: {
-    target: ActiveMemoryRefreshTarget;
-    profile?: ContactProfileArtifact;
-    selectedForPrompt: ScoredMemory[];
-    emotionalSnapshot?: EmotionalSnapshot;
-    emotionalContinuityMemories: PurrMemory[];
-    withheldSummary?: MemoryWithheldSummary;
-    socialContext?: RetrievalSocialContext;
-    contactContextById?: ReadonlyMap<string, RetrievalContactContext>;
-    episodicChains: EpisodicRetrievalChain[];
-    manifestSeed: ContextManifestMemorySeed;
-  }): ActiveMemoryContextSnapshot {
-    const { target } = input;
-    const now = Date.now();
-    const existing = this.activeMemoryContexts.get(target.identity.key);
-    const previousEntries = existing?.entries ?? new Map<string, ActiveMemoryEntry>();
-    const nextEntries = new Map<string, ActiveMemoryEntry>();
-    const selectedIds = new Set(input.selectedForPrompt.map(item => item.memory.id));
-    const maxEntries = Math.max(
-      ACTIVE_MEMORY_ENTRY_MIN_LIMIT,
-      (input.manifestSeed.retrievalLimit ?? ACTIVE_MEMORY_ENTRY_MIN_LIMIT) * ACTIVE_MEMORY_ENTRY_LIMIT_MULTIPLIER,
-      input.selectedForPrompt.length,
-    );
-
-      for (const [id, entry] of previousEntries.entries()) {
-        if (selectedIds.has(id)) continue;
-        if (this.isMemoryQuarantined(entry.scored.memory)) continue;
-        const missCount = entry.missCount + 1;
-      if (missCount >= ACTIVE_MEMORY_MISS_LIMIT) continue;
-      const retainedScore = entry.retainedScore * ACTIVE_MEMORY_MISS_DECAY;
-      nextEntries.set(id, {
-        ...entry,
-        scored: this.cloneScoredPromptMemory(entry.scored),
-        retainedScore,
-        missCount,
-      });
-    }
-
-    for (const scored of input.selectedForPrompt) {
-      const id = scored.memory.id;
-      const previous = previousEntries.get(id);
-      nextEntries.set(id, {
-        scored: this.cloneScoredPromptMemory(scored),
-        retainedScore: Math.max(scored.score, previous?.retainedScore ?? 0),
-        firstSelectedAt: previous?.firstSelectedAt ?? now,
-        lastSelectedAt: now,
-        missCount: 0,
-      });
-    }
-
-    const rankedEntries = [...nextEntries.entries()]
-      .sort(([, left], [, right]) => (
-        right.retainedScore - left.retainedScore
-        || right.lastSelectedAt - left.lastSelectedAt
-        || right.scored.memory.importance - left.scored.memory.importance
-      ))
-      .slice(0, maxEntries);
-    const cappedEntries = new Map(rankedEntries);
-    const selectedForActivePrompt = rankedEntries.map(([, entry]) => this.cloneScoredPromptMemory(entry.scored));
-    const profile = input.profile ?? existing?.profile;
-    const emotionalSnapshot = input.emotionalSnapshot ?? existing?.emotionalSnapshot;
-      const emotionalContinuityMemories = input.emotionalContinuityMemories.length > 0
-        ? input.emotionalContinuityMemories.map(memory => cloneMemory(memory))
-        : this.filterQuarantinedMemories(existing?.emotionalContinuityMemories.map(memory => cloneMemory(memory)) ?? []).memories;
-    const withheldSummary = input.withheldSummary ?? existing?.withheldSummary;
-    const socialContext = input.socialContext ?? existing?.socialContext;
-    const contactContextById = input.contactContextById ?? existing?.contactContextById;
-      const episodicChains = input.episodicChains.length > 0
-        ? input.episodicChains.map(cloneEpisodicRetrievalChain)
-        : this.filterQuarantinedEpisodicChains(existing?.episodicChains.map(cloneEpisodicRetrievalChain) ?? []);
-    const contextBlock = renderPromptBlock(profile, selectedForActivePrompt, {
-      emotionalSnapshot,
-      emotionalContinuityMemories,
-      withheldSummary,
-      socialContext,
-      contactContextById,
-      episodicChains,
+    }, {
+      activeMemoryContexts: this.activeMemoryContexts,
+      eventBus: this.eventBus,
+      isMemoryQuarantined: memory => isMemoryQuarantined(this.sessionQuarantineFilter, memory),
+      filterQuarantinedMemories: memories => filterQuarantinedMemories(
+        this.sessionQuarantineFilter,
+        memories,
+      ).memories,
+      filterQuarantinedEpisodicChains: chains => filterQuarantinedEpisodicChains(
+        this.sessionQuarantineFilter,
+        chains,
+      ),
+      toErrorMessage,
     });
-    const selectedMemoryIds = [...cappedEntries.keys()];
-    const refreshSerial = (existing?.refreshSerial ?? 0) + 1;
-    const snapshot: ActiveMemoryContextSnapshot = {
-      key: target.identity.key,
-      subjectKey: target.identity.subjectKey,
-      channelId: target.request.channelId,
-      trustLevel: target.identity.trustLevel,
-      channelVisibility: target.identity.channelVisibility,
-      visibilityScope: target.identity.visibilityScope,
-      contextBlock,
-      contextChars: contextBlock.length,
-      selectedMemoryIds,
-      generatedAt: now,
-      lastRefreshStartedAt: target.startedAt,
-      lastRefreshCompletedAt: now,
-      refreshStatus: 'ready',
-      versionPointer: buildSnapshotVersionPointer([
-        target.identity.key,
-        refreshSerial,
-        selectedMemoryIds.join(','),
-        contextBlock,
-      ]),
-      manifestSeed: {
-        ...input.manifestSeed,
-        reason: input.manifestSeed.reason ?? 'active_projection',
-        returnedCount: selectedMemoryIds.length,
-      },
-    };
-
-    this.activeMemoryContexts.set(target.identity.key, {
-      snapshot,
-      entries: cappedEntries,
-      ...(profile ? { profile: cloneContactProfileArtifact(profile) } : {}),
-      ...(emotionalSnapshot ? { emotionalSnapshot: cloneEmotionalSnapshot(emotionalSnapshot) } : {}),
-      emotionalContinuityMemories,
-      ...(withheldSummary ? { withheldSummary: cloneMemoryWithheldSummary(withheldSummary) } : {}),
-      ...(socialContext ? { socialContext } : {}),
-      ...(contactContextById ? { contactContextById } : {}),
-      episodicChains,
-      refreshSerial,
-      maxEntries,
-    });
-    void this.eventBus?.emit('memory.active_context.refresh', {
-      channelId: target.request.channelId,
-      key: target.identity.key,
-      phase: 'ready',
-      selectedMemoryIds,
-      contextChars: contextBlock.length,
-      timestamp: now,
-    }).catch((emitError: unknown) => {
-      log.debug('Failed to emit active memory refresh event', {
-        key: target.identity.key,
-        channelId: target.request.channelId,
-        error: toErrorMessage(emitError),
-      });
-    });
-    return snapshot;
   }
 
   async retrieve(
@@ -1127,7 +618,7 @@ export class MemoryRetriever implements MemoryProvider {
       conversationScope,
     );
     const socialContext = canonicalContactId
-      ? await this.resolveRetrievalSocialContext(canonicalContactId, effectiveTrust, channelPrivacy)
+      ? await resolveRetrievalSocialContext(this.contactStore, canonicalContactId, effectiveTrust, channelPrivacy)
       : undefined;
     const telemetry: RetrievalTelemetry = {
       channelId,
@@ -1173,15 +664,17 @@ export class MemoryRetriever implements MemoryProvider {
     const emotionalSnapshot = turnSnapshot?.emotionalSnapshot
       ? cloneEmotionalSnapshot(turnSnapshot.emotionalSnapshot)
       : canonicalContactId
-        ? await this.resolveEmotionalSnapshot(canonicalContactId)
+        ? await resolveEmotionalSnapshot(this.contactStore, canonicalContactId)
         : undefined;
       telemetry.emotionalSnapshotIncluded = !!emotionalSnapshot;
-      const contactQuarantine = this.filterQuarantinedMemories(
+      const contactQuarantine = filterQuarantinedMemories(
+        this.sessionQuarantineFilter,
         turnSnapshot?.contactEmotionalMemories.map(cloneMemory)
-        ?? (canonicalContactId ? await this.collectContactEmotionalMemories(canonicalContactId) : []),
+        ?? (canonicalContactId ? await collectContactEmotionalMemories(this.memoryStore, canonicalContactId) : []),
       );
       const contactEmotionalSource = contactQuarantine.memories;
-      const proactiveQuarantine = this.filterQuarantinedMemories(
+      const proactiveQuarantine = filterQuarantinedMemories(
+        this.sessionQuarantineFilter,
         turnSnapshot?.proactiveCandidates.map(cloneMemory) ?? [],
       );
       const proactiveSource = proactiveQuarantine.memories;
@@ -1195,7 +688,7 @@ export class MemoryRetriever implements MemoryProvider {
           canonicalContactId,
           scopeQuery: normalizedScopeQuery,
         });
-      const episodicChains = this.filterQuarantinedEpisodicChains(rawEpisodicChains);
+      const episodicChains = filterQuarantinedEpisodicChains(this.sessionQuarantineFilter, rawEpisodicChains);
     const episodicEpisodeCount = countEpisodicChainEpisodes(episodicChains);
     telemetry.episodicChainCount = episodicChains.length;
     telemetry.episodicEpisodeCount = episodicEpisodeCount;
@@ -1209,7 +702,8 @@ export class MemoryRetriever implements MemoryProvider {
 
     const emptySelectedIds = new Set<string>();
     const fallbackEmotionalContinuity = canonicalContactId
-      ? await this.collectEmotionalContinuityMemories(
+      ? await collectEmotionalContinuityMemories(
+        this.memoryStore,
         canonicalContactId,
         effectiveTrust,
         channelDisclosure,
@@ -1218,6 +712,7 @@ export class MemoryRetriever implements MemoryProvider {
         channelMeta,
         contactEmotionalSource,
         roomVisibility,
+        memories => filterQuarantinedMemories(this.sessionQuarantineFilter, memories).memories,
       )
       : [];
     telemetry.emotionalContinuityCount = fallbackEmotionalContinuity.length;
@@ -1269,7 +764,7 @@ export class MemoryRetriever implements MemoryProvider {
           );
           semanticMemories = semanticMemories.filter(memory => !isInternalMemoryArtifact(memory));
         }
-        const semanticQuarantine = this.filterQuarantinedMemories(semanticMemories);
+        const semanticQuarantine = filterQuarantinedMemories(this.sessionQuarantineFilter, semanticMemories);
         semanticMemories = semanticQuarantine.memories;
         if (!turnSnapshot) {
           const recentLexicalCandidates = await collectRecentLexicalMemoryCandidates({
@@ -1279,7 +774,7 @@ export class MemoryRetriever implements MemoryProvider {
           scopeQuery: normalizedScopeQuery,
           });
           semanticMemories = mergeScoredMemoryCandidates(semanticMemories, recentLexicalCandidates);
-          const mergedSemanticQuarantine = this.filterQuarantinedMemories(semanticMemories);
+          const mergedSemanticQuarantine = filterQuarantinedMemories(this.sessionQuarantineFilter, semanticMemories);
           semanticMemories = mergedSemanticQuarantine.memories;
           withheldSummary = mergeMemoryWithheldSummaries(
             withheldSummary,
@@ -1297,7 +792,7 @@ export class MemoryRetriever implements MemoryProvider {
             Math.max(40, limit * 4),
               normalizedScopeQuery,
             )).filter(memory => !isInternalMemoryArtifact(memory));
-          const lexicalQuarantine = this.filterQuarantinedMemories(lexicalMemories);
+          const lexicalQuarantine = filterQuarantinedMemories(this.sessionQuarantineFilter, lexicalMemories);
           const visibleLexicalMemories = lexicalQuarantine.memories;
           withheldSummary = mergeMemoryWithheldSummaries(withheldSummary, lexicalQuarantine.summary);
           telemetry.lexicalCandidateCount = visibleLexicalMemories.length;
@@ -1530,7 +1025,8 @@ export class MemoryRetriever implements MemoryProvider {
         runtimeConfig: this.runtimeConfig,
         llmProvider: this.llmProvider,
       });
-      const scoredCandidates = await this.applySocialContextRankingAdjustments(
+      const scoredCandidates = await applySocialContextRankingAdjustments(
+        this.contactStore,
         rerankDecision.ranked ?? allScored,
         contextText,
         socialContext,
@@ -1698,7 +1194,8 @@ export class MemoryRetriever implements MemoryProvider {
       });
       const selectedIds = new Set(selected.map(item => item.memory.id));
       const emotionalContinuityMemories = canonicalContactId
-        ? await this.collectEmotionalContinuityMemories(
+        ? await collectEmotionalContinuityMemories(
+          this.memoryStore,
           canonicalContactId,
           effectiveTrust,
           channelDisclosure,
@@ -1707,6 +1204,7 @@ export class MemoryRetriever implements MemoryProvider {
           channelMeta,
           turnSnapshot?.contactEmotionalMemories,
           roomVisibility,
+          memories => filterQuarantinedMemories(this.sessionQuarantineFilter, memories).memories,
         )
         : [];
       telemetry.emotionalContinuityCount = emotionalContinuityMemories.length;
@@ -1718,17 +1216,26 @@ export class MemoryRetriever implements MemoryProvider {
         ),
         collectEpisodicChainProvenanceRefs(episodicChains),
       );
-      const selectedForPrompt = await this.attachEvolutionChains(selected, {
-        contextText,
-        trustLevel: effectiveTrust,
-        channelPrivacy,
-        broadcast,
-        channelMeta,
-        canonicalContactId,
-        operatorApproval,
-        roomVisibility,
-      });
-      const selectedContactContextById = await this.buildSelectedContactContext(selectedForPrompt, socialContext);
+      const selectedForPrompt = await attachEvolutionChains(
+        this.memoryStore,
+        selected,
+        {
+          contextText,
+          trustLevel: effectiveTrust,
+          channelPrivacy,
+          broadcast,
+          channelMeta,
+          canonicalContactId,
+          operatorApproval,
+          roomVisibility,
+        },
+        memory => isMemoryQuarantined(this.sessionQuarantineFilter, memory),
+      );
+      const selectedContactContextById = await buildSelectedContactContext(
+        this.contactStore,
+        selectedForPrompt,
+        socialContext,
+      );
 
       // Update access stats; fail closed if persistence fails.
       for (const s of selected) {
@@ -1798,98 +1305,60 @@ export class MemoryRetriever implements MemoryProvider {
     _turnBudgetCharacteristics?: ContextBudgetTurnCharacteristics,
     _scopeQuery?: MemoryScopeQuery,
   ): Promise<string> {
-    if (this.proactiveRecallProbability <= 0) return '';
-
-    const currentTurn = ++this.proactiveTurnCounter;
-    if (currentTurn - this.lastProactiveRecallTurn <= this.proactiveRecallMinTurnsBetween) {
-      return '';
-    }
-
-    if (Math.random() > this.proactiveRecallProbability) {
-      return '';
-    }
-
-    const effectiveTrust = trustLevel ?? 'regular';
-    const channelDisclosure = classifyChannelDisclosure(channelId, channelMeta);
-    const { channelPrivacy, broadcast } = channelDisclosure;
-    const visibilityScope = resolveBroadcastVisibilityScope(channelId, channelMeta) ?? 'non_broadcast';
-    const operatorApproval = visibilityScope === 'approved_private_context';
-      const roomVisibility = await this.resolveRoomVisibilityContext(channelId, channelMeta, canonicalContactId, undefined);
-      const candidates = this.filterQuarantinedMemories(
-        turnSnapshot?.proactiveCandidates.map(cloneMemory)
-        ?? await this.collectProactiveRecallCandidates(channelId, canonicalContactId),
-      ).memories;
-      if (candidates.length === 0) return '';
-
-    const weighted = candidates
-      .filter((memory) => evaluateRetrievalAccessDecision(memory, {
-        trustLevel: effectiveTrust,
-        channelPrivacy,
-        broadcast,
-        channelMeta,
-        canonicalContactId,
-        operatorApproval,
-        roomVisibility,
-      }).allowed)
-      .map(memory => ({
-        memory,
-        weight: computeProactiveRecallWeight(memory),
-      }))
-      .filter(item => item.weight > 0)
-      .sort((left, right) => right.weight - left.weight);
-
-    if (weighted.length === 0) return '';
-
-    const selected = selectWeightedMemory(weighted);
-    if (!selected) return '';
-
-    this.lastProactiveRecallTurn = currentTurn;
-    try {
-      await this.memoryStore.updateMemory(selected.id, {
-        lastAccessed: Date.now(),
-        accessCount: selected.accessCount + 1,
-      });
-    } catch (error) {
-      const wrapped = new RetrievalIntegrityError(
-        `Failed to update proactive recall access stats for memory ${selected.id}`,
+    return retrieveProactiveRecallWithDeps({
+      memoryStore: this.memoryStore,
+      sessionQuarantineFilter: this.sessionQuarantineFilter,
+      proactiveRecallProbability: this.proactiveRecallProbability,
+      proactiveRecallMinTurnsBetween: this.proactiveRecallMinTurnsBetween,
+      proactiveTurnCounter: this.proactiveTurnCounter,
+      lastProactiveRecallTurn: this.lastProactiveRecallTurn,
+      setProactiveTurnCounter: value => {
+        this.proactiveTurnCounter = value;
+      },
+      setLastProactiveRecallTurn: value => {
+        this.lastProactiveRecallTurn = value;
+      },
+      resolveRoomVisibilityContext: (roomChannelId, roomChannelMeta, roomCanonicalContactId) => (
+        this.resolveRoomVisibilityContext(roomChannelId, roomChannelMeta, roomCanonicalContactId, undefined)
+      ),
+      createAccessUpdateError: (memoryId, effectiveTrust, error) => new RetrievalIntegrityError(
+        `Failed to update proactive recall access stats for memory ${memoryId}`,
         {
           stage: 'proactive_access_update',
           channelId,
           trustLevel: effectiveTrust,
-          memoryId: selected.id,
+          memoryId,
         },
         error,
-      );
-      log.error('Proactive recall integrity failure', {
-        context: wrapped.context,
-        error: toErrorMessage(wrapped),
-        cause: toErrorMessage(wrapped.cause),
-      });
-      throw wrapped;
-    }
-
-    return renderProactiveRecall(selected);
+      ),
+      logIntegrityFailure: (wrapped, cause) => {
+        log.error('Proactive recall integrity failure', {
+          context: wrapped instanceof RetrievalIntegrityError ? wrapped.context : undefined,
+          error: toErrorMessage(wrapped),
+          cause: toErrorMessage(cause),
+        });
+      },
+      channelId,
+      trustLevel,
+      channelMeta,
+      canonicalContactId,
+      turnSnapshot,
+    });
   }
 
   private async resolveEpisodicChains(input: {
     contextText: string;
     channelId: string;
     trustLevel: TrustLevel;
-    channelDisclosure: ChannelDisclosureContext;
+    channelDisclosure: ReturnType<typeof classifyChannelDisclosure>;
     canonicalContactId?: string;
     scopeQuery?: MemoryScopeQuery;
   }): Promise<EpisodicRetrievalChain[]> {
-    if (!this.episodicStore) {
-      return [];
-    }
-
-    try {
-      return this.filterQuarantinedEpisodicChains(
-        (await retrieveEpisodicChains(this.episodicStore, input))
-          .map(cloneEpisodicRetrievalChain),
-      );
-    } catch (error) {
-      throw new RetrievalIntegrityError(
+    return resolveEpisodicChainsWithDeps({
+      episodicStore: this.episodicStore,
+      sessionQuarantineFilter: this.sessionQuarantineFilter,
+      request: input,
+      wrapError: error => new RetrievalIntegrityError(
         'Episodic landmark retrieval failed',
         {
           stage: 'episodic_retrieve',
@@ -1897,400 +1366,17 @@ export class MemoryRetriever implements MemoryProvider {
           trustLevel: input.trustLevel,
         },
         error,
-      );
-    }
-  }
-
-  private filterQuarantinedEpisodicChains(
-    chains: readonly EpisodicRetrievalChain[],
-  ): EpisodicRetrievalChain[] {
-    if (!this.sessionQuarantineFilter || chains.length === 0) {
-      return chains.map(cloneEpisodicRetrievalChain);
-    }
-    return chains
-      .filter(chain => !this.isEpisodicChainQuarantined(chain))
-      .map(cloneEpisodicRetrievalChain);
-  }
-
-  private isEpisodicChainQuarantined(chain: EpisodicRetrievalChain): boolean {
-    for (const episode of chain.episodes) {
-      if (episode.spanRefs.some(ref => this.isRetiredSessionId(ref.sessionId))) return true;
-      if (episode.provenanceRefs.some(ref => (
-        ref.kind === 'session' && this.isRetiredSessionId(ref.refId)
-      ))) {
-        return true;
-      }
-    }
-    for (const arc of chain.arcs) {
-      if (arc.spanRefs.some(ref => this.isRetiredSessionId(ref.sessionId))) return true;
-      if (arc.provenanceRefs.some(ref => (
-        ref.kind === 'session' && this.isRetiredSessionId(ref.refId)
-      ))) {
-        return true;
-      }
-    }
-    return false;
-  }
-
-  private async resolveEmotionalSnapshot(contactId: string): Promise<EmotionalSnapshot | undefined> {
-    if (!this.contactStore) return undefined;
-
-    const directSnapshot = await this.contactStore.getEmotionalSnapshot(contactId);
-    if (directSnapshot) return directSnapshot;
-
-    const contact = await this.contactStore.getById(contactId);
-    if (!contact?.emotionalBaseline) return undefined;
-
-    const baselineRaw = contact.emotionalBaseline;
-    const baselineValence = clamp(baselineRaw.valenceBaseline, -1, 1);
-    const moodValence = clamp(baselineRaw.moodValence, -1, 1);
-    const moodDrift = Number.isFinite(baselineRaw.moodDrift)
-      ? clamp(baselineRaw.moodDrift, -1, 1)
-      : clamp(moodValence - baselineValence, -1, 1);
-    const moodSamples = Number.isFinite(baselineRaw.moodSamples)
-      ? Math.max(0, Math.floor(baselineRaw.moodSamples))
-      : 0;
-    const lastMoodUpdateEpochMs = Number.isFinite(baselineRaw.lastMoodUpdateEpochMs)
-      ? Math.max(0, Math.floor(baselineRaw.lastMoodUpdateEpochMs))
-      : undefined;
-
-    if (
-      moodSamples === 0
-      && Math.abs(baselineValence) < 1e-6
-      && Math.abs(moodValence) < 1e-6
-      && lastMoodUpdateEpochMs === undefined
-    ) {
-      return undefined;
-    }
-
-    return {
-      baselineValence,
-      moodValence,
-      moodDrift,
-      moodSamples,
-      lastMoodUpdateEpochMs,
-    };
-  }
-
-  private async resolveRetrievalSocialContext(
-    canonicalContactId: string,
-    trustLevel: TrustLevel,
-    channelPrivacy: ChannelPrivacy,
-  ): Promise<RetrievalSocialContext | undefined> {
-    if (!this.contactStore) return undefined;
-
-    const canonicalContact = await this.contactStore.getById(canonicalContactId);
-    if (!canonicalContact) return undefined;
-
-    const canonicalEntity = await this.contactStore.getSocialGraphEntityByContactId(canonicalContactId);
-    if (!canonicalEntity) {
-      return {
-        canonicalContactId,
-        canonicalDisplayName: canonicalContact.displayName,
-        relatedContactsById: new Map(),
-      };
-    }
-
-    const edges = await this.contactStore.listSocialRelationshipEdges({
-      contactId: canonicalContactId,
-      viewerTrustLevel: trustLevel,
-      viewerChannelPrivacy: channelPrivacy,
-    });
-    const relatedContactsById = new Map<string, RetrievalContactContext>();
-    for (const edge of edges) {
-      const relatedContact = await this.resolveRelatedContactFromEdge(
-        canonicalEntity.id,
-        edge,
-      );
-      if (!relatedContact) continue;
-
-      const existing = relatedContactsById.get(relatedContact.id);
-      relatedContactsById.set(
-        relatedContact.id,
-        mergeRetrievalContactContext(
-          existing,
-          this.buildRelatedContactContext(relatedContact, edge),
-        ),
-      );
-    }
-
-    return {
-      canonicalContactId,
-      canonicalDisplayName: canonicalContact.displayName,
-      relatedContactsById,
-    };
-  }
-
-  private async resolveRelatedContactFromEdge(
-    canonicalEntityId: string,
-    edge: SocialRelationshipEdge,
-  ): Promise<Contact | undefined> {
-    if (!this.contactStore) return undefined;
-
-    const otherEntityId = edge.sourceEntityId === canonicalEntityId
-      ? edge.targetEntityId
-      : edge.sourceEntityId;
-    const otherEntity = await this.contactStore.getSocialGraphEntityById(otherEntityId);
-    if (!otherEntity?.contactId) return undefined;
-    return this.contactStore.getById(otherEntity.contactId);
-  }
-
-  private buildRelatedContactContext(
-    contact: Contact,
-    edge: SocialRelationshipEdge,
-  ): RetrievalContactContext {
-    return {
-      contactId: contact.id,
-      displayName: contact.displayName,
-      trustLevel: contact.trustLevel,
-      relationshipType: contact.relationshipType,
-      relationshipLabels: [normalizeRelationCue(edge.relationshipType)],
-      relatedToCanonical: true,
-    };
-  }
-
-  private async buildSelectedContactContext(
-    selected: readonly ScoredMemory[],
-    socialContext?: RetrievalSocialContext,
-  ): Promise<ReadonlyMap<string, RetrievalContactContext> | undefined> {
-    if (!this.contactStore) {
-      return socialContext?.relatedContactsById;
-    }
-
-    const contexts = new Map<string, RetrievalContactContext>(socialContext?.relatedContactsById ?? []);
-    for (const item of selected) {
-      const contactId = item.memory.contactId?.trim();
-      if (!contactId || contactId === socialContext?.canonicalContactId || contexts.has(contactId)) {
-        continue;
-      }
-      const contact = await this.contactStore.getById(contactId);
-      if (!contact) continue;
-      contexts.set(contactId, {
-        contactId,
-        displayName: contact.displayName,
-        trustLevel: contact.trustLevel,
-        relationshipType: contact.relationshipType,
-        relationshipLabels: [],
-        relatedToCanonical: false,
-      });
-    }
-
-    return contexts.size > 0 ? contexts : undefined;
-  }
-
-  private shouldExpandEvolutionChains(input: {
-    contextText: string;
-    trustLevel: TrustLevel;
-    channelPrivacy: ChannelPrivacy;
-  }): boolean {
-    return input.channelPrivacy === 'private'
-      && isHighTierTrustLevel(input.trustLevel)
-      && EVOLUTION_CHAIN_USEFUL_HINT.test(input.contextText);
-  }
-
-  private async attachEvolutionChains(
-    selected: readonly ScoredMemory[],
-    options: {
-      contextText: string;
-      trustLevel: TrustLevel;
-      channelPrivacy: ChannelPrivacy;
-      broadcast: boolean;
-      channelMeta?: ChannelMeta;
-      canonicalContactId?: string;
-      operatorApproval: boolean;
-      roomVisibility?: RetrievalRoomVisibilityContext;
-    },
-  ): Promise<ScoredMemory[]> {
-    if (!this.shouldExpandEvolutionChains(options)) {
-      return [...selected];
-    }
-
-    const expanded = [...selected];
-    const selectedIds = new Set(expanded.map(item => item.memory.id));
-    for (let index = 0; index < Math.min(expanded.length, EVOLUTION_CHAIN_SELECTED_LIMIT); index++) {
-      const item = expanded[index];
-      const links = (await this.memoryStore.getEvolutionLinksForSourceMemory(item.memory.id))
-        .slice(0, EVOLUTION_CHAIN_PER_MEMORY_LIMIT);
-      const chain: NonNullable<ScoredMemory['evolutionChain']> = [];
-      for (const link of links) {
-        if (selectedIds.has(link.targetMemoryId)) continue;
-          const target = await this.memoryStore.getById(link.targetMemoryId);
-          if (!target || target.deletedAt !== undefined) continue;
-          if (this.isMemoryQuarantined(target)) continue;
-          const accessDecision = evaluateRetrievalAccessDecision(target, {
-          trustLevel: options.trustLevel,
-          channelPrivacy: options.channelPrivacy,
-          broadcast: options.broadcast,
-          channelMeta: options.channelMeta,
-          canonicalContactId: options.canonicalContactId,
-          operatorApproval: options.operatorApproval,
-          roomVisibility: options.roomVisibility,
-        });
-        if (!accessDecision.allowed) continue;
-        chain.push({
-          relation: link.relation,
-          confidence: link.confidence,
-          reason: link.reason,
-          memory: target,
-        });
-      }
-      if (chain.length > 0) {
-        expanded[index] = {
-          ...item,
-          evolutionChain: chain,
-        };
-      }
-    }
-
-    return expanded;
-  }
-
-  private async applySocialContextRankingAdjustments(
-    candidates: readonly ScoredMemory[],
-    contextText: string,
-    socialContext?: RetrievalSocialContext,
-  ): Promise<ScoredMemory[]> {
-    if (!socialContext) return [...candidates];
-
-    const queryTokens = new Set(tokenizeForExplicitMatch(contextText));
-    const adjusted = await Promise.all(candidates.map(async candidate => ({
-      ...candidate,
-      score: candidate.score * await this.resolveSocialContextScoreMultiplier(
-        candidate.memory,
-        queryTokens,
-        socialContext,
       ),
-    })));
-    return adjusted.sort((left, right) => right.score - left.score);
-  }
-
-  private async resolveSocialContextScoreMultiplier(
-    memory: Pick<PurrMemory, 'contactId'>,
-    queryTokens: ReadonlySet<string>,
-    socialContext: RetrievalSocialContext,
-  ): Promise<number> {
-    const contactId = memory.contactId?.trim();
-    if (!contactId) return 1;
-    if (contactId === socialContext.canonicalContactId) return 1.1;
-
-    const related = socialContext.relatedContactsById.get(contactId);
-    if (related) {
-      return querySuggestsContactFocus(queryTokens, related) ? 1.05 : 0.85;
-    }
-
-    const contact = this.contactStore ? await this.contactStore.getById(contactId) : undefined;
-    if (contact && querySuggestsContactFocus(queryTokens, {
-      displayName: contact.displayName,
-      relationshipType: contact.relationshipType,
-      relationshipLabels: [],
-    })) {
-      return 0.9;
-    }
-
-    return 0.45;
-  }
-
-  private async collectEmotionalContinuityMemories(
-    canonicalContactId: string,
-    trustLevel: TrustLevel,
-    channelDisclosure: ChannelDisclosureContext,
-    selectedIds: ReadonlySet<string>,
-    operatorApproval = false,
-    channelMeta?: ChannelMeta,
-    sourceOverride?: readonly PurrMemory[],
-    roomVisibility?: RetrievalRoomVisibilityContext,
-  ): Promise<PurrMemory[]> {
-      const source = this.filterQuarantinedMemories(
-        (sourceOverride?.map(cloneMemory) ?? await this.collectContactEmotionalMemories(canonicalContactId))
-          .filter(memory => !isInternalMemoryArtifact(memory)),
-      ).memories;
-    if (source.length === 0) return [];
-
-    return source
-      .filter(memory => memory.type === 'emotional')
-      .filter(memory => !selectedIds.has(memory.id))
-      .filter((memory) => evaluateRetrievalAccessDecision(memory, {
-        trustLevel,
-        channelPrivacy: channelDisclosure.channelPrivacy,
-        broadcast: channelDisclosure.broadcast,
-        channelMeta,
-        canonicalContactId,
-        operatorApproval,
-        roomVisibility,
-      }).allowed)
-      .sort((left, right) => right.extractedAt - left.extractedAt)
-      .slice(0, 3);
-  }
-
-  private async collectContactEmotionalMemories(canonicalContactId: string): Promise<PurrMemory[]> {
-    return (await this.memoryStore
-      .getMemoriesByContact(canonicalContactId, 12))
-      .filter(memory => !isInternalMemoryArtifact(memory));
-  }
-
-  private async collectProactiveRecallCandidates(
-    channelId: string,
-    canonicalContactId?: string,
-  ): Promise<PurrMemory[]> {
-    if (canonicalContactId) {
-      const byContact = (await this.memoryStore
-        .getMemoriesByContact(canonicalContactId, 24))
-        .filter(memory => !isInternalMemoryArtifact(memory));
-      if (byContact.length > 0) return byContact;
-    }
-
-    const byChannel = (await this.memoryStore
-      .getMemoriesByChannel(channelId, 24))
-      .filter(memory => !isInternalMemoryArtifact(memory));
-    if (byChannel.length > 0) return byChannel;
-
-    return (await this.memoryStore
-      .getAllActiveMemories())
-      .filter(memory => !isInternalMemoryArtifact(memory))
-      .sort((left, right) => right.lastAccessed - left.lastAccessed)
-      .slice(0, 24);
-  }
-
-  private isTelemetryEnabled(): boolean {
-    return this.runtimeConfig?.memoryRetrievalTelemetryEnabled ?? this.telemetryEnabled;
+    });
   }
 
   private async emitRetrievalTelemetry(telemetry: RetrievalTelemetry): Promise<void> {
-    if (this.isTelemetryEnabled()) {
-      log.debug('Retrieval stats', telemetry);
-    }
-
-    if (!this.costTelemetry) return;
-
-    try {
-      const requestContext = getRequestContext();
-      const correlation = requestContext
-        ? {
-          ...(requestContext.turnId ? { turnId: requestContext.turnId } : {}),
-          ...(requestContext.requestId ? { requestId: requestContext.requestId } : {}),
-          callType: requestContext.callType ?? 'memory',
-          purpose: 'memory.retrieval',
-          originType: requestContext.originType ?? requestContext.callType ?? 'memory',
-          originStage: requestContext.originStage ?? 'memory.retrieval',
-          ...(requestContext.toolName ? { toolName: requestContext.toolName } : {}),
-          ...(requestContext.toolCallId ? { toolCallId: requestContext.toolCallId } : {}),
-        }
-        : {};
-      await this.costTelemetry.recordMemoryRetrieval(
-        {
-          ...telemetry,
-          candidates: telemetry.candidateCount,
-          ranked: telemetry.rankedCount,
-          returned: telemetry.returnedCount,
-          ...correlation,
-        },
-      );
-    } catch (err) {
-      log.error('Failed to emit retrieval telemetry', {
-        channelId: telemetry.channelId,
-        error: String(err),
-      });
-    }
+    await emitRetrievalTelemetryWithDeps({
+      runtimeConfig: this.runtimeConfig,
+      telemetryEnabled: this.telemetryEnabled,
+      costTelemetry: this.costTelemetry,
+      telemetry,
+    });
   }
 }
 

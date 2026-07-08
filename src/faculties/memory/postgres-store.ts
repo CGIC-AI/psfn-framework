@@ -45,613 +45,83 @@ import type {
   ScratchpadEntryReplaceOptions,
   MemoryWriteCommit,
 } from './memory-store-port.js';
-import { MEMORY_EVOLUTION_RELATIONS, normalizeMemorySalienceUpdates } from './memory-store-port.js';
+import { normalizeMemorySalienceUpdates } from './memory-store-port.js';
 import {
   applyRetentionClassTags,
-  CORE_DURABLE_MEMORY_TAGS,
-  DURABLE_PREFERENCE_MEMORY_TAG,
-  DURABLE_RETENTION_TAG,
-  inferMemorySourceTypeFromSourceRef,
-  normalizeConsentFlags,
-  normalizeFormationVAD,
   normalizeMemoryProvenance,
   normalizeMemoryScopeQuery,
   normalizeMemoryScopeRef,
   normalizeMemoryScopeTags,
   normalizeMemorySourceType,
-  PREFERENCE_MEMORY_TAG,
   type MemoryScopeQuery,
   type PurrMemory,
 } from './types.js';
 import {
-  mapStoredMemoryMaintenanceReviewRow,
   normalizeMemoryMaintenanceReviewInput,
 } from './maintenance-review.js';
+import {
+  ADMIN_DURABLE_MEMORY_TAGS,
+  ADMIN_FAVORITE_TEXT_REGEX,
+  ADMIN_PREFERENCE_MEMORY_TAGS,
+  ADMIN_PREFERENCE_TEXT_REGEX,
+  addPostgresQueryValue,
+  activeAdminMemoryClause,
+  buildPostgresAdminMemoryWhere,
+  durableAdminMemoryCondition,
+  mapPostgresAdminPrivacySummary,
+  preferenceAdminMemoryCondition,
+} from './postgres-store/admin.js';
+import {
+  fromEvolutionLinkRow,
+  normalizeEvolutionLinkInput,
+  normalizeEvolutionRelation,
+} from './postgres-store/evolution.js';
+import { fromMaintenanceReviewRow } from './postgres-store/reviews.js';
+import type {
+  AdminMemoryPrivacyAggregateRow,
+  ContactProfileRow,
+  CountRow,
+  MemoryAbstractionLinkRow,
+  MemoryDeleteVersionRow,
+  MemoryEmbeddingSearchRow,
+  MemoryEvolutionLinkRow,
+  MemoryLinkRow,
+  MemoryMaintenanceReviewPgRow,
+  MemoryRow,
+  ScratchpadRow,
+  SensitivityCountRow,
+} from './postgres-store/rows.js';
+import {
+  decodeEmbedding,
+  decodeStringArray,
+  encodeEmbeddingLiteral,
+  fromMemoryRow,
+  parseOptionalPgNumber,
+  parsePgNumber,
+  serializeJsonValue,
+  toMemoryRow,
+  validateEmbeddingDimensions,
+} from './postgres-store/rows.js';
+import {
+  clampLimit,
+  increment,
+  lexicalScore,
+  memoryEvolutionKey,
+  memoryKey,
+} from './postgres-store/utils.js';
+import {
+  assertExistingMemorySchemaHasEmbeddingColumn,
+  validatePostgresMemorySchema,
+} from './postgres-store/schema.js';
 
 const SCRATCHPAD_TTL_MS = 24 * 60 * 60 * 1000;
 const SCRATCHPAD_MAX_ENTRIES = 64;
 const log = createComponentLogger('PostgresMemoryStore');
-const ADMIN_DURABLE_MEMORY_TAGS = [
-  DURABLE_RETENTION_TAG,
-  DURABLE_PREFERENCE_MEMORY_TAG,
-  ...CORE_DURABLE_MEMORY_TAGS,
-] as const;
-const ADMIN_PREFERENCE_MEMORY_TAGS = [
-  PREFERENCE_MEMORY_TAG,
-  DURABLE_PREFERENCE_MEMORY_TAG,
-  'favorite',
-  'favourite',
-  'like',
-  'likes',
-  'liked',
-  'love',
-  'loves',
-  'loved',
-  'enjoy',
-  'enjoys',
-  'preferred',
-  'prefers',
-  'dislike',
-  'dislikes',
-  'hates',
-  'stable_preference',
-] as const;
-const ADMIN_FAVORITE_TEXT_REGEX =
-  String.raw`(^|[^[:alnum:]_])((my|our|his|her|their|[[:alpha:]][[:alnum:]_-]*'s)[[:space:]]+favou?rite|favou?rite[[:space:]]+[[:alnum:]_-]+[[:space:]]+(is|are|was|were))([^[:alnum:]_]|$)`;
-const ADMIN_PREFERENCE_TEXT_REGEX =
-  String.raw`(^|[^[:alnum:]_])((i|we)[[:space:]]+(really[[:space:]]+)?(prefer|preferred|like|liked|love|loved|enjoy|enjoyed|hate|hated|dislike|disliked|don't[[:space:]]+like|do[[:space:]]+not[[:space:]]+like|can't[[:space:]]+stand|cannot[[:space:]]+stand)|(prefers|preferred|likes|liked|loves|loved|enjoys|enjoyed|hates|hated|dislikes|disliked))([^[:alnum:]_]|$)`;
-
-type PgNumeric = number | string;
-
-interface MemoryRow {
-  id: string;
-  text: string;
-  type: PurrMemory['type'];
-  importance: PgNumeric;
-  confidence: PgNumeric;
-  emotional_valence: PgNumeric;
-  formation_vad: unknown;
-  salience: PgNumeric;
-  source_ref: string;
-  source_type: string | null;
-  provenance_json: unknown;
-  extracted_at: PgNumeric;
-  last_accessed: PgNumeric;
-  access_count: PgNumeric;
-  superseded_by: string | null;
-  tags: unknown;
-  scope_ref_kind: string | null;
-  scope_ref_id: string | null;
-  scope_ref_label: string | null;
-  scope_tags: unknown;
-  provenance_refs: unknown;
-  retention_class: PurrMemory['retentionClass'] | null;
-  sensitivity: PurrMemory['sensitivity'];
-  consent_flags: unknown;
-  contact_id: string | null;
-  deleted_at: PgNumeric | null;
-  deleted_by: string | null;
-  delete_reason: string | null;
-  embedding: string | null;
-}
-
-interface MemorySchemaTableRow {
-  table_name: string;
-}
-
-interface MemorySchemaColumnRow {
-  column_name: string;
-  data_type: string;
-  udt_name: string;
-}
-
-interface MemoryEmbeddingSearchRow extends MemoryRow {
-  similarity: PgNumeric;
-}
-
-interface MemoryDeleteVersionRow {
-  delete_id: string;
-  memory_id: string;
-  snapshot_json: unknown;
-  deleted_at: PgNumeric;
-  deleted_by: string | null;
-  delete_reason: string | null;
-  restored_at: PgNumeric | null;
-  restored_by: string | null;
-}
-
-interface MemoryAbstractionLinkRow {
-  id: string;
-  source_memory_id: string;
-  abstracted_memory_id: string;
-  external_ref: string;
-  created_at: number;
-  created_by: string | null;
-  reason: string | null;
-}
-
-interface MemoryEvolutionLinkRow {
-  id: string;
-  source_memory_id: string;
-  target_memory_id: string;
-  relation: string;
-  confidence: number;
-  reason: string | null;
-  source_ref: string | null;
-  source_type: string | null;
-  provenance_refs: unknown;
-  provenance_json: unknown;
-  created_at: number;
-}
-
-interface MemoryLinkRow {
-  id1: string;
-  id2: string;
-  link_type: string;
-  created_at: number;
-}
-
-interface MemoryMaintenanceReviewPgRow {
-  id: string;
-  kind: string;
-  status: string;
-  subject_memory_id: string;
-  candidate_memory_ids: unknown;
-  state_json: unknown;
-  quarantine_reason: string | null;
-  created_at: number;
-  updated_at: number;
-}
-
-interface ContactProfileRow {
-  contact_id: string;
-  summary_text: string;
-  source_memory_ids: unknown;
-  confidence_score: number;
-  novelty_score: number;
-  updated_at: number;
-}
-
-interface ScratchpadRow {
-  id: string;
-  content: string;
-  created_at: PgNumeric;
-  updated_at: PgNumeric;
-}
-
-interface CountRow {
-  count: PgNumeric;
-}
-
-interface AdminMemoryPrivacyAggregateRow {
-  active_memory_count: PgNumeric;
-  high_sensitivity_count: PgNumeric;
-  consent_gated_count: PgNumeric;
-  contact_linked_count: PgNumeric;
-  scoped_count: PgNumeric;
-  preference_count: PgNumeric;
-  durable_preference_count: PgNumeric;
-}
-
-interface SensitivityCountRow {
-  sensitivity: string | null;
-  count: PgNumeric;
-}
 
 export interface PostgresMemoryStoreOptions {
   notesDir?: string;
   scratchpadMirrorPath?: string;
   journal?: MemoryJournal;
-}
-
-function decodeJsonArray(value: unknown): string[] {
-  if (!Array.isArray(value)) return [];
-  return value.flatMap((entry) => (typeof entry === 'string' ? [entry] : []));
-}
-
-function decodeJsonObject(value: unknown): Record<string, number> {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) return {};
-  const out: Record<string, number> = {};
-  for (const [key, raw] of Object.entries(value)) {
-    if (typeof raw === 'number' && Number.isFinite(raw)) {
-      out[key] = raw;
-    }
-  }
-  return out;
-}
-
-function decodeJsonRecord(value: unknown): Record<string, unknown> {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) return {};
-  return { ...(value as Record<string, unknown>) };
-}
-
-function decodeStringArray(value: unknown): string[] {
-  return decodeJsonArray(value).map(item => item.trim()).filter(Boolean);
-}
-
-function parsePgNumber(value: unknown, field: string): number {
-  if (typeof value === 'number' && Number.isFinite(value)) {
-    return value;
-  }
-  if (typeof value === 'string' && value.trim().length > 0) {
-    const parsed = Number(value);
-    if (Number.isFinite(parsed)) {
-      return parsed;
-    }
-  }
-  throw new Error(`Invalid PostgreSQL memory row ${field}: expected a finite number`);
-}
-
-function parseOptionalPgNumber(value: unknown, field: string): number | undefined {
-  if (value === null || value === undefined) {
-    return undefined;
-  }
-  return parsePgNumber(value, field);
-}
-
-function serializeJsonValue(value: unknown): string | null {
-  if (value === undefined || value === null) return null;
-  return JSON.stringify(value);
-}
-
-function decodeFormationVAD(value: unknown): PurrMemory['formationVAD'] {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
-  const candidate = value as Partial<NonNullable<PurrMemory['formationVAD']>>;
-  if (
-    typeof candidate.valence !== 'number'
-    || typeof candidate.arousal !== 'number'
-    || typeof candidate.dominance !== 'number'
-  ) {
-    return undefined;
-  }
-  return normalizeFormationVAD({
-    valence: candidate.valence,
-    arousal: candidate.arousal,
-    dominance: candidate.dominance,
-  });
-}
-
-function encodeEmbeddingLiteral(embedding: Float32Array): string {
-  return `[${Array.from(embedding, value => Number(value)).join(',')}]`;
-}
-
-function decodeEmbedding(value: unknown): Float32Array | undefined {
-  if (typeof value !== 'string') return undefined;
-  const trimmed = value.trim();
-  if (!trimmed.startsWith('[') || !trimmed.endsWith(']')) return undefined;
-  const inner = trimmed.slice(1, -1).trim();
-  if (!inner) return new Float32Array();
-  const parsedValues = inner.split(',').map((entry) => {
-    const normalized = entry.trim();
-    if (!normalized) return Number.NaN;
-    return Number(normalized);
-  });
-  if (parsedValues.some((entry) => !Number.isFinite(entry))) {
-    return undefined;
-  }
-  return new Float32Array(parsedValues);
-}
-
-function validateEmbeddingDimensions(embedding: Float32Array, expectedDims: number, operation: string): void {
-  if (embedding.length !== expectedDims) {
-    throw new Error(`PostgreSQL memory embedding ${operation} dimension mismatch: expected ${expectedDims}, got ${embedding.length}`);
-  }
-}
-
-function memoryKey(id1: string, id2: string): string {
-  return [id1, id2].sort().join('::');
-}
-
-function memoryEvolutionKey(
-  sourceMemoryId: string,
-  targetMemoryId: string,
-  relation: MemoryEvolutionRelation,
-): string {
-  return `${sourceMemoryId}::${targetMemoryId}::${relation}`;
-}
-
-function increment(counts: Record<string, number>, key: string): void {
-  counts[key] = (counts[key] ?? 0) + 1;
-}
-
-function clampLimit(limit: number | undefined, fallback: number, min: number, max: number): number {
-  if (limit === undefined || !Number.isFinite(limit)) return fallback;
-  return Math.max(min, Math.min(max, Math.floor(limit)));
-}
-
-function activeAdminMemoryClause(): string {
-  return `
-    superseded_by IS NULL
-    AND deleted_at IS NULL
-    AND NOT (
-      lower(source_ref) LIKE 'source:context_feedback|%'
-      OR (
-        jsonb_typeof(tags) = 'array'
-        AND EXISTS (
-          SELECT 1
-          FROM jsonb_array_elements_text(tags) AS tag(value)
-          WHERE lower(tag.value) = 'context_feedback'
-        )
-      )
-    )
-  `;
-}
-
-function durableAdminMemoryCondition(tagParam: string): string {
-  return `
-    (
-      retention_class = 'durable'
-      OR (
-        jsonb_typeof(tags) = 'array'
-        AND EXISTS (
-          SELECT 1
-          FROM jsonb_array_elements_text(tags) AS tag(value)
-          WHERE lower(tag.value) = ANY(${tagParam}::text[])
-        )
-      )
-    )
-  `;
-}
-
-function preferenceAdminMemoryCondition(
-  tagParam: string,
-  favoriteRegexParam: string,
-  preferenceRegexParam: string,
-): string {
-  return `
-    (
-      type <> 'boundary'
-      AND (
-        (
-          jsonb_typeof(tags) = 'array'
-          AND EXISTS (
-            SELECT 1
-            FROM jsonb_array_elements_text(tags) AS tag(value)
-            WHERE lower(tag.value) = ANY(${tagParam}::text[])
-              OR lower(tag.value) LIKE 'preference:%'
-          )
-        )
-        OR text ~* ${favoriteRegexParam}
-        OR text ~* ${preferenceRegexParam}
-      )
-    )
-  `;
-}
-
-function addPostgresQueryValue(values: unknown[], value: unknown): string {
-  values.push(value);
-  return `$${values.length}`;
-}
-
-function buildPostgresAdminMemoryWhere(options: MemoryAdminListOptions = {}): {
-  sql: string;
-  values: unknown[];
-} {
-  const values: unknown[] = [];
-  const clauses = [activeAdminMemoryClause()];
-  if (options.type) {
-    clauses.push(`type = ${addPostgresQueryValue(values, options.type)}`);
-  }
-  if (options.sensitivity) {
-    clauses.push(`sensitivity = ${addPostgresQueryValue(values, options.sensitivity)}`);
-  }
-  if (options.retentionClass === 'durable') {
-    clauses.push(durableAdminMemoryCondition(addPostgresQueryValue(values, [...ADMIN_DURABLE_MEMORY_TAGS])));
-  } else if (options.retentionClass === 'standard') {
-    clauses.push(`NOT ${durableAdminMemoryCondition(addPostgresQueryValue(values, [...ADMIN_DURABLE_MEMORY_TAGS]))}`);
-  }
-  if (options.preferenceOnly) {
-    clauses.push(preferenceAdminMemoryCondition(
-      addPostgresQueryValue(values, [...ADMIN_PREFERENCE_MEMORY_TAGS]),
-      addPostgresQueryValue(values, ADMIN_FAVORITE_TEXT_REGEX),
-      addPostgresQueryValue(values, ADMIN_PREFERENCE_TEXT_REGEX),
-    ));
-  }
-  if (options.startDate !== undefined) {
-    clauses.push(`extracted_at >= ${addPostgresQueryValue(values, options.startDate)}`);
-  }
-  if (options.endDate !== undefined) {
-    clauses.push(`extracted_at <= ${addPostgresQueryValue(values, options.endDate)}`);
-  }
-  return {
-    sql: clauses.map(clause => `(${clause})`).join(' AND '),
-    values,
-  };
-}
-
-function mapPostgresAdminPrivacySummary(
-  row: AdminMemoryPrivacyAggregateRow | undefined,
-  sensitivityRows: SensitivityCountRow[],
-): MemoryAdminPrivacySummary {
-  const sensitivityCounts: Record<string, number> = {};
-  for (const sensitivityRow of sensitivityRows) {
-    sensitivityCounts[sensitivityRow.sensitivity ?? 'personal'] = parsePgNumber(sensitivityRow.count, 'count');
-  }
-  return {
-    activeMemoryCount: row ? parsePgNumber(row.active_memory_count, 'active_memory_count') : 0,
-    highSensitivityCount: row ? parsePgNumber(row.high_sensitivity_count, 'high_sensitivity_count') : 0,
-    consentGatedCount: row ? parsePgNumber(row.consent_gated_count, 'consent_gated_count') : 0,
-    contactLinkedCount: row ? parsePgNumber(row.contact_linked_count, 'contact_linked_count') : 0,
-    scopedCount: row ? parsePgNumber(row.scoped_count, 'scoped_count') : 0,
-    preferenceCount: row ? parsePgNumber(row.preference_count, 'preference_count') : 0,
-    durablePreferenceCount: row ? parsePgNumber(row.durable_preference_count, 'durable_preference_count') : 0,
-    sensitivityCounts,
-  };
-}
-
-function toMemoryRow(memory: PurrMemory, embedding?: Float32Array): MemoryRow {
-  return {
-    id: memory.id,
-    text: memory.text,
-    type: memory.type,
-    importance: memory.importance,
-    confidence: memory.confidence,
-    emotional_valence: memory.emotionalValence,
-    formation_vad: memory.formationVAD ?? null,
-    salience: memory.salience,
-    source_ref: memory.sourceRef,
-    source_type: normalizeMemorySourceType(
-      memory.sourceType,
-      inferMemorySourceTypeFromSourceRef(memory.sourceRef),
-    ),
-    provenance_json: normalizeMemoryProvenance(memory.provenance) ?? {},
-    extracted_at: memory.extractedAt,
-    last_accessed: memory.lastAccessed,
-    access_count: memory.accessCount,
-    superseded_by: memory.supersededBy ?? null,
-    tags: memory.tags,
-    scope_ref_kind: memory.scopeRef?.kind ?? null,
-    scope_ref_id: memory.scopeRef?.id ?? null,
-    scope_ref_label: memory.scopeRef?.label ?? null,
-    scope_tags: memory.scopeTags ?? [],
-    provenance_refs: memory.provenanceRefs ?? [],
-    retention_class: memory.retentionClass ?? null,
-    sensitivity: memory.sensitivity,
-    consent_flags: memory.consentFlags ?? {},
-    contact_id: memory.contactId ?? null,
-    deleted_at: memory.deletedAt ?? null,
-    deleted_by: memory.deletedBy ?? null,
-    delete_reason: memory.deleteReason ?? null,
-    embedding: embedding ? encodeEmbeddingLiteral(embedding) : null,
-  };
-}
-
-function fromMemoryRow(row: MemoryRow): PurrMemory {
-  const scopeRef = row.scope_ref_kind && row.scope_ref_id
-    ? normalizeMemoryScopeRef({
-      kind: row.scope_ref_kind as any,
-      id: row.scope_ref_id,
-      ...(row.scope_ref_label ? { label: row.scope_ref_label } : {}),
-    })
-    : undefined;
-  const deletedAt = parseOptionalPgNumber(row.deleted_at, 'deleted_at');
-  const provenance = normalizeMemoryProvenance(decodeJsonRecord(row.provenance_json));
-  return {
-    id: row.id,
-    text: row.text,
-    type: row.type,
-    importance: parsePgNumber(row.importance, 'importance'),
-    confidence: parsePgNumber(row.confidence, 'confidence'),
-    emotionalValence: parsePgNumber(row.emotional_valence, 'emotional_valence'),
-    formationVAD: decodeFormationVAD(row.formation_vad),
-    salience: parsePgNumber(row.salience, 'salience'),
-    sourceRef: row.source_ref,
-    sourceType: normalizeMemorySourceType(
-      row.source_type,
-      inferMemorySourceTypeFromSourceRef(row.source_ref),
-    ),
-    ...(provenance ? { provenance } : {}),
-    extractedAt: parsePgNumber(row.extracted_at, 'extracted_at'),
-    lastAccessed: parsePgNumber(row.last_accessed, 'last_accessed'),
-    accessCount: parsePgNumber(row.access_count, 'access_count'),
-    ...(row.superseded_by ? { supersededBy: row.superseded_by } : {}),
-    tags: decodeStringArray(row.tags),
-    ...(scopeRef ? { scopeRef } : {}),
-    ...(Array.isArray(row.scope_tags) ? { scopeTags: decodeStringArray(row.scope_tags) } : {}),
-    ...(Array.isArray(row.provenance_refs) ? { provenanceRefs: decodeStringArray(row.provenance_refs) } : {}),
-    ...(row.retention_class ? { retentionClass: row.retention_class } : {}),
-    sensitivity: row.sensitivity,
-    consentFlags: normalizeConsentFlags(decodeJsonObject(row.consent_flags)),
-    ...(row.contact_id ? { contactId: row.contact_id } : {}),
-    ...(deletedAt !== undefined ? { deletedAt } : {}),
-    ...(row.deleted_by ? { deletedBy: row.deleted_by } : {}),
-    ...(row.delete_reason ? { deleteReason: row.delete_reason } : {}),
-  };
-}
-
-function fromMaintenanceReviewRow(row: MemoryMaintenanceReviewPgRow): MemoryMaintenanceReview {
-  return mapStoredMemoryMaintenanceReviewRow({
-    id: row.id,
-    kind: row.kind,
-    status: row.status,
-    subjectMemoryId: row.subject_memory_id,
-    candidateMemoryIdsJson: serializeJsonValue(row.candidate_memory_ids),
-    stateJson: serializeJsonValue(row.state_json),
-    quarantineReason: row.quarantine_reason,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
-  });
-}
-
-function normalizeEvolutionRelation(relation: MemoryEvolutionRelation): MemoryEvolutionRelation {
-  if ((MEMORY_EVOLUTION_RELATIONS as readonly string[]).includes(relation)) {
-    return relation;
-  }
-  throw new Error(`Invalid memory evolution relation: ${String(relation)}`);
-}
-
-function normalizeEvolutionConfidence(confidence: number | undefined): number {
-  const normalized = confidence ?? 1;
-  if (!Number.isFinite(normalized) || normalized < 0 || normalized > 1) {
-    throw new Error('Memory evolution link confidence must be between 0 and 1');
-  }
-  return normalized;
-}
-
-function normalizeEvolutionLinkInput(input: MemoryEvolutionLinkInput): MemoryEvolutionLink {
-  const sourceMemoryId = input.sourceMemoryId.trim();
-  const targetMemoryId = input.targetMemoryId.trim();
-  if (!sourceMemoryId || !targetMemoryId) {
-    throw new Error('sourceMemoryId and targetMemoryId are required');
-  }
-  if (sourceMemoryId === targetMemoryId) {
-    throw new Error('Memory evolution links require distinct source and target memories');
-  }
-  const sourceRef = input.sourceRef?.trim() || undefined;
-  const provenanceRefs = [...new Set((input.provenanceRefs ?? [])
-    .map(ref => ref.trim())
-    .filter(ref => ref.length > 0))];
-  const provenance = normalizeMemoryProvenance(input.provenance);
-  return {
-    id: input.linkId?.trim() || randomUUID(),
-    sourceMemoryId,
-    targetMemoryId,
-    relation: normalizeEvolutionRelation(input.relation),
-    confidence: normalizeEvolutionConfidence(input.confidence),
-    reason: input.reason?.trim() || undefined,
-    sourceRef,
-    sourceType: normalizeMemorySourceType(input.sourceType, sourceRef
-      ? inferMemorySourceTypeFromSourceRef(sourceRef)
-      : 'unknown'),
-    provenanceRefs,
-    ...(provenance ? { provenance } : {}),
-    createdAt: input.createdAt ?? Date.now(),
-  };
-}
-
-function fromEvolutionLinkRow(row: MemoryEvolutionLinkRow): MemoryEvolutionLink {
-  const relation = (MEMORY_EVOLUTION_RELATIONS as readonly string[]).includes(row.relation)
-    ? row.relation as MemoryEvolutionRelation
-    : 'updates';
-  const provenance = normalizeMemoryProvenance(decodeJsonRecord(row.provenance_json));
-  return {
-    id: row.id,
-    sourceMemoryId: row.source_memory_id,
-    targetMemoryId: row.target_memory_id,
-    relation,
-    confidence: row.confidence,
-    ...(row.reason ? { reason: row.reason } : {}),
-    ...(row.source_ref ? { sourceRef: row.source_ref } : {}),
-    sourceType: normalizeMemorySourceType(row.source_type),
-    provenanceRefs: decodeStringArray(row.provenance_refs),
-    ...(provenance ? { provenance } : {}),
-    createdAt: row.created_at,
-  };
-}
-
-function lexicalScore(memory: PurrMemory, query: string): number {
-  const tokens = query
-    .toLowerCase()
-    .split(/[^a-z0-9]+/g)
-    .map(token => token.trim())
-    .filter(token => token.length > 0);
-  if (tokens.length === 0) return 0;
-  const haystack = `${memory.text} ${memory.tags.join(' ')} ${memory.sourceRef}`.toLowerCase();
-  let score = 0;
-  for (const token of tokens) {
-    if (haystack.includes(token)) score += 1;
-  }
-  return score / tokens.length;
 }
 
 export async function createPostgresMemoryStore(
@@ -678,60 +148,6 @@ export async function createPostgresMemoryStoreFromPool(
   const store = new PostgresMemoryStore(pool, embeddingDims, options);
   await store.waitUntilReady();
   return store;
-}
-
-async function assertExistingMemorySchemaHasEmbeddingColumn(pool: Pool): Promise<void> {
-  const tables = await queryRows<MemorySchemaTableRow>(pool, `
-    SELECT table_name
-    FROM information_schema.tables
-    WHERE table_schema = current_schema()
-      AND table_name = 'l2_memories'
-  `);
-  if (tables.length === 0) return;
-  const embeddingColumns = await queryRows<MemorySchemaColumnRow>(pool, `
-    SELECT table_name, column_name, data_type, udt_name
-    FROM information_schema.columns
-    WHERE table_schema = current_schema()
-      AND table_name = 'l2_memories'
-      AND column_name = 'embedding'
-  `);
-  if (embeddingColumns.length === 0) {
-    throw new Error(
-      'PostgreSQL memory schema is missing l2_memories.embedding; recreate the memory schema before starting the memory store',
-    );
-  }
-}
-
-async function validatePostgresMemorySchema(pool: Pool): Promise<void> {
-  const legacyEmbeddingTables = await queryRows<MemorySchemaTableRow>(pool, `
-    SELECT table_name
-    FROM information_schema.tables
-    WHERE table_schema = current_schema()
-      AND table_name = 'l2_memory_embeddings'
-  `);
-  if (legacyEmbeddingTables.length > 0) {
-    throw new Error(
-      'Unsupported PostgreSQL memory schema detected: l2_memory_embeddings is no longer used; recreate the memory schema so embeddings live on l2_memories.embedding',
-    );
-  }
-
-  const memoryColumns = await queryRows<MemorySchemaColumnRow>(pool, `
-    SELECT table_name, column_name, data_type, udt_name
-    FROM information_schema.columns
-    WHERE table_schema = current_schema()
-      AND table_name = 'l2_memories'
-  `);
-  const embeddingColumn = memoryColumns.find(column => column.column_name === 'embedding');
-  if (!embeddingColumn) {
-    throw new Error(
-      'PostgreSQL memory schema is missing l2_memories.embedding; recreate the memory schema before starting the memory store',
-    );
-  }
-  if (embeddingColumn.udt_name !== 'vector') {
-    throw new Error(
-      `PostgreSQL memory schema column l2_memories.embedding must use pgvector, got ${embeddingColumn.udt_name || embeddingColumn.data_type}`,
-    );
-  }
 }
 
 interface MemoryStoreTransactionState {

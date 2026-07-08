@@ -54,6 +54,12 @@ import type { NotificationSenderMetadata } from './notification-sender.js';
 // ── Request parameter types (agent → gateway) ──
 
 export interface GatewayCorrelationParams {
+  /**
+   * Multi-companion (sprint-10 W1): companion the request acts for. Agents
+   * self-stamp this from COMPANION_ID; the gateway verifies it against the
+   * connection's identified companionId and disconnects on mismatch.
+   */
+  companionId?: string;
   turnId?: string;
   requestId?: string;
   channelId?: string;
@@ -704,4 +710,7 @@ export const GatewayErrors = {
   VOICE_STREAM_CANCELLED: -32006,
   VOICE_STREAM_OVERFLOW: -32007,
   VOICE_STREAM_SEQUENCE: -32008,
+  COMPANION_IDENTIFY_REQUIRED: -32009,
+  COMPANION_IDENTITY_MISMATCH: -32010,
+  COMPANION_ROUTING_UNAVAILABLE: -32011,
 } as const;

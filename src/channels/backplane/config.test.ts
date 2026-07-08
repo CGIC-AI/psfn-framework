@@ -232,6 +232,77 @@ describe('loadRuntimeChannelsConfig', () => {
     }
   });
 
+  it('loads multi-companion companionId routing fields from channels.json', () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'psfn-channel-config-'));
+    try {
+      writeFileSync(join(dataDir, 'channels.json'), JSON.stringify({
+        discord: {
+          heartbeatChannelId: '1312460007211536394',
+          companionId: ' comp-a ',
+        },
+        telegram: {
+          enabled: false,
+          companionId: 'comp-b',
+        },
+        api: {
+          companionId: 'comp-b',
+        },
+      }));
+
+      const config = loadRuntimeChannelsConfig(dataDir, {});
+
+      expect(config.discord.companionId).toBe('comp-a');
+      expect(config.telegram.companionId).toBe('comp-b');
+      expect(config.api).toEqual({ companionId: 'comp-b' });
+    } finally {
+      rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  it('omits companionId routing fields when channels.json does not declare them', () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'psfn-channel-config-'));
+    try {
+      const config = loadRuntimeChannelsConfig(dataDir, {});
+      expect(config.discord.companionId).toBeUndefined();
+      expect(config.telegram.companionId).toBeUndefined();
+      expect(config.api).toEqual({});
+    } finally {
+      rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects empty or non-string companionId routing values fail-closed', () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'psfn-channel-config-'));
+    try {
+      writeFileSync(join(dataDir, 'channels.json'), JSON.stringify({
+        discord: { companionId: '   ' },
+      }));
+      expect(() => loadRuntimeChannelsConfig(dataDir, {}))
+        .toThrow('channels.json.discord.companionId must not be empty');
+
+      writeFileSync(join(dataDir, 'channels.json'), JSON.stringify({
+        api: { companionId: 42 },
+      }));
+      expect(() => loadRuntimeChannelsConfig(dataDir, {}))
+        .toThrow('channels.json.api.companionId must be a string');
+    } finally {
+      rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects unsupported keys in the channels.json api section', () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'psfn-channel-config-'));
+    try {
+      writeFileSync(join(dataDir, 'channels.json'), JSON.stringify({
+        api: { companionId: 'comp-a', token: 'nope' },
+      }));
+      expect(() => loadRuntimeChannelsConfig(dataDir, {}))
+        .toThrow('channels.json.api has unsupported keys: token');
+    } finally {
+      rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+
   it('loads discord group memory mode and channel overrides from channels.json', () => {
     const dataDir = mkdtempSync(join(tmpdir(), 'psfn-channel-config-'));
     try {

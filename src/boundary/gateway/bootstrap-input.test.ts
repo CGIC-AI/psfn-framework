@@ -141,6 +141,36 @@ describe('resolveGatewayBootstrapInput', () => {
     expect(bootstrap.diagnostics.workspacePathProvided).toBe(true);
   });
 
+  it('resolves the multi-companion flag into the gateway server bootstrap contract', () => {
+    const baseEnv = {
+      PSFN_RUNTIME_MODE: 'gateway-agent',
+      GATEWAY_SOCKET: '/run/psfn/gateway.sock',
+      WORKSPACE_PATH: '/workspace',
+      GIT_REPO_ROOT: process.cwd(),
+      GATEWAY_SESSION_HMAC_KEY: 'v1:test-session-secret',
+    };
+
+    const flagOff = resolveGatewayBootstrapInput({
+      config: createConfig(),
+      env: { ...baseEnv },
+      startupHydration: createStartupHydration(),
+    });
+    expect(flagOff.server.multiCompanion).toEqual({
+      enabled: false,
+      channelRouting: {},
+    });
+
+    const flagOn = resolveGatewayBootstrapInput({
+      config: { ...createConfig(), multiCompanion: true },
+      env: { ...baseEnv },
+      startupHydration: createStartupHydration(),
+    });
+    expect(flagOn.server.multiCompanion).toEqual({
+      enabled: true,
+      channelRouting: {},
+    });
+  });
+
   it('preserves telegram override presence when telegramEnabled is explicitly false', () => {
     expect(
       buildGatewayChannelsConfigOverrides({

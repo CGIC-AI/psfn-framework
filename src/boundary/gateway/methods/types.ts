@@ -34,7 +34,12 @@ export interface GatewayMethodRuntime {
   workspacePath: string;
   sessionHmacKeyring: SessionHmacKeyring;
   approvalBoundary: ApprovalBoundaryService;
-  notifyAll(method: string, params: unknown): void;
+  /**
+   * Notify the connection that originated the current request. Single-companion
+   * mode preserves the historical broadcast; multi-companion mode pins delivery
+   * to the requesting connection (companion crossover would leak secrets).
+   */
+  notifyRequester(method: string, params: unknown): void;
   listPendingConfirmations(): ConfirmationQueueEntry[];
   listConfirmationHistory(): ConfirmationQueueHistoryEntry[];
   resolveConfirmation(params: ConfirmationResolveParams): Promise<ConfirmationResolveResult>;

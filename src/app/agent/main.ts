@@ -138,10 +138,17 @@ async function main(): Promise<void> {
   const primaryUserId = config.voiceTargetUserId?.trim() || process.env.PRIMARY_USER_ID;
 
   log.info(`Connecting to gateway at ${formatGatewayRpcEndpoint(gatewayRpcEndpoint)}...`);
-  const gateway = await GatewayClient.connectEndpoint(gatewayRpcEndpoint, embeddingDims);
+  const gateway = await GatewayClient.connectEndpoint(gatewayRpcEndpoint, embeddingDims, {
+    ...(config.companionId ? { companionId: config.companionId } : {}),
+  });
+  // Self-report companion identity before any other traffic. Multi-companion
+  // gateways reject unidentified agents fail-closed; a failure here is fatal.
+  await gateway.identifyAsAgent();
   const llmProvider = createLLMProviderPort(gateway);
   const gatewayOps = createGatewayOpsPortFromClient(gateway);
-  log.info('Connected to gateway');
+  log.info('Connected to gateway', {
+    ...(config.companionId ? { companionId: config.companionId } : {}),
+  });
   let shuttingDown = false;
   let stopFn: () => Promise<void> = async () => {};
   const unregisterGatewayDisconnect = gateway.onDisconnect(async (event) => {

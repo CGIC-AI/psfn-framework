@@ -34,7 +34,7 @@ function createHarness(policyConfig: PolicyConfig): { invoke(params: Record<stri
     policyConfig: effectivePolicyConfig,
     workspacePath: process.cwd(),
     sessionHmacKeyring: keyring,
-    notifyAll: vi.fn(),
+    notifyRequester: vi.fn(),
     listPendingConfirmations: () => [],
     listConfirmationHistory: () => [],
     resolveConfirmation: vi.fn(async () => ({

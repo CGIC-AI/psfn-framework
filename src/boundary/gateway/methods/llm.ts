@@ -55,7 +55,7 @@ const llmDescriptors: Array<AuditedMethodDescriptor<any, unknown>> = [
           },
           params.stream ? {
             onText: (text) => {
-              runtime.notifyAll('llm.chunk', { requestId, text } satisfies LLMChunkNotification);
+              runtime.notifyRequester('llm.chunk', { requestId, text } satisfies LLMChunkNotification);
             },
           } : undefined,
         ),
@@ -76,6 +76,7 @@ const llmDescriptors: Array<AuditedMethodDescriptor<any, unknown>> = [
     },
     summary: (p: LLMChatParams) => ({
       ...toShardRoutingSummary(resolveShardChannelRouting(p.channelId)),
+      ...(p.companionId?.trim() ? { companionId: p.companionId.trim() } : {}),
       model: p.model,
       stream: p.stream,
       ...toSummaryCorrelation(buildCorrelation({
@@ -136,6 +137,7 @@ const llmDescriptors: Array<AuditedMethodDescriptor<any, unknown>> = [
     },
     summary: (p: LLMCompleteParams) => ({
       ...toShardRoutingSummary(resolveShardChannelRouting(p.channelId)),
+      ...(p.companionId?.trim() ? { companionId: p.companionId.trim() } : {}),
       purpose: p.purpose,
       ...toSummaryCorrelation(buildCorrelation({
         turnId: p.turnId,

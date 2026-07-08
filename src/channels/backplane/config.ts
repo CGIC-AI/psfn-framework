@@ -53,12 +53,24 @@ export interface TelegramChannelConfig {
   mode: TelegramMode;
   pollIntervalMs: number;
   webhook: TelegramWebhookConfig;
+  /** Multi-companion (sprint-10 W1): companion that owns this channel account. */
+  companionId?: string;
 }
 
 export interface DiscordChannelConfig {
   heartbeatChannelId: string;
   allowedBotUserIds: string[];
   groupMemory: ChannelGroupMemoryConfig;
+  /** Multi-companion (sprint-10 W1): companion that owns this channel account. */
+  companionId?: string;
+}
+
+/**
+ * Multi-companion (sprint-10 W1): routing for the gateway-hosted API surface
+ * (OpenAI-compatible chat, API voice websocket, Wyoming-tagged api traffic).
+ */
+export interface ApiChannelConfig {
+  companionId?: string;
 }
 
 export interface ExternalChannelProfileConfig {
@@ -89,6 +101,7 @@ export interface ChannelContextEnvelopeConfig {
 export interface RuntimeChannelsConfig {
   discord: DiscordChannelConfig;
   telegram: TelegramChannelConfig;
+  api: ApiChannelConfig;
   psfnAmica: PsfnAmicaChannelConfig;
   contextEnvelope: ChannelContextEnvelopeConfig;
 }
@@ -421,6 +434,12 @@ export function loadRuntimeChannelsConfig(
   // classification consumes them in E3.2.
   const contextEnvelope = parseContextEnvelopeSection(scopedRoot);
   const discordConfig = parseSectionObject(scopedRoot, 'discord') ?? {};
+  const apiConfig = parseSectionObject(scopedRoot, 'api') ?? {};
+  const unknownApiKeys = Object.keys(apiConfig).filter(key => key !== 'companionId');
+  if (unknownApiKeys.length > 0) {
+    throw new Error(`channels.json.api has unsupported keys: ${unknownApiKeys.join(', ')}`);
+  }
+  const apiCompanionId = parseConfiguredString(apiConfig.companionId, 'channels.json.api.companionId');
   const psfnAmicaConfig = parseSectionObject(scopedRoot, 'psfnAmica') ?? {};
   if (Object.keys(psfnAmicaConfig).length > 0 && !Object.hasOwn(psfnAmicaConfig, 'enabled')) {
     throw new Error('channels.json.psfnAmica.enabled must be configured when psfnAmica settings are present');
@@ -527,6 +546,15 @@ export function loadRuntimeChannelsConfig(
     }
   }
 
+  const discordCompanionId = parseConfiguredString(
+    discordConfig.companionId,
+    'channels.json.discord.companionId',
+  );
+  const telegramCompanionId = parseConfiguredString(
+    telegramConfig.companionId,
+    'channels.json.telegram.companionId',
+  );
+
   return {
     discord: {
       heartbeatChannelId: parseConfiguredString(discordConfig.heartbeatChannelId, 'channels.json.discord.heartbeatChannelId')
@@ -537,6 +565,10 @@ export function loadRuntimeChannelsConfig(
         discordConfig.groupMemory,
         'channels.json.discord.groupMemory',
       ) ?? createDefaultChannelGroupMemoryConfig(),
+      ...(discordCompanionId ? { companionId: discordCompanionId } : {}),
+    },
+    api: {
+      ...(apiCompanionId ? { companionId: apiCompanionId } : {}),
     },
     psfnAmica: {
       enabled: psfnAmicaEnabled,
@@ -548,6 +580,7 @@ export function loadRuntimeChannelsConfig(
       allowedUsers,
       mode,
       pollIntervalMs,
+      ...(telegramCompanionId ? { companionId: telegramCompanionId } : {}),
       webhook: {
         url: webhookUrl,
         secret: webhookSecret,

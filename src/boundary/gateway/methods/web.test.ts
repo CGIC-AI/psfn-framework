@@ -31,7 +31,7 @@ function createRuntimeHarness(policyConfig: PolicyConfig): RuntimeHarness {
     policyConfig,
     workspacePath: process.cwd(),
     sessionHmacKeyring: keyring,
-    notifyAll: vi.fn(),
+    notifyRequester: vi.fn(),
     listPendingConfirmations: () => [],
     listConfirmationHistory: () => [],
     resolveConfirmation: vi.fn(async () => ({

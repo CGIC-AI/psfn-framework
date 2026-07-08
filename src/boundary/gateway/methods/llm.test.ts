@@ -85,7 +85,7 @@ function createHarness() {
     policyConfig: { workspacePath: process.cwd() },
     workspacePath: process.cwd(),
     sessionHmacKeyring: { activeVersion: 'v1', keys: { v1: 'test' } },
-    notifyAll: vi.fn(),
+    notifyRequester: vi.fn(),
     listPendingConfirmations: () => [],
     listConfirmationHistory: () => [],
     resolveConfirmation: vi.fn(async () => ({

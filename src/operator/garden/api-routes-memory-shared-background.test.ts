@@ -22,9 +22,10 @@ function makeRequest(url: string): IncomingMessage {
 }
 
 function makeService(
-  sharedBackground: AdminMemoryService['sharedBackground'],
+  sharedBackground: AdminMemorySessionService['sharedBackground'],
 ): AdminMemoryService {
-  return { sharedBackground } as unknown as AdminMemoryService;
+  const sessionService = { sharedBackground } as unknown as AdminMemorySessionService;
+  return { forSession: () => sessionService };
 }
 
 function routesFor(service: AdminMemoryService): AdminApiRoute[] {

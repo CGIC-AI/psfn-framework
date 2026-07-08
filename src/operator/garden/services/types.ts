@@ -658,7 +658,23 @@ export interface AdminMemoryScopeMutationResult extends MemoryMutationResult {
   scopeRepair?: AdminMemoryScopeRepairView;
 }
 
+/**
+ * Identity of the requesting admin session for body-gate grants. `null`
+ * means no session identity could be derived from the request; the gate
+ * fail-closes to redacted bodies and refuses new grants for that case.
+ */
+export type AdminMemorySessionKey = string | null;
+
 export interface AdminMemoryService {
+  /**
+   * Binds the per-request admin session identity. Body-gate grants
+   * (elevation and reveals) are keyed by this identity so one operator's
+   * grants never leak memory bodies to other concurrent admin sessions.
+   */
+  forSession(sessionKey: AdminMemorySessionKey): AdminMemorySessionService;
+}
+
+export interface AdminMemorySessionService {
   listMemories(params?: URLSearchParams): Promise<AdminMemoryListData>;
   getMemoryDetail(id: string): Promise<AdminMemoryDetailData | null>;
   listManagedScopes(params?: URLSearchParams): Promise<AdminMemoryScopeListData>;

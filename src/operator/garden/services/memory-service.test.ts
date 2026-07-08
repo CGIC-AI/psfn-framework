@@ -7,6 +7,8 @@ import type {
 import type { PurrMemory } from '../../../faculties/memory/types.js';
 import { AdminMemoryDataService } from './memory-service.js';
 
+const OPERATOR_SESSION = 'cookie:operator-a';
+
 function makeMemory(id: string, overrides: Partial<PurrMemory> = {}): PurrMemory {
   return {
     id,
@@ -58,7 +60,7 @@ describe('AdminMemoryDataService', () => {
     } as unknown as MemoryStorePort;
     const service = new AdminMemoryDataService({ memoryStore });
 
-    const result = await service.listMemories(new URLSearchParams({
+    const result = await service.forSession(OPERATOR_SESSION).listMemories(new URLSearchParams({
       type: 'semantic',
       sensitivity: 'personal',
       retention: 'durable',
@@ -122,7 +124,7 @@ describe('AdminMemoryDataService', () => {
     };
     const service = new AdminMemoryDataService({ memoryStore, embeddingService });
 
-    const result = await service.searchMemories('memory');
+    const result = await service.forSession(OPERATOR_SESSION).searchMemories('memory');
 
     expect(memoryStore.getAdminMemoryPrivacySummary).toHaveBeenCalledTimes(1);
     expect(memoryStore.getAllActiveMemories).not.toHaveBeenCalled();
@@ -146,7 +148,7 @@ describe('AdminMemoryDataService', () => {
     } as unknown as MemoryStorePort;
     const service = new AdminMemoryDataService({ memoryStore });
 
-    const result = await service.bulkUpdate(['m1', 'missing', 'm2'], {
+    const result = await service.forSession(OPERATOR_SESSION).bulkUpdate(['m1', 'missing', 'm2'], {
       memoryType: 'Relational',
       sensitivity: 'Confidential',
       retentionClass: 'Durable',
@@ -203,7 +205,7 @@ describe('AdminMemoryDataService high-intimacy body gate', () => {
     const personal = makeMemory('personal-1');
     const { service } = makeGatedService([intimate, confidential, personal]);
 
-    const list = await service.listMemories();
+    const list = await service.forSession(OPERATOR_SESSION).listMemories();
     expect(list.elevation).toEqual({ elevated: false, ttlMs: 15 * 60 * 1_000 });
 
     const intimateView = list.memories.find(memory => memory.id === 'intimate-1');
@@ -234,7 +236,7 @@ describe('AdminMemoryDataService high-intimacy body gate', () => {
     expect(personalView?.bodyRedacted).toBeUndefined();
     expect(personalView?.text).toBe('Memory personal-1');
 
-    const search = await service.searchMemories('confession');
+    const search = await service.forSession(OPERATOR_SESSION).searchMemories('confession');
     expect(search.results.find(memory => memory.id === 'intimate-1')?.bodyRedacted).toBe(true);
     expect(search.results.find(memory => memory.id === 'personal-1')?.bodyRedacted).toBeUndefined();
   });
@@ -244,11 +246,11 @@ describe('AdminMemoryDataService high-intimacy body gate', () => {
     const intimate = makeMemory('intimate-reveal', { sensitivity: 'intimate', text: 'Hidden truth.' });
     const { service, appendAuditTimelineEntry } = makeGatedService([intimate], { now: () => now });
 
-    const redacted = await service.getMemoryDetail('intimate-reveal');
+    const redacted = await service.forSession(OPERATOR_SESSION).getMemoryDetail('intimate-reveal');
     expect(redacted?.memory.bodyRedacted).toBe(true);
     expect(appendAuditTimelineEntry).not.toHaveBeenCalled();
 
-    const revealed = await service.revealMemory('intimate-reveal');
+    const revealed = await service.forSession(OPERATOR_SESSION).revealMemory('intimate-reveal');
     expect(revealed?.memory.text).toBe('Hidden truth.');
     expect(revealed?.memory.bodyRedacted).toBeUndefined();
     expect(appendAuditTimelineEntry).toHaveBeenCalledWith(
@@ -259,17 +261,17 @@ describe('AdminMemoryDataService high-intimacy body gate', () => {
     );
 
     // The per-item grant persists across reads until the TTL expires.
-    const stillVisible = await service.getMemoryDetail('intimate-reveal');
+    const stillVisible = await service.forSession(OPERATOR_SESSION).getMemoryDetail('intimate-reveal');
     expect(stillVisible?.memory.bodyRedacted).toBeUndefined();
 
     now = BASE_NOW + 15 * 60 * 1_000;
-    const expired = await service.getMemoryDetail('intimate-reveal');
+    const expired = await service.forSession(OPERATOR_SESSION).getMemoryDetail('intimate-reveal');
     expect(expired?.memory.bodyRedacted).toBe(true);
   });
 
   it('audits a denied memory_access event when revealing a missing memory', async () => {
     const { service, appendAuditTimelineEntry } = makeGatedService([]);
-    expect(await service.revealMemory('missing')).toBeNull();
+    expect(await service.forSession(OPERATOR_SESSION).revealMemory('missing')).toBeNull();
     expect(appendAuditTimelineEntry).toHaveBeenCalledWith(
       'memory_access',
       'denied',
@@ -282,7 +284,7 @@ describe('AdminMemoryDataService high-intimacy body gate', () => {
     const confidential = makeMemory('confidential-elevated', { sensitivity: 'confidential' });
     const { service, appendAuditTimelineEntry } = makeGatedService([confidential], { now: () => now });
 
-    const status = service.elevateBodyAccess();
+    const status = service.forSession(OPERATOR_SESSION).elevateBodyAccess();
     expect(status).toEqual({
       elevated: true,
       expiresAt: BASE_NOW + 15 * 60 * 1_000,
@@ -295,13 +297,13 @@ describe('AdminMemoryDataService high-intimacy body gate', () => {
       [`expiresAt=${new Date(BASE_NOW + 15 * 60 * 1_000).toISOString()}`],
     );
 
-    const elevatedList = await service.listMemories();
+    const elevatedList = await service.forSession(OPERATOR_SESSION).listMemories();
     expect(elevatedList.elevation.elevated).toBe(true);
     expect(elevatedList.memories[0]?.bodyRedacted).toBeUndefined();
     expect(elevatedList.memories[0]?.text).toBe('Memory confidential-elevated');
 
     now = BASE_NOW + 15 * 60 * 1_000;
-    const expiredList = await service.listMemories();
+    const expiredList = await service.forSession(OPERATOR_SESSION).listMemories();
     expect(expiredList.elevation).toEqual({ elevated: false, ttlMs: 15 * 60 * 1_000 });
     expect(expiredList.memories[0]?.bodyRedacted).toBe(true);
   });
@@ -310,8 +312,8 @@ describe('AdminMemoryDataService high-intimacy body gate', () => {
     const confidential = makeMemory('confidential-dropped', { sensitivity: 'confidential' });
     const { service, appendAuditTimelineEntry } = makeGatedService([confidential]);
 
-    service.elevateBodyAccess();
-    const status = service.dropBodyElevation();
+    service.forSession(OPERATOR_SESSION).elevateBodyAccess();
+    const status = service.forSession(OPERATOR_SESSION).dropBodyElevation();
     expect(status.elevated).toBe(false);
     expect(appendAuditTimelineEntry).toHaveBeenCalledWith(
       'memory_access',
@@ -319,8 +321,57 @@ describe('AdminMemoryDataService high-intimacy body gate', () => {
       'Operator ended Garden memory body access elevation; intimate/confidential memory bodies are redacted again.',
     );
 
-    const list = await service.listMemories();
+    const list = await service.forSession(OPERATOR_SESSION).listMemories();
     expect(list.memories[0]?.bodyRedacted).toBe(true);
+  });
+
+
+  it('scopes elevation and reveal grants to the requesting admin session', async () => {
+    const intimate = makeMemory('intimate-cross-session', { sensitivity: 'intimate', text: 'Only for A.' });
+    const { service } = makeGatedService([intimate]);
+    const operatorA = service.forSession('cookie:operator-a');
+    const operatorB = service.forSession('cookie:operator-b');
+
+    operatorA.elevateBodyAccess();
+    expect(operatorA.getBodyElevationStatus().elevated).toBe(true);
+    expect(operatorB.getBodyElevationStatus().elevated).toBe(false);
+
+    const listForA = await operatorA.listMemories();
+    expect(listForA.memories[0]?.bodyRedacted).toBeUndefined();
+    const listForB = await operatorB.listMemories();
+    expect(listForB.elevation.elevated).toBe(false);
+    expect(listForB.memories[0]?.bodyRedacted).toBe(true);
+
+    // Per-item reveals are session-scoped too.
+    operatorA.dropBodyElevation();
+    await operatorA.revealMemory('intimate-cross-session');
+    expect((await operatorA.getMemoryDetail('intimate-cross-session'))?.memory.bodyRedacted).toBeUndefined();
+    expect((await operatorB.getMemoryDetail('intimate-cross-session'))?.memory.bodyRedacted).toBe(true);
+
+    // Dropping B's (empty) elevation never disturbs A's grants.
+    operatorB.dropBodyElevation();
+    expect((await operatorA.getMemoryDetail('intimate-cross-session'))?.memory.bodyRedacted).toBeUndefined();
+  });
+
+  it('fail-closes to redacted bodies and refuses grants without a session identity', async () => {
+    const intimate = makeMemory('intimate-anon', { sensitivity: 'intimate' });
+    const { service } = makeGatedService([intimate]);
+    const anonymous = service.forSession(null);
+
+    expect(anonymous.getBodyElevationStatus().elevated).toBe(false);
+    expect(() => anonymous.elevateBodyAccess()).toThrowError(
+      'Garden memory body elevation requires an admin session identity',
+    );
+    await expect(anonymous.revealMemory('intimate-anon')).rejects.toThrowError(
+      'Garden memory reveal requires an admin session identity',
+    );
+    const list = await anonymous.listMemories();
+    expect(list.memories[0]?.bodyRedacted).toBe(true);
+
+    // Even with another session elevated, the anonymous view stays redacted.
+    service.forSession('cookie:operator-a').elevateBodyAccess();
+    const stillRedacted = await anonymous.listMemories();
+    expect(stillRedacted.memories[0]?.bodyRedacted).toBe(true);
   });
 
   it('gates managed scope detail memory bodies behind the same elevation', async () => {
@@ -338,12 +389,12 @@ describe('AdminMemoryDataService high-intimacy body gate', () => {
     } as unknown as MemoryStorePort;
     const service = new AdminMemoryDataService({ memoryStore });
 
-    const detail = await service.getManagedScopeDetail('project', 'garden');
+    const detail = await service.forSession(OPERATOR_SESSION).getManagedScopeDetail('project', 'garden');
     expect(detail?.memories[0]?.memory.bodyRedacted).toBe(true);
     expect(detail?.elevation.elevated).toBe(false);
 
-    service.elevateBodyAccess();
-    const elevatedDetail = await service.getManagedScopeDetail('project', 'garden');
+    service.forSession(OPERATOR_SESSION).elevateBodyAccess();
+    const elevatedDetail = await service.forSession(OPERATOR_SESSION).getManagedScopeDetail('project', 'garden');
     expect(elevatedDetail?.memories[0]?.memory.bodyRedacted).toBeUndefined();
     expect(elevatedDetail?.memories[0]?.memory.text).toBe('Memory intimate-scoped');
   });

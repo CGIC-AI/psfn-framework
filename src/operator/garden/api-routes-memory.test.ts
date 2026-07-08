@@ -2,12 +2,18 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import { describe, expect, it, vi } from 'vitest';
 import { buildAdminMemoryRoutes } from './api-routes-memory.js';
 import type { AdminApiRoute } from './routes/types.js';
-import type { AdminMemoryService } from './services/types.js';
+import type { AdminMemoryService, AdminMemorySessionService } from './services/types.js';
 
 class CapturingResponse {
   status = 0;
   headers: Record<string, string> = {};
+  setHeaders: Record<string, string> = {};
   body = '';
+
+  setHeader(name: string, value: string): this {
+    this.setHeaders[name] = value;
+    return this;
+  }
 
   writeHead(status: number, headers?: Record<string, string>): this {
     this.status = status;
@@ -29,8 +35,10 @@ function makeRequest(url: string, body = ''): IncomingMessage {
   } as IncomingMessage;
 }
 
-function makeMemoryService(overrides: Partial<AdminMemoryService> = {}): AdminMemoryService {
-  return {
+type TestAdminMemoryService = AdminMemoryService & AdminMemorySessionService;
+
+function makeMemoryService(overrides: Partial<AdminMemorySessionService> = {}): TestAdminMemoryService {
+  const service = {
     listMemories: vi.fn(async () => ({
       memories: [],
       pagination: { limit: 50, offset: 0, total: 0, hasPrevious: false, hasNext: false },
@@ -86,7 +94,12 @@ function makeMemoryService(overrides: Partial<AdminMemoryService> = {}): AdminMe
       elevation: { elevated: false, ttlMs: 900_000 },
     } as never)),
     ...overrides,
-  };
+  } as AdminMemorySessionService;
+  // The route layer binds a per-request session; the flat mock stands in for
+  // both the service and its session view so call assertions stay direct.
+  return Object.assign(service, {
+    forSession: vi.fn(() => service),
+  }) as TestAdminMemoryService;
 }
 
 function makeRoutes(memoryService: AdminMemoryService): AdminApiRoute[] {
@@ -166,7 +179,7 @@ describe('admin memory API route split', () => {
       _memoryId: string,
       _fields: { text: string; reason?: string; referencePath?: string },
     ) => ({ ok: true }));
-    const memoryService = makeMemoryService() as AdminMemoryService & {
+    const memoryService = makeMemoryService() as TestAdminMemoryService & {
       patchMemory: typeof patchMemory;
     };
     memoryService.patchMemory = patchMemory;
@@ -231,7 +244,7 @@ describe('admin memory API route split', () => {
         scopeAssignments: [],
         elevation: { elevated: false, ttlMs: 900_000 },
       } as never)),
-    }) as AdminMemoryService & { patchMemory: typeof patchMemory };
+    }) as TestAdminMemoryService & { patchMemory: typeof patchMemory };
     memoryService.patchMemory = patchMemory;
     const routes = makeRoutes(memoryService);
 
@@ -252,7 +265,7 @@ describe('admin memory API route split', () => {
     const patchMemory = vi.fn(async () => ({ ok: true }));
     const memoryService = makeMemoryService({
       getMemoryDetail: vi.fn(async () => null),
-    }) as AdminMemoryService & { patchMemory: typeof patchMemory };
+    }) as TestAdminMemoryService & { patchMemory: typeof patchMemory };
     memoryService.patchMemory = patchMemory;
     const routes = makeRoutes(memoryService);
 

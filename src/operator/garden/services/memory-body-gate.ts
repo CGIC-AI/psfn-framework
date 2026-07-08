@@ -3,6 +3,7 @@ import { isHighIntimacySensitivityLevel } from '../../../system/trust/types.js';
 import type {
   AdminMemoryBodyRedaction,
   AdminMemoryElevationStatus,
+  AdminMemorySessionKey,
   AdminMemoryView,
 } from './types.js';
 
@@ -43,15 +44,22 @@ function buildBodyRedaction(memory: Pick<PurrMemory, 'sensitivity' | 'text'>): A
   };
 }
 
+interface AdminMemorySessionGrants {
+  elevationExpiresAt: number | null;
+  revealExpiryById: Map<string, number>;
+}
+
 /**
  * Session-scoped grant state for reading high-intimacy memory bodies in the
- * Garden admin memory API. State is in-memory by design: grants are
- * short-lived operator session affordances, and restarting the process
- * fail-closes back to redacted-by-default.
+ * Garden admin memory API. Grants are keyed by the requesting admin session
+ * identity so one operator's elevation or reveal never leaks bodies to other
+ * concurrent admin sessions in the same process. State is in-memory by
+ * design: grants are short-lived operator session affordances, and restarting
+ * the process fail-closes back to redacted-by-default. A `null` session key
+ * (no derivable admin session identity) fail-closes to no grants at all.
  */
 export class AdminMemoryBodyGate {
-  private elevationExpiresAt: number | null = null;
-  private readonly revealExpiryById = new Map<string, number>();
+  private readonly grantsBySession = new Map<string, AdminMemorySessionGrants>();
   private readonly now: () => number;
   private readonly ttlMs: number;
 
@@ -60,51 +68,53 @@ export class AdminMemoryBodyGate {
     this.ttlMs = options?.ttlMs ?? ADMIN_MEMORY_BODY_ACCESS_TTL_MS;
   }
 
-  status(): AdminMemoryElevationStatus {
-    const elevated = this.isElevated();
+  status(sessionKey: AdminMemorySessionKey): AdminMemoryElevationStatus {
+    const expiresAt = this.elevationExpiryFor(sessionKey);
     return {
-      elevated,
+      elevated: expiresAt !== null,
       ttlMs: this.ttlMs,
-      ...(elevated && this.elevationExpiresAt !== null ? { expiresAt: this.elevationExpiresAt } : {}),
+      ...(expiresAt !== null ? { expiresAt } : {}),
     };
   }
 
-  isElevated(): boolean {
-    if (this.elevationExpiresAt === null) return false;
-    if (this.now() >= this.elevationExpiresAt) {
-      this.elevationExpiresAt = null;
-      return false;
+  isElevated(sessionKey: AdminMemorySessionKey): boolean {
+    return this.elevationExpiryFor(sessionKey) !== null;
+  }
+
+  elevate(sessionKey: AdminMemorySessionKey): AdminMemoryElevationStatus {
+    if (sessionKey === null) {
+      // Fail closed: an elevation grant must be keyed to a concrete session.
+      throw new Error('Garden memory body elevation requires an admin session identity');
     }
-    return true;
+    this.sweepExpiredSessions();
+    const grants = this.grantsFor(sessionKey);
+    grants.elevationExpiresAt = this.now() + this.ttlMs;
+    return this.status(sessionKey);
   }
 
-  elevate(): AdminMemoryElevationStatus {
-    this.elevationExpiresAt = this.now() + this.ttlMs;
-    return this.status();
-  }
-
-  dropElevation(): AdminMemoryElevationStatus {
-    this.elevationExpiresAt = null;
-    return this.status();
-  }
-
-  recordReveal(memoryId: string): void {
-    this.revealExpiryById.set(memoryId, this.now() + this.ttlMs);
-  }
-
-  private isRevealed(memoryId: string): boolean {
-    const expiresAt = this.revealExpiryById.get(memoryId);
-    if (expiresAt === undefined) return false;
-    if (this.now() >= expiresAt) {
-      this.revealExpiryById.delete(memoryId);
-      return false;
+  dropElevation(sessionKey: AdminMemorySessionKey): AdminMemoryElevationStatus {
+    if (sessionKey !== null) {
+      const grants = this.grantsBySession.get(sessionKey);
+      if (grants) {
+        grants.elevationExpiresAt = null;
+        this.dropSessionIfEmpty(sessionKey, grants);
+      }
     }
-    return true;
+    return this.status(sessionKey);
   }
 
-  canReadBody(memory: Pick<PurrMemory, 'id' | 'sensitivity'>): boolean {
+  recordReveal(sessionKey: AdminMemorySessionKey, memoryId: string): void {
+    if (sessionKey === null) {
+      // Fail closed: a reveal grant must be keyed to a concrete session.
+      throw new Error('Garden memory reveal requires an admin session identity');
+    }
+    this.sweepExpiredSessions();
+    this.grantsFor(sessionKey).revealExpiryById.set(memoryId, this.now() + this.ttlMs);
+  }
+
+  canReadBody(sessionKey: AdminMemorySessionKey, memory: Pick<PurrMemory, 'id' | 'sensitivity'>): boolean {
     if (!isHighIntimacyMemory(memory)) return true;
-    return this.isElevated() || this.isRevealed(memory.id);
+    return this.isElevated(sessionKey) || this.isRevealed(sessionKey, memory.id);
   }
 
   /**
@@ -113,8 +123,8 @@ export class AdminMemoryBodyGate {
    * the body is replaced by an explicit redaction marker. The embedding is
    * stripped from redacted views because it is derived from the body.
    */
-  toAdminView(memory: PurrMemory): AdminMemoryView {
-    if (this.canReadBody(memory)) return memory;
+  toAdminView(sessionKey: AdminMemorySessionKey, memory: PurrMemory): AdminMemoryView {
+    if (this.canReadBody(sessionKey, memory)) return memory;
     const { embedding: _embedding, ...metadata } = memory;
     return {
       ...metadata,
@@ -122,5 +132,62 @@ export class AdminMemoryBodyGate {
       bodyRedacted: true,
       bodyRedaction: buildBodyRedaction(memory),
     };
+  }
+
+  private grantsFor(sessionKey: string): AdminMemorySessionGrants {
+    const existing = this.grantsBySession.get(sessionKey);
+    if (existing) return existing;
+    const created: AdminMemorySessionGrants = {
+      elevationExpiresAt: null,
+      revealExpiryById: new Map(),
+    };
+    this.grantsBySession.set(sessionKey, created);
+    return created;
+  }
+
+  private elevationExpiryFor(sessionKey: AdminMemorySessionKey): number | null {
+    if (sessionKey === null) return null;
+    const grants = this.grantsBySession.get(sessionKey);
+    if (!grants || grants.elevationExpiresAt === null) return null;
+    if (this.now() >= grants.elevationExpiresAt) {
+      grants.elevationExpiresAt = null;
+      this.dropSessionIfEmpty(sessionKey, grants);
+      return null;
+    }
+    return grants.elevationExpiresAt;
+  }
+
+  private isRevealed(sessionKey: AdminMemorySessionKey, memoryId: string): boolean {
+    if (sessionKey === null) return false;
+    const grants = this.grantsBySession.get(sessionKey);
+    if (!grants) return false;
+    const expiresAt = grants.revealExpiryById.get(memoryId);
+    if (expiresAt === undefined) return false;
+    if (this.now() >= expiresAt) {
+      grants.revealExpiryById.delete(memoryId);
+      this.dropSessionIfEmpty(sessionKey, grants);
+      return false;
+    }
+    return true;
+  }
+
+  private dropSessionIfEmpty(sessionKey: string, grants: AdminMemorySessionGrants): void {
+    if (grants.elevationExpiresAt === null && grants.revealExpiryById.size === 0) {
+      this.grantsBySession.delete(sessionKey);
+    }
+  }
+
+  /** Bounds grant-map growth: fully expired sessions are pruned on each new grant. */
+  private sweepExpiredSessions(): void {
+    const now = this.now();
+    for (const [sessionKey, grants] of this.grantsBySession) {
+      if (grants.elevationExpiresAt !== null && now >= grants.elevationExpiresAt) {
+        grants.elevationExpiresAt = null;
+      }
+      for (const [memoryId, expiresAt] of grants.revealExpiryById) {
+        if (now >= expiresAt) grants.revealExpiryById.delete(memoryId);
+      }
+      this.dropSessionIfEmpty(sessionKey, grants);
+    }
   }
 }

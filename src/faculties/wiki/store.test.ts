@@ -99,4 +99,43 @@ describe('WikiStore', () => {
       body: 'nope',
     })).toThrow('invalid characters');
   });
+
+  // ── W5b scope dimension ──
+
+  it('default (personal) writes omit scope from serialized metadata (byte-identical to pre-W5b)', () => {
+    const workspace = makeWorkspace();
+    const store = new WikiStore(workspace);
+    const doc = store.upsert({ title: 'World Note', body: 'Some durable world fact.' });
+    // In-memory: absent scope == personal, so the field is not set.
+    expect(doc).not.toHaveProperty('scope');
+    const metadataPath = join(resolvePersonalWikiDir(workspace), 'metadata', `${doc.id}.json`);
+    const persisted = JSON.parse(readFileSync(metadataPath, 'utf-8')) as Record<string, unknown>;
+    expect('scope' in persisted).toBe(false);
+    // Round-trips cleanly through read (checksum + metadata validation).
+    expect(store.get(doc.id)?.body).toContain('durable world fact');
+  });
+
+  it('accepts an explicit personal scope (still omitted, still byte-identical)', () => {
+    const store = new WikiStore(makeWorkspace());
+    const doc = store.upsert({ title: 'Personal Note', body: 'A note.', scope: 'personal' });
+    expect(doc).not.toHaveProperty('scope');
+  });
+
+  it('fail-closed REJECTS any direct shared_world scope write (the leak surface)', () => {
+    const store = new WikiStore(makeWorkspace());
+    expect(() => store.upsert({
+      title: 'Kitchen Toaster',
+      body: 'A new toaster sits next to the satellite in the kitchen.',
+      scope: 'shared_world:home',
+    })).toThrow(/personal-scope only/);
+  });
+
+  it('rejects a malformed scope value before writing anything', () => {
+    const store = new WikiStore(makeWorkspace());
+    expect(() => store.upsert({
+      title: 'Bad Scope',
+      body: 'x',
+      scope: 'shared_world:bad site!' as unknown as 'personal',
+    })).toThrow(/valid siteId/);
+  });
 });

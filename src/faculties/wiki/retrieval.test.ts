@@ -29,6 +29,7 @@ function makeMatch(overrides: Partial<WikiSemanticMatch> = {}): WikiSemanticMatc
     path: overrides.path ?? 'documents/doc-1.md',
     sourceClass: overrides.sourceClass ?? 'companion_authored_note',
     sensitivity: overrides.sensitivity ?? 'personal',
+    scope: overrides.scope ?? 'personal',
     chunkIndex: overrides.chunkIndex ?? 0,
     chunkText: overrides.chunkText ?? 'Reference chunk text.',
     score: overrides.score ?? 0.9,
@@ -85,6 +86,88 @@ describe('resolveWikiRetrievalPlan (deterministic gate)', () => {
       focusActive: false,
     });
     expect(plan).toBeNull();
+  });
+
+  // ── W5b scope dimension ──
+
+  it('flag-off carries NO scope restriction (byte-identical to pre-W5b)', () => {
+    const off = resolveWikiRetrievalPlan({
+      settings: makeSettings(),
+      isDirectMessage: true,
+      focusActive: false,
+      // multiCompanion omitted → off
+      currentSiteId: 'studio', // present but ignored while flag is off
+    });
+    expect(off).toEqual({ contextClass: 'dm', tokenCap: 1000, similarityThreshold: 0.6 });
+    expect(off).not.toHaveProperty('allowedScopes');
+  });
+
+  it('under the flag WITH a current site: personal + that site shared scope', () => {
+    const plan = resolveWikiRetrievalPlan({
+      settings: makeSettings(),
+      isDirectMessage: true,
+      focusActive: false,
+      multiCompanion: true,
+      currentSiteId: 'studio',
+    });
+    expect(plan?.allowedScopes).toEqual(['personal', 'shared_world:studio']);
+  });
+
+  it('under the flag WITHOUT a current site: personal-only (shared does not participate)', () => {
+    const plan = resolveWikiRetrievalPlan({
+      settings: makeSettings(),
+      isDirectMessage: true,
+      focusActive: false,
+      multiCompanion: true,
+      // no currentSiteId
+    });
+    expect(plan?.allowedScopes).toEqual(['personal']);
+  });
+
+  it('personal scope is ALWAYS present, across every context class', () => {
+    for (const turn of [
+      { isDirectMessage: true, focusActive: false },
+      { isDirectMessage: false, focusActive: false },
+      { isDirectMessage: false, focusActive: true },
+    ]) {
+      const plan = resolveWikiRetrievalPlan({
+        settings: makeSettings(),
+        ...turn,
+        multiCompanion: true,
+        currentSiteId: 'studio',
+      });
+      expect(plan?.allowedScopes).toContain('personal');
+    }
+  });
+
+  it('swaps the shared scope when the current site changes (personal untouched)', () => {
+    const atStudio = resolveWikiRetrievalPlan({
+      settings: makeSettings(),
+      isDirectMessage: true,
+      focusActive: false,
+      multiCompanion: true,
+      currentSiteId: 'studio',
+    });
+    const atCabin = resolveWikiRetrievalPlan({
+      settings: makeSettings(),
+      isDirectMessage: true,
+      focusActive: false,
+      multiCompanion: true,
+      currentSiteId: 'cabin',
+    });
+    expect(atStudio?.allowedScopes).toEqual(['personal', 'shared_world:studio']);
+    expect(atCabin?.allowedScopes).toEqual(['personal', 'shared_world:cabin']);
+  });
+
+  it('ignores a syntactically invalid current siteId (personal-only, fail closed)', () => {
+    const plan = resolveWikiRetrievalPlan({
+      settings: makeSettings(),
+      isDirectMessage: true,
+      focusActive: false,
+      multiCompanion: true,
+      currentSiteId: 'bad site!', // space + bang are not valid ID token chars
+    });
+    expect(plan?.allowedScopes).toEqual(['personal']);
   });
 });
 
@@ -218,5 +301,61 @@ describe('WikiRetrievalService', () => {
     });
     expect(block).toBe('');
     expect(bus.events[0]?.payload).toMatchObject({ outcome: 'skipped', reason: 'below_threshold' });
+  });
+
+  // ── W5b scope forwarding: the plan's allowedScopes reach the projection ──
+
+  it('flag-off forwards NO scope filter to the projection (byte-identical query path)', async () => {
+    const projection = makeProjection([makeMatch({ chunkText: 'World facts.' })]);
+    const service = new WikiRetrievalService({
+      projection,
+      embedding: fakeEmbedding,
+      getSettings: () => makeSettings(),
+      // getMultiCompanion omitted → off
+    });
+    await service.retrieveContextBlock({
+      channelId: 'c1',
+      queryText: 'query',
+      isDirectMessage: true,
+      focusActive: false,
+      currentSiteId: 'studio',
+    });
+    // 4th positional arg (scopes) must be undefined → unrestricted, as today.
+    expect((projection.search as any).mock.calls[0][3]).toBeUndefined();
+  });
+
+  it('under the flag forwards personal + the current site shared scope', async () => {
+    const projection = makeProjection([makeMatch({ chunkText: 'World facts.' })]);
+    const service = new WikiRetrievalService({
+      projection,
+      embedding: fakeEmbedding,
+      getSettings: () => makeSettings(),
+      getMultiCompanion: () => true,
+    });
+    await service.retrieveContextBlock({
+      channelId: 'c1',
+      queryText: 'query',
+      isDirectMessage: true,
+      focusActive: false,
+      currentSiteId: 'studio',
+    });
+    expect((projection.search as any).mock.calls[0][3]).toEqual(['personal', 'shared_world:studio']);
+  });
+
+  it('under the flag with no current site forwards personal-only', async () => {
+    const projection = makeProjection([makeMatch({ chunkText: 'World facts.' })]);
+    const service = new WikiRetrievalService({
+      projection,
+      embedding: fakeEmbedding,
+      getSettings: () => makeSettings(),
+      getMultiCompanion: () => true,
+    });
+    await service.retrieveContextBlock({
+      channelId: 'c1',
+      queryText: 'query',
+      isDirectMessage: true,
+      focusActive: false,
+    });
+    expect((projection.search as any).mock.calls[0][3]).toEqual(['personal']);
   });
 });

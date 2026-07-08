@@ -717,11 +717,12 @@ export class PostgresEpisodicStore implements EpisodicStorePort {
     params.push(normalizeOffset(options.offset));
     const offsetIndex = params.length;
 
+    const orderDir = options.order === 'desc' ? 'DESC' : 'ASC';
     const rows = await queryRows<PostgresEpisodeRow>(this.pool, `
       SELECT id, episode_json
       FROM l01_episodes
       WHERE ${where.join(' AND ')}
-      ORDER BY started_at ASC, id ASC
+      ORDER BY started_at ${orderDir}, id ${orderDir}
       LIMIT $${limitIndex} OFFSET $${offsetIndex}
     `, params);
     return rows.map(mapEpisodeRow);

@@ -677,6 +677,9 @@ export class SleepCycleEpisodeConsolidator {
       // input.sessionId, so refining other-session episodes would ground them
       // against the wrong conversation (mlwk.7).
       sessionId: input.sessionId,
+      // Newest first so an active session's recent episodes are always within
+      // the cap instead of being starved behind an older backlog (mlwk.13).
+      order: 'desc',
       limit: REVIEW_EPISODE_LIMIT,
     });
     result.reviewedEpisodes = canonicalEpisodes.length;
@@ -868,6 +871,9 @@ export class SleepCycleEpisodeConsolidator {
       // sessions must not be consolidated against this session's transcript
       // grounding (mlwk.7).
       sessionId: input.sessionId,
+      // Newest first so recent candidates are not starved behind an older
+      // backlog under the cap (mlwk.13).
+      order: 'desc',
       limit: REVIEW_EPISODE_LIMIT,
     });
     result.candidateEpisodesReviewed = candidates.length;

@@ -770,11 +770,12 @@ export class EpisodicStore implements EpisodicStorePort {
       params.push(parseRequiredText(options.sessionId, 'sessionId'));
     }
 
+    const orderDir = options.order === 'desc' ? 'DESC' : 'ASC';
     const rows = this.db.prepare(`
       SELECT id, episode_json
       FROM l01_episodes
       WHERE ${where.join(' AND ')}
-      ORDER BY started_at ASC, id ASC
+      ORDER BY started_at ${orderDir}, id ${orderDir}
       LIMIT ? OFFSET ?
     `).all(
       ...params,

@@ -313,6 +313,12 @@ export interface EpisodeTimeSearchOptions extends EpisodeListOptions {
    * matches the episode's thread_id. Omitted => episodes from every session.
    */
   sessionId?: string;
+  /**
+   * Order results by start time. Defaults to 'asc' (oldest first). Use 'desc'
+   * when a capped query must include the most recent episodes rather than
+   * starving them behind an older backlog.
+   */
+  order?: 'asc' | 'desc';
 }
 
 export interface EpisodeArcListOptions {

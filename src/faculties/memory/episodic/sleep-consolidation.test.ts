@@ -191,6 +191,47 @@ describe('SleepCycleEpisodeConsolidator', () => {
     expect(otherSession.map(episode => episode.id).sort()).toEqual(['other-1', 'other-2']);
   });
 
+  it('reviews recent episodes instead of starving them behind an over-limit old backlog (mlwk.13)', async () => {
+    const store = makeStore();
+    // More than REVIEW_EPISODE_LIMIT (200) old, well-separated solo episodes so
+    // an oldest-first cap would fill entirely with them.
+    const oldBase = Date.parse('2026-05-01T00:00:00.000Z');
+    for (let i = 0; i < 205; i += 1) {
+      const startedAt = new Date(oldBase + i * 3_600_000).toISOString();
+      const endedAt = new Date(oldBase + i * 3_600_000 + 600_000).toISOString();
+      await store.createEpisode(episodeInput(`old-${i}`, startedAt, endedAt));
+    }
+    // A recent adjacent pair in its own channel scope (same session) that should
+    // merge — only reachable if the review query includes recent episodes.
+    await store.createEpisode(episodeInput('recent-1', '2026-06-09T10:00:00.000Z', '2026-06-09T10:20:00.000Z', {
+      channelId: 'discord:recent',
+    }));
+    await store.createEpisode(episodeInput('recent-2', '2026-06-09T10:22:00.000Z', '2026-06-09T10:40:00.000Z', {
+      channelId: 'discord:recent',
+    }));
+
+    const consolidator = new SleepCycleEpisodeConsolidator(
+      store,
+      { getRecentMessages: () => [] },
+      { complete: vi.fn(async () => refinementResponse()) },
+      { now: () => NOW },
+    );
+
+    const result = await consolidator.run({ sessionId: 'discord:main' });
+
+    // The cap is hit, but the recent pair was reviewed and merged rather than
+    // starved: recent-1 absorbed recent-2's span.
+    expect(result.reviewedEpisodes).toBe(200);
+    const survivingRecent = await store.getEpisode('recent-1');
+    expect(survivingRecent?.endedAt).toBe('2026-06-09T10:40:00.000Z');
+    const activeRecent = await store.searchByTime({
+      from: '2026-06-09T00:00:00.000Z',
+      to: '2026-06-10T00:00:00.000Z',
+      sessionId: 'discord:main',
+    });
+    expect(activeRecent.map(episode => episode.id)).toEqual(['recent-1']);
+  });
+
   it('repairs historical overlaps outside the old short review window', async () => {
     const store = makeStore();
     await store.createEpisode(episodeInput('old-wide', '2026-05-24T02:27:00.000Z', '2026-05-24T04:01:00.000Z'));

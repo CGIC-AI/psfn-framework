@@ -3,6 +3,7 @@
 
 import { isIP } from 'node:net';
 import { lookup } from 'node:dns/promises';
+import { sleep } from '../../shared/utils/timing.js';
 
 const PRIVATE_RANGES = [
   // IPv4
@@ -311,19 +312,45 @@ export async function checkResolvedIP(
     return { allowed: true, address: bare };
   }
 
+  let result: { address: string; family: number };
   try {
-    const result = await resolver(bare);
-    if (isAlwaysBlockedIP(result.address)) {
-      return {
-        allowed: false,
-        reason: `DNS resolved ${bare} to blocked IP ${result.address} (cloud metadata / link-local)`,
-      };
-    }
-    if (isPrivateIP(result.address) && !options.allowPrivateResolvedIp) {
-      return { allowed: false, reason: `DNS resolved ${bare} to private IP ${result.address}` };
-    }
-    return { allowed: true, address: result.address };
+    result = await resolveWithTransientRetry(bare, resolver);
   } catch {
     return { allowed: false, reason: `DNS resolution failed for ${bare}` };
   }
+
+  if (isAlwaysBlockedIP(result.address)) {
+    return {
+      allowed: false,
+      reason: `DNS resolved ${bare} to blocked IP ${result.address} (cloud metadata / link-local)`,
+    };
+  }
+  if (isPrivateIP(result.address) && !options.allowPrivateResolvedIp) {
+    return { allowed: false, reason: `DNS resolved ${bare} to private IP ${result.address}` };
+  }
+  return { allowed: true, address: result.address };
+}
+
+const DNS_RESOLUTION_ATTEMPTS = 2;
+const DNS_RESOLUTION_RETRY_DELAY_MS = 250;
+
+// A single transient resolver failure (flaky upstream nameserver) must not
+// permanently block an otherwise-allowed fetch; the check still fails closed
+// after the final attempt.
+async function resolveWithTransientRetry(
+  hostname: string,
+  resolver: DnsResolver,
+): Promise<{ address: string; family: number }> {
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= DNS_RESOLUTION_ATTEMPTS; attempt += 1) {
+    try {
+      return await resolver(hostname);
+    } catch (error) {
+      lastError = error;
+      if (attempt < DNS_RESOLUTION_ATTEMPTS) {
+        await sleep(DNS_RESOLUTION_RETRY_DELAY_MS);
+      }
+    }
+  }
+  throw lastError;
 }

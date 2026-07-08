@@ -7,6 +7,7 @@ import type {
   ChargePolicyRuntimeLane,
   ChargePolicySurface,
 } from '../contracts/charge-policy.js';
+import { hydrateRunChargeRollingWindowFromEvents } from './run-charge.js';
 
 export interface RunChargeLedgerMetadata {
   provider?: string;
@@ -66,10 +67,32 @@ export interface RunChargeLedgerAggregates {
   byLineage: RunChargeBreakdown[];
 }
 
+export interface RunChargeDailySummary {
+  /** UTC calendar day (YYYY-MM-DD), same convention as the model-budget dollar ledger. */
+  dayKey: string;
+  amount: number;
+  eventCount: number;
+  byLane: RunChargeBreakdown[];
+}
+
+/**
+ * Calendar accounting over the same charge events: spend accrues per calendar
+ * day and rolls up month-to-date so charge units reconcile against the
+ * monthly dollar cap in one Garden surface. This is a view over the ledger,
+ * not a second accounting path.
+ */
+export interface RunChargeCalendarAccrual {
+  monthKey: string;
+  monthToDateAmount: number;
+  monthToDateEventCount: number;
+  daily: RunChargeDailySummary[];
+}
+
 export interface RunChargeLedgerData {
   activeRun: RunChargeRunSummary | null;
   recentRuns: RunChargeRunSummary[];
   aggregates: RunChargeLedgerAggregates;
+  calendar: RunChargeCalendarAccrual;
   events: RunChargeLedgerEntry[];
 }
 
@@ -180,10 +203,12 @@ function cloneChargeEvent(event: RunChargeEvent): RunChargeEvent {
 function createLedgerEntry(event: RunChargeEvent): RunChargeLedgerEntry {
   const clonedEvent = cloneChargeEvent(event);
   const metadata = extractMetadata(clonedEvent);
+  const eventId = normalizeOptionalString(clonedEvent.eventId) ?? randomUUID();
+  clonedEvent.eventId = eventId;
   return {
     schemaVersion: 1,
     recordType: 'charge_event',
-    eventId: randomUUID(),
+    eventId,
     recordedAtMs: Date.now(),
     event: clonedEvent,
     ...(metadata ? { metadata } : {}),
@@ -238,8 +263,18 @@ function readLedgerEntries(path: string): RunChargeLedgerEntry[] {
         throw new Error(`Invalid charge ledger JSON at line ${index + 1}: ${String(error)}`);
       }
       assertLedgerEntry(parsed, index + 1);
-      return parsed;
+      return withEventIdentity(parsed);
     });
+}
+
+// Rows persisted before RunChargeEvent carried its own eventId reuse the
+// ledger entry id (always present and unique) as the event identity so
+// rolling-window hydration dedupes by exact identity, never by content.
+function withEventIdentity(entry: RunChargeLedgerEntry): RunChargeLedgerEntry {
+  if (normalizeOptionalString(entry.event.eventId)) {
+    return entry;
+  }
+  return { ...entry, event: { ...entry.event, eventId: entry.eventId } };
 }
 
 function matchesQuery(entry: RunChargeLedgerEntry, query: RunChargeLedgerQuery): boolean {
@@ -365,12 +400,80 @@ function summarizeEntries(entries: RunChargeLedgerEntry[]): {
   };
 }
 
+const CALENDAR_ACCRUAL_DAYS = 31;
+const DAY_MS = 24 * 60 * 60_000;
+
+function makeChargeDayKey(timestampMs: number): string {
+  return new Date(timestampMs).toISOString().slice(0, 10);
+}
+
+function makeChargeMonthKey(timestampMs: number): string {
+  return new Date(timestampMs).toISOString().slice(0, 7);
+}
+
+function summarizeCalendarAccrual(
+  entries: readonly RunChargeLedgerEntry[],
+  nowMs: number,
+): RunChargeCalendarAccrual {
+  const monthKey = makeChargeMonthKey(nowMs);
+  const windowStartMs = nowMs - (CALENDAR_ACCRUAL_DAYS * DAY_MS);
+  const dailyBuckets = new Map<string, { amount: number; eventCount: number; byLane: Map<string, RunChargeBreakdown> }>();
+  let monthToDateAmount = 0;
+  let monthToDateEventCount = 0;
+
+  for (const entry of entries) {
+    const timestamp = entry.event.timestampMs;
+    if (timestamp > nowMs) continue;
+    if (makeChargeMonthKey(timestamp) === monthKey) {
+      monthToDateAmount += entry.event.amount;
+      monthToDateEventCount += 1;
+    }
+    if (timestamp < windowStartMs) continue;
+    const dayKey = makeChargeDayKey(timestamp);
+    let bucket = dailyBuckets.get(dayKey);
+    if (!bucket) {
+      bucket = { amount: 0, eventCount: 0, byLane: new Map() };
+      dailyBuckets.set(dayKey, bucket);
+    }
+    bucket.amount += entry.event.amount;
+    bucket.eventCount += 1;
+    addBreakdown(bucket.byLane, entry.event.lane, entry.event.amount);
+  }
+
+  const daily = [...dailyBuckets.entries()]
+    .sort(([left], [right]) => right.localeCompare(left))
+    .map(([dayKey, bucket]) => ({
+      dayKey,
+      amount: bucket.amount,
+      eventCount: bucket.eventCount,
+      byLane: sortedBreakdowns(bucket.byLane),
+    }));
+
+  return {
+    monthKey,
+    monthToDateAmount,
+    monthToDateEventCount,
+    daily,
+  };
+}
+
+export interface RunChargeLedgerOptions {
+  now?: () => number;
+}
+
 export class RunChargeLedger {
   private entries: RunChargeLedgerEntry[];
   private unsubscribe?: () => void;
+  private readonly now: () => number;
 
-  constructor(private readonly path: string, eventBus?: Pick<EventBus, 'on'> | null) {
+  constructor(
+    private readonly path: string,
+    eventBus?: Pick<EventBus, 'on'> | null,
+    options: RunChargeLedgerOptions = {},
+  ) {
+    this.now = options.now ?? (() => Date.now());
     this.entries = readLedgerEntries(path);
+    hydrateRunChargeRollingWindowFromEvents(this.entries.map(entry => entry.event), this.now());
     if (eventBus) {
       this.unsubscribe = eventBus.on('agent.charge', (event) => {
         this.recordChargeEvent(event);
@@ -413,6 +516,9 @@ export class RunChargeLedger {
       activeRun: runs[0] ?? null,
       recentRuns: runs.slice(0, DEFAULT_RECENT_RUN_LIMIT),
       aggregates,
+      // Calendar accrual always reflects the full ledger, not the query
+      // filter: per-day reset semantics must not shift with the view.
+      calendar: summarizeCalendarAccrual(this.entries, this.now()),
       events: allMatchingEntries.slice(0, limit).map(entry => ({
         ...entry,
         event: cloneChargeEvent(entry.event),

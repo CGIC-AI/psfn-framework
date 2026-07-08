@@ -1,4 +1,4 @@
-import 'dotenv/config';
+import '../../shared/utils/load-dotenv.js';
 import { join, resolve } from 'node:path';
 import { runSessionRepairScan } from '../../persistence/repair/repair.js';
 import { loadConfig } from '../../system/config/load-config.js';

@@ -914,12 +914,21 @@ describe('GatewayClient filesystem RPC wrappers', () => {
     const listReq = conn.sent[1] as { id: number; method: string; params: Record<string, unknown> };
     expect(listReq.method).toBe('fs.list');
     expect(listReq.params).toEqual({ path: 'downloads', maxEntries: 25 });
+    const listResult = {
+      paths: ['downloads/COMPANION_EXPERIENCE.md'],
+      scannedEntries: 1,
+      maxEntries: 25,
+      maxScannedEntries: 5000,
+      truncated: false,
+      scanLimitReached: false,
+      entryLimitReached: false,
+    };
     conn._emit({
       jsonrpc: '2.0',
       id: listReq.id,
-      result: { paths: ['downloads/COMPANION_EXPERIENCE.md'] },
+      result: listResult,
     });
-    await expect(listPromise).resolves.toEqual(['downloads/COMPANION_EXPERIENCE.md']);
+    await expect(listPromise).resolves.toEqual(listResult);
 
     const searchPromise = client.fsSearch({ query: 'alpha', glob: '*.txt', maxMatches: 2 });
     const searchReq = conn.sent[2] as { id: number; method: string; params: Record<string, unknown> };

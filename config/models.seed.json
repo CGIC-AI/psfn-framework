@@ -1,5 +1,8 @@
 {
   "schemaVersion": 1,
+  "promptCaching": {
+    "enabled": false
+  },
   "models": [
     {
       "id": "primary",
@@ -171,6 +174,18 @@
       "identity": {
         "provider": "openrouter",
         "model": "google/gemma-4-31b-it",
+        "source": { "type": "openrouter" }
+      },
+      "purposes": [{ "purpose": "chat", "primary": false }],
+      "capabilities": { "maxOutputTokens": 8192, "contextWindow": 128000 },
+      "tuning": { "maxOutputTokens": 8192 }
+    },
+    {
+      "id": "gpt-5.4-nano",
+      "rank": 92,
+      "identity": {
+        "provider": "openrouter",
+        "model": "openai/gpt-5.4-nano",
         "source": { "type": "openrouter" }
       },
       "purposes": [{ "purpose": "chat", "primary": false }],

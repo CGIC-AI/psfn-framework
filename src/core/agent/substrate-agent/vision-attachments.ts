@@ -46,14 +46,24 @@ type VisionAttachmentResolutionResult =
 interface ResolvedVisionAttachmentSet {
   blocks: ImageContent[];
   failures: VisionAttachmentResolutionFailure[];
+  /** Image attachments beyond the embed cap, dropped and reported. */
+  overflowCount: number;
 }
 
 export interface TurnUserContentBuildResult {
   content: UserMessage['content'];
   currentTurnVisionReview?: CurrentTurnVisionReviewContext;
+  persistedUserContent?: string;
 }
 
+/** Max images per single vision-model call. */
 const VISION_ATTACHMENT_MAX_COUNT = 4;
+/**
+ * Per-turn ceiling across chunked concurrent vision calls (3 calls of 4).
+ * Anything beyond this is dropped LOUDLY — the turn text says how many were
+ * not reviewed; nothing is silently truncated.
+ */
+const VISION_TURN_IMAGE_CEILING = 12;
 const VISION_ATTACHMENT_MAX_BYTES = 8 * 1024 * 1024;
 const DEDICATED_VISION_REVIEW_MAX_ATTEMPTS = 3;
 const LIVE_ATTACHMENT_DIRECT_INSPECTION_INSTRUCTION = [
@@ -105,14 +115,29 @@ export function hasVisionAttachments(message?: SubstrateMessage): boolean {
   return message.attachments.some((attachment) => resolveAttachmentImageContentType(attachment) !== null);
 }
 
-export function collectVisionAttachmentUrls(message?: SubstrateMessage): string[] {
-  if (!message?.attachments || message.attachments.length === 0) return [];
-  return message.attachments
+interface VisionAttachmentUrlCollection {
+  urls: string[];
+  /** Image attachments beyond the per-turn ceiling, dropped and reported. */
+  droppedCount: number;
+}
+
+function collectVisionAttachmentUrlsDetailed(message?: SubstrateMessage): VisionAttachmentUrlCollection {
+  if (!message?.attachments || message.attachments.length === 0) {
+    return { urls: [], droppedCount: 0 };
+  }
+  const fetchable = message.attachments
     .filter((attachment) => resolveAttachmentImageContentType(attachment) !== null)
     .filter((attachment) => isFetchableAttachmentUrl(attachment.url))
-    .slice(0, VISION_ATTACHMENT_MAX_COUNT)
     .map((attachment) => attachment.url.trim())
     .filter((url) => url.length > 0);
+  return {
+    urls: fetchable.slice(0, VISION_TURN_IMAGE_CEILING),
+    droppedCount: Math.max(0, fetchable.length - VISION_TURN_IMAGE_CEILING),
+  };
+}
+
+export function collectVisionAttachmentUrls(message?: SubstrateMessage): string[] {
+  return collectVisionAttachmentUrlsDetailed(message).urls;
 }
 
 export function collectVisionTurnImageUrls(message?: SubstrateMessage): string[] {
@@ -120,13 +145,20 @@ export function collectVisionTurnImageUrls(message?: SubstrateMessage): string[]
   if (!message.attachments || message.attachments.length === 0) return [];
   return message.attachments
     .filter((attachment) => resolveAttachmentImageContentType(attachment) !== null)
-    .slice(0, VISION_ATTACHMENT_MAX_COUNT)
+    .slice(0, VISION_TURN_IMAGE_CEILING)
     .map((attachment) => attachment.url.trim())
     .filter((url) => url.length > 0);
 }
 
 export function hasVisionTurnInputs(message?: SubstrateMessage): boolean {
   return hasVisionAttachments(message);
+}
+
+export function buildPersistedVisionUnavailableUserContent(message: SubstrateMessage): string {
+  return appendPersistedImageAttachmentBlock(message.content, buildPersistedImageAttachmentBlock({
+    imageCount: countVisionTurnImageInputs(message),
+    unavailableReason: 'vision pipeline failed before image contents could be inspected.',
+  }));
 }
 
 export async function buildTurnUserContent(input: {
@@ -136,7 +168,8 @@ export async function buildTurnUserContent(input: {
   logger: VisionLogger;
   visionReviewer?: ImageVisionReviewer | null;
 }): Promise<TurnUserContentBuildResult> {
-  const visionUrls = collectVisionAttachmentUrls(input.message);
+  const visionCollection = collectVisionAttachmentUrlsDetailed(input.message);
+  const visionUrls = visionCollection.urls;
   const visionReferences = collectVisionTurnImageUrls(input.message);
   const hasInlineImages = hasInlineVisionAttachments(input.message);
   const semanticText = extractSemanticVisionTurnText(
@@ -145,7 +178,7 @@ export async function buildTurnUserContent(input: {
   );
   if (visionUrls.length > 0 && !hasInlineImages && input.visionReviewer) {
     try {
-      const review = await analyzeWithDedicatedVisionRetry({
+      const review = await analyzeVisionUrlsInChunks({
         reviewer: input.visionReviewer,
         imageUrls: visionUrls,
         question: DEDICATED_VISION_REVIEW_QUESTION,
@@ -153,13 +186,28 @@ export async function buildTurnUserContent(input: {
         channelId: input.message.channelId,
         channelType: input.message.channelType,
       });
+      const extraNotes = [...review.failureNotes];
+      if (visionCollection.droppedCount > 0) {
+        extraNotes.push(
+          `${String(visionCollection.droppedCount)} additional image attachment(s) exceeded the ${String(VISION_TURN_IMAGE_CEILING)}-image per-turn limit and were not reviewed; say so if it matters.`,
+        );
+      }
       return {
         content: buildReviewedVisionTurnText({
           summary: review.summary,
           semanticText,
+          extraNotes,
         }),
+        persistedUserContent: appendPersistedImageAttachmentBlock(
+          input.message.content,
+          buildPersistedImageAttachmentBlock({
+            summary: review.summary,
+            model: review.model,
+            imageCount: review.imageCount,
+          }),
+        ),
         currentTurnVisionReview: {
-          imageUrls: [...visionUrls],
+          imageUrls: [...review.reviewedUrls],
           question: review.question,
           summary: review.summary,
         },
@@ -177,6 +225,7 @@ export async function buildTurnUserContent(input: {
           semanticText,
           errorMessage,
         }),
+        persistedUserContent: buildPersistedVisionUnavailableUserContent(input.message),
       };
     }
   }
@@ -205,6 +254,11 @@ export async function buildTurnUserContent(input: {
     noteParts.push(PARTIAL_ATTACHMENT_RESOLUTION_INSTRUCTION);
     noteParts.push(formatVisionAttachmentFailureSummary(resolved.failures));
   }
+  if (resolved.overflowCount > 0) {
+    noteParts.push(
+      `${String(resolved.overflowCount)} additional image attachment(s) beyond the first ${String(VISION_ATTACHMENT_MAX_COUNT)} were not embedded for this turn; say so if it matters.`,
+    );
+  }
 
   const textParts = [noteParts.join(' ')];
   if (hasSemanticText) {
@@ -217,6 +271,134 @@ export async function buildTurnUserContent(input: {
       ...resolved.blocks,
     ],
   };
+}
+
+function chunkVisionUrls(urls: readonly string[], size: number): string[][] {
+  const chunks: string[][] = [];
+  for (let index = 0; index < urls.length; index += size) {
+    chunks.push(urls.slice(index, index + size));
+  }
+  return chunks;
+}
+
+interface ChunkedVisionReviewResult {
+  summary: string;
+  question: string;
+  reviewedUrls: string[];
+  imageCount: number;
+  model?: string;
+  /** Explicit notes for chunks whose review failed — never silently dropped. */
+  failureNotes: string[];
+}
+
+/**
+ * More images than one vision call accepts fan out as CONCURRENT calls (one
+ * per chunk of VISION_ATTACHMENT_MAX_COUNT) and the summaries merge with
+ * image-range labels. Vision review is a negligible-charge action, so
+ * parallel fan-out is the right default; charged generative work must never
+ * auto-parallelize like this.
+ */
+async function analyzeVisionUrlsInChunks(input: {
+  reviewer: ImageVisionReviewer;
+  imageUrls: string[];
+  question: string;
+  logger: VisionLogger;
+  channelId: string;
+  channelType?: string;
+}): Promise<ChunkedVisionReviewResult> {
+  const chunks = chunkVisionUrls(input.imageUrls, VISION_ATTACHMENT_MAX_COUNT);
+  const settled = await Promise.allSettled(chunks.map((chunk) => analyzeWithDedicatedVisionRetry({
+    ...input,
+    imageUrls: chunk,
+  })));
+
+  const summaries: string[] = [];
+  const reviewedUrls: string[] = [];
+  const failureNotes: string[] = [];
+  let reviewedImageCount = 0;
+  let model: string | undefined;
+  settled.forEach((result, index) => {
+    const chunk = chunks[index];
+    const start = index * VISION_ATTACHMENT_MAX_COUNT + 1;
+    const end = start + chunk.length - 1;
+    const rangeLabel = chunks.length === 1
+      ? null
+      : (chunk.length === 1 ? `Image ${String(start)}` : `Images ${String(start)}-${String(end)}`);
+    if (result.status === 'fulfilled') {
+      summaries.push(rangeLabel ? `${rangeLabel}: ${result.value.summary}` : result.value.summary);
+      reviewedUrls.push(...chunk);
+      reviewedImageCount += Number.isFinite(result.value.imageCount)
+        ? result.value.imageCount
+        : chunk.length;
+      if (!model && typeof result.value.model === 'string' && result.value.model.trim().length > 0) {
+        model = result.value.model.trim();
+      }
+      return;
+    }
+    failureNotes.push(
+      `Vision review failed for ${rangeLabel ?? 'the attached image(s)'}: ${toErrorMessage(result.reason)}. Do not pretend you saw those.`,
+    );
+  });
+
+  if (summaries.length === 0) {
+    const firstRejection = settled.find(
+      (result): result is PromiseRejectedResult => result.status === 'rejected',
+    );
+    const reason: unknown = firstRejection?.reason;
+    throw reason instanceof Error ? reason : new Error(toErrorMessage(reason));
+  }
+
+  const firstFulfilled = settled.find(
+    (result): result is PromiseFulfilledResult<Awaited<ReturnType<ImageVisionReviewer['analyze']>>> =>
+      result.status === 'fulfilled',
+  );
+  return {
+    summary: summaries.join('\n'),
+    question: firstFulfilled?.value.question ?? input.question,
+    reviewedUrls,
+    imageCount: reviewedImageCount || reviewedUrls.length,
+    ...(model ? { model } : {}),
+    failureNotes,
+  };
+}
+
+function countVisionTurnImageInputs(message?: SubstrateMessage): number {
+  return message?.attachments
+    ?.filter((attachment) => resolveAttachmentImageContentType(attachment) !== null)
+    .length ?? 0;
+}
+
+function appendPersistedImageAttachmentBlock(content: string, block: string): string {
+  const trimmedContent = content.trimEnd();
+  if (trimmedContent.length === 0) {
+    return block;
+  }
+  return `${trimmedContent}\n\n${block}`;
+}
+
+function buildPersistedImageAttachmentBlock(input: {
+  imageCount: number;
+  summary?: string;
+  model?: string;
+  unavailableReason?: string;
+}): string {
+  const lines = [
+    '---',
+    'Image attachment:',
+  ];
+  const summary = input.summary?.trim();
+  if (summary && summary.length > 0) {
+    lines.push(`Description: ${summary}`);
+  } else {
+    lines.push(`Description unavailable: ${input.unavailableReason ?? 'vision pipeline did not return a description.'}`);
+  }
+  const model = input.model?.trim();
+  if (model && model.length > 0) {
+    lines.push(`Model: ${model}`);
+  }
+  lines.push(`Image count: ${String(Math.max(1, input.imageCount))}`);
+  lines.push('---');
+  return lines.join('\n');
 }
 
 async function analyzeWithDedicatedVisionRetry(input: {
@@ -298,20 +480,23 @@ async function resolveVisionImageContentBlocks(input: {
     return {
       blocks: [],
       failures: [],
+      overflowCount: 0,
     };
   }
 
-  const imageAttachments = attachments
+  const allImageAttachments = attachments
     .map((attachment) => ({
       attachment,
       contentType: resolveAttachmentImageContentType(attachment),
     }))
-    .filter((entry): entry is { attachment: Attachment; contentType: string } => entry.contentType !== null)
-    .slice(0, VISION_ATTACHMENT_MAX_COUNT);
+    .filter((entry): entry is { attachment: Attachment; contentType: string } => entry.contentType !== null);
+  const imageAttachments = allImageAttachments.slice(0, VISION_ATTACHMENT_MAX_COUNT);
+  const overflowCount = allImageAttachments.length - imageAttachments.length;
   if (imageAttachments.length === 0) {
     return {
       blocks: [],
       failures: [],
+      overflowCount: 0,
     };
   }
 
@@ -351,6 +536,7 @@ async function resolveVisionImageContentBlocks(input: {
   return {
     blocks,
     failures,
+    overflowCount,
   };
 }
 
@@ -594,11 +780,15 @@ function buildUnresolvedVisionTurnText(input: {
 function buildReviewedVisionTurnText(input: {
   summary: string;
   semanticText: string;
+  extraNotes?: readonly string[];
 }): string {
   const textParts = [
     DEDICATED_VISION_REVIEW_INSTRUCTION,
     `Current image review: ${input.summary.trim()}`,
   ];
+  for (const note of input.extraNotes ?? []) {
+    textParts.push(`[Runtime note] ${note}`);
+  }
   if (input.semanticText.length > 0) {
     textParts.push(`User text: ${input.semanticText}`);
   }

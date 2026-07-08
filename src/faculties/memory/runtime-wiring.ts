@@ -1,15 +1,12 @@
 import type { ToolRegistrar } from '../../core/agent/tool-registrar.js';
+import type { ContactStorePort } from '../../core/contacts/contact-store-port.js';
 import type { MemoryStorePort } from './memory-store-port.js';
+import type { EpisodicTimelineStore } from './retrieval/episodic.js';
 import type { MemoryWriter } from './writer.js';
+import { createSharedBackgroundProvider } from './retrieval/shared-background.js';
 import {
   createMemoryTool,
-  createMemoryDeleteTool,
-  createMemoryImportTool,
-  createMemoryPatchTool,
-  createMemoryRedactTool,
   createScratchpadTool,
-  createScratchpadWriteTool,
-  createUndoMemoryDeleteTool,
 } from './tools.js';
 
 export interface MemoryRuntimeTarget {
@@ -21,14 +18,19 @@ export function registerMemoryTools(
   options: {
     writer: MemoryWriter;
     memoryStore: MemoryStorePort;
+    episodicStore?: EpisodicTimelineStore | null;
+    contactStore?: ContactStorePort | null;
   },
 ): void {
-  target.registerTool(createMemoryTool(options.writer, options.memoryStore), 'core');
+  const sharedBackgroundProvider = options.contactStore
+    ? createSharedBackgroundProvider({
+      memoryStore: options.memoryStore,
+      contactStore: options.contactStore,
+    })
+    : null;
+  target.registerTool(createMemoryTool(options.writer, options.memoryStore, {
+    episodicStore: options.episodicStore ?? null,
+    sharedBackgroundProvider,
+  }), 'core');
   target.registerTool(createScratchpadTool(options.memoryStore), 'core');
-  target.registerTool(createMemoryImportTool(options.writer), 'extended');
-  target.registerTool(createMemoryPatchTool(options.writer), 'extended');
-  target.registerTool(createMemoryRedactTool(options.writer), 'extended');
-  target.registerTool(createMemoryDeleteTool(options.memoryStore), 'extended');
-  target.registerTool(createUndoMemoryDeleteTool(options.memoryStore), 'extended');
-  target.registerTool(createScratchpadWriteTool(options.memoryStore), 'extended');
 }

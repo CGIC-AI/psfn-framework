@@ -176,4 +176,64 @@ describe('resolveStartupPreflightBundle', () => {
     expect(config.memoryRetrievalLimit).toBe(15);
     expect(config.maintenanceIntervalMs).toBe(123_000);
   });
+
+  it('fails agent startup when the static concern-softening config is missing', () => {
+    const rootDir = mkdtempSync(join(tmpdir(), 'psfn-startup-preflight-static-config-'));
+    const systemDataDir = join(rootDir, 'system-data');
+    const companionDataDir = join(rootDir, 'companion-data');
+    const legacyDataDir = join(rootDir, 'legacy-data-empty');
+    const configDir = join(rootDir, 'config');
+    mkdirSync(systemDataDir, { recursive: true });
+    mkdirSync(companionDataDir, { recursive: true });
+    mkdirSync(legacyDataDir, { recursive: true });
+    mkdirSync(configDir, { recursive: true });
+    tempDirs.push(rootDir);
+    for (const ownerFile of requiredOwnerFiles) {
+      copyOwnerExample(systemDataDir, ownerFile);
+    }
+    saveSettings(systemDataDir, {});
+    saveSchedulerConfig(systemDataDir, loadSchedulerSeedDefaults());
+
+    const config = makeStartupHydrationConfig(systemDataDir, companionDataDir);
+
+    expect(() => resolveStartupPreflightBundle(config, {
+      entrypoint: RUNTIME_MODE.GATEWAY_AGENT,
+      env: {
+        CONFIG_DIR: configDir,
+        PSFN_RUNTIME_LAYOUT_MODE: 'continuous',
+        DATA_DIR: legacyDataDir,
+      },
+      logger: { warn: vi.fn() },
+    })).toThrow(/Static startup config validation failed:[\s\S]*concern-softening\.json[\s\S]*ENOENT/);
+  });
+
+  it('requires explicit WORKSPACE_PATH for production startup preflight', () => {
+    const rootDir = mkdtempSync(join(tmpdir(), 'psfn-startup-preflight-production-'));
+    const systemDataDir = join(rootDir, 'system-data');
+    const companionDataDir = join(rootDir, 'companion-data');
+    mkdirSync(systemDataDir, { recursive: true });
+    mkdirSync(companionDataDir, { recursive: true });
+    tempDirs.push(rootDir);
+    for (const ownerFile of requiredOwnerFiles) {
+      copyOwnerExample(systemDataDir, ownerFile);
+    }
+    saveSettings(systemDataDir, {});
+    saveSchedulerConfig(systemDataDir, loadSchedulerSeedDefaults());
+
+    const config = makeStartupHydrationConfig(systemDataDir, companionDataDir);
+    const env = {
+      CONFIG_DIR: './config',
+      PSFN_RUNTIME_LAYOUT_MODE: 'production',
+      SYSTEM_DATA_DIR: systemDataDir,
+      COMPANION_DATA_DIR: companionDataDir,
+    };
+
+    expect(() => resolveStartupPreflightBundle(config, {
+      entrypoint: RUNTIME_MODE.GATEWAY_AGENT,
+      env,
+      logger: { warn: vi.fn() },
+    })).toThrow(
+      'WORKSPACE_PATH is required for production runtime startup. Set WORKSPACE_PATH to the explicit personal files root.',
+    );
+  });
 });

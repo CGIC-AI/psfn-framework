@@ -39,7 +39,6 @@ export class PromptsLayerService {
       const validationMessage = this.context.buildRuntimePromptLayerValidationMessage([
         ...this.context.deps.promptStore.getAll(),
         {
-          id: 'preview:runtime-layer',
           type,
           identifier: resolvedMetadata.metadata.identifier,
           content,

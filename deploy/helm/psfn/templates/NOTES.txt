@@ -1,0 +1,33 @@
+PSFN rendered for namespace {{ .Release.Namespace }}.
+
+Public/operator entrypoints:
+- Gateway API Service: {{ include "psfn.gatewayApiServiceName" . }}:{{ .Values.ports.gatewayApi }}
+- Garden Service: {{ include "psfn.gardenServiceName" . }}:{{ .Values.ports.garden }}
+{{- if .Values.satelliteHub.enabled }}
+- Satellite Hub Service: {{ include "psfn.satelliteHubServiceName" . }}:{{ .Values.ports.satelliteHub }}
+  Websocket ingress path: {{ .Values.ingress.satelliteHub.path }}
+  Gateway API URL used by the hub: {{ printf "http://%s:%v/v1" (include "psfn.gatewayApiServiceName" .) .Values.ports.gatewayApi }}
+{{- end }}
+
+Internal mTLS transports:
+- Gateway RPC: {{ include "psfn.gatewayRpcUrlForClient" . }}
+- Agent admin transport: {{ include "psfn.agentAdminUrl" . }}
+
+Before using this install, replace CHANGE_ME_* values in Kubernetes Secrets or
+set secrets.existingSecret to an operator-managed Secret. Secret values are not
+printed here.
+
+Required cluster prerequisites:
+- cert-manager CRDs/controllers
+- StorageClass for PVCs
+- NetworkPolicy-capable CNI if policy enforcement is required
+{{- if .Values.modelPrefetch.enabled }}
+- model prefetch external egress to model provider endpoints; NetworkPolicy can
+  allow TCP/443 for the Job, but hostname allowlisting must be enforced by your
+  CNI, firewall, proxy, or egress gateway
+
+Model prefetch:
+- Job: {{ include "psfn.fullname" . }}-model-prefetch
+- Wait before starting restricted-egress agent pods:
+  kubectl -n {{ .Release.Namespace }} wait --for=condition=complete job/{{ include "psfn.fullname" . }}-model-prefetch --timeout=30m
+{{- end }}

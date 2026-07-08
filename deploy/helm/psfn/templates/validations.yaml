@@ -1,0 +1,77 @@
+{{- if not .Values.certificates.enabled -}}
+{{- fail "certificates.enabled must be true because PSFN Kubernetes network transports require mTLS certificates" -}}
+{{- end -}}
+{{- if and .Values.certificates.enabled (not .Values.certificates.issuer.create) (not .Values.certificates.issuer.existingIssuerRef.name) (not .Values.certificates.issuer.name) -}}
+{{- fail "certificates.issuer.existingIssuerRef.name or certificates.issuer.name is required when certificates.issuer.create=false" -}}
+{{- end -}}
+{{- if and .Values.certificates.issuer.create .Values.certificates.issuer.existingIssuerRef.name -}}
+{{- fail "certificates.issuer.existingIssuerRef.name must be empty when certificates.issuer.create=true" -}}
+{{- end -}}
+{{- /* The generated CA secret is namespaced to the release, but cert-manager resolves
+ClusterIssuer CA secrets in its cluster-resource namespace, so a chart-created CA can
+never back a ClusterIssuer. */ -}}
+{{- if and .Values.certificates.issuer.create (ne .Values.certificates.issuer.kind "Issuer") -}}
+{{- fail "certificates.issuer.kind must be Issuer when certificates.issuer.create=true; use certificates.issuer.existingIssuerRef for a ClusterIssuer" -}}
+{{- end -}}
+{{- if and (not .Values.postgres.enabled) (not .Values.postgres.external.enabled) -}}
+{{- fail "postgres.enabled=false requires postgres.external.enabled=true with an existing database URL Secret" -}}
+{{- end -}}
+{{- if and .Values.redis.enabled (not (or (eq .Values.redis.mode "internal") (eq .Values.redis.mode "external"))) -}}
+{{- fail "redis.mode must be internal or external when redis.enabled=true" -}}
+{{- end -}}
+{{- if and .Values.redis.enabled (eq .Values.redis.mode "external") (not .Values.redis.external.url) -}}
+{{- fail "redis.external.url is required when redis.mode=external" -}}
+{{- end -}}
+{{- if and .Values.liteLlm.enabled (not (or (eq .Values.liteLlm.mode "internal") (eq .Values.liteLlm.mode "external"))) -}}
+{{- fail "liteLlm.mode must be internal or external when liteLlm.enabled=true" -}}
+{{- end -}}
+{{- if and .Values.liteLlm.enabled (eq .Values.liteLlm.mode "external") (not .Values.liteLlm.external.baseUrl) -}}
+{{- fail "liteLlm.external.baseUrl is required when liteLlm.mode=external" -}}
+{{- end -}}
+{{- if and .Values.liteLlm.enabled .Values.secrets.create (not .Values.secrets.existingSecret) (not .Values.secrets.allowMissingRequired) -}}
+{{- $_ := required "secrets.values.liteLlmApiKey is required for liteLlm.enabled=true when secrets.allowMissingRequired=false" .Values.secrets.values.liteLlmApiKey -}}
+{{- end -}}
+{{- if .Values.repositoryCheckout.enabled -}}
+{{- if not .Values.repositoryCheckout.mountPath -}}
+{{- fail "repositoryCheckout.mountPath is required when repositoryCheckout.enabled=true" -}}
+{{- end -}}
+{{- $hasHostPath := ne (default "" .Values.repositoryCheckout.hostPath.path) "" -}}
+{{- $hasPvc := ne (default "" .Values.repositoryCheckout.persistentVolumeClaim.claimName) "" -}}
+{{- if eq $hasHostPath $hasPvc -}}
+{{- fail "repositoryCheckout.enabled=true requires exactly one of repositoryCheckout.hostPath.path or repositoryCheckout.persistentVolumeClaim.claimName" -}}
+{{- end -}}
+{{- if and $hasHostPath (not (has .Values.repositoryCheckout.hostPath.type (list "" "Directory" "DirectoryOrCreate"))) -}}
+{{- fail "repositoryCheckout.hostPath.type must be empty, Directory, or DirectoryOrCreate" -}}
+{{- end -}}
+{{- end -}}
+{{- if .Values.beads.allowActions -}}
+{{- range .Values.beads.allowActions -}}
+{{- if not (has . (list "ready" "show" "create" "update" "close" "sync")) -}}
+{{- fail "beads.allowActions entries must be one of: ready, show, create, update, close, sync" -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- if and .Values.secrets.create (not .Values.secrets.existingSecret) (not .Values.secrets.allowMissingRequired) -}}
+{{- $_ := required "secrets.values.backupEncryptionKey is required when secrets.allowMissingRequired=false" .Values.secrets.values.backupEncryptionKey -}}
+{{- end -}}
+{{- if .Values.modelPrefetch.enabled -}}
+{{- if not .Values.persistence.modelCache.enabled -}}
+{{- fail "modelPrefetch.enabled=true requires persistence.modelCache.enabled=true" -}}
+{{- end -}}
+{{- if not .Values.modelPrefetch.textEmotion.enabled -}}
+{{- fail "modelPrefetch.enabled=true requires modelPrefetch.textEmotion.enabled=true until another prefetch target is configured" -}}
+{{- end -}}
+{{- if not .Values.modelPrefetch.textEmotion.model -}}
+{{- fail "modelPrefetch.textEmotion.model is required when modelPrefetch.enabled=true" -}}
+{{- end -}}
+{{- if not (has .Values.modelPrefetch.textEmotion.dtype (list "auto" "fp32" "fp16" "q8" "int8" "uint8" "q4" "bnb4" "q4f16")) -}}
+{{- fail "modelPrefetch.textEmotion.dtype must be one of: auto, fp32, fp16, q8, int8, uint8, q4, bnb4, q4f16" -}}
+{{- end -}}
+{{- end -}}
+{{- if and .Values.satelliteHub.enabled (ne .Values.satelliteHub.agentRuntime "psfn") -}}
+{{- fail "satelliteHub.agentRuntime must be psfn so the hub uses the in-cluster Gateway Service" -}}
+{{- end -}}
+{{- if and .Values.satelliteHub.enabled .Values.secrets.create (not .Values.secrets.existingSecret) (not .Values.secrets.allowMissingRequired) -}}
+{{- $_ := required "secrets.values.deepgramApiKey is required for satelliteHub.enabled=true when secrets.allowMissingRequired=false" .Values.secrets.values.deepgramApiKey -}}
+{{- $_ := required "secrets.values.elevenLabsApiKey is required for satelliteHub.enabled=true when secrets.allowMissingRequired=false" .Values.secrets.values.elevenLabsApiKey -}}
+{{- end -}}

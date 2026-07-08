@@ -193,7 +193,7 @@ export async function runMoaTurn(input: {
       chargePolicy: input.config.chargePolicy,
       eventBus: {
         emit: async (eventName, payload) => {
-          input.emitTelemetry(eventName, payload);
+          input.emitTelemetry(eventName, payload as unknown as Record<string, unknown>);
         },
       },
       lane: 'interactive',

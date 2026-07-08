@@ -12,6 +12,8 @@ import {
   ANALYSIS_WORKBENCH_CHILD_SOURCE,
 } from './execution/analysis-workbench-child-source.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
+import { createComponentLogger } from '../../shared/logger.js';
+import { createRateLimitedLogEmitter } from '../../shared/log-rate-limit.js';
 
 type SandboxExecutionPortSeed =
   Pick<SandboxExecutionPort, 'boundary' | 'shellExec'>
@@ -28,7 +30,14 @@ type ChildSandboxMessage =
   | ({
     type: 'sandbox_result';
     protocol: typeof ANALYSIS_WORKBENCH_CHILD_PROTOCOL;
-  } & SandboxCodeExecutionResponse);
+  } & SandboxCodeExecutionResponse)
+  | {
+    type: 'sandbox_debug_log';
+    protocol: typeof ANALYSIS_WORKBENCH_CHILD_PROTOCOL;
+    message: string;
+    key: string;
+    details?: unknown;
+  };
 
 const DEFAULT_SHELL_UNAVAILABLE_REASON = 'shell_exec unavailable: requires sandbox broker boundary and audit path';
 const CHILD_PROCESS_BOUNDARY_REASON =
@@ -57,6 +66,8 @@ const CHILD_STDIO = ['ignore', 'pipe', 'pipe', 'ipc'] as const;
 const MAX_IPC_DEPTH = 20;
 const MAX_IPC_ARRAY_LENGTH = 10_000;
 const MAX_IPC_OBJECT_KEYS = 2_000;
+const log = createComponentLogger('AnalysisWorkbenchSandbox');
+const rateLimitedDebugLog = createRateLimitedLogEmitter({ windowMs: 60_000 });
 
 function createUnavailableShellBoundary(): GatewayProcessExecutionBoundary {
   return {
@@ -172,8 +183,44 @@ function isChildSandboxMessage(message: unknown): message is ChildSandboxMessage
   if (!message || typeof message !== 'object') return false;
   const candidate = message as { type?: unknown; protocol?: unknown };
   return (
-    (candidate.type === 'sandbox_helper_call' || candidate.type === 'sandbox_result')
+    (
+      candidate.type === 'sandbox_helper_call'
+      || candidate.type === 'sandbox_result'
+      || candidate.type === 'sandbox_debug_log'
+    )
     && candidate.protocol === ANALYSIS_WORKBENCH_CHILD_PROTOCOL
+  );
+}
+
+function normalizeSandboxDebugDetails(value: unknown): Record<string, unknown> {
+  const sanitized = sanitizeForIpc(value);
+  if (!sanitized || typeof sanitized !== 'object' || Array.isArray(sanitized)) {
+    return {};
+  }
+  return sanitized as Record<string, unknown>;
+}
+
+// The child is untrusted: a malformed or unbounded key must not grow the
+// rate-limit key map, so non-string/empty keys collapse into one bucket and
+// oversized keys are truncated to a fixed bound.
+const MAX_SANDBOX_DEBUG_KEY_LENGTH = 128;
+const INVALID_SANDBOX_DEBUG_KEY_BUCKET = 'sandbox_debug_log:invalid-key';
+
+export function normalizeSandboxDebugLogKey(value: unknown): string {
+  if (typeof value !== 'string' || value.trim().length === 0) {
+    return INVALID_SANDBOX_DEBUG_KEY_BUCKET;
+  }
+  return value.length > MAX_SANDBOX_DEBUG_KEY_LENGTH
+    ? value.slice(0, MAX_SANDBOX_DEBUG_KEY_LENGTH)
+    : value;
+}
+
+function handleSandboxDebugLog(
+  message: Extract<ChildSandboxMessage, { type: 'sandbox_debug_log' }>,
+): void {
+  rateLimitedDebugLog(
+    normalizeSandboxDebugLogKey(message.key),
+    () => log.debug(message.message, normalizeSandboxDebugDetails(message.details)),
   );
 }
 
@@ -253,12 +300,12 @@ async function executeCodeInChildProcess(
   const timeoutMs = normalizeTimeoutMs(request.timeoutMs);
 
   return await new Promise<SandboxCodeExecutionResponse>((resolve) => {
-    const child = spawn(
+    const child: ChildProcess = spawn(
       process.execPath,
-      CHILD_PROCESS_NODE_ARGS,
+      [...CHILD_PROCESS_NODE_ARGS],
       {
         env: {},
-        stdio: CHILD_STDIO,
+        stdio: [...CHILD_STDIO],
         serialization: 'advanced',
       },
     );
@@ -300,14 +347,19 @@ async function executeCodeInChildProcess(
         return;
       }
 
+      if (rawMessage.type === 'sandbox_debug_log') {
+        handleSandboxDebugLog(rawMessage);
+        return;
+      }
+
       void handleHelperCall(child, request, rawMessage);
     });
 
-    child.on('error', (error) => {
+    child.on('error', (error: Error) => {
       settle(createChildProcessFailure(`child process sandbox failed: ${toErrorMessage(error)}`));
     });
 
-    child.on('exit', (code, signal) => {
+    child.on('exit', (code: number | null, signal: NodeJS.Signals | null) => {
       if (settled) return;
       const stderr = stderrChunks.join('').trim();
       const suffix = stderr ? `: ${stderr}` : '';

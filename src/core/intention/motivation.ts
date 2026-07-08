@@ -1,5 +1,7 @@
+import { isRecord } from '../../shared/utils/types.js';
 import type { EmotionalSnapshot } from '../contacts/store/emotional-baseline.js';
 import type { EmotionStateSnapshot } from '../emotion/state.js';
+import type { EmotionTelemetryValidation } from '../emotion/telemetry-validation.js';
 
 export type MotivationSignalKind =
   | 'vad_delta'
@@ -56,6 +58,7 @@ export interface MotivationBridgeConfig {
 export interface MotivationBridgeInput {
   sessionId: string;
   currentEmotion: EmotionStateSnapshot | null;
+  emotionTelemetry?: EmotionTelemetryValidation | null;
   contactEmotionalSnapshot?: EmotionalSnapshot | null;
   isPrimaryContact?: boolean;
 }
@@ -82,9 +85,6 @@ interface SessionMotivationState {
 
 const EPSILON = 1e-6;
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
 
 function normalizeSessionId(value: unknown): string {
   if (typeof value !== 'string') {
@@ -262,7 +262,10 @@ export class MotivationBridge {
     };
 
     const currentEmotion = input.currentEmotion ? normalizeEmotionSnapshot(input.currentEmotion) : null;
-    if (!currentEmotion) {
+    const telemetryTrusted = input.emotionTelemetry === undefined
+      || input.emotionTelemetry === null
+      || input.emotionTelemetry.status === 'trusted';
+    if (!currentEmotion || !telemetryTrusted) {
       this.sessionState.set(sessionId, {
         previousEmotion: null,
         negativeValenceStreak: 0,
@@ -273,7 +276,7 @@ export class MotivationBridge {
         profile,
         signals: [],
         metrics: {
-          confidence: 0,
+          confidence: currentEmotion?.confidence ?? 0,
           maxEmotionDelta: 0,
           arousalDelta: 0,
           moodDrift: 0,

@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -36,6 +37,10 @@ import {
   SensitiveImportRoutePolicyError,
 } from './client.js';
 import { MODEL_USAGE_LEDGER_FILE_NAME } from './model-budget.js';
+import {
+  CircuitOpenError,
+  SlidingWindowCircuitBreaker,
+} from '../../shared/resilience/circuit-breaker.js';
 
 function createDeferred<T>() {
   let resolve!: (value: T | PromiseLike<T>) => void;
@@ -674,6 +679,171 @@ describe('LLMClient provider observability', () => {
   });
 });
 
+// mihm: a GLM upstream intermittently emits a tool call whose streamed arguments are a
+// literal empty object; dispatching it fails validation for required-property tools (or,
+// worse, silently defaults an optional action). The client re-runs the whole completion
+// (bounded) when the result carries a corrupt-empty tool call against a required schema,
+// and fails closed by returning the last response as-is once retries are exhausted.
+describe('LLMClient empty-tool-args completion retry (mihm)', () => {
+  const requiredActionTool = {
+    name: 'journal',
+    description: 'journal tool',
+    inputSchema: {
+      type: 'object',
+      properties: { action: { type: 'string' } },
+      required: ['action'],
+    },
+  };
+  const optionalActionTool = {
+    name: 'session',
+    description: 'session tool',
+    inputSchema: {
+      type: 'object',
+      properties: { action: { type: 'string' } },
+    },
+  };
+
+  function doneWithToolCall(name: string, args: Record<string, unknown>) {
+    return {
+      type: 'done',
+      reason: 'toolUse',
+      message: {
+        model: 'z-ai/glm-5',
+        usage: { input: 17, output: 9 },
+        content: [{ type: 'toolCall', id: `call-${name}`, name, arguments: args }],
+      },
+    };
+  }
+
+  function streamYielding(...events: Array<Record<string, unknown>>) {
+    return async function* () {
+      for (const event of events) {
+        yield event;
+      }
+    };
+  }
+
+  beforeEach(() => {
+    mocks.getModel.mockReset();
+    mocks.getModels.mockReset();
+    mocks.getProviders.mockReset();
+    mocks.completeSimple.mockReset();
+    mocks.streamSimple.mockReset();
+    mocks.getEnvApiKey.mockReset();
+
+    mocks.getModel.mockImplementation((provider: string, modelId: string) => ({
+      id: modelId,
+      provider,
+      name: modelId,
+      api: 'openai-completions',
+      input: ['text'],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 128_000,
+      maxTokens: 8192,
+      reasoning: true,
+    }));
+    mocks.getProviders.mockReturnValue(['openrouter']);
+    mocks.getModels.mockImplementation((provider: string) => [
+      {
+        id: 'z-ai/glm-5',
+        provider,
+        name: 'z-ai/glm-5',
+        api: 'openai-completions',
+        input: ['text'],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 128_000,
+        maxTokens: 8192,
+        reasoning: true,
+      },
+    ]);
+    mocks.getEnvApiKey.mockReturnValue(undefined);
+  });
+
+  it('retries and returns the recovered result when a later attempt yields valid args', async () => {
+    const usageRecorder = { recordUsageEvent: vi.fn(async () => undefined) };
+    const client = new LLMClient(makeConfig(), { usageRecorder });
+
+    mocks.streamSimple
+      .mockImplementationOnce(streamYielding(doneWithToolCall('journal', {})))
+      .mockImplementation(streamYielding(doneWithToolCall('journal', { action: 'list' })));
+
+    const response = await client.stream({
+      systemPrompt: 'System',
+      messages: [{ role: 'user', content: 'journal please' }],
+      tools: [requiredActionTool],
+    });
+
+    expect(mocks.streamSimple).toHaveBeenCalledTimes(2);
+    expect(response.toolCalls).toEqual([
+      { id: 'call-journal', name: 'journal', input: { action: 'list' } },
+    ]);
+    expect(usageRecorder.recordUsageEvent).toHaveBeenCalledWith(expect.objectContaining({
+      metadata: expect.objectContaining({ emptyArgsRetries: 1 }),
+    }));
+  });
+
+  it('fails closed after exhausting retries: returns the corrupt-empty response as-is', async () => {
+    const usageRecorder = { recordUsageEvent: vi.fn(async () => undefined) };
+    const client = new LLMClient(makeConfig(), { usageRecorder });
+
+    mocks.streamSimple.mockImplementation(streamYielding(doneWithToolCall('journal', {})));
+
+    const response = await client.stream({
+      systemPrompt: 'System',
+      messages: [{ role: 'user', content: 'journal please' }],
+      tools: [requiredActionTool],
+    });
+
+    // 1 initial attempt + 2 bounded retries, then the corrupt tool call is returned intact
+    // so downstream AJV validation surfaces the error (never fabricated/dropped/defaulted).
+    expect(mocks.streamSimple).toHaveBeenCalledTimes(3);
+    expect(response.toolCalls).toEqual([
+      { id: 'call-journal', name: 'journal', input: {} },
+    ]);
+    expect(usageRecorder.recordUsageEvent).toHaveBeenCalledWith(expect.objectContaining({
+      metadata: expect.objectContaining({ emptyArgsRetries: 2 }),
+    }));
+  });
+
+  it('does not retry when the tool schema accepts empty arguments', async () => {
+    const usageRecorder = { recordUsageEvent: vi.fn(async () => undefined) };
+    const client = new LLMClient(makeConfig(), { usageRecorder });
+
+    mocks.streamSimple.mockImplementation(streamYielding(doneWithToolCall('session', {})));
+
+    const response = await client.stream({
+      systemPrompt: 'System',
+      messages: [{ role: 'user', content: 'session status' }],
+      tools: [optionalActionTool],
+    });
+
+    expect(mocks.streamSimple).toHaveBeenCalledTimes(1);
+    expect(response.toolCalls).toEqual([
+      { id: 'call-session', name: 'session', input: {} },
+    ]);
+    expect(usageRecorder.recordUsageEvent).toHaveBeenCalledWith(expect.objectContaining({
+      metadata: expect.objectContaining({ emptyArgsRetries: 0 }),
+    }));
+  });
+
+  it('does not retry a tool call that already carries valid non-empty args', async () => {
+    const client = new LLMClient(makeConfig());
+
+    mocks.streamSimple.mockImplementation(streamYielding(doneWithToolCall('journal', { action: 'list' })));
+
+    const response = await client.stream({
+      systemPrompt: 'System',
+      messages: [{ role: 'user', content: 'journal please' }],
+      tools: [requiredActionTool],
+    });
+
+    expect(mocks.streamSimple).toHaveBeenCalledTimes(1);
+    expect(response.toolCalls).toEqual([
+      { id: 'call-journal', name: 'journal', input: { action: 'list' } },
+    ]);
+  });
+});
+
 describe('LLMClient prompt caching', () => {
   beforeEach(() => {
     mocks.getModel.mockReset();
@@ -843,6 +1013,186 @@ describe('LLMClient prompt caching', () => {
     });
   });
 });
+
+describe('LLMClient model-agnostic prompt caching (E2.4)', () => {
+  const STATIC_TEXT = 'STATIC IDENTITY.';
+  const SESSION_TEXT = 'SESSION NOTES.';
+  const VOLATILE_TEXT = 'TURN CONTEXT.';
+  const SYSTEM_PROMPT = [STATIC_TEXT, SESSION_TEXT, VOLATILE_TEXT].join('\n\n');
+  const STATIC_PREFIX = STATIC_TEXT;
+  const SESSION_STABLE_PREFIX = `${STATIC_TEXT}\n\n${SESSION_TEXT}`;
+
+  beforeEach(() => {
+    mocks.getModel.mockReset();
+    mocks.getModels.mockReset();
+    mocks.getProviders.mockReset();
+    mocks.completeSimple.mockReset();
+    mocks.streamSimple.mockReset();
+    mocks.getEnvApiKey.mockReset();
+    mocks.getProviders.mockReturnValue(['openrouter']);
+    mocks.getModels.mockReturnValue([]);
+    mocks.getEnvApiKey.mockReturnValue(undefined);
+  });
+
+  function makeRegistry(model: string): CanonicalModelRegistry {
+    return {
+      schemaVersion: 1,
+      promptCaching: { enabled: true, retention: 'short', scope: 'channel' },
+      models: [
+        {
+          id: 'summary-primary',
+          rank: 10,
+          identity: {
+            provider: 'openrouter',
+            model,
+            source: { type: 'openrouter' },
+          },
+          purposes: [{ purpose: 'summary', primary: true }],
+          capabilities: { maxOutputTokens: 4096, contextWindow: 128_000 },
+          tuning: { maxOutputTokens: 4096 },
+        },
+      ],
+    };
+  }
+
+  function makeBoundaries() {
+    const hash = (value: string) => createHash('sha256').update(value, 'utf8').digest('hex');
+    return {
+      staticPrefixChars: STATIC_PREFIX.length,
+      staticPrefixHash: hash(STATIC_PREFIX),
+      sessionStablePrefixChars: SESSION_STABLE_PREFIX.length,
+      sessionStablePrefixHash: hash(SESSION_STABLE_PREFIX),
+    };
+  }
+
+  async function runComplete(model: string, options: { boundaries?: boolean; enabled?: boolean } = {}) {
+    const registry = makeRegistry(model);
+    if (options.enabled === false) {
+      delete (registry as { promptCaching?: unknown }).promptCaching;
+    }
+    const client = new LLMClient(makeConfig({ modelRegistry: registry }), 'http://litellm.test/v1');
+    mocks.completeSimple.mockResolvedValue({
+      content: [{ type: 'text', text: 'ok' }],
+      model,
+      usage: { input: 9, output: 4 },
+      stopReason: 'stop',
+    });
+    const response = await client.complete(
+      {
+        systemPrompt: SYSTEM_PROMPT,
+        messages: [{ role: 'user', content: 'Hi' }],
+        ...(options.boundaries === false ? {} : { promptCacheBoundaries: makeBoundaries() }),
+        correlation: {
+          requestId: 'req-e24-1',
+          channelId: 'discord:e24-channel',
+          callType: 'summary',
+          originType: 'summary',
+          originStage: 'agent.summary',
+          purpose: 'summary',
+        },
+      },
+      'summary',
+      { disableRetry: true },
+    );
+    const requestOptions = mocks.completeSimple.mock.calls[0][2] as {
+      cacheRetention?: string;
+      sessionId?: string;
+      onPayload?: (payload: unknown, model: unknown) => unknown;
+    };
+    return { response, requestOptions };
+  }
+
+  it('applies cache_control passthrough for OpenRouter anthropic targets at the plan boundaries (AC2)', async () => {
+    const { response, requestOptions } = await runComplete('anthropic/claude-sonnet-4.5');
+
+    expect(requestOptions.cacheRetention).toBe('short');
+    expect(requestOptions.sessionId).toBe('discord:e24-channel');
+    expect(typeof requestOptions.onPayload).toBe('function');
+
+    // Exercise the transformer against the completions payload shape pi-ai builds.
+    const payload = {
+      model: 'openrouter/anthropic/claude-sonnet-4.5',
+      messages: [
+        { role: 'system', content: SYSTEM_PROMPT },
+        { role: 'user', content: 'Hi' },
+      ],
+    };
+    const transformed = await requestOptions.onPayload!(payload, { provider: 'openrouter' }) as typeof payload;
+    expect(transformed.messages[0]).toEqual({
+      role: 'system',
+      content: [
+        { type: 'text', text: STATIC_PREFIX, cache_control: { type: 'ephemeral' } },
+        { type: 'text', text: `\n\n${SESSION_TEXT}`, cache_control: { type: 'ephemeral' } },
+        { type: 'text', text: `\n\n${VOLATILE_TEXT}` },
+      ],
+    });
+    expect(transformed.messages[1]).toEqual({ role: 'user', content: 'Hi' });
+
+    expect(response.providerObservability).toMatchObject({
+      promptCaching: {
+        configured: true,
+        engaged: true,
+        mechanism: 'openrouter_cache_control_passthrough',
+        retention: 'short',
+        scope: 'channel',
+        sessionId: 'discord:e24-channel',
+        boundaries: {
+          staticPrefixChars: STATIC_PREFIX.length,
+          sessionStablePrefixChars: SESSION_STABLE_PREFIX.length,
+        },
+        appliedBreakpoints: 2,
+      },
+    });
+  });
+
+  it('sends only supported passthrough params for open models — no payload transformer (AC2)', async () => {
+    const { response, requestOptions } = await runComplete('z-ai/glm-5');
+
+    expect(requestOptions.cacheRetention).toBe('short');
+    expect(requestOptions.sessionId).toBe('discord:e24-channel');
+    expect(requestOptions.onPayload).toBeUndefined();
+    expect(response.providerObservability).toMatchObject({
+      promptCaching: {
+        configured: true,
+        engaged: true,
+        mechanism: 'implicit_prefix',
+        retention: 'short',
+        scope: 'channel',
+      },
+    });
+  });
+
+  it('keeps the wire byte-identical when the flag is off (default)', async () => {
+    const { response, requestOptions } = await runComplete('anthropic/claude-sonnet-4.5', { enabled: false });
+
+    expect(requestOptions.cacheRetention).toBeUndefined();
+    expect(requestOptions.sessionId).toBeUndefined();
+    expect(requestOptions.onPayload).toBeUndefined();
+    expect(response.providerObservability).toMatchObject({
+      promptCaching: {
+        configured: false,
+        engaged: false,
+      },
+    });
+  });
+
+  it('skips breakpoints (but keeps retention) when no boundaries accompany the request', async () => {
+    const { response, requestOptions } = await runComplete('anthropic/claude-sonnet-4.5', { boundaries: false });
+
+    expect(requestOptions.cacheRetention).toBe('short');
+    expect(requestOptions.onPayload).toBeUndefined();
+    expect(response.providerObservability).toMatchObject({
+      promptCaching: {
+        configured: true,
+        engaged: true,
+        mechanism: 'openrouter_cache_control_passthrough',
+      },
+    });
+    const promptCaching = (response.providerObservability as { promptCaching: Record<string, unknown> }).promptCaching;
+    expect(promptCaching.boundaries).toBeUndefined();
+    expect(promptCaching.appliedBreakpoints).toBeUndefined();
+  });
+});
 describe('LLMClient completion model hints', () => {
   beforeEach(() => {
     mocks.getModel.mockReset();
@@ -917,6 +1267,48 @@ describe('LLMClient completion model hints', () => {
     expect(mocks.completeSimple).toHaveBeenCalledTimes(1);
     const requestOptions = mocks.completeSimple.mock.calls[0][2] as { maxTokens: number };
     expect(requestOptions.maxTokens).toBe(77);
+  });
+
+  it('caps hinted-model output at the registry entry maxOutputTokens', async () => {
+    const config = makeConfig();
+    config.modelRegistry!.models.push({
+      id: 'claude-opus-3',
+      rank: 200,
+      identity: {
+        provider: 'anthropic',
+        model: 'anthropic/claude-3-opus-20240229',
+        source: { type: 'litellm' },
+      },
+      purposes: [{ purpose: 'moa', primary: false }],
+      capabilities: { maxOutputTokens: 4096, contextWindow: 200_000 },
+    });
+    const client = new LLMClient(config, 'http://litellm.test/v1');
+    mocks.completeSimple.mockResolvedValue({
+      content: [{ type: 'text', text: 'capped response' }],
+      model: 'anthropic/claude-3-opus-20240229',
+      usage: { input: 12, output: 4 },
+      stopReason: 'stop',
+    });
+
+    await client.complete(
+      {
+        systemPrompt: '',
+        messages: [{ role: 'user', content: 'Reply' }],
+      },
+      'reasoning',
+      {
+        disableRetry: true,
+        modelHint: {
+          provider: 'anthropic',
+          model: 'anthropic/claude-3-opus-20240229',
+          pin: true,
+        },
+      },
+    );
+
+    expect(mocks.completeSimple).toHaveBeenCalledTimes(1);
+    const requestOptions = mocks.completeSimple.mock.calls[0][2] as { maxTokens: number };
+    expect(requestOptions.maxTokens).toBe(4096);
   });
 
   it('fails closed when modelHint.model references a legacy slot key', async () => {
@@ -1022,6 +1414,64 @@ describe('LLMClient completion model hints', () => {
     expect(mocks.completeSimple).toHaveBeenCalledTimes(1);
     const model = mocks.completeSimple.mock.calls[0][0] as { id: string };
     expect(model.id).toBe('openrouter/z-ai/glm-5');
+  });
+
+  it('preserves OpenRouter model ids for direct OpenRouter endpoint routing', async () => {
+    const client = new LLMClient(makeConfig({
+      openRouterApiBaseUrl: 'https://openrouter.ai/api/v1',
+      credentialVault: createEnvCredentialVault({
+        OPENROUTER_API_KEY: 'vault-openrouter-key',
+      }),
+      modelRegistry: {
+        schemaVersion: 1,
+        models: [
+          {
+            id: 'chat-direct-openrouter',
+            rank: 10,
+            identity: {
+              provider: 'litellm',
+              model: 'moonshotai/kimi-k2.6',
+              source: {
+                type: 'openrouter',
+                baseUrl: 'https://openrouter.ai/api/v1',
+              },
+            },
+            purposes: [{ purpose: 'summary', primary: true }],
+            capabilities: {
+              maxOutputTokens: 8192,
+              contextWindow: 262_144,
+            },
+            tuning: {
+              maxOutputTokens: 8192,
+              contextWindow: 262_144,
+            },
+          },
+        ],
+      },
+    }));
+    mocks.completeSimple.mockResolvedValue({
+      content: [{ type: 'text', text: 'direct openrouter response' }],
+      model: 'moonshotai/kimi-k2.6',
+      usage: { input: 12, output: 6 },
+      stopReason: 'stop',
+    });
+
+    await client.complete(
+      {
+        systemPrompt: 'System',
+        messages: [{ role: 'user', content: 'Reply' }],
+      },
+      'summary',
+      { disableRetry: true },
+    );
+
+    expect(mocks.completeSimple).toHaveBeenCalledTimes(1);
+    const model = mocks.completeSimple.mock.calls[0][0] as { id: string; baseUrl: string; provider: string };
+    const requestOptions = mocks.completeSimple.mock.calls[0][2] as { apiKey: string };
+    expect(model.id).toBe('moonshotai/kimi-k2.6');
+    expect(model.provider).toBe('openrouter');
+    expect(model.baseUrl).toBe('https://openrouter.ai/api/v1');
+    expect(requestOptions.apiKey).toBe('vault-openrouter-key');
   });
 
   it('pins explicit model hints to a single candidate when requested', () => {
@@ -1165,6 +1615,7 @@ describe('LLMClient model knob plumbing', () => {
               ...entry.identity,
               provider: 'anthropic',
               model: 'claude-sonnet-4-5',
+              source: { type: 'anthropic' },
             },
             tuning: {
               ...(entry.tuning ?? {}),
@@ -1748,6 +2199,141 @@ describe('LLMClient model budget gates and usage metering', () => {
     mocks.getEnvApiKey.mockReturnValue(undefined);
   });
 
+  it('normalizes OpenRouter streaming usage accounting into provider cost telemetry', async () => {
+    const usageRecorder = { recordUsageEvent: vi.fn(async () => undefined) };
+    const client = new LLMClient(makeConfig(), {
+      litellmBaseUrl: 'http://litellm.test/v1',
+      usageRecorder,
+    });
+
+    mocks.streamSimple.mockImplementation(async function* () {
+      yield {
+        type: 'done',
+        message: {
+          model: 'z-ai/glm-5',
+          usage: {
+            completion_tokens: 2,
+            completion_tokens_details: { reasoning_tokens: 1 },
+            cost: 0.95,
+            cost_details: { upstream_inference_cost: 19 },
+            prompt_tokens: 194,
+            prompt_tokens_details: {
+              cached_tokens: 7,
+              cache_write_tokens: 11,
+            },
+            total_tokens: 196,
+          },
+          content: [{ type: 'text', text: 'ok' }],
+        },
+        reason: 'stop',
+      };
+    });
+
+    const response = await client.stream({
+      systemPrompt: 'System',
+      messages: [{ role: 'user', content: 'Hello there' }],
+      correlation: {
+        turnId: 'turn-openrouter-usage-1',
+        requestId: 'req-openrouter-usage-1',
+        channelId: 'channel-openrouter-usage-1',
+        callType: 'chat',
+      },
+    });
+
+    expect(response).toMatchObject({
+      inputTokens: 194,
+      outputTokens: 2,
+      providerObservability: {
+        routeKind: 'configured_litellm_proxy',
+        backendBaseUrl: 'http://litellm.test/v1',
+      },
+      usageDetails: {
+        input: 194,
+        output: 2,
+        cacheRead: 7,
+        cacheWrite: 11,
+        totalTokens: 196,
+        cost: { total: 0.95 },
+      },
+    });
+    expect(usageRecorder.recordUsageEvent).toHaveBeenCalledWith(expect.objectContaining({
+      inputTokens: 194,
+      outputTokens: 2,
+      cacheReadTokens: 7,
+      cacheWriteTokens: 11,
+      totalTokens: 196,
+      providerCostUsd: 0.95,
+      costSource: 'provider',
+      metadata: expect.objectContaining({
+        routeKind: 'configured_litellm_proxy',
+        backendProvider: 'litellm',
+        backendBaseUrl: 'http://litellm.test/v1',
+        providerCost: { total: 0.95 },
+        rawUsage: expect.objectContaining({
+          cost: 0.95,
+          cost_details: { upstream_inference_cost: 19 },
+        }),
+      }),
+    }));
+  });
+
+  it('normalizes OpenRouter completion usage accounting into provider cost telemetry', async () => {
+    const usageRecorder = { recordUsageEvent: vi.fn(async () => undefined) };
+    const client = new LLMClient(makeConfig(), {
+      litellmBaseUrl: 'http://litellm.test/v1',
+      usageRecorder,
+    });
+
+    mocks.completeSimple.mockResolvedValue({
+      content: [{ type: 'text', text: 'done' }],
+      model: 'deepseek/deepseek-v3.2',
+      usage: {
+        prompt_tokens: 25,
+        completion_tokens: 5,
+        prompt_tokens_details: { cached_tokens: 3 },
+        total_tokens: 30,
+        cost: 0.123,
+      },
+      stopReason: 'stop',
+    });
+
+    const response = await client.complete(
+      {
+        systemPrompt: 'System',
+        messages: [{ role: 'user', content: 'Summarize this quickly' }],
+      },
+      'background',
+      { disableRetry: true },
+    );
+
+    expect(response).toMatchObject({
+      inputTokens: 25,
+      outputTokens: 5,
+      usageDetails: {
+        input: 25,
+        output: 5,
+        cacheRead: 3,
+        cacheWrite: 0,
+        totalTokens: 30,
+        cost: { total: 0.123 },
+      },
+    });
+    expect(usageRecorder.recordUsageEvent).toHaveBeenCalledWith(expect.objectContaining({
+      callKind: 'completion',
+      inputTokens: 25,
+      outputTokens: 5,
+      cacheReadTokens: 3,
+      totalTokens: 30,
+      providerCostUsd: 0.123,
+      costSource: 'provider',
+      metadata: expect.objectContaining({
+        routeKind: 'configured_litellm_proxy',
+        backendProvider: 'litellm',
+        backendBaseUrl: 'http://litellm.test/v1',
+      }),
+    }));
+  });
+
   it('skips budget-blocked primary candidate and falls back to secondary chat candidate', async () => {
     const config = makeConfig();
     const baseRegistry = config.modelRegistry!;
@@ -1856,6 +2442,434 @@ describe('LLMClient model budget gates and usage metering', () => {
     expect((blockedEvents[0].estimatedRequestCostUsd as number)).toBeGreaterThan(0);
   });
 
+  it('falls back to a secondary chat candidate when the primary stream returns no text', async () => {
+    const config = makeConfig({
+      primaryModel: 'ChatGPTN',
+      primaryProvider: 'litellm',
+      modelRoster: {
+        chat: { model: 'ChatGPTN', provider: 'litellm', maxTokens: 4096, contextWindow: 128_000 },
+        background: { model: 'deepseek/deepseek-v3.2', provider: 'openrouter', maxTokens: 8192 },
+      },
+      modelRegistry: {
+        schemaVersion: 1,
+        models: [
+          {
+            id: 'chatgptn-primary',
+            rank: 10,
+            identity: {
+              provider: 'litellm',
+              model: 'ChatGPTN',
+              source: { type: 'litellm' },
+            },
+            purposes: [{ purpose: 'chat', primary: true }],
+            capabilities: {
+              maxOutputTokens: 4096,
+              contextWindow: 128_000,
+            },
+            tuning: {
+              maxOutputTokens: 4096,
+            },
+          },
+          {
+            id: 'openai-nano-fallback',
+            rank: 20,
+            identity: {
+              provider: 'openrouter',
+              model: 'openai/gpt-5.4-nano',
+              source: { type: 'openrouter' },
+            },
+            purposes: [{ purpose: 'chat', primary: false }],
+            capabilities: {
+              maxOutputTokens: 2048,
+              contextWindow: 128_000,
+            },
+            tuning: {
+              maxOutputTokens: 2048,
+            },
+          },
+        ],
+      },
+    });
+    const client = new LLMClient(config, {
+      litellmBaseUrl: 'http://litellm.test/v1',
+    });
+
+    mocks.streamSimple.mockImplementation((model: { id: string }) => (async function* streamByModel() {
+      if (model.id === 'ChatGPTN') {
+        yield {
+          type: 'done',
+          message: {
+            model: 'ChatGPTN',
+            usage: { input: 10, output: 0 },
+            content: [],
+          },
+          reason: 'stop',
+        };
+        return;
+      }
+
+      yield {
+        type: 'done',
+        message: {
+          model: model.id,
+          usage: { input: 8, output: 4 },
+          content: [{ type: 'text', text: 'Recovered on nano.' }],
+        },
+        reason: 'stop',
+      };
+    })());
+
+    const response = await client.stream({
+      systemPrompt: 'System',
+      messages: [{ role: 'user', content: 'Hello there' }],
+      correlation: {
+        turnId: 'turn-empty-primary-1',
+        requestId: 'req-empty-primary-1',
+        channelId: 'channel-empty-primary-1',
+        callType: 'chat',
+        originType: 'chat',
+        originStage: 'agent.turn.prompt',
+      },
+    });
+
+    expect(response.content).toBe('Recovered on nano.');
+    expect(response.model).toBe('openrouter/openai/gpt-5.4-nano');
+    expect(mocks.streamSimple).toHaveBeenCalledTimes(2);
+    expect(mocks.streamSimple.mock.calls.map(call => (call[0] as { id: string }).id)).toEqual([
+      'ChatGPTN',
+      'openrouter/openai/gpt-5.4-nano',
+    ]);
+  });
+
+  it('fails over from unreachable ChatGPTN without retrying the same stream candidate', async () => {
+    const config = makeConfig({
+      primaryModel: 'ChatGPTN',
+      primaryProvider: 'litellm',
+      modelRoster: {
+        chat: { model: 'ChatGPTN', provider: 'litellm', maxTokens: 4096, contextWindow: 128_000 },
+        background: { model: 'deepseek/deepseek-v3.2', provider: 'openrouter', maxTokens: 8192 },
+      },
+      modelRegistry: {
+        schemaVersion: 1,
+        models: [
+          {
+            id: 'chatgptn-primary',
+            rank: 10,
+            identity: {
+              provider: 'litellm',
+              model: 'ChatGPTN',
+              source: { type: 'litellm' },
+            },
+            purposes: [{ purpose: 'chat', primary: true }],
+            capabilities: {
+              maxOutputTokens: 4096,
+              contextWindow: 128_000,
+            },
+            tuning: {
+              maxOutputTokens: 4096,
+            },
+          },
+          {
+            id: 'openai-nano-fallback',
+            rank: 20,
+            identity: {
+              provider: 'openrouter',
+              model: 'openai/gpt-5.4-nano',
+              source: { type: 'openrouter' },
+            },
+            purposes: [{ purpose: 'chat', primary: false }],
+            capabilities: {
+              maxOutputTokens: 2048,
+              contextWindow: 128_000,
+            },
+            tuning: {
+              maxOutputTokens: 2048,
+            },
+          },
+        ],
+      },
+    });
+    const client = new LLMClient(config, {
+      litellmBaseUrl: 'http://litellm.test/v1',
+    });
+
+    mocks.streamSimple.mockImplementation((model: { id: string }) => (async function* streamByModel() {
+      if (model.id === 'ChatGPTN') {
+        throw new Error(
+          '500 litellm.InternalServerError: OpenAIException - Connection error. '
+          + 'Cannot connect to host 192.168.1.43:8000 ssl:default',
+        );
+      }
+
+      yield {
+        type: 'done',
+        message: {
+          model: model.id,
+          usage: { input: 8, output: 4 },
+          content: [{ type: 'text', text: 'Recovered on nano.' }],
+        },
+        reason: 'stop',
+      };
+    })());
+
+    const response = await client.stream({
+      systemPrompt: 'System',
+      messages: [{ role: 'user', content: 'Hello there' }],
+      correlation: {
+        turnId: 'turn-unreachable-primary-1',
+        requestId: 'req-unreachable-primary-1',
+        channelId: 'channel-unreachable-primary-1',
+        callType: 'chat',
+        originType: 'chat',
+        originStage: 'agent.turn.prompt',
+      },
+    });
+    const secondResponse = await client.stream({
+      systemPrompt: 'System',
+      messages: [{ role: 'user', content: 'Second hello' }],
+      correlation: {
+        turnId: 'turn-unreachable-primary-2',
+        requestId: 'req-unreachable-primary-2',
+        channelId: 'channel-unreachable-primary-1',
+        callType: 'chat',
+        originType: 'chat',
+        originStage: 'agent.turn.prompt',
+      },
+    });
+
+    expect(response.content).toBe('Recovered on nano.');
+    expect(secondResponse.content).toBe('Recovered on nano.');
+    expect(mocks.streamSimple.mock.calls.map(call => (call[0] as { id: string }).id)).toEqual([
+      'ChatGPTN',
+      'openrouter/openai/gpt-5.4-nano',
+      'openrouter/openai/gpt-5.4-nano',
+    ]);
+  });
+
+  it('falls back without streaming leading provider template artifacts from the primary model', async () => {
+    const config = makeConfig({
+      primaryModel: 'ChatGPTN',
+      primaryProvider: 'litellm',
+      modelRoster: {
+        chat: { model: 'ChatGPTN', provider: 'litellm', maxTokens: 4096, contextWindow: 128_000 },
+        background: { model: 'deepseek/deepseek-v3.2', provider: 'openrouter', maxTokens: 8192 },
+      },
+      modelRegistry: {
+        schemaVersion: 1,
+        models: [
+          {
+            id: 'chatgptn-primary',
+            rank: 10,
+            identity: {
+              provider: 'litellm',
+              model: 'ChatGPTN',
+              source: { type: 'litellm' },
+            },
+            purposes: [{ purpose: 'chat', primary: true }],
+            capabilities: {
+              maxOutputTokens: 4096,
+              contextWindow: 128_000,
+            },
+            tuning: {
+              maxOutputTokens: 4096,
+            },
+          },
+          {
+            id: 'openai-nano-fallback',
+            rank: 20,
+            identity: {
+              provider: 'openrouter',
+              model: 'openai/gpt-5.4-nano',
+              source: { type: 'openrouter' },
+            },
+            purposes: [{ purpose: 'chat', primary: false }],
+            capabilities: {
+              maxOutputTokens: 2048,
+              contextWindow: 128_000,
+            },
+            tuning: {
+              maxOutputTokens: 2048,
+            },
+          },
+        ],
+      },
+    });
+    const client = new LLMClient(config, {
+      litellmBaseUrl: 'http://litellm.test/v1',
+    });
+
+    mocks.streamSimple.mockImplementation((model: { id: string }) => (async function* streamByModel() {
+      if (model.id === 'ChatGPTN') {
+        yield { type: 'text_delta', delta: '<｜begin' };
+        yield { type: 'text_delta', delta: "▁of▁sentence｜># Carlini's Response\n\nYeah, I remember." };
+        return;
+      }
+
+      yield { type: 'text_delta', delta: 'Recovered on nano.' };
+      yield {
+        type: 'done',
+        message: {
+          model: model.id,
+          usage: { input: 8, output: 4 },
+          content: [{ type: 'text', text: 'Recovered on nano.' }],
+        },
+        reason: 'stop',
+      };
+    })());
+
+    const streamedText: string[] = [];
+    const response = await client.stream({
+      systemPrompt: 'System',
+      messages: [{ role: 'user', content: 'Hello there' }],
+      correlation: {
+        turnId: 'turn-artifact-primary-1',
+        requestId: 'req-artifact-primary-1',
+        channelId: 'channel-artifact-primary-1',
+        callType: 'chat',
+        originType: 'chat',
+        originStage: 'agent.turn.prompt',
+      },
+    }, {
+      onText: (delta) => streamedText.push(delta),
+    });
+
+    expect(response.content).toBe('Recovered on nano.');
+    expect(response.model).toBe('openrouter/openai/gpt-5.4-nano');
+    expect(streamedText.join('')).toBe('Recovered on nano.');
+    expect(streamedText.join('')).not.toContain('begin▁of▁sentence');
+    expect(mocks.streamSimple).toHaveBeenCalledTimes(2);
+    expect(mocks.streamSimple.mock.calls.map(call => (call[0] as { id: string }).id)).toEqual([
+      'ChatGPTN',
+      'openrouter/openai/gpt-5.4-nano',
+    ]);
+  });
+
+  it('falls back on leading generated response headers even without a BOS token', async () => {
+    const config = makeConfig({
+      primaryModel: 'ChatGPTN',
+      primaryProvider: 'litellm',
+      modelRoster: {
+        chat: { model: 'ChatGPTN', provider: 'litellm', maxTokens: 4096, contextWindow: 128_000 },
+        background: { model: 'deepseek/deepseek-v3.2', provider: 'openrouter', maxTokens: 8192 },
+      },
+      modelRegistry: {
+        schemaVersion: 1,
+        models: [
+          {
+            id: 'chatgptn-primary',
+            rank: 10,
+            identity: {
+              provider: 'litellm',
+              model: 'ChatGPTN',
+              source: { type: 'litellm' },
+            },
+            purposes: [{ purpose: 'chat', primary: true }],
+            capabilities: {
+              maxOutputTokens: 4096,
+              contextWindow: 128_000,
+            },
+            tuning: {
+              maxOutputTokens: 4096,
+            },
+          },
+          {
+            id: 'openai-nano-fallback',
+            rank: 20,
+            identity: {
+              provider: 'openrouter',
+              model: 'openai/gpt-5.4-nano',
+              source: { type: 'openrouter' },
+            },
+            purposes: [{ purpose: 'chat', primary: false }],
+            capabilities: {
+              maxOutputTokens: 2048,
+              contextWindow: 128_000,
+            },
+            tuning: {
+              maxOutputTokens: 2048,
+            },
+          },
+        ],
+      },
+    });
+    const client = new LLMClient(config, {
+      litellmBaseUrl: 'http://litellm.test/v1',
+    });
+
+    mocks.streamSimple.mockImplementation((model: { id: string }) => (async function* streamByModel() {
+      if (model.id === 'ChatGPTN') {
+        yield { type: 'text_delta', delta: '# Carlini' };
+        yield { type: 'text_delta', delta: "'s Response\n\nYeah, I remember." };
+        return;
+      }
+
+      yield { type: 'text_delta', delta: 'Recovered on fallback.' };
+      yield {
+        type: 'done',
+        message: {
+          model: model.id,
+          usage: { input: 8, output: 4 },
+          content: [{ type: 'text', text: 'Recovered on fallback.' }],
+        },
+        reason: 'stop',
+      };
+    })());
+
+    const streamedText: string[] = [];
+    const response = await client.stream({
+      systemPrompt: 'System',
+      messages: [{ role: 'user', content: 'Hello there' }],
+      correlation: {
+        turnId: 'turn-header-artifact-primary-1',
+        requestId: 'req-header-artifact-primary-1',
+        channelId: 'channel-header-artifact-primary-1',
+        callType: 'chat',
+        originType: 'chat',
+        originStage: 'agent.turn.prompt',
+      },
+    }, {
+      onText: (delta) => streamedText.push(delta),
+    });
+
+    expect(response.content).toBe('Recovered on fallback.');
+    expect(streamedText.join('')).toBe('Recovered on fallback.');
+    expect(streamedText.join('')).not.toContain("Carlini's Response");
+    expect(mocks.streamSimple).toHaveBeenCalledTimes(2);
+  });
+
+  it('allows normal Markdown headings once they are not response-header artifacts', async () => {
+    const client = new LLMClient(makeConfig(), {
+      litellmBaseUrl: 'http://litellm.test/v1',
+    });
+    const content = '# Garden plan\nBring snacks.';
+
+    mocks.streamSimple.mockImplementation(async function* streamHeading() {
+      yield { type: 'text_delta', delta: '# Garden' };
+      yield { type: 'text_delta', delta: ' plan\n' };
+      yield { type: 'text_delta', delta: 'Bring snacks.' };
+      yield {
+        type: 'done',
+        message: {
+          model: 'z-ai/glm-5',
+          usage: { input: 8, output: 4 },
+          content: [{ type: 'text', text: content }],
+        },
+        reason: 'stop',
+      };
+    });
+
+    const streamedText: string[] = [];
+    const response = await client.stream({
+      systemPrompt: 'System',
+      messages: [{ role: 'user', content: 'Make a quick plan' }],
+    }, {
+      onText: (delta) => streamedText.push(delta),
+    });
+
+    expect(response.content).toBe(content);
+    expect(streamedText.join('')).toBe(content);
+  });
+
   it('persists usage ledger records after successful completion call', async () => {
     const config = makeConfig();
     const client = new LLMClient(config, 'http://litellm.test/v1');
@@ -1962,6 +2976,7 @@ describe('LLMClient model budget gates and usage metering', () => {
         }),
       }),
       'background',
+      {},
     );
     expect(response).toMatchObject({
       content: 'gateway-result',
@@ -2039,6 +3054,7 @@ describe('LLMClient model budget gates and usage metering', () => {
         }),
       }),
       'vision',
+      {},
     );
   });
 
@@ -2092,6 +3108,160 @@ describe('LLMClient model budget gates and usage metering', () => {
       inputTokens: 11,
       outputTokens: 6,
     });
+  });
+
+  it('short-circuits retryable injected transport completions and recovers after cooldown', async () => {
+    let now = 1_000;
+    const circuitBreaker = new SlidingWindowCircuitBreaker({
+      failureThreshold: 2,
+      windowMs: 60_000,
+      cooldownMs: 30_000,
+      now: () => now,
+    });
+    const circuitKey = 'llm.complete::openrouter::deepseek/deepseek-v3.2::registered_model';
+    const transport = {
+      stream: vi.fn(),
+      complete: vi.fn()
+        .mockRejectedValueOnce(new Error('503 service unavailable'))
+        .mockRejectedValueOnce(new Error('503 service unavailable'))
+        .mockResolvedValue({
+          content: 'gateway-recovered',
+          model: 'deepseek/deepseek-v3.2',
+          inputTokens: 9,
+          outputTokens: 4,
+          stopReason: 'stop',
+          toolCalls: [],
+        }),
+    };
+    const client = new LLMClient(makeConfig(), {
+      transport: transport as any,
+      circuitBreaker,
+    });
+    const transitionSpy = vi.spyOn(client as any, 'logCircuitBreakerTransition');
+    const request = () => client.complete(
+      {
+        systemPrompt: 'System',
+        messages: [{ role: 'user', content: 'Summarize this quickly' }],
+      },
+      'background',
+    );
+
+    await expect(request()).rejects.toThrow('503 service unavailable');
+    now += 1_000;
+    await expect(request()).rejects.toThrow('503 service unavailable');
+    now += 1_000;
+    await expect(request()).rejects.toBeInstanceOf(CircuitOpenError);
+    expect(transport.complete).toHaveBeenCalledTimes(2);
+    expect(circuitBreaker.snapshot(circuitKey).state).toBe('open');
+
+    now += 30_001;
+    await expect(request()).resolves.toMatchObject({
+      content: 'gateway-recovered',
+      model: 'deepseek/deepseek-v3.2',
+      inputTokens: 9,
+      outputTokens: 4,
+    });
+
+    expect(transport.complete).toHaveBeenCalledTimes(3);
+    expect(circuitBreaker.snapshot(circuitKey).state).toBe('closed');
+    expect(transitionSpy).toHaveBeenCalledWith(expect.objectContaining({
+      method: 'llm.complete',
+      key: circuitKey,
+      to: 'open',
+      reason: 'failure_threshold',
+    }));
+    expect(transitionSpy).toHaveBeenCalledWith(expect.objectContaining({
+      method: 'llm.complete',
+      key: circuitKey,
+      to: 'half_open',
+      reason: 'cooldown_elapsed',
+    }));
+    expect(transitionSpy).toHaveBeenCalledWith(expect.objectContaining({
+      method: 'llm.complete',
+      key: circuitKey,
+      to: 'closed',
+      reason: 'half_open_success',
+    }));
+  });
+
+  it('short-circuits retryable injected transport streams after the threshold', async () => {
+    const circuitBreaker = new SlidingWindowCircuitBreaker({
+      failureThreshold: 1,
+      windowMs: 60_000,
+      cooldownMs: 30_000,
+    });
+    const callbacks = {
+      onDone: vi.fn(),
+      onError: vi.fn(),
+    };
+    const transport = {
+      stream: vi.fn().mockRejectedValue(new Error('fetch failed')),
+      complete: vi.fn(),
+    };
+    const client = new LLMClient(makeConfig(), {
+      transport: transport as any,
+      circuitBreaker,
+    });
+    const request = () => client.stream(
+      {
+        systemPrompt: 'System',
+        messages: [{ role: 'user', content: 'Stream this reply' }],
+      },
+      callbacks,
+    );
+
+    await expect(request()).rejects.toThrow('fetch failed');
+    await expect(request()).rejects.toBeInstanceOf(CircuitOpenError);
+
+    expect(transport.stream).toHaveBeenCalledTimes(1);
+    expect(callbacks.onDone).not.toHaveBeenCalled();
+    expect(callbacks.onError).toHaveBeenCalledTimes(2);
+    expect(callbacks.onError.mock.calls[1]?.[0]).toBeInstanceOf(CircuitOpenError);
+  });
+
+  it('does not count non-retryable injected transport configuration failures as outages', async () => {
+    const circuitBreaker = new SlidingWindowCircuitBreaker({
+      failureThreshold: 1,
+      windowMs: 60_000,
+      cooldownMs: 30_000,
+    });
+    const circuitKey = 'llm.complete::openrouter::deepseek/deepseek-v3.2::registered_model';
+    const transport = {
+      stream: vi.fn(),
+      complete: vi.fn()
+        .mockRejectedValueOnce(new Error('Gateway provider config is not wired on the gateway'))
+        .mockResolvedValue({
+          content: 'gateway-after-config-failure',
+          model: 'deepseek/deepseek-v3.2',
+          inputTokens: 7,
+          outputTokens: 3,
+          stopReason: 'stop',
+          toolCalls: [],
+        }),
+    };
+    const client = new LLMClient(makeConfig(), {
+      transport: transport as any,
+      circuitBreaker,
+    });
+    const transitionSpy = vi.spyOn(client as any, 'logCircuitBreakerTransition');
+    const request = () => client.complete(
+      {
+        systemPrompt: 'System',
+        messages: [{ role: 'user', content: 'Summarize this quickly' }],
+      },
+      'background',
+    );
+
+    await expect(request()).rejects.toThrow('Gateway provider config is not wired on the gateway');
+    expect(circuitBreaker.snapshot(circuitKey).state).toBe('closed');
+
+    await expect(request()).resolves.toMatchObject({
+      content: 'gateway-after-config-failure',
+      model: 'deepseek/deepseek-v3.2',
+    });
+
+    expect(transport.complete).toHaveBeenCalledTimes(2);
+    expect(transitionSpy).not.toHaveBeenCalled();
   });
 
   it('prioritizes queued foreground chat ahead of queued background work on constrained routes', async () => {

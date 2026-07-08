@@ -1,5 +1,4 @@
-import { realpathSync } from 'node:fs';
-import { basename, dirname, isAbsolute, relative, resolve } from 'node:path';
+import { basename, isAbsolute, relative } from 'node:path';
 import { createComponentLogger } from '../../shared/logger.js';
 import type { BeadsAction, PolicyContext, PolicyDecision } from './protocol.js';
 import type { VaultOperations } from '../integrations/vault/ops.js';
@@ -9,6 +8,7 @@ const log = createComponentLogger('Policy');
 import { evaluateUrlPolicy, type UrlPolicyConfig, type UrlPolicyLane } from './url-policy.js';
 import {
   normalizeWorkspaceRelativeGlob,
+  resolveCanonicalPath,
   resolveWorkspaceFsPathFromRoot,
   resolveWorkspaceRoot,
 } from './filesystem-paths.js';
@@ -135,35 +135,17 @@ export function isInsideAllowedPaths(resolvedPath: string, allowedPrefixes: stri
   return false;
 }
 
-/**
- * Resolve the canonical (symlink-resolved) path for policy checking.
- * Returns the normalized path unchanged if the file doesn't exist (ENOENT).
- * For writes to new files, resolves the parent directory if it exists.
- * Returns null only if a symlink explicitly resolves outside allowed paths.
- */
-function resolveCanonicalPath(normalized: string, isWrite: boolean): string | null {
-  try {
-    return realpathSync(normalized);
-  } catch (err: unknown) {
-    const code = (err as NodeJS.ErrnoException).code;
-    // ENOENT = path doesn't exist at all (not a symlink issue) — safe to use normalized
-    if (code === 'ENOENT') {
-      // For writes, try to resolve the parent directory to catch symlinked parents
-      if (isWrite) {
-        try {
-          const parentReal = realpathSync(dirname(normalized));
-          return resolve(parentReal, basename(normalized));
-        } catch (parentErr) {
-          // Parent doesn't exist either — use normalized path (will fail at write time)
-          log.debug('resolveCanonicalPath: parent resolution failed', { path: normalized, error: String(parentErr) });
-          return normalized;
-        }
-      }
-      return normalized;
-    }
-    // ELOOP, EACCES, or any other error — refuse to resolve (caller should DENY)
-    return null;
-  }
+function resolvePolicyCanonicalPath(normalizedPath: string, isWrite: boolean): string | null {
+  return resolveCanonicalPath(normalizedPath, {
+    missingPathBehavior: isWrite ? 'resolveParent' : 'returnNormalized',
+    errorBehavior: 'deny',
+    onParentResolutionError: ({ path, error }) => {
+      log.debug('resolveCanonicalPath: parent resolution failed', {
+        path,
+        error: String(error),
+      });
+    },
+  });
 }
 
 const PRIME_TO_SHARD_SYNC_OPERATIONS: Readonly<Record<ShardSessionMemorySyncClass, readonly ShardSessionMemorySyncOperation[]>> = {
@@ -378,7 +360,7 @@ export function evaluatePolicy(ctx: PolicyContext, policyConfig: PolicyConfig): 
 
       // Step 2: Resolve symlinks and check canonical path
       const isWrite = method === 'fs.write';
-      const canonical = resolveCanonicalPath(normalizedPath, isWrite);
+      const canonical = resolvePolicyCanonicalPath(normalizedPath, isWrite);
 
       // null = resolution failed (ELOOP, EACCES, etc.) — deny access
       if (canonical === null) {
@@ -417,15 +399,13 @@ export function evaluatePolicy(ctx: PolicyContext, policyConfig: PolicyConfig): 
       }
 
       const maxEntries = (params as Record<string, unknown>).maxEntries;
-      if (maxEntries !== undefined) {
-        if (
-          typeof maxEntries !== 'number' ||
-          !Number.isFinite(maxEntries) ||
-          Math.floor(maxEntries) < 1 ||
-          maxEntries > 500
-        ) {
-          return 'DENY';
-        }
+      if (maxEntries !== undefined && !isPositiveIntegerInRange(maxEntries, 1, 500)) {
+        return 'DENY';
+      }
+
+      const maxScannedEntries = (params as Record<string, unknown>).maxScannedEntries;
+      if (maxScannedEntries !== undefined && !isPositiveIntegerInRange(maxScannedEntries, 1, 20_000)) {
+        return 'DENY';
       }
 
       return 'ALLOW';
@@ -472,7 +452,7 @@ export function evaluatePolicy(ctx: PolicyContext, policyConfig: PolicyConfig): 
         return 'NEEDS_APPROVAL';
       }
 
-      const canonical = resolveCanonicalPath(normalizedPath, true);
+      const canonical = resolvePolicyCanonicalPath(normalizedPath, true);
       if (canonical === null) {
         return 'DENY';
       }

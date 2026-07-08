@@ -1,4 +1,4 @@
-import { v4 as uuidv4 } from 'uuid';
+import { v7 as uuidv7 } from 'uuid';
 import type {
   ChannelPrivacyLevel,
   Contact,
@@ -12,6 +12,7 @@ import type {
 } from '../types.js';
 import { CHANNEL_PRIVACY_LEVELS } from '../types.js';
 import type { TrustLevel } from '../../../system/trust/types.js';
+import { decodeStoredChannelVisibility } from '../../../system/trust/types.js';
 import type { ContactIdentityVerificationRow } from './domain-types.js';
 
 export const LEGACY_DISCORD_CHANNEL = 'discord';
@@ -35,9 +36,11 @@ export function defaultPrivacyForChannel(channel: ContactChannel): ChannelPrivac
     return 'private';
   }
   if (normalized === 'twitter' || normalized === 'rss' || normalized === 'broadcast') {
-    return 'broadcast';
+    // E3.3: broadcast is an envelope flag, not a privacy value; the
+    // provenance-only default records the structural class.
+    return 'public';
   }
-  return 'semi_private';
+  return 'invite_only';
 }
 
 export function normalizePrivacyLevel(
@@ -45,9 +48,9 @@ export function normalizePrivacyLevel(
   channel: ContactChannel,
 ): ChannelPrivacyLevel {
   if (!privacyLevel) return defaultPrivacyForChannel(channel);
-  return CHANNEL_PRIVACY_LEVELS.includes(privacyLevel)
-    ? privacyLevel
-    : defaultPrivacyForChannel(channel);
+  // Stored contact rows may predate the E3.1 vocabulary rename; the shared
+  // decoder maps legacy 'semi_private' to 'invite_only'.
+  return decodeStoredChannelVisibility(privacyLevel) ?? defaultPrivacyForChannel(channel);
 }
 
 export function isValidChannelPrivacyLevel(level: string): level is ChannelPrivacyLevel {
@@ -80,7 +83,7 @@ export function normalizeVerificationTtlMs(ttlMs: number | undefined): number {
 }
 
 export function createVerificationToken(): string {
-  return uuidv4().replace(/-/g, '');
+  return uuidv7().replace(/-/g, '');
 }
 
 export function normalizeVerificationState(value: string): ContactIdentityLinkVerificationState {

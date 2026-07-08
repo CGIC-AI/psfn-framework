@@ -100,8 +100,8 @@ export const SETTINGS_SIMPLE_SECTIONS = [
   },
   {
     id: 'integrations-obsidian',
-    title: 'Obsidian Vault',
-    description: 'Vault bridge and publish behavior',
+    title: 'External Obsidian',
+    description: 'Legacy vault bridge and import source',
     groupId: 'integrations',
   },
   {

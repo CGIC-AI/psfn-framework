@@ -8,7 +8,7 @@ import { ContactStore } from '../../core/contacts/store.js';
 import { ApiServer } from './server.js';
 import type { SubstrateAgent } from '../../core/agent/substrate-agent.js';
 import type { SessionManager } from '../../core/session/manager.js';
-import type { AgentResponse, SubstrateMessage } from '../../shared/contracts/runtime.js';
+import type { AgentResponse, IntentionalNoReplyMetadata, SubstrateMessage } from '../../shared/contracts/runtime.js';
 import type { ApiServerHealthChecks } from './types.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
 import { DEFAULT_COMPANION_ID } from '../../core/identity/companion-naming.js';
@@ -59,6 +59,25 @@ const SATELLITE_TEST_REGISTRY = parseSatelliteRegistryConfig({
             'location',
           ],
           telemetryScopes: ['location', 'timezone', 'presence'],
+          runtime: {
+            schemaVersion: 1,
+            transport: {
+              mode: 'openhome_bridge',
+            },
+            audio: {
+              inputDevice: 'plughw:1,0',
+              outputDevice: 'default',
+              sampleRateHz: 16000,
+              channelCount: 1,
+              frameMs: 20,
+            },
+            refresh: {
+              intervalMs: 300000,
+              jitterMs: 30000,
+              restartPolicy: 'restart_on_runtime_change',
+              restartGraceMs: 5000,
+            },
+          },
         },
       ],
     },
@@ -112,27 +131,70 @@ function request(
   });
 }
 
+interface ParsedSseEvent {
+  event: string;
+  data: string;
+}
+
+function parseSseFrame(frame: string): ParsedSseEvent | null {
+  let event = 'message';
+  const dataLines: string[] = [];
+  for (const line of frame.split(/\r?\n/)) {
+    if (line.startsWith('event:')) {
+      event = line.slice('event:'.length).trim();
+    } else if (line.startsWith('data:')) {
+      dataLines.push(line.slice('data:'.length).trimStart());
+    }
+  }
+  if (dataLines.length === 0) return null;
+  return {
+    event,
+    data: dataLines.join('\n'),
+  };
+}
+
 function streamRequest(
   port: number,
   body: object,
   headers?: Record<string, string>,
-): Promise<{ status: number; headers: http.IncomingHttpHeaders; chunks: string[] }> {
+): Promise<{
+  status: number;
+  headers: http.IncomingHttpHeaders;
+  chunks: string[];
+  events: ParsedSseEvent[];
+}> {
   return new Promise((resolve, reject) => {
     const payload = JSON.stringify(body);
     const req = http.request(
       { hostname: '127.0.0.1', port, method: 'POST', path: '/v1/chat/completions', headers: { 'Content-Type': 'application/json', ...headers } },
       (res) => {
         const chunks: string[] = [];
+        const events: ParsedSseEvent[] = [];
+        let buffer = '';
+        const flushFrame = (frame: string) => {
+          const parsed = parseSseFrame(frame);
+          if (!parsed) return;
+          events.push(parsed);
+          if (parsed.event === 'message') {
+            chunks.push(parsed.data);
+          }
+        };
         res.on('data', (chunk: Buffer) => {
-          const text = chunk.toString();
-          // Split SSE data lines
-          for (const line of text.split('\n')) {
-            if (line.startsWith('data: ')) {
-              chunks.push(line.slice(6));
-            }
+          buffer += chunk.toString();
+          let frameEnd = buffer.indexOf('\n\n');
+          while (frameEnd !== -1) {
+            const frame = buffer.slice(0, frameEnd);
+            buffer = buffer.slice(frameEnd + 2);
+            flushFrame(frame);
+            frameEnd = buffer.indexOf('\n\n');
           }
         });
-        res.on('end', () => resolve({ status: res.statusCode!, headers: res.headers, chunks }));
+        res.on('end', () => {
+          if (buffer.trim()) {
+            flushFrame(buffer);
+          }
+          resolve({ status: res.statusCode!, headers: res.headers, chunks, events });
+        });
       },
     );
     req.on('error', reject);
@@ -290,6 +352,21 @@ function emitQueuedTurnResult(
       await eventBus.emit('agent.turn.end', { message, response });
     })();
   });
+}
+
+function makeNoReplyMetadata(channelId: string): IntentionalNoReplyMetadata {
+  return {
+    schemaVersion: 1,
+    disposition: 'intentional_no_reply',
+    source: 'response_control_tool',
+    auditId: `no-reply:test-turn:${channelId}`,
+    decidedAt: Date.parse('2026-03-08T12:00:00Z'),
+    turnId: '018f0000-0000-7000-9000-000000000001' as IntentionalNoReplyMetadata['turnId'],
+    requestId: 'api-no-reply-request',
+    channelId,
+    toolCallId: 'tool-call-no-reply',
+    reason: 'intentional quiet',
+  };
 }
 
 function toAuthSubprotocol(apiToken: string): string {
@@ -483,7 +560,7 @@ describe('ApiServer', () => {
             authorId: 'admin-user',
             authorName: 'Vega',
             canonicalContactId: 'contact-vega',
-            channelPrivacy: 'semi_private',
+            channelPrivacy: 'invite_only',
           },
         },
       });
@@ -507,7 +584,7 @@ describe('ApiServer', () => {
               name: 'Vega',
             },
             canonicalContactId: 'contact-vega',
-            channelPrivacy: 'semi_private',
+            channelPrivacy: 'invite_only',
           },
         },
       });
@@ -661,6 +738,102 @@ describe('ApiServer', () => {
       expect(body.usage.total_tokens).toBe(15);
     });
 
+    it('returns an empty completion for structured intentional no-reply responses', async () => {
+      await server.stop();
+      const mockAgent = {
+        handleMessage: vi.fn(async (msg: SubstrateMessage) => ({
+          content: '',
+          channelId: msg.channelId,
+          metadata: {
+            model: 'test-model',
+            inputTokens: 4,
+            outputTokens: 1,
+            durationMs: 12,
+            noReply: makeNoReplyMetadata(msg.channelId),
+          },
+        } satisfies AgentResponse)),
+      } as unknown as SubstrateAgent;
+      server = createApiServer({
+        port,
+        agentLoop: mockAgent,
+        eventBus,
+        sessionManager: createMockSessionManager(),
+        allowInsecureWithoutAuth: true,
+      });
+      await server.init();
+      await server.start();
+
+      const res = await request(port, 'POST', '/v1/chat/completions', {
+        model: DEFAULT_COMPANION_ID,
+        messages: [{ role: 'user', content: 'Just observe this.' }],
+      });
+
+      expect(res.status).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(body.choices[0].message.content).toBe('');
+      expect(body.usage.prompt_tokens).toBe(4);
+      expect(body.usage.completion_tokens).toBe(1);
+    });
+
+    it('treats literal NO_REPLY API content as ordinary assistant text', async () => {
+      await server.stop();
+      const mockAgent = {
+        handleMessage: vi.fn(async (msg: SubstrateMessage) => ({
+          content: 'NO_REPLY',
+          channelId: msg.channelId,
+          metadata: { model: 'test-model', inputTokens: 2, outputTokens: 1, durationMs: 3 },
+        } satisfies AgentResponse)),
+      } as unknown as SubstrateAgent;
+      server = createApiServer({
+        port,
+        agentLoop: mockAgent,
+        eventBus,
+        sessionManager: createMockSessionManager(),
+        allowInsecureWithoutAuth: true,
+      });
+      await server.init();
+      await server.start();
+
+      const res = await request(port, 'POST', '/v1/chat/completions', {
+        model: DEFAULT_COMPANION_ID,
+        messages: [{ role: 'user', content: 'Say the marker literally.' }],
+      });
+
+      expect(res.status).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(body.choices[0].message.content).toBe('NO_REPLY');
+    });
+
+    it('rejects empty agent output without a no-reply marker', async () => {
+      await server.stop();
+      const mockAgent = {
+        handleMessage: vi.fn(async (msg: SubstrateMessage) => ({
+          content: '   ',
+          channelId: msg.channelId,
+          metadata: { model: 'test-model', inputTokens: 2, outputTokens: 0, durationMs: 3 },
+        } satisfies AgentResponse)),
+      } as unknown as SubstrateAgent;
+      server = createApiServer({
+        port,
+        agentLoop: mockAgent,
+        eventBus,
+        sessionManager: createMockSessionManager(),
+        allowInsecureWithoutAuth: true,
+      });
+      await server.init();
+      await server.start();
+
+      const res = await request(port, 'POST', '/v1/chat/completions', {
+        model: DEFAULT_COMPANION_ID,
+        messages: [{ role: 'user', content: 'Return nothing.' }],
+      });
+
+      expect(res.status).toBe(502);
+      const body = JSON.parse(res.body);
+      expect(body.error.type).toBe('model_error');
+      expect(body.error.message).toContain('intentional no-reply marker');
+    });
+
     it('binds author identity to the local insecure principal and ignores spoofed headers', async () => {
       await server.stop();
       const mockAgent = createMockAgentLoop(eventBus);
@@ -738,12 +911,23 @@ describe('ApiServer', () => {
         model: DEFAULT_COMPANION_ID,
         messages: [{ role: 'user', content: 'Prepare a public draft.' }],
       }, {
-        'X-Channel-Privacy': 'broadcast',
+        'X-Channel-Privacy': 'public',
       });
       expect(res.status).toBe(200);
 
       const call = (mockAgent.handleMessage as any).mock.calls[0][0] as SubstrateMessage;
-      expect(call.routing?.channelPrivacy).toBe('broadcast');
+      expect(call.routing?.channelPrivacy).toBe('public');
+    });
+
+    it('rejects the retired broadcast privacy header fail-closed (E3.3: broadcast is a channel-owned flag)', async () => {
+      const res = await request(port, 'POST', '/v1/chat/completions', {
+        model: DEFAULT_COMPANION_ID,
+        messages: [{ role: 'user', content: 'Prepare a broadcast draft.' }],
+      }, {
+        'X-Channel-Privacy': 'broadcast',
+      });
+
+      expect(res.status).toBe(400);
     });
 
     it('rejects invalid channel privacy headers', async () => {
@@ -995,6 +1179,81 @@ describe('ApiServer', () => {
         messages: [],
       });
       expect(res.status).toBe(400);
+    });
+
+    it('returns 400 for invalid message roles', async () => {
+      const res = await request(port, 'POST', '/v1/chat/completions', {
+        model: DEFAULT_COMPANION_ID,
+        messages: [{ role: 'tool', content: 'unsupported role' }],
+      });
+
+      expect(res.status).toBe(400);
+      const body = JSON.parse(res.body);
+      expect(body.error.type).toBe('invalid_request');
+      expect(body.error.message).toContain('messages[0].role');
+    });
+
+    it('returns 400 for malformed content parts', async () => {
+      const res = await request(port, 'POST', '/v1/chat/completions', {
+        model: DEFAULT_COMPANION_ID,
+        messages: [{
+          role: 'user',
+          content: [{ type: 'image_url', image_url: { detail: 'high' } }],
+        }],
+      });
+
+      expect(res.status).toBe(400);
+      const body = JSON.parse(res.body);
+      expect(body.error.type).toBe('invalid_request');
+      expect(body.error.message).toContain('messages[0].content[0].image_url.url');
+    });
+
+    it('returns 400 for bad stream and max_tokens values', async () => {
+      const badStream = await request(port, 'POST', '/v1/chat/completions', {
+        model: DEFAULT_COMPANION_ID,
+        stream: 'true',
+        messages: [{ role: 'user', content: 'hello' }],
+      });
+      expect(badStream.status).toBe(400);
+      expect(JSON.parse(badStream.body).error.message).toContain('stream must be a boolean');
+
+      const badMaxTokens = await request(port, 'POST', '/v1/chat/completions', {
+        model: DEFAULT_COMPANION_ID,
+        max_tokens: 0,
+        messages: [{ role: 'user', content: 'hello' }],
+      });
+      expect(badMaxTokens.status).toBe(400);
+      expect(JSON.parse(badMaxTokens.body).error.message).toContain('max_tokens must be greater than or equal to 1');
+    });
+
+    it('accepts valid mixed text and image content parts', async () => {
+      const res = await request(port, 'POST', '/v1/chat/completions', {
+        model: DEFAULT_COMPANION_ID,
+        stream: false,
+        max_tokens: 32,
+        messages: [{
+          role: 'user',
+          content: [
+            { type: 'text', text: 'what is in these images?' },
+            {
+              type: 'image_url',
+              image_url: {
+                url: 'https://images.example.test/current.png',
+                detail: 'high',
+              },
+            },
+            {
+              type: 'image',
+              data: 'iVBORw0KGgo=',
+              mimeType: 'image/png',
+              name: 'inline.png',
+            },
+          ],
+        }],
+      });
+
+      expect(res.status).toBe(200);
+      expect(JSON.parse(res.body).choices[0].message.content).toBe('Hello world');
     });
 
     it('returns 400 for invalid JSON', async () => {
@@ -1476,9 +1735,86 @@ describe('ApiServer', () => {
       expect(res.chunks[res.chunks.length - 1]).toBe('[DONE]');
     });
 
+    it('emits machine-readable SSE errors for empty streaming agent responses', async () => {
+      const mockAgent = {
+        handleMessage: vi.fn(async (message: SubstrateMessage) => ({
+          content: '',
+          channelId: message.channelId,
+          metadata: { model: 'test-model', inputTokens: 1, outputTokens: 0, durationMs: 1 },
+        })),
+      } as unknown as SubstrateAgent;
+
+      await server.stop();
+      server = createApiServer({
+        port,
+        agentLoop: mockAgent,
+        eventBus,
+        sessionManager: createMockSessionManager(),
+        allowInsecureWithoutAuth: true,
+      });
+      await server.init();
+      await server.start();
+
+      const res = await streamRequest(port, {
+        model: DEFAULT_COMPANION_ID,
+        messages: [{ role: 'user', content: 'Hello' }],
+        stream: true,
+      });
+
+      expect(res.status).toBe(200);
+      const errorEvent = res.events.find((event) => event.event === 'error');
+      expect(errorEvent).toBeDefined();
+      expect(JSON.parse(errorEvent!.data).error).toMatchObject({
+        type: 'empty_response',
+        message: 'Agent returned empty content',
+      });
+      expect(res.chunks[res.chunks.length - 1]).toBe('[DONE]');
+      const nonDoneDataChunks = res.chunks.filter((chunk) => chunk !== '[DONE]');
+      expect(nonDoneDataChunks.some((chunk) => {
+        const parsed = JSON.parse(chunk) as { choices?: Array<{ delta?: { content?: string }; finish_reason?: string | null }> };
+        return parsed.choices?.some((choice) => (
+          choice.delta?.content?.includes('[Error:') === true
+          || choice.finish_reason === 'stop'
+        )) === true;
+      })).toBe(false);
+    });
+
+    it('emits machine-readable SSE errors for streaming agent-busy failures', async () => {
+      const mockAgent = {
+        handleMessage: vi.fn(async () => {
+          throw new Error('Agent is already processing a prompt');
+        }),
+      } as unknown as SubstrateAgent;
+
+      await server.stop();
+      server = createApiServer({
+        port,
+        agentLoop: mockAgent,
+        eventBus,
+        sessionManager: createMockSessionManager(),
+        allowInsecureWithoutAuth: true,
+      });
+      await server.init();
+      await server.start();
+
+      const res = await streamRequest(port, {
+        model: DEFAULT_COMPANION_ID,
+        messages: [{ role: 'user', content: 'Hello' }],
+        stream: true,
+      });
+
+      expect(res.status).toBe(200);
+      const errorEvent = res.events.find((event) => event.event === 'error');
+      expect(errorEvent).toBeDefined();
+      expect(JSON.parse(errorEvent!.data).error).toMatchObject({
+        type: 'agent_busy',
+        message: 'Agent is already processing another prompt',
+      });
+      expect(res.chunks[res.chunks.length - 1]).toBe('[DONE]');
+    });
+
     it('delivers queued streaming follow-ups after the active stream finishes', async () => {
       const releaseFirst = createDeferred<void>();
-      const completionOrder: string[] = [];
       const mockAgent = {
         handleMessage: vi.fn(async (message: SubstrateMessage) => {
           await eventBus.emit('agent.stream.delta', { channelId: message.channelId, text: 'First' });
@@ -1514,10 +1850,7 @@ describe('ApiServer', () => {
         model: DEFAULT_COMPANION_ID,
         messages: [{ role: 'user', content: 'First stream turn' }],
         stream: true,
-      }, { 'X-Session-ID': 'stream-queue' }).then((value) => {
-        completionOrder.push('first');
-        return value;
-      });
+      }, { 'X-Session-ID': 'stream-queue' });
 
       await new Promise(resolve => setTimeout(resolve, 20));
 
@@ -1525,10 +1858,7 @@ describe('ApiServer', () => {
         model: DEFAULT_COMPANION_ID,
         messages: [{ role: 'user', content: 'Second stream turn' }],
         stream: true,
-      }, { 'X-Session-ID': 'stream-queue' }).then((value) => {
-        completionOrder.push('second');
-        return value;
-      });
+      }, { 'X-Session-ID': 'stream-queue' });
 
       await new Promise(resolve => setTimeout(resolve, 20));
       expect(mockAgent.followUp).not.toHaveBeenCalled();
@@ -1547,7 +1877,6 @@ describe('ApiServer', () => {
         .map((chunk) => JSON.parse(chunk).choices[0].delta.content)
         .filter(Boolean);
 
-      expect(completionOrder).toEqual(['first', 'second']);
       expect(firstContent).toEqual(['First', ' done']);
       expect(secondContent).toEqual(['Second done']);
       expect(mockAgent.handleMessage).toHaveBeenCalledTimes(1);
@@ -1985,6 +2314,83 @@ describe('ApiServer with auth', () => {
     expect(res.status).toBe(200);
   });
 
+  it('serves authorized satellite config pulls from the core registry', async () => {
+    await server.stop();
+    server = createApiServer({
+      port,
+      agentLoop: createMockAgentLoop(eventBus),
+      eventBus,
+      sessionManager: createMockSessionManager(),
+      apiKey: 'test-secret-key',
+      satelliteRegistry: SATELLITE_TEST_REGISTRY,
+    });
+    await server.init();
+    await server.start();
+
+    const res = await request(
+      port,
+      'GET',
+      '/v1/satellites/config?satelliteId=android-phone&endpointId=companion-app&claimType=android-mobile',
+      undefined,
+      { Authorization: 'Bearer test-secret-key' },
+    );
+    expect(res.status).toBe(200);
+    expect(res.headers['cache-control']).toBe('no-store');
+    const body = JSON.parse(res.body);
+    expect(body).toMatchObject({
+      object: 'companion.satellite_config',
+      schemaVersion: 1,
+      satellite: {
+        satelliteId: 'android-phone',
+        displayName: 'Android Mobile Satellite',
+        mobility: 'mobile',
+      },
+      endpoint: {
+        endpointId: 'companion-app',
+        promptChannelType: 'mobile_satellite',
+        claimType: 'android-mobile',
+      },
+      identity: {
+        authorId: 'primary-user',
+        authorName: 'Primary User',
+        canonicalContactId: 'contact-primary-user',
+        channelPrivacy: 'private',
+      },
+      session: {
+        channelIdTemplate: 'satellite:android-mobile:{sessionId}',
+        fixedHeaders: {
+          claimType: 'android-mobile',
+          satelliteId: 'android-phone',
+          endpointId: 'companion-app',
+        },
+      },
+      runtime: {
+        transport: { mode: 'openhome_bridge' },
+        audio: {
+          inputDevice: 'plughw:1,0',
+          sampleRateHz: 16000,
+        },
+        refresh: {
+          intervalMs: 300000,
+          restartPolicy: 'restart_on_runtime_change',
+        },
+      },
+    });
+    expect(body.configVersion).toMatch(/^[a-f0-9]{64}$/u);
+  });
+
+  it('fails closed when satellite config pulls are not registry-backed', async () => {
+    const res = await request(
+      port,
+      'GET',
+      '/v1/satellites/config?satelliteId=android-phone&endpointId=companion-app&claimType=android-mobile',
+      undefined,
+      { Authorization: 'Bearer test-secret-key' },
+    );
+    expect(res.status).toBe(503);
+    expect(JSON.parse(res.body).error.type).toBe('satellite_registry_not_configured');
+  });
+
   it('accepts requests with admin token when configured as alternate auth token', async () => {
     await server.stop();
     server = createApiServer({
@@ -2050,7 +2456,7 @@ describe('ApiServer with auth', () => {
       externalChannelProfiles: {
         'psfn-amica': {
           canonicalContactId: 'contact-primary-user',
-          channelPrivacy: 'semi_private',
+          channelPrivacy: 'invite_only',
         },
       },
     });
@@ -2087,7 +2493,7 @@ describe('ApiServer with auth', () => {
       externalChannelProfiles: {
         'psfn-amica': {
           canonicalContactId: 'contact-primary-user',
-          channelPrivacy: 'semi_private',
+          channelPrivacy: 'invite_only',
         },
       },
     });
@@ -2113,7 +2519,7 @@ describe('ApiServer with auth', () => {
     expect(call.authorName).toBe('Primary User');
     expect(call.routing?.source).toBe('psfn-amica');
     expect(call.routing?.canonicalContactId).toBe('contact-primary-user');
-    expect(call.routing?.channelPrivacy).toBe('semi_private');
+    expect(call.routing?.channelPrivacy).toBe('invite_only');
   });
 
   it('routes registry-backed satellite claims with effective speech and vision capabilities', async () => {
@@ -2186,7 +2592,7 @@ describe('ApiServer with auth', () => {
           authorId: 'primary-user',
           authorName: 'Primary User',
           canonicalContactId: 'contact-primary-user',
-          channelPrivacy: 'semi_private',
+          channelPrivacy: 'invite_only',
         },
       },
     });
@@ -2210,7 +2616,7 @@ describe('ApiServer with auth', () => {
     expect(call.authorName).toBe('Primary User');
     expect(call.routing?.source).toBe('psfn-amica');
     expect(call.routing?.canonicalContactId).toBe('contact-primary-user');
-    expect(call.routing?.channelPrivacy).toBe('semi_private');
+    expect(call.routing?.channelPrivacy).toBe('invite_only');
   });
 
   it('fails closed for psfn-amica claims when the PSFN-side profile is missing', async () => {

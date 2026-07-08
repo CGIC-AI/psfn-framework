@@ -2,7 +2,7 @@ import { createServer, type Server } from 'node:http';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { GatewayMethodRuntime } from './types.js';
 import type { PolicyConfig } from '../policy.js';
-import { registerWebMethods } from './web.js';
+import { registerWebMethods, resetWebCircuitBreakersForTests } from './web.js';
 import { GatewayErrors } from '../protocol.js';
 import type { DnsResolver } from '../url-policy.js';
 
@@ -105,6 +105,7 @@ describe('registerWebMethods', () => {
   const servers: Server[] = [];
 
   afterEach(async () => {
+    resetWebCircuitBreakersForTests();
     await Promise.all(servers.map(server => new Promise<void>((resolve) => {
       server.close(() => resolve());
     })));
@@ -329,6 +330,46 @@ describe('registerWebMethods', () => {
     expect(message).toContain('Fetch failed: 500 Internal Server Error');
     expect(message.toLowerCase()).not.toContain('please try again');
     expect(message.toLowerCase()).not.toContain('ask for resend');
+  });
+
+  it('opens a per-url web.fetch circuit after repeated provider failures', async () => {
+    let requestCount = 0;
+    const { server, url } = await listenHttp(() => {
+      requestCount += 1;
+      return {
+        status: 503,
+        body: 'service unavailable',
+      };
+    });
+    servers.push(server);
+
+    const harness = createRuntimeHarness({
+      workspacePath: process.cwd(),
+      urlPolicy: {
+        localCrawlerLane: {
+          enabled: true,
+          allowHttp: true,
+          hostAllowlist: ['127.0.0.1'],
+        },
+      },
+    });
+    const params = {
+      url: `${url}/unstable`,
+      lane: 'local_crawler',
+    };
+
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      await expect(harness.invoke(params)).rejects.toMatchObject({
+        code: GatewayErrors.PROVIDER_ERROR,
+        message: expect.stringContaining('Fetch failed: 503 Service Unavailable'),
+      });
+    }
+
+    await expect(harness.invoke(params)).rejects.toMatchObject({
+      code: GatewayErrors.PROVIDER_ERROR,
+      message: expect.stringContaining('Circuit open for web.fetch'),
+    });
+    expect(requestCount).toBe(3);
   });
 
   it('fetches binary payloads for web.fetch_binary', async () => {

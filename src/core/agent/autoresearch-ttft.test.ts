@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { SubstrateAgent } from './substrate-agent.js';
 import { EventBus } from '../../shared/event-bus.js';
 import type { SessionManager } from '../session/manager.js';
+import { resolveConversationScopeFromMetadata } from '../session/conversation-scope.js';
 import type { LLMProviderPort, LLMResponse } from './substrate-agent.js';
 import type {
   LLMContext,
@@ -48,7 +49,11 @@ function makeConfig(): SubstrateConfig {
       models: [
         {
           id: 'deepseek-v3.2',
-          identity: { provider: 'openrouter', model: 'deepseek/deepseek-v3.2' },
+          identity: {
+            provider: 'openrouter',
+            model: 'deepseek/deepseek-v3.2',
+            source: { type: 'openrouter' },
+          },
           rank: 1,
           purposes: [{ purpose: 'chat', primary: true }],
           capabilities: { contextWindow: 128_000, maxOutputTokens: 1024 },
@@ -93,6 +98,15 @@ function makeMockSessionManager(): SessionManager {
     appendSystemNote: vi.fn(),
     awaitPendingAutoCompaction: vi.fn().mockResolvedValue(undefined),
     scheduleAutoCompactionBetweenTurns: vi.fn().mockResolvedValue(undefined),
+    captureTurnSessionContext: vi.fn(async (input: { channelId: string }) => ({
+      channelId: input.channelId,
+      recentEntries: [],
+      sourceEntryCount: 0,
+      compactionSummaryTexts: [],
+      focusKnowledgeTexts: [],
+      continuityEntries: [],
+      versionPointer: 'mock-session-context',
+    })),
     buildContext: vi.fn().mockResolvedValue({
       systemPrompt: TEST_SYSTEM_PROMPT,
       messages: [{ role: 'user', content: 'Hello' }],
@@ -100,6 +114,18 @@ function makeMockSessionManager(): SessionManager {
     getRecentMessages: vi.fn().mockReturnValue([]),
     getRoleEnvelopeRefsForEntries: vi.fn().mockReturnValue([]),
     resolveSessionChannelId: vi.fn((channelId: string) => channelId),
+    getRecentConversationSpeakers: () => [],
+    resolveConversationScope: vi.fn((input: {
+      channelId: string;
+      channelMeta?: { isDirectMessage?: boolean };
+      userId?: string;
+      contact?: { contactId: string; displayName?: string };
+    }) => resolveConversationScopeFromMetadata({
+      channelId: input.channelId,
+      isDirectMessage: input.channelMeta?.isDirectMessage,
+      ...(input.contact ? { contact: input.contact } : {}),
+      ...(input.userId ? { participantId: input.userId } : {}),
+    })),
     getActiveFocusMemoryScopeQuery: vi.fn().mockReturnValue(null),
     setActiveContextSession: vi.fn(),
     getActiveContextSession: vi.fn().mockReturnValue(null),

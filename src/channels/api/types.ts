@@ -1,6 +1,7 @@
 // ── OpenAI-compatible API types ──
 
 import type { ExternalTelemetryEvent } from '../../shared/event-bus.js';
+import type { IntentionalNoReplyMetadata } from '../../shared/contracts/runtime.js';
 import type { ApiAuthPrincipal } from '../backplane/http/auth.js';
 
 export interface OpenAITextContentPart {
@@ -176,6 +177,7 @@ export interface ApiChatCompletionRpcSuccess {
     channelId: string;
     inputTokens: number;
     outputTokens: number;
+    noReply?: IntentionalNoReplyMetadata;
   };
 }
 

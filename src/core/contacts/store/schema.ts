@@ -14,7 +14,7 @@ function hasTable(db: Database.Database, tableName: string): boolean {
 
 function ensureChannelPrivacyColumn(db: Database.Database): void {
   if (!hasColumn(db, 'contact_channel_ids', 'privacy_level')) {
-    db.exec("ALTER TABLE contact_channel_ids ADD COLUMN privacy_level TEXT NOT NULL DEFAULT 'semi_private'");
+    db.exec("ALTER TABLE contact_channel_ids ADD COLUMN privacy_level TEXT NOT NULL DEFAULT 'invite_only'");
   }
 }
 
@@ -24,9 +24,21 @@ function ensureConversationChannelPrivacyColumn(db: Database.Database): void {
   }
 }
 
+function ensureMachineIntelligenceColumn(db: Database.Database): void {
+  if (!hasColumn(db, 'contacts', 'is_machine_intelligence')) {
+    db.exec('ALTER TABLE contacts ADD COLUMN is_machine_intelligence INTEGER NOT NULL DEFAULT 0');
+  }
+}
+
 function ensureNicknameColumn(db: Database.Database): void {
   if (!hasColumn(db, 'contacts', 'nickname')) {
     db.exec('ALTER TABLE contacts ADD COLUMN nickname TEXT');
+  }
+}
+
+function ensureTimezoneColumn(db: Database.Database): void {
+  if (!hasColumn(db, 'contacts', 'timezone')) {
+    db.exec('ALTER TABLE contacts ADD COLUMN timezone TEXT');
   }
 }
 
@@ -60,14 +72,16 @@ export function initializeContactStoreSchema(db: Database.Database): void {
       emotional_time_series TEXT NOT NULL DEFAULT '[]',
       first_seen TEXT NOT NULL,
       last_seen TEXT NOT NULL,
-      notes TEXT
+      notes TEXT,
+      timezone TEXT,
+      is_machine_intelligence INTEGER NOT NULL DEFAULT 0
     );
 
     CREATE TABLE IF NOT EXISTS contact_channel_ids (
       contact_id TEXT NOT NULL,
       channel TEXT NOT NULL,
       channel_user_id TEXT NOT NULL,
-      privacy_level TEXT NOT NULL DEFAULT 'semi_private',
+      privacy_level TEXT NOT NULL DEFAULT 'invite_only',
       first_seen TEXT NOT NULL,
       last_seen TEXT NOT NULL,
       PRIMARY KEY (channel, channel_user_id),
@@ -145,6 +159,11 @@ export function initializeContactStoreSchema(db: Database.Database): void {
       FOREIGN KEY (target_entity_id) REFERENCES social_graph_entities(id) ON DELETE CASCADE
     );
 
+    CREATE TABLE IF NOT EXISTS contact_maintenance_watermarks (
+      processor TEXT PRIMARY KEY,
+      last_run_at TEXT NOT NULL
+    );
+
     CREATE INDEX IF NOT EXISTS idx_contacts_trust ON contacts(trust_level);
     CREATE INDEX IF NOT EXISTS idx_contacts_discord ON contacts(discord_user_id);
     CREATE INDEX IF NOT EXISTS idx_contact_channel_ids_contact ON contact_channel_ids(contact_id);
@@ -183,6 +202,8 @@ export function initializeContactStoreSchema(db: Database.Database): void {
   `);
 
   ensureNicknameColumn(db);
+  ensureTimezoneColumn(db);
+  ensureMachineIntelligenceColumn(db);
   ensureEmotionalTimeSeriesColumn(db);
   ensureChannelPrivacyColumn(db);
   ensureConversationChannelPrivacyColumn(db);

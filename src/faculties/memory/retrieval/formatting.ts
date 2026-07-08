@@ -1,7 +1,11 @@
 import type { EmotionalSnapshot } from '../../../core/contacts/store/emotional-baseline.js';
 import { wrapPromptSectionXml } from '../../../core/identity/prompt-sections.js';
+import { renderSystemLanguageTemplate } from '../../../core/identity/system-language.js';
 import { isBoundaryMemory } from '../boundary-log.js';
-import type { ContactProfileArtifact } from '../memory-store-port.js';
+import type {
+  ContactProfileArtifact,
+  MemoryEvolutionRelation,
+} from '../memory-store-port.js';
 import type { PurrMemory } from '../types.js';
 import {
   formatMemoryWithheldRelevanceBandLabel,
@@ -30,14 +34,15 @@ export function renderPromptBlock(
   },
 ): string {
   const sections: string[] = [];
+  const socialContext = options?.socialContext;
   if (profile && profile.summary.trim().length > 0) {
     sections.push(wrapPromptSectionXml({
       id: 'core_profile',
       content: `Core profile for this person:\n${profile.summary.trim()}`,
     }));
   }
-  if ((options?.socialContext?.relatedContactsById.size ?? 0) > 0) {
-    sections.push(renderSocialContext(options.socialContext!));
+  if ((socialContext?.relatedContactsById.size ?? 0) > 0 && socialContext) {
+    sections.push(renderSocialContext(socialContext));
   }
   if (options?.emotionalSnapshot) {
     sections.push(renderEmotionalSnapshot(options.emotionalSnapshot));
@@ -116,7 +121,7 @@ function renderEmotionalContinuityMemories(memories: PurrMemory[]): string {
       : memory.emotionalValence <= -0.25
         ? ' (-)'
         : '';
-    return `- [emotional] ${memory.text}${marker}`;
+    return `- [emotional] ${compactMemoryTextForPrompt(memory.text)}${marker}`;
   });
   return wrapPromptSectionXml({
     id: 'cross_session_emotional_continuity',
@@ -135,17 +140,24 @@ function renderWithheldSummary(summary: MemoryWithheldSummary): string {
   return wrapPromptSectionXml({
     id: 'memory_context_note',
     content: [
-      'Memory context note:',
-      `- ${summary.totalCount} candidate ${plural} kept out of this turn's memory context.`,
-      ...(detailLine ? [`- Broad trust/privacy reasons: ${detailLine}.`] : []),
-      ...(relevanceLine ? [`- Coarse relevance bands: ${relevanceLine}.`] : []),
-      '- Safe next actions: do not infer or disclose missing details; ask for consent, clarification, or a more private/higher-trust channel if needed.',
+      renderSystemLanguageTemplate('memory_context_note.header'),
+      renderSystemLanguageTemplate('memory_context_note.withheld_count', {
+        total_count: summary.totalCount,
+        memory_noun: plural,
+      }),
+      ...(detailLine
+        ? [renderSystemLanguageTemplate('memory_context_note.reasons', { detail_line: detailLine })]
+        : []),
+      ...(relevanceLine
+        ? [renderSystemLanguageTemplate('memory_context_note.relevance', { relevance_line: relevanceLine })]
+        : []),
+      renderSystemLanguageTemplate('memory_context_note.safe_next_actions'),
     ].join('\n'),
   });
 }
 
 function renderEpisodicLandmarkChains(chains: readonly EpisodicRetrievalChain[]): string {
-  const lines = ['Episodic landmark chains selected before raw span/artifact drill-down:'];
+  const lines = ['Episodes from your shared history related to this conversation:'];
   chains.forEach((chain, chainIndex) => {
     const chainTerms = chain.matchedTerms.length > 0
       ? `; matched: ${chain.matchedTerms.join(', ')}`
@@ -160,57 +172,85 @@ function renderEpisodicLandmarkChains(chains: readonly EpisodicRetrievalChain[])
           || arc.targetEpisodeId === episode.id
         ));
       const arcPrefix = incomingArc
-        ? `${incomingArc.arcKind} from ${otherEpisodeId(incomingArc, episode.id)} -> `
+        ? `${incomingArc.arcKind} from ${otherEpisodeTitle(chain, incomingArc, episode.id)} -> `
         : '';
       const themes = episode.themes.length > 0 ? episode.themes.slice(0, 5).join(', ') : 'none';
       lines.push(
-        `- ${arcPrefix}${compactPromptLine(episode.title, 96)} (${episode.startedAt} to ${episode.endedAt}; themes: ${themes}; salience ${episode.salience.score.toFixed(2)})`,
+        `- ${arcPrefix}${compactPromptLine(episode.title, 96)} (${formatEpisodeTimeRange(episode.startedAt, episode.endedAt)}; themes: ${themes})`,
       );
-      lines.push(`  Landmark: ${compactPromptLine(episode.landmark, 260)}`);
-      const refs = formatEpisodeRawRefs(episode);
-      if (refs) {
-        lines.push(`  Raw refs for drill-down: ${refs}`);
-      }
+      lines.push(`  Landmark: ${compactPromptLine(stripLandmarkTimestampTail(episode.landmark), 260)}`);
     });
   });
 
-  lines.push('Use these landmarks as scoped recall waypoints; drill into raw span/artifact refs only when needed.');
+  lines.push('Use these landmarks to orient recall; search the session history when you need the full conversation behind one.');
   return wrapPromptSectionXml({
     id: 'episodic_landmark_chains',
     content: lines.join('\n'),
   });
 }
 
-function otherEpisodeId(
+function otherEpisodeTitle(
+  chain: EpisodicRetrievalChain,
   arc: EpisodicRetrievalChain['arcs'][number],
   episodeId: string,
 ): string {
-  return arc.sourceEpisodeId === episodeId ? arc.targetEpisodeId : arc.sourceEpisodeId;
-}
-
-function formatEpisodeRawRefs(
-  episode: EpisodicRetrievalChain['episodes'][number],
-): string {
-  const parts: string[] = [];
-  if (episode.spanRefs.length > 0) {
-    parts.push(`spans ${episode.spanRefs.slice(0, 4).map(ref => ref.spanId).join(', ')}`);
-  }
-  if (episode.artifactRefs.length > 0) {
-    parts.push(`artifacts ${episode.artifactRefs.slice(0, 4).map(ref => ref.artifactId).join(', ')}`);
-  }
-  const provenanceRefs = episode.provenanceRefs
-    .slice(0, 6)
-    .map(ref => `${ref.kind}:${ref.refId}`);
-  if (provenanceRefs.length > 0) {
-    parts.push(`provenance ${provenanceRefs.join(', ')}`);
-  }
-  return parts.join('; ');
+  const otherId = arc.sourceEpisodeId === episodeId ? arc.targetEpisodeId : arc.sourceEpisodeId;
+  const other = chain.episodes.find(episode => episode.id === otherId);
+  if (!other) return 'an earlier episode';
+  return `"${compactPromptLine(other.title, 64)}"`;
 }
 
 function compactPromptLine(value: string, maxChars: number): string {
   const compact = value.replace(/\s+/g, ' ').trim();
   if (compact.length <= maxChars) return compact;
   return `${compact.slice(0, maxChars - 3)}...`;
+}
+
+// Memory text written by reflection/deliberation flows can carry machine
+// artifacts (fenced JSON self-reports, carry-forward scaffolding) appended
+// after the narrative paragraph. The narrative is the memory; the artifact
+// belongs to records and tooling, never to companion-facing context.
+// Exported so the reflection writer can store narrative-only text at the
+// source; this render-time pass remains the safety net for legacy memories.
+export function compactMemoryTextForPrompt(text: string): string {
+  const fenceIndex = text.indexOf('```');
+  const narrative = (fenceIndex >= 0 ? text.slice(0, fenceIndex) : text)
+    .replace(/\*\*carry_forward:\*\*[\s\S]*$/i, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (narrative.length > 0) return narrative;
+  return text.replace(/\s+/g, ' ').trim();
+}
+
+const UTC_MONTH_NAMES = [
+  'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+] as const;
+
+// Auto-generated landmarks end with a raw ISO range that duplicates the
+// readable time range already on the episode line.
+function stripLandmarkTimestampTail(landmark: string): string {
+  return landmark
+    .replace(/\s*from \d{4}-\d{2}-\d{2}T[\d:.]+Z to \d{4}-\d{2}-\d{2}T[\d:.]+Z\.?/g, '.')
+    .replace(/\.\.+$/, '.')
+    .trim();
+}
+
+function formatEpisodeTimeRange(startedAt: string, endedAt: string): string {
+  const start = new Date(startedAt);
+  const end = new Date(endedAt);
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) {
+    return `${startedAt} to ${endedAt}`;
+  }
+  const day = (date: Date): string => (
+    `${UTC_MONTH_NAMES[date.getUTCMonth()]} ${date.getUTCDate()} ${date.getUTCFullYear()}`
+  );
+  const clock = (date: Date): string => (
+    `${String(date.getUTCHours()).padStart(2, '0')}:${String(date.getUTCMinutes()).padStart(2, '0')}`
+  );
+  if (start.toISOString().slice(0, 10) === end.toISOString().slice(0, 10)) {
+    return `${day(start)}, ${clock(start)}-${clock(end)} UTC`;
+  }
+  return `${day(start)} ${clock(start)} UTC to ${day(end)} ${clock(end)} UTC`;
 }
 
 function formatMemoriesForPrompt(
@@ -291,12 +331,15 @@ function renderSociallyScopedMemorySections(
 }
 
 function renderMemorySection(heading: string, scored: ScoredMemory[]): string {
-  const lines = scored.map(s => {
+  const lines = scored.flatMap(s => {
     const m = s.memory;
     const valence =
       m.emotionalValence > 0.3 ? ' (+)' :
       m.emotionalValence < -0.3 ? ' (-)' : '';
-    return `- [${m.type}] ${m.text}${valence}`;
+    return [
+      `- [${m.type}] ${compactMemoryTextForPrompt(m.text)}${valence}`,
+      ...formatEvolutionChainLines(s),
+    ];
   });
 
   return wrapPromptSectionXml({
@@ -314,7 +357,7 @@ function renderAttributedMemorySection(
   scored: ScoredMemory[],
   contactContextById?: ReadonlyMap<string, RetrievalContactContext>,
 ): string {
-  const lines = scored.map(s => {
+  const lines = scored.flatMap(s => {
     const memory = s.memory;
     const valence =
       memory.emotionalValence > 0.3 ? ' (+)' :
@@ -323,7 +366,10 @@ function renderAttributedMemorySection(
     const subjectPrefix = descriptor
       ? `${descriptor.displayName}${formatContactDescriptorSuffix(descriptor)}: `
       : '';
-    return `- [${memory.type}] ${subjectPrefix}${memory.text}${valence}`;
+    return [
+      `- [${memory.type}] ${subjectPrefix}${compactMemoryTextForPrompt(memory.text)}${valence}`,
+      ...formatEvolutionChainLines(s),
+    ];
   });
   return wrapPromptSectionXml({
     id: heading.includes('social context')
@@ -331,6 +377,26 @@ function renderAttributedMemorySection(
       : 'separate_people_memories',
     content: `${heading}\n${lines.join('\n')}`,
   });
+}
+
+function formatEvolutionChainLines(scored: ScoredMemory): string[] {
+  if (!scored.evolutionChain || scored.evolutionChain.length === 0) return [];
+  return scored.evolutionChain.map(link => (
+    `  - ${formatEvolutionRelation(link.relation)} [${link.memory.type}] ${compactMemoryTextForPrompt(link.memory.text)}${link.confidence < 0.6 ? ' (tentative link)' : ''}`
+  ));
+}
+
+function formatEvolutionRelation(relation: MemoryEvolutionRelation): string {
+  switch (relation) {
+    case 'supersedes':
+      return 'Supersedes';
+    case 'updates':
+      return 'Updates';
+    case 'negates':
+      return 'Negates';
+    case 'conflicts_with':
+      return 'Conflicts with';
+  }
 }
 
 function formatContactDescriptorSuffix(descriptor: RetrievalContactContext): string {
@@ -350,6 +416,6 @@ export function renderProactiveRecall(memory: PurrMemory): string {
     memory.emotionalValence < -0.3 ? ' (-)' : '';
   return [
     'Spontaneous recall:',
-    `- [${memory.type}] ${memory.text}${valenceSuffix}`,
+    `- [${memory.type}] ${compactMemoryTextForPrompt(memory.text)}${valenceSuffix}`,
   ].join('\n');
 }

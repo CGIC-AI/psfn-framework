@@ -15,6 +15,17 @@ export interface BackupJsonConfig {
   maxMonthlyBackups: number;
   mirrorDir: string;
   verifyRestore: boolean;
+  encryption: BackupEncryptionJsonConfig;
+}
+
+export interface BackupEncryptionJsonConfig {
+  mode: 'required';
+  keyRef: BackupEncryptionKeyRefConfig;
+}
+
+export interface BackupEncryptionKeyRefConfig {
+  kind: 'env';
+  envName: string;
 }
 
 interface BackupConfigLoadOptions {
@@ -48,6 +59,38 @@ function toString(value: unknown, field: string): string {
   return value;
 }
 
+function validateEncryptionConfig(value: unknown): BackupEncryptionJsonConfig {
+  if (!isRecord(value)) {
+    throw new Error('Invalid backup config: encryption must be an object');
+  }
+  if (value.mode !== 'required') {
+    throw new Error(
+      `Invalid backup config: encryption.mode must be "required", got ${JSON.stringify(value.mode)}`,
+    );
+  }
+  if (!isRecord(value.keyRef)) {
+    throw new Error('Invalid backup config: encryption.keyRef must be an object');
+  }
+  if (value.keyRef.kind !== 'env') {
+    throw new Error(
+      `Invalid backup config: encryption.keyRef.kind must be "env", got ${JSON.stringify(value.keyRef.kind)}`,
+    );
+  }
+  const envName = toString(value.keyRef.envName, 'encryption.keyRef.envName').trim();
+  if (!/^[A-Z_][A-Z0-9_]*$/.test(envName)) {
+    throw new Error(
+      `Invalid backup config: encryption.keyRef.envName must be an uppercase env var name, got ${JSON.stringify(value.keyRef.envName)}`,
+    );
+  }
+  return {
+    mode: 'required',
+    keyRef: {
+      kind: 'env',
+      envName,
+    },
+  };
+}
+
 function validateBackupConfig(raw: unknown, sourcePath: string): BackupJsonConfig {
   if (!isRecord(raw)) {
     throw new Error(`Invalid backup config at ${sourcePath}: expected object`);
@@ -59,6 +102,7 @@ function validateBackupConfig(raw: unknown, sourcePath: string): BackupJsonConfi
     maxMonthlyBackups: toPositiveNumber(raw.maxMonthlyBackups, 'maxMonthlyBackups', 0),
     mirrorDir: toString(raw.mirrorDir, 'mirrorDir'),
     verifyRestore: toBoolean(raw.verifyRestore, 'verifyRestore'),
+    encryption: validateEncryptionConfig(raw.encryption),
   };
 }
 

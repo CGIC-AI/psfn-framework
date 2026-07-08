@@ -20,6 +20,9 @@ import type { RuntimePromptLayerSchemaClassification } from '../../../../src/cor
 import type { NorthStarItem } from '../../../../src/faculties/north-star/store.js';
 import type { SkillEntry, SkillSnapshot } from '../../../../src/faculties/skills/types.js';
 import type { ValuesJournalEntry } from '../../../../src/faculties/values/store.js';
+import type { ReflectionJournalEntry } from '../../../../src/persistence/journals/reflection-journal.js';
+import type { ReflectionMetacognitionJournalEntry } from '../../../../src/persistence/journals/reflection-metacognition-journal.js';
+import type { ReflectionDailyJournalEntry } from '../../../../src/persistence/journals/reflection-substrate.js';
 import type { ReflectionTemplate } from '../../../../src/core/scheduler/heartbeat-policy.js';
 import type {
   AdminSessionListData as CanonicalAdminSessionListData,
@@ -77,11 +80,22 @@ export type {
 } from '../../../../src/operator/garden/services/types.js';
 export type {
   AdminDashboardData,
+  AdminCogSecEventListData,
+  AdminCogSecRemediationApplyData,
+  AdminCogSecRemediationInput,
+  AdminCogSecRemediationPreviewData,
   AdminPromptDetailData,
   AdminPromptListData,
   AdminSessionListData,
   AdminSessionMessagesData,
+  AdminSessionRouteListData,
+  AdminSessionRouteResetData,
+  AdminSessionRouteResetInput,
+  AdminSessionRouteView,
+  AdminSessionSearchData,
+  AdminSessionSearchHitView,
   AdminSessionTurnData,
+  AdminPromptLoomData,
   AdminTurnRetrievalTelemetry,
   AdminTurnStageTelemetry,
   AdminSettingsData,
@@ -121,6 +135,9 @@ export type {
 } from '../../../../src/faculties/skills/types.js';
 export type { NorthStarItem, NorthStarScope } from '../../../../src/faculties/north-star/store.js';
 export type { ValuesJournalEntry } from '../../../../src/faculties/values/store.js';
+export type { ReflectionJournalEntry } from '../../../../src/persistence/journals/reflection-journal.js';
+export type { ReflectionMetacognitionJournalEntry } from '../../../../src/persistence/journals/reflection-metacognition-journal.js';
+export type { ReflectionDailyJournalEntry } from '../../../../src/persistence/journals/reflection-substrate.js';
 
 // Memory -- backend-owned with UI compatibility overlays for legacy wire shapes.
 export type AdminUiPurrMemory = Omit<CanonicalPurrMemory, 'type' | 'scopeRef' | 'sensitivity'> & {
@@ -132,7 +149,24 @@ export type AdminUiPurrMemory = Omit<CanonicalPurrMemory, 'type' | 'scopeRef' | 
   updatedAt?: number;
   emotionalWeight?: number;
   supersededAt?: number;
+  bodyRedacted?: boolean;
+  bodyRedaction?: AdminMemoryBodyRedaction;
 };
+
+// Explicit redaction descriptor for a hidden high-intimacy memory body.
+export interface AdminMemoryBodyRedaction {
+  sensitivity: string;
+  originalLength: number;
+  reason: 'high_intimacy_sensitivity';
+  revealHint: string;
+}
+
+// Session-elevation state for reading high-intimacy memory bodies.
+export interface AdminMemoryElevationStatus {
+  elevated: boolean;
+  expiresAt?: number;
+  ttlMs: number;
+}
 
 export type AdminUiMemoryScopeRef = Omit<CanonicalMemoryScopeRef, 'kind'> & {
   kind: CanonicalMemoryScopeRef['kind'] | string;
@@ -151,6 +185,8 @@ export interface AdminMemoryPrivacySummary {
   consentGatedCount: number;
   contactLinkedCount: number;
   scopedCount: number;
+  preferenceCount: number;
+  durablePreferenceCount: number;
   sensitivityCounts: Record<string, number>;
 }
 
@@ -165,6 +201,7 @@ export interface AdminMemoryListData {
     hasPrevious: boolean;
     hasNext: boolean;
   };
+  elevation?: AdminMemoryElevationStatus;
 }
 
 export interface AdminMemoryDetailData {
@@ -172,6 +209,7 @@ export interface AdminMemoryDetailData {
   linkedContact?: AdminMemoryContactSummary;
   scopeAssignments: AdminMemoryScopeAssignmentView[];
   scopeRepair?: AdminMemoryScopeRepairView;
+  elevation?: AdminMemoryElevationStatus;
 }
 
 export interface AdminMemorySearchResult {
@@ -179,6 +217,7 @@ export interface AdminMemorySearchResult {
   results: AdminUiPurrMemory[];
   contactsById: Record<string, AdminMemoryContactSummary>;
   privacySummary: AdminMemoryPrivacySummary;
+  elevation?: AdminMemoryElevationStatus;
 }
 
 export interface AdminMemoryLink {
@@ -243,6 +282,7 @@ export interface AdminMemoryScopeListData {
 export interface AdminMemoryScopeDetailData {
   scope: AdminMemoryScopeSummary;
   memories: AdminMemoryScopedMemoryView[];
+  elevation?: AdminMemoryElevationStatus;
 }
 
 export interface AdminMemoryScopeMutationResult {
@@ -313,9 +353,38 @@ export interface AdminTurnPromptSnapshotData {
   versionPointer: string;
 }
 
+export type AdminAuthenticityProvenanceKind =
+  | 'user_direct'
+  | 'companion_direct'
+  | 'compaction_summary'
+  | 'system_note'
+  | 'system_injection'
+  | 'memory_retrieval'
+  | 'extraction_artifact'
+  | 'projection'
+  | 'search_result'
+  | 'tool_result'
+  | 'redacted_transformed';
+
+export interface AdminAuthenticityProvenance {
+  schemaVersion: 1;
+  kind: AdminAuthenticityProvenanceKind;
+  sourceAuthor: string;
+  transformedBy: string;
+  wording: string;
+  directSpeech: boolean;
+  detailLoss: string;
+  emotionalTexture: string;
+  safeAsPartnerSpeech: boolean;
+  sourceSpanCount?: number;
+  sourceEntryIds?: number[];
+  notes?: string[];
+}
+
 export interface AdminTurnPromptContextMessage {
   role: string;
   content: string;
+  provenance?: AdminAuthenticityProvenance;
 }
 
 export type AdminPromptSectionCacheabilityClass =
@@ -352,12 +421,26 @@ export interface AdminPromptSectionCacheability {
   reason: string;
 }
 
+export type AdminPromptSectionScopeClass = 'dm' | 'room' | 'global';
+
+export type AdminPromptSectionVolatilityClass = 'static' | 'session_stable' | 'append_only' | 'volatile';
+
+export interface AdminPromptSectionScopeProvenance {
+  producer?: string;
+  scopeKey?: string;
+  scopeClass?: AdminPromptSectionScopeClass;
+  volatility?: AdminPromptSectionVolatilityClass;
+  sourceHint?: string;
+}
+
 export interface AdminPromptSectionTelemetry {
   id: string;
   title: string;
   content: string;
   charCount: number;
   tokenCount: number;
+  provenance?: AdminAuthenticityProvenance;
+  scopeProvenance?: AdminPromptSectionScopeProvenance;
 }
 
 export interface AdminTurnProviderWireMessage {
@@ -373,6 +456,20 @@ export interface AdminTurnProviderSystemRoleData {
   usesOutOfBandSystemPrompt: boolean;
 }
 
+/**
+ * Provider prompt-cache telemetry mirror, rendered absent-tolerant in the
+ * Loom Cache tab. E2.4 populates hit/miss fields; render whatever exists.
+ */
+export interface AdminTurnPromptCachingObservabilityData {
+  configured: boolean;
+  engaged: boolean;
+  strategy?: string;
+  retention?: string;
+  scope?: string;
+  sessionId?: string;
+  reason?: string;
+}
+
 export interface AdminTurnProviderObservabilityData {
   routeKind: string;
   requestedProvider: string;
@@ -382,6 +479,7 @@ export interface AdminTurnProviderObservabilityData {
   backendApi: string;
   backendBaseUrl?: string;
   systemRole: AdminTurnProviderSystemRoleData;
+  promptCaching?: AdminTurnPromptCachingObservabilityData;
   providerWireMessages: AdminTurnProviderWireMessage[];
 }
 
@@ -394,20 +492,27 @@ export interface AdminTurnPromptResponseSnapshotData {
   toolCallCount?: number;
 }
 
+/**
+ * Prompt observability that is not derivable from the PromptPlan (E2.2).
+ * Rendered prompt strings and the shipped message history live on
+ * AdminTurnSnapshotData.plan for current records; the optional string fields
+ * here exist only on historical persisted records that predate the plan.
+ */
 export interface AdminTurnPromptContextSnapshotData {
-  renderedStaticPrefix: string;
-  renderedDynamicSuffix: string;
-  runtimeContext: string;
-  memoryContextBlock: string;
-  scratchpadContext: string;
-  assembledPrompt: string;
-  finalSystemPrompt: string;
-  messages: AdminTurnPromptContextMessage[];
+  renderedStaticPrefix?: string;
+  renderedDynamicSuffix?: string;
+  runtimeContext?: string;
+  memoryContextBlock?: string;
+  scratchpadContext?: string;
+  assembledPrompt?: string;
+  finalSystemPrompt?: string;
+  messages?: AdminTurnPromptContextMessage[];
   currentTurnInput?: string;
   providerObservability?: AdminTurnProviderObservabilityData;
   response?: AdminTurnPromptResponseSnapshotData;
   inputSections?: AdminPromptSectionTelemetry[];
   runtimeContextSections?: AdminPromptSectionTelemetry[];
+  memoryContextSections?: AdminPromptSectionTelemetry[];
   finalSystemSections?: AdminPromptSectionTelemetry[];
   sectionCacheability?: AdminPromptSectionCacheability[];
 }
@@ -480,6 +585,26 @@ export interface AdminTurnMemorySnapshotData {
   versionPointer: string;
 }
 
+export interface AdminPromptPlanBlock {
+  id: string;
+  layer: 'prompt_stack' | 'runtime' | 'session' | 'provider';
+  volatility: 'static' | 'session_stable' | 'turn';
+  producer: string;
+  scopeKey?: string;
+  renderedText: string;
+  tokensEst: number;
+}
+
+export interface AdminPromptPlanData {
+  schemaVersion: number;
+  blocks: AdminPromptPlanBlock[];
+  variables: Record<string, string>;
+  messages: AdminTurnPromptContextMessage[];
+  toolDefinitions: AdminTurnToolSchema[];
+  cachePlan: { staticBoundary: number; sessionStableBoundary: number };
+  scope: unknown;
+}
+
 export interface AdminTurnSnapshotData {
   turnId: string;
   requestId: string;
@@ -488,6 +613,8 @@ export interface AdminTurnSnapshotData {
   trustLevel: string;
   canonicalContactKey?: string;
   prompt?: AdminTurnPromptSnapshotData;
+  /** The turn's PromptPlan: the persisted snapshot IS the plan (E2.2). */
+  plan?: AdminPromptPlanData;
   promptContext?: AdminTurnPromptContextSnapshotData;
   toolContext?: AdminTurnToolContextSnapshotData;
   sessionContext?: AdminTurnSessionContextSnapshotData;
@@ -531,7 +658,7 @@ export interface ContactChannelLink extends ContactChannelIdentity {
   lastSeen?: string;
 }
 
-export type ChannelPrivacyLevel = 'private' | 'semi_private' | 'public' | 'broadcast';
+export type ChannelPrivacyLevel = 'private' | 'invite_only' | 'public' | 'broadcast';
 
 export interface Contact {
   id: string;
@@ -638,11 +765,22 @@ export interface AdminContactSocialGraphView {
   connections: AdminContactSocialGraphConnectionView[];
 }
 
+export interface AdminContactRelationshipScoreView {
+  score: number;
+  resolvedTier: string;
+  previousTierThreshold?: number;
+  nextTier?: string;
+  nextTierThreshold?: number;
+  progressToNextTier?: number;
+  updatedAt?: string;
+}
+
 export interface AdminContactListData {
   contacts: Contact[];
   profileMap: Record<string, ContactProfileArtifact>;
   relatedChannelMap: Record<string, ContactConversationChannelView[]>;
   socialGraphMap: Record<string, AdminContactSocialGraphView>;
+  relationshipScoreMap?: Record<string, AdminContactRelationshipScoreView>;
   verifications: ContactIdentityLinkVerification[];
   mutationAudits: ContactMutationAuditEntry[];
   mutationAuditQuery: unknown;
@@ -664,7 +802,7 @@ export const RELATIONSHIP_TYPES: RelationshipType[] = [
 ];
 
 export const CHANNEL_PRIVACY_LEVELS: ChannelPrivacyLevel[] = [
-  'private', 'semi_private', 'public', 'broadcast',
+  'private', 'invite_only', 'public', 'broadcast',
 ];
 
 export interface ContactIdentityLinkVerification {
@@ -868,6 +1006,54 @@ export interface SchedulerMutationResult {
   message: string;
 }
 
+// Subsystem health (background lanes)
+export type SubsystemLaneOutcome = 'ran' | 'skipped' | 'degraded' | 'failed';
+
+export type SubsystemLaneStatus =
+  | 'ok'
+  | 'skipped'
+  | 'degraded'
+  | 'failed'
+  | 'stale'
+  | 'paused'
+  | 'never';
+
+export type SubsystemLaneSource = 'event_bus' | 'scheduler';
+
+export interface SubsystemLaneEvent {
+  at: number;
+  outcome: SubsystemLaneOutcome;
+  reason?: string;
+  error?: string;
+  counts?: Record<string, number>;
+}
+
+export interface SubsystemLaneHealth {
+  id: string;
+  label: string;
+  description: string;
+  source: SubsystemLaneSource;
+  sinceProcessStart: boolean;
+  status: SubsystemLaneStatus;
+  lastEventAt: number | null;
+  lastOutcome: SubsystemLaneOutcome | null;
+  lastReason: string | null;
+  lastError: string | null;
+  counts: Record<string, number>;
+  observedEventCount: number;
+  recent: SubsystemLaneEvent[];
+  intervalMs?: number;
+  lastRunAt?: number | null;
+  nextRunDueAt?: number | null;
+  deniedReason?: string | null;
+}
+
+export interface SubsystemHealthSnapshot {
+  processStartedAt: number;
+  generatedAt: number;
+  lanes: SubsystemLaneHealth[];
+}
+
 // Skills
 export type SkillRequirements = SkillEntry['requires'];
 
@@ -897,6 +1083,18 @@ export interface AdminValuesData {
   entries: ValuesJournalEntry[];
 }
 
+export interface AdminReflectionMetacognitionData {
+  entries: ReflectionMetacognitionJournalEntry[];
+}
+
+export interface AdminReflectionDailyData {
+  entries: ReflectionDailyJournalEntry[];
+}
+
+export interface AdminReflectionJournalData {
+  entries: ReflectionJournalEntry[];
+}
+
 // Telemetry
 export interface TelemetryCorrelation {
   turnId?: string;
@@ -924,6 +1122,7 @@ export type AuditActionType =
   | 'identity_edit'
   | 'external_action'
   | 'memory_mutation'
+  | 'memory_access'
   | 'settings_change'
   | 'confirmation'
   | 'charge_decision'

@@ -1,9 +1,12 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { PromptLayerStore } from '../../../core/identity/prompt-store.js';
-import { IMMUTABLE_HUMAN_SAFETY_LAYER_HEADER } from '../../../core/identity/prompt-composer.js';
+import {
+  COMPACTION_SUMMARY_PROMPT_KEY,
+  PromptRegistryStore,
+} from '../../../core/identity/prompt-registry.js';
 import { composeDefaultFoundationTemplate } from '../../../core/identity/foundation-sections.js';
 import { createPromptStatePort } from '../../../core/identity/prompt-state-port.js';
 import { PromptRuntimeLayoutStore } from '../../../core/identity/prompt-runtime.js';
@@ -44,6 +47,74 @@ afterEach(() => {
 });
 
 describe('AdminPromptsDataService', () => {
+  it('invalidates prompt cache on Garden prompt layer and registry edits', () => {
+    const root = makeTempDir();
+    const invalidatePromptCache = vi.fn();
+    const promptStore = new PromptLayerStore(
+      join(root, 'prompt-layers.json'),
+      join(root, 'prompt-history.jsonl'),
+      { onMutation: invalidatePromptCache },
+    );
+    const promptRegistry = new PromptRegistryStore(
+      join(root, 'prompt-registry.json'),
+      join(root, 'prompt-registry-history.jsonl'),
+      { onMutation: invalidatePromptCache },
+    );
+    promptStore.seedFromCharacterCard('seeded foundation');
+    invalidatePromptCache.mockClear();
+
+    const service = new AdminPromptsDataService({ promptStore, promptRegistry });
+    const foundation = promptStore.getByType('base')[0];
+    const layerResult = service.updatePromptLayer(JSON.stringify({
+      layerId: foundation.id,
+      content: 'Garden-edited stable prompt layer',
+    }));
+    const registryResult = service.updatePromptRegistry(JSON.stringify({
+      key: COMPACTION_SUMMARY_PROMPT_KEY,
+      content: 'Summarize this excerpt in 3 bullet points and preserve action items.',
+    }));
+
+    expect(layerResult.ok).toBe(true);
+    expect(registryResult.ok).toBe(true);
+    expect(invalidatePromptCache).toHaveBeenCalledWith('prompt-layer-update:base');
+    expect(invalidatePromptCache).toHaveBeenCalledWith(`prompt-registry-update:${COMPACTION_SUMMARY_PROMPT_KEY}`);
+  });
+
+  it('invalidates prompt cache on Garden runtime prompt block edits', () => {
+    const root = makeTempDir();
+    const invalidatePromptCache = vi.fn();
+    const promptStore = new PromptLayerStore(
+      join(root, 'prompt-layers.json'),
+      join(root, 'prompt-history.jsonl'),
+    );
+    const promptRuntimeLayoutStore = new PromptRuntimeLayoutStore(
+      join(root, 'prompt-runtime-layout.json'),
+      { onMutation: invalidatePromptCache },
+    );
+    promptRuntimeLayoutStore.setEditableBlockContent(
+      'runtime.persona_adaptation',
+      'Required persona guidance.',
+      'admin',
+    );
+    invalidatePromptCache.mockClear();
+    const service = new AdminPromptsDataService({
+      promptStore,
+      promptRuntimeLayoutStore,
+    });
+
+    const result = service.saveRuntimePromptBlocks(JSON.stringify({
+      blocks: [
+        {
+          id: 'runtime.context',
+          content: 'Stable extra context guidance.',
+        },
+      ],
+    }));
+
+    expect(result.ok).toBe(true);
+    expect(invalidatePromptCache).toHaveBeenCalledWith('prompt-runtime-layout-editable-blocks');
+  });
+
   it('allows human Character Foundation mutations through the Garden API service', () => {
     const root = makeTempDir();
     const promptStore = new PromptLayerStore(
@@ -228,7 +299,7 @@ describe('AdminPromptsDataService', () => {
     expect(nonNullSnapshot.immutableBlocks.map(block => block.editable)).toEqual([false, false, false, false]);
     expect(nonNullSnapshot.companionLayer?.editable).toBe(false);
     expect(nonNullSnapshot.mutableLayers).toHaveLength(0);
-    expect(nonNullSnapshot.preview.text).toContain(IMMUTABLE_HUMAN_SAFETY_LAYER_HEADER);
+    expect(nonNullSnapshot.preview.text).toContain('<immutable_human_safety_amendments>');
     expect(nonNullSnapshot.preview.text).not.toContain('operator constitution content');
     expect(nonNullSnapshot.preview.text).not.toContain('seeded foundation');
   });
@@ -251,6 +322,8 @@ describe('AdminPromptsDataService', () => {
       'runtime.scratchpad',
       'session.compaction_summary',
       'session.focus_knowledge',
+      'session.orientation',
+      'session.cogsec_notices',
     ], 'admin');
 
     const service = new AdminPromptsDataService({
@@ -268,9 +341,30 @@ describe('AdminPromptsDataService', () => {
       'runtime.scratchpad',
       'session.compaction_summary',
       'session.focus_knowledge',
+      'session.orientation',
+      'session.cogsec_notices',
+      'runtime.current_datetime',
       'session.current_messages',
       'tools.active_schemas',
     ]);
+    expect(listed.runtimeBlocks.find(block => block.id === 'session.orientation')).toMatchObject({
+      schemaClassification: 'required_runtime_aware',
+      required: true,
+      immutable: false,
+      providerManaged: false,
+      reorderable: true,
+      placement: 'system_prompt',
+      contentVisible: true,
+    });
+    expect(listed.runtimeBlocks.find(block => block.id === 'runtime.current_datetime')).toMatchObject({
+      schemaClassification: 'required_runtime_aware',
+      required: true,
+      immutable: false,
+      providerManaged: false,
+      reorderable: false,
+      placement: 'system_prompt',
+      contentVisible: true,
+    });
     expect(listed.runtimeBlocks.find(block => block.id === 'session.current_messages')).toMatchObject({
       schemaClassification: 'immutable_provider_managed',
       required: true,
@@ -571,6 +665,8 @@ describe('AdminPromptsDataService', () => {
         'runtime.scratchpad',
         'session.compaction_summary',
         'session.focus_knowledge',
+        'session.orientation',
+        'session.cogsec_notices',
       ],
     }));
 
@@ -584,6 +680,8 @@ describe('AdminPromptsDataService', () => {
       'runtime.scratchpad',
       'session.compaction_summary',
       'session.focus_knowledge',
+      'session.orientation',
+      'session.cogsec_notices',
     ]);
   });
 

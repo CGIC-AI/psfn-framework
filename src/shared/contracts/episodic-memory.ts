@@ -1,3 +1,4 @@
+import { isRecord } from '../utils/types.js';
 export const EPISODIC_CONTRACT_VERSION = 1 as const;
 
 export const EPISODE_ARC_KINDS = [
@@ -50,6 +51,13 @@ export interface EpisodeAffect {
   labels: string[];
 }
 
+/** The companion's own first-person take on what an episode meant to her. */
+export interface EpisodeMeaning {
+  text: string;
+  recordedAt: string;
+  source: 'companion_dream_pass' | 'companion_direct';
+}
+
 export interface Episode {
   schemaVersion: typeof EPISODIC_CONTRACT_VERSION;
   id: string;
@@ -66,6 +74,7 @@ export interface Episode {
   spanRefs: EpisodeSpanRef[];
   artifactRefs: EpisodeArtifactRef[];
   provenanceRefs: EpisodeProvenanceRef[];
+  meaning?: EpisodeMeaning;
   createdAt: string;
   updatedAt: string;
 }
@@ -103,9 +112,12 @@ const EPISODE_KEYS = new Set([
   'spanRefs',
   'artifactRefs',
   'provenanceRefs',
+  'meaning',
   'createdAt',
   'updatedAt',
 ]);
+const MEANING_KEYS = new Set(['text', 'recordedAt', 'source']);
+const MEANING_SOURCES = new Set(['companion_dream_pass', 'companion_direct']);
 const EPISODE_ARC_KEYS = new Set([
   'schemaVersion',
   'id',
@@ -149,9 +161,6 @@ const PROVENANCE_KINDS = new Set([
   'operator_note',
 ]);
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
 
 function assertKnownKeys(value: Record<string, unknown>, allowed: ReadonlySet<string>, label: string): void {
   for (const key of Object.keys(value)) {
@@ -358,6 +367,7 @@ export function parseEpisode(value: unknown): Episode {
 
   const threadId = parseOptionalString(record.threadId, 'episode.threadId');
   const channelId = parseOptionalString(record.channelId, 'episode.channelId');
+  const meaning = parseOptionalMeaning(record.meaning);
   return {
     schemaVersion: EPISODIC_CONTRACT_VERSION,
     id: parseRequiredString(record.id, 'episode.id'),
@@ -374,8 +384,24 @@ export function parseEpisode(value: unknown): Episode {
     spanRefs,
     artifactRefs,
     provenanceRefs: parseProvenanceRefs(record.provenanceRefs, 'episode.provenanceRefs'),
+    ...(meaning ? { meaning } : {}),
     createdAt: parseIsoInstant(record.createdAt, 'episode.createdAt'),
     updatedAt: parseIsoInstant(record.updatedAt, 'episode.updatedAt'),
+  };
+}
+
+function parseOptionalMeaning(value: unknown): EpisodeMeaning | undefined {
+  if (value === undefined) return undefined;
+  const record = parseRecord(value, 'episode.meaning');
+  assertKnownKeys(record, MEANING_KEYS, 'episode.meaning');
+  const source = parseRequiredString(record.source, 'episode.meaning.source');
+  if (!MEANING_SOURCES.has(source)) {
+    throw new Error(`episode.meaning.source "${source}" is unsupported`);
+  }
+  return {
+    text: parseRequiredString(record.text, 'episode.meaning.text'),
+    recordedAt: parseIsoInstant(record.recordedAt, 'episode.meaning.recordedAt'),
+    source: source as EpisodeMeaning['source'],
   };
 }
 

@@ -1,4 +1,3 @@
-import type Database from 'better-sqlite3';
 import type { ChannelType } from '../../shared/contracts/runtime.js';
 import type { ToolRegistrar } from '../agent/tool-registrar.js';
 import type { IntentionPostTurnHook } from '../agent/substrate-agent.js';
@@ -7,8 +6,12 @@ import type {
   ActiveConcernContextProvider,
   ConcernStorePort,
 } from './concern-store-port.js';
+import type { ActiveConcernVAD } from './concerns.js';
 import {
+  evaluatePendingFollowUpActivationState,
+  filterPendingFollowUpsForActiveChannel,
   type PendingFollowUpContextProvider,
+  type PendingFollowUp,
 } from './pending-follow-ups.js';
 import type { PendingFollowUpStorePort } from './pending-follow-up-store-port.js';
 import type {
@@ -25,10 +28,6 @@ import {
   type BehavioralPatternContextProvider,
 } from './patterns.js';
 import type { BehavioralPatternStorePort } from './behavioral-pattern-store-port.js';
-import {
-  createSQLiteIntentionRuntimeStores,
-  type SQLiteIntentionRuntimeStores,
-} from './sqlite-adapters.js';
 
 export interface IntentionRuntimeTarget {
   activeConcernProvider: ActiveConcernContextProvider | null;
@@ -67,6 +66,7 @@ export interface IntentionAppraisalHooks {
     channelId: string;
     canonicalContactKey?: string;
     sourceMessageId: string;
+    formationVAD?: ActiveConcernVAD;
   }): Promise<void>;
   onIntentionFollowUpDecision(input: {
     decision: IntentionActionDecision;
@@ -75,10 +75,19 @@ export interface IntentionAppraisalHooks {
     canonicalContactKey?: string;
     sourceMessageId: string;
   }): Promise<string | undefined>;
+  getPendingFollowUpsForResurfacing(input: {
+    channelId: string;
+    canonicalContactKey?: string;
+    sourceMessageId: string;
+    isBackgroundTurn: boolean;
+    now: number;
+    motivationSignals?: readonly string[];
+    currentMoodValence?: number | null;
+  }): Promise<readonly PendingFollowUp[]>;
   onIntentionFollowUpActivated(input: {
     pendingFollowUpId: string;
     activationReason?: string;
-  }): Promise<void>;
+  }): Promise<boolean>;
 }
 
 export interface IntentionBehavioralPatternHooks {
@@ -132,6 +141,8 @@ function normalizeObservedAtIso(value: number | undefined): string | undefined {
   return new Date(Math.floor(value)).toISOString();
 }
 
+const PENDING_FOLLOW_UP_RESURFACE_LIMIT = 3;
+
 export function createIntentionAppraisalHooks(
   concernStore: ConcernStorePort,
   pendingFollowUpStore?: PendingFollowUpStorePort,
@@ -152,6 +163,8 @@ export function createIntentionAppraisalHooks(
     onIntentionConcernDecision: async ({
       decision,
       canonicalContactKey,
+      sourceMessageId,
+      formationVAD,
     }) => {
       if (decision.type !== 'concern') {
         return;
@@ -164,6 +177,8 @@ export function createIntentionAppraisalHooks(
         decision,
         ...(canonicalContactKey ? { contactId: canonicalContactKey } : {}),
         ...(expiresAt ? { expiresAt } : {}),
+        ...(formationVAD ? { formationVAD } : {}),
+        sourceMessageId,
       });
     },
     onIntentionFollowUpDecision: async ({
@@ -191,8 +206,46 @@ export function createIntentionAppraisalHooks(
         ...(decision.dueAt ? { dueAt: normalizeFutureIsoTimestamp(decision.dueAt) } : {}),
         ...(canonicalContactKey ? { contactId: canonicalContactKey } : {}),
         sourceMessageId,
+        ...(decision.followUp?.contextSummary
+          ? { contextSummary: decision.followUp.contextSummary }
+          : {}),
+        ...(decision.followUp?.wakeConditions?.length
+          ? { wakeConditions: decision.followUp.wakeConditions }
+          : {}),
       });
+      if (!followUp) {
+        return undefined;
+      }
       return followUp.id;
+    },
+    getPendingFollowUpsForResurfacing: async ({
+      channelId,
+      canonicalContactKey,
+      sourceMessageId,
+      isBackgroundTurn,
+      now,
+      motivationSignals,
+      currentMoodValence,
+    }) => {
+      if (!pendingFollowUpStore) {
+        return [];
+      }
+      const asOf = new Date(now).toISOString();
+      const pendingFollowUps = await pendingFollowUpStore.list({
+        ...(canonicalContactKey ? { contactId: canonicalContactKey } : {}),
+        includeActivated: false,
+        includeExpired: false,
+        asOf,
+      });
+      return filterPendingFollowUpsForActiveChannel(pendingFollowUps, channelId)
+        .filter(followUp => followUp.sourceMessageId !== sourceMessageId)
+        .filter(followUp => evaluatePendingFollowUpActivationState(followUp, {
+          now,
+          isBackgroundTurn,
+          ...(motivationSignals ? { motivationSignals } : {}),
+          ...(currentMoodValence !== undefined ? { currentMoodValence } : {}),
+        }).eligibleNow)
+        .slice(0, PENDING_FOLLOW_UP_RESURFACE_LIMIT);
     },
     onIntentionFollowUpActivated: async ({
       pendingFollowUpId,
@@ -201,9 +254,10 @@ export function createIntentionAppraisalHooks(
       if (!pendingFollowUpStore) {
         throw new Error('PendingFollowUpStorePort is required for follow-up activation');
       }
-      await pendingFollowUpStore.dequeue(pendingFollowUpId, {
+      const activated = await pendingFollowUpStore.dequeue(pendingFollowUpId, {
         ...(activationReason ? { activationReason } : {}),
       });
+      return activated !== null;
     },
   };
 }
@@ -316,31 +370,4 @@ export function wireIntentionRuntimeStores(
     pendingFollowUpStore,
     behavioralPatternTracker,
   };
-}
-
-export function wireIntentionRuntime(
-  target: IntentionRuntimeTarget,
-  db: Database.Database,
-): IntentionRuntimeWiring {
-  const {
-    concernProvider,
-    pendingFollowUpProvider,
-    behavioralPatternProvider,
-    concernStore,
-    pendingFollowUpStore,
-    behavioralPatternTracker,
-  }: SQLiteIntentionRuntimeStores = createSQLiteIntentionRuntimeStores(db);
-  return wireIntentionRuntimeStores(
-    target,
-    {
-      concernStore,
-      pendingFollowUpStore,
-      behavioralPatternTracker,
-    },
-    {
-      concernProvider,
-      pendingFollowUpProvider,
-      behavioralPatternProvider,
-    },
-  );
 }

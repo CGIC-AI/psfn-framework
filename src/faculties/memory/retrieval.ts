@@ -15,25 +15,30 @@ import type {
   RetrievalModeInput,
 } from './types.js';
 import { MEMORY_CONFIG } from './types.js';
+import type { ContextManifestMemorySeed } from '../../core/session/context-manifest.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type { EventBus } from '../../shared/event-bus.js';
 import {
   type TrustLevel,
-  type ChannelVisibility,
+  isHighTierTrustLevel,
 } from '../../system/trust/types.js';
+import type { ChannelPrivacy } from '../../system/trust/context-envelope.js';
 import type { ContextBudgetConfigLike } from '../../shared/context-budget.js';
 import {
   resolveMemoryRetrievalBudget,
   type ContextBudgetTurnCharacteristics,
 } from '../../shared/context-budget.js';
 import {
-  classifyChannel,
+  classifyChannelDisclosure,
+  type ChannelDisclosureContext,
   type ChannelMeta,
 } from '../../system/trust/policy.js';
 import { resolveBroadcastVisibilityScope } from '../../system/trust/broadcast-safety.js';
 import { createComponentLogger } from '../../shared/logger.js';
+import { clampUnit as clampProbability } from '../../shared/utils/numeric.js';
 import type { ContactStorePort } from '../../core/contacts/contact-store-port.js';
 import type { Contact, SocialRelationshipEdge } from '../../core/contacts/types.js';
+import type { ConversationScope } from '../../core/session/conversation-scope.js';
 import type { EmotionalSnapshot } from '../../core/contacts/store/emotional-baseline.js';
 import type { TurnMemorySnapshot } from '../../core/turns/snapshot.js';
 import {
@@ -42,7 +47,6 @@ import {
   type CostTelemetryPort,
 } from '../../shared/telemetry/cost-telemetry-port.js';
 import { getRequestContext } from '../../primitives/llm/request-context.js';
-import { evaluateCompositionalPolicyForChannelId } from '../../system/capabilities/compositional-policy.js';
 import {
   buildSnapshotVersionPointer,
   cloneContactProfileArtifact,
@@ -50,16 +54,13 @@ import {
   cloneMemory,
   cloneScoredMemory,
 } from '../../core/turns/snapshot.js';
-import {
-  composeRetrievalRanking,
-  RETRIEVAL_COMPOSITION_BATCH_SIZE,
-  RETRIEVAL_COMPOSITION_FINALIST_LIMIT,
-  RETRIEVAL_COMPOSITION_MAX_CANDIDATES,
-  type RetrievalComposeCandidate,
-} from './retrieval-compose.js';
 import { isInternalMemoryArtifact } from './internal-artifacts.js';
 import {
   cloneMemoryWithheldSummary,
+  createEmptyMemoryWithheldSummary,
+  incrementMemoryWithheldRelevanceBand,
+  incrementMemoryWithheldReason,
+  resolveMemoryWithheldRelevanceBand,
   serializeMemoryWithheldSummary,
   type MemoryWithheldSummary,
 } from './withheld-summary.js';
@@ -69,16 +70,45 @@ import {
 } from './types.js';
 import {
   evaluateRetrievalAccessDecision,
+  mergeMemoryWithheldSummaries,
   summarizeWithheldMemories,
+  type RetrievalRoomVisibilityContext,
 } from './retrieval/access.js';
+import {
+  ACTIVE_MEMORY_ENTRY_LIMIT_MULTIPLIER,
+  ACTIVE_MEMORY_ENTRY_MIN_LIMIT,
+  ACTIVE_MEMORY_MISS_DECAY,
+  ACTIVE_MEMORY_MISS_LIMIT,
+  cloneActiveMemorySnapshot,
+  type ActiveMemoryEntry,
+  type ActiveMemoryRefreshLoop,
+  type ActiveMemoryRefreshTarget,
+  type ActiveMemoryState,
+} from './retrieval/active-state.js';
 import {
   resolveGuaranteedSelectionFloor,
   selectWithinRelevanceAndTokenBudget,
 } from './retrieval/budget.js';
 import {
+  collectRecentLexicalMemoryCandidates,
+  mergeScoredMemoryCandidates,
+} from './retrieval/candidates.js';
+import {
+  applyCompositionalRetrievalRanking as applyCompositionalRetrievalRankingWithPolicy,
+} from './retrieval/compositional.js';
+import {
   renderProactiveRecall,
   renderPromptBlock,
 } from './retrieval/formatting.js';
+import type {
+  ActiveMemoryContextInvalidationRequest,
+  ActiveMemoryContextInvalidationResult,
+  ActiveMemoryContextRequest,
+  ActiveMemoryContextSnapshot,
+} from './active-context.js';
+import {
+  resolveActiveMemoryContextIdentity,
+} from './active-context.js';
 import {
   cloneRetrievalCallerContext,
   cloneRetrievalModeInput,
@@ -112,8 +142,21 @@ import {
   normalizeRelationCue,
   querySuggestsContactFocus,
 } from './retrieval/social.js';
+import {
+  computeSharedBackground,
+  SHARED_BACKGROUND_DEFAULT_LIMIT,
+  type SharedBackgroundAccessOptions,
+  type SharedBackgroundResult,
+} from './retrieval/shared-background.js';
+import {
+  collectContactProfileProvenanceRefs,
+  mergeProvenanceRefs,
+} from './retrieval/provenance.js';
+import {
+  applyWithheldSummaryTelemetry,
+  buildManifestSeedFromTelemetry,
+} from './retrieval/telemetry.js';
 import type {
-  CompositionalRetrievalDecision,
   RetrievalContactContext,
   RetrievalDecisionDiagnostics,
   RetrievalSocialContext,
@@ -121,106 +164,40 @@ import type {
   ScoredMemory,
 } from './retrieval/types.js';
 const log = createComponentLogger('Retrieval');
-const RECENT_MEMORY_AUGMENT_SCAN_LIMIT = 96;
-const RECENT_MEMORY_AUGMENT_SELECTED_LIMIT = 12;
-const RECENT_MEMORY_AUGMENT_MIN_OVERLAP = 2;
-const RECENT_MEMORY_AUGMENT_BASE_SIMILARITY = 0.62;
-
-function hasCountEntries(record: Record<string, number | undefined> | undefined): boolean {
-  return !!record && Object.values(record).some(count => count > 0);
-}
-
-function applyWithheldSummaryTelemetry(
-  telemetry: RetrievalTelemetry,
-  withheldSummary: MemoryWithheldSummary | undefined,
-): void {
-  telemetry.withheldCount = withheldSummary?.totalCount ?? 0;
-  const reasonCounts = withheldSummary?.reasonCounts;
-  if (hasCountEntries(reasonCounts)) {
-    telemetry.withheldReasonCounts = { ...reasonCounts };
-  }
-  const relevanceBands = withheldSummary?.relevanceBands;
-  if (hasCountEntries(relevanceBands)) {
-    telemetry.withheldRelevanceBands = { ...relevanceBands };
-  }
-}
-
-function collectContactProfileProvenanceRefs(profile: ContactProfileArtifact | undefined): string[] {
-  if (!profile) return [];
-  const refs = new Set<string>();
-  const contactId = profile.contactId.trim();
-  if (contactId) {
-    refs.add(`contact_profile:${contactId}`);
-  }
-  for (const sourceMemoryId of profile.sourceMemoryIds) {
-    const normalized = sourceMemoryId.trim();
-    if (normalized) {
-      refs.add(`contact_profile_source_memory:${normalized}`);
-    }
-  }
-  return [...refs];
-}
-
-function mergeProvenanceRefs(...groups: Array<readonly string[] | undefined>): string[] {
-  const refs = new Set<string>();
-  for (const group of groups) {
-    for (const ref of group ?? []) {
-      const normalized = ref.trim();
-      if (normalized) refs.add(normalized);
-    }
-  }
-  return [...refs];
-}
-
-function mergeScoredMemoryCandidates(
-  primary: Array<PurrMemory & { similarity: number }>,
-  augment: Array<PurrMemory & { similarity: number }>,
-): Array<PurrMemory & { similarity: number }> {
-  if (augment.length === 0) return primary;
-  const byId = new Map<string, PurrMemory & { similarity: number }>();
-  for (const memory of primary) {
-    byId.set(memory.id, memory);
-  }
-  for (const memory of augment) {
-    const existing = byId.get(memory.id);
-    if (!existing || memory.similarity > existing.similarity) {
-      byId.set(memory.id, memory);
-    }
-  }
-  return [...byId.values()].sort((left, right) => (
-    right.similarity - left.similarity
-    || right.salience - left.salience
-    || right.extractedAt - left.extractedAt
-  ));
-}
-
-function mergeMemoryWithheldSummaries(
-  ...summaries: Array<MemoryWithheldSummary | undefined>
-): MemoryWithheldSummary | undefined {
-  let merged: MemoryWithheldSummary | undefined;
-  for (const summary of summaries) {
-    if (!summary || summary.totalCount <= 0) continue;
-    merged ??= { totalCount: 0, reasonCounts: {}, relevanceBands: {} };
-    merged.totalCount += summary.totalCount;
-    for (const [reason, count] of Object.entries(summary.reasonCounts)) {
-      if (!count || count <= 0) continue;
-      const reasonKey = reason as keyof MemoryWithheldSummary['reasonCounts'];
-      merged.reasonCounts[reasonKey] = (merged.reasonCounts[reasonKey] ?? 0) + count;
-    }
-    for (const [band, count] of Object.entries(summary.relevanceBands ?? {})) {
-      if (!count || count <= 0) continue;
-      const bandKey = band as keyof NonNullable<MemoryWithheldSummary['relevanceBands']>;
-      merged.relevanceBands ??= {};
-      merged.relevanceBands[bandKey] = (merged.relevanceBands[bandKey] ?? 0) + count;
-    }
-  }
-  return merged;
-}
+const EVOLUTION_CHAIN_SELECTED_LIMIT = 3;
+const EVOLUTION_CHAIN_PER_MEMORY_LIMIT = 3;
+const EVOLUTION_CHAIN_USEFUL_HINT = /\b(history|lineage|changed|change|updated|update|previous|old|correction|corrected|conflict|contradict|superseded|why)\b/i;
 
 interface ContactProfileAccessResult {
   profile?: ContactProfileArtifact;
   withheldSummary?: MemoryWithheldSummary;
   withheldSourceMemoryIds: string[];
+}
+
+function buildRoomVisibilityContext(
+  channelId: string,
+  channelMeta: ChannelMeta | undefined,
+  canonicalContact: Contact | undefined,
+  conversationScope: ConversationScope | undefined,
+): RetrievalRoomVisibilityContext {
+  const canonicalContactRoomIds = new Set<string>();
+  for (const conversation of canonicalContact?.conversationChannels ?? []) {
+    const roomId = conversation.channelId.trim();
+    if (roomId.length > 0) canonicalContactRoomIds.add(roomId);
+  }
+
+  // The turn ConversationScope is plumbed through as an available input
+  // (E1 epic); the gating fields below intentionally keep deriving from
+  // channelMeta and the canonical contact until a dependent bead flips the
+  // room-visibility gate to consume the scope.
+  return {
+    currentChannelId: channelId,
+    ...(channelMeta?.isDirectMessage !== undefined
+      ? { currentIsDirectMessage: channelMeta.isDirectMessage }
+      : {}),
+    ...(canonicalContactRoomIds.size > 0 ? { canonicalContactRoomIds } : {}),
+    ...(conversationScope ? { conversationScope } : {}),
+  };
 }
 
 type RetrievalIntegrityErrorStage =
@@ -258,6 +235,14 @@ export interface MemoryRetrieverConfig {
   proactiveRecallMinTurnsBetween?: number;
 }
 
+export interface MemorySessionQuarantineFilter {
+  isSessionRetiredOrQuarantined(logicalSessionId: string): boolean;
+  getRetiredLogicalSessionIds?(): ReadonlySet<string>;
+}
+
+type MemoryQuarantineCandidate = Pick<PurrMemory, 'id' | 'sourceRef' | 'provenance' | 'provenanceRefs'>
+  & { similarity?: number };
+
 function isSubstrateConfig(config: MemoryRetrieverConfig | SubstrateConfig | undefined): config is SubstrateConfig {
   return !!config && typeof config === 'object' && 'defaultContextWindow' in config;
 }
@@ -284,6 +269,9 @@ export class MemoryRetriever implements MemoryProvider {
   private proactiveRecallMinTurnsBetween: number;
   private proactiveTurnCounter: number;
   private lastProactiveRecallTurn: number;
+  private activeMemoryContexts: Map<string, ActiveMemoryState>;
+  private activeMemoryRefreshLoops: Map<string, ActiveMemoryRefreshLoop>;
+  private sessionQuarantineFilter: MemorySessionQuarantineFilter | null;
 
   constructor(
     memoryStore: MemoryStorePort,
@@ -293,6 +281,7 @@ export class MemoryRetriever implements MemoryProvider {
     contactStore?: ContactStorePort | null,
     llmProvider?: LLMProviderPort | null,
     episodicStore?: EpisodicRetrievalStore | null,
+    sessionQuarantineFilter?: MemorySessionQuarantineFilter | null,
   ) {
     this.memoryStore = memoryStore;
     this.embeddingService = embeddingService;
@@ -325,8 +314,48 @@ export class MemoryRetriever implements MemoryProvider {
     this.contactStore = contactStore ?? null;
     this.llmProvider = llmProvider ?? null;
     this.episodicStore = episodicStore ?? null;
+    this.sessionQuarantineFilter = sessionQuarantineFilter ?? null;
     this.proactiveTurnCounter = 0;
     this.lastProactiveRecallTurn = Number.NEGATIVE_INFINITY;
+    this.activeMemoryContexts = new Map();
+    this.activeMemoryRefreshLoops = new Map();
+  }
+
+  /**
+   * Shared-background retrieval mode (E4.5): the union of memories that link two
+   * contacts (edge-evidence, co-mention, shared-room), gated by the asking
+   * context and bounded to top-K. Exposed to the model only as the
+   * `shared_background` ACTION of the canonical memory tool (Charter Law 33).
+   */
+  async sharedBackground(input: {
+    contactAId: string;
+    contactBId: string;
+    access: SharedBackgroundAccessOptions;
+    limit?: number;
+  }): Promise<SharedBackgroundResult> {
+    if (!this.contactStore) {
+      // Fail closed: no contact store means the social graph and rosters are
+      // unavailable, so no link can be established.
+      return {
+        contactAId: input.contactAId,
+        contactBId: input.contactBId,
+        resolved: false,
+        missingContactIds: [input.contactAId, input.contactBId],
+        items: [],
+        totalCandidates: 0,
+        truncated: false,
+        limit: input.limit ?? SHARED_BACKGROUND_DEFAULT_LIMIT,
+      };
+    }
+    return computeSharedBackground(
+      { memoryStore: this.memoryStore, contactStore: this.contactStore },
+      {
+        contactAId: input.contactAId,
+        contactBId: input.contactBId,
+        access: input.access,
+        ...(input.limit !== undefined ? { limit: input.limit } : {}),
+      },
+    );
   }
 
   private resolveRetrievalBudget(
@@ -349,14 +378,307 @@ export class MemoryRetriever implements MemoryProvider {
     );
   }
 
+  getActiveMemoryContext(request: ActiveMemoryContextRequest): ActiveMemoryContextSnapshot | null {
+    const identity = resolveActiveMemoryContextIdentity(request);
+    const state = this.activeMemoryContexts.get(identity.key);
+    if (!state) return null;
+    return cloneActiveMemorySnapshot(state.snapshot);
+  }
+
+  invalidateActiveMemoryContexts(
+    request: ActiveMemoryContextInvalidationRequest,
+  ): ActiveMemoryContextInvalidationResult {
+    const memoryIds = new Set((request.memoryIds ?? []).map(id => id.trim()).filter(Boolean));
+    const sessionChannelIds = new Set((request.sessionChannelIds ?? []).map(id => id.trim()).filter(Boolean));
+    const invalidatedKeys: string[] = [];
+    let invalidatedMemoryEntryCount = 0;
+
+    for (const [key, state] of this.activeMemoryContexts.entries()) {
+      const keyParts = key.split('|');
+      const sessionMatches = state.snapshot.channelId && sessionChannelIds.has(state.snapshot.channelId)
+        ? true
+        : [...sessionChannelIds].some(sessionId => keyParts.includes(`session:${sessionId}`));
+      const selectedMemoryMatches = state.snapshot.selectedMemoryIds.some(id => memoryIds.has(id));
+      const activeEntryMatches = [...state.entries.keys()].some(id => memoryIds.has(id));
+      if (!sessionMatches && !selectedMemoryMatches && !activeEntryMatches) continue;
+
+      invalidatedMemoryEntryCount += [...state.entries.keys()]
+        .filter(id => memoryIds.has(id)).length;
+      invalidatedKeys.push(key);
+      this.activeMemoryContexts.delete(key);
+    }
+
+    if (invalidatedKeys.length > 0) {
+      void this.eventBus?.emit('memory.active_context.invalidate', {
+        reason: request.reason,
+        memoryIds: [...memoryIds],
+        sessionChannelIds: [...sessionChannelIds],
+        invalidatedKeys: [...invalidatedKeys],
+        timestamp: Date.now(),
+      }).catch((error: unknown) => {
+        log.debug('Failed to emit active memory invalidation event', {
+          error: toErrorMessage(error),
+        });
+      });
+    }
+
+    return {
+      invalidatedContextCount: invalidatedKeys.length,
+      invalidatedMemoryEntryCount,
+      invalidatedKeys,
+    };
+  }
+
+  refreshActiveMemoryContext(request: ActiveMemoryContextRequest): Promise<ActiveMemoryContextSnapshot | null> {
+    const identity = resolveActiveMemoryContextIdentity(request);
+    const existing = this.activeMemoryRefreshLoops.get(identity.key);
+    if (existing) {
+      existing.latestRequest = request;
+      return existing.running;
+    }
+
+    const loop: ActiveMemoryRefreshLoop = {
+      running: Promise.resolve(null),
+    };
+    loop.running = this.runActiveMemoryRefreshLoop(identity.key, request)
+      .finally(() => {
+        if (this.activeMemoryRefreshLoops.get(identity.key) === loop) {
+          this.activeMemoryRefreshLoops.delete(identity.key);
+        }
+      });
+    this.activeMemoryRefreshLoops.set(identity.key, loop);
+    return loop.running;
+  }
+
+  private async runActiveMemoryRefreshLoop(
+    key: string,
+    initialRequest: ActiveMemoryContextRequest,
+  ): Promise<ActiveMemoryContextSnapshot | null> {
+    let nextRequest: ActiveMemoryContextRequest | undefined = initialRequest;
+    let latestSnapshot: ActiveMemoryContextSnapshot | null = null;
+    while (nextRequest) {
+      latestSnapshot = await this.performActiveMemoryRefresh(nextRequest);
+      const loop = this.activeMemoryRefreshLoops.get(key);
+      nextRequest = loop?.latestRequest;
+      if (loop) {
+        delete loop.latestRequest;
+      }
+    }
+    return latestSnapshot;
+  }
+
+  private async performActiveMemoryRefresh(
+    request: ActiveMemoryContextRequest,
+  ): Promise<ActiveMemoryContextSnapshot | null> {
+    const identity = resolveActiveMemoryContextIdentity(request);
+    const startedAt = Date.now();
+    this.markActiveMemoryRefreshing(identity.key, startedAt);
+
+    try {
+      const turnSnapshot = typeof this.captureTurnMemorySnapshot === 'function'
+        ? await this.captureTurnMemorySnapshot(
+          request.contextText,
+          request.channelId,
+          request.trustLevel,
+          request.channelMeta,
+          request.canonicalContactId,
+          request.turnBudgetCharacteristics,
+          request.scopeQuery,
+          request.callerContext,
+          request.retrievalMode,
+        )
+        : undefined;
+
+      await this.retrieve(
+        request.contextText,
+        request.channelId,
+        request.trustLevel,
+        request.channelMeta,
+        request.canonicalContactId,
+        turnSnapshot,
+        request.turnBudgetCharacteristics,
+        undefined,
+        request.scopeQuery,
+        request.callerContext,
+        request.retrievalMode,
+        request.conversationScope,
+        {
+          request,
+          startedAt,
+          identity,
+        },
+      );
+      return cloneActiveMemorySnapshot(this.activeMemoryContexts.get(identity.key)?.snapshot ?? null);
+    } catch (error) {
+      return this.markActiveMemoryDegraded(identity.key, request.channelId, startedAt, error);
+    }
+  }
+
+  private markActiveMemoryRefreshing(key: string, startedAt: number): void {
+    const state = this.activeMemoryContexts.get(key);
+    if (!state) return;
+    state.snapshot = {
+      ...state.snapshot,
+      refreshStatus: 'refreshing',
+      lastRefreshStartedAt: startedAt,
+    };
+  }
+
+  private markActiveMemoryDegraded(
+    key: string,
+    channelId: string,
+    startedAt: number,
+    error: unknown,
+  ): ActiveMemoryContextSnapshot | null {
+    const errorText = toErrorMessage(error);
+    const state = this.activeMemoryContexts.get(key);
+    log.error('Active memory context refresh failed; keeping previous active context', {
+      key,
+      channelId,
+      error: errorText,
+    });
+    void this.eventBus?.emit('memory.active_context.refresh', {
+      channelId,
+      key,
+      phase: 'degraded',
+      error: errorText,
+      timestamp: Date.now(),
+    }).catch((emitError: unknown) => {
+      log.debug('Failed to emit active memory refresh degradation event', {
+        key,
+        channelId,
+        error: toErrorMessage(emitError),
+      });
+    });
+    if (!state) return null;
+    state.snapshot = {
+      ...state.snapshot,
+      refreshStatus: 'degraded',
+      lastRefreshStartedAt: startedAt,
+      lastRefreshCompletedAt: Date.now(),
+      lastRefreshError: errorText,
+    };
+    return cloneActiveMemorySnapshot(state.snapshot);
+  }
+
+  private async resolveRoomVisibilityContext(
+    channelId: string,
+    channelMeta: ChannelMeta | undefined,
+    canonicalContactId: string | undefined,
+    conversationScope: ConversationScope | undefined,
+  ): Promise<RetrievalRoomVisibilityContext> {
+    const canonicalContact = canonicalContactId && this.contactStore
+      ? await this.contactStore.getById(canonicalContactId)
+      : undefined;
+    return buildRoomVisibilityContext(channelId, channelMeta, canonicalContact, conversationScope);
+  }
+
+  private getRetiredLogicalSessionIds(): ReadonlySet<string> {
+    return this.sessionQuarantineFilter?.getRetiredLogicalSessionIds?.() ?? new Set<string>();
+  }
+
+  private isRetiredSessionId(logicalSessionId: string | undefined): boolean {
+    const normalized = logicalSessionId?.trim();
+    if (!normalized || !this.sessionQuarantineFilter) return false;
+    return this.sessionQuarantineFilter.isSessionRetiredOrQuarantined(normalized);
+  }
+
+  private referenceTargetsRetiredSession(reference: string | undefined): boolean {
+    const normalized = reference?.trim();
+    if (!normalized || !this.sessionQuarantineFilter) return false;
+    if (this.isRetiredSessionId(normalized)) return true;
+    for (const retiredId of this.getRetiredLogicalSessionIds()) {
+      const sessionId = retiredId.trim();
+      if (!sessionId) continue;
+      if (normalized === `session:${sessionId}`) return true;
+      if (this.hasDelimitedSessionReference(normalized, sessionId)) return true;
+    }
+    return false;
+  }
+
+  private hasDelimitedSessionReference(reference: string, sessionId: string): boolean {
+    const marker = `session:${sessionId}`;
+    const index = reference.indexOf(marker);
+    if (index < 0) return false;
+    const before = index === 0 ? '' : reference[index - 1];
+    const after = reference[index + marker.length] ?? '';
+    const beforeDelimited = index === 0 || before === '|' || before === ',' || before === ' ' || before === '#';
+    const afterDelimited = after === '' || after === '|' || after === ',' || after === ' ' || after === '#';
+    return beforeDelimited && afterDelimited;
+  }
+
+  private isMemoryQuarantined(memory: MemoryQuarantineCandidate): boolean {
+    if (!this.sessionQuarantineFilter) return false;
+    if (this.isRetiredSessionId(memory.provenance?.sessionId)) return true;
+    if (this.referenceTargetsRetiredSession(memory.sourceRef)) return true;
+    return (memory.provenanceRefs ?? []).some(ref => this.referenceTargetsRetiredSession(ref));
+  }
+
+  private summarizeQuarantinedMemories<T extends MemoryQuarantineCandidate>(
+    memories: readonly T[],
+  ): { summary?: MemoryWithheldSummary; withheldIds: string[] } {
+    const summary = createEmptyMemoryWithheldSummary();
+    const withheldIds = new Set<string>();
+    const seenIds = new Set<string>();
+    for (const memory of memories) {
+      if (seenIds.has(memory.id)) continue;
+      seenIds.add(memory.id);
+      if (!this.isMemoryQuarantined(memory)) continue;
+      incrementMemoryWithheldReason(summary, 'session_quarantine.blocked');
+      incrementMemoryWithheldRelevanceBand(
+        summary,
+        resolveMemoryWithheldRelevanceBand(memory.similarity),
+      );
+      withheldIds.add(memory.id);
+    }
+    return {
+      ...(summary.totalCount > 0 ? { summary } : {}),
+      withheldIds: [...withheldIds],
+    };
+  }
+
+  private filterQuarantinedMemories<T extends MemoryQuarantineCandidate>(
+    memories: readonly T[],
+  ): { memories: T[]; summary?: MemoryWithheldSummary; withheldIds: string[] } {
+    if (!this.sessionQuarantineFilter || memories.length === 0) {
+      return { memories: [...memories], withheldIds: [] };
+    }
+    const summary = createEmptyMemoryWithheldSummary();
+    const withheldIds = new Set<string>();
+    const filtered: T[] = [];
+    const seenIds = new Set<string>();
+    for (const memory of memories) {
+      if (this.isMemoryQuarantined(memory)) {
+        if (!seenIds.has(memory.id)) {
+          seenIds.add(memory.id);
+          incrementMemoryWithheldReason(summary, 'session_quarantine.blocked');
+          incrementMemoryWithheldRelevanceBand(
+            summary,
+            resolveMemoryWithheldRelevanceBand(memory.similarity),
+          );
+          withheldIds.add(memory.id);
+        }
+        continue;
+      }
+      filtered.push(memory);
+    }
+    return {
+      memories: filtered,
+      ...(summary.totalCount > 0 ? { summary } : {}),
+      withheldIds: [...withheldIds],
+    };
+  }
+
   private async resolveContactProfileAccess(
     profile: ContactProfileArtifact | undefined,
     options: {
       trustLevel: TrustLevel;
-      channelVisibility: ChannelVisibility;
+      channelPrivacy: ChannelPrivacy;
+      broadcast: boolean;
       channelMeta?: ChannelMeta;
       canonicalContactId?: string;
       operatorApproval?: boolean;
+      roomVisibility?: RetrievalRoomVisibilityContext;
     },
   ): Promise<ContactProfileAccessResult> {
     if (!profile) {
@@ -370,75 +692,28 @@ export class MemoryRetriever implements MemoryProvider {
       return { profile: cloneContactProfileArtifact(profile), withheldSourceMemoryIds: [] };
     }
 
-    const sourceMemories = (
-      await Promise.all(sourceMemoryIds.map(id => this.memoryStore.getById(id)))
-    )
-      .filter((memory): memory is PurrMemory => Boolean(memory))
-      .map(memory => ({ ...memory, similarity: 1 }));
-    if (sourceMemories.length === 0) {
-      return { profile: cloneContactProfileArtifact(profile), withheldSourceMemoryIds: [] };
-    }
-
-    const { summary, withheldIds } = summarizeWithheldMemories(sourceMemories, options);
-    if (withheldIds.length === 0) {
-      return { profile: cloneContactProfileArtifact(profile), withheldSourceMemoryIds: [] };
-    }
-
-    return {
-      withheldSummary: summary,
-      withheldSourceMemoryIds: withheldIds,
-    };
-  }
-
-  private async collectRecentLexicalMemoryCandidates(
-    contextText: string,
-    existingIds: ReadonlySet<string>,
-    scopeQuery: MemoryScopeQuery | undefined,
-  ): Promise<Array<PurrMemory & { similarity: number }>> {
-    const contextTokens = new Set(tokenizeForExplicitMatch(contextText));
-    if (contextTokens.size === 0) return [];
-
-    const recentMemories = await this.memoryStore.listActiveMemories({
-      limit: RECENT_MEMORY_AUGMENT_SCAN_LIMIT,
-    });
-    const candidates: Array<PurrMemory & { similarity: number }> = [];
-    for (const memory of recentMemories) {
-      if (existingIds.has(memory.id)) continue;
-      if (isInternalMemoryArtifact(memory)) continue;
-      if (scopeQuery?.mode === 'only' && !memoryMatchesScopeQuery(memory, scopeQuery)) continue;
-
-      const memoryTokens = new Set([
-        ...tokenizeForExplicitMatch(memory.text),
-        ...memory.tags.flatMap(tag => tokenizeForExplicitMatch(tag)),
-      ]);
-      let overlap = 0;
-      let longOverlap = false;
-      for (const token of contextTokens) {
-        if (!memoryTokens.has(token)) continue;
-        overlap++;
-        if (token.length >= 6) {
-          longOverlap = true;
-        }
+      const sourceMemories = (
+        await Promise.all(sourceMemoryIds.map(id => this.memoryStore.getById(id)))
+      )
+        .filter((memory): memory is PurrMemory => Boolean(memory))
+        .map(memory => ({ ...memory, similarity: 1 }));
+      if (sourceMemories.length === 0) {
+        return { profile: cloneContactProfileArtifact(profile), withheldSourceMemoryIds: [] };
       }
-      if (overlap < RECENT_MEMORY_AUGMENT_MIN_OVERLAP || !longOverlap) continue;
 
-      const overlapWeight = Math.min(0.24, overlap * 0.035);
-      const salienceWeight = clamp(memory.salience, 0, 1) * 0.08;
-      const importanceWeight = clamp(memory.importance, 0, 1) * 0.06;
-      const similarity = Math.min(
-        0.92,
-        RECENT_MEMORY_AUGMENT_BASE_SIMILARITY + overlapWeight + salienceWeight + importanceWeight,
-      );
-      candidates.push({ ...cloneMemory(memory), similarity });
+      const quarantine = this.summarizeQuarantinedMemories(sourceMemories);
+      const { summary, withheldIds } = summarizeWithheldMemories(sourceMemories, options);
+      const withheldSummary = mergeMemoryWithheldSummaries(quarantine.summary, summary);
+      const blockedIds = [...new Set([...quarantine.withheldIds, ...withheldIds])];
+      if (blockedIds.length === 0) {
+        return { profile: cloneContactProfileArtifact(profile), withheldSourceMemoryIds: [] };
+      }
+
+      return {
+        withheldSummary,
+        withheldSourceMemoryIds: blockedIds,
+      };
     }
-
-    return candidates
-      .sort((left, right) => (
-        right.similarity - left.similarity
-        || right.extractedAt - left.extractedAt
-      ))
-      .slice(0, RECENT_MEMORY_AUGMENT_SELECTED_LIMIT);
-  }
 
   async captureTurnMemorySnapshot(
     contextText: string,
@@ -460,29 +735,50 @@ export class MemoryRetriever implements MemoryProvider {
     const budget = this.resolveRetrievalBudget(effectiveBudgetTurn);
     const limit = budget.estimatedCount;
     const effectiveTrust = trustLevel ?? 'regular';
-    const channelVisibility = classifyChannel(channelId, channelMeta);
+    const channelDisclosure = classifyChannelDisclosure(channelId, channelMeta);
+    const { channelPrivacy, broadcast } = channelDisclosure;
     const visibilityScope = resolveBroadcastVisibilityScope(channelId, channelMeta) ?? 'non_broadcast';
     const operatorApproval = visibilityScope === 'approved_private_context';
+    const roomVisibility = await this.resolveRoomVisibilityContext(channelId, channelMeta, canonicalContactId, undefined);
     const rawProfile = canonicalContactId
       ? await this.memoryStore.getContactProfile(canonicalContactId)
       : undefined;
     const profileAccess = await this.resolveContactProfileAccess(rawProfile, {
       trustLevel: effectiveTrust,
-      channelVisibility,
+      channelPrivacy,
+      broadcast,
       channelMeta,
       canonicalContactId,
       operatorApproval,
+      roomVisibility,
     });
     const profile = profileAccess.profile;
-    const emotionalSnapshot = canonicalContactId
-      ? await this.resolveEmotionalSnapshot(canonicalContactId)
-      : undefined;
-    const contactEmotionalMemories = canonicalContactId
-      ? await this.collectContactEmotionalMemories(canonicalContactId)
-      : [];
+      const emotionalSnapshot = canonicalContactId
+        ? await this.resolveEmotionalSnapshot(canonicalContactId)
+        : undefined;
+      let quarantineWithheldSummary: MemoryWithheldSummary | undefined;
+      const quarantineWithheldIds: string[] = [];
+      const applyQuarantineResult = <T extends MemoryQuarantineCandidate>(result: {
+        memories: T[];
+        summary?: MemoryWithheldSummary;
+        withheldIds: string[];
+      }): T[] => {
+        quarantineWithheldSummary = mergeMemoryWithheldSummaries(
+          quarantineWithheldSummary,
+          result.summary,
+        );
+        quarantineWithheldIds.push(...result.withheldIds);
+        return result.memories;
+      };
+      let contactEmotionalMemories = canonicalContactId
+        ? await this.collectContactEmotionalMemories(canonicalContactId)
+        : [];
+      contactEmotionalMemories = applyQuarantineResult(
+        this.filterQuarantinedMemories(contactEmotionalMemories),
+      );
 
-    let semanticCandidates: Array<PurrMemory & { similarity: number }> = [];
-    let lexicalCandidates: Array<PurrMemory & { similarity: number }> = [];
+      let semanticCandidates: Array<PurrMemory & { similarity: number }> = [];
+      let lexicalCandidates: Array<PurrMemory & { similarity: number }> = [];
 
     if (contextText.trim().length > 0) {
       const embedding = await this.embeddingService.embed(contextText);
@@ -493,38 +789,49 @@ export class MemoryRetriever implements MemoryProvider {
         candidateLimit,
         normalizedScopeQuery,
       );
-      semanticCandidates = semanticCandidates
-        .filter(memory => !isInternalMemoryArtifact(memory))
-        .map(cloneScoredMemory);
-      if (semanticCandidates.length === 0) {
-        lexicalCandidates = (await this.memoryStore
-          .searchByText(contextText, candidateLimit, normalizedScopeQuery))
+        semanticCandidates = semanticCandidates
           .filter(memory => !isInternalMemoryArtifact(memory))
           .map(cloneScoredMemory);
-      }
-      const recentLexicalCandidates = await this.collectRecentLexicalMemoryCandidates(
+        semanticCandidates = applyQuarantineResult(
+          this.filterQuarantinedMemories(semanticCandidates),
+        );
+        if (semanticCandidates.length === 0) {
+          lexicalCandidates = (await this.memoryStore
+            .searchByText(contextText, candidateLimit, normalizedScopeQuery))
+            .filter(memory => !isInternalMemoryArtifact(memory))
+            .map(cloneScoredMemory);
+          lexicalCandidates = applyQuarantineResult(
+            this.filterQuarantinedMemories(lexicalCandidates),
+          );
+        }
+        const recentLexicalCandidates = await collectRecentLexicalMemoryCandidates({
+          memoryStore: this.memoryStore,
         contextText,
-        new Set([
+        existingIds: new Set([
           ...semanticCandidates.map(memory => memory.id),
           ...lexicalCandidates.map(memory => memory.id),
         ]),
-        normalizedScopeQuery,
-      );
-      semanticCandidates = mergeScoredMemoryCandidates(semanticCandidates, recentLexicalCandidates);
-    }
+          scopeQuery: normalizedScopeQuery,
+        });
+        semanticCandidates = mergeScoredMemoryCandidates(semanticCandidates, recentLexicalCandidates);
+        semanticCandidates = applyQuarantineResult(
+          this.filterQuarantinedMemories(semanticCandidates),
+        );
+      }
 
-    const proactiveCandidates = (await this.collectProactiveRecallCandidates(
-      channelId,
-      canonicalContactId,
-    )).map(cloneMemory);
-    const episodicChains = await this.resolveEpisodicChains({
-      contextText,
-      channelId,
-      trustLevel: effectiveTrust,
-      channelVisibility,
-      canonicalContactId,
-      scopeQuery: normalizedScopeQuery,
-    });
+      const proactiveCandidates = applyQuarantineResult(this.filterQuarantinedMemories(await this.collectProactiveRecallCandidates(
+        channelId,
+        canonicalContactId,
+      )))
+        .map(cloneMemory);
+      const episodicChains = this.filterQuarantinedEpisodicChains(await this.resolveEpisodicChains({
+        contextText,
+        channelId,
+        trustLevel: effectiveTrust,
+        channelDisclosure,
+        canonicalContactId,
+        scopeQuery: normalizedScopeQuery,
+      }));
     const retrievalCandidates = semanticCandidates.length > 0 ? semanticCandidates : lexicalCandidates;
     const {
       summary: candidateWithheldSummary,
@@ -533,19 +840,23 @@ export class MemoryRetriever implements MemoryProvider {
       [...retrievalCandidates, ...contactEmotionalMemories, ...proactiveCandidates],
       {
         trustLevel: effectiveTrust,
-        channelVisibility,
+        channelPrivacy,
+        broadcast,
         channelMeta,
         canonicalContactId,
         operatorApproval,
+        roomVisibility,
       },
     );
-    const withheldSummary = mergeMemoryWithheldSummaries(
-      candidateWithheldSummary,
-      profileAccess.withheldSummary,
-    );
-    const withheldIds = [...new Set([
-      ...withheldCandidateIds,
-      ...profileAccess.withheldSourceMemoryIds,
+      const withheldSummary = mergeMemoryWithheldSummaries(
+        quarantineWithheldSummary,
+        candidateWithheldSummary,
+        profileAccess.withheldSummary,
+      );
+      const withheldIds = [...new Set([
+        ...quarantineWithheldIds,
+        ...withheldCandidateIds,
+        ...profileAccess.withheldSourceMemoryIds,
     ])];
 
     return {
@@ -566,7 +877,7 @@ export class MemoryRetriever implements MemoryProvider {
       versionPointer: buildSnapshotVersionPointer([
         channelId,
         effectiveTrust,
-        channelVisibility,
+        channelPrivacy,
         visibilityScope,
         operatorApproval ? 'approved' : 'default',
         profile?.updatedAt,
@@ -582,6 +893,198 @@ export class MemoryRetriever implements MemoryProvider {
     };
   }
 
+  private cloneScoredPromptMemory(input: ScoredMemory): ScoredMemory {
+    return {
+      ...input,
+      memory: cloneScoredMemory(input.memory),
+      privacyBreakdown: { ...input.privacyBreakdown },
+      ...(input.evolutionChain
+        ? {
+          evolutionChain: input.evolutionChain.map(link => ({
+            ...link,
+            memory: cloneMemory(link.memory),
+          })),
+        }
+        : {}),
+    };
+  }
+
+  private finalizeRetrievalPromptBlock(input: {
+    activeContextTarget?: ActiveMemoryRefreshTarget;
+    profile?: ContactProfileArtifact;
+    selectedForPrompt?: ScoredMemory[];
+    emotionalSnapshot?: EmotionalSnapshot;
+    emotionalContinuityMemories?: PurrMemory[];
+    withheldSummary?: MemoryWithheldSummary;
+    socialContext?: RetrievalSocialContext;
+    contactContextById?: ReadonlyMap<string, RetrievalContactContext>;
+    episodicChains?: EpisodicRetrievalChain[];
+    telemetry: RetrievalTelemetry;
+  }): string {
+    const block = renderPromptBlock(input.profile, input.selectedForPrompt ?? [], {
+      emotionalSnapshot: input.emotionalSnapshot,
+      emotionalContinuityMemories: input.emotionalContinuityMemories,
+      withheldSummary: input.withheldSummary,
+      socialContext: input.socialContext,
+      contactContextById: input.contactContextById,
+      episodicChains: input.episodicChains,
+    });
+
+    if (!input.activeContextTarget) {
+      return block;
+    }
+
+    return this.applyActiveMemoryContextRefresh({
+      target: input.activeContextTarget,
+      profile: input.profile,
+      selectedForPrompt: input.selectedForPrompt ?? [],
+      emotionalSnapshot: input.emotionalSnapshot,
+      emotionalContinuityMemories: input.emotionalContinuityMemories ?? [],
+      withheldSummary: input.withheldSummary,
+      socialContext: input.socialContext,
+      contactContextById: input.contactContextById,
+      episodicChains: input.episodicChains ?? [],
+      manifestSeed: buildManifestSeedFromTelemetry(input.telemetry),
+    }).contextBlock;
+  }
+
+  private applyActiveMemoryContextRefresh(input: {
+    target: ActiveMemoryRefreshTarget;
+    profile?: ContactProfileArtifact;
+    selectedForPrompt: ScoredMemory[];
+    emotionalSnapshot?: EmotionalSnapshot;
+    emotionalContinuityMemories: PurrMemory[];
+    withheldSummary?: MemoryWithheldSummary;
+    socialContext?: RetrievalSocialContext;
+    contactContextById?: ReadonlyMap<string, RetrievalContactContext>;
+    episodicChains: EpisodicRetrievalChain[];
+    manifestSeed: ContextManifestMemorySeed;
+  }): ActiveMemoryContextSnapshot {
+    const { target } = input;
+    const now = Date.now();
+    const existing = this.activeMemoryContexts.get(target.identity.key);
+    const previousEntries = existing?.entries ?? new Map<string, ActiveMemoryEntry>();
+    const nextEntries = new Map<string, ActiveMemoryEntry>();
+    const selectedIds = new Set(input.selectedForPrompt.map(item => item.memory.id));
+    const maxEntries = Math.max(
+      ACTIVE_MEMORY_ENTRY_MIN_LIMIT,
+      (input.manifestSeed.retrievalLimit ?? ACTIVE_MEMORY_ENTRY_MIN_LIMIT) * ACTIVE_MEMORY_ENTRY_LIMIT_MULTIPLIER,
+      input.selectedForPrompt.length,
+    );
+
+      for (const [id, entry] of previousEntries.entries()) {
+        if (selectedIds.has(id)) continue;
+        if (this.isMemoryQuarantined(entry.scored.memory)) continue;
+        const missCount = entry.missCount + 1;
+      if (missCount >= ACTIVE_MEMORY_MISS_LIMIT) continue;
+      const retainedScore = entry.retainedScore * ACTIVE_MEMORY_MISS_DECAY;
+      nextEntries.set(id, {
+        ...entry,
+        scored: this.cloneScoredPromptMemory(entry.scored),
+        retainedScore,
+        missCount,
+      });
+    }
+
+    for (const scored of input.selectedForPrompt) {
+      const id = scored.memory.id;
+      const previous = previousEntries.get(id);
+      nextEntries.set(id, {
+        scored: this.cloneScoredPromptMemory(scored),
+        retainedScore: Math.max(scored.score, previous?.retainedScore ?? 0),
+        firstSelectedAt: previous?.firstSelectedAt ?? now,
+        lastSelectedAt: now,
+        missCount: 0,
+      });
+    }
+
+    const rankedEntries = [...nextEntries.entries()]
+      .sort(([, left], [, right]) => (
+        right.retainedScore - left.retainedScore
+        || right.lastSelectedAt - left.lastSelectedAt
+        || right.scored.memory.importance - left.scored.memory.importance
+      ))
+      .slice(0, maxEntries);
+    const cappedEntries = new Map(rankedEntries);
+    const selectedForActivePrompt = rankedEntries.map(([, entry]) => this.cloneScoredPromptMemory(entry.scored));
+    const profile = input.profile ?? existing?.profile;
+    const emotionalSnapshot = input.emotionalSnapshot ?? existing?.emotionalSnapshot;
+      const emotionalContinuityMemories = input.emotionalContinuityMemories.length > 0
+        ? input.emotionalContinuityMemories.map(memory => cloneMemory(memory))
+        : this.filterQuarantinedMemories(existing?.emotionalContinuityMemories.map(memory => cloneMemory(memory)) ?? []).memories;
+    const withheldSummary = input.withheldSummary ?? existing?.withheldSummary;
+    const socialContext = input.socialContext ?? existing?.socialContext;
+    const contactContextById = input.contactContextById ?? existing?.contactContextById;
+      const episodicChains = input.episodicChains.length > 0
+        ? input.episodicChains.map(cloneEpisodicRetrievalChain)
+        : this.filterQuarantinedEpisodicChains(existing?.episodicChains.map(cloneEpisodicRetrievalChain) ?? []);
+    const contextBlock = renderPromptBlock(profile, selectedForActivePrompt, {
+      emotionalSnapshot,
+      emotionalContinuityMemories,
+      withheldSummary,
+      socialContext,
+      contactContextById,
+      episodicChains,
+    });
+    const selectedMemoryIds = [...cappedEntries.keys()];
+    const refreshSerial = (existing?.refreshSerial ?? 0) + 1;
+    const snapshot: ActiveMemoryContextSnapshot = {
+      key: target.identity.key,
+      subjectKey: target.identity.subjectKey,
+      channelId: target.request.channelId,
+      trustLevel: target.identity.trustLevel,
+      channelVisibility: target.identity.channelVisibility,
+      visibilityScope: target.identity.visibilityScope,
+      contextBlock,
+      contextChars: contextBlock.length,
+      selectedMemoryIds,
+      generatedAt: now,
+      lastRefreshStartedAt: target.startedAt,
+      lastRefreshCompletedAt: now,
+      refreshStatus: 'ready',
+      versionPointer: buildSnapshotVersionPointer([
+        target.identity.key,
+        refreshSerial,
+        selectedMemoryIds.join(','),
+        contextBlock,
+      ]),
+      manifestSeed: {
+        ...input.manifestSeed,
+        reason: input.manifestSeed.reason ?? 'active_projection',
+        returnedCount: selectedMemoryIds.length,
+      },
+    };
+
+    this.activeMemoryContexts.set(target.identity.key, {
+      snapshot,
+      entries: cappedEntries,
+      ...(profile ? { profile: cloneContactProfileArtifact(profile) } : {}),
+      ...(emotionalSnapshot ? { emotionalSnapshot: cloneEmotionalSnapshot(emotionalSnapshot) } : {}),
+      emotionalContinuityMemories,
+      ...(withheldSummary ? { withheldSummary: cloneMemoryWithheldSummary(withheldSummary) } : {}),
+      ...(socialContext ? { socialContext } : {}),
+      ...(contactContextById ? { contactContextById } : {}),
+      episodicChains,
+      refreshSerial,
+      maxEntries,
+    });
+    void this.eventBus?.emit('memory.active_context.refresh', {
+      channelId: target.request.channelId,
+      key: target.identity.key,
+      phase: 'ready',
+      selectedMemoryIds,
+      contextChars: contextBlock.length,
+      timestamp: now,
+    }).catch((emitError: unknown) => {
+      log.debug('Failed to emit active memory refresh event', {
+        key: target.identity.key,
+        channelId: target.request.channelId,
+        error: toErrorMessage(emitError),
+      });
+    });
+    return snapshot;
+  }
+
   async retrieve(
     contextText: string,
     channelId: string,
@@ -594,6 +1097,8 @@ export class MemoryRetriever implements MemoryProvider {
     scopeQuery?: MemoryScopeQuery,
     callerContext?: RetrievalCallerContext,
     retrievalMode?: RetrievalModeInput,
+    conversationScope?: ConversationScope,
+    activeContextTarget?: ActiveMemoryRefreshTarget,
   ): Promise<string> {
     const hasDirectRetrievalContext = callerContext !== undefined || retrievalMode !== undefined;
     const effectiveCallerContext = hasDirectRetrievalContext
@@ -611,11 +1116,18 @@ export class MemoryRetriever implements MemoryProvider {
     const budget = this.resolveRetrievalBudget(effectiveBudgetTurn);
     const limit = budget.estimatedCount;
     const effectiveTrust = trustLevel ?? 'regular';
-    const channelVisibility = classifyChannel(channelId, channelMeta);
+    const channelDisclosure = classifyChannelDisclosure(channelId, channelMeta);
+    const { channelPrivacy, broadcast } = channelDisclosure;
     const visibilityScope = resolveBroadcastVisibilityScope(channelId, channelMeta) ?? 'non_broadcast';
     const operatorApproval = visibilityScope === 'approved_private_context';
+    const roomVisibility = await this.resolveRoomVisibilityContext(
+      channelId,
+      channelMeta,
+      canonicalContactId,
+      conversationScope,
+    );
     const socialContext = canonicalContactId
-      ? await this.resolveRetrievalSocialContext(canonicalContactId, effectiveTrust, channelVisibility)
+      ? await this.resolveRetrievalSocialContext(canonicalContactId, effectiveTrust, channelPrivacy)
       : undefined;
     const telemetry: RetrievalTelemetry = {
       channelId,
@@ -623,7 +1135,7 @@ export class MemoryRetriever implements MemoryProvider {
       reason: 'ok',
       retrievalSource: 'embedding',
       trustLevel: effectiveTrust,
-      channelVisibility,
+      channelVisibility: channelPrivacy,
       candidateCount: 0,
       semanticCandidateCount: 0,
       lexicalCandidateCount: 0,
@@ -648,10 +1160,12 @@ export class MemoryRetriever implements MemoryProvider {
         : undefined;
     const profileAccess = await this.resolveContactProfileAccess(rawProfile, {
       trustLevel: effectiveTrust,
-      channelVisibility,
+      channelPrivacy,
+      broadcast,
       channelMeta,
       canonicalContactId,
       operatorApproval,
+      roomVisibility,
     });
     const profile = profileAccess.profile;
     telemetry.profileIncluded = !!profile;
@@ -661,72 +1175,90 @@ export class MemoryRetriever implements MemoryProvider {
       : canonicalContactId
         ? await this.resolveEmotionalSnapshot(canonicalContactId)
         : undefined;
-    telemetry.emotionalSnapshotIncluded = !!emotionalSnapshot;
-    const contactEmotionalSource = turnSnapshot?.contactEmotionalMemories.map(cloneMemory)
-      ?? (canonicalContactId ? await this.collectContactEmotionalMemories(canonicalContactId) : []);
-    const proactiveSource = turnSnapshot?.proactiveCandidates.map(cloneMemory) ?? [];
-    const episodicChains = Array.isArray(turnSnapshot?.episodicChains)
-      ? turnSnapshot.episodicChains.map(cloneEpisodicRetrievalChain)
-      : await this.resolveEpisodicChains({
-        contextText,
+      telemetry.emotionalSnapshotIncluded = !!emotionalSnapshot;
+      const contactQuarantine = this.filterQuarantinedMemories(
+        turnSnapshot?.contactEmotionalMemories.map(cloneMemory)
+        ?? (canonicalContactId ? await this.collectContactEmotionalMemories(canonicalContactId) : []),
+      );
+      const contactEmotionalSource = contactQuarantine.memories;
+      const proactiveQuarantine = this.filterQuarantinedMemories(
+        turnSnapshot?.proactiveCandidates.map(cloneMemory) ?? [],
+      );
+      const proactiveSource = proactiveQuarantine.memories;
+      const rawEpisodicChains = Array.isArray(turnSnapshot?.episodicChains)
+        ? turnSnapshot.episodicChains.map(cloneEpisodicRetrievalChain)
+        : await this.resolveEpisodicChains({
+          contextText,
         channelId,
         trustLevel: effectiveTrust,
-        channelVisibility,
-        canonicalContactId,
-        scopeQuery: normalizedScopeQuery,
-      });
+        channelDisclosure,
+          canonicalContactId,
+          scopeQuery: normalizedScopeQuery,
+        });
+      const episodicChains = this.filterQuarantinedEpisodicChains(rawEpisodicChains);
     const episodicEpisodeCount = countEpisodicChainEpisodes(episodicChains);
     telemetry.episodicChainCount = episodicChains.length;
     telemetry.episodicEpisodeCount = episodicEpisodeCount;
-    const snapshotWithheldSummary = cloneMemoryWithheldSummary(turnSnapshot?.withheldSummary);
-    let withheldSummary = mergeMemoryWithheldSummaries(
-      snapshotWithheldSummary,
-      profileAccess.withheldSummary,
-    );
+      const snapshotWithheldSummary = cloneMemoryWithheldSummary(turnSnapshot?.withheldSummary);
+      let withheldSummary = mergeMemoryWithheldSummaries(
+        snapshotWithheldSummary,
+        profileAccess.withheldSummary,
+        contactQuarantine.summary,
+        proactiveQuarantine.summary,
+      );
 
     const emptySelectedIds = new Set<string>();
     const fallbackEmotionalContinuity = canonicalContactId
       ? await this.collectEmotionalContinuityMemories(
         canonicalContactId,
         effectiveTrust,
-        channelVisibility,
+        channelDisclosure,
         emptySelectedIds,
         operatorApproval,
         channelMeta,
         contactEmotionalSource,
+        roomVisibility,
       )
       : [];
     telemetry.emotionalContinuityCount = fallbackEmotionalContinuity.length;
 
     if (!contextText.trim()) {
       if (!snapshotWithheldSummary) {
-        withheldSummary = mergeMemoryWithheldSummaries(summarizeWithheldMemories(
-          contactEmotionalSource,
-          {
+        withheldSummary = mergeMemoryWithheldSummaries(
+          withheldSummary,
+          summarizeWithheldMemories(
+            contactEmotionalSource,
+            {
             trustLevel: effectiveTrust,
-            channelVisibility,
+            channelPrivacy,
+            broadcast,
             channelMeta,
             canonicalContactId,
             operatorApproval,
-          },
-        ).summary, profileAccess.withheldSummary);
+            roomVisibility,
+            },
+          ).summary,
+        );
       }
       telemetry.reason = 'empty_input';
       applyWithheldSummaryTelemetry(telemetry, withheldSummary);
       await this.emitRetrievalTelemetry(telemetry);
-      return renderPromptBlock(profile, [], {
+      return this.finalizeRetrievalPromptBlock({
+        activeContextTarget,
+        profile,
         emotionalSnapshot,
         emotionalContinuityMemories: fallbackEmotionalContinuity,
         withheldSummary,
         socialContext,
         episodicChains,
+        telemetry,
       });
     }
 
     try {
-      let semanticMemories = (turnSnapshot?.semanticCandidates.map(cloneScoredMemory) ?? [])
-        .filter(memory => !isInternalMemoryArtifact(memory));
-      if (semanticMemories.length === 0 && !turnSnapshot) {
+        let semanticMemories = (turnSnapshot?.semanticCandidates.map(cloneScoredMemory) ?? [])
+          .filter(memory => !isInternalMemoryArtifact(memory));
+        if (semanticMemories.length === 0 && !turnSnapshot) {
         const embedding = await this.embeddingService.embed(contextText);
         const candidateLimit = Math.max(40, limit * 4);
         semanticMemories = await this.memoryStore.searchByEmbedding(
@@ -734,31 +1266,44 @@ export class MemoryRetriever implements MemoryProvider {
           this.retrievalThreshold,
           candidateLimit,
           normalizedScopeQuery,
-        );
-        semanticMemories = semanticMemories.filter(memory => !isInternalMemoryArtifact(memory));
-      }
-      if (!turnSnapshot) {
-        const recentLexicalCandidates = await this.collectRecentLexicalMemoryCandidates(
+          );
+          semanticMemories = semanticMemories.filter(memory => !isInternalMemoryArtifact(memory));
+        }
+        const semanticQuarantine = this.filterQuarantinedMemories(semanticMemories);
+        semanticMemories = semanticQuarantine.memories;
+        if (!turnSnapshot) {
+          const recentLexicalCandidates = await collectRecentLexicalMemoryCandidates({
+          memoryStore: this.memoryStore,
           contextText,
-          new Set(semanticMemories.map(memory => memory.id)),
-          normalizedScopeQuery,
-        );
-        semanticMemories = mergeScoredMemoryCandidates(semanticMemories, recentLexicalCandidates);
-      }
-      telemetry.semanticCandidateCount = semanticMemories.length;
+          existingIds: new Set(semanticMemories.map(memory => memory.id)),
+          scopeQuery: normalizedScopeQuery,
+          });
+          semanticMemories = mergeScoredMemoryCandidates(semanticMemories, recentLexicalCandidates);
+          const mergedSemanticQuarantine = this.filterQuarantinedMemories(semanticMemories);
+          semanticMemories = mergedSemanticQuarantine.memories;
+          withheldSummary = mergeMemoryWithheldSummaries(
+            withheldSummary,
+            mergedSemanticQuarantine.summary,
+          );
+        }
+        withheldSummary = mergeMemoryWithheldSummaries(withheldSummary, semanticQuarantine.summary);
+        telemetry.semanticCandidateCount = semanticMemories.length;
 
       let memories = semanticMemories;
       if (semanticMemories.length === 0) {
-        const lexicalMemories = (turnSnapshot?.lexicalCandidates.map(cloneScoredMemory)
-          ?? await this.memoryStore.searchByText(
-            contextText,
+          const lexicalMemories = (turnSnapshot?.lexicalCandidates.map(cloneScoredMemory)
+            ?? await this.memoryStore.searchByText(
+              contextText,
             Math.max(40, limit * 4),
-            normalizedScopeQuery,
-          )).filter(memory => !isInternalMemoryArtifact(memory));
-        telemetry.lexicalCandidateCount = lexicalMemories.length;
-        if (lexicalMemories.length > 0) {
-          memories = lexicalMemories;
-          telemetry.retrievalSource = 'lexical_fallback';
+              normalizedScopeQuery,
+            )).filter(memory => !isInternalMemoryArtifact(memory));
+          const lexicalQuarantine = this.filterQuarantinedMemories(lexicalMemories);
+          const visibleLexicalMemories = lexicalQuarantine.memories;
+          withheldSummary = mergeMemoryWithheldSummaries(withheldSummary, lexicalQuarantine.summary);
+          telemetry.lexicalCandidateCount = visibleLexicalMemories.length;
+          if (visibleLexicalMemories.length > 0) {
+            memories = visibleLexicalMemories;
+            telemetry.retrievalSource = 'lexical_fallback';
           log.info('Retrieval: lexical fallback activated after semantic miss', {
             channelId,
             trustLevel: effectiveTrust,
@@ -768,18 +1313,23 @@ export class MemoryRetriever implements MemoryProvider {
             queryLength: contextText.length,
           });
         } else {
-          if (!snapshotWithheldSummary) {
-            withheldSummary = mergeMemoryWithheldSummaries(summarizeWithheldMemories(
-              [...contactEmotionalSource, ...proactiveSource],
-              {
-                trustLevel: effectiveTrust,
-                channelVisibility,
-                channelMeta,
-                canonicalContactId,
-                operatorApproval,
-              },
-            ).summary, profileAccess.withheldSummary);
-          }
+            if (!snapshotWithheldSummary) {
+              withheldSummary = mergeMemoryWithheldSummaries(
+                withheldSummary,
+                summarizeWithheldMemories(
+                  [...contactEmotionalSource, ...proactiveSource],
+                  {
+                    trustLevel: effectiveTrust,
+                    channelPrivacy,
+                    broadcast,
+                    channelMeta,
+                    canonicalContactId,
+                    operatorApproval,
+                    roomVisibility,
+                  },
+                ).summary,
+              );
+            }
           telemetry.reason = 'no_candidates';
           applyWithheldSummaryTelemetry(telemetry, withheldSummary);
           if (episodicChains.length > 0) {
@@ -792,12 +1342,15 @@ export class MemoryRetriever implements MemoryProvider {
               collectEpisodicChainProvenanceRefs(episodicChains),
             );
             await this.emitRetrievalTelemetry(telemetry);
-            return renderPromptBlock(profile, [], {
+            return this.finalizeRetrievalPromptBlock({
+              activeContextTarget,
+              profile,
               emotionalSnapshot,
               emotionalContinuityMemories: fallbackEmotionalContinuity,
               withheldSummary,
               socialContext,
               episodicChains,
+              telemetry,
             });
           }
           log.info('Retrieval: no candidates (semantic + lexical)', {
@@ -809,27 +1362,35 @@ export class MemoryRetriever implements MemoryProvider {
             queryLength: contextText.length,
           });
           await this.emitRetrievalTelemetry(telemetry);
-          return renderPromptBlock(profile, [], {
+          return this.finalizeRetrievalPromptBlock({
+            activeContextTarget,
+            profile,
             emotionalSnapshot,
             emotionalContinuityMemories: fallbackEmotionalContinuity,
             withheldSummary,
             socialContext,
             episodicChains,
+            telemetry,
           });
         }
       }
       telemetry.candidateCount = memories.length;
       if (!snapshotWithheldSummary) {
-        withheldSummary = mergeMemoryWithheldSummaries(summarizeWithheldMemories(
-          [...memories, ...contactEmotionalSource, ...proactiveSource],
-          {
-            trustLevel: effectiveTrust,
-            channelVisibility,
-            channelMeta,
-            canonicalContactId,
-            operatorApproval,
-          },
-        ).summary, profileAccess.withheldSummary);
+        withheldSummary = mergeMemoryWithheldSummaries(
+          withheldSummary,
+          summarizeWithheldMemories(
+            [...memories, ...contactEmotionalSource, ...proactiveSource],
+            {
+              trustLevel: effectiveTrust,
+              channelPrivacy,
+              broadcast,
+              channelMeta,
+              canonicalContactId,
+              operatorApproval,
+              roomVisibility,
+            },
+          ).summary,
+        );
       }
       applyWithheldSummaryTelemetry(telemetry, withheldSummary);
 
@@ -838,9 +1399,11 @@ export class MemoryRetriever implements MemoryProvider {
         telemetry.bottomSimilarity = memories[memories.length - 1].similarity;
       }
 
-      const diagnostics: RetrievalDecisionDiagnostics = {
-        candidateCount: memories.length,
-        policyAllowedCount: 0,
+        const diagnostics: RetrievalDecisionDiagnostics = {
+          candidateCount: memories.length,
+          policyAllowedCount: 0,
+          rejectedBySessionQuarantine: telemetry.sessionQuarantineRejectedCount ?? 0,
+          rejectedByRoomVisibility: 0,
         rejectedByContactScope: 0,
         rejectedBySensitivity: 0,
         rejectedByPolicy: 0,
@@ -860,13 +1423,17 @@ export class MemoryRetriever implements MemoryProvider {
         }
         const accessDecision = evaluateRetrievalAccessDecision(memory, {
           trustLevel: effectiveTrust,
-          channelVisibility,
+          channelPrivacy,
+          broadcast,
           channelMeta,
           canonicalContactId,
           operatorApproval,
+          roomVisibility,
         });
         if (!accessDecision.allowed) {
-          if (accessDecision.rejectionKind === 'contact_scope') {
+          if (accessDecision.rejectionKind === 'room_visibility') {
+            diagnostics.rejectedByRoomVisibility++;
+          } else if (accessDecision.rejectionKind === 'contact_scope') {
             diagnostics.rejectedByContactScope++;
           } else if (accessDecision.rejectionKind === 'sensitivity') {
             diagnostics.rejectedBySensitivity++;
@@ -885,6 +1452,7 @@ export class MemoryRetriever implements MemoryProvider {
       }
       diagnostics.policyAllowedCount = policyAllowed.length;
       telemetry.policyAllowedCount = diagnostics.policyAllowedCount;
+      telemetry.roomVisibilityRejectedCount = diagnostics.rejectedByRoomVisibility;
       telemetry.contactScopeRejectedCount = diagnostics.rejectedByContactScope;
       telemetry.sensitivityRejectedCount = diagnostics.rejectedBySensitivity;
       telemetry.policyRejectedCount = diagnostics.rejectedByPolicy;
@@ -901,12 +1469,15 @@ export class MemoryRetriever implements MemoryProvider {
             collectEpisodicChainProvenanceRefs(episodicChains),
           );
           await this.emitRetrievalTelemetry(telemetry);
-          return renderPromptBlock(profile, [], {
+          return this.finalizeRetrievalPromptBlock({
+            activeContextTarget,
+            profile,
             emotionalSnapshot,
             emotionalContinuityMemories: fallbackEmotionalContinuity,
             withheldSummary,
             socialContext,
             episodicChains,
+            telemetry,
           });
         }
         telemetry.reason = 'trust_filtered';
@@ -914,19 +1485,24 @@ export class MemoryRetriever implements MemoryProvider {
         log.info('Retrieval: all candidates filtered by trust policy', {
           channelId,
           trustLevel: effectiveTrust,
-          channelVisibility,
+          channelPrivacy,
           candidateCount: diagnostics.candidateCount,
-          rejectedByContactScope: diagnostics.rejectedByContactScope,
-          rejectedBySensitivity: diagnostics.rejectedBySensitivity,
+          rejectedByRoomVisibility: diagnostics.rejectedByRoomVisibility,
+            rejectedByContactScope: diagnostics.rejectedByContactScope,
+            rejectedBySessionQuarantine: diagnostics.rejectedBySessionQuarantine,
+            rejectedBySensitivity: diagnostics.rejectedBySensitivity,
           rejectedByPolicy: diagnostics.rejectedByPolicy,
           rejectedByPolicyReasonTags: diagnostics.rejectedByPolicyReasonTag,
         });
-        return renderPromptBlock(profile, [], {
+        return this.finalizeRetrievalPromptBlock({
+          activeContextTarget,
+          profile,
           emotionalSnapshot,
           emotionalContinuityMemories: fallbackEmotionalContinuity,
           withheldSummary,
           socialContext,
           episodicChains,
+          telemetry,
         });
       }
 
@@ -947,11 +1523,13 @@ export class MemoryRetriever implements MemoryProvider {
         }))
         .filter(item => !item.retrievalModeExcluded)
         .sort((a, b) => b.score - a.score);
-      const rerankDecision = await this.applyCompositionalRetrievalRanking(
+      const rerankDecision = await applyCompositionalRetrievalRankingWithPolicy({
         contextText,
         channelId,
-        allScored,
-      );
+        candidates: allScored,
+        runtimeConfig: this.runtimeConfig,
+        llmProvider: this.llmProvider,
+      });
       const scoredCandidates = await this.applySocialContextRankingAdjustments(
         rerankDecision.ranked ?? allScored,
         contextText,
@@ -1010,12 +1588,15 @@ export class MemoryRetriever implements MemoryProvider {
             collectEpisodicChainProvenanceRefs(episodicChains),
           );
           await this.emitRetrievalTelemetry(telemetry);
-          return renderPromptBlock(profile, [], {
+          return this.finalizeRetrievalPromptBlock({
+            activeContextTarget,
+            profile,
             emotionalSnapshot,
             emotionalContinuityMemories: fallbackEmotionalContinuity,
             withheldSummary,
             socialContext,
             episodicChains,
+            telemetry,
           });
         }
         telemetry.reason = 'score_filtered';
@@ -1025,12 +1606,15 @@ export class MemoryRetriever implements MemoryProvider {
           trustLevel: effectiveTrust,
           policyAllowedCount: diagnostics.policyAllowedCount,
         });
-        return renderPromptBlock(profile, [], {
+        return this.finalizeRetrievalPromptBlock({
+          activeContextTarget,
+          profile,
           emotionalSnapshot,
           emotionalContinuityMemories: fallbackEmotionalContinuity,
           withheldSummary,
           socialContext,
           episodicChains,
+          telemetry,
         });
       }
 
@@ -1075,7 +1659,7 @@ export class MemoryRetriever implements MemoryProvider {
       log.info('Retrieval trace', {
         channelId,
         trustLevel: effectiveTrust,
-        channelVisibility,
+        channelPrivacy,
         retrievalSource: telemetry.retrievalSource,
         semanticCandidates: telemetry.semanticCandidateCount,
         lexicalCandidates: telemetry.lexicalCandidateCount,
@@ -1093,6 +1677,7 @@ export class MemoryRetriever implements MemoryProvider {
         withheldCount: telemetry.withheldCount,
         withheldReasonCounts: telemetry.withheldReasonCounts,
         withheldRelevanceBands: telemetry.withheldRelevanceBands,
+        rejectedByRoomVisibility: diagnostics.rejectedByRoomVisibility,
         rejectedByScore: diagnostics.rejectedByScore,
         scoreGuaranteedCount,
         evidenceSupportAverage: telemetry.evidenceSupportAverage,
@@ -1108,7 +1693,7 @@ export class MemoryRetriever implements MemoryProvider {
       });
       log.debug('Retrieval decision rationale', {
         trustLevel: effectiveTrust,
-        channelVisibility,
+        channelPrivacy,
         ...diagnostics,
       });
       const selectedIds = new Set(selected.map(item => item.memory.id));
@@ -1116,11 +1701,12 @@ export class MemoryRetriever implements MemoryProvider {
         ? await this.collectEmotionalContinuityMemories(
           canonicalContactId,
           effectiveTrust,
-          channelVisibility,
+          channelDisclosure,
           selectedIds,
           operatorApproval,
           channelMeta,
           turnSnapshot?.contactEmotionalMemories,
+          roomVisibility,
         )
         : [];
       telemetry.emotionalContinuityCount = emotionalContinuityMemories.length;
@@ -1132,7 +1718,17 @@ export class MemoryRetriever implements MemoryProvider {
         ),
         collectEpisodicChainProvenanceRefs(episodicChains),
       );
-      const selectedContactContextById = await this.buildSelectedContactContext(selected, socialContext);
+      const selectedForPrompt = await this.attachEvolutionChains(selected, {
+        contextText,
+        trustLevel: effectiveTrust,
+        channelPrivacy,
+        broadcast,
+        channelMeta,
+        canonicalContactId,
+        operatorApproval,
+        roomVisibility,
+      });
+      const selectedContactContextById = await this.buildSelectedContactContext(selectedForPrompt, socialContext);
 
       // Update access stats; fail closed if persistence fails.
       for (const s of selected) {
@@ -1158,13 +1754,17 @@ export class MemoryRetriever implements MemoryProvider {
       telemetry.count = selected.length + episodicEpisodeCount;
       telemetry.reason = 'ok';
       await this.emitRetrievalTelemetry(telemetry);
-      return renderPromptBlock(profile, selected, {
+      return this.finalizeRetrievalPromptBlock({
+        activeContextTarget,
+        profile,
+        selectedForPrompt,
         emotionalSnapshot,
         emotionalContinuityMemories,
         withheldSummary,
         socialContext,
         contactContextById: selectedContactContextById,
         episodicChains,
+        telemetry,
       });
     } catch (error) {
       telemetry.reason = 'error';
@@ -1210,20 +1810,26 @@ export class MemoryRetriever implements MemoryProvider {
     }
 
     const effectiveTrust = trustLevel ?? 'regular';
-    const channelVisibility = classifyChannel(channelId, channelMeta);
+    const channelDisclosure = classifyChannelDisclosure(channelId, channelMeta);
+    const { channelPrivacy, broadcast } = channelDisclosure;
     const visibilityScope = resolveBroadcastVisibilityScope(channelId, channelMeta) ?? 'non_broadcast';
     const operatorApproval = visibilityScope === 'approved_private_context';
-    const candidates = turnSnapshot?.proactiveCandidates.map(cloneMemory)
-      ?? await this.collectProactiveRecallCandidates(channelId, canonicalContactId);
-    if (candidates.length === 0) return '';
+      const roomVisibility = await this.resolveRoomVisibilityContext(channelId, channelMeta, canonicalContactId, undefined);
+      const candidates = this.filterQuarantinedMemories(
+        turnSnapshot?.proactiveCandidates.map(cloneMemory)
+        ?? await this.collectProactiveRecallCandidates(channelId, canonicalContactId),
+      ).memories;
+      if (candidates.length === 0) return '';
 
     const weighted = candidates
       .filter((memory) => evaluateRetrievalAccessDecision(memory, {
         trustLevel: effectiveTrust,
-        channelVisibility,
+        channelPrivacy,
+        broadcast,
         channelMeta,
         canonicalContactId,
         operatorApproval,
+        roomVisibility,
       }).allowed)
       .map(memory => ({
         memory,
@@ -1269,7 +1875,7 @@ export class MemoryRetriever implements MemoryProvider {
     contextText: string;
     channelId: string;
     trustLevel: TrustLevel;
-    channelVisibility: ChannelVisibility;
+    channelDisclosure: ChannelDisclosureContext;
     canonicalContactId?: string;
     scopeQuery?: MemoryScopeQuery;
   }): Promise<EpisodicRetrievalChain[]> {
@@ -1278,8 +1884,10 @@ export class MemoryRetriever implements MemoryProvider {
     }
 
     try {
-      return (await retrieveEpisodicChains(this.episodicStore, input))
-        .map(cloneEpisodicRetrievalChain);
+      return this.filterQuarantinedEpisodicChains(
+        (await retrieveEpisodicChains(this.episodicStore, input))
+          .map(cloneEpisodicRetrievalChain),
+      );
     } catch (error) {
       throw new RetrievalIntegrityError(
         'Episodic landmark retrieval failed',
@@ -1291,6 +1899,37 @@ export class MemoryRetriever implements MemoryProvider {
         error,
       );
     }
+  }
+
+  private filterQuarantinedEpisodicChains(
+    chains: readonly EpisodicRetrievalChain[],
+  ): EpisodicRetrievalChain[] {
+    if (!this.sessionQuarantineFilter || chains.length === 0) {
+      return chains.map(cloneEpisodicRetrievalChain);
+    }
+    return chains
+      .filter(chain => !this.isEpisodicChainQuarantined(chain))
+      .map(cloneEpisodicRetrievalChain);
+  }
+
+  private isEpisodicChainQuarantined(chain: EpisodicRetrievalChain): boolean {
+    for (const episode of chain.episodes) {
+      if (episode.spanRefs.some(ref => this.isRetiredSessionId(ref.sessionId))) return true;
+      if (episode.provenanceRefs.some(ref => (
+        ref.kind === 'session' && this.isRetiredSessionId(ref.refId)
+      ))) {
+        return true;
+      }
+    }
+    for (const arc of chain.arcs) {
+      if (arc.spanRefs.some(ref => this.isRetiredSessionId(ref.sessionId))) return true;
+      if (arc.provenanceRefs.some(ref => (
+        ref.kind === 'session' && this.isRetiredSessionId(ref.refId)
+      ))) {
+        return true;
+      }
+    }
+    return false;
   }
 
   private async resolveEmotionalSnapshot(contactId: string): Promise<EmotionalSnapshot | undefined> {
@@ -1336,7 +1975,7 @@ export class MemoryRetriever implements MemoryProvider {
   private async resolveRetrievalSocialContext(
     canonicalContactId: string,
     trustLevel: TrustLevel,
-    channelVisibility: ChannelVisibility,
+    channelPrivacy: ChannelPrivacy,
   ): Promise<RetrievalSocialContext | undefined> {
     if (!this.contactStore) return undefined;
 
@@ -1355,7 +1994,7 @@ export class MemoryRetriever implements MemoryProvider {
     const edges = await this.contactStore.listSocialRelationshipEdges({
       contactId: canonicalContactId,
       viewerTrustLevel: trustLevel,
-      viewerChannelVisibility: channelVisibility,
+      viewerChannelPrivacy: channelPrivacy,
     });
     const relatedContactsById = new Map<string, RetrievalContactContext>();
     for (const edge of edges) {
@@ -1439,6 +2078,73 @@ export class MemoryRetriever implements MemoryProvider {
     return contexts.size > 0 ? contexts : undefined;
   }
 
+  private shouldExpandEvolutionChains(input: {
+    contextText: string;
+    trustLevel: TrustLevel;
+    channelPrivacy: ChannelPrivacy;
+  }): boolean {
+    return input.channelPrivacy === 'private'
+      && isHighTierTrustLevel(input.trustLevel)
+      && EVOLUTION_CHAIN_USEFUL_HINT.test(input.contextText);
+  }
+
+  private async attachEvolutionChains(
+    selected: readonly ScoredMemory[],
+    options: {
+      contextText: string;
+      trustLevel: TrustLevel;
+      channelPrivacy: ChannelPrivacy;
+      broadcast: boolean;
+      channelMeta?: ChannelMeta;
+      canonicalContactId?: string;
+      operatorApproval: boolean;
+      roomVisibility?: RetrievalRoomVisibilityContext;
+    },
+  ): Promise<ScoredMemory[]> {
+    if (!this.shouldExpandEvolutionChains(options)) {
+      return [...selected];
+    }
+
+    const expanded = [...selected];
+    const selectedIds = new Set(expanded.map(item => item.memory.id));
+    for (let index = 0; index < Math.min(expanded.length, EVOLUTION_CHAIN_SELECTED_LIMIT); index++) {
+      const item = expanded[index];
+      const links = (await this.memoryStore.getEvolutionLinksForSourceMemory(item.memory.id))
+        .slice(0, EVOLUTION_CHAIN_PER_MEMORY_LIMIT);
+      const chain: NonNullable<ScoredMemory['evolutionChain']> = [];
+      for (const link of links) {
+        if (selectedIds.has(link.targetMemoryId)) continue;
+          const target = await this.memoryStore.getById(link.targetMemoryId);
+          if (!target || target.deletedAt !== undefined) continue;
+          if (this.isMemoryQuarantined(target)) continue;
+          const accessDecision = evaluateRetrievalAccessDecision(target, {
+          trustLevel: options.trustLevel,
+          channelPrivacy: options.channelPrivacy,
+          broadcast: options.broadcast,
+          channelMeta: options.channelMeta,
+          canonicalContactId: options.canonicalContactId,
+          operatorApproval: options.operatorApproval,
+          roomVisibility: options.roomVisibility,
+        });
+        if (!accessDecision.allowed) continue;
+        chain.push({
+          relation: link.relation,
+          confidence: link.confidence,
+          reason: link.reason,
+          memory: target,
+        });
+      }
+      if (chain.length > 0) {
+        expanded[index] = {
+          ...item,
+          evolutionChain: chain,
+        };
+      }
+    }
+
+    return expanded;
+  }
+
   private async applySocialContextRankingAdjustments(
     candidates: readonly ScoredMemory[],
     contextText: string,
@@ -1474,12 +2180,9 @@ export class MemoryRetriever implements MemoryProvider {
 
     const contact = this.contactStore ? await this.contactStore.getById(contactId) : undefined;
     if (contact && querySuggestsContactFocus(queryTokens, {
-      contactId,
       displayName: contact.displayName,
-      trustLevel: contact.trustLevel,
       relationshipType: contact.relationshipType,
       relationshipLabels: [],
-      relatedToCanonical: false,
     })) {
       return 0.9;
     }
@@ -1490,14 +2193,17 @@ export class MemoryRetriever implements MemoryProvider {
   private async collectEmotionalContinuityMemories(
     canonicalContactId: string,
     trustLevel: TrustLevel,
-    channelVisibility: ChannelVisibility,
+    channelDisclosure: ChannelDisclosureContext,
     selectedIds: ReadonlySet<string>,
     operatorApproval = false,
     channelMeta?: ChannelMeta,
     sourceOverride?: readonly PurrMemory[],
+    roomVisibility?: RetrievalRoomVisibilityContext,
   ): Promise<PurrMemory[]> {
-    const source = (sourceOverride?.map(cloneMemory) ?? await this.collectContactEmotionalMemories(canonicalContactId))
-      .filter(memory => !isInternalMemoryArtifact(memory));
+      const source = this.filterQuarantinedMemories(
+        (sourceOverride?.map(cloneMemory) ?? await this.collectContactEmotionalMemories(canonicalContactId))
+          .filter(memory => !isInternalMemoryArtifact(memory)),
+      ).memories;
     if (source.length === 0) return [];
 
     return source
@@ -1505,10 +2211,12 @@ export class MemoryRetriever implements MemoryProvider {
       .filter(memory => !selectedIds.has(memory.id))
       .filter((memory) => evaluateRetrievalAccessDecision(memory, {
         trustLevel,
-        channelVisibility,
+        channelPrivacy: channelDisclosure.channelPrivacy,
+        broadcast: channelDisclosure.broadcast,
         channelMeta,
         canonicalContactId,
         operatorApproval,
+        roomVisibility,
       }).allowed)
       .sort((left, right) => right.extractedAt - left.extractedAt)
       .slice(0, 3);
@@ -1541,113 +2249,6 @@ export class MemoryRetriever implements MemoryProvider {
       .filter(memory => !isInternalMemoryArtifact(memory))
       .sort((left, right) => right.lastAccessed - left.lastAccessed)
       .slice(0, 24);
-  }
-
-  private shouldUseCompositionalRetrieval(channelId: string): boolean {
-    if (!this.runtimeConfig || !this.llmProvider) return false;
-
-    return evaluateCompositionalPolicyForChannelId({
-      policy: this.runtimeConfig.compositionalPolicy,
-      capabilityTier: this.runtimeConfig.capabilityTier,
-      channelId,
-      purpose: 'retrieval',
-    }).allowed;
-  }
-
-  private async applyCompositionalRetrievalRanking(
-    contextText: string,
-    channelId: string,
-    candidates: ScoredMemory[],
-  ): Promise<CompositionalRetrievalDecision> {
-    const compositionalCandidateCount = Math.min(candidates.length, RETRIEVAL_COMPOSITION_MAX_CANDIDATES);
-    const finalistCount = compositionalCandidateCount < 2
-      ? compositionalCandidateCount
-      : Math.min(RETRIEVAL_COMPOSITION_FINALIST_LIMIT, compositionalCandidateCount);
-    const evaluationBatchCount = compositionalCandidateCount < 2
-      ? 0
-      : Math.ceil(compositionalCandidateCount / RETRIEVAL_COMPOSITION_BATCH_SIZE);
-
-    if (!this.shouldUseCompositionalRetrieval(channelId)) {
-      return {
-        ranked: null,
-        mode: 'disabled_policy',
-        candidateCount: compositionalCandidateCount,
-        evaluationBatchCount,
-        finalistCount,
-      };
-    }
-    if (candidates.length < 2) {
-      return {
-        ranked: null,
-        mode: 'insufficient_candidates',
-        candidateCount: compositionalCandidateCount,
-        evaluationBatchCount,
-        finalistCount,
-      };
-    }
-    if (!this.llmProvider) {
-      return {
-        ranked: null,
-        mode: 'llm_unavailable',
-        candidateCount: compositionalCandidateCount,
-        evaluationBatchCount,
-        finalistCount,
-      };
-    }
-
-    const decision = await composeRetrievalRanking({
-      llmClient: this.llmProvider,
-      query: contextText,
-      channelId,
-      candidates: candidates.map((candidate): RetrievalComposeCandidate => ({
-        id: candidate.memory.id,
-        text: candidate.memory.text,
-        type: candidate.memory.type,
-        score: candidate.score,
-        similarity: candidate.memory.similarity,
-        importance: candidate.memory.importance,
-        confidence: candidate.memory.confidence,
-        salience: candidate.memory.salience,
-        evidenceSupport: candidate.evidenceSupport,
-        explicitlyQueried: candidate.explicitlyQueried,
-      })),
-    });
-    if (!decision) {
-      return {
-        ranked: null,
-        mode: 'malformed_or_failed',
-        candidateCount: compositionalCandidateCount,
-        evaluationBatchCount,
-        finalistCount,
-      };
-    }
-
-    const finalOrderIndex = new Map(
-      decision.finalOrder.map((id, index) => [id, index] as const),
-    );
-
-    return {
-      ranked: candidates
-      .map((candidate) => {
-        const relevance = decision.relevanceById.get(candidate.memory.id) ?? 0;
-        const finalIndex = finalOrderIndex.get(candidate.memory.id);
-        let multiplier = 1 + (relevance * 0.75);
-        if (finalIndex !== undefined && decision.finalOrder.length > 0) {
-          const composeWeight = (decision.finalOrder.length - finalIndex) / decision.finalOrder.length;
-          multiplier += composeWeight * 1.25;
-        }
-
-        return {
-          ...candidate,
-          score: candidate.score * multiplier,
-        };
-      })
-      .sort((left, right) => right.score - left.score),
-      mode: 'applied',
-      candidateCount: compositionalCandidateCount,
-      evaluationBatchCount,
-      finalistCount,
-    };
   }
 
   private isTelemetryEnabled(): boolean {
@@ -1695,11 +2296,6 @@ export class MemoryRetriever implements MemoryProvider {
 
 function toErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
-}
-
-function clampProbability(value: number): number {
-  if (!Number.isFinite(value)) return 0;
-  return Math.max(0, Math.min(1, value));
 }
 
 function clampTurnFrequency(value: number): number {

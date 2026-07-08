@@ -9,6 +9,7 @@ import {
   DEFAULT_EXTENDED_TOOL_AUTOLOAD_MAX,
   selectBoundedOverlayCandidates,
 } from './extended-tool-autoload-policy.js';
+import { assertNoRetiredFirstPartyToolAliases } from './tool-surface/registry.js';
 
 describe('extended-tool-autoload-policy', () => {
   it('classifies development workflow turns as dev intent', () => {
@@ -114,36 +115,26 @@ describe('extended-tool-autoload-policy', () => {
     expect(DEFAULT_EXTENDED_TOOL_AUTOLOAD_CANDIDATES.memory.filter(name => name === 'north_star')).toHaveLength(1);
   });
 
-  it('preloads the dedicated selfie tool before generic social image tools', () => {
+  it('keeps default autoload candidates on canonical tool names', () => {
+    const candidates = Object.values(DEFAULT_EXTENDED_TOOL_AUTOLOAD_CANDIDATES).flat();
+    expect(() => assertNoRetiredFirstPartyToolAliases(
+      candidates,
+      'default extended-tool autoload candidates',
+    )).not.toThrow();
+  });
+
+  it('preloads the canonical media surface for social media work', () => {
     expect(DEFAULT_EXTENDED_TOOL_AUTOLOAD_MAX).toBe(4);
-    expect(DEFAULT_EXTENDED_TOOL_AUTOLOAD_CANDIDATES.social.slice(0, 4)).toEqual([
-      'selfie_create',
-      'image_create',
-      'image_edit',
-      'image_analyze',
-    ]);
+    expect(DEFAULT_EXTENDED_TOOL_AUTOLOAD_CANDIDATES.social).toEqual(['media', 'vault']);
 
     const policy = createDefaultExtendedToolAutoloadPolicy(DEFAULT_EXTENDED_TOOL_AUTOLOAD_MAX);
     const selection = policy.selectOverlayCandidates('social', [
-      'selfie_create',
-      'image_create',
-      'image_edit',
-      'image_analyze',
+      'media',
       'vault',
     ]);
 
-    expect(selection.selected).toEqual([
-      'selfie_create',
-      'image_create',
-      'image_edit',
-      'image_analyze',
-    ]);
-    expect(selection.skipped).toEqual([
-      {
-        toolName: 'vault',
-        reason: 'budget_exhausted',
-      },
-    ]);
+    expect(selection.selected).toEqual(['media', 'vault']);
+    expect(selection.skipped).toEqual([]);
   });
 
   it('keeps reflection intent free of overlay preload candidates', () => {
@@ -194,9 +185,7 @@ describe('extended-tool-autoload-policy', () => {
         'beads',
         'vault',
         'north_star',
-        'image_create',
-        'image_edit',
-        'image_analyze',
+        'media',
       ]);
 
       expect(selection.candidates).not.toContain('analysis_workbench');
@@ -207,6 +196,10 @@ describe('extended-tool-autoload-policy', () => {
   it('classifies tools with explicit core, overlay, and background semantics', () => {
     expect(classifyToolForTurn('repo_status', { coreToolNames: ['repo_status'] })).toBe('core');
     expect(classifyToolForTurn('schedule', { coreToolNames: ['schedule'] })).toBe('core');
+    // No extended tools default to background-only since the scheduler
+    // consolidation, but an explicit configuration still classifies them.
+    expect(classifyToolForTurn('schedule_task')).toBe('overlay');
+    expect(classifyToolForTurn('schedule_task', { backgroundOnlyToolNames: ['schedule_task'] })).toBe('background');
     expect(classifyToolForTurn('repo_diff')).toBe('overlay');
     expect(classifyToolForTurn('   ')).toBe('background');
   });

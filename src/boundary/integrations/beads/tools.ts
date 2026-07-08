@@ -26,6 +26,7 @@ type BeadsAction = 'ready' | 'show' | 'create' | 'update' | 'close' | 'sync';
 export interface BeadsToolParams {
   action?: BeadsActionName;
   id?: string;
+  limit?: number;
   title?: string;
   issue_type?: 'bug' | 'feature' | 'task' | 'epic' | 'chore';
   status?: 'open' | 'in_progress' | 'blocked' | 'closed';
@@ -180,6 +181,11 @@ export function createBeadsTool(ops: BeadsOperations): AgentTool<any> {
       reason: Type.Optional(Type.String({
         description: 'Used with action=close. Close reason text.',
       })),
+      limit: Type.Optional(Type.Integer({
+        minimum: 1,
+        maximum: 100,
+        description: 'Used with action=ready. Max issues returned (default 20). Raise only when you truly need more; the full list is very large.',
+      })),
       actor: Type.Optional(Type.String({
         description: 'Optional actor identifier for audit attribution.',
       })),
@@ -194,7 +200,10 @@ export function createBeadsTool(ops: BeadsOperations): AgentTool<any> {
         const result = await (async (): Promise<BeadsActionResult> => {
           switch (actionForError) {
             case 'ready':
-              return await ops.ready({ actor: params.actor });
+              return await ops.ready({
+                actor: params.actor,
+                ...(params.limit !== undefined ? { limit: params.limit } : {}),
+              });
             case 'show':
               return await ops.show({
                 id: requirePlainStringParam(params, 'id', 'show', '{"action":"show","id":"PSFN-123"}'),

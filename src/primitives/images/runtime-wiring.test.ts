@@ -19,7 +19,7 @@ describe('media runtime wiring', () => {
       },
     );
 
-    expect(registerTool).toHaveBeenCalledTimes(5);
+    expect(registerTool).toHaveBeenCalledTimes(2);
 
     const calls = new Map(
       registerTool.mock.calls.map(([tool, exposure]) => [tool.name, { tool, exposure }]),
@@ -31,18 +31,13 @@ describe('media runtime wiring', () => {
       'image.edit',
       'web.fetch_binary',
     ]);
-    expect(calls.get('image_create')?.exposure).toBe('extended');
+    expect(calls.get('image_create')).toBeUndefined();
     expect(calls.get('selfie_create')?.tool.wiringMeta?.requiredGatewayMethods).toEqual([
       'image.create',
       'image.edit',
       'web.fetch_binary',
     ]);
-    expect(calls.get('image_edit')?.tool.wiringMeta?.requiredGatewayMethods).toEqual([
-      'image.edit',
-      'web.fetch_binary',
-    ]);
-    expect(calls.get('image_analyze')?.tool.wiringMeta?.requiredGatewayMethods).toEqual([
-      'web.fetch_binary',
-    ]);
+    expect(calls.get('image_edit')).toBeUndefined();
+    expect(calls.get('image_analyze')).toBeUndefined();
   });
 });

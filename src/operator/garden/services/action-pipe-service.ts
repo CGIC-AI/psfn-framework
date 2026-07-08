@@ -1,14 +1,28 @@
 import type { PostTurnActionRuntime } from '../../../core/agent/post-turn-action-runtime.js';
+import type { OutreachOutboxStore } from '../../../core/intention/outreach-outbox.js';
 import type {
   AdminActionPipeMutationResult,
   AdminActionPipeService,
+  AdminActionPipeStatus,
 } from './types.js';
 
 export class AdminActionPipeDataService implements AdminActionPipeService {
-  constructor(private readonly runtime: PostTurnActionRuntime) {}
+  constructor(
+    private readonly runtime: PostTurnActionRuntime,
+    private readonly outreachOutbox?: OutreachOutboxStore | null,
+  ) {}
 
-  async getActionPipeStatus() {
-    return this.runtime.getStatus();
+  async getActionPipeStatus(): Promise<AdminActionPipeStatus> {
+    const status = this.runtime.getStatus();
+    if (!this.outreachOutbox) {
+      return status;
+    }
+    return {
+      ...status,
+      outreachOutbox: {
+        recentRecords: this.outreachOutbox.listRecent(25),
+      },
+    };
   }
 
   async cancelAction(input: { actionRef: string; reason?: string }): Promise<AdminActionPipeMutationResult> {

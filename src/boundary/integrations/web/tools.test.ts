@@ -82,35 +82,80 @@ describe('web tools', () => {
     }]);
   });
 
-  it('returns an error result when the unified tool fails', async () => {
+  it('returns structured invalid-input metadata when the unified tool input is incomplete', async () => {
+    const ops = {
+      fetch: vi.fn(),
+    };
+
+    const tool = createWebTool(ops);
+    const result = await tool.execute('call-3', {});
+
+    expect(ops.fetch).not.toHaveBeenCalled();
+    expect(result.details).toMatchObject({
+      isError: true,
+      errorClass: 'invalid_input',
+      retryHint: 'try_alternative_input',
+      retryable: false,
+      rawDiagnostic: 'target is required.',
+    });
+    expect(result.content).toEqual([{
+      type: 'text',
+      text: 'web failed: Invalid input: target is required.',
+    }]);
+  });
+
+  it('returns structured retryable metadata when the unified tool backend is unavailable', async () => {
     const ops = {
       fetch: vi.fn(async () => {
-        throw new Error('blocked');
+        const error = new Error('Fetch failed: 503 Service Unavailable') as Error & { code: number };
+        error.code = -32003;
+        throw error;
       }),
     };
 
     const tool = createWebTool(ops);
-    const result = await tool.execute('call-3', {
+    const result = await tool.execute('call-4', {
       target: 'https://example.com',
     });
 
-    expect(result.details).toEqual({ isError: true });
-    expect(result.content).toEqual([{ type: 'text', text: 'web failed: blocked' }]);
+    expect(result.details).toMatchObject({
+      isError: true,
+      errorClass: 'unavailable',
+      retryHint: 'retry_with_backoff',
+      retryable: true,
+      rawDiagnostic: 'Fetch failed: 503 Service Unavailable',
+    });
+    expect(result.content).toEqual([{
+      type: 'text',
+      text: 'web failed: Service unavailable: Fetch failed: 503 Service Unavailable',
+    }]);
   });
 
-  it('keeps the legacy web_fetch alias behavior intact', async () => {
+  it('annotates web_fetch private-IP policy blocks without leaking secret URL params', async () => {
     const ops = {
       fetch: vi.fn(async () => {
-        throw new Error('blocked');
+        const error = new Error(
+          'URL blocked: resolved address is cloud metadata for http://169.254.169.254/latest?token=secret-value',
+        ) as Error & { code: number };
+        error.code = -32002;
+        throw error;
       }),
     };
 
     const tool = createWebFetchTool(ops);
-    const result = await tool.execute('call-4', {
+    const result = await tool.execute('call-5', {
       url: 'https://example.com',
     });
 
-    expect(result.details).toEqual({ isError: true });
-    expect(result.content).toEqual([{ type: 'text', text: 'web_fetch failed: blocked' }]);
+    expect(result.details).toMatchObject({
+      isError: true,
+      errorClass: 'policy_blocked',
+      retryHint: 'try_alternative_input',
+      retryable: false,
+    });
+    expect((result.details as any).rawDiagnostic).toContain('cloud metadata');
+    expect((result.details as any).rawDiagnostic).not.toContain('secret-value');
+    expect((result.content[0] as { text: string }).text).toContain('web_fetch failed: Blocked by runtime policy');
+    expect((result.content[0] as { text: string }).text).not.toContain('secret-value');
   });
 });

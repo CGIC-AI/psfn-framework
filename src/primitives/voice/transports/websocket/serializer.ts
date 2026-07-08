@@ -1,3 +1,4 @@
+import { isObjectRecord } from '../../../../shared/utils/types.js';
 import {
   VOICE_WIRE_PROTOCOL,
   type VoiceWireFrame,
@@ -32,9 +33,6 @@ function ensureFrameSize(raw: string, maxFrameBytes: number): void {
   }
 }
 
-function isObjectRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null;
-}
 
 function validateShape(value: unknown): asserts value is VoiceWireFrame {
   if (!isObjectRecord(value)) {

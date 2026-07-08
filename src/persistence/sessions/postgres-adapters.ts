@@ -1,6 +1,7 @@
 import type { Pool, PoolClient } from 'pg';
-import { classifyChannel } from '../../system/trust/policy.js';
-import type { ChannelVisibility } from '../../system/trust/types.js';
+import { classifyChannelDisclosure } from '../../system/trust/policy.js';
+import type { ChannelPrivacy } from '../../system/trust/context-envelope.js';
+import { decodeStoredChannelVisibility } from '../../system/trust/types.js';
 import {
   createPostgresPool,
   ensurePostgresSchema,
@@ -10,10 +11,12 @@ import {
 import { POSTGRES_TRANSCRIPT_MIGRATIONS } from '../postgres/migrations.js';
 import type { SessionArchivePort } from '../journals/journal/port.js';
 import { createFilesystemSessionArchivePort } from '../journals/journal/port.js';
+import { isCogSecTombstoneSessionEntry } from '../../core/cogsec/tombstones.js';
 import type {
   KeywordSearchableTranscriptProjection,
   SessionSearchHit,
   TranscriptProjectionDrift,
+  TranscriptSearchOptions,
 } from './transcript-projection-port.js';
 import type { TurnRecordStorePort } from './turn-record-store-port.js';
 import { createFilesystemTurnRecordStorePort } from './turn-records.js';
@@ -53,7 +56,7 @@ interface ProjectionRecord {
   authorName?: string;
   content: string;
   timestamp: number;
-  channelVisibility: ChannelVisibility;
+  channelVisibility: ChannelPrivacy;
 }
 
 export interface PostgresTranscriptProjectionOptions {
@@ -82,16 +85,10 @@ function normalizeSearchLimit(limit: number | undefined): number {
 function normalizeChannelVisibility(
   value: string | undefined,
   channelId: string,
-): ChannelVisibility {
-  switch (value) {
-    case 'private':
-    case 'semi_private':
-    case 'public':
-    case 'broadcast':
-      return value;
-    default:
-      return classifyChannel(channelId);
-  }
+): ChannelPrivacy {
+  // Stored rows may predate the E3.1 vocabulary rename; the shared decoder
+  // maps legacy 'semi_private' to 'invite_only'.
+  return decodeStoredChannelVisibility(value) ?? classifyChannelDisclosure(channelId).channelPrivacy;
 }
 
 function normalizeTimestamp(value: number): number {
@@ -189,6 +186,16 @@ async function upsertProjectionRecord(client: PoolClient, record: ProjectionReco
   );
 }
 
+async function deleteProjectionRecord(client: PoolClient, channelId: string, messageId: number): Promise<void> {
+  await client.query(
+    `
+      DELETE FROM session_messages_projection
+      WHERE channel_id = $1 AND message_id = $2
+    `,
+    [channelId, messageId],
+  );
+}
+
 class PostgresTranscriptProjection implements KeywordSearchableTranscriptProjection {
   private readonly pool: Pool;
   private readonly messageIdsByChannel: Map<string, Set<number>>;
@@ -235,6 +242,26 @@ class PostgresTranscriptProjection implements KeywordSearchableTranscriptProject
     entry: import('../../core/session/types.js').SessionEntry,
     options: { channelId?: string } = {},
   ): void {
+    const channelId = options.channelId ?? entry.channelId;
+    if (isCogSecTombstoneSessionEntry(entry)) {
+      const messageIds = this.messageIdsByChannel.get(channelId) ?? new Set<number>();
+      messageIds.delete(entry.id);
+      this.messageIdsByChannel.set(channelId, messageIds);
+      this.driftByChannel.delete(channelId);
+
+      this.enqueueWrite(channelId, async (client) => {
+        await deleteProjectionRecord(client, channelId, entry.id);
+        await client.query(
+          `
+            DELETE FROM session_projection_drift
+            WHERE channel_id = $1
+          `,
+          [channelId],
+        );
+      });
+      return;
+    }
+
     const record = toProjectionRecord(entry, options);
     const messageIds = this.messageIdsByChannel.get(record.channelId) ?? new Set<number>();
     messageIds.add(record.messageId);
@@ -257,7 +284,9 @@ class PostgresTranscriptProjection implements KeywordSearchableTranscriptProject
     channelId: string,
     entries: readonly import('../../core/session/types.js').SessionEntry[],
   ): void {
-    const records = entries.map(entry => toProjectionRecord(entry, { channelId }));
+    const records = entries
+      .filter(entry => !isCogSecTombstoneSessionEntry(entry))
+      .map(entry => toProjectionRecord(entry, { channelId }));
     this.replaceCachedChannel(channelId, records.map(record => record.messageId));
     this.driftByChannel.delete(channelId);
 
@@ -326,11 +355,20 @@ class PostgresTranscriptProjection implements KeywordSearchableTranscriptProject
     ));
   }
 
-  async searchByKeywords(query: string, limit = DEFAULT_SEARCH_LIMIT): Promise<SessionSearchHit[]> {
+  async flushPendingWrites(): Promise<void> {
+    await this.writeChain;
+  }
+
+  async searchByKeywords(
+    query: string,
+    limit = DEFAULT_SEARCH_LIMIT,
+    options: TranscriptSearchOptions = {},
+  ): Promise<SessionSearchHit[]> {
     const normalizedQuery = query.trim();
     if (!normalizedQuery) return [];
-    await this.writeChain;
+    await this.flushPendingWrites();
     const boundedLimit = normalizeSearchLimit(limit);
+    const scopedChannelId = options.channelId?.trim() || undefined;
     const rows = await queryRows<SearchRow>(
       this.pool,
       `
@@ -352,10 +390,11 @@ class PostgresTranscriptProjection implements KeywordSearchableTranscriptProject
           ) AS snippet
         FROM session_messages_projection
         WHERE search_vector @@ websearch_to_tsquery('simple', $1)
+          AND ($3::text IS NULL OR channel_id = $3)
         ORDER BY score DESC, timestamp DESC, message_id DESC
         LIMIT $2
       `,
-      [normalizedQuery, boundedLimit],
+      [normalizedQuery, boundedLimit, scopedChannelId ?? null],
     );
 
     return rows.map(row => ({

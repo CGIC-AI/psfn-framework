@@ -204,6 +204,7 @@ interface ServerHarness {
 async function createHarness(options: {
   token?: string;
   allowInsecureWithoutToken?: boolean;
+  host?: string;
   modelDiscovery?: {
     getAvailableModels: () => Promise<DiscoveredModel[]>;
     invalidateCache: () => void;
@@ -351,14 +352,22 @@ async function createHarness(options: {
   });
   const server = new AdminServer({
     port,
+    host: options.host,
     token: options.token,
     allowInsecureWithoutToken: options.allowInsecureWithoutToken ?? false,
     eventBus,
     config,
     services,
   });
-  await server.init();
-  await server.start();
+  try {
+    await server.init();
+    await server.start();
+  } catch (error) {
+    db.close();
+    rmSync(tempDir, { recursive: true, force: true });
+    resetRuntimeTrustPolicy();
+    throw error;
+  }
 
   return { tempDir, db, eventBus, server, port };
 }
@@ -371,6 +380,31 @@ async function destroyHarness(harness: ServerHarness): Promise<void> {
 }
 
 describe('AdminServer Garden routing', () => {
+  describe('startup auth policy', () => {
+    it('rejects insecure local mode on non-loopback hosts', async () => {
+      await expect(
+        createHarness({
+          allowInsecureWithoutToken: true,
+          host: '0.0.0.0',
+        }),
+      ).rejects.toThrow('ADMIN_ALLOW_INSECURE=true requires ADMIN_HOST to be loopback');
+    });
+
+    it('allows insecure local mode on explicit loopback hosts', async () => {
+      const localHarness = await createHarness({
+        allowInsecureWithoutToken: true,
+        host: '127.0.0.1',
+      });
+      await destroyHarness(localHarness);
+
+      const localhostHarness = await createHarness({
+        allowInsecureWithoutToken: true,
+        host: 'localhost',
+      });
+      await destroyHarness(localhostHarness);
+    });
+  });
+
   describe('routing without auth token', () => {
     let harness: ServerHarness;
 
@@ -420,6 +454,32 @@ describe('AdminServer Garden routing', () => {
       expect(res.status).toBe(200);
       const payload = JSON.parse(res.body) as { stats: { sessionCount: number } };
       expect(payload.stats.sessionCount).toBeTypeOf('number');
+    });
+
+    it('reports disabled observer sidecar health when persistence is unavailable', async () => {
+      const healthRes = await request(harness.port, 'GET', '/api/admin/evals/observer-sidecar/health');
+      expect(healthRes.status).toBe(200);
+      const healthPayload = JSON.parse(healthRes.body) as {
+        status: string;
+        runtime: { status: string; enabled: boolean } | null;
+        persistence: { available: boolean; authoritative: boolean };
+      };
+      expect(healthPayload.status).toBe('disabled');
+      expect(healthPayload.runtime).toMatchObject({
+        status: 'disabled',
+        enabled: false,
+      });
+      expect(healthPayload.persistence).toEqual({
+        available: false,
+        evalOwned: false,
+        authoritative: false,
+      });
+
+      const observationsRes = await request(harness.port, 'GET', '/api/admin/evals/observer-sidecar/observations');
+      expect(observationsRes.status).toBe(503);
+      expect(JSON.parse(observationsRes.body)).toEqual({
+        error: 'Observer eval sidecar persistence unavailable',
+      });
     });
 
     it('keeps canonical /api/admin chat and models routes aligned', async () => {

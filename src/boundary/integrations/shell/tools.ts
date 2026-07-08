@@ -3,8 +3,7 @@ import type { AgentTool, AgentToolResult } from '@mariozechner/pi-agent-core';
 import { withCapabilityRequirement } from '../../../system/capabilities/requirements.js';
 import { tagToolWithReversibility } from '../../../system/capabilities/safeguards.js';
 import type { ShellOperations } from './ops.js';
-import { textResult, textResultWithError } from '../../../core/tools/results.js';
-import { toErrorMessage } from '../../../shared/utils/errors.js';
+import { textResult, textResultFromError } from '../../../core/tools/results.js';
 
 type ShellAction = 'exec';
 
@@ -101,7 +100,7 @@ export function createShellTool(ops: ShellOperations): AgentTool<any> {
           duration_ms: result.durationMs,
         }, null, 2));
       } catch (error) {
-        return textResultWithError(`shell failed: ${toErrorMessage(error)}`, true);
+        return textResultFromError('shell failed', error);
       }
     },
   };

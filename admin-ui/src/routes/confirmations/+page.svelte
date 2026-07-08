@@ -20,6 +20,17 @@
     return new Date(value).toLocaleString();
   }
 
+  // Friendly, kind-specific titles for known confirmation methods. Falls back
+  // to the raw method identifier for any proposal kind without a label.
+  const METHOD_LABELS: Record<string, string> = {
+    'identity.card.update': 'Persona / character card update',
+    'contact.trust.promote': 'Trusted-tier promotion',
+  };
+
+  function methodLabel(method: string): string {
+    return METHOD_LABELS[method] ?? method;
+  }
+
   function stringifyParams(params: Record<string, unknown>): string {
     try {
       return JSON.stringify(params, null, 2);
@@ -250,9 +261,10 @@
             <div class="flex items-center justify-between">
               <div>
                 <h3 class="text-base font-semibold text-shadow-900">
-                  {entry.method}
+                  {methodLabel(entry.method)}
                   <span class="text-shadow-600 font-normal">({entry.action})</span>
                 </h3>
+                <p class="text-xs text-shadow-500 font-mono mt-0.5">{entry.method}</p>
               </div>
               <span class="inline-block px-2.5 py-1 rounded-full text-sm font-medium bg-gold-100 text-gold-700">
                 Pending

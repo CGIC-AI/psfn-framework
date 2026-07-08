@@ -5,6 +5,7 @@
 import { randomUUID } from 'node:crypto';
 import type { AgentTool, AgentToolResult } from '@mariozechner/pi-agent-core';
 import type { CapabilityTier, ShardToolsetConfig, SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
+import { sanitizeCoreSubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type { SubstrateMessage } from '../../shared/contracts/runtime.js';
 import { resolvePresenceSubjectId } from '../../core/agent/presence-metadata.js';
 import type { EventBus } from '../../shared/event-bus.js';
@@ -54,6 +55,15 @@ import {
 } from './output-review.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
 import { textResultWithError } from '../../core/tools/results.js';
+import {
+  buildCompletionHandoffDedupeKey,
+  emitCompletionHandoff,
+  safeEmitCompletionHandoffError,
+  summarizeCompletionText,
+  type CompletionHandoffInput,
+  type CompletionHandoffRef,
+} from '../../core/agent/completion-handoff.js';
+import type { CompletionNoticeBuffer } from '../../core/agent/completion-notices.js';
 import type {
   ShardFoldReviewController,
   ShardFoldReviewRecord,
@@ -81,14 +91,31 @@ const SHARD_TOOLSET_ALL = '*';
 const SHARD_SYNC_POLICY_VERSION = 1;
 const SHARD_SYNC_MEMORY_TARGET = 'memory:index';
 const INTERNAL_SHARD_SOURCE_PARAM = '__psfnShardSource';
-const BLOCKED_SHARD_TOOL_NAMES = new Set(['subagent', 'spawn_subagent', 'load_tools']);
-const APPRENTICE_SHARD_TOOL_EXTRAS = [
-  'contact_list',
+const BLOCKED_SHARD_TOOL_NAMES = new Set([
+  'subagent',
+  'spawn_subagent',
+  'load_tools',
+  'memory_write',
   'memory_import_batch',
+  'memory_patch',
+  'memory_redact',
+  'memory_delete',
+  'undo_memory_delete',
+  'scratchpad_read',
+  'scratchpad_write',
+  'contact_list',
+  'contact_lookup',
+  'contact_note',
+  'contact_set_trust',
+  'contact_link_identity',
+  'contact_set_channel_privacy',
+  'contact_set_machine_intelligence',
+]);
+const APPRENTICE_SHARD_TOOL_EXTRAS = [
 ] as const;
 export const DEFAULT_SHARD_TOOLSET = [
-  'memory_write',
-  'contact_lookup',
+  'memory',
+  'contact',
   'repo_status',
   'repo_diff',
 ] as const;
@@ -125,6 +152,8 @@ export interface ShardManagerDeps {
   eventBus: EventBus;
   llmProvider: LLMProviderPort;
   sessionStore: SessionStore;
+  /** Buffer for compact companion-facing completion notices (never session-persisted). */
+  completionNotices?: CompletionNoticeBuffer | null;
   sessionManager?: SessionManager | null;
   embeddingService: EmbeddingProviderPort | null;
   memoryProvider: MemoryProvider | null;
@@ -215,16 +244,20 @@ export class ShardManager implements ShardExecutionPort, SubagentExecutionPort {
     const shardId = `shard-${randomUUID()}`;
     const channelId = `shard:${shardId}`;
     const coreCompanionId = resolveCompanionIdFromConfig(this.deps.config);
+    const coreCompanionName = resolveCompanionNameFromConfig(this.deps.config);
     const shardCompanionId = deriveShardCompanionId(coreCompanionId, shardId);
     const shardRuntimeConfig: SubstrateConfig = {
       ...this.deps.config,
       companionId: shardCompanionId,
     };
-    const contextPack = shardConfig.contextPack ?? await this.buildContextPack(
-      shardId,
-      channelId,
-      shardConfig,
-    );
+    const contextPack = shardConfig.contextPack
+      ? this.withCompanionNameForContextPack(shardConfig.contextPack, coreCompanionName)
+      : await this.buildContextPack(
+        shardId,
+        channelId,
+        shardConfig,
+        coreCompanionName,
+      );
     const preparedConfig = contextPack
       ? { ...shardConfig, contextPack }
       : shardConfig;
@@ -233,7 +266,7 @@ export class ShardManager implements ShardExecutionPort, SubagentExecutionPort {
       channelId,
       channelType: 'api',
       authorId: coreCompanionId,
-      authorName: resolveCompanionNameFromConfig(this.deps.config),
+      authorName: coreCompanionName,
       content: shardConfig.task,
       timestamp: new Date(),
     };
@@ -421,6 +454,14 @@ export class ShardManager implements ShardExecutionPort, SubagentExecutionPort {
   ): Promise<ShardResult> {
     this.refreshShardHealth();
     if (this.activeCount >= this.maxConcurrent) {
+      await this.emitShardBlockedHandoff({
+        shardId,
+        channelId,
+        shardConfig,
+        lineage,
+        reason: 'concurrency_limit',
+        error: `Shard limit reached (${this.maxConcurrent} concurrent). Wait for active shards to complete.`,
+      });
       throw new Error(
         `Shard limit reached (${this.maxConcurrent} concurrent). Wait for active shards to complete.`,
       );
@@ -432,6 +473,15 @@ export class ShardManager implements ShardExecutionPort, SubagentExecutionPort {
     const requiredCapabilities = this.resolveRequiredCapabilities(shardConfig.requiredCapabilities);
     const missingCapabilities = requiredCapabilities.filter(capability => !capabilities.includes(capability));
     if (missingCapabilities.length > 0) {
+      await this.emitShardBlockedHandoff({
+        shardId,
+        channelId,
+        shardConfig,
+        lineage,
+        reason: 'missing_capabilities',
+        error: `Shard routing denied: "${shardConfig.name}" is missing required capability tokens `
+        + `(${missingCapabilities.join(', ')}).`,
+      });
       throw new Error(
         `Shard routing denied: "${shardConfig.name}" is missing required capability tokens `
         + `(${missingCapabilities.join(', ')}).`,
@@ -506,7 +556,7 @@ export class ShardManager implements ShardExecutionPort, SubagentExecutionPort {
         this.deps.llmProvider,
         sessionManager,
         systemPrompt,
-        runtimeConfig,
+        sanitizeCoreSubstrateConfig(runtimeConfig),
         {
           runtimeMode: this.deps.runtimeMode,
         },
@@ -625,6 +675,11 @@ export class ShardManager implements ShardExecutionPort, SubagentExecutionPort {
         lifecycleState: result.lifecycleState,
         health: result.health,
       });
+      await this.emitShardCompletionHandoff({
+        shardConfig,
+        channelId,
+        result,
+      });
       return result;
     } catch (error) {
       const msg = toErrorMessage(error);
@@ -634,6 +689,13 @@ export class ShardManager implements ShardExecutionPort, SubagentExecutionPort {
         shardId,
         status: 'failed',
         durationMs: Date.now() - startTime,
+        error: msg,
+      });
+      await this.emitShardFailureHandoff({
+        shardId,
+        channelId,
+        shardConfig,
+        lineage,
         error: msg,
       });
       throw new Error(`Shard "${shardConfig.name}" failed (execution_failed): ${msg}`);
@@ -654,6 +716,166 @@ export class ShardManager implements ShardExecutionPort, SubagentExecutionPort {
       capabilities: [...shard.capabilities],
       requiredCapabilities: [...shard.requiredCapabilities],
     }));
+  }
+
+  private async emitShardBlockedHandoff(input: {
+    shardId: string;
+    channelId: string;
+    shardConfig: ShardConfig;
+    lineage: ShardResult['lineage'];
+    reason: string;
+    error: string;
+  }): Promise<void> {
+    await this.emitShardHandoff({
+      source: 'shard',
+      taskId: input.shardId,
+      taskLabel: input.shardConfig.name,
+      shardId: input.shardId,
+      status: 'blocked',
+      resultSummary: `Shard "${input.shardConfig.name}" did not start.`,
+      outputRefs: [
+        { kind: 'session', ref: input.channelId, label: 'shard transcript' },
+        { kind: 'lineage', ref: input.lineage.shardId, label: input.lineage.kind },
+      ],
+      validationPerformed: ['shard_spawn_policy', input.reason],
+      blocker: {
+        reason: input.reason,
+        error: input.error,
+      },
+      partialResult: false,
+      recommendedNextAction: 'Revise the shard request, wait for active shards to clear, or choose a narrower task before any partner notification.',
+      origin: this.originFromShardConfig(input.shardConfig),
+      dedupeKey: buildCompletionHandoffDedupeKey([
+        'shard',
+        input.shardId,
+        'blocked',
+        input.reason,
+        input.shardConfig.sourceContext?.requestId,
+        input.shardConfig.sourceContext?.turnId,
+      ]),
+    }, input.shardConfig.sourceContext?.channelId);
+  }
+
+  private async emitShardCompletionHandoff(input: {
+    shardConfig: ShardConfig;
+    channelId: string;
+    result: ShardResult;
+  }): Promise<void> {
+    const artifactRefs = this.buildArtifactRefs(input.result);
+    await this.emitShardHandoff({
+      source: 'shard',
+      taskId: input.result.shardId,
+      taskLabel: input.result.name,
+      shardId: input.result.shardId,
+      status: 'completed',
+      resultSummary: summarizeCompletionText(input.result.content),
+      artifactRefs,
+      outputRefs: [
+        { kind: 'session', ref: input.channelId, label: 'shard transcript' },
+        { kind: 'lineage', ref: input.result.lineage.shardId, label: input.result.lineage.kind },
+        ...(artifactRefs.length > 0
+          ? [{ kind: 'fold_review', ref: input.result.shardId, label: 'artifact review required' }]
+          : []),
+      ],
+      validationPerformed: [
+        'shard_lifecycle_terminal',
+        `state_reason:${input.result.stateReason}`,
+        `health:${input.result.health}`,
+        ...(input.result.artifactReturn ? ['artifact_return_review_required'] : []),
+      ],
+      partialResult: false,
+      recommendedNextAction: input.result.artifactReturn
+        ? 'Review returned artifacts through fold review, then decide whether to continue or write a companion-authored response.'
+        : 'Review the shard handoff and decide whether to continue, delegate follow-up work, or write a companion-authored response.',
+      origin: this.originFromShardConfig(input.shardConfig),
+      dedupeKey: buildCompletionHandoffDedupeKey([
+        'shard',
+        input.result.shardId,
+        'completed',
+        input.result.stateReason,
+        input.shardConfig.sourceContext?.requestId,
+        input.shardConfig.sourceContext?.turnId,
+      ]),
+    }, input.shardConfig.sourceContext?.channelId);
+  }
+
+  private async emitShardFailureHandoff(input: {
+    shardId: string;
+    channelId: string;
+    shardConfig: ShardConfig;
+    lineage: ShardResult['lineage'];
+    error: string;
+  }): Promise<void> {
+    await this.emitShardHandoff({
+      source: 'shard',
+      taskId: input.shardId,
+      taskLabel: input.shardConfig.name,
+      shardId: input.shardId,
+      status: 'failed',
+      resultSummary: `Shard "${input.shardConfig.name}" failed before producing a final handoff.`,
+      outputRefs: [
+        { kind: 'session', ref: input.channelId, label: 'shard transcript' },
+        { kind: 'lineage', ref: input.lineage.shardId, label: input.lineage.kind },
+      ],
+      validationPerformed: ['shard_lifecycle_terminal', 'execution_failed'],
+      blocker: {
+        reason: 'execution_failed',
+        error: input.error,
+      },
+      partialResult: false,
+      recommendedNextAction: 'Inspect the shard transcript/error, then decide whether to retry with narrower scope or communicate a companion-authored status.',
+      origin: this.originFromShardConfig(input.shardConfig),
+      dedupeKey: buildCompletionHandoffDedupeKey([
+        'shard',
+        input.shardId,
+        'failed',
+        input.error,
+        input.shardConfig.sourceContext?.requestId,
+        input.shardConfig.sourceContext?.turnId,
+      ]),
+    }, input.shardConfig.sourceContext?.channelId);
+  }
+
+  private async emitShardHandoff(
+    handoff: CompletionHandoffInput,
+    targetChannelId: string | undefined,
+  ): Promise<void> {
+    if (!targetChannelId?.trim()) return;
+    try {
+      await emitCompletionHandoff({
+        eventBus: this.deps.eventBus,
+        targetChannelId,
+        handoff,
+        ...(this.deps.completionNotices ? { notices: this.deps.completionNotices } : {}),
+      });
+    } catch (error) {
+      this.auditTrail?.append('shard.completion_handoff.failed', {
+        shardId: handoff.shardId,
+        targetChannelId,
+        error: safeEmitCompletionHandoffError(error),
+      });
+    }
+  }
+
+  private buildArtifactRefs(result: ShardResult): CompletionHandoffRef[] {
+    return (result.artifactReturn?.artifacts ?? []).map(artifact => ({
+      kind: artifact.kind,
+      ref: artifact.artifactId,
+      label: artifact.name,
+      policy: artifact.mergePolicy,
+    }));
+  }
+
+  private originFromShardConfig(shardConfig: ShardConfig): CompletionHandoffInput['origin'] {
+    const source = shardConfig.sourceContext;
+    if (!source) {
+      return {};
+    }
+    return {
+      sourceChannelId: source.channelId,
+      ...(source.requestId ? { requestId: source.requestId, sourceMessageId: source.requestId } : {}),
+      ...(source.turnId ? { turnId: source.turnId, originatingTaskId: source.turnId } : {}),
+    };
   }
 
   async listFoldReviews(): Promise<ShardFoldReviewRecord[]> {
@@ -906,6 +1128,7 @@ export class ShardManager implements ShardExecutionPort, SubagentExecutionPort {
     shardId: string,
     shardChannelId: string,
     shardConfig: ShardConfig,
+    companionName: string,
   ): Promise<ShardContextPack | null> {
     const source = this.normalizeSourceContext(shardConfig.sourceContext);
     if (!source) {
@@ -980,8 +1203,20 @@ export class ShardManager implements ShardExecutionPort, SubagentExecutionPort {
       purpose: 'shard_context',
       task: shardConfig.task,
       source,
+      companionName,
       sessionEntries,
       ...(memoryBlock ? { memoryBlock } : {}),
+    };
+  }
+
+  private withCompanionNameForContextPack(
+    contextPack: ShardContextPack,
+    companionName: string,
+  ): ShardContextPack {
+    const existingCompanionName = contextPack.companionName?.trim();
+    return {
+      ...contextPack,
+      companionName: existingCompanionName || companionName,
     };
   }
 
@@ -1175,10 +1410,11 @@ export class ShardManager implements ShardExecutionPort, SubagentExecutionPort {
   }
 
   private renderContextPack(contextPack: ShardContextPack): string {
+    const companionName = contextPack.companionName?.trim() || 'Assistant';
     const sourceConversation = contextPack.sessionEntries
       .map(entry => {
         const speaker = entry.role === 'assistant'
-          ? 'Assistant'
+          ? entry.authorName?.trim() || companionName
           : entry.role === 'system'
             ? 'System'
             : (entry.authorName?.trim() || 'User');
@@ -1232,7 +1468,7 @@ export class ShardManager implements ShardExecutionPort, SubagentExecutionPort {
         if (this.isShardMemoryImportTool(tool.name, params)) {
           return this.quarantineShardMemoryImport(tool.name, toolCallId, params, memoryReviewContext);
         }
-        this.enforceShardToolSyncPolicy(tool.name, shardId, toolCallId);
+        this.enforceShardToolSyncPolicy(tool.name, params, shardId, toolCallId);
         const scopedParams = this.applyShardSourceParams(tool.name, params, shardId);
         // scopedParams has extra shard-source fields; tool.execute expects Static<TSchema>
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -1248,8 +1484,9 @@ export class ShardManager implements ShardExecutionPort, SubagentExecutionPort {
     if (toolName !== 'memory' || typeof params !== 'object' || params === null || Array.isArray(params)) {
       return false;
     }
-    const action = typeof (params as Record<string, unknown>).action === 'string'
-      ? (params as Record<string, unknown>).action.trim().toLowerCase()
+    const paramRecord = params as Record<string, unknown>;
+    const action = typeof paramRecord.action === 'string'
+      ? paramRecord.action.trim().toLowerCase()
       : '';
     return action === 'import';
   }
@@ -1366,8 +1603,13 @@ export class ShardManager implements ShardExecutionPort, SubagentExecutionPort {
     return decision;
   }
 
-  private enforceShardToolSyncPolicy(toolName: string, shardId: string, toolCallId: string): void {
-    const operation = this.resolveShardToolSyncOperation(toolName);
+  private enforceShardToolSyncPolicy(
+    toolName: string,
+    params: unknown,
+    shardId: string,
+    toolCallId: string,
+  ): void {
+    const operation = this.resolveShardToolSyncOperation(toolName, params);
     if (!operation) {
       return;
     }
@@ -1399,7 +1641,28 @@ export class ShardManager implements ShardExecutionPort, SubagentExecutionPort {
 
   private resolveShardToolSyncOperation(
     toolName: string,
+    params: unknown,
   ): ShardSessionMemorySyncEnvelope['operation'] | null {
+    if (toolName === 'memory') {
+      if (typeof params !== 'object' || params === null || Array.isArray(params)) {
+        return null;
+      }
+      const paramRecord = params as Record<string, unknown>;
+      const action = typeof paramRecord.action === 'string'
+        ? paramRecord.action.trim().toLowerCase()
+        : '';
+      if (action === 'write') return 'memory_write';
+      if (action === 'import') return 'memory_import_batch';
+      if (
+        action === 'patch'
+        || action === 'redact'
+        || action === 'delete'
+        || action === 'restore'
+      ) {
+        return 'memory_redact';
+      }
+      return null;
+    }
     if (
       toolName !== 'memory_write'
       && toolName !== 'memory_import_batch'
@@ -1415,6 +1678,22 @@ export class ShardManager implements ShardExecutionPort, SubagentExecutionPort {
     params: unknown,
     shardId: string,
   ): unknown {
+    if (toolName === 'memory') {
+      if (typeof params !== 'object' || params === null || Array.isArray(params)) {
+        return params;
+      }
+      const paramRecord = params as Record<string, unknown>;
+      const action = typeof paramRecord.action === 'string'
+        ? paramRecord.action.trim().toLowerCase()
+        : '';
+      if (action !== 'write') {
+        return params;
+      }
+      return {
+        ...(params as Record<string, unknown>),
+        [INTERNAL_SHARD_SOURCE_PARAM]: `shard:${shardId}`,
+      };
+    }
     if (
       toolName !== 'memory_write'
       && toolName !== 'memory_import_batch'

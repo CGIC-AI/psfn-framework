@@ -1,14 +1,14 @@
-import 'dotenv/config';
+import '../../shared/utils/load-dotenv.js';
 import { ensureActiveTimezone } from '../../shared/time/active-timezone.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import { loadConfig } from '../../system/config/load-config.js';
 import { hydrateJsonBackedRuntimeConfig } from '../../system/config/runtime-config.js';
 import { parseOptionalPositiveIntEnv } from '../../shared/utils/env.js';
-import { createSignalShutdownHandler } from '../startup/support/signal-shutdown.js';
+import { createSignalShutdownHandler, registerProcessErrorHandlers } from '../startup/support/signal-shutdown.js';
 import { runShutdownSequence } from '../startup/support/shutdown-helpers.js';
 import { isExplicitTrue } from '../startup/support/env-parsing.js';
 import {
-  resolveAdminTransportSocketPath,
+  resolveAdminTransportClientEndpoint,
 } from '../../operator/garden/transport-paths.js';
 import { GardenOperatorSurface } from '../../operator/garden/operator-surface.js';
 
@@ -30,7 +30,7 @@ async function main(): Promise<void> {
     token: process.env.ADMIN_TOKEN || undefined,
     allowInsecureWithoutToken: isExplicitTrue(process.env.ADMIN_ALLOW_INSECURE),
     config,
-    transportSocketPath: resolveAdminTransportSocketPath(process.env),
+    transportEndpoint: resolveAdminTransportClientEndpoint(process.env),
   });
   await surface.init();
   await surface.start();
@@ -60,6 +60,13 @@ async function main(): Promise<void> {
       log.error('Unhandled SIGTERM shutdown error', { error: String(error) });
       process.exit(1);
     });
+  });
+
+  registerProcessErrorHandlers({
+    logger: log,
+    requestShutdown: () => {
+      void shutdown('uncaughtException').catch(() => process.exit(1));
+    },
   });
 }
 

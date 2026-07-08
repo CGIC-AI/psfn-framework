@@ -2,6 +2,7 @@ import { join } from 'node:path';
 import {
   loadRequiredJson,
 } from './load-or-seed.js';
+import { assertPositiveInteger } from './validators.js';
 import { writeJsonAtomic } from '../../shared/utils/fs.js';
 import { isRecord, normalizeStringArray } from '../../shared/utils/types.js';
 
@@ -22,13 +23,15 @@ interface SkillsRuntimeLoadOptions {
 }
 
 function normalizePositiveInteger(value: unknown, field: string, min: number, max: number): number {
-  if (typeof value !== 'number' || !Number.isInteger(value)) {
-    throw new Error(`Invalid skills config: ${field} must be an integer`);
-  }
-  if (value < min || value > max) {
-    throw new Error(`Invalid skills config: ${field} must be between ${min} and ${max}`);
-  }
-  return value;
+  return assertPositiveInteger(value, field, {
+    min,
+    max,
+    messages: {
+      notInteger: ({ fieldLabel }) => `Invalid skills config: ${fieldLabel} must be an integer`,
+      belowMin: ({ fieldLabel }) => `Invalid skills config: ${fieldLabel} must be between ${min} and ${max}`,
+      aboveMax: ({ fieldLabel }) => `Invalid skills config: ${fieldLabel} must be between ${min} and ${max}`,
+    },
+  });
 }
 
 function validateSkillsConfig(raw: unknown, sourcePath: string): SkillsRuntimeConfig {

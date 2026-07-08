@@ -1,8 +1,21 @@
 import type { LLMProviderPort } from '../agent/contracts.js';
 import type { SessionEntry } from './types.js';
-import { classifyChannel, getAllowedSensitivities } from '../../system/trust/policy.js';
-import type { ChannelVisibility, SensitivityLevel, TrustLevel } from '../../system/trust/types.js';
+import type { SourceChannelSessionRoute, SessionRouteResetMode } from './session-routes.js';
+import { classifyChannelDisclosure, getAllowedSensitivities } from '../../system/trust/policy.js';
+import type { SensitivityLevel, TrustLevel } from '../../system/trust/types.js';
+import type { ChannelPrivacy } from '../../system/trust/context-envelope.js';
+import { decodeStoredChannelVisibility } from '../../system/trust/types.js';
 import type { TranscriptSearchPort } from '../../persistence/sessions/transcript-search-port.js';
+import { isCogSecTombstoneSessionEntry } from '../cogsec/tombstones.js';
+import { SESSION_SEARCH_SUMMARY_PROMPT_KEY } from '../identity/prompt-registry.js';
+import type { PromptRegistryStatePort } from '../identity/prompt-state-port.js';
+import { completeSessionSummary } from './manager/compaction-service.js';
+import { getRequestContext } from '../../primitives/llm/request-context.js';
+import { createComponentLogger } from '../../shared/logger.js';
+import { toErrorMessage } from '../../shared/utils/errors.js';
+import { clipSnippet } from '../../shared/utils/snippets.js';
+
+const log = createComponentLogger('SessionSearch');
 
 const DEFAULT_SESSION_SEARCH_LIMIT = 8;
 const MAX_SESSION_SEARCH_LIMIT = 25;
@@ -10,20 +23,27 @@ const SESSION_SEARCH_OVERSAMPLE_FACTOR = 4;
 const SESSION_SEARCH_MAX_SUMMARY_MATCHES = 10;
 const SESSION_SEARCH_MAX_SUMMARY_CONTEXT_CHARS = 4000;
 const SESSION_SEARCH_MAX_SNIPPET_CHARS = 220;
-
-const SESSION_SEARCH_SUMMARY_SYSTEM_PROMPT = [
-  'You summarize keyword-search matches from archived chat transcripts.',
-  'Use only the provided snippets.',
-  'Name key topics and channel groupings.',
-  'If evidence is sparse or ambiguous, state that explicitly.',
-  'Keep the answer concise (3-5 sentences).',
-].join(' ');
+/** Correlation channel label when a search is not scoped to one channel. */
+const SESSION_SEARCH_CORRELATION_CHANNEL = 'session-search';
 
 export interface SessionSearchViewerContext {
   channelId?: string;
   isDirectMessage?: boolean;
   trustLevel?: TrustLevel;
-  channelVisibility?: ChannelVisibility;
+  channelVisibility?: ChannelPrivacy;
+}
+
+export interface SessionSearchRouteLabel {
+  sourceChannelId: string;
+  activeLogicalSessionId: string;
+  status: 'active' | 'retired';
+  mode?: SessionRouteResetMode;
+  retiredAt?: string;
+}
+
+export interface SessionSearchRouteStateProvider {
+  getRouteForLogicalSession?(logicalSessionId: string): SourceChannelSessionRoute | null | undefined;
+  getSessionRouteForLogicalSession?(logicalSessionId: string): SourceChannelSessionRoute | null | undefined;
 }
 
 export interface SessionSearchHitResult {
@@ -31,9 +51,10 @@ export interface SessionSearchHitResult {
   messageId: number;
   role: SessionEntry['role'];
   timestamp: number;
-  channelVisibility: ChannelVisibility;
+  channelVisibility: ChannelPrivacy;
   score: number;
   snippet: string;
+  sessionRoute?: SessionSearchRouteLabel;
 }
 
 export interface SessionSearchResult {
@@ -66,40 +87,34 @@ export function resolveSessionSearchViewerTrustLevel(input?: TrustLevel): TrustL
 export function resolveSessionSearchHitVisibility(
   input: string | undefined,
   channelId: string,
-): ChannelVisibility {
-  switch (input) {
-    case 'private':
-    case 'semi_private':
-    case 'public':
-    case 'broadcast':
-      return input;
-    default:
-      return classifyChannel(channelId);
-  }
+): ChannelPrivacy {
+  // Search hits come from persisted projections that may predate the E3.1
+  // rename / E3.3 broadcast split; the shared decoder maps the retired
+  // vocabulary onto ChannelPrivacy.
+  return decodeStoredChannelVisibility(input) ?? classifyChannelDisclosure(channelId).channelPrivacy;
 }
 
-function visibilityToSensitivity(visibility: ChannelVisibility): SensitivityLevel {
+function visibilityToSensitivity(visibility: ChannelPrivacy): SensitivityLevel {
   switch (visibility) {
     case 'private':
       return 'confidential';
-    case 'semi_private':
+    case 'invite_only':
       return 'personal';
     case 'public':
-    case 'broadcast':
       return 'public';
   }
 }
 
 export function resolveSessionSearchViewerVisibility(
   viewer: SessionSearchViewerContext | undefined,
-): ChannelVisibility {
+): ChannelPrivacy {
   if (viewer?.channelVisibility) {
     return viewer.channelVisibility;
   }
   if (viewer?.channelId) {
-    return classifyChannel(viewer.channelId, {
+    return classifyChannelDisclosure(viewer.channelId, {
       isDirectMessage: viewer.isDirectMessage,
-    });
+    }).channelPrivacy;
   }
   return 'public';
 }
@@ -114,7 +129,7 @@ export function canViewerAccessSessionHit(
   const trustLevel = resolveSessionSearchViewerTrustLevel(viewer?.trustLevel);
   const viewerVisibility = resolveSessionSearchViewerVisibility(viewer);
   const allowedSensitivities = new Set(
-    getAllowedSensitivities(trustLevel, viewerVisibility),
+    getAllowedSensitivities(trustLevel, { channelPrivacy: viewerVisibility, broadcast: false }),
   );
   const hitVisibility = resolveSessionSearchHitVisibility(hit.channelVisibility, hit.channelId);
   return allowedSensitivities.has(visibilityToSensitivity(hitVisibility));
@@ -124,9 +139,7 @@ export function truncateSessionSearchSnippet(
   content: string,
   maxChars = SESSION_SEARCH_MAX_SNIPPET_CHARS,
 ): string {
-  const normalized = content.replace(/\s+/g, ' ').trim();
-  if (normalized.length <= maxChars) return normalized;
-  return `${normalized.slice(0, maxChars - 3)}...`;
+  return clipSnippet(content, maxChars);
 }
 
 function fallbackSessionSearchSummary(query: string, hits: SessionSearchHitResult[]): string {
@@ -151,7 +164,10 @@ function buildSessionSearchSummaryPayload(
   let budgetUsed = lines.join('\n').length;
   for (const hit of hits.slice(0, SESSION_SEARCH_MAX_SUMMARY_MATCHES)) {
     const timestampIso = new Date(hit.timestamp).toISOString();
-    const line = `- [${timestampIso}] channel=${hit.channelId} role=${hit.role} visibility=${hit.channelVisibility} score=${hit.score.toFixed(3)} snippet=${truncateSessionSearchSnippet(hit.snippet)}`;
+    const routeLabel = hit.sessionRoute
+      ? ` route_status=${hit.sessionRoute.status} source_channel=${hit.sessionRoute.sourceChannelId}`
+      : '';
+    const line = `- [${timestampIso}] channel=${hit.channelId} role=${hit.role} visibility=${hit.channelVisibility}${routeLabel} score=${hit.score.toFixed(3)} snippet=${truncateSessionSearchSnippet(hit.snippet)}`;
     if (budgetUsed + line.length > SESSION_SEARCH_MAX_SUMMARY_CONTEXT_CHARS) {
       break;
     }
@@ -164,28 +180,74 @@ function buildSessionSearchSummaryPayload(
   return lines.join('\n');
 }
 
-async function summarizeSessionSearch(
-  llmProvider: LLMProviderPort | null | undefined,
-  query: string,
-  hits: SessionSearchHitResult[],
-): Promise<string> {
-  const fallback = fallbackSessionSearchSummary(query, hits);
-  if (hits.length === 0 || !llmProvider) return fallback;
+export function resolveSessionSearchRouteLabel(
+  routeState: SessionSearchRouteStateProvider | null | undefined,
+  logicalSessionId: string,
+): SessionSearchRouteLabel | undefined {
+  const route = routeState?.getSessionRouteForLogicalSession?.(logicalSessionId)
+    ?? routeState?.getRouteForLogicalSession?.(logicalSessionId);
+  if (!route) return undefined;
+  if (route.activeLogicalSessionId === logicalSessionId) {
+    return {
+      sourceChannelId: route.sourceChannelId,
+      activeLogicalSessionId: route.activeLogicalSessionId,
+      status: 'active',
+      mode: route.mode,
+    };
+  }
+  const retired = route.retiredSessions.find(entry => entry.logicalSessionId === logicalSessionId);
+  if (!retired) return undefined;
+  return {
+    sourceChannelId: route.sourceChannelId,
+    activeLogicalSessionId: route.activeLogicalSessionId,
+    status: 'retired',
+    mode: retired.mode,
+    retiredAt: retired.retiredAt,
+  };
+}
 
-  const payload = buildSessionSearchSummaryPayload(query, hits);
+async function summarizeSessionSearch(params: {
+  llmProvider: LLMProviderPort | null | undefined;
+  promptRegistry: PromptRegistryStatePort | null;
+  channelId: string;
+  query: string;
+  hits: SessionSearchHitResult[];
+}): Promise<string> {
+  const fallback = fallbackSessionSearchSummary(params.query, params.hits);
+  if (params.hits.length === 0 || !params.llmProvider) return fallback;
+
+  const payload = buildSessionSearchSummaryPayload(params.query, params.hits);
+  const requestContext = getRequestContext();
+  const requestIdBase = requestContext?.requestId
+    ? `${requestContext.requestId}:search-summary`
+    : `search-summary:${params.channelId}:${Date.now()}`;
   try {
-    const response = await llmProvider.complete(
-      {
-        systemPrompt: SESSION_SEARCH_SUMMARY_SYSTEM_PROMPT,
-        messages: [{ role: 'user', content: payload }],
-      },
-      'summary',
-    );
-    const content = typeof response.content === 'string'
-      ? response.content.replace(/\s+/g, ' ').trim()
-      : '';
-    return content || fallback;
-  } catch {
+    // Shared session-summary completion path: PromptRegistry-owned prompt,
+    // runtime-token injection, retry, and correlation metadata all live in
+    // completeSessionSummary (see compaction-service.ts).
+    const summary = await completeSessionSummary({
+      channelId: params.channelId,
+      sourceText: payload,
+      llmProvider: params.llmProvider,
+      promptRegistry: params.promptRegistry,
+      promptKey: SESSION_SEARCH_SUMMARY_PROMPT_KEY,
+      requestIdBase,
+      correlationPurpose: 'session.search.summary',
+      originStage: 'session.search.summary',
+      maxRetries: 1,
+      baseDelayMs: 150,
+    });
+    const normalized = summary.replace(/\s+/g, ' ').trim();
+    return normalized || fallback;
+  } catch (error) {
+    // Non-blocking by contract: search results still return with the
+    // deterministic fallback summary, but the failure is never silent.
+    log.warn('Session search summary failed; using deterministic fallback', {
+      channelId: params.channelId,
+      query: params.query,
+      hitCount: params.hits.length,
+      error: toErrorMessage(error),
+    });
     return fallback;
   }
 }
@@ -193,11 +255,13 @@ async function summarizeSessionSearch(
 export async function runSessionSearch(params: {
   transcriptSearch: TranscriptSearchPort | null | undefined;
   llmProvider?: LLMProviderPort | null;
+  promptRegistry?: PromptRegistryStatePort | null;
   query: string;
   limit?: number;
   summarize?: boolean;
   targetChannelId?: string;
   viewer?: SessionSearchViewerContext;
+  sessionRouteState?: SessionSearchRouteStateProvider | null;
 }): Promise<SessionSearchResult> {
   const normalizedQuery = params.query.trim();
   if (!normalizedQuery || !params.transcriptSearch) {
@@ -220,15 +284,17 @@ export async function runSessionSearch(params: {
     normalizedQuery,
     requestedLimit * SESSION_SEARCH_OVERSAMPLE_FACTOR,
   );
+  const nonTombstoneHits = rawHits.filter(hit => !isCogSecTombstoneSessionEntry(hit));
   const scopedHits = scopedChannelId
-    ? rawHits.filter(hit => hit.channelId === scopedChannelId)
-    : rawHits;
+    ? nonTombstoneHits.filter(hit => hit.channelId === scopedChannelId)
+    : nonTombstoneHits;
   const filteredHits = scopedHits.filter(hit => canViewerAccessSessionHit(params.viewer, hit));
 
   const hits: SessionSearchHitResult[] = filteredHits
     .slice(0, requestedLimit)
     .map(hit => {
       const visibility = resolveSessionSearchHitVisibility(hit.channelVisibility, hit.channelId);
+      const sessionRoute = resolveSessionSearchRouteLabel(params.sessionRouteState, hit.channelId);
       return {
         channelId: hit.channelId,
         messageId: hit.messageId,
@@ -237,11 +303,18 @@ export async function runSessionSearch(params: {
         channelVisibility: visibility,
         score: hit.score,
         snippet: truncateSessionSearchSnippet(hit.snippet || hit.content),
+        ...(sessionRoute ? { sessionRoute } : {}),
       };
     });
 
   const summary = params.summarize
-    ? await summarizeSessionSearch(params.llmProvider, normalizedQuery, hits)
+    ? await summarizeSessionSearch({
+      llmProvider: params.llmProvider,
+      promptRegistry: params.promptRegistry ?? null,
+      channelId: scopedChannelId ?? params.viewer?.channelId ?? SESSION_SEARCH_CORRELATION_CHANNEL,
+      query: normalizedQuery,
+      hits,
+    })
     : fallbackSessionSearchSummary(normalizedQuery, hits);
 
   return {

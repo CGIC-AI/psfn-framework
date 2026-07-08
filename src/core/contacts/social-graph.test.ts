@@ -57,17 +57,24 @@ describe('ContactStore social graph', () => {
       confidence: 0.9,
     });
 
+    const publicVisible = store.listSocialRelationshipEdges({
+      contactId: alice.id,
+      viewerTrustLevel: 'public',
+      viewerChannelPrivacy: 'private',
+    });
+    expect(publicVisible).toHaveLength(0);
+
     const regularVisible = store.listSocialRelationshipEdges({
       contactId: alice.id,
       viewerTrustLevel: 'regular',
-      viewerChannelVisibility: 'private',
+      viewerChannelPrivacy: 'private',
     });
-    expect(regularVisible).toHaveLength(0);
+    expect(regularVisible).toHaveLength(2);
 
     const trustedVisible = store.listSocialRelationshipEdges({
       contactId: alice.id,
       viewerTrustLevel: 'trusted',
-      viewerChannelVisibility: 'private',
+      viewerChannelPrivacy: 'private',
     });
     expect(trustedVisible).toHaveLength(2);
     expect(trustedVisible.map(edge => edge.relationshipType).sort()).toEqual(['family', 'friend']);
@@ -135,7 +142,7 @@ describe('ContactStore social graph', () => {
     const mergedEdges = store.listSocialRelationshipEdges({
       contactId: target.id,
       viewerTrustLevel: 'trusted',
-      viewerChannelVisibility: 'private',
+      viewerChannelPrivacy: 'private',
     });
     expect(mergedEdges).toHaveLength(1);
     expect(mergedEdges[0]?.confidence).toBe(0.85);
@@ -143,8 +150,50 @@ describe('ContactStore social graph', () => {
 
     const relatedContacts = store.listRelatedContacts(target.id, {
       viewerTrustLevel: 'trusted',
-      viewerChannelVisibility: 'private',
+      viewerChannelPrivacy: 'private',
     });
     expect(relatedContacts.map(contact => contact.id)).toEqual([third.id]);
+  });
+
+  it('preserves inverse-pair mirror consistency when contacts merge (E4.3)', () => {
+    const source = store.upsert({ displayName: 'Source', discordUserId: 'source-1' });
+    const target = store.upsert({ displayName: 'Target', discordUserId: 'target-1' });
+    const child = store.upsert({ displayName: 'Child', discordUserId: 'child-1' });
+
+    const sourceEntity = store.getSocialGraphEntityByContactId(source.id)!;
+    const childEntity = store.getSocialGraphEntityByContactId(child.id)!;
+
+    // Source is the parent of Child -> parent(source->child) + mirror child(child->source).
+    store.upsertSocialRelationshipEdge({
+      sourceEntityId: sourceEntity.id,
+      targetEntityId: childEntity.id,
+      relationshipType: 'parent',
+      directional: true,
+      confidence: 0.7,
+      evidenceMemoryIds: ['ev-parent'],
+    });
+
+    // Merge source into target: the parent/child pair must re-bind to target.
+    expect(store.mergeContacts(source.id, target.id)).toBe(true);
+    expect(store.getSocialGraphEntityByContactId(source.id)).toBeUndefined();
+
+    const targetEntity = store.getSocialGraphEntityByContactId(target.id)!;
+    const edges = store.listSocialRelationshipEdges({
+      contactId: target.id,
+      viewerTrustLevel: 'primary',
+      viewerChannelPrivacy: 'private',
+    });
+    const parentEdge = edges.find(edge => edge.relationshipType === 'parent');
+    const childEdge = edges.find(edge => edge.relationshipType === 'child');
+    expect(parentEdge).toBeDefined();
+    expect(childEdge).toBeDefined();
+    // Parent target->child, child mirror child->target — no orphaned mirror, direction intact.
+    expect(parentEdge!.sourceEntityId).toBe(targetEntity.id);
+    expect(parentEdge!.targetEntityId).toBe(childEntity.id);
+    expect(childEdge!.sourceEntityId).toBe(childEntity.id);
+    expect(childEdge!.targetEntityId).toBe(targetEntity.id);
+
+    // Graph is fully consistent after the merge.
+    expect(store.reconcileSocialGraphConsistency({ apply: false }).findings).toEqual([]);
   });
 });

@@ -6,6 +6,8 @@ import { toErrorMessage } from '../../../shared/utils/errors.js';
 
 const DEFAULT_LIST_MAX_ENTRIES = 200;
 const MAX_LIST_MAX_ENTRIES = 500;
+const DEFAULT_LIST_MAX_SCANNED_ENTRIES = 5_000;
+const MAX_LIST_MAX_SCANNED_ENTRIES = 20_000;
 const MAX_READ_CHARS = 20_000;
 const DEFAULT_SEARCH_MAX_MATCHES = 50;
 const MAX_SEARCH_MAX_MATCHES = 200;
@@ -107,6 +109,13 @@ export function createFsTool(ops: FilesystemOperations): AgentTool<any> {
         maximum: MAX_LIST_MAX_ENTRIES,
         description: `Used with action=list. Max entries to return (default ${String(DEFAULT_LIST_MAX_ENTRIES)}).`,
       })),
+      max_scanned_entries: Type.Optional(Type.Integer({
+        minimum: 1,
+        maximum: MAX_LIST_MAX_SCANNED_ENTRIES,
+        description:
+          `Used with action=list. Max filesystem entries to scan before returning incomplete results `
+          + `(default ${String(DEFAULT_LIST_MAX_SCANNED_ENTRIES)}).`,
+      })),
       max_bytes: Type.Optional(Type.Integer({
         minimum: 1,
         maximum: MAX_READ_CHARS,
@@ -169,17 +178,28 @@ export function createFsTool(ops: FilesystemOperations): AgentTool<any> {
             const path = typeof params.path === 'string' && params.path.trim().length > 0
               ? params.path.trim()
               : undefined;
-            const paths = await ops.list(
+            const result = await ops.list(
               glob,
               typeof params.max_entries === 'number' ? params.max_entries : DEFAULT_LIST_MAX_ENTRIES,
-              path ? { path } : undefined,
+              {
+                ...(path ? { path } : {}),
+                ...(typeof params.max_scanned_entries === 'number'
+                  ? { maxScannedEntries: params.max_scanned_entries }
+                  : {}),
+              },
             );
             return textResult(JSON.stringify({
               action: 'list',
               ...(path ? { path } : {}),
               glob: glob ?? '*',
-              count: paths.length,
-              paths,
+              count: result.paths.length,
+              scanned_entries: result.scannedEntries,
+              max_entries: result.maxEntries,
+              max_scanned_entries: result.maxScannedEntries,
+              truncated: result.truncated,
+              scan_limit_reached: result.scanLimitReached,
+              entry_limit_reached: result.entryLimitReached,
+              paths: result.paths,
             }, null, 2));
           }
 

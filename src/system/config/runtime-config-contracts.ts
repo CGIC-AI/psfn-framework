@@ -5,6 +5,8 @@ import type { StreamingTtsProvider } from '../../primitives/voice/connectors/tts
 import type { CapabilityTier } from '../capabilities/tier-types.js';
 import type { ChargePolicyConfig } from './charge-policy-config.js';
 import type { SatelliteRegistryConfig } from '../../shared/contracts/satellite-registry.js';
+import type { GroupMemorySettings } from './group-memory-config.js';
+import type { EmotionScopingSettings } from './emotion-scoping-config.js';
 import type {
   CanonicalModelRegistry,
   CanonicalProviderRegistry,
@@ -15,6 +17,7 @@ import type {
   ModelPurpose,
   ModelRoleAssignments,
   ModelSlot,
+  ObserverEvalSidecarSettings,
   ResponseStyleOverrides,
   RuntimeConfigHooks,
   TextEmotionDType,
@@ -23,7 +26,7 @@ import type {
 export type { CapabilityTier } from '../capabilities/tier-types.js';
 export type ShardToolsetConfig = Partial<Record<CapabilityTier, string[]>>;
 export type SessionRestartBehavior = 'reuse_latest_session' | 'new_session';
-export type PersistenceBackend = 'sqlite' | 'postgres';
+export type PersistenceBackend = 'postgres';
 export const PROMOTED_EXTENDED_TOOL_SLOTS_MAX = 4;
 
 export interface CompositionalPolicyConfig {
@@ -39,6 +42,68 @@ export function createDefaultCompositionalPolicyConfig(): CompositionalPolicyCon
     allowedTiers: [],
     allowedChannelTypes: [],
     allowedPurposes: [],
+  };
+}
+
+export function createDefaultObserverEvalSidecarLeverSettings(): NonNullable<ObserverEvalSidecarSettings['levers']> {
+  return {
+    enabled: false,
+    cooldownMs: 21_600_000,
+    wouldMessage: {
+      enabled: true,
+      socialNeedThreshold: 0.7,
+      attachmentIntensityThreshold: 0.5,
+      sustainMs: 1_800_000,
+    },
+    wouldCheckIn: {
+      enabled: true,
+      valenceThreshold: -0.3,
+      sustainMs: 1_200_000,
+    },
+    wouldRest: {
+      enabled: true,
+      sleepPressureThreshold: 0.8,
+      arousalThreshold: 0.8,
+      sustainMs: 1_800_000,
+    },
+    ruminationWatch: {
+      enabled: true,
+      intensityThreshold: 0.4,
+      sustainMs: 2_700_000,
+    },
+  };
+}
+
+export function createDefaultObserverEvalSidecarSettings(): ObserverEvalSidecarSettings {
+  return {
+    enabled: false,
+    sidecarId: 'observer-eval-sidecar',
+    deploymentTarget: 'test_persona',
+    mode: 'observe_only',
+    queue: {
+      maxQueuedTurns: 32,
+      overflowPolicy: 'drop_newest',
+      observerTimeoutMs: 5_000,
+      maxRetries: 0,
+      retryDelayMs: 0,
+      shutdownDrainTimeoutMs: 5_000,
+    },
+    adapter: {
+      kind: 'disabled',
+      sessionLabel: 'psfn-observer-eval',
+      agentName: 'psfn-companion',
+      includeWorldState: false,
+    },
+    persistence: {
+      enabled: false,
+      retentionDays: 14,
+      maxStoredObservations: 10_000,
+    },
+    garden: {
+      exposeHealth: true,
+      exposeTelemetry: true,
+    },
+    levers: createDefaultObserverEvalSidecarLeverSettings(),
   };
 }
 
@@ -75,6 +140,12 @@ export interface SubstrateConfig {
   memoryRetrievalBudgetPct?: number;
   moodCongruenceWeight?: number;
   adaptiveContextBudgetsEnabled?: boolean;
+  wikiRetrievalEnabled?: boolean;
+  wikiRetrievalChatTokenCap?: number;
+  wikiRetrievalGroupTokenCap?: number;
+  wikiRetrievalFocusTokenCap?: number;
+  wikiRetrievalSimilarityThreshold?: number;
+  wikiRetrievalGroupSimilarityThreshold?: number;
   extractionInterval: number;
   maintenanceIntervalMs: number;
   defaultContextWindow: number;
@@ -93,6 +164,14 @@ export interface SubstrateConfig {
   memoryExtractionMaxWrites?: number;
   memoryExtractionTelemetryEnabled?: boolean;
   memoryRetrievalTelemetryEnabled?: boolean;
+  /**
+   * Consecutive failed active-memory context refreshes (per context key)
+   * before an operator alert is raised via the system-derived notification
+   * path (E5.5). Owned by settings.json.
+   */
+  memoryRefreshFailureAlertThreshold?: number;
+  groupMemory?: GroupMemorySettings;
+  emotionScoping?: EmotionScopingSettings;
   profileSynthesisEnabled?: boolean;
   profileSynthesisRefreshIntervalMs?: number;
   profileSynthesisCooldownMs?: number;
@@ -117,6 +196,7 @@ export interface SubstrateConfig {
   promotedExtendedTools?: string[];
   capabilityTier?: CapabilityTier;
   compositionalPolicy?: CompositionalPolicyConfig;
+  observerEvalSidecar?: ObserverEvalSidecarSettings;
   shardToolsets?: ShardToolsetConfig;
   voiceEnabled?: boolean;
   discordBackfillOnStartup?: boolean;
@@ -184,7 +264,7 @@ export interface SubstrateConfig {
   webFetchTlsCaCertPaths?: string[];
   /** Path to a CA certificate file (PEM) to trust for all outbound TLS connections (LLM, embeddings, etc.). Sets NODE_EXTRA_CA_CERTS at startup. */
   gatewayTlsCaPath?: string;
-  /** When explicitly set to false, disables TLS certificate verification (NODE_TLS_REJECT_UNAUTHORIZED=0). DANGEROUS — dev only. */
+  /** Dev/test-only request for endpoint-scoped TLS verification exceptions. Rejected in production; never maps to NODE_TLS_REJECT_UNAUTHORIZED. */
   gatewayTlsRejectUnauthorized?: boolean;
   wyomingShardRouting?: WyomingShardRoutingConfig;
   wyomingEnabled?: boolean;
@@ -231,7 +311,16 @@ export const CORE_SECRET_BEARING_CONFIG_KEYS = [
 
 export type CoreSecretBearingConfigKey = (typeof CORE_SECRET_BEARING_CONFIG_KEYS)[number];
 
-export type CoreSubstrateConfig = Omit<SubstrateConfig, CoreSecretBearingConfigKey>;
+export interface CoreSubstrateConfig extends SubstrateConfig {
+  credentialVault?: never;
+  discordToken?: never;
+  discordBotId?: never;
+  litellmApiKeyRef?: never;
+  openRouterApiKeyRef?: never;
+  deepgramApiKey?: never;
+  elevenLabsApiKey?: never;
+  falApiKey?: never;
+}
 
 export function sanitizeCoreSubstrateConfig(config: SubstrateConfig): CoreSubstrateConfig {
   const {
@@ -246,5 +335,5 @@ export function sanitizeCoreSubstrateConfig(config: SubstrateConfig): CoreSubstr
     ...coreConfig
   } = config;
 
-  return coreConfig;
+  return coreConfig as CoreSubstrateConfig;
 }

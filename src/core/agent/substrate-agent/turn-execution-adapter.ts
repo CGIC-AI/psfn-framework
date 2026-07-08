@@ -5,24 +5,29 @@ import type { CostTelemetryPort } from '../../../shared/telemetry/cost-telemetry
 import type { ComposeContext } from '../../identity/prompt-types.js';
 import type { SessionManager } from '../../session/manager.js';
 import type { MessagePromptOverride, ResponseStyle, SubstrateMessage } from '../../../shared/contracts/runtime.js';
-import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
+import type { CoreSubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
 import type { RuntimeMode } from '../tool-wiring-validator.js';
 import type { EventBridge } from '../event-bridge.js';
-import type { LLMProviderPort, MemoryExtractor, MemoryProvider } from '../contracts.js';
+import type { LLMProviderPort, MemoryExtractor, MemoryProvider, WikiRetrievalPort } from '../contracts.js';
 import type { SatellitePresencePort } from '../satellite-adapter-port.js';
 import type { SkillsRuntime } from '../../../faculties/skills/runtime.js';
 import type { TurnToolSummary } from '../../../faculties/skills/reflection-nudge.js';
 import type { TrustLevel } from '../../../system/trust/types.js';
 import type { EmotionSelfModelRuntime } from './emotion-self-model-runtime.js';
-import type { ResolvedAuthorContext } from './runtime-context.js';
+import type { ParticipantRelationshipEdgeInput, ResolvedAuthorContext, UserRuntimeProfile } from './runtime-context.js';
 import type { TurnExecutionRuntime } from './turn-execution-runtime.js';
+import type { PromptCacheTurnRuntime } from './turn-execution/prompt-cache-runtime.js';
+import { CompletionNoticeBuffer } from '../completion-notices.js';
 import type { TurnSupportRuntime } from './turn-support-runtime.js';
 import type { ToolRuntimeFacade } from './tool-runtime-facade.js';
 import type { ChannelMeta } from '../../../system/trust/policy.js';
 import type { InternalState } from '../../self-model/state.js';
 import type { MetacognitiveFlag } from '../../self-model/metacognition.js';
 import type { ContextBudgetTurnCharacteristics } from '../../../shared/context-budget.js';
+import type { ConversationScopeSpeaker } from '../../session/conversation-scope.js';
 import type { ImageVisionReviewer } from '../../../primitives/images/types.js';
+import type { ObserverEvalSidecarRuntime } from '../../eval/observer-sidecar/types.js';
+import type { FatigueBudgetPort } from '../fatigue/fatigue-budget.js';
 
 interface TurnExecutionAdapterCallbacks {
   resolveTaskKind: (message: SubstrateMessage) => string | undefined;
@@ -31,6 +36,15 @@ interface TurnExecutionAdapterCallbacks {
     taskKind?: string,
   ) => ContextBudgetTurnCharacteristics;
   resolveAuthorContext: (message: SubstrateMessage) => Promise<ResolvedAuthorContext>;
+  countResolvableSpeakerContacts: (
+    message: SubstrateMessage,
+    speakers: readonly ConversationScopeSpeaker[],
+  ) => Promise<number>;
+  resolveParticipantRelationships: (
+    message: SubstrateMessage,
+    conversationScope: import('../../session/conversation-scope.js').ConversationScope,
+    trustLevel: TrustLevel,
+  ) => Promise<ParticipantRelationshipEdgeInput[]>;
   resolveChannelType: (message: SubstrateMessage) => string | undefined;
   ensureModel: (message?: SubstrateMessage) => void;
   captureTurnPromptSnapshot: (ctx: ComposeContext) => import('../../turns/snapshot.js').TurnPromptSnapshot;
@@ -54,6 +68,7 @@ interface TurnExecutionAdapterCallbacks {
     message: SubstrateMessage,
     resolvedUserName: string,
     trustLevel: TrustLevel,
+    relationshipType: ResolvedAuthorContext['relationshipType'] | undefined,
     channelType: string | undefined,
     canonicalContactKey: string | undefined,
     subjectIdentityKey: string | undefined,
@@ -64,6 +79,9 @@ interface TurnExecutionAdapterCallbacks {
     internalState: InternalState,
     metacognitiveFlags: readonly MetacognitiveFlag[],
     emotionAppraisalChain: readonly import('../../emotion/appraisal.js').EmotionAppraisalEntry[],
+    currentUserRuntimeProfile: UserRuntimeProfile | undefined,
+    conversationScope: import('../../session/conversation-scope.js').ConversationScope,
+    participantRelationshipEdges: readonly ParticipantRelationshipEdgeInput[],
   ) => Record<string, string>;
   setCurrentSelfModelState: (
     state: InternalState,
@@ -74,6 +92,7 @@ interface TurnExecutionAdapterCallbacks {
     message: SubstrateMessage,
     resolvedUserName: string,
     trustLevel: TrustLevel,
+    relationshipType: ResolvedAuthorContext['relationshipType'] | undefined,
     channelType: string | undefined,
     canonicalContactKey: string | undefined,
     subjectIdentityKey: string | undefined,
@@ -84,6 +103,7 @@ interface TurnExecutionAdapterCallbacks {
     internalState: InternalState,
     metacognitiveFlags: readonly MetacognitiveFlag[],
     emotionAppraisalChain: readonly import('../../emotion/appraisal.js').EmotionAppraisalEntry[],
+    conversationScope?: import('../../session/conversation-scope.js').ConversationScope,
   ) => string;
   buildPromptPrefixCacheKey: (
     message: SubstrateMessage,
@@ -91,7 +111,10 @@ interface TurnExecutionAdapterCallbacks {
     canonicalContactKey: string | undefined,
     subjectIdentityKey: string | undefined,
   ) => string;
-  buildStaticPromptSettingsHash: (templateVariables: Record<string, string>) => string;
+  buildStaticPromptSettingsHash: (
+    templateVariables: Record<string, string>,
+    staticPrefixTemplate?: string,
+  ) => string;
   resolveStaticPromptPrefix: (params: {
     cacheKey: string;
     staticPrefixTemplate: string;
@@ -99,7 +122,7 @@ interface TurnExecutionAdapterCallbacks {
     settingsHash: string;
     now: Date;
     variables: Record<string, string>;
-  }) => string;
+  }) => Promise<string>;
   hashPromptText: (text: string) => string;
   getPersonaAdaptation: (
     trustLevel: TrustLevel,
@@ -115,22 +138,27 @@ interface TurnExecutionAdapterCallbacks {
 export interface TurnExecutionAdapterOptions {
   eventBus: EventBus;
   costTelemetry: CostTelemetryPort;
+  fatigueBudget?: FatigueBudgetPort | null;
   satellitePresence: SatellitePresencePort;
   llmClient: LLMProviderPort;
   imageVisionReviewer: ImageVisionReviewer | null;
   sessionManager: SessionManager;
-  config: SubstrateConfig;
+  config: CoreSubstrateConfig;
   runtimeMode: RuntimeMode;
   agent: Agent;
   bridge: EventBridge;
   systemPrompt: string;
   memoryProvider: MemoryProvider | null;
   memoryExtractor: MemoryExtractor | null;
+  wikiRetrieval: WikiRetrievalPort | null;
   skillsRuntime: SkillsRuntime | null;
   evaluateReflectionNudge: (toolSummary: TurnToolSummary) => string | null;
   emotionSelfModelRuntime: EmotionSelfModelRuntime;
+  observerEvalSidecar?: ObserverEvalSidecarRuntime | null;
   turnSupportRuntime: TurnSupportRuntime;
   toolRuntimeFacade: ToolRuntimeFacade;
+  promptCacheRuntime: PromptCacheTurnRuntime;
+  completionNotices?: CompletionNoticeBuffer;
   callbacks: TurnExecutionAdapterCallbacks;
 }
 
@@ -140,6 +168,7 @@ export function createTurnExecutionRuntimeAdapter(
   return {
     eventBus: options.eventBus,
     costTelemetry: options.costTelemetry,
+    fatigueBudget: options.fatigueBudget ?? null,
     satellitePresence: options.satellitePresence,
     llmClient: options.llmClient,
     imageVisionReviewer: options.imageVisionReviewer,
@@ -149,13 +178,19 @@ export function createTurnExecutionRuntimeAdapter(
     agent: options.agent,
     bridge: options.bridge,
     systemPrompt: options.systemPrompt,
+    promptCacheRuntime: options.promptCacheRuntime,
+    completionNotices: options.completionNotices ?? new CompletionNoticeBuffer(),
     memoryProvider: options.memoryProvider,
     memoryExtractor: options.memoryExtractor,
+    wikiRetrieval: options.wikiRetrieval,
     skillsRuntime: options.skillsRuntime,
     evaluateReflectionNudge: (toolSummary) => options.evaluateReflectionNudge(toolSummary),
     emotionSelfModelRuntime: options.emotionSelfModelRuntime,
+    observerEvalSidecar: options.observerEvalSidecar ?? null,
     pinDeferredContinuationSessionContext: (deferredContinuationId, channelId) => options.turnSupportRuntime
       .pinDeferredContinuationSessionContext(deferredContinuationId, channelId),
+    awaitPostTurnDrain: (input) => options.turnSupportRuntime.awaitPostTurnDrain(input).then(() => undefined),
+    registerPostTurnBackgroundWork: (input) => options.turnSupportRuntime.registerPostTurnBackgroundWork(input),
     resolveTaskKind: (message) => options.callbacks.resolveTaskKind(message),
     buildTurnBudgetCharacteristics: (message, taskKind) => options.callbacks
       .buildTurnBudgetCharacteristics(message, taskKind),
@@ -164,6 +199,10 @@ export function createTurnExecutionRuntimeAdapter(
       .buildTurnCorrelation(message, callType, turnId, requestId),
     withCorrelationPurpose: (correlation, purpose) => options.turnSupportRuntime.withCorrelationPurpose(correlation, purpose),
     resolveAuthorContext: (message) => options.callbacks.resolveAuthorContext(message),
+    countResolvableSpeakerContacts: (message, speakers) => options.callbacks
+      .countResolvableSpeakerContacts(message, speakers),
+    resolveParticipantRelationships: (message, conversationScope, trustLevel) => options.callbacks
+      .resolveParticipantRelationships(message, conversationScope, trustLevel),
     emitTurnStage: (
       message,
       turnStartMs,
@@ -181,8 +220,8 @@ export function createTurnExecutionRuntimeAdapter(
       callType,
       payload,
     ),
-    recordUserMessage: (message, turnId, requestId, trustLevel, continuityUserId) => options.turnSupportRuntime
-      .recordUserMessage(message, turnId, requestId, trustLevel, continuityUserId),
+    recordUserMessage: (message, turnId, requestId, trustLevel, continuityUserId, contentOverride) => options.turnSupportRuntime
+      .recordUserMessage(message, turnId, requestId, trustLevel, continuityUserId, contentOverride),
     recordSystemMessage: (message, turnId, requestId, content, continuityUserId) => options.turnSupportRuntime
       .recordSystemMessage(message, turnId, requestId, content, continuityUserId),
     resolveSessionChannelId: (channelId) => options.turnSupportRuntime.resolveSessionChannelId(channelId),
@@ -214,6 +253,7 @@ export function createTurnExecutionRuntimeAdapter(
       message,
       resolvedUserName,
       trustLevel,
+      relationshipType,
       channelType,
       canonicalContactKey,
       subjectIdentityKey,
@@ -224,10 +264,14 @@ export function createTurnExecutionRuntimeAdapter(
       internalState,
       metacognitiveFlags,
       emotionAppraisalChain,
+      currentUserRuntimeProfile,
+      conversationScope,
+      participantRelationshipEdges,
     ) => options.callbacks.buildDynamicPromptTemplateVariables(
       message,
       resolvedUserName,
       trustLevel,
+      relationshipType,
       channelType,
       canonicalContactKey,
       subjectIdentityKey,
@@ -238,6 +282,9 @@ export function createTurnExecutionRuntimeAdapter(
       internalState,
       metacognitiveFlags,
       emotionAppraisalChain,
+      currentUserRuntimeProfile,
+      conversationScope,
+      participantRelationshipEdges,
     ),
     setCurrentSelfModelState: (
       state,
@@ -248,6 +295,7 @@ export function createTurnExecutionRuntimeAdapter(
       message,
       resolvedUserName,
       trustLevel,
+      relationshipType,
       channelType,
       canonicalContactKey,
       subjectIdentityKey,
@@ -258,10 +306,12 @@ export function createTurnExecutionRuntimeAdapter(
       internalState,
       metacognitiveFlags,
       emotionAppraisalChain,
+      conversationScope,
     ) => options.callbacks.buildRuntimeContext(
       message,
       resolvedUserName,
       trustLevel,
+      relationshipType,
       channelType,
       canonicalContactKey,
       subjectIdentityKey,
@@ -272,11 +322,12 @@ export function createTurnExecutionRuntimeAdapter(
       internalState,
       metacognitiveFlags,
       emotionAppraisalChain,
+      conversationScope,
     ),
     buildPromptPrefixCacheKey: (message, channelType, canonicalContactKey, subjectIdentityKey) => options.callbacks
       .buildPromptPrefixCacheKey(message, channelType, canonicalContactKey, subjectIdentityKey),
-    buildStaticPromptSettingsHash: (templateVariables) => options.callbacks
-      .buildStaticPromptSettingsHash(templateVariables),
+    buildStaticPromptSettingsHash: (templateVariables, staticPrefixTemplate) => options.callbacks
+      .buildStaticPromptSettingsHash(templateVariables, staticPrefixTemplate),
     resolveStaticPromptPrefix: (params) => options.callbacks.resolveStaticPromptPrefix(params),
     hashPromptText: (text) => options.callbacks.hashPromptText(text),
     getPersonaAdaptation: (trustLevel, internalState, metacognitiveFlags, templateVariables) => options.callbacks
@@ -347,6 +398,7 @@ export function createTurnExecutionRuntimeAdapter(
     dequeueBackgroundContinuationDeliveries: (deliverySessionId, limit) => options.turnSupportRuntime
       .dequeueBackgroundContinuationDeliveries(deliverySessionId, limit),
     emitTelemetry: (eventName, payload) => options.turnSupportRuntime.emitTelemetry(eventName, payload),
+    consumeIntentionalNoReplyDecision: (turnId) => options.turnSupportRuntime.consumeIntentionalNoReplyDecision(turnId),
     runIntentionPostTurnHooks: (context) => options.turnSupportRuntime.runIntentionPostTurnHooks(context),
   };
 }

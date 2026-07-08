@@ -15,34 +15,53 @@ import type {
   LowTierTrustLevel,
   TrustMutationSource,
   SensitivityLevel,
-  ChannelVisibility,
   ConsentFlags,
 } from './types.js';
 import {
   isHighTierTrustLevel,
-  normalizeChannelVisibility,
   sensitivityOrd,
 } from './types.js';
 import type { ResponseStyle, ResponseStyleOverrides } from '../../shared/contracts/runtime.js';
 import { getRuntimeTrustPolicy } from './runtime-policy.js';
+import type { ChannelClassificationOverride, TrustPolicyConfig } from '../config/trust-policy-config.js';
+import {
+  DEFAULT_CONTACT_TRACKING_MODE,
+  deriveDefaultDeliveryStyle,
+  normalizeChannelPrivacy,
+  type ChannelDeliveryStyle,
+  type ChannelEnvelopeLabel,
+  type ChannelPrivacy,
+  type ContextEnvelope,
+  type ContactTrackingMode,
+} from './context-envelope.js';
+import { getRuntimeChannelEnvelopeLabels } from './runtime-channel-labels.js';
 
 export interface ChannelMeta {
   isDirectMessage?: boolean;
   broadcastApprovalToken?: string;
   disclosureConsentGranted?: boolean;
-  privacyLevel?: ChannelVisibility;
+  /**
+   * Adapter-declared privacy hint (X-Channel-Privacy header, satellite
+   * registry, routing metadata). E3.2: a DERIVED-DEFAULT-tier input only —
+   * channel-owned labels and operator overrides always win, and per-contact
+   * privacy fields must never populate this (docs/context-envelope.md).
+   * E3.3: adapters declare ChannelPrivacy only; the broadcast flag is owned
+   * by channel labels, operator overrides, and broadcastPrefixes.
+   */
+  privacyLevel?: ChannelPrivacy;
 }
 
-const RESPONSE_STYLE_BY_VISIBILITY: Record<ChannelVisibility, ResponseStyle> = {
-  private: 'expressive',
-  semi_private: 'concise',
-  public: 'concise',
-  broadcast: 'concise',
-};
+/**
+ * The disclosure-gating slice of the Context Envelope: every re-keyed gate
+ * (visibilityAllowed lookups, continuity direction, disclosure ceilings)
+ * consumes this pair. A full ContextEnvelope satisfies it structurally.
+ */
+export type ChannelDisclosureContext = Pick<ContextEnvelope, 'channelPrivacy' | 'broadcast'>;
 
 export function buildTrustPromptState(trustLevel: TrustLevel): Record<string, string> {
+  // The bare trust tier is the session-stable {{trust_level}} macro; the
+  // duplicate {{runtime_trust_level}} spelling was removed (E2.5).
   return {
-    runtime_trust_level: trustLevel,
     runtime_trust_is_primary: String(trustLevel === 'primary'),
     runtime_trust_is_trusted: String(trustLevel === 'trusted'),
     runtime_trust_is_regular: String(trustLevel === 'regular'),
@@ -59,9 +78,30 @@ export function buildResponseStylePromptState(style: ResponseStyle): Record<stri
   };
 }
 
+/**
+ * Bare-value Context Envelope macros (E3.3). Values only — the envelope is
+ * deterministic pre-prompt state and NEVER becomes privacy-reasoning prose.
+ */
+export function buildContextEnvelopePromptState(envelope: ContextEnvelope): Record<string, string> {
+  return {
+    runtime_channel_privacy: envelope.channelPrivacy,
+    runtime_audience_scope: envelope.audienceScope,
+    runtime_audience_knowledge: envelope.audienceKnowledge,
+    runtime_broadcast: String(envelope.broadcast),
+  };
+}
+
 // ── Policy evaluation ──
 
 export type PolicyDecision = 'allow' | 'deny' | 'sanitize';
+// Reason-tag mapping through the E3.3 envelope re-key:
+// - 'visibility.channel_restricted' is KEPT for the channelPrivacy-keyed
+//   restriction (identical semantics: the channel's structural class denies
+//   the sensitivity; the reason string now cites the channelPrivacy value).
+// - 'visibility.broadcast_restricted' is NEW: the old broadcast-visibility
+//   denial (retired 'broadcast' ChannelVisibility row) now cites the
+//   broadcast envelope dimension explicitly.
+// - All other tags are unchanged.
 export type PolicyReasonTag =
   | 'operator.approval_override'
   | 'boundary.withhold'
@@ -69,6 +109,7 @@ export type PolicyReasonTag =
   | 'consent.allow_recall_denied'
   | 'trust.ceiling_exceeded'
   | 'visibility.channel_restricted'
+  | 'visibility.broadcast_restricted'
   | 'default.within_bounds';
 
 export interface DisclosureBoundaryDirective {
@@ -84,7 +125,9 @@ export interface DisclosureBoundaryDirective {
 
 export interface PolicyContext {
   trustLevel: TrustLevel;
-  channelVisibility: ChannelVisibility;
+  /** Context Envelope disclosure pair for the channel (E3.3 re-key). */
+  channelPrivacy: ChannelPrivacy;
+  broadcast: boolean;
   memorySensitivity: SensitivityLevel;
   consentFlags?: ConsentFlags;
   disclosureBoundary?: DisclosureBoundaryDirective;
@@ -258,12 +301,25 @@ export function evaluateMemoryPolicy(ctx: PolicyContext): PolicyResult {
     };
   }
 
-  // Layer 5: Visibility gate — channel type imposes additional restrictions
-  const allowedByVisibility = trustPolicy.visibilityAllowed[ctx.channelVisibility];
-  if (!allowedByVisibility.includes(ctx.memorySensitivity)) {
+  // Layer 5: Envelope gate — the channel's {channelPrivacy, broadcast} pair
+  // imposes additional restrictions. Broadcast surfaces are always 'public'
+  // by construction, so the effective row is the privacy row; the broadcast
+  // flag is cited in the denial so withheld reasons name the envelope
+  // dimension that gated (approval-token elevation arrives as
+  // operatorApproval at layer 1 via broadcast-safety.ts).
+  const allowedByEnvelope = trustPolicy.visibilityAllowed[ctx.channelPrivacy];
+  if (!allowedByEnvelope.includes(ctx.memorySensitivity)) {
+    if (ctx.broadcast) {
+      return {
+        decision: 'deny',
+        reason: `broadcast (channelPrivacy '${ctx.channelPrivacy}') channels restrict '${ctx.memorySensitivity}' memory access`,
+        reasonTag: 'visibility.broadcast_restricted',
+        layer: 'visibility',
+      };
+    }
     return {
       decision: 'deny',
-      reason: `${ctx.channelVisibility} channels restrict '${ctx.memorySensitivity}' memory access`,
+      reason: `channelPrivacy '${ctx.channelPrivacy}' channels restrict '${ctx.memorySensitivity}' memory access`,
       reasonTag: 'visibility.channel_restricted',
       layer: 'visibility',
     };
@@ -278,58 +334,172 @@ export function evaluateMemoryPolicy(ctx: PolicyContext): PolicyResult {
   };
 }
 
-// ── Channel classification ──
+// ── Channel classification (envelope-keyed) ──
+//
+// classifyChannelEnvelope resolves the {channelPrivacy, broadcast} pair per
+// the Context Envelope contract precedence (docs/context-envelope.md):
+//   1. channel-owned label   — channels.json contextEnvelope.channels.<id>
+//   2. operator override     — trust-policy.json channelClassification
+//                              visibilityOverrides (exact, then longest prefix)
+//   3. derived default       — adapter-declared runtime metadata and DEMOTED
+//                              prefix heuristics; isDirectMessage → private,
+//                              else invite_only
+// E3.3 deleted the transitional 4-value ChannelVisibility projection: the
+// pair IS the classification.
+
+export type ChannelClassificationSource = 'channel_label' | 'operator_override' | 'derived_default';
+
+export interface ChannelEnvelopeClassification {
+  privacy: ChannelPrivacy;
+  broadcast: boolean;
+  contactTracking: ContactTrackingMode;
+  /**
+   * Delivery/length style for the channel (E3.3): the channel-owned label
+   * when present, else the derived default applied ONCE here
+   * (deriveDefaultDeliveryStyle) so response style has no live privacy
+   * coupling downstream. Delivery only — never persona/tone prose.
+   */
+  deliveryStyle: ChannelDeliveryStyle;
+  deliveryStyleSource: 'channel_label' | 'derived_default';
+  /** Which precedence tier resolved the {privacy, broadcast} pair. */
+  source: ChannelClassificationSource;
+  /** Migration-seeded fail-closed label awaiting operator review (never gates). */
+  needsReview: boolean;
+}
 
 function resolvePrefixVisibilityOverride(
   channelId: string,
-  prefixOverrides: Record<string, ChannelVisibility>,
-): ChannelVisibility | undefined {
-  let bestMatch: { prefix: string; visibility: ChannelVisibility } | undefined;
-  for (const [prefix, visibility] of Object.entries(prefixOverrides)) {
+  prefixOverrides: Record<string, ChannelClassificationOverride>,
+): ChannelClassificationOverride | undefined {
+  let bestMatch: { prefix: string; override: ChannelClassificationOverride } | undefined;
+  for (const [prefix, override] of Object.entries(prefixOverrides)) {
     if (!channelId.startsWith(prefix)) continue;
     if (!bestMatch || prefix.length > bestMatch.prefix.length) {
-      bestMatch = { prefix, visibility };
+      bestMatch = { prefix, override };
     }
   }
-  return bestMatch?.visibility;
+  return bestMatch?.override;
 }
 
-export function classifyChannel(
+/**
+ * Pure envelope classification over explicit inputs. classifyChannelEnvelope
+ * wraps this with the runtime label/policy accessors; Garden and maintenance
+ * surfaces call it directly against freshly loaded owner files.
+ */
+export function resolveChannelEnvelopeClassification(
   channelId: string,
-  meta?: ChannelMeta,
-): ChannelVisibility {
-  const trustPolicy = getRuntimeTrustPolicy();
-  const visibilityOverrides = trustPolicy.channelClassification.visibilityOverrides;
+  meta: ChannelMeta | undefined,
+  inputs: {
+    label?: ChannelEnvelopeLabel;
+    trustPolicy: TrustPolicyConfig;
+  },
+): ChannelEnvelopeClassification {
+  const { label, trustPolicy } = inputs;
+  const contactTracking = label?.contactTracking ?? DEFAULT_CONTACT_TRACKING_MODE;
+  const needsReview = label?.needsReview === true;
 
+  const finalize = (
+    pair: { privacy: ChannelPrivacy; broadcast: boolean },
+    source: ChannelClassificationSource,
+  ): ChannelEnvelopeClassification => ({
+    ...pair,
+    contactTracking,
+    // Delivery style is resolved ONCE at classification: channel-owned label
+    // wins; otherwise the derived default of the FINAL pair applies. This is
+    // the only remaining privacy→style linkage (a derived default), per the
+    // delivery-guidance rule in docs/context-envelope.md.
+    deliveryStyle: label?.deliveryStyle
+      ?? deriveDefaultDeliveryStyle({ channelPrivacy: pair.privacy, broadcast: pair.broadcast }),
+    deliveryStyleSource: label?.deliveryStyle ? 'channel_label' : 'derived_default',
+    source,
+    needsReview,
+  });
+
+  // ── Tier 1: channel-owned label (channels.json contextEnvelope) ──
+  if (label?.broadcast === true) {
+    // Contract: a broadcast surface is always channelPrivacy 'public'.
+    // (Labels pairing broadcast=true with a non-public privacy are rejected
+    // fail-closed at validation.)
+    return finalize({ privacy: 'public', broadcast: true }, 'channel_label');
+  }
+  if (label?.privacy !== undefined) {
+    return finalize({ privacy: label.privacy, broadcast: false }, 'channel_label');
+  }
+  // A label carrying broadcast=false (without privacy) pins the flag while the
+  // privacy value falls through to the next tiers — channel ownership of the
+  // broadcast flag stays highest-precedence.
+  const broadcastPinnedFalse = label?.broadcast === false;
+  const applyPin = (pair: { privacy: ChannelPrivacy; broadcast: boolean }): {
+    privacy: ChannelPrivacy;
+    broadcast: boolean;
+  } => ({
+    privacy: broadcastPinnedFalse && pair.broadcast ? 'public' : pair.privacy,
+    broadcast: broadcastPinnedFalse ? false : pair.broadcast,
+  });
+
+  // ── Tier 2: operator trust-policy overrides (exact, then longest prefix) ──
+  const visibilityOverrides = trustPolicy.channelClassification.visibilityOverrides;
   const exactOverride = Object.prototype.hasOwnProperty.call(visibilityOverrides.exact, channelId)
     ? visibilityOverrides.exact[channelId]
     : undefined;
   if (exactOverride !== undefined) {
-    return exactOverride;
+    return finalize(applyPin(exactOverride), 'operator_override');
   }
-
   const prefixOverride = resolvePrefixVisibilityOverride(channelId, visibilityOverrides.prefix);
   if (prefixOverride !== undefined) {
-    return prefixOverride;
+    return finalize(applyPin(prefixOverride), 'operator_override');
   }
+
+  // ── Tier 3: derived default ──
+  // broadcastPrefixes / privatePrefixes are DEMOTED heuristics (E3.2): they
+  // are seed data for channel-owned records (npm run migrate:channel-envelope)
+  // and survive here only as derived-default inputs for channels that have no
+  // owned label yet. Adapter-declared metadata (X-Channel-Privacy, satellite
+  // registry, routing channelPrivacy → ChannelMeta.privacyLevel) and the DM
+  // flag are runtime observations, not operator policy, so they also live in
+  // this tier. Relative order is preserved from the pre-envelope hierarchy so
+  // unlabeled channels classify byte-identically.
+  const derived = (pair: { privacy: ChannelPrivacy; broadcast: boolean }): ChannelEnvelopeClassification =>
+    finalize(applyPin(pair), 'derived_default');
 
   if (trustPolicy.channelClassification.broadcastPrefixes.some(prefix => channelId.startsWith(prefix))) {
-    return 'broadcast';
+    return derived({ privacy: 'public', broadcast: true });
   }
 
-  const explicitPrivacyLevel = normalizeChannelVisibility(meta?.privacyLevel);
+  const explicitPrivacyLevel = normalizeChannelPrivacy(meta?.privacyLevel);
   if (explicitPrivacyLevel !== undefined) {
-    return explicitPrivacyLevel;
+    return derived({ privacy: explicitPrivacyLevel, broadcast: false });
   }
 
-  // Discord DMs explicitly flagged by adapter — private (honne)
-  if (meta?.isDirectMessage) return 'private';
+  // Direct messages explicitly flagged by adapter — private (honne)
+  if (meta?.isDirectMessage) {
+    return derived({ privacy: 'private', broadcast: false });
+  }
 
   if (trustPolicy.channelClassification.privatePrefixes.some(prefix => channelId.startsWith(prefix))) {
-    return 'private';
+    return derived({ privacy: 'private', broadcast: false });
   }
 
-  return trustPolicy.channelClassification.defaultVisibility;
+  return derived({ privacy: trustPolicy.channelClassification.defaultVisibility, broadcast: false });
+}
+
+export function classifyChannelEnvelope(
+  channelId: string,
+  meta?: ChannelMeta,
+): ChannelEnvelopeClassification {
+  return resolveChannelEnvelopeClassification(channelId, meta, {
+    label: getRuntimeChannelEnvelopeLabels()[channelId],
+    trustPolicy: getRuntimeTrustPolicy(),
+  });
+}
+
+/** The disclosure pair for a channel, as consumed by the re-keyed gates. */
+export function classifyChannelDisclosure(
+  channelId: string,
+  meta?: ChannelMeta,
+): ChannelDisclosureContext {
+  const classification = classifyChannelEnvelope(channelId, meta);
+  return { channelPrivacy: classification.privacy, broadcast: classification.broadcast };
 }
 
 function resolvePrefixStyleOverride(
@@ -362,6 +532,22 @@ function resolveChannelTypeStyleOverride(
   return undefined;
 }
 
+/**
+ * Response style resolution (E3.3: decoupled from privacy).
+ *
+ * Precedence:
+ *   1. Operator response-style overrides (exact, prefix, channelType).
+ *   2. Channel-owned deliveryStyle label (channels.json contextEnvelope).
+ *   3. Channel-type heuristics (voice/telegram/internal/api/discord/webui),
+ *      unchanged from the pre-envelope behavior.
+ *   4. overrides.defaultStyle, else the classification's derived-default
+ *      deliveryStyle (deriveDefaultDeliveryStyle, applied once at
+ *      classification — the retired RESPONSE_STYLE_BY_VISIBILITY mapping
+ *      survives only as that derived default).
+ *
+ * Style is delivery/length guidance only; persona and tone prose remain
+ * forbidden substrate content (charter rule).
+ */
 export function resolveChannelResponseStyle(
   channelId: string,
   options: {
@@ -387,6 +573,11 @@ export function resolveChannelResponseStyle(
     if (byChannelType) return byChannelType;
   }
 
+  const classification = classifyChannelEnvelope(channelId, options.meta);
+  if (classification.deliveryStyleSource === 'channel_label') {
+    return classification.deliveryStyle;
+  }
+
   const normalizedChannelType = channelType?.toLowerCase();
   const normalizedChannelId = channelId.toLowerCase();
   if (
@@ -409,10 +600,8 @@ export function resolveChannelResponseStyle(
     return 'concise';
   }
 
-  const explicitPrivacyLevel = normalizeChannelVisibility(options.meta?.privacyLevel);
-  if (explicitPrivacyLevel) {
-    const visibility = classifyChannel(channelId, options.meta);
-    return overrides?.defaultStyle ?? RESPONSE_STYLE_BY_VISIBILITY[visibility];
+  if (normalizeChannelPrivacy(options.meta?.privacyLevel)) {
+    return overrides?.defaultStyle ?? classification.deliveryStyle;
   }
 
   if (options.meta?.isDirectMessage) return 'expressive';
@@ -431,8 +620,7 @@ export function resolveChannelResponseStyle(
     return 'expressive';
   }
 
-  const visibility = classifyChannel(channelId, options.meta);
-  return overrides?.defaultStyle ?? RESPONSE_STYLE_BY_VISIBILITY[visibility];
+  return overrides?.defaultStyle ?? classification.deliveryStyle;
 }
 
 export function getResponseStylePromptGuidance(style: ResponseStyle): string {
@@ -443,29 +631,39 @@ export function getResponseStylePromptGuidance(style: ResponseStyle): string {
 }
 
 // ── Continuity sharing ──
+// The re-keyed gates consume the envelope {channelPrivacy, broadcast} pair.
+// A broadcast surface is always 'public', so its allowed-sensitivity row IS
+// the public row (docs/context-envelope.md) — the flag adds the published-
+// artifact property (approval tokens, broadcast-safety), never a wider row.
+
+function envelopeAllowedSensitivities(
+  context: ChannelDisclosureContext,
+): readonly SensitivityLevel[] {
+  return getRuntimeTrustPolicy().visibilityAllowed[context.channelPrivacy];
+}
 
 export function channelsShareContinuity(sourceChannelId: string, targetChannelId: string): boolean {
-  const sourceVisibility = classifyChannel(sourceChannelId);
-  const targetVisibility = classifyChannel(targetChannelId);
-  return visibilitiesShareContinuity(sourceVisibility, targetVisibility);
+  return visibilitiesShareContinuity(
+    classifyChannelDisclosure(sourceChannelId),
+    classifyChannelDisclosure(targetChannelId),
+  );
 }
 
 export function getVisibilityDisclosureCeiling(
-  channelVisibility: ChannelVisibility,
+  context: ChannelDisclosureContext,
 ): SensitivityLevel {
-  const allowed = getRuntimeTrustPolicy().visibilityAllowed[channelVisibility];
+  const allowed = envelopeAllowedSensitivities(context);
   return allowed.reduce<SensitivityLevel>((ceiling, candidate) => (
     sensitivityOrd(candidate) > sensitivityOrd(ceiling) ? candidate : ceiling
   ), allowed[0] ?? 'public');
 }
 
 export function visibilitiesShareContinuity(
-  sourceVisibility: ChannelVisibility,
-  targetVisibility: ChannelVisibility,
+  source: ChannelDisclosureContext,
+  target: ChannelDisclosureContext,
 ): boolean {
-  const trustPolicy = getRuntimeTrustPolicy();
-  const sourceAllowed = trustPolicy.visibilityAllowed[sourceVisibility];
-  const targetAllowed = trustPolicy.visibilityAllowed[targetVisibility];
+  const sourceAllowed = envelopeAllowedSensitivities(source);
+  const targetAllowed = envelopeAllowedSensitivities(target);
 
   // Directional: source continuity can flow into target only if the target
   // allows every sensitivity the source channel may disclose.
@@ -476,11 +674,11 @@ export function visibilitiesShareContinuity(
 
 export function getAllowedSensitivities(
   trustLevel: TrustLevel,
-  channelVisibility: ChannelVisibility,
+  context: ChannelDisclosureContext,
 ): SensitivityLevel[] {
   const trustPolicy = getRuntimeTrustPolicy();
   const trustAllowed = trustPolicy.trustCeiling[trustLevel];
-  const visibilityAllowed = trustPolicy.visibilityAllowed[channelVisibility];
+  const envelopeAllowed = envelopeAllowedSensitivities(context);
 
-  return trustAllowed.filter(sensitivity => visibilityAllowed.includes(sensitivity)) as SensitivityLevel[];
+  return trustAllowed.filter(sensitivity => envelopeAllowed.includes(sensitivity)) as SensitivityLevel[];
 }

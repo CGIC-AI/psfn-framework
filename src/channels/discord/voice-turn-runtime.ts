@@ -1,4 +1,4 @@
-import { AudioPlayerStatus, createAudioResource, entersState } from '@discordjs/voice';
+import { AudioPlayerStatus, createAudioResource, EndBehaviorType, entersState } from '@discordjs/voice';
 import prism from 'prism-media';
 import { Readable } from 'node:stream';
 import type { SubstrateMessage } from '../../shared/contracts/runtime.js';
@@ -118,6 +118,7 @@ export async function handleVoiceUtterance(
   }
 
   const turnId = `voice-turn-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const timestampMs = Date.now();
   const turn: ActiveVoiceTurn = {
     token: Symbol(turnId),
     turnId,
@@ -140,13 +141,13 @@ export async function handleVoiceUtterance(
       turnId,
       channelId: turn.channel.id,
       userId: runtime.targetUserId,
-      timestampMs: Date.now(),
+      timestampMs,
     });
 
     let opusStream: NodeJS.ReadableStream;
     try {
       opusStream = turn.connection.receiver.subscribe(runtime.targetUserId, {
-        end: { behavior: 'after-silence' as never, duration: CAPTURE_SILENCE_MS },
+        end: { behavior: EndBehaviorType.AfterSilence, duration: CAPTURE_SILENCE_MS },
       });
     } catch (subscribeError) {
       throw createStructuredVoiceError({

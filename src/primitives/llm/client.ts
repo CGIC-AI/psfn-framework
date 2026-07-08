@@ -1,3 +1,4 @@
+import { isRecord } from '../../shared/utils/types.js';
 import {
   streamSimple,
   completeSimple,
@@ -10,18 +11,23 @@ import type {
   CompletionPurpose,
   CorrelationMetadata,
   LLMContext,
+  LLMSystemPromptCacheBoundaries,
+  LLMUsageCostDetails,
+  LLMUsageDetails,
   LLMPromptCacheObservability,
   LLMProviderObservability,
   LLMModelHint,
   LLMResponse,
   LLMProviderWireMessage,
   ModelBudgetBlockedEvent,
+  PromptCacheRetention,
   StreamCallbacks,
   ToolCall,
+  ToolSchema,
 } from '../../shared/contracts/runtime.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import { createModel, createOpenAICompatibleEndpointModel, type OpenAICompatibleApi } from './models.js';
-import { withRetry, markErrorAsNonRetryable } from './retry.js';
+import { withRetry, markErrorAsNonRetryable, isRetryableError } from './retry.js';
 import { llmRetryConfig } from './retry-config.js';
 import {
   extractReasoningContent,
@@ -35,7 +41,18 @@ import {
 import { createComponentLogger } from '../../shared/logger.js';
 import { FallbackRunner } from './fallback.js';
 import type { ImportPolicyAuditRecord, RoutingCandidate, RoutingPurpose } from './routing.js';
-import { evaluateImportPolicy, resolveRoutingCandidates } from './routing.js';
+import {
+  applyGlobalPromptCachePolicy,
+  evaluateImportPolicy,
+  resolveGlobalPromptCachePolicy,
+  resolveRoutingCandidates,
+} from './routing.js';
+import {
+  createSystemPromptCacheControlPayloadTransformer,
+  resolvePromptCacheMechanism,
+  verifySystemPromptCacheBoundaries,
+  type PromptCachePayloadReport,
+} from './prompt-cache.js';
 import { resolveRegisteredModel, resolveSystemRoleCapabilityMetadata } from './models.js';
 import {
   EligibilityDeniedError,
@@ -68,8 +85,31 @@ import type { LLMProviderPort } from '../../core/agent/contracts.js';
 import { resolveRuntimeLaneClassForModelCall } from '../../core/agent/worker-lanes.js';
 import { ModelCallGate } from './model-call-gate.js';
 import { clampVisionCompletionMaxTokens } from './vision-limits.js';
+import type { ModelUsageRecorder } from '../../shared/telemetry/model-usage.js';
+import { getRunChargeSnapshot } from '../../shared/telemetry/run-charge.js';
+import {
+  type CircuitBreakerTransition,
+  SlidingWindowCircuitBreaker,
+} from '../../shared/resilience/circuit-breaker.js';
+import { classifyLLMError } from './error-classify.js';
 
 const log = createComponentLogger('LLMClient');
+// mihm: bound on how many times a single completion is re-run when its tool call
+// arrives with corrupt-empty arguments against a required-property schema. After this
+// many retries the (still corrupt) response is returned as-is so downstream validation
+// surfaces it — fail closed, never fabricate/drop/default.
+const MAX_EMPTY_TOOL_ARGS_COMPLETION_RETRIES = 2;
+const LLM_CIRCUIT_BREAKER_WINDOW_MS = 60_000;
+const LLM_CIRCUIT_BREAKER_COOLDOWN_MS = 30_000;
+const LLM_CIRCUIT_BREAKER_FAILURE_THRESHOLD = 3;
+const PROVIDER_RESPONSE_PREFIX_ARTIFACTS = [
+  '<｜begin▁of▁sentence｜>',
+  '<｜begin_of_sentence｜>',
+  '<|begin▁of▁sentence|>',
+  '<|begin_of_sentence|>',
+] as const;
+const PROVIDER_RESPONSE_HEADER_ARTIFACT_PATTERN = /^#{1,6}\s+(?:(?:assistant|model|bot|character|companion|[^#\r\n]{1,80}'s)\s+)?response\s*:?(?:\r?\n|$)/iu;
+const PROVIDER_RESPONSE_HEADER_POTENTIAL_MAX_CHARS = 120;
 
 interface LLMRequestOptions extends SimpleStreamOptions {
   zdr?: boolean;
@@ -96,6 +136,8 @@ export interface LLMClientRuntimeOptions {
   eligibilityGate?: EligibilityGate;
   onEligibilityDecision?: (decision: EligibilityDecision) => void;
   onBudgetBlocked?: (event: ModelBudgetBlockedEvent) => void;
+  usageRecorder?: ModelUsageRecorder;
+  circuitBreaker?: SlidingWindowCircuitBreaker;
 }
 
 const FULL_KNOB_PASSTHROUGH_PROVIDERS = new Set(['openrouter', 'litellm', 'local_endpoint']);
@@ -138,6 +180,9 @@ export class LLMClient {
   private onEligibilityDecision?: (decision: EligibilityDecision) => void;
   private onBudgetBlocked?: (event: ModelBudgetBlockedEvent) => void;
   private modelCallGate: ModelCallGate;
+  private usageRecorder?: ModelUsageRecorder;
+  private circuitBreaker: SlidingWindowCircuitBreaker;
+  private usageCallCounter = 0;
 
   constructor(
     config: SubstrateConfig,
@@ -155,7 +200,13 @@ export class LLMClient {
     this.eligibilityGate = runtimeOptions.eligibilityGate;
     this.onEligibilityDecision = runtimeOptions.onEligibilityDecision;
     this.onBudgetBlocked = runtimeOptions.onBudgetBlocked;
+    this.usageRecorder = runtimeOptions.usageRecorder;
     this.modelCallGate = new ModelCallGate();
+    this.circuitBreaker = runtimeOptions.circuitBreaker ?? new SlidingWindowCircuitBreaker({
+      failureThreshold: LLM_CIRCUIT_BREAKER_FAILURE_THRESHOLD,
+      windowMs: LLM_CIRCUIT_BREAKER_WINDOW_MS,
+      cooldownMs: LLM_CIRCUIT_BREAKER_COOLDOWN_MS,
+    });
   }
 
   private getModelAndKey(candidate: RoutingCandidate): { model: Model<any>; apiKey: string | undefined } {
@@ -277,6 +328,7 @@ export class LLMClient {
       systemPrompt: context.systemPrompt,
       messages: context.messages,
       ...(context.tools?.length ? { tools: context.tools } : {}),
+      ...(context.promptCacheBoundaries ? { promptCacheBoundaries: context.promptCacheBoundaries } : {}),
       modelHint: {
         model: hintModel,
         provider: candidate.provider,
@@ -296,7 +348,7 @@ export class LLMClient {
   }
 
   private shouldNormalizeProxyModelId(candidate: RoutingCandidate): boolean {
-    return !!candidate.requestBaseUrl || this.litellmBaseUrl !== null;
+    return !candidate.requestBaseUrl && this.litellmBaseUrl !== null;
   }
 
   private resolveReasoningLevel(candidate: RoutingCandidate): ThinkingLevel | undefined {
@@ -375,6 +427,109 @@ export class LLMClient {
       scope,
       sessionId,
     };
+  }
+
+  /**
+   * Model-agnostic provider cache engagement (E2.4): applied when the
+   * models.json registry-wide promptCaching policy is enabled. Mutates the
+   * request options with the params the resolved provider actually supports
+   * (cacheRetention / sessionId / cache_control onPayload transformer) and
+   * returns the promptCaching observability reflecting what was applied.
+   * Returns null when the flag is off — zero wire change.
+   */
+  private applyModelAgnosticPromptCache(input: {
+    candidate: RoutingCandidate;
+    model: Model<any>;
+    systemPrompt: string;
+    boundaries: LLMSystemPromptCacheBoundaries | undefined;
+    correlation: ResolvedCorrelationMetadata | undefined;
+    requestOptions: LLMRequestOptions;
+  }): LLMPromptCacheObservability | null {
+    const { candidate, model, requestOptions } = input;
+    if (candidate.promptCacheEnabled !== true) return null;
+
+    const retention: PromptCacheRetention = candidate.promptCacheRetention ?? 'short';
+    const scope = candidate.promptCacheScope ?? 'channel';
+    // candidate.model is the requested (registry-identity) model id — e.g.
+    // 'anthropic/claude-sonnet-4.5' on OpenRouter — which is the stable
+    // discriminator even when a proxy route rewrites the backend model id.
+    const mechanism = resolvePromptCacheMechanism({
+      provider: candidate.provider,
+      modelId: candidate.model,
+      api: typeof (model as { api?: unknown }).api === 'string' ? (model as { api: string }).api : undefined,
+    });
+    if (retention === 'none') {
+      return {
+        configured: true,
+        engaged: false,
+        retention,
+        scope,
+        mechanism,
+        reason: 'disabled',
+        ...(candidate.promptCacheStrategy ? { strategy: candidate.promptCacheStrategy } : {}),
+      };
+    }
+
+    const sessionId = scope === 'request'
+      ? input.correlation?.requestId
+      : input.correlation?.channelId;
+    if (requestOptions.cacheRetention === undefined) {
+      requestOptions.cacheRetention = retention;
+    }
+    if (requestOptions.sessionId === undefined && sessionId) {
+      requestOptions.sessionId = sessionId;
+    }
+
+    const observability: LLMPromptCacheObservability = {
+      configured: true,
+      engaged: true,
+      retention,
+      scope,
+      mechanism,
+      ...(candidate.promptCacheStrategy ? { strategy: candidate.promptCacheStrategy } : {}),
+      ...(sessionId ? { sessionId } : {}),
+    };
+
+    const boundaries = input.boundaries;
+    if (
+      boundaries
+      && (mechanism === 'anthropic_cache_control' || mechanism === 'openrouter_cache_control_passthrough')
+    ) {
+      if (!verifySystemPromptCacheBoundaries(input.systemPrompt, boundaries)) {
+        log.warn('Prompt cache boundaries did not match the serialized system prompt; skipping cache breakpoints', {
+          provider: candidate.provider,
+          model: String(model.id),
+          mechanism,
+          staticPrefixChars: boundaries.staticPrefixChars,
+          sessionStablePrefixChars: boundaries.sessionStablePrefixChars,
+          systemPromptChars: input.systemPrompt.length,
+        });
+        return observability;
+      }
+      observability.boundaries = {
+        staticPrefixChars: boundaries.staticPrefixChars,
+        sessionStablePrefixChars: boundaries.sessionStablePrefixChars,
+      };
+      const report: PromptCachePayloadReport = { appliedBreakpoints: 0 };
+      const transformer = createSystemPromptCacheControlPayloadTransformer({
+        mechanism,
+        boundaries,
+        retention,
+        report,
+      });
+      const existingOnPayload = requestOptions.onPayload;
+      requestOptions.onPayload = async (payload, payloadModel) => {
+        const transformed = transformer(payload, payloadModel);
+        if (report.appliedBreakpoints > 0) {
+          observability.appliedBreakpoints = report.appliedBreakpoints;
+        }
+        const next = transformed ?? payload;
+        const chained = await existingOnPayload?.(next, payloadModel);
+        return chained ?? (transformed !== undefined ? next : undefined);
+      };
+    }
+
+    return observability;
   }
 
   private enforceImportRoutingPolicy(purpose: RoutingPurpose, candidate: RoutingCandidate): void {
@@ -489,6 +644,7 @@ export class LLMClient {
       candidate.promptCacheStrategy ?? '',
       candidate.promptCacheRetention ?? '',
       candidate.promptCacheScope ?? '',
+      candidate.promptCacheEnabled ? 'cache_enabled' : '',
       candidate.requestBaseUrl ?? '',
       candidate.requestApiKeyEnv ?? '',
       candidate.openRouterZdrOnly ? 'zdr' : '',
@@ -520,8 +676,16 @@ export class LLMClient {
 
     let provider = modelHint.provider ?? qualified?.provider ?? baseCandidate.provider;
     let model = qualified?.model ?? hintedModel ?? baseCandidate.model;
-    let maxTokens = modelHint.maxTokens ?? baseCandidate.maxTokens;
-    const contextWindow = modelHint.contextWindow ?? baseCandidate.contextWindow;
+    const registryEntry = this.findRegistryModelEntry(provider, model);
+    // The hinted model's own catalog output cap beats the base candidate's:
+    // inheriting a roster default above the target model's maximum (e.g. 16384
+    // onto claude-3-opus's 4096) is a guaranteed 400 from the provider.
+    const registryMaxTokens = toPositiveInteger(registryEntry?.tuning?.maxOutputTokens)
+      ?? toPositiveInteger(registryEntry?.capabilities?.maxOutputTokens);
+    const registryContextWindow = toPositiveInteger(registryEntry?.tuning?.contextWindow)
+      ?? toPositiveInteger(registryEntry?.capabilities?.contextWindow);
+    let maxTokens = modelHint.maxTokens ?? registryMaxTokens ?? baseCandidate.maxTokens;
+    const contextWindow = modelHint.contextWindow ?? registryContextWindow ?? baseCandidate.contextWindow;
     const thinkingEnabled = modelHint.thinkingEnabled ?? baseCandidate.thinkingEnabled;
     const thinkingEffort = modelHint.thinkingEffort ?? baseCandidate.thinkingEffort;
     const temperature = modelHint.temperature ?? baseCandidate.temperature;
@@ -529,7 +693,6 @@ export class LLMClient {
     const topK = modelHint.topK ?? baseCandidate.topK;
     const frequencyPenalty = modelHint.frequencyPenalty ?? baseCandidate.frequencyPenalty;
     const repetitionPenalty = modelHint.repetitionPenalty ?? baseCandidate.repetitionPenalty;
-    const registryEntry = this.findRegistryModelEntry(provider, model);
     const supportsVision = typeof registryEntry?.capabilities?.supportsVision === 'boolean'
       ? registryEntry.capabilities.supportsVision
       : baseCandidate.supportsVision;
@@ -573,7 +736,12 @@ export class LLMClient {
       if (baseCandidate.importRouteMode) hinted.importRouteMode = baseCandidate.importRouteMode;
     }
 
-    return this.withOpenRouterPreferences(hinted);
+    // The registry-wide promptCaching policy is model-agnostic: hinted
+    // candidates engage it exactly like roster-resolved candidates.
+    return applyGlobalPromptCachePolicy(
+      this.withOpenRouterPreferences(hinted),
+      resolveGlobalPromptCachePolicy(this.config),
+    );
   }
 
   private findRegistryModelEntry(provider: string, model: string) {
@@ -698,6 +866,7 @@ export class LLMClient {
     model: Model<any>,
     context: PiContext,
     correlation: ResolvedCorrelationMetadata | undefined,
+    promptCachingOverride?: LLMPromptCacheObservability,
   ): LLMProviderObservability {
     const systemRole = resolveSystemRoleCapabilityMetadata(model);
     return {
@@ -709,7 +878,7 @@ export class LLMClient {
       backendApi: model.api,
       ...(model.baseUrl ? { backendBaseUrl: model.baseUrl } : {}),
       systemRole,
-      promptCaching: this.buildPromptCacheObservability(candidate, correlation),
+      promptCaching: promptCachingOverride ?? this.buildPromptCacheObservability(candidate, correlation),
       providerWireMessages: this.toProviderWireMessages(context, systemRole),
     };
   }
@@ -779,6 +948,57 @@ export class LLMClient {
     return null;
   }
 
+  private resolveCircuitBreakerKey(
+    method: 'llm.stream' | 'llm.complete',
+    candidate: RoutingCandidate,
+  ): string {
+    const routeKey = this.resolveModelCallResourceKey(candidate) ?? 'registered_model';
+    return [
+      method,
+      candidate.provider.trim().toLowerCase(),
+      candidate.model.trim().toLowerCase(),
+      routeKey,
+    ].join('::');
+  }
+
+  private logCircuitBreakerTransition(transition: CircuitBreakerTransition): void {
+    const payload = {
+      method: transition.method,
+      circuitKey: transition.key,
+      from: transition.from,
+      to: transition.to,
+      reason: transition.reason,
+      failureCount: transition.failureCount,
+      failureThreshold: transition.failureThreshold,
+      windowMs: transition.windowMs,
+      cooldownMs: transition.cooldownMs,
+      ...(transition.openUntilMs !== undefined ? {
+        openUntil: new Date(transition.openUntilMs).toISOString(),
+      } : {}),
+      ...(transition.lastError ? { lastError: transition.lastError } : {}),
+    };
+
+    if (transition.to === 'open') {
+      log.warn('LLM circuit breaker opened', payload);
+      return;
+    }
+    log.info('LLM circuit breaker state changed', payload);
+  }
+
+  private async runTransportWithCircuitBreaker<T>(
+    method: 'llm.stream' | 'llm.complete',
+    candidate: RoutingCandidate,
+    operation: () => Promise<T>,
+  ): Promise<T> {
+    return await this.circuitBreaker.execute({
+      key: this.resolveCircuitBreakerKey(method, candidate),
+      method,
+      operation,
+      shouldRecordFailure: isRetryableError,
+      onTransition: transition => this.logCircuitBreakerTransition(transition),
+    });
+  }
+
   private async runWithModelCallGate<T>(
     purpose: RoutingPurpose,
     candidate: RoutingCandidate,
@@ -816,22 +1036,230 @@ export class LLMClient {
     }
   }
 
+  private createUsageLogicalCallId(
+    callKind: 'chat' | 'completion',
+    purpose: RoutingPurpose,
+    candidate: RoutingCandidate,
+    correlation: ResolvedCorrelationMetadata | undefined,
+    attempt: number,
+  ): string {
+    this.usageCallCounter += 1;
+    return [
+      'llm',
+      process.pid,
+      this.usageCallCounter,
+      callKind,
+      purpose,
+      correlation?.requestId ?? 'unknown',
+      correlation?.toolCallId ?? 'none',
+      candidate.provider,
+      candidate.model,
+      attempt,
+    ].join(':');
+  }
+
   private recordUsage(
     purpose: RoutingPurpose,
+    callKind: 'chat' | 'completion',
     candidate: RoutingCandidate,
     inputTokens: number,
     outputTokens: number,
     correlation: ResolvedCorrelationMetadata | undefined,
+    usageDetails: LLMUsageDetails | undefined,
+    options: {
+      startedAtMs: number;
+      completedAtMs: number;
+      ttftMs?: number;
+      attempt: number;
+      stopReason?: string;
+      providerObservability?: LLMProviderObservability;
+      metadata?: Record<string, unknown>;
+    },
   ): void {
-    this.budgetController.recordUsage({
+    const service = this.resolveBudgetService(purpose, correlation);
+    const process = this.resolveBudgetProcess(purpose, correlation);
+    const budgetRecord = this.budgetController.recordUsage({
       candidate,
       purpose,
-      service: this.resolveBudgetService(purpose, correlation),
-      process: this.resolveBudgetProcess(purpose, correlation),
+      service,
+      process,
       inputTokens,
       outputTokens,
       correlation,
     });
+    const chargeSnapshot = getRunChargeSnapshot();
+    const providerCostUsd = normalizeUsageCost(usageDetails?.cost?.total);
+    const estimatedCostUsd = normalizeUsageCost(budgetRecord.estimatedCostUsd) ?? 0;
+    const logicalCallId = this.createUsageLogicalCallId(callKind, purpose, candidate, correlation, options.attempt);
+    const metadata = {
+      ...(options.metadata ?? {}),
+      ...(options.providerObservability
+        ? {
+            routeKind: options.providerObservability.routeKind,
+            backendProvider: options.providerObservability.backendProvider,
+            backendModel: options.providerObservability.backendModel,
+            backendApi: options.providerObservability.backendApi,
+            ...(options.providerObservability.backendBaseUrl
+              ? { backendBaseUrl: options.providerObservability.backendBaseUrl }
+              : {}),
+          }
+        : {}),
+      ...(usageDetails?.raw ? { rawUsage: usageDetails.raw } : {}),
+      ...(usageDetails?.cost ? { providerCost: usageDetails.cost } : {}),
+    };
+
+    void this.usageRecorder?.recordUsageEvent({
+      logicalCallId,
+      attempt: options.attempt,
+      recordedAtMs: options.completedAtMs,
+      startedAtMs: options.startedAtMs,
+      completedAtMs: options.completedAtMs,
+      durationMs: Math.max(0, options.completedAtMs - options.startedAtMs),
+      ...(options.ttftMs !== undefined ? { ttftMs: options.ttftMs } : {}),
+      status: 'success',
+      callKind,
+      callType: correlation?.callType ?? (callKind === 'chat' ? 'chat' : 'background'),
+      purpose,
+      ...(correlation?.originType ? { originType: correlation.originType } : {}),
+      ...(correlation?.originStage ? { originStage: correlation.originStage } : {}),
+      service,
+      process,
+      ...(correlation?.turnId ? { turnId: correlation.turnId } : {}),
+      ...(correlation?.requestId ? { requestId: correlation.requestId } : {}),
+      ...(correlation?.channelId ? { channelId: correlation.channelId } : {}),
+      ...(correlation?.toolName ? { toolName: correlation.toolName } : {}),
+      ...(correlation?.toolCallId ? { toolCallId: correlation.toolCallId } : {}),
+      ...(chargeSnapshot
+        ? {
+            chargeLane: chargeSnapshot.lane,
+            chargeRunId: chargeSnapshot.lineage.runId,
+            chargeRootRunId: chargeSnapshot.lineage.rootRunId,
+            ...(chargeSnapshot.lineage.parentRunId ? { chargeParentRunId: chargeSnapshot.lineage.parentRunId } : {}),
+          }
+        : {}),
+      provider: candidate.provider,
+      model: normalizeModelIdForProvider(candidate.provider, candidate.model),
+      ...(candidate.slotKey ? { slotKey: candidate.slotKey } : {}),
+      requestedProvider: candidate.provider,
+      requestedModel: candidate.model,
+      inputTokens: usageDetails?.input ?? inputTokens,
+      outputTokens: usageDetails?.output ?? outputTokens,
+      cacheReadTokens: usageDetails?.cacheRead ?? 0,
+      cacheWriteTokens: usageDetails?.cacheWrite ?? 0,
+      ...(usageDetails?.totalTokens !== undefined ? { totalTokens: usageDetails.totalTokens } : {}),
+      ...(providerCostUsd !== undefined ? { providerCostUsd } : {}),
+      estimatedCostUsd,
+      costSource: providerCostUsd !== undefined ? 'provider' : (estimatedCostUsd > 0 ? 'estimate' : 'none'),
+      ...(usageDetails?.cost?.currency ? { currency: usageDetails.cost.currency } : {}),
+      ...(options.stopReason ? { stopReason: options.stopReason } : {}),
+      metadata,
+    }).catch((error) => {
+      log.warn('Failed to persist model usage event', {
+        error: error instanceof Error ? error.message : String(error),
+        provider: candidate.provider,
+        model: candidate.model,
+        purpose,
+        ...correlation,
+      });
+    });
+  }
+
+  /**
+   * gu8m diagnostics: when a streamed response contains tool calls with empty
+   * arguments, emit a structured, provenance-classified warning so incidents are
+   * attributable from logs alone (no live debugger required). Distinguishes:
+   *  - provider_emitted_empty: the model called the tool with no arguments at all
+   *    (no argument fragments arrived anywhere in the stream).
+   *  - stream_parse_dropped: argument fragments DID arrive but a tool call still
+   *    ended empty — the accumulator lost them (the pre-patch failure mode). This
+   *    should not fire once the pi-ai index-routing patch is applied; keeping the
+   *    classifier lets us confirm the fix holds and catch any regression.
+   */
+  private logEmptyToolArgumentProvenance(
+    toolCalls: readonly ToolCall[],
+    argumentFragmentBytes: number,
+    candidate: RoutingCandidate,
+    correlation: ResolvedCorrelationMetadata | undefined,
+    attempt: number,
+  ): void {
+    for (const toolCall of toolCalls) {
+      const provenance = classifyToolArgumentProvenance({
+        args: toolCall.input,
+        argumentFragmentBytes,
+      });
+      // Non-empty args are a genuine schema rejection if they fail downstream — not an
+      // emptiness/loss incident — so the gateway does not warn on them here.
+      if (provenance === 'validation_rejected') continue;
+      log.warn('Tool call arrived with empty arguments', {
+        provenance,
+        toolName: toolCall.name,
+        toolCallId: toolCall.id,
+        argumentFragmentBytes,
+        // 0 = first completion attempt; ≥1 = mihm empty-args completion retry.
+        attempt,
+        provider: candidate.provider,
+        model: candidate.model,
+        ...(correlation ? toDiagnosticCorrelationFields(correlation) : {}),
+      });
+    }
+  }
+
+  /**
+   * mihm fail-closed backstop. Some OpenRouter GLM upstreams intermittently emit a
+   * tool call whose streamed arguments are a literal empty object — the provider-side
+   * tool-template parser dropped them (nothing client-side can recover). Dispatching
+   * such a call fails AJV validation for required-property tools (or, worse, silently
+   * runs an optional-action tool's default). Because the flake is a per-request routing
+   * lottery, re-running the same completion usually lands a clean upstream. This wraps a
+   * single completion attempt and retries the WHOLE attempt (bounded) whenever the result
+   * carries a corrupt-empty tool call, then FAILS CLOSED by returning the last response
+   * as-is so downstream validation surfaces the error — never fabricating args, never
+   * dropping the call, never defaulting the action.
+   */
+  private async retryCompletionOnCorruptEmptyToolArgs<T>(input: {
+    attempt: (attemptIndex: number) => Promise<T>;
+    extractToolCalls: (result: T) => readonly ToolCall[];
+    tools: readonly ToolSchema[] | undefined;
+    candidate: RoutingCandidate;
+    correlation: ResolvedCorrelationMetadata | undefined;
+    purpose: string;
+    onRetriesResolved: (retries: number) => void;
+  }): Promise<T> {
+    let result = await input.attempt(0);
+    let retries = 0;
+    for (;;) {
+      const corrupt = findCorruptEmptyToolCalls(input.extractToolCalls(result), input.tools);
+      if (corrupt.length === 0) break;
+      if (retries >= MAX_EMPTY_TOOL_ARGS_COMPLETION_RETRIES) break;
+      retries += 1;
+      log.warn('Retrying completion: tool call arguments empty against a required-property schema', {
+        toolNames: corrupt.map((call) => call.name),
+        attempt: retries,
+        maxRetries: MAX_EMPTY_TOOL_ARGS_COMPLETION_RETRIES,
+        provider: input.candidate.provider,
+        model: input.candidate.model,
+        purpose: input.purpose,
+        ...(input.correlation ? toDiagnosticCorrelationFields(input.correlation) : {}),
+      });
+      result = await input.attempt(retries);
+    }
+
+    if (retries > 0) {
+      const stillCorrupt = findCorruptEmptyToolCalls(input.extractToolCalls(result), input.tools);
+      log.warn('Empty-args completion retry resolved', {
+        outcome: stillCorrupt.length > 0 ? 'exhausted_returned_corrupt' : 'recovered',
+        retries,
+        maxRetries: MAX_EMPTY_TOOL_ARGS_COMPLETION_RETRIES,
+        ...(stillCorrupt.length > 0 ? { corruptToolNames: stillCorrupt.map((call) => call.name) } : {}),
+        provider: input.candidate.provider,
+        model: input.candidate.model,
+        purpose: input.purpose,
+        ...(input.correlation ? toDiagnosticCorrelationFields(input.correlation) : {}),
+      });
+    }
+
+    input.onRetriesResolved(retries);
+    return result;
   }
 
   async stream(context: LLMContext, callbacks?: StreamCallbacks): Promise<LLMResponse> {
@@ -839,22 +1267,52 @@ export class LLMClient {
     const estimatedInputTokens = this.resolveEstimatedBudgetInputTokens(piContext);
     const correlation = this.resolveCorrelation(context.correlation, undefined, 'chat');
     const modelHint = this.mergeModelHints(context.modelHint, undefined);
+    const startedAtMs = Date.now();
+    let firstTokenAtMs: number | undefined;
+    // mihm: retries spent re-running the winning completion because it carried a
+    // corrupt-empty tool call. Recorded into model-usage metadata_json so incidents
+    // are queryable. Stays 0 unless the empty-args backstop engaged.
+    let emptyArgsRetries = 0;
 
     try {
       const { result: finalResponse, candidate, attempts } = await this.runWithFallback(
         'chat',
         async (candidateTarget) => {
-          if (this.transport) {
-            return await this.transport.stream(
-              this.buildTransportContext(context, candidateTarget, correlation),
-              callbacks,
+          const transport = this.transport;
+          if (transport) {
+            const transportContext = this.buildTransportContext(context, candidateTarget, correlation);
+            return await this.runTransportWithCircuitBreaker(
+              'llm.stream',
+              candidateTarget,
+              async () => await transport.stream(transportContext, callbacks),
             );
           }
           const { model, apiKey } = this.getModelAndKey(candidateTarget);
           const requestOptions = this.buildRequestOptions(candidateTarget, apiKey, { correlation });
-          const providerObservability = this.buildProviderObservability(candidateTarget, model, piContext, correlation);
+          const promptCaching = this.applyModelAgnosticPromptCache({
+            candidate: candidateTarget,
+            model,
+            systemPrompt: piContext.systemPrompt ?? '',
+            boundaries: context.promptCacheBoundaries,
+            correlation,
+            requestOptions,
+          });
+          const providerObservability = this.buildProviderObservability(
+            candidateTarget,
+            model,
+            piContext,
+            correlation,
+            promptCaching ?? undefined,
+          );
 
-          return withRetry(async () => {
+          return this.retryCompletionOnCorruptEmptyToolArgs<LLMResponse>({
+            tools: context.tools,
+            candidate: candidateTarget,
+            correlation,
+            purpose: 'chat',
+            extractToolCalls: (result) => result.toolCalls,
+            onRetriesResolved: (retries) => { emptyArgsRetries = retries; },
+            attempt: (attemptIndex) => withRetry(async () => {
             const eventStream = streamSimple(
               model,
               piContext,
@@ -866,22 +1324,52 @@ export class LLMClient {
             const toolCalls: ToolCall[] = [];
             let response: LLMResponse | null = null;
             let emittedData = false;
+            let emittedTextLength = 0;
+            let sawTextDelta = false;
+            // gu8m: total raw tool-argument-fragment bytes observed across the whole
+            // stream. Lets us classify empty final tool arguments as provider_emitted_empty
+            // (no fragments ever arrived) vs stream_parse_dropped (fragments arrived but the
+            // accumulator lost them) — response-level, since the pre-patch bug orphaned
+            // fragments onto a *different* content block than the named call.
+            let toolArgumentFragmentBytes = 0;
 
             try {
               for await (const event of eventStream) {
                 switch (event.type) {
                   case 'text_delta':
-                    emittedData = true;
+                    if (firstTokenAtMs === undefined) firstTokenAtMs = Date.now();
+                    sawTextDelta = true;
                     content += event.delta;
-                    callbacks?.onText?.(event.delta);
+                    assertNoProviderResponsePrefixArtifact(content, candidateTarget);
+                    if (isPotentialProviderResponsePrefixArtifact(content)) {
+                      break;
+                    }
+                    {
+                      const unEmitted = content.slice(emittedTextLength);
+                      emittedTextLength = content.length;
+                      if (unEmitted) {
+                        emittedData = true;
+                        callbacks?.onText?.(unEmitted);
+                      }
+                    }
                     break;
 
                   case 'thinking_delta':
+                    if (firstTokenAtMs === undefined) firstTokenAtMs = Date.now();
                     emittedData = true;
                     reasoning += event.delta;
                     break;
 
+                  case 'toolcall_delta': {
+                    const fragment = (event as { delta?: unknown }).delta;
+                    if (typeof fragment === 'string') {
+                      toolArgumentFragmentBytes += fragment.length;
+                    }
+                    break;
+                  }
+
                   case 'toolcall_end':
+                    if (firstTokenAtMs === undefined) firstTokenAtMs = Date.now();
                     emittedData = true;
                     toolCalls.push({
                       id: event.toolCall.id,
@@ -892,10 +1380,12 @@ export class LLMClient {
                     break;
 
                   case 'done': {
+                    if (firstTokenAtMs === undefined) firstTokenAtMs = Date.now();
                     const contentBlocks = event.message.content as unknown[];
+                    const finalTextContent = extractTextContent(contentBlocks);
                     // If text_delta events didn't fire, extract text from content blocks
-                    if (!content) {
-                      content = extractTextContent(contentBlocks);
+                    if (!content || (isPotentialProviderResponsePrefixArtifact(content) && finalTextContent)) {
+                      content = finalTextContent;
                     }
                     // Extract reasoning from content blocks if thinking_delta didn't fire
                     if (!reasoning) {
@@ -904,14 +1394,29 @@ export class LLMClient {
                     const finalToolCalls = extractToolCallsFromContentBlocks(contentBlocks);
                     // Normalize away stringified content block arrays from streaming
                     content = normalizeContent(content);
+                    assertNoProviderResponsePrefixArtifact(content, candidateTarget);
+                    if (sawTextDelta && content.length > emittedTextLength) {
+                      const unEmitted = content.slice(emittedTextLength);
+                      emittedTextLength = content.length;
+                      if (unEmitted) {
+                        emittedData = true;
+                        callbacks?.onText?.(unEmitted);
+                      }
+                    }
+                    const usageDetails = normalizeLLMUsageDetails(
+                      event.message.usage,
+                      event.message.usage.input,
+                      event.message.usage.output,
+                    );
                     response = {
                       content,
                       ...(reasoning ? { reasoning } : {}),
                       providerObservability,
                       toolCalls: finalToolCalls.length > 0 ? finalToolCalls : toolCalls,
                       model: event.message.model,
-                      inputTokens: event.message.usage.input,
-                      outputTokens: event.message.usage.output,
+                      inputTokens: usageDetails.input,
+                      outputTokens: usageDetails.output,
+                      usageDetails,
                       stopReason: event.reason,
                     };
                     break;
@@ -935,11 +1440,19 @@ export class LLMClient {
             }
 
             if (response) {
+              assertUsableProviderResponse(response, candidateTarget);
+              this.logEmptyToolArgumentProvenance(
+                response.toolCalls,
+                toolArgumentFragmentBytes,
+                candidateTarget,
+                correlation,
+                attemptIndex,
+              );
               return response;
             }
 
             log.warn('Stream completed without done event', { model: String(model.id), hasContent: !!content });
-            return {
+            const incompleteResponse = {
               content,
               ...(reasoning ? { reasoning } : {}),
               providerObservability,
@@ -947,9 +1460,19 @@ export class LLMClient {
               model: String(model.id),
               inputTokens: 0,
               outputTokens: 0,
+              usageDetails: normalizeLLMUsageDetails(undefined, 0, 0),
               stopReason: 'unknown',
             };
+            assertUsableProviderResponse(incompleteResponse, candidateTarget);
+            return incompleteResponse;
           }, llmRetryConfig(this.config), {
+            circuitBreaker: {
+              breaker: this.circuitBreaker,
+              key: this.resolveCircuitBreakerKey('llm.stream', candidateTarget),
+              method: 'llm.stream',
+              onTransition: transition => this.logCircuitBreakerTransition(transition),
+            },
+            shouldRetry: ({ error }) => shouldRetryWithinCandidate(error),
             onRetry: ({ attempt, maxRetries, delayMs, error }) => {
               log.warn('LLM stream failed, retrying', {
                 model: String(model.id),
@@ -962,6 +1485,7 @@ export class LLMClient {
                 purpose: 'chat',
               });
             },
+          }),
           });
         },
         {
@@ -974,6 +1498,10 @@ export class LLMClient {
       log.info('LLM stream completed', {
         model: candidate.model,
         provider: candidate.provider,
+        routeKind: finalResponse.providerObservability?.routeKind ?? 'unknown',
+        backendProvider: finalResponse.providerObservability?.backendProvider,
+        backendModel: finalResponse.providerObservability?.backendModel,
+        backendApi: finalResponse.providerObservability?.backendApi,
         attempts,
         ...correlation,
         purpose: 'chat',
@@ -981,10 +1509,25 @@ export class LLMClient {
 
       this.recordUsage(
         'chat',
+        'chat',
         candidate,
         finalResponse.inputTokens,
         finalResponse.outputTokens,
         correlation,
+        finalResponse.usageDetails,
+        {
+          startedAtMs,
+          completedAtMs: Date.now(),
+          ...(firstTokenAtMs !== undefined ? { ttftMs: Math.max(0, firstTokenAtMs - startedAtMs) } : {}),
+          attempt: attempts,
+          stopReason: finalResponse.stopReason,
+          providerObservability: finalResponse.providerObservability,
+          metadata: {
+            fallbackAttempts: attempts,
+            toolCallCount: finalResponse.toolCalls.length,
+            emptyArgsRetries,
+          },
+        },
       );
 
       callbacks?.onDone?.(finalResponse);
@@ -1006,22 +1549,50 @@ export class LLMClient {
     const estimatedInputTokens = this.resolveEstimatedBudgetInputTokens(piContext);
     const correlation = this.resolveCorrelation(context.correlation, options.correlation, purpose);
     const modelHint = this.mergeModelHints(context.modelHint, options.modelHint);
+    const startedAtMs = Date.now();
+    // mihm: see stream(). disableRetry callers opt out of all retries, so the
+    // empty-args backstop only engages on the retrying path; stays 0 otherwise.
+    let emptyArgsRetries = 0;
 
     const { result: response, candidate, attempts } = await this.runWithFallback(
       routingPurpose,
       async (candidateTarget) => {
-        if (this.transport) {
-          return await this.transport.complete(
-            this.buildTransportContext(context, candidateTarget, correlation),
-            purpose,
-          );
+        const transport = this.transport;
+        if (transport) {
+          const transportContext = this.buildTransportContext(context, candidateTarget, correlation);
+          const executeTransport = async () => await transport.complete(transportContext, purpose, {
+            ...(options.signal ? { signal: options.signal } : {}),
+          });
+          const response = options.disableRetry
+            ? await executeTransport()
+            : await this.runTransportWithCircuitBreaker(
+                'llm.complete',
+                candidateTarget,
+                executeTransport,
+              );
+          assertUsableProviderResponse(response, candidateTarget);
+          return response;
         }
         const { model, apiKey } = this.getModelAndKey(candidateTarget);
         const requestOptions = this.buildRequestOptions(candidateTarget, apiKey, {
           signal: options.signal,
           correlation,
         });
-        const providerObservability = this.buildProviderObservability(candidateTarget, model, piContext, correlation);
+        const promptCaching = this.applyModelAgnosticPromptCache({
+          candidate: candidateTarget,
+          model,
+          systemPrompt: piContext.systemPrompt ?? '',
+          boundaries: context.promptCacheBoundaries,
+          correlation,
+          requestOptions,
+        });
+        const providerObservability = this.buildProviderObservability(
+          candidateTarget,
+          model,
+          piContext,
+          correlation,
+          promptCaching ?? undefined,
+        );
 
         const request = async () => {
           try {
@@ -1040,28 +1611,60 @@ export class LLMClient {
         };
 
         if (options.disableRetry) {
+          const response = await request();
+          assertUsableProviderResponse(response, candidateTarget);
           return {
-            response: await request(),
+            response,
             providerObservability,
           };
         }
 
-        const response = await withRetry(request, llmRetryConfig(this.config), {
-          onRetry: ({ attempt, maxRetries, delayMs, error }) => {
-            log.warn('LLM complete failed, retrying', {
-              model: String(model.id),
-              provider: candidateTarget.provider,
-              attempt,
-              maxRetries,
-              delayMs,
-              error: error.message,
-              ...correlation,
-              purpose,
-              routingPurpose,
-            });
-          },
+        return this.retryCompletionOnCorruptEmptyToolArgs<{
+          response: Awaited<ReturnType<typeof completeSimple>>;
+          providerObservability: LLMProviderObservability;
+        }>({
+          tools: context.tools,
+          candidate: candidateTarget,
+          correlation,
+          purpose,
+          extractToolCalls: (result) => extractCompletionToolCalls(result.response),
+          onRetriesResolved: (retries) => { emptyArgsRetries = retries; },
+          attempt: (attemptIndex) => withRetry(async () => {
+            const attemptResponse = await request();
+            assertUsableProviderResponse(attemptResponse, candidateTarget);
+            this.logEmptyToolArgumentProvenance(
+              extractCompletionToolCalls(attemptResponse),
+              // Non-streaming: there is no fragment channel, so an empty payload is
+              // always a provider-emitted empty (never an accumulator drop).
+              0,
+              candidateTarget,
+              correlation,
+              attemptIndex,
+            );
+            return { response: attemptResponse, providerObservability };
+          }, llmRetryConfig(this.config), {
+            circuitBreaker: {
+              breaker: this.circuitBreaker,
+              key: this.resolveCircuitBreakerKey('llm.complete', candidateTarget),
+              method: 'llm.complete',
+              onTransition: transition => this.logCircuitBreakerTransition(transition),
+            },
+            shouldRetry: ({ error }) => shouldRetryWithinCandidate(error),
+            onRetry: ({ attempt, maxRetries, delayMs, error }) => {
+              log.warn('LLM complete failed, retrying', {
+                model: String(model.id),
+                provider: candidateTarget.provider,
+                attempt,
+                maxRetries,
+                delayMs,
+                error: error.message,
+                ...correlation,
+                purpose,
+                routingPurpose,
+              });
+            },
+          }),
         });
-        return { response, providerObservability };
       },
         {
           modelHint,
@@ -1071,23 +1674,13 @@ export class LLMClient {
         },
       );
 
-    log.info('LLM complete finished', {
-      model: candidate.model,
-      provider: candidate.provider,
-      attempts,
-      requestedModelHint: modelHint?.model,
-      ...correlation,
-      purpose,
-      routingPurpose,
-    });
-
     const completionResponse = (
       'response' in response
         ? response.response
         : response
     ) as {
       content: unknown;
-      usage?: { input: number; output: number };
+      usage?: unknown;
       reasoning?: string;
       toolCalls?: ToolCall[];
       model: string;
@@ -1096,6 +1689,26 @@ export class LLMClient {
       stopReason?: string;
       providerObservability?: LLMProviderObservability;
     };
+    const providerObservability = (
+      ('providerObservability' in response && response.providerObservability)
+        ? response.providerObservability
+        : completionResponse.providerObservability
+    );
+
+    log.info('LLM complete finished', {
+      model: candidate.model,
+      provider: candidate.provider,
+      routeKind: providerObservability?.routeKind ?? 'unknown',
+      backendProvider: providerObservability?.backendProvider,
+      backendModel: providerObservability?.backendModel,
+      backendApi: providerObservability?.backendApi,
+      attempts,
+      requestedModelHint: modelHint?.model,
+      ...correlation,
+      purpose,
+      routingPurpose,
+    });
+
     const responseContent = completionResponse.content as unknown;
     const contentBlocks = Array.isArray(responseContent) ? responseContent : undefined;
     const content = typeof responseContent === 'string'
@@ -1104,31 +1717,50 @@ export class LLMClient {
     const reasoning = typeof completionResponse.reasoning === 'string'
       ? completionResponse.reasoning
       : extractReasoningContent(contentBlocks);
-    const inputTokens = completionResponse.usage?.input ?? completionResponse.inputTokens ?? 0;
-    const outputTokens = completionResponse.usage?.output ?? completionResponse.outputTokens ?? 0;
+    const usageDetails = normalizeLLMUsageDetails(
+      completionResponse.usage,
+      completionResponse.inputTokens ?? 0,
+      completionResponse.outputTokens ?? 0,
+    );
+    const inputTokens = usageDetails.input;
+    const outputTokens = usageDetails.output;
 
     this.recordUsage(
       routingPurpose,
+      'completion',
       candidate,
       inputTokens,
       outputTokens,
       correlation,
+      usageDetails,
+      {
+        startedAtMs,
+        completedAtMs: Date.now(),
+        attempt: attempts,
+        stopReason: completionResponse.stopReason ?? 'unknown',
+        providerObservability,
+        metadata: {
+          completionPurpose: purpose,
+          routingPurpose,
+          fallbackAttempts: attempts,
+          emptyArgsRetries,
+        },
+      },
     );
 
     return {
       content: normalizeContent(content),
       ...(reasoning ? { reasoning } : {}),
       ...(
-        ('providerObservability' in response && response.providerObservability)
-          ? { providerObservability: response.providerObservability }
-          : (completionResponse.providerObservability
-            ? { providerObservability: completionResponse.providerObservability }
-            : {})
+        providerObservability
+          ? { providerObservability }
+          : {}
       ),
       toolCalls: Array.isArray(completionResponse.toolCalls) ? completionResponse.toolCalls : [],
       model: completionResponse.model,
       inputTokens,
       outputTokens,
+      usageDetails,
       stopReason: completionResponse.stopReason ?? 'unknown',
     };
   }
@@ -1235,6 +1867,97 @@ function isAbortError(error: Error): boolean {
   return error.name === 'AbortError' || /aborted|abort|cancelled|canceled/i.test(error.message);
 }
 
+function shouldRetryWithinCandidate(error: Error): boolean {
+  return classifyLLMError(error).category !== 'connection_unavailable';
+}
+
+
+function normalizeUsageCount(value: unknown): number {
+  const numeric = toFiniteNumber(value);
+  return numeric !== undefined && numeric > 0 ? Math.floor(numeric) : 0;
+}
+
+function normalizeUsageCost(value: unknown): number | undefined {
+  const numeric = toFiniteNumber(value);
+  return numeric !== undefined && numeric >= 0 ? numeric : undefined;
+}
+
+function normalizeUsageCountFromRecord(record: Record<string, unknown>, ...keys: string[]): number {
+  for (const key of keys) {
+    const count = normalizeUsageCount(record[key]);
+    if (count > 0) return count;
+  }
+  return 0;
+}
+
+function optionalRecord(value: unknown): Record<string, unknown> {
+  return isRecord(value) ? value : {};
+}
+
+function normalizeLLMUsageCostDetails(value: unknown): LLMUsageCostDetails | undefined {
+  const totalFromNumericCost = normalizeUsageCost(value);
+  if (totalFromNumericCost !== undefined) {
+    return { total: totalFromNumericCost };
+  }
+
+  if (!isRecord(value)) return undefined;
+  const input = normalizeUsageCost(value.input);
+  const output = normalizeUsageCost(value.output);
+  const cacheRead = normalizeUsageCost(value.cacheRead);
+  const cacheWrite = normalizeUsageCost(value.cacheWrite);
+  const total = normalizeUsageCost(value.total);
+  const currency = typeof value.currency === 'string' && value.currency.trim().length > 0
+    ? value.currency.trim().toUpperCase()
+    : undefined;
+  if (
+    input === undefined
+    && output === undefined
+    && cacheRead === undefined
+    && cacheWrite === undefined
+    && total === undefined
+    && currency === undefined
+  ) {
+    return undefined;
+  }
+  return {
+    ...(input !== undefined ? { input } : {}),
+    ...(output !== undefined ? { output } : {}),
+    ...(cacheRead !== undefined ? { cacheRead } : {}),
+    ...(cacheWrite !== undefined ? { cacheWrite } : {}),
+    ...(total !== undefined ? { total } : {}),
+    ...(currency ? { currency } : {}),
+  };
+}
+
+function normalizeLLMUsageDetails(
+  value: unknown,
+  fallbackInputTokens: number,
+  fallbackOutputTokens: number,
+): LLMUsageDetails {
+  const record = isRecord(value) ? value : {};
+  const promptTokenDetails = optionalRecord(record.prompt_tokens_details);
+  const input = normalizeUsageCountFromRecord(record, 'input', 'prompt_tokens')
+    || normalizeUsageCount(fallbackInputTokens);
+  const output = normalizeUsageCountFromRecord(record, 'output', 'completion_tokens')
+    || normalizeUsageCount(fallbackOutputTokens);
+  const cacheRead = normalizeUsageCountFromRecord(record, 'cacheRead')
+    || normalizeUsageCount(promptTokenDetails.cached_tokens);
+  const cacheWrite = normalizeUsageCountFromRecord(record, 'cacheWrite')
+    || normalizeUsageCount(promptTokenDetails.cache_write_tokens);
+  const totalTokens = normalizeUsageCountFromRecord(record, 'totalTokens', 'total_tokens')
+    || input + output + cacheRead + cacheWrite;
+  const cost = normalizeLLMUsageCostDetails(record.cost);
+  return {
+    input,
+    output,
+    cacheRead,
+    cacheWrite,
+    totalTokens,
+    ...(cost ? { cost } : {}),
+    ...(isRecord(value) ? { raw: { ...value } } : {}),
+  };
+}
+
 function toFiniteNumber(value: unknown): number | undefined {
   if (typeof value !== 'number' || !Number.isFinite(value)) return undefined;
   return value;
@@ -1280,6 +2003,99 @@ function normalizeSharedRouteKey(value: string | null | undefined): string {
   }
 }
 
+/**
+ * Provenance of a tool call's arguments at the point it is diagnosed (empty-args
+ * validation failure, or gateway-side stream inspection). See gu8m / mihm.
+ *  - provider_emitted_empty: args empty AND either no argument-fragment bytes were
+ *    streamed (the model genuinely called the tool with no arguments) OR the only
+ *    fragment on the wire was a literal empty JSON object '{}' (the provider-side
+ *    GLM tool-template parser failure — mihm; nothing was lost client-side).
+ *  - stream_parse_dropped: args empty BUT non-empty argument-fragment bytes were
+ *    streamed (fragments were lost during accumulation — the pre-patch failure mode).
+ *  - validation_rejected: args are non-empty (any failure is a real schema mismatch,
+ *    not lost/absent arguments).
+ */
+export type ToolArgumentProvenance =
+  | 'provider_emitted_empty'
+  | 'stream_parse_dropped'
+  | 'validation_rejected';
+
+// Byte length of a literal empty JSON object ('{}'). A tool call whose *entire*
+// streamed argument payload is exactly these bytes came off the wire already empty
+// (mihm: provider emitted '{}'), so it is a provider-side empty, not an accumulator
+// drop — even though fragment bytes were technically observed.
+const EMPTY_JSON_OBJECT_ARGUMENT_BYTES = '{}'.length;
+
+export function classifyToolArgumentProvenance(input: {
+  args: Record<string, unknown> | undefined | null;
+  argumentFragmentBytes: number;
+}): ToolArgumentProvenance {
+  const isEmpty = !input.args || Object.keys(input.args).length === 0;
+  if (!isEmpty) {
+    return 'validation_rejected';
+  }
+  if (
+    input.argumentFragmentBytes === 0
+    || input.argumentFragmentBytes === EMPTY_JSON_OBJECT_ARGUMENT_BYTES
+  ) {
+    return 'provider_emitted_empty';
+  }
+  return 'stream_parse_dropped';
+}
+
+/**
+ * A tool call is a mihm "corrupt-empty" call when its arguments are empty
+ * ({} / null / undefined) AND the tool's own schema declares required properties.
+ * Such a call can never satisfy validation, so it is retried (see
+ * LLMClient.retryCompletionOnCorruptEmptyToolArgs) rather than dispatched. Tool
+ * calls whose schema accepts {} are intentionally NOT flagged — an empty payload
+ * is valid for them and must dispatch normally.
+ */
+function toolInputIsEmpty(input: Record<string, unknown> | null | undefined): boolean {
+  return !input || Object.keys(input).length === 0;
+}
+
+function toolSchemaRequiresProperties(schema: Record<string, unknown> | undefined): boolean {
+  if (!schema) return false;
+  const required = schema.required;
+  return Array.isArray(required) && required.length > 0;
+}
+
+export function findCorruptEmptyToolCalls(
+  toolCalls: readonly ToolCall[],
+  tools: readonly ToolSchema[] | undefined,
+): ToolCall[] {
+  if (!tools || tools.length === 0) return [];
+  const schemaByName = new Map(tools.map((tool) => [tool.name, tool.inputSchema]));
+  return toolCalls.filter((call) => {
+    if (!toolInputIsEmpty(call.input)) return false;
+    // Unknown tool → we cannot prove it requires arguments, so do not flag it;
+    // any downstream failure surfaces normally (no behavior change vs. today).
+    return toolSchemaRequiresProperties(schemaByName.get(call.name));
+  });
+}
+
+function toDiagnosticCorrelationFields(
+  correlation: ResolvedCorrelationMetadata,
+): Record<string, string> {
+  const fields: Record<string, string> = {};
+  if (correlation.requestId) fields.requestId = correlation.requestId;
+  if (correlation.turnId) fields.turnId = correlation.turnId;
+  if (correlation.channelId) fields.channelId = correlation.channelId;
+  return fields;
+}
+
+/**
+ * Tool calls a non-streaming completion would dispatch. Matches complete()'s final
+ * derivation (the raw response's `toolCalls` field) so the mihm empty-args retry
+ * decision inspects exactly what would otherwise be sent to the tools.
+ */
+function extractCompletionToolCalls(raw: unknown): ToolCall[] {
+  if (!raw || typeof raw !== 'object') return [];
+  const toolCalls = (raw as { toolCalls?: unknown }).toolCalls;
+  return Array.isArray(toolCalls) ? toolCalls as ToolCall[] : [];
+}
+
 function extractToolCallsFromContentBlocks(blocks?: unknown[]): ToolCall[] {
   if (!Array.isArray(blocks) || blocks.length === 0) return [];
   return blocks.flatMap((block) => {
@@ -1300,6 +2116,60 @@ function extractToolCallsFromContentBlocks(blocks?: unknown[]): ToolCall[] {
         : {},
     }];
   });
+}
+
+function assertUsableProviderResponse(
+  response: {
+    content?: unknown;
+    toolCalls?: unknown;
+  },
+  candidate: RoutingCandidate,
+): void {
+  const contentBlocks = Array.isArray(response.content) ? response.content : undefined;
+  const content = typeof response.content === 'string'
+    ? response.content
+    : extractTextContent(contentBlocks);
+  const normalizedContent = normalizeContent(content);
+  assertNoProviderResponsePrefixArtifact(normalizedContent, candidate);
+  const directToolCalls = Array.isArray(response.toolCalls) ? response.toolCalls : [];
+  const blockToolCalls = extractToolCallsFromContentBlocks(contentBlocks);
+
+  if (normalizedContent.trim().length > 0 || directToolCalls.length > 0 || blockToolCalls.length > 0) {
+    return;
+  }
+
+  throw new Error(`LLM response from ${candidate.provider}/${candidate.model} contained no text or tool calls`);
+}
+
+function detectProviderResponsePrefixArtifact(content: string): string | null {
+  const normalized = content.trimStart();
+  if (!normalized) return null;
+  const specialToken = PROVIDER_RESPONSE_PREFIX_ARTIFACTS.find((artifact) => normalized.startsWith(artifact));
+  if (specialToken) return specialToken;
+  const responseHeader = normalized.match(PROVIDER_RESPONSE_HEADER_ARTIFACT_PATTERN)?.[0]?.trim();
+  return responseHeader || null;
+}
+
+function isPotentialProviderResponsePrefixArtifact(content: string): boolean {
+  const normalized = content.trimStart();
+  if (!normalized) return true;
+  if (detectProviderResponsePrefixArtifact(content)) return true;
+  if (PROVIDER_RESPONSE_PREFIX_ARTIFACTS.some((artifact) => artifact.startsWith(normalized))) return true;
+  return isPotentialProviderResponseHeaderArtifact(normalized);
+}
+
+function assertNoProviderResponsePrefixArtifact(content: string, candidate: RoutingCandidate): void {
+  const artifact = detectProviderResponsePrefixArtifact(content);
+  if (!artifact) return;
+  throw new Error(
+    `LLM response from ${candidate.provider}/${candidate.model} began with provider template artifact ${artifact}`,
+  );
+}
+
+function isPotentialProviderResponseHeaderArtifact(normalizedContent: string): boolean {
+  if (!normalizedContent.startsWith('#')) return false;
+  if (/\r?\n/u.test(normalizedContent)) return false;
+  return normalizedContent.length <= PROVIDER_RESPONSE_HEADER_POTENTIAL_MAX_CHARS;
 }
 
 function normalizeProxyModelId(provider: string, modelId: string): string {

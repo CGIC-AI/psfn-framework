@@ -3,7 +3,11 @@ import Database from 'better-sqlite3';
 import * as sqliteVec from 'sqlite-vec';
 import { MemoryStore } from './store.js';
 import { DEFAULT_EMBEDDING_CONFIG } from './embedding.js';
-import type { PurrMemory } from './types.js';
+import {
+  DURABLE_PREFERENCE_MEMORY_TAG,
+  DURABLE_RETENTION_TAG,
+  type PurrMemory,
+} from './types.js';
 
 const EMBEDDING_DIMS = DEFAULT_EMBEDDING_CONFIG.dims;
 
@@ -165,6 +169,23 @@ describe('MemoryStore', () => {
       const all = store.getAllActiveMemories();
       expect(all[0].salience).toBe(0.3);
       expect(all[0].accessCount).toBe(5);
+    });
+
+    it('round-trips retention class on insert and update', () => {
+      const emb = makeEmbedding(1);
+      store.insertMemory(makeMemory('m-retention', 'My favorite color is teal.', {
+        tags: ['preference', 'favorite', 'preference:color'],
+        retentionClass: 'durable',
+      }), emb);
+
+      expect(store.getById('m-retention')).toMatchObject({
+        retentionClass: 'durable',
+        tags: expect.arrayContaining(['preference', 'favorite', 'preference:color']),
+      });
+
+      store.updateMemory('m-retention', { retentionClass: 'standard' });
+
+      expect(store.getById('m-retention')?.retentionClass).toBe('standard');
     });
 
     it('superseded memories are excluded from active list', () => {
@@ -423,6 +444,104 @@ describe('MemoryStore', () => {
       expect(store.countActiveMemories()).toBe(3);
     });
 
+    it('filters, counts, paginates, and summarizes Garden admin memory lists in the store', () => {
+      const base = Date.UTC(2026, 3, 1, 12, 0, 0);
+      store.insertMemory(
+        makeMemory('admin-standard', 'A standard semantic fact.', {
+          extractedAt: base,
+          lastAccessed: base,
+          sensitivity: 'personal',
+        }),
+        makeEmbedding(1),
+      );
+      store.insertMemory(
+        makeMemory('admin-durable-pref-old', "V's favorite tea is oolong.", {
+          extractedAt: base + 1_000,
+          lastAccessed: base + 1_000,
+          tags: ['favorite', 'preference:drink'],
+          retentionClass: 'durable',
+          sensitivity: 'personal',
+        }),
+        makeEmbedding(2),
+      );
+      store.insertMemory(
+        makeMemory('admin-durable-pref-new', 'V prefers matte stationery.', {
+          extractedAt: base + 2_000,
+          lastAccessed: base + 2_000,
+          tags: ['preference', 'durable_preference'],
+          retentionClass: 'durable',
+          sensitivity: 'confidential',
+          consentFlags: { allowRecall: false },
+          contactId: 'contact-v',
+          scopeTags: ['project:stationery'],
+        }),
+        makeEmbedding(3),
+      );
+      store.insertMemory(
+        makeMemory('admin-internal', 'Context feedback should stay hidden.', {
+          extractedAt: base + 3_000,
+          lastAccessed: base + 3_000,
+          sourceRef: 'source:context_feedback|turn:test|score:0.5',
+          tags: ['context_feedback'],
+          sensitivity: 'confidential',
+        }),
+        makeEmbedding(4),
+      );
+      store.insertMemory(
+        makeMemory('admin-deleted', 'Deleted memory should stay hidden.', {
+          extractedAt: base + 4_000,
+          lastAccessed: base + 4_000,
+          deletedAt: base + 5_000,
+          deletedBy: 'test',
+        }),
+        makeEmbedding(5),
+      );
+      store.insertMemory(
+        makeMemory('admin-superseded', 'Superseded memory should stay hidden.', {
+          extractedAt: base + 6_000,
+          lastAccessed: base + 6_000,
+          supersededBy: 'replacement',
+        }),
+        makeEmbedding(6),
+      );
+
+      const page = store.listAdminMemories({
+        retentionClass: 'durable',
+        preferenceOnly: true,
+        limit: 1,
+        offset: 1,
+      });
+
+      expect(page.total).toBe(2);
+      expect(page.memories.map(memory => memory.id)).toEqual(['admin-durable-pref-old']);
+      expect(page.privacySummary).toEqual({
+        activeMemoryCount: 3,
+        highSensitivityCount: 1,
+        consentGatedCount: 1,
+        contactLinkedCount: 1,
+        scopedCount: 1,
+        preferenceCount: 2,
+        durablePreferenceCount: 2,
+        sensitivityCounts: {
+          confidential: 1,
+          personal: 2,
+        },
+      });
+
+      const filtered = store.listAdminMemories({
+        type: 'semantic',
+        sensitivity: 'confidential',
+        startDate: base + 2_000,
+        endDate: base + 2_000,
+      });
+      expect(filtered.total).toBe(1);
+      expect(filtered.memories.map(memory => memory.id)).toEqual(['admin-durable-pref-new']);
+
+      const unfiltered = store.listAdminMemories({ limit: 10 });
+      expect(unfiltered.total).toBe(3);
+      expect(unfiltered.memories.map(memory => memory.id)).not.toContain('admin-internal');
+    });
+
     it('getMemoriesByChannel returns sensitivity', () => {
       const emb = makeEmbedding(1);
       store.insertMemory(
@@ -548,6 +667,82 @@ describe('MemoryStore', () => {
       const byAbstracted = store.getAbstractionLinksForAbstractedMemory('m-abstract');
       expect(byAbstracted).toHaveLength(1);
       expect(byAbstracted[0].sourceMemoryId).toBe('m-source');
+    });
+
+    it('records and lists first-class memory evolution links', () => {
+      store.insertMemory(makeMemory('m-source', 'Source memory'), makeEmbedding(1));
+      store.insertMemory(makeMemory('m-target', 'Target memory'), makeEmbedding(2));
+      store.insertMemory(makeMemory('m-other', 'Other target memory'), makeEmbedding(3));
+
+      const relations = ['supersedes', 'updates', 'negates', 'conflicts_with'] as const;
+      const links = relations.map((relation, index) => store.recordEvolutionLink({
+        linkId: `evolution-${relation}`,
+        sourceMemoryId: 'm-source',
+        targetMemoryId: index === 3 ? 'm-other' : 'm-target',
+        relation,
+        confidence: 0.25 + (index * 0.2),
+        reason: `${relation} reason`,
+        sourceRef: `source:tool:memory_write|invocation:call-${index}`,
+        sourceType: 'tool_write',
+        provenanceRefs: [`l0:turn-${index}`, '  ', `memory:m-source`],
+        provenance: {
+          toolName: 'memory_write',
+          toolCallId: `call-${index}`,
+        },
+        createdAt: 100 + index,
+      }));
+
+      expect(links.map(link => link.relation)).toEqual([...relations]);
+      expect(links[0]).toMatchObject({
+        id: 'evolution-supersedes',
+        sourceMemoryId: 'm-source',
+        targetMemoryId: 'm-target',
+        relation: 'supersedes',
+        confidence: 0.25,
+        reason: 'supersedes reason',
+        sourceType: 'tool_write',
+        provenanceRefs: ['l0:turn-0', 'memory:m-source'],
+        provenance: {
+          toolName: 'memory_write',
+          toolCallId: 'call-0',
+        },
+        createdAt: 100,
+      });
+
+      const bySource = store.getEvolutionLinksForSourceMemory('m-source');
+      expect(bySource.map(link => link.relation)).toEqual([
+        'conflicts_with',
+        'negates',
+        'updates',
+        'supersedes',
+      ]);
+      expect(store.getEvolutionLinksForSourceMemory('m-source', 'updates')).toEqual([links[1]]);
+
+      const byTarget = store.getEvolutionLinksForTargetMemory('m-target');
+      expect(byTarget.map(link => link.relation)).toEqual(['negates', 'updates', 'supersedes']);
+      expect(store.getEvolutionLinksForTargetMemory('m-other', 'conflicts_with')).toEqual([links[3]]);
+    });
+
+    it('rejects memory evolution links with invalid confidence or endpoints', () => {
+      expect(() => store.recordEvolutionLink({
+        sourceMemoryId: 'm-source',
+        targetMemoryId: 'm-target',
+        relation: 'updates',
+        confidence: -0.01,
+      })).toThrow('confidence must be between 0 and 1');
+
+      expect(() => store.recordEvolutionLink({
+        sourceMemoryId: 'm-source',
+        targetMemoryId: 'm-target',
+        relation: 'updates',
+        confidence: 1.01,
+      })).toThrow('confidence must be between 0 and 1');
+
+      expect(() => store.recordEvolutionLink({
+        sourceMemoryId: 'same',
+        targetMemoryId: 'same',
+        relation: 'conflicts_with',
+      })).toThrow('distinct source and target');
     });
 
     it('getMemoriesByContact returns active memories for canonical contact', () => {
@@ -906,6 +1101,76 @@ describe('MemoryStore', () => {
       const mem = store.getById('m1');
       expect(mem?.type).toBe('relational');
       expect(mem?.sensitivity).toBe('intimate');
+    });
+
+    it('bulkUpdate applies retention tags and skips deleted or missing memories', () => {
+      store.insertMemory(makeMemory('m1', 'V prefers oolong tea', {
+        tags: ['preference:tea'],
+      }), makeEmbedding(1));
+      store.insertMemory(makeMemory('m2', 'Standard memory', {
+        tags: [DURABLE_RETENTION_TAG, DURABLE_PREFERENCE_MEMORY_TAG, 'preference'],
+        retentionClass: 'durable',
+      }), makeEmbedding(2));
+      store.insertMemory(makeMemory('m-deleted', 'Deleted memory', {
+        tags: ['preference:music'],
+      }), makeEmbedding(3));
+      store.softDeleteMemory('m-deleted', { deletedBy: 'test' });
+
+      const durableCount = store.bulkUpdate(['m1', 'missing', 'm-deleted'], { retentionClass: 'durable' });
+      expect(durableCount).toBe(1);
+      expect(store.getById('m1')).toMatchObject({
+        retentionClass: 'durable',
+        tags: ['preference:tea', DURABLE_RETENTION_TAG, DURABLE_PREFERENCE_MEMORY_TAG],
+      });
+      expect(store.getById('m-deleted')?.retentionClass).toBeUndefined();
+      expect(store.getById('m-deleted')?.tags).toEqual(['preference:music']);
+
+      const standardCount = store.bulkUpdate(['m1', 'm2'], { retentionClass: 'standard' });
+      expect(standardCount).toBe(2);
+      expect(store.getById('m1')).toMatchObject({
+        retentionClass: 'standard',
+        tags: ['preference:tea'],
+      });
+      expect(store.getById('m2')).toMatchObject({
+        retentionClass: 'standard',
+        tags: ['preference'],
+      });
+    });
+
+    it('bulkUpdateSalience applies distinct salience values per memory', () => {
+      store.insertMemory(makeMemory('m1', 'A', { salience: 0.8 }), makeEmbedding(1));
+      store.insertMemory(makeMemory('m2', 'B', { salience: 0.7 }), makeEmbedding(2));
+      store.insertMemory(makeMemory('m3', 'C', { salience: 0.6 }), makeEmbedding(3));
+
+      const count = store.bulkUpdateSalience([
+        { id: 'm1', salience: 0.2 },
+        { id: 'm2', salience: 0.35 },
+      ]);
+
+      expect(count).toBe(2);
+      expect(store.getById('m1')?.salience).toBe(0.2);
+      expect(store.getById('m2')?.salience).toBe(0.35);
+      expect(store.getById('m3')?.salience).toBe(0.6);
+    });
+
+    it('bulkUpdateSalience rolls back the page when a write fails', () => {
+      store.insertMemory(makeMemory('m1', 'A', { salience: 0.8 }), makeEmbedding(1));
+      store.insertMemory(makeMemory('m2', 'B', { salience: 0.7 }), makeEmbedding(2));
+      db.exec(`
+        CREATE TRIGGER fail_m2_salience_update
+        BEFORE UPDATE OF salience ON l2_memories
+        WHEN OLD.id = 'm2'
+        BEGIN
+          SELECT RAISE(ABORT, 'simulated salience failure');
+        END;
+      `);
+
+      expect(() => store.bulkUpdateSalience([
+        { id: 'm1', salience: 0.2 },
+        { id: 'm2', salience: 0.35 },
+      ])).toThrow('simulated salience failure');
+      expect(store.getById('m1')?.salience).toBe(0.8);
+      expect(store.getById('m2')?.salience).toBe(0.7);
     });
   });
 });

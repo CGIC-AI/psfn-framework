@@ -13,6 +13,7 @@ import { checkAdminRequestAuth, checkAdminUpgradeAuth } from './server-auth.js';
 import { handleAdminRequest } from './server-request-routing.js';
 import { AdminServerTransport } from './server-transport.js';
 import { AdminServerTelemetryTransport } from './server-telemetry-transport.js';
+import { validateAdminAuthStartupPolicy } from './auth-policy.js';
 
 const log = createComponentLogger('AdminServer');
 const ADMIN_MAX_BODY_SIZE = 65_536; // 64KB
@@ -52,15 +53,14 @@ export class AdminServer implements Lifecycle {
   }
 
   async start(): Promise<void> {
-    if (!this.token && !this.allowInsecureWithoutToken) {
-      const err = new Error('ADMIN_TOKEN is required unless ADMIN_ALLOW_INSECURE=true');
-      log.error('Refusing to start admin server without authentication', {
-        host: this.host,
-        port: this.port,
-        requiredEnv: 'ADMIN_TOKEN or ADMIN_ALLOW_INSECURE=true',
-      });
-      throw err;
-    }
+    validateAdminAuthStartupPolicy({
+      host: this.host,
+      port: this.port,
+      token: this.token,
+      allowInsecureWithoutToken: this.allowInsecureWithoutToken,
+      componentLabel: 'admin server',
+      logger: log,
+    });
 
     return new Promise((resolve, reject) => {
       const onError = (err: NodeJS.ErrnoException) => {
@@ -105,7 +105,6 @@ export class AdminServer implements Lifecycle {
     handleAdminRequest(req, res, {
       token: this.token,
       checkAuth: (request, response) => this.checkAuth(request, response),
-      tryServeStaticAsset: (path, response) => this.transport.tryServeStaticAsset(path, response),
       isGardenUiEnabled: () => this.transport.isGardenUiEnabled(),
       serveGardenBuildAsset: (path, response) => this.transport.serveGardenBuildAsset(path, response),
       serveGardenPage: (path, response) => this.transport.serveGardenPage(path, response),

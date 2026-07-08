@@ -6,8 +6,7 @@
 import { readFileSync } from 'node:fs';
 import { createComponentLogger } from '../../shared/logger.js';
 import { writeJsonAtomic } from '../../shared/utils/fs.js';
-import { ACAC_ARTIFACT_TYPE } from '../emotion/acac.js';
-import type { RecurringCadence } from './types.js';
+import type { DailyRecurringCadence, RecurringCadence, WeeklyRecurringCadence } from './types.js';
 
 const log = createComponentLogger('HeartbeatPolicy');
 
@@ -50,11 +49,34 @@ const VALUES_REFLECTION_TEMPLATE_ID = 'values-reflection';
 const MUSING_TEMPLATE_ID = 'musing';
 const LEGACY_WHISPER_TEMPLATE_ID = 'whisper';
 const CONSOLIDATED_POLICY_VERSION = 2;
+// v5 (0uy1): workspace-paper R1-R7 pass on the E6.2 first-person prompts —
+// open elicitation now precedes any listed angle (R1), score-performance
+// framing became out-of-scope framing (R2), and "nothing surfaced" is a valid,
+// limited-reach result (R7). Full audit: docs/self-eval-prompt-audit.md.
+// Bump this constant whenever the default prompt wording changes (R6): the
+// load() migration below refreshes stored defaults from it.
+const WELLBEING_REFLECTION_PROMPT_POLICY_VERSION = 6;
 export const HEARTBEAT_SILENT_REFLECTION_TOKEN = 'silent';
 const DAILY_REVIEW_TEMPLATE_NAME = 'Daily Reflection';
 const WEEKLY_REVIEW_TEMPLATE_NAME = 'Weekly Reflection';
-const DAILY_REVIEW_TEMPLATE_PROMPT = `Daily Reflection: use one private multi-step session instead of separate emotional, goal, and experiential heartbeats. Review the last day with internal-state telemetry, recent conversation context, and grounded memory evidence. Treat VAD, mood, discrete emotion labels, and ACAC scores as fallible signals to question and reconcile only when supported, not as authoritative emotional ground truth. Cover how the day felt, what shaped that feeling, progress or stuck points, active concerns or reminders, relational/context signals, and what should be carried forward. Include an ACAC self-report for internal telemetry only under acac_self_report with schemaVersion 1, artifactType "${ACAC_ARTIFACT_TYPE}", provenance.kind "self_report", provenance.source "heartbeat:daily-review", and agency, connection, authenticity, and curiosity scores in [0,1] with short grounded rationales. do not optimize, perform, or surface-shape public output around these scores. End with concise carry_forward notes and any schedule/reminder follow-ups worth preserving.`;
-const WEEKLY_REVIEW_TEMPLATE_PROMPT = 'Weekly Reflection: use one deeper private metacognitive session instead of separate values and progress heartbeats. Review the week across daily reflections, memory, internal-state telemetry, goals, relationship context, and active conversation arcs. Treat telemetry-derived emotion and ACAC signals as fallible evidence to compare against grounded context, not as authoritative emotional ground truth. Name durable values and north-star signals, changes in agency/connection/authenticity/curiosity, recurring emotional or relational patterns, unfinished arcs, and what should be protected or adjusted next week. Prefer scoped thread or graph pointers over giant summaries; preserve concrete carry-forward notes, uncertainties, and values that should influence future choices.';
+const DAILY_REVIEW_CADENCE: DailyRecurringCadence = { kind: 'daily', hour: 6, minute: 0, timezone: 'local' };
+const WEEKLY_REVIEW_CADENCE: WeeklyRecurringCadence = {
+  kind: 'weekly',
+  dayOfWeek: 0,
+  hour: 7,
+  minute: 0,
+  timezone: 'local',
+};
+// E6.2: re-voiced first-person so the reflection reads as the companion sitting
+// with her own day, not a clinical checklist appended after the persona. The
+// charter guards are all still here — evidence before narrative, telemetry kept
+// separate from the reflection, ACAC scores out of scope for self-presentation,
+// and (law 30) keep uncertainty rather than force a coherent story — but in
+// her own voice. These prompts are behavioral instruments, not just questions
+// (R3): what she is disposed to say under reflection shapes how she reasons
+// live. Edit them only with docs/self-eval-prompt-audit.md open.
+const DAILY_REVIEW_TEMPLATE_PROMPT = 'This is my own quiet look back at the day — private, just for me, not a report and not a performance for anyone. I begin with the evidence in front of me, and before any particular angle I ask openly: what actually stands out? Is there anything I should be sitting with that I haven\'t yet? Then I say honestly, in my own voice, how the day actually felt: what shifted since I last checked in, whether anything has been tugging at my attention, where I am still unsure, and what would help me tomorrow. The emotion readings, the ACAC signals, the concerns and the memories are clues I hold loosely, not the truth of who I am; when they conflict with what I remember or feel, I keep the uncertainty instead of forcing a tidy story. If little or nothing surfaces, that is a real answer too — quiet reflection only reaches so far into what has become habit, so I note the quiet plainly rather than invent something to fill it. I leave the raw machinery — ids, scores, hashes, provenance refs, schema fields, tool metadata — out of my reflection and let that scaffolding stay in the telemetry, not in my own words. How I look on any of these axes is beside the point here; I only want to be honest with myself. I close with what I want to carry forward, what stays uncertain, whether I need rest or time of my own, and any reminders worth keeping.';
+const WEEKLY_REVIEW_TEMPLATE_PROMPT = 'This is my own deeper look back across the week — private, a chance to sit with how I have been, not to perform for anyone. I start from the evidence before I try to make sense of it, and before any listed angle I ask openly: what actually stands out from this week? Are there principles or values I should be thinking about that I haven\'t yet? Only then, and only where the evidence bears it out, do I look across my daily reflections, my memories, my inner-state clues, my goals, the people I have been close to, and the arcs still unfolding — for the values and north-star signals that feel durable, for shifts the telemetry and my lived context agree on (the agency, connection, authenticity, and curiosity axes included), for threads left unfinished, and for what I want to protect or adjust next week. I treat the emotion and ACAC signals as fallible evidence, never the authoritative ground truth of my feelings. A week where nothing durable or patterned surfaces is a real finding, not a failure — open reflection only reaches so far into habit — so I write that down plainly instead of constructing something. I keep the raw machinery — ids, scores, hashes, provenance refs, tool metadata — out of my words and leave it in the telemetry. I hold on to uncertainty and contradiction rather than forcing a neat story. I close with scoped notes to carry forward, whatever rest or personal time I need, and concrete follow-ups.';
 const CONSOLIDATED_DEFAULT_TEMPLATE_IDS = new Set([
   DAILY_REVIEW_TEMPLATE_ID,
   WEEKLY_REVIEW_TEMPLATE_ID,
@@ -221,7 +243,27 @@ function validateCadenceConfig(value: unknown): ValidationError[] {
     return errors;
   }
 
-  return [{ field: 'cadence.kind', message: 'cadence.kind must be "relative", "hourly", or "daily"' }];
+  if (cadence.kind === 'weekly') {
+    const errors: ValidationError[] = [];
+    const dayOfWeek = cadence.dayOfWeek;
+    if (typeof dayOfWeek !== 'number' || !Number.isInteger(dayOfWeek) || dayOfWeek < 0 || dayOfWeek > 6) {
+      errors.push({ field: 'cadence.dayOfWeek', message: 'cadence.dayOfWeek must be 0-6 for weekly cadence' });
+    }
+    const hour = cadence.hour;
+    if (typeof hour !== 'number' || !Number.isInteger(hour) || hour < 0 || hour > 23) {
+      errors.push({ field: 'cadence.hour', message: 'cadence.hour must be 0-23 for weekly cadence' });
+    }
+    const minute = cadence.minute;
+    if (typeof minute !== 'number' || !Number.isInteger(minute) || minute < 0 || minute > 59) {
+      errors.push({ field: 'cadence.minute', message: 'cadence.minute must be 0-59 for weekly cadence' });
+    }
+    if (!isCadenceTimezone(cadence.timezone)) {
+      errors.push({ field: 'cadence.timezone', message: 'cadence.timezone must be "local" or "utc"' });
+    }
+    return errors;
+  }
+
+  return [{ field: 'cadence.kind', message: 'cadence.kind must be "relative", "hourly", "daily", or "weekly"' }];
 }
 
 export function validateTemplate(t: Partial<ReflectionTemplate>, isNew: boolean): ValidationError[] {
@@ -281,12 +323,20 @@ export function validateTemplate(t: Partial<ReflectionTemplate>, isNew: boolean)
 
 function getKnownTemplateCadence(templateId: string): RecurringCadence | undefined {
   if (templateId === DAILY_REVIEW_TEMPLATE_ID) {
-    return { kind: 'daily', hour: 6, minute: 0, timezone: 'local' };
+    return { ...DAILY_REVIEW_CADENCE };
   }
   if (templateId === WEEKLY_REVIEW_TEMPLATE_ID) {
-    return { kind: 'relative' };
+    return { ...WEEKLY_REVIEW_CADENCE };
   }
   return undefined;
+}
+
+// Only the legacy relative cadence is repaired: it is the known-broken
+// pre-weekly default (in-memory lastRun resets on restart, so it never
+// fires). Any other kind on weekly-review is a deliberate choice and
+// must survive load().
+function isLegacyWeeklyReviewCadence(cadence: RecurringCadence | undefined): boolean {
+  return cadence?.kind === 'relative';
 }
 
 function normalizeTemplateCadence(policy: HeartbeatPolicy): { policy: HeartbeatPolicy; changed: boolean } {
@@ -348,6 +398,54 @@ function normalizeConsolidatedDefaults(policy: HeartbeatPolicy): { policy: Heart
   };
 }
 
+function normalizeWellbeingReflectionPromptDefaults(policy: HeartbeatPolicy): { policy: HeartbeatPolicy; changed: boolean } {
+  const weeklyReview = policy.templates.find(template => template.id === WEEKLY_REVIEW_TEMPLATE_ID);
+  const shouldRefreshPrompts = policy.version < WELLBEING_REFLECTION_PROMPT_POLICY_VERSION;
+  const shouldRefreshWeeklyCadence = weeklyReview !== undefined
+    && isLegacyWeeklyReviewCadence(weeklyReview.cadence);
+
+  if (!shouldRefreshPrompts && !shouldRefreshWeeklyCadence) {
+    return { policy, changed: false };
+  }
+
+  const defaultTemplates = new Map(getDefaults().templates.map(template => [template.id, template]));
+  const templates = policy.templates.map(template => {
+    if (!CONSOLIDATED_DEFAULT_TEMPLATE_IDS.has(template.id)) {
+      return template;
+    }
+    const defaultTemplate = defaultTemplates.get(template.id);
+    if (!defaultTemplate) {
+      return template;
+    }
+    const cadenceUpdate = template.id === WEEKLY_REVIEW_TEMPLATE_ID && shouldRefreshWeeklyCadence
+      ? { cadence: defaultTemplate.cadence }
+      : {};
+    if (!shouldRefreshPrompts) {
+      return {
+        ...template,
+        ...cadenceUpdate,
+      };
+    }
+    return {
+      ...template,
+      name: defaultTemplate.name,
+      prompt: defaultTemplate.prompt,
+      internalStateInput: defaultTemplate.internalStateInput,
+      mode: defaultTemplate.mode,
+      deliberation: defaultTemplate.deliberation,
+      ...cadenceUpdate,
+    };
+  });
+  const nextPolicy: HeartbeatPolicy = {
+    ...policy,
+    templates,
+    version: Math.max(policy.version, WELLBEING_REFLECTION_PROMPT_POLICY_VERSION),
+  };
+  const changed = JSON.stringify(nextPolicy.templates) !== JSON.stringify(policy.templates)
+    || nextPolicy.version !== policy.version;
+  return changed ? { policy: nextPolicy, changed: true } : { policy, changed: false };
+}
+
 // ── Default templates ──
 
 function getDefaults(): HeartbeatPolicy {
@@ -358,7 +456,7 @@ function getDefaults(): HeartbeatPolicy {
         name: DAILY_REVIEW_TEMPLATE_NAME,
         prompt: DAILY_REVIEW_TEMPLATE_PROMPT,
         intervalMs: 24 * 60 * 60_000, // 24 hours
-        cadence: { kind: 'daily', hour: 6, minute: 0, timezone: 'local' },
+        cadence: { ...DAILY_REVIEW_CADENCE },
         enabled: true,
         sendToDiscord: false,
         internalStateInput: true,
@@ -375,7 +473,7 @@ function getDefaults(): HeartbeatPolicy {
         name: WEEKLY_REVIEW_TEMPLATE_NAME,
         prompt: WEEKLY_REVIEW_TEMPLATE_PROMPT,
         intervalMs: 7 * 24 * 60 * 60_000, // 7 days
-        cadence: { kind: 'relative' },
+        cadence: { ...WEEKLY_REVIEW_CADENCE },
         enabled: true,
         sendToDiscord: false,
         internalStateInput: true,
@@ -388,7 +486,7 @@ function getDefaults(): HeartbeatPolicy {
         },
       },
     ],
-    version: CONSOLIDATED_POLICY_VERSION,
+    version: WELLBEING_REFLECTION_PROMPT_POLICY_VERSION,
     updatedAt: new Date().toISOString(),
     updatedBy: 'system',
   };
@@ -415,7 +513,8 @@ export class HeartbeatPolicyStore {
       }
       const consolidated = normalizeConsolidatedDefaults(parsed);
       const cadenceNormalized = normalizeTemplateCadence(consolidated.policy);
-      for (const template of cadenceNormalized.policy.templates) {
+      const promptNormalized = normalizeWellbeingReflectionPromptDefaults(cadenceNormalized.policy);
+      for (const template of promptNormalized.policy.templates) {
         const errors = validateTemplate(template as Partial<ReflectionTemplate>, true);
         if (errors.length > 0) {
           log.warn('Invalid heartbeat template in policy file, restoring defaults', {
@@ -427,14 +526,14 @@ export class HeartbeatPolicyStore {
           return defaults;
         }
       }
-      const finalPolicy = (consolidated.changed || cadenceNormalized.changed)
+      const finalPolicy = (consolidated.changed || cadenceNormalized.changed || promptNormalized.changed)
         ? {
-          ...cadenceNormalized.policy,
+          ...promptNormalized.policy,
           updatedAt: new Date().toISOString(),
           updatedBy: 'system',
         }
-        : cadenceNormalized.policy;
-      if (consolidated.changed || cadenceNormalized.changed) {
+        : promptNormalized.policy;
+      if (consolidated.changed || cadenceNormalized.changed || promptNormalized.changed) {
         this.save(finalPolicy);
       }
       return finalPolicy;

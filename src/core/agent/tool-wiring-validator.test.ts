@@ -323,7 +323,7 @@ describe('validateToolWiring', () => {
           exclusivityKeyPolicy: 'static_key',
         }),
       }),
-      makeTool('spawn_subagent', {
+      makeTool('subagent', {
         concurrency: makeConcurrencyMeta('spawn_subagent', { maxParallel: 5 }),
       }),
     ];
@@ -338,7 +338,7 @@ describe('validateToolWiring', () => {
 
   it('rejects invalid exclusive concurrency metadata when required', () => {
     const tools = [
-      makeTool('memory_delete', {
+      makeTool('memory', {
         concurrency: {
           ...makeConcurrencyMeta('exclusive', {
             exclusivityKey: undefined,

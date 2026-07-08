@@ -173,14 +173,14 @@ describe('deriveToolHealthViews', () => {
     ]);
   });
 
-  it('shows unified vault health and degrades when gateway action coverage is partial', () => {
+  it('shows external vault bridge health and degrades when gateway action coverage is partial', () => {
     const views = deriveToolHealthViews({
       catalog: {
         generatedAt: 1,
         tools: [
           {
             name: 'vault',
-            description: 'Unified durable vault surface for Obsidian notes, search, and daily journaling.',
+            description: 'Legacy external Obsidian/Vault bridge for bounded read, write, search, and daily-note compatibility.',
             scope: 'extended',
             wiringMeta: {
               requiredServices: ['vault'],
@@ -223,7 +223,7 @@ describe('deriveToolHealthViews', () => {
         name: 'vault',
         health: {
           status: 'degraded',
-          detail: 'Vault is missing actions required by the unified tool: write, daily.',
+          detail: 'External vault bridge is missing actions required by the tool: write, daily.',
         },
         contexts: {
           chat: {
@@ -239,7 +239,80 @@ describe('deriveToolHealthViews', () => {
     ]);
   });
 
-  it('adds a conditional unified vault tool when vault service health is unavailable', () => {
+  it('surfaces canonical media and selfie tools without retired generic image helpers', () => {
+    const views = deriveToolHealthViews({
+      catalog: {
+        generatedAt: 1,
+        tools: [
+          {
+            name: 'media',
+            description: 'Unified media surface for generate, edit, and analyze actions.',
+            scope: 'extended',
+            wiringMeta: {
+              requiredGatewayMethods: ['image.create', 'image.edit', 'web.fetch_binary'],
+            },
+            schema: {
+              actions: [
+                { name: 'generate', requiredCapabilities: [] },
+                { name: 'edit', requiredCapabilities: [] },
+                { name: 'analyze', requiredCapabilities: [] },
+              ],
+              requiredParameters: ['action'],
+              requiredCapabilities: [],
+              reversibility: 'irreversible',
+              bundleMembership: ['extended', 'toolset.managed', 'domain:media'],
+              canonical: {
+                domain: 'media',
+                exposure: 'extended',
+              },
+            },
+          },
+          {
+            name: 'selfie_create',
+            description: 'First-class self-expression image tool.',
+            scope: 'extended',
+            wiringMeta: {
+              requiredGatewayMethods: ['image.create', 'image.edit', 'web.fetch_binary'],
+            },
+          },
+        ],
+      },
+      state: {
+        generatedAt: 2,
+        coreTools: [],
+        extendedTools: ['media', 'selfie_create'],
+        promotedToolsConfigured: [],
+        promotedToolsActive: [],
+        promotedToolsSkipped: [],
+        loadedExtendedTools: [],
+        activeTools: [],
+        lastSnapshot: null,
+      },
+      serviceHealth: [
+        {
+          serviceId: 'gateway',
+          status: 'healthy',
+          detail: 'Gateway is configured.',
+          checkedAt: 1,
+        },
+      ],
+      recentFailures: [],
+    });
+    const inventory = deriveToolInventoryGroups(views);
+    const toolNames = inventory.flatMap(group => group.tools.map(tool => tool.name));
+
+    expect(toolNames).toEqual(['media', 'selfie_create']);
+    expect(toolNames).not.toContain('image_create');
+    expect(toolNames).not.toContain('image_edit');
+    expect(toolNames).not.toContain('image_analyze');
+    expect(views.find(view => view.name === 'media')?.schema?.actions.map(action => action.name)).toEqual([
+      'generate',
+      'edit',
+      'analyze',
+    ]);
+  });
+
+  it('adds a conditional external vault bridge tool when vault service health is unavailable', () => {
     const views = deriveToolHealthViews({
       catalog: {
         generatedAt: 1,

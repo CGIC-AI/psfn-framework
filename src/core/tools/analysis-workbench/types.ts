@@ -16,7 +16,7 @@ export interface AnalysisWorkbenchBudget {
   maxIterations: number;      // default 15
   maxTokens?: number;         // total input+output tokens, default 100_000
   maxWallTimeMs?: number;     // total elapsed before tier clamp, default 300_000 (5 min)
-  maxSubQueries?: number;     // llm_query calls, default 20
+  maxSubQueries?: number;     // llm_query calls, default 24
   maxToolCalls?: number;      // sandbox tool calls (file/web helpers), default 50
 }
 
@@ -95,7 +95,7 @@ export const DEFAULT_REPL_TIER_BUDGETS: REPLConfig['tierBudgets'] = {
   autonomous: {
     maxIterations: 15,
     maxWallTimeMs: 300_000,
-    maxSubQueries: 20,
+    maxSubQueries: 24,
     maxToolCalls: 50,
     memoryCeilingMb: 256,
   },
@@ -106,7 +106,7 @@ export const DEFAULT_REPL_CONFIG: REPLConfig = {
     maxIterations: 15,
     maxTokens: 100_000,
     maxWallTimeMs: 300_000,
-    maxSubQueries: 20,
+    maxSubQueries: 24,
     maxToolCalls: 50,
   },
   tierBudgets: DEFAULT_REPL_TIER_BUDGETS,

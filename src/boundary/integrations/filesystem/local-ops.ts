@@ -2,6 +2,7 @@ import type {
   FilesystemEditOptions,
   FilesystemEditResult,
   FilesystemListOptions,
+  FilesystemListResult,
   FilesystemOperations,
   FilesystemReadOptions,
   FilesystemReadResult,
@@ -42,7 +43,7 @@ export class WorkspaceFilesystemOps implements FilesystemOperations {
     glob = DEFAULT_LIST_GLOB,
     maxEntries = DEFAULT_LIST_MAX_ENTRIES,
     options?: FilesystemListOptions,
-  ): Promise<string[]> {
+  ): Promise<FilesystemListResult> {
     return listWorkspaceFiles(this.workspaceRoot, glob, maxEntries, options);
   }
 

@@ -23,6 +23,7 @@ export interface ShardContextPack {
   purpose: 'shard_context';
   task: string;
   source: ShardSourceContext;
+  companionName?: string;
   sessionEntries: ShardContextPackEntry[];
   memoryBlock?: string;
 }
@@ -31,6 +32,7 @@ export interface ShardParentContextSnapshot {
   inheritedFrom: string;
   source: ShardSourceContext;
   task: string;
+  companionName?: string;
   transcript: {
     entries: ShardContextPackEntry[];
   };

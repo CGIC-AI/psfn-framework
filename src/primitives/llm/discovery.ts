@@ -227,19 +227,79 @@ function inferSupportsReasoning(meta: OpenRouterModelEntry | undefined): boolean
   return undefined;
 }
 
-function buildOpenRouterMetaMap(openRouterMeta: OpenRouterModelEntry[]): Map<string, OpenRouterModelEntry> {
-  const metaMap = new Map<string, OpenRouterModelEntry>();
-  for (const meta of openRouterMeta) {
-    for (const key of [
-      ...expandModelLookupKeys(meta.id),
-      ...expandModelLookupKeys(meta.canonical_slug),
-    ]) {
-      if (!metaMap.has(key)) {
-        metaMap.set(key, meta);
+function normalizeModalityTokens(values: readonly unknown[]): string[] {
+  const tokens: string[] = [];
+  for (const value of values) {
+    const normalized = normalizeLowerToken(value);
+    if (!normalized) continue;
+    for (const token of normalized.split(/[^a-z0-9]+/i)) {
+      if (token.length > 0) {
+        tokens.push(token);
       }
     }
   }
-  return metaMap;
+  return tokens;
+}
+
+function readModalitySideTokens(value: string, side: 'input' | 'output'): string[] {
+  const arrowIndex = value.indexOf('->');
+  const sideValue = arrowIndex >= 0
+    ? (side === 'input' ? value.slice(0, arrowIndex) : value.slice(arrowIndex + 2))
+    : value;
+  return normalizeModalityTokens([sideValue]);
+}
+
+function inferDiscoveryTextModel(meta: OpenRouterModelEntry): boolean {
+  const outputModalities = Array.isArray(meta.architecture?.output_modalities)
+    ? normalizeModalityTokens(meta.architecture.output_modalities)
+    : [];
+  const modality = typeof meta.architecture?.modality === 'string'
+    ? meta.architecture.modality.trim()
+    : '';
+  const inferredOutputModalities = outputModalities.length > 0
+    ? outputModalities
+    : (modality.length > 0 ? readModalitySideTokens(modality, 'output') : []);
+
+  if (inferredOutputModalities.length > 0 && (
+    inferredOutputModalities.length !== 1
+    || inferredOutputModalities[0] !== 'text'
+  )) {
+    return false;
+  }
+
+  const inputModalities = Array.isArray(meta.architecture?.input_modalities)
+    ? normalizeModalityTokens(meta.architecture.input_modalities)
+    : [];
+  const inferredInputModalities = inputModalities.length > 0
+    ? inputModalities
+    : (modality.length > 0 ? readModalitySideTokens(modality, 'input') : []);
+
+  if (inferredInputModalities.length === 0) {
+    return true;
+  }
+
+  const inputSet = new Set(inferredInputModalities);
+  if (!inputSet.has('text')) {
+    return false;
+  }
+
+  const auxiliaryModalities = inferredInputModalities.filter(modality => modality !== 'text');
+  if (auxiliaryModalities.length > 1) {
+    return false;
+  }
+  return auxiliaryModalities.every(modality => modality === 'image' || modality === 'file');
+}
+
+function buildLiteLLMModelMap(litellmModels: LiteLLMModelEntry[]): Map<string, LiteLLMModelEntry> {
+  const modelMap = new Map<string, LiteLLMModelEntry>();
+  for (const model of litellmModels) {
+    for (const key of expandModelLookupKeys(model.id)) {
+      if (!modelMap.has(key)) {
+        modelMap.set(key, model);
+      }
+    }
+  }
+  return modelMap;
 }
 
 function pushUnique(target: string[], value: string | undefined): void {
@@ -266,12 +326,15 @@ function buildOpenRouterZdrEndpointMap(
   return endpointMap;
 }
 
-function findOpenRouterMeta(
-  litellmId: string,
-  metaMap: Map<string, OpenRouterModelEntry>,
-): OpenRouterModelEntry | undefined {
-  for (const key of expandModelLookupKeys(litellmId)) {
-    const matched = metaMap.get(key);
+function findLiteLLMModel(
+  meta: OpenRouterModelEntry,
+  litellmModelMap: Map<string, LiteLLMModelEntry>,
+): LiteLLMModelEntry | undefined {
+  for (const key of [
+    ...expandModelLookupKeys(meta.id),
+    ...expandModelLookupKeys(meta.canonical_slug),
+  ]) {
+    const matched = litellmModelMap.get(key);
     if (matched) return matched;
   }
   return undefined;
@@ -293,6 +356,43 @@ function findOpenRouterZdrEndpointSummary(
   return undefined;
 }
 
+function discoveredModelFromOpenRouterMeta(
+  meta: OpenRouterModelEntry,
+  litellmModelMap: Map<string, LiteLLMModelEntry>,
+  endpointMap: Map<string, OpenRouterZdrEndpointSummary>,
+): DiscoveredModel {
+  const litellmModel = findLiteLLMModel(meta, litellmModelMap);
+  const zdrEndpointSummary = findOpenRouterZdrEndpointSummary(litellmModel?.id ?? meta.id, meta, endpointMap);
+  const providerHints = normalizeProviderHints([
+    'openrouter',
+    ...(litellmModel ? providerHintsFromLiteLLM(litellmModel) : []),
+    providerFromModelId(meta.canonical_slug ?? meta.id),
+  ]);
+
+  return {
+    id: meta.id,
+    description: meta.description ?? meta.name,
+    ...(providerHints.length > 0 ? { providerHints } : {}),
+    contextLength: meta.top_provider?.context_length ?? meta.context_length,
+    maxCompletionTokens: meta.top_provider?.max_completion_tokens,
+    pricing: normalizePricing(meta.pricing),
+    ...(inferSupportsVision(meta) ? { supportsVision: true } : {}),
+    ...(inferSupportsReasoning(meta) ? { supportsReasoning: true } : {}),
+    ...(zdrEndpointSummary
+      ? {
+          zdrAvailable: true,
+          zdrEndpointCount: zdrEndpointSummary.count,
+          ...(zdrEndpointSummary.providerTags.length > 0
+            ? { zdrProviderTags: zdrEndpointSummary.providerTags }
+            : {}),
+          ...(zdrEndpointSummary.providerNames.length > 0
+            ? { zdrProviderNames: zdrEndpointSummary.providerNames }
+            : {}),
+        }
+      : {}),
+  };
+}
+
 function deriveOpenRouterZdrEndpointsApiUrl(openRouterModelsApiUrl: string): string {
   try {
     const parsed = new URL(openRouterModelsApiUrl);
@@ -306,6 +406,18 @@ function deriveOpenRouterZdrEndpointsApiUrl(openRouterModelsApiUrl: string): str
 }
 
 const CACHE_TTL_MS = 5 * 60_000; // 5 minutes
+
+type ModelDiscoveryFetchProvider = 'litellm' | 'openrouter';
+type ModelDiscoveryFetchPurpose = 'models' | 'zdr-endpoints';
+
+function buildInFlightFetchKey(
+  provider: ModelDiscoveryFetchProvider,
+  purpose: ModelDiscoveryFetchPurpose,
+  endpoint: string,
+  configScope: string,
+): string {
+  return JSON.stringify([provider, purpose, endpoint, configScope]);
+}
 
 function isGatewayAgentEntrypoint(): boolean {
   const entrypoint = (process.argv[1] ?? '')
@@ -323,6 +435,7 @@ export class ModelDiscovery implements ModelDiscoveryBackend {
   private allowDirectNetworkEgress: boolean;
   private cache: DiscoveredModel[] | null = null;
   private cacheTime = 0;
+  private readonly inFlightFetches = new Map<string, Promise<unknown>>();
 
   constructor(
     litellmBaseUrl: string,
@@ -349,47 +462,15 @@ export class ModelDiscovery implements ModelDiscoveryBackend {
     }
 
     const [litellmModels, openRouterMeta, openRouterZdrEndpoints] = await Promise.all([
-      this.fetchLiteLLM(),
+      this.fetchLiteLLMForEnrichment(),
       this.fetchOpenRouterMeta(),
       this.fetchOpenRouterZdrEndpoints(),
     ]);
 
-    // Build a metadata lookup from OpenRouter
-    const metaMap = buildOpenRouterMetaMap(openRouterMeta);
+    const textModels = openRouterMeta.filter(inferDiscoveryTextModel);
+    const litellmModelMap = buildLiteLLMModelMap(litellmModels);
     const zdrEndpointMap = buildOpenRouterZdrEndpointMap(openRouterZdrEndpoints);
-
-    // Merge: LiteLLM provides the available model list, OpenRouter enriches it
-    const models: DiscoveredModel[] = litellmModels.map(lm => {
-      const meta = findOpenRouterMeta(lm.id, metaMap);
-      const zdrEndpointSummary = findOpenRouterZdrEndpointSummary(lm.id, meta, zdrEndpointMap);
-      const providerHints = normalizeProviderHints([
-        ...providerHintsFromLiteLLM(lm),
-        ...(meta ? ['openrouter'] : []),
-        providerFromModelId(meta?.canonical_slug ?? meta?.id ?? lm.id),
-      ]);
-      return {
-        id: lm.id,
-        description: meta?.description ?? meta?.name,
-        ...(providerHints.length > 0 ? { providerHints } : {}),
-        contextLength: meta?.top_provider?.context_length ?? meta?.context_length,
-        maxCompletionTokens: meta?.top_provider?.max_completion_tokens,
-        pricing: normalizePricing(meta?.pricing),
-        ...(inferSupportsVision(meta) ? { supportsVision: true } : {}),
-        ...(inferSupportsReasoning(meta) ? { supportsReasoning: true } : {}),
-        ...(zdrEndpointSummary
-          ? {
-              zdrAvailable: true,
-              zdrEndpointCount: zdrEndpointSummary.count,
-              ...(zdrEndpointSummary.providerTags.length > 0
-                ? { zdrProviderTags: zdrEndpointSummary.providerTags }
-                : {}),
-              ...(zdrEndpointSummary.providerNames.length > 0
-                ? { zdrProviderNames: zdrEndpointSummary.providerNames }
-                : {}),
-            }
-          : {}),
-      };
-    });
+    const models = textModels.map(meta => discoveredModelFromOpenRouterMeta(meta, litellmModelMap, zdrEndpointMap));
 
     this.cache = models;
     this.cacheTime = Date.now();
@@ -410,56 +491,103 @@ export class ModelDiscovery implements ModelDiscoveryBackend {
     );
   }
 
-  private async fetchLiteLLM(): Promise<LiteLLMModelEntry[]> {
+  private coalesceInFlightFetch<T>(key: string, fetcher: () => Promise<T>): Promise<T> {
+    const existing = this.inFlightFetches.get(key);
+    if (existing) {
+      return existing as Promise<T>;
+    }
+
+    const promise = Promise.resolve()
+      .then(fetcher)
+      .finally(() => {
+        if (this.inFlightFetches.get(key) === promise) {
+          this.inFlightFetches.delete(key);
+        }
+      });
+    this.inFlightFetches.set(key, promise);
+    return promise;
+  }
+
+  private fetchLiteLLM(): Promise<LiteLLMModelEntry[]> {
+    const url = `${this.litellmBaseUrl}/v1/models`;
+    const key = buildInFlightFetchKey(
+      'litellm',
+      'models',
+      url,
+      this.litellmApiKey ? 'auth:present' : 'auth:none',
+    );
     const headers: Record<string, string> = {};
     if (this.litellmApiKey) {
       headers['Authorization'] = `Bearer ${this.litellmApiKey}`;
     }
 
-    try {
-      const res = await this.resolveFetch()(`${this.litellmBaseUrl}/v1/models`, { headers });
-      if (!res.ok) {
-        throw new Error(`LiteLLM /v1/models returned ${res.status}`);
+    return this.coalesceInFlightFetch(key, async () => {
+      try {
+        const res = await this.resolveFetch()(url, { headers });
+        if (!res.ok) {
+          throw new Error(`LiteLLM /v1/models returned ${res.status}`);
+        }
+        const data = await res.json() as { data?: LiteLLMModelEntry[] };
+        if (!Array.isArray(data.data)) {
+          throw new Error('LiteLLM /v1/models returned invalid payload');
+        }
+        return data.data;
+      } catch (err) {
+        log.warn('Failed to fetch LiteLLM models', { error: String(err) });
+        throw err instanceof Error ? err : new Error(String(err));
       }
-      const data = await res.json() as { data?: LiteLLMModelEntry[] };
-      if (!Array.isArray(data.data)) {
-        throw new Error('LiteLLM /v1/models returned invalid payload');
-      }
-      return data.data;
-    } catch (err) {
-      log.warn('Failed to fetch LiteLLM models', { error: String(err) });
-      throw err instanceof Error ? err : new Error(String(err));
-    }
+    });
   }
 
-  private async fetchOpenRouterMeta(): Promise<OpenRouterModelEntry[]> {
+  private async fetchLiteLLMForEnrichment(): Promise<LiteLLMModelEntry[]> {
     try {
-      const res = await this.resolveFetch()(this.openRouterModelsApiUrl);
-      if (!res.ok) {
-        log.warn(`OpenRouter /api/v1/models returned ${res.status}`);
-        return [];
-      }
-      const data = await res.json() as { data?: OpenRouterModelEntry[] };
-      return data.data ?? [];
-    } catch (err) {
-      log.warn('Failed to fetch OpenRouter metadata', { error: String(err) });
+      return await this.fetchLiteLLM();
+    } catch {
       return [];
     }
   }
 
-  private async fetchOpenRouterZdrEndpoints(): Promise<OpenRouterZdrEndpointEntry[]> {
-    try {
-      const res = await this.resolveFetch()(this.openRouterZdrEndpointsApiUrl);
-      if (!res.ok) {
-        log.warn(`OpenRouter /api/v1/endpoints/zdr returned ${res.status}`);
+  private fetchOpenRouterMeta(): Promise<OpenRouterModelEntry[]> {
+    const key = buildInFlightFetchKey('openrouter', 'models', this.openRouterModelsApiUrl, 'auth:none');
+    return this.coalesceInFlightFetch(key, async () => {
+      try {
+        const res = await this.resolveFetch()(this.openRouterModelsApiUrl);
+        if (!res.ok) {
+          throw new Error(`OpenRouter /api/v1/models returned ${res.status}`);
+        }
+        const data = await res.json() as { data?: OpenRouterModelEntry[] };
+        if (!Array.isArray(data.data)) {
+          throw new Error('OpenRouter /api/v1/models returned invalid payload');
+        }
+        return data.data;
+      } catch (err) {
+        log.warn('Failed to fetch OpenRouter metadata', { error: String(err) });
+        throw err instanceof Error ? err : new Error(String(err));
+      }
+    });
+  }
+
+  private fetchOpenRouterZdrEndpoints(): Promise<OpenRouterZdrEndpointEntry[]> {
+    const key = buildInFlightFetchKey(
+      'openrouter',
+      'zdr-endpoints',
+      this.openRouterZdrEndpointsApiUrl,
+      'auth:none',
+    );
+    return this.coalesceInFlightFetch(key, async () => {
+      try {
+        const res = await this.resolveFetch()(this.openRouterZdrEndpointsApiUrl);
+        if (!res.ok) {
+          log.warn(`OpenRouter /api/v1/endpoints/zdr returned ${res.status}`);
+          return [];
+        }
+        const data = await res.json() as { data?: OpenRouterZdrEndpointEntry[] };
+        return data.data ?? [];
+      } catch (err) {
+        log.warn('Failed to fetch OpenRouter ZDR endpoints', { error: String(err) });
         return [];
       }
-      const data = await res.json() as { data?: OpenRouterZdrEndpointEntry[] };
-      return data.data ?? [];
-    } catch (err) {
-      log.warn('Failed to fetch OpenRouter ZDR endpoints', { error: String(err) });
-      return [];
-    }
+    });
   }
 }
 

@@ -12,26 +12,22 @@ import {
 import { DEFAULT_REPL_CONFIG, type REPLConfig } from '../../../core/tools/analysis-workbench/types.js';
 import type { MessageSender } from '../../../system/lifecycle/notifications.js';
 import type { LLMProviderPort } from '../../../core/agent/contracts.js';
-import {
-  createPromotedToolsAddTool,
-  createPromotedToolsListTool,
-  createPromotedToolsRemoveTool,
-  createPromotedToolsSwapTool,
-  type PromotedExtendedToolsManager,
-} from '../../../system/settings-tools.js';
 import { wireFilesystemRuntime, type FilesystemRuntimeTarget } from '../../../boundary/integrations/filesystem/runtime-wiring.js';
 import type { SessionManager } from '../../../core/session/manager.js';
 import {
-  createSessionNewTool,
-  createSessionResumeTool,
   createSessionTool,
 } from '../../../core/tools/session.js';
 import { resolveSessionsDir } from '../../../persistence/layout.js';
-import { createCompleteFocusTool, createStartFocusTool } from '../../../core/tools/focus.js';
 import { PromptLayerStore } from '../../../core/identity/prompt-store.js';
 import { PromptComposer } from '../../../core/identity/prompt-composer.js';
 import { PromptRegistryStore } from '../../../core/identity/prompt-registry.js';
+import type { PromptRegistryStatePort } from '../../../core/identity/prompt-state-port.js';
 import { ensureRuntimePromptLayers } from '../../../core/identity/runtime-prompt-layers.js';
+import { ensureTemporalRulesPromptLayer } from '../../../core/identity/temporal-rules-layer.js';
+import {
+  ensureSystemLanguagePromptLayer,
+  installSystemLanguagePromptLayerSource,
+} from '../../../core/identity/system-language.js';
 import {
   type CharacterCardVersionStore,
 } from '../../../core/identity/card-versioning.js';
@@ -64,20 +60,12 @@ import {
 
 const log = createComponentLogger('SharedWiring');
 
-function hasPromotedToolsManager(
-  target: ToolRegistrarTarget,
-): target is ToolRegistrarTarget & PromotedExtendedToolsManager {
-  return (
-    typeof (target as Partial<PromotedExtendedToolsManager>).getPromotedExtendedToolsLimit === 'function'
-    && typeof (target as Partial<PromotedExtendedToolsManager>).getPromotedExtendedTools === 'function'
-    && typeof (target as Partial<PromotedExtendedToolsManager>).addPromotedExtendedTool === 'function'
-    && typeof (target as Partial<PromotedExtendedToolsManager>).removePromotedExtendedTool === 'function'
-    && typeof (target as Partial<PromotedExtendedToolsManager>).swapPromotedExtendedTools === 'function'
-  );
-}
-
 export interface PromptRuntimeTarget extends ToolRegistrarTarget {
   promptComposer: PromptComposer | null;
+}
+
+export interface PromptCacheInvalidationOptions {
+  invalidatePromptCache?: (reason: string) => void;
 }
 
 export type CharacterCardRuntimeTarget = ToolRegistrarTarget;
@@ -109,18 +97,24 @@ export function wirePromptRuntime(
   target: PromptRuntimeTarget,
   dataDir: string,
   baseSystemPrompt: string,
-  options: IdentityToolOptions = {},
+  options: IdentityToolOptions & PromptCacheInvalidationOptions = {},
 ): PromptLayerStore {
   const promptStore = new PromptLayerStore(
     resolvePromptLayersPath(dataDir),
     resolvePromptHistoryPath(dataDir),
+    {
+      ...(options.invalidatePromptCache ? { onMutation: options.invalidatePromptCache } : {}),
+    },
   );
   const valuesJournal = new ValuesJournalStore(resolveValuesJournalPath(dataDir), {
     legacyFilePaths: [resolveLegacyValuesJournalPath(dataDir)],
   });
   const northStarStore = new NorthStarStore(resolveNorthStarPath(dataDir));
   promptStore.seedFromCharacterCard(baseSystemPrompt);
+  ensureTemporalRulesPromptLayer(promptStore);
   ensureRuntimePromptLayers(promptStore);
+  ensureSystemLanguagePromptLayer(promptStore);
+  installSystemLanguagePromptLayerSource(promptStore);
 
   target.promptComposer = new PromptComposer(
     promptStore,
@@ -152,10 +146,16 @@ export function wireCharacterCardRuntime(
  * Wire static prompt registry used by runtime LLM call-sites
  * (extraction, compaction summary, and other keyed prompts).
  */
-export function wireStaticPromptRegistry(dataDir: string): PromptRegistryStore {
+export function wireStaticPromptRegistry(
+  dataDir: string,
+  options: PromptCacheInvalidationOptions = {},
+): PromptRegistryStore {
   const promptRegistry = new PromptRegistryStore(
     resolvePromptRegistryPath(dataDir),
     resolvePromptRegistryHistoryPath(dataDir),
+    {
+      ...(options.invalidatePromptCache ? { onMutation: options.invalidatePromptCache } : {}),
+    },
   );
   log.info(`Static prompt registry enabled (${promptRegistry.list().length} prompts)`);
   return promptRegistry;
@@ -190,13 +190,6 @@ export function wireSettingsRuntime(
   if (options.registerSystemTool !== false) {
     target.registerTool(createSystemTool(config), 'core');
   }
-  if (!hasPromotedToolsManager(target)) {
-    return;
-  }
-  target.registerTool(createPromotedToolsListTool(target), 'extended');
-  target.registerTool(createPromotedToolsAddTool(target), 'extended');
-  target.registerTool(createPromotedToolsRemoveTool(target), 'extended');
-  target.registerTool(createPromotedToolsSwapTool(target), 'extended');
 }
 
 export function wireSessionToolsRuntime(
@@ -204,33 +197,22 @@ export function wireSessionToolsRuntime(
   sessionManager: SessionManager,
   dataDir: string,
   llmProvider: LLMProviderPort,
+  promptRegistry: PromptRegistryStatePort | null = null,
 ): void {
   target.registerTool(createSessionTool({
     manager: sessionManager,
     llmProvider,
+    promptRegistry,
     sessionsDir: resolveSessionsDir(dataDir),
     dataDir,
     setActiveSession: (sessionId) => sessionManager.setActiveContextSession(sessionId),
     seedSession: (sessionId) => {
       sessionManager.appendSystemNote(
         sessionId,
-        'Session initialized via session_new.',
+        'Session initialized via session action=new.',
       );
     },
   }), 'core');
-  target.registerTool(createSessionNewTool({
-    dataDir,
-    setActiveSession: (sessionId) => sessionManager.setActiveContextSession(sessionId),
-    seedSession: (sessionId) => {
-      sessionManager.appendSystemNote(
-        sessionId,
-        'Session initialized via session_new.',
-      );
-    },
-  }), 'extended');
-  target.registerTool(createSessionResumeTool(sessionManager, { dataDir }), 'extended');
-  target.registerTool(createStartFocusTool(sessionManager), 'extended');
-  target.registerTool(createCompleteFocusTool(sessionManager, llmProvider), 'extended');
 }
 
 export function wireFilesystemToolsRuntime(
@@ -249,7 +231,7 @@ export function wireFilesystemToolsRuntime(
  * scheduled reflections missed memory/contact provenance even though the
  * standalone runtime tests passed.
  */
-export function wireHeartbeatRuntime(
+export async function wireHeartbeatRuntime(
   target: ToolRegistrarTarget,
   scheduler: Scheduler,
   agentLoop: HeartbeatAgent,
@@ -257,8 +239,8 @@ export function wireHeartbeatRuntime(
   dataDir: string,
   heartbeatChannelId?: string,
   runtimeOptions: HeartbeatRuntimeOptions = {},
-): void {
-  wireCoreHeartbeatRuntime(
+): Promise<void> {
+  await wireCoreHeartbeatRuntime(
     target,
     scheduler,
     agentLoop,

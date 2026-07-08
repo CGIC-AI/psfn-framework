@@ -2,8 +2,9 @@ import type { AgentMessage } from '@mariozechner/pi-agent-core';
 import { createComponentLogger } from '../../../shared/logger.js';
 import type { EventBus, EventMap } from '../../../shared/event-bus.js';
 import type { SessionManager } from '../../session/manager.js';
-import { normalizeChannelVisibility, type TrustLevel } from '../../../system/trust/types.js';
-import type { AgentResponse, CorrelationMetadata, InferredPostTurnAction, MessagePromptOverrideMode, ObservabilityCallType, SubstrateMessage, TurnID, TurnRecord, TurnUsage } from '../../../shared/contracts/runtime.js';
+import type { TrustLevel } from '../../../system/trust/types.js';
+import { normalizeChannelPrivacy } from '../../../system/trust/context-envelope.js';
+import type { AgentResponse, CorrelationMetadata, InferredPostTurnAction, IntentionalNoReplyMetadata, MessagePromptOverrideMode, ObservabilityCallType, SubstrateMessage, TurnID, TurnRecord, TurnUsage } from '../../../shared/contracts/runtime.js';
 import type { TurnObservabilityRecord } from '../../turns/observability.js';
 import type { TurnSnapshot } from '../../turns/snapshot.js';
 import type { EmotionStateSnapshot } from '../../emotion/state.js';
@@ -50,9 +51,60 @@ import type { TurnToolSummary } from '../../../faculties/skills/reflection-nudge
 import type { ChannelMeta } from '../../../system/trust/policy.js';
 
 const log = createComponentLogger('SubstrateAgent');
+export const DEFAULT_POST_TURN_DRAIN_TIMEOUT_MS = 5_000;
+
+export interface PostTurnBackgroundWork {
+  name: string;
+  promise: Promise<unknown>;
+}
+
+export interface RegisterPostTurnBackgroundWorkInput {
+  channelId: string;
+  turnId: TurnID;
+  requestId: string;
+  work: readonly PostTurnBackgroundWork[];
+  correlation?: CorrelationMetadata;
+}
+
+export interface AwaitPostTurnDrainInput {
+  channelId: string;
+  turnId: TurnID;
+  requestId: string;
+  timeoutMs?: number;
+  correlation?: CorrelationMetadata;
+}
+
+export interface AwaitPostTurnDrainResult {
+  status: 'idle' | 'drained' | 'timeout';
+  waitMs: number;
+  workCount: number;
+  previousChannelId?: string;
+  previousTurnId?: TurnID;
+  previousRequestId?: string;
+}
+
+interface ActivePostTurnDrain {
+  sequence: number;
+  channelId: string;
+  turnId: TurnID;
+  requestId: string;
+  taskNames: string[];
+  promise: Promise<void>;
+  timedOut: boolean;
+}
+
+function normalizePostTurnDrainTimeoutMs(value: number | undefined): number {
+  if (value === undefined) {
+    return DEFAULT_POST_TURN_DRAIN_TIMEOUT_MS;
+  }
+  if (!Number.isFinite(value) || value < 0) {
+    return DEFAULT_POST_TURN_DRAIN_TIMEOUT_MS;
+  }
+  return Math.floor(value);
+}
 
 function resolveSessionChannelMeta(message: SubstrateMessage): ChannelMeta | undefined {
-  const privacyLevel = normalizeChannelVisibility(message.routing?.channelPrivacy);
+  const privacyLevel = normalizeChannelPrivacy(message.routing?.channelPrivacy);
   if (message.isDirectMessage === undefined && !privacyLevel) return undefined;
   return {
     ...(message.isDirectMessage !== undefined ? { isDirectMessage: message.isDirectMessage } : {}),
@@ -84,6 +136,9 @@ export class TurnSupportRuntime {
   private readonly backgroundContinuationTasks = new Map<string, BackgroundContinuationTaskRecord>();
   private readonly postTurnActionInferers: PostTurnActionInferer[] = [];
   private readonly intentionPostTurnHooks: IntentionPostTurnHook[] = [];
+  private readonly intentionalNoReplyDecisions = new Map<TurnID, IntentionalNoReplyMetadata>();
+  private postTurnDrainSequence = 0;
+  private activePostTurnDrain: ActivePostTurnDrain | null = null;
 
   constructor(options: TurnSupportRuntimeOptions) {
     this.eventBus = options.eventBus;
@@ -132,6 +187,47 @@ export class TurnSupportRuntime {
     this.activeTurnIntent = intent;
   }
 
+  recordIntentionalNoReplyDecision(input: {
+    source: IntentionalNoReplyMetadata['source'];
+    toolCallId?: string;
+    reason?: string;
+  }): IntentionalNoReplyMetadata | null {
+    const correlation = this.activeTurnCorrelation;
+    const turnId = correlation?.turnId as TurnID | undefined;
+    if (!correlation || !turnId) {
+      log.warn('Intentional no-reply requested without active turn correlation');
+      return null;
+    }
+    const activeCorrelation = correlation;
+
+    const decision: IntentionalNoReplyMetadata = {
+      schemaVersion: 1,
+      disposition: 'intentional_no_reply',
+      source: input.source,
+      auditId: `no-reply:${turnId}:${input.toolCallId ?? 'unknown-tool-call'}`,
+      decidedAt: Date.now(),
+      turnId,
+      ...(activeCorrelation.requestId ? { requestId: activeCorrelation.requestId } : {}),
+      ...(activeCorrelation.channelId ? { channelId: activeCorrelation.channelId } : {}),
+      ...(input.toolCallId ? { toolCallId: input.toolCallId } : {}),
+      ...(input.reason ? { reason: input.reason } : {}),
+    };
+    this.intentionalNoReplyDecisions.set(turnId, decision);
+    this.emitTelemetry('agent.no_reply.intentional', {
+      ...decision,
+      ...this.withCorrelationPurpose(activeCorrelation, 'agent.no_reply.intentional'),
+    });
+    return decision;
+  }
+
+  consumeIntentionalNoReplyDecision(turnId: TurnID): IntentionalNoReplyMetadata | null {
+    const decision = this.intentionalNoReplyDecisions.get(turnId) ?? null;
+    if (decision) {
+      this.intentionalNoReplyDecisions.delete(turnId);
+    }
+    return decision;
+  }
+
   getBackgroundContinuationTasks(): readonly BackgroundContinuationTaskRecord[] {
     return [...this.backgroundContinuationTasks.values()]
       .sort((left, right) => left.completedAt - right.completedAt)
@@ -155,6 +251,159 @@ export class TurnSupportRuntime {
       if (index !== -1) {
         this.intentionPostTurnHooks.splice(index, 1);
       }
+    };
+  }
+
+  registerPostTurnBackgroundWork(input: RegisterPostTurnBackgroundWorkInput): void {
+    const work = input.work.filter(task => task.name.trim().length > 0);
+    if (work.length === 0) {
+      return;
+    }
+
+    const sequence = this.postTurnDrainSequence + 1;
+    this.postTurnDrainSequence = sequence;
+    const taskNames = work.map(task => task.name);
+    const drain: ActivePostTurnDrain = {
+      sequence,
+      channelId: input.channelId,
+      turnId: input.turnId,
+      requestId: input.requestId,
+      taskNames,
+      promise: Promise.resolve(),
+      timedOut: false,
+    };
+
+    drain.promise = Promise.all(
+      work.map(async (task) => {
+        try {
+          await task.promise;
+          return null;
+        } catch (error) {
+          return {
+            name: task.name,
+            error: toErrorMessage(error),
+          };
+        }
+      }),
+    ).then((failures) => {
+      const failedTasks = failures.filter((failure): failure is { name: string; error: string } => failure !== null);
+      if (failedTasks.length > 0) {
+        log.warn('Post-turn background work completed with failures', {
+          channelId: input.channelId,
+          turnId: input.turnId,
+          requestId: input.requestId,
+          failureCount: failedTasks.length,
+          failedTasks,
+        });
+      }
+      this.emitPostTurnDrainTelemetry('drained', {
+        channelId: input.channelId,
+        previousTurnId: input.turnId,
+        previousRequestId: input.requestId,
+        workCount: work.length,
+        taskNames,
+        failureCount: failedTasks.length,
+        correlation: input.correlation,
+      });
+    }).finally(() => {
+      if (this.activePostTurnDrain?.sequence === sequence) {
+        this.activePostTurnDrain = null;
+      }
+    });
+
+    this.activePostTurnDrain = drain;
+    this.emitPostTurnDrainTelemetry('registered', {
+      channelId: input.channelId,
+      previousTurnId: input.turnId,
+      previousRequestId: input.requestId,
+      workCount: work.length,
+      taskNames,
+      correlation: input.correlation,
+    });
+  }
+
+  async awaitPostTurnDrain(input: AwaitPostTurnDrainInput): Promise<AwaitPostTurnDrainResult> {
+    const drain = this.activePostTurnDrain;
+    if (!drain || drain.timedOut) {
+      return {
+        status: 'idle',
+        waitMs: 0,
+        workCount: 0,
+      };
+    }
+
+    const timeoutMs = normalizePostTurnDrainTimeoutMs(input.timeoutMs);
+    const waitStartedAt = Date.now();
+    this.emitPostTurnDrainTelemetry('wait_started', {
+      channelId: input.channelId,
+      turnId: input.turnId,
+      requestId: input.requestId,
+      previousChannelId: drain.channelId,
+      previousTurnId: drain.turnId,
+      previousRequestId: drain.requestId,
+      workCount: drain.taskNames.length,
+      taskNames: drain.taskNames,
+      timeoutMs,
+      correlation: input.correlation,
+    });
+
+    let resolveTimeout!: (value: 'timeout') => void;
+    const timeoutPromise = new Promise<'timeout'>((resolve) => {
+      resolveTimeout = resolve;
+    });
+    const timeoutHandle = setTimeout(() => resolveTimeout('timeout'), timeoutMs);
+    const outcome = await Promise.race([
+      drain.promise.then(() => 'drained' as const),
+      timeoutPromise,
+    ]);
+    clearTimeout(timeoutHandle);
+
+    const waitMs = Math.max(0, Date.now() - waitStartedAt);
+    if (outcome === 'timeout') {
+      drain.timedOut = true;
+      if (this.activePostTurnDrain?.sequence === drain.sequence) {
+        this.activePostTurnDrain = null;
+      }
+      log.warn('Post-turn drain timed out before starting new turn', {
+        channelId: input.channelId,
+        turnId: input.turnId,
+        requestId: input.requestId,
+        previousChannelId: drain.channelId,
+        previousTurnId: drain.turnId,
+        previousRequestId: drain.requestId,
+        timeoutMs,
+        waitMs,
+        taskNames: drain.taskNames,
+      });
+      this.emitPostTurnDrainTelemetry('timeout', {
+        channelId: input.channelId,
+        turnId: input.turnId,
+        requestId: input.requestId,
+        previousTurnId: drain.turnId,
+        previousRequestId: drain.requestId,
+        workCount: drain.taskNames.length,
+        taskNames: drain.taskNames,
+        waitMs,
+        timeoutMs,
+        correlation: input.correlation,
+      });
+      return {
+        status: 'timeout',
+        waitMs,
+        workCount: drain.taskNames.length,
+        previousChannelId: drain.channelId,
+        previousTurnId: drain.turnId,
+        previousRequestId: drain.requestId,
+      };
+    }
+
+    return {
+      status: 'drained',
+      waitMs,
+      workCount: drain.taskNames.length,
+      previousChannelId: drain.channelId,
+      previousTurnId: drain.turnId,
+      previousRequestId: drain.requestId,
     };
   }
 
@@ -304,12 +553,40 @@ export class TurnSupportRuntime {
     });
   }
 
+  private emitPostTurnDrainTelemetry(
+    phase: EventMap['agent.post_turn.drain']['phase'],
+    payload: {
+      channelId: string;
+      turnId?: TurnID;
+      requestId?: string;
+      previousChannelId?: string;
+      previousTurnId?: TurnID;
+      previousRequestId?: string;
+      workCount: number;
+      taskNames: string[];
+      waitMs?: number;
+      timeoutMs?: number;
+      failureCount?: number;
+      correlation?: CorrelationMetadata;
+    },
+  ): void {
+    const { correlation, ...rest } = payload;
+    const purpose = `agent.post_turn.drain.${phase}`;
+    this.emitTelemetry('agent.post_turn.drain', {
+      ...rest,
+      phase,
+      timestamp: Date.now(),
+      ...(correlation ? this.withCorrelationPurpose(correlation, purpose) : { purpose }),
+    });
+  }
+
   recordUserMessage(
     message: SubstrateMessage,
     turnId: TurnID,
     requestId: string,
     trustLevel: TrustLevel,
     continuityUserId?: string,
+    contentOverride?: string,
   ): number | null {
     return recordUserMessageForTurn({
       sessionManager: this.sessionManager,
@@ -318,6 +595,7 @@ export class TurnSupportRuntime {
       requestId,
       trustLevel,
       continuityUserId,
+      contentOverride,
     });
   }
 
@@ -390,8 +668,11 @@ export class TurnSupportRuntime {
     completedAt: number;
     userSessionEntryId: number | null;
     assistantSessionEntryId: number | null;
-    response: AgentResponse;
+    response?: AgentResponse;
+    model?: string;
+    assistantMessageContent?: string;
     turnMessages: AgentMessage[];
+    status?: TurnRecord['status'];
     promptMode: MessagePromptOverrideMode;
     promptText: string;
     contextMessageCount: number;
@@ -403,6 +684,7 @@ export class TurnSupportRuntime {
     turnSnapshot?: TurnSnapshot;
     turnObservability?: TurnObservabilityRecord;
     internalStateSnapshotRef?: string;
+    persistedUserMessageContent?: string;
   }): TurnRecord {
     const roleEnvelopeRefs = this.sessionManager.getRoleEnvelopeRefsForEntries(
       input.message.channelId,

@@ -1,3 +1,4 @@
+import { isRecord } from '../../shared/utils/types.js';
 export type ToolObservationContextDisplayMode = 'full' | 'summary';
 
 export interface ToolObservationContextShape {
@@ -319,8 +320,4 @@ function tryParseJson(content: string): unknown | null {
   } catch {
     return null;
   }
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }

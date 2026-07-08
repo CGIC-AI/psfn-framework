@@ -4,6 +4,9 @@ import {
   type CanonicalModelPurpose,
   type ModelRegistryBudgetPolicy,
   type ModelRegistryEntry,
+  type ModelRegistryPromptCachingPolicy,
+  type PromptCacheRetention,
+  type PromptCacheScope,
   type ModelCatalogEntry,
   type ModelContextBudgetConfig,
   type ModelRouteConfig,
@@ -40,6 +43,7 @@ const MODEL_REGISTRY_THINKING_EFFORT_VALUES = new Set([
   'low',
   'medium',
   'high',
+  'xhigh',
 ]);
 const MODEL_REGISTRY_TEMPERATURE_RANGE = { min: 0, max: 2 } as const;
 const MODEL_REGISTRY_TOP_P_RANGE = { min: 0, max: 1 } as const;
@@ -368,6 +372,57 @@ function normalizeModelRegistryBudgetPolicy(
   };
 }
 
+const MODEL_REGISTRY_PROMPT_CACHE_RETENTIONS = new Set<PromptCacheRetention>(['none', 'short', 'long']);
+const MODEL_REGISTRY_PROMPT_CACHE_SCOPES = new Set<PromptCacheScope>(['channel', 'request']);
+
+/**
+ * Registry-wide provider prompt-caching policy (E2.4). Fail-closed: `enabled`
+ * must be an explicit boolean, and retention/scope must be canonical values
+ * when present. The seed default is `{ "enabled": false }`; the operator flips
+ * it after verifying cache engagement on a test channel.
+ */
+function normalizeModelRegistryPromptCachingPolicy(
+  value: unknown,
+  fieldPath: string,
+): ModelRegistryPromptCachingPolicy {
+  if (!isRecord(value)) {
+    throw new Error(`Invalid model registry at ${fieldPath}: expected object`);
+  }
+
+  const enabled = toBoolean(value.enabled);
+  if (enabled === undefined) {
+    throw new Error(`Invalid model registry at ${fieldPath}.enabled: expected boolean`);
+  }
+
+  let retention: PromptCacheRetention | undefined;
+  if (value.retention !== undefined) {
+    const retentionRaw = toNonEmptyString(value.retention)?.toLowerCase();
+    if (!retentionRaw || !MODEL_REGISTRY_PROMPT_CACHE_RETENTIONS.has(retentionRaw as PromptCacheRetention)) {
+      throw new Error(
+        `Invalid model registry at ${fieldPath}.retention: expected one of ${[...MODEL_REGISTRY_PROMPT_CACHE_RETENTIONS].join(', ')}`,
+      );
+    }
+    retention = retentionRaw as PromptCacheRetention;
+  }
+
+  let scope: PromptCacheScope | undefined;
+  if (value.scope !== undefined) {
+    const scopeRaw = toNonEmptyString(value.scope)?.toLowerCase();
+    if (!scopeRaw || !MODEL_REGISTRY_PROMPT_CACHE_SCOPES.has(scopeRaw as PromptCacheScope)) {
+      throw new Error(
+        `Invalid model registry at ${fieldPath}.scope: expected one of ${[...MODEL_REGISTRY_PROMPT_CACHE_SCOPES].join(', ')}`,
+      );
+    }
+    scope = scopeRaw as PromptCacheScope;
+  }
+
+  return {
+    enabled,
+    ...(retention ? { retention } : {}),
+    ...(scope ? { scope } : {}),
+  };
+}
+
 function normalizeModelRegistryEntry(value: unknown, fieldPath: string): ModelRegistryEntry {
   if (!isRecord(value)) {
     throw new Error(`Invalid model registry at ${fieldPath}: expected object`);
@@ -489,6 +544,9 @@ export function normalizeCanonicalModelRegistry(
   const budgetPolicy = value.budgetPolicy !== undefined
     ? normalizeModelRegistryBudgetPolicy(value.budgetPolicy, `${sourcePath}.budgetPolicy`)
     : undefined;
+  const promptCaching = value.promptCaching !== undefined
+    ? normalizeModelRegistryPromptCachingPolicy(value.promptCaching, `${sourcePath}.promptCaching`)
+    : undefined;
 
   const seenIds = new Set<string>();
   const models = value.models.map((entry, index) => {
@@ -525,6 +583,7 @@ export function normalizeCanonicalModelRegistry(
     schemaVersion: 1,
     models,
     ...(budgetPolicy ? { budgetPolicy } : {}),
+    ...(promptCaching ? { promptCaching } : {}),
   };
 }
 

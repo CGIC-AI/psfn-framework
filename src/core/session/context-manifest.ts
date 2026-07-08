@@ -25,6 +25,8 @@ export interface ContextManifestMemorySeed {
   retrievalBudgetPct?: number;
   retrievalTokenBudget?: number;
   retrievalLimitMode?: 'budget' | 'hard_limit';
+  sessionQuarantineRejectedCount?: number;
+  roomVisibilityRejectedCount?: number;
   contactScopeRejectedCount?: number;
   sensitivityRejectedCount?: number;
   policyRejectedCount?: number;
@@ -45,6 +47,7 @@ export type ContextManifestSection =
   | 'memories'
   | 'compaction_summary'
   | 'continuity'
+  | 'cogsec_notices'
   | 'session_history';
 
 export interface ContextManifestSectionUsage {
@@ -78,6 +81,8 @@ export interface ContextManifestMemorySummary {
   rankedCount: number;
   returnedCount: number;
   excluded: {
+    sessionQuarantineRejectedCount?: number;
+    roomVisibilityRejectedCount?: number;
     contactScopeRejectedCount?: number;
     sensitivityRejectedCount: number;
     policyRejectedCount: number;

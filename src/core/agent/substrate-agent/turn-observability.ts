@@ -1,7 +1,7 @@
 import type { CorrelationMetadata, ObservabilityCallType, SubstrateMessage, TurnID } from '../../../shared/contracts/runtime.js';
 import { isDeferredToolHandoffMessageId } from '../deferred-tool-handoff.js';
 
-export type TurnStageName = 'trust' | 'memory' | 'context' | 'prompt' | 'first-token' | 'end';
+export type TurnStageName = 'trust' | 'memory' | 'fatigue' | 'context' | 'prompt' | 'first-token' | 'end';
 
 export interface TurnStageTelemetryParams {
   message: SubstrateMessage;

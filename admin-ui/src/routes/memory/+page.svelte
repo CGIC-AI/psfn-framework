@@ -4,12 +4,15 @@
     bulkDeleteMemories,
     bulkUpdateMemories,
     deleteMemory,
+    dropMemoryBodyElevation,
+    elevateMemoryBodyAccess,
     getMemoryDetail,
     getManagedMemoryScopeDetail,
     getMemoryLinks,
     linkMemories,
     listManagedMemoryScopes,
     listMemories,
+    revealMemory,
     searchMemories,
     unlinkMemories,
     updateMemoryScope,
@@ -18,6 +21,7 @@
     AdminBulkMutationResult,
     AdminMemoryContactSummary,
     AdminMemoryDetailData,
+    AdminMemoryElevationStatus,
     AdminMemoryLink,
     AdminMemoryListData,
     AdminMemorySearchResult,
@@ -28,6 +32,7 @@
 
   const MEMORY_TYPES = ['', 'episodic', 'semantic', 'emotional', 'procedural', 'reflection', 'relational'];
   const SENSITIVITY_LEVELS = ['', 'public', 'personal', 'intimate', 'confidential'];
+  const RETENTION_CLASSES = ['', 'standard', 'durable'];
   const MEMORY_LINK_TYPES = ['related', 'supports', 'conflicts', 'sequence', 'causal'];
   const MANAGED_SCOPE_KINDS = [
     { value: 'project', label: 'Project' },
@@ -44,6 +49,8 @@
 
   let typeFilter = $state('');
   let sensitivityFilter = $state('');
+  let retentionFilter = $state('');
+  let preferenceOnlyFilter = $state(false);
   let startDateFilter = $state('');
   let endDateFilter = $state('');
   let searchQuery = $state('');
@@ -62,6 +69,7 @@
   let selectedIds = $state<string[]>([]);
   let bulkMemoryType = $state('');
   let bulkSensitivity = $state('');
+  let bulkRetentionClass = $state('');
   let linksById = $state<Record<string, AdminMemoryLink[]>>({});
   let linkTargetById = $state<Record<string, string>>({});
   let linkTypeById = $state<Record<string, string>>({});
@@ -77,6 +85,9 @@
   let scopeEditorRefLabel = $state('');
   let scopeEditorTags = $state('');
   let scopeMutating = $state(false);
+  let elevation = $state<AdminMemoryElevationStatus | null>(null);
+  let elevationMutating = $state(false);
+  let revealingId = $state<string | null>(null);
 
   let selectedCount = $derived(selectedIds.length);
 
@@ -166,6 +177,8 @@
   function clearListFilters(): void {
     typeFilter = '';
     sensitivityFilter = '';
+    retentionFilter = '';
+    preferenceOnlyFilter = false;
     startDateFilter = '';
     endDateFilter = '';
     offset = 0;
@@ -193,11 +206,14 @@
       data = await listMemories({
         type: typeFilter || undefined,
         sensitivity: sensitivityFilter || undefined,
+        retention: retentionFilter || undefined,
+        preference: preferenceOnlyFilter || undefined,
         startDate: startDateFilter || undefined,
         endDate: endDateFilter || undefined,
         limit: PAGE_SIZE,
         offset,
       });
+      elevation = data.elevation ?? elevation;
     } catch (e) {
       error = e instanceof Error ? e.message : 'Failed to load memories';
     } finally {
@@ -224,6 +240,7 @@
       if (requestId !== searchRequestId) return;
       searchResults = nextResults;
       searchActive = true;
+      elevation = nextResults.elevation ?? elevation;
     } catch (e) {
       if (requestId !== searchRequestId) return;
       error = e instanceof Error ? e.message : 'Search failed';
@@ -252,6 +269,7 @@
 
     try {
       detailModalData = await getMemoryDetail(id);
+      elevation = detailModalData.elevation ?? elevation;
       syncScopeEditorFromDetail();
       await ensureLinksLoaded(id);
     } catch (e) {
@@ -325,14 +343,15 @@
       flash(false, 'Select at least one memory');
       return;
     }
-    if (!bulkMemoryType && !bulkSensitivity) {
-      flash(false, 'Choose a memory type and/or sensitivity');
+    if (!bulkMemoryType && !bulkSensitivity && !bulkRetentionClass) {
+      flash(false, 'Choose a memory type, sensitivity, or retention class');
       return;
     }
     try {
       const result = await bulkUpdateMemories(selectedIds, {
         ...(bulkMemoryType ? { memoryType: bulkMemoryType } : {}),
         ...(bulkSensitivity ? { sensitivity: bulkSensitivity } : {}),
+        ...(bulkRetentionClass ? { retentionClass: bulkRetentionClass } : {}),
       });
       flash(true, `Updated ${result.count} memories`);
       await loadMemories();
@@ -437,9 +456,24 @@
     return `${level}: ${privacySummary?.sensitivityCounts?.[level] ?? 0}`;
   }
 
-  function formatDate(ts: number | undefined): string {
-    if (ts === undefined || ts === null) return 'unknown';
-    return new Date(ts).toLocaleDateString(undefined, {
+  type TimestampLike = number | string | null | undefined;
+
+  function normalizeTimestamp(ts: TimestampLike): number | undefined {
+    if (ts === undefined || ts === null) return undefined;
+    if (typeof ts === 'number' && Number.isFinite(ts)) return ts;
+    if (typeof ts === 'string' && ts.trim().length > 0) {
+      const parsed = Number(ts);
+      if (Number.isFinite(parsed)) return parsed;
+    }
+    return undefined;
+  }
+
+  function formatDate(ts: TimestampLike): string {
+    const normalized = normalizeTimestamp(ts);
+    if (normalized === undefined) return 'unknown';
+    const date = new Date(normalized);
+    if (Number.isNaN(date.getTime())) return 'unknown';
+    return date.toLocaleDateString(undefined, {
       year: 'numeric', month: 'short', day: 'numeric',
       hour: '2-digit', minute: '2-digit',
     });
@@ -460,12 +494,12 @@
   }
 
   // Backend uses `extractedAt`, old frontend used `createdAt`
-  function memCreated(m: AdminUiPurrMemory): number | undefined {
+  function memCreated(m: AdminUiPurrMemory): TimestampLike {
     return m.extractedAt ?? m.createdAt;
   }
 
   // Backend uses `lastAccessed`, old frontend used `updatedAt`
-  function memUpdated(m: AdminUiPurrMemory): number | undefined {
+  function memUpdated(m: AdminUiPurrMemory): TimestampLike {
     return m.lastAccessed ?? m.updatedAt;
   }
 
@@ -475,7 +509,7 @@
   }
 
   // Backend uses `deletedAt` for superseded, old frontend used `supersededAt`
-  function memSuperseded(m: AdminUiPurrMemory): number | undefined {
+  function memSuperseded(m: AdminUiPurrMemory): TimestampLike {
     return m.deletedAt ?? m.supersededAt;
   }
 
@@ -483,6 +517,24 @@
   function memTags(m: AdminUiPurrMemory): string {
     if (Array.isArray(m.tags)) return m.tags.join(', ');
     return String(m.tags ?? '');
+  }
+
+  function memoryTagSet(m: AdminUiPurrMemory): Set<string> {
+    return new Set(
+      (Array.isArray(m.tags) ? m.tags : String(m.tags ?? '').split(','))
+        .map(tag => tag.trim().toLowerCase())
+        .filter(Boolean)
+    );
+  }
+
+  function isDurableMemoryView(m: AdminUiPurrMemory): boolean {
+    const tags = memoryTagSet(m);
+    return m.retentionClass === 'durable' || tags.has('durable') || tags.has('durable_preference');
+  }
+
+  function isPreferenceMemoryView(m: AdminUiPurrMemory): boolean {
+    const tags = memoryTagSet(m);
+    return tags.has('preference') || [...tags].some(tag => tag.startsWith('preference:'));
   }
 
   function managedScopeKey(kind: string, id: string): string {
@@ -618,6 +670,52 @@
     }
   }
 
+  async function handleElevate(): Promise<void> {
+    elevationMutating = true;
+    try {
+      elevation = await elevateMemoryBodyAccess();
+      flash(true, 'Memory body access elevated (audited). Intimate/confidential bodies are visible until the elevation expires.');
+      await Promise.all([
+        loadMemories(),
+        detailModalId ? openDetailModal(detailModalId) : Promise.resolve(),
+      ]);
+    } catch (e) {
+      flash(false, e instanceof Error ? e.message : 'Failed to elevate memory body access');
+    } finally {
+      elevationMutating = false;
+    }
+  }
+
+  async function handleDropElevation(): Promise<void> {
+    elevationMutating = true;
+    try {
+      elevation = await dropMemoryBodyElevation();
+      flash(true, 'Memory body access elevation ended. High-intimacy bodies are redacted again.');
+      await Promise.all([
+        loadMemories(),
+        detailModalId ? openDetailModal(detailModalId) : Promise.resolve(),
+      ]);
+    } catch (e) {
+      flash(false, e instanceof Error ? e.message : 'Failed to end memory elevation');
+    } finally {
+      elevationMutating = false;
+    }
+  }
+
+  async function handleReveal(id: string): Promise<void> {
+    revealingId = id;
+    try {
+      detailModalData = await revealMemory(id);
+      elevation = detailModalData.elevation ?? elevation;
+      syncScopeEditorFromDetail();
+      flash(true, 'Memory body revealed (audited).');
+    } catch (e) {
+      flash(false, e instanceof Error ? e.message : 'Failed to reveal memory body');
+    } finally {
+      revealingId = null;
+    }
+  }
+
   onMount(() => {
     loadMemories();
     loadManagedScopes();
@@ -646,7 +744,40 @@
       </p>
     </div>
 
-    <div class="grid grid-cols-2 gap-3 lg:grid-cols-5">
+    <div class="flex flex-wrap items-center gap-3 rounded-xl border p-3
+      {elevation?.elevated ? 'border-wilt-200 bg-wilt-50' : 'border-bark-200 bg-bark-50'}">
+      {#if elevation?.elevated}
+        <span class="px-2.5 py-0.5 text-sm rounded-full font-medium bg-wilt-600 text-white">
+          Elevated
+        </span>
+        <span class="text-sm text-wilt-700">
+          Intimate and confidential memory bodies are visible
+          {#if elevation.expiresAt}until {formatDate(elevation.expiresAt)}{/if}. Every elevation is audit-logged.
+        </span>
+        <button
+          onclick={() => { void handleDropElevation(); }}
+          disabled={elevationMutating}
+          class="ml-auto px-3 py-1.5 rounded-lg border border-wilt-300 text-wilt-700 text-sm font-medium
+                 hover:bg-wilt-100 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+        >
+          End elevation
+        </button>
+      {:else}
+        <span class="text-sm text-shadow-600">
+          Intimate and confidential memory bodies are redacted by default. Metadata stays browsable; reveal per memory or elevate this session (both audited).
+        </span>
+        <button
+          onclick={() => { void handleElevate(); }}
+          disabled={elevationMutating}
+          class="ml-auto px-3 py-1.5 rounded-lg border border-bark-300 text-shadow-800 text-sm font-medium
+                 hover:bg-bark-200 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+        >
+          Elevate{elevation?.ttlMs ? ` for ${Math.round(elevation.ttlMs / 60000)} min` : ''} (audited)
+        </button>
+      {/if}
+    </div>
+
+    <div class="grid grid-cols-2 gap-3 lg:grid-cols-7">
       <div class="rounded-xl border border-bark-200 bg-bark-50 p-3">
         <p class="text-xs uppercase tracking-[0.16em] text-shadow-500">Active</p>
         <p class="mt-2 font-serif text-2xl text-shadow-900">{privacySummary?.activeMemoryCount ?? 0}</p>
@@ -666,6 +797,14 @@
       <div class="rounded-xl border border-bark-200 bg-bark-50 p-3">
         <p class="text-xs uppercase tracking-[0.16em] text-shadow-500">Scoped</p>
         <p class="mt-2 font-serif text-2xl text-shadow-900">{privacySummary?.scopedCount ?? 0}</p>
+      </div>
+      <div class="rounded-xl border border-bark-200 bg-bark-50 p-3">
+        <p class="text-xs uppercase tracking-[0.16em] text-shadow-500">Preferences</p>
+        <p class="mt-2 font-serif text-2xl text-shadow-900">{privacySummary?.preferenceCount ?? 0}</p>
+      </div>
+      <div class="rounded-xl border border-moss-200 bg-moss-50 p-3">
+        <p class="text-xs uppercase tracking-[0.16em] text-moss-700">Durable Prefs</p>
+        <p class="mt-2 font-serif text-2xl text-moss-700">{privacySummary?.durablePreferenceCount ?? 0}</p>
       </div>
     </div>
 
@@ -815,6 +954,14 @@
                         Repair suggested
                       </span>
                     {/if}
+                    {#if entry.memory.bodyRedacted}
+                      <span
+                        class="rounded-full bg-wilt-50 px-2 py-0.5 text-wilt-700 border border-wilt-200"
+                        title={entry.memory.bodyRedaction?.revealHint ?? 'Body hidden; reveal or elevate to view (audited).'}
+                      >
+                        body hidden{entry.memory.bodyRedaction ? ` (${entry.memory.bodyRedaction.originalLength} chars)` : ''}
+                      </span>
+                    {/if}
                     <span class="rounded-full bg-bark-200 px-2 py-0.5 text-shadow-700">
                       {entry.memory.type}
                     </span>
@@ -844,7 +991,7 @@
 
   <!-- Filter bar -->
   <div class="card-garden p-4 space-y-3">
-    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
+    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-3">
       <select
         bind:value={typeFilter}
         onchange={applyListFilters}
@@ -868,6 +1015,28 @@
           <option value={level}>{level.charAt(0).toUpperCase() + level.slice(1)}</option>
         {/each}
       </select>
+
+      <select
+        bind:value={retentionFilter}
+        onchange={applyListFilters}
+        class="px-3 py-2 rounded-lg border border-bark-300 bg-bark-50 text-shadow-800
+               focus:outline-none focus:border-gold-400 focus:ring-2 focus:ring-gold-300 text-sm"
+      >
+        <option value="">All Retention</option>
+        {#each RETENTION_CLASSES.filter(level => level) as retentionClass}
+          <option value={retentionClass}>{retentionClass.charAt(0).toUpperCase() + retentionClass.slice(1)}</option>
+        {/each}
+      </select>
+
+      <label class="flex items-center gap-2 px-3 py-2 rounded-lg border border-bark-300 bg-bark-50 text-sm text-shadow-800">
+        <input
+          type="checkbox"
+          bind:checked={preferenceOnlyFilter}
+          onchange={applyListFilters}
+          class="h-4 w-4 rounded border-bark-300 accent-gold-600"
+        />
+        Preferences
+      </label>
 
       <input
         type="date"
@@ -985,6 +1154,15 @@
           <option value={sensitivity}>{sensitivity}</option>
         {/each}
       </select>
+      <select
+        bind:value={bulkRetentionClass}
+        class="px-3 py-2 rounded-lg border border-bark-300 bg-bark-50 text-shadow-800 text-sm"
+      >
+        <option value="">Set retention (optional)</option>
+        {#each RETENTION_CLASSES.filter(t => t) as retentionClass}
+          <option value={retentionClass}>{retentionClass}</option>
+        {/each}
+      </select>
       <button
         onclick={handleBulkUpdate}
         disabled={selectedCount === 0}
@@ -1045,6 +1223,16 @@
                   {memory.sensitivity}
                 </span>
               {/if}
+              {#if isDurableMemoryView(memory)}
+                <span class="px-2 py-0.5 text-sm rounded border bg-moss-50 text-moss-700 border-moss-200">
+                  durable
+                </span>
+              {/if}
+              {#if isPreferenceMemoryView(memory)}
+                <span class="px-2 py-0.5 text-sm rounded border bg-gold-50 text-gold-800 border-gold-200">
+                  preference
+                </span>
+              {/if}
               {#if memory.contactId && contactsById[memory.contactId]}
                 <span class="px-2 py-0.5 text-sm rounded border bg-bark-200 text-shadow-800 border-bark-300">
                   {contactsById[memory.contactId].displayName}
@@ -1053,6 +1241,14 @@
               {#if memSuperseded(memory)}
                 <span class="px-2 py-0.5 text-sm rounded border bg-bark-200 text-shadow-600 border-bark-300 line-through">
                   superseded
+                </span>
+              {/if}
+              {#if memory.bodyRedacted}
+                <span
+                  class="px-2 py-0.5 text-sm rounded border bg-wilt-50 text-wilt-700 border-wilt-200"
+                  title={memory.bodyRedaction?.revealHint ?? 'Body hidden; reveal or elevate to view (audited).'}
+                >
+                  body hidden{memory.bodyRedaction ? ` (${memory.bodyRedaction.originalLength} chars)` : ''}
                 </span>
               {/if}
             </div>
@@ -1182,6 +1378,16 @@
                 {detailModalData.memory.sensitivity}
               </span>
             {/if}
+            {#if isDurableMemoryView(detailModalData.memory)}
+              <span class="px-2 py-0.5 text-sm rounded border bg-moss-50 text-moss-700 border-moss-200">
+                durable
+              </span>
+            {/if}
+            {#if isPreferenceMemoryView(detailModalData.memory)}
+              <span class="px-2 py-0.5 text-sm rounded border bg-gold-50 text-gold-800 border-gold-200">
+                preference
+              </span>
+            {/if}
             {#if detailModalData.linkedContact}
               <span class="px-2 py-0.5 text-sm rounded border bg-bark-200 text-shadow-800 border-bark-300">
                 {detailModalData.linkedContact.displayName}
@@ -1193,7 +1399,27 @@
             {/if}
           </div>
 
-          <p class="text-shadow-800 leading-relaxed">{memText(detailModalData.memory)}</p>
+          {#if detailModalData.memory.bodyRedacted}
+            <div class="rounded-lg border border-wilt-200 bg-wilt-50 p-3 space-y-2">
+              <p class="text-sm font-medium text-wilt-700">
+                Body redacted ({detailModalData.memory.bodyRedaction?.sensitivity ?? detailModalData.memory.sensitivity}
+                {detailModalData.memory.bodyRedaction ? ` -- ${detailModalData.memory.bodyRedaction.originalLength} chars hidden` : ''})
+              </p>
+              <p class="text-sm text-wilt-700">
+                {detailModalData.memory.bodyRedaction?.revealHint ?? 'Reveal this memory or elevate memory body access to view (both are audit-logged).'}
+              </p>
+              <button
+                onclick={() => { void handleReveal(detailMemoryId); }}
+                disabled={revealingId === detailModalData.memory.id}
+                class="px-3 py-1.5 rounded-lg border border-wilt-300 text-wilt-700 text-sm font-medium
+                       hover:bg-wilt-100 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+              >
+                {revealingId === detailModalData.memory.id ? 'Revealing...' : 'Reveal body (audited)'}
+              </button>
+            </div>
+          {:else}
+            <p class="text-shadow-800 leading-relaxed">{memText(detailModalData.memory)}</p>
+          {/if}
 
           <div class="grid grid-cols-1 sm:grid-cols-2 gap-2 text-shadow-700">
             <span>Extracted: <span class="text-shadow-800">{formatDate(memCreated(detailModalData.memory))}</span></span>
@@ -1209,6 +1435,9 @@
             {/if}
             {#if detailModalData.memory.accessCount !== undefined}
               <span>Access Count: <span class="text-shadow-800">{detailModalData.memory.accessCount}</span></span>
+            {/if}
+            {#if detailModalData.memory.retentionClass}
+              <span>Retention: <span class="text-shadow-800">{detailModalData.memory.retentionClass}</span></span>
             {/if}
             {#if detailModalData.memory.sourceRef}
               <span class="sm:col-span-2">Source: <code class="text-shadow-800 bg-bark-200 px-1 rounded text-sm break-all">{detailModalData.memory.sourceRef}</code></span>

@@ -1,4 +1,3 @@
-import type { ProcessEnv } from 'node:process';
 import type {
   RuntimeChannelsConfig,
   RuntimeChannelsConfigOverrides,
@@ -71,7 +70,7 @@ export interface ConfigStorePort {
   saveCapabilityTier(nextConfig: unknown): CapabilityTierConfig;
   loadChargePolicy(): ChargePolicyConfig;
   saveChargePolicy(nextConfig: unknown): ChargePolicyConfig;
-  loadChannels(env?: ProcessEnv, overrides?: RuntimeChannelsConfigOverrides): RuntimeChannelsConfig;
+  loadChannels(env?: NodeJS.ProcessEnv, overrides?: RuntimeChannelsConfigOverrides): RuntimeChannelsConfig;
   loadChannelsOwnerFile(): Record<string, unknown>;
   saveChannelsOwnerFile(nextConfig: unknown): Record<string, unknown>;
   loadBackup(): BackupJsonConfig;

@@ -132,11 +132,29 @@ function collectTextViolations(file, text, rules) {
 }
 
 /** @returns {string[]} */
-function listTrackedFiles() {
-  return execSync('git ls-files -z', { encoding: 'utf8' })
+export function parseTrackedFilesFromGitLsStage(raw) {
+  return raw
     .split('\0')
     .filter(Boolean)
-    .map((file) => toPosixRelativePath(file));
+    .map((entry) => {
+      const pathSeparatorIndex = entry.indexOf('\t');
+      if (pathSeparatorIndex === -1) {
+        throw new Error(`Malformed git ls-files --stage entry: ${entry}`);
+      }
+      const [mode] = entry.slice(0, pathSeparatorIndex).split(' ');
+      if (mode === '160000') {
+        return null;
+      }
+      return toPosixRelativePath(entry.slice(pathSeparatorIndex + 1));
+    })
+    .filter((file) => file !== null);
+}
+
+/** @returns {string[]} */
+function listTrackedFiles() {
+  return parseTrackedFilesFromGitLsStage(
+    execSync('git ls-files --stage -z', { encoding: 'utf8' }),
+  );
 }
 
 /**
@@ -154,6 +172,7 @@ function listTrackedFiles() {
 export function scanPublicSanitizeTrackedFiles(trackedFiles, options = {}) {
   const localBlocklist = options.localBlocklist ?? loadLocalBlocklist();
   const readTextFile = options.readTextFile ?? ((file) => readFileSync(file, 'utf8'));
+  const skipMissingWorkingTreeFiles = options.readTextFile === undefined;
 
   /** @type {Array<{file:string, line:number, rule:string, snippet:string}>} */
   const violations = [];
@@ -178,6 +197,9 @@ export function scanPublicSanitizeTrackedFiles(trackedFiles, options = {}) {
       continue;
     }
 
+    if (skipMissingWorkingTreeFiles && !existsSync(trackedFile)) {
+      continue;
+    }
     const text = readTextFile(trackedFile);
     violations.push(...collectTextViolations(trackedFile, text, TEXT_RULES));
     violations.push(...collectTextViolations(trackedFile, text, localBlocklist.textRuleRegex));

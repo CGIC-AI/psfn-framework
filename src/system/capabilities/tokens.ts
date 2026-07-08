@@ -1,5 +1,6 @@
 export const CAPABILITY_TOKENS = [
   'identity.read',
+  'internal.read',
   'identity.write.runtime',
   'identity.write.base',
   'identity.write.operator',

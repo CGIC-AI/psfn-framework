@@ -41,14 +41,14 @@ export function createLocalAdminToolHealthProvider(
             ? {
               serviceId: 'vault',
               status: 'healthy',
-              detail: `Local vault tools are configured for "${vaultName}".`,
+              detail: `External Obsidian vault bridge is configured for "${vaultName}".`,
               checkedAt,
               availableActions: [...ALL_VAULT_ACTIONS],
             }
             : {
               serviceId: 'vault',
               status: 'not_applicable',
-              detail: 'Vault tools are disabled in this runtime.',
+              detail: 'External Obsidian vault bridge is disabled in this runtime.',
               checkedAt,
             },
         ],
@@ -85,7 +85,7 @@ export function createGatewayAdminToolHealthProvider(
             {
               serviceId: 'vault',
               status: 'unavailable',
-              detail: 'Gateway runtime health is unavailable; vault status is unknown.',
+              detail: 'Gateway runtime health is unavailable; external vault bridge status is unknown.',
               checkedAt,
             },
             {

@@ -8,6 +8,7 @@ import {
   MEMORY_CONFIG,
   computeMemoryScopeMatchStrength,
   evaluateMemoryPrivacyRisk,
+  isDurablePreferenceMemory,
   type MemoryPrivacyRiskBreakdown,
   type MemoryScopeQuery,
   type PurrMemory,
@@ -28,6 +29,19 @@ const REFLECTION_PROVENANCE_PREFIXES = [
   'reflection_daily:',
   'reflection_process:',
 ] as const;
+const PREFERENCE_CONTEXT_HINT =
+  /\b(favou?rite|prefer|preference|likes?|loves?|enjoys?|dislikes?|hates?|taste|colou?r|outfit|wear|clothes?|moment|memory|recommend|choose|which)\b/i;
+const BROAD_PROFILE_CONTEXT_HINT =
+  /\b(what do you remember|what do we remember|tell me about|what do you know about|profile|preferences?)\b/i;
+const PREFERENCE_CATEGORY_CONTEXT_HINTS: ReadonlyArray<readonly [string, RegExp]> = [
+  ['preference:color', /\b(?:colou?r|palette|shade|hue)\b/i],
+  ['preference:outfit', /\b(?:outfit|wear|clothes?|clothing|dress|shirt|jacket)\b/i],
+  ['preference:moment', /\b(?:moment|memory|occasion|tradition|ritual)\b/i],
+  ['preference:food', /\b(?:food|meal|coffee|tea|drink|dessert|snack|restaurant|cuisine)\b/i],
+  ['preference:media', /\b(?:music|song|movie|film|book|game|show|artist|album)\b/i],
+  ['preference:place', /\b(?:place|city|room|park|beach|mountain|home|venue)\b/i],
+  ['preference:style', /\b(?:style|aesthetic|vibe|tone|format|communication)\b/i],
+];
 
 interface RetrievalScoreComponents {
   score: number;
@@ -36,6 +50,8 @@ interface RetrievalScoreComponents {
   contradictionPenaltyMultiplier: number;
   explicitlyQueried: boolean;
   lowConfidenceSingleSourceSuppressed: boolean;
+  quietPreferenceSuppressed: boolean;
+  preferenceContextBoost: number;
   evidenceSourceCount: number;
   privacyRisk: number;
   privacyPenalty: number;
@@ -66,6 +82,17 @@ export function collectSelectedProvenanceRefs(
     refs.add('retrieval:lexical_fallback');
   }
   for (const item of scored) {
+    // The metacognition monitor counts memory-backed evidence by the
+    // `memory:` prefix; without these entries supporting_memories is
+    // structurally zero and confabulation_risk pins at max confidence.
+    if (item.memory.id.trim()) {
+      refs.add(`memory:${item.memory.id.trim()}`);
+    }
+    for (const link of item.evolutionChain ?? []) {
+      if (link.relation === 'conflicts_with' || link.relation === 'negates') {
+        refs.add(`memory:${link.memory.id}|conflict:${link.relation}`);
+      }
+    }
     if (item.memory.sourceRef.trim()) {
       refs.add(item.memory.sourceRef.trim());
     }
@@ -80,12 +107,13 @@ export function collectSelectedProvenanceRefs(
 export function applyScoreGuarantee(scoredCandidates: ScoredMemory[]): ScoreGuaranteeResult {
   const positiveScored = scoredCandidates.filter(candidate => candidate.score > 0);
   const zeroScored = scoredCandidates.filter(candidate => candidate.score <= 0);
+  const guaranteeEligibleZeroScored = zeroScored.filter(candidate => !candidate.quietPreferenceSuppressed);
   const rejectedByScore = zeroScored.length;
 
   let scoreGuaranteedCount = 0;
-  if (positiveScored.length < SCORE_GUARANTEE_MIN_K && zeroScored.length > 0) {
+  if (positiveScored.length < SCORE_GUARANTEE_MIN_K && guaranteeEligibleZeroScored.length > 0) {
     const needed = SCORE_GUARANTEE_MIN_K - positiveScored.length;
-    const rescued = zeroScored
+    const rescued = guaranteeEligibleZeroScored
       .sort((a, b) => b.memory.similarity - a.memory.similarity)
       .slice(0, needed)
       .map(item => ({
@@ -133,6 +161,9 @@ export function computeRetrievalScore(
   const boundarySimilarityBoost = isBoundaryMemory(memory)
     ? computeBoundarySimilarityBoost(contextText, memory)
     : 1;
+  const explicitlyQueried = hasExplicitMemoryMention(contextText, memory.text);
+  const preferenceContext = computePreferenceContextRelevance(memory, contextText, explicitlyQueried);
+  const preferenceContextBoost = preferenceContext.relevant ? preferenceContext.boost : 1;
   const scopeMatchStrength = computeMemoryScopeMatchStrength(memory, options?.scopeQuery);
   const scopeBoost = 1 + (scopeMatchStrength * 0.35);
   const accessReinforcementBoost = deriveAccessReinforcement(memory);
@@ -146,16 +177,21 @@ export function computeRetrievalScore(
     moodCongruenceFactor *
     typePriorityBoost *
     boundarySimilarityBoost *
+    preferenceContextBoost *
     scopeBoost *
     accessReinforcementBoost
   );
   const evidence = deriveEvidenceSupport(memory);
   const contradictionPenaltyMultiplier = deriveContradictionPenalty(memory);
-  const explicitlyQueried = hasExplicitMemoryMention(contextText, memory.text);
   const retrievalModeExcluded = reflectionMode && isReflectionRetrievalCandidate(memory);
   const lowConfidenceSingleSourceSuppressed = (
     evidence.sourceCount <= 1
     && memory.confidence < 0.45
+    && !explicitlyQueried
+  );
+  const quietPreferenceSuppressed = (
+    isDurablePreferenceMemory(memory)
+    && !preferenceContext.relevant
     && !explicitlyQueried
   );
   const evidenceBoost = 0.45 + (evidence.support * 0.55);
@@ -167,6 +203,9 @@ export function computeRetrievalScore(
     const dominanceCap = memory.similarity * 0.02;
     score = Math.min(score, dominanceCap);
   }
+  if (!retrievalModeExcluded && quietPreferenceSuppressed) {
+    score = 0;
+  }
   return {
     score,
     baseScore,
@@ -174,6 +213,8 @@ export function computeRetrievalScore(
     contradictionPenaltyMultiplier,
     explicitlyQueried,
     lowConfidenceSingleSourceSuppressed,
+    quietPreferenceSuppressed,
+    preferenceContextBoost,
     evidenceSourceCount: evidence.sourceCount,
     privacyRisk: privacyEvaluation.risk,
     privacyPenalty,
@@ -187,6 +228,7 @@ function computeRetrievalRecencyBoost(
   now: number,
   temporalMode: boolean,
 ): number {
+  if (!Number.isFinite(extractedAt)) return 1;
   const ageDays = Math.max(0, (now - extractedAt) / (1000 * 60 * 60 * 24));
   const decayDays = temporalMode ? TEMPORAL_RECENCY_DECAY_DAYS : DEFAULT_RECENCY_DECAY_DAYS;
   return 1 / (1 + ageDays / decayDays);
@@ -222,10 +264,12 @@ function isReflectionRetrievalCandidate(
 }
 
 function isSameUtcDay(left: number, right: number): boolean {
+  if (!Number.isFinite(left) || !Number.isFinite(right)) return false;
   return formatUtcDate(left) === formatUtcDate(right);
 }
 
 function formatUtcDate(epochMs: number): string {
+  if (!Number.isFinite(epochMs)) return '';
   return new Date(epochMs).toISOString().slice(0, 10);
 }
 
@@ -285,7 +329,9 @@ function deriveAccessReinforcement(
 ): number {
   const effectiveLastAccessed = Number.isFinite(memory.lastAccessed)
     ? memory.lastAccessed
-    : memory.extractedAt;
+    : Number.isFinite(memory.extractedAt)
+      ? memory.extractedAt
+      : Date.now();
   const ageMs = Math.max(0, Date.now() - effectiveLastAccessed);
   const ageDays = ageMs / (1000 * 60 * 60 * 24);
   const freshnessDays = Math.max(1, MEMORY_CONFIG.retrievalAccessFreshnessDays);
@@ -317,6 +363,43 @@ function deriveContradictionPenalty(
   if (memory.supersededBy) return 0.25;
   if (hasContradictionHint) return 0.55;
   return 1;
+}
+
+function computePreferenceContextRelevance(
+  memory: Pick<PurrMemory, 'text' | 'type' | 'tags' | 'retentionClass'>,
+  contextText: string,
+  explicitlyQueried: boolean,
+): { relevant: boolean; boost: number } {
+  if (!isDurablePreferenceMemory(memory)) {
+    return { relevant: false, boost: 1 };
+  }
+  const context = contextText.trim();
+  if (!context) return { relevant: false, boost: 1 };
+  if (explicitlyQueried) return { relevant: true, boost: 1.4 };
+  if (BROAD_PROFILE_CONTEXT_HINT.test(context)) return { relevant: true, boost: 1.15 };
+
+  const tags = new Set(memory.tags.map(tag => tag.trim().toLowerCase()).filter(Boolean));
+  for (const [tag, pattern] of PREFERENCE_CATEGORY_CONTEXT_HINTS) {
+    if (tags.has(tag) && pattern.test(context)) {
+      return { relevant: true, boost: 1.45 };
+    }
+  }
+
+  if (!PREFERENCE_CONTEXT_HINT.test(context)) return { relevant: false, boost: 1 };
+
+  const contextTokens = new Set(tokenizeForExplicitMatch(context));
+  if (contextTokens.size === 0) return { relevant: false, boost: 1 };
+  const memoryTokens = new Set([
+    ...tokenizeForExplicitMatch(memory.text),
+    ...memory.tags.flatMap(tag => tokenizeForExplicitMatch(tag)),
+  ]);
+  let overlap = 0;
+  for (const token of contextTokens) {
+    if (memoryTokens.has(token)) overlap++;
+  }
+  return overlap > 0
+    ? { relevant: true, boost: Math.min(1.5, 1.2 + overlap * 0.08) }
+    : { relevant: false, boost: 1 };
 }
 
 function countDistinctEvidenceSources(

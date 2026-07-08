@@ -76,20 +76,21 @@ describe('ImageService', () => {
   it('uses FAL by default when the provider succeeds', async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
-      if (url === 'https://queue.fal.run/fal-ai/nano-banana-2') {
+      if (url === 'https://queue.fal.run/xai/grok-imagine-image') {
         expect(init?.method).toBe('POST');
         const body = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>;
-        expect(body.resolution).toBe('2K');
-        expect(body.enable_safety_checker).toBe(false);
-        expect(body.safety_tolerance).toBe('6');
+        expect(body).toEqual({
+          prompt: 'a lighthouse at dusk',
+          sync_mode: false,
+        });
         return jsonResponse({
           status: 'COMPLETED',
-          request_id: 'fal-req-1',
-          response_url: 'https://queue.fal.run/fal-ai/nano-banana-2/requests/fal-req-1',
+          request_id: 'fal-grok-default-1',
+          response_url: 'https://queue.fal.run/xai/grok-imagine-image/requests/fal-grok-default-1',
         });
       }
 
-      if (url === 'https://queue.fal.run/fal-ai/nano-banana-2/requests/fal-req-1') {
+      if (url === 'https://queue.fal.run/xai/grok-imagine-image/requests/fal-grok-default-1') {
         return jsonResponse({
           images: [
             {
@@ -118,9 +119,9 @@ describe('ImageService', () => {
     expect(result).toEqual({
       provider: 'fal',
       mode: 'create',
-      model: 'fal-ai/nano-banana-2',
+      model: 'xai/grok-imagine-image',
       fallbackUsed: false,
-      requestId: 'fal-req-1',
+      requestId: 'fal-grok-default-1',
       images: [
         {
           url: 'https://cdn.example.test/output.png',
@@ -134,18 +135,18 @@ describe('ImageService', () => {
   it('retries transient FAL fetch failures once before surfacing an image failure', async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
-      if (url === 'https://queue.fal.run/fal-ai/nano-banana-2') {
+      if (url === 'https://queue.fal.run/xai/grok-imagine-image') {
         if (fetchMock.mock.calls.filter(([calledUrl]) => String(calledUrl) === url).length === 1) {
           throw new TypeError('fetch failed');
         }
         return jsonResponse({
           status: 'COMPLETED',
           request_id: 'fal-retry-1',
-          response_url: 'https://queue.fal.run/fal-ai/nano-banana-2/requests/fal-retry-1',
+          response_url: 'https://queue.fal.run/xai/grok-imagine-image/requests/fal-retry-1',
         });
       }
 
-      if (url === 'https://queue.fal.run/fal-ai/nano-banana-2/requests/fal-retry-1') {
+      if (url === 'https://queue.fal.run/xai/grok-imagine-image/requests/fal-retry-1') {
         return jsonResponse({
           images: [
             {
@@ -172,6 +173,58 @@ describe('ImageService', () => {
     });
 
     expect(result.requestId).toBe('fal-retry-1');
+    expect(fetchMock.mock.calls.filter(([url]) => String(url) === 'https://queue.fal.run/xai/grok-imagine-image')).toHaveLength(2);
+  });
+
+  it('falls back through the configured default FAL create model chain in auto mode', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === 'https://queue.fal.run/xai/grok-imagine-image') {
+        throw new TypeError('fetch failed');
+      }
+
+      if (url === 'https://queue.fal.run/fal-ai/nano-banana-2') {
+        throw new TypeError('fetch failed');
+      }
+
+      if (url === 'https://queue.fal.run/fal-ai/gpt-image-1.5') {
+        return jsonResponse({
+          status: 'COMPLETED',
+          request_id: 'fal-fallback-1',
+          response_url: 'https://queue.fal.run/fal-ai/gpt-image-1.5/requests/fal-fallback-1',
+        });
+      }
+
+      if (url === 'https://queue.fal.run/fal-ai/gpt-image-1.5/requests/fal-fallback-1') {
+        return jsonResponse({
+          images: [
+            {
+              url: 'https://cdn.example.test/fallback.png',
+              content_type: 'image/png',
+              file_name: 'fallback.png',
+            },
+          ],
+        });
+      }
+
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+
+    const service = new ImageService(
+      {
+        falApiKey: 'fal-key',
+      },
+      fetchMock as typeof fetch,
+    );
+
+    const result = await service.create({
+      prompt: 'a lighthouse at dusk',
+    });
+
+    expect(result.model).toBe('fal-ai/gpt-image-1.5');
+    expect(result.fallbackUsed).toBe(true);
+    expect(result.fallbackReason).toBe('fal_transient_model_fallback');
+    expect(fetchMock.mock.calls.filter(([url]) => String(url) === 'https://queue.fal.run/xai/grok-imagine-image')).toHaveLength(2);
     expect(fetchMock.mock.calls.filter(([url]) => String(url) === 'https://queue.fal.run/fal-ai/nano-banana-2')).toHaveLength(2);
   });
 
@@ -181,16 +234,16 @@ describe('ImageService', () => {
     const imageBytes = Uint8Array.from([1, 2, 3, 4]);
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
-      if (url === 'https://queue.fal.run/fal-ai/nano-banana-2') {
+      if (url === 'https://queue.fal.run/xai/grok-imagine-image') {
         expect(init?.method).toBe('POST');
         return jsonResponse({
           status: 'COMPLETED',
           request_id: 'fal-req-storage-1',
-          response_url: 'https://queue.fal.run/fal-ai/nano-banana-2/requests/fal-req-storage-1',
+          response_url: 'https://queue.fal.run/xai/grok-imagine-image/requests/fal-req-storage-1',
         });
       }
 
-      if (url === 'https://queue.fal.run/fal-ai/nano-banana-2/requests/fal-req-storage-1') {
+      if (url === 'https://queue.fal.run/xai/grok-imagine-image/requests/fal-req-storage-1') {
         return jsonResponse({
           images: [
             {
@@ -234,16 +287,16 @@ describe('ImageService', () => {
     const imageBytes = Uint8Array.from([137, 80, 78, 71, 2]);
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
-      if (url === 'https://queue.fal.run/fal-ai/nano-banana-2') {
+      if (url === 'https://queue.fal.run/xai/grok-imagine-image') {
         return jsonResponse({ request_id: 'fal-req-personal-1' });
       }
-      if (url === 'https://queue.fal.run/fal-ai/nano-banana-2/requests/fal-req-personal-1/status') {
+      if (url === 'https://queue.fal.run/xai/grok-imagine-image/requests/fal-req-personal-1/status') {
         return jsonResponse({
           status: 'COMPLETED',
-          response_url: 'https://queue.fal.run/fal-ai/nano-banana-2/requests/fal-req-personal-1',
+          response_url: 'https://queue.fal.run/xai/grok-imagine-image/requests/fal-req-personal-1',
         });
       }
-      if (url === 'https://queue.fal.run/fal-ai/nano-banana-2/requests/fal-req-personal-1') {
+      if (url === 'https://queue.fal.run/xai/grok-imagine-image/requests/fal-req-personal-1') {
         return jsonResponse({
           images: [
             {
@@ -283,7 +336,7 @@ describe('ImageService', () => {
       schemaVersion: 1,
       provider: 'fal',
       mode: 'create',
-      model: 'fal-ai/nano-banana-2',
+      model: 'xai/grok-imagine-image',
       requestId: 'fal-req-personal-1',
       prompt: 'a lighthouse at dusk',
       sourceToolName: 'image_create',
@@ -548,29 +601,31 @@ describe('ImageService', () => {
     expect(result.requestId).toBe('fal-grok-imagine');
   });
 
-  it('defaults FAL edits to GPT Image 2', async () => {
+  it('defaults FAL edits to Grok Imagine quality edit', async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
-      if (url === 'https://queue.fal.run/openai/gpt-image-2/edit') {
+      if (url === 'https://queue.fal.run/xai/grok-imagine-image/quality/edit') {
         expect(init?.method).toBe('POST');
         const body = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>;
         expect(body).toMatchObject({
           prompt: 'turn this into a sunset selfie',
           image_urls: ['https://example.test/source.png'],
           sync_mode: false,
+          resolution: '2k',
         });
-        expect(body).not.toHaveProperty('resolution');
         expect(body).not.toHaveProperty('enable_safety_checker');
         expect(body).not.toHaveProperty('safety_tolerance');
         expect(body).not.toHaveProperty('limit_generations');
+        expect(body).not.toHaveProperty('image_size');
+        expect(body).not.toHaveProperty('input_fidelity');
         return jsonResponse({
           status: 'COMPLETED',
           request_id: 'fal-edit-req-1',
-          response_url: 'https://queue.fal.run/openai/gpt-image-2/edit/requests/fal-edit-req-1',
+          response_url: 'https://queue.fal.run/xai/grok-imagine-image/quality/edit/requests/fal-edit-req-1',
         });
       }
 
-      if (url === 'https://queue.fal.run/openai/gpt-image-2/edit/requests/fal-edit-req-1') {
+      if (url === 'https://queue.fal.run/xai/grok-imagine-image/quality/edit/requests/fal-edit-req-1') {
         return jsonResponse({
           images: [
             {
@@ -600,7 +655,7 @@ describe('ImageService', () => {
     expect(result).toEqual({
       provider: 'fal',
       mode: 'edit',
-      model: 'openai/gpt-image-2/edit',
+      model: 'xai/grok-imagine-image/quality/edit',
       fallbackUsed: false,
       requestId: 'fal-edit-req-1',
       images: [
@@ -658,13 +713,131 @@ describe('ImageService', () => {
     expect(result.requestId).toBe('fal-gpt-edit-1');
   });
 
+  it('maps Grok Imagine quality edit options to the FAL payload', async () => {
+    const fetchMock = createCompletedFalGenerationFetchMock(
+      'xai/grok-imagine-image/quality/edit',
+      'fal-grok-edit-1',
+      (body) => {
+        expect(body).toEqual({
+          prompt: 'same person at the beach in a one-piece swimsuit',
+          image_urls: ['data:image/png;base64,cmVm'],
+          sync_mode: false,
+          num_images: 1,
+          aspect_ratio: '3:4',
+          resolution: '2k',
+        });
+      },
+    );
+
+    const service = new ImageService(
+      {
+        falApiKey: 'fal-key',
+      },
+      fetchMock as typeof fetch,
+    );
+
+    const result = await service.edit({
+      prompt: 'same person at the beach in a one-piece swimsuit',
+      imageUrls: ['data:image/png;base64,cmVm'],
+      model: 'xai/grok-imagine-image/quality/edit',
+      numImages: 1,
+      aspectRatio: '3:4',
+      resolution: '2K',
+      imageSize: '1024x1024',
+      inputFidelity: 'high',
+      seed: 7,
+    });
+
+    expect(result.model).toBe('xai/grok-imagine-image/quality/edit');
+    expect(result.requestId).toBe('fal-grok-edit-1');
+  });
+
+  it('omits aspect ratios Grok Imagine edit does not support', async () => {
+    const fetchMock = createCompletedFalGenerationFetchMock(
+      'xai/grok-imagine-image/edit',
+      'fal-grok-edit-2',
+      (body) => {
+        expect(body).not.toHaveProperty('aspect_ratio');
+        expect(body).toMatchObject({ resolution: '2k' });
+      },
+    );
+
+    const service = new ImageService(
+      {
+        falApiKey: 'fal-key',
+      },
+      fetchMock as typeof fetch,
+    );
+
+    const result = await service.edit({
+      prompt: 'wider crop of the same portrait',
+      imageUrls: ['data:image/png;base64,cmVm'],
+      model: 'xai/grok-imagine-image/edit',
+      aspectRatio: '21:9',
+    });
+
+    expect(result.requestId).toBe('fal-grok-edit-2');
+  });
+
+  it('waits longer than two minutes for slow FAL queue image results', async () => {
+    vi.useFakeTimers();
+
+    let statusCalls = 0;
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === 'https://queue.fal.run/openai/gpt-image-2/edit') {
+        return jsonResponse({ request_id: 'fal-slow-edit-1' });
+      }
+      if (url === 'https://queue.fal.run/openai/gpt-image-2/edit/requests/fal-slow-edit-1/status') {
+        statusCalls += 1;
+        return jsonResponse({
+          status: statusCalls < 84 ? 'IN_PROGRESS' : 'COMPLETED',
+          response_url: 'https://queue.fal.run/openai/gpt-image-2/edit/requests/fal-slow-edit-1',
+        });
+      }
+      if (url === 'https://queue.fal.run/openai/gpt-image-2/edit/requests/fal-slow-edit-1') {
+        return jsonResponse({
+          images: [
+            {
+              url: 'https://cdn.example.test/slow-edit.png',
+              content_type: 'image/png',
+              file_name: 'slow-edit.png',
+            },
+          ],
+        });
+      }
+
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+
+    const service = new ImageService(
+      {
+        falApiKey: 'fal-key',
+      },
+      fetchMock as typeof fetch,
+    );
+
+    const resultPromise = service.edit({
+      prompt: 'slow morning selfie',
+      imageUrls: ['data:image/png;base64,cmVm'],
+      model: 'openai/gpt-image-2/edit',
+    });
+
+    await vi.advanceTimersByTimeAsync(126_000);
+    const result = await resultPromise;
+
+    expect(result.requestId).toBe('fal-slow-edit-1');
+    expect(result.images[0]?.url).toBe('https://cdn.example.test/slow-edit.png');
+    expect(statusCalls).toBe(84);
+  });
+
   it('falls back to a configured ComfyUI create workflow on FAL content-policy failures', async () => {
     vi.useFakeTimers();
 
     let comfyPromptBody: string | undefined;
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
-      if (url === 'https://queue.fal.run/fal-ai/nano-banana-2') {
+      if (url === 'https://queue.fal.run/xai/grok-imagine-image') {
         return jsonResponse(
           {
             detail: [{

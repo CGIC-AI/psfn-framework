@@ -5,6 +5,14 @@ import type { GatewayRoutingEnvelope } from '../../shared/routing/envelope.js';
 
 export type SubagentTaskLifecycleState = 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
 
+export interface SubagentExecutionSourceContext {
+  channelId: string;
+  requestId?: string;
+  turnId?: string;
+  originatingTaskId?: string;
+  originatingBeadId?: string;
+}
+
 export interface SubagentExecutionRequest {
   name: string;
   task: string;
@@ -14,6 +22,7 @@ export interface SubagentExecutionRequest {
   requiredCapabilities?: readonly string[];
   executionChannelId?: string;
   message?: SubstrateMessage;
+  sourceContext?: SubagentExecutionSourceContext;
 }
 
 export interface WyomingSubagentDelegationRequest {
@@ -37,6 +46,7 @@ export interface SubagentTaskRecord {
   failureReason?: string;
   capabilities: string[];
   requiredCapabilities: string[];
+  sourceContext?: SubagentExecutionSourceContext;
 }
 
 export interface SubagentResult {

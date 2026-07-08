@@ -13,7 +13,13 @@ import {
   RUNTIME_SETTINGS_KEYS,
   normalizeEditableSettings,
 } from './settings.js';
-import { createDefaultCompositionalPolicyConfig, type SubstrateConfig } from './config/runtime-config-contracts.js';
+import {
+  createDefaultCompositionalPolicyConfig,
+  createDefaultObserverEvalSidecarLeverSettings,
+  createDefaultObserverEvalSidecarSettings,
+  type SubstrateConfig,
+} from './config/runtime-config-contracts.js';
+import { createDefaultGroupMemorySettings } from './config/group-memory-config.js';
 import type { CanonicalModelRegistry } from '../shared/contracts/runtime.js';
 import { registerStreamingSttProvider } from '../primitives/voice/connectors/stt/index.js';
 import { registerStreamingTtsProvider } from '../primitives/voice/connectors/tts/index.js';
@@ -354,6 +360,7 @@ describe('settings', () => {
         shardToolsets: {
           nursery: ['tool-a'],
         },
+        observerEvalSidecar: createDefaultObserverEvalSidecarSettings(),
       };
 
       saveSettings(tempDir, settings);
@@ -440,6 +447,355 @@ describe('settings', () => {
 
       expect(normalized.profileSynthesisSourceMemoryLimit).toBe(20);
       expect(normalized.profileSynthesisMinSourceMemories).toBe(20);
+    });
+
+    it('normalizes observer eval sidecar deployment settings strictly', () => {
+      const settings = {
+        ...createDefaultObserverEvalSidecarSettings(),
+        enabled: true,
+        sidecarId: ' eval-sidecar ',
+        deploymentTarget: 'test_persona' as const,
+        queue: {
+          maxQueuedTurns: '12',
+          overflowPolicy: 'drop_newest',
+          observerTimeoutMs: '2500',
+          maxRetries: '1',
+          retryDelayMs: '100',
+          shutdownDrainTimeoutMs: '3000',
+        },
+        adapter: {
+          kind: 'emosim_server' as const,
+          serverUrl: ' http://emosim.test:17342 ',
+          sessionLabel: ' psfn-observer-eval ',
+          agentName: ' observer ',
+          timeoutMs: '4000',
+          includeWorldState: true,
+        },
+        persistence: {
+          enabled: true,
+          rootDir: ' /repo/runtime/eval/observer-sidecar ',
+          retentionDays: '21',
+          maxStoredObservations: '7500',
+        },
+        garden: {
+          exposeHealth: true,
+          exposeTelemetry: false,
+        },
+      };
+
+      const normalized = normalizeEditableSettings({
+        observerEvalSidecar: settings as any,
+      });
+
+      expect(normalized.observerEvalSidecar).toEqual({
+        enabled: true,
+        sidecarId: 'eval-sidecar',
+        deploymentTarget: 'test_persona',
+        mode: 'observe_only',
+        queue: {
+          maxQueuedTurns: 12,
+          overflowPolicy: 'drop_newest',
+          observerTimeoutMs: 2500,
+          maxRetries: 1,
+          retryDelayMs: 100,
+          shutdownDrainTimeoutMs: 3000,
+        },
+        adapter: {
+          kind: 'emosim_server',
+          serverUrl: 'http://emosim.test:17342',
+          sessionLabel: 'psfn-observer-eval',
+          agentName: 'observer',
+          timeoutMs: 4000,
+          includeWorldState: true,
+        },
+        persistence: {
+          enabled: true,
+          rootDir: '/repo/runtime/eval/observer-sidecar',
+          retentionDays: 21,
+          maxStoredObservations: 7500,
+        },
+        garden: {
+          exposeHealth: true,
+          exposeTelemetry: false,
+        },
+        levers: createDefaultObserverEvalSidecarLeverSettings(),
+      });
+    });
+
+    it('fails closed on malformed observer sidecar lever settings', () => {
+      const base = {
+        ...createDefaultObserverEvalSidecarSettings(),
+        persistence: {
+          enabled: true,
+          rootDir: '/repo/runtime/eval/observer-sidecar',
+          retentionDays: 21,
+          maxStoredObservations: 7500,
+        },
+      };
+
+      expect(() => normalizeEditableSettings({
+        observerEvalSidecar: {
+          ...base,
+          levers: {
+            ...createDefaultObserverEvalSidecarLeverSettings(),
+            wouldCheckIn: { enabled: true, valenceThreshold: -3, sustainMs: 1_200_000 },
+          },
+        } as any,
+      })).toThrow(/observerEvalSidecar\.levers\.wouldCheckIn\.valenceThreshold/);
+
+      expect(() => normalizeEditableSettings({
+        observerEvalSidecar: {
+          ...base,
+          levers: 'watch-everything',
+        } as any,
+      })).toThrow(/observerEvalSidecar\.levers/);
+    });
+
+    it('rejects enabled levers without observer sidecar persistence', () => {
+      expect(() => normalizeEditableSettings({
+        observerEvalSidecar: {
+          ...createDefaultObserverEvalSidecarSettings(),
+          levers: {
+            ...createDefaultObserverEvalSidecarLeverSettings(),
+            enabled: true,
+          },
+        } as any,
+      })).toThrow(/lever tracking requires observerEvalSidecar\.persistence\.enabled=true/);
+    });
+
+    it('normalizes group memory settings as a JSON-owned structured object', () => {
+      const defaults = createDefaultGroupMemorySettings();
+      const normalized = normalizeEditableSettings({
+        groupMemory: {
+          memoryMode: 'group',
+          autoDetection: {
+            recentParticipantWindowMessages: '60',
+            recentParticipantWindowMs: 3_600_000,
+            minDistinctHumanContacts: 3,
+            groupCapableChannelTypes: ['discord', 'discord'],
+            fallbackModeWhenOneHuman: 'direct',
+            includeAiCompanions: true,
+          },
+          onlineExtraction: {
+            observedMessageTriggerCount: 40,
+            observedTimeTriggerMs: 300_000,
+            maxMessagesPerChunk: 60,
+            maxEstimatedTokensPerChunk: 10_000,
+            chunkOverlapMessages: 4,
+            cooldownMs: 90_000,
+            backlogLagTriggerMessages: 90,
+            maxBacklogChunksPerRun: 3,
+          },
+          salience: {
+            minImportance: 0.6,
+            minConfidence: 0.7,
+            minNovelty: 0.4,
+            minCandidateScore: 0.8,
+            maxCandidateSpansPerChunk: 10,
+            neighboringContextMessages: 3,
+            reasonWeights: {
+              companionMention: 0.9,
+              explicitPreference: 0.8,
+            },
+            lowSignalRules: {
+              shortMessageMaxChars: 12,
+              repeatThreshold: 4,
+            },
+          },
+          writeCaps: {
+            maxWritesPerRun: 6,
+            maxWritesPerChunk: 3,
+            maxWritesPerContact: 2,
+            maxWritesPerSubject: 1,
+            maxLowSalienceWritesPerRun: 1,
+            maxWritesPerBackfillRun: 10,
+            maxWritesPerTimeWindow: 18,
+            timeWindowMs: 1_800_000,
+            lowSalienceThreshold: 0.5,
+            rankingWeights: {
+              addressMode: 0.6,
+              perContactCoverage: 0.9,
+            },
+            addressModeWeights: {
+              overheardRoomContext: 0.25,
+            },
+          },
+          profileRefresh: {
+            enabled: false,
+            minSourceMemories: 4,
+          },
+          telemetry: {
+            enabled: true,
+            exposeGardenDiagnostics: false,
+            maxDiagnosticMemoryScan: 700,
+          },
+          backfill: {
+            maxMessagesPerRun: 200,
+            maxChunksPerRun: 3,
+            maxLlmCallsPerRun: 2,
+            cooldownMs: 900_000,
+          },
+        } as any,
+      });
+
+      expect(normalized.groupMemory).toEqual({
+        ...defaults,
+        memoryMode: 'group',
+        autoDetection: {
+          ...defaults.autoDetection,
+          recentParticipantWindowMessages: 60,
+          recentParticipantWindowMs: 3_600_000,
+          minDistinctHumanContacts: 3,
+          groupCapableChannelTypes: ['discord'],
+          includeAiCompanions: true,
+        },
+        onlineExtraction: {
+          observedMessageTriggerCount: 40,
+          observedTimeTriggerMs: 300_000,
+          maxMessagesPerChunk: 60,
+          maxEstimatedTokensPerChunk: 10_000,
+          chunkOverlapMessages: 4,
+          cooldownMs: 90_000,
+          backlogLagTriggerMessages: 90,
+          maxBacklogChunksPerRun: 3,
+        },
+        salience: {
+          ...defaults.salience,
+          minImportance: 0.6,
+          minConfidence: 0.7,
+          minNovelty: 0.4,
+          minCandidateScore: 0.8,
+          maxCandidateSpansPerChunk: 10,
+          neighboringContextMessages: 3,
+          reasonWeights: {
+            ...defaults.salience.reasonWeights,
+            companionMention: 0.9,
+            explicitPreference: 0.8,
+          },
+          lowSignalRules: {
+            ...defaults.salience.lowSignalRules,
+            shortMessageMaxChars: 12,
+            repeatThreshold: 4,
+          },
+        },
+        writeCaps: {
+          ...defaults.writeCaps,
+          maxWritesPerRun: 6,
+          maxWritesPerChunk: 3,
+          maxWritesPerContact: 2,
+          maxWritesPerSubject: 1,
+          maxLowSalienceWritesPerRun: 1,
+          maxWritesPerBackfillRun: 10,
+          maxWritesPerTimeWindow: 18,
+          timeWindowMs: 1_800_000,
+          lowSalienceThreshold: 0.5,
+          rankingWeights: {
+            ...defaults.writeCaps.rankingWeights,
+            addressMode: 0.6,
+            perContactCoverage: 0.9,
+          },
+          addressModeWeights: {
+            ...defaults.writeCaps.addressModeWeights,
+            overheardRoomContext: 0.25,
+          },
+        },
+        profileRefresh: {
+          ...defaults.profileRefresh,
+          enabled: false,
+          minSourceMemories: 4,
+        },
+        telemetry: {
+          enabled: true,
+          exposeGardenDiagnostics: false,
+          maxDiagnosticMemoryScan: 700,
+        },
+        backfill: {
+          maxMessagesPerRun: 200,
+          maxChunksPerRun: 3,
+          maxLlmCallsPerRun: 2,
+          cooldownMs: 900_000,
+        },
+      });
+    });
+
+    it('fails closed for malformed group memory settings', () => {
+      expect(() => normalizeEditableSettings({
+        groupMemory: {
+          memoryMode: 'guild',
+        } as any,
+      })).toThrow('groupMemory.memoryMode');
+
+      expect(() => normalizeEditableSettings({
+        groupMemory: {
+          onlineExtraction: {
+            maxMessagesPerChunk: 0,
+          },
+        } as any,
+      })).toThrow('groupMemory.onlineExtraction.maxMessagesPerChunk');
+
+      expect(() => normalizeEditableSettings({
+        groupMemory: {
+          mysteryKnob: true,
+        } as any,
+      })).toThrow('unknown field mysteryKnob');
+    });
+
+    it('fails closed for partial observer eval sidecar settings', () => {
+      expect(() => normalizeEditableSettings({
+        observerEvalSidecar: {
+          enabled: true,
+        } as any,
+      })).toThrow('observerEvalSidecar.queue');
+    });
+
+    it('fails closed when observer eval sidecar is enabled without a server URL', () => {
+      const sidecar = {
+        ...createDefaultObserverEvalSidecarSettings(),
+        enabled: true,
+        adapter: {
+          kind: 'emosim_server' as const,
+          sessionLabel: 'psfn-observer-eval',
+          agentName: 'observer',
+          includeWorldState: false,
+        },
+      };
+
+      expect(() => normalizeEditableSettings({
+        observerEvalSidecar: sidecar,
+      })).toThrow('observerEvalSidecar.adapter.serverUrl');
+    });
+
+    it('fails closed on a non-http observer eval sidecar server URL', () => {
+      const sidecar = {
+        ...createDefaultObserverEvalSidecarSettings(),
+        enabled: true,
+        adapter: {
+          kind: 'emosim_server' as const,
+          serverUrl: 'ftp://emosim.test:17342',
+          sessionLabel: 'psfn-observer-eval',
+          agentName: 'observer',
+          includeWorldState: false,
+        },
+      };
+
+      expect(() => normalizeEditableSettings({
+        observerEvalSidecar: sidecar,
+      })).toThrow('observerEvalSidecar.adapter.serverUrl');
+    });
+
+    it('fails closed on removed spawn-per-call emosim adapter settings', () => {
+      const sidecar = {
+        ...createDefaultObserverEvalSidecarSettings(),
+        adapter: {
+          kind: 'disabled' as const,
+          emosimRoot: '/repo/vendor/emo_sim',
+          includeWorldState: false,
+        },
+      };
+
+      expect(() => normalizeEditableSettings({
+        observerEvalSidecar: sidecar as any,
+      })).toThrow('observerEvalSidecar.adapter.emosimRoot');
     });
 
     it('fails closed for legacy model fields without canonical modelRegistry', () => {
@@ -615,7 +971,7 @@ describe('settings', () => {
             repetition_penalty: '1.2',
             thinking: {
               enabled: 'true',
-              effort: 'HIGH',
+              effort: 'XHIGH',
               budget_tokens: '2048',
             },
           },
@@ -629,7 +985,7 @@ describe('settings', () => {
       expect(primaryTuning?.frequencyPenalty).toBe(-0.4);
       expect(primaryTuning?.repetitionPenalty).toBe(1.2);
       expect(primaryTuning?.thinkingEnabled).toBe(true);
-      expect(primaryTuning?.thinkingEffort).toBe('high');
+      expect(primaryTuning?.thinkingEffort).toBe('xhigh');
       expect(primaryTuning?.thinkingBudgetTokens).toBe(2048);
       expect(primaryTuning?.top_p).toBeUndefined();
       expect(primaryTuning?.top_k).toBeUndefined();
@@ -770,7 +1126,7 @@ describe('settings', () => {
           'repo_status',
           'prompt_layer_list',
           'settings_get',
-          'contact_lookup',
+          'media',
         ],
       });
 
@@ -799,6 +1155,59 @@ describe('settings', () => {
         allowedChannelTypes: ['api', 'discord'],
         allowedPurposes: ['retrieval'],
       });
+    });
+
+    it('applies observer eval sidecar deployment settings as one validated runtime object', () => {
+      const config = makeConfig();
+      const sidecar = {
+        ...createDefaultObserverEvalSidecarSettings(),
+        enabled: true,
+        sidecarId: 'observer-eval-test-persona',
+        deploymentTarget: 'test_persona' as const,
+        adapter: {
+          kind: 'emosim_server' as const,
+          serverUrl: 'http://emosim.test:17342',
+          sessionLabel: 'psfn-observer-eval-test',
+          agentName: 'observer',
+          timeoutMs: 2500,
+          includeWorldState: true,
+        },
+        persistence: {
+          enabled: true,
+          rootDir: '/repo/runtime/eval/observer-sidecar',
+          retentionDays: 30,
+          maxStoredObservations: 5000,
+        },
+        garden: {
+          exposeHealth: true,
+          exposeTelemetry: false,
+        },
+      };
+
+      applySettings(config, {
+        observerEvalSidecar: sidecar,
+      });
+
+      expect(config.observerEvalSidecar).toEqual(sidecar);
+      expect(config.observerEvalSidecar).not.toBe(sidecar);
+    });
+
+    it('applies group memory settings by value', () => {
+      const config = makeConfig();
+      const groupMemory = {
+        ...createDefaultGroupMemorySettings(),
+        memoryMode: 'group' as const,
+        onlineExtraction: {
+          ...createDefaultGroupMemorySettings().onlineExtraction,
+          maxMessagesPerChunk: 60,
+        },
+      };
+
+      applySettings(config, { groupMemory });
+      groupMemory.onlineExtraction.maxMessagesPerChunk = 90;
+
+      expect(config.groupMemory?.memoryMode).toBe('group');
+      expect(config.groupMemory?.onlineExtraction.maxMessagesPerChunk).toBe(60);
     });
 
     it('applies import-processing routing controls', () => {
@@ -1574,6 +1983,8 @@ describe('settings', () => {
       expect(snapshot.analysisWorkbenchMaxTokens).toBeNull();
       expect(snapshot.analysisWorkbenchMaxWallTimeMs).toBeNull();
       expect(snapshot.analysisWorkbenchMaxSubQueries).toBeNull();
+      expect(snapshot.observerEvalSidecar).toEqual(createDefaultObserverEvalSidecarSettings());
+      expect(snapshot.groupMemory).toEqual(createDefaultGroupMemorySettings());
       expect(snapshot.sessionRestartBehavior).toBe('reuse_latest_session');
       expect(snapshot.observationMaskingWindow).toBe(1);
       expect(snapshot.compactionEmotionalSalienceThresholdPct).toBe(75);
@@ -1619,6 +2030,8 @@ describe('settings', () => {
 
     it('validates setting key membership', () => {
       expect(isRuntimeSettingKey('analysisWorkbenchMaxSubQueries')).toBe(true);
+      expect(isRuntimeSettingKey('observerEvalSidecar')).toBe(true);
+      expect(isRuntimeSettingKey('groupMemory')).toBe(true);
       expect(isRuntimeSettingKey('sessionRestartBehavior')).toBe(true);
       expect(isRuntimeSettingKey('compositionalPolicy')).toBe(true);
       expect(isRuntimeSettingKey('promotedExtendedTools')).toBe(true);
@@ -1644,6 +2057,43 @@ describe('settings', () => {
       config.promotedExtendedTools = ['repo_status', 'session_list'];
       const snapshot = getRuntimeSettingsSnapshot(config);
       expect(snapshot.promotedExtendedTools).toEqual(['repo_status', 'session_list']);
+    });
+
+    it('includes observer eval sidecar settings in snapshot when configured', () => {
+      const config = makeConfig();
+      config.observerEvalSidecar = {
+        ...createDefaultObserverEvalSidecarSettings(),
+        enabled: true,
+        sidecarId: 'observer-eval-live',
+        deploymentTarget: 'live',
+        adapter: {
+          kind: 'emosim_server',
+          serverUrl: 'http://emosim.test:17342',
+          sessionLabel: 'psfn-observer-eval',
+          agentName: 'observer',
+          includeWorldState: false,
+        },
+      };
+
+      const snapshot = getRuntimeSettingsSnapshot(config);
+      expect(snapshot.observerEvalSidecar).toEqual(config.observerEvalSidecar);
+      expect(snapshot.observerEvalSidecar).not.toBe(config.observerEvalSidecar);
+    });
+
+    it('includes group memory settings in snapshot when configured', () => {
+      const config = makeConfig();
+      config.groupMemory = {
+        ...createDefaultGroupMemorySettings(),
+        memoryMode: 'group',
+        onlineExtraction: {
+          ...createDefaultGroupMemorySettings().onlineExtraction,
+          maxMessagesPerChunk: 60,
+        },
+      };
+
+      const snapshot = getRuntimeSettingsSnapshot(config);
+      expect(snapshot.groupMemory).toEqual(config.groupMemory);
+      expect(snapshot.groupMemory).not.toBe(config.groupMemory);
     });
 
     it('honors explicit sttProvider selection and defaults to disabled when unset in snapshot', () => {
@@ -1980,7 +2430,7 @@ describe('settings', () => {
 
     it('parseSettingsForm bounds promotedExtendedTools to four slots', () => {
       const params = new URLSearchParams({
-        promotedExtendedTools: 'repo_status, session_list, prompt_layer_list, settings_get, contact_lookup',
+        promotedExtendedTools: 'repo_status, session_list, prompt_layer_list, settings_get, media',
       });
 
       const [settings, errors] = parseSettingsForm(params);

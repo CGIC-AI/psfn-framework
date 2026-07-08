@@ -17,6 +17,7 @@ import {
   tagMessageClass,
   type MessageClassMetadata,
 } from './message-classes.js';
+import { renderSystemLanguageTemplate } from '../identity/system-language.js';
 
 // ── Custom message types ──
 
@@ -66,8 +67,8 @@ export interface MirrorMessage {
   timestamp: number;
 }
 
-type ClassifiedUserMessage = UserMessage & MessageClassMetadata;
-type ClassifiedAssistantMessage = PiAssistantMessage & MessageClassMetadata;
+interface ClassifiedUserMessage extends UserMessage, MessageClassMetadata {}
+interface ClassifiedAssistantMessage extends PiAssistantMessage, MessageClassMetadata {}
 
 interface MirrorSessionMetadata {
   type: 'mirror';
@@ -180,12 +181,13 @@ export function convertToLlm(messages: AgentMessage[]): Message[] {
 
   for (const msg of messages) {
     if (isCompactionMessage(msg)) {
-      result.push({
+      const message = {
         role: 'user',
-        content: `[Previous conversation summary]\n${msg.summary}`,
+        content: `${renderSystemLanguageTemplate('compaction.header')}\n${msg.summary}`,
         timestamp: msg.timestamp,
         messageClass: MESSAGE_CLASSES.compaction,
-      } satisfies ClassifiedUserMessage);
+      } as ClassifiedUserMessage;
+      result.push(message);
     } else if (isSystemNoteMessage(msg)) {
       result.push(createInternalAssistantMessage(
         `[System note] ${msg.content}`,
@@ -204,12 +206,13 @@ export function convertToLlm(messages: AgentMessage[]): Message[] {
       continue;
     } else if (isMirrorMessage(msg)) {
       const speaker = msg.sourceAuthorName?.trim() || msg.sourceRole;
-      result.push({
+      const message = {
         role: 'user',
         content: `[Mirror note from ${msg.originChannelId}] ${speaker}: ${compactMirrorText(msg.content)}`,
         timestamp: msg.timestamp,
         messageClass: MESSAGE_CLASSES.mirror,
-      } satisfies ClassifiedUserMessage);
+      } as ClassifiedUserMessage;
+      result.push(message);
     } else {
       // Standard pi-ai Message — pass through, preserving canonical outward subtypes.
       if (msg.role === 'user' || msg.role === 'assistant') {
@@ -257,12 +260,13 @@ export function sessionEntryToMessage(entry: SessionEntry): AgentMessage {
   }
 
   if (entry.role === 'user') {
-    return {
+    const message = {
       role: 'user',
       content: entry.content,
       timestamp: ts,
       messageClass: MESSAGE_CLASSES.outwardSpeech,
-    } satisfies ClassifiedUserMessage;
+    } as ClassifiedUserMessage;
+    return message;
   }
 
   if (entry.role === 'tool') {
@@ -281,7 +285,7 @@ export function sessionEntryToMessage(entry: SessionEntry): AgentMessage {
   }
 
   // assistant
-  return {
+  const message = {
     role: 'assistant',
     content: [{ type: 'text', text: entry.content }],
     api: '',
@@ -293,7 +297,8 @@ export function sessionEntryToMessage(entry: SessionEntry): AgentMessage {
     messageClass: isMusingReflectionChannel(entry.channelId)
       ? MESSAGE_CLASSES.musing
       : MESSAGE_CLASSES.outwardSpeech,
-  } satisfies ClassifiedAssistantMessage;
+  } as ClassifiedAssistantMessage;
+  return message;
 }
 
 /**

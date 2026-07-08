@@ -14,8 +14,15 @@ import type {
 import type { ContextBudgetTurnCharacteristics } from '../../../../shared/context-budget.js';
 import { createComponentLogger } from '../../../../shared/logger.js';
 import { toErrorMessage } from '../../../../shared/utils/errors.js';
+import {
+  buildCompletionHandoffDedupeKey,
+  emitCompletionHandoff,
+  safeEmitCompletionHandoffError,
+  type CompletionHandoffInput,
+} from '../../completion-handoff.js';
 import type { ChannelMeta } from '../../../../system/trust/policy.js';
 import type { TrustLevel } from '../../../../system/trust/types.js';
+import type { ConversationScope } from '../../../session/conversation-scope.js';
 import type { InternalState } from '../../../self-model/state.js';
 import type { TurnSnapshot } from '../../../turns/snapshot.js';
 import {
@@ -28,14 +35,116 @@ import type { TurnExecutionObservability } from './observability.js';
 const log = createComponentLogger('SubstrateAgent');
 type TurnExecutionRuntime = import('../turn-execution-runtime.js').TurnExecutionRuntime;
 
+interface PostTurnBackgroundTask {
+  name: string;
+  promise: Promise<unknown>;
+}
+
 export async function collectTurnResponseAttachments(input: {
   runtime: TurnExecutionRuntime;
   turnMessages: AgentMessage[];
+  galleryContext?: {
+    channelId?: string;
+    channelType?: string;
+    turnId?: string;
+    requestId?: string;
+    sourceMessageId?: string;
+    userSessionEntryId?: number;
+    assistantSessionEntryId?: number;
+  };
 }): Promise<NonNullable<AgentResponse['attachments']>> {
   return collectGeneratedImageAttachments({
     turnMessages: input.turnMessages,
     companionDataDir: resolveConfiguredCompanionDataDir(input.runtime.config),
+    galleryContext: input.galleryContext,
   });
+}
+
+function createPostTurnBackgroundTask(input: {
+  name: string;
+  run: () => Promise<unknown> | unknown;
+  onError: (error: unknown) => void;
+}): PostTurnBackgroundTask {
+  let promise: Promise<unknown>;
+  try {
+    promise = Promise.resolve(input.run());
+  } catch (error) {
+    promise = Promise.reject(error);
+  }
+  return {
+    name: input.name,
+    promise: promise.catch((error) => {
+      input.onError(error);
+      throw error;
+    }),
+  };
+}
+
+async function emitBackgroundContinuationCompletionHandoff(input: {
+  runtime: TurnExecutionRuntime;
+  message: SubstrateMessage;
+  response: AgentResponse;
+  turnId: TurnID;
+  requestId: string;
+  completionSignal: ReturnType<TurnExecutionRuntime['queueBackgroundContinuationCompletion']>;
+}): Promise<void> {
+  const { runtime, message, response, turnId, requestId, completionSignal } = input;
+  const handoff: CompletionHandoffInput = {
+    source: 'background_continuation',
+    taskId: completionSignal.continuationId,
+    taskLabel: completionSignal.taskKind ?? completionSignal.intent ?? 'background_continuation',
+    status: 'completed',
+    resultSummary: response.content.trim()
+      ? response.content
+      : 'Background continuation completed without deliverable text.',
+    outputRefs: [
+      { kind: 'background_continuation', ref: completionSignal.continuationId },
+      { kind: 'delivery_session', ref: completionSignal.deliverySessionId },
+      { kind: 'source_message', ref: completionSignal.sourceMessageId },
+    ],
+    validationPerformed: [
+      'background_completion_policy',
+      `notification_reason:${completionSignal.notificationReason}`,
+      `notify_user:${String(completionSignal.notifyUser)}`,
+      `queued_for_post_turn_delivery:${String(completionSignal.queuedForPostTurnDelivery)}`,
+    ],
+    partialResult: false,
+    recommendedNextAction: completionSignal.notifyUser
+      ? 'Review this internal handoff on the next foreground turn and write any partner update in the companion voice under outbound policy.'
+      : 'Keep this as internal completion context unless a later policy decision asks for a companion-authored update.',
+    origin: {
+      originatingTaskId: completionSignal.continuationId,
+      sourceChannelId: message.channelId,
+      sourceMessageId: message.id,
+      requestId,
+      turnId,
+    },
+    dedupeKey: buildCompletionHandoffDedupeKey([
+      'background_continuation',
+      completionSignal.continuationId,
+      completionSignal.sourceMessageId,
+      completionSignal.completedAt.toString(),
+    ]),
+  };
+
+  try {
+    // Companion-facing notice only when the continuation actually produced
+    // something to act on; bookkeeping completions stay on the event bus.
+    const companionRelevant = completionSignal.notifyUser
+      || completionSignal.hasDeliverableContent;
+    await emitCompletionHandoff({
+      eventBus: runtime.eventBus,
+      targetChannelId: completionSignal.deliverySessionId,
+      handoff,
+      ...(companionRelevant ? { notices: runtime.completionNotices } : {}),
+    });
+  } catch (error) {
+    log.warn('Background continuation completion handoff failed', {
+      continuationId: completionSignal.continuationId,
+      channelId: message.channelId,
+      error: safeEmitCompletionHandoffError(error),
+    });
+  }
 }
 
 export async function schedulePostTurnWork(input: {
@@ -73,7 +182,9 @@ export async function schedulePostTurnWork(input: {
   templateVariables: Record<string, string>;
   emotionSessionId: string;
   channelMeta: ChannelMeta;
+  conversationScope: ConversationScope;
   turnBudgetCharacteristics: ContextBudgetTurnCharacteristics;
+  persistedUserMessageContent?: string;
   observability: Pick<
     TurnExecutionObservability,
     'emitObservedTurnStage'
@@ -118,7 +229,9 @@ export async function schedulePostTurnWork(input: {
     templateVariables,
     emotionSessionId,
     channelMeta,
+    conversationScope,
     turnBudgetCharacteristics,
+    persistedUserMessageContent,
     observability,
   } = input;
 
@@ -152,6 +265,13 @@ export async function schedulePostTurnWork(input: {
     ttftMs: firstTokenAt - startTime,
     inputTokens: turnUsage.inputTokens,
     outputTokens: turnUsage.outputTokens,
+    ...(response.metadata.noReply
+      ? {
+          responseDisposition: 'intentional_no_reply',
+          noReplyAuditId: response.metadata.noReply.auditId,
+          noReplySource: response.metadata.noReply.source,
+        }
+      : {}),
   });
   runtime.sessionManager.recordTurn(
     runtime.buildTurnRecord({
@@ -172,6 +292,7 @@ export async function schedulePostTurnWork(input: {
       speakerRole,
       canonicalContactKey,
       retrievalProvenanceRefs,
+      ...(persistedUserMessageContent ? { persistedUserMessageContent } : {}),
       turnSnapshot,
       turnObservability: {
         stages: observability.getObservedTurnStages(),
@@ -188,6 +309,14 @@ export async function schedulePostTurnWork(input: {
     ...runtime.withCorrelationPurpose(turnCorrelationBase, 'agent.turn.end'),
   });
   if (completionSignal) {
+    await emitBackgroundContinuationCompletionHandoff({
+      runtime,
+      message,
+      response,
+      turnId,
+      requestId,
+      completionSignal,
+    });
     await runtime.emitBackgroundContinuationEvent(
       'agent.background.continuation.completed',
       {
@@ -239,53 +368,85 @@ export async function schedulePostTurnWork(input: {
     ...runtime.withCorrelationPurpose(turnCorrelationBase, 'agent.turn.usage'),
   });
 
-  runtime.memoryExtractor?.maybeExtract(
-    message.channelId,
-    canonicalContactKey,
-    turnId,
-  ).catch(err => {
-    log.error('Memory extraction error', { error: String(err) });
-  });
+  const postTurnBackgroundWork: PostTurnBackgroundTask[] = [];
+  const memoryExtractor = runtime.memoryExtractor;
+  if (memoryExtractor) {
+    postTurnBackgroundWork.push(createPostTurnBackgroundTask({
+      name: 'memory_extraction',
+      run: () => memoryExtractor.maybeExtract(
+        message.channelId,
+        canonicalContactKey,
+        turnId,
+      ),
+      onError: (error) => {
+        log.error('Memory extraction error', { error: String(error) });
+      },
+    }));
+  }
 
-  void runtime.runIntentionPostTurnHooks({
-    message,
-    response,
-    turnMessages,
-    turnId,
-    completedAt,
-    ...(canonicalContactKey ? { canonicalContactKey } : {}),
-  }).catch((error) => {
-    log.error('Intention post-turn hook dispatch error', {
+  postTurnBackgroundWork.push(createPostTurnBackgroundTask({
+    name: 'intention_post_turn_hooks',
+    run: () => runtime.runIntentionPostTurnHooks({
+      message,
+      response,
+      turnMessages,
+      turnId,
+      completedAt,
+      ...(canonicalContactKey ? { canonicalContactKey } : {}),
+    }),
+    onError: (error) => {
+      log.error('Intention post-turn hook dispatch error', {
+        channelId: message.channelId,
+        error: toErrorMessage(error),
+      });
+    },
+  }));
+
+  postTurnBackgroundWork.push(createPostTurnBackgroundTask({
+    name: 'emotion_appraisal',
+    // E1.5: the turn's ConversationScope is plumbed into the appraisal params
+    // as an available input; emotion scoping acts on it without changing this
+    // call site's shape.
+    run: () => runtime.emotionSelfModelRuntime.triggerEmotionAppraisal({
+      sessionChannelId: emotionSessionId,
+      turnId,
+      internalState,
+      templateVariables,
+      conversationScope,
+    }),
+    onError: (error) => {
+      log.error('Emotion appraisal error', {
+        channelId: message.channelId,
+        error: toErrorMessage(error),
+      });
+    },
+  }));
+
+  postTurnBackgroundWork.push(createPostTurnBackgroundTask({
+    name: 'auto_compaction',
+    run: () => runtime.sessionManager.scheduleAutoCompactionBetweenTurns({
       channelId: message.channelId,
-      error: toErrorMessage(error),
-    });
-  });
+      systemPrompt: fullPrompt,
+      memoriesBlock: memoryContextBlock,
+      llmProvider: runtime.llmClient,
+      channelMeta,
+      userId: continuitySubjectKey,
+      compactionPromptText: turnSnapshot.sessionContext?.compactionPromptText,
+      turnBudgetCharacteristics,
+    }),
+    onError: (error) => {
+      log.error('Auto-compaction dispatch error', {
+        channelId: message.channelId,
+        error: toErrorMessage(error),
+      });
+    },
+  }));
 
-  void runtime.emotionSelfModelRuntime.triggerEmotionAppraisal({
-    sessionChannelId: emotionSessionId,
-    turnId,
-    internalState,
-    templateVariables,
-  }).catch((error) => {
-    log.error('Emotion appraisal error', {
-      channelId: message.channelId,
-      error: toErrorMessage(error),
-    });
-  });
-
-  void runtime.sessionManager.scheduleAutoCompactionBetweenTurns({
+  runtime.registerPostTurnBackgroundWork({
     channelId: message.channelId,
-    systemPrompt: fullPrompt,
-    memoriesBlock: memoryContextBlock,
-    llmProvider: runtime.llmClient,
-    channelMeta,
-    userId: continuitySubjectKey,
-    compactionPromptText: turnSnapshot.sessionContext?.compactionPromptText,
-    turnBudgetCharacteristics,
-  }).catch((error) => {
-    log.error('Auto-compaction dispatch error', {
-      channelId: message.channelId,
-      error: toErrorMessage(error),
-    });
+    turnId,
+    requestId,
+    work: postTurnBackgroundWork,
+    correlation: turnCorrelationBase,
   });
 }

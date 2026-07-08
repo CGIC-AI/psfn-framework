@@ -12,6 +12,10 @@ import { normalizeNotificationSenderMetadata } from './notification-sender.js';
 
 const log = createComponentLogger('Gateway');
 const DEFAULT_CONFIRMATION_NOTIFICATION_PRIORITY = 4;
+const CONFIRMATION_NOTIFICATION_SENDER = Object.freeze({
+  kind: 'system',
+  provenance: 'system.gateway.confirmation',
+});
 
 export interface GatewayNtfyConfig {
   baseUrl: string;
@@ -178,6 +182,7 @@ export async function notifyOperatorForPendingAction({
   if (!delivered && ntfyNotifier?.isConfigured()) {
     try {
       await ntfyNotifier.send({
+        sender: CONFIRMATION_NOTIFICATION_SENDER,
         message: notification,
         title: 'PSFN approval required',
         priority: DEFAULT_CONFIRMATION_NOTIFICATION_PRIORITY,

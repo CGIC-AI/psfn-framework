@@ -8,6 +8,30 @@ import type {
   NormalizedIntentionAppraisalInput,
 } from './types.js';
 
+function emotionTelemetryPromptPayload(
+  telemetry: NormalizedIntentionAppraisalInput['currentEmotionTelemetry'],
+): Record<string, unknown> | null {
+  if (!telemetry) return null;
+  return {
+    status: telemetry.status,
+    source: telemetry.source,
+    reasons: telemetry.reasons,
+    confidence: telemetry.confidence,
+    weight: telemetry.weight,
+    observedAtMs: telemetry.observedAtMs,
+    validatedAtMs: telemetry.validatedAtMs,
+    rawSignal: telemetry.rawSignal,
+    provenance: telemetry.provenance.map(entry => ({
+      source: entry.source,
+      ...(entry.modality ? { modality: entry.modality } : {}),
+      ...(entry.observedAtMs !== undefined ? { observedAtMs: entry.observedAtMs } : {}),
+      ...(entry.classifier ? { classifier: entry.classifier } : {}),
+      ...(entry.model ? { model: entry.model } : {}),
+      ...(entry.provenanceRef ? { provenanceRef: entry.provenanceRef } : {}),
+    })),
+  };
+}
+
 function topDiscreteLabels(discrete: Record<string, number>, limit = 5): Record<string, number> {
   return Object.fromEntries(
     Object.entries(discrete)
@@ -92,6 +116,7 @@ export function buildAppraisalPromptPayload(input: {
         : {}),
     };
   });
+  const promptEmotionTelemetry = emotionTelemetryPromptPayload(normalized.currentEmotionTelemetry);
 
   return {
     trigger,
@@ -105,6 +130,7 @@ export function buildAppraisalPromptPayload(input: {
           mood: normalized.internalState.emotional.mood,
           confidence: normalized.internalState.emotional.confidence,
           topDiscrete: topDiscreteLabels(normalized.internalState.emotional.discreteEmotions),
+          ...(promptEmotionTelemetry ? { telemetry: promptEmotionTelemetry } : {}),
         },
         cognitive: normalized.internalState.cognitive,
         attention: {
@@ -122,6 +148,7 @@ export function buildAppraisalPromptPayload(input: {
         mood: normalized.currentEmotion.mood,
         confidence: normalized.currentEmotion.confidence,
         topDiscrete: topDiscreteLabels(normalized.currentEmotion.discrete),
+        ...(promptEmotionTelemetry ? { telemetry: promptEmotionTelemetry } : {}),
       }
       : null,
     contactEmotionalSnapshot: normalized.contactEmotionalSnapshot,

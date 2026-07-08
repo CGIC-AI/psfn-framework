@@ -108,27 +108,16 @@ describe('wireSessionToolsRuntime', () => {
     wireSessionToolsRuntime(target, sessionManager, tempDir, llmProvider);
 
     const calls = target.registerTool.mock.calls as Array<[any, string]>;
-    expect(calls).toHaveLength(5);
-    expect(calls.map(([tool]) => tool.name).sort()).toEqual([
-      'complete_focus',
-      'session',
-      'session_new',
-      'session_resume',
-      'start_focus',
-    ]);
+    expect(calls).toHaveLength(1);
+    expect(calls.map(([tool]) => tool.name)).toEqual(['session']);
     expect(calls.find(([tool]) => tool.name === 'session')?.[1]).toBe('core');
-    expect(
-      calls
-        .filter(([tool]) => tool.name !== 'session')
-        .every(([, category]) => category === 'extended'),
-    ).toBe(true);
 
-    const sessionNewTool = calls.find(([tool]) => tool.name === 'session_new')?.[0] as {
+    const sessionTool = calls.find(([tool]) => tool.name === 'session')?.[0] as {
       execute: (toolCallId: string, params: Record<string, unknown>) => Promise<{ details: Record<string, unknown> }>;
     };
-    expect(sessionNewTool).toBeDefined();
+    expect(sessionTool).toBeDefined();
 
-    const result = await sessionNewTool.execute('call-session-new', {});
+    const result = await sessionTool.execute('call-session-new', { action: 'new' });
     const details = result.details as {
       newSessionId: string;
       previousSessionId: string | null;
@@ -138,7 +127,7 @@ describe('wireSessionToolsRuntime', () => {
     expect(sessionManager.setActiveContextSession).toHaveBeenCalledWith(details.newSessionId);
     expect(sessionManager.appendSystemNote).toHaveBeenCalledWith(
       details.newSessionId,
-      'Session initialized via session_new.',
+      'Session initialized via session action=new.',
     );
 
     const active = readLastActiveSession(tempDir);
@@ -148,7 +137,7 @@ describe('wireSessionToolsRuntime', () => {
 });
 
 describe('wireSettingsRuntime', () => {
-  it('registers system as core and promoted-tool helpers as extended', () => {
+  it('registers system as core and leaves promoted state on canonical toolset', () => {
     const target = {
       registerTool: vi.fn(),
       getPromotedExtendedToolsLimit: () => 4,
@@ -176,19 +165,8 @@ describe('wireSettingsRuntime', () => {
     wireSettingsRuntime(target as any, {} as any);
 
     const calls = target.registerTool.mock.calls as Array<[any, string]>;
-    expect(calls.map(([tool]) => tool.name).sort()).toEqual([
-      'promoted_tools_add',
-      'promoted_tools_list',
-      'promoted_tools_remove',
-      'promoted_tools_swap',
-      'system',
-    ]);
+    expect(calls.map(([tool]) => tool.name)).toEqual(['system']);
     expect(calls.find(([tool]) => tool.name === 'system')?.[1]).toBe('core');
-    expect(
-      calls
-        .filter(([tool]) => tool.name !== 'system')
-        .every(([, category]) => category === 'extended'),
-    ).toBe(true);
   });
 });
 
@@ -364,7 +342,7 @@ describe('wireHeartbeatRuntime', () => {
     expect(text).toContain('Templates:');
   });
 
-  it('keeps values mutations extended while values_list moves behind orient', () => {
+  it('keeps all values actions behind orient instead of registering direct values tools', () => {
     const eventBus = new EventBus();
     const scheduler = new Scheduler(eventBus, {
       tickIntervalMs: 100,
@@ -391,12 +369,9 @@ describe('wireHeartbeatRuntime', () => {
     const calls = target.registerTool.mock.calls as Array<[any, string]>;
     const names = calls.map(([tool]) => tool.name);
     expect(names).not.toContain('values_list');
-    expect(names).toEqual(expect.arrayContaining(['values_add', 'values_update']));
-    expect(
-      calls
-        .filter(([tool]) => ['values_add', 'values_update'].includes(tool.name))
-        .every(([, category]) => category === 'extended'),
-    ).toBe(true);
+    expect(names).not.toContain('values_add');
+    expect(names).not.toContain('values_update');
+    expect(names).toEqual(['schedule']);
   });
 
   it('writes versioned values entries when weekly reflection task runs', async () => {
@@ -471,8 +446,9 @@ describe('wireHeartbeatRuntime', () => {
       const valuesCall = (agentLoop.handleMessage as ReturnType<typeof vi.fn>).mock.calls.find(
         (call) => call[0]?.channelId === 'internal:reflection:weekly-review',
       );
-      expect(valuesCall?.[0]?.content).toContain('[Internal State Input]');
-      expect(valuesCall?.[0]?.content).toContain('serialized_internal_state:');
+      expect(valuesCall?.[0]?.content).toContain('[Reflection Self Evidence]');
+      expect(valuesCall?.[0]?.content).toContain('[What this evidence is]');
+      expect(valuesCall?.[0]?.content).not.toContain('serialized_internal_state:');
     } finally {
       nowSpy.mockRestore();
     }
@@ -599,21 +575,25 @@ describe('wireHeartbeatRuntime', () => {
       const valuesDeliberationCalls = (llmProvider.complete as ReturnType<typeof vi.fn>).mock.calls
         .filter((call) => (
           typeof call[0]?.messages?.[0]?.content === 'string'
-          && call[0].messages[0].content.includes('durable values and north-star signals')
+          && call[0].messages[0].content.includes('north-star signals that feel durable')
         ));
       expect(valuesDeliberationCalls.map((call) => call[1])).toEqual(['reasoning']);
       const firstDeliberationCall = valuesDeliberationCalls[0]?.[0] as
         | {
           messages?: Array<{ content?: string }>;
+        }
+        | undefined;
+      const firstDeliberationOptions = valuesDeliberationCalls[0]?.[2] as
+        | {
           correlation?: { callType?: string; originType?: string; originStage?: string; channelId?: string };
         }
         | undefined;
       expect(firstDeliberationCall?.messages?.[0]?.content).not.toContain(
         '<appearance_context>',
       );
-      expect(firstDeliberationCall?.messages?.[0]?.content).toContain('[Internal State Input]');
-      expect(firstDeliberationCall?.messages?.[0]?.content).toContain(`snapshot_ref: ${narrative.snapshotRef}`);
-      expect(firstDeliberationCall?.correlation).toMatchObject({
+      expect(firstDeliberationCall?.messages?.[0]?.content).toContain('[Reflection Self Evidence]');
+      expect(firstDeliberationCall?.messages?.[0]?.content).not.toContain(`snapshot_ref: ${narrative.snapshotRef}`);
+      expect(firstDeliberationOptions?.correlation).toMatchObject({
         callType: 'scheduled',
         originType: 'scheduled',
         originStage: 'heartbeat.deliberation.evidence',
@@ -713,7 +693,8 @@ describe('wireHeartbeatRuntime', () => {
       expect(metacognitionEntry.initiatorSurface).toBe('scheduler:reflection_template');
       expect(metacognitionEntry.reason).toBe('Scheduled reflection run');
       expect(metacognitionEntry.reflectionJournalEntryId).toBeDefined();
-      expect(metacognitionEntry.prompt).toContain('[Internal State Input]');
+      expect(metacognitionEntry.prompt).toContain('[Reflection Self Evidence]');
+      expect(metacognitionEntry.prompt).not.toContain('serialized_internal_state:');
     } finally {
       nowSpy.mockRestore();
     }
@@ -763,8 +744,8 @@ describe('wireHeartbeatRuntime', () => {
       (call) => call[0]?.channelId === 'internal:reflection:daily-review',
     );
     expect(experientialCall).toBeDefined();
-    expect(experientialCall?.[0]?.content).toContain('[Internal State Input]');
-    expect(experientialCall?.[0]?.content).toContain(`snapshot_ref: ${narrative.snapshotRef}`);
+    expect(experientialCall?.[0]?.content).toContain('[Reflection Self Evidence]');
+    expect(experientialCall?.[0]?.content).not.toContain(`snapshot_ref: ${narrative.snapshotRef}`);
     expect(experientialCall?.[0]?.content).toContain('[Recent Metacognitive Flags]');
     expect(experientialCall?.[0]?.content).toContain('[Active Concerns]');
   });

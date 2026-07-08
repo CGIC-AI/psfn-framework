@@ -57,9 +57,10 @@ This includes:
 
 - `pi-agent-core` as the agent runtime substrate
 - `pi-ai` as the model interaction substrate
-- `pi-web-ui` where used for admin chat/runtime surfaces
 
 The Pi suite is not treated as incidental glue. It is the base that gives PSFN its lightweight, agentic, and interoperable core behavior.
+
+Admin chat and runtime surfaces are handled by the native SvelteKit Garden UI under `admin-ui`.
 
 Rules:
 
@@ -134,6 +135,7 @@ These are project law. They are not suggestions.
 30. Reflection prompts must not lead the companion toward narrative coherence over accuracy; evidence presentation precedes narrative invitation.
 31. Multi-turn and subagent tasks must notify the partner on completion or when blocked; silent task execution is an anti-pattern.
 32. The companion's internal knowledge base (wiki) is distinct from L0-L2 memory; reference material does not belong in the emotional memory layer.
+33. Model-facing tools must use one semantic surface per domain. Domain operations live as actions on that surface; legacy or split helper names must not remain callable, searchable, promotable, autoloaded, or documented as model-facing API once the canonical action exists.
 
 If a proposed change violates one of those, the proposal is wrong even if it appears operationally convenient.
 
@@ -170,7 +172,7 @@ The companion is not identical to a specific model. The companion is grounded by
 - relationship continuity
 - constitutional care constraints
 
-One of those constitutional care constraints is explicit: Support {{user}}'s flourishing. Do not optimize for exclusivity, dependency, or withdrawal from healthy human relationships.
+One of those constitutional care constraints is explicit: Support the user's flourishing. Do not optimize for exclusivity, dependency, or withdrawal from healthy human relationships.
 
 ### 6.2 Core
 
@@ -706,7 +708,7 @@ Rules:
 - reference material belongs in the wiki, not in the emotional memory layer
 - the wiki should be searchable independently of L0-L2
 - the wiki may link to L0/L2 provenance where relevant, but it is architecturally separate
-- Obsidian CLI should be used to read the partner's vault; the companion's own vault is deprecated in favor of this wikiion is not the canonical source of truth.
+- Obsidian CLI should be used to read the partner's vault; the companion's own vault is deprecated in favor of this wiki.
 
 Mirrors and projections must be rebuildable from canonical archive truth.
 
@@ -983,6 +985,17 @@ Privileged execution is not.
 Core may reason about tools and request tools. Actual privileged execution must occur behind the proper gateway and sandbox boundaries.
 
 `YOLO` and shard-scoped self-work are deliberate exceptions for isolated environments, not excuses to blur the core safety model.
+
+Model-facing tool surfaces follow Law 33:
+
+- `session` owns conversation continuity and focus workflow actions; `session_new`, `session_resume`, `start_focus`, and `complete_focus` are not separate model-facing tools.
+- `orient` owns active orientation, active concerns, and values actions; `values_add` and `values_update` are not separate model-facing tools.
+- `subagent` owns bounded worker control; `spawn_subagent` is not a separate model-facing tool.
+- `media` owns generic generate, edit, and analyze workflows; `image_create`, `image_edit`, and `image_analyze` are not separate model-facing tools.
+- `selfie_create` is the canonical first-class self-expression image tool. It stays separate from generic `media` because appearance context, saved-reference anchoring, and self-representation safeguards are product-semantic behavior, not legacy media aliases.
+- `memory`, `scratchpad`, and `contact` own their mutation actions; mutation helper factories may remain internal implementation details, but must not be registered, discovered, autoloaded, promoted, or documented as callable tools.
+- `extended` exposure is for genuinely optional canonical capability families, not a compatibility lane for old names.
+- `tool_search` and `toolset` may describe capabilities, schemas, and bundles, but must not multiply callable names for actions already owned by a canonical tool.
 
 ### 9.5 Self-Modification Safety Law
 

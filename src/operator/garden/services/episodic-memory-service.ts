@@ -4,7 +4,9 @@ import {
   type EpisodeArc,
   type EpisodeArcKind,
 } from '../../../shared/contracts/episodic-memory.js';
-import type { EpisodicStore } from '../../../faculties/memory/episodic/store.js';
+import type {
+  EpisodicStorePort,
+} from '../../../faculties/memory/episodic/store-port.js';
 import type {
   AdminEpisodicEpisodeDetailData,
   AdminEpisodicEpisodeListData,
@@ -17,8 +19,14 @@ import type {
 } from './types.js';
 
 export type AdminEpisodicStore = Pick<
-  EpisodicStore,
-  'getEpisode' | 'listEpisodeArcsForEpisode' | 'listEpisodes' | 'searchByThread' | 'searchByTime'
+  EpisodicStorePort,
+  | 'getEpisode'
+  | 'getEpisodesByIds'
+  | 'listEpisodeArcsForEpisode'
+  | 'listEpisodeArcsForEpisodes'
+  | 'listEpisodes'
+  | 'searchByThread'
+  | 'searchByTime'
 >;
 
 const DEFAULT_EPISODE_LIST_LIMIT = 50;
@@ -137,7 +145,7 @@ export class AdminEpisodicMemoryDataService implements AdminEpisodicMemoryServic
       throw new Error('from must be before or equal to to');
     }
 
-    const episodes = this.loadEpisodeCandidates({ threadId, from, to })
+    const episodes = (await this.loadEpisodeCandidates({ threadId, from, to }))
       .sort(compareEpisodeRecency);
     const page = episodes.slice(offset, offset + limit);
 
@@ -159,22 +167,22 @@ export class AdminEpisodicMemoryDataService implements AdminEpisodicMemoryServic
   }
 
   async getEpisodeDetail(id: string): Promise<AdminEpisodicEpisodeDetailData | null> {
-    const episode = this.store.getEpisode(id);
+    const episode = await this.store.getEpisode(id);
     if (!episode) return null;
     const provenance = this.toProvenanceData(episode);
     return {
       episode,
       ...provenance,
-      relatedArcs: this.buildRelatedArcViews(episode.id),
+      relatedArcs: await this.buildRelatedArcViews(episode.id),
       threadEpisodes: episode.threadId
-        ? this.store.searchByThread(episode.threadId, { limit: MAX_EPISODIC_SCAN_LIMIT })
+        ? (await this.store.searchByThread(episode.threadId, { limit: MAX_EPISODIC_SCAN_LIMIT }))
           .sort(compareEpisodeChronology)
         : [],
     };
   }
 
   async getEpisodeProvenance(id: string): Promise<AdminEpisodicEpisodeProvenanceData | null> {
-    const episode = this.store.getEpisode(id);
+    const episode = await this.store.getEpisode(id);
     return episode ? this.toProvenanceData(episode) : null;
   }
 
@@ -182,7 +190,7 @@ export class AdminEpisodicMemoryDataService implements AdminEpisodicMemoryServic
     id: string,
     params?: URLSearchParams,
   ): Promise<{ episodeId: string; relatedArcs: AdminEpisodicRelatedArcView[] } | null> {
-    if (!this.store.getEpisode(id)) return null;
+    if (!(await this.store.getEpisode(id))) return null;
     const direction = parseArcDirection(params?.get('direction'));
     const arcKind = parseArcKind(params?.get('arcKind'));
     const limit = parsePositiveInteger(
@@ -193,7 +201,7 @@ export class AdminEpisodicMemoryDataService implements AdminEpisodicMemoryServic
     );
     return {
       episodeId: id,
-      relatedArcs: this.buildRelatedArcViews(id, { direction, arcKind, limit }),
+      relatedArcs: await this.buildRelatedArcViews(id, { direction, arcKind, limit }),
     };
   }
 
@@ -204,7 +212,7 @@ export class AdminEpisodicMemoryDataService implements AdminEpisodicMemoryServic
       MAX_EPISODIC_SCAN_LIMIT,
       'limit',
     );
-    const threads = this.buildThreadSummaries(this.store.listEpisodes({ limit }))
+    const threads = (await this.buildThreadSummaries(await this.store.listEpisodes({ limit })))
       .sort(compareThreadRecency);
     return { threads };
   }
@@ -213,37 +221,37 @@ export class AdminEpisodicMemoryDataService implements AdminEpisodicMemoryServic
     const normalizedThreadId = threadId.trim();
     if (!normalizedThreadId) return null;
 
-    const episodes = this.store.searchByThread(normalizedThreadId, { limit: MAX_EPISODIC_SCAN_LIMIT })
+    const episodes = (await this.store.searchByThread(normalizedThreadId, { limit: MAX_EPISODIC_SCAN_LIMIT }))
       .sort(compareEpisodeChronology);
     if (episodes.length === 0) return null;
 
-    const arcs = this.collectArcsForEpisodes(episodes);
+    const arcs = await this.collectArcsForEpisodes(episodes);
     const thread = this.summarizeThread(normalizedThreadId, episodes, arcs);
     return {
       thread,
       episodes,
       arcs,
-      relatedArcs: this.buildThreadRelatedArcViews(new Set(episodes.map(episode => episode.id)), arcs),
+      relatedArcs: await this.buildThreadRelatedArcViews(new Set(episodes.map(episode => episode.id)), arcs),
     };
   }
 
-  private loadEpisodeCandidates(options: {
+  private async loadEpisodeCandidates(options: {
     threadId?: string;
     from?: string;
     to?: string;
-  }): Episode[] {
+  }): Promise<Episode[]> {
     const hasTimeFilter = options.from !== undefined || options.to !== undefined;
     if (options.threadId && !hasTimeFilter) {
-      return this.store.searchByThread(options.threadId, { limit: MAX_EPISODIC_SCAN_LIMIT });
+      return await this.store.searchByThread(options.threadId, { limit: MAX_EPISODIC_SCAN_LIMIT });
     }
 
     const timeMatches = hasTimeFilter
-      ? this.store.searchByTime({
+      ? await this.store.searchByTime({
         ...(options.from ? { from: options.from } : {}),
         ...(options.to ? { to: options.to } : {}),
         limit: MAX_EPISODIC_SCAN_LIMIT,
       })
-      : this.store.listEpisodes({ limit: MAX_EPISODIC_SCAN_LIMIT });
+      : await this.store.listEpisodes({ limit: MAX_EPISODIC_SCAN_LIMIT });
 
     return options.threadId
       ? timeMatches.filter(episode => episode.threadId === options.threadId)
@@ -259,32 +267,45 @@ export class AdminEpisodicMemoryDataService implements AdminEpisodicMemoryServic
     };
   }
 
-  private buildRelatedArcViews(
+  private async buildRelatedArcViews(
     episodeId: string,
     options: {
       direction?: 'incoming' | 'outgoing' | 'both';
       arcKind?: EpisodeArcKind;
       limit?: number;
     } = {},
-  ): AdminEpisodicRelatedArcView[] {
-    return this.store.listEpisodeArcsForEpisode(episodeId, {
+  ): Promise<AdminEpisodicRelatedArcView[]> {
+    const arcs = await this.store.listEpisodeArcsForEpisode(episodeId, {
       direction: options.direction ?? 'both',
       ...(options.arcKind ? { arcKind: options.arcKind } : {}),
       limit: options.limit ?? DEFAULT_ARC_LIST_LIMIT,
-    }).map(arc => this.toRelatedArcView(episodeId, arc));
+    });
+    return await this.toRelatedArcViews(episodeId, arcs);
   }
 
-  private toRelatedArcView(episodeId: string, arc: EpisodeArc): AdminEpisodicRelatedArcView {
+  private async toRelatedArcViews(
+    episodeId: string,
+    arcs: readonly EpisodeArc[],
+  ): Promise<AdminEpisodicRelatedArcView[]> {
+    const relatedEpisodeIds = arcs.map(arc => this.getRelatedEpisodeIdForEpisode(episodeId, arc));
+    const relatedEpisodes = await this.getEpisodeMap(relatedEpisodeIds);
+    return arcs.map((arc) => {
+      const direction = arc.sourceEpisodeId === episodeId ? 'outgoing' : 'incoming';
+      const relatedEpisodeId = this.getRelatedEpisodeIdForEpisode(episodeId, arc);
+      return {
+        arc,
+        direction,
+        relatedEpisode: relatedEpisodes.get(relatedEpisodeId) ?? null,
+      };
+    });
+  }
+
+  private getRelatedEpisodeIdForEpisode(episodeId: string, arc: EpisodeArc): string {
     const direction = arc.sourceEpisodeId === episodeId ? 'outgoing' : 'incoming';
-    const relatedEpisodeId = direction === 'outgoing' ? arc.targetEpisodeId : arc.sourceEpisodeId;
-    return {
-      arc,
-      direction,
-      relatedEpisode: this.store.getEpisode(relatedEpisodeId) ?? null,
-    };
+    return direction === 'outgoing' ? arc.targetEpisodeId : arc.sourceEpisodeId;
   }
 
-  private buildThreadSummaries(episodes: readonly Episode[]): AdminEpisodicThreadSummary[] {
+  private async buildThreadSummaries(episodes: readonly Episode[]): Promise<AdminEpisodicThreadSummary[]> {
     const byThread = new Map<string, Episode[]>();
     for (const episode of episodes) {
       if (!episode.threadId) continue;
@@ -293,9 +314,10 @@ export class AdminEpisodicMemoryDataService implements AdminEpisodicMemoryServic
       byThread.set(episode.threadId, group);
     }
 
+    const arcsByThread = await this.collectArcsByThread(byThread);
     return [...byThread.entries()].map(([threadId, threadEpisodes]) => {
       const sorted = [...threadEpisodes].sort(compareEpisodeChronology);
-      const arcs = this.collectArcsForEpisodes(sorted);
+      const arcs = arcsByThread.get(threadId) ?? [];
       return this.summarizeThread(threadId, sorted, arcs);
     });
   }
@@ -320,15 +342,38 @@ export class AdminEpisodicMemoryDataService implements AdminEpisodicMemoryServic
     };
   }
 
-  private collectArcsForEpisodes(episodes: readonly Episode[]): EpisodeArc[] {
+  private async collectArcsForEpisodes(episodes: readonly Episode[]): Promise<EpisodeArc[]> {
+    if (episodes.length === 0) return [];
+    const episodeIds = episodes.map(episode => episode.id);
+    const arcs = await this.store.listEpisodeArcsForEpisodes(episodeIds, {
+      direction: 'both',
+      limit: MAX_EPISODIC_SCAN_LIMIT,
+    });
+    return this.sortAndDeduplicateArcs(arcs);
+  }
+
+  private async collectArcsByThread(
+    byThread: ReadonlyMap<string, readonly Episode[]>,
+  ): Promise<Map<string, EpisodeArc[]>> {
+    const allThreadEpisodes = [...byThread.values()].flat();
+    const allArcs = await this.collectArcsForEpisodes(allThreadEpisodes);
+    const result = new Map<string, EpisodeArc[]>();
+    for (const [threadId, episodes] of byThread.entries()) {
+      const episodeIds = new Set(episodes.map(episode => episode.id));
+      result.set(
+        threadId,
+        allArcs.filter(arc => (
+          episodeIds.has(arc.sourceEpisodeId) || episodeIds.has(arc.targetEpisodeId)
+        )),
+      );
+    }
+    return result;
+  }
+
+  private sortAndDeduplicateArcs(arcs: readonly EpisodeArc[]): EpisodeArc[] {
     const byId = new Map<string, EpisodeArc>();
-    for (const episode of episodes) {
-      for (const arc of this.store.listEpisodeArcsForEpisode(episode.id, {
-        direction: 'both',
-        limit: MAX_EPISODIC_SCAN_LIMIT,
-      })) {
-        byId.set(arc.id, arc);
-      }
+    for (const arc of arcs) {
+      byId.set(arc.id, arc);
     }
     return [...byId.values()].sort((left, right) => {
       if (right.updatedAt !== left.updatedAt) return right.updatedAt.localeCompare(left.updatedAt);
@@ -336,10 +381,16 @@ export class AdminEpisodicMemoryDataService implements AdminEpisodicMemoryServic
     });
   }
 
-  private buildThreadRelatedArcViews(
+  private async buildThreadRelatedArcViews(
     threadEpisodeIds: ReadonlySet<string>,
     arcs: readonly EpisodeArc[],
-  ): AdminEpisodicRelatedArcView[] {
+  ): Promise<AdminEpisodicRelatedArcView[]> {
+    const relatedEpisodeIds = arcs.map((arc) => {
+      const sourceInThread = threadEpisodeIds.has(arc.sourceEpisodeId);
+      const direction = sourceInThread ? 'outgoing' : 'incoming';
+      return direction === 'outgoing' ? arc.targetEpisodeId : arc.sourceEpisodeId;
+    });
+    const relatedEpisodes = await this.getEpisodeMap(relatedEpisodeIds);
     return arcs.map((arc) => {
       const sourceInThread = threadEpisodeIds.has(arc.sourceEpisodeId);
       const direction = sourceInThread ? 'outgoing' : 'incoming';
@@ -347,8 +398,14 @@ export class AdminEpisodicMemoryDataService implements AdminEpisodicMemoryServic
       return {
         arc,
         direction,
-        relatedEpisode: this.store.getEpisode(relatedEpisodeId) ?? null,
+        relatedEpisode: relatedEpisodes.get(relatedEpisodeId) ?? null,
       };
     });
+  }
+
+  private async getEpisodeMap(ids: readonly string[]): Promise<Map<string, Episode>> {
+    if (ids.length === 0) return new Map();
+    const episodes = await this.store.getEpisodesByIds(ids);
+    return new Map(episodes.map(episode => [episode.id, episode]));
   }
 }

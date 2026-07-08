@@ -76,12 +76,55 @@ describe('entriesToMessages', () => {
       }),
     ], 'private');
 
-    expect(messages).toEqual([
-      {
-        role: 'user',
-        content: 'This is the actual partner message.',
+    expect(messages).toHaveLength(1);
+    expect(messages[0]).toMatchObject({
+      role: 'user',
+      content: 'This is the actual partner message.',
+      provenance: {
+        kind: 'user_direct',
+        sourceAuthor: 'partner',
+        transformedBy: 'none',
+        wording: 'direct',
+        safeAsPartnerSpeech: true,
       },
-    ]);
+    });
+  });
+
+  it('renders group user history with speaker labels before consecutive user messages are merged', () => {
+    const messages = entriesToMessages([
+      makeEntry({
+        channelId: 'discord:kube',
+        channelVisibility: 'invite_only',
+        role: 'user',
+        content: 'first group message',
+        authorId: 'vega-id',
+        authorName: 'Vega',
+      }),
+      makeEntry({
+        id: 2,
+        channelId: 'discord:kube',
+        channelVisibility: 'invite_only',
+        role: 'user',
+        content: 'second group message',
+        authorId: 'iku-id',
+        authorName: 'Iku',
+        timestamp: 1_700_000_000_100,
+      }),
+    ], 'invite_only');
+
+    expect(messages).toHaveLength(1);
+    expect(messages[0]).toMatchObject({
+      role: 'user',
+      content: [
+        'Vega (discord:vega-id): first group message',
+        'Iku (discord:iku-id): second group message',
+      ].join('\n'),
+      provenance: {
+        kind: 'user_direct',
+        sourceSpanCount: 2,
+        sourceEntryIds: [1, 2],
+      },
+    });
   });
 
   it('reclassifies scheduled heartbeat prompts as system context', () => {
@@ -102,16 +145,25 @@ describe('entriesToMessages', () => {
       }),
     ], 'private');
 
-    expect(messages).toEqual([
-      {
-        role: 'system',
-        content: '[SYSTEM: Whisper] Your hourly heartbeat is firing.',
+    expect(messages).toHaveLength(2);
+    expect(messages[0]).toMatchObject({
+      role: 'system',
+      content: '[SYSTEM: Whisper] Your hourly heartbeat is firing.',
+      provenance: {
+        kind: 'system_note',
+        sourceAuthor: 'system',
+        safeAsPartnerSpeech: false,
       },
-      {
-        role: 'assistant',
-        content: 'A quiet thought.',
+    });
+    expect(messages[1]).toMatchObject({
+      role: 'assistant',
+      content: 'A quiet thought.',
+      provenance: {
+        kind: 'companion_direct',
+        sourceAuthor: 'companion',
+        safeAsPartnerSpeech: false,
       },
-    ]);
+    });
   });
 
   it('drops internal-lane instrumentation from assembled context', () => {
@@ -139,15 +191,18 @@ describe('entriesToMessages', () => {
       }),
     ], 'private');
 
-    expect(messages).toEqual([
-      {
-        role: 'user',
-        content: 'What changed?',
+    expect(messages).toHaveLength(1);
+    expect(messages[0]).toMatchObject({
+      role: 'user',
+      content: 'What changed?',
+      provenance: {
+        kind: 'user_direct',
+        safeAsPartnerSpeech: true,
       },
-    ]);
+    });
   });
 
-  it('renders masked stale tool dumps as summaries instead of verbatim output', () => {
+  it('omits masked stale tool dumps from historical prompt messages', () => {
     const observation = normalizeToolObservation({
       toolName: 'orientation_dump',
       content: 'Orientation note: keep the trust policy lane isolated.',
@@ -161,11 +216,51 @@ describe('entriesToMessages', () => {
       }),
     ], 'private');
 
-    expect(messages).toEqual([
-      {
+    expect(messages).toHaveLength(0);
+  });
+
+  it('marks direct user, companion, and system context with distinct authenticity provenance', () => {
+    const observation = normalizeToolObservation({
+      toolName: 'search',
+      content: 'Search result one.',
+    });
+
+    const messages = entriesToMessages([
+      makeEntry({
+        role: 'user',
+        content: 'Direct partner words.',
+        authorId: 'user-1',
+        authorName: 'PrimaryUser',
+      }),
+      makeEntry({
+        id: 2,
+        role: 'assistant',
+        content: 'Direct companion words.',
+        timestamp: 1_700_000_000_100,
+      }),
+      makeEntry({
+        id: 3,
         role: 'system',
-        content: '[Tool result: orientation_dump] Captured 1 line of text output.',
-      },
+        content: 'Quiet planner note.',
+        authorId: 'quiet-planner',
+        authorName: 'Quiet Planner',
+        timestamp: 1_700_000_000_200,
+      }),
+      makeEntry({
+        id: 4,
+        role: 'tool',
+        content: 'Search result one.',
+        timestamp: 1_700_000_000_300,
+        metadata: buildToolObservationMetadata(undefined, observation.metadata),
+      }),
+    ], 'private', true, true);
+
+    expect(messages.map(message => message.provenance?.kind)).toEqual([
+      'user_direct',
+      'companion_direct',
+      'system_note',
     ]);
+    expect(messages[0]?.provenance?.safeAsPartnerSpeech).toBe(true);
+    expect(messages.slice(1).every(message => message.provenance?.safeAsPartnerSpeech === false)).toBe(true);
   });
 });

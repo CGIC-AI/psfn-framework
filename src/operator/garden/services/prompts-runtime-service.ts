@@ -14,6 +14,8 @@ import {
 import type {
   AdminPromptListData,
   AdminPromptRuntimeBlock,
+  AdminRuntimePromptLayerCoverage,
+  AdminRuntimePromptLayerCoverageEntry,
   RuntimePromptUpdateResult,
 } from './types.js';
 import type { AdminPromptsServiceContext } from './prompts-service-context.js';
@@ -34,7 +36,7 @@ export class PromptsRuntimeService {
 
   private listRuntimeBlocks(): AdminPromptRuntimeBlock[] {
     const defaultSystemOrder = getPromptRuntimeBlockDefinitions()
-      .filter(block => block.placement === 'system_prompt')
+      .filter(block => block.placement === 'system_prompt' && block.reorderable)
       .map(block => block.id as PromptRuntimeSystemPromptBlockId);
     const runtimeLayout = this.context.deps.promptRuntimeLayoutStore?.getLayout();
     const systemOrder = runtimeLayout?.systemPromptBlockOrder ?? defaultSystemOrder;
@@ -58,11 +60,15 @@ export class PromptsRuntimeService {
         lockedReason: block.lockedReason,
         companionEditable: block.companionEditable === true,
         effectiveOrder: block.placement === 'system_prompt'
-          ? (systemOrderIndex.get(block.id as PromptRuntimeSystemPromptBlockId) ?? Number.MAX_SAFE_INTEGER)
+          ? (
+              block.reorderable
+                ? (systemOrderIndex.get(block.id as PromptRuntimeSystemPromptBlockId) ?? Number.MAX_SAFE_INTEGER)
+                : systemOrder.length
+            )
           : (
               block.placement === 'context_messages'
-                ? systemOrder.length
-                : systemOrder.length + 1
+                ? systemOrder.length + 1
+                : systemOrder.length + 2
           ),
         customContent: block.companionEditable === true
           ? (customContentByBlockId[block.id as PromptRuntimeEditableBlockId] ?? '')
@@ -76,10 +82,10 @@ export class PromptsRuntimeService {
       });
   }
 
-  private listRuntimeLayerCoverage() {
+  private listRuntimeLayerCoverage(): AdminRuntimePromptLayerCoverage {
     const layers = this.context.deps.promptStore.getAll();
     const validation = validateRuntimePromptLayerCoverage(layers);
-    const issueByIdentifier = new Map(
+    const issueByIdentifier = new Map<string, AdminRuntimePromptLayerCoverageEntry['status']>(
       validation.issues.map((issue) => [issue.identifier, issue.reason] as const),
     );
 

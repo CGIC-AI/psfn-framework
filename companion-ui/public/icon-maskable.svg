@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="PSFN Satellite Mobile Chat App">
+  <rect width="512" height="512" fill="#fafafa"/>
+  <circle cx="256" cy="256" r="196" fill="#ffffff" stroke="#d4a520" stroke-width="16"/>
+  <path d="M142 216c30-38 70-58 121-58 40 0 76 12 107 35" fill="none" stroke="#478c30" stroke-width="20" stroke-linecap="round"/>
+  <path d="M166 292c25-22 55-33 90-33 34 0 64 11 89 32" fill="none" stroke="#cc4d6e" stroke-width="20" stroke-linecap="round"/>
+  <circle cx="256" cy="354" r="28" fill="#d4a520"/>
+</svg>

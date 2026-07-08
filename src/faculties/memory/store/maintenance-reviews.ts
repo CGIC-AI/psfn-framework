@@ -1,9 +1,13 @@
 import type Database from 'better-sqlite3';
 import type {
+  MemoryEvolutionRelation,
+  MemoryMaintenanceDiagnostics,
+  MemoryMaintenanceDiagnosticsOptions,
   MemoryMaintenanceReview,
   MemoryMaintenanceReviewInput,
   MemoryMaintenanceReviewListOptions,
 } from '../memory-store-port.js';
+import { MEMORY_EVOLUTION_RELATIONS } from '../memory-store-port.js';
 import {
   mapStoredMemoryMaintenanceReviewRow,
   normalizeMemoryMaintenanceReviewInput,
@@ -101,4 +105,78 @@ export function getMemoryMaintenanceReview(
     LIMIT 1
   `).get(normalized) as MemoryMaintenanceReviewRow | undefined;
   return row ? mapRow(row) : undefined;
+}
+
+interface MaintenanceDiagnosticsReviewRow {
+  kind: string;
+  status: string;
+  created_at: number;
+  updated_at: number;
+}
+
+interface MaintenanceDiagnosticsEvolutionRow {
+  relation: string;
+  created_at: number;
+}
+
+function increment(counts: Record<string, number>, key: string): void {
+  counts[key] = (counts[key] ?? 0) + 1;
+}
+
+export function getMemoryMaintenanceDiagnostics(
+  db: Database.Database,
+  options: MemoryMaintenanceDiagnosticsOptions = {},
+): MemoryMaintenanceDiagnostics {
+  const now = Number.isFinite(options.now) ? Number(options.now) : Date.now();
+  const reviewRows = db.prepare(`
+    SELECT kind, status, created_at, updated_at
+    FROM l2_memory_maintenance_reviews
+  `).all() as MaintenanceDiagnosticsReviewRow[];
+  const evolutionRows = db.prepare(`
+    SELECT relation, created_at
+    FROM memory_evolution_links
+  `).all() as MaintenanceDiagnosticsEvolutionRow[];
+
+  const reviewCountsByKind: Record<string, number> = {};
+  const reviewCountsByStatus: Record<string, number> = {};
+  const pendingAges: number[] = [];
+  for (const row of reviewRows) {
+    increment(reviewCountsByKind, row.kind);
+    increment(reviewCountsByStatus, row.status);
+    if (row.status === 'pending') {
+      pendingAges.push(Math.max(0, now - row.created_at));
+    }
+  }
+
+  const evolutionDecisionCountsByRelation: Record<MemoryEvolutionRelation, number> = {
+    supersedes: 0,
+    updates: 0,
+    negates: 0,
+    conflicts_with: 0,
+  };
+  let latestEvolutionDecisionAt: number | undefined;
+  for (const row of evolutionRows) {
+    if (MEMORY_EVOLUTION_RELATIONS.includes(row.relation as MemoryEvolutionRelation)) {
+      evolutionDecisionCountsByRelation[row.relation as MemoryEvolutionRelation] += 1;
+    }
+    latestEvolutionDecisionAt = Math.max(latestEvolutionDecisionAt ?? 0, row.created_at);
+  }
+
+  const pendingAgeTotal = pendingAges.reduce((sum, age) => sum + age, 0);
+  return {
+    reviewCount: reviewRows.length,
+    pendingReviewCount: pendingAges.length,
+    reviewCountsByKind,
+    reviewCountsByStatus,
+    oldestPendingReviewAgeMs: pendingAges.length > 0 ? Math.max(...pendingAges) : 0,
+    averagePendingReviewAgeMs: pendingAges.length > 0 ? pendingAgeTotal / pendingAges.length : 0,
+    evolutionDecisionCount: evolutionRows.length,
+    evolutionDecisionCountsByRelation,
+    supersessionDecisionCount: evolutionDecisionCountsByRelation.supersedes,
+    conflictDecisionCount: evolutionDecisionCountsByRelation.conflicts_with
+      + evolutionDecisionCountsByRelation.negates,
+    ...(latestEvolutionDecisionAt !== undefined && latestEvolutionDecisionAt > 0
+      ? { latestEvolutionDecisionAt }
+      : {}),
+  };
 }

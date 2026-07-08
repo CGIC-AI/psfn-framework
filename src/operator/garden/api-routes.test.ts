@@ -1,9 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import http from 'node:http';
 import net from 'node:net';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { brotliDecompressSync, gunzipSync } from 'node:zlib';
 import Database from 'better-sqlite3';
 import * as sqliteVec from 'sqlite-vec';
 import WebSocket from 'ws';
@@ -12,7 +13,10 @@ import { AdminServer } from './server.js';
 import { createInProcessGardenAdminContract } from './local-admin-contract.js';
 import { MemoryStore } from '../../faculties/memory/store.js';
 import { MemoryWriter } from '../../faculties/memory/writer.js';
-import { EpisodicStore, type EpisodeCreateInput } from '../../faculties/memory/episodic/store.js';
+import { EpisodicStore } from '../../faculties/memory/episodic/store.js';
+import {
+  type EpisodeCreateInput,
+} from '../../faculties/memory/episodic/store-port.js';
 import { SessionStore } from '../../persistence/sessions/store.js';
 import { SessionManager } from '../../core/session/manager.js';
 import { Scheduler } from '../../core/scheduler/scheduler.js';
@@ -32,6 +36,7 @@ import {
 } from '../../core/identity/prompt-registry.js';
 import { createPromptStatePort } from '../../core/identity/prompt-state-port.js';
 import { CharacterCardVersionStore } from '../../core/identity/card-versioning.js';
+import { ActiveConcernStore } from '../../core/intention/sqlite-stores/active-concern-store.js';
 import { loadSettings } from '../../system/settings.js';
 import { saveCapabilityTierConfig } from '../../system/config/capability-tier-config.js';
 import { loadModelsConfig, saveModelsConfig } from '../../system/config/models-config.js';
@@ -88,6 +93,50 @@ function request(
     if (body) req.write(body);
     req.end();
   });
+}
+
+function requestBuffer(
+  port: number,
+  method: string,
+  path: string,
+  headers?: Record<string, string>,
+): Promise<{ status: number; headers: http.IncomingHttpHeaders; body: Buffer }> {
+  return new Promise((resolve, reject) => {
+    const req = http.request(
+      {
+        hostname: '127.0.0.1',
+        port,
+        method,
+        path,
+        headers: headers ?? {},
+      },
+      (res) => {
+        const chunks: Buffer[] = [];
+        res.on('data', (chunk: Buffer) => { chunks.push(Buffer.from(chunk)); });
+        res.on('end', () => resolve({
+          status: res.statusCode!,
+          headers: res.headers,
+          body: Buffer.concat(chunks),
+        }));
+      },
+    );
+    req.on('error', reject);
+    req.end();
+  });
+}
+
+function decodeJsonBody(response: {
+  headers: http.IncomingHttpHeaders;
+  body: Buffer;
+}): unknown {
+  const encoding = response.headers['content-encoding'];
+  if (encoding === 'br') {
+    return JSON.parse(brotliDecompressSync(response.body).toString('utf8'));
+  }
+  if (encoding === 'gzip') {
+    return JSON.parse(gunzipSync(response.body).toString('utf8'));
+  }
+  return JSON.parse(response.body.toString('utf8'));
 }
 
 function buildMultipartBody(
@@ -440,6 +489,7 @@ describe('AdminServer JSON API routes', () => {
   let shardManager: ShardManager;
   let foldReviewController: ShardFoldReviewController;
   let contactStore: ContactStore;
+  let concernStore: ActiveConcernStore;
   let promptStore: PromptLayerStore;
   let promptRegistry: PromptRegistryStore;
   let cardVersionStore: CharacterCardVersionStore;
@@ -465,6 +515,20 @@ describe('AdminServer JSON API routes', () => {
     testConfig.dataDir = tempDir;
     testConfig.characterCardPath = join(tempDir, 'character.json');
     writeFileSync(testConfig.characterCardPath, `${JSON.stringify(testCard, null, 2)}\n`, 'utf-8');
+    // Owner files must pre-exist: services fail closed on missing owner
+    // files rather than seeding them implicitly. Bootstrap from the repo's
+    // seed templates exactly as a deployment would.
+    writeFileSync(
+      join(tempDir, 'settings.json'),
+      `${JSON.stringify({ embeddingProvider: 'transformers', transformersModel: 'test-model', embeddingDims: 2, sessionHistoryBudgetPct: testConfig.sessionHistoryBudgetPct }, null, 2)}\n`,
+      'utf-8',
+    );
+    for (const ownerFile of ['models', 'providers', 'scheduler', 'capability-tier', 'trust-policy', 'charge-policy', 'backup', 'skills']) {
+      copyFileSync(
+        join(process.cwd(), 'config', `${ownerFile}.seed.json`),
+        join(tempDir, `${ownerFile}.json`),
+      );
+    }
     const sessionsDir = join(tempDir, 'sessions');
     mkdirSync(sessionsDir, { recursive: true });
 
@@ -477,6 +541,9 @@ describe('AdminServer JSON API routes', () => {
     sessionManager = new SessionManager(sessionStore, testConfig, eventBus);
     scheduler = new Scheduler(eventBus);
     contactStore = new ContactStore(db, 'primary-user');
+    concernStore = new ActiveConcernStore(db, {
+      now: () => new Date('2026-06-29T12:00:00.000Z'),
+    });
     promptStore = new PromptLayerStore(
       join(tempDir, 'prompt-layers.json'),
       join(tempDir, 'prompt-history.jsonl'),
@@ -631,7 +698,7 @@ describe('AdminServer JSON API routes', () => {
           {
             serviceId: 'vault',
             status: 'not_applicable',
-            detail: 'Vault is disabled in this runtime.',
+            detail: 'External Obsidian vault bridge is disabled in this runtime.',
             checkedAt: 1_701_234_567_999,
           },
           {
@@ -662,6 +729,7 @@ describe('AdminServer JSON API routes', () => {
       config: testConfig,
       embeddingService: testEmbeddingService,
       contactStore,
+      concernStore,
       promptState: createPromptStatePort({
         layers: promptStore,
         registry: promptRegistry,
@@ -703,6 +771,69 @@ describe('AdminServer JSON API routes', () => {
     expect(authorized.status).toBe(200);
     const payload = JSON.parse(authorized.body) as { stats: { memoryTotal: number } };
     expect(payload.stats.memoryTotal).toBeGreaterThanOrEqual(0);
+  });
+
+  it('exposes Garden concern management actions', async () => {
+    const active = concernStore.create({
+      text: 'Inspect medication reminder pressure',
+      priority: 'high',
+      expiresAt: '2026-06-29T18:00:00.000Z',
+    });
+    concernStore.create({
+      text: 'Resolve stale hydration reminder',
+      status: 'watching',
+      createdAt: '2026-06-29T08:00:00.000Z',
+      expiresAt: '2026-06-29T09:00:00.000Z',
+    });
+
+    const listed = await request(port, 'GET', '/api/admin/concerns?includeExpired=true', undefined, authHeaders);
+    expect(listed.status).toBe(200);
+    expect(JSON.parse(listed.body)).toMatchObject({
+      concerns: [
+        expect.objectContaining({ id: active.id, text: 'Inspect medication reminder pressure' }),
+        expect.objectContaining({ text: 'Resolve stale hydration reminder' }),
+      ],
+    });
+
+    const sweep = await request(
+      port,
+      'POST',
+      '/api/admin/concerns/resolve-stale',
+      JSON.stringify({
+        asOf: '2026-06-29T12:00:00.000Z',
+        evidenceRefs: [{ kind: 'operator', ref: 'garden:stale-sweep' }],
+      }),
+      authHeaders,
+    );
+    expect(sweep.status).toBe(200);
+    expect(JSON.parse(sweep.body)).toMatchObject({
+      ok: true,
+      concerns: [expect.objectContaining({
+        text: 'Resolve stale hydration reminder',
+        status: 'resolved',
+      })],
+    });
+
+    const suppress = await request(
+      port,
+      'POST',
+      `/api/admin/concerns/${encodeURIComponent(active.id)}/suppress`,
+      JSON.stringify({ outcome: 'Operator suppressed this thread.', evidenceRef: 'garden:manual-suppress' }),
+      authHeaders,
+    );
+    expect(suppress.status).toBe(200);
+    expect(JSON.parse(suppress.body)).toMatchObject({
+      ok: true,
+      concerns: [expect.objectContaining({
+        id: active.id,
+        status: 'suppressed',
+        resolutionOutcome: 'Operator suppressed this thread.',
+      })],
+    });
+
+    const promptFacing = await request(port, 'GET', '/api/admin/concerns', undefined, authHeaders);
+    expect(promptFacing.status).toBe(200);
+    expect(JSON.parse(promptFacing.body)).toEqual({ concerns: [] });
   });
 
   it('lists and fetches persisted shard fold reviews on the canonical admin shard routes', async () => {
@@ -1212,7 +1343,7 @@ describe('AdminServer JSON API routes', () => {
 
   it('rejects invalid cadence payloads on PATCH /api/admin/scheduler/tasks/:taskId', async () => {
     const invalidCadenceCases: Array<[cadence: Record<string, unknown>, errorFragment: string]> = [
-      [{ kind: 'weekly', minute: 0 }, 'cadence.kind'],
+      [{ kind: 'monthly', minute: 0 }, 'cadence.kind'],
       [{ kind: 'daily', hour: 24, minute: 0, timezone: 'utc' }, 'cadence.hour'],
       [{ kind: 'hourly', minute: 60, timezone: 'utc' }, 'cadence.minute'],
       [{ kind: 'daily', hour: 8, minute: 0, timezone: 'Not/AZone' }, 'cadence.timezone'],
@@ -1236,7 +1367,7 @@ describe('AdminServer JSON API routes', () => {
 
   it('rejects invalid cadence payloads on POST /api/admin/scheduler/tasks', async () => {
     const invalidCadenceCases: Array<[cadence: Record<string, unknown>, errorFragment: string]> = [
-      [{ kind: 'weekly', minute: 0 }, 'cadence.kind'],
+      [{ kind: 'monthly', minute: 0 }, 'cadence.kind'],
       [{ kind: 'daily', hour: 24, minute: 0, timezone: 'utc' }, 'cadence.hour'],
       [{ kind: 'hourly', minute: 60, timezone: 'utc' }, 'cadence.minute'],
       [{ kind: 'daily', hour: 8, minute: 0, timezone: 'Not/AZone' }, 'cadence.timezone'],
@@ -1684,6 +1815,131 @@ describe('AdminServer JSON API routes', () => {
       authHeaders,
     );
     expect(badRange.status).toBe(400);
+  });
+
+  it('supports preference memory review filters and retention edits', async () => {
+    const now = Date.UTC(2026, 2, 1, 10, 0, 0);
+    memoryStore.insertMemory({
+      id: 'pref-durable-color',
+      text: "V's favorite color is teal.",
+      type: 'semantic',
+      importance: 0.9,
+      confidence: 0.95,
+      emotionalValence: 0.1,
+      salience: 0.9,
+      sourceRef: 'api:preference:1',
+      extractedAt: now,
+      lastAccessed: now,
+      accessCount: 0,
+      tags: ['preference', 'favorite', 'preference:color', 'durable_preference'],
+      retentionClass: 'durable',
+      sensitivity: 'personal',
+    }, new Float32Array([0.1, 0.3, 0.2]));
+    memoryStore.insertMemory({
+      id: 'pref-standard-style',
+      text: 'V likes matte stationery.',
+      type: 'semantic',
+      importance: 0.65,
+      confidence: 0.85,
+      emotionalValence: 0,
+      salience: 0.65,
+      sourceRef: 'api:preference:2',
+      extractedAt: now + 1,
+      lastAccessed: now + 1,
+      accessCount: 0,
+      tags: ['preference', 'preference:style'],
+      retentionClass: 'standard',
+      sensitivity: 'personal',
+    }, new Float32Array([0.2, 0.4, 0.1]));
+    memoryStore.insertMemory({
+      id: 'durable-non-preference',
+      text: 'Durable non-preference profile fact.',
+      type: 'semantic',
+      importance: 0.75,
+      confidence: 0.9,
+      emotionalValence: 0,
+      salience: 0.75,
+      sourceRef: 'api:profile:1',
+      extractedAt: now + 2,
+      lastAccessed: now + 2,
+      accessCount: 0,
+      tags: ['durable'],
+      retentionClass: 'durable',
+      sensitivity: 'personal',
+    }, new Float32Array([0.3, 0.2, 0.4]));
+
+    const preferenceRes = await request(port, 'GET', '/api/admin/memory?preference=true', undefined, authHeaders);
+    expect(preferenceRes.status).toBe(200);
+    const preferencePayload = JSON.parse(preferenceRes.body) as {
+      memories: Array<{ id: string }>;
+      privacySummary: {
+        matchingMemoryCount: number;
+        preferenceCount: number;
+        durablePreferenceCount: number;
+      };
+    };
+    expect(preferencePayload.memories.map(memory => memory.id)).toEqual(expect.arrayContaining([
+      'pref-durable-color',
+      'pref-standard-style',
+    ]));
+    expect(preferencePayload.memories.map(memory => memory.id)).not.toContain('durable-non-preference');
+    expect(preferencePayload.privacySummary.matchingMemoryCount).toBe(2);
+    expect(preferencePayload.privacySummary.preferenceCount).toBe(2);
+    expect(preferencePayload.privacySummary.durablePreferenceCount).toBe(1);
+
+    const durablePreferenceRes = await request(
+      port,
+      'GET',
+      '/api/admin/memory?preference=true&retention=durable',
+      undefined,
+      authHeaders,
+    );
+    expect(durablePreferenceRes.status).toBe(200);
+    const durablePreferencePayload = JSON.parse(durablePreferenceRes.body) as {
+      memories: Array<{ id: string }>;
+    };
+    expect(durablePreferencePayload.memories.map(memory => memory.id)).toEqual(['pref-durable-color']);
+
+    const markDurableRes = await request(
+      port,
+      'POST',
+      '/api/admin/memory/bulk-update',
+      JSON.stringify({
+        ids: ['pref-standard-style'],
+        fields: { retentionClass: 'durable' },
+      }),
+      authHeaders,
+    );
+    expect(markDurableRes.status).toBe(200);
+    expect(memoryStore.getById('pref-standard-style')).toMatchObject({
+      retentionClass: 'durable',
+      tags: expect.arrayContaining(['durable', 'durable_preference']),
+    });
+
+    const markStandardRes = await request(
+      port,
+      'POST',
+      '/api/admin/memory/bulk-update',
+      JSON.stringify({
+        ids: ['pref-durable-color'],
+        fields: { retentionClass: 'standard' },
+      }),
+      authHeaders,
+    );
+    expect(markStandardRes.status).toBe(200);
+    const standardMemory = memoryStore.getById('pref-durable-color');
+    expect(standardMemory?.retentionClass).toBe('standard');
+    expect(standardMemory?.tags).not.toContain('durable');
+    expect(standardMemory?.tags).not.toContain('durable_preference');
+
+    const invalidRetentionRes = await request(
+      port,
+      'GET',
+      '/api/admin/memory?retention=forever',
+      undefined,
+      authHeaders,
+    );
+    expect(invalidRetentionRes.status).toBe(400);
   });
 
   it('exposes L0.1 episodic episodes, provenance, arcs, and threads', async () => {
@@ -2713,7 +2969,7 @@ describe('AdminServer JSON API routes', () => {
             };
           };
           toolContext?: {
-            activeTools?: Array<{ name: string }>;
+            activeTools?: Array<{ name: string; description?: string; inputSchema?: Record<string, unknown> }>;
             adaptiveSnapshot?: {
               skipped?: Array<{ toolName?: string; reason?: string }>;
             };
@@ -2727,6 +2983,29 @@ describe('AdminServer JSON API routes', () => {
           };
           sessionContext?: { compactionPromptText?: string };
         } | null;
+        promptLoom?: {
+          historicalSnapshot: {
+            label: string;
+            removedPromptLayerIds: string[];
+          };
+          providerPayload: {
+            finalSystemPrompt: string | null;
+            providerMessages: Array<{ role: string; source: string; content: string }>;
+            activeTools: Array<{ name: string; description: string; inputSchema: Record<string, unknown> }>;
+          };
+          providerResult: {
+            renderedChatOutput: string | null;
+          };
+          memoryCapture: {
+            input: {
+              currentTurnInput: string | null;
+              renderedChatOutput: string | null;
+            };
+            output: {
+              extractedMemoryIds: string[];
+            };
+          };
+        };
       }>;
     };
     expect(messagesPayload.messages.map(message => message.content)).toContain('hello');
@@ -2784,6 +3063,39 @@ describe('AdminServer JSON API routes', () => {
         reason: 'not_needed_for_turn',
       }),
     ]);
+    expect(messagesPayload.turns[0]?.promptLoom?.providerPayload).toEqual({
+      finalSystemPrompt: 'Final system prompt',
+      providerMessages: [
+        { role: 'developer', source: 'system_prompt', content: 'Final system prompt' },
+        { role: 'user', source: 'message', content: 'hello' },
+        { role: 'assistant', source: 'message', content: 'world' },
+      ],
+      activeTools: [
+        {
+          name: 'contact_lookup',
+          description: 'Look up a contact.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              query: { type: 'string' },
+            },
+            required: ['query'],
+          },
+        },
+      ],
+    });
+    expect(messagesPayload.turns[0]?.promptLoom?.historicalSnapshot.label).toBe(
+      'Persisted turn snapshot; not current prompt generator state.',
+    );
+    expect(messagesPayload.turns[0]?.promptLoom?.memoryCapture).toMatchObject({
+      input: {
+        currentTurnInput: 'hello',
+        renderedChatOutput: 'world',
+      },
+      output: {
+        extractedMemoryIds: [],
+      },
+    });
     expect(messagesPayload.turns[0]?.snapshot?.sessionContext?.compactionPromptText).toBe('Compaction prompt snapshot');
     expect(messagesPayload.turns[0]?.snapshot?.memory?.contactEmotionalMemories[0]).not.toHaveProperty('embedding');
     expect(messagesPayload.turns[0]?.snapshot?.memory?.semanticCandidates).toHaveLength(1);
@@ -2799,6 +3111,112 @@ describe('AdminServer JSON API routes', () => {
     });
   });
 
+  it('paginates and compresses admin session message payloads', async () => {
+    const channelId = 'api-page-session';
+    for (let index = 1; index <= 125; index += 1) {
+      sessionStore.append({
+        channelId,
+        role: index % 2 === 0 ? 'assistant' : 'user',
+        content: `Message ${index} ${'payload '.repeat(20)}`,
+        authorId: `author-${index % 3}`,
+        authorName: `Author ${index % 3}`,
+        timestamp: 1_700_000_000_000 + index,
+        channelVisibility: 'direct',
+      });
+    }
+
+    const firstRes = await request(
+      port,
+      'GET',
+      `/api/admin/sessions/${encodeURIComponent(channelId)}?limit=100`,
+      undefined,
+      authHeaders,
+    );
+    expect(firstRes.status).toBe(200);
+    const firstPayload = JSON.parse(firstRes.body) as {
+      messages: Array<{ id: number; content: string }>;
+      pagination: {
+        limit: number;
+        beforeId: number | null;
+        nextBeforeId: number | null;
+        hasMoreOlder: boolean;
+        totalMessages: number;
+        returnedMessages: number;
+      };
+    };
+    expect(firstPayload.messages).toHaveLength(100);
+    expect(firstPayload.messages[0]?.content).toContain('Message 26');
+    expect(firstPayload.messages[99]?.content).toContain('Message 125');
+    expect(firstPayload.pagination).toMatchObject({
+      limit: 100,
+      beforeId: null,
+      nextBeforeId: firstPayload.messages[0]?.id,
+      hasMoreOlder: true,
+      totalMessages: 125,
+      returnedMessages: 100,
+    });
+
+    const olderRes = await request(
+      port,
+      'GET',
+      `/api/admin/sessions/${encodeURIComponent(channelId)}?limit=100&beforeId=${firstPayload.pagination.nextBeforeId}`,
+      undefined,
+      authHeaders,
+    );
+    expect(olderRes.status).toBe(200);
+    const olderPayload = JSON.parse(olderRes.body) as {
+      messages: Array<{ content: string }>;
+      pagination: { hasMoreOlder: boolean; returnedMessages: number; nextBeforeId: number | null };
+    };
+    expect(olderPayload.messages).toHaveLength(25);
+    expect(olderPayload.messages[0]?.content).toContain('Message 1');
+    expect(olderPayload.messages[24]?.content).toContain('Message 25');
+    expect(olderPayload.pagination).toMatchObject({
+      hasMoreOlder: false,
+      returnedMessages: 25,
+      nextBeforeId: null,
+    });
+
+    const invalidRes = await request(
+      port,
+      'GET',
+      `/api/admin/sessions/${encodeURIComponent(channelId)}?limit=10000`,
+      undefined,
+      authHeaders,
+    );
+    expect(invalidRes.status).toBe(400);
+
+    const compressedRes = await requestBuffer(
+      port,
+      'GET',
+      `/api/admin/sessions/${encodeURIComponent(channelId)}?limit=100`,
+      {
+        ...authHeaders,
+        'Accept-Encoding': 'br, gzip',
+      },
+    );
+    expect(compressedRes.status).toBe(200);
+    expect(['br', 'gzip']).toContain(compressedRes.headers['content-encoding']);
+    expect(compressedRes.headers.vary).toContain('Accept-Encoding');
+    const compressedPayload = decodeJsonBody(compressedRes) as {
+      messages: Array<{ content: string }>;
+    };
+    expect(compressedPayload.messages).toHaveLength(100);
+    expect(compressedPayload.messages[0]?.content).toContain('Message 26');
+
+    const gzipOnlyRes = await requestBuffer(
+      port,
+      'GET',
+      `/api/admin/sessions/${encodeURIComponent(channelId)}?limit=100`,
+      {
+        ...authHeaders,
+        'Accept-Encoding': 'br;q=0, gzip',
+      },
+    );
+    expect(gzipOnlyRes.status).toBe(200);
+    expect(gzipOnlyRes.headers['content-encoding']).toBe('gzip');
+  });
+
   it('supports contact list/detail/update endpoints', async () => {
     const contact = contactStore.upsert({
       displayName: 'Api Contact',
@@ -2811,7 +3229,7 @@ describe('AdminServer JSON API routes', () => {
       relationshipType: 'friend',
     });
     contactStore.linkChannelIdentity(contact.id, 'discord', 'api-contact-user', {
-      privacyLevel: 'semi_private',
+      privacyLevel: 'invite_only',
     });
     contactStore.recordChannelActivity(contact.id, 'discord', '1313001762793197678');
     const contactEntity = contactStore.getSocialGraphEntityByContactId(contact.id)!;
@@ -2832,6 +3250,7 @@ describe('AdminServer JSON API routes', () => {
     expect(listRes.headers['cache-control']).toBe('no-store');
     const listPayload = JSON.parse(listRes.body) as {
       contacts: Array<{ id: string }>;
+      relationshipScoreMap: Record<string, unknown>;
       socialGraphMap: Record<string, {
         edgeCount: number;
         mentionOnlyNeighborCount: number;
@@ -2843,6 +3262,17 @@ describe('AdminServer JSON API routes', () => {
       }>;
     };
     expect(listPayload.contacts.some(entry => entry.id === contact.id)).toBe(true);
+    expect(listPayload.relationshipScoreMap).toEqual(expect.objectContaining({
+      [contact.id]: expect.objectContaining({
+        resolvedTier: 'acquainted',
+        nextTier: 'regular',
+        progressToNextTier: 0.5,
+      }),
+      [mentioned.id]: expect.objectContaining({
+        resolvedTier: 'regular',
+        nextTier: 'trusted',
+      }),
+    }));
     expect(listPayload.socialGraphMap[contact.id]).toMatchObject({
       edgeCount: 1,
       mentionOnlyNeighborCount: 1,
@@ -2896,13 +3326,15 @@ describe('AdminServer JSON API routes', () => {
         channelPrivacy: [{
           channel: 'discord',
           channelId: '1313001762793197678',
-          privacyLevel: 'broadcast',
+          // E3.3: retired 'broadcast' privacy vocabulary is rejected; the
+          // provenance-only per-contact field takes ChannelPrivacy values.
+          privacyLevel: 'public',
         }],
       }),
       authHeaders,
     );
     expect(directChannelRes.status).toBe(200);
-    expect(contactStore.getConversationChannelPrivacy(contact.id, 'discord', '1313001762793197678')).toBe('broadcast');
+    expect(contactStore.getConversationChannelPrivacy(contact.id, 'discord', '1313001762793197678')).toBe('public');
 
     const patchRes = await request(
       port,
@@ -2928,7 +3360,7 @@ describe('AdminServer JSON API routes', () => {
     expect(auditPayload.mutationAudits.some(entry => (
       entry.field === 'channel_privacy'
       && entry.actor === 'admin:api'
-      && entry.newValue?.includes('"privacyLevel":"broadcast"')
+      && entry.newValue?.includes('"privacyLevel":"public"')
     ))).toBe(true);
 
     const badPatch = await request(
@@ -3190,10 +3622,10 @@ describe('AdminServer JSON API routes', () => {
     const promptsBeforeReorderRes = await request(port, 'GET', '/api/admin/prompts', undefined, authHeaders);
     expect(promptsBeforeReorderRes.status).toBe(200);
     const promptsBeforeReorderPayload = JSON.parse(promptsBeforeReorderRes.body) as {
-      runtimeBlocks: Array<{ id: string; placement: string }>;
+      runtimeBlocks: Array<{ id: string; placement: string; reorderable: boolean }>;
     };
     const reorderedRuntimeBlockIds = promptsBeforeReorderPayload.runtimeBlocks
-      .filter(block => block.placement === 'system_prompt')
+      .filter(block => block.placement === 'system_prompt' && block.reorderable)
       .map(block => block.id);
     const [movedRuntimeBlockId] = reorderedRuntimeBlockIds.splice(reorderedRuntimeBlockIds.length - 1, 1);
     if (movedRuntimeBlockId) reorderedRuntimeBlockIds.unshift(movedRuntimeBlockId);
@@ -3210,10 +3642,10 @@ describe('AdminServer JSON API routes', () => {
     const promptsAfterReorderRes = await request(port, 'GET', '/api/admin/prompts', undefined, authHeaders);
     expect(promptsAfterReorderRes.status).toBe(200);
     const promptsAfterReorderPayload = JSON.parse(promptsAfterReorderRes.body) as {
-      runtimeBlocks: Array<{ id: string; placement: string }>;
+      runtimeBlocks: Array<{ id: string; placement: string; reorderable: boolean }>;
     };
     const runtimeOrderIds = promptsAfterReorderPayload.runtimeBlocks
-      .filter(block => block.placement === 'system_prompt')
+      .filter(block => block.placement === 'system_prompt' && block.reorderable)
       .map(block => block.id);
     expect(runtimeOrderIds[0]).toBe(movedRuntimeBlockId);
     expect(promptStore.getById(layerId)?.content).toContain('Updated API prompt content');
@@ -3252,7 +3684,8 @@ describe('AdminServer JSON API routes', () => {
     };
     expect(snapshotPayload.immutableBlocks).toHaveLength(4);
     expect(snapshotPayload.immutableBlocks.every(block => block.editable === false)).toBe(true);
-    expect(snapshotPayload.preview.text).toContain('[Immutable Human-Safety Amendments]');
+    expect(snapshotPayload.preview.text).toContain('<immutable_human_safety_amendments>');
+    expect(snapshotPayload.preview.text).not.toContain('[Immutable Human-Safety Amendments]');
     expect(snapshotPayload.preview.text).not.toContain('You are {{char}}.');
     expect(snapshotPayload.mutableLayers).toEqual([]);
 
@@ -3940,6 +4373,35 @@ describe('AdminServer JSON API routes', () => {
         timeZone: 'local',
         inactivityThresholdMinutes: 60,
       },
+      nearTurnMemory: {
+        direct: { cadenceTurns: 3 },
+        group: { minIntervalMinutes: 15, minNewEntries: 8 },
+      },
+      episodeSynthesis: {
+        timerIntervalMinutes: 30,
+        turnThreshold: 24,
+        minRelevantTurns: 10,
+        transcriptMessageLimit: 96,
+        maxEpisodesPerRun: 6,
+        gapSplitMinutes: 45,
+        maxEntriesPerEpisode: 14,
+        minConversationalEntries: 2,
+        minSingleEntryChars: 120,
+      },
+      sleepConsolidation: {
+        reviewWindowDays: 60,
+        refinementWindowHours: 36,
+        adjacencyGapMinutes: 45,
+        maxRefinementsPerRun: 8,
+        maxConsolidationsPerRun: 6,
+      },
+      arcFormation: {
+        passIntervalDays: 6,
+        reviewWindowDays: 30,
+        minConfidence: 0.5,
+        maxArcsPerRun: 12,
+        maxEpisodesPerRun: 60,
+      },
     });
     const expectedSkills = saveSkillsConfig(tempDir, {
       enabled: true,
@@ -3953,14 +4415,13 @@ describe('AdminServer JSON API routes', () => {
       trustCeiling: {
         primary: ['public', 'personal', 'intimate', 'confidential'],
         trusted: ['public', 'personal'],
-        regular: ['public'],
+        regular: ['public', 'personal'],
         public: ['public'],
       },
       visibilityAllowed: {
         private: ['public', 'personal', 'intimate', 'confidential'],
-        semi_private: ['public', 'personal'],
+        invite_only: ['public', 'personal'],
         public: ['public'],
-        broadcast: ['public'],
       },
       channelClassification: {
         privatePrefixes: ['custom:'],
@@ -3968,7 +4429,8 @@ describe('AdminServer JSON API routes', () => {
         defaultVisibility: 'public',
         visibilityOverrides: {
           exact: {
-            'custom:exact-room': 'broadcast',
+            // E3.3: broadcast overrides are the explicit envelope pair.
+            'custom:exact-room': { privacy: 'public', broadcast: true },
           },
           prefix: {
             'custom:': 'private',

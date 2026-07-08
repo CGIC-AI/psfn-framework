@@ -177,8 +177,10 @@ describe('prepareAgentStartupContext', () => {
     process.env.WORKSPACE_PATH = workspaceDir;
     process.env.CHARACTER_CARD_PATH = join(systemDataDir, 'purrsephone.json');
     process.env.COMPANION_ID = 'test-companion';
+    process.env.POSTGRES_DATABASE_URL = 'postgresql://test:test@127.0.0.1:5432/test';
     process.env.LITELLM_API_KEY = 'test-litellm-key';
     process.env.OPENROUTER_API_KEY = 'test-openrouter-key';
+    process.env.PSFN_BACKUP_ENCRYPTION_KEY = 'test-backup-secret';
 
     const context = prepareAgentStartupContext({
       env: process.env,
@@ -195,6 +197,10 @@ describe('prepareAgentStartupContext', () => {
       expect(context.coreConfig.primaryModel).toBe('openrouter/z-ai/glm-5.1');
       expect(context.coreConfig.modelRoster.vision?.model).toBe('openrouter/google/gemini-3.1-flash-lite-preview');
       expect(context.coreConfig.modelRoster.chat?.provider).toBe('litellm');
+      expect(context.gatewayRpcEndpoint).toEqual({
+        kind: 'unix',
+        socketPath: '/run/psfn/gateway.sock',
+      });
     } finally {
       context.stopDebugObserver();
     }

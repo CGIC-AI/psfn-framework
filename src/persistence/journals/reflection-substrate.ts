@@ -1,9 +1,9 @@
-import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { existsSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { createComponentLogger } from '../../shared/logger.js';
 import { formatActiveDateTimeLabel } from '../../shared/time/active-timezone.js';
 import type { EmotionalTimeSeriesPoint } from '../../core/contacts/store/emotional-baseline.js';
-import { appendJsonLine } from '../jsonl.js';
+import { appendJsonLine, readJsonLines } from '../jsonl.js';
 import { sanitizeChannelId } from '../sessions/store-primitives.js';
 import {
   normalizeValuesDeliberationMetadata,
@@ -14,6 +14,14 @@ import { NON_CANONICAL_REFLECTION_SUBSTRATE } from './reflection-journal.js';
 
 const log = createComponentLogger('ReflectionSubstrate');
 const ISO_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+
+// Guidance wording inside reflection context blocks is part of the
+// self-report instrument (R6, docs/self-eval-prompt-audit.md): version any
+// wording change here instead of editing casually.
+// v2: R2 rewrite — replaced "do not invent a gap or stale absence" and
+// "not as a command to intensify them" suppression phrasing with
+// out-of-scope/descriptive framing.
+export const REFLECTION_CONTEXT_GUIDANCE_VERSION = 2;
 
 export type ReflectionExecutionSource =
   | 'manual'
@@ -156,6 +164,7 @@ export interface ReflectionContactPendingFollowUp {
 
 export interface ReflectionContactContextBundleInput {
   contactId: string;
+  companionName?: string;
   contactDisplayName?: string;
   trustLevel?: string;
   primarySessionId?: string;
@@ -233,27 +242,15 @@ function readJsonlEntries<T>(
   normalize: (raw: unknown) => T | null,
   warningPrefix: string,
 ): T[] {
-  if (!existsSync(filePath)) return [];
-  const raw = readFileSync(filePath, 'utf-8');
-  if (raw.trim().length === 0) return [];
-
-  return raw
-    .split('\n')
-    .map(line => line.trim())
-    .filter(line => line.length > 0)
-    .map((line, index) => {
-      try {
-        return normalize(JSON.parse(line) as unknown);
-      } catch (error) {
-        log.warn(warningPrefix, {
-          filePath,
-          line: index + 1,
-          error: String(error),
-        });
-        return null;
-      }
-    })
-    .filter((entry): entry is T => entry !== null);
+  return readJsonLines(filePath, normalize, {
+    onError: ({ line, error }) => {
+      log.warn(warningPrefix, {
+        filePath,
+        line,
+        error: String(error),
+      });
+    },
+  }).entries;
 }
 
 function listJsonlFiles(rootDir: string): string[] {
@@ -277,11 +274,42 @@ function truncateReflectionText(text: string, maxLength = 220): string {
   return `${normalized.slice(0, maxLength - 1).trimEnd()}...`;
 }
 
-function formatOptionalNumber(value: number | null | undefined, digits = 3): string {
-  if (value === undefined || value === null || !Number.isFinite(value)) {
-    return 'unknown';
-  }
-  return Number(value).toFixed(digits);
+function describeSignedValence(value: number | null | undefined): string {
+  if (value === undefined || value === null || !Number.isFinite(value)) return 'unknown';
+  if (value >= 0.35) return 'lifted';
+  if (value >= 0.12) return 'slightly lifted';
+  if (value <= -0.35) return 'heavy';
+  if (value <= -0.12) return 'slightly heavy';
+  return 'steady';
+}
+
+function describeArousal(value: number | null | undefined): string {
+  if (value === undefined || value === null || !Number.isFinite(value)) return 'unknown';
+  if (value >= 0.35) return 'activated';
+  if (value >= 0.12) return 'a little activated';
+  if (value <= -0.25) return 'quieted';
+  return 'steady';
+}
+
+function describeDominance(value: number | null | undefined): string {
+  if (value === undefined || value === null || !Number.isFinite(value)) return 'unknown';
+  if (value >= 0.25) return 'agentic';
+  if (value <= -0.25) return 'less agentic';
+  return 'balanced';
+}
+
+function describeUnitConfidence(value: number | null | undefined): string {
+  if (value === undefined || value === null || !Number.isFinite(value)) return 'unknown confidence';
+  if (value >= 0.72) return 'strong confidence';
+  if (value >= 0.38) return 'some confidence';
+  return 'thin confidence';
+}
+
+function describeMoodDrift(value: number | null | undefined): string {
+  if (value === undefined || value === null || !Number.isFinite(value)) return 'unknown';
+  if (value >= 0.12) return 'warmer than the contact baseline';
+  if (value <= -0.12) return 'heavier than the contact baseline';
+  return 'close to the contact baseline';
 }
 
 function formatOptionalDateTime(value: string | null | undefined): string {
@@ -301,6 +329,7 @@ function joinContextSections(...sections: Array<string | undefined>): string {
 function formatRecentSessionMessagesBlock(
   messages: readonly ReflectionContactRecentMessage[] | undefined,
   primarySessionId?: string,
+  companionName?: string,
 ): { block?: string; provenanceRefs: string[] } {
   if (!messages || messages.length === 0) {
     return { provenanceRefs: [] };
@@ -314,7 +343,7 @@ function formatRecentSessionMessagesBlock(
 
   messages.slice(-12).forEach((message) => {
     const speaker = message.role === 'assistant'
-      ? message.authorName?.trim() || 'Assistant'
+      ? message.authorName?.trim() || companionName?.trim() || 'Assistant'
       : message.authorName?.trim() || 'User';
     const content = truncateReflectionText(message.content, 240);
     lines.push(`- ${speaker}: ${content}`);
@@ -333,6 +362,7 @@ function formatRecentSessionMessagesBlock(
 function formatRecentSessionTailBlock(
   messages: readonly ReflectionContactRecentMessage[] | undefined,
   primarySessionId?: string,
+  companionName?: string,
 ): { block?: string; provenanceRefs: string[] } {
   const tailMessages = messages?.slice(-4);
   if (!tailMessages || tailMessages.length === 0) {
@@ -347,7 +377,7 @@ function formatRecentSessionTailBlock(
 
   tailMessages.forEach((message) => {
     const speaker = message.role === 'assistant'
-      ? message.authorName?.trim() || 'Assistant'
+      ? message.authorName?.trim() || companionName?.trim() || 'Assistant'
       : message.authorName?.trim() || 'User';
     const content = truncateReflectionText(message.content, 240);
     lines.push(`- ${speaker}: ${content}`);
@@ -416,20 +446,22 @@ function formatPendingFollowUpsBlock(
 }
 
 function formatContactRelationalBlock(input: ReflectionContactContextBundleInput): string {
+  const displayName = input.contactDisplayName?.trim() || 'the current contact';
+  const trustLevel = input.trustLevel?.trim() || 'unknown';
+  const primarySession = input.primarySessionId?.trim() ? 'a live session is known' : 'no live session is known';
+  const lastSeen = formatOptionalDateTime(input.lastSeen);
+  const lastSeenLine = lastSeen === 'unknown'
+    ? 'Last-seen timing is unknown.'
+    : `Last seen around ${lastSeen}.`;
+  const recentStatus = (input.recentSessionMessages?.length ?? 0) > 0 ? 'active' : 'quiet';
   const lines = [
-    '[Reflection Contact Context]',
-    `contact_id: ${input.contactId}`,
-    `contact_name: ${input.contactDisplayName?.trim() || 'unknown'}`,
-    `trust_level: ${input.trustLevel?.trim() || 'unknown'}`,
-    `primary_session_id: ${input.primarySessionId?.trim() || 'unknown'}`,
-    `last_seen: ${formatOptionalDateTime(input.lastSeen)}`,
-    `last_seen_delta_seconds: ${input.lastSeenDeltaSeconds === null || input.lastSeenDeltaSeconds === undefined
-      ? 'unknown'
-      : Math.max(0, Math.floor(input.lastSeenDeltaSeconds)).toString()}`,
-    `recent_contact_status: ${(input.recentSessionMessages?.length ?? 0) > 0 ? 'active' : 'quiet'}`,
-    'guidance:',
-    '- Ground the reflection in the live contact, not in a generic silence narrative.',
-    '- If recent_contact_status is active, do not invent a gap or stale absence.',
+    '[Reflection Contact Evidence]',
+    `- Current contact: ${displayName}; trust scope ${trustLevel}.`,
+    `- Session continuity: ${primarySession}.`,
+    `- ${lastSeenLine}`,
+    `- Recent contact status: ${recentStatus}.`,
+    '- Ground the reflection in the live contact evidence above.',
+    '- Recent contact status is the authoritative presence signal; while it reads active, silence or absence framing is out of scope for this reflection.',
   ];
 
   return lines.join('\n');
@@ -441,29 +473,41 @@ function formatContactAffectBlock(input: ReflectionContactContextBundleInput): s
   }
 
   const lines = [
-    '[Reflection Affect Context]',
-    'Treat these affect signals as current evidence, not as a command to intensify them.',
+    '[Reflection Affect Evidence]',
+    'Treat these affect signals as fallible current evidence; they describe recent state and carry no instruction about what to feel or express.',
   ];
 
   if (input.currentVAD) {
     lines.push(
-      `current_vad: valence=${formatOptionalNumber(input.currentVAD.valence, 3)} `
-      + `arousal=${formatOptionalNumber(input.currentVAD.arousal, 3)} `
-      + `dominance=${formatOptionalNumber(input.currentVAD.dominance, 3)}`,
+      `- Current affect appears ${describeSignedValence(input.currentVAD.valence)}, `
+      + `${describeArousal(input.currentVAD.arousal)}, and ${describeDominance(input.currentVAD.dominance)}.`,
     );
   }
 
   if (input.emotionalSnapshot) {
-    lines.push(`emotional_snapshot: ${JSON.stringify(input.emotionalSnapshot)}`);
+    const snapshotValence = typeof input.emotionalSnapshot.valence === 'number'
+      ? input.emotionalSnapshot.valence
+      : typeof input.emotionalSnapshot.moodValence === 'number'
+        ? input.emotionalSnapshot.moodValence
+        : undefined;
+    const snapshotConfidence = typeof input.emotionalSnapshot.confidence === 'number'
+      ? input.emotionalSnapshot.confidence
+      : undefined;
+    lines.push(
+      `- Contact mood snapshot appears ${describeSignedValence(snapshotValence)} `
+      + `with ${describeUnitConfidence(snapshotConfidence)}.`,
+    );
+    if (typeof input.emotionalSnapshot.moodDrift === 'number') {
+      lines.push(`- Mood drift is ${describeMoodDrift(input.emotionalSnapshot.moodDrift)}.`);
+    }
   }
 
   if (input.emotionalTimeSeries?.length) {
-    lines.push('emotional_time_series:');
+    lines.push('- Recent affect trend:');
     for (const point of input.emotionalTimeSeries) {
       lines.push(
-        `- ${new Date(point.observedAtMs).toISOString()} `
-        + `valence=${formatOptionalNumber(point.valence, 3)} `
-        + `confidence=${formatOptionalNumber(point.confidence, 3)}`,
+        `  - ${new Date(point.observedAtMs).toISOString()}: `
+        + `${describeSignedValence(point.valence)} (${describeUnitConfidence(point.confidence)})`,
       );
     }
   }
@@ -513,7 +557,11 @@ export function assembleReflectionContactContextBundle(
     `reflection_contact:${input.contactId}`,
   ]);
 
-  const recentSessionBlock = formatRecentSessionMessagesBlock(input.recentSessionMessages, input.primarySessionId);
+  const recentSessionBlock = formatRecentSessionMessagesBlock(
+    input.recentSessionMessages,
+    input.primarySessionId,
+    input.companionName,
+  );
   if (recentSessionBlock.block) {
     relationalSections.push(recentSessionBlock.block);
     recentSessionBlock.provenanceRefs.forEach(ref => provenanceRefs.add(ref));
@@ -547,7 +595,11 @@ export function assembleReflectionContactContextBundle(
       if (normalized) provenanceRefs.add(normalized);
     }
   } else {
-    const tailBlock = formatRecentSessionTailBlock(input.recentSessionMessages, input.primarySessionId);
+    const tailBlock = formatRecentSessionTailBlock(
+      input.recentSessionMessages,
+      input.primarySessionId,
+      input.companionName,
+    );
     if (tailBlock.block) {
       selfSections.push('[Reflection Memory Retrieval]', tailBlock.block);
       tailBlock.provenanceRefs.forEach(ref => provenanceRefs.add(ref));
@@ -728,7 +780,7 @@ export function assembleReflectionSubstrateContext(input: {
       const provenanceRef = toReflectionJournalProvenanceRef(entry);
       provenanceRefs.push(provenanceRef);
       linesBySection[classifyReflectionContextSection(entry.templateId)].push(
-        `- ref=${provenanceRef} template=${entry.templateId} mode=${entry.mode} reflection=${truncateReflectionText(entry.reflection)}`,
+        `- ${entry.templateId} ${entry.mode} reflection: ${truncateReflectionText(entry.reflection)}`,
       );
     }
     for (const [sectionKey, lines] of Object.entries(linesBySection) as Array<[ReflectionContextSectionKey, string[]]>) {
@@ -748,7 +800,7 @@ export function assembleReflectionSubstrateContext(input: {
       const provenanceRef = toReflectionDailyJournalProvenanceRef(entry);
       provenanceRefs.push(provenanceRef);
       linesBySection[classifyReflectionContextSection(entry.templateId)].push(
-        `- ref=${provenanceRef} date=${entry.date} template=${entry.templateId ?? 'unknown'} reflection=${truncateReflectionText(entry.reflection)}`,
+        `- ${entry.date} ${entry.templateId ?? 'unknown'} reflection: ${truncateReflectionText(entry.reflection)}`,
       );
     }
     for (const [sectionKey, lines] of Object.entries(linesBySection) as Array<[ReflectionContextSectionKey, string[]]>) {
@@ -768,10 +820,10 @@ export function assembleReflectionSubstrateContext(input: {
       const provenanceRef = toReflectionProcessLogProvenanceRef(entry);
       provenanceRefs.push(provenanceRef);
       const processSummary = entry.stage === 'failed'
-        ? `error=${truncateReflectionText(entry.error ?? 'unknown failure')}`
-        : `reflection=${truncateReflectionText(entry.reflection ?? 'none')}`;
+        ? `error: ${truncateReflectionText(entry.error ?? 'unknown failure')}`
+        : `reflection: ${truncateReflectionText(entry.reflection ?? 'none')}`;
       linesBySection[classifyReflectionContextSection(entry.templateId)].push(
-        `- ref=${provenanceRef} process=${entry.processId} stage=${entry.stage} template=${entry.templateId ?? 'unknown'} ${processSummary}`,
+        `- ${entry.stage} ${entry.templateId ?? 'unknown'} process clue; ${processSummary}`,
       );
     }
     for (const [sectionKey, lines] of Object.entries(linesBySection) as Array<[ReflectionContextSectionKey, string[]]>) {

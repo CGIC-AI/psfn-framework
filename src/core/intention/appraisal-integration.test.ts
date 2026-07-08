@@ -8,7 +8,9 @@ import { wirePostTurnActionRuntime } from '../../app/startup/composition/post-tu
 import { EventBus } from '../../shared/event-bus.js';
 import { Scheduler } from '../scheduler/scheduler.js';
 import { InternalStateComputer } from '../self-model/state.js';
-import type { AgentResponse, SubstrateMessage } from '../../shared/contracts/runtime.js';
+import type { AgentResponse, InferredPostTurnAction, SubstrateMessage } from '../../shared/contracts/runtime.js';
+import { INTENTION_OUTBOUND_MESSAGE_ACTION_KIND } from './appraisal.js';
+import type { OutreachOutboxAppendInput, OutreachOutboxRecord } from './outreach-outbox.js';
 
 function makeMessage(): SubstrateMessage {
   return {
@@ -68,7 +70,307 @@ function makeResponse(internalState = makeInternalState()): AgentResponse {
   };
 }
 
+function makeOutboundAction(
+  payload: Record<string, unknown>,
+): InferredPostTurnAction {
+  return {
+    id: 'outbound-action-1',
+    kind: INTENTION_OUTBOUND_MESSAGE_ACTION_KIND,
+    payload,
+    dedupeKey: 'outbound-action-1',
+    channelId: 'primary-dm',
+    sourceMessageId: 'source-message-1',
+    inferredAt: Date.now(),
+  };
+}
+
+function makePendingFollowUp() {
+  return {
+    id: 'pending-follow-up-1',
+    content: 'Check in about the doctor call.',
+    priority: 'high' as const,
+    timing: 'scheduled' as const,
+    createdAt: '2026-06-16T12:00:00.000Z',
+    dueAt: '2026-07-17T12:00:00.000Z',
+    channelId: 'primary-dm',
+    channelType: 'discord' as const,
+    authorId: 'system:intention',
+    authorName: 'Whisper',
+  };
+}
+
+function registerOutboundHandlerHarness(options: {
+  pendingFollowUp?: ReturnType<typeof makePendingFollowUp> & { activatedAt?: string };
+  activeConcernIds?: string[];
+  dispatchResult?: { outcome: 'sent' } | { outcome: 'blocked'; reason: string; retryAfterMs?: number };
+  dispatchError?: Error;
+  terminalRecord?: OutreachOutboxRecord;
+}) {
+  const tempDir = mkdtempSync(join(tmpdir(), 'psfn-intention-outbound-'));
+  const eventBus = new EventBus();
+  const scheduler = new Scheduler(eventBus, {
+    tickIntervalMs: 50,
+    heartbeatIntervalMs: 1_000,
+  });
+  const postTurnActions = {
+    registerHandler: vi.fn().mockReturnValue(() => {}),
+    listQueued: vi.fn().mockReturnValue([]),
+    getStatus: vi.fn(),
+  };
+  const dispatch = options.dispatchError
+    ? vi.fn().mockRejectedValue(options.dispatchError)
+    : vi.fn().mockResolvedValue(options.dispatchResult ?? { outcome: 'sent' });
+  const outboxRecords: OutreachOutboxAppendInput[] = [];
+  const getTerminal = vi.fn().mockReturnValue(options.terminalRecord);
+  const sessionAudit = vi.fn();
+  const sessionAssistant = vi.fn();
+  const onIntentionFollowUpActivated = vi.fn();
+  const pendingFollowUpStore = {
+    enqueue: vi.fn(),
+    peek: vi.fn().mockResolvedValue(options.pendingFollowUp ?? null),
+    dequeue: vi.fn(),
+    quarantine: vi.fn(),
+    list: vi.fn(),
+    listQuarantined: vi.fn(),
+  };
+
+  wireHeartbeatRuntime(
+    { registerTool: vi.fn() },
+    scheduler,
+    {
+      handleMessage: vi.fn(),
+      followUp: vi.fn(),
+      waitForIdle: vi.fn(),
+      registerPostTurnActionInferer: vi.fn().mockReturnValue(() => {}),
+    } as any,
+    { send: vi.fn() },
+    tempDir,
+    undefined,
+    {
+      eventBus,
+      postTurnActions: postTurnActions as any,
+      llmProvider: { stream: vi.fn(), complete: vi.fn() } as any,
+      proactiveOutbound: { dispatch },
+      outreachOutbox: {
+        append: vi.fn((record: OutreachOutboxAppendInput) => {
+          outboxRecords.push(record);
+          return { version: 1, recordedAt: Date.now(), ...record };
+        }),
+        hasTerminal: vi.fn((dedupeKey: string) => Boolean(options.terminalRecord && options.terminalRecord.dedupeKey === dedupeKey)),
+        getTerminal,
+        listRecent: vi.fn(() => []),
+      },
+      sessionManager: {
+        resolveSessionChannelId: (channelId: string) => channelId,
+        getRecentMessages: vi.fn().mockReturnValue([]),
+        recordSystemMessage: sessionAudit,
+        recordAssistantMessage: sessionAssistant,
+      } as any,
+      pendingFollowUpStore: pendingFollowUpStore as any,
+      onIntentionFollowUpActivated,
+      getActiveConcerns: () => (options.activeConcernIds ?? []).map(id => ({ id })),
+    },
+  );
+
+  const outboundRegistration = postTurnActions.registerHandler.mock.calls.find(
+    call => call[0] === INTENTION_OUTBOUND_MESSAGE_ACTION_KIND,
+  );
+  const handler = outboundRegistration?.[1] as ((action: InferredPostTurnAction) => Promise<{ detail?: string } | void>) | undefined;
+  if (!handler) {
+    rmSync(tempDir, { recursive: true, force: true });
+    throw new Error('Outbound handler was not registered');
+  }
+
+  return {
+    handler,
+    dispatch,
+    getTerminal,
+    outboxRecords,
+    sessionAudit,
+    sessionAssistant,
+    onIntentionFollowUpActivated,
+    pendingFollowUpStore,
+    cleanup: () => rmSync(tempDir, { recursive: true, force: true }),
+  };
+}
+
 describe('intention appraisal runtime integration', () => {
+  it('blocks stale outbound actions when their linked concern has been cleared', async () => {
+    const harness = registerOutboundHandlerHarness({
+      pendingFollowUp: makePendingFollowUp(),
+      activeConcernIds: [],
+    });
+    try {
+      const result = await harness.handler(makeOutboundAction({
+        channelId: 'primary-dm',
+        channelType: 'discord',
+        content: 'Remember to call the doctor.',
+        pendingFollowUpId: 'pending-follow-up-1',
+        concernIds: ['cleared-concern-1'],
+      }));
+
+      expect(result).toEqual({ detail: 'blocked:stale_concern' });
+      expect(harness.dispatch).not.toHaveBeenCalled();
+      expect(harness.sessionAssistant).not.toHaveBeenCalled();
+      expect(harness.outboxRecords.map(record => record.phase)).toEqual(['queued', 'blocked']);
+      expect(harness.outboxRecords[1]).toMatchObject({
+        reason: 'stale_concern',
+        dedupeKey: 'outbound-action-1',
+      });
+      expect(harness.sessionAudit).toHaveBeenCalledWith(
+        'primary-dm',
+        expect.stringContaining('blocked: stale_concern'),
+        'system:outreach-outbox',
+        'Outreach Outbox',
+        true,
+        undefined,
+        expect.objectContaining({
+          requestId: 'outbound-action-1',
+          sourceMessageId: 'source-message-1',
+        }),
+      );
+      expect(harness.onIntentionFollowUpActivated).not.toHaveBeenCalled();
+      expect(harness.pendingFollowUpStore.dequeue).not.toHaveBeenCalled();
+    } finally {
+      harness.cleanup();
+    }
+  });
+
+  it('does not activate pending follow-ups after successful external outbound sends', async () => {
+    const harness = registerOutboundHandlerHarness({
+      pendingFollowUp: makePendingFollowUp(),
+      activeConcernIds: ['active-concern-1'],
+    });
+    try {
+      const result = await harness.handler(makeOutboundAction({
+        channelId: 'primary-dm',
+        channelType: 'discord',
+        content: 'Remember to call the doctor.',
+        pendingFollowUpId: 'pending-follow-up-1',
+        concernIds: ['active-concern-1'],
+      }));
+
+      expect(result).toEqual({ detail: 'sent' });
+      expect(harness.dispatch).toHaveBeenCalledTimes(1);
+      expect(harness.dispatch).toHaveBeenCalledWith({
+        actionId: 'outbound-action-1',
+        channelId: 'primary-dm',
+        channelType: 'discord',
+        content: 'Remember to call the doctor.',
+      });
+      expect(harness.outboxRecords.map(record => record.phase)).toEqual(['queued', 'sent']);
+      expect(harness.sessionAssistant).toHaveBeenCalledWith(
+        'primary-dm',
+        'Remember to call the doctor.',
+        undefined,
+        true,
+        undefined,
+        expect.objectContaining({
+          sourceMessageId: 'source-message-1',
+          metadata: expect.stringContaining('"type":"proactive_outbound_message"'),
+          roleEnvelopePreview: expect.objectContaining({
+            internalRole: 'outreach_candidate',
+            promotionTarget: 'turn_record_summary',
+          }),
+        }),
+      );
+      expect(harness.onIntentionFollowUpActivated).not.toHaveBeenCalled();
+      expect(harness.pendingFollowUpStore.dequeue).not.toHaveBeenCalled();
+    } finally {
+      harness.cleanup();
+    }
+  });
+
+  it('skips replayed outbound actions when terminal outbox history exists', async () => {
+    const terminalRecord: OutreachOutboxRecord = {
+      version: 1,
+      phase: 'sent',
+      actionId: 'outbound-action-1',
+      dedupeKey: 'outbound-action-1',
+      channelId: 'primary-dm',
+      channelType: 'discord',
+      sourceMessageId: 'source-message-1',
+      recordedAt: 1_700_000_000_000,
+    };
+    const harness = registerOutboundHandlerHarness({
+      pendingFollowUp: makePendingFollowUp(),
+      activeConcernIds: ['active-concern-1'],
+      terminalRecord,
+    });
+    try {
+      const result = await harness.handler(makeOutboundAction({
+        channelId: 'primary-dm',
+        channelType: 'discord',
+        content: 'Remember to call the doctor.',
+        pendingFollowUpId: 'pending-follow-up-1',
+        concernIds: ['active-concern-1'],
+      }));
+
+      expect(result).toEqual({ detail: 'skipped:terminal_dedupe:sent' });
+      expect(harness.dispatch).not.toHaveBeenCalled();
+      expect(harness.sessionAssistant).not.toHaveBeenCalled();
+      expect(harness.outboxRecords).toEqual([
+        expect.objectContaining({
+          phase: 'skipped',
+          metadata: expect.objectContaining({
+            skippedReason: 'terminal_dedupe_replay',
+            terminalPhase: 'sent',
+          }),
+        }),
+      ]);
+    } finally {
+      harness.cleanup();
+    }
+  });
+
+  it('records blocked and failed terminal outbound history without bypassing dispatcher policy', async () => {
+    const blockedHarness = registerOutboundHandlerHarness({
+      pendingFollowUp: makePendingFollowUp(),
+      activeConcernIds: ['active-concern-1'],
+      dispatchResult: { outcome: 'blocked', reason: 'channel_not_approved_for_primary' },
+    });
+    try {
+      const result = await blockedHarness.handler(makeOutboundAction({
+        channelId: 'unapproved-channel',
+        channelType: 'discord',
+        content: 'Remember to call the doctor.',
+        pendingFollowUpId: 'pending-follow-up-1',
+        concernIds: ['active-concern-1'],
+      }));
+
+      expect(result).toEqual({ detail: 'blocked:channel_not_approved_for_primary' });
+      expect(blockedHarness.dispatch).toHaveBeenCalledTimes(1);
+      expect(blockedHarness.outboxRecords.map(record => record.phase)).toEqual(['queued', 'blocked']);
+      expect(blockedHarness.outboxRecords[1]).toMatchObject({
+        reason: 'channel_not_approved_for_primary',
+      });
+    } finally {
+      blockedHarness.cleanup();
+    }
+
+    const failure = new Error('gateway unavailable');
+    const failedHarness = registerOutboundHandlerHarness({
+      pendingFollowUp: makePendingFollowUp(),
+      activeConcernIds: ['active-concern-1'],
+      dispatchError: failure,
+    });
+    try {
+      await expect(failedHarness.handler(makeOutboundAction({
+        channelId: 'primary-dm',
+        channelType: 'discord',
+        content: 'Remember to call the doctor.',
+        pendingFollowUpId: 'pending-follow-up-1',
+        concernIds: ['active-concern-1'],
+      }))).rejects.toThrow('gateway unavailable');
+      expect(failedHarness.outboxRecords.map(record => record.phase)).toEqual(['queued', 'failed']);
+      expect(failedHarness.outboxRecords[1]).toMatchObject({
+        error: 'Error: gateway unavailable',
+      });
+    } finally {
+      failedHarness.cleanup();
+    }
+  });
+
   it('dispatches follow-up actions asynchronously through post-turn runtime', async () => {
     const tempDir = mkdtempSync(join(tmpdir(), 'psfn-intention-'));
     const nowSpy = vi.spyOn(Date, 'now');
@@ -139,7 +441,7 @@ describe('intention appraisal runtime integration', () => {
           getActiveConcerns: () => [{
             title: 'Follow up soon',
             dueAt: Date.now() + 1_000,
-            status: 'open',
+            status: 'active',
           }],
           emotionState: {
             getState: () => ({
@@ -264,7 +566,7 @@ describe('intention appraisal runtime integration', () => {
           getActiveConcerns: () => [{
             title: 'Follow up soon',
             dueAt: Date.now() + 1_000,
-            status: 'open',
+            status: 'active',
           }],
           emotionState: {
             getState: () => ({
@@ -381,7 +683,7 @@ describe('intention appraisal runtime integration', () => {
           getActiveConcerns: () => [{
             title: 'Follow up soon',
             dueAt: Date.now() + 1_000,
-            status: 'open',
+            status: 'active',
           }],
           emotionState: {
             getState: () => ({

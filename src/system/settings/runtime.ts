@@ -1,8 +1,17 @@
 import {
   DEFAULT_MOOD_CONGRUENCE_WEIGHT,
   DEFAULT_UI_THEME_ID,
+  createDefaultObserverEvalSidecarSettings,
   type SubstrateConfig,
 } from '../config/runtime-config-contracts.js';
+import {
+  cloneGroupMemorySettings,
+  createDefaultGroupMemorySettings,
+} from '../config/group-memory-config.js';
+import {
+  cloneEmotionScopingSettings,
+  createDefaultEmotionScopingSettings,
+} from '../config/emotion-scoping-config.js';
 import {
   cloneImageWorkflowSettings,
   normalizeImageWorkflowSettings,
@@ -65,6 +74,12 @@ const DIRECT_DEFINED_CONFIG_SETTINGS = [
   'memoryRetrievalBudgetPct',
   'moodCongruenceWeight',
   'adaptiveContextBudgetsEnabled',
+  'wikiRetrievalEnabled',
+  'wikiRetrievalChatTokenCap',
+  'wikiRetrievalGroupTokenCap',
+  'wikiRetrievalFocusTokenCap',
+  'wikiRetrievalSimilarityThreshold',
+  'wikiRetrievalGroupSimilarityThreshold',
   'sessionMirrorEnabled',
   'sessionMirrorMaxChars',
   'sessionMirrorActiveWindowMs',
@@ -81,6 +96,9 @@ const DIRECT_DEFINED_CONFIG_SETTINGS = [
   'memoryExtractionMaxWrites',
   'memoryExtractionTelemetryEnabled',
   'memoryRetrievalTelemetryEnabled',
+  'memoryRefreshFailureAlertThreshold',
+  'groupMemory',
+  'emotionScoping',
   'profileSynthesisEnabled',
   'profileSynthesisRefreshIntervalMs',
   'profileSynthesisCooldownMs',
@@ -126,6 +144,14 @@ function getContextSettingsSnapshot(config: SubstrateConfig) {
       config.moodCongruenceWeight ?? DEFAULT_MOOD_CONGRUENCE_WEIGHT,
     adaptiveContextBudgetsEnabled:
       config.adaptiveContextBudgetsEnabled ?? false,
+    wikiRetrievalEnabled: config.wikiRetrievalEnabled ?? false,
+    wikiRetrievalChatTokenCap: config.wikiRetrievalChatTokenCap ?? 1000,
+    wikiRetrievalGroupTokenCap: config.wikiRetrievalGroupTokenCap ?? 400,
+    wikiRetrievalFocusTokenCap: config.wikiRetrievalFocusTokenCap ?? 2000,
+    wikiRetrievalSimilarityThreshold:
+      config.wikiRetrievalSimilarityThreshold ?? 0.6,
+    wikiRetrievalGroupSimilarityThreshold:
+      config.wikiRetrievalGroupSimilarityThreshold ?? 0.78,
     sessionMirrorEnabled: config.sessionMirrorEnabled ?? true,
     sessionMirrorMaxChars: config.sessionMirrorMaxChars ?? 220,
     sessionMirrorActiveWindowMs:
@@ -148,6 +174,12 @@ function getContextSettingsSnapshot(config: SubstrateConfig) {
     | 'memoryRetrievalBudgetPct'
     | 'moodCongruenceWeight'
     | 'adaptiveContextBudgetsEnabled'
+    | 'wikiRetrievalEnabled'
+    | 'wikiRetrievalChatTokenCap'
+    | 'wikiRetrievalGroupTokenCap'
+    | 'wikiRetrievalFocusTokenCap'
+    | 'wikiRetrievalSimilarityThreshold'
+    | 'wikiRetrievalGroupSimilarityThreshold'
     | 'sessionMirrorEnabled'
     | 'sessionMirrorMaxChars'
     | 'sessionMirrorActiveWindowMs'
@@ -175,6 +207,14 @@ function getMemorySettingsSnapshot(config: SubstrateConfig) {
       config.memoryExtractionTelemetryEnabled ?? true,
     memoryRetrievalTelemetryEnabled:
       config.memoryRetrievalTelemetryEnabled ?? true,
+    memoryRefreshFailureAlertThreshold:
+      config.memoryRefreshFailureAlertThreshold ?? null,
+    groupMemory: cloneGroupMemorySettings(
+      config.groupMemory ?? createDefaultGroupMemorySettings(),
+    ),
+    emotionScoping: cloneEmotionScopingSettings(
+      config.emotionScoping ?? createDefaultEmotionScopingSettings(),
+    ),
     profileSynthesisEnabled: config.profileSynthesisEnabled ?? true,
     profileSynthesisRefreshIntervalMs:
       config.profileSynthesisRefreshIntervalMs ?? null,
@@ -190,6 +230,9 @@ function getMemorySettingsSnapshot(config: SubstrateConfig) {
     analysisWorkbenchMaxTokens: config.analysisWorkbenchMaxTokens ?? null,
     analysisWorkbenchMaxWallTimeMs: config.analysisWorkbenchMaxWallTimeMs ?? null,
     analysisWorkbenchMaxSubQueries: config.analysisWorkbenchMaxSubQueries ?? null,
+    observerEvalSidecar: structuredClone(
+      config.observerEvalSidecar ?? createDefaultObserverEvalSidecarSettings(),
+    ),
     retryMaxAttempts: config.retryMaxAttempts ?? null,
     retryBaseDelayMs: config.retryBaseDelayMs ?? null,
   } satisfies SnapshotSection<
@@ -200,6 +243,9 @@ function getMemorySettingsSnapshot(config: SubstrateConfig) {
     | 'memoryExtractionMaxWrites'
     | 'memoryExtractionTelemetryEnabled'
     | 'memoryRetrievalTelemetryEnabled'
+    | 'memoryRefreshFailureAlertThreshold'
+    | 'groupMemory'
+    | 'emotionScoping'
     | 'profileSynthesisEnabled'
     | 'profileSynthesisRefreshIntervalMs'
     | 'profileSynthesisCooldownMs'
@@ -212,6 +258,7 @@ function getMemorySettingsSnapshot(config: SubstrateConfig) {
     | 'analysisWorkbenchMaxTokens'
     | 'analysisWorkbenchMaxWallTimeMs'
     | 'analysisWorkbenchMaxSubQueries'
+    | 'observerEvalSidecar'
     | 'retryMaxAttempts'
     | 'retryBaseDelayMs'
   >;
@@ -487,6 +534,16 @@ function applyCoreSettings(
       settings.sessionMirrorChannelOverrides ?? {},
     );
   }
+  if ('groupMemory' in settings) {
+    config.groupMemory = cloneGroupMemorySettings(
+      settings.groupMemory ?? createDefaultGroupMemorySettings(),
+    );
+  }
+  if ('emotionScoping' in settings) {
+    config.emotionScoping = cloneEmotionScopingSettings(
+      settings.emotionScoping ?? createDefaultEmotionScopingSettings(),
+    );
+  }
   if ('sessionRestartBehavior' in settings) {
     const behavior = settings.sessionRestartBehavior;
     config.sessionRestartBehavior =
@@ -638,6 +695,9 @@ function applyWebAndGardenSettings(
     config.imageWorkflows = normalizeImageWorkflowSettings(
       settings.imageWorkflows,
     );
+  }
+  if ('observerEvalSidecar' in settings) {
+    config.observerEvalSidecar = structuredClone(settings.observerEvalSidecar);
   }
   if ('uiThemeId' in settings) {
     const trimmedThemeId = settings.uiThemeId?.trim() ?? '';

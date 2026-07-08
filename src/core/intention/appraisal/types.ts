@@ -1,12 +1,15 @@
 import type { LLMProviderPort } from '../../agent/contracts.js';
 import type { EmotionalSnapshot } from '../../contacts/store/emotional-baseline.js';
 import type { EmotionStateSnapshot } from '../../emotion/state.js';
+import type { EmotionTelemetryValidation } from '../../emotion/telemetry-validation.js';
 import type { InternalState } from '../../self-model/state.js';
 import type { PendingFollowUpWakeCondition } from '../pending-follow-ups.js';
+import type { ProactiveQuietHoursConfig } from '../proactive-time-gate.js';
 import type {
   ChannelType,
   SubstrateMessage,
 } from '../../../shared/contracts/runtime.js';
+import type { ActiveConcernStatus } from '../concerns.js';
 
 export const DEFAULT_APPRAISAL_FREQUENCY = 3;
 export const DEFAULT_EMOTIONAL_SHIFT_THRESHOLD = 0.35;
@@ -22,8 +25,11 @@ export const DEFAULT_SYSTEM_PROMPT = [
   'Consider unresolved concerns, emotional needs, scheduled commitments, and relationship maintenance.',
   'Most turns should return noop unless concrete action is warranted.',
   'Return JSON only, no markdown, with shape:',
-  '{"decisions":[{"type":"followUp|concern|schedule|reminder|noop","priority":"low|medium|high","reason":"string","timing":"immediate|soon|scheduled|none","dueAt":number?,"followUp":{"content":"string","channelId":"string?","channelType":"string?","contextSummary":"string?","pendingFollowUpId":"string?","wakeConditions":["next_user_turn"|"background_recheck"|"sustained_negative_mood"]?},"concern":{"title":"string","summary":"string?","dueAt":number?,"priority":"low|medium|high?","status":"open|pending|resolved?"},"schedule":{"templateId":"string","sendToDiscordOverride":boolean?},"reminder":{"kind":"important_date|self_reminder","classification":"birthday|anniversary|important_date|check_in|self_note","title":"string","content":"string","schedule":"one_time|annual","channelId":"string?","channelType":"string?"}}]}',
+  '{"decisions":[{"type":"followUp|concern|schedule|reminder|noop","priority":"low|medium|high","reason":"string","timing":"immediate|soon|scheduled|none","dueAt":number?,"followUp":{"content":"string","channelId":"string?","channelType":"string?","contextSummary":"string?","pendingFollowUpId":"string?","concernIds":["string"]?,"wakeConditions":["next_user_turn"|"background_recheck"|"sustained_negative_mood"]?,"delivery":"internal|external?"},"concern":{"title":"string","summary":"string?","dueAt":number?,"priority":"low|medium|high?","status":"candidate|active|watching|deferred|blocked|resolved|dismissed|suppressed?"},"schedule":{"templateId":"string","sendToDiscordOverride":boolean?},"reminder":{"kind":"important_date|self_reminder","classification":"birthday|anniversary|important_date|check_in|self_note","title":"string","content":"string","schedule":"one_time|annual","channelId":"string?","channelType":"string?"}}]}',
   'For followUp decisions, include followUp.content as a brief internal Whisper note to self, not a user-facing message.',
+  'Set followUp.delivery to "external" ONLY when you genuinely decide to reach out to the primary partner now: followUp.content then becomes the actual message you send, written in your own voice. External delivery is policy-gated (primary private channel only, rate-limited) and may be blocked. Default is "internal".',
+  'If the user asked for a future reminder/check-in ("tomorrow", a weekday, a calendar date, or any later time), set dueAt to the earliest intended send time as epoch milliseconds in the supplied timezone. Do not use external delivery before that dueAt.',
+  'When a followUp is based on supplied activeConcerns, include the exact activeConcerns ids in followUp.concernIds.',
   'Use followUp.contextSummary for the key situation to preserve if the follow-up may need to wait and be resurfaced later.',
   'Use followUp.wakeConditions only when the follow-up should stay pending until a later state cue. next_user_turn waits for the next external user turn, background_recheck waits for an internal/background appraisal turn, and sustained_negative_mood waits for continued notably negative mood or motivation signals.',
   'When resurfacing or refining an already pending follow-up, reuse followUp.pendingFollowUpId instead of inventing a duplicate.',
@@ -40,6 +46,7 @@ export const INTENTION_FOLLOW_UP_ACTION_KIND = 'intention.follow_up';
 export const INTENTION_FOLLOW_UP_AUTHOR_ID = 'system:intention';
 export const INTENTION_FOLLOW_UP_AUTHOR_NAME = 'Whisper';
 export const INTENTION_REMINDER_ACTION_KIND = 'intention.reminder';
+export const INTENTION_OUTBOUND_MESSAGE_ACTION_KIND = 'intention.outbound_message';
 
 export type IntentionDecisionType = 'followUp' | 'concern' | 'schedule' | 'reminder' | 'noop';
 export type IntentionDecisionPriority = 'low' | 'medium' | 'high';
@@ -56,7 +63,7 @@ export interface ActiveConcernSnapshot {
   id?: string;
   title?: string;
   summary?: string;
-  status?: string;
+  status?: ActiveConcernStatus;
   dueAt?: number;
   resolvedAt?: number;
   priority?: IntentionDecisionPriority | number;
@@ -88,6 +95,10 @@ export interface IntentionFollowUpDecision {
   contextSummary?: string;
   wakeConditions?: PendingFollowUpWakeCondition[];
   pendingFollowUpId?: string;
+  concernIds?: string[];
+  requiresActiveConcern?: boolean;
+  /** 'internal' (default) keeps the whisper-to-self path; 'external' requests policy-gated outbound delivery. */
+  delivery?: 'internal' | 'external';
 }
 
 export interface IntentionConcernDecision {
@@ -95,7 +106,7 @@ export interface IntentionConcernDecision {
   summary?: string;
   dueAt?: number;
   priority?: IntentionDecisionPriority;
-  status?: 'open' | 'pending' | 'resolved';
+  status?: ActiveConcernStatus;
 }
 
 export interface IntentionScheduleDecision {
@@ -165,6 +176,16 @@ export interface IntentionFollowUpActionPayload {
   pendingFollowUpId?: string;
 }
 
+export interface IntentionOutboundMessageActionPayload {
+  channelId: string;
+  channelType: ChannelType;
+  content: string;
+  reason?: string;
+  pendingFollowUpId?: string;
+  concernIds?: string[];
+  requiresActiveConcern?: boolean;
+}
+
 export interface IntentionReminderActionPayload {
   reminderId: string;
 }
@@ -177,6 +198,9 @@ export interface IntentionDecisionActionContext {
 
 export interface IntentionDecisionActionOptions {
   surfacePendingFollowUpsImmediately?: boolean;
+  now?: number;
+  minimumOutboundRunAt?: number;
+  proactiveOutboundQuietHours?: ProactiveQuietHoursConfig | null;
 }
 
 export interface SessionAppraisalState {
@@ -188,6 +212,7 @@ export interface NormalizedIntentionAppraisalInput {
   sessionId: string;
   internalState: InternalState | null;
   currentEmotion: EmotionStateSnapshot | null;
+  currentEmotionTelemetry: EmotionTelemetryValidation | null;
   recentMessages: IntentionAppraisalMessage[];
   activeConcerns: ActiveConcernSnapshot[];
   activeCareReminders: ActiveCareReminderSnapshot[];

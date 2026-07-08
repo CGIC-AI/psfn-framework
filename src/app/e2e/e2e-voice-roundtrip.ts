@@ -8,7 +8,7 @@
 //
 // Run: npx tsx src/app/e2e/e2e-voice-roundtrip.ts
 
-import 'dotenv/config';
+import '../../shared/utils/load-dotenv.js';
 import type { IncomingMessage } from 'node:http';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -17,9 +17,10 @@ import { promisify } from 'node:util';
 import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import type { SubstrateMessage } from '../../shared/contracts/runtime.js';
+import { sanitizeCoreSubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import { EventBus } from '../../shared/event-bus.js';
 import { LLMClient } from '../../primitives/llm/client.js';
-import { composeSubstrateAgent, composeIdentity, composeSessionRuntime } from '../startup/composition/composition.js';
+import { composeSubstrateAgent, composeIdentity, composeSessionRuntimeAsync } from '../startup/composition/composition.js';
 import { ElevenLabsTtsClient } from '../../primitives/voice/elevenlabs.js';
 import { DeepgramSttClient } from '../../primitives/voice/deepgram.js';
 import { createApiVoiceWebSocketRuntime } from '../../channels/api/voice-websocket-runtime.js';
@@ -32,6 +33,7 @@ import {
 } from '../../primitives/voice/transports/websocket/types.js';
 import { INSECURE_LOCAL_API_PRINCIPAL } from '../../channels/backplane/http/auth.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
+import { sleep } from '../../shared/utils/timing.js';
 import { createIsolatedE2ERuntime } from './runtime-harness.js';
 import type {
   VoiceWebSocketRuntime,
@@ -174,7 +176,7 @@ async function waitFor(
     if (Date.now() - start > timeoutMs) {
       throw new Error(`Timed out waiting after ${timeoutMs}ms`);
     }
-    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+    await sleep(intervalMs);
   }
 }
 
@@ -383,16 +385,16 @@ async function main(): Promise<void> {
     console.log(`  Baseline transcript: ${seedBaselineTranscript}`);
     console.log(`  Baseline match: ${baselineMatch.pass} (${baselineMatch.score.toFixed(2)} | ${baselineMatch.reason})`);
 
-  // Build agent + voice runtime using real system components
+    // Build agent + voice runtime using real system components
     const eventBus = new EventBus();
     const llmClient = new LLMClient(config);
-    const { sessionManager } = composeSessionRuntime({ config });
+    const { sessionManager } = await composeSessionRuntimeAsync({ config });
     const agentLoop = composeSubstrateAgent({
       eventBus,
       llmProvider: llmClient,
       sessionManager,
       systemPrompt,
-      config,
+      config: sanitizeCoreSubstrateConfig(config),
     });
 
     await eventBus.emit('system.init', {});

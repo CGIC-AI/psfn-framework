@@ -16,6 +16,9 @@ import type {
   ContactMutationAuditQuery,
   ChannelPrivacyLevel,
   RelationshipType,
+  RoomQueryOptions,
+  RoomRosterMember,
+  RoomSummary,
   SocialGraphEntity,
   SocialGraphEntityQuery,
   SocialGraphEntityUpsertInput,
@@ -34,6 +37,8 @@ import {
 import { createComponentLogger } from '../../shared/logger.js';
 import { writeJsonAtomic } from '../../shared/utils/fs.js';
 import { appendMutationAuditEntry, listMutationAuditEntries } from './store/audit.js';
+import { isDeliberateMachineIntelligenceCorrection } from './observed-machine-intelligence.js';
+import type { MachineIntelligenceObservationMarkResult } from './contact-store-port.js';
 import {
   appendEmotionalObservationToTimeSeries,
   computeUpdatedEmotionalBaseline,
@@ -70,14 +75,21 @@ import {
   updateContactRelationshipType,
 } from './store/mutation-operations.js';
 import {
+  countKnownRooms,
+  countRoomRoster,
+  countVerifiedIdentityLinks,
   getCanonicalContactKey,
   getContactByChannelIdentity,
+  getContactMaintenanceWatermark,
   getConversationChannelPrivacy,
   getContactByDiscordUserId,
   getContactById,
   getContactsByTrustLevel,
   listAllContacts,
   listIdentityLinkVerifications,
+  listKnownRooms,
+  listRoomRoster,
+  setContactMaintenanceWatermark,
 } from './store/read-operations.js';
 import { initializeContactStoreSchema } from './store/schema.js';
 import {
@@ -87,8 +99,10 @@ import {
   listRelatedContactIds,
   listSocialGraphEntities,
   listSocialRelationshipEdges,
+  reconcileSocialGraphConsistency,
   upsertSocialGraphEntity,
   upsertSocialRelationshipEdge,
+  type SocialGraphConsistencyReport,
 } from './store/social-graph.js';
 import {
   collectUpsertIdentities,
@@ -203,7 +217,7 @@ export class ContactStore implements ContactStorePort {
     contact: Contact | undefined,
     identities: ContactChannelIdentity[],
     discordUserId: string | undefined,
-    options: TrustMutationOptions = {},
+    options: ContactTrustMutationOptions = {},
   ): boolean {
     if (options.allowPrimaryTrustAssignment === true) return true;
 
@@ -316,6 +330,20 @@ export class ContactStore implements ContactStorePort {
         outcome: 'allowed',
       });
     }
+    if (
+      target
+      && Object.prototype.hasOwnProperty.call(partial, 'timezone')
+      && (target.timezone ?? null) !== (contact.timezone ?? null)
+    ) {
+      appendMutationAuditEntry(
+        this.db,
+        contact.id,
+        'timezone',
+        target.timezone ?? null,
+        contact.timezone ?? null,
+        options.actor,
+      );
+    }
     log.debug('Upserted contact', { id: contact.id, displayName: partial.displayName });
     this.syncContactExports();
     return contact;
@@ -367,6 +395,10 @@ export class ContactStore implements ContactStorePort {
     return listRelatedContactIds(this.db, contactId, query)
       .map(id => this.getById(id))
       .filter((contact): contact is Contact => contact !== undefined);
+  }
+
+  reconcileSocialGraphConsistency(options: { apply?: boolean } = {}): SocialGraphConsistencyReport {
+    return reconcileSocialGraphConsistency(this.db, options);
   }
 
   private isBehaviorDriftMutationAllowed(
@@ -555,6 +587,39 @@ export class ContactStore implements ContactStorePort {
     return true;
   }
 
+  setMachineIntelligence(id: string, isMachineIntelligence: boolean, actor?: string): boolean {
+    const contact = this.getById(id);
+    if (!contact) return false;
+    const current = contact.isMachineIntelligence === true;
+    if (current === isMachineIntelligence) return true;
+    this.db.prepare('UPDATE contacts SET is_machine_intelligence = ? WHERE id = ?')
+      .run(isMachineIntelligence ? 1 : 0, id);
+    appendMutationAuditEntry(this.db, id, 'is_machine_intelligence', String(current), String(isMachineIntelligence), actor);
+    return true;
+  }
+
+  markMachineIntelligenceFromObservation(id: string, actor: string): MachineIntelligenceObservationMarkResult {
+    // Audit check + write share one immediate transaction so a deliberate
+    // operator correction can never land between check and write (charter law
+    // 26 — observation must not clobber the operator).
+    return this.db.transaction((): MachineIntelligenceObservationMarkResult => {
+      const latest = listMutationAuditEntries(this.db, {
+        contactId: id,
+        field: 'is_machine_intelligence',
+        limit: 1,
+      });
+      if (isDeliberateMachineIntelligenceCorrection(latest[0]?.actor)) {
+        return 'override_preserved';
+      }
+      const contact = this.getById(id);
+      if (!contact) return 'not_found';
+      if (contact.isMachineIntelligence === true) return 'already_marked';
+      this.db.prepare('UPDATE contacts SET is_machine_intelligence = 1 WHERE id = ?').run(id);
+      appendMutationAuditEntry(this.db, id, 'is_machine_intelligence', 'false', 'true', actor);
+      return 'marked';
+    }).immediate();
+  }
+
   updateLastSeen(id: string): void {
     updateContactLastSeen(this.db, id);
   }
@@ -607,6 +672,23 @@ export class ContactStore implements ContactStorePort {
   ): void {
     recordContactChannelActivity(this.db, contactId, channel, channelId, privacyLevel);
     this.syncContactExports();
+  }
+
+  // ── Room roster (E4.1) ── bounded read-only queries over channel activity.
+  listKnownRooms(options?: Pick<RoomQueryOptions, 'limit' | 'offset'>): RoomSummary[] {
+    return listKnownRooms(this.db, options);
+  }
+
+  countKnownRooms(): number {
+    return countKnownRooms(this.db);
+  }
+
+  listRoomRoster(channelId: string, options?: RoomQueryOptions): RoomRosterMember[] {
+    return listRoomRoster(this.db, channelId, options);
+  }
+
+  countRoomRoster(channelId: string, options?: Pick<RoomQueryOptions, 'channel'>): number {
+    return countRoomRoster(this.db, channelId, options);
   }
 
   mergeContacts(sourceContactId: string, targetContactId: string): boolean {
@@ -895,6 +977,18 @@ export class ContactStore implements ContactStorePort {
 
   listIdentityLinkVerifications(limit = 25): ContactIdentityLinkVerification[] {
     return listIdentityLinkVerifications(this.db, limit);
+  }
+
+  countVerifiedIdentityLinks(contactId: string): number {
+    return countVerifiedIdentityLinks(this.db, contactId);
+  }
+
+  getContactMaintenanceWatermark(processor: string): string | undefined {
+    return getContactMaintenanceWatermark(this.db, processor);
+  }
+
+  setContactMaintenanceWatermark(processor: string, lastRunAt: string): void {
+    setContactMaintenanceWatermark(this.db, processor, lastRunAt);
   }
 
   listMutationAuditEntries(query: ContactMutationAuditQuery = {}): ContactMutationAuditEntry[] {

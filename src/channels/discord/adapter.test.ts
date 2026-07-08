@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { EventBus } from '../../shared/event-bus.js';
 import { SessionStore } from '../../persistence/sessions/store.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
-import type { SubstrateMessage } from '../../shared/contracts/runtime.js';
+import type { IntentionalNoReplyMetadata, SubstrateMessage } from '../../shared/contracts/runtime.js';
 
 const discordMock = vi.hoisted(() => {
   return {
@@ -477,6 +477,21 @@ function makeDiscordIncomingMessage(
   };
 }
 
+function makeNoReplyMetadata(channelId: string): IntentionalNoReplyMetadata {
+  return {
+    schemaVersion: 1,
+    disposition: 'intentional_no_reply',
+    source: 'response_control_tool',
+    auditId: `no-reply:test-turn:${channelId}`,
+    decidedAt: Date.parse('2026-03-08T12:00:00Z'),
+    turnId: '018f0000-0000-7000-9000-000000000001' as IntentionalNoReplyMetadata['turnId'],
+    requestId: 'msg-no-reply',
+    channelId,
+    toolCallId: 'tool-call-no-reply',
+    reason: 'resting intentionally',
+  };
+}
+
 function makeReactionTargetMessage(
   channelId: string,
   channel: any,
@@ -521,6 +536,20 @@ describe('DiscordAdapter DM routing', () => {
     voiceMock.stop.mockResolvedValue(undefined);
   });
 
+  it('does not register duplicate Discord listeners when initialized twice', async () => {
+    const adapter = new DiscordAdapter(makeConfig(), new EventBus());
+
+    await adapter.init();
+    await adapter.init();
+
+    const client = discordMock.createdClients.at(-1);
+    expect(client).toBeDefined();
+    expect(client.on.mock.calls.filter((call: unknown[]) => call[0] === 'messageCreate')).toHaveLength(1);
+    expect(client.on.mock.calls.filter((call: unknown[]) => call[0] === 'messageReactionAdd')).toHaveLength(1);
+    expect(client.once.mock.calls.filter((call: unknown[]) => call[0] === 'ready')).toHaveLength(1);
+    expect(voiceMock.init).toHaveBeenCalledTimes(1);
+  });
+
   it('routes DMs without requiring a bot mention', async () => {
     const eventBus = new EventBus();
     const adapter = new DiscordAdapter(makeConfig(), eventBus);
@@ -553,6 +582,64 @@ describe('DiscordAdapter DM routing', () => {
       content: 'hello from dm',
     }));
     expect(interactive.sent).toContain('dm reply');
+  });
+
+  it('marks allowlisted companion-bot messages as machine intelligence in routing metadata (E7.3)', async () => {
+    const eventBus = new EventBus();
+    const adapter = new DiscordAdapter(makeConfig(), eventBus, { allowedBotUserIds: ['companion-bot'] });
+    await adapter.init();
+
+    const channelId = 'guild-room';
+    const interactive = makeInteractiveTextChannel();
+    discordMock.channelsById.set(channelId, interactive.channel);
+
+    const handler = vi.fn(async (message: SubstrateMessage) => ({
+      content: '',
+      channelId: message.channelId,
+      metadata: { model: 'test', inputTokens: 0, outputTokens: 0, durationMs: 1 },
+    }));
+    adapter.onMessage(handler);
+
+    await (adapter as any).onDiscordMessage(
+      makeDiscordIncomingMessage(channelId, interactive.channel, {
+        id: 'bot-msg',
+        content: 'peer companion says hi',
+        guildId: 'guild-1',
+        authorId: 'companion-bot',
+        authorDisplayName: 'Purrsephone',
+        bot: true,
+      }),
+    );
+
+    expect(handler).toHaveBeenCalledTimes(1);
+    const message = handler.mock.calls[0][0] as SubstrateMessage;
+    expect(message.routing?.authorIsMachineIntelligence).toBe(true);
+    expect(message.routing?.responseMode).toBe('observe');
+  });
+
+  it('does not mark human-authored messages as machine intelligence (E7.3)', async () => {
+    const eventBus = new EventBus();
+    const adapter = new DiscordAdapter(makeConfig(), eventBus);
+    await adapter.init();
+
+    const channelId = 'dm-human';
+    const interactive = makeInteractiveTextChannel();
+    discordMock.channelsById.set(channelId, interactive.channel);
+
+    const handler = vi.fn(async (message: SubstrateMessage) => ({
+      content: 'ok',
+      channelId: message.channelId,
+      metadata: { model: 'test', inputTokens: 0, outputTokens: 0, durationMs: 1 },
+    }));
+    adapter.onMessage(handler);
+
+    await (adapter as any).onDiscordMessage(
+      makeDiscordIncomingMessage(channelId, interactive.channel, { id: 'h1', content: 'hi there' }),
+    );
+
+    expect(handler).toHaveBeenCalledTimes(1);
+    const message = handler.mock.calls[0][0] as SubstrateMessage;
+    expect(message.routing?.authorIsMachineIntelligence).toBeUndefined();
   });
 
   it('keeps DM ingress responsive across channels while another DM turn is in flight', async () => {
@@ -725,6 +812,126 @@ describe('DiscordAdapter DM routing', () => {
       expect(attachment?.parsedTextPath && existsSync(attachment.parsedTextPath)).toBe(true);
       expect(readFileSync(attachment!.localPath!, 'utf8')).toBe('# Field notes\n\nThe artifact is in the garden.');
       expect(readFileSync(attachment!.parsedTextPath!, 'utf8')).toContain('The artifact is in the garden.');
+    } finally {
+      vi.stubGlobal('fetch', originalFetch);
+      rmSync(personalFilesDir, { recursive: true, force: true });
+    }
+  });
+
+  it('quarantines spoofed image-looking scripts before image attachment context', async () => {
+    const personalFilesDir = mkdtempSync(join(tmpdir(), 'psfn-discord-quarantine-adapter-'));
+    const originalFetch = globalThis.fetch;
+    const script = '#!/bin/sh\necho DO_NOT_PROMPT\n';
+    const fetchMock = vi.fn(async () => new Response(script, {
+      headers: { 'content-type': 'text/plain' },
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    try {
+      const eventBus = new EventBus();
+      const adapter = new DiscordAdapter(makeConfig(), eventBus, { personalFilesDir });
+      await adapter.init();
+
+      const channelId = 'dm-channel-quarantine-spoof';
+      const interactive = makeInteractiveTextChannel();
+      discordMock.channelsById.set(channelId, interactive.channel);
+
+      const handler = vi.fn(async () => {
+        return {
+          content: 'quarantine noted',
+          channelId,
+          metadata: { model: 'test', inputTokens: 0, outputTokens: 0, durationMs: 1 },
+        };
+      });
+      adapter.onMessage(handler);
+
+      await (adapter as any).onDiscordMessage(
+        makeDiscordIncomingMessage(channelId, interactive.channel, {
+          id: 'dm-spoof-1',
+          content: 'this is probably an image?',
+          attachments: [
+            {
+              id: 'att-spoof-image-script',
+              name: 'photo.png',
+              url: 'https://cdn.discordapp.com/attachments/a/b/photo.png',
+              contentType: 'text/plain',
+              size: script.length,
+            },
+          ],
+        }),
+      );
+
+      expect(fetchMock).toHaveBeenCalledWith('https://cdn.discordapp.com/attachments/a/b/photo.png');
+      expect(handler).toHaveBeenCalledTimes(1);
+      const message = handler.mock.calls[0][0] as SubstrateMessage;
+      expect(message.attachments).toBeUndefined();
+      expect(message.content).toContain('[Attached file quarantined: photo.png]');
+      expect(message.content).toContain('declared_extension_mismatch:declared=text/plain;expected=image/png');
+      expect(message.content).toContain('shebang');
+      expect(message.content).not.toContain('DO_NOT_PROMPT');
+      const quarantineRoot = join(personalFilesDir, 'downloads', 'quarantine', 'discord');
+      expect(message.content).not.toContain(quarantineRoot);
+    } finally {
+      vi.stubGlobal('fetch', originalFetch);
+      rmSync(personalFilesDir, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps image attachments visible when Discord declares a different image subtype', async () => {
+    const personalFilesDir = mkdtempSync(join(tmpdir(), 'psfn-discord-image-mismatch-'));
+    const originalFetch = globalThis.fetch;
+    const fetchMock = vi.fn(async () => new Response(
+      Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+      { headers: { 'content-type': 'image/png' } },
+    ));
+    vi.stubGlobal('fetch', fetchMock);
+
+    try {
+      const eventBus = new EventBus();
+      const adapter = new DiscordAdapter(makeConfig(), eventBus, { personalFilesDir });
+      await adapter.init();
+
+      const channelId = 'dm-channel-image-type-mismatch';
+      const interactive = makeInteractiveTextChannel();
+      discordMock.channelsById.set(channelId, interactive.channel);
+
+      const handler = vi.fn(async () => {
+        return {
+          content: 'image received',
+          channelId,
+          metadata: { model: 'test', inputTokens: 0, outputTokens: 0, durationMs: 1 },
+        };
+      });
+      adapter.onMessage(handler);
+
+      await (adapter as any).onDiscordMessage(
+        makeDiscordIncomingMessage(channelId, interactive.channel, {
+          id: 'dm-image-mismatch-1',
+          content: '',
+          attachments: [
+            {
+              id: 'att-image-mismatch',
+              name: 'image.png',
+              url: 'https://cdn.discordapp.com/attachments/a/b/image.png',
+              contentType: 'image/webp',
+              size: 251_293,
+            },
+          ],
+        }),
+      );
+
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(handler).toHaveBeenCalledTimes(1);
+      const message = handler.mock.calls[0][0] as SubstrateMessage;
+      expect(message.content).toBe('(image attachment)');
+      expect(message.content).not.toContain('quarantined');
+      expect(message.attachments).toEqual([
+        {
+          url: 'https://cdn.discordapp.com/attachments/a/b/image.png',
+          contentType: 'image/webp',
+          name: 'image.png',
+        },
+      ]);
     } finally {
       vi.stubGlobal('fetch', originalFetch);
       rmSync(personalFilesDir, { recursive: true, force: true });
@@ -1468,7 +1675,7 @@ describe('DiscordAdapter DM routing', () => {
     }
   });
 
-  it('queues contended messages in gateway mode when no direct agent is attached', async () => {
+  it('coalesces queued contended messages into one deferred turn in gateway mode', async () => {
     const eventBus = new EventBus();
     const adapter = new DiscordAdapter(makeConfig(), eventBus);
     await adapter.init();
@@ -1509,6 +1716,12 @@ describe('DiscordAdapter DM routing', () => {
         content: 'second',
       }),
     );
+    await (adapter as any).onDiscordMessage(
+      makeDiscordIncomingMessage(channelId, interactive.channel, {
+        id: 'dm-3',
+        content: 'third',
+      }),
+    );
 
     expect(handler).toHaveBeenCalledTimes(1);
     releaseFirst?.();
@@ -1516,7 +1729,86 @@ describe('DiscordAdapter DM routing', () => {
     await vi.waitFor(() => {
       expect(handler).toHaveBeenCalledTimes(2);
     });
-    expect(handler.mock.calls.map((call) => call[0].id)).toEqual(['dm-1', 'dm-2']);
+    expect(handler.mock.calls.map((call) => call[0].id)).toEqual(['dm-1', 'dm-3']);
+    expect(handler.mock.calls[1]?.[0].content).toBe('second\nthird');
+    await vi.waitFor(() => {
+      expect(interactive.sent).toEqual(['reply-dm-1', 'reply-dm-3']);
+    });
+  });
+
+  it('never merges queued messages from different authors into one attributed turn', async () => {
+    const eventBus = new EventBus();
+    const adapter = new DiscordAdapter(makeConfig(), eventBus);
+    await adapter.init();
+
+    const channelId = 'dm-mixed-author-channel';
+    const interactive = makeInteractiveTextChannel();
+    discordMock.channelsById.set(channelId, interactive.channel);
+
+    let releaseFirst: (() => void) | null = null;
+    const firstTurn = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+
+    const handler = vi.fn(async (message: SubstrateMessage) => {
+      if (message.id === 'mix-1') {
+        await firstTurn;
+      }
+      return {
+        content: `reply-${message.id}`,
+        channelId,
+        metadata: { model: 'test', inputTokens: 0, outputTokens: 0, durationMs: 1 },
+      };
+    });
+    adapter.onMessage(handler);
+
+    const firstDispatch = (adapter as any).onDiscordMessage(
+      makeDiscordIncomingMessage(channelId, interactive.channel, {
+        id: 'mix-1',
+        content: 'first',
+        authorId: 'author-a',
+      }),
+    );
+
+    await Promise.resolve();
+
+    await (adapter as any).onDiscordMessage(
+      makeDiscordIncomingMessage(channelId, interactive.channel, {
+        id: 'mix-2',
+        content: 'from author a',
+        authorId: 'author-a',
+      }),
+    );
+    await (adapter as any).onDiscordMessage(
+      makeDiscordIncomingMessage(channelId, interactive.channel, {
+        id: 'mix-3',
+        content: 'also from author a',
+        authorId: 'author-a',
+      }),
+    );
+    await (adapter as any).onDiscordMessage(
+      makeDiscordIncomingMessage(channelId, interactive.channel, {
+        id: 'mix-4',
+        content: 'from author b',
+        authorId: 'author-b',
+        authorDisplayName: 'AuthorB',
+      }),
+    );
+
+    expect(handler).toHaveBeenCalledTimes(1);
+    releaseFirst?.();
+    await firstDispatch;
+    await vi.waitFor(() => {
+      expect(handler).toHaveBeenCalledTimes(3);
+    });
+
+    const deferredTurns = handler.mock.calls.slice(1).map((call) => call[0]);
+    expect(deferredTurns.map((turn) => turn.authorId)).toEqual(['author-a', 'author-b']);
+    expect(deferredTurns[0]?.content).toBe('from author a\nalso from author a');
+    expect(deferredTurns[1]?.content).toBe('from author b');
+    await vi.waitFor(() => {
+      expect(interactive.sent).toEqual(['reply-mix-1', 'reply-mix-3', 'reply-mix-4']);
+    });
   });
 });
 
@@ -1823,7 +2115,7 @@ describe('DiscordAdapter status visibility', () => {
     )).toBe(true);
   });
 
-  it('suppresses empty handler responses instead of sending empty Discord messages', async () => {
+  it('reports empty handler responses instead of silently treating them as no-reply', async () => {
     const eventBus = new EventBus();
     const adapter = new DiscordAdapter(makeConfig(), eventBus);
     await adapter.init();
@@ -1831,6 +2123,10 @@ describe('DiscordAdapter status visibility', () => {
     const channelId = 'ch-empty';
     const interactive = makeInteractiveTextChannel();
     discordMock.channelsById.set(channelId, interactive.channel);
+    const diagnostics: any[] = [];
+    (eventBus as any).on('channel.message.error', (event: any) => {
+      diagnostics.push(event);
+    });
 
     adapter.onMessage(async () => {
       return {
@@ -1843,6 +2139,72 @@ describe('DiscordAdapter status visibility', () => {
     await (adapter as any).onDiscordMessage(makeDiscordIncomingMessage(channelId, interactive.channel));
 
     expect(interactive.sent).toHaveLength(0);
+    expect(diagnostics).toContainEqual(expect.objectContaining({
+      channelId,
+      channelType: 'discord',
+      phase: 'handler',
+      error: 'empty_agent_response_without_suppression_marker',
+    }));
+  });
+
+  it('suppresses Discord output for structured intentional no-reply responses', async () => {
+    const eventBus = new EventBus();
+    const adapter = new DiscordAdapter(makeConfig(), eventBus);
+    await adapter.init();
+
+    const channelId = 'ch-no-reply';
+    const interactive = makeInteractiveTextChannel();
+    discordMock.channelsById.set(channelId, interactive.channel);
+    const sentEvents: any[] = [];
+    const diagnostics: any[] = [];
+    (eventBus as any).on('message.sent', (event: any) => {
+      sentEvents.push(event);
+    });
+    (eventBus as any).on('channel.message.error', (event: any) => {
+      diagnostics.push(event);
+    });
+
+    adapter.onMessage(async () => {
+      return {
+        content: '',
+        channelId,
+        metadata: {
+          model: 'test',
+          inputTokens: 3,
+          outputTokens: 1,
+          durationMs: 1,
+          noReply: makeNoReplyMetadata(channelId),
+        },
+      };
+    });
+
+    await (adapter as any).onDiscordMessage(makeDiscordIncomingMessage(channelId, interactive.channel));
+
+    expect(interactive.sent).toHaveLength(0);
+    expect(sentEvents).toHaveLength(0);
+    expect(diagnostics).toHaveLength(0);
+  });
+
+  it('treats literal NO_REPLY text as normal Discord content', async () => {
+    const eventBus = new EventBus();
+    const adapter = new DiscordAdapter(makeConfig(), eventBus);
+    await adapter.init();
+
+    const channelId = 'ch-literal-no-reply';
+    const interactive = makeInteractiveTextChannel();
+    discordMock.channelsById.set(channelId, interactive.channel);
+
+    adapter.onMessage(async () => {
+      return {
+        content: 'NO_REPLY',
+        channelId,
+        metadata: { model: 'test', inputTokens: 0, outputTokens: 1, durationMs: 1 },
+      };
+    });
+
+    await (adapter as any).onDiscordMessage(makeDiscordIncomingMessage(channelId, interactive.channel));
+
+    expect(interactive.sent).toContain('NO_REPLY');
   });
 
   it('emits channel.message.error diagnostics without sending canned fallback text when handler throws', async () => {

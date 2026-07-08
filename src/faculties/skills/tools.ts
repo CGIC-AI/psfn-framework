@@ -10,6 +10,8 @@ const SKILL_TOOL_ACTION_NAMES = [
   'skill_list',
   'view',
   'skill_view',
+  'stats',
+  'skill_stats',
   'create',
   'skill_create',
   'update',
@@ -18,12 +20,13 @@ const SKILL_TOOL_ACTION_NAMES = [
 const SKILL_TOOL_ACTION_HELP = [
   'list',
   'view',
+  'stats',
   'create',
   'update',
 ].join(', ');
 
 type SkillToolActionName = (typeof SKILL_TOOL_ACTION_NAMES)[number];
-type SkillToolAction = 'list' | 'view' | 'create' | 'update';
+type SkillToolAction = 'list' | 'view' | 'stats' | 'create' | 'update';
 
 function resolveSkillOwnership(source: SkillSource): SkillOwnership {
   switch (source) {
@@ -71,6 +74,9 @@ function normalizeSkillAction(params: SkillToolParams): SkillToolAction {
     case 'view':
     case 'skill_view':
       return 'view';
+    case 'stats':
+    case 'skill_stats':
+      return 'stats';
     case 'create':
     case 'skill_create':
       return 'create';
@@ -145,6 +151,122 @@ function buildSkillListPayload(runtime: SkillsRuntime, params: SkillListParams):
   };
 }
 
+function buildSkillMetadata(runtime: SkillsRuntime, name: string): Record<string, unknown> | null {
+  const result = runtime.findSkill(name);
+  if (!result) return null;
+  const { entry, eligible } = result;
+  const snapshot = runtime.getSnapshot();
+  const includedNames = new Set(snapshot.includedSkills.map(skill => skill.name));
+  return {
+    name: entry.name,
+    category: entry.category ?? null,
+    description: entry.description,
+    version: entry.version ?? null,
+    createdAt: entry.createdAt ?? null,
+    updatedAt: entry.updatedAt ?? null,
+    source: entry.source,
+    ownership: resolveSkillOwnership(entry.source),
+    path: entry.relativePath,
+    inPromptIndex: includedNames.has(entry.name),
+    eligible: eligible.eligible,
+    reasons: eligible.reasons,
+    requires: entry.requires,
+  };
+}
+
+function buildStatsTotals(stats: ReturnType<SkillsRuntime['listSkillUsageStats']>): Record<string, unknown> {
+  const totals = stats.reduce((accumulator, item) => {
+    accumulator.recordedSkills += 1;
+    accumulator.invocationCount += item.invocationCount;
+    accumulator.successCount += item.successCount;
+    accumulator.failureCount += item.failureCount;
+    if (item.averageDurationMs !== null && item.durationSampleCount > 0) {
+      accumulator.durationSampleCount += item.durationSampleCount;
+      accumulator.totalDurationMs += item.averageDurationMs * item.durationSampleCount;
+    }
+    return accumulator;
+  }, {
+    recordedSkills: 0,
+    invocationCount: 0,
+    successCount: 0,
+    failureCount: 0,
+    durationSampleCount: 0,
+    totalDurationMs: 0,
+  });
+
+  return {
+    recordedSkills: totals.recordedSkills,
+    invocationCount: totals.invocationCount,
+    successCount: totals.successCount,
+    failureCount: totals.failureCount,
+    successRate: totals.invocationCount > 0
+      ? totals.successCount / totals.invocationCount
+      : null,
+    averageDurationMs: totals.durationSampleCount > 0
+      ? totals.totalDurationMs / totals.durationSampleCount
+      : null,
+  };
+}
+
+function buildSkillStatsPayload(runtime: SkillsRuntime, name?: string): Record<string, unknown> {
+  const normalizedName = typeof name === 'string' ? name.trim() : '';
+  if (normalizedName) {
+    const skill = buildSkillMetadata(runtime, normalizedName);
+    const lookupName = typeof skill?.name === 'string' ? skill.name : normalizedName;
+    const stats = runtime.getSkillUsageStats(lookupName);
+    const status = skill
+      ? (stats ? 'ok' : 'no_stats')
+      : (stats ? 'stats_without_loaded_skill' : 'not_found');
+
+    return {
+      action: 'stats',
+      scope: 'skill',
+      status,
+      name: lookupName,
+      skill,
+      stats,
+      message: stats
+        ? null
+        : skill
+          ? `No skill usage stats recorded for "${lookupName}".`
+          : `Skill "${lookupName}" was not found and no usage stats are recorded for it.`,
+    };
+  }
+
+  const snapshot = runtime.getSnapshot();
+  const evaluations = runtime.listSkillEvaluations();
+  const includedNames = new Set(snapshot.includedSkills.map(skill => skill.name));
+  const stats = runtime.listSkillUsageStats();
+  const statsByName = new Map(stats.map(item => [item.name.toLowerCase(), item]));
+  const loadedSkillNames = new Set(evaluations.map(({ entry }) => entry.name.toLowerCase()));
+  const recordedWithoutLoadedSkillCount = stats
+    .filter(item => !loadedSkillNames.has(item.name.toLowerCase()))
+    .length;
+
+  return {
+    action: 'stats',
+    scope: 'list',
+    generatedAt: snapshot.generatedAt,
+    signature: snapshot.signature,
+    managedOwnership: runtime.getManagedOwnership(),
+    totals: buildStatsTotals(stats),
+    recordedWithoutLoadedSkillCount,
+    skills: evaluations.map(({ entry, eligibility }) => ({
+      name: entry.name,
+      category: entry.category ?? null,
+      description: entry.description,
+      version: entry.version ?? null,
+      source: entry.source,
+      ownership: resolveSkillOwnership(entry.source),
+      path: entry.relativePath,
+      inPromptIndex: includedNames.has(entry.name),
+      eligible: eligibility.eligible,
+      reasons: eligibility.reasons,
+      stats: statsByName.get(entry.name.toLowerCase()) ?? null,
+    })),
+  };
+}
+
 function buildSkillViewPayload(runtime: SkillsRuntime, name: string): Record<string, unknown> | null {
   const result = runtime.findSkill(name);
   if (!result) {
@@ -181,7 +303,7 @@ export function createSkillTool(runtime: SkillsRuntime): AgentTool<any> {
     name: 'skill',
     label: 'skill',
     description:
-      'Unified skill management surface for list/view/create/update. '
+      'Unified skill management surface for list/view/stats/create/update. '
       + 'Skills capture reusable workflow guidance; tools execute actions. '
       + 'Created and updated skills are personal skills stored under the configured personal files root, separate from deployment/system skill directories. '
       + 'Creator workflows such as image or music creation should be modeled as skills loaded with action="view", not as new top-level tools. '
@@ -199,7 +321,7 @@ export function createSkillTool(runtime: SkillsRuntime): AgentTool<any> {
       })),
       name: Type.Optional(Type.String({
         minLength: 1,
-        description: 'Required for action=view|create|update. Skill name.',
+        description: 'Required for action=view|create|update. Optional for action=stats; omit to list summaries.',
       })),
       category: Type.Optional(Type.String({
         minLength: 1,
@@ -224,12 +346,27 @@ export function createSkillTool(runtime: SkillsRuntime): AgentTool<any> {
               return textResultWithError('skill action=view requires a non-empty name.', true);
             }
 
+            const startedAt = Date.now();
             const payload = buildSkillViewPayload(runtime, name);
             if (!payload) {
               return textResultWithError(`Skill "${name}" not found`, true);
             }
-            return textResult(JSON.stringify(payload, null, 2));
+            let telemetryWarning: string | null = null;
+            try {
+              runtime.recordSkillInvocation(name, {
+                outcome: 'success',
+                durationMs: Date.now() - startedAt,
+              });
+            } catch (error) {
+              telemetryWarning = `Skill usage telemetry was not recorded: ${toErrorMessage(error)}`;
+            }
+            return textResult(JSON.stringify({
+              ...payload,
+              ...(telemetryWarning ? { telemetryWarning } : {}),
+            }, null, 2));
           }
+          case 'stats':
+            return textResult(JSON.stringify(buildSkillStatsPayload(runtime, params.name), null, 2));
           case 'create': {
             const name = typeof params.name === 'string' ? params.name : '';
             const category = typeof params.category === 'string' ? params.category : '';

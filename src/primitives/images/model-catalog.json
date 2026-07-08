@@ -1,0 +1,41 @@
+{
+  "schemaVersion": 1,
+  "createModels": [
+    "xai/grok-imagine-image",
+    "fal-ai/nano-banana-2",
+    "fal-ai/gpt-image-1.5",
+    "fal-ai/nano-banana-pro",
+    "fal-ai/flux-2",
+    "fal-ai/flux-2-pro",
+    "fal-ai/flux-2-flex",
+    "fal-ai/flux/krea",
+    "fal-ai/flux-2/klein/4b",
+    "fal-ai/flux-2/klein/9b",
+    "fal-ai/z-image/base",
+    "fal-ai/z-image/turbo",
+    "fal-ai/qwen-image",
+    "fal-ai/qwen-image-2/text-to-image"
+  ],
+  "editModels": [
+    "xai/grok-imagine-image/quality/edit",
+    "fal-ai/nano-banana-2/edit",
+    "openai/gpt-image-2/edit",
+    "xai/grok-imagine-image/edit",
+    "fal-ai/gpt-image-1.5/edit"
+  ],
+  "defaultCreateModelChain": [
+    "xai/grok-imagine-image",
+    "fal-ai/nano-banana-2",
+    "fal-ai/gpt-image-1.5"
+  ],
+  "defaultEditModelChain": [
+    "xai/grok-imagine-image/quality/edit",
+    "fal-ai/nano-banana-2/edit",
+    "openai/gpt-image-2/edit"
+  ],
+  "selfieEditModelChain": [
+    "xai/grok-imagine-image/quality/edit",
+    "fal-ai/nano-banana-2/edit",
+    "openai/gpt-image-2/edit"
+  ]
+}

@@ -60,6 +60,12 @@ describe('fs tool', () => {
       action: 'list',
       glob: 'docs/*.txt',
       count: 3,
+      scanned_entries: expect.any(Number),
+      max_entries: 10,
+      max_scanned_entries: 5000,
+      truncated: false,
+      scan_limit_reached: false,
+      entry_limit_reached: false,
       paths: ['docs/draft.txt', 'docs/long.txt', 'docs/notes.txt'],
     });
     expect(shortRead).toEqual({
@@ -137,8 +143,15 @@ describe('fs tool', () => {
     expect(homeList).toMatchObject({
       action: 'list',
       glob: '*',
+      count: 0,
+      truncated: false,
+      scan_limit_reached: false,
+      entry_limit_reached: false,
     });
-    expect(homeList.paths).toEqual(expect.arrayContaining(['docs', 'downloads', 'src']));
+    expect(homeList.paths).toEqual([]);
+    expect(homeList.paths).not.toContain('docs');
+    expect(homeList.paths).not.toContain('downloads');
+    expect(homeList.paths).not.toContain('src');
     expect(homeList.paths).not.toContain('docs/notes.txt');
     expect(homeList.paths).not.toContain('downloads/COMPANION_EXPERIENCE.md');
     expect(homeList.paths).not.toContain('src/noise.ts');
@@ -147,8 +160,79 @@ describe('fs tool', () => {
       path: 'downloads',
       glob: '*',
       count: 1,
+      scanned_entries: expect.any(Number),
+      max_entries: 20,
+      max_scanned_entries: 5000,
+      truncated: false,
+      scan_limit_reached: false,
+      entry_limit_reached: false,
       paths: ['downloads/COMPANION_EXPERIENCE.md'],
     });
+  });
+
+  it('reports list match caps without scan-limit metadata', async () => {
+    writeFileSync(join(workspace, 'docs', 'a.txt'), 'a', 'utf-8');
+    writeFileSync(join(workspace, 'docs', 'b.txt'), 'b', 'utf-8');
+    writeFileSync(join(workspace, 'docs', 'c.txt'), 'c', 'utf-8');
+    const tool = createFsTool(ops);
+
+    const listed = JSON.parse(resultText(await tool.execute('list-entry-cap', {
+      action: 'list',
+      glob: 'docs/*.txt',
+      max_entries: 2,
+      max_scanned_entries: 20,
+    })));
+
+    expect(listed).toMatchObject({
+      action: 'list',
+      glob: 'docs/*.txt',
+      count: 2,
+      max_entries: 2,
+      max_scanned_entries: 20,
+      truncated: true,
+      scan_limit_reached: false,
+      entry_limit_reached: true,
+    });
+    expect(listed.paths).toHaveLength(2);
+  });
+
+  it('reports scan-limit truncation for sparse list globs', async () => {
+    mkdirSync(join(workspace, 'deep', 'nested'), { recursive: true });
+    writeFileSync(join(workspace, 'deep', 'nested', 'noise.txt'), 'noise', 'utf-8');
+    const tool = createFsTool(ops);
+
+    const listed = JSON.parse(resultText(await tool.execute('list-scan-cap', {
+      action: 'list',
+      glob: '**/*.needle',
+      max_entries: 10,
+      max_scanned_entries: 2,
+    })));
+
+    expect(listed).toMatchObject({
+      action: 'list',
+      glob: '**/*.needle',
+      count: 0,
+      scanned_entries: 2,
+      max_entries: 10,
+      max_scanned_entries: 2,
+      truncated: true,
+      scan_limit_reached: true,
+      entry_limit_reached: false,
+      paths: [],
+    });
+  });
+
+  it('preserves list path policy checks when scan controls are present', async () => {
+    const tool = createFsTool(ops);
+
+    const result = await tool.execute('list-traversal', {
+      action: 'list',
+      path: '../outside',
+      glob: '*.txt',
+      max_scanned_entries: 2,
+    });
+
+    expect(resultText(result)).toContain('fs failed: fs list path must be a workspace-relative directory path');
   });
 
   it('writes new files and edits existing files through the unified fs surface', async () => {

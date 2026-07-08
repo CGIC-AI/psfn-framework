@@ -38,11 +38,13 @@ import type {
   WebSocketVoiceSession,
 } from '../../primitives/voice/transports/websocket/types.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
+import { resolveAgentResponseDisposition } from '../../shared/agent-response-disposition.js';
 import type { WebRequestBinaryResult } from '../../boundary/gateway/protocol.js';
 import type {
   VoiceWebSocketRuntime,
   VoiceWebSocketRuntimeContext,
 } from './voice-websocket.js';
+import { clampHttpHeader } from './http-policy.js';
 import type { ApiAuthPrincipal } from '../backplane/http/auth.js';
 
 const log = createComponentLogger('ApiVoiceRuntime');
@@ -280,13 +282,6 @@ function singleHeader(value: string | string[] | undefined): string | undefined 
   return value;
 }
 
-function clampHeader(value: string | undefined, maxLength: number): string | undefined {
-  if (!value) return undefined;
-  const trimmed = value.trim();
-  if (!trimmed) return undefined;
-  return trimmed.length > maxLength ? trimmed.slice(0, maxLength) : trimmed;
-}
-
 function parseRequestUrl(request: IncomingMessage): URL | null {
   try {
     return new URL(request.url ?? '/', `http://${request.headers.host ?? 'localhost'}`);
@@ -300,7 +295,7 @@ function readQueryParam(request: IncomingMessage, names: string[]): string | und
   if (!url) return undefined;
 
   for (const name of names) {
-    const value = clampHeader(url.searchParams.get(name) ?? undefined, 1024);
+    const value = clampHttpHeader(url.searchParams.get(name) ?? undefined, 1024);
     if (value) return value;
   }
 
@@ -313,9 +308,9 @@ function readHeaderOrQuery(
   queryNames: string[],
   maxLength: number,
 ): string | undefined {
-  const headerValue = clampHeader(singleHeader(request.headers[headerName]), maxLength);
+  const headerValue = clampHttpHeader(singleHeader(request.headers[headerName]), maxLength);
   if (headerValue) return headerValue;
-  return clampHeader(readQueryParam(request, queryNames), maxLength);
+  return clampHttpHeader(readQueryParam(request, queryNames), maxLength);
 }
 
 function deriveActor(principal: ApiAuthPrincipal): VoiceActor {
@@ -462,14 +457,19 @@ async function runAgentAssistantTurn(params: {
 
     await eventBus.emit('message.received', { message });
     const response = await agentLoop.handleMessage(message);
-    await eventBus.emit('message.sent', { response });
-    await eventBus.emit('voice.tts.requested', {
-      turnId,
-      channelId,
-      userId: actor.authorId,
-      text: response.content,
-      timestampMs: Date.now(),
-    });
+    const disposition = resolveAgentResponseDisposition(response);
+    if (disposition.kind === 'send') {
+      await eventBus.emit('message.sent', { response });
+      await eventBus.emit('voice.tts.requested', {
+        turnId,
+        channelId,
+        userId: actor.authorId,
+        text: response.content,
+        timestampMs: Date.now(),
+      });
+    } else if (disposition.kind === 'empty_response_error') {
+      throw new Error('Voice agent returned empty content without an intentional no-reply marker');
+    }
     await eventBus.emit('voice.turn.end', {
       turnId,
       channelId,

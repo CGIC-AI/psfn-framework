@@ -38,9 +38,10 @@
   });
 
   // ── Editing state ──
-  type CadenceEditorMode = 'relative' | 'hourly' | 'daily';
+  type CadenceEditorMode = 'relative' | 'hourly' | 'daily' | 'weekly';
   type CadenceEditorState = {
     mode: CadenceEditorMode;
+    dayOfWeek: string;
     hour: string;
     minute: string;
     timezone: SchedulerCadenceTimezone;
@@ -50,8 +51,9 @@
   const DEFERRED_REFLECTION_TASK_PREFIX = 'reflection:deferred:';
   const KNOWN_HEARTBEAT_CADENCE: Record<string, RecurringCadence> = {
     'daily-review': { kind: 'daily', hour: 6, minute: 0, timezone: 'local' },
-    'weekly-review': { kind: 'relative' },
+    'weekly-review': { kind: 'weekly', dayOfWeek: 0, hour: 7, minute: 0, timezone: 'local' },
   };
+  const WEEKDAY_LABELS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 
   let editingIntervals = $state<Record<string, string>>({});
   let editingCadence = $state<Record<string, CadenceEditorState>>({});
@@ -167,6 +169,16 @@
     if (cadence.kind === 'daily') {
       return {
         mode: 'daily',
+        dayOfWeek: '0',
+        hour: String(cadence.hour),
+        minute: String(cadence.minute),
+        timezone: cadence.timezone,
+      };
+    }
+    if (cadence.kind === 'weekly') {
+      return {
+        mode: 'weekly',
+        dayOfWeek: String(cadence.dayOfWeek),
         hour: String(cadence.hour),
         minute: String(cadence.minute),
         timezone: cadence.timezone,
@@ -175,6 +187,7 @@
     if (cadence.kind === 'hourly') {
       return {
         mode: 'hourly',
+        dayOfWeek: '0',
         hour: '0',
         minute: String(cadence.minute),
         timezone: cadence.timezone,
@@ -182,6 +195,7 @@
     }
     return {
       mode: 'relative',
+      dayOfWeek: '0',
       hour: '0',
       minute: '0',
       timezone: 'local',
@@ -205,6 +219,9 @@
       }
       if (cadence?.kind === 'daily') {
         return `Daily @ ${formatTwoDigits(cadence.hour)}:${formatTwoDigits(cadence.minute)} (${cadence.timezone.toUpperCase()})`;
+      }
+      if (cadence?.kind === 'weekly') {
+        return `Weekly ${WEEKDAY_LABELS[cadence.dayOfWeek] ?? `day ${cadence.dayOfWeek}`} @ ${formatTwoDigits(cadence.hour)}:${formatTwoDigits(cadence.minute)} (${cadence.timezone.toUpperCase()})`;
       }
       return msToHuman(task.intervalMs);
     }
@@ -341,7 +358,7 @@
         timezone: editor.timezone,
       };
       intervalMs = 60 * 60_000;
-    } else {
+    } else if (editor.mode === 'daily') {
       const hour = parseBoundedInt(editor.hour, 0, 23);
       const minute = parseBoundedInt(editor.minute, 0, 59);
       if (hour === null || minute === null) {
@@ -355,6 +372,22 @@
         timezone: editor.timezone,
       };
       intervalMs = 24 * 60 * 60_000;
+    } else {
+      const dayOfWeek = parseBoundedInt(editor.dayOfWeek, 0, 6);
+      const hour = parseBoundedInt(editor.hour, 0, 23);
+      const minute = parseBoundedInt(editor.minute, 0, 59);
+      if (dayOfWeek === null || hour === null || minute === null) {
+        showFeedback('error', 'Weekly cadence requires day 0-6, hour 0-23, and minute 0-59.');
+        return;
+      }
+      cadence = {
+        kind: 'weekly',
+        dayOfWeek,
+        hour,
+        minute,
+        timezone: editor.timezone,
+      };
+      intervalMs = 7 * 24 * 60 * 60_000;
     }
 
     saving = `cadence:${task.id}`;
@@ -763,6 +796,7 @@
                             <option value="relative">Interval</option>
                             <option value="hourly">Hourly on minute</option>
                             <option value="daily">Daily at time</option>
+                            <option value="weekly">Weekly at time</option>
                           </select>
                           <span class="text-[11px] text-shadow-500">
                             {cadenceEditor.mode === 'relative' ? 'Relative cadence' : 'Clock-aware cadence'}
@@ -823,8 +857,68 @@
                               {saving === `cadence:${task.id}` ? '...' : 'Save'}
                             </button>
                           </div>
+                        {:else if cadenceEditor.mode === 'daily'}
+                          <div class="flex flex-wrap items-center gap-2">
+                            <span class="text-xs text-shadow-600">Time</span>
+                            <input
+                              type="number"
+                              min="0"
+                              max="23"
+                              value={cadenceEditor.hour}
+                              oninput={(e) => {
+                                updateCadenceEditor(task, { hour: (e.target as HTMLInputElement).value });
+                              }}
+                              class="w-14 px-2 py-1 text-sm font-mono border border-bark-300 rounded
+                                     bg-white text-shadow-800 focus:outline-none focus:ring-1 focus:ring-gold-400"
+                            />
+                            <span class="text-xs text-shadow-500">:</span>
+                            <input
+                              type="number"
+                              min="0"
+                              max="59"
+                              value={cadenceEditor.minute}
+                              oninput={(e) => {
+                                updateCadenceEditor(task, { minute: (e.target as HTMLInputElement).value });
+                              }}
+                              class="w-14 px-2 py-1 text-sm font-mono border border-bark-300 rounded
+                                     bg-white text-shadow-800 focus:outline-none focus:ring-1 focus:ring-gold-400"
+                            />
+                            <select
+                              value={cadenceEditor.timezone}
+                              onchange={(e) => {
+                                updateCadenceEditor(task, { timezone: (e.target as HTMLSelectElement).value as SchedulerCadenceTimezone });
+                              }}
+                              class="px-2 py-1 text-xs border border-bark-300 rounded
+                                     bg-white text-shadow-800 focus:outline-none focus:ring-1 focus:ring-gold-400"
+                            >
+                              <option value="local">Local</option>
+                              <option value="utc">UTC</option>
+                            </select>
+                            <button
+                              onclick={() => saveTaskCadence(task)}
+                              disabled={saving === `cadence:${task.id}`}
+                              class="text-xs px-2 py-1 rounded border border-moss-300 bg-moss-50
+                                     text-moss-700 hover:bg-moss-100 transition-colors
+                                     disabled:opacity-50 font-medium"
+                            >
+                              {saving === `cadence:${task.id}` ? '...' : 'Save'}
+                            </button>
+                          </div>
                         {:else}
                           <div class="flex flex-wrap items-center gap-2">
+                            <span class="text-xs text-shadow-600">Day</span>
+                            <select
+                              value={cadenceEditor.dayOfWeek}
+                              onchange={(e) => {
+                                updateCadenceEditor(task, { dayOfWeek: (e.target as HTMLSelectElement).value });
+                              }}
+                              class="px-2 py-1 text-xs border border-bark-300 rounded
+                                     bg-white text-shadow-800 focus:outline-none focus:ring-1 focus:ring-gold-400"
+                            >
+                              {#each WEEKDAY_LABELS as label, index}
+                                <option value={String(index)}>{label}</option>
+                              {/each}
+                            </select>
                             <span class="text-xs text-shadow-600">Time</span>
                             <input
                               type="number"

@@ -4,10 +4,6 @@ import type { MessageSender } from '../../system/lifecycle/notifications.js';
 import type { Scheduler } from './scheduler.js';
 import { createScheduleTool } from './schedule-tool.js';
 import {
-  createValuesAddTool,
-  createValuesUpdateTool,
-} from '../../faculties/values/tools.js';
-import {
   createHeartbeatTemplateRuntime,
   type HeartbeatTemplateRuntime,
 } from './heartbeat-template-runtime.js';
@@ -16,6 +12,7 @@ import {
   type HeartbeatAgent,
   type HeartbeatRuntimeOptions,
 } from './heartbeat-runtime-contracts.js';
+import { rehydrateScheduledPromptTasks } from './scheduled-prompts.js';
 export {
   DEFERRED_HEARTBEAT_ACTION_KIND,
 } from './heartbeat-runtime-contracts.js';
@@ -27,7 +24,7 @@ export type {
 
 const log = createComponentLogger('HeartbeatRuntime');
 
-export function wireHeartbeatRuntime(
+export async function wireHeartbeatRuntime(
   target: ToolRegistrarTarget,
   scheduler: Scheduler,
   agentLoop: HeartbeatAgent,
@@ -35,7 +32,7 @@ export function wireHeartbeatRuntime(
   dataDir: string,
   heartbeatChannelId?: string,
   runtimeOptions: HeartbeatRuntimeOptions = {},
-): void {
+): Promise<void> {
   const templateRuntime: HeartbeatTemplateRuntime = createHeartbeatTemplateRuntime({
     scheduler,
     agentLoop,
@@ -46,11 +43,25 @@ export function wireHeartbeatRuntime(
   });
 
   wireHeartbeatPostTurnRuntime({
+    scheduler,
     agentLoop,
     sender,
     templateRuntime,
     runtimeOptions,
   });
+
+  if (runtimeOptions.scheduledPromptStore) {
+    const rehydratedCount = await rehydrateScheduledPromptTasks({
+      scheduler,
+      agentLoop,
+      sender,
+      scheduledPromptStore: runtimeOptions.scheduledPromptStore,
+      ...(heartbeatChannelId ? { heartbeatChannelId } : {}),
+    });
+    if (rehydratedCount > 0) {
+      log.info('Rehydrated scheduled prompts', { count: rehydratedCount });
+    }
+  }
 
   target.registerTool(createScheduleTool({
     scheduler,
@@ -63,9 +74,8 @@ export function wireHeartbeatRuntime(
     memoryWriter: runtimeOptions.memoryWriter,
     pendingFollowUpStore: runtimeOptions.pendingFollowUpStore ?? null,
     careReminderStore: runtimeOptions.careReminderStore ?? null,
+    scheduledPromptStore: runtimeOptions.scheduledPromptStore ?? null,
   }), 'core');
-  target.registerTool(createValuesAddTool(templateRuntime.valuesJournal), 'extended');
-  target.registerTool(createValuesUpdateTool(templateRuntime.valuesJournal), 'extended');
 
   const activeCount = templateRuntime.initialPolicy.templates.filter(t => t.enabled).length;
   log.info(`Heartbeat runtime wired (${templateRuntime.initialPolicy.templates.length} templates, ${activeCount} active)`);

@@ -1,5 +1,5 @@
-import type { SessionSearchHit } from './transcript-projection-port.js';
+import type { SessionSearchHit, TranscriptSearchOptions } from './transcript-projection-port.js';
 
 export interface TranscriptSearchPort {
-  searchByKeywords(query: string, limit?: number): Promise<SessionSearchHit[]>;
+  searchByKeywords(query: string, limit?: number, options?: TranscriptSearchOptions): Promise<SessionSearchHit[]>;
 }

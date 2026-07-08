@@ -9,8 +9,12 @@ import type { ConfirmationResolveResult } from '../../system/capabilities/confir
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type { ReflectionTemplate } from '../../core/scheduler/heartbeat-policy.js';
 import type { RecurringCadence, ScheduledTask, TaskType } from '../../core/scheduler/types.js';
+import type { WakeWindowSnapshot } from '../../core/scheduler/temporal-wakeup.js';
 import type { SkillSnapshot } from '../../faculties/skills/types.js';
 import type { ValuesJournalEntry } from '../../faculties/values/store.js';
+import type { ReflectionJournalEntry } from '../../persistence/journals/reflection-journal.js';
+import type { ReflectionMetacognitionJournalEntry } from '../../persistence/journals/reflection-metacognition-journal.js';
+import type { ReflectionDailyJournalEntry } from '../../persistence/journals/reflection-substrate.js';
 import type { ModelDiscoveryBackend } from '../../primitives/llm/discovery.js';
 import type {
   AdminChatBootstrapResponse,
@@ -23,16 +27,27 @@ import type {
   AdminAuditHistoryService,
   AdminChargeLedgerService,
   AdminContactsService,
+  AdminConcernService,
   AdminDashboardService,
+  AdminDiagnosticsService,
   AdminEpisodicMemoryService,
+  AdminGroupMemoryService,
   AdminImagesService,
   AdminIdentityService,
   AdminMemoryService,
+  AdminModelUsageService,
   AdminPromptsService,
   AdminShardFoldReviewService,
   AdminSessionService,
   AdminSettingsService,
+  AdminWikiService,
 } from './services/types.js';
+import type { AdminObserverEvalSidecarService } from './services/observer-eval-sidecar-service.js';
+import type { AdminPendingContactsService } from './services/pending-contacts-service.js';
+import type { AdminRoomsService } from './services/rooms-service.js';
+import type { AdminGraphProposalsService } from './services/graph-proposals-service.js';
+import type { AdminSubsystemHealthService } from './services/subsystem-health-service.js';
+import type { AdminToolConformanceService } from './services/tool-conformance-service.js';
 
 export interface ConfirmationQueueAdminApi {
   listConfirmationQueue(): Promise<ConfirmationListResult>;
@@ -56,6 +71,12 @@ export interface AdminScheduledTaskView {
   runAt?: number;
   state: string;
   cadence?: AdminTaskCadence;
+  lastRunAt?: number;
+  lastFinishedAt?: number;
+  lastOutcome?: string;
+  lastError?: string;
+  lastErrorAt?: number;
+  lastDeniedReason?: string;
 }
 
 export interface AdminSchedulerApi {
@@ -80,6 +101,8 @@ export interface AdminSchedulerApi {
   }): { ok: boolean; message: string };
   removeTask?(id: string): { ok: boolean; message: string };
   updateReflection?(id: string, updates: Partial<ReflectionTemplate>): { ok: boolean; message: string };
+  /** Current habit wake-window estimate + data sufficiency (E7.2). */
+  getWakeWindow?(): WakeWindowSnapshot | null;
 }
 
 export interface ManagedSkillRecord {
@@ -107,6 +130,18 @@ export interface AdminValuesJournalApi {
   list(options?: { limit?: number }): ValuesJournalEntry[];
 }
 
+export interface AdminReflectionMetacognitionJournalApi {
+  listRecent(options?: { limit?: number }): ReflectionMetacognitionJournalEntry[];
+}
+
+export interface AdminReflectionDailyJournalApi {
+  listRecent(options?: { limit?: number }): ReflectionDailyJournalEntry[];
+}
+
+export interface AdminReflectionJournalApi {
+  listRecent(options?: { limit?: number }): ReflectionJournalEntry[];
+}
+
 export interface AdminChatBootstrapApi {
   buildBootstrap(options?: { requestOrigin?: string; settingsApiBaseUrl?: string }): Promise<AdminChatBootstrapResponse>;
   updateSelection(
@@ -121,16 +156,27 @@ export interface AdminChatBootstrapApi {
 
 export interface GardenAdminDomainServices {
   dashboard: AdminDashboardService;
+  diagnostics: AdminDiagnosticsService;
   images: AdminImagesService;
   auditHistory: AdminAuditHistoryService;
   charges?: AdminChargeLedgerService | null;
+  modelUsage?: AdminModelUsageService | null;
+  observerEvalSidecar?: AdminObserverEvalSidecarService | null;
   actionPipe?: AdminActionPipeService | null;
   shards: AdminShardFoldReviewService;
   adaptiveTools?: AdminAdaptiveToolsService | null;
+  wiki?: AdminWikiService | null;
   episodicMemory?: AdminEpisodicMemoryService | null;
+  groupMemory?: AdminGroupMemoryService | null;
   memory: AdminMemoryService;
   sessions: AdminSessionService;
   contacts: AdminContactsService;
+  pendingContacts?: AdminPendingContactsService | null;
+  rooms?: AdminRoomsService | null;
+  graphProposals?: AdminGraphProposalsService | null;
+  concerns?: AdminConcernService | null;
+  subsystemHealth?: AdminSubsystemHealthService | null;
+  toolConformance?: AdminToolConformanceService | null;
   settings: AdminSettingsService;
   identity: AdminIdentityService;
   prompts: AdminPromptsService;
@@ -138,6 +184,9 @@ export interface GardenAdminDomainServices {
   skills?: AdminSkillsApi | null;
   confirmations?: ConfirmationQueueAdminApi | null;
   values: AdminValuesJournalApi;
+  reflectionMetacognitionJournal: AdminReflectionMetacognitionJournalApi;
+  reflectionDailyJournal: AdminReflectionDailyJournalApi;
+  reflectionJournal: AdminReflectionJournalApi;
   modelDiscovery?: AdminModelDiscoveryApi | null;
   chatBootstrap: AdminChatBootstrapApi;
 }

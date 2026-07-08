@@ -1,7 +1,8 @@
 import { spawn } from 'node:child_process';
 import { accessSync, constants, realpathSync } from 'node:fs';
-import { basename, delimiter, dirname, isAbsolute, join, normalize, resolve } from 'node:path';
+import { basename, delimiter, isAbsolute, join, normalize, resolve } from 'node:path';
 import type { ShellExecParams, ShellExecResult } from '../../gateway/protocol.js';
+import { resolveCanonicalPath } from '../../gateway/filesystem-paths.js';
 import { isInsideAllowedPaths } from '../../gateway/policy.js';
 import type { ShellExecPolicyConfig } from './shell-policy-config.js';
 
@@ -12,12 +13,20 @@ const DEFAULT_MAX_OUTPUT_CHARS_CAP = 100_000;
 const MAX_COMMAND_LENGTH = 256;
 const MAX_ARGS = 64;
 const MAX_ARG_LENGTH = 4_096;
+// ponytail: the sandbox child must not inherit the parent PATH. A poisoned PATH
+// could shadow an allowlisted command name (e.g. a hostile `cat` earlier on
+// PATH). Resolve commands AND run the child against this curated, system-safe
+// PATH unless an operator override (SHELL_EXEC_PATH) is set.
+const DEFAULT_SANDBOX_PATH = ['/usr/local/bin', '/usr/bin', '/bin'].join(delimiter);
+const SHELL_CANONICAL_PATH_OPTIONS = {
+  missingPathBehavior: 'resolveParent',
+  errorBehavior: 'returnNormalized',
+} as const;
 const SANDBOX_CHILD_ENV_ALLOWLIST = [
   'LANG',
   'LC_ALL',
   'LC_CTYPE',
   'LOGNAME',
-  'PATH',
   'PWD',
   'SHELL',
   'TERM',
@@ -27,6 +36,25 @@ const SANDBOX_CHILD_ENV_ALLOWLIST = [
   'TZ',
   'USER',
 ] as const;
+// ponytail: env vars that can redirect executable/library resolution or
+// inject code into the child must never pass through from the parent env,
+// even when an operator allowlists them. Passing PATH through would let the
+// child resolve a different binary than the one policy validation approved
+// against the curated sandbox PATH.
+const RESERVED_SANDBOX_ENV_VARS = new Set([
+  'PATH',
+  'NODE_OPTIONS',
+  'BASH_ENV',
+  'ENV',
+  'SHELLOPTS',
+]);
+const RESERVED_SANDBOX_ENV_PREFIXES = ['LD_', 'DYLD_'] as const;
+
+function isReservedSandboxEnvVar(name: string): boolean {
+  const upper = name.toUpperCase();
+  if (RESERVED_SANDBOX_ENV_VARS.has(upper)) return true;
+  return RESERVED_SANDBOX_ENV_PREFIXES.some(prefix => upper.startsWith(prefix));
+}
 
 interface NormalizedShellAllowlist {
   names: Set<string>;
@@ -51,24 +79,6 @@ function includesPathSeparator(value: string): boolean {
   return value.includes('/') || value.includes('\\');
 }
 
-function resolveCanonicalPath(pathValue: string): string {
-  const normalized = resolve(normalize(pathValue));
-  try {
-    return realpathSync(normalized);
-  } catch (err: unknown) {
-    const code = (err as NodeJS.ErrnoException).code;
-    if (code === 'ENOENT') {
-      try {
-        const parent = realpathSync(dirname(normalized));
-        return resolve(parent, basename(normalized));
-      } catch {
-        return normalized;
-      }
-    }
-    return normalized;
-  }
-}
-
 function resolveCanonicalExecutablePath(command: string): string | null {
   const absolute = resolve(normalize(command));
   try {
@@ -79,8 +89,7 @@ function resolveCanonicalExecutablePath(command: string): string | null {
   }
 }
 
-function resolveExecutableFromPath(command: string): string | null {
-  const pathValue = process.env.PATH ?? '';
+function resolveExecutableFromPath(command: string, pathValue: string): string | null {
   const candidates = pathValue.split(delimiter).filter(Boolean);
   for (const candidateDir of candidates) {
     const candidate = join(candidateDir, command);
@@ -94,9 +103,19 @@ function resolveExecutableFromPath(command: string): string | null {
   return null;
 }
 
+function resolveCurrentNodeExecutable(): string | null {
+  try {
+    accessSync(process.execPath, constants.X_OK);
+    return realpathSync(process.execPath);
+  } catch {
+    return null;
+  }
+}
+
 function buildSandboxChildEnv(
   requestedEnvVars: readonly string[],
   envAllowlist: readonly string[],
+  sandboxPath: string,
   env: NodeJS.ProcessEnv = process.env,
 ): NodeJS.ProcessEnv {
   const nextEnv: NodeJS.ProcessEnv = {};
@@ -106,11 +125,13 @@ function buildSandboxChildEnv(
       nextEnv[key] = value;
     }
   }
-
   const allowedEnvNames = new Set(envAllowlist.map((value) => value.trim()).filter(Boolean));
   for (const envVar of requestedEnvVars) {
     const trimmed = envVar.trim();
     if (!trimmed) continue;
+    if (isReservedSandboxEnvVar(trimmed)) {
+      throw new ShellExecPolicyError(`shell.exec env var is reserved and cannot be passed through: ${trimmed}`);
+    }
     if (!allowedEnvNames.has(trimmed)) {
       throw new ShellExecPolicyError(`shell.exec env var not allowlisted: ${trimmed}`);
     }
@@ -119,6 +140,10 @@ function buildSandboxChildEnv(
       nextEnv[trimmed] = value;
     }
   }
+
+  // PATH is deliberately not inherited; the curated sandbox PATH is applied
+  // after requested-env processing so nothing can shadow it.
+  nextEnv.PATH = sandboxPath;
 
   return nextEnv;
 }
@@ -202,7 +227,7 @@ function resolveAllowedShellRoots(
     ? policy.allowedCwd
     : [workspacePath];
   const logical = allowedRootsRaw.map(path => resolve(normalize(path)));
-  const canonical = logical.map(path => resolveCanonicalPath(path));
+  const canonical = logical.map(path => resolveCanonicalPath(path, SHELL_CANONICAL_PATH_OPTIONS));
   return { logical, canonical };
 }
 
@@ -215,7 +240,7 @@ function resolveWorkingDirectory(
     ? rawCwd.trim()
     : workspacePath;
   const resolvedCwd = resolve(normalize(requestedCwd));
-  const canonicalCwd = resolveCanonicalPath(resolvedCwd);
+  const canonicalCwd = resolveCanonicalPath(resolvedCwd, SHELL_CANONICAL_PATH_OPTIONS);
   if (!isInsideAllowedPaths(resolvedCwd, allowedRoots.logical)) {
     throw new ShellExecPolicyError(`shell.exec cwd not allowlisted: ${resolvedCwd}`);
   }
@@ -268,7 +293,7 @@ function assertArgumentPathsAllowed(
   for (const arg of args) {
     for (const candidate of collectArgumentPathCandidates(arg)) {
       const resolvedPath = resolveArgumentPathCandidate(candidate, cwd);
-      const canonicalPath = resolveCanonicalPath(resolvedPath);
+      const canonicalPath = resolveCanonicalPath(resolvedPath, SHELL_CANONICAL_PATH_OPTIONS);
       if (!isInsideAllowedPaths(resolvedPath, allowedRoots.logical)) {
         throw new ShellExecPolicyError(`shell.exec argument path not allowlisted: ${resolvedPath}`);
       }
@@ -296,7 +321,11 @@ function resolveBoundedExecutionPolicy(
   return { timeoutMs, maxOutputChars };
 }
 
-function assertCommandAllowed(command: string, allowlist: readonly string[]): void {
+function resolveAllowedCommandExecutable(
+  command: string,
+  allowlist: readonly string[],
+  sandboxPath: string,
+): string {
   if (!command) {
     throw new ShellExecPolicyError('shell.exec command is required');
   }
@@ -313,15 +342,22 @@ function assertCommandAllowed(command: string, allowlist: readonly string[]): vo
   const commandIsPath = includesPathSeparator(command) || isAbsolute(command);
   const canonicalCommand = commandIsPath
     ? resolveCanonicalExecutablePath(command)
-    : resolveExecutableFromPath(command);
+    : resolveExecutableFromPath(command, sandboxPath);
   const commandLower = command.toLowerCase();
+  const currentNodeExecutable = commandLower === 'node'
+    ? resolveCurrentNodeExecutable()
+    : null;
 
   if (!commandIsPath) {
     if (normalizedAllowlist.names.has(commandLower)) {
-      return;
+      const resolvedCommand = canonicalCommand ?? currentNodeExecutable;
+      if (resolvedCommand) {
+        return resolvedCommand;
+      }
+      throw new ShellExecPolicyError(`shell.exec command not executable or not found: ${command}`);
     }
     if (canonicalCommand && normalizedAllowlist.canonicalPaths.has(canonicalCommand)) {
-      return;
+      return canonicalCommand;
     }
     throw new ShellExecPolicyError(`shell.exec command not allowlisted: ${command}`);
   }
@@ -331,14 +367,17 @@ function assertCommandAllowed(command: string, allowlist: readonly string[]): vo
   }
 
   if (normalizedAllowlist.canonicalPaths.has(canonicalCommand)) {
-    return;
+    return canonicalCommand;
   }
 
   const canonicalBase = basename(canonicalCommand).toLowerCase();
   if (normalizedAllowlist.names.has(canonicalBase)) {
-    const expectedCanonical = resolveExecutableFromPath(canonicalBase);
-    if (expectedCanonical && expectedCanonical === canonicalCommand) {
-      return;
+    const expectedCanonical = resolveExecutableFromPath(canonicalBase, sandboxPath);
+    if (
+      (expectedCanonical && expectedCanonical === canonicalCommand)
+      || (canonicalBase === 'node' && currentNodeExecutable === canonicalCommand)
+    ) {
+      return canonicalCommand;
     }
   }
 
@@ -347,6 +386,7 @@ function assertCommandAllowed(command: string, allowlist: readonly string[]): vo
 
 async function runCommandBounded(
   command: string,
+  executableCommand: string,
   args: string[],
   cwd: string,
   limits: { timeoutMs: number; maxOutputChars: number },
@@ -354,7 +394,7 @@ async function runCommandBounded(
 ): Promise<ShellExecResult> {
   const startedAt = Date.now();
   return await new Promise<ShellExecResult>((resolveResult, rejectResult) => {
-    const child = spawn(command, args, {
+    const child = spawn(executableCommand, args, {
       cwd,
       env: childEnv,
       shell: false,
@@ -428,14 +468,15 @@ export async function executeShellCommandWithPolicy(
     throw new ShellExecPolicyError('shell.exec policy is disabled');
   }
 
+  const sandboxPath = policy.pathOverride ?? DEFAULT_SANDBOX_PATH;
   const command = resolveCommand(params.command);
-  assertCommandAllowed(command, policy.allowlist ?? []);
+  const executableCommand = resolveAllowedCommandExecutable(command, policy.allowlist ?? [], sandboxPath);
   const args = resolveArgs(params.args);
   const allowedRoots = resolveAllowedShellRoots(workspacePath, policy);
   const cwd = resolveWorkingDirectory(params.cwd, workspacePath, allowedRoots);
   assertArgumentPathsAllowed(args, cwd, allowedRoots);
   const limits = resolveBoundedExecutionPolicy(params, policy);
   const requestedEnvVars = resolveRequestedEnvVars((params as { envVars?: unknown }).envVars);
-  const childEnv = buildSandboxChildEnv(requestedEnvVars, policy.envAllowlist ?? []);
-  return await runCommandBounded(command, args, cwd, limits, childEnv);
+  const childEnv = buildSandboxChildEnv(requestedEnvVars, policy.envAllowlist ?? [], sandboxPath);
+  return await runCommandBounded(command, executableCommand, args, cwd, limits, childEnv);
 }

@@ -1,5 +1,6 @@
 import type { LLMProviderPort } from '../../../core/agent/contracts.js';
 import { getRequestContext } from '../../../primitives/llm/request-context.js';
+import { withRetry } from '../../../primitives/llm/retry.js';
 
 const DEFAULT_WEB_SEARCH_MAX_URLS = 3;
 const MAX_WEB_SEARCH_URLS = 5;
@@ -34,47 +35,72 @@ export async function planWebSearchUrls(
     .slice(0, requested);
 }
 
+/**
+ * Marks a completion whose content was not valid JSON. Only this failure mode
+ * is retryable for web-search planning; thrown provider/network errors
+ * propagate unretried on any attempt.
+ */
+class WebSearchJsonParseError extends Error {
+  constructor(cause: unknown) {
+    super('web search completion returned invalid JSON', { cause });
+    this.name = 'WebSearchJsonParseError';
+  }
+}
+
 export function createWebSearchQueryJson(llmProvider: LLMProviderPort): WebSearchQueryJson {
   return async (prompt: string, maxRetries?: number): Promise<unknown> => {
     const requestContext = getRequestContext();
-    const retries = typeof maxRetries === 'number' && Number.isFinite(maxRetries)
+    // Callers pass the total attempt budget (historical contract of this
+    // surface); the shared retry primitive counts retries after the first try.
+    const totalAttempts = typeof maxRetries === 'number' && Number.isFinite(maxRetries)
       ? Math.max(1, Math.floor(maxRetries))
       : 2;
 
-    for (let attempt = 1; attempt <= retries; attempt++) {
-      const response = await llmProvider.complete(
-        {
-          systemPrompt: 'You are a precise web research planner. Return valid JSON only.',
-          messages: [{
-            role: 'user',
-            content: `${prompt}\n\nRespond with valid JSON only, no markdown.`,
-          }],
-          correlation: {
-            ...(requestContext?.turnId ? { turnId: requestContext.turnId } : {}),
-            ...(requestContext?.channelId ? { channelId: requestContext.channelId } : {}),
-            requestId: requestContext?.requestId
-              ? `${requestContext.requestId}:web-search:${attempt}`
-              : `web-search-${Date.now()}-${attempt}`,
-            callType: 'tool',
-            toolName: 'web',
-            purpose: attempt === 1 ? 'agent.web.search' : 'agent.web.search.retry',
-            originType: 'tool',
-            originStage: attempt === 1 ? 'agent.web.search' : 'agent.web.search.retry',
-            ...(requestContext?.toolCallId ? { toolCallId: requestContext.toolCallId } : {}),
-          },
+    let attempt = 0;
+    try {
+      return await withRetry(
+        async () => {
+          attempt += 1;
+          const response = await llmProvider.complete(
+            {
+              systemPrompt: 'You are a precise web research planner. Return valid JSON only.',
+              messages: [{
+                role: 'user',
+                content: `${prompt}\n\nRespond with valid JSON only, no markdown.`,
+              }],
+              correlation: {
+                ...(requestContext?.turnId ? { turnId: requestContext.turnId } : {}),
+                ...(requestContext?.channelId ? { channelId: requestContext.channelId } : {}),
+                requestId: requestContext?.requestId
+                  ? `${requestContext.requestId}:web-search:${attempt}`
+                  : `web-search-${Date.now()}-${attempt}`,
+                callType: 'tool',
+                toolName: 'web',
+                purpose: attempt === 1 ? 'agent.web.search' : 'agent.web.search.retry',
+                originType: 'tool',
+                originStage: attempt === 1 ? 'agent.web.search' : 'agent.web.search.retry',
+                ...(requestContext?.toolCallId ? { toolCallId: requestContext.toolCallId } : {}),
+              },
+            },
+            'reasoning',
+          );
+
+          try {
+            return JSON.parse(response.content) as unknown;
+          } catch (error) {
+            throw new WebSearchJsonParseError(error);
+          }
         },
-        'reasoning',
+        { maxRetries: totalAttempts - 1, baseDelayMs: 0 },
+        { isRetryable: (error) => error instanceof WebSearchJsonParseError },
       );
-
-      try {
-        return JSON.parse(response.content);
-      } catch {
-        if (attempt === retries) {
-          return null;
-        }
+    } catch (error) {
+      // Parse failures exhaust the attempt budget into a null plan; every
+      // other error (provider, network, abort) propagates to the caller.
+      if (error instanceof WebSearchJsonParseError) {
+        return null;
       }
+      throw error;
     }
-
-    return null;
   };
 }

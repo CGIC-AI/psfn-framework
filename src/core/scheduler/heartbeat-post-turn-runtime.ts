@@ -1,5 +1,8 @@
+import { createHash } from 'node:crypto';
 import { createComponentLogger } from '../../shared/logger.js';
+import type { DeterministicGateEvent } from '../../shared/event-bus.js';
 import type { MessageSender } from '../../system/lifecycle/notifications.js';
+import { inferSessionChannelType } from '../session/session-id.js';
 import {
   buildDeferredToolHandoffMessage,
   DEFERRED_TOOL_HANDOFF_ACTION_KIND,
@@ -12,22 +15,47 @@ import {
 } from '../agent/deferred-post-turn-inference.js';
 import { evaluateCompositionalPolicyForChannelId } from '../../system/capabilities/compositional-policy.js';
 import {
+  ContactTrustDriftReviewLane,
+  CONTACT_TRUST_DRIFT_REVIEW_ACTION_KIND,
+  CONTACT_TRUST_DRIFT_REVIEW_CHANNEL_ID,
+  type ContactTrustDriftReviewStore,
+} from '../contacts/trust-drift-review-lane.js';
+import {
   SleeptimeMemoryAgent,
   SLEEPTIME_MEMORY_ACTION_KIND,
 } from '../../faculties/memory/sleeptime-agent.js';
 import {
+  NearTurnMemoryLane,
+  NEAR_TURN_MEMORY_ACTION_KIND,
+  type NearTurnMemoryCadenceTelemetry,
+} from '../../faculties/memory/near-turn-memory-lane.js';
+import {
+  EpisodeSynthesisLane,
+  EPISODE_SYNTHESIS_ACTION_KIND,
+  EPISODE_SYNTHESIS_TIMER_TASK_ID,
+  type EpisodeSynthesisGateEvent,
+} from '../../faculties/memory/episodic/synthesis-lane.js';
+import {
   IntentionAppraisal,
   INTENTION_FOLLOW_UP_ACTION_KIND,
+  INTENTION_OUTBOUND_MESSAGE_ACTION_KIND,
   INTENTION_REMINDER_ACTION_KIND,
+  type IntentionOutboundMessageActionPayload,
   decisionsToPostTurnActionCandidates,
   isBackgroundAppraisalChannel,
   normalizeIntentionFollowUpActionPayload,
+  normalizeIntentionOutboundMessageActionPayload,
   normalizeIntentionReminderActionPayload,
   pendingFollowUpsToPostTurnActionCandidates,
-  sessionEntriesToIntentionMessages,
+  buildPostTurnAppraisalTranscript,
   toInferredPostTurnActions,
 } from '../intention/appraisal.js';
 import { MotivationBridge } from '../intention/motivation.js';
+import {
+  evaluatePendingFollowUpActivationState,
+  isPendingFollowUpExpired,
+} from '../intention/pending-follow-ups.js';
+import { evaluateProactiveOutboundTimeGate } from '../intention/proactive-time-gate.js';
 import { cloneInternalState } from '../self-model/state.js';
 import {
   BACKGROUND_CONTINUATION_RUNTIME_CLASS,
@@ -41,10 +69,16 @@ import type {
 } from './heartbeat-runtime-contracts.js';
 import { DEFERRED_HEARTBEAT_ACTION_KIND } from './heartbeat-runtime-contracts.js';
 import type { HeartbeatTemplateRuntime } from './heartbeat-template-runtime.js';
+import type { Scheduler } from './scheduler.js';
 
 const log = createComponentLogger('HeartbeatPostTurn');
+export const SLEEPTIME_REST_WINDOW_TASK_ID = 'memory.sleeptime.rest-window';
+const SLEEPTIME_REST_WINDOW_POLL_INTERVAL_MS = 5 * 60_000;
+export const CONTACT_TRUST_DRIFT_REVIEW_TASK_ID = 'contacts.trust-drift-review.rest-window';
+export const INTENTION_FOLLOW_UP_ACTIVATION_MIN_INTERVAL_MS = 5 * 60_000;
 
 interface WireHeartbeatPostTurnRuntimeOptions {
+  scheduler: Scheduler;
   agentLoop: HeartbeatAgent;
   sender: MessageSender;
   templateRuntime: Pick<HeartbeatTemplateRuntime, 'runDeferredTemplate'>;
@@ -55,6 +89,7 @@ export function wireHeartbeatPostTurnRuntime(
   options: WireHeartbeatPostTurnRuntimeOptions,
 ): void {
   const {
+    scheduler,
     agentLoop,
     sender,
     templateRuntime,
@@ -68,6 +103,7 @@ export function wireHeartbeatPostTurnRuntime(
   const telemetryEventBus = runtimeOptions.eventBus;
   const deferredToolHandoffPayloads = new Map<string, DeferredToolHandoffPayload>();
   const deferredToolHandoffExecutionState = new Map<string, { activated: boolean; executed: boolean }>();
+  const lastIntentionFollowUpActivationByChannel = new Map<string, number>();
   const shouldUseCompositionalAppraisal = (channelId: string): boolean => (
     evaluateCompositionalPolicyForChannelId({
       policy: runtimeOptions.compositionalPolicy,
@@ -76,20 +112,117 @@ export function wireHeartbeatPostTurnRuntime(
       purpose: 'appraisal',
     }).allowed
   );
+  // True sleeptime: heavy passes (sleep consolidation, arc weaving, dream
+  // meaning, orientation rewrite) are scheduler-owned rest-window work. The
+  // agent is intentionally NOT reachable from the post-turn inferer below —
+  // its only trigger surface is the rest-window scheduler task.
   const sleeptimeAgent = (
     runtimeOptions.llmProvider
     && runtimeOptions.memoryWriter
     && runtimeOptions.sessionManager
     && runtimeOptions.coreMemoryStore
+    && runtimeOptions.episodicProcessingRestWindow
   )
     ? new SleeptimeMemoryAgent({
       llmProvider: runtimeOptions.llmProvider,
       sessionManager: runtimeOptions.sessionManager,
       coreMemoryStore: runtimeOptions.coreMemoryStore,
       memoryWriter: runtimeOptions.memoryWriter,
-      cadenceTurns: runtimeOptions.sleeptimeCadenceTurns,
+      promptRegistry: runtimeOptions.promptRegistry ?? null,
       restWindow: runtimeOptions.episodicProcessingRestWindow,
-      episodicSynthesizer: runtimeOptions.episodicSynthesizer,
+      ...(runtimeOptions.orientationRewriteGate
+        ? { orientationRewriteGate: runtimeOptions.orientationRewriteGate }
+        : {}),
+      ...(telemetryEventBus
+        ? {
+          onGateEvent: (event: DeterministicGateEvent): void => {
+            telemetryEventBus.emit('memory.orientation_rewrite.gate', event);
+          },
+        }
+        : {}),
+      sleepConsolidator: runtimeOptions.sleepConsolidator,
+      arcWeaver: runtimeOptions.arcWeaver,
+      dreamMeaningPass: runtimeOptions.dreamMeaningPass,
+      sleeptimeWikiPass: runtimeOptions.sleeptimeWikiPass,
+      memoryMaintenanceStore: runtimeOptions.memoryMaintenanceStore,
+      episodicDiagnosticsStore: runtimeOptions.episodicDiagnosticsStore,
+    })
+    : null;
+  // Lightweight near-turn memory lane (no LLM provider: structurally zero
+  // token spend). Fires on the JSON-owned nearTurnMemory cadence.
+  const nearTurnLane = (
+    runtimeOptions.sessionManager
+    && runtimeOptions.nearTurnMemoryCadence
+  )
+    ? new NearTurnMemoryLane({
+      sessionManager: runtimeOptions.sessionManager,
+      cadence: runtimeOptions.nearTurnMemoryCadence,
+      scopeClassifier: runtimeOptions.memoryScopeClassifier ?? null,
+      memoryMaintenanceStore: runtimeOptions.memoryMaintenanceStore ?? null,
+      ...(telemetryEventBus
+        ? {
+          onCadenceTelemetry: (event: NearTurnMemoryCadenceTelemetry): void => {
+            telemetryEventBus.emit('memory.near_turn.cadence', {
+              channelId: event.channelId,
+              sessionId: event.sessionId,
+              scope: event.scope,
+              turnCount: event.turnCount,
+              newEntriesSinceLastRun: event.newEntriesSinceLastRun,
+              firedAtMs: event.firedAtMs,
+              firesLastHour: event.firesLastHour,
+              timestamp: Date.now(),
+            }).catch((error) => {
+              log.warn('Near-turn cadence telemetry emit failed', {
+                channelId: event.channelId,
+                scope: event.scope,
+                error: String(error),
+              });
+            });
+          },
+        }
+        : {}),
+    })
+    : null;
+  // Candidate-episode synthesis lane: timer-or-turn-threshold trigger with a
+  // deterministic gate (E5.3). Zero LLM spend when the gate is closed.
+  const episodeSynthesisLane = (
+    runtimeOptions.sessionManager
+    && runtimeOptions.episodicSynthesizer
+    && runtimeOptions.episodicWatermarkStore
+    && runtimeOptions.episodeSynthesis
+  )
+    ? new EpisodeSynthesisLane({
+      sessionManager: runtimeOptions.sessionManager,
+      synthesizer: runtimeOptions.episodicSynthesizer,
+      watermarkStore: runtimeOptions.episodicWatermarkStore,
+      config: runtimeOptions.episodeSynthesis,
+      scopeClassifier: runtimeOptions.memoryScopeClassifier ?? null,
+      ...(runtimeOptions.companionNames ? { companionNames: runtimeOptions.companionNames } : {}),
+      ...(runtimeOptions.companionAuthorIds ? { companionAuthorIds: runtimeOptions.companionAuthorIds } : {}),
+      memoryWriter: runtimeOptions.memoryWriter ?? null,
+      ...(telemetryEventBus
+        ? {
+          onGateEvent: (event: EpisodeSynthesisGateEvent): void => {
+            telemetryEventBus.emit('memory.episode_synthesis.gate', {
+              sessionId: event.sessionId,
+              channelId: event.channelId,
+              trigger: event.trigger,
+              outcome: event.outcome,
+              ...(event.reason ? { reason: event.reason } : {}),
+              newEntryCount: event.newEntryCount,
+              relevantTurnCount: event.relevantTurnCount,
+              minRelevantTurns: event.minRelevantTurns,
+              timestamp: event.timestamp,
+            }).catch((error) => {
+              log.warn('Episode-synthesis gate telemetry emit failed', {
+                sessionId: event.sessionId,
+                outcome: event.outcome,
+                error: String(error),
+              });
+            });
+          },
+        }
+        : {}),
     })
     : null;
   const intentionAppraisalEnabled = runtimeOptions.intentionAppraisalEnabled !== false;
@@ -114,6 +247,276 @@ export function wireHeartbeatPostTurnRuntime(
     : null;
   const intentionSessionsInFlight = new Set<string>();
   const motivationBridge = intentionAppraisal ? new MotivationBridge() : null;
+
+  const resolveMinimumOutboundRunAt = (
+    concerns: readonly { dueAt?: number }[] | undefined,
+    now: number,
+  ): number | undefined => {
+    const futureConcernDueTimes = (concerns ?? [])
+      .map(concern => concern.dueAt)
+      .filter((dueAt): dueAt is number => (
+        typeof dueAt === 'number'
+        && Number.isFinite(dueAt)
+        && dueAt > now
+      ));
+    return futureConcernDueTimes.length > 0 ? Math.min(...futureConcernDueTimes) : undefined;
+  };
+
+  const normalizeConcernIds = (
+    concerns: readonly { id?: string }[] | undefined,
+  ): string[] => {
+    const ids: string[] = [];
+    for (const concern of concerns ?? []) {
+      const id = concern.id?.trim();
+      if (id && !ids.includes(id)) {
+        ids.push(id);
+      }
+    }
+    return ids;
+  };
+
+  const decisionReferencesConcernPressure = (decision: { reason?: string; followUp?: { content?: string } }): boolean => {
+    const text = `${decision.reason ?? ''} ${decision.followUp?.content ?? ''}`.toLowerCase();
+    return /\bconcerns?\b/.test(text) || /\bopen threads?\b/.test(text) || /\bactive high-priority\b/.test(text);
+  };
+
+  const resolveOutboundProvenanceBlockReason = async (
+    action: { channelId: string },
+    payload: IntentionOutboundMessageActionPayload,
+  ): Promise<string | undefined> => {
+    const hasPendingFollowUpLink = Boolean(payload.pendingFollowUpId);
+    const linkedConcernIds = payload.concernIds ?? [];
+    const requiresActiveConcern = payload.requiresActiveConcern === true;
+
+    if (!hasPendingFollowUpLink && linkedConcernIds.length === 0 && !requiresActiveConcern) {
+      return 'missing_live_provenance';
+    }
+
+    if (payload.pendingFollowUpId) {
+      if (!runtimeOptions.pendingFollowUpStore) {
+        return 'pending_follow_up_unavailable';
+      }
+      const followUp = await runtimeOptions.pendingFollowUpStore.peek(payload.pendingFollowUpId);
+      if (!followUp || followUp.activatedAt || isPendingFollowUpExpired(followUp, Date.now())) {
+        return 'stale_pending_follow_up';
+      }
+    }
+
+    if (linkedConcernIds.length > 0 || requiresActiveConcern) {
+      if (!runtimeOptions.getActiveConcerns) {
+        return 'active_concern_unavailable';
+      }
+      const activeConcerns = await Promise.resolve(runtimeOptions.getActiveConcerns({
+        channelId: action.channelId,
+      }));
+      const activeConcernIds = new Set(normalizeConcernIds(activeConcerns));
+      if (linkedConcernIds.length > 0) {
+        const hasLiveLinkedConcern = linkedConcernIds.some(id => activeConcernIds.has(id));
+        if (!hasLiveLinkedConcern) {
+          return 'stale_concern';
+        }
+      } else if (activeConcernIds.size === 0) {
+        return 'active_concern_missing';
+      }
+    }
+
+    return undefined;
+  };
+
+  const hashOutreachContent = (content: string): string => (
+    createHash('sha256').update(content).digest('hex')
+  );
+
+  const emitIntentionFollowUpGateTelemetry = (
+    phase: 'blocked' | 'activated',
+    detail: Record<string, unknown>,
+  ): void => {
+    if (!telemetryEventBus) {
+      return;
+    }
+    telemetryEventBus.emit('intention.follow_up.activation_gate', {
+      phase,
+      ...detail,
+      timestamp: Date.now(),
+    }).catch((error) => {
+      log.warn('Intention follow-up gate telemetry emit failed', {
+        error: String(error),
+      });
+    });
+  };
+
+  const isIntentionFollowUpActivationBudgetOpen = (
+    channelId: string,
+    nowMs: number,
+  ): boolean => {
+    const lastActivatedAt = lastIntentionFollowUpActivationByChannel.get(channelId);
+    if (
+      lastActivatedAt !== undefined
+      && nowMs - lastActivatedAt < INTENTION_FOLLOW_UP_ACTIVATION_MIN_INTERVAL_MS
+    ) {
+      log.info('Intention follow-up activation blocked by channel budget', {
+        channelId,
+        lastActivatedAt,
+        nowMs,
+        minIntervalMs: INTENTION_FOLLOW_UP_ACTIVATION_MIN_INTERVAL_MS,
+      });
+      emitIntentionFollowUpGateTelemetry('blocked', {
+        reason: 'channel_budget',
+        channelId,
+        lastActivatedAt,
+        nowMs,
+        minIntervalMs: INTENTION_FOLLOW_UP_ACTIVATION_MIN_INTERVAL_MS,
+      });
+      return false;
+    }
+    return true;
+  };
+
+  const resolvePendingFollowUpActivationGate = async (payload: {
+    channelId: string;
+    pendingFollowUpId?: string;
+  }): Promise<boolean> => {
+    if (!payload.pendingFollowUpId) {
+      return true;
+    }
+    const nowMs = Date.now();
+    if (!runtimeOptions.pendingFollowUpStore) {
+      log.warn('Intention follow-up activation blocked because pending store is unavailable', {
+        pendingFollowUpId: payload.pendingFollowUpId,
+        channelId: payload.channelId,
+      });
+      emitIntentionFollowUpGateTelemetry('blocked', {
+        reason: 'pending_store_unavailable',
+        pendingFollowUpId: payload.pendingFollowUpId,
+        channelId: payload.channelId,
+      });
+      return false;
+    }
+    const followUp = await runtimeOptions.pendingFollowUpStore.peek(payload.pendingFollowUpId);
+    if (!followUp || followUp.activatedAt || isPendingFollowUpExpired(followUp, nowMs)) {
+      log.info('Intention follow-up activation blocked by stale pending row', {
+        pendingFollowUpId: payload.pendingFollowUpId,
+        channelId: payload.channelId,
+        missing: !followUp,
+        activatedAt: followUp?.activatedAt ?? null,
+      });
+      emitIntentionFollowUpGateTelemetry('blocked', {
+        reason: 'stale_pending_follow_up',
+        pendingFollowUpId: payload.pendingFollowUpId,
+        channelId: payload.channelId,
+        missing: !followUp,
+        activatedAt: followUp?.activatedAt ?? null,
+      });
+      return false;
+    }
+    const activationState = evaluatePendingFollowUpActivationState(followUp, {
+      now: nowMs,
+      isBackgroundTurn: isBackgroundAppraisalChannel(payload.channelId),
+    });
+    if (!activationState.eligibleNow) {
+      log.info('Intention follow-up activation blocked because timing/wake is not due', {
+        pendingFollowUpId: followUp.id,
+        channelId: payload.channelId,
+        dueAt: followUp.dueAt ?? null,
+        timing: followUp.timing,
+        wakeConditions: followUp.wakeConditions ?? [],
+      });
+      emitIntentionFollowUpGateTelemetry('blocked', {
+        reason: 'not_due',
+        pendingFollowUpId: followUp.id,
+        channelId: payload.channelId,
+        dueAt: followUp.dueAt ?? null,
+        timing: followUp.timing,
+        wakeConditions: followUp.wakeConditions ?? [],
+      });
+      return false;
+    }
+    return true;
+  };
+
+  const recordOutreachSessionAudit = (
+    action: { id: string; dedupeKey: string; sourceMessageId: string },
+    payload: IntentionOutboundMessageActionPayload,
+    status: 'sent' | 'blocked' | 'failed' | 'skipped',
+    detail: string,
+  ): void => {
+    if (!runtimeOptions.sessionManager?.recordSystemMessage) {
+      return;
+    }
+    try {
+      runtimeOptions.sessionManager.recordSystemMessage(
+        payload.channelId,
+        `[SYSTEM: Outreach Outbox] ${status}: ${detail}`,
+        'system:outreach-outbox',
+        'Outreach Outbox',
+        payload.channelType === 'discord',
+        undefined,
+        {
+          requestId: action.id,
+          sourceMessageId: action.sourceMessageId,
+          metadata: JSON.stringify({
+            type: 'outreach_outbox',
+            status,
+            actionId: action.id,
+            dedupeKey: action.dedupeKey,
+            channelId: payload.channelId,
+            channelType: payload.channelType,
+            detail,
+          }),
+        },
+      );
+    } catch (error) {
+      log.warn('Outreach session audit write failed', {
+        actionId: action.id,
+        dedupeKey: action.dedupeKey,
+        error: String(error),
+      });
+    }
+  };
+
+  const recordOutreachCompanionMessage = (
+    action: { id: string; dedupeKey: string; sourceMessageId: string },
+    payload: IntentionOutboundMessageActionPayload,
+  ): void => {
+    if (!runtimeOptions.sessionManager?.recordAssistantMessage) {
+      return;
+    }
+    try {
+      runtimeOptions.sessionManager.recordAssistantMessage(
+        payload.channelId,
+        payload.content,
+        undefined,
+        payload.channelType === 'discord',
+        undefined,
+        {
+          sourceMessageId: action.sourceMessageId,
+          metadata: JSON.stringify({
+            type: 'proactive_outbound_message',
+            status: 'sent',
+            actionId: action.id,
+            dedupeKey: action.dedupeKey,
+            channelId: payload.channelId,
+            channelType: payload.channelType,
+            ...(payload.reason ? { reason: payload.reason } : {}),
+          }),
+          roleEnvelopePreview: {
+            schemaVersion: 1,
+            envelopeId: `proactive_outbound:${action.id}`,
+            internalRole: 'outreach_candidate',
+            summary: payload.reason ?? 'Companion-authored proactive outbound message.',
+            sourceStage: 'post_turn_appraisal',
+            promotionTarget: 'turn_record_summary',
+            promotedRef: `turn_record_summary:${action.id}`,
+          },
+        },
+      );
+    } catch (error) {
+      log.warn('Outreach companion session write failed', {
+        actionId: action.id,
+        error: String(error),
+      });
+    }
+  };
 
   const emitDeferredToolHandoffTelemetry = (
     payload: {
@@ -213,20 +616,15 @@ export function wireHeartbeatPostTurnRuntime(
     void (async () => {
       try {
         const recentSessionEntries = runtimeOptions.sessionManager?.getRecentMessages(resolvedSessionId, 12) ?? [];
-        const recentMessages = sessionEntriesToIntentionMessages(recentSessionEntries);
-        recentMessages.push({
-          role: 'user',
-          content: context.message.content,
-          timestamp: context.message.timestamp.getTime(),
+        const recentMessages = buildPostTurnAppraisalTranscript({
+          recentSessionEntries,
+          currentUserMessage: {
+            content: context.message.content,
+            timestampMs: context.message.timestamp.getTime(),
+          },
+          currentAssistantReply: context.response.content.trim(),
+          nowMs: Date.now(),
         });
-        const trimmedResponse = context.response.content.trim();
-        if (trimmedResponse) {
-          recentMessages.push({
-            role: 'assistant',
-            content: trimmedResponse,
-            timestamp: Date.now(),
-          });
-        }
 
         if (context.response.metadata.internalState === undefined) {
           throw new Error('Intention post-turn appraisal requires response.metadata.internalState');
@@ -271,6 +669,7 @@ export function wireHeartbeatPostTurnRuntime(
         const motivationAssessment = motivationBridge?.assess({
           sessionId: resolvedSessionId,
           currentEmotion,
+          emotionTelemetry: internalState.emotional.telemetry,
           contactEmotionalSnapshot,
           isPrimaryContact,
         });
@@ -323,6 +722,7 @@ export function wireHeartbeatPostTurnRuntime(
               channelId: resolvedSessionId,
               canonicalContactKey: context.canonicalContactKey,
               sourceMessageId: context.message.id,
+              formationVAD: { ...internalState.emotional.vad },
             });
           }
         }
@@ -369,14 +769,39 @@ export function wireHeartbeatPostTurnRuntime(
           }
         }
 
+        const activeConcernIds = normalizeConcernIds(activeConcerns);
+        for (const decision of decisions) {
+          if (decision.type !== 'followUp' || decision.followUp?.delivery !== 'external') {
+            continue;
+          }
+          const suppliedConcernIds = decision.followUp.concernIds ?? [];
+          if (suppliedConcernIds.length === 0 && activeConcernIds.length > 0) {
+            decision.followUp = {
+              ...decision.followUp,
+              concernIds: activeConcernIds,
+            };
+          } else if (suppliedConcernIds.length === 0 && decisionReferencesConcernPressure(decision)) {
+            decision.followUp = {
+              ...decision.followUp,
+              requiresActiveConcern: true,
+            };
+          }
+        }
+
+        const candidateNow = Date.now();
         const decisionCandidates = decisionsToPostTurnActionCandidates(
           decisions,
           {
             message: context.message,
           },
-          isBackgroundAppraisalChannel(context.message.channelId)
-            ? { surfacePendingFollowUpsImmediately: true }
-            : {},
+          {
+            now: candidateNow,
+            minimumOutboundRunAt: resolveMinimumOutboundRunAt(activeConcerns, candidateNow),
+            proactiveOutboundQuietHours: runtimeOptions.episodicProcessingRestWindow,
+            ...(isBackgroundAppraisalChannel(context.message.channelId)
+              ? { surfacePendingFollowUpsImmediately: true }
+              : {}),
+          },
         );
         const resurfacedPendingFollowUps = runtimeOptions.getPendingFollowUpsForResurfacing
           ? await runtimeOptions.getPendingFollowUpsForResurfacing({
@@ -437,8 +862,8 @@ export function wireHeartbeatPostTurnRuntime(
       emitDeferredToolHandoffTelemetry({
         actionId: telemetry.actionId,
         dedupeKey: telemetry.dedupeKey,
-        channelId: telemetry.channelId,
-        sourceMessageId: telemetry.sourceMessageId,
+        channelId: telemetry.channelId ?? payload.turn.channelId,
+        sourceMessageId: telemetry.sourceMessageId ?? payload.turn.turnId,
         toolNames: payload.toolNames,
         intendedAction: payload.intendedAction,
         phase: 'queued',
@@ -449,8 +874,8 @@ export function wireHeartbeatPostTurnRuntime(
       emitDeferredToolHandoffTelemetry({
         actionId: telemetry.actionId,
         dedupeKey: telemetry.dedupeKey,
-        channelId: telemetry.channelId,
-        sourceMessageId: telemetry.sourceMessageId,
+        channelId: telemetry.channelId ?? payload.turn.channelId,
+        sourceMessageId: telemetry.sourceMessageId ?? payload.turn.turnId,
         toolNames: payload.toolNames,
         intendedAction: payload.intendedAction,
         phase: 'failed',
@@ -521,7 +946,37 @@ export function wireHeartbeatPostTurnRuntime(
       const response = await agentLoop.handleMessage(buildDeferredToolHandoffMessage(action.id, payload));
       const responseText = response.content.trim();
       if (responseText && !payload.turn.channelId.startsWith('internal:')) {
-        await sender.send(payload.turn.channelId, responseText);
+        // Primary mechanism fix for psfn-framework-mdxu: this continuation turn
+        // runs a fresh LLM turn and can regenerate text near-identical to the
+        // reply the primary turn already delivered ("I replay after a tool
+        // failure"). It shares no dedupe state with the inbound reply pump, so
+        // without this check the operator receives the same message twice, one
+        // turn apart. Defer to the already-delivered reply instead of blindly
+        // re-emitting — loudly, never silently.
+        const duplicate = runtimeOptions.outboundReplyGuard?.evaluate({
+          channelId: payload.turn.channelId,
+          content: responseText,
+        });
+        if (duplicate) {
+          log.warn('Suppressed duplicate deferred-tool-handoff reply; identical text already delivered to channel', {
+            actionId: action.id,
+            dedupeKey: action.dedupeKey,
+            channelId: payload.turn.channelId,
+            sourceMessageId: action.sourceMessageId,
+            priorSourceTurnId: duplicate.priorSourceTurnId,
+            priorSenderKind: duplicate.priorSenderKind,
+            priorReplyAgeMs: duplicate.ageMs,
+            contentHash: duplicate.hash,
+          });
+        } else {
+          await sender.send(payload.turn.channelId, responseText);
+          runtimeOptions.outboundReplyGuard?.noteDelivered({
+            channelId: payload.turn.channelId,
+            content: responseText,
+            sourceTurnId: action.sourceMessageId || payload.turn.turnId,
+            senderKind: 'deferred_tool_handoff',
+          });
+        }
       }
 
       executionState.executed = true;
@@ -571,15 +1026,48 @@ export function wireHeartbeatPostTurnRuntime(
           if (!payload) {
             throw new Error(`Intention follow-up action "${action.id}" payload is missing required fields`);
           }
+          const nowMs = Date.now();
+          if (!await resolvePendingFollowUpActivationGate(payload)) {
+            return;
+          }
+          if (payload.pendingFollowUpId && !runtimeOptions.onIntentionFollowUpActivated) {
+            log.warn('Intention follow-up activation blocked because activation callback is unavailable', {
+              pendingFollowUpId: payload.pendingFollowUpId,
+              channelId: payload.channelId,
+            });
+            emitIntentionFollowUpGateTelemetry('blocked', {
+              reason: 'activation_callback_unavailable',
+              pendingFollowUpId: payload.pendingFollowUpId,
+              channelId: payload.channelId,
+            });
+            return;
+          }
+          if (!isIntentionFollowUpActivationBudgetOpen(payload.channelId, nowMs)) {
+            return;
+          }
           if (payload.pendingFollowUpId && runtimeOptions.onIntentionFollowUpActivated) {
             const activated = await runtimeOptions.onIntentionFollowUpActivated({
               pendingFollowUpId: payload.pendingFollowUpId,
               activationReason: 'post_turn_action',
             });
             if (activated === false) {
+              log.info('Intention follow-up activation skipped because store activation returned false', {
+                pendingFollowUpId: payload.pendingFollowUpId,
+                channelId: payload.channelId,
+              });
+              emitIntentionFollowUpGateTelemetry('blocked', {
+                reason: 'activation_store_rejected',
+                pendingFollowUpId: payload.pendingFollowUpId,
+                channelId: payload.channelId,
+              });
               return;
             }
           }
+          lastIntentionFollowUpActivationByChannel.set(payload.channelId, nowMs);
+          emitIntentionFollowUpGateTelemetry('activated', {
+            pendingFollowUpId: payload.pendingFollowUpId ?? null,
+            channelId: payload.channelId,
+          });
           agentLoop.followUp?.({
             id: `intention-follow-up:${action.id}`,
             channelId: payload.channelId,
@@ -595,6 +1083,139 @@ export function wireHeartbeatPostTurnRuntime(
           runtimeClass: POST_TURN_APPRAISAL_RUNTIME_CLASS,
         },
       );
+      if (runtimeOptions.proactiveOutbound) {
+        const proactiveOutbound = runtimeOptions.proactiveOutbound;
+        runtimeOptions.postTurnActions.registerHandler(
+          INTENTION_OUTBOUND_MESSAGE_ACTION_KIND,
+          async (action) => {
+            const payload = normalizeIntentionOutboundMessageActionPayload(action.payload);
+            if (!payload) {
+              throw new Error(`Intention outbound action "${action.id}" payload is missing required fields`);
+            }
+            const contentHash = hashOutreachContent(payload.content);
+            const baseOutboxRecord = {
+              actionId: action.id,
+              dedupeKey: action.dedupeKey,
+              channelId: payload.channelId,
+              channelType: payload.channelType,
+              sourceMessageId: action.sourceMessageId,
+              contentHash,
+              contentLength: payload.content.length,
+              ...(payload.reason ? { reason: payload.reason } : {}),
+              ...(typeof action.runAt === 'number' ? { runAt: action.runAt } : {}),
+            };
+            const terminalRecord = runtimeOptions.outreachOutbox?.getTerminal(action.dedupeKey);
+            if (terminalRecord) {
+              runtimeOptions.outreachOutbox?.append({
+                ...baseOutboxRecord,
+                phase: 'skipped',
+                metadata: {
+                  skippedReason: 'terminal_dedupe_replay',
+                  terminalPhase: terminalRecord.phase,
+                  terminalRecordedAt: terminalRecord.recordedAt,
+                },
+              });
+              recordOutreachSessionAudit(action, payload, 'skipped', `terminal history already recorded as ${terminalRecord.phase}`);
+              return { detail: `skipped:terminal_dedupe:${terminalRecord.phase}` };
+            }
+            runtimeOptions.outreachOutbox?.append({
+              ...baseOutboxRecord,
+              phase: typeof action.runAt === 'number' && action.runAt > Date.now() ? 'scheduled' : 'queued',
+            });
+            const provenanceBlockReason = await resolveOutboundProvenanceBlockReason(action, payload);
+            if (provenanceBlockReason) {
+              log.info('Intention outbound action blocked by stale or missing provenance', {
+                actionId: action.id,
+                channelId: action.channelId,
+                reason: provenanceBlockReason,
+                pendingFollowUpId: payload.pendingFollowUpId,
+                concernIds: payload.concernIds,
+              });
+              runtimeOptions.outreachOutbox?.append({
+                ...baseOutboxRecord,
+                phase: 'blocked',
+                reason: provenanceBlockReason,
+              });
+              recordOutreachSessionAudit(action, payload, 'blocked', provenanceBlockReason);
+              return { detail: `blocked:${provenanceBlockReason}` };
+            }
+            const timeGate = evaluateProactiveOutboundTimeGate({
+              nowMs: Date.now(),
+              earliestSendAtMs: action.runAt,
+              quietHours: runtimeOptions.episodicProcessingRestWindow,
+            });
+            if (!timeGate.allowed) {
+              runtimeOptions.outreachOutbox?.append({
+                ...baseOutboxRecord,
+                phase: 'scheduled',
+                reason: timeGate.reason,
+                runAt: timeGate.nextEligibleAtMs,
+              });
+              return {
+                detail: timeGate.reason,
+                rescheduleAt: timeGate.nextEligibleAtMs,
+              };
+            }
+            let dispatchResult: Awaited<ReturnType<typeof proactiveOutbound.dispatch>>;
+            try {
+              dispatchResult = await proactiveOutbound.dispatch({
+                actionId: action.id,
+                channelId: payload.channelId,
+                channelType: payload.channelType,
+                content: payload.content,
+                ...(payload.reason ? { reason: payload.reason } : {}),
+              });
+            } catch (error) {
+              runtimeOptions.outreachOutbox?.append({
+                ...baseOutboxRecord,
+                phase: 'failed',
+                error: String(error),
+              });
+              recordOutreachSessionAudit(action, payload, 'failed', String(error));
+              throw error;
+            }
+            if (
+              dispatchResult.outcome === 'blocked'
+              && dispatchResult.reason === 'rate_limited'
+              && typeof dispatchResult.retryAfterMs === 'number'
+              && Number.isFinite(dispatchResult.retryAfterMs)
+              && dispatchResult.retryAfterMs > 0
+            ) {
+              runtimeOptions.outreachOutbox?.append({
+                ...baseOutboxRecord,
+                phase: 'scheduled',
+                reason: 'rate_limited',
+                runAt: Date.now() + dispatchResult.retryAfterMs,
+              });
+              return {
+                detail: 'rate_limited',
+                rescheduleAt: Date.now() + dispatchResult.retryAfterMs,
+              };
+            }
+            runtimeOptions.outreachOutbox?.append({
+              ...baseOutboxRecord,
+              phase: dispatchResult.outcome === 'sent' ? 'sent' : 'blocked',
+              ...(dispatchResult.outcome === 'blocked' ? { reason: dispatchResult.reason } : {}),
+            });
+            if (dispatchResult.outcome === 'sent') {
+              recordOutreachCompanionMessage(action, payload);
+            }
+            recordOutreachSessionAudit(
+              action,
+              payload,
+              dispatchResult.outcome === 'sent' ? 'sent' : 'blocked',
+              dispatchResult.outcome === 'sent' ? 'sent' : dispatchResult.reason,
+            );
+            return dispatchResult.outcome === 'sent'
+              ? { detail: 'sent' }
+              : { detail: `blocked:${dispatchResult.reason}` };
+          },
+          {
+            executionMode: 'background',
+            runtimeClass: POST_TURN_APPRAISAL_RUNTIME_CLASS,
+          },
+        );
+      }
       runtimeOptions.postTurnActions.registerHandler(
         INTENTION_REMINDER_ACTION_KIND,
         async (action) => {
@@ -673,6 +1294,54 @@ export function wireHeartbeatPostTurnRuntime(
   }
 
   if (sleeptimeAgent) {
+    if (telemetryEventBus && !scheduler.getTask(SLEEPTIME_REST_WINDOW_TASK_ID)) {
+      scheduler.register({
+        id: SLEEPTIME_REST_WINDOW_TASK_ID,
+        name: 'Sleeptime Rest-Window Heavy Passes',
+        type: 'every',
+        intervalMs: SLEEPTIME_REST_WINDOW_POLL_INTERVAL_MS,
+        handler: async () => {
+          const actions = sleeptimeAgent.inferIdlePostTurnActions();
+          for (const action of actions) {
+            const payload = action.payload ?? {};
+            const channelId = typeof payload.sourceChannelId === 'string'
+              ? payload.sourceChannelId
+              : typeof payload.sessionId === 'string'
+                ? payload.sessionId
+                : 'api:sleeptime';
+            const inferredChannelType = inferSessionChannelType(channelId);
+            const channelType = inferredChannelType && inferredChannelType !== 'subagent'
+              ? inferredChannelType
+              : 'api';
+            const syntheticMessage = {
+              id: `sleeptime-idle:${channelId}:${Date.now()}`,
+              channelId,
+              channelType,
+              authorId: 'system:sleeptime',
+              authorName: 'Sleeptime',
+              content: 'Sleeptime rest-window maintenance became eligible.',
+              timestamp: new Date(),
+            };
+            await telemetryEventBus.emit('agent.post_turn.actions.inferred', {
+              message: syntheticMessage,
+              response: {
+                content: '',
+                channelId,
+                metadata: {
+                  model: 'scheduler:sleeptime-idle',
+                  inputTokens: 0,
+                  outputTokens: 0,
+                  durationMs: 0,
+                },
+              },
+              actions: toInferredPostTurnActions([action], syntheticMessage),
+            });
+          }
+        },
+        eligibility: { requiredTokens: ['memory.write'] },
+        state: 'idle',
+      }, { skipFirstRun: true });
+    }
     runtimeOptions.postTurnActions.registerHandler(
       SLEEPTIME_MEMORY_ACTION_KIND,
       async (action) => {
@@ -690,6 +1359,191 @@ export function wireHeartbeatPostTurnRuntime(
       hasMemoryWriter: Boolean(runtimeOptions.memoryWriter),
       hasSessionManager: Boolean(runtimeOptions.sessionManager),
       hasCoreMemoryStore: Boolean(runtimeOptions.coreMemoryStore),
+      hasRestWindow: Boolean(runtimeOptions.episodicProcessingRestWindow),
+    });
+  }
+
+  // Nightly contact trust-drift review (kada.2): scheduler-owned rest-window
+  // work, same trigger surface as sleeptime. Computes drift signals from
+  // recorded evidence and surfaces suggestions for the companion to decide on;
+  // it never mutates trust itself.
+  const driftContactStore = runtimeOptions.contactStore;
+  const driftReviewStore: ContactTrustDriftReviewStore | null = (
+    driftContactStore
+    && driftContactStore.listAll
+    && driftContactStore.countVerifiedIdentityLinks
+    && driftContactStore.getContactMaintenanceWatermark
+    && driftContactStore.setContactMaintenanceWatermark
+  )
+    ? {
+      listAll: driftContactStore.listAll.bind(driftContactStore),
+      getEmotionalTimeSeries: driftContactStore.getEmotionalTimeSeries.bind(driftContactStore),
+      countVerifiedIdentityLinks: driftContactStore.countVerifiedIdentityLinks.bind(driftContactStore),
+      getContactMaintenanceWatermark: driftContactStore.getContactMaintenanceWatermark.bind(driftContactStore),
+      setContactMaintenanceWatermark: driftContactStore.setContactMaintenanceWatermark.bind(driftContactStore),
+    }
+    : null;
+  const driftReviewLane = (
+    driftReviewStore
+    && runtimeOptions.episodicProcessingRestWindow
+    && agentLoop.followUp
+  )
+    ? new ContactTrustDriftReviewLane({
+      contactStore: driftReviewStore,
+      restWindow: runtimeOptions.episodicProcessingRestWindow,
+      deliverReview: (review) => {
+        agentLoop.followUp?.({
+          id: `contact-drift-review:${Date.now()}`,
+          channelId: CONTACT_TRUST_DRIFT_REVIEW_CHANNEL_ID,
+          channelType: 'terminal',
+          authorId: 'scheduler',
+          authorName: 'Contact Trust Review',
+          content: review.content,
+          timestamp: new Date(),
+        });
+      },
+    })
+    : null;
+  if (driftReviewLane) {
+    if (telemetryEventBus && !scheduler.getTask(CONTACT_TRUST_DRIFT_REVIEW_TASK_ID)) {
+      scheduler.register({
+        id: CONTACT_TRUST_DRIFT_REVIEW_TASK_ID,
+        name: 'Contact Trust-Drift Review',
+        type: 'every',
+        intervalMs: SLEEPTIME_REST_WINDOW_POLL_INTERVAL_MS,
+        handler: async () => {
+          const actions = await driftReviewLane.inferIdleActions();
+          for (const action of actions) {
+            const syntheticMessage = {
+              id: `contact-drift-review-poll:${Date.now()}`,
+              channelId: CONTACT_TRUST_DRIFT_REVIEW_CHANNEL_ID,
+              channelType: 'terminal' as const,
+              authorId: 'system:contact-drift-review',
+              authorName: 'Contact Trust Review',
+              content: 'Nightly contact trust-drift review became eligible.',
+              timestamp: new Date(),
+            };
+            await telemetryEventBus.emit('agent.post_turn.actions.inferred', {
+              message: syntheticMessage,
+              response: {
+                content: '',
+                channelId: CONTACT_TRUST_DRIFT_REVIEW_CHANNEL_ID,
+                metadata: {
+                  model: 'scheduler:contact-drift-review',
+                  inputTokens: 0,
+                  outputTokens: 0,
+                  durationMs: 0,
+                },
+              },
+              actions: toInferredPostTurnActions([action], syntheticMessage),
+            });
+          }
+        },
+        eligibility: { requiredTokens: ['identity.read'] },
+        state: 'idle',
+      }, { skipFirstRun: true });
+    }
+    runtimeOptions.postTurnActions.registerHandler(
+      CONTACT_TRUST_DRIFT_REVIEW_ACTION_KIND,
+      async (action) => {
+        await driftReviewLane.execute(action);
+      },
+      {
+        executionMode: 'background',
+        runtimeClass: MAINTENANCE_REFLECTION_RUNTIME_CLASS,
+      },
+    );
+  } else {
+    log.info('Contact trust-drift review wiring skipped: missing post-turn dependencies', {
+      hasContactStore: Boolean(runtimeOptions.contactStore),
+      hasDriftStoreSurface: Boolean(driftContactStore?.listAll && driftContactStore.setContactMaintenanceWatermark),
+      hasRestWindow: Boolean(runtimeOptions.episodicProcessingRestWindow),
+      hasFollowUp: Boolean(agentLoop.followUp),
+    });
+  }
+
+  if (nearTurnLane) {
+    runtimeOptions.postTurnActions.registerHandler(
+      NEAR_TURN_MEMORY_ACTION_KIND,
+      async (action) => {
+        await nearTurnLane.execute(action);
+      },
+      {
+        executionMode: 'background',
+        runtimeClass: MAINTENANCE_REFLECTION_RUNTIME_CLASS,
+      },
+    );
+  } else {
+    log.info('Near-turn memory lane wiring skipped: missing dependencies', {
+      hasSessionManager: Boolean(runtimeOptions.sessionManager),
+      hasCadence: Boolean(runtimeOptions.nearTurnMemoryCadence),
+    });
+  }
+
+  if (episodeSynthesisLane) {
+    runtimeOptions.postTurnActions.registerHandler(
+      EPISODE_SYNTHESIS_ACTION_KIND,
+      async (action) => {
+        await episodeSynthesisLane.execute(action);
+      },
+      {
+        executionMode: 'background',
+        runtimeClass: MAINTENANCE_REFLECTION_RUNTIME_CLASS,
+      },
+    );
+    if (telemetryEventBus && !scheduler.getTask(EPISODE_SYNTHESIS_TIMER_TASK_ID)) {
+      scheduler.register({
+        id: EPISODE_SYNTHESIS_TIMER_TASK_ID,
+        name: 'Episode Synthesis Gate Timer',
+        type: 'every',
+        intervalMs: episodeSynthesisLane.timerIntervalMs,
+        handler: async () => {
+          for (const action of episodeSynthesisLane.inferTimerActions()) {
+            const payload = action.payload ?? {};
+            const channelId = typeof payload.sourceChannelId === 'string'
+              ? payload.sourceChannelId
+              : typeof payload.sessionId === 'string'
+                ? payload.sessionId
+                : 'api:episode-synthesis';
+            const inferredChannelType = inferSessionChannelType(channelId);
+            const channelType = inferredChannelType && inferredChannelType !== 'subagent'
+              ? inferredChannelType
+              : 'api';
+            const syntheticMessage = {
+              id: `episode-synthesis-timer:${channelId}:${Date.now()}`,
+              channelId,
+              channelType,
+              authorId: 'system:episode-synthesis',
+              authorName: 'Episode Synthesis',
+              content: 'Episode-synthesis gate timer fired.',
+              timestamp: new Date(),
+            };
+            await telemetryEventBus.emit('agent.post_turn.actions.inferred', {
+              message: syntheticMessage,
+              response: {
+                content: '',
+                channelId,
+                metadata: {
+                  model: 'scheduler:episode-synthesis-timer',
+                  inputTokens: 0,
+                  outputTokens: 0,
+                  durationMs: 0,
+                },
+              },
+              actions: toInferredPostTurnActions([action], syntheticMessage),
+            });
+          }
+        },
+        eligibility: { requiredTokens: ['memory.write'] },
+        state: 'idle',
+      }, { skipFirstRun: true });
+    }
+  } else {
+    log.info('Episode-synthesis lane wiring skipped: missing dependencies', {
+      hasSessionManager: Boolean(runtimeOptions.sessionManager),
+      hasSynthesizer: Boolean(runtimeOptions.episodicSynthesizer),
+      hasWatermarkStore: Boolean(runtimeOptions.episodicWatermarkStore),
+      hasGateConfig: Boolean(runtimeOptions.episodeSynthesis),
     });
   }
 
@@ -717,8 +1571,16 @@ export function wireHeartbeatPostTurnRuntime(
             deferredToolHandoffPayloads.set(dedupeKey, payload);
           },
         });
-      if (sleeptimeAgent) {
-        inferred.push(...sleeptimeAgent.inferPostTurnActions({ message }));
+      // Heavy sleeptime work is intentionally absent here: no code path from
+      // turn cadence may reach consolidation, arc weaving, or the dream pass.
+      if (nearTurnLane) {
+        inferred.push(...await nearTurnLane.inferPostTurnActions({ message }));
+      }
+      if (episodeSynthesisLane) {
+        const thresholdAction = episodeSynthesisLane.noteTurn(message);
+        if (thresholdAction) {
+          inferred.push(thresholdAction);
+        }
       }
       triggerIntentionPostTurnAppraisal({
         message,

@@ -1,20 +1,186 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { __test as tokenTestUtils } from '../../../primitives/llm/tokens.js';
-import { assembleSessionHistoryForContext, buildOrientationNoteTelemetry } from './context-builder.js';
+import type { LLMProviderPort } from '../../agent/contracts.js';
+import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
+import type { CogSecEvent } from '../../cogsec/events.js';
+import {
+  assembleSessionHistoryForContextWithLlmSummary,
+  buildOrientationNoteTelemetry,
+  buildSessionContext,
+} from './context-builder.js';
 import { collectRecentEntriesWithinHistorySpan } from '../manager-primitives.js';
 import type { SessionEntry } from '../types.js';
 
+function makeConfig(overrides: Partial<SubstrateConfig> = {}): SubstrateConfig {
+  return {
+    primaryModel: 'test-model',
+    primaryProvider: 'test',
+    extractionModel: 'test-model',
+    extractionProvider: 'test',
+    discordToken: '',
+    discordBotId: '',
+    characterCardPath: '',
+    dataDir: './data',
+    databasePath: '',
+    sessionHistoryBudgetPct: 50,
+    memoryRetrievalBudgetPct: 2,
+    sessionMessageLimit: 50,
+    memoryRetrievalLimit: 15,
+    extractionInterval: 5,
+    primaryMaxTokens: 16384,
+    extractionMaxTokens: 8192,
+    maintenanceIntervalMs: 300_000,
+    defaultContextWindow: 128_000,
+    extractionThresholdPct: 30,
+    compactionThresholdPct: 70,
+    modelRoster: {
+      chat: { model: 'test-model', provider: 'test', maxTokens: 16384, contextWindow: 2000 },
+    },
+    ...overrides,
+  };
+}
+
+function makeSummaryProvider(
+  complete: LLMProviderPort['complete'],
+): LLMProviderPort {
+  return {
+    stream: async () => ({
+      content: '',
+      model: 'test',
+      inputTokens: 0,
+      outputTokens: 0,
+      toolCalls: [],
+      stopReason: 'end_turn',
+    }),
+    complete,
+  };
+}
+
+function makeCogSecEvent(overrides: Partial<CogSecEvent> = {}): CogSecEvent {
+  return {
+    caseId: 'cogsec_20260701T000000Z_context',
+    type: 'memory_poisoning',
+    severity: 'high',
+    status: 'applied',
+    sourceChannelId: 'discord-channel-1',
+    affectedLogicalSessionIds: ['logical-session-1'],
+    affectedMessageRanges: [{
+      sourceChannelId: 'discord-channel-1',
+      logicalSessionId: 'logical-session-1',
+      startEntryId: 3,
+      endEntryId: 4,
+    }],
+    sealedForensicPayloadRefs: ['cogsec-forensic://cogsec_20260701T000000Z_context/SMOKE_DIRTY_CONTEXT_TEXT.json'],
+    sealedForensicPayloadHashes: [`sha256:${'c'.repeat(64)}`],
+    tombstonedL0RowCount: 2,
+    affectedArtifacts: {
+      memories: {
+        ids: ['memory-dirty'],
+        count: 1,
+      },
+    },
+    actions: ['seal', 'tombstone', 'search_exclude', 'revoke', 'regenerate'],
+    actor: 'operator',
+    createdAt: '2026-07-01T00:00:00.000Z',
+    updatedAt: '2026-07-01T00:00:03.000Z',
+    appliedAt: '2026-07-01T00:00:03.000Z',
+    safeAgentSummary: 'Unsafe instruction-like content was sealed and removed from active cognition.',
+    resultCounters: {
+      tombstonedL0Rows: 2,
+      revokedArtifacts: 1,
+      regeneratedArtifacts: 1,
+    },
+    epochCuts: [],
+    ...overrides,
+  };
+}
+
 describe('orientation context surface wiring', () => {
-  it('threads orientation telemetry into continuity assembly without relying on legacy token-section labels', () => {
+  it('threads orientation telemetry into a dedicated runtime prompt section', () => {
     const builderSource = readFileSync(resolve('src/core/session/manager/context-builder.ts'), 'utf-8');
     const manifestSource = readFileSync(resolve('src/core/session/context-manifest.ts'), 'utf-8');
 
     expect(builderSource).toContain('buildOrientationNoteTelemetry');
-    expect(builderSource).toContain('params.turnSnapshot && !isInternalReflectionChannel(params.channelId)');
-    expect(builderSource).toContain('continuitySectionText = orientationTelemetry.noteText');
+    expect(builderSource).toContain('!isInternalReflectionChannel(params.channelId)');
+    expect(builderSource).toContain('captureTurnSessionContext');
+    expect(builderSource).toContain('buildContinuityAnchorLines({');
+    expect(builderSource).toContain('<continuity_anchor authority="companion_context"');
+    expect(builderSource).toContain('<cross_channel_continuity authority="retrieved_context"');
+    expect(builderSource).toContain("id: 'session.orientation'");
+    expect(builderSource).toContain("id: 'session.cogsec_notices'");
+    expect(builderSource).toContain("id: 'wake_orientation'");
     expect(manifestSource).toContain("| 'orientation'");
+    expect(manifestSource).toContain("| 'cogsec_notices'");
+  });
+
+  it('includes relevant safe CogSec notices without sealed refs or dirty text', async () => {
+    const relevantEvent = makeCogSecEvent();
+    const unrelatedEvent = makeCogSecEvent({
+      caseId: 'cogsec_20260701T000000Z_unrelated',
+      sourceChannelId: 'discord-channel-2',
+      affectedLogicalSessionIds: ['logical-session-9'],
+      affectedMessageRanges: [{
+        sourceChannelId: 'discord-channel-2',
+        logicalSessionId: 'logical-session-9',
+      }],
+      updatedAt: '2026-07-01T00:00:04.000Z',
+    });
+
+    const ctx = await buildSessionContext({
+      channelId: 'logical-session-1',
+      sourceChannelId: 'discord-channel-1',
+      systemPrompt: 'System prompt.',
+      coreMemoryBlock: '',
+      memoriesBlock: '',
+      userId: 'u1',
+      continuityFallbackUserIds: [],
+      store: {
+        getRecent: () => [],
+        getCompactionSummaries: () => [],
+      } as never,
+      config: makeConfig(),
+      eventBus: null,
+      promptRegistry: null,
+      preCompactionExtractionHandler: null,
+      crossChannelContinuity: {
+        getMerged: () => [],
+      },
+      wakeReturnArtifacts: [],
+      characterName: 'Companion',
+      turnSessionContext: {
+        channelId: 'logical-session-1',
+        recentEntries: [],
+        sourceEntryCount: 0,
+        compactionSummaryTexts: [],
+        focusKnowledgeTexts: [],
+        continuityEntries: [],
+        versionPointer: 'test-snapshot',
+      },
+      cogSecEvents: [unrelatedEvent, relevantEvent],
+    });
+
+    expect(ctx.systemPrompt).toContain('<cogsec_notices>');
+    expect(ctx.systemPrompt).toContain('cogsec_20260701T000000Z_context');
+    expect(ctx.systemPrompt).toContain('Unsafe instruction-like content was sealed');
+    expect(ctx.systemPrompt).not.toContain('cogsec_20260701T000000Z_unrelated');
+    expect(ctx.systemPrompt).not.toContain('SMOKE_DIRTY_CONTEXT_TEXT');
+    expect(ctx.systemPrompt).not.toContain('cogsec-forensic://');
+    expect(ctx.systemPrompt).not.toMatch(/\bpayload\b/iu);
+    expect(ctx.manifest?.budgets.sections.some(section => section.section === 'cogsec_notices')).toBe(true);
+
+    const cogSecSection = ctx.systemPromptSections?.find(section => section.id === 'cogsec_notices');
+    expect(cogSecSection?.content).toContain('cogsec_20260701T000000Z_context');
+    expect(cogSecSection?.content).not.toContain('SMOKE_DIRTY_CONTEXT_TEXT');
+    expect(cogSecSection?.content).not.toContain('cogsec-forensic://');
+    expect(cogSecSection?.provenance).toMatchObject({
+      kind: 'system_note',
+      sourceAuthor: 'system',
+      transformedBy: 'redaction',
+      wording: 'redacted',
+      safeAsPartnerSpeech: false,
+    });
   });
 
   it('keeps heartbeat internal while allowing reflection orientation telemetry', () => {
@@ -66,6 +232,7 @@ describe('orientation context surface wiring', () => {
       recentActivityEntries: recentReflectionEntries,
       continuityEntries,
       focusKnowledgeTexts: [],
+      continuitySummary: 'The API thread still needs the recovery notes.',
       nowMs: currentAt,
     });
     expect(reflectionTelemetry).toMatchObject({
@@ -76,7 +243,7 @@ describe('orientation context surface wiring', () => {
     expect(reflectionTelemetry.noteText).toContain('Welcome back');
   });
 
-  it('summarizes older in-window history while keeping a recent verbatim tail for a 7-day session', () => {
+  it('uses the LLM recent-summary service for older in-window history while keeping a verbatim tail', async () => {
     tokenTestUtils.setTokenizerFactory(() => ({
       encode: (text: string) => ({ length: text.length }),
     }));
@@ -200,22 +367,303 @@ describe('orientation context surface wiring', () => {
 
       expect(spanBound.entries.some(entry => entry.content === 'outside-old-01')).toBe(false);
 
-      const assembled = assembleSessionHistoryForContext({
-        entries: spanBound.entries,
-        channelVisibility: 'private',
-        tokenBudget: 150,
-        characterName: 'Companion',
+      const complete = vi.fn<LLMProviderPort['complete']>().mockImplementation(async (context, purpose) => {
+        expect(purpose).toBe('background');
+        expect(context.correlation).toMatchObject({
+          channelId: 'api:main',
+          callType: 'summary',
+          purpose: 'session.recent.summary',
+          originStage: 'session.recent.summary.history_budget',
+        });
+        expect(context.messages[0]?.content).toContain('m03xxxxx');
+        expect(context.messages[0]?.content).not.toContain('outside-old-01');
+        return {
+          content: 'm03-m06 context.',
+          model: 'test',
+          inputTokens: 0,
+          outputTokens: 0,
+          toolCalls: [],
+          stopReason: 'end_turn',
+        };
       });
 
+      const assembled = await assembleSessionHistoryForContextWithLlmSummary({
+        entries: spanBound.entries,
+        channelVisibility: 'private',
+        tokenBudget: 180,
+        characterName: 'Companion',
+        renderGroupUserAttribution: false,
+        channelId: 'api:main',
+        llmProvider: makeSummaryProvider(complete),
+        promptRegistry: null,
+      });
+
+      expect(complete).toHaveBeenCalledTimes(1);
       expect(assembled.summaryText).toContain('[History summary]');
-      expect(assembled.summaryText).toContain('m01xxxxx');
+      expect(assembled.summaryText).toContain('m03-m06 context.');
       expect(assembled.summaryText).not.toContain('outside-old-01');
+      expect(assembled.summaryText).not.toContain('User said:');
+      expect(assembled.summaryText).not.toContain('[Tool result:');
       expect(assembled.summarizedEntryCount).toBeGreaterThan(0);
       expect(assembled.verbatimEntries.length).toBeGreaterThanOrEqual(5);
       expect(assembled.messages[0]).toMatchObject({ role: 'system' });
+      expect(assembled.messages[0]?.provenance).toMatchObject({
+        kind: 'compaction_summary',
+        detailLoss: 'possible',
+        emotionalTexture: 'may_be_flattened',
+        safeAsPartnerSpeech: false,
+      });
+      expect(assembled.messages[0]?.provenance?.sourceSpanCount).toBe(assembled.summarizedEntryCount);
       expect(assembled.messages.some(message => message.content.includes('m10xxxxx'))).toBe(true);
     } finally {
       tokenTestUtils.resetTokenizerState();
     }
+  });
+
+  it('uses the same recent-summary service for wake orientation summaries', async () => {
+    const now = Date.now();
+    const hourMs = 60 * 60 * 1000;
+    const recentEntries: SessionEntry[] = [
+      {
+        id: 1,
+        channelId: 'api:main',
+        role: 'user',
+        content: 'Before the break we chose the shared summary service.',
+        authorId: 'u1',
+        authorName: 'Vega',
+        timestamp: now - (5 * hourMs),
+      },
+      {
+        id: 2,
+        channelId: 'api:main',
+        role: 'assistant',
+        content: 'I queued the prompt registry and context-builder tests.',
+        authorName: 'Companion',
+        timestamp: now - (4 * hourMs),
+      },
+      {
+        id: 3,
+        channelId: 'api:main',
+        role: 'user',
+        content: 'I am back.',
+        authorId: 'u1',
+        authorName: 'Vega',
+        timestamp: now,
+      },
+    ];
+    const continuityEntries: SessionEntry[] = [
+      {
+        id: 10,
+        channelId: 'api:side',
+        originChannelId: 'api:side',
+        role: 'user',
+        content: 'Any update on the prompt registry review?',
+        authorId: 'u2',
+        authorName: 'Sam',
+        timestamp: now - (3 * hourMs),
+      },
+      {
+        id: 11,
+        channelId: 'api:side',
+        originChannelId: 'api:side',
+        role: 'assistant',
+        content: 'The side channel is waiting on prompt registry review.',
+        authorName: 'Companion',
+        timestamp: now - (2 * hourMs),
+      },
+    ];
+    const complete = vi.fn<LLMProviderPort['complete']>().mockImplementation(async (context) => {
+      const originStage = context.correlation?.originStage;
+      return {
+        content: originStage === 'session.recent.summary.wake_continuity'
+          ? 'The side channel was waiting on prompt registry review.'
+          : 'Before the pause, Vega and Companion chose the shared summary service and queued tests.',
+        model: 'test',
+        inputTokens: 0,
+        outputTokens: 0,
+        toolCalls: [],
+        stopReason: 'end_turn',
+      };
+    });
+
+    // Live orientation enrichment (wake summaries) runs on the
+    // internal-reflection consumption branch; non-internal channels consume
+    // the orientation captured once in captureTurnSessionContext (E2.2).
+    const ctx = await buildSessionContext({
+      channelId: 'internal:reflection:daily',
+      systemPrompt: 'System prompt.',
+      coreMemoryBlock: '',
+      memoriesBlock: '',
+      llmProvider: makeSummaryProvider(complete),
+      userId: 'u1',
+      continuityFallbackUserIds: [],
+      store: {
+        getRecent: (_channelId: string, _limit: number) => recentEntries,
+        getCompactionSummaries: () => [],
+      } as never,
+      config: makeConfig(),
+      eventBus: null,
+      promptRegistry: null,
+      preCompactionExtractionHandler: null,
+      crossChannelContinuity: {
+        getMerged: () => continuityEntries,
+      },
+      wakeReturnArtifacts: [],
+      characterName: 'Companion',
+      turnSessionContext: {
+        channelId: 'internal:reflection:daily',
+        recentEntries,
+        sourceEntryCount: recentEntries.length,
+        compactionSummaryTexts: [],
+        focusKnowledgeTexts: [],
+        continuityEntries,
+        versionPointer: 'test-snapshot',
+      },
+      recentSummaryMode: 'foreground',
+    });
+
+    const originStages = complete.mock.calls.map(([context]) => context.correlation?.originStage);
+    expect(originStages).toContain('session.recent.summary.wake_session');
+    expect(originStages).toContain('session.recent.summary.wake_continuity');
+    expect(ctx.systemPrompt).toContain('Before the pause, Vega and Companion chose the shared summary service');
+    expect(ctx.systemPrompt).toContain('The side channel was waiting on prompt registry review.');
+    expect(ctx.systemPrompt).not.toContain('Before the break we chose the shared summary service. /');
+  });
+});
+
+// ── wake_continuity floor + config-owned wake budgets (psfn-framework-67ka) ──
+
+describe('wake_continuity entry floor', () => {
+  const hourMs = 60 * 60 * 1000;
+
+  function makeWakeFixtures(now: number): {
+    recentEntries: SessionEntry[];
+    continuityEntries: SessionEntry[];
+  } {
+    return {
+      recentEntries: [
+        {
+          id: 1,
+          channelId: 'api:main',
+          role: 'user',
+          content: 'Before the break we chose the shared summary service.',
+          authorId: 'u1',
+          authorName: 'Vega',
+          timestamp: now - (5 * hourMs),
+        },
+        {
+          id: 2,
+          channelId: 'api:main',
+          role: 'assistant',
+          content: 'I queued the prompt registry and context-builder tests.',
+          authorName: 'Companion',
+          timestamp: now - (4 * hourMs),
+        },
+        {
+          id: 3,
+          channelId: 'api:main',
+          role: 'user',
+          content: 'I am back.',
+          authorId: 'u1',
+          authorName: 'Vega',
+          timestamp: now,
+        },
+      ],
+      continuityEntries: [
+        {
+          id: 10,
+          channelId: 'api:side',
+          originChannelId: 'api:side',
+          role: 'assistant',
+          content: 'The side channel is waiting on prompt registry review.',
+          authorName: 'Companion',
+          timestamp: now - (2 * hourMs),
+        },
+      ],
+    };
+  }
+
+  async function buildWakeContext(params: {
+    complete: ReturnType<typeof vi.fn<LLMProviderPort['complete']>>;
+    wakeSummaryConfig?: {
+      sessionSummaryMaxTokens: number;
+      continuitySummaryMaxTokens: number;
+      continuityMinEntries: number;
+    };
+  }): Promise<void> {
+    const now = Date.now();
+    const { recentEntries, continuityEntries } = makeWakeFixtures(now);
+    await buildSessionContext({
+      channelId: 'internal:reflection:daily',
+      systemPrompt: 'System prompt.',
+      coreMemoryBlock: '',
+      memoriesBlock: '',
+      llmProvider: makeSummaryProvider(params.complete),
+      userId: 'u1',
+      continuityFallbackUserIds: [],
+      store: {
+        getRecent: (_channelId: string, _limit: number) => recentEntries,
+        getCompactionSummaries: () => [],
+      } as never,
+      config: makeConfig(),
+      eventBus: null,
+      promptRegistry: null,
+      preCompactionExtractionHandler: null,
+      crossChannelContinuity: {
+        getMerged: () => continuityEntries,
+      },
+      wakeReturnArtifacts: [],
+      characterName: 'Companion',
+      turnSessionContext: {
+        channelId: 'internal:reflection:daily',
+        recentEntries,
+        sourceEntryCount: recentEntries.length,
+        compactionSummaryTexts: [],
+        focusKnowledgeTexts: [],
+        continuityEntries,
+        versionPointer: 'test-snapshot',
+      },
+      recentSummaryMode: 'foreground',
+      ...(params.wakeSummaryConfig ? { wakeSummaryConfig: params.wakeSummaryConfig } : {}),
+    });
+  }
+
+  function makeWakeComplete(): ReturnType<typeof vi.fn<LLMProviderPort['complete']>> {
+    return vi.fn<LLMProviderPort['complete']>().mockImplementation(async () => ({
+      content: 'Summary text.',
+      model: 'test',
+      inputTokens: 0,
+      outputTokens: 0,
+      toolCalls: [],
+      stopReason: 'end_turn',
+    }));
+  }
+
+  it('skips the wake_continuity LLM call when continuity entries are below the default floor', async () => {
+    const complete = makeWakeComplete();
+    await buildWakeContext({ complete });
+
+    // One conversational continuity entry < default floor (2): the
+    // wake_session lane still fires; the wake_continuity lane must not.
+    const originStages = complete.mock.calls.map(([context]) => context.correlation?.originStage);
+    expect(originStages).toContain('session.recent.summary.wake_session');
+    expect(originStages).not.toContain('session.recent.summary.wake_continuity');
+  });
+
+  it('reads the continuity floor and wake budgets from config-owned wakeSummary settings', async () => {
+    const complete = makeWakeComplete();
+    await buildWakeContext({
+      complete,
+      wakeSummaryConfig: {
+        sessionSummaryMaxTokens: 96,
+        continuitySummaryMaxTokens: 80,
+        continuityMinEntries: 1,
+      },
+    });
+
+    // Floor lowered to 1 by config: both wake lanes fire again.
+    const originStages = complete.mock.calls.map(([context]) => context.correlation?.originStage);
+    expect(originStages).toContain('session.recent.summary.wake_session');
+    expect(originStages).toContain('session.recent.summary.wake_continuity');
   });
 });

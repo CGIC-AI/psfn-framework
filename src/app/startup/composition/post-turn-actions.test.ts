@@ -1,7 +1,7 @@
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { AgentResponse, InferredPostTurnAction, SubstrateMessage } from '../../../shared/contracts/runtime.js';
 import { EventBus } from '../../../shared/event-bus.js';
 import {
@@ -15,6 +15,7 @@ import {
   registerPostTurnSubagentSpawnRuntime,
   wirePostTurnActionRuntime,
 } from './post-turn-actions.js';
+import { resetCompletionHandoffDedupeForTests } from '../../../core/agent/completion-handoff.js';
 
 function createDeferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
   let resolve!: (value: T) => void;
@@ -108,7 +109,12 @@ function readQuarantineSidecar(path: string): Array<{
     });
 }
 
+
 describe('wirePostTurnActionRuntime', () => {
+  beforeEach(() => {
+    resetCompletionHandoffDedupeForTests();
+  });
+
   it('deduplicates queued actions and executes once after idle', async () => {
     const eventBus = new EventBus();
     const scheduler = new Scheduler(eventBus, {
@@ -494,6 +500,71 @@ describe('wirePostTurnActionRuntime', () => {
         'continuation:continuation-2',
       ]);
       expect(runtime.listQueued()).toHaveLength(0);
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it('lets handlers reschedule an action without consuming retry attempts', async () => {
+    const nowSpy = vi.spyOn(Date, 'now');
+    try {
+      nowSpy.mockReturnValue(1_700_000_000_000);
+
+      const eventBus = new EventBus();
+      const scheduler = new Scheduler(eventBus, {
+        tickIntervalMs: 100,
+        heartbeatIntervalMs: 1_000,
+      });
+      const runtime = wirePostTurnActionRuntime({
+        eventBus,
+        scheduler,
+        agentLoop: {
+          waitForIdle: vi.fn().mockResolvedValue(undefined),
+        },
+        intervalMs: 1,
+      });
+      const handler = vi.fn().mockResolvedValue({
+        detail: 'quiet_hours',
+        rescheduleAt: 1_700_000_060_000,
+      });
+      runtime.registerHandler('heartbeat.run_template', handler, {
+        executionMode: 'background',
+      });
+
+      const phases: string[] = [];
+      eventBus.on('agent.post_turn.action.telemetry', ({ phase }) => {
+        phases.push(phase);
+      });
+
+      await eventBus.emit('agent.post_turn.actions.inferred', {
+        message: makeMessage(),
+        response: makeResponse(),
+        actions: [
+          makeAction({
+            id: 'reschedule-action',
+            dedupeKey: 'reschedule:key',
+            maxRetries: 1,
+          }),
+        ],
+      });
+
+      await scheduler.tick();
+
+      expect(handler).toHaveBeenCalledTimes(1);
+      expect(runtime.getStatus()).toMatchObject({
+        queueDepth: 1,
+        scheduledCount: 1,
+        queued: [
+          expect.objectContaining({
+            actionId: 'reschedule-action',
+            state: 'scheduled',
+            attempt: 0,
+            maxAttempts: 2,
+            nextRunAt: 1_700_000_060_000,
+          }),
+        ],
+      });
+      expect(phases).toContain('rescheduled');
     } finally {
       nowSpy.mockRestore();
     }
@@ -1071,6 +1142,10 @@ describe('wirePostTurnActionRuntime', () => {
 
   it('routes post-turn subagent spawn actions through explicit policy and records status', async () => {
     const eventBus = new EventBus();
+    const handoffEvents: Array<Record<string, any>> = [];
+    eventBus.on('agent.completion_handoff', event => {
+      handoffEvents.push(event);
+    });
     const scheduler = new Scheduler(eventBus, {
       tickIntervalMs: 100,
       heartbeatIntervalMs: 1_000,
@@ -1131,6 +1206,7 @@ describe('wirePostTurnActionRuntime', () => {
     });
 
     await scheduler.tick();
+    await Promise.resolve();
 
     expect(executeSubagent).toHaveBeenCalledWith({
       name: 'research',
@@ -1170,6 +1246,21 @@ describe('wirePostTurnActionRuntime', () => {
           }),
         ],
       },
+    });
+    // Bookkeeping handoffs are event-bus records only: no session writes, no
+    // companion-facing notices.
+    expect(handoffEvents).toHaveLength(1);
+    expect(handoffEvents[0]).toMatchObject({
+      targetChannelId: 'test-channel',
+      noticeBuffered: false,
+      handoff: expect.objectContaining({
+        source: 'post_turn_action',
+        status: 'completed',
+        task: expect.objectContaining({ subagentId: 'subagent-1' }),
+        privacy: expect.objectContaining({
+          partnerNotification: 'policy_gated_companion_authored',
+        }),
+      }),
     });
   });
 
@@ -1291,6 +1382,10 @@ describe('wirePostTurnActionRuntime', () => {
 
   it('blocks deferred actions when eligibility denies required capabilities', async () => {
     const eventBus = new EventBus();
+    const handoffEvents: Array<Record<string, any>> = [];
+    eventBus.on('agent.completion_handoff', event => {
+      handoffEvents.push(event as Record<string, any>);
+    });
     const scheduler = new Scheduler(eventBus, {
       tickIntervalMs: 100,
       heartbeatIntervalMs: 1_000,
@@ -1325,9 +1420,21 @@ describe('wirePostTurnActionRuntime', () => {
     });
 
     await scheduler.tick();
+    await Promise.resolve();
 
     expect(handler).not.toHaveBeenCalled();
     expect(runtime.listQueued()).toHaveLength(0);
     expect(phases).toContain('failed');
+    expect(handoffEvents).toHaveLength(1);
+    expect(handoffEvents[0]).toMatchObject({
+      noticeBuffered: false,
+      handoff: expect.objectContaining({
+        status: 'blocked',
+        blocker: expect.objectContaining({ reason: 'eligibility_denied' }),
+        privacy: expect.objectContaining({
+          partnerNotification: 'policy_gated_companion_authored',
+        }),
+      }),
+    });
   });
 });

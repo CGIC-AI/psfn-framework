@@ -1,5 +1,5 @@
 import {
-  classifyChannel,
+  classifyChannelDisclosure,
   type ChannelMeta,
 } from '../../system/trust/policy.js';
 import type { ActiveChannelQuery, ActiveContinuityChannel, ContinuityEntryProvenance, UserContinuityStore } from './continuity.js';
@@ -149,7 +149,7 @@ export function resolveValidatedCrossChannelContinuityProvenance(
   }
 
   const sourceVisibility = parseChannelVisibility(entry.channelVisibility)
-    ?? classifyChannel(sourceChannelId);
+    ?? classifyChannelDisclosure(sourceChannelId).channelPrivacy;
   if (continuity.sourceVisibility !== sourceVisibility) {
     return null;
   }

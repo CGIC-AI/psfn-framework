@@ -1,19 +1,58 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { DEFAULT_COMPANION_ID } from '../../identity/companion-naming.js';
-import { injectPromptRuntimeTokens } from '../../identity/prompt-runtime.js';
+import { injectPromptRuntimeTokens, resolvePromptMacroManifestEntry } from '../../identity/prompt-runtime.js';
+import { TurnPromptVariableNamespace } from '../../identity/prompt-variable-namespace.js';
 import { composeDefaultRuntimePromptTemplate } from '../../identity/runtime-prompt-layers.js';
-import { formatActiveConcernsContextBlock } from '../../intention/concerns.js';
+import { buildActiveConcernsRuntimeData } from '../../intention/concerns.js';
 import type { SubstrateMessage } from '../../../shared/contracts/runtime.js';
+import type { ApiHealthResponse, ApiHealthSubsystemStatus } from '../../../channels/api/types.js';
+import type { SessionEntry } from '../../session/types.js';
+import {
+  createGroupConversationScope,
+  resolveConversationScopeFromMetadata,
+} from '../../session/conversation-scope.js';
 import type { InternalState } from '../../self-model/state.js';
 import {
+  buildContinuityGapPromptVariables,
   buildDynamicPromptTemplateVariables,
   buildPromptTemplateVariables,
   buildRuntimeContext,
   buildScratchpadContextBlock,
+  collectContinuityFallbackKeys,
   getPersonaAdaptation,
+  resolveActiveConcernsRuntimeData,
   resolveAuthorContext,
   resolveIdentityChannel,
 } from './runtime-context.js';
+import {
+  resetRunChargeRollingWindowForTests,
+  runWithChargeContext,
+} from '../../../shared/telemetry/run-charge.js';
+import { makeTestFatiguePolicyConfig } from '../../../test-support/charge-policy.js';
+import { classifyChannelDisclosure } from '../../../system/trust/policy.js';
+import { normalizeChannelPrivacy } from '../../../system/trust/context-envelope.js';
+import {
+  resetConcernSofteningConfigCacheForTests,
+} from '../../intention/concern-softening.js';
+
+const originalConfigDir = process.env.CONFIG_DIR;
+const tempConfigDirs: string[] = [];
+
+afterEach(() => {
+  for (const dir of tempConfigDirs.splice(0)) {
+    rmSync(dir, { recursive: true, force: true });
+  }
+  if (originalConfigDir === undefined) {
+    delete process.env.CONFIG_DIR;
+  } else {
+    process.env.CONFIG_DIR = originalConfigDir;
+  }
+  resetConcernSofteningConfigCacheForTests();
+  resetRunChargeRollingWindowForTests();
+});
 
 function makeMessage(overrides: Partial<SubstrateMessage> = {}): SubstrateMessage {
   return {
@@ -25,6 +64,22 @@ function makeMessage(overrides: Partial<SubstrateMessage> = {}): SubstrateMessag
     content: 'Reflect on recent activity.',
     timestamp: new Date('2026-03-17T12:00:00Z'),
     ...overrides,
+  };
+}
+
+function makeSessionEntry(overrides: Partial<SessionEntry>): SessionEntry {
+  return {
+    id: overrides.id ?? 1,
+    channelId: overrides.channelId ?? 'discord:group:ops',
+    role: overrides.role ?? 'user',
+    content: overrides.content ?? 'hello',
+    timestamp: overrides.timestamp ?? 0,
+    ...(overrides.authorId !== undefined ? { authorId: overrides.authorId } : {}),
+    ...(overrides.authorName !== undefined ? { authorName: overrides.authorName } : {}),
+    ...(overrides.discordMessageId !== undefined ? { discordMessageId: overrides.discordMessageId } : {}),
+    ...(overrides.metadata !== undefined ? { metadata: overrides.metadata } : {}),
+    ...(overrides.originChannelId !== undefined ? { originChannelId: overrides.originChannelId } : {}),
+    ...(overrides.channelVisibility !== undefined ? { channelVisibility: overrides.channelVisibility } : {}),
   };
 }
 
@@ -132,12 +187,95 @@ const TEST_CHARGE_POLICY = {
     cheap_cloud: 'Cheap cloud models are lightly priced to keep them available for routine use.',
     premium_cloud: 'Premium cloud models are intentionally more expensive to reserve for high-value calls.',
   },
+  fatigue: makeTestFatiguePolicyConfig(),
 };
 
+function makeRuntimeContextConcern(text = 'Check the missing concern config path.') {
+  return {
+    id: 'concern-config-1',
+    text,
+    priority: 'high' as const,
+    source: 'agent' as const,
+    status: 'active' as const,
+    createdAt: '2026-02-01T10:00:00.000Z',
+    expiresAt: '2026-02-01T11:00:00.000Z',
+    salience: 0.5,
+    sensitivity: 'personal' as const,
+    owner: 'companion' as const,
+    evidenceRefs: [],
+    resolutionEvidenceRefs: [],
+  };
+}
+
+function healthySubsystem(meta: Record<string, unknown> = { checkLatencyMs: 8 }): ApiHealthSubsystemStatus {
+  return {
+    status: 'healthy',
+    meta,
+  };
+}
+
+function makeApiHealthResponse(overrides: {
+  subsystems?: Partial<ApiHealthResponse['subsystems']>;
+  continuityChecks?: Partial<ApiHealthResponse['continuity']['checks']>;
+  checkedAt?: string;
+} = {}): ApiHealthResponse {
+  const subsystems: ApiHealthResponse['subsystems'] = {
+    memory: healthySubsystem({ checkLatencyMs: 7 }),
+    llm: healthySubsystem({ probeLatencyMs: 18, checkLatencyMs: 19 }),
+    discord: healthySubsystem(),
+    embeddings: healthySubsystem({ probeLatencyMs: 11 }),
+    scheduler: healthySubsystem(),
+    ...(overrides.subsystems ?? {}),
+  };
+  const checks: ApiHealthResponse['continuity']['checks'] = {
+    database: healthySubsystem(),
+    gatewayLink: healthySubsystem(),
+    schedulerHealthcheck: healthySubsystem(),
+    ...(overrides.continuityChecks ?? {}),
+  };
+  const status = (
+    Object.values(subsystems).every(subsystem => subsystem.status === 'healthy')
+    && Object.values(checks).every(check => check.status === 'healthy')
+  )
+    ? 'healthy'
+    : 'degraded';
+
+  return {
+    status,
+    checkedAt: overrides.checkedAt ?? '2026-06-29T10:30:00.000Z',
+    uptimeSeconds: 120,
+    subsystems,
+    continuity: {
+      status: Object.values(checks).every(check => check.status === 'healthy') ? 'healthy' : 'degraded',
+      checks,
+    },
+  };
+}
+
+type DynamicPromptVariablesInput = Parameters<typeof buildDynamicPromptTemplateVariables>[0];
+type DynamicPromptVariablesTestInput =
+  Omit<DynamicPromptVariablesInput, 'conversationScope'>
+  & Partial<Pick<DynamicPromptVariablesInput, 'conversationScope'>>;
+
+/**
+ * Tests simulate turn ingress: unless a case provides an explicit scope, it is
+ * resolved from the message metadata with the same shared rule the
+ * SessionManager applies (resolveConversationScopeFromMetadata).
+ */
+function withConversationScope(input: DynamicPromptVariablesTestInput): DynamicPromptVariablesInput {
+  return {
+    ...input,
+    conversationScope: input.conversationScope ?? resolveConversationScopeFromMetadata({
+      channelId: input.message.channelId,
+      isDirectMessage: input.message.isDirectMessage,
+    }),
+  };
+}
+
 function buildRuntimePromptOutputs(
-  input: Parameters<typeof buildDynamicPromptTemplateVariables>[0],
+  input: DynamicPromptVariablesTestInput,
 ): { variables: Record<string, string>; rendered: string } {
-  const variables = buildDynamicPromptTemplateVariables(input);
+  const variables = buildDynamicPromptTemplateVariables(withConversationScope(input));
   return {
     variables,
     rendered: injectPromptRuntimeTokens(DEFAULT_RUNTIME_PROMPT_TEMPLATE, {
@@ -151,15 +289,15 @@ function buildRuntimePromptOutputs(
 }
 
 function renderPromptOwnedRuntimeLayers(
-  input: Parameters<typeof buildDynamicPromptTemplateVariables>[0],
+  input: DynamicPromptVariablesTestInput,
 ): string {
   return buildRuntimePromptOutputs(input).rendered;
 }
 
 function buildAtomicAffectTemplateOutput(
-  input: Parameters<typeof buildDynamicPromptTemplateVariables>[0],
+  input: DynamicPromptVariablesTestInput,
 ): string {
-  const variables = buildDynamicPromptTemplateVariables(input);
+  const variables = buildDynamicPromptTemplateVariables(withConversationScope(input));
   return injectPromptRuntimeTokens([
     'present={{runtime_affect_snapshot_present}}',
     'mode={{runtime_affect_mode}}',
@@ -177,9 +315,9 @@ function buildAtomicAffectTemplateOutput(
 }
 
 function buildInternalStateTemplateOutput(
-  input: Parameters<typeof buildDynamicPromptTemplateVariables>[0],
+  input: DynamicPromptVariablesTestInput,
 ): string {
-  const variables = buildDynamicPromptTemplateVariables(input);
+  const variables = buildDynamicPromptTemplateVariables(withConversationScope(input));
   return injectPromptRuntimeTokens([
     'cognitive={{runtime_internal_state_cognitive_processing_quality}}/{{runtime_internal_state_cognitive_certainty_label}}/{{runtime_internal_state_cognitive_topic_engagement_label}}',
     'attention={{runtime_internal_state_attention_conversation_trajectory}}/{{runtime_internal_state_attention_active_concern_count}}/{{runtime_internal_state_attention_pending_follow_up_count}}',
@@ -195,9 +333,9 @@ function buildInternalStateTemplateOutput(
 }
 
 function buildAtomicMetacognitionTemplateOutput(
-  input: Parameters<typeof buildDynamicPromptTemplateVariables>[0],
+  input: DynamicPromptVariablesTestInput,
 ): string {
-  const variables = buildDynamicPromptTemplateVariables(input);
+  const variables = buildDynamicPromptTemplateVariables(withConversationScope(input));
   return injectPromptRuntimeTokens([
     'uncertainty={{runtime_flag_uncertainty_present}}|{{runtime_flag_uncertainty_confidence}}|{{runtime_flag_uncertainty_evidence}}',
     'avoidance={{runtime_flag_avoidance_present}}|{{runtime_flag_avoidance_confidence}}|{{runtime_flag_avoidance_evidence}}',
@@ -210,6 +348,75 @@ function buildAtomicMetacognitionTemplateOutput(
     },
   });
 }
+
+function buildMinimalRuntimeContextInput() {
+  return {
+    message: makeMessage({ channelId: 'api:general', channelType: 'api' as const }),
+    resolvedUserName: 'User',
+    trustLevel: 'primary' as const,
+    channelType: 'api',
+    canonicalContactKey: undefined,
+    subjectIdentityKey: 'user-1',
+    responseStyle: 'concise' as const,
+    now: new Date('2026-06-10T12:00:00Z'),
+    taskKind: 'chat',
+    templateVariables: {},
+    modelId: 'test-model',
+    contextWindow: 4096,
+    capabilityTier: 'nursery' as const,
+    activeToolCounts: {
+      core: 0,
+      promoted: 0,
+      extendedLoaded: 0,
+      autoload: 0,
+      deferred: 0,
+      total: 0,
+    },
+    extendedTools: [],
+    loadedExtended: new Map(),
+    classifyExtendedToolForTurn: () => 'overlay' as const,
+    promotedExtendedToolNames: new Set<string>(),
+    formatTopEmotions: () => '',
+  };
+}
+
+describe('active concerns runtime data resolution', () => {
+  it('still skips active-concern provider failures without crashing a turn', () => {
+    const logger = { warn: vi.fn(), debug: vi.fn() };
+    const result = resolveActiveConcernsRuntimeData({
+      activeConcernProvider: {
+        getActiveConcerns: () => {
+          throw new Error('active concern store unavailable');
+        },
+      },
+      canonicalContactKey: 'contact-alex',
+      logger,
+    });
+
+    expect(result).toBeUndefined();
+    expect(logger.warn).toHaveBeenCalledWith(
+      'Active concerns context injection skipped due to provider error',
+      { error: 'active concern store unavailable' },
+    );
+  });
+
+  it('does not swallow static concern-softening config load failures', () => {
+    const missingConfigDir = mkdtempSync(join(tmpdir(), 'psfn-runtime-context-missing-config-'));
+    tempConfigDirs.push(missingConfigDir);
+    process.env.CONFIG_DIR = missingConfigDir;
+    resetConcernSofteningConfigCacheForTests();
+    const logger = { warn: vi.fn(), debug: vi.fn() };
+
+    expect(() => resolveActiveConcernsRuntimeData({
+      activeConcernProvider: {
+        getActiveConcerns: () => [makeRuntimeContextConcern()],
+      },
+      canonicalContactKey: 'contact-alex',
+      logger,
+    })).toThrow(/concern-softening\.json|ENOENT/);
+    expect(logger.warn).not.toHaveBeenCalled();
+  });
+});
 
 describe('runtime subject identity', () => {
   it('resolves internal reflection turns to the companion subject instead of the scheduler', async () => {
@@ -259,6 +466,115 @@ describe('runtime subject identity', () => {
       subjectIdentityKey: DEFAULT_COMPANION_ID,
       continuitySubjectKey: DEFAULT_COMPANION_ID,
     });
+  });
+
+  // ── E1.7: reflection/heartbeat turns take a ConversationScope ──
+
+  it('AC1: a dm/default reflection turn never consults the group branch (byte-identical binding)', async () => {
+    const logger = { warn: () => undefined, debug: () => undefined };
+    const baseInput = {
+      contactStore: null,
+      logger,
+      companionIdentityKey: DEFAULT_COMPANION_ID,
+      companionDisplayName: 'Companion',
+    } as const;
+
+    // Default reflection (no scope hint at all).
+    const defaultContext = await resolveAuthorContext({
+      message: makeMessage({ authorId: 'contact-primary', routing: { canonicalContactId: 'contact-primary' } }),
+      ...baseInput,
+    });
+    // Same message, but explicitly tagged as a dm reflection scope: must be
+    // identical to the default — the dm path is inert to the new hint.
+    const dmScopedContext = await resolveAuthorContext({
+      message: makeMessage({
+        authorId: 'contact-primary',
+        routing: {
+          canonicalContactId: 'contact-primary',
+          reflectionScope: { kind: 'dm', contactId: 'contact-primary', displayName: 'Primary' },
+        },
+      }),
+      ...baseInput,
+    });
+
+    expect(defaultContext).toEqual(dmScopedContext);
+    expect(defaultContext.canonicalContactKey).toBe('contact-primary');
+    expect(defaultContext.continuityFallbackKeys).toEqual([]);
+  });
+
+  it('AC2: a group reflection turn reflects on the room with no single-member binding', async () => {
+    const authorContext = await resolveAuthorContext({
+      message: makeMessage({
+        authorId: 'scheduler',
+        routing: {
+          // A single member id must NOT leak into the binding on a group scope.
+          canonicalContactId: 'contact-alice',
+          reflectionScope: { kind: 'group', roomId: 'discord:group:townsquare', roomName: 'Town Square' },
+        },
+      }),
+      contactStore: null,
+      logger: { warn: () => undefined, debug: () => undefined },
+      companionIdentityKey: DEFAULT_COMPANION_ID,
+      companionDisplayName: 'Companion',
+    });
+
+    // No single canonical contact is bound for a room reflection.
+    expect(authorContext.canonicalContactKey).toBeUndefined();
+    // Continuity fallback keys are room-based (no contact fallback).
+    expect(authorContext.continuityFallbackKeys).toEqual(['room:discord:group:townsquare']);
+    expect(authorContext).toMatchObject({
+      trustLevel: 'primary',
+      speakerRole: 'system',
+      resolvedUserName: 'Companion',
+      subjectIdentityKey: DEFAULT_COMPANION_ID,
+      continuitySubjectKey: DEFAULT_COMPANION_ID,
+    });
+  });
+
+  it('AC2: a group reflection prompt carries no speaking_with content', () => {
+    const roomScope = createGroupConversationScope({
+      channelId: 'discord:group:townsquare',
+      roomName: 'Town Square',
+    });
+    const variables = buildDynamicPromptTemplateVariables(withConversationScope({
+      ...buildMinimalRuntimeContextInput(),
+      message: makeMessage({ channelId: 'internal:reflection:whisper', channelType: 'terminal' }),
+      resolvedUserName: 'Companion',
+      trustLevel: 'primary',
+      subjectIdentityKey: DEFAULT_COMPANION_ID,
+      taskKind: 'reflection',
+      conversationScope: roomScope,
+    }));
+
+    expect(variables.runtime_speaking_with_name).toBe('');
+    expect(variables.runtime_speaking_with_trust_level).toBe('');
+    // Internal reflection turns do not surface a live conversation participant roster.
+    expect(variables.runtime_conversation_state_available).toBe('false');
+    expect(variables.runtime_room_id).toBe('');
+  });
+
+  it('collectContinuityFallbackKeys is scope-aware: dm keeps contact keys, group is room-only', () => {
+    const contact = {
+      id: 'contact-alice',
+      discordUserId: 'discord-alice',
+      channelIdentities: [{ channel: 'api', userId: 'api-alice' }],
+    } as never;
+
+    // dm scope (or no scope) => contact-derived fallback keys, as before.
+    const dmScope = resolveConversationScopeFromMetadata({
+      channelId: 'discord:dm:alice',
+      isDirectMessage: true,
+      contact: { contactId: 'contact-alice' },
+    });
+    expect(collectContinuityFallbackKeys('author-alice', 'contact-alice', contact, dmScope))
+      .toEqual(['api-alice', 'author-alice', 'discord-alice']);
+    expect(collectContinuityFallbackKeys('author-alice', 'contact-alice', contact))
+      .toEqual(['api-alice', 'author-alice', 'discord-alice']);
+
+    // group scope => room key only, never a single member's identities.
+    const groupScope = createGroupConversationScope({ channelId: 'discord:group:townsquare' });
+    expect(collectContinuityFallbackKeys('author-alice', 'contact-alice', contact, groupScope))
+      .toEqual(['room:discord:group:townsquare']);
   });
 
   it('renders prompt-owned runtime layers for reflection turns against the companion subject', () => {
@@ -311,7 +627,6 @@ describe('runtime subject identity', () => {
       classifyExtendedToolForTurn: () => 'overlay',
       promotedExtendedToolNames: new Set(),
       skillsContext: '',
-      activeConcernsBlock: '',
       behavioralNotesBlock: '',
       config: {},
     });
@@ -324,7 +639,7 @@ describe('runtime subject identity', () => {
     expect(rendered).not.toContain('userId: scheduler');
     expect(rendered).not.toContain('Channel: internal:reflection:whisper');
     expect(rendered).not.toContain('<appearance_context>');
-    expect(buildRuntimeContext({
+    const runtimeContext = buildRuntimeContext({
       message,
       resolvedUserName: 'Companion',
       trustLevel: 'primary',
@@ -351,7 +666,10 @@ describe('runtime subject identity', () => {
       classifyExtendedToolForTurn: () => 'overlay',
       promotedExtendedToolNames: new Set(),
       formatTopEmotions: () => '',
-    })).toBe('');
+    });
+    expect(runtimeContext).not.toContain('<runtime_substrate_health>');
+    expect(runtimeContext).not.toContain('<companion_runtime_context>');
+    expect(runtimeContext).not.toContain('userId: scheduler');
   });
 
   it('marks ordinary external turns as user speakers', async () => {
@@ -453,11 +771,13 @@ describe('runtime subject identity', () => {
       resolvedUserName: 'Tool Handoff',
       canonicalContactKey: 'contact-v',
       continuitySubjectKey: 'contact-v',
-      channelPrivacyLevel: 'private',
       continuityFallbackKeys: ['api-user-1'],
     });
+    // E3.2: per-contact conversation-channel privacy is demoted to provenance
+    // evidence — author resolution must not read it or surface it for gating.
+    expect(authorContext).not.toHaveProperty('channelPrivacyLevel');
     expect(getByChannelIdentity).toHaveBeenCalledWith('api', 'api-user-1');
-    expect(getConversationChannelPrivacy).toHaveBeenCalledWith('contact-v', 'api', 'api:session-1');
+    expect(getConversationChannelPrivacy).not.toHaveBeenCalled();
     expect(updateLastSeen).not.toHaveBeenCalled();
     expect(recordChannelActivity).not.toHaveBeenCalled();
   });
@@ -470,15 +790,17 @@ describe('runtime subject identity', () => {
       authorName: 'User',
     });
 
-    const runtimeContext = buildRuntimeContext({
+    // E2.5: the charge budget renders through the editable runtime.charge_budget
+    // layer from bare charge variables; it never enters the static prompt prefix.
+    const rendered = renderPromptOwnedRuntimeLayers({
       message,
       resolvedUserName: 'User',
       trustLevel: 'primary',
       channelType: 'api',
       responseStyle: 'concise',
       now: new Date('2026-03-17T12:00:00Z'),
+      templateVariables: {},
       modelId: 'test-model',
-      contextWindow: 4096,
       capabilityTier: 'autonomous',
       activeToolCounts: {
         core: 6,
@@ -492,20 +814,63 @@ describe('runtime subject identity', () => {
       loadedExtended: new Map(),
       classifyExtendedToolForTurn: () => 'overlay',
       promotedExtendedToolNames: new Set(),
-      formatTopEmotions: () => '',
+      skillsContext: '',
+      behavioralNotesBlock: '',
       config: { chargePolicy: TEST_CHARGE_POLICY },
     });
 
-    expect(runtimeContext).toContain('<runtime_charge_budget>');
-    expect(runtimeContext).toContain('current-turn spend 0; remaining 24 of 24 run-charge units');
-    expect(runtimeContext).toContain('This prompt quota is a fresh current-turn allowance');
-    expect(runtimeContext).toContain('visible in Garden Charge / Budget');
-    expect(runtimeContext).toContain('paid image/video generation: 6');
-    expect(runtimeContext).toContain('analysis_workbench extension pass after the first iteration: 4');
-    expect(runtimeContext).toContain('analysis_workbench first pass: 0 charge units');
-    expect(runtimeContext).toContain('each extension pass after the first iteration costs 4 current-turn units');
-    expect(runtimeContext).toContain('Do not use it for routine orient actions, concern maintenance, scheduler work, tool discovery, schema confusion, simple lookup, or ordinary replies.');
-    expect(runtimeContext).not.toContain('think');
+    expect(rendered).toContain('<runtime_charge_budget>');
+    expect(rendered).toContain('You have 24 of 24 run-charge units left for the interactive lane/window.');
+    expect(rendered).toContain('Available charge action costs:');
+    expect(rendered).toContain('paid image/video generation: 6');
+    expect(rendered).not.toContain('analysis_workbench extension pass after the first iteration: 4');
+    expect(rendered).not.toContain('analysis_workbench first pass: 0 charge units');
+    expect(rendered).not.toContain('Use analysis_workbench only');
+    expect(rendered).not.toContain('visible in Garden Charge / Budget');
+    expect(rendered).not.toContain('think');
+  });
+
+  it('lists Workbench extension cost only when analysis_workbench is available', async () => {
+    const rendered = await runWithChargeContext({
+      chargePolicy: TEST_CHARGE_POLICY,
+      lane: 'interactive',
+      runId: 'charge-workbench-available',
+    }, async () => renderPromptOwnedRuntimeLayers({
+      message: makeMessage({
+        channelId: 'api:general',
+        channelType: 'api',
+        authorId: 'user-1',
+        authorName: 'User',
+      }),
+      resolvedUserName: 'User',
+      trustLevel: 'primary',
+      channelType: 'api',
+      responseStyle: 'concise',
+      now: new Date('2026-03-17T12:00:00Z'),
+      templateVariables: {},
+      modelId: 'test-model',
+      capabilityTier: 'autonomous',
+      activeToolCounts: {
+        core: 6,
+        promoted: 0,
+        extendedLoaded: 0,
+        autoload: 0,
+        deferred: 0,
+        total: 6,
+      },
+      extendedTools: [],
+      loadedExtended: new Map(),
+      classifyExtendedToolForTurn: () => 'overlay',
+      promotedExtendedToolNames: new Set(),
+      skillsContext: '',
+      behavioralNotesBlock: '',
+      config: { chargePolicy: TEST_CHARGE_POLICY },
+      analysisWorkbenchAvailable: true,
+    }));
+
+    expect(rendered).toContain('analysis_workbench extension pass after the first iteration: 4');
+    expect(rendered).not.toContain('analysis_workbench first pass: 0 charge units');
+    expect(rendered).not.toContain('Use analysis_workbench only');
   });
 
   it('renders satellite endpoint capability context for registered mobile speech turns', () => {
@@ -617,13 +982,15 @@ describe('runtime subject identity', () => {
 
   it('renders routed channel privacy through the prompt-owned runtime layers', () => {
     const message = makeMessage({
-      channelId: 'api:admin-broadcast',
+      channelId: 'api:admin-announcements',
       channelType: 'api',
       authorId: 'admin-user',
       authorName: 'Admin User',
       routing: {
         source: 'api',
-        channelPrivacy: 'broadcast',
+        // E3.3: adapters declare ChannelPrivacy only; broadcast is an
+        // envelope flag owned by labels/overrides/prefixes.
+        channelPrivacy: 'public',
       },
     });
 
@@ -642,7 +1009,7 @@ describe('runtime subject identity', () => {
       fallbackCharacterName: 'Companion',
     });
 
-    expect(templateVariables.channel_visibility).toBe('broadcast');
+    expect(templateVariables.channel_visibility).toBe('public');
 
     const renderedRuntimeLayers = renderPromptOwnedRuntimeLayers({
       message,
@@ -669,20 +1036,20 @@ describe('runtime subject identity', () => {
       classifyExtendedToolForTurn: () => 'overlay',
       promotedExtendedToolNames: new Set(),
       skillsContext: '',
-      activeConcernsBlock: '',
       behavioralNotesBlock: '',
       config: {},
     });
 
-    expect(renderedRuntimeLayers).toContain('<speaking_with>');
-    expect(renderedRuntimeLayers).toContain('<name>Admin User</name>');
-    expect(renderedRuntimeLayers).toContain('<trust_level>regular</trust_level>');
-    expect(renderedRuntimeLayers).toContain('<channel_context>');
-    expect(renderedRuntimeLayers).toContain('<type>api</type>');
-    expect(renderedRuntimeLayers).toContain('<visibility>broadcast</visibility>');
+    expect(renderedRuntimeLayers).toContain('<conversation_state>');
+    expect(renderedRuntimeLayers).toContain('<chat_type>group</chat_type>');
+    expect(renderedRuntimeLayers).toContain('<channel_id>api:admin-announcements</channel_id>');
+    expect(renderedRuntimeLayers).toContain('<channel_type>api</channel_type>');
+    expect(renderedRuntimeLayers).toContain('<channel_visibility>public</channel_visibility>');
+    expect(renderedRuntimeLayers).toContain('<current_message_author name="Admin User" id="admin-user" trust="regular" />');
+    expect(renderedRuntimeLayers).not.toContain('<speaking_with>');
   });
 
-  it('does not expose appearance context for generic image tools', () => {
+  it('keeps appearance variables available for chat when generic media tools are active', () => {
     const message = makeMessage({
       channelId: 'discord:dm:alex',
       channelType: 'discord',
@@ -729,8 +1096,8 @@ describe('runtime subject identity', () => {
       },
       extendedTools: [],
       loadedExtended: new Map([
-        ['image_create', {
-          toolName: 'image_create',
+        ['media', {
+          toolName: 'media',
           source: 'autoload',
           activatedAt: 1,
           lastActivatedAt: 1,
@@ -739,18 +1106,19 @@ describe('runtime subject identity', () => {
       classifyExtendedToolForTurn: () => 'overlay',
       promotedExtendedToolNames: new Set(),
       skillsContext: '',
-      activeConcernsBlock: '',
       behavioralNotesBlock: '',
       config: {},
     });
 
     expect(variables.runtime_self_image_tool_active).toBe('false');
-    expect(variables.runtime_appearance_context_body).toBe('');
+    expect(variables.runtime_appearance_context_body).toBe(
+      templateVariables['character.visual_description'],
+    );
     expect(rendered).not.toContain('<appearance_context>');
     expect(rendered).not.toContain('<self_image_tool_guidance>');
   });
 
-  it('does not expose appearance context for the unified media tool', () => {
+  it('keeps appearance variables available for chat when the unified media tool is active', () => {
     const message = makeMessage({
       channelId: 'discord:dm:alex',
       channelType: 'discord',
@@ -807,18 +1175,19 @@ describe('runtime subject identity', () => {
       classifyExtendedToolForTurn: () => 'overlay',
       promotedExtendedToolNames: new Set(),
       skillsContext: '',
-      activeConcernsBlock: '',
       behavioralNotesBlock: '',
       config: {},
     });
 
     expect(variables.runtime_self_image_tool_active).toBe('false');
-    expect(variables.runtime_appearance_context_body).toBe('');
+    expect(variables.runtime_appearance_context_body).toBe(
+      templateVariables['character.visual_description'],
+    );
     expect(rendered).not.toContain('<appearance_context>');
     expect(rendered).not.toContain('<self_image_tool_guidance>');
   });
 
-  it('exposes appearance context when the explicit selfie tool is active', () => {
+  it('activates selfie guidance while appearance stays in static foundation context', () => {
     const message = makeMessage({
       channelId: 'discord:dm:alex',
       channelType: 'discord',
@@ -875,7 +1244,6 @@ describe('runtime subject identity', () => {
       classifyExtendedToolForTurn: () => 'overlay',
       promotedExtendedToolNames: new Set(),
       skillsContext: '',
-      activeConcernsBlock: '',
       behavioralNotesBlock: '',
       config: {},
     });
@@ -884,8 +1252,9 @@ describe('runtime subject identity', () => {
     expect(variables.runtime_appearance_context_body).toBe(
       templateVariables['character.visual_description'],
     );
-    expect(rendered).toContain('<appearance_context>');
+    expect(rendered).not.toContain('<appearance_context>');
     expect(rendered).toContain('<self_image_tool_guidance>');
+    expect(rendered).toContain('character appearance section');
   });
 
   it('surfaces attention counts for pending whispers and active concerns through prompt-owned layers', () => {
@@ -976,7 +1345,6 @@ describe('runtime subject identity', () => {
       classifyExtendedToolForTurn: () => 'overlay',
       promotedExtendedToolNames: new Set(),
       skillsContext: '',
-      activeConcernsBlock: '',
       behavioralNotesBlock: '',
       config: {},
     });
@@ -985,7 +1353,7 @@ describe('runtime subject identity', () => {
     expect(variables.runtime_internal_state_attention_active_concern_count).toBe('2');
     expect(variables.runtime_internal_state_attention_pending_follow_up_count).toBe('1');
     expect(variables.runtime_internal_state_relational_trust_level).toBe('primary');
-    expect(rendered).toContain('<internal_state>');
+    expect(rendered).not.toContain('<internal_state>');
   });
 
   it('appends companion runtime guidance overrides when present', () => {
@@ -1142,10 +1510,11 @@ describe('runtime subject identity', () => {
   });
 
   it('exposes granular runtime prompt variables for editable prompt-owned phrasing', () => {
-    const variables = buildDynamicPromptTemplateVariables({
+    const variables = buildDynamicPromptTemplateVariables(withConversationScope({
       message: makeMessage({
         channelId: 'discord:dm:alex',
         channelType: 'discord_text',
+        isDirectMessage: true,
         authorId: 'alex',
         authorName: 'Alex',
         content: 'hey',
@@ -1172,30 +1541,242 @@ describe('runtime subject identity', () => {
       classifyExtendedToolForTurn: () => 'overlay',
       promotedExtendedToolNames: new Set(['selfie_create']),
       skillsContext: '',
-      activeConcernsBlock: '',
       behavioralNotesBlock: '',
       lastMessageReceivedAtMs: new Date('2026-03-16T09:15:00Z').getTime(),
       config: {},
-    });
+    }));
 
     expect(variables.runtime_current_datetime_iso).toBe('2026-03-18T09:30:00.000-04:00');
+    expect(variables.runtime_current_today).toBe('2026-03-18');
+    expect(variables.runtime_current_yesterday).toBe('2026-03-17');
+    expect(variables.runtime_current_tomorrow).toBe('2026-03-19');
+    expect(variables.runtime_current_part_of_day).toBe('late morning');
     expect(variables.runtime_last_message_received_weekday).toBe('Monday');
     expect(variables.runtime_last_message_received_date_human).toBe('March 16, 2026');
     expect(variables.runtime_last_message_received_time_human).toBe('5:15 AM');
     expect(variables.runtime_last_message_received_timezone).toBe('America/New_York');
     expect(variables.runtime_last_message_received_days_hours).toBe('2 days 4 hours');
-    expect(variables.runtime_last_message_received_missing_notice).toBe('');
+    expect(variables.runtime_last_message_received_missing).toBe('false');
     expect(variables.runtime_speaking_with_trust_level).toBe('trusted');
-    expect(variables.runtime_channel_visibility).toBe('semi_private');
+    expect(variables.runtime_chat_type).toBe('direct_message');
+    expect(variables.runtime_room_id).toBe('discord:dm:alex');
+    expect(variables.runtime_current_message_author_name).toBe('Alex');
+    expect(variables.runtime_current_message_author_id).toBe('alex');
+    expect(variables.runtime_current_message_author_trust_level).toBe('trusted');
+    expect(variables.runtime_current_message_author_relationship).toBe('');
+    expect(variables.runtime_current_message_author_xml).toBe('<current_message_author name="Alex" id="alex" trust="trusted" />');
+    expect(variables.runtime_current_message_author_timezone).toBe('');
+    expect(variables.runtime_current_message_author_local_time).toBe('');
+    expect(variables.runtime_recent_active_participants_xml).toBe('');
+    expect(variables.runtime_recent_active_participants_count).toBe('0');
+    expect(variables.runtime_channel_visibility).toBe('private');
     expect(variables.runtime_response_style).toBe('expressive');
     expect(variables.runtime_response_style_name).toBe('Expressive');
-    expect(variables.runtime_response_style_guidance_body).toBe(variables.runtime_response_style_guidance);
-    expect(variables.runtime_response_style_delivery_guidance).toBe('Keep your voice warm and vivid.');
-    expect(variables.runtime_response_style_expansion_guidance).toBe(
-      'Add personality-rich detail when it helps clarity.',
-    );
+    expect('runtime_response_style_guidance_body' in variables).toBe(false);
+    expect('runtime_response_style_delivery_guidance' in variables).toBe(false);
+    expect('runtime_response_style_expansion_guidance' in variables).toBe(false);
     expect(variables.runtime_tooling_active_count).toBe('5');
     expect(variables.runtime_tooling_available_extended_count).toBe('1');
+  });
+
+  it('renders group conversation_state with five recent active participants newest-first', () => {
+    const { rendered, variables } = buildRuntimePromptOutputs({
+      message: makeMessage({
+        channelId: 'discord:group:ops',
+        channelType: 'discord',
+        isDirectMessage: false,
+        authorId: 'discord:u-current',
+        authorName: 'Vega "Pilot"',
+        content: 'status?',
+      }),
+      resolvedUserName: 'Vega',
+      trustLevel: 'trusted',
+      relationshipType: 'friend',
+      channelType: 'discord_text',
+      canonicalContactKey: 'contact-vega',
+      responseStyle: 'concise',
+      now: new Date('2026-03-18T13:30:00Z'),
+      templateVariables: {},
+      modelId: 'test-model',
+      capabilityTier: 'autonomous',
+      activeToolCounts: {
+        core: 2,
+        promoted: 0,
+        extendedLoaded: 0,
+        autoload: 0,
+        deferred: 0,
+        total: 2,
+      },
+      extendedTools: [],
+      loadedExtended: new Map(),
+      classifyExtendedToolForTurn: () => 'overlay',
+      promotedExtendedToolNames: new Set(),
+      skillsContext: '',
+      behavioralNotesBlock: '',
+      currentUserRuntimeProfile: {
+        user_id: 'discord:u-current',
+        display_name: 'Vega',
+        timezone: 'America/Chicago',
+      },
+      recentActiveParticipantRuntimeProfiles: [
+        { user_id: 'discord:u-b', display_name: 'Basil', timezone: 'Europe/London' },
+        { user_id: 'discord:u-g', display_name: 'Gale', timezone: 'Asia/Tokyo' },
+        { user_id: 'discord:u-f', display_name: 'Fenn', timezone: 'Not/AZone' },
+      ],
+      recentChannelEntries: [
+        makeSessionEntry({ id: 1, authorId: 'discord:u-a', authorName: 'Aster', timestamp: 1000 }),
+        makeSessionEntry({ id: 2, authorId: 'discord:u-b', authorName: 'Basil old', timestamp: 2000 }),
+        makeSessionEntry({ id: 3, authorId: 'discord:u-c', authorName: 'Cyra', timestamp: 3000 }),
+        makeSessionEntry({ id: 4, authorId: 'discord:u-d', authorName: 'Dax', timestamp: 4000 }),
+        makeSessionEntry({ id: 5, authorId: 'discord:u-e', authorName: 'Echo', timestamp: 5000 }),
+        makeSessionEntry({ id: 6, authorId: 'discord:u-f', authorName: 'Fenn', timestamp: 6000 }),
+        makeSessionEntry({ id: 7, authorId: 'discord:u-g', authorName: 'Gale', timestamp: 7000 }),
+        makeSessionEntry({ id: 8, authorId: 'discord:u-b', authorName: 'Basil', timestamp: 8000 }),
+        makeSessionEntry({ id: 9, role: 'assistant', authorId: 'companion', authorName: 'Companion', timestamp: 9000 }),
+      ],
+      config: {},
+    });
+
+    expect(variables.runtime_chat_type).toBe('group');
+    expect(variables.runtime_room_id).toBe('discord:group:ops');
+    expect(variables.runtime_current_message_author_name).toBe('Vega "Pilot"');
+    expect(variables.runtime_current_message_author_name_xml_attr).toBe('Vega &quot;Pilot&quot;');
+    expect(variables.runtime_current_message_author_timezone).toBe('America/Chicago');
+    expect(variables.runtime_current_message_author_local_time).toBe('8:30 AM');
+    expect(variables.runtime_current_message_author_trust_level).toBe('trusted');
+    expect(variables.runtime_current_message_author_relationship).toBe('friend');
+    expect(variables.runtime_current_message_author_xml).toBe(
+      '<current_message_author name="Vega &quot;Pilot&quot;" id="discord:u-current" trust="trusted" relationship="friend" timezone="America/Chicago" local_time="8:30 AM" />',
+    );
+    expect(variables.runtime_recent_active_participants_count).toBe('5');
+    expect(variables.runtime_recent_active_participants_xml.match(/<participant\b/gu)).toHaveLength(5);
+    expect(variables.runtime_recent_active_participants_xml).toContain(
+      '<participant name="Basil" id="discord:u-b" timezone="Europe/London" local_time="1:30 PM" />',
+    );
+    expect(variables.runtime_recent_active_participants_xml).toContain(
+      '<participant name="Gale" id="discord:u-g" timezone="Asia/Tokyo" local_time="10:30 PM" />',
+    );
+    expect(variables.runtime_recent_active_participants_xml).toContain('<participant name="Fenn" id="discord:u-f" />');
+    expect(variables.runtime_recent_active_participants_xml).toContain('<participant name="Echo" id="discord:u-e" />');
+    expect(variables.runtime_recent_active_participants_xml).toContain('<participant name="Dax" id="discord:u-d" />');
+    expect(variables.runtime_recent_active_participants_xml).not.toContain('Cyra');
+    expect(variables.runtime_recent_active_participants_xml).not.toContain('Aster');
+    expect(variables.runtime_recent_active_participants_xml).not.toContain('Companion');
+
+    const participantXml = variables.runtime_recent_active_participants_xml;
+    expect(participantXml.indexOf('Basil')).toBeLessThan(participantXml.indexOf('Gale'));
+    expect(participantXml.indexOf('Gale')).toBeLessThan(participantXml.indexOf('Fenn'));
+    expect(participantXml.indexOf('Fenn')).toBeLessThan(participantXml.indexOf('Echo'));
+    expect(participantXml.indexOf('Echo')).toBeLessThan(participantXml.indexOf('Dax'));
+    expect(rendered).toContain('<conversation_state>');
+    expect(rendered).toContain('<chat_type>group</chat_type>');
+    expect(rendered).toContain('<channel_id>discord:group:ops</channel_id>');
+    expect(rendered).toContain('<current_message_author name="Vega &quot;Pilot&quot;" id="discord:u-current" trust="trusted" relationship="friend" timezone="America/Chicago" local_time="8:30 AM" />');
+    expect(rendered).toContain('<recent_active_participants max="5">');
+  });
+
+  it('does not render a fake participant list for direct messages', () => {
+    const { rendered, variables } = buildRuntimePromptOutputs({
+      message: makeMessage({
+        channelId: 'discord:dm:alex',
+        channelType: 'discord',
+        isDirectMessage: true,
+        authorId: 'discord:u-alex',
+        authorName: 'Alex',
+        content: 'ping',
+      }),
+      resolvedUserName: 'Alex',
+      trustLevel: 'trusted',
+      channelType: 'discord_text',
+      canonicalContactKey: 'contact-alex',
+      responseStyle: 'concise',
+      now: new Date('2026-03-18T13:30:00Z'),
+      templateVariables: {},
+      modelId: 'test-model',
+      capabilityTier: 'autonomous',
+      activeToolCounts: {
+        core: 2,
+        promoted: 0,
+        extendedLoaded: 0,
+        autoload: 0,
+        deferred: 0,
+        total: 2,
+      },
+      extendedTools: [],
+      loadedExtended: new Map(),
+      classifyExtendedToolForTurn: () => 'overlay',
+      promotedExtendedToolNames: new Set(),
+      skillsContext: '',
+      behavioralNotesBlock: '',
+      currentUserRuntimeProfile: {
+        user_id: 'discord:u-alex',
+        display_name: 'Alex',
+        timezone: 'America/Los_Angeles',
+      },
+      recentChannelEntries: [
+        makeSessionEntry({ channelId: 'discord:dm:alex', id: 1, authorId: 'discord:u-alex', authorName: 'Alex', timestamp: 1000 }),
+      ],
+      config: {},
+    });
+
+    expect(variables.runtime_chat_type).toBe('direct_message');
+    expect(variables.runtime_current_message_author_timezone).toBe('America/Los_Angeles');
+    expect(variables.runtime_current_message_author_local_time).toBe('6:30 AM');
+    expect(variables.runtime_recent_active_participants_xml).toBe('');
+    expect(variables.runtime_recent_active_participants_count).toBe('0');
+    expect(rendered).toContain('<chat_type>direct_message</chat_type>');
+    expect(rendered).toContain('<current_message_author name="Alex" id="discord:u-alex" trust="trusted" timezone="America/Los_Angeles" local_time="6:30 AM" />');
+    expect(rendered).not.toContain('<recent_active_participants');
+  });
+
+  it('does not render hardcoded Analyst Workbench guidance from default runtime layers', () => {
+    const baseInput = {
+      message: makeMessage({
+        channelId: 'api:worker',
+        channelType: 'api',
+        authorId: 'worker',
+        authorName: 'Worker',
+        content: 'analyze this evidence set',
+      }),
+      resolvedUserName: 'Worker',
+      trustLevel: 'regular' as const,
+      channelType: 'api',
+      responseStyle: 'concise' as const,
+      now: new Date('2026-03-18T13:30:00Z'),
+      templateVariables: {},
+      modelId: 'test-model',
+      capabilityTier: 'autonomous' as const,
+      activeToolCounts: {
+        core: 2,
+        promoted: 0,
+        extendedLoaded: 0,
+        autoload: 0,
+        deferred: 0,
+        total: 2,
+      },
+      extendedTools: [],
+      loadedExtended: new Map(),
+      classifyExtendedToolForTurn: () => 'overlay' as const,
+      promotedExtendedToolNames: new Set<string>(),
+      skillsContext: '',
+      behavioralNotesBlock: '',
+      config: {},
+    };
+
+    const unavailable = buildRuntimePromptOutputs({
+      ...baseInput,
+      analysisWorkbenchAvailable: false,
+    });
+    const available = buildRuntimePromptOutputs({
+      ...baseInput,
+      analysisWorkbenchAvailable: true,
+    });
+
+    expect(unavailable.variables.runtime_analysis_workbench_available).toBe('false');
+    expect(available.variables.runtime_analysis_workbench_available).toBe('true');
+    expect(unavailable.rendered).not.toContain('<analysis_workbench_guidance>');
+    expect(available.rendered).not.toContain('<analysis_workbench_guidance>');
+    expect(available.rendered).not.toContain('analysis_workbench is a large-evidence escalation surface only.');
   });
 
   it('substitutes atomic affect macros under both honne and tatemae trust tiers', () => {
@@ -1228,7 +1809,6 @@ describe('runtime subject identity', () => {
       classifyExtendedToolForTurn: () => 'overlay' as const,
       promotedExtendedToolNames: new Set<string>(),
       skillsContext: '',
-      activeConcernsBlock: '',
       behavioralNotesBlock: '',
       config: {},
       internalState: TEST_INTERNAL_STATE,
@@ -1283,7 +1863,6 @@ describe('runtime subject identity', () => {
       classifyExtendedToolForTurn: () => 'overlay' as const,
       promotedExtendedToolNames: new Set<string>(),
       skillsContext: '',
-      activeConcernsBlock: '',
       behavioralNotesBlock: '',
       config: {},
       internalState: TEST_INTERNAL_STATE,
@@ -1314,7 +1893,7 @@ describe('runtime subject identity', () => {
         summary: 'Latest summary',
       },
     ] as const;
-    const variables = buildDynamicPromptTemplateVariables({
+    const variables = buildDynamicPromptTemplateVariables(withConversationScope({
       message: makeMessage({
         channelId: 'api:test',
         channelType: 'api',
@@ -1362,7 +1941,7 @@ describe('runtime subject identity', () => {
       classifyExtendedToolForTurn: (toolName) => (toolName === 'background_probe' ? 'background' : 'overlay'),
       promotedExtendedToolNames: new Set(),
       skillsContext: '<skills_index><skill name="conversation" /><skill name="memory" /></skills_index>',
-      activeConcernsBlock: formatActiveConcernsContextBlock([
+      activeConcerns: buildActiveConcernsRuntimeData([
         {
           id: 'concern-1',
           text: 'medication reminder logistics',
@@ -1396,7 +1975,7 @@ describe('runtime subject identity', () => {
       ].join('\n'),
       emotionAppraisalChain,
       config: {},
-    });
+    }));
 
     expect(variables.runtime_concerns_count).toBe('3');
     expect(variables.runtime_concerns_top_priorities).toBe('high, low');
@@ -1406,11 +1985,11 @@ describe('runtime subject identity', () => {
     expect(variables.runtime_behavioral_notes_count).toBe('2');
     expect(variables.runtime_skills_count).toBe('2');
     expect(variables.runtime_extended_tools_total).toBe('3');
-    expect(variables.runtime_extended_tools_activatable_count).toBe('0');
-    expect(variables.runtime_extended_tools_blocked_count).toBe('2');
+    expect(variables.runtime_extended_tools_activatable_count).toBe('1');
+    expect(variables.runtime_extended_tools_blocked_count).toBe('1');
     expect(variables.runtime_extended_tool_names).toBe('web, notify, background_probe');
     expect(variables.runtime_extended_tool_directory_lines).toContain(
-      '- web: Fetch a web page (blocked by current tier: external.web)',
+      '- web: Fetch a web page (use toolset action="activate")',
     );
     expect(variables.runtime_extended_tool_directory_lines).toContain(
       '- notify: Notify the operator (blocked by current tier: external.web, external.discord, external.email)',
@@ -1465,7 +2044,6 @@ describe('runtime subject identity', () => {
       classifyExtendedToolForTurn: () => 'overlay' as const,
       promotedExtendedToolNames: new Set<string>(),
       skillsContext: '',
-      activeConcernsBlock: '',
       behavioralNotesBlock: '',
       config: {},
       internalState: TEST_INTERNAL_STATE,
@@ -1484,23 +2062,23 @@ describe('runtime subject identity', () => {
     };
 
     const output = buildAtomicMetacognitionTemplateOutput(baseInput);
-    const variables = buildDynamicPromptTemplateVariables(baseInput);
+    const variables = buildDynamicPromptTemplateVariables(withConversationScope(baseInput));
 
     expect(output).toBe(
       'uncertainty=true|0.583|certainty=0.220 (<0.400); contradictory_memory_signals=2'
       + ' avoidance=false||'
       + ' confabulation=true|0.650|assertions=2; supporting_memories=0',
     );
-    expect(variables.runtime_metacognitive_persona_guidance_body).toBe([
-      '- Use tentative language and acknowledge uncertainty explicitly.',
-      '- Anchor strong claims to retrieved evidence, or state when evidence is missing.',
-    ].join('\n'));
+    expect(variables.runtime_flag_uncertainty_present).toBe('true');
+    expect(variables.runtime_flag_confabulation_risk_present).toBe('true');
+    expect('runtime_metacognitive_persona_guidance_body' in variables).toBe(false);
   });
 
   it('preserves structured runtime sections while sourcing prose from atomic prompt variables', () => {
     const message = makeMessage({
       channelId: 'discord:dm:alex',
       channelType: 'discord_text',
+      isDirectMessage: true,
       authorId: 'alex',
       authorName: 'Alex',
       content: 'hey',
@@ -1570,7 +2148,7 @@ describe('runtime subject identity', () => {
       classifyExtendedToolForTurn: (toolName) => (toolName === 'background_probe' ? 'background' : 'overlay'),
       promotedExtendedToolNames: new Set(['selfie_create']),
       skillsContext: '<skills_index><skill name="conversation" /><skill name="memory" /></skills_index>',
-      activeConcernsBlock: formatActiveConcernsContextBlock([
+      activeConcerns: buildActiveConcernsRuntimeData([
         {
           id: 'concern-1',
           text: 'medication reminder logistics',
@@ -1647,8 +2225,13 @@ describe('runtime subject identity', () => {
     expect(variables.runtime_last_message_received_ago).toBe('2 days ago');
     expect(variables.runtime_speaking_with_name).toBe('Alex');
     expect(variables.runtime_speaking_with_trust_level).toBe('trusted');
+    expect(variables.runtime_chat_type).toBe('direct_message');
+    expect(variables.runtime_room_id).toBe('discord:dm:alex');
+    expect(variables.runtime_current_message_author_name).toBe('Alex');
+    expect(variables.runtime_current_message_author_id).toBe('alex');
+    expect(variables.runtime_recent_active_participants_xml).toBe('');
     expect(variables.runtime_channel_type).toBe('discord_text');
-    expect(variables.runtime_channel_visibility).toBe('semi_private');
+    expect(variables.runtime_channel_visibility).toBe('private');
     expect(variables.runtime_capability_tier).toBe('autonomous');
     expect(variables.runtime_response_style).toBe('expressive');
     expect(variables.runtime_internal_state_attention_conversation_trajectory).toBe('deepening');
@@ -1666,30 +2249,31 @@ describe('runtime subject identity', () => {
       characterPromptVariables['character.visual_description'],
     );
     expect(rendered).toContain('<runtime_state>');
-    expect(rendered).toContain('<runtime_self>');
+    expect(rendered).not.toContain('<runtime_self>');
     expect(rendered).toContain('<runtime_attention>');
     expect(rendered).toContain('<runtime_tooling>');
-    expect(rendered).toContain('<name>Alex</name>');
-    expect(rendered).toContain('<trust_level>trusted</trust_level>');
-    expect(rendered).toContain('<type>discord_text</type>');
-    expect(rendered).toContain('<visibility>semi_private</visibility>');
-    expect(rendered).toContain('<identifier>test-model</identifier>');
-    expect(rendered).toContain('<tier>autonomous</tier>');
-    expect(rendered).toContain('<active_count>5</active_count>');
-    expect(rendered).toContain('<available_extended_count>3</available_extended_count>');
-    expect(rendered).toContain('<analysis_workbench_guidance>');
-    expect(rendered).toContain('analysis_workbench is a large-evidence escalation surface only.');
-    expect(rendered).toContain('large files, codebases, logs, transcripts, datasets, or evidence sets');
-    expect(rendered).toContain('Do not use analysis_workbench for routine orient actions, concern maintenance, scheduler or schedule work, simple lookup');
-    expect(rendered).toContain('orient for persona/human/goals/values/concerns');
-    expect(rendered).toContain('<appearance_context>');
+    expect(rendered).toContain('<conversation_state>');
+    expect(rendered).toContain('<chat_type>direct_message</chat_type>');
+    expect(rendered).toContain('<channel_id>discord:dm:alex</channel_id>');
+    expect(rendered).toContain('<channel_type>discord_text</channel_type>');
+    expect(rendered).toContain('<channel_visibility>private</channel_visibility>');
+    expect(rendered).toContain('<current_message_author name="Alex" id="alex" trust="trusted" />');
+    expect(rendered).not.toContain('<speaking_with>');
+    expect(rendered).not.toContain('<model_context>');
+    expect(rendered).not.toContain('<identifier>test-model</identifier>');
+    expect(rendered).not.toContain('<capability_tier>');
+    expect(rendered).not.toContain('<tier>autonomous</tier>');
+    expect(rendered).not.toContain('<active_count>');
+    expect(rendered).not.toContain('<available_extended_count>');
+    expect(rendered).not.toContain('<analysis_workbench_guidance>');
+    expect(rendered).not.toContain('analysis_workbench is a large-evidence escalation surface only.');
     expect(rendered).toContain('<self_image_tool_guidance>');
     expect(rendered).toContain('<extended_tools>');
     expect(rendered).not.toContain('{{');
   });
 
   it('fails closed with structured fallback variables when prior-message context is unavailable', () => {
-    const variables = buildDynamicPromptTemplateVariables({
+    const variables = buildDynamicPromptTemplateVariables(withConversationScope({
       message: makeMessage(),
       resolvedUserName: 'Companion',
       trustLevel: 'primary',
@@ -1715,11 +2299,10 @@ describe('runtime subject identity', () => {
       classifyExtendedToolForTurn: () => 'overlay',
       promotedExtendedToolNames: new Set(),
       skillsContext: '',
-      activeConcernsBlock: '',
       behavioralNotesBlock: '',
       lastMessageReceivedAtMs: null,
       config: {},
-    });
+    }));
 
     expect(variables.runtime_affect_snapshot_present).toBe('false');
     expect(variables.runtime_affect_mode).toBe('');
@@ -1733,17 +2316,9 @@ describe('runtime subject identity', () => {
     expect(variables.runtime_affect_control).toBe('');
     expect(variables.runtime_affect_display_range_min).toBe('');
     expect(variables.runtime_affect_display_range_max).toBe('');
-    expect(variables.runtime_affect_profile_intensity).toBe('');
-    expect(variables.runtime_affect_profile_variability).toBe('');
-    expect(variables.runtime_affect_profile_control).toBe('');
-    expect(variables.runtime_affect_profile_display_range_min).toBe('');
-    expect(variables.runtime_affect_profile_display_range_max).toBe('');
     expect(variables.runtime_affect_valence).toBe('');
     expect(variables.runtime_affect_arousal).toBe('');
     expect(variables.runtime_affect_dominance).toBe('');
-    expect(variables.runtime_affect_snapshot_vad_valence).toBe('');
-    expect(variables.runtime_affect_snapshot_vad_arousal).toBe('');
-    expect(variables.runtime_affect_snapshot_vad_dominance).toBe('');
     expect(variables.runtime_affect_snapshot_mood_valence).toBe('');
     expect(variables.runtime_affect_snapshot_mood_arousal).toBe('');
     expect(variables.runtime_affect_snapshot_mood_dominance).toBe('');
@@ -1771,7 +2346,7 @@ describe('runtime subject identity', () => {
     expect(variables.runtime_emotion_appraisal_latest_timestamp_iso).toBe('');
     expect(variables.runtime_emotion_appraisal_recent_lines).toBe('');
     expect(variables.runtime_behavioral_notes_count).toBe('0');
-    expect(variables.runtime_behavioral_notes_body_raw).toBe('');
+    expect(variables.runtime_behavioral_notes_body).toBe('');
     expect(variables.runtime_skills_count).toBe('0');
     expect(variables.runtime_extended_tools_total).toBe('0');
     expect(variables.runtime_extended_tools_activatable_count).toBe('0');
@@ -1784,9 +2359,9 @@ describe('runtime subject identity', () => {
       expect(variables[`runtime_flag_${flagName}_confidence`]).toBe('');
       expect(variables[`runtime_flag_${flagName}_evidence`]).toBe('');
     }
-    expect(variables.runtime_emotional_affect_body).toBe('');
-    expect(variables.runtime_metacognitive_persona_guidance_body).toBe('');
-    expect(variables.runtime_internal_state_body).toBe('');
+    expect('runtime_emotional_affect_body' in variables).toBe(false);
+    expect('runtime_metacognitive_persona_guidance_body' in variables).toBe(false);
+    expect('runtime_internal_state_body' in variables).toBe(false);
     expect(variables.runtime_internal_turn_kind).toBe('heartbeat');
     expect(variables.runtime_speaking_with_name).toBe('');
     expect(variables.runtime_speaking_with_trust_level).toBe('');
@@ -1794,12 +2369,11 @@ describe('runtime subject identity', () => {
     expect(variables.runtime_channel_visibility).toBe('');
     expect(variables.runtime_last_message_received_weekday).toBe('');
     expect(variables.runtime_last_message_received_ago).toBe('');
-    expect(variables.runtime_last_message_received_missing_notice).toBe(
-      'No earlier message is loaded for this channel.',
-    );
+    expect(variables.runtime_last_message_received_present).toBe('false');
+    expect(variables.runtime_last_message_received_missing).toBe('true');
   });
 
-  it('uses persisted conversation-channel privacy and records it on activity', async () => {
+  it('records persisted conversation-channel privacy as evidence without surfacing it for gating', async () => {
     const recordedCalls: Array<{
       contactId: string;
       channel: string;
@@ -1842,13 +2416,27 @@ describe('runtime subject identity', () => {
       companionDisplayName: 'Companion',
     });
 
-    expect(authorContext.channelPrivacyLevel).toBe('private');
+    // E3.2: the stored per-contact value is re-recorded as provenance
+    // evidence, but the resolved author context must not expose it —
+    // classification consumes channels.json labels, operator overrides, and
+    // derived defaults only (docs/context-envelope.md).
+    expect(authorContext).not.toHaveProperty('channelPrivacyLevel');
     expect(recordedCalls).toEqual([{
       contactId: 'contact-alex',
       channel: 'discord',
       channelId: '1313001762793197678',
       privacyLevel: 'private',
     }]);
+
+    // AC (E3.2): a contact-level privacy label cannot change classification.
+    // The contact store labeled this conversation channel 'private', yet the
+    // channel still classifies by its own derived default (invite_only) —
+    // there is no seam from the resolved author context into ChannelMeta.
+    const routingPrivacy = normalizeChannelPrivacy(undefined);
+    const channelMeta = {
+      ...(routingPrivacy ? { privacyLevel: routingPrivacy } : {}),
+    };
+    expect(classifyChannelDisclosure('1313001762793197678', channelMeta)).toEqual({ channelPrivacy: 'invite_only', broadcast: false });
   });
 
   it('labels blocked extended tools clearly in the prompt-owned runtime layers', () => {
@@ -1896,13 +2484,196 @@ describe('runtime subject identity', () => {
       classifyExtendedToolForTurn: () => 'overlay',
       promotedExtendedToolNames: new Set(),
       skillsContext: '',
-      activeConcernsBlock: '',
       behavioralNotesBlock: '',
       config: {},
     });
 
     expect(renderedRuntimeLayers).toContain('Never claim a tool executed, failed, or was denied unless this turn contains the actual tool call and tool result.');
     expect(renderedRuntimeLayers).toContain('blocked by current tier: external.web');
-    expect(renderedRuntimeLayers).toContain('<available_extended_count>2</available_extended_count>');
+    expect(renderedRuntimeLayers).not.toContain('<available_extended_count>');
+  });
+});
+
+describe('companion-facing substrate health context', () => {
+  it('does not render backend health telemetry into default prompt context', async () => {
+    const rendered = await runWithChargeContext({
+      chargePolicy: TEST_CHARGE_POLICY,
+      lane: 'interactive',
+      runId: 'health-omitted',
+    }, async () => buildRuntimeContext({
+      ...buildMinimalRuntimeContextInput(),
+      config: { chargePolicy: TEST_CHARGE_POLICY },
+      substrateHealth: {
+        apiHealth: makeApiHealthResponse({
+          subsystems: {
+            memory: {
+              status: 'degraded',
+              detail: 'Postgres check failed at /var/lib/psfn/runtime using DATABASE_URL',
+              meta: { checkLatencyMs: 44 },
+            },
+          },
+        }),
+      },
+    }));
+
+    expect(rendered).not.toContain('<runtime_substrate_health>');
+    expect(rendered).not.toContain('Overall: healthy');
+    expect(rendered).not.toContain('Memory store: degraded');
+    expect(rendered).not.toContain('/var/lib/psfn');
+    expect(rendered).not.toContain('DATABASE_URL');
+  });
+});
+
+describe('internal state continuity gap context', () => {
+  // E2.5: the continuity notice wording lives in the editable
+  // runtime.continuity_notice layer; the runtime produces only bare gap values.
+  function renderContinuityLayer(gap: { offlineSince: string; gapMs: number } | null): string {
+    return injectPromptRuntimeTokens(DEFAULT_RUNTIME_PROMPT_TEMPLATE, {
+      variables: buildContinuityGapPromptVariables(gap),
+    });
+  }
+
+  it('renders a continuity notice when a gap is present', () => {
+    const rendered = renderContinuityLayer({
+      offlineSince: '2026-06-07T12:00:00.000Z',
+      gapMs: 3 * 24 * 60 * 60 * 1000,
+    });
+
+    expect(rendered).toContain('<runtime_continuity_notice>');
+    expect(rendered).toContain('offline for about 3 days');
+    expect(rendered).toContain('2026-06-07T12:00:00.000Z');
+    expect(rendered).toContain('ask what happened');
+  });
+
+  it('formats sub-two-day gaps in hours', () => {
+    const variables = buildContinuityGapPromptVariables({
+      offlineSince: '2026-06-10T01:00:00.000Z',
+      gapMs: 11 * 60 * 60 * 1000,
+    });
+    expect(variables.runtime_continuity_gap_present).toBe('true');
+    expect(variables.runtime_continuity_gap_duration).toBe('11 hours');
+
+    expect(renderContinuityLayer({
+      offlineSince: '2026-06-10T01:00:00.000Z',
+      gapMs: 11 * 60 * 60 * 1000,
+    })).toContain('offline for about 11 hours');
+  });
+
+  it('omits the continuity notice without a gap (bare values blank, section prunes)', () => {
+    expect(buildContinuityGapPromptVariables(null)).toEqual({
+      runtime_continuity_gap_present: 'false',
+      runtime_continuity_gap_duration: '',
+      runtime_continuity_gap_offline_since: '',
+    });
+    expect(renderContinuityLayer(null)).not.toContain('runtime_continuity_notice');
+
+    const runtimeContext = buildRuntimeContext(buildMinimalRuntimeContextInput());
+    expect(runtimeContext).not.toContain('runtime_continuity_notice');
+    expect(runtimeContext).not.toContain('<runtime_substrate_health>');
+  });
+});
+
+describe('turn prompt variable namespace conformance', () => {
+  it('builds every session and turn variable with a registered macro and no duplicate producers', () => {
+    const now = new Date('2026-03-18T13:30:00Z');
+    const message = makeMessage({
+      channelId: 'discord:dm:alex',
+      channelType: 'discord_text',
+      isDirectMessage: true,
+      authorId: 'alex',
+      authorName: 'Alex',
+      content: 'hey',
+    });
+    const { templateVariables: sessionVariables } = buildPromptTemplateVariables({
+      message,
+      resolvedUserName: 'Alex',
+      trustLevel: 'trusted',
+      channelType: 'discord_text',
+      canonicalContactKey: 'contact-alex',
+      subjectIdentityKey: 'alex',
+      now,
+      characterPromptVariables: {
+        name: 'Purrsephone',
+        char: 'Purrsephone',
+        char_name: 'Purrsephone',
+        character: 'Purrsephone',
+        character_name: 'Purrsephone',
+        description: 'A companion.',
+        personality: 'Warm.',
+        scenario: '{{user}} and {{char}} are chatting.',
+        system_prompt: '',
+        post_history_instructions: '',
+        mes_example: '',
+        first_mes: 'Hi.',
+        creator: 'system',
+        creator_notes: '',
+        tags: 'bootstrap',
+        alternate_greetings: '',
+        visual_description: 'Silver eyes.',
+        extensions_visual_description: 'Silver eyes.',
+        'character.name': 'Purrsephone',
+        'character.visual_description': 'Silver eyes.',
+        'character.extensions.likes': 'jazz',
+        extensions_likes: 'jazz',
+      },
+      modelId: 'test-model',
+      fallbackCharacterName: 'Purrsephone',
+    });
+
+    const dynamicVariables = buildDynamicPromptTemplateVariables(withConversationScope({
+      message,
+      resolvedUserName: 'Alex',
+      trustLevel: 'trusted',
+      relationshipType: 'friend',
+      channelType: 'discord_text',
+      canonicalContactKey: 'contact-alex',
+      subjectIdentityKey: 'alex',
+      responseStyle: 'expressive',
+      now,
+      taskKind: undefined,
+      templateVariables: sessionVariables,
+      internalState: TEST_INTERNAL_STATE,
+      metacognitiveFlags: [],
+      emotionAppraisalChain: [],
+      modelId: 'test-model',
+      capabilityTier: 'autonomous',
+      activeToolCounts: {
+        core: 2,
+        promoted: 1,
+        extendedLoaded: 1,
+        autoload: 1,
+        deferred: 0,
+        total: 5,
+      },
+      extendedTools: [{ name: 'generate_image', description: 'Generate an image.' }] as any,
+      loadedExtended: new Map([['generate_image', { source: 'autoload' } as any]]),
+      classifyExtendedToolForTurn: () => 'overlay',
+      promotedExtendedToolNames: new Set(['selfie_create']),
+      skillsContext: '<skills_index><skill id="memory.write">Persist.</skill></skills_index>',
+      behavioralNotesBlock: '',
+      lastMessageReceivedAtMs: new Date('2026-03-16T09:15:00Z').getTime(),
+      analysisWorkbenchAvailable: true,
+      config: {},
+    }));
+
+    // Single construction path: session phase, prompt-assembly overlay, turn phase.
+    // Any unregistered key or duplicate cross-phase write throws (fail closed).
+    const namespace = new TurnPromptVariableNamespace();
+    namespace.assignRecord('session', sessionVariables, 'substrate-agent:buildPromptTemplateVariables');
+    namespace.assign('session', 'runtime_speaking_with_is_machine_intelligence', 'false', 'turn-execution:assembleTurnPrompt');
+    namespace.assignRecord('turn', dynamicVariables, 'substrate-agent:buildDynamicPromptTemplateVariables');
+    const { variables } = namespace.freeze();
+
+    for (const key of Object.keys(variables)) {
+      expect(
+        resolvePromptMacroManifestEntry(key),
+        `Prompt variable "${key}" is not registered in the macro manifest`,
+      ).not.toBeNull();
+    }
+    // active_timezone is owned by the session phase and must not be re-produced
+    // by the dynamic builder (that was the pre-manifest double write).
+    expect(sessionVariables.active_timezone).toBeTruthy();
+    expect('active_timezone' in dynamicVariables).toBe(false);
+    expect(variables.active_timezone).toBe(sessionVariables.active_timezone);
   });
 });

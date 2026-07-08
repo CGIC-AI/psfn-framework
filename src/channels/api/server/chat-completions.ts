@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { ChannelType, SubstrateMessage } from '../../../shared/contracts/runtime.js';
+import { isIntentionalNoReplyResponse } from '../../../shared/agent-response-disposition.js';
 import type { SatelliteRegistryConfig } from '../../../shared/contracts/satellite-registry.js';
 import type { ContactStorePort } from '../../../core/contacts/contact-store-port.js';
 import type { SubstrateAgent } from '../../../core/agent/substrate-agent.js';
@@ -19,6 +20,7 @@ import { toErrorMessage } from '../../../shared/utils/errors.js';
 import { resolveApiTurnIdentity } from '../external-channel-claim.js';
 import type {
   ApiServerRuntime,
+  ApiChatCompletionRpcSuccess,
   ChatCompletionRequest,
 } from '../types.js';
 import { buildChatCompletionResponse } from '../response-format.js';
@@ -87,6 +89,12 @@ interface IdentityClaimHeaders {
   nonce?: string;
   expiresAt?: string;
   signature?: string;
+}
+
+function isNoReplyRuntimeCompletion(
+  response: ApiChatCompletionRpcSuccess['response'],
+): boolean {
+  return response.noReply?.disposition === 'intentional_no_reply';
 }
 
 export interface ApiChatCompletionsHandlerConfig {
@@ -820,21 +828,21 @@ export class ApiChatCompletionsHandler {
   ): void {
     if (err instanceof RequestLifecycleError) {
       if (err.reason === 'timeout' && canWriteResponse(res)) {
-        transport.writeErrorAndDone('\n[Error: Request timed out]');
+        transport.writeErrorAndDone('request_timeout', 'Request timed out before turn completed');
       }
       return;
     }
 
     if (this.isAgentBusyError(err)) {
       if (canWriteResponse(res)) {
-        transport.writeErrorAndDone('\n[Error: Agent busy]');
+        transport.writeErrorAndDone('agent_busy', 'Agent is already processing another prompt');
       }
       return;
     }
 
     this.logger.error('Streaming completion error', { error: String(err) });
     if (canWriteResponse(res)) {
-      transport.writeErrorAndDone('\n[Error: Internal server error]');
+      transport.writeErrorAndDone('internal_error', 'Internal server error');
     }
   }
 
@@ -868,6 +876,15 @@ export class ApiChatCompletionsHandler {
           );
           return;
         }
+        if (!result.response.content.trim() && !isNoReplyRuntimeCompletion(result.response)) {
+          this.sendRuntimeError(
+            res,
+            502,
+            'model_error',
+            'Agent returned empty content without an intentional no-reply marker',
+          );
+          return;
+        }
 
         const response = buildChatCompletionResponse({
           id: `chatcmpl-${randomUUID()}`,
@@ -896,6 +913,10 @@ export class ApiChatCompletionsHandler {
         turn.turnPromise,
       );
       if (!canWriteResponse(res)) return;
+      if (!agentResponse.content.trim() && !isIntentionalNoReplyResponse(agentResponse)) {
+        sendApiError(res, 502, 'model_error', 'Agent returned empty content without an intentional no-reply marker');
+        return;
+      }
 
       const response = buildChatCompletionResponse({
         id: `chatcmpl-${randomUUID()}`,
@@ -947,7 +968,11 @@ export class ApiChatCompletionsHandler {
         );
         if (!canWriteResponse(res)) return;
         if (!result.ok) {
-          transport.writeErrorAndDone(`\n[Error: ${result.error.message}]`);
+          transport.writeErrorAndDone(result.error.type, result.error.message, result.error.details);
+          return;
+        }
+        if (!result.response.content.trim() && !isNoReplyRuntimeCompletion(result.response)) {
+          transport.writeErrorAndDone('empty_response', 'Agent returned empty content');
           return;
         }
 
@@ -974,8 +999,12 @@ export class ApiChatCompletionsHandler {
     const turn = this.beginPreparedTurn(pendingTurn);
 
     try {
-      await this.awaitTurnOrInterrupt(turn.channelId, req, res, turn.turnPromise);
+      const agentResponse = await this.awaitTurnOrInterrupt(turn.channelId, req, res, turn.turnPromise);
       if (!canWriteResponse(res)) return;
+      if (!agentResponse.content.trim() && !isIntentionalNoReplyResponse(agentResponse)) {
+        transport.writeErrorAndDone('empty_response', 'Agent returned empty content');
+        return;
+      }
 
       transport.writeFinish();
       transport.writeDone();

@@ -1,3 +1,4 @@
+import { isRecord } from '../../shared/utils/types.js';
 import type { EmotionStateSnapshot, VADVector } from './state.js';
 
 export const SESSION_METADATA_EMOTION_STATE_KEY = 'emotionState';
@@ -6,9 +7,6 @@ interface SessionMetadataEnvelope {
   [key: string]: unknown;
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
 
 function parseMetadataEnvelope(metadata: string | undefined): SessionMetadataEnvelope {
   if (!metadata) return {};

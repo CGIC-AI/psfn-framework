@@ -24,6 +24,16 @@ describe('repo tool', () => {
     mockOps = createMockGitOps();
   });
 
+  it('describes inspect-first workflow and required mutation arguments', () => {
+    const tool = createRepoTool(mockOps);
+
+    expect(tool.description).toContain('Use action=inspect before mutating');
+    expect(tool.description).toContain('action=patch requires file_path and full replacement content');
+    expect(tool.description).toContain('action=branch requires name');
+    expect(tool.description).toContain('action=commit requires message');
+    expect(tool.description).toContain('action=publish/open_pr requires title/body');
+  });
+
   it('reports repository status and diff through the unified repo surface', async () => {
     mockOps.status.mockReturnValue({
       branch: 'feature/test',
@@ -138,5 +148,27 @@ describe('repo tool', () => {
 
     expect(resultText(result)).toContain('repo failed: commit failed');
     expect(result.details?.isError).toBe(true);
+  });
+
+  it('returns minimal valid JSON examples for missing mutation arguments', async () => {
+    const missingPatchPath = await createRepoTool(mockOps).execute('call-patch-missing-path', {
+      action: 'patch',
+      content: 'new content',
+    });
+    const missingCommitIntent = await createRepoTool(mockOps).execute('call-commit-missing-intent', {
+      action: 'commit',
+      message: 'Fix bug',
+    });
+    const missingPublishBody = await createRepoTool(mockOps).execute('call-publish-missing-body', {
+      action: 'publish',
+      title: 'Title',
+    });
+
+    expect(resultText(missingPatchPath)).toContain('Missing required field "file_path"');
+    expect(resultText(missingPatchPath)).toContain('"action":"patch"');
+    expect(resultText(missingCommitIntent)).toContain('Missing required field "intent"');
+    expect(resultText(missingCommitIntent)).toContain('"action":"commit"');
+    expect(resultText(missingPublishBody)).toContain('Missing required field "body"');
+    expect(resultText(missingPublishBody)).toContain('"action":"publish"');
   });
 });

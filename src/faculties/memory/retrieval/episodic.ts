@@ -3,21 +3,32 @@ import {
   parseEpisodeArc,
   type Episode,
   type EpisodeArc,
+  type EpisodeArcKind,
   type EpisodeArtifactRef,
   type EpisodeProvenanceRef,
   type EpisodeSpanRef,
 } from '../../../shared/contracts/episodic-memory.js';
-import { trustAtLeast, type ChannelVisibility, type TrustLevel } from '../../../system/trust/types.js';
-import type { EpisodeArcListOptions, EpisodeListOptions } from '../episodic/store.js';
+import { trustAtLeast, type TrustLevel } from '../../../system/trust/types.js';
+import type { ChannelDisclosureContext } from '../../../system/trust/policy.js';
+import type {
+  EpisodicStorePort,
+} from '../episodic/store-port.js';
 import type { MemoryScopeQuery } from '../types.js';
 
-type Awaitable<T> = T | Promise<T>;
+export type EpisodicRetrievalStore = Pick<
+  EpisodicStorePort,
+  'listEpisodes' | 'getEpisode' | 'listEpisodeArcsForEpisode'
+>;
 
-export interface EpisodicRetrievalStore {
-  listEpisodes(options?: EpisodeListOptions): Awaitable<Episode[]>;
-  getEpisode(id: string): Awaitable<Episode | undefined>;
-  listEpisodeArcsForEpisode(episodeId: string, options?: EpisodeArcListOptions): Awaitable<EpisodeArc[]>;
-}
+export type EpisodicArcMembershipStore = Pick<
+  EpisodicStorePort,
+  'listEpisodeArcsForEpisode' | 'getEpisodesByIds'
+>;
+
+export type EpisodicTimelineStore = Pick<
+  EpisodicStorePort,
+  'searchByTime' | 'listEpisodes' | 'getEpisode' | 'listEpisodeArcsForEpisode'
+>;
 
 export interface EpisodicRetrievalChain {
   rootEpisodeId: string;
@@ -27,17 +38,40 @@ export interface EpisodicRetrievalChain {
   matchedTerms: string[];
 }
 
+export interface EpisodicTimelineEntry {
+  episode: Episode;
+  source: 'range' | 'linked';
+  outsideRequestedRange: boolean;
+  relation?: EpisodeArcKind;
+  linkedFromEpisodeId?: string;
+  linkedArcId?: string;
+}
+
 export interface EpisodicRetrievalInput {
   contextText: string;
   channelId: string;
   trustLevel: TrustLevel;
-  channelVisibility: ChannelVisibility;
+  channelDisclosure: ChannelDisclosureContext;
   canonicalContactId?: string;
   scopeQuery?: MemoryScopeQuery;
   scanLimit?: number;
   maxChains?: number;
   maxDepth?: number;
   maxEpisodesPerChain?: number;
+}
+
+export interface EpisodicTimelineInput {
+  from?: string;
+  to?: string;
+  channelId: string;
+  trustLevel: TrustLevel;
+  channelDisclosure: ChannelDisclosureContext;
+  canonicalContactId?: string;
+  scopeQuery?: MemoryScopeQuery;
+  limit?: number;
+  scanLimit?: number;
+  maxDepth?: number;
+  maxEpisodesPerRoot?: number;
 }
 
 interface EpisodeCandidate {
@@ -50,14 +84,24 @@ const DEFAULT_SCAN_LIMIT = 1000;
 const DEFAULT_MAX_CHAINS = 3;
 const DEFAULT_MAX_DEPTH = 2;
 const DEFAULT_MAX_EPISODES_PER_CHAIN = 5;
+const DEFAULT_TIMELINE_LIMIT = 8;
+const DEFAULT_TIMELINE_SCAN_LIMIT = 200;
+const DEFAULT_TIMELINE_MAX_DEPTH = 1;
+const DEFAULT_TIMELINE_MAX_EPISODES_PER_ROOT = 3;
 const ARC_SCAN_LIMIT = 8;
 const MIN_ROOT_MATCH_SCORE = 0.18;
 const MIN_RELATED_MATCH_SCORE = 0.08;
 const QUERY_STOP_WORDS = new Set([
   'about',
   'again',
+  'all',
   'also',
+  'and',
   'anything',
+  'are',
+  'been',
+  'being',
+  'but',
   'can',
   'chain',
   'could',
@@ -65,27 +109,47 @@ const QUERY_STOP_WORDS = new Set([
   'does',
   'for',
   'from',
+  'had',
   'happen',
   'happened',
+  'has',
   'have',
+  'her',
+  'him',
+  'his',
+  'how',
   'into',
+  'its',
+  'just',
   'know',
   'memory',
   'more',
+  'not',
+  'now',
   'our',
+  'out',
   'please',
   'recall',
   'remember',
+  'she',
   'that',
   'the',
   'their',
+  'them',
+  'then',
   'there',
+  'they',
   'this',
   'through',
+  'too',
+  'very',
   'was',
   'were',
   'what',
   'when',
+  'who',
+  'why',
+  'will',
   'with',
   'would',
   'you',
@@ -151,6 +215,144 @@ export async function retrieveEpisodicChains(
   return chains.sort((left, right) => {
     if (right.score !== left.score) return right.score - left.score;
     return left.rootEpisodeId.localeCompare(right.rootEpisodeId);
+  });
+}
+
+export async function retrieveEpisodicTimeline(
+  store: EpisodicTimelineStore,
+  input: EpisodicTimelineInput,
+): Promise<EpisodicTimelineEntry[]> {
+  const limit = normalizePositiveInteger(input.limit, DEFAULT_TIMELINE_LIMIT);
+  const scanLimit = normalizePositiveInteger(
+    input.scanLimit,
+    Math.max(DEFAULT_TIMELINE_SCAN_LIMIT, limit * 4),
+  );
+  const maxDepth = normalizeNonNegativeInteger(input.maxDepth, DEFAULT_TIMELINE_MAX_DEPTH);
+  const maxEpisodesPerRoot = Math.max(
+    2,
+    normalizePositiveInteger(input.maxEpisodesPerRoot, DEFAULT_TIMELINE_MAX_EPISODES_PER_ROOT),
+  );
+  const visibilityInput: EpisodicRetrievalInput = {
+    contextText: '',
+    channelId: input.channelId,
+    trustLevel: input.trustLevel,
+    channelDisclosure: input.channelDisclosure,
+    ...(input.canonicalContactId ? { canonicalContactId: input.canonicalContactId } : {}),
+    ...(input.scopeQuery ? { scopeQuery: input.scopeQuery } : {}),
+  };
+
+  const scannedEpisodes = (await store.searchByTime({
+    ...(input.from ? { from: input.from } : {}),
+    ...(input.to ? { to: input.to } : {}),
+    limit: scanLimit,
+  }))
+    .map(episode => parseEpisode(cloneEpisode(episode)))
+    .sort(compareEpisodesChronological);
+
+  const episodeIndex = new Map<string, Episode>();
+  for (const episode of scannedEpisodes) {
+    episodeIndex.set(episode.id, episode);
+  }
+
+  const visibleRoots = scannedEpisodes
+    .filter(episode => isEpisodeVisibleForTurn(episode, visibilityInput))
+    .slice(0, limit);
+  const inRangeEpisodeIds = new Set(visibleRoots.map(episode => episode.id));
+  const entriesById = new Map<string, EpisodicTimelineEntry>();
+
+  for (const root of visibleRoots) {
+    if (entriesById.size >= limit && !entriesById.has(root.id)) break;
+    recordTimelineEntry(entriesById, {
+      episode: root,
+      source: 'range',
+      outsideRequestedRange: false,
+    });
+    if (entriesById.size >= limit) continue;
+
+    const chain = await buildEpisodeChain({
+      store,
+      root: {
+        episode: root,
+        score: root.salience.score,
+        matchedTerms: [],
+      },
+      input: visibilityInput,
+      queryTokens: [],
+      normalizedQuery: '',
+      episodeIndex,
+      maxDepth,
+      maxEpisodesPerChain: maxEpisodesPerRoot,
+    });
+
+    for (const episode of chain.episodes.slice(1).sort(compareEpisodesChronological)) {
+      if (entriesById.has(episode.id)) continue;
+      if (entriesById.size >= limit) break;
+      const arc = findTimelineArcForEpisode(episode.id, chain.arcs);
+      const linkedFromEpisodeId = arc
+        ? (arc.sourceEpisodeId === episode.id ? arc.targetEpisodeId : arc.sourceEpisodeId)
+        : undefined;
+      const source = inRangeEpisodeIds.has(episode.id) ? 'range' : 'linked';
+      recordTimelineEntry(entriesById, {
+        episode,
+        source,
+        outsideRequestedRange: !episodeOverlapsRange(episode, input.from, input.to),
+        ...(arc ? { relation: arc.arcKind, linkedArcId: arc.id } : {}),
+        ...(linkedFromEpisodeId ? { linkedFromEpisodeId } : {}),
+      });
+    }
+  }
+
+  return [...entriesById.values()].sort((left, right) => (
+    compareEpisodesChronological(left.episode, right.episode)
+    || sourceOrder(left.source) - sourceOrder(right.source)
+  ));
+}
+
+export interface EpisodeArcMembership {
+  arc: EpisodeArc;
+  /** Resolved member episodes (arc source and target) in chronological order. */
+  members: Episode[];
+}
+
+export interface EpisodeArcMembershipOptions {
+  arcKind?: EpisodeArcKind;
+  limit?: number;
+}
+
+/**
+ * Lists the arcs one episode belongs to, with every member episode
+ * resolved — the "which threads is this memory part of" surface that the
+ * recall-expansion tool (z6z) consumes. Fails closed when an arc references
+ * an unavailable episode: a dangling arc member is a store invariant
+ * violation (consolidation re-points memberships), never data to skip.
+ */
+export async function listEpisodeArcMemberships(
+  store: EpisodicArcMembershipStore,
+  episodeId: string,
+  options: EpisodeArcMembershipOptions = {},
+): Promise<EpisodeArcMembership[]> {
+  const arcs = (await store.listEpisodeArcsForEpisode(episodeId, {
+    direction: 'both',
+    ...(options.arcKind ? { arcKind: options.arcKind } : {}),
+    ...(options.limit !== undefined ? { limit: options.limit } : {}),
+  })).map(arc => parseEpisodeArc(cloneEpisodeArc(arc)));
+
+  const memberIds = [...new Set(arcs.flatMap(arc => [arc.sourceEpisodeId, arc.targetEpisodeId]))];
+  if (memberIds.length === 0) return [];
+  const episodesById = new Map(
+    (await store.getEpisodesByIds(memberIds)).map(episode => [episode.id, parseEpisode(cloneEpisode(episode))]),
+  );
+
+  return arcs.map((arc) => {
+    const members = [arc.sourceEpisodeId, arc.targetEpisodeId].map((memberId) => {
+      const member = episodesById.get(memberId);
+      if (!member) {
+        throw new Error(`episode arc "${arc.id}" references unavailable episode "${memberId}"`);
+      }
+      return cloneEpisode(member);
+    });
+    members.sort(compareEpisodesChronological);
+    return { arc, members };
   });
 }
 
@@ -390,7 +592,8 @@ function isEpisodeVisibleForTurn(episode: Episode, input: EpisodicRetrievalInput
     return false;
   }
 
-  return input.channelVisibility !== 'broadcast' && trustAtLeast(input.trustLevel, 'trusted');
+  // E3.3: the retired 'broadcast' visibility check is now the envelope flag.
+  return !input.channelDisclosure.broadcast && trustAtLeast(input.trustLevel, 'trusted');
 }
 
 function episodeMatchesScopeQuery(episode: Episode, scopeQuery: MemoryScopeQuery | undefined): boolean {
@@ -427,6 +630,42 @@ function compareArcs(left: EpisodeArc, right: EpisodeArc): number {
   if (rightScore !== leftScore) return rightScore - leftScore;
   if (right.updatedAt !== left.updatedAt) return right.updatedAt.localeCompare(left.updatedAt);
   return left.id.localeCompare(right.id);
+}
+
+function compareEpisodesChronological(left: Episode, right: Episode): number {
+  if (left.startedAt !== right.startedAt) return left.startedAt.localeCompare(right.startedAt);
+  if (left.endedAt !== right.endedAt) return left.endedAt.localeCompare(right.endedAt);
+  return left.id.localeCompare(right.id);
+}
+
+function sourceOrder(source: EpisodicTimelineEntry['source']): number {
+  return source === 'range' ? 0 : 1;
+}
+
+function recordTimelineEntry(
+  entriesById: Map<string, EpisodicTimelineEntry>,
+  entry: EpisodicTimelineEntry,
+): void {
+  const existing = entriesById.get(entry.episode.id);
+  if (!existing || (existing.source === 'linked' && entry.source === 'range')) {
+    entriesById.set(entry.episode.id, {
+      ...entry,
+      episode: cloneEpisode(entry.episode),
+    });
+  }
+}
+
+function findTimelineArcForEpisode(
+  episodeId: string,
+  arcs: readonly EpisodeArc[],
+): EpisodeArc | undefined {
+  return arcs.find(arc => arc.sourceEpisodeId === episodeId || arc.targetEpisodeId === episodeId);
+}
+
+function episodeOverlapsRange(episode: Episode, from: string | undefined, to: string | undefined): boolean {
+  if (from !== undefined && episode.endedAt < from) return false;
+  if (to !== undefined && episode.startedAt > to) return false;
+  return true;
 }
 
 function tokenizeQuery(value: string): string[] {

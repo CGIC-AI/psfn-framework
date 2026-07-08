@@ -27,34 +27,13 @@ const TOOL_REVERSIBILITY_BY_NAME: Readonly<Record<string, ToolReversibility>> = 
   prompt_layer_rollback: 'irreversible',
   prompt_layer_update: 'irreversible',
   prompt_layer_toggle: 'irreversible',
-  north_star_list: 'reversible',
-  north_star_create: 'irreversible',
-  north_star_update: 'irreversible',
-  north_star_delete: 'irreversible',
-  north_star_reorder: 'irreversible',
   settings_get: 'reversible',
-  promoted_tools_list: 'reversible',
-  promoted_tools_add: 'irreversible',
-  promoted_tools_remove: 'irreversible',
-  promoted_tools_swap: 'irreversible',
+  self_status: 'reversible',
   contact: 'irreversible',
-  contact_list: 'reversible',
-  contact_lookup: 'reversible',
-  contact_note: 'irreversible',
-  contact_link_identity: 'irreversible',
-  contact_set_channel_privacy: 'irreversible',
-  contact_set_trust: 'irreversible',
   media: 'irreversible',
+  selfie_create: 'irreversible',
   memory: 'irreversible',
-  memory_write: 'irreversible',
-  memory_import_batch: 'reversible',
-  memory_redact: 'irreversible',
-  memory_delete: 'irreversible',
-  undo_memory_delete: 'reversible',
-  memory_patch: 'irreversible',
   scratchpad: 'irreversible',
-  scratchpad_read: 'reversible',
-  scratchpad_write: 'irreversible',
   repo: 'irreversible',
   repo_status: 'reversible',
   repo_diff: 'reversible',
@@ -74,11 +53,8 @@ const TOOL_REVERSIBILITY_BY_NAME: Readonly<Record<string, ToolReversibility>> = 
   issue_sync: 'irreversible',
   north_star: 'irreversible',
   skill: 'irreversible',
-  self_restart: 'irreversible',
-  self_rebuild: 'irreversible',
   notify: 'irreversible',
   notify_operator: 'irreversible',
-  spawn_subagent: 'irreversible',
   analysis_workbench: 'reversible',
   skill_list: 'reversible',
 };
@@ -162,6 +138,10 @@ export function createSafeguardAuditTrail(
 
 export function resolveToolReversibility(toolName: string): ToolReversibility {
   return TOOL_REVERSIBILITY_BY_NAME[toolName] ?? 'reversible';
+}
+
+export function hasExplicitToolReversibility(toolName: string): boolean {
+  return Object.prototype.hasOwnProperty.call(TOOL_REVERSIBILITY_BY_NAME, toolName);
 }
 
 export function tagToolWithReversibility<T extends AgentTool<any>>(

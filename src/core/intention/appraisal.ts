@@ -9,8 +9,12 @@ export {
 export {
   decisionsToPostTurnActionCandidates,
   normalizeIntentionFollowUpActionPayload,
+  normalizeIntentionOutboundMessageActionPayload,
   normalizeIntentionReminderActionPayload,
   pendingFollowUpsToPostTurnActionCandidates,
   toInferredPostTurnActions,
 } from './appraisal/action-translation.js';
-export { sessionEntriesToIntentionMessages } from './appraisal/formatting.js';
+export {
+  buildPostTurnAppraisalTranscript,
+  sessionEntriesToIntentionMessages,
+} from './appraisal/formatting.js';

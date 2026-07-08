@@ -1,7 +1,10 @@
 import type { AgentMessage } from '@mariozechner/pi-agent-core';
 import type { AssistantMessage, UserMessage } from '@mariozechner/pi-ai';
 import { enforceUntrustedCompactionGuard } from '../../../identity/prompt-composer.js';
-import { formatAttributedSystemContent } from '../../../session/entry-attribution.js';
+import {
+  formatAttributedSystemContent,
+  formatGroupUserMessageContent,
+} from '../../../session/entry-attribution.js';
 import { runWithVisionToolRequestContext } from '../../../../primitives/images/request-context.js';
 import { runWithRequestContext } from '../../../../primitives/llm/request-context.js';
 import {
@@ -26,10 +29,16 @@ import {
   cloneObservedAdaptiveToolSnapshot,
   readActiveTurnToolSchemas,
 } from '../turn-tool-context.js';
-import { buildRuntimeDatetimeAnchorRetryPrompt, buildRuntimeDatetimeContradictionRefusal, detectRuntimeDatetimeContradiction } from '../runtime-datetime-contradiction-guard.js';
+import {
+  buildRuntimeDatetimeAnchorRetryPrompt,
+  buildRuntimeDatetimeContradictionRefusal,
+  buildRuntimeDatetimeDetectionContext,
+  detectRuntimeDatetimeContradiction,
+} from '../runtime-datetime-contradiction-guard.js';
 import { resolveAppearanceContextFromTemplateVariables } from '../runtime-context.js';
 import { sanitizePersistedReasoningText } from '../turn-records.js';
 import {
+  buildPersistedVisionUnavailableUserContent,
   buildTurnUserContent,
   hasVisionTurnInputs,
 } from '../vision-attachments.js';
@@ -40,10 +49,15 @@ import {
 import type { TurnExecutionObservability } from './observability.js';
 
 const log = createComponentLogger('SubstrateAgent');
-const VISION_TURN_TIMEOUT_MS = 30_000;
+// Covers attachment fetch (with gateway DNS retries) plus the vision model call;
+// 30s proved too tight on slow deployments where the model finished at ~70s.
+const VISION_TURN_TIMEOUT_MS = 120_000;
 const VISION_RECOVERY_REPLAY_MAX_ATTEMPTS = 3;
 const RUNTIME_FALLBACK_MODEL = 'runtime-fallback';
 type TurnExecutionRuntime = import('../turn-execution-runtime.js').TurnExecutionRuntime;
+type RuntimeContradictionDiagnostic = NonNullable<
+NonNullable<AgentResponse['metadata']['diagnostics']>['runtimeContradiction']
+>;
 
 export interface AgentInvocationMutableState {
   turnMessages: AgentMessage[];
@@ -59,6 +73,7 @@ export interface AgentInvocationResult {
   fallbackDiagnostics: AgentResponse['metadata']['diagnostics'] | undefined;
   runtimeContradictionDiagnostics: NonNullable<AgentResponse['metadata']['diagnostics']> | undefined;
   turnIntent: string | null;
+  persistedUserMessageContent?: string;
 }
 
 async function runWithVisionTurnTimeout<T>({
@@ -134,7 +149,15 @@ function buildPromptMessage(
   speakerRole: 'user' | 'system',
   content: UserMessage['content'],
 ): UserMessage | SystemNoteMessage {
-  if (speakerRole !== 'system' || typeof content !== 'string') {
+  if (speakerRole !== 'system') {
+    return {
+      role: 'user',
+      content: formatCurrentTurnUserContentForPrompt(message, content),
+      timestamp: Date.now(),
+    } satisfies UserMessage;
+  }
+
+  if (typeof content !== 'string') {
     return {
       role: 'user',
       content,
@@ -151,18 +174,77 @@ function buildPromptMessage(
   } satisfies SystemNoteMessage;
 }
 
+function shouldRenderCurrentTurnGroupAttribution(message: SubstrateMessage): boolean {
+  if (message.isDirectMessage === true) return false;
+  if (message.isDirectMessage === false) return true;
+  const explicitChannelVisibility = message.routing?.channelPrivacy;
+  return explicitChannelVisibility !== undefined && explicitChannelVisibility !== 'private';
+}
+
+function formatCurrentTurnUserContentForPrompt(
+  message: SubstrateMessage,
+  content: UserMessage['content'],
+): UserMessage['content'] {
+  if (!shouldRenderCurrentTurnGroupAttribution(message)) return content;
+  const attribution = {
+    authorId: message.authorId,
+    authorName: message.authorName,
+    source: message.channelType,
+  };
+  if (typeof content === 'string') {
+    return formatGroupUserMessageContent(content, attribution);
+  }
+
+  const firstTextIndex = content.findIndex(block => block.type === 'text');
+  if (firstTextIndex < 0) {
+    return [
+      { type: 'text', text: formatGroupUserMessageContent('', attribution) },
+      ...content,
+    ];
+  }
+
+  return content.map((block, index) => {
+    if (index !== firstTextIndex || block.type !== 'text') return block;
+    return {
+      ...block,
+      text: formatGroupUserMessageContent(block.text, attribution),
+    };
+  });
+}
+
+function accumulateProviderCacheUsage(
+  messages: AgentMessage[],
+): { cacheReadTokens: number; cacheWriteTokens: number } | null {
+  let cacheReadTokens = 0;
+  let cacheWriteTokens = 0;
+  let assistantMessages = 0;
+  for (const message of messages) {
+    if (message.role !== 'assistant') continue;
+    // Loose read: runtime-fallback and test-fixture assistant messages may
+    // omit usage even though the wire type declares it.
+    const usage = (message as { usage?: AssistantMessage['usage'] }).usage;
+    if (!usage) continue;
+    assistantMessages += 1;
+    cacheReadTokens += Number.isFinite(usage.cacheRead) ? usage.cacheRead : 0;
+    cacheWriteTokens += Number.isFinite(usage.cacheWrite) ? usage.cacheWrite : 0;
+  }
+  if (assistantMessages === 0) return null;
+  return { cacheReadTokens, cacheWriteTokens };
+}
+
 function readAssistantReasoning(message: AssistantMessage | null): string | undefined {
   if (!message || !Array.isArray(message.content)) return undefined;
-  const reasoning = message.content
-    .filter((block: unknown): block is { type: string; thinking?: string } => (
-      typeof block === 'object'
-      && block !== null
-      && (block as { type?: unknown }).type === 'thinking'
-      && typeof (block as { thinking?: unknown }).thinking === 'string'
-    ))
-    .map(block => block.thinking?.trim() ?? '')
-    .filter(block => block.length > 0)
-    .join('\n\n');
+  const reasoningBlocks: string[] = [];
+  for (const block of message.content) {
+    if ((block as { type?: unknown }).type !== 'thinking') {
+      continue;
+    }
+    const thinking = (block as { thinking?: unknown }).thinking;
+    if (typeof thinking === 'string' && thinking.trim().length > 0) {
+      reasoningBlocks.push(thinking.trim());
+    }
+  }
+  const reasoning = reasoningBlocks.join('\n\n');
   return sanitizePersistedReasoningText(reasoning);
 }
 
@@ -196,6 +278,26 @@ function buildPromptResponseSnapshot(input: {
     ...(reasoning ? { reasoning } : {}),
     ...(toolCallCount !== undefined ? { toolCallCount } : {}),
   };
+}
+
+function stringifyPromptContentForSnapshot(
+  content: UserMessage['content'],
+  persistedUserContent?: string,
+): string {
+  if (persistedUserContent !== undefined) {
+    return persistedUserContent;
+  }
+  if (typeof content === 'string') {
+    return content;
+  }
+  return content
+    .map((block) => {
+      if (block.type === 'text') {
+        return block.text;
+      }
+      return `[${block.type}]`;
+    })
+    .join('\n\n');
 }
 
 function countImageAttachments(message: SubstrateMessage): number {
@@ -323,6 +425,7 @@ export async function invokeAgentForTurn(input: {
   let responseModel = runtime.agent.state.model.id;
   let fallbackDiagnostics: AgentResponse['metadata']['diagnostics'] | undefined;
   let runtimeContradictionDiagnostics: NonNullable<AgentResponse['metadata']['diagnostics']> | undefined;
+  let runtimeContradictionDiagnostic: RuntimeContradictionDiagnostic | undefined;
   const turnIntent: string | null = autoloadOutcome.intent;
   const isVisionTurn = hasVisionTurnInputs(message);
   const visionTurnDeadlineAt = isVisionTurn ? promptStageStart + VISION_TURN_TIMEOUT_MS : null;
@@ -379,6 +482,7 @@ export async function invokeAgentForTurn(input: {
       fallbackDiagnostics,
       runtimeContradictionDiagnostics,
       turnIntent,
+      ...(isVisionTurn ? { persistedUserMessageContent: buildPersistedVisionUnavailableUserContent(message) } : {}),
     };
   }
 
@@ -387,6 +491,11 @@ export async function invokeAgentForTurn(input: {
     runtime.getAdaptiveToolRuntimeState().lastSnapshot,
   );
   const activeTools = readActiveTurnToolSchemas(runtime.agent);
+  if (turnSnapshot.plan) {
+    // The plan carries exactly what ships to the provider: bind the resolved
+    // tool definitions before the snapshot is (re-)emitted and persisted.
+    turnSnapshot.plan.toolDefinitions = activeTools;
+  }
   if (activeTools.length > 0 || adaptiveToolSnapshot) {
     turnSnapshot.toolContext = {
       activeTools,
@@ -475,6 +584,7 @@ export async function invokeAgentForTurn(input: {
         message,
         errorMessage,
       }),
+      persistedUserContent: buildPersistedVisionUnavailableUserContent(message),
     };
   }
   const selfieAppearanceContext = activeTools.some((tool) => tool.name === 'selfie_create')
@@ -490,7 +600,10 @@ export async function invokeAgentForTurn(input: {
       : {}),
   };
   if (turnSnapshot.promptContext) {
-    turnSnapshot.promptContext.currentTurnInput = turnUserContentBuildResult.content;
+    turnSnapshot.promptContext.currentTurnInput = stringifyPromptContentForSnapshot(
+      turnUserContentBuildResult.content,
+      turnUserContentBuildResult.persistedUserContent,
+    );
     turnSnapshot.capturedAt = Date.now();
     observability.emitTurnSnapshotInBackground(turnSnapshot);
   }
@@ -554,20 +667,24 @@ export async function invokeAgentForTurn(input: {
 
   responseText = runtime.extractResponseText();
   const runtimeContradictionDetection = detectRuntimeDatetimeContradiction(
-    turnSnapshot.promptContext,
+    buildRuntimeDatetimeDetectionContext({
+      plan: turnSnapshot.plan,
+      promptContext: turnSnapshot.promptContext,
+    }),
     responseText,
   );
   if (runtimeContradictionDetection.anchorDetected && runtimeContradictionDetection.contradictionDetected) {
+    runtimeContradictionDiagnostic = {
+      code: 'runtime_datetime_anchor_contradiction',
+      anchorDetected: true,
+      matchedSignals: [...runtimeContradictionDetection.matchedSignals],
+      attempts: 1,
+      retryAttempted: true,
+      retrySucceeded: false,
+      refusalApplied: false,
+    };
     runtimeContradictionDiagnostics = {
-      runtimeContradiction: {
-        code: 'runtime_datetime_anchor_contradiction',
-        anchorDetected: true,
-        matchedSignals: [...runtimeContradictionDetection.matchedSignals],
-        attempts: 1,
-        retryAttempted: true,
-        retrySucceeded: false,
-        refusalApplied: false,
-      },
+      runtimeContradiction: runtimeContradictionDiagnostic,
     };
     log.warn('Runtime datetime contradiction detected; retrying with strengthened anchor', {
       channelId: message.channelId,
@@ -629,29 +746,32 @@ export async function invokeAgentForTurn(input: {
     responseText = runtime.extractResponseText();
 
     const retryContradictionDetection = detectRuntimeDatetimeContradiction(
-      turnSnapshot.promptContext,
+      buildRuntimeDatetimeDetectionContext({
+        plan: turnSnapshot.plan,
+        promptContext: turnSnapshot.promptContext,
+      }),
       responseText,
     );
     if (retryContradictionDetection.contradictionDetected) {
-      const baseRuntimeContradiction = runtimeContradictionDiagnostics.runtimeContradiction;
+      runtimeContradictionDiagnostic = {
+        ...runtimeContradictionDiagnostic,
+        attempts: 2,
+        retrySucceeded: false,
+        refusalApplied: true,
+      };
       runtimeContradictionDiagnostics = {
-        runtimeContradiction: {
-          ...baseRuntimeContradiction,
-          attempts: 2,
-          retrySucceeded: false,
-          refusalApplied: true,
-        },
+        runtimeContradiction: runtimeContradictionDiagnostic,
       };
       responseText = buildRuntimeDatetimeContradictionRefusal();
     } else {
-      const baseRuntimeContradiction = runtimeContradictionDiagnostics.runtimeContradiction;
+      runtimeContradictionDiagnostic = {
+        ...runtimeContradictionDiagnostic,
+        attempts: 2,
+        retrySucceeded: true,
+        refusalApplied: false,
+      };
       runtimeContradictionDiagnostics = {
-        runtimeContradiction: {
-          ...baseRuntimeContradiction,
-          attempts: 2,
-          retrySucceeded: true,
-          refusalApplied: false,
-        },
+        runtimeContradiction: runtimeContradictionDiagnostic,
       };
     }
   }
@@ -793,13 +913,29 @@ export async function invokeAgentForTurn(input: {
     });
 
   }
+  // Provider-reported prompt-cache usage (E2.4): recorded into the turn's
+  // promptCaching observability so telemetry reflects what the provider
+  // actually served from cache.
+  const providerCacheUsage = accumulateProviderCacheUsage(mutableState.turnMessages);
+  if (providerCacheUsage && turnSnapshot.promptContext?.providerObservability) {
+    turnSnapshot.promptContext.providerObservability.promptCaching = {
+      ...turnSnapshot.promptContext.providerObservability.promptCaching,
+      usage: providerCacheUsage,
+    };
+  }
   observability.emitObservedTurnStage('prompt', {
     durationMs: Date.now() - promptStageStart,
     ttftMs: streamFirstTokenAt - startTime,
-    ...(runtimeContradictionDiagnostics
+    ...(providerCacheUsage
+      ? {
+        cacheReadTokens: providerCacheUsage.cacheReadTokens,
+        cacheWriteTokens: providerCacheUsage.cacheWriteTokens,
+      }
+      : {}),
+    ...(runtimeContradictionDiagnostic
       ? {
         runtimeContradictionRetry: true,
-        runtimeContradictionAttempts: runtimeContradictionDiagnostics.runtimeContradiction.attempts,
+        runtimeContradictionAttempts: runtimeContradictionDiagnostic.attempts,
       }
       : {}),
   });
@@ -822,5 +958,8 @@ export async function invokeAgentForTurn(input: {
     fallbackDiagnostics,
     runtimeContradictionDiagnostics,
     turnIntent,
+    ...(turnUserContentBuildResult.persistedUserContent
+      ? { persistedUserMessageContent: turnUserContentBuildResult.persistedUserContent }
+      : {}),
   };
 }

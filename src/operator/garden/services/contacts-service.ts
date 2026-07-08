@@ -27,6 +27,8 @@ import type {
   AdminContactSocialGraphConnectionView,
   AdminContactDetailData,
   AdminContactListData,
+  AdminContactRelationshipScoreReader,
+  AdminContactRelationshipScoreView,
   AdminContactSocialGraphView,
   AdminContactsService,
   ContactUpdateResult,
@@ -57,8 +59,52 @@ interface ContactUpdatePayload {
   trustLevel?: TrustLevel;
   relationshipType?: RelationshipType;
   notes?: string;
+  timezone?: unknown;
   channelPrivacy?: ChannelPrivacyUpdate[];
   addChannel?: AddChannelLink;
+}
+
+type ContactTimezonePayload =
+  | { ok: true; present: false }
+  | { ok: true; present: true; timezone: string | undefined }
+  | { ok: false; message: string };
+
+function hasPayloadField(payload: object, field: string): boolean {
+  return Object.prototype.hasOwnProperty.call(payload, field);
+}
+
+function normalizeContactTimezonePayload(payload: { timezone?: unknown }): ContactTimezonePayload {
+  if (!hasPayloadField(payload, 'timezone')) {
+    return { ok: true, present: false };
+  }
+
+  if (payload.timezone === null || payload.timezone === undefined) {
+    return { ok: true, present: true, timezone: undefined };
+  }
+
+  if (typeof payload.timezone !== 'string') {
+    return {
+      ok: false,
+      message: 'timezone must be a valid IANA timezone name string, null, or empty string',
+    };
+  }
+
+  const timezone = payload.timezone.trim();
+  if (!timezone) {
+    return { ok: true, present: true, timezone: undefined };
+  }
+
+  try {
+    const canonicalTimezone = new Intl.DateTimeFormat('en-US', { timeZone: timezone })
+      .resolvedOptions()
+      .timeZone;
+    return { ok: true, present: true, timezone: canonicalTimezone || timezone };
+  } catch {
+    return {
+      ok: false,
+      message: `Invalid timezone: ${timezone}. timezone must be a valid IANA timezone name`,
+    };
+  }
 }
 
 function isMentionOnlyContact(contact: Contact | undefined): boolean {
@@ -73,6 +119,7 @@ export class AdminContactsDataService implements AdminContactsService {
     contactStore?: ContactStorePort | null;
     memoryStore: MemoryStorePort;
     sessionStore: SessionStore;
+    relationshipScoreReader?: AdminContactRelationshipScoreReader | null;
   }) {}
 
   private normalizeContactMutationAuditField(value: string | null): ContactMutationAuditField | undefined {
@@ -115,7 +162,7 @@ export class AdminContactsDataService implements AdminContactsService {
     const contactById = new Map(contacts.map(contact => [contact.id, contact] as const));
     const entities = await contactStore.listSocialGraphEntities({
       viewerTrustLevel: 'primary',
-      viewerChannelVisibility: 'private',
+      viewerChannelPrivacy: 'private',
       limit: Math.max(contacts.length * 4, 100),
     });
     const entityById = new Map(entities.map(entity => [entity.id, entity] as const));
@@ -126,7 +173,7 @@ export class AdminContactsDataService implements AdminContactsService {
     );
     const edges = await contactStore.listSocialRelationshipEdges({
       viewerTrustLevel: 'primary',
-      viewerChannelVisibility: 'private',
+      viewerChannelPrivacy: 'private',
       limit: Math.max(contacts.length * 8, 200),
     });
     const edgesByEntityId = new Map<string, SocialRelationshipEdge[]>();
@@ -187,7 +234,7 @@ export class AdminContactsDataService implements AdminContactsService {
       };
     };
 
-    return new Map(contacts.map((contact) => {
+    return new Map<string, AdminContactSocialGraphView>(contacts.map((contact) => {
       const entity = entityByContactId.get(contact.id);
       if (!entity) {
         return [contact.id, {
@@ -243,6 +290,14 @@ export class AdminContactsDataService implements AdminContactsService {
     }));
   }
 
+  private async buildRelationshipScoreMap(
+    contacts: Contact[],
+  ): Promise<Map<string, AdminContactRelationshipScoreView>> {
+    const reader = this.deps.relationshipScoreReader;
+    if (!reader || contacts.length === 0) return new Map();
+    return reader.listContactRelationshipScores(contacts.map(contact => contact.id));
+  }
+
   async listContacts(params?: URLSearchParams): Promise<AdminContactListData> {
     const contactStore = this.deps.contactStore;
     if (!contactStore) {
@@ -251,6 +306,7 @@ export class AdminContactsDataService implements AdminContactsService {
         profileMap: new Map(),
         relatedChannelMap: new Map(),
         socialGraphMap: new Map(),
+        relationshipScoreMap: new Map(),
         verifications: [],
         mutationAudits: [],
         mutationAuditQuery: this.parseContactMutationAuditQuery(params),
@@ -266,6 +322,7 @@ export class AdminContactsDataService implements AdminContactsService {
       sessionStore: this.deps.sessionStore,
     });
     const socialGraphMap = await this.buildSocialGraphMap(contacts, profileMap);
+    const relationshipScoreMap = await this.buildRelationshipScoreMap(contacts);
 
     const verifications = await contactStore.listIdentityLinkVerifications(20);
     const mutationAuditQuery = this.parseContactMutationAuditQuery(params);
@@ -276,6 +333,7 @@ export class AdminContactsDataService implements AdminContactsService {
       profileMap,
       relatedChannelMap,
       socialGraphMap,
+      relationshipScoreMap,
       verifications,
       mutationAudits,
       mutationAuditQuery,
@@ -318,7 +376,13 @@ export class AdminContactsDataService implements AdminContactsService {
       return { ok: false, message: 'Contact store not available' };
     }
 
-    let payload: { displayName?: string; trustLevel?: TrustLevel; relationshipType?: RelationshipType; notes?: string };
+    let payload: {
+      displayName?: string;
+      trustLevel?: TrustLevel;
+      relationshipType?: RelationshipType;
+      notes?: string;
+      timezone?: unknown;
+    };
     try {
       payload = JSON.parse(body);
     } catch {
@@ -343,12 +407,22 @@ export class AdminContactsDataService implements AdminContactsService {
       return { ok: false, message: `Invalid relationship type: ${payload.relationshipType}` };
     }
 
-    const contact = await contactStore.upsert({
+    const timezonePayload = normalizeContactTimezonePayload(payload);
+    if (!timezonePayload.ok) {
+      return { ok: false, message: timezonePayload.message };
+    }
+
+    const contactInput: Partial<Contact> & { displayName: string } = {
       displayName,
       trustLevel: payload.trustLevel ?? 'regular',
       relationshipType: payload.relationshipType ?? 'acquaintance',
       notes: payload.notes,
-    });
+    };
+    if (timezonePayload.present) {
+      contactInput.timezone = timezonePayload.timezone;
+    }
+
+    const contact = await contactStore.upsert(contactInput);
 
     return {
       ok: true,
@@ -534,6 +608,11 @@ export class AdminContactsDataService implements AdminContactsService {
       return { ok: false, message: 'Request body must be valid JSON' };
     }
 
+    const timezonePayload = normalizeContactTimezonePayload(payload);
+    if (!timezonePayload.ok) {
+      return { ok: false, message: timezonePayload.message };
+    }
+
     if (payload.displayName !== undefined || payload.nickname !== undefined) {
       const displayName = payload.displayName?.trim() ?? contact.displayName;
       if (!displayName) {
@@ -564,6 +643,18 @@ export class AdminContactsDataService implements AdminContactsService {
 
     if (payload.notes !== undefined) {
       await contactStore.updateNotes(contactId, payload.notes, 'admin:api');
+    }
+
+    if (timezonePayload.present) {
+      const currentContact = await contactStore.getById(contactId);
+      if (!currentContact) {
+        return { ok: false, message: 'Contact not found' };
+      }
+      await contactStore.upsert({
+        id: contactId,
+        displayName: currentContact.displayName,
+        timezone: timezonePayload.timezone,
+      }, { actor: 'admin:api' });
     }
 
     // Apply channel privacy updates

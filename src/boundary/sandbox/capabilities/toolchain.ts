@@ -1,4 +1,4 @@
-import type { GatewayREPLCapabilities, SandboxBudgetRef } from './contracts.js';
+import type { FsListView, GatewayREPLCapabilities, SandboxBudgetRef } from './contracts.js';
 import {
   consumeToolCallBudget,
   toErrorMessage,
@@ -14,7 +14,7 @@ const MAX_WRITE_FILE_CONTENT_CHARS = 500_000;
 export interface ToolchainCapabilities {
   read_file: (path: string) => Promise<string>;
   write_file: (path: string, content: string) => Promise<{ ok: boolean; error?: string }>;
-  list_files: (glob?: string, maxEntries?: number) => Promise<string[] | { error: string }>;
+  list_files: (glob?: string, maxEntries?: number) => Promise<FsListView | { error: string }>;
 }
 
 interface CreateToolchainCapabilitiesOptions {
@@ -116,7 +116,7 @@ export function createToolchainCapabilities(
   const list_files = async (
     glob?: string,
     maxEntries?: number,
-  ): Promise<string[] | { error: string }> => {
+  ): Promise<FsListView | { error: string }> => {
     if (!consumeToolCallBudget(options.budgetRef)) {
       return { error: TOOL_CALL_BUDGET_EXCEEDED_MESSAGE };
     }

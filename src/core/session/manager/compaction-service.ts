@@ -2,9 +2,14 @@ import type { LLMProviderPort } from '../../agent/contracts.js';
 import { countMessageTokens, countTokens } from '../../../primitives/llm/tokens.js';
 import { createComponentLogger } from '../../../shared/logger.js';
 import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
-import type { ChannelVisibility } from '../../../system/trust/types.js';
+import type { ChannelPrivacy } from '../../../system/trust/context-envelope.js';
 import type { EventBus } from '../../../shared/event-bus.js';
-import { COMPACTION_SUMMARY_PROMPT_KEY, getDefaultPromptText } from '../../identity/prompt-registry.js';
+import {
+  COMPACTION_SUMMARY_PROMPT_KEY,
+  RECENT_SESSION_SUMMARY_PROMPT_KEY,
+  getDefaultPromptText,
+  type PromptRegistryKey,
+} from '../../identity/prompt-registry.js';
 import { injectPromptRuntimeTokens } from '../../identity/prompt-runtime.js';
 import type { PromptRegistryStatePort } from '../../identity/prompt-state-port.js';
 import { toErrorMessage } from '../../../shared/utils/errors.js';
@@ -16,10 +21,12 @@ import type { SessionStore } from '../../../persistence/sessions/store.js';
 import type { SessionEntry } from '../types.js';
 import {
   appendCompactionMetadataBlocks,
+  buildRecentSessionSummaryFallbackText,
+  buildSessionSummarySourceBlock,
   buildCompactionPreservedTagBlock,
   resolveEmotionalSalienceThreshold,
-  withRetry,
 } from '../manager-primitives.js';
+import { withRetry } from '../../../primitives/llm/retry.js';
 import type { PreCompactionExtractionHandler } from './contracts.js';
 import { entriesToMessages } from './context-support.js';
 import { getRequestContext } from '../../../primitives/llm/request-context.js';
@@ -29,7 +36,7 @@ const log = createComponentLogger('CompactionService');
 export interface CompactionParams {
   channelId: string;
   recent: SessionEntry[];
-  channelVisibility: ChannelVisibility;
+  channelVisibility: ChannelPrivacy;
   systemTokens: number;
   compactionPromptText?: string;
   llmProvider: LLMProviderPort;
@@ -56,13 +63,160 @@ export interface CompactionResult {
   compactionSummaryText?: string;
 }
 
+export type RecentSessionSummaryPurpose =
+  | 'history_budget'
+  | 'wake_session'
+  | 'wake_continuity'
+  | 'free_time_return';
+
+export interface RecentSessionSummaryParams {
+  channelId: string;
+  entries: readonly SessionEntry[];
+  characterName?: string;
+  llmProvider?: LLMProviderPort;
+  promptRegistry: PromptRegistryStatePort | null;
+  maxTokens: number;
+  purpose: RecentSessionSummaryPurpose;
+}
+
+export interface SessionSummaryCompletionParams {
+  channelId: string;
+  sourceText: string;
+  llmProvider: LLMProviderPort;
+  promptRegistry: PromptRegistryStatePort | null;
+  promptKey: PromptRegistryKey;
+  promptText?: string;
+  requestIdBase: string;
+  correlationPurpose: string;
+  originStage: string;
+  maxRetries: number;
+  baseDelayMs: number;
+  onRetry?: (params: { attempt: number; delayMs: number; error: Error }) => Promise<void> | void;
+}
+
+function stripGeneratedSummaryToolResultLines(content: string): string {
+  const lines = content
+    .split('\n')
+    .map(line => line.trim())
+    .filter(line => line.length > 0);
+  const filtered = lines.filter(line => !/^(?:[-*]\s*)?(?:\[Tool result:|Tool reported:)/iu.test(line));
+  return filtered.join(' ');
+}
+
+export function normalizeGeneratedRecentSummaryText(content: string, maxTokens: number): string {
+  const withoutHeader = stripGeneratedSummaryToolResultLines(content)
+    .replace(/^\[History summary\]\s*/iu, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!withoutHeader || maxTokens <= 0) return '';
+  if (countTokens(withoutHeader) <= maxTokens) return withoutHeader;
+
+  let maxChars = Math.max(80, Math.floor(withoutHeader.length * 0.8));
+  while (maxChars >= 80) {
+    const candidate = `${withoutHeader.slice(0, maxChars).trimEnd()}...`;
+    if (countTokens(candidate) <= maxTokens) {
+      return candidate;
+    }
+    maxChars = Math.floor(maxChars * 0.8);
+  }
+  return '';
+}
+
+/**
+ * Shared session-summary completion primitive. Owns PromptRegistry lookup,
+ * runtime-token injection, retry behavior, request correlation, and
+ * callType/originStage metadata for every session-summary LLM call
+ * (compaction, recent-session, and session-search summaries).
+ *
+ * callType convention: the positional `complete` callType is 'background'
+ * while the correlation metadata carries callType 'summary'.
+ */
+export async function completeSessionSummary(params: SessionSummaryCompletionParams): Promise<string> {
+  const summaryPrompt = params.promptText
+    ?? params.promptRegistry?.getPrompt(params.promptKey)
+    ?? getDefaultPromptText(params.promptKey);
+  const runtimeSummaryPrompt = injectPromptRuntimeTokens(summaryPrompt);
+  const requestContext = getRequestContext();
+  const summaryResponse = await withRetry(
+    () => params.llmProvider.complete(
+      {
+        systemPrompt: runtimeSummaryPrompt,
+        messages: [{ role: 'user', content: params.sourceText }],
+        correlation: {
+          ...(requestContext?.turnId ? { turnId: requestContext.turnId } : {}),
+          requestId: `${params.requestIdBase}:summary`,
+          channelId: params.channelId,
+          callType: 'summary',
+          purpose: params.correlationPurpose,
+          originType: 'summary',
+          originStage: params.originStage,
+          ...(requestContext?.toolName ? { toolName: requestContext.toolName } : {}),
+          ...(requestContext?.toolCallId ? { toolCallId: requestContext.toolCallId } : {}),
+        },
+      },
+      'background',
+    ),
+    { maxRetries: params.maxRetries, baseDelayMs: params.baseDelayMs },
+    {
+      // Session-summary retries are unconditional by contract: any completion
+      // failure (not just transport-retryable ones) gets the full retry budget.
+      isRetryable: () => true,
+      ...(params.onRetry ? { onRetry: params.onRetry } : {}),
+    },
+  );
+  return summaryResponse.content;
+}
+
+export async function summarizeRecentSessionEntries(params: RecentSessionSummaryParams): Promise<string> {
+  const sourceText = buildSessionSummarySourceBlock({
+    entries: params.entries,
+    characterName: params.characterName,
+  });
+  if (!sourceText) return '';
+
+  if (!params.llmProvider) {
+    return buildRecentSessionSummaryFallbackText({
+      entries: params.entries,
+      characterName: params.characterName,
+      maxTokens: params.maxTokens,
+    }).replace(/^\[History summary\]\s*/iu, '').trim();
+  }
+
+  const requestContext = getRequestContext();
+  const requestIdBase = requestContext?.requestId
+    ? `${requestContext.requestId}:recent-summary:${params.purpose}`
+    : `recent-summary:${params.channelId}:${params.purpose}:${Date.now()}`;
+  try {
+    const summary = await completeSessionSummary({
+      channelId: params.channelId,
+      sourceText,
+      llmProvider: params.llmProvider,
+      promptRegistry: params.promptRegistry,
+      promptKey: RECENT_SESSION_SUMMARY_PROMPT_KEY,
+      requestIdBase,
+      correlationPurpose: 'session.recent.summary',
+      originStage: `session.recent.summary.${params.purpose}`,
+      maxRetries: 1,
+      baseDelayMs: 150,
+    });
+    return normalizeGeneratedRecentSummaryText(summary, params.maxTokens);
+  } catch (error) {
+    log.warn('Recent session summary failed', {
+      channelId: params.channelId,
+      purpose: params.purpose,
+      error: toErrorMessage(error),
+    });
+    return '';
+  }
+}
+
 /**
  * Evaluate whether auto-compaction should trigger based on current token usage
  * relative to the configured compaction threshold.
  */
 export function shouldCompact(params: {
   recent: SessionEntry[];
-  channelVisibility: ChannelVisibility;
+  channelVisibility: ChannelPrivacy;
   systemTokens: number;
   config: SubstrateConfig;
 }): { trigger: boolean; tokenBudget: number; totalTokens: number } {
@@ -153,47 +307,33 @@ export async function runAutoCompaction(params: CompactionParams): Promise<Compa
     ? `${requestContext.requestId}:compaction`
     : `compaction:${params.channelId}:${Date.now()}`;
   try {
-    const compactionPrompt = params.compactionPromptText
-      ?? params.promptRegistry?.getPrompt(COMPACTION_SUMMARY_PROMPT_KEY)
-      ?? getDefaultPromptText(COMPACTION_SUMMARY_PROMPT_KEY);
-    const runtimeCompactionPrompt = injectPromptRuntimeTokens(compactionPrompt);
-    const summaryResponse = await withRetry(
-      () => params.llmProvider.complete(
-        {
-          systemPrompt: runtimeCompactionPrompt,
-          messages: [{ role: 'user', content: compactText }],
-          correlation: {
-            ...(requestContext?.turnId ? { turnId: requestContext.turnId } : {}),
-            requestId: `${compactionRequestIdBase}:summary`,
-            channelId: params.channelId,
-            callType: 'summary',
-            purpose: 'session.compaction.summary',
-            originType: 'summary',
-            originStage: 'session.compaction.summary',
-            ...(requestContext?.toolName ? { toolName: requestContext.toolName } : {}),
-            ...(requestContext?.toolCallId ? { toolCallId: requestContext.toolCallId } : {}),
-          },
-        },
-        'background',
-      ),
-      { maxRetries: retryMaxRetries, baseDelayMs: 250 },
-      {
-        onRetry: async ({ attempt, delayMs, error }) => {
-          sawRetry = true;
-          lastRetryAttempt = attempt + 1;
-          await params.eventBus?.emit('agent.retry.start', {
-            channelId: params.channelId,
-            attempt: lastRetryAttempt,
-            maxAttempts: retryMaxAttempts,
-            delayMs,
-            error: error.message,
-          });
-        },
+    const summaryContent = await completeSessionSummary({
+      channelId: params.channelId,
+      sourceText: compactText,
+      llmProvider: params.llmProvider,
+      promptRegistry: params.promptRegistry,
+      promptKey: COMPACTION_SUMMARY_PROMPT_KEY,
+      promptText: params.compactionPromptText,
+      requestIdBase: compactionRequestIdBase,
+      correlationPurpose: 'session.compaction.summary',
+      originStage: 'session.compaction.summary',
+      maxRetries: retryMaxRetries,
+      baseDelayMs: 250,
+      onRetry: async ({ attempt, delayMs, error }) => {
+        sawRetry = true;
+        lastRetryAttempt = attempt + 1;
+        await params.eventBus?.emit('agent.retry.start', {
+          channelId: params.channelId,
+          attempt: lastRetryAttempt,
+          maxAttempts: retryMaxAttempts,
+          delayMs,
+          error: error.message,
+        });
       },
-    );
+    });
 
     // Store compaction summary
-    const compactionSummary = appendCompactionMetadataBlocks(summaryResponse.content, [
+    const compactionSummary = appendCompactionMetadataBlocks(summaryContent, [
       sourceHashTag,
       preservedTagBlock,
     ]);

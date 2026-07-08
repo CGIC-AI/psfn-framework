@@ -203,6 +203,8 @@ export function createRuntimeVoiceTtsConnector(
 
   const connectorConfig = resolveStreamingTtsRuntimeConfig(provider, config);
   const resolvedConnectorConfig = options.fetchImpl
+    && typeof connectorConfig === 'object'
+    && connectorConfig !== null
     ? { ...connectorConfig, fetchImpl: options.fetchImpl }
     : connectorConfig;
   return {

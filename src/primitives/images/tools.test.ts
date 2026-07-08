@@ -1,11 +1,33 @@
-import { describe, expect, it, vi } from 'vitest';
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AgentToolResult } from '@mariozechner/pi-agent-core';
 import type { TextContent } from '@mariozechner/pi-ai';
 import { runWithVisionToolRequestContext } from './request-context.js';
-import { createImageAnalyzeTool, createImageCreateTool, createImageEditTool, createMediaTool, createSelfieTool } from './tools.js';
+import { createMediaTool, createSelfieTool } from './tools.js';
 import { IMAGE_ASPECT_RATIO_VALUES, type ImageToolResultDetails, type ImageVisionReviewer, type MediaToolResultDetails } from './types.js';
-import { runWithChargeContext } from '../../shared/telemetry/run-charge.js';
+import {
+  chargeSurface,
+  resetRunChargeRollingWindowForTests,
+  runWithChargeContext,
+} from '../../shared/telemetry/run-charge.js';
+import {
+  listPendingPaidDeliverables,
+  runWithPaidDeliverableTracking,
+} from '../../shared/paid-deliverable-tracking.js';
+import { resolveToolRequiredCapabilities } from '../../system/capabilities/requirements.js';
 import type { ChargePolicyConfig } from '../../system/config/charge-policy-config.js';
+import { makeTestFatiguePolicyConfig } from '../../test-support/charge-policy.js';
+
+const tempDirs: string[] = [];
+
+afterEach(() => {
+  resetRunChargeRollingWindowForTests();
+  tempDirs.splice(0).forEach((dir) => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+});
 
 function resultText(result: AgentToolResult<any>): string {
   return result.content
@@ -14,7 +36,7 @@ function resultText(result: AgentToolResult<any>): string {
     .join('\n');
 }
 
-function readAspectRatios(tool: ReturnType<typeof createImageCreateTool> | ReturnType<typeof createImageEditTool>): string[] {
+function readAspectRatios(tool: { parameters: unknown }): string[] {
   const schema = (tool.parameters as {
     properties?: Record<string, { anyOf?: Array<{ const?: string }> }>;
   }).properties?.aspect_ratio;
@@ -71,6 +93,18 @@ function makeChargePolicy(): ChargePolicyConfig {
       cheap_cloud: 1,
       premium_cloud: 4,
     },
+    fatigue: makeTestFatiguePolicyConfig(),
+  };
+}
+
+function makeInteractiveQuotaPolicy(quota: number): ChargePolicyConfig {
+  const policy = makeChargePolicy();
+  return {
+    ...policy,
+    runChargeQuotaByLane: {
+      ...policy.runChargeQuotaByLane,
+      interactive: quota,
+    },
   };
 }
 
@@ -82,6 +116,81 @@ describe('image tools', () => {
     });
 
     expect(readActions(tool)).toEqual(['generate', 'edit', 'analyze']);
+    expect(tool.description).toContain('generate requires prompt');
+    expect(tool.description).toContain('edit requires prompt and input_urls');
+    expect(tool.description).toContain('analyze requires input_urls');
+    expect((tool.parameters as any).properties.prompt.description).toContain('Required for action=generate');
+    expect((tool.parameters as any).properties.input_urls.description).toContain('Required for action=edit');
+  });
+
+  it('keeps selfie_create concise and focused on required prompt/reference behavior', () => {
+    const tool = createSelfieTool({
+      create: vi.fn(),
+      edit: vi.fn(),
+    });
+
+    expect(tool.description.length).toBeLessThan(520);
+    expect(tool.description).toContain('Requires prompt');
+    expect(tool.description).toContain('saved-reference anchoring');
+    expect(tool.description).not.toContain('content policy');
+    expect((tool.parameters as any).properties.edit_model.description.length).toBeLessThan(220);
+    expect((tool.parameters as any).properties.edit_model.description).not.toContain('gpt-image-2');
+  });
+
+  it('returns minimal valid examples for missing media arguments', async () => {
+    const reviewer: ImageVisionReviewer = {
+      analyze: vi.fn(async () => ({
+        question: 'unused',
+        summary: 'unused',
+        model: 'vision-model',
+        imageCount: 1,
+      })),
+    };
+    const tool = createMediaTool({
+      create: vi.fn(),
+      edit: vi.fn(),
+    }, reviewer);
+
+    const missingGeneratePrompt = await tool.execute('media-missing-generate-prompt', {
+      action: 'generate',
+    }) as AgentToolResult<MediaToolResultDetails>;
+    const missingEditPrompt = await tool.execute('media-missing-edit-prompt', {
+      action: 'edit',
+      input_urls: ['https://images.example.test/source.png'],
+    }) as AgentToolResult<MediaToolResultDetails>;
+    const missingEditInput = await tool.execute('media-missing-edit-input', {
+      action: 'edit',
+      prompt: 'make this warmer',
+    }) as AgentToolResult<MediaToolResultDetails>;
+    const missingAnalyzeInput = await tool.execute('media-missing-analyze-input', {
+      action: 'analyze',
+    }) as AgentToolResult<MediaToolResultDetails>;
+
+    expect(resultText(missingGeneratePrompt)).toContain('Missing required field "prompt" for media action="generate"');
+    expect(resultText(missingGeneratePrompt)).toContain('{"action":"generate","prompt":"full image description"}');
+    expect(resultText(missingEditPrompt)).toContain('Missing required field "prompt" for media action="edit"');
+    expect(resultText(missingEditInput)).toContain('Missing required field "input_urls" for media action="edit"');
+    expect(resultText(missingAnalyzeInput)).toContain('Missing required field "input_urls" for media action="analyze"');
+    expect(missingGeneratePrompt.details.isError).toBe(true);
+    expect(missingEditPrompt.details.isError).toBe(true);
+    expect(missingEditInput.details.isError).toBe(true);
+    expect(missingAnalyzeInput.details.isError).toBe(true);
+  });
+
+  it('does not capability-gate benign media and selfie actions', () => {
+    const mediaTool = createMediaTool({
+      create: vi.fn(),
+      edit: vi.fn(),
+    });
+    const selfieTool = createSelfieTool({
+      create: vi.fn(),
+      edit: vi.fn(),
+    });
+
+    expect(resolveToolRequiredCapabilities(mediaTool, { action: 'generate' })).toEqual([]);
+    expect(resolveToolRequiredCapabilities(mediaTool, { action: 'edit' })).toEqual([]);
+    expect(resolveToolRequiredCapabilities(mediaTool, { action: 'analyze' })).toEqual([]);
+    expect(resolveToolRequiredCapabilities(selfieTool, {})).toEqual([]);
   });
 
   it('returns generated media results plus an in-turn vision review from the unified media tool', async () => {
@@ -150,7 +259,12 @@ describe('image tools', () => {
       ['agent.charge', 'externalModelConsult'],
     ]);
     expect(result.details.mediaResult?.requestId).toBe('req-media-1');
+    expect(result.details.mediaResult?.images[0]?.url).toBe('https://images.example.test/media-selfie.png');
     expect(result.details.visionReview?.summary).toContain('consistent');
+    expect(resultText(result)).toContain('"imageCount": 1');
+    expect(resultText(result)).toContain('chat attachment');
+    expect(resultText(result)).not.toContain('https://images.example.test/media-selfie.png');
+    expect(resultText(result)).not.toContain('/tmp/media-selfie.png');
   });
 
   it('analyzes images through the unified media tool', async () => {
@@ -217,18 +331,71 @@ describe('image tools', () => {
     expect(emitted).toHaveLength(0);
   });
 
-  it('constrains aspect_ratio to the supported preset list for create and edit', () => {
-    const createTool = createImageCreateTool({
+  it('rejects exhausted paid image quota before calling the provider or writing artifacts', async () => {
+    const artifactDir = mkdtempSync(join(tmpdir(), 'psfn-paid-image-quota-'));
+    tempDirs.push(artifactDir);
+    const artifactPath = join(artifactDir, 'should-not-exist.png');
+    const sidecarPath = `${artifactPath}.image-meta.json`;
+    const ops = {
+      create: vi.fn(async () => {
+        writeFileSync(artifactPath, Buffer.from('provider-bytes'));
+        writeFileSync(sidecarPath, '{}');
+        return {
+          provider: 'fal' as const,
+          mode: 'create' as const,
+          model: 'fal-ai/nano-banana-2',
+          fallbackUsed: false,
+          requestId: 'req-should-not-run',
+          images: [{
+            url: 'https://images.example.test/should-not-run.png',
+            contentType: 'image/png',
+            fileName: 'should-not-run.png',
+            localPath: artifactPath,
+          }],
+        };
+      }),
+      edit: vi.fn(),
+    };
+    const chargePolicy = makeInteractiveQuotaPolicy(6);
+
+    await runWithChargeContext({
+      chargePolicy,
+      lane: 'interactive',
+      runId: 'prior-paid-image',
+    }, async () => {
+      chargeSurface('paidImageGeneration');
+    });
+
+    const tool = createMediaTool(ops);
+    const result = await runWithChargeContext({
+      chargePolicy,
+      lane: 'interactive',
+      runId: 'exhausted-paid-image',
+    }, async () => tool.execute('tool-call-media-quota', {
+      action: 'generate',
+      prompt: 'a purring cat on a server rack',
+    }) as Promise<AgentToolResult<MediaToolResultDetails>>);
+
+    expect(ops.create).not.toHaveBeenCalled();
+    expect(result.details.isError).toBe(true);
+    expect(resultText(result)).toContain('media generate failed: Charge quota exceeded');
+    expect(resultText(result)).toContain('rolling 24-hour budget');
+    expect(existsSync(artifactPath)).toBe(false);
+    expect(existsSync(sidecarPath)).toBe(false);
+  });
+
+  it('constrains aspect_ratio to the supported preset list for media and selfie tools', () => {
+    const mediaTool = createMediaTool({
       create: vi.fn(),
       edit: vi.fn(),
     });
-    const editTool = createImageEditTool({
+    const selfieTool = createSelfieTool({
       create: vi.fn(),
       edit: vi.fn(),
     });
 
-    expect(readAspectRatios(createTool)).toEqual([...IMAGE_ASPECT_RATIO_VALUES]);
-    expect(readAspectRatios(editTool)).toEqual([...IMAGE_ASPECT_RATIO_VALUES]);
+    expect(readAspectRatios(mediaTool)).toEqual([...IMAGE_ASPECT_RATIO_VALUES]);
+    expect(readAspectRatios(selfieTool)).toEqual([...IMAGE_ASPECT_RATIO_VALUES]);
   });
 
   it('returns generated image results plus an in-turn vision review', async () => {
@@ -257,11 +424,12 @@ describe('image tools', () => {
       })),
     };
 
-    const tool = createImageCreateTool(ops, reviewer);
+    const tool = createMediaTool(ops, reviewer);
     const result = await tool.execute('tool-call-1', {
+      action: 'generate',
       prompt: 'a cute mirror selfie of me in warm morning light',
       aspect_ratio: '3:4',
-    }) as AgentToolResult<ImageToolResultDetails>;
+    }) as AgentToolResult<MediaToolResultDetails>;
 
     expect(ops.create).toHaveBeenCalledWith(expect.objectContaining({
       prompt: 'a cute mirror selfie of me in warm morning light',
@@ -273,9 +441,13 @@ describe('image tools', () => {
       prompt: 'a cute mirror selfie of me in warm morning light',
       mode: 'create',
     });
-    expect(result.details.imageResult?.requestId).toBe('req-vision-1');
+    expect(result.details.mediaResult?.requestId).toBe('req-vision-1');
+    expect(result.details.mediaResult?.images[0]?.url).toBe('https://images.example.test/selfie.png');
     expect(result.details.visionReview?.summary).toContain('matches the companion look');
-    expect(resultText(result)).toContain('"requestId": "req-vision-1"');
+    expect(resultText(result)).toContain('"imageCount": 1');
+    expect(resultText(result)).not.toContain('"requestId": "req-vision-1"');
+    expect(resultText(result)).not.toContain('https://images.example.test/selfie.png');
+    expect(resultText(result)).not.toContain('/tmp/selfie.png');
     expect(resultText(result)).toContain('Vision review:');
   });
 
@@ -323,8 +495,108 @@ describe('image tools', () => {
       mode: 'create',
     });
     expect(result.details.visionReview?.summary).toContain('consistent companion portrait');
-    expect(resultText(result)).toContain('"requestId": "req-selfie-1"');
+    expect(result.details.imageResult?.requestId).toBe('req-selfie-1');
+    expect(result.details.imageResult?.images[0]?.url).toBe('https://images.example.test/selfie-explicit.png');
+    expect(resultText(result)).toContain('"imageCount": 1');
+    expect(resultText(result)).not.toContain('"requestId": "req-selfie-1"');
+    expect(resultText(result)).not.toContain('https://images.example.test/selfie-explicit.png');
+    expect(resultText(result)).not.toContain('/tmp/selfie-explicit.png');
     expect(resultText(result)).toContain('Vision review:');
+  });
+
+  it('states the paid image is a pending attachment that requires a reply to deliver', async () => {
+    const ops = {
+      create: vi.fn(async () => ({
+        provider: 'fal' as const,
+        mode: 'create' as const,
+        model: 'fal-ai/nano-banana-2',
+        fallbackUsed: false,
+        requestId: 'req-pending-1',
+        images: [{
+          url: 'https://images.example.test/pending.png',
+          contentType: 'image/png',
+          fileName: 'pending.png',
+          localPath: '/tmp/pending.png',
+        }],
+      })),
+      edit: vi.fn(),
+    };
+
+    const tool = createSelfieTool(ops);
+    const result = await tool.execute('tool-call-pending', {
+      prompt: 'a candid mirror selfie in soft morning light',
+    }) as AgentToolResult<ImageToolResultDetails>;
+
+    const text = resultText(result);
+    expect(text).toContain('"attachmentPending": true');
+    expect(text).toContain('pending chat attachment');
+    expect(text).toContain('will NOT be delivered');
+    expect(text).toContain('"generationId": "req-pending-1"');
+    expect(text).toContain('"fileName": "pending.png"');
+  });
+
+  it('registers a pending paid deliverable for a charged selfie generation', async () => {
+    const ops = {
+      create: vi.fn(async () => ({
+        provider: 'fal' as const,
+        mode: 'create' as const,
+        model: 'fal-ai/nano-banana-2',
+        fallbackUsed: false,
+        requestId: 'req-deliverable-1',
+        images: [{
+          url: 'https://images.example.test/deliverable.png',
+          contentType: 'image/png',
+          fileName: 'deliverable.png',
+          localPath: '/tmp/deliverable.png',
+        }],
+      })),
+      edit: vi.fn(),
+    };
+
+    const tool = createSelfieTool(ops);
+    const pending = await runWithPaidDeliverableTracking(async () => {
+      await tool.execute('tool-call-deliverable', {
+        prompt: 'a candid mirror selfie in soft morning light',
+      });
+      return listPendingPaidDeliverables();
+    });
+
+    expect(pending).toEqual([{
+      surface: 'paidImageGeneration',
+      toolName: 'selfie_create',
+      toolCallId: 'tool-call-deliverable',
+      identifier: 'req-deliverable-1',
+      artifactCount: 1,
+    }]);
+  });
+
+  it('does not register a pending paid deliverable for a free comfyui generation', async () => {
+    const ops = {
+      create: vi.fn(async () => ({
+        provider: 'comfyui' as const,
+        mode: 'create' as const,
+        fallbackUsed: false,
+        requestId: 'req-free-1',
+        images: [{
+          url: 'https://images.example.test/free.png',
+          contentType: 'image/png',
+          fileName: 'free.png',
+          localPath: '/tmp/free.png',
+        }],
+      })),
+      edit: vi.fn(),
+    };
+
+    const tool = createSelfieTool(ops);
+    const pending = await runWithPaidDeliverableTracking(async () => {
+      await tool.execute('tool-call-free', {
+        prompt: 'a candid mirror selfie in soft morning light',
+        provider: 'comfyui',
+      });
+      return listPendingPaidDeliverables();
+    });
+
+    expect(pending).toEqual([]);
   });
 
   it('uses the default reference photo for selfie_create through the edit pipeline', async () => {
@@ -387,32 +659,37 @@ describe('image tools', () => {
     expect(result.details.imageResult?.requestId).toBe('req-selfie-ref-1');
   });
 
-  it('falls back to fresh generation when a referenced selfie edit hits provider content policy', async () => {
+  it('falls through to the next edit tier with the original prompt when a referenced selfie edit hits provider content policy', async () => {
     const providerBlock = new Error(
       'FAL edit result fetch failed (422): {"detail":[{"type":"content_policy_violation","msg":"The content could not be processed because it contained material flagged by a content checker."}]}',
     );
+    let editCalls = 0;
     const ops = {
-      create: vi.fn(async () => ({
-        provider: 'fal',
-        mode: 'create' as const,
-        model: 'fal-ai/nano-banana-2',
-        fallbackUsed: false,
-        requestId: 'req-selfie-fallback-1',
-        images: [{
-          url: 'https://images.example.test/selfie-fallback.png',
-          contentType: 'image/png',
-          fileName: 'selfie-fallback.png',
-          localPath: '/tmp/selfie-fallback.png',
-        }],
-      })),
+      create: vi.fn(),
       edit: vi.fn(async () => {
-        throw providerBlock;
+        editCalls += 1;
+        if (editCalls === 1) {
+          throw providerBlock;
+        }
+        return {
+          provider: 'fal',
+          mode: 'edit' as const,
+          model: 'fal-ai/nano-banana-2/edit',
+          fallbackUsed: false,
+          requestId: 'req-selfie-fallback-1',
+          images: [{
+            url: 'https://images.example.test/selfie-fallback.png',
+            contentType: 'image/png',
+            fileName: 'selfie-fallback.png',
+            localPath: '/tmp/selfie-fallback.png',
+          }],
+        };
       }),
     };
     const reviewer: ImageVisionReviewer = {
       analyze: vi.fn(async () => ({
         question: 'Describe the generated image.',
-        summary: 'The fallback portrait is fully clothed and coherent.',
+        summary: 'The fallback portrait still matches the reference.',
         model: 'vision-model',
         imageCount: 1,
       })),
@@ -426,34 +703,197 @@ describe('image tools', () => {
       })),
     };
 
+    const prompt = 'Purrsephone in a soft oversized off-shoulder knit sweater, flirty expression, cozy bedroom background with rumpled sheets';
     const tool = createSelfieTool(ops, reviewer, { referenceResolver });
     const result = await tool.execute('tool-call-selfie-policy-fallback', {
-      prompt: 'Purrsephone in a soft oversized off-shoulder knit sweater, flirty expression, cozy bedroom background with rumpled sheets',
+      prompt,
       aspect_ratio: '3:4',
     }) as AgentToolResult<ImageToolResultDetails>;
 
-    expect(ops.edit).toHaveBeenCalledWith(expect.objectContaining({
+    expect(ops.create).not.toHaveBeenCalled();
+    expect(ops.edit).toHaveBeenNthCalledWith(1, expect.objectContaining({
+      prompt,
+      model: 'xai/grok-imagine-image/quality/edit',
       imageUrls: ['data:image/png;base64,cmVm'],
+      aspectRatio: '3:4',
       sourceToolName: 'selfie_create',
       referenceImageIds: ['ref-default'],
     }));
-    expect(ops.create).toHaveBeenCalledWith(expect.objectContaining({
+    expect(ops.edit).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      prompt,
+      model: 'fal-ai/nano-banana-2/edit',
+      imageUrls: ['data:image/png;base64,cmVm'],
       aspectRatio: '3:4',
       sourceToolName: 'selfie_create',
+      referenceImageIds: ['ref-default'],
     }));
-    const fallbackParams = ops.create.mock.calls[0]?.[0] as { prompt: string };
-    expect(fallbackParams.prompt).toContain('Tasteful fully clothed companion self-portrait');
-    expect(fallbackParams.prompt).not.toMatch(/flirty|off[- ]shoulder|rumpled sheets|bedroom/i);
     expect(reviewer.analyze).toHaveBeenCalledWith({
       imageUrls: ['https://images.example.test/selfie-fallback.png'],
       imageLocalPaths: ['/tmp/selfie-fallback.png'],
-      prompt: fallbackParams.prompt,
-      mode: 'create',
+      prompt,
+      mode: 'edit',
     });
     expect(result.details.imageResult?.fallbackUsed).toBe(true);
-    expect(result.details.imageResult?.fallbackReason).toBe('selfie_reference_content_policy_fresh_generation');
-    expect(resultText(result)).toContain('Reference image edit was blocked');
-    expect(resultText(result)).toContain('"requestId": "req-selfie-fallback-1"');
+    expect(result.details.imageResult?.fallbackReason).toBe('selfie_edit_chain_fallback');
+    expect(resultText(result)).toContain('content policy block');
+    expect(resultText(result)).toContain('Fell back to fal-ai/nano-banana-2/edit');
+    expect(result.details.imageResult?.requestId).toBe('req-selfie-fallback-1');
+    expect(resultText(result)).not.toContain('"requestId": "req-selfie-fallback-1"');
+    expect(resultText(result)).not.toContain('https://images.example.test/selfie-fallback.png');
+  });
+
+  it('starts the selfie edit chain at the requested tier and skips stricter models', async () => {
+    const providerBlock = new Error(
+      'FAL edit result fetch failed (422): {"detail":[{"type":"content_policy_violation","msg":"flagged by a content checker"}]}',
+    );
+    let editCalls = 0;
+    const ops = {
+      create: vi.fn(),
+      edit: vi.fn(async () => {
+        editCalls += 1;
+        if (editCalls === 1) {
+          throw providerBlock;
+        }
+        return {
+          provider: 'fal',
+          mode: 'edit' as const,
+          model: 'openai/gpt-image-2/edit',
+          fallbackUsed: false,
+          requestId: 'req-selfie-gpt-edit-1',
+          images: [{
+            url: 'https://images.example.test/selfie-gpt-edit.png',
+            contentType: 'image/png',
+            fileName: 'selfie-gpt-edit.png',
+            localPath: '/tmp/selfie-gpt-edit.png',
+          }],
+        };
+      }),
+    };
+    const referenceResolver = {
+      resolveForTool: vi.fn(async () => ({
+        id: 'ref-default',
+        dataUrl: 'data:image/png;base64,cmVm',
+        description: 'default portrait',
+        tags: ['default'],
+      })),
+    };
+
+    const tool = createSelfieTool(ops, undefined, { referenceResolver });
+    const result = await tool.execute('tool-call-selfie-tier-start', {
+      prompt: 'me at the beach in a modest one-piece swimsuit, golden hour',
+      edit_model: 'fal-ai/nano-banana-2/edit',
+    }) as AgentToolResult<ImageToolResultDetails>;
+
+    expect(ops.create).not.toHaveBeenCalled();
+    expect(ops.edit).toHaveBeenCalledTimes(2);
+    expect(ops.edit).toHaveBeenNthCalledWith(1, expect.objectContaining({
+      model: 'fal-ai/nano-banana-2/edit',
+    }));
+    expect(ops.edit).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      model: 'openai/gpt-image-2/edit',
+      prompt: 'me at the beach in a modest one-piece swimsuit, golden hour',
+    }));
+    expect(result.details.imageResult?.fallbackUsed).toBe(true);
+    expect(result.details.imageResult?.fallbackReason).toBe('selfie_edit_chain_fallback');
+  });
+
+  it('falls through the selfie edit chain when a tier times out', async () => {
+    const timeoutError = new Error('FAL request req-slow-1 timed out after 300000ms');
+    let editCalls = 0;
+    const ops = {
+      create: vi.fn(),
+      edit: vi.fn(async () => {
+        editCalls += 1;
+        if (editCalls === 1) {
+          throw timeoutError;
+        }
+        return {
+          provider: 'fal',
+          mode: 'edit' as const,
+          model: 'fal-ai/nano-banana-2/edit',
+          fallbackUsed: false,
+          requestId: 'req-selfie-timeout-1',
+          images: [{
+            url: 'https://images.example.test/selfie-timeout.png',
+            contentType: 'image/png',
+            fileName: 'selfie-timeout.png',
+            localPath: '/tmp/selfie-timeout.png',
+          }],
+        };
+      }),
+    };
+    const referenceResolver = {
+      resolveForTool: vi.fn(async () => ({
+        id: 'ref-default',
+        dataUrl: 'data:image/png;base64,cmVm',
+        description: 'default portrait',
+        tags: ['default'],
+      })),
+    };
+
+    const tool = createSelfieTool(ops, undefined, { referenceResolver });
+    const result = await tool.execute('tool-call-selfie-timeout-fallback', {
+      prompt: 'a cozy reading-nook portrait of me',
+    }) as AgentToolResult<ImageToolResultDetails>;
+
+    expect(ops.create).not.toHaveBeenCalled();
+    expect(ops.edit).toHaveBeenCalledTimes(2);
+    expect(result.details.imageResult?.fallbackUsed).toBe(true);
+    expect(result.details.imageResult?.fallbackReason).toBe('selfie_edit_chain_fallback');
+    expect(resultText(result)).toContain('timeout or provider error');
+  });
+
+  it('retries the last configured tier with a sanitized prompt when every tier blocks the original', async () => {
+    const providerBlock = new Error(
+      'FAL edit result fetch failed (422): {"detail":[{"type":"content_policy_violation","msg":"flagged by a content checker"}]}',
+    );
+    let editCalls = 0;
+    const ops = {
+      create: vi.fn(),
+      edit: vi.fn(async () => {
+        editCalls += 1;
+        if (editCalls <= 3) {
+          throw providerBlock;
+        }
+        return {
+          provider: 'fal',
+          mode: 'edit' as const,
+          model: 'openai/gpt-image-2/edit',
+          fallbackUsed: false,
+          requestId: 'req-selfie-sanitized-1',
+          images: [{
+            url: 'https://images.example.test/selfie-sanitized.png',
+            contentType: 'image/png',
+            fileName: 'selfie-sanitized.png',
+            localPath: '/tmp/selfie-sanitized.png',
+          }],
+        };
+      }),
+    };
+    const referenceResolver = {
+      resolveForTool: vi.fn(async () => ({
+        id: 'ref-default',
+        dataUrl: 'data:image/png;base64,cmVm',
+        description: 'default portrait',
+        tags: ['default'],
+      })),
+    };
+
+    const tool = createSelfieTool(ops, undefined, { referenceResolver });
+    const result = await tool.execute('tool-call-selfie-sanitized', {
+      prompt: 'a flirty off-shoulder portrait in the bedroom with rumpled sheets',
+    }) as AgentToolResult<ImageToolResultDetails>;
+
+    expect(ops.create).not.toHaveBeenCalled();
+    expect(ops.edit).toHaveBeenCalledTimes(4);
+    const sanitizedParams = ops.edit.mock.calls[3]?.[0] as { prompt: string; model: string; referenceImageIds: string[] };
+    expect(sanitizedParams.model).toBe('openai/gpt-image-2/edit');
+    expect(sanitizedParams.referenceImageIds).toEqual(['ref-default']);
+    expect(sanitizedParams.prompt).toContain('Tasteful fully clothed companion self-portrait');
+    expect(sanitizedParams.prompt).not.toMatch(/flirty|off[- ]shoulder|rumpled sheets|bedroom/i);
+    expect(result.details.imageResult?.fallbackUsed).toBe(true);
+    expect(result.details.imageResult?.fallbackReason).toBe('selfie_edit_chain_sanitized_prompt');
+    expect(resultText(result)).toContain('safer prompt');
   });
 
   it('tells agents to stop retrying selfie prompts when policy fallback is also blocked', async () => {
@@ -483,16 +923,17 @@ describe('image tools', () => {
       aspect_ratio: '3:4',
     }) as AgentToolResult<ImageToolResultDetails>;
 
-    expect(ops.edit).toHaveBeenCalledTimes(1);
-    expect(ops.create).toHaveBeenCalledTimes(1);
+    // Three chain tiers with the original prompt plus the sanitized last resort.
+    expect(ops.edit).toHaveBeenCalledTimes(4);
+    expect(ops.create).not.toHaveBeenCalled();
     expect(result.details.isError).toBe(true);
     expect(resultText(result)).toContain('selfie_create was blocked by the image provider content policy');
-    expect(resultText(result)).toContain('A fresh-generation fallback was attempted and was also blocked');
+    expect(resultText(result)).toContain('A safer edit fallback was attempted and was also blocked');
     expect(resultText(result)).toContain('Do not retry the same prompt');
     expect(resultText(result)).toContain('stop tool attempts');
   });
 
-  it('lets image_edit append a selected reference photo to the edit inputs', async () => {
+  it('lets media edit append a selected reference photo to the edit inputs', async () => {
     const ops = {
       create: vi.fn(),
       edit: vi.fn(async () => ({
@@ -517,12 +958,13 @@ describe('image tools', () => {
       })),
     };
 
-    const tool = createImageEditTool(ops, undefined, { referenceResolver });
+    const tool = createMediaTool(ops, undefined, { referenceResolver });
     const result = await tool.execute('tool-call-edit-ref', {
+      action: 'edit',
       prompt: 'keep the pose, update the hairstyle to match the reference',
-      image_urls: ['https://images.example.test/source.png'],
+      input_urls: ['https://images.example.test/source.png'],
       reference_image_tags: ['short-hair'],
-    }) as AgentToolResult<ImageToolResultDetails>;
+    }) as AgentToolResult<MediaToolResultDetails>;
 
     expect(referenceResolver.resolveForTool).toHaveBeenCalledWith({
       referenceImageTags: ['short-hair'],
@@ -533,13 +975,13 @@ describe('image tools', () => {
         'https://images.example.test/source.png',
         'data:image/png;base64,c2hvcnQ=',
       ],
-      sourceToolName: 'image_edit',
+      sourceToolName: 'media',
       referenceImageIds: ['ref-short-hair'],
     }));
-    expect(result.details.imageResult?.requestId).toBe('req-edit-ref-1');
+    expect(result.details.mediaResult?.requestId).toBe('req-edit-ref-1');
   });
 
-  it('exposes image_analyze as a callable vision tool', async () => {
+  it('exposes media action=analyze as the callable vision path', async () => {
     const reviewer: ImageVisionReviewer = {
       analyze: vi.fn(async () => ({
         question: 'Does this still look like me?',
@@ -549,11 +991,15 @@ describe('image tools', () => {
       })),
     };
 
-    const tool = createImageAnalyzeTool(reviewer);
+    const tool = createMediaTool({
+      create: vi.fn(),
+      edit: vi.fn(),
+    }, reviewer);
     const result = await tool.execute('tool-call-2', {
-      image_urls: ['https://images.example.test/review.png'],
+      action: 'analyze',
+      input_urls: ['https://images.example.test/review.png'],
       question: 'Does this still look like me?',
-    }) as AgentToolResult<ImageToolResultDetails>;
+    }) as AgentToolResult<MediaToolResultDetails>;
 
     expect(reviewer.analyze).toHaveBeenCalledWith({
       imageUrls: ['https://images.example.test/review.png'],
@@ -564,7 +1010,7 @@ describe('image tools', () => {
     expect(resultText(result)).toContain('appearance is consistent');
   });
 
-  it('reuses the current-turn vision review when image_analyze is called with a mismatched stale url', async () => {
+  it('reuses the current-turn vision review when media analyze is called with a mismatched stale url', async () => {
     const reviewer: ImageVisionReviewer = {
       analyze: vi.fn(async () => ({
         question: 'Does this still look like me?',
@@ -574,7 +1020,10 @@ describe('image tools', () => {
       })),
     };
 
-    const tool = createImageAnalyzeTool(reviewer);
+    const tool = createMediaTool({
+      create: vi.fn(),
+      edit: vi.fn(),
+    }, reviewer);
     const result = await runWithVisionToolRequestContext(
       {
         userMessageText: 'did you not see the image?',
@@ -588,11 +1037,12 @@ describe('image tools', () => {
         },
       },
       async () => tool.execute('tool-call-3', {
-        image_urls: [
+        action: 'analyze',
+        input_urls: [
           'https://files.example.test/uploads/other-image.png?token=stale',
         ],
         question: 'Does this still look like me?',
-      }) as Promise<AgentToolResult<ImageToolResultDetails>>,
+      }) as Promise<AgentToolResult<MediaToolResultDetails>>,
     );
 
     expect(reviewer.analyze).not.toHaveBeenCalled();
@@ -612,7 +1062,10 @@ describe('image tools', () => {
       })),
     };
 
-    const tool = createImageAnalyzeTool(reviewer);
+    const tool = createMediaTool({
+      create: vi.fn(),
+      edit: vi.fn(),
+    }, reviewer);
     const result = await runWithVisionToolRequestContext(
       {
         userMessageText: 'did you not see the image?',
@@ -621,11 +1074,12 @@ describe('image tools', () => {
         ],
       },
       async () => tool.execute('tool-call-3b', {
-        image_urls: [
+        action: 'analyze',
+        input_urls: [
           'https://files.example.test/uploads/other-image.png?token=stale',
         ],
         question: 'Does this still look like me?',
-      }) as Promise<AgentToolResult<ImageToolResultDetails>>,
+      }) as Promise<AgentToolResult<MediaToolResultDetails>>,
     );
 
     expect(reviewer.analyze).not.toHaveBeenCalled();
@@ -644,16 +1098,20 @@ describe('image tools', () => {
       })),
     };
 
-    const tool = createImageAnalyzeTool(reviewer);
+    const tool = createMediaTool({
+      create: vi.fn(),
+      edit: vi.fn(),
+    }, reviewer);
     const result = await runWithVisionToolRequestContext(
       {
         userMessageText: 'can you see this now?',
         imageAttachmentUrls: ['inline:image:0'],
       },
       async () => tool.execute('tool-call-inline', {
-        image_urls: ['attachment:current-turn-image-1'],
+        action: 'analyze',
+        input_urls: ['attachment:current-turn-image-1'],
         question: 'What is visible?',
-      }) as Promise<AgentToolResult<ImageToolResultDetails>>,
+      }) as Promise<AgentToolResult<MediaToolResultDetails>>,
     );
 
     expect(reviewer.analyze).not.toHaveBeenCalled();
@@ -673,7 +1131,10 @@ describe('image tools', () => {
     };
     const explicitUrl = 'https://images.example.test/review/explicit-image.png?token=current';
 
-    const tool = createImageAnalyzeTool(reviewer);
+    const tool = createMediaTool({
+      create: vi.fn(),
+      edit: vi.fn(),
+    }, reviewer);
     const result = await runWithVisionToolRequestContext(
       {
         userMessageText: explicitUrl,
@@ -682,9 +1143,10 @@ describe('image tools', () => {
         ],
       },
       async () => tool.execute('tool-call-4', {
-        image_urls: [explicitUrl],
+        action: 'analyze',
+        input_urls: [explicitUrl],
         question: 'What is in this image?',
-      }) as Promise<AgentToolResult<ImageToolResultDetails>>,
+      }) as Promise<AgentToolResult<MediaToolResultDetails>>,
     );
 
     expect(reviewer.analyze).toHaveBeenCalledWith({

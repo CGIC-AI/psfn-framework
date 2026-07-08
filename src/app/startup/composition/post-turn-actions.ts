@@ -6,6 +6,14 @@ import type { Scheduler } from '../../../core/scheduler/scheduler.js';
 import {
   POST_TURN_SUBAGENT_SPAWN_ACTION_KIND,
 } from '../../../core/agent/post-turn-action-runtime.js';
+import {
+  buildCompletionHandoffDedupeKey,
+  emitCompletionHandoff as emitCompletionHandoffRecord,
+  extractOriginIds,
+  safeEmitCompletionHandoffError,
+  type CompletionHandoffInput,
+  type CompletionHandoffStatus,
+} from '../../../core/agent/completion-handoff.js';
 import type {
   PostTurnActionAgent,
   PostTurnActionCapability,
@@ -508,6 +516,7 @@ export function wirePostTurnActionRuntime(
       | 'deduplicated'
       | 'started'
       | 'succeeded'
+      | 'rescheduled'
       | 'retry_scheduled'
       | 'failed'
       | 'dropped_budget'
@@ -545,6 +554,74 @@ export function wirePostTurnActionRuntime(
     });
   };
 
+  const emitCompletionHandoff = (
+    entry: DeferredQueueEntry,
+    status: CompletionHandoffStatus,
+    input: {
+      summary: string;
+      validationPerformed: string[];
+      recommendedNextAction: string;
+      blocker?: { reason: string; error?: string };
+      partialResult?: boolean;
+      subagentSpawn?: PostTurnActionHandlerResult['subagentSpawn'];
+    },
+  ): void => {
+    const originIds = extractOriginIds(entry.action.payload);
+    const subagentId = input.subagentSpawn?.subagentId;
+    const subagentOutputRefs: CompletionHandoffInput['outputRefs'] = subagentId
+      ? [{
+          kind: 'subagent_result',
+          ref: subagentId,
+          ...(input.subagentSpawn?.name ? { label: input.subagentSpawn.name } : {}),
+        }]
+      : [];
+    const handoff: CompletionHandoffInput = {
+      source: 'post_turn_action',
+      taskId: entry.action.id,
+      taskLabel: entry.action.kind,
+      ...(subagentId ? { subagentId } : {}),
+      status,
+      resultSummary: input.summary,
+      outputRefs: [
+        { kind: 'post_turn_action', ref: entry.action.id, label: entry.action.kind },
+        { kind: 'dedupe_key', ref: entry.action.dedupeKey },
+        ...subagentOutputRefs,
+      ],
+      validationPerformed: input.validationPerformed,
+      ...(input.blocker ? { blocker: input.blocker } : {}),
+      partialResult: input.partialResult ?? false,
+      recommendedNextAction: input.recommendedNextAction,
+      origin: {
+        ...originIds,
+        sourceChannelId: entry.action.channelId,
+        sourceMessageId: entry.action.sourceMessageId,
+        requestId: entry.action.sourceMessageId,
+      },
+      dedupeKey: buildCompletionHandoffDedupeKey([
+        'post_turn_action',
+        entry.action.id,
+        entry.action.dedupeKey,
+        status,
+        input.blocker?.reason,
+      ]),
+    };
+    // Telemetry/journal record only. Deferred post-turn actions are runtime
+    // bookkeeping: they must never write into session transcripts and never
+    // surface companion-facing notices (subagent/shard results arrive through
+    // their own faculties).
+    emitCompletionHandoffRecord({
+      eventBus,
+      targetChannelId: entry.action.channelId,
+      handoff,
+    }).catch((error) => {
+      log.warn('Deferred action completion handoff failed', {
+        actionId: entry.action.id,
+        actionKind: entry.action.kind,
+        error: safeEmitCompletionHandoffError(error),
+      });
+    });
+  };
+
   const recordDrop = (
     entry: DeferredQueueEntry,
     reason: string,
@@ -567,6 +644,12 @@ export function wirePostTurnActionRuntime(
       maxQueuedActions: runtimeProfile.maxQueuedActions,
       backPressureMode: runtimeProfile.degradationMode,
     });
+    emitCompletionHandoff(entry, 'blocked', {
+      summary: `Post-turn action "${entry.action.kind}" was dropped before running.`,
+      validationPerformed: ['runtime_lane_budget', 'post_turn_action_not_executed'],
+      blocker: { reason: 'dropped_budget', error: reason },
+      recommendedNextAction: 'Decide whether to requeue a narrower action or ignore the stale work before notifying any partner.',
+    });
   };
 
   const recordFailure = (
@@ -586,6 +669,12 @@ export function wirePostTurnActionRuntime(
       attempt: entry.attempt,
       maxAttempts: entry.maxRetries + 1,
       error,
+    });
+    emitCompletionHandoff(entry, reason === 'eligibility_denied' ? 'blocked' : 'failed', {
+      summary: `Post-turn action "${entry.action.kind}" did not complete.`,
+      validationPerformed: ['post_turn_action_terminal_failure', reason],
+      blocker: { reason, error },
+      recommendedNextAction: 'Review the failure and decide whether to retry, narrow scope, or produce a companion-authored status.',
     });
   };
 
@@ -647,6 +736,12 @@ export function wirePostTurnActionRuntime(
       maxAttempts: entry.maxRetries + 1,
       detail,
     });
+    emitCompletionHandoff(entry, reason === 'cancelled' ? 'cancelled' : 'blocked', {
+      summary: `Post-turn action "${entry.action.kind}" was ${reason}.`,
+      validationPerformed: ['post_turn_action_terminal', reason],
+      blocker: { reason, error: detail },
+      recommendedNextAction: 'Decide whether any replacement action is needed; do not send raw action text as a partner update.',
+    });
   };
 
   const recordCompletion = (
@@ -665,6 +760,15 @@ export function wirePostTurnActionRuntime(
       maxAttempts: entry.maxRetries + 1,
       detail: result?.detail?.trim() || 'succeeded',
       ...(result?.subagentSpawn ? { subagentSpawn: { ...result.subagentSpawn } } : {}),
+    });
+    emitCompletionHandoff(entry, 'completed', {
+      summary: result?.detail?.trim() || `Post-turn action "${entry.action.kind}" succeeded.`,
+      validationPerformed: [
+        'post_turn_action_handler_completed',
+        ...(result?.subagentSpawn ? ['subagent_spawn_result_recorded'] : []),
+      ],
+      subagentSpawn: result?.subagentSpawn,
+      recommendedNextAction: 'Review the internal action result and decide the next companion-authored step.',
     });
   };
 
@@ -819,6 +923,32 @@ export function wirePostTurnActionRuntime(
         if (result) {
           handlerResult = result;
         }
+        if (typeof result?.rescheduleAt === 'number') {
+          break;
+        }
+      }
+      if (typeof handlerResult?.rescheduleAt === 'number') {
+        const rescheduleAt = normalizeActionRunAt(handlerResult.rescheduleAt);
+        if (rescheduleAt === undefined || rescheduleAt <= Date.now()) {
+          throw new Error(`Deferred action handler returned invalid rescheduleAt for "${entry.action.kind}"`);
+        }
+        entry.attempt = Math.max(0, entry.attempt - 1);
+        entry.nextRunAt = rescheduleAt;
+        persistQueue();
+        const delayMs = Math.max(1, rescheduleAt - Date.now());
+        log.info('Deferred action rescheduled by handler', {
+          actionId: entry.action.id,
+          actionKind: entry.action.kind,
+          nextRunAt: entry.nextRunAt,
+          delayMs,
+          detail: handlerResult.detail,
+        });
+        emitTelemetry('rescheduled', entry, {
+          delayMs,
+          nextRetryAt: entry.nextRunAt,
+          ...(handlerResult.detail ? { error: handlerResult.detail } : {}),
+        });
+        return true;
       }
       queue.delete(entry.action.dedupeKey);
       persistQueue();
@@ -1213,10 +1343,10 @@ export function wirePostTurnActionRuntime(
         nextRunAt: entry.nextRunAt,
       }));
     },
-    cancel(actionRef: string, reason = 'cancelled'): boolean {
+    cancel(actionRef: string, reason: PostTurnActionTerminalReason = 'cancelled'): boolean {
       return completeQueuedActionWithoutRunning(actionRef, 'cancelled', reason);
     },
-    acknowledge(actionRef: string, detail = 'acknowledged'): boolean {
+    acknowledge(actionRef: string, detail: PostTurnActionTerminalReason = 'acknowledged'): boolean {
       return completeQueuedActionWithoutRunning(actionRef, 'acknowledged', detail);
     },
     getActionStatus,

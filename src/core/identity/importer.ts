@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
+import { clampUnit } from '../../shared/utils/numeric.js';
 import {
   parseCard,
   type CCv3Data,
@@ -78,11 +79,6 @@ function toTextArray(value: unknown): string[] {
     .filter((entry): entry is string => typeof entry === 'string')
     .map(entry => entry.trim())
     .filter(entry => entry.length > 0);
-}
-
-function clampUnit(value: unknown, fallback: number): number {
-  if (typeof value !== 'number' || !Number.isFinite(value)) return fallback;
-  return Math.min(1, Math.max(0, value));
 }
 
 function uniqueLowercase(values: readonly string[]): string[] {

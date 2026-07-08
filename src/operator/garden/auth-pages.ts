@@ -3,15 +3,7 @@ import { formatPossessiveCompanionName } from '../../core/identity/companion-nam
 import { resolveCompanionNameFromConfig } from '../../core/identity/companion-runtime.js';
 import { sendText } from '../../channels/backplane/http/primitives.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
-
-function escapeHtml(value: string): string {
-  return value
-    .replaceAll('&', '&amp;')
-    .replaceAll('<', '&lt;')
-    .replaceAll('>', '&gt;')
-    .replaceAll('"', '&quot;')
-    .replaceAll('\'', '&#39;');
-}
+import { escapeHtml } from '../../shared/utils/escaping.js';
 
 export function resolveGardenTitle(config: SubstrateConfig): string {
   const companionName = resolveCompanionNameFromConfig(config);

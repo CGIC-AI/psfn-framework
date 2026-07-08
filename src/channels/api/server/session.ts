@@ -1,3 +1,4 @@
+import { isObjectRecord as isRecord } from '../../../shared/utils/types.js';
 import type { IncomingMessage } from 'node:http';
 import { randomUUID } from 'node:crypto';
 import type {
@@ -8,7 +9,7 @@ import type {
 } from '../../../shared/contracts/runtime.js';
 import type { SatelliteRoutingMetadata } from '../../../shared/contracts/satellite-registry.js';
 import type { SessionManager } from '../../../core/session/manager.js';
-import type { ChannelVisibility } from '../../../system/trust/types.js';
+import type { ChannelPrivacy } from '../../../system/trust/context-envelope.js';
 import type { ApiAuthPrincipal } from '../../backplane/http/auth.js';
 import type { ChatCompletionRequest } from '../types.js';
 import type { TurnRoutingOverrides } from './request.js';
@@ -99,7 +100,7 @@ export function seedSession(params: {
   messages: ChatCompletionRequest['messages'];
   authorId: string;
   authorName: string;
-  channelPrivacy?: ChannelVisibility;
+  channelPrivacy?: ChannelPrivacy;
 }): void {
   const {
     sessionManager,
@@ -163,7 +164,7 @@ export function buildSubstrateMessage(params: {
   authorName: string;
   req: IncomingMessage;
   overrides: TurnRoutingOverrides;
-  channelPrivacy?: ChannelVisibility;
+  channelPrivacy?: ChannelPrivacy;
   canonicalContactId?: string;
   satellite?: SatelliteRoutingMetadata;
   attachments?: Attachment[];
@@ -232,9 +233,6 @@ export function buildSubstrateMessage(params: {
   };
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === 'object';
-}
 
 function contentPartToImageAttachment(part: Record<string, unknown>, index: number): Attachment | null {
   if (part.type === 'image') {

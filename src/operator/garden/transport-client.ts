@@ -1,18 +1,40 @@
-import { request, type IncomingHttpHeaders } from 'node:http';
+import { readFileSync } from 'node:fs';
+import {
+  request as httpRequest,
+  type ClientRequest,
+  type IncomingHttpHeaders,
+  type IncomingMessage,
+  type RequestOptions as HttpRequestOptions,
+} from 'node:http';
+import {
+  request as httpsRequest,
+  type RequestOptions as HttpsRequestOptions,
+} from 'node:https';
 import { createConnection } from 'node:net';
-import type { IncomingMessage, ServerResponse } from 'node:http';
+import type { ServerResponse } from 'node:http';
 import type { Duplex } from 'node:stream';
-import { WebSocket, WebSocketServer } from 'ws';
+import type { ConnectionOptions } from 'node:tls';
+import { WebSocket, WebSocketServer, type ClientOptions } from 'ws';
 import { createComponentLogger } from '../../shared/logger.js';
 import { sendText } from '../../channels/backplane/http/primitives.js';
+import {
+  createSpiffeCheckServerIdentity,
+  requireMtlsPeerFileConfig,
+} from '../../shared/net/mtls.js';
+import type {
+  GardenAdminTransportClientEndpoint,
+  GardenAdminTransportNetworkClientEndpoint,
+  GardenAdminTransportSocketEndpoint,
+} from './transport-paths.js';
 
 const log = createComponentLogger('GardenAdminTransportProxy');
 const HEALTH_PROBE_TIMEOUT_MS = 1_500;
 export const HEALTH_PROBE_PATH = '/api/admin/__transport_probe__';
 
 export interface GardenAdminTransportHealth {
+  mode: GardenAdminTransportClientEndpoint['mode'];
   reachable: boolean;
-  status: 'ok' | 'error';
+  status: 'ok' | 'degraded';
   httpStatus?: number;
   error?: string;
 }
@@ -21,6 +43,18 @@ interface TransportProbePayload {
   status?: unknown;
   error?: unknown;
 }
+
+interface TlsRequestOptions {
+  ca: Buffer;
+  cert: Buffer;
+  key: Buffer;
+  rejectUnauthorized: true;
+  checkServerIdentity: NonNullable<ConnectionOptions['checkServerIdentity']>;
+}
+
+type WebSocketTlsRequestOptions = Omit<TlsRequestOptions, 'checkServerIdentity'> & {
+  checkServerIdentity: NonNullable<ClientOptions['checkServerIdentity']>;
+};
 
 function firstHeader(value: string | string[] | undefined): string | undefined {
   return Array.isArray(value) ? value[0] : value;
@@ -43,6 +77,30 @@ function buildProxyHeaders(headers: IncomingHttpHeaders): IncomingHttpHeaders {
   return forwardedHeaders;
 }
 
+function buildWebSocketHeaders(headers: IncomingHttpHeaders): Record<string, string> {
+  const normalized: Record<string, string> = {};
+  for (const [key, value] of Object.entries(buildProxyHeaders(headers))) {
+    const firstValue = firstHeader(value);
+    if (firstValue !== undefined) {
+      normalized[key] = firstValue;
+    }
+  }
+  return normalized;
+}
+
+function toWebSocketTlsOptions(tlsOptions: TlsRequestOptions): WebSocketTlsRequestOptions {
+  return tlsOptions as unknown as WebSocketTlsRequestOptions;
+}
+
+function asSocketEndpoint(
+  endpoint: GardenAdminTransportClientEndpoint,
+): GardenAdminTransportSocketEndpoint {
+  if (endpoint.mode !== 'socket') {
+    throw new Error('Garden admin transport endpoint is not socket-backed');
+  }
+  return endpoint;
+}
+
 function parseTransportProbePayload(body: string): { status?: string; error?: string } | null {
   if (!body.trim()) return null;
 
@@ -57,10 +115,70 @@ function parseTransportProbePayload(body: string): { status?: string; error?: st
   }
 }
 
+function normalizeRequestPath(path: string): string {
+  return path.startsWith('/') ? path : `/${path}`;
+}
+
+function buildNetworkUrl(endpointUrl: URL, requestPath: string): URL {
+  const url = new URL(endpointUrl.toString());
+  const parsedPath = new URL(normalizeRequestPath(requestPath), 'http://localhost');
+  url.pathname = parsedPath.pathname;
+  url.search = parsedPath.search;
+  url.hash = '';
+  return url;
+}
+
+function buildNetworkRequestOptions(
+  endpoint: GardenAdminTransportNetworkClientEndpoint,
+  requestPath: string,
+  method: string | undefined,
+  headers: IncomingHttpHeaders | undefined,
+  tlsOptions: TlsRequestOptions | undefined,
+): HttpRequestOptions | HttpsRequestOptions {
+  const url = buildNetworkUrl(endpoint.httpUrl, requestPath);
+  return {
+    protocol: url.protocol,
+    hostname: url.hostname,
+    port: url.port,
+    path: `${url.pathname}${url.search}`,
+    method,
+    headers,
+    ...(url.protocol === 'https:' ? tlsOptions : {}),
+  };
+}
+
+function buildTlsRequestOptions(
+  endpoint: GardenAdminTransportClientEndpoint,
+): TlsRequestOptions | undefined {
+  if (endpoint.mode !== 'network') {
+    return undefined;
+  }
+  const peerAuthMode: string = endpoint.peerAuthMode;
+  if (
+    peerAuthMode !== 'mtls-spiffe'
+    || endpoint.httpUrl.protocol !== 'https:'
+    || endpoint.wsUrl.protocol !== 'wss:'
+  ) {
+    throw new Error('Garden admin network transport requires HTTPS/WSS mTLS with SPIFFE peer authorization');
+  }
+
+  const tlsConfig = requireMtlsPeerFileConfig(endpoint.tls, 'Garden admin transport client TLS');
+  return {
+    ca: readFileSync(tlsConfig.caPath),
+    cert: readFileSync(tlsConfig.certPath),
+    key: readFileSync(tlsConfig.keyPath),
+    rejectUnauthorized: true,
+    checkServerIdentity: createSpiffeCheckServerIdentity(tlsConfig.expectedPeerSpiffeUri),
+  };
+}
+
 export class GardenAdminTransportProxy {
   private readonly webSocketServer = new WebSocketServer({ noServer: true });
+  private readonly tlsRequestOptions: TlsRequestOptions | undefined;
 
-  constructor(private readonly socketPath: string) {}
+  constructor(private readonly endpoint: GardenAdminTransportClientEndpoint) {
+    this.tlsRequestOptions = buildTlsRequestOptions(endpoint);
+  }
 
   close(callback: () => void): void {
     this.webSocketServer.close(callback);
@@ -68,67 +186,77 @@ export class GardenAdminTransportProxy {
 
   probeHealth(): Promise<GardenAdminTransportHealth> {
     return new Promise((resolve) => {
-      const proxyRequest = request({
-        socketPath: this.socketPath,
-        path: HEALTH_PROBE_PATH,
-        method: 'GET',
-      }, (proxyResponse) => {
-        let body = '';
-        proxyResponse.setEncoding('utf8');
-        proxyResponse.on('data', (chunk: string) => {
-          body += chunk;
-          if (body.length > 4096) {
-            proxyRequest.destroy(new Error('Transport health probe response exceeded 4096 bytes'));
-          }
-        });
-        proxyResponse.on('end', () => {
-          const httpStatus = proxyResponse.statusCode ?? 502;
-          const payload = parseTransportProbePayload(body);
-          if (httpStatus < 200 || httpStatus >= 300) {
-            resolve({
-              reachable: true,
-              status: 'error',
-              httpStatus,
-              error: payload?.error ?? payload?.status ?? `Transport health probe returned HTTP ${httpStatus}`,
-            });
-            return;
-          }
-
-          if (payload?.status !== 'ok') {
-            resolve({
-              reachable: true,
-              status: 'error',
-              httpStatus,
-              error: payload?.error ?? payload?.status ?? 'Transport health probe did not report ok',
-            });
-            return;
-          }
-
-          resolve({
-            reachable: true,
-            status: 'ok',
-            httpStatus,
+      let timedOut = false;
+      const proxyRequest = this.createRequest(
+        HEALTH_PROBE_PATH,
+        'GET',
+        undefined,
+        (proxyResponse) => {
+          let body = '';
+          proxyResponse.setEncoding('utf8');
+          proxyResponse.on('data', (chunk: string) => {
+            body += chunk;
+            if (body.length > 4096) {
+              proxyRequest.destroy(new Error('Transport health probe response exceeded 4096 bytes'));
+            }
           });
-        });
-        proxyResponse.on('error', (error) => {
-          resolve({
-            reachable: true,
-            status: 'error',
-            httpStatus: proxyResponse.statusCode,
-            error: String(error),
+          proxyResponse.on('end', () => {
+            const httpStatus = proxyResponse.statusCode ?? 502;
+            const payload = parseTransportProbePayload(body);
+            if (httpStatus < 200 || httpStatus >= 300) {
+              resolve({
+                mode: this.endpoint.mode,
+                reachable: true,
+                status: 'degraded',
+                httpStatus,
+                error: payload?.error ?? payload?.status ?? `Transport health probe returned HTTP ${httpStatus}`,
+              });
+              return;
+            }
+
+            if (payload?.status !== 'ok') {
+              resolve({
+                mode: this.endpoint.mode,
+                reachable: true,
+                status: 'degraded',
+                httpStatus,
+                error: payload?.error ?? payload?.status ?? 'Transport health probe did not report ok',
+              });
+              return;
+            }
+
+            resolve({
+              mode: this.endpoint.mode,
+              reachable: true,
+              status: 'ok',
+              httpStatus,
+            });
           });
-        });
-      });
+          proxyResponse.on('error', (error) => {
+            resolve({
+              mode: this.endpoint.mode,
+              reachable: true,
+              status: 'degraded',
+              httpStatus: proxyResponse.statusCode,
+              error: String(error),
+            });
+          });
+        },
+      );
 
       proxyRequest.setTimeout(HEALTH_PROBE_TIMEOUT_MS, () => {
+        timedOut = true;
         proxyRequest.destroy(new Error(`Timed out after ${HEALTH_PROBE_TIMEOUT_MS}ms`));
       });
 
       proxyRequest.on('error', (error) => {
         resolve({
+          mode: this.endpoint.mode,
           reachable: false,
-          status: 'error',
-          error: String(error),
+          status: 'degraded',
+          error: timedOut
+            ? `Transport health probe timed out after ${HEALTH_PROBE_TIMEOUT_MS}ms`
+            : String(error),
         });
       });
 
@@ -137,23 +265,49 @@ export class GardenAdminTransportProxy {
   }
 
   proxyApiRequest(req: IncomingMessage, res: ServerResponse): void {
-    const proxyRequest = request({
-      socketPath: this.socketPath,
-      path: req.url ?? '/',
-      method: req.method,
-      headers: buildProxyHeaders(req.headers),
-    }, (proxyResponse) => {
-      res.writeHead(proxyResponse.statusCode ?? 502, proxyResponse.headers);
-      proxyResponse.pipe(res);
+    let timedOut = false;
+    const requestPath = req.url ?? '/';
+    const proxyRequest = this.createRequest(
+      requestPath,
+      req.method,
+      buildProxyHeaders(req.headers),
+      (proxyResponse) => {
+        res.writeHead(proxyResponse.statusCode ?? 502, proxyResponse.headers);
+        proxyResponse.pipe(res);
+        proxyResponse.on('error', (error) => {
+          log.warn('Garden admin proxy response stream failed', {
+            path: requestPath,
+            error: String(error),
+          });
+          if (!res.destroyed) {
+            res.destroy(error);
+          }
+        });
+      },
+    );
+
+    proxyRequest.setTimeout(this.endpoint.timeoutMs, () => {
+      timedOut = true;
+      proxyRequest.destroy(new Error(`Timed out after ${this.endpoint.timeoutMs}ms`));
     });
 
     proxyRequest.on('error', (error) => {
       log.warn('Garden admin proxy request failed', {
-        path: req.url ?? '/',
+        path: requestPath,
         error: String(error),
       });
       if (res.writableEnded || res.destroyed) return;
-      sendText(res, 502, 'Bad Gateway');
+      if (res.headersSent) {
+        res.destroy(error);
+        return;
+      }
+      sendText(
+        res,
+        502,
+        timedOut
+          ? 'Bad Gateway: admin transport timed out'
+          : 'Bad Gateway: admin transport unavailable',
+      );
     });
 
     req.on('aborted', () => {
@@ -168,14 +322,16 @@ export class GardenAdminTransportProxy {
     socket: Duplex,
     head: Buffer,
   ): void {
-    const upstreamSocket = new WebSocket('ws://localhost/api/admin/events', {
-      createConnection: () => createConnection(this.socketPath),
-      headers: buildProxyHeaders(req.headers),
-    });
+    const upstreamSocket = new WebSocket(
+      this.resolveTelemetryWebSocketUrl(),
+      this.buildTelemetryWebSocketOptions(req),
+    );
     let upgraded = false;
+    let failed = false;
 
     const failBeforeUpgrade = (reason: string): void => {
-      if (upgraded) return;
+      if (upgraded || failed) return;
+      failed = true;
       log.warn('Garden telemetry upstream websocket failed before upgrade', { reason });
       socket.write('HTTP/1.1 502 Bad Gateway\r\n\r\n');
       socket.destroy();
@@ -200,6 +356,69 @@ export class GardenAdminTransportProxy {
     upstreamSocket.once('error', (error) => {
       failBeforeUpgrade(String(error));
     });
+    upstreamSocket.once('unexpected-response', (_request, response) => {
+      response.resume();
+      failBeforeUpgrade(`Unexpected upstream websocket response: ${response.statusCode ?? 0}`);
+    });
+    upstreamSocket.once('close', (code, reason) => {
+      failBeforeUpgrade(`Upstream websocket closed before upgrade: ${code} ${reason.toString()}`);
+    });
+  }
+
+  private createRequest(
+    requestPath: string,
+    method: string | undefined,
+    headers: IncomingHttpHeaders | undefined,
+    callback: (res: IncomingMessage) => void,
+  ): ClientRequest {
+    if (this.endpoint.mode === 'socket') {
+      return httpRequest({
+        socketPath: this.endpoint.socketPath,
+        path: normalizeRequestPath(requestPath),
+        method,
+        headers,
+      }, callback);
+    }
+
+    const options = buildNetworkRequestOptions(
+      this.endpoint,
+      requestPath,
+      method,
+      headers,
+      this.tlsRequestOptions,
+    );
+    return this.endpoint.httpUrl.protocol === 'https:'
+      ? httpsRequest(options, callback)
+      : httpRequest(options, callback);
+  }
+
+  private resolveTelemetryWebSocketUrl(): string {
+    if (this.endpoint.mode === 'socket') {
+      return 'ws://localhost/api/admin/events';
+    }
+    return buildNetworkUrl(this.endpoint.wsUrl, '/api/admin/events').toString();
+  }
+
+  private buildTelemetryWebSocketOptions(req: IncomingMessage): ClientOptions {
+    const options: ClientOptions = {
+      headers: buildWebSocketHeaders(req.headers),
+      handshakeTimeout: this.endpoint.timeoutMs,
+    };
+
+    if (this.endpoint.mode === 'socket') {
+      const socketEndpoint = asSocketEndpoint(this.endpoint);
+      return {
+        ...options,
+        createConnection: () => createConnection(socketEndpoint.socketPath),
+      };
+    }
+
+    return {
+      ...options,
+      ...(this.endpoint.wsUrl.protocol === 'wss:' && this.tlsRequestOptions
+        ? toWebSocketTlsOptions(this.tlsRequestOptions)
+        : {}),
+    };
   }
 
   private attachTelemetryBridge(

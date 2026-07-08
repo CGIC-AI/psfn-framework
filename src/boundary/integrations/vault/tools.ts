@@ -1,11 +1,12 @@
-// ── Obsidian Vault Tool ──
-// Unified model-facing vault surface for durable notes and daily journaling.
+// ── External Obsidian Vault Tool ──
+// Legacy external Obsidian bridge for bounded source access and compatibility.
 
 import { Type } from '@sinclair/typebox';
 import type { AgentTool, AgentToolResult } from '@mariozechner/pi-agent-core';
 import type { VaultOperations } from './ops.js';
 import { textResult, textResultWithError } from '../../../core/tools/results.js';
 import { toErrorMessage } from '../../../shared/utils/errors.js';
+import { truncateToolOutputContent } from '../../../shared/utils/tool-output.js';
 
 const MAX_READ_CHARS = 12_000;
 const VAULT_ACTION_HELP = 'read, write, search, daily';
@@ -83,19 +84,13 @@ function requireNonEmptyString(value: unknown, field: string): string {
   return value;
 }
 
-function truncateContent(content: string): string {
-  return content.length > MAX_READ_CHARS
-    ? content.slice(0, MAX_READ_CHARS) + '\n... (truncated)'
-    : content;
-}
-
 async function executeVaultRead(
   ops: VaultOperations,
   params: VaultToolParams,
 ): Promise<AgentToolResult<{ isError?: boolean }>> {
   const name = requireNonEmptyString(params.name, 'name');
   const result = await ops.read(name);
-  return textResult(`=== ${result.name} ===\n${truncateContent(result.content)}`);
+  return textResult(`=== ${result.name} ===\n${truncateToolOutputContent(result.content, MAX_READ_CHARS)}`);
 }
 
 async function executeVaultWrite(
@@ -136,7 +131,7 @@ async function executeVaultDaily(
 ): Promise<AgentToolResult<{ isError?: boolean }>> {
   const result = await ops.daily(typeof params.content === 'string' ? { content: params.content } : undefined);
   if (result.mode === 'read') {
-    const content = result.content ? truncateContent(result.content) : '(empty)';
+    const content = result.content ? truncateToolOutputContent(result.content, MAX_READ_CHARS) : '(empty)';
     return textResult(`=== Daily Note (${result.date}) ===\n${content}`);
   }
   return textResult(`Appended to daily note (${result.date})`);
@@ -147,7 +142,8 @@ export function createVaultTool(ops: VaultOperations): AgentTool<any> {
     name: 'vault',
     label: 'vault',
     description:
-      'Unified durable vault surface for Obsidian notes, search, and daily journaling. '
+      'Legacy external Obsidian/Vault bridge for bounded read, write, search, and daily-note compatibility. '
+      + 'Canonical durable reference knowledge belongs in the internal wiki tool, not vault. '
       + 'Use action=read|write|search|daily. Legacy vault_* aliases remain accepted as action values only.',
     parameters: Type.Object({
       action: Type.Optional(Type.Union([
@@ -164,14 +160,14 @@ export function createVaultTool(ops: VaultOperations): AgentTool<any> {
       })),
       name: Type.Optional(Type.String({
         minLength: 1,
-        description: 'Used with action=read|write. Note name or path relative to vault root.',
+        description: 'Used with action=read|write. Note name or path relative to the configured external vault root.',
       })),
       content: Type.Optional(Type.String({
         description: 'Used with action=write to write markdown, or action=daily to append to today\'s daily note.',
       })),
       folder: Type.Optional(Type.String({
         minLength: 1,
-        description: 'Used with action=write mode=create. Folder path within the vault root.',
+        description: 'Used with action=write mode=create. Folder path within the configured external vault root.',
       })),
       mode: Type.Optional(Type.Union([
         Type.Literal('create'),

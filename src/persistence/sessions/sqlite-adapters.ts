@@ -20,6 +20,7 @@ export interface SQLiteSessionAdapters {
 }
 
 export interface SQLiteSessionAdaptersOptions {
+  enableSearchIndex?: boolean;
   disableSearchIndex?: boolean;
   searchIndexPath?: string;
 }
@@ -45,12 +46,12 @@ export function createDefaultSQLiteSessionAdapters(
   options: SQLiteSessionAdaptersOptions = {},
 ): SQLiteSessionAdapters {
   const sessionArchivePort = createDefaultSQLiteSessionArchivePort();
-  const transcriptProjection = options.disableSearchIndex
-    ? null
-    : createDefaultSQLiteTranscriptProjection(
+  const transcriptProjection = options.enableSearchIndex && !options.disableSearchIndex
+    ? createDefaultSQLiteTranscriptProjection(
       options.searchIndexPath
         ?? join(sessionsDir, DEFAULT_SQLITE_SESSION_SEARCH_INDEX_FILENAME),
-    );
+    )
+    : null;
 
   return {
     sessionArchivePort,

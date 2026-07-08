@@ -1,3 +1,6 @@
+import { isObjectRecord as isRecord } from '../../shared/utils/types.js';
+import { clampUnit } from '../../shared/utils/numeric.js';
+import { escapeXmlText } from '../../shared/utils/escaping.js';
 import { cloneInternalState, type InternalState } from './state.js';
 import { wrapPromptSectionXml } from '../identity/prompt-sections.js';
 
@@ -184,6 +187,16 @@ export function buildMetacognitiveFlagPromptVariables(
   return variables;
 }
 
+// Charter 8.6: companion-facing signal strength reads as language, not as a
+// three-decimal score. The numeric confidence stays available to templates
+// and telemetry via runtime_flag_*_confidence.
+function describeConfidenceStrength(confidence: number): string {
+  if (confidence >= 0.85) return 'strong signal';
+  if (confidence >= 0.6) return 'clear signal';
+  if (confidence >= 0.45) return 'moderate signal';
+  return 'faint signal';
+}
+
 export function formatMetacognitiveNotesContextBlock(
   flags: readonly MetacognitiveFlag[],
   options: MetacognitiveNotesFormatOptions = {},
@@ -202,7 +215,7 @@ export function formatMetacognitiveNotesContextBlock(
 
   const lines: string[] = [];
   for (const flag of selected) {
-    lines.push(`- ${flag.flag} (confidence=${flag.confidence.toFixed(3)}): ${flag.evidence}`);
+    lines.push(`- ${flag.flag} (${describeConfidenceStrength(flag.confidence)}): ${flag.evidence}`);
   }
   return wrapPromptSectionXml({
     id: 'metacognitive_notes',
@@ -266,7 +279,7 @@ function detectAvoidanceFlag(
   }
   const responseTokens = lookback.map(text => tokenizeSignalTerms(text));
   let consideredConcernCount = 0;
-  const unresolvedConcernIds: string[] = [];
+  const unresolvedConcernTexts: string[] = [];
 
   for (const concern of input.internalState.attention.activeConcerns) {
     const concernTokens = tokenizeSignalTerms(concern.text);
@@ -274,16 +287,29 @@ function detectAvoidanceFlag(
     consideredConcernCount += 1;
     const addressed = responseTokens.some(tokens => tokenCoverage(concernTokens, tokens) >= config.avoidanceConcernCoverageThreshold);
     if (!addressed) {
-      unresolvedConcernIds.push(concern.id);
+      unresolvedConcernTexts.push(concern.text);
     }
   }
 
-  if (consideredConcernCount === 0 || unresolvedConcernIds.length === 0) {
+  if (consideredConcernCount === 0 || unresolvedConcernTexts.length === 0) {
     return null;
   }
-  const confidence = roundDecimal(clampUnit(unresolvedConcernIds.length / consideredConcernCount));
-  const evidence = `unresolved_concerns=${unresolvedConcernIds.join(',')}; lookback_turns=${lookback.length}`;
+  const confidence = roundDecimal(clampUnit(unresolvedConcernTexts.length / consideredConcernCount));
+  const excerpts = unresolvedConcernTexts
+    .slice(0, 2)
+    .map(text => `"${compactConcernExcerpt(text)}"`)
+    .join(', ');
+  const count = unresolvedConcernTexts.length;
+  const evidence = `${count} open concern${count === 1 ? '' : 's'} untouched across the last ${lookback.length} turns (${excerpts})`;
   return buildMetacognitiveFlag('avoidance', confidence, evidence);
+}
+
+function compactConcernExcerpt(text: string): string {
+  const compact = text.replace(/\s+/g, ' ').trim();
+  const truncated = compact.length <= 60 ? compact : `${compact.slice(0, 57)}...`;
+  // Concern text is free-form and flows into XML-wrapped prompt sections via
+  // flag evidence; escape after truncation so entities are never cut in half.
+  return escapeXmlText(truncated);
 }
 
 function detectHighEngagementFlag(
@@ -567,17 +593,6 @@ function parseNonNegativeFinite(value: number, fieldName: string): number {
   return roundDecimal(value);
 }
 
-function clampUnit(value: number): number {
-  if (!Number.isFinite(value)) return 0;
-  if (value <= 0) return 0;
-  if (value >= 1) return 1;
-  return value;
-}
-
 function roundDecimal(value: number): number {
   return Math.round(value * 1000) / 1000;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null;
 }

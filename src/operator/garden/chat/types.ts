@@ -26,11 +26,6 @@ export interface AdminChatBootstrapApiConfig {
   apiKey?: string;
 }
 
-export interface AdminChatRuntimeAssetConfig {
-  moduleUrl: string;
-  stylesheetUrl: string;
-}
-
 export interface AdminChatRuntimeModelConfig {
   id: string;
   name: string;
@@ -41,7 +36,6 @@ export interface AdminChatRuntimeModelConfig {
 }
 
 export interface AdminChatRuntimeConfig {
-  assets: AdminChatRuntimeAssetConfig;
   transportHeaders: Record<string, string>;
   model: AdminChatRuntimeModelConfig;
   apiKey?: string;

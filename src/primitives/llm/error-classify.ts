@@ -2,8 +2,10 @@ export type LLMErrorCategory =
   | 'abort'
   | 'context_overflow'
   | 'rate_limit'
+  | 'connection_unavailable'
   | 'timeout'
   | 'auth'
+  | 'empty_response'
   | 'unknown';
 
 export interface LLMErrorClassification {
@@ -49,6 +51,17 @@ const RATE_LIMIT_PATTERNS = [
   'temporarily overloaded',
 ] as const;
 
+const CONNECTION_UNAVAILABLE_PATTERNS = [
+  'api connection error',
+  'connection error',
+  'cannot connect to host',
+  'connect call failed',
+  'connection refused',
+  'destination host unreachable',
+  'no route to host',
+  'network is unreachable',
+] as const;
+
 const TIMEOUT_PATTERNS = [
   'timeout',
   'timed out',
@@ -69,6 +82,15 @@ const AUTH_PATTERNS = [
   'authentication error',
   'access denied',
   'permission denied',
+] as const;
+
+const EMPTY_RESPONSE_PATTERNS = [
+  'contained no text',
+  'contained no text or tool calls',
+  'empty response',
+  'empty assistant',
+  'no text content',
+  'provider template artifact',
 ] as const;
 
 function getStatusCode(error: ErrorLike): number | undefined {
@@ -126,6 +148,13 @@ export function classifyLLMError(error: unknown): LLMErrorClassification {
     return { category: 'rate_limit', retryable: true, ...(statusCode !== undefined ? { statusCode } : {}) };
   }
 
+  const connectionUnavailableCode = code === 'ECONNREFUSED'
+    || code === 'EHOSTUNREACH'
+    || code === 'ENETUNREACH';
+  if (connectionUnavailableCode || includesAny(text, CONNECTION_UNAVAILABLE_PATTERNS)) {
+    return { category: 'connection_unavailable', retryable: true, ...(statusCode !== undefined ? { statusCode } : {}) };
+  }
+
   const timeoutStatus = statusCode === 408 || statusCode === 504;
   const timeoutCode = code === 'ETIMEDOUT' || code === 'ECONNABORTED' || code === 'ECONNRESET';
   if (timeoutStatus || timeoutCode || includesAny(text, TIMEOUT_PATTERNS)) {
@@ -134,6 +163,10 @@ export function classifyLLMError(error: unknown): LLMErrorClassification {
 
   if (statusCode === 401 || statusCode === 403 || includesAny(text, AUTH_PATTERNS)) {
     return { category: 'auth', retryable: true, ...(statusCode !== undefined ? { statusCode } : {}) };
+  }
+
+  if (includesAny(text, EMPTY_RESPONSE_PATTERNS)) {
+    return { category: 'empty_response', retryable: true, ...(statusCode !== undefined ? { statusCode } : {}) };
   }
 
   return { category: 'unknown', retryable: true, ...(statusCode !== undefined ? { statusCode } : {}) };

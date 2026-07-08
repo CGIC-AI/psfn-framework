@@ -1,4 +1,3 @@
-import type Database from 'better-sqlite3';
 import { randomUUID } from 'node:crypto';
 import { EmotionObserver } from '../../core/emotion/observer.js';
 import { EmotionState } from '../../core/emotion/state.js';
@@ -25,7 +24,11 @@ import {
 } from '../../system/capabilities/approval-queue-port.js';
 import type { CoreSubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type { MemoryStorePort } from '../../faculties/memory/memory-store-port.js';
+import type {
+  EpisodicStorePort,
+} from '../../faculties/memory/episodic/store-port.js';
 import type { ContactStorePort } from '../../core/contacts/contact-store-port.js';
+import type { ContactTrackingGate } from '../../core/contacts/tracking-gate.js';
 import type {
   IntentionRuntimeProviders,
   IntentionRuntimeWiring,
@@ -52,12 +55,14 @@ export interface BootstrapAgentCoreRuntimeOptions {
   pathSnapshot: RuntimePathSnapshot;
   eventBus: EventBus;
   gateway: GatewayClient;
-  db?: Database.Database | null;
   memoryStore: MemoryStorePort;
+  episodicStore: EpisodicStorePort;
   contactStore?: ContactStorePort;
   intentionRuntime?: IntentionRuntimeWiring;
   intentionProviders?: IntentionRuntimeProviders;
   capabilityRuntime: CapabilityRuntime;
+  /** Contact-tracking policy gate (E3.4). Absent gate behaves as 'auto' everywhere. */
+  contactTrackingGate?: ContactTrackingGate | null;
 }
 
 export async function bootstrapAgentCoreRuntime(
@@ -68,8 +73,8 @@ export async function bootstrapAgentCoreRuntime(
     pathSnapshot,
     eventBus,
     gateway,
-    db,
     memoryStore,
+    episodicStore,
     contactStore,
     intentionRuntime,
     intentionProviders,
@@ -117,8 +122,8 @@ export async function bootstrapAgentCoreRuntime(
     pathSnapshot,
     eventBus,
     gateway,
-    db,
     memoryStore,
+    episodicStore,
     contactStore,
     card,
     systemPrompt,
@@ -140,6 +145,7 @@ export async function bootstrapAgentCoreRuntime(
       ?? process.env.TELEGRAM_PRIMARY_USER_ID
       ?? ''
     ).trim() || undefined,
+    contactTrackingGate: options.contactTrackingGate ?? null,
   });
 
   return {

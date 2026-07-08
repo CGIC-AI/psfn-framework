@@ -4,10 +4,13 @@ import type {
   MessagePromptOverride,
   ResponseStyle,
 } from '../../../shared/contracts/runtime.js';
-import { isChannelVisibility, type ChannelVisibility } from '../../../system/trust/types.js';
+import { isChannelPrivacy, type ChannelPrivacy } from '../../../system/trust/context-envelope.js';
 import { readJsonBodyWithLimit } from '../../backplane/http/primitives.js';
 import type { ApiRuntimeChatRequest, ChatCompletionRequest } from '../types.js';
-import { hasCallerProvidedPrimaryTrust } from '../request-validation.js';
+import {
+  hasCallerProvidedPrimaryTrust,
+  validateChatCompletionRequest,
+} from '../request-validation.js';
 import {
   clampHttpHeader as clampHeaderValue,
   singleHeader as firstHeaderValue,
@@ -30,7 +33,7 @@ export interface TurnRoutingOverrides {
 
 export interface ChannelPrivacyResolution {
   ok: true;
-  value?: ChannelVisibility;
+  value?: ChannelPrivacy;
 }
 
 export interface ChannelPrivacyError {
@@ -115,13 +118,19 @@ export async function readChatCompletionRequest(
     return null;
   }
 
-  // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- runtime validation of untrusted JSON
-  if (!parsed.messages || !Array.isArray(parsed.messages) || parsed.messages.length === 0) {
-    sendApiError(res, 400, 'invalid_request', 'messages field is required and must be a non-empty array');
+  const validation = validateChatCompletionRequest(parsed);
+  if (!validation.ok) {
+    sendApiError(
+      res,
+      400,
+      'invalid_request',
+      validation.message,
+      validation.details,
+    );
     return null;
   }
 
-  return parsed;
+  return validation.value;
 }
 
 export function resolveChannelPrivacy(req: IncomingMessage): ChannelPrivacyResolution | ChannelPrivacyError {
@@ -132,10 +141,10 @@ export function resolveChannelPrivacy(req: IncomingMessage): ChannelPrivacyResol
   if (!rawValue) {
     return { ok: true };
   }
-  if (!isChannelVisibility(rawValue)) {
+  if (!isChannelPrivacy(rawValue)) {
     return {
       ok: false,
-      error: 'X-Channel-Privacy must be one of: private, semi_private, public, broadcast',
+      error: 'X-Channel-Privacy must be one of: private, invite_only, public, broadcast',
     };
   }
   return { ok: true, value: rawValue };

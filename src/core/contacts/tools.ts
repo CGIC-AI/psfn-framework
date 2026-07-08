@@ -1,11 +1,15 @@
 // ── Contact Management Tools ──
-// Unified model-facing contact surface plus compatibility wrappers for legacy tool names.
+// Unified model-facing contact surface plus internal helper factories for domain operations.
 
 import { Type } from '@sinclair/typebox';
 import type { AgentTool, AgentToolResult } from '@mariozechner/pi-agent-core';
 import type { ContactStorePort } from './contact-store-port.js';
 import type { TrustLevel } from '../../system/trust/types.js';
 import { TRUST_LEVELS, isHighTierTrustLevel } from '../../system/trust/types.js';
+import type {
+  ApprovalQueuePort,
+  ConfirmationQueueEntry,
+} from '../../system/capabilities/approval-queue-port.js';
 import type { TrustDriftBehaviorSignals } from '../../system/trust/policy.js';
 import { CHANNEL_PRIVACY_LEVELS, type ChannelPrivacyLevel, type Contact } from './types.js';
 import { resolvePreferredContactName } from './preferred-name.js';
@@ -16,35 +20,50 @@ import { tagToolWithReversibility } from '../../system/capabilities/safeguards.j
 
 const CONTACT_ACTION_NAMES = [
   'list',
-  'contact_list',
+  'search',
   'lookup',
-  'contact_lookup',
   'note',
-  'contact_note',
   'set_trust',
-  'contact_set_trust',
+  'propose_trust',
   'link_identity',
-  'contact_link_identity',
   'set_channel_privacy',
-  'contact_set_channel_privacy',
+  'set_machine_intelligence',
 ] as const;
 const CONTACT_ACTION_HELP = [
   'list',
+  'search',
   'lookup',
   'note',
   'set_trust',
+  'propose_trust',
   'link_identity',
   'set_channel_privacy',
+  'set_machine_intelligence',
 ].join(', ');
 
 type ContactActionName = (typeof CONTACT_ACTION_NAMES)[number];
 type ContactAction =
   | 'list'
+  | 'search'
   | 'lookup'
   | 'note'
   | 'set_trust'
+  | 'propose_trust'
   | 'link_identity'
-  | 'set_channel_privacy';
+  | 'set_channel_privacy'
+  | 'set_machine_intelligence';
+
+// ── Trusted-tier promotion proposal (human-in-the-loop) ──
+// The agent can never write high-tier trust directly (store.ts / policy.ts
+// guards). Instead it proposes a promotion to 'trusted' onto the shared
+// ConfirmationQueue; the operator approves in Garden, and only the approval
+// execution — running under a manual-authorized actor — performs the write.
+const TRUSTED_PROMOTION_METHOD = 'contact.trust.promote';
+const TRUSTED_PROMOTION_ACTION = 'promote_trusted';
+const TRUSTED_PROMOTION_REQUESTED_LEVEL: TrustLevel = 'trusted';
+// Manual-authorized actor (operator: prefix) so the store's high-tier guard
+// (isManualHighTierTrustMutationAuthorized) passes on approval execution.
+const TRUSTED_PROMOTION_APPROVAL_ACTOR = 'operator:confirmation-queue';
 
 interface ContactSetTrustParams {
   contactId: string;
@@ -55,10 +74,13 @@ interface ContactSetTrustParams {
 
 interface ContactToolParams extends Partial<ContactSetTrustParams> {
   action?: ContactActionName;
+  query?: string;
+  isMachineIntelligence?: boolean;
   notes?: string;
   channel?: string;
   channelUserId?: string;
   privacyLevel?: ChannelPrivacyLevel;
+  rationale?: string;
 }
 
 function errorMessage(error: unknown): string {
@@ -67,6 +89,47 @@ function errorMessage(error: unknown): string {
 
 function formatConfidence(confidence: number): string {
   return `${Math.round(confidence * 100)}%`;
+}
+
+function contactExampleJson(contactId: string): string {
+  return JSON.stringify({ action: 'lookup', contactId });
+}
+
+function formatContactChannels(contact: Contact): string {
+  const channels = (contact.channels ?? [])
+    .map(channel => `${channel.channel}:${channel.userId}[${channel.privacyLevel}]`);
+  return channels.length > 0 ? channels.join(', ') : '';
+}
+
+function formatContactIdentities(contact: Contact): string {
+  const channelKeys = new Set((contact.channels ?? [])
+    .map(channel => `${channel.channel}:${channel.userId}`));
+  const identities = (contact.channelIdentities ?? [])
+    .map(identity => `${identity.channel}:${identity.userId}`)
+    .filter(identity => !channelKeys.has(identity));
+  return identities.length > 0 ? identities.join(', ') : '';
+}
+
+function formatRelatedChannels(contact: Contact): string {
+  const related = (contact.conversationChannels ?? [])
+    .map(channel => `${channel.channel}:${channel.channelId}${channel.privacyLevel ? `[${channel.privacyLevel}]` : ''}`);
+  return related.length > 0 ? related.join(', ') : '';
+}
+
+async function formatContactIdRecoveryGuidance(contactStore: ContactStorePort): Promise<string> {
+  const contacts = await contactStore.listAll();
+  if (contacts.length === 0) {
+    return 'Run contact with {"action":"list"} first to get valid contactId values. '
+      + 'Minimal valid JSON: {"action":"lookup","contactId":"<contactId from list>"}. '
+      + 'Do not retry lookup with a display name.';
+  }
+
+  const visibleIds = contacts.map(contact => contact.id).slice(0, 8);
+  const remaining = contacts.length - visibleIds.length;
+  const suffix = remaining > 0 ? `, and ${remaining} more` : '';
+  return `Valid contactIds: ${visibleIds.join(', ')}${suffix}. `
+    + `Minimal valid JSON: ${contactExampleJson(visibleIds[0] ?? '<contactId from list>')}. `
+    + 'Use contact action=list when you need names or channels before choosing an ID; do not guess contactId from display names.';
 }
 
 function normalizeContactAction(params: ContactToolParams): ContactAction {
@@ -91,23 +154,23 @@ function normalizeContactAction(params: ContactToolParams): ContactAction {
 
   switch (rawAction) {
     case 'list':
-    case 'contact_list':
       return 'list';
+    case 'search':
+      return 'search';
     case 'lookup':
-    case 'contact_lookup':
       return 'lookup';
     case 'note':
-    case 'contact_note':
       return 'note';
     case 'set_trust':
-    case 'contact_set_trust':
       return 'set_trust';
+    case 'propose_trust':
+      return 'propose_trust';
     case 'link_identity':
-    case 'contact_link_identity':
       return 'link_identity';
     case 'set_channel_privacy':
-    case 'contact_set_channel_privacy':
       return 'set_channel_privacy';
+    case 'set_machine_intelligence':
+      return 'set_machine_intelligence';
     default:
       throw new Error(`action must be one of: ${CONTACT_ACTION_HELP}`);
   }
@@ -200,6 +263,125 @@ async function executeContactSetTrust(
   }
   return textResult(
     `Trust level for ${contactId} set to ${trustLevel}. Disclosure boundary and consent gates remain enforced.`,
+  );
+}
+
+async function executeContactProposeTrust(
+  contactStore: ContactStorePort,
+  proposalQueue: ApprovalQueuePort | undefined,
+  params: ContactToolParams,
+): Promise<AgentToolResult<{ isError?: boolean }>> {
+  const contactId = params.contactId?.trim() ?? '';
+  if (!contactId) {
+    return textResultWithError('Missing contactId', true);
+  }
+
+  // 'trusted' is the only tier the agent may propose. 'primary' stays
+  // owner-only via existing owner-identity authorization and can never be
+  // proposed through this path.
+  const requestedLevel = params.trustLevel;
+  if (requestedLevel !== undefined && requestedLevel !== TRUSTED_PROMOTION_REQUESTED_LEVEL) {
+    return textResultWithError(
+      `propose_trust can only propose promotion to 'trusted'. `
+      + `Requested level '${requestedLevel}' is not allowed`
+      + (requestedLevel === 'primary'
+        ? " ('primary' remains owner-only and can never be proposed)."
+        : '.'),
+      true,
+    );
+  }
+
+  const rationale = params.rationale?.trim() ?? '';
+  if (!rationale) {
+    return textResultWithError(
+      'Missing rationale. propose_trust requires a short rationale explaining why this contact should be promoted to trusted.',
+      true,
+    );
+  }
+
+  // Fail closed: without a wired confirmation queue there is no human-in-the-loop
+  // path, and the agent must never write high-tier trust directly.
+  if (!proposalQueue) {
+    return textResultWithError(
+      'Trusted-promotion proposals require a confirmation queue, but none is wired into the contact tool. '
+      + 'High-tier trust promotion cannot proceed.',
+      true,
+    );
+  }
+
+  const contact = await contactStore.getById(contactId);
+  if (!contact) {
+    return textResultWithError(`Contact ${contactId} not found`, true);
+  }
+
+  if (isHighTierTrustLevel(contact.trustLevel)) {
+    return textResultWithError(
+      `Contact ${contactId} is already at high-tier trust '${contact.trustLevel}'; no promotion to trusted is needed.`,
+      true,
+    );
+  }
+
+  const currentLevel = contact.trustLevel;
+  const contactName = resolvePreferredContactName(contact) ?? contact.displayName;
+
+  const entry = proposalQueue.enqueue(
+    {
+      method: TRUSTED_PROMOTION_METHOD,
+      action: TRUSTED_PROMOTION_ACTION,
+      scope: `${contactName} (${contactId}): ${currentLevel} -> ${TRUSTED_PROMOTION_REQUESTED_LEVEL}`,
+      params: {
+        contactId,
+        currentLevel,
+        requestedLevel: TRUSTED_PROMOTION_REQUESTED_LEVEL,
+        rationale,
+      },
+      companionReason: rationale,
+    },
+    async (approvedParams: Record<string, unknown>, queueEntry: ConfirmationQueueEntry) => {
+      const approvedContactId = typeof approvedParams.contactId === 'string'
+        ? approvedParams.contactId.trim()
+        : '';
+      if (!approvedContactId) {
+        throw new Error('Approved trusted-promotion proposal must include a contactId.');
+      }
+
+      const approvedLevel = approvedParams.requestedLevel;
+      if (approvedLevel !== TRUSTED_PROMOTION_REQUESTED_LEVEL) {
+        throw new Error(
+          `Trusted-promotion proposals can only set 'trusted'; refusing requested level '${String(approvedLevel)}'.`,
+        );
+      }
+
+      const target = await contactStore.getById(approvedContactId);
+      if (!target) {
+        throw new Error(`Contact ${approvedContactId} not found; cannot apply trusted promotion.`);
+      }
+      if (isHighTierTrustLevel(target.trustLevel)) {
+        throw new Error(
+          `Contact ${approvedContactId} is already at high-tier trust '${target.trustLevel}'; nothing to promote.`,
+        );
+      }
+
+      // Runs under a manual-authorized actor so the store's high-tier guard
+      // passes; setTrustLevel writes a trust_level mutation audit entry.
+      const applied = await contactStore.setTrustLevel(
+        approvedContactId,
+        TRUSTED_PROMOTION_REQUESTED_LEVEL,
+        TRUSTED_PROMOTION_APPROVAL_ACTOR,
+      );
+      if (!applied) {
+        throw new Error(
+          `Failed to promote contact ${approvedContactId} to trusted (proposal ${queueEntry.id}); trust unchanged.`,
+        );
+      }
+    },
+  );
+
+  return textResult(
+    `Trusted-promotion proposal queued for ${contactName} (${contactId}): ${currentLevel} -> `
+    + `${TRUSTED_PROMOTION_REQUESTED_LEVEL} (proposal id: ${entry.id}). `
+    + 'Trust is unchanged until the operator approves in the Garden Confirmations page. '
+    + 'Deny leaves trust untouched.',
   );
 }
 
@@ -297,12 +479,14 @@ async function executeContactLookup(
 ): Promise<AgentToolResult<{ isError?: boolean }>> {
   const id = params.contactId?.trim();
   if (!id) {
-    return textResultWithError('Missing contactId', true);
+    const guidance = await formatContactIdRecoveryGuidance(contactStore);
+    return textResultWithError(`Missing required field "contactId" for action=lookup. ${guidance}`, true);
   }
 
   const contact = await lookupContact(contactStore, id);
   if (!contact) {
-    return textResultWithError(`No contact found for: ${id}`, true);
+    const guidance = await formatContactIdRecoveryGuidance(contactStore);
+    return textResultWithError(`No contact found for contactId "${id}". ${guidance}`, true);
   }
 
   const identities = contact.channelIdentities
@@ -318,6 +502,7 @@ async function executeContactLookup(
     + `Contact: ${contactName}\n`
     + `Trust: ${contact.trustLevel}\n`
     + `Relationship: ${contact.relationshipType}\n`
+    + (contact.isMachineIntelligence ? 'Machine intelligence: yes (peer companion/agent)\n' : '')
     + (identities ? `Identities: ${identities}\n` : '')
     + (channels ? `Channels: ${channels}\n` : '')
     + `First seen: ${contact.firstSeen}\n`
@@ -386,44 +571,179 @@ async function executeContactList(
     return textResult('No contacts in address book.');
   }
 
-  const lines = contacts.map(c =>
-    `- ${(resolvePreferredContactName(c) ?? c.displayName)} [${c.trustLevel}/${c.relationshipType}]`
-    + ((c.channels?.length ?? 0) > 0 ? ` channels=${c.channels!.length}` : '')
-    + (c.notes ? ` — ${c.notes}` : ''),
+  const lines = contacts.map(formatContactSummaryLine);
+  return textResult(
+    `Contacts (${contacts.length}):\n${lines.join('\n')}\n`
+    + 'Pass contactId from this list to action=lookup, action=set_trust, or action=note; do not guess from display names.',
   );
-  return textResult(`Contacts (${contacts.length}):\n${lines.join('\n')}`);
+}
+
+function formatContactSummaryLine(contact: Contact): string {
+  const channels = formatContactChannels(contact);
+  const identities = formatContactIdentities(contact);
+  const relatedChannels = formatRelatedChannels(contact);
+  return `- ${contact.id}: ${(resolvePreferredContactName(contact) ?? contact.displayName)} `
+    + `[${contact.trustLevel}/${contact.relationshipType}]`
+    + (channels ? ` channels=${channels}` : '')
+    + (identities ? ` identities=${identities}` : '')
+    + (relatedChannels ? ` related_channels=${relatedChannels}` : '')
+    + (contact.notes ? ` — ${contact.notes}` : '');
+}
+
+function normalizeContactSearchTokens(query: string): string[] {
+  return query
+    .toLowerCase()
+    .split(/\s+/)
+    .map(token => token.trim())
+    .filter(token => token.length > 0);
+}
+
+function contactSearchHaystack(contact: Contact): string {
+  return [
+    contact.id,
+    contact.discordUserId,
+    contact.displayName,
+    contact.nickname,
+    contact.trustLevel,
+    contact.relationshipType,
+    contact.notes,
+    ...(contact.channels ?? []).flatMap(channel => [
+      channel.channel,
+      channel.userId,
+      channel.privacyLevel,
+    ]),
+    ...(contact.channelIdentities ?? []).flatMap(identity => [
+      identity.channel,
+      identity.userId,
+    ]),
+    ...(contact.conversationChannels ?? []).flatMap(channel => [
+      channel.channel,
+      channel.channelId,
+      channel.privacyLevel ?? '',
+    ]),
+  ]
+    .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+    .join(' ')
+    .toLowerCase();
+}
+
+async function executeContactSearch(
+  contactStore: ContactStorePort,
+  params: { query?: string },
+): Promise<AgentToolResult<{ isError?: boolean }>> {
+  const query = params.query?.trim() ?? '';
+  if (!query) {
+    return textResultWithError(
+      'Missing required field "query" for action=search. '
+      + 'Minimal valid JSON: {"action":"search","query":"name, handle, channel, or note text"}. '
+      + 'Use action=list to browse contactId values; do not retry action=search without a non-empty query.',
+      true,
+    );
+  }
+
+  const contacts = await contactStore.listAll();
+  const tokens = normalizeContactSearchTokens(query);
+  const matches = contacts.filter((contact) => {
+    const haystack = contactSearchHaystack(contact);
+    return tokens.every(token => haystack.includes(token));
+  });
+
+  if (matches.length === 0) {
+    return textResult(
+      `No contacts matched query "${query}". `
+      + 'Run contact with {"action":"list"} to browse valid contactId values, or search for a name, handle, channel, or note phrase.',
+    );
+  }
+
+  return textResult(
+    `Contact search results for "${query}" (${matches.length}):\n${matches.map(formatContactSummaryLine).join('\n')}\n`
+    + 'Pass an exact contactId from these results to action=lookup, action=set_trust, or action=note; do not guess from display names.',
+  );
 }
 
 async function executeUnifiedContactAction(
   contactStore: ContactStorePort,
   params: ContactToolParams = {},
+  proposalQueue?: ApprovalQueuePort,
 ): Promise<AgentToolResult<{ isError?: boolean }>> {
   const action = normalizeContactAction(params);
 
   switch (action) {
     case 'list':
       return await executeContactList(contactStore);
+    case 'search':
+      return await executeContactSearch(contactStore, params);
     case 'lookup':
       return await executeContactLookup(contactStore, params);
     case 'note':
       return await executeContactNote(contactStore, params);
     case 'set_trust':
       return await executeContactSetTrust(contactStore, params as ContactSetTrustParams);
+    case 'propose_trust':
+      return await executeContactProposeTrust(contactStore, proposalQueue, params);
     case 'link_identity':
       return await executeContactLinkIdentity(contactStore, params);
     case 'set_channel_privacy':
       return await executeContactSetChannelPrivacy(contactStore, params);
+    case 'set_machine_intelligence':
+      return await executeContactSetMachineIntelligence(contactStore, params);
   }
 }
 
-export function createContactTool(contactStore: ContactStorePort): AgentTool<any> {
+async function executeContactSetMachineIntelligence(
+  contactStore: ContactStorePort,
+  params: ContactToolParams,
+): Promise<AgentToolResult<{ isError?: boolean }>> {
+  const contactId = params.contactId?.trim() ?? '';
+  if (!contactId) {
+    return textResultWithError('Missing contactId', true);
+  }
+  if (typeof params.isMachineIntelligence !== 'boolean') {
+    return textResultWithError('Provide isMachineIntelligence: true or false', true);
+  }
+  const applied = await contactStore.setMachineIntelligence(
+    contactId,
+    params.isMachineIntelligence,
+    'agent:tool:contact_set_machine_intelligence',
+  );
+  if (!applied) {
+    return textResultWithError(`Contact not found: ${contactId}`, true);
+  }
+  return textResult(
+    `Contact ${contactId} is now marked as ${params.isMachineIntelligence
+      ? 'a machine intelligence (peer companion/agent — conversation loop risk applies)'
+      : 'not a machine intelligence'}.`,
+  );
+}
+
+export interface CreateContactToolOptions {
+  /**
+   * Shared confirmation queue used by action=propose_trust to enqueue a
+   * trusted-tier promotion for operator approval. When absent, propose_trust
+   * fails closed — the agent can never write high-tier trust directly.
+   */
+  proposalQueue?: ApprovalQueuePort;
+}
+
+export function createContactTool(
+  contactStore: ContactStorePort,
+  options: CreateContactToolOptions = {},
+): AgentTool<any> {
+  const proposalQueue = options.proposalQueue;
   const tool: AgentTool<any> = {
     name: 'contact',
     label: 'contact',
     description:
-      'Unified contact surface for listing, lookup, notes, trust, identity linking, and channel privacy. '
-      + `Use action=${CONTACT_ACTION_HELP}. `
-      + 'Trust and disclosure boundaries remain enforced, and legacy contact_* action aliases are accepted.',
+      'Unified contact surface for browsing, searching, lookup, notes, trust, identity linking, and channel privacy. '
+      + 'Use action=list to browse contactId values, action=search with query to find contacts by name/handle/channel/notes, '
+      + 'then action=lookup with exact contactId for details. action=note and action=set_trust also require contactId. '
+      + 'set_trust can only apply low-tier trust changes autonomously; to promote a contact to trusted, use '
+      + 'action=propose_trust with contactId and rationale — this queues a proposal for operator approval in Garden and '
+      + 'never changes trust directly. '
+      + 'link_identity and set_channel_privacy require contactId, channel, and channelUserId; privacy changes also require privacyLevel. '
+      + 'set_machine_intelligence requires contactId and isMachineIntelligence. '
+      + `Other actions: ${CONTACT_ACTION_HELP}. `
+      + 'Trust and disclosure boundaries remain enforced.',
     parameters: Type.Object({
       action: Type.Optional(Type.Union(CONTACT_ACTION_NAMES.map((action) => Type.Literal(action)), {
         description:
@@ -434,8 +754,15 @@ export function createContactTool(contactStore: ContactStorePort): AgentTool<any
         minLength: 1,
         description: 'Canonical contact ID, Discord user ID, or channel identity (channel:userId) for lookup.',
       })),
+      query: Type.Optional(Type.String({
+        minLength: 1,
+        description: 'Required for action=search. Matches name, nickname, canonical id, Discord/channel identity, related channel, trust/relationship, or notes.',
+      })),
       notes: Type.Optional(Type.String({
         description: 'Notes to store when action=note.',
+      })),
+      isMachineIntelligence: Type.Optional(Type.Boolean({
+        description: 'For action=set_machine_intelligence: whether this contact is another machine intelligence (peer companion/agent).',
       })),
       trustLevel: Type.Optional(Type.Unsafe<TrustLevel>({
         type: 'string',
@@ -454,6 +781,12 @@ export function createContactTool(contactStore: ContactStorePort): AgentTool<any
       })),
       confirmSuggestion: Type.Optional(Type.Boolean({
         description: 'Apply a trust drift suggestion after preview when action=set_trust.',
+      })),
+      rationale: Type.Optional(Type.String({
+        minLength: 1,
+        description:
+          'Required for action=propose_trust: short rationale for promoting this contact to trusted. '
+          + 'Surfaced to the operator on the Garden Confirmations page.',
       })),
       channel: Type.Optional(Type.String({
         minLength: 1,
@@ -477,7 +810,7 @@ export function createContactTool(contactStore: ContactStorePort): AgentTool<any
       let actionForError = typeof params.action === 'string' ? params.action : undefined;
       try {
         actionForError = normalizeContactAction(params);
-        return await executeUnifiedContactAction(contactStore, params);
+        return await executeUnifiedContactAction(contactStore, params, proposalQueue);
       } catch (error) {
         const suffix = actionForError ? ` for action=${actionForError}` : '';
         return textResultWithError(`contact failed${suffix}: ${errorMessage(error)}`, true);
@@ -494,18 +827,15 @@ export function createContactTool(contactStore: ContactStorePort): AgentTool<any
             ? 'identity.read'
             : ['identity.read', 'identity.write.runtime'] as const;
         case 'list':
-        case 'contact_list':
+        case 'search':
         case 'lookup':
-        case 'contact_lookup':
           return 'identity.read';
         case 'note':
-        case 'contact_note':
         case 'set_trust':
-        case 'contact_set_trust':
+        case 'propose_trust':
         case 'link_identity':
-        case 'contact_link_identity':
         case 'set_channel_privacy':
-        case 'contact_set_channel_privacy':
+        case 'set_machine_intelligence':
           return 'identity.write.runtime';
         default:
           return ['identity.read', 'identity.write.runtime'] as const;
@@ -594,7 +924,7 @@ export function createContactSetChannelPrivacyTool(contactStore: ContactStorePor
       privacyLevel: Type.Unsafe<ChannelPrivacyLevel>({
         type: 'string',
         enum: [...CHANNEL_PRIVACY_LEVELS],
-        description: 'Privacy level: private, semi_private, public, broadcast',
+        description: 'Privacy level: private, invite_only, public, broadcast',
       }),
     }),
     execute: async (

@@ -2,11 +2,12 @@ import type { ServerResponse } from 'node:http';
 import {
   SSE_RESPONSE_HEADERS,
   buildStreamingContentChunk,
-  buildStreamingErrorChunk,
+  buildStreamingErrorEvent,
   buildStreamingFinishChunk,
   buildStreamingRoleChunk,
   formatSseDataEvent,
   formatSseDoneEvent,
+  formatSseErrorEvent,
   type StreamingChunkMetadata,
 } from '../response-format.js';
 import type { ChatCompletionChunk } from '../types.js';
@@ -37,8 +38,12 @@ export class SseStreamingTransport {
     this.writeChunk(buildStreamingFinishChunk(this.metadata));
   }
 
-  writeErrorAndDone(content: string): void {
-    this.writeChunk(buildStreamingErrorChunk(this.metadata, content));
+  writeErrorAndDone(
+    type: string,
+    message: string,
+    details?: Record<string, unknown>,
+  ): void {
+    this.res.write(formatSseErrorEvent(buildStreamingErrorEvent(type, message, details)));
     this.writeDone();
   }
 

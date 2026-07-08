@@ -1,11 +1,7 @@
 import Database from 'better-sqlite3';
 import { describe, expect, it } from 'vitest';
-import {
-  PendingFollowUpStore,
-  createPendingFollowUpStorePort,
-  evaluatePendingFollowUpWakeState,
-  filterPendingFollowUpsForActiveChannel,
-} from './pending-follow-ups.js';
+import { PendingFollowUpStore } from './sqlite-stores/pending-follow-up-store.js';
+import { createPendingFollowUpStorePort, evaluatePendingFollowUpWakeState, filterPendingFollowUpsForActiveChannel } from './pending-follow-ups.js';
 
 describe('PendingFollowUpStore', () => {
   it('creates and lists pending follow-ups by contact scope', () => {
@@ -102,6 +98,112 @@ describe('PendingFollowUpStore', () => {
       activationReason: 'port_dequeue',
     });
     await expect(port.list({ contactId: 'contact-a' })).resolves.toEqual([]);
+  });
+
+  it('deduplicates near-identical enqueue requests by superseding the existing row', async () => {
+    const db = new Database(':memory:');
+    let nextId = 0;
+    const store = new PendingFollowUpStore(db, {
+      idFactory: () => `follow-up-${++nextId}`,
+      now: () => new Date('2026-03-25T12:00:00.000Z'),
+    });
+
+    const first = store.enqueue({
+      content: 'Check in about the medication plan tomorrow.',
+      priority: 'medium',
+      timing: 'soon',
+      channelId: 'discord:primary',
+      channelType: 'discord',
+      authorId: 'system:intention',
+      authorName: 'Whisper',
+      contactId: 'contact-a',
+      sourceMessageId: 'msg-1',
+    });
+    const second = store.enqueue({
+      content: 'Check in tomorrow about the medication plan.',
+      priority: 'high',
+      timing: 'soon',
+      channelId: 'discord:primary',
+      channelType: 'discord',
+      authorId: 'system:intention',
+      authorName: 'Whisper',
+      contactId: 'contact-a',
+      sourceMessageId: 'msg-2',
+      dueAt: '2026-03-25T14:00:00.000Z',
+    });
+
+    expect(second?.id).toBe(first?.id);
+    expect(store.list({ contactId: 'contact-a', includeExpired: true })).toEqual([
+      expect.objectContaining({
+        id: first?.id,
+        content: 'Check in tomorrow about the medication plan.',
+        priority: 'high',
+        dueAt: '2026-03-25T14:00:00.000Z',
+        sourceMessageId: 'msg-2',
+      }),
+    ]);
+    expect(nextId).toBe(1);
+  });
+
+  it('enforces the per-channel/contact pending backlog cap with supersede or drop telemetry paths', () => {
+    const db = new Database(':memory:');
+    let nextId = 0;
+    const store = new PendingFollowUpStore(db, {
+      idFactory: () => `follow-up-${++nextId}`,
+      now: () => new Date('2026-03-25T12:00:00.000Z'),
+      backlogCap: 2,
+    });
+
+    const first = store.enqueue({
+      content: 'Plan the garden watering reminder.',
+      priority: 'medium',
+      timing: 'soon',
+      channelId: 'discord:primary',
+      channelType: 'discord',
+      authorId: 'system:intention',
+      authorName: 'Whisper',
+      contactId: 'contact-a',
+    });
+    store.enqueue({
+      content: 'Review the tax upload checklist.',
+      priority: 'medium',
+      timing: 'scheduled',
+      channelId: 'discord:primary',
+      channelType: 'discord',
+      authorId: 'system:intention',
+      authorName: 'Whisper',
+      contactId: 'contact-a',
+      dueAt: '2026-03-26T12:00:00.000Z',
+    });
+
+    expect(store.enqueue({
+      content: 'Schedule the piano tuning question.',
+      priority: 'low',
+      timing: 'soon',
+      channelId: 'discord:primary',
+      channelType: 'discord',
+      authorId: 'system:intention',
+      authorName: 'Whisper',
+      contactId: 'contact-a',
+    })).toBeNull();
+
+    const cappedSupersede = store.enqueue({
+      content: 'Plan garden tomorrow.',
+      priority: 'high',
+      timing: 'soon',
+      channelId: 'discord:primary',
+      channelType: 'discord',
+      authorId: 'system:intention',
+      authorName: 'Whisper',
+      contactId: 'contact-a',
+    });
+
+    expect(cappedSupersede?.id).toBe(first?.id);
+    expect(store.list({ contactId: 'contact-a', includeExpired: true }).map(followUp => followUp.content)).toEqual([
+      'Plan garden tomorrow.',
+      'Review the tax upload checklist.',
+    ]);
+    expect(nextId).toBe(2);
   });
 
   it('quarantines invalid persisted rows instead of silently dropping them', async () => {

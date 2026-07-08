@@ -31,5 +31,7 @@ describe('agent control plane', () => {
     expect(controlPlaneSource).not.toContain("gateway.shellExec('npm', ['run', 'build']");
     expect(controlPlaneSource).toContain('unregister gateway disconnect hook');
     expect(controlPlaneSource).toContain('write graceful shutdown markers');
+    expect(controlPlaneSource).toContain('close app cache');
+    expect(readSource('main.ts')).toContain('shutdownTargets.appCache = appCache');
   });
 });

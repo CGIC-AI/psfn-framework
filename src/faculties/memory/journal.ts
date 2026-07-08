@@ -1,11 +1,11 @@
 // ── Memory Journal ──
 // Append-only JSONL mirror of every memory mutation (insert / soft-delete / restore).
-// Provides a human-readable, version-controllable L0 record that survives SQLite
-// corruption and can be used to replay the full memory history.
+// This is an audit/export aid, not the authoritative L2 restore primitive:
+// embeddings, evolution links, and Postgres-only memory tables are restored
+// from encrypted database backups.
 
-import { appendFileSync, mkdirSync } from 'node:fs';
-import { dirname } from 'node:path';
 import { createComponentLogger } from '../../shared/logger.js';
+import { appendJsonLine } from '../../persistence/jsonl.js';
 import type { PurrMemory } from './types.js';
 import type { MemoryDeleteVersion } from './memory-store-port.js';
 
@@ -44,7 +44,6 @@ export type MemoryJournalEvent =
 
 export class MemoryJournal {
   private readonly path: string;
-  private dirEnsured = false;
 
   constructor(journalPath: string) {
     this.path = journalPath;
@@ -52,11 +51,7 @@ export class MemoryJournal {
 
   append(event: MemoryJournalEvent): void {
     try {
-      if (!this.dirEnsured) {
-        mkdirSync(dirname(this.path), { recursive: true });
-        this.dirEnsured = true;
-      }
-      appendFileSync(this.path, JSON.stringify(event) + '\n', 'utf-8');
+      appendJsonLine(this.path, event);
     } catch (err) {
       log.warn('Failed to append to memory journal', {
         path: this.path,

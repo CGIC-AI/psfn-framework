@@ -58,6 +58,9 @@ function makeMockStore(memories: Array<PurrMemory & { similarity: number }>): Me
     getMemoriesByChannel: vi.fn().mockReturnValue([]),
     getAllActiveMemories: vi.fn().mockReturnValue(memories),
     listActiveMemories: vi.fn().mockReturnValue(memories),
+    recordEvolutionLink: vi.fn(),
+    getEvolutionLinksForSourceMemory: vi.fn().mockReturnValue([]),
+    getEvolutionLinksForTargetMemory: vi.fn().mockReturnValue([]),
   } as unknown as MemoryStorePort;
 }
 
@@ -168,6 +171,101 @@ function countRenderedMemories(block: string): number {
   return matches ? matches.length : 0;
 }
 
+describe('MemoryRetriever active memory context', () => {
+  beforeEach(() => {
+    idCounter = 0;
+  });
+
+  it('retains existing recalled memories when a later refresh has no candidates', async () => {
+    const recalled = makeMemory({
+      text: 'V prefers oolong tea in the afternoon.',
+      sensitivity: 'public',
+      similarity: 0.95,
+    });
+    const store = makeMockStore([recalled]);
+    const retriever = new MemoryRetriever(store, makeMockEmbedding(), { retrievalBudgetPct: 0.1 }, makeMockEventBus());
+    const request = {
+      contextText: 'oolong tea',
+      channelId: 'api:test',
+      trustLevel: 'regular' as const,
+    };
+
+    await retriever.refreshActiveMemoryContext(request);
+    const first = retriever.getActiveMemoryContext(request);
+    expect(first?.contextBlock).toContain('oolong tea');
+    expect(first?.selectedMemoryIds).toContain(recalled.id);
+
+    (store.searchByEmbedding as ReturnType<typeof vi.fn>).mockResolvedValueOnce([]);
+    await retriever.refreshActiveMemoryContext({
+      ...request,
+      contextText: 'unrelated operational chatter',
+    });
+
+    const second = retriever.getActiveMemoryContext(request);
+    expect(second?.contextBlock).toContain('oolong tea');
+    expect(second?.selectedMemoryIds).toContain(recalled.id);
+    expect(second?.refreshStatus).toBe('ready');
+  });
+
+  it('marks refresh degraded and keeps the previous active context when retrieval fails', async () => {
+    const recalled = makeMemory({
+      text: 'V prefers oolong tea in the afternoon.',
+      sensitivity: 'public',
+      similarity: 0.95,
+    });
+    const store = makeMockStore([recalled]);
+    const retriever = new MemoryRetriever(store, makeMockEmbedding(), { retrievalBudgetPct: 0.1 }, makeMockEventBus());
+    const request = {
+      contextText: 'oolong tea',
+      channelId: 'api:test',
+      trustLevel: 'regular' as const,
+    };
+
+    await retriever.refreshActiveMemoryContext(request);
+    (store.searchByEmbedding as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('vector store unavailable'));
+
+    await retriever.refreshActiveMemoryContext({
+      ...request,
+      contextText: 'fresh cue',
+    });
+
+    const active = retriever.getActiveMemoryContext(request);
+    expect(active?.contextBlock).toContain('oolong tea');
+    expect(active?.selectedMemoryIds).toContain(recalled.id);
+    expect(active?.refreshStatus).toBe('degraded');
+    expect(active?.lastRefreshError).toBe('vector store unavailable');
+  });
+
+  it('invalidates active memory contexts by selected memory id or session channel id', async () => {
+    const recalled = makeMemory({
+      text: 'V prefers oolong tea in the afternoon.',
+      sensitivity: 'public',
+      similarity: 0.95,
+    });
+    const store = makeMockStore([recalled]);
+    const retriever = new MemoryRetriever(store, makeMockEmbedding(), { retrievalBudgetPct: 0.1 }, makeMockEventBus());
+    const request = {
+      contextText: 'oolong tea',
+      channelId: 'api:test',
+      trustLevel: 'regular' as const,
+    };
+
+    await retriever.refreshActiveMemoryContext(request);
+    expect(retriever.getActiveMemoryContext(request)?.selectedMemoryIds).toContain(recalled.id);
+
+    const result = retriever.invalidateActiveMemoryContexts({
+      memoryIds: [recalled.id],
+      sessionChannelIds: [],
+      reason: 'cogsec_revocation',
+    });
+
+    expect(result.invalidatedContextCount).toBe(1);
+    expect(result.invalidatedMemoryEntryCount).toBe(1);
+    expect(result.invalidatedKeys[0]).toContain('session:api:test');
+    expect(retriever.getActiveMemoryContext(request)).toBeNull();
+  });
+});
+
 // ── Tests ──
 
 describe('MemoryRetriever trust-gated filtering', () => {
@@ -204,17 +302,91 @@ describe('MemoryRetriever trust-gated filtering', () => {
     expect(result).toContain('Confidential secret');
   });
 
-  it('regular trust returns only public memories', async () => {
+  it('expands bounded evolution chains for useful high-trust private retrieval', async () => {
+    const current = makeMemory({
+      id: 'workspace-current',
+      text: 'Current workspace is /home/ada/new.',
+      tags: ['current_state', 'workspace'],
+      sensitivity: 'public',
+      similarity: 0.96,
+    });
+    const previous = makeMemory({
+      id: 'workspace-old',
+      text: 'Current workspace is /home/ada/old.',
+      tags: ['current_state', 'workspace'],
+      sensitivity: 'public',
+      similarity: 0.2,
+      supersededBy: current.id,
+    });
+    const store = makeMockStore([current]);
+    (store.getEvolutionLinksForSourceMemory as ReturnType<typeof vi.fn>).mockReturnValue([{
+      id: 'evolution-workspace',
+      sourceMemoryId: current.id,
+      targetMemoryId: previous.id,
+      relation: 'supersedes',
+      confidence: 0.93,
+      reason: 'memory_writer:current_state_replacement',
+      sourceType: 'tool_write',
+      provenanceRefs: [],
+      createdAt: Date.now(),
+    }]);
+    (store.getById as ReturnType<typeof vi.fn>).mockImplementation((id: string) => (
+      id === previous.id ? previous : current
+    ));
+    const retriever = new MemoryRetriever(store, makeMockEmbedding(), { retrievalLimit: 20 });
+
+    const result = await retriever.retrieve('what changed in the workspace history?', 'api:test', 'primary');
+
+    expect(result).toContain('Current workspace is /home/ada/new.');
+    expect(result).toContain('Supersedes [semantic] Current workspace is /home/ada/old.');
+  });
+
+  it('does not expand evolution chains for non-useful retrieval prompts', async () => {
+    const current = makeMemory({
+      id: 'workspace-current',
+      text: 'Current workspace is /home/ada/new.',
+      tags: ['current_state', 'workspace'],
+      sensitivity: 'public',
+      similarity: 0.96,
+    });
+    const previous = makeMemory({
+      id: 'workspace-old',
+      text: 'Current workspace is /home/ada/old.',
+      tags: ['current_state', 'workspace'],
+      sensitivity: 'public',
+      similarity: 0.2,
+      supersededBy: current.id,
+    });
+    const store = makeMockStore([current]);
+    (store.getEvolutionLinksForSourceMemory as ReturnType<typeof vi.fn>).mockReturnValue([{
+      id: 'evolution-workspace',
+      sourceMemoryId: current.id,
+      targetMemoryId: previous.id,
+      relation: 'supersedes',
+      confidence: 0.93,
+      sourceType: 'tool_write',
+      provenanceRefs: [],
+      createdAt: Date.now(),
+    }]);
+    const retriever = new MemoryRetriever(store, makeMockEmbedding(), { retrievalLimit: 20 });
+
+    const result = await retriever.retrieve('workspace status', 'api:test', 'primary');
+
+    expect(result).toContain('Current workspace is /home/ada/new.');
+    expect(result).not.toContain('Current workspace is /home/ada/old.');
+    expect(store.getEvolutionLinksForSourceMemory).not.toHaveBeenCalled();
+  });
+
+  it('regular trust returns public and personal memories', async () => {
     const memories = makeAllSensitivities();
     const store = makeMockStore(memories);
     const embedding = makeMockEmbedding();
     const retriever = new MemoryRetriever(store, embedding, { retrievalLimit: 20 });
 
-    // Regular trust, semi_private channel (numeric Discord ID)
     const result = await retriever.retrieve('test query', '1234567890', 'regular');
 
     expect(result).toContain('Public fact');
-    expect(result).not.toContain('Personal detail');
+    expect(result).toContain('Personal detail');
     expect(result).not.toContain('Intimate memory');
     expect(result).not.toContain('Confidential secret');
   });
@@ -222,7 +394,7 @@ describe('MemoryRetriever trust-gated filtering', () => {
   it('explains withheld memories with abstract reasons in the memory context block', async () => {
     const memories = [
       makeMemory({ text: 'Public fact', sensitivity: 'public', similarity: 0.95 }),
-      makeMemory({ text: 'Personal detail', sensitivity: 'personal', similarity: 0.9 }),
+      makeMemory({ text: 'Intimate detail', sensitivity: 'intimate', similarity: 0.9 }),
     ];
     const store = makeMockStore(memories);
     const embedding = makeMockEmbedding();
@@ -243,7 +415,7 @@ describe('MemoryRetriever trust-gated filtering', () => {
     const result = await retriever.retrieve('test query', '1234567890', 'regular', undefined, undefined, snapshot);
 
     expect(result).toContain('Public fact');
-    expect(result).not.toContain('Personal detail');
+    expect(result).not.toContain('Intimate detail');
     expect(result).toContain('Memory context note:');
     expect(result).toContain('1 candidate memory was kept out');
     expect(result).toContain('Broad trust/privacy reasons: 1 trust ceiling.');
@@ -267,7 +439,7 @@ describe('MemoryRetriever trust-gated filtering', () => {
     expect(result).not.toContain('Confidential secret');
   });
 
-  it('retrieves scoped episodic landmark chains and preserves raw refs for drill-down', async () => {
+  it('retrieves scoped episodic landmark chains and keeps raw span/artifact refs out of companion context', async () => {
     const store = makeMockStore([]);
     const embedding = makeMockEmbedding();
     const vacationStart = makeEpisode({
@@ -345,11 +517,12 @@ describe('MemoryRetriever trust-gated filtering', () => {
       snapshot,
     );
 
-    expect(result).toContain('Episodic landmark chains selected before raw span/artifact drill-down');
+    expect(result).toContain('Episodes from your shared history related to this conversation:');
     expect(result).toContain('Sicily vacation planning');
     expect(result).toContain('Sicily hotel resolution');
-    expect(result).toContain('span-vacation-start');
-    expect(result).toContain('artifact-flight-options');
+    expect(result).not.toContain('span-vacation-start');
+    expect(result).not.toContain('artifact-flight-options');
+    expect(result).not.toContain('Raw refs');
     expect(result).not.toContain('Pregnancy appointment logistics');
     expect(episodicStore.listEpisodeArcsForEpisode).toHaveBeenCalledWith(vacationStart.id, {
       direction: 'both',
@@ -502,10 +675,10 @@ describe('MemoryRetriever trust-gated filtering', () => {
 
     expect(result).toContain('Wedding cake tasting shortlist');
     expect(result).toContain('Bakery deposit and tasting appointment');
-    expect(result).toContain('span-wedding-cake');
-    expect(result).toContain('span-bakery-deposit');
-    expect(result).toContain('artifact-cake-shortlist');
-    expect(result).toContain('artifact-bakery-contract');
+    expect(result).not.toContain('span-wedding-cake');
+    expect(result).not.toContain('span-bakery-deposit');
+    expect(result).not.toContain('artifact-cake-shortlist');
+    expect(result).not.toContain('artifact-bakery-contract');
     expect(result).not.toContain('Wedding venue walkthrough');
     expect(result).not.toContain('First dance our song idea');
     expect(result).not.toContain('Pregnancy timeline check-in');
@@ -634,6 +807,69 @@ describe('MemoryRetriever trust-gated filtering', () => {
     expect(result).not.toContain('Context feedback for turn abc');
   });
 
+  it('boosts durable preferences when the context asks for a matching preference category', async () => {
+    const preference = makeMemory({
+      id: 'favorite-color',
+      text: "V's favorite color is teal.",
+      sensitivity: 'public',
+      importance: 0.9,
+      salience: 0.9,
+      similarity: 0.55,
+      tags: ['preference', 'favorite', 'preference:color', 'durable_preference'],
+      retentionClass: 'durable',
+    });
+    const higherSimilarityTask = makeMemory({
+      id: 'receipt-task',
+      text: 'V recently filed receipts for grocery budgeting.',
+      sensitivity: 'public',
+      importance: 0.55,
+      salience: 0.65,
+      similarity: 0.75,
+      tags: ['task'],
+    });
+    const store = makeMockStore([higherSimilarityTask, preference]);
+    const embedding = makeMockEmbedding();
+    const retriever = new MemoryRetriever(store, embedding, { retrievalLimit: 20 });
+
+    const result = await retriever.retrieve("What is V's favorite color?", 'api:test', 'primary');
+
+    expect(result).toContain("V's favorite color is teal.");
+    expect(result.indexOf("V's favorite color is teal.")).toBeLessThan(
+      result.indexOf('V recently filed receipts for grocery budgeting.'),
+    );
+  });
+
+  it('keeps durable preferences quiet during unrelated retrieval', async () => {
+    const preference = makeMemory({
+      id: 'quiet-favorite-color',
+      text: "V's favorite color is teal.",
+      sensitivity: 'public',
+      importance: 0.95,
+      salience: 0.95,
+      similarity: 0.99,
+      tags: ['preference', 'favorite', 'preference:color', 'durable_preference'],
+      retentionClass: 'durable',
+    });
+    const deployment = makeMemory({
+      id: 'deployment-checklist',
+      text: 'The deployment checklist requires npm run build before handoff.',
+      sensitivity: 'public',
+      importance: 0.7,
+      salience: 0.7,
+      similarity: 0.7,
+      tags: ['deployment'],
+    });
+    const store = makeMockStore([preference, deployment]);
+    const embedding = makeMockEmbedding();
+    const retriever = new MemoryRetriever(store, embedding, { retrievalLimit: 20 });
+
+    const result = await retriever.retrieve('deployment checklist status', 'api:test', 'primary');
+
+    expect(result).toContain('The deployment checklist requires npm run build before handoff.');
+    expect(result).not.toContain("V's favorite color is teal.");
+    expect(countRenderedMemories(result)).toBe(1);
+  });
+
   it('broadcast channels stay public_only unless explicit approval token is present', async () => {
     const memories = makeAllSensitivities();
     const store = makeMockStore(memories);
@@ -725,13 +961,13 @@ describe('MemoryRetriever trust-gated filtering', () => {
     expect(result).not.toContain('Alpha only memory');
   });
 
-  it('primary trust + semi_private channel returns public + personal only', async () => {
+  it('primary trust + invite_only channel returns public + personal only', async () => {
     const memories = makeAllSensitivities();
     const store = makeMockStore(memories);
     const embedding = makeMockEmbedding();
     const retriever = new MemoryRetriever(store, embedding, { retrievalLimit: 20 });
 
-    // Numeric channel = semi_private (Discord guild)
+    // Numeric channel = invite_only (Discord guild)
     const result = await retriever.retrieve('test query', '1234567890', 'primary');
 
     expect(result).toContain('Public fact');
@@ -778,7 +1014,7 @@ describe('MemoryRetriever trust-gated filtering', () => {
     expect(result).toContain('Confidential secret');
   });
 
-  it('primary trust + Discord guild metadata remains semi_private', async () => {
+  it('primary trust + Discord guild metadata remains invite_only', async () => {
     const memories = makeAllSensitivities();
     const store = makeMockStore(memories);
     const embedding = makeMockEmbedding();
@@ -860,9 +1096,8 @@ describe('MemoryRetriever trust-gated filtering', () => {
     // No trustLevel argument — should default to 'regular'
     const result = await retriever.retrieve('test query', '1234567890');
 
-    // regular trust + semi_private = public only
     expect(result).toContain('Public fact');
-    expect(result).not.toContain('Personal detail');
+    expect(result).toContain('Personal detail');
     expect(result).not.toContain('Intimate memory');
     expect(result).not.toContain('Confidential secret');
   });
@@ -1163,10 +1398,10 @@ describe('MemoryRetriever trust-gated filtering', () => {
 
     await retriever.retrieve('test query', '1234567890', 'regular');
 
-    // Only the public memory (mem-1) should have updateMemory called
+    // Regular trust allows public and personal memories; denied intimate/confidential memories are not updated.
     const updateCalls = (store.updateMemory as ReturnType<typeof vi.fn>).mock.calls;
-    expect(updateCalls.length).toBe(1);
-    expect(updateCalls[0][0]).toBe('mem-1'); // The public memory ID
+    expect(updateCalls.length).toBe(2);
+    expect(updateCalls.map(call => call[0])).toEqual(['mem-1', 'mem-2']);
   });
 
   it('trusted trust + private channel returns public + personal only', async () => {
@@ -1282,7 +1517,7 @@ describe('MemoryRetriever basic behavior', () => {
     const staleSensitive = makeMemory({
       id: 'stale-sensitive',
       text: 'Old introspection grounding probe residue from another run.',
-      sensitivity: 'personal',
+      sensitivity: 'intimate',
       similarity: 0.95,
       extractedAt: Date.now() - 60_000,
     });
@@ -1822,7 +2057,7 @@ describe('MemoryRetriever basic behavior', () => {
     const result = await retriever.retrieve(
       'How is your family doing lately?',
       '1234567890',
-      'regular',
+      'public',
       undefined,
       primary.id,
     );
@@ -2613,7 +2848,6 @@ describe('MemoryRetriever retrieval trace telemetry', () => {
     const eventBus = makeMockEventBus();
     const retriever = new MemoryRetriever(store, embedding, { retrievalLimit: 20 }, eventBus);
 
-    // regular trust + semi_private = only public allowed
     await retriever.retrieve('test query', '1234567890', 'regular');
 
     const calls = ((eventBus.emit as unknown) as ReturnType<typeof vi.fn>).mock.calls;
@@ -2633,6 +2867,377 @@ describe('MemoryRetriever retrieval trace telemetry', () => {
   });
 });
 
+describe('MemoryRetriever room-scoped visibility', () => {
+  const GROUP_ROOM_X = 'discord:guild-1:room-x';
+  const GROUP_ROOM_Y = 'discord:guild-1:room-y';
+  const VEGA_DM = 'discord:dm:vega';
+
+  beforeEach(() => {
+    idCounter = 0;
+  });
+
+  afterEach(() => {
+    tokenTestUtils.resetTokenizerState();
+  });
+
+  function latestRetrievalTelemetry(eventBus: EventBus): Record<string, unknown> {
+    const calls = ((eventBus.emit as unknown) as ReturnType<typeof vi.fn>).mock.calls;
+    expect(calls).toHaveLength(1);
+    expect(calls[0][0]).toBe('memory.retrieval');
+    return calls[0][1] as Record<string, unknown>;
+  }
+
+  function makeRoomVisibilityContactStore(): { contactStore: ContactStore; vegaId: string } {
+    const db = new Database(':memory:');
+    const contactStore = new ContactStore(db, 'primary-user');
+    const vega = contactStore.upsert({
+      displayName: 'Vega',
+      discordUserId: 'vega-discord',
+      trustLevel: 'trusted',
+      relationshipType: 'friend',
+    });
+    contactStore.recordChannelActivity(vega.id, 'discord', VEGA_DM, 'private');
+    return { contactStore, vegaId: vega.id };
+  }
+
+  it('allows same-room group memories while blocking cross-room and DM memories in a group room', async () => {
+    const { contactStore, vegaId } = makeRoomVisibilityContactStore();
+    contactStore.recordChannelActivity(vegaId, 'discord', GROUP_ROOM_X, 'invite_only');
+    contactStore.recordChannelActivity(vegaId, 'discord', GROUP_ROOM_Y, 'invite_only');
+    const sameRoomMemory = makeMemory({
+      id: 'group-x-memory',
+      text: 'Room X decided the deployment window is Friday.',
+      sensitivity: 'public',
+      provenance: { channelId: GROUP_ROOM_X },
+      scopeRef: { kind: 'conversation', id: GROUP_ROOM_X },
+      similarity: 0.97,
+    });
+    const crossRoomMemory = makeMemory({
+      id: 'group-y-memory',
+      text: 'Room Y private launch codename is Lantern.',
+      sensitivity: 'public',
+      provenance: { channelId: GROUP_ROOM_Y },
+      scopeRef: { kind: 'conversation', id: GROUP_ROOM_Y },
+      similarity: 0.96,
+    });
+    const dmMemory = makeMemory({
+      id: 'vega-dm-memory',
+      text: 'Vega said in DM that the invoice folder is personal.',
+      sensitivity: 'public',
+      contactId: vegaId,
+      provenance: { channelId: VEGA_DM },
+      similarity: 0.95,
+    });
+    const eventBus = makeMockEventBus();
+    const retriever = new MemoryRetriever(
+      makeMockStore([sameRoomMemory, crossRoomMemory, dmMemory]),
+      makeMockEmbedding(),
+      { retrievalLimit: 20 },
+      eventBus,
+      contactStore,
+    );
+
+    const result = await retriever.retrieve(
+      'deployment window and launch notes',
+      GROUP_ROOM_X,
+      'primary',
+      { isDirectMessage: false, privacyLevel: 'invite_only' },
+      vegaId,
+    );
+
+    expect(result).toContain('Room X decided the deployment window is Friday.');
+    expect(result).not.toContain('Room Y private launch codename is Lantern.');
+    expect(result).not.toContain('invoice folder is personal');
+
+    const telemetry = latestRetrievalTelemetry(eventBus);
+    expect(telemetry.roomVisibilityRejectedCount).toBe(2);
+    expect(telemetry.withheldReasonCounts).toMatchObject({
+      'room_visibility.blocked': 2,
+    });
+    expect(telemetry.policyAllowedCount).toBe(1);
+  });
+
+  it('allows same-room personal memories for regular contacts without trust ceiling rejection', async () => {
+    const { contactStore, vegaId } = makeRoomVisibilityContactStore();
+    contactStore.recordChannelActivity(vegaId, 'discord', GROUP_ROOM_X, 'invite_only');
+    const sameRoomPersonalMemory = makeMemory({
+      id: 'group-x-personal-memory',
+      text: 'Room X heard Vega prefers the quiet rollout plan.',
+      sensitivity: 'personal',
+      contactId: vegaId,
+      provenance: { channelId: GROUP_ROOM_X },
+      scopeRef: { kind: 'conversation', id: GROUP_ROOM_X },
+      similarity: 0.99,
+    });
+    const eventBus = makeMockEventBus();
+    const retriever = new MemoryRetriever(
+      makeMockStore([sameRoomPersonalMemory]),
+      makeMockEmbedding(),
+      { retrievalLimit: 20 },
+      eventBus,
+      contactStore,
+    );
+
+    const result = await retriever.retrieve(
+      'quiet rollout plan',
+      GROUP_ROOM_X,
+      'regular',
+      { isDirectMessage: false, privacyLevel: 'invite_only' },
+      vegaId,
+    );
+
+    expect(result).toContain('Room X heard Vega prefers the quiet rollout plan.');
+
+    const telemetry = latestRetrievalTelemetry(eventBus);
+    expect(telemetry.roomVisibilityRejectedCount).toBe(0);
+    expect(telemetry.withheldReasonCounts).not.toMatchObject({
+      'trust.ceiling_exceeded': expect.any(Number),
+    });
+    expect(telemetry.returnedCount).toBe(1);
+  });
+
+  it('allows participated group memories in the participant DM and blocks non-participated rooms', async () => {
+    const { contactStore, vegaId } = makeRoomVisibilityContactStore();
+    contactStore.recordChannelActivity(vegaId, 'discord', GROUP_ROOM_X, 'invite_only');
+    const dmMemory = makeMemory({
+      id: 'vega-dm-memory',
+      text: 'Vega DM reminder: prefer short deployment summaries.',
+      sensitivity: 'public',
+      contactId: vegaId,
+      provenance: { channelId: VEGA_DM },
+      similarity: 0.98,
+    });
+    const participatedGroupMemory = makeMemory({
+      id: 'group-x-memory',
+      text: 'Room X agreed Vega owns the smoke test checklist.',
+      sensitivity: 'public',
+      contactId: vegaId,
+      provenance: { channelId: GROUP_ROOM_X },
+      scopeRef: { kind: 'conversation', id: GROUP_ROOM_X },
+      similarity: 0.97,
+    });
+    const nonParticipatedGroupMemory = makeMemory({
+      id: 'group-y-memory',
+      text: 'Room Y agreed on a secret budget ceiling.',
+      sensitivity: 'public',
+      provenance: { channelId: GROUP_ROOM_Y },
+      scopeRef: { kind: 'conversation', id: GROUP_ROOM_Y },
+      similarity: 0.96,
+    });
+    const eventBus = makeMockEventBus();
+    const retriever = new MemoryRetriever(
+      makeMockStore([dmMemory, participatedGroupMemory, nonParticipatedGroupMemory]),
+      makeMockEmbedding(),
+      { retrievalLimit: 20 },
+      eventBus,
+      contactStore,
+    );
+
+    const result = await retriever.retrieve(
+      'deployment summary and checklist',
+      VEGA_DM,
+      'primary',
+      { isDirectMessage: true, privacyLevel: 'private' },
+      vegaId,
+    );
+
+    expect(result).toContain('Vega DM reminder: prefer short deployment summaries.');
+    expect(result).toContain('Room X agreed Vega owns the smoke test checklist.');
+    expect(result).not.toContain('Room Y agreed on a secret budget ceiling.');
+
+    const telemetry = latestRetrievalTelemetry(eventBus);
+    expect(telemetry.roomVisibilityRejectedCount).toBe(1);
+    expect(telemetry.withheldReasonCounts).toMatchObject({
+      'room_visibility.blocked': 1,
+    });
+    expect(telemetry.returnedCount).toBe(2);
+  });
+
+  it('allows participated group personal memories in the participant DM for regular contacts', async () => {
+    const { contactStore, vegaId } = makeRoomVisibilityContactStore();
+    contactStore.recordChannelActivity(vegaId, 'discord', GROUP_ROOM_X, 'invite_only');
+    const participatedGroupMemory = makeMemory({
+      id: 'group-x-personal-memory',
+      text: 'Room X knows Vega volunteered to own the risky checklist.',
+      sensitivity: 'personal',
+      contactId: vegaId,
+      provenance: { channelId: GROUP_ROOM_X },
+      scopeRef: { kind: 'conversation', id: GROUP_ROOM_X },
+      similarity: 0.99,
+    });
+    const eventBus = makeMockEventBus();
+    const retriever = new MemoryRetriever(
+      makeMockStore([participatedGroupMemory]),
+      makeMockEmbedding(),
+      { retrievalLimit: 20 },
+      eventBus,
+      contactStore,
+    );
+
+    const result = await retriever.retrieve(
+      'risky checklist',
+      VEGA_DM,
+      'regular',
+      { isDirectMessage: true, privacyLevel: 'private' },
+      vegaId,
+    );
+
+    expect(result).toContain('Room X knows Vega volunteered to own the risky checklist.');
+
+    const telemetry = latestRetrievalTelemetry(eventBus);
+    expect(telemetry.roomVisibilityRejectedCount).toBe(0);
+    expect(telemetry.withheldReasonCounts).not.toMatchObject({
+      'trust.ceiling_exceeded': expect.any(Number),
+    });
+    expect(telemetry.returnedCount).toBe(1);
+  });
+
+  it('fails closed for DM access when room participation proof is missing', async () => {
+    const { contactStore, vegaId } = makeRoomVisibilityContactStore();
+    const blockedGroupMemory = makeMemory({
+      id: 'group-x-memory',
+      text: 'Room X discussed a private server migration plan.',
+      sensitivity: 'public',
+      contactId: vegaId,
+      provenance: { channelId: GROUP_ROOM_X },
+      scopeRef: { kind: 'conversation', id: GROUP_ROOM_X },
+      similarity: 0.99,
+    });
+    const eventBus = makeMockEventBus();
+    const retriever = new MemoryRetriever(
+      makeMockStore([blockedGroupMemory]),
+      makeMockEmbedding(),
+      { retrievalLimit: 20 },
+      eventBus,
+      contactStore,
+    );
+
+    const result = await retriever.retrieve(
+      'server migration plan',
+      VEGA_DM,
+      'primary',
+      { isDirectMessage: true, privacyLevel: 'private' },
+      vegaId,
+    );
+
+    expect(result).not.toContain('private server migration plan');
+    expect(result).toContain('Memory context note:');
+    expect(result).toContain('room visibility boundary');
+
+    const telemetry = latestRetrievalTelemetry(eventBus);
+    expect(telemetry.roomVisibilityRejectedCount).toBe(1);
+    expect(telemetry.withheldReasonCounts).toMatchObject({
+      'room_visibility.blocked': 1,
+    });
+    expect(telemetry.reason).toBe('trust_filtered');
+    expect(telemetry.returnedCount).toBe(0);
+  });
+
+  it('withholds same-room memories from retired logical sessions while allowing fresh-route memories', async () => {
+    const { contactStore, vegaId } = makeRoomVisibilityContactStore();
+    contactStore.recordChannelActivity(vegaId, 'discord', GROUP_ROOM_X, 'invite_only');
+    const freshLogicalSessionId = `${GROUP_ROOM_X}:session:20260630T120000Z-fresh123`;
+    const retiredMemory = makeMemory({
+      id: 'retired-room-memory',
+      text: 'Old poisoned lane said the deployment password was basil.',
+      sensitivity: 'public',
+      provenance: { channelId: GROUP_ROOM_X, sessionId: GROUP_ROOM_X },
+      scopeRef: { kind: 'conversation', id: GROUP_ROOM_X },
+      sourceRef: `source:extraction|channel:${GROUP_ROOM_X}|session:${GROUP_ROOM_X}|turn:old`,
+      similarity: 0.99,
+    });
+    const freshMemory = makeMemory({
+      id: 'fresh-room-memory',
+      text: 'Fresh lane says the deployment checklist is smoke test first.',
+      sensitivity: 'public',
+      provenance: { channelId: GROUP_ROOM_X, sessionId: freshLogicalSessionId },
+      scopeRef: { kind: 'conversation', id: GROUP_ROOM_X },
+      sourceRef: `source:extraction|channel:${GROUP_ROOM_X}|session:${freshLogicalSessionId}|turn:fresh`,
+      similarity: 0.98,
+    });
+    const eventBus = makeMockEventBus();
+    const retriever = new MemoryRetriever(
+      makeMockStore([retiredMemory, freshMemory]),
+      makeMockEmbedding(),
+      { retrievalLimit: 20 },
+      eventBus,
+      contactStore,
+      null,
+      null,
+      {
+        isSessionRetiredOrQuarantined: (logicalSessionId: string) => logicalSessionId === GROUP_ROOM_X,
+        getRetiredLogicalSessionIds: () => new Set([GROUP_ROOM_X]),
+      },
+    );
+
+    const result = await retriever.retrieve(
+      'deployment checklist',
+      GROUP_ROOM_X,
+      'primary',
+      { isDirectMessage: false, privacyLevel: 'invite_only' },
+      vegaId,
+    );
+
+    expect(result).toContain('Fresh lane says the deployment checklist is smoke test first.');
+    expect(result).not.toContain('Old poisoned lane said the deployment password was basil.');
+
+    const telemetry = latestRetrievalTelemetry(eventBus);
+    expect(telemetry.sessionQuarantineRejectedCount).toBe(1);
+    expect(telemetry.withheldReasonCounts).toMatchObject({
+      'session_quarantine.blocked': 1,
+    });
+    expect(telemetry.roomVisibilityRejectedCount).toBe(0);
+    expect(telemetry.returnedCount).toBe(1);
+  });
+
+  it('carries room-visibility rejections into active context manifest seeds', async () => {
+    const { contactStore, vegaId } = makeRoomVisibilityContactStore();
+    contactStore.recordChannelActivity(vegaId, 'discord', GROUP_ROOM_X, 'invite_only');
+    const sameRoomMemory = makeMemory({
+      id: 'group-x-memory',
+      text: 'Room X selected the blue release train.',
+      sensitivity: 'public',
+      provenance: { channelId: GROUP_ROOM_X },
+      scopeRef: { kind: 'conversation', id: GROUP_ROOM_X },
+      similarity: 0.97,
+    });
+    const crossRoomMemory = makeMemory({
+      id: 'group-y-memory',
+      text: 'Room Y selected the red release train.',
+      sensitivity: 'public',
+      provenance: { channelId: GROUP_ROOM_Y },
+      scopeRef: { kind: 'conversation', id: GROUP_ROOM_Y },
+      similarity: 0.96,
+    });
+    const retriever = new MemoryRetriever(
+      makeMockStore([sameRoomMemory, crossRoomMemory]),
+      makeMockEmbedding(),
+      { retrievalLimit: 20 },
+      makeMockEventBus(),
+      contactStore,
+    );
+    const request = {
+      contextText: 'release train',
+      channelId: GROUP_ROOM_X,
+      trustLevel: 'primary' as const,
+      channelMeta: { isDirectMessage: false, privacyLevel: 'invite_only' as const },
+      canonicalContactId: vegaId,
+    };
+
+    await retriever.refreshActiveMemoryContext(request);
+    const active = retriever.getActiveMemoryContext(request);
+
+    expect(active?.contextBlock).toContain('Room X selected the blue release train.');
+    expect(active?.contextBlock).not.toContain('Room Y selected the red release train.');
+    expect(active?.manifestSeed).toMatchObject({
+      roomVisibilityRejectedCount: 1,
+      withheldReasonCounts: {
+        'room_visibility.blocked': 1,
+      },
+    });
+  });
+});
+
 describe('MemoryRetriever compositional retrieval rerank', () => {
   beforeEach(() => {
     idCounter = 0;
@@ -2642,7 +3247,7 @@ describe('MemoryRetriever compositional retrieval rerank', () => {
     tokenTestUtils.resetTokenizerState();
   });
 
-  it('uses batch-evaluate-and-compose reranking when compositional retrieval policy allows it', async () => {
+  it('uses deterministic metadata reranking when compositional retrieval policy allows it', async () => {
     const memories = [
       makeMemory({ id: 'mem-alpha', text: 'Alpha baseline memory', similarity: 0.92, importance: 0.8 }),
       makeMemory({ id: 'mem-bravo', text: 'Bravo directly answers the question', similarity: 0.86, importance: 0.8 }),
@@ -2653,32 +3258,7 @@ describe('MemoryRetriever compositional retrieval rerank', () => {
     const store = makeMockStore(memories);
     const embedding = makeMockEmbedding();
     const eventBus = makeMockEventBus();
-    const llmProvider = makeMockLLMProvider([
-      {
-        content: `<response>
-<candidate><id>mem-alpha</id><relevance>0.2</relevance></candidate>
-<candidate><id>mem-bravo</id><relevance>0.95</relevance></candidate>
-<candidate><id>mem-charlie</id><relevance>0.05</relevance></candidate>
-<candidate><id>mem-delta</id><relevance>0.7</relevance></candidate>
-</response>`,
-      },
-      {
-        content: `<response>
-<candidate><id>mem-echo</id><relevance>0.1</relevance></candidate>
-</response>`,
-      },
-      {
-        content: `<response>
-<ranking>
-<id>mem-delta</id>
-<id>mem-bravo</id>
-<id>mem-alpha</id>
-<id>mem-charlie</id>
-<id>mem-echo</id>
-</ranking>
-</response>`,
-      },
-    ]);
+    const llmProvider = makeMockLLMProvider([]);
     const runtimeConfig = makeRuntimeConfig({
       capabilityTier: 'autonomous',
       compositionalPolicy: {
@@ -2697,7 +3277,7 @@ describe('MemoryRetriever compositional retrieval rerank', () => {
       llmProvider,
     );
 
-    const result = await retriever.retrieve('which memory best answers the question?', 'api:test', 'primary');
+    const result = await retriever.retrieve('which continuity anchor answers the question?', 'api:test', 'primary');
 
     expect(result.indexOf('Delta best continuity anchor')).toBeLessThan(
       result.indexOf('Alpha baseline memory'),
@@ -2705,11 +3285,7 @@ describe('MemoryRetriever compositional retrieval rerank', () => {
     expect(result.indexOf('Bravo directly answers the question')).toBeLessThan(
       result.indexOf('Alpha baseline memory'),
     );
-    expect(llmProvider.complete).toHaveBeenCalledTimes(3);
-    const llmCalls = (llmProvider.complete as ReturnType<typeof vi.fn>).mock.calls;
-    expect(llmCalls.every((call) => call[1] === 'memory')).toBe(true);
-    expect((llmProvider.complete as ReturnType<typeof vi.fn>).mock.calls[0][0].systemPrompt).toContain('Alpha baseline memory');
-    expect((llmProvider.complete as ReturnType<typeof vi.fn>).mock.calls[2][0].systemPrompt).toContain('Delta best continuity anchor');
+    expect(llmProvider.complete).not.toHaveBeenCalled();
     const calls = ((eventBus.emit as unknown) as ReturnType<typeof vi.fn>).mock.calls;
     expect(calls).toHaveLength(1);
     expect(calls[0][1]).toMatchObject({
@@ -2767,7 +3343,7 @@ describe('MemoryRetriever compositional retrieval rerank', () => {
     });
   });
 
-  it('fails closed to deterministic retrieval when compositional rerank responses are malformed', async () => {
+  it('does not spend a memory model call when deterministic rerank is available', async () => {
     const memories = [
       makeMemory({ id: 'mem-alpha', text: 'Alpha baseline memory', similarity: 0.98, importance: 0.95 }),
       makeMemory({ id: 'mem-bravo', text: 'Bravo directly answers the question', similarity: 0.86, importance: 0.8 }),
@@ -2805,12 +3381,12 @@ describe('MemoryRetriever compositional retrieval rerank', () => {
     expect(result.indexOf('Bravo directly answers the question')).toBeLessThan(
       result.indexOf('Delta best continuity anchor'),
     );
-    expect(llmProvider.complete).toHaveBeenCalledTimes(1);
+    expect(llmProvider.complete).not.toHaveBeenCalled();
     const calls = ((eventBus.emit as unknown) as ReturnType<typeof vi.fn>).mock.calls;
     expect(calls).toHaveLength(1);
     expect(calls[0][1]).toMatchObject({
       reason: 'ok',
-      compositionalMode: 'malformed_or_failed',
+      compositionalMode: 'applied',
       compositionalCandidateCount: 3,
       compositionalEvaluationBatchCount: 1,
       compositionalFinalistCount: 3,
@@ -3125,6 +3701,36 @@ describe('MemoryRetriever caller-context retrieval modes', () => {
     expect(result.indexOf('Same-day but lower-similarity memory')).toBeLessThan(
       result.indexOf('Week-old but higher-similarity memory'),
     );
+  });
+
+  it('does not fail temporal retrieval when a memory has an invalid timestamp', async () => {
+    const memories = [
+      makeMemory({
+        text: 'Memory with malformed extracted timestamp',
+        sensitivity: 'public',
+        similarity: 0.9,
+        importance: 0.9,
+        salience: 0.9,
+        extractedAt: Number.NaN,
+        lastAccessed: Number.NaN,
+      }),
+    ];
+    const retriever = new MemoryRetriever(makeMockStore(memories), makeMockEmbedding(), { retrievalLimit: 20 });
+
+    const result = await retriever.retrieve(
+      'timestamp resilience question',
+      'api:test',
+      'primary',
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      { retrievalMode: 'temporal' },
+    );
+
+    expect(result).toContain('Memory with malformed extracted timestamp');
   });
 
   it('reflection mode excludes reflection memories from ranked retrieval', async () => {

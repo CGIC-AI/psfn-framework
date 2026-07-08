@@ -5,6 +5,7 @@ import { MemoryStore } from './store.js';
 import { SalienceDecay } from './decay.js';
 import { MEMORY_CONFIG } from './types.js';
 import type { PurrMemory } from './types.js';
+import type { MemoryStorePort } from './memory-store-port.js';
 import { DEFAULT_EMBEDDING_CONFIG } from './embedding.js';
 
 const EMBEDDING_DIMS = DEFAULT_EMBEDDING_CONFIG.dims;
@@ -31,6 +32,14 @@ function makeEmbedding(): Float32Array {
   const arr = new Float32Array(EMBEDDING_DIMS);
   for (let i = 0; i < EMBEDDING_DIMS; i++) arr[i] = Math.random() - 0.5;
   return arr;
+}
+
+function createDeferred(): { promise: Promise<void>; resolve: () => void } {
+  let resolve!: () => void;
+  const promise = new Promise<void>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
 }
 
 describe('SalienceDecay', () => {
@@ -232,6 +241,52 @@ describe('SalienceDecay', () => {
     expect(durableUpdated.salience).toBeGreaterThan(MEMORY_CONFIG.durableSalienceFloor);
   });
 
+  it('retains durable preference memories longer than ordinary durable memories', async () => {
+    const oneYearAgo = Date.now() - 365 * 24 * 60 * 60 * 1000;
+
+    const preference = makeMemory({
+      id: 'durable-preference',
+      text: 'My favorite color is teal.',
+      type: 'semantic',
+      salience: 1.0,
+      lastAccessed: oneYearAgo,
+      tags: ['preference', 'favorite', 'preference:color'],
+      retentionClass: 'durable',
+    });
+    const durable = makeMemory({
+      id: 'durable-standard',
+      text: 'Durable profile memory',
+      type: 'semantic',
+      salience: 1.0,
+      lastAccessed: oneYearAgo,
+      tags: ['durable'],
+      retentionClass: 'durable',
+    });
+    const standard = makeMemory({
+      id: 'standard-semantic',
+      text: 'Standard semantic memory',
+      type: 'semantic',
+      salience: 1.0,
+      lastAccessed: oneYearAgo,
+      tags: [],
+    });
+
+    store.insertMemory(preference, makeEmbedding());
+    store.insertMemory(durable, makeEmbedding());
+    store.insertMemory(standard, makeEmbedding());
+
+    await decay.run();
+
+    const all = store.getAllActiveMemories();
+    const preferenceUpdated = all.find(m => m.id === 'durable-preference')!;
+    const durableUpdated = all.find(m => m.id === 'durable-standard')!;
+    const standardUpdated = all.find(m => m.id === 'standard-semantic')!;
+
+    expect(preferenceUpdated.salience).toBeGreaterThan(durableUpdated.salience);
+    expect(durableUpdated.salience).toBeGreaterThan(standardUpdated.salience);
+    expect(preferenceUpdated.salience).toBeGreaterThan(MEMORY_CONFIG.preferenceDurableSalienceFloor);
+  });
+
   it('never decays durable memories below durable floor', async () => {
     const veryOld = Date.now() - 20 * 365 * 24 * 60 * 60 * 1000;
     const mem = makeMemory({
@@ -262,8 +317,9 @@ describe('SalienceDecay', () => {
     expect(updated[0].salience).toBe(0.8);
   });
 
-  it('updates eligible memories without relying on a transaction wrapper helper', async () => {
+  it('batches eligible salience updates instead of updating each memory individually', async () => {
     const updateSpy = vi.spyOn(store, 'updateMemory');
+    const bulkSpy = vi.spyOn(store, 'bulkUpdateSalience');
     const oneWeekAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
     store.insertMemory(makeMemory({
       id: 'tx-check',
@@ -274,7 +330,11 @@ describe('SalienceDecay', () => {
 
     await decay.run();
 
-    expect(updateSpy).toHaveBeenCalledTimes(1);
+    expect(updateSpy).not.toHaveBeenCalled();
+    expect(bulkSpy).toHaveBeenCalledTimes(1);
+    expect(bulkSpy).toHaveBeenCalledWith([
+      expect.objectContaining({ id: 'tx-check', salience: expect.any(Number) }),
+    ]);
   });
 
   it('uses provided maintenance interval when starting timer', () => {
@@ -295,15 +355,58 @@ describe('SalienceDecay', () => {
     expect(setIntervalSpy).toHaveBeenCalledWith(expect.any(Function), MEMORY_CONFIG.maintenanceIntervalMs);
   });
 
+  it('stops an in-flight run before reading the next batch', async () => {
+    const oneWeekAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
+    const firstBatchWriteStarted = createDeferred();
+    const firstBatchWriteRelease = createDeferred();
+    const firstBatch = makeMemory({
+      id: 'cancel-page-0',
+      type: 'episodic',
+      salience: 1.0,
+      lastAccessed: oneWeekAgo,
+    });
+    const secondBatch = makeMemory({
+      id: 'cancel-page-1',
+      type: 'episodic',
+      salience: 1.0,
+      lastAccessed: oneWeekAgo,
+    });
+    const listActiveMemories = vi.fn(async (options?: { limit?: number; offset?: number }) => (
+      options?.offset === 0 ? [firstBatch] : [secondBatch]
+    ));
+    const bulkUpdateSalience = vi.fn(async () => {
+      firstBatchWriteStarted.resolve();
+      await firstBatchWriteRelease.promise;
+    });
+    const cancellableDecay = new SalienceDecay({
+      listActiveMemories,
+      bulkUpdateSalience,
+    } as unknown as MemoryStorePort, { batchSize: 1 });
+
+    const runPromise = cancellableDecay.run();
+    await firstBatchWriteStarted.promise;
+
+    cancellableDecay.stop();
+    firstBatchWriteRelease.resolve();
+    await runPromise;
+
+    expect(listActiveMemories).toHaveBeenCalledTimes(1);
+    expect(listActiveMemories).toHaveBeenCalledWith({ limit: 1, offset: 0 });
+    expect(bulkUpdateSalience).toHaveBeenCalledTimes(1);
+  });
+
   it('processes salience decay across multiple pages of active memories', async () => {
     const oneWeekAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
+    const baseExtractedAt = Date.now();
     const pagedDecay = new SalienceDecay(store, { batchSize: 2 });
+    const bulkSpy = vi.spyOn(store, 'bulkUpdateSalience');
 
     for (let i = 0; i < 5; i += 1) {
       store.insertMemory(makeMemory({
         id: `batch-${i}`,
         type: 'episodic',
         salience: 1.0,
+        extractedAt: baseExtractedAt - i,
         lastAccessed: oneWeekAgo,
       }), makeEmbedding());
     }
@@ -315,6 +418,13 @@ describe('SalienceDecay', () => {
     for (const memory of updated) {
       expect(memory.salience).toBeCloseTo(0.5, 1);
     }
+    expect(bulkSpy).toHaveBeenCalledTimes(3);
+    expect(bulkSpy.mock.calls.map(([updates]) => updates.length)).toEqual([2, 2, 1]);
+    expect(bulkSpy.mock.calls.map(([updates]) => updates.map(update => update.id))).toEqual([
+      ['batch-0', 'batch-1'],
+      ['batch-2', 'batch-3'],
+      ['batch-4'],
+    ]);
   });
 
   it('uses paginated reads while decaying active memories', async () => {
@@ -335,5 +445,62 @@ describe('SalienceDecay', () => {
     expect(listSpy).toHaveBeenCalledWith({ limit: 2, offset: 0 });
     expect(listSpy).toHaveBeenCalledWith({ limit: 2, offset: 2 });
     expect(listSpy).toHaveBeenCalledWith({ limit: 2, offset: 4 });
+  });
+
+  it('propagates salience batch write failures without reading later pages', async () => {
+    const pagedDecay = new SalienceDecay(store, { batchSize: 2 });
+    const oneWeekAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
+    for (let i = 0; i < 4; i += 1) {
+      store.insertMemory(makeMemory({
+        id: `failure-${i}`,
+        type: 'episodic',
+        salience: 1.0,
+        extractedAt: Date.now() - i,
+        lastAccessed: oneWeekAgo,
+      }), makeEmbedding());
+    }
+
+    const listSpy = vi.spyOn(store, 'listActiveMemories');
+    vi.spyOn(store, 'bulkUpdateSalience').mockImplementation(() => {
+      throw new Error('simulated salience batch failure');
+    });
+
+    await expect(pagedDecay.run()).rejects.toThrow('simulated salience batch failure');
+    expect(listSpy).toHaveBeenCalledTimes(1);
+    expect(store.getById('failure-0')?.salience).toBe(1.0);
+    expect(store.getById('failure-1')?.salience).toBe(1.0);
+  });
+
+  it('yields to the event loop between salience decay pages', async () => {
+    const pagedDecay = new SalienceDecay(store, { batchSize: 1 });
+    const oneWeekAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
+    const baseExtractedAt = Date.now();
+    for (let i = 0; i < 2; i += 1) {
+      store.insertMemory(makeMemory({
+        id: `yield-${i}`,
+        type: 'episodic',
+        salience: 1.0,
+        extractedAt: baseExtractedAt - i,
+        lastAccessed: oneWeekAgo,
+      }), makeEmbedding());
+    }
+
+    let immediateRan = false;
+    let yieldedBeforeSecondPage = false;
+    const listActiveMemories = store.listActiveMemories.bind(store);
+    vi.spyOn(store, 'listActiveMemories').mockImplementation((options) => {
+      if (options?.offset === 1) {
+        yieldedBeforeSecondPage = immediateRan;
+      }
+      return listActiveMemories(options);
+    });
+
+    const runPromise = pagedDecay.run();
+    setImmediate(() => {
+      immediateRan = true;
+    });
+    await runPromise;
+
+    expect(yieldedBeforeSecondPage).toBe(true);
   });
 });

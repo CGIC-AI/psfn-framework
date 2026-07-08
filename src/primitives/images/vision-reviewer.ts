@@ -9,16 +9,18 @@ import {
 } from '@mariozechner/pi-ai';
 import type { LLMProviderPort } from '../../core/agent/contracts.js';
 import { resolveModel } from '../../core/agent/stream-adapter.js';
-import { resolveRoutingCandidates, type RoutingCandidate } from '../llm/routing.js';
+import { getRequestContext } from '../llm/request-context.js';
 import {
   resolveConfiguredLiteLLMApiKey,
   resolveConfiguredLiteLLMBaseUrl,
 } from '../../system/config/providers-config.js';
 import { resolveProviderApiKey } from '../../boundary/custody/credential-vault.js';
-import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
+import { sanitizeCoreSubstrateConfig, type SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import { extractTextContent } from '../llm/conversion.js';
 import { clampVisionCompletionMaxTokens } from '../llm/vision-limits.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
+import { createComponentLogger } from '../../shared/logger.js';
+import type { CorrelationMetadata, LLMContext } from '../../shared/contracts/runtime.js';
 import type {
   ImageMode,
   ImageVisionReview,
@@ -28,6 +30,8 @@ import type {
 
 const VISION_IMAGE_MAX_COUNT = 4;
 const VISION_IMAGE_MAX_BYTES = 8 * 1024 * 1024;
+
+const log = createComponentLogger('ImageVisionReviewer');
 
 type BinaryFetcher = (
   url: string,
@@ -144,25 +148,25 @@ function extractVisionResponseSummary(response: { content?: unknown[] | string }
     : extractTextContent(response.content).trim();
 }
 
-function buildCandidateModelHint(candidate: RoutingCandidate) {
+function buildVisionReviewCorrelation(): CorrelationMetadata {
+  const requestContext = getRequestContext();
   return {
-    provider: candidate.provider,
-    model: candidate.model,
-    maxTokens: clampVisionCompletionMaxTokens(candidate.maxTokens),
-    pin: true,
-    ...(candidate.contextWindow !== undefined ? { contextWindow: candidate.contextWindow } : {}),
-    ...(candidate.thinkingEnabled !== undefined ? { thinkingEnabled: candidate.thinkingEnabled } : {}),
-    ...(candidate.thinkingEffort !== undefined ? { thinkingEffort: candidate.thinkingEffort } : {}),
-    ...(candidate.temperature !== undefined ? { temperature: candidate.temperature } : {}),
-    ...(candidate.topP !== undefined ? { topP: candidate.topP } : {}),
-    ...(candidate.topK !== undefined ? { topK: candidate.topK } : {}),
-    ...(candidate.frequencyPenalty !== undefined ? { frequencyPenalty: candidate.frequencyPenalty } : {}),
-    ...(candidate.repetitionPenalty !== undefined ? { repetitionPenalty: candidate.repetitionPenalty } : {}),
+    ...(requestContext?.turnId ? { turnId: requestContext.turnId } : {}),
+    ...(requestContext?.channelId ? { channelId: requestContext.channelId } : {}),
+    requestId: requestContext?.requestId
+      ? `${requestContext.requestId}:vision-review`
+      : `vision-review-${Date.now()}`,
+    callType: 'tool',
+    ...(requestContext?.toolName ? { toolName: requestContext.toolName } : {}),
+    purpose: 'images.vision_review',
+    originType: 'tool',
+    originStage: 'images.vision_review',
+    ...(requestContext?.toolCallId ? { toolCallId: requestContext.toolCallId } : {}),
   };
 }
 
 export class DefaultImageVisionReviewer implements ImageVisionReviewer {
-  private readonly completeImpl: ImageVisionReviewerOptions['completeImpl'];
+  private readonly completeImpl: NonNullable<ImageVisionReviewerOptions['completeImpl']>;
 
   constructor(
     private readonly config: SubstrateConfig,
@@ -177,7 +181,7 @@ export class DefaultImageVisionReviewer implements ImageVisionReviewer {
       .filter((value) => value.length > 0)
       .slice(0, VISION_IMAGE_MAX_COUNT);
     if (imageUrls.length === 0) {
-      throw new Error('image_analyze requires at least one image URL');
+      throw new Error('media action="analyze" requires at least one image URL');
     }
 
     const question = normalizeQuestion(input);
@@ -205,47 +209,46 @@ export class DefaultImageVisionReviewer implements ImageVisionReviewer {
         ],
         timestamp: Date.now(),
       }],
-    } satisfies PiContext;
+    };
 
     if (this.options.llmProvider) {
-      const candidates = resolveRoutingCandidates(this.config, 'vision');
-      if (candidates.length === 0) {
-        throw new Error('No eligible model configured for purpose \'vision\'. Add a primary model for this purpose in config.modelRegistry.');
-      }
-
-      let lastError: Error | null = null;
-      for (const candidate of candidates) {
-        try {
-          const response = await this.options.llmProvider.complete(
-            {
-              systemPrompt: context.systemPrompt,
-              messages: context.messages,
-              modelHint: buildCandidateModelHint(candidate),
-            },
-            'vision',
-          );
-          const summary = extractVisionResponseSummary(response);
-          if (!summary) {
-            throw new Error(`vision review returned empty text from ${candidate.provider}/${candidate.model}`);
-          }
-          return {
-            question,
-            summary,
-            model: response.model,
-            imageCount: imageBlocks.length,
-          };
-        } catch (error) {
-          lastError = error instanceof Error ? error : new Error(String(error));
+      // The LLM client owns 'vision'-purpose candidate resolution, fallback
+      // iteration, per-candidate retries, and circuit-breaker cooldowns; the
+      // reviewer only supplies the context and correlation metadata.
+      const correlation = buildVisionReviewCorrelation();
+      try {
+        const response = await this.options.llmProvider.complete(
+          {
+            systemPrompt: context.systemPrompt,
+            messages: context.messages as unknown as LLMContext['messages'],
+            correlation,
+          },
+          'vision',
+        );
+        const summary = extractVisionResponseSummary(response);
+        if (!summary) {
+          throw new Error(`vision review returned empty text from ${response.model}`);
         }
+        return {
+          question,
+          summary,
+          model: response.model,
+          imageCount: imageBlocks.length,
+        };
+      } catch (error) {
+        log.warn('Vision review completion failed', {
+          imageCount: imageBlocks.length,
+          error: toErrorMessage(error),
+          ...correlation,
+        });
+        throw error;
       }
-
-      throw new Error(`vision review failed for all configured vision models: ${lastError?.message ?? 'unknown error'}`);
     }
 
-    const model = resolveModel(this.config, 'vision');
+    const model = resolveModel(sanitizeCoreSubstrateConfig(this.config), 'vision');
     const response = await this.completeImpl(
       model,
-      context,
+      context as unknown as PiContext,
       {
         apiKey: resolveApiKey(model, this.config),
         maxTokens: clampVisionCompletionMaxTokens(model.maxTokens),

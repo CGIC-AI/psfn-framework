@@ -1,3 +1,4 @@
+import { isRecord } from '../../shared/utils/types.js';
 export const ACAC_SCHEMA_VERSION = 1 as const;
 export const ACAC_ARTIFACT_TYPE = 'psfn.acac_self_report' as const;
 
@@ -223,8 +224,4 @@ function parseUnit(value: unknown, fieldName: string): number {
 function roundDecimal(value: number, precision = 4): number {
   const factor = 10 ** precision;
   return Math.round(value * factor) / factor;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }

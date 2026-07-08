@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { resolveContextWindow } from './agent-state-runtime.js';
+import { getLatestAssistantMessage, resolveContextWindow } from './agent-state-runtime.js';
 import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
 
 function makeConfig(overrides: Partial<SubstrateConfig> = {}): SubstrateConfig {
@@ -40,5 +40,41 @@ describe('resolveContextWindow', () => {
       }),
       undefined,
     )).toThrow('No positive context window is configured for the active chat model.');
+  });
+});
+
+describe('getLatestAssistantMessage', () => {
+  const assistant = (text: string) => ({
+    role: 'assistant',
+    content: [{ type: 'text', text }],
+  });
+  const messages = [
+    { role: 'user', content: 'hello' },
+    assistant('user-facing reply'),
+    { role: 'custom', type: 'internalWhisper', content: 'note to self' },
+    assistant('internal continuation'),
+  ];
+
+  it('returns the last assistant message when unbounded', () => {
+    expect(getLatestAssistantMessage(messages)?.content)
+      .toEqual([{ type: 'text', text: 'internal continuation' }]);
+  });
+
+  it('excludes assistant messages at or past the user-facing boundary', () => {
+    expect(getLatestAssistantMessage(messages, 2)?.content)
+      .toEqual([{ type: 'text', text: 'user-facing reply' }]);
+  });
+
+  it('returns null when no assistant message exists before the boundary', () => {
+    expect(getLatestAssistantMessage(messages, 1)).toBeNull();
+  });
+
+  it('ignores invalid boundary values', () => {
+    expect(getLatestAssistantMessage(messages, -1)?.content)
+      .toEqual([{ type: 'text', text: 'internal continuation' }]);
+    expect(getLatestAssistantMessage(messages, Number.NaN)?.content)
+      .toEqual([{ type: 'text', text: 'internal continuation' }]);
+    expect(getLatestAssistantMessage(messages, 99)?.content)
+      .toEqual([{ type: 'text', text: 'internal continuation' }]);
   });
 });

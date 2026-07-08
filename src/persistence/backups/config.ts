@@ -1,11 +1,11 @@
 import { resolveBackupsDir } from '../layout.js';
 import { loadBackupConfig } from '../../system/config/backup-config.js';
+import type { BackupEncryptionRuntimeConfig } from './encryption.js';
 
 export const DEFAULT_BACKUP_INTERVAL_HOURS = 12;
 export const DEFAULT_BACKUP_ROTATING_COUNT = 9;
 export const DEFAULT_BACKUP_WEEKLY_COUNT = 2;
 export const DEFAULT_BACKUP_MONTHLY_COUNT = 1;
-export const DEFAULT_BACKUP_MIRROR_DIR = '/mnt/ai/psfn-bak';
 export const DEFAULT_BACKUP_VERIFY_RESTORE = true;
 
 /** @deprecated Use DEFAULT_BACKUP_INTERVAL_HOURS instead */
@@ -27,6 +27,7 @@ export interface BackupRuntimeConfig {
   /** When non-empty, completed backups are mirrored here. */
   mirrorDir: string;
   verifyRestore: boolean;
+  encryption: BackupEncryptionRuntimeConfig;
 }
 
 interface ResolveBackupRuntimeConfigOptions {
@@ -77,6 +78,11 @@ export function resolveBackupRuntimeConfig(
 
   const mirrorDir = env.BACKUP_MIRROR_DIR?.trim()
     ?? jsonConfig.mirrorDir;
+  const encryptionEnvName = jsonConfig.encryption.keyRef.envName;
+  const encryptionPassphrase = env[encryptionEnvName]?.trim();
+  if (!encryptionPassphrase) {
+    throw new Error(`Backup encryption key env ${encryptionEnvName} is required`);
+  }
 
   return {
     intervalMs,
@@ -89,5 +95,10 @@ export function resolveBackupRuntimeConfig(
       env.BACKUP_VERIFY_RESTORE,
       jsonConfig.verifyRestore,
     ),
+    encryption: {
+      mode: 'required',
+      keyRef: jsonConfig.encryption.keyRef,
+      passphrase: encryptionPassphrase,
+    },
   };
 }

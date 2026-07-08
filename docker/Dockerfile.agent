@@ -1,25 +1,139 @@
-FROM node:22-slim
+FROM postgres:17.6-bookworm@sha256:f3bd19c606e442c3d7bdfa8002e03fe260a1023351e0ea4598032022b68dd6e3 AS postgres-client
+
+RUN set -eux; \
+    mkdir -p /opt/postgresql-client/bin /opt/postgresql-client/lib /opt/postgresql-client/wrappers; \
+    for binary in pg_dump pg_restore psql pg_isready; do \
+      cp "/usr/lib/postgresql/17/bin/${binary}" "/opt/postgresql-client/bin/${binary}"; \
+    done; \
+    ldd /opt/postgresql-client/bin/pg_dump \
+      /opt/postgresql-client/bin/pg_restore \
+      /opt/postgresql-client/bin/psql \
+      /opt/postgresql-client/bin/pg_isready \
+      | awk '$2 == "=>" && $3 ~ /^\// { print $3 }' \
+      | sort -u \
+      | while read -r library; do cp -L "${library}" /opt/postgresql-client/lib/; done; \
+    for binary in pg_dump pg_restore psql pg_isready; do \
+      printf '#!/bin/sh\nLD_LIBRARY_PATH=/opt/postgresql-client/lib exec /opt/postgresql-client/bin/%s "$@"\n' "${binary}" > "/opt/postgresql-client/wrappers/${binary}"; \
+      chmod 0755 "/opt/postgresql-client/wrappers/${binary}"; \
+    done
+
+FROM node:24.13.1-slim@sha256:a81a03dd965b4052269a57fac857004022b522a4bf06e7a739e25e18bce45af2 AS native-toolchain
 
 WORKDIR /app
 
-# Install dependencies
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+      g++=4:12.2.0-3 \
+      make=4.3-4.1 \
+      python3=3.11.2-1+b1 \
+    && rm -rf /var/lib/apt/lists/*
+
+FROM native-toolchain AS build
+
 COPY package*.json ./
-RUN npm ci --omit=dev
+COPY admin-ui/package*.json ./admin-ui/
+COPY patches/ ./patches/
+RUN npm_config_nodedir=/usr/local npm ci
 
-# Copy compiled output
-COPY dist/ ./dist/
+COPY tsconfig.json tsup.config.ts ./
+COPY src/ ./src/
+COPY satellites/ ./satellites/
+COPY admin-ui/ ./admin-ui/
 
-# Agent data directories
-RUN mkdir -p /app/data /app/workspace
+# Contract-surface hash for per-component rollout skew detection: agent and
+# gateway may run different image tags ONLY while this hash matches. The
+# surface is the shared contracts plus the boundary (gateway RPC/policy) layer.
+RUN find src/shared/contracts src/boundary -type f -name '*.ts' ! -name '*.test.ts' \
+      | LC_ALL=C sort | xargs sha256sum | sha256sum | cut -c1-16 > /app/contract-hash.txt \
+    && cat /app/contract-hash.txt
 
-# Non-root user for defense in depth
-RUN groupadd -r psfn && useradd -r -g psfn -d /app psfn
-RUN chown -R psfn:psfn /app
-USER psfn
+RUN npm run build
+RUN npm run garden:build
 
+FROM native-toolchain AS production-deps
+
+WORKDIR /app
+
+COPY package*.json ./
+COPY admin-ui/package*.json ./admin-ui/
+COPY patches/ ./patches/
+RUN npm_config_nodedir=/usr/local npm ci --omit=dev \
+    && rm -rf /root/.npm /app/admin-ui/node_modules
+
+FROM node:24.13.1-slim@sha256:a81a03dd965b4052269a57fac857004022b522a4bf06e7a739e25e18bce45af2 AS runtime
+
+WORKDIR /app
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+      git=1:2.39.5-0+deb12u3 \
+      ripgrep=13.0.0-4+b2 \
+    && npm install -g @beads/bd@1.1.0 \
+    && npm cache clean --force \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY package*.json ./
+COPY admin-ui/package*.json ./admin-ui/
+COPY --from=production-deps /app/node_modules/ ./node_modules/
+
+COPY --from=postgres-client /opt/postgresql-client/ /opt/postgresql-client/
+COPY --from=build /app/dist/ ./dist/
+COPY --from=build /app/contract-hash.txt ./contract-hash.txt
+COPY --from=build /app/admin-ui/build/ ./admin-ui/build/
+COPY config/*.seed.json ./config/
+COPY config/concern-softening.json ./config/concern-softening.json
+COPY scripts/ops/ ./scripts/ops/
+
+RUN git init /app \
+    && git config user.name "PSFN Runtime Image" \
+    && git config user.email "runtime-image@psfn.local" \
+    && git config --system --add safe.directory /app \
+    && printf 'node_modules/\nadmin-ui/node_modules/\n' > .gitignore \
+    && git add .gitignore package*.json admin-ui/package*.json dist admin-ui/build config scripts/ops \
+    && git commit -m "Runtime image snapshot"
+
+# Non-root user for defense in depth. Keep the numeric ID aligned with the
+# Kubernetes securityContext so runAsNonRoot can be verified at admission time.
+RUN groupadd -r -g 999 psfn && useradd -r -u 999 -g psfn -d /app psfn
+RUN mkdir -p \
+      /app/backups \
+      /app/companion-data \
+      /app/data \
+      /app/logs \
+      /app/runtime-root \
+      /app/system-data \
+      /app/tmp \
+      /app/workspace \
+      /run/psfn \
+    && chown -R psfn:psfn \
+      /app/.git \
+      /app/backups \
+      /app/companion-data \
+      /app/data \
+      /app/logs \
+      /app/runtime-root \
+      /app/system-data \
+      /app/tmp \
+      /app/workspace \
+      /run/psfn
+USER 999:999
+
+# Build provenance for companion self-diagnosis (self_status action=diagnose).
+# CD should pass the real source commit(s); helm env overrides these at pod
+# level. Empty defaults are reported as "unavailable" (fail-closed).
+ARG PSFN_GIT_COMMIT=""
+ARG PSFN_PREVIOUS_GIT_COMMIT=""
+ENV PSFN_GIT_COMMIT=${PSFN_GIT_COMMIT}
+ENV PSFN_PREVIOUS_GIT_COMMIT=${PSFN_PREVIOUS_GIT_COMMIT}
 ENV NODE_ENV=production
+ENV PATH=/opt/postgresql-client/wrappers:$PATH
 ENV GATEWAY_SOCKET=/run/psfn/gateway.sock
-ENV DATABASE_PATH=/app/data/psfn.db
-ENV DATA_DIR=/app/data
+ENV PSFN_RUNTIME_ROOT=/app/runtime-root
+ENV SYSTEM_DATA_DIR=/app/system-data
+ENV COMPANION_DATA_DIR=/app/companion-data
+ENV WORKSPACE_PATH=/app/workspace
+ENV PSFN_LOGS_DIR=/app/logs
+ENV PSFN_TEMP_DIR=/app/tmp
+ENV BACKUP_ROOT_DIR=/app/backups
 
 CMD ["node", "dist/agent-main.js"]

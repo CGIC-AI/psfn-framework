@@ -1,4 +1,5 @@
 import type { PendingFollowUpWakeCondition } from '../pending-follow-ups.js';
+import { normalizeConcernStatus } from '../concerns.js';
 import type {
   IntentionActionDecision,
   IntentionConcernDecision,
@@ -95,6 +96,10 @@ function parseFollowUpPayload(value: unknown): IntentionFollowUpDecision | undef
   const pendingFollowUpId = typeof value.pendingFollowUpId === 'string'
     ? value.pendingFollowUpId.trim()
     : '';
+  const concernIds = parseConcernIds(value);
+  const delivery = value.delivery === 'external' || value.delivery === 'internal'
+    ? value.delivery
+    : undefined;
   const wakeConditions = Array.isArray(value.wakeConditions)
     ? [...new Set(
       value.wakeConditions
@@ -115,7 +120,27 @@ function parseFollowUpPayload(value: unknown): IntentionFollowUpDecision | undef
     ...(contextSummary ? { contextSummary } : {}),
     ...(wakeConditions.length > 0 ? { wakeConditions } : {}),
     ...(pendingFollowUpId ? { pendingFollowUpId } : {}),
+    ...(concernIds.length > 0 ? { concernIds } : {}),
+    ...(delivery ? { delivery } : {}),
   };
+}
+
+function parseConcernIds(value: Record<string, unknown>): string[] {
+  const ids: string[] = [];
+  const appendId = (candidate: unknown): void => {
+    if (typeof candidate !== 'string') return;
+    const normalized = candidate.trim();
+    if (normalized && !ids.includes(normalized)) {
+      ids.push(normalized);
+    }
+  };
+  appendId(value.concernId);
+  if (Array.isArray(value.concernIds)) {
+    for (const candidate of value.concernIds) {
+      appendId(candidate);
+    }
+  }
+  return ids;
 }
 
 function parseConcernPayload(value: unknown): IntentionConcernDecision | undefined {
@@ -123,9 +148,9 @@ function parseConcernPayload(value: unknown): IntentionConcernDecision | undefin
   const title = typeof value.title === 'string' ? value.title.trim() : '';
   const summary = typeof value.summary === 'string' ? value.summary.trim() : '';
   if (!title && !summary) return undefined;
-  const status = value.status === 'open' || value.status === 'pending' || value.status === 'resolved'
-    ? value.status
-    : undefined;
+  const status = value.status === undefined
+    ? undefined
+    : normalizeConcernStatus(value.status);
   const priority = normalizeConcernPriority(value.priority);
   return {
     ...(title ? { title } : {}),

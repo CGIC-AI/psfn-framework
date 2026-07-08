@@ -34,7 +34,11 @@ export const navGroups: NavGroup[] = [
   navGroup('memory', 'Memory & Identity', [
     { id: 'memory', path: '/memory', defaultLabel: 'Memory', icon: '\u{1F33F}' },
     { id: 'episodic-memory', path: '/episodic-memory', defaultLabel: 'L0.1 Episodes', icon: '\u{1F9F6}' },
+    { id: 'wiki', path: '/wiki', defaultLabel: 'Wiki', icon: '\u{1F4D8}' },
     { id: 'contacts', path: '/contacts', defaultLabel: 'Contacts', icon: '\u{1F6AA}' },
+    { id: 'contact-approvals', path: '/contact-approvals', defaultLabel: 'Contact Approvals', icon: '\u{1F91D}' },
+    { id: 'rooms', path: '/rooms', defaultLabel: 'Rooms', icon: '\u{1F6CB}\u{FE0F}' },
+    { id: 'graph-proposals', path: '/graph-proposals', defaultLabel: 'Graph Proposals', icon: '\u{1F578}\u{FE0F}' },
     { id: 'identity', path: '/identity', defaultLabel: 'Identity', icon: '\u{1F331}' },
     { id: 'images', path: '/images', defaultLabel: 'Images', icon: '\u{1F5BC}\u{FE0F}' },
     { id: 'values', path: '/values', defaultLabel: 'Values', icon: '\u{1F4D6}' },
@@ -50,11 +54,15 @@ export const navGroups: NavGroup[] = [
   navGroup('review', 'Review & Safety', [
     { id: 'prompts', path: '/prompts', defaultLabel: 'Prompts', icon: '\u{1FAB4}' },
     { id: 'prompt-monitor', path: '/prompt-monitor', defaultLabel: 'Prompt Monitor', icon: '\u{1F9F5}' },
+    { id: 'session-recovery', path: '/session-recovery', defaultLabel: 'Session Recovery', icon: '\u{26A0}\u{FE0F}' },
+    { id: 'evals-emotion-sidecar', path: '/evals/emotion-sidecar', defaultLabel: 'Evals', icon: '\u{1F4CA}' },
     { id: 'confirmations', path: '/confirmations', defaultLabel: 'Confirmations', icon: '\u{1F512}' },
+    { id: 'subsystem-health', path: '/subsystem-health', defaultLabel: 'Subsystem Health', icon: '\u{1FAC0}' },
     { id: 'telemetry', path: '/telemetry', defaultLabel: 'Events & Audit', icon: '\u{1F4A7}' },
   ]),
   navGroup('configure', 'Configure Garden', [
     { id: 'settings', path: '/settings', defaultLabel: 'Settings', icon: '\u{2600}\u{FE0F}' },
+    { id: 'channels', path: '/channels', defaultLabel: 'Channels', icon: '\u{1F4E1}' },
     { id: 'theme', path: '/theme', defaultLabel: 'Theme', icon: '\u{1F3A8}' },
     { id: 'primer', path: '/primer', defaultLabel: 'Primer', icon: '\u{1F4DA}' },
   ]),

@@ -57,16 +57,16 @@ function normalizeInspectTarget(params: Record<string, unknown>): RepoInspectTar
   }
 }
 
-function requireString(value: unknown, field: string): string {
+function requireString(value: unknown, field: string, exampleJson: string): string {
   if (typeof value !== 'string' || value.trim().length === 0) {
-    throw new Error(`${field} is required.`);
+    throw new Error(`Missing required field "${field}". Minimal valid JSON: ${exampleJson}.`);
   }
   return value;
 }
 
-function requireStringField(value: unknown, field: string): string {
+function requireStringField(value: unknown, field: string, exampleJson: string): string {
   if (typeof value !== 'string') {
-    throw new Error(`${field} is required.`);
+    throw new Error(`Missing required field "${field}". Minimal valid JSON: ${exampleJson}.`);
   }
   return value;
 }
@@ -172,9 +172,11 @@ export function createRepoTool(
     description:
       access === 'read_only'
         ? 'Unified repository inspection primitive for git-backed status and diff lookup. '
-          + 'Use action=inspect with target=status|diff|both.'
+          + 'Use action=inspect with target=status|diff|both; empty arguments default to status inspection.'
         : 'Unified repository primitive for git-backed inspection and mutation. '
-          + 'Use action=inspect|patch|branch|commit|publish. '
+          + 'Use action=inspect before mutating; target=status|diff|both controls inspection detail. '
+          + 'action=patch requires file_path and full replacement content; action=branch requires name; '
+          + 'action=commit requires message, and action=publish/open_pr requires title/body. '
           + 'Inspect is read-only; patch, branch, commit, and publish remain explicitly gated.',
     parameters: Type.Object({
       action: buildActionSchema(access),
@@ -235,24 +237,26 @@ export function createRepoTool(
             return await executeInspect(gitOps, params);
 
           case 'patch': {
-            const filePath = requireString(params.file_path, 'file_path');
-            const content = requireStringField(params.content, 'content');
+            const patchExample = '{"action":"patch","file_path":"src/example.ts","content":"full file content"}';
+            const filePath = requireString(params.file_path, 'file_path', patchExample);
+            const content = requireStringField(params.content, 'content', patchExample);
             await gitOps.applyPatch(filePath, content);
             return textResult(`Applied and staged: ${filePath}`);
           }
 
           case 'branch': {
             const name = await gitOps.createBranch(
-              requireString(params.name, 'name'),
+              requireString(params.name, 'name', '{"action":"branch","name":"feature/example"}'),
               typeof params.start_point === 'string' ? params.start_point : undefined,
             );
             return textResult(`Created and checked out branch: ${name}`);
           }
 
           case 'commit': {
+            const commitExample = '{"action":"commit","message":"Describe the change","intent":"why this change is needed"}';
             const result = await gitOps.commit(
-              requireString(params.message, 'message'),
-              requireString(params.intent, 'intent'),
+              requireString(params.message, 'message', commitExample),
+              requireString(params.intent, 'intent', commitExample),
               typeof params.scope === 'string' ? params.scope : undefined,
             );
             return textResult(
@@ -261,9 +265,10 @@ export function createRepoTool(
           }
 
           case 'publish': {
+            const publishExample = '{"action":"publish","title":"Pull request title","body":"Summary and tests"}';
             const url = await gitOps.openPR(
-              requireString(params.title, 'title'),
-              requireStringField(params.body, 'body'),
+              requireString(params.title, 'title', publishExample),
+              requireStringField(params.body, 'body', publishExample),
               typeof params.base === 'string' ? params.base : undefined,
             );
             return textResult(`PR created: ${url}`);

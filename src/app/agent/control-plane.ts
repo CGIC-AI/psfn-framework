@@ -32,6 +32,7 @@ const DEFAULT_EXTRACTION_DRAIN_TIMEOUT_MS = 10_000;
 export interface AgentControlPlaneShutdownTargets {
   apiServer?: ApiServer;
   adminTransport?: Lifecycle;
+  appCache?: { close?: () => Promise<void> };
 }
 
 export interface BuildAgentControlPlaneOptions {
@@ -129,6 +130,7 @@ export function buildAgentControlPlane(
         { step: 'shutdown module loader', action: () => moduleLoader.shutdown() },
         { step: 'stop API server', action: () => shutdownTargets.apiServer?.stop() },
         { step: 'stop admin server', action: () => shutdownTargets.adminTransport?.stop() },
+        { step: 'close app cache', action: () => shutdownTargets.appCache?.close?.() },
         { step: 'destroy gateway client', action: () => gateway.destroy() },
         { step: 'close database', action: () => closeDatabase() },
       ], log);
@@ -174,7 +176,7 @@ export function buildAgentControlPlane(
     defaultBudgetChannel: 'discord',
   }), {
     gatewayMode: true,
-  }));
+  }), 'extended');
 
   return { lifecycleNotifier, stopFn };
 }

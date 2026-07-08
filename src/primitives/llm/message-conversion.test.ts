@@ -110,6 +110,31 @@ describe('contextMessagesToPiMessages', () => {
     ].join('\n\n'));
   });
 
+  it('does not serialize provenance metadata when system context is moved into the system prompt', () => {
+    const systemPrompt = mergeSystemContextIntoSystemPrompt('Base instructions', [
+      {
+        role: 'system',
+        content: '[Tool result: search_logs] Returned 2 hits.',
+        provenance: {
+          schemaVersion: 1,
+          kind: 'tool_result',
+          sourceAuthor: 'tool',
+          transformedBy: 'tool',
+          wording: 'transformed',
+          directSpeech: false,
+          detailLoss: 'none',
+          emotionalTexture: 'unknown',
+          safeAsPartnerSpeech: false,
+        },
+      },
+    ]);
+
+    expect(systemPrompt).not.toContain('kind="tool_result"');
+    expect(systemPrompt).not.toContain('safe_as_partner_speech="false"');
+    expect(systemPrompt).not.toContain('authenticity_provenance');
+    expect(systemPrompt).toContain('[Tool result: search_logs] Returned 2 hits.');
+  });
+
   it('uses Date.now by default for each converted message', () => {
     const nowSpy = vi.spyOn(Date, 'now')
       .mockReturnValueOnce(10)

@@ -19,6 +19,7 @@
     ".codex-*/**",
     ".fallow/**",
     ".firecrawl/**",
+    "PSFN-Satellite-Hub/**",
     "worktrees/**"
   ],
   "workspaces": {
@@ -27,7 +28,6 @@
     ]
   },
   "ignoreDependencies": [
-    "@mariozechner/pi-web-ui",
     "@sinclair/typebox",
     "@snazzah/davey",
     "@sveltejs/adapter-static",

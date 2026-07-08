@@ -5,6 +5,8 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { AdminServerTransport } from './server-transport.js';
 
+const originalCwd = process.cwd();
+
 interface ResponseCapture {
   status: number;
   headers: Record<string, string>;
@@ -69,6 +71,7 @@ function createHarness(): {
 let rootsToDelete: string[] = [];
 
 afterEach(() => {
+  process.chdir(originalCwd);
   for (const root of rootsToDelete) {
     rmSync(root, { recursive: true, force: true });
   }
@@ -76,6 +79,36 @@ afterEach(() => {
 });
 
 describe('AdminServerTransport Garden assets', () => {
+  it('enables Garden assets from the runtime working directory', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'admin-transport-cwd-test-'));
+    rootsToDelete.push(root);
+    const buildDir = join(root, 'admin-ui', 'build');
+    mkdirSync(buildDir, { recursive: true });
+    writeFileSync(join(buildDir, 'index.html'), '<!doctype html><html><body>runtime-shell</body></html>', 'utf8');
+    process.chdir(root);
+
+    const transport = new AdminServerTransport({
+      warn: vi.fn(),
+      info: vi.fn(),
+      debug: vi.fn(),
+    });
+
+    transport.initialize();
+
+    expect(transport.isGardenUiEnabled()).toBe(true);
+
+    const { response, done } = createResponseCapture();
+    transport.serveGardenPage('/', response);
+
+    await expect(done).resolves.toMatchObject({
+      status: 200,
+      body: '<!doctype html><html><body>runtime-shell</body></html>',
+      headers: expect.objectContaining({
+        'Content-Type': 'text/html',
+      }),
+    });
+  });
+
   it('serves built immutable asset files directly', async () => {
     const harness = createHarness();
     rootsToDelete.push(harness.buildDir);

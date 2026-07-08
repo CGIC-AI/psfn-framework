@@ -1,7 +1,9 @@
+import { isRecord } from '../../shared/utils/types.js';
 // ── Gateway Server ──
 // Host-side process that holds secrets and proxies all external interactions.
 
 import * as net from 'node:net';
+import type * as https from 'node:https';
 import {
   JSONRPCServer,
   JSONRPCClient,
@@ -12,8 +14,8 @@ import { DEFAULT_COMPANION_ID } from '../../core/identity/companion-naming.js';
 import type { ChannelOutboundDock } from '../../channels/backplane/types.js';
 import type { CapabilityTier, WyomingShardRoutingConfig } from '../../system/config/runtime-config-contracts.js';
 import type { SubstrateMessage } from '../../shared/contracts/runtime.js';
-import type { NdjsonConnection } from './transport.js';
-import { createSocketServer } from './transport.js';
+import type { GatewayRpcConnection, GatewayRpcEndpoint } from './transport.js';
+import { createSocketServer, createWebSocketRpcServer } from './transport.js';
 import {
   type PolicyDecision,
   type RuntimeHealthResult,
@@ -43,6 +45,7 @@ import {
 import { GatewayRuntimeHealthTracker } from './runtime-health.js';
 import { evaluatePolicy } from './policy.js';
 import type { ApiStreamDeltaNotification } from '../../channels/api/types.js';
+import type { ModelUsageRecorder } from '../../shared/telemetry/model-usage.js';
 
 const log = createComponentLogger('Gateway');
 const DEFAULT_CONNECTION_HEALTHCHECK_STALE_AFTER_MS = 90_000;
@@ -86,12 +89,14 @@ export { requireGatewaySessionHmacKeyring, resolveGatewaySessionHmacKeyring } fr
 
 export interface GatewayServerOptions {
   socketPath: string;
+  gatewayRpcEndpoint?: GatewayRpcEndpoint;
   llmProvider: LLMProviderPort;
   embeddingService: EmbeddingProviderPort;
   modelDiscovery?: ModelDiscoveryBackend;
   discordAdapter: ChannelOutboundDock;
   gitOps?: GitOperations;
   imageConfig?: ImageRuntimeConfig;
+  modelUsageRecorder?: ModelUsageRecorder;
   policyConfig: PolicyConfig;
   ntfy?: GatewayNtfyConfig;
   auditStore?: GatewayAuditStorePort;
@@ -103,10 +108,10 @@ export interface GatewayServerOptions {
 }
 
 export class GatewayServer {
-  private netServer: net.Server | null = null;
-  private readonly connections = new Set<NdjsonConnection>();
-  private readonly rpcClients = new Map<NdjsonConnection, JSONRPCServerAndClient>();
-  private readonly connectionStatuses = new Map<NdjsonConnection, GatewayConnectionStatus>();
+  private rpcServer: net.Server | https.Server | null = null;
+  private readonly connections = new Set<GatewayRpcConnection>();
+  private readonly rpcClients = new Map<GatewayRpcConnection, JSONRPCServerAndClient>();
+  private readonly connectionStatuses = new Map<GatewayRpcConnection, GatewayConnectionStatus>();
   private readonly options: GatewayServerOptions;
   private readonly sessionHmacKeyring: SessionHmacKeyring;
   private streamRequestCounter = 0;
@@ -190,7 +195,7 @@ export class GatewayServer {
     }
   }
 
-  private registerMethods(target: JSONRPCServerAndClient, conn: NdjsonConnection): void {
+  private registerMethods(target: JSONRPCServerAndClient, conn: GatewayRpcConnection): void {
     const runtime: GatewayMethodRuntime = {
       target,
       llmProvider: this.options.llmProvider,
@@ -199,6 +204,7 @@ export class GatewayServer {
       discordAdapter: this.options.discordAdapter,
       gitOps: this.options.gitOps,
       imageConfig: this.options.imageConfig,
+      ...(this.options.modelUsageRecorder ? { modelUsageRecorder: this.options.modelUsageRecorder } : {}),
       policyConfig: this.options.policyConfig,
       workspacePath: this.options.policyConfig.workspacePath,
       sessionHmacKeyring: this.sessionHmacKeyring,
@@ -229,81 +235,95 @@ export class GatewayServer {
   // ── Connection management ──
 
   start(): void {
-    this.netServer = createSocketServer(this.options.socketPath, (conn) => {
-      log.info('Agent connected');
-      this.connections.add(conn);
-      this.connectionStatuses.set(conn, {
-        role: 'agent',
-        state: 'registering',
-        stateReason: 'connection_opened',
-        health: 'healthy',
-        connectedAt: Date.now(),
-        lastHealthcheckAt: Date.now(),
-        lastTransitionAt: Date.now(),
-        healthcheckStaleAfterMs: DEFAULT_CONNECTION_HEALTHCHECK_STALE_AFTER_MS,
-      });
-      this.appendConnectionTransition(conn, 'none', 'registering', 'connection_opened');
+    const endpoint = this.options.gatewayRpcEndpoint ?? {
+      kind: 'unix' as const,
+      socketPath: this.options.socketPath,
+    };
 
-      const serverAndClient = new JSONRPCServerAndClient(
-        new JSONRPCServer(),
-        new JSONRPCClient((request) => { conn.send(request); }),
-      );
-      this.registerMethods(serverAndClient, conn);
-      this.rpcClients.set(conn, serverAndClient);
-      this.transitionConnectionState(conn, 'ready', 'rpc_registered');
+    this.rpcServer = endpoint.kind === 'unix'
+      ? createSocketServer(endpoint.socketPath, (conn) => this.registerConnection(conn))
+      : createWebSocketRpcServer({
+          host: endpoint.host,
+          port: endpoint.port,
+          path: endpoint.path,
+          tls: endpoint.tls,
+        }, (conn) => this.registerConnection(conn));
+  }
 
-      conn.on('frameError', async (error: unknown) => {
-        const frameError = normalizeNdjsonFrameError(error);
-        await this.handleMalformedFrame(conn, 'ndjson', frameError.reason, frameError.preview);
-      });
+  private registerConnection(conn: GatewayRpcConnection): void {
+    log.info('Agent connected');
+    this.connections.add(conn);
+    this.connectionStatuses.set(conn, {
+      role: 'agent',
+      state: 'registering',
+      stateReason: 'connection_opened',
+      health: 'healthy',
+      connectedAt: Date.now(),
+      lastHealthcheckAt: Date.now(),
+      lastTransitionAt: Date.now(),
+      healthcheckStaleAfterMs: DEFAULT_CONNECTION_HEALTHCHECK_STALE_AFTER_MS,
+    });
+    this.appendConnectionTransition(conn, 'none', 'registering', 'connection_opened');
 
-      conn.onMessage(async (message) => {
-        if (!this.connections.has(conn)) {
-          return;
-        }
-        this.touchConnectionHealthcheck(conn);
-        this.transitionConnectionState(conn, 'ready', 'rpc_message_received');
-        const validationError = validateJsonRpcFrame(message);
-        if (validationError) {
-          await this.handleMalformedFrame(
-            conn,
-            'jsonrpc',
-            validationError,
-            summarizeFramePreview(message),
-          );
-          return;
-        }
-        const releaseInFlightHealthcheck = this.beginInFlightHealthcheck(conn);
-        // json-rpc-2.0 receiveAndSend() payload param is typed as `any`; message is parsed JSON
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        try {
-          await serverAndClient.receiveAndSend(message as any);
-        } catch (error) {
-          const messageText = toErrorMessage(error);
-          await this.handleMalformedFrame(
-            conn,
-            'jsonrpc',
-            `JSON-RPC receive/send failed: ${messageText}`,
-            summarizeFramePreview(message),
-          );
-        } finally {
-          releaseInFlightHealthcheck();
-        }
-      });
+    const serverAndClient = new JSONRPCServerAndClient(
+      new JSONRPCServer(),
+      new JSONRPCClient((request) => { conn.send(request); }),
+    );
+    this.registerMethods(serverAndClient, conn);
+    this.rpcClients.set(conn, serverAndClient);
+    this.transitionConnectionState(conn, 'ready', 'rpc_registered');
 
-      conn.on('close', () => {
-        log.info('Agent disconnected');
-        this.transitionConnectionState(conn, 'offline', 'connection_closed');
-        this.removeConnection(conn);
-      });
+    conn.on('frameError', async (error: unknown) => {
+      const frameError = normalizeNdjsonFrameError(error);
+      await this.handleMalformedFrame(conn, 'ndjson', frameError.reason, frameError.preview);
+    });
 
-      conn.on('error', (err) => {
-        const messageText = err instanceof Error ? err.message : String(err);
-        log.error('Connection error', { error: messageText });
-        this.transitionConnectionState(conn, 'degraded', 'connection_error', messageText);
-        this.transitionConnectionState(conn, 'offline', 'connection_error', messageText);
-        this.removeConnection(conn);
-      });
+    conn.onMessage(async (message) => {
+      if (!this.connections.has(conn)) {
+        return;
+      }
+      this.touchConnectionHealthcheck(conn);
+      this.transitionConnectionState(conn, 'ready', 'rpc_message_received');
+      const validationError = validateJsonRpcFrame(message);
+      if (validationError) {
+        await this.handleMalformedFrame(
+          conn,
+          'jsonrpc',
+          validationError,
+          summarizeFramePreview(message),
+        );
+        return;
+      }
+      const releaseInFlightHealthcheck = this.beginInFlightHealthcheck(conn);
+      // json-rpc-2.0 receiveAndSend() payload param is typed as `any`; message is parsed JSON
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      try {
+        await serverAndClient.receiveAndSend(message as any);
+      } catch (error) {
+        const messageText = toErrorMessage(error);
+        await this.handleMalformedFrame(
+          conn,
+          'jsonrpc',
+          `JSON-RPC receive/send failed: ${messageText}`,
+          summarizeFramePreview(message),
+        );
+      } finally {
+        releaseInFlightHealthcheck();
+      }
+    });
+
+    conn.on('close', () => {
+      log.info('Agent disconnected');
+      this.transitionConnectionState(conn, 'offline', 'connection_closed');
+      this.removeConnection(conn);
+    });
+
+    conn.on('error', (err) => {
+      const messageText = err instanceof Error ? err.message : String(err);
+      log.error('Connection error', { error: messageText });
+      this.transitionConnectionState(conn, 'degraded', 'connection_error', messageText);
+      this.transitionConnectionState(conn, 'offline', 'connection_error', messageText);
+      this.removeConnection(conn);
     });
   }
 
@@ -315,12 +335,16 @@ export class GatewayServer {
       params,
     };
     for (const conn of this.connections) {
+      const status = this.connectionStatuses.get(conn);
+      if (status?.role !== 'agent' || status.state !== 'ready' || status.health !== 'healthy') {
+        continue;
+      }
       conn.send(notification);
     }
   }
 
   // Send notification to a specific connection
-  notifyOne(conn: NdjsonConnection, method: string, params: unknown): void {
+  notifyOne(conn: GatewayRpcConnection, method: string, params: unknown): void {
     conn.send({
       jsonrpc: '2.0' as const,
       method,
@@ -328,14 +352,14 @@ export class GatewayServer {
     });
   }
 
-  private removeConnection(conn: NdjsonConnection): void {
+  private removeConnection(conn: GatewayRpcConnection): void {
     this.connections.delete(conn);
     this.rpcClients.delete(conn);
     this.connectionStatuses.delete(conn);
   }
 
   private async handleMalformedFrame(
-    conn: NdjsonConnection,
+    conn: GatewayRpcConnection,
     frameKind: MalformedFrameKind,
     reason: string,
     preview?: string,
@@ -432,7 +456,7 @@ export class GatewayServer {
     }
   }
 
-  private touchConnectionHealthcheck(conn: NdjsonConnection): void {
+  private touchConnectionHealthcheck(conn: GatewayRpcConnection): void {
     const status = this.connectionStatuses.get(conn);
     if (!status || status.state === 'offline') {
       return;
@@ -443,7 +467,7 @@ export class GatewayServer {
     }
   }
 
-  private beginInFlightHealthcheck(conn: NdjsonConnection): () => void {
+  private beginInFlightHealthcheck(conn: GatewayRpcConnection): () => void {
     const timer = setInterval(() => {
       this.touchConnectionHealthcheck(conn);
     }, CONNECTION_IN_FLIGHT_HEALTH_TOUCH_INTERVAL_MS);
@@ -456,7 +480,7 @@ export class GatewayServer {
   }
 
   private transitionConnectionState(
-    conn: NdjsonConnection,
+    conn: GatewayRpcConnection,
     nextState: GatewayConnectionState,
     reason: string,
     failureReason?: string,
@@ -498,7 +522,7 @@ export class GatewayServer {
   }
 
   private appendConnectionTransition(
-    conn: NdjsonConnection,
+    conn: GatewayRpcConnection,
     from: GatewayConnectionState | 'none',
     to: GatewayConnectionState,
     reason: string,
@@ -547,7 +571,7 @@ export class GatewayServer {
     return this.runtimeHealthTracker.getSnapshot(this.getConnectionSummary());
   }
 
-  private identifyConnection(conn: NdjsonConnection, params: unknown): { success: true; role: GatewayConnectionRole } {
+  private identifyConnection(conn: GatewayRpcConnection, params: unknown): { success: true; role: GatewayConnectionRole } {
     if (!isRecord(params) || !isGatewayConnectionRole(params.role)) {
       throw new Error('gateway.client.identify requires a valid role');
     }
@@ -570,9 +594,9 @@ export class GatewayServer {
     this.rpcClients.clear();
     this.connectionStatuses.clear();
 
-    if (this.netServer) {
+    if (this.rpcServer) {
       await new Promise<void>((resolve) => {
-        this.netServer!.close(() => resolve());
+        this.rpcServer!.close(() => resolve());
       });
     }
 
@@ -715,8 +739,4 @@ function truncateFramePreview(value: string): string {
     return value;
   }
   return `${value.slice(0, FRAME_PREVIEW_LIMIT)}... (${value.length} chars)`;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }

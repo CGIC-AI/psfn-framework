@@ -147,7 +147,7 @@ describe('buildRelatedConversationChannelMap', () => {
         {
           channel: 'discord',
           userId: 'user-a',
-          privacyLevel: 'semi_private',
+          privacyLevel: 'invite_only',
         },
         {
           channel: 'discord',

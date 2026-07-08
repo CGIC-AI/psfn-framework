@@ -5,11 +5,13 @@ export interface ContactRow {
   nickname: string | null;
   trust_level: string;
   relationship_type: string;
+  is_machine_intelligence?: number | null;
   emotional_baseline: string;
   emotional_time_series: string;
   first_seen: string;
   last_seen: string;
   notes: string | null;
+  timezone: string | null;
 }
 
 export interface ContactIdentityRow {

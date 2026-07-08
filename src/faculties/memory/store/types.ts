@@ -3,6 +3,7 @@ import type {
   ContactProfileArtifact,
   MemoryAbstractionLink,
   MemoryDeleteVersion,
+  MemoryEvolutionLink,
   MemoryLink,
   MemoryPatchEvent,
   ScratchpadEntry,
@@ -32,6 +33,7 @@ export interface MemoryRow {
   scope_ref_label: string | null;
   scope_tags: string | null;
   provenance_refs: string | null;
+  retention_class: PurrMemory['retentionClass'] | null;
   sensitivity: string | null;
   consent_flags: string | null;
   contact_id: string | null;
@@ -59,6 +61,20 @@ export interface MemoryAbstractionLinkRow {
   created_at: number;
   created_by: string | null;
   reason: string | null;
+}
+
+export interface MemoryEvolutionLinkRow {
+  id: string;
+  source_memory_id: string;
+  target_memory_id: string;
+  relation: string;
+  confidence: number;
+  reason: string | null;
+  source_ref: string | null;
+  source_type: string | null;
+  provenance_refs: string | null;
+  provenance_json: string | null;
+  created_at: number;
 }
 
 export interface MemoryPatchEventRow {
@@ -105,8 +121,8 @@ export interface ContactProfileRow {
 export interface ScratchpadRow {
   id: string;
   content: string;
-  created_at: number;
-  updated_at: number;
+  created_at: number | string;
+  updated_at: number | string;
 }
 
 export interface MemoryStoreOptions {
@@ -121,6 +137,7 @@ export type {
   ContactProfileArtifact,
   MemoryAbstractionLink,
   MemoryDeleteVersion,
+  MemoryEvolutionLink,
   MemoryLink,
   MemoryPatchEvent,
   MemoryMaintenanceReview,

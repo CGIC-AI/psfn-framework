@@ -44,6 +44,7 @@ interface FeatureExtractionPipelineType {
 
 export interface EmbeddingRuntimeProvider extends EmbeddingProviderPort {
   readonly kind: EmbeddingProviderKind;
+  readonly model: string;
 }
 
 export interface EmbeddingConfig {
@@ -106,6 +107,7 @@ interface EmbedOptions {
 
 abstract class HttpEmbeddingProvider implements EmbeddingRuntimeProvider {
   abstract readonly kind: EmbeddingProviderKind;
+  abstract readonly model: string;
   abstract readonly dims: number;
 
   async embed(text: string, options: EmbedOptions = {}): Promise<Float32Array> {
@@ -250,6 +252,10 @@ export class OllamaEmbeddingProvider extends HttpEmbeddingProvider {
     return this.config.dims;
   }
 
+  get model(): string {
+    return this.config.model;
+  }
+
   protected async embedInternal(texts: string[], options: EmbedOptions): Promise<Float32Array[]> {
     const url = appendPath(this.config.ollamaUrl, '/api/embed');
 
@@ -298,6 +304,10 @@ export class TransformersEmbeddingProvider implements EmbeddingRuntimeProvider {
 
   get dims(): number {
     return this.config.dims;
+  }
+
+  get model(): string {
+    return this.config.model;
   }
 
   private async getPipeline(): Promise<FeatureExtractionPipelineType> {
@@ -390,6 +400,10 @@ export class ApiEmbeddingProvider extends HttpEmbeddingProvider {
 
   get dims(): number {
     return this.config.dims;
+  }
+
+  get model(): string {
+    return this.config.model;
   }
 
   protected async embedInternal(texts: string[], options: EmbedOptions): Promise<Float32Array[]> {

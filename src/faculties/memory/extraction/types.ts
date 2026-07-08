@@ -1,5 +1,6 @@
-import type { ExtractedFact, MemoryType } from '../types.js';
+import type { ExtractedFact, MemoryScopeRef, MemoryType, PurrMemory } from '../types.js';
 import type { TurnID } from '../../../shared/contracts/runtime.js';
+import type { SessionEntry } from '../../../core/session/types.js';
 
 export interface MemoryExtractorConfig {
   extractionInterval?: number;
@@ -17,9 +18,16 @@ export interface MemoryExtractorDrainOptions {
 
 export type ExtractionTriggerReason =
   | 'manual'
+  | 'response_turn'
   | 'interval'
   | 'context_threshold'
   | 'interval_and_threshold'
+  | 'observed_count'
+  | 'observed_time'
+  | 'direct_mention'
+  | 'high_salience'
+  | 'backlog_lag'
+  | 'operator_backfill'
   | 'pre_compaction'
   | 'crash_recovery';
 
@@ -28,6 +36,8 @@ export type ExtractionRejectionReason =
   | 'low_confidence'
   | 'low_novelty'
   | 'low_signal'
+  | 'cogsec_risk'
+  | 'ambiguous_speaker'
   | 'write_cap';
 
 export type ExtractionPreLlmGateReason =
@@ -53,6 +63,9 @@ export interface ExtractionEndTelemetry {
   count: number;
   turnId?: TurnID;
   triggerReason: ExtractionTriggerReason;
+  triggerContactId?: string;
+  routedContactIds?: string[];
+  sourceSpeakerNames?: string[];
   coveredUpToMessageId?: number;
   parsedCount: number;
   acceptedCount: number;
@@ -61,6 +74,10 @@ export interface ExtractionEndTelemetry {
   deduplicatedCount: number;
   supersededCount: number;
   rejectionBreakdown: Record<ExtractionRejectionReason, number>;
+  routedFactCount?: number;
+  ambiguousSpeakerSkippedCount?: number;
+  ambiguousSpeakerSkipReasons?: Record<string, number>;
+  writeCapSkips?: GroupMemoryWriteCapSkip[];
   compositionalMode: 'legacy' | 'chunk_compose';
   chunkCount: number;
   mergedFactCount: number;
@@ -70,6 +87,25 @@ export interface ExtractionEndTelemetry {
   preLlmGateReason?: ExtractionPreLlmGateReason;
   preLlmGateSignalScore?: number;
   preLlmGateSignalCount?: number;
+}
+
+export type GroupMemoryWriteCapSkipReason =
+  | 'run_cap'
+  | 'chunk_cap'
+  | 'contact_cap'
+  | 'subject_cap'
+  | 'low_salience_cap'
+  | 'backfill_cap'
+  | 'time_window_cap';
+
+export interface GroupMemoryWriteCapSkip {
+  reason: GroupMemoryWriteCapSkipReason;
+  skippedCount: number;
+  configuredLimit: number;
+  affectedContactIds?: string[];
+  affectedSubjectContactIds?: string[];
+  affectedClasses?: string[];
+  affectedScopeRefs?: MemoryScopeRef[];
 }
 
 export interface ProfileSynthesisConfig {
@@ -88,7 +124,32 @@ export interface AcceptedFactWrite {
   memoryId: string;
   importance: number;
   confidence: number;
+  contactId?: string;
+  sourceContactId?: string;
+  subjectContactId?: string;
+  triggerContactId?: string;
+  sourceSpeakerName?: string;
+  scopeRef?: MemoryScopeRef;
 }
+
+export interface ConcernCandidateExtractionContext {
+  channelId: string;
+  triggerReason: ExtractionTriggerReason;
+  canonicalContactId?: string;
+  turnId?: TurnID;
+  sourceRef: string;
+  recentEntries: readonly SessionEntry[];
+  acceptedFacts: readonly ExtractedFact[];
+  acceptedWrites: readonly AcceptedFactWrite[];
+  relatedMemories: readonly Pick<
+    PurrMemory,
+    'id' | 'type' | 'text' | 'importance' | 'confidence' | 'salience' | 'sourceRef'
+  >[];
+}
+
+export type ConcernCandidateExtractionSink = (
+  context: ConcernCandidateExtractionContext,
+) => void | Promise<void>;
 
 export interface AcceptedFactCandidate {
   fact: ExtractedFact;

@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 1,
+  "maxTextChars": 140,
+  "rewriteRules": [
+    { "pattern": "^user['’]s\\s+", "flags": "i", "replacement": "" },
+    { "pattern": "^purrsephone['’]s\\s+", "flags": "i", "replacement": "" },
+    { "pattern": "\\bactive concern\\b", "flags": "gi", "replacement": "open thread" },
+    { "pattern": "\\bconcern\\b", "flags": "gi", "replacement": "thread" }
+  ]
+}

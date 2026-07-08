@@ -22,6 +22,7 @@ import {
   resolveOptionalEnvCredential,
 } from '../custody/credential-vault.js';
 import { requireGatewaySessionHmacKeyring } from './session-hmac-env.js';
+import { setRuntimeChannelEnvelopeLabels } from '../../system/trust/runtime-channel-labels.js';
 import {
   buildRuntimeChannelsConfigOverrides,
   type StartupConfigHydrationResult,
@@ -34,6 +35,10 @@ import { DEFAULT_DISCORD_START_RETRY_BASE_DELAY_MS,
   DEFAULT_DISCORD_START_RETRY_MAX_DELAY_MS,
   DEFAULT_DISCORD_START_RETRY_MAX_ATTEMPTS,
 } from './discord-startup.js';
+import {
+  resolveGatewayRpcEndpointFromEnv,
+  type GatewayRpcEndpoint,
+} from './transport.js';
 
 const DEFAULT_SOCKET_PATH = '/run/psfn/gateway.sock';
 const DEFAULT_NTFY_TIMEOUT_MS = 8_000;
@@ -70,6 +75,7 @@ export interface GatewayBootstrapInput {
   diagnostics: GatewayBootstrapDiagnostics;
   runtimeMode: GatewayRuntimeMode;
   socketPath: string;
+  gatewayRpcEndpoint: GatewayRpcEndpoint;
   workspacePath: string;
   workspaceRoot: string;
   codebaseRoot: string;
@@ -246,7 +252,7 @@ function buildGatewayPolicyConfig(
     ?? (beadsToolsEnabled ? [...ALL_BEADS_ACTIONS] : undefined);
   const vaultToolsEnabled = parseBooleanEnvWithFallback(
     env.VAULT_TOOLS_ENABLED,
-    Boolean(config.obsidianVaultName),
+    false,
   );
   const vaultAllowActions = parseVaultActionsEnv(env.VAULT_ALLOW_ACTIONS)
     ?? (vaultToolsEnabled ? [...ALL_VAULT_ACTIONS] : undefined);
@@ -333,17 +339,29 @@ export function resolveGatewayBootstrapInput(
   const wyomingShardRouting = config.wyomingShardRouting ?? { enabled: false };
   const auditDbPath = env.AUDIT_DB_PATH ?? resolve(systemDataDir, 'gateway-audit.db');
   const providerEnv = buildProviderCredentialEnv(config, env);
+  const gatewayRpcEndpoint = resolveGatewayRpcEndpointFromEnv(env, DEFAULT_SOCKET_PATH);
   const channelsConfig = loadRuntimeChannelsConfig(
     systemDataDir,
     env,
     buildGatewayChannelsConfigOverrides(config, settingsDomains.runtime),
     { credentialVault: config.credentialVault },
   );
+  // E3.2: publish channel-owned Context Envelope labels so gateway-side
+  // classification consumers see the same precedence as the agent process.
+  setRuntimeChannelEnvelopeLabels(channelsConfig.contextEnvelope.channels);
 
-  const ntfyConfigured = Boolean(ntfyBaseUrl && ntfyTopic);
   const ntfyConfigIncomplete = Boolean(
     (ntfyBaseUrl && !ntfyTopic) || (!ntfyBaseUrl && ntfyTopic),
   );
+  const ntfy = ntfyBaseUrl && ntfyTopic
+    ? {
+      baseUrl: ntfyBaseUrl,
+      defaultTopic: ntfyTopic,
+      token: ntfyToken,
+      timeoutMs: ntfyTimeoutMs,
+      debounceWindowMs: ntfyDebounceMs,
+    }
+    : undefined;
 
   return {
     diagnostics: {
@@ -352,7 +370,10 @@ export function resolveGatewayBootstrapInput(
       ntfyConfigIncomplete,
     },
     runtimeMode,
-    socketPath: env.GATEWAY_SOCKET ?? DEFAULT_SOCKET_PATH,
+    socketPath: gatewayRpcEndpoint.kind === 'unix'
+      ? gatewayRpcEndpoint.socketPath
+      : env.GATEWAY_SOCKET ?? DEFAULT_SOCKET_PATH,
+    gatewayRpcEndpoint,
     workspacePath,
     workspaceRoot,
     codebaseRoot,
@@ -365,17 +386,7 @@ export function resolveGatewayBootstrapInput(
     server: {
       sessionHmacKeyring,
       wyomingShardRouting,
-      ...(ntfyConfigured
-        ? {
-          ntfy: {
-            baseUrl: ntfyBaseUrl,
-            defaultTopic: ntfyTopic,
-            token: ntfyToken,
-            timeoutMs: ntfyTimeoutMs,
-            debounceWindowMs: ntfyDebounceMs,
-          },
-        }
-        : {}),
+      ...(ntfy ? { ntfy } : {}),
       confirmation: {
         expiryMs: confirmationExpiryMs,
         operatorDiscordChannelId: confirmationOperatorDiscordChannelId,

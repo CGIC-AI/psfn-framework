@@ -41,6 +41,16 @@ export interface ShellExecView {
   durationMs: number;
 }
 
+export interface FsListView {
+  paths: string[];
+  scannedEntries: number;
+  maxEntries: number;
+  maxScannedEntries: number;
+  truncated: boolean;
+  scanLimitReached: boolean;
+  entryLimitReached: boolean;
+}
+
 export interface SandboxBrokerExecutionBoundary {
   kind: 'sandbox_broker';
   isolatedFromGatewaySecrets: true;
@@ -77,7 +87,7 @@ export interface ChildProcessCodeExecutionBoundary {
 
 export type SandboxCodeExecutionBoundary = ChildProcessCodeExecutionBoundary;
 
-export type SandboxHostHelper = (...args: unknown[]) => unknown | Promise<unknown>;
+export type SandboxHostHelper = (...args: any[]) => unknown | Promise<unknown>;
 
 export interface SandboxCodeExecutionRequest {
   code: string;
@@ -122,7 +132,7 @@ export type GatewayREPLCapabilities = {
   gitCommit?: (message: string, intent: string, scope?: string) => Promise<GitCommitView>;
   fsRead?: (path: string) => Promise<string>;
   fsWrite?: (path: string, content: string) => Promise<void>;
-  fsList?: (glob?: string, maxEntries?: number) => Promise<string[]>;
+  fsList?: (glob?: string, maxEntries?: number) => Promise<FsListView>;
 };
 
 export interface ScheduleView {
@@ -152,6 +162,10 @@ export interface SandboxDeps {
   runNestedAnalysis?: NestedAnalysisRunner;
   moduleInstallConfirmationQueue?: ApprovalQueuePort | null;
   onModuleRegistryMutation?: (mutation: ModuleRegistryMutation) => Promise<void> | void;
+  mutationPolicy?: {
+    allowRepoMutation?: boolean;
+    allowWorkspaceWrite?: boolean;
+  };
   requestMetadata?: Partial<LLMRequestMetadata>;
 }
 

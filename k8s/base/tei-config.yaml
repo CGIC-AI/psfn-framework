@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: tei-config
+  namespace: psfn
+  labels:
+    app.kubernetes.io/part-of: psfn
+    app.kubernetes.io/component: tei
+data:
+  TEI_MODEL_ID: "BAAI/bge-large-en-v1.5"
+  TEI_MAX_BATCH_TOKENS: "16384"
+  TEI_MAX_CLIENT_BATCH_SIZE: "32"

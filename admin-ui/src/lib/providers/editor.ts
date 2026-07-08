@@ -42,7 +42,7 @@ export function providerRegistryIsDirty(
 
 export function providerTypeSummary(type: CanonicalProviderType): string {
   if (type === 'openrouter') return 'Model discovery + routed OpenRouter traffic';
-  if (type === 'litellm_proxy') return 'Proxy-backed provider routing';
+  if (type === 'litellm_proxy') return 'LiteLLM gateway routing + OpenAI-compatible model catalog';
   if (type === 'generic_openai') return 'OpenAI-compatible backend';
   return `${PROVIDER_TYPE_LABELS[type]} direct backend`;
 }
@@ -55,6 +55,7 @@ export function providerRuntimeRole(entry: ProviderRegistryEntry): string[] {
   }
   if (entry.type === 'litellm_proxy') {
     roles.push('proxy routing');
+    roles.push('catalog discovery');
   }
   if (!providerIsEnabled(entry)) {
     roles.push('disabled');

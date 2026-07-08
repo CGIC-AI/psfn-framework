@@ -6,9 +6,11 @@ import {
   IdentityCoolingOffManager,
   LifecycleRestartSafeguard,
   getToolReversibility,
+  hasExplicitToolReversibility,
   resolveToolReversibility,
   tagToolWithReversibility,
 } from './safeguards.js';
+import { MODEL_FACING_DRIFT_GUARD_RETIRED_TOOL_ALIASES } from '../../core/agent/tool-surface/registry.js';
 
 function mockTool(name: string): AgentTool<any> {
   return {
@@ -23,15 +25,28 @@ function mockTool(name: string): AgentTool<any> {
 describe('tool reversibility tagging', () => {
   it('classifies known irreversible tools', () => {
     expect(resolveToolReversibility('memory')).toBe('irreversible');
-    expect(resolveToolReversibility('memory_write')).toBe('irreversible');
-    expect(resolveToolReversibility('memory_redact')).toBe('irreversible');
-    expect(resolveToolReversibility('memory_delete')).toBe('irreversible');
     expect(resolveToolReversibility('north_star')).toBe('irreversible');
     expect(resolveToolReversibility('scratchpad')).toBe('irreversible');
     expect(resolveToolReversibility('system')).toBe('irreversible');
     expect(resolveToolReversibility('repo')).toBe('irreversible');
     expect(resolveToolReversibility('repo_commit')).toBe('irreversible');
     expect(resolveToolReversibility('skill')).toBe('irreversible');
+    expect(resolveToolReversibility('media')).toBe('irreversible');
+    expect(resolveToolReversibility('selfie_create')).toBe('irreversible');
+  });
+
+  it('does not author reversibility metadata for retired model-facing split aliases', () => {
+    const retiredMetadataAliases = [
+      ...MODEL_FACING_DRIFT_GUARD_RETIRED_TOOL_ALIASES,
+      'promoted_tools_list',
+      'promoted_tools_add',
+      'promoted_tools_remove',
+      'promoted_tools_swap',
+    ];
+
+    for (const alias of retiredMetadataAliases) {
+      expect(hasExplicitToolReversibility(alias), alias).toBe(false);
+    }
   });
 
   it('defaults unknown tools to reversible and supports explicit override', () => {

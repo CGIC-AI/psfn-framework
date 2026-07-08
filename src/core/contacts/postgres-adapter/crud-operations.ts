@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { v4 as uuidv4 } from 'uuid';
+import { v7 as uuidv7 } from 'uuid';
 import type {
   ChannelPrivacyLevel,
   Contact,
@@ -18,7 +18,8 @@ import type {
 import type { TrustLevel } from '../../../system/trust/types.js';
 import { isHighTierTrustLevel } from '../../../system/trust/types.js';
 import { isManualHighTierTrustMutationAuthorized, resolveTrustMutationSource } from '../../../system/trust/policy.js';
-import type { ContactUpsertMutationOptions } from '../contact-store-port.js';
+import type { ContactUpsertMutationOptions, MachineIntelligenceObservationMarkResult } from '../contact-store-port.js';
+import { isDeliberateMachineIntelligenceCorrection } from '../observed-machine-intelligence.js';
 import type { EmotionalSnapshot, EmotionalTimeSeriesPoint } from '../store/emotional-baseline.js';
 import {
   appendEmotionalObservationToTimeSeries,
@@ -44,12 +45,22 @@ import type { ContactIdentityVerificationRow, ContactMutationAuditRow, ContactRo
 import {
   chooseMoreRestrictiveSensitivity,
   contactMutationAuditRowToEntry,
+  normalizeAuditActor,
   normalizeJsonObject,
   normalizeLimit,
   socialGraphEdgeRowToEdge,
 } from './mapping.js';
 import { queryOne, queryRows, withPostgresClient } from './connection.js';
 import type { PostgresContactOperationMap, PostgresContactStoreClass } from './operation-map.js';
+
+function hasOwnTimezone(partial: Partial<Contact>): boolean {
+  return Object.prototype.hasOwnProperty.call(partial, 'timezone');
+}
+
+function normalizeTimezoneValue(value: string | undefined): string | null {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : null;
+}
 
 const postgresContactCrudOperations: PostgresContactOperationMap = {
   async upsert(
@@ -101,6 +112,9 @@ const postgresContactCrudOperations: PostgresContactOperationMap = {
         : (partial.relationshipType ?? target.relationshipType);
       const nextEmotion = partial.emotionalBaseline ?? target.emotionalBaseline ?? {};
       const nextDiscordUserId = partial.discordUserId ?? target.discordUserId ?? undefined;
+      const nextTimezone = hasOwnTimezone(partial)
+        ? normalizeTimezoneValue(partial.timezone)
+        : (target.timezone ?? null);
       await this.pool.query(
         `
           UPDATE contacts
@@ -111,8 +125,9 @@ const postgresContactCrudOperations: PostgresContactOperationMap = {
               relationship_type = $5,
               emotional_baseline = $6,
               last_seen = $7,
-              notes = COALESCE($8, notes)
-          WHERE id = $9
+              notes = COALESCE($8, notes),
+              timezone = $9
+          WHERE id = $10
         `,
         [
           nextDiscordUserId ?? null,
@@ -123,6 +138,7 @@ const postgresContactCrudOperations: PostgresContactOperationMap = {
           nextEmotion,
           now,
           partial.notes ?? null,
+          nextTimezone,
           target.id,
         ],
       );
@@ -152,6 +168,9 @@ const postgresContactCrudOperations: PostgresContactOperationMap = {
       if ((target.notes ?? null) !== (partial.notes ?? target.notes ?? null) && partial.notes !== undefined) {
         await this.appendMutationAuditEntry(target.id, 'notes', target.notes ?? null, partial.notes ?? null, options.actor);
       }
+      if (hasOwnTimezone(partial) && (target.timezone ?? null) !== nextTimezone) {
+        await this.appendMutationAuditEntry(target.id, 'timezone', target.timezone ?? null, nextTimezone, options.actor);
+      }
 
       const hydrated = await this.loadContactById(target.id);
       if (!hydrated) {
@@ -171,7 +190,7 @@ const postgresContactCrudOperations: PostgresContactOperationMap = {
     const shouldForcePrimary = identities.some(identity => isPrimaryIdentity(identity, this.primaryUserId))
       || (legacyDiscordUserId ? isPrimaryIdentity({ channel: 'discord', userId: legacyDiscordUserId }, this.primaryUserId) : false);
     const contact: Contact = {
-      id: partial.id?.trim() || uuidv4(),
+      id: partial.id?.trim() || uuidv7(),
       ...(legacyDiscordUserId ? { discordUserId: legacyDiscordUserId } : {}),
       displayName: partial.displayName.trim(),
       ...(normalizeNicknameValue(partial.nickname) !== undefined ? { nickname: normalizeNicknameValue(partial.nickname) ?? undefined } : {}),
@@ -181,6 +200,7 @@ const postgresContactCrudOperations: PostgresContactOperationMap = {
       firstSeen: partial.firstSeen ?? now,
       lastSeen: partial.lastSeen ?? now,
       ...(partial.notes ? { notes: partial.notes } : {}),
+      ...(normalizeTimezoneValue(partial.timezone) ? { timezone: normalizeTimezoneValue(partial.timezone) ?? undefined } : {}),
     };
 
     await this.pool.query(
@@ -195,9 +215,10 @@ const postgresContactCrudOperations: PostgresContactOperationMap = {
           emotional_baseline,
           first_seen,
           last_seen,
-          notes
+          notes,
+          timezone
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
       `,
       [
         contact.id,
@@ -210,6 +231,7 @@ const postgresContactCrudOperations: PostgresContactOperationMap = {
         contact.firstSeen,
         contact.lastSeen,
         contact.notes ?? null,
+        contact.timezone ?? null,
       ],
     );
 
@@ -244,8 +266,8 @@ const postgresContactCrudOperations: PostgresContactOperationMap = {
     const row = await queryOne<ContactRow>(
       this.pool,
       `
-        SELECT id, discord_user_id, display_name, nickname, trust_level, relationship_type,
-               emotional_baseline, first_seen, last_seen, notes
+        SELECT id, discord_user_id, display_name, nickname, trust_level, relationship_type, is_machine_intelligence,
+               emotional_baseline, first_seen, last_seen, notes, timezone
         FROM contacts
         WHERE discord_user_id = $1
         LIMIT 1
@@ -264,8 +286,8 @@ const postgresContactCrudOperations: PostgresContactOperationMap = {
     const rows = await queryRows<ContactRow>(
       this.pool,
       `
-        SELECT id, discord_user_id, display_name, nickname, trust_level, relationship_type,
-               emotional_baseline, first_seen, last_seen, notes
+        SELECT id, discord_user_id, display_name, nickname, trust_level, relationship_type, is_machine_intelligence,
+               emotional_baseline, first_seen, last_seen, notes, timezone
         FROM contacts
         WHERE trust_level = $1
         ORDER BY last_seen DESC
@@ -282,6 +304,76 @@ const postgresContactCrudOperations: PostgresContactOperationMap = {
 
   async updateLastSeen(id: string): Promise<void> {
     await this.touchContactLastSeen(id);
+  },
+
+  async setMachineIntelligence(id: string, isMachineIntelligence: boolean, actor?: string): Promise<boolean> {
+    const contact = await this.loadContactById(id);
+    if (!contact) return false;
+    const current = contact.isMachineIntelligence === true;
+    if (current === isMachineIntelligence) return true;
+    await this.pool.query(
+      'UPDATE contacts SET is_machine_intelligence = $1 WHERE id = $2',
+      [isMachineIntelligence, id],
+    );
+    await this.appendMutationAuditEntry(
+      id,
+      'is_machine_intelligence',
+      String(current),
+      String(isMachineIntelligence),
+      actor,
+    );
+    await this.syncContactExports();
+    return true;
+  },
+
+  async markMachineIntelligenceFromObservation(
+    id: string,
+    actor: string,
+  ): Promise<MachineIntelligenceObservationMarkResult> {
+    // Row-lock + audit check + write in one transaction: a concurrent deliberate
+    // correction either commits first (and the audit check preserves it) or
+    // blocks on the row lock and lands after this observation (correction wins).
+    const result = await withPostgresClient(this.pool, async (client): Promise<MachineIntelligenceObservationMarkResult> => {
+      const contact = await client.query<{ is_machine_intelligence: boolean | null }>(
+        'SELECT is_machine_intelligence FROM contacts WHERE id = $1 FOR UPDATE',
+        [id],
+      );
+      if (contact.rows.length === 0) return 'not_found';
+      const latest = await client.query<{ actor: string }>(
+        `
+          SELECT actor
+          FROM contact_mutation_audit
+          WHERE contact_id = $1 AND field = 'is_machine_intelligence'
+          ORDER BY timestamp DESC, id DESC
+          LIMIT 1
+        `,
+        [id],
+      );
+      if (isDeliberateMachineIntelligenceCorrection(latest.rows[0]?.actor)) {
+        return 'override_preserved';
+      }
+      if (contact.rows[0]?.is_machine_intelligence === true) return 'already_marked';
+      await client.query('UPDATE contacts SET is_machine_intelligence = TRUE WHERE id = $1', [id]);
+      await client.query(
+        `
+          INSERT INTO contact_mutation_audit (
+            contact_id,
+            actor,
+            field,
+            old_value,
+            new_value,
+            timestamp
+          )
+          VALUES ($1, $2, 'is_machine_intelligence', 'false', 'true', $3)
+        `,
+        [id, normalizeAuditActor(actor), new Date().toISOString()],
+      );
+      return 'marked';
+    });
+    if (result === 'marked') {
+      await this.syncContactExports();
+    }
+    return result;
   },
 
   async updateIdentityProfile(contactId: string, displayName: string, nickname?: string, actor?: string): Promise<boolean> {
@@ -358,8 +450,8 @@ const postgresContactCrudOperations: PostgresContactOperationMap = {
       const sourceRow = await queryOne<ContactRow>(
         this.pool,
         `
-          SELECT id, discord_user_id, display_name, nickname, trust_level, relationship_type,
-                 emotional_baseline, emotional_time_series, first_seen, last_seen, notes
+          SELECT id, discord_user_id, display_name, nickname, trust_level, relationship_type, is_machine_intelligence,
+                 emotional_baseline, emotional_time_series, first_seen, last_seen, notes, timezone
           FROM contacts
           WHERE id = $1
           LIMIT 1
@@ -369,8 +461,8 @@ const postgresContactCrudOperations: PostgresContactOperationMap = {
       const targetRow = await queryOne<ContactRow>(
         this.pool,
         `
-          SELECT id, discord_user_id, display_name, nickname, trust_level, relationship_type,
-                 emotional_baseline, emotional_time_series, first_seen, last_seen, notes
+          SELECT id, discord_user_id, display_name, nickname, trust_level, relationship_type, is_machine_intelligence,
+                 emotional_baseline, emotional_time_series, first_seen, last_seen, notes, timezone
           FROM contacts
           WHERE id = $1
           LIMIT 1
@@ -420,6 +512,7 @@ const postgresContactCrudOperations: PostgresContactOperationMap = {
       const mergedFirstSeen = earliestTimestamp(sourceRow.first_seen, targetRow.first_seen);
       const mergedLastSeen = latestTimestamp(sourceRow.last_seen, targetRow.last_seen);
       const mergedNotes = targetRow.notes ?? sourceRow.notes;
+      const mergedTimezone = targetRow.timezone ?? sourceRow.timezone;
 
       const sourceEntity = await this.loadSocialGraphEntityByContactId(sourceContactId);
       const targetEntity = await this.loadSocialGraphEntityByContactId(targetContactId);
@@ -527,8 +620,9 @@ const postgresContactCrudOperations: PostgresContactOperationMap = {
               emotional_time_series = $7,
               first_seen = $8,
               last_seen = $9,
-              notes = $10
-          WHERE id = $11
+              notes = $10,
+              timezone = $11
+          WHERE id = $12
         `,
         [
           mergedDiscordUserId,
@@ -537,10 +631,11 @@ const postgresContactCrudOperations: PostgresContactOperationMap = {
           mergedTrustLevel,
           mergedRelationshipType,
           mergedBaseline,
-          mergedEmotionalTimeSeries,
+          JSON.stringify(mergedEmotionalTimeSeries),
           mergedFirstSeen,
           mergedLastSeen,
           mergedNotes ?? null,
+          mergedTimezone ?? null,
           targetContactId,
         ],
       );
@@ -584,7 +679,9 @@ const postgresContactCrudOperations: PostgresContactOperationMap = {
             last_seen = $3
         WHERE id = $4
       `,
-      [updatedBaseline, updatedTimeSeries, new Date().toISOString(), id],
+      // node-pg encodes JS arrays as Postgres array literals, which are not
+      // valid JSON for a jsonb column — serialize explicitly.
+      [updatedBaseline, JSON.stringify(updatedTimeSeries), new Date().toISOString(), id],
     );
     await this.syncContactExports();
     return await this.getById(id);
@@ -822,7 +919,7 @@ const postgresContactCrudOperations: PostgresContactOperationMap = {
     const createdAt = now.toISOString();
     const expiresAt = new Date(now.getTime() + Math.min(Math.max(Math.floor(input.ttlMs ?? 5 * 60_000), 1), 60 * 60_000)).toISOString();
     const verification: ContactIdentityLinkVerification = {
-      id: uuidv4(),
+      id: uuidv7(),
       contactId: contact.id,
       sourceChannel: sourceIdentity.channel,
       sourceUserId: sourceIdentity.userId,
@@ -1070,8 +1167,8 @@ const postgresContactCrudOperations: PostgresContactOperationMap = {
     const rows = await queryRows<ContactRow>(
       this.pool,
       `
-        SELECT id, discord_user_id, display_name, nickname, trust_level, relationship_type,
-               emotional_baseline, first_seen, last_seen, notes
+        SELECT id, discord_user_id, display_name, nickname, trust_level, relationship_type, is_machine_intelligence,
+               emotional_baseline, first_seen, last_seen, notes, timezone
         FROM contacts
         ORDER BY last_seen DESC
       `,
@@ -1096,6 +1193,51 @@ const postgresContactCrudOperations: PostgresContactOperationMap = {
       [normalizedLimit],
     );
     return rows.map(row => this.toVerification(row));
+  },
+
+  async countVerifiedIdentityLinks(contactId: string): Promise<number> {
+    const rows = await queryRows<{ count: string | number }>(
+      this.pool,
+      `
+        SELECT COUNT(*) AS count
+        FROM contact_identity_link_verifications
+        WHERE contact_id = $1 AND status = 'verified'
+      `,
+      [contactId],
+    );
+    const raw = rows[0]?.count ?? 0;
+    const parsed = typeof raw === 'number' ? raw : Number.parseInt(raw, 10);
+    if (!Number.isFinite(parsed)) {
+      throw new Error(`Verified identity link count for contact ${contactId} is not numeric`);
+    }
+    return parsed;
+  },
+
+  async getContactMaintenanceWatermark(processor: string): Promise<string | undefined> {
+    const rows = await queryRows<{ last_run_at: string }>(
+      this.pool,
+      'SELECT last_run_at FROM contact_maintenance_watermarks WHERE processor = $1',
+      [processor],
+    );
+    return rows[0]?.last_run_at;
+  },
+
+  async setContactMaintenanceWatermark(processor: string, lastRunAt: string): Promise<void> {
+    const trimmedProcessor = processor.trim();
+    if (!trimmedProcessor) {
+      throw new Error('Contact maintenance watermark processor must be a non-empty string');
+    }
+    if (!Number.isFinite(Date.parse(lastRunAt))) {
+      throw new Error(`Contact maintenance watermark lastRunAt "${lastRunAt}" is not a valid timestamp`);
+    }
+    await this.pool.query(
+      `
+        INSERT INTO contact_maintenance_watermarks (processor, last_run_at)
+        VALUES ($1, $2)
+        ON CONFLICT (processor) DO UPDATE SET last_run_at = EXCLUDED.last_run_at
+      `,
+      [trimmedProcessor, lastRunAt],
+    );
   },
 
   async listMutationAuditEntries(query: ContactMutationAuditQuery = {}): Promise<ContactMutationAuditEntry[]> {

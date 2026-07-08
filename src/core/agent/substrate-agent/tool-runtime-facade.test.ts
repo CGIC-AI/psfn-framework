@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { AgentTool } from '@mariozechner/pi-agent-core';
 import { ToolRuntimeFacade } from './tool-runtime-facade.js';
+import { createWorkerExecutionPolicy, SUBAGENT_WORKER_LANE } from '../worker-lanes.js';
 
 function makeTool(name: string, execute = vi.fn(async () => ({
   content: [{ type: 'text', text: `${name} ok` }],
@@ -57,10 +58,49 @@ function createFacade(taskKind: string | null = null) {
 }
 
 describe('ToolRuntimeFacade maintenance core tool policy', () => {
+  it('rejects high-risk retired first-party aliases at the model-facing registration boundary', () => {
+    const { facade } = createFacade(null);
+    expect(() => facade.registerTool(makeTool('session_new'), 'core')).toThrow(
+      'core tool registration includes retired first-party tool aliases: session_new->session',
+    );
+    expect(() => facade.registerTool(makeTool('selfie_create'), 'extended')).not.toThrow();
+  });
+
+  it('rejects widened drift-guard aliases for concerns, north_star, and lifecycle', () => {
+    const { facade } = createFacade(null);
+    expect(() => facade.registerTool(makeTool('create_concern'), 'core')).toThrow(
+      'core tool registration includes retired first-party tool aliases: create_concern->orient',
+    );
+    expect(() => facade.registerTool(makeTool('list_concerns'), 'core')).toThrow(
+      'core tool registration includes retired first-party tool aliases: list_concerns->orient',
+    );
+    expect(() => facade.registerTool(makeTool('resolve_concern'), 'core')).toThrow(
+      'core tool registration includes retired first-party tool aliases: resolve_concern->orient',
+    );
+    for (const alias of [
+      'north_star_list',
+      'north_star_create',
+      'north_star_update',
+      'north_star_delete',
+      'north_star_reorder',
+    ]) {
+      expect(() => facade.registerTool(makeTool(alias), 'extended')).toThrow(
+        `extended tool registration includes retired first-party tool aliases: ${alias}->north_star`,
+      );
+    }
+    expect(() => facade.registerTool(makeTool('self_restart'), 'core')).toThrow(
+      'core tool registration includes retired first-party tool aliases: self_restart->system',
+    );
+    expect(() => facade.registerTool(makeTool('self_rebuild'), 'core')).toThrow(
+      'core tool registration includes retired first-party tool aliases: self_rebuild->system',
+    );
+  });
+
   it('keeps only the reflection allowlist of core tools active for maintenance turns', () => {
     const { facade, agent, emitTelemetry, correlation } = createFacade('reflection');
     facade.registerTool(makeTool('identity'), 'core');
     facade.registerTool(makeTool('system'), 'core');
+    facade.registerTool(makeTool('self_status'), 'core');
     facade.registerTool(makeTool('session'), 'core');
     facade.registerTool(makeTool('contact'), 'core');
     facade.registerTool(makeTool('subagent'), 'core');
@@ -77,7 +117,7 @@ describe('ToolRuntimeFacade maintenance core tool policy', () => {
     }, 'reflection', 'background', correlation, { intent: null, skipped: [] });
 
     const tools = agent.setTools.mock.calls.at(-1)?.[0] as Array<{ name: string }>;
-    expect(tools.map(tool => tool.name)).toEqual(['contact', 'identity', 'session', 'system']);
+    expect(tools.map(tool => tool.name)).toEqual(['contact', 'identity', 'self_status', 'session', 'system']);
 
     const skippedEvents = emitTelemetry.mock.calls
       .filter(([eventName]) => eventName === 'agent.tools.core_guardrail.skipped');
@@ -87,7 +127,7 @@ describe('ToolRuntimeFacade maintenance core tool policy', () => {
     ]));
   });
 
-  it('leaves the core tool set unchanged for non-maintenance turns', () => {
+  it('routes analysis_workbench away from non-worker parent turns', () => {
     const { facade, agent, emitTelemetry, correlation } = createFacade(null);
     facade.registerTool(makeTool('identity'), 'core');
     facade.registerTool(makeTool('system'), 'core');
@@ -107,10 +147,14 @@ describe('ToolRuntimeFacade maintenance core tool policy', () => {
     }, undefined, 'chat', correlation, { intent: null, skipped: [] });
 
     const tools = agent.setTools.mock.calls.at(-1)?.[0] as Array<{ name: string }>;
-    expect(tools.map(tool => tool.name)).toEqual(['analysis_workbench', 'contact', 'identity', 'session', 'subagent', 'system']);
-    expect(emitTelemetry).not.toHaveBeenCalledWith(
+    expect(tools.map(tool => tool.name)).toEqual(['contact', 'identity', 'session', 'subagent', 'system']);
+    expect(emitTelemetry).toHaveBeenCalledWith(
       'agent.tools.core_guardrail.skipped',
-      expect.anything(),
+      expect.objectContaining({
+        toolName: 'analysis_workbench',
+        reason: 'analysis_workbench_worker_context_required',
+        recommendation: 'delegate_large_evidence_analysis_to_subagent_or_shard',
+      }),
     );
   });
 
@@ -171,8 +215,8 @@ describe('ToolRuntimeFacade maintenance core tool policy', () => {
     );
   });
 
-  it('keeps analysis_workbench available for explicit large-evidence turns', () => {
-    const { facade, agent, correlation } = createFacade(null);
+  it('requires delegation for explicit large-evidence parent turns', () => {
+    const { facade, agent, emitTelemetry, correlation } = createFacade(null);
     facade.registerTool(makeTool('session'), 'core');
     facade.registerTool(makeTool('analysis_workbench'), 'core');
 
@@ -187,13 +231,50 @@ describe('ToolRuntimeFacade maintenance core tool policy', () => {
     }, undefined, 'chat', correlation, { intent: 'memory', skipped: [] });
 
     const tools = agent.setTools.mock.calls.at(-1)?.[0] as Array<{ name: string }>;
+    expect(tools.map(tool => tool.name)).toEqual(['session']);
+    expect(emitTelemetry).toHaveBeenCalledWith(
+      'agent.tools.core_guardrail.skipped',
+      expect.objectContaining({
+        toolName: 'analysis_workbench',
+        intent: 'memory',
+        reason: 'analysis_workbench_worker_context_required',
+      }),
+    );
+  });
+
+  it('keeps analysis_workbench available inside worker contexts', () => {
+    const { facade, agent, emitTelemetry, correlation } = createFacade(null);
+    facade.registerTool(makeTool('session'), 'core');
+    facade.registerTool(makeTool('analysis_workbench'), 'core');
+
+    facade.applyActiveToolsToAgentForTurn({
+      id: 'msg-worker-large-evidence-1',
+      channelId: 'subagent:analysis',
+      channelType: 'api',
+      authorId: 'system:subagent-task',
+      authorName: 'Subagent Task',
+      content: 'Analyze this large transcript and evidence set.',
+      routing: {
+        workerExecution: createWorkerExecutionPolicy(SUBAGENT_WORKER_LANE),
+      },
+      timestamp: new Date('2026-04-23T12:00:00Z'),
+    }, undefined, 'background', correlation, { intent: 'memory', skipped: [] });
+
+    const tools = agent.setTools.mock.calls.at(-1)?.[0] as Array<{ name: string }>;
     expect(tools.map(tool => tool.name)).toEqual(['analysis_workbench', 'session']);
+    expect(emitTelemetry).not.toHaveBeenCalledWith(
+      'agent.tools.core_guardrail.skipped',
+      expect.objectContaining({
+        toolName: 'analysis_workbench',
+        reason: 'analysis_workbench_worker_context_required',
+      }),
+    );
   });
 
   it('removes visual tools from audio-only satellite turns', () => {
     const { facade, agent, emitTelemetry, correlation } = createFacade(null);
     facade.registerTool(makeTool('session'), 'core');
-    facade.registerTool(makeTool('image_analyze'), 'core');
+    facade.registerTool(makeTool('media'), 'core');
     facade.registerTool(makeTool('selfie_create'), 'core');
 
     facade.applyActiveToolsToAgentForTurn({
@@ -237,7 +318,7 @@ describe('ToolRuntimeFacade maintenance core tool policy', () => {
     expect(emitTelemetry).toHaveBeenCalledWith(
       'agent.tools.core_guardrail.skipped',
       expect.objectContaining({
-        toolName: 'image_analyze',
+        toolName: 'media',
         satelliteId: 'pi-voice',
         reason: 'satellite_capability_denied',
       }),
@@ -280,7 +361,14 @@ describe('ToolRuntimeFacade maintenance core tool policy', () => {
       content: 'mutate',
     });
     expect(execute).not.toHaveBeenCalled();
-    expect(denied.details).toEqual({ isError: true });
+    expect(denied.details).toMatchObject({
+      isError: true,
+      errorClass: 'permission_denied',
+      retryHint: 'operator_escalation',
+      retryable: false,
+      companionMessage: expect.stringContaining('read-only introspection'),
+    });
+    expect((denied.details as any).rawDiagnostic).toContain('maintenance_turn_allowlist');
     expect(denied.content[0]).toMatchObject({
       type: 'text',
     });

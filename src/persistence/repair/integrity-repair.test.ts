@@ -80,7 +80,6 @@ describe('runSessionIntegrityRepair', () => {
 
     const store = new SessionStore(harness.sessionsDir, {
       integrityKeyring: keyring,
-      disableSearchIndex: true,
     });
     const entries = store.getRecent('api:legacy', 10);
     expect(entries.map(entry => entry.content)).toEqual(['legacy hello', 'legacy hi']);
@@ -155,7 +154,6 @@ describe('runSessionIntegrityRepair', () => {
 
     const store = new SessionStore(harness.sessionsDir, {
       integrityKeyring: keyring,
-      disableSearchIndex: true,
     });
     const entries = store.getRecent('api:mixed', 10);
     expect(entries.map(entry => entry.content)).toEqual([
@@ -214,7 +212,6 @@ describe('runSessionIntegrityRepair', () => {
 
     const store = new SessionStore(harness.sessionsDir, {
       integrityKeyring: keyring,
-      disableSearchIndex: true,
     });
     const entries = store.getRecent('api:tampered', 10);
     expect(entries.map(entry => entry.content)).toEqual(['original first', 'tampered second']);
@@ -280,7 +277,6 @@ describe('runSessionIntegrityRepair', () => {
 
     const beforeRepair = new SessionStore(harness.sessionsDir, {
       integrityKeyring: keyring,
-      disableSearchIndex: true,
     });
     expect(beforeRepair.getRecent('api:vision', 10).map(entry => entry.content)).toEqual([
       'before the image turn',
@@ -300,7 +296,6 @@ describe('runSessionIntegrityRepair', () => {
 
     const store = new SessionStore(harness.sessionsDir, {
       integrityKeyring: keyring,
-      disableSearchIndex: true,
     });
     const entries = store.getRecent('api:vision', 10);
     expect(entries.map(entry => entry.content)).toEqual([

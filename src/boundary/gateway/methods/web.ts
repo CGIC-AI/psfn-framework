@@ -27,11 +27,21 @@ import {
   WEB_FETCH_USER_AGENT,
 } from '../../../system/security/policy-constants.js';
 import { registerGatedDescriptors } from './register.js';
+import {
+  type CircuitBreakerTransition,
+  CircuitOpenError,
+  SlidingWindowCircuitBreaker,
+} from '../../../shared/resilience/circuit-breaker.js';
 
 const log = createComponentLogger('GatewayWeb');
 const tlsBundleCache = new Map<string, string>();
 const WEB_FETCH_BINARY_MAX_BYTES_DEFAULT = 8 * 1024 * 1024;
 const REDIRECT_STATUS_CODES = new Set([301, 302, 303, 307, 308]);
+const WEB_CIRCUIT_BREAKER = new SlidingWindowCircuitBreaker({
+  failureThreshold: 3,
+  windowMs: 60_000,
+  cooldownMs: 30_000,
+});
 
 interface ResponseLike {
   status: number;
@@ -99,6 +109,94 @@ function formatFetchProviderError(err: unknown): string {
     return `Fetch timeout: ${details}`;
   }
   return `Fetch failed: ${details}`;
+}
+
+function normalizeWebCircuitUrl(url: string): string {
+  try {
+    const parsed = new URL(url);
+    const pathname = parsed.pathname.replace(/\/+$/, '') || '/';
+    return `${parsed.origin}${pathname}`.toLowerCase();
+  } catch {
+    return url.trim().toLowerCase();
+  }
+}
+
+function webCircuitKey(method: WebFetchMethodName, lane: UrlPolicyLane, url: string): string {
+  return `${method}::${lane}::${normalizeWebCircuitUrl(url)}`;
+}
+
+function isProviderJsonRpcError(error: Error): boolean {
+  return error instanceof JSONRPCErrorException
+    && error.code === GatewayErrors.PROVIDER_ERROR;
+}
+
+function toCircuitOpenJsonRpcError(error: CircuitOpenError): JSONRPCErrorException {
+  return new JSONRPCErrorException(
+    error.message,
+    GatewayErrors.PROVIDER_ERROR,
+    {
+      code: error.code,
+      circuitKey: error.circuitKey,
+      method: error.method,
+      state: error.state,
+      failureCount: error.failureCount,
+      failureThreshold: error.failureThreshold,
+      windowMs: error.windowMs,
+      cooldownMs: error.cooldownMs,
+      openedAtMs: error.openedAtMs,
+      openUntilMs: error.openUntilMs,
+    },
+  );
+}
+
+function logWebCircuitTransition(transition: CircuitBreakerTransition): void {
+  const payload = {
+    method: transition.method,
+    circuitKey: transition.key,
+    from: transition.from,
+    to: transition.to,
+    reason: transition.reason,
+    failureCount: transition.failureCount,
+    failureThreshold: transition.failureThreshold,
+    windowMs: transition.windowMs,
+    cooldownMs: transition.cooldownMs,
+    ...(transition.openUntilMs !== undefined ? {
+      openUntil: new Date(transition.openUntilMs).toISOString(),
+    } : {}),
+    ...(transition.lastError ? { lastError: transition.lastError } : {}),
+  };
+
+  if (transition.to === 'open') {
+    log.warn('Web fetch circuit breaker opened', payload);
+    return;
+  }
+  log.info('Web fetch circuit breaker state changed', payload);
+}
+
+async function withWebCircuit<T>(
+  method: WebFetchMethodName,
+  lane: UrlPolicyLane,
+  url: string,
+  operation: () => Promise<T>,
+): Promise<T> {
+  try {
+    return await WEB_CIRCUIT_BREAKER.execute({
+      key: webCircuitKey(method, lane, url),
+      method,
+      operation,
+      shouldRecordFailure: isProviderJsonRpcError,
+      onTransition: logWebCircuitTransition,
+    });
+  } catch (error) {
+    if (error instanceof CircuitOpenError) {
+      throw toCircuitOpenJsonRpcError(error);
+    }
+    throw error;
+  }
+}
+
+export function resetWebCircuitBreakersForTests(): void {
+  WEB_CIRCUIT_BREAKER.reset();
 }
 
 function parseLane(value: unknown): UrlPolicyLane | null {
@@ -527,31 +625,33 @@ const webDescriptors: Array<GatedMethodDescriptor<any, unknown>> = [
         );
       }
 
-      const { response, finalUrl } = await fetchWithValidatedRedirectChain(
-        'web.fetch',
-        params.url,
-        lane,
-        urlPolicyConfig,
-        tlsCaBundle,
-        {},
-        undefined,
-        undefined,
-        runtime,
-        dnsResolver,
-      );
-
-      if (!response.ok) {
-        throw new JSONRPCErrorException(
-          `Fetch failed: ${response.status} ${response.statusText}`,
-          GatewayErrors.PROVIDER_ERROR,
+      return await withWebCircuit('web.fetch', lane, params.url, async () => {
+        const { response, finalUrl } = await fetchWithValidatedRedirectChain(
+          'web.fetch',
+          params.url,
+          lane,
+          urlPolicyConfig,
+          tlsCaBundle,
+          {},
+          undefined,
+          undefined,
+          runtime,
+          dnsResolver,
         );
-      }
-      const rawContent = await response.text();
-      const result = sanitizeWebContent(rawContent, finalUrl);
-      if (result.injectionPatternsFound > 0) {
-        log.warn(`Sanitized ${result.injectionPatternsFound} injection patterns from ${finalUrl}`);
-      }
-      return { content: result.content, sanitized: result.sanitized };
+
+        if (!response.ok) {
+          throw new JSONRPCErrorException(
+            `Fetch failed: ${response.status} ${response.statusText}`,
+            GatewayErrors.PROVIDER_ERROR,
+          );
+        }
+        const rawContent = await response.text();
+        const result = sanitizeWebContent(rawContent, finalUrl);
+        if (result.injectionPatternsFound > 0) {
+          log.warn(`Sanitized ${result.injectionPatternsFound} injection patterns from ${finalUrl}`);
+        }
+        return { content: result.content, sanitized: result.sanitized };
+      });
     },
     summary: (p: WebFetchParams) => ({ url: p.url, lane: describeLane(p.lane) }),
     approvalAction: 'fetch',
@@ -576,52 +676,54 @@ const webDescriptors: Array<GatedMethodDescriptor<any, unknown>> = [
         );
       }
 
-      const { response } = await fetchWithValidatedRedirectChain(
-        'web.fetch_binary',
-        params.url,
-        lane,
-        urlPolicyConfig,
-        tlsCaBundle,
-        requestHeaders,
-        undefined,
-        undefined,
-        runtime,
-        dnsResolver,
-      );
-
-      if (!response.ok) {
-        throw new JSONRPCErrorException(
-          `Fetch failed: ${response.status} ${response.statusText}`,
-          GatewayErrors.PROVIDER_ERROR,
+      return await withWebCircuit('web.fetch_binary', lane, params.url, async () => {
+        const { response } = await fetchWithValidatedRedirectChain(
+          'web.fetch_binary',
+          params.url,
+          lane,
+          urlPolicyConfig,
+          tlsCaBundle,
+          requestHeaders,
+          undefined,
+          undefined,
+          runtime,
+          dnsResolver,
         );
-      }
 
-      const reportedLength = Number.parseInt(response.headers.get('content-length') ?? '', 10);
-      if (Number.isFinite(reportedLength) && reportedLength > maxBytes) {
-        throw new JSONRPCErrorException(
-          `Fetch binary payload too large: ${reportedLength} bytes exceeds ${maxBytes}`,
-          GatewayErrors.PROVIDER_ERROR,
-        );
-      }
+        if (!response.ok) {
+          throw new JSONRPCErrorException(
+            `Fetch failed: ${response.status} ${response.statusText}`,
+            GatewayErrors.PROVIDER_ERROR,
+          );
+        }
 
-      const bytes = Buffer.from(await response.arrayBuffer());
-      if (bytes.length > maxBytes) {
-        throw new JSONRPCErrorException(
-          `Fetch binary payload too large: ${bytes.length} bytes exceeds ${maxBytes}`,
-          GatewayErrors.PROVIDER_ERROR,
-        );
-      }
+        const reportedLength = Number.parseInt(response.headers.get('content-length') ?? '', 10);
+        if (Number.isFinite(reportedLength) && reportedLength > maxBytes) {
+          throw new JSONRPCErrorException(
+            `Fetch binary payload too large: ${reportedLength} bytes exceeds ${maxBytes}`,
+            GatewayErrors.PROVIDER_ERROR,
+          );
+        }
 
-      const mimeType = (response.headers.get('content-type') ?? 'application/octet-stream')
-        .split(';')[0]
-        .trim()
-        .toLowerCase();
+        const bytes = Buffer.from(await response.arrayBuffer());
+        if (bytes.length > maxBytes) {
+          throw new JSONRPCErrorException(
+            `Fetch binary payload too large: ${bytes.length} bytes exceeds ${maxBytes}`,
+            GatewayErrors.PROVIDER_ERROR,
+          );
+        }
 
-      return {
-        dataBase64: bytes.toString('base64'),
-        mimeType: mimeType || 'application/octet-stream',
-        sizeBytes: bytes.length,
-      };
+        const mimeType = (response.headers.get('content-type') ?? 'application/octet-stream')
+          .split(';')[0]
+          .trim()
+          .toLowerCase();
+
+        return {
+          dataBase64: bytes.toString('base64'),
+          mimeType: mimeType || 'application/octet-stream',
+          sizeBytes: bytes.length,
+        };
+      });
     },
     summary: (p: WebFetchBinaryParams) => ({
       url: p.url,
@@ -654,48 +756,50 @@ const webDescriptors: Array<GatedMethodDescriptor<any, unknown>> = [
         );
       }
 
-      const { response } = await fetchWithValidatedRedirectChain(
-        'web.request_binary',
-        params.url,
-        lane,
-        urlPolicyConfig,
-        tlsCaBundle,
-        requestHeaders,
-        requestMethod,
-        requestBody,
-        runtime,
-        dnsResolver,
-      );
-
-      const reportedLength = Number.parseInt(response.headers.get('content-length') ?? '', 10);
-      if (Number.isFinite(reportedLength) && reportedLength > maxBytes) {
-        throw new JSONRPCErrorException(
-          `Fetch binary payload too large: ${reportedLength} bytes exceeds ${maxBytes}`,
-          GatewayErrors.PROVIDER_ERROR,
+      return await withWebCircuit('web.request_binary', lane, params.url, async () => {
+        const { response } = await fetchWithValidatedRedirectChain(
+          'web.request_binary',
+          params.url,
+          lane,
+          urlPolicyConfig,
+          tlsCaBundle,
+          requestHeaders,
+          requestMethod,
+          requestBody,
+          runtime,
+          dnsResolver,
         );
-      }
 
-      const bytes = Buffer.from(await response.arrayBuffer());
-      if (bytes.length > maxBytes) {
-        throw new JSONRPCErrorException(
-          `Fetch binary payload too large: ${bytes.length} bytes exceeds ${maxBytes}`,
-          GatewayErrors.PROVIDER_ERROR,
-        );
-      }
+        const reportedLength = Number.parseInt(response.headers.get('content-length') ?? '', 10);
+        if (Number.isFinite(reportedLength) && reportedLength > maxBytes) {
+          throw new JSONRPCErrorException(
+            `Fetch binary payload too large: ${reportedLength} bytes exceeds ${maxBytes}`,
+            GatewayErrors.PROVIDER_ERROR,
+          );
+        }
 
-      const mimeType = (response.headers.get('content-type') ?? 'application/octet-stream')
-        .split(';')[0]
-        .trim()
-        .toLowerCase();
+        const bytes = Buffer.from(await response.arrayBuffer());
+        if (bytes.length > maxBytes) {
+          throw new JSONRPCErrorException(
+            `Fetch binary payload too large: ${bytes.length} bytes exceeds ${maxBytes}`,
+            GatewayErrors.PROVIDER_ERROR,
+          );
+        }
 
-      return {
-        status: response.status,
-        statusText: response.statusText,
-        ok: response.ok,
-        dataBase64: bytes.toString('base64'),
-        mimeType: mimeType || 'application/octet-stream',
-        sizeBytes: bytes.length,
-      };
+        const mimeType = (response.headers.get('content-type') ?? 'application/octet-stream')
+          .split(';')[0]
+          .trim()
+          .toLowerCase();
+
+        return {
+          status: response.status,
+          statusText: response.statusText,
+          ok: response.ok,
+          dataBase64: bytes.toString('base64'),
+          mimeType: mimeType || 'application/octet-stream',
+          sizeBytes: bytes.length,
+        };
+      });
     },
     summary: (p: WebRequestBinaryParams) => ({
       url: p.url,

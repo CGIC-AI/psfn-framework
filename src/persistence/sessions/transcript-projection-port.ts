@@ -8,7 +8,7 @@ export interface SessionSearchHit {
   authorName?: string;
   content: string;
   timestamp: number;
-  channelVisibility: import('../../system/trust/types.js').ChannelVisibility;
+  channelVisibility: import('../../system/trust/context-envelope.js').ChannelPrivacy;
   score: number;
   snippet: string;
 }
@@ -19,6 +19,11 @@ export interface TranscriptProjectionDrift {
   markedAt: number;
 }
 
+export interface TranscriptSearchOptions {
+  /** Restrict hits to one projected channel/logical session. */
+  channelId?: string;
+}
+
 export interface TranscriptProjectionPort {
   upsertSessionEntry(entry: SessionEntry, options?: { channelId?: string }): void;
   replaceChannelEntries(channelId: string, entries: readonly SessionEntry[]): void;
@@ -26,10 +31,11 @@ export interface TranscriptProjectionPort {
   markProjectionDrift(channelId: string, reason?: string): void;
   clearProjectionDrift(channelId: string): void;
   listProjectionDrift(): TranscriptProjectionDrift[];
+  flushPendingWrites?(): Promise<void>;
 }
 
 export interface KeywordSearchableTranscriptProjection extends TranscriptProjectionPort {
-  searchByKeywords(query: string, limit?: number): Promise<SessionSearchHit[]>;
+  searchByKeywords(query: string, limit?: number, options?: TranscriptSearchOptions): Promise<SessionSearchHit[]>;
 }
 
 export function supportsKeywordSearch(

@@ -79,6 +79,51 @@ describe('FallbackRunner', () => {
     expect(thirdRunSeen[0]).toBe(chatPrimary.model);
   });
 
+  it('cooldowns unreachable candidates and defers them on subsequent runs', async () => {
+    let now = 0;
+    const runner = new FallbackRunner({ connectivityCooldownMs: 1000, now: () => now });
+
+    const firstRunSeen: string[] = [];
+    await runner.run(
+      'chat',
+      [chatPrimary, chatFallback],
+      async (candidate) => {
+        firstRunSeen.push(candidate.model);
+        if (candidate.model === chatPrimary.model) {
+          throw new Error(
+            '500 litellm.InternalServerError: OpenAIException - Connection error. '
+            + 'Cannot connect to host 192.168.1.43:8000 ssl:default',
+          );
+        }
+        return 'ok';
+      },
+    );
+    expect(firstRunSeen).toEqual([chatPrimary.model, chatFallback.model]);
+
+    const secondRunSeen: string[] = [];
+    await runner.run(
+      'chat',
+      [chatPrimary, chatFallback],
+      async (candidate) => {
+        secondRunSeen.push(candidate.model);
+        return 'ok';
+      },
+    );
+    expect(secondRunSeen[0]).toBe(chatFallback.model);
+
+    now = 2_000;
+    const thirdRunSeen: string[] = [];
+    await runner.run(
+      'chat',
+      [chatPrimary, chatFallback],
+      async (candidate) => {
+        thirdRunSeen.push(candidate.model);
+        return 'ok';
+      },
+    );
+    expect(thirdRunSeen[0]).toBe(chatPrimary.model);
+  });
+
   it('fails fast for context overflow without trying next candidate', async () => {
     const runner = new FallbackRunner({ rateLimitCooldownMs: 1000, now: () => 0 });
     const execute = vi.fn(async (_candidate: RoutingCandidate) => {

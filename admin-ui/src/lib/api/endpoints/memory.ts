@@ -1,6 +1,7 @@
 import { apiDelete, apiGet, apiPost } from '$lib/api/client';
 import type {
   AdminBulkMutationResult,
+  AdminMemoryElevationStatus,
   AdminMemoryLink,
   AdminMemoryLinkResult,
   AdminMemoryListData,
@@ -15,6 +16,8 @@ import type {
 export interface MemoryListParams {
   type?: string;
   sensitivity?: string;
+  retention?: string;
+  preference?: boolean;
   startDate?: string;
   endDate?: string;
   limit?: number;
@@ -27,6 +30,8 @@ export function listMemories(
   const search = new URLSearchParams();
   if (params?.type) search.set('type', params.type);
   if (params?.sensitivity) search.set('sensitivity', params.sensitivity);
+  if (params?.retention) search.set('retention', params.retention);
+  if (params?.preference) search.set('preference', 'true');
   if (params?.startDate) search.set('startDate', params.startDate);
   if (params?.endDate) search.set('endDate', params.endDate);
   if (params?.limit !== undefined) search.set('limit', String(params.limit));
@@ -45,6 +50,27 @@ export function getMemoryDetail(id: string): Promise<AdminMemoryDetailData> {
   return apiGet<AdminMemoryDetailData>(
     `/api/admin/memory/${encodeURIComponent(id)}`
   );
+}
+
+// Reveals a single high-intimacy memory body. Audit-logged server-side.
+export function revealMemory(id: string): Promise<AdminMemoryDetailData> {
+  return apiPost<AdminMemoryDetailData>(
+    `/api/admin/memory/${encodeURIComponent(id)}/reveal`,
+    {}
+  );
+}
+
+export function getMemoryElevation(): Promise<AdminMemoryElevationStatus> {
+  return apiGet<AdminMemoryElevationStatus>('/api/admin/memory/elevation');
+}
+
+// Grants TTL-bound access to all high-intimacy memory bodies. Audit-logged server-side.
+export function elevateMemoryBodyAccess(): Promise<AdminMemoryElevationStatus> {
+  return apiPost<AdminMemoryElevationStatus>('/api/admin/memory/elevation', {});
+}
+
+export function dropMemoryBodyElevation(): Promise<AdminMemoryElevationStatus> {
+  return apiDelete<AdminMemoryElevationStatus>('/api/admin/memory/elevation');
 }
 
 export function listManagedMemoryScopes(kind?: 'project' | 'north_star'): Promise<AdminMemoryScopeListData> {
@@ -128,7 +154,7 @@ export function bulkDeleteMemories(ids: string[]): Promise<AdminBulkMutationResu
 
 export function bulkUpdateMemories(
   ids: string[],
-  fields: { memoryType?: string; sensitivity?: string }
+  fields: { memoryType?: string; sensitivity?: string; retentionClass?: string }
 ): Promise<AdminBulkMutationResult> {
   return apiPost<AdminBulkMutationResult>('/api/admin/memory/bulk-update', {
     ids,

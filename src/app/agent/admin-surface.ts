@@ -7,15 +7,24 @@ import { GatewayModelDiscovery } from '../../primitives/llm/discovery.js';
 import type { CharacterCardVersionStore } from '../../core/identity/card-versioning.js';
 import type { CharacterCardV2 } from '../../core/identity/types.js';
 import type { PostTurnActionRuntime } from '../../core/agent/post-turn-action-runtime.js';
+import type { OutreachOutboxStore } from '../../core/intention/outreach-outbox.js';
+import type { PendingContactApprovalStore } from '../../core/contacts/pending-contact-approvals.js';
+import type { SocialGraphProposalStore } from '../../faculties/memory/social-graph/proposals.js';
 import type { AgentCoreRuntime } from './core-runtime.js';
 import type { EventBus } from '../../shared/event-bus.js';
 import type { Scheduler } from '../../core/scheduler/scheduler.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type { SatelliteRegistryConfig } from '../../shared/contracts/satellite-registry.js';
+import type { ChannelGroupMemoryConfig } from '../../system/config/group-memory-config.js';
 import type { ApprovalQueuePort } from '../../system/capabilities/approval-queue-port.js';
-import type { EpisodicStore } from '../../faculties/memory/episodic/store.js';
+import type {
+  EpisodicStorePort,
+} from '../../faculties/memory/episodic/store-port.js';
 import { createGatewayConfirmationQueueAdminApi } from '../startup/support/confirmation-queue-admin-api.js';
-import { resolveAdminTransportSocketPath } from '../../operator/garden/transport-paths.js';
+import {
+  resolveAdminTransportMode,
+  resolveAdminTransportServerEndpoint,
+} from '../../operator/garden/transport-paths.js';
 
 export interface StartOptionalAdminTransportServerOptions {
   adminPort?: number;
@@ -24,11 +33,17 @@ export interface StartOptionalAdminTransportServerOptions {
   env?: NodeJS.ProcessEnv;
   config: SubstrateConfig;
   satelliteRegistryConfig: SatelliteRegistryConfig;
+  channelGroupMemory?: ChannelGroupMemoryConfig;
   gateway: GatewayClient;
   eventBus: EventBus;
   scheduler: Scheduler;
   postTurnActions: PostTurnActionRuntime;
-  episodicStore?: EpisodicStore | null;
+  outreachOutbox?: OutreachOutboxStore | null;
+  episodicStore?: EpisodicStorePort | null;
+  /** Pending contact approvals queue (E3.4 contact-tracking policy gate). */
+  pendingContactApprovals?: PendingContactApprovalStore | null;
+  /** Social-graph edge proposals from the graph-builder worker (E4.2). */
+  socialGraphProposals?: SocialGraphProposalStore | null;
   card: CharacterCardV2;
   shardManager: ShardExecutionPort;
   cardVersionStore: CharacterCardVersionStore;
@@ -41,18 +56,23 @@ export interface StartOptionalAdminTransportServerOptions {
     | 'contactStore'
     | 'promptState'
     | 'skillsRuntime'
+    | 'observerEvalSidecar'
     | 'agentLoop'
+    | 'memoryExtractor'
+    | 'intentionRuntime'
+    | 'toolConformanceRunner'
   >;
 }
 
 export async function startOptionalAdminTransportServer(
   options: StartOptionalAdminTransportServerOptions,
 ): Promise<GardenAdminTransportServer | undefined> {
-  if (!options.adminPort) {
+  const env = options.env ?? process.env;
+  const transportMode = resolveAdminTransportMode(env);
+  if (!options.adminPort && transportMode === 'socket') {
     return undefined;
   }
 
-  const env = options.env ?? process.env;
   const modelDiscovery = new GatewayModelDiscovery(options.gateway);
   const adminConfig: SubstrateConfig = {
     ...options.config,
@@ -68,15 +88,23 @@ export async function startOptionalAdminTransportServer(
     sessionManager: options.coreRuntime.sessionManager,
     scheduler: options.scheduler,
     postTurnActions: options.postTurnActions,
+    outreachOutbox: options.outreachOutbox ?? null,
     shardManager: options.shardManager,
     eventBus: options.eventBus,
     contactStore: options.coreRuntime.contactStore,
+    pendingContactApprovals: options.pendingContactApprovals ?? null,
+    socialGraphProposals: options.socialGraphProposals ?? null,
+    concernStore: options.coreRuntime.intentionRuntime.concernStore,
     characterCard: options.card,
     config: adminConfig,
     embeddingService: options.gateway,
     modelDiscovery,
     promptState: options.coreRuntime.promptState,
     skillsRuntime: options.coreRuntime.skillsRuntime,
+    observerEvalSidecar: options.coreRuntime.observerEvalSidecar,
+    memoryExtractor: options.coreRuntime.memoryExtractor,
+    ...(options.channelGroupMemory ? { channelGroupMemory: options.channelGroupMemory } : {}),
+    companionAuthorIds: options.config.discordBotId ? [options.config.discordBotId] : [],
     confirmationQueueApi: createGatewayConfirmationQueueAdminApi(
       options.gateway,
       options.cardProposalQueue,
@@ -84,9 +112,11 @@ export async function startOptionalAdminTransportServer(
     cardVersionStore: options.cardVersionStore,
     adaptiveToolsStateProvider: options.coreRuntime.agentLoop,
     toolHealthProvider: createGatewayAdminToolHealthProvider(options.gateway),
+    ...(env.PSFN_LOGS_DIR ? { logsDir: env.PSFN_LOGS_DIR } : {}),
+    toolConformanceRunner: options.coreRuntime.toolConformanceRunner,
   });
   const adminTransport = new GardenAdminTransportServer({
-    socketPath: resolveAdminTransportSocketPath(env),
+    endpoint: resolveAdminTransportServerEndpoint(env),
     eventBus: options.eventBus,
     config: adminConfig,
     services,

@@ -55,7 +55,7 @@ export function formatExtractionTranscript(
       } else {
         speaker = entry.authorName?.trim() || roleNames.userName?.trim() || 'user';
       }
-      return `${speaker}: ${entry.content}`;
+      return `[message_id:${entry.id}] ${speaker}: ${entry.content}`;
     })
     .join('\n');
 }

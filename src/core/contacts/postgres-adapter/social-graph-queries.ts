@@ -1,6 +1,11 @@
 import { randomUUID } from 'node:crypto';
-import type { Contact, SocialGraphEntity, SocialGraphEntityQuery, SocialGraphEntityUpsertInput, SocialRelationshipEdge, SocialRelationshipEdgeQuery, SocialRelationshipEdgeUpsertInput } from '../types.js';
+import type { Contact, SocialGraphEntity, SocialGraphEntityQuery, SocialGraphEntityUpsertInput, SocialRelationshipEdge, SocialRelationshipEdgeQuery, SocialRelationshipEdgeUpsertInput, SocialRelationshipKind } from '../types.js';
 import { getAllowedSensitivities } from '../../../system/trust/policy.js';
+import {
+  classifySocialRelationship,
+  effectiveEdgeDirectional,
+  inverseRelationshipKind,
+} from '../social-relationship-classification.js';
 import {
   chooseMoreRestrictiveSensitivity,
   edgeVisible,
@@ -15,6 +20,116 @@ import {
 import type { SocialGraphEntityRow, SocialRelationshipEdgeRow } from './rows.js';
 import { queryOne, queryRows } from './connection.js';
 import type { PostgresContactOperationMap, PostgresContactStoreClass } from './operation-map.js';
+import type { Pool } from 'pg';
+import type { SensitivityLevel } from '../../../system/trust/types.js';
+
+interface SocialEdgeWriteFields {
+  sensitivity: SensitivityLevel;
+  provenanceRefs: string[];
+  evidenceMemoryIds: string[];
+  confidence: number;
+}
+
+function edgeToWriteFields(edge: SocialRelationshipEdge): SocialEdgeWriteFields {
+  return {
+    sensitivity: edge.sensitivity,
+    provenanceRefs: edge.provenanceRefs,
+    evidenceMemoryIds: edge.evidenceMemoryIds,
+    confidence: edge.confidence,
+  };
+}
+
+/** Canonical endpoint ordering for undirected edges (parity with the sqlite store). */
+function normalizeUndirectedSocialEndpoints(
+  sourceEntityId: string,
+  targetEntityId: string,
+  directional: boolean,
+): { sourceEntityId: string; targetEntityId: string } {
+  if (directional || sourceEntityId <= targetEntityId) {
+    return { sourceEntityId, targetEntityId };
+  }
+  return { sourceEntityId: targetEntityId, targetEntityId: sourceEntityId };
+}
+
+const SOCIAL_EDGE_COLUMNS = `
+  id, source_entity_id, target_entity_id, relationship_type, directional,
+  sensitivity, provenance_refs, evidence_memory_ids, confidence, created_at, updated_at
+`;
+
+/**
+ * Find-or-create a single edge row for an exact (source, target, type,
+ * directional) key, merging write-fields (max confidence, union provenance /
+ * evidence, more-restrictive sensitivity). Endpoints are used verbatim.
+ */
+async function upsertSingleSocialEdgeRow(
+  pool: Pool,
+  sourceEntityId: string,
+  targetEntityId: string,
+  relationshipType: SocialRelationshipKind,
+  directional: boolean,
+  fields: SocialEdgeWriteFields,
+  now: string,
+): Promise<SocialRelationshipEdge> {
+  const existing = await queryOne<SocialRelationshipEdgeRow>(
+    pool,
+    `
+      SELECT ${SOCIAL_EDGE_COLUMNS}
+      FROM social_relationship_edges
+      WHERE source_entity_id = $1
+        AND target_entity_id = $2
+        AND relationship_type = $3
+        AND directional = $4
+      LIMIT 1
+    `,
+    [sourceEntityId, targetEntityId, relationshipType, directional],
+  );
+
+  if (existing) {
+    const existingEdge = socialGraphEdgeRowToEdge(existing);
+    const nextSensitivity = chooseMoreRestrictiveSensitivity(existingEdge.sensitivity, fields.sensitivity);
+    const nextProvenanceRefs = [...new Set([...existingEdge.provenanceRefs, ...fields.provenanceRefs])];
+    const nextEvidenceMemoryIds = [...new Set([...existingEdge.evidenceMemoryIds, ...fields.evidenceMemoryIds])];
+    const nextConfidence = Math.max(existingEdge.confidence, fields.confidence);
+    await pool.query(
+      `
+        UPDATE social_relationship_edges
+        SET sensitivity = $1,
+            provenance_refs = $2,
+            evidence_memory_ids = $3,
+            confidence = $4,
+            updated_at = $5
+        WHERE id = $6
+      `,
+      [nextSensitivity, nextProvenanceRefs, nextEvidenceMemoryIds, nextConfidence, now, existingEdge.id],
+    );
+    const updated = await queryOne<SocialRelationshipEdgeRow>(
+      pool,
+      `SELECT ${SOCIAL_EDGE_COLUMNS} FROM social_relationship_edges WHERE id = $1 LIMIT 1`,
+      [existingEdge.id],
+    );
+    if (!updated) throw new Error(`Failed to reload social relationship edge ${existingEdge.id}`);
+    return socialGraphEdgeRowToEdge(updated);
+  }
+
+  const id = `edge:${randomUUID()}`;
+  await pool.query(
+    `
+      INSERT INTO social_relationship_edges (
+        id, source_entity_id, target_entity_id, relationship_type, directional,
+        sensitivity, provenance_refs, evidence_memory_ids, confidence, created_at, updated_at
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+    `,
+    [id, sourceEntityId, targetEntityId, relationshipType, directional, fields.sensitivity, fields.provenanceRefs, fields.evidenceMemoryIds, fields.confidence, now, now],
+  );
+  const created = await queryOne<SocialRelationshipEdgeRow>(
+    pool,
+    `SELECT ${SOCIAL_EDGE_COLUMNS} FROM social_relationship_edges WHERE id = $1 LIMIT 1`,
+    [id],
+  );
+  if (!created) throw new Error(`Failed to load social relationship edge ${id}`);
+  return socialGraphEdgeRowToEdge(created);
+}
 
 const postgresContactSocialGraphOperations: PostgresContactOperationMap = {
   async upsertSocialGraphEntityForContact(contact: Pick<Contact, 'id' | 'displayName' | 'firstSeen' | 'lastSeen'>): Promise<SocialGraphEntity> {
@@ -146,7 +261,7 @@ const postgresContactSocialGraphOperations: PostgresContactOperationMap = {
     const limit = normalizeLimit(query.limit, 100, 1, 100);
     const allowed = new Set(getAllowedSensitivities(
       normalizeViewerTrustLevel(query.viewerTrustLevel),
-      normalizeViewerVisibility(query.viewerChannelVisibility),
+      { channelPrivacy: normalizeViewerVisibility(query.viewerChannelPrivacy), broadcast: false },
     ));
     const rows = query.contactId
       ? await queryRows<SocialGraphEntityRow>(
@@ -256,100 +371,45 @@ const postgresContactSocialGraphOperations: PostgresContactOperationMap = {
       throw new Error('social relationship edge cannot target the same entity');
     }
 
-    const directional = input.directional ?? true;
     const relationshipType = input.relationshipType;
-    const sensitivity = input.sensitivity ?? 'personal';
-    const provenanceRefs = input.provenanceRefs ?? [];
-    const evidenceMemoryIds = input.evidenceMemoryIds ?? [];
-    const confidence = input.confidence ?? 0.7;
-    const sourceExists = await this.loadSocialGraphEntityById(sourceEntityId);
-    const targetExists = await this.loadSocialGraphEntityById(targetEntityId);
+    const classification = classifySocialRelationship(relationshipType);
+    // E4.3: classification governs the stored directional flag (fail-closed
+    // normalization) — symmetric => undirected, inverse_pair => directional,
+    // genuinely_directional => respect caller. Parity with the sqlite store.
+    const directional = effectiveEdgeDirectional(relationshipType, input.directional);
+    const endpoints = normalizeUndirectedSocialEndpoints(sourceEntityId, targetEntityId, directional);
+
+    const sourceExists = await this.loadSocialGraphEntityById(endpoints.sourceEntityId);
+    const targetExists = await this.loadSocialGraphEntityById(endpoints.targetEntityId);
     if (!sourceExists || !targetExists) {
       throw new Error('social relationship edge requires existing source and target entities');
     }
 
-    const existing = await queryOne<SocialRelationshipEdgeRow>(
-      this.pool,
-      `
-        SELECT id, source_entity_id, target_entity_id, relationship_type, directional,
-               sensitivity, provenance_refs, evidence_memory_ids, confidence, created_at, updated_at
-        FROM social_relationship_edges
-        WHERE source_entity_id = $1
-          AND target_entity_id = $2
-          AND relationship_type = $3
-          AND directional = $4
-        LIMIT 1
-      `,
-      [sourceEntityId, targetEntityId, relationshipType, directional],
-    );
+    const fields: SocialEdgeWriteFields = {
+      sensitivity: input.sensitivity ?? 'personal',
+      provenanceRefs: input.provenanceRefs ?? [],
+      evidenceMemoryIds: input.evidenceMemoryIds ?? [],
+      confidence: input.confidence ?? 0.7,
+    };
     const now = new Date().toISOString();
 
-    if (existing) {
-      const existingEdge = socialGraphEdgeRowToEdge(existing);
-      const nextSensitivity = existingEdge.sensitivity >= sensitivity ? existingEdge.sensitivity : sensitivity;
-      const nextProvenanceRefs = [...new Set([...existingEdge.provenanceRefs, ...provenanceRefs])];
-      const nextEvidenceMemoryIds = [...new Set([...existingEdge.evidenceMemoryIds, ...evidenceMemoryIds])];
-      const nextConfidence = Math.max(existingEdge.confidence, confidence);
-      await this.pool.query(
-        `
-          UPDATE social_relationship_edges
-          SET sensitivity = $1,
-              provenance_refs = $2,
-              evidence_memory_ids = $3,
-              confidence = $4,
-              updated_at = $5
-          WHERE id = $6
-        `,
-        [nextSensitivity, nextProvenanceRefs, nextEvidenceMemoryIds, nextConfidence, now, existingEdge.id],
+    if (classification.directionality === 'inverse_pair') {
+      const inverseType = inverseRelationshipKind(relationshipType)!;
+      // Both rows converge to the shared union via three idempotent upserts.
+      const primaryOnce = await upsertSingleSocialEdgeRow(
+        this.pool, endpoints.sourceEntityId, endpoints.targetEntityId, relationshipType, true, fields, now,
       );
-      const updated = await queryOne<SocialRelationshipEdgeRow>(
-        this.pool,
-        `
-          SELECT id, source_entity_id, target_entity_id, relationship_type, directional,
-                 sensitivity, provenance_refs, evidence_memory_ids, confidence, created_at, updated_at
-          FROM social_relationship_edges
-          WHERE id = $1
-          LIMIT 1
-        `,
-        [existingEdge.id],
+      const mirror = await upsertSingleSocialEdgeRow(
+        this.pool, endpoints.targetEntityId, endpoints.sourceEntityId, inverseType, true, edgeToWriteFields(primaryOnce), now,
       );
-      if (!updated) throw new Error(`Failed to reload social relationship edge ${existingEdge.id}`);
-      return socialGraphEdgeRowToEdge(updated);
+      return await upsertSingleSocialEdgeRow(
+        this.pool, endpoints.sourceEntityId, endpoints.targetEntityId, relationshipType, true, edgeToWriteFields(mirror), now,
+      );
     }
 
-    const id = `edge:${randomUUID()}`;
-    await this.pool.query(
-      `
-        INSERT INTO social_relationship_edges (
-          id,
-          source_entity_id,
-          target_entity_id,
-          relationship_type,
-          directional,
-          sensitivity,
-          provenance_refs,
-          evidence_memory_ids,
-          confidence,
-          created_at,
-          updated_at
-        )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-      `,
-      [id, sourceEntityId, targetEntityId, relationshipType, directional, sensitivity, provenanceRefs, evidenceMemoryIds, confidence, now, now],
+    return await upsertSingleSocialEdgeRow(
+      this.pool, endpoints.sourceEntityId, endpoints.targetEntityId, relationshipType, directional, fields, now,
     );
-    const created = await queryOne<SocialRelationshipEdgeRow>(
-      this.pool,
-      `
-        SELECT id, source_entity_id, target_entity_id, relationship_type, directional,
-               sensitivity, provenance_refs, evidence_memory_ids, confidence, created_at, updated_at
-        FROM social_relationship_edges
-        WHERE id = $1
-        LIMIT 1
-      `,
-      [id],
-    );
-    if (!created) throw new Error(`Failed to load social relationship edge ${id}`);
-    return socialGraphEdgeRowToEdge(created);
   },
 
   async listSocialRelationshipEdges(query: SocialRelationshipEdgeQuery = {}): Promise<SocialRelationshipEdge[]> {

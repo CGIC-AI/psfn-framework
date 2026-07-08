@@ -12,6 +12,7 @@ import {
 } from '../../journals/journal-utils.js';
 import type { JournalEntry, SessionEntry } from '../../../core/session/types.js';
 import { resolveSessionEntryTurnContext } from '../../../core/session/turn-provenance.js';
+import { isCogSecTombstoneSessionEntry } from '../../../core/cogsec/tombstones.js';
 import type { TranscriptProjectionPort } from '../transcript-projection-port.js';
 import type {
   ChannelCache,
@@ -95,6 +96,10 @@ export class SessionJournalRuntime {
 
   scanArchiveMetadata(archive: SessionArchiveHandle): JournalFileMetadata {
     return this.archivePort.scanJournalFileMetadata(archive);
+  }
+
+  fingerprintArchive(archive: SessionArchiveHandle): string | null {
+    return this.archivePort.fingerprintArchive(archive);
   }
 
   verifyAndNormalizeEntry(
@@ -274,6 +279,34 @@ export class SessionJournalRuntime {
     return cache;
   }
 
+  readJournalEntries(archive: SessionArchiveHandle): JournalEntry[] {
+    const { entries, quarantined } = this.archivePort.readJournalFile(archive);
+    if (quarantined.length > 0) {
+      this.warnAboutQuarantinedEntries(archive.channelId, archive, quarantined.length, entries.length);
+    }
+    return entries;
+  }
+
+  rewriteJournalEntries(archive: SessionArchiveHandle, entries: readonly JournalEntry[]): JournalEntry[] {
+    const rewritten: JournalEntry[] = [];
+    let previousHmac: string | null = null;
+
+    for (const entry of entries) {
+      const { _hmac, _hmacKeyVersion, ...unsigned } = entry;
+      if (!this.integrityProvider) {
+        rewritten.push(unsigned);
+        continue;
+      }
+
+      const signed = this.integrityProvider.sign(unsigned, previousHmac);
+      rewritten.push(signed);
+      previousHmac = signed._hmac ?? previousHmac;
+    }
+
+    this.archivePort.writeJournalFile(archive, rewritten);
+    return rewritten;
+  }
+
   backfillTranscriptProjectionFromDisk(params: {
     transcriptProjection: TranscriptProjectionPort | null;
     channelIndex: Map<string, ChannelIndexEntry>;
@@ -297,6 +330,10 @@ export class SessionJournalRuntime {
 
       try {
         const loaded = this.loadChannel(this.openArchive(channelId, filePath));
+        const expectedProjectedCount = loaded.entries.filter(entry => !isCogSecTombstoneSessionEntry(entry)).length;
+        if (projectedCount === expectedProjectedCount) {
+          continue;
+        }
         params.transcriptProjection.replaceChannelEntries(channelId, loaded.entries);
       } catch (error) {
         params.transcriptProjection.markProjectionDrift(channelId, toErrorMessage(error));

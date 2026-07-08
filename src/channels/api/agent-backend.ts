@@ -2,6 +2,8 @@ import { randomUUID } from 'node:crypto';
 import type {
   Attachment,
   ChannelType,
+  ContextMessage,
+  LLMContext,
   MessageModelOverride,
   MessagePromptOverride,
   MessageRoutingMetadata,
@@ -9,6 +11,7 @@ import type {
   ResponseStyle,
   SubstrateMessage,
 } from '../../shared/contracts/runtime.js';
+import type { LLMProviderPort } from '../../core/agent/contracts.js';
 import type {
   SatelliteRegistryConfig,
   SatelliteRoutingMetadata,
@@ -18,7 +21,7 @@ import type { SubstrateAgent } from '../../core/agent/substrate-agent.js';
 import type { EventBus } from '../../shared/event-bus.js';
 import { createEventBusSensorIngestPort, type SensorIngestPort } from '../../shared/telemetry/sensor-ingest-port.js';
 import type { SessionManager } from '../../core/session/manager.js';
-import { isChannelVisibility, type ChannelVisibility } from '../../system/trust/types.js';
+import { isChannelPrivacy, type ChannelPrivacy } from '../../system/trust/context-envelope.js';
 import type {
   ApiChatCompletionCancelRpcParams,
   ApiChatCompletionCancelRpcResult,
@@ -84,7 +87,7 @@ interface TurnRoutingOverrides {
 
 interface ChannelPrivacyResolution {
   ok: true;
-  value?: ChannelVisibility;
+  value?: ChannelPrivacy;
 }
 
 interface ChannelPrivacyError {
@@ -103,6 +106,8 @@ interface IdentityClaimHeaders {
 
 interface ActiveRequestState {
   channelId: string;
+  /** Direct model-room completions abort via their own controller instead of the agent loop. */
+  abort?: () => void;
 }
 
 interface ObservedTurnCompletion {
@@ -115,6 +120,8 @@ export interface AgentApiBackendConfig {
   agentLoop: SubstrateAgent;
   eventBus: EventBus;
   sessionManager: SessionManager;
+  /** Required for direct (raw) model completions that bypass the companion turn pipeline. */
+  llmProvider?: LLMProviderPort;
   contactStore?: ContactStorePort;
   healthChecks?: ApiServerHealthChecks;
   schedulerHealthcheckStaleAfterMs?: number;
@@ -128,6 +135,7 @@ export class AgentApiBackend {
   private readonly agentLoop: SubstrateAgent;
   private readonly eventBus: EventBus;
   private readonly sessionManager: SessionManager;
+  private readonly llmProvider: LLMProviderPort | null;
   private readonly contactStore: ContactStorePort | null;
   private readonly healthChecks: ApiServerHealthChecks;
   private readonly schedulerHealthcheckStaleAfterMs: number;
@@ -145,6 +153,7 @@ export class AgentApiBackend {
     this.agentLoop = config.agentLoop;
     this.eventBus = config.eventBus;
     this.sessionManager = config.sessionManager;
+    this.llmProvider = config.llmProvider ?? null;
     this.contactStore = config.contactStore ?? null;
     this.healthChecks = config.healthChecks ?? {};
     this.schedulerHealthcheckStaleAfterMs = this.parseSchedulerHealthcheckStaleAfterMs(
@@ -168,11 +177,14 @@ export class AgentApiBackend {
   }
 
   async handleHealth(): Promise<ApiHealthRpcResult> {
-    return await buildApiHealthResponse({
+    const result = await buildApiHealthResponse({
       healthChecks: this.healthChecks,
       lastSchedulerHealthcheckAtMs: this.lastSchedulerHealthcheckAtMs,
       schedulerHealthcheckStaleAfterMs: this.schedulerHealthcheckStaleAfterMs,
     });
+    const healthAwareAgent = this.agentLoop as Partial<Pick<SubstrateAgent, 'setCompanionSubstrateHealthContext'>>;
+    healthAwareAgent.setCompanionSubstrateHealthContext?.({ apiHealth: result.body });
+    return result.body;
   }
 
   async handleTelemetryIngest(
@@ -195,6 +207,14 @@ export class AgentApiBackend {
     const active = this.activeRequests.get(params.requestId);
     if (!active) {
       return { cancelled: false };
+    }
+    if (active.abort) {
+      active.abort();
+      this.eventBus.emit('api.turn.abort', {
+        channelId: active.channelId,
+        reason: 'client_disconnected',
+      }).catch(() => undefined);
+      return { cancelled: true };
     }
     this.abortActiveTurn(active.channelId, 'client_disconnected');
     return { cancelled: true };
@@ -235,6 +255,18 @@ export class AgentApiBackend {
     signal?: AbortSignal;
     timeoutMs?: number;
   }): Promise<ApiChatCompletionRpcResult> {
+    const overrides = this.parseTurnRoutingOverrides(params.request);
+    if (!overrides.ok) {
+      return this.fail(400, 'invalid_request', overrides.error);
+    }
+    // A provider/model override with system_prompt_mode none|custom is a direct
+    // model conversation (model room): it must not see the companion's memory,
+    // contacts, or session context. system_prompt_mode=default opts back into
+    // the full companion pipeline with the overridden model.
+    if (overrides.value.modelOverride && overrides.value.promptOverride) {
+      return await this.executeDirectModelCompletion(params, overrides.value);
+    }
+
     const pendingTurn = await this.prepareTurn(
       params.request,
       params.headers,
@@ -292,6 +324,7 @@ export class AgentApiBackend {
           channelId: response.channelId,
           inputTokens: response.metadata.inputTokens,
           outputTokens: response.metadata.outputTokens,
+          ...(response.metadata.noReply ? { noReply: response.metadata.noReply } : {}),
         },
       };
     } catch (error) {
@@ -313,6 +346,158 @@ export class AgentApiBackend {
       }
       turnCompletion.dispose();
       unsubscribe();
+      this.activeRequests.delete(params.requestId);
+    }
+  }
+
+  /**
+   * Direct (raw) model completion for model-room participant turns.
+   *
+   * Bypasses the companion turn pipeline entirely: no memory retrieval, no
+   * contact/trust context, no session history, no persona system prompt. The
+   * request messages and the optional custom system prompt are the whole
+   * context. The model hint is pinned so a provider failure surfaces as an
+   * error instead of silently falling back to the companion's chat model.
+   */
+  private async executeDirectModelCompletion(
+    params: {
+      requestId: string;
+      request: ChatCompletionRequest;
+      headers: ApiRpcHeaders;
+      onDelta?: (text: string) => void | Promise<void>;
+      signal?: AbortSignal;
+      timeoutMs?: number;
+    },
+    overrides: TurnRoutingOverrides,
+  ): Promise<ApiChatCompletionRpcResult> {
+    const modelOverride = overrides.modelOverride;
+    const promptOverride = overrides.promptOverride;
+    if (!modelOverride || !promptOverride) {
+      return this.fail(500, 'internal_error', 'Direct model completion requires model and prompt overrides');
+    }
+    if (!this.llmProvider) {
+      return this.fail(
+        503,
+        'direct_model_unavailable',
+        'Direct model completions are unavailable because no LLM provider port is configured',
+      );
+    }
+
+    const messages: ContextMessage[] = [];
+    for (const message of params.request.messages) {
+      if (message.role !== 'user' && message.role !== 'assistant') {
+        return this.fail(
+          400,
+          'invalid_request',
+          'Direct model turns only accept user and assistant messages; use system_prompt_mode=custom with system_prompt for system instructions',
+        );
+      }
+      const text = getMessageTextContent(message).trim();
+      if (!text) continue;
+      messages.push({ role: message.role, content: text });
+    }
+    if (!messages.some(message => message.role === 'user')) {
+      return this.fail(400, 'invalid_request', 'Direct model turns require at least one non-empty user message');
+    }
+
+    const channelId = this.readHeader(params.headers, 'x-channel-id', 256)
+      ?? `api:model-room:${params.requestId}`;
+    const context: LLMContext = {
+      systemPrompt: promptOverride.mode === 'custom' ? promptOverride.systemPrompt ?? '' : '',
+      messages,
+      modelHint: {
+        provider: modelOverride.provider,
+        model: modelOverride.model,
+        pin: true,
+        ...(modelOverride.maxTokens !== undefined ? { maxTokens: modelOverride.maxTokens } : {}),
+      },
+      correlation: {
+        requestId: params.requestId,
+        channelId,
+        callType: 'chat',
+        originType: 'chat',
+        originStage: 'model_room.direct',
+        purpose: 'model_room.direct',
+      },
+    };
+
+    if (params.signal?.aborted) {
+      return this.fail(499, 'request_cancelled', 'Direct model completion cancelled');
+    }
+
+    // Direct completions must stay cancellable: register in activeRequests so
+    // cancelChatCompletion can find them, and pass the per-request AbortSignal
+    // into the provider so cancellation can stop provider work.
+    const abortController = new AbortController();
+    const onExternalAbort = () => abortController.abort();
+    if (params.signal) {
+      if (params.signal.aborted) {
+        abortController.abort();
+      } else {
+        params.signal.addEventListener('abort', onExternalAbort, { once: true });
+      }
+    }
+    this.activeRequests.set(params.requestId, {
+      channelId,
+      abort: () => abortController.abort(),
+    });
+    const abortPromise = new Promise<never>((_, reject) => {
+      const rejectCancelled = () => reject(new Error('api_chat_completion_cancelled'));
+      if (abortController.signal.aborted) {
+        rejectCancelled();
+      } else {
+        abortController.signal.addEventListener('abort', rejectCancelled, { once: true });
+      }
+    });
+
+    const timeoutMs = this.normalizeChatCompletionTimeoutMs(params.timeoutMs);
+    let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const completion = this.llmProvider.complete(context, 'reasoning', {
+        signal: abortController.signal,
+      });
+      const response = timeoutMs === null
+        ? await Promise.race([completion, abortPromise])
+        : await Promise.race([
+          completion,
+          abortPromise,
+          new Promise<never>((_, reject) => {
+            timeoutHandle = setTimeout(() => {
+              reject(new Error('api_chat_completion_timeout'));
+            }, timeoutMs);
+            timeoutHandle.unref();
+          }),
+        ]);
+      if (!response.content || !response.content.trim()) {
+        return this.fail(502, 'model_error', `Direct model ${modelOverride.provider}/${modelOverride.model} returned empty content`);
+      }
+      // Direct completions do not stream; emit the full text as one delta so
+      // SSE clients still receive content.
+      await params.onDelta?.(response.content);
+      return {
+        ok: true,
+        response: {
+          content: response.content,
+          channelId,
+          inputTokens: response.inputTokens,
+          outputTokens: response.outputTokens,
+        },
+      };
+    } catch (error) {
+      if (error instanceof Error && error.message === 'api_chat_completion_cancelled') {
+        return this.fail(499, 'request_cancelled', 'Direct model completion cancelled');
+      }
+      if (error instanceof Error && error.message === 'api_chat_completion_timeout') {
+        return this.fail(504, 'request_timeout', 'Direct model completion timed out');
+      }
+      return this.fail(502, 'model_error', `Direct model ${modelOverride.provider}/${modelOverride.model} failed: ${toErrorMessage(error)}`);
+    } finally {
+      if (params.signal) {
+        params.signal.removeEventListener('abort', onExternalAbort);
+      }
+      if (timeoutHandle) {
+        clearTimeout(timeoutHandle);
+      }
       this.activeRequests.delete(params.requestId);
     }
   }
@@ -478,7 +663,7 @@ export class AgentApiBackend {
     messages: ChatCompletionRequest['messages'],
     authorId: string,
     authorName: string,
-    channelPrivacy?: ChannelVisibility,
+    channelPrivacy?: ChannelPrivacy,
   ): void {
     const count = this.sessionManager.getMessageCount(channelId);
     if (count > 0) return;
@@ -526,10 +711,10 @@ export class AgentApiBackend {
     if (!rawValue) {
       return { ok: true };
     }
-    if (!isChannelVisibility(rawValue)) {
+    if (!isChannelPrivacy(rawValue)) {
       return {
         ok: false,
-        error: 'X-Channel-Privacy must be one of: private, semi_private, public, broadcast',
+        error: 'X-Channel-Privacy must be one of: private, invite_only, public, broadcast',
       };
     }
     return { ok: true, value: rawValue };
@@ -804,7 +989,7 @@ export class AgentApiBackend {
     authorName: string;
     headers: ApiRpcHeaders;
     overrides: TurnRoutingOverrides;
-    channelPrivacy?: ChannelVisibility;
+    channelPrivacy?: ChannelPrivacy;
     canonicalContactId?: string;
     satellite?: SatelliteRoutingMetadata;
     attachments?: Attachment[];

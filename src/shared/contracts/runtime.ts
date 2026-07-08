@@ -1,14 +1,20 @@
 import type { ContextManifest } from '../../core/session/context-manifest.js';
 import type { CompanionPresenceMetadata, EmbodimentPresenceMetadata } from '../../core/agent/presence-metadata.js';
 import type { CredentialReference } from '../../boundary/custody/credential-vault.js';
-import type { ChannelVisibility, TrustLevel } from '../../system/trust/types.js';
+import type { TrustLevel } from '../../system/trust/types.js';
+import type { ChannelPrivacy } from '../../system/trust/context-envelope.js';
 import type { TurnID } from '../../core/turns/types.js';
 import type { ModelContextBudgetConfig } from '../context-budget-contracts.js';
 import type {
   ChargePolicyRuntimeLane,
   ChargePolicySurface,
+  FatiguePolicyChannelSetting,
+  FatiguePolicyIntent,
+  FatiguePolicyRelationshipClass,
+  FatiguePolicyState,
 } from './charge-policy.js';
 import type { SatelliteRoutingMetadata } from './satellite-registry.js';
+import type { GatewayRoutingEnvelope } from '../routing/envelope.js';
 
 // ── Channel-agnostic message types ──
 
@@ -31,6 +37,17 @@ export interface TurnRecordToolCall {
   toolName: string;
   toolCallId?: string;
   isError?: boolean;
+  provenanceRefs?: string[];
+  /** Normalized input arguments the model issued for this tool call. */
+  arguments?: Record<string, unknown>;
+  /** Text result returned by the tool (present once the result is observed). */
+  resultText?: string;
+  /** Structured result details returned by the tool, when provided. */
+  details?: unknown;
+  /** Assistant reasoning that accompanied the tool call, when captured. */
+  rationale?: string;
+  /** Provider thought signature attached to the tool call, when captured. */
+  thoughtSignature?: string;
 }
 
 export interface TurnRecordVersionPointers {
@@ -70,10 +87,7 @@ export interface WyomingShardDelegationHint {
   reason: string;
 }
 
-export interface GatewayRoutingMetadata {
-  schemaVersion: 1;
-  companionId: string;
-}
+export interface GatewayRoutingMetadata extends GatewayRoutingEnvelope {}
 
 export interface WyomingRoutingMetadata {
   connectionId?: string;
@@ -166,7 +180,7 @@ export interface CorrelationMetadata extends LLMRequestMetadata {
   callType: ObservabilityCallType;
   purpose: string;
   viewerTrustLevel?: TrustLevel;
-  viewerChannelVisibility?: ChannelVisibility;
+  viewerChannelPrivacy?: ChannelPrivacy;
   viewerIsDirectMessage?: boolean;
   embodimentContext?: EmbodimentPresenceMetadata;
 }
@@ -179,6 +193,18 @@ export interface GeneratedMessageProvenanceMetadata {
   sourceAuthorName: string;
 }
 
+/**
+ * E1.7: self-contained ConversationScope decision for scheduler-dispatched
+ * reflection/heartbeat turns. Deliberately structural (no core/session import)
+ * so the shared contract layer stays clean. A `group` hint makes the reflection
+ * reflect on the ROOM: no single canonical contact is bound and continuity keys
+ * become room-based. A `dm` hint (or absence) leaves reflection binding
+ * byte-identical to the pre-E1.7 behavior.
+ */
+export type ReflectionScopeHint =
+  | { kind: 'dm'; contactId: string; displayName?: string }
+  | { kind: 'group'; roomId: string; roomName?: string };
+
 export interface MessageRoutingMetadata {
   source?: 'wyoming' | 'discord' | 'api' | 'psfn-amica' | 'satellite' | 'unknown';
   /**
@@ -186,11 +212,21 @@ export interface MessageRoutingMetadata {
    * context but must not trigger model response generation or channel egress.
    */
   responseMode?: 'respond' | 'observe';
+  /**
+   * Provenance-honest marker that the message author is another machine
+   * intelligence (peer companion/agent), sourced from CHANNEL bot/app metadata
+   * (e.g. Discord `author.bot`). Consumed by author-context resolution to
+   * auto-tag the contact as machine-intelligence so conversation-fatigue
+   * relationship classes apply without manual tagging. Observation only ever
+   * ADDS the marker; a deliberate operator/tool correction on the contact
+   * (non-`system:` audit actor) is never clobbered by re-observation.
+   */
+  authorIsMachineIntelligence?: boolean;
   gateway?: GatewayRoutingMetadata;
   wyoming?: WyomingRoutingMetadata;
   satellite?: SatelliteRoutingMetadata;
   broadcast?: BroadcastRoutingMetadata;
-  channelPrivacy?: ChannelVisibility;
+  channelPrivacy?: ChannelPrivacy;
   modelOverride?: MessageModelOverride;
   promptOverride?: MessagePromptOverride;
   responseStyle?: ResponseStyle;
@@ -202,6 +238,20 @@ export interface MessageRoutingMetadata {
   canonicalContactId?: string;
   /** Internal provenance for generated messages so runtime handoffs do not masquerade as user-authored turns. */
   generated?: GeneratedMessageProvenanceMetadata;
+  /**
+   * E1.7: explicit ConversationScope decision for scheduler-dispatched
+   * reflection/heartbeat turns. When present with `kind: 'group'`, the turn
+   * pipeline reflects on the ROOM (`roomId`), binds no single canonical contact,
+   * and derives room-based continuity fallback keys. Absent (or `kind: 'dm'`)
+   * leaves the existing DM/internal reflection binding byte-identical.
+   */
+  reflectionScope?: ReflectionScopeHint;
+  workerExecution?: {
+    lane: string;
+    profileClass: string;
+    modelPurpose: ModelPurpose;
+    failClosed: boolean;
+  };
 }
 
 export interface SubstrateMessage {
@@ -262,15 +312,150 @@ export interface RunChargeLineage {
 }
 
 export interface RunChargeEvent extends Partial<CorrelationMetadata> {
+  /** Stable per-event identity; rolling-window dedupe collapses only exact replays of the same event. */
+  eventId: string;
   timestampMs: number;
   lane: ChargePolicyRuntimeLane;
   surface: ChargePolicySurface;
   amount: number;
+  /** Lane quota from charge-policy.json; enforced per run and over the shared rolling 24h window. */
   quota: number;
+  /** Rolling 24h lane spend after this event, shared across root runs and nested children. */
   spentAfter: number;
+  /** Rolling 24h lane quota remaining after this event. */
   remainingAfter: number;
   lineage: RunChargeLineage;
   details?: Record<string, unknown>;
+}
+
+export type FatigueBudgetDecision = 'charged' | 'free' | 'overcharge';
+
+export type FatigueBudgetReason =
+  | 'machine_intelligence_response'
+  | 'overcharge_recent_human_participation'
+  | 'overcharge_work_intent_wrapup'
+  | 'peer_not_machine_intelligence'
+  | 'triggering_author_not_machine_intelligence';
+
+export type FatigueBudgetSoftState = 'clear' | 'soft_limit_reached';
+
+export type FatigueBudgetHardState = 'available' | 'exhausted';
+
+export type FatigueTriggeringAuthorRole =
+  | 'human'
+  | 'machine_intelligence'
+  | 'system'
+  | 'unknown';
+
+export interface FatigueBudgetActorSnapshot {
+  role: FatigueTriggeringAuthorRole;
+  contactId?: string;
+  channelAuthorId?: string;
+  displayName?: string;
+  isMachineIntelligence?: boolean;
+}
+
+export interface FatigueBudgetPeerSnapshot {
+  contactId: string;
+  displayName?: string;
+  channelAuthorId?: string;
+  isMachineIntelligence?: boolean;
+}
+
+export interface FatigueBudgetEvent extends Partial<CorrelationMetadata> {
+  timestampMs: number;
+  dayKey: string;
+  localCompanionId: string;
+  peerContactId: string;
+  channelId: string;
+  triggeringAuthor: FatigueBudgetActorSnapshot;
+  peer: FatigueBudgetPeerSnapshot;
+  amount: number;
+  decision: FatigueBudgetDecision;
+  reason: FatigueBudgetReason;
+  spentAfter: number;
+  remainingAllowance: number;
+  allowance: number;
+  softLimit: number;
+  normalSpentAfter?: number;
+  overchargeSpentAfter?: number;
+  overchargeAllowance?: number;
+  remainingOvercharge?: number;
+  softState: FatigueBudgetSoftState;
+  hardState: FatigueBudgetHardState;
+  lineage?: RunChargeLineage;
+  details?: Record<string, unknown>;
+}
+
+export type FatigueEnforcementDecision =
+  | 'allowed_free'
+  | 'allowed_charged'
+  | 'wrap_up_charged'
+  | 'overcharge_charged'
+  | 'suppressed_hard_exhausted';
+
+export interface FatigueEnforcementBudgetMetadata {
+  spentBefore: number;
+  remainingBefore: number;
+  allowance: number;
+  softLimit: number;
+  hardLimit: number;
+  amount: number;
+  spentAfterProjected: number;
+  remainingAfterProjected: number;
+  normalSpentBefore: number;
+  normalSpentAfterProjected: number;
+  overchargeSpentBefore: number;
+  overchargeSpentAfterProjected: number;
+  overchargeAllowance: number;
+  overchargeRemainingBefore: number;
+  overchargeRemainingAfterProjected: number;
+}
+
+export interface FatigueRecordedEventMetadata {
+  timestampMs: number;
+  amount: number;
+  decision: FatigueBudgetDecision;
+  reason: FatigueBudgetReason;
+  spentAfter: number;
+  remainingAllowance: number;
+  normalSpentAfter?: number;
+  overchargeSpentAfter?: number;
+  overchargeAllowance?: number;
+  remainingOvercharge?: number;
+  softState: FatigueBudgetSoftState;
+  hardState: FatigueBudgetHardState;
+}
+
+export interface FatigueEnforcementMetadata {
+  schemaVersion: 1;
+  decision: FatigueEnforcementDecision;
+  modelDisposition: 'allowed' | 'suppressed';
+  alertInjected: boolean;
+  shouldRecordSpend: boolean;
+  spendDecision: FatigueBudgetDecision;
+  spendReason: FatigueBudgetReason;
+  policyState: FatiguePolicyState;
+  policyBaseState: Exclude<FatiguePolicyState, 'overcharge_eligible'>;
+  intent: FatiguePolicyIntent;
+  relationshipClass: FatiguePolicyRelationshipClass;
+  channelSetting: FatiguePolicyChannelSetting;
+  overchargeEligible: boolean;
+  overchargePermitted: boolean;
+  overchargeBlockedReasons: string[];
+  overchargeReasons: string[];
+  scope: FatigueBudgetScopeSnapshot;
+  peer: FatigueBudgetPeerSnapshot;
+  triggeringAuthor: FatigueBudgetActorSnapshot;
+  budget: FatigueEnforcementBudgetMetadata;
+  recordedEvent?: FatigueRecordedEventMetadata;
+}
+
+export interface FatigueBudgetScopeSnapshot {
+  localCompanionId: string;
+  peerContactId: string;
+  channelId: string;
+  dayKey: string;
 }
 
 export interface ResponseMetadata {
@@ -278,6 +463,7 @@ export interface ResponseMetadata {
   inputTokens: number;
   outputTokens: number;
   durationMs: number;
+  noReply?: IntentionalNoReplyMetadata;
   internalState?: import('../../core/self-model/state.js').InternalState;
   internalStateSnapshotRef?: string;
   metacognitiveFlags?: import('../../core/self-model/metacognition.js').MetacognitiveFlag[];
@@ -310,6 +496,20 @@ export interface ResponseMetadata {
     approvalRequired: boolean;
     provenanceRefs: string[];
   };
+  fatigue?: FatigueEnforcementMetadata;
+}
+
+export interface IntentionalNoReplyMetadata {
+  schemaVersion: 1;
+  disposition: 'intentional_no_reply';
+  source: 'response_control_tool';
+  auditId: string;
+  decidedAt: number;
+  turnId: TurnID;
+  requestId?: string;
+  channelId?: string;
+  toolCallId?: string;
+  reason?: string;
 }
 
 export interface TurnUsage {
@@ -335,9 +535,87 @@ export interface ToolSchema {
 
 export type Role = 'user' | 'assistant' | 'system';
 
+export type AuthenticityProvenanceKind =
+  | 'user_direct'
+  | 'companion_direct'
+  | 'compaction_summary'
+  | 'system_note'
+  | 'system_injection'
+  | 'memory_retrieval'
+  | 'extraction_artifact'
+  | 'projection'
+  | 'search_result'
+  | 'tool_result'
+  | 'redacted_transformed';
+
+export type AuthenticitySourceAuthor =
+  | 'partner'
+  | 'companion'
+  | 'system'
+  | 'tool'
+  | 'memory'
+  | 'mixed'
+  | 'unknown';
+
+export type AuthenticityTransformer =
+  | 'none'
+  | 'runtime'
+  | 'compaction'
+  | 'retrieval'
+  | 'extraction'
+  | 'projection'
+  | 'redaction'
+  | 'tool'
+  | 'system';
+
+export type AuthenticityWording = 'direct' | 'derived' | 'transformed' | 'redacted';
+export type AuthenticityDetailLossRisk = 'none' | 'possible' | 'likely';
+export type AuthenticityEmotionalTexture = 'preserved' | 'may_be_flattened' | 'unknown';
+
+export interface AuthenticityProvenance {
+  schemaVersion: 1;
+  kind: AuthenticityProvenanceKind;
+  sourceAuthor: AuthenticitySourceAuthor;
+  transformedBy: AuthenticityTransformer;
+  wording: AuthenticityWording;
+  directSpeech: boolean;
+  detailLoss: AuthenticityDetailLossRisk;
+  emotionalTexture: AuthenticityEmotionalTexture;
+  safeAsPartnerSpeech: boolean;
+  sourceSpanCount?: number;
+  sourceEntryIds?: number[];
+  notes?: string[];
+}
+
 export interface ContextMessage {
   role: Role;
   content: string;
+  provenance?: AuthenticityProvenance;
+}
+
+/** Scope class for a prompt block: DM contact, room/channel, or global. */
+export type PromptSectionScopeClass = 'dm' | 'room' | 'global';
+
+export type PromptSectionVolatilityClass = 'static' | 'session_stable' | 'append_only' | 'volatile';
+
+/**
+ * Per-block producer + scope labels (Loom block inspection, bead u9jo.3).
+ * Distinct from `AuthenticityProvenance` (which describes source authorship /
+ * authenticity of the rendered text); this describes WHICH producer emitted the
+ * block and WHAT scope it was keyed to. Interim shape carried on the current
+ * snapshot; a later epic replaces the plumbing but keeps this UI contract.
+ */
+export interface PromptSectionScopeProvenance {
+  /** Producer module/function that emitted the block. */
+  producer?: string;
+  /** Resolved scope key: `dm:<contactId>` / `room:<channelId>` / `global`. */
+  scopeKey?: string;
+  /** Scope class the block was keyed to. */
+  scopeClass?: PromptSectionScopeClass;
+  /** Volatility / cacheability class, when determinable. */
+  volatility?: PromptSectionVolatilityClass;
+  /** Source data hint (e.g. core-memory scope key, memory IDs). */
+  sourceHint?: string;
 }
 
 export interface PromptSectionTelemetry {
@@ -346,16 +624,52 @@ export interface PromptSectionTelemetry {
   content: string;
   charCount: number;
   tokenCount: number;
+  /** Source authorship / authenticity of the rendered text. */
+  provenance?: AuthenticityProvenance;
+  /** Producer module + scope labels for Loom block inspection (bead u9jo.3). */
+  scopeProvenance?: PromptSectionScopeProvenance;
 }
 
 export interface LLMContext {
   systemPrompt: string;
+  /**
+   * Ordered nonempty session-derived blocks appended to the base system
+   * prompt by the session context builder (memories, compaction summaries,
+   * orientation, continuity, ...). Consumed by the PromptPlan builder so the
+   * plan carries the same blocks the systemPrompt string was joined from.
+   */
+  sessionPromptBlocks?: Array<{ id: string; content: string }>;
   messages: ContextMessage[];
   tools?: ToolSchema[];
   modelHint?: LLMModelHint;
   correlation?: CorrelationMetadata;
   manifest?: ContextManifest;
   systemPromptSections?: PromptSectionTelemetry[];
+  /**
+   * PromptPlan cachePlan boundaries for `systemPrompt` (E2.4). Only attached
+   * when the models.json promptCaching policy is enabled; consumers verify the
+   * prefix hashes before applying provider cache breakpoints.
+   */
+  promptCacheBoundaries?: LLMSystemPromptCacheBoundaries;
+}
+
+export interface LLMUsageCostDetails {
+  input?: number;
+  output?: number;
+  cacheRead?: number;
+  cacheWrite?: number;
+  total?: number;
+  currency?: string;
+}
+
+export interface LLMUsageDetails {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+  totalTokens: number;
+  cost?: LLMUsageCostDetails;
+  raw?: Record<string, unknown>;
 }
 
 export interface StreamCallbacks {
@@ -373,6 +687,7 @@ export interface LLMResponse {
   model: string;
   inputTokens: number;
   outputTokens: number;
+  usageDetails?: LLMUsageDetails;
   stopReason: string;
 }
 
@@ -400,6 +715,25 @@ export type PromptCacheStrategy = 'openai_responses';
 export type PromptCacheRetention = 'none' | 'short' | 'long';
 export type PromptCacheScope = 'channel' | 'request';
 
+/**
+ * Provider cache engagement mechanism resolved per request (E2.4):
+ * - anthropic_cache_control: cache_control breakpoints at PromptPlan cachePlan
+ *   boundaries on the anthropic-messages API.
+ * - openrouter_cache_control_passthrough: cache_control breakpoints embedded in
+ *   the OpenAI-completions system message parts; OpenRouter forwards them to
+ *   Anthropic backends.
+ * - openai_prompt_cache_key: prompt_cache_key / prompt_cache_retention params
+ *   on the OpenAI responses API.
+ * - implicit_prefix: no request-level knob exists for the provider; the
+ *   engagement is the byte-stable static prefix itself (OpenRouter open
+ *   models, local runners).
+ */
+export type PromptCacheMechanism =
+  | 'anthropic_cache_control'
+  | 'openrouter_cache_control_passthrough'
+  | 'openai_prompt_cache_key'
+  | 'implicit_prefix';
+
 export interface LLMPromptCacheObservability {
   configured: boolean;
   engaged: boolean;
@@ -408,6 +742,43 @@ export interface LLMPromptCacheObservability {
   scope?: PromptCacheScope;
   sessionId?: string;
   reason?: 'disabled' | 'missing_channel_id';
+  /** Mechanism actually applied to the provider request (E2.4). */
+  mechanism?: PromptCacheMechanism;
+  /** cache_control breakpoints applied to the serialized system prompt. */
+  appliedBreakpoints?: number;
+  /** PromptPlan cachePlan boundaries projected onto the serialized system prompt. */
+  boundaries?: {
+    staticPrefixChars: number;
+    sessionStablePrefixChars: number;
+  };
+  /** Provider-reported cache usage for the turn, when the provider returns it. */
+  usage?: {
+    cacheReadTokens: number;
+    cacheWriteTokens: number;
+  };
+  /** Per-turn static-prefix stability check against the previous turn on the same scope. */
+  prefixStability?: {
+    checked: boolean;
+    stable?: boolean;
+    firstObservation?: boolean;
+    scopeKey?: string;
+    changedBlockIds?: string[];
+  };
+}
+
+/**
+ * PromptPlan cachePlan boundaries projected onto the serialized provider
+ * system prompt (char offsets + content hashes). Carried as plain data on
+ * LLMContext so the provider client — local or across the gateway RPC — can
+ * verify the prefix bytes before applying provider cache breakpoints.
+ * Fail-closed: a hash mismatch means the boundaries are stale and no
+ * breakpoints are applied.
+ */
+export interface LLMSystemPromptCacheBoundaries {
+  staticPrefixChars: number;
+  staticPrefixHash: string;
+  sessionStablePrefixChars: number;
+  sessionStablePrefixHash: string;
 }
 
 export interface LLMProviderObservability {
@@ -571,10 +942,33 @@ export interface ModelRegistryEntry {
   metadata?: Record<string, unknown>;
 }
 
+/**
+ * Registry-wide provider prompt-caching policy (models.json owner, E2.4).
+ *
+ * `enabled` is the master switch and seeds OFF: the operator flips it to true
+ * after verifying cache engagement on a test channel. When disabled, no
+ * provider request carries any cache parameter (zero wire change). When
+ * enabled, per-provider serializers engage the mechanism the pi-ai layer
+ * actually supports (Anthropic cache_control breakpoints at PromptPlan
+ * boundaries, OpenRouter anthropic cache_control passthrough, OpenAI
+ * responses prompt_cache_key; byte-stable-prefix-only providers get telemetry
+ * without wire changes).
+ *
+ * `retention` ('none' | 'short' | 'long', default 'short') and `scope`
+ * ('channel' | 'request', default 'channel') tune cache lifetime and the
+ * session key used by providers with session-based caching.
+ */
+export interface ModelRegistryPromptCachingPolicy {
+  enabled: boolean;
+  retention?: PromptCacheRetention;
+  scope?: PromptCacheScope;
+}
+
 export interface CanonicalModelRegistry {
   schemaVersion: 1;
   models: ModelRegistryEntry[];
   budgetPolicy?: ModelRegistryBudgetPolicy;
+  promptCaching?: ModelRegistryPromptCachingPolicy;
 }
 
 export interface ModelUsageLedgerRecord {
@@ -620,8 +1014,8 @@ export interface ModelBudgetBlockedEvent extends Partial<CorrelationMetadata> {
   budget: ModelBudgetWindowSnapshot;
 }
 
-export type ModelPurpose = 'chat' | 'background' | 'memory' | 'context' | 'reasoning' | 'longContext' | 'vision';
-export type CompletionPurpose = 'background' | 'memory' | 'context' | 'extraction' | 'summary' | 'reasoning' | 'import_processing' | 'vision';
+export type ModelPurpose = 'chat' | 'background' | 'memory' | 'context' | 'reasoning' | 'longContext' | 'vision' | 'moa';
+export type CompletionPurpose = 'chat' | 'background' | 'memory' | 'context' | 'extraction' | 'summary' | 'reasoning' | 'import_processing' | 'vision';
 export type ImportProcessingRouteMode = 'background' | 'openrouter_zdr' | 'local_endpoint';
 export const COMPOSITIONAL_PURPOSES = [
   'extraction',
@@ -638,10 +1032,116 @@ export const IMPORT_PROCESSING_ROUTE_MODES: readonly ImportProcessingRouteMode[]
   'local_endpoint',
 ];
 
+export const OBSERVER_EVAL_SIDECAR_DEPLOYMENT_TARGETS = [
+  'live',
+  'eval',
+  'test_persona',
+] as const;
+export type ObserverEvalSidecarDeploymentTarget =
+  typeof OBSERVER_EVAL_SIDECAR_DEPLOYMENT_TARGETS[number];
+
+export const OBSERVER_EVAL_SIDECAR_MODES = [
+  'observe_only',
+] as const;
+export type ObserverEvalSidecarMode =
+  typeof OBSERVER_EVAL_SIDECAR_MODES[number];
+
+export const OBSERVER_EVAL_SIDECAR_ADAPTER_KINDS = [
+  'disabled',
+  'emosim_server',
+] as const;
+export type ObserverEvalSidecarAdapterKind =
+  typeof OBSERVER_EVAL_SIDECAR_ADAPTER_KINDS[number];
+
+export type ObserverEvalSidecarOverflowPolicy = 'drop_newest';
+
+export interface ObserverEvalSidecarQueueSettings {
+  maxQueuedTurns: number;
+  overflowPolicy: ObserverEvalSidecarOverflowPolicy;
+  observerTimeoutMs: number;
+  maxRetries: number;
+  retryDelayMs: number;
+  shutdownDrainTimeoutMs: number;
+}
+
+export interface ObserverEvalSidecarAdapterSettings {
+  kind: ObserverEvalSidecarAdapterKind;
+  /**
+   * Base URL of the long-lived emo_sim server (HTTP JSON API), e.g.
+   * http://psfn-emosim:17342. Required when kind=emosim_server and the
+   * sidecar is enabled. The emo_sim API is unauthenticated by design; it
+   * must only be reachable over loopback or a cluster-internal service.
+   */
+  serverUrl?: string;
+  /** Stable emo_sim session label. Found-or-created once; never recreated. */
+  sessionLabel?: string;
+  /** Stable emo_sim human-agent name representing the companion. */
+  agentName?: string;
+  timeoutMs?: number;
+  includeWorldState: boolean;
+}
+
+export interface ObserverEvalSidecarPersistenceSettings {
+  enabled: boolean;
+  rootDir?: string;
+  retentionDays: number;
+  maxStoredObservations: number;
+}
+
+export interface ObserverEvalSidecarGardenExposureSettings {
+  exposeHealth: boolean;
+  exposeTelemetry: boolean;
+}
+
+/**
+ * Shadow trigger levers over the observer sidecar's simulated emotion state.
+ * TRACKING ONLY: lever events are write-only telemetry for the Garden admin
+ * surface. Nothing in the live companion loop may read or act on them.
+ */
+export interface ObserverEvalSidecarLeverSettings {
+  enabled: boolean;
+  /** Minimum ms between refires of the same lever without a full condition reset. */
+  cooldownMs: number;
+  wouldMessage: {
+    enabled: boolean;
+    socialNeedThreshold: number;
+    attachmentIntensityThreshold: number;
+    sustainMs: number;
+  };
+  wouldCheckIn: {
+    enabled: boolean;
+    valenceThreshold: number;
+    sustainMs: number;
+  };
+  wouldRest: {
+    enabled: boolean;
+    sleepPressureThreshold: number;
+    arousalThreshold: number;
+    sustainMs: number;
+  };
+  ruminationWatch: {
+    enabled: boolean;
+    intensityThreshold: number;
+    sustainMs: number;
+  };
+}
+
+export interface ObserverEvalSidecarSettings {
+  enabled: boolean;
+  sidecarId: string;
+  deploymentTarget: ObserverEvalSidecarDeploymentTarget;
+  mode: ObserverEvalSidecarMode;
+  queue: ObserverEvalSidecarQueueSettings;
+  adapter: ObserverEvalSidecarAdapterSettings;
+  persistence: ObserverEvalSidecarPersistenceSettings;
+  garden: ObserverEvalSidecarGardenExposureSettings;
+  levers?: ObserverEvalSidecarLeverSettings;
+}
+
 export interface RuntimeConfigHooks {
   refreshModels?: () => void;
   refreshCapabilities?: () => void;
-  invalidatePromptPrefixCache?: () => void;
+  invalidatePromptPrefixCache?: (reason?: string) => void;
   persistPromotedExtendedTools?: (toolNames: readonly string[]) => void;
 }
 

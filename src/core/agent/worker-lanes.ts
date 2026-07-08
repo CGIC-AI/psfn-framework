@@ -236,7 +236,12 @@ export function resolveRuntimeLaneClassForPostTurnActionKind(
   if (normalized === 'tool_handoff.continue') {
     return BACKGROUND_CONTINUATION_RUNTIME_CLASS;
   }
-  if (normalized === 'heartbeat.run_template' || normalized === 'memory.sleeptime.run') {
+  if (
+    normalized === 'heartbeat.run_template'
+    || normalized === 'memory.sleeptime.run'
+    || normalized === 'memory.near-turn.run'
+    || normalized === 'memory.episode-synthesis.run'
+  ) {
     return MAINTENANCE_REFLECTION_RUNTIME_CLASS;
   }
   return POST_TURN_APPRAISAL_RUNTIME_CLASS;

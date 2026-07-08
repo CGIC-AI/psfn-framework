@@ -36,14 +36,14 @@ describe('presence metadata contract', () => {
       embodimentId: 'display',
       satelliteId: 'kitchen',
       companionId: TEST_COMPANION_ID,
-      channelPrivacy: 'semi_private',
+      channelPrivacy: 'invite_only',
     })).toEqual({
       kind: 'embodiment',
       siteId: 'ha-main',
       embodimentId: 'display',
       satelliteId: 'kitchen',
       companionId: TEST_COMPANION_ID,
-      channelPrivacy: 'semi_private',
+      channelPrivacy: 'invite_only',
     });
 
     expect(buildEmanationPresenceMetadata({

@@ -3,10 +3,55 @@ import {
   buildPromptContextSectionCacheability,
   buildStaticPromptSettingsHash,
   captureTurnPromptSnapshot,
+  resolveStaticPromptPrefixFromAppCache,
 } from './prompt-lifecycle.js';
+import { createMemoryAppCache } from '../../../shared/cache/memory-cache.js';
 import type { PromptComposer } from '../../identity/prompt-composer.js';
 
 describe('prompt-lifecycle cacheability', () => {
+  it('caches only rendered static prompt prefixes through the app cache', async () => {
+    const cache = createMemoryAppCache();
+    const events: unknown[] = [];
+    const first = await resolveStaticPromptPrefixFromAppCache({
+      cache,
+      cacheKey: 'channel::api::contact-1',
+      staticPrefixTemplate: 'BASE {{user}}',
+      staticHash: 'static-hash',
+      settingsHash: 'settings-hash',
+      now: new Date('2026-04-04T10:00:00.000-04:00'),
+      variables: {
+        user: 'Operator',
+      },
+      onCacheEvent: event => events.push(event),
+    });
+    const second = await resolveStaticPromptPrefixFromAppCache({
+      cache,
+      cacheKey: 'channel::api::contact-1',
+      staticPrefixTemplate: 'BASE {{user}}',
+      staticHash: 'static-hash',
+      settingsHash: 'settings-hash',
+      now: new Date('2026-04-04T10:30:00.000-04:00'),
+      variables: {
+        user: 'Different user should not render on hit',
+      },
+      onCacheEvent: event => events.push(event),
+    });
+
+    expect(first).toBe('BASE Operator');
+    expect(second).toBe('BASE Operator');
+    expect(cache.getStats()).toMatchObject({
+      hits: 1,
+      misses: 1,
+      sets: 1,
+    });
+    expect(events).toEqual([
+      expect.objectContaining({ event: 'miss', cacheKeyHash: expect.any(String) }),
+      expect.objectContaining({ event: 'stored', cacheKeyHash: expect.any(String) }),
+      expect.objectContaining({ event: 'hit', cacheKeyHash: expect.any(String) }),
+    ]);
+    expect(JSON.stringify(events)).not.toContain('Operator');
+  });
+
   it('builds a stable settings hash regardless of variable order or now_iso churn', () => {
     const baseline = buildStaticPromptSettingsHash({
       user: 'Operator',
@@ -29,6 +74,75 @@ describe('prompt-lifecycle cacheability', () => {
 
     expect(reordered).toBe(baseline);
     expect(changedStableSetting).not.toBe(baseline);
+  });
+
+  it('ignores volatile unreferenced runtime fields in the static settings hash', () => {
+    const staticPrefixTemplate = [
+      '<identity>{{char_name}}</identity>',
+      '<style>{{personality}}</style>',
+    ].join('\n');
+    const baseline = buildStaticPromptSettingsHash({
+      char_name: 'Purrsephone',
+      personality: 'Warm and precise.',
+      user: 'Vega',
+      user_id: 'discord:vega',
+      channel_id: 'discord:group:1',
+      runtime_current_datetime_iso: '2026-04-04T10:00:00.000-04:00',
+      runtime_charge_budget_body: '24 remaining',
+      memory_context: 'remembered item A',
+      now_iso: '2026-04-04T10:00:00.000-04:00',
+    }, staticPrefixTemplate);
+    const volatileOnlyChange = buildStaticPromptSettingsHash({
+      char_name: 'Purrsephone',
+      personality: 'Warm and precise.',
+      user: 'Different speaker',
+      user_id: 'discord:different',
+      channel_id: 'discord:group:2',
+      runtime_current_datetime_iso: '2026-04-04T10:30:00.000-04:00',
+      runtime_charge_budget_body: '4 remaining',
+      memory_context: 'remembered item B',
+      now_iso: '2026-04-04T10:30:00.000-04:00',
+    }, staticPrefixTemplate);
+    const stableIdentityChange = buildStaticPromptSettingsHash({
+      char_name: 'Artemis',
+      personality: 'Warm and precise.',
+      user: 'Vega',
+      runtime_current_datetime_iso: '2026-04-04T10:00:00.000-04:00',
+      runtime_charge_budget_body: '24 remaining',
+      memory_context: 'remembered item A',
+      now_iso: '2026-04-04T10:00:00.000-04:00',
+    }, staticPrefixTemplate);
+
+    expect(volatileOnlyChange).toBe(baseline);
+    expect(stableIdentityChange).not.toBe(baseline);
+  });
+
+  it('includes {{#if}} guard variables in the static settings hash', () => {
+    const staticPrefixTemplate = [
+      '<identity>{{char_name}}</identity>',
+      '{{#if personality}}<style>Stay in voice.</style>{{/if}}',
+    ].join('\n');
+    const baseline = buildStaticPromptSettingsHash({
+      char_name: 'Companion',
+      personality: 'Warm and precise.',
+      user: 'Operator',
+    }, staticPrefixTemplate);
+    const guardVariableChange = buildStaticPromptSettingsHash({
+      char_name: 'Companion',
+      personality: '',
+      user: 'Operator',
+    }, staticPrefixTemplate);
+    const guardVariableSame = buildStaticPromptSettingsHash({
+      char_name: 'Companion',
+      personality: 'Warm and precise.',
+      user: 'Someone else — not referenced by the template',
+    }, staticPrefixTemplate);
+
+    // A variable used only inside a {{#if ...}} guard changes the rendered
+    // output, so it must invalidate the static-prefix cache.
+    expect(guardVariableChange).not.toBe(baseline);
+    // Unreferenced variables stay filtered out of the hash.
+    expect(guardVariableSame).toBe(baseline);
   });
 
   it('annotates template sections with cacheability classes and breakers', () => {

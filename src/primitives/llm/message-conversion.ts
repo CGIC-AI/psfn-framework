@@ -1,3 +1,4 @@
+import { isObjectRecord as isRecord } from '../../shared/utils/types.js';
 import type {
   AssistantMessage,
   ImageContent,
@@ -14,7 +15,7 @@ const SYSTEM_CONTEXT_OPEN_TAG = '<session_context>';
 const SYSTEM_CONTEXT_CLOSE_TAG = '</session_context>';
 type AssistantContentBlock = TextContent | ThinkingContent | ToolCall;
 
-interface LooseContextMessage extends Partial<ContextMessage> {
+interface LooseContextMessage {
   role?: unknown;
   content?: unknown;
   timestamp?: unknown;
@@ -43,9 +44,6 @@ interface GenericBlock {
   arguments?: unknown;
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === 'object';
-}
 
 function createInternalAssistantMessage(
   content: string,
@@ -182,7 +180,7 @@ function createAssistantMessage(
     model: typeof message.model === 'string' ? message.model : '',
     ...(typeof message.responseId === 'string' ? { responseId: message.responseId } : {}),
     usage: isRecord(message.usage)
-      ? message.usage as AssistantMessage['usage']
+      ? message.usage as unknown as AssistantMessage['usage']
       : {
         input: 0,
         output: 0,

@@ -1,4 +1,13 @@
-import type { ActiveConcern } from '../concerns.js';
+import {
+  ACTIVE_CONCERN_OWNERS,
+  ACTIVE_CONCERN_SENSITIVITIES,
+  normalizeConcernEvidenceRefs,
+  normalizeConcernStatus,
+  type ActiveConcern,
+  type ActiveConcernEvidenceRef,
+  type ActiveConcernOwner,
+  type ActiveConcernSensitivity,
+} from '../concerns.js';
 import type { PendingFollowUp, PendingFollowUpWakeCondition } from '../pending-follow-ups.js';
 import type { BehavioralPatternSample, BehavioralStrategySummary } from '../patterns.js';
 import { CHANNEL_TYPES as RUNTIME_CHANNEL_TYPES, type ChannelType } from '../../../shared/contracts/runtime.js';
@@ -8,12 +17,22 @@ export interface ActiveConcernRow {
   text: string;
   priority: string;
   source: string;
+  status: string | null;
   created_at: string;
   expires_at: string;
+  salience: number | string | null;
+  sensitivity: string | null;
+  owner: string | null;
+  evidence_refs: unknown;
+  resolution_evidence_refs: unknown;
   resolved_at: string | null;
   resolution_outcome: string | null;
   contact_id: string | null;
   formation_vad: unknown;
+  last_reviewed_at: string | null;
+  next_review_at: string | null;
+  merged_from_ids: unknown;
+  split_from_id: string | null;
 }
 
 export interface PendingFollowUpRow {
@@ -154,6 +173,34 @@ export function normalizeSource(value: string): 'appraisal' | 'agent' | 'heartbe
   return value as 'appraisal' | 'agent' | 'heartbeat';
 }
 
+export function normalizeStatus(value: string | null | undefined) {
+  return normalizeConcernStatus(value ?? 'active');
+}
+
+export function normalizeSensitivity(value: string | null | undefined): ActiveConcernSensitivity {
+  const normalized = value ?? 'personal';
+  if (!ACTIVE_CONCERN_SENSITIVITIES.includes(normalized as ActiveConcernSensitivity)) {
+    throw new Error(`Unsupported active concern sensitivity: ${String(value)}`);
+  }
+  return normalized as ActiveConcernSensitivity;
+}
+
+export function normalizeOwner(value: string | null | undefined): ActiveConcernOwner {
+  const normalized = value ?? 'companion';
+  if (!ACTIVE_CONCERN_OWNERS.includes(normalized as ActiveConcernOwner)) {
+    throw new Error(`Unsupported active concern owner: ${String(value)}`);
+  }
+  return normalized as ActiveConcernOwner;
+}
+
+export function normalizeSalience(value: unknown): number {
+  const parsed = toNumber(value ?? 0.5);
+  if (!Number.isFinite(parsed) || parsed < 0 || parsed > 1) {
+    throw new Error(`Unsupported active concern salience: ${String(value)}`);
+  }
+  return parsed;
+}
+
 export function normalizePendingPriority(value: string): 'low' | 'medium' | 'high' {
   if (!PENDING_FOLLOW_UP_PRIORITIES.includes(value as (typeof PENDING_FOLLOW_UP_PRIORITIES)[number])) {
     throw new Error(`Unsupported pending follow-up priority: ${value}`);
@@ -281,6 +328,61 @@ export function parseFormationVAD(value: unknown): { valence: number; arousal: n
   };
 }
 
+function parseJsonValue(value: unknown, fieldName: string): unknown {
+  if (typeof value !== 'string') {
+    return value;
+  }
+  try {
+    return JSON.parse(value);
+  } catch (error) {
+    throw new Error(`Field "${fieldName}" must be valid JSON: ${String(error)}`);
+  }
+}
+
+export function parseConcernEvidenceRefs(
+  value: unknown,
+  fieldName: string,
+): ActiveConcernEvidenceRef[] {
+  if (value === null || value === undefined) {
+    return [];
+  }
+  return normalizeConcernEvidenceRefs(
+    parseJsonValue(value, fieldName) as ActiveConcernEvidenceRef[],
+    fieldName,
+  );
+}
+
+export function serializeConcernEvidenceRefs(value: readonly ActiveConcernEvidenceRef[] | undefined): string {
+  return JSON.stringify(normalizeConcernEvidenceRefs(value));
+}
+
+export function parseStringList(value: unknown, fieldName: string): string[] {
+  if (value === null || value === undefined) {
+    return [];
+  }
+  const parsed = parseJsonValue(value, fieldName);
+  if (!Array.isArray(parsed)) {
+    throw new Error(`Field "${fieldName}" must be a JSON array`);
+  }
+  const normalized = parsed.map((item, index) => {
+    if (typeof item !== 'string') {
+      throw new Error(`Field "${fieldName}[${index}]" must be a string`);
+    }
+    return normalizeRequiredText(item, `${fieldName}[${index}]`, 128);
+  });
+  return [...new Set(normalized)];
+}
+
+export function serializeStringList(value: readonly string[] | undefined): string {
+  if (value === undefined) {
+    return JSON.stringify([]);
+  }
+  const normalized = value.map((item, index) => (
+    normalizeRequiredText(item, `ids[${index}]`, 128)
+  ));
+  return JSON.stringify([...new Set(normalized)]);
+}
+
 export function normalizeContactId(value: string | undefined): string | undefined {
   if (value === undefined) return undefined;
   const normalized = compactWhitespace(value);
@@ -323,17 +425,38 @@ export function mapActiveConcernRow(row: ActiveConcernRow): ActiveConcern {
     : normalizeOptionalText(row.resolution_outcome, 'resolution_outcome', MAX_CONCERN_RESOLUTION_CHARS);
   const contactId = row.contact_id === null ? undefined : normalizeContactId(row.contact_id);
   const formationVAD = parseFormationVAD(row.formation_vad);
+  const lastReviewedAt = row.last_reviewed_at === null
+    ? undefined
+    : normalizeIsoTimestamp(row.last_reviewed_at, 'last_reviewed_at');
+  const nextReviewAt = row.next_review_at === null
+    ? undefined
+    : normalizeIsoTimestamp(row.next_review_at, 'next_review_at');
+  const mergedFromIds = parseStringList(row.merged_from_ids, 'merged_from_ids');
+  const splitFromId = row.split_from_id === null ? undefined : normalizeContactId(row.split_from_id);
   return {
     id: row.id,
     text: row.text,
     priority: normalizePriority(row.priority),
     source: normalizeSource(row.source),
+    status: normalizeStatus(row.status),
     createdAt: normalizeIsoTimestamp(row.created_at, 'created_at'),
     expiresAt: normalizeIsoTimestamp(row.expires_at, 'expires_at'),
+    salience: normalizeSalience(row.salience),
+    sensitivity: normalizeSensitivity(row.sensitivity),
+    owner: normalizeOwner(row.owner),
+    evidenceRefs: parseConcernEvidenceRefs(row.evidence_refs, 'evidence_refs'),
+    resolutionEvidenceRefs: parseConcernEvidenceRefs(
+      row.resolution_evidence_refs,
+      'resolution_evidence_refs',
+    ),
     ...(resolvedAt ? { resolvedAt } : {}),
     ...(resolutionOutcome ? { resolutionOutcome } : {}),
     ...(contactId ? { contactId } : {}),
     ...(formationVAD ? { formationVAD } : {}),
+    ...(lastReviewedAt ? { lastReviewedAt } : {}),
+    ...(nextReviewAt ? { nextReviewAt } : {}),
+    ...(mergedFromIds.length > 0 ? { mergedFromIds } : {}),
+    ...(splitFromId ? { splitFromId } : {}),
   };
 }
 

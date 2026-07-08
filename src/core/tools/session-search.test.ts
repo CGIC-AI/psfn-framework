@@ -6,7 +6,7 @@ import type { SubstrateConfig } from '../../system/config/runtime-config-contrac
 import { SessionStore } from '../../persistence/sessions/store.js';
 import { SessionManager } from '../session/manager.js';
 import { runWithRequestContext } from '../../primitives/llm/request-context.js';
-import { createSessionGrepTool, createSessionSearchTool } from './session-search.js';
+import { createSessionTool } from './session.js';
 
 function makeConfig(overrides: Partial<SubstrateConfig> = {}): SubstrateConfig {
   return {
@@ -42,20 +42,84 @@ function toolText(result: { content: Array<{ type: string; text: string }> }): s
   return result.content.map(entry => entry.text).join('');
 }
 
+
+class InMemoryTranscriptSearch {
+  private readonly entries: Array<{
+    channelId: string;
+    role: 'user' | 'assistant' | 'system' | 'tool';
+    content: string;
+    timestamp: number;
+    channelVisibility: 'private' | 'invite_only' | 'public' | 'broadcast';
+  }> = [];
+
+  record(entry: {
+    channelId: string;
+    role: 'user' | 'assistant' | 'system' | 'tool';
+    content: string;
+    timestamp: number;
+    channelVisibility: 'private' | 'invite_only' | 'public' | 'broadcast';
+  }): void {
+    this.entries.push(entry);
+  }
+
+  async searchByKeywords(query: string, limit = 10) {
+    const needle = query.toLowerCase();
+    return this.entries
+      .filter(entry => entry.content.toLowerCase().includes(needle))
+      .slice(0, limit)
+      .map((entry, index) => ({
+        channelId: entry.channelId,
+        messageId: index + 1,
+        role: entry.role,
+        content: entry.content,
+        timestamp: entry.timestamp,
+        channelVisibility: entry.channelVisibility,
+        score: 1,
+        snippet: entry.content,
+      }));
+  }
+}
+
 describe('session search tools', () => {
   let dir: string;
   let store: SessionStore;
   let manager: SessionManager;
+  let transcriptSearch: InMemoryTranscriptSearch;
 
   beforeEach(() => {
     dir = mkdtempSync(join(tmpdir(), 'psfn-session-search-tools-'));
     store = new SessionStore(join(dir, 'sessions'));
-    manager = new SessionManager(store, makeConfig({ dataDir: dir }));
+    transcriptSearch = new InMemoryTranscriptSearch();
+    const originalAppend = store.append.bind(store);
+    store.append = ((entry: Parameters<SessionStore['append']>[0]) => {
+      transcriptSearch.record({
+        channelId: entry.channelId,
+        role: entry.role,
+        content: entry.content,
+        timestamp: entry.timestamp,
+        channelVisibility: entry.channelVisibility,
+      });
+      return originalAppend(entry);
+    }) as SessionStore['append'];
+    manager = new SessionManager(store, makeConfig({ dataDir: dir }), undefined, undefined, transcriptSearch);
   });
 
   afterEach(() => {
     rmSync(dir, { recursive: true, force: true });
   });
+
+  function makeTool(
+    llmProvider: any,
+    runRipgrep?: Parameters<typeof createSessionTool>[0]['runRipgrep'],
+  ): ReturnType<typeof createSessionTool> {
+    return createSessionTool({
+      manager,
+      llmProvider,
+      sessionsDir: join(dir, 'sessions'),
+      dataDir: dir,
+      ...(runRipgrep ? { runRipgrep } : {}),
+    });
+  }
 
   it('session_search uses the indexed transcript path and gates hits by caller privacy', async () => {
     store.append({
@@ -83,7 +147,7 @@ describe('session search tools', () => {
         stopReason: 'stop',
       })),
     } as any;
-    const tool = createSessionSearchTool(manager, llmProvider);
+    const tool = makeTool(llmProvider);
 
     const result = await runWithRequestContext(
       {
@@ -91,9 +155,9 @@ describe('session search tools', () => {
         purpose: 'agent.turn.prompt',
         channelId: 'api:public-search',
         viewerTrustLevel: 'regular',
-        viewerChannelVisibility: 'public',
+        viewerChannelPrivacy: 'public',
       },
-      () => tool.execute('session-search-1', { query: 'Project Orion' }),
+      () => tool.execute('session-search-1', { action: 'search', query: 'Project Orion' }),
     );
     const payload = JSON.parse(toolText(result)) as {
       totalHits: number;
@@ -109,6 +173,58 @@ describe('session search tools', () => {
     expect(payload.hits[0]?.snippet).toContain('Orion');
     expect(payload.summary).toContain('Found 1 transcript matches');
     expect(llmProvider.complete).not.toHaveBeenCalled();
+  });
+
+  it('session_search excludes CogSec tombstone hits even when the search port returns them', async () => {
+    transcriptSearch.record({
+      channelId: 'api:cogsec-search',
+      role: 'user',
+      content: '[CogSec redaction: cogsec_20260701T000000Z_search]',
+      timestamp: 1_000,
+      channelVisibility: 'public',
+    });
+    transcriptSearch.record({
+      channelId: 'api:normal-search',
+      role: 'assistant',
+      content: 'Normal CogSec planning note without a tombstone marker.',
+      timestamp: 2_000,
+      channelVisibility: 'public',
+    });
+
+    const llmProvider = {
+      complete: vi.fn(async () => ({
+        content: 'Model summary should not be used.',
+        toolCalls: [],
+        model: 'mock',
+        inputTokens: 1,
+        outputTokens: 1,
+        stopReason: 'stop',
+      })),
+    } as any;
+    const tool = makeTool(llmProvider);
+
+    const result = await runWithRequestContext(
+      {
+        callType: 'tool',
+        purpose: 'agent.turn.prompt',
+        channelId: 'api:public-search',
+        viewerTrustLevel: 'regular',
+        viewerChannelPrivacy: 'public',
+      },
+      () => tool.execute('session-search-cogsec', { action: 'search', query: 'CogSec' }),
+    );
+    const payload = JSON.parse(toolText(result)) as {
+      totalHits: number;
+      hits: Array<{ channelId: string; snippet: string }>;
+    };
+
+    expect(payload.totalHits).toBe(1);
+    expect(payload.hits).toEqual([
+      expect.objectContaining({
+        channelId: 'api:normal-search',
+      }),
+    ]);
+    expect(JSON.stringify(payload)).not.toContain('cogsec_20260701T000000Z_search');
   });
 
   it('session_search can summarize and scope to a specific channel', async () => {
@@ -137,7 +253,7 @@ describe('session search tools', () => {
         stopReason: 'stop',
       })),
     } as any;
-    const tool = createSessionSearchTool(manager, llmProvider);
+    const tool = makeTool(llmProvider);
 
     const result = await runWithRequestContext(
       {
@@ -145,9 +261,10 @@ describe('session search tools', () => {
         purpose: 'agent.turn.prompt',
         channelId: 'api:private-search',
         viewerTrustLevel: 'primary',
-        viewerChannelVisibility: 'private',
+        viewerChannelPrivacy: 'private',
       },
       () => tool.execute('session-search-2', {
+        action: 'search',
         query: 'Pegasus',
         channelId: 'api:alpha',
         summarize: true,
@@ -167,26 +284,11 @@ describe('session search tools', () => {
     expect(llmProvider.complete).toHaveBeenCalledTimes(1);
   });
 
-  it('session_search accepts keyword as an alias for query', async () => {
-    store.append({
-      channelId: 'api:alias-test',
-      role: 'assistant',
-      content: 'Matrix verification note for alias coverage.',
-      timestamp: 5_000,
-      channelVisibility: 'private',
-    });
-
+  it('session_search requires a non-empty query through the canonical surface', async () => {
     const llmProvider = {
-      complete: vi.fn(async () => ({
-        content: 'Alias summary should not be used.',
-        toolCalls: [],
-        model: 'mock',
-        inputTokens: 1,
-        outputTokens: 1,
-        stopReason: 'stop',
-      })),
+      complete: vi.fn(),
     } as any;
-    const tool = createSessionSearchTool(manager, llmProvider);
+    const tool = makeTool(llmProvider);
 
     const result = await runWithRequestContext(
       {
@@ -194,21 +296,77 @@ describe('session search tools', () => {
         purpose: 'agent.turn.prompt',
         channelId: 'api:alias-search',
         viewerTrustLevel: 'primary',
-        viewerChannelVisibility: 'private',
+        viewerChannelPrivacy: 'private',
       },
-      () => tool.execute('session-search-3', { keyword: 'Matrix verification' }),
+      () => tool.execute('session-search-3', { action: 'search' }),
+    );
+
+    expect(toolText(result)).toContain('session_search requires a non-empty query.');
+    expect((result.details as { isError?: boolean }).isError).toBe(true);
+    expect(llmProvider.complete).not.toHaveBeenCalled();
+  });
+
+  it('session_search labels retired and active logical session route hits for audit', async () => {
+    const sourceChannelId = 'discord:garden:room';
+    manager.recordUserMessage(sourceChannelId, 'Route audit needle before reset.', 'vega-id', 'Vega', false);
+    const reset = manager.resetSourceChannelSession({
+      sourceChannelId,
+      actor: 'operator',
+      reason: 'audit label test',
+      mode: 'break_glass_quarantine',
+    });
+    manager.recordUserMessage(sourceChannelId, 'Route audit needle after reset.', 'vega-id', 'Vega', false);
+
+    const llmProvider = {
+      complete: vi.fn(async () => ({
+        content: 'Route audit summary.',
+        toolCalls: [],
+        model: 'mock',
+        inputTokens: 1,
+        outputTokens: 1,
+        stopReason: 'stop',
+      })),
+    } as any;
+    const tool = makeTool(llmProvider);
+
+    const result = await runWithRequestContext(
+      {
+        callType: 'tool',
+        purpose: 'agent.turn.prompt',
+        channelId: sourceChannelId,
+        viewerTrustLevel: 'primary',
+        viewerChannelPrivacy: 'private',
+      },
+      () => tool.execute('session-search-routes', { action: 'search', query: 'Route audit needle', limit: 5 }),
     );
     const payload = JSON.parse(toolText(result)) as {
-      totalHits: number;
-      hits: Array<{ channelId: string; snippet: string }>;
+      hits: Array<{
+        channelId: string;
+        sessionRoute?: {
+          sourceChannelId: string;
+          activeLogicalSessionId: string;
+          status: 'active' | 'retired';
+          mode?: string;
+          retiredAt?: string;
+        };
+      }>;
     };
 
-    expect(payload.totalHits).toBe(1);
-    expect(payload.hits).toHaveLength(1);
-    expect(payload.hits[0]?.channelId).toBe('api:alias-test');
-    expect(payload.hits[0]?.snippet).toContain('Matrix');
-    expect(payload.hits[0]?.snippet).toContain('verification');
-    expect(llmProvider.complete).not.toHaveBeenCalled();
+    const oldHit = payload.hits.find(hit => hit.channelId === sourceChannelId);
+    const freshHit = payload.hits.find(hit => hit.channelId === reset.newLogicalSessionId);
+    expect(oldHit?.sessionRoute).toMatchObject({
+      sourceChannelId,
+      activeLogicalSessionId: reset.newLogicalSessionId,
+      status: 'retired',
+      mode: 'break_glass_quarantine',
+    });
+    expect(oldHit?.sessionRoute?.retiredAt).toBeTruthy();
+    expect(freshHit?.sessionRoute).toMatchObject({
+      sourceChannelId,
+      activeLogicalSessionId: reset.newLogicalSessionId,
+      status: 'active',
+      mode: 'break_glass_quarantine',
+    });
   });
 
   it('session_grep filters raw journal hits by caller privacy and returns structured matches', async () => {
@@ -256,10 +414,7 @@ describe('session search tools', () => {
       ],
       truncated: false,
     }));
-    const tool = createSessionGrepTool({
-      sessionsDir: join(dir, 'sessions'),
-      runRipgrep,
-    });
+    const tool = makeTool({ complete: vi.fn() } as any, runRipgrep);
 
     const result = await runWithRequestContext(
       {
@@ -267,9 +422,9 @@ describe('session search tools', () => {
         purpose: 'agent.turn.prompt',
         channelId: 'api:public-search',
         viewerTrustLevel: 'regular',
-        viewerChannelVisibility: 'public',
+        viewerChannelPrivacy: 'public',
       },
-      () => tool.execute('session-grep-1', { pattern: 'Orion launch date' }),
+      () => tool.execute('session-grep-1', { action: 'grep', pattern: 'Orion launch date' }),
     );
     const payload = JSON.parse(toolText(result)) as {
       truncated: boolean;
@@ -293,13 +448,44 @@ describe('session search tools', () => {
     expect(payload.hits[0]?.snippet).toContain('Orion launch date');
   });
 
-  it('session_grep reports runner failures as tool errors', async () => {
-    const tool = createSessionGrepTool({
-      sessionsDir: join(dir, 'sessions'),
-      runRipgrep: vi.fn(async () => {
-        throw new Error('rg executable not found');
-      }),
-    });
+  it('session_grep excludes CogSec tombstone rows from normal companion results', async () => {
+    const runRipgrep = vi.fn(async () => ({
+      matches: [
+        {
+          filePath: '20260701_api-cogsec_user_000001.jsonl',
+          lineNumber: 3,
+          lineText: JSON.stringify({
+            type: 'message',
+            id: 1,
+            channelId: 'api:cogsec-grep',
+            role: 'user',
+            content: '[CogSec redaction: cogsec_20260701T000000Z_grep]',
+            metadata: JSON.stringify({
+              kind: 'cogsec_l0_tombstone',
+              caseId: 'cogsec_20260701T000000Z_grep',
+              redactedAt: '2026-07-01T00:00:00.000Z',
+            }),
+            timestamp: 1_000,
+            channelVisibility: 'public',
+          }),
+        },
+        {
+          filePath: '20260701_api-normal_user_000002.jsonl',
+          lineNumber: 8,
+          lineText: JSON.stringify({
+            type: 'message',
+            id: 2,
+            channelId: 'api:normal-grep',
+            role: 'assistant',
+            content: 'Normal CogSec planning note without a tombstone marker.',
+            timestamp: 2_000,
+            channelVisibility: 'public',
+          }),
+        },
+      ],
+      truncated: false,
+    }));
+    const tool = makeTool({ complete: vi.fn() } as any, runRipgrep);
 
     const result = await runWithRequestContext(
       {
@@ -307,9 +493,99 @@ describe('session search tools', () => {
         purpose: 'agent.turn.prompt',
         channelId: 'api:public-search',
         viewerTrustLevel: 'regular',
-        viewerChannelVisibility: 'public',
+        viewerChannelPrivacy: 'public',
       },
-      () => tool.execute('session-grep-2', { pattern: 'Orion' }),
+      () => tool.execute('session-grep-cogsec', { action: 'grep', pattern: 'CogSec' }),
+    );
+    const payload = JSON.parse(toolText(result)) as {
+      scannedMatchCount: number;
+      hits: Array<{ channelId: string; snippet: string }>;
+    };
+
+    expect(payload.scannedMatchCount).toBe(1);
+    expect(payload.hits).toEqual([
+      expect.objectContaining({
+        channelId: 'api:normal-grep',
+      }),
+    ]);
+    expect(JSON.stringify(payload)).not.toContain('cogsec_20260701T000000Z_grep');
+  });
+
+  it('session_grep labels retired logical session route hits for audit', async () => {
+    const sourceChannelId = 'discord:garden:grep-room';
+    const reset = manager.resetSourceChannelSession({
+      sourceChannelId,
+      actor: 'operator',
+      reason: 'grep audit label test',
+      mode: 'break_glass_quarantine',
+    });
+    const runRipgrep = vi.fn(async () => ({
+      matches: [
+        {
+          filePath: '20260325_discord_garden_grep-room_000001.jsonl',
+          lineNumber: 4,
+          lineText: JSON.stringify({
+            type: 'message',
+            id: 4,
+            channelId: sourceChannelId,
+            role: 'user',
+            content: 'Grep route needle before reset.',
+            timestamp: 7_000,
+            channelVisibility: 'private',
+            authorName: 'Vega',
+          }),
+        },
+      ],
+      truncated: false,
+    }));
+    const tool = makeTool({ complete: vi.fn() } as any, runRipgrep);
+
+    const result = await runWithRequestContext(
+      {
+        callType: 'tool',
+        purpose: 'agent.turn.prompt',
+        channelId: sourceChannelId,
+        viewerTrustLevel: 'primary',
+        viewerChannelPrivacy: 'private',
+      },
+      () => tool.execute('session-grep-routes', { action: 'grep', pattern: 'Grep route needle' }),
+    );
+    const payload = JSON.parse(toolText(result)) as {
+      hits: Array<{
+        channelId: string;
+        sessionRoute?: {
+          sourceChannelId: string;
+          activeLogicalSessionId: string;
+          status: 'active' | 'retired';
+          mode?: string;
+          retiredAt?: string;
+        };
+      }>;
+    };
+
+    expect(payload.hits[0]?.sessionRoute).toMatchObject({
+      sourceChannelId,
+      activeLogicalSessionId: reset.newLogicalSessionId,
+      status: 'retired',
+      mode: 'break_glass_quarantine',
+    });
+    expect(payload.hits[0]?.sessionRoute?.retiredAt).toBeTruthy();
+  });
+
+  it('session_grep reports runner failures as tool errors', async () => {
+    const tool = makeTool({ complete: vi.fn() } as any, vi.fn(async () => {
+      throw new Error('rg executable not found');
+    }));
+
+    const result = await runWithRequestContext(
+      {
+        callType: 'tool',
+        purpose: 'agent.turn.prompt',
+        channelId: 'api:public-search',
+        viewerTrustLevel: 'regular',
+        viewerChannelPrivacy: 'public',
+      },
+      () => tool.execute('session-grep-2', { action: 'grep', pattern: 'Orion' }),
     );
 
     expect(toolText(result)).toContain('session_grep failed: rg executable not found');

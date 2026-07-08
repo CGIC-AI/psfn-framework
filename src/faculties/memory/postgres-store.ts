@@ -1,5 +1,6 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { randomUUID } from 'node:crypto';
-import type { Pool } from 'pg';
+import type { Pool, PoolClient } from 'pg';
 import { writeJsonAtomic } from '../../shared/utils/fs.js';
 import {
   createPostgresPool,
@@ -7,6 +8,7 @@ import {
   executeQuery,
   queryRows,
 } from '../../persistence/postgres.js';
+import { createComponentLogger } from '../../shared/logger.js';
 import {
   POSTGRES_MEMORY_MIGRATIONS,
 } from '../../persistence/postgres/migrations.js';
@@ -15,17 +17,27 @@ import type {
   ContactProfileArtifact,
   MemoryAbstractionLink,
   MemoryAbstractionLinkInput,
+  MemoryAdminListOptions,
+  MemoryAdminListResult,
+  MemoryAdminPrivacySummary,
   MemoryBulkUpdatePatch,
   MemoryDeleteVersion,
+  MemoryEvolutionLink,
+  MemoryEvolutionLinkInput,
+  MemoryEvolutionRelation,
+  MemoryMaintenanceDiagnostics,
+  MemoryMaintenanceDiagnosticsOptions,
   MemoryListOptions,
   MemoryLink,
   MemoryMaintenanceReview,
   MemoryMaintenanceReviewInput,
   MemoryMaintenanceReviewListOptions,
+  MemorySalienceUpdate,
   MemorySoftDeleteOptions,
   MemoryStorePort,
   MemoryStoreStats,
   MemoryStoreUpdatePatch,
+  MemoryPatchEvent,
   MemoryUndoSoftDeleteOptions,
   ScratchpadAddResult,
   ScratchpadEntry,
@@ -33,12 +45,21 @@ import type {
   ScratchpadEntryReplaceOptions,
   MemoryWriteCommit,
 } from './memory-store-port.js';
+import { MEMORY_EVOLUTION_RELATIONS, normalizeMemorySalienceUpdates } from './memory-store-port.js';
 import {
+  applyRetentionClassTags,
+  CORE_DURABLE_MEMORY_TAGS,
+  DURABLE_PREFERENCE_MEMORY_TAG,
+  DURABLE_RETENTION_TAG,
+  inferMemorySourceTypeFromSourceRef,
   normalizeConsentFlags,
   normalizeFormationVAD,
+  normalizeMemoryProvenance,
   normalizeMemoryScopeQuery,
   normalizeMemoryScopeRef,
   normalizeMemoryScopeTags,
+  normalizeMemorySourceType,
+  PREFERENCE_MEMORY_TAG,
   type MemoryScopeQuery,
   type PurrMemory,
 } from './types.js';
@@ -47,19 +68,56 @@ import {
   normalizeMemoryMaintenanceReviewInput,
 } from './maintenance-review.js';
 
+const SCRATCHPAD_TTL_MS = 24 * 60 * 60 * 1000;
+const SCRATCHPAD_MAX_ENTRIES = 64;
+const log = createComponentLogger('PostgresMemoryStore');
+const ADMIN_DURABLE_MEMORY_TAGS = [
+  DURABLE_RETENTION_TAG,
+  DURABLE_PREFERENCE_MEMORY_TAG,
+  ...CORE_DURABLE_MEMORY_TAGS,
+] as const;
+const ADMIN_PREFERENCE_MEMORY_TAGS = [
+  PREFERENCE_MEMORY_TAG,
+  DURABLE_PREFERENCE_MEMORY_TAG,
+  'favorite',
+  'favourite',
+  'like',
+  'likes',
+  'liked',
+  'love',
+  'loves',
+  'loved',
+  'enjoy',
+  'enjoys',
+  'preferred',
+  'prefers',
+  'dislike',
+  'dislikes',
+  'hates',
+  'stable_preference',
+] as const;
+const ADMIN_FAVORITE_TEXT_REGEX =
+  String.raw`(^|[^[:alnum:]_])((my|our|his|her|their|[[:alpha:]][[:alnum:]_-]*'s)[[:space:]]+favou?rite|favou?rite[[:space:]]+[[:alnum:]_-]+[[:space:]]+(is|are|was|were))([^[:alnum:]_]|$)`;
+const ADMIN_PREFERENCE_TEXT_REGEX =
+  String.raw`(^|[^[:alnum:]_])((i|we)[[:space:]]+(really[[:space:]]+)?(prefer|preferred|like|liked|love|loved|enjoy|enjoyed|hate|hated|dislike|disliked|don't[[:space:]]+like|do[[:space:]]+not[[:space:]]+like|can't[[:space:]]+stand|cannot[[:space:]]+stand)|(prefers|preferred|likes|liked|loves|loved|enjoys|enjoyed|hates|hated|dislikes|disliked))([^[:alnum:]_]|$)`;
+
+type PgNumeric = number | string;
+
 interface MemoryRow {
   id: string;
   text: string;
   type: PurrMemory['type'];
-  importance: number;
-  confidence: number;
-  emotional_valence: number;
+  importance: PgNumeric;
+  confidence: PgNumeric;
+  emotional_valence: PgNumeric;
   formation_vad: unknown;
-  salience: number;
+  salience: PgNumeric;
   source_ref: string;
-  extracted_at: number;
-  last_accessed: number;
-  access_count: number;
+  source_type: string | null;
+  provenance_json: unknown;
+  extracted_at: PgNumeric;
+  last_accessed: PgNumeric;
+  access_count: PgNumeric;
   superseded_by: string | null;
   tags: unknown;
   scope_ref_kind: string | null;
@@ -71,7 +129,7 @@ interface MemoryRow {
   sensitivity: PurrMemory['sensitivity'];
   consent_flags: unknown;
   contact_id: string | null;
-  deleted_at: number | null;
+  deleted_at: PgNumeric | null;
   deleted_by: string | null;
   delete_reason: string | null;
   embedding: string | null;
@@ -88,17 +146,17 @@ interface MemorySchemaColumnRow {
 }
 
 interface MemoryEmbeddingSearchRow extends MemoryRow {
-  similarity: number;
+  similarity: PgNumeric;
 }
 
 interface MemoryDeleteVersionRow {
   delete_id: string;
   memory_id: string;
   snapshot_json: unknown;
-  deleted_at: number;
+  deleted_at: PgNumeric;
   deleted_by: string | null;
   delete_reason: string | null;
-  restored_at: number | null;
+  restored_at: PgNumeric | null;
   restored_by: string | null;
 }
 
@@ -110,6 +168,20 @@ interface MemoryAbstractionLinkRow {
   created_at: number;
   created_by: string | null;
   reason: string | null;
+}
+
+interface MemoryEvolutionLinkRow {
+  id: string;
+  source_memory_id: string;
+  target_memory_id: string;
+  relation: string;
+  confidence: number;
+  reason: string | null;
+  source_ref: string | null;
+  source_type: string | null;
+  provenance_refs: unknown;
+  provenance_json: unknown;
+  created_at: number;
 }
 
 interface MemoryLinkRow {
@@ -143,8 +215,27 @@ interface ContactProfileRow {
 interface ScratchpadRow {
   id: string;
   content: string;
-  created_at: number;
-  updated_at: number;
+  created_at: PgNumeric;
+  updated_at: PgNumeric;
+}
+
+interface CountRow {
+  count: PgNumeric;
+}
+
+interface AdminMemoryPrivacyAggregateRow {
+  active_memory_count: PgNumeric;
+  high_sensitivity_count: PgNumeric;
+  consent_gated_count: PgNumeric;
+  contact_linked_count: PgNumeric;
+  scoped_count: PgNumeric;
+  preference_count: PgNumeric;
+  durable_preference_count: PgNumeric;
+}
+
+interface SensitivityCountRow {
+  sensitivity: string | null;
+  count: PgNumeric;
 }
 
 export interface PostgresMemoryStoreOptions {
@@ -169,8 +260,33 @@ function decodeJsonObject(value: unknown): Record<string, number> {
   return out;
 }
 
+function decodeJsonRecord(value: unknown): Record<string, unknown> {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return {};
+  return { ...(value as Record<string, unknown>) };
+}
+
 function decodeStringArray(value: unknown): string[] {
   return decodeJsonArray(value).map(item => item.trim()).filter(Boolean);
+}
+
+function parsePgNumber(value: unknown, field: string): number {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === 'string' && value.trim().length > 0) {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) {
+      return parsed;
+    }
+  }
+  throw new Error(`Invalid PostgreSQL memory row ${field}: expected a finite number`);
+}
+
+function parseOptionalPgNumber(value: unknown, field: string): number | undefined {
+  if (value === null || value === undefined) {
+    return undefined;
+  }
+  return parsePgNumber(value, field);
 }
 
 function serializeJsonValue(value: unknown): string | null {
@@ -226,9 +342,141 @@ function memoryKey(id1: string, id2: string): string {
   return [id1, id2].sort().join('::');
 }
 
+function memoryEvolutionKey(
+  sourceMemoryId: string,
+  targetMemoryId: string,
+  relation: MemoryEvolutionRelation,
+): string {
+  return `${sourceMemoryId}::${targetMemoryId}::${relation}`;
+}
+
+function increment(counts: Record<string, number>, key: string): void {
+  counts[key] = (counts[key] ?? 0) + 1;
+}
+
 function clampLimit(limit: number | undefined, fallback: number, min: number, max: number): number {
   if (limit === undefined || !Number.isFinite(limit)) return fallback;
   return Math.max(min, Math.min(max, Math.floor(limit)));
+}
+
+function activeAdminMemoryClause(): string {
+  return `
+    superseded_by IS NULL
+    AND deleted_at IS NULL
+    AND NOT (
+      lower(source_ref) LIKE 'source:context_feedback|%'
+      OR (
+        jsonb_typeof(tags) = 'array'
+        AND EXISTS (
+          SELECT 1
+          FROM jsonb_array_elements_text(tags) AS tag(value)
+          WHERE lower(tag.value) = 'context_feedback'
+        )
+      )
+    )
+  `;
+}
+
+function durableAdminMemoryCondition(tagParam: string): string {
+  return `
+    (
+      retention_class = 'durable'
+      OR (
+        jsonb_typeof(tags) = 'array'
+        AND EXISTS (
+          SELECT 1
+          FROM jsonb_array_elements_text(tags) AS tag(value)
+          WHERE lower(tag.value) = ANY(${tagParam}::text[])
+        )
+      )
+    )
+  `;
+}
+
+function preferenceAdminMemoryCondition(
+  tagParam: string,
+  favoriteRegexParam: string,
+  preferenceRegexParam: string,
+): string {
+  return `
+    (
+      type <> 'boundary'
+      AND (
+        (
+          jsonb_typeof(tags) = 'array'
+          AND EXISTS (
+            SELECT 1
+            FROM jsonb_array_elements_text(tags) AS tag(value)
+            WHERE lower(tag.value) = ANY(${tagParam}::text[])
+              OR lower(tag.value) LIKE 'preference:%'
+          )
+        )
+        OR text ~* ${favoriteRegexParam}
+        OR text ~* ${preferenceRegexParam}
+      )
+    )
+  `;
+}
+
+function addPostgresQueryValue(values: unknown[], value: unknown): string {
+  values.push(value);
+  return `$${values.length}`;
+}
+
+function buildPostgresAdminMemoryWhere(options: MemoryAdminListOptions = {}): {
+  sql: string;
+  values: unknown[];
+} {
+  const values: unknown[] = [];
+  const clauses = [activeAdminMemoryClause()];
+  if (options.type) {
+    clauses.push(`type = ${addPostgresQueryValue(values, options.type)}`);
+  }
+  if (options.sensitivity) {
+    clauses.push(`sensitivity = ${addPostgresQueryValue(values, options.sensitivity)}`);
+  }
+  if (options.retentionClass === 'durable') {
+    clauses.push(durableAdminMemoryCondition(addPostgresQueryValue(values, [...ADMIN_DURABLE_MEMORY_TAGS])));
+  } else if (options.retentionClass === 'standard') {
+    clauses.push(`NOT ${durableAdminMemoryCondition(addPostgresQueryValue(values, [...ADMIN_DURABLE_MEMORY_TAGS]))}`);
+  }
+  if (options.preferenceOnly) {
+    clauses.push(preferenceAdminMemoryCondition(
+      addPostgresQueryValue(values, [...ADMIN_PREFERENCE_MEMORY_TAGS]),
+      addPostgresQueryValue(values, ADMIN_FAVORITE_TEXT_REGEX),
+      addPostgresQueryValue(values, ADMIN_PREFERENCE_TEXT_REGEX),
+    ));
+  }
+  if (options.startDate !== undefined) {
+    clauses.push(`extracted_at >= ${addPostgresQueryValue(values, options.startDate)}`);
+  }
+  if (options.endDate !== undefined) {
+    clauses.push(`extracted_at <= ${addPostgresQueryValue(values, options.endDate)}`);
+  }
+  return {
+    sql: clauses.map(clause => `(${clause})`).join(' AND '),
+    values,
+  };
+}
+
+function mapPostgresAdminPrivacySummary(
+  row: AdminMemoryPrivacyAggregateRow | undefined,
+  sensitivityRows: SensitivityCountRow[],
+): MemoryAdminPrivacySummary {
+  const sensitivityCounts: Record<string, number> = {};
+  for (const sensitivityRow of sensitivityRows) {
+    sensitivityCounts[sensitivityRow.sensitivity ?? 'personal'] = parsePgNumber(sensitivityRow.count, 'count');
+  }
+  return {
+    activeMemoryCount: row ? parsePgNumber(row.active_memory_count, 'active_memory_count') : 0,
+    highSensitivityCount: row ? parsePgNumber(row.high_sensitivity_count, 'high_sensitivity_count') : 0,
+    consentGatedCount: row ? parsePgNumber(row.consent_gated_count, 'consent_gated_count') : 0,
+    contactLinkedCount: row ? parsePgNumber(row.contact_linked_count, 'contact_linked_count') : 0,
+    scopedCount: row ? parsePgNumber(row.scoped_count, 'scoped_count') : 0,
+    preferenceCount: row ? parsePgNumber(row.preference_count, 'preference_count') : 0,
+    durablePreferenceCount: row ? parsePgNumber(row.durable_preference_count, 'durable_preference_count') : 0,
+    sensitivityCounts,
+  };
 }
 
 function toMemoryRow(memory: PurrMemory, embedding?: Float32Array): MemoryRow {
@@ -242,6 +490,11 @@ function toMemoryRow(memory: PurrMemory, embedding?: Float32Array): MemoryRow {
     formation_vad: memory.formationVAD ?? null,
     salience: memory.salience,
     source_ref: memory.sourceRef,
+    source_type: normalizeMemorySourceType(
+      memory.sourceType,
+      inferMemorySourceTypeFromSourceRef(memory.sourceRef),
+    ),
+    provenance_json: normalizeMemoryProvenance(memory.provenance) ?? {},
     extracted_at: memory.extractedAt,
     last_accessed: memory.lastAccessed,
     access_count: memory.accessCount,
@@ -271,19 +524,26 @@ function fromMemoryRow(row: MemoryRow): PurrMemory {
       ...(row.scope_ref_label ? { label: row.scope_ref_label } : {}),
     })
     : undefined;
+  const deletedAt = parseOptionalPgNumber(row.deleted_at, 'deleted_at');
+  const provenance = normalizeMemoryProvenance(decodeJsonRecord(row.provenance_json));
   return {
     id: row.id,
     text: row.text,
     type: row.type,
-    importance: row.importance,
-    confidence: row.confidence,
-    emotionalValence: row.emotional_valence,
+    importance: parsePgNumber(row.importance, 'importance'),
+    confidence: parsePgNumber(row.confidence, 'confidence'),
+    emotionalValence: parsePgNumber(row.emotional_valence, 'emotional_valence'),
     formationVAD: decodeFormationVAD(row.formation_vad),
-    salience: row.salience,
+    salience: parsePgNumber(row.salience, 'salience'),
     sourceRef: row.source_ref,
-    extractedAt: row.extracted_at,
-    lastAccessed: row.last_accessed,
-    accessCount: row.access_count,
+    sourceType: normalizeMemorySourceType(
+      row.source_type,
+      inferMemorySourceTypeFromSourceRef(row.source_ref),
+    ),
+    ...(provenance ? { provenance } : {}),
+    extractedAt: parsePgNumber(row.extracted_at, 'extracted_at'),
+    lastAccessed: parsePgNumber(row.last_accessed, 'last_accessed'),
+    accessCount: parsePgNumber(row.access_count, 'access_count'),
     ...(row.superseded_by ? { supersededBy: row.superseded_by } : {}),
     tags: decodeStringArray(row.tags),
     ...(scopeRef ? { scopeRef } : {}),
@@ -293,7 +553,7 @@ function fromMemoryRow(row: MemoryRow): PurrMemory {
     sensitivity: row.sensitivity,
     consentFlags: normalizeConsentFlags(decodeJsonObject(row.consent_flags)),
     ...(row.contact_id ? { contactId: row.contact_id } : {}),
-    ...(row.deleted_at !== null ? { deletedAt: row.deleted_at } : {}),
+    ...(deletedAt !== undefined ? { deletedAt } : {}),
     ...(row.deleted_by ? { deletedBy: row.deleted_by } : {}),
     ...(row.delete_reason ? { deleteReason: row.delete_reason } : {}),
   };
@@ -311,6 +571,72 @@ function fromMaintenanceReviewRow(row: MemoryMaintenanceReviewPgRow): MemoryMain
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   });
+}
+
+function normalizeEvolutionRelation(relation: MemoryEvolutionRelation): MemoryEvolutionRelation {
+  if ((MEMORY_EVOLUTION_RELATIONS as readonly string[]).includes(relation)) {
+    return relation;
+  }
+  throw new Error(`Invalid memory evolution relation: ${String(relation)}`);
+}
+
+function normalizeEvolutionConfidence(confidence: number | undefined): number {
+  const normalized = confidence ?? 1;
+  if (!Number.isFinite(normalized) || normalized < 0 || normalized > 1) {
+    throw new Error('Memory evolution link confidence must be between 0 and 1');
+  }
+  return normalized;
+}
+
+function normalizeEvolutionLinkInput(input: MemoryEvolutionLinkInput): MemoryEvolutionLink {
+  const sourceMemoryId = input.sourceMemoryId.trim();
+  const targetMemoryId = input.targetMemoryId.trim();
+  if (!sourceMemoryId || !targetMemoryId) {
+    throw new Error('sourceMemoryId and targetMemoryId are required');
+  }
+  if (sourceMemoryId === targetMemoryId) {
+    throw new Error('Memory evolution links require distinct source and target memories');
+  }
+  const sourceRef = input.sourceRef?.trim() || undefined;
+  const provenanceRefs = [...new Set((input.provenanceRefs ?? [])
+    .map(ref => ref.trim())
+    .filter(ref => ref.length > 0))];
+  const provenance = normalizeMemoryProvenance(input.provenance);
+  return {
+    id: input.linkId?.trim() || randomUUID(),
+    sourceMemoryId,
+    targetMemoryId,
+    relation: normalizeEvolutionRelation(input.relation),
+    confidence: normalizeEvolutionConfidence(input.confidence),
+    reason: input.reason?.trim() || undefined,
+    sourceRef,
+    sourceType: normalizeMemorySourceType(input.sourceType, sourceRef
+      ? inferMemorySourceTypeFromSourceRef(sourceRef)
+      : 'unknown'),
+    provenanceRefs,
+    ...(provenance ? { provenance } : {}),
+    createdAt: input.createdAt ?? Date.now(),
+  };
+}
+
+function fromEvolutionLinkRow(row: MemoryEvolutionLinkRow): MemoryEvolutionLink {
+  const relation = (MEMORY_EVOLUTION_RELATIONS as readonly string[]).includes(row.relation)
+    ? row.relation as MemoryEvolutionRelation
+    : 'updates';
+  const provenance = normalizeMemoryProvenance(decodeJsonRecord(row.provenance_json));
+  return {
+    id: row.id,
+    sourceMemoryId: row.source_memory_id,
+    targetMemoryId: row.target_memory_id,
+    relation,
+    confidence: row.confidence,
+    ...(row.reason ? { reason: row.reason } : {}),
+    ...(row.source_ref ? { sourceRef: row.source_ref } : {}),
+    sourceType: normalizeMemorySourceType(row.source_type),
+    provenanceRefs: decodeStringArray(row.provenance_refs),
+    ...(provenance ? { provenance } : {}),
+    createdAt: row.created_at,
+  };
 }
 
 function lexicalScore(memory: PurrMemory, query: string): number {
@@ -342,11 +668,38 @@ export async function createPostgresMemoryStoreFromPool(
   embeddingDims: number,
   options: PostgresMemoryStoreOptions = {},
 ): Promise<MemoryStorePort> {
+  // A pre-existing l2_memories without its embedding column is a broken
+  // schema, not a fresh database; surface the fail-closed guidance before
+  // the idempotent migrations trip over the missing column with a raw
+  // Postgres error.
+  await assertExistingMemorySchemaHasEmbeddingColumn(pool);
   await ensurePostgresSchema(pool, POSTGRES_MEMORY_MIGRATIONS);
   await validatePostgresMemorySchema(pool);
   const store = new PostgresMemoryStore(pool, embeddingDims, options);
   await store.waitUntilReady();
   return store;
+}
+
+async function assertExistingMemorySchemaHasEmbeddingColumn(pool: Pool): Promise<void> {
+  const tables = await queryRows<MemorySchemaTableRow>(pool, `
+    SELECT table_name
+    FROM information_schema.tables
+    WHERE table_schema = current_schema()
+      AND table_name = 'l2_memories'
+  `);
+  if (tables.length === 0) return;
+  const embeddingColumns = await queryRows<MemorySchemaColumnRow>(pool, `
+    SELECT table_name, column_name, data_type, udt_name
+    FROM information_schema.columns
+    WHERE table_schema = current_schema()
+      AND table_name = 'l2_memories'
+      AND column_name = 'embedding'
+  `);
+  if (embeddingColumns.length === 0) {
+    throw new Error(
+      'PostgreSQL memory schema is missing l2_memories.embedding; recreate the memory schema before starting the memory store',
+    );
+  }
 }
 
 async function validatePostgresMemorySchema(pool: Pool): Promise<void> {
@@ -381,6 +734,11 @@ async function validatePostgresMemorySchema(pool: Pool): Promise<void> {
   }
 }
 
+interface MemoryStoreTransactionState {
+  client: PoolClient;
+  operations: Array<Promise<unknown>>;
+}
+
 class PostgresMemoryStore implements MemoryStorePort {
   private readonly pool: Pool;
   private readonly embeddingDims: number;
@@ -388,11 +746,14 @@ class PostgresMemoryStore implements MemoryStorePort {
   private readonly scratchpadMirrorPath: string | null;
   private persistChain: Promise<void> = Promise.resolve();
   private readonly initialization: Promise<void>;
+  /** Active transaction scope: writes issued inside a runInTransaction handler join its client. */
+  private readonly transactionContext = new AsyncLocalStorage<MemoryStoreTransactionState>();
 
   private memories = new Map<string, PurrMemory>();
   private embeddings = new Map<string, Float32Array>();
   private deleteVersions = new Map<string, MemoryDeleteVersion>();
   private abstractionLinks = new Map<string, MemoryAbstractionLink>();
+  private memoryEvolutionLinks = new Map<string, MemoryEvolutionLink>();
   private memoryLinks = new Map<string, MemoryLink>();
   private maintenanceReviews = new Map<string, MemoryMaintenanceReview>();
   private contactProfiles = new Map<string, ContactProfileArtifact>();
@@ -414,7 +775,8 @@ class PostgresMemoryStore implements MemoryStorePort {
     const memoryRows = await queryRows<MemoryRow>(this.pool, `
       SELECT
         id, text, type, importance, confidence, emotional_valence, formation_vad,
-        salience, source_ref, extracted_at, last_accessed, access_count, superseded_by,
+        salience, source_ref, source_type, provenance_json, extracted_at, last_accessed,
+        access_count, superseded_by,
         tags, scope_ref_kind, scope_ref_id, scope_ref_label, scope_tags, provenance_refs,
         retention_class, sensitivity, consent_flags, contact_id, deleted_at, deleted_by,
         delete_reason, embedding::text AS embedding
@@ -444,10 +806,10 @@ class PostgresMemoryStore implements MemoryStorePort {
         snapshot: typeof row.snapshot_json === 'object' && row.snapshot_json !== null
           ? (row.snapshot_json as PurrMemory)
           : JSON.parse(String(row.snapshot_json)) as PurrMemory,
-        deletedAt: row.deleted_at,
+        deletedAt: parsePgNumber(row.deleted_at, 'deleted_at'),
         deletedBy: row.deleted_by ?? 'unknown',
         deleteReason: row.delete_reason ?? undefined,
-        restoredAt: row.restored_at ?? undefined,
+        restoredAt: parseOptionalPgNumber(row.restored_at, 'restored_at'),
         restoredBy: row.restored_by ?? undefined,
       });
     }
@@ -467,6 +829,21 @@ class PostgresMemoryStore implements MemoryStorePort {
         ...(row.reason ? { reason: row.reason } : {}),
       };
       this.abstractionLinks.set(link.id, link);
+    }
+
+    const evolutionLinkRows = await queryRows<MemoryEvolutionLinkRow>(this.pool, `
+      SELECT
+        id, source_memory_id, target_memory_id, relation, confidence, reason,
+        source_ref, source_type, provenance_refs, provenance_json, created_at
+      FROM memory_evolution_links
+    `);
+    for (const row of evolutionLinkRows) {
+      const link = fromEvolutionLinkRow(row);
+      this.memoryEvolutionLinks.set(memoryEvolutionKey(
+        link.sourceMemoryId,
+        link.targetMemoryId,
+        link.relation,
+      ), link);
     }
 
     const memoryLinkRows = await queryRows<MemoryLinkRow>(this.pool, `
@@ -516,10 +893,11 @@ class PostgresMemoryStore implements MemoryStorePort {
       this.scratchpadEntries.set(row.id, {
         id: row.id,
         content: row.content,
-        createdAt: row.created_at,
-        updatedAt: row.updated_at,
+        createdAt: parsePgNumber(row.created_at, 'scratchpad_entries.created_at'),
+        updatedAt: parsePgNumber(row.updated_at, 'scratchpad_entries.updated_at'),
       });
     }
+    this.pruneExpiredScratchpadEntries();
   }
 
   private persist<T>(task: () => Promise<T>): Promise<T> {
@@ -528,20 +906,45 @@ class PostgresMemoryStore implements MemoryStorePort {
     return operation;
   }
 
+  /**
+   * Routes a write either into the active transaction (eager, on the
+   * checked-out client, awaited by runInTransaction before COMMIT) or onto
+   * the serialized persist chain when no transaction is open.
+   */
+  private runWrite<T>(task: () => Promise<T>): Promise<T> {
+    const transaction = this.transactionContext.getStore();
+    if (transaction) {
+      const operation = task();
+      transaction.operations.push(operation);
+      return operation;
+    }
+    return this.persist(task);
+  }
+
+  private async executeWrite(text: string, values: readonly unknown[]): Promise<void> {
+    const transaction = this.transactionContext.getStore();
+    if (transaction) {
+      await transaction.client.query(text, [...values]);
+      return;
+    }
+    await executeQuery(this.pool, text, values);
+  }
+
   private async upsertMemoryRow(memory: PurrMemory, embedding?: Float32Array): Promise<void> {
     if (embedding) {
       validateEmbeddingDimensions(embedding, this.embeddingDims, 'write');
     }
     const row = toMemoryRow(memory, embedding);
-    await executeQuery(this.pool, `
+    await this.executeWrite(`
       INSERT INTO l2_memories (
         id, text, type, importance, confidence, emotional_valence, formation_vad, salience,
-        source_ref, extracted_at, last_accessed, access_count, superseded_by, tags,
+        source_ref, source_type, provenance_json, extracted_at, last_accessed, access_count,
+        superseded_by, tags,
         scope_ref_kind, scope_ref_id, scope_ref_label, scope_tags, provenance_refs,
         retention_class, sensitivity, consent_flags, contact_id, deleted_at, deleted_by,
         delete_reason, embedding
       ) VALUES (
-        $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27::vector
+        $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29::vector
       )
       ON CONFLICT (id) DO UPDATE SET
         text = EXCLUDED.text,
@@ -552,6 +955,8 @@ class PostgresMemoryStore implements MemoryStorePort {
         formation_vad = EXCLUDED.formation_vad,
         salience = EXCLUDED.salience,
         source_ref = EXCLUDED.source_ref,
+        source_type = EXCLUDED.source_type,
+        provenance_json = EXCLUDED.provenance_json,
         extracted_at = EXCLUDED.extracted_at,
         last_accessed = EXCLUDED.last_accessed,
         access_count = EXCLUDED.access_count,
@@ -580,6 +985,8 @@ class PostgresMemoryStore implements MemoryStorePort {
       serializeJsonValue(row.formation_vad),
       row.salience,
       row.source_ref,
+      row.source_type,
+      serializeJsonValue(row.provenance_json),
       row.extracted_at,
       row.last_accessed,
       row.access_count,
@@ -666,9 +1073,37 @@ class PostgresMemoryStore implements MemoryStorePort {
     writeJsonAtomic(this.scratchpadMirrorPath, payload);
   }
 
+  private collectExpiredScratchpadEntryIds(now = Date.now()): string[] {
+    const cutoff = now - SCRATCHPAD_TTL_MS;
+    return Array.from(this.scratchpadEntries.values())
+      .filter(entry => entry.updatedAt < cutoff)
+      .map(entry => entry.id);
+  }
+
+  private pruneExpiredScratchpadEntries(now = Date.now()): string[] {
+    const expiredIds = this.collectExpiredScratchpadEntryIds(now);
+    if (expiredIds.length === 0) {
+      return [];
+    }
+
+    for (const id of expiredIds) {
+      this.scratchpadEntries.delete(id);
+    }
+
+    void this.persist(async () => {
+      for (const id of expiredIds) {
+        await executeQuery(this.pool, 'DELETE FROM scratchpad_entries WHERE id = $1', [id]);
+      }
+    }).catch((error: unknown) => {
+      log.warn('Failed to prune expired scratchpad entries', { error: String(error) });
+    });
+    this.syncScratchpadMirror();
+    return expiredIds;
+  }
+
   async insertMemory(memory: PurrMemory, embedding: Float32Array): Promise<void> {
     validateEmbeddingDimensions(embedding, this.embeddingDims, 'insert');
-    await this.persist(() => this.upsertMemoryRow(memory, embedding));
+    await this.runWrite(() => this.upsertMemoryRow(memory, embedding));
     this.memories.set(memory.id, memory);
     this.embeddings.set(memory.id, embedding);
     this.journal?.onInsert(memory);
@@ -679,6 +1114,71 @@ class PostgresMemoryStore implements MemoryStorePort {
       await this.updateMemory(id, { supersededBy: input.memory.id });
     }
     await this.insertMemory(input.memory, input.embedding);
+  }
+
+  /**
+   * Runs the handler inside a real database transaction: a dedicated client
+   * is checked out, BEGIN/COMMIT wrap the handler's writes, and any failure
+   * rolls back both the database statements and the in-memory cache. Writes
+   * issued inside the handler (awaited or fire-and-forget) are captured via
+   * AsyncLocalStorage and awaited before COMMIT. The whole transaction holds
+   * the persist chain so unrelated writes never interleave with it. The
+   * append-only JSONL journal is an audit mirror, not a restore primitive,
+   * so entries it may have recorded for rolled-back writes are tolerated.
+   */
+  async runInTransaction<T>(handler: () => T): Promise<T> {
+    if (this.transactionContext.getStore()) {
+      throw new Error('Nested memory-store transactions are not supported');
+    }
+    return this.persist(async () => {
+      const client = await this.pool.connect();
+      const state: MemoryStoreTransactionState = { client, operations: [] };
+      const memoriesSnapshot = new Map(this.memories);
+      const embeddingsSnapshot = new Map(this.embeddings);
+      try {
+        await client.query('BEGIN');
+        const result = await this.transactionContext.run(state, () => handler());
+        await Promise.all(state.operations);
+        await client.query('COMMIT');
+        return result;
+      } catch (error) {
+        // Let in-flight statements settle before rolling back; their
+        // failures are subsumed by the transaction failure being thrown.
+        await Promise.allSettled(state.operations);
+        try {
+          await client.query('ROLLBACK');
+        } catch (rollbackError) {
+          log.error('Failed to roll back memory-store transaction', {
+            error: String(rollbackError),
+          });
+        }
+        this.memories = memoriesSnapshot;
+        this.embeddings = embeddingsSnapshot;
+        throw error;
+      } finally {
+        client.release();
+      }
+    });
+  }
+
+  async recordPatchEvent(event: MemoryPatchEvent): Promise<void> {
+    await this.runWrite(() => this.executeWrite(`
+      INSERT INTO l2_memory_patch_events (
+        id, memory_id, source_ref, source_type, provenance_json, reason, patch_json, previous_json, next_json, created_at
+      )
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+    `, [
+      event.id,
+      event.memoryId,
+      event.sourceRef,
+      normalizeMemorySourceType(event.sourceType),
+      serializeJsonValue(normalizeMemoryProvenance(event.provenance) ?? {}),
+      event.reason ?? null,
+      serializeJsonValue(event.patch),
+      serializeJsonValue(event.previousValues),
+      serializeJsonValue(event.nextValues),
+      event.createdAt,
+    ]));
   }
 
   async searchByEmbedding(
@@ -692,7 +1192,8 @@ class PostgresMemoryStore implements MemoryStorePort {
     const rows = await queryRows<MemoryEmbeddingSearchRow>(this.pool, `
       SELECT
         id, text, type, importance, confidence, emotional_valence, formation_vad,
-        salience, source_ref, extracted_at, last_accessed, access_count, superseded_by,
+        salience, source_ref, source_type, provenance_json, extracted_at, last_accessed,
+        access_count, superseded_by,
         tags, scope_ref_kind, scope_ref_id, scope_ref_label, scope_tags, provenance_refs,
         retention_class, sensitivity, consent_flags, contact_id, deleted_at, deleted_by,
         delete_reason, embedding::text AS embedding,
@@ -706,7 +1207,7 @@ class PostgresMemoryStore implements MemoryStorePort {
     `, [encodeEmbeddingLiteral(embedding), threshold]);
 
     return rows
-      .map((row) => ({ ...fromMemoryRow(row), similarity: row.similarity }))
+      .map((row) => ({ ...fromMemoryRow(row), similarity: parsePgNumber(row.similarity, 'similarity') }))
       .filter((memory) => {
         if (!normalizedScopeQuery) return true;
         const refs = normalizedScopeQuery.refs ?? [];
@@ -763,12 +1264,13 @@ class PostgresMemoryStore implements MemoryStorePort {
     if (updates.scopeRef !== undefined) next.scopeRef = normalizeMemoryScopeRef(updates.scopeRef);
     if (updates.scopeTags !== undefined) next.scopeTags = normalizeMemoryScopeTags(updates.scopeTags);
     if (updates.provenanceRefs !== undefined) next.provenanceRefs = [...updates.provenanceRefs];
+    if (updates.retentionClass !== undefined) next.retentionClass = updates.retentionClass;
     if (updates.contactId !== undefined) next.contactId = updates.contactId;
     if (updates.deletedAt !== undefined) next.deletedAt = updates.deletedAt;
     if (updates.deletedBy !== undefined) next.deletedBy = updates.deletedBy;
     if (updates.deleteReason !== undefined) next.deleteReason = updates.deleteReason;
     const embedding = this.embeddings.get(id);
-    await this.persist(() => this.upsertMemoryRow(next, embedding));
+    await this.runWrite(() => this.upsertMemoryRow(next, embedding));
     this.memories.set(id, next);
   }
 
@@ -779,6 +1281,23 @@ class PostgresMemoryStore implements MemoryStorePort {
       .slice(0, limit);
   }
 
+  async listMemories(options: MemoryListOptions = {}): Promise<PurrMemory[]> {
+    const offset = clampLimit(options.offset, 0, 0, 100_000);
+    const memories = Array.from(this.memories.values())
+      .sort((left, right) => {
+        const leftArchived = left.supersededBy || left.deletedAt ? 1 : 0;
+        const rightArchived = right.supersededBy || right.deletedAt ? 1 : 0;
+        return leftArchived - rightArchived
+          || right.extractedAt - left.extractedAt
+          || right.id.localeCompare(left.id);
+      });
+    if (options.limit === undefined) {
+      return memories.slice(offset);
+    }
+    const limit = clampLimit(options.limit, 50, 1, 500);
+    return memories.slice(offset, offset + limit);
+  }
+
   async listActiveMemories(options: MemoryListOptions = {}): Promise<PurrMemory[]> {
     const limit = clampLimit(options.limit, 50, 1, 500);
     const offset = clampLimit(options.offset, 0, 0, 100_000);
@@ -786,6 +1305,78 @@ class PostgresMemoryStore implements MemoryStorePort {
       .filter(memory => !memory.supersededBy && !memory.deletedAt)
       .sort((left, right) => right.extractedAt - left.extractedAt || right.id.localeCompare(left.id))
       .slice(offset, offset + limit);
+  }
+
+  async listAdminMemories(options: MemoryAdminListOptions = {}): Promise<MemoryAdminListResult> {
+    const limit = clampLimit(options.limit, 50, 1, 500);
+    const offset = clampLimit(options.offset, 0, 0, 100_000);
+    const where = buildPostgresAdminMemoryWhere(options);
+    const pageValues = [
+      ...where.values,
+      limit,
+      offset,
+    ];
+    const limitParam = `$${where.values.length + 1}`;
+    const offsetParam = `$${where.values.length + 2}`;
+    const rows = await queryRows<MemoryRow>(this.pool, `
+      SELECT
+        id, text, type, importance, confidence, emotional_valence, formation_vad,
+        salience, source_ref, source_type, provenance_json, extracted_at, last_accessed,
+        access_count, superseded_by,
+        tags, scope_ref_kind, scope_ref_id, scope_ref_label, scope_tags, provenance_refs,
+        retention_class, sensitivity, consent_flags, contact_id, deleted_at, deleted_by,
+        delete_reason, embedding::text AS embedding
+      FROM l2_memories
+      WHERE ${where.sql}
+      ORDER BY extracted_at DESC, id DESC
+      LIMIT ${limitParam}
+      OFFSET ${offsetParam}
+    `, pageValues);
+    const totalRows = await queryRows<CountRow>(this.pool, `
+      SELECT COUNT(*) AS count
+      FROM l2_memories
+      WHERE ${where.sql}
+    `, where.values);
+    return {
+      memories: rows.map(fromMemoryRow),
+      total: totalRows[0] ? parsePgNumber(totalRows[0].count, 'count') : 0,
+      privacySummary: await this.getAdminMemoryPrivacySummary(),
+    };
+  }
+
+  async getAdminMemoryPrivacySummary(): Promise<MemoryAdminPrivacySummary> {
+    const values: unknown[] = [];
+    const durableCondition = durableAdminMemoryCondition(
+      addPostgresQueryValue(values, [...ADMIN_DURABLE_MEMORY_TAGS]),
+    );
+    const preferenceCondition = preferenceAdminMemoryCondition(
+      addPostgresQueryValue(values, [...ADMIN_PREFERENCE_MEMORY_TAGS]),
+      addPostgresQueryValue(values, ADMIN_FAVORITE_TEXT_REGEX),
+      addPostgresQueryValue(values, ADMIN_PREFERENCE_TEXT_REGEX),
+    );
+    const activeWhere = activeAdminMemoryClause();
+    const aggregateRows = await queryRows<AdminMemoryPrivacyAggregateRow>(this.pool, `
+      SELECT
+        COUNT(*) AS active_memory_count,
+        COALESCE(SUM(CASE WHEN sensitivity IN ('intimate', 'confidential') THEN 1 ELSE 0 END), 0) AS high_sensitivity_count,
+        COALESCE(SUM(CASE WHEN consent_flags->>'allowRecall' = 'false' THEN 1 ELSE 0 END), 0) AS consent_gated_count,
+        COALESCE(SUM(CASE WHEN contact_id IS NOT NULL THEN 1 ELSE 0 END), 0) AS contact_linked_count,
+        COALESCE(SUM(CASE
+          WHEN (scope_ref_kind IS NOT NULL AND scope_ref_id IS NOT NULL)
+            OR (jsonb_typeof(scope_tags) = 'array' AND jsonb_array_length(scope_tags) > 0)
+          THEN 1 ELSE 0 END), 0) AS scoped_count,
+        COALESCE(SUM(CASE WHEN ${preferenceCondition} THEN 1 ELSE 0 END), 0) AS preference_count,
+        COALESCE(SUM(CASE WHEN ${preferenceCondition} AND ${durableCondition} THEN 1 ELSE 0 END), 0) AS durable_preference_count
+      FROM l2_memories
+      WHERE ${activeWhere}
+    `, values);
+    const sensitivityRows = await queryRows<SensitivityCountRow>(this.pool, `
+      SELECT COALESCE(sensitivity, 'personal') AS sensitivity, COUNT(*) AS count
+      FROM l2_memories
+      WHERE ${activeWhere}
+      GROUP BY COALESCE(sensitivity, 'personal')
+    `);
+    return mapPostgresAdminPrivacySummary(aggregateRows[0], sensitivityRows);
   }
 
   async countActiveMemories(): Promise<number> {
@@ -881,6 +1472,71 @@ class PostgresMemoryStore implements MemoryStorePort {
     return Array.from(this.abstractionLinks.values()).filter(link => link.abstractedMemoryId === abstractedMemoryId);
   }
 
+  async recordEvolutionLink(input: MemoryEvolutionLinkInput): Promise<MemoryEvolutionLink> {
+    const link = normalizeEvolutionLinkInput(input);
+    await this.persist(async () => {
+      await executeQuery(this.pool, `
+        INSERT INTO memory_evolution_links (
+          id, source_memory_id, target_memory_id, relation, confidence, reason,
+          source_ref, source_type, provenance_refs, provenance_json, created_at
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+        ON CONFLICT (source_memory_id, target_memory_id, relation) DO UPDATE SET
+          id = EXCLUDED.id,
+          confidence = EXCLUDED.confidence,
+          reason = EXCLUDED.reason,
+          source_ref = EXCLUDED.source_ref,
+          source_type = EXCLUDED.source_type,
+          provenance_refs = EXCLUDED.provenance_refs,
+          provenance_json = EXCLUDED.provenance_json,
+          created_at = EXCLUDED.created_at
+      `, [
+        link.id,
+        link.sourceMemoryId,
+        link.targetMemoryId,
+        link.relation,
+        link.confidence,
+        link.reason ?? null,
+        link.sourceRef ?? null,
+        link.sourceType,
+        serializeJsonValue(link.provenanceRefs),
+        serializeJsonValue(link.provenance ?? {}),
+        link.createdAt,
+      ]);
+    });
+    this.memoryEvolutionLinks.set(memoryEvolutionKey(
+      link.sourceMemoryId,
+      link.targetMemoryId,
+      link.relation,
+    ), link);
+    return link;
+  }
+
+  async getEvolutionLinksForSourceMemory(
+    sourceMemoryId: string,
+    relation?: MemoryEvolutionRelation,
+  ): Promise<MemoryEvolutionLink[]> {
+    const normalized = sourceMemoryId.trim();
+    if (!normalized) return [];
+    const normalizedRelation = relation ? normalizeEvolutionRelation(relation) : undefined;
+    return Array.from(this.memoryEvolutionLinks.values())
+      .filter(link => link.sourceMemoryId === normalized)
+      .filter(link => normalizedRelation === undefined || link.relation === normalizedRelation)
+      .sort((left, right) => right.createdAt - left.createdAt || right.id.localeCompare(left.id));
+  }
+
+  async getEvolutionLinksForTargetMemory(
+    targetMemoryId: string,
+    relation?: MemoryEvolutionRelation,
+  ): Promise<MemoryEvolutionLink[]> {
+    const normalized = targetMemoryId.trim();
+    if (!normalized) return [];
+    const normalizedRelation = relation ? normalizeEvolutionRelation(relation) : undefined;
+    return Array.from(this.memoryEvolutionLinks.values())
+      .filter(link => link.targetMemoryId === normalized)
+      .filter(link => normalizedRelation === undefined || link.relation === normalizedRelation)
+      .sort((left, right) => right.createdAt - left.createdAt || right.id.localeCompare(left.id));
+  }
+
   async getStats(): Promise<MemoryStoreStats> {
     const active = Array.from(this.memories.values()).filter(memory => !memory.supersededBy && !memory.deletedAt);
     const byType: Record<string, number> = {};
@@ -940,6 +1596,54 @@ class PostgresMemoryStore implements MemoryStorePort {
 
   async getMemoryMaintenanceReview(id: string): Promise<MemoryMaintenanceReview | undefined> {
     return this.maintenanceReviews.get(id.trim());
+  }
+
+  async getMemoryMaintenanceDiagnostics(
+    options: MemoryMaintenanceDiagnosticsOptions = {},
+  ): Promise<MemoryMaintenanceDiagnostics> {
+    const now = Number.isFinite(options.now) ? Number(options.now) : Date.now();
+    const reviewCountsByKind: Record<string, number> = {};
+    const reviewCountsByStatus: Record<string, number> = {};
+    const pendingReviewAges: number[] = [];
+    for (const review of this.maintenanceReviews.values()) {
+      increment(reviewCountsByKind, review.kind);
+      increment(reviewCountsByStatus, review.status);
+      if (review.status === 'pending') {
+        pendingReviewAges.push(Math.max(0, now - review.createdAt));
+      }
+    }
+
+    const evolutionDecisionCountsByRelation: Record<MemoryEvolutionRelation, number> = {
+      supersedes: 0,
+      updates: 0,
+      negates: 0,
+      conflicts_with: 0,
+    };
+    let latestEvolutionDecisionAt: number | undefined;
+    for (const link of this.memoryEvolutionLinks.values()) {
+      evolutionDecisionCountsByRelation[link.relation] += 1;
+      latestEvolutionDecisionAt = Math.max(latestEvolutionDecisionAt ?? 0, link.createdAt);
+    }
+
+    const pendingAgeTotal = pendingReviewAges.reduce((sum, age) => sum + age, 0);
+    return {
+      reviewCount: this.maintenanceReviews.size,
+      pendingReviewCount: pendingReviewAges.length,
+      reviewCountsByKind,
+      reviewCountsByStatus,
+      oldestPendingReviewAgeMs: pendingReviewAges.length > 0 ? Math.max(...pendingReviewAges) : 0,
+      averagePendingReviewAgeMs: pendingReviewAges.length > 0
+        ? pendingAgeTotal / pendingReviewAges.length
+        : 0,
+      evolutionDecisionCount: this.memoryEvolutionLinks.size,
+      evolutionDecisionCountsByRelation,
+      supersessionDecisionCount: evolutionDecisionCountsByRelation.supersedes,
+      conflictDecisionCount: evolutionDecisionCountsByRelation.conflicts_with
+        + evolutionDecisionCountsByRelation.negates,
+      ...(latestEvolutionDecisionAt !== undefined && latestEvolutionDecisionAt > 0
+        ? { latestEvolutionDecisionAt }
+        : {}),
+    };
   }
 
   async getMemoriesByChannel(channelId: string, limit: number): Promise<PurrMemory[]> {
@@ -1009,18 +1713,122 @@ class PostgresMemoryStore implements MemoryStorePort {
   }
 
   async bulkUpdate(ids: string[], fields: MemoryBulkUpdatePatch): Promise<number> {
-    let count = 0;
+    if (
+      fields.type === undefined
+      && fields.sensitivity === undefined
+      && fields.retentionClass === undefined
+    ) {
+      return 0;
+    }
+
+    const updatesById = new Map<string, PurrMemory>();
     for (const id of ids) {
-      const existing = this.memories.get(id);
+      const normalizedId = id.trim();
+      if (!normalizedId) continue;
+      const existing = this.memories.get(normalizedId);
       if (!existing || existing.deletedAt) continue;
       const next = { ...existing };
       if (fields.type !== undefined) next.type = fields.type;
       if (fields.sensitivity !== undefined) next.sensitivity = fields.sensitivity;
-      await this.persist(() => this.upsertMemoryRow(next, this.embeddings.get(id)));
-      this.memories.set(id, next);
-      count += 1;
+      if (fields.retentionClass !== undefined) {
+        next.retentionClass = fields.retentionClass;
+        next.tags = applyRetentionClassTags(existing, fields.retentionClass);
+      }
+      updatesById.set(normalizedId, next);
     }
-    return count;
+    const updates = [...updatesById.values()];
+    if (updates.length === 0) return 0;
+
+    const values: unknown[] = [];
+    const valueColumns = ['id'];
+    const setClauses: string[] = [];
+    if (fields.type !== undefined) {
+      valueColumns.push('type');
+      setClauses.push('type = updates.type');
+    }
+    if (fields.sensitivity !== undefined) {
+      valueColumns.push('sensitivity');
+      setClauses.push('sensitivity = updates.sensitivity');
+    }
+    if (fields.retentionClass !== undefined) {
+      valueColumns.push('retention_class', 'tags');
+      setClauses.push('retention_class = updates.retention_class', 'tags = updates.tags');
+    }
+
+    const rows = updates.map((update) => {
+      const row: string[] = [];
+      values.push(update.id);
+      row.push(`$${values.length}::text`);
+      if (fields.type !== undefined) {
+        values.push(update.type);
+        row.push(`$${values.length}::text`);
+      }
+      if (fields.sensitivity !== undefined) {
+        values.push(update.sensitivity);
+        row.push(`$${values.length}::text`);
+      }
+      if (fields.retentionClass !== undefined) {
+        values.push(update.retentionClass ?? null);
+        row.push(`$${values.length}::text`);
+        values.push(JSON.stringify(update.tags));
+        row.push(`$${values.length}::jsonb`);
+      }
+      return `(${row.join(', ')})`;
+    });
+
+    const result = await this.persist(() => executeQuery(this.pool, `
+      UPDATE l2_memories AS memory
+      SET ${setClauses.join(', ')}
+      FROM (VALUES ${rows.join(', ')}) AS updates(${valueColumns.join(', ')})
+      WHERE memory.id = updates.id
+        AND memory.deleted_at IS NULL
+      RETURNING memory.id
+    `, values));
+
+    const updatedIds = new Set(result.rows.flatMap(row => (
+      typeof row.id === 'string' ? [row.id] : []
+    )));
+    for (const update of updates) {
+      if (updatedIds.has(update.id)) {
+        this.memories.set(update.id, update);
+      }
+    }
+    return result.rowCount ?? updatedIds.size;
+  }
+
+  async bulkUpdateSalience(updates: MemorySalienceUpdate[]): Promise<number> {
+    const normalizedUpdates = normalizeMemorySalienceUpdates(updates);
+    if (normalizedUpdates.length === 0) return 0;
+
+    const values: unknown[] = [];
+    const rows = normalizedUpdates.map((update, index) => {
+      const idParam = index * 2 + 1;
+      const salienceParam = idParam + 1;
+      values.push(update.id, update.salience);
+      return `($${idParam}::text, $${salienceParam}::numeric)`;
+    });
+
+    const result = await this.persist(() => executeQuery(this.pool, `
+      UPDATE l2_memories AS memory
+      SET salience = updates.salience
+      FROM (VALUES ${rows.join(', ')}) AS updates(id, salience)
+      WHERE memory.id = updates.id
+        AND memory.deleted_at IS NULL
+        AND memory.superseded_by IS NULL
+      RETURNING memory.id
+    `, values));
+
+    const updatedIds = new Set(result.rows.flatMap(row => (
+      typeof row.id === 'string' ? [row.id] : []
+    )));
+    for (const update of normalizedUpdates) {
+      if (!updatedIds.has(update.id)) continue;
+      const existing = this.memories.get(update.id);
+      if (!existing || existing.deletedAt) continue;
+      this.memories.set(update.id, { ...existing, salience: update.salience });
+    }
+
+    return result.rowCount ?? 0;
   }
 
   async upsertContactProfile(profile: ContactProfileArtifact): Promise<void> {
@@ -1110,17 +1918,20 @@ class PostgresMemoryStore implements MemoryStorePort {
   }
 
   async getScratchpadEntry(id: string): Promise<ScratchpadEntry | undefined> {
+    this.pruneExpiredScratchpadEntries();
     return this.scratchpadEntries.get(id.trim());
   }
 
   listScratchpadEntries(limit: number = 64): ScratchpadEntry[] {
+    this.pruneExpiredScratchpadEntries();
     return Array.from(this.scratchpadEntries.values())
       .sort((left, right) => right.updatedAt - left.updatedAt || right.createdAt - left.createdAt)
-      .slice(0, clampLimit(limit, 64, 1, 64));
+      .slice(0, clampLimit(limit, SCRATCHPAD_MAX_ENTRIES, 1, SCRATCHPAD_MAX_ENTRIES));
   }
 
   private async pruneScratchpadEntries(): Promise<string[]> {
-    const maxEntries = 64;
+    this.pruneExpiredScratchpadEntries();
+    const maxEntries = SCRATCHPAD_MAX_ENTRIES;
     const ordered = Array.from(this.scratchpadEntries.values())
       .sort((left, right) => left.updatedAt - right.updatedAt || left.createdAt - right.createdAt);
     const overflow = Math.max(0, ordered.length - maxEntries);

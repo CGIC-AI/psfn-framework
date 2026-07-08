@@ -1,6 +1,8 @@
 import { existsSync, mkdirSync, rmSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import type { SessionEntry, CompactionSummary, JournalEntry } from '../../core/session/types.js';
+import type { CogSecEventStore, CogSecAction } from '../../core/cogsec/events.js';
+import type { CogSecForensicArchive } from '../../core/cogsec/forensic-archive.js';
 import type { TurnRecord } from '../../shared/contracts/runtime.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import {
@@ -35,13 +37,10 @@ import {
   type SessionSearchHit,
   supportsKeywordSearch,
   type TranscriptProjectionPort,
+  type TranscriptSearchOptions,
 } from './transcript-projection-port.js';
-import {
-  createDefaultSQLiteSessionArchivePort,
-  createDefaultSQLiteTranscriptProjection,
-  createDefaultSQLiteTurnRecordStorePort,
-  DEFAULT_SQLITE_SESSION_SEARCH_INDEX_FILENAME,
-} from './sqlite-adapters.js';
+import { createFilesystemSessionArchivePort } from '../journals/journal/port.js';
+import { createFilesystemTurnRecordStorePort } from './turn-records.js';
 import type { TurnRecordStorePort } from './turn-record-store-port.js';
 import type { TranscriptSearchPort } from './transcript-search-port.js';
 import {
@@ -70,6 +69,15 @@ import { SessionJournalRuntime } from './store/journal-runtime.js';
 import { resolveSessionEntryTurnContext } from '../../core/session/turn-provenance.js';
 import { backfillLegacyTurnId, parseTurnId } from '../../core/turns/id.js';
 import { indexedChannelId, resolvePrimarySessionId } from './store/session-index-keys.js';
+import {
+  buildCogSecInvalidatedSummaryContent,
+  buildCogSecTombstoneContent,
+  buildCogSecTombstoneMetadata,
+  isCogSecInvalidatedSummaryContent,
+  isCogSecTombstoneContent,
+  normalizeCogSecCaseId,
+  parseCogSecTombstoneCaseId,
+} from '../../core/cogsec/tombstones.js';
 const log = createComponentLogger('SessionStore');
 const MAX_RECENT_ENTRY_CACHE_LIMITS = 8;
 const JOURNAL_WRITE_LOCK_SUFFIX = '.write-lock';
@@ -109,6 +117,73 @@ export interface SessionActivitySummary {
   lastMessagePreview: string;
 }
 
+type CogSecEventMetadataStore = Pick<CogSecEventStore, 'getEvent' | 'updateEvent'>;
+type CogSecForensicArchiveWriter = Pick<CogSecForensicArchive, 'sealArtifact'>;
+
+export interface CogSecL0TombstoneOptions {
+  channelId: string;
+  caseId: string;
+  eventStore: CogSecEventMetadataStore;
+  forensicArchive: CogSecForensicArchiveWriter;
+  messageIds?: readonly number[];
+  startEntryId?: number;
+  endEntryId?: number;
+  actor?: string;
+  timestamp?: number;
+}
+
+export interface CogSecL0TombstoneResult {
+  caseId: string;
+  sourceChannelId: string;
+  logicalSessionId: string;
+  tombstonedL0RowCount: number;
+  tombstonedMessageIds: number[];
+  sealedForensicPayloadRef?: string;
+  sealedForensicPayloadHash?: string;
+}
+
+export interface CogSecTombstoneChannelDiagnostic {
+  channelId: string;
+  rowCount: number;
+  messageIds: number[];
+}
+
+export interface CogSecTombstoneDiagnostic {
+  caseId: string;
+  rowCount: number;
+  channels: CogSecTombstoneChannelDiagnostic[];
+}
+
+export interface CogSecCompactionInvalidationOptions {
+  channelId: string;
+  caseId: string;
+  compactionIds: readonly number[];
+}
+
+export interface CogSecCompactionInvalidationResult {
+  caseId: string;
+  channelId: string;
+  invalidatedCompactionIds: number[];
+}
+
+export interface CogSecCompactionRegenerationSummary {
+  compactionId: number;
+  summary: string;
+}
+
+export interface CogSecCompactionRegenerationOptions {
+  channelId: string;
+  caseId: string;
+  summaries: readonly CogSecCompactionRegenerationSummary[];
+}
+
+export interface CogSecCompactionRegenerationResult {
+  caseId: string;
+  channelId: string;
+  regeneratedCompactionIds: number[];
+  skippedCompactionIds: number[];
+}
+
 const DEFAULT_MESSAGE_PREVIEW_CHARS = 120;
 
 function toMessagePreview(content: string, maxChars = DEFAULT_MESSAGE_PREVIEW_CHARS): string {
@@ -143,6 +218,113 @@ function syncLastMessageMetadataFromEntries(cache: ChannelCache): void {
     return;
   }
   applyLastMessageMetadata(cache, lastEntry);
+}
+
+function normalizeEntryId(value: number, field: string): number {
+  if (!Number.isInteger(value) || value <= 0) {
+    throw new Error(`${field} must be a positive integer`);
+  }
+  return value;
+}
+
+function normalizeOptionalEntryId(value: number | undefined, field: string): number | undefined {
+  return value === undefined ? undefined : normalizeEntryId(value, field);
+}
+
+function normalizeCogSecSelector(options: Pick<CogSecL0TombstoneOptions, 'messageIds' | 'startEntryId' | 'endEntryId'>): {
+  messageIds: Set<number>;
+  startEntryId?: number;
+  endEntryId?: number;
+} {
+  const messageIds = new Set<number>();
+  for (const [index, id] of (options.messageIds ?? []).entries()) {
+    messageIds.add(normalizeEntryId(id, `messageIds[${index}]`));
+  }
+  const startEntryId = normalizeOptionalEntryId(options.startEntryId, 'startEntryId');
+  const endEntryId = normalizeOptionalEntryId(options.endEntryId, 'endEntryId');
+  if (startEntryId !== undefined && endEntryId !== undefined && endEntryId < startEntryId) {
+    throw new Error('endEntryId must be greater than or equal to startEntryId');
+  }
+  if (messageIds.size === 0 && startEntryId === undefined && endEntryId === undefined) {
+    throw new Error('CogSec tombstone requires messageIds or an entry-id range');
+  }
+  return {
+    messageIds,
+    ...(startEntryId !== undefined ? { startEntryId } : {}),
+    ...(endEntryId !== undefined ? { endEntryId } : {}),
+  };
+}
+
+function isSelectedCogSecMessage(
+  entry: JournalEntry,
+  selector: ReturnType<typeof normalizeCogSecSelector>,
+): boolean {
+  if (entry.type !== 'message') return false;
+  if (selector.messageIds.has(entry.id)) return true;
+  if (selector.startEntryId !== undefined && entry.id < selector.startEntryId) return false;
+  if (selector.endEntryId !== undefined && entry.id > selector.endEntryId) return false;
+  return selector.startEntryId !== undefined || selector.endEntryId !== undefined;
+}
+
+function uniqueStrings<T extends string>(values: readonly T[]): T[] {
+  return [...new Set(values)];
+}
+
+function buildCogSecTombstoneJournalEntry(
+  entry: JournalEntry,
+  content: string,
+  metadata: string,
+): JournalEntry {
+  if (entry.type !== 'message') {
+    throw new Error('CogSec tombstone can only replace message journal entries');
+  }
+  return {
+    type: 'message',
+    id: entry.id,
+    channelId: entry.channelId,
+    role: entry.role!,
+    content,
+    authorId: entry.authorId,
+    authorName: entry.authorName,
+    timestamp: entry.timestamp,
+    discordMessageId: entry.discordMessageId,
+    metadata,
+    originChannelId: entry.originChannelId,
+    channelVisibility: entry.channelVisibility,
+  };
+}
+
+function buildCogSecInvalidatedCompactionJournalEntry(
+  entry: JournalEntry,
+  summary: string,
+): JournalEntry {
+  if (entry.type !== 'compaction') {
+    throw new Error('CogSec summary invalidation can only replace compaction journal entries');
+  }
+  return {
+    type: 'compaction',
+    id: entry.id,
+    channelId: entry.channelId,
+    timestamp: entry.timestamp,
+    summary,
+    coveredUpTo: entry.coveredUpTo,
+  };
+}
+
+function normalizeCogSecRegeneratedSummary(summary: string, field: string): string {
+  const normalized = summary.trim();
+  if (!normalized) {
+    throw new Error(`${field} must be non-empty`);
+  }
+  if (
+    isCogSecTombstoneContent(normalized)
+    || isCogSecInvalidatedSummaryContent(normalized)
+    || normalized.includes('[CogSec redaction:')
+    || normalized.includes('[CogSec summary invalidated:')
+  ) {
+    throw new Error(`${field} must not contain CogSec tombstone or invalidation marker text`);
+  }
+  return normalized;
 }
 
 function sleepSync(ms: number): void {
@@ -218,29 +400,18 @@ export class SessionStore implements TranscriptSearchPort {
       ?? createKeyringIntegrityProvider(options.integrityKeyring ?? null);
     this.journalRuntime = new SessionJournalRuntime(
       integrityProvider,
-      options.sessionArchivePort ?? createDefaultSQLiteSessionArchivePort(),
+      options.sessionArchivePort ?? createFilesystemSessionArchivePort(),
     );
     mkdirSync(sessionsDir, { recursive: true });
     if (options.transcriptProjection !== undefined) {
       this.transcriptProjection = options.transcriptProjection;
-    } else if (!options.disableSearchIndex) {
-      try {
-        this.transcriptProjection = createDefaultSQLiteTranscriptProjection(
-          options.searchIndexPath ?? join(this.sessionsDir, DEFAULT_SQLITE_SESSION_SEARCH_INDEX_FILENAME),
-        );
-      } catch (error) {
-        log.warn('Transcript projection unavailable; canonical archive remains authoritative and keyword search is disabled', {
-          error: toErrorMessage(error),
-        });
-        this.transcriptProjection = null;
-      }
     }
     if (options.transcriptSearch !== undefined) {
       this.transcriptSearch = options.transcriptSearch;
     } else if (supportsKeywordSearch(this.transcriptProjection)) {
       this.transcriptSearch = this.transcriptProjection;
     }
-    this.turnRecordStore = options.turnRecordStore ?? createDefaultSQLiteTurnRecordStorePort(this.sessionsDir);
+    this.turnRecordStore = options.turnRecordStore ?? createFilesystemTurnRecordStorePort(this.sessionsDir);
     loadChannelIndex(this.channelIndexPath, this.channelIndex);
     this.migrateLegacyFilenames();
     this.primeChannelIndexFromDisk();
@@ -458,6 +629,11 @@ export class SessionStore implements TranscriptSearchPort {
       limit,
     );
   }
+  private fingerprintArchive(cache: ChannelCache): string | null {
+    return this.journalRuntime.fingerprintArchive(
+      this.journalRuntime.openArchive(cache.channelId, cache.resolvedPath),
+    );
+  }
   private applyTurnTombstonesToEntries(entries: readonly SessionEntry[], tombstones: ReadonlySet<string>): SessionEntry[] {
     if (tombstones.size === 0) return [...entries];
     return entries.filter((entry) => {
@@ -509,12 +685,23 @@ export class SessionStore implements TranscriptSearchPort {
     const cached = cache.recentEntriesByLimit.get(limit);
     if (!cached) return null;
     if (cached.fingerprint !== this.buildRecentEntriesFingerprint(cache)) return null;
+    if (cached.archiveFingerprint !== this.fingerprintArchive(cache)) return null;
     return [...cached.entries];
   }
-  private writeCachedRecentEntries(cache: ChannelCache, limit: number, entries: SessionEntry[]): void {
+  private writeCachedRecentEntries(
+    cache: ChannelCache,
+    limit: number,
+    entries: SessionEntry[],
+    archiveFingerprintBeforeRead: string | null,
+  ): void {
     if (cache.fullyLoaded) return;
+    const archiveFingerprint = this.fingerprintArchive(cache);
+    if (!archiveFingerprint || archiveFingerprint !== archiveFingerprintBeforeRead) {
+      return;
+    }
     cache.recentEntriesByLimit.set(limit, {
       fingerprint: this.buildRecentEntriesFingerprint(cache),
+      archiveFingerprint,
       entries: [...entries],
     });
     while (cache.recentEntriesByLimit.size > MAX_RECENT_ENTRY_CACHE_LIMITS) {
@@ -630,9 +817,21 @@ export class SessionStore implements TranscriptSearchPort {
     if (filtered.length <= limit) return filtered;
     return filtered.slice(-limit);
   }
-  async searchByKeywords(query: string, limit = 10): Promise<SessionSearchHit[]> {
+  async searchByKeywords(
+    query: string,
+    limit = 10,
+    options: TranscriptSearchOptions = {},
+  ): Promise<SessionSearchHit[]> {
     if (!this.transcriptSearch) return [];
-    return await this.transcriptSearch.searchByKeywords(query, limit);
+    const requestedChannelId = options.channelId?.trim();
+    if (!requestedChannelId) {
+      return await this.transcriptSearch.searchByKeywords(query, limit);
+    }
+    const scopedChannelId = this.resolveSessionId(requestedChannelId) ?? requestedChannelId;
+    const hits = await this.transcriptSearch.searchByKeywords(query, limit, { channelId: scopedChannelId });
+    // Fail closed: never return out-of-scope rows even if an injected search
+    // backend ignores the channel filter.
+    return hits.filter(hit => hit.channelId === scopedChannelId);
   }
   rebuildSearchIndex(): void {
     this.backfillTranscriptProjectionFromDisk();
@@ -681,9 +880,10 @@ export class SessionStore implements TranscriptSearchPort {
     if (recentCacheHit) {
       return recentCacheHit;
     }
+    const archiveFingerprintBeforeRead = cached ? this.fingerprintArchive(cached) : null;
     const recentEntries = this.readRecentEntriesFromTail(resolved.channelId, resolved.filePath, limit);
     if (cached) {
-      this.writeCachedRecentEntries(cached, limit, recentEntries);
+      this.writeCachedRecentEntries(cached, limit, recentEntries, archiveFingerprintBeforeRead);
     }
     return recentEntries;
   }
@@ -699,6 +899,269 @@ export class SessionStore implements TranscriptSearchPort {
     const cache = this.ensureChannelFullyLoaded(channelId);
     if (!cache) return [];
     return cache.entries.filter(entry => entry.id >= normalizedStart && entry.id <= normalizedEnd);
+  }
+  applyCogSecTombstones(options: CogSecL0TombstoneOptions): CogSecL0TombstoneResult {
+    const caseId = normalizeCogSecCaseId(options.caseId);
+    const event = options.eventStore.getEvent(caseId);
+    if (!event) {
+      throw new Error(`CogSec event not found: ${caseId}`);
+    }
+    const selector = normalizeCogSecSelector(options);
+    const timestamp = options.timestamp ?? Date.now();
+    const redactedAt = new Date(timestamp).toISOString();
+
+    const result = this.withLockedExistingChannelWrite(options.channelId, (cache) => {
+      const archive = this.journalRuntime.openArchive(cache.channelId, cache.resolvedPath);
+      const rawEntries = this.journalRuntime.readJournalEntries(archive);
+      const selectedRows = rawEntries.filter(entry => isSelectedCogSecMessage(entry, selector));
+      const selectedMessageIds = selectedRows.map(entry => entry.id);
+      if (selectedRows.length === 0) {
+        return {
+          caseId,
+          sourceChannelId: event.sourceChannelId,
+          logicalSessionId: cache.channelId,
+          tombstonedL0RowCount: 0,
+          tombstonedMessageIds: [],
+        } satisfies CogSecL0TombstoneResult;
+      }
+
+      const sealed = options.forensicArchive.sealArtifact({
+        caseId,
+        kind: 'l0_rows',
+        sourceChannelId: event.sourceChannelId,
+        logicalSessionId: cache.channelId,
+        payload: {
+          caseId,
+          sourceChannelId: event.sourceChannelId,
+          logicalSessionId: cache.channelId,
+          selectedMessageIds,
+          rows: selectedRows,
+        },
+      });
+
+      const tombstoneContent = buildCogSecTombstoneContent(caseId);
+      const tombstoneMetadata = buildCogSecTombstoneMetadata({
+        caseId,
+        redactedAt,
+        actor: options.actor,
+      });
+      const selectedIdSet = new Set(selectedMessageIds);
+      const rewrittenEntries = rawEntries.map(entry => (
+        entry.type === 'message' && selectedIdSet.has(entry.id)
+          ? buildCogSecTombstoneJournalEntry(entry, tombstoneContent, tombstoneMetadata)
+          : entry
+      ));
+
+      this.journalRuntime.rewriteJournalEntries(archive, rewrittenEntries);
+      const reloaded = this.journalRuntime.loadChannel(archive);
+      const sessionKey = this.resolveCacheSessionKey(cache);
+      this.channels.set(sessionKey, reloaded);
+      this.upsertChannelIndex(sessionKey, snapshotIndexEntry(reloaded));
+      this.syncTranscriptProjectionForChannel(reloaded.channelId, reloaded.entries);
+
+      const currentEvent = options.eventStore.getEvent(caseId) ?? event;
+      const affectedMessageRanges = [
+        ...currentEvent.affectedMessageRanges,
+        {
+          sourceChannelId: event.sourceChannelId,
+          logicalSessionId: cache.channelId,
+          messageIds: selectedMessageIds,
+        },
+      ];
+      const nextActions = uniqueStrings([
+        ...currentEvent.actions,
+        'seal',
+        'tombstone',
+      ] satisfies CogSecAction[]);
+
+      options.eventStore.updateEvent(caseId, {
+        affectedLogicalSessionIds: uniqueStrings([
+          ...currentEvent.affectedLogicalSessionIds,
+          cache.channelId,
+        ]),
+        affectedMessageRanges,
+        sealedForensicPayloadRefs: uniqueStrings([
+          ...currentEvent.sealedForensicPayloadRefs,
+          sealed.ref,
+        ]),
+        sealedForensicPayloadHashes: uniqueStrings([
+          ...currentEvent.sealedForensicPayloadHashes,
+          sealed.sha256,
+        ]),
+        tombstonedL0RowCount: currentEvent.tombstonedL0RowCount + selectedRows.length,
+        actions: nextActions,
+        resultCounters: {
+          ...currentEvent.resultCounters,
+          sealedArtifacts: (currentEvent.resultCounters.sealedArtifacts ?? 0) + 1,
+          tombstonedL0Rows: (currentEvent.resultCounters.tombstonedL0Rows ?? 0) + selectedRows.length,
+        },
+      });
+
+      return {
+        caseId,
+        sourceChannelId: event.sourceChannelId,
+        logicalSessionId: cache.channelId,
+        tombstonedL0RowCount: selectedRows.length,
+        tombstonedMessageIds: selectedMessageIds,
+        sealedForensicPayloadRef: sealed.ref,
+        sealedForensicPayloadHash: sealed.sha256,
+      } satisfies CogSecL0TombstoneResult;
+    });
+
+    if (!result) {
+      throw new Error(`Session channel not found for CogSec tombstone: ${options.channelId}`);
+    }
+    return result;
+  }
+  listCogSecTombstoneDiagnostics(options: { channelId?: string } = {}): CogSecTombstoneDiagnostic[] {
+    const targets = options.channelId
+      ? [options.channelId]
+      : this.listChannels().map(channel => channel.sessionId);
+    const byCase = new Map<string, Map<string, number[]>>();
+
+    for (const target of targets) {
+      const cache = this.ensureChannelFullyLoaded(target);
+      if (!cache) continue;
+      for (const entry of cache.entries) {
+        const caseId = parseCogSecTombstoneCaseId(entry);
+        if (!caseId) continue;
+        let channels = byCase.get(caseId);
+        if (!channels) {
+          channels = new Map<string, number[]>();
+          byCase.set(caseId, channels);
+        }
+        const messageIds = channels.get(cache.channelId) ?? [];
+        messageIds.push(entry.id);
+        channels.set(cache.channelId, messageIds);
+      }
+    }
+
+    return [...byCase.entries()]
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([caseId, channelsById]) => {
+        const channels = [...channelsById.entries()]
+          .sort(([left], [right]) => left.localeCompare(right))
+          .map(([channelId, messageIds]) => ({
+            channelId,
+            messageIds: [...messageIds].sort((left, right) => left - right),
+            rowCount: messageIds.length,
+          }));
+        return {
+          caseId,
+          rowCount: channels.reduce((sum, channel) => sum + channel.rowCount, 0),
+          channels,
+        };
+      });
+  }
+  applyCogSecCompactionInvalidations(
+    options: CogSecCompactionInvalidationOptions,
+  ): CogSecCompactionInvalidationResult {
+    const caseId = normalizeCogSecCaseId(options.caseId);
+    const compactionIds = new Set(options.compactionIds.map((id, index) => (
+      normalizeEntryId(id, `compactionIds[${index}]`)
+    )));
+    if (compactionIds.size === 0) {
+      throw new Error('CogSec compaction invalidation requires at least one compaction ID');
+    }
+
+    const result = this.withLockedExistingChannelWrite(options.channelId, (cache) => {
+      const archive = this.journalRuntime.openArchive(cache.channelId, cache.resolvedPath);
+      const rawEntries = this.journalRuntime.readJournalEntries(archive);
+      const selectedIds = rawEntries
+        .filter(entry => entry.type === 'compaction' && compactionIds.has(entry.id))
+        .map(entry => entry.id);
+      if (selectedIds.length === 0) {
+        return {
+          caseId,
+          channelId: cache.channelId,
+          invalidatedCompactionIds: [],
+        } satisfies CogSecCompactionInvalidationResult;
+      }
+
+      const invalidatedSummary = buildCogSecInvalidatedSummaryContent(caseId);
+      const selectedIdSet = new Set(selectedIds);
+      const rewrittenEntries = rawEntries.map(entry => (
+        entry.type === 'compaction' && selectedIdSet.has(entry.id)
+          ? buildCogSecInvalidatedCompactionJournalEntry(entry, invalidatedSummary)
+          : entry
+      ));
+
+      this.journalRuntime.rewriteJournalEntries(archive, rewrittenEntries);
+      const reloaded = this.journalRuntime.loadChannel(archive);
+      const sessionKey = this.resolveCacheSessionKey(cache);
+      this.channels.set(sessionKey, reloaded);
+      this.upsertChannelIndex(sessionKey, snapshotIndexEntry(reloaded));
+
+      return {
+        caseId,
+        channelId: cache.channelId,
+        invalidatedCompactionIds: selectedIds,
+      } satisfies CogSecCompactionInvalidationResult;
+    });
+
+    if (!result) {
+      throw new Error(`Session channel not found for CogSec compaction invalidation: ${options.channelId}`);
+    }
+    return result;
+  }
+  applyCogSecCompactionRegenerations(
+    options: CogSecCompactionRegenerationOptions,
+  ): CogSecCompactionRegenerationResult {
+    const caseId = normalizeCogSecCaseId(options.caseId);
+    const summariesById = new Map<number, string>();
+    for (const [index, summary] of options.summaries.entries()) {
+      const compactionId = normalizeEntryId(summary.compactionId, `summaries[${index}].compactionId`);
+      summariesById.set(
+        compactionId,
+        normalizeCogSecRegeneratedSummary(summary.summary, `summaries[${index}].summary`),
+      );
+    }
+    if (summariesById.size === 0) {
+      throw new Error('CogSec compaction regeneration requires at least one summary');
+    }
+
+    const result = this.withLockedExistingChannelWrite(options.channelId, (cache) => {
+      const archive = this.journalRuntime.openArchive(cache.channelId, cache.resolvedPath);
+      const rawEntries = this.journalRuntime.readJournalEntries(archive);
+      const regeneratedIds: number[] = [];
+      const skippedIds: number[] = [];
+      const rewrittenEntries = rawEntries.map(entry => {
+        if (entry.type !== 'compaction' || !summariesById.has(entry.id)) return entry;
+        const currentSummary = entry.summary ?? '';
+        if (!isCogSecInvalidatedSummaryContent(currentSummary)) {
+          skippedIds.push(entry.id);
+          return entry;
+        }
+        regeneratedIds.push(entry.id);
+        return buildCogSecInvalidatedCompactionJournalEntry(entry, summariesById.get(entry.id)!);
+      });
+
+      for (const id of summariesById.keys()) {
+        if (!regeneratedIds.includes(id) && !skippedIds.includes(id)) {
+          skippedIds.push(id);
+        }
+      }
+
+      if (regeneratedIds.length > 0) {
+        this.journalRuntime.rewriteJournalEntries(archive, rewrittenEntries);
+        const reloaded = this.journalRuntime.loadChannel(archive);
+        const sessionKey = this.resolveCacheSessionKey(cache);
+        this.channels.set(sessionKey, reloaded);
+        this.upsertChannelIndex(sessionKey, snapshotIndexEntry(reloaded));
+      }
+
+      return {
+        caseId,
+        channelId: cache.channelId,
+        regeneratedCompactionIds: regeneratedIds,
+        skippedCompactionIds: skippedIds,
+      } satisfies CogSecCompactionRegenerationResult;
+    });
+
+    if (!result) {
+      throw new Error(`Session channel not found for CogSec compaction regeneration: ${options.channelId}`);
+    }
+    return result;
   }
   getRecentDiscordMessageIds(channelId: string, limit: number): Set<string> {
     const entries = this.getRecent(channelId, limit);

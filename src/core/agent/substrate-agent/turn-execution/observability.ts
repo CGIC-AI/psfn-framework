@@ -22,7 +22,14 @@ import { toErrorMessage } from '../../../../shared/utils/errors.js';
 const log = createComponentLogger('SubstrateAgent');
 type TurnExecutionRuntime = import('../turn-execution-runtime.js').TurnExecutionRuntime;
 
-export type TurnExecutionStageName = 'trust' | 'memory' | 'context' | 'first-token' | 'prompt' | 'end';
+export type TurnExecutionStageName =
+  | 'trust'
+  | 'memory'
+  | 'fatigue'
+  | 'context'
+  | 'first-token'
+  | 'prompt'
+  | 'end';
 
 export interface TurnExecutionObservability {
   emitObservedTurnStage: (
@@ -125,7 +132,13 @@ export function createTurnExecutionObservability(input: {
       ...(telemetry.retrievalLimit !== undefined ? { retrievalLimit: telemetry.retrievalLimit } : {}),
       ...(telemetry.retrievalBudgetPct !== undefined ? { retrievalBudgetPct: telemetry.retrievalBudgetPct } : {}),
       ...(telemetry.retrievalTokenBudget !== undefined ? { retrievalTokenBudget: telemetry.retrievalTokenBudget } : {}),
-      ...(telemetry.retrievalLimitMode ? { retrievalLimitMode: telemetry.retrievalLimitMode } : {}),
+	      ...(telemetry.retrievalLimitMode ? { retrievalLimitMode: telemetry.retrievalLimitMode } : {}),
+	      ...(telemetry.sessionQuarantineRejectedCount !== undefined
+	        ? { sessionQuarantineRejectedCount: telemetry.sessionQuarantineRejectedCount }
+	        : {}),
+	      ...(telemetry.roomVisibilityRejectedCount !== undefined
+	        ? { roomVisibilityRejectedCount: telemetry.roomVisibilityRejectedCount }
+        : {}),
       ...(telemetry.contactScopeRejectedCount !== undefined
         ? { contactScopeRejectedCount: telemetry.contactScopeRejectedCount }
         : {}),

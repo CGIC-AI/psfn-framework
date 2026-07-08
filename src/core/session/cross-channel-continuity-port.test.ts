@@ -45,7 +45,7 @@ describe('createUserContinuityPort', () => {
         content: 'Fallback continuity note',
         timestamp: Date.now() + 1,
         originChannelId: '1234567890',
-        channelVisibility: 'semi_private',
+        channelVisibility: 'invite_only',
       },
     });
 

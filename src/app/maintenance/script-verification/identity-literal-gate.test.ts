@@ -11,7 +11,7 @@ describe('identity literal gate wiring', () => {
 
     expect(scripts['verify:identity-literals']).toBe('node scripts/identity-literal-scan.mjs');
     expect(scripts['verify:repository-hygiene']).toBe(
-      'npm run verify:public-sanitize && npm run verify:identity-literals && npm run verify:dependency-cycles',
+      'npm run verify:public-sanitize && npm run verify:identity-literals && npm run verify:dependency-cycles && npm run verify:shared-type-guards',
     );
   });
 });

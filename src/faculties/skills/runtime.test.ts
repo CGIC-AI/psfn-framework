@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { SkillsRuntime } from './runtime.js';
+import { SKILL_USAGE_TELEMETRY_FILE_NAME } from './telemetry.js';
 
 function writeSkill(path: string, description: string, body: string): void {
   writeFileSync(path, [
@@ -133,6 +134,68 @@ describe('skills runtime', () => {
         managedRoot: 'purrsephone/skills',
         configPath: 'companion-data/skills.json',
       });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('records content-free skill invocation success and failure metrics', () => {
+    const root = mkdtempSync(join(tmpdir(), 'skills-runtime-telemetry-'));
+    const dataDir = join(root, 'data');
+    const seedDir = join(root, 'config');
+    const skillDir = join(root, 'skills', 'memory-management');
+
+    mkdirSync(dataDir, { recursive: true });
+    mkdirSync(seedDir, { recursive: true });
+    mkdirSync(skillDir, { recursive: true });
+
+    writeSkillsConfig(dataDir, seedDir);
+    writeSkill(join(skillDir, 'SKILL.md'), 'telemetry proof', '# Sensitive workflow body');
+
+    try {
+      const runtime = new SkillsRuntime({
+        dataDir,
+        seedDir,
+        repoRoot: root,
+        isBinaryAvailable: () => true,
+      });
+
+      expect(runtime.recordSkillInvocation('missing-skill', {
+        outcome: 'success',
+        durationMs: 10,
+        occurredAt: '2026-06-29T10:00:00.000Z',
+      })).toBeNull();
+
+      runtime.recordSkillInvocation('memory-management', {
+        outcome: 'success',
+        durationMs: 100,
+        occurredAt: '2026-06-29T10:00:00.000Z',
+      });
+      const stats = runtime.recordSkillInvocation('MEMORY-MANAGEMENT', {
+        outcome: 'failure',
+        durationMs: 300,
+        occurredAt: '2026-06-29T10:01:00.000Z',
+      });
+
+      expect(stats).toMatchObject({
+        name: 'memory-management',
+        invocationCount: 2,
+        successCount: 1,
+        failureCount: 1,
+        durationSampleCount: 2,
+        averageDurationMs: 200,
+        lastDurationMs: 300,
+        lastOutcome: 'failure',
+        successRate: 0.5,
+        firstUsedAt: '2026-06-29T10:00:00.000Z',
+        lastUsedAt: '2026-06-29T10:01:00.000Z',
+      });
+      expect(runtime.getSkillUsageStats('memory-management')).toEqual(stats);
+      expect(runtime.listSkillUsageStats()).toHaveLength(1);
+
+      const persisted = readFileSync(join(dataDir, SKILL_USAGE_TELEMETRY_FILE_NAME), 'utf-8');
+      expect(persisted).toContain('"invocationCount": 2');
+      expect(persisted).not.toContain('Sensitive workflow body');
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

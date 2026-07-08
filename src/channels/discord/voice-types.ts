@@ -90,6 +90,12 @@ export interface VoiceTurnRuntimeContext extends VoiceRuntimeBaseContext {
   capturing: boolean;
   preferredTtsProviderId: RuntimeVoiceTtsProvider;
   getHandler: () => MessageHandler | null;
+  emitTurnObservation(params: {
+    turnId?: string;
+    stage: VoiceTurnErrorStage;
+    kind: VoiceTurnObservationKind;
+    detail?: Record<string, unknown>;
+  }): Promise<void>;
 }
 
 export interface VoiceRecoveryRuntimeContext extends VoiceRuntimeBaseContext {

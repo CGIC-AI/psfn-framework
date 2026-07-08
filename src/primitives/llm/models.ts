@@ -121,7 +121,8 @@ function supportsOpenAIDeveloperRole(model: Model<any>): boolean {
     || isZai
     || provider === 'opencode'
     || baseUrl.includes('opencode.ai');
-  return model.compat?.supportsDeveloperRole ?? !isNonStandard;
+  const compat = model.compat as { supportsDeveloperRole?: boolean } | undefined;
+  return compat?.supportsDeveloperRole ?? !isNonStandard;
 }
 
 function resolveOpenAITransport(model: Model<any>): LLMSystemPromptTransport {

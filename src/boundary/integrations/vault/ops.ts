@@ -1,10 +1,11 @@
-// ── Obsidian Vault Operations ──
-// Core operations for reading/writing notes in an Obsidian vault via the CLI.
+// ── External Obsidian Vault Operations ──
+// Core operations for bounded external Obsidian vault access via the CLI.
 // All operations use the Obsidian CLI which communicates with the running desktop app via IPC.
 
 import { execSync } from 'node:child_process';
 import { createComponentLogger } from '../../../shared/logger.js';
 import { toErrorMessage } from '../../../shared/utils/errors.js';
+import { sleep } from '../../../shared/utils/timing.js';
 
 const OBSIDIAN_SERVICES = [
   'obsidian-xvfb',
@@ -193,7 +194,7 @@ export class VaultOps implements VaultOperations {
         throw new Error(`obsidian command not found — ensure CLI is installed and on PATH`);
       }
       if (msg.includes('vault') && msg.includes('not found')) {
-        throw new Error(`Vault '${this.config.vaultName}' not found — check the canonical Obsidian settings in settings.json`);
+        throw new Error(`External vault '${this.config.vaultName}' not found — check the Obsidian bridge settings in settings.json`);
       }
       if (msg.includes('IPC') || msg.includes('connect')) {
         if (!isRetry) {
@@ -223,7 +224,7 @@ export class VaultOps implements VaultOperations {
         services: OBSIDIAN_SERVICES,
         waitMs: OBSIDIAN_RESTART_WAIT_MS,
       });
-      await new Promise(resolve => setTimeout(resolve, OBSIDIAN_RESTART_WAIT_MS));
+      await sleep(OBSIDIAN_RESTART_WAIT_MS);
       return true;
     } catch (err) {
       log.warn('Failed to restart Obsidian services', { error: toErrorMessage(err) });

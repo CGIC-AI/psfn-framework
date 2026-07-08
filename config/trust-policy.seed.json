@@ -2,19 +2,23 @@
   "trustCeiling": {
     "primary": ["public", "personal", "intimate", "confidential"],
     "trusted": ["public", "personal"],
-    "regular": ["public"],
+    "regular": ["public", "personal"],
     "public": ["public"]
   },
   "visibilityAllowed": {
     "private": ["public", "personal", "intimate", "confidential"],
-    "semi_private": ["public", "personal"],
-    "public": ["public"],
-    "broadcast": ["public"]
+    "invite_only": ["public", "personal"],
+    "public": ["public"]
   },
+  "audienceScopeThresholds": {
+    "fewMax": 10,
+    "manyMax": 100
+  },
+  "participantRelationshipConfidenceThreshold": 0.7,
   "channelClassification": {
     "privatePrefixes": ["api:", "sillytavern:", "openwebui:", "shard:", "internal:"],
     "broadcastPrefixes": ["twitter:", "social:"],
-    "defaultVisibility": "semi_private",
+    "defaultVisibility": "invite_only",
     "visibilityOverrides": {
       "exact": {},
       "prefix": {}

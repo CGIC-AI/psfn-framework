@@ -14,20 +14,66 @@ const GH_PROJECT_SYNC_ENABLED_KEY = 'custom.github_project_sync.enabled';
 const GH_PROJECT_SYNC_PROJECT_URL_KEY = 'custom.github_project_sync.project_url';
 const GH_PROJECT_SYNC_OWNER_KEY = 'custom.github_project_sync.owner';
 const GH_PROJECT_SYNC_PROJECT_NUMBER_KEY = 'custom.github_project_sync.project_number';
+const GH_PROJECT_SYNC_FIELDS_PREFIX = 'custom.github_project_sync.fields.';
+const GH_PROJECT_SYNC_STATUS_FIELD_ID_KEY = `${GH_PROJECT_SYNC_FIELDS_PREFIX}status.field_id`;
+const GH_PROJECT_SYNC_STATUS_OPTION_PREFIX = `${GH_PROJECT_SYNC_FIELDS_PREFIX}status.options.`;
+const GH_PROJECT_SYNC_PRIORITY_FIELD_ID_KEY = `${GH_PROJECT_SYNC_FIELDS_PREFIX}priority.field_id`;
+const GH_PROJECT_SYNC_PRIORITY_TYPE_KEY = `${GH_PROJECT_SYNC_FIELDS_PREFIX}priority.type`;
+const GH_PROJECT_SYNC_PRIORITY_OPTION_PREFIX = `${GH_PROJECT_SYNC_FIELDS_PREFIX}priority.options.`;
+const GH_PROJECT_SYNC_PRIORITY_VALUE_PREFIX = `${GH_PROJECT_SYNC_FIELDS_PREFIX}priority.values.`;
 const ITEM_OWNER_METADATA_KEY = 'github_project_sync_owner';
 const ITEM_PROJECT_NUMBER_METADATA_KEY = 'github_project_sync_project_number';
 const ITEM_ID_METADATA_KEY = 'github_project_sync_item_id';
 const DRAFT_CONTENT_ID_METADATA_KEY = 'github_project_sync_draft_content_id';
 const ITEM_ARCHIVED_METADATA_KEY = 'github_project_sync_archived';
 const PROJECT_URL_PATTERN = /^https:\/\/github\.com\/(?:users|orgs)\/([^/]+)\/projects\/(\d+)\/?$/i;
+const BEAD_STATUSES = ['open', 'in_progress', 'blocked', 'closed'] as const;
+const BEAD_PRIORITIES = [0, 1, 2, 3, 4] as const;
+const UPDATE_PROJECT_FIELD_VALUE_MUTATION = [
+  'mutation($projectId:ID!, $itemId:ID!, $fieldId:ID!) {',
+  'updateProjectV2ItemFieldValue(input:{projectId:$projectId,itemId:$itemId,fieldId:$fieldId,value:FIELD_VALUE}) {',
+  'projectV2Item { id }',
+  '}',
+  '}',
+].join(' ');
+
+type BeadStatus = typeof BEAD_STATUSES[number];
+type BeadPriority = typeof BEAD_PRIORITIES[number];
 
 interface CommandRunner {
   run(command: string, args: readonly string[], options: { cwd: string; label: string }): Promise<string>;
 }
 
+interface GitHubProjectStatusFieldConfig {
+  fieldId: string;
+  options: Record<BeadStatus, string>;
+}
+
+interface GitHubProjectPriorityNumberFieldConfig {
+  fieldId: string;
+  type: 'number';
+  values?: Partial<Record<BeadPriority, number>>;
+}
+
+interface GitHubProjectPrioritySingleSelectFieldConfig {
+  fieldId: string;
+  type: 'single_select';
+  options: Record<BeadPriority, string>;
+}
+
+type GitHubProjectPriorityFieldConfig =
+  | GitHubProjectPriorityNumberFieldConfig
+  | GitHubProjectPrioritySingleSelectFieldConfig;
+
+interface GitHubProjectNativeFieldsConfig {
+  status?: GitHubProjectStatusFieldConfig;
+  priority?: GitHubProjectPriorityFieldConfig;
+}
+
 interface GitHubProjectSyncConfig {
   owner: string;
   projectNumber: number;
+  nativeFields?: GitHubProjectNativeFieldsConfig;
 }
 
 interface GitHubProjectSyncDisabled {
@@ -216,6 +262,216 @@ function parsePositiveInteger(value: unknown): number | undefined {
   return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : undefined;
 }
 
+function hasConfigKey(config: Record<string, unknown>, key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(config, key);
+}
+
+function hasConfigKeyWithPrefix(config: Record<string, unknown>, prefix: string): boolean {
+  return Object.keys(config).some((key) => key.startsWith(prefix));
+}
+
+function configError(error: string): GitHubProjectSyncConfigError {
+  return {
+    disabled: false,
+    error,
+  };
+}
+
+function readRequiredConfigString(
+  config: Record<string, unknown>,
+  key: string,
+  description: string,
+): string | GitHubProjectSyncConfigError {
+  const value = asNonEmptyString(config[key]);
+  if (value) return value;
+  return configError(`Invalid GitHub Project native-field config: ${key} must be a non-empty ${description}`);
+}
+
+function readOptionalConfigString(
+  config: Record<string, unknown>,
+  key: string,
+  description: string,
+): string | GitHubProjectSyncConfigError | undefined {
+  if (!hasConfigKey(config, key)) return undefined;
+  return readRequiredConfigString(config, key, description);
+}
+
+function priorityMappedKeys(prefix: string, priority: BeadPriority): [string, string] {
+  return [`${prefix}${priority}`, `${prefix}P${priority}`];
+}
+
+function readPriorityMappedString(
+  config: Record<string, unknown>,
+  prefix: string,
+  priority: BeadPriority,
+  description: string,
+): string | GitHubProjectSyncConfigError | undefined {
+  const [numericKey, prefixedKey] = priorityMappedKeys(prefix, priority);
+  const numericValue = readOptionalConfigString(config, numericKey, description);
+  if (typeof numericValue !== 'string' && numericValue !== undefined) return numericValue;
+  const prefixedValue = readOptionalConfigString(config, prefixedKey, description);
+  if (typeof prefixedValue !== 'string' && prefixedValue !== undefined) return prefixedValue;
+  if (numericValue && prefixedValue && numericValue !== prefixedValue) {
+    return configError(
+      `Invalid GitHub Project native-field config: ${numericKey} and ${prefixedKey} both map priority P${priority}; set only one`,
+    );
+  }
+  return prefixedValue ?? numericValue;
+}
+
+function isKnownNativeFieldConfigKey(key: string): boolean {
+  if (key === GH_PROJECT_SYNC_STATUS_FIELD_ID_KEY) return true;
+  if (BEAD_STATUSES.some((status) => key === `${GH_PROJECT_SYNC_STATUS_OPTION_PREFIX}${status}`)) return true;
+  if (key === GH_PROJECT_SYNC_PRIORITY_FIELD_ID_KEY || key === GH_PROJECT_SYNC_PRIORITY_TYPE_KEY) return true;
+  return BEAD_PRIORITIES.some((priority) => (
+    priorityMappedKeys(GH_PROJECT_SYNC_PRIORITY_OPTION_PREFIX, priority).includes(key)
+    || priorityMappedKeys(GH_PROJECT_SYNC_PRIORITY_VALUE_PREFIX, priority).includes(key)
+  ));
+}
+
+function validateKnownNativeFieldKeys(config: Record<string, unknown>): GitHubProjectSyncConfigError | undefined {
+  const unknownKey = Object.keys(config)
+    .find((key) => key.startsWith(GH_PROJECT_SYNC_FIELDS_PREFIX) && !isKnownNativeFieldConfigKey(key));
+  if (!unknownKey) return undefined;
+  return configError(`Invalid GitHub Project native-field config: unsupported key ${unknownKey}`);
+}
+
+function hasStatusFieldConfig(config: Record<string, unknown>): boolean {
+  return hasConfigKey(config, GH_PROJECT_SYNC_STATUS_FIELD_ID_KEY)
+    || hasConfigKeyWithPrefix(config, GH_PROJECT_SYNC_STATUS_OPTION_PREFIX);
+}
+
+function hasPriorityFieldConfig(config: Record<string, unknown>): boolean {
+  return hasConfigKey(config, GH_PROJECT_SYNC_PRIORITY_FIELD_ID_KEY)
+    || hasConfigKey(config, GH_PROJECT_SYNC_PRIORITY_TYPE_KEY)
+    || hasConfigKeyWithPrefix(config, GH_PROJECT_SYNC_PRIORITY_OPTION_PREFIX)
+    || hasConfigKeyWithPrefix(config, GH_PROJECT_SYNC_PRIORITY_VALUE_PREFIX);
+}
+
+function parseStatusFieldConfig(
+  config: Record<string, unknown>,
+): GitHubProjectStatusFieldConfig | GitHubProjectSyncConfigError | undefined {
+  if (!hasStatusFieldConfig(config)) return undefined;
+  const fieldId = readRequiredConfigString(config, GH_PROJECT_SYNC_STATUS_FIELD_ID_KEY, 'status field id');
+  if (typeof fieldId !== 'string') return fieldId;
+
+  const options = {} as Record<BeadStatus, string>;
+  for (const status of BEAD_STATUSES) {
+    const key = `${GH_PROJECT_SYNC_STATUS_OPTION_PREFIX}${status}`;
+    const optionId = readRequiredConfigString(config, key, `single-select option id for status ${status}`);
+    if (typeof optionId !== 'string') return optionId;
+    options[status] = optionId;
+  }
+  return { fieldId, options };
+}
+
+function parsePriorityNumberValues(
+  config: Record<string, unknown>,
+): Partial<Record<BeadPriority, number>> | GitHubProjectSyncConfigError | undefined {
+  if (!hasConfigKeyWithPrefix(config, GH_PROJECT_SYNC_PRIORITY_VALUE_PREFIX)) return undefined;
+  const values: Partial<Record<BeadPriority, number>> = {};
+  for (const priority of BEAD_PRIORITIES) {
+    const value = readPriorityMappedString(
+      config,
+      GH_PROJECT_SYNC_PRIORITY_VALUE_PREFIX,
+      priority,
+      `number value for priority P${priority}`,
+    );
+    if (typeof value !== 'string') {
+      return value ?? configError(
+        `Invalid GitHub Project native-field config: missing number value mapping for priority P${priority}`,
+      );
+    }
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed)) {
+      return configError(
+        `Invalid GitHub Project native-field config: priority P${priority} value mapping must be a finite number`,
+      );
+    }
+    values[priority] = parsed;
+  }
+  return values;
+}
+
+function parsePrioritySingleSelectOptions(
+  config: Record<string, unknown>,
+): Record<BeadPriority, string> | GitHubProjectSyncConfigError {
+  const options = {} as Record<BeadPriority, string>;
+  for (const priority of BEAD_PRIORITIES) {
+    const optionId = readPriorityMappedString(
+      config,
+      GH_PROJECT_SYNC_PRIORITY_OPTION_PREFIX,
+      priority,
+      `single-select option id for priority P${priority}`,
+    );
+    if (typeof optionId !== 'string') {
+      return optionId ?? configError(
+        `Invalid GitHub Project native-field config: missing single-select option mapping for priority P${priority}`,
+      );
+    }
+    options[priority] = optionId;
+  }
+  return options;
+}
+
+function parsePriorityFieldConfig(
+  config: Record<string, unknown>,
+): GitHubProjectPriorityFieldConfig | GitHubProjectSyncConfigError | undefined {
+  if (!hasPriorityFieldConfig(config)) return undefined;
+  const fieldId = readRequiredConfigString(config, GH_PROJECT_SYNC_PRIORITY_FIELD_ID_KEY, 'priority field id');
+  if (typeof fieldId !== 'string') return fieldId;
+
+  const rawType = readRequiredConfigString(
+    config,
+    GH_PROJECT_SYNC_PRIORITY_TYPE_KEY,
+    'priority field type (number or single_select)',
+  );
+  if (typeof rawType !== 'string') return rawType;
+  if (rawType !== 'number' && rawType !== 'single_select') {
+    return configError(
+      `Invalid GitHub Project native-field config: ${GH_PROJECT_SYNC_PRIORITY_TYPE_KEY} must be number or single_select`,
+    );
+  }
+
+  if (rawType === 'number') {
+    if (hasConfigKeyWithPrefix(config, GH_PROJECT_SYNC_PRIORITY_OPTION_PREFIX)) {
+      return configError(
+        `Invalid GitHub Project native-field config: ${GH_PROJECT_SYNC_PRIORITY_OPTION_PREFIX}* requires ${GH_PROJECT_SYNC_PRIORITY_TYPE_KEY}=single_select`,
+      );
+    }
+    const values = parsePriorityNumberValues(config);
+    if (values && 'disabled' in values) return values;
+    return values ? { fieldId, type: 'number', values } : { fieldId, type: 'number' };
+  }
+
+  if (hasConfigKeyWithPrefix(config, GH_PROJECT_SYNC_PRIORITY_VALUE_PREFIX)) {
+    return configError(
+      `Invalid GitHub Project native-field config: ${GH_PROJECT_SYNC_PRIORITY_VALUE_PREFIX}* requires ${GH_PROJECT_SYNC_PRIORITY_TYPE_KEY}=number`,
+    );
+  }
+  const options = parsePrioritySingleSelectOptions(config);
+  if ('disabled' in options) return options;
+  return { fieldId, type: 'single_select', options };
+}
+
+function parseNativeFieldsConfig(
+  config: Record<string, unknown>,
+): { nativeFields?: GitHubProjectNativeFieldsConfig } | GitHubProjectSyncConfigError {
+  const knownKeysError = validateKnownNativeFieldKeys(config);
+  if (knownKeysError) return knownKeysError;
+
+  const status = parseStatusFieldConfig(config);
+  if (status && 'disabled' in status) return status;
+  const priority = parsePriorityFieldConfig(config);
+  if (priority && 'disabled' in priority) return priority;
+
+  const nativeFields = {
+    ...(status ? { status } : {}),
+    ...(priority ? { priority } : {}),
+  };
+  return Object.keys(nativeFields).length > 0 ? { nativeFields } : {};
+}
+
 function resolveProjectConfig(config: Record<string, unknown>): GitHubProjectSyncConfigResult {
   const enabled = parseBoolean(config[GH_PROJECT_SYNC_ENABLED_KEY]);
   if (enabled === false) {
@@ -228,7 +484,9 @@ function resolveProjectConfig(config: Record<string, unknown>): GitHubProjectSyn
   const owner = asNonEmptyString(config[GH_PROJECT_SYNC_OWNER_KEY]);
   const projectNumber = parsePositiveInteger(config[GH_PROJECT_SYNC_PROJECT_NUMBER_KEY]);
   if (owner && projectNumber) {
-    return { owner, projectNumber };
+    const nativeFields = parseNativeFieldsConfig(config);
+    if ('disabled' in nativeFields) return nativeFields;
+    return { owner, projectNumber, ...nativeFields };
   }
 
   const projectUrl = asNonEmptyString(config[GH_PROJECT_SYNC_PROJECT_URL_KEY]);
@@ -240,9 +498,19 @@ function resolveProjectConfig(config: Record<string, unknown>): GitHubProjectSyn
         error: `Invalid ${GH_PROJECT_SYNC_PROJECT_URL_KEY}: expected https://github.com/users/<owner>/projects/<number> or https://github.com/orgs/<owner>/projects/<number>`,
       };
     }
+    const nativeFields = parseNativeFieldsConfig(config);
+    if ('disabled' in nativeFields) return nativeFields;
     return {
       owner: match[1],
       projectNumber: Number.parseInt(match[2], 10),
+      ...nativeFields,
+    };
+  }
+
+  if (hasConfigKeyWithPrefix(config, GH_PROJECT_SYNC_FIELDS_PREFIX)) {
+    return {
+      disabled: false,
+      error: `Incomplete GitHub Project sync config: native-field config requires ${GH_PROJECT_SYNC_PROJECT_URL_KEY} or owner/project_number`,
     };
   }
 
@@ -356,8 +624,8 @@ async function ensureProjectAccess(
   runner: CommandRunner,
   workspacePath: string,
   config: GitHubProjectSyncConfig,
-): Promise<void> {
-  await runner.run(
+): Promise<string> {
+  const stdout = await runner.run(
     'gh',
     ['project', 'view', String(config.projectNumber), '--owner', config.owner, '--format', 'json'],
     {
@@ -365,6 +633,18 @@ async function ensureProjectAccess(
       label: `gh project view ${config.owner}/${config.projectNumber}`,
     },
   );
+  const payload = parseJson<Record<string, unknown>>(
+    stdout,
+    `gh project view ${config.owner}/${config.projectNumber}`,
+  );
+  const projectId = asNonEmptyString(payload.id);
+  if (!projectId) {
+    throw new JSONRPCErrorException(
+      `gh project view ${config.owner}/${config.projectNumber} returned no project id`,
+      GatewayErrors.PROVIDER_ERROR,
+    );
+  }
+  return projectId;
 }
 
 async function loadIssueById(
@@ -445,6 +725,131 @@ async function lookupDraftContentIdByItemId(
   return content.id;
 }
 
+function isBeadStatus(value: string): value is BeadStatus {
+  return (BEAD_STATUSES as readonly string[]).includes(value);
+}
+
+function issueStatusForNativeField(issue: BeadsIssueRecord): BeadStatus {
+  const status = issue.status ?? 'open';
+  if (isBeadStatus(status)) return status;
+  throw new JSONRPCErrorException(
+    `Issue ${issue.id} has unsupported status for GitHub Project field sync: ${status}`,
+    GatewayErrors.PROVIDER_ERROR,
+  );
+}
+
+function issuePriorityForNativeField(issue: BeadsIssueRecord): BeadPriority | undefined {
+  if (issue.priority === undefined) return undefined;
+  if (BEAD_PRIORITIES.some((priority) => priority === issue.priority)) {
+    return issue.priority as BeadPriority;
+  }
+  throw new JSONRPCErrorException(
+    `Issue ${issue.id} has unsupported priority for GitHub Project field sync: ${issue.priority}`,
+    GatewayErrors.PROVIDER_ERROR,
+  );
+}
+
+function updateProjectFieldValueMutation(fieldValueLiteral: string): string {
+  return UPDATE_PROJECT_FIELD_VALUE_MUTATION.replace('FIELD_VALUE', fieldValueLiteral);
+}
+
+async function updateProjectFieldValue(
+  runner: CommandRunner,
+  workspacePath: string,
+  projectId: string,
+  itemId: string,
+  fieldId: string,
+  fieldValueLiteral: string,
+  label: string,
+): Promise<void> {
+  const stdout = await runner.run(
+    'gh',
+    [
+      'api',
+      'graphql',
+      '-f',
+      `query=${updateProjectFieldValueMutation(fieldValueLiteral)}`,
+      '-F',
+      `projectId=${projectId}`,
+      '-F',
+      `itemId=${itemId}`,
+      '-F',
+      `fieldId=${fieldId}`,
+    ],
+    {
+      cwd: workspacePath,
+      label: `gh api graphql update project field ${label}`,
+    },
+  );
+  const payload = parseJson<{ errors?: unknown[] }>(stdout, `gh api graphql update project field ${label}`);
+  if (Array.isArray(payload.errors) && payload.errors.length > 0) {
+    throw new JSONRPCErrorException(
+      `gh api graphql update project field ${label} returned GraphQL errors`,
+      GatewayErrors.PROVIDER_ERROR,
+    );
+  }
+}
+
+function priorityNumberValue(
+  priorityField: GitHubProjectPriorityNumberFieldConfig,
+  priority: BeadPriority,
+): number {
+  return priorityField.values?.[priority] ?? priority;
+}
+
+async function updateNativeProjectFields(
+  runner: CommandRunner,
+  workspacePath: string,
+  config: GitHubProjectSyncConfig,
+  projectId: string,
+  itemId: string,
+  issue: BeadsIssueRecord,
+): Promise<void> {
+  const nativeFields = config.nativeFields;
+  if (!nativeFields) return;
+
+  if (nativeFields.status) {
+    const status = issueStatusForNativeField(issue);
+    const optionId = nativeFields.status.options[status];
+    await updateProjectFieldValue(
+      runner,
+      workspacePath,
+      projectId,
+      itemId,
+      nativeFields.status.fieldId,
+      `{ singleSelectOptionId: ${JSON.stringify(optionId)} }`,
+      `${issue.id} status`,
+    );
+  }
+
+  const priorityField = nativeFields.priority;
+  if (!priorityField) return;
+  const priority = issuePriorityForNativeField(issue);
+  if (priority === undefined) return;
+  if (priorityField.type === 'number') {
+    await updateProjectFieldValue(
+      runner,
+      workspacePath,
+      projectId,
+      itemId,
+      priorityField.fieldId,
+      `{ number: ${priorityNumberValue(priorityField, priority)} }`,
+      `${issue.id} priority`,
+    );
+    return;
+  }
+
+  await updateProjectFieldValue(
+    runner,
+    workspacePath,
+    projectId,
+    itemId,
+    priorityField.fieldId,
+    `{ singleSelectOptionId: ${JSON.stringify(priorityField.options[priority])} }`,
+    `${issue.id} priority`,
+  );
+}
+
 async function persistItemMetadata(
   runner: CommandRunner,
   workspacePath: string,
@@ -487,6 +892,7 @@ async function createItem(
   runner: CommandRunner,
   workspacePath: string,
   config: GitHubProjectSyncConfig,
+  projectId: string,
   issue: BeadsIssueRecord,
 ): Promise<GitHubProjectSyncResult> {
   const stdout = await runner.run(
@@ -519,6 +925,7 @@ async function createItem(
   }
   const draftContentId = await lookupDraftContentIdByItemId(runner, workspacePath, itemId);
   await persistItemMetadata(runner, workspacePath, issue.id, config, itemId, draftContentId, false);
+  await updateNativeProjectFields(runner, workspacePath, config, projectId, itemId, issue);
   return {
     integration: 'github_project',
     state: 'synced',
@@ -562,11 +969,12 @@ async function syncOpenIssue(
   runner: CommandRunner,
   workspacePath: string,
   config: GitHubProjectSyncConfig,
+  projectId: string,
   issue: BeadsIssueRecord,
 ): Promise<GitHubProjectSyncResult> {
   const itemId = getMatchingItemId(issue, config);
   if (!itemId) {
-    return await createItem(runner, workspacePath, config, issue);
+    return await createItem(runner, workspacePath, config, projectId, issue);
   }
   const draftContentId = getMatchingDraftContentId(issue, config)
     ?? await lookupDraftContentIdByItemId(runner, workspacePath, itemId);
@@ -604,6 +1012,7 @@ async function syncOpenIssue(
   if (isMetadataArchived(issue) || !getMatchingDraftContentId(issue, config)) {
     await persistItemMetadata(runner, workspacePath, issue.id, config, itemId, draftContentId, false);
   }
+  await updateNativeProjectFields(runner, workspacePath, config, projectId, itemId, issue);
 
   return {
     integration: 'github_project',
@@ -621,6 +1030,7 @@ async function syncClosedIssue(
   runner: CommandRunner,
   workspacePath: string,
   config: GitHubProjectSyncConfig,
+  projectId: string,
   issue: BeadsIssueRecord,
 ): Promise<GitHubProjectSyncResult> {
   const itemId = getMatchingItemId(issue, config);
@@ -645,6 +1055,8 @@ async function syncClosedIssue(
       reason: 'Project item is already marked archived in beads metadata',
     };
   }
+
+  await updateNativeProjectFields(runner, workspacePath, config, projectId, itemId, issue);
 
   await runner.run(
     'gh',
@@ -697,12 +1109,13 @@ async function syncIssueRecord(
   runner: CommandRunner,
   workspacePath: string,
   config: GitHubProjectSyncConfig,
+  projectId: string,
   issue: BeadsIssueRecord,
 ): Promise<GitHubProjectSyncResult> {
   if ((issue.status ?? 'open') === 'closed') {
-    return await syncClosedIssue(runner, workspacePath, config, issue);
+    return await syncClosedIssue(runner, workspacePath, config, projectId, issue);
   }
-  return await syncOpenIssue(runner, workspacePath, config, issue);
+  return await syncOpenIssue(runner, workspacePath, config, projectId, issue);
 }
 
 export async function syncMutatedBeadToGitHubProject(
@@ -736,9 +1149,9 @@ export async function syncMutatedBeadToGitHubProject(
       };
     }
 
-    await ensureProjectAccess(runner, workspacePath, resolvedConfig);
+    const projectId = await ensureProjectAccess(runner, workspacePath, resolvedConfig);
     const issue = await loadIssueById(runner, workspacePath, issueId);
-    return await syncIssueRecord(runner, workspacePath, resolvedConfig, issue);
+    return await syncIssueRecord(runner, workspacePath, resolvedConfig, projectId, issue);
   } catch (error) {
     const issueId = action === 'create' ? extractIssueId(action, target, payload) : target;
     return toSyncErrorResult(issueId, resolvedConfig, error);
@@ -777,7 +1190,7 @@ export async function syncAllBeadsToGitHubProject(
     };
   }
 
-  await ensureProjectAccess(runner, workspacePath, config);
+  const projectId = await ensureProjectAccess(runner, workspacePath, config);
   const issues = await exportIssues(runner, workspacePath);
   const errors: Array<{ issueId: string; message: string }> = [];
   let synced = 0;
@@ -787,7 +1200,7 @@ export async function syncAllBeadsToGitHubProject(
   for (const issue of issues) {
     let result: GitHubProjectSyncResult;
     try {
-      result = await syncIssueRecord(runner, workspacePath, config, issue);
+      result = await syncIssueRecord(runner, workspacePath, config, projectId, issue);
     } catch (error) {
       result = toSyncErrorResult(issue.id, config, error);
     }

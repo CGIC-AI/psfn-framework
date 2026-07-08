@@ -167,7 +167,7 @@ describe('resolveApiTurnIdentity', () => {
           authorId: 'primary-user',
           authorName: 'Primary User',
           canonicalContactId: 'contact-primary-user',
-          channelPrivacy: 'semi_private',
+          channelPrivacy: 'invite_only',
         },
       },
     });
@@ -181,7 +181,7 @@ describe('resolveApiTurnIdentity', () => {
         authorName: 'Primary User',
         source: 'psfn-amica',
         canonicalContactId: 'contact-primary-user',
-        channelPrivacy: 'semi_private',
+        channelPrivacy: 'invite_only',
       },
     });
   });

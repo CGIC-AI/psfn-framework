@@ -1,9 +1,8 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { Pool, PoolClient, QueryResult } from 'pg';
-import { createDefaultSQLiteSessionAdapters } from '../../persistence/sessions/sqlite-adapters.js';
 import { createDefaultPostgresSessionAdapters } from '../../persistence/sessions/postgres-adapters.js';
 import { resolveSessionsDir } from '../../persistence/layout.js';
 import { runTranscriptProjectionRepairCommand } from './transcript-projection-repair.js';
@@ -152,20 +151,26 @@ describe('runTranscriptProjectionRepairCommand', () => {
     dirs.length = 0;
   });
 
-  it('rebuilds sqlite transcript projection state from authoritative JSONL sessions', async () => {
-    const root = mkdtempSync(join(tmpdir(), 'psfn-transcript-repair-cli-sqlite-'));
+  it('targets postgres projection even when config backend is sqlite and leaves legacy sqlite search absent', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'psfn-transcript-repair-cli-postgres-only-'));
     dirs.push(root);
     const dataDir = join(root, 'data');
     const sessionsDir = resolveSessionsDir(dataDir);
-    const adapters = createDefaultSQLiteSessionAdapters(sessionsDir);
+    const pool = new FakePostgresPool();
+    const postgresUrl = 'postgres://unused';
+
+    const adapters = await createDefaultPostgresSessionAdapters(postgresUrl, {
+      sessionsDir,
+      pool: pool as unknown as Pool,
+    });
 
     adapters.sessionArchivePort.writeImportedSession({
       sessionsDir,
-      channelId: 'api:sqlite-repair',
+      channelId: 'api:postgres-only-repair',
       seedTimestamp: 1_000,
       messages: [{
         role: 'assistant',
-        content: 'sqlite projection repair needle',
+        content: 'postgres only projection repair needle',
         timestamp: 1_000,
       }],
     });
@@ -173,12 +178,17 @@ describe('runTranscriptProjectionRepairCommand', () => {
     const config: SubstrateConfig = {
       dataDir,
       persistenceBackend: 'sqlite',
+      postgresDatabaseUrl: postgresUrl,
     } as SubstrateConfig;
 
     const report = await runTranscriptProjectionRepairCommand({
       config,
       dataDir,
       dependencies: {
+        createPostgresSessionAdapters: async () => createDefaultPostgresSessionAdapters(postgresUrl, {
+          sessionsDir,
+          pool: pool as unknown as Pool,
+        }),
         resolveIntegrityProvider: () => null,
       },
     });
@@ -188,13 +198,17 @@ describe('runTranscriptProjectionRepairCommand', () => {
       rebuiltChannels: 1,
       driftBefore: 0,
       driftAfter: 0,
-      persistenceBackend: 'sqlite',
+      persistenceBackend: 'postgres',
     });
 
-    const reloaded = createDefaultSQLiteSessionAdapters(sessionsDir);
-    const hits = reloaded.transcriptSearch ? await reloaded.transcriptSearch.searchByKeywords('repair needle') : [];
+    const reloaded = await createDefaultPostgresSessionAdapters(postgresUrl, {
+      sessionsDir,
+      pool: pool as unknown as Pool,
+    });
+    const hits = await reloaded.transcriptSearch.searchByKeywords('repair needle');
     expect(hits).toHaveLength(1);
-    expect(hits[0]?.channelId).toBe('api:sqlite-repair');
+    expect(hits[0]?.channelId).toBe('api:postgres-only-repair');
+    expect(existsSync(join(sessionsDir, 'session-search.sqlite'))).toBe(false);
   });
 
   it('rebuilds postgres transcript projection state from authoritative JSONL sessions', async () => {
@@ -258,8 +272,8 @@ describe('runTranscriptProjectionRepairCommand', () => {
     expect(pool.drift.size).toBe(0);
   });
 
-  it('fails closed when the selected sqlite backend does not expose a transcript projection', async () => {
-    const root = mkdtempSync(join(tmpdir(), 'psfn-transcript-repair-cli-disabled-'));
+  it('fails closed when postgres transcript projection wiring is invalid', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'psfn-transcript-repair-cli-invalid-postgres-'));
     dirs.push(root);
     const dataDir = join(root, 'data');
     const sessionsDir = resolveSessionsDir(dataDir);
@@ -272,27 +286,9 @@ describe('runTranscriptProjectionRepairCommand', () => {
       config,
       dataDir,
       dependencies: {
-        createSQLiteSessionAdapters: () => createDefaultSQLiteSessionAdapters(sessionsDir, { disableSearchIndex: true }),
-        resolveIntegrityProvider: () => null,
-      },
-    })).rejects.toThrow('requires an enabled transcript projection backend for sqlite');
-  });
-
-  it('fails closed when postgres transcript projection wiring is invalid', async () => {
-    const root = mkdtempSync(join(tmpdir(), 'psfn-transcript-repair-cli-invalid-postgres-'));
-    dirs.push(root);
-    const dataDir = join(root, 'data');
-    const config: SubstrateConfig = {
-      dataDir,
-      persistenceBackend: 'postgres',
-    } as SubstrateConfig;
-
-    await expect(runTranscriptProjectionRepairCommand({
-      config,
-      dataDir,
-      dependencies: {
         resolveIntegrityProvider: () => null,
       },
     })).rejects.toThrow('requires config.postgresDatabaseUrl');
+    expect(existsSync(join(sessionsDir, 'session-search.sqlite'))).toBe(false);
   });
 });

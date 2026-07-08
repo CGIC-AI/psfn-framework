@@ -1,15 +1,8 @@
-import type Database from 'better-sqlite3';
 import type { ToolRegistrar } from '../agent/tool-registrar.js';
+import type { ApprovalQueuePort } from '../../system/capabilities/approval-queue-port.js';
 import type { ContactStorePort } from './contact-store-port.js';
 import type { ChannelPrivacyLevel } from './types.js';
-import { createSQLiteContactStore } from './sqlite-adapter.js';
-import {
-  createContactTool,
-  createContactLinkIdentityTool,
-  createContactNoteTool,
-  createContactSetChannelPrivacyTool,
-  createContactSetTrustTool,
-} from './tools.js';
+import { createContactTool } from './tools.js';
 
 export interface ContactRuntimeTarget {
   contactStore: ContactStorePort | null;
@@ -25,6 +18,11 @@ export interface ContactRuntimeIdentityLink {
 export interface ContactRuntimeOptions {
   bootstrapPrimaryIdentityLinks?: ContactRuntimeIdentityLink[];
   exportDir?: string;
+  /**
+   * Shared confirmation queue for trusted-tier promotion proposals
+   * (contact action=propose_trust). Absent → propose_trust fails closed.
+   */
+  proposalQueue?: ApprovalQueuePort;
 }
 
 export async function registerContactRuntime(
@@ -51,23 +49,9 @@ export async function registerContactRuntime(
     }
   }
 
-  target.registerTool(createContactTool(contactStore));
-  target.registerTool(createContactSetTrustTool(contactStore), 'extended');
-  target.registerTool(createContactSetChannelPrivacyTool(contactStore), 'extended');
-  target.registerTool(createContactNoteTool(contactStore), 'extended');
-  target.registerTool(createContactLinkIdentityTool(contactStore), 'extended');
+  target.registerTool(createContactTool(contactStore, {
+    proposalQueue: options.proposalQueue,
+  }));
 
   return contactStore;
-}
-
-export async function wireContactRuntime(
-  target: ContactRuntimeTarget,
-  db: Database.Database,
-  primaryUserId?: string,
-  options: ContactRuntimeOptions = {},
-): Promise<ContactStorePort> {
-  const contactStore = createSQLiteContactStore(db, primaryUserId, {
-    exportDir: options.exportDir,
-  });
-  return await registerContactRuntime(target, contactStore, primaryUserId, options);
 }

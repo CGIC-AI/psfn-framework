@@ -25,8 +25,23 @@ export function resolveContextWindow(
   throw new Error('No positive context window is configured for the active chat model.');
 }
 
-export function getLatestAssistantMessage(messages: readonly unknown[]): AssistantMessage | null {
-  for (let i = messages.length - 1; i >= 0; i -= 1) {
+/**
+ * Latest assistant message, optionally bounded to the user-facing portion of
+ * the current run. `upperBoundExclusive` is the agent-state message index
+ * where internal follow-up continuation began (userFacingBoundaryIndex);
+ * assistant text authored past it is internal processing, never the outward
+ * reply (psfn-framework-ay73).
+ */
+export function getLatestAssistantMessage(
+  messages: readonly unknown[],
+  upperBoundExclusive?: number,
+): AssistantMessage | null {
+  const bound = typeof upperBoundExclusive === 'number'
+    && Number.isInteger(upperBoundExclusive)
+    && upperBoundExclusive >= 0
+    ? Math.min(upperBoundExclusive, messages.length)
+    : messages.length;
+  for (let i = bound - 1; i >= 0; i -= 1) {
     const message = messages[i];
     if ((message as unknown as { role: string }).role === 'assistant') {
       return message as unknown as AssistantMessage;

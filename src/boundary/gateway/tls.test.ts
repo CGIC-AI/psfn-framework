@@ -54,11 +54,22 @@ describe('applyGatewayTlsConfig', () => {
     expect(process.env.NODE_EXTRA_CA_CERTS).toBeUndefined();
   });
 
-  it('sets NODE_TLS_REJECT_UNAUTHORIZED=0 when rejectUnauthorized is false', () => {
+  it('reports verification disabled when rejectUnauthorized is false without mutating NODE_TLS_REJECT_UNAUTHORIZED', () => {
+    delete process.env.NODE_TLS_REJECT_UNAUTHORIZED;
+
     const status = applyGatewayTlsConfig({ rejectUnauthorized: false });
 
     expect(status.verificationDisabled).toBe(true);
-    expect(process.env.NODE_TLS_REJECT_UNAUTHORIZED).toBe('0');
+    expect(process.env.NODE_TLS_REJECT_UNAUTHORIZED).toBeUndefined();
+  });
+
+  it('preserves existing NODE_TLS_REJECT_UNAUTHORIZED when rejectUnauthorized is false', () => {
+    process.env.NODE_TLS_REJECT_UNAUTHORIZED = '1';
+
+    const status = applyGatewayTlsConfig({ rejectUnauthorized: false });
+
+    expect(status.verificationDisabled).toBe(true);
+    expect(process.env.NODE_TLS_REJECT_UNAUTHORIZED).toBe('1');
   });
 
   it('does not set NODE_TLS_REJECT_UNAUTHORIZED when rejectUnauthorized is true', () => {
@@ -80,6 +91,8 @@ describe('applyGatewayTlsConfig', () => {
   });
 
   it('applies both CA path and reject-unauthorized together', () => {
+    delete process.env.NODE_TLS_REJECT_UNAUTHORIZED;
+
     const status = applyGatewayTlsConfig({
       caPath: tempCaPath,
       rejectUnauthorized: false,
@@ -88,6 +101,6 @@ describe('applyGatewayTlsConfig', () => {
     expect(status.customCaApplied).toBe(true);
     expect(status.verificationDisabled).toBe(true);
     expect(process.env.NODE_EXTRA_CA_CERTS).toBe(tempCaPath);
-    expect(process.env.NODE_TLS_REJECT_UNAUTHORIZED).toBe('0');
+    expect(process.env.NODE_TLS_REJECT_UNAUTHORIZED).toBeUndefined();
   });
 });

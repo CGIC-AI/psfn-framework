@@ -16,6 +16,7 @@ describe('loadRuntimeChannelsConfig', () => {
       const config = loadRuntimeChannelsConfig(dataDir, {});
       expect(config.discord.heartbeatChannelId).toBe('');
       expect(config.discord.allowedBotUserIds).toEqual([]);
+      expect(config.discord.groupMemory).toEqual({ channelOverrides: {} });
       expect(config.telegram.enabled).toBe(false);
       expect(config.telegram.token).toBe('');
       expect(config.telegram.allowedUsers).toEqual([]);
@@ -224,7 +225,154 @@ describe('loadRuntimeChannelsConfig', () => {
       expect(config.discord).toEqual({
         heartbeatChannelId: '1312460007211536394',
         allowedBotUserIds: ['1050938702622375987', '1467253459387678963'],
+        groupMemory: { channelOverrides: {} },
       });
+    } finally {
+      rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  it('loads discord group memory mode and channel overrides from channels.json', () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'psfn-channel-config-'));
+    try {
+      writeFileSync(join(dataDir, 'channels.json'), JSON.stringify({
+        discord: {
+          groupMemory: {
+            memoryMode: 'auto',
+            channelOverrides: {
+              '1486443955561299979': {
+                memoryMode: 'group',
+                autoDetection: {
+                  recentParticipantWindowMessages: 60,
+                  minDistinctHumanContacts: 3,
+                },
+                onlineExtraction: {
+                  observedMessageTriggerCount: 40,
+                  maxMessagesPerChunk: 60,
+                  chunkOverlapMessages: 4,
+                },
+                salience: {
+                  maxCandidateSpansPerChunk: 10,
+                  neighboringContextMessages: 3,
+                  reasonWeights: {
+                    companionMention: 0.9,
+                  },
+                  lowSignalRules: {
+                    shortMessageMaxChars: 12,
+                  },
+                },
+                writeCaps: {
+                  maxWritesPerRun: 6,
+                  maxWritesPerContact: 2,
+                  maxWritesPerSubject: 1,
+                  maxWritesPerTimeWindow: 18,
+                  timeWindowMs: 1_800_000,
+                  rankingWeights: {
+                    addressMode: 0.6,
+                    perContactCoverage: 0.9,
+                  },
+                  addressModeWeights: {
+                    overheardRoomContext: 0.25,
+                  },
+                },
+                telemetry: {
+                  maxDiagnosticMemoryScan: 700,
+                },
+              },
+              'dm-channel': {
+                memoryMode: 'direct',
+              },
+            },
+          },
+        },
+      }));
+
+      const config = loadRuntimeChannelsConfig(dataDir, {});
+
+      expect(config.discord.groupMemory).toEqual({
+        memoryMode: 'auto',
+        channelOverrides: {
+          '1486443955561299979': {
+            memoryMode: 'group',
+            autoDetection: {
+              recentParticipantWindowMessages: 60,
+              minDistinctHumanContacts: 3,
+            },
+            onlineExtraction: {
+              observedMessageTriggerCount: 40,
+              maxMessagesPerChunk: 60,
+              chunkOverlapMessages: 4,
+            },
+            salience: {
+              maxCandidateSpansPerChunk: 10,
+              neighboringContextMessages: 3,
+              reasonWeights: {
+                companionMention: 0.9,
+              },
+              lowSignalRules: {
+                shortMessageMaxChars: 12,
+              },
+            },
+            writeCaps: {
+              maxWritesPerRun: 6,
+              maxWritesPerContact: 2,
+              maxWritesPerSubject: 1,
+              maxWritesPerTimeWindow: 18,
+              timeWindowMs: 1_800_000,
+              rankingWeights: {
+                addressMode: 0.6,
+                perContactCoverage: 0.9,
+              },
+              addressModeWeights: {
+                overheardRoomContext: 0.25,
+              },
+            },
+            telemetry: {
+              maxDiagnosticMemoryScan: 700,
+            },
+          },
+          'dm-channel': {
+            memoryMode: 'direct',
+          },
+        },
+      });
+    } finally {
+      rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects malformed discord group memory overrides', () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'psfn-channel-config-'));
+    try {
+      writeFileSync(join(dataDir, 'channels.json'), JSON.stringify({
+        discord: {
+          groupMemory: {
+            memoryMode: 'guild',
+          },
+        },
+      }));
+
+      expect(() => loadRuntimeChannelsConfig(dataDir, {})).toThrow(
+        'channels.json.discord.groupMemory.memoryMode',
+      );
+
+      writeFileSync(join(dataDir, 'channels.json'), JSON.stringify({
+        discord: {
+          groupMemory: {
+            channelOverrides: {
+              room: {
+                onlineExtraction: {
+                  maxMessagesPerChunk: 0,
+                },
+              },
+            },
+          },
+        },
+      }));
+
+      expect(() => loadRuntimeChannelsConfig(dataDir, {})).toThrow(
+        'channels.json.discord.groupMemory.channelOverrides.room.onlineExtraction.maxMessagesPerChunk',
+      );
     } finally {
       rmSync(dataDir, { recursive: true, force: true });
     }
@@ -257,7 +405,7 @@ describe('loadRuntimeChannelsConfig', () => {
             authorId: 'primary-user',
             authorName: 'Primary User',
             canonicalContactId: 'contact-primary-user',
-            channelPrivacy: 'semi_private',
+            channelPrivacy: 'invite_only',
           },
         },
       }));
@@ -270,7 +418,7 @@ describe('loadRuntimeChannelsConfig', () => {
           authorId: 'primary-user',
           authorName: 'Primary User',
           canonicalContactId: 'contact-primary-user',
-          channelPrivacy: 'semi_private',
+          channelPrivacy: 'invite_only',
         },
       });
       expect(buildExternalChannelProfiles(config)).toEqual({
@@ -278,7 +426,7 @@ describe('loadRuntimeChannelsConfig', () => {
           authorId: 'primary-user',
           authorName: 'Primary User',
           canonicalContactId: 'contact-primary-user',
-          channelPrivacy: 'semi_private',
+          channelPrivacy: 'invite_only',
         },
       });
     } finally {
@@ -296,7 +444,7 @@ describe('loadRuntimeChannelsConfig', () => {
             authorId: 'primary-user',
             authorName: 'Primary User',
             canonicalContactId: 'contact-primary-user',
-            channelPrivacy: 'semi_private',
+            channelPrivacy: 'invite_only',
           },
         },
       }));
@@ -482,6 +630,111 @@ describe('loadRuntimeChannelsConfig', () => {
       }));
       const falseyConfig = loadRuntimeChannelsConfig(dataDir, {});
       expect(falseyConfig.telegram.enabled).toBe(false);
+    } finally {
+      rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  it('defaults contextEnvelope to an empty channel-label map', () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'psfn-channel-config-'));
+    try {
+      const config = loadRuntimeChannelsConfig(dataDir, {});
+      expect(config.contextEnvelope).toEqual({ channels: {} });
+    } finally {
+      rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  it('parses per-channel contextEnvelope labels from channels.json', () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'psfn-channel-config-'));
+    try {
+      writeFileSync(join(dataDir, 'channels.json'), JSON.stringify({
+        contextEnvelope: {
+          channels: {
+            'discord:friends-room': {
+              privacy: 'invite_only',
+              broadcast: false,
+              contactTracking: 'auto',
+            },
+            'twitter:main': {
+              privacy: 'public',
+              broadcast: true,
+            },
+          },
+        },
+      }));
+
+      const config = loadRuntimeChannelsConfig(dataDir, {});
+      expect(config.contextEnvelope.channels['discord:friends-room']).toEqual({
+        privacy: 'invite_only',
+        broadcast: false,
+        contactTracking: 'auto',
+      });
+      expect(config.contextEnvelope.channels['twitter:main']).toEqual({
+        privacy: 'public',
+        broadcast: true,
+      });
+    } finally {
+      rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  it('accepts the reserved role_gated contactTracking mode as config', () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'psfn-channel-config-'));
+    try {
+      writeFileSync(join(dataDir, 'channels.json'), JSON.stringify({
+        contextEnvelope: {
+          channels: {
+            'discord:big-room': { contactTracking: 'role_gated' },
+          },
+        },
+      }));
+
+      const config = loadRuntimeChannelsConfig(dataDir, {});
+      expect(config.contextEnvelope.channels['discord:big-room']).toEqual({
+        contactTracking: 'role_gated',
+      });
+    } finally {
+      rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  it('fails closed on retired or invalid contextEnvelope vocabulary', () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'psfn-channel-config-'));
+    try {
+      writeFileSync(join(dataDir, 'channels.json'), JSON.stringify({
+        contextEnvelope: {
+          channels: {
+            'discord:room': { privacy: 'semi_private' },
+          },
+        },
+      }));
+      expect(() => loadRuntimeChannelsConfig(dataDir, {})).toThrow(/privacy/);
+
+      writeFileSync(join(dataDir, 'channels.json'), JSON.stringify({
+        contextEnvelope: {
+          channels: {
+            'discord:room': { privacy: 'broadcast' },
+          },
+        },
+      }));
+      expect(() => loadRuntimeChannelsConfig(dataDir, {})).toThrow(/privacy/);
+
+      writeFileSync(join(dataDir, 'channels.json'), JSON.stringify({
+        contextEnvelope: {
+          channels: {
+            'discord:room': {},
+          },
+        },
+      }));
+      expect(() => loadRuntimeChannelsConfig(dataDir, {})).toThrow(/at least one field/);
+
+      writeFileSync(join(dataDir, 'channels.json'), JSON.stringify({
+        contextEnvelope: {
+          thresholds: { fewMax: 10 },
+        },
+      }));
+      expect(() => loadRuntimeChannelsConfig(dataDir, {})).toThrow(/unsupported keys/);
     } finally {
       rmSync(dataDir, { recursive: true, force: true });
     }

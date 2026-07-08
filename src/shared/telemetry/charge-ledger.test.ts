@@ -1,10 +1,19 @@
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { EventBus } from '../event-bus.js';
 import type { RunChargeEvent } from '../contracts/runtime.js';
+import type { ChargePolicyConfig } from '../contracts/charge-policy.js';
 import { RunChargeLedger } from './charge-ledger.js';
+import {
+  chargeSurface,
+  getRunChargeRollingWindowSnapshot,
+  resetRunChargeRollingWindowForTests,
+  runWithChargeContext,
+} from './run-charge.js';
+import { makeTestFatiguePolicyConfig } from '../../test-support/charge-policy.js';
 
 const tempDirs: string[] = [];
 
@@ -16,6 +25,7 @@ function makeTempDir(): string {
 
 function makeEvent(overrides: Partial<RunChargeEvent> = {}): RunChargeEvent {
   return {
+    eventId: randomUUID(),
     timestampMs: 1_800_000_000_000,
     lane: 'interactive',
     surface: 'externalModelConsult',
@@ -40,11 +50,56 @@ function makeEvent(overrides: Partial<RunChargeEvent> = {}): RunChargeEvent {
   };
 }
 
+function makeChargePolicy(): ChargePolicyConfig {
+  return {
+    schemaVersion: 1,
+    runChargeQuotaByLane: {
+      interactive: 3,
+      background: 3,
+      maintenance: 0,
+      subagent: 3,
+      shard: 12,
+    },
+    surfaceCosts: {
+      ownerFileInspection: 0,
+      localFilesystem: 0,
+      memoryRead: 0,
+      memoryWrite: 0,
+      localEmbedding: 0,
+      externalEmbedding: 0,
+      localImageGeneration: 0,
+      paidImageGeneration: 3,
+      analysisWorkbenchExtensionBand: 1,
+      subagentLaunch: 1,
+      shardLaunch: 8,
+      externalModelConsult: 1,
+      moaRoundBase: 1,
+    },
+    moa: {
+      perRoundMultiplierByReferenceModelClass: {
+        local: 1,
+        subscription: 1,
+        cheap_cloud: 1,
+        premium_cloud: 2,
+      },
+    },
+    referenceModelClassPricing: {
+      local: 0,
+      subscription: 0,
+      cheap_cloud: 1,
+      premium_cloud: 4,
+    },
+    fatigue: makeTestFatiguePolicyConfig(),
+  };
+}
+
 describe('RunChargeLedger', () => {
   afterEach(() => {
     for (const dir of tempDirs.splice(0)) {
       rmSync(dir, { recursive: true, force: true });
     }
+    resetRunChargeRollingWindowForTests();
+    vi.useRealTimers();
   });
 
   it('persists charge events to append-only JSONL and reloads history after restart', () => {
@@ -109,5 +164,133 @@ describe('RunChargeLedger', () => {
     expect(data.aggregates.amount).toBe(12);
     expect(data.events[0].event.spentAfter).toBe(12);
     expect(data.events[0].event.quota).toBe(10);
+  });
+
+  it('hydrates rolling charge enforcement from persisted ledger events after restart', async () => {
+    const nowMs = 1_800_000_000_000;
+    vi.useFakeTimers();
+    vi.setSystemTime(nowMs);
+    const ledgerPath = join(makeTempDir(), 'charge-ledger.jsonl');
+    const firstLedger = new RunChargeLedger(ledgerPath, null, { now: () => nowMs });
+    firstLedger.recordChargeEvent(makeEvent({
+      timestampMs: nowMs - 60_000,
+      amount: 2,
+      quota: 3,
+      spentAfter: 2,
+      remainingAfter: 1,
+    }));
+    firstLedger.close();
+    resetRunChargeRollingWindowForTests();
+
+    const rebootedLedger = new RunChargeLedger(ledgerPath, null, { now: () => nowMs });
+    await expect(runWithChargeContext({
+      chargePolicy: makeChargePolicy(),
+      lane: 'interactive',
+      runId: 'root-after-restart',
+    }, async () => {
+      chargeSurface('externalModelConsult', { amount: 2 });
+    })).rejects.toThrow('rolling 24-hour budget');
+    rebootedLedger.close();
+  });
+
+  it('hydrates two persisted events with identical metadata as two spends', () => {
+    const nowMs = 1_800_000_000_000;
+    const ledgerPath = join(makeTempDir(), 'charge-ledger.jsonl');
+    const firstLedger = new RunChargeLedger(ledgerPath, null, { now: () => nowMs });
+    const identical = { timestampMs: nowMs - 60_000, amount: 1, quota: 3, spentAfter: 1, remainingAfter: 2 };
+    firstLedger.recordChargeEvent(makeEvent(identical));
+    firstLedger.recordChargeEvent(makeEvent(identical));
+    firstLedger.close();
+    resetRunChargeRollingWindowForTests();
+
+    const rebootedLedger = new RunChargeLedger(ledgerPath, null, { now: () => nowMs });
+    const window = getRunChargeRollingWindowSnapshot(nowMs);
+    expect(window.entryCount).toBe(2);
+    expect(window.spentByLane.interactive).toBe(2);
+    rebootedLedger.close();
+  });
+
+  it('reuses the ledger entry id as identity for rows persisted without an event eventId', () => {
+    const nowMs = 1_800_000_000_000;
+    const dir = join(makeTempDir(), 'state');
+    mkdirSync(dir, { recursive: true });
+    const ledgerPath = join(dir, 'charge-ledger.jsonl');
+    const { eventId: _dropped, ...legacyEvent } = makeEvent({
+      timestampMs: nowMs - 60_000,
+      amount: 2,
+      quota: 3,
+      spentAfter: 2,
+      remainingAfter: 1,
+    });
+    const legacyLine = JSON.stringify({
+      schemaVersion: 1,
+      recordType: 'charge_event',
+      eventId: 'ledger-entry-legacy-1',
+      recordedAtMs: nowMs - 60_000,
+      event: legacyEvent,
+    });
+    writeFileSync(ledgerPath, `${legacyLine}\n${legacyLine}\n`, 'utf-8');
+
+    const ledger = new RunChargeLedger(ledgerPath, null, { now: () => nowMs });
+    const window = getRunChargeRollingWindowSnapshot(nowMs);
+    // Same ledger entry id on both lines: exact identity, so it counts once.
+    expect(window.entryCount).toBe(1);
+    expect(window.spentByLane.interactive).toBe(2);
+    expect(ledger.listEntries()[0]?.event.eventId).toBe('ledger-entry-legacy-1');
+    ledger.close();
+  });
+});
+
+describe('RunChargeLedger calendar accrual', () => {
+  afterEach(() => {
+    for (const dir of tempDirs.splice(0)) {
+      rmSync(dir, { recursive: true, force: true });
+    }
+    resetRunChargeRollingWindowForTests();
+    vi.useRealTimers();
+  });
+
+  // 1_800_000_000_000 = 2027-01-15T08:53:20Z
+  const NOW_MS = 1_800_000_000_000;
+
+  it('buckets spend per UTC calendar day and rolls up month-to-date', () => {
+    const ledgerPath = join(makeTempDir(), 'charge-ledger.jsonl');
+    const ledger = new RunChargeLedger(ledgerPath, null, { now: () => NOW_MS });
+
+    // Two events today, one yesterday, one earlier in the month, one last month.
+    ledger.recordChargeEvent(makeEvent({ timestampMs: NOW_MS - 60_000, amount: 3 }));
+    ledger.recordChargeEvent(makeEvent({ timestampMs: NOW_MS - 30_000, amount: 2, lane: 'background' }));
+    ledger.recordChargeEvent(makeEvent({ timestampMs: NOW_MS - 24 * 60 * 60_000, amount: 5 }));
+    ledger.recordChargeEvent(makeEvent({ timestampMs: NOW_MS - 10 * 24 * 60 * 60_000, amount: 7 }));
+    ledger.recordChargeEvent(makeEvent({ timestampMs: NOW_MS - 40 * 24 * 60 * 60_000, amount: 11 }));
+
+    const { calendar } = ledger.getData();
+
+    expect(calendar.monthKey).toBe('2027-01');
+    expect(calendar.monthToDateAmount).toBe(3 + 2 + 5 + 7);
+    expect(calendar.monthToDateEventCount).toBe(4);
+
+    // Daily buckets cover the 31-day window only, most recent first.
+    expect(calendar.daily.map(day => day.dayKey)).toEqual(['2027-01-15', '2027-01-14', '2027-01-05']);
+    expect(calendar.daily[0].amount).toBe(5);
+    expect(calendar.daily[0].eventCount).toBe(2);
+    expect(calendar.daily[0].byLane.map(lane => lane.key).sort()).toEqual(['background', 'interactive']);
+    expect(calendar.daily[1].amount).toBe(5);
+    expect(calendar.daily[2].amount).toBe(7);
+  });
+
+  it('keeps calendar accrual stable regardless of the query filter', () => {
+    const ledgerPath = join(makeTempDir(), 'charge-ledger.jsonl');
+    const ledger = new RunChargeLedger(ledgerPath, null, { now: () => NOW_MS });
+    ledger.recordChargeEvent(makeEvent({ timestampMs: NOW_MS - 60_000, amount: 3 }));
+    ledger.recordChargeEvent(makeEvent({
+      timestampMs: NOW_MS - 30_000,
+      amount: 2,
+      lineage: { runId: 'run-other', rootRunId: 'run-other' },
+    }));
+
+    const filtered = ledger.getData({ runId: 'run-other' });
+    expect(filtered.aggregates.amount).toBe(2);
+    expect(filtered.calendar.monthToDateAmount).toBe(5);
   });
 });

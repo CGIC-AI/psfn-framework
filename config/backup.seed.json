@@ -3,6 +3,13 @@
   "maxRotatingBackups": 9,
   "maxWeeklyBackups": 2,
   "maxMonthlyBackups": 1,
-  "mirrorDir": "/mnt/ai/psfn-bak",
-  "verifyRestore": true
+  "mirrorDir": "",
+  "verifyRestore": true,
+  "encryption": {
+    "mode": "required",
+    "keyRef": {
+      "kind": "env",
+      "envName": "PSFN_BACKUP_ENCRYPTION_KEY"
+    }
+  }
 }

@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os';
 import { SessionStore } from '../../persistence/sessions/store.js';
 import { getDefaultTrustPolicy, resetRuntimeTrustPolicy, setRuntimeTrustPolicy } from '../../system/trust/runtime-policy.js';
 import { createTurnId, isTurnId } from '../../core/turns/id.js';
+import { createDefaultGroupMemorySettings } from '../../system/config/group-memory-config.js';
 
 const tempDirs: string[] = [];
 
@@ -280,6 +281,38 @@ describe('extraction acceptance gates', () => {
     expect(decision.allowed).toBe(true);
     expect(decision.reason).toBeUndefined();
     expect(decision.signalCount).toBeGreaterThan(0);
+  });
+
+  // jpvd.4: the pre-LLM gate is now expressed on the shared deterministic-gate
+  // primitive. These lock the decision byte-for-byte across the reasons.
+  it('closes as empty_transcript with zeroed counts on an empty transcript', () => {
+    const decision = extractionTestUtils.evaluateExtractionPreLlmGate([] as never);
+    expect(decision).toEqual({
+      allowed: false,
+      reason: 'empty_transcript',
+      signalScore: 0,
+      signalCount: 0,
+      recentEntryCount: 0,
+      userEntryCount: 0,
+    });
+  });
+
+  it('treats a whitespace-only transcript as empty', () => {
+    const decision = extractionTestUtils.evaluateExtractionPreLlmGate([
+      { role: 'user', content: '   ' },
+      { role: 'assistant', content: '' },
+    ] as never);
+    expect(decision.allowed).toBe(false);
+    expect(decision.reason).toBe('empty_transcript');
+    expect(decision.recentEntryCount).toBe(0);
+  });
+
+  it('allows neutral turns that are not explicit filler', () => {
+    const decision = extractionTestUtils.evaluateExtractionPreLlmGate([
+      { role: 'user', content: 'The build pipeline runs the integration suite nightly.' },
+    ] as never);
+    expect(decision.allowed).toBe(true);
+    expect(decision.reason).toBeUndefined();
   });
 });
 
@@ -1141,22 +1174,21 @@ describe('MemoryExtractor refusal boundary extraction', () => {
     await extractor.extract('api:boundary-memory-test');
 
     expect(processFact).toHaveBeenCalledTimes(1);
-    expect(processFact).toHaveBeenCalledWith(
-      expect.objectContaining({
-        type: 'boundary',
-        importance: 0.98,
-        confidence: 0.95,
-        tags: expect.arrayContaining(['boundary', 'refusal']),
-      }),
-      expect.stringContaining('visibility:private'),
-      undefined,
-      undefined,
-      'api:boundary-memory-test',
-      undefined,
-      undefined,
-      'manual',
-      undefined,
-    );
+    const processFactCall = processFact.mock.calls[0];
+    expect(processFactCall[0]).toEqual(expect.objectContaining({
+      type: 'boundary',
+      importance: 0.98,
+      confidence: 0.95,
+      tags: expect.arrayContaining(['boundary', 'refusal']),
+    }));
+    expect(processFactCall[1]).toEqual(expect.stringContaining('visibility:private'));
+    expect(processFactCall[4]).toBe('api:boundary-memory-test');
+    expect(processFactCall[5]).toBe('api:boundary-memory-test');
+    expect(processFactCall[8]).toBe('manual');
+    expect(processFactCall[10]).toEqual(expect.objectContaining({
+      routingReason: 'single_speaker_transcript',
+      sourceSpeakerName: 'user',
+    }));
     expect(processFact.mock.calls[0][0].text.toLowerCase()).toContain('paywall');
 
     const calls = (eventBus.emit as ReturnType<typeof vi.fn>).mock.calls;
@@ -1495,6 +1527,81 @@ describe('MemoryExtractor provenance and trust caps', () => {
 });
 
 describe('MemoryExtractor canonical profile synthesis', () => {
+  function makeProfileHarness(options: {
+    targetContact?: Record<string, unknown>;
+    sourceMemories: Record<string, unknown>[];
+    profileResponse: string | ((context: { systemPrompt: string }) => string);
+  }) {
+    const llmClient = {
+      complete: vi
+        .fn()
+        .mockResolvedValueOnce({ content: '<response></response>' })
+        .mockImplementationOnce(async (context: { systemPrompt: string }) => ({
+          content: typeof options.profileResponse === 'function'
+            ? options.profileResponse(context)
+            : options.profileResponse,
+        })),
+    } as any;
+
+    const sessionManager = {
+      getMessageCount: vi.fn().mockReturnValue(6),
+      getRecentMessages: vi.fn().mockReturnValue([
+        { role: 'user', content: 'I started a new job at the studio this week.', authorName: 'PrimaryUser' },
+      ]),
+    } as any;
+
+    const memoryStore = {
+      getMemoriesByChannel: vi.fn().mockReturnValue([]),
+      getContactProfile: vi.fn().mockReturnValue(undefined),
+      getMemoriesByContact: vi.fn().mockReturnValue(options.sourceMemories),
+      upsertContactProfile: vi.fn(),
+    } as any;
+
+    const embeddingService = {
+      embed: vi.fn().mockResolvedValue(new Float32Array(8)),
+      embedBatch: vi.fn(),
+      dims: 8,
+    } as any;
+
+    const eventBus = {
+      emit: vi.fn().mockResolvedValue(undefined),
+    } as any;
+
+    const contactStore = options.targetContact
+      ? {
+        getById: vi.fn().mockResolvedValue(options.targetContact),
+        getByChannelIdentity: vi.fn().mockResolvedValue(undefined),
+        getByDiscordUserId: vi.fn().mockResolvedValue(undefined),
+        listAll: vi.fn().mockResolvedValue([options.targetContact]),
+      } as any
+      : null;
+
+    const extractor = new MemoryExtractor(
+      llmClient,
+      sessionManager,
+      memoryStore,
+      embeddingService,
+      eventBus,
+      {
+        extractionInterval: 5,
+        minImportance: 0.45,
+        minConfidence: 0.6,
+        minNovelty: 0.35,
+        telemetryEnabled: true,
+      },
+      undefined,
+      undefined,
+      contactStore,
+    );
+
+    return {
+      extractor,
+      llmClient,
+      memoryStore,
+      contactStore,
+    };
+  }
+
   it('refreshes canonical profile on interval when source memories are sufficient', async () => {
     const llmClient = {
       complete: vi
@@ -1508,7 +1615,7 @@ describe('MemoryExtractor canonical profile synthesis', () => {
     const sessionManager = {
       getMessageCount: vi.fn().mockReturnValue(6),
       getRecentMessages: vi.fn().mockReturnValue([
-        { role: 'user', content: 'Hey', authorName: 'PrimaryUser' },
+        { role: 'user', content: 'I started a new job at the studio this week.', authorName: 'PrimaryUser' },
       ]),
     } as any;
 
@@ -1575,6 +1682,256 @@ describe('MemoryExtractor canonical profile synthesis', () => {
     }));
   });
 
+  it('normalizes duplicate names in synthesized contact profile summaries', async () => {
+    const llmClient = {
+      complete: vi
+        .fn()
+        .mockResolvedValueOnce({ content: '<response></response>' })
+        .mockResolvedValueOnce({
+          content: '<profile><summary>Carlini Carlini keeps livestream guardrails explicit.</summary></profile>',
+        }),
+    } as any;
+
+    const sessionManager = {
+      getMessageCount: vi.fn().mockReturnValue(6),
+      getRecentMessages: vi.fn().mockReturnValue([
+        { role: 'user', content: 'I started a new job at the studio this week.', authorName: 'PrimaryUser' },
+      ]),
+    } as any;
+
+    const memoryStore = {
+      getMemoriesByChannel: vi.fn().mockReturnValue([]),
+      getContactProfile: vi.fn().mockReturnValue(undefined),
+      getMemoriesByContact: vi.fn().mockReturnValue([
+        {
+          id: 'm1',
+          type: 'relational',
+          text: 'Carlini Carlini keeps livestream guardrails explicit.',
+          importance: 0.95,
+          confidence: 0.95,
+          salience: 0.92,
+        },
+        {
+          id: 'm2',
+          type: 'semantic',
+          text: 'Carlini prefers careful public-channel moderation.',
+          importance: 0.82,
+          confidence: 0.88,
+          salience: 0.8,
+        },
+      ]),
+      upsertContactProfile: vi.fn(),
+    } as any;
+
+    const embeddingService = {
+      embed: vi.fn().mockResolvedValue(new Float32Array(8)),
+      embedBatch: vi.fn(),
+      dims: 8,
+    } as any;
+
+    const eventBus = {
+      emit: vi.fn().mockResolvedValue(undefined),
+    } as any;
+
+    const extractor = new MemoryExtractor(
+      llmClient,
+      sessionManager,
+      memoryStore,
+      embeddingService,
+      eventBus,
+      {
+        extractionInterval: 5,
+        minImportance: 0.45,
+        minConfidence: 0.6,
+        minNovelty: 0.35,
+        telemetryEnabled: true,
+      },
+    );
+
+    await extractor.maybeExtract('api:profile-duplicate-test', 'contact-canonical-1');
+    await extractor.drain({ timeoutMs: 2_000 });
+
+    expect(memoryStore.upsertContactProfile).toHaveBeenCalledWith(expect.objectContaining({
+      contactId: 'contact-canonical-1',
+      summary: 'Carlini keeps livestream guardrails explicit.',
+      sourceMemoryIds: ['m1', 'm2'],
+    }));
+  });
+
+  it('skips profile refresh when synthesized summary contains unresolved macros', async () => {
+    const llmClient = {
+      complete: vi
+        .fn()
+        .mockResolvedValueOnce({ content: '<response></response>' })
+        .mockResolvedValueOnce({
+          content: '<profile><summary>{{char}} keeps livestream guardrails explicit.</summary></profile>',
+        }),
+    } as any;
+
+    const sessionManager = {
+      getMessageCount: vi.fn().mockReturnValue(6),
+      getRecentMessages: vi.fn().mockReturnValue([
+        { role: 'user', content: 'I started a new job at the studio this week.', authorName: 'PrimaryUser' },
+      ]),
+    } as any;
+
+    const memoryStore = {
+      getMemoriesByChannel: vi.fn().mockReturnValue([]),
+      getContactProfile: vi.fn().mockReturnValue(undefined),
+      getMemoriesByContact: vi.fn().mockReturnValue([
+        {
+          id: 'm1',
+          type: 'relational',
+          text: 'Carlini keeps livestream guardrails explicit.',
+          importance: 0.95,
+          confidence: 0.95,
+          salience: 0.92,
+        },
+        {
+          id: 'm2',
+          type: 'semantic',
+          text: 'Carlini prefers careful public-channel moderation.',
+          importance: 0.82,
+          confidence: 0.88,
+          salience: 0.8,
+        },
+      ]),
+      upsertContactProfile: vi.fn(),
+    } as any;
+
+    const embeddingService = {
+      embed: vi.fn().mockResolvedValue(new Float32Array(8)),
+      embedBatch: vi.fn(),
+      dims: 8,
+    } as any;
+
+    const eventBus = {
+      emit: vi.fn().mockResolvedValue(undefined),
+    } as any;
+
+    const extractor = new MemoryExtractor(
+      llmClient,
+      sessionManager,
+      memoryStore,
+      embeddingService,
+      eventBus,
+      {
+        extractionInterval: 5,
+        minImportance: 0.45,
+        minConfidence: 0.6,
+        minNovelty: 0.35,
+        telemetryEnabled: true,
+      },
+    );
+
+    await extractor.maybeExtract('api:profile-macro-test', 'contact-canonical-1');
+    await extractor.drain({ timeoutMs: 2_000 });
+
+    expect(llmClient.complete).toHaveBeenCalledTimes(2);
+    expect(memoryStore.upsertContactProfile).not.toHaveBeenCalled();
+  });
+
+  it('passes target contact context and skips aliasing the target to mentioned people', async () => {
+    let profilePrompt = '';
+    const { extractor, memoryStore } = makeProfileHarness({
+      targetContact: {
+        id: 'contact-iki',
+        displayName: 'Iki',
+        trustLevel: 'regular',
+        relationshipType: 'friend',
+        firstSeen: '2026-06-28T00:00:00.000Z',
+        lastSeen: '2026-06-28T00:00:00.000Z',
+      },
+      sourceMemories: [
+        {
+          id: 'm1',
+          type: 'semantic',
+          text: 'MrDragonFox stated that Carlini needs streaming guardrails.',
+          importance: 0.92,
+          confidence: 0.95,
+          salience: 0.9,
+          contactId: 'contact-iki',
+          sourceType: 'turn',
+        },
+        {
+          id: 'm2',
+          type: 'relational',
+          text: 'Iki asked about Carlini in the group room.',
+          importance: 0.82,
+          confidence: 0.88,
+          salience: 0.82,
+          contactId: 'contact-iki',
+          sourceType: 'turn',
+        },
+      ],
+      profileResponse: (context) => {
+        profilePrompt = context.systemPrompt;
+        return '<profile><summary>This contact, known as MrDragonFox and also by the name Carlini, cares about streaming guardrails.</summary></profile>';
+      },
+    });
+
+    await extractor.maybeExtract('api:profile-iki-test', 'contact-iki');
+    await extractor.drain({ timeoutMs: 2_000 });
+
+    expect(profilePrompt).toContain('Target contact display name: Iki');
+    expect(profilePrompt).toContain('Target contact trust level: regular');
+    expect(profilePrompt).toContain('Do not infer aliases for the target from names merely mentioned');
+    expect(profilePrompt).toContain('target_contact_id=contact-iki');
+    expect(memoryStore.upsertContactProfile).not.toHaveBeenCalled();
+  });
+
+  it('allows scoped summaries that the target discussed another named person', async () => {
+    let profilePrompt = '';
+    const { extractor, memoryStore } = makeProfileHarness({
+      targetContact: {
+        id: 'contact-vega',
+        displayName: 'Vega',
+        nickname: 'V',
+        trustLevel: 'regular',
+        relationshipType: 'friend',
+        firstSeen: '2026-06-28T00:00:00.000Z',
+        lastSeen: '2026-06-28T00:00:00.000Z',
+      },
+      sourceMemories: [
+        {
+          id: 'm1',
+          type: 'semantic',
+          text: 'Vega discussed Carlini streaming guardrails in the group room.',
+          importance: 0.9,
+          confidence: 0.93,
+          salience: 0.88,
+          contactId: 'contact-vega',
+          sourceType: 'turn',
+        },
+        {
+          id: 'm2',
+          type: 'procedural',
+          text: 'Vega prefers concise launch notes after group planning.',
+          importance: 0.8,
+          confidence: 0.88,
+          salience: 0.8,
+          contactId: 'contact-vega',
+          sourceType: 'turn',
+        },
+      ],
+      profileResponse: (context) => {
+        profilePrompt = context.systemPrompt;
+        return '<profile><summary>Vega discussed Carlini streaming guardrails and prefers concise launch notes.</summary></profile>';
+      },
+    });
+
+    await extractor.maybeExtract('api:profile-vega-test', 'contact-vega');
+    await extractor.drain({ timeoutMs: 2_000 });
+
+    expect(profilePrompt).toContain('Target contact display name: Vega');
+    expect(profilePrompt).toContain('Target contact nickname: V');
+    expect(memoryStore.upsertContactProfile).toHaveBeenCalledWith(expect.objectContaining({
+      contactId: 'contact-vega',
+      summary: 'Vega discussed Carlini streaming guardrails and prefers concise launch notes.',
+      sourceMemoryIds: ['m1', 'm2'],
+    }));
+  });
+
   it('skips profile refresh when synthesized summary novelty is too low', async () => {
     const llmClient = {
       complete: vi
@@ -1588,7 +1945,7 @@ describe('MemoryExtractor canonical profile synthesis', () => {
     const sessionManager = {
       getMessageCount: vi.fn().mockReturnValue(6),
       getRecentMessages: vi.fn().mockReturnValue([
-        { role: 'user', content: 'Hey', authorName: 'PrimaryUser' },
+        { role: 'user', content: 'I started a new job at the studio this week.', authorName: 'PrimaryUser' },
       ]),
     } as any;
 
@@ -1661,7 +2018,7 @@ describe('MemoryExtractor canonical profile synthesis', () => {
     const sessionManager = {
       getMessageCount: vi.fn().mockReturnValue(6),
       getRecentMessages: vi.fn().mockReturnValue([
-        { role: 'user', content: 'Hey', authorName: 'PrimaryUser' },
+        { role: 'user', content: 'I started a new job at the studio this week.', authorName: 'PrimaryUser' },
       ]),
     } as any;
 
@@ -2031,5 +2388,254 @@ describe('MemoryExtractor crash recovery markers', () => {
     const prompt = (llmClient.complete as ReturnType<typeof vi.fn>).mock.calls[0][0].systemPrompt as string;
     expect(prompt).toContain('Human participant name: A');
     expect(prompt).not.toContain('Human participant name: Alex Example');
+  });
+});
+
+describe('MemoryExtractor interval watermark coverage', () => {
+  function buildWatermarkEntries(channelId: string, count: number) {
+    return Array.from({ length: count }, (_, index) => {
+      const id = index + 1;
+      const role = index % 2 === 0 ? 'user' : 'assistant';
+      return {
+        id,
+        channelId,
+        role,
+        authorName: role,
+        content: role === 'user'
+          ? `I am planning a Kyoto trip detail ${id} for my vacation.`
+          : `Noted travel detail ${id}.`,
+        timestamp: id * 1_000,
+      };
+    });
+  }
+
+  function buildWatermarkHarness(channelId: string, options: {
+    llmClient?: any;
+    entryCount?: number;
+  } = {}) {
+    const entries = buildWatermarkEntries(channelId, options.entryCount ?? 10);
+    const llmClient = options.llmClient ?? {
+      complete: vi.fn().mockResolvedValue({ content: '<response></response>' }),
+    } as any;
+    const sessionManager = {
+      getMessageCount: vi.fn().mockReturnValue(entries.length),
+      getRecentMessages: vi.fn().mockReturnValue(entries),
+    } as any;
+    const memoryStore = {
+      getMemoriesByChannel: vi.fn().mockReturnValue([]),
+    } as any;
+    const embeddingService = {
+      embed: vi.fn().mockResolvedValue(new Float32Array(8)),
+      embedBatch: vi.fn(),
+      dims: 8,
+    } as any;
+    const eventBus = {
+      emit: vi.fn().mockResolvedValue(undefined),
+    } as any;
+
+    const extractor = new MemoryExtractor(
+      llmClient,
+      sessionManager,
+      memoryStore,
+      embeddingService,
+      eventBus,
+      { extractionInterval: 5 },
+    );
+
+    return { extractor, entries, llmClient, sessionManager, eventBus };
+  }
+
+  it('does not re-send a pre-compaction batch on the next interval trigger', async () => {
+    const channelId = 'api:watermark-compaction';
+    const { extractor, entries, llmClient, sessionManager, eventBus } =
+      buildWatermarkHarness(channelId);
+
+    // Pre-compaction extraction consumes the oldest 8 of 10 messages.
+    await extractor.queueCompactionExtraction(channelId, entries.slice(0, 8));
+    expect(llmClient.complete).toHaveBeenCalledTimes(1);
+
+    // Without watermark coverage the interval trigger (interval=5, lastCount=0,
+    // currentCount=10) would fire immediately and re-send extracted messages.
+    await extractor.maybeExtract(channelId);
+    expect(llmClient.complete).toHaveBeenCalledTimes(1);
+
+    const startReasons = (eventBus.emit as ReturnType<typeof vi.fn>).mock.calls
+      .filter(([name]) => name === 'memory.extraction.start')
+      .map(([, payload]) => payload?.triggerReason);
+    expect(startReasons).toEqual(['pre_compaction']);
+
+    // Five genuinely new messages later, the interval trigger fires again.
+    sessionManager.getMessageCount.mockReturnValue(13);
+    await extractor.maybeExtract(channelId);
+    expect(llmClient.complete).toHaveBeenCalledTimes(2);
+  });
+
+  it('advances coverage only for the consumed range, not the newest unextracted messages', async () => {
+    const channelId = 'api:watermark-partial';
+    const { extractor, entries, llmClient, sessionManager } =
+      buildWatermarkHarness(channelId);
+
+    // Batch covers messages 1-4 only; messages 5-10 remain unextracted.
+    await extractor.queueCompactionExtraction(channelId, entries.slice(0, 4));
+    expect(llmClient.complete).toHaveBeenCalledTimes(1);
+
+    // Watermark moved to 4, so 10 - 4 = 6 >= interval 5: the trigger still
+    // fires for the unconsumed tail instead of skipping it.
+    await extractor.maybeExtract(channelId);
+    expect(llmClient.complete).toHaveBeenCalledTimes(2);
+    expect(sessionManager.getMessageCount).toHaveBeenCalledWith(channelId);
+  });
+
+  it('does not advance the watermark when pre-compaction extraction fails', async () => {
+    const channelId = 'api:watermark-failure';
+    const llmClient = {
+      complete: vi
+        .fn()
+        .mockRejectedValueOnce(new Error('extraction provider unavailable'))
+        .mockResolvedValue({ content: '<response></response>' }),
+    } as any;
+    const { extractor, entries } = buildWatermarkHarness(channelId, { llmClient });
+
+    await expect(
+      extractor.queueCompactionExtraction(channelId, entries.slice(0, 8)),
+    ).rejects.toThrow('Extraction orchestration failed');
+    expect(llmClient.complete).toHaveBeenCalledTimes(1);
+
+    // The failed batch is still covered by the next interval trigger.
+    await extractor.maybeExtract(channelId);
+    expect(llmClient.complete).toHaveBeenCalledTimes(2);
+  });
+
+  it('advances the watermark after crash-recovery extraction covers the backlog', async () => {
+    const channelId = 'api:watermark-recovery';
+    const { extractor, entries, llmClient, eventBus } = buildWatermarkHarness(channelId);
+
+    // Crash recovery re-extracts the whole unextracted backlog.
+    await extractor.queueRetroactiveExtraction(channelId, entries);
+    expect(llmClient.complete).toHaveBeenCalledTimes(1);
+
+    const startReasons = (eventBus.emit as ReturnType<typeof vi.fn>).mock.calls
+      .filter(([name]) => name === 'memory.extraction.start')
+      .map(([, payload]) => payload?.triggerReason);
+    expect(startReasons).toEqual(['crash_recovery']);
+
+    // The recovered range is covered; the interval trigger does not re-send it.
+    await extractor.maybeExtract(channelId);
+    expect(llmClient.complete).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('MemoryExtractor group range in-flight reuse (mlwk.22)', () => {
+  function groupWriteCaps() {
+    return createDefaultGroupMemorySettings().writeCaps;
+  }
+
+  function groupEntry(channelId: string, id: number): unknown {
+    return {
+      id,
+      channelId,
+      role: 'user',
+      content: `Group range message ${id} with enough substance to extract.`,
+      authorName: 'user',
+      timestamp: id * 1_000,
+      metadata: JSON.stringify({
+        turn: {
+          schemaVersion: 1,
+          turnId: createTurnId(),
+          requestId: `req-group-${id}`,
+          role: 'user',
+        },
+      }),
+    };
+  }
+
+  function makeExtractor(gate: Promise<void>): MemoryExtractor {
+    const llmClient = {
+      complete: vi.fn().mockImplementation(async () => {
+        await gate;
+        return { content: '<response></response>' };
+      }),
+    } as any;
+    const sessionManager = {
+      getMessageCount: vi.fn().mockReturnValue(0),
+      getRecentMessages: vi.fn().mockReturnValue([]),
+    } as any;
+    const memoryStore = {
+      getMemoriesByChannel: vi.fn().mockReturnValue([]),
+    } as any;
+    const embeddingService = {
+      embed: vi.fn().mockResolvedValue(new Float32Array(8)),
+      embedBatch: vi.fn(),
+      dims: 8,
+    } as any;
+    const eventBus = {
+      emit: vi.fn().mockResolvedValue(undefined),
+    } as any;
+    return new MemoryExtractor(
+      llmClient,
+      sessionManager,
+      memoryStore,
+      embeddingService,
+      eventBus,
+      { extractionInterval: 5, minImportance: 0.45, minConfidence: 0.6, minNovelty: 0.35 },
+    );
+  }
+
+  it('reports false for an observed group range dropped into an in-flight extraction', async () => {
+    let releaseComplete!: () => void;
+    const gate = new Promise<void>((resolve) => { releaseComplete = resolve; });
+    const extractor = makeExtractor(gate);
+    const channelId = 'api:group-range-inflight';
+
+    // First range starts an extraction that we hold in-flight via the gate.
+    const firstPromise = extractor.extractObservedGroupRange({
+      channelId,
+      triggerReason: 'observed_count',
+      recoveredEntries: [groupEntry(channelId, 1), groupEntry(channelId, 2)] as any,
+      groupWriteCaps: groupWriteCaps(),
+    });
+    await Promise.resolve();
+    expect(extractor.getPendingExtractionPromise(channelId)).not.toBeNull();
+
+    // A different range on the SAME channel is coalesced into the in-flight run
+    // and its entries are dropped; it must report false so the caller does not
+    // mark the range processed.
+    const secondPromise = extractor.extractObservedGroupRange({
+      channelId,
+      triggerReason: 'observed_count',
+      recoveredEntries: [groupEntry(channelId, 3), groupEntry(channelId, 4)] as any,
+      groupWriteCaps: groupWriteCaps(),
+    });
+
+    releaseComplete();
+    const [firstResult, secondResult] = await Promise.all([firstPromise, secondPromise]);
+    expect(firstResult).toBe(true);
+    expect(secondResult).toBe(false);
+  });
+
+  it('reports false for an operator backfill range dropped into an in-flight extraction', async () => {
+    let releaseComplete!: () => void;
+    const gate = new Promise<void>((resolve) => { releaseComplete = resolve; });
+    const extractor = makeExtractor(gate);
+    const channelId = 'api:group-backfill-inflight';
+
+    const firstPromise = extractor.extractGroupBackfillRange({
+      channelId,
+      recoveredEntries: [groupEntry(channelId, 1), groupEntry(channelId, 2)] as any,
+      groupWriteCaps: groupWriteCaps(),
+    });
+    await Promise.resolve();
+    expect(extractor.getPendingExtractionPromise(channelId)).not.toBeNull();
+
+    const secondPromise = extractor.extractGroupBackfillRange({
+      channelId,
+      recoveredEntries: [groupEntry(channelId, 3), groupEntry(channelId, 4)] as any,
+      groupWriteCaps: groupWriteCaps(),
+    });
+
+    releaseComplete();
+    const [firstResult, secondResult] = await Promise.all([firstPromise, secondPromise]);
+    expect(firstResult).toBe(true);
+    expect(secondResult).toBe(false);
   });
 });

@@ -77,6 +77,7 @@ describe('resolveGatewayBootstrapInput', () => {
         GIT_REPO_ROOT: process.cwd(),
         MODULE_REGISTRY_PATH: 'registry/module-registry.json',
         GATEWAY_SESSION_HMAC_KEY: 'v1:test-session-secret',
+        BEADS_TOOLS_ENABLED: 'true',
         NTFY_BASE_URL: 'https://ntfy.local',
         NTFY_TOPIC: 'alerts',
         NTFY_TOKEN: 'ntfy-token',
@@ -100,6 +101,10 @@ describe('resolveGatewayBootstrapInput', () => {
 
     expect(bootstrap.runtimeMode).toBe('gateway-agent');
     expect(bootstrap.socketPath).toBe('/run/psfn/gateway.sock');
+    expect(bootstrap.gatewayRpcEndpoint).toEqual({
+      kind: 'unix',
+      socketPath: '/run/psfn/gateway.sock',
+    });
     expect(bootstrap.workspacePath).toBe('/workspace');
     expect(bootstrap.workspaceRoot).toBe('/workspace');
     expect(bootstrap.gitRepoRoot).toBe(process.cwd());
@@ -121,6 +126,9 @@ describe('resolveGatewayBootstrapInput', () => {
     expect(bootstrap.policyConfig.beads).toEqual({
       enabled: true,
       allowActions: ['ready', 'show', 'create', 'update', 'close', 'sync'],
+    });
+    expect(bootstrap.policyConfig.vault).toEqual({
+      enabled: false,
     });
     expect(bootstrap.providerEnv.OPENAI_API_KEY).toBe('openai-secret');
     expect(bootstrap.discordStartRetry).toEqual({
@@ -166,6 +174,69 @@ describe('resolveGatewayBootstrapInput', () => {
 
     expect(bootstrap.policyConfig.beads).toEqual({
       enabled: false,
+    });
+  });
+
+  it('parses explicit WSS gateway RPC endpoint configuration', () => {
+    const bootstrap = resolveGatewayBootstrapInput({
+      config: createConfig(),
+      env: {
+        PSFN_RUNTIME_MODE: 'split',
+        WORKSPACE_PATH: '/workspace',
+        GATEWAY_SESSION_HMAC_KEY: 'v1:test-session-secret',
+        GATEWAY_RPC_ENDPOINT: 'wss://gateway-rpc.local:10054/rpc',
+        GATEWAY_RPC_TLS_CA_PATH: '/certs/ca.pem',
+        GATEWAY_RPC_TLS_CERT_PATH: '/certs/gateway.pem',
+        GATEWAY_RPC_TLS_KEY_PATH: '/certs/gateway-key.pem',
+        GATEWAY_RPC_TLS_EXPECTED_PEER_SPIFFE_URI: 'spiffe://cluster.local/psfn/agent/test-companion',
+      },
+      startupHydration: createStartupHydration(),
+    });
+
+    expect(bootstrap.gatewayRpcEndpoint).toEqual({
+      kind: 'wss',
+      url: 'wss://gateway-rpc.local:10054/rpc',
+      host: 'gateway-rpc.local',
+      port: 10054,
+      path: '/rpc',
+      tls: {
+        caPath: '/certs/ca.pem',
+        certPath: '/certs/gateway.pem',
+        keyPath: '/certs/gateway-key.pem',
+        expectedPeerSpiffeUri: 'spiffe://cluster.local/psfn/agent/test-companion',
+      },
+    });
+  });
+
+  it('rejects WSS gateway RPC selection without TLS file configuration', () => {
+    expect(() => resolveGatewayBootstrapInput({
+      config: createConfig(),
+      env: {
+        PSFN_RUNTIME_MODE: 'split',
+        WORKSPACE_PATH: '/workspace',
+        GATEWAY_SESSION_HMAC_KEY: 'v1:test-session-secret',
+        GATEWAY_RPC_ENDPOINT: 'wss://gateway-rpc.local:10054/rpc',
+      },
+      startupHydration: createStartupHydration(),
+    })).toThrow(/GATEWAY_RPC_ENDPOINT=wss requires GATEWAY_RPC_TLS_CA_PATH/);
+  });
+
+  it('only enables legacy vault tools when explicitly requested', () => {
+    const bootstrap = resolveGatewayBootstrapInput({
+      config: createConfig(),
+      env: {
+        PSFN_RUNTIME_MODE: 'split',
+        WORKSPACE_PATH: '/workspace',
+        GATEWAY_SESSION_HMAC_KEY: 'v1:test-session-secret',
+        VAULT_TOOLS_ENABLED: 'true',
+        VAULT_ALLOW_ACTIONS: 'read,search',
+      },
+      startupHydration: createStartupHydration(),
+    });
+
+    expect(bootstrap.policyConfig.vault).toEqual({
+      enabled: true,
+      allowActions: ['read', 'search'],
     });
   });
 });

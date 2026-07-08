@@ -1,4 +1,6 @@
-import type { CanonicalModelRegistry, ImportProcessingRouteMode, ModelCatalogEntry, ModelPurpose, ModelRoleAssignments, ModelSlot } from '../../shared/contracts/runtime.js';
+import type { CanonicalModelRegistry, ImportProcessingRouteMode, ModelCatalogEntry, ModelPurpose, ModelRoleAssignments, ModelSlot, ObserverEvalSidecarSettings } from '../../shared/contracts/runtime.js';
+import type { GroupMemorySettings } from '../config/group-memory-config.js';
+import type { EmotionScopingSettings } from '../config/emotion-scoping-config.js';
 import type { CapabilityTier, CompositionalPolicyConfig, SessionRestartBehavior, SubstrateConfig } from '../config/runtime-config-contracts.js';
 import type { ImageWorkflowSettings } from '../../primitives/images/types.js';
 
@@ -73,6 +75,12 @@ export interface EditableSettings {
   memoryRetrievalBudgetPct?: number;
   moodCongruenceWeight?: number;
   adaptiveContextBudgetsEnabled?: boolean;
+  wikiRetrievalEnabled?: boolean;
+  wikiRetrievalChatTokenCap?: number;
+  wikiRetrievalGroupTokenCap?: number;
+  wikiRetrievalFocusTokenCap?: number;
+  wikiRetrievalSimilarityThreshold?: number;
+  wikiRetrievalGroupSimilarityThreshold?: number;
   sessionMirrorEnabled?: boolean;
   sessionMirrorMaxChars?: number;
   sessionMirrorActiveWindowMs?: number;
@@ -94,6 +102,9 @@ export interface EditableSettings {
   memoryExtractionMaxWrites?: number;
   memoryExtractionTelemetryEnabled?: boolean;
   memoryRetrievalTelemetryEnabled?: boolean;
+  memoryRefreshFailureAlertThreshold?: number;
+  groupMemory?: GroupMemorySettings;
+  emotionScoping?: EmotionScopingSettings;
   profileSynthesisEnabled?: boolean;
   profileSynthesisRefreshIntervalMs?: number;
   profileSynthesisCooldownMs?: number;
@@ -127,6 +138,7 @@ export interface EditableSettings {
   embeddingApiModel?: string;
   embeddingApiDims?: number;
   compositionalPolicy?: CompositionalPolicyConfig;
+  observerEvalSidecar?: ObserverEvalSidecarSettings;
   wyomingShardRouting?: SubstrateConfig['wyomingShardRouting'];
   shardToolsets?: SubstrateConfig['shardToolsets'];
   webFetchAllowHttp?: boolean;
@@ -198,6 +210,12 @@ export const RUNTIME_SETTINGS_KEYS = [
   'memoryRetrievalBudgetPct',
   'moodCongruenceWeight',
   'adaptiveContextBudgetsEnabled',
+  'wikiRetrievalEnabled',
+  'wikiRetrievalChatTokenCap',
+  'wikiRetrievalGroupTokenCap',
+  'wikiRetrievalFocusTokenCap',
+  'wikiRetrievalSimilarityThreshold',
+  'wikiRetrievalGroupSimilarityThreshold',
   'sessionMirrorEnabled',
   'sessionMirrorMaxChars',
   'sessionMirrorActiveWindowMs',
@@ -217,6 +235,9 @@ export const RUNTIME_SETTINGS_KEYS = [
   'memoryExtractionMaxWrites',
   'memoryExtractionTelemetryEnabled',
   'memoryRetrievalTelemetryEnabled',
+  'memoryRefreshFailureAlertThreshold',
+  'groupMemory',
+  'emotionScoping',
   'profileSynthesisEnabled',
   'profileSynthesisRefreshIntervalMs',
   'profileSynthesisCooldownMs',
@@ -250,6 +271,7 @@ export const RUNTIME_SETTINGS_KEYS = [
   'embeddingApiModel',
   'embeddingApiDims',
   'compositionalPolicy',
+  'observerEvalSidecar',
   'webFetchAllowHttp',
   'webFetchDomainAllowlist',
   'webFetchAllowInternalNetwork',
@@ -310,6 +332,9 @@ export type RuntimeSettingValue =
   | null
   | string[]
   | CompositionalPolicyConfig
+  | GroupMemorySettings
+  | EmotionScopingSettings
+  | ObserverEvalSidecarSettings
   | ImageWorkflowSettings
   | Record<string, boolean>
   | Partial<Record<'nursery' | 'apprentice' | 'autonomous' | 'custom', string[]>>

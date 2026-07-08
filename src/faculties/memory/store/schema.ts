@@ -25,6 +25,7 @@ export function createMemoryStoreSchema(db: Database.Database, embeddingDims: nu
       scope_ref_label TEXT,
       scope_tags TEXT NOT NULL DEFAULT '[]',
       provenance_refs TEXT NOT NULL DEFAULT '[]',
+      retention_class TEXT CHECK (retention_class IN ('standard', 'durable') OR retention_class IS NULL),
       contact_id TEXT,
       deleted_at INTEGER,
       deleted_by TEXT,
@@ -67,6 +68,26 @@ export function createMemoryStoreSchema(db: Database.Database, embeddingDims: nu
     );
     CREATE INDEX IF NOT EXISTS idx_l2_abstraction_source ON l2_memory_abstraction_links(source_memory_id);
     CREATE INDEX IF NOT EXISTS idx_l2_abstraction_abstracted ON l2_memory_abstraction_links(abstracted_memory_id);
+
+    CREATE TABLE IF NOT EXISTS memory_evolution_links (
+      id TEXT PRIMARY KEY,
+      source_memory_id TEXT NOT NULL,
+      target_memory_id TEXT NOT NULL,
+      relation TEXT NOT NULL CHECK (relation IN ('supersedes', 'updates', 'negates', 'conflicts_with')),
+      confidence REAL NOT NULL DEFAULT 1 CHECK (confidence >= 0 AND confidence <= 1),
+      reason TEXT,
+      source_ref TEXT,
+      source_type TEXT NOT NULL DEFAULT 'unknown',
+      provenance_refs TEXT NOT NULL DEFAULT '[]',
+      provenance_json TEXT NOT NULL DEFAULT '{}',
+      created_at INTEGER NOT NULL,
+      CHECK (source_memory_id <> target_memory_id),
+      UNIQUE (source_memory_id, target_memory_id, relation)
+    );
+    CREATE INDEX IF NOT EXISTS idx_memory_evolution_links_source ON memory_evolution_links(source_memory_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_memory_evolution_links_target ON memory_evolution_links(target_memory_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_memory_evolution_links_relation ON memory_evolution_links(relation, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_memory_evolution_links_source_ref ON memory_evolution_links(source_ref, source_type);
 
     CREATE TABLE IF NOT EXISTS l2_memory_patch_events (
       id TEXT PRIMARY KEY,
@@ -143,6 +164,9 @@ export function migrateMemoryStoreSchema(db: Database.Database): void {
   if (!hasColumn(db, 'l2_memories', 'provenance_refs')) {
     db.exec(`ALTER TABLE l2_memories ADD COLUMN provenance_refs TEXT NOT NULL DEFAULT '[]'`);
   }
+  if (!hasColumn(db, 'l2_memories', 'retention_class')) {
+    db.exec(`ALTER TABLE l2_memories ADD COLUMN retention_class TEXT`);
+  }
   if (!hasColumn(db, 'l2_memories', 'scope_ref_kind')) {
     db.exec(`ALTER TABLE l2_memories ADD COLUMN scope_ref_kind TEXT`);
   }
@@ -178,6 +202,10 @@ export function migrateMemoryStoreSchema(db: Database.Database): void {
     db.exec(`ALTER TABLE l2_memories ADD COLUMN delete_reason TEXT`);
   } catch { /* column already exists */ }
   db.exec(`CREATE INDEX IF NOT EXISTS idx_l2_deleted_at ON l2_memories(deleted_at)`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_l2_admin_active ON l2_memories(superseded_by, deleted_at, extracted_at DESC, id DESC)`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_l2_admin_type ON l2_memories(type, superseded_by, deleted_at, extracted_at DESC, id DESC)`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_l2_admin_sensitivity ON l2_memories(sensitivity, superseded_by, deleted_at, extracted_at DESC, id DESC)`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_l2_admin_retention ON l2_memories(retention_class, superseded_by, deleted_at, extracted_at DESC, id DESC)`);
 
   db.exec(`
     CREATE TABLE IF NOT EXISTS l2_memory_delete_versions (
@@ -240,6 +268,28 @@ export function migrateMemoryStoreSchema(db: Database.Database): void {
   `);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_l2_abstraction_source ON l2_memory_abstraction_links(source_memory_id)`);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_l2_abstraction_abstracted ON l2_memory_abstraction_links(abstracted_memory_id)`);
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS memory_evolution_links (
+      id TEXT PRIMARY KEY,
+      source_memory_id TEXT NOT NULL,
+      target_memory_id TEXT NOT NULL,
+      relation TEXT NOT NULL CHECK (relation IN ('supersedes', 'updates', 'negates', 'conflicts_with')),
+      confidence REAL NOT NULL DEFAULT 1 CHECK (confidence >= 0 AND confidence <= 1),
+      reason TEXT,
+      source_ref TEXT,
+      source_type TEXT NOT NULL DEFAULT 'unknown',
+      provenance_refs TEXT NOT NULL DEFAULT '[]',
+      provenance_json TEXT NOT NULL DEFAULT '{}',
+      created_at INTEGER NOT NULL,
+      CHECK (source_memory_id <> target_memory_id),
+      UNIQUE (source_memory_id, target_memory_id, relation)
+    );
+  `);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_memory_evolution_links_source ON memory_evolution_links(source_memory_id, created_at DESC)`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_memory_evolution_links_target ON memory_evolution_links(target_memory_id, created_at DESC)`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_memory_evolution_links_relation ON memory_evolution_links(relation, created_at DESC)`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_memory_evolution_links_source_ref ON memory_evolution_links(source_ref, source_type)`);
 
   db.exec(`
     CREATE TABLE IF NOT EXISTS scratchpad_entries (

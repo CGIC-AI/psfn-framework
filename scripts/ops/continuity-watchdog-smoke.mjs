@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 
-import { mkdtemp, readFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createServer } from 'node:http';
 import { spawn } from 'node:child_process';
@@ -9,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 
 const watchdogScript = new URL('./continuity-watchdog-healthcheck.mjs', import.meta.url);
 const watchdogScriptPath = fileURLToPath(watchdogScript);
+const smokeRoot = fileURLToPath(new URL('../../data/ops/watchdog-smoke/', import.meta.url));
 
 function makeHealthyPayload() {
   return {
@@ -84,7 +84,8 @@ function isExpectedAuthorization(headerValue, expectedApiKey) {
 }
 
 async function runScenario(name, options = {}) {
-  const tempDir = await mkdtemp(join(tmpdir(), `psfn-watchdog-smoke-${name}-`));
+  await mkdir(smokeRoot, { recursive: true });
+  const tempDir = await mkdtemp(join(smokeRoot, `${name}-`));
   const stateFile = join(tempDir, 'watchdog-state.json');
   const expectedApiKey = options.expectedApiKey ?? '';
   const watchdogApiKey = options.watchdogApiKey ?? '';
@@ -131,6 +132,12 @@ async function runScenario(name, options = {}) {
       CONTINUITY_WATCHDOG_MAX_FAILURES: '2',
       CONTINUITY_WATCHDOG_STATE_FILE: stateFile,
       CONTINUITY_WATCHDOG_RESTART_PID: '',
+      CONTINUITY_WATCHDOG_SYSTEMD_SERVICE: '',
+      CONTINUITY_WATCHDOG_PROCESS_PATTERN: '',
+      CONTINUITY_WATCHDOG_DRY_RUN: 'true',
+      CONTINUITY_WATCHDOG_NTFY_BASE_URL: 'https://ntfy.invalid',
+      CONTINUITY_WATCHDOG_NTFY_TOPIC: 'watchdog-smoke',
+      CONTINUITY_WATCHDOG_NTFY_TOKEN: 'watchdog-smoke-token',
     };
     delete baseEnv.API_KEY;
     delete baseEnv.CONTINUITY_WATCHDOG_API_KEY;
@@ -183,6 +190,7 @@ async function runScenario(name, options = {}) {
         else resolve();
       });
     });
+    await rm(tempDir, { recursive: true, force: true });
   }
 }
 

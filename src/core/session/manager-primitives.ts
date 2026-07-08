@@ -1,3 +1,5 @@
+import { isRecord } from '../../shared/utils/types.js';
+import { clampUnit } from '../../shared/utils/numeric.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type { TurnID } from '../../shared/contracts/runtime.js';
 import type { SessionRoleEnvelopePreview } from '../internal-role-envelopes/projections.js';
@@ -9,9 +11,16 @@ import {
   type TemporalTurnWindow,
 } from '../../shared/context-budget.js';
 import { formatActiveDate } from '../../shared/time/active-timezone.js';
-import type { ChannelVisibility, TrustLevel } from '../../system/trust/types.js';
+import type { TrustLevel } from '../../system/trust/types.js';
+import type { ChannelPrivacy } from '../../system/trust/context-envelope.js';
+import { decodeStoredChannelVisibility } from '../../system/trust/types.js';
 import type { ChannelMeta } from '../../system/trust/policy.js';
 import { COMPACTION_REFUSAL_PATTERNS, matchesRefusalPatterns } from '../../system/security/refusal-patterns.js';
+import {
+  formatToolObservationForContext,
+  parseToolObservationMetadata,
+  type ToolObservationMetadata,
+} from './tool-observation.js';
 import type { SessionEntry } from './types.js';
 
 /** Default number of cross-channel continuity messages to include in context. */
@@ -104,8 +113,12 @@ const DEFAULT_EMOTIONAL_SALIENCE_THRESHOLD_PCT = 75;
 const MAX_PRESERVED_SAFETY_TAGS = 8;
 const MAX_PRESERVED_EMOTIONAL_ENTRIES = 6;
 const MAX_PRESERVED_SAFETY_TAG_CONTENT_CHARS = 240;
-const MAX_HISTORY_SUMMARY_LINES = 6;
-const MAX_HISTORY_SUMMARY_LINE_CHARS = 160;
+const MAX_HISTORY_SUMMARY_ITEMS = 6;
+const MAX_HISTORY_SUMMARY_ITEM_CHARS = 160;
+const DEFAULT_SUMMARY_SOURCE_ENTRY_CHARS = 700;
+const MAX_SUMMARY_SOURCE_TOOL_FAILURE_CHARS = 220;
+const MAX_FALLBACK_RECENT_SUMMARY_ITEMS = 4;
+const MAX_FALLBACK_RECENT_SUMMARY_ITEM_CHARS = 140;
 
 export interface SessionMessageRecordOptions {
   trustLevel?: TrustLevel;
@@ -123,7 +136,8 @@ export interface MirrorEntryMetadata {
   sourceChannelId: string;
   sourceRole: 'user' | 'assistant';
   sourceAuthorName?: string;
-  sourceVisibility: ChannelVisibility;
+  /** Stored-value decode domain: ChannelPrivacy (legacy 'broadcast' -> 'public'). */
+  sourceVisibility: ChannelPrivacy;
   trustLevel: TrustLevel;
   mirroredAt: number;
   truncated: boolean;
@@ -159,6 +173,24 @@ function isEntryWithinTemporalWindow(
   return nowMs - entry.timestamp <= recentHours * 60 * 60 * 1000;
 }
 
+/**
+ * Minimum conversational (user/assistant) entries the temporal window must
+ * retain. A casual temporal cue in a message ("today", "just now") narrows the
+ * window for retrieval purposes, but it must never strip the immediate
+ * conversation: with no floor, a same-day filter right after a date boundary
+ * reduced a live turn's context to a single exchange and the companion
+ * re-answered her own previous reply.
+ */
+export const TEMPORAL_WINDOW_MIN_CONVERSATIONAL_ENTRIES = 12;
+
+/**
+ * Backfill reaches at most this far into the past. The floor exists to keep
+ * conversational continuity across a date boundary (last night's exchange is
+ * still "the conversation"), not to drag week-old content back into a
+ * temporally anchored turn.
+ */
+export const TEMPORAL_WINDOW_BACKFILL_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+
 export function applyTemporalSessionHistoryWindow(
   entries: readonly SessionEntry[],
   turnBudgetCharacteristics?: ContextBudgetTurnCharacteristics,
@@ -170,16 +202,35 @@ export function applyTemporalSessionHistoryWindow(
   }
 
   const nowMs = now.getTime();
-  return entries.filter(entry => isEntryWithinTemporalWindow(entry, temporalWindow, nowMs));
+  const filtered = entries.filter(entry => isEntryWithinTemporalWindow(entry, temporalWindow, nowMs));
+  const conversationalCount = filtered.filter(isConversationalDialogueEntry).length;
+  if (conversationalCount >= TEMPORAL_WINDOW_MIN_CONVERSATIONAL_ENTRIES) {
+    return filtered;
+  }
+
+  // Backfill the most recent pre-window entries (bounded by the backfill age
+  // cap) until the floor is met, so temporal narrowing never severs the live
+  // conversation at a date boundary.
+  const backfillCutoff = nowMs - TEMPORAL_WINDOW_BACKFILL_MAX_AGE_MS;
+  const kept = new Set(filtered);
+  const backfilled: SessionEntry[] = [...filtered];
+  let missing = TEMPORAL_WINDOW_MIN_CONVERSATIONAL_ENTRIES - conversationalCount;
+  for (let index = entries.length - 1; index >= 0 && missing > 0; index--) {
+    const entry = entries[index];
+    if (kept.has(entry)) continue;
+    if (!Number.isFinite(entry.timestamp) || entry.timestamp < backfillCutoff) continue;
+    backfilled.push(entry);
+    kept.add(entry);
+    if (isConversationalDialogueEntry(entry)) {
+      missing -= 1;
+    }
+  }
+  return backfilled.sort((a, b) => a.timestamp - b.timestamp || a.id - b.id);
 }
 
-interface RetryConfig {
-  maxRetries: number;
-  baseDelayMs: number;
-}
-
-interface RetryCallbacks {
-  onRetry?: (params: { attempt: number; delayMs: number; error: Error }) => Promise<void> | void;
+function isConversationalDialogueEntry(entry: SessionEntry): boolean {
+  return (entry.role === 'user' || entry.role === 'assistant')
+    && !isNonConversationalSessionEntry(entry);
 }
 
 interface SessionMetadataEnvelope {
@@ -193,9 +244,6 @@ interface InternalSessionLaneMetadata {
   source?: string;
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
 
 function parseMetadataEnvelope(metadata: string | undefined): SessionMetadataEnvelope | null {
   if (!metadata) return null;
@@ -217,41 +265,16 @@ function parseMetadataEnvelope(metadata: string | undefined): SessionMetadataEnv
 export function isNonConversationalSessionEntry(entry: Pick<SessionEntry, 'metadata'>): boolean {
   const envelope = parseMetadataEnvelope(entry.metadata);
   if (!envelope) return false;
+  // Legacy CompletionHandoff bookkeeping rows (no longer written, but still
+  // present in stores/backups until purged) are runtime metadata, never
+  // conversation. Excluding them here keeps window collection, token
+  // accounting, and prompt conversion consistent.
+  if (envelope.type === 'completion_handoff') return true;
   const lane = envelope.sessionLane;
   if (!isRecord(lane)) return false;
 
   const laneMetadata = lane as Partial<InternalSessionLaneMetadata>;
   return laneMetadata.schemaVersion === 1 && laneMetadata.kind === 'internal';
-}
-
-export async function withRetry<T>(
-  task: () => Promise<T>,
-  config: RetryConfig,
-  callbacks?: RetryCallbacks,
-): Promise<T> {
-  const maxRetries = Math.max(0, config.maxRetries);
-  const baseDelayMs = Math.max(0, config.baseDelayMs);
-
-  for (let attempt = 0; ; attempt++) {
-    try {
-      return await task();
-    } catch (error) {
-      if (attempt >= maxRetries) throw error;
-
-      const err = error instanceof Error ? error : new Error(String(error));
-      const retryAttempt = attempt + 1;
-      const delayMs = baseDelayMs * (2 ** attempt);
-      await callbacks?.onRetry?.({
-        attempt: retryAttempt,
-        delayMs,
-        error: err,
-      });
-
-      if (delayMs > 0) {
-        await new Promise(resolve => setTimeout(resolve, delayMs));
-      }
-    }
-  }
 }
 
 export function trimRecentEntriesToTokenBudget(entries: SessionEntry[], tokenBudget: number): SessionEntry[] {
@@ -451,46 +474,301 @@ interface HistorySummaryLine {
   content: string;
 }
 
+interface ToolFailureSummary {
+  metadata: ToolObservationMetadata;
+  content: string;
+}
+
+interface ToolFailureAggregate {
+  toolName: string;
+  count: number;
+  latestContent: string;
+}
+
+function resolveToolHistorySummary(entry: SessionEntry): ToolFailureSummary | null {
+  const metadata = parseToolObservationMetadata(entry.metadata);
+  if (!metadata?.isError) return null;
+  return {
+    metadata,
+    content: formatToolObservationForContext(entry.content, metadata),
+  };
+}
+
+function normalizeToolFailureSummaryContent(content: string): string {
+  return content
+    .replace(/\[Tool result:[^\]]+\]\s*/giu, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function aggregateToolFailure(
+  aggregates: Map<string, ToolFailureAggregate>,
+  failure: ToolFailureSummary,
+): void {
+  const toolName = failure.metadata.toolName || 'unknown_tool';
+  const latestContent = clipHistorySummaryContent(
+    normalizeToolFailureSummaryContent(failure.content) || 'failed without a readable error payload',
+    MAX_SUMMARY_SOURCE_TOOL_FAILURE_CHARS,
+  );
+  const existing = aggregates.get(toolName);
+  if (existing) {
+    existing.count += 1;
+    existing.latestContent = latestContent;
+    return;
+  }
+  aggregates.set(toolName, {
+    toolName,
+    count: 1,
+    latestContent,
+  });
+}
+
+function formatToolFailureAggregate(aggregate: ToolFailureAggregate): string {
+  const countText = aggregate.count === 1 ? '1 time' : `${aggregate.count} times`;
+  return `${aggregate.toolName} failed ${countText}; latest error: ${aggregate.latestContent}`;
+}
+
+function resolveSummarySourceSpeaker(entry: SessionEntry, characterName?: string): string {
+  if (entry.role === 'tool') {
+    const metadata = parseToolObservationMetadata(entry.metadata);
+    return `Tool ${metadata?.toolName || entry.authorName || 'result'}`;
+  }
+  return resolveHistorySummarySpeaker(entry, characterName);
+}
+
+export function buildSessionSummarySourceBlock(params: {
+  entries: readonly SessionEntry[];
+  characterName?: string;
+  maxEntryChars?: number;
+  omitToolFailures?: boolean;
+}): string {
+  const maxEntryChars = Math.max(80, Math.floor(params.maxEntryChars ?? DEFAULT_SUMMARY_SOURCE_ENTRY_CHARS));
+  const transcriptLines: string[] = [];
+  const toolFailures = new Map<string, ToolFailureAggregate>();
+
+  for (const entry of params.entries) {
+    if (isNonConversationalSessionEntry(entry)) continue;
+
+    if (entry.role === 'tool') {
+      const failureSummary = resolveToolHistorySummary(entry);
+      if (failureSummary) {
+        if (!params.omitToolFailures) {
+          aggregateToolFailure(toolFailures, failureSummary);
+        }
+        continue;
+      }
+    }
+
+    const normalizedContent = normalizeHistorySummaryContent(entry.content);
+    if (!normalizedContent) continue;
+    const speaker = resolveSummarySourceSpeaker(entry, params.characterName);
+    transcriptLines.push(`${speaker}: ${clipHistorySummaryContent(normalizedContent, maxEntryChars)}`);
+  }
+
+  const sections: string[] = [];
+  if (transcriptLines.length > 0) {
+    sections.push(['[Conversation excerpt]', ...transcriptLines].join('\n'));
+  }
+
+  if (toolFailures.size > 0) {
+    sections.push([
+      '[Compressed tool failures]',
+      ...[...toolFailures.values()].map(formatToolFailureAggregate),
+    ].join('\n'));
+  }
+
+  return sections.join('\n\n').trim();
+}
+
+interface FallbackRecentSummaryLine {
+  speaker: string;
+  content: string;
+}
+
+function buildFallbackRecentSummaryLines(
+  entries: readonly SessionEntry[],
+  characterName?: string,
+): FallbackRecentSummaryLine[] {
+  const lines: FallbackRecentSummaryLine[] = [];
+  for (const entry of entries) {
+    if (entry.role !== 'user' && entry.role !== 'assistant') continue;
+    if (isNonConversationalSessionEntry(entry)) continue;
+    const normalizedContent = normalizeHistorySummaryContent(entry.content);
+    if (!normalizedContent) continue;
+    lines.push({
+      speaker: resolveHistorySummarySpeaker(entry, characterName),
+      content: normalizedContent,
+    });
+  }
+  return lines.slice(-MAX_FALLBACK_RECENT_SUMMARY_ITEMS);
+}
+
+function formatFallbackRecentSummaryClause(line: FallbackRecentSummaryLine, maxContentChars: number): string {
+  const content = clipHistorySummaryContent(
+    line.content,
+    maxContentChars,
+  );
+  return `${line.speaker} noted "${content}"`;
+}
+
+function buildFallbackRecentSummaryParagraph(
+  lines: readonly FallbackRecentSummaryLine[],
+  maxContentChars: number,
+): string | null {
+  if (lines.length === 0) return null;
+  const clauses = lines.map(line => formatFallbackRecentSummaryClause(line, maxContentChars));
+  return `Earlier in the summarized span, ${joinHistorySummaryClauses(clauses)}.`;
+}
+
+export function buildRecentSessionSummaryFallbackText(params: {
+  entries: readonly SessionEntry[];
+  characterName?: string;
+  maxTokens: number;
+}): string {
+  if (params.entries.length === 0 || params.maxTokens <= 0) {
+    return '';
+  }
+
+  const headerLines = ['[History summary]'];
+  if (countTokens(headerLines.join('\n')) > params.maxTokens) {
+    return '';
+  }
+
+  const lines = buildFallbackRecentSummaryLines(params.entries, params.characterName);
+  for (let lineCount = lines.length; lineCount > 0; lineCount -= 1) {
+    const selectedLines = lines.slice(-lineCount);
+    for (
+      let maxContentChars = MAX_FALLBACK_RECENT_SUMMARY_ITEM_CHARS;
+      maxContentChars >= 32;
+      maxContentChars -= 24
+    ) {
+      const paragraph = buildFallbackRecentSummaryParagraph(selectedLines, maxContentChars);
+      if (!paragraph) continue;
+      if (countTokens([...headerLines, paragraph].join('\n')) <= params.maxTokens) {
+        return [...headerLines, paragraph].join('\n');
+      }
+    }
+  }
+
+  const failureBlock = buildSessionSummarySourceBlock({
+    entries: params.entries,
+    characterName: params.characterName,
+  }).split('\n').filter(line => line.includes('failed ')).slice(-2);
+  if (failureBlock.length === 0) return '';
+  const compressedFailureSummary = [
+    ...headerLines,
+    `Earlier tool calls had compressed failures: ${failureBlock.join(' / ')}.`,
+  ].join('\n');
+  return countTokens(compressedFailureSummary) <= params.maxTokens ? compressedFailureSummary : '';
+}
+
+function formatRepeatedToolFailureSummary(failures: readonly ToolFailureSummary[]): HistorySummaryLine {
+  const latest = failures[failures.length - 1];
+  const toolName = latest.metadata.toolName;
+  const latestContent = latest.content;
+  const content = failures.length === 1
+    ? latestContent
+    : `${toolName} failed ${failures.length} times. Most recent failure: ${latestContent}`;
+  return {
+    speaker: 'Tool',
+    content,
+  };
+}
+
+function pushHistorySummaryLine(
+  grouped: HistorySummaryLine[],
+  line: HistorySummaryLine,
+): void {
+  const last = grouped.at(-1);
+  if (last && last.speaker === line.speaker) {
+    last.content = `${last.content} / ${line.content}`;
+    return;
+  }
+
+  grouped.push(line);
+}
+
 function buildHistorySummaryLines(
   entries: SessionEntry[],
   characterName?: string,
 ): HistorySummaryLine[] {
   const grouped: HistorySummaryLine[] = [];
+  let pendingToolFailures: ToolFailureSummary[] = [];
+
+  const flushToolFailures = (): void => {
+    if (pendingToolFailures.length === 0) return;
+    pushHistorySummaryLine(grouped, formatRepeatedToolFailureSummary(pendingToolFailures));
+    pendingToolFailures = [];
+  };
 
   for (const entry of entries) {
+    if (entry.role === 'tool') {
+      const failureSummary = resolveToolHistorySummary(entry);
+      if (failureSummary) {
+        pendingToolFailures.push(failureSummary);
+        continue;
+      }
+      flushToolFailures();
+    } else {
+      flushToolFailures();
+    }
+
     const normalizedContent = normalizeHistorySummaryContent(entry.content);
     if (!normalizedContent) continue;
 
-    const speaker = resolveHistorySummarySpeaker(entry, characterName);
-    const last = grouped.at(-1);
-    if (last && last.speaker === speaker) {
-      last.content = `${last.content} / ${normalizedContent}`;
-      continue;
-    }
-
-    grouped.push({ speaker, content: normalizedContent });
+    pushHistorySummaryLine(grouped, {
+      speaker: resolveHistorySummarySpeaker(entry, characterName),
+      content: normalizedContent,
+    });
   }
+  flushToolFailures();
 
-  return grouped.slice(-MAX_HISTORY_SUMMARY_LINES);
+  return grouped.slice(-MAX_HISTORY_SUMMARY_ITEMS);
 }
 
-function fitHistorySummaryLine(
-  prefixLines: string[],
-  line: HistorySummaryLine,
+function formatHistorySummaryClause(line: HistorySummaryLine, maxContentChars: number): string {
+  const content = clipHistorySummaryContent(line.content, maxContentChars).replace(/[.!?]+$/u, '');
+  const verb = line.speaker === 'Tool' ? 'reported' : 'said';
+  return `${line.speaker} ${verb}: ${content}`;
+}
+
+function joinHistorySummaryClauses(clauses: readonly string[]): string {
+  if (clauses.length === 0) return '';
+  if (clauses.length === 1) return clauses[0];
+  if (clauses.length === 2) return `${clauses[0]} and ${clauses[1]}`;
+  return `${clauses.slice(0, -1).join('; ')}; and ${clauses[clauses.length - 1]}`;
+}
+
+function buildHistorySummaryParagraph(
+  lines: readonly HistorySummaryLine[],
+  maxContentChars: number,
+): string | null {
+  if (lines.length === 0) return null;
+  const clauses = lines.map(line => formatHistorySummaryClause(line, maxContentChars));
+  return `In the summarized span, ${joinHistorySummaryClauses(clauses)}.`;
+}
+
+function fitHistorySummaryParagraph(
+  headerLines: readonly string[],
+  summaryLines: readonly HistorySummaryLine[],
   maxTokens: number,
 ): string | null {
-  let content = clipHistorySummaryContent(line.content, MAX_HISTORY_SUMMARY_LINE_CHARS);
-
-  for (;;) {
-    const candidate = `- ${line.speaker}: ${content}`;
-    if (countTokens([...prefixLines, candidate].join('\n')) <= maxTokens) {
-      return candidate;
+  for (let lineCount = summaryLines.length; lineCount > 0; lineCount -= 1) {
+    const lines = summaryLines.slice(-lineCount);
+    for (
+      let maxContentChars = MAX_HISTORY_SUMMARY_ITEM_CHARS;
+      maxContentChars >= 32;
+      maxContentChars -= 24
+    ) {
+      const paragraph = buildHistorySummaryParagraph(lines, maxContentChars);
+      if (!paragraph) continue;
+      if (countTokens([...headerLines, paragraph].join('\n')) <= maxTokens) {
+        return paragraph;
+      }
     }
-    if (content.length <= 16) {
-      return null;
-    }
-    content = clipHistorySummaryContent(content, Math.max(16, content.length - 24));
   }
+
+  return null;
 }
 
 export function buildSessionHistorySummaryText(params: {
@@ -507,14 +785,12 @@ export function buildSessionHistorySummaryText(params: {
     return '';
   }
 
-  const lines = [...headerLines];
-  for (const line of buildHistorySummaryLines(params.entries, params.characterName)) {
-    const fitted = fitHistorySummaryLine(lines, line, params.maxTokens);
-    if (!fitted) break;
-    lines.push(fitted);
-  }
-
-  return lines.length > headerLines.length ? lines.join('\n') : '';
+  const paragraph = fitHistorySummaryParagraph(
+    headerLines,
+    buildHistorySummaryLines(params.entries, params.characterName),
+    params.maxTokens,
+  );
+  return paragraph ? [...headerLines, paragraph].join('\n') : '';
 }
 
 export function normalizeImportBootstrapMaxTokens(value: number | undefined): number {
@@ -537,11 +813,6 @@ function normalizeTaggedContent(content: string): string {
     return normalized;
   }
   return `${normalized.slice(0, MAX_PRESERVED_SAFETY_TAG_CONTENT_CHARS - 3)}...`;
-}
-
-function clampUnit(value: number): number {
-  if (!Number.isFinite(value)) return 0;
-  return Math.max(0, Math.min(1, value));
 }
 
 export function resolveEmotionalSalienceThreshold(config: SubstrateConfig): number {
@@ -702,20 +973,17 @@ export function appendCompactionMetadataBlocks(summary: string, blocks: string[]
   return `${trimmedSummary}\n\n${normalizedBlocks.join('\n\n')}`;
 }
 
-export function parseChannelVisibility(value?: string): ChannelVisibility | undefined {
-  switch (value) {
-    case 'private':
-    case 'semi_private':
-    case 'public':
-    case 'broadcast':
-      return value;
-    default:
-      return undefined;
-  }
+export function parseChannelVisibility(value?: string): ChannelPrivacy | undefined {
+  // Parses persisted visibility labels; the shared decoder maps records
+  // written before the E3.1 rename / E3.3 broadcast split onto ChannelPrivacy
+  // ('semi_private' -> 'invite_only', 'broadcast' -> 'public').
+  return decodeStoredChannelVisibility(value);
 }
 
-export function isUntrustedVisibility(visibility: ChannelVisibility): boolean {
-  return visibility === 'public' || visibility === 'broadcast';
+export function isUntrustedVisibility(privacy: ChannelPrivacy): boolean {
+  // Public structural access is untrusted context; broadcast surfaces are
+  // always 'public', so the retired broadcast check is subsumed.
+  return privacy === 'public';
 }
 
 export function wrapUntrustedContext(content: string, source: 'public' = 'public'): string {
@@ -735,12 +1003,9 @@ export function parseMirrorMetadata(value?: string): MirrorEntryMetadata | null 
     const parsed = JSON.parse(value) as Partial<MirrorEntryMetadata>;
     if (parsed.type !== 'mirror') return null;
     if (parsed.sourceRole !== 'user' && parsed.sourceRole !== 'assistant') return null;
-    if (
-      parsed.sourceVisibility !== 'private'
-      && parsed.sourceVisibility !== 'semi_private'
-      && parsed.sourceVisibility !== 'public'
-      && parsed.sourceVisibility !== 'broadcast'
-    ) {
+    // Mirror metadata is persisted; decode legacy 'semi_private' records.
+    const sourceVisibility = decodeStoredChannelVisibility(parsed.sourceVisibility);
+    if (!sourceVisibility) {
       return null;
     }
     if (
@@ -759,7 +1024,7 @@ export function parseMirrorMetadata(value?: string): MirrorEntryMetadata | null 
       sourceChannelId: parsed.sourceChannelId,
       sourceRole: parsed.sourceRole,
       sourceAuthorName: typeof parsed.sourceAuthorName === 'string' ? parsed.sourceAuthorName : undefined,
-      sourceVisibility: parsed.sourceVisibility,
+      sourceVisibility,
       trustLevel: parsed.trustLevel,
       mirroredAt: parsed.mirroredAt,
       truncated: parsed.truncated === true,

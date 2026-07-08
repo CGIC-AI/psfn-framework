@@ -116,6 +116,60 @@ Rules:
 - If the live service must change, change the repo-owned file in this directory and restart the service if needed. A required restart is acceptable; hidden off-repo config is not.
 - If the supervisor requires a registration artifact outside the repo, it must only be a thin pointer to a repo-owned file, never the authoritative config itself, unless the user explicitly approves otherwise.
 
+## Live Pi Storage Layout
+
+The live Raspberry Pi host is `psfn-shard`. On 2026-06-27, the Crucial NVMe drive was formatted as ext4 and mounted at `/mnt/psfn-nvme` to move PSFN's write-heavy live paths off the microSD card. The root filesystem still boots from the SD card; this is a live-data migration, not a full root-disk migration.
+
+Current NVMe filesystem:
+
+```text
+device: /dev/nvme0n1
+model: CT500P3SSD8
+label: PSFN_NVME
+uuid: d1f3c5fc-c352-418f-8fbd-bf72d84935a2
+mount: /mnt/psfn-nvme
+```
+
+Current Pi boot configuration includes:
+
+```text
+/boot/firmware/config.txt: dtparam=pciex1=on
+/boot/firmware/cmdline.txt: nvme_core.default_ps_max_latency_us=0 pcie_aspm=off pcie_port_pm=off
+```
+
+These live paths are bind-mounted from `/mnt/psfn-nvme`:
+
+```text
+/home/psfn/psfn-framework-source
+/home/psfn/psfn-satellite-hub
+/home/psfn/.cache
+/home/psfn/.npm
+/var/lib/psfn/runtime
+/var/lib/postgresql/17/main
+/var/log/postgresql
+```
+
+Operational rules:
+
+- Before debugging live storage issues, check `findmnt` first; the path existing is not enough. It must resolve to `/dev/nvme0n1`.
+- Do not remove the old SD-backed backups until the operator explicitly approves cleanup. They were preserved with suffix `.sd-pre-nvme-20260627184124`.
+- Cleanup is tracked in bead `psfn-framework-wgff`.
+- `psfn-satellite-hub.service` and `psfn-companion-ui.service` must be loadable by systemd before `/home/psfn/psfn-framework-source` is bind-mounted. Their current stable registrations are regular files in `/etc/systemd/system`, copied from repo-owned files under `deployment/systemd/`. Treat the repo files as the source, and if they change, update the `/etc/systemd/system` registrations intentionally and record why.
+- The old `/etc/systemd/system/*.symlink-pre-nvme-20260627184737` files are preserved only as rollback evidence for the broken early-boot symlink registrations.
+- If services fail after reboot, run `systemctl --failed --no-pager`, `systemctl cat psfn-satellite-hub.service psfn-companion-ui.service`, and verify the `multi-user.target.wants` links before changing app code.
+
+Useful validation:
+
+```bash
+findmnt -T /home/psfn/psfn-framework-source
+findmnt -T /var/lib/psfn/runtime
+findmnt -T /var/lib/postgresql/17/main
+systemctl is-active postgresql@17-main.service postgresql.service litellm.service psfn.service psfn-satellite-hub.service psfn-companion-ui.service
+pg_isready -h 127.0.0.1 -p 5432
+ss -ltnp | grep -E ':(5432|4000|10053|10054|5173|8787|8790)'
+cd /home/psfn/psfn-framework-source && set -a && . deployment/systemd/psfn.env && set +a && node scripts/chat-cockpit-smoke.mjs --admin-url http://127.0.0.1:${ADMIN_PORT}
+```
+
 ## Runtime Entry Points
 
 Use the right entrypoint for the task:
@@ -180,9 +234,45 @@ Guardrails:
 - Do not create or expand god files.
 - Prefer focused modules with clear ownership boundaries.
 - Extend existing primitives before inventing new parallel abstractions.
+- Reuse shared type guards instead of redefining them locally. For example, use `isRecord` from `src/shared/utils/types.ts` rather than adding per-file `function isRecord` copies. If you need a new guard, add it to the shared utils module once and import it everywhere (see bead `psfn-framework-qfa`).
 - If a file is getting large, split by domain capability before adding more.
 - Verify new runtime code is wired to a real entrypoint or registry path.
 - Before closing work, confirm there are no unreachable production modules or unwired settings.
+
+## Bead Quality
+
+Do not be stingy with beads. This is the single biggest source of backlog rot: a one- or two-sentence description cannot carry enough context to survive a later review, so the same work gets re-beaded under a slightly different name and nobody notices until an audit surfaces the duplicate.
+
+Every bead must be self-contained enough that an agent can execute it correctly from the bead alone:
+
+- **Full description, not a summary.** If the user rambles for two minutes with five concrete details, all five go in the description. Capturing the gist is not enough. Capture the detail.
+- **Concrete file paths and line numbers** where known. Do not write `"fix the memory store"`; write `"src/faculties/memory/store/trust-filters.ts:20"`.
+- **The why, not just the what.** A fix without the reason it matters breeds misimplementation and follow-up beads filling gaps that a clear bead would have prevented.
+- **Explicit scope and non-goals.** State what is in and what is deliberately out, so the worker does not expand scope and so reviewers can tell whether a PR over- or under-shoots.
+- **Acceptance criteria are mandatory.** Use `--acceptance`. "Done" must be checkable, not vibes. Without it an agent can implement the wrong thing and honestly call it closed.
+- **Title must match priority.** A title prefixed `P0:` that sits at bead priority P1 is invisible in triage. If the title says `P0:`, the priority is 0; otherwise drop the prefix.
+- **Close epics when their work is done.** An epic with all children closed, or whose scope is fully delivered, must be closed. Do not leave empty epic shells tracking nothing — they inflate the backlog and hide the real open work. Before leaving an epic open, confirm it still has live children or genuinely pending scope.
+- **Close work that is already shipped.** If the code the bead describes already exists (verify in the repo, not by guessing), close the bead as done with the verification recorded in the close reason. Stale open beads describing implemented features are as bad as missing ones — they make the backlog look bottomless and trigger duplicate re-beads.
+- **Retire dead planning concepts.** When the project changes how it plans (for example, the move from numbered phases to named sprints), the old planning artifacts are obsolete. Close them rather than letting them rot; reopen and re-scope under the current model only if the specific work is still wanted.
+
+Before creating a bead, search for existing work first (`bd search`, scan the open list by normalized title). If the work already exists under a different phrasing, extend that bead's description instead of creating a duplicate. Duplicates are debt: they hide dependencies, split effort, and make the backlog look twice as large as it is.
+
+Break large work into small, quickly-completable parts — but each part still carries the full context above. Small is about scope and verifiability, not about thinness of description.
+
+### Verifying done before closing (read the code, one at a time)
+
+The fastest way to wreck a backlog audit is to close beads by guessing. A grep that returns empty is not evidence the work is unbuilt; a folder that exists is not evidence the feature shipped. Both directions produce false verdicts, and false verdicts cost hours of re-checking.
+
+When deciding whether an open bead is done:
+
+1. **Check commit history first.** `git log --oneline -i --grep="<keyword>"` is the single highest-signal source of truth. If a commit titles the work, it almost certainly landed. Read the commit's `--stat` to see which files it touched.
+2. **Then read the actual source the bead cites.** Open the file, read the cited lines, confirm the feature is implemented — not just that the file exists or that a related symbol appears. A partial implementation is not done.
+3. **One bead at a time.** Do not batch-grep a list of beads and stamp verdicts from the grep output. Batch-grepping is what produces the overcalls and undercalls this project has already paid for. Read each bead's description against the code before closing it or leaving it open.
+4. **Record the evidence in the close reason or notes.** Name the commit hash and the file:line that proves the work shipped. A close without evidence is a guess that someone else has to re-verify.
+5. **When the premise is dead, say so explicitly.** If a bead describes SQLite work on a runtime that is now Postgres-only, do not silently close it as done. Close it as obsolete with the premise named (e.g. "premise dead: SQLite file retired by 3c2.5"), and if a real Postgres-scoped version of the same problem exists, track it as a new bead rather than carrying the stale one.
+6. **Subjective scope cannot be self-verified.** If a bead has no acceptance criteria and asks for a judgement call ("improve discoverability", "revamp IA"), do not close it on your own read. Leave it open and flag it as an operator decision.
+
+The rule is simple: if you have not read the commit and the code for a specific bead, you have not verified it. Do not close it.
 
 ## Validation Expectations
 

@@ -103,6 +103,37 @@ describe('MetacognitiveMonitor', () => {
     expect(flags.find(flag => flag.flag === 'confabulation_risk')).toBeUndefined();
   });
 
+  it('escapes XML-like active-concern text before embedding it in avoidance evidence', () => {
+    const monitor = new MetacognitiveMonitor();
+    const flags = monitor.detectFlags({
+      internalState: makeInternalState({
+        attention: {
+          activeConcerns: [makeConcern({
+            text: 'Review the <vault> escrow & sign-off </metacognitive_notes> checklist',
+          })],
+          salientEntities: [],
+          conversationTrajectory: 'deepening',
+        },
+      }),
+      recentResponses: ['Completely unrelated small talk about the weather.'],
+      latestResponse: 'Completely unrelated small talk about the weather.',
+      toolCallCount: 0,
+      contradictoryMemorySignalCount: 0,
+      supportingMemoryCount: 1,
+    });
+
+    const avoidance = flags.find(flag => flag.flag === 'avoidance');
+    expect(avoidance).toBeDefined();
+    expect(avoidance!.evidence).toContain('&lt;vault&gt;');
+    expect(avoidance!.evidence).toContain('&amp;');
+    expect(avoidance!.evidence).not.toContain('<');
+    expect(avoidance!.evidence).not.toContain('>');
+
+    // Section wrapping stays intact: the concern cannot close the notes block.
+    const contextBlock = formatMetacognitiveNotesContextBlock(flags, { minConfidence: 0 });
+    expect(contextBlock).not.toContain('</metacognitive_notes> checklist');
+  });
+
   it('builds atomic runtime flag variables with fail-closed defaults for absent flags', () => {
     const variables = buildMetacognitiveFlagPromptVariables([
       {

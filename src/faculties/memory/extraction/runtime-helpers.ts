@@ -106,6 +106,53 @@ export function evaluateExtractionTrigger(
   };
 }
 
+export interface ExtractionWatermarkAdvance {
+  previousCount: number;
+  nextCount: number;
+  coveredUpToMessageId: number;
+}
+
+/**
+ * Advances the interval watermark (lastExtractionCount) after an out-of-band
+ * extraction (pre_compaction / crash_recovery) consumed a batch of entries, so
+ * the next interval trigger does not re-send messages that were already
+ * extracted (psfn-framework-xcw8).
+ *
+ * Coverage is recorded only for the consumed range: the watermark moves to the
+ * current message count minus the countable messages newer than the last
+ * consumed entry, and it never regresses. Callers must invoke this only after
+ * the extraction completed successfully — on failure the watermark stays put so
+ * crash recovery and the next interval trigger still cover the content.
+ */
+export function advanceExtractionWatermarkForCoverage(
+  channelId: string,
+  sessionManager: SessionManager,
+  consumedEntries: readonly SessionEntry[],
+): ExtractionWatermarkAdvance | null {
+  let coveredUpToMessageId: number | null = null;
+  for (const entry of consumedEntries) {
+    if (!Number.isFinite(entry.id)) continue;
+    if (coveredUpToMessageId === null || entry.id > coveredUpToMessageId) {
+      coveredUpToMessageId = entry.id;
+    }
+  }
+  if (coveredUpToMessageId === null) return null;
+  const maxConsumedId = coveredUpToMessageId;
+
+  const currentCount = sessionManager.getMessageCount(channelId);
+  const newerCount = sessionManager.getRecentMessages(channelId)
+    .filter(entry => isCountableExtractionEntry(entry)
+      && Number.isFinite(entry.id)
+      && entry.id > maxConsumedId)
+    .length;
+  const nextCount = Math.max(0, currentCount - newerCount);
+  const previousCount = lastExtractionCount.get(channelId) ?? 0;
+  if (nextCount <= previousCount) return null;
+
+  lastExtractionCount.set(channelId, nextCount);
+  return { previousCount, nextCount, coveredUpToMessageId };
+}
+
 export function resolveCoveredUpToMessageId(
   sessionManager: SessionManager,
   channelId: string,

@@ -1,4 +1,4 @@
-import type { ChannelVisibility } from '../../system/trust/types.js';
+import type { ChannelPrivacy } from '../../system/trust/context-envelope.js';
 
 export const SATELLITE_REGISTRY_FILE_NAME = 'satellites.json';
 
@@ -47,6 +47,24 @@ export type SatelliteMobility = 'static' | 'portable' | 'mobile' | 'unknown';
 
 export type SatelliteAuthMode = 'api_key' | 'mtls';
 
+export const SATELLITE_TRANSPORT_MODES = [
+  'http_chat_completions',
+  'voice_websocket',
+  'openhome_bridge',
+  'satellite_hub',
+] as const;
+
+export type SatelliteTransportMode = typeof SATELLITE_TRANSPORT_MODES[number];
+
+export const SATELLITE_CONFIG_RESTART_POLICIES = [
+  'manual',
+  'restart_on_transport_change',
+  'restart_on_runtime_change',
+  'restart_on_any_change',
+] as const;
+
+export type SatelliteConfigRestartPolicy = typeof SATELLITE_CONFIG_RESTART_POLICIES[number];
+
 /**
  * `satellites.json` is the authority for what an external endpoint may claim.
  * Per-request advertised capabilities only reduce this registry maximum; they
@@ -65,7 +83,36 @@ export interface SatelliteDefaultIdentityConfig {
   authorId: string;
   authorName: string;
   canonicalContactId: string;
-  channelPrivacy: ChannelVisibility;
+  channelPrivacy: ChannelPrivacy;
+}
+
+export interface SatelliteEndpointTransportConfig {
+  mode: SatelliteTransportMode;
+  chatCompletionsPath?: string;
+  voiceWebSocketPath?: string;
+}
+
+export interface SatelliteEndpointAudioRuntimeConfig {
+  inputDevice?: string;
+  outputDevice?: string;
+  sampleRateHz?: number;
+  channelCount?: number;
+  frameMs?: number;
+  wakeWordEnabled?: boolean;
+}
+
+export interface SatelliteEndpointRefreshConfig {
+  intervalMs: number;
+  jitterMs?: number;
+  restartPolicy: SatelliteConfigRestartPolicy;
+  restartGraceMs?: number;
+}
+
+export interface SatelliteEndpointRuntimeConfig {
+  schemaVersion: 1;
+  transport: SatelliteEndpointTransportConfig;
+  audio?: SatelliteEndpointAudioRuntimeConfig;
+  refresh: SatelliteEndpointRefreshConfig;
 }
 
 export interface SatelliteEndpointConfig {
@@ -77,6 +124,7 @@ export interface SatelliteEndpointConfig {
   defaultIdentity: SatelliteDefaultIdentityConfig;
   maxCapabilities: SatelliteCapability[];
   telemetryScopes: SatelliteTelemetryScope[];
+  runtime?: SatelliteEndpointRuntimeConfig;
 }
 
 export interface SatelliteConfig {
@@ -160,4 +208,61 @@ export interface SatelliteRoutingMetadata {
     principalId: string;
     certBound: boolean;
   };
+}
+
+export interface SatelliteConfigPullHeaderContract {
+  claimType: string;
+  satelliteId: string;
+  endpointId: string;
+  sessionId: string;
+  threadId: string;
+  capabilities: string;
+  telemetryScopes: string;
+}
+
+export interface SatelliteConfigPullSessionContract {
+  channelType: 'api';
+  routingSource: 'satellite';
+  claimType: string;
+  channelIdTemplate: string;
+  sessionIdHeader: string;
+  fixedHeaders: {
+    claimType: string;
+    satelliteId: string;
+    endpointId: string;
+  };
+  headerNames: SatelliteConfigPullHeaderContract;
+}
+
+export interface SatelliteConfigPullResponse {
+  object: 'companion.satellite_config';
+  schemaVersion: 1;
+  configVersion: string;
+  satellite: {
+    satelliteId: string;
+    displayName: string;
+    mobility: SatelliteMobility;
+    staticLocationLabel?: string;
+  };
+  endpoint: {
+    endpointId: string;
+    displayName: string;
+    promptChannelType: string;
+    claimType: string;
+    claimTypes: string[];
+  };
+  identity: SatelliteDefaultIdentityConfig;
+  session: SatelliteConfigPullSessionContract;
+  capabilities: {
+    registryMax: SatelliteCapability[];
+    runtimeEnabled: SatelliteCapability[];
+    policyDenied: SatelliteCapability[];
+  };
+  telemetryScopes: SatelliteTelemetryScope[];
+  auth: {
+    mode: SatelliteAuthMode;
+    principalId: string;
+    certBound: boolean;
+  };
+  runtime: SatelliteEndpointRuntimeConfig;
 }

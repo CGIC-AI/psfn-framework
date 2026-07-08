@@ -1,16 +1,18 @@
 // ── Prompt Stack Types ──
-// Layered prompt composition: base -> operator -> runtime -> channel -> task
+// Layered prompt ownership: base -> operator -> system_language -> runtime -> channel -> task.
+// system_language layers are owner-backed template sources and are not rendered into prompts.
 
-export type LayerType = 'base' | 'operator' | 'runtime' | 'channel' | 'task';
+export type LayerType = 'base' | 'operator' | 'system_language' | 'runtime' | 'channel' | 'task';
 export const PROMPT_LAYER_ROLES = ['system', 'user', 'assistant'] as const;
 export type PromptLayerRole = (typeof PROMPT_LAYER_ROLES)[number];
 
 export const LAYER_TYPE_ORDER: Record<LayerType, number> = {
   base: 0,
   operator: 1,
-  runtime: 2,
-  channel: 3,
-  task: 4,
+  system_language: 2,
+  runtime: 3,
+  channel: 4,
+  task: 5,
 };
 
 export interface PromptLayer {
@@ -78,18 +80,33 @@ export interface PromptComposerOptions {
   persistLastKnownGood?: boolean;
 }
 
-export interface ComposeResult {
+/**
+ * One dynamic-suffix section with its render policy (E2.5): required sections
+ * fail the turn loudly on unresolved macros; optional sections drop with
+ * telemetry instead of leaking tokens into the prompt.
+ */
+export interface ComposedDynamicSection {
+  identifier: string;
+  required: boolean;
+  content: string;
+}
+
+/**
+ * Result of the single composer entrypoint (PromptComposer.composeSplit).
+ * The static/dynamic split semantics survive downstream as PromptPlan
+ * volatility boundaries; there is no unsplit compose() fallback (E2.2).
+ */
+export interface ComposeSplitResult {
   text: string;
   hash: string;
   layerCount: number;
   layerIds: string[];
   promptIdentifiers?: string[];
   autoHealedPromptIdentifiers?: string[];
-}
-
-export interface ComposeSplitResult extends ComposeResult {
   staticPrefix: string;
   dynamicSuffix: string;
+  /** Per-layer dynamic sections in suffix order (dynamicSuffix = join('\n\n')). */
+  dynamicSections: ComposedDynamicSection[];
   staticHash: string;
   dynamicHash: string;
   staticLayerIds: string[];

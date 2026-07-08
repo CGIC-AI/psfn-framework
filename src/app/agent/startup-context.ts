@@ -1,6 +1,10 @@
 import { loadAgentConfig } from '../../system/config/load-config.js';
 import { EventBus } from '../../shared/event-bus.js';
 import { DEFAULT_GATEWAY_SOCKET_PATH } from '../../system/security/policy-constants.js';
+import {
+  resolveGatewayRpcEndpointFromEnv,
+  type GatewayRpcEndpoint,
+} from '../../boundary/gateway/transport.js';
 import { resolveBackupRuntimeConfig } from '../../persistence/backups/config.js';
 import {
   RUNTIME_MODE,
@@ -21,6 +25,8 @@ import {
 import {
   loadSatelliteRegistryConfig,
 } from '../../channels/backplane/satellite-registry.js';
+import { setRuntimeChannelEnvelopeLabels } from '../../system/trust/runtime-channel-labels.js';
+import { CHARGE_POLICY_FILE_NAME } from '../../system/config/charge-policy-config.js';
 import {
   buildRuntimeChannelsConfigOverrides,
 } from '../startup/support/bootstrap-helpers.js';
@@ -60,6 +66,7 @@ export interface AgentStartupContext {
   capabilityRuntime: CapabilityRuntime;
   eligibilityGate: EligibilityGate;
   socketPath: string;
+  gatewayRpcEndpoint: GatewayRpcEndpoint;
   moduleRegistryPath: string;
   eventBus: EventBus;
   stopDebugObserver: () => void;
@@ -94,7 +101,7 @@ export function prepareAgentStartupContext(input: {
   const coreConfig = sanitizeCoreSubstrateConfig(config);
   logAgentStartupHydrationDiagnostics(input.log, startupHydration.diagnostics);
 
-  const { pathSnapshot, trustPolicyConfig, schedulerConfig } = startupHydration;
+  const { pathSnapshot, trustPolicyConfig, schedulerConfig, chargePolicyConfig } = startupHydration;
   input.log.info('Loaded trust policy configuration', {
     exactOverrideCount: Object.keys(
       trustPolicyConfig.channelClassification.visibilityOverrides.exact,
@@ -102,6 +109,10 @@ export function prepareAgentStartupContext(input: {
     prefixOverrideCount: Object.keys(
       trustPolicyConfig.channelClassification.visibilityOverrides.prefix,
     ).length,
+  });
+  input.log.info('Loaded charge policy quotas', {
+    runChargeQuotaByLane: chargePolicyConfig.runChargeQuotaByLane,
+    sourcePath: `${pathSnapshot.systemDataDir}/${CHARGE_POLICY_FILE_NAME}`,
   });
   const runtimeChannelsOverrides = buildRuntimeChannelsConfigOverrides(
     config,
@@ -118,6 +129,12 @@ export function prepareAgentStartupContext(input: {
       },
     },
   );
+  // E3.2: publish channel-owned Context Envelope labels for classification
+  // (channel-owned label > operator override > derived default).
+  setRuntimeChannelEnvelopeLabels(channelsConfig.contextEnvelope.channels);
+  input.log.info('Loaded channel-owned context envelope labels', {
+    labeledChannelCount: Object.keys(channelsConfig.contextEnvelope.channels).length,
+  });
   const satelliteRegistryConfig = loadSatelliteRegistryConfig(pathSnapshot.systemDataDir);
   const backupConfig = resolveBackupRuntimeConfig({
     dataDir: pathSnapshot.systemDataDir,
@@ -133,7 +150,10 @@ export function prepareAgentStartupContext(input: {
     () => capabilityRuntime,
     (decision) => emitEligibilityDecisionTelemetry(eventBus, decision, input.log),
   );
-  const socketPath = input.env.GATEWAY_SOCKET ?? DEFAULT_GATEWAY_SOCKET_PATH;
+  const gatewayRpcEndpoint = resolveGatewayRpcEndpointFromEnv(input.env, DEFAULT_GATEWAY_SOCKET_PATH);
+  const socketPath = gatewayRpcEndpoint.kind === 'unix'
+    ? gatewayRpcEndpoint.socketPath
+    : input.env.GATEWAY_SOCKET ?? DEFAULT_GATEWAY_SOCKET_PATH;
   if (!input.env.WORKSPACE_PATH) {
     input.log.warn('WORKSPACE_PATH not set, defaulting to runtime layout workspace path', {
       mode: pathSnapshot.runtimePathLayout.mode,
@@ -163,6 +183,7 @@ export function prepareAgentStartupContext(input: {
     capabilityRuntime,
     eligibilityGate,
     socketPath,
+    gatewayRpcEndpoint,
     moduleRegistryPath,
     eventBus,
     stopDebugObserver,

@@ -5,11 +5,18 @@ import type {
   ContactProfileArtifact,
   MemoryAbstractionLink,
   MemoryAbstractionLinkInput,
+  MemoryAdminListOptions,
+  MemoryAdminListResult,
+  MemoryAdminPrivacySummary,
   MemoryBulkUpdatePatch,
   MemoryDeleteVersion,
+  MemoryEvolutionLink,
+  MemoryEvolutionLinkInput,
+  MemoryEvolutionRelation,
   MemoryListOptions,
   MemoryLink,
   MemoryPatchEvent,
+  MemorySalienceUpdate,
   MemorySoftDeleteOptions,
   MemoryStoreUpdatePatch,
   MemoryUndoSoftDeleteOptions,
@@ -18,6 +25,8 @@ import type {
   ScratchpadEntryCreateOptions,
   ScratchpadEntryReplaceOptions,
   MemoryMaintenanceReview,
+  MemoryMaintenanceDiagnostics,
+  MemoryMaintenanceDiagnosticsOptions,
   MemoryMaintenanceReviewInput,
   MemoryMaintenanceReviewListOptions,
   MemoryWriteCommit,
@@ -38,12 +47,19 @@ import {
   recordAbstractionLink,
   getAbstractionLinksForSourceMemory,
   getAbstractionLinksForAbstractedMemory,
+  recordEvolutionLink,
+  getEvolutionLinksForSourceMemory,
+  getEvolutionLinksForTargetMemory,
   bulkDelete,
   bulkUpdate,
+  bulkUpdateSalience,
 } from './store/read-write-operations.js';
 import {
   getAllActiveMemories,
+  listMemories,
   listActiveMemories,
+  listAdminMemories,
+  getAdminMemoryPrivacySummary,
   countActiveMemories,
   getById,
   getStats,
@@ -66,6 +82,7 @@ import {
   upsertMemoryMaintenanceReview,
   listMemoryMaintenanceReviews,
   getMemoryMaintenanceReview,
+  getMemoryMaintenanceDiagnostics,
 } from './store/maintenance-reviews.js';
 import type { MemoryStoreOptions } from './store/types.js';
 import { searchByEmbedding } from './store/vector-search.js';
@@ -142,8 +159,20 @@ export class MemoryStore {
     return getAllActiveMemories(this.db, limit);
   }
 
+  listMemories(options: MemoryListOptions = {}): PurrMemory[] {
+    return listMemories(this.db, options);
+  }
+
   listActiveMemories(options: MemoryListOptions = {}): PurrMemory[] {
     return listActiveMemories(this.db, options);
+  }
+
+  listAdminMemories(options: MemoryAdminListOptions = {}): MemoryAdminListResult {
+    return listAdminMemories(this.db, options);
+  }
+
+  getAdminMemoryPrivacySummary(): MemoryAdminPrivacySummary {
+    return getAdminMemoryPrivacySummary(this.db);
   }
 
   countActiveMemories(): number {
@@ -184,6 +213,24 @@ export class MemoryStore {
     return getAbstractionLinksForAbstractedMemory(this.db, abstractedMemoryId);
   }
 
+  recordEvolutionLink(input: MemoryEvolutionLinkInput): MemoryEvolutionLink {
+    return recordEvolutionLink(this.db, input);
+  }
+
+  getEvolutionLinksForSourceMemory(
+    sourceMemoryId: string,
+    relation?: MemoryEvolutionRelation,
+  ): MemoryEvolutionLink[] {
+    return getEvolutionLinksForSourceMemory(this.db, sourceMemoryId, relation);
+  }
+
+  getEvolutionLinksForTargetMemory(
+    targetMemoryId: string,
+    relation?: MemoryEvolutionRelation,
+  ): MemoryEvolutionLink[] {
+    return getEvolutionLinksForTargetMemory(this.db, targetMemoryId, relation);
+  }
+
   getStats(): { total: number; byType: Record<string, number>; avgSalience: number } {
     return getStats(this.db);
   }
@@ -200,6 +247,12 @@ export class MemoryStore {
 
   getMemoryMaintenanceReview(id: string): MemoryMaintenanceReview | undefined {
     return getMemoryMaintenanceReview(this.db, id);
+  }
+
+  getMemoryMaintenanceDiagnostics(
+    options: MemoryMaintenanceDiagnosticsOptions = {},
+  ): MemoryMaintenanceDiagnostics {
+    return getMemoryMaintenanceDiagnostics(this.db, options);
   }
 
   getMemoriesByChannel(channelId: string, limit: number): PurrMemory[] {
@@ -228,6 +281,10 @@ export class MemoryStore {
 
   bulkUpdate(ids: string[], fields: MemoryBulkUpdatePatch): number {
     return bulkUpdate(this.db, ids, fields);
+  }
+
+  bulkUpdateSalience(updates: MemorySalienceUpdate[]): number {
+    return bulkUpdateSalience(this.db, updates);
   }
 
   upsertContactProfile(profile: ContactProfileArtifact): void {

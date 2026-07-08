@@ -54,7 +54,7 @@ export async function queryRows<T extends QueryResultRow>(
   text: string,
   values: readonly unknown[] = [],
 ): Promise<T[]> {
-  const result = await pool.query<T>(text, values);
+  const result = await pool.query<T>(text, [...values]);
   return result.rows;
 }
 
@@ -63,7 +63,7 @@ export async function queryOne<T extends QueryResultRow>(
   text: string,
   values: readonly unknown[] = [],
 ): Promise<T | undefined> {
-  const result = await pool.query<T>(text, values);
+  const result = await pool.query<T>(text, [...values]);
   return result.rows[0];
 }
 
@@ -72,6 +72,5 @@ export async function executeQuery(
   text: string,
   values: readonly unknown[] = [],
 ): Promise<QueryResult> {
-  return await pool.query(text, values);
+  return await pool.query(text, [...values]);
 }
-

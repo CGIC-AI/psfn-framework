@@ -19,6 +19,7 @@
     ContactMutationAuditEntry,
     ContactConversationChannelView,
     ContactProfileArtifact,
+    AdminContactRelationshipScoreView,
     RelationshipType,
     TrustLevel,
     ChannelPrivacyLevel,
@@ -84,7 +85,7 @@
 
   const PRIVACY_BADGE_STYLES: Record<string, { bg: string; text: string; label: string }> = {
     private:      { bg: 'background-color: #4A7C59', text: 'color: white', label: 'Private' },
-    semi_private: { bg: 'background-color: #8B7355', text: 'color: white', label: 'Semi-Private' },
+    invite_only: { bg: 'background-color: #8B7355', text: 'color: white', label: 'Invite-Only' },
     public:       { bg: 'background-color: #4A5C8B', text: 'color: white', label: 'Public' },
     broadcast:    { bg: 'background-color: #C44569', text: 'color: white', label: 'Broadcast' },
   };
@@ -138,6 +139,10 @@
     return data?.socialGraphMap[contactId];
   }
 
+  function getRelationshipScore(contactId: string): AdminContactRelationshipScoreView | undefined {
+    return data?.relationshipScoreMap?.[contactId];
+  }
+
   function contactNameForId(contactId: string): string {
     const contact = data?.contacts.find(c => c.id === contactId);
     return contact ? contactDisplayName(contact) : contactId;
@@ -153,6 +158,42 @@
 
   function formatRelType(rt: string): string {
     return rt.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+  }
+
+  function finiteNumber(value: number | undefined): number | null {
+    return typeof value === 'number' && Number.isFinite(value) ? value : null;
+  }
+
+  function formatRelationshipScore(value: number): string {
+    if (!Number.isFinite(value)) return String(value);
+    if (Number.isInteger(value)) return String(value);
+    return value.toFixed(2).replace(/\.?0+$/, '');
+  }
+
+  function relationshipScoreProgress(score: AdminContactRelationshipScoreView): number {
+    const providedProgress = finiteNumber(score.progressToNextTier);
+    if (providedProgress !== null) {
+      const percent = providedProgress <= 1 ? providedProgress * 100 : providedProgress;
+      return Math.max(0, Math.min(100, percent));
+    }
+
+    const nextThreshold = finiteNumber(score.nextTierThreshold);
+    if (nextThreshold === null) return 100;
+
+    const previousThreshold = finiteNumber(score.previousTierThreshold) ?? 0;
+    const span = nextThreshold - previousThreshold;
+    if (span <= 0) return score.score >= nextThreshold ? 100 : 0;
+
+    return Math.max(0, Math.min(100, ((score.score - previousThreshold) / span) * 100));
+  }
+
+  function relationshipProgressLabel(score: AdminContactRelationshipScoreView): string {
+    const nextThreshold = finiteNumber(score.nextTierThreshold);
+    if (score.nextTier && nextThreshold !== null) {
+      const remaining = Math.max(0, nextThreshold - score.score);
+      return `${formatRelationshipScore(score.score)} / ${formatRelationshipScore(nextThreshold)} · ${formatRelationshipScore(remaining)} to ${formatRelType(score.nextTier)}`;
+    }
+    return 'Highest tracked tier';
   }
 
   function formatConfidence(value: number): string {
@@ -747,6 +788,7 @@
         {@const channels = getChannels(contact.id)}
         {@const profile = getProfile(contact.id)}
         {@const graph = getSocialGraph(contact.id)}
+        {@const relationshipScore = getRelationshipScore(contact.id)}
         {@const badge = trustBadge(contact.trustLevel)}
 
         <div class="card-garden p-5 flex flex-col gap-3 {editingContactId === contact.id ? 'ring-2 ring-gold-400' : ''}">
@@ -805,6 +847,26 @@
               <span>Last: {formatDate(contact.lastSeen)}</span>
             </div>
           </div>
+
+          {#if relationshipScore}
+            <div class="border-t border-moss-200 pt-3 space-y-2">
+              <div class="flex items-baseline justify-between gap-3">
+                <span class="text-xs font-medium uppercase tracking-wider text-shadow-600">Dynamic Relationship</span>
+                <span class="text-sm font-semibold text-shadow-900">{formatRelType(relationshipScore.resolvedTier)}</span>
+              </div>
+              <div class="flex items-baseline justify-between gap-3 text-sm">
+                <span class="text-shadow-700">Score</span>
+                <span class="font-mono font-semibold text-shadow-900">{formatRelationshipScore(relationshipScore.score)}</span>
+              </div>
+              <div class="h-2 w-full overflow-hidden rounded-full bg-bark-200" aria-label="Relationship progress toward next tier">
+                <div class="h-full rounded-full bg-moss-600 transition-all" style="width: {relationshipScoreProgress(relationshipScore)}%"></div>
+              </div>
+              <p class="text-xs text-shadow-600">{relationshipProgressLabel(relationshipScore)}</p>
+              {#if relationshipScore.updatedAt}
+                <p class="text-xs text-shadow-500">Updated {formatDateTime(relationshipScore.updatedAt)}</p>
+              {/if}
+            </div>
+          {/if}
 
           <!-- Notes (click to open full edit) -->
           <div class="border-t border-bark-200 pt-2">

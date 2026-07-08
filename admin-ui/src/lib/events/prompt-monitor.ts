@@ -1,5 +1,12 @@
 import type {
+  AdminAuthenticityProvenance,
+  AdminPromptLoomData,
+  AdminPromptPlanBlock,
+  AdminPromptPlanData,
+  AdminPromptSectionTelemetry,
   AdminSessionTurnData,
+  AdminTurnPromptContextMessage,
+  AdminTurnProviderWireMessage,
   AdminTurnSnapshotData,
   AdminTurnStageTelemetry,
 } from '../types';
@@ -23,6 +30,7 @@ export interface PromptMonitorTurn {
   latestEventAt: number;
   record: AdminSessionTurnData['record'] | null;
   snapshot: AdminTurnSnapshotData | null;
+  promptLoom: AdminPromptLoomData | null;
   stages: AdminTurnStageTelemetry[];
 }
 
@@ -56,32 +64,133 @@ export interface PromptMonitorSummary {
 function cloneStage(stage: AdminTurnStageTelemetry): AdminTurnStageTelemetry {
   return {
     ...stage,
-    data: { ...stage.data },
+    data: cloneJsonObject(stage.data),
   };
+}
+
+function cloneJsonSafe<T>(value: T): T {
+  return cloneJsonSafeValue(value, new WeakSet<object>()) as T;
+}
+
+function cloneJsonObject<T extends Record<string, unknown>>(value: T): T {
+  return cloneJsonSafe(value);
+}
+
+function cloneJsonSafeValue(value: unknown, seen: WeakSet<object>): unknown {
+  if (
+    value === null
+    || typeof value === 'string'
+    || typeof value === 'number'
+    || typeof value === 'boolean'
+  ) {
+    return value;
+  }
+  if (typeof value === 'bigint') return value.toString();
+  if (value === undefined || typeof value === 'function' || typeof value === 'symbol') {
+    return undefined;
+  }
+
+  if (Array.isArray(value)) {
+    return value.map(item => {
+      const cloned = cloneJsonSafeValue(item, seen);
+      return cloned === undefined ? null : cloned;
+    });
+  }
+
+  if (typeof value !== 'object') return undefined;
+  if (seen.has(value)) return '[Circular]';
+  seen.add(value);
+
+  if (value instanceof Date) return value.toISOString();
+  if (value instanceof RegExp) return value.toString();
+
+  const tag = Object.prototype.toString.call(value);
+  if (tag === '[object Window]' || tag === '[object global]') {
+    return '[Unserializable global object]';
+  }
+
+  const output: Record<string, unknown> = {};
+  let entries: [string, unknown][];
+  try {
+    entries = Object.entries(value as Record<string, unknown>);
+  } catch {
+    return `[Unserializable ${tag}]`;
+  }
+
+  for (const [key, nested] of entries) {
+    const cloned = cloneJsonSafeValue(nested, seen);
+    if (cloned !== undefined) {
+      output[key] = cloned;
+    }
+  }
+  seen.delete(value);
+  return output;
+}
+
+function cloneProvenance(
+  provenance: AdminAuthenticityProvenance | undefined,
+): AdminAuthenticityProvenance | undefined {
+  if (!provenance) return undefined;
+  return {
+    ...provenance,
+    ...(provenance.sourceEntryIds ? { sourceEntryIds: [...provenance.sourceEntryIds] } : {}),
+    ...(provenance.notes ? { notes: [...provenance.notes] } : {}),
+  };
+}
+
+function clonePromptContextMessage(
+  message: AdminTurnPromptContextMessage,
+): AdminTurnPromptContextMessage {
+  return {
+    ...message,
+    ...(message.provenance ? { provenance: cloneProvenance(message.provenance) } : {}),
+  };
+}
+
+function clonePromptSection(
+  section: AdminPromptSectionTelemetry,
+): AdminPromptSectionTelemetry {
+  return {
+    ...section,
+    ...(section.provenance ? { provenance: cloneProvenance(section.provenance) } : {}),
+    ...(section.scopeProvenance ? { scopeProvenance: { ...section.scopeProvenance } } : {}),
+  };
+}
+
+function clonePromptLoom(loom: AdminPromptLoomData): AdminPromptLoomData {
+  return cloneJsonSafe(loom);
 }
 
 function cloneSnapshot(snapshot: AdminTurnSnapshotData): AdminTurnSnapshotData {
   return {
     ...snapshot,
     ...(snapshot.prompt ? { prompt: { ...snapshot.prompt } } : {}),
+    ...(snapshot.plan ? { plan: cloneJsonSafe(snapshot.plan) } : {}),
     ...(snapshot.promptContext
       ? {
         promptContext: {
           ...snapshot.promptContext,
-          messages: snapshot.promptContext.messages.map(message => ({ ...message })),
+          ...(snapshot.promptContext.messages
+            ? { messages: snapshot.promptContext.messages.map(clonePromptContextMessage) }
+            : {}),
           ...(snapshot.promptContext.inputSections
             ? {
-              inputSections: snapshot.promptContext.inputSections.map(section => ({ ...section })),
+              inputSections: snapshot.promptContext.inputSections.map(clonePromptSection),
             }
             : {}),
           ...(snapshot.promptContext.runtimeContextSections
             ? {
-              runtimeContextSections: snapshot.promptContext.runtimeContextSections.map(section => ({ ...section })),
+              runtimeContextSections: snapshot.promptContext.runtimeContextSections.map(clonePromptSection),
+            }
+            : {}),
+          ...(snapshot.promptContext.memoryContextSections
+            ? {
+              memoryContextSections: snapshot.promptContext.memoryContextSections.map(clonePromptSection),
             }
             : {}),
           ...(snapshot.promptContext.finalSystemSections
             ? {
-              finalSystemSections: snapshot.promptContext.finalSystemSections.map(section => ({ ...section })),
+              finalSystemSections: snapshot.promptContext.finalSystemSections.map(clonePromptSection),
             }
             : {}),
           ...(snapshot.promptContext.providerObservability
@@ -109,7 +218,7 @@ function cloneSnapshot(snapshot: AdminTurnSnapshotData): AdminTurnSnapshotData {
         toolContext: {
           activeTools: snapshot.toolContext.activeTools.map(tool => ({
             ...tool,
-            inputSchema: structuredClone(tool.inputSchema),
+            inputSchema: cloneJsonObject(tool.inputSchema),
           })),
           ...(snapshot.toolContext.adaptiveSnapshot
             ? {
@@ -188,6 +297,7 @@ function sortTurns(turns: readonly PromptMonitorTurn[]): PromptMonitorTurn[] {
       ...turn,
       stages: sortStages(turn.stages),
       snapshot: turn.snapshot ? cloneSnapshot(turn.snapshot) : null,
+      promptLoom: turn.promptLoom ? clonePromptLoom(turn.promptLoom) : null,
     }));
 }
 
@@ -224,8 +334,446 @@ function buildTurnFromSession(turn: AdminSessionTurnData): PromptMonitorTurn {
     latestEventAt,
     record: { ...turn.record },
     snapshot: turn.snapshot ? cloneSnapshot(turn.snapshot) : null,
+    promptLoom: turn.promptLoom ? clonePromptLoom(turn.promptLoom) : null,
     stages: sortStages(turn.stages),
   };
+}
+
+const HISTORICAL_SNAPSHOT_LABEL = 'Persisted turn snapshot; not current prompt generator state.';
+const REMOVED_PROMPT_LAYER_IDS = [
+  'runtime_self',
+  'model_context',
+  'analysis_workbench_guidance',
+] as const;
+
+function historicalLayerMatches(text: string | null | undefined, layerId: string): boolean {
+  if (!text) return false;
+  const normalized = text.toLowerCase();
+  return normalized.includes(layerId) || normalized.includes(layerId.replaceAll('_', ' '));
+}
+
+function addHistoricalHitsForText(
+  hits: AdminPromptLoomData['historicalSnapshot']['hits'],
+  source: string,
+  text: string | null | undefined,
+): void {
+  for (const layerId of REMOVED_PROMPT_LAYER_IDS) {
+    if (historicalLayerMatches(text, layerId)) {
+      hits.push({ layerId, source });
+    }
+  }
+}
+
+function addHistoricalHitsForSections(
+  hits: AdminPromptLoomData['historicalSnapshot']['hits'],
+  source: string,
+  sections: AdminPromptSectionTelemetry[] | undefined,
+): void {
+  for (const section of sections ?? []) {
+    for (const layerId of REMOVED_PROMPT_LAYER_IDS) {
+      if (
+        historicalLayerMatches(section.id, layerId)
+        || historicalLayerMatches(section.title, layerId)
+        || historicalLayerMatches(section.content, layerId)
+      ) {
+        hits.push({
+          layerId,
+          source,
+          sectionId: section.id,
+          title: section.title,
+        });
+      }
+    }
+  }
+}
+
+function collectHistoricalSnapshotHits(
+  snapshot: AdminTurnSnapshotData | null,
+): AdminPromptLoomData['historicalSnapshot']['hits'] {
+  const hits: AdminPromptLoomData['historicalSnapshot']['hits'] = [];
+  addHistoricalHitsForText(hits, 'prompt.staticPrefixTemplate', snapshot?.prompt?.staticPrefixTemplate);
+  addHistoricalHitsForText(hits, 'prompt.dynamicSuffixTemplate', snapshot?.prompt?.dynamicSuffixTemplate);
+  addHistoricalHitsForSections(hits, 'promptContext.inputSections', snapshot?.promptContext?.inputSections);
+  addHistoricalHitsForSections(
+    hits,
+    'promptContext.runtimeContextSections',
+    snapshot?.promptContext?.runtimeContextSections,
+  );
+  addHistoricalHitsForSections(
+    hits,
+    'promptContext.finalSystemSections',
+    snapshot?.promptContext?.finalSystemSections,
+  );
+  return hits;
+}
+
+function hasToolResultPayload(toolCall: AdminSessionTurnData['record']['toolCalls'][number]): boolean {
+  const record = toolCall as unknown as Record<string, unknown>;
+  return typeof record.resultText === 'string'
+    || typeof record.isError === 'boolean'
+    || record.details !== undefined;
+}
+
+function clonePromptContextMessagesForLoom(
+  messages: AdminTurnPromptContextMessage[] | undefined,
+): AdminPromptLoomData['generatedPrompt']['contextMessages'] {
+  return (messages?.map(clonePromptContextMessage) ?? []) as AdminPromptLoomData['generatedPrompt']['contextMessages'];
+}
+
+function clonePromptSectionsForLoom(
+  sections: AdminPromptSectionTelemetry[] | undefined,
+): AdminPromptLoomData['generatedPrompt']['inputSections'] {
+  return (sections?.map(clonePromptSection) ?? []) as AdminPromptLoomData['generatedPrompt']['inputSections'];
+}
+
+function cloneProviderMessagesForLoom(
+  messages: AdminTurnProviderWireMessage[] | undefined,
+): AdminPromptLoomData['providerPayload']['providerMessages'] {
+  return (messages?.map(message => ({ ...message })) ?? []) as AdminPromptLoomData['providerPayload']['providerMessages'];
+}
+
+function getPlanBlockText(
+  plan: AdminPromptPlanData | undefined,
+  id: string,
+): string | null {
+  return plan?.blocks.find(block => block.id === id)?.renderedText ?? null;
+}
+
+function joinPlanBlockTexts(blocks: readonly AdminPromptPlanBlock[]): string {
+  return blocks
+    .map(block => block.renderedText.trim())
+    .filter(text => text.length > 0)
+    .join('\n\n');
+}
+
+const DATETIME_ANCHOR_BLOCK_ID = 'runtime.current_datetime';
+
+/**
+ * Mirror of stripCurrentDatetimePromptBlocks (turn-execution/prompt-plan.ts):
+ * stale datetime anchors are stripped fail-closed before the plan's own
+ * ordered anchor block is appended last. Kept regex-identical so the live-bus
+ * fallback serialization matches the server projection byte-for-byte.
+ */
+function stripCurrentDatetimeBlocksView(text: string): string {
+  return text
+    .replace(/<runtime\.current_datetime(?:\s+[^>]*)?>\s*[\s\S]*?<\/runtime\.current_datetime>/g, '')
+    .replace(/<current_datetime>\s*[\s\S]*?<\/current_datetime>/g, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+/** Mirror of serializePromptPlanSystemPrompt for the live-bus fallback. */
+function serializePlanSystemPromptView(plan: AdminPromptPlanData): string {
+  const anchorBlock = plan.blocks.find(block => block.id === DATETIME_ANCHOR_BLOCK_ID);
+  const body = stripCurrentDatetimeBlocksView(
+    joinPlanBlockTexts(plan.blocks.filter(block => block.id !== DATETIME_ANCHOR_BLOCK_ID)),
+  );
+  const anchor = anchorBlock?.renderedText.trim() ?? '';
+  if (!anchor) return body;
+  return body ? `${body}\n\n${anchor}` : anchor;
+}
+
+interface PromptLoomPlanStrings {
+  renderedStaticPrefix: string | null;
+  renderedDynamicSuffix: string | null;
+  runtimeContext: string | null;
+  memoryContextBlock: string | null;
+  scratchpadContext: string | null;
+  assembledPrompt: string | null;
+  finalSystemPrompt: string | null;
+  contextMessages: AdminPromptLoomData['generatedPrompt']['contextMessages'];
+}
+
+/**
+ * Live-event fallback mirror of the server-side plan derivation (E2.2): the
+ * snapshot's PromptPlan is the source of truth for prompt strings; the legacy
+ * promptContext string fields exist only on historical records.
+ */
+function derivePromptLoomPlanStrings(
+  snapshot: AdminTurnSnapshotData | undefined | null,
+): PromptLoomPlanStrings {
+  const plan = snapshot?.plan;
+  if (plan) {
+    return {
+      renderedStaticPrefix: getPlanBlockText(plan, 'static_prefix') ?? '',
+      renderedDynamicSuffix: getPlanBlockText(plan, 'dynamic_suffix') ?? '',
+      runtimeContext: getPlanBlockText(plan, 'runtime.context') ?? '',
+      memoryContextBlock: getPlanBlockText(plan, 'memory.retrieval') ?? '',
+      scratchpadContext: getPlanBlockText(plan, 'runtime.scratchpad') ?? '',
+      assembledPrompt: joinPlanBlockTexts(
+        plan.blocks.filter(block => block.layer === 'prompt_stack' || block.layer === 'runtime'),
+      ),
+      finalSystemPrompt: serializePlanSystemPromptView(plan),
+      contextMessages: clonePromptContextMessagesForLoom(plan.messages),
+    };
+  }
+  const promptContext = snapshot?.promptContext;
+  return {
+    renderedStaticPrefix: promptContext?.renderedStaticPrefix ?? null,
+    renderedDynamicSuffix: promptContext?.renderedDynamicSuffix ?? null,
+    runtimeContext: promptContext?.runtimeContext ?? null,
+    memoryContextBlock: promptContext?.memoryContextBlock ?? null,
+    scratchpadContext: promptContext?.scratchpadContext ?? null,
+    assembledPrompt: promptContext?.assembledPrompt ?? null,
+    finalSystemPrompt: promptContext?.finalSystemPrompt ?? null,
+    contextMessages: clonePromptContextMessagesForLoom(promptContext?.messages),
+  };
+}
+
+/**
+ * Live-bus fallback Provider Wire view. The recorded provider-wire capture is
+ * byte-equal to the plan serialization at runtime (E2.2 single assembly path),
+ * so the fallback serves the capture with an explicit 'recorded_snapshot'
+ * source marker; the persisted-record path serves the plan-derived wire.
+ */
+function buildProviderWireFromSnapshot(
+  snapshot: AdminTurnSnapshotData | null,
+  planStrings: PromptLoomPlanStrings,
+): AdminPromptLoomData['providerWire'] {
+  const plan = snapshot?.plan ?? null;
+  const toolDefinitions = plan
+    ? plan.toolDefinitions.map(tool => ({ ...tool, inputSchema: cloneJsonObject(tool.inputSchema) }))
+    : snapshot?.toolContext?.activeTools.map(tool => ({
+      ...tool,
+      inputSchema: cloneJsonObject(tool.inputSchema),
+    })) ?? [];
+  return {
+    source: 'recorded_snapshot',
+    legacy: plan === null,
+    systemRoleTransport: snapshot?.promptContext?.providerObservability?.systemRole?.transport ?? null,
+    systemPrompt: planStrings.finalSystemPrompt,
+    messages: cloneProviderMessagesForLoom(snapshot?.promptContext?.providerObservability?.providerWireMessages),
+    toolDefinitions,
+  } as AdminPromptLoomData['providerWire'];
+}
+
+function buildPromptLoomFromTurn(turn: PromptMonitorTurn): AdminPromptLoomData {
+  const snapshot = turn.snapshot;
+  const promptContext = snapshot?.promptContext;
+  const planStrings = derivePromptLoomPlanStrings(snapshot);
+  const response = promptContext?.response ?? null;
+  const renderedChatOutput = response?.content ?? turn.record?.assistantMessage?.content ?? null;
+  const historicalHits = collectHistoricalSnapshotHits(snapshot);
+  const toolCalls = turn.record?.toolCalls ?? [];
+  return {
+    source: 'turn_snapshot',
+    snapshotCapturedAt: snapshot?.capturedAt ?? null,
+    plan: (snapshot?.plan ? cloneJsonSafe(snapshot.plan) : null) as AdminPromptLoomData['plan'],
+    providerWire: buildProviderWireFromSnapshot(snapshot, planStrings),
+    historicalSnapshot: {
+      label: HISTORICAL_SNAPSHOT_LABEL,
+      removedPromptLayerIds: [...new Set(historicalHits.map(hit => hit.layerId))],
+      hits: historicalHits,
+    },
+    generatedPrompt: {
+      renderedStaticPrefix: planStrings.renderedStaticPrefix,
+      renderedDynamicSuffix: planStrings.renderedDynamicSuffix,
+      runtimeContext: planStrings.runtimeContext,
+      memoryContextBlock: planStrings.memoryContextBlock,
+      scratchpadContext: planStrings.scratchpadContext,
+      assembledPrompt: planStrings.assembledPrompt,
+      contextMessages: planStrings.contextMessages,
+      inputSections: clonePromptSectionsForLoom(promptContext?.inputSections),
+      runtimeContextSections: clonePromptSectionsForLoom(promptContext?.runtimeContextSections),
+      memoryContextSections: clonePromptSectionsForLoom(promptContext?.memoryContextSections),
+      finalSystemSections: clonePromptSectionsForLoom(promptContext?.finalSystemSections),
+    },
+    providerPayload: {
+      finalSystemPrompt: planStrings.finalSystemPrompt,
+      providerMessages: cloneProviderMessagesForLoom(promptContext?.providerObservability?.providerWireMessages),
+      activeTools: snapshot?.toolContext?.activeTools.map(tool => ({
+        ...tool,
+        inputSchema: cloneJsonObject(tool.inputSchema),
+      })) ?? [],
+    },
+    providerResult: {
+      response: response ? { ...response } : null,
+      renderedChatOutput,
+    },
+    memoryCapture: {
+      input: {
+        currentTurnInput: promptContext?.currentTurnInput ?? null,
+        ...(turn.record?.userMessage ? { userMessage: { ...turn.record.userMessage } } : {}),
+        ...(turn.record?.assistantMessage ? { assistantMessage: { ...turn.record.assistantMessage } } : {}),
+        renderedChatOutput,
+      },
+      output: {
+        extractedMemoryIds: [...(turn.record?.extractedMemoryIds ?? [])],
+      },
+    },
+    toolActivity: {
+      toolCalls: toolCalls.map(toolCall => cloneJsonSafe(toolCall)),
+      toolResults: toolCalls
+        .filter(hasToolResultPayload)
+        .map(toolCall => cloneJsonSafe(toolCall)),
+    },
+  };
+}
+
+export function resolvePromptMonitorPromptLoom(turn: PromptMonitorTurn): AdminPromptLoomData {
+  return turn.promptLoom ? clonePromptLoom(turn.promptLoom) : buildPromptLoomFromTurn(turn);
+}
+
+/**
+ * The turn's PromptPlan as the Loom projects it: prefer the API-served loom
+ * plan, fall back to the live-bus snapshot plan. null → legacy pre-plan turn.
+ */
+export function resolvePromptMonitorPlan(turn: PromptMonitorTurn): AdminPromptPlanData | null {
+  const plan = turn.promptLoom?.plan ?? turn.snapshot?.plan ?? null;
+  return plan ? (cloneJsonSafe(plan) as AdminPromptPlanData) : null;
+}
+
+// ── Turn-diff affordance (E2.3): block-level diff between two plans ──
+
+export type PromptPlanBlockDiffStatus = 'added' | 'removed' | 'changed' | 'unchanged';
+
+export interface PromptPlanBlockDiffEntry {
+  id: string;
+  status: PromptPlanBlockDiffStatus;
+  layer: AdminPromptPlanBlock['layer'] | null;
+  volatility: AdminPromptPlanBlock['volatility'] | null;
+  producer: string | null;
+  scopeKey: string | null;
+  /** UTF-8 byte sizes of the rendered block text (changed-bytes indicator). */
+  bytesBefore: number | null;
+  bytesAfter: number | null;
+  bytesDelta: number | null;
+}
+
+export interface PromptPlanBlockDiff {
+  /** false when either side lacks a plan (legacy pre-plan turn). */
+  comparable: boolean;
+  entries: PromptPlanBlockDiffEntry[];
+  addedCount: number;
+  removedCount: number;
+  changedCount: number;
+  unchangedCount: number;
+  /** Non-unchanged blocks whose volatility is 'static' (should be 0 for a quiet consecutive pair). */
+  staticRegionChangedCount: number;
+}
+
+const PLAN_TEXT_ENCODER = new TextEncoder();
+
+function planBlockBytes(block: AdminPromptPlanBlock): number {
+  return PLAN_TEXT_ENCODER.encode(block.renderedText).length;
+}
+
+/**
+ * Block-level diff between two turns' plans: which blocks appeared,
+ * disappeared, or changed (id-level identity, byte-size indicator per block).
+ * Entries follow the after-plan block order; removed blocks are appended in
+ * their before-plan order.
+ */
+export function diffPromptPlanBlocks(
+  before: AdminPromptPlanData | null | undefined,
+  after: AdminPromptPlanData | null | undefined,
+): PromptPlanBlockDiff {
+  if (!before || !after) {
+    return {
+      comparable: false,
+      entries: [],
+      addedCount: 0,
+      removedCount: 0,
+      changedCount: 0,
+      unchangedCount: 0,
+      staticRegionChangedCount: 0,
+    };
+  }
+  const beforeById = new Map(before.blocks.map(block => [block.id, block]));
+  const afterIds = new Set(after.blocks.map(block => block.id));
+  const entries: PromptPlanBlockDiffEntry[] = [];
+
+  for (const afterBlock of after.blocks) {
+    const beforeBlock = beforeById.get(afterBlock.id);
+    if (!beforeBlock) {
+      entries.push({
+        id: afterBlock.id,
+        status: 'added',
+        layer: afterBlock.layer,
+        volatility: afterBlock.volatility,
+        producer: afterBlock.producer,
+        scopeKey: afterBlock.scopeKey ?? null,
+        bytesBefore: null,
+        bytesAfter: planBlockBytes(afterBlock),
+        bytesDelta: null,
+      });
+      continue;
+    }
+    const bytesBefore = planBlockBytes(beforeBlock);
+    const bytesAfter = planBlockBytes(afterBlock);
+    entries.push({
+      id: afterBlock.id,
+      status: beforeBlock.renderedText === afterBlock.renderedText ? 'unchanged' : 'changed',
+      layer: afterBlock.layer,
+      volatility: afterBlock.volatility,
+      producer: afterBlock.producer,
+      scopeKey: afterBlock.scopeKey ?? null,
+      bytesBefore,
+      bytesAfter,
+      bytesDelta: bytesAfter - bytesBefore,
+    });
+  }
+  for (const beforeBlock of before.blocks) {
+    if (afterIds.has(beforeBlock.id)) continue;
+    entries.push({
+      id: beforeBlock.id,
+      status: 'removed',
+      layer: beforeBlock.layer,
+      volatility: beforeBlock.volatility,
+      producer: beforeBlock.producer,
+      scopeKey: beforeBlock.scopeKey ?? null,
+      bytesBefore: planBlockBytes(beforeBlock),
+      bytesAfter: null,
+      bytesDelta: null,
+    });
+  }
+
+  return {
+    comparable: true,
+    entries,
+    addedCount: entries.filter(entry => entry.status === 'added').length,
+    removedCount: entries.filter(entry => entry.status === 'removed').length,
+    changedCount: entries.filter(entry => entry.status === 'changed').length,
+    unchangedCount: entries.filter(entry => entry.status === 'unchanged').length,
+    staticRegionChangedCount: entries.filter(
+      entry => entry.volatility === 'static' && entry.status !== 'unchanged',
+    ).length,
+  };
+}
+
+// ── Cache projection: static-prefix hash timeline across recent turns ──
+
+export interface PromptMonitorStaticHashTimelineEntry {
+  turnId: string;
+  latestEventAt: number;
+  staticHash: string | null;
+  /** null when this or every earlier turn lacks a recorded hash. */
+  changedFromPrevious: boolean | null;
+}
+
+export function buildStaticPrefixHashTimeline(
+  turns: readonly PromptMonitorTurn[],
+  limit: number = 12,
+): PromptMonitorStaticHashTimelineEntry[] {
+  const ascending = [...turns]
+    .sort((left, right) => left.latestEventAt - right.latestEventAt)
+    .slice(-Math.max(1, limit));
+  let previousHash: string | null = null;
+  return ascending.map(turn => {
+    const staticHash = readString(turn.snapshot?.prompt?.staticHash);
+    const changedFromPrevious = staticHash !== null && previousHash !== null
+      ? staticHash !== previousHash
+      : null;
+    if (staticHash !== null) {
+      previousHash = staticHash;
+    }
+    return {
+      turnId: turn.turnId,
+      latestEventAt: turn.latestEventAt,
+      staticHash,
+      changedFromPrevious,
+    };
+  });
 }
 
 function readSnapshotEnvelopeData(
@@ -300,6 +848,7 @@ export function mergePromptMonitorEvent(
       latestEventAt: event.timestamp,
       record: null,
       snapshot: snapshot,
+      promptLoom: null,
       stages: stage ? [stage] : [],
     };
 

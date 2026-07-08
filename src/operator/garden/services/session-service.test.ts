@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -11,8 +11,11 @@ import {
   normalizeToolObservation,
 } from '../../../core/session/tool-observation.js';
 import { SessionStore } from '../../../persistence/sessions/store.js';
+import { createSqliteTranscriptProjection } from '../../../persistence/sessions/transcript-projection.js';
 import { createTurnId } from '../../../core/turns/id.js';
 import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
+import type { MemoryStorePort } from '../../../faculties/memory/memory-store-port.js';
+import type { PurrMemory } from '../../../faculties/memory/types.js';
 import { AdminSessionDataService } from './session-service.js';
 
 function makeConfig(overrides?: Partial<SubstrateConfig>): SubstrateConfig {
@@ -57,6 +60,298 @@ describe('AdminSessionDataService', () => {
 
   afterEach(() => {
     rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('returns newest message page by default and older pages by beforeId cursor', () => {
+    const channelId = 'api:paginated-session';
+    for (let index = 1; index <= 250; index += 1) {
+      store.append({
+        channelId,
+        role: index % 2 === 0 ? 'assistant' : 'user',
+        content: `Message ${index}`,
+        timestamp: 1_700_000_000_000 + index,
+      });
+    }
+
+    const service = new AdminSessionDataService({
+      sessionStore: store,
+      sessionManager: new SessionManager(store, makeConfig({ dataDir: dir })),
+      eventBus: new EventBus(),
+    });
+
+    const firstPage = service.getSessionMessages(channelId);
+    expect(firstPage.messages).toHaveLength(100);
+    expect(firstPage.messages[0]?.content).toBe('Message 151');
+    expect(firstPage.messages[99]?.content).toBe('Message 250');
+    expect(firstPage.pagination).toMatchObject({
+      limit: 100,
+      beforeId: null,
+      nextBeforeId: firstPage.messages[0]?.id,
+      hasMoreOlder: true,
+      totalMessages: 250,
+      returnedMessages: 100,
+    });
+
+    const secondPage = service.getSessionMessages(channelId, {
+      limit: 100,
+      beforeId: firstPage.pagination.nextBeforeId,
+    });
+    expect(secondPage.messages).toHaveLength(100);
+    expect(secondPage.messages[0]?.content).toBe('Message 51');
+    expect(secondPage.messages[99]?.content).toBe('Message 150');
+    expect(secondPage.pagination).toMatchObject({
+      limit: 100,
+      beforeId: firstPage.pagination.nextBeforeId,
+      nextBeforeId: secondPage.messages[0]?.id,
+      hasMoreOlder: true,
+      totalMessages: 250,
+      returnedMessages: 100,
+    });
+
+    const terminalPage = service.getSessionMessages(channelId, {
+      limit: 100,
+      beforeId: secondPage.pagination.nextBeforeId,
+    });
+    expect(terminalPage.messages).toHaveLength(50);
+    expect(terminalPage.messages[0]?.content).toBe('Message 1');
+    expect(terminalPage.messages[49]?.content).toBe('Message 50');
+    expect(terminalPage.pagination).toMatchObject({
+      limit: 100,
+      beforeId: secondPage.pagination.nextBeforeId,
+      nextBeforeId: null,
+      hasMoreOlder: false,
+      totalMessages: 250,
+      returnedMessages: 50,
+    });
+  });
+
+  it('searches session messages scoped to the requested session only', async () => {
+    const searchDir = mkdtempSync(join(tmpdir(), 'admin-session-search-'));
+    const searchStore = new SessionStore(searchDir, {
+      transcriptProjection: createSqliteTranscriptProjection(join(searchDir, 'session-search.sqlite')),
+    });
+    try {
+      const targetChannelId = 'api:search-target';
+      const otherChannelId = 'api:search-other';
+      const targetHitId = searchStore.append({
+        channelId: targetChannelId,
+        role: 'user',
+        content: 'poisoned instruction planted here',
+        timestamp: 1_700_000_000_001,
+      });
+      searchStore.append({
+        channelId: targetChannelId,
+        role: 'assistant',
+        content: 'a clean unrelated response',
+        timestamp: 1_700_000_000_002,
+      });
+      searchStore.append({
+        channelId: otherChannelId,
+        role: 'user',
+        content: 'poisoned instruction in a different session',
+        timestamp: 1_700_000_000_003,
+      });
+
+      const service = new AdminSessionDataService({
+        sessionStore: searchStore,
+        sessionManager: new SessionManager(searchStore, makeConfig({ dataDir: searchDir })),
+        eventBus: new EventBus(),
+      });
+
+      const result = await service.searchSessionMessages(targetChannelId, 'poisoned');
+      expect(result.sessionId).toBe(targetChannelId);
+      expect(result.query).toBe('poisoned');
+      expect(result.hits).toHaveLength(1);
+      expect(result.hits[0]?.messageId).toBe(targetHitId);
+      expect(result.hits[0]?.content).toContain('planted here');
+
+      const blankQuery = await service.searchSessionMessages(targetChannelId, '   ');
+      expect(blankQuery.hits).toEqual([]);
+    } finally {
+      rmSync(searchDir, { recursive: true, force: true });
+    }
+  });
+
+  it('skips turn snapshots, compaction audits, and role-envelope previews in messagesOnly mode', () => {
+    const channelId = 'api:messages-only';
+    const firstMessageId = store.append({
+      channelId,
+      role: 'user',
+      content: 'first message',
+      timestamp: 1_700_000_000_001,
+    });
+    store.append({
+      channelId,
+      role: 'assistant',
+      content: 'second message',
+      timestamp: 1_700_000_000_002,
+    });
+    store.insertCompaction(channelId, 'summary of early rows', firstMessageId);
+
+    const service = new AdminSessionDataService({
+      sessionStore: store,
+      sessionManager: new SessionManager(store, makeConfig({ dataDir: dir })),
+      eventBus: new EventBus(),
+    });
+
+    const full = service.getSessionMessages(channelId);
+    expect(full.compactionAuditViews.length).toBeGreaterThan(0);
+
+    const light = service.getSessionMessages(channelId, { messagesOnly: true });
+    expect(light.messages).toHaveLength(2);
+    expect(light.pagination.totalMessages).toBe(2);
+    expect(light.turns).toEqual([]);
+    expect(light.compactionAuditViews).toEqual([]);
+    expect(light.roleEnvelopePreviews).toEqual([]);
+  });
+
+  it('previews and applies CogSec remediation without exposing sealed content in safe event logs', async () => {
+    const channelId = 'api:cogsec-admin';
+    const dirtyText = 'DIRTY_ADMIN_COGSEC_TEXT';
+    const dirtyMessageId = store.append({
+      channelId,
+      role: 'user',
+      content: dirtyText,
+      timestamp: 1,
+      authorName: 'Operator',
+    });
+    store.append({
+      channelId,
+      role: 'assistant',
+      content: 'clean response remains',
+      timestamp: 2,
+      authorName: 'Companion',
+    });
+    store.insertCompaction(channelId, 'DIRTY_ADMIN_COGSEC_SUMMARY', dirtyMessageId);
+
+    const taintedMemory: PurrMemory = {
+      id: 'memory-cogsec-admin',
+      text: 'tainted memory linked by provenance',
+      type: 'semantic',
+      importance: 0.8,
+      confidence: 0.9,
+      emotionalValence: 0,
+      salience: 0.9,
+      sourceRef: `${channelId}:extract|source:session|session:${channelId}|message:${dirtyMessageId}`,
+      extractedAt: 1,
+      lastAccessed: 1,
+      accessCount: 0,
+      tags: [],
+      sensitivity: 'personal',
+    };
+    const softDeleteMemory = vi.fn().mockResolvedValue({
+      deleteId: 'delete-1',
+      memoryId: taintedMemory.id,
+      snapshot: taintedMemory,
+      deletedAt: 1,
+      deletedBy: 'operator:garden',
+    });
+    const memoryStore = {
+      listMemories: vi.fn().mockResolvedValue([taintedMemory]),
+      softDeleteMemory,
+    } as unknown as MemoryStorePort;
+
+    const config = makeConfig({ dataDir: dir });
+    const service = new AdminSessionDataService({
+      sessionStore: store,
+      sessionManager: new SessionManager(store, config),
+      eventBus: new EventBus(),
+      memoryStore,
+      config,
+    });
+
+    const input = {
+      sourceChannelId: channelId,
+      messageIds: [dirtyMessageId],
+      type: 'memory_poisoning' as const,
+      severity: 'high' as const,
+      reason: 'operator selected contaminated row',
+      actor: 'operator:garden',
+      cutEpoch: false,
+    };
+    const preview = await service.previewCogSecRemediation(input);
+    expect(preview.counts).toMatchObject({
+      l0Rows: 1,
+      projectionRows: 1,
+      memories: 1,
+      compactionSummaries: 1,
+    });
+    expect(JSON.stringify(preview)).not.toContain(dirtyText);
+
+    const applied = await service.applyCogSecRemediation(input);
+    expect(applied.tombstones).toHaveLength(1);
+    expect(applied.tombstones[0]?.tombstonedL0RowCount).toBe(1);
+    expect(applied.revocation.revokedMemoryIds).toEqual(['memory-cogsec-admin']);
+    expect(softDeleteMemory).toHaveBeenCalledWith('memory-cogsec-admin', expect.objectContaining({
+      deletedBy: 'operator:garden',
+      reason: expect.stringContaining(applied.event.caseId),
+    }));
+    expect(store.getRecent(channelId, 5).map(entry => entry.content)).not.toContain(dirtyText);
+
+    const events = await service.listCogSecEvents();
+    const serializedEvents = JSON.stringify(events);
+    expect(events.events[0]?.caseId).toBe(applied.event.caseId);
+    expect(serializedEvents).not.toContain(dirtyText);
+    expect(serializedEvents).not.toContain('cogsec-forensic://');
+    expect(serializedEvents).not.toContain('sealedForensicPayloadRefs');
+  });
+
+  it('keeps CogSec previews scoped to the operator-selected logical session', async () => {
+    const sourceChannelId = 'discord:guild:room';
+    const oldLogicalSessionId = sourceChannelId;
+    const dirtyMessageId = store.append({
+      channelId: oldLogicalSessionId,
+      role: 'user',
+      content: 'DIRTY_OLD_LOGICAL_SESSION_TEXT',
+      timestamp: 1,
+      authorName: 'Vega',
+    });
+    const config = makeConfig({ dataDir: dir });
+    const sessionManager = new SessionManager(store, config);
+    const reset = sessionManager.resetSourceChannelSession({
+      sourceChannelId,
+      actor: 'operator:garden',
+      reason: 'cut a fresh lane before CogSec cleanup',
+      mode: 'break_glass_quarantine',
+    });
+    store.append({
+      channelId: reset.newLogicalSessionId,
+      role: 'user',
+      content: 'clean active lane text',
+      timestamp: 2,
+      originChannelId: sourceChannelId,
+    });
+
+    const service = new AdminSessionDataService({
+      sessionStore: store,
+      sessionManager,
+      eventBus: new EventBus(),
+      config,
+    });
+
+    const preview = await service.previewCogSecRemediation({
+      sourceChannelId,
+      affectedMessageRanges: [{
+        sourceChannelId,
+        logicalSessionId: oldLogicalSessionId,
+        messageIds: [dirtyMessageId],
+      }],
+      type: 'content_poisoning',
+      severity: 'high',
+      reason: 'operator selected old logical session row',
+      actor: 'operator:garden',
+    });
+
+    expect(preview.draft.affectedLogicalSessionIds).toEqual([oldLogicalSessionId]);
+    expect(preview.draft.affectedLogicalSessionIds).not.toContain(reset.newLogicalSessionId);
+    expect(preview.counts.l0Rows).toBe(1);
+    expect(preview.preview.l0Messages).toEqual([
+      expect.objectContaining({
+        logicalSessionId: oldLogicalSessionId,
+        messageId: dirtyMessageId,
+      }),
+    ]);
+    expect(JSON.stringify(preview)).not.toContain('DIRTY_OLD_LOGICAL_SESSION_TEXT');
   });
 
   it('returns persisted turn observability without requiring live event-bus state', () => {
@@ -150,7 +445,7 @@ describe('AdminSessionDataService', () => {
           capturedAt: 1_700_000_000_020,
           trustLevel: 'regular',
           prompt: {
-            staticPrefixTemplate: 'Static prefix',
+            staticPrefixTemplate: '<runtime_self>Historical runtime self layer</runtime_self>',
             dynamicSuffixTemplate: 'Dynamic suffix',
             staticHash: 'static-hash',
             versionPointer: 'prompt-v1',
@@ -167,6 +462,30 @@ describe('AdminSessionDataService', () => {
               { role: 'user', content: 'hello' },
               { role: 'assistant', content: 'world' },
             ],
+            providerObservability: {
+              routeKind: 'configured_litellm_proxy',
+              requestedProvider: 'openrouter',
+              requestedModel: 'openrouter/test-model',
+              backendProvider: 'litellm',
+              backendModel: 'openrouter/test-model',
+              backendApi: 'openai-responses',
+              backendBaseUrl: 'http://127.0.0.1:4000',
+              promptCaching: {
+                configured: false,
+                engaged: false,
+              },
+              systemRole: {
+                transport: 'openai_developer',
+                supportsSystemRole: true,
+                supportsDeveloperRole: true,
+                usesOutOfBandSystemPrompt: false,
+              },
+              providerWireMessages: [
+                { role: 'developer', source: 'system_prompt', content: 'Final system prompt' },
+                { role: 'user', source: 'message', content: 'hello' },
+                { role: 'assistant', source: 'message', content: 'world' },
+              ],
+            },
           },
           toolContext: {
             activeTools: [
@@ -337,6 +656,42 @@ describe('AdminSessionDataService', () => {
       },
       sessionContext: {
         compactionPromptText: 'Compaction prompt snapshot',
+      },
+    });
+    expect(result.turns[0]?.promptLoom).toMatchObject({
+      historicalSnapshot: {
+        label: 'Persisted turn snapshot; not current prompt generator state.',
+        removedPromptLayerIds: ['runtime_self'],
+      },
+      providerPayload: {
+        finalSystemPrompt: 'Final system prompt',
+        providerMessages: [
+          { role: 'developer', source: 'system_prompt', content: 'Final system prompt' },
+          { role: 'user', source: 'message', content: 'hello' },
+          { role: 'assistant', source: 'message', content: 'world' },
+        ],
+        activeTools: [
+          {
+            name: 'contact_lookup',
+            description: 'Look up a contact.',
+            inputSchema: {
+              type: 'object',
+              properties: {
+                query: { type: 'string' },
+              },
+              required: ['query'],
+            },
+          },
+        ],
+      },
+      memoryCapture: {
+        input: {
+          currentTurnInput: null,
+          renderedChatOutput: 'world',
+        },
+        output: {
+          extractedMemoryIds: [],
+        },
       },
     });
   });

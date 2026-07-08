@@ -1,6 +1,11 @@
 import { EventStream, type AssistantMessage } from '@mariozechner/pi-ai';
-import type { AgentContext, AgentLoopConfig, AgentMessage, StreamFn } from '@mariozechner/pi-agent-core';
-import { executeToolCallsWithScheduler, type ToolCallSchedulerOptions } from './tool-call-scheduler.js';
+import type { AgentContext, AgentLoopConfig, AgentMessage, AgentTool, StreamFn } from '@mariozechner/pi-agent-core';
+import type { LLMSystemPromptCacheBoundaries } from '../../shared/contracts/runtime.js';
+import {
+  createToolCallExecutionGuard,
+  executeToolCallsWithScheduler,
+  type ToolCallSchedulerOptions,
+} from './tool-call-scheduler.js';
 import {
   AGENT_LOOP_ASSISTANT_STEP_CHECK_IN_AT,
   AGENT_LOOP_MAX_ASSISTANT_STEPS_PER_RUN,
@@ -10,6 +15,12 @@ type AgentLoopErrorEvent = {
   type: 'agent_error';
   error: Error;
   messages: AgentMessage[];
+};
+
+type LiveToolAgentContext = AgentContext & {
+  getTools?: () => AgentTool<any>[] | undefined;
+  /** PromptPlan cachePlan boundaries for systemPrompt (E2.4); forwarded to the stream transport. */
+  promptCacheBoundaries?: LLMSystemPromptCacheBoundaries;
 };
 
 export function agentLoopWithScheduler(
@@ -24,7 +35,7 @@ export function agentLoopWithScheduler(
   (async () => {
     const newMessages = [...prompts];
     try {
-      const currentContext = {
+      const currentContext: LiveToolAgentContext = {
         ...context,
         messages: [...context.messages, ...prompts],
       };
@@ -59,7 +70,7 @@ export function agentLoopContinueWithScheduler(
   (async () => {
     const newMessages: AgentMessage[] = [];
     try {
-      const currentContext = { ...context };
+      const currentContext: LiveToolAgentContext = { ...context };
       stream.push({ type: 'agent_start' });
       stream.push({ type: 'turn_start' });
       await runLoop(currentContext, newMessages, config, signal, stream, streamFn, schedulerOptions);
@@ -78,7 +89,7 @@ function createAgentStream() {
 }
 
 async function runLoop(
-  currentContext: AgentContext,
+  currentContext: LiveToolAgentContext,
   newMessages: AgentMessage[],
   config: AgentLoopConfig,
   signal: AbortSignal,
@@ -89,6 +100,8 @@ async function runLoop(
   let firstTurn = true;
   let assistantStepCount = 0;
   let checkInMessageSent = false;
+  let userFacingBoundaryMarked = false;
+  const toolExecutionGuard = createToolCallExecutionGuard();
   let pendingMessages = (await config.getSteeringMessages?.()) || [];
 
   for (;;) {
@@ -147,11 +160,14 @@ async function runLoop(
       const toolResults: any[] = [];
       if (hasMoreToolCalls) {
         const toolExecution = await executeToolCallsWithScheduler(
-          currentContext.tools,
+          () => resolveCurrentTools(currentContext),
           message,
           config.getSteeringMessages,
           { signal, stream },
-          schedulerOptions,
+          {
+            ...schedulerOptions,
+            guard: toolExecutionGuard,
+          },
         );
         toolResults.push(...toolExecution.toolResults);
         steeringAfterTools = toolExecution.steeringMessages ?? null;
@@ -172,6 +188,19 @@ async function runLoop(
 
     const followUpMessages = (await config.getFollowUpMessages?.()) || [];
     if (followUpMessages.length > 0) {
+      // Queued follow-ups are internal runtime notes (intention whispers,
+      // system notes) — draining them extends this run past the user-facing
+      // exchange. Mark the boundary once so downstream response extraction
+      // and no-reply scoping treat everything after it as internal
+      // continuation, never as the outward reply (psfn-framework-ay73).
+      // A batch containing a genuine user message stays user-facing.
+      const containsUserMessage = followUpMessages.some(
+        message => (message as { role?: unknown }).role === 'user',
+      );
+      if (!userFacingBoundaryMarked && !containsUserMessage) {
+        userFacingBoundaryMarked = true;
+        stream.push({ type: 'user_facing_boundary' });
+      }
       pendingMessages = followUpMessages;
       continue;
     }
@@ -193,7 +222,7 @@ function buildLoopCheckInMessage(stepCount: number): AgentMessage {
         + 'Do not repeat failed tool calls; continue only when the next step directly advances the goal and fits the charge budget.',
     }],
     timestamp: Date.now(),
-  } as AgentMessage;
+  } as unknown as AgentMessage;
 }
 
 function buildLoopLimitMessage(
@@ -230,7 +259,7 @@ function buildLoopLimitMessage(
 }
 
 async function streamAssistantResponse(
-  context: AgentContext,
+  context: LiveToolAgentContext,
   config: AgentLoopConfig,
   signal: AbortSignal,
   stream: ReturnType<typeof createAgentStream>,
@@ -247,7 +276,8 @@ async function streamAssistantResponse(
   const llmContext = {
     systemPrompt: context.systemPrompt,
     messages: llmMessages,
-    tools: context.tools,
+    tools: resolveCurrentTools(context),
+    ...(context.promptCacheBoundaries ? { promptCacheBoundaries: context.promptCacheBoundaries } : {}),
   };
 
   const response = await streamFn(config.model, llmContext, {
@@ -313,6 +343,10 @@ async function streamAssistantResponse(
     throw error;
   }
   return resolveStreamResult(response, { partialMessage });
+}
+
+function resolveCurrentTools(context: LiveToolAgentContext): AgentTool<any>[] | undefined {
+  return context.getTools?.() ?? context.tools;
 }
 
 function terminateStreamWithError(

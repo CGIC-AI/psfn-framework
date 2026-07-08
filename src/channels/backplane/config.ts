@@ -13,10 +13,19 @@ import { parseBooleanEnv } from '../../shared/utils/env.js';
 import { writeJsonAtomic } from '../../shared/utils/fs.js';
 import { isRecord } from '../../shared/utils/types.js';
 import {
-  normalizeChannelVisibility,
-  type ChannelVisibility,
-} from '../../system/trust/types.js';
+  normalizeChannelPrivacy,
+  type ChannelPrivacy,
+} from '../../system/trust/context-envelope.js';
+import {
+  validateChannelEnvelopeLabel,
+  type ChannelEnvelopeLabel,
+} from '../../system/trust/context-envelope.js';
 import type { ChannelType } from '../../shared/contracts/runtime.js';
+import {
+  createDefaultChannelGroupMemoryConfig,
+  normalizeChannelGroupMemoryConfig,
+  type ChannelGroupMemoryConfig,
+} from '../../system/config/group-memory-config.js';
 
 const log = createComponentLogger('ChannelConfig');
 
@@ -49,13 +58,14 @@ export interface TelegramChannelConfig {
 export interface DiscordChannelConfig {
   heartbeatChannelId: string;
   allowedBotUserIds: string[];
+  groupMemory: ChannelGroupMemoryConfig;
 }
 
 export interface ExternalChannelProfileConfig {
   authorId?: string;
   authorName?: string;
   canonicalContactId?: string;
-  channelPrivacy?: ChannelVisibility;
+  channelPrivacy?: ChannelPrivacy;
 }
 
 export interface PsfnAmicaChannelConfig {
@@ -63,10 +73,24 @@ export interface PsfnAmicaChannelConfig {
   defaultIdentity?: ExternalChannelProfileConfig;
 }
 
+/**
+ * Channel-owned Context Envelope labels (E3.1 contract,
+ * docs/context-envelope.md). channels.json owns per-channel
+ * { privacy, broadcast, contactTracking }; these labels are the
+ * highest-precedence source for a channel's envelope:
+ *   channel-owned label > operator trust-policy override > derived default.
+ * E3.1 validates and carries this section; E3.2 wires it into classification.
+ */
+export interface ChannelContextEnvelopeConfig {
+  /** Exact channel-id keyed envelope labels. */
+  channels: Record<string, ChannelEnvelopeLabel>;
+}
+
 export interface RuntimeChannelsConfig {
   discord: DiscordChannelConfig;
   telegram: TelegramChannelConfig;
   psfnAmica: PsfnAmicaChannelConfig;
+  contextEnvelope: ChannelContextEnvelopeConfig;
 }
 
 export interface RuntimeChannelsConfigOverrides {
@@ -94,11 +118,52 @@ const DEFAULT_TELEGRAM_CHANNEL_CONFIG: TelegramChannelConfig = {
 const DEFAULT_DISCORD_CHANNEL_CONFIG: DiscordChannelConfig = {
   heartbeatChannelId: '',
   allowedBotUserIds: [],
+  groupMemory: createDefaultChannelGroupMemoryConfig(),
 };
 
 const DEFAULT_PSFN_AMICA_CHANNEL_CONFIG: PsfnAmicaChannelConfig = {
   enabled: false,
 };
+
+export function createDefaultChannelContextEnvelopeConfig(): ChannelContextEnvelopeConfig {
+  return { channels: {} };
+}
+
+/**
+ * Fail-closed parser for the channels.json `contextEnvelope` section.
+ * Exported (E3.2) so Garden channel views and the one-time channel-envelope
+ * migration validate against exactly the same rules as runtime load.
+ */
+export function parseContextEnvelopeSection(
+  scopedRoot: Record<string, unknown>,
+): ChannelContextEnvelopeConfig {
+  const section = parseSectionObject(scopedRoot, 'contextEnvelope');
+  if (!section) return createDefaultChannelContextEnvelopeConfig();
+
+  const unknownKeys = Object.keys(section).filter(key => key !== 'channels');
+  if (unknownKeys.length > 0) {
+    throw new Error(`channels.json.contextEnvelope has unsupported keys: ${unknownKeys.join(', ')}`);
+  }
+
+  const channelsRaw = section.channels;
+  if (channelsRaw === undefined) return createDefaultChannelContextEnvelopeConfig();
+  if (!isRecord(channelsRaw)) {
+    throw new Error('channels.json.contextEnvelope.channels must be an object');
+  }
+
+  const channels: Record<string, ChannelEnvelopeLabel> = {};
+  for (const [rawChannelId, rawLabel] of Object.entries(channelsRaw)) {
+    const channelId = rawChannelId.trim();
+    if (!channelId) {
+      throw new Error('channels.json.contextEnvelope.channels keys must be non-empty channel ids');
+    }
+    channels[channelId] = validateChannelEnvelopeLabel(
+      rawLabel,
+      `channels.json.contextEnvelope.channels.${rawChannelId}`,
+    );
+  }
+  return { channels };
+}
 
 function parseBoolean(value: unknown): boolean | undefined {
   if (typeof value === 'boolean') return value;
@@ -243,10 +308,13 @@ function parseExternalChannelProfile(
   const canonicalContactId = parseConfiguredString(value.canonicalContactId, `${fieldName}.canonicalContactId`);
   const channelPrivacyRaw = parseConfiguredString(value.channelPrivacy, `${fieldName}.channelPrivacy`);
   const channelPrivacy = channelPrivacyRaw
-    ? normalizeChannelVisibility(channelPrivacyRaw)
+    ? normalizeChannelPrivacy(channelPrivacyRaw)
     : undefined;
   if (channelPrivacyRaw && !channelPrivacy) {
-    throw new Error(`${fieldName}.channelPrivacy must be one of: private, semi_private, public, broadcast`);
+    throw new Error(
+      `${fieldName}.channelPrivacy must be one of: private, invite_only, public `
+      + "(broadcast is a channels.json contextEnvelope label, not a privacy value)",
+    );
   }
 
   const profile: ExternalChannelProfileConfig = {
@@ -299,6 +367,12 @@ export function saveChannelsOwnerFile(
     throw new Error('channels.json must contain a JSON object at the root');
   }
 
+  // E3.2: owner-file validation on save — the contextEnvelope section is the
+  // channel-owned classification authority, so writes that would fail the
+  // runtime load validation are rejected fail-closed instead of persisted.
+  const scopedRoot = parseSectionObject(nextConfig, 'channels') ?? nextConfig;
+  parseContextEnvelopeSection(scopedRoot);
+
   const filePath = join(dataDir, CHANNELS_FILE_NAME);
   writeJsonAtomic(filePath, nextConfig);
   return nextConfig;
@@ -343,6 +417,9 @@ export function loadRuntimeChannelsConfig(
   const rawConfig = loadChannelsOwnerFile(dataDir);
   const root = isRecord(rawConfig) ? rawConfig : {};
   const scopedRoot = parseSectionObject(root, 'channels') ?? root;
+  // Context Envelope labels are validated fail-closed at load (E3.1 contract);
+  // classification consumes them in E3.2.
+  const contextEnvelope = parseContextEnvelopeSection(scopedRoot);
   const discordConfig = parseSectionObject(scopedRoot, 'discord') ?? {};
   const psfnAmicaConfig = parseSectionObject(scopedRoot, 'psfnAmica') ?? {};
   if (Object.keys(psfnAmicaConfig).length > 0 && !Object.hasOwn(psfnAmicaConfig, 'enabled')) {
@@ -456,6 +533,10 @@ export function loadRuntimeChannelsConfig(
         ?? DEFAULT_DISCORD_CHANNEL_CONFIG.heartbeatChannelId,
       allowedBotUserIds: parseConfiguredStringArray(discordConfig.allowedBotUserIds, 'channels.json.discord.allowedBotUserIds')
         ?? DEFAULT_DISCORD_CHANNEL_CONFIG.allowedBotUserIds,
+      groupMemory: normalizeChannelGroupMemoryConfig(
+        discordConfig.groupMemory,
+        'channels.json.discord.groupMemory',
+      ) ?? createDefaultChannelGroupMemoryConfig(),
     },
     psfnAmica: {
       enabled: psfnAmicaEnabled,
@@ -475,6 +556,7 @@ export function loadRuntimeChannelsConfig(
         path: webhookPath,
       },
     },
+    contextEnvelope,
   };
 }
 

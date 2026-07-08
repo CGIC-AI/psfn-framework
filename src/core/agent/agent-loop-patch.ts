@@ -1,6 +1,17 @@
 import type { Agent, AgentMessage } from '@mariozechner/pi-agent-core';
+import type { LLMSystemPromptCacheBoundaries } from '../../shared/contracts/runtime.js';
 import { agentLoopContinueWithScheduler, agentLoopWithScheduler } from './scheduled-agent-loop.js';
 import type { ToolCallSchedulerOptions } from './tool-call-scheduler.js';
+
+export interface AgentLoopPromptCacheHooks {
+  /**
+   * Resolve the PromptPlan cachePlan boundaries for the EXACT system prompt
+   * the loop is about to ship (E2.4). Implementations must return undefined
+   * unless the given system prompt byte-matches the prompt the boundaries
+   * were computed for — stale boundaries are worse than none.
+   */
+  resolvePromptCacheBoundaries?: (systemPrompt: string) => LLMSystemPromptCacheBoundaries | undefined;
+}
 
 type PatchedAgent = {
   __psfnToolSchedulerPatched?: boolean;
@@ -23,7 +34,11 @@ type PatchedAgent = {
   streamFn?: any;
 };
 
-export function installAgentToolSchedulerPatch(agent: Agent, schedulerOptions: ToolCallSchedulerOptions): void {
+export function installAgentToolSchedulerPatch(
+  agent: Agent,
+  schedulerOptions: ToolCallSchedulerOptions,
+  promptCacheHooks?: AgentLoopPromptCacheHooks,
+): void {
   const target = agent as unknown as PatchedAgent;
   if (target.__psfnToolSchedulerPatched) {
     return;
@@ -44,12 +59,22 @@ export function installAgentToolSchedulerPatch(agent: Agent, schedulerOptions: T
     this._state.isStreaming = true;
     this._state.streamMessage = null;
     this._state.error = undefined;
+    // User-facing boundary: index into _state.messages where internal
+    // follow-up continuation begins for this run (null = no internal
+    // continuation). Reset per run; set once when the loop drains queued
+    // internal follow-ups (psfn-framework-ay73).
+    this._state.userFacingBoundaryIndex = null;
 
     const reasoning = this._state.thinkingLevel === 'off' ? undefined : this._state.thinkingLevel;
+    const promptCacheBoundaries = promptCacheHooks?.resolvePromptCacheBoundaries?.(
+      typeof this._state.systemPrompt === 'string' ? this._state.systemPrompt : '',
+    );
     const context = {
       systemPrompt: this._state.systemPrompt,
       messages: this._state.messages.slice(),
       tools: this._state.tools,
+      getTools: () => this._state.tools,
+      ...(promptCacheBoundaries ? { promptCacheBoundaries } : {}),
     };
     let skipInitialSteeringPoll = options?.skipInitialSteeringPoll === true;
 
@@ -115,18 +140,26 @@ export function installAgentToolSchedulerPatch(agent: Agent, schedulerOptions: T
             }
             break;
           case 'agent_error':
-            terminalStreamError = event.error instanceof Error
+            const normalizedError = event.error instanceof Error
               ? event.error
               : new Error(String(event.error));
+            terminalStreamError = normalizedError;
             sawTerminalStreamError = true;
             partial = null;
-            this._state.error = terminalStreamError.message;
+            this._state.error = normalizedError.message;
             this._state.streamMessage = null;
             break;
           case 'agent_end':
             this._state.isStreaming = false;
             this._state.streamMessage = null;
             break;
+          case 'user_facing_boundary':
+            if (this._state.userFacingBoundaryIndex == null) {
+              this._state.userFacingBoundaryIndex = this._state.messages.length;
+            }
+            // Internal marker for response extraction; not an agent event
+            // external subscribers know about.
+            continue;
           default:
             break;
         }

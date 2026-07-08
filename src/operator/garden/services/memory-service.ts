@@ -4,6 +4,8 @@ import type { ContactStorePort } from '../../../core/contacts/contact-store-port
 import { DEFAULT_COMPANION_NAME } from '../../../core/identity/companion-naming.js';
 import { isInternalMemoryArtifact } from '../../../faculties/memory/internal-artifacts.js';
 import type {
+  MemoryAdminPrivacySummary as StoreMemoryAdminPrivacySummary,
+  MemoryBulkUpdatePatch,
   MemoryLink,
   MemoryStorePort,
 } from '../../../faculties/memory/memory-store-port.js';
@@ -11,9 +13,18 @@ import {
   normalizeMemoryScopeRef,
   normalizeMemoryScopeTags,
   VALID_MEMORY_TYPES,
+  type MemoryRetentionClass,
   type MemoryType,
+  type PurrMemory,
 } from '../../../faculties/memory/types.js';
+import { createComponentLogger } from '../../../shared/logger.js';
 import { VALID_SENSITIVITY_LEVELS, type SensitivityLevel } from '../../../system/trust/types.js';
+import {
+  collectSharedBackgroundUnion,
+  SHARED_BACKGROUND_DEFAULT_LIMIT,
+  SHARED_BACKGROUND_MAX_LIMIT,
+} from '../../../faculties/memory/retrieval/shared-background.js';
+import { AdminMemoryBodyGate } from './memory-body-gate.js';
 import {
   buildManagedScopeEvidence,
   buildManagedScopeRepairPreview,
@@ -25,17 +36,29 @@ import {
 import type {
   AdminBulkMutationResult,
   AdminMemoryDetailData,
+  AdminMemoryElevationStatus,
   AdminMemoryLinkResult,
   AdminMemoryListData,
   AdminMemoryPrivacySummary,
   AdminMemorySearchResult,
   AdminMemoryService,
+  AdminMemorySessionKey,
+  AdminMemorySessionService,
+  AdminSharedBackgroundResult,
+  AdminMemoryScopeDetailData,
+  AdminMemoryScopeListData,
+  AdminMemoryScopeMutationResult,
+  AdminMemoryScopeRepairView,
   MemoryMutationResult,
 } from './types.js';
 
+const log = createComponentLogger('AdminMemoryService');
+
 const DEFAULT_MEMORY_LIST_LIMIT = 50;
 const MAX_MEMORY_LIST_LIMIT = 200;
-const MAX_MEMORY_FILTER_SCAN = 100_000;
+const MAX_MANAGED_SCOPE_MEMORY_SCAN = 100_000;
+/** Matches the store-side listAdminMemories clamp so every page is full. */
+const MANAGED_SCOPE_MEMORY_PAGE_SIZE = 500;
 
 function parseMemoryTypeFilter(value: string | null | undefined): MemoryType | undefined {
   if (!value) return undefined;
@@ -53,6 +76,19 @@ function parseSensitivityFilter(value: string | null | undefined): SensitivityLe
   return VALID_SENSITIVITY_LEVELS.includes(normalized as SensitivityLevel)
     ? normalized as SensitivityLevel
     : undefined;
+}
+
+function parseRetentionFilter(value: string | null | undefined): MemoryRetentionClass | undefined {
+  if (!value) return undefined;
+  const normalized = value.trim().toLowerCase();
+  if (normalized === 'standard' || normalized === 'durable') return normalized;
+  return undefined;
+}
+
+function parseBooleanFilter(value: string | null | undefined): boolean {
+  if (!value) return false;
+  const normalized = value.trim().toLowerCase();
+  return normalized === 'true' || normalized === '1' || normalized === 'yes';
 }
 
 function parseDateFilter(value: string | null | undefined, boundary: 'start' | 'end'): number | undefined {
@@ -88,6 +124,10 @@ function memoryTimestamp(memory: { extractedAt?: number; createdAt?: number }): 
   return memory.extractedAt ?? memory.createdAt ?? 0;
 }
 
+function isActiveMemoryView(memory: { supersededBy?: unknown; deletedAt?: unknown }): boolean {
+  return memory.supersededBy == null && memory.deletedAt == null;
+}
+
 function parsePositiveInteger(
   value: string | null | undefined,
   fallback: number,
@@ -109,57 +149,66 @@ function compareMemoryRecency(
 }
 
 function buildPrivacySummary(
-  activeMemories: readonly AdminMemoryListData['memories'][number][],
-  matchingMemories: readonly AdminMemoryListData['memories'][number][],
+  summary: StoreMemoryAdminPrivacySummary,
+  matchingMemoryCount: number,
   pageMemoryCount: number,
 ): AdminMemoryPrivacySummary {
-  const sensitivityCounts: Record<string, number> = {};
-  let highSensitivityCount = 0;
-  let consentGatedCount = 0;
-  let contactLinkedCount = 0;
-  let scopedCount = 0;
-
-  for (const memory of activeMemories) {
-    sensitivityCounts[memory.sensitivity] = (sensitivityCounts[memory.sensitivity] ?? 0) + 1;
-    if (memory.sensitivity === 'intimate' || memory.sensitivity === 'confidential') {
-      highSensitivityCount += 1;
-    }
-    if (memory.consentFlags?.allowRecall === false) {
-      consentGatedCount += 1;
-    }
-    if (memory.contactId) {
-      contactLinkedCount += 1;
-    }
-    if (memory.scopeRef || (memory.scopeTags?.length ?? 0) > 0) {
-      scopedCount += 1;
-    }
-  }
-
   return {
-    activeMemoryCount: activeMemories.length,
-    matchingMemoryCount: matchingMemories.length,
+    activeMemoryCount: summary.activeMemoryCount,
+    matchingMemoryCount,
     pageMemoryCount,
-    highSensitivityCount,
-    consentGatedCount,
-    contactLinkedCount,
-    scopedCount,
-    sensitivityCounts,
+    highSensitivityCount: summary.highSensitivityCount,
+    consentGatedCount: summary.consentGatedCount,
+    contactLinkedCount: summary.contactLinkedCount,
+    scopedCount: summary.scopedCount,
+    preferenceCount: summary.preferenceCount,
+    durablePreferenceCount: summary.durablePreferenceCount,
+    sensitivityCounts: summary.sensitivityCounts,
   };
 }
 
 export class AdminMemoryDataService implements AdminMemoryService {
+  private readonly bodyGate: AdminMemoryBodyGate;
+
   constructor(private readonly deps: {
     memoryStore: MemoryStorePort;
     contactStore?: ContactStorePort | null;
     embeddingService?: EmbeddingProviderPort | null;
     resolveCompanionName?: () => string;
     appendAuditTimelineEntry?: (
-      actionType: 'memory_mutation',
+      actionType: 'memory_mutation' | 'memory_access',
       decision: 'allowed' | 'denied',
       narrative: string,
       details?: Array<string | null | undefined>,
     ) => void;
-  }) {}
+    now?: () => number;
+  }) {
+    this.bodyGate = new AdminMemoryBodyGate(deps.now ? { now: deps.now } : undefined);
+  }
+
+  forSession(sessionKey: AdminMemorySessionKey): AdminMemorySessionService {
+    return {
+      listMemories: params => this.listMemories(sessionKey, params),
+      getMemoryDetail: id => this.getMemoryDetail(sessionKey, id),
+      listManagedScopes: params => this.listManagedScopes(params),
+      getManagedScopeDetail: (kind, id) => this.getManagedScopeDetail(sessionKey, kind, id),
+      searchMemories: query => this.searchMemories(sessionKey, query),
+      sharedBackground: (contactAId, contactBId, limit) => (
+        this.sharedBackground(sessionKey, contactAId, contactBId, limit)
+      ),
+      supersedeMemory: id => this.supersedeMemory(id),
+      updateMemoryScope: (id, fields) => this.updateMemoryScope(sessionKey, id, fields),
+      linkMemories: (id1, id2, linkType) => this.linkMemories(id1, id2, linkType),
+      unlinkMemories: (id1, id2) => this.unlinkMemories(id1, id2),
+      getMemoryLinks: id => this.getMemoryLinks(id),
+      bulkDelete: ids => this.bulkDelete(ids),
+      bulkUpdate: (ids, fields) => this.bulkUpdate(ids, fields),
+      getBodyElevationStatus: () => this.getBodyElevationStatus(sessionKey),
+      elevateBodyAccess: () => this.elevateBodyAccess(sessionKey),
+      dropBodyElevation: () => this.dropBodyElevation(sessionKey),
+      revealMemory: id => this.revealMemory(sessionKey, id),
+    };
+  }
 
   private resolveCompanionName(): string {
     return this.deps.resolveCompanionName?.() ?? DEFAULT_COMPANION_NAME;
@@ -175,9 +224,32 @@ export class AdminMemoryDataService implements AdminMemoryService {
     return map;
   }
 
-  private async listManagedScopeMemories() {
-    return (await this.deps.memoryStore.getAllActiveMemories(MAX_MEMORY_FILTER_SCAN))
-      .filter(memory => !isInternalMemoryArtifact(memory));
+  private async listManagedScopeMemories(): Promise<PurrMemory[]> {
+    // Stores clamp listAdminMemories page sizes (Postgres caps at 500), so a
+    // single oversized request silently misses older memories. Page through
+    // the store until it is exhausted, bounded by the managed-scope scan cap.
+    const collected: PurrMemory[] = [];
+    let offset = 0;
+    let total = 0;
+    while (collected.length < MAX_MANAGED_SCOPE_MEMORY_SCAN) {
+      const page = await this.deps.memoryStore.listAdminMemories({
+        limit: MANAGED_SCOPE_MEMORY_PAGE_SIZE,
+        offset,
+      });
+      total = page.total;
+      if (page.memories.length === 0) break;
+      collected.push(...page.memories);
+      offset += page.memories.length;
+      if (offset >= page.total) break;
+    }
+    if (collected.length >= MAX_MANAGED_SCOPE_MEMORY_SCAN && total > collected.length) {
+      log.warn('Managed-scope memory scan hit its cap; scope counts exclude the overflow', {
+        cap: MAX_MANAGED_SCOPE_MEMORY_SCAN,
+        total,
+      });
+      collected.length = MAX_MANAGED_SCOPE_MEMORY_SCAN;
+    }
+    return collected;
   }
 
   private buildScopeAssignments(
@@ -189,7 +261,7 @@ export class AdminMemoryDataService implements AdminMemoryService {
     }));
   }
 
-  private buildScopeRepair(memory: AdminMemoryDetailData['memory']): AdminMemoryDetailData['scopeRepair'] {
+  private buildScopeRepair(memory: AdminMemoryDetailData['memory']): AdminMemoryScopeRepairView {
     const preview = buildManagedScopeRepairPreview(memory);
     return {
       needsRepair: preview.needsRepair,
@@ -199,7 +271,7 @@ export class AdminMemoryDataService implements AdminMemoryService {
     };
   }
 
-  async listMemories(params?: URLSearchParams): Promise<AdminMemoryListData> {
+  async listMemories(sessionKey: AdminMemorySessionKey, params?: URLSearchParams): Promise<AdminMemoryListData> {
     const limit = parsePositiveInteger(
       params?.get('limit'),
       DEFAULT_MEMORY_LIST_LIMIT,
@@ -209,32 +281,27 @@ export class AdminMemoryDataService implements AdminMemoryService {
     const offset = parsePositiveInteger(params?.get('offset'), 0, 0, Number.MAX_SAFE_INTEGER);
     const typeFilter = parseMemoryTypeFilter(params?.get('type'));
     const sensitivityFilter = parseSensitivityFilter(params?.get('sensitivity'));
+    const retentionFilter = parseRetentionFilter(params?.get('retention'));
+    const preferenceOnly = parseBooleanFilter(params?.get('preference'));
     const startDate = parseDateFilter(params?.get('startDate'), 'start');
     const endDate = parseDateFilter(params?.get('endDate'), 'end');
 
-    const activeMemories = (await this.deps.memoryStore
-      .getAllActiveMemories(MAX_MEMORY_FILTER_SCAN))
-      .filter(memory => !isInternalMemoryArtifact(memory));
-
-    const filtered = activeMemories
-      .filter((memory) => {
-        if (typeFilter && memory.type !== typeFilter) return false;
-        if (sensitivityFilter && memory.sensitivity !== sensitivityFilter) return false;
-        const createdAt = memoryTimestamp(memory);
-        if (startDate !== undefined && createdAt < startDate) return false;
-        if (endDate !== undefined && createdAt > endDate) return false;
-        return true;
-      })
-      .sort((a, b) => {
-        return compareMemoryRecency(a, b);
-      });
-
-    const total = filtered.length;
-    const memories = filtered.slice(offset, offset + limit);
+    const result = await this.deps.memoryStore.listAdminMemories({
+      limit,
+      offset,
+      ...(typeFilter ? { type: typeFilter } : {}),
+      ...(sensitivityFilter ? { sensitivity: sensitivityFilter } : {}),
+      ...(retentionFilter ? { retentionClass: retentionFilter } : {}),
+      ...(preferenceOnly ? { preferenceOnly: true } : {}),
+      ...(startDate !== undefined ? { startDate } : {}),
+      ...(endDate !== undefined ? { endDate } : {}),
+    });
+    const memories = result.memories;
+    const total = result.total;
     return {
-      memories,
+      memories: memories.map(memory => this.bodyGate.toAdminView(sessionKey, memory)),
       contactsById: await this.buildContactSummaryMap(),
-      privacySummary: buildPrivacySummary(activeMemories, filtered, memories.length),
+      privacySummary: buildPrivacySummary(result.privacySummary, total, memories.length),
       pagination: {
         limit,
         offset,
@@ -242,21 +309,73 @@ export class AdminMemoryDataService implements AdminMemoryService {
         hasPrevious: offset > 0,
         hasNext: offset + memories.length < total,
       },
+      elevation: this.bodyGate.status(sessionKey),
     };
   }
 
-  async getMemoryDetail(id: string): Promise<AdminMemoryDetailData | null> {
+  async getMemoryDetail(sessionKey: AdminMemorySessionKey, id: string): Promise<AdminMemoryDetailData | null> {
     const memory = await this.deps.memoryStore.getById(id);
     if (!memory) return null;
     const linkedContact = memory.contactId
       ? (await this.buildContactSummaryMap()).get(memory.contactId)
       : undefined;
     return {
-      memory,
+      memory: this.bodyGate.toAdminView(sessionKey, memory),
       linkedContact,
       scopeAssignments: this.buildScopeAssignments(memory),
       scopeRepair: this.buildScopeRepair(memory),
+      elevation: this.bodyGate.status(sessionKey),
     };
+  }
+
+  getBodyElevationStatus(sessionKey: AdminMemorySessionKey): AdminMemoryElevationStatus {
+    return this.bodyGate.status(sessionKey);
+  }
+
+  elevateBodyAccess(sessionKey: AdminMemorySessionKey): AdminMemoryElevationStatus {
+    const status = this.bodyGate.elevate(sessionKey);
+    const ttlMinutes = Math.round(status.ttlMs / 60_000);
+    this.deps.appendAuditTimelineEntry?.(
+      'memory_access',
+      'allowed',
+      `Operator elevated Garden memory body access for ${ttlMinutes} minutes; intimate/confidential memory bodies are visible.`,
+      [status.expiresAt !== undefined ? `expiresAt=${new Date(status.expiresAt).toISOString()}` : null],
+    );
+    return status;
+  }
+
+  dropBodyElevation(sessionKey: AdminMemorySessionKey): AdminMemoryElevationStatus {
+    const status = this.bodyGate.dropElevation(sessionKey);
+    this.deps.appendAuditTimelineEntry?.(
+      'memory_access',
+      'allowed',
+      'Operator ended Garden memory body access elevation; intimate/confidential memory bodies are redacted again.',
+    );
+    return status;
+  }
+
+  async revealMemory(sessionKey: AdminMemorySessionKey, id: string): Promise<AdminMemoryDetailData | null> {
+    const memory = await this.deps.memoryStore.getById(id);
+    if (!memory) {
+      this.deps.appendAuditTimelineEntry?.(
+        'memory_access',
+        'denied',
+        `Memory reveal failed: memory "${id}" was not found.`,
+      );
+      return null;
+    }
+
+    const wasRedacted = !this.bodyGate.canReadBody(sessionKey, memory);
+    this.bodyGate.recordReveal(sessionKey, memory.id);
+    if (wasRedacted) {
+      this.deps.appendAuditTimelineEntry?.(
+        'memory_access',
+        'allowed',
+        `Operator revealed ${memory.sensitivity} memory "${memory.id}" body (${memory.text.length} chars).`,
+        [`source=${memory.sourceRef}`],
+      );
+    }
+    return this.getMemoryDetail(sessionKey, id);
   }
 
   async listManagedScopes(params?: URLSearchParams): Promise<AdminMemoryScopeListData> {
@@ -312,7 +431,11 @@ export class AdminMemoryDataService implements AdminMemoryService {
     };
   }
 
-  async getManagedScopeDetail(kind: string, id: string): Promise<AdminMemoryScopeDetailData | null> {
+  async getManagedScopeDetail(
+    sessionKey: AdminMemorySessionKey,
+    kind: string,
+    id: string,
+  ): Promise<AdminMemoryScopeDetailData | null> {
     const scope = parseManagedScopeParams(kind, id);
     if (!scope) return null;
 
@@ -322,7 +445,7 @@ export class AdminMemoryDataService implements AdminMemoryService {
       )))
       .sort(compareMemoryRecency)
       .map(memory => ({
-        memory,
+        memory: this.bodyGate.toAdminView(sessionKey, memory),
         evidence: buildManagedScopeEvidence(memory, scope),
         repair: this.buildScopeRepair(memory),
       }));
@@ -345,30 +468,86 @@ export class AdminMemoryDataService implements AdminMemoryService {
         needsRepairCount: memories.filter(item => item.repair.needsRepair).length,
       },
       memories,
+      elevation: this.bodyGate.status(sessionKey),
     };
   }
 
-  async searchMemories(query: string): Promise<AdminMemorySearchResult> {
-    const activeMemories = (await this.deps.memoryStore.getAllActiveMemories(MAX_MEMORY_FILTER_SCAN))
-      .filter(memory => !isInternalMemoryArtifact(memory));
+  async searchMemories(sessionKey: AdminMemorySessionKey, query: string): Promise<AdminMemorySearchResult> {
+    const privacySummary = await this.deps.memoryStore.getAdminMemoryPrivacySummary();
     const embeddingService = this.deps.embeddingService;
     if (!embeddingService) {
       return {
         query,
         results: [],
         contactsById: await this.buildContactSummaryMap(),
-        privacySummary: buildPrivacySummary(activeMemories, [], 0),
+        privacySummary: buildPrivacySummary(privacySummary, 0, 0),
+        elevation: this.bodyGate.status(sessionKey),
       };
     }
     const embedding = await embeddingService.embed(query);
     const results = (await this.deps.memoryStore
       .searchByEmbedding(embedding, 0.1, 50))
+      .filter(isActiveMemoryView)
       .filter(memory => !isInternalMemoryArtifact(memory));
     return {
       query,
-      results,
+      results: results.map(memory => this.bodyGate.toAdminView(sessionKey, memory)),
       contactsById: await this.buildContactSummaryMap(),
-      privacySummary: buildPrivacySummary(activeMemories, results, results.length),
+      privacySummary: buildPrivacySummary(privacySummary, results.length, results.length),
+      elevation: this.bodyGate.status(sessionKey),
+    };
+  }
+
+  async sharedBackground(
+    sessionKey: AdminMemorySessionKey,
+    contactAId: string,
+    contactBId: string,
+    limit?: number,
+  ): Promise<AdminSharedBackgroundResult> {
+    const effectiveLimit = Math.min(
+      Math.max(1, Number.isFinite(limit) ? Math.floor(limit as number) : SHARED_BACKGROUND_DEFAULT_LIMIT),
+      SHARED_BACKGROUND_MAX_LIMIT,
+    );
+    const contactStore = this.deps.contactStore;
+    if (!contactStore) {
+      return {
+        contactAId,
+        contactBId,
+        resolved: false,
+        missingContactIds: [contactAId, contactBId],
+        items: [],
+        contactsById: new Map(),
+        totalCandidates: 0,
+        truncated: false,
+        limit: effectiveLimit,
+        elevation: this.bodyGate.status(sessionKey),
+      };
+    }
+
+    const union = await collectSharedBackgroundUnion(
+      { memoryStore: this.deps.memoryStore, contactStore },
+      { contactAId, contactBId },
+    );
+    const items = union.candidates.slice(0, effectiveLimit).map(candidate => ({
+      // Body redaction inherited from the E3.5 admin body gate.
+      memory: this.bodyGate.toAdminView(sessionKey, candidate.memory),
+      sources: candidate.sources,
+      score: candidate.score,
+    }));
+
+    return {
+      contactAId: union.contactAId,
+      contactBId: union.contactBId,
+      ...(union.contactADisplayName ? { contactADisplayName: union.contactADisplayName } : {}),
+      ...(union.contactBDisplayName ? { contactBDisplayName: union.contactBDisplayName } : {}),
+      resolved: union.resolved,
+      missingContactIds: union.missingContactIds,
+      items,
+      contactsById: await this.buildContactSummaryMap(),
+      totalCandidates: union.candidates.length,
+      truncated: union.candidates.length > effectiveLimit,
+      limit: effectiveLimit,
+      elevation: this.bodyGate.status(sessionKey),
     };
   }
 
@@ -397,6 +576,7 @@ export class AdminMemoryDataService implements AdminMemoryService {
   }
 
   async updateMemoryScope(
+    sessionKey: AdminMemorySessionKey,
     id: string,
     fields: {
       scopeRef?: { kind?: string; id?: string; label?: string } | null;
@@ -461,7 +641,7 @@ export class AdminMemoryDataService implements AdminMemoryService {
 
     return {
       ok: true,
-      memory: updated,
+      memory: this.bodyGate.toAdminView(sessionKey, updated),
       scopeAssignments: this.buildScopeAssignments(updated),
       scopeRepair: this.buildScopeRepair(updated),
     };
@@ -540,7 +720,7 @@ export class AdminMemoryDataService implements AdminMemoryService {
 
   async bulkUpdate(
     ids: string[],
-    fields: { memoryType?: string; sensitivity?: string },
+    fields: { memoryType?: string; sensitivity?: string; retentionClass?: string },
   ): Promise<AdminBulkMutationResult> {
     if (!ids.length) {
       return { ok: false, count: 0, message: 'No IDs provided' };
@@ -549,7 +729,8 @@ export class AdminMemoryDataService implements AdminMemoryService {
       return { ok: false, count: 0, message: 'Bulk update limited to 500 items' };
     }
 
-    const storeFields: Partial<Pick<import('../../../faculties/memory/types.js').PurrMemory, 'type' | 'sensitivity'>> = {};
+    const storeFields: MemoryBulkUpdatePatch = {};
+    let retentionClass: MemoryRetentionClass | undefined;
 
     if (fields.memoryType !== undefined) {
       const normalized = fields.memoryType.trim().toLowerCase();
@@ -567,15 +748,30 @@ export class AdminMemoryDataService implements AdminMemoryService {
       storeFields.sensitivity = normalized as SensitivityLevel;
     }
 
-    if (Object.keys(storeFields).length === 0) {
+    if (fields.retentionClass !== undefined) {
+      const normalized = fields.retentionClass.trim().toLowerCase();
+      if (normalized !== 'standard' && normalized !== 'durable') {
+        return { ok: false, count: 0, message: `Invalid retention class: ${fields.retentionClass}` };
+      }
+      retentionClass = normalized as MemoryRetentionClass;
+    }
+
+    if (Object.keys(storeFields).length === 0 && retentionClass === undefined) {
       return { ok: false, count: 0, message: 'No valid fields to update' };
+    }
+
+    if (retentionClass !== undefined) {
+      storeFields.retentionClass = retentionClass;
     }
 
     const count = await this.deps.memoryStore.bulkUpdate(ids, storeFields);
     this.deps.appendAuditTimelineEntry?.(
       'memory_mutation',
       'allowed',
-      `Bulk updated ${count} memories (${ids.length} requested, fields: ${Object.keys(storeFields).join(', ')}).`,
+      `Bulk updated ${count} memories (${ids.length} requested, fields: ${[
+        ...Object.keys(storeFields),
+        ...(retentionClass ? ['retentionClass'] : []),
+      ].join(', ')}).`,
     );
     return { ok: true, count };
   }

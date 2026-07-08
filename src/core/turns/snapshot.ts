@@ -10,14 +10,21 @@ import type {
 } from '../../faculties/memory/types.js';
 import type { EpisodicRetrievalChain } from '../../faculties/memory/retrieval/episodic.js';
 import type { SessionEntry } from '../session/types.js';
+import type { SessionContinuityArtifact } from '../session/continuity-artifacts.js';
+import type { IdleGapTexture } from '../scheduler/time-texture.js';
 import type {
   ContextMessage,
+  FatigueEnforcementMetadata,
   LLMProviderObservability,
   PromptSectionTelemetry,
   ToolSchema,
   TurnID,
 } from '../../shared/contracts/runtime.js';
+import { cloneAuthenticityProvenance } from '../../shared/authenticity-provenance.js';
 import type { TrustLevel } from '../../system/trust/types.js';
+import type { PromptPlan } from '../agent/substrate-agent/turn-execution/prompt-plan.js';
+
+export type { FatigueEnforcementMetadata };
 
 export type PromptCacheabilityClass = 'static' | 'session_stable' | 'append_only' | 'volatile';
 export type PromptCacheBreaker =
@@ -48,9 +55,18 @@ export interface PromptSectionCacheability {
   reason: string;
 }
 
+export interface TurnPromptSnapshotDynamicSection {
+  identifier: string;
+  /** Required sections fail the turn loudly on unresolved macros (E2.5). */
+  required: boolean;
+  content: string;
+}
+
 export interface TurnPromptSnapshot {
   staticPrefixTemplate: string;
   dynamicSuffixTemplate: string;
+  /** Per-layer dynamic sections (dynamicSuffixTemplate = join('\n\n')). */
+  dynamicSuffixSections?: TurnPromptSnapshotDynamicSection[];
   staticHash: string;
   versionPointer: string;
   sectionCacheability?: PromptSectionCacheability[];
@@ -59,11 +75,14 @@ export interface TurnPromptSnapshot {
 export interface TurnSessionContextSnapshot {
   channelId: string;
   recentEntries: SessionEntry[];
+  /** Entries collected from the store before windowing/summarization. */
+  sourceEntryCount?: number;
   historySummaryText?: string;
   historySummaryEntryCount?: number;
   compactionSummaryTexts: string[];
   focusKnowledgeTexts: string[];
   continuityEntries: SessionEntry[];
+  wakeReturnArtifacts?: SessionContinuityArtifact[];
   orientation?: TurnOrientationSnapshot;
   intentionAppraisalArtifactCount?: number;
   compactionPromptText?: string;
@@ -80,7 +99,9 @@ export interface TurnOrientationSnapshot {
   noteText?: string;
   sessionSummary?: string;
   continuitySummary?: string;
+  lastUserMessage?: string;
   openThreadSummary?: string;
+  timeTexture?: IdleGapTexture;
   sourceCounts: {
     session: number;
     continuity: number;
@@ -113,20 +134,20 @@ export interface TurnPromptResponseSnapshot {
   toolCallCount?: number;
 }
 
+/**
+ * Turn prompt observability that is NOT derivable from the PromptPlan:
+ * provider wire observability, the model response, section telemetry lists,
+ * and cacheability annotations. The rendered prompt strings and the shipped
+ * message history live on TurnSnapshot.plan (E2.2) — the persisted snapshot
+ * IS the plan; there is no duplicated prompt-string state here.
+ */
 export interface TurnPromptContextSnapshot {
-  renderedStaticPrefix: string;
-  renderedDynamicSuffix: string;
-  runtimeContext: string;
-  memoryContextBlock: string;
-  scratchpadContext: string;
-  assembledPrompt: string;
-  finalSystemPrompt: string;
-  messages: ContextMessage[];
   currentTurnInput?: string;
   providerObservability?: LLMProviderObservability;
   response?: TurnPromptResponseSnapshot;
   inputSections?: PromptSectionTelemetry[];
   runtimeContextSections?: PromptSectionTelemetry[];
+  memoryContextSections?: PromptSectionTelemetry[];
   finalSystemSections?: PromptSectionTelemetry[];
   sectionCacheability?: PromptSectionCacheability[];
 }
@@ -144,10 +165,17 @@ export interface TurnSnapshot {
   trustLevel: TrustLevel;
   canonicalContactKey?: string;
   prompt?: TurnPromptSnapshot;
+  /**
+   * The turn's PromptPlan (schema-versioned): the single assembly artifact.
+   * The persisted turn snapshot IS the plan — the Loom and provider
+   * serialization read the same ordered blocks/messages/tool definitions.
+   */
+  plan?: PromptPlan;
   promptContext?: TurnPromptContextSnapshot;
   toolContext?: TurnToolContextSnapshot;
   sessionContext?: TurnSessionContextSnapshot;
   memory?: TurnMemorySnapshot;
+  fatigue?: FatigueEnforcementMetadata;
 }
 
 export function buildSnapshotVersionPointer(parts: ReadonlyArray<string | number | null | undefined>): string {
@@ -162,6 +190,15 @@ export function buildSnapshotVersionPointer(parts: ReadonlyArray<string | number
 
 export function cloneSessionEntry(entry: SessionEntry): SessionEntry {
   return { ...entry };
+}
+
+export function cloneSessionContinuityArtifact(
+  artifact: SessionContinuityArtifact,
+): SessionContinuityArtifact {
+  return {
+    ...artifact,
+    facets: [...artifact.facets],
+  };
 }
 
 export function cloneOrientationSnapshot(snapshot: TurnOrientationSnapshot): TurnOrientationSnapshot {
@@ -183,7 +220,10 @@ export function cloneEmotionalSnapshot(snapshot: EmotionalSnapshot): EmotionalSn
 }
 
 export function cloneContextMessage(message: ContextMessage): ContextMessage {
-  return { ...message };
+  return {
+    ...message,
+    ...(message.provenance ? { provenance: cloneAuthenticityProvenance(message.provenance) } : {}),
+  };
 }
 
 export function cloneProviderObservability(
@@ -210,6 +250,14 @@ export function clonePromptSectionCacheability(
   return {
     ...section,
     cacheBreakers: [...section.cacheBreakers],
+  };
+}
+
+export function clonePromptSectionTelemetry(section: PromptSectionTelemetry): PromptSectionTelemetry {
+  return {
+    ...section,
+    ...(section.provenance ? { provenance: cloneAuthenticityProvenance(section.provenance) } : {}),
+    ...(section.scopeProvenance ? { scopeProvenance: { ...section.scopeProvenance } } : {}),
   };
 }
 

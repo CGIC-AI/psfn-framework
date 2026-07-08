@@ -181,4 +181,74 @@ describe('ApiServer runtime seam', () => {
       await server.stop();
     }
   });
+
+  it('streams runtime errors as machine-readable SSE error events', async () => {
+    const runtime: ApiServerRuntime = {
+      handleHealth: async () => ({
+        status: 'healthy',
+        checkedAt: new Date().toISOString(),
+        uptimeSeconds: 1,
+        subsystems: {
+          memory: { status: 'healthy' },
+          llm: { status: 'healthy' },
+          discord: { status: 'healthy' },
+          embeddings: { status: 'healthy' },
+          scheduler: { status: 'healthy' },
+        },
+        continuity: {
+          status: 'healthy',
+          checks: {
+            database: { status: 'healthy' },
+            gatewayLink: { status: 'healthy' },
+            schedulerHealthcheck: { status: 'healthy' },
+          },
+        },
+      }),
+      handleTelemetryIngest: async () => ({
+        ok: true,
+        response: { ok: true, id: 'telemetry-1', acceptedEventType: 'external.telemetry.heartbeat' },
+      }),
+      handleChatCompletion: async ({ onDelta }) => {
+        onDelta?.('partial before failure');
+        return {
+          ok: false,
+          error: {
+            status: 502,
+            type: 'model_error',
+            message: 'Upstream model failed',
+            details: { provider: 'test-provider' },
+          },
+        };
+      },
+    };
+    const server = createServer(runtime);
+    const port = await startServer(server);
+
+    try {
+      const response = await fetch(`http://127.0.0.1:${port}/v1/chat/completions`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${API_KEY}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          model: 'runtime-model',
+          stream: true,
+          messages: [{ role: 'user', content: 'hello' }],
+        }),
+      });
+      const body = await response.text();
+
+      expect(response.status).toBe(200);
+      expect(body).toContain('partial before failure');
+      expect(body).toContain('event: error');
+      expect(body).toContain('"type":"model_error"');
+      expect(body).toContain('"message":"Upstream model failed"');
+      expect(body).toContain('"details":{"provider":"test-provider"}');
+      expect(body).not.toContain('[Error:');
+      expect(body).toContain('[DONE]');
+    } finally {
+      await server.stop();
+    }
+  });
 });

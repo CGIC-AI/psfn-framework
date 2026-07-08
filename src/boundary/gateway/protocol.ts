@@ -6,6 +6,8 @@ import type {
   CompletionPurpose,
   ContextMessage,
   LLMProviderObservability,
+  LLMSystemPromptCacheBoundaries,
+  LLMUsageDetails,
   ModelThinkingEffort,
   ObservabilityCallType,
   SubstrateMessage,
@@ -69,6 +71,8 @@ export interface LLMChatParams extends GatewayCorrelationParams {
   pin?: boolean;
   messages: ContextMessage[];
   systemPrompt: string;
+  /** PromptPlan cachePlan boundaries for systemPrompt (E2.4); hash-verified before use. */
+  promptCacheBoundaries?: LLMSystemPromptCacheBoundaries;
   stream?: boolean;
   maxTokens?: number;
   contextWindow?: number;
@@ -88,6 +92,8 @@ export interface LLMCompleteParams extends GatewayCorrelationParams {
   pin?: boolean;
   messages: ContextMessage[];
   systemPrompt: string;
+  /** PromptPlan cachePlan boundaries for systemPrompt (E2.4); hash-verified before use. */
+  promptCacheBoundaries?: LLMSystemPromptCacheBoundaries;
   purpose: CompletionPurpose;
   maxTokens?: number;
   contextWindow?: number;
@@ -155,6 +161,7 @@ export interface FsListParams {
   path?: string;
   glob?: string;
   maxEntries?: number;
+  maxScannedEntries?: number;
 }
 
 export interface FsSearchParams {
@@ -210,7 +217,10 @@ export interface BeadsBaseParams extends GatewayCorrelationParams {
   actor?: string;
 }
 
-export interface BeadsReadyParams extends BeadsBaseParams {}
+export interface BeadsReadyParams extends BeadsBaseParams {
+  /** Max ready issues returned (default 20, cap 100): the full list is a context firehose. */
+  limit?: number;
+}
 
 export interface BeadsShowParams extends BeadsBaseParams {
   id: string;
@@ -341,6 +351,7 @@ export interface LLMChatResult {
   model: string;
   inputTokens: number;
   outputTokens: number;
+  usageDetails?: LLMUsageDetails;
   stopReason: string;
   requestId?: string;
 }
@@ -352,6 +363,7 @@ export interface LLMCompleteResult {
   model: string;
   inputTokens: number;
   outputTokens: number;
+  usageDetails?: LLMUsageDetails;
   stopReason: string;
 }
 
@@ -407,6 +419,12 @@ export interface FsWriteResult {
 
 export interface FsListResult {
   paths: string[];
+  scannedEntries: number;
+  maxEntries: number;
+  maxScannedEntries: number;
+  truncated: boolean;
+  scanLimitReached: boolean;
+  entryLimitReached: boolean;
 }
 
 export interface FsSearchMatch {

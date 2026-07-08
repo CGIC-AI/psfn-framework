@@ -4,9 +4,32 @@ import type { AgentTool } from '@mariozechner/pi-agent-core';
 import {
   createIntentionAppraisalHooks,
   createIntentionBehavioralPatternHooks,
-  wireIntentionRuntime,
+  wireIntentionRuntimeStores,
   type IntentionRuntimeTarget,
+  type IntentionRuntimeWiring,
 } from './runtime-wiring.js';
+import { createSQLiteIntentionRuntimeStores } from './sqlite-adapters.js';
+
+// Legacy SQLite convenience wiring, kept test-local until psfn-framework-3c2.5
+// deletes the SQLite intention stores and this test file with it.
+function wireIntentionRuntime(
+  target: IntentionRuntimeTarget,
+  db: Database.Database,
+): IntentionRuntimeWiring {
+  const {
+    concernProvider,
+    pendingFollowUpProvider,
+    behavioralPatternProvider,
+    concernStore,
+    pendingFollowUpStore,
+    behavioralPatternTracker,
+  } = createSQLiteIntentionRuntimeStores(db);
+  return wireIntentionRuntimeStores(
+    target,
+    { concernStore, pendingFollowUpStore, behavioralPatternTracker },
+    { concernProvider, pendingFollowUpProvider, behavioralPatternProvider },
+  );
+}
 
 class FakeTarget implements IntentionRuntimeTarget {
   activeConcernProvider: IntentionRuntimeTarget['activeConcernProvider'] = null;
@@ -97,7 +120,7 @@ describe('wireIntentionRuntime', () => {
     expect(active).toHaveLength(1);
     expect(active[0]).toMatchObject({
       title: 'Check hydration reminder',
-      status: 'open',
+      status: 'active',
       priority: 'medium',
     });
     expect(typeof active[0]?.dueAt).toBe('number');
@@ -165,6 +188,8 @@ describe('wireIntentionRuntime', () => {
         followUp: {
           content: 'Check in tomorrow about medication.',
           channelType: 'api',
+          contextSummary: 'Medication follow-up context.',
+          wakeConditions: ['next_user_turn'],
         },
       },
       channelId: 'api:test',
@@ -183,6 +208,8 @@ describe('wireIntentionRuntime', () => {
       timing: 'scheduled',
       contactId: 'contact-a',
       sourceMessageId: 'msg-3',
+      contextSummary: 'Medication follow-up context.',
+      wakeConditions: ['next_user_turn'],
     });
 
     await hooks.onIntentionFollowUpActivated({
@@ -308,6 +335,100 @@ describe('wireIntentionRuntime', () => {
       channelId: 'api:test',
       sourceMessageId: 'msg-2',
     })).rejects.toThrow('Concern decision must include title or summary');
+  });
+
+  it('surfaces eligible pending follow-ups through appraisal hooks', async () => {
+    const db = new Database(':memory:');
+    const target = new FakeTarget();
+    const runtime = wireIntentionRuntime(target, db);
+    const hooks = createIntentionAppraisalHooks(runtime.concernStore, runtime.pendingFollowUpStore);
+    const now = Date.parse('2026-03-26T12:00:00.000Z');
+    const createdAt = new Date(now - 60_000).toISOString();
+
+    const due = await runtime.pendingFollowUpStore.enqueue({
+      content: 'Due follow-up',
+      priority: 'medium',
+      timing: 'scheduled',
+      createdAt,
+      dueAt: new Date(now - 1_000).toISOString(),
+      channelId: 'discord:primary',
+      channelType: 'discord',
+      authorId: 'system:intention',
+      authorName: 'Whisper',
+      contactId: 'contact-a',
+      sourceMessageId: 'msg-due',
+    });
+    const wakeOnUserTurnId = await hooks.onIntentionFollowUpDecision({
+      decision: {
+        type: 'followUp',
+        priority: 'low',
+        reason: 'Wake once the user returns.',
+        timing: 'soon',
+        followUp: {
+          content: 'Wake on user turn',
+          channelType: 'discord',
+          wakeConditions: ['next_user_turn'],
+        },
+      },
+      channelId: 'discord:primary',
+      channelType: 'discord',
+      canonicalContactKey: 'contact-a',
+      sourceMessageId: 'msg-wake-user',
+    });
+    expect(wakeOnUserTurnId).toBeTruthy();
+    await runtime.pendingFollowUpStore.enqueue({
+      content: 'Future follow-up',
+      priority: 'medium',
+      timing: 'scheduled',
+      createdAt,
+      dueAt: new Date(now + 60_000).toISOString(),
+      channelId: 'discord:primary',
+      channelType: 'discord',
+      authorId: 'system:intention',
+      authorName: 'Whisper',
+      contactId: 'contact-a',
+      sourceMessageId: 'msg-future',
+    });
+    await runtime.pendingFollowUpStore.enqueue({
+      content: 'Wrong channel',
+      priority: 'medium',
+      timing: 'scheduled',
+      createdAt,
+      dueAt: new Date(now - 1_000).toISOString(),
+      channelId: 'discord:other',
+      channelType: 'discord',
+      authorId: 'system:intention',
+      authorName: 'Whisper',
+      contactId: 'contact-a',
+      sourceMessageId: 'msg-other-channel',
+    });
+    await runtime.pendingFollowUpStore.enqueue({
+      content: 'Wrong contact',
+      priority: 'medium',
+      timing: 'scheduled',
+      createdAt,
+      dueAt: new Date(now - 1_000).toISOString(),
+      channelId: 'discord:primary',
+      channelType: 'discord',
+      authorId: 'system:intention',
+      authorName: 'Whisper',
+      contactId: 'contact-b',
+      sourceMessageId: 'msg-other-contact',
+    });
+
+    const surfaced = await hooks.getPendingFollowUpsForResurfacing({
+      channelId: 'discord:primary',
+      canonicalContactKey: 'contact-a',
+      sourceMessageId: 'msg-current',
+      isBackgroundTurn: false,
+      now,
+      currentMoodValence: 0,
+    });
+
+    expect(surfaced.map(followUp => followUp.id)).toEqual([
+      due.id,
+      wakeOnUserTurnId,
+    ]);
   });
 
   it('suppresses concern creation when a similar concern was just resolved', async () => {

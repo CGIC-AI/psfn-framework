@@ -2,6 +2,8 @@
 
 PSFN memory is not a single store. The runtime combines append-only session history, typed long-term memories, continuity artifacts, contact state, and a few small high-priority ledgers.
 
+Last updated: 2026-06-29.
+
 ## Layers That Exist Today
 
 ### L0: Session history
@@ -13,10 +15,11 @@ PSFN memory is not a single store. The runtime combines append-only session hist
 
 ### L0.1: Episodic landmarks
 
-- Stored in SQLite through `EpisodicStore` tables `l01_episodes` and `l01_episode_arcs`
+- Stored in PostgreSQL through the runtime episodic store tables `l01_episodes`, `l01_episode_spans`, `l01_episode_arcs`, lineage, review, candidate, watermark, and message-claim tables
 - Represents bounded lived episodes with L0 span/artifact provenance, salience, affect, themes, participants, thread IDs, and channel IDs
-- Created during configured rest/me-time windows after user inactivity by the sleeptime episodic synthesizer
+- Candidate episodes are created by the gated episode-synthesis lane (timer-or-turn-threshold trigger plus a deterministic relevance gate; see "Background memory lanes" below); nightly rest-window sleeptime work consolidates and refines them
 - Allows multiple episodes per day; a long-running theme is a graph of linked episodes, not one large aggregate record
+- Hard message claiming: each episode claims its source messages in `l01_episode_message_claims`, and a partial unique index guarantees at most one live episode per source message. Daytime synthesis drops actively claimed messages from its input before grouping, so overlapping passes can never re-process the same turns. Nightly consolidation is the only process allowed to restructure claims, via `transferEpisodeMessageClaims`: claims move to the consolidated episode and the covered candidates are marked superseded (hidden from live queries, never deleted, claim history retained). The >50% span-overlap merge heuristic remains as defense in depth for pre-claiming data.
 - Retrieved before raw span/artifact drill-down so L1 can search a scoped episode chain instead of all chats and all memories
 - Exposed in Garden through the episodic memory page for episode, provenance, arc, and thread inspection
 - Must stay separate from L2 typed memories and from generic transcript summary/vector caches
@@ -30,13 +33,13 @@ PSFN memory is not a single store. The runtime combines append-only session hist
 
 ### L2: Typed long-term memories
 
-- Stored in SQLite through `MemoryStore`
-- Embedded with the configured embeddings provider and indexed with `sqlite-vec`
+- Stored in PostgreSQL through `PostgresMemoryStore`
+- Embedded with the configured embeddings provider and indexed/searchable through `pgvector`
 - Retrieved by `MemoryRetriever`
 - Written through `MemoryWriter` and `MemoryExtractor`
-- The storage contract stays async-safe at the port level so SQLite and PostgreSQL share the same `MemoryStorePort` surface.
-- The supported PostgreSQL memory path stores embeddings in `l2_memories.embedding` via `pgvector` and performs database-side similarity search. Missing `pgvector` support is a fail-closed startup error, not a silent fallback to app-side array scanning.
-- Backends may optimize the internal implementation differently, but the caller contract must not assume SQLite-specific transaction or vector-index behavior.
+- The storage contract stays async-safe at the port level so tests, repair utilities, and legacy migration code can exercise adapters without leaking storage details into callers.
+- The supported memory path stores embeddings in `l2_memories.embedding` via `pgvector` and performs database-side similarity search. Missing `pgvector` support is a fail-closed startup error, not a silent fallback to app-side array scanning.
+- SQLite/sqlite-vec code remains only for legacy migration utilities and adapter tests; it is not a runtime default.
 
 ### Parallel memory/state artifacts
 
@@ -45,7 +48,7 @@ PSFN memory is not a single store. The runtime combines append-only session hist
 - append-only daily reflection journals under `notes/reflections/daily/`
 - append-only long-process reflection logs under `notes/reflections/process-logs/`
 - active orientation persisted in `core_memory.json`
-- contact profiles and social graph state in SQLite/contact stores
+- contact profiles, social graph state, concerns, intentions, internal state, and follow-ups in PostgreSQL stores
 - scratchpad mirror at `notes/scratchpad.json`
 - memory mutation journal at `notes/memories.jsonl`
 
@@ -55,20 +58,34 @@ PSFN memory is not a single store. The runtime combines append-only session hist
 - Orientation storage intentionally remains on legacy `core_memory.json` paths for now; the runtime rename is model-facing rather than a persistence migration.
 - Long-term memory lives in the typed `memory` store and is retrieved selectively; it is not the same thing as active orientation.
 - `scratchpad` remains an explicit ephemeral workspace for bulky temporary material and working notes, not canonical memory.
+- `wiki` is the workspace-backed durable reference surface for authored notes, imported documents, curated references, and personal knowledge-base material.
 - Ephemeral scratchpad notes and managed temp artifacts now follow an explicit retention policy from `scheduler.json`. Durable artifacts promoted into the research library are exempt from lifecycle cleanup.
 
 ### Scratchpad
 
 Scratchpad is a separate semantic surface, not a subtype of long-term memory.
 
-- Lives in SQLite `scratchpad_entries` with an optional mirror at `notes/scratchpad.json`
+- Lives in runtime scratchpad storage with an optional mirror at `notes/scratchpad.json`; live runtime state is Postgres-backed where scratchpad rows are persisted through the active runtime store
 - Holds temporary long-context notes, excerpts, rolling summaries, and working hypotheses for large source material
 - Is bounded and intentionally ephemeral; it helps the current work, not durable recall
 - Must stay distinct from `orient`, which is active canon, and from typed long-term `memory`, which is durable retrieval state
 - Should be promoted only when the content stabilizes:
   - stable facts or relational knowledge go to `memory`
-  - durable operator-authored notes or artifacts go to repo docs or `vault`
+  - durable operator-authored notes, imported documents, and artifacts go to `wiki` or repo docs
   - active self-orientation belongs in `orient`
+
+### Wiki / Knowledge Base
+
+Wiki documents are stable reference knowledge, not lived memory.
+
+- Live under `WORKSPACE_PATH/knowledge/wiki/` with document bodies and metadata stored in deterministic subtrees
+- Hold durable authored notes, imported partner-vault notes, parsed documents, generated syntheses, external references, and system seeds
+- Carry source class, provenance references, sensitivity, timestamps, and revision metadata
+- Stay distinct from L0 transcript history, L0.1 episodic landmarks, L2 typed memory, scratchpad, journal files, and current orientation
+- May link to memory/session records by provenance reference, but the wiki body does not become L0/L0.1/L2 memory by default
+- Imports from Obsidian/Vault or other external sources require explicit source class and provenance and fail closed when those fields are missing
+
+The legacy `vault`/Obsidian surface is an optional external source bridge. It is not the canonical personal long-term storage surface.
 
 ## Memory Types
 
@@ -116,6 +133,80 @@ The current write pipeline is:
 
 Extraction can also run in crash recovery and pre-compaction paths, not only after a normal turn.
 
+## Direct And Group Memory Modes
+
+Long-term extraction has an explicit memory-mode contract:
+
+- `direct` uses the normal lightweight 1:1 extraction cadence and caps.
+- `group` uses group-room windowing, attribution, salience gates, write caps, profile refresh coverage, telemetry, and backfill limits.
+- `auto` chooses between direct and group behavior from channel topology plus recent canonical human participants.
+
+The canonical runtime owner for group-memory defaults is `settings.json` under `groupMemory`. The canonical channel owner for manual provider or channel overrides is `channels.json` under `discord.groupMemory`. The same knob names are used in both places: mode, participant window, trigger thresholds, chunk sizes, overlap, cooldowns, backlog limits, salience thresholds, salience reason weights, candidate-span caps, neighboring context size, low-signal skip rules, write caps, per-contact/per-subject caps, time-window write caps, backfill write caps, write-ranking weights, address-mode weights, profile refresh thresholds, telemetry visibility, and backfill limits.
+
+Manual `memoryMode` overrides auto detection. A per-channel override can force a Discord channel to `direct` or `group` even when topology is ambiguous. Auto mode treats Discord guild channels and threads as group-capable and Discord private 1:1 conversations as direct. A group-capable channel with only one recent canonical human speaker falls back according to `groupMemory.autoDetection.fallbackModeWhenOneHuman`, which defaults to `direct`.
+
+Recent participant detection must use a rolling window from `groupMemory.autoDetection.recentParticipantWindowMessages` and `groupMemory.autoDetection.recentParticipantWindowMs`. Historical channel activity can inform that a room is group-capable, but it must not force all future extraction into high-volume group processing forever. Companion, system, API-principal, and bot contacts are excluded from the human participant count unless explicitly configured as human-relevant or AI-companion participants.
+
+Group mode changes memory extraction only. It must never cause an observed message to receive a reply and must not relax retrieval privacy or cross-contact memory boundaries.
+
+### Group-Memory Settings
+
+All group-memory knobs are JSON-owned. Defaults live in `settings.json` under `groupMemory`; channel overrides live in `channels.json` under `discord.groupMemory`. Operators should tune those owner files, not code, and then use Garden diagnostics to confirm the resolved per-channel values.
+
+Top-level settings:
+
+- `enabled`: enables the group-memory subsystem.
+- `memoryMode`: default mode, one of `direct`, `group`, or `auto`.
+
+Auto-detection settings:
+
+- `autoDetection.recentParticipantWindowMessages`: how many recent messages to scan for participant classification.
+- `autoDetection.recentParticipantWindowMs`: time window for the same participant scan.
+- `autoDetection.minDistinctHumanContacts`: human participant count required for `auto` group classification.
+- `autoDetection.groupCapableChannelTypes`: provider channel types that may be group rooms.
+- `autoDetection.fallbackModeWhenOneHuman`: direct or group behavior when a group-capable room has one recent human.
+- `autoDetection.excludeCompanionContact`, `excludeSystemContacts`, `excludeApiPrincipals`, `excludeBotContacts`, `includeAiCompanions`: participant filters for the classification window.
+
+Online extraction settings:
+
+- `onlineExtraction.observedMessageTriggerCount`: unread observed-message count that can trigger group extraction.
+- `onlineExtraction.observedTimeTriggerMs`: max wait before a time-triggered extraction may run.
+- `onlineExtraction.maxMessagesPerChunk`: live chunk size for one extraction range.
+- `onlineExtraction.maxEstimatedTokensPerChunk`: token ceiling for a chunk.
+- `onlineExtraction.chunkOverlapMessages`: context overlap between chunks.
+- `onlineExtraction.cooldownMs`: per-channel cooldown after scheduling extraction.
+- `onlineExtraction.backlogLagTriggerMessages`: unread lag that can force backlog catch-up.
+- `onlineExtraction.maxBacklogChunksPerRun`: max online chunks per run.
+
+Normal live group windows should be tuned to room velocity. The default shape is deliberately in the 50-100 message range (`observedMessageTriggerCount` defaults to 50, `maxMessagesPerChunk` to 75, and backlog lag to 100). Large historical rooms must be handled by bounded backfill, not by making the live hot path consume one fixed giant batch.
+
+Salience settings:
+
+- `salience.minImportance`, `minConfidence`, `minNovelty`: write gates applied after extraction.
+- `salience.minCandidateScore`: pre-LLM candidate threshold for group ranges.
+- `salience.maxCandidateSpansPerChunk`: max candidate spans selected per chunk.
+- `salience.neighboringContextMessages`: neighboring messages included around selected candidates.
+- `salience.reasonWeights.companionMention`, `directAddress`, `participantFact`, `explicitPreference`, `relationshipClaim`, `boundarySafety`, `commitment`, `emotionalEvent`, `durablePlan`: score weights for durable group signals.
+- `salience.lowSignalRules.enabled`, `shortMessageMaxChars`, `repeatWindowMessages`, `repeatThreshold`, `lowInformationPenalty`: filters for chatter and repeated low-information messages.
+
+Write-cap settings:
+
+- `writeCaps.maxWritesPerRun`, `maxWritesPerChunk`, `maxWritesPerContact`, `maxWritesPerSubject`: group write ceilings.
+- `writeCaps.maxLowSalienceWritesPerRun`: cap for lower-salience accepted facts.
+- `writeCaps.maxWritesPerBackfillRun`: separate catch-up/backfill write ceiling.
+- `writeCaps.maxWritesPerTimeWindow` and `timeWindowMs`: rolling write ceiling.
+- `writeCaps.lowSalienceThreshold`: threshold used by the low-salience cap.
+- `writeCaps.rankingWeights.importance`, `novelty`, `confidence`, `addressMode`, `relationshipRelevance`, `emotionalIntensity`, `perContactCoverage`: candidate ranking weights.
+- `writeCaps.addressModeWeights.directToCompanion`, `mentionOfCompanion`, `replyToUser`, `overheardRoomContext`, `systemApi`: ranking weights for how the message reached the companion.
+
+Profile, telemetry, and backfill settings:
+
+- `profileRefresh.enabled`, `minAcceptedWritesPerContact`, `minSourceMemories`, `cooldownMs`: profile refresh coverage and throttling.
+- `telemetry.enabled`, `exposeGardenDiagnostics`, `maxDiagnosticMemoryScan`: group-memory telemetry and Garden diagnostic exposure.
+- `backfill.maxMessagesPerRun`, `maxChunksPerRun`, `maxLlmCallsPerRun`, `cooldownMs`: operator backfill ceilings.
+
+Group extraction preserves attribution separately from ownership. Accepted group memories can carry source speaker/contact, subject contact, trigger contact, address mode, source message IDs, source span, and conversation scope. Ambiguous mixed-speaker facts fail closed. A participant being in the same room does not grant them access to another participant's private memories during retrieval.
+
 ## Compaction And Carry-Forward
 
 Compaction is context-window maintenance, not a replacement memory layer.
@@ -129,6 +220,8 @@ Compaction is context-window maintenance, not a replacement memory layer.
 - L0.1 episodic synthesis is separate rest-window work. It creates bounded episode landmarks with provenance and graph links; compaction summaries do not become episodes automatically.
 
 The open design boundary is richer L1/L2 integration: future work can let contextual memory agents traverse an L0.1 chain and then selectively expand L0 spans, artifacts, or L2 memories. That expansion must stay bounded, provenance-preserving, and trust-gated.
+
+The richer projection specs in [`SPEC_L01_LANDMARK_SCHEMA.md`](./SPEC_L01_LANDMARK_SCHEMA.md) and [`SPEC_MEMORY_PROJECTION_LAYER.md`](./SPEC_MEMORY_PROJECTION_LAYER.md) are design contracts for additional motif, occasion, callback, and declarative projection work. They do not mean those tables or the `recall_expand` tool are fully implemented today.
 
 ## Retrieval Path
 
@@ -150,6 +243,12 @@ When memories are withheld, the retriever can return withheld summaries instead 
 
 Episodic retrieval is landmark-first. A cue such as a wedding cake question should select the cake/bakery episode chain and its raw references, not the entire wedding-planning history and not one giant wedding memory. If no episodic landmarks match, normal L2 retrieval behavior remains intact.
 
+### Turn Hot Path (Active Memory Context, E5.5)
+
+Foreground turns never block on retrieval. The turn serves the cached active-memory context and schedules a background refresh; the refreshed context lands on a later pass, so remembering something a turn late is acceptable and by design. There is no blocking legacy fallback: a memory provider wired into turn execution must expose the active-context surface or startup of the turn fails closed.
+
+Degraded state is explicit, never silent. When a turn proceeds without a fresh active context, a typed `memory.active_context.turn_degraded` event records the reason (`not_ready` on cold start, `refresh_failed` after a failed refresh, `stale` while a refresh from an earlier pass is still in flight). Persistent refresh failure — consecutive `degraded` refresh phases for the same context key crossing the settings.json-owned `memoryRefreshFailureAlertThreshold` — raises an operator alert through the gateway's system-derived ntfy notification path; a successful refresh resets the counter and re-arms the alert.
+
 ## Trust And Privacy
 
 Memory access is not just similarity-based.
@@ -159,6 +258,16 @@ Memory access is not just similarity-based.
 - Boundary memories receive dedicated handling.
 - Broadcast contexts use additional visibility-scope checks.
 - High-intimacy memories are scoped to the canonical contact they belong to.
+
+### Garden Admin Body Gate
+
+The Garden admin memory API (`/api/admin/memory*`) sensitivity-gates memory bodies for the operator:
+
+- `intimate` and `confidential` bodies are redacted by default in list, search, detail, and managed-scope views; metadata (id, type, sensitivity, scope, timestamps, salience, provenance summary) stays browsable.
+- Redactions are explicit, never silent: the body is replaced by a marker naming the sensitivity level, original character count, and how to reveal.
+- Access is granted by an audited per-memory reveal (`POST /api/admin/memory/<id>/reveal`) or an audited session elevation (`POST`/`DELETE`/`GET /api/admin/memory/elevation`). Both grants expire after a fixed TTL (`ADMIN_MEMORY_BODY_ACCESS_TTL_MS`, 15 minutes) and every reveal/elevation writes a `memory_access` audit entry.
+- Metadata operations (supersede, bulk delete, bulk field update, scope edits, linking) do not require body access. Patching the body of a redacted memory fails closed until it is revealed or the session is elevated.
+- Session transcripts and Loom per-turn retrieval views are conversation/debugging surfaces, not memory rows, and are outside this gate.
 
 ## Maintenance
 
@@ -170,6 +279,51 @@ The memory system is actively maintained by runtime jobs:
 - extraction marker updates
 - database integrity and embedding-dimension checks at startup
 
+### Background memory lanes (E5.2/E5.3, JSON-owned)
+
+Background memory work is split into three lanes. Every cadence, threshold, and window is owned by `scheduler.json` (schema-guarded, fail closed on missing or invalid config); nothing is hardcoded.
+
+**Near-turn lane (`nearTurnMemory`)** — lightweight, deterministic, zero LLM spend (the lane holds no LLM provider at all). It keeps only extraction trigger evaluation (the existing per-turn and observed-group extraction wiring), active-memory review refresh (stale-memory maintenance reviews), and concern-candidate derivation (the intention appraisal path). Cadence keys:
+
+- `nearTurnMemory.direct.cadenceTurns` — direct/1:1 (DM) scopes keep the historical per-N-turns posture (default every 3 turns).
+- `nearTurnMemory.group.minIntervalMinutes` and `nearTurnMemory.group.minNewEntries` — group/room scopes use watermark + interval batching. A group run is only eligible once at least `minNewEntries` new turns have accumulated AND at least `minIntervalMinutes` of wall-clock time has elapsed since the last run.
+
+Direct-vs-group topology reuses the canonical group-memory classification pipeline (`groupMemory` settings, `memoryMode` direct/group/auto, channel overrides, and participant-window auto-detection) via `ObservedGroupMemoryScheduler.classifyChannelMemoryScope` — the same classifier that gates observed group extraction; there is no parallel detector. If classification fails, the lane logs the error and degrades to group batching (the compute-conservative direction). Each fire emits a `memory.near_turn.cadence` telemetry event (scope, turn count, new-entries-since-last-run, rolling per-channel `firesLastHour`), streamed to the Garden admin telemetry websocket.
+
+**Candidate-episode synthesis lane (`episodeSynthesis`)** — the deterministic trigger gate for episode-candidate creation. The gate evaluates when the scheduler timer fires (`timerIntervalMinutes`, task `memory.episode-synthesis.timer`) OR a per-session turn threshold is reached (`turnThreshold`), whichever comes first. Two deterministic checks then run with zero LLM spend when closed:
+
+1. Gate 1 — any new messages since the durable synthesis processing watermark? None => no-op.
+2. Gate 2 — at least `minRelevantTurns` (default 10) companion-relevant turns. Relevance reuses the group-chat addressing/mention/attribution detection (`classifySessionEntryCompanionRelevance` in the extraction speaker-routing module): the companion's own turns, replies to her, direct address, and mentions count; async group traffic between other members does not. DMs count every conversational turn.
+
+Below the minimum the lane holds and accumulates: the watermark does not advance, so the next period evaluates the whole accumulated chunk (9 relevant now => hold; 25 total next period => process as one chunk). Every evaluation — processed or skipped, with a typed reason (`no_new_messages`, `below_relevance_minimum`, `session_retired`) — emits a `memory.episode_synthesis.gate` event for the subsystem-health view. Synthesis tuning (`transcriptMessageLimit`, `maxEpisodesPerRun`, `gapSplitMinutes`, `maxEntriesPerEpisode`, `minConversationalEntries`, `minSingleEntryChars`) lives in the same block.
+
+**Contextual topic cutting (E5.4, `episodeSynthesis.topicSegmentationEnabled`, default false)** — with the flag on, the deterministic pre-cuts (UTC day boundary, long-gap split, entry cap) stay the outer bounds, and within each gated chunk an LLM proposes contiguous topic segments via schema-bound structured output (`src/faculties/memory/episodic/topic-segmentation.ts`; same gateway-backed provider port as the other episodic passes). Turns of an unfinished trailing topic in the newest chunk are HELD BACK — not claimed, not episodized — and roll into the next pass, joining the next episode if the topic continues; the processing watermark never advances past held or unprocessed turns. Malformed segmentation output fails closed: no episode for that chunk, nothing claimed, the run stops before the watermark passes the chunk, and a typed `memory.episode_synthesis.segmentation` event (outcome `failed`) records the error; successful cuts emit the same event with outcome `segmented` plus held-back counts. `maxEpisodesPerRun` caps materialized candidates across all segments. Flag off => deterministic cutting is unchanged; flag on without a provider fails closed at construction.
+
+**Sleeptime (rest-window scheduler lane)** — actual sleeptime: nightly scheduler-owned work, like dreaming. Sleep consolidation, arc weaving, the dream-meaning pass, and the orientation-block rewrite run ONLY from the `memory.sleeptime.rest-window` scheduler task inside the `episodicProcessing` rest window (default 00:00–09:00 plus 60 min of inactivity). No code path from turn cadence can reach them — the sleeptime agent has no turn-based inference surface and fails closed at construction without a rest-window config; unreachability is test-enforced. Heavy-pass tuning is JSON-owned: `sleepConsolidation` (`reviewWindowDays`, `refinementWindowHours`, `adjacencyGapMinutes`, `maxRefinementsPerRun`, `maxConsolidationsPerRun`), `orientationRewrite` (`minNewEntriesSinceRewrite`, `refreshAfterQuietDays`; the orient rewrite is gated on deterministic evidence of change — see "Deterministic pre-LLM gating" below), and `arcFormation` (`passIntervalDays`, `reviewWindowDays`, `minConfidence`, `maxArcsPerRun`, `maxEpisodesPerRun`). Arc weaving links CANONICAL episodes only (candidates wait for consolidation) into cross-day thematic threads; arc membership is mutable (join/leave/re-point) with a full audit trail in `l01_episode_arc_audit`, and consolidation supersession re-points arc memberships onto the consolidated episode so no arc dangles on a non-live episode.
+
+Sleep consolidation runs the candidate-then-consolidate model (m58.1). Daytime synthesis output is CANDIDATE episodes (`l01_episodes.status = 'candidate'`): fully live for retrieval — they are the only record of the day — but identifiable until a sleep cycle rules on them. The nightly pass clusters same-scope overlapping/adjacent candidates, asks a schema-bound LLM thematic grouping which candidates form one episode ("this whole stretch was us discussing X"; a mis-joined distinct-topic fragment goes to its own group), and folds each multi-candidate group into a new consolidated canonical episode: spans, artifacts, and provenance are unioned deterministically (every covered L0 transcript span keeps an `l0_span` provenance ref), message claims move via `transferEpisodeMessageClaims`, and the source candidates are marked superseded — never deleted, with lineage (`canonicalizes`) and candidate-decision rows recording the fold. Lone candidates are confirmed canonical deterministically with zero LLM spend. Malformed or failed grouping output fails closed per cluster: a typed `memory.sleep_consolidation.failure` event fires and the candidates stay untouched for the next night. LLM grouping work per run is bounded by `maxConsolidationsPerRun`. The deterministic adjacent-merge repair only touches claim-free canonical episodes (the pre-claiming historical backlog); claim-holding episodes are products of deliberate thematic consolidation and are never blindly re-merged.
+
+Note: the old `scheduler.json` `sleeptime` cadence key was removed with no legacy alias; configs still carrying it fail validation with rename guidance.
+
+### Deterministic pre-LLM gating (jpvd.4)
+
+Recurring nondeterministic LLM passes must not fire when deterministic signals can already tell us nothing changed. A single shared primitive — `evaluateDeterministicGate` in `src/shared/gating/deterministic-gate.ts` — expresses every such gate as a pure decision over named deterministic inputs (counts since a watermark, VAD/trend deltas, keyword signal scores, elapsed time, pending-item counts): `blockWhen` hard-close pre-checks run first in order, then the gate opens if ANY opening signal fires, else closes with a reason. It returns `{ open, reason, inputs }` with zero side effects and zero LLM spend; a missing/non-finite required input fails closed. A closed gate short-circuits the pass and emits a typed `DeterministicGateEvent` (`{ lane, outcome: 'ran' | 'skipped', reason, inputs, timestamp, sessionId? }`) that the Garden subsystem-health view renders as a lane (`src/operator/garden/services/subsystem-health-service.ts`).
+
+Per-pass gate definitions:
+
+- **Orientation-block rewrite** (`memory.orientation_rewrite.gate`, config `scheduler.json` `orientationRewrite`) — the heaviest nightly sleeptime LLM pass. Opens on deterministic evidence of change since the last rewrite: at least `minNewEntriesSinceRewrite` new conversational turns (the snapshot `updatedAt` is the last-rewrite baseline), OR any new activity once the last rewrite is stale past `refreshAfterQuietDays` (never rewrites orientation from an empty transcript). A never-oriented companion (all orient blocks empty) fails open for its first rewrite. On quiet nights the gate closes (`no_change`) and the whole orient-plan call is skipped. Skipping is the common case.
+- **Dream-meaning pass** (`memory.dream_meaning.gate`) — a cadence gate (`cadence`: skip until `passIntervalMs` elapses since the last pass) followed by an episodes gate (`no_episodes`: skip unless at least one in-window consolidated episode still lacks a meaning).
+- **Sleep-consolidation refinement** (`memory.sleep_consolidation.refinement_gate`) — the bounded LLM title/landmark/theme/salience cleanup fires only when at least one in-window episode is still unrefined (`no_unrefined_episodes` when none). Thresholds already live in `scheduler.json` `sleepConsolidation`.
+- **Emotion appraisal** (`emotion.appraisal.gate`) — opens on the turn cadence (`turnCadence`) OR a large enough VAD movement (`vadDeltaThreshold`, gated by trusted telemetry); closes as `no_movement`. The open reason is the trigger (`periodic` / `vad_shift`).
+- **Extraction pre-LLM gate** (`src/faculties/memory/extraction/signals.ts`) — an `empty_transcript` block rule, then opens when any user turn scores meaningful OR nothing was explicit filler, else `low_signal`. Byte-identical to its pre-refactor decision; skips keep surfacing through `memory.extraction.end` telemetry.
+- **Concern candidate review** (`intention.concern_candidate.gate`) — a pending-count gate (`insufficient_candidates` for ≤ 1 pending) and a turn-interval cadence trigger. `already_running` stays a concurrency guard, not a deterministic gate.
+
+### Social-graph builder worker (E4.2, memory-agent lane)
+
+A background job (`SocialGraphBuilderWorker`, `src/faculties/memory/social-graph/`) proposes social-graph edges from accumulated room evidence. It runs on the same background-maintenance posture as sleeptime/salience-decay (scheduler eligibility gate) and is NEVER inline in the chat path. It is purely heuristic (no LLM call, so no model charge) and reads NEW room-scoped memories since its own advisory watermark. Three evidence classes: repeated co-presence of two tracked contacts across N room sessions (→ `acquaintance`, ~0.5), overheard interactions naming two tracked people (→ typed per `inferRelationshipTypeFromFact` else acquaintance, ~0.6), and named-relationship facts like "my sister Iki" (→ fine-typed, symmetric kinds undirected/bidirectional and asymmetric kinds single-direction with the inverse table deferred to E4.3, ~0.7).
+
+Proposals are NOT live edges: they land in a durable, file-backed proposal store (`social-graph-proposals.json` under companion-data `state/`), strictly out of the live graph until an operator accepts them in Garden (`/graph-proposals`). Acceptance writes the edge through the normal `upsertSocialRelationshipEdge` path (optionally with an operator-adjusted type); rejection persists and blocks re-proposal of the same evidence. Idempotency and rejection-blocking are keyed by an evidence-set hash, so re-running from the same watermark produces no duplicates. A proposal that conflicts with a differently-typed live edge is never auto-resolved — it lands in a `conflict` review state and the operator edge is untouched. Untracked speakers (no contact row, per E3.4) can never enter the graph. Cadence knobs are owned by `scheduler.json` under `socialGraphBuilder` (`intervalMs`, `coPresenceMinSessions`, `coPresenceWindowMinutes`, `scanMemoryLimit`). Each run emits a `memory.social_graph.builder` telemetry event (scanned / proposed / conflicts / skipped-untracked / deduped) — Law 31: results are operator-visible, never silent.
+
 If embeddings change materially, re-embed and validate the store before trusting retrieval quality. Operational steps live in [`docs/operations.md`](./operations.md).
 
 ## Files And Code To Trust
@@ -178,10 +332,13 @@ Start here when behavior matters:
 
 - `src/faculties/memory/types.ts`
 - `src/faculties/memory/store.ts`
+- `src/faculties/memory/postgres-store.ts`
 - `src/faculties/memory/writer.ts`
 - `src/faculties/memory/extraction.ts`
 - `src/faculties/memory/retrieval.ts`
 - `src/faculties/memory/episodic/store.ts`
+- `src/faculties/memory/episodic/postgres-store.ts`
 - `src/faculties/memory/episodic/synthesis.ts`
 - `src/faculties/memory/retrieval/episodic.ts`
 - `src/app/startup/composition/composition.ts`
+- `src/persistence/runtime-factory.ts`

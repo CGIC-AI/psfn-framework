@@ -1,4 +1,4 @@
-import type { CompletionPurpose, CorrelationMetadata, ObservabilityCallType } from '../../shared/contracts/runtime.js';
+import type { CompletionPurpose, CorrelationMetadata, ModelPurpose, ObservabilityCallType } from '../../shared/contracts/runtime.js';
 
 const OBSERVABILITY_CALL_TYPES: ReadonlySet<ObservabilityCallType> = new Set([
   'chat',
@@ -26,7 +26,7 @@ export function normalizeCorrelationValue(value: string | undefined): string | u
 }
 
 export function inferCallType(
-  purpose: CompletionPurpose | 'chat',
+  purpose: CompletionPurpose | ModelPurpose,
   channelId?: string,
 ): ObservabilityCallType {
   const normalizedChannelId = normalizeCorrelationValue(channelId)?.toLowerCase();
@@ -48,6 +48,8 @@ export function inferCallType(
     case 'background':
     case 'import_processing':
     case 'vision':
+    case 'longContext':
+    case 'moa':
     default:
       return 'background';
   }

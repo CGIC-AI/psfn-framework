@@ -5,6 +5,7 @@ import { tagToolWithReversibility } from '../../system/capabilities/safeguards.j
 import type { SubagentControlPort } from './port.js';
 import { textResult, textResultWithError } from '../../core/tools/results.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
+import { getRequestContext } from '../../primitives/llm/request-context.js';
 
 type SubagentToolAction = 'spawn' | 'message' | 'wait' | 'cancel' | 'status';
 
@@ -28,8 +29,9 @@ export function createSubagentTool(port: SubagentControlPort): AgentTool<any> {
     name: 'subagent',
     label: 'subagent',
     description:
-      'Control bounded short-horizon subagents with action=spawn, message, wait, cancel, or status. '
-      + 'Use shard action=spawn for long-horizon or distributed shard work.',
+      'Control bounded short-horizon subagents. action=spawn requires name and task and returns subagent_id; '
+      + 'action=message requires subagent_id and message; wait/cancel/status use subagent_id from spawn or status. '
+      + 'Use status without subagent_id to list visible tasks. Use shard action=spawn for long-horizon or distributed shard work.',
     parameters: Type.Object({
       action: Type.Optional(Type.Union([
         Type.Literal('spawn'),
@@ -75,6 +77,7 @@ export function createSubagentTool(port: SubagentControlPort): AgentTool<any> {
       try {
         switch (action) {
           case 'spawn': {
+            const requestContext = getRequestContext();
             const task = await port.spawn({
               name: normalizeRequiredText(params.name, 'name'),
               task: normalizeRequiredText(params.task, 'task'),
@@ -83,6 +86,15 @@ export function createSubagentTool(port: SubagentControlPort): AgentTool<any> {
               ...(params.capabilities?.length ? { capabilities: params.capabilities } : {}),
               ...(params.required_capabilities?.length
                 ? { requiredCapabilities: params.required_capabilities }
+                : {}),
+              ...(requestContext?.channelId
+                ? {
+                    sourceContext: {
+                      channelId: requestContext.channelId,
+                      ...(requestContext.requestId ? { requestId: requestContext.requestId } : {}),
+                      ...(requestContext.turnId ? { turnId: requestContext.turnId } : {}),
+                    },
+                  }
                 : {}),
             });
             return textResult(formatPayload({
@@ -188,7 +200,23 @@ function formatPayload(payload: Record<string, unknown>): string {
 function normalizeRequiredText(value: string | undefined, field: string): string {
   const normalized = value?.trim();
   if (!normalized) {
-    throw new Error(`${field} is required.`);
+    if (field === 'name' || field === 'task') {
+      throw new Error(
+        `Missing required field "${field}". Minimal valid JSON: {"action":"spawn","name":"short-label","task":"bounded task to run"}.`,
+      );
+    }
+    if (field === 'message') {
+      throw new Error(
+        'Missing required field "message". Minimal valid JSON: {"action":"message","subagent_id":"subagent-1","message":"follow-up instruction"}.',
+      );
+    }
+    if (field === 'subagent_id') {
+      throw new Error(
+        'Missing required field "subagent_id". Use the id returned by action=spawn or action=status. '
+        + 'Minimal valid JSON: {"action":"message","subagent_id":"subagent-1","message":"follow-up instruction"}.',
+      );
+    }
+    throw new Error(`Missing required field "${field}".`);
   }
   return normalized;
 }

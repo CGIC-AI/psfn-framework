@@ -3,6 +3,12 @@
   "memoryRetrievalBudgetPct": 2,
   "moodCongruenceWeight": 0.15,
   "adaptiveContextBudgetsEnabled": false,
+  "wikiRetrievalEnabled": false,
+  "wikiRetrievalChatTokenCap": 1000,
+  "wikiRetrievalGroupTokenCap": 400,
+  "wikiRetrievalFocusTokenCap": 2000,
+  "wikiRetrievalSimilarityThreshold": 0.6,
+  "wikiRetrievalGroupSimilarityThreshold": 0.78,
   "sessionMirrorEnabled": true,
   "sessionMirrorMaxChars": 220,
   "sessionMirrorActiveWindowMs": 1800000,
@@ -20,6 +26,102 @@
   "memoryExtractionMaxWrites": 2,
   "memoryExtractionTelemetryEnabled": true,
   "memoryRetrievalTelemetryEnabled": true,
+  "memoryRefreshFailureAlertThreshold": 3,
+  "groupMemory": {
+    "enabled": true,
+    "memoryMode": "auto",
+    "autoDetection": {
+      "recentParticipantWindowMessages": 75,
+      "recentParticipantWindowMs": 21600000,
+      "minDistinctHumanContacts": 2,
+      "groupCapableChannelTypes": ["discord"],
+      "fallbackModeWhenOneHuman": "direct",
+      "excludeCompanionContact": true,
+      "excludeSystemContacts": true,
+      "excludeApiPrincipals": true,
+      "excludeBotContacts": true,
+      "includeAiCompanions": false
+    },
+    "onlineExtraction": {
+      "observedMessageTriggerCount": 50,
+      "observedTimeTriggerMs": 600000,
+      "maxMessagesPerChunk": 75,
+      "maxEstimatedTokensPerChunk": 12000,
+      "chunkOverlapMessages": 5,
+      "cooldownMs": 120000,
+      "backlogLagTriggerMessages": 100,
+      "maxBacklogChunksPerRun": 2
+    },
+    "salience": {
+      "minImportance": 0.55,
+      "minConfidence": 0.65,
+      "minNovelty": 0.35,
+      "minCandidateScore": 0.7,
+      "maxCandidateSpansPerChunk": 12,
+      "neighboringContextMessages": 2,
+      "reasonWeights": {
+        "companionMention": 0.8,
+        "directAddress": 1,
+        "participantFact": 0.45,
+        "explicitPreference": 0.75,
+        "relationshipClaim": 0.8,
+        "boundarySafety": 0.9,
+        "commitment": 0.75,
+        "emotionalEvent": 0.7,
+        "durablePlan": 0.65
+      },
+      "lowSignalRules": {
+        "enabled": true,
+        "shortMessageMaxChars": 16,
+        "repeatWindowMessages": 12,
+        "repeatThreshold": 3,
+        "lowInformationPenalty": 0.45
+      }
+    },
+    "writeCaps": {
+      "maxWritesPerRun": 8,
+      "maxWritesPerChunk": 4,
+      "maxWritesPerContact": 2,
+      "maxWritesPerSubject": 2,
+      "maxLowSalienceWritesPerRun": 1,
+      "maxWritesPerBackfillRun": 12,
+      "maxWritesPerTimeWindow": 24,
+      "timeWindowMs": 3600000,
+      "lowSalienceThreshold": 0.55,
+      "rankingWeights": {
+        "importance": 1,
+        "novelty": 0.7,
+        "confidence": 0.7,
+        "addressMode": 0.4,
+        "relationshipRelevance": 0.4,
+        "emotionalIntensity": 0.3,
+        "perContactCoverage": 0.5
+      },
+      "addressModeWeights": {
+        "directToCompanion": 1,
+        "mentionOfCompanion": 0.8,
+        "replyToUser": 0.7,
+        "overheardRoomContext": 0.45,
+        "systemApi": 0.2
+      }
+    },
+    "profileRefresh": {
+      "enabled": true,
+      "minAcceptedWritesPerContact": 1,
+      "minSourceMemories": 2,
+      "cooldownMs": 600000
+    },
+    "telemetry": {
+      "enabled": true,
+      "exposeGardenDiagnostics": true
+    },
+    "backfill": {
+      "maxMessagesPerRun": 250,
+      "maxChunksPerRun": 4,
+      "maxLlmCallsPerRun": 4,
+      "cooldownMs": 1800000
+    }
+  },
   "profileSynthesisEnabled": true,
   "profileSynthesisRefreshIntervalMs": 21600000,
   "profileSynthesisCooldownMs": 300000,
@@ -31,7 +133,36 @@
   "profileSynthesisMinSourceMemories": 2,
   "analysisWorkbenchMaxTokens": 76000,
   "analysisWorkbenchMaxWallTimeMs": 300000,
-  "analysisWorkbenchMaxSubQueries": 12,
+  "analysisWorkbenchMaxSubQueries": 24,
+  "observerEvalSidecar": {
+    "enabled": false,
+    "sidecarId": "observer-eval-sidecar",
+    "deploymentTarget": "test_persona",
+    "mode": "observe_only",
+    "queue": {
+      "maxQueuedTurns": 32,
+      "overflowPolicy": "drop_newest",
+      "observerTimeoutMs": 5000,
+      "maxRetries": 0,
+      "retryDelayMs": 0,
+      "shutdownDrainTimeoutMs": 5000
+    },
+    "adapter": {
+      "kind": "disabled",
+      "sessionLabel": "psfn-observer-eval",
+      "agentName": "psfn-companion",
+      "includeWorldState": false
+    },
+    "persistence": {
+      "enabled": false,
+      "retentionDays": 14,
+      "maxStoredObservations": 10000
+    },
+    "garden": {
+      "exposeHealth": true,
+      "exposeTelemetry": true
+    }
+  },
   "importProcessingRouteMode": "background",
   "importProcessingStrictPolicy": false,
   "openRouterModelsApiUrl": "https://openrouter.ai/api/v1/models",

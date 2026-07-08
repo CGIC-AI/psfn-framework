@@ -23,7 +23,7 @@ export async function withPostgresClient<T>(
 }
 
 export async function queryRows<T>(pool: Pool, text: string, values: readonly unknown[] = []): Promise<T[]> {
-  const result = await pool.query(text, values);
+  const result = await pool.query(text, [...values]);
   return result.rows as T[];
 }
 
@@ -31,4 +31,3 @@ export async function queryOne<T>(pool: Pool, text: string, values: readonly unk
   const rows = await queryRows<T>(pool, text, values);
   return rows[0];
 }
-

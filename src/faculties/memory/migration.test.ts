@@ -1,10 +1,48 @@
-import Database from 'better-sqlite3';
-import * as sqliteVec from 'sqlite-vec';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import type { Pool, PoolClient, QueryResult } from 'pg';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { EmbeddingProviderPort } from '../../core/agent/contracts.js';
-import { MemoryStore } from './store.js';
-import { migrateMemoryEmbeddings } from './migration.js';
-import type { PurrMemory } from './types.js';
+import {
+  migratePostgresMemoryEmbeddings,
+  runRetrievalValidation,
+} from './migration.js';
+
+const postgresMocks = vi.hoisted(() => {
+  const pool = {
+    end: vi.fn(async () => undefined),
+  };
+  const clientQueries: Array<{ text: string; values: readonly unknown[] }> = [];
+  const client = {
+    query: vi.fn(async (text: string, values: readonly unknown[] = []) => {
+      clientQueries.push({ text, values });
+      return {
+        rows: [],
+        command: 'OK',
+        rowCount: 1,
+        oid: 0,
+        fields: [],
+      } as QueryResult;
+    }),
+  };
+
+  return {
+    pool,
+    client,
+    clientQueries,
+    createPostgresPool: vi.fn(() => pool),
+    ensurePostgresSchema: vi.fn(async () => undefined),
+    queryRows: vi.fn(async () => []),
+    withPostgresClient: vi.fn(async (_pool: unknown, handler: (client: PoolClient) => Promise<unknown>) => (
+      await handler(client as unknown as PoolClient)
+    )),
+  };
+});
+
+vi.mock('../../persistence/postgres.js', () => ({
+  createPostgresPool: postgresMocks.createPostgresPool,
+  ensurePostgresSchema: postgresMocks.ensurePostgresSchema,
+  queryRows: postgresMocks.queryRows,
+  withPostgresClient: postgresMocks.withPostgresClient,
+}));
 
 const TEST_DIMS = 2;
 
@@ -44,10 +82,7 @@ class CountingEmbeddingService implements EmbeddingProviderPort {
       if (this.delayMs > 0) {
         await new Promise(resolve => setTimeout(resolve, this.delayMs));
       }
-      return texts.map(text => {
-        const vector = this.encoder(text);
-        return new Float32Array(vector);
-      });
+      return texts.map(text => new Float32Array(this.encoder(text)));
     } finally {
       this.inFlight -= 1;
     }
@@ -69,124 +104,85 @@ const IMPROVED_VECTORS: Record<ReturnType<typeof classifySemanticKey>, readonly 
   other: [0, -1],
 };
 
-const LEGACY_VECTORS: Record<ReturnType<typeof classifySemanticKey>, readonly [number, number]> = {
-  cats: [0, 1],
-  space: [-1, 0],
-  bread: [1, 0],
-  other: [0, -1],
-};
-
 function improvedEncoder(text: string): readonly number[] {
   return IMPROVED_VECTORS[classifySemanticKey(text)];
 }
 
-function legacyEncoder(text: string): readonly number[] {
-  return LEGACY_VECTORS[classifySemanticKey(text)];
-}
-
-function makeMemory(id: string, text: string): PurrMemory {
-  const now = Date.now();
-  return {
-    id,
-    text,
-    type: 'semantic',
-    importance: 0.7,
-    confidence: 0.8,
-    emotionalValence: 0,
-    salience: 0.7,
-    sourceRef: 'test:memory-migration',
-    extractedAt: now,
-    lastAccessed: now,
-    accessCount: 1,
-    tags: ['migration-test'],
-    sensitivity: 'personal',
-  };
-}
-
-function readEmbedding(db: Database.Database, memoryId: string): Float32Array {
-  const row = db.prepare(`
-    SELECT embedding
-    FROM l2_memory_embeddings
-    WHERE memory_id = ?
-    LIMIT 1
-  `).get(memoryId) as { embedding: Buffer } | undefined;
-  if (!row) {
-    throw new Error(`Missing embedding row for memory ${memoryId}`);
+function readFloatVector(buffer: Buffer): number[] {
+  const values: number[] = [];
+  for (let index = 0; index < buffer.byteLength; index += Float32Array.BYTES_PER_ELEMENT) {
+    values.push(buffer.readFloatLE(index));
   }
-
-  const data = row.embedding;
-  const out = new Float32Array(data.byteLength / Float32Array.BYTES_PER_ELEMENT);
-  for (let idx = 0; idx < out.length; idx++) {
-    out[idx] = data.readFloatLE(idx * Float32Array.BYTES_PER_ELEMENT);
-  }
-  return out;
+  return values;
 }
 
-describe('migrateMemoryEmbeddings', () => {
-  let db: Database.Database;
-  let store: MemoryStore;
+beforeEach(() => {
+  postgresMocks.pool.end.mockClear();
+  postgresMocks.client.query.mockClear();
+  postgresMocks.clientQueries.length = 0;
+  postgresMocks.createPostgresPool.mockClear();
+  postgresMocks.ensurePostgresSchema.mockClear();
+  postgresMocks.queryRows.mockReset();
+  postgresMocks.queryRows.mockResolvedValue([]);
+  postgresMocks.withPostgresClient.mockClear();
+});
 
-  beforeEach(() => {
-    db = new Database(':memory:');
-    sqliteVec.load(db);
-    store = new MemoryStore(db, TEST_DIMS);
-  });
-
-  afterEach(() => {
-    db.close();
-  });
-
-  it('re-embeds all rows in configured batch sizes', async () => {
-    const legacy = new CountingEmbeddingService(legacyEncoder);
+describe('migratePostgresMemoryEmbeddings', () => {
+  it('re-embeds all Postgres rows in configured batch sizes', async () => {
+    postgresMocks.queryRows.mockResolvedValue([
+      { id: 'm-1', text: 'cat purr memory' },
+      { id: 'm-2', text: 'rocket telemetry memory' },
+      { id: 'm-3', text: 'bread recipe memory' },
+      { id: 'm-4', text: 'cat comfort memory' },
+      { id: 'm-5', text: 'space station memory' },
+    ]);
     const fresh = new CountingEmbeddingService(improvedEncoder);
 
-    const records = [
-      makeMemory('m-1', 'cat purr memory'),
-      makeMemory('m-2', 'rocket telemetry memory'),
-      makeMemory('m-3', 'bread recipe memory'),
-      makeMemory('m-4', 'cat comfort memory'),
-      makeMemory('m-5', 'space station memory'),
-    ];
-
-    for (const memory of records) {
-      store.insertMemory(memory, await legacy.embed(memory.text));
-    }
-
-    const result = await migrateMemoryEmbeddings(db, fresh, {
+    const result = await migratePostgresMemoryEmbeddings(' postgres://memory ', fresh, {
       batchSize: 2,
       parallelism: 1,
     });
 
-    expect(result.total).toBe(5);
-    expect(result.processed).toBe(5);
-    expect(result.updated).toBe(5);
-    expect(result.failed).toBe(0);
+    expect(postgresMocks.createPostgresPool).toHaveBeenCalledWith('postgres://memory', {
+      applicationName: 'psfn-memory-embedding-migration',
+      allowExitOnIdle: true,
+    });
+    expect(postgresMocks.ensurePostgresSchema).toHaveBeenCalledWith(
+      postgresMocks.pool as unknown as Pool,
+      expect.any(Array),
+    );
+    expect(postgresMocks.queryRows.mock.calls[0]?.[1]).toContain('WHERE deleted_at IS NULL');
+    expect(result).toMatchObject({
+      total: 5,
+      processed: 5,
+      updated: 5,
+      failed: 0,
+      batchSize: 2,
+      parallelism: 1,
+      failures: [],
+    });
     expect(fresh.batches.map(batch => batch.length)).toEqual([2, 2, 1]);
-
-    const migrated = Array.from(readEmbedding(db, 'm-1'));
-    expect(migrated).toEqual([1, 0]);
+    expect(postgresMocks.clientQueries).toHaveLength(5);
+    expect(postgresMocks.clientQueries[0]).toMatchObject({
+      values: ['m-1', '[1,0]'],
+    });
+    expect(postgresMocks.pool.end).toHaveBeenCalledTimes(1);
   });
 
   it('caps worker concurrency to configured parallelism', async () => {
-    const legacy = new CountingEmbeddingService(legacyEncoder);
+    postgresMocks.queryRows.mockResolvedValue([
+      { id: 'm-a', text: 'cat memory one' },
+      { id: 'm-b', text: 'cat memory two' },
+      { id: 'm-c', text: 'cat memory three' },
+      { id: 'm-d', text: 'cat memory four' },
+      { id: 'm-e', text: 'cat memory five' },
+      { id: 'm-f', text: 'cat memory six' },
+    ]);
     const fresh = new CountingEmbeddingService(improvedEncoder, TEST_DIMS, {
       delayMs: 10,
     });
 
-    const records = [
-      makeMemory('m-a', 'cat memory one'),
-      makeMemory('m-b', 'cat memory two'),
-      makeMemory('m-c', 'cat memory three'),
-      makeMemory('m-d', 'cat memory four'),
-      makeMemory('m-e', 'cat memory five'),
-      makeMemory('m-f', 'cat memory six'),
-    ];
-
-    for (const memory of records) {
-      store.insertMemory(memory, await legacy.embed(memory.text));
-    }
-
-    const result = await migrateMemoryEmbeddings(db, fresh, {
+    const result = await migratePostgresMemoryEmbeddings('postgres://memory', fresh, {
       batchSize: 1,
       parallelism: 3,
     });
@@ -196,38 +192,37 @@ describe('migrateMemoryEmbeddings', () => {
     expect(fresh.maxConcurrent).toBeGreaterThan(1);
     expect(fresh.maxConcurrent).toBeLessThanOrEqual(3);
   });
+});
 
-  it('runs pre/post retrieval validation for test queries', async () => {
-    const legacy = new CountingEmbeddingService(legacyEncoder);
-    const improved = new CountingEmbeddingService(improvedEncoder);
+describe('runRetrievalValidation', () => {
+  it('summarizes retrieval hits from the prepared vector query', async () => {
+    const embeddingService = new CountingEmbeddingService(improvedEncoder);
+    const db = {
+      prepare: () => ({
+        all: (embedding: Buffer, topK: number) => {
+          const [x, y] = readFloatVector(embedding);
+          const memoryId = x === 1 ? 'm-cats' : y === 1 ? 'm-space' : 'm-other';
+          return [{ memory_id: memoryId, distance: topK === 1 ? 0.1 : 0.2 }];
+        },
+      }),
+    };
 
-    const records = [
-      makeMemory('m-cats', 'cat purr profile'),
-      makeMemory('m-space', 'rocket launch profile'),
-      makeMemory('m-bread', 'bread baking profile'),
-    ];
+    const report = await runRetrievalValidation(db, embeddingService, [
+      { query: 'cat memory recall', expectedMemoryIds: ['m-cats'] },
+      { query: 'space launch memory recall', expectedMemoryIds: ['m-space'] },
+    ], 1);
 
-    for (const memory of records) {
-      store.insertMemory(memory, await legacy.embed(memory.text));
-    }
-
-    const result = await migrateMemoryEmbeddings(db, improved, {
-      batchSize: 2,
-      parallelism: 2,
-      validationTopK: 1,
-      validationQueries: [
-        { query: 'cat memory recall', expectedMemoryIds: ['m-cats'] },
-        { query: 'space launch memory recall', expectedMemoryIds: ['m-space'] },
-        { query: 'bread baking memory recall', expectedMemoryIds: ['m-bread'] },
-      ],
+    expect(report).toMatchObject({
+      status: 'ok',
+      topK: 1,
+      queryCount: 2,
+      expectedQueryCount: 2,
+      hitRate: 1,
+      meanReciprocalRank: 1,
     });
-
-    expect(result.validation).toBeDefined();
-    expect(result.validation?.pre.status).toBe('ok');
-    expect(result.validation?.post.status).toBe('ok');
-    expect(result.validation?.pre.hitRate).toBe(0);
-    expect(result.validation?.post.hitRate).toBe(1);
-    expect(result.validation?.pre.meanReciprocalRank).toBe(0);
-    expect(result.validation?.post.meanReciprocalRank).toBe(1);
+    expect(report.details.map(detail => detail.topMemoryIds)).toEqual([
+      ['m-cats'],
+      ['m-space'],
+    ]);
   });
 });

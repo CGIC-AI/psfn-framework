@@ -1,3 +1,4 @@
+import { isRecord } from '../../shared/utils/types.js';
 import {
   deriveMaskedToolObservationContextSummary,
   deriveToolObservationContextShape,
@@ -38,9 +39,6 @@ const DEFAULT_TOOL_OBSERVATION_CONTENT = '(no text tool output)';
 const MAX_TOOL_OBSERVATION_CONTENT_CHARS = 4_000;
 export const MASKED_TOOL_OBSERVATION_CONTENT = '__masked_tool_observation__';
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
 
 function parseMetadataEnvelope(metadata: string | undefined): SessionMetadataEnvelope {
   if (!metadata) return {};

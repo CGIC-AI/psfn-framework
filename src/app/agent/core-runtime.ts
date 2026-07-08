@@ -1,9 +1,6 @@
-import type Database from 'better-sqlite3';
 import type { CoreSubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type { EventBus } from '../../shared/event-bus.js';
-import { MemoryStore } from '../../faculties/memory/store.js';
-import { MemoryJournal } from '../../faculties/memory/journal.js';
-import { EpisodicStore } from '../../faculties/memory/episodic/index.js';
+import type { EpisodicStorePort } from '../../faculties/memory/episodic/index.js';
 import {
   createMemoryStorePort,
   type CoreMemoryStorePort,
@@ -27,11 +24,22 @@ import type {
   IntentionBehavioralPatternHooks,
   IntentionRuntimeProviders,
 } from '../../core/intention/runtime-wiring.js';
-import { composeSessionRuntimeAsync, composeSubstrateAgent, wireCoreMemoryRuntime, wireMemoryRuntime, wireSelfModelRuntime } from '../startup/composition/composition.js';
+import {
+  composeFatigueBudgetRuntime,
+  composeSessionRuntimeAsync,
+  composeSubstrateAgent,
+  type FatigueBudgetComposition,
+  wireDiagnosticsRuntime,
+  wireCoreMemoryRuntime,
+  wireMemoryRuntime,
+  wireSelfModelRuntime,
+} from '../startup/composition/composition.js';
 import { wirePromptRuntime, wireCharacterCardRuntime, wireStaticPromptRegistry, wireSettingsRuntime, wireSessionToolsRuntime, buildCharacterPromptVariablesProvider } from '../startup/composition/parity.js';
-import { registerContactRuntime, wireContactRuntime } from '../../core/contacts/runtime-wiring.js';
+import { registerContactRuntime } from '../../core/contacts/runtime-wiring.js';
+import type { ContactRuntimeOptions } from '../../core/contacts/runtime-wiring.js';
 import type { ContactStorePort } from '../../core/contacts/contact-store-port.js';
 import { wireSkillsRuntime } from '../../faculties/skills/runtime-wiring.js';
+import { wireWikiRuntime } from '../../faculties/wiki/runtime-wiring.js';
 import { registerFilesystemTools } from '../../boundary/integrations/filesystem/runtime-wiring.js';
 import { GatewayFilesystemOps } from '../../boundary/integrations/filesystem/gateway-ops.js';
 import { registerImageTools } from '../../primitives/images/runtime-wiring.js';
@@ -44,9 +52,10 @@ import { createWebSearchQueryJson } from '../../boundary/integrations/web/search
 import {
   createIntentionAppraisalHooks,
   createIntentionBehavioralPatternHooks,
-  wireIntentionRuntime,
   wireIntentionRuntimeStores,
 } from '../../core/intention/runtime-wiring.js';
+import { createAutomatedConcernRuntime } from '../../core/intention/concern-candidates.js';
+import { createDefaultConcernRouteDispatcher } from './concern-route-wiring.js';
 import { createIdentityCoolingOffManagerFromEnv } from '../../system/capabilities/safeguards.js';
 import { composeSystemPromptTemplate } from '../../core/identity/loader.js';
 import {
@@ -54,24 +63,42 @@ import {
   type PromptStatePort,
 } from '../../core/identity/prompt-state-port.js';
 import type { CharacterCardVersionStore } from '../../core/identity/card-versioning.js';
+import { createPersonaPreambleService, type PersonaPreamblePort } from '../../core/identity/persona-preamble.js';
 import type { SubstrateAgent } from '../../core/agent/substrate-agent.js';
-import { createPromptGenerationFailureAlertHandler } from '../startup/support/operator-alerts.js';
+import type { ContactTrackingGate } from '../../core/contacts/tracking-gate.js';
+import {
+  createActiveMemoryRefreshFailureAlertHandler,
+  createPromptGenerationFailureAlertHandler,
+  isPromptGenerationFailureAlertConfigured,
+} from '../startup/support/operator-alerts.js';
+import { createAppCacheFromEnv } from '../../shared/cache/runtime.js';
+import type { AppCache } from '../../shared/cache/types.js';
 import type { NotificationPort } from '../../core/tools/ntfy.js';
+import { createObserverEvalSidecarRuntimeFromConfig } from '../../core/eval/observer-sidecar/config.js';
+import type { ObserverEvalSidecarRuntime } from '../../core/eval/observer-sidecar/types.js';
 import {
   resolveContactsDir,
-  resolveMemoryJournalPath,
-  resolveNotesDir,
   resolvePersonalSkillsDir,
-  resolveScratchpadMirrorPath,
 } from '../../persistence/layout.js';
+import { createSelfStatusTool } from '../../core/tools/self-status.js';
+import {
+  createPostgresModelUsageStoreFromConfig,
+  type PostgresModelUsageStore,
+} from '../../persistence/postgres/model-usage-store.js';
+import type { ModelUsageQueryPort } from '../../shared/telemetry/model-usage.js';
+import {
+  createToolConformanceRunner,
+  type ToolConformanceRunner,
+} from '../../core/agent/tool-conformance/runner.js';
+import { getObserverEvalSidecarHealthSnapshot } from '../../core/eval/observer-sidecar/runtime.js';
 
 export interface AgentCoreRuntimeOptions {
   config: CoreSubstrateConfig;
   pathSnapshot: RuntimePathSnapshot;
   eventBus: EventBus;
   gateway: GatewayClient;
-  db?: Database.Database | null;
   memoryStore?: MemoryStorePort;
+  episodicStore?: EpisodicStorePort | null;
   contactStore?: ContactStorePort;
   card: CharacterCardV2;
   systemPrompt: string;
@@ -85,6 +112,8 @@ export interface AgentCoreRuntimeOptions {
   identityCoolingOff?: ReturnType<typeof createIdentityCoolingOffManagerFromEnv>;
   primaryUserId?: string;
   primaryTelegramUserId?: string;
+  /** Contact-tracking policy gate (E3.4). Absent gate behaves as 'auto' everywhere. */
+  contactTrackingGate?: ContactTrackingGate | null;
 }
 
 export interface AgentCoreRuntime {
@@ -99,8 +128,14 @@ export interface AgentCoreRuntime {
   intentionRuntime: IntentionRuntimeWiring;
   intentionAppraisalHooks: IntentionAppraisalHooks;
   intentionBehavioralHooks: IntentionBehavioralPatternHooks;
+  observerEvalSidecar: ObserverEvalSidecarRuntime;
   memoryExtractor: MemoryExtractor;
+  personaPreamble: PersonaPreamblePort;
   imageVisionReviewer: DefaultImageVisionReviewer;
+  appCache: AppCache;
+  fatigueBudget: FatigueBudgetComposition['fatigueBudget'];
+  fatigueLedger: FatigueBudgetComposition['fatigueLedger'];
+  toolConformanceRunner: ToolConformanceRunner;
 }
 
 export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): Promise<AgentCoreRuntime> {
@@ -121,11 +156,21 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
     primaryTelegramUserId,
     intentionProviders,
   } = options;
-  const db = options.db ?? null;
+  const contactTrackingGate = options.contactTrackingGate ?? null;
+  const episodicStore = options.episodicStore ?? (() => {
+    throw new Error('PostgreSQL core runtime requires an injected episodic store');
+  })();
+  const invalidatePromptCache = (reason: string): void => {
+    config.runtimeHooks?.invalidatePromptPrefixCache?.(reason);
+  };
 
-  const promptRegistry = wireStaticPromptRegistry(pathSnapshot.companionDataDir);
+  const promptRegistry = wireStaticPromptRegistry(pathSnapshot.companionDataDir, {
+    invalidatePromptCache,
+  });
+  const appCache = await createAppCacheFromEnv();
   const llmProvider = createLLMProviderPort(gateway);
   const gatewayOps = createGatewayOpsPortFromClient(gateway);
+  const observerEvalSidecar = createObserverEvalSidecarRuntimeFromConfig(config);
   const sessionComposition = await composeSessionRuntimeAsync({
     config,
     eventBus,
@@ -133,21 +178,24 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
     promptRegistry,
     sessionIntegrityProvider: gateway.createSessionIntegrityProvider(),
   });
+  const fatigueRuntime = composeFatigueBudgetRuntime({ config, eventBus });
   const { sessionStore, sessionManager } = sessionComposition;
   sessionManager.characterName = card.data.name;
 
   const memoryStore = options.memoryStore
     ? createMemoryStorePort(options.memoryStore)
     : (() => {
-      if (!db) {
-        throw new Error('SQLite memory fallback requires an initialized database handle');
-      }
-      return createMemoryStorePort(new MemoryStore(db, gateway.dims, {
-        notesDir: resolveNotesDir(pathSnapshot.companionDataDir),
-        scratchpadMirrorPath: resolveScratchpadMirrorPath(pathSnapshot.companionDataDir),
-        journal: new MemoryJournal(resolveMemoryJournalPath(pathSnapshot.companionDataDir)),
-      }));
+      throw new Error('PostgreSQL core runtime requires an injected memory store');
     })();
+
+  const characterPromptVariablesProvider = buildCharacterPromptVariablesProvider(cardVersionStore);
+  // E6.1: one shared persona preamble service. Its template + per-subsystem
+  // labels/instructions are operator-editable through the prompt registry; the
+  // companion name and compressed persona derive from the live character card.
+  const personaPreamble = createPersonaPreambleService({
+    registry: promptRegistry,
+    personaVariables: characterPromptVariablesProvider,
+  });
 
   const agentLoop = composeSubstrateAgent({
     eventBus,
@@ -155,19 +203,83 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
     sessionManager,
     systemPrompt,
     characterName: card.data.name,
-    characterPromptVariablesProvider: buildCharacterPromptVariablesProvider(cardVersionStore),
+    characterPromptVariablesProvider,
     config,
     runtimeMode: 'gateway',
     streamTransport: {
       stream: gateway.stream.bind(gateway),
     },
     streamRuntimeOptions: {
-      onTerminalFailure: createPromptGenerationFailureAlertHandler(operatorNotifier, card.data.name),
+      onTerminalFailure: createPromptGenerationFailureAlertHandler(operatorNotifier, card.data.name, {
+        enabled: isPromptGenerationFailureAlertConfigured(process.env),
+      }),
     },
+    fatigueBudget: fatigueRuntime.fatigueBudget,
     emotionRuntime,
+    observerEvalSidecar,
+    appCache,
+    contactTrackingGate,
   });
   agentLoop.scratchpadProvider = memoryStore;
   agentLoop.setCapabilityRuntime(capabilityRuntime);
+  wireDiagnosticsRuntime(eventBus);
+  // E5.5: persistent active-memory refresh failure raises an operator alert
+  // through the system-derived gateway notification path. The threshold is
+  // config-owned (settings.json memoryRefreshFailureAlertThreshold) and the
+  // handler factory fails closed on a missing or invalid value.
+  eventBus.on(
+    'memory.active_context.refresh',
+    createActiveMemoryRefreshFailureAlertHandler({
+      notifier: operatorNotifier,
+      companionName: card.data.name,
+      failureThreshold: config.memoryRefreshFailureAlertThreshold,
+      enabled: isPromptGenerationFailureAlertConfigured(process.env),
+    }),
+  );
+  // Lazily construct a read-only model-usage query port on first `diagnose`
+  // call. Deferring avoids an idle pool and a startup migration race with the
+  // gateway-side recorder; it fails closed to null on non-postgres backends.
+  let cachedModelUsageStore: PostgresModelUsageStore | null | undefined;
+  const getModelUsageQuery = (): ModelUsageQueryPort | null => {
+    if (cachedModelUsageStore === undefined) {
+      cachedModelUsageStore = createPostgresModelUsageStoreFromConfig(config);
+    }
+    return cachedModelUsageStore;
+  };
+  const runtimePathLayout = pathSnapshot.runtimePathLayout;
+  // Tool-surface conformance runner. getToolCatalog is a lazy closure evaluated
+  // at run time, so it reflects the full tool set even though the sweep is
+  // triggered long after this registration point.
+  const toolConformanceRunner = createToolConformanceRunner({
+    getToolCatalog: () => agentLoop.getToolCatalog(),
+    systemDataDir: pathSnapshot.systemDataDir,
+  });
+  agentLoop.registerTool(createSelfStatusTool({
+    config,
+    getCapabilityTier: () => capabilityRuntime.getTier(),
+    getAdaptiveToolRuntimeState: () => agentLoop.getAdaptiveToolRuntimeState(),
+    getToolCatalogSnapshot: () => agentLoop.getToolCatalogSnapshot(),
+    getToolHealthStatusByName: () => agentLoop.getToolHealthStatusByName(),
+    getObserverEvalSidecarHealth: () => getObserverEvalSidecarHealthSnapshot(observerEvalSidecar),
+    getMemoryStats: () => memoryStore.getStats(),
+    listRecentSessions: (limit) => sessionManager.listRecentSessions(limit),
+    getStreamingState: () => agentLoop.isStreaming,
+    logsDir: pathSnapshot.runtimePathLayout.logsDir,
+    diagnosis: {
+      env: process.env,
+      paths: {
+        systemDataDir: pathSnapshot.systemDataDir,
+        companionDataDir: pathSnapshot.companionDataDir,
+        workspacePath: pathSnapshot.workspacePath,
+        logsDir: runtimePathLayout.logsDir,
+        tempDir: runtimePathLayout.tempDir,
+        backupsDir: runtimePathLayout.backupsDir,
+      },
+      repoRoot: process.cwd(),
+      getModelUsageQuery,
+    },
+    runConformance: (trigger) => toolConformanceRunner.run(trigger),
+  }), 'core');
 
   const skillsRuntime = wireSkillsRuntime(agentLoop, {
     dataDir: pathSnapshot.systemDataDir,
@@ -180,6 +292,15 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
     searchQueryJson: createWebSearchQueryJson(llmProvider),
   });
   registerFilesystemTools(agentLoop, new GatewayFilesystemOps(gatewayOps), { gatewayMode: true });
+  const wikiRuntime = await wireWikiRuntime(agentLoop, pathSnapshot.workspaceRoot, {
+    ...(config.postgresDatabaseUrl?.trim() ? { databaseUrl: config.postgresDatabaseUrl.trim() } : {}),
+    embedding: gateway,
+    eventBus,
+    getConfig: () => config,
+  });
+  // E8.3: attach the supplemental wiki RAG provider (null when the projection
+  // is unavailable); pre-turn assembly consults it AFTER memory context.
+  agentLoop.wikiRetrieval = wikiRuntime.retrievalService;
   const imageVisionReviewer = new DefaultImageVisionReviewer(config, {
     binaryFetcher: gateway.webFetchBinary.bind(gateway),
     llmProvider,
@@ -199,6 +320,7 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
       confirmationQueue: cardProposalQueue,
       identityCoolingOff,
       getCapabilityTier: () => capabilityRuntime.getTier(),
+      invalidatePromptCache,
     },
   );
   wireCharacterCardRuntime(agentLoop, cardVersionStore, {
@@ -206,9 +328,12 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
     confirmationQueue: cardProposalQueue,
   });
   wireSettingsRuntime(agentLoop, config, { registerSystemTool: false });
-  wireSessionToolsRuntime(agentLoop, sessionManager, pathSnapshot.companionDataDir, gateway);
-  const contactRuntimeOptions = {
+  wireSessionToolsRuntime(agentLoop, sessionManager, pathSnapshot.companionDataDir, gateway, promptRegistry);
+  const contactRuntimeOptions: ContactRuntimeOptions = {
     exportDir: resolveContactsDir(pathSnapshot.companionDataDir),
+    // Reuse the shared confirmation queue (also used by card/module proposals)
+    // so trusted-tier promotion proposals surface on the Garden Confirmations page.
+    proposalQueue: cardProposalQueue,
     ...(primaryTelegramUserId
       ? {
           bootstrapPrimaryIdentityLinks: [{
@@ -219,32 +344,23 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
         }
       : {}),
   };
-  const contactStore = options.contactStore
-    ? await registerContactRuntime(agentLoop, options.contactStore, primaryUserId, contactRuntimeOptions)
-    : await (() => {
-      if (!db) {
-        throw new Error('Contact runtime requires an injected ContactStorePort for non-sqlite backends');
-      }
-      return wireContactRuntime(
-        agentLoop,
-        db,
-        primaryUserId,
-        contactRuntimeOptions,
-      );
-    })();
-  const intentionRuntime = options.intentionRuntime ?? (() => {
-    if (!db) {
-      throw new Error('Intention runtime requires injected persistence stores for non-sqlite backends');
-    }
-    return wireIntentionRuntime(agentLoop, db);
-  })();
-  if (options.intentionRuntime) {
-    wireIntentionRuntimeStores(agentLoop, options.intentionRuntime, intentionProviders ?? {
-      concernProvider: null,
-      pendingFollowUpProvider: null,
-      behavioralPatternProvider: null,
-    });
+  if (!options.contactStore) {
+    throw new Error('PostgreSQL core runtime requires an injected contact store');
   }
+  const contactStore = await registerContactRuntime(
+    agentLoop,
+    options.contactStore,
+    primaryUserId,
+    contactRuntimeOptions,
+  );
+  const intentionRuntime = options.intentionRuntime ?? (() => {
+    throw new Error('PostgreSQL core runtime requires injected intention persistence stores');
+  })();
+  wireIntentionRuntimeStores(agentLoop, intentionRuntime, intentionProviders ?? {
+    concernProvider: null,
+    pendingFollowUpProvider: null,
+    behavioralPatternProvider: null,
+  });
   const coreMemoryStore = wireCoreMemoryRuntime({
     agentLoop,
     sessionManager,
@@ -259,6 +375,17 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
   const intentionBehavioralHooks = createIntentionBehavioralPatternHooks(
     intentionRuntime.behavioralPatternTracker,
   );
+  const concernRouteDispatcher = createDefaultConcernRouteDispatcher({
+    companionDataDir: pathSnapshot.companionDataDir,
+    eventBus,
+  });
+  const automatedConcernRuntime = createAutomatedConcernRuntime({
+    eventBus,
+    llmProvider,
+    concernStore: intentionRuntime.concernStore,
+    personaPreamble,
+    routeDispatcher: concernRouteDispatcher,
+  });
   const memoryExtractor = wireMemoryRuntime({
     agentLoop,
     llmProvider,
@@ -270,7 +397,12 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
     config,
     promptRegistry,
     contactStore,
-    episodicStore: db ? new EpisodicStore(db) : null,
+    episodicStore,
+    concernCandidateSink: automatedConcernRuntime.extractionSink,
+    isAutoContactCreationAllowed: contactTrackingGate
+      ? (channelId: string) => contactTrackingGate.isAutoContactCreationAllowed(channelId)
+      : null,
+    personaPreamble,
   });
   const promptState = createPromptStatePort({
     layers: promptStore,
@@ -289,7 +421,13 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
     intentionRuntime,
     intentionAppraisalHooks,
     intentionBehavioralHooks,
+    observerEvalSidecar,
     memoryExtractor,
+    personaPreamble,
     imageVisionReviewer,
+    appCache,
+    fatigueBudget: fatigueRuntime.fatigueBudget,
+    fatigueLedger: fatigueRuntime.fatigueLedger,
+    toolConformanceRunner,
   };
 }

@@ -10,12 +10,22 @@ interface ActiveConcernRow {
   text: string;
   priority: string;
   source: string;
+  status: string | null;
   created_at: string;
   expires_at: string;
+  salience: number | null;
+  sensitivity: string | null;
+  owner: string | null;
+  evidence_refs: unknown;
+  resolution_evidence_refs: unknown;
   resolved_at: string | null;
   resolution_outcome: string | null;
   contact_id: string | null;
   formation_vad: unknown;
+  last_reviewed_at: string | null;
+  next_review_at: string | null;
+  merged_from_ids: unknown;
+  split_from_id: string | null;
 }
 
 interface PendingFollowUpRow {
@@ -85,27 +95,68 @@ class FakeIntentionPool {
     const normalized = text.replace(/\s+/g, ' ').trim();
 
     if (normalized.startsWith('INSERT INTO active_concerns')) {
-      const [id, textValue, priority, source, createdAt, expiresAt, contactId, formationVAD] = values as [
+      const [
+        id,
+        textValue,
+        priority,
+        source,
+        status,
+        createdAt,
+        expiresAt,
+        salience,
+        sensitivity,
+        owner,
+        evidenceRefs,
+        resolutionEvidenceRefs,
+        resolvedAt,
+        contactId,
+        formationVAD,
+        lastReviewedAt,
+        nextReviewAt,
+        mergedFromIds,
+        splitFromId,
+      ] = values as [
         string,
         string,
         string,
         string,
         string,
+        string,
+        string,
+        number,
+        string,
+        string,
+        unknown,
+        unknown,
+        string | null,
+        string | null,
+        unknown,
         string,
         string | null,
         unknown,
+        string | null,
       ];
       this.activeConcerns.set(id, {
         id,
         text: textValue,
         priority,
         source,
+        status,
         created_at: createdAt,
         expires_at: expiresAt,
-        resolved_at: null,
+        salience,
+        sensitivity,
+        owner,
+        evidence_refs: evidenceRefs,
+        resolution_evidence_refs: resolutionEvidenceRefs,
+        resolved_at: resolvedAt,
         resolution_outcome: null,
         contact_id: contactId,
         formation_vad: formationVAD,
+        last_reviewed_at: lastReviewedAt,
+        next_review_at: nextReviewAt,
+        merged_from_ids: mergedFromIds,
+        split_from_id: splitFromId,
       });
       return { rows: [this.activeConcerns.get(id)! as Row] };
     }
@@ -131,27 +182,77 @@ class FakeIntentionPool {
     }
 
     if (normalized.includes('FROM active_concerns') && normalized.includes('ORDER BY CASE priority')) {
-      const [asOf, maybeContactId, maybeLimit] = values as [string, string | number, number | undefined];
-      const contactId = typeof maybeLimit === 'number' ? (typeof maybeContactId === 'string' ? maybeContactId : undefined) : undefined;
-      const limit = typeof maybeLimit === 'number' ? maybeLimit : Number(maybeContactId);
+      const filtersExpired = normalized.includes('expires_at >');
+      const filtersResolved = normalized.includes('resolved_at IS NULL');
+      const maybeAsOf = filtersExpired ? values[0] as string : undefined;
+      const maybeContactId = values.length === (filtersExpired ? 3 : 2)
+        ? values[filtersExpired ? 1 : 0]
+        : undefined;
+      const contactId = typeof maybeContactId === 'string' ? maybeContactId : undefined;
+      const limit = Number(values[values.length - 1]);
       const rows = [...this.activeConcerns.values()]
-        .filter((row) => row.resolved_at === null)
-        .filter((row) => row.expires_at > asOf)
+        .filter((row) => !filtersResolved || row.resolved_at === null)
+        .filter((row) => !filtersResolved || (row.status !== 'resolved' && row.status !== 'dismissed' && row.status !== 'suppressed'))
+        .filter((row) => !maybeAsOf || row.expires_at > maybeAsOf)
         .filter((row) => !contactId || row.contact_id === null || row.contact_id === contactId)
         .sort((left, right) => concernSort(left, right))
-        .slice(0, Number(limit))
+        .slice(0, limit)
         .map(row => row as Row);
       return { rows };
     }
 
     if (normalized.startsWith('UPDATE active_concerns')) {
-      const [id, resolvedAt, resolutionOutcome] = values as [string, string, string | null];
-      const row = this.activeConcerns.get(id);
-      if (!row || row.resolved_at !== null) {
+      const row = this.activeConcerns.get(values[0] as string);
+      if (!row) {
         return { rows: [] };
       }
-      row.resolved_at = resolvedAt;
-      row.resolution_outcome = resolutionOutcome;
+      if (normalized.includes('SET status = $2')) {
+        const [
+          ,
+          status,
+          resolvedAt,
+          resolutionOutcome,
+          lastReviewedAt,
+          nextReviewAt,
+          salience,
+          evidenceRefs,
+          resolutionEvidenceRefs,
+        ] = values as [string, string, string | null, string | null, string, string | null, number, unknown, unknown];
+        row.status = status;
+        row.resolved_at = resolvedAt;
+        row.resolution_outcome = resolutionOutcome;
+        row.last_reviewed_at = lastReviewedAt;
+        row.next_review_at = nextReviewAt;
+        row.salience = salience;
+        row.evidence_refs = evidenceRefs;
+        row.resolution_evidence_refs = resolutionEvidenceRefs;
+        return { rows: [row as Row] };
+      }
+      const [
+        ,
+        priority,
+        status,
+        expiresAt,
+        salience,
+        sensitivity,
+        owner,
+        evidenceRefs,
+        lastReviewedAt,
+        nextReviewAt,
+        mergedFromIds,
+        splitFromId,
+      ] = values as [string, string, string, string, number, string, string, unknown, string, string | null, unknown, string | null];
+      row.priority = priority;
+      row.status = status;
+      row.expires_at = expiresAt;
+      row.salience = salience;
+      row.sensitivity = sensitivity;
+      row.owner = owner;
+      row.evidence_refs = evidenceRefs;
+      row.last_reviewed_at = lastReviewedAt;
+      row.next_review_at = nextReviewAt;
+      row.merged_from_ids = mergedFromIds;
+      row.split_from_id = splitFromId;
       return { rows: [row as Row] };
     }
 
@@ -268,6 +369,54 @@ class FakeIntentionPool {
     }
 
     if (normalized.startsWith('UPDATE intention_pending_follow_ups')) {
+      if (normalized.includes('SET content = $2')) {
+        const [
+          id,
+          content,
+          priority,
+          timing,
+          channelId,
+          channelType,
+          authorId,
+          authorName,
+          dueAt,
+          contactId,
+          sourceMessageId,
+          contextSummary,
+          wakeConditions,
+        ] = values as [
+          string,
+          string,
+          string,
+          string,
+          string,
+          string,
+          string,
+          string,
+          string,
+          string | null,
+          string | null,
+          string | null,
+          string | null,
+        ];
+        const row = this.pendingFollowUps.get(id);
+        if (!row || row.activated_at !== null) {
+          return { rows: [] };
+        }
+        row.content = content;
+        row.priority = priority;
+        row.timing = timing;
+        row.channel_id = channelId;
+        row.channel_type = channelType;
+        row.author_id = authorId;
+        row.author_name = authorName;
+        row.due_at = dueAt;
+        row.contact_id = contactId;
+        row.source_message_id = sourceMessageId;
+        row.context_summary = contextSummary;
+        row.wake_conditions = wakeConditions;
+        return { rows: [row as Row] };
+      }
       const [id, activatedAt, activationReason] = values as [string, string, string | null];
       const row = this.pendingFollowUps.get(id);
       if (!row || row.activated_at !== null) {
@@ -453,11 +602,27 @@ describe('postgres intention adapters', () => {
 
     const active = await ports.concernStore.getActiveConcerns('contact-a');
     expect(active).toHaveLength(1);
+    expect(ports.concernProvider.getActiveConcerns('contact-a')).toHaveLength(1);
     expect(active[0]).toMatchObject({
       text: 'Check hydration reminder',
       contactId: 'contact-a',
       priority: 'medium',
       source: 'agent',
+      status: 'active',
+    });
+
+    const duplicate = await ports.concernStore.create({
+      text: 'Check the hydration reminder',
+      contactId: 'contact-a',
+      priority: 'high',
+      status: 'blocked',
+      evidenceRefs: [{ kind: 'runtime', ref: 'pg-dedupe-1' }],
+    });
+    expect(duplicate.id).toBe(created.id);
+    expect(duplicate).toMatchObject({
+      priority: 'high',
+      status: 'blocked',
+      evidenceRefs: [{ kind: 'runtime', ref: 'pg-dedupe-1' }],
     });
 
     const resolved = await ports.concernStore.resolveConcern(created.id, {
@@ -465,6 +630,7 @@ describe('postgres intention adapters', () => {
       resolvedAt: '2026-03-28T01:00:00.000Z',
     });
     expect(resolved?.resolutionOutcome).toBe('Handled already');
+    expect(ports.concernProvider.getActiveConcerns('contact-a')).toEqual([]);
 
     const recent = await ports.concernStore.listRecentlyResolvedConcerns('contact-a', {
       asOf: '2026-03-28T02:00:00.000Z',
@@ -483,6 +649,37 @@ describe('postgres intention adapters', () => {
       withinMs: 4 * 60 * 60 * 1000,
     });
     expect(match?.id).toBe(created.id);
+  });
+
+  it('resolves stale duplicate concerns before Postgres creation opens another thread', async () => {
+    const pool = new FakeIntentionPool();
+    const ports = createPostgresIntentionPortsFromPool(pool as never);
+
+    const stale = await ports.concernStore.create({
+      text: 'Follow up on hydration tomorrow morning',
+      contactId: 'contact-a',
+      status: 'watching',
+      createdAt: '2026-03-28T00:00:00.000Z',
+      expiresAt: '2026-03-28T01:00:00.000Z',
+    });
+
+    const duplicate = await ports.concernStore.create({
+      text: 'Follow up on hydration tomorrow',
+      contactId: 'contact-a',
+      priority: 'high',
+      createdAt: '2026-03-28T02:00:00.000Z',
+      evidenceRefs: [{ kind: 'message', ref: 'msg-repeat-hydration' }],
+    });
+
+    expect(duplicate.id).toBe(stale.id);
+    expect(duplicate.status).toBe('resolved');
+    expect(duplicate.resolutionOutcome).toBe('Resolved as stale after review window elapsed.');
+    await expect(ports.concernStore.getActiveConcerns('contact-a')).resolves.toEqual([]);
+    await expect(ports.concernStore.list({
+      contactId: 'contact-a',
+      includeResolved: true,
+      includeExpired: true,
+    })).resolves.toHaveLength(1);
   });
 
   it('persists pending follow-ups and activation state', async () => {
@@ -523,6 +720,54 @@ describe('postgres intention adapters', () => {
     });
     expect(activated?.activatedAt).toBe('2026-03-28T04:00:00.000Z');
     expect(activated?.activationReason).toBe('post_turn_action');
+  });
+
+  it('deduplicates near-identical pending follow-up enqueues through the Postgres port', async () => {
+    const pool = new FakeIntentionPool();
+    let nextId = 0;
+    const ports = createPostgresIntentionPortsFromPool(pool as never, {
+      now: () => new Date('2026-03-28T02:00:00.000Z'),
+      idFactory: () => `follow-up-${++nextId}`,
+    });
+
+    const first = await ports.pendingFollowUpStore.enqueue({
+      content: 'Check in about the medication plan tomorrow.',
+      priority: 'medium',
+      timing: 'soon',
+      channelId: 'api:test',
+      channelType: 'api',
+      authorId: 'system:intention',
+      authorName: 'Whisper',
+      contactId: 'contact-a',
+      sourceMessageId: 'msg-1',
+    });
+    const second = await ports.pendingFollowUpStore.enqueue({
+      content: 'Check in tomorrow about the medication plan.',
+      priority: 'high',
+      timing: 'soon',
+      channelId: 'api:test',
+      channelType: 'api',
+      authorId: 'system:intention',
+      authorName: 'Whisper',
+      contactId: 'contact-a',
+      sourceMessageId: 'msg-2',
+      dueAt: '2026-03-28T04:00:00.000Z',
+    });
+
+    expect(second?.id).toBe(first?.id);
+    await expect(ports.pendingFollowUpStore.list({
+      contactId: 'contact-a',
+      includeExpired: true,
+    })).resolves.toEqual([
+      expect.objectContaining({
+        id: first?.id,
+        content: 'Check in tomorrow about the medication plan.',
+        priority: 'high',
+        dueAt: '2026-03-28T04:00:00.000Z',
+        sourceMessageId: 'msg-2',
+      }),
+    ]);
+    expect(nextId).toBe(1);
   });
 
   it('filters stale pending follow-ups the same way for store and runtime provider access', async () => {

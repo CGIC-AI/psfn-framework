@@ -213,6 +213,14 @@ describe('createSubstrateStreamFn', () => {
           model: 'gateway-model',
           inputTokens: 11,
           outputTokens: 7,
+          usageDetails: {
+            input: 11,
+            output: 7,
+            cacheRead: 3,
+            cacheWrite: 2,
+            totalTokens: 18,
+            cost: { total: 0.42 },
+          },
           stopReason: 'stop',
         };
       }),
@@ -251,9 +259,17 @@ describe('createSubstrateStreamFn', () => {
       'toolcall_end',
       'done',
     ]);
-    const doneEvent = events.at(-1) as { type: string; message: { content: unknown[]; model: string } };
+    const doneEvent = events.at(-1) as { type: string; message: { content: unknown[]; model: string; usage: Record<string, unknown> } };
     expect(doneEvent.type).toBe('done');
     expect(doneEvent.message.model).toBe('gateway-model');
+    expect(doneEvent.message.usage).toMatchObject({
+      input: 11,
+      output: 7,
+      cacheRead: 3,
+      cacheWrite: 2,
+      totalTokens: 18,
+      cost: { total: 0.42 },
+    });
     expect(doneEvent.message.content).toEqual([
       { type: 'text', text: 'hello world' },
       { type: 'thinking', thinking: 'step by step' },
@@ -282,9 +298,10 @@ describe('createSubstrateStreamFn', () => {
           },
           {
             id: 'call-image-analyze',
-            name: 'image_analyze',
+            name: 'media',
             input: {
-              image_urls: '["https://images.example.test/source.png"]',
+              action: 'analyze',
+              input_urls: '["https://images.example.test/source.png"]',
               question: 'What is visible?',
             },
           },
@@ -304,10 +321,11 @@ describe('createSubstrateStreamFn', () => {
       }),
     };
     const imageAnalyzeTool = {
-      name: 'image_analyze',
-      description: 'Analyze images.',
+      name: 'media',
+      description: 'Generate, edit, or analyze media.',
       parameters: Type.Object({
-        image_urls: Type.Array(Type.String()),
+        action: Type.Literal('analyze'),
+        input_urls: Type.Array(Type.String()),
         question: Type.Optional(Type.String()),
       }),
     };
@@ -325,8 +343,9 @@ describe('createSubstrateStreamFn', () => {
       action: 'activate',
       tools: ['north_star'],
     });
-    expect(toolCalls.find((entry) => entry.name === 'image_analyze')?.arguments).toEqual({
-      image_urls: ['https://images.example.test/source.png'],
+    expect(toolCalls.find((entry) => entry.name === 'media')?.arguments).toEqual({
+      action: 'analyze',
+      input_urls: ['https://images.example.test/source.png'],
       question: 'What is visible?',
     });
     expect(validateToolArguments(toolsetTool as any, toolCalls[0] as any)).toEqual({
@@ -334,7 +353,8 @@ describe('createSubstrateStreamFn', () => {
       tools: ['north_star'],
     });
     expect(validateToolArguments(imageAnalyzeTool as any, toolCalls[1] as any)).toEqual({
-      image_urls: ['https://images.example.test/source.png'],
+      action: 'analyze',
+      input_urls: ['https://images.example.test/source.png'],
       question: 'What is visible?',
     });
   });
@@ -646,6 +666,106 @@ describe('createSubstrateStreamFn', () => {
     expect((streamAdapterMocks.transportStream.mock.calls[1]?.[0] as LLMContext).modelHint?.model).toBe('moonshotai/kimi-k2.5');
   });
 
+  it('falls back to the next configured chat candidate when the primary response has no text', async () => {
+    process.env.LITELLM_BASE_URL = 'http://localhost:4000/v1';
+    const config = makeConfig({
+      primaryModel: 'ChatGPTN',
+      primaryProvider: 'litellm',
+      modelRoster: {
+        chat: { model: 'ChatGPTN', provider: 'litellm', maxTokens: 4096, contextWindow: 128_000 },
+        background: { model: 'deepseek/deepseek-v3.2', provider: 'openrouter', maxTokens: 8192 },
+      },
+      modelRegistry: {
+        schemaVersion: 1,
+        models: [
+          {
+            id: 'chatgptn-primary',
+            rank: 10,
+            identity: {
+              provider: 'litellm',
+              model: 'ChatGPTN',
+              source: { type: 'litellm' },
+            },
+            purposes: [{ purpose: 'chat', primary: true }],
+            capabilities: {
+              maxOutputTokens: 4096,
+              contextWindow: 128_000,
+            },
+            tuning: {
+              maxOutputTokens: 4096,
+            },
+          },
+          {
+            id: 'openai-nano-fallback',
+            rank: 20,
+            identity: {
+              provider: 'openrouter',
+              model: 'openai/gpt-5.4-nano',
+              source: { type: 'openrouter' },
+            },
+            purposes: [{ purpose: 'chat', primary: false }],
+            capabilities: {
+              maxOutputTokens: 2048,
+              contextWindow: 128_000,
+            },
+            tuning: {
+              maxOutputTokens: 2048,
+            },
+          },
+        ],
+      },
+    });
+
+    streamAdapterMocks.transportStream.mockImplementation((context: LLMContext) => {
+      if (context.modelHint?.model === 'ChatGPTN') {
+        return Promise.resolve({
+          content: '',
+          toolCalls: [],
+          model: 'ChatGPTN',
+          inputTokens: 11,
+          outputTokens: 0,
+          stopReason: 'stop',
+        });
+      }
+
+      return Promise.resolve({
+        content: 'Recovered on nano.',
+        toolCalls: [],
+        model: 'openrouter/openai/gpt-5.4-nano',
+        inputTokens: 7,
+        outputTokens: 4,
+        stopReason: 'stop',
+      });
+    });
+
+    const streamFn = makeStreamFn(config);
+    const model = resolveModel(config, 'chat');
+    const events = await runWithRequestContext(
+      {
+        turnId: 'turn-empty-primary-1',
+        requestId: 'req-empty-primary-1',
+        channelId: 'channel-empty-primary-1',
+        callType: 'chat',
+        originType: 'chat',
+        originStage: 'agent.turn.prompt',
+        purpose: 'agent.turn.prompt',
+      },
+      async () => {
+        const stream = await streamFn(model, {
+          systemPrompt: 'System',
+          messages: [{ role: 'user', content: 'hello' }],
+        } as any, {});
+        return await collectStreamEvents(stream as AsyncIterable<unknown>);
+      },
+    );
+
+    expect((events.at(-1) as { type: string; message: { model: string } }).type).toBe('done');
+    expect((events.at(-1) as { message: { model: string } }).message.model).toBe('openrouter/openai/gpt-5.4-nano');
+    expect(streamAdapterMocks.transportStream).toHaveBeenCalledTimes(2);
+    expect((streamAdapterMocks.transportStream.mock.calls[0]?.[0] as LLMContext).modelHint?.model).toBe('ChatGPTN');
+    expect((streamAdapterMocks.transportStream.mock.calls[1]?.[0] as LLMContext).modelHint?.model).toBe('openai/gpt-5.4-nano');
+  });
+
   it('routes tool-side reasoning streams through the reasoning candidate instead of the mounted chat model', async () => {
     process.env.LITELLM_BASE_URL = 'http://localhost:4000/v1';
     const config = makeConfig({
@@ -931,6 +1051,45 @@ describe('resolveModel', () => {
     });
     const model = resolveModel(config, 'context');
     expect(model.id).toBe('long-context-model');
+  });
+
+  it('resolves OpenRouter-sourced entries through direct OpenRouter endpoint config', () => {
+    const config = makeConfig({
+      openRouterApiBaseUrl: 'https://openrouter.ai/api/v1',
+      modelRegistry: {
+        schemaVersion: 1,
+        models: [
+          {
+            id: 'pi-live-chat',
+            rank: 1,
+            identity: {
+              provider: 'litellm',
+              model: 'z-ai/glm-5.2',
+              source: {
+                type: 'openrouter',
+                baseUrl: 'https://openrouter.ai/api/v1',
+              },
+            },
+            purposes: [{ purpose: 'chat', primary: true }],
+            capabilities: {
+              maxOutputTokens: 16384,
+              contextWindow: 202_752,
+            },
+            tuning: {
+              maxOutputTokens: 16384,
+              contextWindow: 202_752,
+            },
+          },
+        ],
+      },
+    });
+
+    const model = resolveModel(config, 'chat');
+    expect(model.id).toBe('z-ai/glm-5.2');
+    expect(model.provider).toBe('openrouter');
+    expect(model.baseUrl).toBe('https://openrouter.ai/api/v1');
+    expect(model.maxTokens).toBe(16384);
+    expect(model.contextWindow).toBe(202_752);
   });
 
   it('fails closed when a configured vision slot targets a text-only model', () => {

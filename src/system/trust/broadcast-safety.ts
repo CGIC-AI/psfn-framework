@@ -1,4 +1,4 @@
-import { classifyChannel, type ChannelMeta } from './policy.js';
+import { classifyChannelEnvelope, type ChannelMeta } from './policy.js';
 
 export type BroadcastVisibilityScope = 'public_only' | 'approved_private_context';
 export type BroadcastRiskSignal = 'sensitive' | 'private' | 'off_brand';
@@ -123,7 +123,7 @@ export function resolveBroadcastVisibilityScope(
   meta?: ChannelMeta,
   options: BroadcastApprovalOptions = {},
 ): BroadcastVisibilityScope | null {
-  if (classifyChannel(channelId, meta) !== 'broadcast') return null;
+  if (!classifyChannelEnvelope(channelId, meta).broadcast) return null;
   return isExplicitBroadcastApprovalToken(meta?.broadcastApprovalToken, options)
     ? 'approved_private_context'
     : 'public_only';

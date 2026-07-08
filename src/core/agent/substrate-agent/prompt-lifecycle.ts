@@ -1,8 +1,14 @@
 import { createHash } from 'node:crypto';
 import type { SubstrateMessage } from '../../../shared/contracts/runtime.js';
+import type { AppCache } from '../../../shared/cache/types.js';
 import type { PromptComposer } from '../../identity/prompt-composer.js';
-import type { ComposeContext, ComposeSplitResult } from '../../identity/prompt-types.js';
-import { injectPromptRuntimeTokens } from '../../identity/prompt-runtime.js';
+import type { ComposeContext, ComposedDynamicSection } from '../../identity/prompt-types.js';
+import {
+  getVolatileClockPromptMacroNames,
+  isStaticVolatilityPromptVariable,
+  normalizePromptMacroName,
+  renderFinalPromptSection,
+} from '../../identity/prompt-runtime.js';
 import type {
   PromptCacheBreaker,
   PromptCacheabilityClass,
@@ -14,6 +20,8 @@ import { buildSnapshotVersionPointer } from '../../turns/snapshot.js';
 export interface PromptSections {
   staticPrefix: string;
   dynamicSuffix: string;
+  /** Per-layer dynamic sections with render policy (E2.5). */
+  dynamicSections: ComposedDynamicSection[];
   staticHash: string;
   sectionCacheability: PromptSectionCacheability[];
 }
@@ -24,24 +32,30 @@ export interface FrozenPromptPrefix {
   settingsHash: string;
 }
 
+export interface StaticPromptPrefixCacheEvent {
+  event: 'hit' | 'miss' | 'stored' | 'invalid_record';
+  backend: AppCache['backend'];
+  cacheKeyHash: string;
+  staticHash: string;
+  settingsHash: string;
+}
+
+interface FrozenPromptPrefixCacheRecord extends FrozenPromptPrefix {
+  schemaVersion: 1;
+}
+
+export const STATIC_PROMPT_PREFIX_CACHE_KEY_PREFIX = 'prompt:static-prefix:v1:';
 const PROMPT_HASH_LENGTH = 16;
 const PROMPT_MACRO_PATTERN = /\{\{\s*([a-zA-Z0-9_.-]+(?:\(\))?)\s*\}\}/g;
-const VOLATILE_MACRO_TOKENS = new Set([
-  'current_datetime',
-  'current_datetime_iso',
-  'now',
-  'now()',
-  'current_date',
-  'date',
-  'date()',
-  'current_time',
-  'time',
-  'time()',
-  'current_timestamp',
-  'unix_timestamp',
-  'timestamp',
-  'timestamp()',
-]);
+// {{#if var}} guard variables are referenced variables too: a guard-only
+// variable change alters the rendered output, so it must invalidate the
+// static-prefix cache and participate in macro cacheability classification.
+const PROMPT_MACRO_GUARD_PATTERN = /\{\{#if\s+([a-zA-Z0-9_.-]+(?:\(\))?)\s*\}\}/g;
+// Derived from the prompt macro manifest (PROMPT_RUNTIME_MACRO_HINTS): the clock
+// alias macros are the only tokens that re-render from the wall clock inside an
+// otherwise cached static prefix render. Other turn-volatile macros are rejected
+// from static-class layers by assertStaticPromptLayerMacroVolatility instead.
+const VOLATILE_MACRO_TOKENS = new Set(getVolatileClockPromptMacroNames());
 const CHANNEL_MACRO_TOKENS = new Set(['channel_id', 'channel_type']);
 
 interface TemplateSectionConfig {
@@ -57,12 +71,16 @@ export function hashPromptText(text: string): string {
 }
 
 function normalizePromptMacroToken(token: string): string {
-  return token.trim().toLowerCase();
+  return normalizePromptMacroName(token);
 }
 
 function collectPromptMacroTokens(text: string): string[] {
   const tokens = new Set<string>();
   text.replace(PROMPT_MACRO_PATTERN, (_match, rawToken: string) => {
+    tokens.add(normalizePromptMacroToken(rawToken));
+    return '';
+  });
+  text.replace(PROMPT_MACRO_GUARD_PATTERN, (_match, rawToken: string) => {
     tokens.add(normalizePromptMacroToken(rawToken));
     return '';
   });
@@ -247,6 +265,7 @@ export function composePromptSections(input: {
     return {
       staticPrefix: systemPrompt,
       dynamicSuffix: '',
+      dynamicSections: [],
       staticHash: hashPromptText(systemPrompt),
       sectionCacheability: buildPromptTemplateSectionCacheability({
         staticPrefix: systemPrompt,
@@ -255,30 +274,20 @@ export function composePromptSections(input: {
     };
   }
 
-  const splitComposer = promptComposer as PromptComposer & {
-    composeSplit?: (ctx?: ComposeContext) => ComposeSplitResult;
-  };
-  if (typeof splitComposer.composeSplit === 'function') {
-    const split = splitComposer.composeSplit(composeContext);
-    return {
+  // Single composer entrypoint (E2.2): composeSplit's static/dynamic split is
+  // the source of the PromptPlan volatility boundaries. No unsplit fallback.
+  const split = promptComposer.composeSplit(composeContext);
+  // Boundary guard: injected composer doubles (tests) may predate the E2.5
+  // dynamicSections contract; downstream falls back to the joined template.
+  const composedDynamicSections = (split.dynamicSections as ComposedDynamicSection[] | undefined) ?? [];
+  return {
+    staticPrefix: split.staticPrefix,
+    dynamicSuffix: split.dynamicSuffix,
+    dynamicSections: composedDynamicSections.map(section => ({ ...section })),
+    staticHash: split.staticHash,
+    sectionCacheability: buildPromptTemplateSectionCacheability({
       staticPrefix: split.staticPrefix,
       dynamicSuffix: split.dynamicSuffix,
-      staticHash: split.staticHash,
-      sectionCacheability: buildPromptTemplateSectionCacheability({
-        staticPrefix: split.staticPrefix,
-        dynamicSuffix: split.dynamicSuffix,
-      }),
-    };
-  }
-
-  const composed = promptComposer.compose(composeContext);
-  return {
-    staticPrefix: composed.text,
-    dynamicSuffix: '',
-    staticHash: composed.hash,
-    sectionCacheability: buildPromptTemplateSectionCacheability({
-      staticPrefix: composed.text,
-      dynamicSuffix: '',
     }),
   };
 }
@@ -292,6 +301,7 @@ export function captureTurnPromptSnapshot(input: {
   return {
     staticPrefixTemplate: sections.staticPrefix,
     dynamicSuffixTemplate: sections.dynamicSuffix,
+    dynamicSuffixSections: sections.dynamicSections,
     staticHash: sections.staticHash,
     versionPointer: buildSnapshotVersionPointer([
       sections.staticHash,
@@ -314,9 +324,28 @@ export function buildPromptPrefixCacheKey(
   ].join('::');
 }
 
-export function buildStaticPromptSettingsHash(templateVariables: Record<string, string>): string {
+// Derived from the prompt macro manifest: only 'static'-volatility variables
+// (character card fields, config-owned identifiers) participate in the static
+// settings hash. Unknown keys fail closed to non-stable.
+function isStaticPromptStableVariable(key: string): boolean {
+  return isStaticVolatilityPromptVariable(key);
+}
+
+export function buildStaticPromptSettingsHash(
+  templateVariables: Record<string, string>,
+  staticPrefixTemplate?: string,
+): string {
+  const referencedTokens = staticPrefixTemplate
+    ? new Set(collectPromptMacroTokens(staticPrefixTemplate))
+    : null;
   const stableEntries = Object.entries(templateVariables)
-    .filter(([key]) => key !== 'now_iso')
+    .filter(([key]) => (
+      isStaticPromptStableVariable(key)
+      && (
+        referencedTokens === null
+        || referencedTokens.has(normalizePromptMacroToken(key))
+      )
+    ))
     .sort(([left], [right]) => left.localeCompare(right));
   return hashPromptText(JSON.stringify(stableEntries));
 }
@@ -335,14 +364,108 @@ export function resolveStaticPromptPrefix(input: {
     return cached.renderedPrefix;
   }
 
-  const renderedPrefix = injectPromptRuntimeTokens(input.staticPrefixTemplate, {
+  // The static prefix is a required render unit (E2.5): an unresolved macro
+  // here fails the turn loudly instead of leaking template syntax into the
+  // cached prompt prefix.
+  const renderedPrefix = renderFinalPromptSection(input.staticPrefixTemplate, {
     now: input.now,
     variables: input.variables,
+    sectionLabel: 'static prompt prefix',
+    required: true,
   });
   input.cache.set(input.cacheKey, {
     renderedPrefix,
     staticHash: input.staticHash,
     settingsHash: input.settingsHash,
   });
+  return renderedPrefix;
+}
+
+function buildStaticPromptPrefixCacheKey(input: {
+  cacheKey: string;
+  staticHash: string;
+  settingsHash: string;
+}): { key: string; cacheKeyHash: string } {
+  const cacheKeyHash = hashPromptText(input.cacheKey);
+  return {
+    cacheKeyHash,
+    key: [
+      STATIC_PROMPT_PREFIX_CACHE_KEY_PREFIX,
+      cacheKeyHash,
+      ':',
+      input.staticHash,
+      ':',
+      input.settingsHash,
+    ].join(''),
+  };
+}
+
+function parseFrozenPromptPrefixCacheRecord(raw: string): FrozenPromptPrefixCacheRecord | null {
+  try {
+    const parsed = JSON.parse(raw) as Partial<FrozenPromptPrefixCacheRecord>;
+    if (parsed.schemaVersion !== 1) return null;
+    if (typeof parsed.renderedPrefix !== 'string') return null;
+    if (typeof parsed.staticHash !== 'string') return null;
+    if (typeof parsed.settingsHash !== 'string') return null;
+    return {
+      schemaVersion: 1,
+      renderedPrefix: parsed.renderedPrefix,
+      staticHash: parsed.staticHash,
+      settingsHash: parsed.settingsHash,
+    };
+  } catch {
+    return null;
+  }
+}
+
+export async function resolveStaticPromptPrefixFromAppCache(input: {
+  cache: AppCache;
+  cacheKey: string;
+  staticPrefixTemplate: string;
+  staticHash: string;
+  settingsHash: string;
+  now: Date;
+  variables: Record<string, string>;
+  onCacheEvent?: (event: StaticPromptPrefixCacheEvent) => void;
+}): Promise<string> {
+  const { key, cacheKeyHash } = buildStaticPromptPrefixCacheKey(input);
+  const eventBase = {
+    backend: input.cache.backend,
+    cacheKeyHash,
+    staticHash: input.staticHash,
+    settingsHash: input.settingsHash,
+  } satisfies Omit<StaticPromptPrefixCacheEvent, 'event'>;
+
+  const cached = await input.cache.get(key);
+  if (cached !== null) {
+    const parsed = parseFrozenPromptPrefixCacheRecord(cached);
+    if (
+      parsed
+      && parsed.staticHash === input.staticHash
+      && parsed.settingsHash === input.settingsHash
+    ) {
+      input.onCacheEvent?.({ ...eventBase, event: 'hit' });
+      return parsed.renderedPrefix;
+    }
+    await input.cache.delete(key);
+    input.onCacheEvent?.({ ...eventBase, event: 'invalid_record' });
+  } else {
+    input.onCacheEvent?.({ ...eventBase, event: 'miss' });
+  }
+
+  const renderedPrefix = renderFinalPromptSection(input.staticPrefixTemplate, {
+    now: input.now,
+    variables: input.variables,
+    sectionLabel: 'static prompt prefix',
+    required: true,
+  });
+  const record: FrozenPromptPrefixCacheRecord = {
+    schemaVersion: 1,
+    renderedPrefix,
+    staticHash: input.staticHash,
+    settingsHash: input.settingsHash,
+  };
+  await input.cache.set(key, JSON.stringify(record));
+  input.onCacheEvent?.({ ...eventBase, event: 'stored' });
   return renderedPrefix;
 }

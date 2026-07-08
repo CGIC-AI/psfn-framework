@@ -22,6 +22,12 @@ import type {
   MemoryRedactionResult,
 } from './writer.js';
 import type { PurrMemory } from './types.js';
+import {
+  EPISODIC_CONTRACT_VERSION,
+  type Episode,
+  type EpisodeArc,
+} from '../../shared/contracts/episodic-memory.js';
+import type { EpisodicTimelineStore } from './retrieval/episodic.js';
 
 /** Extract text from AgentToolResult content array */
 function resultText(result: { content: Array<{ type: string; text: string }> }): string {
@@ -46,6 +52,97 @@ function makeMemory(overrides: Partial<PurrMemory> = {}): PurrMemory {
     tags: [],
     sensitivity: 'personal',
     ...overrides,
+  };
+}
+
+function makeEpisode(overrides: Partial<Episode> = {}): Episode {
+  const id = overrides.id ?? 'episode-1';
+  const startedAt = overrides.startedAt ?? '2026-03-30T10:00:00.000Z';
+  const endedAt = overrides.endedAt ?? '2026-03-30T10:05:00.000Z';
+  return {
+    schemaVersion: EPISODIC_CONTRACT_VERSION,
+    id,
+    title: 'Morning planning check-in',
+    landmark: 'They reviewed the next practical step and why it mattered.',
+    startedAt,
+    endedAt,
+    threadId: 'thread-alpha',
+    channelId: 'api:test',
+    participantContactIds: ['contact:primary'],
+    salience: { score: 0.76, novelty: 0.4, emotionalIntensity: 0.3 },
+    affect: { valence: 0.2, arousal: 0.3, dominance: 0.4, labels: ['focused'] },
+    themes: ['planning'],
+    spanRefs: [{
+      spanId: `span-${id}`,
+      threadId: 'thread-alpha',
+      channelId: 'api:test',
+      startedAt,
+      endedAt,
+    }],
+    artifactRefs: [],
+    provenanceRefs: [{ kind: 'l0_span', refId: `span-${id}` }],
+    createdAt: '2026-03-30T10:06:00.000Z',
+    updatedAt: '2026-03-30T10:06:00.000Z',
+    ...overrides,
+  };
+}
+
+function makeEpisodeArc(overrides: Partial<EpisodeArc> = {}): EpisodeArc {
+  return {
+    schemaVersion: EPISODIC_CONTRACT_VERSION,
+    id: 'arc-1',
+    sourceEpisodeId: 'episode-root',
+    targetEpisodeId: 'episode-linked',
+    arcKind: 'continuation',
+    salience: 0.8,
+    confidence: 0.78,
+    themes: ['planning'],
+    spanRefs: [{ spanId: 'span-arc-1' }],
+    artifactRefs: [],
+    provenanceRefs: [{ kind: 'l0_span', refId: 'span-arc-1' }],
+    createdAt: '2026-03-30T10:06:00.000Z',
+    updatedAt: '2026-03-30T10:06:00.000Z',
+    ...overrides,
+  };
+}
+
+function makeEpisodicTimelineStore(
+  episodes: Episode[],
+  arcs: EpisodeArc[] = [],
+): EpisodicTimelineStore & {
+  searchByTime: ReturnType<typeof vi.fn>;
+  listEpisodes: ReturnType<typeof vi.fn>;
+  getEpisode: ReturnType<typeof vi.fn>;
+  listEpisodeArcsForEpisode: ReturnType<typeof vi.fn>;
+} {
+  return {
+    searchByTime: vi.fn((options: { from?: string; to?: string; limit?: number; offset?: number } = {}) => {
+      const filtered = episodes
+        .filter(episode => (
+          (options.from === undefined || episode.endedAt >= options.from)
+          && (options.to === undefined || episode.startedAt <= options.to)
+        ))
+        .sort((left, right) => (
+          left.startedAt.localeCompare(right.startedAt)
+          || left.id.localeCompare(right.id)
+        ));
+      const offset = options.offset ?? 0;
+      const limit = options.limit ?? filtered.length;
+      return filtered.slice(offset, offset + limit);
+    }),
+    listEpisodes: vi.fn((options: { limit?: number; offset?: number } = {}) => {
+      const sorted = [...episodes].sort((left, right) => (
+        left.startedAt.localeCompare(right.startedAt)
+        || left.id.localeCompare(right.id)
+      ));
+      const offset = options.offset ?? 0;
+      const limit = options.limit ?? sorted.length;
+      return sorted.slice(offset, offset + limit);
+    }),
+    getEpisode: vi.fn((id: string) => episodes.find(episode => episode.id === id)),
+    listEpisodeArcsForEpisode: vi.fn((id: string) => arcs.filter(arc => (
+      arc.sourceEpisodeId === id || arc.targetEpisodeId === id
+    ))),
   };
 }
 
@@ -88,13 +185,20 @@ describe('createMemoryTool', () => {
     };
   }
 
-  function mockUnifiedStore(): {
+  function mockUnifiedStore(memories: PurrMemory[] = []): {
     searchByText: ReturnType<typeof vi.fn>;
+    listMemories: ReturnType<typeof vi.fn>;
+    listActiveMemories: ReturnType<typeof vi.fn>;
+    getAllActiveMemories: ReturnType<typeof vi.fn>;
     softDeleteMemory: ReturnType<typeof vi.fn>;
     undoSoftDelete: ReturnType<typeof vi.fn>;
   } {
+    const cloneMemories = (items: PurrMemory[]) => items.map(memory => ({ ...memory }));
     return {
       searchByText: vi.fn(),
+      listMemories: vi.fn(async () => cloneMemories(memories)),
+      listActiveMemories: vi.fn(async () => cloneMemories(memories.filter(memory => !memory.deletedAt && !memory.supersededBy))),
+      getAllActiveMemories: vi.fn(async () => cloneMemories(memories.filter(memory => !memory.deletedAt && !memory.supersededBy))),
       softDeleteMemory: vi.fn(),
       undoSoftDelete: vi.fn(),
     };
@@ -139,24 +243,72 @@ describe('createMemoryTool', () => {
     }));
   });
 
-  it('accepts action=memory_write as a legacy alias on the unified memory tool', async () => {
+  it('normalizes JSON-array tag strings for unified writes', async () => {
     const store = mockUnifiedStore();
     const tool = createMemoryTool(writer as unknown as MemoryWriter, store as unknown as MemoryStorePort);
 
-    await tool.execute('memory-call-alias', {
+    await tool.execute('memory-call-json-tags', {
+      action: 'write',
+      text: 'V likes clean tag metadata',
+      type: 'semantic',
+      tags: '["Identity", "Preference", 42, "  Hobby  "]',
+    });
+
+    expect(writer.write).toHaveBeenCalledWith(expect.objectContaining({
+      tags: ['identity', 'preference', 'hobby'],
+    }));
+  });
+
+  it('patches through action=patch with unified provenance', async () => {
+    const store = mockUnifiedStore();
+    const tool = createMemoryTool(writer as unknown as MemoryWriter, store as unknown as MemoryStorePort);
+
+    const result = await tool.execute('memory-call-patch', {
+      action: 'patch',
+      memory_id: 'mem-patch',
+      confidence: 0.92,
+      append_tags: ' corrected, preference ',
+      reason: 'operator correction',
+    });
+
+    expect(writer.patchMemory).toHaveBeenCalledWith(expect.objectContaining({
+      memoryId: 'mem-patch',
+      confidence: 0.92,
+      appendTags: ['corrected', 'preference'],
+      reason: 'operator correction',
+      sourceRef: 'source:tool:memory|action:patch|invocation:memory-call-patch',
+      sourceType: 'tool_write',
+      provenance: {
+        toolName: 'memory',
+        toolCallId: 'memory-call-patch',
+      },
+    }));
+    expect(resultText(result as any)).toContain('Memory patched');
+  });
+
+  it('rejects retired helper action names on canonical memory', async () => {
+    const store = mockUnifiedStore();
+    const tool = createMemoryTool(writer as unknown as MemoryWriter, store as unknown as MemoryStorePort);
+
+    const result = await tool.execute('memory-call-retired-alias', {
       action: 'memory_write',
       text: 'Alias write',
       type: 'semantic',
     } as any);
 
-    expect(writer.write).toHaveBeenCalledWith(expect.objectContaining({
-      text: 'Alias write',
-      sourceRef: 'source:tool:memory|action:write|invocation:memory-call-alias',
-      provenance: {
-        toolName: 'memory',
-        toolCallId: 'memory-call-alias',
-      },
-    }));
+    expect(writer.write).not.toHaveBeenCalled();
+    expect(resultText(result as any)).toContain('invalid action');
+    expect((result.details as any).isError).toBe(true);
+  });
+
+  it('describes required fields for model-facing memory actions', () => {
+    const store = mockUnifiedStore();
+    const tool = createMemoryTool(writer as unknown as MemoryWriter, store as unknown as MemoryStorePort);
+
+    expect(tool.description).toContain('action=search with required query');
+    expect(tool.description).toContain('action=write with required text and type');
+    expect(tool.description).toContain('patch/redact/delete use memory_id');
+    expect(tool.description).toContain('restore uses delete_id');
   });
 
   it('searches through action=search and formats results', async () => {
@@ -176,6 +328,371 @@ describe('createMemoryTool', () => {
     expect(resultText(result as any)).toContain('Memory search results (1)');
     expect(resultText(result as any)).toContain('mem-search-1');
     expect(resultText(result as any)).toContain('similarity=0.82');
+  });
+
+  it('census reports public-channel visible counts and companion-readable withheld context without protected text', async () => {
+    const store = mockUnifiedStore([
+      makeMemory({
+        id: 'mem-public-active',
+        text: 'Public deploy plan is safe to mention',
+        type: 'semantic',
+        sensitivity: 'public',
+        sourceType: 'turn',
+        contactId: 'contact:primary',
+      }),
+      makeMemory({
+        id: 'mem-public-archived',
+        text: 'Archived public deploy note',
+        type: 'episodic',
+        sensitivity: 'public',
+        sourceType: 'tool_write',
+        deletedAt: 1_700_000_000_000,
+        deletedBy: 'test',
+      }),
+      makeMemory({
+        id: 'mem-secret',
+        text: 'secret launch phrase must not leak',
+        type: 'semantic',
+        sensitivity: 'confidential',
+        sourceType: 'turn',
+      }),
+    ]);
+    const tool = createMemoryTool(writer as unknown as MemoryWriter, store as unknown as MemoryStorePort);
+
+    const result = await tool.execute('memory-call-census-public', {
+      action: 'census',
+      channel_id: 'api:public',
+      trust_level: 'regular',
+      channel_visibility: 'public',
+    });
+
+    const text = resultText(result as any);
+    expect(text).toContain('Memory census:');
+    expect(text).toContain('Visible memories: 2');
+    expect(text).toContain('By type: episodic: 1, semantic: 1.');
+    expect(text).toContain('By sensitivity: public: 2.');
+    expect(text).toContain('By state: active: 1, archived: 1.');
+    expect(text).toContain('Withheld context: 1 candidate memory was present');
+    expect(text).toContain('Withheld trust/privacy reasons: 1 trust ceiling.');
+    expect(text).toContain('Withheld categories: semantic: 1.');
+    expect(text).toContain('Withheld provenance classes: turn: 1.');
+    expect(text).toContain('No memory text returned.');
+    expect(text).not.toContain('secret launch phrase');
+    expect(text).not.toContain('mem-secret');
+  });
+
+  it('exists answers contact-scoped topic checks without returning memory text', async () => {
+    const store = mockUnifiedStore([
+      makeMemory({
+        id: 'mem-primary',
+        text: 'Primary contact deployment plan prefers concise rollout summaries',
+        type: 'semantic',
+        sensitivity: 'personal',
+        contactId: 'contact:primary',
+        scopeRef: { kind: 'contact', id: 'contact:primary' },
+        scopeTags: ['relationship'],
+      }),
+      makeMemory({
+        id: 'mem-other',
+        text: 'Other contact deployment plan has a different cadence',
+        type: 'semantic',
+        sensitivity: 'public',
+        contactId: 'contact:other',
+        scopeRef: { kind: 'contact', id: 'contact:other' },
+      }),
+    ]);
+    const tool = createMemoryTool(writer as unknown as MemoryWriter, store as unknown as MemoryStorePort);
+
+    const result = await tool.execute('memory-call-exists-contact', {
+      action: 'exists',
+      query: 'deployment plan',
+      contact_id: 'contact:primary',
+      channel_id: 'api:private',
+      trust_level: 'primary',
+      channel_visibility: 'private',
+      canonical_contact_id: 'contact:primary',
+    });
+
+    const text = resultText(result as any);
+    expect(text).toContain('Result: yes, 1 visible matching memory found.');
+    expect(text).toContain('By contact scope: contact:primary: 1.');
+    expect(text).toContain('By scope ref: contact:contact:primary: 1.');
+    expect(text).toContain('No memory text returned.');
+    expect(text).not.toContain('concise rollout summaries');
+    expect(text).not.toContain('different cadence');
+    expect(text).not.toContain('mem-primary');
+  });
+
+  it('exists reports withheld-only confidential matches on public channels without leaking text', async () => {
+    const store = mockUnifiedStore([
+      makeMemory({
+        id: 'mem-hidden-topic',
+        text: 'confidential garden protocol phrase',
+        type: 'procedural',
+        sensitivity: 'confidential',
+        sourceType: 'tool_write',
+      }),
+    ]);
+    const tool = createMemoryTool(writer as unknown as MemoryWriter, store as unknown as MemoryStorePort);
+
+    const result = await tool.execute('memory-call-exists-withheld', {
+      action: 'exists',
+      query: 'garden protocol',
+      channel_id: 'api:public',
+      trust_level: 'public',
+      channel_visibility: 'public',
+    });
+
+    const text = resultText(result as any);
+    expect(text).toContain('Result: yes, matching memory exists, but none is visible in this channel.');
+    expect(text).toContain('Withheld context: 1 candidate memory was present');
+    expect(text).toContain('Withheld categories: procedural: 1.');
+    expect(text).toContain('Withheld provenance classes: tool_write: 1.');
+    expect(text).toContain('Withheld relevance bands: 1 high-match.');
+    expect(text).not.toContain('confidential garden protocol phrase');
+    expect(text).not.toContain('mem-hidden-topic');
+  });
+
+  it('exists returns a clear no-result answer without memory text', async () => {
+    const store = mockUnifiedStore([
+      makeMemory({
+        id: 'mem-unrelated',
+        text: 'Visible unrelated memory',
+        type: 'semantic',
+        sensitivity: 'public',
+      }),
+    ]);
+    const tool = createMemoryTool(writer as unknown as MemoryWriter, store as unknown as MemoryStorePort);
+
+    const result = await tool.execute('memory-call-exists-empty', {
+      action: 'exists',
+      query: 'nonexistent lattice topic',
+      channel_id: 'api:public',
+      trust_level: 'public',
+      channel_visibility: 'public',
+    });
+
+    const text = resultText(result as any);
+    expect(text).toContain('Result: no matching memories found for the requested topic and filters.');
+    expect(text).toContain('No memory text returned.');
+    expect(text).not.toContain('Visible unrelated memory');
+  });
+
+  it('returns date timeline episodes using inclusive range boundaries', async () => {
+    const store = mockUnifiedStore();
+    const episodicStore = makeEpisodicTimelineStore([
+      makeEpisode({
+        id: 'episode-previous-overlap',
+        title: 'Midnight handoff',
+        landmark: 'A previous-night episode ended exactly at the day boundary.',
+        startedAt: '2026-03-29T23:50:00.000Z',
+        endedAt: '2026-03-30T00:00:00.000Z',
+      }),
+      makeEpisode({
+        id: 'episode-inside-day',
+        title: 'Noon garden plan',
+        landmark: 'They made the main plan during the requested day.',
+        startedAt: '2026-03-30T12:00:00.000Z',
+        endedAt: '2026-03-30T12:10:00.000Z',
+      }),
+      makeEpisode({
+        id: 'episode-next-overlap',
+        title: 'Late-day wrap',
+        landmark: 'The episode started exactly at the end of the requested day.',
+        startedAt: '2026-03-30T23:59:59.999Z',
+        endedAt: '2026-03-31T00:05:00.000Z',
+      }),
+      makeEpisode({
+        id: 'episode-outside',
+        title: 'Next-day only',
+        landmark: 'This episode starts after the requested day.',
+        startedAt: '2026-03-31T00:00:00.000Z',
+        endedAt: '2026-03-31T00:10:00.000Z',
+      }),
+    ]);
+    const tool = createMemoryTool(writer as unknown as MemoryWriter, store as unknown as MemoryStorePort, {
+      episodicStore,
+    });
+
+    const result = await tool.execute('memory-call-timeline-date', {
+      action: 'timeline',
+      date: '2026-03-30',
+      channel_id: 'api:test',
+      trust_level: 'primary',
+      channel_visibility: 'private',
+      limit: 10,
+    });
+
+    expect(episodicStore.searchByTime).toHaveBeenCalledWith({
+      from: '2026-03-30T00:00:00.000Z',
+      to: '2026-03-30T23:59:59.999Z',
+      limit: 200,
+    });
+    const text = resultText(result as any);
+    expect(text).toContain('Episodic timeline for date 2026-03-30');
+    expect(text).toContain('Midnight handoff');
+    expect(text).toContain('Noon garden plan');
+    expect(text).toContain('Late-day wrap');
+    expect(text).not.toContain('Next-day only');
+
+    episodicStore.searchByTime.mockClear();
+    const rangeResult = await tool.execute('memory-call-timeline-range', {
+      action: 'timeline',
+      after: '2026-03-30T11:00:00Z',
+      before: '2026-03-30T13:00:00Z',
+      channel_id: 'api:test',
+      trust_level: 'primary',
+      channel_visibility: 'private',
+      limit: 10,
+    });
+
+    expect(episodicStore.searchByTime).toHaveBeenCalledWith({
+      from: '2026-03-30T11:00:00.000Z',
+      to: '2026-03-30T13:00:00.000Z',
+      limit: 200,
+    });
+    const rangeText = resultText(rangeResult as any);
+    expect(rangeText).toContain('Noon garden plan');
+    expect(rangeText).not.toContain('Midnight handoff');
+    expect(rangeText).not.toContain('Late-day wrap');
+  });
+
+  it('filters hidden off-channel timeline episodes by existing episodic visibility rules', async () => {
+    const store = mockUnifiedStore();
+    const episodicStore = makeEpisodicTimelineStore([
+      makeEpisode({
+        id: 'episode-visible',
+        title: 'Visible same-channel episode',
+        landmark: 'This same-channel episode can be shown.',
+      }),
+      makeEpisode({
+        id: 'episode-hidden-confidential',
+        title: 'Confidential off-channel episode',
+        landmark: 'This off-channel episode should remain hidden at regular trust.',
+        channelId: 'api:hidden',
+        participantContactIds: ['contact:primary'],
+      }),
+      makeEpisode({
+        id: 'episode-hidden-contact',
+        title: 'Other contact hidden episode',
+        landmark: 'This episode belongs to another contact and must not leak.',
+        channelId: 'api:other',
+        participantContactIds: ['contact:other'],
+      }),
+    ]);
+    const tool = createMemoryTool(writer as unknown as MemoryWriter, store as unknown as MemoryStorePort, {
+      episodicStore,
+    });
+
+    const result = await tool.execute('memory-call-timeline-hidden', {
+      action: 'timeline',
+      date: '2026-03-30',
+      channel_id: 'api:test',
+      trust_level: 'regular',
+      channel_visibility: 'public',
+      canonical_contact_id: 'contact:primary',
+      limit: 10,
+    });
+
+    const text = resultText(result as any);
+    expect(text).toContain('Visible same-channel episode');
+    expect(text).not.toContain('Confidential off-channel episode');
+    expect(text).not.toContain('Other contact hidden episode');
+  });
+
+  it('returns a clear no-results message for empty visible timeline ranges', async () => {
+    const store = mockUnifiedStore();
+    const episodicStore = makeEpisodicTimelineStore([
+      makeEpisode({
+        id: 'episode-other-day',
+        title: 'Other day episode',
+        startedAt: '2026-03-30T10:00:00.000Z',
+        endedAt: '2026-03-30T10:10:00.000Z',
+      }),
+    ]);
+    const tool = createMemoryTool(writer as unknown as MemoryWriter, store as unknown as MemoryStorePort, {
+      episodicStore,
+    });
+
+    const result = await tool.execute('memory-call-timeline-empty', {
+      action: 'timeline',
+      date: '2026-04-02',
+      channel_id: 'api:test',
+      trust_level: 'primary',
+      channel_visibility: 'private',
+    });
+
+    expect(resultText(result as any)).toBe('No visible episodic memories found for date 2026-04-02.');
+  });
+
+  it('includes visible graph-linked continuation episodes without leaking hidden linked episodes', async () => {
+    const store = mockUnifiedStore();
+    const root = makeEpisode({
+      id: 'episode-root',
+      title: 'Garden repair begins',
+      landmark: 'They identified the first garden repair step.',
+      startedAt: '2026-03-30T09:00:00.000Z',
+      endedAt: '2026-03-30T09:10:00.000Z',
+      themes: ['garden', 'repair'],
+    });
+    const linked = makeEpisode({
+      id: 'episode-linked',
+      title: 'Garden repair continues',
+      landmark: 'The repair continued the next day with a visible follow-up.',
+      startedAt: '2026-03-31T09:00:00.000Z',
+      endedAt: '2026-03-31T09:15:00.000Z',
+      themes: ['garden', 'repair'],
+    });
+    const hiddenLinked = makeEpisode({
+      id: 'episode-hidden-linked',
+      title: 'Hidden continuation detail',
+      landmark: 'This linked episode is in a different contact scope.',
+      startedAt: '2026-03-31T10:00:00.000Z',
+      endedAt: '2026-03-31T10:15:00.000Z',
+      channelId: 'api:hidden',
+      participantContactIds: ['contact:other'],
+      themes: ['garden', 'repair'],
+    });
+    const episodicStore = makeEpisodicTimelineStore([
+      root,
+      linked,
+      hiddenLinked,
+    ], [
+      makeEpisodeArc({
+        id: 'arc-visible-continuation',
+        sourceEpisodeId: root.id,
+        targetEpisodeId: linked.id,
+        arcKind: 'continuation',
+        confidence: 0.82,
+      }),
+      makeEpisodeArc({
+        id: 'arc-hidden-continuation',
+        sourceEpisodeId: root.id,
+        targetEpisodeId: hiddenLinked.id,
+        arcKind: 'continuation',
+        confidence: 0.9,
+      }),
+    ]);
+    const tool = createMemoryTool(writer as unknown as MemoryWriter, store as unknown as MemoryStorePort, {
+      episodicStore,
+    });
+
+    const result = await tool.execute('memory-call-timeline-linked', {
+      action: 'timeline',
+      date: '2026-03-30',
+      channel_id: 'api:test',
+      trust_level: 'trusted',
+      channel_visibility: 'invite_only',
+      canonical_contact_id: 'contact:primary',
+      limit: 4,
+    });
+
+    const text = resultText(result as any);
+    expect(text).toContain('Garden repair begins');
+    expect(text).toContain('Garden repair continues');
+    expect(text).toContain('linked continuation episode');
+    expect(text).toContain('outside requested range');
+    expect(text).not.toContain('Hidden continuation detail');
   });
 
   it('imports through action=import with unified provenance qualifiers', async () => {
@@ -366,7 +883,15 @@ describe('createMemoryTool', () => {
 
     const missingQuery = await tool.execute('memory-call-10', { action: 'search' } as any);
     expect(resultText(missingQuery as any)).toContain('query is required for action=search');
+    expect(resultText(missingQuery as any)).toContain('Missing required field "query"');
+    expect(resultText(missingQuery as any)).toContain('Minimal valid JSON: {"action":"search","query":"topic"}');
+    expect(resultText(missingQuery as any)).toContain('Do not retry action=search without a non-empty query');
     expect((missingQuery.details as any).isError).toBe(true);
+
+    const blankQuery = await tool.execute('memory-call-10b', { action: 'search', query: '   ' } as any);
+    expect(resultText(blankQuery as any)).toContain('Missing required field "query"');
+    expect((blankQuery.details as any).isError).toBe(true);
+    expect(store.searchByText).not.toHaveBeenCalled();
 
     const badAction = await tool.execute('memory-call-11', { action: 'purge' } as any);
     expect(resultText(badAction as any)).toContain('invalid action');
@@ -585,6 +1110,20 @@ describe('createMemoryWriteTool', () => {
       text: 'Tagged memory',
       type: 'semantic',
       tags: ' Identity , Preference, HOBBY ',
+    });
+
+    expect(writer.write).toHaveBeenCalledWith(expect.objectContaining({
+      tags: ['identity', 'preference', 'hobby'],
+    }));
+  });
+
+  it('normalizes JSON-array tag strings for legacy memory_write', async () => {
+    const tool = createMemoryWriteTool(writer as unknown as MemoryWriter);
+
+    await tool.execute('call-json-tags', {
+      text: 'Tagged memory',
+      type: 'semantic',
+      tags: '["Identity", "Preference", false, "HOBBY"]',
     });
 
     expect(writer.write).toHaveBeenCalledWith(expect.objectContaining({
@@ -864,6 +1403,19 @@ describe('createMemoryImportTool', () => {
     expect(importedRecords[0].tags).toEqual(['identity', 'preference']);
   });
 
+  it('normalizes JSON-array tag strings in imported records', async () => {
+    const tool = createMemoryImportTool(writer as unknown as MemoryWriter);
+
+    await tool.execute('call-json-import-tags', {
+      records: [
+        { text: 'Tagged import', type: 'semantic', tags: '["Identity", "PREFERENCE", null]' },
+      ],
+    });
+
+    const importedRecords = writer.importBatch.mock.calls[0][0];
+    expect(importedRecords[0].tags).toEqual(['identity', 'preference']);
+  });
+
   it('handles errors gracefully and returns isError in details', async () => {
     writer.importBatch.mockRejectedValueOnce(new Error('Storage full'));
 
@@ -946,6 +1498,21 @@ describe('createMemoryPatchTool', () => {
       reason: 'corrected source',
       sourceRef: 'source:tool:memory_patch|invocation:call-patch-1',
       sourceType: 'tool_write',
+    }));
+  });
+
+  it('normalizes JSON-array tag strings when patching tags', async () => {
+    const tool = createMemoryPatchTool(writer as unknown as MemoryWriter);
+    await tool.execute('call-patch-json-tags', {
+      memory_id: 'mem-1',
+      tags: '["Belief-Corrected", "Source-Retracted", 7]',
+      reason: 'corrected tags',
+    });
+
+    expect(writer.patchMemory).toHaveBeenCalledWith(expect.objectContaining({
+      memoryId: 'mem-1',
+      tags: ['belief-corrected', 'source-retracted'],
+      reason: 'corrected tags',
     }));
   });
 
@@ -1183,7 +1750,8 @@ describe('scratchpad tools', () => {
     const tool = createScratchpadTool(store as unknown as MemoryStorePort);
 
     const listed = await tool.execute('scratchpad-list', { action: 'list' });
-    expect(resultText(listed as any)).toContain('ephemeral long-context workspace');
+    expect(resultText(listed as any)).toContain('24h ephemeral working context');
+    expect(resultText(listed as any)).toContain('durable reminders');
     expect(store.listScratchpadEntries).toHaveBeenCalledWith(20);
 
     const appended = await tool.execute('scratchpad-append', {
@@ -1211,7 +1779,7 @@ describe('scratchpad tools', () => {
     expect((missingAppendId.details as any).isError).toBe(true);
   });
 
-  it('accepts action=scratchpad_read as a legacy alias on the unified scratchpad tool', async () => {
+  it('rejects retired read helper action names on canonical scratchpad', async () => {
     const store = mockScratchpadStore();
     store.listScratchpadEntries.mockReturnValue([]);
     const tool = createScratchpadTool(store as unknown as MemoryStorePort);
@@ -1221,8 +1789,9 @@ describe('scratchpad tools', () => {
       limit: 4,
     } as any);
 
-    expect(resultText(result as any)).toContain('Scratchpad is empty');
-    expect(store.listScratchpadEntries).toHaveBeenCalledWith(4);
+    expect(resultText(result as any)).toContain('invalid action');
+    expect((result.details as any).isError).toBe(true);
+    expect(store.listScratchpadEntries).not.toHaveBeenCalled();
   });
 
   it('scratchpad_read returns empty-state message', async () => {
@@ -1251,6 +1820,7 @@ describe('scratchpad tools', () => {
     const text = resultText(result as any);
     expect(text).toContain('Scratchpad entries (1)');
     expect(text).toContain('sp-1');
+    expect(text).toContain('2023-11-14T22:15:00.000Z');
     expect(text).toContain('Remember to check weekly backup integrity.');
     expect(store.listScratchpadEntries).toHaveBeenCalledWith(3);
   });

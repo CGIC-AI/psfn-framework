@@ -1,7 +1,11 @@
 import {
   DEFAULT_UI_THEME_ID,
+  createDefaultObserverEvalSidecarLeverSettings,
+  createDefaultObserverEvalSidecarSettings,
   PROMOTED_EXTENDED_TOOL_SLOTS_MAX,
 } from '../config/runtime-config-contracts.js';
+import { normalizeGroupMemorySettings } from '../config/group-memory-config.js';
+import { normalizeEmotionScopingSettings } from '../config/emotion-scoping-config.js';
 import { normalizeImageWorkflowSettings } from '../../primitives/images/types.js';
 import {
   MEMORY_RETRIEVAL_BUDGET_PCT_RANGE,
@@ -10,6 +14,16 @@ import {
 import { normalizeCompositionalPolicyConfig } from '../capabilities/compositional-policy.js';
 import { isRecord } from '../../shared/utils/types.js';
 import { isCapabilityTier } from '../capabilities/tiers.js';
+import {
+  OBSERVER_EVAL_SIDECAR_ADAPTER_KINDS,
+  OBSERVER_EVAL_SIDECAR_DEPLOYMENT_TARGETS,
+  OBSERVER_EVAL_SIDECAR_MODES,
+  type ObserverEvalSidecarAdapterKind,
+  type ObserverEvalSidecarDeploymentTarget,
+  type ObserverEvalSidecarMode,
+  type ObserverEvalSidecarOverflowPolicy,
+  type ObserverEvalSidecarSettings,
+} from '../../shared/contracts/runtime.js';
 import {
   normalizeSttProvider,
   normalizeTtsProvider,
@@ -47,6 +61,15 @@ const TEXT_EMOTION_DTYPE_VALUES = [
   'q4f16',
 ] as const;
 const TEXT_EMOTION_DTYPE_SET = new Set<string>(TEXT_EMOTION_DTYPE_VALUES);
+const OBSERVER_EVAL_SIDECAR_ADAPTER_KIND_SET = new Set<string>(
+  OBSERVER_EVAL_SIDECAR_ADAPTER_KINDS,
+);
+const OBSERVER_EVAL_SIDECAR_DEPLOYMENT_TARGET_SET = new Set<string>(
+  OBSERVER_EVAL_SIDECAR_DEPLOYMENT_TARGETS,
+);
+const OBSERVER_EVAL_SIDECAR_MODE_SET = new Set<string>(
+  OBSERVER_EVAL_SIDECAR_MODES,
+);
 
 function normalizeTextEmotionDtype(
   value: unknown,
@@ -163,6 +186,346 @@ function normalizeShardToolsetConfig(
   return parsed;
 }
 
+function expectRecord(value: unknown, fieldPath: string): Record<string, unknown> {
+  if (!isRecord(value)) {
+    throw new Error(`Invalid settings at ${fieldPath}: expected object`);
+  }
+  return value;
+}
+
+function expectBoolean(value: unknown, fieldPath: string): boolean {
+  const normalized = toBoolean(value);
+  if (normalized === undefined) {
+    throw new Error(`Invalid settings at ${fieldPath}: expected boolean`);
+  }
+  return normalized;
+}
+
+function expectNonEmptyString(value: unknown, fieldPath: string): string {
+  const normalized = toNonEmptyString(value);
+  if (!normalized) {
+    throw new Error(`Invalid settings at ${fieldPath}: expected non-empty string`);
+  }
+  return normalized;
+}
+
+function expectIntegerInRange(
+  value: unknown,
+  fieldPath: string,
+  min: number,
+  max: number,
+): number {
+  const normalized = toIntegerInRange(value, min, max);
+  if (normalized === undefined) {
+    throw new Error(`Invalid settings at ${fieldPath}: expected integer ${min}-${max}`);
+  }
+  return normalized;
+}
+
+function optionalNonEmptyString(value: unknown, fieldPath: string): string | undefined {
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+  return expectNonEmptyString(value, fieldPath);
+}
+
+function assertHttpUrl(value: string, fieldPath: string): void {
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    throw new Error(`Invalid settings at ${fieldPath}: expected an absolute http(s) URL`);
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    throw new Error(`Invalid settings at ${fieldPath}: expected an http(s) URL`);
+  }
+}
+
+function expectEnumValue<T extends string>(
+  value: unknown,
+  fieldPath: string,
+  allowed: ReadonlySet<string>,
+  description: string,
+): T {
+  if (typeof value !== 'string') {
+    throw new Error(`Invalid settings at ${fieldPath}: expected ${description}`);
+  }
+  const normalized = value.trim();
+  if (!allowed.has(normalized)) {
+    throw new Error(`Invalid settings at ${fieldPath}: expected ${description}`);
+  }
+  return normalized as T;
+}
+
+function expectNumberInRange(
+  value: unknown,
+  fieldPath: string,
+  min: number,
+  max: number,
+): number {
+  const normalized = toNumberInRange(value, min, max);
+  if (normalized === undefined) {
+    throw new Error(`Invalid settings at ${fieldPath}: expected number ${min}..${max}`);
+  }
+  return normalized;
+}
+
+function normalizeObserverEvalSidecarLeverSettings(
+  value: unknown,
+  fieldPath: string,
+  persistenceEnabled: boolean,
+): NonNullable<ObserverEvalSidecarSettings['levers']> {
+  if (value === undefined) {
+    return createDefaultObserverEvalSidecarLeverSettings();
+  }
+  const root = expectRecord(value, fieldPath);
+  const wouldMessage = expectRecord(root.wouldMessage, `${fieldPath}.wouldMessage`);
+  const wouldCheckIn = expectRecord(root.wouldCheckIn, `${fieldPath}.wouldCheckIn`);
+  const wouldRest = expectRecord(root.wouldRest, `${fieldPath}.wouldRest`);
+  const ruminationWatch = expectRecord(root.ruminationWatch, `${fieldPath}.ruminationWatch`);
+
+  const enabled = expectBoolean(root.enabled, `${fieldPath}.enabled`);
+  if (enabled && !persistenceEnabled) {
+    // Lever events are persistence-only telemetry; without the eval-owned
+    // Postgres store there is nowhere non-authoritative to record them.
+    throw new Error(
+      `Invalid settings at ${fieldPath}.enabled: lever tracking requires observerEvalSidecar.persistence.enabled=true`,
+    );
+  }
+
+  return {
+    enabled,
+    cooldownMs: expectIntegerInRange(root.cooldownMs, `${fieldPath}.cooldownMs`, 60_000, 604_800_000),
+    wouldMessage: {
+      enabled: expectBoolean(wouldMessage.enabled, `${fieldPath}.wouldMessage.enabled`),
+      socialNeedThreshold: expectNumberInRange(
+        wouldMessage.socialNeedThreshold,
+        `${fieldPath}.wouldMessage.socialNeedThreshold`,
+        0,
+        1,
+      ),
+      attachmentIntensityThreshold: expectNumberInRange(
+        wouldMessage.attachmentIntensityThreshold,
+        `${fieldPath}.wouldMessage.attachmentIntensityThreshold`,
+        0,
+        1,
+      ),
+      sustainMs: expectIntegerInRange(wouldMessage.sustainMs, `${fieldPath}.wouldMessage.sustainMs`, 0, 604_800_000),
+    },
+    wouldCheckIn: {
+      enabled: expectBoolean(wouldCheckIn.enabled, `${fieldPath}.wouldCheckIn.enabled`),
+      valenceThreshold: expectNumberInRange(
+        wouldCheckIn.valenceThreshold,
+        `${fieldPath}.wouldCheckIn.valenceThreshold`,
+        -1,
+        1,
+      ),
+      sustainMs: expectIntegerInRange(wouldCheckIn.sustainMs, `${fieldPath}.wouldCheckIn.sustainMs`, 0, 604_800_000),
+    },
+    wouldRest: {
+      enabled: expectBoolean(wouldRest.enabled, `${fieldPath}.wouldRest.enabled`),
+      sleepPressureThreshold: expectNumberInRange(
+        wouldRest.sleepPressureThreshold,
+        `${fieldPath}.wouldRest.sleepPressureThreshold`,
+        0,
+        1,
+      ),
+      arousalThreshold: expectNumberInRange(
+        wouldRest.arousalThreshold,
+        `${fieldPath}.wouldRest.arousalThreshold`,
+        0,
+        1,
+      ),
+      sustainMs: expectIntegerInRange(wouldRest.sustainMs, `${fieldPath}.wouldRest.sustainMs`, 0, 604_800_000),
+    },
+    ruminationWatch: {
+      enabled: expectBoolean(ruminationWatch.enabled, `${fieldPath}.ruminationWatch.enabled`),
+      intensityThreshold: expectNumberInRange(
+        ruminationWatch.intensityThreshold,
+        `${fieldPath}.ruminationWatch.intensityThreshold`,
+        0,
+        1,
+      ),
+      sustainMs: expectIntegerInRange(
+        ruminationWatch.sustainMs,
+        `${fieldPath}.ruminationWatch.sustainMs`,
+        0,
+        604_800_000,
+      ),
+    },
+  };
+}
+
+function normalizeObserverEvalSidecarSettings(
+  value: unknown,
+  fieldPath: string,
+): ObserverEvalSidecarSettings {
+  const root = expectRecord(value, fieldPath);
+  const queue = expectRecord(root.queue, `${fieldPath}.queue`);
+  const adapter = expectRecord(root.adapter, `${fieldPath}.adapter`);
+  const persistence = expectRecord(root.persistence, `${fieldPath}.persistence`);
+  const garden = expectRecord(root.garden, `${fieldPath}.garden`);
+  const defaults = createDefaultObserverEvalSidecarSettings();
+
+  const enabled = expectBoolean(root.enabled, `${fieldPath}.enabled`);
+  const sidecarId = expectNonEmptyString(root.sidecarId, `${fieldPath}.sidecarId`);
+  const deploymentTarget = expectEnumValue<ObserverEvalSidecarDeploymentTarget>(
+    root.deploymentTarget,
+    `${fieldPath}.deploymentTarget`,
+    OBSERVER_EVAL_SIDECAR_DEPLOYMENT_TARGET_SET,
+    `one of: ${OBSERVER_EVAL_SIDECAR_DEPLOYMENT_TARGETS.join(', ')}`,
+  );
+  const mode = expectEnumValue<ObserverEvalSidecarMode>(
+    root.mode,
+    `${fieldPath}.mode`,
+    OBSERVER_EVAL_SIDECAR_MODE_SET,
+    `one of: ${OBSERVER_EVAL_SIDECAR_MODES.join(', ')}`,
+  );
+  const adapterKind = expectEnumValue<ObserverEvalSidecarAdapterKind>(
+    adapter.kind,
+    `${fieldPath}.adapter.kind`,
+    OBSERVER_EVAL_SIDECAR_ADAPTER_KIND_SET,
+    `one of: ${OBSERVER_EVAL_SIDECAR_ADAPTER_KINDS.join(', ')}`,
+  );
+  for (const removedKey of ['emosimRoot', 'pythonExecutable', 'deterministicSeed'] as const) {
+    if (removedKey in adapter) {
+      throw new Error(
+        `Invalid settings at ${fieldPath}.adapter.${removedKey}: the spawn-per-call emosim adapter was removed; `
+        + 'use adapter.kind=emosim_server with adapter.serverUrl instead',
+      );
+    }
+  }
+  const serverUrl = optionalNonEmptyString(adapter.serverUrl, `${fieldPath}.adapter.serverUrl`);
+  const sessionLabel = optionalNonEmptyString(
+    adapter.sessionLabel,
+    `${fieldPath}.adapter.sessionLabel`,
+  );
+  const agentName = optionalNonEmptyString(adapter.agentName, `${fieldPath}.adapter.agentName`);
+  const adapterTimeoutMs = adapter.timeoutMs === undefined
+    ? undefined
+    : expectIntegerInRange(adapter.timeoutMs, `${fieldPath}.adapter.timeoutMs`, 1, 600_000);
+
+  if (serverUrl !== undefined) {
+    assertHttpUrl(serverUrl, `${fieldPath}.adapter.serverUrl`);
+  }
+  if (enabled && adapterKind === 'disabled') {
+    throw new Error(
+      `Invalid settings at ${fieldPath}.adapter.kind: enabled sidecar requires a non-disabled adapter`,
+    );
+  }
+  if (enabled && adapterKind === 'emosim_server') {
+    if (!serverUrl) {
+      throw new Error(
+        `Invalid settings at ${fieldPath}.adapter.serverUrl: required when enabled sidecar uses adapter.kind=emosim_server`,
+      );
+    }
+    if (!sessionLabel) {
+      throw new Error(
+        `Invalid settings at ${fieldPath}.adapter.sessionLabel: required when enabled sidecar uses adapter.kind=emosim_server`,
+      );
+    }
+    if (!agentName) {
+      throw new Error(
+        `Invalid settings at ${fieldPath}.adapter.agentName: required when enabled sidecar uses adapter.kind=emosim_server`,
+      );
+    }
+  }
+
+  const persistenceEnabled = expectBoolean(
+    persistence.enabled,
+    `${fieldPath}.persistence.enabled`,
+  );
+  const persistenceRootDir = optionalNonEmptyString(
+    persistence.rootDir,
+    `${fieldPath}.persistence.rootDir`,
+  );
+  if (persistenceEnabled && !persistenceRootDir) {
+    throw new Error(
+      `Invalid settings at ${fieldPath}.persistence.rootDir: required when persistence.enabled=true`,
+    );
+  }
+
+  return {
+    enabled,
+    sidecarId,
+    deploymentTarget,
+    mode,
+    queue: {
+      maxQueuedTurns: expectIntegerInRange(
+        queue.maxQueuedTurns,
+        `${fieldPath}.queue.maxQueuedTurns`,
+        0,
+        100_000,
+      ),
+      overflowPolicy: expectEnumValue<ObserverEvalSidecarOverflowPolicy>(
+        queue.overflowPolicy,
+        `${fieldPath}.queue.overflowPolicy`,
+        new Set(['drop_newest']),
+        'drop_newest',
+      ),
+      observerTimeoutMs: expectIntegerInRange(
+        queue.observerTimeoutMs,
+        `${fieldPath}.queue.observerTimeoutMs`,
+        1,
+        600_000,
+      ),
+      maxRetries: expectIntegerInRange(
+        queue.maxRetries,
+        `${fieldPath}.queue.maxRetries`,
+        0,
+        10,
+      ),
+      retryDelayMs: expectIntegerInRange(
+        queue.retryDelayMs,
+        `${fieldPath}.queue.retryDelayMs`,
+        0,
+        600_000,
+      ),
+      shutdownDrainTimeoutMs: expectIntegerInRange(
+        queue.shutdownDrainTimeoutMs,
+        `${fieldPath}.queue.shutdownDrainTimeoutMs`,
+        1,
+        600_000,
+      ),
+    },
+    adapter: {
+      kind: adapterKind,
+      ...(serverUrl ? { serverUrl } : {}),
+      ...(sessionLabel ? { sessionLabel } : {}),
+      ...(agentName ? { agentName } : {}),
+      ...(adapterTimeoutMs !== undefined ? { timeoutMs: adapterTimeoutMs } : {}),
+      includeWorldState: adapter.includeWorldState === undefined
+        ? defaults.adapter.includeWorldState
+        : expectBoolean(adapter.includeWorldState, `${fieldPath}.adapter.includeWorldState`),
+    },
+    persistence: {
+      enabled: persistenceEnabled,
+      ...(persistenceRootDir ? { rootDir: persistenceRootDir } : {}),
+      retentionDays: expectIntegerInRange(
+        persistence.retentionDays,
+        `${fieldPath}.persistence.retentionDays`,
+        1,
+        3650,
+      ),
+      maxStoredObservations: expectIntegerInRange(
+        persistence.maxStoredObservations,
+        `${fieldPath}.persistence.maxStoredObservations`,
+        1,
+        10_000_000,
+      ),
+    },
+    garden: {
+      exposeHealth: expectBoolean(garden.exposeHealth, `${fieldPath}.garden.exposeHealth`),
+      exposeTelemetry: expectBoolean(garden.exposeTelemetry, `${fieldPath}.garden.exposeTelemetry`),
+    },
+    levers: normalizeObserverEvalSidecarLeverSettings(
+      root.levers,
+      `${fieldPath}.levers`,
+      persistenceEnabled,
+    ),
+  };
+}
+
 function hasSetting(settings: EditableSettings, key: string): boolean {
   return key in settings;
 }
@@ -247,6 +610,24 @@ function normalizeEndpointAndGardenSettings(
   if ('uiThemeId' in settings) {
     normalized.uiThemeId =
       toNonEmptyString(settings.uiThemeId) ?? DEFAULT_UI_THEME_ID;
+  }
+  if ('observerEvalSidecar' in settings) {
+    normalized.observerEvalSidecar = normalizeObserverEvalSidecarSettings(
+      settings.observerEvalSidecar,
+      'observerEvalSidecar',
+    );
+  }
+  if ('groupMemory' in settings) {
+    normalized.groupMemory = normalizeGroupMemorySettings(
+      settings.groupMemory,
+      'groupMemory',
+    );
+  }
+  if ('emotionScoping' in settings) {
+    normalized.emotionScoping = normalizeEmotionScopingSettings(
+      settings.emotionScoping,
+      'emotionScoping',
+    );
   }
 }
 

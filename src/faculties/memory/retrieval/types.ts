@@ -3,6 +3,7 @@ import type {
   SensitivityLevel,
   TrustLevel,
 } from '../../../system/trust/types.js';
+import type { MemoryEvolutionRelation } from '../memory-store-port.js';
 import type {
   MemoryPrivacyRiskBreakdown,
   PurrMemory,
@@ -20,17 +21,29 @@ export interface ScoredMemory {
   contradictionPenaltyMultiplier: number;
   explicitlyQueried: boolean;
   lowConfidenceSingleSourceSuppressed: boolean;
+  quietPreferenceSuppressed: boolean;
+  preferenceContextBoost: number;
   evidenceSourceCount: number;
   privacyRisk: number;
   privacyPenalty: number;
   privacyBreakdown: MemoryPrivacyRiskBreakdown;
   retrievalModeExcluded: boolean;
   score: number;
+  evolutionChain?: MemoryEvolutionPromptLink[];
+}
+
+export interface MemoryEvolutionPromptLink {
+  relation: MemoryEvolutionRelation;
+  confidence: number;
+  reason?: string;
+  memory: PurrMemory;
 }
 
 export interface RetrievalDecisionDiagnostics {
   candidateCount: number;
-  policyAllowedCount: number;
+	  policyAllowedCount: number;
+	  rejectedBySessionQuarantine: number;
+	  rejectedByRoomVisibility: number;
   rejectedByContactScope: number;
   rejectedBySensitivity: number;
   rejectedByPolicy: number;
@@ -73,7 +86,9 @@ export interface RetrievalTelemetry {
   retrievalBudgetPct: number;
   retrievalTokenBudget: number;
   retrievalLimitMode: 'budget' | 'hard_limit';
-  policyAllowedCount?: number;
+	  policyAllowedCount?: number;
+	  sessionQuarantineRejectedCount?: number;
+	  roomVisibilityRejectedCount?: number;
   contactScopeRejectedCount?: number;
   sensitivityRejectedCount?: number;
   policyRejectedCount?: number;
@@ -136,7 +151,12 @@ export interface RetrievalSocialContext {
   relatedContactsById: ReadonlyMap<string, RetrievalContactContext>;
 }
 
-export type RetrievalAccessRejectionKind = 'contact_scope' | 'sensitivity' | 'policy';
+export type RetrievalAccessRejectionKind =
+  | 'session_quarantine'
+  | 'room_visibility'
+  | 'contact_scope'
+  | 'sensitivity'
+  | 'policy';
 
 export interface RetrievalAccessDecision {
   allowed: boolean;

@@ -7,37 +7,90 @@ import type { MemoryWriter, MemoryWriteOptions } from './writer.js';
 import type { MemoryStorePort } from './memory-store-port.js';
 import type {
   MemoryType,
+  MemoryScopeKind,
+  MemoryScopeQuery,
   SensitivityLevel,
   MemoryRedactionOperation,
   MemoryFormationVAD,
   MemorySourceType,
+  PurrMemory,
 } from './types.js';
 import {
+  memoryMatchesScopeQuery,
+  normalizeMemoryScopeQuery,
   VALID_MEMORY_TYPES,
+  VALID_MEMORY_SCOPE_KINDS,
   VALID_SENSITIVITY_LEVELS,
   VALID_MEMORY_REDACTION_OPERATIONS,
 } from './types.js';
 import { textResult, textResultWithError } from '../../core/tools/results.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
 import { normalizeToolArguments } from '../../shared/tool-argument-normalization.js';
+import { getRequestContext } from '../../primitives/llm/request-context.js';
+import {
+  TRUST_LEVELS,
+  type TrustLevel,
+} from '../../system/trust/types.js';
+import {
+  CHANNEL_PRIVACY_VALUES,
+  type ChannelPrivacy,
+} from '../../system/trust/context-envelope.js';
+import { classifyChannelDisclosure } from '../../system/trust/policy.js';
+import {
+  retrieveEpisodicTimeline,
+  type EpisodicTimelineEntry,
+  type EpisodicTimelineStore,
+} from './retrieval/episodic.js';
+import {
+  evaluateRetrievalAccessDecision,
+  summarizeWithheldMemories,
+} from './retrieval/access.js';
+import type {
+  SharedBackgroundProvider,
+  SharedBackgroundResult,
+  SharedBackgroundSource,
+} from './retrieval/shared-background.js';
+import {
+  formatMemoryWithheldReasonLabel,
+  formatMemoryWithheldRelevanceBandLabel,
+  listMemoryWithheldReasonEntries,
+  listMemoryWithheldRelevanceBandEntries,
+  type MemoryWithheldSummary,
+} from './withheld-summary.js';
+import {
+  lexicalMemoryScoreToSimilarity,
+  normalizeLexicalMemoryQuery,
+  scoreLexicalMemoryMatch,
+  tokenizeLexicalMemoryQuery,
+} from './lexical-match.js';
 
 const INTERNAL_SHARD_SOURCE_PARAM = '__psfnShardSource';
 const SCRATCHPAD_DEFAULT_LIMIT = 20;
 const SCRATCHPAD_MAX_LIMIT = 64;
 const MEMORY_SEARCH_DEFAULT_LIMIT = 5;
 const MEMORY_SEARCH_MAX_LIMIT = 20;
+const MEMORY_TIMELINE_DEFAULT_LIMIT = 8;
+const MEMORY_TIMELINE_MAX_LIMIT = 20;
+const DATE_ONLY_PATTERN = /^(\d{4})-(\d{2})-(\d{2})$/;
+const ISO_INSTANT_WITH_ZONE_PATTERN = /^\d{4}-\d{2}-\d{2}T.+(?:Z|[+-]\d{2}:?\d{2})$/i;
 const MEMORY_TOOL_ACTIONS = [
   'write',
-  'memory_write',
   'search',
+  'shared_background',
+  'census',
+  'exists',
+  'timeline',
   'import',
+  'patch',
   'redact',
   'delete',
   'restore',
 ] as const;
+const SHARED_BACKGROUND_TOOL_LIMIT_DEFAULT = 12;
+const SHARED_BACKGROUND_TOOL_LIMIT_MAX = 25;
 type MemoryToolAction = (typeof MEMORY_TOOL_ACTIONS)[number];
-type ScratchpadToolAction = 'list' | 'scratchpad_read' | 'add' | 'replace' | 'append' | 'remove';
-const SCRATCHPAD_TOOL_ACTIONS: ScratchpadToolAction[] = ['list', 'scratchpad_read', 'add', 'replace', 'append', 'remove'];
+type ScratchpadToolAction = 'list' | 'add' | 'replace' | 'append' | 'remove';
+const SCRATCHPAD_TOOL_ACTIONS: ScratchpadToolAction[] = ['list', 'add', 'replace', 'append', 'remove'];
 
 function errorMessage(error: unknown): string {
   return toErrorMessage(error);
@@ -97,7 +150,7 @@ function buildToolSourceContext(
 }
 
 function buildUnifiedMemorySourceContext(
-  action: Exclude<MemoryToolAction, 'search'>,
+  action: Exclude<MemoryToolAction, 'search' | 'timeline'>,
   toolCallId: string,
   shardSource: string | null,
   qualifiers: string[] = [],
@@ -131,12 +184,12 @@ function formatScratchpadList(
   entries: Array<{ id: string; content: string; updatedAt: number }>,
 ): string {
   if (entries.length === 0) {
-    return 'Scratchpad is empty. Use it for temporary long-context notes, excerpts, and working summaries.';
+    return 'Scratchpad is empty. Use it for temporary same-day working notes, excerpts, and working summaries.';
   }
 
   const lines = [
-    `Scratchpad entries (${entries.length}) [ephemeral long-context workspace]:`,
-    'Temporary notes are not canonical memory or orientation. Promote only stable facts, decisions, or polished artifacts when warranted.',
+    `Scratchpad entries (${entries.length}) [24h ephemeral working context]:`,
+    'Do not use scratchpad for durable reminders, proactive follow-ups, relationship state, journals, or stable memories. Promote stable facts to memory, follow-ups to orient open threads, and durable notes to journal.',
   ];
   for (const entry of entries) {
     lines.push(`- ${entry.id} [${new Date(entry.updatedAt).toISOString()}]: ${entry.content}`);
@@ -166,14 +219,90 @@ function formatMemorySearchResults(
   return lines.join('\n');
 }
 
-function parseTags(tags: string | undefined): string[] | undefined {
-  return tags
-    ? tags.split(',').map(tag => tag.trim().toLowerCase()).filter(Boolean)
-    : undefined;
+function formatEpisodicTimeline(
+  entries: readonly EpisodicTimelineEntry[],
+  rangeLabel: string,
+): string {
+  if (entries.length === 0) {
+    return `No visible episodic memories found for ${rangeLabel}.`;
+  }
+
+  const linkedCount = entries.filter(entry => entry.source === 'linked').length;
+  const linkedSuffix = linkedCount > 0
+    ? `, including ${linkedCount} linked continuation${linkedCount === 1 ? '' : 's'}`
+    : '';
+  const lines = [
+    `Episodic timeline for ${rangeLabel} (${entries.length} episode${entries.length === 1 ? '' : 's'}${linkedSuffix}):`,
+  ];
+
+  for (const entry of entries) {
+    const episode = entry.episode;
+    const timeRange = `${formatTimelineInstant(episode.startedAt)} to ${formatTimelineInstant(episode.endedAt)}`;
+    const linkParts: string[] = [];
+    if (entry.source === 'linked') {
+      linkParts.push(`linked ${entry.relation ?? 'related'} episode`);
+      if (entry.outsideRequestedRange) linkParts.push('outside requested range');
+      if (entry.linkedFromEpisodeId) linkParts.push(`from ${entry.linkedFromEpisodeId}`);
+    }
+    const linkSuffix = linkParts.length > 0 ? ` [${linkParts.join(', ')}]` : '';
+    lines.push(`- ${timeRange}: ${episode.title} (${episode.id})${linkSuffix}`);
+    lines.push(`  ${truncateTimelineText(episode.landmark, 220)}`);
+    if (episode.themes.length > 0) {
+      lines.push(`  Themes: ${episode.themes.slice(0, 6).join(', ')}`);
+    }
+    if (episode.meaning?.text) {
+      lines.push(`  Meaning: ${truncateTimelineText(episode.meaning.text, 180)}`);
+    }
+  }
+
+  return lines.join('\n');
+}
+
+function formatTimelineInstant(isoInstant: string): string {
+  return isoInstant.replace('.000Z', 'Z').replace('T', ' ');
+}
+
+function truncateTimelineText(value: string, maxLength: number): string {
+  const compact = value.replace(/\s+/g, ' ').trim();
+  if (compact.length <= maxLength) return compact;
+  return `${compact.slice(0, Math.max(0, maxLength - 3)).trimEnd()}...`;
+}
+
+function normalizeTagEntries(entries: readonly unknown[]): string[] | undefined {
+  const normalized = entries
+    .flatMap(entry => (typeof entry === 'string' ? [entry.trim().toLowerCase()] : []))
+    .filter(Boolean);
+  return normalized.length > 0 ? normalized : undefined;
+}
+
+function parseTags(tags: unknown): string[] | undefined {
+  if (tags === undefined || tags === null) return undefined;
+  if (Array.isArray(tags)) return normalizeTagEntries(tags);
+  if (typeof tags !== 'string') return undefined;
+  const trimmed = tags.trim();
+  if (!trimmed) return undefined;
+  if (trimmed.startsWith('[')) {
+    try {
+      const parsed = JSON.parse(trimmed) as unknown;
+      if (Array.isArray(parsed)) return normalizeTagEntries(parsed);
+    } catch {
+      // Fall through to comma-splitting below for malformed legacy input.
+    }
+  }
+  return normalizeTagEntries(trimmed.split(','));
 }
 
 export interface MemoryWriteToolOptions {
   getFormationVAD?: () => MemoryFormationVAD | undefined;
+}
+
+export interface MemoryToolOptions extends MemoryWriteToolOptions {
+  episodicStore?: EpisodicTimelineStore | null;
+  /**
+   * Shared-background provider (E4.5) backing `action=shared_background`. When
+   * absent the action fails closed with an explicit not-configured error.
+   */
+  sharedBackgroundProvider?: SharedBackgroundProvider | null;
 }
 
 interface MemoryToolParams {
@@ -187,6 +316,16 @@ interface MemoryToolParams {
   sensitivity?: SensitivityLevel;
   query?: string;
   limit?: number;
+  contact_id?: string;
+  contactId?: string;
+  scope_kind?: MemoryScopeKind;
+  scopeKind?: MemoryScopeKind;
+  scope_id?: string;
+  scopeId?: string;
+  scope_tag?: string;
+  scopeTag?: string;
+  include_archived?: boolean;
+  includeArchived?: boolean;
   records?: Array<{
     text: string;
     type: MemoryType;
@@ -201,6 +340,554 @@ interface MemoryToolParams {
   operation?: MemoryRedactionOperation;
   reason?: string;
   delete_id?: string;
+  date?: string;
+  after?: string;
+  before?: string;
+  channel_id?: string;
+  channelId?: string;
+  trust_level?: TrustLevel;
+  trustLevel?: TrustLevel;
+  channel_visibility?: ChannelPrivacy;
+  channelVisibility?: ChannelPrivacy;
+  canonical_contact_id?: string;
+  canonicalContactId?: string;
+  contact_a?: string;
+  contactA?: string;
+  contact_b?: string;
+  contactB?: string;
+  formation_vad?: MemoryFormationVAD;
+  clear_formation_vad?: boolean;
+  append_tags?: string;
+}
+
+type TimelineRangeResult =
+  | { ok: true; from?: string; to?: string; label: string }
+  | { ok: false; error: string };
+
+type TimelineVisibilityResult =
+  | {
+    ok: true;
+    channelId: string;
+    trustLevel: TrustLevel;
+    channelVisibility: ChannelPrivacy;
+    /** Broadcast flag from channel classification (viewer context carries privacy only). */
+    broadcast: boolean;
+    canonicalContactId?: string;
+  }
+  | { ok: false; error: string };
+
+type MemoryVisibilityAction = 'timeline' | 'census' | 'exists' | 'shared_background';
+
+type MemoryScopeFilterResult =
+  | {
+    ok: true;
+    contactId?: string;
+    scopeQuery?: MemoryScopeQuery;
+  }
+  | { ok: false; error: string };
+
+interface MemoryVisibilityFilter {
+  contactId?: string;
+  scopeQuery?: MemoryScopeQuery;
+  includeArchived: boolean;
+}
+
+interface MemoryAccessOptions {
+  trustLevel: TrustLevel;
+  channelPrivacy: ChannelPrivacy;
+  broadcast: boolean;
+  canonicalContactId?: string;
+}
+
+interface MemoryAccessPartition {
+  visible: PurrMemory[];
+  withheld: Array<PurrMemory & { similarity?: number }>;
+  withheldSummary?: MemoryWithheldSummary;
+}
+
+function resolveTimelineRange(params: MemoryToolParams): TimelineRangeResult {
+  const date = normalizeOptionalToolString(params.date);
+  const after = normalizeOptionalToolString(params.after);
+  const before = normalizeOptionalToolString(params.before);
+
+  if (date && (after || before)) {
+    return { ok: false, error: 'Error: provide either date or after/before for action=timeline, not both' };
+  }
+
+  if (date) {
+    const dayRange = normalizeTimelineDate(date);
+    if (!dayRange) {
+      return { ok: false, error: 'Error: date must be a valid YYYY-MM-DD UTC date for action=timeline' };
+    }
+    return {
+      ok: true,
+      from: dayRange.from,
+      to: dayRange.to,
+      label: `date ${date}`,
+    };
+  }
+
+  if (!after && !before) {
+    return { ok: false, error: 'Error: date or after/before is required for action=timeline' };
+  }
+
+  const from = after ? normalizeTimelineBoundary(after, 'after', 'start') : undefined;
+  if (from && 'error' in from) {
+    return { ok: false, error: from.error };
+  }
+  const to = before ? normalizeTimelineBoundary(before, 'before', 'end') : undefined;
+  if (to && 'error' in to) {
+    return { ok: false, error: to.error };
+  }
+
+  const normalizedFrom = from?.value;
+  const normalizedTo = to?.value;
+  if (normalizedFrom && normalizedTo && normalizedFrom > normalizedTo) {
+    return { ok: false, error: 'Error: after must be before or equal to before for action=timeline' };
+  }
+
+  return {
+    ok: true,
+    ...(normalizedFrom ? { from: normalizedFrom } : {}),
+    ...(normalizedTo ? { to: normalizedTo } : {}),
+    label: normalizedFrom && normalizedTo
+      ? `range ${normalizedFrom} to ${normalizedTo}`
+      : normalizedFrom
+        ? `range after ${normalizedFrom}`
+        : `range before ${normalizedTo}`,
+  };
+}
+
+function resolveMemoryVisibility(
+  params: MemoryToolParams,
+  action: MemoryVisibilityAction,
+): TimelineVisibilityResult {
+  const requestContext = getRequestContext();
+  const channelId = normalizeOptionalToolString(params.channel_id)
+    ?? normalizeOptionalToolString(params.channelId)
+    ?? normalizeOptionalToolString(requestContext?.channelId);
+  const trustLevelResult = normalizeTimelineTrustLevel(
+    params.trust_level ?? params.trustLevel ?? requestContext?.viewerTrustLevel,
+    action,
+  );
+  const visibilityResult = normalizeTimelineChannelVisibility(
+    params.channel_visibility ?? params.channelVisibility ?? requestContext?.viewerChannelPrivacy,
+    action,
+  );
+  const canonicalContactId = normalizeOptionalToolString(params.canonical_contact_id)
+    ?? normalizeOptionalToolString(params.canonicalContactId);
+
+  if (!channelId) {
+    return { ok: false, error: `Error: channel_id is required for action=${action} when no request context channel is available` };
+  }
+  if (!trustLevelResult.ok) {
+    return { ok: false, error: trustLevelResult.error };
+  }
+  if (!visibilityResult.ok) {
+    return { ok: false, error: visibilityResult.error };
+  }
+
+  return {
+    ok: true,
+    channelId,
+    trustLevel: trustLevelResult.value,
+    channelVisibility: visibilityResult.value,
+    broadcast: classifyChannelDisclosure(channelId).broadcast,
+    ...(canonicalContactId ? { canonicalContactId } : {}),
+  };
+}
+
+function normalizeOptionalToolString(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function normalizeTimelineTrustLevel(
+  value: unknown,
+  action: MemoryVisibilityAction,
+): { ok: true; value: TrustLevel } | { ok: false; error: string } {
+  const normalized = normalizeOptionalToolString(value);
+  if (!normalized) {
+    return { ok: false, error: `Error: trust_level is required for action=${action} when no request context trust is available` };
+  }
+  if ((TRUST_LEVELS as readonly string[]).includes(normalized)) {
+    return { ok: true, value: normalized as TrustLevel };
+  }
+  return {
+    ok: false,
+    error: `Error: invalid trust_level "${normalized}" for action=${action}. Must be one of: ${TRUST_LEVELS.join(', ')}`,
+  };
+}
+
+function normalizeTimelineChannelVisibility(
+  value: unknown,
+  action: MemoryVisibilityAction,
+): { ok: true; value: ChannelPrivacy } | { ok: false; error: string } {
+  const normalized = normalizeOptionalToolString(value);
+  if (!normalized) {
+    return {
+      ok: false,
+      error: `Error: channel_visibility is required for action=${action} when no request context visibility is available`,
+    };
+  }
+  if ((CHANNEL_PRIVACY_VALUES as readonly string[]).includes(normalized)) {
+    return { ok: true, value: normalized as ChannelPrivacy };
+  }
+  return {
+    ok: false,
+    error: `Error: invalid channel_visibility "${normalized}" for action=${action}. Must be one of: ${CHANNEL_PRIVACY_VALUES.join(', ')}`,
+  };
+}
+
+function normalizeTimelineDate(value: string): { from: string; to: string } | null {
+  const dateParts = parseDateOnlyParts(value);
+  if (!dateParts) return null;
+  return {
+    from: new Date(Date.UTC(dateParts.year, dateParts.month - 1, dateParts.day, 0, 0, 0, 0)).toISOString(),
+    to: new Date(Date.UTC(dateParts.year, dateParts.month - 1, dateParts.day, 23, 59, 59, 999)).toISOString(),
+  };
+}
+
+function normalizeTimelineBoundary(
+  value: string,
+  field: 'after' | 'before',
+  dateOnlyEdge: 'start' | 'end',
+): { value: string } | { error: string } {
+  const dateRange = normalizeTimelineDate(value);
+  if (dateRange) {
+    return { value: dateOnlyEdge === 'start' ? dateRange.from : dateRange.to };
+  }
+  if (!ISO_INSTANT_WITH_ZONE_PATTERN.test(value)) {
+    return {
+      error: `Error: ${field} must be a valid YYYY-MM-DD date or ISO-8601 timestamp with timezone for action=timeline`,
+    };
+  }
+  const timestamp = Date.parse(value);
+  if (!Number.isFinite(timestamp)) {
+    return {
+      error: `Error: ${field} must be a valid YYYY-MM-DD date or ISO-8601 timestamp with timezone for action=timeline`,
+    };
+  }
+  return { value: new Date(timestamp).toISOString() };
+}
+
+function parseDateOnlyParts(value: string): { year: number; month: number; day: number } | null {
+  const match = DATE_ONLY_PATTERN.exec(value);
+  if (!match) return null;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  if (
+    date.getUTCFullYear() !== year
+    || date.getUTCMonth() !== month - 1
+    || date.getUTCDate() !== day
+  ) {
+    return null;
+  }
+  return { year, month, day };
+}
+
+function normalizeOptionalBoolean(value: unknown, fallback: boolean): boolean {
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'string') {
+    const normalized = value.trim().toLowerCase();
+    if (normalized === 'true' || normalized === '1' || normalized === 'yes') return true;
+    if (normalized === 'false' || normalized === '0' || normalized === 'no') return false;
+  }
+  return fallback;
+}
+
+function resolveMemoryVisibilityFilter(
+  params: MemoryToolParams,
+  defaultIncludeArchived: boolean,
+): MemoryScopeFilterResult & { includeArchived?: boolean } {
+  const contactId = normalizeOptionalToolString(params.contact_id)
+    ?? normalizeOptionalToolString(params.contactId);
+  const rawScopeKind = normalizeOptionalToolString(params.scope_kind)
+    ?? normalizeOptionalToolString(params.scopeKind);
+  const scopeId = normalizeOptionalToolString(params.scope_id)
+    ?? normalizeOptionalToolString(params.scopeId);
+  const scopeTag = normalizeOptionalToolString(params.scope_tag)
+    ?? normalizeOptionalToolString(params.scopeTag);
+  const includeArchived = normalizeOptionalBoolean(
+    params.include_archived ?? params.includeArchived,
+    defaultIncludeArchived,
+  );
+
+  let scopeKind: MemoryScopeKind | undefined;
+  if (rawScopeKind) {
+    if (!(VALID_MEMORY_SCOPE_KINDS as readonly string[]).includes(rawScopeKind)) {
+      return {
+        ok: false,
+        error: `Error: invalid scope_kind "${rawScopeKind}". Must be one of: ${VALID_MEMORY_SCOPE_KINDS.join(', ')}`,
+      };
+    }
+    scopeKind = rawScopeKind as MemoryScopeKind;
+  }
+  if ((scopeKind && !scopeId) || (!scopeKind && scopeId)) {
+    return { ok: false, error: 'Error: scope_kind and scope_id must be provided together' };
+  }
+
+  const scopeQuery = normalizeMemoryScopeQuery({
+    ...(scopeKind && scopeId ? { refs: [{ kind: scopeKind, id: scopeId }] } : {}),
+    ...(scopeTag ? { tags: [scopeTag] } : {}),
+    mode: 'only',
+  });
+  return {
+    ok: true,
+    ...(contactId ? { contactId } : {}),
+    ...(scopeQuery ? { scopeQuery } : {}),
+    includeArchived,
+  };
+}
+
+function memoryState(memory: Pick<PurrMemory, 'deletedAt' | 'supersededBy'>): 'active' | 'archived' {
+  return memory.deletedAt || memory.supersededBy ? 'archived' : 'active';
+}
+
+function memoryMatchesVisibilityFilter(memory: PurrMemory, filter: MemoryVisibilityFilter): boolean {
+  if (!filter.includeArchived && memoryState(memory) === 'archived') return false;
+  if (filter.contactId && memory.contactId !== filter.contactId) return false;
+  if (filter.scopeQuery && !memoryMatchesScopeQuery(memory, filter.scopeQuery)) return false;
+  return true;
+}
+
+async function listFilteredMemories(
+  memoryStore: MemoryStorePort,
+  filter: MemoryVisibilityFilter,
+): Promise<PurrMemory[]> {
+  const memories = await memoryStore.listMemories();
+  return memories.filter(memory => memoryMatchesVisibilityFilter(memory, filter));
+}
+
+function partitionVisibleMemories<T extends PurrMemory & { similarity?: number }>(
+  memories: readonly T[],
+  access: MemoryAccessOptions,
+): MemoryAccessPartition {
+  const visible: PurrMemory[] = [];
+  const withheld: Array<PurrMemory & { similarity?: number }> = [];
+  for (const memory of memories) {
+    const decision = evaluateRetrievalAccessDecision(memory, access);
+    if (decision.allowed) {
+      visible.push(memory);
+    } else {
+      withheld.push(memory);
+    }
+  }
+  const { summary } = summarizeWithheldMemories(memories, access);
+  return {
+    visible,
+    withheld,
+    ...(summary ? { withheldSummary: summary } : {}),
+  };
+}
+
+function incrementCount(counts: Record<string, number>, key: string): void {
+  const normalized = key.trim();
+  if (!normalized) return;
+  counts[normalized] = (counts[normalized] ?? 0) + 1;
+}
+
+function countBy<T>(items: readonly T[], keyForItem: (item: T) => string | undefined): Record<string, number> {
+  const counts: Record<string, number> = {};
+  for (const item of items) {
+    incrementCount(counts, keyForItem(item) ?? 'none');
+  }
+  return counts;
+}
+
+function formatCounts(counts: Record<string, number>, maxEntries = 8): string {
+  const entries = Object.entries(counts)
+    .filter(([, count]) => count > 0)
+    .sort(([leftKey, leftCount], [rightKey, rightCount]) => rightCount - leftCount || leftKey.localeCompare(rightKey));
+  if (entries.length === 0) return 'none';
+  const visible = entries.slice(0, maxEntries).map(([key, count]) => `${key}: ${count}`);
+  const hiddenCount = entries.length - visible.length;
+  if (hiddenCount > 0) visible.push(`${hiddenCount} more`);
+  return visible.join(', ');
+}
+
+function scopeRefLabel(memory: PurrMemory): string | undefined {
+  if (!memory.scopeRef) return undefined;
+  return `${memory.scopeRef.kind}:${memory.scopeRef.id}`;
+}
+
+function provenanceBucket(memory: PurrMemory): string {
+  if (memory.sourceType && memory.sourceType !== 'unknown') return memory.sourceType;
+  const normalized = memory.sourceRef.toLowerCase();
+  if (normalized.includes('shard:')) return 'shard';
+  if (normalized.includes('tool:') || normalized.includes('source:tool')) return 'tool_write';
+  if (normalized.includes('heartbeat')) return 'heartbeat';
+  if (normalized.includes('reflection')) return 'reflection';
+  if (normalized.includes('session') || normalized.includes('turn') || normalized.includes('conversation')) return 'turn';
+  return 'unspecified_source';
+}
+
+function formatWithheldContext(
+  summary: MemoryWithheldSummary | undefined,
+  withheld: readonly PurrMemory[],
+): string[] {
+  if (!summary || summary.totalCount <= 0) return [];
+  const plural = summary.totalCount === 1 ? 'memory was' : 'memories were';
+  const lines = [
+    `- Withheld context: ${summary.totalCount} candidate ${plural} present but not included in visible detail because trust/privacy gates withheld it.`,
+  ];
+  const reasonLine = listMemoryWithheldReasonEntries(summary.reasonCounts)
+    .map(({ reason, count }) => `${count} ${formatMemoryWithheldReasonLabel(reason)}`)
+    .join(', ');
+  if (reasonLine) {
+    lines.push(`- Withheld trust/privacy reasons: ${reasonLine}.`);
+  }
+  const relevanceLine = listMemoryWithheldRelevanceBandEntries(summary.relevanceBands ?? {})
+    .map(({ band, count }) => `${count} ${formatMemoryWithheldRelevanceBandLabel(band)}`)
+    .join(', ');
+  if (relevanceLine) {
+    lines.push(`- Withheld relevance bands: ${relevanceLine}.`);
+  }
+  lines.push(`- Withheld categories: ${formatCounts(countBy(withheld, memory => memory.type))}.`);
+  lines.push(`- Withheld states: ${formatCounts(countBy(withheld, memoryState))}.`);
+  lines.push(`- Withheld provenance classes: ${formatCounts(countBy(withheld, provenanceBucket))}.`);
+  lines.push('- Protected withheld memory text, memory IDs, contact IDs, and scope labels are not included.');
+  return lines;
+}
+
+function formatVisibleMemoryBreakdown(visible: readonly PurrMemory[]): string[] {
+  if (visible.length === 0) return [];
+  const lines = [
+    `- By type: ${formatCounts(countBy(visible, memory => memory.type))}.`,
+    `- By sensitivity: ${formatCounts(countBy(visible, memory => memory.sensitivity))}.`,
+    `- By state: ${formatCounts(countBy(visible, memoryState))}.`,
+  ];
+  const contactCounts = countBy(visible, memory => memory.contactId ?? 'not contact-scoped');
+  lines.push(`- By contact scope: ${formatCounts(contactCounts)}.`);
+  const scopeRefCounts = countBy(visible, memory => scopeRefLabel(memory) ?? 'not scope-ref-scoped');
+  lines.push(`- By scope ref: ${formatCounts(scopeRefCounts)}.`);
+  const scopeTagCounts = countBy(
+    visible.flatMap(memory => memory.scopeTags?.length ? memory.scopeTags : ['not scope-tag-scoped']),
+    tag => tag,
+  );
+  lines.push(`- By scope tag: ${formatCounts(scopeTagCounts)}.`);
+  return lines;
+}
+
+function formatMemoryCensusResult(partition: MemoryAccessPartition): string {
+  const lines = ['Memory census:'];
+  const visibleCount = partition.visible.length;
+  const withheldCount = partition.withheldSummary?.totalCount ?? 0;
+  if (visibleCount === 0 && withheldCount === 0) {
+    lines.push('- No memories matched the requested filters.');
+    lines.push('No memory text returned.');
+    return lines.join('\n');
+  }
+
+  lines.push(`- Visible memories: ${visibleCount}.`);
+  lines.push(...formatVisibleMemoryBreakdown(partition.visible));
+  lines.push(...formatWithheldContext(partition.withheldSummary, partition.withheld));
+  lines.push('No memory text returned.');
+  return lines.join('\n');
+}
+
+function formatMemoryExistsResult(partition: MemoryAccessPartition): string {
+  const visibleCount = partition.visible.length;
+  const withheldCount = partition.withheldSummary?.totalCount ?? 0;
+  const totalCount = visibleCount + withheldCount;
+  const lines = ['Memory exists check:'];
+  if (totalCount === 0) {
+    lines.push('- Result: no matching memories found for the requested topic and filters.');
+    lines.push('No memory text returned.');
+    return lines.join('\n');
+  }
+
+  if (visibleCount > 0) {
+    lines.push(`- Result: yes, ${visibleCount} visible matching ${visibleCount === 1 ? 'memory' : 'memories'} found.`);
+  } else {
+    lines.push('- Result: yes, matching memory exists, but none is visible in this channel.');
+  }
+  lines.push(...formatVisibleMemoryBreakdown(partition.visible));
+  lines.push(...formatWithheldContext(partition.withheldSummary, partition.withheld));
+  lines.push('No memory text returned.');
+  return lines.join('\n');
+}
+
+const SHARED_BACKGROUND_SOURCE_LABELS: Record<SharedBackgroundSource, string> = {
+  edge_evidence: 'edge-evidence',
+  co_mention: 'co-mention',
+  shared_room: 'shared-room',
+};
+
+function formatSharedBackgroundSources(sources: readonly SharedBackgroundSource[]): string {
+  if (sources.length === 0) return 'unknown';
+  return sources.map(source => SHARED_BACKGROUND_SOURCE_LABELS[source]).join(', ');
+}
+
+function formatSharedBackgroundResult(result: SharedBackgroundResult): string {
+  const nameA = result.contactADisplayName ?? result.contactAId;
+  const nameB = result.contactBDisplayName ?? result.contactBId;
+  const lines = [`Shared background between ${nameA} and ${nameB}:`];
+
+  if (!result.resolved) {
+    const missing = result.missingContactIds.length > 0
+      ? result.missingContactIds.join(', ')
+      : 'one or both contacts';
+    lines.push(`- Could not resolve both contacts (${missing}). No shared background returned.`);
+    lines.push('No memory text returned.');
+    return lines.join('\n');
+  }
+
+  if (result.items.length === 0) {
+    lines.push('- No shared-background memories are visible in this context.');
+  } else {
+    lines.push(`- Visible shared-background memories: ${result.items.length} (of ${result.totalCandidates} candidate${result.totalCandidates === 1 ? '' : 's'}).`);
+    for (const item of result.items) {
+      lines.push(
+        `- [${formatSharedBackgroundSources(item.sources)}] `
+        + `(${item.memory.type}; ${item.memory.sensitivity}): ${item.memory.text}`,
+      );
+    }
+  }
+
+  if (result.truncated) {
+    lines.push(`- Result truncated to the top ${result.limit} by evidence-source priority, then salience, then recency.`);
+  }
+
+  if (result.withheldSummary && result.withheldSummary.totalCount > 0) {
+    const plural = result.withheldSummary.totalCount === 1 ? 'memory was' : 'memories were';
+    lines.push(
+      `- Withheld context: ${result.withheldSummary.totalCount} candidate ${plural} present but withheld by trust/privacy gates.`,
+    );
+    const reasonLine = listMemoryWithheldReasonEntries(result.withheldSummary.reasonCounts)
+      .map(({ reason, count }) => `${count} ${formatMemoryWithheldReasonLabel(reason)}`)
+      .join(', ');
+    if (reasonLine) {
+      lines.push(`- Withheld trust/privacy reasons: ${reasonLine}.`);
+    }
+    lines.push('- Protected withheld memory text, memory IDs, contact IDs, and scope labels are not included.');
+  }
+
+  return lines.join('\n');
+}
+
+function filterTopicMatches(memories: readonly PurrMemory[], query: string): Array<PurrMemory & { similarity: number }> {
+  const normalizedQuery = normalizeLexicalMemoryQuery(query);
+  const tokens = tokenizeLexicalMemoryQuery(normalizedQuery);
+  if (tokens.length === 0) return [];
+  return memories
+    .map((memory) => {
+      const score = scoreLexicalMemoryMatch(memory, tokens, normalizedQuery);
+      if (score <= 0) return null;
+      return {
+        ...memory,
+        similarity: lexicalMemoryScoreToSimilarity(score),
+      };
+    })
+    .filter((memory): memory is PurrMemory & { similarity: number } => memory !== null)
+    .sort((left, right) => (
+      right.similarity - left.similarity
+      || right.salience - left.salience
+      || right.extractedAt - left.extractedAt
+    ));
 }
 
 export function createMemoryWriteTool(
@@ -282,9 +969,7 @@ export function createMemoryWriteTool(
         const emotionalValence = normalizedParams.emotional_valence !== undefined ? clamp(Number(normalizedParams.emotional_valence), -1, 1) : undefined;
         const confidence = normalizedParams.confidence !== undefined ? clamp(Number(normalizedParams.confidence), 0, 1) : undefined;
 
-        const tags = normalizedParams.tags
-          ? normalizedParams.tags.split(',').map(t => t.trim().toLowerCase()).filter(Boolean)
-          : undefined;
+        const tags = parseTags(normalizedParams.tags);
         const formationVAD = options.getFormationVAD?.();
         const sourceContext = buildToolSourceContext('memory_write', toolCallId, internalSource);
 
@@ -307,8 +992,14 @@ export function createMemoryWriteTool(
             return textResult(`Memory created (id: ${result.memory.id}, type: ${type})`);
           case 'deduplicated':
             return textResult(`Duplicate detected — bumped salience on existing memory (id: ${result.existingId})`);
+          case 'updated':
+            return textResult(`Memory created and linked as a compatible update (id: ${result.memory.id}, type: ${type})`);
           case 'superseded':
             return textResult(`Memory created, superseding older conflicting memory (id: ${result.memory.id}, type: ${type})`);
+          case 'negated':
+            return textResult(`Memory created and linked as negating prior memory (id: ${result.memory.id}, type: ${type})`);
+          case 'conflict':
+            return textResult(`Memory created and linked for conflict review (id: ${result.memory.id}, type: ${type})`);
         }
       } catch (error) {
         return textResultWithError(`Error writing memory: ${errorMessage(error)}`, true);
@@ -389,7 +1080,7 @@ export function createMemoryImportTool(writer: MemoryWriter): AgentTool<any> {
             importance: r.importance !== undefined ? clamp(Number(r.importance), 0, 1) : undefined,
             emotionalValence: r.emotional_valence !== undefined ? clamp(Number(r.emotional_valence), -1, 1) : undefined,
             confidence: r.confidence !== undefined ? clamp(Number(r.confidence), 0, 1) : undefined,
-            tags: r.tags ? r.tags.split(',').map(t => t.trim().toLowerCase()).filter(Boolean) : undefined,
+            tags: parseTags(r.tags),
             sourceRef: sourceContext.sourceRef,
             sourceType: sourceContext.sourceType,
             provenance: sourceContext.provenance,
@@ -459,6 +1150,8 @@ export function createMemoryPatchTool(writer: MemoryWriter): AgentTool<any> {
         if (params.tags && params.append_tags) {
           return textResultWithError('Error: provide either tags or append_tags, not both', true);
         }
+        const replacementTags = params.tags ? parseTags(params.tags) ?? [] : undefined;
+        const appendTags = params.append_tags ? parseTags(params.append_tags) ?? [] : undefined;
 
         const sourceContext = buildToolSourceContext('memory_patch', toolCallId, internalSource);
         const result = await writer.patchMemory({
@@ -471,10 +1164,8 @@ export function createMemoryPatchTool(writer: MemoryWriter): AgentTool<any> {
             : {}),
           ...(params.formation_vad !== undefined ? { formationVAD: params.formation_vad } : {}),
           ...(params.clear_formation_vad !== undefined ? { clearFormationVAD: params.clear_formation_vad } : {}),
-          ...(params.tags ? { tags: params.tags.split(',').map(tag => tag.trim().toLowerCase()).filter(Boolean) } : {}),
-          ...(params.append_tags
-            ? { appendTags: params.append_tags.split(',').map(tag => tag.trim().toLowerCase()).filter(Boolean) }
-            : {}),
+          ...(params.tags ? { tags: replacementTags } : {}),
+          ...(params.append_tags ? { appendTags } : {}),
           ...(params.reason ? { reason: params.reason.trim() } : {}),
           sourceRef: sourceContext.sourceRef,
           sourceType: sourceContext.sourceType,
@@ -655,19 +1346,22 @@ export function createUndoMemoryDeleteTool(memoryStore: MemoryStorePort): AgentT
 export function createMemoryTool(
   writer: MemoryWriter,
   memoryStore: MemoryStorePort,
-  options: MemoryWriteToolOptions = {},
+  options: MemoryToolOptions = {},
 ): AgentTool<any> {
   return {
     name: 'memory',
     description:
       'Unified long-term memory tool. '
-      + 'Use action=write|search|import|redact|delete|restore to manage durable memory explicitly.',
+      + 'Use action=search with required query for lookup, action=write with required text and type to store memory, '
+      + 'and action=census|exists|timeline for orientation before writing. '
+      + 'Use action=shared_background with contact_a and contact_b to find what links two people. '
+      + 'Mutation actions require exact IDs: patch/redact/delete use memory_id; restore uses delete_id.',
     label: 'memory',
     parameters: Type.Object({
       action: Type.Unsafe<MemoryToolAction>({
         type: 'string',
         enum: [...MEMORY_TOOL_ACTIONS],
-        description: 'One of: write, search, import, redact, delete, restore.',
+        description: 'One of: write, search, shared_background, census, exists, timeline, import, patch, redact, delete, restore.',
       }),
       text: Type.Optional(
         Type.String({ description: 'Required for action=write. The memory text to store.' }),
@@ -682,7 +1376,8 @@ export function createMemoryTool(
       importance: Type.Optional(Type.Number({ description: 'Optional 0-1 significance for action=write.' })),
       emotional_valence: Type.Optional(Type.Number({ description: 'Optional -1 to 1 emotional valence for action=write.' })),
       confidence: Type.Optional(Type.Number({ description: 'Optional 0-1 confidence for action=write.' })),
-      tags: Type.Optional(Type.String({ description: 'Optional comma-separated tags for action=write or action=import records.' })),
+      tags: Type.Optional(Type.String({ description: 'Optional comma-separated tags for action=write/import, or full replacement tags for action=patch.' })),
+      append_tags: Type.Optional(Type.String({ description: 'Optional comma-separated tags to append for action=patch. Mutually exclusive with tags.' })),
       sensitivity: Type.Optional(
         Type.Unsafe<SensitivityLevel>({
           type: 'string',
@@ -691,12 +1386,66 @@ export function createMemoryTool(
         }),
       ),
       query: Type.Optional(
-        Type.String({ description: 'Required for action=search. Lexical memory search query.' }),
+        Type.String({ description: 'Required for action=search or action=exists. Lexical memory topic query.' }),
       ),
       limit: Type.Optional(
         Type.Number({
-          description: `Optional result limit for action=search (${MEMORY_SEARCH_DEFAULT_LIMIT}-${MEMORY_SEARCH_MAX_LIMIT}).`,
+          description: `Optional result limit for action=search or action=timeline. Search: ${MEMORY_SEARCH_DEFAULT_LIMIT}-${MEMORY_SEARCH_MAX_LIMIT}; timeline: ${MEMORY_TIMELINE_DEFAULT_LIMIT}-${MEMORY_TIMELINE_MAX_LIMIT}.`,
         }),
+      ),
+      contact_id: Type.Optional(
+        Type.String({ description: 'For action=census or action=exists, restrict aggregate checks to one contact id.' }),
+      ),
+      scope_kind: Type.Optional(
+        Type.Unsafe<MemoryScopeKind>({
+          type: 'string',
+          enum: [...VALID_MEMORY_SCOPE_KINDS],
+          description: 'For action=census or action=exists with scope_id, restrict aggregate checks to this scope kind.',
+        }),
+      ),
+      scope_id: Type.Optional(
+        Type.String({ description: 'For action=census or action=exists with scope_kind, restrict aggregate checks to this scope id.' }),
+      ),
+      scope_tag: Type.Optional(
+        Type.String({ description: 'For action=census or action=exists, restrict aggregate checks to memories carrying this scope tag.' }),
+      ),
+      include_archived: Type.Optional(
+        Type.Boolean({ description: 'For action=census or action=exists, include soft-deleted or superseded memories in aggregate counts.' }),
+      ),
+      date: Type.Optional(
+        Type.String({ description: 'For action=timeline, UTC day to navigate as YYYY-MM-DD.' }),
+      ),
+      after: Type.Optional(
+        Type.String({ description: 'For action=timeline, inclusive range start as YYYY-MM-DD or ISO-8601 timestamp with timezone.' }),
+      ),
+      before: Type.Optional(
+        Type.String({ description: 'For action=timeline, inclusive range end as YYYY-MM-DD or ISO-8601 timestamp with timezone.' }),
+      ),
+      channel_id: Type.Optional(
+        Type.String({ description: 'For action=census, action=exists, or action=timeline, current channel id. Usually supplied by runtime context.' }),
+      ),
+      trust_level: Type.Optional(
+        Type.Unsafe<TrustLevel>({
+          type: 'string',
+          enum: [...TRUST_LEVELS],
+          description: 'For action=census, action=exists, or action=timeline, current viewer trust level. Usually supplied by runtime context.',
+        }),
+      ),
+      channel_visibility: Type.Optional(
+        Type.Unsafe<ChannelPrivacy>({
+          type: 'string',
+          enum: [...CHANNEL_PRIVACY_VALUES],
+          description: 'For action=census, action=exists, or action=timeline, current channel visibility. Usually supplied by runtime context.',
+        }),
+      ),
+      canonical_contact_id: Type.Optional(
+        Type.String({ description: 'For action=census, action=exists, or action=timeline, optional canonical contact id for trusted cross-channel continuity.' }),
+      ),
+      contact_a: Type.Optional(
+        Type.String({ description: 'Required for action=shared_background. First contact id of the pair to find shared background for.' }),
+      ),
+      contact_b: Type.Optional(
+        Type.String({ description: 'Required for action=shared_background. Second contact id of the pair to find shared background for.' }),
       ),
       records: Type.Optional(
         Type.Array(
@@ -718,7 +1467,7 @@ export function createMemoryTool(
         Type.String({ description: 'Optional import source label for action=import. Default: "import".' }),
       ),
       memory_id: Type.Optional(
-        Type.String({ description: 'Required for action=redact or action=delete. Memory ID to mutate.' }),
+        Type.String({ description: 'Required for action=patch, action=redact, or action=delete. Memory ID to mutate.' }),
       ),
       operation: Type.Optional(
         Type.Unsafe<MemoryRedactionOperation>({
@@ -728,11 +1477,17 @@ export function createMemoryTool(
         }),
       ),
       reason: Type.Optional(
-        Type.String({ description: 'Optional reason logged for redact/delete operations.' }),
+        Type.String({ description: 'Optional reason logged for patch/redact/delete operations.' }),
       ),
       delete_id: Type.Optional(
         Type.String({ description: 'Required for action=restore. Delete checkpoint ID to restore.' }),
       ),
+      formation_vad: Type.Optional(Type.Object({
+        valence: Type.Number(),
+        arousal: Type.Number(),
+        dominance: Type.Number(),
+      })),
+      clear_formation_vad: Type.Optional(Type.Boolean({ description: 'Clear existing formation VAD metadata for action=patch.' })),
     }),
     execute: async (
       toolCallId: string,
@@ -742,9 +1497,9 @@ export function createMemoryTool(
       try {
         const normalizedParams = (normalizeToolArguments(
           'memory',
-          params as Record<string, unknown>,
+          params as unknown as Record<string, unknown>,
         ) ?? params) as MemoryToolParams;
-        const internalSource = extractInternalSource(normalizedParams as Record<string, unknown>);
+        const internalSource = extractInternalSource(normalizedParams as unknown as Record<string, unknown>);
         const action = normalizedParams.action;
 
         if (!MEMORY_TOOL_ACTIONS.includes(action)) {
@@ -752,7 +1507,6 @@ export function createMemoryTool(
         }
 
         switch (action) {
-          case 'memory_write':
           case 'write': {
             const text = normalizedParams.text?.trim();
             const type = normalizedParams.type;
@@ -791,8 +1545,14 @@ export function createMemoryTool(
                 return textResult(`Memory created (id: ${result.memory.id}, type: ${type})`);
               case 'deduplicated':
                 return textResult(`Duplicate detected — bumped salience on existing memory (id: ${result.existingId})`);
+              case 'updated':
+                return textResult(`Memory created and linked as a compatible update (id: ${result.memory.id}, type: ${type})`);
               case 'superseded':
                 return textResult(`Memory created, superseding older conflicting memory (id: ${result.memory.id}, type: ${type})`);
+              case 'negated':
+                return textResult(`Memory created and linked as negating prior memory (id: ${result.memory.id}, type: ${type})`);
+              case 'conflict':
+                return textResult(`Memory created and linked for conflict review (id: ${result.memory.id}, type: ${type})`);
             }
             break;
           }
@@ -800,7 +1560,13 @@ export function createMemoryTool(
           case 'search': {
             const query = normalizedParams.query?.trim();
             if (!query) {
-              return textResultWithError('Error: query is required for action=search', true);
+              return textResultWithError(
+                'Error: query is required for action=search. '
+                + 'Missing required field "query". '
+                + 'Minimal valid JSON: {"action":"search","query":"topic"}. '
+                + 'Do not retry action=search without a non-empty query.',
+                true,
+              );
             }
 
             const limit = normalizedParams.limit === undefined
@@ -814,6 +1580,136 @@ export function createMemoryTool(
               sensitivity: memory.sensitivity,
               similarity: memory.similarity,
             }))));
+          }
+
+          case 'shared_background': {
+            const provider = options.sharedBackgroundProvider;
+            if (!provider) {
+              return textResultWithError(
+                'Error: shared-background retrieval is not configured for action=shared_background',
+                true,
+              );
+            }
+            const contactAId = normalizeOptionalToolString(normalizedParams.contact_a)
+              ?? normalizeOptionalToolString(normalizedParams.contactA);
+            const contactBId = normalizeOptionalToolString(normalizedParams.contact_b)
+              ?? normalizeOptionalToolString(normalizedParams.contactB);
+            if (!contactAId || !contactBId) {
+              return textResultWithError(
+                'Error: contact_a and contact_b are both required for action=shared_background',
+                true,
+              );
+            }
+            if (contactAId === contactBId) {
+              return textResultWithError(
+                'Error: contact_a and contact_b must be different contacts for action=shared_background',
+                true,
+              );
+            }
+            const visibility = resolveMemoryVisibility(normalizedParams, 'shared_background');
+            if (!visibility.ok) {
+              return textResultWithError(visibility.error, true);
+            }
+            const limit = normalizedParams.limit === undefined
+              ? SHARED_BACKGROUND_TOOL_LIMIT_DEFAULT
+              : clampInt(normalizedParams.limit, 1, SHARED_BACKGROUND_TOOL_LIMIT_MAX);
+            const result = await provider.sharedBackground({
+              contactAId,
+              contactBId,
+              access: {
+                trustLevel: visibility.trustLevel,
+                channelPrivacy: visibility.channelVisibility,
+                broadcast: visibility.broadcast,
+                ...(visibility.canonicalContactId ? { canonicalContactId: visibility.canonicalContactId } : {}),
+              },
+              limit,
+            });
+            return textResult(formatSharedBackgroundResult(result));
+          }
+
+          case 'census': {
+            const visibility = resolveMemoryVisibility(normalizedParams, 'census');
+            if (!visibility.ok) {
+              return textResultWithError(visibility.error, true);
+            }
+            const filterResult = resolveMemoryVisibilityFilter(normalizedParams, true);
+            if (!filterResult.ok) {
+              return textResultWithError(filterResult.error, true);
+            }
+            const filter: MemoryVisibilityFilter = {
+              ...(filterResult.contactId ? { contactId: filterResult.contactId } : {}),
+              ...(filterResult.scopeQuery ? { scopeQuery: filterResult.scopeQuery } : {}),
+              includeArchived: filterResult.includeArchived ?? true,
+            };
+            const memories = await listFilteredMemories(memoryStore, filter);
+            const partition = partitionVisibleMemories(memories, {
+              trustLevel: visibility.trustLevel,
+              channelPrivacy: visibility.channelVisibility,
+              broadcast: visibility.broadcast,
+              ...(visibility.canonicalContactId ? { canonicalContactId: visibility.canonicalContactId } : {}),
+            });
+            return textResult(formatMemoryCensusResult(partition));
+          }
+
+          case 'exists': {
+            const query = normalizedParams.query?.trim();
+            if (!query) {
+              return textResultWithError('Error: query is required for action=exists', true);
+            }
+            const visibility = resolveMemoryVisibility(normalizedParams, 'exists');
+            if (!visibility.ok) {
+              return textResultWithError(visibility.error, true);
+            }
+            const filterResult = resolveMemoryVisibilityFilter(normalizedParams, false);
+            if (!filterResult.ok) {
+              return textResultWithError(filterResult.error, true);
+            }
+            const filter: MemoryVisibilityFilter = {
+              ...(filterResult.contactId ? { contactId: filterResult.contactId } : {}),
+              ...(filterResult.scopeQuery ? { scopeQuery: filterResult.scopeQuery } : {}),
+              includeArchived: filterResult.includeArchived ?? false,
+            };
+            const memories = await listFilteredMemories(memoryStore, filter);
+            const matchingMemories = filterTopicMatches(memories, query);
+            const partition = partitionVisibleMemories(matchingMemories, {
+              trustLevel: visibility.trustLevel,
+              channelPrivacy: visibility.channelVisibility,
+              broadcast: visibility.broadcast,
+              ...(visibility.canonicalContactId ? { canonicalContactId: visibility.canonicalContactId } : {}),
+            });
+            return textResult(formatMemoryExistsResult(partition));
+          }
+
+          case 'timeline': {
+            if (!options.episodicStore) {
+              return textResultWithError('Error: episodic timeline store is not configured for action=timeline', true);
+            }
+
+            const range = resolveTimelineRange(normalizedParams);
+            if (!range.ok) {
+              return textResultWithError(range.error, true);
+            }
+            const visibility = resolveMemoryVisibility(normalizedParams, 'timeline');
+            if (!visibility.ok) {
+              return textResultWithError(visibility.error, true);
+            }
+
+            const limit = normalizedParams.limit === undefined
+              ? MEMORY_TIMELINE_DEFAULT_LIMIT
+              : clampInt(normalizedParams.limit, 1, MEMORY_TIMELINE_MAX_LIMIT);
+            const entries = await retrieveEpisodicTimeline(options.episodicStore, {
+              ...(range.from ? { from: range.from } : {}),
+              ...(range.to ? { to: range.to } : {}),
+              channelId: visibility.channelId,
+              trustLevel: visibility.trustLevel,
+              channelDisclosure: {
+                channelPrivacy: visibility.channelVisibility,
+                broadcast: visibility.broadcast,
+              },
+              ...(visibility.canonicalContactId ? { canonicalContactId: visibility.canonicalContactId } : {}),
+              limit,
+            });
+            return textResult(formatEpisodicTimeline(entries, range.label));
           }
 
           case 'import': {
@@ -862,6 +1758,45 @@ export function createMemoryTool(
             return textResult(
               `Import complete: ${result.written} written, ${result.deduplicated} deduplicated, `
               + `${result.superseded} superseded, ${result.errors} errors (${records.length} total)`,
+            );
+          }
+
+          case 'patch': {
+            const memoryId = normalizedParams.memory_id?.trim();
+            if (!memoryId) {
+              return textResultWithError('Error: memory_id is required for action=patch', true);
+            }
+            if (normalizedParams.tags && normalizedParams.append_tags) {
+              return textResultWithError('Error: provide either tags or append_tags for action=patch, not both', true);
+            }
+
+            const replacementTags = normalizedParams.tags ? parseTags(normalizedParams.tags) ?? [] : undefined;
+            const appendTags = normalizedParams.append_tags ? parseTags(normalizedParams.append_tags) ?? [] : undefined;
+            const sourceContext = buildUnifiedMemorySourceContext('patch', toolCallId, internalSource);
+            const result = await writer.patchMemory({
+              memoryId,
+              ...(normalizedParams.text !== undefined ? { text: normalizedParams.text } : {}),
+              ...(normalizedParams.importance !== undefined ? { importance: clamp(Number(normalizedParams.importance), 0, 1) } : {}),
+              ...(normalizedParams.confidence !== undefined ? { confidence: clamp(Number(normalizedParams.confidence), 0, 1) } : {}),
+              ...(normalizedParams.emotional_valence !== undefined
+                ? { emotionalValence: clamp(Number(normalizedParams.emotional_valence), -1, 1) }
+                : {}),
+              ...(normalizedParams.formation_vad !== undefined ? { formationVAD: normalizedParams.formation_vad } : {}),
+              ...(normalizedParams.clear_formation_vad !== undefined ? { clearFormationVAD: normalizedParams.clear_formation_vad } : {}),
+              ...(normalizedParams.tags ? { tags: replacementTags } : {}),
+              ...(normalizedParams.append_tags ? { appendTags } : {}),
+              ...(normalizedParams.reason ? { reason: normalizedParams.reason.trim() } : {}),
+              sourceRef: sourceContext.sourceRef,
+              sourceType: sourceContext.sourceType,
+              provenance: sourceContext.provenance,
+            });
+
+            if (!result) {
+              return textResultWithError(`Memory not found or already deleted: ${memoryId}`, true);
+            }
+
+            return textResult(
+              `Memory patched (id: ${result.memory.id}, event: ${result.patchEventId}, fields: ${result.updatedFields.join(', ')}).`,
             );
           }
 
@@ -950,8 +1885,9 @@ export function createScratchpadTool(memoryStore: MemoryStorePort): AgentTool<an
   return {
     name: 'scratchpad',
     description:
-      'Ephemeral long-context note workspace for temporary excerpts, summaries, and working notes. '
-      + 'Use action=list|add|replace|append|remove. Scratchpad stays distinct from orient and durable memory.',
+      '24h ephemeral working-note workspace for temporary excerpts, summaries, and same-day task context. '
+      + 'Use action=list|add|replace|append|remove. Do not use scratchpad for durable reminders, proactive follow-ups, relationship state, journals, or stable memories. '
+      + 'Use orient concerns/open threads for reminders and proactive follow-ups, memory for stable facts, and journal for durable markdown notes.',
     label: 'scratchpad',
     parameters: Type.Object({
       action: Type.Unsafe<ScratchpadToolAction>({
@@ -986,7 +1922,6 @@ export function createScratchpadTool(memoryStore: MemoryStorePort): AgentTool<an
         }
 
         switch (action) {
-          case 'scratchpad_read':
           case 'list': {
             const limit = params.limit === undefined
               ? SCRATCHPAD_DEFAULT_LIMIT

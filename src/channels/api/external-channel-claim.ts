@@ -4,7 +4,7 @@ import type {
   SatelliteRegistryConfig,
   SatelliteRoutingMetadata,
 } from '../../shared/contracts/satellite-registry.js';
-import type { ChannelVisibility } from '../../system/trust/types.js';
+import type { ChannelPrivacy } from '../../system/trust/context-envelope.js';
 import type { ExternalChannelProfileConfig } from '../backplane/config.js';
 import type { ApiAuthPrincipal } from '../backplane/http/auth.js';
 import {
@@ -26,7 +26,7 @@ export interface ApiTurnIdentity {
   authorId: string;
   authorName: string;
   source: MessageRoutingSource;
-  channelPrivacy?: ChannelVisibility;
+  channelPrivacy?: ChannelPrivacy;
   canonicalContactId?: string;
   satellite?: SatelliteRoutingMetadata;
 }

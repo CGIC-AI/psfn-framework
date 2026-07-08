@@ -43,6 +43,22 @@ describe('classifyLLMError', () => {
     expect(result.retryable).toBe(true);
   });
 
+  it('classifies unreachable backend connection errors as retryable connectivity failures', () => {
+    const error = Object.assign(
+      new Error(
+        '500 litellm.InternalServerError: OpenAIException - Connection error. '
+        + 'Cannot connect to host 192.168.1.43:8000 ssl:default '
+        + "[Connect call failed ('192.168.1.43', 8000)]",
+      ),
+      { status: 500 },
+    );
+
+    const result = classifyLLMError(error);
+    expect(result.category).toBe('connection_unavailable');
+    expect(result.retryable).toBe(true);
+    expect(result.statusCode).toBe(500);
+  });
+
   it('classifies auth errors as retryable', () => {
     const error = Object.assign(new Error('unauthorized'), {
       status: 401,
@@ -52,6 +68,24 @@ describe('classifyLLMError', () => {
     expect(result.category).toBe('auth');
     expect(result.retryable).toBe(true);
     expect(result.statusCode).toBe(401);
+  });
+
+  it('classifies empty provider responses as retryable', () => {
+    const result = classifyLLMError(
+      new Error('LLM response from litellm/ChatGPTN contained no text or tool calls'),
+    );
+
+    expect(result.category).toBe('empty_response');
+    expect(result.retryable).toBe(true);
+  });
+
+  it('classifies provider template artifacts as retryable empty responses', () => {
+    const result = classifyLLMError(
+      new Error('LLM response from litellm/ChatGPTN began with provider template artifact <｜begin▁of▁sentence｜>'),
+    );
+
+    expect(result.category).toBe('empty_response');
+    expect(result.retryable).toBe(true);
   });
 
   it('defaults to unknown for unmatched errors', () => {

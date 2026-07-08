@@ -3,11 +3,16 @@ import type {
   CoreMemoryAppendOptions,
   CoreMemoryBlock,
   CoreMemoryLabel,
+  CoreMemoryFormatContext,
+  CoreMemoryMutationOptions,
   CoreMemoryRethinkInput,
+  CoreMemoryScopeOptions,
   CoreMemorySnapshot,
 } from '../core-memory/store.js';
 import type {
+  MemoryProvenance,
   MemoryScopeQuery,
+  MemorySourceType,
   PurrMemory,
 } from './types.js';
 
@@ -46,6 +51,43 @@ export interface MemoryLink {
   createdAt: number;
 }
 
+export const MEMORY_EVOLUTION_RELATIONS = [
+  'supersedes',
+  'updates',
+  'negates',
+  'conflicts_with',
+] as const;
+
+export type MemoryEvolutionRelation = typeof MEMORY_EVOLUTION_RELATIONS[number];
+
+export interface MemoryEvolutionLink {
+  id: string;
+  sourceMemoryId: string;
+  targetMemoryId: string;
+  relation: MemoryEvolutionRelation;
+  confidence: number;
+  reason?: string;
+  sourceRef?: string;
+  sourceType: MemorySourceType;
+  provenanceRefs: string[];
+  provenance?: MemoryProvenance;
+  createdAt: number;
+}
+
+export interface MemoryEvolutionLinkInput {
+  sourceMemoryId: string;
+  targetMemoryId: string;
+  relation: MemoryEvolutionRelation;
+  confidence?: number;
+  reason?: string;
+  sourceRef?: string;
+  sourceType?: MemorySourceType;
+  provenanceRefs?: string[];
+  provenance?: MemoryProvenance;
+  createdAt?: number;
+  linkId?: string;
+}
+
 export interface MemoryAbstractionLink {
   id: string;
   sourceMemoryId: string;
@@ -81,14 +123,21 @@ export interface ScratchpadAddResult {
   evictedIds: string[];
 }
 
-export type MemoryMaintenanceReviewKind = 'near_duplicate' | 'provenance_confidence';
+export type MemoryMaintenanceReviewKind =
+  | 'near_duplicate'
+  | 'provenance_confidence'
+  | 'high_impact_low_confidence'
+  | 'stale_memory'
+  | 'conflicting_memory';
 
 export type MemoryMaintenanceReviewStatus = 'pending' | 'quarantined' | 'resolved' | 'dismissed';
 
 export type MemoryMaintenanceRecommendedAction =
   | 'review'
   | 'merge_candidate'
-  | 'corroborate_or_dismiss';
+  | 'corroborate_or_dismiss'
+  | 'verify_or_supersede'
+  | 'resolve_conflict';
 
 export interface MemoryMaintenanceReviewCandidate {
   memoryId: string;
@@ -145,6 +194,24 @@ export interface MemoryMaintenanceReviewListOptions {
   limit?: number;
 }
 
+export interface MemoryMaintenanceDiagnostics {
+  reviewCount: number;
+  pendingReviewCount: number;
+  reviewCountsByKind: Record<string, number>;
+  reviewCountsByStatus: Record<string, number>;
+  oldestPendingReviewAgeMs: number;
+  averagePendingReviewAgeMs: number;
+  evolutionDecisionCount: number;
+  evolutionDecisionCountsByRelation: Record<MemoryEvolutionRelation, number>;
+  supersessionDecisionCount: number;
+  conflictDecisionCount: number;
+  latestEvolutionDecisionAt?: number;
+}
+
+export interface MemoryMaintenanceDiagnosticsOptions {
+  now?: number;
+}
+
 export type MemorySearchResult = PurrMemory & { similarity: number };
 
 export interface MemoryStoreStats {
@@ -170,6 +237,7 @@ export type MemoryStoreUpdatePatch = Partial<Pick<
   | 'scopeRef'
   | 'scopeTags'
   | 'provenanceRefs'
+  | 'retentionClass'
   | 'sourceType'
   | 'provenance'
   | 'contactId'
@@ -182,6 +250,32 @@ export type MemoryStoreUpdatePatch = Partial<Pick<
 export interface MemoryListOptions {
   limit?: number;
   offset?: number;
+}
+
+export interface MemoryAdminListOptions extends MemoryListOptions {
+  type?: PurrMemory['type'];
+  sensitivity?: PurrMemory['sensitivity'];
+  retentionClass?: PurrMemory['retentionClass'];
+  preferenceOnly?: boolean;
+  startDate?: number;
+  endDate?: number;
+}
+
+export interface MemoryAdminPrivacySummary {
+  activeMemoryCount: number;
+  highSensitivityCount: number;
+  consentGatedCount: number;
+  contactLinkedCount: number;
+  scopedCount: number;
+  preferenceCount: number;
+  durablePreferenceCount: number;
+  sensitivityCounts: Record<string, number>;
+}
+
+export interface MemoryAdminListResult {
+  memories: PurrMemory[];
+  total: number;
+  privacySummary: MemoryAdminPrivacySummary;
 }
 
 export interface MemorySoftDeleteOptions {
@@ -209,6 +303,27 @@ export interface MemoryAbstractionLinkInput {
 export interface MemoryBulkUpdatePatch {
   type?: PurrMemory['type'];
   sensitivity?: PurrMemory['sensitivity'];
+  retentionClass?: PurrMemory['retentionClass'];
+}
+
+export interface MemorySalienceUpdate {
+  id: string;
+  salience: number;
+}
+
+export function normalizeMemorySalienceUpdates(
+  updates: readonly MemorySalienceUpdate[],
+): MemorySalienceUpdate[] {
+  const byId = new Map<string, number>();
+  for (const update of updates) {
+    const id = update.id.trim();
+    if (!id) continue;
+    if (!Number.isFinite(update.salience)) {
+      throw new Error('bulkUpdateSalience requires finite salience values');
+    }
+    byId.set(id, update.salience);
+  }
+  return Array.from(byId, ([id, salience]) => ({ id, salience }));
 }
 
 export interface ScratchpadEntryCreateOptions {
@@ -246,7 +361,10 @@ interface MemoryStorePortBackend extends ScratchpadProvider {
   updateMemory(id: string, updates: MemoryStoreUpdatePatch): Awaitable<void>;
   recordPatchEvent(event: MemoryPatchEvent): Awaitable<void>;
   getAllActiveMemories(limit?: number): Awaitable<PurrMemory[]>;
+  listMemories(options?: MemoryListOptions): Awaitable<PurrMemory[]>;
   listActiveMemories(options?: MemoryListOptions): Awaitable<PurrMemory[]>;
+  listAdminMemories(options?: MemoryAdminListOptions): Awaitable<MemoryAdminListResult>;
+  getAdminMemoryPrivacySummary(): Awaitable<MemoryAdminPrivacySummary>;
   countActiveMemories(): Awaitable<number>;
   getById(id: string): Awaitable<PurrMemory | undefined>;
   softDeleteMemory(
@@ -263,6 +381,15 @@ interface MemoryStorePortBackend extends ScratchpadProvider {
   getAbstractionLinksForAbstractedMemory(
     abstractedMemoryId: string,
   ): Awaitable<MemoryAbstractionLink[]>;
+  recordEvolutionLink(input: MemoryEvolutionLinkInput): Awaitable<MemoryEvolutionLink>;
+  getEvolutionLinksForSourceMemory(
+    sourceMemoryId: string,
+    relation?: MemoryEvolutionRelation,
+  ): Awaitable<MemoryEvolutionLink[]>;
+  getEvolutionLinksForTargetMemory(
+    targetMemoryId: string,
+    relation?: MemoryEvolutionRelation,
+  ): Awaitable<MemoryEvolutionLink[]>;
   getStats(): Awaitable<MemoryStoreStats>;
   getMemoriesByChannel(channelId: string, limit: number): Awaitable<PurrMemory[]>;
   getMemoriesByContact(contactId: string, limit: number): Awaitable<PurrMemory[]>;
@@ -271,6 +398,7 @@ interface MemoryStorePortBackend extends ScratchpadProvider {
   getLinkedMemories(id: string): Awaitable<MemoryLink[]>;
   bulkDelete(ids: string[]): Awaitable<number>;
   bulkUpdate(ids: string[], fields: MemoryBulkUpdatePatch): Awaitable<number>;
+  bulkUpdateSalience(updates: MemorySalienceUpdate[]): Awaitable<number>;
   upsertContactProfile(profile: ContactProfileArtifact): Awaitable<void>;
   getContactProfile(contactId: string): Awaitable<ContactProfileArtifact | undefined>;
   listContactProfiles(): Awaitable<ContactProfileArtifact[]>;
@@ -295,6 +423,7 @@ interface MemoryStorePortBackend extends ScratchpadProvider {
     options?: MemoryMaintenanceReviewListOptions,
   ): Awaitable<MemoryMaintenanceReview[]>;
   getMemoryMaintenanceReview?(id: string): Awaitable<MemoryMaintenanceReview | undefined>;
+  getMemoryMaintenanceDiagnostics?(options?: MemoryMaintenanceDiagnosticsOptions): Awaitable<MemoryMaintenanceDiagnostics>;
 }
 
 export interface MemoryStorePort extends ScratchpadProvider {
@@ -315,7 +444,10 @@ export interface MemoryStorePort extends ScratchpadProvider {
   updateMemory(id: string, updates: MemoryStoreUpdatePatch): Promise<void>;
   recordPatchEvent(event: MemoryPatchEvent): Promise<void>;
   getAllActiveMemories(limit?: number): Promise<PurrMemory[]>;
+  listMemories(options?: MemoryListOptions): Promise<PurrMemory[]>;
   listActiveMemories(options?: MemoryListOptions): Promise<PurrMemory[]>;
+  listAdminMemories(options?: MemoryAdminListOptions): Promise<MemoryAdminListResult>;
+  getAdminMemoryPrivacySummary(): Promise<MemoryAdminPrivacySummary>;
   countActiveMemories(): Promise<number>;
   getById(id: string): Promise<PurrMemory | undefined>;
   softDeleteMemory(id: string, options?: MemorySoftDeleteOptions): Promise<MemoryDeleteVersion | null>;
@@ -327,6 +459,15 @@ export interface MemoryStorePort extends ScratchpadProvider {
   recordAbstractionLink(input: MemoryAbstractionLinkInput): Promise<MemoryAbstractionLink>;
   getAbstractionLinksForSourceMemory(sourceMemoryId: string): Promise<MemoryAbstractionLink[]>;
   getAbstractionLinksForAbstractedMemory(abstractedMemoryId: string): Promise<MemoryAbstractionLink[]>;
+  recordEvolutionLink(input: MemoryEvolutionLinkInput): Promise<MemoryEvolutionLink>;
+  getEvolutionLinksForSourceMemory(
+    sourceMemoryId: string,
+    relation?: MemoryEvolutionRelation,
+  ): Promise<MemoryEvolutionLink[]>;
+  getEvolutionLinksForTargetMemory(
+    targetMemoryId: string,
+    relation?: MemoryEvolutionRelation,
+  ): Promise<MemoryEvolutionLink[]>;
   getStats(): Promise<MemoryStoreStats>;
   getMemoriesByChannel(channelId: string, limit: number): Promise<PurrMemory[]>;
   getMemoriesByContact(contactId: string, limit: number): Promise<PurrMemory[]>;
@@ -335,6 +476,7 @@ export interface MemoryStorePort extends ScratchpadProvider {
   getLinkedMemories(id: string): Promise<MemoryLink[]>;
   bulkDelete(ids: string[]): Promise<number>;
   bulkUpdate(ids: string[], fields: MemoryBulkUpdatePatch): Promise<number>;
+  bulkUpdateSalience(updates: MemorySalienceUpdate[]): Promise<number>;
   upsertContactProfile(profile: ContactProfileArtifact): Promise<void>;
   getContactProfile(contactId: string): Promise<ContactProfileArtifact | undefined>;
   listContactProfiles(): Promise<ContactProfileArtifact[]>;
@@ -355,19 +497,20 @@ export interface MemoryStorePort extends ScratchpadProvider {
   upsertMemoryMaintenanceReview?(input: MemoryMaintenanceReviewInput): Promise<MemoryMaintenanceReview>;
   listMemoryMaintenanceReviews?(options?: MemoryMaintenanceReviewListOptions): Promise<MemoryMaintenanceReview[]>;
   getMemoryMaintenanceReview?(id: string): Promise<MemoryMaintenanceReview | undefined>;
+  getMemoryMaintenanceDiagnostics?(options?: MemoryMaintenanceDiagnosticsOptions): Promise<MemoryMaintenanceDiagnostics>;
 }
 
 export interface CoreMemoryStorePort {
-  getSnapshot(): CoreMemorySnapshot;
-  getBlock(label: CoreMemoryLabel): CoreMemoryBlock;
+  getSnapshot(options?: CoreMemoryScopeOptions): CoreMemorySnapshot;
+  getBlock(label: CoreMemoryLabel, options?: CoreMemoryScopeOptions): CoreMemoryBlock;
   append(
     label: CoreMemoryLabel,
     appendText: string,
     options?: CoreMemoryAppendOptions,
   ): CoreMemoryBlock;
-  replace(label: CoreMemoryLabel, content: string): CoreMemoryBlock;
-  rethink(input: CoreMemoryRethinkInput): CoreMemorySnapshot;
-  formatForContext(): string;
+  replace(label: CoreMemoryLabel, content: string, options?: CoreMemoryMutationOptions): CoreMemoryBlock;
+  rethink(input: CoreMemoryRethinkInput, options?: CoreMemoryMutationOptions): CoreMemorySnapshot;
+  formatForContext(context?: CoreMemoryFormatContext): string;
 }
 
 export function createMemoryStorePort(store: MemoryStorePortBackend): MemoryStorePort {
@@ -392,7 +535,10 @@ export function createMemoryStorePort(store: MemoryStorePortBackend): MemoryStor
       await store.recordPatchEvent(event);
     },
     getAllActiveMemories: async (limit) => await store.getAllActiveMemories(limit),
+    listMemories: async (options) => await store.listMemories(options),
     listActiveMemories: async (options) => await store.listActiveMemories(options),
+    listAdminMemories: async (options) => await store.listAdminMemories(options),
+    getAdminMemoryPrivacySummary: async () => await store.getAdminMemoryPrivacySummary(),
     countActiveMemories: async () => await store.countActiveMemories(),
     getById: async (id) => await store.getById(id),
     softDeleteMemory: async (id, options) => await store.softDeleteMemory(id, options),
@@ -405,6 +551,13 @@ export function createMemoryStorePort(store: MemoryStorePortBackend): MemoryStor
     getAbstractionLinksForAbstractedMemory: async (abstractedMemoryId) => (
       await store.getAbstractionLinksForAbstractedMemory(abstractedMemoryId)
     ),
+    recordEvolutionLink: async (input) => await store.recordEvolutionLink(input),
+    getEvolutionLinksForSourceMemory: async (sourceMemoryId, relation) => (
+      await store.getEvolutionLinksForSourceMemory(sourceMemoryId, relation)
+    ),
+    getEvolutionLinksForTargetMemory: async (targetMemoryId, relation) => (
+      await store.getEvolutionLinksForTargetMemory(targetMemoryId, relation)
+    ),
     getStats: async () => await store.getStats(),
     getMemoriesByChannel: async (channelId, limit) => await store.getMemoriesByChannel(channelId, limit),
     getMemoriesByContact: async (contactId, limit) => await store.getMemoriesByContact(contactId, limit),
@@ -413,6 +566,7 @@ export function createMemoryStorePort(store: MemoryStorePortBackend): MemoryStor
     getLinkedMemories: async (id) => await store.getLinkedMemories(id),
     bulkDelete: async (ids) => await store.bulkDelete(ids),
     bulkUpdate: async (ids, fields) => await store.bulkUpdate(ids, fields),
+    bulkUpdateSalience: async (updates) => await store.bulkUpdateSalience(updates),
     upsertContactProfile: async (profile) => {
       await store.upsertContactProfile(profile);
     },
@@ -443,16 +597,23 @@ export function createMemoryStorePort(store: MemoryStorePortBackend): MemoryStor
         getMemoryMaintenanceReview: async (id) => await store.getMemoryMaintenanceReview!(id),
       }
       : {}),
+    ...(store.getMemoryMaintenanceDiagnostics
+      ? {
+        getMemoryMaintenanceDiagnostics: async (options) => (
+          await store.getMemoryMaintenanceDiagnostics!(options)
+        ),
+      }
+      : {}),
   };
 }
 
 export function createCoreMemoryStorePort(store: CoreMemoryStorePort): CoreMemoryStorePort {
   return {
-    getSnapshot: () => store.getSnapshot(),
-    getBlock: (label) => store.getBlock(label),
+    getSnapshot: (options) => store.getSnapshot(options),
+    getBlock: (label, options) => store.getBlock(label, options),
     append: (label, appendText, options) => store.append(label, appendText, options),
-    replace: (label, content) => store.replace(label, content),
-    rethink: (input) => store.rethink(input),
-    formatForContext: () => store.formatForContext(),
+    replace: (label, content, options) => store.replace(label, content, options),
+    rethink: (input, options) => store.rethink(input, options),
+    formatForContext: (context) => store.formatForContext(context),
   };
 }

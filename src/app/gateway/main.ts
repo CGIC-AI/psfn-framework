@@ -2,7 +2,7 @@
 // Host-side process that holds secrets and proxies all external interactions.
 // Run: npx tsx src/app/gateway/main.ts
 
-import 'dotenv/config';
+import '../../shared/utils/load-dotenv.js';
 import { ensureActiveTimezone } from '../../shared/time/active-timezone.js';
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
@@ -18,6 +18,7 @@ import type { StartupConfigHydrationDiagnostics } from '../startup/support/boots
 import { hydrateSecretBearingConfig } from '../startup/support/bootstrap-helpers.js';
 import { RUNTIME_MODE } from '../../system/lifecycle/runtime-mode.js';
 import { applyGatewayTlsConfig } from '../../boundary/gateway/tls.js';
+import { formatGatewayRpcEndpoint } from '../../boundary/gateway/transport.js';
 import { buildGatewayPrivilegedCore } from '../../boundary/gateway/privileged-core.js';
 import {
   initGatewayChannelSurfaces,
@@ -29,9 +30,10 @@ import {
 import { createGatewayVoiceSurfaces } from '../../boundary/gateway/voice-surfaces.js';
 import { resolveStartupPreflightBundle } from '../startup/support/startup-preflight.js';
 import { runShutdownSequence } from '../startup/support/shutdown-helpers.js';
-import { createSignalShutdownHandler } from '../startup/support/signal-shutdown.js';
+import { createSignalShutdownHandler, registerProcessErrorHandlers } from '../startup/support/signal-shutdown.js';
 import { resolveGatewayApiSurfaceBindings, startOptionalGatewayApiServer } from './api-surface.js';
 import { loadSatelliteRegistryConfig } from '../../channels/backplane/satellite-registry.js';
+import { CHARGE_POLICY_FILE_NAME } from '../../system/config/charge-policy-config.js';
 import { ensurePersonalFilesLayout } from '../../persistence/layout.js';
 
 const log = createComponentLogger('Gateway');
@@ -92,6 +94,10 @@ async function main(): Promise<void> {
       startupHydration.trustPolicyConfig.channelClassification.visibilityOverrides.prefix,
     ).length,
   });
+  log.info('Loaded charge policy quotas', {
+    runChargeQuotaByLane: startupHydration.chargePolicyConfig.runChargeQuotaByLane,
+    sourcePath: `${startupHydration.pathSnapshot.systemDataDir}/${CHARGE_POLICY_FILE_NAME}`,
+  });
   if (!bootstrap.diagnostics.workspacePathProvided) {
     log.warn('WORKSPACE_PATH not set, defaulting to runtime layout workspace path', {
       workspacePath: bootstrap.workspacePath,
@@ -109,7 +115,6 @@ async function main(): Promise<void> {
     eventBus,
     eligibilityGate,
     privilegedServices,
-    auditDb,
     createGatewayServer,
   } = privilegedCore;
   const stopDebugObserver = attachTerminalDebugObserver(eventBus, { scope: 'gateway' });
@@ -122,8 +127,9 @@ async function main(): Promise<void> {
     });
   }
 
-  // Ensure gateway socket directory exists
-  mkdirSync(dirname(bootstrap.socketPath), { recursive: true });
+  if (bootstrap.gatewayRpcEndpoint.kind === 'unix') {
+    mkdirSync(dirname(bootstrap.gatewayRpcEndpoint.socketPath), { recursive: true });
+  }
   ensurePersonalFilesLayout(bootstrap.workspaceRoot);
   if (bootstrap.workspaceRoot !== bootstrap.gitRepoRoot) {
     log.info('Gateway workspace and git roots diverge', {
@@ -166,13 +172,9 @@ async function main(): Promise<void> {
   });
   const { discord, telegram } = channelSurfaces;
 
-  if ((config.persistenceBackend ?? 'sqlite') === 'sqlite') {
-    log.info(`Audit log: ${bootstrap.auditDbPath}`);
-  } else {
-    log.info('Gateway audit persistence backend', {
-      persistenceBackend: config.persistenceBackend ?? 'sqlite',
-    });
-  }
+  log.info('Gateway audit persistence backend', {
+    persistenceBackend: config.persistenceBackend,
+  });
 
   // ── Create gateway server ──
 
@@ -217,7 +219,7 @@ async function main(): Promise<void> {
   await voiceSurfaces.start();
   await startGatewayChannelSurfaces(channelSurfaces, bootstrap, log);
 
-  log.info(`Ready — listening on ${bootstrap.socketPath}`);
+  log.info(`Ready — gateway RPC listening on ${formatGatewayRpcEndpoint(bootstrap.gatewayRpcEndpoint)}`);
   log.info(`Workspace: ${bootstrap.workspaceRoot}`);
 
   // ── Graceful shutdown ──
@@ -236,12 +238,6 @@ async function main(): Promise<void> {
         { step: 'stop voice surfaces', action: () => voiceSurfaces.stop() },
         { step: 'stop gateway server', action: () => gateway.stop() },
         { step: 'stop channel adapters', action: () => stopGatewayChannelSurfaces(channelSurfaces) },
-        {
-          step: 'close audit database',
-          action: () => {
-            auditDb?.close();
-          },
-        },
       ], log);
       log.info('Stopped');
     })();
@@ -267,6 +263,13 @@ async function main(): Promise<void> {
       log.error('Unhandled SIGTERM shutdown error', { error: String(error) });
       process.exit(1);
     });
+  });
+
+  registerProcessErrorHandlers({
+    logger: log,
+    requestShutdown: () => {
+      void shutdown('uncaughtException').catch(() => process.exit(1));
+    },
   });
 }
 

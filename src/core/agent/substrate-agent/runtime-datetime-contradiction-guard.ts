@@ -1,7 +1,19 @@
+import {
+  getPromptPlanBlockText,
+  renderPromptPlanAssembledPrompt,
+  serializePromptPlanSystemPrompt,
+  type PromptPlan,
+} from './turn-execution/prompt-plan.js';
+
 export interface RuntimeDatetimePromptContextLike {
   assembledPrompt?: string;
   runtimeContext?: string;
+  finalSystemPrompt?: string;
   runtimeContextSections?: ReadonlyArray<{
+    id: string;
+    content?: string;
+  }>;
+  finalSystemSections?: ReadonlyArray<{
     id: string;
     content?: string;
   }>;
@@ -51,18 +63,61 @@ const CONTRADICTION_PATTERNS = [
 function hasRuntimeDatetimeAnchor(promptContext: RuntimeDatetimePromptContextLike | null | undefined): boolean {
   if (!promptContext) return false;
 
-  if (promptContext.assembledPrompt?.includes('<current_datetime>')) {
+  if (
+    promptContext.assembledPrompt?.includes('<runtime.current_datetime')
+    || promptContext.assembledPrompt?.includes('<current_datetime>')
+    || promptContext.finalSystemPrompt?.includes('<runtime.current_datetime')
+    || promptContext.finalSystemPrompt?.includes('<current_datetime>')
+  ) {
     return true;
   }
 
-  if (promptContext.runtimeContext?.includes('<current_datetime>')) {
+  if (
+    promptContext.runtimeContext?.includes('<runtime.current_datetime')
+    || promptContext.runtimeContext?.includes('<current_datetime>')
+  ) {
     return true;
   }
 
-  return promptContext.runtimeContextSections?.some(section => (
+  return (promptContext.runtimeContextSections?.some(section => (
     section.id === 'current_datetime'
+    || section.id === 'runtime_current_datetime'
+    || section.id === 'runtime.current_datetime'
+    || section.content?.includes('<runtime.current_datetime')
     || section.content?.includes('<current_datetime>')
-  )) ?? false;
+  )) ?? false) || (promptContext.finalSystemSections?.some(section => (
+    section.id === 'current_datetime'
+    || section.id === 'runtime_current_datetime'
+    || section.id === 'runtime.current_datetime'
+    || section.content?.includes('<runtime.current_datetime')
+    || section.content?.includes('<current_datetime>')
+  )) ?? false);
+}
+
+/**
+ * Build the detection context from the turn's PromptPlan (the shipped prompt)
+ * plus section telemetry. The plan is the source of truth for what the
+ * provider actually received (E2.2).
+ */
+export function buildRuntimeDatetimeDetectionContext(input: {
+  plan?: PromptPlan;
+  promptContext?: RuntimeDatetimePromptContextLike | null;
+}): RuntimeDatetimePromptContextLike {
+  return {
+    ...(input.plan
+      ? {
+        assembledPrompt: renderPromptPlanAssembledPrompt(input.plan),
+        finalSystemPrompt: serializePromptPlanSystemPrompt(input.plan),
+        runtimeContext: getPromptPlanBlockText(input.plan, 'runtime.context'),
+      }
+      : {}),
+    ...(input.promptContext?.runtimeContextSections
+      ? { runtimeContextSections: input.promptContext.runtimeContextSections }
+      : {}),
+    ...(input.promptContext?.finalSystemSections
+      ? { finalSystemSections: input.promptContext.finalSystemSections }
+      : {}),
+  };
 }
 
 export function detectRuntimeDatetimeContradiction(

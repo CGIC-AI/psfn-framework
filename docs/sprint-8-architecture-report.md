@@ -1,5 +1,7 @@
 # Sprint 8 Technical Architecture Report
 
+> Current status update, 2026-06-29: this report is a Sprint 8 historical architecture snapshot. It remains useful for understanding the integration path, but current runtime contracts have advanced. Prefer [`architecture.md`](./architecture.md), [`memory.md`](./memory.md), [`specifications.md`](./specifications.md), [`operations.md`](./operations.md), and [`development-status.md`](./development-status.md) for live Postgres-only runtime behavior, owner-file contracts, current tool surfaces, and current roadmap status.
+
 This report describes the current `main` branch after the Sprint 8 integration work. It is a source-backed architecture snapshot, not a shakedown artifact log.
 
 ## Executive Summary
@@ -238,7 +240,7 @@ Garden is now organized into five sections: Live Operations, Memory & Identity, 
 
 Episodic memory is visible through dedicated admin routes for episodes, threads, arcs, provenance, and detail (`src/operator/garden/api-routes-episodic-memory.ts:40`). The data service validates pagination, ISO time filters, thread IDs, arc kind, and arc direction, then returns episode lists, thread summaries, details, provenance, and related arcs (`src/operator/garden/services/episodic-memory-service.ts:122`, `src/operator/garden/services/episodic-memory-service.ts:125`, `src/operator/garden/services/episodic-memory-service.ts:161`, `src/operator/garden/services/episodic-memory-service.ts:181`, `src/operator/garden/services/episodic-memory-service.ts:200`). The Garden frontend calls those APIs through typed endpoint helpers (`admin-ui/src/lib/api/endpoints/episodic-memory.ts:36`, `admin-ui/src/lib/api/endpoints/episodic-memory.ts:44`, `admin-ui/src/lib/api/endpoints/episodic-memory.ts:60`, `admin-ui/src/lib/api/endpoints/episodic-memory.ts:69`).
 
-Charge and audit are also first-class operator concerns. The admin contract wires charge ledger into audit history, then exposes it as a domain service (`src/operator/garden/local-admin-contract.ts:109`, `src/operator/garden/local-admin-contract.ts:146`). Garden request routing keeps client-page routing separate from API/health/login/static paths and only serves client routes when Garden UI is enabled (`src/operator/garden/server-request-routing.ts:50`, `src/operator/garden/server-request-routing.ts:78`, `src/operator/garden/server-request-routing.ts:116`).
+Charge and audit are also first-class operator concerns. The admin contract wires charge ledger into audit history, then exposes it as a domain service (`src/operator/garden/local-admin-contract.ts:109`, `src/operator/garden/local-admin-contract.ts:146`). Garden request routing keeps client-page routing separate from API/health/login and SvelteKit build-asset paths, and only serves client routes when Garden UI is enabled (`src/operator/garden/server-request-routing.ts:50`, `src/operator/garden/server-request-routing.ts:78`, `src/operator/garden/server-request-routing.ts:116`).
 
 ## External Dependencies
 
@@ -246,7 +248,6 @@ Charge and audit are also first-class operator concerns. The admin contract wire
 | --- | --- | --- |
 | `@mariozechner/pi-agent-core` | Core agent runtime and tool-call substrate. | Critical |
 | `@mariozechner/pi-ai` | LLM provider interaction substrate. | Critical |
-| `@mariozechner/pi-web-ui` | Admin/chat UI integration substrate where used. | Important |
 | `better-sqlite3` | Local SQLite persistence for memory/session projections and stores. | Critical |
 | `sqlite-vec` | Vector search for memory retrieval. | Critical for embeddings retrieval |
 | `pg` | Optional PostgreSQL-backed session projection/adapters. | Optional |
@@ -255,6 +256,8 @@ Charge and audit are also first-class operator concerns. The admin contract wire
 | Discord, Telegram, Wyoming, WebSocket voice libraries | Channel and embodiment adapters. | Optional by channel |
 | Svelte 5 Garden | Human/operator-facing admin UI. | Foundational operational surface |
 | Docker Compose | Production/containerized agent isolation paths. | Deployment-dependent |
+
+Admin chat and runtime surfaces are implemented by the native SvelteKit Garden UI under `admin-ui`, not by an external UI package.
 
 Pinned dependency versions live in `package.json` and the repo overrides high-risk transitive versions such as `undici`, `fast-xml-parser`, `tar`, and `rollup` (`package.json:68`, `package.json:91`).
 

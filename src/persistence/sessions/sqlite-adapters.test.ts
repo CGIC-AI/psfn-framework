@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -15,7 +15,7 @@ describe('sqlite session adapters', () => {
     dirs.length = 0;
   });
 
-  it('wires the default JSONL archive, sqlite projection/search, and turn records together', async () => {
+  it('wires the default JSONL archive and turn records without creating a sqlite search projection', () => {
     const sessionsDir = mkdtempSync(join(tmpdir(), 'psfn-sqlite-session-adapters-'));
     dirs.push(sessionsDir);
     const adapters = createDefaultSQLiteSessionAdapters(sessionsDir);
@@ -43,19 +43,9 @@ describe('sqlite session adapters', () => {
       imported.filePath,
     );
     expect(adapters.sessionArchivePort.readJournalFile(archive).entries).toHaveLength(2);
-
-    adapters.transcriptProjection?.upsertSessionEntry({
-      id: 1,
-      channelId: 'api:default-session-stack',
-      role: 'user',
-      content: 'sqlite projection search needle',
-      timestamp: 1_000,
-    });
-    const hits = adapters.transcriptProjection
-      ? await adapters.transcriptProjection.searchByKeywords('projection needle')
-      : [];
-    expect(hits).toHaveLength(1);
-    expect(hits[0].channelId).toBe('api:default-session-stack');
+    expect(adapters.transcriptProjection).toBeNull();
+    expect(adapters.transcriptSearch).toBeNull();
+    expect(existsSync(join(sessionsDir, 'session-search.sqlite'))).toBe(false);
 
     const record: TurnRecord = {
       schemaVersion: 1,
@@ -88,5 +78,62 @@ describe('sqlite session adapters', () => {
 
     adapters.turnRecordStore.appendTurnRecord(record);
     expect(adapters.turnRecordStore.readRecentTurnRecords(record.channelId, 5)).toEqual([record]);
+  });
+
+  it('keeps the legacy sqlite projection available only through explicit opt-in', async () => {
+    const sessionsDir = mkdtempSync(join(tmpdir(), 'psfn-sqlite-session-adapters-legacy-search-'));
+    dirs.push(sessionsDir);
+    const adapters = createDefaultSQLiteSessionAdapters(sessionsDir, { enableSearchIndex: true });
+
+    adapters.transcriptProjection?.upsertSessionEntry({
+      id: 1,
+      channelId: 'api:legacy-session-stack',
+      role: 'user',
+      content: 'sqlite projection search needle',
+      timestamp: 1_000,
+    });
+
+    const hits = adapters.transcriptSearch
+      ? await adapters.transcriptSearch.searchByKeywords('projection needle')
+      : [];
+    expect(hits).toHaveLength(1);
+    expect(hits[0].channelId).toBe('api:legacy-session-stack');
+    expect(existsSync(join(sessionsDir, 'session-search.sqlite'))).toBe(true);
+  });
+
+  it('excludes CogSec tombstones from the sqlite transcript projection', async () => {
+    const sessionsDir = mkdtempSync(join(tmpdir(), 'psfn-sqlite-cogsec-projection-'));
+    dirs.push(sessionsDir);
+    const adapters = createDefaultSQLiteSessionAdapters(sessionsDir, { enableSearchIndex: true });
+    expect(adapters.transcriptSearch).toBeDefined();
+    expect(adapters.transcriptProjection).toBeDefined();
+    const search = adapters.transcriptSearch!;
+    const projection = adapters.transcriptProjection!;
+
+    projection.upsertSessionEntry({
+      id: 1,
+      channelId: 'api:sqlite-cogsec',
+      role: 'user',
+      content: 'sqlite dirty search needle',
+      timestamp: 1_000,
+    });
+    await expect(search.searchByKeywords('dirty needle')).resolves.toHaveLength(1);
+
+    projection.upsertSessionEntry({
+      id: 1,
+      channelId: 'api:sqlite-cogsec',
+      role: 'user',
+      content: '[CogSec redaction: cogsec_20260701T000000Z_sqlite]',
+      metadata: JSON.stringify({
+        kind: 'cogsec_l0_tombstone',
+        caseId: 'cogsec_20260701T000000Z_sqlite',
+        redactedAt: '2026-07-01T00:00:00.000Z',
+      }),
+      timestamp: 1_000,
+    });
+
+    await expect(search.searchByKeywords('dirty needle')).resolves.toHaveLength(0);
+    await expect(search.searchByKeywords('CogSec redaction')).resolves.toHaveLength(0);
+    expect(projection.countProjectedMessages('api:sqlite-cogsec')).toBe(0);
   });
 });

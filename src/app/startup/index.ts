@@ -1,4 +1,4 @@
-import 'dotenv/config';
+import '../../shared/utils/load-dotenv.js';
 import { createComponentLogger } from '../../shared/logger.js';
 
 const log = createComponentLogger('Main');

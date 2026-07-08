@@ -1,14 +1,19 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
   PromptRegistryStore,
   EXTRACTION_PROMPT_KEY,
   COMPACTION_SUMMARY_PROMPT_KEY,
+  RECENT_SESSION_SUMMARY_PROMPT_KEY,
+  SESSION_SEARCH_SUMMARY_PROMPT_KEY,
   PROFILE_SYNTHESIS_PROMPT_KEY,
+  SLEEPTIME_ORIENTATION_PROMPT_KEY,
+  WIKI_PASS_PROMPT_KEY,
   getDefaultPromptText,
 } from './prompt-registry.js';
+import { subsystemPersonaPromptKeys } from './persona-preamble-seeds.js';
 
 describe('PromptRegistryStore', () => {
   let tmpDir: string;
@@ -63,12 +68,76 @@ describe('PromptRegistryStore', () => {
     rmSync(filePath, { force: true });
     const seeded = new PromptRegistryStore(filePath, historyPath);
 
+    // list() is sorted by key.localeCompare; the persona preamble surface (E6.1)
+    // registers additional operator-editable keys under subsystem.persona.*,
+    // which sort after the core prompts.
     expect(seeded.list().map(entry => entry.key)).toEqual([
       EXTRACTION_PROMPT_KEY,
       PROFILE_SYNTHESIS_PROMPT_KEY,
+      SLEEPTIME_ORIENTATION_PROMPT_KEY,
+      WIKI_PASS_PROMPT_KEY,
       COMPACTION_SUMMARY_PROMPT_KEY,
+      RECENT_SESSION_SUMMARY_PROMPT_KEY,
+      SESSION_SEARCH_SUMMARY_PROMPT_KEY,
+      ...subsystemPersonaPromptKeys().sort((a, b) => a.localeCompare(b)),
     ]);
     expect(seeded.getPrompt(EXTRACTION_PROMPT_KEY)).toBe(getDefaultPromptText(EXTRACTION_PROMPT_KEY));
+  });
+
+  it('seeds the extraction prompt with group-room name and macro hygiene guidance', () => {
+    const prompt = getDefaultPromptText(EXTRACTION_PROMPT_KEY);
+
+    expect(prompt).toContain('human participant(s), named speakers, and relevant relationships');
+    expect(prompt).toContain('Preserve the named speaker/contact when known');
+    expect(prompt).toContain('source_message_ids');
+    expect(prompt).toContain('subject_name');
+    expect(prompt).toContain('Use subject_name "room", "channel", "group", or "conversation"');
+    expect(prompt).toContain('address_mode');
+    expect(prompt).toContain('direct_to_companion|mention_of_companion|reply_to_user|overheard_room_context|system_api');
+    expect(prompt).toContain('Never output raw character-card macros');
+    expect(prompt).toContain('{{user}}');
+    expect(prompt).toContain('{{char}}');
+    expect(prompt).not.toContain('extract important facts about the user');
+    expect(prompt).not.toContain('Only extract durable, user-centric facts');
+    expect(prompt).not.toMatch(/the primary user/i);
+  });
+
+  it('seeds the profile synthesis prompt with target-aware attribution rules', () => {
+    const prompt = getDefaultPromptText(PROFILE_SYNTHESIS_PROMPT_KEY);
+
+    expect(prompt).toContain('Target contact:');
+    expect(prompt).toContain('{target_contact}');
+    expect(prompt).toContain('Do not infer aliases for the target from names merely mentioned');
+    expect(prompt).toContain('If the target mentioned or discussed another person');
+  });
+
+  it('seeds the sleeptime orientation prompt without assigning companion identity or mood', () => {
+    const prompt = getDefaultPromptText(SLEEPTIME_ORIENTATION_PROMPT_KEY);
+
+    expect(prompt).toContain('Review recent conversation evidence for one channel scope');
+    expect(prompt).toContain('Do not assign the companion an identity');
+    expect(prompt).toContain('Do not override the character card');
+    expect(prompt).toContain('"orient"');
+    expect(prompt).not.toMatch(/you are an? .*assistant/i);
+  });
+
+  it('seeds the recent session summary prompt for prose summaries without tool-result dumps', () => {
+    const prompt = getDefaultPromptText(RECENT_SESSION_SUMMARY_PROMPT_KEY);
+
+    expect(prompt).toContain('one compact prose paragraph');
+    expect(prompt).toContain('Do not write a transcript');
+    expect(prompt).toContain('Do not repeat tool results');
+    expect(prompt).not.toBe(getDefaultPromptText(COMPACTION_SUMMARY_PROMPT_KEY));
+  });
+
+  it('seeds the session search summary prompt scoped to provided snippets', () => {
+    const prompt = getDefaultPromptText(SESSION_SEARCH_SUMMARY_PROMPT_KEY);
+
+    expect(prompt).toContain('keyword-search matches from archived chat transcripts');
+    expect(prompt).toContain('Use only the provided snippets');
+    expect(prompt).toContain('Name key topics and channel groupings');
+    expect(store.getPrompt(SESSION_SEARCH_SUMMARY_PROMPT_KEY)).toBe(prompt);
+    expect(prompt).not.toBe(getDefaultPromptText(RECENT_SESSION_SUMMARY_PROMPT_KEY));
   });
 
   it('updates prompt text and writes history entry', () => {
@@ -85,6 +154,21 @@ describe('PromptRegistryStore', () => {
     expect(history[0].version).toBe(1);
     expect(history[0].previousText).toContain('Summarize this conversation excerpt');
     expect(history[0].newText).toContain('3 bullet points');
+  });
+
+  it('fails closed when prompt history cannot be written', () => {
+    mkdirSync(historyPath);
+
+    expect(() => {
+      store.update(
+        COMPACTION_SUMMARY_PROMPT_KEY,
+        'Summarize this excerpt in 3 bullet points and preserve action items.',
+        'admin',
+      );
+    }).toThrow('Failed to write prompt registry history');
+
+    expect(store.getByKey(COMPACTION_SUMMARY_PROMPT_KEY)?.version).toBe(1);
+    expect(store.getPrompt(COMPACTION_SUMMARY_PROMPT_KEY)).toBe(getDefaultPromptText(COMPACTION_SUMMARY_PROMPT_KEY));
   });
 
   it('rejects extraction prompt updates that remove required placeholders', () => {

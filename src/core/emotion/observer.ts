@@ -1,3 +1,5 @@
+import { isObjectRecord as isRecord } from '../../shared/utils/types.js';
+import { clampSigned, clampUnit } from '../../shared/utils/numeric.js';
 import { EmotionState, type EmotionObservation, type EmotionStateSnapshot, type VADVector } from './state.js';
 import {
   toAudioEmotionSignal,
@@ -509,18 +511,4 @@ function cloneVad(vad: Readonly<VADVector>): VADVector {
     arousal: vad.arousal,
     dominance: vad.dominance,
   };
-}
-
-function clampSigned(value: number): number {
-  if (!Number.isFinite(value)) return 0;
-  return Math.max(-1, Math.min(1, value));
-}
-
-function clampUnit(value: number): number {
-  if (!Number.isFinite(value)) return 0;
-  return Math.max(0, Math.min(1, value));
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null;
 }

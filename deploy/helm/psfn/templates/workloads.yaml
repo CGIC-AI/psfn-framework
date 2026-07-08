@@ -1,0 +1,520 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "psfn.gatewayApiServiceName" . }}
+  labels:
+    {{- include "psfn.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - name: http-api
+      port: {{ .Values.ports.gatewayApi }}
+      targetPort: http-api
+  selector:
+    {{- include "psfn.componentLabels" (dict "root" . "component" "gateway") | nindent 4 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "psfn.gatewayRpcServiceName" . }}
+  labels:
+    {{- include "psfn.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - name: gateway-rpc
+      port: {{ .Values.ports.gatewayRpc }}
+      targetPort: gateway-rpc
+  selector:
+    {{- include "psfn.componentLabels" (dict "root" . "component" "gateway") | nindent 4 }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "psfn.fullname" . }}-gateway
+  labels:
+    {{- include "psfn.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.workloads.gateway.replicaCount }}
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "psfn.componentLabels" (dict "root" . "component" "gateway") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "psfn.componentLabels" (dict "root" . "component" "gateway") | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "psfn.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      initContainers:
+        {{- include "psfn.seedInitContainer" . | nindent 8 }}
+        {{- include "psfn.waitForPostgresInitContainer" (dict "root" . "image" .Values.workloads.gateway.image) | nindent 8 }}
+      containers:
+        - name: gateway
+          image: {{ include "psfn.image" (dict "root" . "image" .Values.workloads.gateway.image) | quote }}
+          imagePullPolicy: {{ default .Values.psfnAppImage.pullPolicy .Values.workloads.gateway.image.pullPolicy }}
+          command:
+            {{- toYaml .Values.workloads.gateway.command | nindent 12 }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          ports:
+            - name: http-api
+              containerPort: {{ .Values.ports.gatewayApi }}
+              {{- if .Values.hostPorts.gatewayApi.enabled }}
+              hostPort: {{ .Values.hostPorts.gatewayApi.port }}
+              {{- with .Values.hostPorts.gatewayApi.hostIP }}
+              hostIP: {{ . | quote }}
+              {{- end }}
+              {{- end }}
+            - name: gateway-rpc
+              containerPort: {{ .Values.ports.gatewayRpc }}
+          env:
+            {{- include "psfn.commonEnv" . | nindent 12 }}
+            {{- include "psfn.providerSecretEnv" . | nindent 12 }}
+            {{- if .Values.liteLlm.enabled }}
+            - name: LITELLM_BASE_URL
+              value: {{ include "psfn.liteLlmBaseUrl" . | quote }}
+            {{- end }}
+            - name: API_HOST
+              value: 0.0.0.0
+            - name: API_PORT
+              value: {{ .Values.ports.gatewayApi | quote }}
+            - name: ADMIN_HOST
+              value: {{ include "psfn.gardenServiceName" . | quote }}
+            - name: ADMIN_PORT
+              value: {{ .Values.ports.garden | quote }}
+            - name: GATEWAY_SESSION_HMAC_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "psfn.appSecretName" . }}
+                  key: {{ .Values.secrets.keys.gatewaySessionHmacKey }}
+            - name: GATEWAY_RPC_ENDPOINT
+              value: {{ include "psfn.gatewayRpcUrlForServer" . | quote }}
+            - name: GATEWAY_RPC_TLS_CA_PATH
+              value: {{ printf "%s/gateway-rpc/ca.crt" .Values.certificates.mountBasePath | quote }}
+            - name: GATEWAY_RPC_TLS_CERT_PATH
+              value: {{ printf "%s/gateway-rpc/tls.crt" .Values.certificates.mountBasePath | quote }}
+            - name: GATEWAY_RPC_TLS_KEY_PATH
+              value: {{ printf "%s/gateway-rpc/tls.key" .Values.certificates.mountBasePath | quote }}
+            - name: GATEWAY_RPC_TLS_EXPECTED_PEER_SPIFFE_URI
+              value: {{ include "psfn.spiffeAgent" . | quote }}
+          readinessProbe:
+            tcpSocket:
+              port: http-api
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket:
+              port: http-api
+            initialDelaySeconds: 30
+            periodSeconds: 20
+          resources:
+            {{- toYaml .Values.workloads.gateway.resources | nindent 12 }}
+          volumeMounts:
+            - name: system-data
+              mountPath: {{ .Values.runtime.systemDataDir }}
+            - name: companion-data
+              mountPath: {{ .Values.runtime.companionDataDir }}
+              readOnly: true
+            - name: workspace
+              mountPath: {{ .Values.runtime.workspacePath }}
+            - name: runtime
+              mountPath: {{ .Values.runtime.logsDir }}
+              subPath: logs
+            - name: runtime
+              mountPath: {{ .Values.runtime.tempDir }}
+              subPath: tmp
+            {{- if .Values.persistence.modelCache.enabled }}
+            - name: model-cache
+              mountPath: {{ .Values.runtime.modelCacheDir }}
+            {{- end }}
+            {{- include "psfn.repositoryCheckoutVolumeMount" . | nindent 12 }}
+            - name: gateway-rpc-tls
+              mountPath: {{ printf "%s/gateway-rpc" .Values.certificates.mountBasePath }}
+              readOnly: true
+      volumes:
+        {{- include "psfn.commonVolumes" . | nindent 8 }}
+        - name: gateway-rpc-tls
+          secret:
+            secretName: {{ include "psfn.gatewayRpcCertSecretName" . }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "psfn.agentAdminServiceName" . }}
+  labels:
+    {{- include "psfn.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - name: admin-https
+      port: {{ .Values.ports.agentAdmin }}
+      targetPort: admin-https
+  selector:
+    {{- include "psfn.componentLabels" (dict "root" . "component" "agent") | nindent 4 }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "psfn.fullname" . }}-agent
+  labels:
+    {{- include "psfn.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.workloads.agent.replicaCount }}
+  # Recreate guarantees a single live agent instance: a RollingUpdate window
+  # briefly runs two agents against one gateway, risking double-handling of
+  # partner messages. Identity is single-instance by design.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "psfn.componentLabels" (dict "root" . "component" "agent") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "psfn.componentLabels" (dict "root" . "component" "agent") | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "psfn.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      initContainers:
+        {{- include "psfn.seedInitContainer" . | nindent 8 }}
+        {{- include "psfn.waitForPostgresInitContainer" (dict "root" . "image" .Values.workloads.agent.image) | nindent 8 }}
+      containers:
+        - name: agent
+          image: {{ include "psfn.image" (dict "root" . "image" .Values.workloads.agent.image) | quote }}
+          imagePullPolicy: {{ default .Values.psfnAppImage.pullPolicy .Values.workloads.agent.image.pullPolicy }}
+          command:
+            {{- toYaml .Values.workloads.agent.command | nindent 12 }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          ports:
+            - name: admin-https
+              containerPort: {{ .Values.ports.agentAdmin }}
+          env:
+            {{- include "psfn.commonEnv" . | nindent 12 }}
+            - name: GATEWAY_RPC_ENDPOINT
+              value: {{ include "psfn.gatewayRpcUrlForClient" . | quote }}
+            - name: GATEWAY_RPC_TLS_CA_PATH
+              value: {{ printf "%s/gateway-rpc/ca.crt" .Values.certificates.mountBasePath | quote }}
+            - name: GATEWAY_RPC_TLS_CERT_PATH
+              value: {{ printf "%s/gateway-rpc/tls.crt" .Values.certificates.mountBasePath | quote }}
+            - name: GATEWAY_RPC_TLS_KEY_PATH
+              value: {{ printf "%s/gateway-rpc/tls.key" .Values.certificates.mountBasePath | quote }}
+            - name: GATEWAY_RPC_TLS_EXPECTED_PEER_SPIFFE_URI
+              value: {{ include "psfn.spiffeGateway" . | quote }}
+            - name: GATEWAY_RPC_TLS_SERVER_NAME
+              value: {{ include "psfn.gatewayRpcServerName" . | quote }}
+            - name: ADMIN_TRANSPORT_MODE
+              value: network
+            - name: ADMIN_TRANSPORT_LISTEN_HOST
+              value: 0.0.0.0
+            - name: ADMIN_TRANSPORT_LISTEN_PORT
+              value: {{ .Values.ports.agentAdmin | quote }}
+            - name: ADMIN_TRANSPORT_TLS_CA_PATH
+              value: {{ printf "%s/admin-transport/ca.crt" .Values.certificates.mountBasePath | quote }}
+            - name: ADMIN_TRANSPORT_TLS_CERT_PATH
+              value: {{ printf "%s/admin-transport/tls.crt" .Values.certificates.mountBasePath | quote }}
+            - name: ADMIN_TRANSPORT_TLS_KEY_PATH
+              value: {{ printf "%s/admin-transport/tls.key" .Values.certificates.mountBasePath | quote }}
+            - name: ADMIN_TRANSPORT_TLS_EXPECTED_PEER_SPIFFE_URI
+              value: {{ include "psfn.spiffeGarden" . | quote }}
+            {{- if .Values.redis.enabled }}
+            - name: PSFN_APP_CACHE_MODE
+              value: redis
+            - name: PSFN_REDIS_URL
+              value: {{ ternary .Values.redis.external.url (printf "redis://%s:%v" (include "psfn.redisServiceName" .) .Values.ports.redis) (eq .Values.redis.mode "external") | quote }}
+            - name: PSFN_REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "psfn.redisPasswordSecretName" . }}
+                  key: {{ include "psfn.redisPasswordSecretKey" . }}
+            {{- if and (eq .Values.redis.mode "external") .Values.redis.external.tls.enabled }}
+            - name: PSFN_REDIS_TLS_REJECT_UNAUTHORIZED
+              value: {{ .Values.redis.external.tls.rejectUnauthorized | quote }}
+            {{- end }}
+            {{- else }}
+            - name: PSFN_APP_CACHE_MODE
+              value: memory
+            {{- end }}
+          readinessProbe:
+            tcpSocket:
+              port: admin-https
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket:
+              port: admin-https
+            initialDelaySeconds: 45
+            periodSeconds: 20
+          resources:
+            {{- toYaml .Values.workloads.agent.resources | nindent 12 }}
+          volumeMounts:
+            - name: system-data
+              mountPath: {{ .Values.runtime.systemDataDir }}
+            - name: companion-data
+              mountPath: {{ .Values.runtime.companionDataDir }}
+            - name: workspace
+              mountPath: {{ .Values.runtime.workspacePath }}
+            - name: runtime
+              mountPath: {{ .Values.runtime.logsDir }}
+              subPath: logs
+            - name: runtime
+              mountPath: {{ .Values.runtime.tempDir }}
+              subPath: tmp
+            - name: runtime
+              mountPath: {{ .Values.runtime.backupsDir }}
+              subPath: backups
+            {{- if .Values.persistence.modelCache.enabled }}
+            - name: model-cache
+              mountPath: {{ .Values.runtime.modelCacheDir }}
+            {{- end }}
+            {{- include "psfn.repositoryCheckoutVolumeMount" . | nindent 12 }}
+            - name: gateway-rpc-client-tls
+              mountPath: {{ printf "%s/gateway-rpc" .Values.certificates.mountBasePath }}
+              readOnly: true
+            - name: admin-transport-tls
+              mountPath: {{ printf "%s/admin-transport" .Values.certificates.mountBasePath }}
+              readOnly: true
+      volumes:
+        {{- include "psfn.commonVolumes" . | nindent 8 }}
+        - name: gateway-rpc-client-tls
+          secret:
+            secretName: {{ include "psfn.agentRpcClientCertSecretName" . }}
+        - name: admin-transport-tls
+          secret:
+            secretName: {{ include "psfn.agentAdminCertSecretName" . }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "psfn.gardenServiceName" . }}
+  labels:
+    {{- include "psfn.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - name: http-garden
+      port: {{ .Values.ports.garden }}
+      targetPort: http-garden
+  selector:
+    {{- include "psfn.componentLabels" (dict "root" . "component" "garden") | nindent 4 }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "psfn.fullname" . }}-garden
+  labels:
+    {{- include "psfn.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.workloads.garden.replicaCount }}
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "psfn.componentLabels" (dict "root" . "component" "garden") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "psfn.componentLabels" (dict "root" . "component" "garden") | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "psfn.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      initContainers:
+        {{- include "psfn.seedInitContainer" . | nindent 8 }}
+      containers:
+        - name: garden
+          image: {{ include "psfn.image" (dict "root" . "image" .Values.workloads.garden.image) | quote }}
+          imagePullPolicy: {{ default .Values.psfnAppImage.pullPolicy .Values.workloads.garden.image.pullPolicy }}
+          command:
+            {{- toYaml .Values.workloads.garden.command | nindent 12 }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          ports:
+            - name: http-garden
+              containerPort: {{ .Values.ports.garden }}
+              {{- if .Values.hostPorts.garden.enabled }}
+              hostPort: {{ .Values.hostPorts.garden.port }}
+              {{- with .Values.hostPorts.garden.hostIP }}
+              hostIP: {{ . | quote }}
+              {{- end }}
+              {{- end }}
+          env:
+            {{- include "psfn.commonEnv" . | nindent 12 }}
+            - name: ADMIN_HOST
+              value: 0.0.0.0
+            - name: ADMIN_PORT
+              value: {{ .Values.ports.garden | quote }}
+            - name: ADMIN_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "psfn.appSecretName" . }}
+                  key: {{ .Values.secrets.keys.adminToken }}
+            - name: ADMIN_TRANSPORT_MODE
+              value: network
+            - name: ADMIN_TRANSPORT_URL
+              value: {{ include "psfn.agentAdminUrl" . | quote }}
+            - name: ADMIN_TRANSPORT_TLS_CA_PATH
+              value: {{ printf "%s/admin-transport/ca.crt" .Values.certificates.mountBasePath | quote }}
+            - name: ADMIN_TRANSPORT_TLS_CERT_PATH
+              value: {{ printf "%s/admin-transport/tls.crt" .Values.certificates.mountBasePath | quote }}
+            - name: ADMIN_TRANSPORT_TLS_KEY_PATH
+              value: {{ printf "%s/admin-transport/tls.key" .Values.certificates.mountBasePath | quote }}
+            - name: ADMIN_TRANSPORT_TLS_EXPECTED_PEER_SPIFFE_URI
+              value: {{ include "psfn.spiffeAgent" . | quote }}
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http-garden
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http-garden
+            initialDelaySeconds: 30
+            periodSeconds: 20
+          resources:
+            {{- toYaml .Values.workloads.garden.resources | nindent 12 }}
+          volumeMounts:
+            - name: system-data
+              mountPath: {{ .Values.runtime.systemDataDir }}
+            - name: companion-data
+              mountPath: {{ .Values.runtime.companionDataDir }}
+              readOnly: true
+            - name: workspace
+              mountPath: {{ .Values.runtime.workspacePath }}
+            - name: runtime
+              mountPath: {{ .Values.runtime.tempDir }}
+              subPath: tmp
+            {{- include "psfn.repositoryCheckoutVolumeMount" . | nindent 12 }}
+            - name: admin-transport-client-tls
+              mountPath: {{ printf "%s/admin-transport" .Values.certificates.mountBasePath }}
+              readOnly: true
+      volumes:
+        {{- include "psfn.commonVolumes" . | nindent 8 }}
+        - name: admin-transport-client-tls
+          secret:
+            secretName: {{ include "psfn.gardenAdminClientCertSecretName" . }}
+{{- if .Values.satelliteHub.enabled }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "psfn.satelliteHubServiceName" . }}
+  labels:
+    {{- include "psfn.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - name: hub-ws
+      port: {{ .Values.ports.satelliteHub }}
+      targetPort: hub-ws
+  selector:
+    {{- include "psfn.componentLabels" (dict "root" . "component" "satellite-hub") | nindent 4 }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "psfn.fullname" . }}-satellite-hub
+  labels:
+    {{- include "psfn.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "psfn.componentLabels" (dict "root" . "component" "satellite-hub") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "psfn.componentLabels" (dict "root" . "component" "satellite-hub") | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "psfn.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: satellite-hub
+          image: {{ include "psfn.satelliteHubImage" . | quote }}
+          imagePullPolicy: {{ .Values.satelliteHub.image.pullPolicy }}
+          {{- with .Values.satelliteHub.command }}
+          command:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          ports:
+            - name: hub-ws
+              containerPort: {{ .Values.ports.satelliteHub }}
+          env:
+            - name: AGENT_RUNTIME
+              value: {{ .Values.satelliteHub.agentRuntime | quote }}
+            - name: REALTIME_VOICE_BIND_HOST
+              value: "0.0.0.0"
+            - name: REALTIME_VOICE_PORT
+              value: {{ .Values.ports.satelliteHub | quote }}
+            - name: PSFN_API_BASE_URL
+              value: {{ printf "http://%s:%v/v1" (include "psfn.gatewayApiServiceName" .) .Values.ports.gatewayApi | quote }}
+            - name: PSFN_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "psfn.appSecretName" . }}
+                  key: {{ .Values.secrets.keys.apiKey }}
+            - name: PSFN_MODEL
+              value: {{ .Values.satelliteHub.psfnModel | quote }}
+            - name: DEEPGRAM_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "psfn.appSecretName" . }}
+                  key: {{ .Values.secrets.keys.deepgramApiKey }}
+            - name: ELEVENLABS_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "psfn.appSecretName" . }}
+                  key: {{ .Values.secrets.keys.elevenLabsApiKey }}
+            - name: ELEVENLABS_VOICE_ID
+              value: {{ required "satelliteHub.elevenLabsVoiceId is required when satelliteHub.enabled=true" .Values.satelliteHub.elevenLabsVoiceId | quote }}
+            - name: ARTIFACT_ROOT
+              value: {{ .Values.satelliteHub.artifactRoot | quote }}
+          readinessProbe:
+            httpGet:
+              path: /
+              port: hub-ws
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /
+              port: hub-ws
+            initialDelaySeconds: 20
+            periodSeconds: 20
+          resources:
+            {{- toYaml .Values.satelliteHub.resources | nindent 12 }}
+          volumeMounts:
+            - name: runtime
+              mountPath: /app/.artifacts
+              subPath: satellite-hub-artifacts
+      volumes:
+        - name: runtime
+          persistentVolumeClaim:
+            claimName: {{ include "psfn.fullname" . }}-runtime
+{{- end }}

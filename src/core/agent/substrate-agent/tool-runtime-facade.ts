@@ -60,8 +60,13 @@ import {
   type ValidateToolsOptions,
   type WirableTool,
 } from '../tool-wiring-validator.js';
+import { assertNoModelFacingDriftGuardToolAliases } from '../tool-surface/registry.js';
 import type { RuntimeServiceHealthStatus } from '../../../operator/tool-health/types.js';
-import type { RuntimeToolCatalogSnapshot } from '../tool-catalog.js';
+import {
+  buildRuntimeToolCatalogEntry,
+  type RuntimeToolCatalogSnapshot,
+} from '../tool-catalog.js';
+import { resolveTurnWorkerExecutionPolicy } from './model-runtime.js';
 
 interface ToolRuntimeFacadeOptions {
   config: SubstrateConfig;
@@ -104,6 +109,10 @@ const MAINTENANCE_CORE_TOOL_POLICIES = new Map<string, MaintenanceCoreToolPolicy
     allowedActions: ['list', 'search', 'grep'],
     resolveAction: resolveMaintenanceSessionAction,
   }],
+  ['self_status', {
+    allowedActions: ['snapshot', 'diagnose', 'logs'],
+    resolveAction: resolveMaintenanceSelfStatusAction,
+  }],
   ['system', {
     allowedActions: ['read'],
     resolveAction: resolveMaintenanceSystemAction,
@@ -112,10 +121,7 @@ const MAINTENANCE_CORE_TOOL_POLICIES = new Map<string, MaintenanceCoreToolPolicy
 
 const SATELLITE_VISUAL_TOOL_NAMES = new Set([
   'media',
-  'image_create',
   'selfie_create',
-  'image_edit',
-  'image_analyze',
 ]);
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
@@ -135,6 +141,10 @@ function explicitlyRequestsLargeEvidenceAnalysis(content: string): boolean {
     || /\blarge[-\s]context\b/i.test(content)
     || /\blarge\s+(file|files|codebase|codebases|log|logs|transcript|transcripts|dataset|datasets|evidence\s+set|evidence)\b/i.test(content)
     || /\bmulti[-\s]stage\s+analysis\b/i.test(content);
+}
+
+function isWorkerExecutionTurn(message: SubstrateMessage): boolean {
+  return resolveTurnWorkerExecutionPolicy(message) !== null;
 }
 
 function resolveMaintenanceIdentityAction(params: Record<string, unknown>): string | null {
@@ -189,29 +199,30 @@ function resolveMaintenanceSessionAction(params: Record<string, unknown>): strin
   }
   switch (rawAction) {
     case 'list':
-    case 'session_list':
       return 'list';
     case 'new':
-    case 'session_new':
       return 'new';
     case 'resume':
-    case 'session_resume':
       return 'resume';
     case 'search':
-    case 'session_search':
       return 'search';
     case 'grep':
-    case 'session_grep':
       return 'grep';
     case 'start_focus':
-    case 'focus_start':
       return 'start_focus';
     case 'complete_focus':
-    case 'focus_complete':
       return 'complete_focus';
     default:
       return null;
   }
+}
+
+function resolveMaintenanceSelfStatusAction(params: Record<string, unknown>): string | null {
+  const rawAction = typeof params.action === 'string' ? params.action.trim() : '';
+  if (!rawAction) {
+    return 'snapshot';
+  }
+  return rawAction === 'snapshot' || rawAction === 'diagnose' || rawAction === 'logs' ? rawAction : null;
 }
 
 function resolveMaintenanceContactAction(params: Record<string, unknown>): string | null {
@@ -230,22 +241,16 @@ function resolveMaintenanceContactAction(params: Record<string, unknown>): strin
   }
   switch (rawAction) {
     case 'list':
-    case 'contact_list':
       return 'list';
     case 'lookup':
-    case 'contact_lookup':
       return 'lookup';
     case 'note':
-    case 'contact_note':
       return 'note';
     case 'set_trust':
-    case 'contact_set_trust':
       return 'set_trust';
     case 'link_identity':
-    case 'contact_link_identity':
       return 'link_identity';
     case 'set_channel_privacy':
-    case 'contact_set_channel_privacy':
       return 'set_channel_privacy';
     default:
       return null;
@@ -298,6 +303,7 @@ export class ToolRuntimeFacade {
   }
 
   registerTool(tool: AgentTool<any>, category: ToolCategory = 'core'): void {
+    assertNoModelFacingDriftGuardToolAliases([tool.name], `${category} tool registration`);
     const taggedTool = this.withToolConcurrencyMetadata(tagToolWithReversibility(tool), category);
     if (category === 'core') {
       this.coreTools.push(taggedTool);
@@ -364,12 +370,7 @@ export class ToolRuntimeFacade {
   getToolCatalogSnapshot(): RuntimeToolCatalogSnapshot {
     const toSnapshotEntry = (tool: AgentTool<any>, scope: 'core' | 'extended') => {
       const wiringMeta = cloneToolWiringMeta((tool as WirableTool).wiringMeta);
-      return {
-        name: tool.name,
-        description: tool.description,
-        scope,
-        ...(wiringMeta ? { wiringMeta } : {}),
-      };
+      return buildRuntimeToolCatalogEntry(tool, scope, wiringMeta);
     };
 
     return {
@@ -429,9 +430,11 @@ export class ToolRuntimeFacade {
 
   createToolsetTool(): AgentTool<any> {
     return createToolsetTool({
+      getCoreTools: () => this.coreTools,
       getExtendedTools: () => this.extendedTools,
       getExtendedToolAutoloadPolicy: () => this.extendedToolAutoloadPolicy,
       getAdaptiveToolRuntimeState: () => this.getAdaptiveToolRuntimeState(),
+      resolveCapabilityAccess: () => this.resolveCapabilityAccess(),
       getActiveTurnCorrelation: () => this.getActiveTurnCorrelation(),
       getActiveTurnTaskKind: () => this.getActiveTurnTaskKind(),
       getActiveTurnIntent: () => this.getActiveTurnIntent(),
@@ -502,8 +505,15 @@ export class ToolRuntimeFacade {
       autoloadOutcome.intent,
       correlation,
     );
-    const satelliteResolution = this.applySatelliteCapabilityToolPolicy(
+    const workerScopedResolution = this.applyAnalysisWorkbenchWorkerContextPolicy(
       resolution,
+      message,
+      taskKind,
+      autoloadOutcome.intent,
+      correlation,
+    );
+    const satelliteResolution = this.applySatelliteCapabilityToolPolicy(
+      workerScopedResolution,
       message,
       correlation,
     );
@@ -679,7 +689,7 @@ export class ToolRuntimeFacade {
         continue;
       }
 
-      const guardedTool = this.createMaintenanceGuardedCoreTool(tool, taskKind, correlation);
+      const guardedTool = this.createMaintenanceGuardedCoreTool(tool, taskKind ?? '', correlation);
       if (!guardedTool) {
         this.emitTelemetry('agent.tools.core_guardrail.skipped', {
           ...this.withAdaptiveCorrelation(correlation ?? undefined, 'agent.tools.core_guardrail.skipped'),
@@ -749,6 +759,77 @@ export class ToolRuntimeFacade {
           taskKind: taskKind ?? null,
           intent,
           reason: 'routine_intent_direct_tool_path',
+        });
+        continue;
+      }
+
+      filteredTools.push(tool);
+      if (source) {
+        filteredSnapshotTools.push({ toolName: tool.name, source });
+      }
+    }
+
+    if (!removed) {
+      return resolution;
+    }
+
+    const counts: AdaptiveToolSnapshotTelemetry['counts'] = {
+      core: 0,
+      promoted: 0,
+      extendedLoaded: 0,
+      autoload: 0,
+      deferred: 0,
+      total: filteredSnapshotTools.length,
+    };
+    for (const entry of filteredSnapshotTools) {
+      if (entry.source === 'core') counts.core += 1;
+      else if (entry.source === 'promoted') counts.promoted += 1;
+      else if (entry.source === 'extended_loaded') counts.extendedLoaded += 1;
+      else if (entry.source === 'autoload') counts.autoload += 1;
+      else counts.deferred += 1;
+    }
+
+    return {
+      tools: filteredTools,
+      snapshotTools: filteredSnapshotTools,
+      promotedSkipped: resolution.promotedSkipped.map(entry => ({
+        ...entry,
+        ...(entry.missingTokens ? { missingTokens: [...entry.missingTokens] } : {}),
+      })),
+      counts,
+    };
+  }
+
+  private applyAnalysisWorkbenchWorkerContextPolicy(
+    resolution: ActiveToolResolution,
+    message: SubstrateMessage,
+    taskKind: string | null | undefined,
+    intent: string | null | undefined,
+    correlation: CorrelationMetadata | null,
+  ): ActiveToolResolution {
+    if (isWorkerExecutionTurn(message)) {
+      return resolution;
+    }
+
+    const sourceByToolName = new Map(
+      resolution.snapshotTools.map((entry) => [entry.toolName, entry.source] as const),
+    );
+    const filteredTools: AgentTool<any>[] = [];
+    const filteredSnapshotTools: AdaptiveToolSnapshotTool[] = [];
+    let removed = false;
+
+    for (const tool of resolution.tools) {
+      const source = sourceByToolName.get(tool.name);
+      if (tool.name === 'analysis_workbench' && source === 'core') {
+        removed = true;
+        this.emitTelemetry('agent.tools.core_guardrail.skipped', {
+          ...this.withAdaptiveCorrelation(correlation ?? undefined, 'agent.tools.core_guardrail.skipped'),
+          toolName: tool.name,
+          taskKind: taskKind ?? null,
+          intent: intent ?? null,
+          channelId: message.channelId,
+          reason: 'analysis_workbench_worker_context_required',
+          recommendation: 'delegate_large_evidence_analysis_to_subagent_or_shard',
         });
         continue;
       }
@@ -879,6 +960,8 @@ export class ToolRuntimeFacade {
         const normalizedParams = isPlainRecord(params) ? params : {};
         const requestedAction = policy.resolveAction(normalizedParams);
         if (!requestedAction || !policy.allowedActions.includes(requestedAction)) {
+          const companionMessage = `${tool.name} is limited to read-only introspection during ${taskKind} turns. `
+            + `Allowed actions: ${policy.allowedActions.join(', ')}.`;
           this.emitTelemetry('agent.tools.core_guardrail.denied', {
             ...this.withAdaptiveCorrelation(correlation ?? undefined, 'agent.tools.core_guardrail.denied'),
             toolName: tool.name,
@@ -888,9 +971,19 @@ export class ToolRuntimeFacade {
             reason: 'maintenance_turn_allowlist',
           });
           return textResultWithError(
-            `${tool.name} is limited to read-only introspection during ${taskKind} turns. `
-            + `Allowed actions: ${policy.allowedActions.join(', ')}.`,
+            companionMessage,
             true,
+            {
+              errorClass: 'permission_denied',
+              companionMessage,
+              rawDiagnostic: {
+                toolName: tool.name,
+                taskKind,
+                requestedAction: requestedAction ?? null,
+                allowedActions: [...policy.allowedActions],
+                reason: 'maintenance_turn_allowlist',
+              },
+            },
           );
         }
         return tool.execute(toolCallId, params, signal);

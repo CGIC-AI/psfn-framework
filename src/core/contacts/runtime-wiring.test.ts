@@ -1,7 +1,28 @@
 import Database from 'better-sqlite3';
 import { describe, it, expect } from 'vitest';
 import type { AgentTool } from '@mariozechner/pi-agent-core';
-import { wireContactRuntime, type ContactRuntimeTarget } from './runtime-wiring.js';
+import type Database from 'better-sqlite3';
+import {
+  registerContactRuntime,
+  type ContactRuntimeOptions,
+  type ContactRuntimeTarget,
+} from './runtime-wiring.js';
+import { createSQLiteContactStore } from './sqlite-adapter.js';
+import type { ContactStorePort } from './contact-store-port.js';
+
+// Legacy SQLite convenience wiring, kept test-local until psfn-framework-3c2.5
+// deletes the SQLite contact store and this test file with it.
+async function wireContactRuntime(
+  target: ContactRuntimeTarget,
+  db: Database.Database,
+  primaryUserId?: string,
+  options: ContactRuntimeOptions = {},
+): Promise<ContactStorePort> {
+  const contactStore = createSQLiteContactStore(db, primaryUserId, {
+    exportDir: options.exportDir,
+  });
+  return await registerContactRuntime(target, contactStore, primaryUserId, options);
+}
 
 class FakeTarget implements ContactRuntimeTarget {
   contactStore = null;
@@ -13,20 +34,14 @@ class FakeTarget implements ContactRuntimeTarget {
 }
 
 describe('wireContactRuntime', () => {
-  it('injects ContactStore and registers the unified contact surface without legacy core aliases', async () => {
+  it('injects ContactStore and registers only the unified contact surface', async () => {
     const db = new Database(':memory:');
     const target = new FakeTarget();
 
     const contactStore = await wireContactRuntime(target, db, 'primary-user-123');
 
     expect(target.contactStore).toBe(contactStore);
-    expect(target.tools.map(t => t.name).sort()).toEqual([
-      'contact',
-      'contact_link_identity',
-      'contact_note',
-      'contact_set_channel_privacy',
-      'contact_set_trust',
-    ]);
+    expect(target.tools.map(t => t.name)).toEqual(['contact']);
   });
 
   it('threads primary user id into ContactStore behavior', async () => {

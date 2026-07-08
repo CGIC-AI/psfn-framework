@@ -7,6 +7,8 @@
 
 import type { CoreSubstrateConfig, SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
 import type { EventBus } from '../../../shared/event-bus.js';
+import type { AppCache } from '../../../shared/cache/types.js';
+import { wireRuntimeDiagnosticsEventCapture } from '../../../shared/diagnostics/runtime-diagnostics.js';
 import { createEventBusCostTelemetryPort } from '../../../shared/telemetry/cost-telemetry-port.js';
 import { SessionStore, type SessionIntegrityProvider } from '../../../persistence/sessions/store.js';
 import { SessionManager } from '../../../core/session/manager.js';
@@ -22,14 +24,22 @@ import {
   createEmbeddingProviderFromEnv as createEmbeddingProviderFromMemoryEnv,
   type EmbeddingRuntimeProvider,
 } from '../../../faculties/memory/embedding.js';
+import { MemoryJournal } from '../../../faculties/memory/journal.js';
+import { createPostgresMemoryStore } from '../../../faculties/memory/postgres-store.js';
 import {
   SubstrateAgent,
   type EmotionRuntimeWiring,
   type SubstrateAgentOptions,
 } from '../../../core/agent/substrate-agent.js';
+import {
+  DeterministicFatigueBudgetPort,
+  type FatigueBudgetPort,
+} from '../../../core/agent/fatigue/fatigue-budget.js';
+import type { ObserverEvalSidecarRuntime } from '../../../core/eval/observer-sidecar/types.js';
 import { MemoryRetriever } from '../../../faculties/memory/retrieval.js';
 import type { EpisodicRetrievalStore } from '../../../faculties/memory/retrieval/episodic.js';
 import { MemoryExtractor } from '../../../faculties/memory/extraction.js';
+import type { ConcernCandidateExtractionSink } from '../../../faculties/memory/extraction/types.js';
 import { MemoryWriter } from '../../../faculties/memory/writer.js';
 import type {
   CoreMemoryStorePort,
@@ -37,13 +47,13 @@ import type {
 } from '../../../faculties/memory/memory-store-port.js';
 import { createCoreMemoryStorePort } from '../../../faculties/memory/memory-store-port.js';
 import type { ContactStorePort } from '../../../core/contacts/contact-store-port.js';
+import type { ContactTrackingGate } from '../../../core/contacts/tracking-gate.js';
 import { ShardManager } from '../../../faculties/shards/manager.js';
 import { ShardFoldReviewController } from '../../../faculties/shards/fold-review.js';
 import {
   createShardExecutionPort,
   type ShardExecutionPort,
 } from '../../../faculties/shards/port.js';
-import { createBoundedSubagentLaunchTool } from '../../../faculties/shards/tools.js';
 import { SubagentFaculty } from '../../../faculties/subagents/faculty.js';
 import { createSubagentTool } from '../../../faculties/subagents/tools.js';
 import { createAnalysisWorkbenchTool } from '../../../core/tools/analysis-workbench/tools.js';
@@ -59,6 +69,7 @@ import { resolveCompanionIdFromConfig } from '../../../core/identity/companion-r
 import type { CharacterCardV2 } from '../../../core/identity/types.js';
 import type { LLMProviderPort, EmbeddingProviderPort } from '../../../core/agent/contracts.js';
 import type { PromptRegistryStatePort } from '../../../core/identity/prompt-state-port.js';
+import type { PersonaPreamblePort } from '../../../core/identity/persona-preamble.js';
 import type { ShardAuditTrail } from '../../../faculties/shards/manager.js';
 import type { ApprovalQueuePort } from '../../../system/capabilities/approval-queue-port.js';
 import type { ModuleRegistryMutation } from '../../../system/modules/types.js';
@@ -69,14 +80,18 @@ import {
   resolveConfiguredCompanionDataDir,
   resolveCoreMemoryPath,
   resolveContinuityDir,
+  resolveFatigueLedgerPath,
   resolveLegacyValuesJournalPath,
+  resolveMemoryJournalPath,
+  resolveNotesDir,
   resolveShardFoldReviewStorePath,
   resolveShardSessionMemorySyncAuditPath,
+  resolveScratchpadMirrorPath,
   resolveSessionsDir,
   resolveValuesJournalPath,
 } from '../../../persistence/layout.js';
-import { createDefaultSQLiteSessionAdapters } from '../../../persistence/sessions/sqlite-adapters.js';
 import { createDefaultPostgresSessionAdapters } from '../../../persistence/sessions/postgres-adapters.js';
+import { FatigueLedger } from '../../../shared/telemetry/fatigue-ledger.js';
 
 export interface SessionComposition {
   sessionStore: SessionStore;
@@ -96,7 +111,7 @@ export interface SessionCompositionOptions {
 
 function createSessionComposition(
   options: SessionCompositionOptions,
-  sessionAdapters: ReturnType<typeof createDefaultSQLiteSessionAdapters> | Awaited<ReturnType<typeof createDefaultPostgresSessionAdapters>>,
+  sessionAdapters: Awaited<ReturnType<typeof createDefaultPostgresSessionAdapters>>,
   sessionsDir: string,
 ): SessionComposition {
   const companionDataDir = resolveConfiguredCompanionDataDir(options.config);
@@ -111,6 +126,7 @@ function createSessionComposition(
     options.config,
     options.eventBus,
     options.promptRegistry ?? null,
+    sessionAdapters.transcriptSearch,
   );
   const internalRoleEnvelopeLedger = wireInternalRoleEnvelopeRuntime(sessionManager, options.config);
 
@@ -125,21 +141,6 @@ function createSessionComposition(
   return { sessionStore, sessionManager, continuityStore, internalRoleEnvelopeLedger };
 }
 
-export function composeSessionRuntime(options: SessionCompositionOptions): SessionComposition {
-  const companionDataDir = resolveConfiguredCompanionDataDir(options.config);
-  migrateLegacyPersistenceLayout(companionDataDir);
-
-  if ((options.config.persistenceBackend ?? 'sqlite') !== 'sqlite') {
-    throw new Error(
-      'composeSessionRuntime() only supports sqlite-backed session composition. Use composeSessionRuntimeAsync() for postgres-backed runtime composition.',
-    );
-  }
-
-  const sessionsDir = options.sessionsDir ?? resolveSessionsDir(companionDataDir);
-  const sessionAdapters = createDefaultSQLiteSessionAdapters(sessionsDir);
-  return createSessionComposition(options, sessionAdapters, sessionsDir);
-}
-
 export async function composeSessionRuntimeAsync(
   options: SessionCompositionOptions,
 ): Promise<SessionComposition> {
@@ -147,19 +148,39 @@ export async function composeSessionRuntimeAsync(
   migrateLegacyPersistenceLayout(companionDataDir);
 
   const sessionsDir = options.sessionsDir ?? resolveSessionsDir(companionDataDir);
-  if ((options.config.persistenceBackend ?? 'sqlite') === 'postgres') {
-    const databaseUrl = options.config.postgresDatabaseUrl?.trim();
-    if (!databaseUrl) {
-      throw new Error('PostgreSQL session composition requires config.postgresDatabaseUrl');
-    }
-    const sessionAdapters = await createDefaultPostgresSessionAdapters(databaseUrl, {
-      sessionsDir,
-    });
-    return createSessionComposition(options, sessionAdapters, sessionsDir);
+  if (options.config.persistenceBackend !== 'postgres') {
+    throw new Error('PostgreSQL session composition requires config.persistenceBackend=postgres');
+  }
+  const databaseUrl = options.config.postgresDatabaseUrl?.trim();
+  if (!databaseUrl) {
+    throw new Error('PostgreSQL session composition requires config.postgresDatabaseUrl');
+  }
+  const sessionAdapters = await createDefaultPostgresSessionAdapters(databaseUrl, {
+    sessionsDir,
+  });
+  return createSessionComposition(options, sessionAdapters, sessionsDir);
+}
+
+export async function composeMemoryStoreAsync(
+  config: SubstrateConfig,
+  embeddingDims: number,
+): Promise<MemoryStorePort> {
+  const companionDataDir = resolveConfiguredCompanionDataDir(config);
+  migrateLegacyPersistenceLayout(companionDataDir);
+
+  if (config.persistenceBackend !== 'postgres') {
+    throw new Error('PostgreSQL memory composition requires config.persistenceBackend=postgres');
+  }
+  const databaseUrl = config.postgresDatabaseUrl?.trim();
+  if (!databaseUrl) {
+    throw new Error('PostgreSQL memory composition requires config.postgresDatabaseUrl');
   }
 
-  const sessionAdapters = createDefaultSQLiteSessionAdapters(sessionsDir);
-  return createSessionComposition(options, sessionAdapters, sessionsDir);
+  return await createPostgresMemoryStore(databaseUrl, embeddingDims, {
+    notesDir: resolveNotesDir(companionDataDir),
+    scratchpadMirrorPath: resolveScratchpadMirrorPath(companionDataDir),
+    journal: new MemoryJournal(resolveMemoryJournalPath(companionDataDir)),
+  });
 }
 
 export function createEmbeddingProviderFromEnv(): EmbeddingRuntimeProvider {
@@ -196,8 +217,13 @@ export interface SubstrateAgentCompositionOptions {
   config: CoreSubstrateConfig;
   runtimeMode?: RuntimeMode;
   emotionRuntime?: EmotionRuntimeWiring;
+  fatigueBudget?: FatigueBudgetPort | null;
+  observerEvalSidecar?: ObserverEvalSidecarRuntime | null;
   streamRuntimeOptions?: SubstrateAgentOptions['streamRuntimeOptions'];
   streamTransport?: SubstrateAgentOptions['streamTransport'];
+  appCache?: AppCache;
+  /** Contact-tracking policy gate (E3.4). Absent gate behaves as 'auto' everywhere. */
+  contactTrackingGate?: ContactTrackingGate | null;
 }
 
 export function composeSubstrateAgent(options: SubstrateAgentCompositionOptions): SubstrateAgent {
@@ -215,10 +241,42 @@ export function composeSubstrateAgent(options: SubstrateAgentCompositionOptions)
         : {}),
       ...(options.runtimeMode ? { runtimeMode: options.runtimeMode } : {}),
       ...(options.emotionRuntime ? { emotionRuntime: options.emotionRuntime } : {}),
+      ...(options.fatigueBudget ? { fatigueBudget: options.fatigueBudget } : {}),
+      ...(options.observerEvalSidecar ? { observerEvalSidecar: options.observerEvalSidecar } : {}),
       ...(options.streamRuntimeOptions ? { streamRuntimeOptions: options.streamRuntimeOptions } : {}),
       ...(options.streamTransport ? { streamTransport: options.streamTransport } : {}),
+      ...(options.appCache ? { appCache: options.appCache } : {}),
+      ...(options.contactTrackingGate ? { contactTrackingGate: options.contactTrackingGate } : {}),
     },
   );
+}
+
+export interface FatigueBudgetComposition {
+  fatigueLedger: FatigueLedger;
+  fatigueBudget: FatigueBudgetPort;
+}
+
+export interface FatigueBudgetCompositionOptions {
+  config: SubstrateConfig;
+  eventBus?: EventBus;
+  now?: () => number;
+}
+
+export function composeFatigueBudgetRuntime(
+  options: FatigueBudgetCompositionOptions,
+): FatigueBudgetComposition {
+  const companionDataDir = resolveConfiguredCompanionDataDir(options.config);
+  migrateLegacyPersistenceLayout(companionDataDir);
+  const sharedOptions = options.now ? { now: options.now } : {};
+  const fatigueLedger = new FatigueLedger(
+    resolveFatigueLedgerPath(companionDataDir),
+    options.eventBus ?? null,
+    sharedOptions,
+  );
+  return {
+    fatigueLedger,
+    fatigueBudget: new DeterministicFatigueBudgetPort(fatigueLedger, sharedOptions),
+  };
 }
 
 export interface SelfModelRuntimeTarget {
@@ -227,6 +285,10 @@ export interface SelfModelRuntimeTarget {
 
 export function wireSelfModelRuntime(target: SelfModelRuntimeTarget): void {
   target.setSelfModelRuntimeRequired(true);
+}
+
+export function wireDiagnosticsRuntime(eventBus: EventBus): void {
+  wireRuntimeDiagnosticsEventCapture(eventBus);
 }
 
 export interface CoreMemoryRuntimeOptions {
@@ -264,6 +326,11 @@ export interface MemoryRuntimeOptions {
   promptRegistry?: PromptRegistryStatePort | null;
   contactStore?: ContactStorePort | null;
   episodicStore?: EpisodicRetrievalStore | null;
+  concernCandidateSink?: ConcernCandidateExtractionSink | null;
+  /** Contact-tracking policy gate predicate (E3.4); absent behaves as 'auto'. */
+  isAutoContactCreationAllowed?: ((channelId: string) => boolean) | null;
+  /** Shared persona preamble service (E6.1); soft persona framing before extraction/profile prompts. */
+  personaPreamble?: PersonaPreamblePort | null;
 }
 
 export function wireMemoryRuntime(options: MemoryRuntimeOptions): MemoryExtractor {
@@ -273,21 +340,34 @@ export function wireMemoryRuntime(options: MemoryRuntimeOptions): MemoryExtracto
       options.memoryStore,
       options.embeddingService,
       options.config,
-      costTelemetry,
-      options.contactStore ?? null,
-      options.llmProvider,
-      options.episodicStore ?? null,
-    )
-    : new MemoryRetriever(
-      options.memoryStore,
-      options.embeddingService,
+	      costTelemetry,
+	      options.contactStore ?? null,
+	      options.llmProvider,
+	      options.episodicStore ?? null,
+	      options.sessionManager,
+	    )
+	    : new MemoryRetriever(
+	      options.memoryStore,
+	      options.embeddingService,
       undefined,
-      costTelemetry,
-      options.contactStore ?? null,
-      options.llmProvider,
-      options.episodicStore ?? null,
-    );
+	      costTelemetry,
+	      options.contactStore ?? null,
+	      options.llmProvider,
+	      options.episodicStore ?? null,
+	      options.sessionManager,
+	    );
 
+  const extractorFormationOptions = {
+    ...(options.concernCandidateSink
+      ? { emitConcernCandidates: options.concernCandidateSink }
+      : {}),
+    ...(options.isAutoContactCreationAllowed
+      ? { isAutoContactCreationAllowed: options.isAutoContactCreationAllowed }
+      : {}),
+    ...(options.personaPreamble
+      ? { personaPreamble: options.personaPreamble }
+      : {}),
+  };
   const memoryExtractor = options.config
     ? new MemoryExtractor(
       options.llmProvider,
@@ -299,6 +379,7 @@ export function wireMemoryRuntime(options: MemoryRuntimeOptions): MemoryExtracto
       options.promptRegistry ?? null,
       options.sessionStore ?? null,
       options.contactStore ?? null,
+      extractorFormationOptions,
     )
     : new MemoryExtractor(
       options.llmProvider,
@@ -310,6 +391,7 @@ export function wireMemoryRuntime(options: MemoryRuntimeOptions): MemoryExtracto
       options.promptRegistry ?? null,
       options.sessionStore ?? null,
       options.contactStore ?? null,
+      extractorFormationOptions,
     );
   options.sessionManager.setPreCompactionExtractionHandler(async ({
     channelId,
@@ -358,6 +440,7 @@ export function wireShardAndThinkRuntime(options: ToolRuntimeOptions): ShardExec
     eventBus: options.eventBus,
     llmProvider: options.llmProvider,
     sessionStore: options.sessionStore,
+    completionNotices: options.agentLoop.completionNotices,
     sessionManager: options.sessionManager,
     embeddingService: options.embeddingService,
     memoryProvider: options.agentLoop.memoryProvider,
@@ -373,6 +456,7 @@ export function wireShardAndThinkRuntime(options: ToolRuntimeOptions): ShardExec
     eventBus: options.eventBus,
     llmProvider: options.llmProvider,
     sessionStore: options.sessionStore,
+    completionNotices: options.agentLoop.completionNotices,
     embeddingService: options.embeddingService,
     memoryProvider: options.agentLoop.memoryProvider,
     config: options.config,
@@ -383,7 +467,6 @@ export function wireShardAndThinkRuntime(options: ToolRuntimeOptions): ShardExec
   });
   const shardExecutionPort = createShardExecutionPort(shardManager);
   options.agentLoop.registerTool(createSubagentTool(subagentFaculty), 'core');
-  options.agentLoop.registerTool(createBoundedSubagentLaunchTool(shardManager), 'extended');
 
   options.agentLoop.registerTool(createAnalysisWorkbenchTool({
     llmProvider: options.llmProvider,

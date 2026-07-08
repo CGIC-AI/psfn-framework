@@ -29,12 +29,13 @@ import type {
 } from '../backplane/types.js';
 import type { SubstrateAgent } from '../../core/agent/substrate-agent.js';
 import type { EventBus } from '../../shared/event-bus.js';
+import { resolveAgentResponseDisposition } from '../../shared/agent-response-disposition.js';
 import type { SessionStore } from '../../persistence/sessions/store.js';
 import type { EligibilityGate } from '../../system/capabilities/eligibility.js';
 import { createComponentLogger } from '../../shared/logger.js';
+import { createRateLimitedLogEmitter } from '../../shared/log-rate-limit.js';
 import { DiscordVoiceRuntime } from './voice.js';
 import {
-  DeferredLatestByChannel,
   emitTurnContentionTelemetry,
   type TurnContentionPhase,
   type TurnContentionPolicy,
@@ -46,8 +47,10 @@ import {
   toDiscordDocumentAttachmentCandidate,
   type DiscordDocumentAttachmentCandidate,
 } from './file-ingest.js';
+import { hasDiscordAttachmentMetadataQuarantineRisk } from './file-quarantine.js';
 
 const log = createComponentLogger('Discord');
+const rateLimitedDebugLog = createRateLimitedLogEmitter({ windowMs: 60_000 });
 
 const TYPING_INTERVAL_MS = 9_000;
 const MAX_DISCORD_LENGTH = 2000;
@@ -122,6 +125,42 @@ interface PendingDiscordTurn {
   respondToMessage: boolean;
 }
 
+function coalesceSameAuthorDiscordTurns(turns: PendingDiscordTurn[]): PendingDiscordTurn {
+  if (turns.length === 1) return turns[0]!;
+
+  const latest = turns[turns.length - 1]!;
+  const messages = turns.map(turn => turn.substrateMsg);
+  return {
+    ...latest,
+    substrateMsg: {
+      ...latest.substrateMsg,
+      content: messages
+        .map(message => message.content)
+        .filter(content => content.trim().length > 0)
+        .join('\n'),
+      attachments: messages.flatMap(message => message.attachments ?? []),
+    },
+    replyToOriginal: turns.some(turn => turn.replyToOriginal),
+    respondToMessage: turns.some(turn => turn.respondToMessage),
+  };
+}
+
+// Only contiguous same-author turns may merge into one substrate message;
+// merging across authors would attribute one user's text to another for
+// downstream memory, policy, and audit paths.
+function coalescePendingDiscordTurns(turns: PendingDiscordTurn[]): PendingDiscordTurn[] {
+  const groups: PendingDiscordTurn[][] = [];
+  for (const turn of turns) {
+    const current = groups.at(-1);
+    if (current && current[0]!.substrateMsg.authorId === turn.substrateMsg.authorId) {
+      current.push(turn);
+    } else {
+      groups.push([turn]);
+    }
+  }
+  return groups.map(group => coalesceSameAuthorDiscordTurns(group));
+}
+
 export class DiscordAdapter implements ChannelAdapterPort {
   readonly id = 'discord';
   readonly name = this.id;
@@ -153,7 +192,7 @@ export class DiscordAdapter implements ChannelAdapterPort {
   private voiceHandler: MessageHandler | null = null;
   private agent: SubstrateAgent | null = null;
   private processing = new Set<string>();
-  private pendingByChannel = new DeferredLatestByChannel<PendingDiscordTurn>();
+  private pendingByChannel = new Map<string, PendingDiscordTurn[]>();
   private lockStartedAt = new Map<string, number>();
   private lockContention = new Map<string, number>();
   private lockPolicy = new Map<string, TurnContentionPolicy>();
@@ -164,6 +203,7 @@ export class DiscordAdapter implements ChannelAdapterPort {
   private longRunningTools = new Map<string, LongRunningToolState>();
   private allowedBotUserIds: Set<string>;
   private personalFilesDir: string | null;
+  private initialized = false;
 
   constructor(config: SubstrateConfig, eventBus: EventBus, options: DiscordAdapterOptions = {}) {
     this.runtimeConfig = config;
@@ -257,6 +297,9 @@ export class DiscordAdapter implements ChannelAdapterPort {
   }
 
   async init(): Promise<void> {
+    if (this.initialized) return;
+    this.initialized = true;
+
     this.client.on(Events.MessageCreate, (msg) => {
       this.onDiscordMessage(msg).catch(err => {
         log.error('Message handling error', { error: String(err) });
@@ -507,15 +550,19 @@ export class DiscordAdapter implements ChannelAdapterPort {
         log.debug('Steering message into active stream', { channelId });
         void this.agent.steer(substrateMsg);
       } else {
-        // Gateway mode has no direct agent instance, so keep latest message queued
-        // instead of dropping it during lock contention.
-        const deferred = this.pendingByChannel.set(channelId, turn);
-        this.emitQueueTelemetry(channelId, 'contended', 'defer-latest', {
-          queueDepth: deferred.queueDepth,
+        // Gateway mode has no direct agent instance to steer, so preserve all
+        // contended messages for the agent-side queue to bundle or process.
+        const pending = this.pendingByChannel.get(channelId) ?? [];
+        pending.push(turn);
+        this.pendingByChannel.set(channelId, pending);
+        this.emitQueueTelemetry(channelId, 'contended', 'queue', {
+          queueDepth: pending.length,
           waitMs,
-          superseded: deferred.replaced,
         });
-        log.debug('Queueing contended Discord message for deferred processing', { channelId });
+        log.debug('Queueing contended Discord message for deferred processing', {
+          channelId,
+          queueDepth: pending.length,
+        });
       }
       return;
     }
@@ -524,7 +571,7 @@ export class DiscordAdapter implements ChannelAdapterPort {
     const lockStartMs = Date.now();
     this.lockStartedAt.set(channelId, lockStartMs);
     this.lockContention.set(channelId, 0);
-    const lockPolicy: TurnContentionPolicy = this.agent ? 'steer' : 'defer-latest';
+    const lockPolicy: TurnContentionPolicy = this.agent ? 'steer' : 'queue';
     this.lockPolicy.set(channelId, lockPolicy);
     this.emitQueueTelemetry(channelId, 'acquired', lockPolicy, {
       queueDepth: 0,
@@ -541,16 +588,17 @@ export class DiscordAdapter implements ChannelAdapterPort {
 
       const response = await this.handler(substrateMsg);
       const trimmedResponse = response.content.trim();
-      const hasText = trimmedResponse.length > 0;
+      const disposition = resolveAgentResponseDisposition(response);
+      const hasText = disposition.kind === 'send' && disposition.hasText;
       const responseAttachments = response.attachments ?? [];
-      if (hasText) {
+      if (disposition.kind === 'send' && hasText) {
         if (replyToOriginal) {
           await this.sendReply(msg, trimmedResponse);
         } else {
           await this.outbound.sendText({ channelId }, response.content);
         }
       }
-      if (responseAttachments.length > 0) {
+      if (disposition.kind === 'send' && responseAttachments.length > 0) {
         const mediaContext = replyToOriginal && !hasText
           ? { channelId, replyToMessageId: msg.id }
           : { channelId };
@@ -558,10 +606,27 @@ export class DiscordAdapter implements ChannelAdapterPort {
           await this.outbound.sendMedia?.(mediaContext, attachment);
         }
       }
-      if (hasText || responseAttachments.length > 0) {
+      if (disposition.kind === 'send' && (hasText || responseAttachments.length > 0)) {
         await this.eventBus.emit('message.sent', { response });
+      } else if (disposition.kind === 'intentional_no_reply') {
+        log.debug('Suppressing intentional no-reply for Discord channel', {
+          channelId,
+          auditId: disposition.noReply.auditId,
+        });
+      } else if (disposition.kind === 'policy_suppressed') {
+        log.debug('Suppressing policy-held Discord response', {
+          channelId,
+          reason: disposition.reason,
+        });
       } else {
-        log.debug('Suppressing empty handler response for Discord channel', { channelId });
+        log.warn('Discord handler returned empty response without a suppression marker', { channelId });
+        await this.eventBus.emit('channel.message.error', {
+          channelId,
+          channelType: 'discord',
+          messageId: substrateMsg.id,
+          phase: 'handler',
+          error: 'empty_agent_response_without_suppression_marker',
+        }).catch(() => undefined);
       }
 
     } catch (error) {
@@ -593,8 +658,33 @@ export class DiscordAdapter implements ChannelAdapterPort {
       this.clearLongRunningToolsForChannel(channelId);
       await this.clearStatus(channelId, 'compaction');
       await this.clearStatus(channelId, 'long-running');
-      const pending = this.pendingByChannel.take(channelId);
+      const pendingQueue = this.pendingByChannel.get(channelId);
+      const coalescedQueueDepth = pendingQueue?.length ?? 0;
+      const coalescedMessageIds = pendingQueue?.map(entry => entry.substrateMsg.id) ?? [];
+      const coalescedTurns = pendingQueue ? coalescePendingDiscordTurns(pendingQueue.splice(0)) : [];
+      if (pendingQueue) {
+        this.pendingByChannel.delete(channelId);
+      }
+      const pending = coalescedTurns.at(0) ?? null;
+      const remainder = coalescedTurns.slice(1);
+      if (remainder.length > 0) {
+        // Cross-author turns stay separate; re-queue them so each author's
+        // coalesced turn is processed on its own once this one completes.
+        this.pendingByChannel.set(channelId, remainder);
+      }
       if (pending) {
+        if (coalescedQueueDepth > 1) {
+          this.emitQueueTelemetry(channelId, 'coalesced', 'queue', {
+            queueDepth: coalescedQueueDepth,
+            waitMs: Math.max(0, Date.now() - lockStartMs),
+          });
+          log.info('Coalescing queued Discord messages into deferred per-author turns', {
+            channelId,
+            queueDepth: coalescedQueueDepth,
+            deferredTurns: coalescedTurns.length,
+            messageIds: coalescedMessageIds,
+          });
+        }
         queueMicrotask(() => {
           this.processMessage(pending).catch((error) => {
             log.error('Deferred Discord message handling error', { channelId, error: String(error) });
@@ -667,6 +757,17 @@ export class DiscordAdapter implements ChannelAdapterPort {
           failures: documentSummary.failures,
         });
       }
+      if (documentSummary.quarantined.length > 0) {
+        log.warn('Discord attachments quarantined pending operator review', {
+          channelId: msg.channelId,
+          messageId: msg.id,
+          quarantined: documentSummary.quarantined.map(attachment => ({
+            name: attachment.name,
+            sha256: attachment.sha256,
+            reasons: attachment.reasons,
+          })),
+        });
+      }
     } else if (documentCandidates.length > 0 && !this.personalFilesDir) {
       log.warn('Discord document attachments skipped because personal files root is not configured', {
         channelId: msg.channelId,
@@ -690,6 +791,11 @@ export class DiscordAdapter implements ChannelAdapterPort {
       routing: {
         source: 'discord',
         responseMode: respondToMessage ? 'respond' : 'observe',
+        // Provenance-honest MI marker from Discord's bot/app metadata. Only ever
+        // set true for bot-authored messages so a human author never triggers
+        // machine-intelligence auto-tagging. Consumed by author-context
+        // resolution to mark the contact (operator corrections survive).
+        ...(msg.author.bot ? { authorIsMachineIntelligence: true } : {}),
       },
     };
   }
@@ -700,6 +806,15 @@ export class DiscordAdapter implements ChannelAdapterPort {
     const attachments: NonNullable<SubstrateMessage['attachments']> = [];
     for (const raw of rawAttachments) {
       if (attachments.length >= DISCORD_MAX_IMAGE_ATTACHMENTS_PER_MESSAGE) break;
+      if (hasDiscordAttachmentMetadataQuarantineRisk(raw)) {
+        log.debug('Skipping metadata-risky Discord image attachment until quarantine review', {
+          channelId: msg.channelId,
+          messageId: msg.id,
+          name: raw.name,
+          contentType: raw.contentType,
+        });
+        continue;
+      }
 
       const contentType = this.resolveDiscordImageContentType(raw);
       if (!contentType) continue;
@@ -816,16 +931,16 @@ export class DiscordAdapter implements ChannelAdapterPort {
     const chunks = splitMessage(content);
     if (chunks.length === 0) return;
 
-    await msg.reply(chunks[0]);
+    await msg.reply(chunks[0]!);
     for (let i = 1; i < chunks.length; i++) {
-      await (msg.channel as TextChannel).send(chunks[i]);
+      await (msg.channel as TextChannel).send(chunks[i]!);
     }
   }
 
   private resolveRuntimeBotId(): string | undefined {
     const liveBotId = this.client.user?.id;
     if (liveBotId) return liveBotId;
-    const configuredBotId = this.runtimeConfig.discordBotId.trim();
+    const configuredBotId = this.runtimeConfig.discordBotId?.trim() ?? '';
     return configuredBotId.length > 0 ? configuredBotId : undefined;
   }
 
@@ -915,14 +1030,31 @@ export class DiscordAdapter implements ChannelAdapterPort {
 
   private startTyping(msg: Message): ReturnType<typeof setInterval> {
     const channel = msg.channel;
+    const channelId = msg.channelId;
     if ('sendTyping' in channel) {
-      (channel as TextChannel).sendTyping().catch(() => {});
+      (channel as TextChannel).sendTyping().catch((error: unknown) => {
+        this.logTypingFailure(channelId, 'initial', error);
+      });
     }
     return setInterval(() => {
       if ('sendTyping' in channel) {
-        (channel as TextChannel).sendTyping().catch(() => {});
+        (channel as TextChannel).sendTyping().catch((error: unknown) => {
+          this.logTypingFailure(channelId, 'interval', error);
+        });
       }
     }, TYPING_INTERVAL_MS);
+  }
+
+  private logTypingFailure(channelId: string, phase: 'initial' | 'interval', error: unknown): void {
+    const errorMessage = toErrorMessage(error);
+    rateLimitedDebugLog(
+      `discord.sendTyping.${phase}:${channelId}:${errorMessage}`,
+      () => log.debug('Discord typing indicator failed', {
+        channelId,
+        phase,
+        error: errorMessage,
+      }),
+    );
   }
 
   private emitQueueTelemetry(

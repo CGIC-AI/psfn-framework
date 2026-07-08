@@ -1,3 +1,4 @@
+import { isRecord } from '../../../shared/utils/types.js';
 import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
 import {
   applySettings,
@@ -10,6 +11,7 @@ import {
   SETTINGS_VALIDATION,
 } from '../../../system/settings.js';
 import type { ConfigStorePort } from '../../../system/config/config-store.js';
+import type { ChargePolicyConfig } from '../../../system/config/charge-policy-config.js';
 import {
   applyProvidersRuntimeConfig,
 } from '../../../system/config/providers-config.js';
@@ -42,6 +44,8 @@ import {
   listStreamingTtsProviders,
 } from '../../../primitives/voice/connectors/tts/index.js';
 import type {
+  AdminChannelEnvelopeData,
+  AdminChannelEnvelopeRow,
   AdminSettingsData,
   AdminSettingsDivergence,
   AdminSettingsStatus,
@@ -49,9 +53,13 @@ import type {
   AdminVoiceProviderData,
   AdminVoiceProviderOption,
   ConfigUpdateResult,
+  EffectiveChargeQuotaState,
   SettingsValidationError,
   SettingsConfigEditors,
 } from './types.js';
+import { parseContextEnvelopeSection } from '../../../channels/backplane/config.js';
+import { validateChannelEnvelopeLabel } from '../../../system/trust/context-envelope.js';
+import { resolveChannelEnvelopeClassification } from '../../../system/trust/policy.js';
 
 const IMPORT_ROUTE_MODE_VALUES = new Set(IMPORT_PROCESSING_ROUTE_MODE_VALUES);
 const SESSION_RESTART_BEHAVIOR_VALUES_SET = new Set(SESSION_RESTART_BEHAVIOR_VALUES);
@@ -107,6 +115,17 @@ function refreshCapabilities(config: SubstrateConfig): AdminSettingsDivergence |
   }
 }
 
+function invalidatePromptCacheAfterOwnerMutation(config: SubstrateConfig, reason: string): void {
+  try {
+    config.runtimeHooks?.invalidatePromptPrefixCache?.(reason);
+  } catch (error) {
+    log.warn('Prompt cache invalidation hook failed after settings mutation', {
+      reason,
+      error: toErrorMessage(error),
+    });
+  }
+}
+
 export function applyAdminModelsConfigMutation(options: {
   config: SubstrateConfig;
   configStore: ConfigStorePort;
@@ -117,6 +136,7 @@ export function applyAdminModelsConfigMutation(options: {
     const saved = configStore.saveModels(payload);
     applySettings(config, saved);
     const divergence = refreshModels(config);
+    invalidatePromptCacheAfterOwnerMutation(config, 'owner-file:models');
     return {
       ok: true,
       refreshedKeys: ['models'],
@@ -140,6 +160,7 @@ export function applyAdminCapabilityTierMutation(options: {
     const saved = configStore.saveCapabilityTier(payload);
     config.capabilityTier = saved.tier;
     const divergence = refreshCapabilities(config);
+    invalidatePromptCacheAfterOwnerMutation(config, 'owner-file:capability-tier');
     return {
       ok: true,
       refreshedKeys: ['capabilities'],
@@ -173,6 +194,7 @@ export function applyAdminSettingsMutation(options: {
 
   configStore.saveRuntimeSettings(mergedRuntimeSettings);
   applySettings(config, mergedRuntimeSettings);
+  invalidatePromptCacheAfterOwnerMutation(config, 'owner-file:settings');
 
   if (Object.hasOwn(domainSplit.runtime, 'openRouterModelsApiUrl')) {
     try {
@@ -184,6 +206,7 @@ export function applyAdminSettingsMutation(options: {
         openrouterProvider.modelsApiUrl = nextUrl;
         const savedProviders = configStore.saveProviders(nextRegistry);
         applyProvidersRuntimeConfig(config, savedProviders);
+        invalidatePromptCacheAfterOwnerMutation(config, 'owner-file:providers');
       }
     } catch (error) {
       return {
@@ -420,9 +443,6 @@ export class AdminSettingsDataService implements AdminSettingsService {
     };
   }
 
-  private isRecord(value: unknown): value is Record<string, unknown> {
-    return value !== null && typeof value === 'object' && !Array.isArray(value);
-  }
 
   private buildValidationResult(errors: SettingsValidationError[]): ConfigUpdateResult {
     return {
@@ -626,12 +646,12 @@ export class AdminSettingsDataService implements AdminSettingsService {
     errors: SettingsValidationError[],
   ): void {
     if (!('modelCatalog' in payload)) return;
-    if (!this.isRecord(payload.modelCatalog)) return;
+    if (!isRecord(payload.modelCatalog)) return;
 
     for (const [slotKey, rawEntry] of Object.entries(payload.modelCatalog)) {
-      if (!this.isRecord(rawEntry) || !('routing' in rawEntry)) continue;
+      if (!isRecord(rawEntry) || !('routing' in rawEntry)) continue;
       const fieldPrefix = `modelCatalog.${slotKey}.routing`;
-      if (!this.isRecord(rawEntry.routing)) {
+      if (!isRecord(rawEntry.routing)) {
         this.pushFieldError(errors, fieldPrefix, `${fieldPrefix} must be an object`, 'invalid_type');
         continue;
       }
@@ -773,12 +793,35 @@ export class AdminSettingsDataService implements AdminSettingsService {
   async getSettingsData(): Promise<AdminSettingsData> {
     const runtimeConfig = splitSettingsByDomain(this.deps.configStore.loadRuntimeSettings()).runtime;
     runtimeConfig.sessionRestartBehavior ??= 'reuse_latest_session';
+    const editors = this.loadSettingsConfigEditors();
     return {
       config: runtimeConfig,
       env: this.getEnvInfo(),
-      editors: this.loadSettingsConfigEditors(),
+      editors,
       voiceProviders: this.loadVoiceProviderData(),
       status: this.buildSettingsStatus(),
+      effectiveChargeQuota: this.buildEffectiveChargeQuotaState(editors.chargePolicy),
+    };
+  }
+
+  /**
+   * Compares the on-disk charge-policy owner file against the quotas the
+   * running process loaded at startup (config.chargePolicy). A divergence means
+   * a restart is required before the on-disk edit takes effect — the exact
+   * failure mode psfn-framework-9bgk traced. Effective is null when the runtime
+   * carries no loaded charge policy.
+   */
+  private buildEffectiveChargeQuotaState(
+    onDisk: ChargePolicyConfig,
+  ): EffectiveChargeQuotaState {
+    const onDiskChargeQuotaByLane = onDisk.runChargeQuotaByLane;
+    const effectiveChargeQuotaByLane = this.deps.config.chargePolicy?.runChargeQuotaByLane ?? null;
+    const restartRequired = effectiveChargeQuotaByLane !== null
+      && JSON.stringify(effectiveChargeQuotaByLane) !== JSON.stringify(onDiskChargeQuotaByLane);
+    return {
+      effectiveChargeQuotaByLane,
+      onDiskChargeQuotaByLane,
+      restartRequired,
     };
   }
 
@@ -801,7 +844,7 @@ export class AdminSettingsDataService implements AdminSettingsService {
       };
     }
 
-    if (!this.isRecord(parsed)) {
+    if (!isRecord(parsed)) {
       return {
         ok: false,
         message: 'Settings payload must be a JSON object',
@@ -828,6 +871,117 @@ export class AdminSettingsDataService implements AdminSettingsService {
       }
       const status = this.updateDivergences(mutationResult.refreshedKeys, mutationResult.divergences);
       return this.buildSuccessfulSaveResult('Settings updated', status);
+    } catch (error) {
+      return { ok: false, message: toErrorMessage(error) };
+    }
+  }
+
+  // ── Garden channel Context Envelope view (E3.2) ──
+
+  /**
+   * Splits the channels.json root into (root, scoped) taking the optional
+   * `channels` wrapper into account, mirroring loadRuntimeChannelsConfig.
+   */
+  private loadChannelsOwnerScopes(): {
+    root: Record<string, unknown>;
+    scopedRoot: Record<string, unknown>;
+    hasWrapper: boolean;
+  } {
+    const root = this.deps.configStore.loadChannelsOwnerFile();
+    const hasWrapper = isRecord(root.channels);
+    const scopedRoot = hasWrapper ? root.channels as Record<string, unknown> : root;
+    return { root, scopedRoot, hasWrapper };
+  }
+
+  /**
+   * Channel list for the Garden CHANNELS view: every channel owning a
+   * channels.json envelope label or an exact operator override, classified
+   * through the contract precedence (channel-owned label > operator override
+   * > derived default) against the freshly loaded owner files.
+   */
+  getChannelEnvelopeData(): AdminChannelEnvelopeData {
+    const { scopedRoot } = this.loadChannelsOwnerScopes();
+    const labels = parseContextEnvelopeSection(scopedRoot).channels;
+    const trustPolicy = this.deps.configStore.loadTrustPolicy();
+
+    const channelIds = new Set<string>([
+      ...Object.keys(labels),
+      ...Object.keys(trustPolicy.channelClassification.visibilityOverrides.exact),
+    ]);
+
+    const channels: AdminChannelEnvelopeRow[] = [...channelIds]
+      .sort((a, b) => a.localeCompare(b))
+      .map((channelId) => {
+        const label = Object.hasOwn(labels, channelId) ? labels[channelId] : undefined;
+        const classification = resolveChannelEnvelopeClassification(channelId, undefined, {
+          ...(label ? { label } : {}),
+          trustPolicy,
+        });
+        return {
+          channelId,
+          privacy: classification.privacy,
+          broadcast: classification.broadcast,
+          contactTracking: classification.contactTracking,
+          deliveryStyle: classification.deliveryStyle,
+          deliveryStyleSource: classification.deliveryStyleSource,
+          source: classification.source,
+          needsReview: classification.needsReview,
+          hasLabel: label !== undefined,
+          ...(label ? { label } : {}),
+        };
+      });
+
+    return {
+      channels,
+      prefixOverrides: { ...trustPolicy.channelClassification.visibilityOverrides.prefix },
+      privatePrefixes: [...trustPolicy.channelClassification.privatePrefixes],
+      broadcastPrefixes: [...trustPolicy.channelClassification.broadcastPrefixes],
+    };
+  }
+
+  /**
+   * Upserts (label object) or removes (null) one channel-owned envelope label
+   * through the owner-file path with full fail-closed validation.
+   */
+  saveChannelEnvelopeLabel(channelIdRaw: string, label: unknown): ConfigUpdateResult {
+    const channelId = channelIdRaw.trim();
+    if (!channelId) {
+      return { ok: false, message: 'channelId must be a non-empty string' };
+    }
+
+    try {
+      const { root, scopedRoot, hasWrapper } = this.loadChannelsOwnerScopes();
+      const currentChannels = parseContextEnvelopeSection(scopedRoot).channels;
+      const nextChannels: Record<string, unknown> = { ...currentChannels };
+
+      if (label === null || label === undefined) {
+        if (!Object.prototype.hasOwnProperty.call(nextChannels, channelId)) {
+          return { ok: false, message: `No channel-owned envelope label exists for '${channelId}'` };
+        }
+        delete nextChannels[channelId];
+      } else {
+        nextChannels[channelId] = validateChannelEnvelopeLabel(
+          label,
+          `contextEnvelope.channels.${channelId}`,
+        );
+      }
+
+      const nextScopedRoot: Record<string, unknown> = {
+        ...scopedRoot,
+        contextEnvelope: { channels: nextChannels },
+      };
+      const nextRoot: Record<string, unknown> = hasWrapper
+        ? { ...root, channels: nextScopedRoot }
+        : nextScopedRoot;
+      // saveChannelsOwnerFile re-validates the contextEnvelope section fail-closed.
+      this.deps.configStore.saveChannelsOwnerFile(nextRoot);
+      invalidatePromptCacheAfterOwnerMutation(this.deps.config, 'owner-file:channels');
+      return {
+        ok: true,
+        message: label === null || label === undefined
+          ? `Channel envelope label removed for ${channelId}`
+          : `Channel envelope label saved for ${channelId}`,
+      };
     } catch (error) {
       return { ok: false, message: toErrorMessage(error) };
     }
@@ -927,19 +1081,23 @@ export class AdminSettingsDataService implements AdminSettingsService {
           const saved = this.deps.configStore.saveProviders(parsed);
           applyProvidersRuntimeConfig(this.deps.config, saved);
           const refreshDivergence = refreshModels(this.deps.config);
+          invalidatePromptCacheAfterOwnerMutation(this.deps.config, 'owner-file:providers');
           const status = this.updateDivergences(['models'], refreshDivergence ? [refreshDivergence] : []);
           return this.buildSuccessfulSaveResult('providers.json saved', status);
         }
         case 'channels': {
           this.deps.configStore.saveChannelsOwnerFile(parsed);
+          invalidatePromptCacheAfterOwnerMutation(this.deps.config, 'owner-file:channels');
           return { ok: true, message: 'channels.json saved' };
         }
         case 'skills': {
           this.deps.configStore.saveSkills(parsed);
+          invalidatePromptCacheAfterOwnerMutation(this.deps.config, 'owner-file:skills');
           return { ok: true, message: 'skills.json saved' };
         }
         case 'trust-policy': {
           this.deps.configStore.saveTrustPolicy(parsed);
+          invalidatePromptCacheAfterOwnerMutation(this.deps.config, 'owner-file:trust-policy');
           return { ok: true, message: 'trust-policy.json saved' };
         }
         default:

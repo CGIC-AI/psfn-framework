@@ -4,6 +4,7 @@ import type {
   ConsentRedactionBehavior,
   MemoryRedactionOperation,
 } from '../../system/trust/types.js';
+import { clampSigned, clampUnit } from '../../shared/utils/numeric.js';
 // Re-export for convenience
 export type {
   SensitivityLevel,
@@ -37,6 +38,14 @@ export type MemorySourceType =
   | 'shard'
   | 'tool_write'
   | 'autonomous_action';
+export const GROUP_MEMORY_ADDRESS_MODES = [
+  'direct_to_companion',
+  'mention_of_companion',
+  'reply_to_user',
+  'overheard_room_context',
+  'system_api',
+] as const;
+export type GroupMemoryAddressMode = typeof GROUP_MEMORY_ADDRESS_MODES[number];
 export type MemoryScopeKind =
   | 'conversation'
   | 'contact'
@@ -66,6 +75,18 @@ export interface MemoryProvenance {
   shardId?: string;
   actor?: 'companion' | 'operator' | 'system' | 'shard' | 'repl';
   reason?: string;
+  triggerContactId?: string;
+  routedContactId?: string;
+  sourceContactId?: string;
+  sourceAuthorId?: string;
+  sourceSpeakerName?: string;
+  subjectContactId?: string;
+  subjectName?: string;
+  addressMode?: GroupMemoryAddressMode;
+  routingReason?: string;
+  sourceMessageIds?: number[];
+  sourceSpanStartMessageId?: number;
+  sourceSpanEndMessageId?: number;
 }
 export interface MemoryScopeRef {
   kind: MemoryScopeKind;
@@ -101,6 +122,8 @@ export const VALID_MEMORY_SCOPE_KINDS: MemoryScopeKind[] = [
 ];
 
 export const DURABLE_RETENTION_TAG = 'durable';
+export const PREFERENCE_MEMORY_TAG = 'preference';
+export const DURABLE_PREFERENCE_MEMORY_TAG = 'durable_preference';
 export const VALID_MEMORY_SOURCE_TYPES: MemorySourceType[] = [
   'unknown',
   'turn',
@@ -127,9 +150,49 @@ const AUTO_DURABLE_RELATIONAL_TAG_HINTS = [
 ] as const;
 const DURABLE_RETENTION_TAG_SET = new Set<string>([
   DURABLE_RETENTION_TAG,
+  DURABLE_PREFERENCE_MEMORY_TAG,
   ...CORE_DURABLE_MEMORY_TAGS,
 ]);
 const AUTO_DURABLE_RELATIONAL_TAG_HINT_SET = new Set<string>(AUTO_DURABLE_RELATIONAL_TAG_HINTS);
+const PREFERENCE_TAG_HINTS = new Set<string>([
+  PREFERENCE_MEMORY_TAG,
+  DURABLE_PREFERENCE_MEMORY_TAG,
+  'favorite',
+  'favourite',
+  'like',
+  'likes',
+  'liked',
+  'love',
+  'loves',
+  'loved',
+  'enjoy',
+  'enjoys',
+  'preferred',
+  'prefers',
+  'dislike',
+  'dislikes',
+  'hates',
+  'stable_preference',
+]);
+const STABLE_PREFERENCE_TAG_HINTS = new Set<string>([
+  DURABLE_PREFERENCE_MEMORY_TAG,
+  'favorite',
+  'favourite',
+  'stable_preference',
+]);
+const EXPLICIT_FAVORITE_TEXT_HINT =
+  /\b(?:my|our|his|her|their|[a-z][a-z0-9_-]*'s)\s+favou?rite\b|\bfavou?rite\s+\w+\s+(?:is|are|was|were)\b/i;
+const EXPLICIT_PREFERENCE_TEXT_HINT =
+  /\b(?:i|we)\s+(?:really\s+)?(?:prefer|preferred|like|liked|love|loved|enjoy|enjoyed|hate|hated|dislike|disliked|don't like|do not like|can't stand|cannot stand)\b|\b(?:prefers|preferred|likes|liked|loves|loved|enjoys|enjoyed|hates|hated|dislikes|disliked)\b/i;
+const PREFERENCE_CATEGORY_HINTS: ReadonlyArray<readonly [string, RegExp]> = [
+  ['preference:color', /\b(?:colou?r|palette|shade|hue)\b/i],
+  ['preference:outfit', /\b(?:outfit|clothes?|clothing|dress|shirt|jacket|wearing|wears?)\b/i],
+  ['preference:moment', /\b(?:moment|memory|occasion|tradition|ritual)\b/i],
+  ['preference:food', /\b(?:food|meal|coffee|tea|drink|dessert|snack|restaurant|cuisine)\b/i],
+  ['preference:media', /\b(?:music|song|movie|film|book|game|show|artist|album)\b/i],
+  ['preference:place', /\b(?:place|city|room|park|beach|mountain|home|venue)\b/i],
+  ['preference:style', /\b(?:style|aesthetic|vibe|tone|format|communication)\b/i],
+];
 const CRITICAL_MEMORY_TAG_HINTS = new Set<string>([
   'critical',
   'core',
@@ -202,6 +265,17 @@ export interface ExtractedFact {
   retentionClass?: MemoryRetentionClass;
   sensitivity?: SensitivityLevel;
   consentFlags?: ConsentFlags;
+  attribution?: ExtractedFactAttribution;
+}
+
+export interface ExtractedFactAttribution {
+  sourceMessageIds?: number[];
+  sourceSpanStartMessageId?: number;
+  sourceSpanEndMessageId?: number;
+  sourceSpeakerName?: string;
+  subjectName?: string;
+  subjectContactId?: string;
+  addressMode?: GroupMemoryAddressMode;
 }
 
 export interface MemoryDecayProfile {
@@ -280,6 +354,8 @@ export const MEMORY_CONFIG = {
   salienceFloor: 0.05,
   durableSalienceFloor: 0.25,
   durableHalflifeMultiplier: 8,
+  preferenceDurableSalienceFloor: 0.35,
+  preferenceDurableHalflifeMultiplier: 12,
   emotionalIntensityPersistenceMinMultiplier: 1,
   emotionalIntensityPersistenceMaxMultiplier: 1.8,
   durableAutoImportanceThreshold: 0.75,
@@ -306,6 +382,23 @@ function normalizeOptionalString(value: unknown): string | undefined {
   if (typeof value !== 'string') return undefined;
   const normalized = value.trim();
   return normalized.length > 0 ? normalized : undefined;
+}
+
+function normalizeOptionalPositiveInteger(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isInteger(value) && value > 0
+    ? value
+    : undefined;
+}
+
+function normalizePositiveIntegerArray(value: unknown): number[] {
+  if (!Array.isArray(value)) return [];
+  return [...new Set(value)]
+    .filter((item): item is number => (
+      typeof item === 'number'
+      && Number.isInteger(item)
+      && item > 0
+    ))
+    .sort((left, right) => left - right);
 }
 
 export function normalizeMemorySourceType(
@@ -348,7 +441,31 @@ export function normalizeMemoryProvenance(value: unknown): MemoryProvenance | un
     ...(normalizeOptionalString(record.mode) ? { mode: normalizeOptionalString(record.mode) } : {}),
     ...(normalizeOptionalString(record.shardId) ? { shardId: normalizeOptionalString(record.shardId) } : {}),
     ...(normalizeOptionalString(record.reason) ? { reason: normalizeOptionalString(record.reason) } : {}),
+    ...(normalizeOptionalString(record.triggerContactId) ? { triggerContactId: normalizeOptionalString(record.triggerContactId) } : {}),
+    ...(normalizeOptionalString(record.routedContactId) ? { routedContactId: normalizeOptionalString(record.routedContactId) } : {}),
+    ...(normalizeOptionalString(record.sourceContactId) ? { sourceContactId: normalizeOptionalString(record.sourceContactId) } : {}),
+    ...(normalizeOptionalString(record.sourceAuthorId) ? { sourceAuthorId: normalizeOptionalString(record.sourceAuthorId) } : {}),
+    ...(normalizeOptionalString(record.sourceSpeakerName) ? { sourceSpeakerName: normalizeOptionalString(record.sourceSpeakerName) } : {}),
+    ...(normalizeOptionalString(record.subjectContactId) ? { subjectContactId: normalizeOptionalString(record.subjectContactId) } : {}),
+    ...(normalizeOptionalString(record.subjectName) ? { subjectName: normalizeOptionalString(record.subjectName) } : {}),
+    ...(normalizeOptionalString(record.routingReason) ? { routingReason: normalizeOptionalString(record.routingReason) } : {}),
   };
+  const addressMode = normalizeOptionalString(record.addressMode);
+  if (addressMode && GROUP_MEMORY_ADDRESS_MODES.includes(addressMode as GroupMemoryAddressMode)) {
+    provenance.addressMode = addressMode as GroupMemoryAddressMode;
+  }
+  const sourceMessageIds = normalizePositiveIntegerArray(record.sourceMessageIds);
+  if (sourceMessageIds.length > 0) {
+    provenance.sourceMessageIds = sourceMessageIds;
+  }
+  const sourceSpanStartMessageId = normalizeOptionalPositiveInteger(record.sourceSpanStartMessageId);
+  if (sourceSpanStartMessageId !== undefined) {
+    provenance.sourceSpanStartMessageId = sourceSpanStartMessageId;
+  }
+  const sourceSpanEndMessageId = normalizeOptionalPositiveInteger(record.sourceSpanEndMessageId);
+  if (sourceSpanEndMessageId !== undefined) {
+    provenance.sourceSpanEndMessageId = sourceSpanEndMessageId;
+  }
   const actor = normalizeOptionalString(record.actor);
   if (actor && ['companion', 'operator', 'system', 'shard', 'repl'].includes(actor)) {
     provenance.actor = actor as MemoryProvenance['actor'];
@@ -474,6 +591,11 @@ export function memoryMatchesScopeQuery(
   )) ?? false;
   const memoryScopeTags = new Set(normalizeMemoryScopeTags(memory.scopeTags));
   const tagMatch = normalized.tags?.some(tag => memoryScopeTags.has(tag)) ?? false;
+  if (normalized.mode === 'only') {
+    // Only-mode mirrors the store-level scope filters: every specified
+    // dimension must match, so refs AND tags are required when both are set.
+    return (!normalized.refs || refMatch) && (!normalized.tags || tagMatch);
+  }
   return refMatch || tagMatch;
 }
 
@@ -495,16 +617,6 @@ export function computeMemoryScopeMatchStrength(
     strength = Math.max(strength, 0.6);
   }
   return strength;
-}
-
-function clampUnit(value: number, fallback = 0.5): number {
-  if (!Number.isFinite(value)) return fallback;
-  return Math.max(0, Math.min(1, value));
-}
-
-function clampSigned(value: number, fallback = 0): number {
-  if (!Number.isFinite(value)) return fallback;
-  return Math.max(-1, Math.min(1, value));
 }
 
 export function normalizeFormationVAD(
@@ -588,6 +700,88 @@ export function normalizeMemoryTypeValue(value: unknown): MemoryType | undefined
   return VALID_MEMORY_TYPES.includes(normalized) ? normalized : undefined;
 }
 
+function hasPreferenceTag(tags: readonly string[], hints: ReadonlySet<string>): boolean {
+  return tags.some(tag => hints.has(tag) || tag.startsWith('preference:'));
+}
+
+function normalizePreferenceText(value: string | undefined): string {
+  return value?.trim().replace(/\s+/g, ' ') ?? '';
+}
+
+export function isPreferenceMemory(input: {
+  type: MemoryType;
+  tags?: readonly string[];
+  text?: string;
+}): boolean {
+  if (input.type === 'boundary') return false;
+  const tags = normalizeMemoryTags(input.tags ?? []);
+  if (hasPreferenceTag(tags, PREFERENCE_TAG_HINTS)) return true;
+  const text = normalizePreferenceText(input.text);
+  if (!text) return false;
+  return EXPLICIT_FAVORITE_TEXT_HINT.test(text) || EXPLICIT_PREFERENCE_TEXT_HINT.test(text);
+}
+
+export function applyRetentionClassTags(input: {
+  type: MemoryType;
+  tags?: readonly string[];
+  text?: string;
+}, retentionClass: MemoryRetentionClass): string[] {
+  const tags = normalizeMemoryTags(input.tags ?? []);
+  if (retentionClass === 'durable') {
+    return normalizeMemoryTags([
+      ...tags,
+      DURABLE_RETENTION_TAG,
+      ...(isPreferenceMemory(input) ? [DURABLE_PREFERENCE_MEMORY_TAG] : []),
+    ]);
+  }
+
+  return normalizeMemoryTags(tags.filter((tag) => {
+    return tag !== DURABLE_RETENTION_TAG && tag !== DURABLE_PREFERENCE_MEMORY_TAG;
+  }));
+}
+
+export function inferPreferenceMemoryTags(input: {
+  type: MemoryType;
+  tags?: readonly string[];
+  text?: string;
+}): string[] {
+  if (!isPreferenceMemory(input)) return [];
+
+  const text = normalizePreferenceText(input.text);
+  const tags = normalizeMemoryTags(input.tags ?? []);
+  const tagSet = new Set(tags);
+  const inferred = new Set<string>([PREFERENCE_MEMORY_TAG]);
+
+  if (
+    EXPLICIT_FAVORITE_TEXT_HINT.test(text)
+    || tagSet.has('favorite')
+    || tagSet.has('favourite')
+  ) {
+    inferred.add('favorite');
+  }
+
+  for (const [tag, pattern] of PREFERENCE_CATEGORY_HINTS) {
+    if (pattern.test(text) || tagSet.has(tag) || tagSet.has(tag.replace('preference:', ''))) {
+      inferred.add(tag);
+    }
+  }
+
+  return [...inferred];
+}
+
+function shouldAutoDurablePreferenceMemory(input: {
+  type: MemoryType;
+  tags?: readonly string[];
+  text?: string;
+  importance?: number;
+}): boolean {
+  if (!isPreferenceMemory(input)) return false;
+  const tags = normalizeMemoryTags(input.tags ?? []);
+  if (hasPreferenceTag(tags, STABLE_PREFERENCE_TAG_HINTS)) return true;
+  if (EXPLICIT_FAVORITE_TEXT_HINT.test(normalizePreferenceText(input.text))) return true;
+  return (input.importance ?? 0) >= 0.6;
+}
+
 export function inferImportedMemoryType(input: {
   text: string;
   explicitType?: unknown;
@@ -626,6 +820,7 @@ export function estimateImportedMemoryCriticality(input: {
   if (input.type === 'relational') score += 0.2;
   if (input.importance >= 0.85) score += 0.25;
   if (normalizedTags.some(tag => CRITICAL_MEMORY_TAG_HINTS.has(tag))) score += 0.3;
+  if (isPreferenceMemory(input)) score += 0.15;
   if (input.text && BOUNDARY_TEXT_HINT.test(input.text)) score += 0.2;
   return clampUnit(score, 0);
 }
@@ -679,6 +874,7 @@ export function isDurableMemory(memory: Pick<PurrMemory, 'tags' | 'retentionClas
 export function inferMemoryRetentionClass(input: {
   type: MemoryType;
   tags?: readonly string[];
+  text?: string;
   importance?: number;
   retentionClass?: MemoryRetentionClass;
 }): MemoryRetentionClass {
@@ -686,6 +882,10 @@ export function inferMemoryRetentionClass(input: {
 
   const normalizedTags = normalizeMemoryTags(input.tags ?? []);
   if (normalizedTags.some(tag => DURABLE_RETENTION_TAG_SET.has(tag))) {
+    return 'durable';
+  }
+
+  if (shouldAutoDurablePreferenceMemory(input)) {
     return 'durable';
   }
 
@@ -700,7 +900,13 @@ export function inferMemoryRetentionClass(input: {
   return 'standard';
 }
 
-type MemoryDecayProfileInput = Pick<PurrMemory, 'type' | 'tags' | 'retentionClass'> & Partial<Pick<PurrMemory, 'emotionalValence' | 'formationVAD'>>;
+export function isDurablePreferenceMemory(
+  memory: Pick<PurrMemory, 'type' | 'tags' | 'retentionClass'> & Partial<Pick<PurrMemory, 'text' | 'importance'>>,
+): boolean {
+  return isPreferenceMemory(memory) && isDurableMemory(memory);
+}
+
+type MemoryDecayProfileInput = Pick<PurrMemory, 'type' | 'tags' | 'retentionClass'> & Partial<Pick<PurrMemory, 'text' | 'importance' | 'emotionalValence' | 'formationVAD'>>;
 
 export function computeMemoryEmotionalIntensity(
   memory: Partial<Pick<PurrMemory, 'emotionalValence' | 'formationVAD'>>,
@@ -732,18 +938,25 @@ export function getMemoryDecayProfile(memory: MemoryDecayProfileInput): MemoryDe
   const retentionClass = inferMemoryRetentionClass({
     type: memory.type,
     tags: memory.tags,
+    text: memory.text,
+    importance: memory.importance,
     retentionClass: memory.retentionClass,
   });
-  const retentionHalflifeMultiplier = retentionClass === 'durable'
-    ? MEMORY_CONFIG.durableHalflifeMultiplier
-    : 1;
+  const durablePreference = retentionClass === 'durable' && isPreferenceMemory(memory);
+  const retentionHalflifeMultiplier = durablePreference
+    ? MEMORY_CONFIG.preferenceDurableHalflifeMultiplier
+    : retentionClass === 'durable'
+      ? MEMORY_CONFIG.durableHalflifeMultiplier
+      : 1;
   const emotionalPersistenceMultiplier = getEmotionalIntensityPersistenceMultiplier(memory);
   const halflifeMultiplier = retentionHalflifeMultiplier * emotionalPersistenceMultiplier;
 
   if (retentionClass === 'durable') {
     return {
       retentionClass,
-      salienceFloor: MEMORY_CONFIG.durableSalienceFloor,
+      salienceFloor: durablePreference
+        ? MEMORY_CONFIG.preferenceDurableSalienceFloor
+        : MEMORY_CONFIG.durableSalienceFloor,
       halflifeMultiplier,
     };
   }

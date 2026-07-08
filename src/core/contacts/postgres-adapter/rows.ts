@@ -5,11 +5,13 @@ export interface ContactRow {
   nickname: string | null;
   trust_level: string;
   relationship_type: string;
+  is_machine_intelligence?: boolean | null;
   emotional_baseline: unknown;
   emotional_time_series?: unknown;
   first_seen: string;
   last_seen: string;
   notes: string | null;
+  timezone: string | null;
 }
 
 export interface ContactIdentityRow {
@@ -83,4 +85,3 @@ export interface SocialRelationshipEdgeRow {
   created_at: string;
   updated_at: string;
 }
-

@@ -103,7 +103,7 @@ describe('AdminChatBootstrapService', () => {
       listAll: () => [makeContact('contact-primary', 'Primary Contact')],
     } as unknown as ContactStore;
     const service = new AdminChatBootstrapService(contactStore, {
-      config: makeRuntimeConfig('/tmp/unused-card.json'),
+      config: makeRuntimeConfig(''),
       resolveGlobalDefaultSessionId: () => '123456789012345678',
     });
 
@@ -124,7 +124,7 @@ describe('AdminChatBootstrapService', () => {
       listAll: () => [makeContact('contact-primary', 'Primary Contact')],
     } as unknown as ContactStore;
     const service = new AdminChatBootstrapService(contactStore, {
-      config: makeRuntimeConfig('/tmp/unused-card.json'),
+      config: makeRuntimeConfig(''),
       resolveGlobalDefaultSessionId: () => null,
     });
 
@@ -150,7 +150,7 @@ describe('AdminChatBootstrapService', () => {
       setConversationChannelPrivacy: vi.fn(() => true),
     } as unknown as ContactStore;
     const service = new AdminChatBootstrapService(contactStore, {
-      config: makeRuntimeConfig('/tmp/unused-card.json'),
+      config: makeRuntimeConfig(''),
       resolveGlobalDefaultSessionId: () => '123456789012345678',
     });
 
@@ -186,7 +186,7 @@ describe('AdminChatBootstrapService', () => {
       setConversationChannelPrivacy: vi.fn(() => true),
     } as unknown as ContactStore;
     const service = new AdminChatBootstrapService(contactStore, {
-      config: makeRuntimeConfig('/tmp/unused-card.json'),
+      config: makeRuntimeConfig(''),
       resolveGlobalDefaultSessionId: () => null,
     });
 
@@ -212,14 +212,14 @@ describe('AdminChatBootstrapService', () => {
       channelId: '1313001762793197678',
       firstSeen: new Date().toISOString(),
       lastSeen: new Date().toISOString(),
-      privacyLevel: 'semi_private',
+      privacyLevel: 'invite_only',
     }];
 
     const setConversationChannelPrivacy = vi.fn((
       _contactId: string,
       _channel: string,
       _channelId: string,
-      privacyLevel: 'private' | 'semi_private' | 'public' | 'broadcast',
+      privacyLevel: 'private' | 'invite_only' | 'public' | 'broadcast',
     ) => {
       if (contact.conversationChannels) {
         contact.conversationChannels[0].privacyLevel = privacyLevel;
@@ -235,7 +235,7 @@ describe('AdminChatBootstrapService', () => {
     } as unknown as ContactStore;
 
     const service = new AdminChatBootstrapService(contactStore, {
-      config: makeRuntimeConfig('/tmp/unused-card.json'),
+      config: makeRuntimeConfig(''),
       resolveGlobalDefaultSessionId: () => null,
     });
 
@@ -253,7 +253,8 @@ describe('AdminChatBootstrapService', () => {
       channelId: '1313001762793197678',
       privacyLevel: 'private',
     });
-    expect(payload.defaultAuthorId).toBe('admin-user');
+    expect(payload.defaultAuthorId).toBe('1313001762793197678');
+    expect(payload.runtime.transportHeaders['X-User-ID']).toBe('1313001762793197678');
     expect(setConversationChannelPrivacy).toHaveBeenCalledWith(
       contact.id,
       'discord',
@@ -270,12 +271,12 @@ describe('AdminChatBootstrapService', () => {
     } as unknown as ContactStore;
     const service = new AdminChatBootstrapService(contactStore, {
       apiKey: 'bootstrap-test-secret',
-      config: makeRuntimeConfig('/tmp/unused-card.json'),
+      config: makeRuntimeConfig(''),
       resolveGlobalDefaultSessionId: () => null,
     });
 
     const payload = await service.buildBootstrap();
-    const modelRoomPayload = await service.buildModelRoomBootstrap(makeRuntimeConfig('/tmp/unused-card.json'));
+    const modelRoomPayload = await service.buildModelRoomBootstrap(makeRuntimeConfig(''));
 
     expect(payload.api.apiKey).toBeUndefined();
     expect(payload.runtime.apiKey).toBeUndefined();
@@ -289,7 +290,7 @@ describe('AdminChatBootstrapService', () => {
       listAll: () => [],
     } as unknown as ContactStore;
     const service = new AdminChatBootstrapService(contactStore, {
-      config: makeRuntimeConfig('/tmp/unused-card.json'),
+      config: makeRuntimeConfig(''),
       resolveGlobalDefaultSessionId: () => null,
     });
 
@@ -298,11 +299,11 @@ describe('AdminChatBootstrapService', () => {
 
   it('fails closed when model room bootstrap has no direct participants', async () => {
     const service = new AdminChatBootstrapService(null, {
-      config: makeRuntimeConfig('/tmp/unused-card.json'),
+      config: makeRuntimeConfig(''),
       resolveGlobalDefaultSessionId: () => null,
     });
 
-    await expect(service.buildModelRoomBootstrap(makeRuntimeConfig('/tmp/unused-card.json', {
+    await expect(service.buildModelRoomBootstrap(makeRuntimeConfig('', {
       modelCatalog: {
         primary: {
           model: 'test-model-room',
@@ -320,7 +321,7 @@ describe('AdminChatBootstrapService', () => {
       ],
     } as unknown as ContactStore;
     const service = new AdminChatBootstrapService(contactStore, {
-      config: makeRuntimeConfig('/tmp/unused-card.json'),
+      config: makeRuntimeConfig(''),
       resolveGlobalDefaultSessionId: () => null,
     });
 
@@ -370,6 +371,37 @@ describe('AdminChatBootstrapService', () => {
     expect(payload.assistantName).toBe('Companion');
     expect(payload.onboarding.required).toBe(true);
     expect(payload.onboarding.message).toContain('Starter identity is active');
+  });
+
+  it('surfaces missing character card errors instead of falling back to configured name', async () => {
+    const root = makeTempDir();
+    const characterCardPath = join(root, 'missing-character.json');
+    const contactStore = {
+      listAll: () => [makeContact('contact-primary', 'Primary Contact')],
+    } as unknown as ContactStore;
+    const service = new AdminChatBootstrapService(contactStore, {
+      config: makeRuntimeConfig(characterCardPath, { characterName: 'Configured Companion' }),
+      resolveGlobalDefaultSessionId: () => null,
+    });
+
+    await expect(service.buildBootstrap()).rejects.toThrow('character card could not be loaded');
+    await expect(service.buildBootstrap()).rejects.toThrow(`Missing character card at ${characterCardPath}`);
+  });
+
+  it('surfaces invalid character card parse errors instead of falling back to configured name', async () => {
+    const root = makeTempDir();
+    const characterCardPath = join(root, 'invalid-character.json');
+    writeFileSync(characterCardPath, '{"broken":', 'utf-8');
+    const contactStore = {
+      listAll: () => [makeContact('contact-primary', 'Primary Contact')],
+    } as unknown as ContactStore;
+    const service = new AdminChatBootstrapService(contactStore, {
+      config: makeRuntimeConfig(characterCardPath, { characterName: 'Configured Companion' }),
+      resolveGlobalDefaultSessionId: () => null,
+    });
+
+    await expect(service.buildBootstrap()).rejects.toThrow('character card could not be loaded');
+    await expect(service.buildBootstrap()).rejects.toThrow(`Invalid character card at ${characterCardPath}`);
   });
 
   it('prefers character card name over configured characterName', async () => {

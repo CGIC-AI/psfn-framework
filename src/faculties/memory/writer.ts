@@ -1,9 +1,14 @@
 // ── Memory Writer ──
 // Shared write/dedup/contradiction logic used by both MemoryExtractor and tools.
 
-import { v4 as uuidv4 } from 'uuid';
+import { v7 as uuidv7 } from 'uuid';
 import type { EmbeddingProviderPort } from '../../core/agent/contracts.js';
-import type { MemoryStorePort } from './memory-store-port.js';
+import type {
+  MemoryEvolutionLink,
+  MemoryEvolutionLinkInput,
+  MemoryEvolutionRelation,
+  MemoryStorePort,
+} from './memory-store-port.js';
 import { abstractMemoryText } from './abstraction.js';
 import type {
   PurrMemory,
@@ -20,9 +25,11 @@ import type {
 } from './types.js';
 import {
   DEDUP_THRESHOLD,
+  DURABLE_PREFERENCE_MEMORY_TAG,
   DURABLE_RETENTION_TAG,
   MEMORY_CONFIG,
   inferMemorySourceTypeFromSourceRef,
+  inferPreferenceMemoryTags,
   normalizeMemoryScopeRef,
   normalizeMemoryScopeTags,
   VALID_MEMORY_TYPES,
@@ -36,10 +43,15 @@ import {
   resolveConsentRedactionBehavior,
 } from './types.js';
 import { createComponentLogger } from '../../shared/logger.js';
+import { clampSigned, clampUnit } from '../../shared/utils/numeric.js';
 import {
   MemoryMaintenanceScheduler,
   type MemoryMaintenanceSchedulerOptions,
 } from './maintenance-review.js';
+import {
+  evaluateCogSecMemoryCandidacy,
+  type CogSecMemoryCandidacyDecision,
+} from '../../core/cogsec/memory-candidacy.js';
 
 const log = createComponentLogger('MemoryWriter');
 const IMPORT_BATCH_EMBED_CHUNK_SIZE = 200;
@@ -67,10 +79,15 @@ export interface MemoryWriteOptions {
 }
 
 export interface WriteResult {
-  action: 'created' | 'deduplicated' | 'superseded';
+  action: 'created' | 'deduplicated' | 'updated' | 'superseded' | 'negated' | 'conflict';
   memory: PurrMemory;
   /** If deduplicated, the existing memory that was bumped */
   existingId?: string;
+  /** Existing memory ids affected by explicit evolution reconciliation. */
+  relatedMemoryIds?: string[];
+  /** Existing memory ids deactivated by this write. */
+  supersededMemoryIds?: string[];
+  evolutionLinks?: MemoryEvolutionLink[];
 }
 
 export interface MemoryPatchOptions {
@@ -157,6 +174,19 @@ export class MemoryWritePolicyError extends Error {
   }
 }
 
+export class MemoryCandidacyPolicyError extends Error {
+  readonly decision: CogSecMemoryCandidacyDecision;
+
+  constructor(decision: CogSecMemoryCandidacyDecision) {
+    super(
+      `Memory write rejected by CogSec candidacy policy: ${decision.riskClass} `
+      + `(${decision.reasonCodes.join(', ')})`,
+    );
+    this.name = 'MemoryCandidacyPolicyError';
+    this.decision = decision;
+  }
+}
+
 export interface MemoryRedactionOptions {
   memoryId: string;
   operation?: MemoryRedactionOperation;
@@ -176,6 +206,7 @@ export interface MemoryRedactionResult {
 }
 
 function applyRetentionSemantics(input: {
+  text: string;
   type: MemoryType;
   importance: number;
   tags: readonly string[];
@@ -184,16 +215,31 @@ function applyRetentionSemantics(input: {
   tags: string[];
   retentionClass?: MemoryRetentionClass;
 } {
-  const tags = normalizeMemoryTags(input.tags);
+  const tags = normalizeMemoryTags([
+    ...input.tags,
+    ...inferPreferenceMemoryTags({
+      text: input.text,
+      type: input.type,
+      tags: input.tags,
+    }),
+  ]);
   const inferred = inferMemoryRetentionClass({
     type: input.type,
     importance: input.importance,
+    text: input.text,
     tags,
     retentionClass: input.retentionClass,
   });
 
   if (inferred === 'durable' && !tags.includes(DURABLE_RETENTION_TAG)) {
     tags.push(DURABLE_RETENTION_TAG);
+  }
+  if (
+    inferred === 'durable'
+    && tags.includes('preference')
+    && !tags.includes(DURABLE_PREFERENCE_MEMORY_TAG)
+  ) {
+    tags.push(DURABLE_PREFERENCE_MEMORY_TAG);
   }
 
   return {
@@ -230,16 +276,6 @@ function normalizeSourceContext(input: {
     ),
     provenance: normalizeMemoryProvenance(input.provenance),
   };
-}
-
-function clampUnit(value: number, fallback = 0.5): number {
-  if (!Number.isFinite(value)) return fallback;
-  return Math.max(0, Math.min(1, value));
-}
-
-function clampSigned(value: number, fallback = 0): number {
-  if (!Number.isFinite(value)) return fallback;
-  return Math.max(-1, Math.min(1, value));
 }
 
 function normalizeProvenanceRefs(
@@ -418,6 +454,229 @@ function evaluateSensitivityWritePolicy(input: {
   };
 }
 
+type ReconciliationWriteAction = Exclude<WriteResult['action'], 'deduplicated'>;
+
+interface MemoryEvolutionDecision {
+  oldMemory: PurrMemory & { similarity: number };
+  relation: MemoryEvolutionRelation;
+  destructive: boolean;
+  reason: string;
+}
+
+const HIGH_IMPACT_MEMORY_TYPES = new Set<MemoryType>(['boundary', 'emotional', 'relational']);
+const HIGH_IMPACT_TAG_HINTS = new Set([
+  'identity',
+  'profile',
+  'contact',
+  'contact_profile',
+  'core_profile',
+  'core_relationship',
+  'relationship_core',
+  'relationship',
+  'boundary',
+  'consent',
+  'emotion',
+  'emotional',
+  'feeling',
+  'family',
+  'partner',
+]);
+const CURRENT_STATE_TAG_HINTS = new Set(['current', 'current_state', 'current-state', 'latest', 'active']);
+const COMPATIBLE_UPDATE_TAG_HINTS = new Set(['preference', 'likes', 'interest', 'routine', 'tool', 'workspace']);
+const CURRENT_STATE_TEXT_HINT = /\b(current|currently|now|latest|active|moved to|changed to|updated?:|update:|is now|are now|no longer)\b/i;
+const COMPATIBLE_UPDATE_TEXT_HINT = /\b(also|additionally|another|besides|after lunch|in addition|likes both|also likes)\b/i;
+const EXPLICIT_NEGATION_TEXT_HINT = /\b(no longer|not|never|doesn't|does not|isn't|is not|aren't|are not|must not|should not|cannot|can't|won't)\b/i;
+const CONTRASTING_TERM_PAIRS: ReadonlyArray<readonly [string, string]> = [
+  ['on', 'off'],
+  ['enabled', 'disabled'],
+  ['active', 'inactive'],
+  ['available', 'unavailable'],
+  ['open', 'closed'],
+  ['allowed', 'disallowed'],
+  ['yes', 'no'],
+  ['true', 'false'],
+];
+
+function normalizeReconciliationTag(tag: string): string {
+  return tag.trim().toLowerCase().replace(/[^a-z0-9]+/g, '_');
+}
+
+function hasAnyTag(tags: readonly string[] | undefined, hints: ReadonlySet<string>): boolean {
+  for (const raw of tags ?? []) {
+    const normalized = normalizeReconciliationTag(raw);
+    if (hints.has(normalized)) return true;
+  }
+  return false;
+}
+
+function textHasWord(text: string, word: string): boolean {
+  return new RegExp(`\\b${word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i').test(text);
+}
+
+function hasContrastingTerms(incomingText: string, existingText: string): boolean {
+  for (const [left, right] of CONTRASTING_TERM_PAIRS) {
+    if (
+      (textHasWord(incomingText, left) && textHasWord(existingText, right))
+      || (textHasWord(incomingText, right) && textHasWord(existingText, left))
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function isCurrentStateMemory(input: {
+  text: string;
+  tags: readonly string[];
+}): boolean {
+  return hasAnyTag(input.tags, CURRENT_STATE_TAG_HINTS) || CURRENT_STATE_TEXT_HINT.test(input.text);
+}
+
+function isCompatibleMemoryUpdate(input: {
+  text: string;
+  tags: readonly string[];
+  existing: PurrMemory;
+}): boolean {
+  if (COMPATIBLE_UPDATE_TEXT_HINT.test(input.text)) return true;
+  if (!hasAnyTag(input.tags, COMPATIBLE_UPDATE_TAG_HINTS)) return false;
+  const incomingTags = new Set(input.tags.map(normalizeReconciliationTag));
+  return input.existing.tags
+    .map(normalizeReconciliationTag)
+    .some(tag => incomingTags.has(tag));
+}
+
+function isExplicitContradiction(input: {
+  text: string;
+  existingText: string;
+}): boolean {
+  return EXPLICIT_NEGATION_TEXT_HINT.test(input.text)
+    || hasContrastingTerms(input.text, input.existingText);
+}
+
+function isHighImpactMemory(input: Pick<PurrMemory, 'type' | 'tags' | 'contactId' | 'text'>): boolean {
+  return HIGH_IMPACT_MEMORY_TYPES.has(input.type)
+    || !!input.contactId
+    || hasAnyTag(input.tags, HIGH_IMPACT_TAG_HINTS)
+    || /\b(identity|profile|partner|family|boundary|consent|feeling|emotion|contact)\b/i.test(input.text);
+}
+
+function chooseWriteAction(decisions: readonly MemoryEvolutionDecision[]): ReconciliationWriteAction {
+  if (decisions.some(decision => decision.relation === 'supersedes' && decision.destructive)) return 'superseded';
+  if (decisions.some(decision => decision.relation === 'negates')) return 'negated';
+  if (decisions.some(decision => decision.relation === 'conflicts_with')) return 'conflict';
+  if (decisions.some(decision => decision.relation === 'updates')) return 'updated';
+  return 'created';
+}
+
+function classifyEvolutionDecision(input: {
+  incomingText: string;
+  incomingTags: readonly string[];
+  incomingConfidence: number;
+  incomingType: MemoryType;
+  incomingContactId?: string;
+  oldMemory: PurrMemory & { similarity: number };
+}): MemoryEvolutionDecision | null {
+  const incomingMemoryLike: Pick<PurrMemory, 'type' | 'tags' | 'contactId' | 'text'> = {
+    type: input.incomingType,
+    tags: [...input.incomingTags],
+    contactId: input.incomingContactId,
+    text: input.incomingText,
+  };
+  const currentState = isCurrentStateMemory({
+    text: input.incomingText,
+    tags: input.incomingTags,
+  });
+  const compatibleUpdate = isCompatibleMemoryUpdate({
+    text: input.incomingText,
+    tags: input.incomingTags,
+    existing: input.oldMemory,
+  });
+  const explicitContradiction = isExplicitContradiction({
+    text: input.incomingText,
+    existingText: input.oldMemory.text,
+  });
+  const highImpact = isHighImpactMemory(incomingMemoryLike) || isHighImpactMemory(input.oldMemory);
+  const higherConfidence = input.incomingConfidence > input.oldMemory.confidence;
+
+  if (currentState && higherConfidence) {
+    return {
+      oldMemory: input.oldMemory,
+      relation: 'supersedes',
+      destructive: true,
+      reason: 'memory_writer:current_state_replacement',
+    };
+  }
+
+  if (compatibleUpdate && !explicitContradiction) {
+    return {
+      oldMemory: input.oldMemory,
+      relation: 'updates',
+      destructive: false,
+      reason: 'memory_writer:compatible_update',
+    };
+  }
+
+  if (highImpact) {
+    return {
+      oldMemory: input.oldMemory,
+      relation: explicitContradiction ? 'negates' : 'conflicts_with',
+      destructive: false,
+      reason: explicitContradiction
+        ? 'memory_writer:high_impact_negation_review'
+        : 'memory_writer:high_impact_conflict_review',
+    };
+  }
+
+  if (explicitContradiction) {
+    return {
+      oldMemory: input.oldMemory,
+      relation: higherConfidence ? 'supersedes' : 'conflicts_with',
+      destructive: higherConfidence,
+      reason: higherConfidence
+        ? 'memory_writer:contradiction_replacement'
+        : 'memory_writer:contradiction_conflict',
+    };
+  }
+
+  if (higherConfidence) {
+    return {
+      oldMemory: input.oldMemory,
+      relation: 'supersedes',
+      destructive: true,
+      reason: 'memory_writer:higher_confidence_replacement',
+    };
+  }
+
+  return null;
+}
+
+function buildEvolutionLinkInput(input: {
+  memory: PurrMemory;
+  decision: MemoryEvolutionDecision;
+  sourceRef: string;
+  sourceType: MemorySourceType;
+  provenance?: MemoryProvenance;
+  incomingProvenanceRefs: readonly string[];
+}): MemoryEvolutionLinkInput {
+  return {
+    sourceMemoryId: input.memory.id,
+    targetMemoryId: input.decision.oldMemory.id,
+    relation: input.decision.relation,
+    confidence: clampUnit(
+      Math.max(input.memory.confidence, input.decision.oldMemory.confidence),
+      input.memory.confidence,
+    ),
+    reason: input.decision.reason,
+    sourceRef: input.sourceRef,
+    sourceType: input.sourceType,
+    provenanceRefs: mergeProvenanceRefs(
+      [`memory:${input.memory.id}`, `memory:${input.decision.oldMemory.id}`],
+      input.incomingProvenanceRefs,
+    ),
+    provenance: input.provenance,
+  };
+}
+
 export class MemoryWriter {
   private readonly maintenanceScheduler: MemoryMaintenanceScheduler | null;
 
@@ -449,6 +708,74 @@ export class MemoryWriter {
   }
 
   /**
+   * Record evolution links for an already-committed memory. The memory has been
+   * durably persisted by persistMemoryWrite before this runs, and the runtime
+   * store (Postgres) has no shared transaction spanning the two, so a link
+   * failure cannot roll the memory back. Surfacing it as a write failure would
+   * report failure for a persisted memory and invite duplicate re-writes, so
+   * link failures are logged durably and skipped instead — the returned links
+   * reflect only what was committed, matching the reported write result
+   * (mlwk.6).
+   */
+  private async recordEvolutionLinks(
+    memory: PurrMemory,
+    decisions: readonly MemoryEvolutionDecision[],
+    context: {
+      sourceRef: string;
+      sourceType: MemorySourceType;
+      provenance?: MemoryProvenance;
+      incomingProvenanceRefs: readonly string[];
+    },
+  ): Promise<MemoryEvolutionLink[]> {
+    const links: MemoryEvolutionLink[] = [];
+    for (const decision of decisions) {
+      try {
+        links.push(await this.memoryStore.recordEvolutionLink(buildEvolutionLinkInput({
+          memory,
+          decision,
+          sourceRef: context.sourceRef,
+          sourceType: context.sourceType,
+          provenance: context.provenance,
+          incomingProvenanceRefs: context.incomingProvenanceRefs,
+        })));
+      } catch (error) {
+        log.error('Failed to record memory evolution link after memory commit; memory is durable, link skipped', {
+          memoryId: memory.id,
+          oldMemoryId: decision.oldMemory.id,
+          relation: decision.relation,
+          reason: decision.reason,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+    return links;
+  }
+
+  private assertCogSecCandidacy(
+    opts: MemoryWriteOptions,
+    options: { logRejection?: boolean } = {},
+  ): void {
+    const decision = evaluateCogSecMemoryCandidacy({
+      text: opts.text,
+      type: opts.type,
+      tags: opts.tags,
+      sourceRef: opts.sourceRef,
+      sourceType: opts.sourceType,
+    });
+    if (decision.disposition === 'allow') return;
+    if (options.logRejection ?? true) {
+      log.info('Rejected memory write by CogSec candidacy policy', {
+        type: opts.type,
+        riskClass: decision.riskClass,
+        disposition: decision.disposition,
+        reasonCodes: decision.reasonCodes,
+        sourceType: opts.sourceType,
+      });
+    }
+    throw new MemoryCandidacyPolicyError(decision);
+  }
+
+  /**
    * Write a single memory with dedup/contradiction handling.
    *
    * 1. Embed the text
@@ -457,6 +784,7 @@ export class MemoryWriter {
    * 4. Insert new memory
    */
   async write(opts: MemoryWriteOptions): Promise<WriteResult> {
+    this.assertCogSecCandidacy(opts);
     const embedding = await this.embeddingService.embed(opts.text);
     return this.writeWithEmbedding(opts, embedding);
   }
@@ -465,6 +793,7 @@ export class MemoryWriter {
     opts: MemoryWriteOptions,
     embedding: Float32Array,
   ): Promise<WriteResult> {
+    this.assertCogSecCandidacy(opts);
     this.validateEmbedding(embedding, 'write');
 
     const {
@@ -495,6 +824,7 @@ export class MemoryWriter {
     }
 
     const retention = applyRetentionSemantics({
+      text,
       type,
       importance,
       tags,
@@ -542,6 +872,7 @@ export class MemoryWriter {
         consentFlags?: ConsentFlags;
         scopeRef?: MemoryScopeRef;
         scopeTags?: string[];
+        retentionClass?: MemoryRetentionClass;
       } = {
         lastAccessed: Date.now(),
         accessCount: existing.accessCount + 1,
@@ -586,6 +917,9 @@ export class MemoryWriter {
       // If this write is durable, upgrade duplicate memory tags so durability survives persistence.
       if (retention.retentionClass === 'durable' && !isDurableMemory(existing)) {
         updates.tags = normalizeMemoryTags([...(updates.tags ?? existing.tags), DURABLE_RETENTION_TAG]);
+        updates.retentionClass = 'durable';
+      } else if (retention.retentionClass === 'durable' && existing.retentionClass !== 'durable') {
+        updates.retentionClass = 'durable';
       }
 
       await this.memoryStore.updateMemory(existing.id, updates);
@@ -609,7 +943,7 @@ export class MemoryWriter {
           tags: updates.tags ?? existing.tags,
           provenanceRefs: updates.provenanceRefs ?? existingProvenanceRefs,
           consentFlags: updates.consentFlags ?? existing.consentFlags,
-          retentionClass: retention.retentionClass ?? existing.retentionClass,
+          retentionClass: updates.retentionClass ?? retention.retentionClass ?? existing.retentionClass,
           scopeRef: updates.scopeRef ?? existing.scopeRef,
           scopeTags: updates.scopeTags ?? existing.scopeTags,
         },
@@ -670,13 +1004,24 @@ export class MemoryWriter {
       text: text.slice(0, 60),
     });
 
-    const supersededMemories = sameContactBroader.filter(old => confidence > old.confidence);
-    const didSupersede = supersededMemories.length > 0;
+    const evolutionDecisions = sameContactBroader
+      .map(old => classifyEvolutionDecision({
+        incomingText: text,
+        incomingTags: retention.tags,
+        incomingConfidence: confidence,
+        incomingType: type,
+        incomingContactId: contactId,
+        oldMemory: old,
+      }))
+      .filter((decision): decision is MemoryEvolutionDecision => decision !== null);
+    const supersededMemories = evolutionDecisions
+      .filter(decision => decision.destructive)
+      .map(decision => decision.oldMemory);
 
     // 3. Insert new memory
     const now = Number.isFinite(extractedAt) ? Number(extractedAt) : Date.now();
     const memory: PurrMemory = {
-      id: uuidv4(),
+      id: uuidv7(),
       text,
       type,
       importance,
@@ -705,6 +1050,12 @@ export class MemoryWriter {
       embedding,
       supersededMemoryIds: supersededMemories.map(old => old.id),
     });
+    const evolutionLinks = await this.recordEvolutionLinks(memory, evolutionDecisions, {
+      sourceRef: normalizedSourceRef,
+      sourceType: normalizedSource.sourceType,
+      provenance: normalizedSource.provenance,
+      incomingProvenanceRefs,
+    });
     this.queueMaintenanceReview({
       memory,
       candidates: sameContactBroader,
@@ -713,11 +1064,22 @@ export class MemoryWriter {
     for (const old of supersededMemories) {
       log.debug('Superseded memory', { oldId: old.id, replacementId: memory.id, text: text.slice(0, 60) });
     }
+    for (const link of evolutionLinks) {
+      log.debug('Recorded memory evolution link', {
+        sourceMemoryId: link.sourceMemoryId,
+        targetMemoryId: link.targetMemoryId,
+        relation: link.relation,
+        reason: link.reason,
+      });
+    }
     log.debug('Created memory', { id: memory.id, type, text: text.slice(0, 60) });
 
     return {
-      action: didSupersede ? 'superseded' : 'created',
+      action: chooseWriteAction(evolutionDecisions),
       memory,
+      relatedMemoryIds: evolutionDecisions.map(decision => decision.oldMemory.id),
+      supersededMemoryIds: supersededMemories.map(old => old.id),
+      evolutionLinks,
     };
   }
 
@@ -754,6 +1116,7 @@ export class MemoryWriter {
     }
 
     const retention = applyRetentionSemantics({
+      text,
       type,
       importance,
       tags,
@@ -837,7 +1200,7 @@ export class MemoryWriter {
     // Always insert the new memory
     const now = Number.isFinite(extractedAt) ? Number(extractedAt) : Date.now();
     const memory: PurrMemory = {
-      id: uuidv4(),
+      id: uuidv7(),
       text,
       type,
       importance,
@@ -866,6 +1229,18 @@ export class MemoryWriter {
       embedding,
       supersededMemoryIds: supersededMemories.map(old => old.id),
     });
+    const evolutionDecisions: MemoryEvolutionDecision[] = supersededMemories.map(oldMemory => ({
+      oldMemory,
+      relation: 'supersedes',
+      destructive: true,
+      reason: 'memory_writer:explicit_upsert_replacement',
+    }));
+    const evolutionLinks = await this.recordEvolutionLinks(memory, evolutionDecisions, {
+      sourceRef: normalizedSourceRef,
+      sourceType: normalizedSource.sourceType,
+      provenance: normalizedSource.provenance,
+      incomingProvenanceRefs: normalizedProvenanceRefs,
+    });
     this.queueMaintenanceReview({
       memory,
       candidates: sameType,
@@ -878,6 +1253,9 @@ export class MemoryWriter {
     return {
       action: didSupersede ? 'superseded' : 'created',
       memory,
+      relatedMemoryIds: evolutionDecisions.map(decision => decision.oldMemory.id),
+      supersededMemoryIds: supersededMemories.map(old => old.id),
+      evolutionLinks,
     };
   }
 
@@ -913,7 +1291,7 @@ export class MemoryWriter {
       }
     }
     if (opts.importance !== undefined) {
-      const importance = clampUnit(opts.importance);
+      const importance = clampUnit(opts.importance, 0.5);
       if (importance !== existing.importance) {
         updates.importance = importance;
         previousValues.importance = existing.importance;
@@ -923,7 +1301,7 @@ export class MemoryWriter {
       }
     }
     if (opts.confidence !== undefined) {
-      const confidence = clampUnit(opts.confidence);
+      const confidence = clampUnit(opts.confidence, 0.5);
       if (confidence !== existing.confidence) {
         updates.confidence = confidence;
         previousValues.confidence = existing.confidence;
@@ -968,6 +1346,7 @@ export class MemoryWriter {
     if (replacementTags || appendedTags) {
       const nextTagInput = replacementTags ?? [...existing.tags, ...(appendedTags ?? [])];
       const retention = applyRetentionSemantics({
+        text: updates.text ?? existing.text,
         type: existing.type,
         importance: updates.importance ?? existing.importance,
         tags: nextTagInput,
@@ -993,6 +1372,14 @@ export class MemoryWriter {
 
     let embedding: Float32Array | undefined;
     if (updates.text !== undefined) {
+      this.assertCogSecCandidacy({
+        text: updates.text,
+        type: existing.type,
+        tags: updates.tags ?? existing.tags,
+        sourceRef: opts.sourceRef,
+        sourceType: opts.sourceType,
+        provenance: opts.provenance,
+      });
       embedding = await this.embeddingService.embed(updates.text);
       this.validateEmbedding(embedding, 'patchMemory');
       updates.embedding = embedding;
@@ -1020,9 +1407,9 @@ export class MemoryWriter {
         : existing.formationVAD,
       tags: updates.tags ?? existing.tags,
     };
-    const patchEventId = uuidv4();
+    const patchEventId = uuidv7();
 
-    this.memoryStore.runInTransaction(() => {
+    await this.memoryStore.runInTransaction(() => {
       this.memoryStore.updateMemory(memoryId, updates);
       this.memoryStore.recordPatchEvent({
         id: patchEventId,
@@ -1073,11 +1460,20 @@ export class MemoryWriter {
     const reason = opts.reason?.trim() || undefined;
     const reviewReferencePath = opts.referencePath?.trim() || undefined;
     const referenceRef = reviewReferencePath ? `reference:${reviewReferencePath}` : undefined;
-    const replacementId = uuidv4();
+    const replacementId = uuidv7();
     const now = Date.now();
+    this.assertCogSecCandidacy({
+      text: nextText,
+      type: existing.type,
+      tags: [...existing.tags, 'corrected'],
+      sourceRef: opts.sourceRef,
+      sourceType: opts.sourceType,
+      provenance: opts.provenance,
+    });
     const embedding = await this.embeddingService.embed(nextText);
     this.validateEmbedding(embedding, 'patch');
     const replacementRetention = applyRetentionSemantics({
+      text: nextText,
       type: existing.type,
       importance: opts.importance ?? existing.importance,
       tags: [...existing.tags, 'corrected'],
@@ -1126,6 +1522,17 @@ export class MemoryWriter {
       });
       this.memoryStore.insertMemory(replacementMemory, embedding);
     });
+    await this.memoryStore.recordEvolutionLink({
+      sourceMemoryId: replacementMemory.id,
+      targetMemoryId: existing.id,
+      relation: 'supersedes',
+      confidence: clampUnit(Math.max(replacementMemory.confidence, existing.confidence), replacementMemory.confidence),
+      reason: reason ? `memory_writer:patch_correction:${reason}` : 'memory_writer:patch_correction',
+      sourceRef: auditContext.sourceRef,
+      sourceType: auditContext.sourceType,
+      provenanceRefs: mergeProvenanceRefs(replacementProvenanceRefs, sourceProvenanceRefs),
+      provenance: auditContext.provenance,
+    });
 
     return {
       sourceMemory: {
@@ -1172,7 +1579,7 @@ export class MemoryWriter {
     }
 
     const abstraction = abstractMemoryText(source.text);
-    const externalRef = `abstraction:${uuidv4()}`;
+    const externalRef = `abstraction:${uuidv7()}`;
     const abstractionSourceRef = normalizeSourceRef(opts.sourceRef, 'tool:memory_redact');
     const abstractionImportance = clampUnit(Math.max(source.importance, 0.55), 0.55);
     const abstractionConfidence = clampUnit(Math.max(source.confidence, 0.6), 0.6);
@@ -1245,11 +1652,36 @@ export class MemoryWriter {
       return { written, deduplicated, superseded, errors, results };
     }
 
+    const acceptedRecords: MemoryWriteOptions[] = [];
+    for (const record of records) {
+      try {
+        this.assertCogSecCandidacy(record, { logRejection: false });
+        acceptedRecords.push(record);
+      } catch (err) {
+        errors++;
+        if (err instanceof MemoryCandidacyPolicyError) {
+          log.info('Rejected memory during batch import by CogSec candidacy policy', {
+            riskClass: err.decision.riskClass,
+            disposition: err.decision.disposition,
+            reasonCodes: err.decision.reasonCodes,
+            type: record.type,
+          });
+          continue;
+        }
+        throw err;
+      }
+    }
+
+    if (acceptedRecords.length === 0) {
+      log.info('Batch import complete', { written, deduplicated, superseded, errors, total: records.length });
+      return { written, deduplicated, superseded, errors, results };
+    }
+
     let batchEmbeddings: Float32Array[] | null = null;
     try {
       const embeddedChunks: Float32Array[][] = [];
-      for (let start = 0; start < records.length; start += IMPORT_BATCH_EMBED_CHUNK_SIZE) {
-        const chunk = records.slice(start, start + IMPORT_BATCH_EMBED_CHUNK_SIZE);
+      for (let start = 0; start < acceptedRecords.length; start += IMPORT_BATCH_EMBED_CHUNK_SIZE) {
+        const chunk = acceptedRecords.slice(start, start + IMPORT_BATCH_EMBED_CHUNK_SIZE);
         const embedded = await this.embeddingService.embedBatch(chunk.map(record => record.text));
         if (embedded.length !== chunk.length) {
           throw new Error(`Expected ${chunk.length} embeddings, received ${embedded.length}`);
@@ -1263,11 +1695,11 @@ export class MemoryWriter {
     } catch (error) {
       log.warn('Batch embedding failed during import; falling back to per-record embedding', {
         error: String(error),
-        total: records.length,
+        total: acceptedRecords.length,
       });
     }
 
-    for (const [index, record] of records.entries()) {
+    for (const [index, record] of acceptedRecords.entries()) {
       try {
         const result = batchEmbeddings
           ? await this.writeWithEmbedding(record, batchEmbeddings[index])
@@ -1276,6 +1708,9 @@ export class MemoryWriter {
 
         switch (result.action) {
           case 'created':
+          case 'updated':
+          case 'negated':
+          case 'conflict':
             written++;
             break;
           case 'deduplicated':
@@ -1288,6 +1723,15 @@ export class MemoryWriter {
         }
       } catch (err) {
         errors++;
+        if (err instanceof MemoryCandidacyPolicyError) {
+          log.info('Rejected memory during batch import by CogSec candidacy policy', {
+            riskClass: err.decision.riskClass,
+            disposition: err.decision.disposition,
+            reasonCodes: err.decision.reasonCodes,
+            type: record.type,
+          });
+          continue;
+        }
         if (err instanceof MemoryWritePolicyError) {
           log.info('Rejected memory during batch import by sensitivity policy', {
             reason: err.reason,

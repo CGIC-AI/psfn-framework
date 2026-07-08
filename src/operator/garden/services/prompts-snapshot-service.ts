@@ -226,10 +226,11 @@ export class PromptsSnapshotService {
       return { ok: false, message: String(error) };
     }
 
+    const snapshot = this.getFoundationSnapshot();
     return {
       ok: true,
       message: 'Saved Character Foundation sections',
-      snapshot: this.getFoundationSnapshot(),
+      ...(snapshot ? { snapshot } : {}),
     };
   }
 

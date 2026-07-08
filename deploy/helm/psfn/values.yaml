@@ -1,0 +1,474 @@
+nameOverride: ""
+fullnameOverride: ""
+
+imagePullPolicy: IfNotPresent
+imagePullSecrets: []
+
+serviceAccount:
+  create: true
+  name: ""
+
+podSecurityContext:
+  fsGroup: 999
+  fsGroupChangePolicy: OnRootMismatch
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: false
+  runAsNonRoot: true
+  runAsUser: 999
+  runAsGroup: 999
+  capabilities:
+    drop:
+      - ALL
+
+psfnAppImage:
+  # One shared image contains dist/ plus admin-ui/build/.
+  repository: localhost/psfn-framework
+  tag: 0.1.0-kube
+  digest: ""
+  pullPolicy: IfNotPresent
+  # Build provenance surfaced to the companion self-diagnosis (self_status
+  # action=diagnose). gitCommit is the source commit this image was built from;
+  # previousGitCommit is the commit of the previously deployed build so the
+  # runtime can list the bead fixes shipped between them. Set both at build/CD
+  # time; empty values are reported as "unavailable" (fail-closed, never guessed).
+  gitCommit: ""
+  previousGitCommit: ""
+
+runtime:
+  companionId: companion
+  companionName: Companion
+  mode: split
+  layoutMode: production
+  nodeEnv: production
+  systemDataDir: /app/system-data
+  companionDataDir: /app/companion-data
+  workspacePath: /app/workspace
+  logsDir: /app/logs
+  tempDir: /app/tmp
+  backupsDir: /app/backups
+  configDir: /app/config
+  characterCardPath: /app/companion-data/companion.json
+  modelCacheDir: /app/models/transformers
+  # Optional path to an authoritative source checkout mounted into the runtime.
+  # When set (and a real git checkout is present), self-diagnosis distinguishes
+  # it from the image-snapshot repo and derives the "fixes shipped" bead list.
+  # Empty means no authoritative checkout is available (reported as unavailable).
+  repositoryDir: ""
+
+bootstrap:
+  # First-ever-install opt-in ONLY. When true, the seed init container copies
+  # /app/config/*.seed.json into system-data for any missing owner file.
+  # Leave false so absent owner files fail closed at startup with the runtime's
+  # loadRequiredJson error instead of silently running on seed defaults. See
+  # src/system/config/load-or-seed.ts: "Runtime config must not seed itself".
+  seedOwnerFiles: false
+
+ports:
+  gatewayApi: 10053
+  gatewayRpc: 10054
+  garden: 10054
+  agentAdmin: 10055
+  satelliteHub: 8787
+  postgres: 5432
+  redis: 6379
+  liteLlm: 4000
+  emosimHttp: 17342
+  emosimTcp: 17341
+
+hostPorts:
+  gatewayApi:
+    enabled: false
+    port: 10053
+    hostIP: ""
+    sourceCIDRs: []
+  garden:
+    enabled: false
+    port: 10054
+    hostIP: ""
+    sourceCIDRs: []
+
+workloads:
+  gateway:
+    replicaCount: 1
+    image:
+      repository: ""
+      tag: ""
+      digest: ""
+    command: ["node", "dist/gateway-main.js"]
+    resources: {}
+    writableMounts:
+      - /app/system-data
+      - /app/logs
+      - /app/tmp
+      - /app/workspace
+      - /run/psfn
+  agent:
+    replicaCount: 1
+    image:
+      repository: ""
+      tag: ""
+      digest: ""
+    command: ["node", "dist/agent-main.js"]
+    resources: {}
+    writableMounts:
+      - /app/system-data
+      - /app/companion-data
+      - /app/workspace
+      - /app/logs
+      - /app/tmp
+      - /app/backups
+      - /run/psfn
+  garden:
+    replicaCount: 1
+    image:
+      repository: ""
+      tag: ""
+      digest: ""
+    command: ["node", "dist/operator-main.js"]
+    resources: {}
+    writableMounts:
+      - /app/system-data
+      - /app/tmp
+
+identity:
+  seedStarterCard: true
+  starterCard:
+    spec: chara_card_v2
+    spec_version: "2.0"
+    data:
+      name: Companion
+      description: Companion is a newly bootstrapped PSFN companion awaiting onboarding and identity tuning.
+      personality: Warm, attentive, honest about uncertainty, and ready to be personalized through onboarding.
+      scenario: The operator is bringing this companion online in a fresh Kubernetes environment.
+      first_mes: "Hi, I'm Companion."
+      mes_example: ""
+      system_prompt: ""
+      post_history_instructions: ""
+      tags:
+        - bootstrap
+      creator: system
+      creator_notes: Auto-seeded starter identity for first-run bootstrap.
+
+persistence:
+  storageClassName: ""
+  accessModes:
+    - ReadWriteOnce
+  systemData:
+    size: 2Gi
+  companionData:
+    size: 10Gi
+  workspace:
+    size: 10Gi
+  runtime:
+    size: 10Gi
+  modelCache:
+    enabled: true
+    size: 8Gi
+
+repositoryCheckout:
+  enabled: false
+  mountPath: /app/repository
+  readOnly: false
+  hostPath:
+    path: ""
+    type: Directory
+  persistentVolumeClaim:
+    claimName: ""
+
+beads:
+  # null preserves the runtime's current fallback behavior: beads tools are
+  # enabled only when the startup code discovers .beads in its existing roots.
+  toolsEnabled: null
+  allowActions: []
+
+secrets:
+  create: true
+  existingSecret: ""
+  # Keep true for helm lint/template with placeholder or externally supplied
+  # secrets. Set false in install values to fail rendering when required keys
+  # are missing.
+  allowMissingRequired: true
+  values:
+    apiKey: CHANGE_ME_API_KEY
+    adminToken: CHANGE_ME_ADMIN_TOKEN
+    gatewaySessionHmacKey: CHANGE_ME_GATEWAY_SESSION_HMAC_KEY
+    openRouterApiKey: ""
+    openAiApiKey: ""
+    liteLlmApiKey: CHANGE_ME_LITELLM_API_KEY
+    backupEncryptionKey: CHANGE_ME_BACKUP_ENCRYPTION_KEY
+    embeddingApiKey: ""
+    hfToken: ""
+    discordToken: ""
+    discordBotId: ""
+    deepgramApiKey: ""
+    elevenLabsApiKey: ""
+    falApiKey: ""
+    ntfyToken: ""
+  keys:
+    apiKey: API_KEY
+    adminToken: ADMIN_TOKEN
+    gatewaySessionHmacKey: GATEWAY_SESSION_HMAC_KEY
+    openRouterApiKey: OPENROUTER_API_KEY
+    openAiApiKey: OPENAI_API_KEY
+    liteLlmApiKey: LITELLM_API_KEY
+    backupEncryptionKey: PSFN_BACKUP_ENCRYPTION_KEY
+    embeddingApiKey: EMBEDDING_API_KEY
+    hfToken: HF_TOKEN
+    discordToken: DISCORD_TOKEN
+    discordBotId: DISCORD_BOT_ID
+    deepgramApiKey: DEEPGRAM_API_KEY
+    elevenLabsApiKey: ELEVENLABS_API_KEY
+    falApiKey: FAL_API_KEY
+    ntfyToken: NTFY_TOKEN
+
+postgres:
+  enabled: true
+  image:
+    repository: docker.io/pgvector/pgvector
+    tag: 0.8.1-pg17
+    digest: sha256:3e8b3adfd27b5707128f60956f62a793c3c9326ea8cfaf0eab7adccb5d700b21
+    pullPolicy: IfNotPresent
+  auth:
+    database: psfn
+    username: psfn
+    password: CHANGE_ME_POSTGRES_PASSWORD
+    existingSecret: ""
+    keys:
+      password: postgres-password
+      databaseUrl: postgres-database-url
+  primary:
+    resources: {}
+    persistence:
+      size: 20Gi
+  external:
+    enabled: false
+    databaseUrlSecret:
+      name: ""
+      key: postgres-database-url
+
+redis:
+  enabled: true
+  mode: internal
+  image:
+    repository: docker.io/library/redis
+    tag: 8.4.0-bookworm
+    digest: sha256:c22af04bb576503bf16b3e34a1fd2fd82de0f765afd866d2e380145e0af30d78
+    pullPolicy: IfNotPresent
+  auth:
+    password: CHANGE_ME_REDIS_PASSWORD
+    existingSecret: ""
+    key: redis-password
+  persistence:
+    size: 5Gi
+  resources: {}
+  external:
+    url: ""
+    passwordSecret:
+      name: ""
+      key: redis-password
+    tls:
+      enabled: false
+      rejectUnauthorized: true
+      caSecret:
+        name: ""
+        key: ca.crt
+
+emosim:
+  # Long-lived emo_sim emotion-simulation engine consumed by the observer
+  # eval sidecar (observerEvalSidecar.adapter.kind=emosim_server pointed at
+  # http://<release>-emosim:17342). The emo_sim API is UNAUTHENTICATED by
+  # upstream design: it is exposed ONLY as a ClusterIP service and guarded by
+  # NetworkPolicy (agent pods only). Never expose these ports externally.
+  enabled: false
+  image:
+    # Built from docker/Dockerfile.emosim with an emo_sim checkout as the
+    # build context; see the Dockerfile header for the exact build command.
+    repository: localhost/psfn-emosim
+    tag: 0.1.0
+    digest: ""
+    pullPolicy: IfNotPresent
+  # Extra server flags appended after the fixed entrypoint
+  # (python server.py --host=0.0.0.0 --statedir=/state), e.g.
+  # ["--timescale=120", "--drivescale=1", "--tick=2"].
+  extraArgs: []
+  persistence:
+    # Session snapshots + events.jsonl live here; survives restarts and
+    # provides the wall-clock downtime catch-up on recovery.
+    size: 1Gi
+  resources: {}
+
+liteLlm:
+  enabled: true
+  mode: internal
+  replicaCount: 1
+  image:
+    repository: ghcr.io/berriai/litellm
+    tag: v1.74.9-stable
+    digest: sha256:f78c763d6f2289305a3acc3a003c6170f797bdda70c56e75776fbab670e663cc
+    pullPolicy: IfNotPresent
+  command: ["litellm"]
+  resources: {}
+  config:
+    existingConfigMap: ""
+    key: config.yaml
+    path: /etc/litellm/config.yaml
+    yaml: |-
+      # The wildcard route alone does NOT serve PSFN: the runtime requests
+      # unprefixed model names (e.g. "z-ai/glm-5.2"), which fail the
+      # "openrouter/*" group and silently fall back to direct OpenRouter.
+      # Every model referenced by a models.json slot needs an explicit
+      # unprefixed route here (2026-07-06 incident, bead psfn-framework-oylk).
+      model_list:
+        - model_name: "openrouter/*"
+          litellm_params:
+            model: "openrouter/*"
+            api_key: "os.environ/OPENROUTER_API_KEY"
+        - model_name: "z-ai/glm-5.2"
+          litellm_params:
+            # Route via OpenRouter ':exacto' variant, which orders upstream
+            # providers by measured tool-call reliability. Flaky vLLM-family
+            # upstreams intermittently return literal '{}' tool-call arguments;
+            # z-ai/glm-5.2:exacto evaluated 10/10 clean (bead psfn-framework-mihm).
+            # Keep model_name unprefixed so models.json/settings are unchanged.
+            model: "openrouter/z-ai/glm-5.2:exacto"
+            api_key: "os.environ/OPENROUTER_API_KEY"
+        - model_name: "moonshotai/kimi-k2.6"
+          litellm_params:
+            model: "openrouter/moonshotai/kimi-k2.6"
+            api_key: "os.environ/OPENROUTER_API_KEY"
+        - model_name: "deepseek/deepseek-v4-pro"
+          litellm_params:
+            model: "openrouter/deepseek/deepseek-v4-pro"
+            api_key: "os.environ/OPENROUTER_API_KEY"
+        - model_name: "google/gemini-3.1-flash-lite"
+          litellm_params:
+            model: "openrouter/google/gemini-3.1-flash-lite"
+            api_key: "os.environ/OPENROUTER_API_KEY"
+        - model_name: "openai/gpt-5.4-mini"
+          litellm_params:
+            model: "openrouter/openai/gpt-5.4-mini"
+            api_key: "os.environ/OPENROUTER_API_KEY"
+      litellm_settings:
+        drop_params: true
+      general_settings:
+        master_key: "os.environ/LITELLM_MASTER_KEY"
+  external:
+    baseUrl: ""
+  extraEnv: []
+  extraEnvFrom: []
+
+embeddings:
+  provider: transformers
+  transformers:
+    model: Xenova/all-MiniLM-L6-v2
+    dims: 384
+    cacheDir: /app/models/transformers
+    prefetch:
+      enabled: false
+  api:
+    url: ""
+    model: snowflake-arctic-embed2
+    dims: 1024
+    apiKeySecret:
+      name: ""
+      key: EMBEDDING_API_KEY
+
+modelPrefetch:
+  enabled: false
+  image:
+    repository: ""
+    tag: ""
+    digest: ""
+    pullPolicy: ""
+  backoffLimit: 2
+  activeDeadlineSeconds: 1800
+  ttlSecondsAfterFinished: 86400
+  resources: {}
+  textEmotion:
+    enabled: true
+    model: SamLowe/roberta-base-go_emotions-onnx
+    dtype: fp32
+
+certificates:
+  enabled: true
+  issuer:
+    create: true
+    kind: Issuer
+    name: ""
+    existingIssuerRef:
+      name: ""
+      kind: Issuer
+      group: cert-manager.io
+  trustDomain: cluster.local
+  duration: 2160h
+  renewBefore: 360h
+  mountBasePath: /run/psfn/tls
+
+networkPolicy:
+  enabled: true
+  ingressController:
+    namespaceSelector:
+      kubernetes.io/metadata.name: kube-system
+    podSelector:
+      app.kubernetes.io/name: traefik
+  dns:
+    namespaceSelector:
+      kubernetes.io/metadata.name: kube-system
+    podSelector:
+      k8s-app: kube-dns
+  gateway:
+    allowExternalEgress: true
+  agent:
+    allowExternalEgress: false
+  modelPrefetch:
+    allowExternalHttpsEgress: true
+  satelliteHub:
+    allowExternalEgress: true
+  liteLlm:
+    allowExternalEgress: true
+
+ingress:
+  enabled: true
+  className: traefik
+  annotations: {}
+  gateway:
+    enabled: true
+    host: psfn-gateway.local
+    path: /
+    pathType: Prefix
+  garden:
+    enabled: true
+    host: psfn-garden.local
+    path: /
+    pathType: Prefix
+  satelliteHub:
+    enabled: false
+    host: psfn-hub.local
+    path: /
+    pathType: Prefix
+
+satelliteHub:
+  enabled: false
+  image:
+    # Build from the external PSFN-Satellite-Hub source with
+    # docker/satellite-hub/Dockerfile, then set repository plus a pinned tag
+    # or digest. Floating tags such as latest/main are rejected when enabled.
+    repository: ""
+    tag: ""
+    digest: ""
+    pullPolicy: IfNotPresent
+  command: ["node", "dist/ts/hub/main.js"]
+  agentRuntime: psfn
+  psfnModel: psfn
+  elevenLabsVoiceId: ""
+  artifactRoot: /app/.artifacts/runtime-ts
+  resources: {}
+
+backupTools:
+  image:
+    repository: docker.io/library/postgres
+    tag: 17.6-bookworm
+    digest: sha256:f3bd19c606e442c3d7bdfa8002e03fe260a1023351e0ea4598032022b68dd6e3
+    pullPolicy: IfNotPresent

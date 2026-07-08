@@ -3,11 +3,11 @@
 // Core always uses an injected transport port so provider credentials remain outside
 // the core runtime boundary.
 
-import type { AssistantMessage, AssistantMessageEvent, Model, ThinkingLevel } from '@mariozechner/pi-ai';
+import type { AssistantMessage, AssistantMessageEvent, Model, StopReason, ThinkingLevel } from '@mariozechner/pi-ai';
 import type { StreamFn } from '@mariozechner/pi-agent-core';
 import type { LLMContext, LLMResponse, ModelBudgetBlockedEvent, MessageModelOverride, ModelPurpose, CorrelationMetadata, StreamCallbacks, ToolCall } from '../../shared/contracts/runtime.js';
 import type { CoreSubstrateConfig } from '../../system/config/runtime-config-contracts.js';
-import { createModel, resolveRegisteredModel } from '../../primitives/llm/models.js';
+import { createModel, createOpenAICompatibleEndpointModel, resolveRegisteredModel } from '../../primitives/llm/models.js';
 import { resolveRoutingCandidates, type RoutingCandidate, type RoutingPurpose } from '../../primitives/llm/routing.js';
 import {
   DEFAULT_BASE_DELAY_MS,
@@ -16,6 +16,7 @@ import {
 } from '../../primitives/llm/retry.js';
 import { llmRetryConfig } from '../../primitives/llm/retry-config.js';
 import { createComponentLogger } from '../../shared/logger.js';
+import { sleep } from '../../shared/utils/timing.js';
 import { getRequestContext } from '../../primitives/llm/request-context.js';
 import { toCorrelationLogFields } from '../../primitives/llm/correlation.js';
 import {
@@ -111,7 +112,7 @@ export function createSubstrateStreamFn(
           litellmBaseUrl,
           model,
           context,
-          options,
+          options: options ? { ...(options as object) } as Record<string, unknown> : undefined,
           purpose,
           service,
           processName,
@@ -387,6 +388,9 @@ function buildTransportContext(
     systemPrompt: llmContext.systemPrompt,
     messages: llmContext.messages,
     ...(llmContext.tools?.length ? { tools: llmContext.tools } : {}),
+    ...(llmContext.promptCacheBoundaries
+      ? { promptCacheBoundaries: llmContext.promptCacheBoundaries }
+      : {}),
     modelHint: buildTransportModelHint(candidate, requestOptions),
     ...(requestContext ? { correlation: requestContext as CorrelationMetadata } : {}),
   };
@@ -567,7 +571,7 @@ function applyTerminalResponse(
   response: LLMResponse,
 ): void {
   state.partial.model = response.model;
-  state.partial.stopReason = response.stopReason;
+  state.partial.stopReason = normalizeStopReason(response.stopReason);
   state.partial.timestamp = Date.now();
   state.partial.usage = buildUsage(response);
   if (response.content) {
@@ -600,21 +604,25 @@ function ensureThinkingContentIndex(state: TransportMessageState): number {
 }
 
 function buildUsage(response: LLMResponse): AssistantMessage['usage'] {
-  const input = toUsageCount(response.inputTokens);
-  const output = toUsageCount(response.outputTokens);
-  const totalTokens = input + output;
+  const usageDetails = response.usageDetails;
+  const input = toUsageCount(usageDetails?.input ?? response.inputTokens);
+  const output = toUsageCount(usageDetails?.output ?? response.outputTokens);
+  const cacheRead = toUsageCount(usageDetails?.cacheRead);
+  const cacheWrite = toUsageCount(usageDetails?.cacheWrite);
+  const totalTokens = toUsageCount(usageDetails?.totalTokens)
+    || input + output + cacheRead + cacheWrite;
   return {
     input,
     output,
-    cacheRead: 0,
-    cacheWrite: 0,
+    cacheRead,
+    cacheWrite,
     totalTokens,
     cost: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      total: 0,
+      input: toUsageCost(usageDetails?.cost?.input),
+      output: toUsageCost(usageDetails?.cost?.output),
+      cacheRead: toUsageCost(usageDetails?.cost?.cacheRead),
+      cacheWrite: toUsageCost(usageDetails?.cost?.cacheWrite),
+      total: toUsageCost(usageDetails?.cost?.total),
     },
   };
 }
@@ -963,8 +971,17 @@ function toUsageCount(value: unknown): number {
     : 0;
 }
 
-function sleep(delayMs: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, delayMs));
+function toUsageCost(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0
+    ? value
+    : 0;
+}
+
+function normalizeStopReason(value: string): StopReason {
+  if (value === 'stop' || value === 'length' || value === 'toolUse' || value === 'error' || value === 'aborted') {
+    return value;
+  }
+  return 'stop';
 }
 
 function resolveModelProvider(model: Model<any>): string | undefined {
@@ -990,6 +1007,22 @@ export function resolveModel(
   if (litellmBaseUrl) {
     const modelId = normalizeLiteLLMModelId(selection.provider, selection.model);
     const model = createModel(litellmBaseUrl, modelId, selection.maxTokens, selection.contextWindow);
+    return ensurePurposeInputCapabilities(model, purpose, {
+      supportsVision: selection.supportsVision,
+    });
+  }
+
+  if (selection.requestBaseUrl) {
+    const model = createOpenAICompatibleEndpointModel({
+      baseUrl: selection.requestBaseUrl,
+      modelId: selection.model,
+      provider: selection.provider,
+      routeLabel: selection.provider.replace(/_/g, ' '),
+      maxTokens: selection.maxTokens,
+      contextWindow: selection.contextWindow,
+      reasoning: selection.supportsReasoning ?? selection.thinkingEnabled ?? false,
+      supportsVision: selection.supportsVision ?? false,
+    });
     return ensurePurposeInputCapabilities(model, purpose, {
       supportsVision: selection.supportsVision,
     });

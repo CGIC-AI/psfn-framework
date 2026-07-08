@@ -4,8 +4,13 @@ import type { Scheduler } from '../../../core/scheduler/scheduler.js';
 import type { SessionManager } from '../../../core/session/manager.js';
 import type { SessionStore } from '../../../persistence/sessions/store.js';
 import type { ShardExecutionPort } from '../../../faculties/shards/port.js';
-import type { DashboardCostWindow, DashboardSessionContextPressure, AnalysisWorkbenchTraceView } from '../types.js';
-import type { AdminDashboardData, AdminDashboardService } from './types.js';
+import type {
+  AnalysisWorkbenchTraceView,
+  DashboardCostWindow,
+  DashboardSessionContextPressure,
+  DashboardToolStatus,
+} from '../types.js';
+import type { AdminAdaptiveToolsService, AdminDashboardData, AdminDashboardService } from './types.js';
 import {
   aggregateDashboardCostWindows,
   createEmptyDashboardCostWindowTotals,
@@ -39,6 +44,9 @@ export class AdminDashboardDataService implements AdminDashboardService {
   private readonly sessionContextUtilizationBySession = new Map<string, number>();
 
   private latestUsageSessionId: string | null = null;
+  private latestTtftMs: number | null = null;
+  private ttftTotalMs = 0;
+  private ttftSampleCount = 0;
 
   private analysisWorkbenchTraces: AnalysisWorkbenchTraceView[] = [];
 
@@ -49,6 +57,7 @@ export class AdminDashboardDataService implements AdminDashboardService {
     scheduler: Scheduler;
     shardManager: ShardExecutionPort;
     eventBus: EventBus;
+    adaptiveToolsService?: AdminAdaptiveToolsService | null;
     resolveLastActiveSessionId?: () => string | null;
   }) {
     this.deps.eventBus.on('agent.turn.usage', ({ message, usage }) => {
@@ -85,6 +94,15 @@ export class AdminDashboardDataService implements AdminDashboardService {
         toolCalls,
         estimatedCostUsd,
       });
+    });
+
+    this.deps.eventBus.on('agent.turn.stage', (payload) => {
+      if (payload.stage !== 'first-token') return;
+      const ttftMs = AdminDashboardDataService.normalizeOptionalDuration(payload.ttftMs);
+      if (ttftMs === null) return;
+      this.latestTtftMs = ttftMs;
+      this.ttftTotalMs += ttftMs;
+      this.ttftSampleCount += 1;
     });
 
     this.deps.eventBus.on('agent.analysis_workbench.trace', ({ timestamp, task, result }) => {
@@ -134,6 +152,12 @@ export class AdminDashboardDataService implements AdminDashboardService {
     return typeof value === 'number' && Number.isFinite(value) && value > 0
       ? value
       : 0;
+  }
+
+  private static normalizeOptionalDuration(value: unknown): number | null {
+    return typeof value === 'number' && Number.isFinite(value) && value >= 0
+      ? value
+      : null;
   }
 
   private pruneUsageSamples(nowMs: number): void {
@@ -193,6 +217,23 @@ export class AdminDashboardDataService implements AdminDashboardService {
     return { sessionId, utilizationPct, hasTelemetry: true };
   }
 
+  private async getToolStatus(): Promise<DashboardToolStatus[]> {
+    if (!this.deps.adaptiveToolsService) {
+      return [];
+    }
+    const data = await this.deps.adaptiveToolsService.getAdaptiveToolsData();
+    return data.toolHealth
+      .map(tool => ({
+        name: tool.name,
+        status: tool.health.status,
+        detail: tool.health.detail,
+      }))
+      .sort((left, right) => (
+        toolStatusWeight(right.status) - toolStatusWeight(left.status)
+        || left.name.localeCompare(right.name)
+      ));
+  }
+
   async getDashboardData(options: { costWindow?: DashboardCostWindow } = {}): Promise<AdminDashboardData> {
     const selectedCostWindow = options.costWindow ?? 'today';
     const nowMs = Date.now();
@@ -202,6 +243,7 @@ export class AdminDashboardDataService implements AdminDashboardService {
       : createEmptyDashboardCostWindowTotals();
     const memStats = await this.deps.memoryStore.getStats();
     const channels = this.deps.sessionStore.listChannels();
+    const toolStatus = await this.getToolStatus();
     return {
       stats: {
         memoryTotal: memStats.total,
@@ -217,6 +259,10 @@ export class AdminDashboardDataService implements AdminDashboardService {
           cacheReadTokens: this.usageTotals.cacheReadTokens,
           llmCalls: this.usageTotals.llmCalls,
           toolCalls: this.usageTotals.toolCalls,
+          lastTtftMs: this.latestTtftMs,
+          averageTtftMs: this.ttftSampleCount > 0
+            ? this.ttftTotalMs / this.ttftSampleCount
+            : null,
           activeSessionContextPressure: this.getActiveSessionContextPressure(),
           estimatedCostUsd: this.usageTotals.estimatedCostUsd,
           costWindows: {
@@ -224,8 +270,23 @@ export class AdminDashboardDataService implements AdminDashboardService {
             byWindow: costByWindow,
           },
         },
+        toolStatus,
         recentAnalysisWorkbenchTraces: this.analysisWorkbenchTraces,
       },
     };
+  }
+}
+
+function toolStatusWeight(status: DashboardToolStatus['status']): number {
+  switch (status) {
+    case 'unavailable':
+      return 4;
+    case 'degraded':
+      return 3;
+    case 'not_applicable':
+      return 2;
+    case 'healthy':
+    default:
+      return 1;
   }
 }

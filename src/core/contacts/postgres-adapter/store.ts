@@ -46,9 +46,15 @@ export class PostgresContactStore implements ContactStorePort {
   declare suggestLowTierTrustDrift: ContactStorePort['suggestLowTierTrustDrift'];
   declare applyLowTierTrustDriftSuggestion: ContactStorePort['applyLowTierTrustDriftSuggestion'];
   declare setTrustLevel: ContactStorePort['setTrustLevel'];
+  declare setMachineIntelligence: ContactStorePort['setMachineIntelligence'];
+  declare markMachineIntelligenceFromObservation: ContactStorePort['markMachineIntelligenceFromObservation'];
   declare updateLastSeen: ContactStorePort['updateLastSeen'];
   declare updateIdentityProfile: ContactStorePort['updateIdentityProfile'];
   declare recordChannelActivity: ContactStorePort['recordChannelActivity'];
+  declare listKnownRooms: ContactStorePort['listKnownRooms'];
+  declare countKnownRooms: ContactStorePort['countKnownRooms'];
+  declare listRoomRoster: ContactStorePort['listRoomRoster'];
+  declare countRoomRoster: ContactStorePort['countRoomRoster'];
   declare mergeContacts: ContactStorePort['mergeContacts'];
   declare updateNotes: ContactStorePort['updateNotes'];
   declare updateEmotionalBaseline: ContactStorePort['updateEmotionalBaseline'];
@@ -64,6 +70,9 @@ export class PostgresContactStore implements ContactStorePort {
   declare linkChannelIdentity: ContactStorePort['linkChannelIdentity'];
   declare listAll: ContactStorePort['listAll'];
   declare listIdentityLinkVerifications: ContactStorePort['listIdentityLinkVerifications'];
+  declare countVerifiedIdentityLinks: ContactStorePort['countVerifiedIdentityLinks'];
+  declare getContactMaintenanceWatermark: ContactStorePort['getContactMaintenanceWatermark'];
+  declare setContactMaintenanceWatermark: ContactStorePort['setContactMaintenanceWatermark'];
   declare listMutationAuditEntries: ContactStorePort['listMutationAuditEntries'];
   declare resolveChannelIdentity: ContactStorePort['resolveChannelIdentity'];
   declare resolveUserId: ContactStorePort['resolveUserId'];

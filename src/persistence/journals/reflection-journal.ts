@@ -1,5 +1,4 @@
-import { existsSync, readFileSync } from 'node:fs';
-import { appendJsonLine } from '../jsonl.js';
+import { appendJsonLine, readJsonLines } from '../jsonl.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import { cloneInternalState, type InternalState } from '../../core/self-model/state.js';
 import type { ValuesMetacognitiveFlag } from '../../faculties/values/narrative-context-types.js';
@@ -229,27 +228,7 @@ export class ReflectionJournalStore {
     if (!Number.isInteger(limitRaw) || limitRaw < 1) {
       throw new Error('Reflection journal listRecent limit must be a positive integer when provided');
     }
-    if (!existsSync(this.filePath)) {
-      return [];
-    }
-
-    const raw = readFileSync(this.filePath, 'utf-8');
-    if (raw.trim().length === 0) {
-      return [];
-    }
-
-    return raw
-      .split('\n')
-      .map(line => line.trim())
-      .filter(line => line.length > 0)
-      .map(line => {
-        try {
-          return normalizePersistedReflectionEntry(JSON.parse(line) as unknown);
-        } catch {
-          return null;
-        }
-      })
-      .filter((entry): entry is ReflectionJournalEntry => entry !== null)
+    return readJsonLines(this.filePath, normalizePersistedReflectionEntry).entries
       .sort((left, right) => {
         const createdAtDelta = Date.parse(right.createdAt) - Date.parse(left.createdAt);
         if (createdAtDelta !== 0) {

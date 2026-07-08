@@ -1,4 +1,5 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
+import { brotliCompressSync, gzipSync } from 'node:zlib';
 
 export interface HttpLogger {
   warn(message: string, meta?: Record<string, unknown>): void;
@@ -184,6 +185,68 @@ export function sendJson(
 ): void {
   res.writeHead(status, { 'Content-Type': 'application/json', ...(headers ?? {}) });
   res.end(JSON.stringify(body));
+}
+
+type JsonCompressionEncoding = 'br' | 'gzip';
+
+const MIN_COMPRESSED_JSON_BYTES = 1024;
+
+function selectJsonCompressionEncoding(req: IncomingMessage): JsonCompressionEncoding | null {
+  const rawHeader = req.headers['accept-encoding'];
+  const header = Array.isArray(rawHeader) ? rawHeader.join(',') : rawHeader;
+  if (!header) return null;
+
+  const accepted = new Map<string, number>();
+  for (const part of header.split(',')) {
+    const [rawEncoding, ...rawParams] = part.trim().split(';');
+    const encoding = rawEncoding.trim().toLowerCase();
+    if (!encoding) continue;
+    const qParam = rawParams
+      .map(param => param.trim())
+      .find(param => param.toLowerCase().startsWith('q='));
+    const q = qParam ? Number.parseFloat(qParam.slice(2)) : 1;
+    if (!Number.isFinite(q) || q < 0) continue;
+    accepted.set(encoding, q);
+  }
+
+  const brotliQ = accepted.has('br') ? accepted.get('br')! : (accepted.get('*') ?? 0);
+  const gzipQ = accepted.has('gzip') ? accepted.get('gzip')! : (accepted.get('*') ?? 0);
+  if (brotliQ <= 0 && gzipQ <= 0) return null;
+  return brotliQ >= gzipQ ? 'br' : 'gzip';
+}
+
+export function sendCompressedJson(
+  req: IncomingMessage,
+  res: ServerResponse,
+  status: number,
+  body: unknown,
+  headers?: Record<string, string>,
+): void {
+  const payload = JSON.stringify(body);
+  const responseHeaders = {
+    'Content-Type': 'application/json',
+    Vary: 'Accept-Encoding',
+    ...(headers ?? {}),
+  };
+  const encoding = Buffer.byteLength(payload) >= MIN_COMPRESSED_JSON_BYTES
+    ? selectJsonCompressionEncoding(req)
+    : null;
+
+  if (!encoding) {
+    res.writeHead(status, responseHeaders);
+    res.end(payload);
+    return;
+  }
+
+  const compressed = encoding === 'br'
+    ? brotliCompressSync(Buffer.from(payload))
+    : gzipSync(Buffer.from(payload));
+  res.writeHead(status, {
+    ...responseHeaders,
+    'Content-Encoding': encoding,
+    'Content-Length': String(compressed.length),
+  });
+  res.end(compressed);
 }
 
 export function sendText(

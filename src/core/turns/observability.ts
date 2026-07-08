@@ -8,8 +8,10 @@ import {
   cloneEpisodicRetrievalChain,
   type EpisodicRetrievalChain,
 } from '../../faculties/memory/retrieval/episodic.js';
+import type { SessionContinuityArtifact } from '../session/continuity-artifacts.js';
 import type { SessionEntry } from '../session/types.js';
 import type {
+  FatigueEnforcementMetadata,
   TurnToolContextSnapshot,
   TurnPromptContextSnapshot,
   TurnPromptSnapshot,
@@ -20,11 +22,17 @@ import {
   cloneAdaptiveToolSnapshotTelemetry,
   cloneContextMessage,
   clonePromptSectionCacheability,
+  clonePromptSectionTelemetry,
   cloneProviderObservability,
   cloneOrientationSnapshot,
+  cloneSessionContinuityArtifact,
   cloneTurnPromptResponseSnapshot,
   cloneToolSchema,
 } from './snapshot.js';
+import {
+  clonePromptPlan,
+  type PromptPlan,
+} from '../agent/substrate-agent/turn-execution/prompt-plan.js';
 
 export type TurnObservabilityCallType =
   | 'chat'
@@ -43,11 +51,13 @@ export interface ObservedScoredMemory extends ObservedMemory {
 export interface TurnSessionContextSnapshotRecord {
   channelId: string;
   recentEntries: SessionEntry[];
+  sourceEntryCount?: number;
   historySummaryText?: string;
   historySummaryEntryCount?: number;
   compactionSummaryTexts: string[];
   focusKnowledgeTexts: string[];
   continuityEntries: SessionEntry[];
+  wakeReturnArtifacts?: SessionContinuityArtifact[];
   orientation?: TurnOrientationSnapshot;
   intentionAppraisalArtifactCount?: number;
   compactionPromptText?: string;
@@ -75,10 +85,13 @@ export interface TurnSnapshotRecord {
   trustLevel: string;
   canonicalContactKey?: string;
   prompt?: TurnPromptSnapshot;
+  /** The turn's PromptPlan (schema-versioned): the persisted snapshot IS the plan. */
+  plan?: PromptPlan;
   promptContext?: TurnPromptContextSnapshot;
   toolContext?: TurnToolContextSnapshot;
   sessionContext?: TurnSessionContextSnapshotRecord;
   memory?: TurnMemorySnapshotRecord;
+  fatigue?: FatigueEnforcementMetadata;
 }
 
 export interface TurnStageTelemetryRecord {
@@ -211,11 +224,13 @@ export function sanitizeTurnSnapshot(snapshot: TurnSnapshot): TurnSnapshotRecord
         },
       }
       : {}),
+    ...(snapshot.plan
+      ? { plan: clonePromptPlan(snapshot.plan, cloneContextMessage, cloneToolSchema) }
+      : {}),
     ...(snapshot.promptContext
       ? {
         promptContext: {
           ...snapshot.promptContext,
-          messages: snapshot.promptContext.messages.map(cloneContextMessage),
           ...(snapshot.promptContext.currentTurnInput !== undefined
             ? { currentTurnInput: snapshot.promptContext.currentTurnInput }
             : {}),
@@ -227,6 +242,18 @@ export function sanitizeTurnSnapshot(snapshot: TurnSnapshot): TurnSnapshotRecord
             : {}),
           ...(snapshot.promptContext.sectionCacheability
             ? { sectionCacheability: snapshot.promptContext.sectionCacheability.map(clonePromptSectionCacheability) }
+            : {}),
+          ...(snapshot.promptContext.inputSections
+            ? { inputSections: snapshot.promptContext.inputSections.map(clonePromptSectionTelemetry) }
+            : {}),
+          ...(snapshot.promptContext.runtimeContextSections
+            ? { runtimeContextSections: snapshot.promptContext.runtimeContextSections.map(clonePromptSectionTelemetry) }
+            : {}),
+          ...(snapshot.promptContext.memoryContextSections
+            ? { memoryContextSections: snapshot.promptContext.memoryContextSections.map(clonePromptSectionTelemetry) }
+            : {}),
+          ...(snapshot.promptContext.finalSystemSections
+            ? { finalSystemSections: snapshot.promptContext.finalSystemSections.map(clonePromptSectionTelemetry) }
             : {}),
         },
       }
@@ -246,6 +273,9 @@ export function sanitizeTurnSnapshot(snapshot: TurnSnapshot): TurnSnapshotRecord
         sessionContext: {
           channelId: snapshot.sessionContext.channelId,
           recentEntries: snapshot.sessionContext.recentEntries.map(cloneSessionEntry),
+          ...(snapshot.sessionContext.sourceEntryCount !== undefined
+            ? { sourceEntryCount: snapshot.sessionContext.sourceEntryCount }
+            : {}),
           ...(snapshot.sessionContext.historySummaryText
             ? { historySummaryText: snapshot.sessionContext.historySummaryText }
             : {}),
@@ -255,6 +285,9 @@ export function sanitizeTurnSnapshot(snapshot: TurnSnapshot): TurnSnapshotRecord
           compactionSummaryTexts: [...snapshot.sessionContext.compactionSummaryTexts],
           focusKnowledgeTexts: [...snapshot.sessionContext.focusKnowledgeTexts],
           continuityEntries: snapshot.sessionContext.continuityEntries.map(cloneSessionEntry),
+          ...(snapshot.sessionContext.wakeReturnArtifacts
+            ? { wakeReturnArtifacts: snapshot.sessionContext.wakeReturnArtifacts.map(cloneSessionContinuityArtifact) }
+            : {}),
           ...(snapshot.sessionContext.orientation
             ? { orientation: cloneOrientationSnapshot(snapshot.sessionContext.orientation) }
             : {}),
@@ -300,6 +333,7 @@ export function sanitizeTurnSnapshot(snapshot: TurnSnapshot): TurnSnapshotRecord
         },
       }
       : {}),
+    ...(snapshot.fatigue ? { fatigue: cloneUnknownValue(snapshot.fatigue) } : {}),
   };
 }
 
@@ -316,11 +350,13 @@ export function cloneTurnSnapshotRecord(snapshot: TurnSnapshotRecord): TurnSnaps
         },
       }
       : {}),
+    ...(snapshot.plan
+      ? { plan: clonePromptPlan(snapshot.plan, cloneContextMessage, cloneToolSchema) }
+      : {}),
     ...(snapshot.promptContext
       ? {
         promptContext: {
           ...snapshot.promptContext,
-          messages: snapshot.promptContext.messages.map(cloneContextMessage),
           ...(snapshot.promptContext.currentTurnInput !== undefined
             ? { currentTurnInput: snapshot.promptContext.currentTurnInput }
             : {}),
@@ -332,6 +368,18 @@ export function cloneTurnSnapshotRecord(snapshot: TurnSnapshotRecord): TurnSnaps
             : {}),
           ...(snapshot.promptContext.sectionCacheability
             ? { sectionCacheability: snapshot.promptContext.sectionCacheability.map(clonePromptSectionCacheability) }
+            : {}),
+          ...(snapshot.promptContext.inputSections
+            ? { inputSections: snapshot.promptContext.inputSections.map(clonePromptSectionTelemetry) }
+            : {}),
+          ...(snapshot.promptContext.runtimeContextSections
+            ? { runtimeContextSections: snapshot.promptContext.runtimeContextSections.map(clonePromptSectionTelemetry) }
+            : {}),
+          ...(snapshot.promptContext.memoryContextSections
+            ? { memoryContextSections: snapshot.promptContext.memoryContextSections.map(clonePromptSectionTelemetry) }
+            : {}),
+          ...(snapshot.promptContext.finalSystemSections
+            ? { finalSystemSections: snapshot.promptContext.finalSystemSections.map(clonePromptSectionTelemetry) }
             : {}),
         },
       }
@@ -351,6 +399,9 @@ export function cloneTurnSnapshotRecord(snapshot: TurnSnapshotRecord): TurnSnaps
         sessionContext: {
           channelId: snapshot.sessionContext.channelId,
           recentEntries: snapshot.sessionContext.recentEntries.map(cloneSessionEntry),
+          ...(snapshot.sessionContext.sourceEntryCount !== undefined
+            ? { sourceEntryCount: snapshot.sessionContext.sourceEntryCount }
+            : {}),
           ...(snapshot.sessionContext.historySummaryText
             ? { historySummaryText: snapshot.sessionContext.historySummaryText }
             : {}),
@@ -360,6 +411,9 @@ export function cloneTurnSnapshotRecord(snapshot: TurnSnapshotRecord): TurnSnaps
           compactionSummaryTexts: [...snapshot.sessionContext.compactionSummaryTexts],
           focusKnowledgeTexts: [...snapshot.sessionContext.focusKnowledgeTexts],
           continuityEntries: snapshot.sessionContext.continuityEntries.map(cloneSessionEntry),
+          ...(snapshot.sessionContext.wakeReturnArtifacts
+            ? { wakeReturnArtifacts: snapshot.sessionContext.wakeReturnArtifacts.map(cloneSessionContinuityArtifact) }
+            : {}),
           ...(snapshot.sessionContext.orientation
             ? { orientation: cloneOrientationSnapshot(snapshot.sessionContext.orientation) }
             : {}),
@@ -393,6 +447,7 @@ export function cloneTurnSnapshotRecord(snapshot: TurnSnapshotRecord): TurnSnaps
         },
       }
       : {}),
+    ...(snapshot.fatigue ? { fatigue: cloneUnknownValue(snapshot.fatigue) } : {}),
   };
 }
 

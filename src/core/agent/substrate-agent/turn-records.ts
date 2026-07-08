@@ -2,7 +2,8 @@ import type { AgentMessage } from '@mariozechner/pi-agent-core';
 import type { AssistantMessage, TextContent, ToolResultMessage } from '@mariozechner/pi-ai';
 import type { SessionManager } from '../../session/manager.js';
 import type { AgentResponse, MessagePromptOverrideMode, SubstrateMessage, TurnID, TurnRecord, TurnRecordToolCall, TurnUsage } from '../../../shared/contracts/runtime.js';
-import { normalizeChannelVisibility, type TrustLevel } from '../../../system/trust/types.js';
+import type { TrustLevel } from '../../../system/trust/types.js';
+import { normalizeChannelPrivacy } from '../../../system/trust/context-envelope.js';
 import type { ChannelMeta } from '../../../system/trust/policy.js';
 import type { TurnSnapshot } from '../../turns/snapshot.js';
 import type { TurnObservabilityRecord } from '../../turns/observability.js';
@@ -28,7 +29,7 @@ const REASONING_CONTAMINATION_PATTERNS = [
 ];
 
 function resolveSessionChannelMeta(message: SubstrateMessage): ChannelMeta | undefined {
-  const privacyLevel = normalizeChannelVisibility(message.routing?.channelPrivacy);
+  const privacyLevel = normalizeChannelPrivacy(message.routing?.channelPrivacy);
   if (message.isDirectMessage === undefined && !privacyLevel) return undefined;
   return {
     ...(message.isDirectMessage !== undefined ? { isDirectMessage: message.isDirectMessage } : {}),
@@ -43,11 +44,13 @@ export function recordUserMessage(input: {
   requestId: string;
   trustLevel: TrustLevel;
   continuityUserId?: string;
+  contentOverride?: string;
 }): number | null {
+  const content = input.contentOverride ?? input.message.content;
   if (input.continuityUserId) {
     return input.sessionManager.recordUserMessage(
       input.message.channelId,
-      input.message.content,
+      content,
       input.message.authorId,
       input.message.authorName,
       input.message.isDirectMessage,
@@ -64,7 +67,7 @@ export function recordUserMessage(input: {
 
   return input.sessionManager.recordUserMessage(
     input.message.channelId,
-    input.message.content,
+    content,
     input.message.authorId,
     input.message.authorName,
     input.message.isDirectMessage,
@@ -183,6 +186,7 @@ export function buildTurnRecord(input: {
   turnSnapshot?: TurnSnapshot;
   turnObservability?: TurnObservabilityRecord;
   internalStateSnapshotRef?: string;
+  persistedUserMessageContent?: string;
   hashPromptText: (text: string) => string;
 }): TurnRecord {
   const toolCalls = buildTurnToolCalls(input.turnMessages);
@@ -211,7 +215,7 @@ export function buildTurnRecord(input: {
     status,
     userMessage: {
       role: input.speakerRole,
-      content: input.message.content,
+      content: input.persistedUserMessageContent ?? input.message.content,
       timestamp: input.message.timestamp.getTime(),
       sourceMessageId: input.message.id,
       authorId: input.message.authorId,
@@ -442,7 +446,7 @@ function cloneTurnObservabilityForRecord(
 }
 
 function hasOwnKeys(value: Record<string, unknown> | undefined): boolean {
-  return Boolean(value) && Object.keys(value).length > 0;
+  return Object.keys(value ?? {}).length > 0;
 }
 
 function collectToolProvenanceRefs(input: {

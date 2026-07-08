@@ -4,16 +4,33 @@ import type {
 } from '../../shared/contracts/runtime.js';
 import type { CapabilityTier } from '../../system/capabilities/tier-types.js';
 import type { CompositionalPolicyConfig } from '../../system/config/runtime-config-contracts.js';
-import type { EpisodicProcessingRestWindowConfig } from '../../system/config/scheduler-config.js';
+import type {
+  EpisodeSynthesisLaneConfig,
+  EpisodicProcessingRestWindowConfig,
+  NearTurnMemoryCadenceConfig,
+  OrientationRewriteGateConfig,
+  ReflectionNoveltyGateConfig,
+} from '../../system/config/scheduler-config.js';
 import type { EventBus } from '../../shared/event-bus.js';
-import type { LLMProvider } from '../agent/contracts.js';
+import type { LLMProviderPort } from '../agent/contracts.js';
 import type {
   ExtendedToolActivationOptions,
   ExtendedToolActivationResult,
   PostTurnActionInferer,
 } from '../agent/substrate-agent.js';
 import type { MemoryWriter } from '../../faculties/memory/writer.js';
+import type { MemoryStorePort } from '../../faculties/memory/memory-store-port.js';
 import type { EpisodicSynthesizer } from '../../faculties/memory/episodic/synthesis.js';
+import type { SleepCycleEpisodeConsolidator } from '../../faculties/memory/episodic/sleep-consolidation.js';
+import type { EpisodeArcWeaver } from '../../faculties/memory/episodic/arc-formation.js';
+import type { DreamMeaningPass } from '../../faculties/memory/episodic/dream-meaning-pass.js';
+import type { SleeptimeWikiPass } from '../../faculties/wiki/sleeptime-wiki-pass.js';
+import type { NearTurnMemoryScopeClassifierPort } from '../../faculties/memory/near-turn-memory-lane.js';
+import type { ProactiveOutboundDispatcher } from '../intention/proactive-outbound.js';
+import type { OutreachOutboxStore } from '../intention/outreach-outbox.js';
+import type {
+  EpisodicStorePort,
+} from '../../faculties/memory/episodic/store-port.js';
 import type { ReflectionMetacognitionJournalStore } from '../../persistence/journals/reflection-metacognition-journal.js';
 import type { SessionManager } from '../session/manager.js';
 import type { CoreMemoryStore } from '../../faculties/core-memory/store.js';
@@ -25,10 +42,13 @@ import type {
 } from '../intention/appraisal.js';
 import type { PendingFollowUp } from '../intention/pending-follow-ups.js';
 import type { PendingFollowUpStorePort } from '../intention/pending-follow-up-store-port.js';
-import type { CareReminderStore } from '../intention/care-reminders.js';
+import type { CareReminderStorePort } from '../intention/care-reminders.js';
+import type { ScheduledPromptStorePort } from './scheduled-prompt-store-port.js';
 import type { PostTurnActionRuntime } from '../agent/post-turn-action-runtime.js';
 import type { InternalState } from '../self-model/state.js';
 import type { MemoryExtractor } from '../agent/contracts.js';
+import type { PromptRegistryStatePort } from '../identity/prompt-state-port.js';
+import type { OutboundReplyGuardPort } from '../../system/lifecycle/outbound-reply-dedupe.js';
 
 export const DEFERRED_HEARTBEAT_ACTION_KIND = 'heartbeat.run_template';
 
@@ -57,15 +77,20 @@ export interface HeartbeatAgent {
 
 export interface HeartbeatRuntimeOptions {
   eventBus?: EventBus;
-  llmProvider?: LLMProvider;
+  llmProvider?: LLMProviderPort;
   capabilityTier?: CapabilityTier;
   compositionalPolicy?: CompositionalPolicyConfig;
   characterPromptVariablesProvider?: () => Record<string, string>;
   memoryWriter?: Pick<MemoryWriter, 'write'>;
+  promptRegistry?: PromptRegistryStatePort | null;
   reflectionStore?: ReflectionMetacognitionJournalStore;
-  sessionManager?: Pick<SessionManager, 'resolveSessionChannelId' | 'getRecentMessages'>;
+  sessionManager?: Pick<SessionManager, 'resolveSessionChannelId' | 'getRecentMessages'> & Partial<Pick<SessionManager, 'recordSystemMessage' | 'recordAssistantMessage'>>;
   emotionState?: { getState(): EmotionStateSnapshot };
-  contactStore?: Pick<ContactStorePort, 'getById' | 'getEmotionalSnapshot' | 'getEmotionalTimeSeries'>;
+  contactStore?: Pick<ContactStorePort, 'getById' | 'getEmotionalSnapshot' | 'getEmotionalTimeSeries'>
+    & Partial<Pick<
+      ContactStorePort,
+      'listAll' | 'countVerifiedIdentityLinks' | 'getContactMaintenanceWatermark' | 'setContactMaintenanceWatermark'
+    >>;
   getActiveConcerns?: (input: {
     channelId: string;
     canonicalContactKey?: string;
@@ -79,6 +104,7 @@ export interface HeartbeatRuntimeOptions {
     channelId: string;
     canonicalContactKey?: string;
     sourceMessageId: string;
+    formationVAD?: { valence: number; arousal: number; dominance: number };
   }) => Promise<void> | void;
   onIntentionFollowUpDecision?: (input: {
     decision: IntentionActionDecision;
@@ -127,7 +153,8 @@ export interface HeartbeatRuntimeOptions {
     nextDueAt?: string;
   } | undefined;
   pendingFollowUpStore?: PendingFollowUpStorePort | null;
-  careReminderStore?: CareReminderStore | null;
+  careReminderStore?: CareReminderStorePort | null;
+  scheduledPromptStore?: ScheduledPromptStorePort | null;
   onBehavioralPatternOutcome?: (input: {
     channelId: string;
     canonicalContactKey?: string;
@@ -136,9 +163,57 @@ export interface HeartbeatRuntimeOptions {
     observedAtMs?: number;
   }) => Promise<void> | void;
   coreMemoryStore?: Pick<CoreMemoryStore, 'getSnapshot' | 'rethink'>;
-  sleeptimeCadenceTurns?: number;
+  /** JSON-owned near-turn lane cadence (scheduler.json `nearTurnMemory`). */
+  nearTurnMemoryCadence?: NearTurnMemoryCadenceConfig;
+  /**
+   * Canonical group-memory scope classifier (ObservedGroupMemoryScheduler)
+   * so the near-turn and episode-synthesis lanes share the memoryMode/topology
+   * detection used by group extraction instead of duplicating it.
+   */
+  memoryScopeClassifier?: NearTurnMemoryScopeClassifierPort | null;
+  /** Gate + tuning config for the candidate-episode synthesis lane. */
+  episodeSynthesis?: EpisodeSynthesisLaneConfig;
+  /**
+   * Deterministic novelty gate for cadence-fired reflection templates
+   * (scheduler.json `reflectionNovelty`). Manual run_template invocations
+   * bypass the gate.
+   */
+  reflectionNoveltyGate?: ReflectionNoveltyGateConfig;
+  /**
+   * Watermark store for the episode-synthesis lane's deterministic gates and
+   * the reflection-template novelty watermark ("entries since last
+   * reflection" per template/scope).
+   */
+  episodicWatermarkStore?: Pick<
+    EpisodicStorePort,
+    'getProcessingWatermark' | 'upsertProcessingWatermark'
+  > | null;
+  /** Companion aliases for deterministic relevance classification. */
+  companionNames?: readonly string[];
+  /** Companion author ids (e.g. Discord bot id) for mention detection. */
+  companionAuthorIds?: readonly string[];
   episodicSynthesizer?: Pick<EpisodicSynthesizer, 'run'> | null;
+  sleepConsolidator?: Pick<SleepCycleEpisodeConsolidator, 'run'> | null;
+  arcWeaver?: Pick<EpisodeArcWeaver, 'run'> | null;
+  dreamMeaningPass?: Pick<DreamMeaningPass, 'run'> | null;
+  /** Sleeptime wiki update pass (E8.2): runs inside the sleeptime stack after settling. */
+  sleeptimeWikiPass?: Pick<SleeptimeWikiPass, 'run'> | null;
+  proactiveOutbound?: Pick<ProactiveOutboundDispatcher, 'dispatch'> | null;
+  /**
+   * Shared outbound-reply dedupe guard. When present, the deferred-tool-handoff
+   * continuation consults it before delivering its reply and suppresses (with a
+   * loud WARN) a message identical to one already delivered to the channel by
+   * the primary turn — preventing the double-reply loop (psfn-framework-mdxu).
+   */
+  outboundReplyGuard?: OutboundReplyGuardPort | null;
+  outreachOutbox?: OutreachOutboxStore | null;
+  memoryMaintenanceStore?: Pick<
+    MemoryStorePort,
+    'upsertMemoryMaintenanceReview' | 'listActiveMemories' | 'getById' | 'getMemoryMaintenanceDiagnostics'
+  > | null;
+  episodicDiagnosticsStore?: Pick<EpisodicStorePort, 'getMaintenanceDiagnostics'> | null;
   episodicProcessingRestWindow?: EpisodicProcessingRestWindowConfig;
+  orientationRewriteGate?: OrientationRewriteGateConfig;
   intentionAppraisalEnabled?: boolean;
   postTurnActions?: PostTurnActionRuntime;
   vaultAutoPublisher?: { publishReflection(input: {
@@ -155,6 +230,12 @@ export interface HeartbeatRunTemplateResult {
   templateName: string;
   reflection: string;
   silent?: boolean;
+  /**
+   * Set when a cadence-fired run was skipped by the reflection novelty gate
+   * (insufficient new scope entries since the template's last reflection).
+   * Manual run_template invocations never carry this flag.
+   */
+  noveltyGateSkipped?: boolean;
   queued?: boolean;
   queuedVia?: 'scheduler' | 'post_turn';
   deferredAction?: PostTurnActionCandidate;

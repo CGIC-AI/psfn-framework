@@ -1,6 +1,10 @@
 import type { SessionEntry } from '../../../core/session/types.js';
 import type { TurnID } from '../../../shared/contracts/runtime.js';
-import type { ChannelVisibility } from '../../../system/trust/types.js';
+import {
+  evaluateDeterministicGate,
+  type DeterministicGateDefinition,
+} from '../../../shared/gating/deterministic-gate.js';
+import type { ChannelPrivacy } from '../../../system/trust/context-envelope.js';
 import type { ExtractedFact } from '../types.js';
 import { clamp } from './config.js';
 import type {
@@ -195,22 +199,30 @@ export interface ExtractionPreLlmGateDecision {
   userEntryCount: number;
 }
 
+/**
+ * Extraction pre-LLM gate expressed on the shared deterministic-gate primitive
+ * (jpvd.4). Byte-identical to the original hand-rolled decision: an empty
+ * transcript hard-closes first; otherwise the gate opens when any user turn
+ * scores as meaningful (signalCount > 0) OR nothing was explicitly low-signal
+ * (explicitLowSignalEntryCount === 0), and closes as 'low_signal' when a turn
+ * was explicit filler and none was meaningful.
+ */
+export const EXTRACTION_PRE_LLM_GATE: DeterministicGateDefinition = {
+  lane: 'extraction',
+  blockWhen: [{ input: 'recentEntryCount', comparator: 'eq', threshold: 0, reason: 'empty_transcript' }],
+  openWhenAny: [
+    { input: 'signalCount', comparator: 'gt', threshold: 0 },
+    { input: 'explicitLowSignalEntryCount', comparator: 'eq', threshold: 0 },
+  ],
+  closedReason: 'low_signal',
+};
+
 export function evaluateExtractionPreLlmGate(
   recentEntries: readonly SessionEntry[],
 ): ExtractionPreLlmGateDecision {
   const recent = recentEntries
     .filter(entry => typeof entry.content === 'string' && entry.content.trim().length > 0);
   const userEntries = recent.filter(entry => entry.role === 'user');
-  if (recent.length === 0) {
-    return {
-      allowed: false,
-      reason: 'empty_transcript',
-      signalScore: 0,
-      signalCount: 0,
-      recentEntryCount: 0,
-      userEntryCount: 0,
-    };
-  }
 
   let signalScore = 0;
   let signalCount = 0;
@@ -226,10 +238,15 @@ export function evaluateExtractionPreLlmGate(
     }
   }
 
-  const allowed = signalCount > 0 || explicitLowSignalEntryCount === 0;
+  const decision = evaluateDeterministicGate(EXTRACTION_PRE_LLM_GATE, {
+    recentEntryCount: recent.length,
+    signalCount,
+    explicitLowSignalEntryCount,
+  });
+
   return {
-    allowed,
-    ...(allowed ? {} : { reason: 'low_signal' }),
+    allowed: decision.open,
+    ...(decision.open ? {} : { reason: decision.reason as ExtractionPreLlmGateReason }),
     signalScore: Number(signalScore.toFixed(4)),
     signalCount,
     recentEntryCount: recent.length,
@@ -487,7 +504,7 @@ function jaccardSimilarity(left: string[], right: string[]): number {
 
 export function applyChannelImportanceCaps(
   fact: ExtractedFact,
-  channelVisibility: ChannelVisibility,
+  channelVisibility: ChannelPrivacy,
 ): ExtractedFact {
   if (fact.type === 'boundary') return fact;
   if (channelVisibility !== 'public') return fact;
@@ -498,15 +515,17 @@ export function applyChannelImportanceCaps(
 export function buildExtractionSourceRef(
   channelId: string,
   entries: SessionEntry[],
-  channelVisibility: ChannelVisibility,
+  channelVisibility: ChannelPrivacy,
   triggerReason?: string,
   turnId?: TurnID,
+  logicalSessionId?: string,
 ): string {
   const source = resolveExtractionSource(channelId);
   const lineRange = resolveExtractionLineRange(entries);
   const turnToken = turnId ? `|turn:${turnId}` : '';
   const triggerToken = triggerReason ? `|trigger:${triggerReason}` : '';
-  return `${channelId}:extract|source:${source}|session:${channelId}|lines:${lineRange}${turnToken}${triggerToken}|visibility:${channelVisibility}|operation:extract`;
+  const sessionToken = logicalSessionId?.trim() || channelId;
+  return `${channelId}:extract|source:${source}|session:${sessionToken}|lines:${lineRange}${turnToken}${triggerToken}|visibility:${channelVisibility}|operation:extract`;
 }
 
 function resolveExtractionSource(channelId: string): string {

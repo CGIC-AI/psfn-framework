@@ -35,7 +35,7 @@ function buildFileAndWebSection(mutationPolicy?: REPLMutationPolicy): string[] {
   const lines = [
     '### File + Web Tools',
     '- `await read_file(path)` — Read file content through gateway fs policy checks',
-    '- `await list_files(glob?, maxEntries?)` — List workspace-relative files via gateway glob policy',
+    '- `await list_files(glob?, maxEntries?)` — List workspace-relative files via gateway glob policy; returns `{ paths, truncated, scanLimitReached }`',
     '- `await web("fetch", url, { prompt? })` — Guarded remote page fetch via gateway SSRF defenses and the default web lane',
     '- `await web("browse", url, { prompt? })` — Uses the `local_crawler` web lane; policy must explicitly allow it',
     '- `await web("search", query, { maxUrls? })` — Discover and fetch a small URL set for a research question',
@@ -117,7 +117,7 @@ function buildBasePrompt(mutationPolicy?: REPLMutationPolicy): string {
     '',
     '```repl',
     'const files = await list_files("src/**/*.ts", 200);',
-    'print("TypeScript files", files.length);',
+    'print("TypeScript files", files.paths.length, files.truncated);',
     '```',
     '',
     'Then in a follow-up iteration:',

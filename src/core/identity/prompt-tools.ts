@@ -521,13 +521,6 @@ export function createIdentityTool(
   store: PromptLayerStatePort,
   options: IdentityToolOptions = {},
 ): AgentTool<any> {
-  const listTool = createPromptLayerListTool(store);
-  const getTool = createPromptLayerGetTool(store);
-  const diffTool = createIdentityDiffTool(store);
-  const historyTool = createIdentityChangelogTool(store);
-  const updateTool = createPromptLayerUpdateTool(store, options);
-  const rollbackTool = createPromptLayerRollbackTool(store, options);
-  const toggleTool = createPromptLayerToggleTool(store, options);
   const identityCoolingOff = options.identityCoolingOff;
 
   const tool: AgentTool<any> = {
@@ -586,9 +579,9 @@ export function createIdentityTool(
       })),
     }),
     execute: async (
-      toolCallId: string,
+      _toolCallId: string,
       params: Record<string, unknown>,
-      signal?: AbortSignal,
+      _signal?: AbortSignal,
     ): Promise<AgentToolResult<{ isError?: boolean }>> => {
       try {
         const action = resolveIdentityAction(params);
@@ -606,36 +599,34 @@ export function createIdentityTool(
 
         switch (action) {
           case 'list_layers':
-            return listTool.execute(toolCallId, {}, signal);
+            return executePromptLayerListAction(store);
           case 'get_layer':
-            return getTool.execute(toolCallId, params as { layer_id?: string; layer?: { id: string } }, signal);
+            return executePromptLayerGetAction(store, params as { layer_id?: string; layer?: { id: string } });
           case 'diff_layer':
-            return diffTool.execute(toolCallId, params as {
+            return executeIdentityDiffAction(store, params as {
               layer_id: string;
               version?: number;
               to_version?: number;
               max_diff_lines?: number;
-            }, signal);
+            });
           case 'history':
-            return historyTool.execute(toolCallId, params as { layer_id?: string; limit?: number }, signal);
+            return executeIdentityChangelogAction(store, params as { layer_id?: string; limit?: number });
           case 'update_layer':
-            return updateTool.execute(toolCallId, {
+            return executePromptLayerUpdateAction(store, options, {
               layer_id: typeof params.layer_id === 'string' ? params.layer_id : undefined,
               content: typeof params.content === 'string' ? params.content : undefined,
               reason: typeof params.reason === 'string' ? params.reason : undefined,
-              action: 'update',
-            }, signal);
+            });
           case 'rollback_layer':
-            return rollbackTool.execute(toolCallId, {
+            return executePromptLayerRollbackAction(store, options, {
               layer_id: typeof params.layer_id === 'string' ? params.layer_id : undefined,
               version: typeof params.version === 'number' ? params.version : undefined,
               reason: typeof params.reason === 'string' ? params.reason : undefined,
-              action: 'rollback',
-            }, signal);
+            });
           case 'toggle_layer':
-            return toggleTool.execute(toolCallId, {
+            return executePromptLayerToggleAction(store, options, {
               layer_id: typeof params.layer_id === 'string' ? params.layer_id : '',
-            }, signal);
+            });
           case 'update_persona':
             if (!options.cardStore) {
               return textResultWithError('Character-card identity store is not configured.', true);
@@ -669,247 +660,189 @@ export function createIdentityTool(
   );
 }
 
-export function createPromptLayerListTool(store: PromptLayerStatePort): AgentTool<any> {
-  return {
-    name: 'prompt_layer_list',
-    description: 'List all prompt layers in the prompt stack, showing their type, name, enabled status, and priority.',
-    label: 'prompt_layer_list',
-    parameters: Type.Object({}),
-    execute: async (
-      _toolCallId: string,
-      _params: Record<string, never>,
-      _signal?: AbortSignal,
-    ): Promise<AgentToolResult<{ isError?: boolean }>> => {
-      try {
-        const layers = store.getAll();
-        if (layers.length === 0) return textResult('No prompt layers configured.');
+async function executePromptLayerListAction(
+  store: PromptLayerStatePort,
+): Promise<AgentToolResult<{ isError?: boolean }>> {
+  try {
+    const layers = store.getAll();
+    if (layers.length === 0) return textResult('No prompt layers configured.');
 
-        const lines = layers.map(l => {
-          const status = l.enabled ? 'ON' : 'OFF';
-          const meta = [
-            l.channelType ? `channel=${l.channelType}` : null,
-            l.taskKind ? `task=${l.taskKind}` : null,
-          ].filter(Boolean).join(', ');
-          return `[${status}] ${l.type}/${l.name} (id=${l.id}, v${l.version}, priority=${l.priority}${meta ? ', ' + meta : ''})`;
-        });
-        return textResult(lines.join('\n'));
-      } catch (error) {
-        return textResultWithError(`prompt_layer_list failed: ${errorMessage(error)}`, true);
-      }
-    },
-  };
+    const lines = layers.map(l => {
+      const status = l.enabled ? 'ON' : 'OFF';
+      const meta = [
+        l.channelType ? `channel=${l.channelType}` : null,
+        l.taskKind ? `task=${l.taskKind}` : null,
+      ].filter(Boolean).join(', ');
+      return `[${status}] ${l.type}/${l.name} (id=${l.id}, v${l.version}, priority=${l.priority}${meta ? ', ' + meta : ''})`;
+    });
+    return textResult(lines.join('\n'));
+  } catch (error) {
+    return textResultWithError(`prompt_layer_list failed: ${errorMessage(error)}`, true);
+  }
 }
 
-export function createPromptLayerGetTool(store: PromptLayerStatePort): AgentTool<any> {
-  return {
-    name: 'prompt_layer_get',
-    description: 'Get the full content and metadata of a specific prompt layer. Use layer_id or layer.id.',
-    label: 'prompt_layer_get',
-    parameters: Type.Object({
-      layer_id: Type.Optional(Type.String({ description: 'ID of the prompt layer to retrieve (prefix match OK).' })),
-      layer: Type.Optional(Type.Object({
-        id: Type.String({ description: 'Prompt layer ID to retrieve (prefix match OK).' }),
-      })),
-    }),
-    execute: async (
-      _toolCallId: string,
-      params: { layer_id?: string; layer?: { id: string } },
-      _signal?: AbortSignal,
-    ): Promise<AgentToolResult<{ isError?: boolean }>> => {
-      try {
-        const layerId = (params.layer_id ?? params.layer?.id ?? '').trim();
-        if (!layerId) return textResultWithError('prompt_layer_get requires layer_id.', true);
-        const layers = store.getAll();
-        const layer = layers.find(l => l.id === layerId || l.id.startsWith(layerId));
-        if (!layer) return textResultWithError(`Layer not found: ${layerId}`, true);
+async function executePromptLayerGetAction(
+  store: PromptLayerStatePort,
+  params: { layer_id?: string; layer?: { id: string } },
+): Promise<AgentToolResult<{ isError?: boolean }>> {
+  try {
+    const layerId = (params.layer_id ?? params.layer?.id ?? '').trim();
+    if (!layerId) return textResultWithError('prompt_layer_get requires layer_id.', true);
+    const layers = store.getAll();
+    const layer = layers.find(l => l.id === layerId || l.id.startsWith(layerId));
+    if (!layer) return textResultWithError(`Layer not found: ${layerId}`, true);
 
-        const text = [
-          `ID: ${layer.id}`,
-          `Type: ${layer.type}`,
-          `Name: ${layer.name}`,
-          `Enabled: ${layer.enabled}`,
-          `Priority: ${layer.priority}`,
-          `Version: ${layer.version}`,
-          `Updated: ${layer.updatedAt} by ${layer.updatedBy}`,
-          `Checksum: ${layer.checksum}`,
-          layer.channelType ? `Channel: ${layer.channelType}` : null,
-          layer.taskKind ? `Task: ${layer.taskKind}` : null,
-          `\n--- Content ---\n${layer.content}`,
-        ].filter(Boolean).join('\n');
-        return textResult(text);
-      } catch (error) {
-        return textResultWithError(`prompt_layer_get failed: ${errorMessage(error)}`, true);
-      }
-    },
-  };
+    const text = [
+      `ID: ${layer.id}`,
+      `Type: ${layer.type}`,
+      `Name: ${layer.name}`,
+      `Enabled: ${layer.enabled}`,
+      `Priority: ${layer.priority}`,
+      `Version: ${layer.version}`,
+      `Updated: ${layer.updatedAt} by ${layer.updatedBy}`,
+      `Checksum: ${layer.checksum}`,
+      layer.channelType ? `Channel: ${layer.channelType}` : null,
+      layer.taskKind ? `Task: ${layer.taskKind}` : null,
+      `\n--- Content ---\n${layer.content}`,
+    ].filter(Boolean).join('\n');
+    return textResult(text);
+  } catch (error) {
+    return textResultWithError(`prompt_layer_get failed: ${errorMessage(error)}`, true);
+  }
 }
 
-export function createIdentityDiffTool(store: PromptLayerStatePort): AgentTool<any> {
-  return withCapabilityRequirement({
-    name: 'identity_diff',
-    description:
-      'Compare a prompt layer\'s current version to any historical version and return a textual diff summary. Use version or to_version.',
-    label: 'identity_diff',
-    parameters: Type.Object({
-      layer_id: Type.String({ description: 'Prompt layer ID (or prefix) to diff.' }),
-      version: Type.Optional(Type.Number({ description: 'Historical version to compare against.', minimum: 1 })),
-      to_version: Type.Optional(Type.Number({ description: 'Alias for version.', minimum: 1 })),
-      max_diff_lines: Type.Optional(Type.Number({
-        description: `Max changed lines to display (default ${DEFAULT_DIFF_LINE_LIMIT}, max ${MAX_DIFF_LINE_LIMIT}).`,
-        minimum: 1,
-      })),
-    }),
-    execute: async (
-      _toolCallId: string,
-      params: {
-        layer_id: string;
-        version?: number;
-        to_version?: number;
-        max_diff_lines?: number;
-      },
-      _signal?: AbortSignal,
-    ): Promise<AgentToolResult<{ isError?: boolean }>> => {
-      try {
-        const layer = resolvePromptLayerById(store, params.layer_id);
-        if (!layer) return textResultWithError(`Layer not found: ${params.layer_id}`, true);
+async function executeIdentityDiffAction(
+  store: PromptLayerStatePort,
+  params: {
+    layer_id: string;
+    version?: number;
+    to_version?: number;
+    max_diff_lines?: number;
+  },
+): Promise<AgentToolResult<{ isError?: boolean }>> {
+  try {
+    const layer = resolvePromptLayerById(store, params.layer_id);
+    if (!layer) return textResultWithError(`Layer not found: ${params.layer_id}`, true);
 
-        const requestedVersion = Math.floor(params.version ?? params.to_version ?? Number.NaN);
-        if (!Number.isInteger(requestedVersion) || requestedVersion <= 0) {
-          return textResultWithError('version must be a positive integer.', true);
-        }
-        if (requestedVersion > layer.version) {
-          return textResultWithError(
-            `Version ${requestedVersion} is newer than current version ${layer.version}.`,
-            true,
-          );
-        }
+    const requestedVersion = Math.floor(params.version ?? params.to_version ?? Number.NaN);
+    if (!Number.isInteger(requestedVersion) || requestedVersion <= 0) {
+      return textResultWithError('version must be a positive integer.', true);
+    }
+    if (requestedVersion > layer.version) {
+      return textResultWithError(
+        `Version ${requestedVersion} is newer than current version ${layer.version}.`,
+        true,
+      );
+    }
 
-        const history = store.getLayerHistory(layer.id);
-        const baseline = resolveHistoricalPromptVersion(layer, history, requestedVersion);
-        if (!baseline) {
-          return textResultWithError(`No prompt history entry found for version ${requestedVersion}.`, true);
-        }
+    const history = store.getLayerHistory(layer.id);
+    const baseline = resolveHistoricalPromptVersion(layer, history, requestedVersion);
+    if (!baseline) {
+      return textResultWithError(`No prompt history entry found for version ${requestedVersion}.`, true);
+    }
 
-        const maxDiffLines = normalizeOptionalBoundedInteger(
-          params.max_diff_lines,
-          DEFAULT_DIFF_LINE_LIMIT,
-          1,
-          MAX_DIFF_LINE_LIMIT,
-        );
-        const diff = buildPromptLineDiff(baseline.content, layer.content, maxDiffLines);
+    const maxDiffLines = normalizeOptionalBoundedInteger(
+      params.max_diff_lines,
+      DEFAULT_DIFF_LINE_LIMIT,
+      1,
+      MAX_DIFF_LINE_LIMIT,
+    );
+    const diff = buildPromptLineDiff(baseline.content, layer.content, maxDiffLines);
 
-        const lines = [
-          `Identity diff for ${layer.type}/${layer.name} (${layer.id.slice(0, 8)})`,
-          `Compared versions: v${requestedVersion} -> v${layer.version}`,
-          `Checksums: ${baseline.checksum} -> ${layer.checksum}`,
-          `Changed lines: +${diff.added} / -${diff.removed}`,
-        ];
+    const lines = [
+      `Identity diff for ${layer.type}/${layer.name} (${layer.id.slice(0, 8)})`,
+      `Compared versions: v${requestedVersion} -> v${layer.version}`,
+      `Checksums: ${baseline.checksum} -> ${layer.checksum}`,
+      `Changed lines: +${diff.added} / -${diff.removed}`,
+    ];
 
-        if (requestedVersion === layer.version) {
-          lines.push('No changes: requested version is the current version.');
-          return textResult(lines.join('\n'));
-        }
+    if (requestedVersion === layer.version) {
+      lines.push('No changes: requested version is the current version.');
+      return textResult(lines.join('\n'));
+    }
 
-        if (diff.lines.length === 0) {
-          lines.push('No textual changes between these versions (metadata-only update).');
-          return textResult(lines.join('\n'));
-        }
+    if (diff.lines.length === 0) {
+      lines.push('No textual changes between these versions (metadata-only update).');
+      return textResult(lines.join('\n'));
+    }
 
-        lines.push('', '--- Diff ---', ...diff.lines);
-        if (diff.hiddenLineCount > 0) {
-          lines.push(`... ${diff.hiddenLineCount} more changed line(s) omitted.`);
-        }
-        return textResult(lines.join('\n'));
-      } catch (error) {
-        return textResultWithError(`identity_diff failed: ${errorMessage(error)}`, true);
-      }
-    },
-  }, 'identity.read');
+    lines.push('', '--- Diff ---', ...diff.lines);
+    if (diff.hiddenLineCount > 0) {
+      lines.push(`... ${diff.hiddenLineCount} more changed line(s) omitted.`);
+    }
+    return textResult(lines.join('\n'));
+  } catch (error) {
+    return textResultWithError(`identity_diff failed: ${errorMessage(error)}`, true);
+  }
 }
 
-export function createIdentityChangelogTool(store: PromptLayerStatePort): AgentTool<any> {
-  return withCapabilityRequirement({
-    name: 'identity_changelog',
-    description:
-      'Generate a changelog of prompt-layer identity modifications with who changed what, when, and why.',
-    label: 'identity_changelog',
-    parameters: Type.Object({
-      layer_id: Type.Optional(Type.String({ description: 'Optional prompt layer ID (or prefix) filter.' })),
-      limit: Type.Optional(Type.Number({
-        description: `Maximum number of changelog entries (default ${DEFAULT_CHANGELOG_LIMIT}, max ${MAX_CHANGELOG_LIMIT}).`,
-        minimum: 1,
-      })),
-    }),
-    execute: async (
-      _toolCallId: string,
-      params: {
-        layer_id?: string;
-        limit?: number;
-      },
-      _signal?: AbortSignal,
-    ): Promise<AgentToolResult<{ isError?: boolean }>> => {
-      try {
-        const limit = normalizeOptionalBoundedInteger(
-          params.limit,
-          DEFAULT_CHANGELOG_LIMIT,
-          1,
-          MAX_CHANGELOG_LIMIT,
-        );
+async function executeIdentityChangelogAction(
+  store: PromptLayerStatePort,
+  params: {
+    layer_id?: string;
+    limit?: number;
+  },
+): Promise<AgentToolResult<{ isError?: boolean }>> {
+  try {
+    const limit = normalizeOptionalBoundedInteger(
+      params.limit,
+      DEFAULT_CHANGELOG_LIMIT,
+      1,
+      MAX_CHANGELOG_LIMIT,
+    );
 
-        const layerFilter = typeof params.layer_id === 'string' && params.layer_id.trim().length > 0
-          ? resolvePromptLayerById(store, params.layer_id)
-          : null;
-        if (params.layer_id && !layerFilter) {
-          return textResultWithError(`Layer not found: ${params.layer_id}`, true);
-        }
+    const layerFilter = typeof params.layer_id === 'string' && params.layer_id.trim().length > 0
+      ? resolvePromptLayerById(store, params.layer_id)
+      : null;
+    if (params.layer_id && !layerFilter) {
+      return textResultWithError(`Layer not found: ${params.layer_id}`, true);
+    }
 
-        const history = layerFilter
-          ? store.getLayerHistory(layerFilter.id)
-          : store.getHistory();
-        if (history.length === 0) {
-          return textResult('No prompt changes recorded yet.');
-        }
+    const history = layerFilter
+      ? store.getLayerHistory(layerFilter.id)
+      : store.getHistory();
+    if (history.length === 0) {
+      return textResult('No prompt changes recorded yet.');
+    }
 
-        const layerTypeById = new Map(store.getAll().map(layer => [layer.id, layer.type]));
-        const sorted = [...history].sort((left, right) => {
-          const timeDelta = new Date(right.timestamp).getTime() - new Date(left.timestamp).getTime();
-          if (timeDelta !== 0) return timeDelta;
-          return right.version - left.version;
-        });
+    const layerTypeById = new Map(store.getAll().map(layer => [layer.id, layer.type]));
+    const sorted = [...history].sort((left, right) => {
+      const timeDelta = new Date(right.timestamp).getTime() - new Date(left.timestamp).getTime();
+      if (timeDelta !== 0) return timeDelta;
+      return right.version - left.version;
+    });
 
-        const selected = sorted.slice(0, limit);
-        const heading = layerFilter
-          ? `Identity changelog for ${layerFilter.type}/${layerFilter.name} (${layerFilter.id.slice(0, 8)})`
-          : 'Identity changelog for all prompt layers';
+    const selected = sorted.slice(0, limit);
+    const heading = layerFilter
+      ? `Identity changelog for ${layerFilter.type}/${layerFilter.name} (${layerFilter.id.slice(0, 8)})`
+      : 'Identity changelog for all prompt layers';
 
-        const lines = selected.map(entry => {
-          const lineDelta = countLineChanges(entry.previousContent, entry.newContent);
-          const layerType = layerTypeById.get(entry.layerId) ?? 'unknown';
-          const reason = entry.reason ?? 'unspecified';
-          const deltaSummary = (lineDelta.added === 0 && lineDelta.removed === 0)
-            ? 'metadata-only'
-            : `+${lineDelta.added}/-${lineDelta.removed} lines`;
-          return [
-            `- ${entry.timestamp}`,
-            `${layerType}/${entry.layerName}`,
-            `v${entry.version}->v${entry.version + 1}`,
-            `by ${entry.updatedBy}`,
-            `what: ${deltaSummary}`,
-            `why: ${reason}`,
-          ].join(' | ');
-        });
+    const lines = selected.map(entry => {
+      const lineDelta = countLineChanges(entry.previousContent, entry.newContent);
+      const layerType = layerTypeById.get(entry.layerId) ?? 'unknown';
+      const reason = entry.reason ?? 'unspecified';
+      const deltaSummary = (lineDelta.added === 0 && lineDelta.removed === 0)
+        ? 'metadata-only'
+        : `+${lineDelta.added}/-${lineDelta.removed} lines`;
+      return [
+        `- ${entry.timestamp}`,
+        `${layerType}/${entry.layerName}`,
+        `v${entry.version}->v${entry.version + 1}`,
+        `by ${entry.updatedBy}`,
+        `what: ${deltaSummary}`,
+        `why: ${reason}`,
+      ].join(' | ');
+    });
 
-        const hiddenCount = sorted.length - selected.length;
-        if (hiddenCount > 0) {
-          lines.push(`... ${hiddenCount} older change(s) omitted.`);
-        }
+    const hiddenCount = sorted.length - selected.length;
+    if (hiddenCount > 0) {
+      lines.push(`... ${hiddenCount} older change(s) omitted.`);
+    }
 
-        return textResult([heading, ...lines].join('\n'));
-      } catch (error) {
-        return textResultWithError(`identity_changelog failed: ${errorMessage(error)}`, true);
-      }
-    },
-  }, 'identity.read');
+    return textResult([heading, ...lines].join('\n'));
+  } catch (error) {
+    return textResultWithError(`identity_changelog failed: ${errorMessage(error)}`, true);
+  }
 }
 
 export interface PromptLayerUpdateToolOptions {
@@ -918,301 +851,188 @@ export interface PromptLayerUpdateToolOptions {
   confirmationQueue?: ApprovalQueuePort;
 }
 
-export function createPromptLayerUpdateTool(
+async function executePromptLayerUpdateAction(
   store: PromptLayerStatePort,
-  options: PromptLayerUpdateToolOptions = {},
-): AgentTool<any> {
-  const identityCoolingOff = options.identityCoolingOff;
+  options: PromptLayerUpdateToolOptions,
+  params: {
+    layer_id?: string;
+    content?: string;
+    reason?: string;
+  },
+): Promise<AgentToolResult<{ isError?: boolean }>> {
   const getCapabilityTier = options.getCapabilityTier ?? (() => 'autonomous' as CapabilityTier);
   const confirmationQueue = options.confirmationQueue;
 
-  const tool: AgentTool<any> = {
-    name: 'prompt_layer_update',
-    description:
-      'Update the content of a prompt layer. Access is controlled by capability tier; history is preserved for rollback. ' +
-      'Base and operator identity-layer edits are queued for operator confirmation.',
-    label: 'prompt_layer_update',
-    parameters: Type.Object({
-      layer_id: Type.Optional(Type.String({ description: 'ID of the prompt layer to update (prefix match OK).' })),
-      content: Type.Optional(Type.String({ description: 'New content for the layer.' })),
-      reason: Type.Optional(Type.String({ description: 'Short rationale for the identity edit.' })),
-      action: Type.Optional(
-        Type.Union([
-          Type.Literal('update'),
-          Type.Literal('commit'),
-          Type.Literal('cancel'),
-        ], { description: 'Action mode. Default: update.' }),
-      ),
-      stage_id: Type.Optional(Type.String({ description: 'Staged base-edit id used for commit/cancel.' })),
-    }),
-    execute: async (
-      _toolCallId: string,
-      params: {
-        layer_id?: string;
-        content?: string;
-        reason?: string;
-        action?: 'update' | 'commit' | 'cancel';
-        stage_id?: string;
-      },
-      _signal?: AbortSignal,
-    ): Promise<AgentToolResult<{ isError?: boolean }>> => {
-      try {
-        const action = params.action ?? 'update';
+  try {
+    const layerId = params.layer_id?.trim();
+    const content = params.content;
+    if (!layerId) return textResultWithError('layer_id is required.', true);
+    if (typeof content !== 'string') return textResultWithError('content is required.', true);
 
-        if (action === 'cancel' || action === 'commit') {
-          return handlePromptLayerStagedAction(store, identityCoolingOff, {
-            action,
-            stage_id: params.stage_id,
-            reason: params.reason,
-          }, {
-            commitReason: 'Committed staged prompt-layer update via prompt_layer_update',
-            commitSuccessMessage: (updated, stageId) =>
-              `Committed staged update for "${updated.name}" to v${updated.version} (stage_id: ${stageId}).`,
-            cancelSuccessMessage: (stageId) =>
-              `Cancelled staged base-layer update (stage_id: ${stageId}).`,
-          });
-        }
+    const layer = resolvePromptLayerById(store, layerId);
+    if (!layer) return textResultWithError(`Layer not found: ${layerId}`, true);
+    if (isCanonicalCharacterFoundationLayer(layer)) {
+      return textResultWithError(CARD_BACKED_FOUNDATION_PROMPT_MESSAGE, true);
+    }
 
-        const layerId = params.layer_id?.trim();
-        const content = params.content;
-        if (!layerId) return textResultWithError('layer_id is required.', true);
-        if (typeof content !== 'string') return textResultWithError('content is required.', true);
-
-        const layer = resolvePromptLayerById(store, layerId);
-        if (!layer) return textResultWithError(`Layer not found: ${layerId}`, true);
-        if (isCanonicalCharacterFoundationLayer(layer)) {
-          return textResultWithError(CARD_BACKED_FOUNDATION_PROMPT_MESSAGE, true);
-        }
-
-        const tier = getCapabilityTier();
-        if (isProtectedPromptLayer(layer)) {
-          const reason = normalizeReason(params.reason) ?? 'Prompt layer updated via prompt_layer_update';
-          if (!confirmationQueue) {
-            return textResultWithError(
-              `${layer.type} identity layer updates require confirmation queue support.`,
-              true,
-            );
-          }
-          const entry = enqueueProtectedPromptLayerProposal(store, confirmationQueue, {
-            action: 'update',
-            layer,
-            tier,
-            reason,
-            nextContent: content,
-          });
-          return textResult(
-            protectedPromptLayerProposalQueuedText(entry, layer, 'update'),
-          );
-        }
-
-        const reason = normalizeReason(params.reason) ?? 'Prompt layer updated via prompt_layer_update';
-        const updated = store.update(layer.id, content, 'agent', {}, reason);
-        return textResult(`Updated layer "${updated.name}" to v${updated.version} (checksum: ${updated.checksum})`);
-      } catch (error) {
-        return textResultWithError(`prompt_layer_update failed: ${errorMessage(error)}`, true);
-      }
-    },
-  };
-
-  return withCapabilityRequirement(tool, (params) => {
-    return resolvePromptLayerWriteCapabilityForAction(store, identityCoolingOff, params);
-  });
-}
-
-export function createPromptLayerRollbackTool(
-  store: PromptLayerStatePort,
-  options: PromptLayerUpdateToolOptions = {},
-): AgentTool<any> {
-  const identityCoolingOff = options.identityCoolingOff;
-  const getCapabilityTier = options.getCapabilityTier ?? (() => 'autonomous' as CapabilityTier);
-  const confirmationQueue = options.confirmationQueue;
-
-  const tool: AgentTool<any> = {
-    name: 'prompt_layer_rollback',
-    description:
-      'Rollback a prompt layer to historical content. Access is controlled by capability tier. ' +
-      'Base and operator identity-layer rollbacks are queued for operator confirmation.',
-    label: 'prompt_layer_rollback',
-    parameters: Type.Object({
-      layer_id: Type.Optional(Type.String({ description: 'ID of the prompt layer to roll back (prefix match OK).' })),
-      version: Type.Optional(Type.Number({ description: 'Historical version to restore.', minimum: 1 })),
-      reason: Type.Optional(Type.String({ description: 'Short rationale for the rollback.' })),
-      action: Type.Optional(
-        Type.Union([
-          Type.Literal('rollback'),
-          Type.Literal('commit'),
-          Type.Literal('cancel'),
-        ], { description: 'Action mode. Default: rollback.' }),
-      ),
-      stage_id: Type.Optional(Type.String({ description: 'Staged base-rollback id used for commit/cancel.' })),
-    }),
-    execute: async (
-      _toolCallId: string,
-      params: {
-        layer_id?: string;
-        version?: number;
-        reason?: string;
-        action?: 'rollback' | 'commit' | 'cancel';
-        stage_id?: string;
-      },
-      _signal?: AbortSignal,
-    ): Promise<AgentToolResult<{ isError?: boolean }>> => {
-      try {
-        const action = params.action ?? 'rollback';
-        if (action === 'cancel' || action === 'commit') {
-          return handlePromptLayerStagedAction(store, identityCoolingOff, {
-            action,
-            stage_id: params.stage_id,
-            reason: params.reason,
-          }, {
-            commitReason: 'Committed staged prompt-layer rollback via prompt_layer_rollback',
-            commitSuccessMessage: (updated, stageId) =>
-              `Committed staged rollback for "${updated.name}" to v${updated.version} (stage_id: ${stageId}).`,
-            cancelSuccessMessage: (stageId) =>
-              `Cancelled staged base-layer rollback (stage_id: ${stageId}).`,
-          });
-        }
-
-        const layerId = params.layer_id?.trim();
-        if (!layerId) return textResultWithError('layer_id is required.', true);
-        if (typeof params.version !== 'number' || !Number.isInteger(params.version) || params.version <= 0) {
-          return textResultWithError('version must be a positive integer.', true);
-        }
-
-        const layer = resolvePromptLayerById(store, layerId);
-        if (!layer) return textResultWithError(`Layer not found: ${layerId}`, true);
-        if (isCanonicalCharacterFoundationLayer(layer)) {
-          return textResultWithError(CARD_BACKED_FOUNDATION_PROMPT_MESSAGE, true);
-        }
-
-        const requestedVersion = params.version;
-        if (requestedVersion > layer.version) {
-          return textResultWithError(
-            `Version ${requestedVersion} is newer than current version ${layer.version}.`,
-            true,
-          );
-        }
-        if (requestedVersion === layer.version) {
-          return textResult(`Layer "${layer.name}" is already at v${requestedVersion}; no rollback needed.`);
-        }
-
-        const history = store.getLayerHistory(layer.id);
-        const baseline = resolveHistoricalPromptVersion(layer, history, requestedVersion);
-        if (!baseline) {
-          return textResultWithError(`No prompt history entry found for version ${requestedVersion}.`, true);
-        }
-        if (baseline.content === layer.content) {
-          return textResult(
-            `Layer "${layer.name}" already matches content from v${requestedVersion}; no rollback applied.`,
-          );
-        }
-
-        const tier = getCapabilityTier();
-        if (isProtectedPromptLayer(layer)) {
-          const reason = normalizeReason(params.reason)
-            ?? `Prompt layer rolled back via prompt_layer_rollback to version ${requestedVersion}`;
-          if (!confirmationQueue) {
-            return textResultWithError(
-              `${layer.type} identity layer rollbacks require confirmation queue support.`,
-              true,
-            );
-          }
-          const entry = enqueueProtectedPromptLayerProposal(store, confirmationQueue, {
-            action: 'rollback',
-            layer,
-            tier,
-            reason,
-            nextContent: baseline.content,
-            requestedVersion,
-          });
-          return textResult(
-            protectedPromptLayerProposalQueuedText(entry, layer, 'rollback'),
-          );
-        }
-
-        const reason = normalizeReason(params.reason)
-          ?? `Prompt layer rolled back via prompt_layer_rollback to version ${requestedVersion}`;
-        const updated = store.update(layer.id, baseline.content, 'agent', {}, reason);
-        return textResult(
-          `Rolled back layer "${updated.name}" to v${requestedVersion} content ` +
-          `(now v${updated.version}, checksum: ${updated.checksum})`,
+    const tier = getCapabilityTier();
+    if (isProtectedPromptLayer(layer)) {
+      const reason = normalizeReason(params.reason) ?? 'Prompt layer updated via prompt_layer_update';
+      if (!confirmationQueue) {
+        return textResultWithError(
+          `${layer.type} identity layer updates require confirmation queue support.`,
+          true,
         );
-      } catch (error) {
-        return textResultWithError(`prompt_layer_rollback failed: ${errorMessage(error)}`, true);
       }
-    },
-  };
+      const entry = enqueueProtectedPromptLayerProposal(store, confirmationQueue, {
+        action: 'update',
+        layer,
+        tier,
+        reason,
+        nextContent: content,
+      });
+      return textResult(
+        protectedPromptLayerProposalQueuedText(entry, layer, 'update'),
+      );
+    }
 
-  return withCapabilityRequirement(tool, (params) => {
-    return resolvePromptLayerWriteCapabilityForAction(store, identityCoolingOff, params);
-  });
+    const reason = normalizeReason(params.reason) ?? 'Prompt layer updated via prompt_layer_update';
+    const updated = store.update(layer.id, content, 'agent', {}, reason);
+    return textResult(`Updated layer "${updated.name}" to v${updated.version} (checksum: ${updated.checksum})`);
+  } catch (error) {
+    return textResultWithError(`prompt_layer_update failed: ${errorMessage(error)}`, true);
+  }
 }
 
-export function createPromptLayerToggleTool(
+async function executePromptLayerRollbackAction(
   store: PromptLayerStatePort,
-  options: PromptLayerUpdateToolOptions = {},
-): AgentTool<any> {
+  options: PromptLayerUpdateToolOptions,
+  params: {
+    layer_id?: string;
+    version?: number;
+    reason?: string;
+  },
+): Promise<AgentToolResult<{ isError?: boolean }>> {
   const getCapabilityTier = options.getCapabilityTier ?? (() => 'autonomous' as CapabilityTier);
   const confirmationQueue = options.confirmationQueue;
-  const tool: AgentTool<any> = {
-    name: 'prompt_layer_toggle',
-    description:
-      'Toggle a prompt layer on/off. Access is controlled by capability tier. '
-      + 'Successful runtime/channel/task toggles return JSON with layerId, previousEnabled, enabled, and state.',
-    label: 'prompt_layer_toggle',
-    parameters: Type.Object({
-      layer_id: Type.String({ description: 'ID of the prompt layer to toggle (prefix match OK).' }),
-    }),
-    execute: async (
-      _toolCallId: string,
-      params: { layer_id: string },
-      _signal?: AbortSignal,
-    ): Promise<AgentToolResult<{ isError?: boolean }>> => {
-      try {
-        const layerId = typeof params.layer_id === 'string' ? params.layer_id.trim() : '';
-        if (!layerId) return textResultWithError('layer_id is required.', true);
-        const layer = resolvePromptLayerById(store, layerId);
-        if (!layer) return textResultWithError(`Layer not found: ${layerId}`, true);
-        if (isCanonicalCharacterFoundationLayer(layer)) {
-          return textResultWithError(CARD_BACKED_FOUNDATION_PROMPT_MESSAGE, true);
-        }
-        if (isProtectedPromptLayer(layer)) {
-          if (!confirmationQueue) {
-            return textResultWithError(
-              `${layer.type} identity layer toggles require confirmation queue support.`,
-              true,
-            );
-          }
-          const entry = enqueueProtectedPromptLayerProposal(store, confirmationQueue, {
-            action: 'toggle',
-            layer,
-            tier: getCapabilityTier(),
-            reason: 'Prompt layer toggle requested via prompt_layer_toggle',
-            nextEnabled: !layer.enabled,
-          });
-          return textResult(
-            protectedPromptLayerProposalQueuedText(entry, layer, 'toggle'),
-          );
-        }
 
-        const previousEnabled = layer.enabled;
-        const toggled = store.toggle(layer.id);
-        return textResult(JSON.stringify({
-          action: 'toggle_layer',
-          layerId: toggled.id,
-          layerName: toggled.name,
-          layerType: toggled.type,
-          previousEnabled,
-          enabled: toggled.enabled,
-          state: toggled.enabled ? 'enabled' : 'disabled',
-        }, null, 2));
-      } catch (error) {
-        return textResultWithError(`prompt_layer_toggle failed: ${errorMessage(error)}`, true);
+  try {
+    const layerId = params.layer_id?.trim();
+    if (!layerId) return textResultWithError('layer_id is required.', true);
+    if (typeof params.version !== 'number' || !Number.isInteger(params.version) || params.version <= 0) {
+      return textResultWithError('version must be a positive integer.', true);
+    }
+
+    const layer = resolvePromptLayerById(store, layerId);
+    if (!layer) return textResultWithError(`Layer not found: ${layerId}`, true);
+    if (isCanonicalCharacterFoundationLayer(layer)) {
+      return textResultWithError(CARD_BACKED_FOUNDATION_PROMPT_MESSAGE, true);
+    }
+
+    const requestedVersion = params.version;
+    if (requestedVersion > layer.version) {
+      return textResultWithError(
+        `Version ${requestedVersion} is newer than current version ${layer.version}.`,
+        true,
+      );
+    }
+    if (requestedVersion === layer.version) {
+      return textResult(`Layer "${layer.name}" is already at v${requestedVersion}; no rollback needed.`);
+    }
+
+    const history = store.getLayerHistory(layer.id);
+    const baseline = resolveHistoricalPromptVersion(layer, history, requestedVersion);
+    if (!baseline) {
+      return textResultWithError(`No prompt history entry found for version ${requestedVersion}.`, true);
+    }
+    if (baseline.content === layer.content) {
+      return textResult(
+        `Layer "${layer.name}" already matches content from v${requestedVersion}; no rollback applied.`,
+      );
+    }
+
+    const tier = getCapabilityTier();
+    if (isProtectedPromptLayer(layer)) {
+      const reason = normalizeReason(params.reason)
+        ?? `Prompt layer rolled back via prompt_layer_rollback to version ${requestedVersion}`;
+      if (!confirmationQueue) {
+        return textResultWithError(
+          `${layer.type} identity layer rollbacks require confirmation queue support.`,
+          true,
+        );
       }
-    },
-  };
+      const entry = enqueueProtectedPromptLayerProposal(store, confirmationQueue, {
+        action: 'rollback',
+        layer,
+        tier,
+        reason,
+        nextContent: baseline.content,
+        requestedVersion,
+      });
+      return textResult(
+        protectedPromptLayerProposalQueuedText(entry, layer, 'rollback'),
+      );
+    }
 
-  return withCapabilityRequirement(tool, (params) =>
-    resolvePromptLayerWriteCapability(store, String(params.layer_id ?? '')),
-  );
+    const reason = normalizeReason(params.reason)
+      ?? `Prompt layer rolled back via prompt_layer_rollback to version ${requestedVersion}`;
+    const updated = store.update(layer.id, baseline.content, 'agent', {}, reason);
+    return textResult(
+      `Rolled back layer "${updated.name}" to v${requestedVersion} content ` +
+      `(now v${updated.version}, checksum: ${updated.checksum})`,
+    );
+  } catch (error) {
+    return textResultWithError(`prompt_layer_rollback failed: ${errorMessage(error)}`, true);
+  }
+}
+
+async function executePromptLayerToggleAction(
+  store: PromptLayerStatePort,
+  options: PromptLayerUpdateToolOptions,
+  params: { layer_id: string },
+): Promise<AgentToolResult<{ isError?: boolean }>> {
+  const getCapabilityTier = options.getCapabilityTier ?? (() => 'autonomous' as CapabilityTier);
+  const confirmationQueue = options.confirmationQueue;
+
+  try {
+    const layerId = typeof params.layer_id === 'string' ? params.layer_id.trim() : '';
+    if (!layerId) return textResultWithError('layer_id is required.', true);
+    const layer = resolvePromptLayerById(store, layerId);
+    if (!layer) return textResultWithError(`Layer not found: ${layerId}`, true);
+    if (isCanonicalCharacterFoundationLayer(layer)) {
+      return textResultWithError(CARD_BACKED_FOUNDATION_PROMPT_MESSAGE, true);
+    }
+    if (isProtectedPromptLayer(layer)) {
+      if (!confirmationQueue) {
+        return textResultWithError(
+          `${layer.type} identity layer toggles require confirmation queue support.`,
+          true,
+        );
+      }
+      const entry = enqueueProtectedPromptLayerProposal(store, confirmationQueue, {
+        action: 'toggle',
+        layer,
+        tier: getCapabilityTier(),
+        reason: 'Prompt layer toggle requested via prompt_layer_toggle',
+        nextEnabled: !layer.enabled,
+      });
+      return textResult(
+        protectedPromptLayerProposalQueuedText(entry, layer, 'toggle'),
+      );
+    }
+
+    const previousEnabled = layer.enabled;
+    const toggled = store.toggle(layer.id);
+    return textResult(JSON.stringify({
+      action: 'toggle_layer',
+      layerId: toggled.id,
+      layerName: toggled.name,
+      layerType: toggled.type,
+      previousEnabled,
+      enabled: toggled.enabled,
+      state: toggled.enabled ? 'enabled' : 'disabled',
+    }, null, 2));
+  } catch (error) {
+    return textResultWithError(`prompt_layer_toggle failed: ${errorMessage(error)}`, true);
+  }
 }

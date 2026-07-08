@@ -1,21 +1,26 @@
 import { spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
-import { Type } from '@sinclair/typebox';
-import type { AgentTool, AgentToolResult } from '@mariozechner/pi-agent-core';
+import type { AgentToolResult } from '@mariozechner/pi-agent-core';
 import type { LLMProviderPort } from '../agent/contracts.js';
 import type { SessionEntry, JournalEntry } from '../session/types.js';
 import { getRequestContext } from '../../primitives/llm/request-context.js';
-import type { ChannelVisibility, TrustLevel } from '../../system/trust/types.js';
+import type { TrustLevel } from '../../system/trust/types.js';
+import type { PromptRegistryStatePort } from '../identity/prompt-state-port.js';
+import { normalizeChannelPrivacy, type ChannelPrivacy } from '../../system/trust/context-envelope.js';
 import type { TranscriptSearchPort } from '../../persistence/sessions/transcript-search-port.js';
 import {
   canViewerAccessSessionHit,
+  resolveSessionSearchRouteLabel,
   resolveSessionSearchHitVisibility,
   runSessionSearch,
   truncateSessionSearchSnippet,
+  type SessionSearchRouteLabel,
+  type SessionSearchRouteStateProvider,
   type SessionSearchViewerContext,
 } from '../session/search-runtime.js';
 import { textResult, textResultWithError } from './results.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
+import { isCogSecTombstoneSessionEntry } from '../cogsec/tombstones.js';
 
 const DEFAULT_SESSION_GREP_LIMIT = 10;
 const MAX_SESSION_GREP_LIMIT = 50;
@@ -29,11 +34,12 @@ export interface SessionGrepHitResult {
   messageId: number;
   role: SessionEntry['role'];
   timestamp: number;
-  channelVisibility: ChannelVisibility;
+  channelVisibility: ChannelPrivacy;
   authorName?: string;
   filePath: string;
   lineNumber: number;
   snippet: string;
+  sessionRoute?: SessionSearchRouteLabel;
 }
 
 export interface SessionGrepResult {
@@ -69,6 +75,18 @@ interface SessionGrepRunnerParams {
 export interface SessionGrepToolOptions {
   sessionsDir: string;
   runRipgrep?: (params: SessionGrepRunnerParams) => Promise<SessionGrepRunnerResult>;
+  sessionRouteState?: SessionSearchRouteStateProvider;
+}
+
+function asSessionRouteStateProvider(value: unknown): SessionSearchRouteStateProvider | undefined {
+  const candidate = value as {
+    getRouteForLogicalSession?: unknown;
+    getSessionRouteForLogicalSession?: unknown;
+  } | null | undefined;
+  return typeof candidate?.getRouteForLogicalSession === 'function'
+    || typeof candidate?.getSessionRouteForLogicalSession === 'function'
+    ? value as SessionSearchRouteStateProvider
+    : undefined;
 }
 
 function normalizeOptionalTrustLevel(value: unknown): TrustLevel | undefined {
@@ -83,16 +101,8 @@ function normalizeOptionalTrustLevel(value: unknown): TrustLevel | undefined {
   }
 }
 
-function normalizeOptionalChannelVisibility(value: unknown): ChannelVisibility | undefined {
-  switch (value) {
-    case 'private':
-    case 'semi_private':
-    case 'public':
-    case 'broadcast':
-      return value;
-    default:
-      return undefined;
-  }
+function normalizeOptionalChannelVisibility(value: unknown): ChannelPrivacy | undefined {
+  return normalizeChannelPrivacy(value);
 }
 
 function resolveViewerContextFromRequest(): SessionSearchViewerContext {
@@ -101,7 +111,7 @@ function resolveViewerContextFromRequest(): SessionSearchViewerContext {
     ? requestContext.channelId.trim()
     : undefined;
   const trustLevel = normalizeOptionalTrustLevel(requestContext?.viewerTrustLevel);
-  const channelVisibility = normalizeOptionalChannelVisibility(requestContext?.viewerChannelVisibility);
+  const channelVisibility = normalizeOptionalChannelVisibility(requestContext?.viewerChannelPrivacy);
   return {
     ...(channelId ? { channelId } : {}),
     ...(trustLevel ? { trustLevel } : {}),
@@ -315,182 +325,126 @@ async function runRipgrepSearch(params: SessionGrepRunnerParams): Promise<Sessio
   });
 }
 
-export function createSessionSearchTool(
-  transcriptSearch: TranscriptSearchPort,
-  llmProvider: LLMProviderPort,
-): AgentTool<any> {
-  return {
-    name: 'session_search',
-    label: 'session_search',
-    description:
-      'Search archived L0 session transcripts with the fast keyword index. '
-      + 'Use query (or keyword) for the search text. '
-      + 'Use summarize=true only when you want a short synthesis; raw hits are cheaper.',
-    parameters: Type.Object({
-      query: Type.Optional(Type.String({
-        minLength: 1,
-        description: 'Keyword or phrase query to search in archived transcripts.',
-      })),
-      keyword: Type.Optional(Type.String({
-        minLength: 1,
-        description: 'Alias for query.',
-      })),
-      limit: Type.Optional(Type.Integer({
-        minimum: 1,
-        maximum: 25,
-        description: 'Maximum number of visible hits to return (default 8).',
-      })),
-      channelId: Type.Optional(Type.String({
-        minLength: 1,
-        description: 'Optional exact channel/session scope filter.',
-      })),
-      summarize: Type.Optional(Type.Boolean({
-        description: 'When true, adds a short natural-language synthesis over the visible hits.',
-      })),
-    }),
-    execute: async (
-      _toolCallId: string,
-      params: {
-        query?: string;
-        keyword?: string;
-        limit?: number;
-        channelId?: string;
-        summarize?: boolean;
-      },
-      _signal?: AbortSignal,
-    ): Promise<AgentToolResult<{ isError?: boolean }>> => {
-      const query = (params.query ?? params.keyword ?? '').trim();
-      if (!query) {
-        return textResultWithError('session_search requires a non-empty query.', true);
-      }
-
-      const result = await runSessionSearch({
-        transcriptSearch,
-        llmProvider,
-        query,
-        limit: params.limit,
-        summarize: params.summarize === true,
-        targetChannelId: params.channelId,
-        viewer: resolveViewerContextFromRequest(),
-      });
-      return textResult(JSON.stringify(result, null, 2));
-    },
-  };
+export interface SessionSearchActionOptions {
+  transcriptSearch: TranscriptSearchPort;
+  llmProvider: LLMProviderPort;
+  sessionRouteState?: SessionSearchRouteStateProvider;
+  promptRegistry?: PromptRegistryStatePort | null;
 }
 
-export function createSessionGrepTool(
+export interface SessionSearchActionParams {
+  query?: string;
+  limit?: number;
+  channelId?: string;
+  summarize?: boolean;
+}
+
+export async function executeSessionSearchAction(
+  options: SessionSearchActionOptions,
+  params: SessionSearchActionParams,
+): Promise<AgentToolResult<{ isError?: boolean }>> {
+  const query = (params.query ?? '').trim();
+  if (!query) {
+    return textResultWithError('session_search requires a non-empty query.', true);
+  }
+
+  const result = await runSessionSearch({
+    transcriptSearch: options.transcriptSearch,
+    llmProvider: options.llmProvider,
+    promptRegistry: options.promptRegistry ?? null,
+    query,
+    limit: params.limit,
+    summarize: params.summarize === true,
+    targetChannelId: params.channelId,
+    viewer: resolveViewerContextFromRequest(),
+    sessionRouteState: options.sessionRouteState
+      ?? asSessionRouteStateProvider(options.transcriptSearch),
+  });
+  return textResult(JSON.stringify(result, null, 2));
+}
+
+export interface SessionGrepActionParams {
+  pattern: string;
+  mode?: SessionGrepMode;
+  caseSensitive?: boolean;
+  limit?: number;
+  channelId?: string;
+}
+
+export async function executeSessionGrepAction(
   options: SessionGrepToolOptions,
-): AgentTool<any> {
+  params: SessionGrepActionParams,
+  signal?: AbortSignal,
+): Promise<AgentToolResult<{ isError?: boolean }>> {
   const grepRunner = options.runRipgrep ?? runRipgrepSearch;
+  const pattern = params.pattern.trim();
+  if (!pattern) {
+    return textResultWithError('session_grep requires a non-empty pattern.', true);
+  }
 
-  return {
-    name: 'session_grep',
-    label: 'session_grep',
-    description:
-      'Run exact literal or regex grep over archived JSONL session journals using ripgrep. '
-      + 'Best for forensic transcript lookups when keyword ranking is not enough.',
-    parameters: Type.Object({
-      pattern: Type.String({
-        minLength: 1,
-        description: 'Literal text or regex pattern to search in archived transcripts.',
-      }),
-      mode: Type.Optional(Type.Union([
-        Type.Literal('literal'),
-        Type.Literal('regex'),
-      ], {
-        description: 'literal for exact text search, regex for ripgrep regex mode. Default literal.',
-      })),
-      caseSensitive: Type.Optional(Type.Boolean({
-        description: 'When true, match case exactly. Default false.',
-      })),
-      limit: Type.Optional(Type.Integer({
-        minimum: 1,
-        maximum: MAX_SESSION_GREP_LIMIT,
-        description: `Maximum visible hits to return (default ${DEFAULT_SESSION_GREP_LIMIT}).`,
-      })),
-      channelId: Type.Optional(Type.String({
-        minLength: 1,
-        description: 'Optional exact channel/session scope filter.',
-      })),
-    }),
-    execute: async (
-      _toolCallId: string,
-      params: {
-        pattern: string;
-        mode?: SessionGrepMode;
-        caseSensitive?: boolean;
-        limit?: number;
-        channelId?: string;
-      },
-      signal?: AbortSignal,
-    ): Promise<AgentToolResult<{ isError?: boolean }>> => {
-      const pattern = params.pattern.trim();
-      if (!pattern) {
-        return textResultWithError('session_grep requires a non-empty pattern.', true);
+  const mode: SessionGrepMode = params.mode === 'regex' ? 'regex' : 'literal';
+  const caseSensitive = params.caseSensitive === true;
+  const limit = normalizeSessionGrepLimit(params.limit);
+  const channelId = typeof params.channelId === 'string' && params.channelId.trim().length > 0
+    ? params.channelId.trim()
+    : undefined;
+  const viewer = resolveViewerContextFromRequest();
+
+  try {
+    const raw = await grepRunner({
+      sessionsDir: options.sessionsDir,
+      pattern,
+      mode,
+      caseSensitive,
+      maxMatches: limit * SESSION_GREP_OVERSAMPLE_FACTOR,
+      signal,
+    });
+
+    const visibleHits: SessionGrepHitResult[] = [];
+    let scannedMatchCount = 0;
+    let gatedOutCount = 0;
+
+    for (const match of raw.matches) {
+      const entry = parseJournalMessageEntry(match.lineText);
+      if (!entry) continue;
+      if (isCogSecTombstoneSessionEntry(entry)) continue;
+      if (channelId && entry.channelId !== channelId) continue;
+      scannedMatchCount += 1;
+      if (!canViewerAccessSessionHit(viewer, entry)) {
+        gatedOutCount += 1;
+        continue;
       }
-
-      const mode: SessionGrepMode = params.mode === 'regex' ? 'regex' : 'literal';
-      const caseSensitive = params.caseSensitive === true;
-      const limit = normalizeSessionGrepLimit(params.limit);
-      const channelId = typeof params.channelId === 'string' && params.channelId.trim().length > 0
-        ? params.channelId.trim()
-        : undefined;
-      const viewer = resolveViewerContextFromRequest();
-
-      try {
-        const raw = await grepRunner({
-          sessionsDir: options.sessionsDir,
-          pattern,
-          mode,
-          caseSensitive,
-          maxMatches: limit * SESSION_GREP_OVERSAMPLE_FACTOR,
-          signal,
-        });
-
-        const visibleHits: SessionGrepHitResult[] = [];
-        let scannedMatchCount = 0;
-        let gatedOutCount = 0;
-
-        for (const match of raw.matches) {
-          const entry = parseJournalMessageEntry(match.lineText);
-          if (!entry) continue;
-          if (channelId && entry.channelId !== channelId) continue;
-          scannedMatchCount += 1;
-          if (!canViewerAccessSessionHit(viewer, entry)) {
-            gatedOutCount += 1;
-            continue;
-          }
-          visibleHits.push({
-            channelId: entry.channelId,
-            messageId: entry.id,
-            role: entry.role,
-            timestamp: entry.timestamp,
-            channelVisibility: resolveSessionSearchHitVisibility(entry.channelVisibility, entry.channelId),
-            ...(typeof entry.authorName === 'string' && entry.authorName.trim().length > 0
-              ? { authorName: entry.authorName.trim() }
-              : {}),
-            filePath: match.filePath,
-            lineNumber: match.lineNumber,
-            snippet: buildSessionMatchSnippet(entry.content, pattern, mode, caseSensitive),
-          });
-          if (visibleHits.length >= limit) {
-            break;
-          }
-        }
-
-        const result: SessionGrepResult = {
-          pattern,
-          mode,
-          caseSensitive,
-          truncated: raw.truncated,
-          scannedMatchCount,
-          gatedOutCount,
-          hits: visibleHits,
-        };
-        return textResult(JSON.stringify(result, null, 2));
-      } catch (error) {
-        return textResultWithError(`session_grep failed: ${toErrorMessage(error)}`, true);
+      const sessionRoute = resolveSessionSearchRouteLabel(options.sessionRouteState, entry.channelId);
+      visibleHits.push({
+        channelId: entry.channelId,
+        messageId: entry.id,
+        role: entry.role,
+        timestamp: entry.timestamp,
+        channelVisibility: resolveSessionSearchHitVisibility(entry.channelVisibility, entry.channelId),
+        ...(typeof entry.authorName === 'string' && entry.authorName.trim().length > 0
+          ? { authorName: entry.authorName.trim() }
+          : {}),
+        filePath: match.filePath,
+        lineNumber: match.lineNumber,
+        snippet: buildSessionMatchSnippet(entry.content, pattern, mode, caseSensitive),
+        ...(sessionRoute ? { sessionRoute } : {}),
+      });
+      if (visibleHits.length >= limit) {
+        break;
       }
-    },
-  };
+    }
+
+    const result: SessionGrepResult = {
+      pattern,
+      mode,
+      caseSensitive,
+      truncated: raw.truncated,
+      scannedMatchCount,
+      gatedOutCount,
+      hits: visibleHits,
+    };
+    return textResult(JSON.stringify(result, null, 2));
+  } catch (error) {
+    return textResultWithError(`session_grep failed: ${toErrorMessage(error)}`, true);
+  }
 }

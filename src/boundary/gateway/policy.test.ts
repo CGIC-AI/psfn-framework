@@ -369,7 +369,7 @@ describe('evaluatePolicy', () => {
 
   it('allows fs.list with workspace-relative glob', () => {
     expect(evaluatePolicy(
-      { method: 'fs.list', params: { glob: 'src/**/*.ts', maxEntries: 50 } },
+      { method: 'fs.list', params: { glob: 'src/**/*.ts', maxEntries: 50, maxScannedEntries: 500 } },
       policyConfig,
     )).toBe('ALLOW');
   });
@@ -509,6 +509,23 @@ describe('evaluatePolicy', () => {
 
     expect(evaluatePolicy(
       { method: 'fs.list', params: { path: 'downloads/*' } },
+      policyConfig,
+    )).toBe('DENY');
+  });
+
+  it('denies unbounded or malformed fs.list scan controls', () => {
+    expect(evaluatePolicy(
+      { method: 'fs.list', params: { glob: 'src/**/*.ts', maxScannedEntries: 0 } },
+      policyConfig,
+    )).toBe('DENY');
+
+    expect(evaluatePolicy(
+      { method: 'fs.list', params: { glob: 'src/**/*.ts', maxScannedEntries: 20_001 } },
+      policyConfig,
+    )).toBe('DENY');
+
+    expect(evaluatePolicy(
+      { method: 'fs.list', params: { glob: 'src/**/*.ts', maxScannedEntries: '500' } },
       policyConfig,
     )).toBe('DENY');
   });
@@ -836,6 +853,22 @@ describe('evaluatePolicy symlink traversal', () => {
     const pathViaSymlink = join(symlinkDirToOutside, 'secret.txt');
     expect(evaluatePolicy(
       { method: 'fs.read', params: { path: pathViaSymlink } },
+      realPolicyConfig,
+    )).toBe('DENY');
+  });
+
+  it('allows fs.read for missing paths under symlinked parents', () => {
+    const missingPathViaSymlink = join(symlinkDirToOutside, 'missing.txt');
+    expect(evaluatePolicy(
+      { method: 'fs.read', params: { path: missingPathViaSymlink } },
+      realPolicyConfig,
+    )).toBe('ALLOW');
+  });
+
+  it('denies fs.write for missing paths under symlinked parents', () => {
+    const missingPathViaSymlink = join(symlinkDirToOutside, 'missing.txt');
+    expect(evaluatePolicy(
+      { method: 'fs.write', params: { path: missingPathViaSymlink } },
       realPolicyConfig,
     )).toBe('DENY');
   });

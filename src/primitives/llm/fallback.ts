@@ -7,9 +7,11 @@ import { toCorrelationLogFields } from './correlation.js';
 const log = createComponentLogger('ModelFallback');
 
 export const DEFAULT_RATE_LIMIT_COOLDOWN_MS = 45_000;
+export const DEFAULT_CONNECTIVITY_COOLDOWN_MS = 5 * 60_000;
 
 export interface FallbackRunnerOptions {
   rateLimitCooldownMs?: number;
+  connectivityCooldownMs?: number;
   now?: () => number;
 }
 
@@ -56,12 +58,14 @@ function candidateKey(candidate: RoutingCandidate): string {
 }
 
 export class FallbackRunner {
-  private readonly cooldownMs: number;
+  private readonly rateLimitCooldownMs: number;
+  private readonly connectivityCooldownMs: number;
   private readonly now: () => number;
   private readonly cooldownUntilByCandidate = new Map<string, number>();
 
   constructor(options: FallbackRunnerOptions = {}) {
-    this.cooldownMs = options.rateLimitCooldownMs ?? DEFAULT_RATE_LIMIT_COOLDOWN_MS;
+    this.rateLimitCooldownMs = options.rateLimitCooldownMs ?? DEFAULT_RATE_LIMIT_COOLDOWN_MS;
+    this.connectivityCooldownMs = options.connectivityCooldownMs ?? DEFAULT_CONNECTIVITY_COOLDOWN_MS;
     this.now = options.now ?? (() => Date.now());
   }
 
@@ -73,8 +77,8 @@ export class FallbackRunner {
     this.cooldownUntilByCandidate.delete(candidateKey(candidate));
   }
 
-  private markCooldown(candidate: RoutingCandidate): number {
-    const cooldownUntil = this.now() + this.cooldownMs;
+  private markCooldown(candidate: RoutingCandidate, cooldownMs: number): number {
+    const cooldownUntil = this.now() + cooldownMs;
     this.cooldownUntilByCandidate.set(candidateKey(candidate), cooldownUntil);
     return cooldownUntil;
   }
@@ -110,17 +114,26 @@ export class FallbackRunner {
     const classification = classifyLLMError(err);
     const isLastAttempt = attempt >= orderedCandidates.length;
 
-    if (classification.category === 'rate_limit') {
-      const nextCooldownUntil = this.markCooldown(candidate);
-      log.warn('Rate limit hit; marking candidate cooldown', {
-        purpose,
-        model: candidate.model,
-        provider: candidate.provider,
-        cooldownMs: this.cooldownMs,
-        cooldownUntil: new Date(nextCooldownUntil).toISOString(),
-        attempt,
-        ...correlationFields,
-      });
+    if (classification.category === 'rate_limit' || classification.category === 'connection_unavailable') {
+      const cooldownMs = classification.category === 'rate_limit'
+        ? this.rateLimitCooldownMs
+        : this.connectivityCooldownMs;
+      const nextCooldownUntil = this.markCooldown(candidate, cooldownMs);
+      log.warn(
+        classification.category === 'rate_limit'
+          ? 'Rate limit hit; marking candidate cooldown'
+          : 'Candidate connectivity failure; marking candidate cooldown',
+        {
+          purpose,
+          category: classification.category,
+          model: candidate.model,
+          provider: candidate.provider,
+          cooldownMs,
+          cooldownUntil: new Date(nextCooldownUntil).toISOString(),
+          attempt,
+          ...correlationFields,
+        },
+      );
     }
 
     if (explicitNonRecoverable || classification.category === 'abort' || classification.category === 'context_overflow') {
@@ -140,6 +153,10 @@ export class FallbackRunner {
       log.error('All fallback candidates exhausted', {
         purpose,
         attempts: attempt,
+        candidateCount: orderedCandidates.length,
+        fallbackAvailable: orderedCandidates.length > 1,
+        failedModel: candidate.model,
+        failedProvider: candidate.provider,
         lastCategory: classification.category,
         lastError: err.message,
         ...correlationFields,

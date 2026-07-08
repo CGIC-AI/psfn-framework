@@ -1,3 +1,4 @@
+import { isRecord } from '../../../../src/shared/utils/types.js';
 export interface ThemePackUiConfig {
   appTitleTemplate: string;
   sidebarTitleTemplate: string;
@@ -13,9 +14,6 @@ export interface ThemePackDefinition {
   cssVariables: Record<string, string>;
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
 
 function requireTrimmedString(
   value: unknown,

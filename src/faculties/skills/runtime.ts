@@ -16,12 +16,15 @@ import {
   scanSkillFiles,
 } from './loader.js';
 import { SkillStore } from './store.js';
+import { SkillUsageTelemetryStore } from './telemetry.js';
 import type {
+  SkillInvocationRecordInput,
   ManagedSkillOwnership,
   SkillDirectorySpec,
   SkillEvaluation,
   SkillLookupResult,
   SkillSnapshot,
+  SkillUsageStats,
 } from './types.js';
 
 export interface SkillsRuntimeOptions {
@@ -31,6 +34,7 @@ export interface SkillsRuntimeOptions {
   managedRootDir?: string;
   environment?: NodeJS.ProcessEnv;
   isBinaryAvailable?: (binaryName: string) => boolean;
+  now?: () => Date;
 }
 
 interface SkillSnapshotCache {
@@ -59,6 +63,7 @@ function requireSkillsRepoRoot(repoRoot: string): string {
 export class SkillsRuntime {
   private options: SkillsRuntimeOptions;
   private store: SkillStore;
+  private telemetry: SkillUsageTelemetryStore;
   private cache: SkillSnapshotCache | null = null;
 
   constructor(options: SkillsRuntimeOptions) {
@@ -66,6 +71,10 @@ export class SkillsRuntime {
     this.store = new SkillStore(options.dataDir, {
       repoRoot: options.repoRoot,
       ...(options.managedRootDir ? { managedRootDir: options.managedRootDir } : {}),
+      ...(options.now ? { now: options.now } : {}),
+    });
+    this.telemetry = new SkillUsageTelemetryStore(options.dataDir, {
+      ...(options.now ? { now: options.now } : {}),
     });
   }
 
@@ -121,6 +130,23 @@ export class SkillsRuntime {
 
   getStore(): SkillStore {
     return this.store;
+  }
+
+  recordSkillInvocation(
+    name: string,
+    input: SkillInvocationRecordInput,
+  ): SkillUsageStats | null {
+    const result = this.findSkill(name);
+    if (!result) return null;
+    return this.telemetry.record(result.entry.name, input);
+  }
+
+  getSkillUsageStats(name: string): SkillUsageStats | null {
+    return this.telemetry.get(name);
+  }
+
+  listSkillUsageStats(): SkillUsageStats[] {
+    return this.telemetry.list();
   }
 
   /** List managed (user-created) skills. */

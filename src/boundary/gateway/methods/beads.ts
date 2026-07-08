@@ -315,6 +315,21 @@ async function executeBeadsAction(
   }
 }
 
+const DEFAULT_READY_LIMIT = 20;
+const MAX_READY_LIMIT = 100;
+
+function parseReadyLimit(value: unknown): number {
+  if (value === undefined || value === null) return DEFAULT_READY_LIMIT;
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    deny('beads.ready limit must be a number');
+  }
+  const normalized = Math.floor(value as number);
+  if (normalized < 1 || normalized > MAX_READY_LIMIT) {
+    deny(`beads.ready limit must be between 1 and ${MAX_READY_LIMIT}`);
+  }
+  return normalized;
+}
+
 function summaryActor(value: unknown): string {
   return typeof value === 'string' && value.trim()
     ? value.trim().slice(0, MAX_ACTOR_CHARS)
@@ -326,7 +341,8 @@ const beadsDescriptors: Array<GatedMethodDescriptor<any, unknown>> = [
     name: 'beads.ready',
     handler: async (params: BeadsReadyParams, runtime) => {
       const actor = normalizeActor(params.actor);
-      return executeBeadsAction(runtime, 'ready', actor, 'ready', () => []);
+      const limit = parseReadyLimit(params.limit);
+      return executeBeadsAction(runtime, 'ready', actor, 'ready', () => ['-n', String(limit)]);
     },
     summary: (params: BeadsReadyParams) => ({
       actor: summaryActor(params.actor),

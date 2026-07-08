@@ -1,4 +1,5 @@
 import { glob as fsGlob, open, readFile, stat, writeFile } from 'node:fs/promises';
+import { join, relative } from 'node:path';
 import {
   normalizeWorkspaceRelativeGlob,
   resolveWorkspaceFsPathFromRoot,
@@ -8,6 +9,7 @@ import type {
   FilesystemEditOptions,
   FilesystemEditResult,
   FilesystemListOptions,
+  FilesystemListResult,
   FilesystemReadResult,
   FilesystemSearchMatch,
   FilesystemSearchMode,
@@ -19,8 +21,10 @@ import type {
 
 const DEFAULT_LIST_GLOB = '**/*';
 const DEFAULT_DIRECTORY_LIST_GLOB = '*';
-const DEFAULT_LIST_MAX_ENTRIES = 200;
-const MAX_LIST_MAX_ENTRIES = 500;
+export const DEFAULT_LIST_MAX_ENTRIES = 200;
+export const MAX_LIST_MAX_ENTRIES = 500;
+export const DEFAULT_LIST_MAX_SCANNED_ENTRIES = 5_000;
+export const MAX_LIST_MAX_SCANNED_ENTRIES = 20_000;
 const DEFAULT_SEARCH_MODE: FilesystemSearchMode = 'literal';
 const DEFAULT_SEARCH_MAX_MATCHES = 50;
 const MAX_SEARCH_MAX_MATCHES = 200;
@@ -57,11 +61,80 @@ const DEFAULT_SEARCH_FOLDERS = [
   'experiments',
 ] as const;
 
+class ListScanLimitReachedError extends Error {
+  constructor() {
+    super('fs list scan limit reached');
+  }
+}
+
+interface GlobDirentLike {
+  name: string;
+  path?: string;
+  parentPath?: string;
+  isDirectory(): boolean;
+}
+
+export interface FilesystemListLimits {
+  maxEntries: number;
+  maxScannedEntries: number;
+}
+
+export interface BoundedGlobListOptions extends FilesystemListLimits {
+  cwd: string;
+  glob: string;
+  allowedRoots: string[];
+  toDisplayPath(absolutePath: string): string;
+}
+
 function clampFiniteInteger(value: unknown, fallback: number, min: number, max: number): number {
   if (typeof value !== 'number' || !Number.isFinite(value)) {
     return fallback;
   }
   return Math.max(min, Math.min(max, Math.floor(value)));
+}
+
+export function normalizeListLimits(
+  maxEntries: unknown,
+  maxScannedEntries: unknown,
+): FilesystemListLimits {
+  return {
+    maxEntries: clampFiniteInteger(maxEntries, DEFAULT_LIST_MAX_ENTRIES, 1, MAX_LIST_MAX_ENTRIES),
+    maxScannedEntries: clampFiniteInteger(
+      maxScannedEntries,
+      DEFAULT_LIST_MAX_SCANNED_ENTRIES,
+      1,
+      MAX_LIST_MAX_SCANNED_ENTRIES,
+    ),
+  };
+}
+
+function isGlobDirentLike(value: unknown): value is GlobDirentLike {
+  return typeof value === 'object'
+    && value !== null
+    && 'name' in value
+    && typeof (value as { name?: unknown }).name === 'string'
+    && 'isDirectory' in value
+    && typeof (value as { isDirectory?: unknown }).isDirectory === 'function';
+}
+
+function isGlobDirectory(value: unknown): boolean {
+  return isGlobDirentLike(value) && value.isDirectory();
+}
+
+function resolveGlobMatchPath(match: unknown, cwd: string): string {
+  if (isGlobDirentLike(match)) {
+    const parentPath = typeof match.parentPath === 'string'
+      ? match.parentPath
+      : typeof match.path === 'string'
+        ? match.path
+        : cwd;
+    return join(parentPath, match.name);
+  }
+  return resolveWorkspaceFsPathFromRoot(String(match), cwd);
+}
+
+function workspaceRelativePath(absolutePath: string, root: string): string {
+  return relative(root, absolutePath).replace(/\\/g, '/').replace(/^\.\//, '') || '.';
 }
 
 function escapeRegExp(value: string): string {
@@ -196,26 +269,69 @@ export async function listWorkspaceFiles(
   glob = DEFAULT_LIST_GLOB,
   maxEntries = DEFAULT_LIST_MAX_ENTRIES,
   options?: FilesystemListOptions,
-): Promise<string[]> {
+): Promise<FilesystemListResult> {
   const normalizedGlob = buildListGlob(glob, options);
+  const limits = normalizeListLimits(maxEntries, options?.maxScannedEntries);
 
-  const boundedMaxEntries = clampFiniteInteger(maxEntries, DEFAULT_LIST_MAX_ENTRIES, 1, MAX_LIST_MAX_ENTRIES);
+  return collectBoundedGlobFiles({
+    cwd: root,
+    glob: normalizedGlob,
+    allowedRoots: [root],
+    ...limits,
+    toDisplayPath: absolutePath => workspaceRelativePath(absolutePath, root),
+  });
+}
+
+export async function collectBoundedGlobFiles(options: BoundedGlobListOptions): Promise<FilesystemListResult> {
   const paths: string[] = [];
+  let scannedEntries = 0;
+  let entryLimitReached = false;
+  let scanLimitReached = false;
 
-  for await (const match of fsGlob(normalizedGlob, { cwd: root })) {
-    const relative = String(match).replace(/\\/g, '/').replace(/^\.\//, '');
-    const absolute = resolveWorkspaceFsPathFromRoot(relative, root);
-    if (!isInsideAllowedPaths(absolute, [root])) {
-      continue;
+  const exclude = (): boolean => {
+    if (scannedEntries >= options.maxScannedEntries) {
+      scanLimitReached = true;
+      throw new ListScanLimitReachedError();
     }
-    paths.push(relative);
-    if (paths.length >= boundedMaxEntries) {
-      break;
+    scannedEntries += 1;
+    return false;
+  };
+
+  try {
+    for await (const match of fsGlob(options.glob, {
+      cwd: options.cwd,
+      withFileTypes: true,
+      exclude,
+    })) {
+      if (isGlobDirectory(match)) {
+        continue;
+      }
+      const absolute = resolveGlobMatchPath(match, options.cwd);
+      if (!isInsideAllowedPaths(absolute, options.allowedRoots)) {
+        continue;
+      }
+      paths.push(options.toDisplayPath(absolute));
+      if (paths.length >= options.maxEntries) {
+        entryLimitReached = true;
+        break;
+      }
+    }
+  } catch (error) {
+    if (!(error instanceof ListScanLimitReachedError)) {
+      throw error;
     }
   }
 
   paths.sort((left, right) => left.localeCompare(right));
-  return paths;
+  return {
+    paths,
+    scannedEntries,
+    maxEntries: options.maxEntries,
+    maxScannedEntries: options.maxScannedEntries,
+    truncated: entryLimitReached || scanLimitReached,
+    scanLimitReached,
+    entryLimitReached,
+  };
 }
 
 function normalizeSearchGlob(options: FilesystemSearchOptions): string {
@@ -261,7 +377,8 @@ export async function searchWorkspaceFiles(root: string, options: FilesystemSear
     0,
     MAX_SEARCH_CONTEXT_LINES,
   );
-  const paths = await listWorkspaceFiles(root, normalizedGlob, maxFiles);
+  const listResult = await listWorkspaceFiles(root, normalizedGlob, maxFiles);
+  const paths = listResult.paths;
   const matches: FilesystemSearchMatch[] = [];
   const truncatedFiles: string[] = [];
   let scannedFiles = 0;
@@ -305,7 +422,7 @@ export async function searchWorkspaceFiles(root: string, options: FilesystemSear
     glob: normalizedGlob,
     mode,
     scannedFiles,
-    hitLimit: matches.length >= maxMatches,
+    hitLimit: matches.length >= maxMatches || listResult.truncated,
     truncatedFiles,
     matches,
   };

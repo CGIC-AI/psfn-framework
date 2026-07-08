@@ -8,11 +8,12 @@ import { join } from 'node:path';
 import { sanitizeChannelId } from '../../persistence/sessions/store.js';
 import type { SessionEntry, SessionEntryRole } from './types.js';
 import {
-  classifyChannel,
+  classifyChannelDisclosure,
   visibilitiesShareContinuity,
   type ChannelMeta,
 } from '../../system/trust/policy.js';
-import type { ChannelVisibility } from '../../system/trust/types.js';
+import type { ChannelPrivacy } from '../../system/trust/context-envelope.js';
+import { decodeStoredChannelVisibility } from '../../system/trust/types.js';
 import {
   appendJournalEntry,
   buildMessageJournalEntry,
@@ -34,14 +35,15 @@ export interface ContinuityEntryProvenance {
   kind: 'continuity';
   continuityUserId: string;
   sourceChannelId: string;
-  sourceVisibility: ChannelVisibility;
+  /** Stored-value decode: ChannelPrivacy (legacy 'broadcast' decodes to 'public'). */
+  sourceVisibility: ChannelPrivacy;
   sourceRole: SessionEntryRole;
   recordedAt: number;
 }
 
 export interface ActiveContinuityChannel {
   channelId: string;
-  channelVisibility: ChannelVisibility;
+  channelVisibility: ChannelPrivacy;
   lastTimestamp: number;
 }
 
@@ -78,7 +80,8 @@ export function parseContinuityEntryProvenance(metadata?: string): ContinuityEnt
   const kind = provenance.kind;
   const continuityUserId = provenance.continuityUserId;
   const sourceChannelId = provenance.sourceChannelId;
-  const sourceVisibility = provenance.sourceVisibility;
+  // Continuity provenance is persisted; decode legacy 'semi_private' records.
+  const sourceVisibility = decodeStoredChannelVisibility(provenance.sourceVisibility);
   const sourceRole = provenance.sourceRole;
   const recordedAt = provenance.recordedAt;
 
@@ -86,12 +89,7 @@ export function parseContinuityEntryProvenance(metadata?: string): ContinuityEnt
     kind !== 'continuity'
     || typeof continuityUserId !== 'string'
     || typeof sourceChannelId !== 'string'
-    || (
-      sourceVisibility !== 'private'
-      && sourceVisibility !== 'semi_private'
-      && sourceVisibility !== 'public'
-      && sourceVisibility !== 'broadcast'
-    )
+    || sourceVisibility === undefined
     || sourceRole !== 'user'
     && sourceRole !== 'assistant'
     && sourceRole !== 'system'
@@ -114,7 +112,7 @@ export function parseContinuityEntryProvenance(metadata?: string): ContinuityEnt
 function buildContinuityEntryMetadata(params: {
   continuityUserId: string;
   sourceChannelId: string;
-  sourceVisibility: ChannelVisibility;
+  sourceVisibility: ChannelPrivacy;
   sourceRole: SessionEntryRole;
   recordedAt: number;
   existingMetadata?: string;
@@ -191,14 +189,15 @@ export class UserContinuityStore {
       metadata: buildContinuityEntryMetadata({
         continuityUserId: userId,
         sourceChannelId: entry.originChannelId ?? entry.channelId,
-        sourceVisibility: (entry.channelVisibility ?? classifyChannel(entry.originChannelId ?? entry.channelId)) as ChannelVisibility,
+        sourceVisibility: parseChannelVisibility(entry.channelVisibility)
+          ?? classifyChannelDisclosure(entry.originChannelId ?? entry.channelId).channelPrivacy,
         sourceRole: entry.role,
         recordedAt: entry.timestamp,
         existingMetadata: entry.metadata,
       }),
     };
     if (!full.channelVisibility) {
-      full.channelVisibility = classifyChannel(entry.channelId);
+      full.channelVisibility = classifyChannelDisclosure(entry.channelId).channelPrivacy;
     }
 
     const journal = buildMessageJournalEntry(id, full);
@@ -236,11 +235,16 @@ export class UserContinuityStore {
 
     // If currentChannelId is provided, filter by visibility compatibility
     if (currentChannelId) {
-      const currentVisibility = classifyChannel(currentChannelId, currentChannelMeta);
+      const currentDisclosure = classifyChannelDisclosure(currentChannelId, currentChannelMeta);
       entries = entries.filter(e => {
         const origin = e.originChannelId ?? e.channelId;
-        const originVisibility = parseChannelVisibility(e.channelVisibility) ?? classifyChannel(origin);
-        return visibilitiesShareContinuity(originVisibility, currentVisibility);
+        const originPrivacy = parseChannelVisibility(e.channelVisibility);
+        const originDisclosure = originPrivacy !== undefined
+          // Stored privacy decode: broadcast:false is lossless here because a
+          // broadcast surface's allowed-sensitivity row IS the public row.
+          ? { channelPrivacy: originPrivacy, broadcast: false }
+          : classifyChannelDisclosure(origin);
+        return visibilitiesShareContinuity(originDisclosure, currentDisclosure);
       });
     }
 
@@ -273,7 +277,8 @@ export class UserContinuityStore {
       if (query.excludeChannelId && channelId === query.excludeChannelId) continue;
       if (withinMs > 0 && nowMs - entry.timestamp > withinMs) continue;
 
-      const channelVisibility = parseChannelVisibility(entry.channelVisibility) ?? classifyChannel(channelId);
+      const channelVisibility = parseChannelVisibility(entry.channelVisibility)
+        ?? classifyChannelDisclosure(channelId).channelPrivacy;
       const existing = byChannel.get(channelId);
       if (!existing || existing.lastTimestamp < entry.timestamp) {
         byChannel.set(channelId, {
@@ -292,14 +297,9 @@ export class UserContinuityStore {
   }
 }
 
-function parseChannelVisibility(value?: string): ChannelVisibility | undefined {
-  switch (value) {
-    case 'private':
-    case 'semi_private':
-    case 'public':
-    case 'broadcast':
-      return value;
-    default:
-      return undefined;
-  }
+function parseChannelVisibility(value?: string): ChannelPrivacy | undefined {
+  // Parses persisted continuity journal labels; the shared decoder maps
+  // records written before the E3.1 rename / E3.3 broadcast split onto
+  // ChannelPrivacy ('semi_private' -> 'invite_only', 'broadcast' -> 'public').
+  return decodeStoredChannelVisibility(value);
 }

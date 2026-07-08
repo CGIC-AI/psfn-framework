@@ -1,11 +1,48 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { createSqliteTranscriptProjection } from './transcript-projection.js';
 import { mkdtempSync, rmSync, writeFileSync, readdirSync, existsSync, readFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { SessionStore, sanitizeChannelId, unsanitizeChannelId } from './store.js';
 import { buildSessionHmacKeyring, signJournalEntry, verifyJournalEntryIntegrity } from '../journals/journal-utils.js';
+import { createFilesystemSessionArchivePort } from '../journals/journal/port.js';
 import { createTurnId, isTurnId } from '../../core/turns/id.js';
 import type { TranscriptProjectionPort } from './transcript-projection-port.js';
+import { CogSecEventStore } from '../../core/cogsec/events.js';
+import { CogSecForensicArchive } from '../../core/cogsec/forensic-archive.js';
+import { buildCogSecInvalidatedSummaryContent } from '../../core/cogsec/tombstones.js';
+import {
+  resolveCogSecEventsPath,
+  resolveCogSecForensicArchiveDir,
+} from '../layout.js';
+
+function appendSessionMessages(
+  targetStore: SessionStore,
+  channelId: string,
+  count: number,
+  contentPrefix = 'Message',
+): void {
+  for (let index = 0; index < count; index += 1) {
+    targetStore.append({
+      channelId,
+      role: index % 2 === 0 ? 'user' : 'assistant',
+      content: `${contentPrefix} ${index}`,
+      timestamp: 1_700_000_000_000 + index,
+    });
+  }
+}
+
+function findSessionJournalPath(rootDir: string, filenameFragment: string): string {
+  const file = readdirSync(rootDir)
+    .find(candidate => (
+      candidate.endsWith('.jsonl')
+      && !candidate.startsWith('_')
+      && !candidate.startsWith('user_')
+      && candidate.includes(filenameFragment)
+    ));
+  expect(file).toBeDefined();
+  return join(rootDir, file!);
+}
 
 describe('SessionStore', () => {
   let dir: string;
@@ -525,20 +562,21 @@ describe('SessionStore', () => {
   });
 
   it('indexes appended messages for FTS keyword search across channels', async () => {
-    store.append({
+    const searchStore = new SessionStore(dir, { transcriptProjection: createSqliteTranscriptProjection(join(dir, 'session-search.sqlite')) });
+    searchStore.append({
       channelId: 'api:alpha',
       role: 'user',
       content: 'Kyoto itinerary planning for spring',
       timestamp: 1_000,
     });
-    store.append({
+    searchStore.append({
       channelId: 'api:beta',
       role: 'assistant',
       content: 'Booked Kyoto train tickets and hotel options',
       timestamp: 2_000,
     });
 
-    const hits = await store.searchByKeywords('Kyoto', 10);
+    const hits = await searchStore.searchByKeywords('Kyoto', 10);
     expect(hits).toHaveLength(2);
 
     const channels = new Set(hits.map(hit => hit.channelId));
@@ -547,21 +585,46 @@ describe('SessionStore', () => {
     expect(hits[0].snippet.toLowerCase()).toContain('kyoto');
   });
 
+  it('scopes FTS keyword search to a single channel when requested', async () => {
+    const searchStore = new SessionStore(dir, { transcriptProjection: createSqliteTranscriptProjection(join(dir, 'session-search.sqlite')) });
+    searchStore.append({
+      channelId: 'api:alpha',
+      role: 'user',
+      content: 'Kyoto itinerary planning for spring',
+      timestamp: 1_000,
+    });
+    searchStore.append({
+      channelId: 'api:beta',
+      role: 'assistant',
+      content: 'Booked Kyoto train tickets and hotel options',
+      timestamp: 2_000,
+    });
+
+    const scopedHits = await searchStore.searchByKeywords('Kyoto', 10, { channelId: 'api:beta' });
+    expect(scopedHits).toHaveLength(1);
+    expect(scopedHits[0].channelId).toBe('api:beta');
+    expect(scopedHits[0].content).toContain('train tickets');
+
+    const missHits = await searchStore.searchByKeywords('Kyoto', 10, { channelId: 'api:absent' });
+    expect(missHits).toHaveLength(0);
+  });
+
   it('ranks denser FTS matches above sparse matches', async () => {
-    store.append({
+    const searchStore = new SessionStore(dir, { transcriptProjection: createSqliteTranscriptProjection(join(dir, 'session-search.sqlite')) });
+    searchStore.append({
       channelId: 'rank:strong',
       role: 'assistant',
       content: 'nebula launch prep; nebula telemetry; nebula anomaly notes',
       timestamp: 1_000,
     });
-    store.append({
+    searchStore.append({
       channelId: 'rank:weak',
       role: 'assistant',
       content: 'nebula launch prep only once',
       timestamp: 2_000,
     });
 
-    const hits = await store.searchByKeywords('nebula launch', 5);
+    const hits = await searchStore.searchByKeywords('nebula launch', 5);
     expect(hits).toHaveLength(2);
     expect(hits[0].channelId).toBe('rank:strong');
     expect(hits[1].channelId).toBe('rank:weak');
@@ -569,7 +632,7 @@ describe('SessionStore', () => {
   });
 
   it('backfills existing JSONL transcripts into FTS index on startup', async () => {
-    const noIndexStore = new SessionStore(dir, { disableSearchIndex: true });
+    const noIndexStore = new SessionStore(dir);
     noIndexStore.append({
       channelId: 'api:legacy-search',
       role: 'user',
@@ -577,14 +640,310 @@ describe('SessionStore', () => {
       timestamp: 1_000,
     });
 
-    const reloaded = new SessionStore(dir);
+    const reloaded = new SessionStore(dir, { transcriptProjection: createSqliteTranscriptProjection(join(dir, 'session-search.sqlite')) });
     const hits = await reloaded.searchByKeywords('aurora protocol', 5);
     expect(hits).toHaveLength(1);
     expect(hits[0].channelId).toBe('api:legacy-search');
   });
 
+  it('seals contaminated rows before replacing companion L0 rows with CogSec tombstones', async () => {
+    const companionRoot = join(dir, 'companion-data');
+    const eventStore = new CogSecEventStore(resolveCogSecEventsPath(companionRoot), {
+      now: () => new Date('2026-07-01T00:00:00.000Z'),
+    });
+    const forensicArchive = new CogSecForensicArchive(resolveCogSecForensicArchiveDir(companionRoot), {
+      now: () => new Date('2026-07-01T00:00:00.000Z'),
+    });
+    eventStore.createEvent({
+      caseId: 'cogsec_20260701T000000Z_l0',
+      type: 'content_poisoning',
+      severity: 'high',
+      sourceChannelId: 'discord-source-channel',
+      safeAgentSummary: 'Unsafe instruction-like content was sealed and removed from active cognition.',
+    });
+
+    const searchStore = new SessionStore(dir, { transcriptProjection: createSqliteTranscriptProjection(join(dir, 'session-search.sqlite')) });
+    const dirtyId = searchStore.append({
+      channelId: 'api:cogsec-l0',
+      role: 'user',
+      content: 'dirty payload text about poisoned basil',
+      authorId: 'discord-user-1',
+      authorName: 'Vega',
+      timestamp: 1_000,
+      metadata: JSON.stringify({ unsafe: 'metadata should not survive redaction' }),
+    });
+    searchStore.append({
+      channelId: 'api:cogsec-l0',
+      role: 'assistant',
+      content: 'clean reply stays visible',
+      timestamp: 2_000,
+    });
+
+    const result = searchStore.applyCogSecTombstones({
+      channelId: 'api:cogsec-l0',
+      caseId: 'cogsec_20260701T000000Z_l0',
+      eventStore,
+      forensicArchive,
+      messageIds: [dirtyId],
+      actor: 'admin:test',
+      timestamp: Date.parse('2026-07-01T00:01:00.000Z'),
+    });
+
+    expect(result.tombstonedL0RowCount).toBe(1);
+    expect(result.tombstonedMessageIds).toEqual([dirtyId]);
+    expect(result.sealedForensicPayloadRef).toBeDefined();
+    expect(result.sealedForensicPayloadHash).toMatch(/^sha256:[a-f0-9]{64}$/u);
+
+    const journalPath = findSessionJournalPath(dir, 'cogsec-l0');
+    const journalText = readFileSync(journalPath, 'utf-8');
+    expect(journalText).not.toContain('dirty payload text');
+    expect(journalText).not.toContain('metadata should not survive');
+    expect(journalText).toContain('[CogSec redaction: cogsec_20260701T000000Z_l0]');
+
+    const recent = searchStore.getRecent('api:cogsec-l0', 10);
+    expect(recent.map(entry => entry.content)).toEqual([
+      '[CogSec redaction: cogsec_20260701T000000Z_l0]',
+      'clean reply stays visible',
+    ]);
+    expect(JSON.parse(recent[0].metadata ?? '{}')).toEqual({
+      kind: 'cogsec_l0_tombstone',
+      caseId: 'cogsec_20260701T000000Z_l0',
+      redactedAt: '2026-07-01T00:01:00.000Z',
+      actor: 'admin:test',
+    });
+
+    await expect(searchStore.searchByKeywords('poisoned basil', 5)).resolves.toHaveLength(0);
+    await expect(searchStore.searchByKeywords('CogSec redaction', 5)).resolves.toHaveLength(0);
+    await expect(searchStore.searchByKeywords('cogsec_20260701T000000Z_l0', 5)).resolves.toHaveLength(0);
+
+    expect(searchStore.listCogSecTombstoneDiagnostics()).toEqual([{
+      caseId: 'cogsec_20260701T000000Z_l0',
+      rowCount: 1,
+      channels: [{
+        channelId: 'api:cogsec-l0',
+        rowCount: 1,
+        messageIds: [dirtyId],
+      }],
+    }]);
+
+    const sealed = forensicArchive.readArtifact(result.sealedForensicPayloadRef!);
+    expect(JSON.stringify(sealed.payload)).toContain('dirty payload text');
+
+    const updatedEvent = eventStore.getEvent('cogsec_20260701T000000Z_l0');
+    expect(updatedEvent?.tombstonedL0RowCount).toBe(1);
+    expect(updatedEvent?.sealedForensicPayloadRefs).toEqual([result.sealedForensicPayloadRef]);
+    expect(updatedEvent?.actions).toEqual(['seal', 'tombstone']);
+
+    const reloaded = new SessionStore(dir, { transcriptProjection: createSqliteTranscriptProjection(join(dir, 'session-search.sqlite')) });
+    expect(reloaded.getRecent('api:cogsec-l0', 10).map(entry => entry.content)).toEqual([
+      '[CogSec redaction: cogsec_20260701T000000Z_l0]',
+      'clean reply stays visible',
+    ]);
+    await expect(reloaded.searchByKeywords('CogSec redaction', 5)).resolves.toHaveLength(0);
+    expect(reloaded.listCogSecTombstoneDiagnostics({ channelId: 'api:cogsec-l0' })[0]?.rowCount).toBe(1);
+  });
+
+  it('does not modify companion L0 when sealed forensic archive write fails', () => {
+    const eventStore = new CogSecEventStore(join(dir, 'cogsec-events.json'));
+    eventStore.createEvent({
+      caseId: 'cogsec_20260701T000000Z_sealfail',
+      type: 'content_poisoning',
+      severity: 'high',
+      sourceChannelId: 'discord-source-channel',
+      safeAgentSummary: 'Unsafe instruction-like content was sealed and removed from active cognition.',
+    });
+    const dirtyId = store.append({
+      channelId: 'api:cogsec-seal-fail',
+      role: 'user',
+      content: 'dirty payload survives because seal failed',
+      timestamp: 1_000,
+    });
+
+    expect(() => store.applyCogSecTombstones({
+      channelId: 'api:cogsec-seal-fail',
+      caseId: 'cogsec_20260701T000000Z_sealfail',
+      eventStore,
+      forensicArchive: {
+        sealArtifact: () => {
+          throw new Error('seal failed');
+        },
+      },
+      messageIds: [dirtyId],
+    })).toThrow('seal failed');
+
+    const journalPath = findSessionJournalPath(dir, 'cogsec-seal-fail');
+    expect(readFileSync(journalPath, 'utf-8')).toContain('dirty payload survives because seal failed');
+    expect(eventStore.getEvent('cogsec_20260701T000000Z_sealfail')?.tombstonedL0RowCount).toBe(0);
+  });
+
+  it('re-signs integrity-protected journals after CogSec tombstoning', () => {
+    const keyring = buildSessionHmacKeyring({
+      serializedKeys: 'v1:integrity-key',
+      activeVersion: 'v1',
+    });
+    expect(keyring).not.toBeNull();
+    const signedStore = new SessionStore(dir, { integrityKeyring: keyring });
+    const companionRoot = join(dir, 'companion-data');
+    const eventStore = new CogSecEventStore(resolveCogSecEventsPath(companionRoot));
+    const forensicArchive = new CogSecForensicArchive(resolveCogSecForensicArchiveDir(companionRoot));
+    eventStore.createEvent({
+      caseId: 'cogsec_20260701T000000Z_hmac',
+      type: 'content_poisoning',
+      severity: 'medium',
+      sourceChannelId: 'discord-source-channel',
+      safeAgentSummary: 'Unsafe instruction-like content was sealed and removed from active cognition.',
+    });
+
+    const dirtyId = signedStore.append({
+      channelId: 'api:cogsec-hmac',
+      role: 'user',
+      content: 'dirty signed payload',
+      timestamp: 1_000,
+    });
+    signedStore.append({
+      channelId: 'api:cogsec-hmac',
+      role: 'assistant',
+      content: 'signed clean reply',
+      timestamp: 2_000,
+    });
+
+    signedStore.applyCogSecTombstones({
+      channelId: 'api:cogsec-hmac',
+      caseId: 'cogsec_20260701T000000Z_hmac',
+      eventStore,
+      forensicArchive,
+      messageIds: [dirtyId],
+    });
+
+    const journalPath = findSessionJournalPath(dir, 'cogsec-hmac');
+    const lines = readFileSync(journalPath, 'utf-8')
+      .split('\n')
+      .filter(Boolean)
+      .map(line => JSON.parse(line) as import('../../core/session/types.js').JournalEntry);
+
+    let previousHmac: string | null = null;
+    for (const line of lines) {
+      const verification = verifyJournalEntryIntegrity(line, keyring!, previousHmac);
+      expect(verification.verified).toBe(true);
+      previousHmac = typeof line._hmac === 'string' ? line._hmac : previousHmac;
+    }
+
+    const reloaded = new SessionStore(dir, { integrityKeyring: keyring });
+    expect(reloaded.getRecent('api:cogsec-hmac', 10).map(entry => entry.content)).toEqual([
+      '[CogSec redaction: cogsec_20260701T000000Z_hmac]',
+      'signed clean reply',
+    ]);
+  });
+
+  it('replaces CogSec-affected compaction summaries with safe invalidation markers', () => {
+    store.append({
+      channelId: 'api:cogsec-summary',
+      role: 'user',
+      content: 'clean turn',
+      timestamp: 1_000,
+    });
+    store.insertCompaction(
+      'api:cogsec-summary',
+      'dirty summary text that should leave active cognition',
+      1,
+    );
+    const compactionId = store.getCompactionSummaries('api:cogsec-summary')[0]?.id;
+    expect(compactionId).toBeDefined();
+
+    const result = store.applyCogSecCompactionInvalidations({
+      channelId: 'api:cogsec-summary',
+      caseId: 'cogsec_20260701T000000Z_summary',
+      compactionIds: [compactionId!],
+    });
+
+    expect(result.invalidatedCompactionIds).toEqual([compactionId]);
+    expect(store.getCompactionSummaries('api:cogsec-summary')[0]?.summary).toBe(
+      buildCogSecInvalidatedSummaryContent('cogsec_20260701T000000Z_summary'),
+    );
+    const journalPath = findSessionJournalPath(dir, 'cogsec-summary');
+    const journalText = readFileSync(journalPath, 'utf-8');
+    expect(journalText).not.toContain('dirty summary text');
+    expect(journalText).toContain('[CogSec summary invalidated: cogsec_20260701T000000Z_summary]');
+
+    const reloaded = new SessionStore(dir);
+    expect(reloaded.getCompactionSummaries('api:cogsec-summary')[0]?.summary).toBe(
+      buildCogSecInvalidatedSummaryContent('cogsec_20260701T000000Z_summary'),
+    );
+  });
+
+  it('replaces invalidated CogSec compaction summaries with regenerated clean summaries', () => {
+    store.append({
+      channelId: 'api:cogsec-regenerated-summary',
+      role: 'user',
+      content: 'clean turn',
+      timestamp: 1_000,
+    });
+    store.insertCompaction(
+      'api:cogsec-regenerated-summary',
+      'dirty summary text that should be replaced',
+      1,
+    );
+    const compactionId = store.getCompactionSummaries('api:cogsec-regenerated-summary')[0]?.id;
+    expect(compactionId).toBeDefined();
+    store.applyCogSecCompactionInvalidations({
+      channelId: 'api:cogsec-regenerated-summary',
+      caseId: 'cogsec_20260701T000000Z_summary',
+      compactionIds: [compactionId!],
+    });
+
+    const result = store.applyCogSecCompactionRegenerations({
+      channelId: 'api:cogsec-regenerated-summary',
+      caseId: 'cogsec_20260701T000000Z_summary',
+      summaries: [{
+        compactionId: compactionId!,
+        summary: 'Clean regenerated summary from tombstoned-safe source.',
+      }],
+    });
+
+    expect(result.regeneratedCompactionIds).toEqual([compactionId]);
+    expect(result.skippedCompactionIds).toEqual([]);
+    expect(store.getCompactionSummaries('api:cogsec-regenerated-summary')[0]?.summary).toBe(
+      'Clean regenerated summary from tombstoned-safe source.',
+    );
+    const journalPath = findSessionJournalPath(dir, 'cogsec-regenerated-summary');
+    const journalText = readFileSync(journalPath, 'utf-8');
+    expect(journalText).not.toContain('dirty summary text');
+    expect(journalText).not.toContain('[CogSec summary invalidated: cogsec_20260701T000000Z_summary]');
+    expect(journalText).toContain('Clean regenerated summary from tombstoned-safe source.');
+
+    const reloaded = new SessionStore(dir);
+    expect(reloaded.getCompactionSummaries('api:cogsec-regenerated-summary')[0]?.summary).toBe(
+      'Clean regenerated summary from tombstoned-safe source.',
+    );
+  });
+
+  it('rejects regenerated CogSec compaction summaries that contain tombstone markers', () => {
+    store.append({
+      channelId: 'api:cogsec-bad-regeneration',
+      role: 'user',
+      content: 'clean turn',
+      timestamp: 1_000,
+    });
+    store.insertCompaction(
+      'api:cogsec-bad-regeneration',
+      buildCogSecInvalidatedSummaryContent('cogsec_20260701T000000Z_summary'),
+      1,
+    );
+    const compactionId = store.getCompactionSummaries('api:cogsec-bad-regeneration')[0]?.id;
+    expect(compactionId).toBeDefined();
+
+    expect(() => store.applyCogSecCompactionRegenerations({
+      channelId: 'api:cogsec-bad-regeneration',
+      caseId: 'cogsec_20260701T000000Z_summary',
+      summaries: [{
+        compactionId: compactionId!,
+        summary: '[CogSec redaction: cogsec_20260701T000000Z_summary]',
+      }],
+    })).toThrow(/must not contain CogSec tombstone/u);
+  });
+
   it('rebuilds transcript projections from authoritative JSONL archives through the injected port', () => {
-    const noProjectionStore = new SessionStore(dir, { disableSearchIndex: true });
+    const noProjectionStore = new SessionStore(dir);
     noProjectionStore.append({
       channelId: 'api:projection-rebuild',
       role: 'user',
@@ -654,7 +1013,7 @@ describe('SessionStore', () => {
     ]);
     expect(projectionBackedStore.count('api:projection-failure')).toBe(1);
 
-    const reloaded = new SessionStore(dir, { disableSearchIndex: true });
+    const reloaded = new SessionStore(dir);
     expect(reloaded.getRecent('api:projection-failure', 10)).toEqual([
       expect.objectContaining({
         id: 1,
@@ -854,6 +1213,130 @@ describe('SessionStore', () => {
     };
     expect(index.channels[channelId].messageCount).toBe(1500);
     expect(index.channels[channelId].lastTimestamp).toBe(baseTimestamp + 1499);
+  });
+
+  it('caches lightweight session tails across repeated unchanged reads', () => {
+    const channelId = 'api:tail-cache-repeat';
+    appendSessionMessages(store, channelId, 8);
+
+    const archivePort = createFilesystemSessionArchivePort();
+    const tailSpy = vi.spyOn(archivePort, 'readJournalTailEntries');
+    const reloaded = new SessionStore(dir, { sessionArchivePort: archivePort });
+    tailSpy.mockClear();
+
+    const first = reloaded.getRecent(channelId, 3);
+    const second = reloaded.getRecent(channelId, 3);
+
+    expect(first.map(entry => entry.content)).toEqual(['Message 5', 'Message 6', 'Message 7']);
+    expect(second).toEqual(first);
+    expect(tailSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('invalidates cached lightweight tails after append', () => {
+    const channelId = 'api:tail-cache-append';
+    appendSessionMessages(store, channelId, 5);
+
+    const archivePort = createFilesystemSessionArchivePort();
+    const tailSpy = vi.spyOn(archivePort, 'readJournalTailEntries');
+    const reloaded = new SessionStore(dir, { sessionArchivePort: archivePort });
+    tailSpy.mockClear();
+
+    expect(reloaded.getRecent(channelId, 2).map(entry => entry.content)).toEqual(['Message 3', 'Message 4']);
+    expect(tailSpy).toHaveBeenCalledTimes(1);
+
+    reloaded.append({
+      channelId,
+      role: 'assistant',
+      content: 'Message 5',
+      timestamp: 1_700_000_000_005,
+    });
+
+    expect(reloaded.getRecent(channelId, 2).map(entry => entry.content)).toEqual(['Message 4', 'Message 5']);
+    expect(tailSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps tail cache entries isolated by channel and requested size', () => {
+    appendSessionMessages(store, 'api:tail-cache-alpha', 6, 'alpha');
+    appendSessionMessages(store, 'api:tail-cache-beta', 6, 'beta');
+
+    const archivePort = createFilesystemSessionArchivePort();
+    const tailSpy = vi.spyOn(archivePort, 'readJournalTailEntries');
+    const reloaded = new SessionStore(dir, { sessionArchivePort: archivePort });
+    tailSpy.mockClear();
+
+    expect(reloaded.getRecent('api:tail-cache-alpha', 2).map(entry => entry.content)).toEqual(['alpha 4', 'alpha 5']);
+    expect(reloaded.getRecent('api:tail-cache-alpha', 3).map(entry => entry.content)).toEqual([
+      'alpha 3',
+      'alpha 4',
+      'alpha 5',
+    ]);
+    expect(reloaded.getRecent('api:tail-cache-beta', 2).map(entry => entry.content)).toEqual(['beta 4', 'beta 5']);
+    expect(tailSpy).toHaveBeenCalledTimes(3);
+
+    expect(reloaded.getRecent('api:tail-cache-alpha', 2).map(entry => entry.content)).toEqual(['alpha 4', 'alpha 5']);
+    expect(reloaded.getRecent('api:tail-cache-alpha', 3).map(entry => entry.content)).toEqual([
+      'alpha 3',
+      'alpha 4',
+      'alpha 5',
+    ]);
+    expect(reloaded.getRecent('api:tail-cache-beta', 2).map(entry => entry.content)).toEqual(['beta 4', 'beta 5']);
+    expect(tailSpy).toHaveBeenCalledTimes(3);
+  });
+
+  it('does not let cached tails hide malformed archive lines', () => {
+    const channelId = 'api:tail-cache-parse';
+    appendSessionMessages(store, channelId, 5);
+
+    const archivePort = createFilesystemSessionArchivePort();
+    const tailSpy = vi.spyOn(archivePort, 'readJournalTailEntries');
+    const reloaded = new SessionStore(dir, { sessionArchivePort: archivePort });
+    tailSpy.mockClear();
+
+    expect(reloaded.getRecent(channelId, 2).map(entry => entry.content)).toEqual(['Message 3', 'Message 4']);
+    expect(tailSpy).toHaveBeenCalledTimes(1);
+
+    const journalPath = findSessionJournalPath(dir, 'tail-cache-parse');
+    writeFileSync(journalPath, `${readFileSync(journalPath, 'utf-8')}{bad\n`, 'utf-8');
+
+    expect(reloaded.getRecent(channelId, 2).map(entry => entry.content)).toEqual(['Message 3', 'Message 4']);
+    expect(tailSpy).toHaveBeenCalledTimes(2);
+    const tailResult = tailSpy.mock.results.at(-1)?.value as { quarantined?: Array<{ raw: string }> } | undefined;
+    expect(tailResult?.quarantined).toEqual([expect.objectContaining({ raw: '{bad' })]);
+  });
+
+  it('does not let cached tails hide integrity failures after archive changes', () => {
+    const channelId = 'api:tail-cache-integrity';
+    const keyring = buildSessionHmacKeyring({
+      serializedKeys: 'v1:integrity-key',
+      activeVersion: 'v1',
+    });
+    const signedStore = new SessionStore(dir, { integrityKeyring: keyring });
+    appendSessionMessages(signedStore, channelId, 4, 'signed');
+
+    const archivePort = createFilesystemSessionArchivePort();
+    const tailSpy = vi.spyOn(archivePort, 'readJournalTailEntries');
+    const reloaded = new SessionStore(dir, {
+      integrityKeyring: keyring,
+      sessionArchivePort: archivePort,
+    });
+    tailSpy.mockClear();
+
+    expect(reloaded.getRecent(channelId, 2).map(entry => entry.content)).toEqual(['signed 2', 'signed 3']);
+    expect(tailSpy).toHaveBeenCalledTimes(1);
+
+    const journalPath = findSessionJournalPath(dir, 'tail-cache-integrity');
+    const lines = readFileSync(journalPath, 'utf-8')
+      .split('\n')
+      .filter(Boolean)
+      .map(line => JSON.parse(line) as Record<string, unknown>);
+    lines[3].content = 'tampered 3 with additional bytes';
+    writeFileSync(journalPath, `${lines.map(line => JSON.stringify(line)).join('\n')}\n`, 'utf-8');
+
+    const entries = reloaded.getRecent(channelId, 2);
+    expect(tailSpy).toHaveBeenCalledTimes(2);
+    expect(entries[0].content).toBe('signed 2');
+    expect(entries[1].content).toContain('<unverified_history>');
+    expect(entries[1].content).toContain('tampered 3 with additional bytes');
   });
 
   it('persists discord message IDs for dedup helpers', () => {

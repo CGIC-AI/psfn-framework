@@ -8,6 +8,10 @@ import {
   type TurnObservabilityWarningCode,
 } from './observability-warnings.js';
 import type { TurnSnapshot } from './snapshot.js';
+import {
+  createPromptPlan,
+  createPromptPlanBlock,
+} from '../agent/substrate-agent/turn-execution/prompt-plan.js';
 
 function buildSnapshot(nowMs: number): TurnSnapshot {
   const staleObservation = normalizeToolObservation({
@@ -87,20 +91,30 @@ function buildSnapshot(nowMs: number): TurnSnapshot {
       proactiveCandidates: [],
       versionPointer: 'memory-v1',
     },
-    promptContext: {
-      renderedStaticPrefix: '',
-      renderedDynamicSuffix: [
-        '[Companion-Derived Values Layer]',
-        '- v7 @ 2026-04-17T22:00:00.000Z (companion_reflection; template=values-reflection; mode=agent):',
-        '  We have not heard from the user in days, so continuity may be breaking down.',
-      ].join('\n'),
-      runtimeContext: '',
-      memoryContextBlock: '',
-      scratchpadContext: '',
-      assembledPrompt: '',
-      finalSystemPrompt: '',
+    plan: createPromptPlan({
+      blocks: [
+        createPromptPlanBlock({
+          id: 'dynamic_suffix',
+          layer: 'prompt_stack',
+          volatility: 'turn',
+          producer: 'identity.prompt-runtime',
+          renderedText: [
+            '[Companion-Derived Values Layer]',
+            '- v7 @ 2026-04-17T22:00:00.000Z (companion_reflection; template=values-reflection; mode=agent):',
+            '  We have not heard from the user in days, so continuity may be breaking down.',
+          ].join('\n'),
+        }),
+      ],
+      variables: {},
       messages: [],
-    },
+      toolDefinitions: [],
+      scope: {
+        kind: 'group',
+        channelId: 'api:test',
+        recentSpeakers: [],
+        key: 'room:api:test',
+      },
+    }),
   };
 }
 

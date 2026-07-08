@@ -1,9 +1,10 @@
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { DefaultImageVisionReviewer } from './vision-reviewer.js';
-import { resolveRoutingCandidates } from '../llm/routing.js';
+import { runWithRequestContext } from '../llm/request-context.js';
+import type { TurnID } from '../../shared/contracts/runtime.js';
 
 vi.mock('../../core/agent/stream-adapter.js', () => ({
   resolveModel: vi.fn(() => ({
@@ -14,25 +15,7 @@ vi.mock('../../core/agent/stream-adapter.js', () => ({
   })),
 }));
 
-vi.mock('../llm/routing.js', () => ({
-  resolveRoutingCandidates: vi.fn(() => [{
-    model: 'vision-model',
-    provider: 'openrouter',
-    maxTokens: 1024,
-  }]),
-}));
-
-const mockedResolveRoutingCandidates = vi.mocked(resolveRoutingCandidates);
-
 describe('DefaultImageVisionReviewer', () => {
-  beforeEach(() => {
-    mockedResolveRoutingCandidates.mockReturnValue([{
-      model: 'vision-model',
-      provider: 'openrouter',
-      maxTokens: 1024,
-    }]);
-  });
-
   it('uses gateway binary fetch when available', async () => {
     const binaryFetcher = vi.fn(async () => ({
       dataBase64: 'AQID',
@@ -148,51 +131,33 @@ describe('DefaultImageVisionReviewer', () => {
     expect(llmProvider.complete).toHaveBeenCalledTimes(1);
     expect(llmProvider.complete).toHaveBeenCalledWith(
       expect.objectContaining({
-        modelHint: expect.objectContaining({
-          model: 'vision-model',
-          provider: 'openrouter',
-          maxTokens: 1024,
-          pin: true,
+        correlation: expect.objectContaining({
+          requestId: expect.stringMatching(/^vision-review-/),
+          callType: 'tool',
+          purpose: 'images.vision_review',
+          originType: 'tool',
+          originStage: 'images.vision_review',
         }),
       }),
       'vision',
     );
+    const completionContext = llmProvider.complete.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(completionContext.modelHint).toBeUndefined();
     expect(completeImpl).not.toHaveBeenCalled();
     expect(result.summary).toBe('Gateway review summary');
     expect(result.model).toBe('gateway-vision-model');
   });
 
-  it('tries the next configured vision model when a vision completion returns empty content', async () => {
-    mockedResolveRoutingCandidates.mockReturnValueOnce([
-      {
-        model: 'primary-vision-model',
-        provider: 'openrouter',
-        maxTokens: 1024,
-      },
-      {
-        model: 'fallback-vision-model',
-        provider: 'openrouter',
-        maxTokens: 2048,
-      },
-    ]);
+  it('derives correlation metadata from the active request context', async () => {
     const llmProvider = {
-      complete: vi.fn()
-        .mockResolvedValueOnce({
-          content: '',
-          toolCalls: [],
-          model: 'primary-vision-model',
-          inputTokens: 11,
-          outputTokens: 0,
-          stopReason: 'stop',
-        })
-        .mockResolvedValueOnce({
-          content: 'Fallback model can see the image.',
-          toolCalls: [],
-          model: 'fallback-vision-model',
-          inputTokens: 12,
-          outputTokens: 8,
-          stopReason: 'stop',
-        }),
+      complete: vi.fn(async () => ({
+        content: 'Gateway review summary',
+        toolCalls: [],
+        model: 'gateway-vision-model',
+        inputTokens: 11,
+        outputTokens: 7,
+        stopReason: 'stop',
+      })),
     };
     const reviewer = new DefaultImageVisionReviewer(
       {
@@ -208,35 +173,99 @@ describe('DefaultImageVisionReviewer', () => {
       },
     );
 
-    const result = await reviewer.analyze({
+    await runWithRequestContext(
+      {
+        turnId: 'turn-1' as TurnID,
+        channelId: 'channel-1',
+        requestId: 'req-1',
+        toolName: 'media',
+        toolCallId: 'call-1',
+      },
+      async () => {
+        await reviewer.analyze({
+          imageUrls: ['https://images.example.test/review.png'],
+          question: 'Describe it.',
+        });
+      },
+    );
+
+    expect(llmProvider.complete).toHaveBeenCalledWith(
+      expect.objectContaining({
+        correlation: expect.objectContaining({
+          turnId: 'turn-1',
+          channelId: 'channel-1',
+          requestId: 'req-1:vision-review',
+          callType: 'tool',
+          toolName: 'media',
+          toolCallId: 'call-1',
+          purpose: 'images.vision_review',
+          originType: 'tool',
+          originStage: 'images.vision_review',
+        }),
+      }),
+      'vision',
+    );
+  });
+
+  it('fails closed when the vision completion returns empty content', async () => {
+    const llmProvider = {
+      complete: vi.fn(async () => ({
+        content: '',
+        toolCalls: [],
+        model: 'primary-vision-model',
+        inputTokens: 11,
+        outputTokens: 0,
+        stopReason: 'stop',
+      })),
+    };
+    const reviewer = new DefaultImageVisionReviewer(
+      {
+        primaryProvider: 'openrouter',
+      } as any,
+      {
+        llmProvider: llmProvider as any,
+        binaryFetcher: vi.fn(async () => ({
+          dataBase64: 'AQID',
+          mimeType: 'image/png',
+          sizeBytes: 3,
+        })),
+      },
+    );
+
+    await expect(reviewer.analyze({
       imageUrls: ['https://images.example.test/review.png'],
       question: 'Describe it.',
-    });
+    })).rejects.toThrow('vision review returned empty text from primary-vision-model');
 
-    expect(llmProvider.complete).toHaveBeenCalledTimes(2);
-    expect(llmProvider.complete).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({
-        modelHint: expect.objectContaining({
-          model: 'primary-vision-model',
-          pin: true,
-        }),
+    expect(llmProvider.complete).toHaveBeenCalledTimes(1);
+  });
+
+  it('propagates vision completion failures without swallowing them', async () => {
+    const llmProvider = {
+      complete: vi.fn(async () => {
+        throw new Error('all vision candidates exhausted');
       }),
-      'vision',
+    };
+    const reviewer = new DefaultImageVisionReviewer(
+      {
+        primaryProvider: 'openrouter',
+      } as any,
+      {
+        llmProvider: llmProvider as any,
+        binaryFetcher: vi.fn(async () => ({
+          dataBase64: 'AQID',
+          mimeType: 'image/png',
+          sizeBytes: 3,
+        })),
+      },
     );
-    expect(llmProvider.complete).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({
-        modelHint: expect.objectContaining({
-          model: 'fallback-vision-model',
-          maxTokens: 1024,
-          pin: true,
-        }),
-      }),
-      'vision',
-    );
-    expect(result.summary).toBe('Fallback model can see the image.');
-    expect(result.model).toBe('fallback-vision-model');
+
+    await expect(reviewer.analyze({
+      imageUrls: ['https://images.example.test/review.png'],
+      question: 'Describe it.',
+    })).rejects.toThrow('all vision candidates exhausted');
+
+    expect(llmProvider.complete).toHaveBeenCalledTimes(1);
   });
 
   it('prefers a saved local image path over gateway fetch for generated outputs', async () => {

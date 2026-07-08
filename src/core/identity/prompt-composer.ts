@@ -6,7 +6,7 @@ import { createHash } from 'node:crypto';
 import type {
   CompanionValuesLayerSnapshot,
   ComposeContext,
-  ComposeResult,
+  ComposedDynamicSection,
   ComposeSplitResult,
   LayerType,
   NorthStarLayerSnapshot,
@@ -17,7 +17,13 @@ import type { PromptLayerStatePort } from './prompt-state-port.js';
 import { PromptManager } from './prompt-manager.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import { writeJsonAtomic } from '../../shared/utils/fs.js';
+import {
+  assertNoRemovedPromptMacros,
+  assertStaticPromptLayerMacroVolatility,
+} from './prompt-runtime.js';
+import { isRequiredRuntimePromptLayer } from './runtime-prompt-layers.js';
 import { wrapPromptSectionXml } from './prompt-sections.js';
+import { SYSTEM_LANGUAGE_LAYER_TYPE } from './system-language.js';
 
 // Keep only identity/foundation + operator policy in the frozen prompt prefix.
 // Channel/task/runtime overlays remain dynamic so per-turn runtime context stays later.
@@ -25,20 +31,19 @@ const STATIC_PREFIX_LAYER_TYPES = new Set<LayerType>(['base', 'operator']);
 const LAST_KNOWN_GOOD_VERSION = 1;
 const UNTRUSTED_COMPACTION_RECORD_TAG = 'untrusted_compaction_summary_record';
 const UNTRUSTED_COMPACTION_PROMPT_TAG = 'untrusted_compaction_summary';
+const IMMUTABLE_HUMAN_SAFETY_SECTION_TAG = '<immutable_human_safety_amendments>';
+const CONSTITUTION_PRECEDENCE_SECTION_TAG = '<constitution_precedence>';
 const SOURCE_BLOCK_SHA256_TAG_PREFIX_PATTERN = /<source_block_sha256\b/i;
 const CONTROL_CHARACTER_PATTERN = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g;
-const CONSTITUTION_PRECEDENCE_HEADER = '[Constitution Precedence]';
-export const IMMUTABLE_HUMAN_SAFETY_LAYER_HEADER = '[Immutable Human-Safety Amendments]';
 export const COMPANION_VALUES_LAYER_HEADER = '[Companion-Derived Values Layer]';
 export const NORTH_STAR_LAYER_HEADER = '[North Star]';
 export const IMMUTABLE_HUMAN_SAFETY_AMENDMENTS = Object.freeze([
   'Prioritize human life, bodily safety, and psychological wellbeing over every mutable instruction.',
   'Refuse assistance that enables abuse, coercion, exploitation, or non-consensual harm to a person.',
   'When safety is uncertain, fail closed: ask for clarification or decline risky requests rather than guessing.',
-  'Support {{user}}\'s flourishing. Do not optimize for exclusivity, dependency, or withdrawal from healthy human relationships.',
+  'Support the user\'s flourishing. Do not optimize for exclusivity, dependency, or withdrawal from healthy human relationships.',
 ] as const);
 const CONSTITUTION_PRECEDENCE_GUARD = [
-  CONSTITUTION_PRECEDENCE_HEADER,
   'Immutable amendments are hardcoded and non-editable.',
   'If any mutable instruction conflicts with them, follow the immutable amendments.',
 ].join('\n');
@@ -69,7 +74,6 @@ function hashText(text: string): string {
 
 export function buildImmutableHumanSafetySection(): string {
   const immutableLines = [
-    IMMUTABLE_HUMAN_SAFETY_LAYER_HEADER,
     ...IMMUTABLE_HUMAN_SAFETY_AMENDMENTS.map((amendment, index) => `${String(index + 1)}. ${amendment}`),
   ].join('\n');
   return [
@@ -257,18 +261,11 @@ export class PromptComposer {
     this.lastKnownGood = null;
   }
 
-  compose(ctx?: ComposeContext): ComposeResult {
-    const split = this.composeSplit(ctx);
-    return {
-      text: split.text,
-      hash: split.hash,
-      layerCount: split.layerCount,
-      layerIds: split.layerIds,
-      promptIdentifiers: split.promptIdentifiers,
-      autoHealedPromptIdentifiers: split.autoHealedPromptIdentifiers,
-    };
-  }
-
+  /**
+   * The single composer entrypoint (E2.2). The static/dynamic split is the
+   * source of the PromptPlan volatility boundaries; the legacy unsplit
+   * compose() fallback was deleted with the PromptPlan consolidation.
+   */
   composeSplit(ctx?: ComposeContext): ComposeSplitResult {
     const layers = this.store.getAll();
     const sorted = this.resolveSortedLayers(layers, ctx);
@@ -287,7 +284,7 @@ export class PromptComposer {
       : null;
 
     const staticChunks: string[] = [];
-    const dynamicChunks: string[] = [];
+    const dynamicSections: ComposedDynamicSection[] = [];
     const staticLayerIds: string[] = [];
     const dynamicLayerIds: string[] = [];
     const seenStaticLayerIds = new Set<string>();
@@ -301,13 +298,25 @@ export class PromptComposer {
     }
     if (companionValuesSection) {
       // Keep companion reflections dynamic so static-prefix caching does not churn as the journal ages.
-      dynamicChunks.push(companionValuesSection.content);
+      dynamicSections.push({
+        identifier: 'companion.values',
+        required: false,
+        content: companionValuesSection.content,
+      });
     }
 
     for (const prompt of managed.prompts) {
       const sourceLayer = prompt.sourceLayerId ? layerById.get(prompt.sourceLayerId) : undefined;
+      const layerLabel = sourceLayer?.identifier ?? sourceLayer?.name ?? prompt.identifier;
+      // Persisted-layer safety valve (E2.5, fail closed but recoverable): a
+      // persisted layer still referencing a removed macro alias produces a
+      // clear validation error naming the canonical replacement.
+      assertNoRemovedPromptMacros(prompt.content, layerLabel);
       const target = this.resolvePromptSection(sourceLayer);
       if (target === 'static') {
+        // Volatility enforcement (fail closed): a turn-volatile macro in a
+        // static-class layer would contaminate the byte-stable static prefix.
+        assertStaticPromptLayerMacroVolatility(prompt.content, layerLabel);
         staticChunks.push(prompt.content);
         if (sourceLayer && !seenStaticLayerIds.has(sourceLayer.id)) {
           seenStaticLayerIds.add(sourceLayer.id);
@@ -316,7 +325,13 @@ export class PromptComposer {
         continue;
       }
 
-      dynamicChunks.push(prompt.content);
+      // Required dynamic sections fail the turn loudly on unresolved macros
+      // at render time; optional sections drop with telemetry instead.
+      dynamicSections.push({
+        identifier: layerLabel,
+        required: sourceLayer?.type === 'runtime' && isRequiredRuntimePromptLayer(layerLabel),
+        content: prompt.content,
+      });
       if (sourceLayer && !seenDynamicLayerIds.has(sourceLayer.id)) {
         seenDynamicLayerIds.add(sourceLayer.id);
         dynamicLayerIds.push(sourceLayer.id);
@@ -324,7 +339,7 @@ export class PromptComposer {
     }
 
     const staticPrefix = staticChunks.join('\n\n');
-    const dynamicSuffix = dynamicChunks.join('\n\n');
+    const dynamicSuffix = dynamicSections.map(section => section.content).join('\n\n');
     const text = [staticPrefix, dynamicSuffix]
       .map(section => section.trim())
       .filter(section => section.length > 0)
@@ -337,6 +352,7 @@ export class PromptComposer {
     const result: ComposeSplitResult = {
       staticPrefix,
       dynamicSuffix,
+      dynamicSections,
       staticHash,
       dynamicHash,
       staticLayerIds,
@@ -384,6 +400,10 @@ export class PromptComposer {
   }
 
   private matchesContext(layer: PromptLayer, ctx?: ComposeContext): boolean {
+    if (layer.type === SYSTEM_LANGUAGE_LAYER_TYPE) {
+      return false;
+    }
+
     if (layer.type === 'base' || layer.type === 'operator' || layer.type === 'runtime') {
       return true;
     }
@@ -475,8 +495,8 @@ export class PromptComposer {
   private ensureConstitutionPrefix(result: ComposeSplitResult | null): ComposeSplitResult | null {
     if (!this.enableConstitution || !result) return result;
 
-    const hasImmutableSection = result.staticPrefix.includes(IMMUTABLE_HUMAN_SAFETY_LAYER_HEADER);
-    const hasPrecedenceGuard = result.staticPrefix.includes(CONSTITUTION_PRECEDENCE_HEADER);
+    const hasImmutableSection = result.staticPrefix.includes(IMMUTABLE_HUMAN_SAFETY_SECTION_TAG);
+    const hasPrecedenceGuard = result.staticPrefix.includes(CONSTITUTION_PRECEDENCE_SECTION_TAG);
     if (hasImmutableSection && hasPrecedenceGuard) {
       return result;
     }

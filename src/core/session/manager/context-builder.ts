@@ -2,6 +2,11 @@ import type { LLMProviderPort } from '../../agent/contracts.js';
 import { countMessageTokens, countTokens } from '../../../primitives/llm/tokens.js';
 import { createComponentLogger } from '../../../shared/logger.js';
 import type { ContextMessage, LLMContext } from '../../../shared/contracts/runtime.js';
+import {
+  buildAuthenticityProvenance,
+  DERIVED_DETAIL_LOSS_NOTE,
+  DERIVED_EMOTIONAL_TEXTURE_NOTE,
+} from '../../../shared/authenticity-provenance.js';
 import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
 import {
   resolveAdaptiveContextBudgetProfile,
@@ -13,20 +18,26 @@ import {
 import type { EventBus } from '../../../shared/event-bus.js';
 import type { PromptRegistryStatePort } from '../../identity/prompt-state-port.js';
 import { wrapCompactionSummaryAsUntrustedContext } from '../../identity/prompt-composer.js';
+import { renderSystemLanguageTemplate } from '../../identity/system-language.js';
 import {
   orderPromptRuntimeSystemPromptSections,
   type PromptRuntimeSystemPromptBlockId,
 } from '../../identity/prompt-runtime.js';
 import { resolveCachedPromptRuntimeLayoutStore } from '../../identity/prompt-runtime-store-cache.js';
 import type { TurnSessionContextSnapshot } from '../../turns/snapshot.js';
-import { cloneSessionEntry } from '../../turns/snapshot.js';
+import {
+  buildSnapshotVersionPointer,
+  cloneSessionContinuityArtifact,
+  cloneSessionEntry,
+} from '../../turns/snapshot.js';
 import type { SessionEntry } from '../types.js';
+import type { SessionContinuityArtifact } from '../continuity-artifacts.js';
 import { resolveSessionEntryTurnContext } from '../turn-provenance.js';
 import {
-  classifyChannel,
+  classifyChannelDisclosure,
   type ChannelMeta,
 } from '../../../system/trust/policy.js';
-import type { ChannelVisibility } from '../../../system/trust/types.js';
+import type { ChannelPrivacy } from '../../../system/trust/context-envelope.js';
 import type { SessionStore } from '../../../persistence/sessions/store.js';
 import type { CrossChannelContinuityPort } from '../cross-channel-continuity-port.js';
 import type {
@@ -34,7 +45,7 @@ import type {
   ContextManifestMemorySeed,
 } from '../context-manifest.js';
 import {
-  buildSessionHistorySummaryText,
+  buildRecentSessionSummaryFallbackText,
   collectRecentEntriesWithinHistorySpan,
   DEFAULT_CONTINUITY_CONTEXT_LIMIT,
   applyTemporalSessionHistoryWindow,
@@ -51,16 +62,29 @@ import {
   countIntentionAppraisalArtifacts,
   entriesToMessages,
 } from './context-support.js';
-import { runAutoCompaction, shouldCompact } from './compaction-service.js';
+import { runAutoCompaction, shouldCompact, summarizeRecentSessionEntries } from './compaction-service.js';
+import {
+  DEFAULT_TEMPORAL_WAKEUP_CONFIG,
+  type TemporalWakeupWakeSummaryConfig,
+} from '../../../system/config/scheduler-config.js';
 import { MASKED_TOOL_OBSERVATION_CONTENT } from '../tool-observation.js';
 import { applyFocusCompactionRanges, type FocusCompactionRange } from '../focus-knowledge.js';
 import { buildPromptSectionTelemetryList } from '../../identity/prompt-sections.js';
+import { formatActiveDateTimeIso } from '../../../shared/time/active-timezone.js';
+import { escapeXmlText } from '../../../shared/utils/escaping.js';
+import { classifyIdleGapTexture, type IdleGapTexture } from '../../scheduler/time-texture.js';
+import type { CogSecEvent } from '../../cogsec/events.js';
+import {
+  buildCogSecEventNoticeBlock,
+  listAgentVisibleCogSecEvents,
+} from '../../cogsec/safe-log.js';
 
 const log = createComponentLogger('ContextBuilder');
 const INTERNAL_REFLECTION_CHANNEL_PREFIX = 'internal:reflection:';
 const INTERNAL_HEARTBEAT_CHANNEL = 'internal:heartbeat';
 export const DEFAULT_ORIENTATION_IDLE_THRESHOLD_MS = 3 * 60 * 60 * 1000;
 const ORIENTATION_SUMMARY_MAX_CHARS = 180;
+const MIN_HISTORY_SUMMARY_TOKEN_BUDGET = 32;
 
 export function isInternalHeartbeatChannel(channelId: string): boolean {
   return channelId === INTERNAL_HEARTBEAT_CHANNEL;
@@ -137,6 +161,8 @@ export interface OrientationNoteTelemetry {
   noteText?: string;
   sessionSummary?: string;
   continuitySummary?: string;
+  lastUserMessage?: string;
+  timeTexture?: IdleGapTexture;
   sourceCounts: {
     session: number;
     continuity: number;
@@ -150,27 +176,10 @@ function compactPromptText(value: string, maxChars = ORIENTATION_SUMMARY_MAX_CHA
   return `${normalized.slice(0, maxChars - 3)}...`;
 }
 
-function summarizeConversationEntries(
-  entries: SessionEntry[],
-  characterName?: string,
-  maxItems = 2,
-): string {
-  const relevant = entries.filter(entry => entry.role === 'user' || entry.role === 'assistant');
-  if (relevant.length === 0) return '';
-
-  const recent = relevant.slice(-maxItems);
-  const roleNames = { charName: characterName };
-  return recent.map((entry) => {
-    const speaker = entry.role === 'assistant'
-      ? resolveRoleName('assistant', roleNames)
-      : entry.authorName ?? resolveRoleName('user', roleNames);
-    return `${speaker}: ${compactPromptText(entry.content)}`;
-  }).join(' / ');
-}
-
 function buildHistorySummaryMessage(
   summaryText: string,
-  channelVisibility: ChannelVisibility,
+  channelVisibility: ChannelPrivacy,
+  sourceSpanCount: number,
 ): ContextMessage {
   const content = isUntrustedVisibility(channelVisibility)
     ? wrapUntrustedContext(summaryText)
@@ -178,13 +187,27 @@ function buildHistorySummaryMessage(
   return {
     role: 'system',
     content,
+    provenance: buildAuthenticityProvenance({
+      kind: 'compaction_summary',
+      sourceAuthor: 'mixed',
+      transformedBy: 'compaction',
+      wording: 'derived',
+      directSpeech: false,
+      detailLoss: 'possible',
+      emotionalTexture: 'may_be_flattened',
+      safeAsPartnerSpeech: false,
+      sourceSpanCount,
+      notes: [DERIVED_DETAIL_LOSS_NOTE, DERIVED_EMOTIONAL_TEXTURE_NOTE],
+    }),
   };
 }
 
 function buildSessionHistoryMessages(
   verbatimEntries: SessionEntry[],
-  channelVisibility: ChannelVisibility,
+  channelVisibility: ChannelPrivacy,
+  renderGroupUserAttribution: boolean,
   summaryText?: string,
+  summarySourceSpanCount = 0,
 ): ContextMessage[] {
   const trimmedSummary = summaryText?.trim();
   const tailMessages = entriesToMessages(
@@ -192,28 +215,90 @@ function buildSessionHistoryMessages(
     channelVisibility,
     true,
     Boolean(trimmedSummary),
+    renderGroupUserAttribution,
   );
   if (!trimmedSummary) {
     return tailMessages;
   }
   return [
-    buildHistorySummaryMessage(trimmedSummary, channelVisibility),
+    buildHistorySummaryMessage(trimmedSummary, channelVisibility, summarySourceSpanCount),
     ...tailMessages,
   ];
 }
 
-export function assembleSessionHistoryForContext(params: {
+export async function assembleSessionHistoryForContextWithLlmSummary(params: {
   entries: SessionEntry[];
-  channelVisibility: ChannelVisibility;
+  channelVisibility: ChannelPrivacy;
+  renderGroupUserAttribution: boolean;
   tokenBudget: number;
   characterName?: string;
+  channelId: string;
+  llmProvider?: LLMProviderPort;
+  promptRegistry: PromptRegistryStatePort | null;
+}): Promise<{
+  summaryText: string;
+  summarizedEntryCount: number;
+  verbatimEntries: SessionEntry[];
+  messages: ContextMessage[];
+}> {
+  const directAssembly = assembleVerbatimSessionHistory(params);
+  if (directAssembly) return directAssembly;
+
+  const candidate = selectHistorySummaryCandidate(params);
+  if (candidate) {
+    const generatedSummaryText = await summarizeRecentSessionEntries({
+      channelId: params.channelId,
+      entries: candidate.summaryEntries,
+      characterName: params.characterName,
+      llmProvider: params.llmProvider,
+      promptRegistry: params.promptRegistry,
+      maxTokens: candidate.remainingBudget,
+      purpose: 'history_budget',
+    });
+    const fittedGeneratedSummaryText = fitHistorySummaryTextToBudget({
+      summaryText: generatedSummaryText,
+      candidate,
+      channelVisibility: params.channelVisibility,
+      renderGroupUserAttribution: params.renderGroupUserAttribution,
+      tokenBudget: params.tokenBudget,
+    });
+    if (fittedGeneratedSummaryText) {
+      return buildHistoryAssemblyFromSummary({
+        summaryText: fittedGeneratedSummaryText,
+        candidate,
+        channelVisibility: params.channelVisibility,
+        renderGroupUserAttribution: params.renderGroupUserAttribution,
+      });
+    }
+  }
+
+  return assembleTrimmedSessionHistory(params);
+}
+
+interface HistorySummaryCandidate {
+  summaryEntries: SessionEntry[];
+  verbatimEntries: SessionEntry[];
+  remainingBudget: number;
+}
+
+function assembleVerbatimSessionHistory(params: {
+  entries: SessionEntry[];
+  channelVisibility: ChannelPrivacy;
+  renderGroupUserAttribution: boolean;
+  tokenBudget: number;
 }): {
   summaryText: string;
   summarizedEntryCount: number;
   verbatimEntries: SessionEntry[];
   messages: ContextMessage[];
-} {
-  const allMessages = entriesToMessages(params.entries, params.channelVisibility);
+} | null {
+  const allMessages = entriesToMessages(
+    params.entries,
+    params.channelVisibility,
+    true,
+    false,
+    params.renderGroupUserAttribution,
+  );
   if (params.entries.length <= SESSION_HISTORY_MIN_MESSAGES || countMessageTokens(allMessages) <= params.tokenBudget) {
     return {
       summaryText: '',
@@ -223,6 +308,15 @@ export function assembleSessionHistoryForContext(params: {
     };
   }
 
+  return null;
+}
+
+function selectHistorySummaryCandidate(params: {
+  entries: SessionEntry[];
+  channelVisibility: ChannelPrivacy;
+  renderGroupUserAttribution: boolean;
+  tokenBudget: number;
+}): HistorySummaryCandidate | null {
   const maxSplitIndex = params.entries.length - SESSION_HISTORY_MIN_MESSAGES;
   for (let splitIndex = 1; splitIndex <= maxSplitIndex; splitIndex += 1) {
     const initialVerbatimEntries = params.entries.slice(splitIndex);
@@ -247,44 +341,135 @@ export function assembleSessionHistoryForContext(params: {
       params.channelVisibility,
       true,
       true,
+      params.renderGroupUserAttribution,
     );
     const tailTokenCount = countMessageTokens(tailMessages);
     const remainingBudget = params.tokenBudget - tailTokenCount;
-    if (remainingBudget <= 0) {
+    if (remainingBudget < MIN_HISTORY_SUMMARY_TOKEN_BUDGET) {
       continue;
     }
 
-    const summaryText = buildSessionHistorySummaryText({
-      entries: summaryEntries,
-      characterName: params.characterName,
-      maxTokens: remainingBudget,
-    });
-    if (!summaryText) {
-      continue;
-    }
-
-    const messages = buildSessionHistoryMessages(
+    return {
+      summaryEntries,
       verbatimEntries,
-      params.channelVisibility,
-      summaryText,
-    );
-    if (countMessageTokens(messages) <= params.tokenBudget) {
-      return {
-        summaryText,
-        summarizedEntryCount: summaryEntries.length,
-        verbatimEntries,
-        messages,
-      };
-    }
+      remainingBudget,
+    };
   }
 
+  return null;
+}
+
+function stripHistorySummaryHeader(summaryText: string): string {
+  return summaryText
+    .replace(/^\[History summary\]\s*/iu, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function withHistorySummaryHeader(summaryText: string): string {
+  const normalized = stripHistorySummaryHeader(summaryText);
+  return normalized ? `[History summary]\n${normalized}` : '';
+}
+
+function buildOrientationFallbackSummary(
+  entries: readonly SessionEntry[],
+  characterName?: string,
+): string {
+  return stripHistorySummaryHeader(buildRecentSessionSummaryFallbackText({
+    entries,
+    characterName,
+    maxTokens: 96,
+  }));
+}
+
+function fitHistorySummaryTextToBudget(params: {
+  summaryText: string;
+  candidate: HistorySummaryCandidate;
+  channelVisibility: ChannelPrivacy;
+  renderGroupUserAttribution: boolean;
+  tokenBudget: number;
+}): string {
+  const normalized = stripHistorySummaryHeader(params.summaryText);
+  if (!normalized) return '';
+
+  let candidateText = withHistorySummaryHeader(normalized);
+  for (;;) {
+    const messages = buildSessionHistoryMessages(
+      params.candidate.verbatimEntries,
+      params.channelVisibility,
+      params.renderGroupUserAttribution,
+      candidateText,
+      params.candidate.summaryEntries.length,
+    );
+    if (countMessageTokens(messages) <= params.tokenBudget) {
+      return candidateText;
+    }
+
+    const body = stripHistorySummaryHeader(candidateText);
+    if (body.length < 100) return '';
+    candidateText = withHistorySummaryHeader(`${body.slice(0, Math.floor(body.length * 0.8)).trimEnd()}...`);
+  }
+}
+
+function buildHistoryAssemblyFromSummary(params: {
+  summaryText: string;
+  candidate: HistorySummaryCandidate;
+  channelVisibility: ChannelPrivacy;
+  renderGroupUserAttribution: boolean;
+}): {
+  summaryText: string;
+  summarizedEntryCount: number;
+  verbatimEntries: SessionEntry[];
+  messages: ContextMessage[];
+} {
+  const messages = buildSessionHistoryMessages(
+    params.candidate.verbatimEntries,
+    params.channelVisibility,
+    params.renderGroupUserAttribution,
+    params.summaryText,
+    params.candidate.summaryEntries.length,
+  );
+  return {
+    summaryText: params.summaryText,
+    summarizedEntryCount: params.candidate.summaryEntries.length,
+    verbatimEntries: params.candidate.verbatimEntries,
+    messages,
+  };
+}
+
+function assembleTrimmedSessionHistory(params: {
+  entries: SessionEntry[];
+  channelVisibility: ChannelPrivacy;
+  renderGroupUserAttribution: boolean;
+  tokenBudget: number;
+}): {
+  summaryText: string;
+  summarizedEntryCount: number;
+  verbatimEntries: SessionEntry[];
+  messages: ContextMessage[];
+} {
   const fallbackEntries = trimRecentEntriesToTokenBudget(params.entries, params.tokenBudget);
   return {
     summaryText: '',
     summarizedEntryCount: 0,
     verbatimEntries: fallbackEntries,
-    messages: entriesToMessages(fallbackEntries, params.channelVisibility),
+    messages: entriesToMessages(
+      fallbackEntries,
+      params.channelVisibility,
+      true,
+      false,
+      params.renderGroupUserAttribution,
+    ),
   };
+}
+
+function shouldRenderSessionHistoryUserAttribution(
+  channelVisibility: ChannelPrivacy,
+  channelMeta?: ChannelMeta,
+): boolean {
+  if (channelMeta?.isDirectMessage === true) return false;
+  if (channelMeta?.isDirectMessage === false) return true;
+  return channelVisibility === 'public';
 }
 
 function formatIdleGap(idleGapMs: number): string {
@@ -307,12 +492,110 @@ function formatIdleGap(idleGapMs: number): string {
     : `${days} day${days === 1 ? '' : 's'}`;
 }
 
+function formatIsoDuration(durationMs: number): string {
+  const totalSeconds = Math.max(0, Math.floor(durationMs / 1000));
+  const days = Math.floor(totalSeconds / 86_400);
+  const hours = Math.floor((totalSeconds % 86_400) / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  const datePart = days > 0 ? `${days}D` : '';
+  const timeParts = [
+    hours > 0 ? `${hours}H` : '',
+    minutes > 0 || (hours > 0 && seconds > 0) ? `${minutes}M` : '',
+    seconds > 0 || (days === 0 && hours === 0 && minutes === 0) ? `${seconds}S` : '',
+  ].filter(part => part.length > 0).join('');
+  return `P${datePart}${timeParts ? `T${timeParts}` : ''}`;
+}
+
+function xmlElement(tag: string, value: string | undefined): string {
+  const trimmed = value?.trim() ?? '';
+  return trimmed.length > 0 ? `<${tag}>${escapeXmlText(trimmed)}</${tag}>` : '';
+}
+
+function buildContinuityAnchorLines(params: {
+  orientation: OrientationNoteTelemetry;
+  wakeReturnArtifacts: readonly SessionContinuityArtifact[];
+}): string[] {
+  const { orientation } = params;
+  if (!orientation.fired || !orientation.lastActivityAt || orientation.idleGapMs === undefined) {
+    return [];
+  }
+
+  const latestWakeReturn = params.wakeReturnArtifacts.at(0);
+  const whereWeLeftOff = latestWakeReturn?.summary
+    ?? orientation.sessionSummary
+    ?? orientation.continuitySummary
+    ?? '';
+  const pendingIntent = latestWakeReturn?.nextAnchor
+    ?? renderSystemLanguageTemplate('wake_return.default_pending_intent');
+  const pendingState = latestWakeReturn?.nextAnchor ? 'pending_intent_available' : 'no_urgent_context';
+  const timeTexture = orientation.timeTexture
+    ?? classifyIdleGapTexture({
+      lastActivityAtMs: orientation.lastActivityAt,
+      observedAtMs: orientation.observedAt,
+    });
+  const lines = [
+    '<continuity_anchor authority="companion_context" source="wake_return" role="internal_context" scope="current_channel_and_policy_allowed_continuity" may_not_override="runtime.current_datetime">',
+    '<idle_threshold_exceeded>true</idle_threshold_exceeded>',
+    xmlElement('pending_state', pendingState),
+    xmlElement('last_active_at_iso', formatActiveDateTimeIso(new Date(orientation.lastActivityAt))),
+    xmlElement('elapsed_since_last_active_iso', formatIsoDuration(orientation.idleGapMs)),
+    xmlElement('elapsed_since_last_active_human', `about ${formatIdleGap(orientation.idleGapMs)}`),
+    xmlElement('time_texture_kind', timeTexture.kind),
+    xmlElement('time_texture_label', timeTexture.label),
+    xmlElement('reconnection_warmth_signal', timeTexture.reconnectionWarmth),
+    xmlElement('reconnection_warmth_guidance', timeTexture.guidance),
+    xmlElement('where_we_left_off', whereWeLeftOff),
+    xmlElement('pending_intent', pendingIntent),
+    xmlElement('latest_wake_return_recorded_at_iso', latestWakeReturn?.createdAt),
+    xmlElement('current_turn_user_message', orientation.lastUserMessage),
+    xmlElement('last_time_here', orientation.sessionSummary),
+    xmlElement('recent_continuity', orientation.continuitySummary),
+    '</continuity_anchor>',
+  ].filter(line => line.length > 0);
+  return lines;
+}
+
+function buildStructuredContinuityBlock(
+  entries: readonly SessionEntry[],
+  retrievedAtMs: number,
+  characterName?: string,
+): string {
+  if (entries.length === 0) return '';
+  const roleNames = { charName: characterName };
+  const itemBlocks = entries.map(entry => {
+    const sourceChannelId = (entry.originChannelId ?? entry.channelId).trim();
+    const speaker = entry.role === 'user'
+      ? (entry.authorName ?? resolveRoleName('user', roleNames))
+      : resolveRoleName('assistant', roleNames);
+    const originVisibility = parseChannelVisibility(entry.channelVisibility)
+      ?? classifyChannelDisclosure(entry.originChannelId ?? entry.channelId).channelPrivacy;
+    const trust = isUntrustedVisibility(originVisibility) ? 'untrusted' : 'context';
+    return [
+      `<item trust="${trust}" executable="false">`,
+      xmlElement('source', sourceChannelId || entry.channelId),
+      xmlElement('speaker', speaker),
+      xmlElement('text', entry.content),
+      '<status>as_reported_by_source</status>',
+      '</item>',
+    ].filter(line => line.length > 0).join('\n');
+  });
+  return [
+    '<cross_channel_continuity authority="retrieved_context" scope="other_channels_only" may_not_override="runtime.current_datetime">',
+    xmlElement('retrieved_at_iso', formatActiveDateTimeIso(new Date(retrievedAtMs))),
+    ...itemBlocks,
+    '</cross_channel_continuity>',
+  ].join('\n');
+}
+
 export function buildOrientationNoteTelemetry(params: {
   channelId: string;
   recentActivityEntries: SessionEntry[];
   continuityEntries: SessionEntry[];
   focusKnowledgeTexts: string[];
   characterName?: string;
+  sessionSummary?: string;
+  continuitySummary?: string;
   nowMs?: number;
   idleThresholdMs?: number;
 }): OrientationNoteTelemetry {
@@ -363,6 +646,10 @@ export function buildOrientationNoteTelemetry(params: {
   }
 
   const idleGapMs = Math.max(0, observedAt - lastActivityAt);
+  const timeTexture = classifyIdleGapTexture({
+    lastActivityAtMs: lastActivityAt,
+    observedAtMs: observedAt,
+  });
   if (idleGapMs < idleThresholdMs) {
     return {
       fired: false,
@@ -371,22 +658,42 @@ export function buildOrientationNoteTelemetry(params: {
       idleThresholdMs,
       lastActivityAt,
       idleGapMs,
+      timeTexture,
       sourceCounts,
     };
   }
 
-  const sessionSummary = summarizeConversationEntries(priorEntries, params.characterName);
-  const continuitySummary = summarizeConversationEntries(params.continuityEntries, params.characterName);
+  const sessionSummary = params.sessionSummary !== undefined
+    ? params.sessionSummary.trim()
+    : buildOrientationFallbackSummary(priorEntries, params.characterName);
+  const continuitySummary = params.continuitySummary !== undefined
+    ? params.continuitySummary.trim()
+    : buildOrientationFallbackSummary(params.continuityEntries, params.characterName);
+  let lastUserMessage: string | undefined;
+  for (let index = relevantRecentEntries.length - 1; index >= 0; index -= 1) {
+    const entry = relevantRecentEntries[index];
+    if (entry.role === 'user') {
+      lastUserMessage = entry.content;
+      break;
+    }
+  }
 
   const noteParts = [
-    '[Welcome back]',
-    `It has been about ${formatIdleGap(idleGapMs)} since this channel was last active.`,
+    renderSystemLanguageTemplate('wake_return.header'),
+    renderSystemLanguageTemplate('wake_return.elapsed', {
+      elapsed: formatIdleGap(idleGapMs),
+    }),
+    `Time texture: ${timeTexture.label}; reconnection warmth signal is ${timeTexture.reconnectionWarmth}.`,
   ];
   if (sessionSummary) {
-    noteParts.push(`Last time here: ${sessionSummary}.`);
+    noteParts.push(renderSystemLanguageTemplate('wake_return.last_time_here', {
+      summary: sessionSummary,
+    }));
   }
   if (continuitySummary) {
-    noteParts.push(`Recent continuity: ${continuitySummary}.`);
+    noteParts.push(renderSystemLanguageTemplate('wake_return.recent_continuity', {
+      summary: continuitySummary,
+    }));
   }
 
   return {
@@ -396,15 +703,175 @@ export function buildOrientationNoteTelemetry(params: {
     idleThresholdMs,
     lastActivityAt,
     idleGapMs,
+    timeTexture,
     noteText: noteParts.join('\n').trim(),
     sessionSummary,
     continuitySummary,
+    ...(lastUserMessage ? { lastUserMessage: compactPromptText(lastUserMessage) } : {}),
     sourceCounts,
+  };
+}
+
+export interface CaptureTurnSessionContextParams {
+  /** Resolved session channel id. */
+  channelId: string;
+  sourceChannelId: string;
+  userId?: string;
+  channelMeta?: ChannelMeta;
+  continuityFallbackUserIds?: string[];
+  turnBudgetCharacteristics?: ContextBudgetTurnCharacteristics;
+  config: SubstrateConfig;
+  /** Compaction-boundary-scoped store: recent entries + compaction summaries. */
+  store: SessionStore;
+  /** Raw session store used for the orientation recent-activity scan. */
+  activityStore: SessionStore;
+  crossChannelContinuity: CrossChannelContinuityPort;
+  focusCompactionRanges: FocusCompactionRange[];
+  focusKnowledgeTexts: string[];
+  wakeReturnArtifacts: SessionContinuityArtifact[];
+  compactionPromptText: string;
+  characterName?: string;
+  /** Optional LLM provider for foreground history-budget summarization. */
+  llmProvider?: LLMProviderPort;
+  promptRegistry: PromptRegistryStatePort | null;
+}
+
+/**
+ * The single session-context derivation for a turn (E2.2).
+ *
+ * This is the ONE place session history, continuity, focus knowledge,
+ * compaction summaries, and the orientation note are derived for a context
+ * build. The turn pipeline captures once (pre-turn, feeding the retrieval
+ * query and the persisted PromptPlan turn snapshot) and buildSessionContext
+ * consumes the captured snapshot; direct callers capture through
+ * SessionManager.buildContext, which performs this capture inline. The former
+ * session-manager snapshot builder and the builder's live re-derivation
+ * branches were both deleted with the PromptPlan consolidation.
+ */
+export async function captureTurnSessionContext(
+  params: CaptureTurnSessionContextParams,
+): Promise<TurnSessionContextSnapshot> {
+  const adaptiveProfile = resolveAdaptiveContextBudgetProfile(
+    params.config,
+    params.turnBudgetCharacteristics,
+  );
+  const historyBudget = resolveSessionHistoryBudget(params.config, {
+    ...(params.turnBudgetCharacteristics ? { turn: params.turnBudgetCharacteristics } : {}),
+    adaptiveProfile,
+  });
+  const maxHistorySpanMs = resolveMaxHistorySpanMs(params.config);
+  const collected = collectRecentEntriesWithinHistorySpan({
+    store: params.store,
+    channelId: params.channelId,
+    estimatedCount: historyBudget.estimatedCount,
+    maxHistorySpanMs,
+  });
+  let recent = applyTemporalSessionHistoryWindow(
+    collected.entries,
+    params.turnBudgetCharacteristics,
+  );
+  const focusCompaction = applyFocusCompactionRanges(recent, params.focusCompactionRanges);
+  recent = focusCompaction.entries;
+  const intentionAppraisalArtifactCount = countIntentionAppraisalArtifacts(recent);
+  recent = applyObservationMasking(
+    recent,
+    params.config.observationMaskingWindow ?? DEFAULT_OBSERVATION_MASKING_WINDOW,
+  ).entries;
+  const channelVisibility = classifyChannelDisclosure(params.sourceChannelId, params.channelMeta).channelPrivacy;
+  const assembledHistory = await assembleSessionHistoryForContextWithLlmSummary({
+    entries: recent,
+    channelVisibility,
+    renderGroupUserAttribution: shouldRenderSessionHistoryUserAttribution(
+      channelVisibility,
+      params.channelMeta,
+    ),
+    tokenBudget: historyBudget.tokenBudget,
+    characterName: params.characterName,
+    channelId: params.channelId,
+    llmProvider: params.llmProvider,
+    promptRegistry: params.promptRegistry,
+  });
+  recent = assembledHistory.verbatimEntries;
+
+  const continuityEntries = params.userId
+    ? params.crossChannelContinuity.getMerged({
+      canonicalUserId: params.userId,
+      limit: params.config.continuityMessageLimit ?? DEFAULT_CONTINUITY_CONTEXT_LIMIT,
+      fallbackUserIds: params.continuityFallbackUserIds ?? [],
+      channelId: params.sourceChannelId,
+      channelMeta: params.channelMeta,
+    })
+    : [];
+  const orientationContinuityEntries = filterContinuityEntriesForChannel(
+    params.sourceChannelId,
+    continuityEntries,
+  );
+  const orientationRecentActivityEntries = getOrientationRecentActivityEntries({
+    channelId: params.channelId,
+    userId: params.userId,
+    channelMeta: params.channelMeta,
+    continuityFallbackUserIds: params.continuityFallbackUserIds ?? [],
+    store: params.activityStore,
+    config: params.config,
+    crossChannelContinuity: params.crossChannelContinuity,
+  });
+  const compactionSummaryTexts = params.store
+    .getCompactionSummaries(params.channelId)
+    .map(summary => summary.summary);
+  const orientation = buildOrientationNoteTelemetry({
+    channelId: params.channelId,
+    recentActivityEntries: orientationRecentActivityEntries,
+    continuityEntries: orientationContinuityEntries,
+    focusKnowledgeTexts: params.focusKnowledgeTexts,
+    characterName: params.characterName,
+  });
+
+  return {
+    channelId: params.channelId,
+    recentEntries: recent.map(cloneSessionEntry),
+    sourceEntryCount: collected.sourceCount,
+    ...(assembledHistory.summaryText
+      ? { historySummaryText: assembledHistory.summaryText }
+      : {}),
+    ...(assembledHistory.summarizedEntryCount > 0
+      ? { historySummaryEntryCount: assembledHistory.summarizedEntryCount }
+      : {}),
+    compactionSummaryTexts: [...compactionSummaryTexts],
+    focusKnowledgeTexts: [...params.focusKnowledgeTexts],
+    continuityEntries: continuityEntries.map(cloneSessionEntry),
+    wakeReturnArtifacts: params.wakeReturnArtifacts.map(cloneSessionContinuityArtifact),
+    orientation,
+    intentionAppraisalArtifactCount,
+    compactionPromptText: params.compactionPromptText,
+    versionPointer: buildSnapshotVersionPointer([
+      params.channelId,
+      recent.at(-1)?.id,
+      recent.at(-1)?.timestamp,
+      assembledHistory.summaryText,
+      assembledHistory.summarizedEntryCount,
+      compactionSummaryTexts.join('\n'),
+      params.focusKnowledgeTexts.join('\n'),
+      focusCompaction.compactedCount,
+      continuityEntries.at(-1)?.id,
+      continuityEntries.at(-1)?.timestamp,
+      params.wakeReturnArtifacts.at(0)?.id,
+      params.wakeReturnArtifacts.at(0)?.createdAt,
+      params.wakeReturnArtifacts.at(0)?.summary,
+      params.wakeReturnArtifacts.at(0)?.nextAnchor,
+      params.compactionPromptText,
+      orientation.fired ? 'orientation:fired' : `orientation:${orientation.reason}`,
+      orientation.idleGapMs,
+      orientation.lastActivityAt,
+      orientation.noteText,
+      orientation.timeTexture?.kind,
+      orientation.timeTexture?.reconnectionWarmth,
+    ]),
   };
 }
 
 interface BuildSessionContextParams {
   channelId: string;
+  sourceChannelId?: string;
   systemPrompt: string;
   coreMemoryBlock: string;
   memoriesBlock: string;
@@ -425,19 +892,36 @@ interface BuildSessionContextParams {
     capturedAt: number;
   }) => void;
   crossChannelContinuity: CrossChannelContinuityPort;
+  wakeReturnArtifacts: readonly SessionContinuityArtifact[];
   /** Character name from identity card (e.g. 'Companion'). Used for display labels. */
   characterName?: string;
-  turnSnapshot?: TurnSessionContextSnapshot;
-  focusKnowledgeTexts: string[];
-  focusCompactionRanges: FocusCompactionRange[];
+  /**
+   * The turn's captured session context (captureTurnSessionContext). The
+   * builder is a pure consumer of this snapshot: there is no parallel live
+   * re-derivation path (E2.2).
+   */
+  turnSessionContext: TurnSessionContextSnapshot;
   memoryManifestSeed?: ContextManifestMemorySeed;
   turnBudgetCharacteristics?: ContextBudgetTurnCharacteristics;
   compactionMode?: 'deferred' | 'foreground';
+  recentSummaryMode?: 'deferred' | 'foreground';
   pendingCompaction?: boolean;
+  cogSecEvents?: readonly CogSecEvent[];
+  /**
+   * JSON-owned wake summary budgets and continuity entry floor
+   * (scheduler.json temporalWakeup.wakeSummary). Falls back to the validated
+   * scheduler defaults when composition has not threaded scheduler config.
+   */
+  wakeSummaryConfig?: TemporalWakeupWakeSummaryConfig;
 }
 
 export async function buildSessionContext(params: BuildSessionContextParams): Promise<LLMContext> {
-  const channelVisibility = classifyChannel(params.channelId, params.channelMeta);
+  const sourceChannelId = params.sourceChannelId ?? params.channelId;
+  const channelVisibility = classifyChannelDisclosure(sourceChannelId, params.channelMeta).channelPrivacy;
+  const renderGroupUserAttribution = shouldRenderSessionHistoryUserAttribution(
+    channelVisibility,
+    params.channelMeta,
+  );
   const adaptiveBudgetProfile = resolveAdaptiveContextBudgetProfile(
     params.config,
     params.turnBudgetCharacteristics,
@@ -450,53 +934,65 @@ export async function buildSessionContext(params: BuildSessionContextParams): Pr
     ...(params.turnBudgetCharacteristics ? { turn: params.turnBudgetCharacteristics } : {}),
     adaptiveProfile: adaptiveBudgetProfile,
   });
-  const maxHistorySpanMs = resolveMaxHistorySpanMs(params.config);
-  const collectedRecent = params.turnSnapshot
-    ? null
-    : collectRecentEntriesWithinHistorySpan({
-      store: params.store,
-      channelId: params.channelId,
-      estimatedCount: historyBudget.estimatedCount,
-      maxHistorySpanMs,
-    });
-  let recent = params.turnSnapshot
-    ? params.turnSnapshot.recentEntries.map(cloneSessionEntry)
-    : collectedRecent!.entries;
-  if (!params.turnSnapshot) {
-    recent = applyTemporalSessionHistoryWindow(recent, params.turnBudgetCharacteristics);
-  }
-  const sourceEntryCount = params.turnSnapshot
-    ? recent.length + (params.turnSnapshot.historySummaryEntryCount ?? 0)
-    : collectedRecent!.sourceCount;
-  const focusCompaction = applyFocusCompactionRanges(
-    recent,
-    params.focusCompactionRanges,
-  );
-  recent = focusCompaction.entries;
-  let historySummaryText = params.turnSnapshot?.historySummaryText?.trim() ?? '';
-  let historySummaryEntryCount = params.turnSnapshot?.historySummaryEntryCount ?? 0;
+  let recent = params.turnSessionContext.recentEntries.map(cloneSessionEntry);
+  const historySummaryEntryCountFromSnapshot = params.turnSessionContext.historySummaryEntryCount ?? 0;
+  const sourceEntryCount = params.turnSessionContext.sourceEntryCount
+    ?? (recent.length + historySummaryEntryCountFromSnapshot);
+  const historySummaryText = params.turnSessionContext.historySummaryText?.trim() ?? '';
+  const historySummaryEntryCount = historySummaryEntryCountFromSnapshot;
   const intentionAppraisalArtifactCount = countIntentionAppraisalArtifacts(recent);
   const masking = applyObservationMasking(
     recent,
     params.config.observationMaskingWindow ?? DEFAULT_OBSERVATION_MASKING_WINDOW,
   );
   recent = masking.entries;
-  let compactionSummaryTexts = params.turnSnapshot
-    ? [...params.turnSnapshot.compactionSummaryTexts]
-    : params.store.getCompactionSummaries(params.channelId).map(summary => summary.summary);
-  const focusKnowledgeTexts = params.turnSnapshot
-    ? [...params.turnSnapshot.focusKnowledgeTexts]
-    : [...params.focusKnowledgeTexts];
+  let compactionSummaryTexts = [...params.turnSessionContext.compactionSummaryTexts];
+  const focusKnowledgeTexts = [...params.turnSessionContext.focusKnowledgeTexts];
+  const memoryIncludedCount = params.memoryManifestSeed?.returnedCount ?? 0;
+  const coreMemoryProvenance = buildAuthenticityProvenance({
+    kind: 'memory_retrieval',
+    sourceAuthor: 'memory',
+    transformedBy: 'retrieval',
+    wording: 'derived',
+    directSpeech: false,
+    detailLoss: 'possible',
+    emotionalTexture: 'may_be_flattened',
+    safeAsPartnerSpeech: false,
+    notes: [DERIVED_DETAIL_LOSS_NOTE, DERIVED_EMOTIONAL_TEXTURE_NOTE],
+  });
+  const memorySectionProvenance = buildAuthenticityProvenance({
+    kind: 'memory_retrieval',
+    sourceAuthor: 'memory',
+    transformedBy: 'retrieval',
+    wording: 'derived',
+    directSpeech: false,
+    detailLoss: 'possible',
+    emotionalTexture: 'may_be_flattened',
+    safeAsPartnerSpeech: false,
+    sourceSpanCount: memoryIncludedCount || undefined,
+    notes: [DERIVED_DETAIL_LOSS_NOTE, DERIVED_EMOTIONAL_TEXTURE_NOTE],
+  });
   const baseSystemTokenCount = countTokens(params.systemPrompt);
   const hasCoreMemorySection = params.coreMemoryBlock.trim().length > 0;
-  const coreMemorySectionText = hasCoreMemorySection ? params.coreMemoryBlock : '';
+  const coreMemorySectionText = hasCoreMemorySection
+    ? params.coreMemoryBlock
+    : '';
   const coreMemoryTokenCount = countTokens(coreMemorySectionText);
-  const memoryTokenCount = countTokens(params.memoriesBlock);
+  const hasMemorySection = params.memoriesBlock.trim().length > 0;
+  const memorySectionText = hasMemorySection
+    ? params.memoriesBlock
+    : '';
+  const memoryTokenCount = countTokens(memorySectionText);
   const systemTokens = baseSystemTokenCount + coreMemoryTokenCount + memoryTokenCount;
   const preAssemblySessionMessageTokens = countMessageTokens(
-    entriesToMessages(recent, channelVisibility, false),
+    entriesToMessages(recent, channelVisibility, false, false, renderGroupUserAttribution),
   );
   const compactionMode = params.compactionMode ?? 'deferred';
+  const recentSummaryMode = params.recentSummaryMode
+    ?? (params.llmProvider ? 'foreground' : 'deferred');
+  const foregroundRecentSummaryProvider = recentSummaryMode === 'foreground'
+    ? params.llmProvider
+    : undefined;
   const compactionCheck = shouldCompact({
     recent,
     channelVisibility,
@@ -521,7 +1017,7 @@ export async function buildSessionContext(params: BuildSessionContextParams): Pr
       recent,
       channelVisibility,
       systemTokens,
-      compactionPromptText: params.compactionPromptText ?? params.turnSnapshot?.compactionPromptText,
+      compactionPromptText: params.compactionPromptText ?? params.turnSessionContext.compactionPromptText,
       llmProvider: params.llmProvider,
       store: params.store,
       config: params.config,
@@ -539,7 +1035,7 @@ export async function buildSessionContext(params: BuildSessionContextParams): Pr
       ];
     }
     const postCompactionMessageTokens = countMessageTokens(
-      entriesToMessages(recent, channelVisibility, false),
+      entriesToMessages(recent, channelVisibility, false, false, renderGroupUserAttribution),
     );
     const newSummaryTokenCount = result.compactionSummaryText
       ? countTokens(wrapCompactionSummaryAsUntrustedContext(result.compactionSummaryText))
@@ -562,14 +1058,12 @@ export async function buildSessionContext(params: BuildSessionContextParams): Pr
 
   // Build system prompt with memories
   let fullSystem = params.systemPrompt;
-  const hasMemorySection = params.memoriesBlock.trim().length > 0;
-  const memorySectionText = hasMemorySection ? params.memoriesBlock : '';
 
   // Prepend compaction summaries as context
   let compactionSummarySectionText = '';
   if (compactionSummaryTexts.length > 0) {
     const summaryBlock = compactionSummaryTexts.join('\n\n');
-    compactionSummarySectionText = '[Previous conversation summary]\n' + summaryBlock;
+    compactionSummarySectionText = `${renderSystemLanguageTemplate('compaction.header')}\n${summaryBlock}`;
   }
 
   let focusKnowledgeSectionText = '';
@@ -577,31 +1071,9 @@ export async function buildSessionContext(params: BuildSessionContextParams): Pr
     focusKnowledgeSectionText = '[Focus knowledge]\n' + focusKnowledgeTexts.join('\n');
   }
 
-  if (!params.turnSnapshot) {
-    const assembledHistory = assembleSessionHistoryForContext({
-      entries: recent,
-      channelVisibility,
-      tokenBudget: historyBudget.tokenBudget,
-      characterName: params.characterName,
-    });
-    recent = assembledHistory.verbatimEntries;
-    historySummaryText = assembledHistory.summaryText;
-    historySummaryEntryCount = assembledHistory.summarizedEntryCount;
-  }
-
   // Cross-channel continuity: include recent activity from other channels
-  const rawCrossChannel = params.turnSnapshot
-    ? params.turnSnapshot.continuityEntries.map(cloneSessionEntry)
-    : params.userId
-      ? params.crossChannelContinuity.getMerged({
-        canonicalUserId: params.userId,
-        limit: params.config.continuityMessageLimit ?? DEFAULT_CONTINUITY_CONTEXT_LIMIT,
-        fallbackUserIds: params.continuityFallbackUserIds,
-        channelId: params.channelId,
-        channelMeta: params.channelMeta,
-      })
-      : [];
-  const crossChannel = filterContinuityEntriesForChannel(params.channelId, rawCrossChannel);
+  const rawCrossChannel = params.turnSessionContext.continuityEntries.map(cloneSessionEntry);
+  const crossChannel = filterContinuityEntriesForChannel(sourceChannelId, rawCrossChannel);
   const recentActivityEntries = getOrientationRecentActivityEntries({
     channelId: params.channelId,
     userId: params.userId,
@@ -611,43 +1083,130 @@ export async function buildSessionContext(params: BuildSessionContextParams): Pr
     config: params.config,
     crossChannelContinuity: params.crossChannelContinuity,
   });
-  const computedOrientationTelemetry = buildOrientationNoteTelemetry({
+  let computedOrientationTelemetry = buildOrientationNoteTelemetry({
     channelId: params.channelId,
     recentActivityEntries,
     continuityEntries: crossChannel,
     focusKnowledgeTexts,
     characterName: params.characterName,
   });
-  const orientationTelemetry = params.turnSnapshot && !isInternalReflectionChannel(params.channelId)
-    ? (params.turnSnapshot.orientation ?? computedOrientationTelemetry)
+  // Internal reflection turns recompute orientation live (they reflect on the
+  // room, not on the internal transport channel the snapshot was keyed to).
+  const shouldUseSnapshotOrientation = !isInternalReflectionChannel(params.channelId);
+  if (!shouldUseSnapshotOrientation && computedOrientationTelemetry.fired) {
+    const wakeSummaryConfig = params.wakeSummaryConfig ?? DEFAULT_TEMPORAL_WAKEUP_CONFIG.wakeSummary;
+    const latestWakeReturnSummary = params.wakeReturnArtifacts.at(0)?.summary.trim();
+    const relevantRecentEntries = recentActivityEntries.filter(
+      entry => entry.role === 'user' || entry.role === 'assistant',
+    );
+    const priorRecentEntries = relevantRecentEntries.slice(0, -1);
+    // The session side inherits the >1 relevant-entry check from the fired
+    // gate; the cross-channel continuity side needs its own floor so a single
+    // trivial cross-channel message does not trigger an LLM summary. The floor
+    // gates only the LLM call: without a foreground provider the summarizer's
+    // deterministic fallback is free and stays available.
+    const conversationalContinuityEntries = crossChannel.filter(
+      entry => entry.role === 'user' || entry.role === 'assistant',
+    );
+    const skipContinuityLlmSummary = foregroundRecentSummaryProvider !== undefined
+      && conversationalContinuityEntries.length < wakeSummaryConfig.continuityMinEntries;
+    if (skipContinuityLlmSummary) {
+      log.info('Skipping wake_continuity LLM summary below continuity entry floor', {
+        channelId: params.channelId,
+        continuityEntryCount: conversationalContinuityEntries.length,
+        continuityMinEntries: wakeSummaryConfig.continuityMinEntries,
+      });
+    }
+    const [sessionSummary, continuitySummary] = await Promise.all([
+      latestWakeReturnSummary
+        ? Promise.resolve(latestWakeReturnSummary)
+        : summarizeRecentSessionEntries({
+          channelId: params.channelId,
+          entries: priorRecentEntries,
+          characterName: params.characterName,
+          llmProvider: foregroundRecentSummaryProvider,
+          promptRegistry: params.promptRegistry,
+          maxTokens: wakeSummaryConfig.sessionSummaryMaxTokens,
+          purpose: 'wake_session',
+        }),
+      skipContinuityLlmSummary
+        ? Promise.resolve('')
+        : summarizeRecentSessionEntries({
+          channelId: params.channelId,
+          entries: crossChannel,
+          characterName: params.characterName,
+          llmProvider: foregroundRecentSummaryProvider,
+          promptRegistry: params.promptRegistry,
+          maxTokens: wakeSummaryConfig.continuitySummaryMaxTokens,
+          purpose: 'wake_continuity',
+        }),
+    ]);
+    computedOrientationTelemetry = buildOrientationNoteTelemetry({
+      channelId: params.channelId,
+      recentActivityEntries,
+      continuityEntries: crossChannel,
+      focusKnowledgeTexts,
+      characterName: params.characterName,
+      sessionSummary,
+      continuitySummary,
+    });
+  }
+  const orientationTelemetry = shouldUseSnapshotOrientation
+    ? (params.turnSessionContext.orientation ?? computedOrientationTelemetry)
     : computedOrientationTelemetry;
 
-  let continuitySectionText = '';
-  if (orientationTelemetry.fired && orientationTelemetry.noteText) {
-    continuitySectionText = orientationTelemetry.noteText;
-  }
-  if (crossChannel.length > 0) {
-    const roleNames = { charName: params.characterName };
-    const continuityBlock = crossChannel
-      .map(e => {
-        const sourceChannelId = (e.originChannelId ?? e.channelId).trim();
-        const origin = sourceChannelId ? ` [from ${sourceChannelId}]` : '';
-        const speaker = e.role === 'user'
-          ? (e.authorName ?? resolveRoleName('user', roleNames))
-          : resolveRoleName('assistant', roleNames);
-        const rawContent = `${speaker}${origin}: ${e.content}`;
-        const originVisibility = parseChannelVisibility(e.channelVisibility)
-          ?? classifyChannel(e.originChannelId ?? e.channelId);
-        if (!isUntrustedVisibility(originVisibility)) {
-          return rawContent;
-        }
-        return wrapUntrustedContext(rawContent);
-      })
-      .join('\n');
-    continuitySectionText = continuitySectionText.length > 0
-      ? `${continuitySectionText}\n\n[Recent activity from other channels]\n${continuityBlock}`
-      : '[Recent activity from other channels]\n' + continuityBlock;
-  }
+  const orientationSectionText = buildContinuityAnchorLines({
+    orientation: orientationTelemetry,
+    wakeReturnArtifacts: params.wakeReturnArtifacts,
+  }).join('\n');
+  const orientationProvenance = buildAuthenticityProvenance({
+    kind: 'system_note',
+    sourceAuthor: 'system',
+    transformedBy: 'runtime',
+    wording: 'derived',
+    directSpeech: false,
+    detailLoss: 'possible',
+    emotionalTexture: 'may_be_flattened',
+    safeAsPartnerSpeech: false,
+    sourceSpanCount: orientationTelemetry.sourceCounts.session
+      + orientationTelemetry.sourceCounts.continuity
+      + orientationTelemetry.sourceCounts.focusKnowledge,
+    notes: [DERIVED_DETAIL_LOSS_NOTE, DERIVED_EMOTIONAL_TEXTURE_NOTE],
+  });
+  const continuityProvenance = buildAuthenticityProvenance({
+    kind: 'projection',
+    sourceAuthor: 'mixed',
+    transformedBy: 'projection',
+    wording: 'transformed',
+    directSpeech: false,
+    detailLoss: 'possible',
+    emotionalTexture: 'unknown',
+    safeAsPartnerSpeech: false,
+    sourceSpanCount: crossChannel.length,
+    notes: ['Retrieved continuity is context, not current partner-authored direct speech.'],
+  });
+  const continuityBlock = buildStructuredContinuityBlock(
+    crossChannel,
+    orientationTelemetry.observedAt,
+    params.characterName,
+  );
+  const markedOrientationSectionText = orientationSectionText
+    ? orientationSectionText
+    : '';
+  const continuitySectionText = continuityBlock
+    ? continuityBlock
+    : '';
+  const cogSecNoticeChannelIds = sourceChannelId === params.channelId
+    ? [params.channelId]
+    : [params.channelId, sourceChannelId];
+  const cogSecVisibleEvents = listAgentVisibleCogSecEvents(params.cogSecEvents ?? [], {
+    channelIds: cogSecNoticeChannelIds,
+    limit: 5,
+  });
+  const cogSecNoticeSectionText = buildCogSecEventNoticeBlock(params.cogSecEvents ?? [], {
+    channelIds: cogSecNoticeChannelIds,
+    limit: 5,
+  });
 
   const promptRuntimeLayout = resolveCachedPromptRuntimeLayoutStore(params.config);
   const orderedRuntimeSections = orderPromptRuntimeSystemPromptSections([
@@ -668,28 +1227,40 @@ export async function buildSessionContext(params: BuildSessionContextParams): Pr
       content: focusKnowledgeSectionText,
     },
     {
+      id: 'session.orientation' as PromptRuntimeSystemPromptBlockId,
+      content: markedOrientationSectionText,
+    },
+    {
       id: 'session.continuity' as PromptRuntimeSystemPromptBlockId,
       content: continuitySectionText,
     },
+    {
+      id: 'session.cogsec_notices' as PromptRuntimeSystemPromptBlockId,
+      content: cogSecNoticeSectionText,
+    },
   ], promptRuntimeLayout);
+  // Ordered nonempty session blocks, exposed for PromptPlan block emission.
+  const sessionPromptBlocks: Array<{ id: string; content: string }> = [];
   for (const section of orderedRuntimeSections) {
     const trimmed = section.content.trim();
     if (!trimmed) continue;
     fullSystem += '\n\n' + trimmed;
+    sessionPromptBlocks.push({ id: section.id, content: trimmed });
   }
 
   // Convert session entries to LLM messages
   const messages: ContextMessage[] = buildSessionHistoryMessages(
     recent,
     channelVisibility,
+    renderGroupUserAttribution,
     historySummaryText,
+    historySummaryEntryCount,
   );
   const sessionMessageTokenCount = countMessageTokens(messages);
   const trimmedEntryCount = Math.max(
     0,
     sourceEntryCount - recent.length - historySummaryEntryCount,
   );
-  const memoryIncludedCount = params.memoryManifestSeed?.returnedCount ?? 0;
   const seededMemoryHardLimit = params.memoryManifestSeed?.retrievalLimitMode === 'hard_limit'
     ? params.memoryManifestSeed.retrievalLimit
     : undefined;
@@ -720,7 +1291,13 @@ export async function buildSessionContext(params: BuildSessionContextParams): Pr
       policyAllowedCount: params.memoryManifestSeed?.policyAllowedCount ?? 0,
       rankedCount: params.memoryManifestSeed?.rankedCount ?? 0,
       returnedCount: memoryIncludedCount,
-      excluded: {
+        excluded: {
+          ...(params.memoryManifestSeed?.sessionQuarantineRejectedCount !== undefined
+            ? { sessionQuarantineRejectedCount: params.memoryManifestSeed.sessionQuarantineRejectedCount }
+            : {}),
+          ...(params.memoryManifestSeed?.roomVisibilityRejectedCount !== undefined
+            ? { roomVisibilityRejectedCount: params.memoryManifestSeed.roomVisibilityRejectedCount }
+          : {}),
         ...(params.memoryManifestSeed?.contactScopeRejectedCount !== undefined
           ? { contactScopeRejectedCount: params.memoryManifestSeed.contactScopeRejectedCount }
           : {}),
@@ -788,7 +1365,9 @@ export async function buildSessionContext(params: BuildSessionContextParams): Pr
           section: 'compaction_summary',
           tokenCount: countTokens(compactionSummarySectionText) + countTokens(focusKnowledgeSectionText),
         },
+        { section: 'orientation', tokenCount: countTokens(markedOrientationSectionText) },
         { section: 'continuity', tokenCount: countTokens(continuitySectionText) },
+        { section: 'cogsec_notices', tokenCount: countTokens(cogSecNoticeSectionText) },
         { section: 'session_history', tokenCount: sessionMessageTokenCount },
       ],
     },
@@ -815,26 +1394,82 @@ export async function buildSessionContext(params: BuildSessionContextParams): Pr
       id: 'core_memory',
       title: 'Core Memory',
       content: coreMemorySectionText,
+      provenance: coreMemoryProvenance,
     },
     {
       id: 'retrieved_memory',
       title: 'Retrieved Memory',
       content: memorySectionText,
+      provenance: memorySectionProvenance,
     },
     {
       id: 'previous_conversation_summary',
       title: 'Previous Conversation Summary',
       content: compactionSummarySectionText,
+      provenance: buildAuthenticityProvenance({
+        kind: 'compaction_summary',
+        sourceAuthor: 'mixed',
+        transformedBy: 'compaction',
+        wording: 'derived',
+        directSpeech: false,
+        detailLoss: 'possible',
+        emotionalTexture: 'may_be_flattened',
+        safeAsPartnerSpeech: false,
+        sourceSpanCount: compactionSummaryTexts.length || undefined,
+        notes: [DERIVED_DETAIL_LOSS_NOTE, DERIVED_EMOTIONAL_TEXTURE_NOTE],
+      }),
     },
     {
       id: 'focus_knowledge',
       title: 'Focus Knowledge',
       content: focusKnowledgeSectionText,
+      provenance: buildAuthenticityProvenance({
+        kind: 'extraction_artifact',
+        sourceAuthor: 'mixed',
+        transformedBy: 'extraction',
+        wording: 'derived',
+        directSpeech: false,
+        detailLoss: 'possible',
+        emotionalTexture: 'may_be_flattened',
+        safeAsPartnerSpeech: false,
+        sourceSpanCount: focusKnowledgeTexts.length || undefined,
+        notes: [DERIVED_DETAIL_LOSS_NOTE, DERIVED_EMOTIONAL_TEXTURE_NOTE],
+      }),
+    },
+    {
+      id: 'wake_orientation',
+      title: 'Wake Orientation',
+      content: markedOrientationSectionText,
+      provenance: orientationProvenance,
+    },
+    {
+      id: 'cross_channel_continuity',
+      title: 'Cross-Channel Continuity',
+      content: continuitySectionText,
+      provenance: continuityProvenance,
+    },
+    {
+      id: 'cogsec_notices',
+      title: 'CogSec Notices',
+      content: cogSecNoticeSectionText,
+      provenance: buildAuthenticityProvenance({
+        kind: 'system_note',
+        sourceAuthor: 'system',
+        transformedBy: 'redaction',
+        wording: 'redacted',
+        directSpeech: false,
+        detailLoss: 'likely',
+        emotionalTexture: 'unknown',
+        safeAsPartnerSpeech: false,
+        sourceSpanCount: cogSecVisibleEvents.length || undefined,
+        notes: ['Safe CogSec notice; sealed material remains outside companion runtime.'],
+      }),
     },
   ]);
 
   return {
     systemPrompt: fullSystem,
+    sessionPromptBlocks,
     messages,
     manifest,
     systemPromptSections,

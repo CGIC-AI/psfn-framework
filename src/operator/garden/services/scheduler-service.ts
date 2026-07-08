@@ -1,9 +1,10 @@
+import { isRecord } from '../../../shared/utils/types.js';
 // ── Admin Scheduler Service ──
 // Wraps Scheduler + HeartbeatPolicyStore for the admin JSON API.
 // Provides task CRUD and reflection template management.
 
-import { join } from 'node:path';
 import type { Scheduler } from '../../../core/scheduler/scheduler.js';
+import { AMBIENT_PRESENCE_TASK_ID } from '../../../core/scheduler/ambient-presence.js';
 import {
   HeartbeatPolicyStore,
   resolveConsolidatedReflectionTemplateId,
@@ -19,8 +20,15 @@ import type {
   ScheduledTask,
   TaskType,
 } from '../../../core/scheduler/types.js';
-import { resolveReflectionMetacognitionJournalPath } from '../../../persistence/layout.js';
-import { ReflectionMetacognitionJournalStore } from '../../../persistence/journals/reflection-metacognition-journal.js';
+import type { WakeWindowSnapshot } from '../../../core/scheduler/temporal-wakeup.js';
+import {
+  resolveHeartbeatPolicyPath,
+  resolveReflectionMetacognitionJournalPath,
+} from '../../../persistence/layout.js';
+import {
+  ReflectionMetacognitionJournalStore,
+  type ReflectionMutationSnapshot,
+} from '../../../persistence/journals/reflection-metacognition-journal.js';
 import { createComponentLogger } from '../../../shared/logger.js';
 
 const log = createComponentLogger('AdminSchedulerService');
@@ -35,9 +43,6 @@ type CadenceValidationResult =
   | { ok: true; cadence: AdminTaskCadence }
   | { ok: false; message: string };
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === 'object' && !Array.isArray(value);
-}
 
 function isRecurringCadenceTimezone(value: unknown): value is RecurringCadenceTimezone {
   return value === 'local' || value === 'utc';
@@ -75,6 +80,10 @@ function cloneReflectionTemplate(template: ReflectionTemplate): ReflectionTempla
   };
 }
 
+function toReflectionMutationSnapshot(template: ReflectionTemplate): ReflectionMutationSnapshot {
+  return JSON.parse(JSON.stringify(cloneReflectionTemplate(template))) as ReflectionMutationSnapshot;
+}
+
 function clonePolicy(policy: HeartbeatPolicy): HeartbeatPolicy {
   return {
     ...policy,
@@ -101,7 +110,7 @@ function validateCadence(input: unknown): CadenceValidationResult {
     return { ok: false, message: 'cadence must be an object' };
   }
 
-  const allowedFields = new Set(['kind', 'hour', 'minute', 'timezone']);
+  const allowedFields = new Set(['kind', 'dayOfWeek', 'hour', 'minute', 'timezone']);
   for (const key of Object.keys(input)) {
     if (!allowedFields.has(key)) {
       return { ok: false, message: `cadence.${key} is not supported` };
@@ -109,13 +118,18 @@ function validateCadence(input: unknown): CadenceValidationResult {
   }
 
   const kind = input.kind;
-  if (kind !== 'relative' && kind !== 'hourly' && kind !== 'daily') {
-    return { ok: false, message: 'cadence.kind must be "relative", "hourly", or "daily"' };
+  if (kind !== 'relative' && kind !== 'hourly' && kind !== 'daily' && kind !== 'weekly') {
+    return { ok: false, message: 'cadence.kind must be "relative", "hourly", "daily", or "weekly"' };
   }
 
   if (kind === 'relative') {
-    if (input.hour !== undefined || input.minute !== undefined || input.timezone !== undefined) {
-      return { ok: false, message: 'relative cadence cannot include hour/minute/timezone' };
+    if (
+      input.dayOfWeek !== undefined
+      || input.hour !== undefined
+      || input.minute !== undefined
+      || input.timezone !== undefined
+    ) {
+      return { ok: false, message: 'relative cadence cannot include dayOfWeek/hour/minute/timezone' };
     }
     return { ok: true, cadence: { kind: 'relative' } };
   }
@@ -132,11 +146,38 @@ function validateCadence(input: unknown): CadenceValidationResult {
   }
 
   const hourValue = input.hour;
-  if (kind === 'daily') {
+  if (kind === 'daily' || kind === 'weekly') {
     if (typeof hourValue !== 'number' || !Number.isInteger(hourValue) || hourValue < 0 || hourValue > 23) {
-      return { ok: false, message: 'cadence.hour must be an integer between 0 and 23 when cadence.kind is "daily"' };
+      return {
+        ok: false,
+        message: `cadence.hour must be an integer between 0 and 23 when cadence.kind is "${kind}"`,
+      };
     }
     const hour = hourValue;
+    if (kind === 'weekly') {
+      const dayOfWeekValue = input.dayOfWeek;
+      if (
+        typeof dayOfWeekValue !== 'number'
+        || !Number.isInteger(dayOfWeekValue)
+        || dayOfWeekValue < 0
+        || dayOfWeekValue > 6
+      ) {
+        return { ok: false, message: 'cadence.dayOfWeek must be an integer between 0 and 6 when cadence.kind is "weekly"' };
+      }
+      return {
+        ok: true,
+        cadence: {
+          kind: 'weekly',
+          dayOfWeek: dayOfWeekValue,
+          hour,
+          minute,
+          timezone,
+        },
+      };
+    }
+    if (input.dayOfWeek !== undefined) {
+      return { ok: false, message: 'cadence.dayOfWeek is only allowed when cadence.kind is "weekly"' };
+    }
     return {
       ok: true,
       cadence: {
@@ -149,7 +190,10 @@ function validateCadence(input: unknown): CadenceValidationResult {
   }
 
   if (hourValue !== undefined) {
-    return { ok: false, message: 'cadence.hour is only allowed when cadence.kind is "daily"' };
+    return { ok: false, message: 'cadence.hour is only allowed when cadence.kind is "daily" or "weekly"' };
+  }
+  if (input.dayOfWeek !== undefined) {
+    return { ok: false, message: 'cadence.dayOfWeek is only allowed when cadence.kind is "weekly"' };
   }
 
   return {
@@ -188,6 +232,12 @@ export interface AdminScheduledTask {
   runAt?: number;
   state: string;
   cadence?: AdminTaskCadence;
+  lastRunAt?: number;
+  lastFinishedAt?: number;
+  lastOutcome?: string;
+  lastError?: string;
+  lastErrorAt?: number;
+  lastDeniedReason?: string;
 }
 
 /** Full scheduler + reflections response. */
@@ -213,6 +263,12 @@ function toAdminTask(task: ScheduledTask): AdminScheduledTask {
     runAt: task.runAt,
     state: task.state,
     cadence,
+    lastRunAt: task.lastRunAt,
+    lastFinishedAt: task.lastFinishedAt,
+    lastOutcome: task.lastOutcome,
+    lastError: task.lastError,
+    lastErrorAt: task.lastErrorAt,
+    lastDeniedReason: task.lastDeniedReason,
   };
 }
 
@@ -223,11 +279,23 @@ export class AdminSchedulerService {
   constructor(
     private readonly scheduler: Scheduler,
     private readonly dataDir: string,
+    /**
+     * Live habit wake-window snapshot provider (E7.2). Recomputes the effective
+     * morning wake slot + data sufficiency on demand so the Garden read surface
+     * reflects the current estimate (including habit drift not yet applied to
+     * the running cadence). Absent → the read route reports it unavailable.
+     */
+    private readonly wakeWindowProvider?: (() => WakeWindowSnapshot | null) | null,
   ) {
-    this.policyStore = new HeartbeatPolicyStore(join(dataDir, 'heartbeat-policy.json'));
+    this.policyStore = new HeartbeatPolicyStore(resolveHeartbeatPolicyPath(dataDir));
     this.reflectionMetacognitionJournal = new ReflectionMetacognitionJournalStore(
       resolveReflectionMetacognitionJournalPath(dataDir),
     );
+  }
+
+  /** Current habit wake-window estimate + sufficiency, or null when unavailable. */
+  getWakeWindow(): WakeWindowSnapshot | null {
+    return this.wakeWindowProvider ? this.wakeWindowProvider() : null;
   }
 
   /** List all tasks and reflection templates. */
@@ -292,8 +360,8 @@ export class AdminSchedulerService {
         reason: `Garden scheduler task update for reflection template "${templateId}"`,
         templateId,
         templateName: template.name,
-        mutationBefore: templateBefore,
-        mutationAfter: cloneReflectionTemplate(template),
+        mutationBefore: toReflectionMutationSnapshot(templateBefore),
+        mutationAfter: toReflectionMutationSnapshot(template),
       }).catch((error) => {
         this.policyStore.save(policyBefore);
         log.error(`Failed to persist reflection mutation audit for "${templateId}"`, {
@@ -488,6 +556,7 @@ export class AdminSchedulerService {
     // Protect core system tasks
     const protectedTasks = new Set([
       'heartbeat',
+      AMBIENT_PRESENCE_TASK_ID,
       'salience-decay',
       'maintenance',
     ]);
@@ -546,8 +615,8 @@ export class AdminSchedulerService {
       reason: `Garden scheduler reflection template update for "${templateId}"`,
       templateId,
       templateName: template.name,
-      mutationBefore: templateBefore,
-      mutationAfter: cloneReflectionTemplate(template),
+      mutationBefore: toReflectionMutationSnapshot(templateBefore),
+      mutationAfter: toReflectionMutationSnapshot(template),
     }).catch((error) => {
       this.policyStore.save(policyBefore);
       log.error(`Failed to persist reflection mutation audit for "${templateId}"`, {

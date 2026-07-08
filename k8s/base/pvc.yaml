@@ -1,0 +1,66 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: psfn-companion-data
+  namespace: psfn
+  labels:
+    app.kubernetes.io/part-of: psfn
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 10Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: psfn-system-data
+  namespace: psfn
+  labels:
+    app.kubernetes.io/part-of: psfn
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 5Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: psfn-workspace
+  namespace: psfn
+  labels:
+    app.kubernetes.io/part-of: psfn
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 5Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: tei-model-cache
+  namespace: psfn
+  labels:
+    app.kubernetes.io/part-of: psfn
+    app.kubernetes.io/component: tei
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 10Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: postgres-data
+  namespace: psfn
+  labels:
+    app.kubernetes.io/part-of: psfn
+    app.kubernetes.io/component: postgres
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 20Gi

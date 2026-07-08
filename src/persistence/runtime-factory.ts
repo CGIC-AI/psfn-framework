@@ -1,7 +1,10 @@
-import type Database from 'better-sqlite3';
 import { MemoryJournal } from '../faculties/memory/journal.js';
 import type { MemoryStorePort } from '../faculties/memory/memory-store-port.js';
 import { createPostgresMemoryStore } from '../faculties/memory/postgres-store.js';
+import {
+  createPostgresEpisodicStore,
+  type EpisodicStorePort,
+} from '../faculties/memory/episodic/index.js';
 import { createPostgresContactStore } from '../core/contacts/postgres-adapter.js';
 import type { ContactStorePort } from '../core/contacts/contact-store-port.js';
 import { createPostgresIntentionPorts } from '../core/intention/postgres-adapters.js';
@@ -9,6 +12,7 @@ import type {
   IntentionRuntimeProviders,
   IntentionRuntimeWiring,
 } from '../core/intention/runtime-wiring.js';
+import type { WeightedThoughtStorePort } from '../core/intention/weighted-thought-store-port.js';
 import type {
   PersistenceBackend,
   SubstrateConfig,
@@ -23,22 +27,28 @@ import {
   type RuntimePathSnapshot,
 } from './layout.js';
 import {
-  createSqliteCompanionStore,
-  type SqliteCompanionStoreOptions,
-} from './sqlite-companion-store.js';
-import {
   ReflectionMetacognitionJournalStore,
 } from './journals/reflection-metacognition-journal.js';
 import { PostgresReflectionMetacognitionMirrorStore } from './reflections/postgres-mirror.js';
+import { PostgresInternalStateStore } from './postgres/internal-state-store.js';
+import type { InternalStateStorePort } from '../core/self-model/internal-state-persistence.js';
+import { PostgresParticipantTrendStore } from './postgres/participant-trend-store.js';
+import type { ParticipantTrendStorePort } from '../core/emotion/participant-trend-persistence.js';
+import { PostgresScheduledPromptStore } from './postgres/scheduled-prompt-store.js';
+import type { ScheduledPromptStorePort } from '../core/scheduler/scheduled-prompt-store-port.js';
 
 export interface AgentPersistenceRuntime {
   backend: PersistenceBackend;
-  db: Database.Database | null;
   memoryStore: MemoryStorePort;
+  episodicStore: EpisodicStorePort;
   reflectionStore: ReflectionMetacognitionJournalStore;
   contactStore?: ContactStorePort;
   intentionRuntime?: IntentionRuntimeWiring;
   intentionProviders?: IntentionRuntimeProviders;
+  weightedThoughtStore?: WeightedThoughtStorePort;
+  internalStateStore: InternalStateStorePort;
+  participantTrendStore: ParticipantTrendStorePort;
+  scheduledPromptStore: ScheduledPromptStorePort;
 }
 
 export interface CreateAgentPersistenceRuntimeOptions {
@@ -46,7 +56,6 @@ export interface CreateAgentPersistenceRuntimeOptions {
   pathSnapshot: RuntimePathSnapshot;
   embeddingDims: number;
   primaryUserId?: string;
-  sqlite?: Pick<SqliteCompanionStoreOptions, 'databaseOptions'>;
 }
 
 export async function createAgentPersistenceRuntime(
@@ -54,45 +63,36 @@ export async function createAgentPersistenceRuntime(
 ): Promise<AgentPersistenceRuntime> {
   migrateLegacyPersistenceLayout(options.pathSnapshot.companionDataDir);
 
-  const backend = options.config.persistenceBackend ?? 'sqlite';
-  if (backend === 'postgres') {
-    const databaseUrl = options.config.postgresDatabaseUrl?.trim();
-    if (!databaseUrl) {
-      throw new Error('PostgreSQL persistence requires config.postgresDatabaseUrl');
-    }
-    const intentionRuntime = await createPostgresIntentionPorts(databaseUrl);
-    return {
-      backend,
-      db: null,
-      memoryStore: await createPostgresMemoryStore(databaseUrl, options.embeddingDims, {
-        notesDir: resolveNotesDir(options.pathSnapshot.companionDataDir),
-        scratchpadMirrorPath: resolveScratchpadMirrorPath(options.pathSnapshot.companionDataDir),
-        journal: new MemoryJournal(resolveMemoryJournalPath(options.pathSnapshot.companionDataDir)),
-      }),
-      reflectionStore: new ReflectionMetacognitionJournalStore(
-        resolveReflectionMetacognitionJournalPath(options.pathSnapshot.companionDataDir),
-        {
-          mirror: await PostgresReflectionMetacognitionMirrorStore.connect(databaseUrl),
-        },
-      ),
-      contactStore: await createPostgresContactStore(databaseUrl, options.primaryUserId, {
-        exportDir: resolveContactsDir(options.pathSnapshot.companionDataDir),
-      }),
-      intentionRuntime,
-      intentionProviders: intentionRuntime,
-    };
+  if (options.config.persistenceBackend !== 'postgres') {
+    throw new Error('Agent persistence runtime requires config.persistenceBackend=postgres');
   }
-
-  const sqliteCompanionStore = createSqliteCompanionStore({
-    databasePath: options.config.databasePath,
-    companionDataDir: options.pathSnapshot.companionDataDir,
-    embeddingDims: options.embeddingDims,
-    databaseOptions: options.sqlite?.databaseOptions,
-  });
+  const databaseUrl = options.config.postgresDatabaseUrl?.trim();
+  if (!databaseUrl) {
+    throw new Error('PostgreSQL persistence requires config.postgresDatabaseUrl');
+  }
+  const intentionRuntime = await createPostgresIntentionPorts(databaseUrl);
   return {
-    backend,
-    db: sqliteCompanionStore.db,
-    memoryStore: sqliteCompanionStore.memoryStore,
-    reflectionStore: sqliteCompanionStore.reflectionStore,
+    backend: 'postgres',
+    memoryStore: await createPostgresMemoryStore(databaseUrl, options.embeddingDims, {
+      notesDir: resolveNotesDir(options.pathSnapshot.companionDataDir),
+      scratchpadMirrorPath: resolveScratchpadMirrorPath(options.pathSnapshot.companionDataDir),
+      journal: new MemoryJournal(resolveMemoryJournalPath(options.pathSnapshot.companionDataDir)),
+    }),
+    episodicStore: createPostgresEpisodicStore(databaseUrl),
+    reflectionStore: new ReflectionMetacognitionJournalStore(
+      resolveReflectionMetacognitionJournalPath(options.pathSnapshot.companionDataDir),
+      {
+        mirror: await PostgresReflectionMetacognitionMirrorStore.connect(databaseUrl),
+      },
+    ),
+    contactStore: await createPostgresContactStore(databaseUrl, options.primaryUserId, {
+      exportDir: resolveContactsDir(options.pathSnapshot.companionDataDir),
+    }),
+    intentionRuntime,
+    intentionProviders: intentionRuntime,
+    weightedThoughtStore: intentionRuntime.weightedThoughtStore,
+    internalStateStore: await PostgresInternalStateStore.connect(databaseUrl),
+    participantTrendStore: await PostgresParticipantTrendStore.connect(databaseUrl),
+    scheduledPromptStore: await PostgresScheduledPromptStore.connect(databaseUrl),
   };
 }

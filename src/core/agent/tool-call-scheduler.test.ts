@@ -3,7 +3,7 @@ import { Type } from '@sinclair/typebox';
 import type { AgentTool } from '@mariozechner/pi-agent-core';
 import type { ToolResultMessage } from '@mariozechner/pi-ai';
 import type { ToolConcurrencyMeta, WirableTool } from './tool-wiring-validator.js';
-import { executeToolCallsWithScheduler } from './tool-call-scheduler.js';
+import { createToolCallExecutionGuard, executeToolCallsWithScheduler } from './tool-call-scheduler.js';
 
 function makeTool(
   name: string,
@@ -29,6 +29,19 @@ function makeAssistantMessage(toolNames: string[]) {
       id: `call-${index + 1}`,
       name,
       arguments: {},
+    })),
+    stopReason: 'stop',
+  };
+}
+
+function makeAssistantToolCalls(calls: Array<{ name: string; arguments: Record<string, unknown> }>) {
+  return {
+    role: 'assistant',
+    content: calls.map((call, index) => ({
+      type: 'toolCall',
+      id: `call-${index + 1}`,
+      name: call.name,
+      arguments: call.arguments,
     })),
     stopReason: 'stop',
   };
@@ -100,11 +113,11 @@ describe('tool-call-scheduler', () => {
     );
   });
 
-  it('runs sibling spawn_subagent calls concurrently when bounded parallelism allows it', async () => {
+  it('runs sibling subagent calls concurrently when bounded parallelism allows it', async () => {
     const starts = new Map<string, number>();
     const ends = new Map<string, number>();
-    const spawnSubagent = makeTool(
-      'spawn_subagent',
+    const subagent = makeTool(
+      'subagent',
       async (toolCallId) => {
         starts.set(toolCallId, Date.now());
         await new Promise((resolve) => setTimeout(resolve, 25));
@@ -120,8 +133,8 @@ describe('tool-call-scheduler', () => {
     const streamEvents: any[] = [];
     const telemetry = vi.fn();
     const result = await executeToolCallsWithScheduler(
-      [spawnSubagent],
-      makeAssistantMessage(['spawn_subagent', 'spawn_subagent', 'spawn_subagent']),
+      [subagent],
+      makeAssistantMessage(['subagent', 'subagent', 'subagent']),
       undefined,
       { stream: { push: (event) => { streamEvents.push(event); } } },
       { maxParallelToolCalls: 3, onTelemetry: telemetry },
@@ -187,11 +200,48 @@ describe('tool-call-scheduler', () => {
     );
   });
 
-  it('respects maxParallelToolCalls bound for spawn_subagent batches', async () => {
+  it('re-resolves tools after a sequential toolset activation in the same assistant batch', async () => {
+    let activeTools: AgentTool<any>[] = [];
+    const overlay = makeTool(
+      'overlay_probe',
+      async () => ({
+        content: [{ type: 'text', text: 'overlay-ok' }],
+        details: {},
+      }),
+      { concurrency: makeConcurrencyMeta('read_only') },
+    );
+    const toolset = makeTool(
+      'toolset',
+      async () => {
+        activeTools = [toolset, overlay];
+        return {
+          content: [{ type: 'text', text: 'activated overlay_probe' }],
+          details: {},
+        };
+      },
+      { concurrency: makeConcurrencyMeta('exclusive') },
+    );
+    activeTools = [toolset];
+
+    const result = await executeToolCallsWithScheduler(
+      () => activeTools,
+      makeAssistantMessage(['toolset', 'overlay_probe']),
+      undefined,
+      { stream: { push: () => undefined } },
+      { maxParallelToolCalls: 8 },
+    );
+
+    expect(result.toolResults).toHaveLength(2);
+    expect(result.toolResults[0]?.isError).toBe(false);
+    expect(result.toolResults[1]?.isError).toBe(false);
+    expect(result.toolResults[1]?.content).toEqual([{ type: 'text', text: 'overlay-ok' }]);
+  });
+
+  it('respects maxParallelToolCalls bound for subagent batches', async () => {
     let active = 0;
     let peak = 0;
-    const spawnSubagent = makeTool(
-      'spawn_subagent',
+    const subagent = makeTool(
+      'subagent',
       async () => {
         active += 1;
         peak = Math.max(peak, active);
@@ -206,8 +256,8 @@ describe('tool-call-scheduler', () => {
     );
 
     await executeToolCallsWithScheduler(
-      [spawnSubagent],
-      makeAssistantMessage(['spawn_subagent', 'spawn_subagent', 'spawn_subagent']),
+      [subagent],
+      makeAssistantMessage(['subagent', 'subagent', 'subagent']),
       undefined,
       { stream: { push: () => undefined } },
       { maxParallelToolCalls: 2 },
@@ -244,12 +294,12 @@ describe('tool-call-scheduler', () => {
     expect(starts[1]).toBeGreaterThanOrEqual(ends[0] as number);
   });
 
-  it('fails closed to sequential when spawn_subagent metadata carries exclusivity wiring', async () => {
+  it('fails closed to sequential when subagent metadata carries exclusivity wiring', async () => {
     const starts: number[] = [];
     const ends: number[] = [];
     const telemetry = vi.fn();
-    const spawnSubagent = makeTool(
-      'spawn_subagent',
+    const subagent = makeTool(
+      'subagent',
       async () => {
         starts.push(Date.now());
         await new Promise((resolve) => setTimeout(resolve, 20));
@@ -266,8 +316,8 @@ describe('tool-call-scheduler', () => {
     );
 
     await executeToolCallsWithScheduler(
-      [spawnSubagent],
-      makeAssistantMessage(['spawn_subagent', 'spawn_subagent']),
+      [subagent],
+      makeAssistantMessage(['subagent', 'subagent']),
       undefined,
       { stream: { push: () => undefined } },
       { maxParallelToolCalls: 4, onTelemetry: telemetry },
@@ -284,9 +334,9 @@ describe('tool-call-scheduler', () => {
     );
   });
 
-  it('fails closed when one sibling spawn_subagent call errors in a parallel batch', async () => {
-    const spawnSubagent = makeTool(
-      'spawn_subagent',
+  it('fails closed when one sibling subagent call errors in a parallel batch', async () => {
+    const subagent = makeTool(
+      'subagent',
       async (toolCallId) => {
         await new Promise((resolve) => setTimeout(resolve, 15));
         if (toolCallId === 'call-2') {
@@ -301,8 +351,8 @@ describe('tool-call-scheduler', () => {
     );
 
     const result = await executeToolCallsWithScheduler(
-      [spawnSubagent],
-      makeAssistantMessage(['spawn_subagent', 'spawn_subagent', 'spawn_subagent']),
+      [subagent],
+      makeAssistantMessage(['subagent', 'subagent', 'subagent']),
       undefined,
       { stream: { push: () => undefined } },
       { maxParallelToolCalls: 3 },
@@ -316,7 +366,7 @@ describe('tool-call-scheduler', () => {
 
   it('skips remaining sequential calls after a tool error so dependent chains can retry after seeing results', async () => {
     const tool = makeTool(
-      'memory_patch',
+      'memory',
       async (toolCallId) => {
         if (toolCallId === 'call-2') {
           throw new Error('memory_id is required');
@@ -329,7 +379,7 @@ describe('tool-call-scheduler', () => {
       {
         concurrency: makeConcurrencyMeta('exclusive', {
           exclusivityKeyPolicy: 'category_tool_name',
-          exclusivityKey: 'extended:memory_patch',
+          exclusivityKey: 'extended:memory',
         }),
       },
     );
@@ -337,7 +387,7 @@ describe('tool-call-scheduler', () => {
 
     const result = await executeToolCallsWithScheduler(
       [tool],
-      makeAssistantMessage(['memory_patch', 'memory_patch', 'memory_patch']),
+      makeAssistantMessage(['memory', 'memory', 'memory']),
       undefined,
       { stream: { push: () => undefined } },
       { maxParallelToolCalls: 1, onTelemetry: telemetry },
@@ -490,6 +540,206 @@ describe('tool-call-scheduler', () => {
       }),
     );
   });
+
+  it('skips identical calls that already succeeded in the same turn', async () => {
+    const execute = vi.fn(async () => ({
+      content: [{ type: 'text', text: 'oriented' }],
+      details: {},
+    }));
+    const orient = makeTool(
+      'orient',
+      execute,
+      {
+        concurrency: makeConcurrencyMeta('exclusive', {
+          exclusivityKeyPolicy: 'category_tool_name',
+          exclusivityKey: 'core:orient',
+        }),
+      },
+    );
+    const telemetry = vi.fn();
+
+    const result = await executeToolCallsWithScheduler(
+      [orient],
+      makeAssistantMessage(['orient', 'orient']),
+      undefined,
+      { stream: { push: () => undefined } },
+      {
+        maxParallelToolCalls: 1,
+        guard: createToolCallExecutionGuard(),
+        onTelemetry: telemetry,
+      },
+    );
+
+    expect(execute).toHaveBeenCalledTimes(1);
+    expect(result.toolResults).toHaveLength(2);
+    expect((result.toolResults[0] as ToolResultMessage).isError).toBe(false);
+    expect((result.toolResults[1] as ToolResultMessage).isError).toBe(true);
+    expect((result.toolResults[1] as ToolResultMessage).content).toEqual([
+      {
+        type: 'text',
+        text: 'Internal tool status: skipped duplicate tool call because the same tool/action/input already succeeded this turn. This is not a user-facing message.',
+      },
+    ]);
+    expect(telemetry).toHaveBeenCalledWith(
+      'agent.tools.scheduler.skipped',
+      expect.objectContaining({
+        reason: 'duplicate_completed',
+        toolName: 'orient',
+      }),
+    );
+  });
+
+  it('stops retrying the same failing call after the per-turn failure limit', async () => {
+    const execute = vi.fn(async () => ({
+      content: [{ type: 'text', text: 'scratchpad backend unavailable' }],
+      details: { isError: true },
+    }));
+    const scratchpad = makeTool(
+      'scratchpad',
+      execute,
+      {
+        concurrency: makeConcurrencyMeta('exclusive', {
+          exclusivityKeyPolicy: 'category_tool_name',
+          exclusivityKey: 'extended:scratchpad',
+        }),
+      },
+    );
+    const guard = createToolCallExecutionGuard();
+    const telemetry = vi.fn();
+    const options = {
+      maxParallelToolCalls: 1,
+      maxFailuresPerSignature: 2,
+      guard,
+      onTelemetry: telemetry,
+    };
+
+    await executeToolCallsWithScheduler(
+      [scratchpad],
+      makeAssistantMessage(['scratchpad']),
+      undefined,
+      { stream: { push: () => undefined } },
+      options,
+    );
+    await executeToolCallsWithScheduler(
+      [scratchpad],
+      makeAssistantMessage(['scratchpad']),
+      undefined,
+      { stream: { push: () => undefined } },
+      options,
+    );
+    const thirdResult = await executeToolCallsWithScheduler(
+      [scratchpad],
+      makeAssistantMessage(['scratchpad']),
+      undefined,
+      { stream: { push: () => undefined } },
+      options,
+    );
+
+    expect(execute).toHaveBeenCalledTimes(2);
+    expect((thirdResult.toolResults[0] as ToolResultMessage).isError).toBe(true);
+    expect((thirdResult.toolResults[0] as ToolResultMessage).content).toEqual([
+      {
+        type: 'text',
+        text: 'Internal tool status: scratchpad is degraded for this action/input after 2 failed attempts this turn. Stop retrying it for now and notify the operator if it affects the conversation. This is not a user-facing message.',
+      },
+    ]);
+    expect(telemetry).toHaveBeenCalledWith(
+      'agent.tools.scheduler.skipped',
+      expect.objectContaining({
+        reason: 'tool_signature_degraded',
+        toolName: 'scratchpad',
+        failures: 2,
+      }),
+    );
+  });
+
+  it('skips repeated malformed same-action calls while allowing a later valid call', async () => {
+    const execute = vi.fn(async (_toolCallId: string, params: { action: string; title?: string; content?: string }) => {
+      if (params.action === 'write' && !params.title) {
+        return {
+          content: [{ type: 'text', text: 'journal failed for action=write: path or title is required' }],
+          details: { isError: true },
+        };
+      }
+      if (params.action === 'write' && !params.content) {
+        return {
+          content: [{ type: 'text', text: 'journal failed for action=write: content is required' }],
+          details: { isError: true },
+        };
+      }
+      return {
+        content: [{ type: 'text', text: 'Journal note created: carlini-notes.md' }],
+        details: {},
+      };
+    });
+    const journal = makeTool(
+      'journal',
+      execute,
+      {
+        concurrency: makeConcurrencyMeta('exclusive', {
+          exclusivityKeyPolicy: 'category_tool_name',
+          exclusivityKey: 'extended:journal',
+        }),
+      },
+    );
+    journal.parameters = Type.Object({
+      action: Type.String(),
+      title: Type.Optional(Type.String()),
+      content: Type.Optional(Type.String()),
+    });
+    const guard = createToolCallExecutionGuard();
+    const telemetry = vi.fn();
+    const options = {
+      maxParallelToolCalls: 1,
+      guard,
+      onTelemetry: telemetry,
+    };
+
+    const first = await executeToolCallsWithScheduler(
+      [journal],
+      makeAssistantToolCalls([{ name: 'journal', arguments: { action: 'write', content: 'body' } }]),
+      undefined,
+      { stream: { push: () => undefined } },
+      options,
+    );
+    const repeatedMalformed = await executeToolCallsWithScheduler(
+      [journal],
+      makeAssistantToolCalls([{ name: 'journal', arguments: { action: 'write', content: 'body again' } }]),
+      undefined,
+      { stream: { push: () => undefined } },
+      options,
+    );
+    const valid = await executeToolCallsWithScheduler(
+      [journal],
+      makeAssistantToolCalls([{ name: 'journal', arguments: { action: 'write', title: 'Carlini notes', content: 'body' } }]),
+      undefined,
+      { stream: { push: () => undefined } },
+      options,
+    );
+
+    expect(execute).toHaveBeenCalledTimes(2);
+    expect((first.toolResults[0] as ToolResultMessage).isError).toBe(true);
+    expect((repeatedMalformed.toolResults[0] as ToolResultMessage).content).toEqual([
+      {
+        type: 'text',
+        text: 'Internal tool status: skipped repeated malformed journal action=write call because required field(s) are still missing: path or title. Use one minimal valid JSON call with all required fields before retrying. This is not a user-facing message.',
+      },
+    ]);
+    expect((valid.toolResults[0] as ToolResultMessage).isError).toBe(false);
+    expect((valid.toolResults[0] as ToolResultMessage).content).toEqual([
+      { type: 'text', text: 'Journal note created: carlini-notes.md' },
+    ]);
+    expect(telemetry).toHaveBeenCalledWith(
+      'agent.tools.scheduler.skipped',
+      expect.objectContaining({
+        reason: 'repeated_malformed_arguments',
+        toolName: 'journal',
+        action: 'write',
+        missingRequirement: 'path or title',
+      }),
+    );
+  });
+
   it('emits cancelled telemetry when execution aborts before a tool call runs', async () => {
     const telemetry = vi.fn();
     const controller = new AbortController();

@@ -9,8 +9,10 @@ import { loadModelsConfig } from '../../../system/config/models-config.js';
 import { loadProvidersConfig } from '../../../system/config/providers-config.js';
 import { loadSchedulerConfig } from '../../../system/config/scheduler-config.js';
 import { createOwnerFileConfigStore } from '../../../system/config/config-store.js';
+import { createDefaultGroupMemorySettings } from '../../../system/config/group-memory-config.js';
 import { loadSettings } from '../../../system/settings.js';
 import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
+import { makeTestFatiguePolicyConfig } from '../../../test-support/charge-policy.js';
 import { AdminSettingsDataService } from './settings-service.js';
 
 let tempDir: string | null = null;
@@ -109,6 +111,19 @@ describe('AdminSettingsDataService', () => {
     const root = makeTempDir();
     const config = buildConfig(root);
     const service = buildService(config);
+    const groupMemory = {
+      ...createDefaultGroupMemorySettings(),
+      memoryMode: 'group' as const,
+      onlineExtraction: {
+        ...createDefaultGroupMemorySettings().onlineExtraction,
+        observedMessageTriggerCount: 40,
+        maxMessagesPerChunk: 60,
+      },
+      writeCaps: {
+        ...createDefaultGroupMemorySettings().writeCaps,
+        maxWritesPerRun: 6,
+      },
+    };
     const payload = {
       sessionRestartBehavior: 'new_session',
       sessionHistoryBudgetPct: 11,
@@ -126,6 +141,7 @@ describe('AdminSettingsDataService', () => {
       memoryExtractionMaxWrites: 14,
       memoryExtractionTelemetryEnabled: false,
       memoryRetrievalTelemetryEnabled: false,
+      groupMemory,
       embeddingProvider: 'api',
       embeddingModel: 'nomic-embed-text',
       embeddingDims: 768,
@@ -150,7 +166,7 @@ describe('AdminSettingsDataService', () => {
       uiThemeId: 'generic-dark',
       analysisWorkbenchMaxTokens: 76_000,
       analysisWorkbenchMaxWallTimeMs: 300_000,
-      analysisWorkbenchMaxSubQueries: 12,
+      analysisWorkbenchMaxSubQueries: 24,
       retryMaxAttempts: 4,
       retryBaseDelayMs: 2_500,
       importProcessingRouteMode: 'local_endpoint',
@@ -618,8 +634,15 @@ describe('AdminSettingsDataService', () => {
       maxRotatingBackups: 12,
       maxWeeklyBackups: 4,
       maxMonthlyBackups: 3,
-      mirrorDir: '/mnt/ai/psfn-bak',
+      mirrorDir: '/srv/backup-mirror',
       verifyRestore: false,
+      encryption: {
+        mode: 'required',
+        keyRef: {
+          kind: 'env',
+          envName: 'PSFN_BACKUP_ENCRYPTION_KEY',
+        },
+      },
     };
 
     const result = service.saveSubConfigJson('backup', JSON.stringify(payload));
@@ -766,6 +789,7 @@ describe('AdminSettingsDataService', () => {
         cheap_cloud: 'Cheap cloud models are lightly priced to keep them available for routine use.',
         premium_cloud: 'Premium cloud models are intentionally more expensive to reserve for high-value calls.',
       },
+      fatigue: makeTestFatiguePolicyConfig(),
     };
 
     const result = service.saveSubConfigJson('charge-policy', JSON.stringify(payload));
@@ -782,6 +806,47 @@ describe('AdminSettingsDataService', () => {
         chargePolicy: payload,
       }),
     }));
+  });
+
+  it('surfaces effective vs on-disk charge quotas with a restart-required indicator (psfn-framework-9bgk)', async () => {
+    const root = makeTempDir();
+    const config = buildConfig(root);
+    const service = buildService(config);
+
+    const seed = loadChargePolicyConfig(root);
+
+    // Operator edits the owner file on disk to raise the interactive quota.
+    const editedOnDisk = {
+      ...seed,
+      runChargeQuotaByLane: { ...seed.runChargeQuotaByLane, interactive: 100 },
+    };
+    const saveResult = service.saveSubConfigJson('charge-policy', JSON.stringify(editedOnDisk));
+    expect(saveResult.ok).toBe(true);
+
+    // The running process still carries the stale quota it loaded at startup.
+    const staleQuotaByLane = { ...seed.runChargeQuotaByLane, interactive: 24 };
+    config.chargePolicy = { ...seed, runChargeQuotaByLane: staleQuotaByLane };
+
+    const diverged = await service.getSettingsData();
+    expect(diverged.effectiveChargeQuota).toEqual({
+      effectiveChargeQuotaByLane: staleQuotaByLane,
+      onDiskChargeQuotaByLane: editedOnDisk.runChargeQuotaByLane,
+      restartRequired: true,
+    });
+
+    // Once the runtime is restarted (effective == on-disk), no restart is required.
+    config.chargePolicy = { ...seed, runChargeQuotaByLane: editedOnDisk.runChargeQuotaByLane };
+    const aligned = await service.getSettingsData();
+    expect(aligned.effectiveChargeQuota.restartRequired).toBe(false);
+
+    // With no loaded charge policy the effective lanes are null and no restart is flagged.
+    delete config.chargePolicy;
+    const unloaded = await service.getSettingsData();
+    expect(unloaded.effectiveChargeQuota).toEqual({
+      effectiveChargeQuotaByLane: null,
+      onDiskChargeQuotaByLane: editedOnDisk.runChargeQuotaByLane,
+      restartRequired: false,
+    });
   });
 
   it('round-trips providers through providers.json owner-file saves and refreshes runtime routing', async () => {

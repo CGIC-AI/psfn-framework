@@ -1,3 +1,9 @@
+import { sleep as defaultSleep } from '../../shared/utils/timing.js';
+import type {
+  CircuitBreakerTransition,
+  SlidingWindowCircuitBreaker,
+} from '../../shared/resilience/circuit-breaker.js';
+
 export interface RetryConfig {
   maxRetries?: number;
   baseDelayMs?: number;
@@ -11,10 +17,24 @@ export interface RetryAttempt {
   error: Error;
 }
 
+export interface RetryDecision {
+  attempt: number;
+  maxRetries: number;
+  error: Error;
+}
+
 export interface RetryOptions {
   isRetryable?: (error: Error) => boolean;
+  shouldRetry?: (decision: RetryDecision) => boolean;
+  shouldRecordFailure?: (error: Error) => boolean;
   onRetry?: (attempt: RetryAttempt) => void | Promise<void>;
   sleep?: (delayMs: number) => Promise<void>;
+  circuitBreaker?: {
+    breaker: SlidingWindowCircuitBreaker;
+    key: string;
+    method?: string;
+    onTransition?: (transition: CircuitBreakerTransition) => void;
+  };
 }
 
 export const DEFAULT_MAX_RETRIES = 3;
@@ -51,10 +71,6 @@ interface ResolvedRetryConfig {
   maxRetries: number;
   baseDelayMs: number;
   retryableErrors: string[];
-}
-
-function defaultSleep(delayMs: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, delayMs));
 }
 
 function toError(value: unknown): Error {
@@ -128,22 +144,43 @@ export async function withRetry<T>(
   const isRetryable = options?.isRetryable
     ?? ((error: Error) => isRetryableError(error, resolved.retryableErrors));
 
-  for (let retryAttempt = 0; ; retryAttempt++) {
-    try {
-      return await fn();
-    } catch (error) {
-      const err = toError(error);
-      const canRetry = retryAttempt < resolved.maxRetries && isRetryable(err);
-      if (!canRetry) throw err;
+  const run = async (): Promise<T> => {
+    for (let retryAttempt = 0; ; retryAttempt++) {
+      try {
+        return await fn();
+      } catch (error) {
+        const err = toError(error);
+        const attempt = retryAttempt + 1;
+        const retryable = isRetryable(err);
+        const shouldRetry = options?.shouldRetry?.({
+          attempt,
+          maxRetries: resolved.maxRetries,
+          error: err,
+        }) ?? true;
+        const canRetry = retryAttempt < resolved.maxRetries && retryable && shouldRetry;
+        if (!canRetry) throw err;
 
-      const delayMs = backoffDelay(resolved.baseDelayMs, retryAttempt);
-      await options?.onRetry?.({
-        attempt: retryAttempt + 1,
-        maxRetries: resolved.maxRetries,
-        delayMs,
-        error: err,
-      });
-      await sleep(delayMs);
+        const delayMs = backoffDelay(resolved.baseDelayMs, retryAttempt);
+        await options?.onRetry?.({
+          attempt,
+          maxRetries: resolved.maxRetries,
+          delayMs,
+          error: err,
+        });
+        await sleep(delayMs);
+      }
     }
+  };
+
+  if (!options?.circuitBreaker) {
+    return await run();
   }
+
+  return await options.circuitBreaker.breaker.execute({
+    key: options.circuitBreaker.key,
+    ...(options.circuitBreaker.method ? { method: options.circuitBreaker.method } : {}),
+    operation: run,
+    shouldRecordFailure: options.shouldRecordFailure ?? isRetryable,
+    onTransition: options.circuitBreaker.onTransition,
+  });
 }

@@ -35,6 +35,7 @@ import {
   assertPersistenceCutoverReady,
   buildPersistenceCutoverOptionsFromConfig,
 } from '../../../persistence/cutover.js';
+import { validateObserverEvalSidecarStartupConfig } from '../../../system/config/observer-eval-sidecar-config.js';
 export type {
   RuntimeVoiceConnectorBinding,
   RuntimeVoiceProviderGate,
@@ -241,6 +242,7 @@ export function hydrateCanonicalStartupConfig(
   const startupRuntimeSettings = configStore.loadStartupRuntimeSettings();
   const { settingsDomains } = startupRuntimeSettings;
   applySettings(config, settingsDomains.runtime);
+  validateObserverEvalSidecarStartupConfig(config, pathSnapshot);
   if (secretAuthority === 'gateway') {
     assertSecuritySensitiveStartupConfig(config);
   }
@@ -268,6 +270,51 @@ export function hydrateCanonicalStartupConfig(
     salienceDecayIntervalMs: persistedScheduler.salienceDecayIntervalMs,
     artifactLifecycle: { ...persistedScheduler.artifactLifecycle },
     episodicProcessing: { ...persistedScheduler.episodicProcessing },
+    nearTurnMemory: {
+      direct: { ...persistedScheduler.nearTurnMemory.direct },
+      group: { ...persistedScheduler.nearTurnMemory.group },
+    },
+    episodeSynthesis: { ...persistedScheduler.episodeSynthesis },
+    sleepConsolidation: { ...persistedScheduler.sleepConsolidation },
+    orientationRewrite: { ...persistedScheduler.orientationRewrite },
+    reflectionNovelty: { ...persistedScheduler.reflectionNovelty },
+    wikiPass: { ...persistedScheduler.wikiPass },
+    arcFormation: { ...persistedScheduler.arcFormation },
+    socialGraphBuilder: { ...persistedScheduler.socialGraphBuilder },
+    temporalWakeup: {
+      enabled: persistedScheduler.temporalWakeup.enabled,
+      morningWake: { ...persistedScheduler.temporalWakeup.morningWake },
+      idleRefresher: { ...persistedScheduler.temporalWakeup.idleRefresher },
+      wakeSummary: { ...persistedScheduler.temporalWakeup.wakeSummary },
+    },
+    freeTime: {
+      enabled: persistedScheduler.freeTime.enabled,
+      minBlockIntervalMinutes: persistedScheduler.freeTime.minBlockIntervalMinutes,
+      maxBlocksPerDay: persistedScheduler.freeTime.maxBlocksPerDay,
+      seedText: persistedScheduler.freeTime.seedText,
+      quietHours: { ...persistedScheduler.freeTime.quietHours },
+      idle: { ...persistedScheduler.freeTime.idle },
+      budget: { ...persistedScheduler.freeTime.budget },
+      returnNote: { ...persistedScheduler.freeTime.returnNote },
+    },
+    weightedThoughtOutreach: {
+      enabled: persistedScheduler.weightedThoughtOutreach.enabled,
+      checkIntervalMs: persistedScheduler.weightedThoughtOutreach.checkIntervalMs,
+      nudgeThreshold: persistedScheduler.weightedThoughtOutreach.nudgeThreshold,
+      maxNudgesPerRun: persistedScheduler.weightedThoughtOutreach.maxNudgesPerRun,
+      lifecycle: {
+        classes: {
+          time_sensitive: { ...persistedScheduler.weightedThoughtOutreach.lifecycle.classes.time_sensitive },
+          standard: { ...persistedScheduler.weightedThoughtOutreach.lifecycle.classes.standard },
+          trivial: { ...persistedScheduler.weightedThoughtOutreach.lifecycle.classes.trivial },
+        },
+        reinforcement: { ...persistedScheduler.weightedThoughtOutreach.lifecycle.reinforcement },
+        accumulatedWeightCap: persistedScheduler.weightedThoughtOutreach.lifecycle.accumulatedWeightCap,
+        contradictionDampeningFactor: persistedScheduler.weightedThoughtOutreach.lifecycle.contradictionDampeningFactor,
+        declineDampeningFactor: persistedScheduler.weightedThoughtOutreach.lifecycle.declineDampeningFactor,
+        relevanceFloor: persistedScheduler.weightedThoughtOutreach.lifecycle.relevanceFloor,
+      },
+    },
   };
   config.maintenanceIntervalMs = schedulerConfig.salienceDecayIntervalMs;
   const chargePolicyConfig = configStore.loadStartupChargePolicy();

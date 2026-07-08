@@ -1,0 +1,18 @@
+# Copy this file to deployment/systemd/user/purrsephone-watchdog.env in the
+# deployed repo checkout and fill in deployment-specific secrets there.
+# Do not place this configuration in ~/.config/systemd, /etc/systemd, or /tmp.
+
+CONTINUITY_WATCHDOG_ENDPOINT=http://127.0.0.1:3000/health
+CONTINUITY_WATCHDOG_API_KEY=replace-with-api-key
+CONTINUITY_WATCHDOG_SYSTEMD_SERVICE=purrsephone.service
+CONTINUITY_WATCHDOG_TIMEOUT_MS=5000
+CONTINUITY_WATCHDOG_MAX_FAILURES=2
+CONTINUITY_WATCHDOG_REPEAT_PAGE_AFTER_MS=1800000
+
+CONTINUITY_WATCHDOG_NTFY_BASE_URL=https://ntfy.sh
+CONTINUITY_WATCHDOG_NTFY_TOPIC=replace-with-private-topic
+CONTINUITY_WATCHDOG_NTFY_TOKEN=replace-with-ntfy-token
+CONTINUITY_WATCHDOG_NTFY_TOKEN_REQUIRED=true
+CONTINUITY_WATCHDOG_NTFY_TITLE=PSFN watchdog page
+CONTINUITY_WATCHDOG_NTFY_PRIORITY=5
+CONTINUITY_WATCHDOG_NTFY_TAGS=rotating_light,warning

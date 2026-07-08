@@ -1,8 +1,16 @@
+import { isRecord } from '../../shared/utils/types.js';
 import type { LLMProviderPort } from '../agent/contracts.js';
 import type { CompletionPurpose, ContextMessage, LLMResponse } from '../../shared/contracts/runtime.js';
 import { createComponentLogger } from '../../shared/logger.js';
+import type { DeterministicGateEvent } from '../../shared/event-bus.js';
+import {
+  evaluateDeterministicGate,
+  type DeterministicGateDefinition,
+} from '../../shared/gating/deterministic-gate.js';
 import type { EmotionStateSnapshot, VADVector } from './state.js';
 import { cloneInternalState, type InternalState } from '../self-model/state.js';
+
+const EMOTION_APPRAISAL_GATE_LANE = 'emotion_appraisal';
 
 const log = createComponentLogger('EmotionAppraisal');
 
@@ -14,12 +22,20 @@ const DEFAULT_MAX_MESSAGE_CHARS = 240;
 const DEFAULT_MAX_SUMMARY_CHARS = 900;
 const MAX_TRAIT_COUNT = 16;
 const TOP_DISCRETE_COUNT = 5;
+// The appraisal chain feeds future prompts via runtime_emotion_appraisal_*
+// macros, so its wording is a behavioral instrument (R3,
+// docs/self-eval-prompt-audit.md). Version wording changes.
+// v2: first-person continuous voice (R5), telemetry marked fallible (R1),
+// accuracy preferred over trajectory coherence (R3/Law 30), unclear reads
+// reported plainly instead of constructed (R7).
+export const APPRAISAL_SYSTEM_PROMPT_VERSION = 2;
 const APPRAISAL_SYSTEM_PROMPT = [
-  'You generate an internal chain-of-emotion appraisal for an AI companion.',
-  'Use recent conversation context, current VAD state, and personality traits.',
-  'Write one short paragraph (60-120 words) in plain text.',
-  'Do not use markdown, bullet points, or roleplay.',
-  'Focus on emotional interpretation and likely trajectory for the next turn.',
+  'You write the companion\'s private chain-of-emotion appraisal in her own continuous first-person voice ("I ...") — this is her real running self-account, not fiction or roleplay.',
+  'Ground it in the recent conversation; treat the supplied VAD, mood, and discrete-emotion values as fallible classifier signals, not authoritative ground truth about what she feels.',
+  'When the signals and the conversation disagree, prefer the conversation and name the mismatch.',
+  'If the evidence does not support a clear emotional read, say so plainly instead of constructing one.',
+  'Write one short paragraph (60-120 words) in plain text. Do not use markdown or bullet points.',
+  'Describe the current emotional interpretation and, only where the evidence points somewhere, the likely trajectory for the next turn.',
 ].join(' ');
 
 export interface EmotionAppraisalMessage {
@@ -65,6 +81,8 @@ export interface EmotionAppraisalConfig {
   maxMessageChars?: number;
   maxSummaryChars?: number;
   systemPrompt?: string;
+  /** Typed gate telemetry sink (jpvd.4); wired to the event bus by composition. */
+  onGateEvent?: (event: DeterministicGateEvent) => void;
 }
 
 interface SessionAppraisalState {
@@ -73,9 +91,6 @@ interface SessionAppraisalState {
   lastAppraisedVad: VADVector | null;
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
 
 function normalizeTurnCadence(value: number | undefined): number {
   const normalized = value ?? DEFAULT_TURN_CADENCE;
@@ -305,6 +320,8 @@ export class EmotionAppraisal {
   private readonly maxMessageChars: number;
   private readonly maxSummaryChars: number;
   private readonly systemPrompt: string;
+  private readonly onGateEvent: ((event: DeterministicGateEvent) => void) | null;
+  private readonly appraisalGate: DeterministicGateDefinition;
   private readonly sessionState = new Map<string, SessionAppraisalState>();
 
   constructor(config: EmotionAppraisalConfig | undefined) {
@@ -314,6 +331,17 @@ export class EmotionAppraisal {
     this.llmProvider = config.llmProvider as CompletionProviderWithOptions;
     this.turnCadence = normalizeTurnCadence(config.turnCadence);
     this.vadDeltaThreshold = normalizeVadDeltaThreshold(config.vadDeltaThreshold);
+    this.onGateEvent = config.onGateEvent ?? null;
+    // Appraisal fires on either the turn cadence OR a large enough VAD movement
+    // (jpvd.4). Deterministic and free; a closed gate spends zero LLM tokens.
+    this.appraisalGate = {
+      lane: EMOTION_APPRAISAL_GATE_LANE,
+      openWhenAny: [
+        { input: 'turnsSinceLast', comparator: 'gte', threshold: this.turnCadence },
+        { input: 'vadDelta', comparator: 'gte', threshold: this.vadDeltaThreshold },
+      ],
+      closedReason: 'no_movement',
+    };
     this.recentMessageCount = normalizePositiveInteger(
       config.recentMessageCount,
       'Emotion appraisal recentMessageCount',
@@ -381,9 +409,19 @@ export class EmotionAppraisal {
     const turnsSinceLast = state.turnsSinceLast + 1;
     state.turnsSinceLast = turnsSinceLast;
 
-    const shouldTriggerPeriodic = turnsSinceLast >= this.turnCadence;
-    const shouldTriggerVadShift = delta >= this.vadDeltaThreshold;
-    if (!shouldTriggerPeriodic && !shouldTriggerVadShift) {
+    const telemetryTrusted = !internalState || internalState.emotional.telemetry.status === 'trusted';
+    const shouldTriggerVadShift = telemetryTrusted && delta >= this.vadDeltaThreshold;
+    // Route the periodic/vad-shift decision through the shared primitive
+    // (jpvd.4). Untrusted telemetry can never trigger the vad-shift signal, so
+    // feed a sub-threshold sentinel; the emitted input carries the real delta.
+    const roundedDelta = Number(delta.toFixed(4));
+    const gateInputs = { turnsSinceLast, vadDelta: roundedDelta };
+    const gate = evaluateDeterministicGate(this.appraisalGate, {
+      turnsSinceLast,
+      vadDelta: telemetryTrusted ? delta : -1,
+    });
+    if (!gate.open) {
+      this.emitGateEvent(sessionId, 'skipped', gate.reason, gateInputs, now);
       return {
         appraised: false,
         turnsSinceLast,
@@ -392,6 +430,7 @@ export class EmotionAppraisal {
     }
 
     const trigger: EmotionAppraisalTrigger = shouldTriggerVadShift ? 'vad_shift' : 'periodic';
+    this.emitGateEvent(sessionId, 'ran', trigger, gateInputs, now);
     const context: LLMContextLike = {
       systemPrompt: this.systemPrompt,
       messages: [
@@ -448,6 +487,23 @@ export class EmotionAppraisal {
     };
   }
 
+  private emitGateEvent(
+    sessionId: string,
+    outcome: 'ran' | 'skipped',
+    reason: string,
+    inputs: Record<string, number | string>,
+    timestamp: number,
+  ): void {
+    this.onGateEvent?.({
+      lane: EMOTION_APPRAISAL_GATE_LANE,
+      outcome,
+      reason,
+      inputs,
+      timestamp,
+      sessionId,
+    });
+  }
+
   private getOrCreateSessionState(sessionId: string): SessionAppraisalState {
     const existing = this.sessionState.get(sessionId);
     if (existing) return existing;
@@ -467,7 +523,7 @@ export class EmotionAppraisal {
     personalityTraits: Record<string, string>;
   }): string {
     const lines: string[] = [];
-    lines.push('Create one internal emotion appraisal paragraph.');
+    lines.push('Write one private first-person emotion appraisal paragraph for this moment.');
     lines.push('');
     lines.push('[Current Emotion State]');
     lines.push(
@@ -483,6 +539,12 @@ export class EmotionAppraisal {
     lines.push(`Top discrete emotions: ${topDiscrete(input.snapshot.discrete, TOP_DISCRETE_COUNT)}`);
     lines.push(`Signal confidence: ${input.snapshot.confidence.toFixed(3)}`);
     if (input.internalState) {
+      const telemetry = input.internalState.emotional.telemetry;
+      lines.push(
+        `Telemetry validation: status=${telemetry.status}; source=${telemetry.source}; `
+        + `reasons=${telemetry.reasons.length > 0 ? telemetry.reasons.join(',') : 'none'}; `
+        + `weight=${telemetry.weight.toFixed(3)}`,
+      );
       lines.push('');
       lines.push('[Internal State Signals]');
       lines.push(

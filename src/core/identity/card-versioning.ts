@@ -1,8 +1,4 @@
 import { createHash } from 'node:crypto';
-import {
-  existsSync,
-  readFileSync,
-} from 'node:fs';
 import { Type } from '@sinclair/typebox';
 import type { AgentTool, AgentToolResult } from '@mariozechner/pi-agent-core';
 import type { CapabilityTier } from '../../system/config/runtime-config-contracts.js';
@@ -14,7 +10,7 @@ import type {
 } from '../../system/capabilities/approval-queue-port.js';
 import type { CharacterCardV2, CharacterData } from './types.js';
 import { assertValidCharacterCard, loadCharacterCard } from './loader.js';
-import { appendJsonLine } from '../../persistence/jsonl.js';
+import { appendJsonLine, readJsonLines } from '../../persistence/jsonl.js';
 import { writeJsonAtomic } from '../../shared/utils/fs.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
 
@@ -121,13 +117,11 @@ function cardChecksum(card: CharacterCardV2): string {
 
 function safeReadHistory(path: string): CharacterCardHistoryEntry[] {
   try {
-    if (!existsSync(path)) return [];
-    const raw = readFileSync(path, 'utf-8').trim();
-    if (!raw) return [];
-    return raw
-      .split('\n')
-      .filter(Boolean)
-      .map((line) => JSON.parse(line) as CharacterCardHistoryEntry);
+    return readJsonLines<CharacterCardHistoryEntry>(
+      path,
+      raw => raw as CharacterCardHistoryEntry,
+      { warnLabel: 'Skipping unreadable character card history line' },
+    ).entries;
   } catch {
     return [];
   }

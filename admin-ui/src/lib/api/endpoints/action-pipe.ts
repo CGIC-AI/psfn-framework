@@ -1,11 +1,13 @@
 import { apiGet, apiPost } from '$lib/api/client';
 import type {
-  PostTurnActionQueueStatus,
   PostTurnActionStatusRecord,
 } from '../../../../../src/core/agent/post-turn-action-runtime.js';
-import type { AdminActionPipeMutationResult } from '../../../../../src/operator/garden/services/types.js';
+import type {
+  AdminActionPipeMutationResult,
+  AdminActionPipeStatus,
+} from '../../../../../src/operator/garden/services/types.js';
 
-export type ActionPipeStatus = PostTurnActionQueueStatus;
+export type ActionPipeStatus = AdminActionPipeStatus;
 export type ActionPipeActionStatus = PostTurnActionStatusRecord;
 export type ActionPipeMutationResult = AdminActionPipeMutationResult;
 

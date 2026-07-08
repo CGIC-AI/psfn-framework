@@ -397,7 +397,7 @@ describe('UserContinuityStore', () => {
       expect(entries).toHaveLength(2);
     });
 
-    it('semi_private channels get no continuity from private channels', () => {
+    it('invite_only channels get no continuity from private channels', () => {
       store.append('user1', {
         channelId: 'api:session1',
         role: 'user',
@@ -406,12 +406,12 @@ describe('UserContinuityStore', () => {
         originChannelId: 'api:session1',
       });
 
-      // From a guild channel (semi_private), should see nothing
+      // From a guild channel (invite_only), should see nothing
       const entries = store.getRecent('user1', 10, undefined, '1234567890');
       expect(entries).toHaveLength(0);
     });
 
-    it('private channels receive lower-sensitivity continuity from semi_private channels', () => {
+    it('private channels receive lower-sensitivity continuity from invite_only channels', () => {
       store.append('user1', {
         channelId: '1234567890',
         role: 'user',
@@ -423,7 +423,7 @@ describe('UserContinuityStore', () => {
       const entries = store.getRecent('user1', 10, undefined, 'api:session1');
       expect(entries).toHaveLength(1);
       expect(entries[0].content).toBe('Guild planning thread');
-      expect(entries[0].channelVisibility).toBe('semi_private');
+      expect(entries[0].channelVisibility).toBe('invite_only');
     });
 
     it('public channels receive only public-ceiling continuity', () => {
@@ -517,8 +517,8 @@ describe('UserContinuityStore', () => {
       expect(entries[0].channelVisibility).toBe('private');
     });
 
-    it('Discord guild messages get semi_private visibility (no DM flag)', () => {
-      // Without pre-stamped visibility, fallback classifyChannel('1234567890') → 'semi_private'
+    it('Discord guild messages get invite_only visibility (no DM flag)', () => {
+      // Without pre-stamped visibility, fallback classifyChannel('1234567890') → 'invite_only'
       store.append('user1', {
         channelId: '1234567890',
         role: 'user',
@@ -528,7 +528,7 @@ describe('UserContinuityStore', () => {
       });
 
       const entries = store.getRecent('user1', 10);
-      expect(entries[0].channelVisibility).toBe('semi_private');
+      expect(entries[0].channelVisibility).toBe('invite_only');
     });
 
     it('DM-flagged current channel allows sharing from private-stamped Discord DM entries', () => {
@@ -648,15 +648,15 @@ describe('SessionManager with continuity', () => {
     // Build context for channel 2 — should include ch1 messages as cross-channel
     const ctx = await mgr.buildContext('sillytavern:ch2', 'System prompt', '', undefined, 'user1');
 
-    expect(ctx.systemPrompt).toContain('[Recent activity from other channels]');
+    expect(ctx.systemPrompt).toContain('<cross_channel_continuity authority="retrieved_context"');
     expect(ctx.systemPrompt).toContain('I like cats');
     expect(ctx.systemPrompt).toContain('Me too!');
     // Should NOT contain the ch2 message in the continuity block (it's already in local)
     // but the ch2 entry will be in the continuity store, excluded by channelId
-    expect(ctx.systemPrompt).not.toContain('[from sillytavern:ch2]');
+    expect(ctx.systemPrompt).not.toContain('<source>sillytavern:ch2</source>');
   });
 
-  it('buildContext includes lower-sensitivity semi_private continuity in private channels', async () => {
+  it('buildContext includes lower-sensitivity invite_only continuity in private channels', async () => {
     const mgr = new SessionManager(sessionStore, config);
     mgr.continuityStore = continuityStore;
 
@@ -666,10 +666,10 @@ describe('SessionManager with continuity', () => {
 
     const ctx = await mgr.buildContext('api:private-main', 'System prompt', '', undefined, 'user1');
 
-    expect(ctx.systemPrompt).toContain('[Recent activity from other channels]');
+    expect(ctx.systemPrompt).toContain('<cross_channel_continuity authority="retrieved_context"');
     expect(ctx.systemPrompt).toContain('Guild follow-up');
     expect(ctx.systemPrompt).toContain('Guild response');
-    expect(ctx.systemPrompt).not.toContain('[from api:private-main]');
+    expect(ctx.systemPrompt).not.toContain('<source>api:private-main</source>');
   });
 
   it('keeps heartbeat journals out of prompt-facing cross-channel continuity', async () => {
@@ -695,7 +695,7 @@ describe('SessionManager with continuity', () => {
       DEFAULT_COMPANION_ID,
     );
 
-    expect(ctx.systemPrompt).not.toContain('[Recent activity from other channels]');
+    expect(ctx.systemPrompt).not.toContain('<cross_channel_continuity');
     expect(ctx.systemPrompt).not.toContain('Earlier heartbeat summary');
   });
 
@@ -767,14 +767,14 @@ describe('SessionManager with continuity', () => {
         DEFAULT_COMPANION_ID,
       );
 
-      expect(ctx.systemPrompt).toContain('[Welcome back]');
-      expect(ctx.systemPrompt).toContain('Last time here');
+      expect(ctx.systemPrompt).toContain('<continuity_anchor authority="companion_context"');
+      expect(ctx.systemPrompt).toContain('<last_time_here>');
       expect(ctx.systemPrompt).toContain('Recovery mattered most.');
-      expect(ctx.systemPrompt).toContain('Recent continuity');
-      expect(ctx.systemPrompt).toContain('[Recent activity from other channels]');
+      expect(ctx.systemPrompt).toContain('<recent_continuity>');
+      expect(ctx.systemPrompt).toContain('<cross_channel_continuity authority="retrieved_context"');
       expect(ctx.systemPrompt).toContain('Earlier reflection summary');
       expect(ctx.systemPrompt).toContain('The API thread still needs recovery notes.');
-      expect(ctx.systemPrompt).not.toContain('[from internal:reflection:daily]');
+      expect(ctx.systemPrompt).not.toContain('<source>internal:reflection:daily</source>');
       expect(ctx.systemPrompt).not.toContain('Earlier heartbeat summary');
     } finally {
       nowSpy.mockRestore();
@@ -790,7 +790,7 @@ describe('SessionManager with continuity', () => {
     const ctx = await mgr.buildContext('ch1', 'System prompt', '');
     expect(ctx.systemPrompt).toBe('System prompt');
     expect(ctx.messages).toHaveLength(1);
-    expect(ctx.systemPrompt).not.toContain('[Recent activity from other channels]');
+    expect(ctx.systemPrompt).not.toContain('<cross_channel_continuity');
   });
 
   it('buildContext works without userId (no continuity injection)', async () => {
@@ -810,7 +810,7 @@ describe('SessionManager with continuity', () => {
 
     // buildContext without userId — should not include continuity
     const ctx = await mgr.buildContext('ch2', 'System prompt', '');
-    expect(ctx.systemPrompt).not.toContain('[Recent activity from other channels]');
+    expect(ctx.systemPrompt).not.toContain('<cross_channel_continuity');
   });
 
   it('does not duplicate messages from current channel in continuity block', async () => {
@@ -823,7 +823,7 @@ describe('SessionManager with continuity', () => {
 
     // Build context for api:ch1 — continuity should NOT include api:ch1 messages
     const ctx = await mgr.buildContext('api:ch1', 'System prompt', '', undefined, 'user1');
-    expect(ctx.systemPrompt).not.toContain('[Recent activity from other channels]');
+    expect(ctx.systemPrompt).not.toContain('<cross_channel_continuity');
   });
 
   it('does not duplicate legacy continuity entries missing originChannelId', async () => {
@@ -841,7 +841,7 @@ describe('SessionManager with continuity', () => {
 
     const ctx = await mgr.buildContext('api:ch1', 'System prompt', '', undefined, 'user1');
     expect(ctx.systemPrompt).not.toContain('Legacy continuity without explicit origin');
-    expect(ctx.systemPrompt).not.toContain('[Recent activity from other channels]');
+    expect(ctx.systemPrompt).not.toContain('<cross_channel_continuity');
   });
 
   it('records Discord DM messages as private visibility via isDirectMessage flag', () => {
@@ -856,7 +856,7 @@ describe('SessionManager with continuity', () => {
     expect(continuity[0].channelVisibility).toBe('private');
   });
 
-  it('records Discord guild messages as semi_private visibility', () => {
+  it('records Discord guild messages as invite_only visibility', () => {
     const mgr = new SessionManager(sessionStore, config);
     mgr.continuityStore = continuityStore;
 
@@ -865,26 +865,41 @@ describe('SessionManager with continuity', () => {
 
     const continuity = continuityStore.getRecent('user1', 10);
     expect(continuity).toHaveLength(1);
-    expect(continuity[0].channelVisibility).toBe('semi_private');
+    expect(continuity[0].channelVisibility).toBe('invite_only');
   });
 
   it('records explicit channel privacy overrides into continuity visibility', () => {
     const mgr = new SessionManager(sessionStore, config);
     mgr.continuityStore = continuityStore;
 
+    // E3.3: adapters declare ChannelPrivacy only; the explicit 'public'
+    // hint overrides the 'api:' private-prefix derived default.
     mgr.recordUserMessage(
-      'api:admin-broadcast',
-      'Prepare the broadcast draft',
+      'api:admin-announcements',
+      'Prepare the announcement draft',
       'user1',
       'Alice',
       undefined,
       undefined,
-      { channelMeta: { privacyLevel: 'broadcast' } },
+      { channelMeta: { privacyLevel: 'public' } },
     );
 
     const continuity = continuityStore.getRecent('user1', 10);
     expect(continuity).toHaveLength(1);
-    expect(continuity[0].channelVisibility).toBe('broadcast');
+    expect(continuity[0].channelVisibility).toBe('public');
+  });
+
+  it('stamps broadcast-prefix channels with the public privacy projection', () => {
+    const mgr = new SessionManager(sessionStore, config);
+    mgr.continuityStore = continuityStore;
+
+    // E3.3 broadcast split: a broadcast surface is channelPrivacy 'public'
+    // plus the envelope flag; stored visibility stamps carry the privacy.
+    mgr.recordUserMessage('twitter:main', 'Broadcast draft', 'user1', 'Alice', false);
+
+    const continuity = continuityStore.getRecent('user1', 10);
+    expect(continuity).toHaveLength(1);
+    expect(continuity[0].channelVisibility).toBe('public');
   });
 
   it('records assistant DM response as private visibility', () => {
@@ -922,7 +937,7 @@ describe('SessionManager with continuity', () => {
       { isDirectMessage: true },
     );
 
-    expect(ctx.systemPrompt).toContain('[Recent activity from other channels]');
+    expect(ctx.systemPrompt).toContain('<cross_channel_continuity authority="retrieved_context"');
     expect(ctx.systemPrompt).toContain('Private API context');
   });
 
@@ -950,7 +965,7 @@ describe('SessionManager with continuity', () => {
       { isDirectMessage: false },
     );
 
-    expect(ctx.systemPrompt).not.toContain('[Recent activity from other channels]');
+    expect(ctx.systemPrompt).not.toContain('<cross_channel_continuity');
     expect(ctx.systemPrompt).not.toContain('Private API context');
   });
 
@@ -973,7 +988,7 @@ describe('SessionManager with continuity', () => {
     });
     const ctx = await mgr.buildContext('api:ch3', 'System prompt', '', undefined, 'user1');
 
-    expect(ctx.systemPrompt).toContain('[from api:dm-channel]');
-    expect(ctx.systemPrompt).toContain('[from api:other-channel]');
+    expect(ctx.systemPrompt).toContain('<source>api:dm-channel</source>');
+    expect(ctx.systemPrompt).toContain('<source>api:other-channel</source>');
   });
 });

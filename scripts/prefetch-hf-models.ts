@@ -1,12 +1,14 @@
 import { mkdirSync } from 'node:fs';
 import path from 'node:path';
-import { config as loadDotenv } from 'dotenv';
+import '../src/shared/utils/load-dotenv.js';
 import {
   resolveProjectTransformersCacheDir,
   TransformersEmbeddingProvider,
 } from '../src/faculties/memory/embedding.js';
 import {
+  TEXT_EMOTION_DTYPE_VALUES,
   TextEmotionClassifier,
+  type TextEmotionDType,
 } from '../src/core/emotion/text-classifier.js';
 import { loadSettings } from '../src/system/settings/io.js';
 
@@ -15,12 +17,14 @@ interface PrefetchCliOptions {
   cacheDir: string;
   embeddingModel: string;
   emotionModel: string | null;
+  emotionDtype: TextEmotionDType;
 }
 
 interface PrefetchRuntimeDefaults {
   cacheDir: string;
   embeddingModel: string;
   emotionModel: string;
+  emotionDtype: TextEmotionDType;
 }
 
 function printUsage(defaults: PrefetchRuntimeDefaults): void {
@@ -33,6 +37,7 @@ function printUsage(defaults: PrefetchRuntimeDefaults): void {
   console.log(`  --cache-dir <path>        Override cache directory (default: ${defaults.cacheDir})`);
   console.log(`  --embedding-model <id>    Override embedding model id (default: ${defaults.embeddingModel})`);
   console.log(`  --emotion-model <id>      Override emotion model id (default: ${defaults.emotionModel})`);
+  console.log(`  --emotion-dtype <dtype>   Override emotion model dtype (default: ${defaults.emotionDtype})`);
   console.log('  --skip-emotion            Skip text emotion model prefetch');
   console.log('  --help                    Show this help');
 }
@@ -59,10 +64,21 @@ function resolveOwnerFileDataDir(env: NodeJS.ProcessEnv): string {
   return dataDir;
 }
 
-function requireRuntimeSetting(value: string | undefined, field: string, dataDir: string): string {
+function requireRuntimeSetting<T extends string>(value: T | undefined, field: string, dataDir: string): T {
   const normalized = resolveOptionalString(value);
-  if (normalized) return normalized;
+  if (normalized) return normalized as T;
   throw new Error(`${field} is required in ${dataDir}/settings.json or via the corresponding CLI override`);
+}
+
+function parseTextEmotionDtype(value: string | undefined, field: string): TextEmotionDType {
+  const normalized = resolveOptionalString(value);
+  if (!normalized) {
+    throw new Error(`${field} requires a non-empty value`);
+  }
+  if (!TEXT_EMOTION_DTYPE_VALUES.includes(normalized as TextEmotionDType)) {
+    throw new Error(`${field} must be one of: ${TEXT_EMOTION_DTYPE_VALUES.join(', ')}`);
+  }
+  return normalized as TextEmotionDType;
 }
 
 function resolvePrefetchRuntimeDefaults(env: NodeJS.ProcessEnv): PrefetchRuntimeDefaults {
@@ -74,6 +90,7 @@ function resolvePrefetchRuntimeDefaults(env: NodeJS.ProcessEnv): PrefetchRuntime
     cacheDir: resolveCacheDir(runtimeSettings.textEmotionCacheDir),
     embeddingModel: requireRuntimeSetting(runtimeSettings.transformersModel, 'transformersModel', dataDir),
     emotionModel: requireRuntimeSetting(runtimeSettings.textEmotionModel, 'textEmotionModel', dataDir),
+    emotionDtype: requireRuntimeSetting(runtimeSettings.textEmotionDtype, 'textEmotionDtype', dataDir),
   };
 }
 
@@ -92,6 +109,7 @@ function parseCliOptions(
   let cacheDir = runtimeDefaults.cacheDir;
   let embeddingModel = runtimeDefaults.embeddingModel;
   let emotionModel: string | null = runtimeDefaults.emotionModel;
+  let emotionDtype = runtimeDefaults.emotionDtype;
 
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
@@ -129,6 +147,11 @@ function parseCliOptions(
         emotionModel = value;
         break;
       }
+      case '--emotion-dtype': {
+        emotionDtype = parseTextEmotionDtype(args[index + 1], '--emotion-dtype');
+        index += 1;
+        break;
+      }
       case '--help':
         printUsage(runtimeDefaults);
         process.exit(0);
@@ -142,6 +165,7 @@ function parseCliOptions(
     cacheDir,
     embeddingModel,
     emotionModel,
+    emotionDtype,
   };
 }
 
@@ -161,12 +185,12 @@ async function prefetchModels(options: PrefetchCliOptions, hfToken: string | und
   const classifier = new TextEmotionClassifier({
     model: options.emotionModel,
     cacheDir: options.cacheDir,
+    dtype: options.emotionDtype,
   });
   await classifier.classify('prefetch emotion model');
 }
 
 async function main(): Promise<void> {
-  loadDotenv();
   const runtimeDefaults = resolvePrefetchRuntimeDefaults(process.env);
   const options = parseCliOptions(process.argv.slice(2), runtimeDefaults);
   const hfToken = resolveOptionalHfToken(process.env);
@@ -180,6 +204,9 @@ async function main(): Promise<void> {
   console.log(`[prefetch:hf-models] cacheDir=${options.cacheDir}`);
   console.log(`[prefetch:hf-models] embeddingModel=${options.embeddingModel}`);
   console.log(`[prefetch:hf-models] emotionModel=${options.emotionModel ?? 'skipped'}`);
+  if (options.emotionModel) {
+    console.log(`[prefetch:hf-models] emotionDtype=${options.emotionDtype}`);
+  }
   console.log(`[prefetch:hf-models] authToken=${hfToken ? 'provided' : 'not provided'}`);
 
   if (options.dryRun) {

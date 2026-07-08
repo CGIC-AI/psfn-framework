@@ -10,6 +10,7 @@ import type {
   ScheduledTask,
   SchedulerConfig,
   TaskState,
+  WeeklyRecurringCadence,
 } from './types.js';
 import { DEFAULT_SCHEDULER_CONFIG } from './types.js';
 import { createComponentLogger } from '../../shared/logger.js';
@@ -21,10 +22,12 @@ import type {
 
 const log = createComponentLogger('Scheduler');
 
+type RuntimeScheduledTask = ScheduledTask & { lastRun: number };
+
 function isWallClockCadence(
   cadence: RecurringCadence | undefined,
-): cadence is HourlyRecurringCadence | DailyRecurringCadence {
-  return cadence?.kind === 'hourly' || cadence?.kind === 'daily';
+): cadence is HourlyRecurringCadence | DailyRecurringCadence | WeeklyRecurringCadence {
+  return cadence?.kind === 'hourly' || cadence?.kind === 'daily' || cadence?.kind === 'weekly';
 }
 
 function validateRecurringCadence(taskId: string, cadence: RecurringCadence | undefined): void {
@@ -44,6 +47,12 @@ function validateRecurringCadence(taskId: string, cadence: RecurringCadence | un
     return;
   }
 
+  if (cadence.kind === 'weekly') {
+    if (!Number.isInteger(cadence.dayOfWeek) || cadence.dayOfWeek < 0 || cadence.dayOfWeek > 6) {
+      throw new Error(`Task "${taskId}" cadence.dayOfWeek must be an integer between 0 and 6`);
+    }
+  }
+
   if (!Number.isInteger(cadence.hour) || cadence.hour < 0 || cadence.hour > 23) {
     throw new Error(`Task "${taskId}" cadence.hour must be an integer between 0 and 23`);
   }
@@ -54,7 +63,7 @@ function validateRecurringCadence(taskId: string, cadence: RecurringCadence | un
 
 function getCurrentSlotStart(
   now: number,
-  cadence: HourlyRecurringCadence | DailyRecurringCadence,
+  cadence: HourlyRecurringCadence | DailyRecurringCadence | WeeklyRecurringCadence,
 ): number {
   const slot = new Date(now);
 
@@ -70,6 +79,26 @@ function getCurrentSlotStart(
     slot.setMinutes(cadence.minute, 0, 0);
     if (slot.getTime() > now) {
       slot.setHours(slot.getHours() - 1);
+    }
+    return slot.getTime();
+  }
+
+  if (cadence.kind === 'weekly') {
+    if (cadence.timezone === 'utc') {
+      slot.setUTCHours(cadence.hour, cadence.minute, 0, 0);
+      const daysSinceSlot = (slot.getUTCDay() - cadence.dayOfWeek + 7) % 7;
+      slot.setUTCDate(slot.getUTCDate() - daysSinceSlot);
+      if (slot.getTime() > now) {
+        slot.setUTCDate(slot.getUTCDate() - 7);
+      }
+      return slot.getTime();
+    }
+
+    slot.setHours(cadence.hour, cadence.minute, 0, 0);
+    const daysSinceSlot = (slot.getDay() - cadence.dayOfWeek + 7) % 7;
+    slot.setDate(slot.getDate() - daysSinceSlot);
+    if (slot.getTime() > now) {
+      slot.setDate(slot.getDate() - 7);
     }
     return slot.getTime();
   }
@@ -92,7 +121,7 @@ function getCurrentSlotStart(
 function isWallClockTaskDue(
   now: number,
   lastRun: number,
-  cadence: HourlyRecurringCadence | DailyRecurringCadence,
+  cadence: HourlyRecurringCadence | DailyRecurringCadence | WeeklyRecurringCadence,
 ): boolean {
   const currentSlotStart = getCurrentSlotStart(now, cadence);
   return now >= currentSlotStart && lastRun < currentSlotStart;
@@ -108,7 +137,7 @@ export class Scheduler {
   private config: SchedulerConfig;
   private eligibilityGate?: EligibilityGate;
   private onEligibilityDecision?: (decision: EligibilityDecision) => void;
-  private tasks = new Map<string, ScheduledTask & { lastRun: number }>();
+  private tasks = new Map<string, RuntimeScheduledTask>();
   private tickTimer: ReturnType<typeof setInterval> | null = null;
   private tickInFlight: Promise<void> | null = null;
   private stopDrainPromise: Promise<void> | null = null;
@@ -304,6 +333,7 @@ export class Scheduler {
 
       const eligibilityDecision = this.evaluateTaskEligibility(id, entry);
       if (eligibilityDecision && !eligibilityDecision.allowed) {
+        const deniedAt = Date.now();
         log.warn('Task blocked by eligibility gate', {
           taskId: id,
           taskName: entry.name,
@@ -314,6 +344,12 @@ export class Scheduler {
           minimumTier: eligibilityDecision.minimumTier,
         });
         entry.lastRun = now;
+        entry.lastRunAt = now;
+        entry.lastFinishedAt = deniedAt;
+        entry.lastOutcome = 'denied';
+        delete entry.lastError;
+        delete entry.lastErrorAt;
+        entry.lastDeniedReason = eligibilityDecision.reasonCode;
         if (entry.type === 'one-shot') {
           entry.state = 'complete';
         }
@@ -334,15 +370,29 @@ export class Scheduler {
 
       entry.state = 'active';
       entry.lastRun = now;
+      entry.lastRunAt = now;
+      delete entry.lastFinishedAt;
+      delete entry.lastOutcome;
+      delete entry.lastError;
+      delete entry.lastErrorAt;
+      delete entry.lastDeniedReason;
       try {
         await entry.handler();
+        entry.lastFinishedAt = Date.now();
+        entry.lastOutcome = 'succeeded';
         await this.eventBus.emit('schedule.task.run', {
           taskId: id,
           taskName: entry.name,
           type: entry.type,
         });
       } catch (err) {
-        log.error(`Task "${entry.name}" error`, { error: String(err) });
+        const errorText = String(err);
+        entry.lastFinishedAt = Date.now();
+        entry.lastOutcome = 'failed';
+        entry.lastError = errorText;
+        entry.lastErrorAt = entry.lastFinishedAt;
+        delete entry.lastDeniedReason;
+        log.error(`Task "${entry.name}" error`, { error: errorText });
       }
 
       if (entry.type === 'one-shot') {

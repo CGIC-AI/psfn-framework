@@ -17,7 +17,15 @@ describe('filesystem runtime wiring', () => {
     const target = createMockTarget();
     const ops = {
       read: vi.fn(async () => ({ content: 'hello', truncated: false })),
-      list: vi.fn(async () => ['a.txt']),
+      list: vi.fn(async () => ({
+        paths: ['a.txt'],
+        scannedEntries: 1,
+        maxEntries: 200,
+        maxScannedEntries: 5000,
+        truncated: false,
+        scanLimitReached: false,
+        entryLimitReached: false,
+      })),
       search: vi.fn(async () => ({
         query: 'a',
         glob: '**/*',
@@ -42,7 +50,15 @@ describe('filesystem runtime wiring', () => {
     const gatewayOps = {
       filesystem: {
         read: vi.fn(async () => ({ content: 'content', truncated: false })),
-        list: vi.fn(async () => []),
+        list: vi.fn(async () => ({
+          paths: [],
+          scannedEntries: 0,
+          maxEntries: 200,
+          maxScannedEntries: 5000,
+          truncated: false,
+          scanLimitReached: false,
+          entryLimitReached: false,
+        })),
         search: vi.fn(async () => ({
           query: 'a',
           glob: '**/*',
@@ -80,7 +96,13 @@ describe('filesystem runtime wiring', () => {
       expect(ops).toBeInstanceOf(WorkspaceFilesystemOps);
 
       const listed = await ops.list('memories/**/*.txt', 10);
-      expect(listed).toEqual(['memories/memorybook.txt']);
+      expect(listed).toMatchObject({
+        paths: ['memories/memorybook.txt'],
+        maxEntries: 10,
+        truncated: false,
+        scanLimitReached: false,
+        entryLimitReached: false,
+      });
 
       const content = await ops.read('memories/memorybook.txt');
       expect(content).toEqual({ content: 'remember this\n', truncated: false });

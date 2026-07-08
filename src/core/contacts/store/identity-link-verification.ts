@@ -9,7 +9,7 @@ import type {
   ContactIdentityLinkVerificationResult,
   ContactIdentityLinkVerificationState,
 } from '../types.js';
-import { v4 as uuidv4 } from 'uuid';
+import { v7 as uuidv7 } from 'uuid';
 import type { ContactIdentityVerificationRow } from './domain-types.js';
 import {
   createVerificationToken,
@@ -125,7 +125,7 @@ export function createIdentityLinkChallenge(
     now.getTime() + normalizeVerificationTtlMs(input.ttlMs),
   ).toISOString();
   const verification: ContactIdentityLinkVerification = {
-    id: uuidv4(),
+    id: uuidv7(),
     contactId: contact.id,
     sourceChannel: sourceIdentity.channel,
     sourceUserId: sourceIdentity.userId,

@@ -165,4 +165,125 @@ describe('skills tools', () => {
       rmSync(root, { recursive: true, force: true });
     }
   });
+
+  it('exposes named and list-level skill usage stats without skill content', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'skills-tools-stats-'));
+    const companionDataDir = join(root, 'companion-data');
+    const personalFilesDir = join(root, 'purrsephone');
+    const seedDir = join(root, 'config');
+    mkdirSync(companionDataDir, { recursive: true });
+    mkdirSync(personalFilesDir, { recursive: true });
+    writeSkillsConfig(companionDataDir, seedDir);
+
+    try {
+      const runtime = new SkillsRuntime({
+        dataDir: companionDataDir,
+        seedDir,
+        repoRoot: root,
+        managedRootDir: join(personalFilesDir, 'skills'),
+        isBinaryAvailable: () => true,
+      });
+      const skillTool = createSkillTool(runtime);
+
+      await skillTool.execute('call-create-1', {
+        action: 'create',
+        name: 'incident-runbook',
+        category: 'ops',
+        description: 'Incident response checklist.',
+        content: '# Incident Runbook\n\n- Secret escalation text',
+      });
+      await skillTool.execute('call-create-2', {
+        action: 'create',
+        name: 'quiet-review',
+        category: 'reflection',
+        description: 'Slow review checklist.',
+        content: '# Quiet Review\n\n- Private review body',
+      });
+
+      await skillTool.execute('call-view-1', {
+        action: 'view',
+        name: 'incident-runbook',
+      });
+      runtime.recordSkillInvocation('incident-runbook', {
+        outcome: 'failure',
+        durationMs: 50,
+        occurredAt: '2026-06-29T12:00:00.000Z',
+      });
+
+      const namedStatsResult = await skillTool.execute('call-stats-1', {
+        action: 'stats',
+        name: 'incident-runbook',
+      });
+      const namedStats = JSON.parse(readText(namedStatsResult)) as {
+        status: string;
+        skill: { name: string; path: string };
+        stats: {
+          invocationCount: number;
+          successCount: number;
+          failureCount: number;
+          lastOutcome: string;
+        };
+      };
+      expect(namedStats.status).toBe('ok');
+      expect(namedStats.skill.name).toBe('incident-runbook');
+      expect(namedStats.skill.path).toContain('purrsephone/skills/ops/incident-runbook/SKILL.md');
+      expect(namedStats.stats.invocationCount).toBe(2);
+      expect(namedStats.stats.successCount).toBe(1);
+      expect(namedStats.stats.failureCount).toBe(1);
+      expect(namedStats.stats.lastOutcome).toBe('failure');
+      expect(readText(namedStatsResult)).not.toContain('Secret escalation text');
+
+      const noStatsResult = await skillTool.execute('call-stats-2', {
+        action: 'skill_stats',
+        name: 'quiet-review',
+      });
+      const noStatsPayload = JSON.parse(readText(noStatsResult)) as {
+        status: string;
+        stats: null;
+      };
+      expect(noStatsPayload.status).toBe('no_stats');
+      expect(noStatsPayload.stats).toBeNull();
+
+      const missingStatsResult = await skillTool.execute('call-stats-3', {
+        action: 'stats',
+        name: 'not-found',
+      });
+      const missingStatsPayload = JSON.parse(readText(missingStatsResult)) as {
+        status: string;
+        stats: null;
+        message: string;
+      };
+      expect(missingStatsResult.details.isError).toBeUndefined();
+      expect(missingStatsPayload.status).toBe('not_found');
+      expect(missingStatsPayload.stats).toBeNull();
+      expect(missingStatsPayload.message).toContain('was not found');
+
+      const listStatsResult = await skillTool.execute('call-stats-4', {
+        action: 'stats',
+      });
+      const listStats = JSON.parse(readText(listStatsResult)) as {
+        scope: string;
+        totals: {
+          recordedSkills: number;
+          invocationCount: number;
+          successCount: number;
+          failureCount: number;
+        };
+        skills: Array<{
+          name: string;
+          stats: null | { invocationCount: number };
+        }>;
+      };
+      expect(listStats.scope).toBe('list');
+      expect(listStats.totals.recordedSkills).toBe(1);
+      expect(listStats.totals.invocationCount).toBe(2);
+      expect(listStats.totals.successCount).toBe(1);
+      expect(listStats.totals.failureCount).toBe(1);
+      expect(listStats.skills.find(skill => skill.name === 'incident-runbook')?.stats?.invocationCount).toBe(2);
+      expect(listStats.skills.find(skill => skill.name === 'quiet-review')?.stats).toBeNull();
+      expect(readText(listStatsResult)).not.toContain('Private review body');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 });

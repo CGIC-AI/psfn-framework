@@ -375,7 +375,15 @@ describe('REPLSandbox', () => {
       ...mockLLM(),
       fsRead: vi.fn(async (path: string) => `read:${path}`),
       fsWrite: vi.fn(async () => {}),
-      fsList: vi.fn(async () => ['src/a.ts', 'src/b.ts']),
+      fsList: vi.fn(async () => ({
+        paths: ['src/a.ts', 'src/b.ts'],
+        scannedEntries: 2,
+        maxEntries: 10,
+        maxScannedEntries: 5000,
+        truncated: false,
+        scanLimitReached: false,
+        entryLimitReached: false,
+      })),
       webFetch: vi.fn(async (url: string) => `fetched:${url}`),
     } as unknown as LLMProviderPort;
     const sandbox = new REPLSandbox(nullDeps(llm, null, {
@@ -387,7 +395,7 @@ describe('REPLSandbox', () => {
         'const content = await read_file("/app/workspace/a.txt"); print(content);',
         'const write = await write_file("/app/workspace/out.txt", "hello"); print(write.ok);',
         'const listed = await list_files("src/**/*.ts", 10);',
-        'print(Array.isArray(listed), listed.length);',
+        'print(Array.isArray(listed.paths), listed.paths.length, listed.truncated);',
         'const page = await web("fetch", "https://example.com"); print(page);',
       ].join('\n'),
       5000,
@@ -396,7 +404,7 @@ describe('REPLSandbox', () => {
 
     expect(result.output).toContain('read:/app/workspace/a.txt');
     expect(result.output).toContain('true');
-    expect(result.output).toContain('true 2');
+    expect(result.output).toContain('true 2 false');
     expect(result.output).toContain('fetched:https://example.com');
     expect((llm as any).fsRead).toHaveBeenCalledWith('/app/workspace/a.txt');
     expect((llm as any).fsWrite).toHaveBeenCalledWith('/app/workspace/out.txt', 'hello');
@@ -605,7 +613,15 @@ describe('REPLSandbox', () => {
       ...mockLLM(),
       fsRead: vi.fn(async (path: string) => `read:${path}`),
       fsWrite: vi.fn(async () => {}),
-      fsList: vi.fn(async () => ['one.ts']),
+      fsList: vi.fn(async () => ({
+        paths: ['one.ts'],
+        scannedEntries: 1,
+        maxEntries: 200,
+        maxScannedEntries: 5000,
+        truncated: false,
+        scanLimitReached: false,
+        entryLimitReached: false,
+      })),
       webFetch: vi.fn(async () => 'web'),
     } as unknown as LLMProviderPort;
     const budgetRef: SandboxBudgetRef = {

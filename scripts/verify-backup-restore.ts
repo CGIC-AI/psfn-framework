@@ -1,13 +1,34 @@
 import { existsSync, readdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { ensureRepositoryBackupRestoreFixture } from './backup-restore-fixture.js';
-import { verifyBackupRestore } from '../src/persistence/backups/service.js';
+import {
+  verifyPostgresDumpArchive,
+} from '../src/persistence/backups/service.js';
+import {
+  COMPANION_TREE_MANIFEST_NAME,
+  WORKSPACE_TREE_MANIFEST_NAME,
+  verifyCompanionTreeSnapshot,
+  verifyWorkspaceTreeSnapshot,
+} from '../src/persistence/backups/companion-tree.js';
+import {
+  ENCRYPTED_BACKUP_MANIFEST_NAME,
+  decryptEncryptedBackupToTemp,
+  readEncryptedBackupManifest,
+  resolveBackupEncryptionFromManifest,
+} from '../src/persistence/backups/encryption.js';
+import { verifyPostgresDumpRestore } from '../src/persistence/backups/postgres-restore.js';
+import {
+  SYSTEM_CONFIG_MANIFEST_NAME,
+  verifySystemConfigSnapshot,
+} from '../src/persistence/backups/system-config-tree.js';
 
 interface CliArgs {
   backupRootDir?: string;
   backupDir?: string;
   restoreScratchRootDir?: string;
   keepRestoreDir: boolean;
+  postgresRestoreUrl?: string;
+  postgresSourceUrl?: string;
 }
 
 function printUsage(): void {
@@ -20,6 +41,8 @@ function printUsage(): void {
       '  --backup-dir <path>           Exact backup snapshot directory to verify',
       '  --restore-scratch-root <path> Root for temporary restore rehearsal directory',
       '  --keep-restore-dir            Preserve restore rehearsal directory for inspection',
+      '  --postgres-restore-url <url>  Scratch database URL for full pg_restore fidelity verification (schema is wiped each run)',
+      '  --postgres-source-url <url>   Source database URL for restored-vs-source row count assertions',
       '  --help                        Show this help text',
     ].join('\n'),
   );
@@ -59,6 +82,20 @@ function parseArgs(argv: string[]): CliArgs {
       index += 1;
       continue;
     }
+    if (arg === '--postgres-restore-url') {
+      const value = argv[index + 1];
+      if (!value) throw new Error('--postgres-restore-url requires a value');
+      args.postgresRestoreUrl = value;
+      index += 1;
+      continue;
+    }
+    if (arg === '--postgres-source-url') {
+      const value = argv[index + 1];
+      if (!value) throw new Error('--postgres-source-url requires a value');
+      args.postgresSourceUrl = value;
+      index += 1;
+      continue;
+    }
     throw new Error(`Unknown argument: ${arg}`);
   }
 
@@ -95,10 +132,14 @@ function resolveLatestBackupDir(backupRootDir: string): string {
   return join(backupRootDir, candidates[candidates.length - 1]);
 }
 
-function resolveDatabaseSnapshotPath(backupDir: string): string {
+interface DatabaseSnapshotPaths {
+  postgresDumpPath?: string;
+}
+
+function resolveDatabaseSnapshotPaths(backupDir: string): DatabaseSnapshotPaths {
   const databaseDir = join(backupDir, 'database');
   if (!existsSync(databaseDir)) {
-    throw new Error(`Backup database directory missing: ${databaseDir}`);
+    return {};
   }
 
   const candidates = readdirSync(databaseDir, { withFileTypes: true })
@@ -110,7 +151,17 @@ function resolveDatabaseSnapshotPath(backupDir: string): string {
     throw new Error(`No database snapshot file found in ${databaseDir}`);
   }
 
-  return join(databaseDir, candidates[0]);
+  const postgresDump = candidates.find(name => name.endsWith('.dump'));
+  const unsupportedSnapshots = candidates.filter(name => !name.endsWith('.dump'));
+  if (unsupportedSnapshots.length > 0) {
+    throw new Error(
+      `Unsupported legacy database snapshot(s) in ${databaseDir}: ${unsupportedSnapshots.join(', ')}. `
+      + 'SQLite backup verification is retired; current backups must use Postgres dump archives and/or tree manifests.',
+    );
+  }
+  return {
+    ...(postgresDump ? { postgresDumpPath: join(databaseDir, postgresDump) } : {}),
+  };
 }
 
 function listSessionSnapshotFiles(sessionSnapshotDir: string): string[] {
@@ -123,38 +174,102 @@ function listSessionSnapshotFiles(sessionSnapshotDir: string): string[] {
     .sort((a, b) => a.localeCompare(b));
 }
 
-function main(): void {
+async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
   const backupRootDir = args.backupDir ? undefined : resolveDefaultBackupRootDir(args);
-  const backupDir = resolve(args.backupDir ?? resolveLatestBackupDir(backupRootDir!));
-  const databaseBackupPath = resolveDatabaseSnapshotPath(backupDir);
-  const sessionSnapshotDir = join(backupDir, 'sessions');
-  const expectedSessionFiles = listSessionSnapshotFiles(sessionSnapshotDir);
+  const requestedBackupDir = resolve(args.backupDir ?? resolveLatestBackupDir(backupRootDir!));
+  const encryptedManifestPath = join(requestedBackupDir, ENCRYPTED_BACKUP_MANIFEST_NAME);
+  const encryptedManifest = existsSync(encryptedManifestPath)
+    ? readEncryptedBackupManifest(requestedBackupDir)
+    : undefined;
+  const decrypted = encryptedManifest
+    ? await decryptEncryptedBackupToTemp(
+      requestedBackupDir,
+      resolveBackupEncryptionFromManifest(encryptedManifest),
+    )
+    : undefined;
+  const backupDir = decrypted?.decryptedBackupDir ?? requestedBackupDir;
+  try {
+    const { postgresDumpPath } = resolveDatabaseSnapshotPaths(backupDir);
+    const sessionSnapshotDir = join(backupDir, 'sessions');
+    const expectedSessionFiles = listSessionSnapshotFiles(sessionSnapshotDir);
 
-  const verification = verifyBackupRestore({
-    databaseBackupPath,
-    sessionSnapshotDir,
-    expectedSessionFiles,
-    restoreScratchRootDir: args.restoreScratchRootDir ? resolve(args.restoreScratchRootDir) : undefined,
-    cleanupRestoreDir: !args.keepRestoreDir,
-  });
+    const postgresDumpVerification = postgresDumpPath
+      ? await verifyPostgresDumpArchive(postgresDumpPath)
+      : undefined;
 
-  console.log(JSON.stringify({
-    backupDir,
-    databaseBackupPath,
-    sessionSnapshotDir,
-    expectedSessionFiles: expectedSessionFiles.length,
-    verified: true,
-    integrityDetails: verification.integrityDetails,
-    restoreDir: verification.restoreDir,
-    cleanupRestoreDir: verification.cleanupRestoreDir,
-  }, null, 2));
+    if (args.postgresRestoreUrl && !postgresDumpPath) {
+      throw new Error('--postgres-restore-url was provided but the backup contains no Postgres dump');
+    }
+    const postgresRestoreVerification = postgresDumpPath && args.postgresRestoreUrl
+      ? await verifyPostgresDumpRestore({
+        dumpPath: postgresDumpPath,
+        scratchDatabaseUrl: args.postgresRestoreUrl,
+        sourceDatabaseUrl: args.postgresSourceUrl,
+      })
+      : undefined;
+
+    const companionTreeVerification = existsSync(join(backupDir, COMPANION_TREE_MANIFEST_NAME))
+      ? verifyCompanionTreeSnapshot(backupDir)
+      : undefined;
+    const workspaceTreeVerification = existsSync(join(backupDir, WORKSPACE_TREE_MANIFEST_NAME))
+      ? verifyWorkspaceTreeSnapshot(backupDir)
+      : undefined;
+    const systemConfigVerification = existsSync(join(backupDir, SYSTEM_CONFIG_MANIFEST_NAME))
+      ? verifySystemConfigSnapshot(backupDir)
+      : undefined;
+
+    console.log(JSON.stringify({
+      backupDir: requestedBackupDir,
+      ...(encryptedManifest
+        ? {
+          encrypted: true,
+          decryptedBackupDir: backupDir,
+        }
+        : { encrypted: false }),
+      sessionSnapshotDir,
+      expectedSessionFiles: expectedSessionFiles.length,
+      verified: true,
+      ...(postgresDumpPath
+        ? {
+          postgresDumpPath,
+          postgresDumpTocEntries: postgresDumpVerification?.tocEntryCount,
+        }
+        : {}),
+      ...(postgresRestoreVerification
+        ? {
+          postgresRestoredTables: postgresRestoreVerification.restoredTableCount,
+          postgresVectorExtension: postgresRestoreVerification.vectorExtensionPresent,
+          postgresVectorColumnChecked: postgresRestoreVerification.vectorColumnChecked,
+          postgresTableCounts: postgresRestoreVerification.tableCounts,
+        }
+        : {}),
+      ...(companionTreeVerification
+        ? {
+          companionTreeVerifiedFiles: companionTreeVerification.verifiedFileCount,
+          companionTreeBytes: companionTreeVerification.totalBytes,
+        }
+        : {}),
+      ...(workspaceTreeVerification
+        ? {
+          workspaceTreeVerifiedFiles: workspaceTreeVerification.verifiedFileCount,
+          workspaceTreeBytes: workspaceTreeVerification.totalBytes,
+        }
+        : {}),
+      ...(systemConfigVerification
+        ? {
+          systemConfigVerifiedFiles: systemConfigVerification.verifiedFileCount,
+          systemConfigBytes: systemConfigVerification.totalBytes,
+        }
+        : {}),
+    }, null, 2));
+  } finally {
+    decrypted?.cleanup();
+  }
 }
 
-try {
-  main();
-} catch (error) {
+main().catch((error: unknown) => {
   const message = error instanceof Error ? error.message : String(error);
   console.error(`[verify-backup-restore] ${message}`);
   process.exit(1);
-}
+});

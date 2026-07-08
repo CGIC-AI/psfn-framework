@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { Value } from '@sinclair/typebox/value';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import {
   readLastActiveSession,
@@ -9,12 +10,7 @@ import {
 } from '../../system/lifecycle/notifications.js';
 import { SessionStore } from '../../persistence/sessions/store.js';
 import { SessionManager } from '../session/manager.js';
-import {
-  createSessionListTool,
-  createSessionNewTool,
-  createSessionResumeTool,
-  createSessionTool,
-} from './session.js';
+import { createSessionTool, type UnifiedSessionToolOptions } from './session.js';
 import { runWithRequestContext } from '../../primitives/llm/request-context.js';
 
 function makeConfig(overrides: Partial<SubstrateConfig> = {}): SubstrateConfig {
@@ -51,15 +47,20 @@ function toolText(result: { content: Array<{ type: string; text: string }> }): s
   return result.content.map(entry => entry.text).join('');
 }
 
-describe('session_new tool', () => {
-  it('exposes expected metadata', () => {
-    const tool = createSessionNewTool({ dataDir: '/tmp' });
-    expect(tool.name).toBe('session_new');
-    expect(tool.label).toBe('session_new');
-    expect(tool.description.toLowerCase()).toContain('session');
-    expect(tool.parameters).toBeDefined();
+function makeSessionToolForNewAction(
+  dataDir: string,
+  overrides: Partial<UnifiedSessionToolOptions> = {},
+): ReturnType<typeof createSessionTool> {
+  return createSessionTool({
+    manager: {} as SessionManager,
+    llmProvider: { complete: vi.fn() } as any,
+    sessionsDir: join(dataDir, 'sessions'),
+    dataDir,
+    ...overrides,
   });
+}
 
+describe('session tool action=new', () => {
   it('creates a new session and switches active context', async () => {
     const dataDir = mkdtempSync(join(tmpdir(), 'session-new-tool-'));
     try {
@@ -71,8 +72,7 @@ describe('session_new tool', () => {
 
       const seeded: string[] = [];
       const setActiveSession = vi.fn();
-      const tool = createSessionNewTool({
-        dataDir,
+      const tool = makeSessionToolForNewAction(dataDir, {
         now: () => 1_700_000_000_123,
         idFactory: () => 'api:session-test-01',
         seedSession: (sessionId) => {
@@ -81,15 +81,17 @@ describe('session_new tool', () => {
         setActiveSession,
       });
 
-      const result = await tool.execute('call-1', {});
+      const result = await tool.execute('call-1', { action: 'new' });
       const details = result.details as {
+        action: string;
         previousSessionId: string | null;
         newSessionId: string;
         newChannelType: string;
         switched: boolean;
       };
 
-      expect(toolText(result as any)).toContain('session_new: active context switched');
+      expect(toolText(result as any)).toContain('session action="new": active context switched');
+      expect(details.action).toBe('new');
       expect(details.previousSessionId).toBe('discord:old-session');
       expect(details.newSessionId).toBe('api:session-test-01');
       expect(details.newChannelType).toBe('api');
@@ -110,13 +112,13 @@ describe('session_new tool', () => {
   it('accepts previous session hint via metadata', async () => {
     const dataDir = mkdtempSync(join(tmpdir(), 'session-new-tool-metadata-'));
     try {
-      const tool = createSessionNewTool({
-        dataDir,
+      const tool = makeSessionToolForNewAction(dataDir, {
         now: () => 1_700_000_000_500,
         idFactory: () => 'api:session-test-02',
       });
 
       const result = await tool.execute('call-2', {
+        action: 'new',
         metadata: {
           previousSessionId: 'api:hinted-session',
           previousChannelType: 'api',
@@ -142,8 +144,7 @@ describe('session_new tool', () => {
     const dataDir = mkdtempSync(join(tmpdir(), 'session-new-tool-background-'));
     try {
       const setActiveSession = vi.fn();
-      const tool = createSessionNewTool({
-        dataDir,
+      const tool = makeSessionToolForNewAction(dataDir, {
         now: () => 1_700_000_000_900,
         idFactory: () => 'api:session-test-bg',
         setActiveSession,
@@ -154,10 +155,10 @@ describe('session_new tool', () => {
           callType: 'background',
           purpose: 'agent.background.continuation',
         },
-        () => tool.execute('call-bg-1', {}),
+        () => tool.execute('call-bg-1', { action: 'new' }),
       );
 
-      expect(toolText(result as any)).toContain('session_new is unavailable during background continuation execution');
+      expect(toolText(result as any)).toContain('session action="new" is unavailable during background continuation execution');
       expect((result.details as { isError?: boolean }).isError).toBe(true);
       expect(setActiveSession).not.toHaveBeenCalled();
     } finally {
@@ -167,10 +168,20 @@ describe('session_new tool', () => {
   });
 });
 
-describe('session list/resume tools', () => {
+describe('session tool list/resume actions', () => {
   let dir: string;
   let store: SessionStore;
   let manager: SessionManager;
+
+  function makeTool(overrides: Partial<UnifiedSessionToolOptions> = {}): ReturnType<typeof createSessionTool> {
+    return createSessionTool({
+      manager,
+      llmProvider: { complete: vi.fn() } as any,
+      sessionsDir: join(dir, 'sessions'),
+      dataDir: dir,
+      ...overrides,
+    });
+  }
 
   beforeEach(() => {
     dir = mkdtempSync(join(tmpdir(), 'psfn-session-tools-'));
@@ -205,8 +216,8 @@ describe('session list/resume tools', () => {
     });
 
     manager.setActiveContextSession('api:b-session');
-    const tool = createSessionListTool(manager, { dataDir: dir });
-    const result = await tool.execute('list-1', { limit: 10 });
+    const tool = makeTool();
+    const result = await tool.execute('list-1', { action: 'list', limit: 10 });
     const payload = JSON.parse(toolText(result)) as {
       activeSessionId: string | null;
       count: number;
@@ -237,8 +248,8 @@ describe('session list/resume tools', () => {
   });
 
   it('session_resume rejects unknown session IDs', async () => {
-    const tool = createSessionResumeTool(manager, { dataDir: dir });
-    const result = await tool.execute('resume-1', { sessionId: 'api:missing' });
+    const tool = makeTool();
+    const result = await tool.execute('resume-1', { action: 'resume', sessionId: 'api:missing' });
 
     expect(toolText(result)).toContain('Session not found: api:missing');
     expect((result.details as { isError?: boolean }).isError).toBe(true);
@@ -259,8 +270,8 @@ describe('session list/resume tools', () => {
     });
     manager.setActiveContextSession('api:session-one');
 
-    const tool = createSessionResumeTool(manager, { dataDir: dir, now: () => 9_999 });
-    const result = await tool.execute('resume-2', { sessionId: 'api:session-two' });
+    const tool = makeTool({ now: () => 9_999 });
+    const result = await tool.execute('resume-2', { action: 'resume', sessionId: 'api:session-two' });
     const payload = JSON.parse(toolText(result)) as {
       resumed: boolean;
       previousSessionId: string | null;
@@ -296,30 +307,81 @@ describe('session list/resume tools', () => {
     });
     manager.setActiveContextSession('api:session-one');
 
-    const tool = createSessionResumeTool(manager, { dataDir: dir, now: () => 10_001 });
+    const tool = makeTool({ now: () => 10_001 });
     const result = await runWithRequestContext(
       {
         callType: 'background',
         purpose: 'deferred_tool_handoff',
       },
-      () => tool.execute('resume-bg-1', { sessionId: 'api:session-two' }),
+      () => tool.execute('resume-bg-1', { action: 'resume', sessionId: 'api:session-two' }),
     );
 
-    expect(toolText(result)).toContain('session_resume is unavailable during background continuation execution');
+    expect(toolText(result)).toContain('session action="resume" is unavailable during background continuation execution');
     expect((result.details as { isError?: boolean }).isError).toBe(true);
     expect(manager.getActiveContextSession()).toBe('api:session-one');
   });
 });
 
 describe('unified session tool', () => {
+
+class InMemoryTranscriptSearch {
+  private readonly entries: Array<{
+    channelId: string;
+    role: 'user' | 'assistant' | 'system' | 'tool';
+    content: string;
+    timestamp: number;
+    channelVisibility: 'private' | 'invite_only' | 'public' | 'broadcast';
+  }> = [];
+
+  record(entry: {
+    channelId: string;
+    role: 'user' | 'assistant' | 'system' | 'tool';
+    content: string;
+    timestamp: number;
+    channelVisibility: 'private' | 'invite_only' | 'public' | 'broadcast';
+  }): void {
+    this.entries.push(entry);
+  }
+
+  async searchByKeywords(query: string, limit = 10) {
+    const needle = query.toLowerCase();
+    return this.entries
+      .filter(entry => entry.content.toLowerCase().includes(needle))
+      .slice(0, limit)
+      .map((entry, index) => ({
+        channelId: entry.channelId,
+        messageId: index + 1,
+        role: entry.role,
+        content: entry.content,
+        timestamp: entry.timestamp,
+        channelVisibility: entry.channelVisibility,
+        score: 1,
+        snippet: entry.content,
+      }));
+  }
+}
+
   let dir: string;
   let store: SessionStore;
   let manager: SessionManager;
+  let transcriptSearch: InMemoryTranscriptSearch;
 
   beforeEach(() => {
     dir = mkdtempSync(join(tmpdir(), 'psfn-session-unified-tools-'));
     store = new SessionStore(join(dir, 'sessions'));
-    manager = new SessionManager(store, makeConfig({ dataDir: dir }));
+    transcriptSearch = new InMemoryTranscriptSearch();
+    const originalAppend = store.append.bind(store);
+    store.append = ((entry: Parameters<SessionStore['append']>[0]) => {
+      transcriptSearch.record({
+        channelId: entry.channelId,
+        role: entry.role,
+        content: entry.content,
+        timestamp: entry.timestamp,
+        channelVisibility: entry.channelVisibility,
+      });
+      return originalAppend(entry);
+    }) as SessionStore['append'];
+    manager = new SessionManager(store, makeConfig({ dataDir: dir }), undefined, undefined, transcriptSearch);
   });
 
   afterEach(() => {
@@ -364,12 +426,19 @@ describe('unified session tool', () => {
       idFactory: () => 'api:session-unified-new',
       setActiveSession: (sessionId) => manager.setActiveContextSession(sessionId),
       seedSession: (sessionId) => {
-        manager.appendSystemNote(sessionId, 'Session initialized via session_new.');
+        manager.appendSystemNote(sessionId, 'Session initialized via session action=new.');
       },
     });
 
     expect(tool.name).toBe('session');
     expect(tool.label).toBe('session');
+    expect(tool.description).toContain('action=list returns exact sessionId values');
+    expect(tool.description).toContain('action=search requires query');
+    expect(tool.description).toContain('action=grep requires pattern');
+    expect(tool.description).toContain('action=resume requires a sessionId from list/search');
+    expect(tool.description).toContain('action=wake_return requires summary');
+    expect(Value.Check((tool as any).parameters, { action: 'session_resume', sessionId: 'api:session-two' })).toBe(false);
+    expect(Value.Check((tool as any).parameters, { action: 'focus_start', scope: 'diagnose' })).toBe(false);
 
     const listed = await tool.execute('session-list', {});
     const listedPayload = JSON.parse(toolText(listed)) as {
@@ -389,10 +458,10 @@ describe('unified session tool', () => {
     };
     expect(createdDetails.previousSessionId).toBe('api:session-one');
     expect(createdDetails.newSessionId).toBe('api:session-unified-new');
-    expect(store.getLastEntry('api:session-unified-new')?.content).toBe('Session initialized via session_new.');
+    expect(store.getLastEntry('api:session-unified-new')?.content).toBe('Session initialized via session action=new.');
 
     const resumed = await tool.execute('session-resume', {
-      action: 'session_resume',
+      action: 'resume',
       sessionId: 'api:session-two',
     });
     const resumedPayload = JSON.parse(toolText(resumed)) as {
@@ -406,7 +475,75 @@ describe('unified session tool', () => {
     expect(manager.getActiveContextSession()).toBe('api:session-two');
   });
 
-  it('dispatches transcript lookup actions, including legacy aliases, through the unified tool', async () => {
+  it('records wake-return continuity artifacts through the unified tool', async () => {
+    store.append({
+      channelId: 'api:session-one',
+      role: 'assistant',
+      content: 'We paused mid-refactor.',
+      timestamp: 1_000,
+    });
+    manager.setActiveContextSession('api:session-one');
+
+    const tool = createSessionTool({
+      manager,
+      llmProvider: {
+        complete: vi.fn(async () => ({
+          content: 'unused',
+          toolCalls: [],
+          model: 'mock',
+          inputTokens: 1,
+          outputTokens: 1,
+          stopReason: 'stop',
+        })),
+      } as any,
+      sessionsDir: join(dir, 'sessions'),
+      dataDir: dir,
+      now: () => Date.parse('2026-04-01T12:00:00.000Z'),
+    });
+
+    expect(Value.Check((tool as any).parameters, {
+      action: 'wake_return',
+      summary: 'Paused mid-refactor with tests still pending.',
+      nextAnchor: 'Resume with the runtime-context test.',
+      facets: ['task'],
+    })).toBe(true);
+
+    const result = await tool.execute('session-wake-return', {
+      action: 'wake_return',
+      summary: 'Paused mid-refactor with tests still pending.',
+      nextAnchor: 'Resume with the runtime-context test.',
+      facets: ['task'],
+    });
+    const payload = JSON.parse(toolText(result)) as {
+      action: string;
+      recorded: boolean;
+      artifact: {
+        sessionId: string;
+        kind: string;
+        occasion: string;
+        summary: string;
+        nextAnchor: string;
+        createdAt: string;
+      };
+    };
+
+    expect(payload).toMatchObject({
+      action: 'wake_return',
+      recorded: true,
+      artifact: {
+        sessionId: 'api:session-one',
+        kind: 'wake_return',
+        occasion: 'return',
+        summary: 'Paused mid-refactor with tests still pending.',
+        nextAnchor: 'Resume with the runtime-context test.',
+        createdAt: '2026-04-01T12:00:00.000Z',
+      },
+    });
+    expect(manager.listSessionContinuityArtifacts('api:session-one', { kind: 'wake_return' })[0])
+      .toMatchObject(payload.artifact);
+  });
+
+  it('dispatches transcript lookup actions through the unified tool', async () => {
     store.append({
       channelId: 'api:public-session',
       role: 'assistant',
@@ -463,7 +600,7 @@ describe('unified session tool', () => {
         purpose: 'agent.turn.prompt',
         channelId: 'api:public-search',
         viewerTrustLevel: 'regular',
-        viewerChannelVisibility: 'public',
+        viewerChannelPrivacy: 'public',
       },
       () => tool.execute('session-search', {
         action: 'search',
@@ -488,10 +625,10 @@ describe('unified session tool', () => {
         purpose: 'agent.turn.prompt',
         channelId: 'api:public-search',
         viewerTrustLevel: 'regular',
-        viewerChannelVisibility: 'public',
+        viewerChannelPrivacy: 'public',
       },
       () => tool.execute('session-grep', {
-        action: 'session_grep',
+        action: 'grep',
         pattern: 'Orion launch date',
       }),
     );
@@ -534,7 +671,7 @@ describe('unified session tool', () => {
     const started = await runWithRequestContext(
       { callType: 'tool', purpose: 'agent.turn', channelId: 'api:focus-context' },
       () => tool.execute('focus-start', {
-        action: 'focus_start',
+        action: 'start_focus',
         scope: 'Diagnose context compaction behavior',
       }),
     );

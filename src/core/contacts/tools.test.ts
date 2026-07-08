@@ -1,6 +1,8 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import Database from 'better-sqlite3';
 import { ContactStore } from './store.js';
+import { ConfirmationQueue } from '../../system/capabilities/confirmation-queue.js';
+import { createApprovalQueuePortFromConfirmationQueue } from '../../system/capabilities/approval-queue-port.js';
 import {
   createContactTool,
   createContactLinkIdentityTool,
@@ -32,6 +34,10 @@ describe('contact tools', () => {
       expect(tool.name).toBe('contact');
       expect(tool.label).toBe('contact');
       expect(tool.description).toContain('Unified contact surface');
+      expect(tool.description).toContain('action=search with query');
+      expect(tool.description).toContain('action=lookup with exact contactId');
+      expect((tool.parameters as any).properties.action.anyOf.map((entry: { const: string }) => entry.const)).toContain('search');
+      expect((tool.parameters as any).properties.query.description).toContain('Required for action=search');
       expect(tool.parameters).toBeDefined();
       expect(typeof tool.execute).toBe('function');
     });
@@ -70,7 +76,21 @@ describe('contact tools', () => {
       expect(store.getById(contact.id)!.trustLevel).toBe('public');
     });
 
-    it('accepts legacy action aliases inside the unified tool', async () => {
+    it('declares action-aware capability requirements for reads and mutations', () => {
+      const tool = createContactTool(store) as ReturnType<typeof createContactTool> & {
+        requiredCapability?: (params: Record<string, unknown>) => unknown;
+      };
+
+      expect(tool.requiredCapability?.({ action: 'list' })).toBe('identity.read');
+      expect(tool.requiredCapability?.({ action: 'search', query: 'grace' })).toBe('identity.read');
+      expect(tool.requiredCapability?.({ action: 'lookup', contactId: 'contact-1' })).toBe('identity.read');
+      expect(tool.requiredCapability?.({ action: 'note', contactId: 'contact-1', notes: 'x' })).toBe('identity.write.runtime');
+      expect(tool.requiredCapability?.({ action: 'set_trust', contactId: 'contact-1', trustLevel: 'public' })).toBe('identity.write.runtime');
+      expect(tool.requiredCapability?.({ action: 'link_identity', contactId: 'contact-1' })).toBe('identity.write.runtime');
+      expect(tool.requiredCapability?.({ action: 'set_channel_privacy', contactId: 'contact-1' })).toBe('identity.write.runtime');
+    });
+
+    it('rejects retired lookup action aliases inside the unified tool', async () => {
       const contact = store.upsert({ displayName: 'Alias User', notes: 'Alias works' });
       const tool = createContactTool(store);
 
@@ -79,11 +99,11 @@ describe('contact tools', () => {
         contactId: contact.id,
       });
 
-      expect(resultText(result)).toContain(`Canonical ID: ${contact.id}`);
-      expect(resultText(result)).toContain('Alias works');
+      expect(resultText(result)).toContain('action must be one of');
+      expect(result.details?.isError).toBe(true);
     });
 
-    it('keeps legacy list aliases working through the unified tool', async () => {
+    it('rejects retired list action aliases inside the unified tool', async () => {
       store.upsert({ displayName: 'Grace', trustLevel: 'trusted', relationshipType: 'friend' });
       const tool = createContactTool(store);
 
@@ -91,8 +111,8 @@ describe('contact tools', () => {
         action: 'contact_list',
       });
 
-      expect(resultText(result)).toContain('Contacts (1)');
-      expect(resultText(result)).toContain('Grace [trusted/friend]');
+      expect(resultText(result)).toContain('action must be one of');
+      expect(result.details?.isError).toBe(true);
     });
 
     it('fails closed when mutation-shaped params are supplied without an action', async () => {
@@ -106,6 +126,220 @@ describe('contact tools', () => {
 
       expect(resultText(result)).toContain('action is required');
       expect(result.details?.isError).toBe(true);
+    });
+
+    it('searches contacts separately from list and lookup and returns exact contactIds', async () => {
+      const grace = store.upsert({
+        displayName: 'Grace Hopper',
+        nickname: 'Amazing Grace',
+        notes: 'Compiler history and navy stories',
+        channelIdentities: [{ channel: 'discord', userId: 'grace-discord' }],
+      });
+      store.upsert({ displayName: 'Ada Lovelace', notes: 'Analytical engine notes' });
+      const tool = createContactTool(store);
+
+      const result = await tool.execute('contact-search', {
+        action: 'search',
+        query: 'compiler discord',
+      });
+      const text = resultText(result);
+
+      expect(text).toContain('Contact search results for "compiler discord" (1)');
+      expect(text).toContain(`${grace.id}: Amazing Grace [regular/stranger]`);
+      expect(text).toContain('discord:grace-discord');
+      expect(text).toContain('Pass an exact contactId from these results to action=lookup');
+    });
+
+    it('names missing search query and gives a minimal valid example', async () => {
+      const tool = createContactTool(store);
+
+      const result = await tool.execute('contact-search-missing-query', {
+        action: 'search',
+      });
+      const text = resultText(result);
+
+      expect(text).toContain('Missing required field "query" for action=search');
+      expect(text).toContain('Minimal valid JSON: {"action":"search","query":"name, handle, channel, or note text"}');
+      expect(text).toContain('do not retry action=search without a non-empty query');
+      expect(result.details?.isError).toBe(true);
+    });
+  });
+
+  // ── action=propose_trust (human-in-the-loop trusted promotion) ──
+
+  describe('contact action=propose_trust', () => {
+    function toolWithQueue() {
+      const queue = new ConfirmationQueue({ idFactory: () => 'proposal-1' });
+      const proposalQueue = createApprovalQueuePortFromConfirmationQueue(queue);
+      const tool = createContactTool(store, { proposalQueue });
+      return { queue, proposalQueue, tool };
+    }
+
+    it('enqueues a trusted-promotion proposal without mutating trust', async () => {
+      const contact = store.upsert({ displayName: 'Rowan', discordUserId: 'rowan-discord' });
+      const { queue, tool } = toolWithQueue();
+
+      const result = await tool.execute('propose-1', {
+        action: 'propose_trust',
+        contactId: contact.id,
+        rationale: 'Sustained warm rapport over months.',
+      });
+      const text = resultText(result);
+
+      expect(result.details?.isError).toBeUndefined();
+      expect(text).toContain('Trusted-promotion proposal queued');
+      expect(text).toContain('regular -> trusted');
+      expect(text).toContain('proposal id: proposal-1');
+
+      // Trust is unchanged until approval.
+      expect(store.getById(contact.id)!.trustLevel).toBe('regular');
+
+      const pending = queue.listPending();
+      expect(pending).toHaveLength(1);
+      expect(pending[0].method).toBe('contact.trust.promote');
+      expect(pending[0].action).toBe('promote_trusted');
+      expect(pending[0].params).toMatchObject({
+        contactId: contact.id,
+        currentLevel: 'regular',
+        requestedLevel: 'trusted',
+        rationale: 'Sustained warm rapport over months.',
+      });
+    });
+
+    it('applies the trusted promotion with a manual actor when the operator approves', async () => {
+      const contact = store.upsert({ displayName: 'Rowan', discordUserId: 'rowan-discord' });
+      const { queue, tool } = toolWithQueue();
+
+      await tool.execute('propose-2', {
+        action: 'propose_trust',
+        contactId: contact.id,
+        rationale: 'Trusted after repeated verified interactions.',
+      });
+
+      const resolved = await queue.resolve({ id: 'proposal-1', decision: 'approve' });
+      expect(resolved.status).toBe('approved');
+      expect(resolved.executed).toBe(true);
+
+      expect(store.getById(contact.id)!.trustLevel).toBe('trusted');
+      expect(queue.listPending()).toHaveLength(0);
+
+      // Audit record written under the manual confirmation-queue actor.
+      const auditEntries = store.listMutationAuditEntries({ contactId: contact.id });
+      const trustAudit = auditEntries.find(entry => entry.field === 'trust_level');
+      expect(trustAudit).toBeDefined();
+      expect(trustAudit!.oldValue).toBe('regular');
+      expect(trustAudit!.newValue).toBe('trusted');
+      expect(trustAudit!.actor).toBe('operator:confirmation-queue');
+    });
+
+    it('leaves trust untouched when the operator denies', async () => {
+      const contact = store.upsert({ displayName: 'Rowan', discordUserId: 'rowan-discord' });
+      const { queue, tool } = toolWithQueue();
+
+      await tool.execute('propose-3', {
+        action: 'propose_trust',
+        contactId: contact.id,
+        rationale: 'Proposed but should be denied.',
+      });
+
+      const resolved = await queue.resolve({ id: 'proposal-1', decision: 'deny' });
+      expect(resolved.status).toBe('denied');
+      expect(resolved.executed).toBe(false);
+
+      expect(store.getById(contact.id)!.trustLevel).toBe('regular');
+      expect(queue.listPending()).toHaveLength(0);
+      const trustAudit = store
+        .listMutationAuditEntries({ contactId: contact.id })
+        .find(entry => entry.field === 'trust_level');
+      expect(trustAudit).toBeUndefined();
+    });
+
+    it('still rejects direct agent high-tier set_trust (guard untouched)', async () => {
+      const contact = store.upsert({ displayName: 'Rowan', discordUserId: 'rowan-discord' });
+      const { tool } = toolWithQueue();
+
+      const result = await tool.execute('direct-high-tier', {
+        action: 'set_trust',
+        contactId: contact.id,
+        trustLevel: 'trusted',
+      });
+
+      expect(result.details?.isError).toBe(true);
+      expect(resultText(result)).toContain('manual admin approval');
+      expect(store.getById(contact.id)!.trustLevel).toBe('regular');
+    });
+
+    it('rejects primary proposals (primary stays owner-only)', async () => {
+      const contact = store.upsert({ displayName: 'Rowan', discordUserId: 'rowan-discord' });
+      const { queue, tool } = toolWithQueue();
+
+      const result = await tool.execute('propose-primary', {
+        action: 'propose_trust',
+        contactId: contact.id,
+        trustLevel: 'primary',
+        rationale: 'Attempt to reach primary via proposal.',
+      });
+
+      expect(result.details?.isError).toBe(true);
+      expect(resultText(result)).toContain("can only propose promotion to 'trusted'");
+      expect(resultText(result)).toContain('owner-only');
+      expect(queue.listPending()).toHaveLength(0);
+      expect(store.getById(contact.id)!.trustLevel).toBe('regular');
+    });
+
+    it('fails closed when no confirmation queue is wired', async () => {
+      const contact = store.upsert({ displayName: 'Rowan', discordUserId: 'rowan-discord' });
+      const tool = createContactTool(store); // no proposalQueue
+
+      const result = await tool.execute('propose-no-queue', {
+        action: 'propose_trust',
+        contactId: contact.id,
+        rationale: 'No queue wired.',
+      });
+
+      expect(result.details?.isError).toBe(true);
+      expect(resultText(result)).toContain('require a confirmation queue');
+      expect(store.getById(contact.id)!.trustLevel).toBe('regular');
+    });
+
+    it('rejects proposals for contacts already at high-tier trust', async () => {
+      // Promote to trusted via a manual operator actor first.
+      const contact = store.upsert({ displayName: 'Rowan', discordUserId: 'rowan-discord' });
+      store.setTrustLevel(contact.id, 'trusted', 'operator:test-setup');
+      expect(store.getById(contact.id)!.trustLevel).toBe('trusted');
+      const { queue, tool } = toolWithQueue();
+
+      const result = await tool.execute('propose-already-trusted', {
+        action: 'propose_trust',
+        contactId: contact.id,
+        rationale: 'Already trusted.',
+      });
+
+      expect(result.details?.isError).toBe(true);
+      expect(resultText(result)).toContain("already at high-tier trust 'trusted'");
+      expect(queue.listPending()).toHaveLength(0);
+    });
+
+    it('requires a rationale', async () => {
+      const contact = store.upsert({ displayName: 'Rowan', discordUserId: 'rowan-discord' });
+      const { queue, tool } = toolWithQueue();
+
+      const result = await tool.execute('propose-no-rationale', {
+        action: 'propose_trust',
+        contactId: contact.id,
+      });
+
+      expect(result.details?.isError).toBe(true);
+      expect(resultText(result)).toContain('Missing rationale');
+      expect(queue.listPending()).toHaveLength(0);
+    });
+
+    it('declares propose_trust as an identity write capability', () => {
+      const tool = createContactTool(store) as ReturnType<typeof createContactTool> & {
+        requiredCapability?: (params: Record<string, unknown>) => unknown;
+      };
+      expect(tool.requiredCapability?.({ action: 'propose_trust', contactId: 'c-1' }))
+        .toBe('identity.write.runtime');
     });
   });
 
@@ -317,6 +551,39 @@ describe('contact tools', () => {
       expect(result.details?.isError).toBe(true);
     });
 
+    it('gives a contactId recovery path when lookup guesses a display name', async () => {
+      const contact = store.upsert({
+        displayName: 'Grace',
+        channelIdentities: [{ channel: 'discord', userId: 'grace-discord' }],
+      });
+      const listTool = createContactListTool(store);
+      const lookupTool = createContactLookupTool(store);
+
+      const list = await listTool.execute('contact-list-recovery', {});
+      const miss = await lookupTool.execute('contact-lookup-display-name-miss', { contactId: 'Grace' });
+      const text = resultText(miss);
+
+      expect(resultText(list)).toContain(`${contact.id}: Grace`);
+      expect(text).toContain('No contact found for contactId "Grace"');
+      expect(text).toContain(`Valid contactIds: ${contact.id}`);
+      expect(text).toContain(`Minimal valid JSON: {"action":"lookup","contactId":"${contact.id}"}`);
+      expect(text).toContain('do not guess contactId from display names');
+      expect(miss.details?.isError).toBe(true);
+    });
+
+    it('names missing contactId and points to list recovery', async () => {
+      const contact = store.upsert({ displayName: 'Lookup Target' });
+      const tool = createContactLookupTool(store);
+
+      const result = await tool.execute('contact-lookup-missing-id', {} as any);
+      const text = resultText(result);
+
+      expect(text).toContain('Missing required field "contactId" for action=lookup');
+      expect(text).toContain(`Valid contactIds: ${contact.id}`);
+      expect(text).toContain(`Minimal valid JSON: {"action":"lookup","contactId":"${contact.id}"}`);
+      expect(result.details?.isError).toBe(true);
+    });
+
     it('does not include Notes line when notes are empty', async () => {
       store.upsert({ displayName: 'Frank' });
       const frank = store.listAll().find(c => c.displayName === 'Frank')!;
@@ -349,17 +616,30 @@ describe('contact tools', () => {
       expect(resultText(result)).toContain('No contacts in address book');
     });
 
-    it('lists all contacts with trust and relationship info', async () => {
-      store.upsert({ displayName: 'Grace', trustLevel: 'trusted', relationshipType: 'friend', notes: 'Met at conf' });
+    it('lists all contacts with contactId, channels, trust, and relationship info', async () => {
+      const grace = store.upsert({
+        displayName: 'Grace',
+        trustLevel: 'trusted',
+        relationshipType: 'friend',
+        notes: 'Met at conf',
+        channelIdentities: [
+          { channel: 'discord', userId: 'grace-discord' },
+          { channel: 'api', userId: 'grace-api' },
+        ],
+      });
       store.upsert({ displayName: 'Hank', trustLevel: 'regular', relationshipType: 'acquaintance' });
       const tool = createContactListTool(store);
 
       const result = await tool.execute('call-12', {});
+      const text = resultText(result);
 
-      expect(resultText(result)).toContain('Contacts (2)');
-      expect(resultText(result)).toContain('Grace [trusted/friend]');
-      expect(resultText(result)).toContain('Met at conf');
-      expect(resultText(result)).toContain('Hank [regular/acquaintance]');
+      expect(text).toContain('Contacts (2)');
+      expect(text).toContain(`${grace.id}: Grace [trusted/friend]`);
+      expect(text).toContain('channels=api:grace-api[private]');
+      expect(text).toContain('discord:grace-discord[invite_only]');
+      expect(text).toContain('Met at conf');
+      expect(text).toContain('Hank [regular/acquaintance]');
+      expect(text).toContain('Pass contactId from this list to action=lookup, action=set_trust, or action=note');
     });
 
     it('prefers nickname over display name in list output', async () => {

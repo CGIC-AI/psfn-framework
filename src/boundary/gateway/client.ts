@@ -6,8 +6,11 @@ import { JSONRPCServer, JSONRPCClient, JSONRPCServerAndClient, JSONRPCErrorExcep
 import { Worker } from 'node:worker_threads';
 import type { LLMProviderPort, EmbeddingProviderPort } from '../../core/agent/contracts.js';
 import type { AgentResponse, Attachment, CompletionPurpose, CorrelationMetadata, LLMContext, LLMModelHint, LLMResponse, StreamCallbacks, SubstrateMessage } from '../../shared/contracts/runtime.js';
-import type { NdjsonConnection } from './transport.js';
-import { createSocketClient } from './transport.js';
+import type { GatewayRpcConnection, GatewayRpcEndpoint } from './transport.js';
+import {
+  createSocketClient,
+  createWebSocketRpcClient,
+} from './transport.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import { BoundedQueue, QueueOverflowError, type QueueOverflowPolicy } from './backpressure.js';
 import { registerReverseGatewayMethods } from './reverse-methods.js';
@@ -107,7 +110,11 @@ const SESSION_INTEGRITY_VERIFY_CACHE_MAX_ENTRIES = 4_096;
 
 const SESSION_INTEGRITY_WORKER_SOURCE = `
 const net = require('node:net');
+const fs = require('node:fs');
 const { parentPort } = require('node:worker_threads');
+const { WebSocket } = require('ws');
+
+const GATEWAY_RPC_WS_PROTOCOL = 'psfn-rpc-v1';
 
 if (!parentPort) {
   throw new Error('Session integrity worker requires a parent port');
@@ -135,9 +142,9 @@ function writeResponse(stateBuffer, payloadBuffer, payload) {
   Atomics.notify(state, 0);
 }
 
-let activeSocket = null;
-let activeSocketPath = null;
-let activeSocketIdentified = false;
+let activeConnection = null;
+let activeEndpointKey = null;
+let activeConnectionIdentified = false;
 let connectPromise = null;
 let buffer = '';
 const pendingById = new Map();
@@ -150,20 +157,31 @@ function rejectPending(error) {
   }
 }
 
-function resetSocket(error) {
-  if (activeSocket) {
-    activeSocket.removeAllListeners();
-    activeSocket.destroy();
-  }
-  activeSocket = null;
-  activeSocketPath = null;
-  activeSocketIdentified = false;
+function resetConnection(error) {
+  const connection = activeConnection;
+  activeConnection = null;
+  activeEndpointKey = null;
+  activeConnectionIdentified = false;
   connectPromise = null;
   buffer = '';
+
+  if (connection) {
+    connection.removeAllListeners();
+    connection.destroy();
+  }
   rejectPending(error);
 }
 
-function wireSocket(socket) {
+function handleMessage(message) {
+  const pending = message && pendingById.get(message.id);
+  if (!pending) return;
+
+  clearTimeout(pending.timer);
+  pending.resolve(message);
+  pendingById.delete(message.id);
+}
+
+function wireUnixSocket(socket) {
   socket.on('data', (chunk) => {
     buffer += chunk.toString('utf8');
     while (true) {
@@ -180,41 +198,109 @@ function wireSocket(socket) {
         continue;
       }
 
-      const pending = message && pendingById.get(message.id);
-      if (!pending) continue;
-
-      clearTimeout(pending.timer);
-      pending.resolve(message);
-      pendingById.delete(message.id);
+      handleMessage(message);
     }
   });
 
   socket.on('error', (error) => {
-    resetSocket(error instanceof Error ? error : new Error(errorMessage(error)));
+    resetConnection(error instanceof Error ? error : new Error(errorMessage(error)));
   });
   socket.on('close', () => {
-    resetSocket(new Error('Session integrity RPC connection closed'));
+    resetConnection(new Error('Session integrity RPC connection closed'));
   });
+
+  return {
+    sendPayload: (payload) => socket.write(JSON.stringify(payload) + '\\n'),
+    destroy: () => socket.destroy(),
+    isOpen: () => !socket.destroyed,
+    removeAllListeners: () => socket.removeAllListeners(),
+  };
 }
 
-async function ensureSocket(socketPath) {
+function normalizeWebSocketMessage(data) {
+  if (typeof data === 'string') return data;
+  if (Buffer.isBuffer(data)) return data.toString('utf8');
+  if (Array.isArray(data)) return Buffer.concat(data).toString('utf8');
+  return Buffer.from(data).toString('utf8');
+}
+
+function wireWebSocket(socket) {
+  socket.on('message', (data, isBinary) => {
+    if (isBinary) return;
+
+    const text = normalizeWebSocketMessage(data);
+    if (!text.trim()) return;
+
+    let message;
+    try {
+      message = JSON.parse(text);
+    } catch {
+      return;
+    }
+
+    handleMessage(message);
+  });
+
+  socket.on('error', (error) => {
+    resetConnection(error instanceof Error ? error : new Error(errorMessage(error)));
+  });
+  socket.on('close', () => {
+    resetConnection(new Error('Session integrity RPC connection closed'));
+  });
+
+  return {
+    sendPayload: (payload) => {
+      if (socket.readyState !== WebSocket.OPEN) return false;
+      socket.send(JSON.stringify(payload));
+      return true;
+    },
+    destroy: () => socket.terminate(),
+    isOpen: () => socket.readyState === WebSocket.OPEN,
+    removeAllListeners: () => socket.removeAllListeners(),
+  };
+}
+
+function endpointKey(endpoint) {
+  if (!endpoint) return null;
+  if (endpoint.kind === 'unix') return 'unix:' + endpoint.socketPath;
+  if (endpoint.kind === 'wss') return 'wss:' + endpoint.url;
+  return null;
+}
+
+async function ensureConnection(endpoint) {
+  const key = endpointKey(endpoint);
+  if (!key) {
+    throw new Error('Session integrity RPC requires a valid gateway endpoint');
+  }
   if (
-    activeSocket
-    && !activeSocket.destroyed
-    && activeSocketPath === socketPath
+    activeConnection
+    && activeConnection.isOpen()
+    && activeEndpointKey === key
   ) {
-    return activeSocket;
+    return activeConnection;
   }
 
   if (connectPromise) {
     return await connectPromise;
   }
 
-  if (activeSocket && activeSocketPath !== socketPath) {
-    resetSocket(new Error('Session integrity socket path changed'));
+  if (activeConnection && activeEndpointKey !== key) {
+    resetConnection(new Error('Session integrity endpoint changed'));
   }
 
-  connectPromise = new Promise((resolve, reject) => {
+  connectPromise = endpoint.kind === 'unix'
+    ? connectUnixSocket(endpoint.socketPath, key)
+    : connectWebSocket(endpoint, key);
+
+  try {
+    return await connectPromise;
+  } finally {
+    connectPromise = null;
+  }
+}
+
+function connectUnixSocket(socketPath, key) {
+  return new Promise((resolve, reject) => {
     const socket = net.createConnection(socketPath);
     let settled = false;
 
@@ -227,10 +313,9 @@ async function ensureSocket(socketPath) {
       if (settled) return;
       settled = true;
       cleanup();
-      activeSocket = socket;
-      activeSocketPath = socketPath;
-      wireSocket(socket);
-      resolve(socket);
+      activeConnection = wireUnixSocket(socket);
+      activeEndpointKey = key;
+      resolve(activeConnection);
     };
 
     const onError = (error) => {
@@ -243,16 +328,193 @@ async function ensureSocket(socketPath) {
 
     socket.once('connect', onConnect);
     socket.once('error', onError);
-  }).finally(() => {
-    connectPromise = null;
   });
 
-  return await connectPromise;
 }
 
-function sendSocketRpc(socket, method, params, id, timeoutMs) {
+function requireNonEmptyString(value, fieldName) {
+  if (typeof value !== 'string') {
+    throw new Error(fieldName + ' is required');
+  }
+  const trimmed = value.trim();
+  if (!trimmed) {
+    throw new Error(fieldName + ' is required');
+  }
+  return trimmed;
+}
+
+function normalizeSpiffeUri(value, fieldName) {
+  const trimmed = requireNonEmptyString(value, fieldName);
+  let parsed;
+  try {
+    parsed = new URL(trimmed);
+  } catch {
+    throw new Error(fieldName + ' must be a valid spiffe:// URI');
+  }
+  if (
+    parsed.protocol !== 'spiffe:'
+    || !parsed.hostname
+    || parsed.username
+    || parsed.password
+    || parsed.search
+    || parsed.hash
+  ) {
+    throw new Error(fieldName + ' must be a spiffe:// URI without credentials, query, or fragment');
+  }
+  return trimmed;
+}
+
+function splitSubjectAltName(subjectAltName) {
+  const entries = [];
+  let current = '';
+  let inQuotes = false;
+  let escaped = false;
+  for (const char of subjectAltName) {
+    if (escaped) {
+      current += char;
+      escaped = false;
+      continue;
+    }
+    if (char === '\\\\') {
+      current += char;
+      escaped = true;
+      continue;
+    }
+    if (char === '"') {
+      current += char;
+      inQuotes = !inQuotes;
+      continue;
+    }
+    if (char === ',' && !inQuotes) {
+      const trimmed = current.trim();
+      if (trimmed) entries.push(trimmed);
+      current = '';
+      continue;
+    }
+    current += char;
+  }
+  const trimmed = current.trim();
+  if (trimmed) entries.push(trimmed);
+  return entries;
+}
+
+function decodeSubjectAltNameValue(value) {
+  const trimmed = value.trim();
+  if (trimmed.startsWith('"') && trimmed.endsWith('"')) {
+    try {
+      const decoded = JSON.parse(trimmed);
+      if (typeof decoded === 'string') {
+        return decoded;
+      }
+    } catch {
+      return trimmed;
+    }
+  }
+  return trimmed;
+}
+
+function isSpiffeUri(value) {
+  try {
+    normalizeSpiffeUri(value, 'certificate URI SAN');
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function extractSpiffeUriSans(subjectAltName) {
+  if (!subjectAltName) return [];
+  const values = [];
+  for (const entry of splitSubjectAltName(subjectAltName)) {
+    const separator = entry.indexOf(':');
+    if (separator < 0) continue;
+    const kind = entry.slice(0, separator).trim().toLowerCase();
+    if (kind !== 'uri') continue;
+    const uri = decodeSubjectAltNameValue(entry.slice(separator + 1));
+    if (isSpiffeUri(uri)) {
+      values.push(uri);
+    }
+  }
+  return values;
+}
+
+function verifyPeerCertificateSpiffeUri(certificate, expectedPeerSpiffeUri) {
+  const expected = normalizeSpiffeUri(expectedPeerSpiffeUri, 'expected peer SPIFFE URI');
+  const spiffeUris = extractSpiffeUriSans(certificate && certificate.subjectaltname);
+  if (spiffeUris.length === 0) {
+    return 'peer TLS certificate is missing SPIFFE URI SAN';
+  }
+  if (!spiffeUris.includes(expected)) {
+    return 'peer TLS certificate SPIFFE URI SAN did not match expected peer identity';
+  }
+  return null;
+}
+
+function loadWebSocketTlsOptions(tls) {
+  if (!tls || !tls.caPath || !tls.certPath || !tls.keyPath || !tls.expectedPeerSpiffeUri) {
+    throw new Error('Session integrity WSS endpoint requires TLS caPath, certPath, keyPath, and expectedPeerSpiffeUri');
+  }
+  const expectedPeerSpiffeUri = normalizeSpiffeUri(tls.expectedPeerSpiffeUri, 'expected peer SPIFFE URI');
+  return {
+    ca: fs.readFileSync(tls.caPath),
+    cert: fs.readFileSync(tls.certPath),
+    key: fs.readFileSync(tls.keyPath),
+    rejectUnauthorized: true,
+    checkServerIdentity: (_hostname, certificate) => {
+      const rejectionReason = verifyPeerCertificateSpiffeUri(certificate, expectedPeerSpiffeUri);
+      return rejectionReason ? new Error(rejectionReason) : undefined;
+    },
+    ...(tls.serverName ? { servername: tls.serverName } : {}),
+  };
+}
+
+function terminateOpenWebSocket(socket) {
+  if (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CLOSING) {
+    socket.terminate();
+  }
+}
+
+function connectWebSocket(endpoint, key) {
   return new Promise((resolve, reject) => {
-    const request = JSON.stringify({ jsonrpc: '2.0', id, method, params }) + '\\n';
+    const socket = new WebSocket(endpoint.url, GATEWAY_RPC_WS_PROTOCOL, loadWebSocketTlsOptions(endpoint.tls));
+    let settled = false;
+
+    const cleanup = () => {
+      socket.removeListener('open', onOpen);
+      socket.removeListener('error', onError);
+      socket.removeListener('unexpected-response', onUnexpectedResponse);
+    };
+
+    const onOpen = () => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      activeConnection = wireWebSocket(socket);
+      activeEndpointKey = key;
+      resolve(activeConnection);
+    };
+
+    const onError = (error) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      terminateOpenWebSocket(socket);
+      reject(error instanceof Error ? error : new Error(errorMessage(error)));
+    };
+
+    const onUnexpectedResponse = (_req, res) => {
+      onError(new Error('Session integrity WSS upgrade failed with HTTP ' + (res.statusCode || 0)));
+    };
+
+    socket.once('open', onOpen);
+    socket.once('error', onError);
+    socket.once('unexpected-response', onUnexpectedResponse);
+  });
+}
+
+function sendRpc(connection, method, params, id, timeoutMs) {
+  return new Promise((resolve, reject) => {
+    const request = { jsonrpc: '2.0', id, method, params };
 
     const timer = setTimeout(() => {
       pendingById.delete(id);
@@ -262,7 +524,10 @@ function sendSocketRpc(socket, method, params, id, timeoutMs) {
     pendingById.set(id, { resolve, reject, timer });
 
     try {
-      socket.write(request);
+      const sent = connection.sendPayload(request);
+      if (sent === false) {
+        throw new Error('Session integrity RPC connection is closed');
+      }
     } catch (error) {
       clearTimeout(timer);
       pendingById.delete(id);
@@ -271,33 +536,34 @@ function sendSocketRpc(socket, method, params, id, timeoutMs) {
   });
 }
 
-async function identifySessionIntegritySocket(socket, requestId, timeoutMs) {
-  if (activeSocketIdentified) {
+async function identifySessionIntegrityConnection(connection, requestId, timeoutMs) {
+  if (activeConnectionIdentified) {
     return;
   }
-  await sendSocketRpc(
-    socket,
+  await sendRpc(
+    connection,
     'gateway.client.identify',
     { role: 'internal_session_integrity' },
     'session-integrity-identify-' + requestId,
     timeoutMs,
   );
-  activeSocketIdentified = true;
+  activeConnectionIdentified = true;
 }
 
-async function requestRpc(socketPath, method, params, id, timeoutMs) {
-  const socket = await ensureSocket(socketPath);
-  await identifySessionIntegritySocket(socket, id, timeoutMs);
-  return await sendSocketRpc(socket, method, params, id, timeoutMs);
+async function requestRpc(endpoint, method, params, id, timeoutMs) {
+  const connection = await ensureConnection(endpoint);
+  await identifySessionIntegrityConnection(connection, id, timeoutMs);
+  return await sendRpc(connection, method, params, id, timeoutMs);
 }
 
 parentPort.on('message', async (job) => {
-  const { stateBuffer, payloadBuffer, socketPath, method, params, requestId, timeoutMs } = job || {};
-  if (!stateBuffer || !payloadBuffer || !socketPath || !method) {
+  const { stateBuffer, payloadBuffer, socketPath, endpoint, method, params, requestId, timeoutMs } = job || {};
+  const resolvedEndpoint = endpoint || (socketPath ? { kind: 'unix', socketPath } : null);
+  if (!stateBuffer || !payloadBuffer || !resolvedEndpoint || !method) {
     return;
   }
   try {
-    const response = await requestRpc(socketPath, method, params, requestId, timeoutMs);
+    const response = await requestRpc(resolvedEndpoint, method, params, requestId, timeoutMs);
     writeResponse(stateBuffer, payloadBuffer, { ok: true, response });
   } catch (error) {
     const message = errorMessage(error);
@@ -306,7 +572,7 @@ parentPort.on('message', async (job) => {
 });
 
 parentPort.on('close', () => {
-  resetSocket(new Error('Session integrity worker closed'));
+  resetConnection(new Error('Session integrity worker closed'));
 });
 `;
 
@@ -314,6 +580,7 @@ export interface GatewayClientOptions {
   voiceStreamQueueSize?: number;
   voiceStreamOverflowPolicy?: QueueOverflowPolicy;
   sessionIntegritySocketPath?: string;
+  sessionIntegrityEndpoint?: GatewayRpcEndpoint;
   sessionIntegrityRpcTimeoutMs?: number;
   keepaliveIntervalMs?: number;
 }
@@ -336,7 +603,7 @@ export interface GatewayConnectionCloseEvent {
 
 export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, GatewayModelDiscoveryTransport {
   private rpcInstance: JSONRPCServerAndClient;
-  private conn: NdjsonConnection;
+  private conn: GatewayRpcConnection;
   private embeddingDims: number;
   private notificationHandlers = new Map<string, Array<(params: unknown) => void>>();
   private connectionCloseHandlers = new Set<(event: GatewayConnectionCloseEvent) => void>();
@@ -351,7 +618,7 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
   private voiceStreams = new Map<string, VoiceStreamState>();
   private readonly voiceStreamQueueSize: number;
   private readonly voiceStreamOverflowPolicy: QueueOverflowPolicy;
-  private readonly sessionIntegritySocketPath: string | null;
+  private readonly sessionIntegrityEndpoint: GatewayRpcEndpoint | null;
   private readonly sessionIntegrityRpcTimeoutMs: number;
   private readonly keepaliveIntervalMs: number;
   private keepaliveTimer: ReturnType<typeof setInterval> | null = null;
@@ -362,12 +629,15 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
   private closedNotified = false;
   private isDestroying = false;
 
-  constructor(conn: NdjsonConnection, embeddingDims: number, options: GatewayClientOptions = {}) {
+  constructor(conn: GatewayRpcConnection, embeddingDims: number, options: GatewayClientOptions = {}) {
     this.conn = conn;
     this.embeddingDims = embeddingDims;
     this.voiceStreamQueueSize = options.voiceStreamQueueSize ?? DEFAULT_VOICE_STREAM_QUEUE_SIZE;
     this.voiceStreamOverflowPolicy = options.voiceStreamOverflowPolicy ?? DEFAULT_VOICE_STREAM_OVERFLOW_POLICY;
-    this.sessionIntegritySocketPath = options.sessionIntegritySocketPath ?? null;
+    this.sessionIntegrityEndpoint = options.sessionIntegrityEndpoint
+      ?? (options.sessionIntegritySocketPath
+        ? { kind: 'unix', socketPath: options.sessionIntegritySocketPath }
+        : null);
     this.sessionIntegrityRpcTimeoutMs = options.sessionIntegrityRpcTimeoutMs ?? DEFAULT_SESSION_INTEGRITY_RPC_TIMEOUT_MS;
     this.keepaliveIntervalMs = options.keepaliveIntervalMs ?? DEFAULT_GATEWAY_KEEPALIVE_INTERVAL_MS;
 
@@ -428,10 +698,23 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
     embeddingDims: number,
     options: GatewayClientOptions = {},
   ): Promise<GatewayClient> {
-    const conn = await createSocketClient({ socketPath });
+    return await GatewayClient.connectEndpoint({ kind: 'unix', socketPath }, embeddingDims, options);
+  }
+
+  static async connectEndpoint(
+    endpoint: GatewayRpcEndpoint,
+    embeddingDims: number,
+    options: GatewayClientOptions = {},
+  ): Promise<GatewayClient> {
+    const conn = endpoint.kind === 'unix'
+      ? await createSocketClient({ socketPath: endpoint.socketPath })
+      : await createWebSocketRpcClient({ url: endpoint.url, tls: endpoint.tls });
     return new GatewayClient(conn, embeddingDims, {
       ...options,
-      sessionIntegritySocketPath: options.sessionIntegritySocketPath ?? socketPath,
+      sessionIntegrityEndpoint: options.sessionIntegrityEndpoint
+        ?? (options.sessionIntegritySocketPath
+          ? { kind: 'unix', socketPath: options.sessionIntegritySocketPath }
+          : endpoint),
     });
   }
 
@@ -465,6 +748,7 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
         ...(modelHint?.pin !== undefined ? { pin: modelHint.pin } : {}),
         messages: context.messages,
         systemPrompt: context.systemPrompt,
+        ...(context.promptCacheBoundaries ? { promptCacheBoundaries: context.promptCacheBoundaries } : {}),
         stream: !!callbacks?.onText,
         ...(modelHint?.maxTokens !== undefined ? { maxTokens: modelHint.maxTokens } : {}),
         ...(modelHint?.contextWindow !== undefined ? { contextWindow: modelHint.contextWindow } : {}),
@@ -495,6 +779,7 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
         model: result.model,
         inputTokens: result.inputTokens,
         outputTokens: result.outputTokens,
+        ...(result.usageDetails ? { usageDetails: result.usageDetails } : {}),
         stopReason: result.stopReason,
       };
 
@@ -537,6 +822,7 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
         ...(modelHint?.pin !== undefined ? { pin: modelHint.pin } : {}),
         messages: context.messages,
         systemPrompt: context.systemPrompt,
+        ...(context.promptCacheBoundaries ? { promptCacheBoundaries: context.promptCacheBoundaries } : {}),
         purpose,
         ...(modelHint?.maxTokens !== undefined ? { maxTokens: modelHint.maxTokens } : {}),
         ...(modelHint?.contextWindow !== undefined ? { contextWindow: modelHint.contextWindow } : {}),
@@ -567,6 +853,7 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
       model: result.model,
       inputTokens: result.inputTokens,
       outputTokens: result.outputTokens,
+      ...(result.usageDetails ? { usageDetails: result.usageDetails } : {}),
       stopReason: result.stopReason,
     };
   }
@@ -779,13 +1066,17 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
     await this.rpcInstance.request('fs.write', { path, content }) as FsWriteResult;
   }
 
-  async fsList(glob?: string, maxEntries = 200, options?: { path?: string }): Promise<string[]> {
-    const result = await this.rpcInstance.request('fs.list', {
+  async fsList(
+    glob?: string,
+    maxEntries = 200,
+    options?: { path?: string; maxScannedEntries?: number },
+  ): Promise<FsListResult> {
+    return await this.rpcInstance.request('fs.list', {
       ...(typeof options?.path === 'string' ? { path: options.path } : {}),
       ...(typeof glob === 'string' ? { glob } : {}),
+      ...(typeof options?.maxScannedEntries === 'number' ? { maxScannedEntries: options.maxScannedEntries } : {}),
       maxEntries,
     }) as FsListResult;
-    return result.paths;
   }
 
   async fsSearch(params: FsSearchParams): Promise<FsSearchResult> {
@@ -1336,8 +1627,8 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
 
   private ensureSessionIntegrityWorker(): Worker {
     if (this.sessionIntegrityWorker) return this.sessionIntegrityWorker;
-    if (!this.sessionIntegritySocketPath) {
-      throw new Error('Session integrity provider requires a gateway socket path');
+    if (!this.sessionIntegrityEndpoint) {
+      throw new Error('Session integrity provider requires a gateway socket path or gateway RPC endpoint');
     }
 
     const worker = new Worker(SESSION_INTEGRITY_WORKER_SOURCE, { eval: true });
@@ -1361,7 +1652,7 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
     worker.postMessage({
       stateBuffer,
       payloadBuffer,
-      socketPath: this.sessionIntegritySocketPath,
+      endpoint: this.sessionIntegrityEndpoint,
       method,
       params,
       requestId,

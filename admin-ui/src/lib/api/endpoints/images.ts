@@ -22,6 +22,43 @@ export interface GeneratedImageView {
   sourceToolName?: string;
   requestId?: string;
   referenceImageIds?: string[];
+  favorite: boolean;
+  tags: string[];
+  meaningfulMoment?: GeneratedImageMeaningfulMoment;
+  conversation?: GeneratedImageConversationLink;
+  companionNoteRefs: GeneratedImageCompanionNoteRef[];
+  artifactRefs: GeneratedImageArtifactRef[];
+}
+
+export interface GeneratedImageConversationLink {
+  channelId?: string;
+  channelType?: string;
+  turnId?: string;
+  requestId?: string;
+  sourceMessageId?: string;
+  userSessionEntryId?: number;
+  assistantSessionEntryId?: number;
+}
+
+export interface GeneratedImageCompanionNoteRef {
+  id: string;
+  label?: string;
+  url?: string;
+}
+
+export interface GeneratedImageArtifactRef {
+  kind: 'generated_image' | 'shared_image' | 'conversation_turn' | 'companion_note' | 'l0_artifact';
+  refId?: string;
+  label?: string;
+  url?: string;
+  localPath?: string;
+}
+
+export interface GeneratedImageMeaningfulMoment {
+  marked: boolean;
+  markedAt: string;
+  note?: string;
+  conversation?: GeneratedImageConversationLink;
 }
 
 export interface GeneratedImagesResponse {
@@ -51,8 +88,44 @@ export interface ImageReferenceMutationResponse {
   reference: ImageReferencePhoto;
 }
 
-export function listGeneratedImages(): Promise<GeneratedImagesResponse> {
-  return apiGet<GeneratedImagesResponse>('/api/admin/images/generated');
+export interface GeneratedImageUpdateResponse {
+  ok: boolean;
+  image: GeneratedImageView;
+}
+
+export function listGeneratedImages(input: {
+  tags?: string[];
+  favorite?: boolean;
+  meaningful?: boolean;
+  q?: string;
+} = {}): Promise<GeneratedImagesResponse> {
+  const params = new URLSearchParams();
+  if (input.tags?.length) params.set('tags', input.tags.join(','));
+  if (input.favorite !== undefined) params.set('favorite', String(input.favorite));
+  if (input.meaningful !== undefined) params.set('meaningful', String(input.meaningful));
+  if (input.q?.trim()) params.set('q', input.q.trim());
+  const query = params.toString();
+  return apiGet<GeneratedImagesResponse>(`/api/admin/images/generated${query ? `?${query}` : ''}`);
+}
+
+export function updateGeneratedImage(
+  id: string,
+  input: {
+    favorite?: boolean;
+    tags?: string[];
+    meaningfulMoment?: {
+      marked: boolean;
+      note?: string;
+    };
+    conversation?: GeneratedImageConversationLink;
+    companionNoteRefs?: GeneratedImageCompanionNoteRef[];
+    artifactRefs?: GeneratedImageArtifactRef[];
+  }
+): Promise<GeneratedImageUpdateResponse> {
+  return apiPatch<GeneratedImageUpdateResponse>(
+    `/api/admin/images/generated/${encodeURIComponent(id)}`,
+    input
+  );
 }
 
 export function listImageReferences(): Promise<ImageReferenceListResponse> {

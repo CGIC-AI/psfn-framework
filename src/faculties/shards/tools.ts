@@ -4,7 +4,10 @@
 import { Type } from '@sinclair/typebox';
 import type { AgentTool, AgentToolResult } from '@mariozechner/pi-agent-core';
 import type { TextContent } from '@mariozechner/pi-ai';
-import type { SubagentExecutionPort } from '../../core/agent/substrate-agent/bounded-subagent-contract.js';
+import type {
+  BoundedSubagentLaunchEnvelope,
+  SubagentExecutionPort,
+} from '../../core/agent/substrate-agent/bounded-subagent-contract.js';
 import {
   BOUNDED_SUBAGENT_LAUNCH_TOOL_NAME,
   buildBoundedSubagentLaunchEnvelope,
@@ -14,7 +17,16 @@ import { getRequestContext } from '../../primitives/llm/request-context.js';
 import { textResultWithError } from '../../core/tools/results.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
 
-export function createBoundedSubagentLaunchTool(manager: SubagentExecutionPort): AgentTool<any> {
+interface BoundedSubagentLaunchToolDetails {
+  isError?: boolean;
+  boundedSubagent?: BoundedSubagentLaunchEnvelope;
+  mutationWorkflow?: 'artifact_return_only';
+  artifactReturn?: unknown;
+}
+
+export function createBoundedSubagentLaunchTool(
+  manager: SubagentExecutionPort,
+): AgentTool<any, BoundedSubagentLaunchToolDetails> {
   return {
     name: BOUNDED_SUBAGENT_LAUNCH_TOOL_NAME,
     description:
@@ -54,7 +66,7 @@ export function createBoundedSubagentLaunchTool(manager: SubagentExecutionPort):
         requiredCapabilities?: string[];
       },
       _signal?: AbortSignal,
-    ): Promise<AgentToolResult<{ isError?: boolean }>> => {
+    ): Promise<AgentToolResult<BoundedSubagentLaunchToolDetails>> => {
       try {
         const requestContext = getRequestContext();
         const launchRequest = normalizeBoundedSubagentLaunchRequest({
@@ -105,8 +117,8 @@ export function createBoundedSubagentLaunchTool(manager: SubagentExecutionPort):
                 : ''}` +
               `${result.requiredCapabilities.length > 0
                 ? `[Required capabilities: ${result.requiredCapabilities.join(', ')}]\n`
-                : ''}\n` +
-              result.content,
+                : ''}` +
+              `[Internal handoff: review worker output via subagent ${result.subagentId}; do not forward raw worker text directly to a partner.]`,
             }] satisfies TextContent[],
           details: {
             boundedSubagent,

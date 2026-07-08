@@ -18,6 +18,7 @@ export interface PostTurnActionAgent {
 export type PostTurnActionCapability = 'generic' | 'subagent_spawn';
 export interface PostTurnActionHandlerResult {
   detail?: string;
+  rescheduleAt?: number;
   subagentSpawn?: PostTurnSubagentSpawnResultStatus;
 }
 

@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { CHANNEL_TYPES, type ChannelType, type MessageRoutingMetadata, type ObservabilityCallType, type PostTurnActionCandidate, type SubstrateMessage } from '../../shared/contracts/runtime.js';
+import { isRetiredFirstPartyToolAlias } from './tool-surface/registry.js';
 
 export const DEFERRED_TOOL_HANDOFF_ACTION_KIND = 'tool_handoff.continue';
 export const DEFAULT_DEFERRED_TOOL_HANDOFF_MAX_RETRIES = 2;
@@ -90,8 +91,8 @@ export function normalizeToolNameList(raw: unknown): string[] {
         && typeof (entry as { name?: unknown }).name === 'string'
           ? (entry as { name: string }).name.trim()
           : ''
-      );
-    if (!trimmed) continue;
+    );
+    if (!trimmed || isRetiredFirstPartyToolAlias(trimmed)) continue;
     deduped.add(trimmed);
   }
   return [...deduped];

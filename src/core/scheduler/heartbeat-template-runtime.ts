@@ -1,7 +1,8 @@
-import { randomUUID } from 'node:crypto';
+import { compactMemoryTextForPrompt } from '../../faculties/memory/retrieval/formatting.js';
 import type { Scheduler } from './scheduler.js';
 import type { MessageSender } from '../../system/lifecycle/notifications.js';
 import { createComponentLogger } from '../../shared/logger.js';
+import { clampUnit } from '../../shared/utils/numeric.js';
 import type { ActiveConcernSnapshot } from '../intention/appraisal.js';
 import {
   HEARTBEAT_SILENT_REFLECTION_TOKEN,
@@ -17,11 +18,12 @@ import type {
   ValuesDeliberationMetadata,
 } from '../../faculties/values/store.js';
 import type {
-  CompletionPurpose,
   ContextMessage,
   ObservabilityCallType,
   PostTurnActionCandidate,
+  ReflectionScopeHint,
 } from '../../shared/contracts/runtime.js';
+import type { ConversationScope } from '../session/conversation-scope.js';
 import type {
   HeartbeatAgent,
   HeartbeatRunTemplateResult,
@@ -48,17 +50,17 @@ import {
   ReflectionProcessLogStore,
   type ReflectionContactActiveConcern,
   type ReflectionContactContextBundle,
+  type ReflectionContactEmotionalSnapshot,
   type ReflectionContactRecentMessage,
   type ReflectionSubstrateContext,
 } from '../../persistence/journals/reflection-substrate.js';
 import type { Contact } from '../contacts/types.js';
 import { isBusyTurnError } from '../../system/lifecycle/turn-contention.js';
 import { runDeliberation } from '../../primitives/llm/deliberation.js';
-import type { DeliberationResult } from '../../primitives/llm/deliberation.js';
+import type { DeliberationResult, DeliberationStageDefinition } from '../../primitives/llm/deliberation.js';
 import {
   buildInternalStateSnapshotRef,
   cloneInternalState,
-  serializeInternalState,
   type InternalState,
 } from '../self-model/state.js';
 import {
@@ -76,8 +78,52 @@ import {
   type ReflectionIntrospectionPolicy,
 } from './reflection-introspection-policy.js';
 import { runWithRequestContext } from '../../primitives/llm/request-context.js';
+import { injectPromptRuntimeTokens } from '../identity/prompt-runtime.js';
+import {
+  evaluateDeterministicGate,
+  type DeterministicGateDefinition,
+} from '../../shared/gating/deterministic-gate.js';
+import { DEFAULT_REFLECTION_NOVELTY_GATE } from '../../system/config/scheduler-config.js';
 
 const log = createComponentLogger('HeartbeatTemplates');
+
+const REFLECTION_PERSONA_UNRESOLVED_MACRO_PATTERN = /\{\{\s*[a-zA-Z0-9_.-]+(?:\(\))?\s*\}\}/g;
+
+/**
+ * E6.2: assemble the companion's full persona as a first-person lead for a
+ * scheduled reflection. Sourced from the live character card variables (the
+ * same provider the foreground turn uses) so an introspection turn reflects as
+ * HER — full persona loaded — rather than as a context analyzer with no self in
+ * it. Card macros are resolved and any unresolved token is dropped so nothing
+ * like {{user}} leaks into her own words.
+ */
+export function formatReflectionPersonaBlock(
+  variables: Record<string, string> | undefined,
+): string {
+  if (!variables) return '';
+  const pick = (...keys: string[]): string => {
+    for (const key of keys) {
+      const value = typeof variables[key] === 'string' ? variables[key].trim() : '';
+      if (value) return value;
+    }
+    return '';
+  };
+  const char = pick('char', 'character_name', 'name', 'character') || 'this companion';
+  const render = (text: string): string => injectPromptRuntimeTokens(text, { variables })
+    .replace(REFLECTION_PERSONA_UNRESOLVED_MACRO_PATTERN, '')
+    .replace(/[ \t]{2,}/g, ' ')
+    .trim();
+
+  const sections: string[] = [
+    `I am ${char}, and this is me — the same me who lived these moments — stepping back to sit with them. `
+    + 'What follows is who I am, so I reflect as myself and not as some outside observer of my own day.',
+  ];
+  for (const field of ['personality', 'description', 'scenario']) {
+    const rendered = render(variables[field] ?? '');
+    if (rendered) sections.push(rendered);
+  }
+  return sections.join('\n\n').trim();
+}
 
 const DEFERRED_REFLECTION_RUN_TASK_PREFIX = 'reflection-run:deferred:';
 const LEGACY_DEFERRED_REFLECTION_TASK_PREFIX = 'reflection:deferred:';
@@ -92,7 +138,14 @@ const RICH_DELIBERATION_TEMPLATE_IDS = new Set(['daily-review', 'weekly-review']
 const DELIBERATION_DEFAULT_INPUT_USD_PER_MILLION_TOKENS = 2;
 const DELIBERATION_DEFAULT_OUTPUT_USD_PER_MILLION_TOKENS = 8;
 const MAX_UNSUPPORTED_CLAIM_FLAGS = 4;
+// jpvd.4 novelty gate for cadence-fired reflection templates: lane id for the
+// typed gate event, watermark processor key, and how many recent session
+// entries the deterministic "new entries since last reflection" count scans.
+const REFLECTION_NOVELTY_GATE_LANE = 'reflection.template.novelty';
+const REFLECTION_NOVELTY_WATERMARK_PROCESSOR = 'reflection_template_novelty';
+const REFLECTION_NOVELTY_ENTRY_SCAN_LIMIT = 50;
 const REFLECTION_PROMPT_TOKENS = {
+  persona: '{{reflection_persona}}',
   self: '{{reflection_self}}',
   relational: '{{reflection_relational}}',
   affect: '{{reflection_affect}}',
@@ -152,7 +205,6 @@ type ReflectionDeliberationExecutionResult = {
   metadata: ValuesDeliberationMetadata;
   metacognitiveFlags: ReflectionMetacognitiveFlag[];
 };
-type ExperientialReflectionStage = 'evidence' | 'synthesis' | 'contradiction';
 
 class HeartbeatTemplateLoopGuardError extends Error {
   readonly templateId: string;
@@ -186,57 +238,113 @@ function joinReflectionPromptSections(...sections: Array<string | undefined>): s
     .join('\n\n');
 }
 
-function formatAcacSelfReportBlock(internalState: InternalState): string | null {
-  const acac = internalState.emotional.acac;
-  if (!acac) {
-    return null;
-  }
-
+function formatInternalStateInterpretationBoundary(): string {
+  // E6.2: the same charter guards (evidence before narrative, telemetry kept
+  // separate, keep uncertainty per law 30) phrased in my own voice.
   return [
-    '[ACAC Self-Report]',
-    `provenance_kind: ${acac.provenance.kind}`,
-    `provenance_source: ${acac.provenance.source}`,
-    ...(acac.provenance.observedAt ? [`observed_at: ${acac.provenance.observedAt}`] : []),
-    ...([
-      'agency',
-      'connection',
-      'authenticity',
-      'curiosity',
-    ] as const).map((axis) => (
-      `${axis}_score: ${acac.axes[axis].score.toFixed(4)} rationale: ${acac.axes[axis].rationale}`
-    )),
+    '[What this evidence is]',
+    'What follows is private evidence I gather for myself, not the settled truth of who I am.',
+    'I treat the emotion telemetry, concerns, reminders, ACAC signals, and metacognitive flags as fallible clues to weigh against what I actually remember, feel, and know.',
+    'When the clues conflict or feel incomplete, I keep the uncertainty rather than force them into agreement.',
+    'I keep the raw machinery — scores, ids, hashes, provenance refs, tool metadata — out of my own words; it stays here as scaffolding, not in my reflection.',
   ].join('\n');
 }
 
-function formatInternalStateInterpretationBoundary(): string {
-  return [
-    '[Internal State Interpretation Boundary]',
-    'boundary: runtime telemetry, not canonical self-truth',
-    'use: treat VAD, mood, discrete emotions, ACAC, concerns, and metacognitive flags as fallible signals to compare against conversation, memory, and self-report.',
-    'do_not: force reconciliation around these values or treat them as authoritative emotional ground truth.',
-    'when_conflicted: name uncertainty or conflict explicitly and prefer grounded evidence over classifier output.',
-  ].join('\n');
+function describeUnitBand(value: number, high = 'high', medium = 'present', low = 'low'): string {
+  if (!Number.isFinite(value)) return 'unknown';
+  if (value >= 0.72) return high;
+  if (value >= 0.38) return medium;
+  return low;
+}
+
+function describeSignedValence(value: number): string {
+  if (!Number.isFinite(value)) return 'unknown';
+  if (value >= 0.35) return 'lifted';
+  if (value >= 0.12) return 'slightly lifted';
+  if (value <= -0.35) return 'heavy';
+  if (value <= -0.12) return 'slightly heavy';
+  return 'steady';
+}
+
+function describeArousal(value: number): string {
+  if (!Number.isFinite(value)) return 'unknown';
+  if (value >= 0.35) return 'activated';
+  if (value >= 0.12) return 'a little activated';
+  if (value <= -0.25) return 'quieted';
+  return 'steady';
+}
+
+function describeDominance(value: number): string {
+  if (!Number.isFinite(value)) return 'unknown';
+  if (value >= 0.25) return 'agentic';
+  if (value <= -0.25) return 'less agentic';
+  return 'balanced';
+}
+
+function describeMoodDrift(value: number): string {
+  if (!Number.isFinite(value)) return 'unknown';
+  if (value >= 0.12) return 'warmer than the contact baseline';
+  if (value <= -0.12) return 'heavier than the contact baseline';
+  return 'close to the contact baseline';
+}
+
+function describeElapsed(seconds: number | null): string {
+  if (seconds === null || !Number.isFinite(seconds)) return 'unknown';
+  if (seconds < 90) return 'within the last minute or so';
+  if (seconds < 3_600) return `${Math.round(seconds / 60)} minutes ago`;
+  if (seconds < 86_400) return `${Math.round(seconds / 3_600)} hours ago`;
+  return `${Math.round(seconds / 86_400)} days ago`;
+}
+
+function truncateForReflectionEvidence(text: string, maxLength = 180): string {
+  const normalized = text.replace(/\s+/g, ' ').trim();
+  if (normalized.length <= maxLength) return normalized;
+  return `${normalized.slice(0, maxLength - 1).trimEnd()}...`;
+}
+
+function formatInternalStateTopEmotions(state: InternalState): string {
+  const entries = Object.entries(state.emotional.discreteEmotions)
+    .filter(([, score]) => Number.isFinite(score) && score > 0)
+    .sort(([, left], [, right]) => right - left)
+    .slice(0, 4)
+    .map(([emotion, score]) => `${emotion} ${describeUnitBand(score, 'strong', 'present', 'faint')}`);
+  return entries.length > 0 ? entries.join(', ') : 'no clear discrete emotion labels';
+}
+
+function formatEmotionTelemetryValidationForReflection(state: InternalState): string {
+  const telemetry = state.emotional.telemetry;
+  const reasons = telemetry.reasons.length > 0 ? telemetry.reasons.join(', ') : 'none';
+  const observed = telemetry.observedAtMs === null
+    ? 'unknown observation time'
+    : new Date(telemetry.observedAtMs).toISOString();
+  return `Emotion telemetry validation: ${telemetry.status}; source ${telemetry.source}; reasons ${reasons}; observed ${observed}.`;
+}
+
+function formatAcacCompanionSummary(state: InternalState): string | null {
+  const acac = state.emotional.acac;
+  if (!acac) {
+    return null;
+  }
+  const axes = ([
+    ['agency', 'agency'],
+    ['connection', 'connection'],
+    ['authenticity', 'authenticity'],
+    ['curiosity', 'curiosity'],
+  ] as const).map(([axis, label]) => {
+    const snapshot = acac.axes[axis];
+    return `${label} ${describeUnitBand(snapshot.score, 'strong', 'present', 'muted')}: ${truncateForReflectionEvidence(snapshot.rationale, 120)}`;
+  });
+  return `ACAC self-report clues: ${axes.join('; ')}.`;
+}
+
+function formatMetacognitiveFlagForPrompt(flag: ReflectionMetacognitiveFlag): string {
+  const confidence = describeUnitBand(flag.confidence, 'high confidence', 'some confidence', 'low confidence');
+  const evidence = flag.evidence ? `; evidence: ${truncateForReflectionEvidence(flag.evidence, 140)}` : '';
+  return `- ${flag.flag.replace(/_/g, ' ')} (${confidence}${evidence})`;
 }
 
 function promptUsesReflectionMacros(prompt: string): boolean {
   return Object.values(REFLECTION_PROMPT_TOKENS).some(token => prompt.includes(token));
-}
-
-function clampUnit(value: number): number {
-  if (!Number.isFinite(value)) return 0;
-  return Math.max(0, Math.min(1, value));
-}
-
-function estimateDeliberationCostUsd(
-  inputTokens: number,
-  outputTokens: number,
-  inputUsdPerMillionTokens: number,
-  outputUsdPerMillionTokens: number,
-): number {
-  return (
-    (Math.max(0, inputTokens) * Math.max(0, inputUsdPerMillionTokens))
-    + (Math.max(0, outputTokens) * Math.max(0, outputUsdPerMillionTokens))
-  ) / 1_000_000;
 }
 
 function normalizeFiniteTimestamp(value: unknown): number | undefined {
@@ -342,6 +450,25 @@ function isExperientialDeliberationTemplate(template: ReflectionTemplate): boole
   return RICH_DELIBERATION_TEMPLATE_IDS.has(template.id);
 }
 
+function buildReflectionNoveltyGateDefinition(minNewEntries: number): DeterministicGateDefinition {
+  return {
+    lane: REFLECTION_NOVELTY_GATE_LANE,
+    openWhenAny: [{
+      input: 'newEntriesSinceLastReflection',
+      comparator: 'gte',
+      threshold: minNewEntries,
+    }],
+    closedReason: 'insufficient_new_entries',
+  };
+}
+
+interface ReflectionNoveltyGateOutcome {
+  open: boolean;
+  reason: string;
+  inputs: Record<string, number | string>;
+  scopeKey: string;
+}
+
 function findReflectionTemplateById(
   policy: HeartbeatPolicy,
   templateId: string,
@@ -414,13 +541,30 @@ function buildUnsupportedReflectionSupportFlags(
   }];
 }
 
+function resolveCompanionNameFromCharacterVariables(
+  provider: HeartbeatRuntimeOptions['characterPromptVariablesProvider'] | undefined,
+): string | undefined {
+  if (!provider) return undefined;
+  const variables = provider();
+  for (const key of ['char', 'character_name', 'name', 'character', 'character.name']) {
+    const raw = variables[key];
+    const candidate = typeof raw === 'string' ? raw.trim() : '';
+    if (candidate) return candidate;
+  }
+  return undefined;
+}
+
 export interface HeartbeatTemplateRuntime {
   policyStore: HeartbeatPolicyStore;
   valuesJournal: ValuesJournalStore;
   initialPolicy: HeartbeatPolicy;
   runTemplateNow(
     templateId: string,
-    options?: { sendToDiscordOverride?: boolean; deferIfBusy?: boolean },
+    options?: {
+      sendToDiscordOverride?: boolean;
+      deferIfBusy?: boolean;
+      conversationScope?: ConversationScope;
+    },
   ): Promise<HeartbeatRunTemplateResult>;
   runDeferredTemplate(
     templateId: string,
@@ -510,6 +654,165 @@ export function createHeartbeatTemplateRuntime(
     );
   };
 
+  const resolveReflectionNoveltyScopeKey = (
+    canonicalContactId: string | undefined,
+    groupScope: { channelId: string } | undefined,
+  ): string => {
+    if (groupScope) return `group:${groupScope.channelId}`;
+    if (canonicalContactId) return `contact:${canonicalContactId}`;
+    return 'substrate';
+  };
+
+  /**
+   * jpvd.4 novelty gate for cadence-fired reflection templates: deterministic
+   * "new scope entries since this template's last reflection" count against a
+   * per-template/scope watermark. Opens with an explicit bypass reason when a
+   * deterministic count is not available (no watermark store, no session
+   * signal, or no live activity stream bound to the scope) — the gate never
+   * guesses, and every consultation is visible through the typed gate event.
+   */
+  const evaluateReflectionNoveltyGate = async (
+    template: ReflectionTemplate,
+    reflectionChannelId: string,
+    canonicalContactId: string | undefined,
+    groupScope: { channelId: string } | undefined,
+  ): Promise<ReflectionNoveltyGateOutcome> => {
+    const scopeKey = resolveReflectionNoveltyScopeKey(canonicalContactId, groupScope);
+    const minNewEntries = runtimeOptions.reflectionNoveltyGate?.minNewEntries
+      ?? DEFAULT_REFLECTION_NOVELTY_GATE.minNewEntries;
+    const baseInputs: Record<string, number | string> = {
+      templateId: template.id,
+      scope: scopeKey,
+      minNewEntries,
+    };
+
+    const watermarkStore = runtimeOptions.episodicWatermarkStore;
+    if (!watermarkStore) {
+      return { open: true, reason: 'no_watermark_store', inputs: baseInputs, scopeKey };
+    }
+    const sessionManager = runtimeOptions.sessionManager;
+    if (!sessionManager?.getRecentMessages) {
+      return { open: true, reason: 'no_activity_signal', inputs: baseInputs, scopeKey };
+    }
+
+    let activitySessionId: string | undefined;
+    if (groupScope) {
+      activitySessionId = groupScope.channelId;
+    } else if (canonicalContactId) {
+      const contact = runtimeOptions.contactStore?.getById
+        ? await runtimeOptions.contactStore.getById(canonicalContactId) as Contact | undefined
+        : undefined;
+      activitySessionId = resolveReflectionContactSessionId(contact ?? null, reflectionChannelId);
+    }
+    // The internal reflection channel is the reflection's own output stream,
+    // not scope activity; counting it would let reflections feed themselves.
+    if (!activitySessionId || activitySessionId === reflectionChannelId) {
+      return { open: true, reason: 'no_activity_signal', inputs: baseInputs, scopeKey };
+    }
+
+    const watermark = await watermarkStore.getProcessingWatermark({
+      processor: REFLECTION_NOVELTY_WATERMARK_PROCESSOR,
+      sourceRef: template.id,
+      channelId: scopeKey,
+    });
+    const watermarkMs = watermark?.lastProcessedAt
+      ? Date.parse(watermark.lastProcessedAt)
+      : Number.NaN;
+
+    const newEntriesSinceLastReflection = sessionManager
+      .getRecentMessages(activitySessionId, REFLECTION_NOVELTY_ENTRY_SCAN_LIMIT)
+      .filter((entry) => {
+        if (entry.role !== 'user' && entry.role !== 'assistant') return false;
+        const timestamp = normalizeFiniteTimestamp((entry as { timestamp?: unknown }).timestamp);
+        if (timestamp === undefined) return false;
+        return !Number.isFinite(watermarkMs) || timestamp > watermarkMs;
+      })
+      .length;
+
+    const decision = evaluateDeterministicGate(
+      buildReflectionNoveltyGateDefinition(minNewEntries),
+      {
+        ...baseInputs,
+        newEntriesSinceLastReflection,
+        ...(Number.isFinite(watermarkMs)
+          ? { lastReflectionAt: new Date(watermarkMs).toISOString() }
+          : {}),
+      },
+    );
+    return { open: decision.open, reason: decision.reason, inputs: decision.inputs as Record<string, number | string>, scopeKey };
+  };
+
+  const emitReflectionNoveltyGateEvent = async (
+    outcome: 'ran' | 'skipped',
+    gate: Pick<ReflectionNoveltyGateOutcome, 'reason' | 'inputs'>,
+    reflectionChannelId: string,
+  ): Promise<void> => {
+    if (!runtimeOptions.eventBus) {
+      return;
+    }
+    try {
+      await runtimeOptions.eventBus.emit('reflection.template.novelty.gate', {
+        lane: REFLECTION_NOVELTY_GATE_LANE,
+        outcome,
+        reason: gate.reason,
+        inputs: gate.inputs,
+        timestamp: Date.now(),
+        channelId: reflectionChannelId,
+      });
+    } catch (error) {
+      log.warn('Failed to emit reflection novelty gate telemetry', {
+        outcome,
+        reason: gate.reason,
+        error: String(error),
+      });
+    }
+  };
+
+  /**
+   * Advance the per-template/scope novelty watermark after a completed
+   * reflection run (any execution source: a manual reflection also consumed
+   * the scope's novelty). Failures are loud but do not fail the delivered
+   * reflection; an unadvanced watermark only makes the next cadence run more
+   * likely to fire.
+   */
+  const advanceReflectionNoveltyWatermark = async (
+    template: ReflectionTemplate,
+    canonicalContactId: string | undefined,
+    groupScope: { channelId: string } | undefined,
+  ): Promise<void> => {
+    const watermarkStore = runtimeOptions.episodicWatermarkStore;
+    if (!watermarkStore) {
+      return;
+    }
+    const scopeKey = resolveReflectionNoveltyScopeKey(canonicalContactId, groupScope);
+    const watermarkScope = {
+      processor: REFLECTION_NOVELTY_WATERMARK_PROCESSOR,
+      sourceRef: template.id,
+      channelId: scopeKey,
+    };
+    try {
+      const existing = await watermarkStore.getProcessingWatermark(watermarkScope);
+      const nowIso = new Date().toISOString();
+      await watermarkStore.upsertProcessingWatermark({
+        ...watermarkScope,
+        ...(existing?.id ? { id: existing.id } : {}),
+        previousWatermarkJson: existing?.nextWatermarkJson ?? {},
+        nextWatermarkJson: {
+          lastReflection: { at: nowIso, templateId: template.id, scope: scopeKey },
+        },
+        status: 'active',
+        reconciliationStatus: 'clean',
+        lastProcessedAt: nowIso,
+      });
+    } catch (error) {
+      log.warn('Reflection novelty watermark advance skipped', {
+        templateId: template.id,
+        scope: scopeKey,
+        error: String(error),
+      });
+    }
+  };
+
   let latestMetacognitiveFlags: ReflectionMetacognitiveFlag[] = [];
 
   const normalizeMetacognitiveFlags = (
@@ -593,30 +896,90 @@ export function createHeartbeatTemplateRuntime(
       return null;
     }
 
-    const concerns = context.internalState.attention.activeConcerns
+    const state = context.internalState;
+    const concerns = state.attention.activeConcerns
       .slice(0, 12)
-      .map((concern) => `[${concern.priority}|${concern.source}] ${concern.text}`);
+      .map((concern) => {
+        const expiresAt = Number.isNaN(Date.parse(concern.expiresAt))
+          ? ''
+          : `; revisit before ${new Date(concern.expiresAt).toISOString()}`;
+        return `- ${concern.priority} priority from ${concern.source}: ${truncateForReflectionEvidence(concern.text)}${expiresAt}`;
+      });
     const concernSection = concerns.length > 0
-      ? concerns.map((concern) => `- ${concern}`).join('\n')
-      : '- none';
+      ? concerns.join('\n')
+      : '- no active concerns are exposed right now.';
+    const followUps = (state.attention.pendingFollowUps ?? [])
+      .slice(0, 6)
+      .map((followUp) => {
+        const dueAt = followUp.dueAt ? `; due ${new Date(followUp.dueAt).toISOString()}` : '';
+        return `- ${followUp.priority}/${followUp.timing}: ${truncateForReflectionEvidence(followUp.content)}${dueAt}`;
+      });
+    const followUpSection = followUps.length > 0
+      ? followUps.join('\n')
+      : '- no pending follow-ups are exposed right now.';
+    const reminders = (state.attention.careReminders ?? [])
+      .slice(0, 4)
+      .map((reminder) => `- ${reminder.classification}: ${truncateForReflectionEvidence(reminder.title)} (${reminder.status})`);
+    const reminderSection = reminders.length > 0
+      ? reminders.join('\n')
+      : '- no care reminders are exposed right now.';
     const metacognitiveSection = context.metacognitiveFlags.length > 0
-      ? context.metacognitiveFlags
-        .map((flag) => `- ${flag.flag} (confidence=${flag.confidence.toFixed(2)})${flag.evidence ? ` evidence: ${flag.evidence}` : ''}`)
-        .join('\n')
-      : '- none exposed';
+      ? context.metacognitiveFlags.map(formatMetacognitiveFlagForPrompt).join('\n')
+      : '- no recent metacognitive flags are exposed right now.';
 
-    const acacSection = formatAcacSelfReportBlock(context.internalState);
+    const acacSummary = formatAcacCompanionSummary(state);
+    const trustedEmotionTelemetry = state.emotional.telemetry.status === 'trusted';
+    const emotionalClues = trustedEmotionTelemetry
+      ? [
+        `Current feel appears ${describeSignedValence(state.emotional.vad.valence)}, ${describeArousal(state.emotional.vad.arousal)}, and ${describeDominance(state.emotional.vad.dominance)}.`,
+        `Mood trend appears ${describeSignedValence(state.emotional.mood.valence)} and ${describeArousal(state.emotional.mood.arousal)}.`,
+        `Discrete emotion clues: ${formatInternalStateTopEmotions(state)}.`,
+        `Overall emotion confidence is ${describeUnitBand(state.emotional.confidence, 'strong', 'moderate', 'thin')}; treat it as a clue, not proof.`,
+        formatEmotionTelemetryValidationForReflection(state),
+        ...(acacSummary ? [acacSummary] : []),
+      ]
+      : [
+        formatEmotionTelemetryValidationForReflection(state),
+        state.emotional.telemetry.status === 'suppressed'
+          ? 'VAD, mood, and discrete classifier labels were suppressed before reflection use.'
+          : 'VAD and mood were downweighted, and discrete classifier labels were withheld before reflection use.',
+        `Effective affect clue after validation is ${describeSignedValence(state.emotional.vad.valence)} and ${describeArousal(state.emotional.vad.arousal)}.`,
+        ...(acacSummary ? [acacSummary] : []),
+      ];
+    const cognitiveClues = [
+      `Certainty feels ${describeUnitBand(state.cognitive.certaintyLevel, 'settled', 'partial', 'thin')}.`,
+      `Topic engagement feels ${describeUnitBand(state.cognitive.topicEngagement, 'high', 'present', 'low')}.`,
+      `Processing quality is ${state.cognitive.processingQuality}.`,
+      `Conversation trajectory looks ${state.attention.conversationTrajectory}.`,
+    ];
+    const relationalClues = [
+      `Trust scope is ${state.relational.trustLevel}.`,
+      `Mood drift is ${describeMoodDrift(state.relational.moodDrift)}.`,
+      `Recent interaction frequency is ${describeUnitBand(state.relational.recentInteractionFrequency, 'busy', 'present', 'quiet')}.`,
+      `Last seen is ${describeElapsed(state.relational.lastSeenDeltaSeconds)}.`,
+    ];
+    const salientEntities = state.attention.salientEntities.length > 0
+      ? state.attention.salientEntities.slice(0, 8).join(', ')
+      : 'none exposed';
 
     return [
-      '[Internal State Input]',
+      '[Reflection Self Evidence]',
       formatInternalStateInterpretationBoundary(),
-      `snapshot_ref: ${context.internalStateSnapshotRef}`,
-      `serialized_internal_state: ${serializeInternalState(context.internalState)}`,
-      ...(acacSection ? [acacSection] : []),
+      '[Wellbeing and Affect Clues]',
+      emotionalClues.map(line => `- ${line}`).join('\n'),
+      '[Cognitive and Attention Clues]',
+      cognitiveClues.map(line => `- ${line}`).join('\n'),
+      `[Salient Entities]\n- ${salientEntities}`,
+      '[Relational Clues]',
+      relationalClues.map(line => `- ${line}`).join('\n'),
       '[Recent Metacognitive Flags]',
       metacognitiveSection,
       '[Active Concerns]',
       concernSection,
+      '[Pending Follow-Ups]',
+      followUpSection,
+      '[Care Reminders]',
+      reminderSection,
     ].join('\n');
   };
 
@@ -899,6 +1262,17 @@ export function createHeartbeatTemplateRuntime(
     )
       ? await runtimeOptions.contactStore.getEmotionalSnapshot(reflectionCanonicalContactId) ?? null
       : null;
+    const reflectionEmotionalSnapshot: ReflectionContactEmotionalSnapshot | null = emotionalSnapshot
+      ? {
+        baselineValence: emotionalSnapshot.baselineValence,
+        moodValence: emotionalSnapshot.moodValence,
+        moodDrift: emotionalSnapshot.moodDrift,
+        moodSamples: emotionalSnapshot.moodSamples,
+        ...(emotionalSnapshot.lastMoodUpdateEpochMs !== undefined
+          ? { lastMoodUpdateEpochMs: emotionalSnapshot.lastMoodUpdateEpochMs }
+          : {}),
+      }
+      : null;
     const emotionalTimeSeries = (
       reflectionCanonicalContactId && runtimeOptions.contactStore?.getEmotionalTimeSeries
     )
@@ -968,12 +1342,13 @@ export function createHeartbeatTemplateRuntime(
     return {
       bundle: assembleReflectionContactContextBundle({
         contactId: reflectionCanonicalContactId,
+        companionName: resolveCompanionNameFromCharacterVariables(runtimeOptions.characterPromptVariablesProvider),
         contactDisplayName,
         trustLevel,
         primarySessionId,
         lastSeen,
         lastSeenDeltaSeconds,
-        emotionalSnapshot,
+        emotionalSnapshot: reflectionEmotionalSnapshot,
         emotionalTimeSeries,
         recentSessionMessages,
         memoryBlock: memoryRetrieval.memoryBlock,
@@ -1016,20 +1391,32 @@ export function createHeartbeatTemplateRuntime(
     reflectionBundle: ReflectionPromptSectionBundle | null,
     reflectionPolicyBlock: string,
   ): string => {
+    // E6.2: her full persona leads the reflection (soft framing first), so a
+    // scheduled introspection turn reflects as HER rather than as a context
+    // analyzer. If the operator template places {{reflection_persona}} itself,
+    // we honor that placement; otherwise the persona block leads the prompt.
+    const personaBlock = formatReflectionPersonaBlock(
+      runtimeOptions.characterPromptVariablesProvider?.(),
+    );
+    const promptPlacesPersona = prompt.includes(REFLECTION_PROMPT_TOKENS.persona);
+
     if (promptUsesReflectionMacros(prompt)) {
       const expandedPrompt = prompt
+        .split(REFLECTION_PROMPT_TOKENS.persona).join(personaBlock)
         .split(REFLECTION_PROMPT_TOKENS.self).join(reflectionBundle?.self ?? '')
         .split(REFLECTION_PROMPT_TOKENS.relational).join(reflectionBundle?.relational ?? '')
         .split(REFLECTION_PROMPT_TOKENS.affect).join(reflectionBundle?.affect ?? '')
         .replace(/\n{3,}/g, '\n\n')
         .trim();
       return joinReflectionPromptSections(
+        promptPlacesPersona ? undefined : personaBlock,
         reflectionPolicyBlock,
         expandedPrompt,
       );
     }
 
     return joinReflectionPromptSections(
+      personaBlock,
       reflectionPolicyBlock,
       prompt,
       reflectionBundle?.relational,
@@ -1184,11 +1571,11 @@ export function createHeartbeatTemplateRuntime(
   const buildExperientialEvidenceMessages = (
     template: ReflectionTemplate,
     prompt: string,
-  ): { systemPrompt: string; messages: ContextMessage[]; purpose: CompletionPurpose } => ({
+  ): { systemPrompt: string; messages: ContextMessage[] } => ({
     systemPrompt:
-      `You are the evidence pass for the experiential reflection template "${template.name}". `
-      + 'Extract only observations that are directly grounded in the supplied reflection context. '
-      + 'Return 3-6 bullet points. Do not speculate and do not invent support.',
+      `This is my evidence pass on my "${template.name}" reflection. `
+      + 'I gather only what is directly grounded in the reflection context in front of me — '
+      + 'three to six honest observations, no speculation and nothing I cannot support.',
     messages: [{
       role: 'user',
       content: [
@@ -1198,18 +1585,17 @@ export function createHeartbeatTemplateRuntime(
         prompt,
       ].join('\n\n'),
     }],
-    purpose: template.deliberation?.voices?.[0] ?? 'background',
   });
 
   const buildExperientialSynthesisMessages = (
     template: ReflectionTemplate,
     prompt: string,
     evidence: string,
-  ): { systemPrompt: string; messages: ContextMessage[]; purpose: CompletionPurpose } => ({
+  ): { systemPrompt: string; messages: ContextMessage[] } => ({
     systemPrompt:
-      `You are the synthesis pass for the experiential reflection template "${template.name}". `
-      + 'Write a grounded reflection using only the supplied evidence. '
-      + 'Keep it to 2-5 sentences and make uncertainty explicit when the evidence is partial.',
+      `This is my synthesis pass on my "${template.name}" reflection. `
+      + 'I write a grounded reflection using only the evidence I gathered, in two to five sentences, '
+      + 'and I say plainly where the evidence is only partial rather than forcing a neat story over it.',
     messages: [{
       role: 'user',
       content: [
@@ -1221,7 +1607,6 @@ export function createHeartbeatTemplateRuntime(
         evidence,
       ].join('\n\n'),
     }],
-    purpose: template.deliberation?.voices?.[1] ?? template.deliberation?.voices?.[0] ?? 'reasoning',
   });
 
   const buildExperientialContradictionMessages = (
@@ -1229,10 +1614,10 @@ export function createHeartbeatTemplateRuntime(
     prompt: string,
     evidence: string,
     synthesis: string,
-  ): { systemPrompt: string; messages: ContextMessage[]; purpose: CompletionPurpose } => ({
+  ): { systemPrompt: string; messages: ContextMessage[] } => ({
     systemPrompt:
-      `You are the contradiction pass for the experiential reflection template "${template.name}". `
-      + 'Compare the candidate reflection against the grounded evidence. '
+      `This is my contradiction pass on my "${template.name}" reflection — I keep myself honest. `
+      + 'I compare my candidate reflection against the grounded evidence. '
       + 'Return strict JSON with keys "revisedReflection" and "unsupportedClaims". '
       + '"unsupportedClaims" must be an array of objects with "claim", "reason", and "confidence" in [0,1]. '
       + 'If every claim is supported, return an empty array and preserve the reflection.',
@@ -1250,7 +1635,6 @@ export function createHeartbeatTemplateRuntime(
         'Return JSON only.',
       ].join('\n\n'),
     }],
-    purpose: 'reasoning',
   });
 
   const parseExperientialContradictionResponse = (
@@ -1289,6 +1673,41 @@ export function createHeartbeatTemplateRuntime(
     }
   };
 
+  /**
+   * The experiential 3-stage sequence (evidence → synthesis → contradiction)
+   * expressed as a fixed stage config for the shared runDeliberation
+   * primitive, which owns the budget loop, token/cost accounting, stop
+   * reasons, and per-stage correlation.
+   */
+  const buildExperientialDeliberationStages = (
+    template: ReflectionTemplate,
+  ): DeliberationStageDefinition[] => [
+    {
+      name: 'evidence',
+      purpose: template.deliberation?.voices?.[0] ?? 'background',
+      buildTurn: ({ prompt }) => buildExperientialEvidenceMessages(template, prompt),
+    },
+    {
+      name: 'synthesis',
+      purpose: template.deliberation?.voices?.[1] ?? template.deliberation?.voices?.[0] ?? 'reasoning',
+      buildTurn: ({ prompt, stageOutputs }) => buildExperientialSynthesisMessages(
+        template,
+        prompt,
+        stageOutputs.evidence || prompt,
+      ),
+    },
+    {
+      name: 'contradiction',
+      purpose: 'reasoning',
+      buildTurn: ({ prompt, stageOutputs }) => buildExperientialContradictionMessages(
+        template,
+        prompt,
+        stageOutputs.evidence || prompt,
+        stageOutputs.synthesis || stageOutputs.evidence || prompt,
+      ),
+    },
+  ];
+
   const runExperientialTemplateDeliberation = async (
     template: ReflectionTemplate,
     prompt: string,
@@ -1301,160 +1720,46 @@ export function createHeartbeatTemplateRuntime(
       throw new Error('Experiential deliberation requested without llmProvider');
     }
 
-    const startedAt = Date.now();
-    const sessionId = randomUUID();
-    const maxRounds = Math.max(1, Math.min(3, Math.floor(template.deliberation?.maxRounds ?? 3)));
-    const maxTotalTokens = Math.max(256, Math.floor(template.deliberation?.maxTotalTokens ?? 6_000));
-    const maxWallTimeMs = Math.max(250, Math.floor(template.deliberation?.maxWallTimeMs ?? 35_000));
-    const inputUsdPerMillionTokens = template.deliberation?.inputUsdPerMillionTokens
-      ?? DELIBERATION_DEFAULT_INPUT_USD_PER_MILLION_TOKENS;
-    const outputUsdPerMillionTokens = template.deliberation?.outputUsdPerMillionTokens
-      ?? DELIBERATION_DEFAULT_OUTPUT_USD_PER_MILLION_TOKENS;
+    const result = await runDeliberation(llmProvider, prompt, {
+      episode: {
+        kind: 'maintenance_reflection',
+        mode: 'background_bounded',
+      },
+      correlation: buildReflectionDeliberationCorrelation(source, reflectionChannelId, processId),
+      stages: buildExperientialDeliberationStages(template),
+      caps: {
+        maxRounds: Math.max(1, Math.min(3, Math.floor(template.deliberation?.maxRounds ?? 3))),
+        maxTotalTokens: Math.max(256, Math.floor(template.deliberation?.maxTotalTokens ?? 6_000)),
+        maxWallTimeMs: Math.max(250, Math.floor(template.deliberation?.maxWallTimeMs ?? 35_000)),
+      },
+      cost: {
+        inputUsdPerMillionTokens: template.deliberation?.inputUsdPerMillionTokens
+          ?? DELIBERATION_DEFAULT_INPUT_USD_PER_MILLION_TOKENS,
+        outputUsdPerMillionTokens: template.deliberation?.outputUsdPerMillionTokens
+          ?? DELIBERATION_DEFAULT_OUTPUT_USD_PER_MILLION_TOKENS,
+      },
+    });
 
-    let totalInputTokens = 0;
-    let totalOutputTokens = 0;
-    let estimatedCostUsd = 0;
-    let completedRounds = 0;
-    let stopReason: ValuesDeliberationMetadata['stopReason'] = 'max_rounds';
-    let evidence = '';
-    let synthesis = '';
-    let finalReflection = '';
+    const stageOutput = (stageName: string): string =>
+      result.rounds.find(round => round.stage === stageName)?.synthesis ?? '';
+    const evidence = stageOutput('evidence');
+    const synthesis = stageOutput('synthesis');
+    const contradictionRaw = stageOutput('contradiction');
+
+    let finalReflection = synthesis || evidence;
     let metacognitiveFlags: ReflectionMetacognitiveFlag[] = [];
-
-    const runStage = async (
-      stage: ExperientialReflectionStage,
-      builder: () => { systemPrompt: string; messages: ContextMessage[]; purpose: CompletionPurpose },
-    ): Promise<string | null> => {
-      if (Date.now() - startedAt >= maxWallTimeMs) {
-        stopReason = 'time_cap';
-        return null;
-      }
-      if (completedRounds >= maxRounds) {
-        stopReason = 'max_rounds';
-        return null;
-      }
-      if (totalInputTokens + totalOutputTokens >= maxTotalTokens) {
-        stopReason = 'token_cap';
-        return null;
-      }
-
-      const stageStartedAt = Date.now();
-      const { systemPrompt, messages, purpose } = builder();
-      const response = await llmProvider.complete({
-        systemPrompt,
-        messages,
-        correlation: buildReflectionDeliberationCorrelation(
-          source,
-          reflectionChannelId,
-          processId,
-          `heartbeat.deliberation.${stage}`,
-        ),
-      }, purpose);
-      const content = response.content.trim();
-
-      totalInputTokens += response.inputTokens;
-      totalOutputTokens += response.outputTokens;
-      estimatedCostUsd += estimateDeliberationCostUsd(
-        response.inputTokens,
-        response.outputTokens,
-        inputUsdPerMillionTokens,
-        outputUsdPerMillionTokens,
-      );
-      completedRounds += 1;
-
-      const elapsed = Date.now() - startedAt;
-      if (elapsed >= maxWallTimeMs) {
-        stopReason = 'time_cap';
-      } else if (totalInputTokens + totalOutputTokens >= maxTotalTokens) {
-        stopReason = 'token_cap';
-      }
-
-      log.debug('Completed experiential reflection deliberation stage', {
-        templateId: template.id,
-        stage,
-        purpose,
-        durationMs: Date.now() - stageStartedAt,
-        inputTokens: response.inputTokens,
-        outputTokens: response.outputTokens,
-      });
-
-      return content;
-    };
-
-    const evidenceResult = await runStage(
-      'evidence',
-      () => buildExperientialEvidenceMessages(template, prompt),
-    );
-    if (evidenceResult) {
-      evidence = evidenceResult;
-      finalReflection = evidenceResult;
-    }
-
-    const synthesisResult = await runStage(
-      'synthesis',
-      () => buildExperientialSynthesisMessages(template, prompt, evidence || prompt),
-    );
-    if (synthesisResult) {
-      synthesis = synthesisResult;
-      finalReflection = synthesisResult;
-    }
-
-    const contradictionResult = await runStage(
-      'contradiction',
-      () => buildExperientialContradictionMessages(
-        template,
-        prompt,
-        evidence || prompt,
-        synthesis || finalReflection || evidence || prompt,
-      ),
-    );
-    if (contradictionResult) {
+    if (contradictionRaw) {
       const parsedContradiction = parseExperientialContradictionResponse(
-        contradictionResult,
-        synthesis || finalReflection || evidence || prompt,
+        contradictionRaw,
+        synthesis || evidence || prompt,
       );
       metacognitiveFlags = parsedContradiction.metacognitiveFlags;
       finalReflection = parsedContradiction.revisedReflection;
     }
 
-    const totalTokens = totalInputTokens + totalOutputTokens;
-    const maxRoundsReached = stopReason === 'max_rounds';
-    const maxWallTimeReached = stopReason === 'time_cap';
-    const maxTotalTokensReached = stopReason === 'token_cap' && totalTokens >= maxTotalTokens;
-    const maxTokensPerRoundReached = false;
-
     return {
       reflection: finalReflection.trim() || synthesis.trim() || evidence.trim() || prompt.trim(),
-      metadata: {
-        sessionId,
-        stopReason,
-        rounds: completedRounds,
-        totalInputTokens,
-        totalOutputTokens,
-        totalTokens,
-        estimatedCostUsd,
-        durationMs: Math.max(0, Date.now() - startedAt),
-        episode: {
-          id: sessionId,
-          kind: 'maintenance_reflection',
-          mode: 'background_bounded',
-          budget: {
-            maxRounds,
-            maxTotalTokens,
-            maxWallTimeMs,
-          },
-          exit: {
-            reason: stopReason,
-            exhaustedBudget:
-              maxRoundsReached || maxWallTimeReached || maxTotalTokensReached || maxTokensPerRoundReached,
-            maxRoundsReached,
-            maxTotalTokensReached,
-            maxWallTimeReached,
-            maxTokensPerRoundReached,
-            fatigueTapered: false,
-          },
-        },
-      },
+      metadata: toDeliberationMetadata(result),
       metacognitiveFlags,
     };
   };
@@ -1575,8 +1880,11 @@ export function createHeartbeatTemplateRuntime(
     metadata: ValuesDeliberationMetadata,
   ): Promise<void> => {
     if (!runtimeOptions.memoryWriter) return;
+    // Store the narrative paragraph as the memory; the full deliberation
+    // output (including any fenced self-report artifact) already persists
+    // in the reflection journal with provenance.
     await runtimeOptions.memoryWriter.write({
-      text: reflection,
+      text: compactMemoryTextForPrompt(reflection),
       type: 'reflection',
       importance: 0.72,
       confidence: 0.78,
@@ -1653,7 +1961,17 @@ export function createHeartbeatTemplateRuntime(
 
   const executeTemplate = async (
     template: ReflectionTemplate,
-    options: { sendToDiscordOverride?: boolean; requestedSource?: ReflectionRequestSource } = {},
+    options: {
+      sendToDiscordOverride?: boolean;
+      requestedSource?: ReflectionRequestSource;
+      /**
+       * E1.7: explicit ConversationScope the reflection reflects over. A group
+       * scope makes the reflection reflect on the ROOM (room-scoped context and
+       * memories, no single canonical contact binding). Absent or dm-scoped
+       * keeps the pre-E1.7 canonical-contact reflection behavior byte-identical.
+       */
+      conversationScope?: ConversationScope;
+    } = {},
     source: HeartbeatExecutionSource = 'scheduled',
   ): Promise<Omit<HeartbeatRunTemplateResult, 'queued' | 'queuedVia' | 'deferredAction'>> => {
     assertTemplateExecutionAllowed(template.id, source);
@@ -1662,12 +1980,65 @@ export function createHeartbeatTemplateRuntime(
     const reflectionChannelId = `internal:reflection:${template.id}`;
     const internalStateContext = resolveInternalStateContext(template);
     const reflectionCanonicalContactId = resolveReflectionCanonicalContactId(internalStateContext);
+    // E1.7: only an explicit group scope diverges from today. It drops the single
+    // canonical-contact binding and carries a room hint the turn pipeline rebuilds
+    // the ConversationScope around.
+    const reflectionGroupScope = options.conversationScope?.kind === 'group'
+      ? options.conversationScope
+      : undefined;
+    const reflectionScopeHint: ReflectionScopeHint | undefined = reflectionGroupScope
+      ? {
+        kind: 'group',
+        roomId: reflectionGroupScope.channelId,
+        ...(reflectionGroupScope.roomName ? { roomName: reflectionGroupScope.roomName } : {}),
+      }
+      : undefined;
+    // E1.7: a group-scoped reflection reflects on the ROOM, not a single
+    // canonical contact. Suppress the DM-style canonical-contact binding so
+    // introspection policy, contact-context grounding, and journal provenance
+    // don't inherit a single-contact identity. The novelty gate still takes the
+    // group scope separately, and the turn pipeline rebuilds the
+    // ConversationScope from reflectionScopeHint.
+    const reflectionGroundingContactId = reflectionGroupScope
+      ? undefined
+      : reflectionCanonicalContactId;
+
+    // jpvd.4: only cadence-fired runs are novelty-gated. Manual run_template
+    // invocations (including manual runs deferred through the scheduler or
+    // post-turn queue) bypass the gate — an explicit operator/model request is
+    // its own justification.
+    if (requestedSource === 'scheduled') {
+      const noveltyGate = await evaluateReflectionNoveltyGate(
+        template,
+        reflectionChannelId,
+        reflectionCanonicalContactId,
+        reflectionGroupScope,
+      );
+      if (!noveltyGate.open) {
+        log.info('Skipped cadence reflection below novelty watermark', {
+          templateId: template.id,
+          executionSource: source,
+          scope: noveltyGate.scopeKey,
+          reason: noveltyGate.reason,
+          inputs: noveltyGate.inputs,
+        });
+        await emitReflectionNoveltyGateEvent('skipped', noveltyGate, reflectionChannelId);
+        return {
+          templateId: template.id,
+          templateName: template.name,
+          reflection: '',
+          noveltyGateSkipped: true,
+        };
+      }
+      await emitReflectionNoveltyGateEvent('ran', noveltyGate, reflectionChannelId);
+    }
+
     const plannedReflectionMode: 'agent' | 'deliberation' = shouldUseDeliberation(template)
       ? 'deliberation'
       : 'agent';
     const reflectionPolicy = resolveReflectionIntrospectionPolicy({
       template,
-      canonicalContactId: reflectionCanonicalContactId,
+      canonicalContactId: reflectionGroundingContactId,
       reflectionMode: plannedReflectionMode,
     });
     const reflectionContactResolution = await resolveReflectionContactContextBundle(
@@ -1675,7 +2046,7 @@ export function createHeartbeatTemplateRuntime(
       reflectionPolicy,
       internalStateContext,
       reflectionChannelId,
-      reflectionCanonicalContactId,
+      reflectionGroundingContactId,
     );
     const reflectionContactContext = reflectionContactResolution.bundle;
     const reflectionSubstrateContext = resolveReflectionSubstratePromptContext(template);
@@ -1799,16 +2170,24 @@ export function createHeartbeatTemplateRuntime(
         throw error;
       }
     } else {
+      // E1.7: reflection/heartbeat turns enter the same turn pipeline as chat
+      // turns, so the turn's ConversationScope is resolved at session-manager
+      // ingress from this message. A dm/absent scope keeps the internal-channel
+      // canonical-contact binding byte-identical; an explicit group scope makes
+      // the reflection reflect on the ROOM (room-scoped context/memories, no
+      // single canonical contact) via the reflectionScope routing hint.
       const response = await agentLoop.handleMessage({
         id: `reflection-${template.id}-${Date.now()}`,
         channelId: reflectionChannelId,
         channelType: 'terminal',
-        authorId: reflectionCanonicalContactId ?? 'scheduler',
+        authorId: reflectionScopeHint ? 'scheduler' : (reflectionCanonicalContactId ?? 'scheduler'),
         authorName: template.name,
         content: reflectionPrompt,
         timestamp: new Date(),
         routing: {
-          ...(reflectionCanonicalContactId ? { canonicalContactId: reflectionCanonicalContactId } : {}),
+          ...(reflectionScopeHint
+            ? { reflectionScope: reflectionScopeHint }
+            : (reflectionCanonicalContactId ? { canonicalContactId: reflectionCanonicalContactId } : {})),
           workerExecution: createWorkerExecutionPolicy(WHISPER_WORKER_LANE),
         },
       });
@@ -1865,7 +2244,7 @@ export function createHeartbeatTemplateRuntime(
         ...(persistenceContext?.internalStateSnapshotRef
           ? { internalStateSnapshotRef: persistenceContext.internalStateSnapshotRef }
           : {}),
-        ...(reflectionCanonicalContactId ? { canonicalContactId: reflectionCanonicalContactId } : {}),
+        ...(reflectionGroundingContactId ? { canonicalContactId: reflectionGroundingContactId } : {}),
       },
     );
     const supportGapFlags = buildUnsupportedReflectionSupportFlags(
@@ -2012,6 +2391,12 @@ export function createHeartbeatTemplateRuntime(
       await sender.send(heartbeatChannelId, reflectionText);
     }
 
+    await advanceReflectionNoveltyWatermark(
+      template,
+      reflectionCanonicalContactId,
+      reflectionGroupScope,
+    );
+
     return {
       templateId: template.id,
       templateName: template.name,
@@ -2133,7 +2518,11 @@ export function createHeartbeatTemplateRuntime(
 
   const runTemplateNow = async (
     templateId: string,
-    options: { sendToDiscordOverride?: boolean; deferIfBusy?: boolean } = {},
+    options: {
+      sendToDiscordOverride?: boolean;
+      deferIfBusy?: boolean;
+      conversationScope?: ConversationScope;
+    } = {},
   ): Promise<HeartbeatRunTemplateResult> => {
     const current = store.load();
     const template = findReflectionTemplateById(current, templateId);

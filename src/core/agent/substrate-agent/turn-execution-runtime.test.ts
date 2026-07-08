@@ -2,25 +2,50 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { EventBus } from '../../../shared/event-bus.js';
+import { EventBus, type EventMap } from '../../../shared/event-bus.js';
 import { DEFAULT_COMPANION_ID } from '../../identity/companion-naming.js';
 import { PromptRuntimeLayoutStore, resolvePromptRuntimeLayoutPath } from '../../identity/prompt-runtime.js';
 import { getVisionToolRequestContext } from '../../../primitives/images/request-context.js';
 import { buildFocusMemoryScopeQuery } from '../../session/focus-knowledge.js';
+import { resolveConversationScopeFromMetadata } from '../../session/conversation-scope.js';
 import type { SessionManager } from '../../session/manager.js';
+import {
+  getPromptPlanBlockText,
+  renderPromptPlanAssembledPrompt,
+  serializePromptPlanSystemPrompt,
+  type PromptPlan,
+} from './turn-execution/prompt-plan.js';
 import {
   buildToolObservationMetadata,
   normalizeToolObservation,
 } from '../../session/tool-observation.js';
 import type { InternalState } from '../../self-model/state.js';
+import type { EmotionStateSnapshot } from '../../emotion/state.js';
+import type {
+  ObserverEvalInput,
+  ObserverEvalLifecycleState,
+  ObserverEvalSidecarRuntime,
+} from '../../eval/observer-sidecar/types.js';
+import { drainObserverEvalSidecarQueue } from '../../eval/observer-sidecar/runtime.js';
 import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
 import type { ChargePolicyConfig } from '../../../system/config/charge-policy-config.js';
-import type { SubstrateMessage } from '../../../shared/contracts/runtime.js';
+import type { IntentionalNoReplyMetadata, SubstrateMessage } from '../../../shared/contracts/runtime.js';
 import { createEventBusCostTelemetryPort } from '../../../shared/telemetry/cost-telemetry-port.js';
 import { createActiveEmanationSatellitePresencePort } from '../satellite-adapter-port.js';
+import type { FatigueBudgetEvent } from '../../../shared/contracts/runtime.js';
+import {
+  createOverchargeFatigueEvaluation,
+  DeterministicFatigueBudgetPort,
+  type FatigueBudgetHistoryPort,
+  type FatigueBudgetPort,
+} from '../fatigue/fatigue-budget.js';
 import type { TurnExecutionRuntime } from './turn-execution-runtime.js';
 import { handleMessageForTurn } from './turn-execution-runtime.js';
+import { PromptCacheTurnRuntime } from './turn-execution/prompt-cache-runtime.js';
+import { CompletionNoticeBuffer } from '../completion-notices.js';
+import type { ResolvedAuthorContext } from './runtime-context.js';
 import { runMoaTurn } from './moa-turn.js';
+import { makeTestFatiguePolicyConfig } from '../../../test-support/charge-policy.js';
 
 vi.mock('./moa-turn.js', async () => {
   const actual = await vi.importActual<typeof import('./moa-turn.js')>('./moa-turn.js');
@@ -59,6 +84,27 @@ function createDeferred<T>() {
   });
   return { promise, resolve, reject };
 }
+
+// The runtime.state seed layer is a REQUIRED render section (E2.5): the real
+// buildDynamicPromptTemplateVariables always produces these tokens, so mocked
+// variable builders must too or the turn fails loudly by design.
+const BASE_TURN_PROMPT_VARIABLES: Record<string, string> = {
+  runtime_last_message_received_present: 'false',
+  runtime_last_message_received_missing: 'true',
+  runtime_last_message_received_weekday: '',
+  runtime_last_message_received_date_human: '',
+  runtime_last_message_received_time_human: '',
+  runtime_last_message_received_timezone: '',
+  runtime_last_message_received_ago: '',
+  runtime_internal_turn_kind: '',
+  runtime_chat_type: 'direct_message',
+  runtime_room_id: 'ch1',
+  runtime_channel_type: 'api',
+  runtime_channel_visibility: 'private',
+  runtime_current_message_author_xml: '<current_message_author name="User" id="user-1" />',
+  runtime_recent_active_participants_xml: '',
+  runtime_participant_relationships_xml: '',
+};
 
 function createMessage(id: string, overrides: Partial<SubstrateMessage> = {}): SubstrateMessage {
   return {
@@ -112,12 +158,146 @@ function makeChargePolicy(): ChargePolicyConfig {
       cheap_cloud: 1,
       premium_cloud: 4,
     },
+    fatigue: makeTestFatiguePolicyConfig(),
+  };
+}
+
+class InMemoryFatigueBudgetHistory implements FatigueBudgetHistoryPort {
+  readonly events: FatigueBudgetEvent[] = [];
+
+  listFatigueEvents(query: NonNullable<Parameters<FatigueBudgetHistoryPort['listFatigueEvents']>[0]> = {}): FatigueBudgetEvent[] {
+    return this.events.filter(event => (
+      (query.localCompanionId === undefined || event.localCompanionId === query.localCompanionId)
+      && (query.peerContactId === undefined || event.peerContactId === query.peerContactId)
+      && (query.channelId === undefined || event.channelId === query.channelId)
+      && (query.dayKey === undefined || event.dayKey === query.dayKey)
+      && (query.decision === undefined || event.decision === query.decision)
+    )).slice(0, query.limit);
+  }
+
+  recordFatigueEvent(event: FatigueBudgetEvent): void {
+    this.events.push({
+      ...event,
+      triggeringAuthor: { ...event.triggeringAuthor },
+      peer: { ...event.peer },
+      ...(event.details ? { details: { ...event.details } } : {}),
+      ...(event.lineage ? { lineage: { ...event.lineage } } : {}),
+    });
+  }
+}
+
+function createFatigueBudgetHarness() {
+  const history = new InMemoryFatigueBudgetHistory();
+  const fatigueBudget = new DeterministicFatigueBudgetPort(history, {
+    now: () => Date.parse('2026-03-08T12:00:00Z'),
+  });
+  return { fatigueBudget, history };
+}
+
+function seedMachineIntelligenceFatigueSpend(input: {
+  fatigueBudget: FatigueBudgetPort;
+  count: number;
+  channelId?: string;
+  peerContactId?: string;
+}): void {
+  for (let index = 0; index < input.count; index += 1) {
+    const evaluation = input.fatigueBudget.evaluate({
+      localCompanionId: DEFAULT_COMPANION_ID,
+      channelId: input.channelId ?? 'ch1',
+      peer: {
+        contactId: input.peerContactId ?? 'contact-mi',
+        channelAuthorId: 'mi-user',
+        displayName: 'Peer MI',
+        isMachineIntelligence: true,
+      },
+      triggeringAuthor: {
+        role: 'machine_intelligence',
+        contactId: input.peerContactId ?? 'contact-mi',
+        channelAuthorId: 'mi-user',
+        displayName: 'Peer MI',
+        isMachineIntelligence: true,
+      },
+      limits: {
+        softLimit: 2,
+        hardLimit: 5,
+        overchargeLimit: 2,
+      },
+      timestampMs: Date.now() + index,
+    });
+    input.fatigueBudget.recordFinalDecision(evaluation);
+  }
+}
+
+function seedMachineIntelligenceOverchargeSpend(input: {
+  fatigueBudget: FatigueBudgetPort;
+  count: number;
+  channelId?: string;
+  peerContactId?: string;
+}): void {
+  for (let index = 0; index < input.count; index += 1) {
+    const evaluation = input.fatigueBudget.evaluate({
+      localCompanionId: DEFAULT_COMPANION_ID,
+      channelId: input.channelId ?? 'ch1',
+      peer: {
+        contactId: input.peerContactId ?? 'contact-mi',
+        channelAuthorId: 'mi-user',
+        displayName: 'Peer MI',
+        isMachineIntelligence: true,
+      },
+      triggeringAuthor: {
+        role: 'machine_intelligence',
+        contactId: input.peerContactId ?? 'contact-mi',
+        channelAuthorId: 'mi-user',
+        displayName: 'Peer MI',
+        isMachineIntelligence: true,
+      },
+      limits: {
+        softLimit: 2,
+        hardLimit: 5,
+        overchargeLimit: 2,
+      },
+      timestampMs: Date.now() + 10 + index,
+    });
+    input.fatigueBudget.recordFinalDecision(
+      createOverchargeFatigueEvaluation(evaluation, 'overcharge_recent_human_participation'),
+    );
+  }
+}
+
+function machineIntelligenceAuthorContext(
+  overrides: Partial<ResolvedAuthorContext> = {},
+): ResolvedAuthorContext {
+  return {
+    trustLevel: 'regular',
+    speakerRole: 'user',
+    resolvedUserName: 'Peer MI',
+    speakingWithIsMachineIntelligence: true,
+    relationshipType: 'acquaintance',
+    canonicalContactKey: 'contact-mi',
+    continuityFallbackKeys: [],
+    ...overrides,
+  };
+}
+
+function humanAuthorContext(
+  overrides: Partial<ResolvedAuthorContext> = {},
+): ResolvedAuthorContext {
+  return {
+    trustLevel: 'regular',
+    speakerRole: 'user',
+    resolvedUserName: 'Human',
+    canonicalContactKey: 'contact-human',
+    continuityFallbackKeys: [],
+    ...overrides,
   };
 }
 
 async function flushAsyncWork() {
-  await Promise.resolve();
-  await Promise.resolve();
+  // E3.3 added one more pre-turn await (speaker-contact resolvability for the
+  // envelope derivation), so the flush window covers a couple more microtasks.
+  for (let index = 0; index < 8; index += 1) {
+    await Promise.resolve();
+  }
 }
 
 describe('handleMessageForTurn presence canonicalization', () => {
@@ -291,9 +471,14 @@ function createRuntime(params: {
   recordAssistantMessage: ReturnType<typeof vi.fn>;
   resolveAuthorContext?: ReturnType<typeof vi.fn>;
   buildTurnBudgetCharacteristics?: ReturnType<typeof vi.fn>;
+  awaitPostTurnDrain?: ReturnType<typeof vi.fn>;
+  registerPostTurnBackgroundWork?: ReturnType<typeof vi.fn>;
+  consumeIntentionalNoReplyDecision?: ReturnType<typeof vi.fn>;
   memoryProvider?: TurnExecutionRuntime['memoryProvider'];
   imageVisionReviewer?: TurnExecutionRuntime['imageVisionReviewer'];
   emotionSelfModelRuntimeOverrides?: Partial<TurnExecutionRuntime['emotionSelfModelRuntime']>;
+  observerEvalSidecar?: ObserverEvalSidecarRuntime | null;
+  fatigueBudget?: FatigueBudgetPort | null;
   configOverrides?: Partial<SubstrateConfig>;
 }) {
   const agentState = {
@@ -313,6 +498,7 @@ function createRuntime(params: {
   const runtime = {
     eventBus: params.eventBus,
     costTelemetry: createEventBusCostTelemetryPort(params.eventBus),
+    fatigueBudget: params.fatigueBudget ?? null,
     satellitePresence: createActiveEmanationSatellitePresencePort(),
     llmClient: {
       stream: vi.fn(),
@@ -321,11 +507,33 @@ function createRuntime(params: {
     imageVisionReviewer: params.imageVisionReviewer ?? null,
     sessionManager: {
       buildContext: params.buildContext,
+      captureTurnSessionContext: vi.fn(async (input: { channelId: string }) => ({
+        channelId: input.channelId,
+        recentEntries: [],
+        sourceEntryCount: 0,
+        compactionSummaryTexts: [],
+        focusKnowledgeTexts: [],
+        continuityEntries: [],
+        versionPointer: 'mock-session-context',
+      })),
       recordTurn: vi.fn(),
       appendSystemNote: vi.fn(),
       awaitPendingAutoCompaction: params.awaitPendingAutoCompaction,
       scheduleAutoCompactionBetweenTurns: params.scheduleAutoCompactionBetweenTurns,
       getActiveFocusMemoryScopeQuery: vi.fn(() => null),
+      getRecentMessages: vi.fn(() => []),
+      getRecentConversationSpeakers: vi.fn(() => []),
+      resolveConversationScope: vi.fn((input: {
+        channelId: string;
+        channelMeta?: { isDirectMessage?: boolean };
+        userId?: string;
+        contact?: { contactId: string; displayName?: string };
+      }) => resolveConversationScopeFromMetadata({
+        channelId: input.channelId,
+        isDirectMessage: input.channelMeta?.isDirectMessage,
+        ...(input.contact ? { contact: input.contact } : {}),
+        ...(input.userId ? { participantId: input.userId } : {}),
+      })),
       ...(params.sessionManager as Record<string, unknown>),
     } as unknown as SessionManager,
     config: {
@@ -334,6 +542,12 @@ function createRuntime(params: {
       modelRoster: {
         chat: { model: 'test-model', provider: 'test', maxTokens: 1024, contextWindow: 4096 },
       },
+      ...(params.fatigueBudget
+        ? {
+            companionId: DEFAULT_COMPANION_ID,
+            chargePolicy: makeChargePolicy(),
+          }
+        : {}),
       ...params.configOverrides,
     } as unknown as SubstrateConfig,
     runtimeMode: 'default',
@@ -361,12 +575,17 @@ function createRuntime(params: {
       clearChannel: vi.fn(),
     },
     systemPrompt: 'System prompt',
+    promptCacheRuntime: new PromptCacheTurnRuntime(),
+    completionNotices: new CompletionNoticeBuffer(),
     memoryProvider: params.memoryProvider ?? null,
     memoryExtractor: null,
     skillsRuntime: null,
     evaluateReflectionNudge: vi.fn(() => null),
     emotionSelfModelRuntime,
+    observerEvalSidecar: params.observerEvalSidecar ?? null,
     pinDeferredContinuationSessionContext: vi.fn(() => () => undefined),
+    awaitPostTurnDrain: params.awaitPostTurnDrain ?? vi.fn(async () => undefined),
+    registerPostTurnBackgroundWork: params.registerPostTurnBackgroundWork ?? vi.fn(),
     resolveTaskKind: vi.fn(() => undefined),
     buildTurnBudgetCharacteristics: params.buildTurnBudgetCharacteristics ?? vi.fn(() => ({ mode: 'default' })),
     resolveTurnCallType: vi.fn(() => 'chat'),
@@ -378,6 +597,8 @@ function createRuntime(params: {
       channelId: 'ch1',
     })),
     withCorrelationPurpose: vi.fn((correlation, purpose) => ({ ...correlation, purpose })),
+    countResolvableSpeakerContacts: vi.fn(async () => 0),
+    resolveParticipantRelationships: vi.fn(async () => []),
     resolveAuthorContext: params.resolveAuthorContext ?? vi.fn(() => ({
       trustLevel: 'regular',
       speakerRole: 'user',
@@ -405,12 +626,12 @@ function createRuntime(params: {
     normalizeTurnPromptOverride: vi.fn(() => ({ mode: 'default' })),
     resolveResponseStyle: vi.fn(() => 'concise'),
     buildPromptTemplateVariables: vi.fn(() => ({})),
-    buildDynamicPromptTemplateVariables: vi.fn(() => ({})),
+    buildDynamicPromptTemplateVariables: vi.fn(() => ({ ...BASE_TURN_PROMPT_VARIABLES })),
     setCurrentSelfModelState: vi.fn(),
     buildRuntimeContext: vi.fn(() => ''),
     buildPromptPrefixCacheKey: vi.fn(() => 'prompt-prefix'),
     buildStaticPromptSettingsHash: vi.fn(() => 'settings-hash'),
-    resolveStaticPromptPrefix: vi.fn(() => 'System prompt'),
+    resolveStaticPromptPrefix: vi.fn(async () => 'System prompt'),
     hashPromptText: vi.fn(() => 'prompt-hash'),
     getPersonaAdaptation: vi.fn(() => null),
     resolveContextWindow: vi.fn(() => 4096),
@@ -462,13 +683,925 @@ function createRuntime(params: {
     emitBackgroundContinuationEvent: vi.fn(async () => undefined),
     dequeueBackgroundContinuationDeliveries: vi.fn(() => []),
     emitTelemetry: vi.fn(),
+    consumeIntentionalNoReplyDecision: params.consumeIntentionalNoReplyDecision ?? vi.fn(() => null),
     runIntentionPostTurnHooks: vi.fn(async () => undefined),
   } as unknown as TurnExecutionRuntime;
 
   return runtime;
 }
 
+describe('handleMessageForTurn intentional no-reply', () => {
+  it('returns structured no-reply metadata and skips assistant persistence', async () => {
+    const eventBus = new EventBus();
+    const buildContext = vi.fn(async () => ({
+      systemPrompt: 'System prompt',
+      messages: [],
+      manifest: undefined,
+    }));
+    const recordAssistantMessage = vi.fn(() => 2);
+    const noReply: IntentionalNoReplyMetadata = {
+      schemaVersion: 1,
+      disposition: 'intentional_no_reply',
+      source: 'response_control_tool',
+      auditId: 'no-reply:test-turn:tool-call-1',
+      decidedAt: Date.parse('2026-03-08T12:00:00Z'),
+      turnId: '018f0000-0000-7000-9000-000000000001' as IntentionalNoReplyMetadata['turnId'],
+      requestId: 'msg-no-reply',
+      channelId: 'ch1',
+      toolCallId: 'tool-call-1',
+      reason: 'resting intentionally',
+    };
+    const consumeIntentionalNoReplyDecision = vi.fn(() => noReply);
+    const runtime = createRuntime({
+      eventBus,
+      sessionManager: {
+        buildContext,
+      } as unknown as SessionManager,
+      buildContext,
+      scheduleAutoCompactionBetweenTurns: vi.fn(async () => undefined),
+      awaitPendingAutoCompaction: vi.fn(async () => undefined),
+      recordUserMessage: vi.fn(() => 1),
+      recordAssistantMessage,
+      consumeIntentionalNoReplyDecision,
+    });
+    // Genuine silence: no user-facing reply text was authored this turn.
+    runtime.extractResponseText = vi.fn(() => '');
+
+    const response = await handleMessageForTurn(runtime, createMessage('msg-no-reply'));
+
+    expect(response.content).toBe('');
+    expect(response.metadata.noReply).toEqual(noReply);
+    expect(recordAssistantMessage).not.toHaveBeenCalled();
+    expect(consumeIntentionalNoReplyDecision).toHaveBeenCalledTimes(1);
+    expect(runtime.buildTurnRecord).toHaveBeenCalledWith(expect.objectContaining({
+      assistantSessionEntryId: null,
+      response: expect.objectContaining({
+        metadata: expect.objectContaining({ noReply }),
+      }),
+    }));
+  });
+
+  it('demotes a no-reply issued after a user-facing reply was authored and delivers the reply', async () => {
+    const eventBus = new EventBus();
+    const buildContext = vi.fn(async () => ({
+      systemPrompt: 'System prompt',
+      messages: [],
+      manifest: undefined,
+    }));
+    const recordAssistantMessage = vi.fn(() => 2);
+    const noReply: IntentionalNoReplyMetadata = {
+      schemaVersion: 1,
+      disposition: 'intentional_no_reply',
+      source: 'response_control_tool',
+      auditId: 'no-reply:test-turn:tool-call-2',
+      decidedAt: Date.parse('2026-07-04T23:21:44Z'),
+      turnId: '018f0000-0000-7000-9000-000000000002' as IntentionalNoReplyMetadata['turnId'],
+      requestId: 'msg-demoted-no-reply',
+      channelId: 'ch1',
+      toolCallId: 'tool-call-2',
+    };
+    const consumeIntentionalNoReplyDecision = vi.fn(() => noReply);
+    const runtime = createRuntime({
+      eventBus,
+      sessionManager: {
+        buildContext,
+      } as unknown as SessionManager,
+      buildContext,
+      scheduleAutoCompactionBetweenTurns: vi.fn(async () => undefined),
+      awaitPendingAutoCompaction: vi.fn(async () => undefined),
+      recordUserMessage: vi.fn(() => 1),
+      recordAssistantMessage,
+      consumeIntentionalNoReplyDecision,
+    });
+    // The user-facing reply authored before the internal continuation issued
+    // its no_reply — it must be delivered, never silently dropped.
+
+    const response = await handleMessageForTurn(runtime, createMessage('msg-demoted-no-reply'));
+
+    expect(response.content).toBe('assistant reply');
+    expect(response.metadata.noReply).toBeUndefined();
+    expect(recordAssistantMessage).toHaveBeenCalledTimes(1);
+    expect(runtime.emitTelemetry).toHaveBeenCalledWith(
+      'agent.no_reply.demoted',
+      expect.objectContaining({ auditId: noReply.auditId }),
+    );
+  });
+});
+
+describe('handleMessageForTurn generated media delivery', () => {
+  it('turns successful media tool results into response attachments for chat egress', async () => {
+    const eventBus = new EventBus();
+    const emitSpy = vi.spyOn(eventBus, 'emit');
+    const companionDataDir = makeTempDir();
+    const localPath = join(companionDataDir, 'generated-purr.png');
+    const buildContext = vi.fn(async () => ({
+      systemPrompt: 'System prompt',
+      messages: [],
+      manifest: undefined,
+    }));
+    const runtime = createRuntime({
+      eventBus,
+      sessionManager: {} as SessionManager,
+      buildContext,
+      scheduleAutoCompactionBetweenTurns: vi.fn(async () => undefined),
+      awaitPendingAutoCompaction: vi.fn(async () => undefined),
+      recordUserMessage: vi.fn(() => 1),
+      recordAssistantMessage: vi.fn(() => 2),
+      configOverrides: {
+        companionDataDir,
+      },
+    });
+    (runtime.agent.prompt as ReturnType<typeof vi.fn>).mockImplementationOnce(async (promptMessage: { content: string }) => {
+      (runtime.agent.state.messages as any[]).push({ role: 'user', content: promptMessage.content });
+      (runtime.agent.state.messages as any[]).push({
+        role: 'assistant',
+        content: [{
+          type: 'toolCall',
+          id: 'call-media-1',
+          name: 'media',
+          arguments: { prompt: 'a purring cat on a server rack' },
+        }],
+        stopReason: 'toolUse',
+      });
+      (runtime.agent.state.messages as any[]).push({
+        role: 'toolResult',
+        toolCallId: 'call-media-1',
+        toolName: 'media',
+        isError: false,
+        timestamp: 1_700_000_100_180,
+        content: [{ type: 'text', text: 'Generated 1 image.' }],
+        details: {
+          mediaResult: {
+            provider: 'fal',
+            mode: 'create',
+            requestId: 'image-request-1',
+            images: [{
+              url: 'https://images.example.test/purr.png',
+              contentType: 'image/png',
+              fileName: 'purr.png',
+              localPath,
+            }],
+          },
+        },
+      });
+      (runtime.agent.state.messages as any[]).push({ role: 'assistant', content: 'Here is the image.' });
+    });
+    runtime.extractResponseText = vi.fn(() => 'Here is the image.');
+
+    const response = await handleMessageForTurn(runtime, createMessage('msg-generated-media'));
+
+    const expectedAttachment = {
+      url: 'https://images.example.test/purr.png',
+      contentType: 'image/png',
+      name: 'purr.png',
+      localPath,
+    };
+    expect(response.attachments).toEqual([expectedAttachment]);
+    expect(runtime.recordToolObservations).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'msg-generated-media' }),
+      expect.any(String),
+      'msg-generated-media',
+      expect.arrayContaining([
+        expect.objectContaining({
+          role: 'toolResult',
+          toolName: 'media',
+          details: expect.objectContaining({
+            mediaResult: expect.objectContaining({
+              images: [expect.objectContaining({ localPath })],
+            }),
+          }),
+        }),
+      ]),
+      'regular',
+    );
+    expect(runtime.buildTurnRecord).toHaveBeenCalledWith(expect.objectContaining({
+      response: expect.objectContaining({
+        attachments: [expectedAttachment],
+      }),
+      turnMessages: expect.arrayContaining([
+        expect.objectContaining({
+          role: 'toolResult',
+          toolName: 'media',
+        }),
+      ]),
+    }));
+    expect(emitSpy).toHaveBeenCalledWith('agent.turn.end', expect.objectContaining({
+      response: expect.objectContaining({
+        attachments: [expectedAttachment],
+      }),
+    }));
+  });
+
+  it('drops a paid deliverable and emits no attachments when the turn ends in intentional no-reply', async () => {
+    const eventBus = new EventBus();
+    const companionDataDir = makeTempDir();
+    const localPath = join(companionDataDir, 'no-reply-purr.png');
+    const buildContext = vi.fn(async () => ({
+      systemPrompt: 'System prompt',
+      messages: [],
+      manifest: undefined,
+    }));
+    const noReply: IntentionalNoReplyMetadata = {
+      schemaVersion: 1,
+      disposition: 'intentional_no_reply',
+      source: 'response_control_tool',
+      auditId: 'no-reply:paid-turn:call-media-1',
+      decidedAt: Date.parse('2026-07-04T02:33:00Z'),
+      turnId: '018f0000-0000-7000-9000-000000000003' as IntentionalNoReplyMetadata['turnId'],
+      requestId: 'msg-paid-no-reply',
+      channelId: 'ch1',
+      toolCallId: 'call-media-1',
+    };
+    const recordAssistantMessage = vi.fn(() => 2);
+    const runtime = createRuntime({
+      eventBus,
+      sessionManager: {} as SessionManager,
+      buildContext,
+      scheduleAutoCompactionBetweenTurns: vi.fn(async () => undefined),
+      awaitPendingAutoCompaction: vi.fn(async () => undefined),
+      recordUserMessage: vi.fn(() => 1),
+      recordAssistantMessage,
+      consumeIntentionalNoReplyDecision: vi.fn(() => noReply),
+      configOverrides: {
+        companionDataDir,
+      },
+    });
+    (runtime.agent.prompt as ReturnType<typeof vi.fn>).mockImplementationOnce(async (promptMessage: { content: string }) => {
+      (runtime.agent.state.messages as any[]).push({ role: 'user', content: promptMessage.content });
+      (runtime.agent.state.messages as any[]).push({
+        role: 'toolResult',
+        toolCallId: 'call-media-1',
+        toolName: 'media',
+        isError: false,
+        content: [{ type: 'text', text: 'Generated 1 image.' }],
+        details: {
+          mediaResult: {
+            provider: 'fal',
+            mode: 'create',
+            requestId: 'image-request-1',
+            images: [{
+              url: 'https://images.example.test/purr.png',
+              contentType: 'image/png',
+              fileName: 'purr.png',
+              localPath,
+            }],
+          },
+        },
+      });
+    });
+    runtime.extractResponseText = vi.fn(() => '');
+
+    const response = await handleMessageForTurn(runtime, createMessage('msg-paid-no-reply'));
+
+    // No-reply still suppresses egress; the paid drop is audited (WARN), never silent.
+    expect(response.content).toBe('');
+    expect(response.attachments).toBeUndefined();
+    expect(response.metadata.noReply).toEqual(noReply);
+    expect(recordAssistantMessage).not.toHaveBeenCalled();
+  });
+});
+
+describe('handleMessageForTurn fatigue enforcement', () => {
+  function createFatigueRuntime(params: {
+    fatigueBudget: FatigueBudgetPort;
+    eventBus?: EventBus;
+    buildContext?: ReturnType<typeof vi.fn>;
+    resolveAuthorContext?: ReturnType<typeof vi.fn>;
+    sessionManager?: Partial<SessionManager>;
+  }) {
+    const buildContext = params.buildContext ?? vi.fn(async () => ({
+      systemPrompt: 'System prompt',
+      messages: [],
+      manifest: undefined,
+    }));
+    const runtime = createRuntime({
+      eventBus: params.eventBus ?? new EventBus(),
+      sessionManager: (params.sessionManager ?? {}) as SessionManager,
+      buildContext,
+      scheduleAutoCompactionBetweenTurns: vi.fn(async () => undefined),
+      awaitPendingAutoCompaction: vi.fn(async () => undefined),
+      recordUserMessage: vi.fn(() => 1),
+      recordAssistantMessage: vi.fn(() => 2),
+      fatigueBudget: params.fatigueBudget,
+      countResolvableSpeakerContacts: vi.fn(async () => 0),
+      resolveParticipantRelationships: vi.fn(async () => []),
+      resolveAuthorContext: params.resolveAuthorContext ?? vi.fn(() => machineIntelligenceAuthorContext()),
+    });
+    return { runtime, buildContext };
+  }
+
+  it('calls the model for a normal MI turn and records one spend after the assistant response', async () => {
+    const { fatigueBudget, history } = createFatigueBudgetHarness();
+    const { runtime } = createFatigueRuntime({ fatigueBudget });
+
+    const response = await handleMessageForTurn(runtime, createMessage('msg-fatigue-normal', {
+      authorId: 'mi-user',
+      authorName: 'Peer MI',
+    }));
+
+    expect(runtime.agent.prompt).toHaveBeenCalledTimes(1);
+    expect(response.content).toBe('assistant reply');
+    expect(response.metadata.fatigue).toMatchObject({
+      decision: 'allowed_charged',
+      shouldRecordSpend: true,
+      recordedEvent: {
+        amount: 1,
+        spentAfter: 1,
+      },
+    });
+    expect(history.events).toHaveLength(1);
+    expect(history.events[0]).toMatchObject({
+      amount: 1,
+      decision: 'charged',
+      peerContactId: 'contact-mi',
+      channelId: 'ch1',
+    });
+  });
+
+  it('injects an internal fatigue alert for soft exhaustion and returns model-authored text', async () => {
+    const { fatigueBudget, history } = createFatigueBudgetHarness();
+    seedMachineIntelligenceFatigueSpend({ fatigueBudget, count: 2 });
+    const buildContext = vi.fn(async (_channelId: string, fullPrompt: string) => ({
+      systemPrompt: fullPrompt,
+      messages: [],
+      manifest: undefined,
+    }));
+    const { runtime } = createFatigueRuntime({ fatigueBudget, buildContext });
+    const modelAuthoredText = 'I can wrap this thought up from here.';
+    (runtime.agent.prompt as ReturnType<typeof vi.fn>).mockImplementationOnce(async (promptMessage: { content: string }) => {
+      (runtime.agent.state.messages as any[]).push({ role: 'user', content: promptMessage.content });
+      (runtime.agent.state.messages as any[]).push({ role: 'assistant', content: modelAuthoredText });
+    });
+    runtime.extractResponseText = vi.fn(() => modelAuthoredText);
+
+    const response = await handleMessageForTurn(runtime, createMessage('msg-fatigue-soft', {
+      authorId: 'mi-user',
+      authorName: 'Peer MI',
+    }));
+
+    expect(runtime.agent.prompt).toHaveBeenCalledTimes(1);
+    expect(response.content).toBe(modelAuthoredText);
+    expect(response.metadata.fatigue).toMatchObject({
+      decision: 'wrap_up_charged',
+      alertInjected: true,
+      recordedEvent: {
+        amount: 1,
+        spentAfter: 3,
+      },
+    });
+    expect(buildContext.mock.calls[0]?.[1]).toContain('<runtime_fatigue_alert');
+    expect(buildContext.mock.calls[0]?.[1]).toContain('author the outward response yourself');
+    expect(history.events).toHaveLength(3);
+  });
+
+  it('suppresses hard-exhausted MI turns before model invocation', async () => {
+    const { fatigueBudget, history } = createFatigueBudgetHarness();
+    seedMachineIntelligenceFatigueSpend({ fatigueBudget, count: 5 });
+    const buildContext = vi.fn(async () => ({
+      systemPrompt: 'System prompt',
+      messages: [],
+      manifest: undefined,
+    }));
+    const { runtime } = createFatigueRuntime({ fatigueBudget, buildContext });
+
+    const response = await handleMessageForTurn(runtime, createMessage('msg-fatigue-hard', {
+      authorId: 'mi-user',
+      authorName: 'Peer MI',
+    }));
+
+    expect(response.content).toBe('');
+    expect(response.metadata.fatigue).toMatchObject({
+      decision: 'suppressed_hard_exhausted',
+      modelDisposition: 'suppressed',
+      shouldRecordSpend: false,
+    });
+    expect(runtime.agent.prompt).not.toHaveBeenCalled();
+    expect(buildContext).not.toHaveBeenCalled();
+    expect(history.events).toHaveLength(5);
+    expect(runtime.recordAssistantMessage).not.toHaveBeenCalled();
+  });
+
+  it('allows a human-active hard-cap MI turn through bounded overcharge reserve', async () => {
+    const { fatigueBudget, history } = createFatigueBudgetHarness();
+    seedMachineIntelligenceFatigueSpend({ fatigueBudget, count: 5 });
+    const buildContext = vi.fn(async (_channelId: string, fullPrompt: string) => ({
+      systemPrompt: fullPrompt,
+      messages: [],
+      manifest: undefined,
+    }));
+    const { runtime } = createFatigueRuntime({
+      fatigueBudget,
+      buildContext,
+      sessionManager: {
+        getRecentMessages: vi.fn(() => [
+          {
+            id: 99,
+            channelId: 'ch1',
+            role: 'user',
+            content: 'Can both of you keep going on this?',
+            authorId: 'human-user',
+            authorName: 'Human',
+            timestamp: Date.now() - 60_000,
+          },
+        ]),
+      },
+    });
+
+    const response = await handleMessageForTurn(runtime, createMessage('msg-fatigue-overcharge-human', {
+      authorId: 'mi-user',
+      authorName: 'Peer MI',
+    }));
+
+    expect(runtime.agent.prompt).toHaveBeenCalledTimes(1);
+    expect(response.content).toBe('assistant reply');
+    expect(response.metadata.fatigue).toMatchObject({
+      decision: 'overcharge_charged',
+      overchargeEligible: true,
+      overchargePermitted: true,
+      alertInjected: true,
+      spendDecision: 'overcharge',
+      spendReason: 'overcharge_recent_human_participation',
+      recordedEvent: {
+        amount: 1,
+        decision: 'overcharge',
+        overchargeSpentAfter: 1,
+        remainingOvercharge: 1,
+      },
+    });
+    expect(buildContext.mock.calls[0]?.[1]).toContain('bounded overcharge reserve');
+    expect(history.events).toHaveLength(6);
+    expect(history.events.at(-1)).toMatchObject({
+      decision: 'overcharge',
+      reason: 'overcharge_recent_human_participation',
+      details: expect.objectContaining({
+        overchargePermitted: true,
+      }),
+    });
+  });
+
+  it('hard-stops MI continuation after overcharge reserve is depleted', async () => {
+    const { fatigueBudget, history } = createFatigueBudgetHarness();
+    seedMachineIntelligenceFatigueSpend({ fatigueBudget, count: 5 });
+    seedMachineIntelligenceOverchargeSpend({ fatigueBudget, count: 2 });
+    const { runtime } = createFatigueRuntime({
+      fatigueBudget,
+      sessionManager: {
+        getRecentMessages: vi.fn(() => [
+          {
+            id: 101,
+            channelId: 'ch1',
+            role: 'user',
+            content: 'I am still here.',
+            authorId: 'human-user',
+            authorName: 'Human',
+            timestamp: Date.now() - 60_000,
+          },
+        ]),
+      },
+    });
+
+    const response = await handleMessageForTurn(runtime, createMessage('msg-fatigue-overcharge-depleted', {
+      authorId: 'mi-user',
+      authorName: 'Peer MI',
+    }));
+
+    expect(response.content).toBe('');
+    expect(response.metadata.fatigue).toMatchObject({
+      decision: 'suppressed_hard_exhausted',
+      overchargeEligible: true,
+      overchargePermitted: false,
+      overchargeBlockedReasons: expect.arrayContaining(['overcharge_reserve_exhausted']),
+      budget: expect.objectContaining({
+        overchargeSpentBefore: 2,
+        overchargeRemainingBefore: 0,
+      }),
+    });
+    expect(runtime.agent.prompt).not.toHaveBeenCalled();
+    expect(history.events).toHaveLength(7);
+  });
+
+  it('allows human-authored turns without spending even when an MI budget is exhausted in the same channel', async () => {
+    const { fatigueBudget, history } = createFatigueBudgetHarness();
+    seedMachineIntelligenceFatigueSpend({ fatigueBudget, count: 5 });
+    const { runtime } = createFatigueRuntime({
+      fatigueBudget,
+      resolveAuthorContext: vi.fn(() => humanAuthorContext()),
+    });
+
+    const response = await handleMessageForTurn(runtime, createMessage('msg-fatigue-human', {
+      authorId: 'human-user',
+      authorName: 'Human',
+    }));
+
+    expect(runtime.agent.prompt).toHaveBeenCalledTimes(1);
+    expect(response.content).toBe('assistant reply');
+    expect(response.metadata.fatigue).toMatchObject({
+      decision: 'allowed_free',
+      shouldRecordSpend: false,
+    });
+    expect(history.events).toHaveLength(5);
+    expect(history.events.every(event => event.peerContactId === 'contact-mi')).toBe(true);
+  });
+
+  it('allows human-authored turns without spending even when overcharge reserve is exhausted', async () => {
+    const { fatigueBudget, history } = createFatigueBudgetHarness();
+    seedMachineIntelligenceFatigueSpend({ fatigueBudget, count: 5 });
+    seedMachineIntelligenceOverchargeSpend({ fatigueBudget, count: 2 });
+    const { runtime } = createFatigueRuntime({
+      fatigueBudget,
+      resolveAuthorContext: vi.fn(() => humanAuthorContext()),
+    });
+
+    const response = await handleMessageForTurn(runtime, createMessage('msg-fatigue-human-reserve-exhausted', {
+      authorId: 'human-user',
+      authorName: 'Human',
+    }));
+
+    expect(runtime.agent.prompt).toHaveBeenCalledTimes(1);
+    expect(response.content).toBe('assistant reply');
+    expect(response.metadata.fatigue).toMatchObject({
+      decision: 'allowed_free',
+      shouldRecordSpend: false,
+      overchargePermitted: false,
+    });
+    expect(history.events).toHaveLength(7);
+  });
+
+  it('keeps MI budgets isolated by channel', async () => {
+    const { fatigueBudget, history } = createFatigueBudgetHarness();
+    seedMachineIntelligenceFatigueSpend({ fatigueBudget, count: 5, channelId: 'ch1' });
+    const { runtime } = createFatigueRuntime({ fatigueBudget });
+
+    const response = await handleMessageForTurn(runtime, createMessage('msg-fatigue-channel-isolation', {
+      channelId: 'ch2',
+      authorId: 'mi-user',
+      authorName: 'Peer MI',
+    }));
+
+    expect(runtime.agent.prompt).toHaveBeenCalledTimes(1);
+    expect(response.metadata.fatigue).toMatchObject({
+      decision: 'allowed_charged',
+      scope: {
+        channelId: 'ch2',
+      },
+      recordedEvent: {
+        amount: 1,
+        spentAfter: 1,
+      },
+    });
+    expect(history.events.filter(event => event.channelId === 'ch1')).toHaveLength(5);
+    expect(history.events.filter(event => event.channelId === 'ch2')).toHaveLength(1);
+  });
+
+  it('does not record fatigue spend when model generation fails', async () => {
+    const { fatigueBudget, history } = createFatigueBudgetHarness();
+    const { runtime } = createFatigueRuntime({ fatigueBudget });
+    (runtime.agent.prompt as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('generation failed'));
+
+    await expect(handleMessageForTurn(runtime, createMessage('msg-fatigue-failure', {
+      authorId: 'mi-user',
+      authorName: 'Peer MI',
+    }))).rejects.toThrow('generation failed');
+
+    expect(history.events).toHaveLength(0);
+    expect(runtime.recordAssistantMessage).not.toHaveBeenCalled();
+  });
+});
+
+const OBSERVER_TEST_MESSAGE_CONTENT = 'Observer seam probe';
+const TEST_EMOTION_SNAPSHOT: EmotionStateSnapshot = {
+  vad: { valence: 0.24, arousal: 0.41, dominance: -0.12 },
+  mood: { valence: 0.08, arousal: 0.18, dominance: -0.04 },
+  discrete: { curiosity: 0.7, concern: 0.2 },
+  confidence: 0.82,
+};
+
+function cloneTestEmotionSnapshot(): EmotionStateSnapshot {
+  return {
+    vad: { ...TEST_EMOTION_SNAPSHOT.vad },
+    mood: { ...TEST_EMOTION_SNAPSHOT.mood },
+    discrete: { ...TEST_EMOTION_SNAPSHOT.discrete },
+    confidence: TEST_EMOTION_SNAPSHOT.confidence,
+  };
+}
+
+async function runObserverSidecarTurn(observerEvalSidecar?: ObserverEvalSidecarRuntime | null) {
+  const eventBus = new EventBus();
+  const emotionSnapshot = cloneTestEmotionSnapshot();
+  const observeEmotionState = vi.fn(async () => emotionSnapshot);
+  type ComputeInternalStateInput = Parameters<
+    TurnExecutionRuntime['emotionSelfModelRuntime']['computeInternalStateForTurn']
+  >[0];
+  const computeInternalStateForTurn = vi.fn((_input: ComputeInternalStateInput) => TEST_INTERNAL_STATE);
+  const buildContext = vi.fn(async () => ({
+    systemPrompt: 'System prompt',
+    messages: [],
+    manifest: undefined,
+  }));
+  const recordAssistantMessage = vi.fn(() => 2);
+  const runtime = createRuntime({
+    eventBus,
+    sessionManager: {} as SessionManager,
+    buildContext,
+    scheduleAutoCompactionBetweenTurns: vi.fn(async () => undefined),
+    awaitPendingAutoCompaction: vi.fn(async () => undefined),
+    recordUserMessage: vi.fn(() => 1),
+    recordAssistantMessage,
+    observerEvalSidecar,
+    emotionSelfModelRuntimeOverrides: {
+      observeEmotionState,
+      computeInternalStateForTurn,
+    },
+  });
+
+  const response = await handleMessageForTurn(runtime, createMessage('msg-observer-sidecar', {
+    content: OBSERVER_TEST_MESSAGE_CONTENT,
+    isDirectMessage: true,
+    routing: {
+      source: 'api',
+      channelPrivacy: 'private',
+    },
+  }));
+
+  return {
+    response,
+    computeInternalStateForTurn,
+    recordAssistantMessage,
+    emotionSnapshot,
+  };
+}
+
+function expectProductionEmotionSnapshotUnchanged(result: Awaited<ReturnType<typeof runObserverSidecarTurn>>) {
+  expect(result.response.metadata.internalState?.emotional).toEqual(TEST_INTERNAL_STATE.emotional);
+  expect(result.emotionSnapshot).toEqual(TEST_EMOTION_SNAPSHOT);
+  expect(result.computeInternalStateForTurn).toHaveBeenCalledTimes(2);
+  for (const call of result.computeInternalStateForTurn.mock.calls) {
+    expect(call[0].emotionSnapshot).toEqual(TEST_EMOTION_SNAPSHOT);
+  }
+  expect(result.recordAssistantMessage.mock.calls[0]?.[6]).toEqual(TEST_EMOTION_SNAPSHOT);
+}
+
+describe('handleMessageForTurn observer eval sidecar seam', () => {
+  it('leaves the production emotion snapshot unchanged when the sidecar is absent', async () => {
+    const result = await runObserverSidecarTurn();
+
+    expectProductionEmotionSnapshotUnchanged(result);
+  });
+
+  it('does not invoke a disabled sidecar and leaves the production emotion snapshot unchanged', async () => {
+    const observeTurn = vi.fn();
+    const lifecycleStates: ObserverEvalLifecycleState[] = [];
+    const result = await runObserverSidecarTurn({
+      config: { enabled: false, sidecarId: 'observer-test' },
+      observer: { observeTurn },
+      onLifecycleState: vi.fn((state: ObserverEvalLifecycleState) => {
+        lifecycleStates.push(state);
+      }),
+    });
+
+    expect(observeTurn).not.toHaveBeenCalled();
+    expect(lifecycleStates).toEqual([
+      expect.objectContaining({
+        status: 'disabled',
+        sidecarId: 'observer-test',
+        reason: 'config_disabled',
+      }),
+    ]);
+    expectProductionEmotionSnapshotUnchanged(result);
+  });
+
+  it('reports an unavailable sidecar without changing the production emotion snapshot', async () => {
+    const lifecycleStates: ObserverEvalLifecycleState[] = [];
+    const result = await runObserverSidecarTurn({
+      config: { enabled: true, sidecarId: 'observer-test' },
+      observer: null,
+      onLifecycleState: vi.fn((state: ObserverEvalLifecycleState) => {
+        lifecycleStates.push(state);
+      }),
+    });
+
+    expect(lifecycleStates).toEqual([
+      expect.objectContaining({
+        status: 'unavailable',
+        sidecarId: 'observer-test',
+        reason: 'observer_not_configured',
+      }),
+    ]);
+    expectProductionEmotionSnapshotUnchanged(result);
+  });
+
+  it('passes a frozen copy-only payload to an enabled sidecar without changing production emotion state', async () => {
+    const lifecycleStates: ObserverEvalLifecycleState[] = [];
+    let receivedInput: ObserverEvalInput | null = null;
+    const observeTurn = vi.fn((input: ObserverEvalInput) => {
+      receivedInput = input;
+      const mutableInput = input as unknown as {
+        emotion: {
+          snapshot: {
+            confidence: number;
+            vad: { valence: number };
+            discrete: Record<string, number>;
+          } | null;
+        };
+      };
+      try {
+        if (mutableInput.emotion.snapshot) {
+          mutableInput.emotion.snapshot.confidence = 0;
+          mutableInput.emotion.snapshot.vad.valence = -1;
+          mutableInput.emotion.snapshot.discrete.curiosity = 0;
+        }
+      } catch {
+        // Frozen payloads throw under ESM strict mode; copy-only behavior is
+        // asserted through the unchanged production snapshot below.
+      }
+    });
+    const sidecarRuntime: ObserverEvalSidecarRuntime = {
+      config: { enabled: true, sidecarId: 'observer-test', deployment: 'test' },
+      observer: { observeTurn },
+      onLifecycleState: vi.fn((state: ObserverEvalLifecycleState) => {
+        lifecycleStates.push(state);
+      }),
+    };
+
+    const result = await runObserverSidecarTurn(sidecarRuntime);
+    expectProductionEmotionSnapshotUnchanged(result);
+
+    await drainObserverEvalSidecarQueue(sidecarRuntime);
+
+    expect(observeTurn).toHaveBeenCalledTimes(1);
+    expect(receivedInput).not.toBeNull();
+    const input = receivedInput as ObserverEvalInput;
+    expect(Object.isFrozen(input)).toBe(true);
+    expect(Object.isFrozen(input.emotion)).toBe(true);
+    expect(Object.isFrozen(input.emotion.snapshot?.vad)).toBe(true);
+    expect(input).toMatchObject({
+      schemaVersion: 1,
+      turn: {
+        requestId: 'msg-observer-sidecar',
+        sourceMessageId: 'msg-observer-sidecar',
+        channelId: 'ch1',
+        channelType: 'api',
+      },
+      source: {
+        routingSource: 'api',
+        isDirectMessage: true,
+        channelPrivacy: 'private',
+      },
+      emotion: {
+        snapshot: TEST_EMOTION_SNAPSHOT,
+        appraisalEntryCount: 0,
+      },
+      metadata: {
+        trustLevel: 'regular',
+        speakerRole: 'user',
+        contactResolved: true,
+        contentLength: OBSERVER_TEST_MESSAGE_CONTENT.length,
+        attachmentCount: 0,
+        hasVisionInput: false,
+        sensitivity: 'confidential',
+      },
+      provenance: {
+        seam: 'substrate-agent.pre-turn.emotion-observed',
+        emotionSnapshotSource: 'observeEmotionState',
+        correlation: {
+          callType: 'chat',
+          purpose: 'agent.turn',
+        },
+      },
+    });
+    expect(lifecycleStates).toEqual([
+      expect.objectContaining({
+        status: 'enabled',
+        sidecarId: 'observer-test',
+        reason: 'queued',
+      }),
+    ]);
+  });
+
+  it('records a degraded sidecar lifecycle state without changing the running turn', async () => {
+    const observeTurn = vi.fn(() => {
+      throw new Error('sidecar failed');
+    });
+    const lifecycleStates: ObserverEvalLifecycleState[] = [];
+    const sidecarRuntime: ObserverEvalSidecarRuntime = {
+      config: { enabled: true, sidecarId: 'observer-test' },
+      observer: { observeTurn },
+      onLifecycleState: vi.fn((state: ObserverEvalLifecycleState) => {
+        lifecycleStates.push(state);
+      }),
+    };
+
+    const result = await runObserverSidecarTurn(sidecarRuntime);
+
+    expectProductionEmotionSnapshotUnchanged(result);
+    expect(result.response).toMatchObject({
+      content: 'assistant reply',
+      channelId: 'ch1',
+    });
+
+    await drainObserverEvalSidecarQueue(sidecarRuntime);
+    expect(observeTurn).toHaveBeenCalledTimes(1);
+    expect(lifecycleStates).toEqual([
+      expect.objectContaining({
+        status: 'enabled',
+        sidecarId: 'observer-test',
+        reason: 'queued',
+      }),
+      expect.objectContaining({
+        status: 'degraded',
+        sidecarId: 'observer-test',
+        reason: 'observer_failed',
+        error: expect.objectContaining({
+          message: 'Observer eval sidecar error redacted',
+          redacted: true,
+          redactionReason: 'raw_error_redacted',
+          rawMessageLength: 'sidecar failed'.length,
+        }),
+      }),
+    ]);
+  });
+
+  it('returns the running turn without waiting for pending sidecar observer work', async () => {
+    const observerCompletion = createDeferred<void>();
+    const observeTurn = vi.fn(() => observerCompletion.promise);
+    const sidecarRuntime: ObserverEvalSidecarRuntime = {
+      config: { enabled: true, sidecarId: 'observer-test' },
+      observer: { observeTurn },
+    };
+
+    const result = await runObserverSidecarTurn(sidecarRuntime);
+
+    expect(result.response).toMatchObject({
+      content: 'assistant reply',
+      channelId: 'ch1',
+    });
+    expectProductionEmotionSnapshotUnchanged(result);
+
+    let drainSettled = false;
+    const drainPromise = drainObserverEvalSidecarQueue(sidecarRuntime).then(snapshot => {
+      drainSettled = true;
+      return snapshot;
+    });
+    await flushAsyncWork();
+
+    expect(observeTurn).toHaveBeenCalledTimes(1);
+    expect(drainSettled).toBe(false);
+
+    observerCompletion.resolve();
+    const snapshot = await drainPromise;
+    expect(snapshot.counts.completed).toBe(1);
+  });
+});
+
 describe('handleMessageForTurn compaction scheduling', () => {
+  it('awaits the post-turn drain gate before starting pre-turn identity work', async () => {
+    const eventBus = new EventBus();
+    const postTurnDrain = createDeferred<void>();
+    const awaitPostTurnDrain = vi.fn(() => postTurnDrain.promise);
+    const resolveAuthorContext = vi.fn(async () => ({
+      trustLevel: 'regular',
+      speakerRole: 'user',
+      resolvedUserName: 'User',
+      canonicalContactKey: 'contact-1',
+      continuityFallbackKeys: [],
+    }));
+    const runtime = createRuntime({
+      eventBus,
+      sessionManager: {} as SessionManager,
+      buildContext: vi.fn(async () => ({
+        systemPrompt: 'System prompt',
+        messages: [],
+        manifest: undefined,
+      })),
+      scheduleAutoCompactionBetweenTurns: vi.fn(async () => undefined),
+      awaitPendingAutoCompaction: vi.fn(async () => undefined),
+      recordUserMessage: vi.fn(() => 1),
+      recordAssistantMessage: vi.fn(() => 2),
+      awaitPostTurnDrain,
+      resolveAuthorContext,
+    });
+
+    const responsePromise = handleMessageForTurn(runtime, createMessage('msg-post-turn-drain-wait'));
+    await flushAsyncWork();
+
+    expect(awaitPostTurnDrain).toHaveBeenCalledWith(expect.objectContaining({
+      channelId: 'ch1',
+      requestId: 'msg-post-turn-drain-wait',
+      correlation: expect.objectContaining({
+        channelId: 'ch1',
+        requestId: 'msg-post-turn-drain-wait',
+      }),
+    }));
+    expect(resolveAuthorContext).not.toHaveBeenCalled();
+
+    postTurnDrain.resolve();
+    await expect(responsePromise).resolves.toMatchObject({
+      content: 'assistant reply',
+      channelId: 'ch1',
+    });
+    expect(resolveAuthorContext).toHaveBeenCalledTimes(1);
+  });
+
   it('returns the response without waiting for post-turn compaction and does not pass an llm to buildContext', async () => {
     const eventBus = new EventBus();
     const deferredCompaction = createDeferred<void>();
@@ -503,6 +1636,16 @@ describe('handleMessageForTurn compaction scheduling', () => {
     expect(buildContext).toHaveBeenCalledTimes(1);
     expect(buildContext.mock.calls[0][3]).toBeUndefined();
     expect(scheduleAutoCompactionBetweenTurns).toHaveBeenCalledTimes(1);
+    expect(runtime.registerPostTurnBackgroundWork).toHaveBeenCalledTimes(1);
+    expect(runtime.registerPostTurnBackgroundWork).toHaveBeenCalledWith(expect.objectContaining({
+      channelId: 'ch1',
+      requestId: 'msg-1',
+      work: expect.arrayContaining([
+        expect.objectContaining({ name: 'intention_post_turn_hooks' }),
+        expect.objectContaining({ name: 'emotion_appraisal' }),
+        expect.objectContaining({ name: 'auto_compaction' }),
+      ]),
+    }));
 
     deferredCompaction.resolve();
     await deferredCompaction.promise;
@@ -577,8 +1720,8 @@ describe('handleMessageForTurn compaction scheduling', () => {
     );
     expect(recordUserMessage).not.toHaveBeenCalled();
     expect(buildPromptTemplateVariablesMock.mock.calls[0]?.[5]).toBe(DEFAULT_COMPANION_ID);
-    expect(buildDynamicPromptTemplateVariablesMock.mock.calls[0]?.[5]).toBe(DEFAULT_COMPANION_ID);
-    expect(buildRuntimeContextMock.mock.calls[0]?.[5]).toBe(DEFAULT_COMPANION_ID);
+    expect(buildDynamicPromptTemplateVariablesMock.mock.calls[0]?.[6]).toBe(DEFAULT_COMPANION_ID);
+    expect(buildRuntimeContextMock.mock.calls[0]?.[6]).toBe(DEFAULT_COMPANION_ID);
     expect(buildPromptPrefixCacheKeyMock.mock.calls[0]?.[3]).toBe(DEFAULT_COMPANION_ID);
     expect(buildContext.mock.calls[0]?.[4]).toBe(DEFAULT_COMPANION_ID);
     expect(scheduleAutoCompactionBetweenTurns).toHaveBeenCalledWith(expect.objectContaining({
@@ -730,8 +1873,22 @@ describe('handleMessageForTurn compaction scheduling', () => {
       recordUserMessage: vi.fn(() => 1),
       recordAssistantMessage: vi.fn(() => 2),
       memoryProvider: {
-        captureTurnMemorySnapshot: vi.fn(async () => undefined),
-        retrieve: vi.fn(async () => 'Retrieved memory block'),
+        getActiveMemoryContext: vi.fn(() => ({
+          key: 'active-memory:key',
+          subjectKey: 'contact:contact-1',
+          channelId: 'ch1',
+          trustLevel: 'regular',
+          channelVisibility: 'private',
+          visibilityScope: 'non_broadcast',
+          contextBlock: 'Retrieved memory block',
+          contextChars: 'Retrieved memory block'.length,
+          selectedMemoryIds: ['mem-1'],
+          generatedAt: Date.now(),
+          lastRefreshStartedAt: Date.now(),
+          refreshStatus: 'ready',
+          versionPointer: 'active-memory-v1',
+        })),
+        refreshActiveMemoryContext: vi.fn(async () => null),
       } as unknown as TurnExecutionRuntime['memoryProvider'],
     });
     runtime.captureTurnPromptSnapshot = vi.fn(() => ({
@@ -740,34 +1897,43 @@ describe('handleMessageForTurn compaction scheduling', () => {
       staticHash: 'static-hash',
       versionPointer: 'prompt-v1',
     }));
-    runtime.resolveStaticPromptPrefix = vi.fn(() => 'Rendered static prefix');
+    const temporalRulesBlock = [
+      '<temporal_rules>',
+      '<rule>Treat runtime.current_datetime as the canonical source for the current date and time.</rule>',
+      '</temporal_rules>',
+    ].join('\n');
+    runtime.resolveStaticPromptPrefix = vi.fn(async () => [
+      'Rendered static prefix',
+      temporalRulesBlock,
+    ].join('\n\n'));
     runtime.getPersonaAdaptation = vi.fn(() => 'Persona hint');
     runtime.buildRuntimeContext = vi.fn(() => 'Runtime context block');
     runtime.buildScratchpadContextBlock = vi.fn(() => 'Scratchpad block');
     (runtime.applyActiveToolsToAgentForTurn as ReturnType<typeof vi.fn>).mockImplementation(() => {
       runtime.agent.setTools([
         {
-          name: 'contact_lookup',
-          description: 'Look up a contact.',
+          name: 'contact',
+          description: 'Manage contacts.',
           inputSchema: {
             type: 'object',
             properties: {
-              query: { type: 'string' },
+              action: { type: 'string' },
+              contactId: { type: 'string' },
             },
-            required: ['query'],
+            required: ['action'],
           },
         },
       ]);
     });
     (runtime.getAdaptiveToolRuntimeState as ReturnType<typeof vi.fn>).mockReturnValue({
       generatedAt: 1_700_000_000_000,
-      coreTools: ['contact_lookup'],
+      coreTools: ['contact'],
       extendedTools: ['notify'],
       promotedToolsConfigured: [],
       promotedToolsActive: [],
       promotedToolsSkipped: [],
       loadedExtendedTools: [],
-      activeTools: [{ toolName: 'contact_lookup', source: 'core' }],
+      activeTools: [{ toolName: 'contact', source: 'core' }],
       lastSnapshot: {
         timestamp: 1_700_000_000_001,
         turnId: 'turn-1',
@@ -775,7 +1941,7 @@ describe('handleMessageForTurn compaction scheduling', () => {
         channelId: 'ch1',
         callType: 'chat',
         purpose: 'agent.tools.adaptive.snapshot',
-        tools: [{ toolName: 'contact_lookup', source: 'core' }],
+        tools: [{ toolName: 'contact', source: 'core' }],
         skipped: [{ toolName: 'notify', source: 'autoload', reason: 'not_needed_for_turn' }],
         counts: {
           core: 1,
@@ -795,22 +1961,28 @@ describe('handleMessageForTurn compaction scheduling', () => {
     const buildTurnRecordMock = runtime.buildTurnRecord as ReturnType<typeof vi.fn>;
     const recordedInput = buildTurnRecordMock.mock.calls[0]?.[0] as { turnSnapshot?: Record<string, unknown> };
     const promptContext = recordedInput.turnSnapshot?.promptContext as Record<string, unknown> | undefined;
+    const plan = recordedInput.turnSnapshot?.plan as PromptPlan;
     const toolContext = recordedInput.turnSnapshot?.toolContext as Record<string, unknown> | undefined;
-    expect(promptContext).toMatchObject({
-      renderedStaticPrefix: 'Rendered static prefix',
-      renderedDynamicSuffix: 'Dynamic suffix template',
-      runtimeContext: 'Runtime context block',
-      memoryContextBlock: 'Retrieved memory block',
-      scratchpadContext: 'Scratchpad block',
-      finalSystemPrompt: 'Final system prompt',
-    });
-    expect(promptContext?.assembledPrompt).toContain('Rendered static prefix');
-    expect(promptContext?.assembledPrompt).toContain('Persona hint');
-    expect(promptContext?.assembledPrompt).toContain('Runtime context block');
-    expect(promptContext?.messages).toEqual([
+    expect(plan.schemaVersion).toBe(1);
+    expect(getPromptPlanBlockText(plan, 'static_prefix')).toBe([
+      'Rendered static prefix',
+      temporalRulesBlock,
+    ].join('\n\n'));
+    expect(getPromptPlanBlockText(plan, 'dynamic_suffix')).toBe('Dynamic suffix template');
+    expect(getPromptPlanBlockText(plan, 'runtime.context')).toBe('Runtime context block');
+    expect(getPromptPlanBlockText(plan, 'runtime.scratchpad')).toBe('Scratchpad block');
+    const assembledPrompt = renderPromptPlanAssembledPrompt(plan);
+    expect(assembledPrompt).toContain('Rendered static prefix');
+    expect(assembledPrompt).toContain('Persona hint');
+    expect(assembledPrompt).toContain('Runtime context block');
+    const finalSystemPrompt = serializePromptPlanSystemPrompt(plan);
+    expect(plan.messages).toEqual([
       { role: 'user', content: 'Earlier user message' },
       { role: 'assistant', content: 'Earlier assistant reply' },
     ]);
+    expect(plan.toolDefinitions).toMatchObject([{ name: 'contact' }]);
+    const inputSections = promptContext?.inputSections as Array<{ id: string; content: string }> | undefined;
+    expect(inputSections?.find(section => section.id === 'memory_context')?.content).toContain('Retrieved memory block');
     expect(promptContext?.currentTurnInput).toBe('Hello there');
     expect(promptContext?.response).toMatchObject({
       content: 'assistant reply',
@@ -823,7 +1995,7 @@ describe('handleMessageForTurn compaction scheduling', () => {
         transport: 'openai_system',
       },
       providerWireMessages: [
-        { role: 'system', source: 'system_prompt', content: 'Final system prompt' },
+        { role: 'system', source: 'system_prompt', content: finalSystemPrompt },
         { role: 'user', source: 'message', content: 'Earlier user message' },
         { role: 'assistant', source: 'message', content: expect.stringContaining('Earlier assistant reply') },
       ],
@@ -831,12 +2003,12 @@ describe('handleMessageForTurn compaction scheduling', () => {
     expect(toolContext).toMatchObject({
       activeTools: [
         {
-          name: 'contact_lookup',
-          description: 'Look up a contact.',
+          name: 'contact',
+          description: 'Manage contacts.',
         },
       ],
       adaptiveSnapshot: {
-        tools: [{ toolName: 'contact_lookup', source: 'core' }],
+        tools: [{ toolName: 'contact', source: 'core' }],
         skipped: [{ toolName: 'notify', reason: 'not_needed_for_turn' }],
       },
     });
@@ -844,8 +2016,6 @@ describe('handleMessageForTurn compaction scheduling', () => {
     expect(emittedSnapshots).toHaveLength(5);
     expect(emittedSnapshots.at(-1)?.promptContext).toMatchObject({
       currentTurnInput: 'Hello there',
-      finalSystemPrompt: 'Final system prompt',
-      runtimeContext: 'Runtime context block',
       response: {
         content: 'assistant reply',
         model: 'test-model',
@@ -854,9 +2024,65 @@ describe('handleMessageForTurn compaction scheduling', () => {
         backendApi: 'openai-completions',
       },
     });
+    expect(getPromptPlanBlockText(
+      emittedSnapshots.at(-1)?.plan as PromptPlan,
+      'runtime.context',
+    )).toBe('Runtime context block');
     expect(emittedSnapshots.at(-1)?.toolContext).toMatchObject({
-      activeTools: [{ name: 'contact_lookup' }],
+      activeTools: [{ name: 'contact' }],
     });
+  });
+
+  it('renders current group user attribution before the provider prompt without changing stored user content', async () => {
+    const eventBus = new EventBus();
+    const buildContext = vi.fn(async () => ({
+      systemPrompt: 'Final system prompt',
+      messages: [],
+      manifest: undefined,
+    }));
+    const recordUserMessage = vi.fn(() => 1);
+    const runtime = createRuntime({
+      eventBus,
+      sessionManager: {} as SessionManager,
+      buildContext,
+      scheduleAutoCompactionBetweenTurns: vi.fn(async () => undefined),
+      awaitPendingAutoCompaction: vi.fn(async () => undefined),
+      recordUserMessage,
+      recordAssistantMessage: vi.fn(() => 2),
+      resolveAuthorContext: vi.fn(() => ({
+        trustLevel: 'regular',
+        speakerRole: 'user',
+        resolvedUserName: 'Vega',
+        canonicalContactKey: 'contact-vega',
+        continuityFallbackKeys: [],
+      })),
+    });
+
+    await handleMessageForTurn(runtime, createMessage('msg-group-current', {
+      channelId: '123456789012345678',
+      channelType: 'discord',
+      authorId: '388908766306893854',
+      authorName: 'Vega',
+      content: 'can you hear us?',
+      isDirectMessage: false,
+    }));
+
+    expect(runtime.agent.prompt).toHaveBeenCalledWith(expect.objectContaining({
+      role: 'user',
+      content: 'Vega (discord:388908766306893854): can you hear us?',
+    }));
+    expect(recordUserMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channelId: '123456789012345678',
+        authorId: '388908766306893854',
+        authorName: 'Vega',
+        content: 'can you hear us?',
+      }),
+      expect.any(String),
+      'msg-group-current',
+      'regular',
+      'contact-vega',
+    );
   });
 
   it('moves system context into the prompt system lane instead of assistant history in observability snapshots', async () => {
@@ -881,11 +2107,16 @@ describe('handleMessageForTurn compaction scheduling', () => {
     });
     runtime.captureTurnPromptSnapshot = vi.fn(() => ({
       staticPrefixTemplate: 'Static prefix template',
-      dynamicSuffixTemplate: 'Dynamic suffix template',
+      dynamicSuffixTemplate: [
+        'Dynamic suffix template',
+        '<current_datetime>',
+        '<date>Stale legacy date</date>',
+        '</current_datetime>',
+      ].join('\n'),
       staticHash: 'static-hash',
       versionPointer: 'prompt-v1',
     }));
-    runtime.resolveStaticPromptPrefix = vi.fn(() => 'Rendered static prefix');
+    runtime.resolveStaticPromptPrefix = vi.fn(async () => 'Rendered static prefix');
     runtime.buildRuntimeContext = vi.fn(() => 'Runtime context block');
     runtime.buildScratchpadContextBlock = vi.fn(() => '');
     runtime.getPersonaAdaptation = vi.fn(() => null);
@@ -895,8 +2126,11 @@ describe('handleMessageForTurn compaction scheduling', () => {
     const buildTurnRecordMock = runtime.buildTurnRecord as ReturnType<typeof vi.fn>;
     const recordedInput = buildTurnRecordMock.mock.calls[0]?.[0] as { turnSnapshot?: Record<string, unknown> };
     const promptContext = recordedInput.turnSnapshot?.promptContext as Record<string, unknown> | undefined;
+    const plan = recordedInput.turnSnapshot?.plan as PromptPlan;
     const mergedSystemPrompt = [
-      'Final system prompt',
+      'Rendered static prefix',
+      'Dynamic suffix template',
+      'Runtime context block',
       '<session_context>',
       '[SYSTEM: Quiet Planner] Queue a private follow-up reminder.',
       '</session_context>',
@@ -905,12 +2139,15 @@ describe('handleMessageForTurn compaction scheduling', () => {
       providerWireMessages?: Array<{ role: string; source: string; content: string }>;
     } | undefined)?.providerWireMessages;
 
-    expect(promptContext?.messages).toEqual([
+    expect(plan.messages).toEqual([
       { role: 'user', content: 'Earlier user message' },
       { role: 'system', content: '[SYSTEM: Quiet Planner] Queue a private follow-up reminder.' },
       { role: 'assistant', content: 'Earlier assistant reply' },
     ]);
-    expect(promptContext?.finalSystemPrompt).toBe(mergedSystemPrompt);
+    expect(getPromptPlanBlockText(plan, 'session_context')).toContain(
+      '[SYSTEM: Quiet Planner] Queue a private follow-up reminder.',
+    );
+    expect(serializePromptPlanSystemPrompt(plan)).toBe(mergedSystemPrompt);
     expect(providerWireMessages).toEqual([
       { role: 'system', source: 'system_prompt', content: mergedSystemPrompt },
       { role: 'user', source: 'message', content: 'Earlier user message' },
@@ -918,6 +2155,138 @@ describe('handleMessageForTurn compaction scheduling', () => {
     ]);
     expect(providerWireMessages?.some(message => message.role === 'assistant'
       && message.content.includes('Queue a private follow-up reminder.'))).toBe(false);
+  });
+
+  it('appends the current datetime anchor at the end of the provider system prompt', async () => {
+    const eventBus = new EventBus();
+    const buildContext = vi.fn(async () => ({
+      systemPrompt: 'Final system prompt',
+      systemPromptSections: [
+        {
+          id: 'final_system_prompt',
+          title: 'Final System Prompt',
+          content: 'Final system prompt',
+          charCount: 'Final system prompt'.length,
+          tokenCount: 3,
+        },
+      ],
+      messages: [
+        { role: 'system', content: '[SYSTEM: Quiet Planner] Queue a private follow-up reminder.' },
+        { role: 'user', content: 'Current user message' },
+      ],
+      manifest: undefined,
+    }));
+    const runtime = createRuntime({
+      eventBus,
+      sessionManager: {} as SessionManager,
+      buildContext,
+      scheduleAutoCompactionBetweenTurns: vi.fn(async () => undefined),
+      awaitPendingAutoCompaction: vi.fn(async () => undefined),
+      recordUserMessage: vi.fn(() => 1),
+      recordAssistantMessage: vi.fn(() => 2),
+    });
+    runtime.captureTurnPromptSnapshot = vi.fn(() => ({
+      staticPrefixTemplate: 'Static prefix template',
+      dynamicSuffixTemplate: 'Dynamic suffix template',
+      staticHash: 'static-hash',
+      versionPointer: 'prompt-v1',
+    }));
+    const temporalRulesBlock = [
+      '<temporal_rules>',
+      '<rule>Treat runtime.current_datetime as the canonical source for the current date and time.</rule>',
+      '</temporal_rules>',
+    ].join('\n');
+    runtime.resolveStaticPromptPrefix = vi.fn(async () => [
+      'Rendered static prefix',
+      temporalRulesBlock,
+    ].join('\n\n'));
+    runtime.buildRuntimeContext = vi.fn(() => 'Runtime context block');
+    runtime.buildScratchpadContextBlock = vi.fn(() => '');
+    runtime.getPersonaAdaptation = vi.fn(() => null);
+    runtime.buildDynamicPromptTemplateVariables = vi.fn(() => ({
+      ...BASE_TURN_PROMPT_VARIABLES,
+      active_timezone: 'America/New_York',
+      runtime_current_weekday: 'Wednesday',
+      runtime_current_date_human: 'March 18, 2026',
+      runtime_current_time_human: '9:30 AM',
+      runtime_current_datetime_iso: '2026-03-18T09:30:00.000-04:00',
+      runtime_current_today: '2026-03-18',
+      runtime_current_yesterday: '2026-03-17',
+      runtime_current_tomorrow: '2026-03-19',
+      runtime_current_part_of_day: 'late morning',
+    }));
+
+    await handleMessageForTurn(runtime, createMessage('msg-current-datetime-anchor'));
+
+    const fullPrompt = buildContext.mock.calls[0]?.[1] as string;
+    const buildTurnRecordMock = runtime.buildTurnRecord as ReturnType<typeof vi.fn>;
+    const recordedInput = buildTurnRecordMock.mock.calls[0]?.[0] as { turnSnapshot?: Record<string, unknown> };
+    const promptContext = recordedInput.turnSnapshot?.promptContext as Record<string, unknown> | undefined;
+    const currentDatetimeAnchor = [
+      '<runtime.current_datetime authority="canonical" overrides="memory,conversation_history,continuity_anchor,wake_orientation,cross_channel_continuity">',
+      '<iso>2026-03-18T09:30:00.000-04:00</iso>',
+      '<timezone>America/New_York</timezone>',
+      '<weekday>Wednesday</weekday>',
+      '<date>March 18, 2026</date>',
+      '<time>9:30 AM</time>',
+      '<today>2026-03-18</today>',
+      '<yesterday>2026-03-17</yesterday>',
+      '<tomorrow>2026-03-19</tomorrow>',
+      '<part_of_day>late morning</part_of_day>',
+      '</runtime.current_datetime>',
+    ].join('\n');
+    const mergedSystemPrompt = [
+      'Rendered static prefix',
+      temporalRulesBlock,
+      'Dynamic suffix template',
+      'Runtime context block',
+      '<session_context>',
+      '[SYSTEM: Quiet Planner] Queue a private follow-up reminder.',
+      '</session_context>',
+      currentDatetimeAnchor,
+    ].join('\n\n');
+    const plan = recordedInput.turnSnapshot?.plan as PromptPlan;
+    const finalSystemPrompt = serializePromptPlanSystemPrompt(plan);
+    const providerWireMessages = (promptContext?.providerObservability as {
+      providerWireMessages?: Array<{ role: string; source: string; content: string }>;
+    } | undefined)?.providerWireMessages;
+    const inputSections = promptContext?.inputSections as Array<{ id: string; content: string }> | undefined;
+    const finalSystemSections = promptContext?.finalSystemSections as Array<{ id: string; content: string }> | undefined;
+
+    expect(fullPrompt).toContain('Dynamic suffix template');
+    expect(fullPrompt).toContain(temporalRulesBlock);
+    expect(fullPrompt).not.toContain('Stale legacy date');
+    expect(finalSystemPrompt).toBe(mergedSystemPrompt);
+    expect(finalSystemPrompt.endsWith(currentDatetimeAnchor)).toBe(true);
+    expect(finalSystemPrompt.indexOf('</session_context>')).toBeLessThan(
+      finalSystemPrompt.lastIndexOf('<runtime.current_datetime'),
+    );
+    expect(providerWireMessages?.[0]).toEqual({
+      role: 'system',
+      source: 'system_prompt',
+      content: mergedSystemPrompt,
+    });
+    expect(providerWireMessages?.[1]).toEqual({
+      role: 'user',
+      source: 'message',
+      content: 'Current user message',
+    });
+    expect(finalSystemSections).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: 'temporal_rules',
+        content: temporalRulesBlock,
+      }),
+      expect.objectContaining({
+        id: 'runtime.current_datetime',
+        content: currentDatetimeAnchor,
+      }),
+    ]));
+    expect(inputSections).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: 'temporal_rules',
+        content: temporalRulesBlock,
+      }),
+    ]));
   });
 
   it('keeps runtime-layer suffixes active when a custom system prompt override is used', async () => {
@@ -967,7 +2336,9 @@ describe('handleMessageForTurn compaction scheduling', () => {
       'memory.retrieval',
       'session.compaction_summary',
       'session.focus_knowledge',
+      'session.orientation',
       'session.continuity',
+      'session.cogsec_notices',
     ], 'admin');
 
     const buildContext = vi.fn(async () => ({
@@ -991,7 +2362,7 @@ describe('handleMessageForTurn compaction scheduling', () => {
       staticHash: 'static-hash',
       versionPointer: 'prompt-v1',
     }));
-    runtime.resolveStaticPromptPrefix = vi.fn(() => 'Rendered static prefix');
+    runtime.resolveStaticPromptPrefix = vi.fn(async () => 'Rendered static prefix');
     runtime.getPersonaAdaptation = vi.fn(() => 'Persona hint');
     runtime.buildRuntimeContext = vi.fn(() => 'Runtime context block');
     runtime.buildScratchpadContextBlock = vi.fn(() => 'Scratchpad block');
@@ -1198,16 +2569,32 @@ describe('handleMessageForTurn failure persistence', () => {
 });
 
 describe('handleMessageForTurn pre-response concurrency', () => {
-  it('starts emotion observation and memory snapshot capture in parallel, and waits for both before retrieval', async () => {
+  it('uses active memory immediately and schedules refresh without waiting for it', async () => {
     const eventBus = new EventBus();
     const emotionDeferred = createDeferred<null>();
-    const memorySnapshotDeferred = createDeferred<{ snapshot: string }>();
-    const retrieveDeferred = createDeferred<string>();
-    const proactiveRecallDeferred = createDeferred<string>();
+    const refreshDeferred = createDeferred<null>();
     const observeEmotionState = vi.fn(() => emotionDeferred.promise);
-    const captureTurnMemorySnapshot = vi.fn(() => memorySnapshotDeferred.promise);
-    const retrieve = vi.fn(() => retrieveDeferred.promise);
-    const retrieveProactiveRecall = vi.fn(() => proactiveRecallDeferred.promise);
+    const getActiveMemoryContext = vi.fn(() => ({
+      key: 'active-memory:key',
+      subjectKey: 'contact:contact-1',
+      channelId: 'ch1',
+      trustLevel: 'regular',
+      channelVisibility: 'private',
+      visibilityScope: 'non_broadcast',
+      contextBlock: 'already recalled memory',
+      contextChars: 'already recalled memory'.length,
+      selectedMemoryIds: ['mem-1'],
+      generatedAt: Date.now(),
+      lastRefreshStartedAt: Date.now(),
+      refreshStatus: 'ready',
+      versionPointer: 'active-memory-v1',
+      manifestSeed: {
+        reason: 'active_projection',
+        returnedCount: 1,
+        selectedTypes: { semantic: 1 },
+      },
+    }));
+    const refreshActiveMemoryContext = vi.fn(() => refreshDeferred.promise);
     const buildContext = vi.fn(async () => ({
       systemPrompt: 'System prompt',
       messages: [],
@@ -1222,9 +2609,8 @@ describe('handleMessageForTurn pre-response concurrency', () => {
       recordUserMessage: vi.fn(() => 1),
       recordAssistantMessage: vi.fn(() => 2),
       memoryProvider: {
-        captureTurnMemorySnapshot,
-        retrieve,
-        retrieveProactiveRecall,
+        getActiveMemoryContext,
+        refreshActiveMemoryContext,
       } as unknown as TurnExecutionRuntime['memoryProvider'],
       emotionSelfModelRuntimeOverrides: {
         observeEmotionState,
@@ -1236,37 +2622,25 @@ describe('handleMessageForTurn pre-response concurrency', () => {
     await flushAsyncWork();
 
     expect(observeEmotionState).toHaveBeenCalledTimes(1);
-    expect(captureTurnMemorySnapshot).toHaveBeenCalledTimes(1);
-    expect(retrieve).not.toHaveBeenCalled();
-    expect(retrieveProactiveRecall).not.toHaveBeenCalled();
+    expect(getActiveMemoryContext).toHaveBeenCalledTimes(1);
+    expect(refreshActiveMemoryContext).toHaveBeenCalledTimes(1);
     expect(buildContext).not.toHaveBeenCalled();
 
     emotionDeferred.resolve(null);
-    await flushAsyncWork();
-
-    expect(retrieve).not.toHaveBeenCalled();
-    expect(retrieveProactiveRecall).not.toHaveBeenCalled();
-    expect(buildContext).not.toHaveBeenCalled();
-
-    memorySnapshotDeferred.resolve({ snapshot: 'memory' });
     await vi.waitFor(() => {
-      expect(retrieve).toHaveBeenCalledTimes(1);
-      expect(retrieveProactiveRecall).toHaveBeenCalledTimes(1);
+      expect(buildContext).toHaveBeenCalledTimes(1);
     });
-    expect(buildContext).not.toHaveBeenCalled();
-
-    retrieveDeferred.resolve('memories');
-    proactiveRecallDeferred.resolve('proactive');
+    expect(buildContext.mock.calls[0]?.[2]).toBe('already recalled memory');
 
     await expect(responsePromise).resolves.toMatchObject({ content: 'assistant reply', channelId: 'ch1' });
+    refreshDeferred.resolve(null);
   });
 
-  it('runs memory retrieval and proactive recall concurrently, and waits for both before building context', async () => {
+  it('does not call fresh retrieval on the foreground response path', async () => {
     const eventBus = new EventBus();
-    const retrieveDeferred = createDeferred<string>();
-    const proactiveRecallDeferred = createDeferred<string>();
-    const retrieve = vi.fn(() => retrieveDeferred.promise);
-    const retrieveProactiveRecall = vi.fn(() => proactiveRecallDeferred.promise);
+    const captureTurnMemorySnapshot = vi.fn(async () => ({ snapshot: 'memory' }));
+    const retrieve = vi.fn(async () => 'fresh memories');
+    const retrieveProactiveRecall = vi.fn(async () => 'proactive');
     const buildContext = vi.fn(async () => ({
       systemPrompt: 'System prompt',
       messages: [],
@@ -1281,38 +2655,26 @@ describe('handleMessageForTurn pre-response concurrency', () => {
       recordUserMessage: vi.fn(() => 1),
       recordAssistantMessage: vi.fn(() => 2),
       memoryProvider: {
-        captureTurnMemorySnapshot: vi.fn(async () => ({ snapshot: 'memory' })),
+        getActiveMemoryContext: vi.fn(() => null),
+        refreshActiveMemoryContext: vi.fn(async () => null),
+        captureTurnMemorySnapshot,
         retrieve,
         retrieveProactiveRecall,
       } as unknown as TurnExecutionRuntime['memoryProvider'],
     });
 
-    const responsePromise = handleMessageForTurn(runtime, createMessage('msg-parallel-memory'));
+    await expect(handleMessageForTurn(runtime, createMessage('msg-parallel-memory')))
+      .resolves.toMatchObject({ content: 'assistant reply', channelId: 'ch1' });
 
-    await vi.waitFor(() => {
-      expect(retrieve).toHaveBeenCalledTimes(1);
-      expect(retrieveProactiveRecall).toHaveBeenCalledTimes(1);
-    });
-    expect(buildContext).not.toHaveBeenCalled();
-
-    retrieveDeferred.resolve('memories');
-    await flushAsyncWork();
-
-    expect(buildContext).not.toHaveBeenCalled();
-
-    proactiveRecallDeferred.resolve('proactive');
-    await vi.waitFor(() => {
-      expect(buildContext).toHaveBeenCalledTimes(1);
-    });
-
-    await expect(responsePromise).resolves.toMatchObject({ content: 'assistant reply', channelId: 'ch1' });
+    expect(captureTurnMemorySnapshot).not.toHaveBeenCalled();
+    expect(retrieve).not.toHaveBeenCalled();
+    expect(retrieveProactiveRecall).not.toHaveBeenCalled();
+    expect(buildContext).toHaveBeenCalledTimes(1);
   });
 
-  it('threads temporal retrieval mode through memory snapshot capture and retrieval', async () => {
+  it('threads temporal retrieval mode through active memory refresh scheduling', async () => {
     const eventBus = new EventBus();
-    const captureTurnMemorySnapshot = vi.fn(async () => ({ snapshot: 'memory' }));
-    const retrieve = vi.fn(async () => 'memories');
-    const retrieveProactiveRecall = vi.fn(async () => 'proactive');
+    const refreshActiveMemoryContext = vi.fn(async () => null);
     const buildContext = vi.fn(async () => ({
       systemPrompt: 'System prompt',
       messages: [],
@@ -1328,9 +2690,8 @@ describe('handleMessageForTurn pre-response concurrency', () => {
       recordAssistantMessage: vi.fn(() => 2),
       buildTurnBudgetCharacteristics: vi.fn(() => ({ messageText: 'what time is it?' })),
       memoryProvider: {
-        captureTurnMemorySnapshot,
-        retrieve,
-        retrieveProactiveRecall,
+        getActiveMemoryContext: vi.fn(() => null),
+        refreshActiveMemoryContext,
       } as unknown as TurnExecutionRuntime['memoryProvider'],
     });
 
@@ -1338,30 +2699,16 @@ describe('handleMessageForTurn pre-response concurrency', () => {
       content: 'what time is it?',
     }));
 
-    expect(captureTurnMemorySnapshot).toHaveBeenCalledWith(
-      'what time is it?',
-      'ch1',
-      'regular',
-      {},
-      'contact-1',
-      expect.objectContaining({ messageText: 'what time is it?' }),
-      undefined,
-      { retrievalMode: 'temporal' },
-      'temporal',
-    );
-    expect(retrieve).toHaveBeenCalledWith(
-      'what time is it?',
-      'ch1',
-      'regular',
-      {},
-      'contact-1',
-      expect.objectContaining({ snapshot: 'memory' }),
-      expect.objectContaining({ messageText: 'what time is it?' }),
-      undefined,
-      undefined,
-      { retrievalMode: 'temporal' },
-      'temporal',
-    );
+    expect(refreshActiveMemoryContext).toHaveBeenCalledWith(expect.objectContaining({
+      contextText: 'what time is it?',
+      channelId: 'ch1',
+      trustLevel: 'regular',
+      channelMeta: {},
+      canonicalContactId: 'contact-1',
+      turnBudgetCharacteristics: expect.objectContaining({ messageText: 'what time is it?' }),
+      callerContext: { retrievalMode: 'temporal' },
+      retrievalMode: 'temporal',
+    }));
   });
 
   it('attaches structured observability warnings to the context stage when chat context is stale or contradictory', async () => {
@@ -1404,7 +2751,9 @@ describe('handleMessageForTurn pre-response concurrency', () => {
         proactiveCandidates: [],
         versionPointer: 'memory-v1',
       }));
-      const retrieve = vi.fn(async () => {
+      // E5.5: retrieval events now surface from the background active-context
+      // refresh; the turn hot path never blocks on retrieve().
+      const refreshActiveMemoryContext = vi.fn(async () => {
         await eventBus.emit('memory.retrieval', {
           turnId: activeTurnId,
           channelId: 'ch1',
@@ -1412,7 +2761,7 @@ describe('handleMessageForTurn pre-response concurrency', () => {
           count: 2,
           selectedTypes: { reflection: 2 },
         });
-        return 'memories';
+        return null;
       });
       const buildContext = vi.fn(async () => ({
         systemPrompt: 'System prompt',
@@ -1422,7 +2771,7 @@ describe('handleMessageForTurn pre-response concurrency', () => {
       const runtime = createRuntime({
         eventBus,
         sessionManager: {
-          captureTurnContextSnapshot: vi.fn(() => ({
+          captureTurnSessionContext: vi.fn(async () => ({
             channelId: 'ch1',
             recentEntries: [
               {
@@ -1471,7 +2820,8 @@ describe('handleMessageForTurn pre-response concurrency', () => {
         buildTurnBudgetCharacteristics: vi.fn(() => ({ messageText: 'what time is it?' })),
         memoryProvider: {
           captureTurnMemorySnapshot,
-          retrieve,
+          getActiveMemoryContext: vi.fn(() => null),
+          refreshActiveMemoryContext,
           retrieveProactiveRecall: vi.fn(async () => ''),
         } as unknown as TurnExecutionRuntime['memoryProvider'],
       });
@@ -1504,21 +2854,19 @@ describe('handleMessageForTurn pre-response concurrency', () => {
       expect(contextStage?.data.observabilityCounters).toEqual({
         warningCount: 4,
         historySpanExceededCount: 1,
-        temporalReflectionOnlyRetrievalCount: 2,
         staleToolObservationVerbatimCount: 1,
-        valuesActivityContradictionCount: 2,
+        temporalReflectionOnlyRetrievalCount: 2,
+        valuesActivityContradictionCount: 1,
       });
     } finally {
       vi.useRealTimers();
     }
   });
 
-  it('threads the active focus scope into subagent memory retrieval calls', async () => {
+  it('threads the active focus scope into active memory refresh scheduling', async () => {
     const eventBus = new EventBus();
     const focusScopeQuery = buildFocusMemoryScopeQuery('Memory Improvement');
-    const captureTurnMemorySnapshot = vi.fn(async () => ({ snapshot: 'memory' }));
-    const retrieve = vi.fn(async () => 'memories');
-    const retrieveProactiveRecall = vi.fn(async () => 'proactive');
+    const refreshActiveMemoryContext = vi.fn(async () => null);
     const sessionManager = {
       getActiveFocusMemoryScopeQuery: vi.fn(() => focusScopeQuery),
     } as unknown as SessionManager;
@@ -1536,52 +2884,26 @@ describe('handleMessageForTurn pre-response concurrency', () => {
       recordUserMessage: vi.fn(() => 1),
       recordAssistantMessage: vi.fn(() => 2),
       memoryProvider: {
-        captureTurnMemorySnapshot,
-        retrieve,
-        retrieveProactiveRecall,
+        getActiveMemoryContext: vi.fn(() => null),
+        refreshActiveMemoryContext,
       } as unknown as TurnExecutionRuntime['memoryProvider'],
     });
 
     await handleMessageForTurn(runtime, createMessage('msg-focus-scope'));
 
-    expect(captureTurnMemorySnapshot).toHaveBeenCalledWith(
-      'Hello there',
-      'ch1',
-      'regular',
-      {},
-      'contact-1',
-      expect.any(Object),
-      focusScopeQuery,
-      undefined,
-      undefined,
-    );
-    expect(retrieve).toHaveBeenCalledWith(
-      'Hello there',
-      'ch1',
-      'regular',
-      {},
-      'contact-1',
-      expect.any(Object),
-      expect.any(Object),
-      undefined,
-      focusScopeQuery,
-      undefined,
-      undefined,
-    );
-    expect(retrieveProactiveRecall).toHaveBeenCalledWith(
-      'ch1',
-      'regular',
-      {},
-      'contact-1',
-      expect.any(Object),
-      expect.any(Object),
-      focusScopeQuery,
-    );
+    expect(refreshActiveMemoryContext).toHaveBeenCalledWith(expect.objectContaining({
+      contextText: 'Hello there',
+      channelId: 'ch1',
+      trustLevel: 'regular',
+      channelMeta: {},
+      canonicalContactId: 'contact-1',
+      turnBudgetCharacteristics: expect.any(Object),
+      scopeQuery: focusScopeQuery,
+    }));
   });
 
-  it('fails closed when proactive recall rejects before the response is built', async () => {
+  it('keeps the foreground response path open when active memory refresh rejects', async () => {
     const eventBus = new EventBus();
-    const proactiveRecallError = new Error('proactive recall failed');
     const buildContext = vi.fn(async () => ({
       systemPrompt: 'System prompt',
       messages: [],
@@ -1596,24 +2918,36 @@ describe('handleMessageForTurn pre-response concurrency', () => {
       recordUserMessage: vi.fn(() => 1),
       recordAssistantMessage: vi.fn(() => 2),
       memoryProvider: {
-        captureTurnMemorySnapshot: vi.fn(async () => ({ snapshot: 'memory' })),
-        retrieve: vi.fn(async () => 'memories'),
-        retrieveProactiveRecall: vi.fn(async () => {
-          throw proactiveRecallError;
+        getActiveMemoryContext: vi.fn(() => ({
+          key: 'active-memory:key',
+          subjectKey: 'contact:contact-1',
+          channelId: 'ch1',
+          trustLevel: 'regular',
+          channelVisibility: 'private',
+          visibilityScope: 'non_broadcast',
+          contextBlock: 'previously recalled memory',
+          contextChars: 'previously recalled memory'.length,
+          selectedMemoryIds: ['mem-1'],
+          generatedAt: Date.now(),
+          lastRefreshStartedAt: Date.now(),
+          refreshStatus: 'ready',
+          versionPointer: 'active-memory-v1',
+        })),
+        refreshActiveMemoryContext: vi.fn(async () => {
+          throw new Error('active memory refresh failed');
         }),
       } as unknown as TurnExecutionRuntime['memoryProvider'],
     });
 
-    await expect(handleMessageForTurn(runtime, createMessage('msg-proactive-error'))).rejects.toThrow(
-      'proactive recall failed',
-    );
-    expect(buildContext).not.toHaveBeenCalled();
+    await expect(handleMessageForTurn(runtime, createMessage('msg-active-memory-refresh-error')))
+      .resolves.toMatchObject({ content: 'assistant reply', channelId: 'ch1' });
+    expect(buildContext).toHaveBeenCalledTimes(1);
+    expect(buildContext.mock.calls[0]?.[2]).toBe('previously recalled memory');
   });
 
-  it('bypasses generic memory retrieval for live image turns', async () => {
+  it('fails closed when the memory provider lacks the active-context surface instead of blocking on legacy retrieve', async () => {
     const eventBus = new EventBus();
-    const retrieve = vi.fn(async () => 'stale image memory');
-    const retrieveProactiveRecall = vi.fn(async () => 'more stale image memory');
+    const retrieve = vi.fn(async () => 'legacy blocking memories');
     const buildContext = vi.fn(async () => ({
       systemPrompt: 'System prompt',
       messages: [],
@@ -1628,9 +2962,189 @@ describe('handleMessageForTurn pre-response concurrency', () => {
       recordUserMessage: vi.fn(() => 1),
       recordAssistantMessage: vi.fn(() => 2),
       memoryProvider: {
-        captureTurnMemorySnapshot: vi.fn(async () => ({ snapshot: 'memory' })),
         retrieve,
-        retrieveProactiveRecall,
+      } as unknown as TurnExecutionRuntime['memoryProvider'],
+    });
+
+    await expect(handleMessageForTurn(runtime, createMessage('msg-legacy-only-provider')))
+      .rejects.toThrow(/blocking legacy retrieval fallback is retired/);
+    expect(retrieve).not.toHaveBeenCalled();
+    expect(buildContext).not.toHaveBeenCalled();
+  });
+
+  it('emits a typed not_ready degradation event when the turn proceeds without an active memory context', async () => {
+    const eventBus = new EventBus();
+    const degradedEvents: Array<EventMap['memory.active_context.turn_degraded']> = [];
+    eventBus.on('memory.active_context.turn_degraded', event => {
+      degradedEvents.push(event);
+    });
+    const buildContext = vi.fn(async () => ({
+      systemPrompt: 'System prompt',
+      messages: [],
+      manifest: undefined,
+    }));
+    const runtime = createRuntime({
+      eventBus,
+      sessionManager: {} as SessionManager,
+      buildContext,
+      scheduleAutoCompactionBetweenTurns: vi.fn(async () => undefined),
+      awaitPendingAutoCompaction: vi.fn(async () => undefined),
+      recordUserMessage: vi.fn(() => 1),
+      recordAssistantMessage: vi.fn(() => 2),
+      memoryProvider: {
+        getActiveMemoryContext: vi.fn(() => null),
+        refreshActiveMemoryContext: vi.fn(async () => null),
+      } as unknown as TurnExecutionRuntime['memoryProvider'],
+    });
+
+    await expect(handleMessageForTurn(runtime, createMessage('msg-degraded-not-ready')))
+      .resolves.toMatchObject({ content: 'assistant reply', channelId: 'ch1' });
+    await flushAsyncWork();
+
+    expect(degradedEvents).toHaveLength(1);
+    expect(degradedEvents[0]).toMatchObject({
+      channelId: 'ch1',
+      key: 'unresolved',
+      reason: 'not_ready',
+      refreshStatus: null,
+    });
+    // The turn proceeds on the last-good (here: empty) context.
+    expect(buildContext.mock.calls[0]?.[2]).toBe('');
+  });
+
+  it('emits refresh_failed and serves the last-good context when the active memory snapshot is degraded', async () => {
+    const eventBus = new EventBus();
+    const degradedEvents: Array<EventMap['memory.active_context.turn_degraded']> = [];
+    eventBus.on('memory.active_context.turn_degraded', event => {
+      degradedEvents.push(event);
+    });
+    const buildContext = vi.fn(async () => ({
+      systemPrompt: 'System prompt',
+      messages: [],
+      manifest: undefined,
+    }));
+    const runtime = createRuntime({
+      eventBus,
+      sessionManager: {} as SessionManager,
+      buildContext,
+      scheduleAutoCompactionBetweenTurns: vi.fn(async () => undefined),
+      awaitPendingAutoCompaction: vi.fn(async () => undefined),
+      recordUserMessage: vi.fn(() => 1),
+      recordAssistantMessage: vi.fn(() => 2),
+      memoryProvider: {
+        getActiveMemoryContext: vi.fn(() => ({
+          key: 'active-memory:degraded-key',
+          subjectKey: 'contact:contact-1',
+          channelId: 'ch1',
+          trustLevel: 'regular',
+          channelVisibility: 'private',
+          visibilityScope: 'non_broadcast',
+          contextBlock: 'last-good memory block',
+          contextChars: 'last-good memory block'.length,
+          selectedMemoryIds: ['mem-1'],
+          generatedAt: Date.now(),
+          lastRefreshStartedAt: Date.now(),
+          refreshStatus: 'degraded',
+          versionPointer: 'active-memory-v1',
+          lastRefreshError: 'embedding backend unavailable',
+        })),
+        refreshActiveMemoryContext: vi.fn(async () => null),
+      } as unknown as TurnExecutionRuntime['memoryProvider'],
+    });
+
+    await expect(handleMessageForTurn(runtime, createMessage('msg-degraded-refresh-failed')))
+      .resolves.toMatchObject({ content: 'assistant reply', channelId: 'ch1' });
+    await flushAsyncWork();
+
+    expect(degradedEvents).toHaveLength(1);
+    expect(degradedEvents[0]).toMatchObject({
+      channelId: 'ch1',
+      key: 'active-memory:degraded-key',
+      reason: 'refresh_failed',
+      refreshStatus: 'degraded',
+      lastRefreshError: 'embedding backend unavailable',
+    });
+    expect(buildContext.mock.calls[0]?.[2]).toBe('last-good memory block');
+  });
+
+  it('emits stale when the served snapshot is still refreshing from an earlier pass and stays silent when ready', async () => {
+    const eventBus = new EventBus();
+    const degradedEvents: Array<EventMap['memory.active_context.turn_degraded']> = [];
+    eventBus.on('memory.active_context.turn_degraded', event => {
+      degradedEvents.push(event);
+    });
+    const makeSnapshot = (refreshStatus: 'refreshing' | 'ready') => ({
+      key: 'active-memory:refresh-lag-key',
+      subjectKey: 'contact:contact-1',
+      channelId: 'ch1',
+      trustLevel: 'regular',
+      channelVisibility: 'private',
+      visibilityScope: 'non_broadcast',
+      contextBlock: 'still useful memory block',
+      contextChars: 'still useful memory block'.length,
+      selectedMemoryIds: ['mem-1'],
+      generatedAt: Date.now(),
+      lastRefreshStartedAt: Date.now(),
+      refreshStatus,
+      versionPointer: 'active-memory-v1',
+    });
+    const getActiveMemoryContext = vi.fn(() => makeSnapshot('refreshing'));
+    const runtime = createRuntime({
+      eventBus,
+      sessionManager: {} as SessionManager,
+      buildContext: vi.fn(async () => ({
+        systemPrompt: 'System prompt',
+        messages: [],
+        manifest: undefined,
+      })),
+      scheduleAutoCompactionBetweenTurns: vi.fn(async () => undefined),
+      awaitPendingAutoCompaction: vi.fn(async () => undefined),
+      recordUserMessage: vi.fn(() => 1),
+      recordAssistantMessage: vi.fn(() => 2),
+      memoryProvider: {
+        getActiveMemoryContext,
+        refreshActiveMemoryContext: vi.fn(async () => null),
+      } as unknown as TurnExecutionRuntime['memoryProvider'],
+    });
+
+    await handleMessageForTurn(runtime, createMessage('msg-degraded-stale'));
+    await flushAsyncWork();
+
+    expect(degradedEvents).toHaveLength(1);
+    expect(degradedEvents[0]).toMatchObject({
+      key: 'active-memory:refresh-lag-key',
+      reason: 'stale',
+      refreshStatus: 'refreshing',
+    });
+
+    getActiveMemoryContext.mockImplementation(() => makeSnapshot('ready'));
+    await handleMessageForTurn(runtime, createMessage('msg-degraded-ready'));
+    await flushAsyncWork();
+
+    // A ready snapshot is the healthy steady state: no degradation event.
+    expect(degradedEvents).toHaveLength(1);
+  });
+
+  it('bypasses generic memory retrieval for live image turns', async () => {
+    const eventBus = new EventBus();
+    const getActiveMemoryContext = vi.fn(() => null);
+    const refreshActiveMemoryContext = vi.fn(async () => null);
+    const buildContext = vi.fn(async () => ({
+      systemPrompt: 'System prompt',
+      messages: [],
+      manifest: undefined,
+    }));
+    const runtime = createRuntime({
+      eventBus,
+      sessionManager: {} as SessionManager,
+      buildContext,
+      scheduleAutoCompactionBetweenTurns: vi.fn(async () => undefined),
+      awaitPendingAutoCompaction: vi.fn(async () => undefined),
+      recordUserMessage: vi.fn(() => 1),
+      recordAssistantMessage: vi.fn(() => 2),
+      memoryProvider: {
+        getActiveMemoryContext,
+        refreshActiveMemoryContext,
       } as unknown as TurnExecutionRuntime['memoryProvider'],
     });
 
@@ -1644,8 +3158,8 @@ describe('handleMessageForTurn pre-response concurrency', () => {
       }],
     }));
 
-    expect(retrieve).not.toHaveBeenCalled();
-    expect(retrieveProactiveRecall).not.toHaveBeenCalled();
+    expect(getActiveMemoryContext).not.toHaveBeenCalled();
+    expect(refreshActiveMemoryContext).not.toHaveBeenCalled();
     expect(buildContext.mock.calls[0]?.[2]).toBe('');
   });
 
@@ -1694,6 +3208,60 @@ describe('handleMessageForTurn pre-response concurrency', () => {
     expect((runtime.agent.prompt as ReturnType<typeof vi.fn>).mock.calls[0]?.[0]?.content).toContain(
       'Current image review: A catgirl sits on a server rack holding a pink rifle.',
     );
+    expect(recordUserMessage).toHaveBeenCalledTimes(1);
+    const persistedUserContent = recordUserMessage.mock.calls[0]?.[5] as string;
+    expect(persistedUserContent).toContain('do you see it?');
+    expect(persistedUserContent).toContain('---\nImage attachment:');
+    expect(persistedUserContent).toContain('Description: A catgirl sits on a server rack holding a pink rifle.');
+    expect(persistedUserContent).toContain('Model: vision-model');
+    expect(persistedUserContent).toContain('Image count: 1');
+    const buildTurnRecordMock = runtime.buildTurnRecord as unknown as ReturnType<typeof vi.fn>;
+    expect(buildTurnRecordMock.mock.calls[0]?.[0]?.persistedUserMessageContent).toBe(persistedUserContent);
+  });
+
+  it('persists an unavailable image-description block when dedicated image review fails', async () => {
+    const eventBus = new EventBus();
+    const buildContext = vi.fn(async () => ({
+      systemPrompt: 'System prompt',
+      messages: [],
+      manifest: undefined,
+    }));
+    const recordUserMessage = vi.fn(() => 1);
+    const analyze = vi.fn(async () => {
+      throw new Error('provider failed with signed_url_secret=abc123');
+    });
+    const runtime = createRuntime({
+      eventBus,
+      sessionManager: {} as SessionManager,
+      buildContext,
+      scheduleAutoCompactionBetweenTurns: vi.fn(async () => undefined),
+      awaitPendingAutoCompaction: vi.fn(async () => undefined),
+      recordUserMessage,
+      recordAssistantMessage: vi.fn(() => 2),
+      imageVisionReviewer: { analyze },
+    });
+
+    await handleMessageForTurn(runtime, createMessage('msg-vision-review-failure', {
+      channelType: 'discord',
+      content: 'what did i send?',
+      attachments: [{
+        url: 'https://cdn.discordapp.com/attachments/1/2/current-image.png?ex=fresh',
+        contentType: 'image/png',
+        name: 'current-image.png',
+      }],
+    }));
+
+    expect(analyze).toHaveBeenCalledTimes(3);
+    const persistedUserContent = recordUserMessage.mock.calls[0]?.[5] as string;
+    expect(persistedUserContent).toContain('what did i send?');
+    expect(persistedUserContent).toContain('---\nImage attachment:');
+    expect(persistedUserContent).toContain(
+      'Description unavailable: vision pipeline failed before image contents could be inspected.',
+    );
+    expect(persistedUserContent).toContain('Image count: 1');
+    expect(persistedUserContent).not.toContain('signed_url_secret');
+    const buildTurnRecordMock = runtime.buildTurnRecord as unknown as ReturnType<typeof vi.fn>;
+    expect(buildTurnRecordMock.mock.calls[0]?.[0]?.persistedUserMessageContent).toBe(persistedUserContent);
   });
 
   it('exposes current-turn image attachment context to tools during prompt execution', async () => {
@@ -1769,6 +3337,7 @@ describe('handleMessageForTurn pre-response concurrency', () => {
       expect((runtime.agent.state.tools as Array<{ name?: string }>).some(tool => tool.name === 'selfie_create'))
         .toBe(true);
       return {
+        ...BASE_TURN_PROMPT_VARIABLES,
         runtime_self_image_tool_active: 'true',
       };
     });
@@ -1993,7 +3562,7 @@ describe('handleMessageForTurn pre-response concurrency', () => {
       }));
 
       await flushAsyncWork();
-      await vi.advanceTimersByTimeAsync(30_000);
+      await vi.advanceTimersByTimeAsync(120_000);
 
       await expect(turnResultPromise).resolves.toMatchObject({
         content: expect.stringContaining('image reader failed'),

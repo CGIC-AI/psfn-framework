@@ -9,7 +9,7 @@ type AdminAdaptiveToolTelemetryEvent = AdminAdaptiveToolsData['recentTelemetry']
 
 export const SERVICE_LABELS: Record<RuntimeServiceHealth['serviceId'], string> = {
   gateway: 'Gateway RPC',
-  vault: 'Vault',
+  vault: 'External Vault',
   ntfy: 'ntfy',
 };
 

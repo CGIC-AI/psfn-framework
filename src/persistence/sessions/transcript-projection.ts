@@ -1,12 +1,15 @@
 import type Database from 'better-sqlite3';
-import { classifyChannel } from '../../system/trust/policy.js';
-import type { ChannelVisibility } from '../../system/trust/types.js';
+import { classifyChannelDisclosure } from '../../system/trust/policy.js';
+import type { ChannelPrivacy } from '../../system/trust/context-envelope.js';
+import { decodeStoredChannelVisibility } from '../../system/trust/types.js';
 import { initDatabase } from '../sqlite-utils.js';
 import type { SessionEntry } from '../../core/session/types.js';
+import { isCogSecTombstoneSessionEntry } from '../../core/cogsec/tombstones.js';
 import type {
   KeywordSearchableTranscriptProjection,
   SessionSearchHit,
   TranscriptProjectionDrift,
+  TranscriptSearchOptions,
 } from './transcript-projection-port.js';
 
 const DEFAULT_SEARCH_LIMIT = 10;
@@ -45,16 +48,10 @@ function normalizeSearchLimit(limit: number): number {
 function normalizeChannelVisibility(
   value: string | undefined,
   channelId: string,
-): ChannelVisibility {
-  switch (value) {
-    case 'private':
-    case 'semi_private':
-    case 'public':
-    case 'broadcast':
-      return value;
-    default:
-      return classifyChannel(channelId);
-  }
+): ChannelPrivacy {
+  // Stored rows may predate the E3.1 vocabulary rename; the shared decoder
+  // maps legacy 'semi_private' to 'invite_only'.
+  return decodeStoredChannelVisibility(value) ?? classifyChannelDisclosure(channelId).channelPrivacy;
 }
 
 function normalizeTimestamp(value: number): number {
@@ -79,7 +76,9 @@ export class SqliteTranscriptProjection implements KeywordSearchableTranscriptPr
   private db: Database.Database;
   private readonly upsertStmt: Database.Statement;
   private readonly deleteChannelStmt: Database.Statement;
+  private readonly deleteEntryStmt: Database.Statement;
   private readonly searchStmt: Database.Statement;
+  private readonly searchInChannelStmt: Database.Statement;
   private readonly countChannelStmt: Database.Statement;
   private readonly markDriftStmt: Database.Statement;
   private readonly clearDriftStmt: Database.Statement;
@@ -112,6 +111,10 @@ export class SqliteTranscriptProjection implements KeywordSearchableTranscriptPr
       DELETE FROM session_messages_index
       WHERE channel_id = ?
     `);
+    this.deleteEntryStmt = this.db.prepare(`
+      DELETE FROM session_messages_index
+      WHERE channel_id = ? AND message_id = ?
+    `);
     this.searchStmt = this.db.prepare(`
       SELECT
         m.channel_id,
@@ -127,6 +130,24 @@ export class SqliteTranscriptProjection implements KeywordSearchableTranscriptPr
       FROM session_fts
       JOIN session_messages_index m ON m.rowid = session_fts.rowid
       WHERE session_fts MATCH ?
+      ORDER BY score ASC, m.timestamp DESC
+      LIMIT ?
+    `);
+    this.searchInChannelStmt = this.db.prepare(`
+      SELECT
+        m.channel_id,
+        m.message_id,
+        m.role,
+        m.author_id,
+        m.author_name,
+        m.content,
+        m.timestamp,
+        m.channel_visibility,
+        bm25(session_fts) AS score,
+        snippet(session_fts, 0, '[', ']', ' ... ', 18) AS snippet
+      FROM session_fts
+      JOIN session_messages_index m ON m.rowid = session_fts.rowid
+      WHERE session_fts MATCH ? AND m.channel_id = ?
       ORDER BY score ASC, m.timestamp DESC
       LIMIT ?
     `);
@@ -200,6 +221,12 @@ export class SqliteTranscriptProjection implements KeywordSearchableTranscriptPr
 
   upsertSessionEntry(entry: SessionEntry, options: { channelId?: string } = {}): void {
     const channelId = options.channelId ?? entry.channelId;
+    if (isCogSecTombstoneSessionEntry(entry)) {
+      this.deleteEntryStmt.run(channelId, entry.id);
+      this.clearProjectionDrift(channelId);
+      return;
+    }
+
     const visibility = normalizeChannelVisibility(entry.channelVisibility, entry.channelId);
     this.upsertStmt.run(
       channelId,
@@ -248,21 +275,31 @@ export class SqliteTranscriptProjection implements KeywordSearchableTranscriptPr
     }));
   }
 
-  async searchByKeywords(query: string, limit = DEFAULT_SEARCH_LIMIT): Promise<SessionSearchHit[]> {
+  async searchByKeywords(
+    query: string,
+    limit = DEFAULT_SEARCH_LIMIT,
+    options: TranscriptSearchOptions = {},
+  ): Promise<SessionSearchHit[]> {
     const normalizedQuery = query.trim();
     if (!normalizedQuery) return [];
 
     const ftsQuery = buildSafeMatchQuery(normalizedQuery);
     if (!ftsQuery) return [];
     const boundedLimit = normalizeSearchLimit(limit);
+    const scopedChannelId = options.channelId?.trim() || undefined;
+    const runSearch = (matchQuery: string): IndexedSearchRow[] => (
+      scopedChannelId === undefined
+        ? this.searchStmt.all(matchQuery, boundedLimit) as IndexedSearchRow[]
+        : this.searchInChannelStmt.all(matchQuery, scopedChannelId, boundedLimit) as IndexedSearchRow[]
+    );
 
     let rows: IndexedSearchRow[] = [];
     try {
-      rows = this.searchStmt.all(ftsQuery, boundedLimit) as IndexedSearchRow[];
+      rows = runSearch(ftsQuery);
     } catch {
       const fallback = `"${escapeMatchToken(normalizedQuery)}"`;
       try {
-        rows = this.searchStmt.all(fallback, boundedLimit) as IndexedSearchRow[];
+        rows = runSearch(fallback);
       } catch {
         return [];
       }

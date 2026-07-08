@@ -25,6 +25,13 @@ describe('resolveBackupRuntimeConfig', () => {
       maxMonthlyBackups: DEFAULT_BACKUP_MONTHLY_COUNT,
       mirrorDir: '',
       verifyRestore: DEFAULT_BACKUP_VERIFY_RESTORE,
+      encryption: {
+        mode: 'required',
+        keyRef: {
+          kind: 'env',
+          envName: 'PSFN_BACKUP_TEST_KEY',
+        },
+      },
     }), 'utf8');
     try {
       test(dataDir);
@@ -40,11 +47,28 @@ describe('resolveBackupRuntimeConfig', () => {
     })).toThrow('Missing required JSON owner file');
   });
 
+  it('fails closed when backup.json is malformed', () => {
+    const root = mkdtempSync(join(tmpdir(), 'psfn-backup-config-invalid-'));
+    const dataDir = join(root, 'system-data');
+    mkdirSync(dataDir, { recursive: true });
+    writeFileSync(join(dataDir, 'backup.json'), '{"broken":', 'utf8');
+    try {
+      expect(() => resolveBackupRuntimeConfig({
+        dataDir,
+        env: {},
+      })).toThrow('Invalid JSON owner file');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it('uses owner-file values when env values are absent', () => {
     withBackupOwnerFile((dataDir) => {
       const config = resolveBackupRuntimeConfig({
         dataDir,
-        env: {},
+        env: {
+          PSFN_BACKUP_TEST_KEY: 'backup-secret',
+        },
       });
 
       expect(config.intervalMs).toBe(DEFAULT_BACKUP_INTERVAL_HOURS * 60 * 60 * 1000);
@@ -53,6 +77,17 @@ describe('resolveBackupRuntimeConfig', () => {
       expect(config.maxMonthlyBackups).toBe(DEFAULT_BACKUP_MONTHLY_COUNT);
       expect(config.rootDir).toBe(`${dataDir}/backups`);
       expect(config.verifyRestore).toBe(DEFAULT_BACKUP_VERIFY_RESTORE);
+      expect(config.encryption.keyRef.envName).toBe('PSFN_BACKUP_TEST_KEY');
+      expect(config.encryption.passphrase).toBe('backup-secret');
+    });
+  });
+
+  it('fails closed when the configured backup encryption key is missing', () => {
+    withBackupOwnerFile((dataDir) => {
+      expect(() => resolveBackupRuntimeConfig({
+        dataDir,
+        env: {},
+      })).toThrow('Backup encryption key env PSFN_BACKUP_TEST_KEY is required');
     });
   });
 
@@ -65,6 +100,7 @@ describe('resolveBackupRuntimeConfig', () => {
           BACKUP_RETENTION_COUNT: '0',
           BACKUP_ROOT_DIR: '/tmp/custom-backups',
           BACKUP_VERIFY_RESTORE: 'false',
+          PSFN_BACKUP_TEST_KEY: 'backup-secret',
         },
       });
 
@@ -80,7 +116,9 @@ describe('resolveBackupRuntimeConfig', () => {
       const config = resolveBackupRuntimeConfig({
         dataDir,
         defaultRootDir: '/srv/psfn/runtime/production/backups',
-        env: {},
+        env: {
+          PSFN_BACKUP_TEST_KEY: 'backup-secret',
+        },
       });
 
       expect(config.rootDir).toBe('/srv/psfn/runtime/production/backups');

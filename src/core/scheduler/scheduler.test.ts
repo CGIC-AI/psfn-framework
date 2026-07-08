@@ -254,6 +254,62 @@ describe('Scheduler', () => {
         nowSpy.mockRestore();
       }
     });
+
+    it('fires weekly cadence at the next wall-clock slot after restart', async () => {
+      const fn = vi.fn();
+      const nowSpy = vi.spyOn(Date, 'now');
+      const saturdayRestartAt = new Date('2026-03-07T12:00:00.000Z').getTime();
+      const sundaySlotAt = new Date('2026-03-08T07:00:00.000Z').getTime();
+
+      try {
+        nowSpy.mockReturnValue(new Date('2026-03-02T12:00:00.000Z').getTime());
+        scheduler.register(
+          {
+            id: 'weekly-review',
+            name: 'Weekly Review',
+            type: 'every',
+            intervalMs: 7 * 24 * 60 * 60_000,
+            cadence: { kind: 'weekly', dayOfWeek: 0, hour: 7, minute: 0, timezone: 'utc' },
+            handler: fn,
+            state: 'idle',
+          },
+          { skipFirstRun: true },
+        );
+        await scheduler.tick();
+        expect(fn).not.toHaveBeenCalled();
+
+        const restartedScheduler = new Scheduler(eventBus, {
+          tickIntervalMs: 100,
+          heartbeatIntervalMs: 500,
+        });
+        nowSpy.mockReturnValue(saturdayRestartAt);
+        restartedScheduler.register(
+          {
+            id: 'weekly-review',
+            name: 'Weekly Review',
+            type: 'every',
+            intervalMs: 7 * 24 * 60 * 60_000,
+            cadence: { kind: 'weekly', dayOfWeek: 0, hour: 7, minute: 0, timezone: 'utc' },
+            handler: fn,
+            state: 'idle',
+          },
+          { skipFirstRun: true },
+        );
+        await restartedScheduler.tick();
+        expect(fn).not.toHaveBeenCalled();
+
+        nowSpy.mockReturnValue(new Date('2026-03-08T06:59:59.000Z').getTime());
+        await restartedScheduler.tick();
+        expect(fn).not.toHaveBeenCalled();
+
+        expect(sundaySlotAt - saturdayRestartAt).toBeLessThan(7 * 24 * 60 * 60_000);
+        nowSpy.mockReturnValue(sundaySlotAt);
+        await restartedScheduler.tick();
+        expect(fn).toHaveBeenCalledOnce();
+      } finally {
+        nowSpy.mockRestore();
+      }
+    });
   });
 
   describe('tick — one-shot tasks', () => {
@@ -387,6 +443,104 @@ describe('Scheduler', () => {
         reasonCode: 'missing_capability_tokens',
         missingTokens: ['memory.write'],
       }]);
+    });
+
+    it('exposes runtime outcome metadata for successful task runs', async () => {
+      const nowSpy = vi.spyOn(Date, 'now');
+      try {
+        nowSpy.mockReturnValue(1_700_000_000_000);
+        scheduler.register({
+          id: 'metadata-success',
+          name: 'Metadata Success',
+          type: 'every',
+          intervalMs: 1,
+          handler: () => {},
+          state: 'idle',
+        });
+
+        await scheduler.tick();
+
+        expect(scheduler.getTask('metadata-success')).toMatchObject({
+          lastRunAt: 1_700_000_000_000,
+          lastFinishedAt: 1_700_000_000_000,
+          lastOutcome: 'succeeded',
+        });
+        expect(scheduler.getTask('metadata-success')?.lastError).toBeUndefined();
+        expect(scheduler.getTask('metadata-success')?.lastDeniedReason).toBeUndefined();
+      } finally {
+        nowSpy.mockRestore();
+      }
+    });
+
+    it('exposes runtime outcome metadata for failed task runs', async () => {
+      const nowSpy = vi.spyOn(Date, 'now');
+      try {
+        nowSpy.mockReturnValue(1_700_000_010_000);
+        scheduler.register({
+          id: 'metadata-failure',
+          name: 'Metadata Failure',
+          type: 'every',
+          intervalMs: 1,
+          handler: () => {
+            throw new Error('scheduler test failure');
+          },
+          state: 'idle',
+        });
+
+        await scheduler.tick();
+
+        expect(scheduler.getTask('metadata-failure')).toMatchObject({
+          state: 'idle',
+          lastRunAt: 1_700_000_010_000,
+          lastFinishedAt: 1_700_000_010_000,
+          lastOutcome: 'failed',
+          lastError: 'Error: scheduler test failure',
+          lastErrorAt: 1_700_000_010_000,
+        });
+        expect(scheduler.getTask('metadata-failure')?.lastDeniedReason).toBeUndefined();
+      } finally {
+        nowSpy.mockRestore();
+      }
+    });
+
+    it('exposes runtime outcome metadata for eligibility-denied task runs', async () => {
+      const nowSpy = vi.spyOn(Date, 'now');
+      try {
+        nowSpy.mockReturnValue(1_700_000_020_000);
+        const gate = createEligibilityGate(() => ({
+          getTier: () => 'custom',
+          getGrantedTokens: () => new Set(),
+          has: () => false,
+        }));
+        const gatedScheduler = new Scheduler(
+          eventBus,
+          { tickIntervalMs: 100, heartbeatIntervalMs: 500 },
+          { eligibilityGate: gate },
+        );
+
+        gatedScheduler.register({
+          id: 'metadata-denied',
+          name: 'Metadata Denied',
+          type: 'every',
+          intervalMs: 1,
+          handler: vi.fn(),
+          eligibility: { requiredTokens: ['memory.write'] },
+          state: 'idle',
+        });
+
+        await gatedScheduler.tick();
+
+        expect(gatedScheduler.getTask('metadata-denied')).toMatchObject({
+          state: 'idle',
+          lastRunAt: 1_700_000_020_000,
+          lastFinishedAt: 1_700_000_020_000,
+          lastOutcome: 'denied',
+          lastDeniedReason: 'missing_capability_tokens',
+        });
+        expect(gatedScheduler.getTask('metadata-denied')?.lastError).toBeUndefined();
+      } finally {
+        nowSpy.mockRestore();
+      }
     });
   });
 

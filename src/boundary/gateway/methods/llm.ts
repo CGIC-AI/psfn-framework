@@ -15,6 +15,13 @@ import {
   inferCallType as inferCorrelationCallType,
   resolveCorrelationMetadata,
 } from '../../../primitives/llm/correlation.js';
+import { createComponentLogger } from '../../../shared/logger.js';
+import {
+  applyGatewayCapturedProviderCost,
+  withGatewayLLMCostCapture,
+} from '../llm-cost-capture.js';
+
+const log = createComponentLogger('GatewayLLMMethods');
 
 const llmDescriptors: Array<AuditedMethodDescriptor<any, unknown>> = [
   {
@@ -36,20 +43,24 @@ const llmDescriptors: Array<AuditedMethodDescriptor<any, unknown>> = [
         toolCallId: params.toolCallId,
         purpose,
       });
-      const response = await runtime.llmProvider.stream(
-        {
-          systemPrompt: params.systemPrompt,
-          messages: params.messages,
-          ...(params.tools?.length ? { tools: params.tools } : {}),
-          ...(modelHint ? { modelHint } : {}),
-          correlation,
-        },
-        params.stream ? {
-          onText: (text) => {
-            runtime.notifyAll('llm.chunk', { requestId, text } satisfies LLMChunkNotification);
+      const captured = await withGatewayLLMCostCapture(
+        async () => await runtime.llmProvider.stream(
+          {
+            systemPrompt: params.systemPrompt,
+            messages: params.messages,
+            ...(params.tools?.length ? { tools: params.tools } : {}),
+            ...(params.promptCacheBoundaries ? { promptCacheBoundaries: params.promptCacheBoundaries } : {}),
+            ...(modelHint ? { modelHint } : {}),
+            correlation,
           },
-        } : undefined,
+          params.stream ? {
+            onText: (text) => {
+              runtime.notifyAll('llm.chunk', { requestId, text } satisfies LLMChunkNotification);
+            },
+          } : undefined,
+        ),
       );
+      const response = applyGatewayCapturedProviderCost(captured.result, captured.captures);
       return {
         content: response.content,
         ...(response.reasoning ? { reasoning: response.reasoning } : {}),
@@ -58,6 +69,7 @@ const llmDescriptors: Array<AuditedMethodDescriptor<any, unknown>> = [
         model: response.model,
         inputTokens: response.inputTokens,
         outputTokens: response.outputTokens,
+        ...(response.usageDetails ? { usageDetails: response.usageDetails } : {}),
         stopReason: response.stopReason,
         requestId,
       };
@@ -98,15 +110,19 @@ const llmDescriptors: Array<AuditedMethodDescriptor<any, unknown>> = [
         toolCallId: params.toolCallId,
         purpose: params.purpose,
       });
-      const response = await runtime.llmProvider.complete(
-        {
-          systemPrompt: params.systemPrompt,
-          messages: params.messages,
-          ...(modelHint ? { modelHint } : {}),
-          correlation,
-        },
-        params.purpose,
+      const captured = await withGatewayLLMCostCapture(
+        async () => await runtime.llmProvider.complete(
+          {
+            systemPrompt: params.systemPrompt,
+            messages: params.messages,
+            ...(params.promptCacheBoundaries ? { promptCacheBoundaries: params.promptCacheBoundaries } : {}),
+            ...(modelHint ? { modelHint } : {}),
+            correlation,
+          },
+          params.purpose,
+        ),
       );
+      const response = applyGatewayCapturedProviderCost(captured.result, captured.captures);
       return {
         content: response.content,
         ...(response.reasoning ? { reasoning: response.reasoning } : {}),
@@ -114,6 +130,7 @@ const llmDescriptors: Array<AuditedMethodDescriptor<any, unknown>> = [
         model: response.model,
         inputTokens: response.inputTokens,
         outputTokens: response.outputTokens,
+        ...(response.usageDetails ? { usageDetails: response.usageDetails } : {}),
         stopReason: response.stopReason,
       };
     },
@@ -141,8 +158,15 @@ const llmDescriptors: Array<AuditedMethodDescriptor<any, unknown>> = [
   {
     name: 'llm.embed',
     handler: async (params: LLMEmbedParams, runtime) => {
-      const embeddings = await runtime.embeddingService.embedBatch(params.texts);
-      return { embeddings: embeddings.map(e => Array.from(e)) };
+      const startedAtMs = Date.now();
+      try {
+        const embeddings = await runtime.embeddingService.embedBatch(params.texts);
+        recordEmbeddingUsage(runtime, params, startedAtMs, 'success');
+        return { embeddings: embeddings.map(e => Array.from(e)) };
+      } catch (error) {
+        recordEmbeddingUsage(runtime, params, startedAtMs, 'failure', error);
+        throw error;
+      }
     },
     summary: (p: LLMEmbedParams) => ({ textCount: p.texts.length }),
   },
@@ -214,6 +238,65 @@ function inferCallType(
   channelId: string | undefined,
 ): ObservabilityCallType {
   return inferCorrelationCallType(purpose, channelId);
+}
+
+function recordEmbeddingUsage(
+  runtime: GatewayMethodRuntime,
+  params: LLMEmbedParams,
+  startedAtMs: number,
+  status: 'success' | 'failure',
+  error?: unknown,
+): void {
+  const completedAtMs = Date.now();
+  const embeddingMetadata = runtime.embeddingService as unknown as { kind?: unknown; model?: unknown };
+  const provider = typeof embeddingMetadata.kind === 'string'
+    ? embeddingMetadata.kind
+    : 'embedding';
+  const model = typeof embeddingMetadata.model === 'string'
+    ? embeddingMetadata.model
+    : `dims:${runtime.embeddingService.dims}`;
+  const logicalCallId = [
+    'embedding',
+    process.pid,
+    completedAtMs,
+    Math.random().toString(16).slice(2, 10),
+  ].join(':');
+  void runtime.modelUsageRecorder?.recordUsageEvent({
+    logicalCallId,
+    recordedAtMs: completedAtMs,
+    startedAtMs,
+    completedAtMs,
+    durationMs: Math.max(0, completedAtMs - startedAtMs),
+    status,
+    callKind: 'embedding',
+    callType: 'memory',
+    purpose: 'embedding',
+    originType: 'memory',
+    originStage: 'embedding',
+    service: 'memory',
+    process: 'embedding',
+    provider,
+    model,
+    totalTokens: 0,
+    costSource: 'none',
+    ...(error
+      ? {
+          errorCode: error instanceof Error ? error.name : 'EmbeddingError',
+          errorMessage: error instanceof Error ? error.message : String(error),
+        }
+      : {}),
+    metadata: {
+      textCount: params.texts.length,
+      totalInputChars: params.texts.reduce((total, text) => total + text.length, 0),
+      dims: runtime.embeddingService.dims,
+    },
+  }).catch((recordError) => {
+    log.warn('Failed to persist embedding usage event', {
+      error: recordError instanceof Error ? recordError.message : String(recordError),
+      provider,
+      model,
+    });
+  });
 }
 
 function toSummaryCorrelation(

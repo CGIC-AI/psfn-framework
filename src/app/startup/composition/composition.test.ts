@@ -59,11 +59,14 @@ function mockResponse(content: string, inputTokens = 10, outputTokens = 20): LLM
   };
 }
 
-function makeInstallScript(source: string): string {
+function makeModuleMutationHelperProbeScript(): string {
   return [
     '```repl',
-    `const result = await module_install("planner", ${JSON.stringify(source)}, true);`,
-    'FINAL(JSON.stringify(result));',
+    'FINAL(JSON.stringify({',
+    '  moduleInstall: typeof module_install,',
+    '  moduleEnable: typeof module_enable,',
+    '  moduleDisable: typeof module_disable,',
+    '}));',
     '```',
   ].join('\n');
 }
@@ -150,23 +153,6 @@ function extractText(result: unknown): string {
   return first?.text ?? '';
 }
 
-function moduleWithActivation(toolName: string): string {
-  return [
-    'export default {',
-    '  name: "planner",',
-    '  activate(ctx) {',
-    '    ctx.registerTool({',
-    `      name: "${toolName}",`,
-    '      label: "planner_probe",',
-    '      description: "module probe",',
-    '      parameters: { type: "object", properties: {}, additionalProperties: false },',
-    '      execute: async () => ({ content: [{ type: "text", text: "ok" }], details: {} }),',
-    '    });',
-    '  },',
-    '};',
-  ].join('\n');
-}
-
 function moduleWithMismatchedGatewayMetadata(toolName: string): string {
   return [
     'export default {',
@@ -228,7 +214,7 @@ function makeExecutionPort(
 }
 
 describe('wireShardAndThinkRuntime split-mode module wiring', () => {
-  it('registers subagent as the canonical core surface and keeps spawn_subagent as extended compatibility', () => {
+  it('registers subagent as the only canonical bounded-worker surface', () => {
     const llm: GatewayLLMProvider = {
       stream: vi.fn(),
       complete: vi.fn(async () => mockResponse('FINAL("noop")')),
@@ -242,16 +228,16 @@ describe('wireShardAndThinkRuntime split-mode module wiring', () => {
     });
 
     expect(target.registrations.find((entry) => entry.tool.name === 'subagent')?.category).toBe('core');
-    expect(target.registrations.find((entry) => entry.tool.name === 'spawn_subagent')?.category).toBe('extended');
+    expect(target.registrations.some((entry) => entry.tool.name === 'spawn_subagent')).toBe(false);
   });
 
-  it('denies module_install for nursery tier', async () => {
+  it('does not expose module mutation helpers for nursery tier', async () => {
     const root = mkdtempSync(join(tmpdir(), 'psfn-split-nursery-'));
     const registryPath = join(root, 'registry.json');
     writeFileSync(registryPath, '[]', 'utf-8');
 
     try {
-      const llm = makeGatewayLLM([makeInstallScript('export default {};')], registryPath);
+      const llm = makeGatewayLLM([makeModuleMutationHelperProbeScript()], registryPath);
       const onMutation = vi.fn();
       const target = wireSplitThinkTool({
         tier: 'nursery',
@@ -264,14 +250,16 @@ describe('wireShardAndThinkRuntime split-mode module wiring', () => {
       const result = await analysisWorkbench.execute('call-1', { task: 'install module' });
       const text = extractText(result);
 
-      expect(text).toContain('module_install is disabled for nursery tier');
+      expect(text).toContain('"moduleInstall":"undefined"');
+      expect(text).toContain('"moduleEnable":"undefined"');
+      expect(text).toContain('"moduleDisable":"undefined"');
       expect(onMutation).not.toHaveBeenCalled();
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
   });
 
-  it('queues apprentice installs for approval and surfaces activation failure on approval', async () => {
+  it('does not expose module mutation helpers for apprentice tier', async () => {
     const root = mkdtempSync(join(tmpdir(), 'psfn-split-apprentice-'));
     const registryPath = join(root, 'registry.json');
     writeFileSync(registryPath, '[]', 'utf-8');
@@ -279,16 +267,9 @@ describe('wireShardAndThinkRuntime split-mode module wiring', () => {
     try {
       const eventBus = new EventBus();
       const queue = new ConfirmationQueue({ idFactory: () => 'confirm-1' });
-      const llm = makeGatewayLLM([makeInstallScript(moduleWithActivation('planner_probe_queue'))], registryPath);
+      const llm = makeGatewayLLM([makeModuleMutationHelperProbeScript()], registryPath);
       const target = new FakeSubstrateAgent();
-      const moduleLoader = new ModuleLoader({
-        eventBus,
-        registerTool: (tool, category) => target.registerTool(tool, category),
-        registryPath,
-      });
-      const onMutation = vi.fn(async (mutation) => {
-        await moduleLoader.applyRegistryMutation(mutation);
-      });
+      const onMutation = vi.fn();
 
       const shardPort = wireShardAndThinkRuntime({
         agentLoop: target as any,
@@ -313,43 +294,26 @@ describe('wireShardAndThinkRuntime split-mode module wiring', () => {
       const result = await analysisWorkbench.execute('call-2', { task: 'install module' });
       const text = extractText(result);
 
-      expect(text).toContain('"queued":true');
+      expect(text).toContain('"moduleInstall":"undefined"');
+      expect(text).toContain('"moduleEnable":"undefined"');
+      expect(text).toContain('"moduleDisable":"undefined"');
       expect(onMutation).not.toHaveBeenCalled();
-
-      const pending = queue.listPending();
-      expect(pending).toHaveLength(1);
-
-      const resolution = await queue.resolve({
-        id: pending[0].id,
-        decision: 'approve',
-      });
-      expect(resolution.status).toBe('failed');
-      expect(resolution.executed).toBe(false);
-      expect(resolution.message).toContain('registry-backed module source execution is disabled');
-      expect(onMutation).toHaveBeenCalledTimes(1);
-      expect(target.tools.map((tool) => tool.name)).not.toContain('planner_probe_queue');
+      expect(queue.listPending()).toHaveLength(0);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
   });
 
-  it('surfaces autonomous install activation failure and leaves the module inactive', async () => {
+  it('does not expose module mutation helpers for autonomous tier', async () => {
     const root = mkdtempSync(join(tmpdir(), 'psfn-split-autonomous-'));
     const registryPath = join(root, 'registry.json');
     writeFileSync(registryPath, '[]', 'utf-8');
 
     try {
       const eventBus = new EventBus();
-      const llm = makeGatewayLLM([makeInstallScript(moduleWithActivation('planner_probe_auto'))], registryPath);
+      const llm = makeGatewayLLM([makeModuleMutationHelperProbeScript()], registryPath);
       const target = new FakeSubstrateAgent();
-      const moduleLoader = new ModuleLoader({
-        eventBus,
-        registerTool: (tool, category) => target.registerTool(tool, category),
-        registryPath,
-      });
-      const onMutation = vi.fn(async (mutation) => {
-        await moduleLoader.applyRegistryMutation(mutation);
-      });
+      const onMutation = vi.fn();
 
       wireShardAndThinkRuntime({
         agentLoop: target as any,
@@ -371,11 +335,10 @@ describe('wireShardAndThinkRuntime split-mode module wiring', () => {
       const result = await analysisWorkbench.execute('call-3', { task: 'install module' });
       const text = extractText(result);
 
-      expect(text).toContain('"ok":false');
-      expect(text).toContain('registry-backed module source execution is disabled');
-      expect(text).not.toContain('"queued":true');
-      expect(onMutation).toHaveBeenCalledTimes(1);
-      expect(target.tools.map((tool) => tool.name)).not.toContain('planner_probe_auto');
+      expect(text).toContain('"moduleInstall":"undefined"');
+      expect(text).toContain('"moduleEnable":"undefined"');
+      expect(text).toContain('"moduleDisable":"undefined"');
+      expect(onMutation).not.toHaveBeenCalled();
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

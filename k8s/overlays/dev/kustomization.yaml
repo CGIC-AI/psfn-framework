@@ -1,0 +1,38 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: psfn-dev
+
+namePrefix: dev-
+
+resources:
+  - ../../base
+
+patches:
+  - target:
+      kind: Deployment
+      name: psfn
+    patch: |
+      - op: replace
+        path: /spec/template/spec/containers/1/resources/requests/memory
+        value: 512Mi
+      - op: replace
+        path: /spec/template/spec/containers/1/resources/limits/memory
+        value: 2Gi
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/requests/memory
+        value: 256Mi
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/limits/memory
+        value: 1Gi
+
+  - target:
+      kind: ConfigMap
+      name: psfn-config
+    patch: |
+      - op: replace
+        path: /data/ALLOW_INSECURE_LOCAL_API
+        value: "true"
+      - op: replace
+        path: /data/LOG_LEVEL
+        value: "debug"

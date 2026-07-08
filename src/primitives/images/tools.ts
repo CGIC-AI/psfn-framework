@@ -2,18 +2,22 @@ import { Type } from '@sinclair/typebox';
 import type { AgentTool, AgentToolResult } from '@mariozechner/pi-agent-core';
 import type { TextContent } from '@mariozechner/pi-ai';
 import type { ImageOperations } from './ops.js';
-import { isFalContentPolicyError } from './fal.js';
+import { isFalContentPolicyError, isTransientFalError } from './fal.js';
 import type {
   ImageReferenceSelector,
   ResolvedImageReference,
 } from './reference-store.js';
 import { getVisionToolRequestContext } from './request-context.js';
 import { textResultWithError } from '../../core/tools/results.js';
-import { chargeSurface } from '../../shared/telemetry/run-charge.js';
+import {
+  assertChargeSurfaceAvailable,
+  chargeSurface,
+} from '../../shared/telemetry/run-charge.js';
+import { notePendingPaidDeliverable } from '../../shared/paid-deliverable-tracking.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
-import { withCapabilityRequirement } from '../../system/capabilities/requirements.js';
 import { tagToolWithReversibility } from '../../system/capabilities/safeguards.js';
 import {
+  DEFAULT_SELFIE_EDIT_MODEL_CHAIN,
   FAL_CREATE_MODELS,
   FAL_EDIT_MODELS,
   IMAGE_ASPECT_RATIO_VALUES,
@@ -32,6 +36,34 @@ const IMAGE_ASPECT_RATIO_DESCRIPTION = [
   'Use only one of the supported presets.',
 ].join(' ');
 const MEDIA_ACTION_VALUES = ['generate', 'edit', 'analyze'] as const;
+
+// Reference-selfie edit tiers come from the image model catalog. Every tier is
+// an edit endpoint so the saved reference photo always anchors the result.
+const SELFIE_EDIT_MODEL_CHAIN = DEFAULT_SELFIE_EDIT_MODEL_CHAIN;
+
+const SELFIE_EDIT_MODEL_DESCRIPTION = [
+  'Optional reference-edit model override for selfie_create.',
+  'Usually omit this; the tool chooses a reference-preserving edit path and keeps the saved reference image anchored.',
+].join(' ');
+
+function resolveSelfieEditModelChain(
+  startModel: typeof FAL_EDIT_MODELS[number] | undefined,
+): readonly typeof FAL_EDIT_MODELS[number][] {
+  if (!startModel) {
+    return SELFIE_EDIT_MODEL_CHAIN;
+  }
+  const startIndex = (SELFIE_EDIT_MODEL_CHAIN as readonly string[]).indexOf(startModel);
+  if (startIndex >= 0) {
+    return SELFIE_EDIT_MODEL_CHAIN.slice(startIndex);
+  }
+  // Off-chain start (e.g. grok speed mode or gpt-image-1.5): try it, then fall
+  // through later configured tiers rather than jumping back to the first tier.
+  return [startModel, ...SELFIE_EDIT_MODEL_CHAIN.slice(1).filter((model) => model !== startModel)];
+}
+
+function shouldFallThroughSelfieEditChain(error: unknown): boolean {
+  return isProviderContentPolicyError(error) || isTransientFalError(error);
+}
 
 type MediaAction = typeof MEDIA_ACTION_VALUES[number];
 
@@ -69,10 +101,41 @@ export interface ImageReferenceResolver {
   resolveForTool(selector: ImageReferenceSelector): Promise<ResolvedImageReference | null>;
 }
 
+function resolveGenerationId(result: ImageGenerationResult): string | undefined {
+  const fromRequest = result.requestId?.trim();
+  if (fromRequest) {
+    return fromRequest;
+  }
+  const fromFileName = result.images.find((image) => image.fileName?.trim())?.fileName?.trim();
+  return fromFileName || undefined;
+}
+
 function formatResult(result: ImageGenerationResult): string {
+  const imageCount = result.images.length;
+  const generationId = resolveGenerationId(result);
   return JSON.stringify({
-    ...result,
-    images: result.images.map(({ localPath: _localPath, ...image }) => image),
+    status: 'image_generated',
+    provider: result.provider,
+    mode: result.mode,
+    ...(result.model ? { model: result.model } : {}),
+    imageCount,
+    fallbackUsed: result.fallbackUsed,
+    ...(result.fallbackReason ? { fallbackReason: result.fallbackReason } : {}),
+    ...(generationId ? { generationId } : {}),
+    attachmentPending: true,
+    delivery: imageCount === 1
+      ? 'This image is a pending chat attachment. It will be delivered to the user ONLY when you send your next reply this turn. '
+        + 'Send a reply (even one short line) so it reaches them; if you end the turn with no reply, this paid image will NOT be delivered. '
+        + 'Reference it by its fileName below.'
+      : 'These images are pending chat attachments. They will be delivered to the user ONLY when you send your next reply this turn. '
+        + 'Send a reply (even one short line) so they reach them; if you end the turn with no reply, these paid images will NOT be delivered. '
+        + 'Reference them by the fileNames below.',
+    images: result.images.map((image, index) => ({
+      index: index + 1,
+      ...(image.contentType ? { contentType: image.contentType } : {}),
+      ...(image.fileName ? { fileName: image.fileName } : {}),
+      hasLocalFile: Boolean(image.localPath?.trim()),
+    })),
   }, null, 2);
 }
 
@@ -157,7 +220,7 @@ function resolveMismatchedCurrentTurnUrlNotice(imageUrls: readonly string[]): st
 
     return [
       'Current turn already includes live image attachment bytes.',
-      'The URL passed to image_analyze does not match a current-turn attachment and may be stale or refer to a different image.',
+      'The URL passed to media action="analyze" does not match a current-turn attachment and may be stale or refer to a different image.',
       'Do not use a mismatched prior-turn URL for this turn.',
       'Inspect the current attached image already in context, or ask the user to resend or paste the specific URL if they want a different image checked.',
     ].join(' ');
@@ -190,16 +253,16 @@ function resolveCurrentTurnVisionReviewFallback(
 
 function buildImageCreateDescription(selfImage: boolean): string {
   if (selfImage) {
-    return 'Generate a dedicated selfie or self-portrait of the companion. Use this explicit path when the request is specifically about her own representation; the runtime Appearance context is loaded for this tool only. When a default reference photo is configured, this tool uses it through the image-edit pipeline unless use_reference_image=false; choose reference_image_id or reference_image_tags for a different saved reference. If the provider blocks the request for content policy, do not retry minor prompt variants in the same turn; report the block and ask for a safer non-explicit direction. Common aspect ratios: 1:1, 3:4, 9:16, 4:3, 16:9. Successful generations also return a vision review of the produced image, so use that instead of asking the user to check whether it looks like you unless you need their aesthetic preference.';
+    return 'Generate a dedicated selfie or self-portrait of the companion. Requires prompt. Use this path for her own representation so appearance context and saved-reference anchoring are active. Default behavior uses the configured reference photo; set use_reference_image=false only when the user explicitly wants no saved reference, or use reference_image_id/reference_image_tags to choose one. Results include a vision review.';
   }
-  return 'Generate a new image. Write the prompt as the full image you want to create, including subject, framing, pose, lighting, setting, mood, and style. For selfies or self-portraits, use the dedicated selfie_create tool instead of this generic path. Common aspect ratios: 1:1, 3:4, 9:16, 4:3, 16:9. Successful generations also return a vision review of the produced image, so use that instead of asking the user to check whether it looks like you unless you need their aesthetic preference.';
+  return 'Generate a new image. Write the prompt as the full image you want to create, including subject, framing, pose, lighting, setting, mood, and style. For selfies or self-portraits, use the first-class selfie_create tool instead of this generic path. Common aspect ratios: 1:1, 3:4, 9:16, 4:3, 16:9. Successful generations also return a vision review of the produced image, so use that instead of asking the user to check whether it looks like you unless you need their aesthetic preference.';
 }
 
 function buildImageCreatePromptDescription(selfImage: boolean): string {
   if (selfImage) {
-    return 'Full generation prompt for a selfie or self-portrait. The runtime Appearance context is available on this tool; combine it with the desired pose, camera angle, lighting, background, and style.';
+    return 'Full generation prompt for a selfie or self-portrait. Combine the always-on appearance context with the desired pose, camera angle, lighting, background, and style.';
   }
-  return 'Full generation prompt. For selfies or self-portraits, use the dedicated selfie_create tool instead of this generic path.';
+  return 'Full generation prompt. For selfies or self-portraits, use the first-class selfie_create tool instead of this generic path.';
 }
 
 function referenceSelectionSchema() {
@@ -311,7 +374,32 @@ function buildMediaResultDetails(
   };
 }
 
-function chargePaidImageGeneration(result: ImageGenerationResult, action: 'generate' | 'edit'): void {
+function preflightPaidImageGeneration(input: {
+  action: 'generate' | 'edit';
+  provider?: 'auto' | 'fal' | 'comfyui';
+  model?: string;
+  imageCount?: number;
+  inputImageCount?: number;
+}): void {
+  if (input.provider === 'comfyui') {
+    return;
+  }
+  assertChargeSurfaceAvailable('paidImageGeneration', {
+    details: {
+      action: input.action,
+      provider: input.provider ?? 'auto',
+      ...(input.model ? { model: input.model } : {}),
+      imageCount: input.imageCount ?? 1,
+      ...(input.inputImageCount !== undefined ? { inputImageCount: input.inputImageCount } : {}),
+    },
+  });
+}
+
+function chargePaidImageGeneration(
+  result: ImageGenerationResult,
+  action: 'generate' | 'edit',
+  source: { toolName: string; toolCallId?: string },
+): void {
   if (result.provider !== 'fal') {
     return;
   }
@@ -322,6 +410,17 @@ function chargePaidImageGeneration(result: ImageGenerationResult, action: 'gener
       ...(result.model ? { model: result.model } : {}),
       imageCount: result.images.length,
     },
+  });
+  // Fal is a paid external surface: a successful generation always incurred real
+  // spend and produced a user-facing artifact. Register it as an undelivered
+  // paid deliverable so the turn cannot silently end in no-reply and drop it.
+  const generationId = resolveGenerationId(result);
+  notePendingPaidDeliverable({
+    surface: 'paidImageGeneration',
+    toolName: source.toolName,
+    ...(source.toolCallId ? { toolCallId: source.toolCallId } : {}),
+    ...(generationId ? { identifier: generationId } : {}),
+    artifactCount: result.images.length,
   });
 }
 
@@ -371,7 +470,7 @@ function contentPolicyBlockedResult<TDetails extends { isError?: boolean }>(
   const message = [
     `${toolName} was blocked by the image provider content policy.`,
     fallbackBlocked
-      ? 'A fresh-generation fallback was attempted and was also blocked.'
+      ? 'A safer edit fallback was attempted and was also blocked.'
       : 'The provider rejected this image request.',
     'Do not retry the same prompt or minor wording variants in this turn; stop tool attempts, tell the user the provider blocked the image request, and ask for a safer non-explicit direction.',
     `Provider error: ${toErrorMessage(error)}`,
@@ -403,13 +502,24 @@ async function executeMediaGenerate(
   ops: ImageOperations,
   reviewer: ImageVisionReviewer | undefined,
   params: MediaToolParams,
+  toolCallId: string,
 ): Promise<AgentToolResult<MediaToolResultDetails>> {
   const prompt = normalizePrompt(params.prompt);
   if (!prompt) {
-    return textResultWithError('media action "generate" requires a non-empty prompt', true);
+    return textResultWithError(
+      'Missing required field "prompt" for media action="generate". '
+      + 'Minimal valid JSON: {"action":"generate","prompt":"full image description"}.',
+      true,
+    );
   }
 
   try {
+    preflightPaidImageGeneration({
+      action: 'generate',
+      provider: params.provider,
+      model: params.model,
+      imageCount: params.num_images,
+    });
     const result = await ops.create({
       prompt,
       provider: params.provider,
@@ -432,7 +542,7 @@ async function executeMediaGenerate(
       useTurbo: params.use_turbo,
       sourceToolName: 'media',
     });
-    chargePaidImageGeneration(result, 'generate');
+    chargePaidImageGeneration(result, 'generate', { toolName: 'media', toolCallId });
     const review = await reviewGeneratedImages(reviewer, {
       imageUrls: result.images.map((image) => image.url),
       imageLocalPaths: result.images.map((image) => image.localPath?.trim() ?? ''),
@@ -455,16 +565,25 @@ async function executeMediaEdit(
   ops: ImageOperations,
   reviewer: ImageVisionReviewer | undefined,
   params: MediaToolParams,
+  toolCallId: string,
   referenceResolver?: ImageReferenceResolver,
 ): Promise<AgentToolResult<MediaToolResultDetails>> {
   const prompt = normalizePrompt(params.prompt);
   if (!prompt) {
-    return textResultWithError('media action "edit" requires a non-empty prompt', true);
+    return textResultWithError(
+      'Missing required field "prompt" for media action="edit". '
+      + 'Minimal valid JSON: {"action":"edit","prompt":"edit instruction","input_urls":["https://example.test/image.png"]}.',
+      true,
+    );
   }
 
   const inputUrls = normalizeInputUrls(params.input_urls);
   if (inputUrls.length === 0) {
-    return textResultWithError('media action "edit" requires at least one input URL', true);
+    return textResultWithError(
+      'Missing required field "input_urls" for media action="edit"; provide at least one image URL. '
+      + 'Minimal valid JSON: {"action":"edit","prompt":"edit instruction","input_urls":["https://example.test/image.png"]}.',
+      true,
+    );
   }
 
   try {
@@ -472,6 +591,13 @@ async function executeMediaEdit(
       defaultToSavedReference: false,
     });
     const imageUrls = appendReferenceImageUrl(inputUrls, reference);
+    preflightPaidImageGeneration({
+      action: 'edit',
+      provider: params.provider,
+      model: params.model,
+      imageCount: params.num_images,
+      inputImageCount: imageUrls.length,
+    });
     const result = await ops.edit({
       prompt,
       imageUrls,
@@ -491,7 +617,7 @@ async function executeMediaEdit(
       sourceToolName: 'media',
       ...(reference ? { referenceImageIds: [reference.id] } : {}),
     });
-    chargePaidImageGeneration(result, 'edit');
+    chargePaidImageGeneration(result, 'edit', { toolName: 'media', toolCallId });
     const review = await reviewGeneratedImages(reviewer, {
       imageUrls: result.images.map((image) => image.url),
       imageLocalPaths: result.images.map((image) => image.localPath?.trim() ?? ''),
@@ -520,7 +646,11 @@ async function executeMediaAnalyze(
 
   const inputUrls = normalizeInputUrls(params.input_urls);
   if (inputUrls.length === 0) {
-    return textResultWithError('media action "analyze" requires at least one input URL', true);
+    return textResultWithError(
+      'Missing required field "input_urls" for media action="analyze"; provide at least one image URL. '
+      + 'Minimal valid JSON: {"action":"analyze","input_urls":["https://example.test/image.png"]}.',
+      true,
+    );
   }
 
   try {
@@ -546,7 +676,7 @@ async function executeMediaAnalyze(
       };
     }
 
-    chargeVisionConsult('image_analyze', {
+    chargeVisionConsult('media_analyze', {
       imageCount: inputUrls.length,
       ...(params.question ? { question: params.question } : {}),
     });
@@ -574,7 +704,9 @@ export function createMediaTool(
     name: 'media',
     label: 'media',
     description:
-      'Unified media surface for generate, edit, and analyze actions. Use action="generate" for new image outputs, action="edit" to transform existing inputs, and action="analyze" to inspect visible contents. For selfies or self-portraits, use the dedicated selfie_create tool so appearance context is only loaded behind that explicit gate. Current implementation is image-backed.',
+      'Unified media surface for image generate, edit, and analyze actions. generate requires prompt. '
+      + 'edit requires prompt and input_urls. analyze requires input_urls and can include question. '
+      + 'For selfies, portraits, or self-representation, use selfie_create so the self-expression reference workflow is active.',
     parameters: Type.Object({
       action: Type.Union(
         MEDIA_ACTION_VALUES.map((value) => Type.Literal(value)),
@@ -583,12 +715,12 @@ export function createMediaTool(
         },
       ),
       prompt: Type.Optional(Type.String({
-        description: 'Instruction text for generate or edit actions.',
+        description: 'Required for action=generate or action=edit. Full generation prompt or edit instruction.',
       })),
       input_urls: Type.Optional(Type.Array(Type.String(), {
         minItems: 1,
         maxItems: 4,
-        description: 'Source media URLs for edit or analyze. Current implementation expects image URLs.',
+        description: 'Required for action=edit or action=analyze. Source image URLs.',
       })),
       question: Type.Optional(Type.String({
         description: 'Optional analysis question. If omitted, the tool returns a concise visible-contents review.',
@@ -621,14 +753,14 @@ export function createMediaTool(
       })),
     }),
     execute: async (
-      _toolCallId: string,
+      toolCallId: string,
       params: MediaToolParams,
     ): Promise<AgentToolResult<MediaToolResultDetails>> => {
       switch (params.action) {
         case 'generate':
-          return await executeMediaGenerate(ops, reviewer, params);
+          return await executeMediaGenerate(ops, reviewer, params, toolCallId);
         case 'edit':
-          return await executeMediaEdit(ops, reviewer, params, options?.referenceResolver);
+          return await executeMediaEdit(ops, reviewer, params, toolCallId, options?.referenceResolver);
         case 'analyze':
           return await executeMediaAnalyze(reviewer, params);
         default:
@@ -637,10 +769,10 @@ export function createMediaTool(
     },
   };
 
-  return tagToolWithReversibility(withCapabilityRequirement(tool, 'external.web'), 'irreversible');
+  return tagToolWithReversibility(tool, 'irreversible');
 }
 
-export function createImageCreateTool(
+function createImageGenerationTool(
   ops: ImageOperations,
   reviewer?: ImageVisionReviewer,
   options?: {
@@ -650,7 +782,7 @@ export function createImageCreateTool(
   },
 ): AgentTool<any> {
   const selfImage = options?.selfImage ?? false;
-  const toolName = options?.toolName ?? 'image_create';
+  const toolName = options?.toolName ?? 'selfie_create';
   const parameterShape = {
     prompt: Type.String({
       description: buildImageCreatePromptDescription(selfImage),
@@ -679,7 +811,10 @@ export function createImageCreateTool(
           use_reference_image: Type.Optional(Type.Boolean({
             description: 'Set false to generate without a saved reference photo.',
           })),
-          edit_model: Type.Optional(Type.Union(FAL_EDIT_MODELS.map((value) => Type.Literal(value)))),
+          edit_model: Type.Optional(Type.Union(
+            FAL_EDIT_MODELS.map((value) => Type.Literal(value)),
+            { description: SELFIE_EDIT_MODEL_DESCRIPTION },
+          )),
         }
       : {}),
   };
@@ -689,7 +824,7 @@ export function createImageCreateTool(
     description: buildImageCreateDescription(selfImage),
     parameters: Type.Object(parameterShape),
     execute: async (
-      _toolCallId: string,
+      toolCallId: string,
       params: {
         prompt: string;
         provider?: 'auto' | 'fal' | 'comfyui';
@@ -727,74 +862,110 @@ export function createImageCreateTool(
         let notice: string | undefined;
         let result: ImageGenerationResult;
         if (reference) {
-          try {
-            result = await ops.edit({
-              prompt: params.prompt,
-              imageUrls: [reference.dataUrl],
-              provider: params.provider,
-              model: params.edit_model,
-              numImages: params.num_images,
-              width: params.width,
-              height: params.height,
-              aspectRatio: params.aspect_ratio,
-              resolution: params.resolution,
-              imageSize: params.image_size,
-              background: params.background,
-              outputFormat: params.output_format,
-              seed: params.seed,
-              sourceToolName: toolName,
-              referenceImageIds: [reference.id],
-            });
-          } catch (error) {
-            if (!selfImage || !isProviderContentPolicyError(error)) {
-              throw error;
-            }
-            const fallbackPrompt = buildSelfImageContentPolicyFallbackPrompt(params.prompt);
+          preflightPaidImageGeneration({
+            action: 'edit',
+            provider: params.provider,
+            model: params.edit_model,
+            imageCount: params.num_images,
+            inputImageCount: 1,
+          });
+          const runReferenceEdit = async (
+            editModel: typeof FAL_EDIT_MODELS[number],
+            editPrompt: string,
+          ): Promise<ImageGenerationResult> => await ops.edit({
+            prompt: editPrompt,
+            imageUrls: [reference.dataUrl],
+            provider: params.provider,
+            model: editModel,
+            numImages: params.num_images,
+            width: params.width,
+            height: params.height,
+            aspectRatio: params.aspect_ratio,
+            resolution: params.resolution,
+            imageSize: params.image_size,
+            background: params.background,
+            outputFormat: params.output_format,
+            seed: params.seed,
+            sourceToolName: toolName,
+            referenceImageIds: [reference.id],
+          });
+
+          const editChain = resolveSelfieEditModelChain(params.edit_model);
+          const chainFailures: { model: string; error: unknown }[] = [];
+          let chainResult: ImageGenerationResult | null = null;
+          for (const editModel of editChain) {
             try {
-              const fallbackResult = await ops.create({
-                prompt: fallbackPrompt,
-                provider: params.provider,
-                model: params.model,
-                numImages: params.num_images,
-                width: params.width,
-                height: params.height,
-                aspectRatio: params.aspect_ratio,
-                resolution: params.resolution,
-                imageSize: params.image_size,
-                background: params.background,
-                outputFormat: params.output_format,
-                seed: params.seed,
-                guidanceScale: params.guidance_scale,
-                numInferenceSteps: params.num_inference_steps,
-                acceleration: params.acceleration,
-                enablePromptExpansion: params.enable_prompt_expansion,
-                enableSafetyChecker: params.enable_safety_checker,
-                negativePrompt: params.negative_prompt,
-                useTurbo: params.use_turbo,
-                sourceToolName: toolName,
-              });
-              result = {
-                ...fallbackResult,
-                fallbackUsed: true,
-                fallbackReason: fallbackResult.fallbackReason
-                  ?? 'selfie_reference_content_policy_fresh_generation',
-              };
-              mode = 'create';
+              chainResult = await runReferenceEdit(editModel, params.prompt);
+              break;
+            } catch (error) {
+              if (!shouldFallThroughSelfieEditChain(error)) {
+                throw error;
+              }
+              chainFailures.push({ model: editModel, error });
+            }
+          }
+
+          if (!chainResult) {
+            const lastFailure = chainFailures[chainFailures.length - 1]!;
+            const allBlockedByContentPolicy = chainFailures.every(
+              (failure) => isProviderContentPolicyError(failure.error),
+            );
+            if (!allBlockedByContentPolicy) {
+              const failureSummary = chainFailures
+                .map((failure) => `${failure.model}: ${toErrorMessage(failure.error)}`)
+                .join('; ');
+              return textResultWithError(
+                `${toolName} failed across all reference edit models (${failureSummary})`,
+                true,
+              );
+            }
+            // Every tier blocked the original prompt; last resort is a sanitized
+            // prompt on the last configured tier, still anchored to the reference.
+            const fallbackPrompt = buildSelfImageContentPolicyFallbackPrompt(params.prompt);
+            const finalModel = editChain[editChain.length - 1]!;
+            try {
+              chainResult = await runReferenceEdit(finalModel, fallbackPrompt);
               reviewPrompt = fallbackPrompt;
+              result = {
+                ...chainResult,
+                fallbackUsed: true,
+                fallbackReason: chainResult.fallbackReason
+                  ?? 'selfie_edit_chain_sanitized_prompt',
+              };
               notice = [
-                'Reference image edit was blocked by the image provider content policy.',
-                'Generated a fresh non-reference self-portrait with a safer prompt instead.',
+                'Every selfie edit model blocked the original prompt for content policy.',
+                `Retried the reference edit on ${finalModel} with a safer prompt instead.`,
               ].join(' ');
             } catch (fallbackError) {
               if (isProviderContentPolicyError(fallbackError)) {
-                return contentPolicyBlockedResult<ImageToolResultDetails>(toolName, error, {
+                return contentPolicyBlockedResult<ImageToolResultDetails>(toolName, lastFailure.error, {
                   fallbackError,
                 });
               }
               throw fallbackError;
             }
+          } else if (chainFailures.length > 0) {
+            result = {
+              ...chainResult,
+              fallbackUsed: true,
+              fallbackReason: chainResult.fallbackReason ?? 'selfie_edit_chain_fallback',
+            };
+            notice = [
+              ...chainFailures.map((failure) => (
+                `Selfie edit on ${failure.model} failed (${isProviderContentPolicyError(failure.error) ? 'content policy block' : 'timeout or provider error'}).`
+              )),
+              `Fell back to ${chainResult.model ?? 'the next edit tier'} with the reference image intact.`,
+            ].join(' ');
+          } else {
+            result = chainResult;
           }
         } else {
+          preflightPaidImageGeneration({
+            action: 'generate',
+            provider: params.provider,
+            model: params.model,
+            imageCount: params.num_images,
+          });
           result = await ops.create({
               prompt: params.prompt,
               provider: params.provider,
@@ -818,7 +989,10 @@ export function createImageCreateTool(
               sourceToolName: toolName,
             });
         }
-        chargePaidImageGeneration(result, mode === 'edit' ? 'edit' : 'generate');
+        chargePaidImageGeneration(result, mode === 'edit' ? 'edit' : 'generate', {
+          toolName,
+          toolCallId,
+        });
         const review = await reviewGeneratedImages(reviewer, {
           imageUrls: result.images.map((image) => image.url),
           imageLocalPaths: result.images.map((image) => image.localPath?.trim() ?? ''),
@@ -850,179 +1024,9 @@ export function createSelfieTool(
     referenceResolver?: ImageReferenceResolver;
   },
 ): AgentTool<any> {
-  return createImageCreateTool(ops, reviewer, {
+  return createImageGenerationTool(ops, reviewer, {
     selfImage: true,
     toolName: 'selfie_create',
     referenceResolver: options?.referenceResolver,
   });
-}
-
-export function createImageEditTool(
-  ops: ImageOperations,
-  reviewer?: ImageVisionReviewer,
-  options?: {
-    referenceResolver?: ImageReferenceResolver;
-  },
-): AgentTool<any> {
-  return {
-    name: 'image_edit',
-    label: 'image_edit',
-    description:
-      'Edit one or more existing images. Write the prompt as the exact transformation you want, including what should change and what must stay the same. For self-image work, use the dedicated selfie_create tool for a fresh companion representation instead of relying on hidden appearance context. Common aspect ratios: 1:1, 3:4, 9:16, 4:3, 16:9. Successful edits also return a vision review of the produced image, so use that instead of asking the user to check whether it still looks like you unless you need their aesthetic preference.',
-    parameters: Type.Object({
-      prompt: Type.String({
-        description:
-          'Full edit instruction. State the target result clearly and mention any identity details that must remain unchanged; for self-image work, use the dedicated selfie_create tool instead of relying on hidden appearance context.',
-      }),
-      image_urls: Type.Array(Type.String(), { minItems: 1, maxItems: 4 }),
-      ...referenceSelectionSchema(),
-      use_default_reference: Type.Optional(Type.Boolean({
-        description: 'Include the configured default reference photo as an additional edit input.',
-      })),
-      provider: providerPreferenceSchema(),
-      model: Type.Optional(Type.Union(FAL_EDIT_MODELS.map((value) => Type.Literal(value)))),
-      num_images: Type.Optional(Type.Integer({ minimum: 1, maximum: 4 })),
-      width: Type.Optional(Type.Integer({ minimum: 64, maximum: 4096 })),
-      height: Type.Optional(Type.Integer({ minimum: 64, maximum: 4096 })),
-      aspect_ratio: aspectRatioSchema(),
-      resolution: Type.Optional(Type.String()),
-      image_size: Type.Optional(Type.String()),
-      background: Type.Optional(Type.String()),
-      output_format: Type.Optional(Type.String()),
-      mask_image_url: Type.Optional(Type.String()),
-      input_fidelity: Type.Optional(Type.String()),
-      seed: Type.Optional(Type.Integer({ minimum: 0 })),
-    }),
-    execute: async (
-      _toolCallId: string,
-      params: {
-        prompt: string;
-        image_urls: string[];
-        provider?: 'auto' | 'fal' | 'comfyui';
-        model?: typeof FAL_EDIT_MODELS[number];
-        num_images?: number;
-        width?: number;
-        height?: number;
-        aspect_ratio?: ImageAspectRatio;
-        resolution?: string;
-        image_size?: string;
-        background?: string;
-        output_format?: string;
-        mask_image_url?: string;
-        input_fidelity?: string;
-        seed?: number;
-        reference_image_id?: string;
-        reference_image_tags?: string[];
-        use_default_reference?: boolean;
-      },
-    ): Promise<AgentToolResult<ImageToolResultDetails>> => {
-      try {
-        const reference = await resolveReferenceImage(options?.referenceResolver, params, {
-          defaultToSavedReference: false,
-        });
-        const imageUrls = appendReferenceImageUrl([...params.image_urls], reference);
-        const result = await ops.edit({
-          prompt: params.prompt,
-          imageUrls,
-          provider: params.provider,
-          model: params.model,
-          numImages: params.num_images,
-          width: params.width,
-          height: params.height,
-          aspectRatio: params.aspect_ratio,
-          resolution: params.resolution,
-          imageSize: params.image_size,
-          background: params.background,
-          outputFormat: params.output_format,
-          maskImageUrl: params.mask_image_url,
-          inputFidelity: params.input_fidelity,
-          seed: params.seed,
-          sourceToolName: 'image_edit',
-          ...(reference ? { referenceImageIds: [reference.id] } : {}),
-        });
-        chargePaidImageGeneration(result, 'edit');
-        const review = await reviewGeneratedImages(reviewer, {
-          imageUrls: result.images.map((image) => image.url),
-          imageLocalPaths: result.images.map((image) => image.localPath?.trim() ?? ''),
-          prompt: params.prompt,
-          mode: 'edit',
-        });
-        return {
-          content: buildToolContent(result, review.visionReview, review.visionReviewError),
-          details: {
-            imageResult: result,
-            ...(review.visionReview ? { visionReview: review.visionReview } : {}),
-            ...(review.visionReviewError ? { visionReviewError: review.visionReviewError } : {}),
-          },
-        };
-      } catch (error) {
-        if (isProviderContentPolicyError(error)) {
-          return contentPolicyBlockedResult<ImageToolResultDetails>('image_edit', error);
-        }
-        return textResultWithError(`image_edit failed: ${toErrorMessage(error)}`, true);
-      }
-    },
-  };
-}
-
-export function createImageAnalyzeTool(reviewer: ImageVisionReviewer): AgentTool<any> {
-  return {
-    name: 'image_analyze',
-    label: 'image_analyze',
-    description:
-      'Inspect one or more images with the vision pipeline. Use this to see what was actually generated or sent, including checking whether a selfie/edit still matches your appearance, instead of asking the user to go inspect it for you. When the current turn already includes live attachment bytes, do not pass a mismatched prior-turn URL unless the user explicitly pasted that URL in the current message.',
-    parameters: Type.Object({
-      image_urls: Type.Array(Type.String(), { minItems: 1, maxItems: 4 }),
-      question: Type.Optional(Type.String({
-        description:
-          'Optional review question. If omitted, the tool defaults to a concise appearance-consistency review.',
-      })),
-    }),
-    execute: async (
-      _toolCallId: string,
-      params: {
-        image_urls: string[];
-        question?: string;
-      },
-    ): Promise<AgentToolResult<ImageToolResultDetails>> => {
-      try {
-        const currentTurnVisionReviewFallback = resolveCurrentTurnVisionReviewFallback(
-          params.image_urls,
-          params.question,
-        );
-        if (currentTurnVisionReviewFallback) {
-          return {
-            content: [{
-              type: 'text',
-              text: formatVisionReview(currentTurnVisionReviewFallback),
-            }] satisfies TextContent[],
-            details: { visionReview: currentTurnVisionReviewFallback },
-          };
-        }
-
-        const mismatchedCurrentTurnUrlNotice = resolveMismatchedCurrentTurnUrlNotice(params.image_urls);
-        if (mismatchedCurrentTurnUrlNotice) {
-          return {
-            content: [{ type: 'text', text: mismatchedCurrentTurnUrlNotice }] satisfies TextContent[],
-            details: { visionReviewError: mismatchedCurrentTurnUrlNotice },
-          };
-        }
-
-        chargeVisionConsult('image_analyze', {
-          imageCount: params.image_urls.length,
-          ...(params.question ? { question: params.question } : {}),
-        });
-        const visionReview = await reviewer.analyze({
-          imageUrls: [...params.image_urls],
-          question: params.question,
-        });
-        return {
-          content: [{ type: 'text', text: formatVisionReview(visionReview) }] satisfies TextContent[],
-          details: { visionReview },
-        };
-      } catch (error) {
-        return textResultWithError(`image_analyze failed: ${toErrorMessage(error)}`, true);
-      }
-    },
-  };
 }

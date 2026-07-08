@@ -1,5 +1,9 @@
 <script lang="ts">
-  import type { AdminPromptSectionCacheability, AdminTurnPromptContextMessage } from '$lib/types';
+  import type {
+    AdminAuthenticityProvenance,
+    AdminPromptSectionCacheability,
+    AdminTurnPromptContextMessage,
+  } from '$lib/types';
 
   interface Props {
     title: string;
@@ -29,6 +33,19 @@
         return 'border-bark-300 bg-bark-100 text-shadow-700';
     }
   }
+
+  function formatProvenanceLabel(provenance: AdminAuthenticityProvenance): string {
+    return [
+      provenance.kind.replaceAll('_', ' '),
+      `source: ${provenance.sourceAuthor}`,
+      `via: ${provenance.transformedBy}`,
+      `wording: ${provenance.wording}`,
+    ].join(' . ');
+  }
+
+  function formatSafetyLabel(provenance: AdminAuthenticityProvenance): string {
+    return provenance.safeAsPartnerSpeech ? 'safe as partner speech' : 'not partner speech';
+  }
 </script>
 
 <div class="rounded-xl border border-bark-200 bg-white p-4">
@@ -55,6 +72,22 @@
       {#each messages as message, index (`${message.role}-${index}`)}
         <div class="rounded-lg border border-bark-200 bg-bark-50 p-3">
           <p class="text-xs font-medium uppercase tracking-wide text-shadow-600">{message.role}</p>
+          {#if message.provenance}
+            <div class="mt-2 flex flex-wrap gap-2 text-xs">
+              <span class="rounded border border-bark-300 bg-white px-2 py-0.5 text-shadow-700">
+                {formatProvenanceLabel(message.provenance)}
+              </span>
+              <span class="rounded border border-bark-300 bg-white px-2 py-0.5 text-shadow-700">
+                {formatSafetyLabel(message.provenance)}
+              </span>
+              <span class="rounded border border-bark-300 bg-white px-2 py-0.5 text-shadow-700">
+                detail loss: {message.provenance.detailLoss}
+              </span>
+              <span class="rounded border border-bark-300 bg-white px-2 py-0.5 text-shadow-700">
+                emotion: {message.provenance.emotionalTexture}
+              </span>
+            </div>
+          {/if}
           <pre class="mt-2 overflow-auto whitespace-pre-wrap font-mono text-sm text-shadow-800">{message.content}</pre>
         </div>
       {/each}

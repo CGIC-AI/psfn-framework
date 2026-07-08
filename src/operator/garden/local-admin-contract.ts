@@ -1,7 +1,7 @@
 import type { EmbeddingProviderPort } from '../../core/agent/contracts.js';
 import { join } from 'node:path';
-import { readSQLiteGatewayAuditHistory } from '../../boundary/gateway/audit.js';
 import type { ContactStorePort } from '../../core/contacts/contact-store-port.js';
+import type { PendingContactApprovalStore } from '../../core/contacts/pending-contact-approvals.js';
 import type { CharacterCardVersionStore } from '../../core/identity/card-versioning.js';
 import { resolveCompanionNameFromConfig } from '../../core/identity/companion-runtime.js';
 import {
@@ -12,29 +12,53 @@ import {
   PromptRuntimeLayoutStore,
   resolvePromptRuntimeLayoutPath,
 } from '../../core/identity/prompt-runtime.js';
+import { invalidateCachedPromptRuntimeLayoutStore } from '../../core/identity/prompt-runtime-store-cache.js';
 import type { CharacterCardV2 } from '../../core/identity/types.js';
 import type { Scheduler } from '../../core/scheduler/scheduler.js';
+import { resolveMorningWakeSnapshot } from '../../core/scheduler/temporal-wakeup.js';
 import type { SessionManager } from '../../core/session/manager.js';
 import type { PostTurnActionRuntime } from '../../core/agent/post-turn-action-runtime.js';
+import { getObserverEvalSidecarHealthSnapshot } from '../../core/eval/observer-sidecar/runtime.js';
+import type { ObserverEvalSidecarRuntime } from '../../core/eval/observer-sidecar/types.js';
+import type { ConcernStorePort } from '../../core/intention/concern-store-port.js';
+import type { OutreachOutboxStore } from '../../core/intention/outreach-outbox.js';
 import { NorthStarStore } from '../../faculties/north-star/store.js';
 import type { MemoryStorePort } from '../../faculties/memory/memory-store-port.js';
-import type { EpisodicStore } from '../../faculties/memory/episodic/store.js';
+import { JsonGroupMemoryWatermarkStore } from '../../faculties/memory/extraction/group-ranges.js';
+import type { GroupMemoryBackfillExtractorPort } from '../../faculties/memory/extraction/group-backfill.js';
+import type {
+  EpisodicStorePort,
+} from '../../faculties/memory/episodic/store-port.js';
 import type { ShardExecutionPort } from '../../faculties/shards/port.js';
 import type { SkillsRuntime } from '../../faculties/skills/runtime.js';
 import { ValuesJournalStore } from '../../faculties/values/store.js';
+import { ReflectionJournalStore } from '../../persistence/journals/reflection-journal.js';
+import { ReflectionMetacognitionJournalStore } from '../../persistence/journals/reflection-metacognition-journal.js';
+import { ReflectionDailyJournalStore } from '../../persistence/journals/reflection-substrate.js';
 import {
   resolveConfiguredCompanionDataDir,
   resolveChargeLedgerPath,
+  resolveFatigueLedgerPath,
   resolveLegacyValuesJournalPath,
   resolveNorthStarPath,
+  resolveReflectionDailyJournalsDir,
+  resolveReflectionJournalPath,
+  resolveReflectionMetacognitionJournalPath,
   resolveValuesJournalPath,
 } from '../../persistence/layout.js';
 import { readLastActiveSession } from '../../system/lifecycle/notifications.js';
 import type { SessionStore } from '../../persistence/sessions/store.js';
 import type { EventBus } from '../../shared/event-bus.js';
 import { RunChargeLedger } from '../../shared/telemetry/charge-ledger.js';
+import { FatigueLedger } from '../../shared/telemetry/fatigue-ledger.js';
+import type { ChannelGroupMemoryConfig } from '../../system/config/group-memory-config.js';
+import { createPostgresModelUsageStoreFromConfig } from '../../persistence/postgres/model-usage-store.js';
+import { createPostgresObserverEvalSidecarStore } from '../../core/eval/observer-sidecar/persistence.js';
 import { createOwnerFileConfigStore } from '../../system/config/config-store.js';
-import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
+import {
+  createDefaultObserverEvalSidecarSettings,
+  type SubstrateConfig,
+} from '../../system/config/runtime-config-contracts.js';
 import type {
   AdaptiveToolsStateProvider,
   AdminModelDiscoveryApi,
@@ -51,17 +75,34 @@ import {
 } from './services/audit-history-service.js';
 import { registerAuditTimelineSources } from './services/audit-event-collector.js';
 import { AdminChargeLedgerDataService } from './services/charge-ledger-service.js';
+import { AdminConcernDataService } from './services/concern-service.js';
 import { AdminContactsDataService } from './services/contacts-service.js';
+import { createContactRelationshipScoreReader } from '../../core/contacts/trust-drift-signals.js';
+import { createAdminPendingContactsService } from './services/pending-contacts-service.js';
+import { createAdminRoomsService } from './services/rooms-service.js';
+import { createAdminGraphProposalsService } from './services/graph-proposals-service.js';
+import type { SocialGraphProposalStore } from '../../faculties/memory/social-graph/proposals.js';
 import { AdminDashboardDataService } from './services/dashboard-service.js';
+import { AdminDiagnosticsDataService } from './services/diagnostics-service.js';
 import { AdminEpisodicMemoryDataService } from './services/episodic-memory-service.js';
+import { AdminGroupMemoryDataService } from './services/group-memory-diagnostics-service.js';
 import { AdminIdentityDataService } from './services/identity-service.js';
 import { AdminImagesDataService } from './services/images-service.js';
 import { AdminMemoryDataService } from './services/memory-service.js';
+import { AdminModelUsageDataService } from './services/model-usage-service.js';
+import {
+  AdminObserverEvalSidecarDataService,
+  type AdminObserverEvalSidecarService,
+} from './services/observer-eval-sidecar-service.js';
 import { AdminPromptsDataService } from './services/prompts-service.js';
 import { AdminSchedulerService } from './services/scheduler-service.js';
+import { AdminSubsystemHealthDataService } from './services/subsystem-health-service.js';
+import { createAdminToolConformanceService } from './services/tool-conformance-service.js';
+import type { ToolConformanceRunner } from '../../core/agent/tool-conformance/runner.js';
 import { AdminSessionDataService } from './services/session-service.js';
 import { AdminSettingsDataService } from './services/settings-service.js';
 import { AdminShardFoldReviewDataService } from './services/shard-fold-review-service.js';
+import { AdminWikiDataService } from './services/wiki-service.js';
 import type { AdminToolHealthProvider } from './tool-health-provider.js';
 
 export interface InProcessGardenAdminContractOptions {
@@ -69,16 +110,14 @@ export interface InProcessGardenAdminContractOptions {
   apiHost?: string;
   apiPort?: number;
   memoryStore: MemoryStorePort;
-  episodicStore?: Pick<
-    EpisodicStore,
-    'getEpisode' | 'listEpisodeArcsForEpisode' | 'listEpisodes' | 'searchByThread' | 'searchByTime'
-  > | null;
+  episodicStore?: EpisodicStorePort | null;
   sessionStore: SessionStore;
   sessionManager: SessionManager;
   scheduler: Scheduler;
   shardManager: ShardExecutionPort;
   eventBus: EventBus;
   contactStore?: ContactStorePort | null;
+  concernStore?: ConcernStorePort | null;
   characterCard: CharacterCardV2;
   config: SubstrateConfig;
   embeddingService: EmbeddingProviderPort | null;
@@ -89,7 +128,19 @@ export interface InProcessGardenAdminContractOptions {
   confirmationQueueApi?: ConfirmationQueueAdminApi | null;
   adaptiveToolsStateProvider?: AdaptiveToolsStateProvider | null;
   toolHealthProvider?: AdminToolHealthProvider | null;
+  toolConformanceRunner?: ToolConformanceRunner | null;
   postTurnActions?: PostTurnActionRuntime | null;
+  outreachOutbox?: OutreachOutboxStore | null;
+  observerEvalSidecar?: ObserverEvalSidecarRuntime | null;
+  channelGroupMemory?: ChannelGroupMemoryConfig;
+  memoryExtractor?: GroupMemoryBackfillExtractorPort | null;
+  companionAuthorIds?: readonly string[];
+  /** Pending contact approvals queue (E3.4 contact-tracking policy gate). */
+  pendingContactApprovals?: PendingContactApprovalStore | null;
+  /** Social-graph edge proposals emitted by the graph-builder worker (E4.2). */
+  socialGraphProposals?: SocialGraphProposalStore | null;
+  /** Runtime log directory for bounded diagnostics reads. Defaults to /app/logs when absent. */
+  logsDir?: string;
 }
 
 export function createInProcessGardenAdminContract(
@@ -106,8 +157,19 @@ export function createInProcessGardenAdminContract(
   const valuesJournal = new ValuesJournalStore(resolveValuesJournalPath(companionDataDir), {
     legacyFilePaths: [resolveLegacyValuesJournalPath(companionDataDir)],
   });
+  const reflectionMetacognitionJournal = new ReflectionMetacognitionJournalStore(
+    resolveReflectionMetacognitionJournalPath(companionDataDir),
+  );
+  const reflectionDailyJournal = new ReflectionDailyJournalStore(
+    resolveReflectionDailyJournalsDir(companionDataDir),
+  );
+  const reflectionJournal = new ReflectionJournalStore(
+    resolveReflectionJournalPath(companionDataDir),
+  );
   const northStarStore = new NorthStarStore(resolveNorthStarPath(companionDataDir));
   const chargeLedger = new RunChargeLedger(resolveChargeLedgerPath(companionDataDir), options.eventBus);
+  const fatigueLedger = new FatigueLedger(resolveFatigueLedgerPath(companionDataDir), options.eventBus);
+  const modelUsageStore = createPostgresModelUsageStoreFromConfig(options.config);
   const auditHistory = new AdminAuditHistoryDataService({
     gardenStore: new GardenAuditHistoryJsonlStore(join(options.config.dataDir, 'garden-audit-history.jsonl')),
     gatewayReader: resolveGatewayAuditReader(options.config),
@@ -130,9 +192,38 @@ export function createInProcessGardenAdminContract(
     },
     resolveCompanionName: () => resolveCompanionNameFromConfig(options.config),
   });
+  const promptRuntimeLayoutPath = resolvePromptRuntimeLayoutPath(companionDataDir);
   const promptRuntimeLayoutStore = new PromptRuntimeLayoutStore(
-    resolvePromptRuntimeLayoutPath(companionDataDir),
+    promptRuntimeLayoutPath,
+    {
+      onMutation: (reason) => {
+        invalidateCachedPromptRuntimeLayoutStore(promptRuntimeLayoutPath);
+        options.config.runtimeHooks?.invalidatePromptPrefixCache?.(reason);
+      },
+    },
   );
+  const adaptiveTools = new AdminAdaptiveToolsDataService({
+    eventBus: options.eventBus,
+    stateProvider: options.adaptiveToolsStateProvider ?? null,
+    toolHealthProvider: options.toolHealthProvider ?? null,
+  });
+  const schedulerService = new AdminSchedulerService(
+    options.scheduler,
+    options.config.dataDir,
+    // Live habit wake-window snapshot: recompute from the current scheduler
+    // config + active-session partner timestamps on each read (E7.2).
+    () => resolveMorningWakeSnapshot({
+      sessionManager: options.sessionManager,
+      morning: configStore.loadScheduler().temporalWakeup.morningWake,
+    }),
+  );
+  const subsystemHealth = new AdminSubsystemHealthDataService({
+    eventBus: options.eventBus,
+    scheduler: schedulerService,
+  });
+  const toolConformance = options.toolConformanceRunner
+    ? createAdminToolConformanceService(options.toolConformanceRunner)
+    : null;
 
   return {
     dashboard: new AdminDashboardDataService({
@@ -142,26 +233,47 @@ export function createInProcessGardenAdminContract(
       scheduler: options.scheduler,
       shardManager: options.shardManager,
       eventBus: options.eventBus,
+      adaptiveToolsService: adaptiveTools,
       resolveLastActiveSessionId,
+    }),
+    diagnostics: new AdminDiagnosticsDataService({
+      eventBus: options.eventBus,
+      ...(options.logsDir ? { logsDir: options.logsDir } : {}),
     }),
     images: new AdminImagesDataService({
       config: options.config,
       companionDataDir,
     }),
     auditHistory,
-    charges: new AdminChargeLedgerDataService(chargeLedger),
+    charges: new AdminChargeLedgerDataService(chargeLedger, fatigueLedger, options.config.chargePolicy?.fatigue ?? null),
+    modelUsage: modelUsageStore ? new AdminModelUsageDataService(modelUsageStore, options.modelDiscovery) : null,
+    observerEvalSidecar: createObserverEvalSidecarAdminService({
+      config: options.config,
+      runtime: options.observerEvalSidecar ?? null,
+    }),
     actionPipe: options.postTurnActions
-      ? new AdminActionPipeDataService(options.postTurnActions)
+      ? new AdminActionPipeDataService(options.postTurnActions, options.outreachOutbox ?? null)
       : null,
     shards: new AdminShardFoldReviewDataService(options.shardManager),
-    adaptiveTools: new AdminAdaptiveToolsDataService({
-      eventBus: options.eventBus,
-      stateProvider: options.adaptiveToolsStateProvider ?? null,
-      toolHealthProvider: options.toolHealthProvider ?? null,
-    }),
+    adaptiveTools,
+    wiki: options.config.workspacePath
+      ? new AdminWikiDataService(options.config.workspacePath)
+      : null,
     episodicMemory: options.episodicStore
       ? new AdminEpisodicMemoryDataService(options.episodicStore)
       : null,
+    groupMemory: new AdminGroupMemoryDataService({
+      ...(options.config.groupMemory ? { groupMemory: options.config.groupMemory } : {}),
+      ...(options.channelGroupMemory ? { channelGroupMemory: options.channelGroupMemory } : {}),
+      sessionStore: options.sessionStore,
+      memoryStore: options.memoryStore,
+      ...(options.contactStore ? { contactStore: options.contactStore } : {}),
+      watermarkStore: new JsonGroupMemoryWatermarkStore(join(companionDataDir, 'group-memory-watermarks.json')),
+      ...(options.memoryExtractor ? { memoryExtractor: options.memoryExtractor } : {}),
+      eventBus: options.eventBus,
+      companionNames: [resolveCompanionNameFromConfig(options.config)],
+      companionAuthorIds: options.companionAuthorIds ?? [],
+    }),
     memory: new AdminMemoryDataService({
       memoryStore: options.memoryStore,
       contactStore: options.contactStore,
@@ -185,12 +297,35 @@ export function createInProcessGardenAdminContract(
       sessionManager: options.sessionManager,
       eventBus: options.eventBus,
       contactStore: options.contactStore,
+      memoryStore: options.memoryStore,
+      config: options.config,
     }),
     contacts: new AdminContactsDataService({
       contactStore: options.contactStore,
       memoryStore: options.memoryStore,
       sessionStore: options.sessionStore,
+      relationshipScoreReader: options.contactStore
+        ? createContactRelationshipScoreReader(options.contactStore)
+        : null,
     }),
+    pendingContacts: options.pendingContactApprovals
+      ? createAdminPendingContactsService({
+        pendingApprovals: options.pendingContactApprovals,
+        contactStore: options.contactStore ?? null,
+      })
+      : null,
+    rooms: createAdminRoomsService({
+      contactStore: options.contactStore ?? null,
+    }),
+    graphProposals: options.socialGraphProposals
+      ? createAdminGraphProposalsService({
+        proposalStore: options.socialGraphProposals,
+        contactStore: options.contactStore ?? null,
+      })
+      : null,
+    concerns: options.concernStore
+      ? new AdminConcernDataService(options.concernStore)
+      : null,
     settings: new AdminSettingsDataService({
       config: options.config,
       configStore,
@@ -223,10 +358,15 @@ export function createInProcessGardenAdminContract(
       },
       companionValuesLayerProvider: () => valuesJournal.buildCompanionDerivedLayer(),
     }),
-    scheduler: new AdminSchedulerService(options.scheduler, options.config.dataDir),
+    scheduler: schedulerService,
+    subsystemHealth,
+    toolConformance,
     skills: options.skillsRuntime ?? null,
     confirmations: options.confirmationQueueApi ?? null,
     values: valuesJournal,
+    reflectionMetacognitionJournal,
+    reflectionDailyJournal,
+    reflectionJournal,
     modelDiscovery: options.modelDiscovery ?? null,
     chatBootstrap: new AdminChatBootstrapService(options.contactStore, {
       apiBaseUrl: options.apiBaseUrl,
@@ -238,10 +378,29 @@ export function createInProcessGardenAdminContract(
   };
 }
 
-function resolveGatewayAuditReader(config: SubstrateConfig): GatewayAuditHistoryReader | null {
-  if ((config.persistenceBackend ?? 'sqlite') !== 'sqlite') {
-    return null;
-  }
-  const auditDbPath = process.env.AUDIT_DB_PATH?.trim() || join(config.dataDir, 'gateway-audit.db');
-  return query => readSQLiteGatewayAuditHistory(auditDbPath, query);
+function createObserverEvalSidecarAdminService(input: {
+  config: SubstrateConfig;
+  runtime?: ObserverEvalSidecarRuntime | null;
+}): AdminObserverEvalSidecarService | null {
+  const settings = input.config.observerEvalSidecar ?? createDefaultObserverEvalSidecarSettings();
+
+  const postgresDatabaseUrl = input.config.postgresDatabaseUrl?.trim();
+  const persistence = settings.persistence.enabled
+    && settings.garden.exposeTelemetry
+    && input.config.persistenceBackend === 'postgres'
+    && postgresDatabaseUrl
+    ? createPostgresObserverEvalSidecarStore(postgresDatabaseUrl)
+    : null;
+
+  return new AdminObserverEvalSidecarDataService({
+    persistence,
+    // The Postgres store implements both the observation and lever ports;
+    // the Garden admin service is the ONLY reader of lever events.
+    leverEvents: persistence,
+    getHealthSnapshot: () => getObserverEvalSidecarHealthSnapshot(input.runtime),
+  });
+}
+
+function resolveGatewayAuditReader(_config: SubstrateConfig): GatewayAuditHistoryReader | null {
+  return null;
 }

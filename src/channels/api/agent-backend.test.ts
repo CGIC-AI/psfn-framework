@@ -10,6 +10,38 @@ function createSessionManagerStub() {
   } as any;
 }
 
+describe('AgentApiBackend health RPC', () => {
+  it('returns the health body directly instead of an HTTP response envelope', async () => {
+    const backend = new AgentApiBackend({
+      agentLoop: { handleMessage: vi.fn(), abort: vi.fn() } as any,
+      eventBus: new EventBus(),
+      sessionManager: createSessionManagerStub(),
+      healthChecks: {
+        memory: () => ({ status: 'healthy' }),
+        llm: () => ({ status: 'healthy' }),
+        discord: () => ({ status: 'healthy' }),
+        embeddings: () => ({ status: 'healthy' }),
+        scheduler: () => ({ status: 'healthy' }),
+      },
+    });
+
+    const health = await backend.handleHealth();
+
+    expect(health).toMatchObject({
+      status: 'healthy',
+      subsystems: {
+        memory: { status: 'healthy' },
+        llm: { status: 'healthy' },
+        discord: { status: 'healthy' },
+        embeddings: { status: 'healthy' },
+        scheduler: { status: 'healthy' },
+      },
+    });
+    expect(health).not.toHaveProperty('statusCode');
+    expect(health).not.toHaveProperty('body');
+  });
+});
+
 describe('AgentApiBackend chat completion deadlines', () => {
   it('returns at visible turn completion instead of waiting for post-turn cleanup', async () => {
     vi.useFakeTimers();
@@ -101,6 +133,271 @@ describe('AgentApiBackend chat completion deadlines', () => {
       });
     } finally {
       vi.useRealTimers();
+    }
+  });
+});
+
+describe('AgentApiBackend direct model completions', () => {
+  function createBackend(overrides: {
+    complete?: ReturnType<typeof vi.fn>;
+    handleMessage?: ReturnType<typeof vi.fn>;
+    llmProvider?: false;
+  } = {}) {
+    const complete = overrides.complete ?? vi.fn(async () => ({
+      content: 'raw model reply',
+      toolCalls: [],
+      model: 'claude-fable-5',
+      inputTokens: 5,
+      outputTokens: 9,
+      stopReason: 'stop',
+    }));
+    const handleMessage = overrides.handleMessage ?? vi.fn(() => new Promise(() => undefined));
+    const backend = new AgentApiBackend({
+      agentLoop: { handleMessage, abort: vi.fn() } as any,
+      eventBus: new EventBus(),
+      sessionManager: createSessionManagerStub(),
+      ...(overrides.llmProvider === false
+        ? {}
+        : { llmProvider: { complete, stream: vi.fn() } as any }),
+    });
+    return { backend, complete, handleMessage };
+  }
+
+  const participantRequest = {
+    model: 'anthropic/claude-fable-5',
+    provider: 'anthropic',
+    messages: [{ role: 'user' as const, content: 'Hello raw model' }],
+  };
+
+  it('bypasses the companion pipeline and pins the overridden model', async () => {
+    const { backend, complete, handleMessage } = createBackend();
+
+    const result = await backend.handleChatCompletion({
+      requestId: 'req-direct-1',
+      request: { ...participantRequest, system_prompt_mode: 'none' },
+      principal: { id: 'principal-1', mode: 'api_key' },
+      headers: { 'x-channel-id': 'model-room:room-1:claude-fable' },
+    });
+
+    expect(handleMessage).not.toHaveBeenCalled();
+    expect(complete).toHaveBeenCalledTimes(1);
+    const [context, purpose] = complete.mock.calls[0];
+    expect(purpose).toBe('reasoning');
+    expect(context.systemPrompt).toBe('');
+    expect(context.messages).toEqual([{ role: 'user', content: 'Hello raw model' }]);
+    expect(context.modelHint).toEqual({
+      provider: 'anthropic',
+      model: 'anthropic/claude-fable-5',
+      pin: true,
+    });
+    expect(result).toEqual({
+      ok: true,
+      response: {
+        content: 'raw model reply',
+        channelId: 'model-room:room-1:claude-fable',
+        inputTokens: 5,
+        outputTokens: 9,
+      },
+    });
+  });
+
+  it('passes a custom system prompt through to the raw completion', async () => {
+    const { backend, complete } = createBackend();
+
+    await backend.handleChatCompletion({
+      requestId: 'req-direct-2',
+      request: {
+        ...participantRequest,
+        system_prompt_mode: 'custom',
+        system_prompt: 'You are a frank advisor.',
+      },
+      principal: { id: 'principal-1', mode: 'api_key' },
+      headers: {},
+    });
+
+    expect(complete.mock.calls[0][0].systemPrompt).toBe('You are a frank advisor.');
+  });
+
+  it('defaults to the raw path when a provider override has no system_prompt_mode', async () => {
+    const { backend, complete, handleMessage } = createBackend();
+
+    const result = await backend.handleChatCompletion({
+      requestId: 'req-direct-3',
+      request: { ...participantRequest },
+      principal: { id: 'principal-1', mode: 'api_key' },
+      headers: {},
+    });
+
+    expect(handleMessage).not.toHaveBeenCalled();
+    expect(complete).toHaveBeenCalledTimes(1);
+    expect(result.ok).toBe(true);
+  });
+
+  it('keeps the companion pipeline when system_prompt_mode=default is explicit', async () => {
+    const handleMessage = vi.fn(() => new Promise(() => undefined));
+    const { backend, complete } = createBackend({ handleMessage });
+
+    const resultPromise = backend.handleChatCompletion({
+      requestId: 'req-direct-4',
+      request: { ...participantRequest, system_prompt_mode: 'default' },
+      principal: { id: 'principal-1', mode: 'api_key' },
+      headers: { 'x-session-id': 'pipeline-session' },
+      timeoutMs: 1_000,
+    });
+
+    const result = await resultPromise;
+    expect(complete).not.toHaveBeenCalled();
+    expect(handleMessage).toHaveBeenCalledTimes(1);
+    expect(result.ok).toBe(false);
+  });
+
+  it('rejects system-role messages on the raw path', async () => {
+    const { backend, complete } = createBackend();
+
+    const result = await backend.handleChatCompletion({
+      requestId: 'req-direct-5',
+      request: {
+        ...participantRequest,
+        messages: [
+          { role: 'system' as const, content: 'sneaky system prompt' },
+          { role: 'user' as const, content: 'hi' },
+        ],
+      },
+      principal: { id: 'principal-1', mode: 'api_key' },
+      headers: {},
+    });
+
+    expect(complete).not.toHaveBeenCalled();
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.status).toBe(400);
+    }
+  });
+
+  it('fails closed when no LLM provider port is configured', async () => {
+    const { backend, handleMessage } = createBackend({ llmProvider: false });
+
+    const result = await backend.handleChatCompletion({
+      requestId: 'req-direct-6',
+      request: { ...participantRequest, system_prompt_mode: 'none' },
+      principal: { id: 'principal-1', mode: 'api_key' },
+      headers: {},
+    });
+
+    expect(handleMessage).not.toHaveBeenCalled();
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.status).toBe(503);
+      expect(result.error.type).toBe('direct_model_unavailable');
+    }
+  });
+
+  it('cancels an in-flight direct completion via cancelChatCompletion', async () => {
+    let providerSignal: AbortSignal | undefined;
+    const complete = vi.fn((_context, _purpose, options) => {
+      providerSignal = options?.signal;
+      return new Promise<never>(() => undefined);
+    });
+    const { backend } = createBackend({ complete });
+
+    const resultPromise = backend.handleChatCompletion({
+      requestId: 'req-direct-cancel-1',
+      request: { ...participantRequest, system_prompt_mode: 'none' },
+      principal: { id: 'principal-1', mode: 'api_key' },
+      headers: { 'x-channel-id': 'model-room:room-1:claude-fable' },
+    });
+
+    await Promise.resolve();
+    const cancelResult = await backend.cancelChatCompletion({ requestId: 'req-direct-cancel-1' });
+    expect(cancelResult).toEqual({ cancelled: true });
+
+    const result = await resultPromise;
+    expect(complete).toHaveBeenCalledTimes(1);
+    expect(providerSignal).toBeInstanceOf(AbortSignal);
+    expect(providerSignal?.aborted).toBe(true);
+    expect(result).toEqual({
+      ok: false,
+      error: {
+        status: 499,
+        type: 'request_cancelled',
+        message: 'Direct model completion cancelled',
+      },
+    });
+
+    const repeatCancel = await backend.cancelChatCompletion({ requestId: 'req-direct-cancel-1' });
+    expect(repeatCancel).toEqual({ cancelled: false });
+  });
+
+  it('cancels an in-flight direct completion when the caller AbortSignal fires', async () => {
+    let providerSignal: AbortSignal | undefined;
+    const complete = vi.fn((_context, _purpose, options) => {
+      providerSignal = options?.signal;
+      return new Promise<never>(() => undefined);
+    });
+    const { backend } = createBackend({ complete });
+    const controller = new AbortController();
+
+    const resultPromise = backend.runChatCompletion({
+      request: { ...participantRequest, system_prompt_mode: 'none' },
+      principal: { id: 'principal-1', mode: 'api_key' },
+      headers: {},
+      signal: controller.signal,
+    });
+
+    await Promise.resolve();
+    controller.abort();
+
+    const result = await resultPromise;
+    expect(complete).toHaveBeenCalledTimes(1);
+    expect(providerSignal).toBeInstanceOf(AbortSignal);
+    expect(providerSignal?.aborted).toBe(true);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.status).toBe(499);
+      expect(result.error.type).toBe('request_cancelled');
+    }
+  });
+
+  it('rejects direct completions immediately when the signal is already aborted', async () => {
+    const complete = vi.fn(() => new Promise<never>(() => undefined));
+    const { backend } = createBackend({ complete });
+    const controller = new AbortController();
+    controller.abort();
+
+    const result = await backend.runChatCompletion({
+      request: { ...participantRequest, system_prompt_mode: 'none' },
+      principal: { id: 'principal-1', mode: 'api_key' },
+      headers: {},
+      signal: controller.signal,
+    });
+
+    expect(complete).not.toHaveBeenCalled();
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.status).toBe(499);
+      expect(result.error.type).toBe('request_cancelled');
+    }
+  });
+
+  it('surfaces pinned-model failures instead of falling back', async () => {
+    const complete = vi.fn(async () => {
+      throw new Error('404 No endpoints available');
+    });
+    const { backend } = createBackend({ complete });
+
+    const result = await backend.handleChatCompletion({
+      requestId: 'req-direct-7',
+      request: { ...participantRequest, system_prompt_mode: 'none' },
+      principal: { id: 'principal-1', mode: 'api_key' },
+      headers: {},
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.status).toBe(502);
+      expect(result.error.type).toBe('model_error');
+      expect(result.error.message).toContain('anthropic/claude-fable-5');
+      expect(result.error.message).toContain('404 No endpoints available');
     }
   });
 });

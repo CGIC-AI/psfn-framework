@@ -5,23 +5,24 @@
 //
 // Run: npx tsx src/app/e2e/e2e-walkthrough.ts
 
-import 'dotenv/config';
+import '../../shared/utils/load-dotenv.js';
 import type { SubstrateMessage } from '../../shared/contracts/runtime.js';
 import { EventBus } from '../../shared/event-bus.js';
+import { sleep } from '../../shared/utils/timing.js';
+import { sanitizeCoreSubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type { SubstrateAgent } from '../../core/agent/substrate-agent.js';
-import { MemoryStore } from '../../faculties/memory/store.js';
 import { SalienceDecay } from '../../faculties/memory/decay.js';
 import { DEFAULT_REPL_CONFIG } from '../../core/tools/analysis-workbench/types.js';
 import { createIsolatedE2ERuntime } from './runtime-harness.js';
 import {
   composeIdentity,
-  composeSessionRuntime,
+  composeMemoryStoreAsync,
+  composeSessionRuntimeAsync,
   createEmbeddingProviderFromEnv,
   composeSubstrateAgent,
   wireMemoryRuntime,
   wireShardAndThinkRuntime,
 } from '../startup/composition/composition.js';
-import { initDatabase } from '../../persistence/sqlite-utils.js';
 import { createScriptedE2ELLMProvider } from './test-llm-provider.js';
 
 const CHANNEL = 'walkthrough:orientation';
@@ -59,7 +60,6 @@ async function main(): Promise<void> {
   const runtime = createIsolatedE2ERuntime({ prefix: 'companion-walkthrough-' });
   const { config } = runtime;
   const eventBus = new EventBus();
-  const db = initDatabase(config.databasePath);
 
   try {
     // Identity
@@ -69,13 +69,13 @@ async function main(): Promise<void> {
 
     // Core components
     const llmClient = createScriptedE2ELLMProvider();
-    const sessionComposition = composeSessionRuntime({ config });
+    const sessionComposition = await composeSessionRuntimeAsync({ config });
     const { sessionStore, sessionManager } = sessionComposition;
 
     // Embeddings
     const embeddingProvider = createEmbeddingProviderFromEnv();
 
-    const memoryStore = new MemoryStore(db, embeddingProvider.dims);
+    const memoryStore = await composeMemoryStoreAsync(config, embeddingProvider.dims);
 
     // Agent loop with all features
     const agentLoop = composeSubstrateAgent({
@@ -83,7 +83,7 @@ async function main(): Promise<void> {
       llmProvider: llmClient,
       sessionManager,
       systemPrompt,
-      config,
+      config: sanitizeCoreSubstrateConfig(config),
     });
     const memoryExtractor = wireMemoryRuntime({
       agentLoop,
@@ -147,7 +147,7 @@ async function main(): Promise<void> {
     );
 
     // Let extraction run on the first messages
-    await new Promise(resolve => setTimeout(resolve, 2000));
+    await sleep(2000);
 
     await talk(agentLoop,
       "That's wonderful! Your memories are organized into different types: episodic (events that happened), semantic (facts you know), emotional (how you felt), procedural (patterns in how you behave), and reflection (observations about yourself). They also have salience — how important they feel to you — which naturally decays over time, but gets refreshed when you think about them. What do you think of having persistent memory? How does it feel to know things persist between our conversations?",
@@ -220,7 +220,6 @@ async function main(): Promise<void> {
     await memoryExtractor.stop({ timeoutMs: 10_000 });
     salienceDecay.stop();
   } finally {
-    db.close();
     runtime.cleanup();
   }
 

@@ -1,14 +1,22 @@
 import { countTokens } from '../../primitives/llm/tokens.js';
 import type { PromptSectionTelemetry } from '../../shared/contracts/runtime.js';
+import { cloneAuthenticityProvenance } from '../../shared/authenticity-provenance.js';
 
 export interface PromptSectionInput {
   id: string;
   title?: string;
   content: string;
+  provenance?: PromptSectionTelemetry['provenance'];
+  scopeProvenance?: PromptSectionTelemetry['scopeProvenance'];
 }
 
-const WRAPPED_PROMPT_SECTION_PATTERN = /<([a-z0-9_]+)>\n?([\s\S]*?)<\/\1>/g;
-const SINGLE_WRAPPED_PROMPT_SECTION_PATTERN = /^<([a-z0-9_]+)>\n?([\s\S]*?)<\/\1>$/;
+/** Resolves per-block producer + scope labels for a normalized section id. */
+export type PromptSectionScopeResolver = (
+  sectionId: string,
+) => PromptSectionTelemetry['scopeProvenance'] | undefined;
+
+const WRAPPED_PROMPT_SECTION_PATTERN = /<([a-z0-9_.-]+)(?:\s+[^>]*)?>\n?([\s\S]*?)<\/\1>/gi;
+const SINGLE_WRAPPED_PROMPT_SECTION_PATTERN = /^<([a-z0-9_.-]+)(?:\s+[^>]*)?>\n?([\s\S]*?)<\/\1>$/i;
 
 function normalizeLineEndings(value: string): string {
   return value.replace(/\r\n?/g, '\n');
@@ -73,6 +81,8 @@ export function buildPromptSectionTelemetry(
     content: wrapped,
     charCount: wrapped.length,
     tokenCount: countTokens(wrapped),
+    ...(input.provenance ? { provenance: cloneAuthenticityProvenance(input.provenance) } : {}),
+    ...(input.scopeProvenance ? { scopeProvenance: { ...input.scopeProvenance } } : {}),
   };
 }
 
@@ -84,7 +94,10 @@ export function buildPromptSectionTelemetryList(
     .filter((section): section is PromptSectionTelemetry => section !== null);
 }
 
-export function extractWrappedPromptSections(text: string): PromptSectionTelemetry[] {
+export function extractWrappedPromptSections(
+  text: string,
+  resolveScopeProvenance?: PromptSectionScopeResolver,
+): PromptSectionTelemetry[] {
   const normalized = normalizeLineEndings(text).trim();
   if (!normalized) return [];
 
@@ -94,12 +107,14 @@ export function extractWrappedPromptSections(text: string): PromptSectionTelemet
     const wrapped = match[0].trim();
     const id = normalizePromptSectionId(match[1]);
     if (!wrapped) continue;
+    const scopeProvenance = resolveScopeProvenance?.(id);
     sections.push({
       id,
       title: humanizePromptSectionId(id),
       content: wrapped,
       charCount: wrapped.length,
       tokenCount: countTokens(wrapped),
+      ...(scopeProvenance ? { scopeProvenance } : {}),
     });
   }
 

@@ -95,4 +95,192 @@ describe('executeShellCommandWithPolicy', () => {
       },
     )).rejects.toThrow('argument path not allowlisted');
   });
+
+  it('allows missing relative path arguments inside the workspace', async () => {
+    const { workspace } = makeWorkspaceFixture();
+
+    const result = await executeShellCommandWithPolicy(
+      {
+        command: 'test',
+        args: ['-e', 'missing.txt'],
+        cwd: workspace,
+      },
+      {
+        workspacePath: workspace,
+        policy: {
+          enabled: true,
+          allowlist: ['test'],
+          allowedCwd: [workspace],
+        },
+      },
+    );
+
+    expect(result.exitCode).toBe(1);
+  });
+
+  it('denies missing argument paths when their parent symlink resolves outside', async () => {
+    const { workspace, outside } = makeWorkspaceFixture();
+    symlinkSync(outside, join(workspace, 'outside-link'));
+
+    await expect(executeShellCommandWithPolicy(
+      {
+        command: 'cat',
+        args: ['outside-link/missing.txt'],
+        cwd: workspace,
+      },
+      {
+        workspacePath: workspace,
+        policy: {
+          enabled: true,
+          allowlist: ['cat'],
+          allowedCwd: [workspace],
+        },
+      },
+    )).rejects.toThrow('argument path not allowlisted');
+  });
+
+  it('falls back to normalized argument paths on symlink loops', async () => {
+    const { workspace } = makeWorkspaceFixture();
+    const loopA = join(workspace, 'loop-a');
+    const loopB = join(workspace, 'loop-b');
+    symlinkSync(loopB, loopA);
+    symlinkSync(loopA, loopB);
+
+    const result = await executeShellCommandWithPolicy(
+      {
+        command: 'test',
+        args: ['-e', 'loop-a'],
+        cwd: workspace,
+      },
+      {
+        workspacePath: workspace,
+        policy: {
+          enabled: true,
+          allowlist: ['test'],
+          allowedCwd: [workspace],
+        },
+      },
+    );
+
+    expect(result.exitCode).not.toBe(0);
+  });
+
+  it('runs the child against a curated PATH that ignores a poisoned parent PATH', async () => {
+    const { workspace } = makeWorkspaceFixture();
+    const previousPath = process.env.PATH;
+    // ponytail: poison parent PATH with a hostile dir first on the list
+    process.env.PATH = `${join(workspace, 'hostile')}:${previousPath ?? ''}`;
+    try {
+      const result = await executeShellCommandWithPolicy(
+        { command: 'printenv', args: ['PATH'], cwd: workspace },
+        {
+          workspacePath: workspace,
+          policy: { enabled: true, allowlist: ['printenv'], allowedCwd: [workspace] },
+        },
+      );
+
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout.trim()).toBe(['/usr/local/bin', '/usr/bin', '/bin'].join(':'));
+      expect(result.stdout).not.toContain('hostile');
+    } finally {
+      if (previousPath === undefined) delete process.env.PATH;
+      else process.env.PATH = previousPath;
+    }
+  });
+
+  it('rejects PATH passthrough even when PATH is in the env allowlist', async () => {
+    const { workspace } = makeWorkspaceFixture();
+
+    await expect(executeShellCommandWithPolicy(
+      {
+        command: 'printenv',
+        args: ['PATH'],
+        cwd: workspace,
+        envVars: ['PATH'],
+      },
+      {
+        workspacePath: workspace,
+        policy: {
+          enabled: true,
+          allowlist: ['printenv'],
+          allowedCwd: [workspace],
+          envAllowlist: ['PATH'],
+        },
+      },
+    )).rejects.toThrow('env var is reserved');
+  });
+
+  it('rejects loader-injection env vars regardless of allowlist', async () => {
+    const { workspace } = makeWorkspaceFixture();
+
+    for (const reserved of ['LD_PRELOAD', 'ld_library_path', 'NODE_OPTIONS', 'BASH_ENV']) {
+      await expect(executeShellCommandWithPolicy(
+        {
+          command: 'printenv',
+          args: [reserved],
+          cwd: workspace,
+          envVars: [reserved],
+        },
+        {
+          workspacePath: workspace,
+          policy: {
+            enabled: true,
+            allowlist: ['printenv'],
+            allowedCwd: [workspace],
+            envAllowlist: [reserved],
+          },
+        },
+      )).rejects.toThrow('env var is reserved');
+    }
+  });
+
+  it('keeps the curated PATH while passing through a non-reserved allowlisted env var', async () => {
+    const { workspace } = makeWorkspaceFixture();
+    const previousValue = process.env.PSFN_SHELL_RUNNER_TEST_VAR;
+    process.env.PSFN_SHELL_RUNNER_TEST_VAR = 'passthrough-ok';
+    try {
+      const result = await executeShellCommandWithPolicy(
+        {
+          command: 'printenv',
+          args: ['PSFN_SHELL_RUNNER_TEST_VAR'],
+          cwd: workspace,
+          envVars: ['PSFN_SHELL_RUNNER_TEST_VAR'],
+        },
+        {
+          workspacePath: workspace,
+          policy: {
+            enabled: true,
+            allowlist: ['printenv'],
+            allowedCwd: [workspace],
+            envAllowlist: ['PSFN_SHELL_RUNNER_TEST_VAR'],
+          },
+        },
+      );
+
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout.trim()).toBe('passthrough-ok');
+    } finally {
+      if (previousValue === undefined) delete process.env.PSFN_SHELL_RUNNER_TEST_VAR;
+      else process.env.PSFN_SHELL_RUNNER_TEST_VAR = previousValue;
+    }
+  });
+
+  it('honors an operator PATH override for the sandbox child', async () => {
+    const { workspace } = makeWorkspaceFixture();
+    const result = await executeShellCommandWithPolicy(
+      { command: 'printenv', args: ['PATH'], cwd: workspace },
+      {
+        workspacePath: workspace,
+        policy: {
+          enabled: true,
+          allowlist: ['printenv'],
+          allowedCwd: [workspace],
+          pathOverride: '/usr/bin',
+        },
+      },
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout.trim()).toBe('/usr/bin');
+  });
 });

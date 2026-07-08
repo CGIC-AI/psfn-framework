@@ -1,19 +1,80 @@
 export {
-  EpisodicStore,
+  type EpisodeArcAuditAction,
+  type EpisodeArcAuditEntry,
+  type EpisodeArcAuditListOptions,
   type EpisodeArcListOptions,
+  type EpisodeArcMutationAudit,
+  type EpisodeArcRemoveInput,
+  type EpisodeArcRepointInput,
+  type EpisodeArcRepointResult,
   type EpisodeArcWriteInput,
+  type EpisodeClaimTransferInput,
+  type EpisodeClaimTransferResult,
   type EpisodeCreateInput,
+  type EpisodeLifecycleStatus,
   type EpisodeListOptions,
+  type EpisodeMessageClaim,
+  type EpisodeMessageClaimEntryInput,
+  type EpisodeMessageClaimListOptions,
+  type EpisodeMessageClaimStatus,
+  type EpisodeMessageClaimWriteInput,
   type EpisodeTimeSearchOptions,
+  type EpisodeUpdateInput,
   type EpisodicStoreOptions,
-} from './store.js';
+  type EpisodicStorePort,
+  type EpisodicStoreResult,
+} from './store-port.js';
+export {
+  PostgresEpisodicStore,
+  createPostgresEpisodicStore,
+  createPostgresEpisodicStoreFromPool,
+} from './postgres-store.js';
+export {
+  DreamMeaningPass,
+  parseMeaningContribution,
+  type DreamMeaningPassOptions,
+  type DreamMeaningPassRunInput,
+  type DreamMeaningPassRunResult,
+  type DreamPassAgent,
+} from './dream-meaning-pass.js';
+export {
+  EpisodeArcWeaver,
+  parseProposedArcs,
+  type ArcFormationOptions,
+  type ArcFormationRunInput,
+  type ArcFormationRunResult,
+} from './arc-formation.js';
+export {
+  SleepCycleEpisodeConsolidator,
+  buildConsolidatedEpisodeInput,
+  buildMergeChains,
+  parseThematicGrouping,
+  type SleepConsolidationFailureEvent,
+  type SleepConsolidationSessionReader,
+  type SleepCycleConsolidationOptions,
+  type SleepCycleConsolidationResult,
+  type SleepCycleConsolidationRunInput,
+} from './sleep-consolidation.js';
 export {
   EpisodicSynthesizer,
+  sessionEntryClaimKey,
+  type EpisodeSegmentationEvent,
   type EpisodicSynthesisOptions,
+  type EpisodicSynthesisProcessingWatermark,
   type EpisodicSynthesisRunInput,
   type EpisodicSynthesisRunResult,
+  type EpisodicSynthesisWatermarkScope,
   type EpisodicSynthesisSessionReader,
+  type EpisodicTopicSegmentationOptions,
 } from './synthesis.js';
+export {
+  TOPIC_SEGMENTATION_SYSTEM_PROMPT,
+  parseTopicSegments,
+  proposeTopicSegments,
+  type TopicSegment,
+  type TopicSegmentStatus,
+  type TopicSegmentationRequest,
+} from './topic-segmentation.js';
 export type {
   Episode,
   EpisodeAffect,

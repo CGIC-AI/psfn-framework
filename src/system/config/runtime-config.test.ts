@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { loadConfig } from './load-config.js';
 import { hydrateJsonBackedRuntimeConfig } from './runtime-config.js';
+import { makeTestFatiguePolicyConfig } from '../../test-support/charge-policy.js';
 
 const ORIGINAL_ENV = { ...process.env };
 const TEMP_DIRS: string[] = [];
@@ -53,7 +54,7 @@ describe('hydrateJsonBackedRuntimeConfig', () => {
     writeFileSync(join(dataDir, 'settings.json'), JSON.stringify({
       analysisWorkbenchMaxTokens: 180000,
       analysisWorkbenchMaxWallTimeMs: 180000,
-      analysisWorkbenchMaxSubQueries: 12,
+      analysisWorkbenchMaxSubQueries: 24,
     }), 'utf8');
     writeFileSync(join(dataDir, 'models.json'), JSON.stringify({
       schemaVersion: 1,
@@ -156,10 +157,12 @@ describe('hydrateJsonBackedRuntimeConfig', () => {
         cheap_cloud: 'Cheap cloud models are lightly priced to keep them available for routine use.',
         premium_cloud: 'Premium cloud models are intentionally more expensive to reserve for high-value calls.',
       },
+      fatigue: makeTestFatiguePolicyConfig(),
     }), 'utf8');
 
     process.env.DATA_DIR = dataDir;
     process.env.COMPANION_ID = 'test-companion';
+    process.env.POSTGRES_DATABASE_URL = 'postgresql://test:test@127.0.0.1:5432/test';
     process.env.CONFIG_DIR = 'config';
     process.env.PRIMARY_MODEL = 'env-primary-should-be-ignored';
     process.env.THINK_MAX_TOKENS = '999999';
@@ -173,7 +176,7 @@ describe('hydrateJsonBackedRuntimeConfig', () => {
     expect(config.primaryMaxTokens).toBe(12288);
     expect(config.analysisWorkbenchMaxTokens).toBe(180000);
     expect(config.analysisWorkbenchMaxWallTimeMs).toBe(180000);
-    expect(config.analysisWorkbenchMaxSubQueries).toBe(12);
+    expect(config.analysisWorkbenchMaxSubQueries).toBe(24);
     expect(config.chargePolicy?.surfaceCosts.shardLaunch).toBe(7);
   });
 });

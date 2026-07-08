@@ -82,12 +82,14 @@ const PERSONAL_DOWNLOADS_DIRNAME = 'downloads';
 const PERSONAL_IMAGES_DIRNAME = 'images';
 const PERSONAL_JOURNAL_DIRNAME = 'journal';
 const PERSONAL_KNOWLEDGE_DIRNAME = 'knowledge';
+const PERSONAL_WIKI_DIRNAME = 'wiki';
 const PERSONAL_SCRATCHPAD_DIRNAME = 'scratchpad';
 const PERSONAL_SKILLS_DIRNAME = 'skills';
 const PERSONAL_MODULES_DIRNAME = 'modules';
 const PERSONAL_EXPERIMENTS_DIRNAME = 'experiments';
 const PERSONAL_TMP_DIRNAME = 'tmp';
 const COMPANION_STATE_DIRNAME = 'state';
+const SYSTEM_STATE_DIRNAME = 'state';
 const COMPANION_DOCS_DIRNAME = 'docs';
 const COMPANION_WORKSPACE_DIRNAME = 'workspace';
 const COMPANION_IMAGES_DIRNAME = 'images';
@@ -137,7 +139,7 @@ export function resolveRuntimeLayoutMode(
   return RUNTIME_LAYOUT_MODE.CONTINUOUS;
 }
 
-function isStrictSubpath(path: string, root: string): boolean {
+export function isStrictSubpath(path: string, root: string): boolean {
   const relativePath = relative(resolve(root), resolve(path));
   return relativePath.length > 0 && !relativePath.startsWith('..') && !isAbsolute(relativePath);
 }
@@ -427,6 +429,21 @@ export function resolveCompanionStateDir(companionDataDir: string): string {
   return join(companionDataDir, COMPANION_STATE_DIRNAME);
 }
 
+/** System-owned runtime/operator state directory (system-data/state). */
+export function resolveSystemStateDir(systemDataDir: string): string {
+  return join(systemDataDir, SYSTEM_STATE_DIRNAME);
+}
+
+/** Latest tool-surface conformance run (system-owned, cross-workstream contract). */
+export function resolveToolConformanceLatestPath(systemDataDir: string): string {
+  return join(resolveSystemStateDir(systemDataDir), 'tool-conformance-latest.json');
+}
+
+/** Bounded JSONL history of the last tool-surface conformance runs. */
+export function resolveToolConformanceHistoryPath(systemDataDir: string): string {
+  return join(resolveSystemStateDir(systemDataDir), 'tool-conformance-history.jsonl');
+}
+
 export function resolveCompanionDocsDir(companionDataDir: string): string {
   return join(companionDataDir, COMPANION_DOCS_DIRNAME);
 }
@@ -568,6 +585,10 @@ export function resolveContinuityDir(dataDir: string): string {
   return join(resolveContactsDir(dataDir), 'continuity');
 }
 
+export function resolvePendingContactApprovalsPath(dataDir: string): string {
+  return join(resolveContactsDir(dataDir), 'pending-approvals.json');
+}
+
 export function resolveValuesJournalPath(dataDir: string): string {
   return join(resolveNotesDir(dataDir), 'values.jsonl');
 }
@@ -687,6 +708,10 @@ export function resolvePostTurnActionQueuePath(companionDataDir: string): string
   return join(resolveCompanionStateDir(companionDataDir), 'post-turn-actions.queue.json');
 }
 
+export function resolveOutreachOutboxLedgerPath(companionDataDir: string): string {
+  return join(resolveCompanionStateDir(companionDataDir), 'outreach-outbox.jsonl');
+}
+
 export function resolveSafeguardAuditTrailPath(companionDataDir: string): string {
   return join(resolveCompanionStateDir(companionDataDir), 'safeguards-audit.jsonl');
 }
@@ -695,12 +720,37 @@ export function resolveChargeLedgerPath(companionDataDir: string): string {
   return join(resolveCompanionStateDir(companionDataDir), 'charge-ledger.jsonl');
 }
 
+// ── Social-graph builder (E4.2) ──
+export function resolveSocialGraphProposalsPath(companionDataDir: string): string {
+  return join(resolveCompanionStateDir(companionDataDir), 'social-graph-proposals.json');
+}
+
+export function resolveSocialGraphBuilderWatermarkPath(companionDataDir: string): string {
+  return join(resolveCompanionStateDir(companionDataDir), 'social-graph-builder-watermark.json');
+}
+
+export function resolveFatigueLedgerPath(companionDataDir: string): string {
+  return join(resolveCompanionStateDir(companionDataDir), 'fatigue-ledger.jsonl');
+}
+
 export function resolveShardSessionMemorySyncAuditPath(companionDataDir: string): string {
   return join(resolveCompanionStateDir(companionDataDir), 'shard-session-memory-sync-audit.jsonl');
 }
 
 export function resolveShardFoldReviewStorePath(companionDataDir: string): string {
   return join(resolveCompanionStateDir(companionDataDir), 'shard-fold-reviews.json');
+}
+
+export function resolveSessionRoutesPath(companionDataDir: string): string {
+  return join(resolveCompanionStateDir(companionDataDir), 'session-routes.json');
+}
+
+export function resolveCogSecEventsPath(companionDataDir: string): string {
+  return join(resolveCompanionStateDir(companionDataDir), 'cogsec-events.json');
+}
+
+export function resolveCogSecForensicArchiveDir(companionDataDir: string): string {
+  return join(resolveCompanionVaultDir(companionDataDir), 'cogsec-forensics');
 }
 
 export function resolveIdentityAssetsDir(companionDataDir: string): string {
@@ -731,6 +781,10 @@ export function resolvePersonalKnowledgeDir(personalFilesDir: string): string {
   return join(personalFilesDir, PERSONAL_KNOWLEDGE_DIRNAME);
 }
 
+export function resolvePersonalWikiDir(personalFilesDir: string): string {
+  return join(resolvePersonalKnowledgeDir(personalFilesDir), PERSONAL_WIKI_DIRNAME);
+}
+
 export function resolvePersonalScratchpadDir(personalFilesDir: string): string {
   return join(personalFilesDir, PERSONAL_SCRATCHPAD_DIRNAME);
 }
@@ -758,6 +812,7 @@ export function ensurePersonalFilesLayout(personalFilesDir: string): void {
   mkdirSync(resolvePersonalImagesDir(personalFilesDir), { recursive: true });
   mkdirSync(resolvePersonalJournalDir(personalFilesDir), { recursive: true });
   mkdirSync(resolvePersonalKnowledgeDir(personalFilesDir), { recursive: true });
+  mkdirSync(resolvePersonalWikiDir(personalFilesDir), { recursive: true });
   mkdirSync(resolvePersonalScratchpadDir(personalFilesDir), { recursive: true });
   mkdirSync(resolvePersonalSkillsDir(personalFilesDir), { recursive: true });
   mkdirSync(resolvePersonalModulesDir(personalFilesDir), { recursive: true });
@@ -836,10 +891,13 @@ function migrateLegacyCompanionStateLayout(companionDataDir: string): void {
     ['north-star.json', resolveNorthStarPath(companionDataDir)],
     ['heartbeat-policy.json', resolveHeartbeatPolicyPath(companionDataDir)],
     ['post-turn-actions.queue.json', resolvePostTurnActionQueuePath(companionDataDir)],
+    ['outreach-outbox.jsonl', resolveOutreachOutboxLedgerPath(companionDataDir)],
     ['safeguards-audit.jsonl', resolveSafeguardAuditTrailPath(companionDataDir)],
     ['charge-ledger.jsonl', resolveChargeLedgerPath(companionDataDir)],
+    ['fatigue-ledger.jsonl', resolveFatigueLedgerPath(companionDataDir)],
     ['shard-session-memory-sync-audit.jsonl', resolveShardSessionMemorySyncAuditPath(companionDataDir)],
     ['shard-fold-reviews.json', resolveShardFoldReviewStorePath(companionDataDir)],
+    ['session-routes.json', resolveSessionRoutesPath(companionDataDir)],
     ['last_active_channel.json', resolveLastActiveSessionPath(companionDataDir)],
   ] as const;
 

@@ -22,21 +22,22 @@ The codebase currently supports:
 When checking behavior, prefer this order:
 
 1. Runtime entrypoints and composition
-   - `src/app/startup/index.ts`
    - `src/app/gateway/main.ts`
    - `src/app/agent/main.ts`
-   - `src/bootstrap/composition.ts`
-   - `src/bootstrap/parity.ts`
+   - `src/app/operator/main.ts`
+   - `src/app/startup/composition/composition.ts`
 2. Config and persistence contracts
-   - `src/types.ts`
-   - `src/settings.ts`
-   - `src/config/settings-contract.ts`
-   - `src/config/runtime-config.ts`
+   - `src/system/config/runtime-config-contracts.ts`
+   - `src/system/config/load-config.ts`
+   - `src/system/config/settings-contract-guard.ts`
+   - `src/system/config/startup-owner-files.ts`
    - `src/persistence/layout.ts`
+   - `src/persistence/runtime-factory.ts` (Postgres-only runtime persistence)
 3. Product/runtime overview and deeper design docs
    - `README.md`
    - `docs/specifications.md`
    - `docs/architecture.md`
+   - `docs/chat-turn-lifecycle.md`
    - `docs/memory.md`
    - `docs/operations.md`
    - `docs/setup.md`
@@ -84,13 +85,16 @@ Canonical mutable config owners live in the system-owned config domain:
 
 - `settings.json`
 - `models.json`
+- `providers.json`
 - `scheduler.json`
 - `capability-tier.json`
 - `channels.json`
 - `skills.json`
 - `trust-policy.json`
+- `charge-policy.json`
+- `backup.json`
 
-See `src/config/settings-contract.ts` for the owner map and schema metadata.
+See `src/system/config/settings-contract-guard.ts` and `src/system/config/startup-owner-files.ts` for the owner map and schema metadata.
 
 ### Two-root persistence
 
@@ -107,32 +111,16 @@ Key directories that matter now:
 
 ```text
 src/
-  agent/              agent loop, tool orchestration, background continuation
-  backup/             scheduled backup and restore verification
-  beads/              gateway-backed bd tools
-  bootstrap/          shared parity and composition wiring
-  capabilities/       tiers, confirmations, safeguards, eligibility
-  channels/           admin, api, discord, telegram, wyoming
-  compositional/      compose/evaluate policy and helpers
-  contacts/           trust-aware contact state and tools
-  context-feedback/   post-turn context scoring
-  emotion/            classifiers, state, persona adaptation
-  gateway/            RPC server/client, policy, TLS, SSRF, audit
-  git/                repo ops and self-modification tools
-  identity/           character card, prompt stack, versioning
-  llm/                routing, retries, discovery, model budgets
-  memory/             extraction, retrieval, decay, writer
-  modules/            runtime module registry and loader
-  persistence/        layout, cutover, path helpers
-  repl/               analysis workbench tooling
-  self-model/         internal state and metacognition
-  session/            journal, provenance, compaction, manifests
-  settings/           schema/coercion/runtime settings helpers
-  shards/             child-agent orchestration
-  skills/             skill storage and tools
-  values/             values journal and tools
-  vault/              Obsidian integration
-  voice/              connectors, transports, runtime, policies
+  app/                entrypoints (gateway, agent, operator, startup composition, maintenance, e2e)
+  boundary/           gateway RPC/policy/SSRF/audit, sandbox execution, fs/git/web/shell/vault/beads adapters, credential vault
+  channels/           api, discord, telegram, wyoming, voice, backplane transports
+  core/               SubstrateAgent, prompts/identity, scheduler, session, emotion, self-model, intention, contacts, tools
+  faculties/          memory (extraction/retrieval/episodic/sleeptime), skills, subagents, shards, media, core-memory, values, context-feedback
+  operator/garden/    Garden server, admin routes, services, audit/telemetry
+  persistence/        runtime layout, sessions, JSONL journals, Postgres stores/migrations, backups, repair
+  primitives/         LLM provider ports, images, voice transports, request context
+  shared/             contracts, event bus, telemetry, routing, logger, utilities
+  system/             config owner files, settings contract, capabilities, trust, lifecycle
 ```
 
 ## Architecture Highlights
@@ -140,27 +128,27 @@ src/
 ### Registries and adapters
 
 - channels, STT, and TTS resolve through registries/manifests with fail-closed activation and parity across runtime modes
-- key files: `src/runtime/channel-lifecycle.ts`, `src/runtime/bootstrap-helpers.ts`, `src/channels/config.ts`, `src/voice/connectors/stt/`, `src/voice/connectors/tts/`
+- key files: `src/channels/`, `src/primitives/voice/`, `src/app/startup/composition/composition.ts`
 
 ### Config ownership and Garden exposure
 
 - mutable runtime settings are owned by canonical JSON files, guarded by owner-file validation, and exposed through Garden/admin APIs
-- key files: `src/config/settings-contract.ts`, `src/config/settings-contract-guard.ts`, `src/channels/admin/api-routes.ts`, `admin-ui/`
+- key files: `src/system/config/settings-contract-guard.ts`, `src/system/config/startup-owner-files.ts`, `src/operator/garden/api-routes.ts`, `admin-ui/`
 
 ### Persistence and layout
 
 - system-owned state lives under `system-data`; companion artifacts live under `companion-data`; cutover helpers and path guards enforce the topology
-- key files: `src/persistence/layout.ts`, `src/app/maintenance/migrate-persistence-layout.ts`, `src/config/runtime-config.ts`, `src/runtime/bootstrap-helpers.ts`
+- key files: `src/persistence/layout.ts`, `src/app/maintenance/migrate-persistence-layout.ts`, `src/persistence/runtime-factory.ts` (PostgreSQL-only runtime stores), `src/system/config/load-config.ts`
 
 ### Cognition and context
 
 - retrieval, extraction, appraisal, analysis workbench context, context manifests, observation masking, and context feedback all feed runtime decision-making
-- key files: `src/compositional/policy.ts`, `src/memory/extraction/`, `src/memory/retrieval.ts`, `src/intention/`, `src/repl/`, `src/session/`, `src/context-feedback/`
+- key files: `src/faculties/memory/extraction/`, `src/faculties/memory/retrieval.ts`, `src/core/intention/`, `src/core/session/` (context manifests, attribution guard), `src/core/tools/analysis-workbench/`, `src/faculties/context-feedback/`
 
 ### Affect, self-model, and background work
 
 - emotion state, active concerns, self-model snapshots, metacognitive flags, background continuation, and shard lifecycle management are first-class runtime surfaces
-- key files: `src/emotion/`, `src/intention/`, `src/self-model/`, `src/agent/background-completion-delivery-queue.ts`, `src/agent/background-completion-policy.ts`, `src/shards/manager.ts`
+- key files: `src/core/emotion/`, `src/core/intention/`, `src/core/self-model/`, `src/core/agent/post-turn-action-runtime.ts`, `src/core/scheduler/heartbeat-post-turn-runtime.ts`, `src/faculties/shards/manager.ts`
 
 ## Channels And Interfaces
 
@@ -208,9 +196,9 @@ Tool surface split:
 
 Main wiring locations:
 
-- `src/bootstrap/composition.ts`
-- `src/bootstrap/parity.ts`
+- `src/app/startup/composition/composition.ts`
 - `src/app/agent/main.ts`
+- `src/persistence/runtime-factory.ts`
 
 ## Validation Commands
 
@@ -278,10 +266,12 @@ bd close <id>         # Complete work
 4. **PUSH TO REMOTE** - This is MANDATORY:
    ```bash
    git pull --rebase
-   bd dolt push
    git push
    git status  # MUST show "up to date with origin"
    ```
+   Do NOT run `bd dolt push` — beads live on the LOCAL shared dolt server
+   (no dolt remote exists). Pushing recreates junk `__dolt_remote_info__` /
+   `refs/dolt/*` refs on GitHub that have to be manually deleted.
 5. **Clean up** - Clear stashes, prune remote branches
 6. **Verify** - All changes committed AND pushed
 7. **Hand off** - Provide context for next session
@@ -292,3 +282,14 @@ bd close <id>         # Complete work
 - NEVER say "ready to push when you are" - YOU must push
 - If push fails, resolve and retry until it succeeds
 <!-- END BEADS INTEGRATION -->
+## Orchestration workflow  
+
+You (Fable) are the orchestrator. Plan, decompose, 
+synthesize.  Reasoning-heavy phases → deep-reasoner 
+Mechanical work → fast-worker Codex (/codex:rescue 
+--background) is a cracked engineer on par with 
+deep-reasoner, from a different perspective. Treat as a 
+peer, not a reviewer.  High-stakes decisions: task Opus + 
+Codex on the same problem in parallel, synthesize the best 
+of both, without showing either the other's answer. Keep 
+your own context lean.

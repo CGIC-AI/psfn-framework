@@ -66,6 +66,7 @@ describe('ContactStore', () => {
       const columns = legacyDb.prepare('PRAGMA table_info(contacts)')
         .all() as Array<{ name: string }>;
       expect(columns.some(column => column.name === 'nickname')).toBe(true);
+      expect(columns.some(column => column.name === 'timezone')).toBe(true);
       expect(migratedStore.updateIdentityProfile('legacy-contact', 'Legacy Updated', 'Leg')).toBe(true);
       expect(migratedStore.getById('legacy-contact')?.nickname).toBe('Leg');
     });
@@ -226,6 +227,56 @@ describe('ContactStore', () => {
       expect(updated.emotionalBaseline).toEqual({ warmth: 0.5 });
     });
 
+    it('persists, hydrates, preserves, updates, and clears optional timezone', () => {
+      const created = store.upsert({
+        displayName: 'Timezone Contact',
+        discordUserId: 'timezone-contact',
+        timezone: '  America/Los_Angeles  ',
+      });
+      expect(created.timezone).toBe('America/Los_Angeles');
+      expect(store.getById(created.id)?.timezone).toBe('America/Los_Angeles');
+
+      const unrelatedUpdate = store.upsert({
+        displayName: 'Timezone Contact Renamed',
+        discordUserId: 'timezone-contact',
+      });
+      expect(unrelatedUpdate.timezone).toBe('America/Los_Angeles');
+
+      const changed = store.upsert({
+        displayName: 'Timezone Contact Renamed',
+        discordUserId: 'timezone-contact',
+        timezone: 'Europe/London',
+      }, { actor: 'admin:api' });
+      expect(changed.timezone).toBe('Europe/London');
+
+      const cleared = store.upsert({
+        displayName: 'Timezone Contact Renamed',
+        discordUserId: 'timezone-contact',
+        timezone: undefined,
+      }, { actor: 'admin:api' });
+      expect(cleared.timezone).toBeUndefined();
+
+      const entries = store.listMutationAuditEntries({
+        contactId: created.id,
+        field: 'timezone',
+        limit: 10,
+      });
+      expect(entries).toEqual([
+        expect.objectContaining({
+          actor: 'admin:api',
+          field: 'timezone',
+          oldValue: 'Europe/London',
+          newValue: null,
+        }),
+        expect.objectContaining({
+          actor: 'admin:api',
+          field: 'timezone',
+          oldValue: 'America/Los_Angeles',
+          newValue: 'Europe/London',
+        }),
+      ]);
+    });
+
     it('exports contact snapshots to configured contacts directory', () => {
       const tempDir = mkdtempSync(join(tmpdir(), 'psfn-contacts-export-'));
       const exportDir = join(tempDir, 'contacts');
@@ -374,7 +425,7 @@ describe('ContactStore', () => {
         INSERT INTO contact_channel_ids (
           contact_id, channel, channel_user_id, privacy_level, first_seen, last_seen
         ) VALUES (?, ?, ?, ?, ?, ?)
-      `).run('owner-legacy', 'discord', PRIMARY_USER_ID, 'semi_private', now, now);
+      `).run('owner-legacy', 'discord', PRIMARY_USER_ID, 'invite_only', now, now);
 
       expect(store.setTrustLevel('owner-legacy', 'primary', 'admin:api')).toBe(true);
       expect(store.getById('owner-legacy')?.trustLevel).toBe('primary');
@@ -661,15 +712,17 @@ describe('ContactStore', () => {
 
     it('records linked identity and conversation channel privacy mutations', () => {
       const contact = store.upsert({ displayName: 'Privacy Audit Target' });
-      expect(store.linkChannelIdentity(contact.id, 'discord', 'privacy-user', { privacyLevel: 'semi_private' })).toBe('linked');
+      expect(store.linkChannelIdentity(contact.id, 'discord', 'privacy-user', { privacyLevel: 'invite_only' })).toBe('linked');
       store.recordChannelActivity(contact.id, 'discord', '1313001762793197678', 'private');
 
       expect(store.setChannelPrivacy(contact.id, 'discord', 'privacy-user', 'private', 'admin:api')).toBe(true);
+      // E3.3: 'broadcast' is retired from the privacy vocabulary; the
+      // provenance-only per-contact field accepts ChannelPrivacy values.
       expect(store.setConversationChannelPrivacy(
         contact.id,
         'discord',
         '1313001762793197678',
-        'broadcast',
+        'public',
         'admin:api',
       )).toBe(true);
 
@@ -681,14 +734,14 @@ describe('ContactStore', () => {
         field: 'channel_privacy',
       });
       expect(entries[0].oldValue).toContain('"privacyLevel":"private"');
-      expect(entries[0].newValue).toContain('"privacyLevel":"broadcast"');
+      expect(entries[0].newValue).toContain('"privacyLevel":"public"');
       expect(entries[0].newValue).toContain('"channelId":"1313001762793197678"');
       expect(entries[1]).toMatchObject({
         contactId: contact.id,
         actor: 'admin:api',
         field: 'channel_privacy',
       });
-      expect(entries[1].oldValue).toContain('"privacyLevel":"semi_private"');
+      expect(entries[1].oldValue).toContain('"privacyLevel":"invite_only"');
       expect(entries[1].newValue).toContain('"privacyLevel":"private"');
       expect(entries[1].newValue).toContain('"userId":"privacy-user"');
     });
@@ -813,7 +866,7 @@ describe('ContactStore', () => {
         INSERT INTO contact_channel_ids (
           contact_id, channel, channel_user_id, privacy_level, first_seen, last_seen
         ) VALUES (?, ?, ?, ?, ?, ?)
-      `).run('primary-owner', 'discord', PRIMARY_USER_ID, 'semi_private', now, now);
+      `).run('primary-owner', 'discord', PRIMARY_USER_ID, 'invite_only', now, now);
 
       db.prepare(`
         INSERT INTO contacts (
@@ -1105,7 +1158,7 @@ describe('ContactStore', () => {
   describe('deleteConversationChannel', () => {
     it('removes a specific persisted conversation channel', () => {
       const contact = store.upsert({ displayName: 'Conversation User' });
-      store.recordChannelActivity(contact.id, 'psfn-amica', 'psfn-amica:short-check', 'semi_private');
+      store.recordChannelActivity(contact.id, 'psfn-amica', 'psfn-amica:short-check', 'invite_only');
       store.recordChannelActivity(contact.id, 'psfn-amica', 'psfn-amica:lab:pi5', 'private');
 
       const result = store.deleteConversationChannel(contact.id, 'psfn-amica', 'psfn-amica:short-check');
@@ -1131,6 +1184,107 @@ describe('ContactStore', () => {
     it('returns false when the conversation channel is not linked to the contact', () => {
       const contact = store.upsert({ displayName: 'Conversation User' });
       expect(store.deleteConversationChannel(contact.id, 'psfn-amica', 'psfn-amica:missing')).toBe(false);
+    });
+  });
+});
+
+describe('ContactStore machine-intelligence flag', () => {
+  let db: Database.Database;
+  let store: ContactStore;
+
+  beforeEach(() => {
+    db = new Database(':memory:');
+    store = new ContactStore(db, PRIMARY_USER_ID);
+  });
+
+  it('defaults to not-MI, sets and round-trips the flag with audit', () => {
+    const contact = store.resolveChannelIdentity('discord', 'artemis-001', 'Artemis');
+    expect(contact.isMachineIntelligence).toBeUndefined();
+
+    expect(store.setMachineIntelligence(contact.id, true, 'test')).toBe(true);
+    const flagged = store.getById(contact.id);
+    expect(flagged?.isMachineIntelligence).toBe(true);
+
+    // Setting the same value is a no-op success; clearing works too.
+    expect(store.setMachineIntelligence(contact.id, true)).toBe(true);
+    expect(store.setMachineIntelligence(contact.id, false)).toBe(true);
+    expect(store.getById(contact.id)?.isMachineIntelligence).toBeUndefined();
+
+    const audit = store.listMutationAuditEntries({ contactId: contact.id });
+    expect(audit.some(entry => entry.field === 'is_machine_intelligence')).toBe(true);
+  });
+
+  it('returns false for unknown contacts', () => {
+    expect(store.setMachineIntelligence('missing-contact', true)).toBe(false);
+  });
+
+  it('survives schema migration on a pre-flag database', () => {
+    const legacy = new Database(':memory:');
+    legacy.exec(`
+      CREATE TABLE contacts (
+        id TEXT PRIMARY KEY,
+        discord_user_id TEXT UNIQUE,
+        display_name TEXT NOT NULL,
+        nickname TEXT,
+        trust_level TEXT NOT NULL DEFAULT 'regular',
+        relationship_type TEXT NOT NULL DEFAULT 'stranger',
+        emotional_baseline TEXT DEFAULT '{}',
+        first_seen TEXT NOT NULL,
+        last_seen TEXT NOT NULL,
+        notes TEXT
+      );
+    `);
+    legacy.prepare(`
+      INSERT INTO contacts (id, display_name, first_seen, last_seen)
+      VALUES ('legacy-1', 'Legacy', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z')
+    `).run();
+    const migrated = new ContactStore(legacy, PRIMARY_USER_ID);
+    expect(migrated.getById('legacy-1')?.isMachineIntelligence).toBeUndefined();
+    expect(migrated.setMachineIntelligence('legacy-1', true)).toBe(true);
+    expect(migrated.getById('legacy-1')?.isMachineIntelligence).toBe(true);
+    legacy.close();
+  });
+
+  describe('countVerifiedIdentityLinks', () => {
+    function insertVerification(contactId: string, id: string, status: string): void {
+      db.prepare(`
+        INSERT INTO contact_identity_link_verifications (
+          id, contact_id, source_channel, source_user_id, target_channel, target_user_id,
+          nonce, expires_at, signature, status, created_at, updated_at
+        ) VALUES (?, ?, 'discord', 'src-user', 'telegram', 'tgt-user',
+          'nonce', '2026-12-31T00:00:00.000Z', 'sig', ?, '2026-07-01T00:00:00.000Z', '2026-07-01T00:00:00.000Z')
+      `).run(id, contactId, status);
+    }
+
+    it('counts only verified rows for the given contact', () => {
+      const contact = store.upsert({ displayName: 'Fixture Verified' });
+      const other = store.upsert({ displayName: 'Fixture Other' });
+      insertVerification(contact.id, 'v1', 'verified');
+      insertVerification(contact.id, 'v2', 'pending');
+      insertVerification(other.id, 'v3', 'verified');
+      expect(store.countVerifiedIdentityLinks(contact.id)).toBe(1);
+      expect(store.countVerifiedIdentityLinks(other.id)).toBe(1);
+      expect(store.countVerifiedIdentityLinks('unknown')).toBe(0);
+    });
+  });
+
+  describe('contact maintenance watermarks', () => {
+    it('returns undefined for an unknown processor', () => {
+      expect(store.getContactMaintenanceWatermark('contacts.trust_drift.review')).toBeUndefined();
+    });
+
+    it('round-trips and upserts a watermark', () => {
+      store.setContactMaintenanceWatermark('contacts.trust_drift.review', '2026-07-07T03:00:00.000Z');
+      expect(store.getContactMaintenanceWatermark('contacts.trust_drift.review'))
+        .toBe('2026-07-07T03:00:00.000Z');
+      store.setContactMaintenanceWatermark('contacts.trust_drift.review', '2026-07-08T03:00:00.000Z');
+      expect(store.getContactMaintenanceWatermark('contacts.trust_drift.review'))
+        .toBe('2026-07-08T03:00:00.000Z');
+    });
+
+    it('rejects an empty processor and an invalid timestamp', () => {
+      expect(() => store.setContactMaintenanceWatermark('  ', '2026-07-07T03:00:00.000Z')).toThrow(/processor/);
+      expect(() => store.setContactMaintenanceWatermark('contacts.trust_drift.review', 'garbage')).toThrow(/timestamp/);
     });
   });
 });

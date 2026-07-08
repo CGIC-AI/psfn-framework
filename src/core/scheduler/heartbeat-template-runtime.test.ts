@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -33,6 +33,7 @@ import {
 import { HeartbeatPolicyStore } from './heartbeat-policy.js';
 import { Scheduler } from './scheduler.js';
 import { createHeartbeatTemplateRuntime } from './heartbeat-template-runtime.js';
+import { createGroupConversationScope } from '../session/conversation-scope.js';
 
 describe('createHeartbeatTemplateRuntime reflection metacognition journal', () => {
   let tempDir: string;
@@ -56,7 +57,7 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
       .filter(line => line.startsWith('- '));
   }
 
-  it('includes ACAC self-report context in heartbeat internal-state prompts and persisted telemetry', async () => {
+  it('includes companion-readable ACAC self-report clues in heartbeat prompts and persisted telemetry', async () => {
     tempDir = mkdtempSync(join(tmpdir(), 'heartbeat-template-runtime-'));
     const capturedPrompts: string[] = [];
     const policyStore = new HeartbeatPolicyStore(resolveHeartbeatPolicyPath(tempDir));
@@ -125,18 +126,23 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
       deferIfBusy: false,
     });
 
-    const internalStateSection = getPromptSection(capturedPrompts[0] ?? '', '[Internal State Input]');
-    expect(internalStateSection).toContain('[Internal State Interpretation Boundary]');
-    expect(internalStateSection).toContain('boundary: runtime telemetry, not canonical self-truth');
-    expect(internalStateSection).toContain('fallible signals to compare against conversation, memory, and self-report');
-    expect(internalStateSection).toContain('do_not: force reconciliation around these values');
-    expect(internalStateSection).toContain('[ACAC Self-Report]');
-    expect(internalStateSection).toContain('provenance_kind: self_report');
-    expect(internalStateSection).toContain('provenance_source: heartbeat:daily-review');
-    expect(internalStateSection).toContain('agency_score: 0.8100 rationale: The next action feels available.');
-    expect(internalStateSection).toContain('connection_score: 0.6200 rationale: The contact thread is present.');
-    expect(internalStateSection).toContain('authenticity_score: 0.7300 rationale: The report matches the current context.');
-    expect(internalStateSection).toContain('curiosity_score: 0.9000 rationale: There is an unresolved question.');
+    const prompt = capturedPrompts[0] ?? '';
+    const internalStateSection = getPromptSection(prompt, '[Reflection Self Evidence]');
+    // E6.2: the evidence boundary guards re-voiced first person (meaning preserved).
+    expect(internalStateSection).toContain('[What this evidence is]');
+    expect(internalStateSection).toContain('fallible clues to weigh against what I actually remember, feel, and know');
+    expect(internalStateSection).toContain('I keep the uncertainty rather than force them into agreement');
+    expect(internalStateSection).toContain('I keep the raw machinery — scores, ids, hashes, provenance refs, tool metadata — out of my own words');
+    expect(internalStateSection).toContain('[Wellbeing and Affect Clues]');
+    expect(internalStateSection).toContain('ACAC self-report clues: agency strong: The next action feels available.');
+    expect(internalStateSection).toContain('connection present: The contact thread is present.');
+    expect(internalStateSection).toContain('authenticity strong: The report matches the current context.');
+    expect(internalStateSection).toContain('curiosity strong: There is an unresolved question.');
+    expect(prompt).not.toContain('[Internal State Input]');
+    expect(prompt).not.toContain('serialized_internal_state:');
+    expect(prompt).not.toContain('snapshot_ref:');
+    expect(prompt).not.toContain('provenance_kind:');
+    expect(prompt).not.toContain('agency_score:');
 
     const raw = readFileSync(resolveReflectionJournalPath(tempDir), 'utf-8').trim();
     const entry = JSON.parse(raw.split('\n').at(-1) ?? '{}') as {
@@ -153,6 +159,81 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
     expect(entry.telemetry?.narrativeContext?.internalState?.emotional?.acac).toEqual(
       internalState.emotional.acac,
     );
+  });
+
+  it('marks uncertain emotion telemetry in reflection prompts before affect use', async () => {
+    tempDir = mkdtempSync(join(tmpdir(), 'heartbeat-template-runtime-'));
+    const capturedPrompts: string[] = [];
+    const policyStore = new HeartbeatPolicyStore(resolveHeartbeatPolicyPath(tempDir));
+    const policy = policyStore.load();
+    const template = policy.templates.find((candidate) => candidate.id === 'daily-review');
+    expect(template).toBeDefined();
+    if (!template) {
+      throw new Error('daily-review template missing from defaults');
+    }
+    template.internalStateInput = true;
+    template.sendToDiscord = false;
+    policyStore.save(policy);
+
+    const nowMs = Date.parse('2026-03-02T12:00:00.000Z');
+    const internalState = new InternalStateComputer().computeState({
+      emotionState: {
+        vad: { valence: -0.8, arousal: 0.6, dominance: -0.4 },
+        mood: { valence: -0.7, arousal: 0.5, dominance: -0.3 },
+        discrete: { sadness: 0.92 },
+        confidence: 0.88,
+      },
+      emotionTelemetry: {
+        source: 'classifier_inferred',
+        observedAtMs: nowMs - 60 * 60_000,
+        nowMs,
+        staleAfterMs: 10 * 60_000,
+        provenance: [{
+          source: 'classifier_inferred',
+          observedAtMs: nowMs - 60 * 60_000,
+          modality: 'text',
+        }],
+      },
+      activeConcerns: [],
+      trustLevel: 'trusted',
+      contactId: 'contact-1',
+      sessionMetrics: {
+        userMessageText: 'Recent conversations matter.',
+        responseText: 'Keep continuity with the primary contact.',
+        toolCallCount: 0,
+        recentTurnCount: 3,
+        lastSeenDeltaSeconds: 120,
+      },
+    });
+    const snapshotRef = buildInternalStateSnapshotRef(internalState);
+
+    const runtime = createHeartbeatTemplateRuntime({
+      scheduler: new Scheduler(new EventBus(), { tickIntervalMs: 100, heartbeatIntervalMs: 1_000 }),
+      agentLoop: {
+        handleMessage: vi.fn(async (message: { content: string }) => {
+          capturedPrompts.push(message.content);
+          return { content: 'Uncertain telemetry stayed bounded.' };
+        }),
+        getCurrentInternalState: () => internalState,
+        getCurrentInternalStateSnapshotRef: () => snapshotRef,
+        getCurrentMetacognitiveFlags: () => [],
+      } as any,
+      sender: { send: vi.fn(async () => undefined) },
+      dataDir: tempDir,
+    });
+
+    await runtime.runTemplateNow('daily-review', {
+      sendToDiscordOverride: false,
+      deferIfBusy: false,
+    });
+
+    const prompt = capturedPrompts[0] ?? '';
+    const internalStateSection = getPromptSection(prompt, '[Reflection Self Evidence]');
+    expect(internalStateSection).toContain('Emotion telemetry validation: uncertain; source classifier_inferred; reasons stale_signal');
+    expect(internalStateSection).toContain('VAD and mood were downweighted, and discrete classifier labels were withheld before reflection use.');
+    expect(internalStateSection).toContain('Effective affect clue after validation');
+    expect(internalStateSection).not.toContain('Current feel appears');
+    expect(internalStateSection).not.toContain('Discrete emotion clues: sadness');
   });
 
   it('records manual deliberation runs with provenance and process ids', async () => {
@@ -191,7 +272,7 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
       });
       const snapshotRef = buildInternalStateSnapshotRef(internalState);
       const metacognitiveFlags = [{ flag: 'continuity', confidence: 0.72 }];
-      const capturedContexts: LLMContext[] = [];
+      const capturedCorrelations: Array<Record<string, unknown> | undefined> = [];
       const llmProvider: LLMProviderPort = {
         stream: vi.fn(async () => ({
           content: '',
@@ -201,8 +282,12 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
           outputTokens: 0,
           stopReason: 'stop',
         })),
-        complete: vi.fn(async (context, purpose) => {
-          capturedContexts.push(context);
+        complete: vi.fn(async (
+          _context: LLMContext,
+          purpose,
+          requestOptions?: { correlation?: Record<string, unknown> },
+        ) => {
+          capturedCorrelations.push(requestOptions?.correlation);
           const content = purpose === 'reasoning'
             ? 'Continuity stays central.'
             : 'Care keeps the tone steady.';
@@ -339,29 +424,21 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
         budget: { maxRounds: 3 },
         exit: { reason: 'max_rounds', maxRoundsReached: true },
       });
-      const evidenceContext = capturedContexts.find((context) => {
-        const correlation = context.correlation;
-        return (
-          correlation?.channelId === 'internal:reflection:weekly-review' &&
-          correlation.originStage === 'heartbeat.deliberation.evidence'
-        );
+      const evidenceCorrelation = capturedCorrelations.find((correlation) => (
+        correlation?.channelId === 'internal:reflection:weekly-review'
+        && correlation.originStage === 'heartbeat.deliberation.evidence'
+      ));
+      expect(evidenceCorrelation).toMatchObject({
+        callType: 'background',
+        originType: 'background',
+        channelId: 'internal:reflection:weekly-review',
+        originStage: 'heartbeat.deliberation.evidence',
       });
-      expect(evidenceContext).toMatchObject({
-        correlation: {
-          callType: 'background',
-          originType: 'background',
-          channelId: 'internal:reflection:weekly-review',
-          originStage: 'heartbeat.deliberation.evidence',
-        },
-      });
-      const contradictionContext = capturedContexts.find((context) => {
-        const correlation = context.correlation;
-        return correlation?.originStage === 'heartbeat.deliberation.contradiction';
-      });
-      expect(contradictionContext).toMatchObject({
-        correlation: {
-          originStage: 'heartbeat.deliberation.contradiction',
-        },
+      const contradictionCorrelation = capturedCorrelations.find(
+        (correlation) => correlation?.originStage === 'heartbeat.deliberation.contradiction',
+      );
+      expect(contradictionCorrelation).toMatchObject({
+        originStage: 'heartbeat.deliberation.contradiction',
       });
     } finally {
       reflectionJournalPrototype.listRecent = originalListRecent;
@@ -414,11 +491,15 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
         outputTokens: 0,
         stopReason: 'stop',
       })),
-      complete: vi.fn(async (context, purpose) => {
+      complete: vi.fn(async (
+        context: LLMContext,
+        purpose,
+        requestOptions?: { correlation?: { originStage?: string; channelId?: string } },
+      ) => {
         capturedPrompts.push(context.messages.map((message) => message.content).join('\n\n'));
         const index = capturedPrompts.length;
-        expect(context.correlation?.originStage).toBe(`heartbeat.deliberation.${index === 1 ? 'evidence' : index === 2 ? 'synthesis' : 'contradiction'}`);
-        expect(context.correlation?.channelId).toBe('internal:reflection:daily-review');
+        expect(requestOptions?.correlation?.originStage).toBe(`heartbeat.deliberation.${index === 1 ? 'evidence' : index === 2 ? 'synthesis' : 'contradiction'}`);
+        expect(requestOptions?.correlation?.channelId).toBe('internal:reflection:daily-review');
         if (index === 1) {
           expect(purpose).toBe('background');
           return {
@@ -484,6 +565,11 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
       dataDir: tempDir,
       runtimeOptions: {
         llmProvider: llmProvider as any,
+        characterPromptVariablesProvider: () => ({
+          char: 'Purrsephone',
+          personality: 'A warm, wry cloistered gardener who tends what she plants and blesses the weeds among the herbs.',
+          description: 'Steady, earthy, unhurried.',
+        }),
         sessionManager: {
           resolveSessionChannelId: (channelId: string) => channelId,
           getRecentMessages: (channelId: string, limit?: number) => (
@@ -517,7 +603,7 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
           id: 'concern-1',
           title: 'Clarify the recovery timeline',
           summary: 'Keep the follow-up explicit.',
-          status: 'open',
+          status: 'active',
           dueAt: Date.parse('2026-04-01T12:00:00.000Z'),
           priority: 'high',
         }],
@@ -536,8 +622,16 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
     expect(capturedPrompts[0]).toContain('[Reflection Introspection Policy]');
     expect(capturedPrompts[0]).toContain('tool_use_mode: prompt_bounded');
     expect(capturedPrompts[0]).toContain('memory_retrieval_modes: temporal, reflection');
-    expect(capturedPrompts[0]).toContain('[Reflection Contact Context]');
+    expect(capturedPrompts[0]).toContain('[Reflection Contact Evidence]');
     expect(capturedPrompts[0]).toContain('We should revisit the recovery plan tomorrow.');
+    // E6.2 regression: the scheduled reflection assembles the FULL persona
+    // (first person) plus memory/self-model context, and the persona leads —
+    // soft framing before the introspection policy and task instructions.
+    expect(capturedPrompts[0]).toContain('I am Purrsephone');
+    expect(capturedPrompts[0]).toContain('cloistered gardener who tends what she plants');
+    expect(capturedPrompts[0]).toContain('trust-filtered contact memory');
+    expect(capturedPrompts[0].indexOf('I am Purrsephone'))
+      .toBeLessThan(capturedPrompts[0].indexOf('[Reflection Introspection Policy]'));
     expect(capturedPrompts[1]).toContain('Stage: synthesis');
     expect(capturedPrompts[2]).toContain('Stage: contradiction');
 
@@ -872,7 +966,7 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
                 id: 'concern-1',
                 title: 'Clarify the recovery timeline',
                 summary: 'Keep the follow-up explicit.',
-                status: 'open',
+                status: 'active',
                 dueAt: Date.parse('2026-04-01T12:00:00.000Z'),
                 priority: 'high',
               }]
@@ -910,7 +1004,7 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
       }));
       const prompt = capturedPrompts[0];
       const introspectionPolicySection = getPromptSection(prompt, '[Reflection Introspection Policy]');
-      const contactSection = getPromptSection(prompt, '[Reflection Contact Context]');
+      const contactSection = getPromptSection(prompt, '[Reflection Contact Evidence]');
       const recentSessionSection = getPromptSection(prompt, '[Recent Contact Session]');
       const memoryHeaderSection = getPromptSection(prompt, '[Reflection Memory Retrieval]');
       const recentTailSection = getPromptSection(prompt, '[Recent Session Tail]');
@@ -919,9 +1013,10 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
       expect(introspectionPolicySection).toContain('overlay_tool_activation: forbidden');
       expect(introspectionPolicySection).toContain('core analysis_workbench tool');
       expect(introspectionPolicySection).toContain('memory_search, session_messages, session_search');
-      expect(contactSection).toContain('contact_id: contact-1');
-      expect(contactSection).toContain('trust_level: trusted');
-      expect(contactSection).toContain('recent_contact_status: active');
+      expect(contactSection).toContain('Current contact: Ari; trust scope trusted.');
+      expect(contactSection).toContain('Recent contact status: active.');
+      expect(contactSection).not.toContain('contact_id:');
+      expect(contactSection).not.toContain('trust_level:');
       expect(getPromptBulletLines(recentSessionSection)).toHaveLength(2);
       expect(memoryHeaderSection).not.toBe('');
       expect(recentTailSection).toBe('');
@@ -965,6 +1060,166 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
       ]));
     },
   );
+
+  it('suppresses DM-style canonical-contact grounding for a group-scoped reflection', async () => {
+    tempDir = mkdtempSync(join(tmpdir(), 'heartbeat-template-runtime-'));
+    const capturedPrompts: string[] = [];
+    const recentSessionMessages = [
+      {
+        id: 1,
+        channelId: 'discord:primary-session',
+        role: 'user' as const,
+        content: 'I was here yesterday.',
+        timestamp: 1_700_000_000_000,
+        authorName: 'Ari',
+      },
+    ];
+    const eventBus = new EventBus();
+    const memoryRetrieve = vi.fn(async (_contextText: string, channelId: string) => {
+      await eventBus.emit('memory.retrieval', {
+        channelId,
+        count: 1,
+        provenanceRefs: ['memory:seeded-public-profile'],
+      });
+      return '[Reflection Memory Retrieval]\n- reflection-only memory';
+    });
+    const currentContact = {
+      id: 'contact-1',
+      displayName: 'Ari',
+      nickname: 'Ari',
+      trustLevel: 'trusted' as const,
+      relationshipType: 'friend' as const,
+      firstSeen: '2026-01-01T00:00:00.000Z',
+      lastSeen: '2026-03-31T12:00:00.000Z',
+      conversationChannels: [{
+        channel: 'discord',
+        channelId: 'discord:primary-session',
+        firstSeen: '2026-01-01T00:00:00.000Z',
+        lastSeen: '2026-03-31T12:00:00.000Z',
+      }],
+    };
+    const currentInternalState = new InternalStateComputer().computeState({
+      emotionState: {
+        vad: { valence: 0.2, arousal: 0.15, dominance: 0.1 },
+        mood: { valence: 0.25, arousal: 0.2, dominance: 0.15 },
+        discrete: { curiosity: 0.5, calm: 0.4 },
+        confidence: 0.75,
+      },
+      activeConcerns: [],
+      trustLevel: 'trusted',
+      contactId: 'contact-1',
+      sessionMetrics: {
+        userMessageText: 'Recent conversations matter.',
+        responseText: 'Keep continuity with the primary contact.',
+        toolCallCount: 0,
+        recentTurnCount: 3,
+        lastSeenDeltaSeconds: 120,
+      },
+    });
+    const currentSnapshotRef = buildInternalStateSnapshotRef(currentInternalState);
+    const handleMessage = vi.fn(async (message) => {
+      capturedPrompts.push(message.content);
+      const responseInternalState = new InternalStateComputer().computeState({
+        emotionState: {
+          vad: { valence: 0.2, arousal: 0.15, dominance: 0.1 },
+          mood: { valence: 0.25, arousal: 0.2, dominance: 0.15 },
+          discrete: { curiosity: 0.5, calm: 0.4 },
+          confidence: 0.75,
+        },
+        activeConcerns: [],
+        trustLevel: 'primary',
+        contactId: message.routing?.canonicalContactId ?? message.authorId,
+        sessionMetrics: {
+          userMessageText: message.content,
+          responseText: 'Room reflection',
+          toolCallCount: 0,
+          recentTurnCount: 1,
+          lastSeenDeltaSeconds: 30,
+        },
+      });
+      return {
+        content: 'Room reflection',
+        metadata: {
+          internalState: responseInternalState,
+          internalStateSnapshotRef: buildInternalStateSnapshotRef(responseInternalState),
+          metacognitiveFlags: [],
+        },
+      };
+    });
+
+    const runtime = createHeartbeatTemplateRuntime({
+      scheduler: new Scheduler(new EventBus(), { tickIntervalMs: 100, heartbeatIntervalMs: 1_000 }),
+      agentLoop: {
+        handleMessage,
+        memoryProvider: {
+          retrieve: memoryRetrieve,
+        },
+        getCurrentInternalState: () => currentInternalState,
+        getCurrentInternalStateSnapshotRef: () => currentSnapshotRef,
+        getCurrentMetacognitiveFlags: () => [],
+      } as any,
+      sender: { send: vi.fn(async () => undefined) },
+      dataDir: tempDir,
+      runtimeOptions: {
+        eventBus,
+        sessionManager: {
+          resolveSessionChannelId: (channelId: string) => channelId,
+          getRecentMessages: (channelId: string, limit?: number) => (
+            channelId === 'discord:primary-session'
+              ? recentSessionMessages.slice(0, limit ?? recentSessionMessages.length)
+              : []
+          ),
+        },
+        contactStore: {
+          getById: async (id: string) => (id === 'contact-1' ? currentContact : undefined),
+          getEmotionalSnapshot: async () => undefined,
+          getEmotionalTimeSeries: async () => [],
+        },
+      } as any,
+    });
+
+    await runtime.runTemplateNow('daily-review', {
+      sendToDiscordOverride: false,
+      deferIfBusy: false,
+      conversationScope: createGroupConversationScope({
+        channelId: 'discord:room-42',
+        roomName: 'launch-room',
+      }),
+    });
+
+    // Final agent turn carries the room scope hint, not a canonical contact.
+    expect(handleMessage).toHaveBeenCalledWith(expect.objectContaining({
+      authorId: 'scheduler',
+      routing: expect.objectContaining({
+        reflectionScope: expect.objectContaining({
+          kind: 'group',
+          roomId: 'discord:room-42',
+          roomName: 'launch-room',
+        }),
+      }),
+    }));
+    const routingArg = handleMessage.mock.calls[0]?.[0]?.routing ?? {};
+    expect(routingArg).not.toHaveProperty('canonicalContactId');
+
+    // Introspection policy drops the DM temporal retrieval binding; contact
+    // evidence grounding is absent entirely.
+    const prompt = capturedPrompts[0];
+    const introspectionPolicySection = getPromptSection(prompt, '[Reflection Introspection Policy]');
+    expect(introspectionPolicySection).toContain('memory_retrieval_modes: reflection');
+    expect(introspectionPolicySection).not.toContain('memory_retrieval_modes: temporal, reflection');
+    expect(getPromptSection(prompt, '[Reflection Contact Evidence]')).toBe('');
+    if (memoryRetrieve.mock.calls.length > 0) {
+      expect(memoryRetrieve.mock.calls[0]?.[10]).toEqual(['reflection']);
+    }
+
+    // Journal provenance must not inherit the single-contact binding.
+    const raw = readFileSync(resolveReflectionJournalPath(tempDir), 'utf-8').trim();
+    const entry = JSON.parse(raw.split('\n').at(-1) ?? '{}') as {
+      substrateProvenanceRefs?: string[];
+    };
+    expect(entry.substrateProvenanceRefs ?? []).not.toContain('reflection_contact:contact-1');
+    expect(entry.substrateProvenanceRefs ?? []).not.toContain('reflection_contact_memory:contact-1');
+  });
 
   it('records internal-state grounding for contactless daily reflection output', async () => {
     tempDir = mkdtempSync(join(tmpdir(), 'heartbeat-template-runtime-'));
@@ -1474,7 +1729,6 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
         role: 'assistant' as const,
         content: 'I am here and tracking that thread.',
         timestamp: 1_700_000_000_100,
-        authorName: 'Companion',
       },
     ];
     const currentContact = {
@@ -1538,6 +1792,7 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
       sender: { send: vi.fn(async () => undefined) },
       dataDir: tempDir,
       runtimeOptions: {
+        characterPromptVariablesProvider: () => ({ char: 'Purrsephone' }),
         sessionManager: {
           resolveSessionChannelId: (channelId: string) => channelId,
           getRecentMessages: (channelId: string, limit?: number) => (
@@ -1578,39 +1833,44 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
 
     expect(capturedPrompts).toHaveLength(1);
     const prompt = capturedPrompts[0];
-    const internalStateSection = getPromptSection(prompt, '[Internal State Input]');
+    const internalStateSection = getPromptSection(prompt, '[Reflection Self Evidence]');
     const memoryHeaderSection = getPromptSection(prompt, '[Reflection Memory Retrieval]');
     const retrievedMemorySection = getPromptSection(prompt, '[Retrieved Memory]');
-    const contactSection = getPromptSection(prompt, '[Reflection Contact Context]');
+    const contactSection = getPromptSection(prompt, '[Reflection Contact Evidence]');
     const recentSessionSection = getPromptSection(prompt, '[Recent Contact Session]');
     const relationalSubstrateSection = getPromptSection(prompt, '[Reflection Relational Substrate]');
-    const affectContextSection = getPromptSection(prompt, '[Reflection Affect Context]');
+    const affectContextSection = getPromptSection(prompt, '[Reflection Affect Evidence]');
     const affectSubstrateSection = getPromptSection(prompt, '[Reflection Affect Substrate]');
     const selfSubstrateSection = getPromptSection(prompt, '[Reflection Self Substrate]');
 
     expect(prompt).not.toContain('{{reflection_self}}');
     expect(prompt).not.toContain('{{reflection_relational}}');
     expect(prompt).not.toContain('{{reflection_affect}}');
-    expect(internalStateSection).toContain('[Internal State Interpretation Boundary]');
-    expect(internalStateSection).toContain('boundary: runtime telemetry, not canonical self-truth');
-    expect(internalStateSection).toContain('fallible signals to compare against conversation, memory, and self-report');
-    expect(internalStateSection).toContain(`snapshot_ref: ${currentSnapshotRef}`);
-    expect(internalStateSection).toContain('serialized_internal_state:');
+    expect(internalStateSection).toContain('[What this evidence is]');
+    expect(internalStateSection).toContain('private evidence I gather for myself, not the settled truth of who I am');
+    expect(internalStateSection).toContain('fallible clues to weigh against what I actually remember, feel, and know');
+    expect(internalStateSection).toContain('[Wellbeing and Affect Clues]');
+    expect(prompt).not.toContain(`snapshot_ref: ${currentSnapshotRef}`);
+    expect(prompt).not.toContain('serialized_internal_state:');
     expect(memoryHeaderSection).not.toBe('');
     expect(retrievedMemorySection).not.toBe('');
     expect(retrievedMemorySection).not.toContain('[Recent Session Tail]');
-    expect(contactSection).toContain('contact_id: contact-1');
-    expect(contactSection).toContain('recent_contact_status: active');
+    expect(contactSection).toContain('Current contact: Ari; trust scope trusted.');
+    expect(contactSection).toContain('Recent contact status: active.');
+    expect(contactSection).not.toContain('contact_id:');
+    expect(recentSessionSection).toContain('Purrsephone: I am here and tracking that thread.');
+    expect(recentSessionSection).not.toContain('Assistant: I am here and tracking that thread.');
     expect(getPromptBulletLines(recentSessionSection)).toHaveLength(2);
     expect(relationalSubstrateSection).toContain('canonical_truth_boundary:');
-    expect(relationalSubstrateSection).toContain('template=daily-review');
-    expect(affectContextSection).toContain('emotional_time_series:');
-    expect(affectContextSection).toContain('confidence=0.840');
+    expect(relationalSubstrateSection).toContain('daily-review');
+    expect(affectContextSection).toContain('Recent affect trend:');
+    expect(affectContextSection).toContain('strong confidence');
     expect(affectContextSection).not.toContain('current_vad:');
+    expect(affectContextSection).not.toContain('confidence=');
     expect(affectSubstrateSection).toContain('canonical_truth_boundary:');
-    expect(affectSubstrateSection).toContain('template=experiential-review');
+    expect(affectSubstrateSection).toContain('experiential-review');
     expect(selfSubstrateSection).toContain('canonical_truth_boundary:');
-    expect(selfSubstrateSection).toContain('template=values-reflection');
+    expect(selfSubstrateSection).toContain('values-reflection');
     expect(memoryRetrieve).toHaveBeenCalled();
 
     const reflectionRaw = readFileSync(resolveReflectionJournalPath(tempDir), 'utf-8').trim();
@@ -1836,5 +2096,277 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
     } finally {
       reflectionJournalPrototype.listRecent = originalListRecent;
     }
+  });
+});
+
+describe('createHeartbeatTemplateRuntime reflection novelty gate', () => {
+  let tempDir: string;
+
+  afterEach(() => {
+    if (tempDir) {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  interface WatermarkScopeInput {
+    processor: string;
+    sourceRef: string;
+    channelId?: string;
+  }
+
+  function buildNoveltyGateHarness(input: { watermarkAt?: string }) {
+    tempDir = mkdtempSync(join(tmpdir(), 'heartbeat-novelty-gate-'));
+
+    const watermarkKey = (scope: WatermarkScopeInput): string =>
+      `${scope.processor}|${scope.sourceRef}|${scope.channelId ?? ''}`;
+    const watermarks = new Map<string, Record<string, unknown>>();
+    if (input.watermarkAt) {
+      const scope = {
+        processor: 'reflection_template_novelty',
+        sourceRef: 'daily-review',
+        channelId: 'contact:contact-1',
+      };
+      watermarks.set(watermarkKey(scope), {
+        ...scope,
+        id: 'wm-existing',
+        previousWatermarkJson: {},
+        nextWatermarkJson: { lastReflection: { at: input.watermarkAt } },
+        artifactsJson: {},
+        status: 'active',
+        reconciliationStatus: 'clean',
+        lastProcessedAt: input.watermarkAt,
+        updatedAt: input.watermarkAt,
+      });
+    }
+    const upsertCalls: Array<Record<string, unknown>> = [];
+    const watermarkStore = {
+      getProcessingWatermark: vi.fn((scope: WatermarkScopeInput) => watermarks.get(watermarkKey(scope))),
+      upsertProcessingWatermark: vi.fn((writeInput: WatermarkScopeInput & Record<string, unknown>) => {
+        upsertCalls.push(writeInput);
+        const stored = {
+          id: 'wm-1',
+          previousWatermarkJson: {},
+          nextWatermarkJson: {},
+          artifactsJson: {},
+          status: 'active',
+          reconciliationStatus: 'clean',
+          updatedAt: String(writeInput.lastProcessedAt ?? ''),
+          ...writeInput,
+        };
+        watermarks.set(watermarkKey(writeInput), stored);
+        return stored;
+      }),
+    };
+
+    const eventBus = new EventBus();
+    const gateEvents: Array<{ lane: string; outcome: string; reason: string; inputs: Record<string, number | string> }> = [];
+    eventBus.on('reflection.template.novelty.gate', (event) => {
+      gateEvents.push(event);
+    });
+
+    const currentContact = {
+      id: 'contact-1',
+      displayName: 'Ari',
+      nickname: 'Ari',
+      trustLevel: 'trusted' as const,
+      relationshipType: 'friend' as const,
+      firstSeen: '2026-01-01T00:00:00.000Z',
+      lastSeen: '2026-03-31T12:00:00.000Z',
+      conversationChannels: [{
+        channel: 'discord',
+        channelId: 'discord:primary-session',
+        firstSeen: '2026-01-01T00:00:00.000Z',
+        lastSeen: '2026-03-31T12:00:00.000Z',
+      }],
+    };
+    const currentInternalState = new InternalStateComputer().computeState({
+      emotionState: {
+        vad: { valence: 0.1, arousal: 0.2, dominance: 0.05 },
+        mood: { valence: 0.15, arousal: 0.25, dominance: 0.1 },
+        discrete: { curiosity: 0.55, calm: 0.45 },
+        confidence: 0.8,
+      },
+      activeConcerns: [],
+      trustLevel: 'trusted',
+      contactId: 'contact-1',
+      sessionMetrics: {
+        userMessageText: 'Recent conversations matter.',
+        responseText: 'Keep continuity with the primary contact.',
+        toolCallCount: 0,
+        recentTurnCount: 2,
+        lastSeenDeltaSeconds: 90,
+      },
+    });
+    const snapshotRef = buildInternalStateSnapshotRef(currentInternalState);
+
+    const complete = vi.fn(async (_context: LLMContext, purpose: string) => ({
+      content: purpose === 'reasoning'
+        ? 'Continuity stays central.'
+        : 'Care keeps the tone steady.',
+      toolCalls: [],
+      model: `mock-${purpose}`,
+      inputTokens: 12,
+      outputTokens: 18,
+      stopReason: 'stop',
+    }));
+    const llmProvider: LLMProviderPort = {
+      stream: vi.fn(async () => ({
+        content: '',
+        toolCalls: [],
+        model: 'mock-stream',
+        inputTokens: 0,
+        outputTokens: 0,
+        stopReason: 'stop',
+      })),
+      complete: complete as unknown as LLMProviderPort['complete'],
+    };
+    const handleMessage = vi.fn(async () => ({ content: 'unused' }));
+
+    const runtime = createHeartbeatTemplateRuntime({
+      scheduler: new Scheduler(new EventBus(), { tickIntervalMs: 100, heartbeatIntervalMs: 1_000 }),
+      agentLoop: {
+        handleMessage,
+        getCurrentInternalState: () => currentInternalState,
+        getCurrentInternalStateSnapshotRef: () => snapshotRef,
+        getCurrentMetacognitiveFlags: () => [],
+      } as any,
+      sender: { send: vi.fn(async () => undefined) },
+      dataDir: tempDir,
+      runtimeOptions: {
+        eventBus,
+        llmProvider: llmProvider as any,
+        reflectionNoveltyGate: { minNewEntries: 1 },
+        episodicWatermarkStore: watermarkStore as any,
+        sessionManager: {
+          resolveSessionChannelId: (channelId: string) => channelId,
+          getRecentMessages: (channelId: string, limit?: number) => (
+            channelId === 'discord:primary-session'
+              ? [
+                {
+                  id: 1,
+                  channelId,
+                  role: 'user' as const,
+                  content: 'We should revisit the recovery plan tomorrow.',
+                  timestamp: 1_700_000_000_000,
+                  authorName: 'Ari',
+                },
+                {
+                  id: 2,
+                  channelId,
+                  role: 'assistant' as const,
+                  content: 'I will keep the thread active.',
+                  timestamp: 1_700_000_000_100,
+                  authorName: 'Companion',
+                },
+              ].slice(0, limit ?? 2)
+              : []
+          ),
+        },
+        contactStore: {
+          getById: async (id: string) => (id === 'contact-1' ? currentContact : undefined),
+          getEmotionalSnapshot: async () => null,
+          getEmotionalTimeSeries: async () => [],
+        },
+      },
+    });
+
+    return { runtime, complete, handleMessage, gateEvents, upsertCalls, watermarkStore };
+  }
+
+  it('skips a cadence-fired reflection with telemetry when no new entries exist since the last reflection', async () => {
+    // Watermark is newer than every session entry: zero new entries in scope.
+    const harness = buildNoveltyGateHarness({
+      watermarkAt: new Date(1_700_000_100_000).toISOString(),
+    });
+
+    await harness.runtime.runDeferredTemplate('daily-review', { requestedSource: 'scheduled' });
+
+    expect(harness.complete).not.toHaveBeenCalled();
+    expect(harness.handleMessage).not.toHaveBeenCalled();
+    expect(harness.gateEvents).toEqual([
+      expect.objectContaining({
+        lane: 'reflection.template.novelty',
+        outcome: 'skipped',
+        reason: 'insufficient_new_entries',
+        inputs: expect.objectContaining({
+          templateId: 'daily-review',
+          scope: 'contact:contact-1',
+          minNewEntries: 1,
+          newEntriesSinceLastReflection: 0,
+        }),
+      }),
+    ]);
+    // A skipped run writes nothing and does not advance the watermark.
+    expect(harness.upsertCalls).toHaveLength(0);
+    expect(existsSync(resolveReflectionMetacognitionJournalPath(tempDir))).toBe(false);
+    expect(existsSync(resolveReflectionJournalPath(tempDir))).toBe(false);
+  });
+
+  it('fires a cadence-fired reflection and advances the watermark when new entries exist', async () => {
+    // Watermark predates the session entries: both count as new.
+    const harness = buildNoveltyGateHarness({
+      watermarkAt: new Date(1_699_000_000_000).toISOString(),
+    });
+
+    await harness.runtime.runDeferredTemplate('daily-review', { requestedSource: 'scheduled' });
+
+    expect(harness.complete).toHaveBeenCalledTimes(3);
+    expect(harness.gateEvents).toEqual([
+      expect.objectContaining({
+        lane: 'reflection.template.novelty',
+        outcome: 'ran',
+        reason: 'open',
+        inputs: expect.objectContaining({
+          templateId: 'daily-review',
+          scope: 'contact:contact-1',
+          newEntriesSinceLastReflection: 2,
+        }),
+      }),
+    ]);
+    expect(harness.upsertCalls).toEqual([
+      expect.objectContaining({
+        processor: 'reflection_template_novelty',
+        sourceRef: 'daily-review',
+        channelId: 'contact:contact-1',
+        id: 'wm-existing',
+        lastProcessedAt: expect.any(String),
+      }),
+    ]);
+    expect(existsSync(resolveReflectionMetacognitionJournalPath(tempDir))).toBe(true);
+  });
+
+  it('runs on first cadence fire when no watermark exists yet', async () => {
+    const harness = buildNoveltyGateHarness({});
+
+    await harness.runtime.runDeferredTemplate('daily-review', { requestedSource: 'scheduled' });
+
+    expect(harness.complete).toHaveBeenCalledTimes(3);
+    expect(harness.gateEvents).toEqual([
+      expect.objectContaining({
+        outcome: 'ran',
+        reason: 'open',
+        inputs: expect.objectContaining({ newEntriesSinceLastReflection: 2 }),
+      }),
+    ]);
+    expect(harness.upsertCalls).toHaveLength(1);
+  });
+
+  it('bypasses the novelty gate for manual run_template invocations', async () => {
+    // Same zero-new-entries setup that skips the cadence path.
+    const harness = buildNoveltyGateHarness({
+      watermarkAt: new Date(1_700_000_100_000).toISOString(),
+    });
+
+    const result = await harness.runtime.runTemplateNow('daily-review', {
+      sendToDiscordOverride: false,
+      deferIfBusy: false,
+    });
+
+    expect(result.reflection).not.toBe('');
+    expect(harness.complete).toHaveBeenCalledTimes(3);
+    // Manual runs are not gate consultations: no gate event either way.
+    expect(harness.gateEvents).toEqual([]);
+    // A manual reflection still consumed the scope's novelty.
+    expect(harness.upsertCalls).toHaveLength(1);
   });
 });

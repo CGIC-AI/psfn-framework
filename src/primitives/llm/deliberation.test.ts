@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { LLMProviderPort } from '../../core/agent/contracts.js';
 import type { CompletionPurpose, LLMContext, LLMResponse, StreamCallbacks } from '../../shared/contracts/runtime.js';
-import { runDeliberation } from './deliberation.js';
+import { runDeliberation, type DeliberationStageDefinition } from './deliberation.js';
 
 interface ScriptedStep {
   purpose: CompletionPurpose;
@@ -272,5 +272,208 @@ describe('runDeliberation', () => {
       },
     });
     expect((options[0]?.correlation as { callType?: string } | undefined)?.callType).toBeUndefined();
+  });
+});
+
+describe('runDeliberation fixed stage sequences', () => {
+  function evidenceSynthesisContradictionStages(): DeliberationStageDefinition[] {
+    return [
+      {
+        name: 'evidence',
+        purpose: 'background',
+        buildTurn: ({ prompt }) => ({
+          systemPrompt: 'Gather evidence.',
+          messages: [{ role: 'user', content: `Stage: evidence\n${prompt}` }],
+        }),
+      },
+      {
+        name: 'synthesis',
+        purpose: 'reasoning',
+        buildTurn: ({ prompt, stageOutputs }) => ({
+          systemPrompt: 'Synthesize.',
+          messages: [{
+            role: 'user',
+            content: `Stage: synthesis\n${prompt}\nEvidence:\n${stageOutputs.evidence}`,
+          }],
+        }),
+      },
+      {
+        name: 'contradiction',
+        purpose: 'reasoning',
+        buildTurn: ({ prompt, stageOutputs }) => ({
+          systemPrompt: 'Check contradictions.',
+          messages: [{
+            role: 'user',
+            content: `Stage: contradiction\n${prompt}\nCandidate:\n${stageOutputs.synthesis}`,
+          }],
+        }),
+      },
+    ];
+  }
+
+  it('runs every stage once, in order, threading prior stage outputs into later builders', async () => {
+    const contexts: LLMContext[] = [];
+    const options: Array<Record<string, unknown> | undefined> = [];
+    const calls: CompletionPurpose[] = [];
+    const scriptedContents = [
+      'Grounded evidence bullets.',
+      'Synthesized reflection.',
+      'Revised reflection after contradiction check.',
+    ];
+    const provider: LLMProviderPort = {
+      stream: vi.fn(async () => ({
+        content: '',
+        toolCalls: [],
+        model: 'mock-stream',
+        inputTokens: 0,
+        outputTokens: 0,
+        stopReason: 'stop',
+      })),
+      complete: vi.fn(async (
+        context: LLMContext,
+        purpose: CompletionPurpose,
+        requestOptions?: Record<string, unknown>,
+      ) => {
+        contexts.push(context);
+        calls.push(purpose);
+        options.push(requestOptions);
+        const content = scriptedContents.at(contexts.length - 1);
+        if (content === undefined) {
+          throw new Error('No scripted stage response available');
+        }
+        return mockResponse({ purpose, content });
+      }),
+    };
+
+    const result = await runDeliberation(provider, 'Reflect on the day', {
+      episode: { kind: 'maintenance_reflection', mode: 'background_bounded' },
+      correlation: {
+        channelId: 'internal:reflection:daily-review',
+        callType: 'scheduled',
+        originType: 'scheduled',
+        originStage: 'heartbeat.deliberation',
+      },
+      stages: evidenceSynthesisContradictionStages(),
+      caps: { maxRounds: 3, maxTotalTokens: 10_000, maxWallTimeMs: 20_000 },
+    });
+
+    expect(result.stopReason).toBe('max_rounds');
+    expect(result.rounds.map(round => round.stage)).toEqual(['evidence', 'synthesis', 'contradiction']);
+    expect(result.rounds).toHaveLength(3);
+    expect(result.output).toBe('Revised reflection after contradiction check.');
+    expect(result.episode).toMatchObject({
+      kind: 'maintenance_reflection',
+      mode: 'background_bounded',
+      budget: { maxRounds: 3, maxTotalTokens: 10_000, maxWallTimeMs: 20_000 },
+      exit: {
+        reason: 'max_rounds',
+        exhaustedBudget: true,
+        maxRoundsReached: true,
+        fatigueTapered: false,
+      },
+    });
+    expect(result.sessionId).toBe(result.episode.id);
+    expect(result.totalTokens).toBeGreaterThan(0);
+    expect(result.estimatedCostUsd).toBeGreaterThan(0);
+
+    // Later builders see earlier stage outputs.
+    expect(contexts[1].messages[0].content).toContain('Evidence:\nGrounded evidence bullets.');
+    expect(contexts[2].messages[0].content).toContain('Candidate:\nSynthesized reflection.');
+
+    // Per-stage correlation: `<originStage>.<stage name>` with pinned call type.
+    expect(options[0]).toMatchObject({
+      correlation: {
+        channelId: 'internal:reflection:daily-review',
+        callType: 'scheduled',
+        originType: 'scheduled',
+        originStage: 'heartbeat.deliberation.evidence',
+        purpose: 'heartbeat.deliberation.evidence',
+      },
+    });
+    expect(options[1]).toMatchObject({
+      correlation: { originStage: 'heartbeat.deliberation.synthesis' },
+    });
+    expect(options[2]).toMatchObject({
+      correlation: { originStage: 'heartbeat.deliberation.contradiction' },
+    });
+  });
+
+  it('skips remaining stages when the round cap is below the stage count', async () => {
+    const { provider, calls } = scriptedProvider([
+      { purpose: 'background', content: 'Evidence only.' },
+    ]);
+
+    const result = await runDeliberation(provider, 'Round-capped stages', {
+      stages: evidenceSynthesisContradictionStages(),
+      caps: { maxRounds: 1, maxTotalTokens: 10_000, maxWallTimeMs: 20_000 },
+    });
+
+    expect(calls).toEqual(['background']);
+    expect(result.stopReason).toBe('max_rounds');
+    expect(result.rounds.map(round => round.stage)).toEqual(['evidence']);
+    expect(result.output).toBe('Evidence only.');
+    expect(result.episode.exit).toMatchObject({
+      reason: 'max_rounds',
+      exhaustedBudget: true,
+      maxRoundsReached: true,
+    });
+  });
+
+  it('stops the stage sequence on token cap', async () => {
+    const { provider, calls } = scriptedProvider([
+      { purpose: 'background', content: 'Expensive evidence.', inputTokens: 200, outputTokens: 200 },
+    ]);
+
+    const result = await runDeliberation(provider, 'Token-capped stages', {
+      stages: evidenceSynthesisContradictionStages(),
+      caps: { maxRounds: 3, maxTotalTokens: 300, maxWallTimeMs: 20_000 },
+    });
+
+    expect(calls).toEqual(['background']);
+    expect(result.stopReason).toBe('token_cap');
+    expect(result.rounds.map(round => round.stage)).toEqual(['evidence']);
+    expect(result.episode.exit).toMatchObject({
+      reason: 'token_cap',
+      exhaustedBudget: true,
+      maxTotalTokensReached: true,
+    });
+  });
+
+  it('stops the stage sequence on wall-time cap', async () => {
+    const { provider, calls } = scriptedProvider([
+      { purpose: 'background', content: 'Slow evidence.', delayMs: 260 },
+    ]);
+
+    const result = await runDeliberation(provider, 'Time-capped stages', {
+      stages: evidenceSynthesisContradictionStages(),
+      caps: { maxRounds: 3, maxTotalTokens: 10_000, maxWallTimeMs: 250 },
+    });
+
+    expect(calls).toEqual(['background']);
+    expect(result.stopReason).toBe('time_cap');
+    expect(result.rounds.map(round => round.stage)).toEqual(['evidence']);
+    expect(result.episode.exit).toMatchObject({
+      reason: 'time_cap',
+      exhaustedBudget: true,
+      maxWallTimeReached: true,
+    });
+  });
+
+  it('fails closed on an empty stage list, duplicate stage names, and conflicting options', async () => {
+    const { provider } = scriptedProvider([]);
+
+    await expect(runDeliberation(provider, 'No stages', { stages: [] }))
+      .rejects.toThrow('Staged deliberation requires at least one stage');
+
+    const duplicate = evidenceSynthesisContradictionStages();
+    duplicate[1] = { ...duplicate[1], name: 'evidence' };
+    await expect(runDeliberation(provider, 'Duplicate stages', { stages: duplicate }))
+      .rejects.toThrow('duplicated');
+
+    await expect(runDeliberation(provider, 'Conflicting options', {
+      stages: evidenceSynthesisContradictionStages(),
+      voices: ['reasoning'],
+      aggregatorModel: 'model-agg',
+    })).rejects.toThrow('remove unsupported options: voices, aggregatorModel');
   });
 });

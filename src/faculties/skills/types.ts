@@ -1,5 +1,6 @@
 export type SkillSource = 'companion' | 'bundled' | 'extra' | 'custom';
 export type SkillOwnership = 'personal' | 'deployment';
+export type SkillInvocationOutcome = 'success' | 'failure';
 
 export interface ManagedSkillOwnership {
   owner: 'personal';
@@ -112,4 +113,24 @@ export interface SkillSnapshot {
 export interface SkillLookupResult {
   entry: SkillEntry;
   eligible: SkillEligibilityResult;
+}
+
+export interface SkillInvocationRecordInput {
+  outcome: SkillInvocationOutcome;
+  durationMs?: number;
+  occurredAt?: Date | string;
+}
+
+export interface SkillUsageStats {
+  name: string;
+  firstUsedAt: string;
+  lastUsedAt: string;
+  invocationCount: number;
+  successCount: number;
+  failureCount: number;
+  durationSampleCount: number;
+  averageDurationMs: number | null;
+  lastDurationMs: number | null;
+  lastOutcome: SkillInvocationOutcome;
+  successRate: number | null;
 }

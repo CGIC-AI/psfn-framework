@@ -43,6 +43,7 @@ export interface ChannelCache {
 
 export interface CachedRecentEntries {
   fingerprint: string;
+  archiveFingerprint: string;
   entries: import('../../core/session/types.js').SessionEntry[];
 }
 
@@ -72,8 +73,6 @@ export interface SessionStoreOptions {
   integrityProvider?: SessionIntegrityProvider | null;
   integrityKeyring?: SessionHmacKeyring | null;
   sessionArchivePort?: SessionArchivePort | null;
-  searchIndexPath?: string;
-  disableSearchIndex?: boolean;
   transcriptProjection?: TranscriptProjectionPort | null;
   transcriptSearch?: TranscriptSearchPort | null;
   turnRecordStore?: TurnRecordStorePort | null;

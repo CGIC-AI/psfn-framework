@@ -86,6 +86,27 @@
     return ms + 'ms';
   }
 
+  function formatOptionalDuration(ms: number | null | undefined): string {
+    return typeof ms === 'number' && Number.isFinite(ms)
+      ? formatDuration(Math.round(ms))
+      : '—';
+  }
+
+  function toolStatusColor(status: string): string {
+    const colors: Record<string, string> = {
+      healthy: 'bg-moss-50 text-moss-700 border-moss-300',
+      degraded: 'bg-gold-50 text-gold-700 border-gold-300',
+      unavailable: 'bg-wilt-50 text-wilt-700 border-wilt-300',
+      not_applicable: 'bg-bark-100 text-shadow-600 border-bark-300',
+    };
+    return colors[status] ?? 'bg-bark-100 text-shadow-700 border-bark-300';
+  }
+
+  function toolStatusLabel(status: string): string {
+    if (status === 'not_applicable') return 'n/a';
+    return status;
+  }
+
   function memoryTypeColor(type: string): string {
     const colors: Record<string, string> = {
       episodic: 'bg-moss-50 text-moss-700 border-moss-300',
@@ -185,6 +206,28 @@
       </div>
     </div>
 
+    <div class="card-garden p-5">
+      <div class="flex items-center justify-between gap-3 mb-3">
+        <h2 class="font-serif text-lg text-shadow-900">Tool Status</h2>
+        <a href="/tools" class="text-sm font-medium text-gold-700 hover:text-gold-800">Open Tools</a>
+      </div>
+      {#if stats.toolStatus.length > 0}
+        <div class="flex flex-wrap gap-2">
+          {#each stats.toolStatus.slice(0, 28) as tool}
+            <span
+              class="inline-flex items-center gap-1 rounded border px-2 py-1 text-xs font-medium {toolStatusColor(tool.status)}"
+              title={tool.detail ?? tool.status}
+            >
+              <span>{tool.name}</span>
+              <span class="font-mono opacity-80">{toolStatusLabel(tool.status)}</span>
+            </span>
+          {/each}
+        </div>
+      {:else}
+        <p class="text-sm text-shadow-600">No tool health snapshot is available yet.</p>
+      {/if}
+    </div>
+
     <!-- Memory breakdown + Token usage -->
     <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
       <!-- Memory by type -->
@@ -233,10 +276,17 @@
                   {formatTokens(Math.round((stats.sessionUsage.inputTokens + stats.sessionUsage.outputTokens) / stats.sessionUsage.turns))}
                 </span>
               </div>
+              <div class="bg-bark-100 rounded-lg p-3">
+                <span class="text-sm text-shadow-600 block">Last TTFT</span>
+                <span class="text-lg font-serif text-shadow-900">{formatOptionalDuration(stats.sessionUsage.lastTtftMs)}</span>
+              </div>
+              <div class="bg-bark-100 rounded-lg p-3">
+                <span class="text-sm text-shadow-600 block">Avg TTFT</span>
+                <span class="text-lg font-serif text-shadow-900">{formatOptionalDuration(stats.sessionUsage.averageTtftMs)}</span>
+              </div>
             </div>
             <p class="text-sm text-shadow-600">
-              Token usage tracking per model requires persistent storage (coming in a future release).
-              Current data reflects active-session telemetry.
+              Current-session telemetry is shown here. Persisted per-model usage is available on Charge / Budget.
             </p>
           </div>
         {:else}

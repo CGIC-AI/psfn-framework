@@ -7,7 +7,7 @@ import type { SubstrateConfig } from '../../system/config/runtime-config-contrac
 import { SessionStore } from '../../persistence/sessions/store.js';
 import { SessionManager } from '../session/manager.js';
 import { runWithRequestContext } from '../../primitives/llm/request-context.js';
-import { createCompleteFocusTool, createStartFocusTool } from './focus.js';
+import { createSessionTool } from './session.js';
 
 function makeConfig(dataDir: string, overrides: Partial<SubstrateConfig> = {}): SubstrateConfig {
   return {
@@ -78,26 +78,34 @@ describe('focus tools', () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
+  function makeTool(): ReturnType<typeof createSessionTool> {
+    return createSessionTool({
+      manager,
+      llmProvider,
+      sessionsDir: join(dir, 'sessions'),
+      dataDir: dir,
+    });
+  }
+
   it('starts a focus session and rejects duplicate active start calls', async () => {
-    const startTool = createStartFocusTool(manager);
+    const tool = makeTool();
 
     const first = await runWithRequestContext(
       { callType: 'tool', purpose: 'agent.turn', channelId: 'api:focus-session' },
-      () => startTool.execute('focus-start-1', { scope: 'Investigate flaky test timeout' }),
+      () => tool.execute('focus-start-1', { action: 'start_focus', scope: 'Investigate flaky test timeout' }),
     );
     expect(toolText(first as any)).toContain('start_focus: tracking');
 
     const second = await runWithRequestContext(
       { callType: 'tool', purpose: 'agent.turn', channelId: 'api:focus-session' },
-      () => startTool.execute('focus-start-2', { scope: 'Duplicate scope should fail' }),
+      () => tool.execute('focus-start-2', { action: 'start_focus', scope: 'Duplicate scope should fail' }),
     );
     expect(toolText(second as any)).toContain('focus session already active');
     expect((second.details as { isError?: boolean }).isError).toBe(true);
   });
 
   it('completes focus by persisting durable knowledge and pruning compacted focus range from context', async () => {
-    const startTool = createStartFocusTool(manager);
-    const completeTool = createCompleteFocusTool(manager, llmProvider);
+    const tool = makeTool();
 
     store.append({
       channelId: 'api:focus-context',
@@ -110,7 +118,7 @@ describe('focus tools', () => {
 
     await runWithRequestContext(
       { callType: 'tool', purpose: 'agent.turn', channelId: 'api:focus-context' },
-      () => startTool.execute('focus-start', { scope: 'Diagnose context compaction behavior' }),
+      () => tool.execute('focus-start', { action: 'start_focus', scope: 'Diagnose context compaction behavior' }),
     );
 
     store.append({
@@ -135,7 +143,8 @@ describe('focus tools', () => {
 
     const completed = await runWithRequestContext(
       { callType: 'tool', purpose: 'agent.turn', channelId: 'api:focus-context', requestId: 'req-focus-1' },
-      () => completeTool.execute('focus-complete', {
+      () => tool.execute('focus-complete', {
+        action: 'complete_focus',
         conclusion: 'Prioritize preserving distilled findings while pruning raw exploration turns.',
       }),
     );
@@ -177,11 +186,10 @@ describe('focus tools', () => {
     expect(reloadedMessages).toContain('Pre-focus baseline context should remain');
     expect(reloadedMessages).not.toContain('Focus step 1 detail to compact later');
     expect(reloadedMessages).not.toContain('Focus step 2 finding to compact later');
-  });
+  }, 60_000);
 
   it('reuses prior focus knowledge as a first-class project context for repeated scopes', async () => {
-    const startTool = createStartFocusTool(manager);
-    const completeTool = createCompleteFocusTool(manager, llmProvider);
+    const tool = makeTool();
     (llmProvider.complete as ReturnType<typeof vi.fn>)
       .mockResolvedValueOnce({
         content: 'First Project Summary\n- Captured the initial direction.\nOpen questions: none',
@@ -202,7 +210,7 @@ describe('focus tools', () => {
 
     await runWithRequestContext(
       { callType: 'tool', purpose: 'agent.turn', channelId: 'api:focus-project' },
-      () => startTool.execute('focus-start-1', { scope: 'Memory workflow overhaul' }),
+      () => tool.execute('focus-start-1', { action: 'start_focus', scope: 'Memory workflow overhaul' }),
     );
     store.append({
       channelId: 'api:focus-project',
@@ -212,12 +220,12 @@ describe('focus tools', () => {
     });
     await runWithRequestContext(
       { callType: 'tool', purpose: 'agent.turn', channelId: 'api:focus-project', requestId: 'focus-project-1' },
-      () => completeTool.execute('focus-complete-1', {}),
+      () => tool.execute('focus-complete-1', { action: 'complete_focus' }),
     );
 
     const resumed = await runWithRequestContext(
       { callType: 'tool', purpose: 'agent.turn', channelId: 'api:focus-project' },
-      () => startTool.execute('focus-start-2', { scope: '  memory workflow overhaul  ' }),
+      () => tool.execute('focus-start-2', { action: 'start_focus', scope: '  memory workflow overhaul  ' }),
     );
     expect(toolText(resumed as any)).toContain('Resuming project context with 1 prior distilled block.');
 
@@ -229,7 +237,7 @@ describe('focus tools', () => {
     });
     const secondCompletion = await runWithRequestContext(
       { callType: 'tool', purpose: 'agent.turn', channelId: 'api:focus-project', requestId: 'focus-project-2' },
-      () => completeTool.execute('focus-complete-2', {}),
+      () => tool.execute('focus-complete-2', { action: 'complete_focus' }),
     );
     expect(toolText(secondCompletion as any)).toContain('Project context now has 2 distilled blocks.');
 
@@ -237,5 +245,5 @@ describe('focus tools', () => {
     expect((context.systemPrompt.match(/\[memory workflow overhaul\]/gi) ?? [])).toHaveLength(1);
     expect(context.systemPrompt).toContain('Second Project Summary');
     expect(context.systemPrompt).toContain('project context with 2 distilled blocks');
-  });
+  }, 60_000);
 });

@@ -67,18 +67,18 @@ class FakePostgresPool {
       return result([{ exists: true }]);
     }
 
-    if (normalized.startsWith('select id, discord_user_id, display_name, nickname, trust_level, relationship_type, emotional_baseline, first_seen, last_seen, notes from contacts where id = $1 limit 1')) {
+    if (normalized.startsWith('select id, discord_user_id, display_name, nickname, trust_level, relationship_type, is_machine_intelligence, emotional_baseline, first_seen, last_seen, notes, timezone from contacts where id = $1 limit 1')) {
       const row = this.contacts.get(String(values[0] ?? ''));
       return result(row ? [row] : []);
     }
 
-    if (normalized.startsWith('select id, discord_user_id, display_name, nickname, trust_level, relationship_type, emotional_baseline, first_seen, last_seen, notes from contacts where discord_user_id = $1 limit 1')) {
+    if (normalized.startsWith('select id, discord_user_id, display_name, nickname, trust_level, relationship_type, is_machine_intelligence, emotional_baseline, first_seen, last_seen, notes, timezone from contacts where discord_user_id = $1 limit 1')) {
       const needle = String(values[0] ?? '');
       const row = [...this.contacts.values()].find(contact => contact.discord_user_id === needle);
       return result(row ? [row] : []);
     }
 
-    if (normalized.startsWith('select c.id, c.discord_user_id, c.display_name, c.nickname, c.trust_level, c.relationship_type, c.emotional_baseline, c.first_seen, c.last_seen, c.notes from contacts c inner join contact_channel_ids i on i.contact_id = c.id where i.channel = $1 and i.channel_user_id = $2 limit 1')) {
+    if (normalized.startsWith('select c.id, c.discord_user_id, c.display_name, c.nickname, c.trust_level, c.relationship_type, c.is_machine_intelligence, c.emotional_baseline, c.first_seen, c.last_seen, c.notes, c.timezone from contacts c inner join contact_channel_ids i on i.contact_id = c.id where i.channel = $1 and i.channel_user_id = $2 limit 1')) {
       const row = this.findContactByChannelIdentity(String(values[0] ?? ''), String(values[1] ?? ''));
       return result(row ? [row] : []);
     }
@@ -115,13 +115,14 @@ class FakePostgresPool {
         first_seen: String(values[7] ?? ''),
         last_seen: String(values[8] ?? ''),
         notes: values[9] == null ? null : String(values[9]),
+        timezone: values[10] == null ? null : String(values[10]),
       };
       this.contacts.set(row.id, row);
       return result();
     }
 
-    if (normalized.startsWith('update contacts set discord_user_id = coalesce(discord_user_id, $1), display_name = $2, nickname = $3, trust_level = $4, relationship_type = $5, emotional_baseline = $6, last_seen = $7, notes = coalesce($8, notes) where id = $9')) {
-      const id = String(values[8] ?? '');
+    if (normalized.startsWith('update contacts set discord_user_id = coalesce(discord_user_id, $1), display_name = $2, nickname = $3, trust_level = $4, relationship_type = $5, emotional_baseline = $6, last_seen = $7, notes = coalesce($8, notes), timezone = $9 where id = $10')) {
+      const id = String(values[9] ?? '');
       const row = this.contacts.get(id);
       if (!row) return result();
       row.discord_user_id = row.discord_user_id ?? (values[0] == null ? null : String(values[0]));
@@ -131,9 +132,10 @@ class FakePostgresPool {
       row.relationship_type = String(values[4] ?? row.relationship_type);
       row.emotional_baseline = values[5] ?? row.emotional_baseline;
       row.last_seen = String(values[6] ?? row.last_seen);
-      if (values[7] !== undefined) {
-        row.notes = values[7] == null ? null : String(values[7]);
+      if (values[7] !== null && values[7] !== undefined) {
+        row.notes = String(values[7]);
       }
+      row.timezone = values[8] == null ? null : String(values[8]);
       return result();
     }
 
@@ -147,7 +149,15 @@ class FakePostgresPool {
       const row = this.contacts.get(String(values[3] ?? ''));
       if (!row) return result();
       row.emotional_baseline = values[0] ?? row.emotional_baseline;
-      row.emotional_time_series = values[1] ?? row.emotional_time_series ?? [];
+      // Faithful to real Postgres: a jsonb parameter must arrive as JSON text.
+      // node-pg encodes raw JS arrays as Postgres array literals, which real
+      // Postgres rejects with 22P02 — exactly the crash-loop bug of 2026-06-11.
+      if (Array.isArray(values[1])) {
+        throw new Error('invalid input syntax for type json (22P02): array literal passed to jsonb column');
+      }
+      row.emotional_time_series = typeof values[1] === 'string'
+        ? JSON.parse(values[1])
+        : values[1] ?? row.emotional_time_series ?? [];
       row.last_seen = String(values[2] ?? row.last_seen);
       return result();
     }
@@ -536,6 +546,60 @@ describe('PostgresContactStore', () => {
       contactId: contact.id,
       source: 'contact',
     });
+  });
+
+  it('preserves, updates, and clears contact timezone metadata', async () => {
+    const pool = new FakePostgresPool();
+    const store = await createPostgresContactStore('postgres://unused', 'primary-user-123', {
+      pool: pool as unknown as Pool,
+    });
+
+    const contact = await store.upsert({
+      displayName: 'Timezone Contact',
+      discordUserId: 'timezone-discord',
+      timezone: 'America/New_York',
+    });
+
+    expect(contact.timezone).toBe('America/New_York');
+    await expect(store.getByDiscordUserId('timezone-discord')).resolves.toMatchObject({
+      id: contact.id,
+      timezone: 'America/New_York',
+    });
+
+    const preserved = await store.upsert({
+      displayName: 'Timezone Contact Renamed',
+      discordUserId: 'timezone-discord',
+    });
+    expect(preserved.timezone).toBe('America/New_York');
+
+    const changed = await store.upsert({
+      displayName: 'Timezone Contact Renamed',
+      discordUserId: 'timezone-discord',
+      timezone: 'Asia/Tokyo',
+    }, { actor: 'admin:api' });
+    expect(changed.timezone).toBe('Asia/Tokyo');
+
+    const cleared = await store.upsert({
+      displayName: 'Timezone Contact Renamed',
+      discordUserId: 'timezone-discord',
+      timezone: undefined,
+    }, { actor: 'admin:api' });
+    expect(cleared.timezone).toBeUndefined();
+
+    expect(pool.contactMutationAudit.filter(entry => entry.field === 'timezone')).toEqual([
+      expect.objectContaining({
+        contact_id: contact.id,
+        actor: 'admin:api',
+        old_value: 'America/New_York',
+        new_value: 'Asia/Tokyo',
+      }),
+      expect.objectContaining({
+        contact_id: contact.id,
+        actor: 'admin:api',
+        old_value: 'Asia/Tokyo',
+        new_value: null,
+      }),
+    ]);
   });
 
   it('creates and verifies a contact identity link challenge', async () => {

@@ -22,6 +22,10 @@
   const isControlSurface = $derived(
     tool.scope === 'core' && (tool.name === 'tool_search' || tool.name === 'toolset'),
   );
+  const actionNames = $derived(tool.schema?.actions.map((action) => action.name) ?? []);
+  const requiredParameters = $derived(tool.schema?.requiredParameters ?? []);
+  const requiredCapabilities = $derived(tool.schema?.requiredCapabilities ?? []);
+  const bundleMembership = $derived(tool.schema?.bundleMembership ?? []);
 </script>
 
 <article class="card-garden p-5">
@@ -50,9 +54,59 @@
     </span>
   </div>
 
+  {#if actionNames.length || requiredParameters.length || requiredCapabilities.length}
+    <div class="mt-4 space-y-3">
+      {#if actionNames.length}
+        <div>
+          <p class="text-xs font-semibold uppercase tracking-[0.16em] text-shadow-500">Actions</p>
+          <div class="mt-2 flex flex-wrap gap-2">
+            {#each actionNames as action}
+              <code class="rounded-md border border-bark-200 bg-white px-2 py-1 text-xs text-shadow-800">{action}</code>
+            {/each}
+          </div>
+        </div>
+      {/if}
+
+      {#if showFullDetail && (requiredParameters.length || requiredCapabilities.length)}
+        <div class="grid gap-3 md:grid-cols-2">
+          <div class="rounded-2xl border border-bark-200 bg-white px-4 py-3">
+            <p class="text-xs font-semibold uppercase tracking-[0.16em] text-shadow-500">Required Params</p>
+            <p class="mt-2 text-sm text-shadow-700">
+              {requiredParameters.length ? requiredParameters.join(', ') : 'none'}
+            </p>
+          </div>
+          <div class="rounded-2xl border border-bark-200 bg-white px-4 py-3">
+            <p class="text-xs font-semibold uppercase tracking-[0.16em] text-shadow-500">Capabilities</p>
+            <p class="mt-2 text-sm text-shadow-700">
+              {requiredCapabilities.length ? requiredCapabilities.join(', ') : 'none'}
+            </p>
+          </div>
+        </div>
+      {/if}
+    </div>
+  {/if}
+
   {#if showFullDetail}
     <div class="mt-4 rounded-2xl border border-bark-200 bg-bark-50 px-3 py-3 text-sm text-shadow-700">
       {tool.health.detail}
+    </div>
+  {/if}
+
+  {#if showFullDetail && tool.schema}
+    <div class="mt-3 flex flex-wrap gap-2 text-xs">
+      <span class="rounded-full border border-bark-200 bg-bark-50 px-2 py-0.5 text-shadow-600">
+        {tool.schema.reversibility}
+      </span>
+      {#if tool.schema.interruptibility}
+        <span class="rounded-full border border-bark-200 bg-bark-50 px-2 py-0.5 text-shadow-600">
+          {tool.schema.interruptibility}
+        </span>
+      {/if}
+      {#each bundleMembership as bundle}
+        <span class="rounded-full border border-bark-200 bg-bark-50 px-2 py-0.5 text-shadow-600">
+          {bundle}
+        </span>
+      {/each}
     </div>
   {/if}
 

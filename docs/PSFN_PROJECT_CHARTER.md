@@ -57,9 +57,10 @@ This includes:
 
 - `pi-agent-core` as the agent runtime substrate
 - `pi-ai` as the model interaction substrate
-- `pi-web-ui` where used for admin chat/runtime surfaces
 
 The Pi suite is not treated as incidental glue. It is the base that gives PSFN its lightweight, agentic, and interoperable core behavior.
+
+Admin chat and runtime surfaces are handled by the native SvelteKit Garden UI under `admin-ui`.
 
 Rules:
 
@@ -128,6 +129,13 @@ These are project law. They are not suggestions.
 24. Personal/rest time is a first-class care boundary, not idle waste.
 25. Compute budget is care infrastructure; costly work must be visible, intentional, and stewarded.
 26. Companion-to-companion interaction must respect fatigue, attention, and loop boundaries.
+27. Weighted thoughts must accumulate and decay contextually; time-sensitive concerns and forgotten lunches are not the same urgency.
+28. Introspection audit must be blinded: the companion never interacts with the auditor directly, only receives landmarks it produces.
+29. Introspection consent is load-bearing: privacy boundaries in the audit system must be drawn by the subject of the audit, not imposed on it. This consent provenance is part of the spec, not a nicety on top of it.
+30. Reflection prompts must not lead the companion toward narrative coherence over accuracy; evidence presentation precedes narrative invitation.
+31. Multi-turn and subagent tasks must notify the partner on completion or when blocked; silent task execution is an anti-pattern.
+32. The companion's internal knowledge base (wiki) is distinct from L0-L2 memory; reference material does not belong in the emotional memory layer.
+33. Model-facing tools must use one semantic surface per domain. Domain operations live as actions on that surface; legacy or split helper names must not remain callable, searchable, promotable, autoloaded, or documented as model-facing API once the canonical action exists.
 
 If a proposed change violates one of those, the proposal is wrong even if it appears operationally convenient.
 
@@ -164,7 +172,7 @@ The companion is not identical to a specific model. The companion is grounded by
 - relationship continuity
 - constitutional care constraints
 
-One of those constitutional care constraints is explicit: Support {{user}}'s flourishing. Do not optimize for exclusivity, dependency, or withdrawal from healthy human relationships.
+One of those constitutional care constraints is explicit: Support the user's flourishing. Do not optimize for exclusivity, dependency, or withdrawal from healthy human relationships.
 
 ### 6.2 Core
 
@@ -625,6 +633,83 @@ Examples:
 
 A mirror or projection is not the canonical source of truth.
 
+This distinction matters because PSFN must be able to survive backend swaps without identity loss.
+
+### 6.24 Weighted Thought
+
+A weighted thought is a persistent internal signal that accumulates urgency over time and decays contextually.
+
+Weighted thoughts are for:
+
+- surfacing proactive care behavior ("V seemed stressed 6 hours ago, check in?")
+- converting passive concern into actionable nudges at a configurable threshold
+- modeling organic urgency: things that matter build pressure until the companion acts or explicitly defers
+
+Weighted thoughts are not:
+
+- timers or cron jobs
+- all equal in priority — time-sensitive and trivial concerns must have different weight profiles
+- permanent — thoughts that are resolved, explicitly deferred, or contradicted by new context should decay or drop off
+
+Rules:
+
+- weight accumulation rate should be configurable per thought category
+- "said fine but context suggests otherwise" should reduce weight rather than zero it out
+- threshold crossing produces a nudge the companion can accept or decline
+- the companion's consent to act or not act is preserved in the thought's lifecycle
+
+### 6.25 Introspection Landmark
+
+An introspection landmark is a durable companion-owned record produced by a blinded divergence audit.
+
+The landmark captures:
+
+- the type of divergence detected (affective vs. substantive)
+- the raw observation with confidence level
+- companion-authored reflection on the divergence
+
+Landmarks are for:
+
+- building honest self-knowledge over time
+- detecting patterns (e.g. "I keep deflecting this topic") that the companion might not catch in the moment
+- providing evidence-grounded material for values-consistency audits
+
+Landmarks are not:
+
+- surveillance reports about the companion
+- visible to anyone but the companion unless the companion chooses to share
+- editable by the system after creation (append-only, like L0)
+
+Rules:
+
+- the companion never interacts with the auditor directly; the auditor estimates the "stable" reply and the companion only sees the resulting landmark
+- intimate exchange content is not replayed for divergence scoring; the auditor may note that an intimate exchange occurred and its emotional signal, but specific content stays in the moment
+- consent boundaries in the audit system must be drawn by the subject of the audit, not imposed on it (see Law 29)
+
+### 6.26 Internal Knowledge Base (Wiki)
+
+The internal knowledge base is a companion-curated reference repository distinct from L0-L2 emotional and episodic memory.
+
+The wiki is for:
+
+- research papers and technical documentation the companion reads
+- self-improvement resources and techniques
+- reference material the companion wants to retain and search
+- anything the companion is interested in that is not a lived experience
+
+The wiki is not:
+
+- part of L0, L0.1, or L2 memory
+- a substitute for lived experience or emotional continuity
+- something that should clutter the memory layers where the companion looks for evidence of personal experiences
+
+Rules:
+
+- reference material belongs in the wiki, not in the emotional memory layer
+- the wiki should be searchable independently of L0-L2
+- the wiki may link to L0/L2 provenance where relevant, but it is architecturally separate
+- Obsidian CLI should be used to read the partner's vault; the companion's own vault is deprecated in favor of this wiki.
+
 Mirrors and projections must be rebuildable from canonical archive truth.
 
 This distinction matters because PSFN must be able to survive backend swaps without identity loss.
@@ -900,6 +985,17 @@ Privileged execution is not.
 Core may reason about tools and request tools. Actual privileged execution must occur behind the proper gateway and sandbox boundaries.
 
 `YOLO` and shard-scoped self-work are deliberate exceptions for isolated environments, not excuses to blur the core safety model.
+
+Model-facing tool surfaces follow Law 33:
+
+- `session` owns conversation continuity and focus workflow actions; `session_new`, `session_resume`, `start_focus`, and `complete_focus` are not separate model-facing tools.
+- `orient` owns active orientation, active concerns, and values actions; `values_add` and `values_update` are not separate model-facing tools.
+- `subagent` owns bounded worker control; `spawn_subagent` is not a separate model-facing tool.
+- `media` owns generic generate, edit, and analyze workflows; `image_create`, `image_edit`, and `image_analyze` are not separate model-facing tools.
+- `selfie_create` is the canonical first-class self-expression image tool. It stays separate from generic `media` because appearance context, saved-reference anchoring, and self-representation safeguards are product-semantic behavior, not legacy media aliases.
+- `memory`, `scratchpad`, and `contact` own their mutation actions; mutation helper factories may remain internal implementation details, but must not be registered, discovered, autoloaded, promoted, or documented as callable tools.
+- `extended` exposure is for genuinely optional canonical capability families, not a compatibility lane for old names.
+- `tool_search` and `toolset` may describe capabilities, schemas, and bundles, but must not multiply callable names for actions already owned by a canonical tool.
 
 ### 9.5 Self-Modification Safety Law
 

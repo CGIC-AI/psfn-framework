@@ -68,6 +68,15 @@ class FakePostgresPool {
       } as QueryResult;
     }
 
+    if (normalized.startsWith('delete from session_messages_projection where channel_id =') && normalized.includes('and message_id =')) {
+      const channelId = String(values[0] ?? '');
+      const messageId = Number(values[1] ?? 0);
+      this.records = this.records.filter(record => (
+        record.channelId !== channelId || record.messageId !== messageId
+      ));
+      return { rows: [], command: 'DELETE', rowCount: 1, oid: 0, fields: [] } as QueryResult;
+    }
+
     if (normalized.startsWith('delete from session_messages_projection where channel_id =')) {
       const channelId = String(values[0] ?? '');
       this.records = this.records.filter(record => record.channelId !== channelId);
@@ -116,7 +125,9 @@ class FakePostgresPool {
     if (normalized.startsWith('select channel_id, message_id, role,')) {
       const query = String(values[0] ?? '').toLowerCase();
       const tokens = query.split(/\s+/).filter(Boolean);
+      const scopedChannelId = values[2] == null ? null : String(values[2]);
       const matches = this.records
+        .filter(record => scopedChannelId === null || record.channelId === scopedChannelId)
         .filter(record => {
           const haystack = record.content.toLowerCase();
           return tokens.every(token => haystack.includes(token));
@@ -179,6 +190,152 @@ describe('postgres session adapters', () => {
     expect(hits).toHaveLength(1);
     expect(hits[0]?.channelId).toBe('api:postgres-search');
     expect(pool.records).toHaveLength(1);
+  });
+
+  it('scopes keyword search to a single channel when requested', async () => {
+    const sessionsDir = mkdtempSync(join(tmpdir(), 'psfn-pg-session-adapters-scoped-'));
+    dirs.push(sessionsDir);
+    const pool = new FakePostgresPool();
+    const adapters = await createDefaultPostgresSessionAdapters('postgres://unused', {
+      sessionsDir,
+      pool: pool as unknown as Pool,
+    });
+
+    adapters.transcriptProjection.upsertSessionEntry({
+      id: 1,
+      channelId: 'api:scoped-target',
+      role: 'user',
+      content: 'shared scoped needle in target',
+      timestamp: 1_000,
+    });
+    adapters.transcriptProjection.upsertSessionEntry({
+      id: 2,
+      channelId: 'api:scoped-other',
+      role: 'user',
+      content: 'shared scoped needle in other',
+      timestamp: 2_000,
+    });
+
+    const unscoped = await adapters.transcriptSearch.searchByKeywords('scoped needle');
+    expect(unscoped).toHaveLength(2);
+
+    const scoped = await adapters.transcriptSearch.searchByKeywords('scoped needle', 10, {
+      channelId: 'api:scoped-target',
+    });
+    expect(scoped).toHaveLength(1);
+    expect(scoped[0]?.channelId).toBe('api:scoped-target');
+    expect(scoped[0]?.messageId).toBe(1);
+  });
+
+  it('replaces channels, normalizes visibility, and supports explicit drift lifecycle operations', async () => {
+    const sessionsDir = mkdtempSync(join(tmpdir(), 'psfn-pg-session-adapters-replace-'));
+    dirs.push(sessionsDir);
+    const pool = new FakePostgresPool();
+    const adapters = await createDefaultPostgresSessionAdapters('postgres://unused', {
+      sessionsDir,
+      pool: pool as unknown as Pool,
+    });
+
+    adapters.transcriptProjection.upsertSessionEntry({
+      id: 1,
+      channelId: 'api:postgres-replace',
+      role: 'assistant',
+      content: 'old projection needle',
+      timestamp: 1_000,
+      channelVisibility: 'not-a-valid-visibility',
+    });
+    await adapters.transcriptSearch.searchByKeywords('old needle');
+    expect(pool.records).toHaveLength(1);
+    expect(pool.records[0].channelVisibility).toBe('private');
+
+    adapters.transcriptProjection.replaceChannelEntries('api:postgres-replace', [{
+      id: 2,
+      channelId: 'api:postgres-replace',
+      role: 'user',
+      content: 'new projection needle',
+      timestamp: 2_000,
+      channelVisibility: 'invite_only',
+    }]);
+
+    expect(adapters.transcriptProjection.countProjectedMessages('api:postgres-replace')).toBe(1);
+    await expect(adapters.transcriptSearch.searchByKeywords('old needle')).resolves.toHaveLength(0);
+    const replacementHits = await adapters.transcriptSearch.searchByKeywords('new needle');
+    expect(replacementHits).toHaveLength(1);
+    expect(replacementHits[0]).toEqual(expect.objectContaining({
+      channelId: 'api:postgres-replace',
+      messageId: 2,
+      channelVisibility: 'invite_only',
+    }));
+
+    adapters.transcriptProjection.markProjectionDrift('api:postgres-replace', 'manual drift');
+    expect(adapters.transcriptProjection.listProjectionDrift()).toEqual([
+      expect.objectContaining({
+        channelId: 'api:postgres-replace',
+        reason: 'manual drift',
+      }),
+    ]);
+
+    adapters.transcriptProjection.clearProjectionDrift('api:postgres-replace');
+    expect(adapters.transcriptProjection.listProjectionDrift()).toEqual([]);
+    await adapters.transcriptSearch.searchByKeywords('new needle');
+    expect(pool.drift.size).toBe(0);
+  });
+
+  it('excludes CogSec tombstones from postgres projection writes and replacement rebuilds', async () => {
+    const sessionsDir = mkdtempSync(join(tmpdir(), 'psfn-pg-cogsec-projection-'));
+    dirs.push(sessionsDir);
+    const pool = new FakePostgresPool();
+    const adapters = await createDefaultPostgresSessionAdapters('postgres://unused', {
+      sessionsDir,
+      pool: pool as unknown as Pool,
+    });
+
+    adapters.transcriptProjection.upsertSessionEntry({
+      id: 1,
+      channelId: 'api:postgres-cogsec',
+      role: 'user',
+      content: 'postgres dirty search needle',
+      timestamp: 1_000,
+    });
+    await expect(adapters.transcriptSearch.searchByKeywords('dirty needle')).resolves.toHaveLength(1);
+
+    adapters.transcriptProjection.upsertSessionEntry({
+      id: 1,
+      channelId: 'api:postgres-cogsec',
+      role: 'user',
+      content: '[CogSec redaction: cogsec_20260701T000000Z_pg]',
+      metadata: JSON.stringify({
+        kind: 'cogsec_l0_tombstone',
+        caseId: 'cogsec_20260701T000000Z_pg',
+        redactedAt: '2026-07-01T00:00:00.000Z',
+      }),
+      timestamp: 1_000,
+    });
+
+    expect(adapters.transcriptProjection.countProjectedMessages('api:postgres-cogsec')).toBe(0);
+    await expect(adapters.transcriptSearch.searchByKeywords('dirty needle')).resolves.toHaveLength(0);
+    await expect(adapters.transcriptSearch.searchByKeywords('CogSec redaction')).resolves.toHaveLength(0);
+
+    adapters.transcriptProjection.replaceChannelEntries('api:postgres-cogsec', [
+      {
+        id: 1,
+        channelId: 'api:postgres-cogsec',
+        role: 'user',
+        content: '[CogSec redaction: cogsec_20260701T000000Z_pg]',
+        timestamp: 1_000,
+      },
+      {
+        id: 2,
+        channelId: 'api:postgres-cogsec',
+        role: 'assistant',
+        content: 'clean postgres replacement',
+        timestamp: 2_000,
+      },
+    ]);
+
+    expect(adapters.transcriptProjection.countProjectedMessages('api:postgres-cogsec')).toBe(1);
+    await expect(adapters.transcriptSearch.searchByKeywords('clean postgres')).resolves.toHaveLength(1);
+    await expect(adapters.transcriptSearch.searchByKeywords('cogsec_20260701T000000Z_pg')).resolves.toHaveLength(0);
   });
 
   it('tracks projection drift when queued postgres writes fail', async () => {

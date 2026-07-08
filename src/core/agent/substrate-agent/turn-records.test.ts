@@ -11,6 +11,58 @@ describe('turn-records tool persistence', () => {
     expect(sanitizePersistedReasoningText('[Scratchpad]\nWorking notes (short-term, may be stale; verify before acting):\n- old note')).toBeUndefined();
   });
 
+  it('uses enriched persisted user content when the stored turn has current image description context', () => {
+    const record = buildTurnRecord({
+      message: {
+        id: 'source-message-image',
+        channelId: 'api:test',
+        channelType: 'api',
+        authorId: 'user-1',
+        authorName: 'User',
+        content: 'what did i send?',
+        timestamp: new Date(1_700_000_000_000),
+      },
+      turnId: '019d2326-d9e1-701d-bcee-250d2cbb0e4e',
+      requestId: 'req-turn-records-image',
+      startedAt: 1_700_000_000_000,
+      completedAt: 1_700_000_000_250,
+      userSessionEntryId: 1,
+      assistantSessionEntryId: 2,
+      response: {
+        content: 'It was a catgirl on a server rack.',
+        channelId: 'api:test',
+        metadata: {
+          model: 'test-model',
+          inputTokens: 10,
+          outputTokens: 6,
+          durationMs: 250,
+        },
+      },
+      turnMessages: [],
+      promptMode: 'default',
+      promptText: 'prompt',
+      contextMessageCount: 1,
+      memoryContextChars: 0,
+      trustLevel: 'regular',
+      speakerRole: 'user',
+      retrievalProvenanceRefs: [],
+      persistedUserMessageContent: [
+        'what did i send?',
+        '',
+        '---',
+        'Image attachment:',
+        'Description: A catgirl sits on a server rack.',
+        'Model: vision-model',
+        'Image count: 1',
+        '---',
+      ].join('\n'),
+      hashPromptText: () => 'prompt-hash',
+    });
+
+    expect(record.userMessage.content).toContain('Description: A catgirl sits on a server rack.');
+    expect(record.userMessage.content).not.toBe('what did i send?');
+  });
+
   it('preserves tool arguments, results, and rationale in the turn record', () => {
     const record = buildTurnRecord({
       message: {
@@ -65,8 +117,8 @@ describe('turn-records tool persistence', () => {
             {
               type: 'toolCall',
               id: 'call-1',
-              name: 'memory_patch',
-              arguments: { memory_id: 'memory-1', text: 'patched value' },
+              name: 'memory',
+              arguments: { action: 'patch', memory_id: 'memory-1', text: 'patched value' },
               thoughtSignature: 'sig-1',
             },
           ],
@@ -74,7 +126,7 @@ describe('turn-records tool persistence', () => {
         {
           role: 'toolResult',
           toolCallId: 'call-1',
-          toolName: 'memory_patch',
+          toolName: 'memory',
           isError: false,
           timestamp: 1_700_000_000_150,
           content: [{ type: 'text', text: 'Memory patched.' }],
@@ -93,14 +145,15 @@ describe('turn-records tool persistence', () => {
 
     expect(record.toolCalls).toEqual([
       {
-        toolName: 'memory_patch',
+        toolName: 'memory',
         toolCallId: 'call-1',
         isError: false,
         arguments: {
+          action: 'patch',
           memory_id: 'memory-1',
           text: 'patched value',
         },
-        provenanceRefs: ['source:tool:memory_patch|invocation:call-1'],
+        provenanceRefs: ['source:tool:memory|invocation:call-1'],
         resultText: 'Memory patched.',
         details: {
           memoryId: 'memory-1',
@@ -158,8 +211,8 @@ describe('turn-records tool persistence', () => {
             {
               type: 'toolCall',
               id: 'call-2',
-              name: 'memory_write',
-              arguments: { text: 'secret value' },
+              name: 'memory',
+              arguments: { action: 'write', text: 'secret value', type: 'semantic' },
               thoughtSignature: 'sig-2',
             },
           ],
@@ -167,7 +220,7 @@ describe('turn-records tool persistence', () => {
         {
           role: 'toolResult',
           toolCallId: 'call-2',
-          toolName: 'memory_write',
+          toolName: 'memory',
           isError: false,
           timestamp: 1_700_000_100_180,
           content: [{ type: 'text', text: 'Memory stored.' }],
@@ -189,11 +242,11 @@ describe('turn-records tool persistence', () => {
     expect(record.versionPointers.model).toBe('openrouter/moonshotai/kimi-k2.5');
     expect(record.toolCalls).toEqual([
       {
-        toolName: 'memory_write',
+        toolName: 'memory',
         toolCallId: 'call-2',
         isError: false,
-        arguments: { text: 'secret value' },
-        provenanceRefs: ['source:tool:memory_write|invocation:call-2'],
+        arguments: { action: 'write', text: 'secret value', type: 'semantic' },
+        provenanceRefs: ['source:tool:memory|invocation:call-2'],
         resultText: 'Memory stored.',
         details: { memoryId: 'memory-2' },
         rationale: 'Need the memory tool first.',
@@ -202,7 +255,7 @@ describe('turn-records tool persistence', () => {
     ]);
   });
 
-  it('normalizes malformed memory_write tool arguments in the canonical turn record', () => {
+  it('normalizes malformed memory action=write arguments in the canonical turn record', () => {
     const record = buildTurnRecord({
       message: {
         id: 'source-message-3',
@@ -256,8 +309,9 @@ describe('turn-records tool persistence', () => {
             {
               type: 'toolCall',
               id: 'call-3',
-              name: 'memory_write',
+              name: 'memory',
               arguments: {
+                action: 'write',
                 text: ': "matrix-secret-2026-04-10T04-49-43-076Z", "type": "semantic", "sensitivity": "personal"}',
                 content: 'matrix-secret-2026-04-10T04-49-43-076Z',
                 type: 'semantic',
@@ -270,7 +324,7 @@ describe('turn-records tool persistence', () => {
         {
           role: 'toolResult',
           toolCallId: 'call-3',
-          toolName: 'memory_write',
+          toolName: 'memory',
           isError: false,
           timestamp: 1_700_000_200_180,
           content: [{ type: 'text', text: 'Memory stored.' }],
@@ -289,15 +343,16 @@ describe('turn-records tool persistence', () => {
 
     expect(record.toolCalls).toEqual([
       {
-        toolName: 'memory_write',
+        toolName: 'memory',
         toolCallId: 'call-3',
         isError: false,
         arguments: {
+          action: 'write',
           text: 'matrix-secret-2026-04-10T04-49-43-076Z',
           type: 'semantic',
           sensitivity: 'personal',
         },
-        provenanceRefs: ['source:tool:memory_write|invocation:call-3'],
+        provenanceRefs: ['source:tool:memory|invocation:call-3'],
         resultText: 'Memory stored.',
         details: { memoryId: 'memory-3' },
         rationale: 'Need to save the exact secret string.',
@@ -306,7 +361,7 @@ describe('turn-records tool persistence', () => {
     ]);
   });
 
-  it('normalizes placeholder memory_write text from step_text in the canonical turn record', () => {
+  it('normalizes placeholder memory action=write text from step_text in the canonical turn record', () => {
     const record = buildTurnRecord({
       message: {
         id: 'source-message-4',
@@ -360,8 +415,9 @@ describe('turn-records tool persistence', () => {
             {
               type: 'toolCall',
               id: 'call-4',
-              name: 'memory_write',
+              name: 'memory',
               arguments: {
+                action: 'write',
                 text: '.',
                 step_text: 'matrix-secret-2026-04-10T05-00-06-862Z',
                 type: 'semantic',
@@ -374,7 +430,7 @@ describe('turn-records tool persistence', () => {
         {
           role: 'toolResult',
           toolCallId: 'call-4',
-          toolName: 'memory_write',
+          toolName: 'memory',
           isError: false,
           timestamp: 1_700_000_300_180,
           content: [{ type: 'text', text: 'Memory stored.' }],
@@ -393,15 +449,16 @@ describe('turn-records tool persistence', () => {
 
     expect(record.toolCalls).toEqual([
       {
-        toolName: 'memory_write',
+        toolName: 'memory',
         toolCallId: 'call-4',
         isError: false,
         arguments: {
+          action: 'write',
           text: 'matrix-secret-2026-04-10T05-00-06-862Z',
           type: 'semantic',
           sensitivity: 'personal',
         },
-        provenanceRefs: ['source:tool:memory_write|invocation:call-4'],
+        provenanceRefs: ['source:tool:memory|invocation:call-4'],
         resultText: 'Memory stored.',
         details: { memoryId: 'memory-4' },
         rationale: 'Need to save the exact secret string.',
@@ -464,8 +521,9 @@ describe('turn-records tool persistence', () => {
             {
               type: 'toolCall',
               id: 'call-5',
-              name: 'memory_patch',
+              name: 'memory',
               arguments: {
+                action: 'patch',
                 id: 'memory-5',
                 text: 'patched value',
               },
@@ -474,8 +532,9 @@ describe('turn-records tool persistence', () => {
             {
               type: 'toolCall',
               id: 'call-6',
-              name: 'memory_delete',
+              name: 'memory',
               arguments: {
+                action: 'delete',
                 id: 'memory-5',
                 reason: 'cleanup',
               },
@@ -486,7 +545,7 @@ describe('turn-records tool persistence', () => {
         {
           role: 'toolResult',
           toolCallId: 'call-5',
-          toolName: 'memory_patch',
+          toolName: 'memory',
           isError: false,
           timestamp: 1_700_000_350_180,
           content: [{ type: 'text', text: 'Memory patched.' }],
@@ -495,7 +554,7 @@ describe('turn-records tool persistence', () => {
         {
           role: 'toolResult',
           toolCallId: 'call-6',
-          toolName: 'memory_delete',
+          toolName: 'memory',
           isError: false,
           timestamp: 1_700_000_350_220,
           content: [{ type: 'text', text: 'Memory deleted.' }],
@@ -514,28 +573,30 @@ describe('turn-records tool persistence', () => {
 
     expect(record.toolCalls).toEqual([
       {
-        toolName: 'memory_patch',
+        toolName: 'memory',
         toolCallId: 'call-5',
         isError: false,
         arguments: {
+          action: 'patch',
           memory_id: 'memory-5',
           text: 'patched value',
         },
-        provenanceRefs: ['source:tool:memory_patch|invocation:call-5'],
+        provenanceRefs: ['source:tool:memory|invocation:call-5'],
         resultText: 'Memory patched.',
         details: { memoryId: 'memory-5', updatedFields: ['text'] },
         rationale: 'Need to patch it, then remove it cleanly.',
         thoughtSignature: 'sig-5',
       },
       {
-        toolName: 'memory_delete',
+        toolName: 'memory',
         toolCallId: 'call-6',
         isError: false,
         arguments: {
+          action: 'delete',
           memory_id: 'memory-5',
           reason: 'cleanup',
         },
-        provenanceRefs: ['source:tool:memory_delete|invocation:call-6'],
+        provenanceRefs: ['source:tool:memory|invocation:call-6'],
         resultText: 'Memory deleted.',
         details: { memoryId: 'memory-5', deleteId: 'delete-5' },
         rationale: 'Need to patch it, then remove it cleanly.',
@@ -893,8 +954,8 @@ describe('turn-records tool persistence', () => {
             {
               type: 'toolCall',
               id: 'call-5',
-              name: 'image_analyze',
-              arguments: { image_url: 'https://example.test/cat.png' },
+              name: 'media',
+              arguments: { action: 'analyze', input_urls: ['https://example.test/cat.png'] },
               thoughtSignature: 'sig-5',
             },
           ],
@@ -902,7 +963,7 @@ describe('turn-records tool persistence', () => {
         {
           role: 'toolResult',
           toolCallId: 'call-5',
-          toolName: 'image_analyze',
+          toolName: 'media',
           isError: false,
           timestamp: 1_700_000_400_180,
           content: [{ type: 'text', text: 'Image analyzed.' }],
@@ -926,14 +987,15 @@ describe('turn-records tool persistence', () => {
 
     expect(record.toolCalls).toEqual([
       {
-        toolName: 'image_analyze',
+        toolName: 'media',
         toolCallId: 'call-5',
         isError: false,
         arguments: {
-          image_url: 'https://example.test/cat.png',
+          action: 'analyze',
+          input_urls: ['https://example.test/cat.png'],
         },
         provenanceRefs: [
-          'source:tool:image_analyze|invocation:call-5',
+          'source:tool:media|invocation:call-5',
           'image:artifact:cat03',
           'vision:model:google/gemini-3-flash-preview',
         ],
@@ -1007,8 +1069,8 @@ describe('turn-records tool persistence', () => {
             {
               type: 'toolCall',
               id: 'call-6',
-              name: 'scratchpad_read',
-              arguments: {},
+              name: 'scratchpad',
+              arguments: { action: 'list' },
               thoughtSignature: 'sig-6',
             },
           ],
@@ -1016,7 +1078,7 @@ describe('turn-records tool persistence', () => {
         {
           role: 'toolResult',
           toolCallId: 'call-6',
-          toolName: 'scratchpad_read',
+          toolName: 'scratchpad',
           isError: false,
           timestamp: 1_700_000_500_180,
           content: [{ type: 'text', text: 'Scratchpad read.' }],
@@ -1061,7 +1123,7 @@ describe('turn-records tool persistence', () => {
 
     expect(record.toolCalls).toEqual([
       expect.objectContaining({
-        toolName: 'scratchpad_read',
+        toolName: 'scratchpad',
         toolCallId: 'call-6',
         thoughtSignature: 'sig-6',
       }),

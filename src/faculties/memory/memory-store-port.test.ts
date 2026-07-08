@@ -2,13 +2,20 @@ import { describe, expect, it } from 'vitest';
 import type { EmbeddingProviderPort } from '../../core/agent/contracts.js';
 import {
   type ContactProfileArtifact,
+  type MemoryAdminListOptions,
+  type MemoryAdminListResult,
+  type MemoryAdminPrivacySummary,
   type MemoryAbstractionLink,
   type MemoryAbstractionLinkInput,
   type MemoryBulkUpdatePatch,
   type MemoryDeleteVersion,
+  type MemoryEvolutionLink,
+  type MemoryEvolutionLinkInput,
+  type MemoryEvolutionRelation,
   type MemoryLink,
   type MemoryPatchEvent,
   type MemorySearchResult,
+  type MemorySalienceUpdate,
   type MemorySoftDeleteOptions,
   type MemoryStorePort,
   type MemoryStoreStats,
@@ -20,9 +27,10 @@ import {
   type ScratchpadEntryReplaceOptions,
   createMemoryStorePort,
 } from './memory-store-port.js';
+import { isInternalMemoryArtifact } from './internal-artifacts.js';
 import { MemoryRetriever } from './retrieval.js';
 import { MemoryWriter } from './writer.js';
-import type { PurrMemory } from './types.js';
+import { isDurableMemory, isPreferenceMemory, type PurrMemory } from './types.js';
 
 function makeEmbeddingProvider(): EmbeddingProviderPort {
   return {
@@ -32,10 +40,30 @@ function makeEmbeddingProvider(): EmbeddingProviderPort {
   };
 }
 
+function makePortMemory(id: string, overrides: Partial<PurrMemory> = {}): PurrMemory {
+  return {
+    id,
+    text: `Memory ${id}`,
+    type: 'semantic',
+    importance: 0.5,
+    confidence: 0.8,
+    emotionalValence: 0,
+    salience: 0.5,
+    sourceRef: 'test:memory-store-port',
+    extractedAt: Date.now(),
+    lastAccessed: Date.now(),
+    accessCount: 0,
+    tags: [],
+    sensitivity: 'personal',
+    ...overrides,
+  };
+}
+
 class InMemoryMemoryStorePort implements MemoryStorePort {
   private readonly memories = new Map<string, PurrMemory>();
   private readonly deleteVersions = new Map<string, MemoryDeleteVersion>();
   private readonly abstractionLinks: MemoryAbstractionLink[] = [];
+  private readonly evolutionLinks: MemoryEvolutionLink[] = [];
   private readonly linkedMemories: MemoryLink[] = [];
   private readonly profiles = new Map<string, ContactProfileArtifact>();
   private readonly scratchpad = new Map<string, ScratchpadEntry>();
@@ -97,10 +125,91 @@ class InMemoryMemoryStorePort implements MemoryStorePort {
       .map(memory => ({ ...memory }));
   }
 
+  listMemories(options: { limit?: number; offset?: number } = {}): PurrMemory[] {
+    const offset = options.offset ?? 0;
+    const memories = [...this.memories.values()]
+      .sort((left, right) => {
+        const leftArchived = left.supersededBy || left.deletedAt ? 1 : 0;
+        const rightArchived = right.supersededBy || right.deletedAt ? 1 : 0;
+        return leftArchived - rightArchived || right.extractedAt - left.extractedAt;
+      });
+    const limited = options.limit === undefined
+      ? memories.slice(offset)
+      : memories.slice(offset, offset + options.limit);
+    return limited.map(memory => ({ ...memory }));
+  }
+
   listActiveMemories(options: { limit?: number; offset?: number } = {}): PurrMemory[] {
     const offset = options.offset ?? 0;
     const limit = options.limit ?? 50;
     return this.getAllActiveMemories().slice(offset, offset + limit);
+  }
+
+  listAdminMemories(options: MemoryAdminListOptions = {}): MemoryAdminListResult {
+    const offset = options.offset ?? 0;
+    const limit = options.limit ?? 50;
+    const active = this.getAllActiveMemories()
+      .filter(memory => !isInternalMemoryArtifact(memory));
+    const filtered = active
+      .filter((memory) => {
+        if (options.type && memory.type !== options.type) return false;
+        if (options.sensitivity && memory.sensitivity !== options.sensitivity) return false;
+        if (options.retentionClass === 'durable' && !isDurableMemory(memory)) return false;
+        if (options.retentionClass === 'standard' && isDurableMemory(memory)) return false;
+        if (options.preferenceOnly && !isPreferenceMemory(memory)) return false;
+        if (options.startDate !== undefined && memory.extractedAt < options.startDate) return false;
+        if (options.endDate !== undefined && memory.extractedAt > options.endDate) return false;
+        return true;
+      })
+      .sort((left, right) => right.extractedAt - left.extractedAt || right.id.localeCompare(left.id));
+    return {
+      memories: filtered.slice(offset, offset + limit).map(memory => ({ ...memory })),
+      total: filtered.length,
+      privacySummary: this.getAdminMemoryPrivacySummary(),
+    };
+  }
+
+  getAdminMemoryPrivacySummary(): MemoryAdminPrivacySummary {
+    const active = this.getAllActiveMemories()
+      .filter(memory => !isInternalMemoryArtifact(memory));
+    const sensitivityCounts: Record<string, number> = {};
+    let highSensitivityCount = 0;
+    let consentGatedCount = 0;
+    let contactLinkedCount = 0;
+    let scopedCount = 0;
+    let preferenceCount = 0;
+    let durablePreferenceCount = 0;
+    for (const memory of active) {
+      sensitivityCounts[memory.sensitivity] = (sensitivityCounts[memory.sensitivity] ?? 0) + 1;
+      if (memory.sensitivity === 'intimate' || memory.sensitivity === 'confidential') {
+        highSensitivityCount += 1;
+      }
+      if (memory.consentFlags?.allowRecall === false) {
+        consentGatedCount += 1;
+      }
+      if (memory.contactId) {
+        contactLinkedCount += 1;
+      }
+      if (memory.scopeRef || (memory.scopeTags?.length ?? 0) > 0) {
+        scopedCount += 1;
+      }
+      if (isPreferenceMemory(memory)) {
+        preferenceCount += 1;
+        if (isDurableMemory(memory)) {
+          durablePreferenceCount += 1;
+        }
+      }
+    }
+    return {
+      activeMemoryCount: active.length,
+      highSensitivityCount,
+      consentGatedCount,
+      contactLinkedCount,
+      scopedCount,
+      preferenceCount,
+      durablePreferenceCount,
+      sensitivityCounts,
+    };
   }
 
   countActiveMemories(): number {
@@ -178,6 +287,42 @@ class InMemoryMemoryStorePort implements MemoryStorePort {
     return this.abstractionLinks.filter(link => link.abstractedMemoryId === abstractedMemoryId);
   }
 
+  recordEvolutionLink(input: MemoryEvolutionLinkInput): MemoryEvolutionLink {
+    const link: MemoryEvolutionLink = {
+      id: input.linkId ?? `evolution-${this.evolutionLinks.length + 1}`,
+      sourceMemoryId: input.sourceMemoryId,
+      targetMemoryId: input.targetMemoryId,
+      relation: input.relation,
+      confidence: input.confidence ?? 1,
+      ...(input.reason ? { reason: input.reason } : {}),
+      ...(input.sourceRef ? { sourceRef: input.sourceRef } : {}),
+      sourceType: input.sourceType ?? 'unknown',
+      provenanceRefs: input.provenanceRefs ?? [],
+      ...(input.provenance ? { provenance: input.provenance } : {}),
+      createdAt: input.createdAt ?? Date.now(),
+    };
+    this.evolutionLinks.push(link);
+    return link;
+  }
+
+  getEvolutionLinksForSourceMemory(
+    sourceMemoryId: string,
+    relation?: MemoryEvolutionRelation,
+  ): MemoryEvolutionLink[] {
+    return this.evolutionLinks
+      .filter(link => link.sourceMemoryId === sourceMemoryId)
+      .filter(link => relation === undefined || link.relation === relation);
+  }
+
+  getEvolutionLinksForTargetMemory(
+    targetMemoryId: string,
+    relation?: MemoryEvolutionRelation,
+  ): MemoryEvolutionLink[] {
+    return this.evolutionLinks
+      .filter(link => link.targetMemoryId === targetMemoryId)
+      .filter(link => relation === undefined || link.relation === relation);
+  }
+
   getStats(): MemoryStoreStats {
     const byType: Record<string, number> = {};
     const memories = this.getAllActiveMemories();
@@ -246,6 +391,20 @@ class InMemoryMemoryStorePort implements MemoryStorePort {
       this.memories.set(id, {
         ...memory,
         ...fields,
+      });
+      count += 1;
+    }
+    return count;
+  }
+
+  bulkUpdateSalience(updates: MemorySalienceUpdate[]): number {
+    let count = 0;
+    for (const update of updates) {
+      const memory = this.memories.get(update.id);
+      if (!memory || memory.deletedAt) continue;
+      this.memories.set(update.id, {
+        ...memory,
+        salience: update.salience,
       });
       count += 1;
     }
@@ -340,7 +499,20 @@ describe('MemoryStorePort', () => {
     expect(retrieved).toContain('V prefers oolong tea in the morning');
   });
 
-  it('delegates transaction and patch event APIs through createMemoryStorePort', async () => {
+  it('lists archived memories separately from active memory reads', () => {
+    const store = new InMemoryMemoryStorePort();
+    store.insertMemory(makePortMemory('active-memory', { extractedAt: 2 }));
+    store.insertMemory(makePortMemory('archived-memory', {
+      extractedAt: 1,
+      deletedAt: 3,
+      deletedBy: 'test',
+    }));
+
+    expect(store.getAllActiveMemories().map(memory => memory.id)).toEqual(['active-memory']);
+    expect(store.listMemories().map(memory => memory.id)).toEqual(['active-memory', 'archived-memory']);
+  });
+
+  it('delegates transaction, patch event, and evolution link APIs through createMemoryStorePort', async () => {
     const backend = new InMemoryMemoryStorePort();
     const port = createMemoryStorePort(backend);
     const patchEvent: MemoryPatchEvent = {
@@ -361,8 +533,22 @@ describe('MemoryStorePort', () => {
 
     const value = await port.runInTransaction(() => 7);
     await port.recordPatchEvent(patchEvent);
+    const evolutionLink = await port.recordEvolutionLink({
+      linkId: 'evolution-1',
+      sourceMemoryId: 'memory-2',
+      targetMemoryId: 'memory-1',
+      relation: 'updates',
+      confidence: 0.8,
+      provenanceRefs: ['l0:turn-1'],
+      provenance: { turnId: 'turn-1' },
+      createdAt: 456,
+    });
 
     expect(value).toBe(7);
     expect(backend.getPatchEvents()).toEqual([patchEvent]);
+    expect(evolutionLink.relation).toBe('updates');
+    await expect(port.getEvolutionLinksForSourceMemory('memory-2')).resolves.toEqual([evolutionLink]);
+    await expect(port.getEvolutionLinksForTargetMemory('memory-1', 'updates')).resolves.toEqual([evolutionLink]);
+    await expect(port.listMemories()).resolves.toEqual([]);
   });
 });

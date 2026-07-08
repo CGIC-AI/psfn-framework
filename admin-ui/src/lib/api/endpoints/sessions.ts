@@ -1,14 +1,92 @@
-import { apiGet } from '$lib/api/client';
-import type { AdminSessionListData, AdminSessionMessagesData } from '$lib/types';
+import { apiGet, apiPost } from '$lib/api/client';
+import type {
+  AdminCogSecEventListData,
+  AdminCogSecRemediationApplyData,
+  AdminCogSecRemediationInput,
+  AdminCogSecRemediationPreviewData,
+  AdminSessionListData,
+  AdminSessionMessagesData,
+  AdminSessionRouteListData,
+  AdminSessionRouteResetData,
+  AdminSessionRouteResetInput,
+  AdminSessionSearchData,
+} from '$lib/types';
+
+export const SESSION_MESSAGE_PAGE_SIZE = 100;
+export const SESSION_SEARCH_LIMIT = 100;
+
+export interface SessionMessagesRequest {
+  limit?: number;
+  beforeId?: number | null;
+  messagesOnly?: boolean;
+}
 
 export function listSessions(): Promise<AdminSessionListData> {
   return apiGet<AdminSessionListData>('/api/admin/sessions');
 }
 
+export function buildSessionMessagesPath(
+  sessionId: string,
+  request: SessionMessagesRequest = {},
+): string {
+  const params = new URLSearchParams();
+  if (request.limit !== undefined) {
+    params.set('limit', String(request.limit));
+  }
+  if (request.beforeId !== undefined && request.beforeId !== null) {
+    params.set('beforeId', String(request.beforeId));
+  }
+  if (request.messagesOnly) {
+    params.set('messagesOnly', 'true');
+  }
+  const query = params.toString();
+  const path = `/api/admin/sessions/${encodeURIComponent(sessionId)}`;
+  return query ? `${path}?${query}` : path;
+}
+
 export function getSessionMessages(
-  sessionId: string
+  sessionId: string,
+  request: SessionMessagesRequest = {},
 ): Promise<AdminSessionMessagesData> {
-  return apiGet<AdminSessionMessagesData>(
-    `/api/admin/sessions/${encodeURIComponent(sessionId)}`
+  return apiGet<AdminSessionMessagesData>(buildSessionMessagesPath(sessionId, request));
+}
+
+export function searchSessionMessages(
+  sessionId: string,
+  query: string,
+  limit?: number,
+): Promise<AdminSessionSearchData> {
+  const params = new URLSearchParams({ q: query });
+  if (limit !== undefined) {
+    params.set('limit', String(limit));
+  }
+  return apiGet<AdminSessionSearchData>(
+    `/api/admin/sessions/${encodeURIComponent(sessionId)}/search?${params.toString()}`,
   );
+}
+
+export function listSessionRoutes(): Promise<AdminSessionRouteListData> {
+  return apiGet<AdminSessionRouteListData>('/api/admin/session-routes');
+}
+
+export function resetSourceChannelSession(
+  input: AdminSessionRouteResetInput,
+): Promise<AdminSessionRouteResetData> {
+  return apiPost<AdminSessionRouteResetData>('/api/admin/session-routes/reset', input);
+}
+
+export function listCogSecEvents(): Promise<AdminCogSecEventListData> {
+  return apiGet<AdminCogSecEventListData>('/api/admin/session-routes/cogsec/events');
+}
+
+export function previewCogSecRemediation(
+  input: AdminCogSecRemediationInput,
+): Promise<AdminCogSecRemediationPreviewData> {
+  return apiPost<AdminCogSecRemediationPreviewData>('/api/admin/session-routes/cogsec/preview', input);
+}
+
+export function applyCogSecRemediation(
+  input: AdminCogSecRemediationInput,
+): Promise<AdminCogSecRemediationApplyData> {
+  return apiPost<AdminCogSecRemediationApplyData>('/api/admin/session-routes/cogsec/apply', input);
 }

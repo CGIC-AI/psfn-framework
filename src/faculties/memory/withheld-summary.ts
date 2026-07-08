@@ -1,6 +1,8 @@
 import type { PolicyReasonTag } from '../../system/trust/policy.js';
 
 export type MemoryWithheldReasonTag =
+  | 'session_quarantine.blocked'
+  | 'room_visibility.blocked'
   | 'contact_scope.high_intimacy'
   | Exclude<PolicyReasonTag, 'operator.approval_override' | 'default.within_bounds'>;
 
@@ -15,21 +17,27 @@ export interface MemoryWithheldSummary {
 }
 
 const MEMORY_WITHHELD_REASON_ORDER: readonly MemoryWithheldReasonTag[] = [
+  'session_quarantine.blocked',
+  'room_visibility.blocked',
   'contact_scope.high_intimacy',
   'boundary.withhold',
   'boundary.consent_required',
   'consent.allow_recall_denied',
   'trust.ceiling_exceeded',
   'visibility.channel_restricted',
+  'visibility.broadcast_restricted',
 ];
 
 const MEMORY_WITHHELD_REASON_LABELS: Record<MemoryWithheldReasonTag, string> = {
+  'session_quarantine.blocked': 'retired session quarantine',
+  'room_visibility.blocked': 'room visibility boundary',
   'contact_scope.high_intimacy': 'high-intimacy contact scope',
   'boundary.withhold': 'explicit non-disclosure boundary',
   'boundary.consent_required': 'explicit consent requirement',
   'consent.allow_recall_denied': 'stored recall denial',
   'trust.ceiling_exceeded': 'trust ceiling',
-  'visibility.channel_restricted': 'channel visibility restriction',
+  'visibility.channel_restricted': 'channel privacy restriction',
+  'visibility.broadcast_restricted': 'broadcast surface restriction',
 };
 
 const MEMORY_WITHHELD_RELEVANCE_BAND_ORDER: readonly MemoryWithheldRelevanceBand[] = [

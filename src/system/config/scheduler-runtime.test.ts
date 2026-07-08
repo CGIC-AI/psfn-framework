@@ -2,11 +2,65 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { describe, expect, it } from 'vitest';
+import { DEFAULT_FREE_TIME_CONFIG, DEFAULT_TEMPORAL_WAKEUP_CONFIG } from './scheduler-config.js';
+import {
+  DEFAULT_TEMPORAL_WAKEUP_CONFIG,
+  DEFAULT_WEIGHTED_THOUGHT_OUTREACH_CONFIG,
+} from './scheduler-config.js';
 import { resolveRuntimeSchedulerConfig } from './scheduler-runtime.js';
 
 function writeJson(path: string, value: unknown): void {
   writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`, 'utf-8');
 }
+
+const MEMORY_LANE_BLOCKS = {
+  nearTurnMemory: {
+    direct: { cadenceTurns: 3 },
+    group: { minIntervalMinutes: 15, minNewEntries: 8 },
+  },
+  episodeSynthesis: {
+    timerIntervalMinutes: 30,
+    turnThreshold: 24,
+    minRelevantTurns: 10,
+    transcriptMessageLimit: 96,
+    maxEpisodesPerRun: 6,
+    gapSplitMinutes: 45,
+    maxEntriesPerEpisode: 14,
+    minConversationalEntries: 2,
+    minSingleEntryChars: 120,
+    topicSegmentationEnabled: false,
+  },
+  sleepConsolidation: {
+    reviewWindowDays: 60,
+    refinementWindowHours: 36,
+    adjacencyGapMinutes: 45,
+    maxRefinementsPerRun: 8,
+    maxConsolidationsPerRun: 6,
+  },
+  orientationRewrite: {
+    minNewEntriesSinceRewrite: 4,
+    refreshAfterQuietDays: 7,
+  },
+  reflectionNovelty: {
+    minNewEntries: 1,
+  },
+  wikiPass: {
+    enabled: true,
+    reviewWindowHours: 36,
+    minNewCanonicalEpisodes: 1,
+    minNewDurableMemories: 3,
+    maxEntriesPerRun: 3,
+    maxSourceEpisodes: 12,
+    maxSourceMemories: 30,
+  },
+  arcFormation: {
+    passIntervalDays: 6,
+    reviewWindowDays: 30,
+    minConfidence: 0.5,
+    maxArcsPerRun: 12,
+    maxEpisodesPerRun: 60,
+  },
+} as const;
 
 describe('resolveRuntimeSchedulerConfig', () => {
   it('requires object-form options with a dataDir', () => {
@@ -24,24 +78,6 @@ describe('resolveRuntimeSchedulerConfig', () => {
     mkdirSync(seedDir, { recursive: true });
 
     try {
-      writeJson(join(seedDir, 'scheduler.seed.json'), {
-        tickIntervalMs: 60_000,
-        heartbeatIntervalMs: 1_800_000,
-        salienceDecayIntervalMs: 300_000,
-        artifactLifecycle: {
-          scratchpadRetentionDays: 14,
-          generatedMediaRetentionDays: 30,
-          workspaceTempRetentionDays: 14,
-          cleanupBatchSize: 128,
-        },
-        episodicProcessing: {
-          enabled: true,
-          startLocalTime: '00:00',
-          endLocalTime: '09:00',
-          timeZone: 'local',
-          inactivityThresholdMinutes: 60,
-        },
-      });
       writeJson(join(dataDir, 'scheduler.json'), {
         tickIntervalMs: 45_000,
         heartbeatIntervalMs: 900_000,
@@ -59,6 +95,7 @@ describe('resolveRuntimeSchedulerConfig', () => {
           timeZone: 'America/New_York',
           inactivityThresholdMinutes: 45,
         },
+        ...MEMORY_LANE_BLOCKS,
       });
 
       const resolved = resolveRuntimeSchedulerConfig({
@@ -83,6 +120,16 @@ describe('resolveRuntimeSchedulerConfig', () => {
           timeZone: 'America/New_York',
           inactivityThresholdMinutes: 45,
         },
+        ...MEMORY_LANE_BLOCKS,
+        socialGraphBuilder: {
+          intervalMs: 1_800_000,
+          coPresenceMinSessions: 3,
+          coPresenceWindowMinutes: 1440,
+          scanMemoryLimit: 500,
+        },
+        temporalWakeup: DEFAULT_TEMPORAL_WAKEUP_CONFIG,
+        freeTime: DEFAULT_FREE_TIME_CONFIG,
+        weightedThoughtOutreach: DEFAULT_WEIGHTED_THOUGHT_OUTREACH_CONFIG,
       });
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -97,24 +144,6 @@ describe('resolveRuntimeSchedulerConfig', () => {
     mkdirSync(seedDir, { recursive: true });
 
     try {
-      writeJson(join(seedDir, 'scheduler.seed.json'), {
-        tickIntervalMs: 60_000,
-        heartbeatIntervalMs: 1_800_000,
-        salienceDecayIntervalMs: 300_000,
-        artifactLifecycle: {
-          scratchpadRetentionDays: 14,
-          generatedMediaRetentionDays: 30,
-          workspaceTempRetentionDays: 14,
-          cleanupBatchSize: 128,
-        },
-        episodicProcessing: {
-          enabled: true,
-          startLocalTime: '00:00',
-          endLocalTime: '09:00',
-          timeZone: 'local',
-          inactivityThresholdMinutes: 60,
-        },
-      });
       writeJson(join(dataDir, 'scheduler.json'), {
         tickIntervalMs: 10_000,
         heartbeatIntervalMs: 20_000,
@@ -132,6 +161,7 @@ describe('resolveRuntimeSchedulerConfig', () => {
           timeZone: 'UTC',
           inactivityThresholdMinutes: 15,
         },
+        ...MEMORY_LANE_BLOCKS,
       });
 
       const resolved = resolveRuntimeSchedulerConfig({
@@ -156,6 +186,16 @@ describe('resolveRuntimeSchedulerConfig', () => {
           timeZone: 'UTC',
           inactivityThresholdMinutes: 15,
         },
+        ...MEMORY_LANE_BLOCKS,
+        socialGraphBuilder: {
+          intervalMs: 1_800_000,
+          coPresenceMinSessions: 3,
+          coPresenceWindowMinutes: 1440,
+          scanMemoryLimit: 500,
+        },
+        temporalWakeup: DEFAULT_TEMPORAL_WAKEUP_CONFIG,
+        freeTime: DEFAULT_FREE_TIME_CONFIG,
+        weightedThoughtOutreach: DEFAULT_WEIGHTED_THOUGHT_OUTREACH_CONFIG,
       });
     } finally {
       rmSync(root, { recursive: true, force: true });

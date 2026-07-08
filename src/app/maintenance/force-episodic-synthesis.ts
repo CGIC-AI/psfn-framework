@@ -1,15 +1,20 @@
+import '../../shared/utils/load-dotenv.js';
 import { inspect } from 'node:util';
-import Database from 'better-sqlite3';
+import type { QueryResultRow } from 'pg';
 import { SessionStore } from '../../persistence/sessions/store.js';
-import { EpisodicStore } from '../../faculties/memory/episodic/store.js';
 import {
+  createPostgresEpisodicStore,
   EpisodicSynthesizer,
   type EpisodicSynthesisOptions,
   type EpisodicSynthesisRunResult,
-} from '../../faculties/memory/episodic/synthesis.js';
+} from '../../faculties/memory/episodic/index.js';
+import { createPostgresPool, queryOne } from '../../persistence/postgres.js';
+import { loadConfig } from '../../system/config/load-config.js';
+import { hydrateSecretBearingConfig } from '../startup/support/bootstrap-helpers.js';
+import { applyGatewayTlsConfig } from '../../boundary/gateway/tls.js';
 
 export interface ForcedEpisodicSynthesisInput extends EpisodicSynthesisOptions {
-  companionDbPath: string;
+  postgresDatabaseUrl: string;
   sessionsDir: string;
   sessionId: string;
   sourceMessageId?: string;
@@ -26,9 +31,21 @@ interface CliOptions extends Partial<ForcedEpisodicSynthesisInput> {
   help?: boolean;
 }
 
-function countEpisodes(db: Database.Database): number {
-  const row = db.prepare('SELECT count(*) AS count FROM l01_episodes').get() as { count?: number } | undefined;
-  return Number(row?.count ?? 0);
+interface EpisodeCountRow extends QueryResultRow {
+  count?: number | string;
+}
+
+async function countEpisodes(postgresDatabaseUrl: string): Promise<number> {
+  const pool = createPostgresPool(postgresDatabaseUrl, {
+    applicationName: 'psfn-force-episodic-synthesis-count',
+    allowExitOnIdle: true,
+  });
+  try {
+    const row = await queryOne<EpisodeCountRow>(pool, 'SELECT count(*) AS count FROM l01_episodes');
+    return Number(row?.count ?? 0);
+  } finally {
+    await pool.end();
+  }
 }
 
 function requiredText(value: string | undefined, field: string): string {
@@ -47,50 +64,45 @@ function parsePositiveInteger(value: string, field: string): number {
   return parsed;
 }
 
-export function runForcedEpisodicSynthesis(
+export async function runForcedEpisodicSynthesis(
   input: ForcedEpisodicSynthesisInput,
-): ForcedEpisodicSynthesisResult {
+): Promise<ForcedEpisodicSynthesisResult> {
   if (input.allowIsolatedRuntime !== true) {
     throw new Error('Forced episodic synthesis requires allowIsolatedRuntime=true');
   }
 
-  const companionDbPath = requiredText(input.companionDbPath, 'companionDbPath');
+  const postgresDatabaseUrl = requiredText(input.postgresDatabaseUrl, 'postgresDatabaseUrl');
   const sessionsDir = requiredText(input.sessionsDir, 'sessionsDir');
   const sessionId = requiredText(input.sessionId, 'sessionId');
 
-  const db = new Database(companionDbPath);
-  try {
-    const episodicStore = new EpisodicStore(db);
-    const sessionStore = new SessionStore(sessionsDir);
-    const beforeEpisodeCount = countEpisodes(db);
-    const synthesizer = new EpisodicSynthesizer(
-      episodicStore,
-      {
-        getRecentMessages: (channelId, limit) => sessionStore.getRecent(channelId, limit),
-      },
-      {
-        transcriptMessageLimit: input.transcriptMessageLimit,
-        maxEpisodesPerRun: input.maxEpisodesPerRun,
-        maxPriorCandidates: input.maxPriorCandidates,
-        gapSplitMinutes: input.gapSplitMinutes,
-        maxEntriesPerEpisode: input.maxEntriesPerEpisode,
-      },
-    );
-    const result = synthesizer.run({
-      sessionId,
-      sourceMessageId: input.sourceMessageId,
-    });
-    const afterEpisodeCount = countEpisodes(db);
+  const episodicStore = createPostgresEpisodicStore(postgresDatabaseUrl);
+  const sessionStore = new SessionStore(sessionsDir);
+  const beforeEpisodeCount = await countEpisodes(postgresDatabaseUrl);
+  const synthesizer = new EpisodicSynthesizer(
+    episodicStore,
+    {
+      getRecentMessages: (channelId, limit) => sessionStore.getRecent(channelId, limit),
+    },
+    {
+      transcriptMessageLimit: input.transcriptMessageLimit,
+      maxEpisodesPerRun: input.maxEpisodesPerRun,
+      maxPriorCandidates: input.maxPriorCandidates,
+      gapSplitMinutes: input.gapSplitMinutes,
+      maxEntriesPerEpisode: input.maxEntriesPerEpisode,
+    },
+  );
+  const result = await synthesizer.run({
+    sessionId,
+    sourceMessageId: input.sourceMessageId,
+  });
+  const afterEpisodeCount = await countEpisodes(postgresDatabaseUrl);
 
-    return {
-      ...result,
-      sessionId,
-      beforeEpisodeCount,
-      afterEpisodeCount,
-    };
-  } finally {
-    db.close();
-  }
+  return {
+    ...result,
+    sessionId,
+    beforeEpisodeCount,
+    afterEpisodeCount,
+  };
 }
 
 function parseCliArgs(argv: readonly string[]): CliOptions {
@@ -117,8 +129,8 @@ function parseCliArgs(argv: readonly string[]): CliOptions {
       case '--allow-isolated-runtime':
         options.allowIsolatedRuntime = true;
         break;
-      case '--companion-db':
-        options.companionDbPath = next();
+      case '--postgres-url':
+        options.postgresDatabaseUrl = next();
         break;
       case '--sessions-dir':
         options.sessionsDir = next();
@@ -154,7 +166,7 @@ function parseCliArgs(argv: readonly string[]): CliOptions {
 function usage(): string {
   return [
     'Usage: tsx src/app/maintenance/force-episodic-synthesis.ts --allow-isolated-runtime \\',
-    '  --companion-db <path> --sessions-dir <path> --session-id <channelId>',
+    '  --postgres-url <url> --sessions-dir <path> --session-id <channelId>',
     '',
     'Runs the L0.1 episodic synthesizer once against an existing isolated-runtime session.',
   ].join('\n');
@@ -166,8 +178,14 @@ async function main(): Promise<void> {
     console.log(usage());
     return;
   }
-  const result = runForcedEpisodicSynthesis({
-    companionDbPath: options.companionDbPath ?? '',
+  const config = loadConfig();
+  applyGatewayTlsConfig({
+    caPath: config.gatewayTlsCaPath,
+    rejectUnauthorized: config.gatewayTlsRejectUnauthorized,
+  });
+  await hydrateSecretBearingConfig(config, { env: process.env });
+  const result = await runForcedEpisodicSynthesis({
+    postgresDatabaseUrl: options.postgresDatabaseUrl ?? config.postgresDatabaseUrl ?? '',
     sessionsDir: options.sessionsDir ?? '',
     sessionId: options.sessionId ?? '',
     sourceMessageId: options.sourceMessageId,

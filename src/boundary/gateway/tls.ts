@@ -1,7 +1,6 @@
 // ── Gateway TLS Configuration ──
-// Wires process-level TLS trust settings at startup so the gateway can trust
-// local/custom CA certificates when connecting to LiteLLM, embedding services,
-// and other HTTPS endpoints.
+// Wires process-level custom CA trust at startup. Verification exceptions must
+// stay endpoint-scoped in the concrete client transport.
 
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -13,9 +12,9 @@ export interface GatewayTlsConfig {
   /** Absolute or relative path to a PEM-encoded CA certificate bundle to trust. */
   caPath?: string;
   /**
-   * When explicitly `false`, disables TLS certificate verification globally.
-   * This is equivalent to NODE_TLS_REJECT_UNAUTHORIZED=0.
-   * DANGEROUS — only use for local development with self-signed certs.
+   * When explicitly `false`, records that an endpoint-scoped TLS verification
+   * exception was requested. This helper never disables process-global TLS
+   * verification; callers must pass scoped TLS options to the intended client.
    * Default: true (verify certificates).
    */
   rejectUnauthorized?: boolean;
@@ -26,17 +25,17 @@ export interface GatewayTlsStatus {
   customCaApplied: boolean;
   /** The resolved CA path, if one was configured. */
   caPath?: string;
-  /** Whether TLS verification is disabled (rejectUnauthorized=false). */
+  /** Whether an endpoint-scoped TLS verification exception was requested. */
   verificationDisabled: boolean;
 }
 
 /**
- * Apply process-level TLS configuration at gateway startup.
+ * Apply process-safe TLS configuration at gateway startup.
  *
  * - If `caPath` is set and the file exists, sets `NODE_EXTRA_CA_CERTS` so that
  *   Node.js trusts the additional CA for all HTTPS connections (LLM, embeddings, etc.).
- * - If `rejectUnauthorized` is explicitly `false`, sets `NODE_TLS_REJECT_UNAUTHORIZED=0`
- *   with prominent warning logs.
+ * - If `rejectUnauthorized` is explicitly `false`, reports the request and logs
+ *   that the exception must be implemented by endpoint-specific client options.
  *
  * Must be called early in the gateway startup sequence, before any HTTPS connections.
  */
@@ -65,18 +64,18 @@ export function applyGatewayTlsConfig(config: GatewayTlsConfig): GatewayTlsStatu
   // ── Reject unauthorized ──
 
   if (config.rejectUnauthorized === false) {
-    process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
     status.verificationDisabled = true;
 
     log.warn('='.repeat(72));
-    log.warn('  TLS CERTIFICATE VERIFICATION DISABLED');
+    log.warn('  TLS CERTIFICATE VERIFICATION EXCEPTION REQUESTED');
     log.warn('  GATEWAY_TLS_REJECT_UNAUTHORIZED=false');
     log.warn('');
-    log.warn('  All outbound HTTPS connections will skip certificate validation.');
-    log.warn('  This is INSECURE and should ONLY be used for local development');
-    log.warn('  with self-signed certificates.');
+    log.warn('  Process-global TLS verification remains enabled.');
+    log.warn('  Any insecure self-signed development exception must be wired');
+    log.warn('  explicitly on the intended endpoint client transport.');
     log.warn('');
-    log.warn('  For production, configure GATEWAY_TLS_CA_PATH with your CA cert.');
+    log.warn('  For production, configure GATEWAY_TLS_CA_PATH with your CA cert');
+    log.warn('  or endpoint-scoped trust material.');
     log.warn('='.repeat(72));
   }
 

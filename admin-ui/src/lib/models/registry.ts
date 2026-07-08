@@ -1,3 +1,5 @@
+import { isRecord } from '../../../../src/shared/utils/types.js';
+export { isRecord };
 export type CanonicalModelPurpose =
   | 'chat'
   | 'background'
@@ -79,7 +81,7 @@ export const CANONICAL_PURPOSES = [
 export const PURPOSE_LABELS: Record<CanonicalModelPurpose, string> = {
   chat: 'chat',
   background: 'background',
-  memory: 'memory',
+  memory: 'memory recall',
   extraction: 'extraction',
   summary: 'summary',
   reasoning: 'reasoning',
@@ -88,10 +90,6 @@ export const PURPOSE_LABELS: Record<CanonicalModelPurpose, string> = {
   vision: 'vision',
   moa: 'moa',
 };
-
-export function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
 
 export function toNonEmptyString(value: unknown): string | undefined {
   if (typeof value !== 'string') return undefined;

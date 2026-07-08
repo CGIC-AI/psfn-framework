@@ -3,6 +3,8 @@ import {
   buildAutonomousActionMemoryContext,
   inferImportedMemoryType,
   initializeImportedMemorySalience,
+  memoryMatchesScopeQuery,
+  normalizeMemoryProvenance,
 } from './types.js';
 
 describe('memory import normalization policy', () => {
@@ -70,5 +72,85 @@ describe('memory import normalization policy', () => {
       'heartbeat_update_policy',
       'update',
     ]));
+  });
+
+  it('normalizes structured group attribution provenance', () => {
+    expect(normalizeMemoryProvenance({
+      channelId: 'discord-room',
+      triggerContactId: 'contact-trigger',
+      routedContactId: 'contact-vega',
+      sourceContactId: 'contact-dragon',
+      sourceAuthorId: 'dragon',
+      sourceSpeakerName: 'MrDragonFox',
+      subjectContactId: 'contact-vega',
+      subjectName: 'Vega',
+      addressMode: 'mention_of_companion',
+      routingReason: 'structured_subject_metadata',
+      sourceMessageIds: [14, 12, 12, 0, -1, 'bad'],
+      sourceSpanStartMessageId: 12,
+      sourceSpanEndMessageId: 14,
+    })).toEqual({
+      channelId: 'discord-room',
+      triggerContactId: 'contact-trigger',
+      routedContactId: 'contact-vega',
+      sourceContactId: 'contact-dragon',
+      sourceAuthorId: 'dragon',
+      sourceSpeakerName: 'MrDragonFox',
+      subjectContactId: 'contact-vega',
+      subjectName: 'Vega',
+      addressMode: 'mention_of_companion',
+      routingReason: 'structured_subject_metadata',
+      sourceMessageIds: [12, 14],
+      sourceSpanStartMessageId: 12,
+      sourceSpanEndMessageId: 14,
+    });
+  });
+});
+
+describe('memoryMatchesScopeQuery', () => {
+  const scopedMemory = {
+    scopeRef: { kind: 'project', id: 'garden' },
+    scopeTags: ['project:garden'],
+  };
+
+  it('requires both refs and tags in only mode when both are specified', () => {
+    const query = {
+      refs: [{ kind: 'project', id: 'garden' }],
+      tags: ['project:atrium'],
+      mode: 'only' as const,
+    };
+    // Ref matches but the tag does not: only mode must reject.
+    expect(memoryMatchesScopeQuery(scopedMemory, query)).toBe(false);
+    // Tag matches but the ref does not: only mode must reject.
+    expect(memoryMatchesScopeQuery(scopedMemory, {
+      refs: [{ kind: 'project', id: 'atrium' }],
+      tags: ['project:garden'],
+      mode: 'only',
+    })).toBe(false);
+    // Both dimensions match: only mode accepts.
+    expect(memoryMatchesScopeQuery(scopedMemory, {
+      refs: [{ kind: 'project', id: 'garden' }],
+      tags: ['project:garden'],
+      mode: 'only',
+    })).toBe(true);
+  });
+
+  it('accepts a single specified dimension in only mode', () => {
+    expect(memoryMatchesScopeQuery(scopedMemory, {
+      refs: [{ kind: 'project', id: 'garden' }],
+      mode: 'only',
+    })).toBe(true);
+    expect(memoryMatchesScopeQuery(scopedMemory, {
+      tags: ['project:atrium'],
+      mode: 'only',
+    })).toBe(false);
+  });
+
+  it('keeps OR semantics for prefer mode', () => {
+    expect(memoryMatchesScopeQuery(scopedMemory, {
+      refs: [{ kind: 'project', id: 'atrium' }],
+      tags: ['project:garden'],
+      mode: 'prefer',
+    })).toBe(true);
   });
 });

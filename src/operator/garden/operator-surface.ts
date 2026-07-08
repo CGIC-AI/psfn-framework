@@ -18,6 +18,8 @@ import {
   GardenAdminTransportProxy,
   type GardenAdminTransportHealth,
 } from './transport-client.js';
+import type { GardenAdminTransportClientEndpoint } from './transport-paths.js';
+import { validateAdminAuthStartupPolicy } from './auth-policy.js';
 
 const log = createComponentLogger('GardenOperatorSurface');
 const ADMIN_MAX_BODY_SIZE = 65_536;
@@ -28,7 +30,7 @@ export interface GardenOperatorSurfaceConfig {
   token?: string;
   allowInsecureWithoutToken?: boolean;
   config: SubstrateConfig;
-  transportSocketPath: string;
+  transportEndpoint: GardenAdminTransportClientEndpoint;
 }
 
 interface GardenOperatorHealthPayload {
@@ -46,7 +48,7 @@ export class GardenOperatorSurface implements Lifecycle {
 
   constructor(private readonly config: GardenOperatorSurfaceConfig) {
     this.transport = new AdminServerTransport(log);
-    this.proxy = new GardenAdminTransportProxy(config.transportSocketPath);
+    this.proxy = new GardenAdminTransportProxy(config.transportEndpoint);
     this.server = createServer((req, res) => this.handleRequest(req, res));
     this.server.on('upgrade', (req, socket, head) => this.handleUpgrade(req, socket, head));
   }
@@ -56,20 +58,20 @@ export class GardenOperatorSurface implements Lifecycle {
   }
 
   async start(): Promise<void> {
-    if (!this.config.token && !this.config.allowInsecureWithoutToken) {
-      const error = new Error('ADMIN_TOKEN is required unless ADMIN_ALLOW_INSECURE=true');
-      log.error('Refusing to start Garden operator surface without authentication', {
-        host: this.config.host ?? '127.0.0.1',
-        port: this.config.port,
-        requiredEnv: 'ADMIN_TOKEN or ADMIN_ALLOW_INSECURE=true',
-      });
-      throw error;
-    }
+    const host = this.config.host ?? '127.0.0.1';
+    validateAdminAuthStartupPolicy({
+      host,
+      port: this.config.port,
+      token: this.config.token,
+      allowInsecureWithoutToken: this.config.allowInsecureWithoutToken,
+      componentLabel: 'Garden operator surface',
+      logger: log,
+    });
 
     return await new Promise((resolve, reject) => {
       const onError = (error: NodeJS.ErrnoException) => {
         log.error('Garden operator surface failed to start', {
-          host: this.config.host ?? '127.0.0.1',
+          host,
           port: this.config.port,
           code: error.code,
           errno: error.errno,
@@ -80,12 +82,12 @@ export class GardenOperatorSurface implements Lifecycle {
       };
 
       this.server.once('error', onError);
-      this.server.listen(this.config.port, this.config.host ?? '127.0.0.1', () => {
+      this.server.listen(this.config.port, host, () => {
         this.server.off('error', onError);
         log.info('Garden operator surface listening', {
-          host: this.config.host ?? '127.0.0.1',
+          host,
           port: this.config.port,
-          transportSocketPath: this.config.transportSocketPath,
+          transportMode: this.config.transportEndpoint.mode,
         });
         resolve();
       });
@@ -108,7 +110,6 @@ export class GardenOperatorSurface implements Lifecycle {
     handleAdminRequest(req, res, {
       token: this.config.token,
       checkAuth: (request, response) => checkAdminRequestAuth(request, response, this.config.token),
-      tryServeStaticAsset: (path, response) => this.transport.tryServeStaticAsset(path, response),
       isGardenUiEnabled: () => this.transport.isGardenUiEnabled(),
       serveGardenBuildAsset: (path, response) => this.transport.serveGardenBuildAsset(path, response),
       serveGardenPage: (path, response) => this.transport.serveGardenPage(path, response),

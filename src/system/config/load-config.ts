@@ -7,7 +7,7 @@ import {
   resolveCredentialVaultBackend,
   resolveOptionalEnvCredential,
 } from '../../boundary/custody/credential-vault.js';
-import { resolveCompanionStateDir, resolveRuntimePathLayout } from '../../persistence/layout.js';
+import { RUNTIME_LAYOUT_MODE, resolveCompanionStateDir, resolveRuntimePathLayout } from '../../persistence/layout.js';
 import { parseOptionalStringEnv } from '../../shared/utils/env.js';
 import type {
   CanonicalModelRegistry,
@@ -20,12 +20,15 @@ import type {
 import {
   type CapabilityTier,
   createDefaultCompositionalPolicyConfig,
+  createDefaultObserverEvalSidecarSettings,
   DEFAULT_MOOD_CONGRUENCE_WEIGHT,
   type PersistenceBackend,
   DEFAULT_UI_THEME_ID,
   type SubstrateConfig,
   sanitizeCoreSubstrateConfig,
 } from './runtime-config-contracts.js';
+import { createDefaultGroupMemorySettings } from './group-memory-config.js';
+import { createDefaultEmotionScopingSettings } from './emotion-scoping-config.js';
 import {
   DEFAULT_COMPANION_CARD_FILE_NAME,
 } from '../../core/identity/companion-naming.js';
@@ -53,6 +56,7 @@ const DEFAULT_MEMORY_EXTRACTION_MIN_CONFIDENCE = 0.6;
 const DEFAULT_MEMORY_EXTRACTION_MIN_NOVELTY = 0.35;
 const DEFAULT_MEMORY_EXTRACTION_EMOTIONAL_INTENSITY_WEIGHT = 0.2;
 const DEFAULT_MEMORY_EXTRACTION_MAX_WRITES = 2;
+const DEFAULT_MEMORY_REFRESH_FAILURE_ALERT_THRESHOLD = 3;
 const DEFAULT_PROFILE_SYNTHESIS_REFRESH_INTERVAL_MS = 6 * 60 * 60 * 1000;
 const DEFAULT_PROFILE_SYNTHESIS_COOLDOWN_MS = 5 * 60 * 1000;
 const DEFAULT_PROFILE_SYNTHESIS_MIN_WRITES = 1;
@@ -77,8 +81,12 @@ const DEFAULT_SESSION_MIRROR_MAX_CHARS = 220;
 const DEFAULT_SESSION_MIRROR_ACTIVE_WINDOW_MS = 1_800_000;
 const DEFAULT_THINK_MAX_TOKENS = 76_000;
 const DEFAULT_THINK_MAX_WALL_TIME_MS = 300_000;
-const DEFAULT_THINK_MAX_SUB_QUERIES = 12;
+const DEFAULT_THINK_MAX_SUB_QUERIES = 24;
 type LoadConfigMode = 'gateway' | 'agent';
+
+function isNodeTlsVerificationGloballyDisabled(value: string | undefined): boolean {
+  return value?.trim() === '0';
+}
 
 function requireCompanionId(env: NodeJS.ProcessEnv): string {
   const companionId = parseOptionalStringEnv(env.COMPANION_ID);
@@ -90,14 +98,14 @@ function requireCompanionId(env: NodeJS.ProcessEnv): string {
 
 function parsePersistenceBackendEnv(value: string | undefined): PersistenceBackend {
   const normalized = value?.trim().toLowerCase() ?? '';
-  if (!normalized || normalized === 'sqlite') {
-    return 'sqlite';
+  if (!normalized) {
+    return 'postgres';
   }
   if (normalized === 'postgres' || normalized === 'postgresql' || normalized === 'pg') {
     return 'postgres';
   }
   throw new Error(
-    `Unsupported PERSISTENCE_BACKEND "${value}". Expected "sqlite" or "postgres".`,
+    `Unsupported PERSISTENCE_BACKEND "${value}". PostgreSQL is the only supported runtime persistence backend.`,
   );
 }
 
@@ -228,6 +236,20 @@ function loadConfigForMode(mode: LoadConfigMode, env: NodeJS.ProcessEnv = proces
     tempDir: env.PSFN_TEMP_DIR,
     backupsDir: env.BACKUP_ROOT_DIR,
   });
+  if (runtimePathLayout.mode === RUNTIME_LAYOUT_MODE.PRODUCTION) {
+    if (gatewayTlsRejectUnauthorized === false) {
+      throw new Error(
+        'GATEWAY_TLS_REJECT_UNAUTHORIZED=false is not supported in production runtime layout; ' +
+        'configure GATEWAY_TLS_CA_PATH or endpoint-scoped TLS trust instead.',
+      );
+    }
+    if (isNodeTlsVerificationGloballyDisabled(env.NODE_TLS_REJECT_UNAUTHORIZED)) {
+      throw new Error(
+        'NODE_TLS_REJECT_UNAUTHORIZED=0 is not supported in production runtime layout; ' +
+        'remove the process-global TLS bypass and configure endpoint-scoped TLS trust instead.',
+      );
+    }
+  }
   const dataDir = runtimePathLayout.systemDataDir;
   const companionDataDir = runtimePathLayout.companionDataDir;
   const companionId = requireCompanionId(env);
@@ -238,8 +260,8 @@ function loadConfigForMode(mode: LoadConfigMode, env: NodeJS.ProcessEnv = proces
     ?? `${resolveCompanionStateDir(companionDataDir)}/${databaseBasename}.db`;
   const persistenceBackend = parsePersistenceBackendEnv(env.PERSISTENCE_BACKEND);
   const postgresDatabaseUrl = parseOptionalStringEnv(env.POSTGRES_DATABASE_URL);
-  if (persistenceBackend === 'postgres' && !postgresDatabaseUrl) {
-    throw new Error('POSTGRES_DATABASE_URL is required when PERSISTENCE_BACKEND=postgres');
+  if (!postgresDatabaseUrl) {
+    throw new Error('POSTGRES_DATABASE_URL is required for runtime persistence');
   }
 
   return {
@@ -289,6 +311,9 @@ function loadConfigForMode(mode: LoadConfigMode, env: NodeJS.ProcessEnv = proces
     memoryExtractionMaxWrites: DEFAULT_MEMORY_EXTRACTION_MAX_WRITES,
     memoryExtractionTelemetryEnabled: true,
     memoryRetrievalTelemetryEnabled: true,
+    memoryRefreshFailureAlertThreshold: DEFAULT_MEMORY_REFRESH_FAILURE_ALERT_THRESHOLD,
+    groupMemory: createDefaultGroupMemorySettings(),
+    emotionScoping: createDefaultEmotionScopingSettings(),
     profileSynthesisEnabled: true,
     profileSynthesisRefreshIntervalMs: DEFAULT_PROFILE_SYNTHESIS_REFRESH_INTERVAL_MS,
     profileSynthesisCooldownMs: DEFAULT_PROFILE_SYNTHESIS_COOLDOWN_MS,
@@ -357,6 +382,7 @@ function loadConfigForMode(mode: LoadConfigMode, env: NodeJS.ProcessEnv = proces
     embeddingApiModel: undefined,
     embeddingApiDims: undefined,
     compositionalPolicy: createDefaultCompositionalPolicyConfig(),
+    observerEvalSidecar: createDefaultObserverEvalSidecarSettings(),
     webFetchAllowHttp: false,
     webFetchAllowInternalNetwork: false,
     webFetchLocalCrawlerEnabled: false,

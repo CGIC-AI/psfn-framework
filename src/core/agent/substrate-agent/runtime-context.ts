@@ -88,6 +88,7 @@ import {
 import { buildSelfPresentationPromptVariables } from './runtime-context-sections/self-presentation.js';
 import { buildSatelliteEndpointContextBlock } from './runtime-context-sections/satellite.js';
 import { buildSituatedPresenceContextBlock } from './runtime-context-sections/situated-presence.js';
+import type { SituatedEmanationTracker } from './runtime-context-sections/situated-emanation.js';
 import type { PlacesRegistryConfig } from '../../../shared/contracts/places-registry.js';
 
 // The section producers moved into ./runtime-context-sections/ (E2.6). This
@@ -407,6 +408,12 @@ export function buildRuntimeContext(input: {
    * empty registry, so a runtime with no `places.json` renders byte-identically.
    */
   placesRegistry?: PlacesRegistryConfig;
+  /**
+   * Handoff-aware active-emanation tracker (S10 B2). Threaded from the agent so
+   * a placeless turn foregrounds the companion's current active emanation. When
+   * absent, the situated block resolves from the turn alone (B1 behaviour).
+   */
+  emanationTracker?: SituatedEmanationTracker;
 }): string {
   const runtimeContextExtra = (() => {
     const raw = input.templateVariables?.runtime_context_extra;
@@ -433,6 +440,7 @@ export function buildRuntimeContext(input: {
   const situatedPresenceContext = buildSituatedPresenceContextBlock({
     message: input.message,
     ...(input.placesRegistry ? { placesRegistry: input.placesRegistry } : {}),
+    ...(input.emanationTracker ? { emanationTracker: input.emanationTracker } : {}),
   });
   if (situatedPresenceContext) {
     sections.push(situatedPresenceContext);

@@ -136,6 +136,7 @@ import {
   type ExtendedToolActivationOptions,
   type ExtendedToolActivationResult,
 } from './substrate-agent/adaptive-tools-runtime.js';
+import { SituatedEmanationTracker } from './substrate-agent/runtime-context-sections/situated-emanation.js';
 import { EmotionSelfModelRuntime } from './substrate-agent/emotion-self-model-runtime.js';
 import {
   type BackgroundContinuationTaskRecord,
@@ -304,6 +305,12 @@ export class SubstrateAgent {
 
   // Places soft-registry (S10) — undefined behaves as an empty registry
   private readonly placesRegistryConfig: PlacesRegistryConfig | undefined;
+
+  // Handoff-aware active-emanation tracker (S10 B2) — remembers the companion's
+  // current situated place so placeless turns (Discord/Telegram) still
+  // foreground the room it is emanating into. In-memory per process; durable
+  // persistence is bead .7's concern.
+  private readonly situatedEmanationTracker = new SituatedEmanationTracker();
 
   // Prompt composition — null falls back to static systemPrompt
   promptComposer: PromptComposer | null = null;
@@ -1303,6 +1310,7 @@ export class SubstrateAgent {
       config: this.config as unknown as Record<string, unknown>,
       substrateHealth: this.companionSubstrateHealthContext,
       ...(this.placesRegistryConfig ? { placesRegistry: this.placesRegistryConfig } : {}),
+      emanationTracker: this.situatedEmanationTracker,
     });
   }
 

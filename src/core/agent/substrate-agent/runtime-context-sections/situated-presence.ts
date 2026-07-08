@@ -24,6 +24,7 @@ import type {
 } from '../../../../shared/contracts/places-registry.js';
 import type { CompanionPresenceMetadata } from '../../presence-metadata.js';
 import { wrapPromptSectionXml } from '../../../identity/prompt-sections.js';
+import type { SituatedEmanationTracker } from './situated-emanation.js';
 
 /**
  * A co-present companion sharing this place. Multi-companion W5 will populate
@@ -45,6 +46,15 @@ export interface SituatedPresenceContextInput {
   placesRegistry?: PlacesRegistryConfig;
   /** Co-present companions; defaults to empty (single-companion turns). */
   coPresent?: ReadonlyArray<CoPresentCompanion>;
+  /**
+   * Handoff-aware active-emanation tracker (S10 B2). When the current turn
+   * carries no place of its own (e.g. Discord/Telegram), the block foregrounds
+   * the companion's CURRENT active emanation's place instead of nothing. The
+   * tracker is also updated from this turn, so a satellite turn that establishes
+   * a place is remembered for subsequent placeless turns. Optional: without it
+   * the pure B1 producer renders byte-identically from the turn alone.
+   */
+  emanationTracker?: SituatedEmanationTracker;
 }
 
 /**
@@ -86,8 +96,20 @@ function formatAffordanceLine(affordance: AffordanceConfig): string {
 
 export function buildSituatedPresenceContextBlock(input: SituatedPresenceContextInput): string {
   const registry = input.placesRegistry;
-  const presence: CompanionPresenceMetadata | undefined = input.message.routing?.presence;
-  const placeId = readSatellitePlaceId(input.message.routing?.satellite);
+  const tracker = input.emanationTracker;
+
+  // B2: fold this turn into the active-emanation tracker first, so a satellite
+  // turn that establishes a place is remembered for later placeless turns.
+  tracker?.observe(input.message);
+
+  // "Where am I right now" = the turn's own bound place/presence when it has
+  // one (a satellite turn), otherwise the companion's CURRENT active emanation
+  // (handoff-aware) so a Discord/Telegram turn still foregrounds the room it is
+  // emanating into. Fail closed: no tracker + no turn place → no fabrication.
+  const turnPlaceId = readSatellitePlaceId(input.message.routing?.satellite);
+  const turnPresence: CompanionPresenceMetadata | undefined = input.message.routing?.presence;
+  const placeId = turnPlaceId ?? tracker?.resolvePlaceId();
+  const presence: CompanionPresenceMetadata | undefined = turnPresence ?? tracker?.resolvePresence();
   const place = resolvePlace(registry, placeId);
   const coPresent = input.coPresent ?? [];
 

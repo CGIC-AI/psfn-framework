@@ -52,6 +52,7 @@ import {
 } from '../startup/composition/parity.js';
 import { createAgentPersistenceRuntime } from '../../persistence/runtime-factory.js';
 import { CompanionPresenceRuntime } from '../../core/agent/companion-presence-runtime.js';
+import { registerCompanionRoomEntryNotes } from '../../core/agent/companion-room-entry.js';
 import {
   resolveOutreachOutboxLedgerPath,
   resolvePendingContactApprovalsPath,
@@ -304,6 +305,20 @@ async function main(): Promise<void> {
   // Wire cross-companion presence into the turn path (same late-wiring pattern
   // as memory/contacts providers). Null flag-off: turns are byte-identical.
   agentLoop.companionPresence = companionPresenceRuntime;
+
+  // Co-location → room-entry note (W6): an observed arrival appends the W5
+  // system-only entry note to the place's companion-room channel session.
+  // Context only, never a triggered turn (no auto-greeting loops); flag-off
+  // the event never fires and nothing is registered.
+  if (companionPresenceRuntime) {
+    registerCompanionRoomEntryNotes({
+      eventBus,
+      sink: sessionManager,
+      placesRegistry: placesRegistryConfig,
+      coPresence: (place) => companionPresenceRuntime.getCoPresent(place),
+    });
+    log.info('Companion room-entry notes wired to co-location events');
+  }
 
   sessionManager.characterName = card.data.name;
   writeStartupSessionMetadata(
@@ -979,6 +994,7 @@ async function main(): Promise<void> {
     trackSessionActivity,
     observedGroupMemoryScheduler,
     outboundReplyGuard,
+    companionAuthorName: card.data.name,
   });
 
   await eventBus.emit('system.init', {});

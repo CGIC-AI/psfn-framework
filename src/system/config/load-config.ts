@@ -30,6 +30,10 @@ import {
 import { createDefaultGroupMemorySettings } from './group-memory-config.js';
 import { createDefaultEmotionScopingSettings } from './emotion-scoping-config.js';
 import {
+  isMultiCompanionEnabled,
+  resolveCompanionFleet,
+} from './companions-config.js';
+import {
   DEFAULT_COMPANION_CARD_FILE_NAME,
 } from '../../core/identity/companion-naming.js';
 
@@ -264,7 +268,16 @@ function loadConfigForMode(mode: LoadConfigMode, env: NodeJS.ProcessEnv = proces
     throw new Error('POSTGRES_DATABASE_URL is required for runtime persistence');
   }
 
+  const multiCompanion = isMultiCompanionEnabled(env);
+  const companionFleet = resolveCompanionFleet({
+    dataDir,
+    multiCompanion,
+    seedDir: parseOptionalStringEnv(env.CONFIG_DIR),
+  });
+
   return {
+    multiCompanion,
+    ...(companionFleet ? { companionFleet } : {}),
     primaryModel,
     primaryProvider,
     extractionModel,

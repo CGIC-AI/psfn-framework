@@ -4,6 +4,7 @@ import type { StreamingSttProvider } from '../../primitives/voice/connectors/stt
 import type { StreamingTtsProvider } from '../../primitives/voice/connectors/tts/index.js';
 import type { CapabilityTier } from '../capabilities/tier-types.js';
 import type { ChargePolicyConfig } from './charge-policy-config.js';
+import type { CompanionsFleetConfig } from './companions-config.js';
 import type { SatelliteRegistryConfig } from '../../shared/contracts/satellite-registry.js';
 import type { GroupMemorySettings } from './group-memory-config.js';
 import type { EmotionScopingSettings } from './emotion-scoping-config.js';
@@ -125,6 +126,10 @@ export interface SubstrateConfig {
   discordBotId?: string;
   characterCardPath: string;
   companionId?: string;
+  /** True when the multi-companion topology flag (PSFN_MULTI_COMPANION) is enabled. */
+  multiCompanion?: boolean;
+  /** Validated fleet manifest; present only when multi-companion mode is enabled. */
+  companionFleet?: CompanionsFleetConfig;
   systemDataDir?: string;
   companionDataDir?: string;
   workspacePath?: string;

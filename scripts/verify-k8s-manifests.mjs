@@ -38,4 +38,33 @@ for (const target of ['k8s/base', 'k8s/overlays/dev', 'k8s/overlays/production']
   assertIncludes(rendered, 'POSTGRES_DATABASE_URL: ""', `${target} empty DSN placeholder`);
 }
 
+// Production ExternalName Postgres host must be explicitly configured
+// (psfn-framework-mlwk.32): an empty externalName renders a service whose DNS
+// never resolves. The committed placeholder must be a value the apiserver
+// rejects (not a valid DNS-1123 subdomain) so an unconfigured overlay fails at
+// apply time instead of deploying silently broken.
+const dns1123Subdomain = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$/;
+const externalPostgres = readFileSync(
+  resolve(repoRoot, 'k8s/overlays/production/external-postgres.yaml'),
+  'utf8',
+);
+const externalNameMatch = externalPostgres.match(/^\s*externalName:\s*(.*)$/m);
+if (!externalNameMatch) {
+  throw new Error('production external-postgres.yaml missing externalName field');
+}
+const externalName = externalNameMatch[1].trim().replace(/^["']|["']$/g, '');
+if (externalName === '') {
+  throw new Error('production external-postgres.yaml externalName must not be empty');
+}
+const isRealHost = dns1123Subdomain.test(externalName);
+const isFailClosedPlaceholder = externalName === 'REPLACE_WITH_EXTERNAL_POSTGRES_HOST';
+if (!isRealHost && !isFailClosedPlaceholder) {
+  throw new Error(
+    `production external-postgres.yaml externalName must be a DNS-1123 subdomain or the fail-closed placeholder, got: ${externalName}`,
+  );
+}
+if (isFailClosedPlaceholder && dns1123Subdomain.test(externalName)) {
+  throw new Error('fail-closed placeholder must not be a valid DNS-1123 subdomain');
+}
+
 console.log('Kubernetes manifest verification passed.');

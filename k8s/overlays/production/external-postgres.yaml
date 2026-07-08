@@ -8,7 +8,11 @@ metadata:
     app.kubernetes.io/part-of: psfn
 spec:
   type: ExternalName
-  externalName: ""
+  # Required. Replace with your external database hostname (e.g.
+  # your-rds-host.amazonaws.com). The placeholder is intentionally not a valid
+  # DNS-1123 subdomain, so kubectl apply fails closed until it is configured
+  # instead of creating a service whose DNS never resolves.
+  externalName: REPLACE_WITH_EXTERNAL_POSTGRES_HOST
   ports:
     - name: tcp
       port: 5432

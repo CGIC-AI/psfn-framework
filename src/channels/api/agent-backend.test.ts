@@ -293,7 +293,11 @@ describe('AgentApiBackend direct model completions', () => {
   });
 
   it('cancels an in-flight direct completion via cancelChatCompletion', async () => {
-    const complete = vi.fn(() => new Promise<never>(() => undefined));
+    let providerSignal: AbortSignal | undefined;
+    const complete = vi.fn((_context, _purpose, options) => {
+      providerSignal = options?.signal;
+      return new Promise<never>(() => undefined);
+    });
     const { backend } = createBackend({ complete });
 
     const resultPromise = backend.handleChatCompletion({
@@ -309,6 +313,8 @@ describe('AgentApiBackend direct model completions', () => {
 
     const result = await resultPromise;
     expect(complete).toHaveBeenCalledTimes(1);
+    expect(providerSignal).toBeInstanceOf(AbortSignal);
+    expect(providerSignal?.aborted).toBe(true);
     expect(result).toEqual({
       ok: false,
       error: {
@@ -323,7 +329,11 @@ describe('AgentApiBackend direct model completions', () => {
   });
 
   it('cancels an in-flight direct completion when the caller AbortSignal fires', async () => {
-    const complete = vi.fn(() => new Promise<never>(() => undefined));
+    let providerSignal: AbortSignal | undefined;
+    const complete = vi.fn((_context, _purpose, options) => {
+      providerSignal = options?.signal;
+      return new Promise<never>(() => undefined);
+    });
     const { backend } = createBackend({ complete });
     const controller = new AbortController();
 
@@ -338,6 +348,9 @@ describe('AgentApiBackend direct model completions', () => {
     controller.abort();
 
     const result = await resultPromise;
+    expect(complete).toHaveBeenCalledTimes(1);
+    expect(providerSignal).toBeInstanceOf(AbortSignal);
+    expect(providerSignal?.aborted).toBe(true);
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.error.status).toBe(499);
@@ -358,6 +371,7 @@ describe('AgentApiBackend direct model completions', () => {
       signal: controller.signal,
     });
 
+    expect(complete).not.toHaveBeenCalled();
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.error.status).toBe(499);

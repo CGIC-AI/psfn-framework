@@ -66,20 +66,60 @@ const GENERIC_COMPANION_LABELS = new Set([
 // separately) and the definite/"primary" generic labels. Bare nouns ("user",
 // "companion", "assistant") are intentionally excluded so ordinary text like
 // "research assistant" or "power user" is never corrupted.
-const USER_REPLACEMENTS: ReadonlyArray<[RegExp, boolean]> = [
-  [/\bthe primary user's\b/gi, true],
-  [/\bprimary user's\b/gi, true],
-  [/\bthe user's\b/gi, true],
-  [/\bthe primary user\b(?!-)/gi, false],
-  [/\bprimary user\b(?!-)/gi, false],
-  [/\bthe user\b(?!-)/gi, false],
+interface ParticipantReplacementPattern {
+  pattern: RegExp;
+  possessive: boolean;
+  skipOrdinaryNounFollower?: boolean;
+}
+
+const ORDINARY_LABEL_NOUN_FOLLOWERS = new Set([
+  'account',
+  'accounts',
+  'animal',
+  'animals',
+  'app',
+  'apps',
+  'assistant',
+  'assistants',
+  'base',
+  'bases',
+  'experience',
+  'experiences',
+  'group',
+  'groups',
+  'guide',
+  'guides',
+  'interface',
+  'interfaces',
+  'manager',
+  'managers',
+  'manual',
+  'manuals',
+  'profile',
+  'profiles',
+  'role',
+  'roles',
+  'software',
+  'system',
+  'systems',
+  'tool',
+  'tools',
+]);
+
+const USER_REPLACEMENTS: readonly ParticipantReplacementPattern[] = [
+  { pattern: /\bthe primary user's\b/gi, possessive: true },
+  { pattern: /\bprimary user's\b/gi, possessive: true },
+  { pattern: /\bthe user's\b/gi, possessive: true },
+  { pattern: /\bthe primary user\b(?!-)/gi, possessive: false, skipOrdinaryNounFollower: true },
+  { pattern: /\bprimary user\b(?!-)/gi, possessive: false, skipOrdinaryNounFollower: true },
+  { pattern: /\bthe user\b(?!-)/gi, possessive: false, skipOrdinaryNounFollower: true },
 ];
 
-const COMPANION_REPLACEMENTS: ReadonlyArray<[RegExp, boolean]> = [
-  [/\bthe companion's\b/gi, true],
-  [/\bthe assistant's\b/gi, true],
-  [/\bthe companion\b(?!-)/gi, false],
-  [/\bthe assistant\b(?!-)/gi, false],
+const COMPANION_REPLACEMENTS: readonly ParticipantReplacementPattern[] = [
+  { pattern: /\bthe companion's\b/gi, possessive: true },
+  { pattern: /\bthe assistant's\b/gi, possessive: true },
+  { pattern: /\bthe companion\b(?!-)/gi, possessive: false, skipOrdinaryNounFollower: true },
+  { pattern: /\bthe assistant\b(?!-)/gi, possessive: false, skipOrdinaryNounFollower: true },
 ];
 
 const PARTICIPANT_MACRO_PATTERN = /\{\{\s*(user|char|character|assistant)\s*\}\}/gi;
@@ -118,17 +158,27 @@ function findRecentNamedSpeaker(
 function applyParticipantReplacement(
   text: string,
   replacement: string | undefined,
-  patterns: ReadonlyArray<[RegExp, boolean]>,
+  patterns: readonly ParticipantReplacementPattern[],
 ): string {
   if (!replacement) return text;
 
   let nextText = text;
-  for (const [pattern, possessive] of patterns) {
-    nextText = nextText.replace(pattern, () => (
-      possessive ? `${replacement}'s` : replacement
-    ));
+  for (const spec of patterns) {
+    nextText = nextText.replace(spec.pattern, (match, ...args) => {
+      const offset = args[args.length - 2] as number;
+      if (spec.skipOrdinaryNounFollower && hasOrdinaryNounFollower(nextText, offset, match.length)) {
+        return match;
+      }
+      return spec.possessive ? `${replacement}'s` : replacement;
+    });
   }
   return nextText;
+}
+
+function hasOrdinaryNounFollower(text: string, offset: number, matchLength: number): boolean {
+  const remainder = text.slice(offset + matchLength);
+  const nextWord = /^\s+([A-Za-z][A-Za-z'-]*)\b/.exec(remainder)?.[1].toLowerCase();
+  return nextWord !== undefined && ORDINARY_LABEL_NOUN_FOLLOWERS.has(nextWord);
 }
 
 function applyParticipantMacroReplacement(text: string, names: ExtractionParticipantNames): string {
@@ -146,9 +196,17 @@ function containsParticipantMacro(text: string): boolean {
   return PARTICIPANT_MACRO_PATTERN.test(text);
 }
 
-function patternMatches(text: string, pattern: RegExp): boolean {
-  pattern.lastIndex = 0;
-  return pattern.test(text);
+function patternMatches(text: string, spec: ParticipantReplacementPattern): boolean {
+  spec.pattern.lastIndex = 0;
+  for (const match of text.matchAll(spec.pattern)) {
+    if (spec.skipOrdinaryNounFollower && hasOrdinaryNounFollower(text, match.index, match[0].length)) {
+      continue;
+    }
+    spec.pattern.lastIndex = 0;
+    return true;
+  }
+  spec.pattern.lastIndex = 0;
+  return false;
 }
 
 export function detectDurableMemoryParticipantPlaceholders(
@@ -169,9 +227,9 @@ export function detectDurableMemoryParticipantPlaceholders(
   PARTICIPANT_MACRO_PATTERN.lastIndex = 0;
 
   const user = userMacros.length > 0
-    || USER_REPLACEMENTS.some(([pattern]) => patternMatches(text, pattern));
+    || USER_REPLACEMENTS.some(pattern => patternMatches(text, pattern));
   const companion = companionMacros.length > 0
-    || COMPANION_REPLACEMENTS.some(([pattern]) => patternMatches(text, pattern));
+    || COMPANION_REPLACEMENTS.some(pattern => patternMatches(text, pattern));
 
   return {
     user,

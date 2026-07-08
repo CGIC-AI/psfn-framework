@@ -86,13 +86,13 @@ export function createResponseControlTool(
     parameters: RESPONSE_CONTROL_PARAMETERS,
     execute: async (
       toolCallId: string,
-      params: ResponseControlParams,
+      params: unknown,
     ): Promise<AgentToolResult<{ isError?: boolean; noReply?: boolean; auditId?: string }>> => {
       // Fail closed on malformed calls: recording an intentional no-reply from
       // empty/garbled arguments would silently swallow the turn's outward
       // response. A dropped-args tool call (see bead psfn-framework-gu8m) must
       // never be able to silence the companion.
-      if (params?.action !== 'no_reply') {
+      if (!isResponseControlParams(params)) {
         return responseControlResult({
           ok: false,
           error: 'response_control requires action="no_reply"; refusing to record a no-reply decision from empty or malformed arguments.',
@@ -137,4 +137,11 @@ export function createResponseControlTool(
       });
     },
   };
+}
+
+function isResponseControlParams(value: unknown): value is ResponseControlParams {
+  return typeof value === 'object'
+    && value !== null
+    && 'action' in value
+    && value.action === 'no_reply';
 }

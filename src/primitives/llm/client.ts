@@ -1476,7 +1476,9 @@ export class LLMClient {
         const transport = this.transport;
         if (transport) {
           const transportContext = this.buildTransportContext(context, candidateTarget, correlation);
-          const executeTransport = async () => await transport.complete(transportContext, purpose);
+          const executeTransport = async () => await transport.complete(transportContext, purpose, {
+            ...(options.signal ? { signal: options.signal } : {}),
+          });
           const response = options.disableRetry
             ? await executeTransport()
             : await this.runTransportWithCircuitBreaker(

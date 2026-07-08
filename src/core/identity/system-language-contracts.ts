@@ -202,7 +202,7 @@ export function normalizeRetiredSystemLanguageLayerContent(
 
   const contentCandidate = JSON.stringify({
     version: SYSTEM_LANGUAGE_SCHEMA_VERSION,
-    templates,
+    templates: templates as SystemLanguageTemplateMap,
   } satisfies SystemLanguageLayerFile, null, 2);
   if (parseSystemLanguageLayerContent(contentCandidate).diagnostics.length > 0) {
     return null;

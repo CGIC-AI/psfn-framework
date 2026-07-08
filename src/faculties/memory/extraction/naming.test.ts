@@ -114,6 +114,16 @@ describe('detectDurableMemoryParticipantPlaceholders', () => {
       companionMacros: [],
       hasAny: false,
     });
+
+    expect(detectDurableMemoryParticipantPlaceholders(
+      'The assistant manager reviewed the user interface while the companion animal slept.',
+    )).toEqual({
+      user: false,
+      companion: false,
+      userMacros: [],
+      companionMacros: [],
+      hasAny: false,
+    });
   });
 });
 
@@ -129,6 +139,22 @@ describe('normalizeExtractedFactParticipantNames', () => {
     expect(result.accepted).toBe(true);
     if (!result.accepted) throw new Error('expected fact to pass participant name hygiene');
     expect(result.fact.text).toBe("Alex trusts Lyra's patience and Lyra's warmth.");
+  });
+
+  it('leaves definite ordinary assistant, companion, and user noun phrases unchanged', () => {
+    const result = normalizeDurableMemoryText(
+      'The assistant manager approved the user interface while the companion animal slept.',
+      {
+        userName: 'Alex',
+        companionName: 'Lyra',
+      },
+    );
+
+    expect(result).toEqual({
+      accepted: true,
+      text: 'The assistant manager approved the user interface while the companion animal slept.',
+      changed: false,
+    });
   });
 
   it('rewrites raw character-card macros to resolved participant names', () => {

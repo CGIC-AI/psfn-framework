@@ -323,7 +323,7 @@ test('buildPromptMonitorTurns sanitizes uncloneable prompt loom data without dro
           name: 'contact_lookup',
           arguments: { query: 'Vega' },
           uncloneable: () => 'drop me',
-        }, {}) as AdminSessionTurnData['record']['toolCalls'][number],
+        }, {}) as unknown as AdminSessionTurnData['record']['toolCalls'][number],
       ],
       toolResults: [],
     },

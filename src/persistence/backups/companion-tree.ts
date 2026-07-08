@@ -6,6 +6,7 @@ import {
   mkdirSync,
   readFileSync,
   readdirSync,
+  realpathSync,
 } from 'node:fs';
 import { dirname, isAbsolute, join, relative, sep } from 'node:path';
 import { isStrictSubpath } from '../layout.js';
@@ -173,6 +174,23 @@ function hashFile(path: string): { sha256: string; sizeBytes: number } {
   };
 }
 
+function hashVerifiedManifestFile(
+  capturedPath: string,
+  treeRealPath: string,
+  manifestPath: string,
+  label: string,
+): { sha256: string; sizeBytes: number } {
+  const canonicalPath = realpathSync(capturedPath);
+  if (!isStrictSubpath(canonicalPath, treeRealPath)) {
+    throw new Error(`${label} manifest entry escapes the capture root: ${manifestPath}`);
+  }
+  const stats = lstatSync(capturedPath);
+  if (!stats.isFile()) {
+    throw new Error(`${label} manifest entry is not a regular file: ${manifestPath}`);
+  }
+  return hashFile(capturedPath);
+}
+
 function captureTreeSnapshot(options: CaptureTreeSnapshotOptions): TreeSnapshotCaptureResult {
   const sourceDir = options.sourceDir.trim();
   if (!sourceDir) {
@@ -302,6 +320,7 @@ export function verifyTreeSnapshot(
   if (!existsSync(treeDir)) {
     throw new Error(`${label} capture missing: ${treeDir}`);
   }
+  const treeRealPath = realpathSync(treeDir);
 
   const manifest = JSON.parse(readFileSync(manifestPath, 'utf-8')) as TreeSnapshotManifest;
   const manifestPaths = new Set(manifest.files.map(entry => entry.path));
@@ -332,7 +351,12 @@ export function verifyTreeSnapshot(
     if (!existsSync(capturedPath)) {
       throw new Error(`Manifested file missing from ${label.toLowerCase()} capture: ${entry.path}`);
     }
-    const { sha256, sizeBytes } = hashFile(capturedPath);
+    const { sha256, sizeBytes } = hashVerifiedManifestFile(
+      capturedPath,
+      treeRealPath,
+      entry.path,
+      label,
+    );
     if (sha256 !== entry.sha256) {
       throw new Error(`${label} capture hash mismatch for ${entry.path}`);
     }

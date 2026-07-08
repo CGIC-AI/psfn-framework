@@ -11,6 +11,7 @@
     SESSION_MESSAGE_PAGE_SIZE,
     SESSION_SEARCH_LIMIT,
   } from '$lib/api/endpoints/sessions';
+  import { createSessionRecoveryInitialLoader } from './initial-loader';
   import type {
     AdminCogSecEventListData,
     AdminCogSecRemediationApplyData,
@@ -87,24 +88,31 @@
     return channelId;
   }
 
-  async function loadRoutes(): Promise<void> {
-    loading = true;
-    error = '';
-    try {
-      const data = await listSessionRoutes();
-      const cogSecData = await listCogSecEvents();
+  const loadRoutes = createSessionRecoveryInitialLoader<AdminSessionRouteView, ChannelInfo, AdminCogSecEventListData['events'][number]>({
+    fetchRoutes: listSessionRoutes,
+    fetchCogSecEvents: listCogSecEvents,
+    getSelectedSourceChannelId: () => selectedSourceChannelId,
+    onStart: () => {
+      loading = true;
+      error = '';
+    },
+    onRoutes: (data) => {
       routes = data.routes;
       channels = data.channels;
-      cogSecEvents = cogSecData.events;
-      if (!selectedSourceChannelId && data.routes[0]) {
-        selectedSourceChannelId = data.routes[0].sourceChannelId;
-      }
-    } catch (e) {
-      error = e instanceof Error ? e.message : 'Failed to load session routes';
-    } finally {
+    },
+    onCogSecEvents: (events) => {
+      cogSecEvents = events;
+    },
+    onSelectSourceChannelId: (sourceChannelId) => {
+      selectedSourceChannelId = sourceChannelId;
+    },
+    onError: (message) => {
+      error = message;
+    },
+    onSettled: () => {
       loading = false;
-    }
-  }
+    },
+  });
 
   interface BrowserRow {
     id: number;

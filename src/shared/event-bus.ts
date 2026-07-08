@@ -10,6 +10,7 @@ import type {
   FatigueBudgetEvent,
 } from './contracts/runtime.js';
 import type { TurnSnapshot } from '../core/turns/snapshot.js';
+import type { SessionRouteResetMode } from '../core/session/session-routes.js';
 import type {
   AdaptiveToolDecisionTelemetry,
   AdaptiveToolSnapshotTelemetry,
@@ -58,6 +59,16 @@ export interface EventMap {
   'agent.turn.start': { message: SubstrateMessage } & EventCorrelationFields;
   'agent.turn.snapshot': { snapshot: TurnSnapshot } & EventCorrelationFields;
   'agent.turn.end': { message: SubstrateMessage; response: AgentResponse } & EventCorrelationFields;
+  'session.route.reset': {
+    sourceChannelId: string;
+    oldLogicalSessionId: string;
+    newLogicalSessionId: string;
+    routeGeneration: number;
+    mode: SessionRouteResetMode;
+    actor: string;
+    reason: string;
+    timestamp: number;
+  };
   'agent.post_turn.actions.inferred': {
     message: SubstrateMessage;
     response: AgentResponse;

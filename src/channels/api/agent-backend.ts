@@ -421,9 +421,13 @@ export class AgentApiBackend {
       },
     };
 
+    if (params.signal?.aborted) {
+      return this.fail(499, 'request_cancelled', 'Direct model completion cancelled');
+    }
+
     // Direct completions must stay cancellable: register in activeRequests so
-    // cancelChatCompletion can find them, and chain the caller's AbortSignal
-    // into a per-request controller that settles the turn on cancel.
+    // cancelChatCompletion can find them, and pass the per-request AbortSignal
+    // into the provider so cancellation can stop provider work.
     const abortController = new AbortController();
     const onExternalAbort = () => abortController.abort();
     if (params.signal) {
@@ -449,7 +453,9 @@ export class AgentApiBackend {
     const timeoutMs = this.normalizeChatCompletionTimeoutMs(params.timeoutMs);
     let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
     try {
-      const completion = this.llmProvider.complete(context, 'reasoning');
+      const completion = this.llmProvider.complete(context, 'reasoning', {
+        signal: abortController.signal,
+      });
       const response = timeoutMs === null
         ? await Promise.race([completion, abortPromise])
         : await Promise.race([

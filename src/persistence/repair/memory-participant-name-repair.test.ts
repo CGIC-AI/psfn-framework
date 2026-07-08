@@ -102,6 +102,8 @@ describe('memory participant name repair', () => {
       { id: 'm-power', text: 'He is a power user of the kiln software.' },
       { id: 'm-planting', text: 'Companion planting improved the harvest.' },
       { id: 'm-personal', text: 'She hired a personal assistant last spring.' },
+      { id: 'm-manager', text: 'The assistant manager approved the user interface.' },
+      { id: 'm-animal', text: 'The companion animal slept through the storm.' },
     ], {
       canonicalContactName: 'Alex',
       companionName: 'Lyra',
@@ -109,7 +111,7 @@ describe('memory participant name repair', () => {
 
     // None are placeholder candidates, so none are rewritten or refused.
     expect(plan).toMatchObject({
-      scanned: 4,
+      scanned: 6,
       candidates: 0,
       unchanged: 0,
       updates: [],

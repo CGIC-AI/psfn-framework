@@ -70,13 +70,14 @@ export function assertPositiveInteger(
   if (typeof value !== 'number' || !Number.isFinite(value) || !Number.isInteger(value)) {
     fail('notInteger');
   }
-  if (value < min) {
+  const integerValue = Number(value);
+  if (integerValue < min) {
     fail('belowMin');
   }
-  if (max !== undefined && value > max) {
+  if (max !== undefined && integerValue > max) {
     fail('aboveMax');
   }
-  return value;
+  return integerValue;
 }
 
 export function assertNoUnknownKeys(

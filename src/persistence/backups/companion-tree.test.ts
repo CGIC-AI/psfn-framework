@@ -172,6 +172,31 @@ describe('companion tree capture', () => {
       .toThrow(`Companion tree manifest entry escapes the capture root: ${absoluteTarget}`);
   });
 
+  it('rejects manifest entries that resolve through symlinks outside the capture root', () => {
+    const root = makeRoot('psfn-companion-tree-symlink-escape');
+    const companionDataDir = seedCompanionData(root);
+    const backupDir = join(root, 'backup-snapshot');
+    mkdirSync(backupDir, { recursive: true });
+    const capture = captureCompanionTree({ companionDataDir, backupDir });
+
+    const outsideContent = 'outside through symlink\n';
+    const outsidePath = join(root, 'outside-target.txt');
+    writeFileSync(outsidePath, outsideContent, 'utf-8');
+    symlinkSync(outsidePath, join(capture.treeDir, 'vault', 'escape-link'));
+    const manifestPath = join(backupDir, COMPANION_TREE_MANIFEST_NAME);
+    const manifest = JSON.parse(readFileSync(manifestPath, 'utf-8')) as CompanionTreeManifest;
+    manifest.files.push({
+      path: 'vault/escape-link',
+      sizeBytes: outsideContent.length,
+      sha256: createHash('sha256').update(outsideContent).digest('hex'),
+    });
+    manifest.fileCount += 1;
+    writeFileSync(manifestPath, JSON.stringify(manifest), 'utf-8');
+
+    expect(() => verifyCompanionTreeSnapshot(backupDir))
+      .toThrow('Companion tree manifest entry escapes the capture root: vault/escape-link');
+  });
+
   it('fails when unmanifested files appear in the capture', () => {
     const root = makeRoot('psfn-companion-tree-unmanifested');
     const companionDataDir = seedCompanionData(root);

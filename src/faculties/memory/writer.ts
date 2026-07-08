@@ -1375,7 +1375,7 @@ export class MemoryWriter {
     };
     const patchEventId = uuidv7();
 
-    this.memoryStore.runInTransaction(() => {
+    await this.memoryStore.runInTransaction(() => {
       this.memoryStore.updateMemory(memoryId, updates);
       this.memoryStore.recordPatchEvent({
         id: patchEventId,

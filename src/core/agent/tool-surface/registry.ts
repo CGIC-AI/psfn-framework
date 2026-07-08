@@ -198,6 +198,15 @@ export const CANONICAL_FIRST_PARTY_TOOL_SURFACES: readonly CanonicalToolSurfaceE
     ],
   },
   {
+    name: 'world',
+    domain: 'boundary',
+    exposure: 'extended',
+    description: 'Canonical physical/virtual world surface for perceiving and controlling place affordances via Home Assistant.',
+    actions: ['perceive', 'list', 'control'],
+    capabilityMetadata: { kind: 'action_aware', source: CAPABILITIES_REQUIREMENTS },
+    retiredAliases: [],
+  },
+  {
     name: 'analysis_workbench',
     domain: 'analysis',
     exposure: 'core',

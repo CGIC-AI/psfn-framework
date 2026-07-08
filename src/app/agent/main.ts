@@ -497,13 +497,16 @@ async function main(): Promise<void> {
   // World tool — perceive/list/control physical & virtual affordances via the
   // places registry and the privileged Home Assistant gateway method (bead .8).
   // Affordance→entity resolution is agent-side against places.json (defence in depth).
-  // TODO(vinz.10): capability/trust gating + staged-off control + a live
-  // situated-place resolver from the emanation/self-model runtime.
+  // Capability gating: perceive/list->world.read, control->world.control
+  // (resolveWorldRequirement). Effector control is staged OFF by default
+  // (WORLD_CONTROL_RUNTIME_ENABLED) and, once enabled, additionally requires a
+  // primary/trusted requester — resolved from the live turn request context.
   registerWorldTools(agentLoop, new GatewayWorldOps(gatewayOps), {
     placesRegistry: placesRegistryConfig,
     gatewayMode: true,
+    resolveRequesterTrust: () => getRequestContext()?.viewerTrustLevel,
   });
-  log.info('World perceive/list/control tool enabled');
+  log.info('World tool enabled (perceive/list live; control staged off, trust-gated)');
 
   // Journal tools — durable markdown notes in the personal workspace.
   registerMarkdownJournalTools(agentLoop, pathSnapshot.workspaceRoot);

@@ -42,7 +42,7 @@ export interface CogSecPersonaConformanceInput {
 }
 
 const GENERIC_ASSISTANT_PATTERN =
-  /\b(?:helpful\s+assistant|ai\s+assistant|as\s+an\s+assistant|language\s+model|chatgpt)\b/iu;
+  /\b(?:helpful\s+assistant|ai\s+assistant|as\s+an\s+assistant|language\s+model|chatgpt)\b/giu;
 const PERSONA_MUTATION_PATTERN =
   /\b(?:from\s+now\s+on|you\s+are\s+now|carlini\s+is\s+now|cardellini\s+is\s+now|change\s+(?:your|the\s+companion'?s)\s+(?:persona|identity|character|self[-\s]?concept|core\s+memory))\b/iu;
 const ATTACK_MECHANICS_PATTERN =
@@ -96,18 +96,32 @@ function anchorCheck(
   };
 }
 
+function collectGenericAssistantMarkers(text: string): Set<string> {
+  const markers = new Set<string>();
+  for (const match of text.matchAll(GENERIC_ASSISTANT_PATTERN)) {
+    markers.add(match[0].toLowerCase().replace(/\s+/gu, ' '));
+  }
+  return markers;
+}
+
 function assistantGenericnessCheck(
   promptText: string,
   stableIdentityText: string,
 ): CogSecPersonaConformanceCheckResult {
-  if (!GENERIC_ASSISTANT_PATTERN.test(promptText)) {
+  const promptMarkers = collectGenericAssistantMarkers(promptText);
+  if (promptMarkers.size === 0) {
     return {
       id: 'assistant_genericness',
       status: 'pass',
       reasonCodes: ['generic_assistant_markers_absent'],
     };
   }
-  if (GENERIC_ASSISTANT_PATTERN.test(stableIdentityText)) {
+  // Only markers the identity source itself contains are excused (warning).
+  // Any marker the prompt ADDS beyond the identity source is drift and must
+  // fail — a generic phrase in identity text must not launder injected drift.
+  const identityMarkers = collectGenericAssistantMarkers(stableIdentityText);
+  const addedMarkers = [...promptMarkers].filter(marker => !identityMarkers.has(marker));
+  if (addedMarkers.length === 0) {
     return {
       id: 'assistant_genericness',
       status: 'warning',

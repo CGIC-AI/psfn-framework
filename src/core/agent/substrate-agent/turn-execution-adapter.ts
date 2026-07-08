@@ -155,6 +155,8 @@ export interface TurnExecutionAdapterOptions {
   memoryExtractor: MemoryExtractor | null;
   wikiRetrieval: WikiRetrievalPort | null;
   placesRegistry?: import('../../../shared/contracts/places-registry.js').PlacesRegistryConfig | undefined;
+  /** Fallback situated place for placeless turns (emanation/virtual-move seam). */
+  resolveSituatedFallbackPlaceId?: () => string | undefined;
   skillsRuntime: SkillsRuntime | null;
   evaluateReflectionNudge: (toolSummary: TurnToolSummary) => string | null;
   emotionSelfModelRuntime: EmotionSelfModelRuntime;
@@ -189,6 +191,9 @@ export function createTurnExecutionRuntimeAdapter(
     memoryExtractor: options.memoryExtractor,
     wikiRetrieval: options.wikiRetrieval,
     placesRegistry: options.placesRegistry,
+    ...(options.resolveSituatedFallbackPlaceId
+      ? { resolveSituatedFallbackPlaceId: options.resolveSituatedFallbackPlaceId }
+      : {}),
     skillsRuntime: options.skillsRuntime,
     evaluateReflectionNudge: (toolSummary) => options.evaluateReflectionNudge(toolSummary),
     emotionSelfModelRuntime: options.emotionSelfModelRuntime,

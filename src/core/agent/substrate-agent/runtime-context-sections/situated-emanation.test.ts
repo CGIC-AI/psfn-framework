@@ -74,6 +74,53 @@ describe('SituatedEmanationTracker', () => {
     expect(tracker.resolvePresence()).toEqual(satellitePresence('sat.kitchen', 'Kitchen satellite'));
   });
 
+  // ── Deliberate virtual navigation overlay (vinz.26, contract s10wm) ──
+
+  it('foregrounds a deliberate virtual move without clobbering the physical emanation', () => {
+    const tracker = new SituatedEmanationTracker();
+    const presence = satellitePresence('sat.living-room', 'Living Room satellite');
+    tracker.observe(makeTurn({ placeId: 'place.living-room', presence }));
+
+    tracker.moveToVirtualPlace('place.mud-tavern');
+
+    // Placeless turns now foreground the virtual destination …
+    expect(tracker.resolvePlaceId()).toBe('place.mud-tavern');
+    expect(tracker.resolveVirtualMovePlaceId()).toBe('place.mud-tavern');
+    // … while the PHYSICAL emanation is untouched (not clobbered): the
+    // established place and its presence survive the virtual move intact.
+    expect(tracker.snapshot()).toEqual({ presence, placeId: 'place.living-room' });
+    expect(tracker.resolvePresence()).toEqual(presence);
+  });
+
+  it('foregrounds a virtual move even when no physical emanation was ever established', () => {
+    const tracker = new SituatedEmanationTracker();
+    tracker.moveToVirtualPlace('place.mud-tavern');
+    expect(tracker.resolvePlaceId()).toBe('place.mud-tavern');
+    expect(tracker.snapshot()).toBeUndefined();
+  });
+
+  it('supersedes a virtual move with the next place-bearing physical turn (latest event wins)', () => {
+    const tracker = new SituatedEmanationTracker();
+    tracker.moveToVirtualPlace('place.mud-tavern');
+
+    tracker.observe(makeTurn({
+      placeId: 'place.kitchen',
+      presence: satellitePresence('sat.kitchen', 'Kitchen satellite'),
+    }));
+
+    // Decision 13 blend default: a fresh physical emanation resets the
+    // foregrounded place; the deliberate virtual position is cleared.
+    expect(tracker.resolvePlaceId()).toBe('place.kitchen');
+    expect(tracker.resolveVirtualMovePlaceId()).toBeUndefined();
+  });
+
+  it('keeps a virtual move across placeless turns (they are not departures)', () => {
+    const tracker = new SituatedEmanationTracker();
+    tracker.moveToVirtualPlace('place.mud-tavern');
+    tracker.observe(makeTurn({}));
+    expect(tracker.resolvePlaceId()).toBe('place.mud-tavern');
+  });
+
   it('never establishes a location from a conflicting/unresolvable presence', () => {
     const tracker = new SituatedEmanationTracker();
     // A satellite record that also claims to be the active/primary emanation is

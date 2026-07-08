@@ -113,6 +113,13 @@ export interface TurnExecutionRuntime {
    * behaves as no situated site (personal-only retrieval).
    */
   placesRegistry?: import('../../../../shared/contracts/places-registry.js').PlacesRegistryConfig | undefined;
+  /**
+   * Fallback situated place for a placeless turn (the emanation tracker's
+   * current place: physical emanation or a deliberate virtual `move`, vinz.26).
+   * Keeps the wiki shared-world scope in lockstep with the rendered situated
+   * block. Absent ⇒ turn-message resolution only.
+   */
+  resolveSituatedFallbackPlaceId?: () => string | undefined;
   skillsRuntime: SkillsRuntime | null;
   evaluateReflectionNudge: (toolSummary: TurnToolSummary) => string | null;
   emotionSelfModelRuntime: EmotionSelfModelRuntime;

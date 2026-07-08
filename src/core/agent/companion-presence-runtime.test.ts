@@ -26,7 +26,10 @@ const NOW = new Date('2026-07-08T12:00:00.000Z');
 
 const PLACES_REGISTRY: PlacesRegistryConfig = {
   schemaVersion: 1,
-  sites: [{ siteId: 'site.home', displayName: 'Home', kind: 'physical' }],
+  sites: [
+    { siteId: 'site.home', displayName: 'Home', kind: 'physical' },
+    { siteId: 'site.mud', displayName: 'The MUD', kind: 'virtual' },
+  ],
   places: [
     {
       placeId: 'place.living-room',
@@ -42,8 +45,22 @@ const PLACES_REGISTRY: PlacesRegistryConfig = {
       kind: 'physical',
       affordances: [],
     },
+    {
+      placeId: 'place.mud-tavern',
+      siteId: 'site.mud',
+      displayName: 'The Rusty Tankard',
+      kind: 'virtual',
+      affordances: [],
+    },
   ],
 };
+
+/** Coordinates of the virtual destination used by the deliberate-move tests. */
+const TAVERN_REF = {
+  siteId: 'site.mud',
+  placeId: 'place.mud-tavern',
+  kind: 'virtual',
+} as const;
 
 function makeMessage(placeId?: string): SubstrateMessage {
   return {
@@ -361,6 +378,91 @@ describe('CompanionPresenceRuntime', () => {
     store.failNext = new Error('shared schema unavailable');
 
     await expect(runtime.refreshOwnPresence()).resolves.toBeUndefined();
+  });
+
+  // ── Deliberate move (vinz.26, contract s10wm) ──
+
+  it('deliberate move writes the own row at the virtual destination with arrival semantics', async () => {
+    const store = new FakePresenceStore();
+    store.seed(peerRecord(PEER_A, TAVERN_REF));
+    const { bus, emit } = makeEventBus();
+    const runtime = makeRuntime(store, bus);
+
+    await runtime.recordDeliberateMove(TAVERN_REF);
+
+    // Own row written at the destination, virtual kind, through the store port.
+    expect(store.upsertCalls).toEqual([{
+      companionId: SELF_ID,
+      siteId: 'site.mud',
+      placeId: 'place.mud-tavern',
+      kind: 'virtual',
+    }]);
+    // Everyone already present at the destination is a fresh co-location.
+    expect(emit).toHaveBeenCalledTimes(1);
+    expect(emit).toHaveBeenCalledWith(
+      'presence.companion.co_located',
+      expect.objectContaining({
+        companionId: PEER_A,
+        observerCompanionId: SELF_ID,
+        siteId: 'site.mud',
+        placeId: 'place.mud-tavern',
+        kind: 'virtual',
+      }),
+    );
+    // The co-presence snapshot serves the destination place.
+    expect(runtime.getCoPresent(TAVERN_REF)).toEqual([
+      { companionId: PEER_A, displayName: PEER_A },
+    ]);
+  });
+
+  it('deliberate move re-targets the heartbeat refresh to the destination', async () => {
+    const store = new FakePresenceStore();
+    const { bus } = makeEventBus();
+    const runtime = makeRuntime(store, bus);
+
+    // Physically situated first, then deliberately moved into the tavern.
+    await runtime.observeTurnPlace(makeMessage('place.living-room'));
+    await runtime.recordDeliberateMove(TAVERN_REF);
+    await runtime.refreshOwnPresence();
+
+    expect(store.upsertCalls).toHaveLength(3);
+    expect(store.upsertCalls[2]).toEqual({
+      companionId: SELF_ID,
+      siteId: 'site.mud',
+      placeId: 'place.mud-tavern',
+      kind: 'virtual',
+    });
+  });
+
+  it('deliberate move THROWS on own-row write failure (the write is the action)', async () => {
+    const store = new FakePresenceStore();
+    store.failNext = new Error('shared schema unavailable');
+    const { bus, emit } = makeEventBus();
+    const runtime = makeRuntime(store, bus);
+
+    await expect(runtime.recordDeliberateMove(TAVERN_REF))
+      .rejects.toThrow('shared schema unavailable');
+    expect(emit).not.toHaveBeenCalled();
+    // The failed move never became the heartbeat target either (the fake
+    // records successful upserts only, and the refresh is a no-op unarmed).
+    await runtime.refreshOwnPresence();
+    expect(store.upsertCalls).toHaveLength(0);
+  });
+
+  it('a later situated physical turn supersedes a deliberate move normally', async () => {
+    const store = new FakePresenceStore();
+    const { bus } = makeEventBus();
+    const runtime = makeRuntime(store, bus);
+
+    await runtime.recordDeliberateMove(TAVERN_REF);
+    await runtime.observeTurnPlace(makeMessage('place.kitchen'));
+    await runtime.refreshOwnPresence();
+
+    expect(store.rows.get(SELF_ID)).toMatchObject({
+      siteId: 'site.home',
+      placeId: 'place.kitchen',
+      kind: 'physical',
+    });
   });
 
   it('deletes its own row and closes the store on graceful shutdown', async () => {

@@ -306,6 +306,7 @@ export async function decryptEncryptedBackupPackage(options: {
   decipher.setAuthTag(Buffer.from(manifest.authTagBase64, 'base64'));
   const tarBinary = options.encryption.tarBinary?.trim() || 'tar';
 
+  const outputDirPreexisted = existsSync(options.outputDir);
   mkdirSync(options.outputDir, { recursive: true });
   const tar = spawn(tarBinary, ['-xzf', '-', '-C', options.outputDir], {
     stdio: ['pipe', 'ignore', 'pipe'],
@@ -316,7 +317,11 @@ export async function decryptEncryptedBackupPackage(options: {
       waitForProcess(tar, tarBinary),
     ]);
   } catch (error) {
-    rmSync(options.outputDir, { recursive: true, force: true });
+    // Only remove what this call created: a pre-existing output directory
+    // may hold unrelated data that a failed decrypt must not wipe.
+    if (!outputDirPreexisted) {
+      rmSync(options.outputDir, { recursive: true, force: true });
+    }
     throw error;
   }
   return options.outputDir;

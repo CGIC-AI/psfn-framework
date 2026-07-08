@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import {
   existsSync,
   mkdirSync,
@@ -121,6 +122,54 @@ describe('companion tree capture', () => {
     writeFileSync(join(capture.treeDir, 'vault', 'note.md'), 'tampered\n', 'utf-8');
     expect(() => verifyCompanionTreeSnapshot(backupDir))
       .toThrow('hash mismatch for vault/note.md');
+  });
+
+  it('rejects manifest entries that traverse outside the capture root', () => {
+    const root = makeRoot('psfn-companion-tree-escape');
+    const companionDataDir = seedCompanionData(root);
+    const backupDir = join(root, 'backup-snapshot');
+    mkdirSync(backupDir, { recursive: true });
+    captureCompanionTree({ companionDataDir, backupDir });
+
+    // Plant a real file outside the tree so a traversal entry would resolve,
+    // hash cleanly, and pass verification without the containment check.
+    const escapeContent = 'outside the capture root\n';
+    writeFileSync(join(backupDir, 'escape.txt'), escapeContent, 'utf-8');
+    const manifestPath = join(backupDir, COMPANION_TREE_MANIFEST_NAME);
+    const manifest = JSON.parse(readFileSync(manifestPath, 'utf-8')) as CompanionTreeManifest;
+    manifest.files.push({
+      path: '../escape.txt',
+      sizeBytes: escapeContent.length,
+      sha256: createHash('sha256').update(escapeContent).digest('hex'),
+    });
+    manifest.fileCount += 1;
+    writeFileSync(manifestPath, JSON.stringify(manifest), 'utf-8');
+
+    expect(() => verifyCompanionTreeSnapshot(backupDir))
+      .toThrow('Companion tree manifest entry escapes the capture root: ../escape.txt');
+  });
+
+  it('rejects absolute manifest entry paths', () => {
+    const root = makeRoot('psfn-companion-tree-absolute');
+    const companionDataDir = seedCompanionData(root);
+    const backupDir = join(root, 'backup-snapshot');
+    mkdirSync(backupDir, { recursive: true });
+    captureCompanionTree({ companionDataDir, backupDir });
+
+    const absoluteTarget = join(root, 'absolute-escape.txt');
+    const absoluteContent = 'absolute escape\n';
+    writeFileSync(absoluteTarget, absoluteContent, 'utf-8');
+    const manifestPath = join(backupDir, COMPANION_TREE_MANIFEST_NAME);
+    const manifest = JSON.parse(readFileSync(manifestPath, 'utf-8')) as CompanionTreeManifest;
+    manifest.files.push({
+      path: absoluteTarget,
+      sizeBytes: absoluteContent.length,
+      sha256: createHash('sha256').update(absoluteContent).digest('hex'),
+    });
+    writeFileSync(manifestPath, JSON.stringify(manifest), 'utf-8');
+
+    expect(() => verifyCompanionTreeSnapshot(backupDir))
+      .toThrow(`Companion tree manifest entry escapes the capture root: ${absoluteTarget}`);
   });
 
   it('fails when unmanifested files appear in the capture', () => {

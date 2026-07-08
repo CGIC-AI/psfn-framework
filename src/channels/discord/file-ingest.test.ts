@@ -390,6 +390,52 @@ describe('Discord document file ingest', () => {
     expect(decision.reasons.some(reason => reason.includes('.codex-plugin/plugin.json(plugin_manifest_name)'))).toBe(true);
   });
 
+  it('terminates and flags tar archives whose headers declare a negative entry size', () => {
+    // A -512 octal size makes the naive scan offset stall in place; the
+    // classifier must finish and treat the archive as malformed.
+    const block = new Uint8Array(512);
+    const encoder = new TextEncoder();
+    block.set(encoder.encode('-0001000\0'), 124);
+    block.set(encoder.encode('ustar'), 257);
+
+    const decision = classifyDiscordAttachmentQuarantineRisk({
+      name: 'data.tar',
+      contentType: 'application/x-tar',
+      declaredContentType: 'application/x-tar',
+      bytes: block,
+    });
+
+    expect(decision.quarantined).toBe(true);
+    expect(decision.sniffedContentType).toBe('application/x-tar');
+    expect(decision.reasons).toEqual(expect.arrayContaining([
+      'archive_signature:application/x-tar',
+      'archive_malformed_entry:negative_tar_size',
+    ]));
+  });
+
+  it('stops enumerating tar entries at the first negative-size header', () => {
+    const encoder = new TextEncoder();
+    const block = new Uint8Array(1024);
+    block.set(encoder.encode('notes/readme.txt'), 0);
+    block.set(encoder.encode('-7777777\0'), 124);
+    block.set(encoder.encode('ustar'), 257);
+    // An entry after the malformed header must not be trusted or reported.
+    block.set(encoder.encode('payload.sh'), 512);
+    block.set(encoder.encode('00000001\0'), 512 + 124);
+    block.set(encoder.encode('ustar'), 512 + 257);
+
+    const decision = classifyDiscordAttachmentQuarantineRisk({
+      name: 'data.tar',
+      contentType: 'application/x-tar',
+      declaredContentType: 'application/x-tar',
+      bytes: block,
+    });
+
+    expect(decision.quarantined).toBe(true);
+    expect(decision.reasons).toContain('archive_malformed_entry:negative_tar_size');
+    expect(decision.reasons.some(reason => reason.includes('payload.sh'))).toBe(false);
+  });
+
   it('quarantines macro-enabled Office containers and withholds parsed body text', async () => {
     const personalFilesDir = mkdtempSync(join(tmpdir(), 'psfn-discord-docm-quarantine-'));
     const originalFetch = globalThis.fetch;

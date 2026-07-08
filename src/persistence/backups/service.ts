@@ -264,20 +264,43 @@ function postgresDumpFileName(databaseUrl: string): string {
   return 'postgres.dump';
 }
 
+/**
+ * Splits a Postgres URL into a credential-free connection argument and the
+ * password, so pg_dump argv never exposes secrets to local process observers.
+ */
+function toCredentialFreePostgresConnection(
+  databaseUrl: string,
+): { connectionArg: string; password?: string } {
+  let url: URL;
+  try {
+    url = new URL(databaseUrl);
+  } catch {
+    throw new Error(
+      'Postgres backup requires a URL connection string (postgres://…) so credentials can be passed via the environment instead of pg_dump argv',
+    );
+  }
+  const password = url.password ? decodeURIComponent(url.password) : '';
+  url.password = '';
+  return { connectionArg: url.toString(), ...(password ? { password } : {}) };
+}
+
 async function dumpPostgresDatabase(
   postgres: BackupPostgresOptions,
   databaseDir: string,
 ): Promise<string> {
   const binary = postgres.pgDumpBinary?.trim() || 'pg_dump';
   const dumpPath = join(databaseDir, postgresDumpFileName(postgres.databaseUrl));
+  const { connectionArg, password } = toCredentialFreePostgresConnection(postgres.databaseUrl);
   mkdirSync(databaseDir, { recursive: true });
   try {
     await execFileAsync(binary, [
       '--format=custom',
       '--no-password',
       `--file=${dumpPath}`,
-      postgres.databaseUrl,
-    ]);
+      connectionArg,
+    ], {
+      env: password ? { ...process.env, PGPASSWORD: password } : process.env,
+    });
   } catch (error) {
     throw new Error(`pg_dump failed: ${describeExecError(error)}`);
   }
@@ -339,6 +362,7 @@ export async function runBackupCycle(
       ...(options.mirrorDir?.trim() ? [options.mirrorDir.trim()] : []),
       options.sessionsDir,
       ...(options.companionDataDir?.trim() ? [options.companionDataDir.trim()] : []),
+      ...(options.systemDataDir?.trim() ? [options.systemDataDir.trim()] : []),
       ...(options.workspaceProtectedPaths ?? []),
     ]);
   }

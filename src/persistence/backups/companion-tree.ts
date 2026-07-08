@@ -8,6 +8,7 @@ import {
   readdirSync,
 } from 'node:fs';
 import { dirname, isAbsolute, join, relative, sep } from 'node:path';
+import { isStrictSubpath } from '../layout.js';
 import { writeJsonAtomic } from '../../shared/utils/fs.js';
 
 export const COMPANION_TREE_DIR_NAME = 'companion-tree';
@@ -143,6 +144,25 @@ function isExcludedPath(relativePath: string, excludedPaths: Set<string>): boole
     }
   }
   return false;
+}
+
+/**
+ * Resolves a manifest entry path under the capture root, rejecting absolute
+ * paths, empty/`.`/`..` segments, and anything that resolves outside the
+ * root — manifest contents are untrusted at verification time.
+ */
+function resolveManifestEntryPath(treeDir: string, manifestPath: string, label: string): string {
+  const segments = manifestPath.split('/');
+  const hasUnsafeSegment = isAbsolute(manifestPath)
+    || segments.some(segment => !segment || segment === '.' || segment === '..');
+  if (hasUnsafeSegment) {
+    throw new Error(`${label} manifest entry escapes the capture root: ${manifestPath}`);
+  }
+  const capturedPath = join(treeDir, ...segments);
+  if (!isStrictSubpath(capturedPath, treeDir)) {
+    throw new Error(`${label} manifest entry escapes the capture root: ${manifestPath}`);
+  }
+  return capturedPath;
 }
 
 function hashFile(path: string): { sha256: string; sizeBytes: number } {
@@ -308,7 +328,7 @@ export function verifyTreeSnapshot(
 
   let totalBytes = 0;
   for (const entry of manifest.files) {
-    const capturedPath = join(treeDir, ...entry.path.split('/'));
+    const capturedPath = resolveManifestEntryPath(treeDir, entry.path, label);
     if (!existsSync(capturedPath)) {
       throw new Error(`Manifested file missing from ${label.toLowerCase()} capture: ${entry.path}`);
     }

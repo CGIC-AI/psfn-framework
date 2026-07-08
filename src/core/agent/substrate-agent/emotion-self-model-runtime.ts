@@ -296,6 +296,19 @@ export class EmotionSelfModelRuntime {
   }
 
   /**
+   * Presence-driven emanation follow (vinz.20): confirm a fresh situated
+   * location OUTSIDE a turn. An auto-follow moves the emanation between
+   * turns, so the durable last-known location must move with it — otherwise
+   * the next plain-chat turn would still twin the OLD room (vinz.29 keys the
+   * mindspace default off this). The next turn's carry-forward resolution
+   * (computeInternalStateForTurn) picks this up as the prior location and
+   * persists it through the normal internal-state snapshot path.
+   */
+  confirmSituatedLocation(location: SituatedLocation): void {
+    this.currentSituatedLocation = location;
+  }
+
+  /**
    * The durable last-known situated location (S10 B3): restored persisted
    * state at startup, refreshed by each turn's carry-forward resolution.
    * vinz.29 keys the shared-mindspace default off this — the twin of the

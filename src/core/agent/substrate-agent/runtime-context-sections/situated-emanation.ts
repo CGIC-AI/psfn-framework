@@ -93,6 +93,23 @@ export class SituatedEmanationTracker {
   }
 
   /**
+   * Presence-driven emanation handoff (conversation-follows-you, vinz.20).
+   * A resolved, trust-gated presence claim at another satellite-bound place
+   * moves the active emanation there WITHOUT a turn: this is the same
+   * state transition a place-bearing satellite turn performs in
+   * {@link observe} — establish the new current place and clear any
+   * deliberate virtual-move overlay (a fresh physical emanation is the
+   * latest event and supersedes it, decision 13) — minus the turn's own
+   * presence metadata, which only a real device turn can honestly carry.
+   * The caller (the presence-follow controller) has already validated the
+   * place against the registry and applied trust/freshness/debounce gates.
+   */
+  handoffToPlace(placeId: string): void {
+    this.current = { placeId };
+    this.virtualMove = undefined;
+  }
+
+  /**
    * Deliberate virtual navigation (world tool `move`, vinz.26). Foregrounds
    * `placeId` for subsequent placeless turns WITHOUT touching the physical
    * emanation: a satellite turn still renders its own bound place, and the next

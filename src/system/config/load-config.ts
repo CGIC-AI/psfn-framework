@@ -385,6 +385,8 @@ function loadConfigForMode(mode: LoadConfigMode, env: NodeJS.ProcessEnv = proces
     observerEvalSidecar: createDefaultObserverEvalSidecarSettings(),
     webFetchAllowHttp: false,
     webFetchAllowInternalNetwork: false,
+    homeAssistantEnabled: false,
+    homeAssistantBaseUrl: undefined,
     webFetchLocalCrawlerEnabled: false,
     webFetchLocalCrawlerAllowHttp: false,
     ...(gatewayTlsCaPath ? { gatewayTlsCaPath } : {}),

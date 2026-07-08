@@ -184,6 +184,8 @@
   },
   "webFetchAllowHttp": false,
   "webFetchAllowInternalNetwork": false,
+  "homeAssistantEnabled": false,
+  "homeAssistantBaseUrl": "",
   "webFetchLocalCrawlerEnabled": false,
   "webFetchLocalCrawlerAllowHttp": false,
   "discordTriggerReactions": "👆",

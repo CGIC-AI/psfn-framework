@@ -170,6 +170,7 @@ export const SETTINGS_BOOLEAN_FIELDS = new Set<string>([
   'importProcessingStrictPolicy',
   'webFetchAllowHttp',
   'webFetchAllowInternalNetwork',
+  'homeAssistantEnabled',
   'webFetchLocalCrawlerEnabled',
   'webFetchLocalCrawlerAllowHttp',
   'telegramEnabled',

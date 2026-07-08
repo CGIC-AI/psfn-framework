@@ -20,6 +20,7 @@ import type { SessionHmacKeyring } from '../../../persistence/journals/journal-u
 import type { ApprovalBoundaryService } from '../approval-boundary.js';
 import type { PolicyConfig } from '../policy.js';
 import type { ModelUsageRecorder } from '../../../shared/telemetry/model-usage.js';
+import type { CredentialVaultPort } from '../../custody/credential-vault.js';
 
 export interface GatewayMethodRuntime {
   target: JSONRPCServerAndClient;
@@ -30,6 +31,7 @@ export interface GatewayMethodRuntime {
   gitOps?: GitOperations;
   imageConfig?: ImageRuntimeConfig;
   modelUsageRecorder?: ModelUsageRecorder;
+  credentialVault?: CredentialVaultPort;
   policyConfig: PolicyConfig;
   workspacePath: string;
   sessionHmacKeyring: SessionHmacKeyring;

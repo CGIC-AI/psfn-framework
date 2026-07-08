@@ -1,10 +1,13 @@
 import { beforeEach, afterEach, describe, expect, it } from 'vitest';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import type { Scheduler } from '../../../core/scheduler/scheduler.js';
 import type { ScheduledTask } from '../../../core/scheduler/types.js';
-import { resolveReflectionMetacognitionJournalPath } from '../../../persistence/layout.js';
+import {
+  resolveHeartbeatPolicyPath,
+  resolveReflectionMetacognitionJournalPath,
+} from '../../../persistence/layout.js';
 import { AdminSchedulerService } from './scheduler-service.js';
 import type { HeartbeatPolicy } from '../../../core/scheduler/heartbeat-policy.js';
 
@@ -59,6 +62,22 @@ describe('AdminSchedulerService', () => {
     rmSync(tempDir, { recursive: true, force: true });
   });
 
+  it('uses the runtime heartbeat policy path under companion state', () => {
+    const { scheduler } = createSchedulerStub();
+    const service = new AdminSchedulerService(scheduler, tempDir);
+
+    const gardenStorePath = (service as unknown as {
+      policyStore: { filePath: string };
+    }).policyStore.filePath;
+
+    expect(gardenStorePath).toBe(resolveHeartbeatPolicyPath(tempDir));
+
+    service.getFullData();
+
+    expect(existsSync(resolveHeartbeatPolicyPath(tempDir))).toBe(true);
+    expect(existsSync(join(tempDir, 'heartbeat-policy.json'))).toBe(false);
+  });
+
   it('normalizes legacy whisper reflection tasks to the consolidated daily reflection template on task updates', () => {
     const { scheduler } = createSchedulerStub([
       makeTask({
@@ -78,7 +97,7 @@ describe('AdminSchedulerService', () => {
       message: 'Task "reflection:whisper" updated',
     });
 
-    const policyPath = join(tempDir, 'heartbeat-policy.json');
+    const policyPath = resolveHeartbeatPolicyPath(tempDir);
     const persisted = JSON.parse(readFileSync(policyPath, 'utf-8')) as HeartbeatPolicy;
     const daily = persisted.templates.find(template => template.id === 'daily-review');
     expect(daily).toBeDefined();
@@ -119,7 +138,7 @@ describe('AdminSchedulerService', () => {
       message: 'Reflection "daily-review" updated',
     });
 
-    const policyPath = join(tempDir, 'heartbeat-policy.json');
+    const policyPath = resolveHeartbeatPolicyPath(tempDir);
     const persisted = JSON.parse(readFileSync(policyPath, 'utf-8')) as HeartbeatPolicy;
     const daily = persisted.templates.find(template => template.id === 'daily-review');
     expect(daily?.name).toBe('Updated Daily Reflection');
@@ -141,6 +160,50 @@ describe('AdminSchedulerService', () => {
     expect(metacognitionEntry.templateId).toBe('daily-review');
     expect(metacognitionEntry.mutationBefore?.name).toBe('Daily Reflection');
     expect(metacognitionEntry.mutationAfter?.name).toBe('Updated Daily Reflection');
+  });
+
+  it('persists weekly cadence updates for reflection tasks', () => {
+    const { scheduler, tasks } = createSchedulerStub([
+      makeTask({
+        id: 'reflection:weekly-review',
+        name: 'Weekly Reflection',
+        intervalMs: 7 * 24 * 60 * 60_000,
+      }),
+    ]);
+    const service = new AdminSchedulerService(scheduler, tempDir);
+
+    const result = service.updateTask('reflection:weekly-review', {
+      cadence: {
+        kind: 'weekly',
+        dayOfWeek: 0,
+        hour: 7,
+        minute: 0,
+        timezone: 'local',
+      },
+    });
+
+    expect(result).toEqual({
+      ok: true,
+      message: 'Task "reflection:weekly-review" updated',
+    });
+    expect(tasks.get('reflection:weekly-review')?.cadence).toEqual({
+      kind: 'weekly',
+      dayOfWeek: 0,
+      hour: 7,
+      minute: 0,
+      timezone: 'local',
+    });
+
+    const persisted = JSON.parse(
+      readFileSync(resolveHeartbeatPolicyPath(tempDir), 'utf-8'),
+    ) as HeartbeatPolicy;
+    expect(persisted.templates.find(template => template.id === 'weekly-review')?.cadence).toEqual({
+      kind: 'weekly',
+      dayOfWeek: 0,
+      hour: 7,
+      minute: 0,
+      timezone: 'local',
+    });
   });
 
   it('includes scheduler runtime outcome metadata in full data', () => {

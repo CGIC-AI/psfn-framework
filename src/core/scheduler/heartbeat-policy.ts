@@ -6,7 +6,7 @@
 import { readFileSync } from 'node:fs';
 import { createComponentLogger } from '../../shared/logger.js';
 import { writeJsonAtomic } from '../../shared/utils/fs.js';
-import type { RecurringCadence } from './types.js';
+import type { DailyRecurringCadence, RecurringCadence, WeeklyRecurringCadence } from './types.js';
 
 const log = createComponentLogger('HeartbeatPolicy');
 
@@ -55,10 +55,18 @@ const CONSOLIDATED_POLICY_VERSION = 2;
 // limited-reach result (R7). Full audit: docs/self-eval-prompt-audit.md.
 // Bump this constant whenever the default prompt wording changes (R6): the
 // load() migration below refreshes stored defaults from it.
-const WELLBEING_REFLECTION_PROMPT_POLICY_VERSION = 5;
+const WELLBEING_REFLECTION_PROMPT_POLICY_VERSION = 6;
 export const HEARTBEAT_SILENT_REFLECTION_TOKEN = 'silent';
 const DAILY_REVIEW_TEMPLATE_NAME = 'Daily Reflection';
 const WEEKLY_REVIEW_TEMPLATE_NAME = 'Weekly Reflection';
+const DAILY_REVIEW_CADENCE: DailyRecurringCadence = { kind: 'daily', hour: 6, minute: 0, timezone: 'local' };
+const WEEKLY_REVIEW_CADENCE: WeeklyRecurringCadence = {
+  kind: 'weekly',
+  dayOfWeek: 0,
+  hour: 7,
+  minute: 0,
+  timezone: 'local',
+};
 // E6.2: re-voiced first-person so the reflection reads as the companion sitting
 // with her own day, not a clinical checklist appended after the persona. The
 // charter guards are all still here — evidence before narrative, telemetry kept
@@ -235,7 +243,27 @@ function validateCadenceConfig(value: unknown): ValidationError[] {
     return errors;
   }
 
-  return [{ field: 'cadence.kind', message: 'cadence.kind must be "relative", "hourly", or "daily"' }];
+  if (cadence.kind === 'weekly') {
+    const errors: ValidationError[] = [];
+    const dayOfWeek = cadence.dayOfWeek;
+    if (typeof dayOfWeek !== 'number' || !Number.isInteger(dayOfWeek) || dayOfWeek < 0 || dayOfWeek > 6) {
+      errors.push({ field: 'cadence.dayOfWeek', message: 'cadence.dayOfWeek must be 0-6 for weekly cadence' });
+    }
+    const hour = cadence.hour;
+    if (typeof hour !== 'number' || !Number.isInteger(hour) || hour < 0 || hour > 23) {
+      errors.push({ field: 'cadence.hour', message: 'cadence.hour must be 0-23 for weekly cadence' });
+    }
+    const minute = cadence.minute;
+    if (typeof minute !== 'number' || !Number.isInteger(minute) || minute < 0 || minute > 59) {
+      errors.push({ field: 'cadence.minute', message: 'cadence.minute must be 0-59 for weekly cadence' });
+    }
+    if (!isCadenceTimezone(cadence.timezone)) {
+      errors.push({ field: 'cadence.timezone', message: 'cadence.timezone must be "local" or "utc"' });
+    }
+    return errors;
+  }
+
+  return [{ field: 'cadence.kind', message: 'cadence.kind must be "relative", "hourly", "daily", or "weekly"' }];
 }
 
 export function validateTemplate(t: Partial<ReflectionTemplate>, isNew: boolean): ValidationError[] {
@@ -295,12 +323,20 @@ export function validateTemplate(t: Partial<ReflectionTemplate>, isNew: boolean)
 
 function getKnownTemplateCadence(templateId: string): RecurringCadence | undefined {
   if (templateId === DAILY_REVIEW_TEMPLATE_ID) {
-    return { kind: 'daily', hour: 6, minute: 0, timezone: 'local' };
+    return { ...DAILY_REVIEW_CADENCE };
   }
   if (templateId === WEEKLY_REVIEW_TEMPLATE_ID) {
-    return { kind: 'relative' };
+    return { ...WEEKLY_REVIEW_CADENCE };
   }
   return undefined;
+}
+
+// Only the legacy relative cadence is repaired: it is the known-broken
+// pre-weekly default (in-memory lastRun resets on restart, so it never
+// fires). Any other kind on weekly-review is a deliberate choice and
+// must survive load().
+function isLegacyWeeklyReviewCadence(cadence: RecurringCadence | undefined): boolean {
+  return cadence?.kind === 'relative';
 }
 
 function normalizeTemplateCadence(policy: HeartbeatPolicy): { policy: HeartbeatPolicy; changed: boolean } {
@@ -363,7 +399,12 @@ function normalizeConsolidatedDefaults(policy: HeartbeatPolicy): { policy: Heart
 }
 
 function normalizeWellbeingReflectionPromptDefaults(policy: HeartbeatPolicy): { policy: HeartbeatPolicy; changed: boolean } {
-  if (policy.version >= WELLBEING_REFLECTION_PROMPT_POLICY_VERSION) {
+  const weeklyReview = policy.templates.find(template => template.id === WEEKLY_REVIEW_TEMPLATE_ID);
+  const shouldRefreshPrompts = policy.version < WELLBEING_REFLECTION_PROMPT_POLICY_VERSION;
+  const shouldRefreshWeeklyCadence = weeklyReview !== undefined
+    && isLegacyWeeklyReviewCadence(weeklyReview.cadence);
+
+  if (!shouldRefreshPrompts && !shouldRefreshWeeklyCadence) {
     return { policy, changed: false };
   }
 
@@ -376,6 +417,15 @@ function normalizeWellbeingReflectionPromptDefaults(policy: HeartbeatPolicy): { 
     if (!defaultTemplate) {
       return template;
     }
+    const cadenceUpdate = template.id === WEEKLY_REVIEW_TEMPLATE_ID && shouldRefreshWeeklyCadence
+      ? { cadence: defaultTemplate.cadence }
+      : {};
+    if (!shouldRefreshPrompts) {
+      return {
+        ...template,
+        ...cadenceUpdate,
+      };
+    }
     return {
       ...template,
       name: defaultTemplate.name,
@@ -383,12 +433,13 @@ function normalizeWellbeingReflectionPromptDefaults(policy: HeartbeatPolicy): { 
       internalStateInput: defaultTemplate.internalStateInput,
       mode: defaultTemplate.mode,
       deliberation: defaultTemplate.deliberation,
+      ...cadenceUpdate,
     };
   });
   const nextPolicy: HeartbeatPolicy = {
     ...policy,
     templates,
-    version: WELLBEING_REFLECTION_PROMPT_POLICY_VERSION,
+    version: Math.max(policy.version, WELLBEING_REFLECTION_PROMPT_POLICY_VERSION),
   };
   const changed = JSON.stringify(nextPolicy.templates) !== JSON.stringify(policy.templates)
     || nextPolicy.version !== policy.version;
@@ -405,7 +456,7 @@ function getDefaults(): HeartbeatPolicy {
         name: DAILY_REVIEW_TEMPLATE_NAME,
         prompt: DAILY_REVIEW_TEMPLATE_PROMPT,
         intervalMs: 24 * 60 * 60_000, // 24 hours
-        cadence: { kind: 'daily', hour: 6, minute: 0, timezone: 'local' },
+        cadence: { ...DAILY_REVIEW_CADENCE },
         enabled: true,
         sendToDiscord: false,
         internalStateInput: true,
@@ -422,7 +473,7 @@ function getDefaults(): HeartbeatPolicy {
         name: WEEKLY_REVIEW_TEMPLATE_NAME,
         prompt: WEEKLY_REVIEW_TEMPLATE_PROMPT,
         intervalMs: 7 * 24 * 60 * 60_000, // 7 days
-        cadence: { kind: 'relative' },
+        cadence: { ...WEEKLY_REVIEW_CADENCE },
         enabled: true,
         sendToDiscord: false,
         internalStateInput: true,

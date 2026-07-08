@@ -24,10 +24,20 @@ export interface DailyRecurringCadence {
   timezone: RecurringCadenceTimezone;
 }
 
+export interface WeeklyRecurringCadence {
+  kind: 'weekly';
+  /** Day of week using JavaScript Date numbering: 0=Sunday, 6=Saturday. */
+  dayOfWeek: number;
+  hour: number;
+  minute: number;
+  timezone: RecurringCadenceTimezone;
+}
+
 export type RecurringCadence =
   | RelativeRecurringCadence
   | HourlyRecurringCadence
-  | DailyRecurringCadence;
+  | DailyRecurringCadence
+  | WeeklyRecurringCadence;
 
 export interface ScheduledTask {
   id: string;

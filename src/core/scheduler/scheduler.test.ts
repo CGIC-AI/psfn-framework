@@ -254,6 +254,62 @@ describe('Scheduler', () => {
         nowSpy.mockRestore();
       }
     });
+
+    it('fires weekly cadence at the next wall-clock slot after restart', async () => {
+      const fn = vi.fn();
+      const nowSpy = vi.spyOn(Date, 'now');
+      const saturdayRestartAt = new Date('2026-03-07T12:00:00.000Z').getTime();
+      const sundaySlotAt = new Date('2026-03-08T07:00:00.000Z').getTime();
+
+      try {
+        nowSpy.mockReturnValue(new Date('2026-03-02T12:00:00.000Z').getTime());
+        scheduler.register(
+          {
+            id: 'weekly-review',
+            name: 'Weekly Review',
+            type: 'every',
+            intervalMs: 7 * 24 * 60 * 60_000,
+            cadence: { kind: 'weekly', dayOfWeek: 0, hour: 7, minute: 0, timezone: 'utc' },
+            handler: fn,
+            state: 'idle',
+          },
+          { skipFirstRun: true },
+        );
+        await scheduler.tick();
+        expect(fn).not.toHaveBeenCalled();
+
+        const restartedScheduler = new Scheduler(eventBus, {
+          tickIntervalMs: 100,
+          heartbeatIntervalMs: 500,
+        });
+        nowSpy.mockReturnValue(saturdayRestartAt);
+        restartedScheduler.register(
+          {
+            id: 'weekly-review',
+            name: 'Weekly Review',
+            type: 'every',
+            intervalMs: 7 * 24 * 60 * 60_000,
+            cadence: { kind: 'weekly', dayOfWeek: 0, hour: 7, minute: 0, timezone: 'utc' },
+            handler: fn,
+            state: 'idle',
+          },
+          { skipFirstRun: true },
+        );
+        await restartedScheduler.tick();
+        expect(fn).not.toHaveBeenCalled();
+
+        nowSpy.mockReturnValue(new Date('2026-03-08T06:59:59.000Z').getTime());
+        await restartedScheduler.tick();
+        expect(fn).not.toHaveBeenCalled();
+
+        expect(sundaySlotAt - saturdayRestartAt).toBeLessThan(7 * 24 * 60 * 60_000);
+        nowSpy.mockReturnValue(sundaySlotAt);
+        await restartedScheduler.tick();
+        expect(fn).toHaveBeenCalledOnce();
+      } finally {
+        nowSpy.mockRestore();
+      }
+    });
   });
 
   describe('tick — one-shot tasks', () => {

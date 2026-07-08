@@ -22,7 +22,7 @@ describe('HeartbeatPolicyStore', () => {
   it('creates defaults when file does not exist', () => {
     const policy = store.load();
     expect(policy.templates).toHaveLength(2);
-    expect(policy.version).toBe(5);
+    expect(policy.version).toBe(6);
     expect(policy.updatedBy).toBe('system');
 
     const ids = policy.templates.map(t => t.id);
@@ -64,6 +64,19 @@ describe('HeartbeatPolicyStore', () => {
     const dailyReview = policy.templates.find(t => t.id === 'daily-review');
     expect(dailyReview).toBeDefined();
     expect(dailyReview!.cadence).toEqual({ kind: 'daily', hour: 6, minute: 0, timezone: 'local' });
+  });
+
+  it('weekly-review template defaults to local Sunday 07:00 cadence', () => {
+    const policy = store.load();
+    const weeklyReview = policy.templates.find(t => t.id === 'weekly-review');
+    expect(weeklyReview).toBeDefined();
+    expect(weeklyReview!.cadence).toEqual({
+      kind: 'weekly',
+      dayOfWeek: 0,
+      hour: 7,
+      minute: 0,
+      timezone: 'local',
+    });
   });
 
   it('daily-review treats ACAC as a private clue without schema narration (E6.2 first-person guards)', () => {
@@ -142,12 +155,19 @@ describe('HeartbeatPolicyStore', () => {
     const loaded = store.load();
     const daily = loaded.templates.find(t => t.id === 'daily-review');
     const weekly = loaded.templates.find(t => t.id === 'weekly-review');
-    expect(loaded.version).toBe(5);
+    expect(loaded.version).toBe(6);
     expect(daily?.enabled).toBe(false);
     expect(daily?.cadence).toEqual({ kind: 'daily', hour: 7, minute: 0, timezone: 'local' });
     expect(daily?.prompt).toContain('quiet look back at the day');
     expect(daily?.prompt).not.toContain('acac_self_report');
     expect(weekly?.prompt).toContain('deeper look back across the week');
+    expect(weekly?.cadence).toEqual({
+      kind: 'weekly',
+      dayOfWeek: 0,
+      hour: 7,
+      minute: 0,
+      timezone: 'local',
+    });
   });
 
   it('migrates version-4 default prompts to the R1-R7 audited wording', () => {
@@ -164,10 +184,112 @@ describe('HeartbeatPolicyStore', () => {
     });
 
     const loaded = store.load();
-    expect(loaded.version).toBe(5);
+    expect(loaded.version).toBe(6);
     const daily = loaded.templates.find(t => t.id === 'daily-review');
     expect(daily?.prompt).toContain('I ask openly');
     expect(daily?.prompt).toContain('that is a real answer too');
+  });
+
+  it('migrates v5 weekly-review relative cadence even after Garden has bumped the version once', () => {
+    const policyPath = join(tmpDir, 'heartbeat-policy.json');
+    const defaults = store.load();
+    const gardenBumpedV5 = {
+      ...defaults,
+      version: 6,
+      updatedAt: '2026-07-07T12:00:00.000Z',
+      updatedBy: 'admin',
+      templates: defaults.templates.map(template => (
+        template.id === 'weekly-review'
+          ? { ...template, cadence: { kind: 'relative' as const }, name: 'Operator Weekly Reflection' }
+          : template
+      )),
+    };
+    writeFileSync(policyPath, JSON.stringify(gardenBumpedV5), 'utf-8');
+
+    const loaded = store.load();
+    const weekly = loaded.templates.find(t => t.id === 'weekly-review');
+
+    expect(loaded.version).toBe(6);
+    expect(weekly?.name).toBe('Operator Weekly Reflection');
+    expect(weekly?.cadence).toEqual({
+      kind: 'weekly',
+      dayOfWeek: 0,
+      hour: 7,
+      minute: 0,
+      timezone: 'local',
+    });
+
+    const persisted = JSON.parse(readFileSync(policyPath, 'utf-8')) as { templates: ReflectionTemplate[] };
+    expect(persisted.templates.find(t => t.id === 'weekly-review')?.cadence).toEqual({
+      kind: 'weekly',
+      dayOfWeek: 0,
+      hour: 7,
+      minute: 0,
+      timezone: 'local',
+    });
+  });
+
+  it('preserves operator-selected weekly-review weekly slots after migration', () => {
+    const policyPath = join(tmpDir, 'heartbeat-policy.json');
+    const defaults = store.load();
+    store.save({
+      ...defaults,
+      version: 6,
+      updatedAt: '2026-07-07T12:00:00.000Z',
+      updatedBy: 'admin',
+      templates: defaults.templates.map(template => (
+        template.id === 'weekly-review'
+          ? { ...template, cadence: { kind: 'weekly', dayOfWeek: 2, hour: 9, minute: 30, timezone: 'utc' } }
+          : template
+      )),
+    });
+
+    const loaded = store.load();
+    const weekly = loaded.templates.find(t => t.id === 'weekly-review');
+
+    expect(weekly?.cadence).toEqual({
+      kind: 'weekly',
+      dayOfWeek: 2,
+      hour: 9,
+      minute: 30,
+      timezone: 'utc',
+    });
+    const persisted = JSON.parse(readFileSync(policyPath, 'utf-8')) as { templates: ReflectionTemplate[] };
+    expect(persisted.templates.find(t => t.id === 'weekly-review')?.cadence).toEqual({
+      kind: 'weekly',
+      dayOfWeek: 2,
+      hour: 9,
+      minute: 30,
+      timezone: 'utc',
+    });
+  });
+
+  it('preserves a deliberate non-weekly weekly-review cadence (only legacy relative is repaired)', () => {
+    const policyPath = join(tmpDir, 'heartbeat-policy.json');
+    const defaults = store.load();
+    store.save({
+      ...defaults,
+      version: 6,
+      updatedAt: '2026-07-07T12:00:00.000Z',
+      updatedBy: 'admin',
+      templates: defaults.templates.map(template => (
+        template.id === 'weekly-review'
+          ? { ...template, cadence: { kind: 'daily', hour: 21, minute: 0, timezone: 'local' } }
+          : template
+      )),
+    });
+
+    const loaded = store.load();
+    const weekly = loaded.templates.find(t => t.id === 'weekly-review');
+
+    expect(weekly?.cadence).toEqual({ kind: 'daily', hour: 21, minute: 0, timezone: 'local' });
+    const persisted = JSON.parse(readFileSync(policyPath, 'utf-8')) as { templates: ReflectionTemplate[] };
+    expect(persisted.templates.find(t => t.id === 'weekly-review')?.cadence).toEqual({
+      kind: 'daily',
+      hour: 21,
+      minute: 0,
+      timezone: 'local',
+    });
   });
 
   it('scheduled reflection templates do not send to Discord by default', () => {
@@ -184,6 +306,13 @@ describe('HeartbeatPolicyStore', () => {
     expect(weekly?.deliberation?.maxRounds).toBe(3);
     expect(weekly?.deliberation?.maxTotalTokens).toBe(14_000);
     expect(weekly?.internalStateInput).toBe(true);
+    expect(weekly?.cadence).toEqual({
+      kind: 'weekly',
+      dayOfWeek: 0,
+      hour: 7,
+      minute: 0,
+      timezone: 'local',
+    });
     expect(weekly?.prompt).toContain('north-star signals that feel durable');
   });
 
@@ -284,14 +413,26 @@ describe('HeartbeatPolicyStore', () => {
     const weeklyReview = loaded.templates.find(t => t.id === 'weekly-review');
     expect(loaded.templates.map(t => t.id)).toEqual(['daily-review', 'weekly-review']);
     expect(dailyReview?.cadence).toEqual({ kind: 'daily', hour: 6, minute: 0, timezone: 'local' });
-    expect(weeklyReview?.cadence).toEqual({ kind: 'relative' });
+    expect(weeklyReview?.cadence).toEqual({
+      kind: 'weekly',
+      dayOfWeek: 0,
+      hour: 7,
+      minute: 0,
+      timezone: 'local',
+    });
 
     const persisted = JSON.parse(readFileSync(policyPath, 'utf-8')) as { templates: ReflectionTemplate[] };
     const persistedDailyReview = persisted.templates.find(t => t.id === 'daily-review');
     const persistedWeeklyReview = persisted.templates.find(t => t.id === 'weekly-review');
     expect(persisted.templates.map(t => t.id)).toEqual(['daily-review', 'weekly-review']);
     expect(persistedDailyReview?.cadence).toEqual({ kind: 'daily', hour: 6, minute: 0, timezone: 'local' });
-    expect(persistedWeeklyReview?.cadence).toEqual({ kind: 'relative' });
+    expect(persistedWeeklyReview?.cadence).toEqual({
+      kind: 'weekly',
+      dayOfWeek: 0,
+      hour: 7,
+      minute: 0,
+      timezone: 'local',
+    });
   });
 
   it('removes legacy whisper defaults during consolidation', () => {
@@ -354,12 +495,18 @@ describe('validateTemplate', () => {
       cadence: { kind: 'daily', hour: 6, minute: 30, timezone: 'local' },
     }, true);
     expect(dailyErrors.filter(e => e.field.startsWith('cadence'))).toHaveLength(0);
+
+    const weeklyErrors = validateTemplate({
+      ...validTemplate,
+      cadence: { kind: 'weekly', dayOfWeek: 0, hour: 7, minute: 0, timezone: 'local' },
+    }, true);
+    expect(weeklyErrors.filter(e => e.field.startsWith('cadence'))).toHaveLength(0);
   });
 
   it('rejects invalid cadence payloads', () => {
     const invalidKind = validateTemplate({
       ...validTemplate,
-      cadence: { kind: 'weekly' as any },
+      cadence: { kind: 'monthly' as any },
     }, true);
     expect(invalidKind.some(e => e.field === 'cadence.kind')).toBe(true);
 
@@ -374,6 +521,12 @@ describe('validateTemplate', () => {
       cadence: { kind: 'daily', hour: 6, minute: 30, timezone: 'mars' } as any,
     }, true);
     expect(invalidDailyTimezone.some(e => e.field === 'cadence.timezone')).toBe(true);
+
+    const invalidWeeklyDay = validateTemplate({
+      ...validTemplate,
+      cadence: { kind: 'weekly', dayOfWeek: 7, hour: 7, minute: 0, timezone: 'local' } as any,
+    }, true);
+    expect(invalidWeeklyDay.some(e => e.field === 'cadence.dayOfWeek')).toBe(true);
   });
 
   it('rejects intervalMs below minimum (5 min)', () => {

@@ -1343,7 +1343,7 @@ describe('AdminServer JSON API routes', () => {
 
   it('rejects invalid cadence payloads on PATCH /api/admin/scheduler/tasks/:taskId', async () => {
     const invalidCadenceCases: Array<[cadence: Record<string, unknown>, errorFragment: string]> = [
-      [{ kind: 'weekly', minute: 0 }, 'cadence.kind'],
+      [{ kind: 'monthly', minute: 0 }, 'cadence.kind'],
       [{ kind: 'daily', hour: 24, minute: 0, timezone: 'utc' }, 'cadence.hour'],
       [{ kind: 'hourly', minute: 60, timezone: 'utc' }, 'cadence.minute'],
       [{ kind: 'daily', hour: 8, minute: 0, timezone: 'Not/AZone' }, 'cadence.timezone'],
@@ -1367,7 +1367,7 @@ describe('AdminServer JSON API routes', () => {
 
   it('rejects invalid cadence payloads on POST /api/admin/scheduler/tasks', async () => {
     const invalidCadenceCases: Array<[cadence: Record<string, unknown>, errorFragment: string]> = [
-      [{ kind: 'weekly', minute: 0 }, 'cadence.kind'],
+      [{ kind: 'monthly', minute: 0 }, 'cadence.kind'],
       [{ kind: 'daily', hour: 24, minute: 0, timezone: 'utc' }, 'cadence.hour'],
       [{ kind: 'hourly', minute: 60, timezone: 'utc' }, 'cadence.minute'],
       [{ kind: 'daily', hour: 8, minute: 0, timezone: 'Not/AZone' }, 'cadence.timezone'],

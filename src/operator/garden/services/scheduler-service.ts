@@ -3,7 +3,6 @@ import { isRecord } from '../../../shared/utils/types.js';
 // Wraps Scheduler + HeartbeatPolicyStore for the admin JSON API.
 // Provides task CRUD and reflection template management.
 
-import { join } from 'node:path';
 import type { Scheduler } from '../../../core/scheduler/scheduler.js';
 import { AMBIENT_PRESENCE_TASK_ID } from '../../../core/scheduler/ambient-presence.js';
 import {
@@ -22,7 +21,10 @@ import type {
   TaskType,
 } from '../../../core/scheduler/types.js';
 import type { WakeWindowSnapshot } from '../../../core/scheduler/temporal-wakeup.js';
-import { resolveReflectionMetacognitionJournalPath } from '../../../persistence/layout.js';
+import {
+  resolveHeartbeatPolicyPath,
+  resolveReflectionMetacognitionJournalPath,
+} from '../../../persistence/layout.js';
 import {
   ReflectionMetacognitionJournalStore,
   type ReflectionMutationSnapshot,
@@ -108,7 +110,7 @@ function validateCadence(input: unknown): CadenceValidationResult {
     return { ok: false, message: 'cadence must be an object' };
   }
 
-  const allowedFields = new Set(['kind', 'hour', 'minute', 'timezone']);
+  const allowedFields = new Set(['kind', 'dayOfWeek', 'hour', 'minute', 'timezone']);
   for (const key of Object.keys(input)) {
     if (!allowedFields.has(key)) {
       return { ok: false, message: `cadence.${key} is not supported` };
@@ -116,13 +118,18 @@ function validateCadence(input: unknown): CadenceValidationResult {
   }
 
   const kind = input.kind;
-  if (kind !== 'relative' && kind !== 'hourly' && kind !== 'daily') {
-    return { ok: false, message: 'cadence.kind must be "relative", "hourly", or "daily"' };
+  if (kind !== 'relative' && kind !== 'hourly' && kind !== 'daily' && kind !== 'weekly') {
+    return { ok: false, message: 'cadence.kind must be "relative", "hourly", "daily", or "weekly"' };
   }
 
   if (kind === 'relative') {
-    if (input.hour !== undefined || input.minute !== undefined || input.timezone !== undefined) {
-      return { ok: false, message: 'relative cadence cannot include hour/minute/timezone' };
+    if (
+      input.dayOfWeek !== undefined
+      || input.hour !== undefined
+      || input.minute !== undefined
+      || input.timezone !== undefined
+    ) {
+      return { ok: false, message: 'relative cadence cannot include dayOfWeek/hour/minute/timezone' };
     }
     return { ok: true, cadence: { kind: 'relative' } };
   }
@@ -139,11 +146,38 @@ function validateCadence(input: unknown): CadenceValidationResult {
   }
 
   const hourValue = input.hour;
-  if (kind === 'daily') {
+  if (kind === 'daily' || kind === 'weekly') {
     if (typeof hourValue !== 'number' || !Number.isInteger(hourValue) || hourValue < 0 || hourValue > 23) {
-      return { ok: false, message: 'cadence.hour must be an integer between 0 and 23 when cadence.kind is "daily"' };
+      return {
+        ok: false,
+        message: `cadence.hour must be an integer between 0 and 23 when cadence.kind is "${kind}"`,
+      };
     }
     const hour = hourValue;
+    if (kind === 'weekly') {
+      const dayOfWeekValue = input.dayOfWeek;
+      if (
+        typeof dayOfWeekValue !== 'number'
+        || !Number.isInteger(dayOfWeekValue)
+        || dayOfWeekValue < 0
+        || dayOfWeekValue > 6
+      ) {
+        return { ok: false, message: 'cadence.dayOfWeek must be an integer between 0 and 6 when cadence.kind is "weekly"' };
+      }
+      return {
+        ok: true,
+        cadence: {
+          kind: 'weekly',
+          dayOfWeek: dayOfWeekValue,
+          hour,
+          minute,
+          timezone,
+        },
+      };
+    }
+    if (input.dayOfWeek !== undefined) {
+      return { ok: false, message: 'cadence.dayOfWeek is only allowed when cadence.kind is "weekly"' };
+    }
     return {
       ok: true,
       cadence: {
@@ -156,7 +190,10 @@ function validateCadence(input: unknown): CadenceValidationResult {
   }
 
   if (hourValue !== undefined) {
-    return { ok: false, message: 'cadence.hour is only allowed when cadence.kind is "daily"' };
+    return { ok: false, message: 'cadence.hour is only allowed when cadence.kind is "daily" or "weekly"' };
+  }
+  if (input.dayOfWeek !== undefined) {
+    return { ok: false, message: 'cadence.dayOfWeek is only allowed when cadence.kind is "weekly"' };
   }
 
   return {
@@ -250,7 +287,7 @@ export class AdminSchedulerService {
      */
     private readonly wakeWindowProvider?: (() => WakeWindowSnapshot | null) | null,
   ) {
-    this.policyStore = new HeartbeatPolicyStore(join(dataDir, 'heartbeat-policy.json'));
+    this.policyStore = new HeartbeatPolicyStore(resolveHeartbeatPolicyPath(dataDir));
     this.reflectionMetacognitionJournal = new ReflectionMetacognitionJournalStore(
       resolveReflectionMetacognitionJournalPath(dataDir),
     );

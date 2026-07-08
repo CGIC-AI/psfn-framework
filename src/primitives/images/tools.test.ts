@@ -116,11 +116,14 @@ describe('image tools', () => {
     });
 
     expect(readActions(tool)).toEqual(['generate', 'edit', 'analyze']);
-    expect(tool.description).toContain('generate requires prompt');
-    expect(tool.description).toContain('edit requires prompt and input_urls');
-    expect(tool.description).toContain('analyze requires input_urls');
+    expect(tool.description).toContain('generate creates a new image from text and requires prompt');
+    expect(tool.description).toContain('edit modifies an existing or attached image');
+    expect(tool.description).toContain('do not use generate when the user asks to change an image they provided');
+    expect(tool.description).toContain('analyze inspects image contents and requires input_urls');
+    expect(tool.description).toContain('do not claim visual verification');
     expect((tool.parameters as any).properties.prompt.description).toContain('Required for action=generate');
     expect((tool.parameters as any).properties.input_urls.description).toContain('Required for action=edit');
+    expect((tool.parameters as any).properties.input_urls.description).toContain('attached-image edits');
   });
 
   it('keeps selfie_create concise and focused on required prompt/reference behavior', () => {
@@ -979,6 +982,50 @@ describe('image tools', () => {
       referenceImageIds: ['ref-short-hair'],
     }));
     expect(result.details.mediaResult?.requestId).toBe('req-edit-ref-1');
+  });
+
+  it('tells the assistant not to visually verify edits when review fails', async () => {
+    const ops = {
+      create: vi.fn(),
+      edit: vi.fn(async () => ({
+        provider: 'fal',
+        mode: 'edit' as const,
+        model: 'openai/gpt-image-2/edit',
+        fallbackUsed: false,
+        requestId: 'req-edit-review-failed',
+        images: [{
+          url: 'https://images.example.test/edit-review-failed.png',
+          contentType: 'image/png',
+          fileName: 'edit-review-failed.png',
+        }],
+      })),
+    };
+    const reviewer: ImageVisionReviewer = {
+      analyze: vi.fn(async () => {
+        throw new Error('vision provider returned empty content');
+      }),
+    };
+
+    const tool = createMediaTool(ops, reviewer);
+    const result = await runWithChargeContext({
+      chargePolicy: makeChargePolicy(),
+      eventBus: { emit: vi.fn(async () => undefined) } as any,
+      lane: 'interactive',
+      correlation: {
+        requestId: 'media-edit-review-failed',
+        channelId: 'api:test',
+      },
+    }, async () => tool.execute('tool-call-edit-review-failed', {
+      action: 'edit',
+      prompt: 'add a red border',
+      input_urls: ['https://images.example.test/source.png'],
+    }) as Promise<AgentToolResult<MediaToolResultDetails>>);
+
+    expect(result.details.mediaResult?.mode).toBe('edit');
+    expect(result.details.visionReviewError).toBe('vision provider returned empty content');
+    expect(resultText(result)).toContain('Vision review unavailable: vision provider returned empty content');
+    expect(resultText(result)).toContain('Do not claim the final pixels match the request');
+    expect(resultText(result)).toContain('automated visual verification was unavailable');
   });
 
   it('exposes media action=analyze as the callable vision path', async () => {

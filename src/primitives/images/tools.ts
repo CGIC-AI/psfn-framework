@@ -36,6 +36,10 @@ const IMAGE_ASPECT_RATIO_DESCRIPTION = [
   'Use only one of the supported presets.',
 ].join(' ');
 const MEDIA_ACTION_VALUES = ['generate', 'edit', 'analyze'] as const;
+const VISION_REVIEW_UNAVAILABLE_REPLY_INSTRUCTION = [
+  'Do not claim the final pixels match the request when the vision review is unavailable.',
+  'Reply that the generated or edited image is attached, and say that automated visual verification was unavailable.',
+].join(' ');
 
 // Reference-selfie edit tiers come from the image model catalog. Every tier is
 // an edit endpoint so the saved reference photo always anchors the result.
@@ -162,7 +166,7 @@ function buildToolContent(
   } else if (reviewError) {
     content.push({
       type: 'text',
-      text: `Vision review unavailable: ${reviewError}`,
+      text: `Vision review unavailable: ${reviewError}\n${VISION_REVIEW_UNAVAILABLE_REPLY_INSTRUCTION}`,
     });
   }
   return content;
@@ -704,8 +708,10 @@ export function createMediaTool(
     name: 'media',
     label: 'media',
     description:
-      'Unified media surface for image generate, edit, and analyze actions. generate requires prompt. '
-      + 'edit requires prompt and input_urls. analyze requires input_urls and can include question. '
+      'Unified media surface for image generate, edit, and analyze actions. generate creates a new image from text and requires prompt. '
+      + 'edit modifies an existing or attached image and requires prompt plus input_urls; do not use generate when the user asks to change an image they provided. '
+      + 'analyze inspects image contents and requires input_urls; it can include question. '
+      + 'If a generate or edit result says Vision review unavailable, deliver the attachment but do not claim visual verification. '
       + 'For selfies, portraits, or self-representation, use selfie_create so the self-expression reference workflow is active.',
     parameters: Type.Object({
       action: Type.Union(
@@ -720,7 +726,10 @@ export function createMediaTool(
       input_urls: Type.Optional(Type.Array(Type.String(), {
         minItems: 1,
         maxItems: 4,
-        description: 'Required for action=edit or action=analyze. Source image URLs.',
+        description:
+          'Required for action=edit or action=analyze. Source image URLs. '
+          + 'For attached-image edits, pass the current attachment/image URL here. '
+          + 'If no fetchable URL is available, ask the user to resend or paste one instead of generating from scratch.',
       })),
       question: Type.Optional(Type.String({
         description: 'Optional analysis question. If omitted, the tool returns a concise visible-contents review.',

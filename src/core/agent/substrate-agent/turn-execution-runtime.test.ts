@@ -2338,6 +2338,7 @@ describe('handleMessageForTurn compaction scheduling', () => {
       'session.focus_knowledge',
       'session.orientation',
       'session.continuity',
+      'session.cogsec_notices',
     ], 'admin');
 
     const buildContext = vi.fn(async () => ({

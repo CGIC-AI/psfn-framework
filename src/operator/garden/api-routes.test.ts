@@ -3262,7 +3262,17 @@ describe('AdminServer JSON API routes', () => {
       }>;
     };
     expect(listPayload.contacts.some(entry => entry.id === contact.id)).toBe(true);
-    expect(listPayload.relationshipScoreMap).toEqual({});
+    expect(listPayload.relationshipScoreMap).toEqual(expect.objectContaining({
+      [contact.id]: expect.objectContaining({
+        resolvedTier: 'acquainted',
+        nextTier: 'regular',
+        progressToNextTier: 0.5,
+      }),
+      [mentioned.id]: expect.objectContaining({
+        resolvedTier: 'regular',
+        nextTier: 'trusted',
+      }),
+    }));
     expect(listPayload.socialGraphMap[contact.id]).toMatchObject({
       edgeCount: 1,
       mentionOnlyNeighborCount: 1,

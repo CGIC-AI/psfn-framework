@@ -323,6 +323,7 @@ describe('AdminPromptsDataService', () => {
       'session.compaction_summary',
       'session.focus_knowledge',
       'session.orientation',
+      'session.cogsec_notices',
     ], 'admin');
 
     const service = new AdminPromptsDataService({
@@ -341,6 +342,7 @@ describe('AdminPromptsDataService', () => {
       'session.compaction_summary',
       'session.focus_knowledge',
       'session.orientation',
+      'session.cogsec_notices',
       'runtime.current_datetime',
       'session.current_messages',
       'tools.active_schemas',
@@ -664,6 +666,7 @@ describe('AdminPromptsDataService', () => {
         'session.compaction_summary',
         'session.focus_knowledge',
         'session.orientation',
+        'session.cogsec_notices',
       ],
     }));
 
@@ -678,6 +681,7 @@ describe('AdminPromptsDataService', () => {
       'session.compaction_summary',
       'session.focus_knowledge',
       'session.orientation',
+      'session.cogsec_notices',
     ]);
   });
 

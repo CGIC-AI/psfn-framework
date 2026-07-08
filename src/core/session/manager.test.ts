@@ -635,6 +635,7 @@ describe('SessionManager', () => {
       'session.focus_knowledge',
       'session.orientation',
       'session.continuity',
+      'session.cogsec_notices',
     ], 'admin');
     const mgr = new SessionManager(store, config);
     mgr.recordUserMessage('ch1', 'Hello', 'u1', 'User');

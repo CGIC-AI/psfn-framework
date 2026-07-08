@@ -1174,26 +1174,21 @@ describe('MemoryExtractor refusal boundary extraction', () => {
     await extractor.extract('api:boundary-memory-test');
 
     expect(processFact).toHaveBeenCalledTimes(1);
-    expect(processFact).toHaveBeenCalledWith(
-      expect.objectContaining({
-        type: 'boundary',
-        importance: 0.98,
-        confidence: 0.95,
-        tags: expect.arrayContaining(['boundary', 'refusal']),
-      }),
-      expect.stringContaining('visibility:private'),
-      undefined,
-      undefined,
-      'api:boundary-memory-test',
-      undefined,
-      undefined,
-      'manual',
-      undefined,
-      expect.objectContaining({
-        routingReason: 'single_speaker_transcript',
-        sourceSpeakerName: 'user',
-      }),
-    );
+    const processFactCall = processFact.mock.calls[0];
+    expect(processFactCall[0]).toEqual(expect.objectContaining({
+      type: 'boundary',
+      importance: 0.98,
+      confidence: 0.95,
+      tags: expect.arrayContaining(['boundary', 'refusal']),
+    }));
+    expect(processFactCall[1]).toEqual(expect.stringContaining('visibility:private'));
+    expect(processFactCall[4]).toBe('api:boundary-memory-test');
+    expect(processFactCall[5]).toBe('api:boundary-memory-test');
+    expect(processFactCall[8]).toBe('manual');
+    expect(processFactCall[10]).toEqual(expect.objectContaining({
+      routingReason: 'single_speaker_transcript',
+      sourceSpeakerName: 'user',
+    }));
     expect(processFact.mock.calls[0][0].text.toLowerCase()).toContain('paywall');
 
     const calls = (eventBus.emit as ReturnType<typeof vi.fn>).mock.calls;

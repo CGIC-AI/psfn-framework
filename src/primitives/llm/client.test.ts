@@ -2976,6 +2976,7 @@ describe('LLMClient model budget gates and usage metering', () => {
         }),
       }),
       'background',
+      {},
     );
     expect(response).toMatchObject({
       content: 'gateway-result',
@@ -3053,6 +3054,7 @@ describe('LLMClient model budget gates and usage metering', () => {
         }),
       }),
       'vision',
+      {},
     );
   });
 

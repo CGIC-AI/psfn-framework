@@ -126,7 +126,26 @@ function mockLLM(): LLMProviderPort {
 }
 
 function mockMemoryProvider(result = ''): MemoryProvider {
-  return { retrieve: vi.fn(async () => result) };
+  return {
+    getActiveMemoryContext: vi.fn(request => ({
+      key: `test:${request.channelId}`,
+      subjectKey: request.canonicalContactId ?? request.channelId,
+      channelId: request.channelId,
+      trustLevel: request.trustLevel ?? 'regular',
+      channelVisibility: 'private',
+      visibilityScope: 'non_broadcast',
+      contextBlock: result,
+      contextChars: result.length,
+      selectedMemoryIds: [],
+      generatedAt: Date.now(),
+      lastRefreshStartedAt: Date.now(),
+      lastRefreshCompletedAt: Date.now(),
+      refreshStatus: 'ready',
+      versionPointer: 'test-memory-context',
+    })),
+    refreshActiveMemoryContext: vi.fn(async () => null),
+    retrieve: vi.fn(async () => result),
+  };
 }
 
 function makeChargePolicy(): ChargePolicyConfig {
@@ -916,8 +935,8 @@ describe('ShardManager', () => {
 
     await manager.spawn({ name: 'mem', task: 'test memory' });
 
-    // Memory retrieval should have been called for the shard's channel
-    expect(memory.retrieve).toHaveBeenCalled();
+    // Shard turn execution should read the active memory context for its channel.
+    expect(memory.getActiveMemoryContext).toHaveBeenCalled();
   });
 
   it('injects a shard context pack from the source channel and keeps shard writes isolated', async () => {

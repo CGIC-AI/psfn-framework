@@ -118,6 +118,12 @@ export interface GatewayClientOptions {
   sessionIntegrityEndpoint?: GatewayRpcEndpoint;
   sessionIntegrityRpcTimeoutMs?: number;
   keepaliveIntervalMs?: number;
+  /**
+   * Multi-companion (sprint-10 W1): the companion this agent process acts for
+   * (COMPANION_ID via load-config). Stamped on gateway.client.identify and on
+   * LLM correlation params so the gateway can verify companion identity.
+   */
+  companionId?: string;
 }
 
 interface VoiceStreamState {
@@ -163,10 +169,18 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
   private sessionIntegrityVerifyCache = new Map<string, JournalIntegrityVerificationResult>();
   private closedNotified = false;
   private isDestroying = false;
+  private readonly companionId?: string;
 
   constructor(conn: GatewayRpcConnection, embeddingDims: number, options: GatewayClientOptions = {}) {
     this.conn = conn;
     this.embeddingDims = embeddingDims;
+    if (options.companionId !== undefined) {
+      const trimmed = options.companionId.trim();
+      if (!trimmed) {
+        throw new Error('GatewayClient companionId must be a non-empty string when provided');
+      }
+      this.companionId = trimmed;
+    }
     this.voiceStreamQueueSize = options.voiceStreamQueueSize ?? DEFAULT_VOICE_STREAM_QUEUE_SIZE;
     this.voiceStreamOverflowPolicy = options.voiceStreamOverflowPolicy ?? DEFAULT_VOICE_STREAM_OVERFLOW_POLICY;
     this.sessionIntegrityEndpoint = options.sessionIntegrityEndpoint
@@ -253,6 +267,19 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
     });
   }
 
+  /**
+   * Identify this connection to the gateway as an agent, self-reporting the
+   * companionId when configured. Multi-companion gateways reject agents that
+   * identify without a companionId (and duplicate companion identities), so a
+   * failure here must abort agent startup — never continue unidentified.
+   */
+  async identifyAsAgent(): Promise<void> {
+    await this.rpcInstance.request('gateway.client.identify', {
+      role: 'agent',
+      ...(this.companionId ? { companionId: this.companionId } : {}),
+    });
+  }
+
   // ── LLMProviderPort interface ──
 
   async stream(context: LLMContext, callbacks?: StreamCallbacks): Promise<LLMResponse> {
@@ -280,6 +307,7 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
       const result = await this.rpcInstance.request('llm.chat', {
         model,  // gateway resolves roster defaults when hint fields are unset
         provider,
+        ...(this.companionId ? { companionId: this.companionId } : {}),
         ...(modelHint?.pin !== undefined ? { pin: modelHint.pin } : {}),
         messages: context.messages,
         systemPrompt: context.systemPrompt,
@@ -354,6 +382,7 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
       {
         model,
         provider,
+        ...(this.companionId ? { companionId: this.companionId } : {}),
         ...(modelHint?.pin !== undefined ? { pin: modelHint.pin } : {}),
         messages: context.messages,
         systemPrompt: context.systemPrompt,

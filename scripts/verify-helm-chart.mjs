@@ -434,9 +434,35 @@ const prefetchHubRendered = render([
 ]);
 assertServiceSelectorsDoNotSelectPrefetch(prefetchHubRendered, 'prefetch plus satellite hub render');
 
+// Generated-CA issuers must stay namespaced: the CA secret lives in the release
+// namespace, so a chart-created ClusterIssuer could never resolve it.
+const generatedCaIssuer = findDocumentByKindName(rendered, 'Issuer', 'psfn-ca');
+assertIncludes(generatedCaIssuer, 'kind: Issuer', 'generated CA issuer namespaced kind');
+assertIncludes(generatedCaIssuer, 'secretName: psfn-ca-tls', 'generated CA issuer secret');
+const gatewayRpcCert = findDocumentByKindName(rendered, 'Certificate', 'psfn-gateway-rpc');
+assertIncludes(gatewayRpcCert, 'kind: Issuer', 'gateway cert issuerRef kind');
+
+const clusterIssuerRefRendered = render([
+  '--set',
+  'certificates.issuer.create=false',
+  '--set',
+  'certificates.issuer.existingIssuerRef.name=corp-ca',
+  '--set',
+  'certificates.issuer.existingIssuerRef.kind=ClusterIssuer',
+]);
+assertNotIncludes(clusterIssuerRefRendered, 'name: psfn-ca-tls', 'existingIssuerRef generated CA secret');
+assertNotIncludes(clusterIssuerRefRendered, 'selfSigned: {}', 'existingIssuerRef bootstrap self-signed issuer');
+const externalIssuerCert = findDocumentByKindName(clusterIssuerRefRendered, 'Certificate', 'psfn-gateway-rpc');
+assertIncludes(externalIssuerCert, 'name: corp-ca', 'existingIssuerRef issuer name');
+assertIncludes(externalIssuerCert, 'kind: ClusterIssuer', 'existingIssuerRef ClusterIssuer kind');
+
 assertRenderFails(
   ['--set', 'certificates.enabled=false'],
   'certificates.enabled must be true',
+);
+assertRenderFails(
+  ['--set', 'certificates.issuer.kind=ClusterIssuer'],
+  'certificates.issuer.kind must be Issuer when certificates.issuer.create=true',
 );
 assertRenderFails(
   [

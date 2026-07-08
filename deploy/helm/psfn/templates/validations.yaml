@@ -7,6 +7,12 @@
 {{- if and .Values.certificates.issuer.create .Values.certificates.issuer.existingIssuerRef.name -}}
 {{- fail "certificates.issuer.existingIssuerRef.name must be empty when certificates.issuer.create=true" -}}
 {{- end -}}
+{{- /* The generated CA secret is namespaced to the release, but cert-manager resolves
+ClusterIssuer CA secrets in its cluster-resource namespace, so a chart-created CA can
+never back a ClusterIssuer. */ -}}
+{{- if and .Values.certificates.issuer.create (ne .Values.certificates.issuer.kind "Issuer") -}}
+{{- fail "certificates.issuer.kind must be Issuer when certificates.issuer.create=true; use certificates.issuer.existingIssuerRef for a ClusterIssuer" -}}
+{{- end -}}
 {{- if and (not .Values.postgres.enabled) (not .Values.postgres.external.enabled) -}}
 {{- fail "postgres.enabled=false requires postgres.external.enabled=true with an existing database URL Secret" -}}
 {{- end -}}

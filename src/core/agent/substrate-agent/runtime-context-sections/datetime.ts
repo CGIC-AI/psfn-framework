@@ -157,7 +157,10 @@ export function buildLastMessagePromptVariables(input: {
   )
     ? new Date(input.lastMessageReceivedAtMs)
     : null;
-  if (!lastMessageReceivedAt) {
+  // A finite but out-of-range millisecond value (|ms| > 8.64e15) constructs an
+  // Invalid Date, whose toISOString() throws in formatActiveDateTimeIso — treat
+  // it as missing instead of crashing prompt assembly.
+  if (!lastMessageReceivedAt || !Number.isFinite(lastMessageReceivedAt.getTime())) {
     return {
       runtime_last_message_received_present: 'false',
       runtime_last_message_received_missing: 'true',

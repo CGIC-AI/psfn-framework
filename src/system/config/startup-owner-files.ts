@@ -43,11 +43,22 @@ import {
   SKILLS_FILE_NAME,
   SKILLS_SEED_FILE_NAME,
 } from './skills-config.js';
+import {
+  COMPANIONS_FILE_NAME,
+  COMPANIONS_SEED_FILE_NAME,
+  isMultiCompanionEnabled,
+  resolveCompanionFleet,
+} from './companions-config.js';
 
 export interface StartupOwnerFileLoadOptions {
   dataDir: string;
   seedDir?: string;
   defaultContextWindow?: number;
+  /**
+   * Multi-companion topology flag. When omitted the canonical env accessor is
+   * consulted. Controls the fail-closed direction for the companions owner file.
+   */
+  multiCompanion?: boolean;
 }
 
 export interface StartupOwnerFileState {
@@ -165,6 +176,17 @@ export function loadStartupChargePolicyOwnerFile(
   return loadChargePolicyConfig(dataDir, seedDir ? { seedDir } : undefined);
 }
 
+export function loadStartupCompanionsOwnerFile(
+  options: Pick<StartupOwnerFileLoadOptions, 'dataDir' | 'seedDir' | 'multiCompanion'>,
+): void {
+  const multiCompanion = options.multiCompanion ?? isMultiCompanionEnabled();
+  resolveCompanionFleet({
+    dataDir: options.dataDir,
+    seedDir: options.seedDir,
+    multiCompanion,
+  });
+}
+
 export function verifyStartupOwnerFiles(
   options: StartupOwnerFileLoadOptions,
 ): StartupOwnerFileVerificationResult {
@@ -230,6 +252,16 @@ export function verifyStartupOwnerFiles(
       dataPath: join(options.dataDir, SKILLS_FILE_NAME),
       seedPath: join(seedDir, SKILLS_SEED_FILE_NAME),
       run: () => loadSkillsConfig(options.dataDir, options.seedDir ? { seedDir: options.seedDir } : undefined),
+    },
+    {
+      label: 'companions',
+      dataPath: join(options.dataDir, COMPANIONS_FILE_NAME),
+      seedPath: join(seedDir, COMPANIONS_SEED_FILE_NAME),
+      run: () => loadStartupCompanionsOwnerFile({
+        dataDir: options.dataDir,
+        seedDir: options.seedDir,
+        multiCompanion: options.multiCompanion,
+      }),
     },
   ];
 

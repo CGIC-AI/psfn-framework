@@ -116,6 +116,7 @@ async function main(): Promise<void> {
     schedulerConfig,
     channelsConfig,
     satelliteRegistryConfig,
+    placesRegistryConfig,
     backupConfig,
     capabilityRuntime,
     eligibilityGate,
@@ -245,6 +246,7 @@ async function main(): Promise<void> {
     intentionProviders,
     capabilityRuntime,
     contactTrackingGate,
+    placesRegistryConfig,
   });
   const {
     safeguardAuditTrail,

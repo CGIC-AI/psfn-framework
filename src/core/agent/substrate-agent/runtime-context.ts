@@ -87,6 +87,8 @@ import {
 } from './runtime-context-sections/notes-and-skills.js';
 import { buildSelfPresentationPromptVariables } from './runtime-context-sections/self-presentation.js';
 import { buildSatelliteEndpointContextBlock } from './runtime-context-sections/satellite.js';
+import { buildSituatedPresenceContextBlock } from './runtime-context-sections/situated-presence.js';
+import type { PlacesRegistryConfig } from '../../../shared/contracts/places-registry.js';
 
 // The section producers moved into ./runtime-context-sections/ (E2.6). This
 // module stays the public entry point for the names other modules consume.
@@ -400,6 +402,11 @@ export function buildRuntimeContext(input: {
   formatTopEmotions: (discrete: Record<string, number>) => string;
   config?: Record<string, unknown>;
   substrateHealth?: CompanionSubstrateHealthContext | null;
+  /**
+   * Places soft-registry threaded from startup. Optional/undefined behaves as an
+   * empty registry, so a runtime with no `places.json` renders byte-identically.
+   */
+  placesRegistry?: PlacesRegistryConfig;
 }): string {
   const runtimeContextExtra = (() => {
     const raw = input.templateVariables?.runtime_context_extra;
@@ -419,6 +426,16 @@ export function buildRuntimeContext(input: {
   const satelliteEndpointContext = buildSatelliteEndpointContextBlock(input.message);
   if (satelliteEndpointContext) {
     sections.push(satelliteEndpointContext);
+  }
+  // Situated-presence block (S10 B1): "where am I / what's here / who else is
+  // here". First consumer of message.routing.presence + the places registry.
+  // coPresent stays [] until multi-companion W5 populates shared presence.
+  const situatedPresenceContext = buildSituatedPresenceContextBlock({
+    message: input.message,
+    ...(input.placesRegistry ? { placesRegistry: input.placesRegistry } : {}),
+  });
+  if (situatedPresenceContext) {
+    sections.push(situatedPresenceContext);
   }
   return sections.join('\n\n');
 }

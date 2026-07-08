@@ -18,6 +18,7 @@ function exampleRegistry(overrides: Record<string, unknown> = {}) {
         displayName: 'Kitchen Voice Pi',
         mobility: 'static',
         staticLocationLabel: 'kitchen',
+        placeId: 'living_room',
         endpoints: [
           {
             endpointId: 'wyoming-voice',
@@ -163,6 +164,73 @@ describe('satellite registry', () => {
         restartPolicy: 'restart_on_runtime_change',
       },
     });
+  });
+
+  it('parses a static placeId binding and threads it onto routing metadata', () => {
+    const registry = exampleRegistry();
+    expect(registry.satellites[0]?.placeId).toBe('living_room');
+    expect(registry.satellites[1]?.placeId).toBeUndefined();
+
+    const result = resolveSatelliteClaim({
+      registry,
+      principal,
+      headers: {
+        'x-psfn-satellite-claim-type': 'voice-pi',
+        'x-psfn-satellite-id': 'pi-voice',
+        'x-psfn-satellite-endpoint-id': 'wyoming-voice',
+        'x-psfn-satellite-session-id': 'kitchen',
+        'x-psfn-satellite-capabilities': 'text,audio_input,speech_to_text,audio_output,text_to_speech',
+      },
+    });
+
+    expect(result.ok && result.value.satellite.placeId).toBe('living_room');
+    expect(result.ok && result.value.satellite.staticLocationLabel).toBe('kitchen');
+  });
+
+  it('omits placeId from routing metadata when the satellite declares no binding', () => {
+    const result = resolveSatelliteClaim({
+      registry: exampleRegistry(),
+      principal,
+      headers: {
+        'x-psfn-satellite-claim-type': 'avatar-vision',
+        'x-psfn-satellite-id': 'voxta-avatar',
+        'x-psfn-satellite-endpoint-id': 'avatar-display',
+        'x-psfn-satellite-session-id': 'lounge',
+      },
+    });
+
+    expect(result.ok && 'placeId' in result.value.satellite).toBe(false);
+  });
+
+  it('rejects a malformed satellite placeId token', () => {
+    expect(() => parseSatelliteRegistryConfig({
+      schemaVersion: 1,
+      enabled: true,
+      satellites: [
+        {
+          satelliteId: 'bad-place',
+          displayName: 'Bad Place Satellite',
+          mobility: 'static',
+          placeId: 'living room',
+          endpoints: [
+            {
+              endpointId: 'voice',
+              displayName: 'Voice Endpoint',
+              claimTypes: ['voice-pi'],
+              promptChannelType: 'voice_satellite',
+              auth: { mode: 'api_key' },
+              defaultIdentity: {
+                authorId: 'primary-user',
+                authorName: 'Primary User',
+                canonicalContactId: 'contact-primary-user',
+                channelPrivacy: 'private',
+              },
+              maxCapabilities: ['text'],
+            },
+          ],
+        },
+      ],
+    })).toThrow('placeId');
   });
 
   it('rejects unknown capabilities and empty mTLS bindings', () => {

@@ -415,6 +415,9 @@ function parseSatelliteConfig(value: unknown, fieldName: string): SatelliteConfi
   const displayName = parseConfiguredString(value.displayName, `${fieldName}.displayName`);
   const mobility = parseMobility(value.mobility, `${fieldName}.mobility`);
   const staticLocationLabel = parseOptionalConfiguredString(value.staticLocationLabel, `${fieldName}.staticLocationLabel`);
+  const placeId = value.placeId === undefined
+    ? undefined
+    : assertIdToken(parseConfiguredString(value.placeId, `${fieldName}.placeId`), `${fieldName}.placeId`);
   if (!Array.isArray(value.endpoints)) {
     throw new Error(`${fieldName}.endpoints must be an array`);
   }
@@ -428,6 +431,7 @@ function parseSatelliteConfig(value: unknown, fieldName: string): SatelliteConfi
     displayName,
     mobility,
     ...(staticLocationLabel ? { staticLocationLabel } : {}),
+    ...(placeId ? { placeId } : {}),
     endpoints,
   };
 }
@@ -852,6 +856,7 @@ export function resolveSatelliteClaim(options: {
     mobility: match.satellite.mobility,
     promptChannelType: match.endpoint.promptChannelType,
     ...(match.satellite.staticLocationLabel ? { staticLocationLabel: match.satellite.staticLocationLabel } : {}),
+    ...(match.satellite.placeId ? { placeId: match.satellite.placeId } : {}),
     capabilities,
     telemetryScopes,
     auth: {

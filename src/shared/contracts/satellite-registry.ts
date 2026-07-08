@@ -132,6 +132,14 @@ export interface SatelliteConfig {
   displayName: string;
   mobility: SatelliteMobility;
   staticLocationLabel?: string;
+  /**
+   * Static foreign key into `places.json` (`PlaceConfig.placeId`). Binds this
+   * satellite to a place so situated context and affordances resolve. Static
+   * only: physical re-bind happens in admin UX, never at runtime. When set and
+   * `places.json` is present, the placeId must resolve or startup fails closed
+   * (see `assertSatellitePlaceBindings`).
+   */
+  placeId?: string;
   endpoints: SatelliteEndpointConfig[];
 }
 
@@ -201,6 +209,8 @@ export interface SatelliteRoutingMetadata {
   mobility: SatelliteMobility;
   promptChannelType: string;
   staticLocationLabel?: string;
+  /** Static place binding carried onto the turn (see `SatelliteConfig.placeId`). */
+  placeId?: string;
   capabilities: SatelliteClaimCapabilityResolution;
   telemetryScopes: SatelliteTelemetryScope[];
   auth: {

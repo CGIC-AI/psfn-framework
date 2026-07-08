@@ -157,6 +157,11 @@ export interface TurnExecutionAdapterOptions {
   placesRegistry?: import('../../../shared/contracts/places-registry.js').PlacesRegistryConfig | undefined;
   /** Fallback situated place for placeless turns (dual-presence seam, vinz.29). */
   resolveSituatedFallbackPlaceId?: (message: SubstrateMessage) => string | undefined;
+  /** Virtual-activity presence follow (vinz.21); absent skips the evaluation. */
+  followVirtualRoomActivity?: (
+    message: SubstrateMessage,
+    author: import('../virtual-room-follow.js').VirtualFollowAuthorContext,
+  ) => Promise<void>;
   skillsRuntime: SkillsRuntime | null;
   evaluateReflectionNudge: (toolSummary: TurnToolSummary) => string | null;
   emotionSelfModelRuntime: EmotionSelfModelRuntime;
@@ -193,6 +198,9 @@ export function createTurnExecutionRuntimeAdapter(
     placesRegistry: options.placesRegistry,
     ...(options.resolveSituatedFallbackPlaceId
       ? { resolveSituatedFallbackPlaceId: options.resolveSituatedFallbackPlaceId }
+      : {}),
+    ...(options.followVirtualRoomActivity
+      ? { followVirtualRoomActivity: options.followVirtualRoomActivity }
       : {}),
     skillsRuntime: options.skillsRuntime,
     evaluateReflectionNudge: (toolSummary) => options.evaluateReflectionNudge(toolSummary),

@@ -123,6 +123,19 @@ export interface TurnExecutionRuntime {
    * situated block. Absent ⇒ turn-message resolution only.
    */
   resolveSituatedFallbackPlaceId?: (message: SubstrateMessage) => string | undefined;
+  /**
+   * Virtual-activity presence follow (vinz.21): evaluated once per turn on
+   * the pre-turn path AFTER author/trust resolution. When the trusted partner
+   * is active in a place-bound virtual companion-room the companion is not
+   * present at, this pulls her virtual presence there through the same port
+   * path a deliberate move uses (arrival semantics + room-entry note).
+   * Never throws (the follower fails closed internally). Absent ⇒ no
+   * evaluation (minimal runtimes/tests).
+   */
+  followVirtualRoomActivity?: (
+    message: SubstrateMessage,
+    author: import('../virtual-room-follow.js').VirtualFollowAuthorContext,
+  ) => Promise<void>;
   skillsRuntime: SkillsRuntime | null;
   evaluateReflectionNudge: (toolSummary: TurnToolSummary) => string | null;
   emotionSelfModelRuntime: EmotionSelfModelRuntime;

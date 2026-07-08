@@ -251,6 +251,18 @@ export async function prepareTurnIdentityState(input: {
   }
 
   const authorContext = await runtime.resolveAuthorContext(message);
+
+  // Virtual-activity presence follow (vinz.21): now that the author's trust
+  // is resolved, trusted-partner activity in a place-bound virtual
+  // companion-room the companion is not present at pulls her virtual presence
+  // there (same port path as a deliberate move — arrival semantics +
+  // room-entry note into this channel's session, so this turn's context
+  // assembly already sees the arrival). Physical-origin turns and every
+  // fail-closed case no-op inside the follower; it never throws.
+  if (runtime.followVirtualRoomActivity) {
+    await runtime.followVirtualRoomActivity(message, authorContext);
+  }
+
   // E3.2: only adapter-declared routing privacy (X-Channel-Privacy header,
   // satellite registry) reaches ChannelMeta. Per-contact conversation-channel
   // privacy is provenance evidence and never gates (docs/context-envelope.md).

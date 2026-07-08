@@ -1,12 +1,12 @@
-import BetterSqlite3 from 'better-sqlite3'
 import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
+import { captureSystemConfigSnapshot } from '../src/persistence/backups/system-config-tree.js'
 
 const REPOSITORY_BACKUP_RESTORE_FIXTURE_ROOT = resolve('workspace/verify-backup-restore-fixture')
 const REPOSITORY_BACKUP_RESTORE_FIXTURE_SNAPSHOT = '20260227T101112123Z'
 
-const FIXTURE_DATABASE_FILE_NAME = 'companion.sqlite'
 const FIXTURE_SESSION_FILE_NAME = 'channel-a.jsonl'
+const FIXTURE_SYSTEM_CONFIG_FILE_NAME = 'settings.json'
 
 function fixtureBackupDir(rootDir: string): string {
   return join(rootDir, REPOSITORY_BACKUP_RESTORE_FIXTURE_SNAPSHOT)
@@ -14,7 +14,8 @@ function fixtureBackupDir(rootDir: string): string {
 
 function fixtureIsComplete(rootDir: string): boolean {
   const backupDir = fixtureBackupDir(rootDir)
-  return existsSync(join(backupDir, 'database', FIXTURE_DATABASE_FILE_NAME))
+  return existsSync(join(backupDir, 'system-config-manifest.json'))
+    && existsSync(join(backupDir, 'system-config', FIXTURE_SYSTEM_CONFIG_FILE_NAME))
     && existsSync(join(backupDir, 'sessions', FIXTURE_SESSION_FILE_NAME))
 }
 
@@ -28,20 +29,20 @@ export function ensureRepositoryBackupRestoreFixture(
 
   const backupDir = fixtureBackupDir(resolvedRootDir)
   rmSync(backupDir, { recursive: true, force: true })
-  mkdirSync(join(backupDir, 'database'), { recursive: true })
   mkdirSync(join(backupDir, 'sessions'), { recursive: true })
-
-  const databasePath = join(backupDir, 'database', FIXTURE_DATABASE_FILE_NAME)
-  const db = new BetterSqlite3(databasePath)
-  try {
-    db.exec('CREATE TABLE IF NOT EXISTS runtime_state (id INTEGER PRIMARY KEY, value TEXT NOT NULL, captured_at TEXT NOT NULL)')
-    db.prepare('INSERT INTO runtime_state (value, captured_at) VALUES (?, ?)').run(
-      'ok',
-      REPOSITORY_BACKUP_RESTORE_FIXTURE_SNAPSHOT,
-    )
-  } finally {
-    db.close()
-  }
+  const systemDataDir = join(backupDir, 'fixture-system-data')
+  mkdirSync(systemDataDir, { recursive: true })
+  writeFileSync(
+    join(systemDataDir, FIXTURE_SYSTEM_CONFIG_FILE_NAME),
+    `${JSON.stringify({ sessionHistoryBudgetPct: 6 }, null, 2)}\n`,
+    'utf8',
+  )
+  captureSystemConfigSnapshot({
+    systemDataDir,
+    backupDir,
+    now: () => Date.parse('2026-02-27T10:11:12.123Z'),
+  })
+  rmSync(systemDataDir, { recursive: true, force: true })
 
   writeFileSync(
     join(backupDir, 'sessions', FIXTURE_SESSION_FILE_NAME),

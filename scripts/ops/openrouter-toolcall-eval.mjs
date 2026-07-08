@@ -700,10 +700,6 @@ function classifyToolCallId(id) {
   return 'other';
 }
 
-function isRecord(value) {
-  return Boolean(value && typeof value === 'object' && !Array.isArray(value));
-}
-
 function classifyToolCall(toolCalls) {
   if (toolCalls.length === 0) {
     return {
@@ -739,7 +735,13 @@ function classifyToolCall(toolCalls) {
     };
   }
 
-  if (!isRecord(parsedArguments) || typeof parsedArguments.action !== 'string' || !TOOL_ACTIONS.has(parsedArguments.action)) {
+  if (
+    !parsedArguments
+    || typeof parsedArguments !== 'object'
+    || Array.isArray(parsedArguments)
+    || typeof parsedArguments.action !== 'string'
+    || !TOOL_ACTIONS.has(parsedArguments.action)
+  ) {
     return {
       classification: CLASSIFICATIONS.WRONG_SHAPE,
       selectedToolCall,

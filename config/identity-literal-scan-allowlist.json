@@ -611,6 +611,234 @@
       "contains": "psfn:app-cache:",
       "reason": "Redis app cache uses a project-scoped key namespace prefix.",
       "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "scripts/verify-k8s-manifests.mjs",
+      "contains": "psfn-framework-mlwk.31",
+      "reason": "Kubernetes verifier comment cites the bead that owns the empty DSN placeholder contract.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "scripts/verify-k8s-manifests.mjs",
+      "contains": "postgresql://psfn:",
+      "reason": "Kubernetes verifier asserts the legacy placeholder credential is absent from rendered manifests.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "scripts/verify-k8s-manifests.mjs",
+      "contains": "psfn-framework-mlwk.32",
+      "reason": "Kubernetes verifier comment cites the bead that owns the empty externalName contract.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/app/agent/main.ts",
+      "contains": "psfn-framework-mdxu",
+      "reason": "Implementation comment cites the bead that owns outbound reply dedupe behavior.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/app/maintenance/backfill-memory-provenance.ts",
+      "contains": "psfn-framework-27ut",
+      "reason": "Maintenance CLI comment cites the bead that owns memory provenance backfill.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/app/maintenance/force-episodic-synthesis.ts",
+      "contains": "psfn-force-episodic-synthesis-count",
+      "reason": "Maintenance script uses a project-scoped PostgreSQL application_name label.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/core/agent/agent-loop-patch.ts",
+      "contains": "psfn-framework-ay73",
+      "reason": "Implementation comment cites the bead that owns internal follow-up reply handling.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/core/agent/no-reply-tool.ts",
+      "contains": "psfn-framework-gu8m",
+      "reason": "Implementation comment cites the bead that owns no-reply tool argument handling.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/core/agent/scheduled-agent-loop.ts",
+      "contains": "psfn-framework-ay73",
+      "reason": "Implementation comment cites the bead that owns internal follow-up reply handling.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/core/agent/substrate-agent/agent-state-runtime.ts",
+      "contains": "psfn-framework-ay73",
+      "reason": "Runtime contract comment cites the bead that owns internal follow-up reply handling.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/core/agent/substrate-agent/turn-execution-runtime.ts",
+      "contains": "psfn-framework-ay73",
+      "reason": "Runtime comment cites the bead that owns internal follow-up reply handling.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/core/eval/observer-sidecar/emosim-adapter.ts",
+      "contains": "psfn.observer-sidecar.emosim-adapter.v2",
+      "reason": "Observer sidecar adapter version uses a stable project-scoped schema namespace.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/core/eval/observer-sidecar/emosim-server-adapter.ts",
+      "contains": "psfn-emosim",
+      "reason": "Observer sidecar config docs use the deployment service-name example for EmoSim.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/core/eval/observer-sidecar/projection.ts",
+      "contains": "psfn.observer-sidecar.appraisal-projection.v2",
+      "reason": "Observer sidecar projection version uses a stable project-scoped schema namespace.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/core/intention/appraisal/formatting.ts",
+      "contains": "psfn-framework-gexb",
+      "reason": "Appraisal formatting comment cites the bead that owns the self-silencing context.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/core/intention/sqlite-stores/pending-follow-up-store.ts",
+      "contains": "psfn-amica",
+      "reason": "Legacy pending follow-up store preserves the psfn-amica external channel type in its schema contract.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/core/scheduler/heartbeat-post-turn-runtime.ts",
+      "contains": "psfn-framework-mdxu",
+      "reason": "Scheduler comment cites the bead that owns post-turn continuation delivery.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/core/scheduler/heartbeat-runtime-contracts.ts",
+      "contains": "psfn-framework-mdxu",
+      "reason": "Scheduler contract comment cites the bead that owns post-turn continuation delivery.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/core/tools/self-diagnosis.ts",
+      "contains": "PSFN Runtime Image",
+      "reason": "Self-diagnosis names the runtime image committer identity used in snapshot metadata.",
+      "pattern": "identity-proper-name"
+    },
+    {
+      "path": "src/faculties/context-feedback/runtime.ts",
+      "contains": "psfn-framework-ls1k",
+      "reason": "Context feedback module comment cites the bead that owns this runtime path.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/faculties/memory/extraction.ts",
+      "contains": "psfn-framework-xcw8",
+      "reason": "Memory extraction comment cites the bead that owns awaited extraction behavior.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/faculties/memory/extraction.ts",
+      "contains": "psfn-framework-kada.1",
+      "reason": "Memory extraction comment cites the bead that owns interlocutor relationship progression.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/faculties/memory/extraction/mention-only-contacts.ts",
+      "contains": "psfn-framework-kada.1",
+      "reason": "Mention-only contact extraction comments cite the bead that owns relationship progression.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/faculties/memory/extraction/orchestrator.ts",
+      "contains": "psfn-framework-2tmg",
+      "reason": "Extraction orchestrator comment cites the bead that owns deterministic contact qualification.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/faculties/memory/extraction/runtime-helpers.ts",
+      "contains": "psfn-framework-xcw8",
+      "reason": "Extraction runtime helper comment cites the bead that owns awaited extraction behavior.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/faculties/memory/extraction/speaker-routing.ts",
+      "contains": "psfn-framework-0zd9",
+      "reason": "Speaker routing comment cites the bead that owns speaker-mismatch provenance handling.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/faculties/wiki/pgvector-projection.ts",
+      "contains": "psfn-wiki-projection",
+      "reason": "Wiki projection persistence uses a project-scoped PostgreSQL application_name label.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/operator/garden/services/settings-service.ts",
+      "contains": "psfn-framework-9bgk",
+      "reason": "Settings service comment cites the bead that owns effective-setting null semantics.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/persistence/postgres/migrations.ts",
+      "contains": "CHECK (channel_type IN ('discord', 'terminal', 'api', 'telegram', 'psfn-amica'))",
+      "reason": "PostgreSQL migration preserves the psfn-amica external channel type in a historical constraint.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/persistence/postgres/participant-trend-store.ts",
+      "contains": "psfn-participant-trends",
+      "reason": "Participant trend persistence uses a project-scoped PostgreSQL application_name label.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/persistence/postgres/scheduled-prompt-store.ts",
+      "contains": "psfn-scheduled-prompts",
+      "reason": "Scheduled prompt persistence uses a project-scoped PostgreSQL application_name label.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/persistence/repair/memory-provenance-backfill.ts",
+      "contains": "psfn-framework-27ut",
+      "reason": "Memory provenance repair comment cites the bead that owns the backfill.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/persistence/repair/memory-provenance-backfill.ts",
+      "contains": "psfn-framework-tsyo",
+      "reason": "Memory provenance repair comment cites the bead that owns historical Postgres provenance gaps.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/persistence/repair/memory-provenance-backfill.ts",
+      "contains": "psfn-framework-0zd9",
+      "reason": "Memory provenance repair comment cites the bead that owns speaker-mismatch provenance handling.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/shared/agent-response-disposition.ts",
+      "contains": "psfn-framework-ay73",
+      "reason": "Agent response disposition comment cites the bead that owns internal follow-up delivery.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/shared/contracts/runtime.ts",
+      "contains": "psfn-emosim",
+      "reason": "Runtime config docs use the deployment service-name example for EmoSim.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/system/config/runtime-config-contracts.ts",
+      "contains": "psfn-observer-eval",
+      "reason": "Runtime config defaults preserve the observer eval sidecar session label.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/system/config/runtime-config-contracts.ts",
+      "contains": "psfn-companion",
+      "reason": "Runtime config defaults preserve the observer eval sidecar agent label.",
+      "pattern": "identity-legacy-slug"
     }
   ]
 }

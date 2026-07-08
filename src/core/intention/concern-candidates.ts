@@ -18,6 +18,7 @@ import type { ConcernStorePort } from './concern-store-port.js';
 import type {
   ConcernRouteDispatcher,
   ConcernRouteRequest,
+  ConcernRouteTarget,
 } from './concern-route-handoff.js';
 import {
   MAX_ACTIVE_CONCERNS,
@@ -62,13 +63,7 @@ const POSSIBLE_EXTERNAL_FOLLOW_UP_PATTERN = /\b(follow\s+up|check\s+in|check\s+o
 export type ConcernCandidateSource = 'memory_extraction';
 export type ConcernCandidateFollowUpHint = 'internal_only' | 'possible_follow_up';
 export type ConcernCandidateReviewAction = 'create' | 'merge' | 'defer' | 'reject' | 'route';
-export type ConcernCandidateRouteTarget =
-  | 'north_star'
-  | 'project'
-  | 'reminder'
-  | 'schedule'
-  | 'introspection'
-  | 'other';
+export type ConcernCandidateRouteTarget = ConcernRouteTarget;
 
 export interface ConcernCandidateMessageContext {
   id: number;

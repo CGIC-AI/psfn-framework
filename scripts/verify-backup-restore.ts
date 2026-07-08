@@ -2,7 +2,6 @@ import { existsSync, readdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { ensureRepositoryBackupRestoreFixture } from './backup-restore-fixture.js';
 import {
-  verifyBackupRestore,
   verifyPostgresDumpArchive,
 } from '../src/persistence/backups/service.js';
 import {
@@ -134,14 +133,13 @@ function resolveLatestBackupDir(backupRootDir: string): string {
 }
 
 interface DatabaseSnapshotPaths {
-  sqlitePath?: string;
   postgresDumpPath?: string;
 }
 
 function resolveDatabaseSnapshotPaths(backupDir: string): DatabaseSnapshotPaths {
   const databaseDir = join(backupDir, 'database');
   if (!existsSync(databaseDir)) {
-    throw new Error(`Backup database directory missing: ${databaseDir}`);
+    return {};
   }
 
   const candidates = readdirSync(databaseDir, { withFileTypes: true })
@@ -154,9 +152,14 @@ function resolveDatabaseSnapshotPaths(backupDir: string): DatabaseSnapshotPaths 
   }
 
   const postgresDump = candidates.find(name => name.endsWith('.dump'));
-  const sqliteSnapshot = candidates.find(name => !name.endsWith('.dump'));
+  const unsupportedSnapshots = candidates.filter(name => !name.endsWith('.dump'));
+  if (unsupportedSnapshots.length > 0) {
+    throw new Error(
+      `Unsupported legacy database snapshot(s) in ${databaseDir}: ${unsupportedSnapshots.join(', ')}. `
+      + 'SQLite backup verification is retired; current backups must use Postgres dump archives and/or tree manifests.',
+    );
+  }
   return {
-    ...(sqliteSnapshot ? { sqlitePath: join(databaseDir, sqliteSnapshot) } : {}),
     ...(postgresDump ? { postgresDumpPath: join(databaseDir, postgresDump) } : {}),
   };
 }
@@ -187,19 +190,9 @@ async function main(): Promise<void> {
     : undefined;
   const backupDir = decrypted?.decryptedBackupDir ?? requestedBackupDir;
   try {
-    const { sqlitePath, postgresDumpPath } = resolveDatabaseSnapshotPaths(backupDir);
+    const { postgresDumpPath } = resolveDatabaseSnapshotPaths(backupDir);
     const sessionSnapshotDir = join(backupDir, 'sessions');
     const expectedSessionFiles = listSessionSnapshotFiles(sessionSnapshotDir);
-
-    const sqliteVerification = sqlitePath
-      ? verifyBackupRestore({
-        databaseBackupPath: sqlitePath,
-        sessionSnapshotDir,
-        expectedSessionFiles,
-        restoreScratchRootDir: args.restoreScratchRootDir ? resolve(args.restoreScratchRootDir) : undefined,
-        cleanupRestoreDir: !args.keepRestoreDir,
-      })
-      : undefined;
 
     const postgresDumpVerification = postgresDumpPath
       ? await verifyPostgresDumpArchive(postgresDumpPath)
@@ -237,14 +230,6 @@ async function main(): Promise<void> {
       sessionSnapshotDir,
       expectedSessionFiles: expectedSessionFiles.length,
       verified: true,
-      ...(sqlitePath
-        ? {
-          databaseBackupPath: sqlitePath,
-          integrityDetails: sqliteVerification?.integrityDetails,
-          restoreDir: sqliteVerification?.restoreDir,
-          cleanupRestoreDir: sqliteVerification?.cleanupRestoreDir,
-        }
-        : {}),
       ...(postgresDumpPath
         ? {
           postgresDumpPath,

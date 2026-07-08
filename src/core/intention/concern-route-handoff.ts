@@ -1,6 +1,5 @@
 import type { EventBus } from '../../shared/event-bus.js';
 import { createComponentLogger } from '../../shared/logger.js';
-import type { ConcernCandidateRouteTarget } from './concern-candidates.js';
 import type { ActiveConcernEvidenceRef, ActiveConcernPriority } from './concerns.js';
 
 const log = createComponentLogger('ConcernRouteHandoff');
@@ -8,11 +7,15 @@ const log = createComponentLogger('ConcernRouteHandoff');
 export type Awaitable<T> = T | Promise<T>;
 
 /**
- * Canonical route target set. Kept structurally identical to
- * {@link ConcernCandidateRouteTarget} so review decisions and grooming share
- * one durable-handoff vocabulary.
+ * Canonical route target set shared by review decisions and grooming.
  */
-export type ConcernRouteTarget = ConcernCandidateRouteTarget;
+export type ConcernRouteTarget =
+  | 'north_star'
+  | 'project'
+  | 'reminder'
+  | 'schedule'
+  | 'introspection'
+  | 'other';
 
 /**
  * Where the route request originated. Preserving provenance keeps blocked and

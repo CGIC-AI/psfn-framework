@@ -1,0 +1,26 @@
+flowchart TB
+  %% PSFN world map — sites, places, affordances, and bound satellites.
+  %% Generated from places.json (+ satellites.json) by renderPlacesMermaid
+  %% (src/channels/backplane/places-mermaid.ts). Regenerate with: npm run map:places.
+  subgraph site_0["Home (physical)"]
+    subgraph place_0["Bedroom · physical"]
+      place_0_aff_0["Bedroom Lights\nlight · ha"]
+    end
+    subgraph place_1["Kitchen · physical"]
+      place_1_aff_0["Kitchen Lights\nlight · ha"]
+      place_1_aff_1(["Kitchen Presence\npresence · ha"])
+    end
+    subgraph place_2["Living Room · physical"]
+      place_2_aff_0["Living Room Lights\nlight · ha"]
+      place_2_aff_1(["Living Room Presence\npresence · ha"])
+    end
+    subgraph place_3["Office · physical"]
+      place_3_aff_0["Office Lights\nlight · ha"]
+    end
+  end
+
+  classDef perceiver fill:#e3f2fd,stroke:#1565c0,color:#0d47a1;
+  classDef effector fill:#fff3e0,stroke:#e65100,color:#bf360c;
+  classDef satellite fill:#f3e5f5,stroke:#6a1b9a,color:#4a148c;
+  class place_1_aff_1,place_2_aff_1 perceiver
+  class place_0_aff_0,place_1_aff_0,place_2_aff_0,place_3_aff_0 effector

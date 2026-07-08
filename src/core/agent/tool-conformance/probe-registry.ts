@@ -16,7 +16,7 @@
 //     toolset, tool_search, self_status) → read_only.
 //   - boundary/external/side-effecting surfaces (fs, repo, shell, web,
 //     analysis_workbench sandbox, notify, media, selfie_create, subagent,
-//     shard, vault, beads, response_control) → schema_only. Their only "read"
+//     shard, vault, beads, world, response_control) → schema_only. Their only "read"
 //     actions depend on a live gateway, external processes, or arguments that
 //     do not belong in a hermetic handler smoke, and several have no read
 //     action at all.
@@ -94,6 +94,10 @@ export const TOOL_CONFORMANCE_PROBE_REGISTRY: Readonly<Record<string, ToolProbeS
   shard: { kind: 'schema_only' },
   vault: { kind: 'schema_only' },
   beads: { kind: 'schema_only' },
+  // world's read actions (perceive/list) require live gateway ops against the
+  // Home Assistant places registry, and move/control mutate world state, so no
+  // hermetic read-only probe exists.
+  world: { kind: 'schema_only' },
 };
 
 export function getToolProbeSpec(toolName: string): ToolProbeSpec | undefined {

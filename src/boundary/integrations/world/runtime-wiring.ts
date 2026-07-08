@@ -4,6 +4,7 @@ import type { ToolRegistrar } from '../../../core/agent/tool-registrar.js';
 import type { ToolWiringMeta, WirableTool } from '../../../core/agent/tool-wiring-validator.js';
 import type { RoomEntryNoteSink } from '../../../core/session/room-entry-note.js';
 import type { PlacesRegistryConfig } from '../../../shared/contracts/places-registry.js';
+import type { TrustLevel } from '../../../system/trust/types.js';
 import type { WorldOperations } from './ops.js';
 import { createWorldTool } from './tools.js';
 
@@ -36,6 +37,13 @@ export interface RegisterWorldToolsOptions {
   applyVirtualMove?: (placeId: string) => void;
   /** Context-system-note sink for the room-entry note fired by `move`. */
   roomEntryNoteSink?: RoomEntryNoteSink;
+  /**
+   * Staged-off gate for `action=control`. Defaults to
+   * `WORLD_CONTROL_RUNTIME_ENABLED` (false) when omitted.
+   */
+  controlEnabled?: boolean;
+  /** Resolves the current requester's trust level for effector-control gating. */
+  resolveRequesterTrust?: () => TrustLevel | undefined;
   /** In gateway mode, attach requiredGatewayMethods so the wiring validator can check them. */
   gatewayMode?: boolean;
 }
@@ -51,12 +59,16 @@ export function registerWorldTools(
     ...(options.companionPresence !== undefined ? { companionPresence: options.companionPresence } : {}),
     ...(options.applyVirtualMove ? { applyVirtualMove: options.applyVirtualMove } : {}),
     ...(options.roomEntryNoteSink ? { roomEntryNoteSink: options.roomEntryNoteSink } : {}),
+    ...(options.controlEnabled !== undefined ? { controlEnabled: options.controlEnabled } : {}),
+    ...(options.resolveRequesterTrust ? { resolveRequesterTrust: options.resolveRequesterTrust } : {}),
   });
   if (options.gatewayMode) {
     attachWiringMeta(tool, { requiredGatewayMethods: [...WORLD_TOOL_GATEWAY_METHODS] });
   }
-  // TODO(vinz.10): register `world` in CANONICAL_FIRST_PARTY_TOOL_SURFACES with
-  // action-aware capabilityMetadata + capability/trust gating (`move` gates
-  // read-tier alongside perceive/list, NOT with control). Extended for now.
+  // `world` is registered as an extended first-party surface in
+  // CANONICAL_FIRST_PARTY_TOOL_SURFACES (action-aware capabilityMetadata).
+  // Capability gating (world.read / world.control) resolves through
+  // resolveWorldRequirement; trust + staged-off control gate inside the tool.
+  // `move` gates read-tier alongside perceive/list, NOT with control.
   target.registerTool(tool, 'extended');
 }

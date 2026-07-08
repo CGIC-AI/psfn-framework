@@ -550,7 +550,10 @@ async function main(): Promise<void> {
   // (null flag-off ⇒ local-only move), applies its local situated effect
   // through the emanation tracker's virtual overlay, and fires the room-entry
   // system note through the session context-note lane.
-  // TODO(vinz.10): capability/trust gating + staged-off control.
+  // Capability gating: perceive/list/move->world.read, control->world.control
+  // (resolveWorldRequirement). Effector control is staged OFF by default
+  // (WORLD_CONTROL_RUNTIME_ENABLED) and, once enabled, additionally requires a
+  // primary/trusted requester — resolved from the live turn request context.
   registerWorldTools(agentLoop, new GatewayWorldOps(gatewayOps), {
     placesRegistry: placesRegistryConfig,
     resolveSituatedPlaceId: () => agentLoop.resolveCurrentSituatedPlaceId(),
@@ -558,8 +561,9 @@ async function main(): Promise<void> {
     applyVirtualMove: (placeId) => agentLoop.applyDeliberateVirtualMove(placeId),
     roomEntryNoteSink: sessionManager,
     gatewayMode: true,
+    resolveRequesterTrust: () => getRequestContext()?.viewerTrustLevel,
   });
-  log.info('World perceive/list/control/move tool enabled');
+  log.info('World tool enabled (perceive/list/move live; control staged off, trust-gated)');
 
   // Journal tools — durable markdown notes in the personal workspace.
   registerMarkdownJournalTools(agentLoop, pathSnapshot.workspaceRoot);

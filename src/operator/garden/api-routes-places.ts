@@ -4,6 +4,7 @@
 // "rooms") to avoid colliding with the existing room-roster surface.
 //
 //   GET   /api/admin/places                                  — sites + places + affordances + bound satellites
+//   GET   /api/admin/places/map                              — Mermaid world-map (flowchart TB) of the above
 //   PATCH /api/admin/places/satellites/:satelliteId/binding  — static re-bind of a satellite's placeId
 //
 // The read is DATA only (Cache-Control: no-store) and is never routed into
@@ -35,6 +36,16 @@ export function buildAdminPlacesRoutes(options: {
         placesService.listPlaces().then(
           (data) => sendJson(res, 200, data, ADMIN_DYNAMIC_JSON_HEADERS),
           (error) => sendJson(res, 500, { error: toSanitizedMessage(error, 'Failed to list places') }),
+        );
+      },
+    },
+    {
+      method: 'GET',
+      match: exactPath('/api/admin/places/map'),
+      handle: (_req, res) => {
+        placesService.renderMermaidMap().then(
+          (mermaid) => sendJson(res, 200, { mermaid }, ADMIN_DYNAMIC_JSON_HEADERS),
+          (error) => sendJson(res, 500, { error: toSanitizedMessage(error, 'Failed to render places map') }),
         );
       },
     },

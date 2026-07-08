@@ -377,6 +377,10 @@ export async function schedulePostTurnWork(input: {
         message.channelId,
         canonicalContactKey,
         turnId,
+        // Location tagging (S10): the static satellite place bound to this turn,
+        // threaded into memory formation so memories gain a `location:<placeId>`
+        // tag. Absent (non-satellite turn) → no location tag (fail-closed).
+        message.routing?.satellite?.placeId,
       ),
       onError: (error) => {
         log.error('Memory extraction error', { error: String(error) });

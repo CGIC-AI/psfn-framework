@@ -657,6 +657,44 @@ export const POSTGRES_CONTACT_MIGRATIONS = [
   `CREATE INDEX IF NOT EXISTS idx_social_relationship_edges_type ON social_relationship_edges(relationship_type, updated_at DESC);`,
 ];
 
+// Sprint 10 D2a — hub identity ↔ contact enrollment. Biometrics stay at the
+// Satellite Hub; core stores only the opaque handle → contact binding plus an
+// audit trail. Semantically separate from the conversational contact_channel_*
+// tables.
+export const POSTGRES_ENROLLMENT_MIGRATIONS = [
+  `
+  CREATE TABLE IF NOT EXISTS hub_identity_enrollments (
+    hub_identity_id TEXT PRIMARY KEY,
+    contact_id TEXT NOT NULL REFERENCES contacts(id) ON DELETE CASCADE,
+    status TEXT NOT NULL DEFAULT 'enrolled',
+    satellite_id TEXT,
+    endpoint_id TEXT,
+    enrolled_by TEXT NOT NULL DEFAULT 'system:unknown',
+    enrolled_at TEXT NOT NULL,
+    revoked_by TEXT,
+    revoked_at TEXT
+  );
+  `,
+  `ALTER TABLE hub_identity_enrollments ADD COLUMN IF NOT EXISTS satellite_id TEXT;`,
+  `ALTER TABLE hub_identity_enrollments ADD COLUMN IF NOT EXISTS endpoint_id TEXT;`,
+  `CREATE INDEX IF NOT EXISTS idx_hub_identity_enrollments_contact ON hub_identity_enrollments(contact_id);`,
+  `CREATE INDEX IF NOT EXISTS idx_hub_identity_enrollments_status ON hub_identity_enrollments(status);`,
+  `
+  CREATE TABLE IF NOT EXISTS hub_identity_enrollment_audit (
+    id BIGSERIAL PRIMARY KEY,
+    hub_identity_id TEXT NOT NULL,
+    contact_id TEXT NOT NULL,
+    action TEXT NOT NULL,
+    actor TEXT NOT NULL,
+    satellite_id TEXT,
+    endpoint_id TEXT,
+    timestamp TEXT NOT NULL
+  );
+  `,
+  `CREATE INDEX IF NOT EXISTS idx_hub_identity_enrollment_audit_handle ON hub_identity_enrollment_audit(hub_identity_id, timestamp DESC);`,
+  `CREATE INDEX IF NOT EXISTS idx_hub_identity_enrollment_audit_contact ON hub_identity_enrollment_audit(contact_id, timestamp DESC);`,
+];
+
 export const POSTGRES_INTENTION_MIGRATIONS = [
   `
   CREATE TABLE IF NOT EXISTS active_concerns (

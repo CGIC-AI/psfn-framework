@@ -36,11 +36,16 @@ const COMPANION_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0
 const POSTGRES_SCHEMA_PATTERN = /^[a-z_][a-z0-9_]*$/u;
 const POSTGRES_SCHEMA_MAX_LENGTH = 63;
 
+/** Valid TCP port range for per-companion Garden operator surfaces. */
+const GARDEN_PORT_MIN = 1;
+const GARDEN_PORT_MAX = 65_535;
+
 const COMPANION_ENTRY_KEYS = [
   'companionId',
   'companionDataDir',
   'characterCardPath',
   'postgresSchema',
+  'gardenPort',
 ] as const;
 
 const COMPANIONS_ROOT_KEYS = ['companions'] as const;
@@ -54,6 +59,15 @@ export interface CompanionFleetEntry {
   characterCardPath: string;
   /** Lowercase Postgres schema owning this companion's tenant tables. */
   postgresSchema: string;
+  /**
+   * Optional TCP port for this companion's own Garden operator surface
+   * (sprint-10 W4: one Garden per companion). When present the supervisor
+   * launcher spawns a dedicated operator process listening on this port,
+   * bound to this companion's admin transport socket. When absent, no
+   * operator process is spawned for the companion. Must be unique across
+   * the fleet — port collisions fail closed at validation time.
+   */
+  gardenPort?: number;
 }
 
 export interface CompanionsFleetConfig {
@@ -118,6 +132,24 @@ function requirePostgresSchema(value: unknown, field: string): string {
   return schema;
 }
 
+function requireOptionalGardenPort(value: unknown, field: string): number | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (typeof value !== 'number' || !Number.isInteger(value)) {
+    throw new Error(
+      `${COMPANIONS_ERROR_PREFIX}: ${field} must be an integer TCP port, got ${JSON.stringify(value)}`,
+    );
+  }
+  if (value < GARDEN_PORT_MIN || value > GARDEN_PORT_MAX) {
+    throw new Error(
+      `${COMPANIONS_ERROR_PREFIX}: ${field} must be between ${GARDEN_PORT_MIN} and ${GARDEN_PORT_MAX}, `
+      + `got ${value}`,
+    );
+  }
+  return value;
+}
+
 function requireRelativePath(value: unknown, field: string): string {
   const raw = requireNonEmptyString(value, field);
   if (isAbsolute(raw)) {
@@ -140,11 +172,13 @@ function validateCompanionEntry(raw: unknown, index: number): CompanionFleetEntr
     throw new Error(`${COMPANIONS_ERROR_PREFIX}: ${label} must be an object`);
   }
   assertNoUnknownKeys(raw, COMPANION_ENTRY_KEYS, label, { errorPrefix: COMPANIONS_ERROR_PREFIX });
+  const gardenPort = requireOptionalGardenPort(raw.gardenPort, `${label}.gardenPort`);
   return {
     companionId: requireCompanionId(raw.companionId, `${label}.companionId`),
     companionDataDir: requireRelativePath(raw.companionDataDir, `${label}.companionDataDir`),
     characterCardPath: requireRelativePath(raw.characterCardPath, `${label}.characterCardPath`),
     postgresSchema: requirePostgresSchema(raw.postgresSchema, `${label}.postgresSchema`),
+    ...(gardenPort !== undefined ? { gardenPort } : {}),
   };
 }
 
@@ -164,6 +198,25 @@ function assertNoDuplicateField(
       );
     }
     seen.set(value, index);
+  }
+}
+
+function assertNoDuplicateGardenPorts(companions: readonly CompanionFleetEntry[]): void {
+  const seen = new Map<number, number>();
+  for (let index = 0; index < companions.length; index += 1) {
+    const port = companions[index].gardenPort;
+    if (port === undefined) {
+      continue;
+    }
+    const previous = seen.get(port);
+    if (previous !== undefined) {
+      throw new Error(
+        `${COMPANIONS_ERROR_PREFIX}: duplicate gardenPort ${port} `
+        + `in companions[${previous}] and companions[${index}] — each companion's Garden `
+        + 'operator surface must listen on its own port',
+      );
+    }
+    seen.set(port, index);
   }
 }
 
@@ -204,6 +257,7 @@ export function validateCompanionsConfig(raw: unknown, sourcePath: string): Comp
 
   assertNoDuplicateField(companions, (entry) => entry.companionId, 'companionId');
   assertNoDuplicateField(companions, (entry) => entry.postgresSchema, 'postgresSchema');
+  assertNoDuplicateGardenPorts(companions);
   assertNoOverlappingDataDirs(companions);
 
   return { companions };

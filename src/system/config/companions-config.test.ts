@@ -154,6 +154,49 @@ describe('companions owner-file config', () => {
       expect(() => validateCompanionsConfig(fleet, 'companions.json'))
         .toThrow(/must not escape the persistence root/);
     });
+
+    it('accepts a fleet with per-companion gardenPort values', () => {
+      const fleet = clone(VALID_FLEET);
+      fleet.companions[0].gardenPort = 10061;
+      fleet.companions[1].gardenPort = 10062;
+      expect(validateCompanionsConfig(fleet, 'companions.json')).toEqual(fleet);
+    });
+
+    it('accepts a fleet where only some companions have a gardenPort', () => {
+      const fleet = clone(VALID_FLEET);
+      fleet.companions[0].gardenPort = 10061;
+      const validated = validateCompanionsConfig(fleet, 'companions.json');
+      expect(validated.companions[0].gardenPort).toBe(10061);
+      expect(validated.companions[1].gardenPort).toBeUndefined();
+    });
+
+    it('rejects a non-integer gardenPort', () => {
+      const fleet = clone(VALID_FLEET);
+      (fleet.companions[0] as Record<string, unknown>).gardenPort = '10061';
+      expect(() => validateCompanionsConfig(fleet, 'companions.json'))
+        .toThrow(/gardenPort must be an integer TCP port/);
+      (fleet.companions[0] as Record<string, unknown>).gardenPort = 10061.5;
+      expect(() => validateCompanionsConfig(fleet, 'companions.json'))
+        .toThrow(/gardenPort must be an integer TCP port/);
+    });
+
+    it('rejects an out-of-range gardenPort', () => {
+      const fleet = clone(VALID_FLEET);
+      fleet.companions[0].gardenPort = 0;
+      expect(() => validateCompanionsConfig(fleet, 'companions.json'))
+        .toThrow(/gardenPort must be between 1 and 65535/);
+      fleet.companions[0].gardenPort = 70_000;
+      expect(() => validateCompanionsConfig(fleet, 'companions.json'))
+        .toThrow(/gardenPort must be between 1 and 65535/);
+    });
+
+    it('rejects a gardenPort collision across the fleet (fail closed)', () => {
+      const fleet = clone(VALID_FLEET);
+      fleet.companions[0].gardenPort = 10061;
+      fleet.companions[1].gardenPort = 10061;
+      expect(() => validateCompanionsConfig(fleet, 'companions.json'))
+        .toThrow(/duplicate gardenPort 10061/);
+    });
   });
 
   describe('loadCompanionsConfig', () => {

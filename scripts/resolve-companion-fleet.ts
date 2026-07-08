@@ -19,9 +19,16 @@
  *   - Single-companion topology (fleet resolves to undefined): print NOTHING.
  *     The launcher reads empty stdout as "stay in single-agent mode".
  *   - Multi-companion topology: one line per companion, fields tab-separated in
- *     the order companionId, companionDataDir, characterCardPath, postgresSchema.
+ *     the order companionId, companionDataDir, characterCardPath, postgresSchema,
+ *     adminTransportSocket, gardenPort. gardenPort is "-" when the companion has
+ *     no Garden operator surface configured (companions.json gardenPort absent).
  *     Tabs/newlines inside any field are rejected (fail closed) so the launcher
  *     can parse the plan with a plain `IFS=$'\t' read`.
+ *
+ * Per-companion Garden support (sprint-10 W4): each companion's admin transport
+ * socket is derived here via `resolveCompanionAdminTransportSocketPath` — the
+ * launcher never derives socket names itself. Network admin transport mode is
+ * rejected fail-closed: per-companion Gardens currently support socket mode only.
  */
 import { resolveRuntimePathLayout } from '../src/persistence/layout.js';
 import {
@@ -29,8 +36,13 @@ import {
   resolveCompanionFleet,
   type CompanionFleetEntry,
 } from '../src/system/config/companions-config.js';
+import {
+  resolveAdminTransportMode,
+  resolveCompanionAdminTransportSocketPath,
+} from '../src/operator/garden/transport-paths.js';
 
 const FIELD_SEPARATOR = '\t';
+const NO_GARDEN_PORT_SENTINEL = '-';
 
 function assertPlanSafe(value: string, field: string, companionId: string): void {
   if (value.includes(FIELD_SEPARATOR) || value.includes('\n') || value.includes('\r')) {
@@ -41,12 +53,18 @@ function assertPlanSafe(value: string, field: string, companionId: string): void
   }
 }
 
-function formatPlanLine(entry: CompanionFleetEntry): string {
-  const fields: Array<[keyof CompanionFleetEntry, string]> = [
+function formatPlanLine(entry: CompanionFleetEntry, env: NodeJS.ProcessEnv): string {
+  const adminTransportSocket = resolveCompanionAdminTransportSocketPath(entry.companionId, env);
+  const fields: Array<[string, string]> = [
     ['companionId', entry.companionId],
     ['companionDataDir', entry.companionDataDir],
     ['characterCardPath', entry.characterCardPath],
     ['postgresSchema', entry.postgresSchema],
+    ['adminTransportSocket', adminTransportSocket],
+    [
+      'gardenPort',
+      entry.gardenPort !== undefined ? String(entry.gardenPort) : NO_GARDEN_PORT_SENTINEL,
+    ],
   ];
   for (const [field, value] of fields) {
     assertPlanSafe(value, field, entry.companionId);
@@ -85,7 +103,17 @@ function main(): void {
     return;
   }
 
-  const plan = fleet.companions.map(formatPlanLine).join('\n');
+  // Per-companion Gardens bind one admin transport socket per agent process;
+  // a single shared network admin transport cannot serve N agents. Fail closed
+  // rather than letting every agent race to bind the same listener.
+  if (resolveAdminTransportMode(env) !== 'socket') {
+    throw new Error(
+      'Multi-companion mode requires ADMIN_TRANSPORT_MODE=socket: per-companion Garden '
+      + 'admin transports are socket-scoped (one garden-admin-<companionId>.sock per agent).',
+    );
+  }
+
+  const plan = fleet.companions.map((entry) => formatPlanLine(entry, env)).join('\n');
   process.stdout.write(`${plan}\n`);
 }
 

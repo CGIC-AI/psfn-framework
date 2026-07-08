@@ -92,6 +92,44 @@ Readonly<Record<GatewayConnectionState, readonly GatewayConnectionState[]>> = {
   offline: [],
 };
 
+// ── Fleet health snapshot (sprint-10 W4 fleet view) ──
+// Cheap, read-only view over state the gateway already tracks: the companion
+// connection registry plus an in-memory ring of multi-companion violation
+// alarms. No new telemetry pipes; fatigue/charge posture is intentionally not
+// here (documented follow-up — the gateway has no cheap authority for it).
+
+const COMPANION_VIOLATION_LOG_LIMIT = 1_000;
+export const FLEET_RECENT_VIOLATION_WINDOW_MS = 60 * 60 * 1_000;
+
+interface CompanionViolationEvent {
+  event: string;
+  companionId?: string;
+  at: number;
+}
+
+export interface GatewayFleetCompanionConnection {
+  companionId: string;
+  /** Live connection state; offline connections are removed, never reported. */
+  state: Exclude<GatewayConnectionState, 'offline'>;
+  health: GatewayConnectionHealth;
+  stateReason: string;
+  connectedAt: number;
+  lastSeenAt: number;
+}
+
+export interface GatewayFleetConnectionSnapshot {
+  generatedAt: number;
+  /** Currently-identified companion connections (one per bound companionId). */
+  connections: GatewayFleetCompanionConnection[];
+  /** Last activity per companionId, retained across disconnects. */
+  lastSeenByCompanionId: Record<string, number>;
+  /** Violation alarms in the recent window, keyed by attributed companionId. */
+  recentViolationsByCompanionId: Record<string, number>;
+  /** Recent violation alarms with no companion attribution. */
+  unattributedRecentViolationCount: number;
+  recentViolationWindowMs: number;
+}
+
 export { requireGatewaySessionHmacKeyring, resolveGatewaySessionHmacKeyring } from './session-hmac-env.js';
 
 // ── Gateway Server Class ──
@@ -146,6 +184,8 @@ export class GatewayServer {
   private readonly apiStreamListeners = new Map<string, Set<(text: string) => void>>();
   private readonly multiCompanion: GatewayMultiCompanionConfig;
   private readonly companionConnections = new Map<string, GatewayRpcConnection>();
+  private readonly companionLastSeen = new Map<string, number>();
+  private readonly companionViolationLog: CompanionViolationEvent[] = [];
 
   constructor(options: GatewayServerOptions) {
     this.options = options;
@@ -709,6 +749,7 @@ export class GatewayServer {
     details: Record<string, unknown>,
   ): void {
     log.error(`Multi-companion violation [${event}]: ${message}`, details);
+    this.recordCompanionViolation(event, details);
     const startedAt = Date.now();
     void (async () => {
       const auditId = await this.audit(`gateway.companion.${event}`, 'DENY', details);
@@ -732,8 +773,78 @@ export class GatewayServer {
     });
   }
 
+  private recordCompanionViolation(event: string, details: Record<string, unknown>): void {
+    const companionId = extractViolationCompanionId(details);
+    this.companionViolationLog.push({
+      event,
+      ...(companionId !== undefined ? { companionId } : {}),
+      at: Date.now(),
+    });
+    if (this.companionViolationLog.length > COMPANION_VIOLATION_LOG_LIMIT) {
+      this.companionViolationLog.splice(
+        0,
+        this.companionViolationLog.length - COMPANION_VIOLATION_LOG_LIMIT,
+      );
+    }
+  }
+
+  /**
+   * Read-only fleet health view (sprint-10 W4): identified companion
+   * connections, last-seen activity (retained across disconnects), and recent
+   * multi-companion violation counts. Consumed by the gateway fleet-status
+   * page; never mutates connection state.
+   */
+  getFleetConnectionSnapshot(now = Date.now()): GatewayFleetConnectionSnapshot {
+    this.refreshConnectionHealth(now);
+
+    const connections: GatewayFleetCompanionConnection[] = [];
+    for (const [companionId, conn] of this.companionConnections.entries()) {
+      const status = this.connectionStatuses.get(conn);
+      if (!status || status.state === 'offline') {
+        continue;
+      }
+      connections.push({
+        companionId,
+        state: status.state,
+        health: status.health,
+        stateReason: status.stateReason,
+        connectedAt: status.connectedAt,
+        lastSeenAt: status.lastHealthcheckAt,
+      });
+    }
+
+    const windowStart = now - FLEET_RECENT_VIOLATION_WINDOW_MS;
+    const recentViolationsByCompanionId: Record<string, number> = {};
+    let unattributedRecentViolationCount = 0;
+    for (const violation of this.companionViolationLog) {
+      if (violation.at < windowStart) {
+        continue;
+      }
+      if (violation.companionId) {
+        recentViolationsByCompanionId[violation.companionId] =
+          (recentViolationsByCompanionId[violation.companionId] ?? 0) + 1;
+      } else {
+        unattributedRecentViolationCount += 1;
+      }
+    }
+
+    return {
+      generatedAt: now,
+      connections,
+      lastSeenByCompanionId: Object.fromEntries(this.companionLastSeen),
+      recentViolationsByCompanionId,
+      unattributedRecentViolationCount,
+      recentViolationWindowMs: FLEET_RECENT_VIOLATION_WINDOW_MS,
+    };
+  }
+
   private removeConnection(conn: GatewayRpcConnection): void {
     const status = this.connectionStatuses.get(conn);
+    if (status?.companionId) {
+      // Preserve last-seen across the disconnect so the fleet view can report
+      // when a now-down companion was last alive.
+      this.companionLastSeen.set(status.companionId, status.lastHealthcheckAt);
+    }
     if (status?.companionId && this.companionConnections.get(status.companionId) === conn) {
       this.companionConnections.delete(status.companionId);
       log.info('Companion connection unbound', { companionId: status.companionId });
@@ -874,6 +985,9 @@ export class GatewayServer {
       return;
     }
     status.lastHealthcheckAt = Date.now();
+    if (status.companionId) {
+      this.companionLastSeen.set(status.companionId, status.lastHealthcheckAt);
+    }
     if (status.state === 'degraded' && status.stateReason === 'healthcheck_stale') {
       this.transitionConnectionState(conn, 'ready', 'healthcheck_recovered');
     }
@@ -1042,11 +1156,13 @@ export class GatewayServer {
       }
       this.companionConnections.set(companionId, conn);
       status.companionId = companionId;
+      this.companionLastSeen.set(companionId, Date.now());
       log.info('Companion connection bound', { companionId });
     } else if (companionId) {
       // Flag off (or non-agent role): record for observability only — routing
       // semantics stay byte-identical to single-companion behavior.
       status.companionId = companionId;
+      this.companionLastSeen.set(companionId, Date.now());
     }
 
     status.role = params.role;
@@ -1094,6 +1210,22 @@ export class GatewayServer {
       await this.options.auditStore.complete(id, Date.now() - startTime, error);
     }
   }
+}
+
+/**
+ * Best-effort companion attribution for a violation alarm. Violation `details`
+ * carry the companion under different keys depending on the event; placeholder
+ * markers like "(unidentified)" are not real ids and stay unattributed.
+ */
+function extractViolationCompanionId(details: Record<string, unknown>): string | undefined {
+  for (const key of ['companionId', 'boundCompanionId', 'senderCompanionId']) {
+    const value = details[key];
+    if (typeof value !== 'string') continue;
+    const trimmed = value.trim();
+    if (!trimmed || trimmed.startsWith('(')) continue;
+    return trimmed;
+  }
+  return undefined;
 }
 
 function extractGatewayCorrelation(

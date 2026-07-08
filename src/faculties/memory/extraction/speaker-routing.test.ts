@@ -110,6 +110,32 @@ describe('structured group fact routing', () => {
     });
   });
 
+  it('skips a named subject whose contact is unresolved instead of routing to the source', async () => {
+    const routingContext = await context([
+      entry(1, 'dragon', 'MrDragonFox', 'Robin is helping run moderation tonight.'),
+      entry(2, 'stranger', 'Robin', 'I can do it after dinner.'),
+    ]);
+
+    const decision = resolveFactRouting(
+      fact({
+        text: 'Robin is helping run moderation tonight.',
+        attribution: {
+          sourceMessageIds: [1],
+          subjectName: 'Robin',
+        },
+      }),
+      routingContext,
+      undefined,
+      { companionNames: ['Carlini'] },
+    );
+
+    expect(decision).toEqual({
+      status: 'skip',
+      reason: 'unresolved_subject_contact',
+      sourceSpeakerName: 'MrDragonFox',
+    });
+  });
+
   it('routes room-level facts to a conversation scope instead of a contact', async () => {
     const routingContext = await context([
       entry(1, 'dragon', 'MrDragonFox', 'The room gets noisy whenever launch planning starts.'),

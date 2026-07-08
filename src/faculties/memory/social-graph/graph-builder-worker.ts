@@ -97,8 +97,18 @@ type SocialGraphBuilderContactPort = Pick<
 >;
 
 export interface SocialGraphBuilderMemoryReader {
-  /** Room-scoped memories with extractedAt > sinceMs, ascending, bounded by limit. */
-  listRoomScopedMemoriesSince(sinceMs: number, limit: number): Promise<PurrMemory[]>;
+  /**
+   * Room-scoped memories after the composite cursor (extractedAt, id), ascending,
+   * bounded by limit. A memory is after the cursor when `extractedAt > sinceMs`,
+   * or `extractedAt === sinceMs && id > sinceId` — so same-timestamp rows at a
+   * truncated batch boundary are not stranded. `sinceId` undefined starts
+   * strictly after `sinceMs`.
+   */
+  listRoomScopedMemoriesSince(
+    sinceMs: number,
+    sinceId: string | undefined,
+    limit: number,
+  ): Promise<PurrMemory[]>;
 }
 
 export interface SocialGraphBuilderWorkerOptions {
@@ -326,6 +336,7 @@ export class SocialGraphBuilderWorker {
     const watermark = this.watermarkStore.get();
     const memories = await this.memoryReader.listRoomScopedMemoriesSince(
       watermark.coveredUpToExtractedAtMs,
+      watermark.coveredUpToId,
       this.config.scanMemoryLimit,
     );
 
@@ -347,22 +358,38 @@ export class SocialGraphBuilderWorker {
       else deduped += 1;
     }
 
-    const maxExtractedAt = memories.reduce(
-      (max, memory) => Math.max(max, memory.extractedAt),
-      watermark.coveredUpToExtractedAtMs,
+    // Advance the composite cursor to the last processed memory in (extractedAt,
+    // id) order — never past it. Because the reader returns memories after the
+    // cursor sorted ascending and truncated at the scan limit, the composite max
+    // of what was scanned is exactly the boundary we fully covered; a truncated
+    // batch leaves the remainder (including same-timestamp rows) strictly after
+    // this cursor for the next run. An empty batch holds the prior cursor.
+    const nextCursor = memories.reduce<{ extractedAtMs: number; id: string } | undefined>(
+      (max, memory) => {
+        if (!max
+          || memory.extractedAt > max.extractedAtMs
+          || (memory.extractedAt === max.extractedAtMs && memory.id > max.id)) {
+          return { extractedAtMs: memory.extractedAt, id: memory.id };
+        }
+        return max;
+      },
+      undefined,
     );
+    const coveredUpToExtractedAtMs = nextCursor?.extractedAtMs ?? watermark.coveredUpToExtractedAtMs;
+    const coveredUpToId = nextCursor?.id ?? watermark.coveredUpToId;
     const telemetry: SocialGraphBuilderTelemetry = {
       scanned: memories.length,
       proposed,
       conflicts,
       skippedUntracked,
       deduped,
-      watermarkAdvancedToMs: maxExtractedAt,
+      watermarkAdvancedToMs: coveredUpToExtractedAtMs,
       runAtMs,
     };
     this.watermarkStore.set({
       schemaVersion: 1,
-      coveredUpToExtractedAtMs: maxExtractedAt,
+      coveredUpToExtractedAtMs,
+      ...(coveredUpToId !== undefined ? { coveredUpToId } : {}),
       updatedAt: runAtMs,
       lastRun: { scanned: telemetry.scanned, proposed, skippedUntracked, conflicts },
     });
@@ -488,22 +515,85 @@ export function createSocialGraphBuilderMemoryReader(deps: {
   getMemoriesByChannel: (channelId: string, limit: number) => Promise<PurrMemory[]>;
 }): SocialGraphBuilderMemoryReader {
   return {
-    async listRoomScopedMemoriesSince(sinceMs: number, limit: number): Promise<PurrMemory[]> {
+    async listRoomScopedMemoriesSince(
+      sinceMs: number,
+      sinceId: string | undefined,
+      limit: number,
+    ): Promise<PurrMemory[]> {
       const channelIds = await deps.listRoomChannelIds();
       const collected: PurrMemory[] = [];
       for (const channelId of channelIds) {
-        const memories = await deps.getMemoriesByChannel(channelId, limit);
-        for (const memory of memories) {
-          if (memory.extractedAt <= sinceMs) continue;
-          const addressMode = memory.provenance?.addressMode;
-          if (!addressMode || !ROOM_ADDRESS_MODES.has(addressMode)) continue;
-          if (!memory.provenance?.channelId) continue;
-          collected.push(memory);
-        }
+        const roomMemories = await readRoomChannelMemoriesSince(
+          deps.getMemoriesByChannel,
+          channelId,
+          sinceMs,
+          sinceId,
+        );
+        collected.push(...roomMemories);
       }
+      // Oldest-first: successive runs advance the cursor forward through history
+      // instead of only ever seeing the newest window and stranding older
+      // unprocessed memories behind the watermark. Id is the deterministic
+      // tie-break that also keeps same-timestamp rows on a stable boundary.
       return collected
-        .sort((left, right) => left.extractedAt - right.extractedAt)
+        .sort(compareByExtractedAtThenId)
         .slice(0, limit);
     },
   };
 }
+
+function compareByExtractedAtThenId(left: PurrMemory, right: PurrMemory): number {
+  if (left.extractedAt !== right.extractedAt) return left.extractedAt - right.extractedAt;
+  return left.id < right.id ? -1 : left.id > right.id ? 1 : 0;
+}
+
+/**
+ * True when a memory sorts strictly after the composite cursor (extractedAt, id):
+ * a newer timestamp, or the same timestamp with a larger id. `sinceId` undefined
+ * means the cursor has no id boundary, so only a strictly newer timestamp counts.
+ */
+function isAfterCursor(memory: PurrMemory, sinceMs: number, sinceId: string | undefined): boolean {
+  if (memory.extractedAt > sinceMs) return true;
+  if (memory.extractedAt < sinceMs) return false;
+  return sinceId !== undefined && memory.id > sinceId;
+}
+
+/**
+ * Fetch every room-context memory for one channel after the composite cursor.
+ *
+ * `getMemoriesByChannel` returns the newest `limit` memories (extractedAt
+ * descending) with no since/offset, so a single capped call can miss older
+ * unprocessed memories when a channel has more than `limit` rows after the
+ * cursor. Grow the fetch window (doubling) until it reaches past the cursor —
+ * the returned batch is smaller than the requested window (channel exhausted) or
+ * its oldest row is already at/behind the cursor — so no unprocessed room memory
+ * after the cursor is stranded.
+ */
+async function readRoomChannelMemoriesSince(
+  getMemoriesByChannel: (channelId: string, limit: number) => Promise<PurrMemory[]>,
+  channelId: string,
+  sinceMs: number,
+  sinceId: string | undefined,
+): Promise<PurrMemory[]> {
+  let fetchLimit = ROOM_CHANNEL_FETCH_PAGE;
+  let batch: PurrMemory[] = [];
+  for (;;) {
+    batch = await getMemoriesByChannel(channelId, fetchLimit);
+    const oldest = batch.at(-1);
+    const reachedCursor = batch.length < fetchLimit
+      || (oldest !== undefined && !isAfterCursor(oldest, sinceMs, sinceId));
+    if (reachedCursor) break;
+    fetchLimit *= 2;
+  }
+  const roomMemories: PurrMemory[] = [];
+  for (const memory of batch) {
+    if (!isAfterCursor(memory, sinceMs, sinceId)) continue;
+    const addressMode = memory.provenance?.addressMode;
+    if (!addressMode || !ROOM_ADDRESS_MODES.has(addressMode)) continue;
+    if (!memory.provenance?.channelId) continue;
+    roomMemories.push(memory);
+  }
+  return roomMemories;
+}
+
+const ROOM_CHANNEL_FETCH_PAGE = 500;

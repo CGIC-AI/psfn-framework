@@ -23,15 +23,16 @@ const DEFAULT_SOURCE_REF = 'source:repair|operation:memory_participant_name_back
 const DEFAULT_SOURCE_TYPE: MemorySourceType = 'tool_write';
 const DEFAULT_REASON = 'memory_participant_name_backfill';
 
+// Candidate selection is restricted to explicit placeholder forms — macros and
+// the definite/"primary" generic labels — matching the narrowed normalizer.
+// Bare nouns ("companion", "assistant", "user's") are intentionally excluded so
+// ordinary text like "research assistant" is not selected for rewrite.
 const SQL_CANDIDATE_PREDICATE = `
   lower(text) LIKE '%{{%'
   OR lower(text) LIKE '%the user%'
   OR lower(text) LIKE '%primary user%'
-  OR lower(text) LIKE '%user''s%'
   OR lower(text) LIKE '%the companion%'
-  OR lower(text) LIKE '%companion%'
   OR lower(text) LIKE '%the assistant%'
-  OR lower(text) LIKE '%assistant%'
 `;
 
 export type MemoryParticipantNameRepairRefusalReason =

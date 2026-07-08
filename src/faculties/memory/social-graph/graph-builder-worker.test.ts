@@ -6,6 +6,7 @@ import type { Contact, SocialGraphEntity, SocialRelationshipEdge, SocialRelation
 import type { PurrMemory } from '../types.js';
 import {
   SocialGraphBuilderWorker,
+  createSocialGraphBuilderMemoryReader,
   type SocialGraphBuilderMemoryReader,
 } from './graph-builder-worker.js';
 import {
@@ -312,6 +313,53 @@ describe('SocialGraphBuilderWorker', () => {
     expect(proposals[0].confidence).toBeCloseTo(0.7);
   });
 
+  it('reader scans oldest unprocessed room memories when a channel exceeds the scan limit', async () => {
+    // A channel with more room memories than the scan limit. getMemoriesByChannel
+    // returns the NEWEST `limit` (extractedAt DESC) — a single capped call would
+    // only ever see the newest window, and advancing the watermark to that batch
+    // max would strand the older unprocessed memories forever.
+    const total = 620;
+    const scanLimit = 500;
+    const roomMemories: PurrMemory[] = [];
+    for (let i = 1; i <= total; i += 1) {
+      roomMemories.push(makeMemory({
+        id: `m-${String(i).padStart(4, '0')}`,
+        extractedAt: i,
+        provenance: { channelId: 'room-1', addressMode: 'reply_to_user', sourceContactId: ALICE },
+      }));
+    }
+    const getMemoriesByChannel = async (channelId: string, limit: number): Promise<PurrMemory[]> => (
+      channelId === 'room-1'
+        ? [...roomMemories].sort((a, b) => b.extractedAt - a.extractedAt).slice(0, limit)
+        : []
+    );
+    const reader = createSocialGraphBuilderMemoryReader({
+      listRoomChannelIds: async () => ['room-1'],
+      getMemoriesByChannel,
+    });
+
+    // First run: the oldest unprocessed memories are returned (ascending), not
+    // the newest window.
+    const firstBatch = await reader.listRoomScopedMemoriesSince(0, undefined, scanLimit);
+    expect(firstBatch).toHaveLength(scanLimit);
+    expect(firstBatch[0].extractedAt).toBe(1);
+    expect(firstBatch.at(-1)?.extractedAt).toBe(scanLimit);
+    // The newest memory must NOT be in the first batch (it is not stranded — it
+    // is simply processed later, oldest-first).
+    expect(firstBatch.some(memory => memory.extractedAt === total)).toBe(false);
+
+    // Second run after advancing the watermark to the first batch's max: the
+    // remaining (newer) memories are picked up. No memory is stranded.
+    const watermark = firstBatch.reduce((max, memory) => Math.max(max, memory.extractedAt), 0);
+    const secondBatch = await reader.listRoomScopedMemoriesSince(watermark, undefined, scanLimit);
+    expect(secondBatch).toHaveLength(total - scanLimit);
+    expect(secondBatch[0].extractedAt).toBe(scanLimit + 1);
+    expect(secondBatch.at(-1)?.extractedAt).toBe(total);
+
+    const covered = new Set([...firstBatch, ...secondBatch].map(memory => memory.extractedAt));
+    expect(covered.size).toBe(total);
+  });
+
   it('proposes a single-direction edge for an asymmetric named relationship (my mom)', async () => {
     const named = makeMemory({
       id: 'named-mom',
@@ -337,5 +385,73 @@ describe('SocialGraphBuilderWorker', () => {
     expect(proposals[0].directional).toBe(true);
     expect(proposals[0].sourceContactId).toBe(ALICE);
     expect(proposals[0].targetContactId).toBe(BOB);
+  });
+
+  it('drains same-timestamp memories at a truncated batch boundary across runs (composite cursor)', async () => {
+    const CARL = 'c-carl';
+    const tracked = new Map([
+      [ALICE, makeContact(ALICE, 'Alice')],
+      [BOB, makeContact(BOB, 'Bob')],
+      [CARL, makeContact(CARL, 'Carl')],
+    ]);
+    // Three named-relationship memories sharing the SAME extractedAt, each a
+    // distinct tracked pair -> a distinct proposal. With scanMemoryLimit 2 the
+    // first run truncates the same-timestamp group. A bare `extractedAt > sinceMs`
+    // watermark would strand the third row (extractedAt === boundary); the
+    // composite (extractedAt, id) cursor drains it on the next run.
+    const sharedExtractedAt = 9_000;
+    const roomMemories: PurrMemory[] = [
+      makeMemory({
+        id: 'n-1',
+        text: 'my sister Bob',
+        extractedAt: sharedExtractedAt,
+        provenance: { channelId: 'room-1', addressMode: 'reply_to_user', sourceContactId: ALICE, subjectContactId: BOB },
+      }),
+      makeMemory({
+        id: 'n-2',
+        text: 'my sister Carl',
+        extractedAt: sharedExtractedAt,
+        provenance: { channelId: 'room-1', addressMode: 'reply_to_user', sourceContactId: ALICE, subjectContactId: CARL },
+      }),
+      makeMemory({
+        id: 'n-3',
+        text: 'my sister Carl',
+        extractedAt: sharedExtractedAt,
+        provenance: { channelId: 'room-1', addressMode: 'reply_to_user', sourceContactId: BOB, subjectContactId: CARL },
+      }),
+    ];
+    const getMemoriesByChannel = async (channelId: string, limit: number): Promise<PurrMemory[]> => (
+      channelId === 'room-1' ? roomMemories.slice(0, limit) : []
+    );
+    const memoryReader = createSocialGraphBuilderMemoryReader({
+      listRoomChannelIds: async () => ['room-1'],
+      getMemoriesByChannel,
+    });
+    const watermarkStore = createFileSocialGraphBuilderWatermarkStore(watermarkPath);
+    const makeWorker = () => new SocialGraphBuilderWorker({
+      memoryReader,
+      contacts: makeStubContacts({ tracked }),
+      proposalStore,
+      watermarkStore,
+      config: { scanMemoryLimit: 2 },
+    });
+
+    const first = await makeWorker().run();
+    expect(first.scanned).toBe(2);
+    expect(first.proposed).toBe(2);
+    // Cursor advanced to the composite boundary (timestamp + last id), not past it.
+    const afterFirst = watermarkStore.get();
+    expect(afterFirst.coveredUpToExtractedAtMs).toBe(sharedExtractedAt);
+    expect(afterFirst.coveredUpToId).toBe('n-2');
+
+    const second = await makeWorker().run();
+    expect(second.scanned).toBe(1);
+    expect(second.proposed).toBe(1);
+
+    // All three distinct pairs proposed — the same-timestamp boundary row is not stranded.
+    const proposals = await proposalStore.list();
+    expect(proposals).toHaveLength(3);
+    const pairs = proposals.map(p => [p.sourceContactId, p.targetContactId].sort().join('|')).sort();
+    expect(pairs).toEqual([`${ALICE}|${BOB}`, `${ALICE}|${CARL}`, `${BOB}|${CARL}`].sort());
   });
 });

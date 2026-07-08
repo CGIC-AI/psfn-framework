@@ -197,6 +197,22 @@ describe('datetime producers', () => {
     expect(variables.runtime_last_message_received_days_hours).toBe('1 hour');
     expect(variables.runtime_last_message_received_timezone).toBe(TEST_TZ);
   });
+
+  it('treats a finite but out-of-range last-message timestamp as missing without throwing', () => {
+    // |ms| beyond the 8.64e15 Date range is finite but constructs an Invalid Date.
+    const outOfRangeMs = 8.64e15 + 1;
+    let variables: Record<string, string> = {};
+    expect(() => {
+      variables = buildLastMessagePromptVariables({
+        now: FIXED_NOW,
+        lastMessageReceivedAtMs: outOfRangeMs,
+      });
+    }).not.toThrow();
+    expect(variables.runtime_last_message_received_present).toBe('false');
+    expect(variables.runtime_last_message_received_missing).toBe('true');
+    expect(variables.runtime_last_message_received_at_iso).toBe('');
+    expect(variables.runtime_last_message_received_ago).toBe('');
+  });
 });
 
 describe('conversation-state producer', () => {

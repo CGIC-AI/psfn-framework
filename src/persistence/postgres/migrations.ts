@@ -1169,3 +1169,35 @@ export const POSTGRES_OBSERVER_EVAL_SIDECAR_MIGRATIONS = [
     OR psfn_emotion_snapshot_source IS NULL;
   `,
 ];
+
+// Multi-companion world schema (sprint 10, W2). Every companion gets its own
+// per-companion schema running the migration chains above; the single `shared`
+// schema holds cross-companion world data (locations/presence, shared wiki
+// chunks, world state). This is the SEPARATE migration chain for that schema.
+//
+// Phase 1 (this workstream) is plumbing only: the chain is intentionally empty
+// of world tables. It establishes the schema's own version ledger so shared
+// migrations can be registered and tracked independently of the per-companion
+// chains. World tables (e.g. `companion_presence`) land in later workstreams
+// (W5) and must be appended here, never to the per-companion chains.
+export const SHARED_SCHEMA_NAME = 'shared';
+
+export const POSTGRES_SHARED_MIGRATIONS: readonly string[] = [
+  // Version ledger for the shared schema. Independent of the per-companion
+  // chains (which are idempotent CREATE ... IF NOT EXISTS lists); this table is
+  // the registration point that lets the shared chain track applied versions as
+  // world tables are added.
+  `
+  CREATE TABLE IF NOT EXISTS shared_schema_migrations (
+    version INTEGER PRIMARY KEY,
+    name TEXT NOT NULL,
+    applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
+  );
+  `,
+  // Register the baseline (infrastructure-only) version. No world tables yet.
+  `
+  INSERT INTO shared_schema_migrations (version, name)
+  VALUES (1, 'shared-schema-baseline')
+  ON CONFLICT (version) DO NOTHING;
+  `,
+];

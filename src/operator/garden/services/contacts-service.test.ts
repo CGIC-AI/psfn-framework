@@ -5,6 +5,8 @@ import type { MemoryStorePort } from '../../../faculties/memory/memory-store-por
 import type { SessionStore } from '../../../persistence/sessions/store.js';
 import { AdminContactsDataService } from './contacts-service.js';
 import type { AdminContactRelationshipScoreReader } from './types.js';
+import { createContactRelationshipScoreReader } from '../../../core/contacts/trust-drift-signals.js';
+import type { EmotionalTimeSeriesPoint } from '../../../core/contacts/store/emotional-baseline.js';
 
 function createServiceHarness(options?: {
   relationshipScoreReader?: AdminContactRelationshipScoreReader;
@@ -33,7 +35,7 @@ function createServiceHarness(options?: {
     sessionStore,
     relationshipScoreReader: options?.relationshipScoreReader,
   });
-  return { db, contactStore, service, profiles };
+  return { db, contactStore, service, profiles, memoryStore, sessionStore };
 }
 
 describe('AdminContactsDataService', () => {
@@ -260,6 +262,44 @@ describe('AdminContactsDataService', () => {
         progressToNextTier: 0.5625,
         updatedAt: '2026-06-29T16:45:00.000Z',
       });
+    } finally {
+      db.close();
+    }
+  });
+
+  it('populates relationshipScoreMap from the production score reader (kada.4)', async () => {
+    const { db, contactStore, memoryStore, sessionStore } = createServiceHarness();
+    try {
+      // A public contact that has cleared every autonomous public→regular drift
+      // component: 3 positive valence points above threshold, no negatives, and
+      // one verified identity link. This must surface progressToNextTier === 1.
+      const contact = contactStore.upsert({ displayName: 'Score Contact', trustLevel: 'public' });
+      const positivePoints: EmotionalTimeSeriesPoint[] = [
+        { valence: 0.5, confidence: 0.5, observedAtMs: 1 },
+        { valence: 0.4, confidence: 0.6, observedAtMs: 2 },
+        { valence: 0.6, confidence: 0.7, observedAtMs: 3 },
+      ];
+      // Production reader over a fake read store exposing exactly the three
+      // methods createContactRelationshipScoreReader depends on.
+      const reader = createContactRelationshipScoreReader({
+        getById: id => contactStore.getById(id),
+        getEmotionalTimeSeries: id => (id === contact.id ? positivePoints : []),
+        countVerifiedIdentityLinks: id => (id === contact.id ? 1 : 0),
+      });
+      const service = new AdminContactsDataService({
+        contactStore,
+        memoryStore,
+        sessionStore,
+        relationshipScoreReader: reader,
+      });
+
+      const result = await service.listContacts();
+      const score = result.relationshipScoreMap?.get(contact.id);
+
+      expect(score).toBeDefined();
+      expect(score?.resolvedTier).toBe('public');
+      expect(score?.nextTier).toBe('regular');
+      expect(score?.progressToNextTier).toBe(1);
     } finally {
       db.close();
     }

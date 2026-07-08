@@ -71,6 +71,7 @@ import { registerAuditTimelineSources } from './services/audit-event-collector.j
 import { AdminChargeLedgerDataService } from './services/charge-ledger-service.js';
 import { AdminConcernDataService } from './services/concern-service.js';
 import { AdminContactsDataService } from './services/contacts-service.js';
+import { createContactRelationshipScoreReader } from '../../core/contacts/trust-drift-signals.js';
 import { createAdminPendingContactsService } from './services/pending-contacts-service.js';
 import { createAdminRoomsService } from './services/rooms-service.js';
 import { createAdminGraphProposalsService } from './services/graph-proposals-service.js';
@@ -288,6 +289,9 @@ export function createInProcessGardenAdminContract(
       contactStore: options.contactStore,
       memoryStore: options.memoryStore,
       sessionStore: options.sessionStore,
+      relationshipScoreReader: options.contactStore
+        ? createContactRelationshipScoreReader(options.contactStore)
+        : null,
     }),
     pendingContacts: options.pendingContactApprovals
       ? createAdminPendingContactsService({

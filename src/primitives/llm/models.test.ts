@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest';
-import { createLiteLLMModel, createModel, resolveSystemRoleCapabilityMetadata } from './models.js';
+import {
+  createLiteLLMModel,
+  createModel,
+  createOpenAICompatibleEndpointModel,
+  resolveSystemRoleCapabilityMetadata,
+} from './models.js';
 import { normalizeContent } from './client.js';
 
 describe('createLiteLLMModel', () => {
@@ -117,6 +122,39 @@ describe('resolveSystemRoleCapabilityMetadata', () => {
       supportsDeveloperRole: true,
       usesOutOfBandSystemPrompt: false,
     });
+  });
+
+  it('keeps Moonshot and Cloudflare OpenAI-compatible endpoints off the developer role', () => {
+    const endpoints = [
+      {
+        provider: 'moonshotai',
+        baseUrl: 'https://api.moonshot.ai/v1',
+      },
+      {
+        provider: 'cloudflare-ai-gateway',
+        baseUrl: 'https://gateway.ai.cloudflare.com/v1/account/gateway/compat',
+      },
+      {
+        provider: 'cloudflare-workers-ai',
+        baseUrl: 'https://api.cloudflare.com/client/v4/accounts/account/ai/v1',
+      },
+    ];
+
+    for (const endpoint of endpoints) {
+      const model = createOpenAICompatibleEndpointModel({
+        baseUrl: endpoint.baseUrl,
+        modelId: 'test-model',
+        provider: endpoint.provider,
+        reasoning: true,
+      });
+
+      expect(resolveSystemRoleCapabilityMetadata(model)).toEqual({
+        transport: 'openai_system',
+        supportsSystemRole: true,
+        supportsDeveloperRole: false,
+        usesOutOfBandSystemPrompt: false,
+      });
+    }
   });
 });
 

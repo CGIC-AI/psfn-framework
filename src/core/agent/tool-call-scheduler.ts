@@ -47,6 +47,7 @@ interface ToolExecutionContext {
 interface MissingArgumentRequirement {
   label: string;
   alternatives: string[];
+  mode?: 'any' | 'all';
 }
 
 export interface ToolExecutionResult {
@@ -65,6 +66,28 @@ type QueuedMessageSkipReason =
 interface QueuedMessageAttribution {
   telemetryReason: QueuedMessageSkipReason;
   resultText: string;
+}
+
+const normalizedValidationParameters = new WeakMap<object, unknown>();
+
+function normalizeToolParametersForPiAiValidation(parameters: unknown): unknown {
+  if (!parameters || typeof parameters !== 'object') return parameters;
+  const schema = parameters as object;
+  // pi-ai 0.73.1 only applies JSON Schema coercion when TypeBox symbols are absent.
+  // Repo tools still use @sinclair/typebox schemas, so strip those symbols on a cached clone.
+  if (Object.getOwnPropertySymbols(schema).length === 0) return parameters;
+  const cached = normalizedValidationParameters.get(schema);
+  if (cached) return cached;
+  const normalized = structuredClone(parameters);
+  normalizedValidationParameters.set(schema, normalized);
+  return normalized;
+}
+
+function normalizeToolForPiAiValidation(tool: AgentTool<any>): AgentTool<any> {
+  const parameters = normalizeToolParametersForPiAiValidation(tool.parameters);
+  return parameters === tool.parameters
+    ? tool
+    : { ...tool, parameters } as AgentTool<any>;
 }
 
 function toolResultDetailsFlagError(result: { details?: unknown } | undefined): boolean {
@@ -246,12 +269,12 @@ async function executeSingleToolCall(
         reason: 'repeated_malformed_arguments',
         toolName: toolCall.name,
         action: repeatedMalformed.action,
-        missingRequirement: repeatedMalformed.requirement.label,
+        missingRequirement: repeatedMalformed.missingRequirement,
       });
       return skipToolCall(
         toolCall,
         context.stream,
-        `Internal tool status: skipped repeated malformed ${toolCall.name}${repeatedMalformed.action ? ` action=${repeatedMalformed.action}` : ''} call because required field(s) are still missing: ${repeatedMalformed.requirement.label}. Use one minimal valid JSON call with all required fields before retrying. This is not a user-facing message.`,
+        `Internal tool status: skipped repeated malformed ${toolCall.name}${repeatedMalformed.action ? ` action=${repeatedMalformed.action}` : ''} call because required field(s) are still missing: ${repeatedMalformed.missingRequirement}. Use one minimal valid JSON call with all required fields before retrying. This is not a user-facing message.`,
       );
     }
     if (guard.inFlightSignatures.has(signature)) {
@@ -306,7 +329,7 @@ async function executeSingleToolCall(
     if (!tool) {
       throw new Error(`Tool ${toolCall.name} not found`);
     }
-    const validatedArgs = validateToolArguments(tool, toolCall);
+    const validatedArgs = validateToolArguments(normalizeToolForPiAiValidation(tool), toolCall);
     result = await tool.execute(toolCall.id, validatedArgs, context.signal, (partialResult) => {
       context.stream.push({
         type: 'tool_execution_update',
@@ -440,18 +463,34 @@ function satisfiesRequirement(toolCall: any, requirement: MissingArgumentRequire
   const args = toolCall?.arguments;
   if (!args || typeof args !== 'object' || Array.isArray(args)) return false;
   const record = args as Record<string, unknown>;
-  return requirement.alternatives.some(field => hasUsefulArgumentValue(record[field]));
+  const checker = (field: string) => hasUsefulArgumentValue(record[field]);
+  return requirement.mode === 'all'
+    ? requirement.alternatives.every(checker)
+    : requirement.alternatives.some(checker);
+}
+
+function missingRequirementLabel(toolCall: any, requirement: MissingArgumentRequirement): string {
+  if (requirement.mode !== 'all') return requirement.label;
+  const args = toolCall?.arguments;
+  if (!args || typeof args !== 'object' || Array.isArray(args)) return requirement.label;
+  const record = args as Record<string, unknown>;
+  const missing = requirement.alternatives.filter(field => !hasUsefulArgumentValue(record[field]));
+  return missing.length > 0 ? missing.join(', ') : requirement.label;
 }
 
 function resolveRepeatedMalformedArgumentSkip(
   toolCall: any,
   guard: ToolCallExecutionGuard,
-): { action: string; requirement: MissingArgumentRequirement } | null {
+): { action: string; requirement: MissingArgumentRequirement; missingRequirement: string } | null {
   const requirements = guard.malformedArgumentFailuresByAction.get(buildMalformedActionKey(toolCall));
   if (!requirements || requirements.length === 0) return null;
   for (const requirement of requirements) {
     if (!satisfiesRequirement(toolCall, requirement)) {
-      return { action: resolveToolCallAction(toolCall), requirement };
+      return {
+        action: resolveToolCallAction(toolCall),
+        requirement,
+        missingRequirement: missingRequirementLabel(toolCall, requirement),
+      };
     }
   }
   return null;
@@ -463,6 +502,21 @@ function normalizeRequiredFieldLabel(value: string): string {
 
 function parseMissingArgumentRequirement(text: string): MissingArgumentRequirement | null {
   const normalized = normalizeRequiredFieldLabel(text);
+  const typeboxMatch = /(?:^|[-\s])(?:[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)?\s*:\s*)?must have required properties?\s+([a-z][a-z0-9_]*(?:\s*,\s*[a-z][a-z0-9_]*)*)/iu.exec(normalized);
+  if (typeboxMatch?.[1]) {
+    const alternatives = typeboxMatch[1]
+      .split(/\s*,\s*/u)
+      .map(field => field.trim())
+      .filter(Boolean);
+    if (alternatives.length > 0) {
+      return {
+        label: alternatives.join(', '),
+        alternatives,
+        mode: 'all',
+      };
+    }
+  }
+
   const match = /(?:^|[.:\s])([a-z][a-z0-9_]*(?:\s+or\s+[a-z][a-z0-9_]*)*)\s+is\s+required(?:[.\s]|$)/iu.exec(normalized);
   if (!match?.[1]) return null;
   const alternatives = match[1]

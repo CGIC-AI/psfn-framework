@@ -38,6 +38,8 @@ import { registerGitTools } from '../../boundary/integrations/git/runtime-wiring
 import { GatewayGitOps } from '../../boundary/integrations/git/gateway-ops.js';
 import { registerBeadsTools } from '../../boundary/integrations/beads/runtime-wiring.js';
 import { GatewayBeadsOps } from '../../boundary/integrations/beads/gateway-ops.js';
+import { registerWorldTools } from '../../boundary/integrations/world/runtime-wiring.js';
+import { GatewayWorldOps } from '../../boundary/integrations/world/gateway-ops.js';
 import { createBehavioralPatternMemoryPromotionHook } from '../../core/intention/patterns.js';
 import {
   wireShardAndThinkRuntime,
@@ -487,6 +489,17 @@ async function main(): Promise<void> {
   // Beads issue-management tools — policy-scoped gateway RPC access (no shell passthrough)
   registerBeadsTools(agentLoop, new GatewayBeadsOps(gatewayOps), { gatewayMode: true });
   log.info('Beads issue-management tools enabled');
+
+  // World tool — perceive/list/control physical & virtual affordances via the
+  // places registry and the privileged Home Assistant gateway method (bead .8).
+  // Affordance→entity resolution is agent-side against places.json (defence in depth).
+  // TODO(vinz.10): capability/trust gating + staged-off control + a live
+  // situated-place resolver from the emanation/self-model runtime.
+  registerWorldTools(agentLoop, new GatewayWorldOps(gatewayOps), {
+    placesRegistry: placesRegistryConfig,
+    gatewayMode: true,
+  });
+  log.info('World perceive/list/control tool enabled');
 
   // Journal tools — durable markdown notes in the personal workspace.
   registerMarkdownJournalTools(agentLoop, pathSnapshot.workspaceRoot);

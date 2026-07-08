@@ -26,7 +26,10 @@ __pycache__/
 # Internal planning/audit artifacts (non-product docs)
 history/
 working_doc/
-working_docs/
+working_docs/*primer*
+working_docs/*Primer*
+working_docs/*PRIMER*
+working_docs/PSFN_PROJECT_STATE_20260611.md
 workspace/
 
 # Companion personal files live inside the repo tree but are runtime/personal data.

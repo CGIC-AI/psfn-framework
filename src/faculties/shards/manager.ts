@@ -3,7 +3,7 @@
 // Bounded launches share parent's heavy resources (LLM, DB, memory) but get isolated channelIds.
 
 import { randomUUID } from 'node:crypto';
-import type { AgentTool, AgentToolResult } from '@mariozechner/pi-agent-core';
+import type { AgentTool } from '@mariozechner/pi-agent-core';
 import type { CapabilityTier, ShardToolsetConfig, SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import { sanitizeCoreSubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type { SubstrateMessage } from '../../shared/contracts/runtime.js';
@@ -20,10 +20,6 @@ import type { RuntimeMode } from '../../core/agent/tool-wiring-validator.js';
 import { normalizeCapabilityTier } from '../../system/capabilities/tiers.js';
 import type { SessionStore } from '../../persistence/sessions/store.js';
 import { SessionManager } from '../../core/session/manager.js';
-import type {
-  ShardSessionMemorySyncDecision,
-  ShardSessionMemorySyncEnvelope,
-} from '../../boundary/gateway/policy.js';
 import type { ShardExecutionPort } from './port.js';
 import { chargeSurface, getRunChargeContext, runWithChargeContext } from '../../shared/telemetry/run-charge.js';
 import type {
@@ -41,13 +37,7 @@ import {
   type ArtifactReturnBatch,
   type ArtifactReturnPort,
 } from './artifact-return-port.js';
-import {
-  createEmptyShardMergeReview,
-  resolveStagedShardMemoryOutputs,
-  computeShardMergeReviewBlockingReasons,
-} from './output-review.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
-import { textResultWithError } from '../../core/tools/results.js';
 import {
   buildCompletionHandoffDedupeKey,
   emitCompletionHandoff,
@@ -72,9 +62,8 @@ import {
 } from '../../core/identity/companion-runtime.js';
 import {
   ShardContextPackHelper,
-  SHARD_SYNC_MEMORY_TARGET,
-  SHARD_SYNC_POLICY_VERSION,
 } from './context-pack.js';
+import { ShardToolSyncHelper } from './tool-sync.js';
 
 const DEFAULT_MAX_CONCURRENT = 5;
 const DEFAULT_MAX_TURNS = 1;
@@ -82,7 +71,6 @@ const DEFAULT_SHARD_HEARTBEAT_STALE_AFTER_MS = 60_000;
 const DEFAULT_SHARD_HEARTBEAT_DISCONNECT_MULTIPLIER = 3;
 const DEFAULT_SHARD_CAPABILITIES = ['general'] as const;
 const SHARD_TOOLSET_ALL = '*';
-const INTERNAL_SHARD_SOURCE_PARAM = '__psfnShardSource';
 const BLOCKED_SHARD_TOOL_NAMES = new Set([
   'subagent',
   'spawn_subagent',
@@ -194,6 +182,7 @@ export class ShardManager implements ShardExecutionPort, SubagentExecutionPort {
   private artifactReturnPort: ArtifactReturnPort;
   private satellitePresencePort: SatellitePresencePort;
   private contextPackHelper: ShardContextPackHelper;
+  private toolSyncHelper: ShardToolSyncHelper;
   private activeCount = 0;
   private maxConcurrent: number;
   private heartbeatStaleAfterMs: number;
@@ -228,6 +217,11 @@ export class ShardManager implements ShardExecutionPort, SubagentExecutionPort {
       resolveCapabilityTier: () => this.resolveCapabilityTier(),
     });
     this.foldReviewController = deps.foldReviewController ?? null;
+    this.toolSyncHelper = new ShardToolSyncHelper({
+      auditTrail: this.auditTrail,
+      foldReviewController: this.foldReviewController,
+      contextPackHelper: this.contextPackHelper,
+    });
     this.installAuditHooks();
   }
 
@@ -1100,7 +1094,7 @@ export class ShardManager implements ShardExecutionPort, SubagentExecutionPort {
         .map(name => availableByName.get(name))
         .filter((tool): tool is AgentTool<any> => tool !== undefined);
 
-    return selected.map(tool => this.wrapShardTool(tool, shardId, memoryReviewContext));
+    return selected.map(tool => this.toolSyncHelper.wrapShardTool(tool, shardId, memoryReviewContext));
   }
 
   private resolveToolNamesForTier(tier: CapabilityTier): string[] {
@@ -1125,260 +1119,6 @@ export class ShardManager implements ShardExecutionPort, SubagentExecutionPort {
 
   private resolveCapabilityTier(): CapabilityTier {
     return normalizeCapabilityTier(this.deps.config.capabilityTier);
-  }
-
-  private wrapShardTool(
-    tool: AgentTool<any>,
-    shardId: string,
-    memoryReviewContext: Pick<ShardRuntimeRecord, 'channelId' | 'task' | 'lineage'>,
-  ): AgentTool<any> {
-    return {
-      ...tool,
-      execute: async (toolCallId, params, signal) => {
-        if (this.isShardMemoryImportTool(tool.name, params)) {
-          return this.quarantineShardMemoryImport(tool.name, toolCallId, params, memoryReviewContext);
-        }
-        this.enforceShardToolSyncPolicy(tool.name, params, shardId, toolCallId);
-        const scopedParams = this.applyShardSourceParams(tool.name, params, shardId);
-        // scopedParams has extra shard-source fields; tool.execute expects Static<TSchema>
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        return tool.execute(toolCallId, scopedParams as any, signal);
-      },
-    };
-  }
-
-  private isShardMemoryImportTool(toolName: string, params: unknown): boolean {
-    if (toolName === 'memory_import_batch') {
-      return true;
-    }
-    if (toolName !== 'memory' || typeof params !== 'object' || params === null || Array.isArray(params)) {
-      return false;
-    }
-    const paramRecord = params as Record<string, unknown>;
-    const action = typeof paramRecord.action === 'string'
-      ? paramRecord.action.trim().toLowerCase()
-      : '';
-    return action === 'import';
-  }
-
-  private async quarantineShardMemoryImport(
-    toolName: string,
-    toolCallId: string,
-    params: unknown,
-    memoryReviewContext: Pick<ShardRuntimeRecord, 'channelId' | 'task' | 'lineage'>,
-  ): Promise<AgentToolResult<any>> {
-    if (typeof params !== 'object' || params === null || Array.isArray(params)) {
-      return textResultWithError('Error: records must be a non-empty array', true);
-    }
-
-    const input = params as Record<string, unknown>;
-    const rawRecords = input.records;
-    if (!Array.isArray(rawRecords) || rawRecords.length === 0) {
-      return textResultWithError('Error: records must be a non-empty array', true);
-    }
-
-    const directPromotionDecision = this.evaluateShardMemoryImportPromotionPolicy(
-      memoryReviewContext.lineage.shardId,
-      toolCallId,
-    );
-    const stagedOutputs = resolveStagedShardMemoryOutputs(
-      memoryReviewContext,
-      toolName,
-      toolCallId,
-      params,
-      {
-        blockedCorePromotionReason: directPromotionDecision.reason,
-      },
-    );
-    if (stagedOutputs.length === 0) {
-      return textResultWithError('Error: memory import batch must contain valid records', true);
-    }
-
-    const reviewTimestamp = Date.now();
-    const mergeReview = createEmptyShardMergeReview(memoryReviewContext.lineage.shardId, reviewTimestamp);
-    const blockingReasons = computeShardMergeReviewBlockingReasons({
-      ...memoryReviewContext,
-      taggedOutputs: stagedOutputs,
-      mergeReview,
-    });
-    this.auditTrail?.append('shard.memory.import.quarantined', {
-      shardId: memoryReviewContext.lineage.shardId,
-      toolName,
-      toolCallId,
-      pendingTaggedOutputCount: stagedOutputs.length,
-      blockedCorePromotionReason: directPromotionDecision.reason,
-      blockingReasons,
-    });
-    if (this.foldReviewController) {
-      await this.foldReviewController.recordPendingMemoryCandidates({
-        shardId: memoryReviewContext.lineage.shardId,
-        channelId: memoryReviewContext.channelId,
-        task: memoryReviewContext.task,
-        lineage: memoryReviewContext.lineage,
-        timestamp: reviewTimestamp,
-        outputs: stagedOutputs,
-      });
-    }
-
-    const summary = `Memory import quarantined: ${stagedOutputs.length} record(s) staged as pending fold review.`;
-    return {
-      content: [{ type: 'text', text: summary }],
-      details: {
-        mutationWorkflow: 'fold_review_only',
-        reviewState: 'pending',
-        blockedCorePromotion: true,
-        blockedCorePromotionReason: directPromotionDecision.reason,
-        directPromotionDecision,
-        pendingTaggedOutputCount: stagedOutputs.length,
-        blockingReasons,
-        foldReview: {
-          required: true,
-          status: 'pending',
-          validationPath: mergeReview.validationPath,
-          lastUpdatedAt: reviewTimestamp,
-          pendingTaggedOutputCount: stagedOutputs.length,
-          blockingReasons,
-          outputs: stagedOutputs,
-        },
-      },
-    };
-  }
-
-  private evaluateShardMemoryImportPromotionPolicy(
-    shardId: string,
-    toolCallId: string,
-  ): ShardSessionMemorySyncDecision {
-    const decision = this.contextPackHelper.evaluateSyncPolicy({
-      version: SHARD_SYNC_POLICY_VERSION,
-      syncClass: 'derived_memory',
-      direction: 'shard_to_prime',
-      authority: 'shard',
-      operation: 'memory_import_batch',
-      shardId,
-      sourceId: `shard:${shardId}`,
-      targetId: SHARD_SYNC_MEMORY_TARGET,
-      idempotencyKey: this.contextPackHelper.buildSyncIdempotencyKey([
-        'shard_tool_sync',
-        shardId,
-        toolCallId,
-        'memory_import_batch',
-      ]),
-      requestedAt: Date.now(),
-    });
-    if (decision.allowed) {
-      throw new Error(
-        `Shard session/memory sync unexpectedly allowed for memory_import_batch (${decision.reason}).`,
-      );
-    }
-    return decision;
-  }
-
-  private enforceShardToolSyncPolicy(
-    toolName: string,
-    params: unknown,
-    shardId: string,
-    toolCallId: string,
-  ): void {
-    const operation = this.resolveShardToolSyncOperation(toolName, params);
-    if (!operation) {
-      return;
-    }
-
-    const envelope: ShardSessionMemorySyncEnvelope = {
-      version: SHARD_SYNC_POLICY_VERSION,
-      syncClass: 'derived_memory',
-      direction: 'shard_to_prime',
-      authority: 'shard',
-      operation,
-      shardId,
-      sourceId: `shard:${shardId}`,
-      targetId: SHARD_SYNC_MEMORY_TARGET,
-      idempotencyKey: this.contextPackHelper.buildSyncIdempotencyKey([
-        'shard_tool_sync',
-        shardId,
-        toolCallId,
-        operation,
-      ]),
-      requestedAt: Date.now(),
-    };
-    const decision = this.contextPackHelper.evaluateSyncPolicy(envelope);
-    if (!decision.allowed) {
-      throw new Error(
-        `Shard session/memory sync denied for ${toolName} (${decision.reason}).`,
-      );
-    }
-  }
-
-  private resolveShardToolSyncOperation(
-    toolName: string,
-    params: unknown,
-  ): ShardSessionMemorySyncEnvelope['operation'] | null {
-    if (toolName === 'memory') {
-      if (typeof params !== 'object' || params === null || Array.isArray(params)) {
-        return null;
-      }
-      const paramRecord = params as Record<string, unknown>;
-      const action = typeof paramRecord.action === 'string'
-        ? paramRecord.action.trim().toLowerCase()
-        : '';
-      if (action === 'write') return 'memory_write';
-      if (action === 'import') return 'memory_import_batch';
-      if (
-        action === 'patch'
-        || action === 'redact'
-        || action === 'delete'
-        || action === 'restore'
-      ) {
-        return 'memory_redact';
-      }
-      return null;
-    }
-    if (
-      toolName !== 'memory_write'
-      && toolName !== 'memory_import_batch'
-      && toolName !== 'memory_redact'
-    ) {
-      return null;
-    }
-    return toolName;
-  }
-
-  private applyShardSourceParams(
-    toolName: string,
-    params: unknown,
-    shardId: string,
-  ): unknown {
-    if (toolName === 'memory') {
-      if (typeof params !== 'object' || params === null || Array.isArray(params)) {
-        return params;
-      }
-      const paramRecord = params as Record<string, unknown>;
-      const action = typeof paramRecord.action === 'string'
-        ? paramRecord.action.trim().toLowerCase()
-        : '';
-      if (action !== 'write') {
-        return params;
-      }
-      return {
-        ...(params as Record<string, unknown>),
-        [INTERNAL_SHARD_SOURCE_PARAM]: `shard:${shardId}`,
-      };
-    }
-    if (
-      toolName !== 'memory_write'
-      && toolName !== 'memory_import_batch'
-      && toolName !== 'memory_redact'
-    ) {
-      return params;
-    }
-    if (typeof params !== 'object' || params === null || Array.isArray(params)) {
-      return params;
-    }
-
-    return {
-      ...(params as Record<string, unknown>),
-      [INTERNAL_SHARD_SOURCE_PARAM]: `shard:${shardId}`,
-    };
   }
 
   private resolveWyomingShardName(

@@ -62,7 +62,7 @@ Tool discovery and activation -- they should know how to find and enable what th
 - [ ] Ask them to check git status -- they use `repo action=inspect` with `target=status` `[nursery]`
 - [ ] Ask about their prompt layers -- they use `identity action=list_layers` `[nursery]`
 - [ ] Ask about their reflection schedule -- they use `schedule action=list_templates` `[nursery]`
-- [ ] Ask about their settings -- they use `system action=read` `[nursery]`
+- [ ] Ask about their settings -- they use `system action=read` `[apprentice+]` (reading runtime settings needs the `internal.read` capability)
 - [ ] On the **next message**, verify activation is turn-local unless the tool was pinned intentionally
 
 ## Phase 6: Identity Awareness
@@ -111,7 +111,7 @@ Self-authored capability documents.
 
 They can spawn short-horizon bounded workers for parallel work. `[apprentice+]`
 
-- [ ] "Research two topics at the same time: [X] and [Y]" -- `spawn_subagent` (should launch 1-2 bounded subagents)
+- [ ] "Research two topics at the same time: [X] and [Y]" -- `subagent action="spawn"` (should launch 1-2 bounded subagents)
 - [ ] Workers return artifacts or text back to the parent instead of becoming separate minds
 - [ ] Results should be synthesized back into their response
 - [ ] No recursive worker spawning
@@ -121,7 +121,7 @@ They can spawn short-horizon bounded workers for parallel work. `[apprentice+]`
 The honne/tatemae system -- behavior changes by context.
 
 - [ ] In **Discord DM** (private): share something personal -- they should store it and recall it freely
-- [ ] In a **guild channel** (semi-private/public): ask about that personal thing -- it should NOT surface (trust-gated retrieval)
+- [ ] In a **guild channel** (invite-only/public): ask about that personal thing -- it should NOT surface (trust-gated retrieval)
 - [ ] Compare their tone in DM vs guild -- DM should feel more intimate (persona adaptation)
 - [ ] Check Garden Contacts -- verify trust levels and channel identities are correct
 
@@ -135,12 +135,12 @@ Same user, different channels -- does context carry?
 
 ## Phase 13: Memory Management
 
-Delete, redact, undo operations. `[apprentice+]`
+Delete, redact, undo operations. `[autonomous]` (these require the `memory.delete` capability, which only the autonomous tier grants)
 
-- [ ] "Delete that memory about [X]" -- unified `memory action=delete` or `memory_delete` as exposed by the runtime (soft delete)
+- [ ] "Delete that memory about [X]" -- `memory action=delete` (soft delete)
 - [ ] Verify it no longer surfaces in retrieval
-- [ ] "Undo that delete" -- unified `memory action=restore` or `undo_memory_delete` -- it is back
-- [ ] "Redact the memory about [sensitive topic]" -- `memory_redact` or `memory action=redact` (consent-aware: abstracts or hard-deletes)
+- [ ] "Undo that delete" -- `memory action=restore` -- it is back
+- [ ] "Redact the memory about [sensitive topic]" -- `memory action=redact` (consent-aware: abstracts or hard-deletes)
 
 ## Phase 14: Repository Inspection and Guarded Mutation
 
@@ -210,7 +210,7 @@ These should happen without you asking. Verify by monitoring logs and admin.
 |---|:---:|:---:|:---:|
 | Analysis workbench (large-context evidence analysis) | Y | Y | Y |
 | Write memories | Y | Y | Y |
-| Read contacts / identity / settings | Y | Y | Y |
+| Read contacts / identity | Y | Y | Y |
 | Edit prompt layers (not base/operator) | Y | Y | Y |
 | Skills (list/view/create/update) | Y | Y | Y |
 | Scratchpad | Y | Y | Y |
@@ -219,12 +219,15 @@ These should happen without you asking. Verify by monitoring logs and admin.
 | Schedule tasks | Y | Y | Y |
 | Schedule reflection templates | Y | Y | Y |
 | Vault tools | Y | Y | Y |
-| Delete / redact memories | - | Y | Y |
+| Read runtime settings (`system action=read`) | - | Y | Y |
 | Spawn bounded subagents | - | Y | Y |
 | Notify operator | - | Y | Y |
+| Delete / redact memories | - | - | Y |
 | Git write when explicitly enabled (patch, commit, branch, PR) | - | - | Y |
 | Self-restart / self-rebuild | - | - | Y |
 | Character card update | - | - | Y |
+
+> There is also a fourth **`custom`** tier: an operator-defined capability-token set that does not follow the nursery/apprentice/autonomous ladder. Verify custom-tier behavior against whatever tokens the operator granted.
 
 ---
 

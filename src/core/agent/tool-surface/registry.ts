@@ -79,6 +79,7 @@ export const MODEL_FACING_DRIFT_GUARD_RETIRED_TOOL_ALIASES = [
   'image_create',
   'image_edit',
   'image_analyze',
+  'media',
   'scratchpad_write',
   'memory_import_batch',
   'memory_patch',
@@ -421,22 +422,23 @@ export const CANONICAL_FIRST_PARTY_TOOL_SURFACES: readonly CanonicalToolSurfaceE
     ],
   },
   {
-    name: 'media',
+    name: 'generate_image',
     domain: 'media',
-    exposure: 'extended',
-    description: 'Canonical generic media generation, editing, and analysis surface.',
+    exposure: 'core',
+    description: 'Canonical generic image generation, editing, and analysis surface.',
     actions: ['generate', 'edit', 'analyze'],
     capabilityMetadata: { kind: 'action_aware', source: CAPABILITIES_REQUIREMENTS },
     retiredAliases: [
-      retiredAlias('image_create', 'media', 'retired', 'generate', 'Image generation belongs on media.'),
-      retiredAlias('image_edit', 'media', 'retired', 'edit', 'Image editing belongs on media.'),
-      retiredAlias('image_analyze', 'media', 'retired', 'analyze', 'Image analysis belongs on media.'),
+      retiredAlias('media', 'generate_image', 'retired', 'generate', 'Generic image work belongs on generate_image; the media name was too vague to route against selfie_create.'),
+      retiredAlias('image_create', 'generate_image', 'retired', 'generate', 'Image generation belongs on generate_image.'),
+      retiredAlias('image_edit', 'generate_image', 'retired', 'edit', 'Image editing belongs on generate_image.'),
+      retiredAlias('image_analyze', 'generate_image', 'retired', 'analyze', 'Image analysis belongs on generate_image.'),
     ],
   },
   {
     name: 'selfie_create',
     domain: 'self_expression',
-    exposure: 'extended',
+    exposure: 'core',
     description: 'Canonical first-class self-expression image surface with appearance and saved-reference anchoring.',
     capabilityMetadata: { kind: 'static', source: CAPABILITIES_REQUIREMENTS },
     retiredAliases: [],
@@ -487,6 +489,39 @@ export const CANONICAL_FIRST_PARTY_TOOL_SURFACES: readonly CanonicalToolSurfaceE
     retiredAliases: [],
   },
 ];
+
+// ── Model-facing presentation order ──
+//
+// The active tool list handed to the model is ordered social/expressive
+// first and admin/boundary/system last, with name as the tie-breaker inside
+// each domain. Non-canonical tools (plugins, channel extras) rank between
+// the first-party feature domains and the boundary/system tail.
+const TOOL_PRESENTATION_DOMAIN_RANK: Readonly<Record<FirstPartyToolDomain, number>> = {
+  self_expression: 10,
+  media: 20,
+  notification: 30,
+  contacts: 40,
+  memory: 50,
+  sessions: 60,
+  orientation: 70,
+  identity: 80,
+  knowledge: 90,
+  scheduler: 100,
+  analysis: 110,
+  subagents: 120,
+  tracked_work: 130,
+  adaptive_tooling: 140,
+  boundary: 160,
+  system: 170,
+};
+
+export const TOOL_PRESENTATION_RANK_UNKNOWN = 150;
+
+export function resolveToolPresentationRank(toolName: string): number {
+  const canonical = CANONICAL_BY_NAME.get(toolName);
+  if (!canonical) return TOOL_PRESENTATION_RANK_UNKNOWN;
+  return TOOL_PRESENTATION_DOMAIN_RANK[canonical.domain];
+}
 
 const CANONICAL_BY_NAME = new Map(
   CANONICAL_FIRST_PARTY_TOOL_SURFACES.map(entry => [entry.name, entry]),

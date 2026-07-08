@@ -22,10 +22,12 @@ export function resolveAppearanceContextFromTemplateVariables(
 }
 
 function hasActiveSelfImageTool(input: {
+  coreToolNames: ReadonlySet<string>;
   loadedExtended: Map<string, AdaptiveLoadedExtendedToolState>;
   promotedExtendedToolNames: Set<string>;
 }): boolean {
   for (const toolName of SELF_IMAGE_TOOL_NAMES) {
+    if (input.coreToolNames.has(toolName)) return true;
     if (input.promotedExtendedToolNames.has(toolName)) return true;
     if (input.loadedExtended.has(toolName)) return true;
   }
@@ -36,6 +38,7 @@ export function buildSelfPresentationPromptVariables(input: {
   internalTurn: boolean;
   templateVariables?: Record<string, string>;
   skillsContext?: string;
+  coreToolNames: ReadonlySet<string>;
   loadedExtended: Map<string, AdaptiveLoadedExtendedToolState>;
   promotedExtendedToolNames: Set<string>;
 }): Record<string, string> {
@@ -46,6 +49,7 @@ export function buildSelfPresentationPromptVariables(input: {
     runtime_skills_index_body: unwrapPromptSectionBody(input.skillsContext),
     runtime_appearance_context_body: appearanceContextBody,
     runtime_self_image_tool_active: String(hasActiveSelfImageTool({
+      coreToolNames: input.coreToolNames,
       loadedExtended: input.loadedExtended,
       promotedExtendedToolNames: input.promotedExtendedToolNames,
     })),

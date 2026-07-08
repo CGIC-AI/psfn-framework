@@ -15,7 +15,7 @@
 //     identity, skill, wiki, schedule, north_star, scratchpad, journal,
 //     toolset, tool_search, self_status) → read_only.
 //   - boundary/external/side-effecting surfaces (fs, repo, shell, web,
-//     analysis_workbench sandbox, notify, media, selfie_create, subagent,
+//     analysis_workbench sandbox, notify, generate_image, selfie_create, subagent,
 //     shard, vault, beads, response_control) → schema_only. Their only "read"
 //     actions depend on a live gateway, external processes, or arguments that
 //     do not belong in a hermetic handler smoke, and several have no read
@@ -88,7 +88,7 @@ export const TOOL_CONFORMANCE_PROBE_REGISTRY: Readonly<Record<string, ToolProbeS
   analysis_workbench: { kind: 'schema_only' },
   response_control: { kind: 'schema_only' },
   notify: { kind: 'schema_only' },
-  media: { kind: 'schema_only' },
+  generate_image: { kind: 'schema_only' },
   selfie_create: { kind: 'schema_only' },
   subagent: { kind: 'schema_only' },
   shard: { kind: 'schema_only' },

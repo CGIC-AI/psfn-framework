@@ -248,7 +248,7 @@ const UNIFIED_TOOL_REQUIREMENT_RESOLVERS: Readonly<Partial<Record<string, Unifie
   session: (action) => resolveSessionRequirement(action),
   skill: (action) => resolveSkillRequirement(action),
   subagent: (action) => resolveSubagentRequirement(action),
-  media: () => NO_CAPABILITY_REQUIREMENT,
+  generate_image: () => NO_CAPABILITY_REQUIREMENT,
   selfie_create: () => NO_CAPABILITY_REQUIREMENT,
   vault: (action) => resolveVaultRequirement(action),
   fs: (action) => resolveFsRequirement(action),

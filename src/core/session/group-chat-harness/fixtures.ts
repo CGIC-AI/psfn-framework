@@ -412,6 +412,7 @@ const BASE_DYNAMIC_INPUT = {
   capabilityTier: 'autonomous' as const,
   activeToolCounts: { core: 0, promoted: 0, extendedLoaded: 0, autoload: 0, deferred: 0, total: 0 },
   extendedTools: [] as never[],
+  coreToolNames: new Set<string>(),
   loadedExtended: new Map(),
   classifyExtendedToolForTurn: () => 'overlay' as const,
   promotedExtendedToolNames: new Set<string>(),

@@ -1394,7 +1394,7 @@ describe('SubstrateAgent.handleMessage', () => {
     const promptCallsBefore = promptSpy.mock.calls.length;
     mockAssistantResponse('Deferred continuation output');
     await agent.handleMessage(buildDeferredToolHandoffMessage('action-42', {
-      toolNames: ['media'],
+      toolNames: ['generate_image'],
       intendedAction: 'continue with deferred tools',
       turn: {
         turnId: 'source-turn-42',
@@ -4038,7 +4038,7 @@ describe('SubstrateAgent.handleMessage', () => {
     );
 
     agent.registerTool(makeExtendedProbeTool('beads'), 'extended');
-    agent.registerTool(makeExtendedProbeTool('media'), 'extended');
+    agent.registerTool(makeExtendedProbeTool('north_star'), 'extended');
 
     const sameTurnEvents: any[] = [];
     const adaptiveDecisions: any[] = [];
@@ -4059,7 +4059,7 @@ describe('SubstrateAgent.handleMessage', () => {
     expect(toolset).toBeDefined();
     const result = await (toolset as any).execute('load-background-skip', {
       action: 'activate',
-      tools: ['beads', 'media'],
+      tools: ['beads', 'north_star'],
     });
 
     const payload = JSON.parse(result.content[0]?.text as string) as {
@@ -4067,16 +4067,16 @@ describe('SubstrateAgent.handleMessage', () => {
       activatedTools?: string[];
     };
     expect(payload.backgroundOnlyTools ?? []).toEqual([]);
-    expect(payload.activatedTools).toEqual(['beads', 'media']);
+    expect(payload.activatedTools).toEqual(['beads', 'north_star']);
     const runtimeState = agent.getAdaptiveToolRuntimeState();
     const activeToolNames = runtimeState.activeTools.map(tool => tool.toolName);
     expect(activeToolNames).toContain('beads');
-    expect(activeToolNames).toContain('media');
+    expect(activeToolNames).toContain('north_star');
 
     expect(sameTurnEvents.at(-1)).toMatchObject({
-      requestedTools: ['beads', 'media'],
-      overlayEligible: ['beads', 'media'],
-      activatedTools: ['beads', 'media'],
+      requestedTools: ['beads', 'north_star'],
+      overlayEligible: ['beads', 'north_star'],
+      activatedTools: ['beads', 'north_star'],
       skippedBackgroundOnly: [],
       intent: 'ops',
       taskKind: 'chat',
@@ -4177,7 +4177,7 @@ describe('SubstrateAgent.handleMessage', () => {
 
     const configuredTools = setToolsSpy.mock.calls.at(-1)?.[0] as Array<{ name: string }>;
     const toolNames = configuredTools.map(tool => tool.name);
-    expect(toolNames).toEqual(['response_control', 'tool_search', 'toolset']);
+    expect(toolNames).toEqual(['tool_search', 'toolset', 'response_control']);
 
     expect(autoloadSummaries).toEqual([]);
   });

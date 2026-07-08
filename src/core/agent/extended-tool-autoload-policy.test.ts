@@ -123,17 +123,18 @@ describe('extended-tool-autoload-policy', () => {
     )).not.toThrow();
   });
 
-  it('preloads the canonical media surface for social media work', () => {
+  it('keeps social preload candidates free of the core image tools', () => {
     expect(DEFAULT_EXTENDED_TOOL_AUTOLOAD_MAX).toBe(4);
-    expect(DEFAULT_EXTENDED_TOOL_AUTOLOAD_CANDIDATES.social).toEqual(['media', 'vault']);
+    // generate_image and selfie_create are core (always active) so the social
+    // intent no longer autoloads an image surface.
+    expect(DEFAULT_EXTENDED_TOOL_AUTOLOAD_CANDIDATES.social).toEqual(['vault']);
 
     const policy = createDefaultExtendedToolAutoloadPolicy(DEFAULT_EXTENDED_TOOL_AUTOLOAD_MAX);
     const selection = policy.selectOverlayCandidates('social', [
-      'media',
       'vault',
     ]);
 
-    expect(selection.selected).toEqual(['media', 'vault']);
+    expect(selection.selected).toEqual(['vault']);
     expect(selection.skipped).toEqual([]);
   });
 
@@ -185,7 +186,7 @@ describe('extended-tool-autoload-policy', () => {
         'beads',
         'vault',
         'north_star',
-        'media',
+        'generate_image',
       ]);
 
       expect(selection.candidates).not.toContain('analysis_workbench');

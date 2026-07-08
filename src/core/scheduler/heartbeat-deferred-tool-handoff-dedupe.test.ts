@@ -32,7 +32,7 @@ function buildAction(): Parameters<ActionHandler>[0] {
     channelId: 'discord:general',
     sourceMessageId: 'turn-1',
     payload: {
-      toolNames: ['media'],
+      toolNames: ['generate_image'],
       intendedAction: 'finish the selfie edit',
       turn: {
         turnId: 'turn-1',
@@ -71,7 +71,7 @@ function wire(options: {
     channelId: 'discord:general',
     metadata: { model: 'm', inputTokens: 1, outputTokens: 1, durationMs: 1 },
   }));
-  const activateExtendedTools = vi.fn(() => ({ activatedTools: ['media'] }));
+  const activateExtendedTools = vi.fn(() => ({ activatedTools: ['generate_image'] }));
   const sender = { send: vi.fn(async () => {}) };
 
   wireHeartbeatRuntime(

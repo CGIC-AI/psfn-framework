@@ -435,6 +435,43 @@ export function resolveSystemStateDir(systemDataDir: string): string {
 }
 
 /** Latest tool-surface conformance run (system-owned, cross-workstream contract). */
+// ── Shared-world (operator/caretaker-owned, cross-companion) storage ──
+// Shared-world wiki documents are NOT companion-data: they are world knowledge
+// attached to a site and are owned by operator/caretaker maintenance surfaces
+// (publication + bulk import), never authored by a companion directly. They live
+// under system-data so a single canonical copy is shared across companions
+// (multi-companion §4 W5: the "shared" data domain). One subtree per site keeps
+// publication and import idempotent and per-site isolated.
+const SHARED_WORLD_DIRNAME = 'shared-world';
+const SHARED_WORLD_WIKI_DIRNAME = 'wiki';
+const SHARED_WORLD_WIKI_SITES_DIRNAME = 'sites';
+
+/** Shared-world (operator/caretaker-owned) root under system-data. */
+export function resolveSharedWorldDir(systemDataDir: string): string {
+  return join(systemDataDir, SHARED_WORLD_DIRNAME);
+}
+
+/** Root for shared-world wiki markdown (one subtree per site). NOT companion-data. */
+export function resolveSharedWorldWikiDir(systemDataDir: string): string {
+  return join(resolveSharedWorldDir(systemDataDir), SHARED_WORLD_WIKI_DIRNAME);
+}
+
+/**
+ * Per-site shared-world wiki store root:
+ *   <system-data>/shared-world/wiki/sites/<siteId>
+ * The siteId is contained fail-closed to the sites root so a malformed id can
+ * never escape the shared-world subtree.
+ */
+export function resolveSharedWorldWikiSiteDir(systemDataDir: string, siteId: string): string {
+  const sitesRoot = join(resolveSharedWorldWikiDir(systemDataDir), SHARED_WORLD_WIKI_SITES_DIRNAME);
+  const resolved = resolve(sitesRoot, siteId);
+  const relativePath = relative(sitesRoot, resolved);
+  if (relativePath === '' || relativePath.startsWith('..') || isAbsolute(relativePath)) {
+    throw new Error(`shared-world wiki siteId "${siteId}" resolves outside the sites root`);
+  }
+  return resolved;
+}
+
 export function resolveToolConformanceLatestPath(systemDataDir: string): string {
   return join(resolveSystemStateDir(systemDataDir), 'tool-conformance-latest.json');
 }

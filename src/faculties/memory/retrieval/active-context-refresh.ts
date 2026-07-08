@@ -94,7 +94,7 @@ export function finalizeRetrievalPromptBlock(
   }, deps).contextBlock;
 }
 
-export function cloneScoredPromptMemory(input: ScoredMemory): ScoredMemory {
+function cloneScoredPromptMemory(input: ScoredMemory): ScoredMemory {
   return {
     ...input,
     memory: cloneMemory(input.memory),

@@ -104,7 +104,7 @@ export const SIMPLE_SECTION_ORDER: readonly SettingsSimpleSectionId[] = [
 ];
 
 export type RawEditorKey = GardenSettingsRawEditorKey;
-export type RawSettingsEditorKey = Exclude<RawEditorKey, 'settings' | 'models'>;
+type RawSettingsEditorKey = Exclude<RawEditorKey, 'settings' | 'models'>;
 export type RawEditorSubsystemId =
   (typeof SETTINGS_GARDEN_RAW_EDITOR_SUBSYSTEM_BY_KEY)[RawEditorKey];
 
@@ -191,7 +191,7 @@ export function normalizeStringList(value: unknown): string[] {
   )];
 }
 
-export function clamp(value: number, min: number, max: number): number {
+function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
 }
 
@@ -199,7 +199,7 @@ export function tryPrettyPrint(raw: string): string {
   try { return JSON.stringify(JSON.parse(raw), null, 2); } catch { return raw; }
 }
 
-export function stringFromConfigValue(value: unknown): string {
+function stringFromConfigValue(value: unknown): string {
   if (Array.isArray(value)) {
     return value
       .filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0)
@@ -208,7 +208,7 @@ export function stringFromConfigValue(value: unknown): string {
   return typeof value === 'string' ? value : String(value ?? '');
 }
 
-export function numberFromConfigValue(value: unknown, fallback: number): number {
+function numberFromConfigValue(value: unknown, fallback: number): number {
   const next = Number(value);
   return Number.isFinite(next) ? next : fallback;
 }
@@ -223,7 +223,7 @@ export function fmtMs(ms: number): string {
   return `${(ms / 1000).toFixed(1)}s`;
 }
 
-export function splitCsv(str: string): string[] {
+function splitCsv(str: string): string[] {
   return str.split(',').map(s => s.trim()).filter(Boolean);
 }
 

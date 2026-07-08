@@ -26,7 +26,7 @@ export interface ContactProfileAccessResult {
   withheldSourceMemoryIds: string[];
 }
 
-export function buildRoomVisibilityContext(
+function buildRoomVisibilityContext(
   channelId: string,
   channelMeta: ChannelMeta | undefined,
   canonicalContact: Contact | undefined,

@@ -20,7 +20,7 @@ export type MemoryQuarantineCandidate =
   Pick<PurrMemory, 'id' | 'sourceRef' | 'provenance' | 'provenanceRefs'>
   & { similarity?: number };
 
-export function isRetiredSessionId(
+function isRetiredSessionId(
   filter: MemorySessionQuarantineFilter | null,
   logicalSessionId: string | undefined,
 ): boolean {

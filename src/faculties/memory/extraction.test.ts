@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os';
 import { SessionStore } from '../../persistence/sessions/store.js';
 import { getDefaultTrustPolicy, resetRuntimeTrustPolicy, setRuntimeTrustPolicy } from '../../system/trust/runtime-policy.js';
 import { createTurnId, isTurnId } from '../../core/turns/id.js';
+import { createDefaultGroupMemorySettings } from '../../system/config/group-memory-config.js';
 
 const tempDirs: string[] = [];
 
@@ -2526,5 +2527,120 @@ describe('MemoryExtractor interval watermark coverage', () => {
     // The recovered range is covered; the interval trigger does not re-send it.
     await extractor.maybeExtract(channelId);
     expect(llmClient.complete).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('MemoryExtractor group range in-flight reuse (mlwk.22)', () => {
+  function groupWriteCaps() {
+    return createDefaultGroupMemorySettings().writeCaps;
+  }
+
+  function groupEntry(channelId: string, id: number): unknown {
+    return {
+      id,
+      channelId,
+      role: 'user',
+      content: `Group range message ${id} with enough substance to extract.`,
+      authorName: 'user',
+      timestamp: id * 1_000,
+      metadata: JSON.stringify({
+        turn: {
+          schemaVersion: 1,
+          turnId: createTurnId(),
+          requestId: `req-group-${id}`,
+          role: 'user',
+        },
+      }),
+    };
+  }
+
+  function makeExtractor(gate: Promise<void>): MemoryExtractor {
+    const llmClient = {
+      complete: vi.fn().mockImplementation(async () => {
+        await gate;
+        return { content: '<response></response>' };
+      }),
+    } as any;
+    const sessionManager = {
+      getMessageCount: vi.fn().mockReturnValue(0),
+      getRecentMessages: vi.fn().mockReturnValue([]),
+    } as any;
+    const memoryStore = {
+      getMemoriesByChannel: vi.fn().mockReturnValue([]),
+    } as any;
+    const embeddingService = {
+      embed: vi.fn().mockResolvedValue(new Float32Array(8)),
+      embedBatch: vi.fn(),
+      dims: 8,
+    } as any;
+    const eventBus = {
+      emit: vi.fn().mockResolvedValue(undefined),
+    } as any;
+    return new MemoryExtractor(
+      llmClient,
+      sessionManager,
+      memoryStore,
+      embeddingService,
+      eventBus,
+      { extractionInterval: 5, minImportance: 0.45, minConfidence: 0.6, minNovelty: 0.35 },
+    );
+  }
+
+  it('reports false for an observed group range dropped into an in-flight extraction', async () => {
+    let releaseComplete!: () => void;
+    const gate = new Promise<void>((resolve) => { releaseComplete = resolve; });
+    const extractor = makeExtractor(gate);
+    const channelId = 'api:group-range-inflight';
+
+    // First range starts an extraction that we hold in-flight via the gate.
+    const firstPromise = extractor.extractObservedGroupRange({
+      channelId,
+      triggerReason: 'observed_count',
+      recoveredEntries: [groupEntry(channelId, 1), groupEntry(channelId, 2)] as any,
+      groupWriteCaps: groupWriteCaps(),
+    });
+    await Promise.resolve();
+    expect(extractor.getPendingExtractionPromise(channelId)).not.toBeNull();
+
+    // A different range on the SAME channel is coalesced into the in-flight run
+    // and its entries are dropped; it must report false so the caller does not
+    // mark the range processed.
+    const secondPromise = extractor.extractObservedGroupRange({
+      channelId,
+      triggerReason: 'observed_count',
+      recoveredEntries: [groupEntry(channelId, 3), groupEntry(channelId, 4)] as any,
+      groupWriteCaps: groupWriteCaps(),
+    });
+
+    releaseComplete();
+    const [firstResult, secondResult] = await Promise.all([firstPromise, secondPromise]);
+    expect(firstResult).toBe(true);
+    expect(secondResult).toBe(false);
+  });
+
+  it('reports false for an operator backfill range dropped into an in-flight extraction', async () => {
+    let releaseComplete!: () => void;
+    const gate = new Promise<void>((resolve) => { releaseComplete = resolve; });
+    const extractor = makeExtractor(gate);
+    const channelId = 'api:group-backfill-inflight';
+
+    const firstPromise = extractor.extractGroupBackfillRange({
+      channelId,
+      recoveredEntries: [groupEntry(channelId, 1), groupEntry(channelId, 2)] as any,
+      groupWriteCaps: groupWriteCaps(),
+    });
+    await Promise.resolve();
+    expect(extractor.getPendingExtractionPromise(channelId)).not.toBeNull();
+
+    const secondPromise = extractor.extractGroupBackfillRange({
+      channelId,
+      recoveredEntries: [groupEntry(channelId, 3), groupEntry(channelId, 4)] as any,
+      groupWriteCaps: groupWriteCaps(),
+    });
+
+    releaseComplete();
+    const [firstResult, secondResult] = await Promise.all([firstPromise, secondPromise]);
+    expect(firstResult).toBe(true);
+    expect(secondResult).toBe(false);
   });
 });

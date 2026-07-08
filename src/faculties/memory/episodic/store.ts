@@ -762,12 +762,20 @@ export class EpisodicStore implements EpisodicStorePort {
       where.push('started_at <= ?');
       params.push(to);
     }
+    if (options.sessionId !== undefined) {
+      // Episodes are scoped by their threadId, which synthesis sets equal to the
+      // session id (buildEpisodeInput); the episode record has no distinct
+      // top-level sessionId field.
+      where.push('thread_id = ?');
+      params.push(parseRequiredText(options.sessionId, 'sessionId'));
+    }
 
+    const orderDir = options.order === 'desc' ? 'DESC' : 'ASC';
     const rows = this.db.prepare(`
       SELECT id, episode_json
       FROM l01_episodes
       WHERE ${where.join(' AND ')}
-      ORDER BY started_at ASC, id ASC
+      ORDER BY started_at ${orderDir}, id ${orderDir}
       LIMIT ? OFFSET ?
     `).all(
       ...params,

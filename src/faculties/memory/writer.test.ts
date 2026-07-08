@@ -596,6 +596,37 @@ describe('MemoryWriter', () => {
       }));
     });
 
+    it('returns the committed memory as success when evolution-link recording fails after the write (mlwk.6)', async () => {
+      const oldMemory = makeExistingMemory({
+        type: 'semantic',
+        text: 'Current workspace is /home/ada/old.',
+        confidence: 0.65,
+        tags: ['current_state', 'workspace'],
+      });
+
+      store.searchByEmbedding.mockReturnValueOnce([]);
+      store.searchByEmbedding.mockReturnValueOnce([oldMemory]);
+      // The memory commits, then the evolution-link write fails.
+      store.recordEvolutionLink.mockRejectedValueOnce(new Error('evolution link store unavailable'));
+
+      const result = await writer.write({
+        text: 'Current workspace is /home/ada/new.',
+        type: 'semantic',
+        confidence: 0.9,
+        tags: ['current_state', 'workspace'],
+      });
+
+      // The memory was durably committed, so the write reports success for the
+      // persisted memory rather than throwing (which would invite duplicate
+      // re-writes). The failed link is omitted so the result matches state.
+      expect(store.persistMemoryWrite).toHaveBeenCalledTimes(1);
+      expect(store.recordEvolutionLink).toHaveBeenCalledTimes(1);
+      expect(result.action).toBe('superseded');
+      expect(result.memory.text).toBe('Current workspace is /home/ada/new.');
+      expect(result.supersededMemoryIds).toEqual([oldMemory.id]);
+      expect(result.evolutionLinks).toEqual([]);
+    });
+
     it('records high-impact ambiguous relationship changes as conflicts without supersession', async () => {
       const oldMemory = makeExistingMemory({
         type: 'relational',

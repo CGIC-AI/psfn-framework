@@ -707,6 +707,50 @@ export class MemoryWriter {
     this.maintenanceScheduler?.queuePostWriteReview(input);
   }
 
+  /**
+   * Record evolution links for an already-committed memory. The memory has been
+   * durably persisted by persistMemoryWrite before this runs, and the runtime
+   * store (Postgres) has no shared transaction spanning the two, so a link
+   * failure cannot roll the memory back. Surfacing it as a write failure would
+   * report failure for a persisted memory and invite duplicate re-writes, so
+   * link failures are logged durably and skipped instead — the returned links
+   * reflect only what was committed, matching the reported write result
+   * (mlwk.6).
+   */
+  private async recordEvolutionLinks(
+    memory: PurrMemory,
+    decisions: readonly MemoryEvolutionDecision[],
+    context: {
+      sourceRef: string;
+      sourceType: MemorySourceType;
+      provenance?: MemoryProvenance;
+      incomingProvenanceRefs: readonly string[];
+    },
+  ): Promise<MemoryEvolutionLink[]> {
+    const links: MemoryEvolutionLink[] = [];
+    for (const decision of decisions) {
+      try {
+        links.push(await this.memoryStore.recordEvolutionLink(buildEvolutionLinkInput({
+          memory,
+          decision,
+          sourceRef: context.sourceRef,
+          sourceType: context.sourceType,
+          provenance: context.provenance,
+          incomingProvenanceRefs: context.incomingProvenanceRefs,
+        })));
+      } catch (error) {
+        log.error('Failed to record memory evolution link after memory commit; memory is durable, link skipped', {
+          memoryId: memory.id,
+          oldMemoryId: decision.oldMemory.id,
+          relation: decision.relation,
+          reason: decision.reason,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+    return links;
+  }
+
   private assertCogSecCandidacy(
     opts: MemoryWriteOptions,
     options: { logRejection?: boolean } = {},
@@ -1006,17 +1050,12 @@ export class MemoryWriter {
       embedding,
       supersededMemoryIds: supersededMemories.map(old => old.id),
     });
-    const evolutionLinks: MemoryEvolutionLink[] = [];
-    for (const decision of evolutionDecisions) {
-      evolutionLinks.push(await this.memoryStore.recordEvolutionLink(buildEvolutionLinkInput({
-        memory,
-        decision,
-        sourceRef: normalizedSourceRef,
-        sourceType: normalizedSource.sourceType,
-        provenance: normalizedSource.provenance,
-        incomingProvenanceRefs,
-      })));
-    }
+    const evolutionLinks = await this.recordEvolutionLinks(memory, evolutionDecisions, {
+      sourceRef: normalizedSourceRef,
+      sourceType: normalizedSource.sourceType,
+      provenance: normalizedSource.provenance,
+      incomingProvenanceRefs,
+    });
     this.queueMaintenanceReview({
       memory,
       candidates: sameContactBroader,
@@ -1196,17 +1235,12 @@ export class MemoryWriter {
       destructive: true,
       reason: 'memory_writer:explicit_upsert_replacement',
     }));
-    const evolutionLinks: MemoryEvolutionLink[] = [];
-    for (const decision of evolutionDecisions) {
-      evolutionLinks.push(await this.memoryStore.recordEvolutionLink(buildEvolutionLinkInput({
-        memory,
-        decision,
-        sourceRef: normalizedSourceRef,
-        sourceType: normalizedSource.sourceType,
-        provenance: normalizedSource.provenance,
-        incomingProvenanceRefs: normalizedProvenanceRefs,
-      })));
-    }
+    const evolutionLinks = await this.recordEvolutionLinks(memory, evolutionDecisions, {
+      sourceRef: normalizedSourceRef,
+      sourceType: normalizedSource.sourceType,
+      provenance: normalizedSource.provenance,
+      incomingProvenanceRefs: normalizedProvenanceRefs,
+    });
     this.queueMaintenanceReview({
       memory,
       candidates: sameType,

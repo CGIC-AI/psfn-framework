@@ -287,6 +287,11 @@ export class MemoryExtractor {
 
     const orderedEntries = [...options.recoveredEntries]
       .sort((left, right) => left.id - right.id);
+    // trackExtraction reuses an existing in-flight run for this channel and
+    // drops these recoveredEntries; reporting success would let the caller mark
+    // an unprocessed range complete (mlwk.22). Only claim success when this call
+    // actually starts the extraction that covers the range.
+    const reusedInFlight = this.hasInFlightExtraction(options.channelId);
     await this.trackExtraction(
       options.channelId,
       options.triggerReason,
@@ -300,7 +305,7 @@ export class MemoryExtractor {
         },
       },
     );
-    return true;
+    return !reusedInFlight;
   }
 
   async extractGroupBackfillRange(options: GroupBackfillExtractionOptions): Promise<boolean> {
@@ -314,6 +319,10 @@ export class MemoryExtractor {
 
     const orderedEntries = [...options.recoveredEntries]
       .sort((left, right) => left.id - right.id);
+    // See extractObservedGroupRange: a reused in-flight run drops these entries,
+    // so only report success when this call starts the covering extraction
+    // (mlwk.22).
+    const reusedInFlight = this.hasInFlightExtraction(options.channelId);
     await this.trackExtraction(
       options.channelId,
       'operator_backfill',
@@ -328,7 +337,7 @@ export class MemoryExtractor {
         forceLegacyExtraction: true,
       },
     );
-    return true;
+    return !reusedInFlight;
   }
 
   async stop(options?: MemoryExtractorDrainOptions): Promise<boolean> {

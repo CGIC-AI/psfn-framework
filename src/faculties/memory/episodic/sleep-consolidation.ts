@@ -673,6 +673,13 @@ export class SleepCycleEpisodeConsolidator {
       from: reviewFrom,
       to: reviewTo,
       lifecycleStatus: 'canonical',
+      // Scope to this run's session: transcript grounding is pulled only for
+      // input.sessionId, so refining other-session episodes would ground them
+      // against the wrong conversation (mlwk.7).
+      sessionId: input.sessionId,
+      // Newest first so an active session's recent episodes are always within
+      // the cap instead of being starved behind an older backlog (mlwk.13).
+      order: 'desc',
       limit: REVIEW_EPISODE_LIMIT,
     });
     result.reviewedEpisodes = canonicalEpisodes.length;
@@ -860,6 +867,13 @@ export class SleepCycleEpisodeConsolidator {
       from: window.from,
       to: window.to,
       lifecycleStatus: 'candidate',
+      // Scope to this run's session (see stage 2): candidates from other
+      // sessions must not be consolidated against this session's transcript
+      // grounding (mlwk.7).
+      sessionId: input.sessionId,
+      // Newest first so recent candidates are not starved behind an older
+      // backlog under the cap (mlwk.13).
+      order: 'desc',
       limit: REVIEW_EPISODE_LIMIT,
     });
     result.candidateEpisodesReviewed = candidates.length;

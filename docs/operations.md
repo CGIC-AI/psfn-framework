@@ -24,6 +24,87 @@ npm run agent:docker:continuous # Continuous/dev profile (isolated internal netw
 - `agent:docker:continuous` is the continuous/dev profile on an isolated internal network.
 - Use `npm run verify:agent-docker-isolation` after changing compose files or operator docs.
 
+## Multi-Companion Fleet Operations
+
+Multi-companion is an opt-in topology: N agent processes behind one gateway. It
+is off by default and byte-identical to single-companion when off. The full
+model is in [`docs/multi-companion.md`](./multi-companion.md); this section is
+the operator quick reference. Enabling it requires `PSFN_MULTI_COMPANION=1` in
+`.env` and a system-owned `companions.json` fleet manifest (seed
+`config/companions.seed.json`). Both mismatches fail closed at startup: flag on
+with no manifest refuses to start; a manifest present with the flag off refuses
+to start.
+
+### Supervisor launcher
+
+`npm run split` (`scripts/start-gateway-agent.sh`) resolves the fleet and, when
+multi-companion is enabled, enters supervisor mode: it spawns one agent process
+per companion plus one Garden operator process per companion that declares a
+`gardenPort`. The spawn plan is produced by:
+
+```bash
+npm run resolve:companion-fleet   # tab-delimited plan; empty stdout = single-companion
+```
+
+Each spawned agent gets a scrubbed environment plus `COMPANION_ID`,
+`COMPANION_DATA_DIR`, `CHARACTER_CARD_PATH`, `COMPANION_PG_SCHEMA`,
+`ADMIN_TRANSPORT_SOCKET`, and `ADMIN_PORT` from the plan. The supervisor is
+shared-fate: if any supervised process exits, the whole fleet is torn down.
+Preview without launching:
+
+```bash
+scripts/start-gateway-agent.sh --dry-run   # prints the spawn plan, launches nothing
+```
+
+Per-companion Gardens use socket admin transport only; network admin-transport
+mode is rejected fail-closed under the supervisor.
+
+### Per-companion Postgres schema
+
+Each agent process pins its runtime persistence to its own schema via
+`COMPANION_PG_SCHEMA` (see [`docs/setup.md`](./setup.md)). It is an explicit
+opt-in, not derived from `COMPANION_ID`; leave it unset for single-companion
+(the `public` schema). The schema is created up front on startup and the pool's
+`search_path` is pinned to it. One additional `shared` schema holds
+cross-companion world data (`companion_presence`, shared-world wiki chunks) and
+is provisioned advisory-lock-serialized so concurrently-starting agents are safe.
+
+### Per-companion Discord accounts
+
+Each companion has its own Discord bot identity, configured in `channels.json`.
+Discord accounts carry `companionId` (the routing dimension — one companionId
+maps to one bot account) and reference their token by env-var name, not inline
+secret:
+
+```jsonc
+{ "companionId": "…", "tokenRef": { "envName": "DISCORD_TOKEN_ARIA" } }
+```
+
+The gateway holds all tokens and resolves each `tokenRef.envName` (or the
+credential vault) at load; an inline `token` field is rejected, and an
+unresolved/empty token fails closed. Add each companion's bot token to `.env`
+under the env var name its account references.
+
+### Fleet status page
+
+The gateway serves a read-only, loopback-only fleet-status surface when
+`FLEET_STATUS_PORT` is set (host `FLEET_STATUS_HOST`, default `127.0.0.1`):
+
+- `GET /` and `GET /fleet` — HTML overview of the cluster
+- `GET /fleet/status.json` — JSON
+
+It reports, per companion: up/down state, health, last-seen and connected
+timestamps, recent violation count, and a link to that companion's Garden. It is
+fed by the gateway connection registry plus the fleet roster. Setting
+`FLEET_STATUS_PORT` while `PSFN_MULTI_COMPANION` is off fails closed; a taken
+port fails closed. Fatigue/charge posture and tool-error counts are a documented
+follow-up and are not shown today.
+
+### Fleet backups
+
+See "Backups And Integrity" below for the per-companion-slice / cluster-artifact
+/ group-mode model and the deterministic leader-election rule.
+
 ## Production Deployment
 
 The repo already contains the system-account installer:
@@ -257,6 +338,7 @@ Fatigue evaluation is always wired and always runs, but it only ever SPENDS on m
 - After verification, the retained backup set contains `encrypted-backup.json` plus `snapshot.tar.gz.enc`; the plaintext staging directory is removed. Mirrors receive the encrypted package, not the plaintext tree.
 - `npm run verify:backup-restore -- --backup-dir <snapshot> --postgres-restore-url <scratch-url> [--postgres-source-url <url>]` decrypts encrypted backup sets using the manifest key reference and runs the same fidelity verification (the decant rehearsal).
 - A failed scheduled backup logs an error and emits a `backup.failed` event on the runtime event bus.
+- Under the multi-companion topology, backups are per-companion by default: each companion is captured as its own slice (its own `postgresSchema` dump plus its own companion-data tree) so a single companion can be moved to another cluster as a slice. A separate `cluster` artifact captures the shared-world schema (`shared`) plus system-data owner files. Enabling `groupMode` (`backup.json`, env override `BACKUP_GROUP_MODE`) instead collapses the fleet into one whole-database family artifact. Exactly one process runs the fleet backup cycle: the leader is deterministic — the first companion in `companions.json` order (`isFleetBackupLeader`, `src/persistence/backups/fleet-scheduler.ts`), no distributed lock — and followers register no backup lane. Partial failure (`FleetBackupPartialFailureError`) is recorded and re-thrown, never swallowed. Per-companion fleet restore build-out is a tracked follow-up.
 - Startup skips SQLite integrity checks for the PostgreSQL runtime backend.
 - Embedding-dimension mismatches are surfaced at startup.
 - Use this verification when backup behavior changes:
@@ -300,6 +382,46 @@ npm run verify:backup-restore
 ```
 
 Validate retrieval quality after the migration, not just command success.
+
+## Shared-World Wiki And Places Maintenance
+
+The shared-world wiki is operator-owned. Companions read shared world knowledge
+and propose entries through the normal wiki pass; they never write the
+`shared_world:<siteId>` scope directly (the personal wiki store rejects any
+non-personal write fail-closed). The dedicated caretaker layer described in the
+design notes is not built yet — shared-world writes happen only through these
+operator maintenance commands:
+
+```bash
+npm run wiki:publish:places          # dry-run: report only
+npm run wiki:publish:places -- --apply
+npm run wiki:import -- --scope shared --site <siteId> --dir <path>          # dry-run
+npm run wiki:import -- --scope shared --site <siteId> --dir <path> --apply
+npm run wiki:import -- --scope personal --dir <path> --apply
+```
+
+- `wiki:publish:places` projects `places.json` into browsable shared-world wiki
+  pages (one site-overview page plus one page per place, scope
+  `shared_world:<siteId>`). It is idempotent — re-running against an unchanged
+  registry is a no-op. Shared-world markdown lives under
+  `<system-data>/shared-world/wiki/sites/<siteId>/`, never in companion-data.
+- `wiki:import --scope shared` runs a deterministic personal-fact guard over
+  every file and rejects any file containing a personal fact; `--scope personal`
+  imports into a companion's own wiki without that gate. Both fail closed on an
+  unknown `siteId`.
+- Projection coupling: under the multi-companion topology both commands project
+  the shared-world markdown into the `shared_wiki_chunks` pgvector store in the
+  `shared` schema in the same operation, and abort before touching the
+  filesystem if the projection target is unreachable. Retrieval then unions a
+  companion's personal wiki with the current site's shared chunks
+  (`resolveWikiRetrievalPlan`).
+
+Room privacy is a property of the place, set as an optional `privacy` field on
+the place registry entry in `places.json` (`"public"` — the default when absent
+— or `"private"`). A `private` place delivers room chat presence-windowed: an
+occupant sees only what was said between their join and exit. This is enforced
+at delivery time (gateway fan-out + session/context serving), never by filtering
+memory extraction. See [`docs/chat-turn-lifecycle.md`](./chat-turn-lifecycle.md).
 
 ## TLS And Proxy Trust
 

@@ -87,6 +87,41 @@ Wiki documents are stable reference knowledge, not lived memory.
 
 The legacy `vault`/Obsidian surface is an optional external source bridge. It is not the canonical personal long-term storage surface.
 
+### Wiki Scopes: Personal vs Shared-World (multi-companion)
+
+Wiki documents carry an optional scope dimension (`WikiScope`,
+`src/faculties/wiki/scope.ts`). Absent means `personal` — the default for every
+existing document and every companion write path, so a personal document is
+byte-identical to a pre-scope document. The non-personal scope is
+`shared_world:<siteId>`: world knowledge tied to a place-registry site, shared
+across the companions on a cluster.
+
+- **Personal wiki stays per-companion and companion-writable.** It lives under
+  `WORKSPACE_PATH/knowledge/wiki/` as before.
+- **Shared-world wiki is operator-owned.** Companions read the shared scope and
+  *propose* entries through the normal wiki pass; they never write it directly.
+  The personal `WikiStore` rejects any non-personal write fail-closed
+  (`assertPersonalScopeWrite`), and only the operator maintenance commands
+  (`wiki:publish:places`, `wiki:import --scope shared`) construct the shared
+  store. The caretaker layer that would autonomously dedup/rewrite/clean the
+  shared wiki is described in the design notes but is not built yet.
+- **Site-keyed retrieval swap.** When the multi-companion flag is on,
+  `resolveWikiRetrievalPlan` (`src/faculties/wiki/retrieval.ts`) restricts a
+  turn's wiki reads to `personal` plus the current site's
+  `shared_world:<siteId>` scope, keyed off the companion's current site from the
+  situated-place seam. Moving between areas swaps the readable shared scope
+  without touching personal wiki. Flag off means unrestricted scope — behavior
+  is unchanged.
+- **Shared-schema chunk projection.** Shared-world pages are projected into a
+  `shared_wiki_chunks` pgvector store in the `shared` Postgres schema (migration
+  in `src/persistence/postgres/migrations.ts`, projection store in
+  `src/faculties/wiki/shared-pgvector-projection.ts`) with a database-level
+  `CHECK (scope = 'shared_world:'||site_id)` leak guard. Retrieval unions a
+  companion's personal semantic matches with the shared projection matches
+  (`mergeWikiSemanticMatches`) and fails closed to personal-only if the shared
+  store is unavailable. Publication/import project into this store in the same
+  operation — see [`docs/operations.md`](./operations.md).
+
 ## Memory Types
 
 The current runtime supports seven memory types:

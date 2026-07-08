@@ -12,6 +12,9 @@ import type { RecurringCadence, ScheduledTask, TaskType } from '../../core/sched
 import type { WakeWindowSnapshot } from '../../core/scheduler/temporal-wakeup.js';
 import type { SkillSnapshot } from '../../faculties/skills/types.js';
 import type { ValuesJournalEntry } from '../../faculties/values/store.js';
+import type { ReflectionJournalEntry } from '../../persistence/journals/reflection-journal.js';
+import type { ReflectionMetacognitionJournalEntry } from '../../persistence/journals/reflection-metacognition-journal.js';
+import type { ReflectionDailyJournalEntry } from '../../persistence/journals/reflection-substrate.js';
 import type { ModelDiscoveryBackend } from '../../primitives/llm/discovery.js';
 import type {
   AdminChatBootstrapResponse,
@@ -127,6 +130,18 @@ export interface AdminValuesJournalApi {
   list(options?: { limit?: number }): ValuesJournalEntry[];
 }
 
+export interface AdminReflectionMetacognitionJournalApi {
+  listRecent(options?: { limit?: number }): ReflectionMetacognitionJournalEntry[];
+}
+
+export interface AdminReflectionDailyJournalApi {
+  listRecent(options?: { limit?: number }): ReflectionDailyJournalEntry[];
+}
+
+export interface AdminReflectionJournalApi {
+  listRecent(options?: { limit?: number }): ReflectionJournalEntry[];
+}
+
 export interface AdminChatBootstrapApi {
   buildBootstrap(options?: { requestOrigin?: string; settingsApiBaseUrl?: string }): Promise<AdminChatBootstrapResponse>;
   updateSelection(
@@ -169,6 +184,9 @@ export interface GardenAdminDomainServices {
   skills?: AdminSkillsApi | null;
   confirmations?: ConfirmationQueueAdminApi | null;
   values: AdminValuesJournalApi;
+  reflectionMetacognitionJournal: AdminReflectionMetacognitionJournalApi;
+  reflectionDailyJournal: AdminReflectionDailyJournalApi;
+  reflectionJournal: AdminReflectionJournalApi;
   modelDiscovery?: AdminModelDiscoveryApi | null;
   chatBootstrap: AdminChatBootstrapApi;
 }

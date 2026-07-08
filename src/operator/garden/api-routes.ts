@@ -55,6 +55,9 @@ import type { AdminToolConformanceService } from './services/tool-conformance-se
 import type {
   AdminChatBootstrapApi,
   AdminModelDiscoveryApi,
+  AdminReflectionDailyJournalApi,
+  AdminReflectionJournalApi,
+  AdminReflectionMetacognitionJournalApi,
   AdminSchedulerApi,
   AdminSkillsApi,
   AdminValuesJournalApi,
@@ -268,6 +271,9 @@ export function buildAdminApiRoutes(options: {
   skillsRuntime?: AdminSkillsApi | null;
   confirmationQueueApi?: ConfirmationQueueAdminApi | null;
   valuesJournal?: AdminValuesJournalApi | null;
+  reflectionMetacognitionJournal?: AdminReflectionMetacognitionJournalApi | null;
+  reflectionDailyJournal?: AdminReflectionDailyJournalApi | null;
+  reflectionJournal?: AdminReflectionJournalApi | null;
   appendAuditTimelineEntry?: (
     actionType: AdminAuditActionType,
     decision: AdminAuditDecision,
@@ -310,9 +316,22 @@ export function buildAdminApiRoutes(options: {
     skillsRuntime,
     confirmationQueueApi,
     valuesJournal,
+    reflectionMetacognitionJournal,
+    reflectionDailyJournal,
+    reflectionJournal,
     appendAuditTimelineEntry,
     withBody,
   } = options;
+
+  const resolveValuesTimelineLimit = (
+    req: IncomingMessage,
+    path: string,
+  ): { ok: true; value: number } | { ok: false; error: string } => {
+    const url = parseRequestUrl(req, path);
+    const parsed = toPositiveIntegerQueryNumber(url.searchParams.get('limit'), 'limit');
+    if (!parsed.ok) return parsed;
+    return { ok: true, value: Math.min(parsed.value ?? 250, 250) };
+  };
 
   const handleDiscoveredModels = (res: ServerResponse, refresh: boolean): void => {
     if (!modelDiscovery) {
@@ -971,6 +990,60 @@ export function buildAdminApiRoutes(options: {
         }
         const entries = valuesJournal.list({ limit: 250 });
         sendJson(res, 200, { entries });
+      },
+    },
+    {
+      method: 'GET',
+      match: exactPath('/api/admin/values/reflections/metacognition'),
+      handle: (req, res) => {
+        if (!reflectionMetacognitionJournal) {
+          sendJson(res, 503, { error: 'Reflection metacognition journal unavailable' });
+          return;
+        }
+        const limit = resolveValuesTimelineLimit(req, '/api/admin/values/reflections/metacognition');
+        if (!limit.ok) {
+          sendJson(res, 400, { error: limit.error });
+          return;
+        }
+        sendJson(res, 200, {
+          entries: reflectionMetacognitionJournal.listRecent({ limit: limit.value }),
+        });
+      },
+    },
+    {
+      method: 'GET',
+      match: exactPath('/api/admin/values/reflections/daily'),
+      handle: (req, res) => {
+        if (!reflectionDailyJournal) {
+          sendJson(res, 503, { error: 'Reflection daily journal unavailable' });
+          return;
+        }
+        const limit = resolveValuesTimelineLimit(req, '/api/admin/values/reflections/daily');
+        if (!limit.ok) {
+          sendJson(res, 400, { error: limit.error });
+          return;
+        }
+        sendJson(res, 200, {
+          entries: reflectionDailyJournal.listRecent({ limit: limit.value }),
+        });
+      },
+    },
+    {
+      method: 'GET',
+      match: exactPath('/api/admin/values/reflections/journal'),
+      handle: (req, res) => {
+        if (!reflectionJournal) {
+          sendJson(res, 503, { error: 'Reflection journal unavailable' });
+          return;
+        }
+        const limit = resolveValuesTimelineLimit(req, '/api/admin/values/reflections/journal');
+        if (!limit.ok) {
+          sendJson(res, 400, { error: limit.error });
+          return;
+        }
+        sendJson(res, 200, {
+          entries: reflectionJournal.listRecent({ limit: limit.value }),
+        });
       },
     },
   ];

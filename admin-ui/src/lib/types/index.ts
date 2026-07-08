@@ -20,6 +20,9 @@ import type { RuntimePromptLayerSchemaClassification } from '../../../../src/cor
 import type { NorthStarItem } from '../../../../src/faculties/north-star/store.js';
 import type { SkillEntry, SkillSnapshot } from '../../../../src/faculties/skills/types.js';
 import type { ValuesJournalEntry } from '../../../../src/faculties/values/store.js';
+import type { ReflectionJournalEntry } from '../../../../src/persistence/journals/reflection-journal.js';
+import type { ReflectionMetacognitionJournalEntry } from '../../../../src/persistence/journals/reflection-metacognition-journal.js';
+import type { ReflectionDailyJournalEntry } from '../../../../src/persistence/journals/reflection-substrate.js';
 import type { ReflectionTemplate } from '../../../../src/core/scheduler/heartbeat-policy.js';
 import type {
   AdminSessionListData as CanonicalAdminSessionListData,
@@ -132,6 +135,9 @@ export type {
 } from '../../../../src/faculties/skills/types.js';
 export type { NorthStarItem, NorthStarScope } from '../../../../src/faculties/north-star/store.js';
 export type { ValuesJournalEntry } from '../../../../src/faculties/values/store.js';
+export type { ReflectionJournalEntry } from '../../../../src/persistence/journals/reflection-journal.js';
+export type { ReflectionMetacognitionJournalEntry } from '../../../../src/persistence/journals/reflection-metacognition-journal.js';
+export type { ReflectionDailyJournalEntry } from '../../../../src/persistence/journals/reflection-substrate.js';
 
 // Memory -- backend-owned with UI compatibility overlays for legacy wire shapes.
 export type AdminUiPurrMemory = Omit<CanonicalPurrMemory, 'type' | 'scopeRef' | 'sensitivity'> & {
@@ -1075,6 +1081,18 @@ export interface AdminConfirmationsData {
 
 export interface AdminValuesData {
   entries: ValuesJournalEntry[];
+}
+
+export interface AdminReflectionMetacognitionData {
+  entries: ReflectionMetacognitionJournalEntry[];
+}
+
+export interface AdminReflectionDailyData {
+  entries: ReflectionDailyJournalEntry[];
+}
+
+export interface AdminReflectionJournalData {
+  entries: ReflectionJournalEntry[];
 }
 
 // Telemetry

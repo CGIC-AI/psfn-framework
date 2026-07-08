@@ -34,6 +34,8 @@ import { PostgresInternalStateStore } from './postgres/internal-state-store.js';
 import type { InternalStateStorePort } from '../core/self-model/internal-state-persistence.js';
 import { PostgresParticipantTrendStore } from './postgres/participant-trend-store.js';
 import type { ParticipantTrendStorePort } from '../core/emotion/participant-trend-persistence.js';
+import { PostgresScheduledPromptStore } from './postgres/scheduled-prompt-store.js';
+import type { ScheduledPromptStorePort } from '../core/scheduler/scheduled-prompt-store-port.js';
 
 export interface AgentPersistenceRuntime {
   backend: PersistenceBackend;
@@ -46,6 +48,7 @@ export interface AgentPersistenceRuntime {
   weightedThoughtStore?: WeightedThoughtStorePort;
   internalStateStore: InternalStateStorePort;
   participantTrendStore: ParticipantTrendStorePort;
+  scheduledPromptStore: ScheduledPromptStorePort;
 }
 
 export interface CreateAgentPersistenceRuntimeOptions {
@@ -90,5 +93,6 @@ export async function createAgentPersistenceRuntime(
     weightedThoughtStore: intentionRuntime.weightedThoughtStore,
     internalStateStore: await PostgresInternalStateStore.connect(databaseUrl),
     participantTrendStore: await PostgresParticipantTrendStore.connect(databaseUrl),
+    scheduledPromptStore: await PostgresScheduledPromptStore.connect(databaseUrl),
   };
 }

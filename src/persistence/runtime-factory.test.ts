@@ -32,6 +32,8 @@ const runtimeFactoryMocks = vi.hoisted(() => ({
   connectPostgresInternalStateStore: vi.fn(async () => runtimeFactoryMocks.postgresInternalStateStore),
   postgresParticipantTrendStore: { kind: 'postgres-participant-trend-store' },
   connectPostgresParticipantTrendStore: vi.fn(async () => runtimeFactoryMocks.postgresParticipantTrendStore),
+  postgresScheduledPromptStore: { kind: 'postgres-scheduled-prompt-store' },
+  connectPostgresScheduledPromptStore: vi.fn(async () => runtimeFactoryMocks.postgresScheduledPromptStore),
   createSqliteEpisodicStore: vi.fn(function EpisodicStore() {
     return runtimeFactoryMocks.sqliteEpisodicStore;
   }),
@@ -87,6 +89,12 @@ vi.mock('./postgres/participant-trend-store.js', () => ({
   },
 }));
 
+vi.mock('./postgres/scheduled-prompt-store.js', () => ({
+  PostgresScheduledPromptStore: {
+    connect: runtimeFactoryMocks.connectPostgresScheduledPromptStore,
+  },
+}));
+
 beforeEach(() => {
   runtimeFactoryMocks.createSqliteCompanionStore.mockClear();
   runtimeFactoryMocks.createPostgresMemoryStore.mockClear();
@@ -94,6 +102,7 @@ beforeEach(() => {
   runtimeFactoryMocks.createPostgresContactStore.mockClear();
   runtimeFactoryMocks.createPostgresIntentionPorts.mockClear();
   runtimeFactoryMocks.connectPostgresReflectionMirror.mockClear();
+  runtimeFactoryMocks.connectPostgresScheduledPromptStore.mockClear();
   runtimeFactoryMocks.createSqliteEpisodicStore.mockClear();
   runtimeFactoryMocks.createReflectionMetacognitionJournalStore.mockClear();
 });
@@ -156,6 +165,7 @@ describe('createAgentPersistenceRuntime', () => {
       intentionProviders: runtimeFactoryMocks.postgresIntentionRuntime as IntentionRuntimeProviders,
       internalStateStore: runtimeFactoryMocks.postgresInternalStateStore,
       participantTrendStore: runtimeFactoryMocks.postgresParticipantTrendStore,
+      scheduledPromptStore: runtimeFactoryMocks.postgresScheduledPromptStore,
     });
     expect(runtimeFactoryMocks.createSqliteCompanionStore).not.toHaveBeenCalled();
     expect(runtimeFactoryMocks.createPostgresMemoryStore).toHaveBeenCalledWith(
@@ -187,6 +197,9 @@ describe('createAgentPersistenceRuntime', () => {
       },
     );
     expect(runtimeFactoryMocks.createPostgresIntentionPorts).toHaveBeenCalledWith(
+      'postgres://postgres:secret@localhost:5432/psfn',
+    );
+    expect(runtimeFactoryMocks.connectPostgresScheduledPromptStore).toHaveBeenCalledWith(
       'postgres://postgres:secret@localhost:5432/psfn',
     );
   });

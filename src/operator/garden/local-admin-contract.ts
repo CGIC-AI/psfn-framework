@@ -32,12 +32,18 @@ import type {
 import type { ShardExecutionPort } from '../../faculties/shards/port.js';
 import type { SkillsRuntime } from '../../faculties/skills/runtime.js';
 import { ValuesJournalStore } from '../../faculties/values/store.js';
+import { ReflectionJournalStore } from '../../persistence/journals/reflection-journal.js';
+import { ReflectionMetacognitionJournalStore } from '../../persistence/journals/reflection-metacognition-journal.js';
+import { ReflectionDailyJournalStore } from '../../persistence/journals/reflection-substrate.js';
 import {
   resolveConfiguredCompanionDataDir,
   resolveChargeLedgerPath,
   resolveFatigueLedgerPath,
   resolveLegacyValuesJournalPath,
   resolveNorthStarPath,
+  resolveReflectionDailyJournalsDir,
+  resolveReflectionJournalPath,
+  resolveReflectionMetacognitionJournalPath,
   resolveValuesJournalPath,
 } from '../../persistence/layout.js';
 import { readLastActiveSession } from '../../system/lifecycle/notifications.js';
@@ -151,6 +157,15 @@ export function createInProcessGardenAdminContract(
   const valuesJournal = new ValuesJournalStore(resolveValuesJournalPath(companionDataDir), {
     legacyFilePaths: [resolveLegacyValuesJournalPath(companionDataDir)],
   });
+  const reflectionMetacognitionJournal = new ReflectionMetacognitionJournalStore(
+    resolveReflectionMetacognitionJournalPath(companionDataDir),
+  );
+  const reflectionDailyJournal = new ReflectionDailyJournalStore(
+    resolveReflectionDailyJournalsDir(companionDataDir),
+  );
+  const reflectionJournal = new ReflectionJournalStore(
+    resolveReflectionJournalPath(companionDataDir),
+  );
   const northStarStore = new NorthStarStore(resolveNorthStarPath(companionDataDir));
   const chargeLedger = new RunChargeLedger(resolveChargeLedgerPath(companionDataDir), options.eventBus);
   const fatigueLedger = new FatigueLedger(resolveFatigueLedgerPath(companionDataDir), options.eventBus);
@@ -349,6 +364,9 @@ export function createInProcessGardenAdminContract(
     skills: options.skillsRuntime ?? null,
     confirmations: options.confirmationQueueApi ?? null,
     values: valuesJournal,
+    reflectionMetacognitionJournal,
+    reflectionDailyJournal,
+    reflectionJournal,
     modelDiscovery: options.modelDiscovery ?? null,
     chatBootstrap: new AdminChatBootstrapService(options.contactStore, {
       apiBaseUrl: options.apiBaseUrl,

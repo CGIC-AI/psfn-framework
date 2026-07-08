@@ -26,7 +26,6 @@ import type { ChannelType, PostTurnActionCandidate } from '../../shared/contract
 import type { MessageSender } from '../../system/lifecycle/notifications.js';
 import { textResult, textResultWithError } from '../tools/results.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
-import { isBusyTurnError } from '../../system/lifecycle/turn-contention.js';
 import type { Scheduler } from './scheduler.js';
 import {
   resolveConsolidatedReflectionTemplateId,
@@ -36,10 +35,18 @@ import {
   type ReflectionTemplate,
 } from './heartbeat-policy.js';
 import type { MemoryWriter } from '../../faculties/memory/writer.js';
+import {
+  registerScheduledPromptTask,
+} from './scheduled-prompts.js';
+import type { ScheduledPromptStorePort } from './scheduled-prompt-store-port.js';
 
 const DEFAULT_LIST_LIMIT = 32;
 const MAX_LIST_LIMIT = 200;
 const MAX_SCHEDULED_TASKS = 50;
+const MAX_DELAY_MINUTES = 10080;
+const MAX_ABSOLUTE_SCHEDULE_MS = 366 * 24 * 60 * 60_000;
+const ISO_DATETIME_WITH_TIMEZONE_PATTERN =
+  /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,9})?)?(?:Z|[+-]\d{2}:\d{2})$/;
 
 const SCHEDULE_TOOL_ACTIONS = [
   'list',
@@ -122,6 +129,7 @@ interface ScheduleToolParams {
   name?: string;
   prompt?: string;
   delay_minutes?: number;
+  run_at?: string;
   id?: string;
   interval_ms?: number;
   enabled?: boolean;
@@ -149,6 +157,10 @@ export interface ScheduleToolOptions {
   careReminderStore?: Pick<
     CareReminderStorePort,
     'create' | 'list' | 'markTriggered'
+  > | null;
+  scheduledPromptStore?: Pick<
+    ScheduledPromptStorePort,
+    'create' | 'listPending' | 'markCompleted'
   > | null;
 }
 
@@ -258,6 +270,52 @@ function normalizeIsoTimestamp(value: unknown, fieldName: string): string {
 function normalizeOptionalIsoTimestamp(value: unknown, fieldName: string): string | undefined {
   if (value === undefined) return undefined;
   return normalizeIsoTimestamp(value, fieldName);
+}
+
+function resolveScheduledPromptRunAt(
+  params: Pick<ScheduleToolParams, 'delay_minutes' | 'run_at'>,
+  nowMs: number,
+): { runAt: number; description: string } {
+  const hasDelay = params.delay_minutes !== undefined;
+  const hasRunAt = params.run_at !== undefined;
+  if (hasDelay === hasRunAt) {
+    throw new Error('schedule_prompt requires exactly one of delay_minutes or run_at');
+  }
+
+  if (hasDelay) {
+    const delayMinutes = params.delay_minutes;
+    if (
+      typeof delayMinutes !== 'number'
+      || !Number.isFinite(delayMinutes)
+      || delayMinutes < 1
+      || delayMinutes > MAX_DELAY_MINUTES
+    ) {
+      throw new Error(`delay_minutes must be between 1 and ${MAX_DELAY_MINUTES} (7 days)`);
+    }
+    return {
+      runAt: nowMs + delayMinutes * 60_000,
+      description: `in ${delayMinutes}m`,
+    };
+  }
+
+  const runAtInput = normalizeNonEmptyString(params.run_at, 'run_at');
+  if (!ISO_DATETIME_WITH_TIMEZONE_PATTERN.test(runAtInput)) {
+    throw new Error('run_at must be an ISO-8601 datetime with explicit timezone (Z or +/-HH:MM)');
+  }
+  const runAt = Date.parse(runAtInput);
+  if (!Number.isFinite(runAt)) {
+    throw new Error('run_at must be a valid ISO-8601 datetime');
+  }
+  if (runAt <= nowMs) {
+    throw new Error('run_at must be in the future');
+  }
+  if (runAt - nowMs > MAX_ABSOLUTE_SCHEDULE_MS) {
+    throw new Error('run_at must be no more than 366 days in the future');
+  }
+  return {
+    runAt,
+    description: `at ${new Date(runAt).toISOString()}`,
+  };
 }
 
 function normalizeChannelType(value: unknown, fieldName: string): ChannelType {
@@ -441,7 +499,7 @@ export function createScheduleTool(options: ScheduleToolOptions): AgentTool<any,
       + 'Follow-ups: create_follow_up needs content and usually channel_id/channel_type or contact_id; activate_follow_up needs follow_up_id. '
       + 'Reminders: create_reminder needs title/content; trigger_reminder needs reminder_id. '
       + 'Templates: list_templates inspects them, update_template uses template_id for existing templates and id only when adding a new template, run_template needs template_id. '
-      + 'Scheduled prompts: schedule_prompt needs name, prompt, and delay_minutes.',
+      + 'Scheduled prompts: schedule_prompt needs name, prompt, and exactly one of delay_minutes or run_at; run_at is ISO-8601 with explicit timezone.',
     parameters: Type.Object({
       action: Type.Optional(Type.Union(
         SCHEDULE_TOOL_ACTIONS.map(action => Type.Literal(action)),
@@ -506,6 +564,10 @@ export function createScheduleTool(options: ScheduleToolOptions): AgentTool<any,
       name: Type.Optional(Type.String({ minLength: 1, description: 'Scheduled prompt name for action=schedule_prompt.' })),
       prompt: Type.Optional(Type.String({ minLength: 1, description: 'Scheduled prompt body.' })),
       delay_minutes: Type.Optional(Type.Number({ minimum: 1, maximum: 10080, description: 'Delay before a scheduled prompt fires.' })),
+      run_at: Type.Optional(Type.String({
+        minLength: 1,
+        description: 'Absolute ISO-8601 datetime with explicit timezone for action=schedule_prompt.',
+      })),
       id: Type.Optional(Type.String({ minLength: 1, description: 'Template id when action=update_template adds a new template.' })),
       interval_ms: Type.Optional(Type.Number({ description: 'Template interval in ms for action=update_template.' })),
       enabled: Type.Optional(Type.Boolean({ description: 'Template enabled state for action=update_template.' })),
@@ -853,12 +915,17 @@ export function createScheduleTool(options: ScheduleToolOptions): AgentTool<any,
           }
 
           case 'schedule_prompt': {
+            if (!options.scheduledPromptStore) {
+              return textResultWithError(
+                'scheduled prompt store is unavailable; cannot create restart-surviving scheduled prompts',
+                true,
+              );
+            }
+
             const name = normalizeNonEmptyString(params.name, 'name');
             const prompt = normalizeNonEmptyString(params.prompt, 'prompt');
-            const delayMinutes = typeof params.delay_minutes === 'number' ? params.delay_minutes : Number.NaN;
-            if (!Number.isFinite(delayMinutes) || delayMinutes < 1 || delayMinutes > 10080) {
-              return textResultWithError('delay_minutes must be between 1 and 10080 (7 days)', true);
-            }
+            const nowMs = Date.now();
+            const scheduled = resolveScheduledPromptRunAt(params, nowMs);
             if (prompt.length < 10) {
               return textResultWithError('prompt must be at least 10 characters', true);
             }
@@ -868,50 +935,32 @@ export function createScheduleTool(options: ScheduleToolOptions): AgentTool<any,
               return textResultWithError(`Max ${MAX_SCHEDULED_TASKS} total tasks allowed`, true);
             }
 
-            const taskId = `planned:${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-            const runAt = Date.now() + delayMinutes * 60_000;
-
-            options.scheduler.register({
+            const taskId = `planned:${nowMs}-${Math.random().toString(36).slice(2, 8)}`;
+            const runAtIso = new Date(scheduled.runAt).toISOString();
+            const record = await options.scheduledPromptStore.create({
               id: taskId,
               name,
-              type: 'one-shot',
-              intervalMs: 0,
-              runAt,
-              handler: async () => {
-                const runPlannedPrompt = async (): Promise<void> => {
-                  const response = await options.agentLoop.handleMessage({
-                    id: `planned-${Date.now()}`,
-                    channelId: `internal:planned:${taskId}`,
-                    channelType: 'terminal',
-                    authorId: 'scheduler',
-                    authorName: name,
-                    content: prompt,
-                    timestamp: new Date(),
-                  });
-
-                  if (options.heartbeatChannelId) {
-                    await options.sender.send(options.heartbeatChannelId, response.content);
-                  }
-                };
-
-                try {
-                  await runPlannedPrompt();
-                } catch (error) {
-                  if (!isBusyTurnError(error)) {
-                    throw error;
-                  }
-                  if (typeof options.agentLoop.waitForIdle !== 'function') {
-                    throw error;
-                  }
-                  await options.agentLoop.waitForIdle();
-                  await runPlannedPrompt();
-                }
-              },
-              state: 'idle',
+              prompt,
+              runAt: runAtIso,
+              createdAt: new Date(nowMs).toISOString(),
+              source: 'schedule_tool',
+              channelId: `internal:planned:${taskId}`,
+              channelType: 'terminal',
+              authorId: 'scheduler',
+              authorName: name,
+              ...(options.heartbeatChannelId ? { deliveryChannelId: options.heartbeatChannelId } : {}),
+            });
+            registerScheduledPromptTask({
+              scheduler: options.scheduler,
+              agentLoop: options.agentLoop,
+              sender: options.sender,
+              scheduledPromptStore: options.scheduledPromptStore,
+              record,
+              rehydrated: false,
+              ...(options.heartbeatChannelId ? { heartbeatChannelId: options.heartbeatChannelId } : {}),
             });
 
-            const fireAt = new Date(runAt).toISOString();
-            return textResult(`Scheduled "${name}" to fire at ${fireAt} (in ${delayMinutes}m)`);
+            return textResult(`Scheduled "${name}" to fire at ${runAtIso} (${scheduled.description})`);
           }
         }
       } catch (error) {

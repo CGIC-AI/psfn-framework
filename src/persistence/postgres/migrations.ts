@@ -912,6 +912,42 @@ export const POSTGRES_REFLECTION_MIGRATIONS = [
   `CREATE INDEX IF NOT EXISTS idx_reflections_process ON reflections(process_id, occurred_at DESC, id DESC);`,
 ];
 
+export const POSTGRES_SCHEDULED_PROMPT_MIGRATIONS = [
+  `
+  CREATE TABLE IF NOT EXISTS scheduler_scheduled_prompts (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    prompt TEXT NOT NULL,
+    run_at TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    source TEXT NOT NULL,
+    channel_id TEXT NOT NULL,
+    channel_type TEXT NOT NULL,
+    author_id TEXT NOT NULL,
+    author_name TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',
+    delivery_channel_id TEXT,
+    completed_at TEXT,
+    CHECK (source = 'schedule_tool'),
+    CHECK (channel_type IN ('discord', 'terminal', 'api', 'telegram', 'psfn-amica')),
+    CHECK (status IN ('pending', 'completed')),
+    CHECK (
+      (status = 'pending' AND completed_at IS NULL)
+      OR (status = 'completed' AND completed_at IS NOT NULL)
+    )
+  );
+  `,
+  `
+  CREATE INDEX IF NOT EXISTS idx_scheduler_scheduled_prompts_pending_due
+    ON scheduler_scheduled_prompts (run_at ASC, created_at ASC, id ASC)
+    WHERE status = 'pending';
+  `,
+  `
+  CREATE INDEX IF NOT EXISTS idx_scheduler_scheduled_prompts_created_at
+    ON scheduler_scheduled_prompts (created_at DESC, id DESC);
+  `,
+];
+
 export const POSTGRES_MODEL_USAGE_MIGRATIONS = [
   `
   CREATE TABLE IF NOT EXISTS model_usage_events (

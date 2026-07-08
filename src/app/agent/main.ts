@@ -832,7 +832,7 @@ async function main(): Promise<void> {
   });
 
   // Heartbeat reflections — policy-driven multi-template reflection system
-  wireHeartbeatRuntime(
+  await wireHeartbeatRuntime(
     agentLoop,
     scheduler,
     agentLoop,
@@ -859,6 +859,7 @@ async function main(): Promise<void> {
       onIntentionFollowUpActivated: intentionAppraisalHooks.onIntentionFollowUpActivated,
       onBehavioralPatternOutcome: intentionBehavioralHooks.onBehavioralPatternOutcome,
       pendingFollowUpStore: intentionRuntime.pendingFollowUpStore,
+      scheduledPromptStore: persistenceRuntime.scheduledPromptStore,
       coreMemoryStore,
       episodicSynthesizer,
       sleepConsolidator,

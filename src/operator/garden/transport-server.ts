@@ -111,6 +111,9 @@ export class GardenAdminTransportServer implements Lifecycle {
       skillsRuntime: config.services.skills,
       confirmationQueueApi: config.services.confirmations,
       valuesJournal: config.services.values,
+      reflectionMetacognitionJournal: config.services.reflectionMetacognitionJournal,
+      reflectionDailyJournal: config.services.reflectionDailyJournal,
+      reflectionJournal: config.services.reflectionJournal,
       withBody: (req, res, cb) => this.withBody(req, res, cb),
       appendAuditTimelineEntry,
     });

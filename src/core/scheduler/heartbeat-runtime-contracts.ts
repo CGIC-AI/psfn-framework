@@ -43,6 +43,7 @@ import type {
 import type { PendingFollowUp } from '../intention/pending-follow-ups.js';
 import type { PendingFollowUpStorePort } from '../intention/pending-follow-up-store-port.js';
 import type { CareReminderStorePort } from '../intention/care-reminders.js';
+import type { ScheduledPromptStorePort } from './scheduled-prompt-store-port.js';
 import type { PostTurnActionRuntime } from '../agent/post-turn-action-runtime.js';
 import type { InternalState } from '../self-model/state.js';
 import type { MemoryExtractor } from '../agent/contracts.js';
@@ -153,6 +154,7 @@ export interface HeartbeatRuntimeOptions {
   } | undefined;
   pendingFollowUpStore?: PendingFollowUpStorePort | null;
   careReminderStore?: CareReminderStorePort | null;
+  scheduledPromptStore?: ScheduledPromptStorePort | null;
   onBehavioralPatternOutcome?: (input: {
     channelId: string;
     canonicalContactKey?: string;

@@ -231,7 +231,7 @@ export function wireFilesystemToolsRuntime(
  * scheduled reflections missed memory/contact provenance even though the
  * standalone runtime tests passed.
  */
-export function wireHeartbeatRuntime(
+export async function wireHeartbeatRuntime(
   target: ToolRegistrarTarget,
   scheduler: Scheduler,
   agentLoop: HeartbeatAgent,
@@ -239,8 +239,8 @@ export function wireHeartbeatRuntime(
   dataDir: string,
   heartbeatChannelId?: string,
   runtimeOptions: HeartbeatRuntimeOptions = {},
-): void {
-  wireCoreHeartbeatRuntime(
+): Promise<void> {
+  await wireCoreHeartbeatRuntime(
     target,
     scheduler,
     agentLoop,

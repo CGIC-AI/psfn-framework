@@ -326,6 +326,15 @@ export function createFileSocialGraphProposalStore(
 export interface SocialGraphBuilderWatermark {
   schemaVersion: 1;
   coveredUpToExtractedAtMs: number;
+  /**
+   * Memory id tiebreaker at coveredUpToExtractedAtMs. The cursor is composite
+   * (extractedAt, id): a batch truncated at the scan limit can share the boundary
+   * timestamp with rows it did not include, so a bare `extractedAt > sinceMs`
+   * filter would strand those same-timestamp rows. Absent means no id boundary
+   * (legacy watermark or a fresh start) and the scan starts strictly after
+   * coveredUpToExtractedAtMs.
+   */
+  coveredUpToId?: string;
   updatedAt: number;
   lastRun?: {
     scanned: number;
@@ -365,6 +374,7 @@ export function createFileSocialGraphBuilderWatermarkStore(
       return {
         schemaVersion: 1,
         coveredUpToExtractedAtMs: parsed.coveredUpToExtractedAtMs,
+        ...(typeof parsed.coveredUpToId === 'string' ? { coveredUpToId: parsed.coveredUpToId } : {}),
         updatedAt: typeof parsed.updatedAt === 'number' ? parsed.updatedAt : 0,
         ...(parsed.lastRun ? { lastRun: parsed.lastRun } : {}),
       };

@@ -1337,7 +1337,12 @@ export class EpisodicSynthesizer {
     decision: CandidateDecisionResult,
     previous: EpisodicProcessingWatermark | undefined,
   ): Promise<EpisodeCandidateDecision> {
-    const watermark = await this.upsertWatermarkForDecision(runInput, candidate, decision, previous, undefined);
+    // Reserve the watermark row (needed as the decision's FK target) WITHOUT
+    // advancing the processed span. If the decision write below fails, the
+    // durable watermark must not mark this span processed, or a later run
+    // would skip it after lookback (mlwk.8). The span is advanced only after
+    // the decision persists, via updateWatermarkDecisionArtifacts.
+    const watermark = await this.upsertWatermarkForDecision(runInput, candidate, decision, previous, undefined, 'reserve');
     const candidateDecision = await this.store.writeEpisodeCandidateDecision({
       id: stableId('episode-candidate-decision', [
         watermark.id,
@@ -1377,7 +1382,7 @@ export class EpisodicSynthesizer {
     previous: EpisodicProcessingWatermark | undefined,
     candidateDecision: EpisodeCandidateDecision,
   ): Promise<EpisodicProcessingWatermark> {
-    return this.upsertWatermarkForDecision(runInput, candidate, decision, previous, candidateDecision.id);
+    return this.upsertWatermarkForDecision(runInput, candidate, decision, previous, candidateDecision.id, 'commit');
   }
 
   private async upsertWatermarkForDecision(
@@ -1386,6 +1391,7 @@ export class EpisodicSynthesizer {
     decision: CandidateDecisionResult,
     previous: EpisodicProcessingWatermark | undefined,
     candidateDecisionId: string | undefined,
+    phase: 'reserve' | 'commit',
   ): Promise<EpisodicProcessingWatermark> {
     const scope = this.buildProcessingWatermarkScope(runInput, candidate.channelId ?? runInput.sessionId);
     const previousCanonicalIds = stringArrayFromRecord(previous?.nextWatermarkJson, 'canonicalEpisodeIds');
@@ -1398,6 +1404,24 @@ export class EpisodicSynthesizer {
       ? mergeStringSets(previousDecisionIds, [candidateDecisionId])
       : previousDecisionIds;
     const candidateSpan = candidate.spanRefs[0];
+    // During the 'reserve' phase the row only needs to exist as the decision's
+    // FK target; the processed span carries forward the previous watermark so a
+    // failed decision write cannot mark this candidate's span processed. The
+    // 'commit' phase (after the decision persists) advances the span.
+    const advanceSpan = phase === 'commit';
+    const processedStartedAt = advanceSpan
+      ? (previous?.processedStartedAt && previous.processedStartedAt <= candidate.startedAt
+        ? previous.processedStartedAt
+        : candidate.startedAt)
+      : previous?.processedStartedAt ?? candidate.startedAt;
+    const processedEndedAt = advanceSpan
+      ? (previous?.processedEndedAt && previous.processedEndedAt >= candidate.endedAt
+        ? previous.processedEndedAt
+        : candidate.endedAt)
+      : previous?.processedEndedAt ?? candidate.startedAt;
+    const lastProcessedAt = advanceSpan
+      ? candidate.endedAt
+      : previous?.lastProcessedAt ?? candidate.startedAt;
     const watermark = await this.store.upsertProcessingWatermark({
       id: stableId('l01-processing-watermark', [
         scope.processor,
@@ -1409,12 +1433,8 @@ export class EpisodicSynthesizer {
       ...scope,
       highWaterTurnId: candidateSpan.endTurnId ?? previous?.highWaterTurnId,
       highWaterMessageId: runInput.sourceMessageId ?? previous?.highWaterMessageId,
-      processedStartedAt: previous?.processedStartedAt && previous.processedStartedAt <= candidate.startedAt
-        ? previous.processedStartedAt
-        : candidate.startedAt,
-      processedEndedAt: previous?.processedEndedAt && previous.processedEndedAt >= candidate.endedAt
-        ? previous.processedEndedAt
-        : candidate.endedAt,
+      processedStartedAt,
+      processedEndedAt,
       previousWatermarkJson: previous ? {
         id: previous.id,
         highWaterTurnId: previous.highWaterTurnId,
@@ -1437,7 +1457,7 @@ export class EpisodicSynthesizer {
         candidateDecisionIds,
         ...(candidateDecisionId ? { lastCandidateDecisionId: candidateDecisionId } : {}),
       },
-      lastProcessedAt: candidate.endedAt,
+      lastProcessedAt,
       updatedAt: candidate.endedAt,
     });
     this.rememberProcessingWatermark(watermark);

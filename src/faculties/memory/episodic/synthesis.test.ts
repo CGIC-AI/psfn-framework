@@ -787,4 +787,40 @@ describe('EpisodicSynthesizer contextual topic cutting (E5.4)', () => {
       topicSegmentation: { enabled: true },
     })).toThrow('no LLM provider');
   });
+
+  it('does not advance the processed watermark span when the decision write fails (mlwk.8)', async () => {
+    const realStore = makeStore();
+    // Inject a durable failure into the candidate-decision write only; every
+    // other store operation delegates to the real in-memory store.
+    const store = new Proxy(realStore, {
+      get(target, prop, receiver) {
+        if (prop === 'writeEpisodeCandidateDecision') {
+          return () => {
+            throw new Error('injected candidate-decision write failure');
+          };
+        }
+        const value = Reflect.get(target, prop, receiver);
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    }) as unknown as EpisodicStore;
+
+    const entries = eightPlusTwoEntries();
+    const synthesizer = new EpisodicSynthesizer(store, { getRecentMessages: () => entries }, {
+      topicSegmentation: { enabled: false },
+    });
+
+    await expect(synthesizer.run({ sessionId: SESSION_ID, sourceMessageId: 'turn:10' }))
+      .rejects.toThrow('injected candidate-decision write failure');
+
+    // No decision was persisted, so the span must not be marked processed.
+    expect(realStore.listEpisodeCandidateDecisions({ limit: 100 })).toHaveLength(0);
+
+    // The watermark row exists (it is the decision's FK target) but its
+    // processed span was NOT advanced to cover the candidate: a later run must
+    // still reconsider these turns rather than treat them as already processed.
+    const watermark = realStore.getProcessingWatermark(WATERMARK_SCOPE);
+    expect(watermark).toBeDefined();
+    expect(Date.parse(watermark!.processedEndedAt)).toBeLessThan(Date.parse(entryTimestamp(10)));
+    expect(watermark!.processedEndedAt).toBe(entryTimestamp(1));
+  });
 });

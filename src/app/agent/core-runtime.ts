@@ -95,6 +95,7 @@ import {
 import { getObserverEvalSidecarHealthSnapshot } from '../../core/eval/observer-sidecar/runtime.js';
 import { createSensorCognitionBridge } from '../../core/agent/perception/sensor-cognition-bridge.js';
 import { createIdentityClaimResolvingSink } from '../../core/agent/perception/identity-claim-resolver.js';
+import { createPerceptionNoteDeliverer } from '../../core/agent/perception/presence-note-delivery.js';
 import { HubIdentityEnrollmentService } from '../../core/enrollment/service.js';
 import type { HubIdentityEnrollmentStorePort } from '../../core/enrollment/enrollment-store-port.js';
 
@@ -373,10 +374,12 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
 
   // Perception ingestion (S10 Workstream D). The bridge normalizes presence/face
   // telemetry into PerceptionEvents; the identity-claim resolver (bead .13) turns
-  // a face identity claim into a fail-closed ResolvedPresence. Its downstream
-  // presence sink defaults to a no-op — note delivery is bead .14. Absent
-  // enrollment store leaves the sink a no-op; off/absent registry config leaves
-  // the bridge itself inactive.
+  // a face identity claim into a fail-closed ResolvedPresence. Bead .14 delivers
+  // both resolved presences and raw presence detected/cleared events as
+  // context-visible `[Presence] ...` notes on the satellite session channel.
+  // Absent enrollment store leaves the sink a no-op; off/absent registry config
+  // leaves the bridge itself inactive.
+  const perceptionNoteDeliverer = createPerceptionNoteDeliverer(sessionManager);
   const perceptionSink = options.hubIdentityEnrollmentStore
     ? createIdentityClaimResolvingSink({
       enrollmentService: new HubIdentityEnrollmentService(
@@ -384,6 +387,8 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
         contactStore,
       ),
       contactStore,
+      presenceSink: perceptionNoteDeliverer,
+      inner: perceptionNoteDeliverer,
     })
     : undefined;
   createSensorCognitionBridge({

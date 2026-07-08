@@ -1116,7 +1116,26 @@ export class EpisodicSynthesizer {
   ): Promise<void> {
     state.candidatesProcessed++;
     const episodeInput = buildEpisodeInput(input.sessionId, group);
+    const claims = group.entries.map(entry => ({
+      claimKey: sessionEntryClaimKey(entry),
+      turnId: getTurnId(entry),
+      channelId: entry.channelId,
+    }));
     const existing = await this.store.getEpisode(episodeInput.id);
+
+    // Resolve which episode this candidate lands on BEFORE mutating store state,
+    // then verify its source-message claims are available. A claim conflict must
+    // abort the run without having created or extended an episode (mlwk.49);
+    // otherwise a conflict leaves duplicate/extended episode state behind. New
+    // episodes cannot be claimed before they exist (claims FK-reference the
+    // episode), so this pre-check guards the mutation and the authoritative
+    // claim write runs after.
+    const consolidationTarget = existing
+      ? null
+      : await this.resolveConsolidationTarget(episodeInput, state.createdEpisodes);
+    const survivingEpisodeId = existing?.id ?? consolidationTarget?.episode.id ?? episodeInput.id;
+    await this.assertGroupClaimsAvailable(survivingEpisodeId, claims);
+
     let episode: Episode;
     let created = false;
     let decision: CandidateDecisionResult;
@@ -1129,50 +1148,44 @@ export class EpisodicSynthesizer {
         reason: 'candidate span already covered by canonical episode id',
         canonicalEpisode: episode,
       };
-    } else {
-      const consolidationTarget = await this.resolveConsolidationTarget(episodeInput, state.createdEpisodes);
-      if (consolidationTarget) {
-        episode = await this.store.updateEpisode(
-          mergeEpisodeWithCandidate(consolidationTarget.episode, episodeInput),
-        );
-        const currentRunIndex = state.createdEpisodes.findIndex(candidate => candidate.id === episode.id);
-        if (currentRunIndex >= 0) {
-          state.createdEpisodes[currentRunIndex] = episode;
-        }
-        state.skippedEpisodeIds.push(episode.id);
-        decision = {
-          status: 'merged',
-          action: 'extend',
-          reason: 'candidate span deterministically overlapped an active canonical episode',
-          canonicalEpisode: episode,
-          sourceEpisode: consolidationTarget.episode,
-          score: consolidationTarget,
-        };
-      } else {
-        // Near-real-time output is a CANDIDATE until the nightly sleep
-        // cycle consolidates or confirms it (m58.1).
-        episode = await this.store.createEpisode({ ...episodeInput, lifecycleStatus: 'candidate' });
-        created = true;
-        state.createdEpisodes.push(episode);
-        decision = {
-          status: 'canonical',
-          action: 'create',
-          reason: 'candidate span did not match an active canonical episode',
-          canonicalEpisode: episode,
-        };
+    } else if (consolidationTarget) {
+      episode = await this.store.updateEpisode(
+        mergeEpisodeWithCandidate(consolidationTarget.episode, episodeInput),
+      );
+      const currentRunIndex = state.createdEpisodes.findIndex(candidate => candidate.id === episode.id);
+      if (currentRunIndex >= 0) {
+        state.createdEpisodes[currentRunIndex] = episode;
       }
+      state.skippedEpisodeIds.push(episode.id);
+      decision = {
+        status: 'merged',
+        action: 'extend',
+        reason: 'candidate span deterministically overlapped an active canonical episode',
+        canonicalEpisode: episode,
+        sourceEpisode: consolidationTarget.episode,
+        score: consolidationTarget,
+      };
+    } else {
+      // Near-real-time output is a CANDIDATE until the nightly sleep
+      // cycle consolidates or confirms it (m58.1).
+      episode = await this.store.createEpisode({ ...episodeInput, lifecycleStatus: 'candidate' });
+      created = true;
+      state.createdEpisodes.push(episode);
+      decision = {
+        status: 'canonical',
+        action: 'create',
+        reason: 'candidate span did not match an active canonical episode',
+        canonicalEpisode: episode,
+      };
     }
 
-    // Claim the group's source messages for the surviving episode before
-    // recording downstream artifacts; a claim conflict aborts the run.
+    // Authoritative claim for the surviving episode before recording downstream
+    // artifacts; the pre-check above keeps a conflict from persisting a
+    // created/extended episode.
     await this.store.claimEpisodeMessages({
       episodeId: episode.id,
       sessionId: input.sessionId,
-      claims: group.entries.map(entry => ({
-        claimKey: sessionEntryClaimKey(entry),
-        turnId: getTurnId(entry),
-        channelId: entry.channelId,
-      })),
+      claims,
     });
 
     const candidateDecision = await this.persistCandidateDecisionAndWatermark(
@@ -1211,6 +1224,28 @@ export class EpisodicSynthesizer {
           relatedThemeOverlap: related.overlap,
         },
       });
+    }
+  }
+
+  private async assertGroupClaimsAvailable(
+    episodeId: string,
+    claims: readonly { claimKey: string }[],
+  ): Promise<void> {
+    const claimKeys = claims.map(claim => claim.claimKey);
+    for (let offset = 0; offset < claimKeys.length; offset += CLAIM_LOOKUP_CHUNK_SIZE) {
+      const chunk = claimKeys.slice(offset, offset + CLAIM_LOOKUP_CHUNK_SIZE);
+      const active = await this.store.listEpisodeMessageClaims({
+        claimKeys: chunk,
+        status: 'active',
+        limit: chunk.length,
+      });
+      const conflict = active.find(claim => claim.episodeId !== episodeId);
+      if (conflict) {
+        throw new Error(
+          `source message "${conflict.claimKey}" is already claimed by episode "${conflict.episodeId}"; `
+          + `refusing to mutate episode "${episodeId}"`,
+        );
+      }
     }
   }
 

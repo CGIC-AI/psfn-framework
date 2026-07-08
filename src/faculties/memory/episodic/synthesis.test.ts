@@ -788,6 +788,83 @@ describe('EpisodicSynthesizer contextual topic cutting (E5.4)', () => {
     })).toThrow('no LLM provider');
   });
 
+  it('does not create or extend an episode when a concurrent claim conflict occurs (mlwk.49)', async () => {
+    const realStore = makeStore();
+    const entries = eightPlusTwoEntries();
+    const conflictingKey = sessionEntryClaimKey(entries[0]);
+
+    // A decoy episode dated far from the candidate window so it is never a
+    // consolidation target; it exists only to hold a conflicting claim.
+    const decoyEpisode = {
+      id: 'episode:decoy',
+      title: 'Unrelated earlier episode',
+      landmark: 'A separate exchange that already owns one source message.',
+      startedAt: '2026-01-01T10:00:00.000Z',
+      endedAt: '2026-01-01T10:05:00.000Z',
+      threadId: 'other:thread',
+      channelId: 'other:thread',
+      participantContactIds: ['contact:tester'],
+      salience: { score: 0.5, novelty: 0.3, emotionalIntensity: 0.2 },
+      affect: { valence: 0.1, arousal: 0.2, dominance: 0.4, labels: ['neutral'] },
+      themes: ['unrelated'],
+      spanRefs: [{
+        spanId: 'span-decoy',
+        threadId: 'other:thread',
+        channelId: 'other:thread',
+        startedAt: '2026-01-01T10:00:00.000Z',
+        endedAt: '2026-01-01T10:05:00.000Z',
+      }],
+      artifactRefs: [],
+      provenanceRefs: [{ kind: 'l0_span' as const, refId: 'span-decoy' }],
+    };
+
+    // Simulate concurrent channel activity: another episode claims one of the
+    // candidate's source messages AFTER the run's initial claimed-entry filter
+    // but before this candidate is persisted. getEpisode is first called at the
+    // top of processCandidateGroup, so we inject the concurrent claim there.
+    let injected = false;
+    const store = new Proxy(realStore, {
+      get(target, prop, receiver) {
+        if (prop === 'getEpisode') {
+          return (id: string) => {
+            if (!injected) {
+              injected = true;
+              target.createEpisode(decoyEpisode);
+              target.claimEpisodeMessages({
+                episodeId: decoyEpisode.id,
+                sessionId: SESSION_ID,
+                claims: [{ claimKey: conflictingKey, turnId: turnId(1), channelId: SESSION_ID }],
+              });
+            }
+            return target.getEpisode(id);
+          };
+        }
+        const value = Reflect.get(target, prop, receiver);
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    }) as unknown as EpisodicStore;
+
+    const synthesizer = new EpisodicSynthesizer(store, { getRecentMessages: () => entries }, {
+      topicSegmentation: { enabled: false },
+    });
+
+    await expect(synthesizer.run({ sessionId: SESSION_ID, sourceMessageId: 'turn:10' }))
+      .rejects.toThrow('already claimed by episode');
+
+    // No candidate episode was created in the candidate's window: the conflict
+    // aborted the run before any episode mutation persisted.
+    const candidateWindow = realStore.searchByTime({
+      from: '2026-04-01T00:00:00.000Z',
+      to: '2026-04-01T23:59:59.999Z',
+    });
+    expect(candidateWindow).toHaveLength(0);
+    expect(realStore.listEpisodeCandidateDecisions({ limit: 100 })).toHaveLength(0);
+    // Only the decoy's own claim exists; no claims were written for a candidate.
+    const activeClaims = realStore.listEpisodeMessageClaims({ status: 'active' });
+    expect(activeClaims).toHaveLength(1);
+    expect(activeClaims[0].episodeId).toBe('episode:decoy');
+  });
+
   it('does not advance the processed watermark span when the decision write fails (mlwk.8)', async () => {
     const realStore = makeStore();
     // Inject a durable failure into the candidate-decision write only; every

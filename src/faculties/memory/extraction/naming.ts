@@ -62,26 +62,24 @@ const GENERIC_COMPANION_LABELS = new Set([
   'the companion',
 ]);
 
+// Only explicit placeholder forms are rewritten: character-card macros (handled
+// separately) and the definite/"primary" generic labels. Bare nouns ("user",
+// "companion", "assistant") are intentionally excluded so ordinary text like
+// "research assistant" or "power user" is never corrupted.
 const USER_REPLACEMENTS: ReadonlyArray<[RegExp, boolean]> = [
   [/\bthe primary user's\b/gi, true],
   [/\bprimary user's\b/gi, true],
   [/\bthe user's\b/gi, true],
-  [/\buser's\b/gi, true],
   [/\bthe primary user\b(?!-)/gi, false],
   [/\bprimary user\b(?!-)/gi, false],
   [/\bthe user\b(?!-)/gi, false],
-  [/(?<!-)\buser\b(?!-)/gi, false],
 ];
 
 const COMPANION_REPLACEMENTS: ReadonlyArray<[RegExp, boolean]> = [
   [/\bthe companion's\b/gi, true],
-  [/\bcompanion's\b/gi, true],
   [/\bthe assistant's\b/gi, true],
-  [/\bassistant's\b/gi, true],
   [/\bthe companion\b(?!-)/gi, false],
-  [/(?<!-)\bcompanion\b(?!-)/gi, false],
   [/\bthe assistant\b(?!-)/gi, false],
-  [/(?<!-)\bassistant\b(?!-)/gi, false],
 ];
 
 const PARTICIPANT_MACRO_PATTERN = /\{\{\s*(user|char|character|assistant)\s*\}\}/gi;

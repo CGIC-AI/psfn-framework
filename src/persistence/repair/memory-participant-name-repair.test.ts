@@ -70,7 +70,7 @@ describe('memory participant name repair', () => {
     const plan = planMemoryParticipantNameRepair([
       {
         id: 'm-generic',
-        text: "The user trusts companion's patience.",
+        text: "The user trusts the companion's patience.",
       },
       {
         id: 'm-clean',
@@ -90,10 +90,48 @@ describe('memory participant name repair', () => {
     expect(plan.updates).toEqual([
       expect.objectContaining({
         memoryId: 'm-generic',
-        beforeText: "The user trusts companion's patience.",
+        beforeText: "The user trusts the companion's patience.",
         afterText: "Alex trusts Lyra's patience.",
       }),
     ]);
+  });
+
+  it('leaves ordinary assistant/companion/user nouns unchanged (not placeholders)', () => {
+    const plan = planMemoryParticipantNameRepair([
+      { id: 'm-research', text: 'The research assistant reviewed the paper.' },
+      { id: 'm-power', text: 'He is a power user of the kiln software.' },
+      { id: 'm-planting', text: 'Companion planting improved the harvest.' },
+      { id: 'm-personal', text: 'She hired a personal assistant last spring.' },
+    ], {
+      canonicalContactName: 'Alex',
+      companionName: 'Lyra',
+    });
+
+    // None are placeholder candidates, so none are rewritten or refused.
+    expect(plan).toMatchObject({
+      scanned: 4,
+      candidates: 0,
+      unchanged: 0,
+      updates: [],
+      refused: [],
+    });
+  });
+
+  it('restricts the candidate SQL predicate to explicit placeholder forms', async () => {
+    const pool = new FakePostgresRepairPool([]);
+    await repairPostgresMemoryParticipantNames(pool as unknown as Pool, {
+      canonicalContactName: 'Alex',
+      companionName: 'Lyra',
+    });
+    const selectSql = pool.poolQueries
+      .map(query => query.text)
+      .find(text => text.includes('FROM l2_memories')) ?? '';
+    expect(selectSql).toContain("'%the companion%'");
+    expect(selectSql).toContain("'%the assistant%'");
+    // Bare-noun predicates that would match ordinary text must be gone.
+    expect(selectSql).not.toMatch(/LIKE '%companion%'/);
+    expect(selectSql).not.toMatch(/LIKE '%assistant%'/);
+    expect(selectSql).not.toMatch(/LIKE '%user''s%'/);
   });
 
   it('refuses ambiguous participant labels instead of partially rewriting memory text', () => {

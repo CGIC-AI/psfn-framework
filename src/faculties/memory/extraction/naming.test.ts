@@ -103,6 +103,18 @@ describe('detectDurableMemoryParticipantPlaceholders', () => {
       hasAny: false,
     });
   });
+
+  it('does not treat bare assistant/companion/user nouns as placeholders', () => {
+    expect(detectDurableMemoryParticipantPlaceholders(
+      'The research assistant helped the power user with companion planting.',
+    )).toEqual({
+      user: false,
+      companion: false,
+      userMacros: [],
+      companionMacros: [],
+      hasAny: false,
+    });
+  });
 });
 
 describe('normalizeExtractedFactParticipantNames', () => {

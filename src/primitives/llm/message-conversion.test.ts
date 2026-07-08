@@ -40,6 +40,8 @@ describe('contextMessagesToPiMessages', () => {
         api: 'openai-completions',
         provider: 'openrouter',
         model: 'openrouter/moonshotai/kimi-k2.5',
+        responseModel: 'moonshotai/kimi-k2.5',
+        diagnostics: [{ category: 'provider', message: 'routed through fallback' }],
         usage: {
           input: 1,
           output: 2,
@@ -72,6 +74,8 @@ describe('contextMessagesToPiMessages', () => {
       api: 'openai-completions',
       provider: 'openrouter',
       model: 'openrouter/moonshotai/kimi-k2.5',
+      responseModel: 'moonshotai/kimi-k2.5',
+      diagnostics: [{ category: 'provider', message: 'routed through fallback' }],
       stopReason: 'toolUse',
       timestamp: 1000,
     });

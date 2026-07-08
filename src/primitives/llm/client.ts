@@ -1936,14 +1936,27 @@ function normalizeLLMUsageDetails(
 ): LLMUsageDetails {
   const record = isRecord(value) ? value : {};
   const promptTokenDetails = optionalRecord(record.prompt_tokens_details);
-  const input = normalizeUsageCountFromRecord(record, 'input', 'prompt_tokens')
+  const promptTokens = normalizeUsageCount(record.prompt_tokens);
+  const cacheWriteFromRaw = normalizeUsageCount(promptTokenDetails.cache_write_tokens);
+  const reportedCachedTokens = normalizeUsageCount(promptTokenDetails.cached_tokens)
+    || normalizeUsageCount(record.prompt_cache_hit_tokens);
+  const cacheWrite = normalizeUsageCountFromRecord(record, 'cacheWrite')
+    || cacheWriteFromRaw;
+  const cacheReadFromRaw = cacheWriteFromRaw > 0
+    ? Math.max(0, reportedCachedTokens - cacheWriteFromRaw)
+    : reportedCachedTokens;
+  const cacheRead = normalizeUsageCountFromRecord(record, 'cacheRead')
+    || cacheReadFromRaw;
+  const inputFromRaw = promptTokens > 0
+    ? Math.max(0, promptTokens - cacheReadFromRaw - cacheWriteFromRaw)
+    : 0;
+  const input = normalizeUsageCountFromRecord(record, 'input')
+    || inputFromRaw
     || normalizeUsageCount(fallbackInputTokens);
+  // pi-ai 0.73.1 follows OpenAI semantics: completion_tokens already includes
+  // completion_tokens_details.reasoning_tokens, so do not add reasoning again.
   const output = normalizeUsageCountFromRecord(record, 'output', 'completion_tokens')
     || normalizeUsageCount(fallbackOutputTokens);
-  const cacheRead = normalizeUsageCountFromRecord(record, 'cacheRead')
-    || normalizeUsageCount(promptTokenDetails.cached_tokens);
-  const cacheWrite = normalizeUsageCountFromRecord(record, 'cacheWrite')
-    || normalizeUsageCount(promptTokenDetails.cache_write_tokens);
   const totalTokens = normalizeUsageCountFromRecord(record, 'totalTokens', 'total_tokens')
     || input + output + cacheRead + cacheWrite;
   const cost = normalizeLLMUsageCostDetails(record.cost);

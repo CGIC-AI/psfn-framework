@@ -89,4 +89,11 @@ describe('findCorruptEmptyToolCalls', () => {
     expect(classifyToolArgumentProvenance({ args: { tools: 'north_star' }, argumentFragmentBytes: 99 }))
       .toBe('validation_rejected');
   });
+
+  it('classifies repaired non-empty streamed args as validation_rejected, not provider_emitted_empty', () => {
+    expect(classifyToolArgumentProvenance({
+      args: { action: 'write', note: 'line one\nline two with invalid \\q escape' },
+      argumentFragmentBytes: 64,
+    })).toBe('validation_rejected');
+  });
 });

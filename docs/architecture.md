@@ -112,6 +112,38 @@ See [`docs/memory.md`](./memory.md) for the memory contract.
 - Channel adapters are manifest-driven and loaded through `src/app/startup/support/channel-lifecycle.ts`.
 - Current runtime surfaces include Discord, Telegram, the gateway-hosted OpenAI-compatible API, the operator-hosted Garden surface, and the Satellite Hub claim/config boundary. Endpoint transports such as Wyoming/OpenHome are owned by the Satellite Hub repository.
 - Voice connectors are plugin-style STT/TTS adapters resolved from runtime settings and capability eligibility.
+- Same-cluster companion↔companion conversation runs through the normal turn
+  pipeline as ordinary channels (`src/shared/contracts/companion-channels.ts`):
+  a many-to-many room (`companion-room:<placeId>`) and a 1:1 DM
+  (`companion-dm:<a>:<b>`), routed by the gateway companion lane
+  (`src/boundary/gateway/companion-channels.ts`) and governed by the existing
+  fatigue budgets. Active only under the multi-companion flag; see
+  [`docs/multi-companion.md`](./multi-companion.md).
+
+### Locations, presence, and world
+
+- A soft-registry `places.json` (`src/shared/contracts/places-registry.ts`,
+  loaded by `src/channels/backplane/places-registry.ts`) models sites, places,
+  and affordances (perceivers/effectors). An absent file degrades to no world
+  surface rather than failing boot; a malformed file fails closed.
+- A situated-presence context section
+  (`src/core/agent/substrate-agent/runtime-context-sections/situated-presence.ts`)
+  renders where the companion is, what it perceives, what it can act on, and who
+  else is co-present. A turn with no resolvable place renders no block — the
+  companion never fabricates a location.
+- Every turn is classified into one of two presence modes by device origin
+  (`turn-presence-mode.ts`): `physical` (a satellite/voice endpoint — the
+  companion emanates into a real room) or `mindspace` (a plain chat channel —
+  the companion is co-located with the partner in a virtual twin of the
+  last-known physical room, resolved via a place's `mirrorsPlaceId` twin link).
+- The `world` tool (`src/boundary/integrations/world/`) exposes
+  `perceive`/`list`/`move`, with `control` staged off by default
+  (`WORLD_CONTROL_RUNTIME_ENABLED = false`) until proven on hardware. HA control
+  is a privileged gateway method holding the token behind a scoped SSRF lane.
+- Cross-companion presence (`companion_presence` in the shared schema) and the
+  shared-world wiki are multi-companion deltas layered on this model — see
+  [`docs/multi-companion.md`](./multi-companion.md) and
+  [`docs/memory.md`](./memory.md).
 
 ### Scheduler and background work
 
@@ -127,6 +159,25 @@ See [`docs/memory.md`](./memory.md) for the memory contract.
 - Production mode forbids overlapping mutable roots and fails closed on partial split-root configuration.
 
 The path contract is defined in `src/persistence/layout.ts` and summarized in [`docs/specifications.md`](./specifications.md).
+
+## Multi-Companion Topology
+
+The default topology is one gateway, one agent, one companion. An opt-in
+multi-companion topology runs N agent processes behind the one gateway — each a
+distinct companion with its own companion ID, data dir, character card, and
+Postgres schema, all connecting to the single gateway over the existing socket
+protocol. It is selected by the `PSFN_MULTI_COMPANION` env flag plus a
+system-owned `companions.json` fleet manifest, and is inert (byte-identical to
+single-companion) when the flag is off.
+
+Tenancy is schema-per-companion (`config.postgresSchema` pins each agent's
+Postgres `search_path`) plus one `shared` schema for cross-companion world data.
+Operability adds one Garden per companion and a read-only gateway fleet-status
+page. The full topology, flag/manifest contract, launcher supervisor mode, and
+fleet operations are documented in [`docs/multi-companion.md`](./multi-companion.md).
+Key files: `src/system/config/companions-config.ts`,
+`src/persistence/postgres.ts`, `src/persistence/runtime-factory.ts`,
+`src/boundary/gateway/fleet-status.ts`, `scripts/start-gateway-agent.sh`.
 
 ## Persistence Ports
 

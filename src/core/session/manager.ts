@@ -126,6 +126,11 @@ import {
   type SessionRouteResetResult,
   type SourceChannelSessionRoute,
 } from './session-routes.js';
+import {
+  roomContentWindowFloorMs,
+  type RoomContentWindow,
+  type RoomContentWindowPort,
+} from './room-content-window.js';
 
 export type {
   FocusSessionCompletionResult,
@@ -185,6 +190,11 @@ export class SessionManager {
   private compressionGuidelineRuntime: CompressionGuidelineRuntime;
   private preCompactionExtractionHandler: PreCompactionExtractionHandler | null;
   private coreMemoryProvider: SessionCoreMemoryProvider | null;
+  /**
+   * Presence-windowed room content gate (psfn-framework-s10rm). Null (the
+   * default) means every channel is unwindowed — byte-identical behavior.
+   */
+  private roomContentWindowPort: RoomContentWindowPort | null = null;
   private internalRoleEnvelopeLedger: InternalRoleEnvelopeLedger | null;
   private activeContextSessionId: string | null = null;
   private pendingAutoCompactions = new Map<string, Promise<void>>();
@@ -693,6 +703,14 @@ export class SessionManager {
           tokenBudget: historyBudget.tokenBudget,
           turnBudgetCharacteristics: params.turnBudgetCharacteristics,
         }).entries;
+        // Presence-window gate (psfn-framework-s10rm): a compaction summary is
+        // itself a served surface — never let it summarize pre-window room
+        // content, or the summary would smuggle it back into context.
+        const roomWindow = this.resolveRoomContentWindow(resolvedChannelId);
+        if (roomWindow.kind !== 'unwindowed') {
+          const floor = roomContentWindowFloorMs(roomWindow);
+          recent = recent.filter(entry => entry.timestamp >= floor);
+        }
         recent = applyFocusCompactionRanges(
           recent,
           this.getFocusCompactionRanges(resolvedChannelId),
@@ -902,6 +920,7 @@ export class SessionManager {
       characterName: this.resolveContextCharacterName(),
       llmProvider: input.llmProvider,
       promptRegistry: this.promptRegistry,
+      roomContentWindow: this.resolveRoomContentWindow(resolvedChannelId),
     });
   }
 
@@ -1060,6 +1079,21 @@ export class SessionManager {
 
   setCoreMemoryProvider(provider: SessionCoreMemoryProvider | null): void {
     this.coreMemoryProvider = provider;
+  }
+
+  /**
+   * Wire the presence-windowed room content gate (psfn-framework-s10rm).
+   * Composition sets this only in multi-companion mode; unset, every channel
+   * serves full history exactly as before.
+   */
+  setRoomContentWindowPort(port: RoomContentWindowPort | null): void {
+    this.roomContentWindowPort = port;
+  }
+
+  /** Servable content window for a resolved channel (unwindowed without a port). */
+  private resolveRoomContentWindow(resolvedChannelId: string): RoomContentWindow {
+    return this.roomContentWindowPort?.resolveWindow(resolvedChannelId)
+      ?? { kind: 'unwindowed' };
   }
 
   /**

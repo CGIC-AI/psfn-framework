@@ -77,6 +77,13 @@ export interface TurnSessionContextSnapshot {
   recentEntries: SessionEntry[];
   /** Entries collected from the store before windowing/summarization. */
   sourceEntryCount?: number;
+  /**
+   * Presence-window serve floor applied to this capture (private rooms,
+   * psfn-framework-s10rm). Absent when the channel is unwindowed.
+   */
+  roomWindowFloorMs?: number;
+  /** Entries dropped by the presence-window gate before assembly. */
+  roomWindowFilteredEntryCount?: number;
   historySummaryText?: string;
   historySummaryEntryCount?: number;
   compactionSummaryTexts: string[];

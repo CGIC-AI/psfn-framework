@@ -77,10 +77,13 @@ describe('PostgresCompanionPresenceStore (W5a)', () => {
     const [, sql, params] = storeMocks.queryOne.mock.calls[0] as [unknown, string, unknown[]];
     expect(sql).toContain('INSERT INTO companion_presence');
     expect(sql).toContain('ON CONFLICT (companion_id) DO UPDATE');
-    // Same-place refresh keeps `since`; a move resets it.
+    // Same-place refresh keeps `since` only while the previous row is fresh
+    // under the staleness TTL; a move or a stale row resets it
+    // (psfn-framework-s10rm presence-window semantics).
     expect(sql).toContain('THEN companion_presence.since');
     expect(sql).toContain('ELSE EXCLUDED.since');
-    expect(params).toEqual([COMPANION_ID, 'site.home', 'place.living-room', 'physical']);
+    expect(sql).toContain("companion_presence.updated_at >= now() - ($5::double precision * interval '1 millisecond')");
+    expect(params).toEqual([COMPANION_ID, 'site.home', 'place.living-room', 'physical', 15 * 60_000]);
     expect(record).toEqual({
       companionId: COMPANION_ID,
       siteId: 'site.home',
@@ -89,6 +92,21 @@ describe('PostgresCompanionPresenceStore (W5a)', () => {
       since: NOW.toISOString(),
       updatedAt: NOW.toISOString(),
     });
+  });
+
+  it('threads a custom staleness TTL into the since-continuity guard', async () => {
+    const store = await PostgresCompanionPresenceStore.connect(
+      'postgres://postgres:secret@localhost:5432/psfn',
+      { staleTtlMs: 1_000 },
+    );
+    await store.upsertPresence({
+      companionId: COMPANION_ID,
+      siteId: 'site.home',
+      placeId: 'place.living-room',
+      kind: 'physical',
+    });
+    const [, , params] = storeMocks.queryOne.mock.calls[0] as [unknown, string, unknown[]];
+    expect(params[4]).toBe(1_000);
   });
 
   it('fails closed on a non-UUID companion id and an unknown kind', async () => {

@@ -26,6 +26,23 @@ export const PLACES_REGISTRY_FILE_NAME = 'places.json';
 
 export type PlaceKind = 'physical' | 'virtual';
 
+/**
+ * Room privacy classification (psfn-framework-s10rm, presence-windowed
+ * delivery). The place registry entry is the canonical home for this field:
+ * a virtual place IS the room behind its `companion-room:<placeId>` channel,
+ * so the room's privacy is a property of the place, not of any per-channel
+ * config.
+ *
+ *  - `public` (the default when the field is absent): everyone sees full room
+ *    history regardless of presence — existing behavior, byte-identical.
+ *  - `private`: content is delivered presence-windowed. An occupant receives
+ *    room chat only from their join (their `companion_presence.since`) until
+ *    their exit; a later joiner has no evidence of pre-join conversation.
+ *    Enforcement is at DELIVERY time (gateway fan-out + session/context
+ *    serving), never by filtering memory extraction.
+ */
+export type PlacePrivacy = 'public' | 'private';
+
 export type AffordanceRole = 'perceiver' | 'effector';
 
 export type AffordanceBackend = 'ha' | 'satellite' | 'vr';
@@ -91,6 +108,11 @@ export interface PlaceConfig {
    * companion-data (character card extensions), never a code identifier here.
    */
   mirrorsPlaceId?: string;
+  /**
+   * Room privacy for presence-windowed delivery (psfn-framework-s10rm).
+   * Absent = `public` (zero behavior change). See {@link PlacePrivacy}.
+   */
+  privacy?: PlacePrivacy;
   affordances: AffordanceConfig[];
 }
 
@@ -131,4 +153,13 @@ export function resolveTwinPlaceOf(
   return registry.places.find(
     (place) => place.kind === 'virtual' && place.mirrorsPlaceId === physicalPlaceId,
   );
+}
+
+/**
+ * Canonical privacy resolution for a place: absent field means `public`.
+ * Single source of truth for the default so the gateway delivery lane and the
+ * agent-side session window gate can never disagree on it.
+ */
+export function resolvePlacePrivacy(place: Pick<PlaceConfig, 'privacy'>): PlacePrivacy {
+  return place.privacy ?? 'public';
 }

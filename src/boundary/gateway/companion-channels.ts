@@ -19,6 +19,17 @@
 // presence row has gone stale between turns, and delivery-side trust gates
 // govern what a recipient does with the message.
 //
+// PRIVATE rooms (psfn-framework-s10rm, presence-windowed delivery): when the
+// addressed place is marked `privacy: 'private'`, a recipient additionally
+// must have JOINED before the message was minted — its presence row's `since`
+// (the join time; the one clock, no separate bookkeeping) must not be after
+// the message timestamp. This closes the join race at the fan-out boundary;
+// the agent-side session window gate (companion-room-window.ts) closes the
+// serving side. PUBLIC places (the default) skip the `since` check entirely —
+// byte-identical to pre-privacy behavior. Discord/Telegram group channels
+// never route through this lane at all; a future private HUMAN room enforces
+// its window at its own channel adapter, not here.
+//
 // DM peers are validated against the fleet manifest (companions.json): the
 // cluster's sibling set is the addressable universe, cross-cluster transport
 // is explicitly deferred.
@@ -26,7 +37,11 @@
 import {
   parseCompanionChannelId,
 } from '../../shared/contracts/companion-channels.js';
-import type { PlacesRegistryConfig } from '../../shared/contracts/places-registry.js';
+import {
+  resolvePlacePrivacy,
+  type PlacePrivacy,
+  type PlacesRegistryConfig,
+} from '../../shared/contracts/places-registry.js';
 import { DEFAULT_COMPANION_PRESENCE_STALE_TTL_MS } from '../../core/agent/companion-presence-runtime.js';
 
 /** Narrow read-only view over the shared-schema presence store. */
@@ -34,6 +49,13 @@ export interface CompanionPresenceReadRow {
   companionId: string;
   /** ISO-8601 freshness beat; rows older than the staleness TTL are gone. */
   updatedAt: string;
+  /**
+   * ISO-8601 join time (start of the current presence window). Required for
+   * PRIVATE-room delivery — a row without it is excluded fail-closed there.
+   * The real store always returns it; it is optional only so narrow public
+   * test doubles remain valid.
+   */
+  since?: string;
 }
 
 export interface CompanionPresenceReadPort {
@@ -58,8 +80,29 @@ export interface CompanionDeliveryViolation {
 }
 
 export type CompanionDeliveryResolution =
-  | { ok: true; kind: 'room' | 'dm'; channelId: string; recipients: string[] }
+  | {
+    ok: true;
+    kind: 'room' | 'dm';
+    channelId: string;
+    recipients: string[];
+    /** Room only: the addressed place's privacy classification. */
+    roomPrivacy?: PlacePrivacy;
+    /**
+     * Private room only: present companions excluded because their window
+     * opened after the message was minted (join race) or their row carried
+     * no `since` (fail closed).
+     */
+    windowExcluded?: string[];
+  }
   | { ok: false; violation: CompanionDeliveryViolation };
+
+export interface CompanionDeliveryResolveOptions {
+  /**
+   * Epoch ms the message envelope is minted with. Private-room recipients
+   * whose `since` is after this instant are excluded. Defaults to now().
+   */
+  messageTimestampMs?: number;
+}
 
 export class GatewayCompanionChannelLane {
   private readonly placesRegistry: Pick<PlacesRegistryConfig, 'places'>;
@@ -79,6 +122,7 @@ export class GatewayCompanionChannelLane {
   async resolveDelivery(
     senderCompanionId: string,
     channelId: string,
+    options?: CompanionDeliveryResolveOptions,
   ): Promise<CompanionDeliveryResolution> {
     const parsed = parseCompanionChannelId(channelId);
     if (!parsed) {
@@ -117,16 +161,41 @@ export class GatewayCompanionChannelLane {
       );
     }
 
+    const roomPrivacy = resolvePlacePrivacy(place);
+    // Private rooms deliver presence-WINDOWED (psfn-framework-s10rm): the
+    // recipient must have joined (their `since`) no later than the message
+    // mint. Public rooms never consult `since` — byte-identical behavior.
+    const windowCutoffMs = roomPrivacy === 'private'
+      ? options?.messageTimestampMs ?? this.now()
+      : null;
+
     const rows = await this.presence.listByPlace(place.siteId, place.placeId);
     const staleCutoffMs = this.now() - this.staleTtlMs;
     const recipients: string[] = [];
+    const windowExcluded: string[] = [];
     for (const row of rows) {
       if (row.companionId === senderCompanionId) continue; // never echo the sender
       if (Date.parse(row.updatedAt) < staleCutoffMs) continue; // crashed/idle-out rows
-      if (recipients.includes(row.companionId)) continue;
+      if (recipients.includes(row.companionId) || windowExcluded.includes(row.companionId)) continue;
+      if (windowCutoffMs !== null) {
+        const sinceMs = typeof row.since === 'string' ? Date.parse(row.since) : Number.NaN;
+        // Fail closed: no parseable join time, or joined after the message
+        // was minted — a private room never delivers pre-join content.
+        if (!Number.isFinite(sinceMs) || sinceMs > windowCutoffMs) {
+          windowExcluded.push(row.companionId);
+          continue;
+        }
+      }
       recipients.push(row.companionId);
     }
-    return { ok: true, kind: 'room', channelId, recipients };
+    return {
+      ok: true,
+      kind: 'room',
+      channelId,
+      recipients,
+      roomPrivacy,
+      ...(roomPrivacy === 'private' ? { windowExcluded } : {}),
+    };
   }
 }
 

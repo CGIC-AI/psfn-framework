@@ -14,6 +14,14 @@ import type { AffordanceConfig, PlaceKind } from '../../shared/contracts/places-
 // (conversation-follows-you, G1) and future multi-companion entry events can
 // call the same helper with their own session handle without dragging in
 // SessionManager internals.
+//
+// PRIVACY INVARIANT (psfn-framework-s10rm, presence-windowed delivery): this
+// note carries PRESENT-TIME state only — room id, surroundings, affordances,
+// and who is here right now. It must NEVER summarize or reference prior
+// conversation: in a PRIVATE room a late joiner's entry note is the first
+// thing they see, and any recap would leak pre-join content their delivery
+// window deliberately withholds. Keep every input field present-tense; do not
+// add a "what you missed" line here for any room kind.
 
 /**
  * Distinct source tag for the session-lane `system_note` envelope, matching the

@@ -34,6 +34,27 @@ export interface ExternalTelemetryEvent {
   scope?: string;
 }
 
+export type PerceptionBridgeTelemetryCounter =
+  | 'delivered'
+  | 'malformed'
+  | 'unrecognized'
+  | 'duplicate'
+  | 'sink_error';
+
+export interface PerceptionBridgeTelemetryEvent {
+  counter: PerceptionBridgeTelemetryCounter;
+  reason: string;
+  eventId?: string;
+  rawEventType?: string;
+  source?: string;
+  scope?: string;
+  channelId?: string;
+  satelliteId?: string;
+  placeId?: string;
+  perceptionKind?: 'presence' | 'identity_claim';
+  timestamp: number;
+}
+
 type EventCorrelationFields = Partial<CorrelationMetadata>;
 
 /**
@@ -877,6 +898,7 @@ export interface EventMap {
     timestampMs: number;
   };
   'external.telemetry.ingested': { event: ExternalTelemetryEvent } & EventCorrelationFields;
+  'agent.perception.bridge.telemetry': PerceptionBridgeTelemetryEvent & EventCorrelationFields;
   'module.install': {
     id: string;
     name: string;

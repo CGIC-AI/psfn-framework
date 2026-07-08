@@ -839,6 +839,24 @@
       "contains": "psfn-companion",
       "reason": "Runtime config defaults preserve the observer eval sidecar agent label.",
       "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/core/enrollment/store.ts",
+      "contains": "PSFN runtime persistence is Postgres-only",
+      "reason": "Framework-name reference in the enrollment store doc comment (Sprint 10 D2a).",
+      "pattern": "identity-proper-name"
+    },
+    {
+      "path": "src/core/enrollment/store.ts",
+      "contains": "'psfn-enrollment'",
+      "reason": "Postgres application-name label for the enrollment store connection pool.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/boundary/integrations/world/tools.ts",
+      "contains": "See bead psfn-framework-vinz.10",
+      "reason": "Beads issue-ID reference in a code comment (Sprint 10 world tool follow-up).",
+      "pattern": "identity-legacy-slug"
     }
   ]
 }

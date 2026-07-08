@@ -138,6 +138,7 @@ import {
   type ExtendedToolActivationOptions,
   type ExtendedToolActivationResult,
 } from './substrate-agent/adaptive-tools-runtime.js';
+import { SituatedEmanationTracker } from './substrate-agent/runtime-context-sections/situated-emanation.js';
 import { EmotionSelfModelRuntime } from './substrate-agent/emotion-self-model-runtime.js';
 import {
   type BackgroundContinuationTaskRecord,
@@ -313,6 +314,12 @@ export class SubstrateAgent {
   // Places soft-registry (S10) — undefined behaves as an empty registry
   private readonly placesRegistryConfig: PlacesRegistryConfig | undefined;
 
+  // Handoff-aware active-emanation tracker (S10 B2) — remembers the companion's
+  // current situated place so placeless turns (Discord/Telegram) still
+  // foreground the room it is emanating into. In-memory per process; durable
+  // persistence is bead .7's concern.
+  private readonly situatedEmanationTracker = new SituatedEmanationTracker();
+
   // Prompt composition — null falls back to static systemPrompt
   promptComposer: PromptComposer | null = null;
 
@@ -356,6 +363,7 @@ export class SubstrateAgent {
       getPendingFollowUpProvider: () => this.pendingFollowUpProvider,
       getContactStore: () => this.contactStore,
       getSelfModelRuntimeRequired: () => this.selfModelRuntimeRequired,
+      getPlacesRegistry: () => this.placesRegistryConfig,
       logger: log,
       onEmotionAppraisalGateEvent: (event) => {
         this.eventBus.emit('emotion.appraisal.gate', event).catch((error) => {
@@ -871,6 +879,9 @@ export class SubstrateAgent {
     this.currentMetacognitiveFlags = cloneMetacognitiveFlags(record.metacognitiveFlags);
     this.internalStateContinuityGap = null;
     this.internalStateContinuityGapRenderCount = 0;
+    // S10 B3: seed the durable situated location so a restored location survives
+    // a continuity gap (reload) and carries forward until a new routing signal.
+    this.emotionSelfModelRuntime.restoreSituatedLocation(this.currentInternalState.situated.location);
   }
 
   /** Records that persisted state was too stale to restore; surfaced to her on the next turn. */
@@ -1323,6 +1334,7 @@ export class SubstrateAgent {
       substrateHealth: this.companionSubstrateHealthContext,
       ...(this.placesRegistryConfig ? { placesRegistry: this.placesRegistryConfig } : {}),
       ...(coPresent && coPresent.length > 0 ? { coPresent } : {}),
+      emanationTracker: this.situatedEmanationTracker,
     });
   }
 

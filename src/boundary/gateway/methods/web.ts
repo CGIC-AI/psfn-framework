@@ -43,7 +43,7 @@ const WEB_CIRCUIT_BREAKER = new SlidingWindowCircuitBreaker({
   cooldownMs: 30_000,
 });
 
-interface ResponseLike {
+export interface ResponseLike {
   status: number;
   statusText: string;
   ok: boolean;
@@ -59,6 +59,11 @@ interface WebPolicyTestHooks {
 }
 
 type WebFetchMethodName = 'web.fetch' | 'web.fetch_binary' | 'web.request_binary';
+export type WebCircuitMethodName =
+  | WebFetchMethodName
+  | 'home_assistant.get_states'
+  | 'home_assistant.call_service'
+  | 'home_assistant.check_connection';
 
 function getErrorMessage(err: unknown): string {
   if (err instanceof Error) return err.message;
@@ -75,7 +80,7 @@ function getErrorCode(err: unknown): string | undefined {
   return typeof code === 'string' ? code : undefined;
 }
 
-function formatFetchFailureDetails(err: unknown): string {
+export function formatFetchFailureDetails(err: unknown): string {
   const topMessage = getErrorMessage(err);
   const topCode = getErrorCode(err);
 
@@ -121,7 +126,7 @@ function normalizeWebCircuitUrl(url: string): string {
   }
 }
 
-function webCircuitKey(method: WebFetchMethodName, lane: UrlPolicyLane, url: string): string {
+function webCircuitKey(method: WebCircuitMethodName, lane: UrlPolicyLane, url: string): string {
   return `${method}::${lane}::${normalizeWebCircuitUrl(url)}`;
 }
 
@@ -173,8 +178,8 @@ function logWebCircuitTransition(transition: CircuitBreakerTransition): void {
   log.info('Web fetch circuit breaker state changed', payload);
 }
 
-async function withWebCircuit<T>(
-  method: WebFetchMethodName,
+export async function withWebCircuit<T>(
+  method: WebCircuitMethodName,
   lane: UrlPolicyLane,
   url: string,
   operation: () => Promise<T>,
@@ -239,11 +244,11 @@ function resolveUrlPolicyConfig(runtime: GatewayMethodRuntime): UrlPolicyConfig 
   return fallback;
 }
 
-function resolveDnsResolver(runtime: GatewayMethodRuntime): DnsResolver | undefined {
+export function resolveDnsResolver(runtime: GatewayMethodRuntime): DnsResolver | undefined {
   return (runtime.policyConfig as WebPolicyTestHooks).webFetchDnsResolver;
 }
 
-function resolveTlsCertPaths(runtime: GatewayMethodRuntime): string[] {
+export function resolveTlsCertPaths(runtime: GatewayMethodRuntime): string[] {
   const configured = runtime.policyConfig.webFetchTlsCaCertPaths;
   if (configured && configured.length > 0) {
     return configured;
@@ -252,7 +257,7 @@ function resolveTlsCertPaths(runtime: GatewayMethodRuntime): string[] {
   return [];
 }
 
-function loadTlsBundle(paths: readonly string[]): string | undefined {
+export function loadTlsBundle(paths: readonly string[]): string | undefined {
   if (paths.length === 0) return undefined;
 
   const normalized = paths
@@ -273,7 +278,7 @@ function loadTlsBundle(paths: readonly string[]): string | undefined {
   return bundle;
 }
 
-function normalizeRequestHeaders(raw: unknown): Record<string, string> {
+export function normalizeRequestHeaders(raw: unknown): Record<string, string> {
   if (!raw || typeof raw !== 'object') return {};
   const entries = Object.entries(raw as Record<string, unknown>);
   if (entries.length === 0) return {};
@@ -470,7 +475,7 @@ async function fetchWithPolicyChecks(
   }
 }
 
-interface RedirectChainFetchResult {
+export interface RedirectChainFetchResult {
   response: ResponseLike;
   finalUrl: string;
   redirectHopCount: number;
@@ -504,8 +509,8 @@ async function recordRedirectChainAudit(
   });
 }
 
-async function fetchWithValidatedRedirectChain(
-  rpcMethod: WebFetchMethodName,
+export async function fetchWithValidatedRedirectChain(
+  rpcMethod: WebCircuitMethodName,
   originUrl: string,
   lane: UrlPolicyLane,
   urlPolicyConfig: UrlPolicyConfig,

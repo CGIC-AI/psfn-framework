@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { IncomingHttpHeaders } from 'node:http';
 import type {
@@ -492,6 +492,65 @@ export function parseSatelliteRegistryConfig(
   };
   assertUniqueRegistryBindings(config);
   return config;
+}
+
+/**
+ * Persist the satellite registry owner file (`satellites.json`) back to
+ * `dataDir`. The config is re-validated through {@link parseSatelliteRegistryConfig}
+ * before it touches disk so a malformed mutation fails closed and never
+ * corrupts the owner file. Written atomically via a temp file + rename so a
+ * crash mid-write cannot leave a partial registry. Returns the normalized
+ * config that was actually written.
+ *
+ * This is the single write path used by the Garden static satellite re-bind
+ * surface (Sprint 10 Workstream F1 / Decision 6). Cross-registry place-binding
+ * validation (`assertSatellitePlaceBindings`) is the caller's responsibility —
+ * this function only owns the satellites.json owner-file contract.
+ */
+/**
+ * Reduce a parsed registry to its on-disk wire form. The parser fills optional
+ * arrays (notably `telemetryScopes`) to `[]` on load but REJECTS an empty array
+ * on parse, so a naive JSON round-trip of a parsed config is not re-loadable.
+ * Emitting the same optional fields the parser treats as omittable keeps the
+ * written file re-loadable (and re-validatable).
+ */
+function toSerializableSatelliteRegistry(config: SatelliteRegistryConfig): unknown {
+  return {
+    schemaVersion: config.schemaVersion,
+    enabled: config.enabled,
+    satellites: config.satellites.map((satellite) => ({
+      satelliteId: satellite.satelliteId,
+      displayName: satellite.displayName,
+      mobility: satellite.mobility,
+      ...(satellite.staticLocationLabel ? { staticLocationLabel: satellite.staticLocationLabel } : {}),
+      ...(satellite.placeId ? { placeId: satellite.placeId } : {}),
+      endpoints: satellite.endpoints.map((endpoint) => ({
+        endpointId: endpoint.endpointId,
+        displayName: endpoint.displayName,
+        claimTypes: endpoint.claimTypes,
+        promptChannelType: endpoint.promptChannelType,
+        auth: endpoint.auth,
+        defaultIdentity: endpoint.defaultIdentity,
+        maxCapabilities: endpoint.maxCapabilities,
+        ...(endpoint.telemetryScopes.length > 0 ? { telemetryScopes: endpoint.telemetryScopes } : {}),
+        ...(endpoint.runtime ? { runtime: endpoint.runtime } : {}),
+      })),
+    })),
+  };
+}
+
+export function saveSatelliteRegistryConfig(
+  dataDir: string,
+  config: SatelliteRegistryConfig,
+): SatelliteRegistryConfig {
+  const wire = toSerializableSatelliteRegistry(config);
+  // Fail closed: the wire form must itself parse cleanly before it touches disk.
+  const validated = parseSatelliteRegistryConfig(wire, SATELLITE_REGISTRY_FILE_NAME);
+  const filePath = join(dataDir, SATELLITE_REGISTRY_FILE_NAME);
+  const tempPath = `${filePath}.tmp`;
+  writeFileSync(tempPath, `${JSON.stringify(wire, null, 2)}\n`, 'utf8');
+  renameSync(tempPath, filePath);
+  return validated;
 }
 
 export function loadSatelliteRegistryConfig(dataDir: string): SatelliteRegistryConfig {

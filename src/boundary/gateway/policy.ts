@@ -18,6 +18,12 @@ export interface BeadsPolicyConfig {
   allowActions?: BeadsAction[];
 }
 
+export interface HomeAssistantPolicyConfig {
+  enabled?: boolean;
+  baseUrl?: string;
+  tokenConfigured?: boolean;
+}
+
 export type VaultPolicyAction = 'write' | 'read' | 'search' | 'daily';
 
 export interface VaultPolicyConfig {
@@ -39,6 +45,7 @@ export interface PolicyConfig {
   webFetchTlsCaCertPaths?: string[];
   shellExec?: ShellExecPolicyConfig;
   beads?: BeadsPolicyConfig;
+  homeAssistant?: HomeAssistantPolicyConfig;
   vault?: VaultPolicyConfig;
 }
 
@@ -304,6 +311,17 @@ export function evaluatePolicy(ctx: PolicyContext, policyConfig: PolicyConfig): 
     case 'image.create':
     case 'image.edit':
       return 'ALLOW';
+
+    case 'home_assistant.get_states':
+    case 'home_assistant.check_connection':
+      return 'ALLOW';
+
+    case 'home_assistant.call_service': {
+      const ha = policyConfig.homeAssistant;
+      return ha?.enabled === true && Boolean(ha.baseUrl?.trim()) && ha.tokenConfigured === true
+        ? 'NEEDS_APPROVAL'
+        : 'ALLOW';
+    }
 
     case 'vault.write':
     case 'vault.read':

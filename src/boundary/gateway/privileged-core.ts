@@ -98,6 +98,7 @@ export async function buildGatewayPrivilegedCore(
       gitOps,
       imageConfig: input.config,
       ...(privilegedServices.modelUsageStore ? { modelUsageRecorder: privilegedServices.modelUsageStore } : {}),
+      ...(input.config.credentialVault ? { credentialVault: input.config.credentialVault } : {}),
       policyConfig: {
         ...input.bootstrap.policyConfig,
         ...(privilegedServices.vaultOps

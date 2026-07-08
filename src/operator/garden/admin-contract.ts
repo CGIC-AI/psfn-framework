@@ -45,6 +45,8 @@ import type {
 import type { AdminObserverEvalSidecarService } from './services/observer-eval-sidecar-service.js';
 import type { AdminPendingContactsService } from './services/pending-contacts-service.js';
 import type { AdminRoomsService } from './services/rooms-service.js';
+import type { AdminPlacesService } from './services/places-service.js';
+import type { AdminEnrollmentService } from './services/enrollment-service.js';
 import type { AdminGraphProposalsService } from './services/graph-proposals-service.js';
 import type { AdminSubsystemHealthService } from './services/subsystem-health-service.js';
 import type { AdminToolConformanceService } from './services/tool-conformance-service.js';
@@ -173,6 +175,8 @@ export interface GardenAdminDomainServices {
   contacts: AdminContactsService;
   pendingContacts?: AdminPendingContactsService | null;
   rooms?: AdminRoomsService | null;
+  places?: AdminPlacesService | null;
+  enrollment?: AdminEnrollmentService | null;
   graphProposals?: AdminGraphProposalsService | null;
   concerns?: AdminConcernService | null;
   subsystemHealth?: AdminSubsystemHealthService | null;

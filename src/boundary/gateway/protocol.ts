@@ -153,6 +153,20 @@ export interface WebRequestBinaryParams extends WebFetchBinaryParams {
   bodyBase64?: string;
 }
 
+export interface HomeAssistantGetStatesParams extends GatewayCorrelationParams {
+  entityId?: string;
+}
+
+export interface HomeAssistantCallServiceParams extends GatewayCorrelationParams {
+  domain: string;
+  service: string;
+  entityId?: string;
+  entityIds?: string[];
+  data?: Record<string, unknown>;
+}
+
+export type HomeAssistantCheckConnectionParams = GatewayCorrelationParams;
+
 export interface FsReadParams {
   path: string;
   maxBytes?: number;
@@ -414,6 +428,34 @@ export interface WebRequestBinaryResult extends WebFetchBinaryResult {
   ok: boolean;
 }
 
+export interface HomeAssistantState {
+  entity_id: string;
+  state: string;
+  attributes?: Record<string, unknown>;
+  last_changed?: string;
+  last_updated?: string;
+  context?: Record<string, unknown>;
+  [key: string]: unknown;
+}
+
+export interface HomeAssistantGetStatesResult {
+  states: HomeAssistantState[];
+  count: number;
+  entityId?: string;
+}
+
+export interface HomeAssistantCallServiceResult {
+  domain: string;
+  service: string;
+  entityIds?: string[];
+  response: unknown;
+}
+
+export interface HomeAssistantCheckConnectionResult {
+  ok: true;
+  message: string;
+}
+
 export interface FsReadResult {
   content: string;
   truncated: boolean;
@@ -567,6 +609,9 @@ export interface GatewayMethods {
   'web.fetch': [WebFetchParams, WebFetchResult];
   'web.fetch_binary': [WebFetchBinaryParams, WebFetchBinaryResult];
   'web.request_binary': [WebRequestBinaryParams, WebRequestBinaryResult];
+  'home_assistant.get_states': [HomeAssistantGetStatesParams, HomeAssistantGetStatesResult];
+  'home_assistant.call_service': [HomeAssistantCallServiceParams, HomeAssistantCallServiceResult];
+  'home_assistant.check_connection': [HomeAssistantCheckConnectionParams, HomeAssistantCheckConnectionResult];
   'shell.exec': [ShellExecParams, ShellExecResult];
   'vault.write': [VaultWriteParams, VaultWriteResult];
   'vault.read': [VaultReadParams, VaultReadResult];

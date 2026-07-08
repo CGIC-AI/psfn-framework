@@ -71,6 +71,7 @@ import {
 import { buildContinuityGapPromptVariables } from './runtime-context-sections/continuity-gap.js';
 import {
   buildInternalStatePromptVariables,
+  buildSituatedLocationPromptVariables,
   toEmotionSnapshotFromInternalState,
 } from './runtime-context-sections/internal-state.js';
 import { buildConcernPromptVariables } from './runtime-context-sections/concerns.js';
@@ -91,6 +92,7 @@ import {
   buildSituatedPresenceContextBlock,
   type CoPresentCompanion,
 } from './runtime-context-sections/situated-presence.js';
+import type { SituatedEmanationTracker } from './runtime-context-sections/situated-emanation.js';
 import type { PlacesRegistryConfig } from '../../../shared/contracts/places-registry.js';
 
 // The section producers moved into ./runtime-context-sections/ (E2.6). This
@@ -357,6 +359,7 @@ export function buildDynamicPromptTemplateVariables(
     }),
     ...buildMetacognitiveFlagPromptVariables(input.metacognitiveFlags ?? []),
     ...buildInternalStatePromptVariables(input.internalState),
+    ...buildSituatedLocationPromptVariables(input.internalState, now),
     ...buildConcernPromptVariables(input.activeConcerns),
     ...buildEmotionAppraisalPromptVariables(input.emotionAppraisalChain ?? []),
     ...buildBehavioralNotesPromptVariables(input.behavioralNotesBlock),
@@ -416,6 +419,12 @@ export function buildRuntimeContext(input: {
    * (always the case flag-off) renders byte-identically to today.
    */
   coPresent?: ReadonlyArray<CoPresentCompanion>;
+  /**
+   * Handoff-aware active-emanation tracker (S10 B2). Threaded from the agent so
+   * a placeless turn foregrounds the companion's current active emanation. When
+   * absent, the situated block resolves from the turn alone (B1 behaviour).
+   */
+  emanationTracker?: SituatedEmanationTracker;
 }): string {
   const runtimeContextExtra = (() => {
     const raw = input.templateVariables?.runtime_context_extra;
@@ -444,6 +453,7 @@ export function buildRuntimeContext(input: {
     message: input.message,
     ...(input.placesRegistry ? { placesRegistry: input.placesRegistry } : {}),
     ...(input.coPresent && input.coPresent.length > 0 ? { coPresent: input.coPresent } : {}),
+    ...(input.emanationTracker ? { emanationTracker: input.emanationTracker } : {}),
   });
   if (situatedPresenceContext) {
     sections.push(situatedPresenceContext);

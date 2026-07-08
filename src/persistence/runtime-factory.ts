@@ -7,6 +7,8 @@ import {
 } from '../faculties/memory/episodic/index.js';
 import { createPostgresContactStore } from '../core/contacts/postgres-adapter.js';
 import type { ContactStorePort } from '../core/contacts/contact-store-port.js';
+import { createPostgresHubIdentityEnrollmentStore } from '../core/enrollment/store.js';
+import type { HubIdentityEnrollmentStorePort } from '../core/enrollment/enrollment-store-port.js';
 import { createPostgresIntentionPorts } from '../core/intention/postgres-adapters.js';
 import type {
   IntentionRuntimeProviders,
@@ -46,6 +48,13 @@ export interface AgentPersistenceRuntime {
   episodicStore: EpisodicStorePort;
   reflectionStore: ReflectionMetacognitionJournalStore;
   contactStore?: ContactStorePort;
+  /**
+   * Hub identity ↔ contact enrollment binding store (Sprint 10 D2a). Biometric
+   * compute/templates stay at the Satellite Hub; this store holds only the
+   * opaque handle → contact binding. Consumed by the presence resolution path
+   * (bead .13) and the Garden enrollment surface (bead .17).
+   */
+  hubIdentityEnrollmentStore?: HubIdentityEnrollmentStorePort;
   intentionRuntime?: IntentionRuntimeWiring;
   intentionProviders?: IntentionRuntimeProviders;
   weightedThoughtStore?: WeightedThoughtStorePort;
@@ -134,6 +143,7 @@ export async function createAgentPersistenceRuntime(
       exportDir: resolveContactsDir(options.pathSnapshot.companionDataDir),
       schema,
     }),
+    hubIdentityEnrollmentStore: await createPostgresHubIdentityEnrollmentStore(databaseUrl, { schema }),
     intentionRuntime,
     intentionProviders: intentionRuntime,
     weightedThoughtStore: intentionRuntime.weightedThoughtStore,

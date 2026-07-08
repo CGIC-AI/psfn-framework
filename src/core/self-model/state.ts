@@ -46,12 +46,36 @@ import {
 } from '../intention/care-reminders.js';
 import { CHANNEL_TYPES, type ChannelType } from '../../shared/contracts/runtime.js';
 import { TRUST_LEVELS, type TrustLevel } from '../../system/trust/types.js';
+import type { PlaceKind } from '../../shared/contracts/places-registry.js';
+
+export const SITUATED_LOCATION_KINDS = ['physical', 'virtual'] as const;
 
 export const INTERNAL_STATE_PROCESSING_QUALITIES = ['fluent', 'deliberate', 'struggling'] as const;
 export type InternalStateProcessingQuality = typeof INTERNAL_STATE_PROCESSING_QUALITIES[number];
 
 export const INTERNAL_STATE_CONVERSATION_TRAJECTORIES = ['deepening', 'shifting', 'wrapping-up', 'casual'] as const;
 export type InternalStateConversationTrajectory = typeof INTERNAL_STATE_CONVERSATION_TRAJECTORIES[number];
+
+/**
+ * A durable, last-known situated location (S10 B3). Carried across turns and
+ * continuity gaps so the companion remembers where it is even when a turn
+ * arrives with no fresh routing signal. `updatedAt` is the last time this
+ * location was CONFIRMED by a routing signal, not the current turn time — so a
+ * carried-forward location honestly ages and is never presented as a fresh
+ * reading.
+ */
+export interface SituatedLocation {
+  /** Resolved place id when a satellite→place binding exists; null otherwise. */
+  placeId: string | null;
+  /** Site the place belongs to (or presence-derived siteId); null when unknown. */
+  siteId: string | null;
+  /** Human-readable location label. Always non-empty for a resolved location. */
+  label: string;
+  /** Physical vs virtual place; null when only a presence label is known. */
+  kind: PlaceKind | null;
+  /** ISO timestamp of when this location was last confirmed by a routing signal. */
+  updatedAt: string;
+}
 
 export interface InternalState {
   emotional: {
@@ -82,6 +106,10 @@ export interface InternalState {
     recentInteractionFrequency: number;
     lastSeenDeltaSeconds: number | null;
   };
+  situated: {
+    /** Last-known durable location; null when the companion has no known place. */
+    location: SituatedLocation | null;
+  };
 }
 
 export interface InternalStateSessionMetrics {
@@ -103,6 +131,14 @@ export interface InternalStateComputeInput {
   contactId?: string;
   contactEmotionalSnapshot?: EmotionalSnapshot | null;
   sessionMetrics: InternalStateSessionMetrics;
+  /**
+   * Durable situated location resolved for this turn (already carry-forward
+   * merged by the caller): the freshly-confirmed location, or the prior
+   * location when this turn carried no routing signal, or null when no place is
+   * known. computeState only validates and stores it — resolution/carry-forward
+   * happens upstream (see resolveTurnSituatedLocation).
+   */
+  situatedLocation?: SituatedLocation | null;
 }
 
 interface NormalizedInternalStateComputeInput {
@@ -115,6 +151,7 @@ interface NormalizedInternalStateComputeInput {
   trustLevel: TrustLevel;
   contactId: string | null;
   contactEmotionalSnapshot: EmotionalSnapshot | null;
+  situatedLocation: SituatedLocation | null;
   sessionMetrics: {
     userMessageText: string;
     responseText: string;
@@ -270,6 +307,9 @@ export class InternalStateComputer {
         ),
         lastSeenDeltaSeconds: normalized.sessionMetrics.lastSeenDeltaSeconds,
       },
+      situated: {
+        location: normalized.situatedLocation,
+      },
     };
   }
 }
@@ -304,6 +344,9 @@ function normalizeComputeInput(input: InternalStateComputeInput): NormalizedInte
     trustLevel: normalizeTrustLevel(input.trustLevel),
     contactId: normalizeOptionalIdentifier(input.contactId, 'contactId'),
     contactEmotionalSnapshot: normalizeOptionalEmotionalSnapshot(input.contactEmotionalSnapshot),
+    situatedLocation: input.situatedLocation == null
+      ? null
+      : normalizeSituatedLocation(input.situatedLocation, 'situatedLocation'),
     sessionMetrics: normalizeSessionMetrics(input.sessionMetrics),
   };
 }
@@ -825,6 +868,11 @@ function normalizeInternalState(state: InternalState): InternalState {
     throw new Error('InternalState relational field must be an object');
   }
   const emotionalTelemetry = (state.emotional as { telemetry?: EmotionTelemetryValidation }).telemetry;
+  // `situated` is a newer bucket (S10 B3): persisted state written before it
+  // existed omits it entirely. Absence normalizes to "no known location" (null)
+  // — honest, never a fabricated place — matching the tolerant defaults used
+  // for attention.pendingFollowUps / careReminders.
+  const situatedBucket = (state as { situated?: { location?: unknown } }).situated;
 
   return {
     emotional: {
@@ -875,7 +923,33 @@ function normalizeInternalState(state: InternalState): InternalState {
           'relational.lastSeenDeltaSeconds',
         ),
     },
+    situated: {
+      location: situatedBucket?.location == null
+        ? null
+        : normalizeSituatedLocation(situatedBucket.location, 'situated.location'),
+    },
   };
+}
+
+function normalizeSituatedLocation(value: unknown, fieldName: string): SituatedLocation {
+  if (!isRecord(value)) {
+    throw new Error(`InternalState field "${fieldName}" must be an object`);
+  }
+  return {
+    placeId: normalizeOptionalIdentifier(value.placeId as string | null | undefined, `${fieldName}.placeId`),
+    siteId: normalizeOptionalIdentifier(value.siteId as string | null | undefined, `${fieldName}.siteId`),
+    label: normalizeIdentifier(value.label as string, `${fieldName}.label`),
+    kind: normalizeSituatedLocationKind(value.kind, `${fieldName}.kind`),
+    updatedAt: normalizeIsoTimestamp(value.updatedAt as string, `${fieldName}.updatedAt`),
+  };
+}
+
+function normalizeSituatedLocationKind(value: unknown, fieldName: string): PlaceKind | null {
+  if (value === null || value === undefined) return null;
+  if (typeof value !== 'string' || !SITUATED_LOCATION_KINDS.includes(value as PlaceKind)) {
+    throw new Error(`InternalState field "${fieldName}" has unsupported place kind "${String(value)}"`);
+  }
+  return value as PlaceKind;
 }
 
 function deriveLegacyEmotionTelemetry(state: InternalState): EmotionTelemetryValidation {

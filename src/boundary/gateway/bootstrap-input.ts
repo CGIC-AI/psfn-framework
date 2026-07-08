@@ -297,6 +297,17 @@ function buildGatewayPolicyConfig(
       enabled: beadsToolsEnabled,
       ...(beadsAllowActions ? { allowActions: beadsAllowActions } : {}),
     },
+    homeAssistant: {
+      enabled: config.homeAssistantEnabled === true,
+      ...(config.homeAssistantBaseUrl?.trim()
+        ? { baseUrl: config.homeAssistantBaseUrl.trim() }
+        : {}),
+      tokenConfigured: Boolean(resolveOptionalEnvCredential(
+        config.credentialVault,
+        'HOME_ASSISTANT_TOKEN',
+        env,
+      )),
+    },
     vault: {
       enabled: vaultToolsEnabled,
       ...(vaultAllowActions ? { allowActions: vaultAllowActions } : {}),

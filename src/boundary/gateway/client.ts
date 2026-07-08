@@ -95,6 +95,10 @@ import type {
   BeadsCloseParams,
   BeadsSyncParams,
   BeadsActionResult,
+  HomeAssistantGetStatesParams,
+  HomeAssistantGetStatesResult,
+  HomeAssistantCallServiceParams,
+  HomeAssistantCallServiceResult,
   ImageGenerationRpcResult,
 } from './protocol.js';
 import { GatewayErrors } from './protocol.js';
@@ -706,6 +710,20 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
 
   async beadsSync(params: BeadsSyncParams = {}): Promise<BeadsActionResult> {
     return await this.rpcInstance.request('beads.sync', params) as BeadsActionResult;
+  }
+
+  // ── Home Assistant world control (Sprint 10, bead .8 gateway method) ──
+
+  async homeAssistantGetStates(
+    params: HomeAssistantGetStatesParams = {},
+  ): Promise<HomeAssistantGetStatesResult> {
+    return await this.rpcInstance.request('home_assistant.get_states', params) as HomeAssistantGetStatesResult;
+  }
+
+  async homeAssistantCallService(
+    params: HomeAssistantCallServiceParams,
+  ): Promise<HomeAssistantCallServiceResult> {
+    return await this.rpcInstance.request('home_assistant.call_service', params) as HomeAssistantCallServiceResult;
   }
 
   async imageCreate(params: ImageCreateParams): Promise<ImageGenerationRpcResult> {

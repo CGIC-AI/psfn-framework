@@ -39,6 +39,7 @@ const runtimeFactoryMocks = vi.hoisted(() => ({
   bootstrapPool: { end: vi.fn(async () => undefined) },
   createPostgresPool: vi.fn(() => runtimeFactoryMocks.bootstrapPool),
   ensurePostgresSchemaExists: vi.fn(async () => undefined),
+  ensurePostgresSchema: vi.fn(async () => undefined),
   createSqliteEpisodicStore: vi.fn(function EpisodicStore() {
     return runtimeFactoryMocks.sqliteEpisodicStore;
   }),
@@ -109,6 +110,7 @@ vi.mock('./postgres/companion-presence-store.js', () => ({
 vi.mock('./postgres.js', () => ({
   createPostgresPool: runtimeFactoryMocks.createPostgresPool,
   ensurePostgresSchemaExists: runtimeFactoryMocks.ensurePostgresSchemaExists,
+  ensurePostgresSchema: runtimeFactoryMocks.ensurePostgresSchema,
 }));
 
 beforeEach(() => {
@@ -183,6 +185,9 @@ describe('createAgentPersistenceRuntime', () => {
         },
       },
       contactStore: runtimeFactoryMocks.postgresContactStore as ContactStorePort,
+      // Enrollment store (locations vinz.12) is constructed for real around the
+      // mocked pool — asserted structurally, schema threading asserted below.
+      hubIdentityEnrollmentStore: expect.any(Object),
       intentionRuntime: runtimeFactoryMocks.postgresIntentionRuntime as IntentionRuntimeWiring,
       intentionProviders: runtimeFactoryMocks.postgresIntentionRuntime as IntentionRuntimeProviders,
       internalStateStore: runtimeFactoryMocks.postgresInternalStateStore,
@@ -229,9 +234,13 @@ describe('createAgentPersistenceRuntime', () => {
       'postgres://postgres:secret@localhost:5432/psfn',
       { schema: undefined },
     );
-    // No schema configured: no companion schema is provisioned up front.
+    // No schema configured: no companion schema is provisioned up front. The
+    // enrollment store still creates its own (schema-less) pool, so assert no
+    // pool anywhere was schema-pinned rather than "no pool at all".
     expect(runtimeFactoryMocks.ensurePostgresSchemaExists).not.toHaveBeenCalled();
-    expect(runtimeFactoryMocks.createPostgresPool).not.toHaveBeenCalled();
+    for (const call of runtimeFactoryMocks.createPostgresPool.mock.calls) {
+      expect(call[1]).not.toHaveProperty('schema');
+    }
     // Multi-companion flag off: the shared schema is never touched and no
     // presence store exists.
     expect(runtimeFactoryMocks.connectPostgresCompanionPresenceStore).not.toHaveBeenCalled();
@@ -317,6 +326,12 @@ describe('createAgentPersistenceRuntime', () => {
     expect(runtimeFactoryMocks.createPostgresIntentionPorts).toHaveBeenCalledWith(
       'postgres://postgres:secret@localhost:5432/psfn',
       { schema: 'companion_x' },
+    );
+    // The enrollment store's pool is schema-pinned too — its tables FK-reference
+    // contacts(id), which lives inside the companion schema.
+    expect(runtimeFactoryMocks.createPostgresPool).toHaveBeenCalledWith(
+      'postgres://postgres:secret@localhost:5432/psfn',
+      expect.objectContaining({ applicationName: 'psfn-enrollment', schema: 'companion_x' }),
     );
     expect(runtimeFactoryMocks.connectPostgresInternalStateStore).toHaveBeenCalledWith(
       'postgres://postgres:secret@localhost:5432/psfn',

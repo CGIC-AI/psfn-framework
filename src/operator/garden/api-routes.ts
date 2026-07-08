@@ -13,8 +13,12 @@ import { buildAdminContactRoutes } from './routes/contact-routes.js';
 import { buildAdminContactApprovalRoutes } from './api-routes-contact-approvals.js';
 import type { AdminPendingContactsService } from './services/pending-contacts-service.js';
 import { buildAdminRoomRoutes } from './api-routes-rooms.js';
+import { buildAdminPlacesRoutes } from './api-routes-places.js';
+import { buildAdminEnrollmentRoutes } from './api-routes-enrollment.js';
 import { buildAdminGraphProposalRoutes } from './api-routes-graph-proposals.js';
 import type { AdminRoomsService } from './services/rooms-service.js';
+import type { AdminPlacesService } from './services/places-service.js';
+import type { AdminEnrollmentService } from './services/enrollment-service.js';
 import type { AdminGraphProposalsService } from './services/graph-proposals-service.js';
 import { buildAdminConcernRoutes } from './routes/concern-routes.js';
 import { buildAdminIdentityRoutes } from './routes/identity-routes.js';
@@ -258,6 +262,8 @@ export function buildAdminApiRoutes(options: {
   contactsService: AdminContactsService;
   pendingContactsService?: AdminPendingContactsService | null;
   roomsService?: AdminRoomsService | null;
+  placesService?: AdminPlacesService | null;
+  enrollmentService?: AdminEnrollmentService | null;
   graphProposalsService?: AdminGraphProposalsService | null;
   concernService?: AdminConcernService | null;
   subsystemHealthService?: AdminSubsystemHealthService | null;
@@ -303,6 +309,8 @@ export function buildAdminApiRoutes(options: {
     contactsService,
     pendingContactsService,
     roomsService,
+    placesService,
+    enrollmentService,
     graphProposalsService,
     concernService,
     subsystemHealthService,
@@ -732,6 +740,12 @@ export function buildAdminApiRoutes(options: {
       : []),
     ...(roomsService
       ? buildAdminRoomRoutes({ roomsService })
+      : []),
+    ...(placesService
+      ? buildAdminPlacesRoutes({ placesService, withBody })
+      : []),
+    ...(enrollmentService
+      ? buildAdminEnrollmentRoutes({ enrollmentService, withBody })
       : []),
     ...(graphProposalsService
       ? buildAdminGraphProposalRoutes({ graphProposalsService, withBody })

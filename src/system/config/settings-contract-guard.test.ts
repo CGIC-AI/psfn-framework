@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import * as adminUiGardenContract from '../../../admin-ui/src/lib/settings-garden-contract.js';
 import {
@@ -165,5 +166,69 @@ describe('settings contract guard', () => {
       ok: true,
       errors: [],
     });
+  });
+});
+
+// Sprint 10 / Workstream F2: the Home Assistant connection settings are the only
+// runtime toggles the location/world surface adds to the settings contract
+// (places.json stays a soft registry with no owner-file boot gate). These named
+// assertions fail closed if a future change drops the HA fields' owner-file
+// assignment, Garden exposure metadata, or seed defaults out of sync.
+describe('home assistant connection settings compliance', () => {
+  const HA_FIELD_KEYS = ['homeAssistantEnabled', 'homeAssistantBaseUrl'] as const;
+
+  it('registers the HA connection settings as runtime-owned contract fields', () => {
+    const contractData = buildSettingsContractData();
+
+    expect(contractData.fields.homeAssistantEnabled).toEqual({
+      key: 'homeAssistantEnabled',
+      ownerSubsystem: 'runtime',
+      ownerFile: 'settings.json',
+      type: 'boolean',
+    });
+    expect(contractData.fields.homeAssistantBaseUrl).toEqual({
+      key: 'homeAssistantBaseUrl',
+      ownerSubsystem: 'runtime',
+      ownerFile: 'settings.json',
+      type: 'string',
+    });
+
+    for (const key of HA_FIELD_KEYS) {
+      expect(contractData.fields[key].deprecated).toBeUndefined();
+    }
+  });
+
+  it('exposes the HA connection settings through Garden advanced metadata', () => {
+    const exposureKeys = new Set(listGardenSettingsFieldExposureKeys());
+
+    for (const key of HA_FIELD_KEYS) {
+      expect(exposureKeys.has(key)).toBe(true);
+      const exposure = SETTINGS_GARDEN_FIELD_EXPOSURE[key];
+      expect(exposure.surface).toBe('advanced');
+      // Advanced fields must land in a section the shared Garden contract renders.
+      expect(SETTINGS_GARDEN_SECTION_FIELDS[exposure.sectionId]).toContain(key);
+    }
+  });
+
+  it('keeps the HA connection settings covered by the contract guard with no gaps', () => {
+    expect(verifySettingsContractGuard()).toEqual({ ok: true, errors: [] });
+
+    const tunableKeys = listGardenSettingsTunableFieldCoverage().map((entry) => entry.fieldKey);
+    for (const key of HA_FIELD_KEYS) {
+      expect(tunableKeys).toContain(key);
+    }
+  });
+
+  it('keeps settings.seed.json HA defaults in sync with the contract', () => {
+    const seed = JSON.parse(readFileSync('config/settings.seed.json', 'utf-8')) as Record<string, unknown>;
+    const contractData = buildSettingsContractData();
+
+    expect(seed.homeAssistantEnabled).toBe(false);
+    expect(seed.homeAssistantBaseUrl).toBe('');
+
+    for (const key of HA_FIELD_KEYS) {
+      expect(key in seed).toBe(true);
+      expect(contractData.fields[key]).toBeDefined();
+    }
   });
 });

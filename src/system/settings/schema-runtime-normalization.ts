@@ -836,6 +836,8 @@ function normalizeWebFetchSettings(
   normalizeBooleanSetting(normalized, settings, 'webFetchAllowHttp');
   normalizeStringListSetting(normalized, settings, 'webFetchDomainAllowlist');
   normalizeBooleanSetting(normalized, settings, 'webFetchAllowInternalNetwork');
+  normalizeBooleanSetting(normalized, settings, 'homeAssistantEnabled');
+  normalizeTrimmedStringSetting(normalized, settings, 'homeAssistantBaseUrl');
   normalizeBooleanSetting(normalized, settings, 'webFetchLocalCrawlerEnabled');
   normalizeBooleanSetting(
     normalized,

@@ -472,3 +472,139 @@ describe('InternalStateComputer', () => {
     })).toThrow('createdAt');
   });
 });
+
+describe('InternalStateComputer durable situated location', () => {
+  const baseComputeInput = {
+    emotionState: {
+      vad: { valence: 0, arousal: 0, dominance: 0 },
+      mood: { valence: 0, arousal: 0, dominance: 0 },
+      discrete: {},
+      confidence: 0,
+    },
+    activeConcerns: [],
+    pendingFollowUps: [],
+    careReminders: [],
+    trustLevel: 'trusted' as const,
+    sessionMetrics: {
+      userMessageText: 'hi',
+      responseText: 'hello',
+      toolCallCount: 0,
+      recentTurnCount: 0,
+    },
+  };
+
+  it('defaults situated.location to null when no location is supplied', () => {
+    const state = new InternalStateComputer().computeState({ ...baseComputeInput });
+    expect(state.situated).toEqual({ location: null });
+  });
+
+  it('stores and normalizes a supplied situated location', () => {
+    const state = new InternalStateComputer().computeState({
+      ...baseComputeInput,
+      situatedLocation: {
+        placeId: '  living-room  ',
+        siteId: 'home',
+        label: '  the living room  ',
+        kind: 'physical',
+        updatedAt: '2026-07-08T12:00:00.000Z',
+      },
+    });
+    expect(state.situated.location).toEqual({
+      placeId: 'living-room',
+      siteId: 'home',
+      label: 'the living room',
+      kind: 'physical',
+      updatedAt: '2026-07-08T12:00:00.000Z',
+    });
+  });
+
+  it('rejects an unsupported situated place kind (fail closed)', () => {
+    expect(() => new InternalStateComputer().computeState({
+      ...baseComputeInput,
+      situatedLocation: {
+        placeId: 'living-room',
+        siteId: 'home',
+        label: 'the living room',
+        kind: 'imaginary' as never,
+        updatedAt: '2026-07-08T12:00:00.000Z',
+      },
+    })).toThrow('place kind');
+  });
+
+  it('carries situated location through clone/serialize and the snapshot ref', () => {
+    const state = new InternalStateComputer().computeState({
+      ...baseComputeInput,
+      situatedLocation: {
+        placeId: 'living-room',
+        siteId: 'home',
+        label: 'the living room',
+        kind: 'physical',
+        updatedAt: '2026-07-08T12:00:00.000Z',
+      },
+    });
+    const cloned = cloneInternalState(state);
+    expect(cloned.situated).toEqual(state.situated);
+    expect(serializeInternalState(cloned)).toBe(serializeInternalState(state));
+    expect(buildInternalStateSnapshotRef(cloned)).toBe(buildInternalStateSnapshotRef(state));
+  });
+
+  it('produces different snapshot refs for different locations, stable for equal ones', () => {
+    const computer = new InternalStateComputer();
+    const atLivingRoom = computer.computeState({
+      ...baseComputeInput,
+      situatedLocation: {
+        placeId: 'living-room',
+        siteId: 'home',
+        label: 'the living room',
+        kind: 'physical',
+        updatedAt: '2026-07-08T12:00:00.000Z',
+      },
+    });
+    const atBedroom = computer.computeState({
+      ...baseComputeInput,
+      situatedLocation: {
+        placeId: 'bedroom',
+        siteId: 'home',
+        label: 'the bedroom',
+        kind: 'physical',
+        updatedAt: '2026-07-08T12:00:00.000Z',
+      },
+    });
+    const noLocation = computer.computeState({ ...baseComputeInput });
+
+    expect(buildInternalStateSnapshotRef(atLivingRoom)).not.toBe(
+      buildInternalStateSnapshotRef(atBedroom),
+    );
+    expect(buildInternalStateSnapshotRef(atLivingRoom)).not.toBe(
+      buildInternalStateSnapshotRef(noLocation),
+    );
+  });
+
+  it('tolerates persisted state written before the situated bucket existed', () => {
+    const legacy = {
+      emotional: {
+        vad: { valence: 0, arousal: 0, dominance: 0 },
+        mood: { valence: 0, arousal: 0, dominance: 0 },
+        discreteEmotions: {},
+        confidence: 0,
+      },
+      cognitive: { certaintyLevel: 0.5, topicEngagement: 0.5, processingQuality: 'fluent' },
+      attention: {
+        activeConcerns: [],
+        salientEntities: [],
+        conversationTrajectory: 'casual',
+      },
+      relational: {
+        contactId: null,
+        trustLevel: 'trusted',
+        baselineValence: 0,
+        moodDrift: 0,
+        recentInteractionFrequency: 0,
+        lastSeenDeltaSeconds: null,
+      },
+    } as unknown as Parameters<typeof cloneInternalState>[0];
+
+    const normalized = cloneInternalState(legacy);
+    expect(normalized.situated).toEqual({ location: null });
+  });
+});

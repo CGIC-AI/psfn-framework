@@ -29,9 +29,11 @@ export function createRateLimitedLogEmitter(
     }
 
     while (lastLoggedAtByKey.size > maxKeys) {
-      const oldestKey = lastLoggedAtByKey.keys().next().value;
-      if (typeof oldestKey !== 'string') return;
-      lastLoggedAtByKey.delete(oldestKey);
+      // Evict the oldest entry unconditionally: bailing on unexpected key
+      // types would let the map grow without bound.
+      const oldest = lastLoggedAtByKey.keys().next();
+      if (oldest.done) return;
+      lastLoggedAtByKey.delete(oldest.value);
     }
   };
 

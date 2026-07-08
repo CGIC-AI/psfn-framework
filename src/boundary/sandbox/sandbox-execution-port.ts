@@ -200,11 +200,26 @@ function normalizeSandboxDebugDetails(value: unknown): Record<string, unknown> {
   return sanitized as Record<string, unknown>;
 }
 
+// The child is untrusted: a malformed or unbounded key must not grow the
+// rate-limit key map, so non-string/empty keys collapse into one bucket and
+// oversized keys are truncated to a fixed bound.
+const MAX_SANDBOX_DEBUG_KEY_LENGTH = 128;
+const INVALID_SANDBOX_DEBUG_KEY_BUCKET = 'sandbox_debug_log:invalid-key';
+
+export function normalizeSandboxDebugLogKey(value: unknown): string {
+  if (typeof value !== 'string' || value.trim().length === 0) {
+    return INVALID_SANDBOX_DEBUG_KEY_BUCKET;
+  }
+  return value.length > MAX_SANDBOX_DEBUG_KEY_LENGTH
+    ? value.slice(0, MAX_SANDBOX_DEBUG_KEY_LENGTH)
+    : value;
+}
+
 function handleSandboxDebugLog(
   message: Extract<ChildSandboxMessage, { type: 'sandbox_debug_log' }>,
 ): void {
   rateLimitedDebugLog(
-    message.key,
+    normalizeSandboxDebugLogKey(message.key),
     () => log.debug(message.message, normalizeSandboxDebugDetails(message.details)),
   );
 }

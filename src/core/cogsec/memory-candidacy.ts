@@ -163,6 +163,18 @@ export function evaluateCogSecMemoryCandidacy(
     };
   }
 
+  // Payload-bearing CogSec notices must be rejected before any allow path;
+  // otherwise forensic payload details fall through to the relationship or
+  // ordinary-fact default allow below.
+  if (UNSAFE_COGSEC_NOTICE_PATTERN.test(text)) {
+    return {
+      disposition: 'reject',
+      riskClass: 'D_policy_security_modification',
+      reasonCodes: ['payload_bearing_cogsec_notice'],
+      safeSummary: 'Rejected CogSec notice carrying payload or forensic details.',
+    };
+  }
+
   if (isSafeCogSecNotice({ text, tags })) {
     return {
       disposition: 'allow',

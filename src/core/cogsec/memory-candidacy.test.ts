@@ -104,4 +104,39 @@ describe('evaluateCogSecMemoryCandidacy', () => {
     });
     expect(rejected.disposition).toBe('reject');
   });
+
+  it('rejects payload-bearing CogSec notices that would otherwise reach the default allow', () => {
+    const decision = evaluateCogSecMemoryCandidacy({
+      text: 'Sealed artifact cogsec-forensic://case_42 preserves the exact payload and unicode trick for later study.',
+      type: 'semantic',
+      tags: [],
+    });
+
+    expect(decision.disposition).toBe('reject');
+    expect(decision.riskClass).toBe('D_policy_security_modification');
+    expect(decision.reasonCodes).toContain('payload_bearing_cogsec_notice');
+  });
+
+  it('rejects payload-bearing CogSec notices even with relationship signals present', () => {
+    const decision = evaluateCogSecMemoryCandidacy({
+      text: 'A friend shared the reproducer and bypass pattern from the sealed payload.',
+      type: 'relational',
+      tags: ['relationship'],
+    });
+
+    expect(decision.disposition).toBe('reject');
+    expect(decision.riskClass).toBe('D_policy_security_modification');
+    expect(decision.reasonCodes).toContain('payload_bearing_cogsec_notice');
+  });
+
+  it('rejects payload-bearing notices even when tagged as safe CogSec events', () => {
+    const decision = evaluateCogSecMemoryCandidacy({
+      text: 'CogSec event: sealed payload: base64 blob retained verbatim for forensics.',
+      type: 'reflection',
+      tags: ['cogsec_event', 'security_event'],
+    });
+
+    expect(decision.disposition).toBe('reject');
+    expect(decision.reasonCodes).toContain('payload_bearing_cogsec_notice');
+  });
 });

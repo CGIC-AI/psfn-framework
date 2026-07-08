@@ -100,7 +100,7 @@ import {
 import { prepareAgentStartupContext } from './startup-context.js';
 import { AgentApiBackend } from '../../channels/api/agent-backend.js';
 import { resolveActiveHealthProbeConfig } from '../../channels/api/active-health-probe.js';
-import { buildExternalChannelProfiles } from '../../channels/backplane/config.js';
+import { buildExternalChannelProfiles, resolveDiscordCompanionView } from '../../channels/backplane/config.js';
 
 const log = createComponentLogger('Agent');
 ensureActiveTimezone();
@@ -524,6 +524,14 @@ async function main(): Promise<void> {
     scheduler,
     runtimeStatusMeta,
   }, resolveActiveHealthProbeConfig(process.env));
+  // Multi-companion (W1-P2): project the discord settings that belong to THIS
+  // companion. Single-account config passes through unchanged; multi-account
+  // config selects this companion's own bot account entry.
+  const discordChannelView = resolveDiscordCompanionView(
+    channelsConfig.discord,
+    config.companionId,
+  );
+
   const apiBackend = new AgentApiBackend({
     agentLoop,
     eventBus,
@@ -553,7 +561,7 @@ async function main(): Promise<void> {
     env: process.env,
     config,
     satelliteRegistryConfig,
-    channelGroupMemory: channelsConfig.discord.groupMemory,
+    channelGroupMemory: discordChannelView.groupMemory,
     gateway,
     eventBus,
     scheduler,
@@ -586,7 +594,7 @@ async function main(): Promise<void> {
     });
   }
 
-  const heartbeatChannelId = channelsConfig.discord.heartbeatChannelId || undefined;
+  const heartbeatChannelId = discordChannelView.heartbeatChannelId || undefined;
   const shutdownTargets: AgentControlPlaneShutdownTargets = {};
   const controlPlane = buildAgentControlPlane({
     heartbeatChannelId,
@@ -828,7 +836,7 @@ async function main(): Promise<void> {
   // scope classifier for sleeptime cadence, so it is built before the heartbeat
   // runtime wiring below.
   const observedGroupMemoryScheduler = new ObservedGroupMemoryScheduler({
-    channelGroupMemory: channelsConfig.discord.groupMemory,
+    channelGroupMemory: discordChannelView.groupMemory,
     sessionReader: sessionStore,
     watermarkStore: new JsonGroupMemoryWatermarkStore(
       join(pathSnapshot.companionDataDir, 'group-memory-watermarks.json'),

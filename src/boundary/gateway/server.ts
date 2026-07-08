@@ -103,6 +103,13 @@ export interface GatewayServerOptions {
   embeddingService: EmbeddingProviderPort;
   modelDiscovery?: ModelDiscoveryBackend;
   discordAdapter: ChannelOutboundDock;
+  /**
+   * Multi-account discord (sprint-10 W1-P2): outbound dock per companionId.
+   * Required to cover every companion routed via multiCompanion.discordAccounts;
+   * outbound sends from a companion connection resolve through its own dock
+   * only, so one companion can never egress through another companion's bot.
+   */
+  discordAccountDocks?: ReadonlyMap<string, ChannelOutboundDock>;
   gitOps?: GitOperations;
   imageConfig?: ImageRuntimeConfig;
   modelUsageRecorder?: ModelUsageRecorder;
@@ -147,7 +154,18 @@ export class GatewayServer {
     if (this.multiCompanion.enabled) {
       log.info('Multi-companion gateway routing enabled', {
         channelRouting: this.multiCompanion.channelRouting,
+        discordAccounts: this.multiCompanion.discordAccounts,
       });
+    }
+    if (this.discordAccountRoutingActive()) {
+      const missingDocks = [...new Set(Object.values(this.multiCompanion.discordAccounts))]
+        .filter(companionId => !options.discordAccountDocks?.has(companionId));
+      if (missingDocks.length > 0) {
+        throw new Error(
+          'Multi-account discord routing requires an outbound dock per routed companion; '
+          + `missing docks for: ${missingDocks.join(', ')}`,
+        );
+      }
     }
     this.capabilityTierProvider = options.capabilityTierProvider ?? (() => 'nursery');
     this.wyomingShardRouting = options.wyomingShardRouting;
@@ -225,7 +243,7 @@ export class GatewayServer {
       llmProvider: this.options.llmProvider,
       embeddingService: this.options.embeddingService,
       ...(this.options.modelDiscovery ? { modelDiscovery: this.options.modelDiscovery } : {}),
-      discordAdapter: this.options.discordAdapter,
+      discordAdapter: this.resolveConnectionDiscordDock(conn),
       gitOps: this.options.gitOps,
       imageConfig: this.options.imageConfig,
       ...(this.options.modelUsageRecorder ? { modelUsageRecorder: this.options.modelUsageRecorder } : {}),
@@ -265,6 +283,69 @@ export class GatewayServer {
       this.dispatchApiStreamDelta(params as ApiStreamDeltaNotification);
       return null;
     });
+  }
+
+  /** True when per-account discord routing (W1-P2 multi-account) is active. */
+  private discordAccountRoutingActive(): boolean {
+    return this.multiCompanion.enabled
+      && Object.keys(this.multiCompanion.discordAccounts).length > 0;
+  }
+
+  /**
+   * Outbound discord dock for one agent connection. Single-companion mode and
+   * W1 single-account multi-companion mode keep today's shared adapter
+   * byte-identical; multi-account mode resolves the calling companion's own
+   * bot account at send time and fails closed (alarm + error) when the
+   * connection is unidentified or its companion owns no discord account —
+   * cross-account egress is structurally impossible because the dock is
+   * derived from the connection's bound companionId, never from parameters.
+   */
+  private resolveConnectionDiscordDock(conn: GatewayRpcConnection): ChannelOutboundDock {
+    if (!this.discordAccountRoutingActive()) {
+      return this.options.discordAdapter;
+    }
+    const requireDock = (): ChannelOutboundDock => this.requireCompanionDiscordDock(conn);
+    return {
+      id: 'discord',
+      outbound: {
+        textChunkLimit: this.options.discordAdapter.outbound.textChunkLimit,
+        sendText: async (ctx, text) => {
+          await requireDock().outbound.sendText(ctx, text);
+        },
+        sendMedia: async (ctx, media) => {
+          const dock = requireDock();
+          if (!dock.outbound.sendMedia) {
+            throw new Error('Discord outbound dock does not support media sends');
+          }
+          await dock.outbound.sendMedia(ctx, media);
+        },
+      },
+    };
+  }
+
+  private requireCompanionDiscordDock(conn: GatewayRpcConnection): ChannelOutboundDock {
+    const companionId = this.connectionStatuses.get(conn)?.companionId;
+    if (!companionId) {
+      this.alarmCompanionViolation(
+        'discord_send_unidentified',
+        'Discord outbound rejected: connection has no bound companionId',
+        {},
+      );
+      throw new Error('Multi-account discord outbound requires an identified companion connection');
+    }
+    const dock = this.options.discordAccountDocks?.get(companionId);
+    if (!dock) {
+      this.alarmCompanionViolation(
+        'discord_send_no_account',
+        `Discord outbound rejected: companion "${companionId}" owns no discord bot account`,
+        { companionId },
+      );
+      throw new Error(
+        `Companion "${companionId}" has no discord bot account; sending through another `
+        + 'companion\'s account is not permitted',
+      );
+    }
+    return dock;
   }
 
   private isConnectionAuthorizedForApiStream(conn: GatewayRpcConnection): boolean {
@@ -407,12 +488,17 @@ export class GatewayServer {
    * multi-companion mode resolves exactly one companion via the channels.json
    * routing table and fails closed on any ambiguity.
    */
-  notifyChannelMessage(surface: GatewayChannelSurface, method: string, params: unknown): void {
+  notifyChannelMessage(
+    surface: GatewayChannelSurface,
+    method: string,
+    params: unknown,
+    discordAccountId?: string,
+  ): void {
     if (!this.multiCompanion.enabled) {
       this.notifyAll(method, params);
       return;
     }
-    const route = this.resolveCompanionAgent(surface);
+    const route = this.resolveCompanionAgent(surface, discordAccountId);
     this.notifyOne(route.conn, method, params);
   }
 
@@ -504,12 +590,60 @@ export class GatewayServer {
    * Resolve the ready agent connection owning a channel surface. Fail-closed:
    * unrouted surface, unknown/disconnected companion, or unhealthy connection
    * all alarm loudly and throw — traffic is never rerouted to another agent.
+   *
+   * When multi-account discord routing is active (W1-P2), the discord surface
+   * routes per bot account: the adapter that received the message names its
+   * accountId, and only that account's companion receives it. A missing or
+   * unknown accountId fails closed — never a broadcast, never another account.
    */
-  private resolveCompanionAgent(surface: GatewayChannelSurface): {
+  private resolveCompanionAgent(surface: GatewayChannelSurface, discordAccountId?: string): {
     conn: GatewayRpcConnection;
     client: JSONRPCServerAndClient;
     companionId: string;
   } {
+    const companionId = this.resolveRoutedCompanionId(surface, discordAccountId);
+    this.refreshConnectionHealth();
+    return this.requireReadyCompanionRoute(surface, companionId);
+  }
+
+  private resolveRoutedCompanionId(
+    surface: GatewayChannelSurface,
+    discordAccountId?: string,
+  ): string {
+    if (surface === 'discord' && this.discordAccountRoutingActive()) {
+      if (!discordAccountId) {
+        this.alarmCompanionViolation(
+          'unrouted_discord_account',
+          'Discord surface uses per-account routing but the inbound message carries no accountId',
+          { surface },
+        );
+        throw new Error(
+          'Multi-account discord routing requires an accountId for the discord surface',
+        );
+      }
+      const companionId = this.multiCompanion.discordAccounts[discordAccountId];
+      if (!companionId) {
+        this.alarmCompanionViolation(
+          'unrouted_discord_account',
+          `Discord account "${discordAccountId}" has no companion routing entry in channels.json`,
+          { surface, discordAccountId },
+        );
+        throw new Error(
+          `Multi-companion routing has no companion for discord account "${discordAccountId}"`,
+        );
+      }
+      return companionId;
+    }
+    if (discordAccountId) {
+      this.alarmCompanionViolation(
+        'unrouted_discord_account',
+        `Received discord accountId "${discordAccountId}" but no discord.accounts routing is configured`,
+        { surface, discordAccountId },
+      );
+      throw new Error(
+        `No discord account routing configured for account "${discordAccountId}"`,
+      );
+    }
     const companionId = this.multiCompanion.channelRouting[surface];
     if (!companionId) {
       this.alarmCompanionViolation(
@@ -521,7 +655,14 @@ export class GatewayServer {
         `Multi-companion routing has no companion for channel surface "${surface}"`,
       );
     }
-    this.refreshConnectionHealth();
+    return companionId;
+  }
+
+  private requireReadyCompanionRoute(surface: GatewayChannelSurface, companionId: string): {
+    conn: GatewayRpcConnection;
+    client: JSONRPCServerAndClient;
+    companionId: string;
+  } {
     const conn = this.companionConnections.get(companionId);
     if (!conn) {
       this.alarmCompanionViolation(

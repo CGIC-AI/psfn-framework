@@ -17,10 +17,16 @@ export interface GatewayMultiCompanionConfig {
   enabled: boolean;
   /** channels.json-owned surface→companionId routing table. */
   channelRouting: Partial<Record<GatewayChannelSurface, string>>;
+  /**
+   * Multi-account discord routing (W1-P2): accountId → companionId, one bot
+   * identity per companion. Mutually exclusive with `channelRouting.discord`
+   * (enforced by the channels.json parser).
+   */
+  discordAccounts: Record<string, string>;
 }
 
 export function disabledGatewayMultiCompanionConfig(): GatewayMultiCompanionConfig {
-  return { enabled: false, channelRouting: {} };
+  return { enabled: false, channelRouting: {}, discordAccounts: {} };
 }
 
 /**
@@ -64,6 +70,11 @@ export function resolveGatewayMultiCompanionConfig(
     ...(channelsConfig.api.companionId ? { api: channelsConfig.api.companionId } : {}),
   };
 
+  const discordAccounts: Record<string, string> = {};
+  for (const account of channelsConfig.discord.accounts ?? []) {
+    discordAccounts[account.accountId] = account.companionId;
+  }
+
   const routedSurfaces = Object.keys(channelRouting);
   if (!enabled && routedSurfaces.length > 0) {
     throw new Error(
@@ -72,6 +83,14 @@ export function resolveGatewayMultiCompanionConfig(
       + 'fields — single-companion mode must not silently ignore routing config.',
     );
   }
+  const routedAccountIds = Object.keys(discordAccounts);
+  if (!enabled && routedAccountIds.length > 0) {
+    throw new Error(
+      `channels.json declares discord.accounts [${routedAccountIds.join(', ')}] but `
+      + `${MULTI_COMPANION_ENV_VAR} is not enabled. Enable the flag or remove the accounts `
+      + 'section — single-companion mode must not silently ignore per-companion bot identities.',
+    );
+  }
 
-  return { enabled, channelRouting };
+  return { enabled, channelRouting, discordAccounts };
 }

@@ -3,7 +3,7 @@ import type { SubstrateConfig } from '../../../system/config/runtime-config-cont
 import type { SubstrateAgent } from '../../../core/agent/substrate-agent.js';
 import type { EligibilityGate } from '../../../system/capabilities/eligibility.js';
 import { ApiServer, type ApiServerConfig } from '../../../channels/api/server.js';
-import { DiscordAdapter } from '../../../channels/discord/adapter.js';
+import { DiscordAdapter, type DiscordAdapterAccountBinding } from '../../../channels/discord/adapter.js';
 import type { DiscordChannelConfig, TelegramChannelConfig } from '../../../channels/backplane/config.js';
 import { TelegramAdapter } from '../../../channels/telegram/adapter.js';
 import type {
@@ -24,25 +24,37 @@ export interface DiscordChannelAdapterFactoryOptions {
   onVoiceMessage?: MessageHandler | null;
   eligibilityGate?: EligibilityGate;
   personalFilesDir?: string;
+  /**
+   * Multi-companion (sprint-10 W1-P2): bind this adapter instance to one
+   * per-companion bot account. The registry/manifest key becomes
+   * `discord:<accountId>` and `allowedBotUserIds` must be provided explicitly
+   * (per-account) instead of via `discordConfig`.
+   */
+  account?: DiscordAdapterAccountBinding;
+  allowedBotUserIds?: string[];
 }
 
 export function createDiscordChannelAdapterFactoryEntry(
   options: DiscordChannelAdapterFactoryOptions,
 ): ChannelAdapterFactoryPort {
+  const adapterId = options.account ? `discord:${options.account.accountId}` : 'discord';
   return {
     manifest: {
-      id: 'discord',
-      label: 'Discord',
+      id: adapterId,
+      label: options.account ? `Discord (${options.account.accountId})` : 'Discord',
       enabled: true,
       required: true,
       eligibility: {},
     },
     create: async (): Promise<ChannelAdapterPort> => {
+      const allowedBotUserIds = options.allowedBotUserIds
+        ?? options.discordConfig?.allowedBotUserIds;
       const adapter = new DiscordAdapter(options.config, options.eventBus, {
         ...(options.sessionStore ? { sessionStore: options.sessionStore } : {}),
         ...(options.eligibilityGate ? { eligibilityGate: options.eligibilityGate } : {}),
-        ...(options.discordConfig ? { allowedBotUserIds: options.discordConfig.allowedBotUserIds } : {}),
+        ...(allowedBotUserIds ? { allowedBotUserIds } : {}),
         ...(options.personalFilesDir ? { personalFilesDir: options.personalFilesDir } : {}),
+        ...(options.account ? { account: options.account } : {}),
       });
       if (options.agentLoop) {
         adapter.setAgent(options.agentLoop);

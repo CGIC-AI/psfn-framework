@@ -158,6 +158,7 @@ describe('resolveGatewayBootstrapInput', () => {
     expect(flagOff.server.multiCompanion).toEqual({
       enabled: false,
       channelRouting: {},
+      discordAccounts: {},
     });
 
     const flagOn = resolveGatewayBootstrapInput({
@@ -168,6 +169,7 @@ describe('resolveGatewayBootstrapInput', () => {
     expect(flagOn.server.multiCompanion).toEqual({
       enabled: true,
       channelRouting: {},
+      discordAccounts: {},
     });
   });
 

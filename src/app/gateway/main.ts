@@ -185,7 +185,15 @@ async function main(): Promise<void> {
 
   // ── Create gateway server ──
 
-  const gateway = createGatewayServer({ discordAdapter: discord });
+  // Multi-account discord (W1-P2): one outbound dock per companionId so
+  // agent-originated discord sends egress through their own bot identity only.
+  const discordAccountDocks = channelSurfaces.discordAccounts
+    ? new Map(channelSurfaces.discordAccounts.map(account => [account.companionId, account.adapter]))
+    : undefined;
+  const gateway = createGatewayServer({
+    discordAdapter: discord,
+    ...(discordAccountDocks ? { discordAccountDocks } : {}),
+  });
   const {
     apiHost,
     apiPort,
@@ -202,6 +210,9 @@ async function main(): Promise<void> {
   });
   wireGatewayChannelMessages({
     discord,
+    ...(channelSurfaces.discordAccounts
+      ? { discordAccounts: channelSurfaces.discordAccounts }
+      : {}),
     telegram,
     gateway,
     serializeMessage,

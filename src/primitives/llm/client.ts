@@ -40,10 +40,7 @@ import { createComponentLogger } from '../../shared/logger.js';
 import { FallbackRunner } from './fallback.js';
 import type { ImportPolicyAuditRecord, RoutingCandidate, RoutingPurpose } from './routing.js';
 import {
-  applyGlobalPromptCachePolicy,
   evaluateImportPolicy,
-  resolveGlobalPromptCachePolicy,
-  resolveRoutingCandidates,
 } from './routing.js';
 import {
   createSystemPromptCacheControlPayloadTransformer,
@@ -63,7 +60,6 @@ import {
   resolveCorrelationMetadata,
 } from './correlation.js';
 import {
-  findRegistryEntryByModelId,
   ModelBudgetController,
   ModelBudgetExceededError,
   normalizeModelIdForProvider,
@@ -104,8 +100,11 @@ import {
   normalizeSharedRouteKey,
   normalizeUsageCost,
   toDiagnosticCorrelationFields,
-  toFiniteNumber,
 } from './client-response-helpers.js';
+import {
+  mergeModelHints,
+  resolveCandidates as resolveModelHintCandidates,
+} from './model-hint-routing.js';
 
 export {
   classifyToolArgumentProvenance,
@@ -113,6 +112,7 @@ export {
   inferCallType,
   normalizeContent,
 } from './client-response-helpers.js';
+export { LegacyModelHintError } from './model-hint-routing.js';
 export type { ToolArgumentProvenance } from './client-response-helpers.js';
 
 const log = createComponentLogger('LLMClient');
@@ -166,20 +166,6 @@ export class SensitiveImportRoutePolicyError extends Error {
     this.name = 'SensitiveImportRoutePolicyError';
     this.audit = audit;
     this.reason = reason;
-  }
-}
-
-export class LegacyModelHintError extends Error {
-  readonly code = 'legacy_model_hint_unsupported';
-  readonly modelHint: string;
-
-  constructor(modelHint: string) {
-    super(
-      `Legacy slot-key model hints are unsupported: "${modelHint}". ` +
-      'Use provider-qualified model id (provider:model) or provide model + provider explicitly.',
-    );
-    this.name = 'LegacyModelHintError';
-    this.modelHint = modelHint;
   }
 }
 
@@ -559,268 +545,11 @@ export class LLMClient {
     throw new SensitiveImportRoutePolicyError(evaluation.audit, reason);
   }
 
-  private normalizeModelHint(modelHint: LLMCompletionModelHint | undefined): LLMCompletionModelHint | null {
-    if (!modelHint) return null;
-    const rawModel = modelHint.model?.trim();
-    const provider = modelHint.provider?.trim().toLowerCase();
-    const maxTokens = toPositiveInteger(modelHint.maxTokens);
-    const contextWindow = toPositiveInteger(modelHint.contextWindow);
-    const thinkingEnabled = typeof modelHint.thinkingEnabled === 'boolean'
-      ? modelHint.thinkingEnabled
-      : undefined;
-    const thinkingEffort = toThinkingEffort(modelHint.thinkingEffort);
-    const temperature = toFiniteNumber(modelHint.temperature);
-    const topP = toUnitInterval(modelHint.topP);
-    const topK = toPositiveInteger(modelHint.topK);
-    const frequencyPenalty = toFiniteNumber(modelHint.frequencyPenalty);
-    const repetitionPenalty = toFiniteNumber(modelHint.repetitionPenalty);
-    const pin = modelHint.pin === true ? true : undefined;
-    if (
-      !rawModel
-      && !provider
-      && pin === undefined
-      && maxTokens === undefined
-      && contextWindow === undefined
-      && thinkingEnabled === undefined
-      && thinkingEffort === undefined
-      && temperature === undefined
-      && topP === undefined
-      && topK === undefined
-      && frequencyPenalty === undefined
-      && repetitionPenalty === undefined
-    ) {
-      return null;
-    }
-    return {
-      ...(rawModel ? { model: rawModel } : {}),
-      ...(provider ? { provider } : {}),
-      ...(pin ? { pin } : {}),
-      ...(maxTokens !== undefined ? { maxTokens } : {}),
-      ...(contextWindow !== undefined ? { contextWindow } : {}),
-      ...(thinkingEnabled !== undefined ? { thinkingEnabled } : {}),
-      ...(thinkingEffort !== undefined ? { thinkingEffort } : {}),
-      ...(temperature !== undefined ? { temperature } : {}),
-      ...(topP !== undefined ? { topP } : {}),
-      ...(topK !== undefined ? { topK } : {}),
-      ...(frequencyPenalty !== undefined ? { frequencyPenalty } : {}),
-      ...(repetitionPenalty !== undefined ? { repetitionPenalty } : {}),
-    };
-  }
-
-  private mergeModelHints(
-    contextHint: LLMCompletionModelHint | undefined,
-    optionHint: LLMCompletionModelHint | undefined,
-  ): LLMCompletionModelHint | undefined {
-    const normalizedContext = this.normalizeModelHint(contextHint);
-    const normalizedOption = this.normalizeModelHint(optionHint);
-    if (!normalizedContext && !normalizedOption) return undefined;
-    return {
-      ...(normalizedContext ?? {}),
-      ...(normalizedOption ?? {}),
-    };
-  }
-
-  private parseProviderQualifiedHint(value: string): { provider: string; model: string } | null {
-    const separatorIndex = value.indexOf(':');
-    if (separatorIndex <= 0) return null;
-    const provider = value.slice(0, separatorIndex).trim().toLowerCase();
-    const model = value.slice(separatorIndex + 1).trim();
-    if (!provider || !model || provider.includes('/')) return null;
-    return { provider, model };
-  }
-
-  private withOpenRouterPreferences(candidate: RoutingCandidate): RoutingCandidate {
-    if (candidate.provider !== 'openrouter') return candidate;
-    if (candidate.openRouterProviderOrder !== undefined) return candidate;
-    const providerOrder = this.config.openRouterProviderOrder?.filter(Boolean) ?? [];
-    if (providerOrder.length === 0) return candidate;
-    return {
-      ...candidate,
-      openRouterProviderOrder: [...providerOrder],
-    };
-  }
-
-  private candidateKey(candidate: RoutingCandidate): string {
-    return [
-      candidate.provider,
-      candidate.model,
-      String(candidate.maxTokens),
-      String(candidate.contextWindow ?? ''),
-      String(candidate.supportsVision ?? ''),
-      String(candidate.supportsReasoning ?? ''),
-      String(candidate.thinkingEnabled ?? ''),
-      candidate.thinkingEffort ?? '',
-      String(candidate.temperature ?? ''),
-      String(candidate.topP ?? ''),
-      String(candidate.topK ?? ''),
-      String(candidate.frequencyPenalty ?? ''),
-      String(candidate.repetitionPenalty ?? ''),
-      candidate.promptCacheStrategy ?? '',
-      candidate.promptCacheRetention ?? '',
-      candidate.promptCacheScope ?? '',
-      candidate.promptCacheEnabled ? 'cache_enabled' : '',
-      candidate.requestBaseUrl ?? '',
-      candidate.requestApiKeyEnv ?? '',
-      candidate.openRouterZdrOnly ? 'zdr' : '',
-      candidate.openRouterProviderOrder?.join(',') ?? '',
-      candidate.importRouteMode ?? '',
-    ].join('::');
-  }
-
-  private dedupeCandidates(candidates: RoutingCandidate[]): RoutingCandidate[] {
-    const deduped: RoutingCandidate[] = [];
-    const seen = new Set<string>();
-    for (const candidate of candidates) {
-      const key = this.candidateKey(candidate);
-      if (seen.has(key)) continue;
-      seen.add(key);
-      deduped.push(candidate);
-    }
-    return deduped;
-  }
-
-  private resolveModelHintCandidate(
-    modelHint: LLMCompletionModelHint,
-    fallbackCandidates: RoutingCandidate[],
-  ): RoutingCandidate | null {
-    const baseCandidate = fallbackCandidates.at(0);
-    if (baseCandidate === undefined) return null;
-    const hintedModel = modelHint.model?.trim();
-    const qualified = hintedModel ? this.parseProviderQualifiedHint(hintedModel) : null;
-
-    let provider = modelHint.provider ?? qualified?.provider ?? baseCandidate.provider;
-    let model = qualified?.model ?? hintedModel ?? baseCandidate.model;
-    const registryEntry = this.findRegistryModelEntry(provider, model);
-    // The hinted model's own catalog output cap beats the base candidate's:
-    // inheriting a roster default above the target model's maximum (e.g. 16384
-    // onto claude-3-opus's 4096) is a guaranteed 400 from the provider.
-    const registryMaxTokens = toPositiveInteger(registryEntry?.tuning?.maxOutputTokens)
-      ?? toPositiveInteger(registryEntry?.capabilities?.maxOutputTokens);
-    const registryContextWindow = toPositiveInteger(registryEntry?.tuning?.contextWindow)
-      ?? toPositiveInteger(registryEntry?.capabilities?.contextWindow);
-    let maxTokens = modelHint.maxTokens ?? registryMaxTokens ?? baseCandidate.maxTokens;
-    const contextWindow = modelHint.contextWindow ?? registryContextWindow ?? baseCandidate.contextWindow;
-    const thinkingEnabled = modelHint.thinkingEnabled ?? baseCandidate.thinkingEnabled;
-    const thinkingEffort = modelHint.thinkingEffort ?? baseCandidate.thinkingEffort;
-    const temperature = modelHint.temperature ?? baseCandidate.temperature;
-    const topP = modelHint.topP ?? baseCandidate.topP;
-    const topK = modelHint.topK ?? baseCandidate.topK;
-    const frequencyPenalty = modelHint.frequencyPenalty ?? baseCandidate.frequencyPenalty;
-    const repetitionPenalty = modelHint.repetitionPenalty ?? baseCandidate.repetitionPenalty;
-    const supportsVision = typeof registryEntry?.capabilities?.supportsVision === 'boolean'
-      ? registryEntry.capabilities.supportsVision
-      : baseCandidate.supportsVision;
-    const supportsReasoning = typeof registryEntry?.capabilities?.supportsReasoning === 'boolean'
-      ? registryEntry.capabilities.supportsReasoning
-      : baseCandidate.supportsReasoning;
-
-    if (!provider || !model) return null;
-    provider = provider.trim().toLowerCase();
-    model = model.trim();
-    if (!provider || !model) return null;
-
-    if (!Number.isFinite(maxTokens) || maxTokens <= 0) {
-      maxTokens = this.config.primaryMaxTokens;
-    }
-    if (!Number.isFinite(maxTokens) || maxTokens <= 0) return null;
-
-    const hinted: RoutingCandidate = {
-      provider,
-      model,
-      maxTokens: Math.floor(maxTokens),
-      ...(contextWindow !== undefined ? { contextWindow } : {}),
-      ...(supportsVision !== undefined ? { supportsVision } : {}),
-      ...(supportsReasoning !== undefined ? { supportsReasoning } : {}),
-      ...(thinkingEnabled !== undefined ? { thinkingEnabled } : {}),
-      ...(thinkingEffort !== undefined ? { thinkingEffort } : {}),
-      ...(temperature !== undefined ? { temperature } : {}),
-      ...(topP !== undefined ? { topP } : {}),
-      ...(topK !== undefined ? { topK } : {}),
-      ...(frequencyPenalty !== undefined ? { frequencyPenalty } : {}),
-      ...(repetitionPenalty !== undefined ? { repetitionPenalty } : {}),
-    };
-
-    if (baseCandidate.provider === provider) {
-      if (baseCandidate.requestBaseUrl) hinted.requestBaseUrl = baseCandidate.requestBaseUrl;
-      if (baseCandidate.requestApiKeyEnv) hinted.requestApiKeyEnv = baseCandidate.requestApiKeyEnv;
-      if (baseCandidate.promptCacheStrategy) hinted.promptCacheStrategy = baseCandidate.promptCacheStrategy;
-      if (baseCandidate.promptCacheRetention) hinted.promptCacheRetention = baseCandidate.promptCacheRetention;
-      if (baseCandidate.promptCacheScope) hinted.promptCacheScope = baseCandidate.promptCacheScope;
-      if (baseCandidate.openRouterZdrOnly) hinted.openRouterZdrOnly = true;
-      if (baseCandidate.importRouteMode) hinted.importRouteMode = baseCandidate.importRouteMode;
-    }
-
-    // The registry-wide promptCaching policy is model-agnostic: hinted
-    // candidates engage it exactly like roster-resolved candidates.
-    return applyGlobalPromptCachePolicy(
-      this.withOpenRouterPreferences(hinted),
-      resolveGlobalPromptCachePolicy(this.config),
-    );
-  }
-
-  private findRegistryModelEntry(provider: string, model: string) {
-    const registryModels = this.config.modelRegistry?.models ?? [];
-    const normalizedProvider = provider.trim().toLowerCase();
-    const normalizedModel = normalizeModelIdForProvider(normalizedProvider, model);
-
-    const directMatch = registryModels.find((entry) => (
-      entry.identity.provider.trim().toLowerCase() === normalizedProvider
-      && normalizeModelIdForProvider(entry.identity.provider, entry.identity.model) === normalizedModel
-    ));
-    if (directMatch) {
-      return directMatch;
-    }
-
-    return findRegistryEntryByModelId(this.config, normalizedModel);
-  }
-
-  private ensureNonLegacyModelHint(
-    modelHint: LLMCompletionModelHint,
-    fallbackCandidates: RoutingCandidate[],
-  ): void {
-    const hintedModel = modelHint.model?.trim();
-    if (!hintedModel) return;
-    if (modelHint.provider) return;
-    if (this.parseProviderQualifiedHint(hintedModel)) return;
-
-    const slotKeys = new Set<string>();
-    for (const candidate of fallbackCandidates) {
-      if (candidate.slotKey) slotKeys.add(candidate.slotKey);
-    }
-    for (const entry of this.config.modelRegistry?.models ?? []) {
-      slotKeys.add(entry.id);
-    }
-    if (slotKeys.has(hintedModel)) {
-      throw new LegacyModelHintError(hintedModel);
-    }
-  }
-
   private resolveCandidates(
     purpose: RoutingPurpose,
     modelHint: LLMCompletionModelHint | undefined,
   ): RoutingCandidate[] {
-    const candidates = resolveRoutingCandidates(this.config, purpose);
-    const normalizedHint = this.normalizeModelHint(modelHint);
-    if (!normalizedHint) return candidates;
-    this.ensureNonLegacyModelHint(normalizedHint, candidates);
-
-    const hintedCandidate = this.resolveModelHintCandidate(normalizedHint, candidates);
-    if (!hintedCandidate) return candidates;
-
-    log.debug('Applying completion model hint', {
-      purpose,
-      requestedModel: normalizedHint.model ?? null,
-      requestedProvider: normalizedHint.provider ?? null,
-      pin: normalizedHint.pin ?? false,
-      routedModel: hintedCandidate.model,
-      routedProvider: hintedCandidate.provider,
-    });
-
-    if (normalizedHint.pin === true) {
-      return [hintedCandidate];
-    }
-
-    return this.dedupeCandidates([hintedCandidate, ...candidates]);
+    return resolveModelHintCandidates(this.config, purpose, modelHint);
   }
 
   private applyPurposeOutputLimits(
@@ -1280,7 +1009,7 @@ export class LLMClient {
     const piContext = this.buildPiContext(context);
     const estimatedInputTokens = this.resolveEstimatedBudgetInputTokens(piContext);
     const correlation = this.resolveCorrelation(context.correlation, undefined, 'chat');
-    const modelHint = this.mergeModelHints(context.modelHint, undefined);
+    const modelHint = mergeModelHints(context.modelHint, undefined);
     const startedAtMs = Date.now();
     let firstTokenAtMs: number | undefined;
     // mihm: retries spent re-running the winning completion because it carried a
@@ -1562,7 +1291,7 @@ export class LLMClient {
     const piContext = this.buildPiContext(context);
     const estimatedInputTokens = this.resolveEstimatedBudgetInputTokens(piContext);
     const correlation = this.resolveCorrelation(context.correlation, options.correlation, purpose);
-    const modelHint = this.mergeModelHints(context.modelHint, options.modelHint);
+    const modelHint = mergeModelHints(context.modelHint, options.modelHint);
     const startedAtMs = Date.now();
     // mihm: see stream(). disableRetry callers opt out of all retries, so the
     // empty-args backstop only engages on the retrying path; stays 0 otherwise.
@@ -1883,29 +1612,4 @@ function isAbortError(error: Error): boolean {
 
 function shouldRetryWithinCandidate(error: Error): boolean {
   return classifyLLMError(error).category !== 'connection_unavailable';
-}
-
-function toPositiveInteger(value: unknown): number | undefined {
-  const numeric = toFiniteNumber(value);
-  if (numeric === undefined || numeric <= 0) return undefined;
-  return Math.floor(numeric);
-}
-
-function toUnitInterval(value: unknown): number | undefined {
-  const numeric = toFiniteNumber(value);
-  if (numeric === undefined || numeric < 0 || numeric > 1) return undefined;
-  return numeric;
-}
-
-function toThinkingEffort(value: unknown): ThinkingLevel | undefined {
-  switch (value) {
-    case 'minimal':
-    case 'low':
-    case 'medium':
-    case 'high':
-    case 'xhigh':
-      return value;
-    default:
-      return undefined;
-  }
 }

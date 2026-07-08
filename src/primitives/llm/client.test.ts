@@ -679,6 +679,171 @@ describe('LLMClient provider observability', () => {
   });
 });
 
+// mihm: a GLM upstream intermittently emits a tool call whose streamed arguments are a
+// literal empty object; dispatching it fails validation for required-property tools (or,
+// worse, silently defaults an optional action). The client re-runs the whole completion
+// (bounded) when the result carries a corrupt-empty tool call against a required schema,
+// and fails closed by returning the last response as-is once retries are exhausted.
+describe('LLMClient empty-tool-args completion retry (mihm)', () => {
+  const requiredActionTool = {
+    name: 'journal',
+    description: 'journal tool',
+    inputSchema: {
+      type: 'object',
+      properties: { action: { type: 'string' } },
+      required: ['action'],
+    },
+  };
+  const optionalActionTool = {
+    name: 'session',
+    description: 'session tool',
+    inputSchema: {
+      type: 'object',
+      properties: { action: { type: 'string' } },
+    },
+  };
+
+  function doneWithToolCall(name: string, args: Record<string, unknown>) {
+    return {
+      type: 'done',
+      reason: 'toolUse',
+      message: {
+        model: 'z-ai/glm-5',
+        usage: { input: 17, output: 9 },
+        content: [{ type: 'toolCall', id: `call-${name}`, name, arguments: args }],
+      },
+    };
+  }
+
+  function streamYielding(...events: Array<Record<string, unknown>>) {
+    return async function* () {
+      for (const event of events) {
+        yield event;
+      }
+    };
+  }
+
+  beforeEach(() => {
+    mocks.getModel.mockReset();
+    mocks.getModels.mockReset();
+    mocks.getProviders.mockReset();
+    mocks.completeSimple.mockReset();
+    mocks.streamSimple.mockReset();
+    mocks.getEnvApiKey.mockReset();
+
+    mocks.getModel.mockImplementation((provider: string, modelId: string) => ({
+      id: modelId,
+      provider,
+      name: modelId,
+      api: 'openai-completions',
+      input: ['text'],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 128_000,
+      maxTokens: 8192,
+      reasoning: true,
+    }));
+    mocks.getProviders.mockReturnValue(['openrouter']);
+    mocks.getModels.mockImplementation((provider: string) => [
+      {
+        id: 'z-ai/glm-5',
+        provider,
+        name: 'z-ai/glm-5',
+        api: 'openai-completions',
+        input: ['text'],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 128_000,
+        maxTokens: 8192,
+        reasoning: true,
+      },
+    ]);
+    mocks.getEnvApiKey.mockReturnValue(undefined);
+  });
+
+  it('retries and returns the recovered result when a later attempt yields valid args', async () => {
+    const usageRecorder = { recordUsageEvent: vi.fn(async () => undefined) };
+    const client = new LLMClient(makeConfig(), { usageRecorder });
+
+    mocks.streamSimple
+      .mockImplementationOnce(streamYielding(doneWithToolCall('journal', {})))
+      .mockImplementation(streamYielding(doneWithToolCall('journal', { action: 'list' })));
+
+    const response = await client.stream({
+      systemPrompt: 'System',
+      messages: [{ role: 'user', content: 'journal please' }],
+      tools: [requiredActionTool],
+    });
+
+    expect(mocks.streamSimple).toHaveBeenCalledTimes(2);
+    expect(response.toolCalls).toEqual([
+      { id: 'call-journal', name: 'journal', input: { action: 'list' } },
+    ]);
+    expect(usageRecorder.recordUsageEvent).toHaveBeenCalledWith(expect.objectContaining({
+      metadata: expect.objectContaining({ emptyArgsRetries: 1 }),
+    }));
+  });
+
+  it('fails closed after exhausting retries: returns the corrupt-empty response as-is', async () => {
+    const usageRecorder = { recordUsageEvent: vi.fn(async () => undefined) };
+    const client = new LLMClient(makeConfig(), { usageRecorder });
+
+    mocks.streamSimple.mockImplementation(streamYielding(doneWithToolCall('journal', {})));
+
+    const response = await client.stream({
+      systemPrompt: 'System',
+      messages: [{ role: 'user', content: 'journal please' }],
+      tools: [requiredActionTool],
+    });
+
+    // 1 initial attempt + 2 bounded retries, then the corrupt tool call is returned intact
+    // so downstream AJV validation surfaces the error (never fabricated/dropped/defaulted).
+    expect(mocks.streamSimple).toHaveBeenCalledTimes(3);
+    expect(response.toolCalls).toEqual([
+      { id: 'call-journal', name: 'journal', input: {} },
+    ]);
+    expect(usageRecorder.recordUsageEvent).toHaveBeenCalledWith(expect.objectContaining({
+      metadata: expect.objectContaining({ emptyArgsRetries: 2 }),
+    }));
+  });
+
+  it('does not retry when the tool schema accepts empty arguments', async () => {
+    const usageRecorder = { recordUsageEvent: vi.fn(async () => undefined) };
+    const client = new LLMClient(makeConfig(), { usageRecorder });
+
+    mocks.streamSimple.mockImplementation(streamYielding(doneWithToolCall('session', {})));
+
+    const response = await client.stream({
+      systemPrompt: 'System',
+      messages: [{ role: 'user', content: 'session status' }],
+      tools: [optionalActionTool],
+    });
+
+    expect(mocks.streamSimple).toHaveBeenCalledTimes(1);
+    expect(response.toolCalls).toEqual([
+      { id: 'call-session', name: 'session', input: {} },
+    ]);
+    expect(usageRecorder.recordUsageEvent).toHaveBeenCalledWith(expect.objectContaining({
+      metadata: expect.objectContaining({ emptyArgsRetries: 0 }),
+    }));
+  });
+
+  it('does not retry a tool call that already carries valid non-empty args', async () => {
+    const client = new LLMClient(makeConfig());
+
+    mocks.streamSimple.mockImplementation(streamYielding(doneWithToolCall('journal', { action: 'list' })));
+
+    const response = await client.stream({
+      systemPrompt: 'System',
+      messages: [{ role: 'user', content: 'journal please' }],
+      tools: [requiredActionTool],
+    });
+
+    expect(mocks.streamSimple).toHaveBeenCalledTimes(1);
+    expect(response.toolCalls).toEqual([
+      { id: 'call-journal', name: 'journal', input: { action: 'list' } },
+    ]);
+  });
+});
+
 describe('LLMClient prompt caching', () => {
   beforeEach(() => {
     mocks.getModel.mockReset();

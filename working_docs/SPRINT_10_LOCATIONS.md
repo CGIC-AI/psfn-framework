@@ -319,3 +319,61 @@ The operator resolved the prior open questions. These are now binding for the sp
    - **Robot / physical-space self-locating** and **VR self-locating** (avatar running into frame, procedural animations).
    - **Live biometric matching inside core** (compute stays at the Satellite Hub; core only binds resolved identity claims).
 ```
+
+## 7. Decisions addendum (2026-07-08, cont.) — dual presence & the shared "latent space"
+
+Follow-up design conversation. Binding for the sprint.
+
+9. **Two presence modes, classified per turn by device origin.** Every turn is one of:
+   - **Physical emanation-to-satellite:** the inbound device is a classified satellite → the companion is *physically present* in that room; foreground that room's real sensors/effectors.
+   - **Shared mindspace ("the latent space"):** the inbound origin is a plain chat channel (phone/Discord/etc.) → the companion is co-located with the partner in a **virtual twin of the physical space** — same room graph, used for contextual grounding ("am I in bed or the office?"). This keeps the relationship grounded in routine; a text chat is still situated in a shared room (talking in bed → she's with him "in his heart and phone"). A companion can have **both** (physical satellites *and* the latent-space overlay); the situated block picks the mode from the origin classification, not a global flag.
+
+10. **The "latent space" is a virtual mirror of the physical place graph.** A physical room and its latent-space twin are two places linked by an **overlap/twin mapping**. Use a **neutral technical identifier** in code/config for the concept (e.g. place mode `mindspace`/`overlay`, and a `twinOf`/`mirrorsPlaceId` link); "the latent space" is a **character-facing display label** in companion-data, never a code identifier or committed test string.
+
+11. **UX: reuse the two existing Garden pages + an overlap mapping (near-term).** Rather than a brand-new spatial UI, extend what exists: **virtual spaces are added to the conversation-rooms page** (they are channels, per the rooms-are-channels decision), **physical spaces live on the satellite page**, and where a virtual room is the latent-space twin of a physical room, the two are **mapped as overlapping**. The richer drag-drop visual map (`vinz.22`) stays as the future embellishment — the near-term delineation is these two pages plus the mapping.
+
+12. **`move` has two trigger paths, not just self-invoked.**
+    - **Self-invoked** deliberate virtual navigation (`vinz.26`) — companion chooses to walk between virtual rooms; describes the destination + lists exits; fires the room-entry note.
+    - **Auto on presence:** physical presence detected at a satellite **auto-emanates** her to that device (physical follow — this is emanation handoff via the sensor bridge → conversation-follows-you, `vinz.6`/`.11`/`.20`, NOT a companion tool call, since satellites are static); virtual activity/presence in a room moves her to that room.
+
+13. **Latent-space room during plain chat = blend (resolved).** Default to the last-known physical room (last satellite presence); update when a narrative cue says otherwise ("heading to the office" → office). A chat turn foregrounds the twinned latent-space room, which defaults to your last physical room and is overridable by what you say. Tracked in `vinz.29`.
+
+## 8. Implementation status & next steps (2026-07-08)
+
+The locations line is on branch **`s10-location-foundations`** (tip `6d44cf0a`), built as three integration waves of one-bead-per-agent parallel work, each merged `--no-ff` for bead traceability and gated on build + lint + settings-contract + targeted vitest. Convergence into `feat/multi-companion` is owned by the multi-companion side (their `sprint-10-next-steps.md` §2b); this section is the locations-side inventory to hand them.
+
+### Shipped on `s10-location-foundations` (15 beads, 231 targeted tests green)
+
+| Bead | What landed |
+|---|---|
+| `vinz.1` | `places.json` soft-registry + Site/Place/Affordance contracts (stable `placeId`/`siteId` keys for shared `companion_presence`) |
+| `vinz.2` | static satellite→place binding (`placeId` on `SatelliteConfig`+`SatelliteRoutingMetadata`), fail-closed cross-registry validation |
+| `vinz.5` | situated-presence runtime-context producer (first consumer of `routing.presence`; `coPresent` hook for multi-companion) |
+| `vinz.6` | active-emanation integration — placeless turns inherit current emanation place; handoff switches foregrounded place |
+| `vinz.7` | durable situated location state (`InternalState.situated`) + bottom-of-prompt recency reminder with confirmation age |
+| `vinz.8` | gateway Home Assistant method (states/call-service/connectivity), HA-host-scoped SSRF lane, gateway-side token (never crosses to agent) |
+| `vinz.9` | agent-side `world` tool (perceive/list/control), affordance→entity resolution via places registry, fail-closed when HA unconfigured |
+| `vinz.11` | sensor→cognition bridge — consumes `external.telemetry.ingested`, normalizes to `PerceptionEvent`, `PerceptionEventSink` seam |
+| `vinz.12` | hub-identity↔contact enrollment (Postgres-only), fail-closed resolution, no contact auto-create, enroll/revoke audit |
+| `vinz.13` | resolve presence identity claim → contact (enrolled → known w/ trust; else explicit anonymous), `ResolvedPresence` type for `.14` |
+| `vinz.17` | Garden places/affordances admin API + static satellite re-bind + enrollment surface (biometrics never surfaced) |
+| `vinz.18` | settings-contract / owner-file compliance for HA + location settings (regression tests) |
+| `s10rm` (part) | room-entry system-note helper (`composeRoomEntryNote`/`appendRoomEntryNote`, W5 entry event) |
+
+### Open (filed, not yet built)
+
+- `vinz.10` — world-tool surface registration + capability tokens (`world.read`/`world.control`) + trust gating + **staged-off control** (follow the `robotics` modeled-but-disabled pattern). *Unblocked by `.9`.*
+- `vinz.14` — deliver perception into cognition via context-visible notes ("partner just walked in"). *Unblocked by `.13`.*
+- `vinz.26` — world-tool **`move`** action (virtual navigation; fails closed on physical). Auto-invokes on presence. **Must write presence through `CompanionPresenceTurnPort`** (contract `s10wm`), never `companion_presence` directly. *Blocked-by `.9`.*
+- `vinz.29` — dual-presence classification + latent-space twin mapping (§7 decisions 9–13). Same `CompanionPresenceTurnPort` contract. *Related to `.5`/`.26`/`.17`/`s10mc.5`.*
+- `vinz.27` / `vinz.28` — world-wiki bulk import (personal-fact-guarded) + Garden personal/world wiki delineation. *Related to `vinz.4`/`i5s2`.*
+- `vinz.30` — Garden admin-ui panels for places/enrollment + the virtual(conversation-rooms)/physical(satellite)/overlap UX. *Blocked-by `.17`.*
+- `s10rm` remainder — presence-windowed private-room delivery, public/group exemption, memory-tag tweaks.
+- `vinz.19` — tests + e2e + docs capstone.
+- `vinz.22` (STG) — visual world-mapping Garden tool (the near-term delineation is the two-pages-plus-overlap approach; this is the richer future map).
+
+### Convergence notes for the multi-companion side
+
+- `feat/multi-companion` merged locations at the **wave-0** point (`98e964eb` ← `ad661699`); everything in waves 1–2 above is new to it. Expect conflicts at the **situated-presence** producer and the **presence-registry** layer, not just textual diffs.
+- `move`/dual-presence adopt **`CompanionPresenceTurnPort`** (`src/core/agent/companion-presence-runtime.ts`, on `mc/w5a-companion-presence`) — the single seam feeding co-location events, situated context, and wiki scope-swap.
+- The `world` tool is a pure consumer of the `.8` gateway HA ops; it registers **no** new gateway method, so no collision with the multi-companion gateway multiplexing or the Garden `/api/admin/*` routes.

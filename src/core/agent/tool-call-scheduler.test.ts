@@ -740,6 +740,116 @@ describe('tool-call-scheduler', () => {
     );
   });
 
+  it('classifies TypeBox required-property validation failures for repeated malformed skips', async () => {
+    const execute = vi.fn(async () => ({
+      content: [{ type: 'text', text: 'Journal note created: carlini-notes.md' }],
+      details: {},
+    }));
+    const journal = makeTool(
+      'journal',
+      execute,
+      {
+        concurrency: makeConcurrencyMeta('exclusive', {
+          exclusivityKeyPolicy: 'category_tool_name',
+          exclusivityKey: 'extended:journal',
+        }),
+      },
+    );
+    journal.parameters = Type.Object({
+      action: Type.Literal('write'),
+      title: Type.String(),
+      content: Type.String(),
+    });
+    const guard = createToolCallExecutionGuard();
+    const telemetry = vi.fn();
+    const options = {
+      maxParallelToolCalls: 1,
+      guard,
+      onTelemetry: telemetry,
+    };
+
+    const first = await executeToolCallsWithScheduler(
+      [journal],
+      makeAssistantToolCalls([{ name: 'journal', arguments: { action: 'write' } }]),
+      undefined,
+      { stream: { push: () => undefined } },
+      options,
+    );
+    const repeatedMalformed = await executeToolCallsWithScheduler(
+      [journal],
+      makeAssistantToolCalls([{ name: 'journal', arguments: { action: 'write', title: 'Carlini notes' } }]),
+      undefined,
+      { stream: { push: () => undefined } },
+      options,
+    );
+
+    const firstText = (first.toolResults[0] as ToolResultMessage).content[0]?.text;
+    expect(execute).not.toHaveBeenCalled();
+    expect(firstText).toContain('Validation failed for tool "journal":');
+    expect(firstText).toContain('  - title: must have required properties title, content');
+    expect((repeatedMalformed.toolResults[0] as ToolResultMessage).content).toEqual([
+      {
+        type: 'text',
+        text: 'Internal tool status: skipped repeated malformed journal action=write call because required field(s) are still missing: content. Use one minimal valid JSON call with all required fields before retrying. This is not a user-facing message.',
+      },
+    ]);
+    expect(telemetry).toHaveBeenCalledWith(
+      'agent.tools.scheduler.skipped',
+      expect.objectContaining({
+        reason: 'repeated_malformed_arguments',
+        toolName: 'journal',
+        action: 'write',
+        missingRequirement: 'content',
+      }),
+    );
+  });
+
+  it('passes TypeBox-coerced numeric and boolean argument strings to tool execution', async () => {
+    let observedParams: unknown;
+    const execute = vi.fn(async (_toolCallId: string, params: unknown) => {
+      observedParams = params;
+      return {
+        content: [{ type: 'text', text: 'settings listed' }],
+        details: {},
+      };
+    });
+    const settings = makeTool(
+      'settings',
+      execute,
+      { concurrency: makeConcurrencyMeta('exclusive') },
+    );
+    settings.parameters = Type.Object({
+      action: Type.Literal('list'),
+      limit: Type.Integer(),
+      threshold: Type.Number(),
+      includeResolved: Type.Boolean(),
+    });
+
+    const result = await executeToolCallsWithScheduler(
+      [settings],
+      makeAssistantToolCalls([{
+        name: 'settings',
+        arguments: {
+          action: 'list',
+          limit: '3',
+          threshold: '0.75',
+          includeResolved: 'false',
+        },
+      }]),
+      undefined,
+      { stream: { push: () => undefined } },
+      { maxParallelToolCalls: 1 },
+    );
+
+    expect((result.toolResults[0] as ToolResultMessage).isError).toBe(false);
+    expect(observedParams).toEqual({
+      action: 'list',
+      limit: 3,
+      threshold: 0.75,
+      includeResolved: false,
+    });
+  });
+
   it('emits cancelled telemetry when execution aborts before a tool call runs', async () => {
     const telemetry = vi.fn();
     const controller = new AbortController();

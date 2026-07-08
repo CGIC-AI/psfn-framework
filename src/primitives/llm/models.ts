@@ -112,6 +112,13 @@ function supportsOpenAIDeveloperRole(model: Model<any>): boolean {
   const provider = model.provider.trim().toLowerCase();
   const baseUrl = typeof model.baseUrl === 'string' ? model.baseUrl.toLowerCase() : '';
   const isZai = provider === 'zai' || baseUrl.includes('api.z.ai');
+  const isMoonshot = provider === 'moonshotai'
+    || provider === 'moonshotai-cn'
+    || baseUrl.includes('api.moonshot.');
+  const isCloudflareWorkersAI = provider === 'cloudflare-workers-ai'
+    || baseUrl.includes('api.cloudflare.com');
+  const isCloudflareAiGateway = provider === 'cloudflare-ai-gateway'
+    || baseUrl.includes('gateway.ai.cloudflare.com');
   const isNonStandard = provider === 'cerebras'
     || baseUrl.includes('cerebras.ai')
     || provider === 'xai'
@@ -119,8 +126,11 @@ function supportsOpenAIDeveloperRole(model: Model<any>): boolean {
     || baseUrl.includes('chutes.ai')
     || baseUrl.includes('deepseek.com')
     || isZai
+    || isMoonshot
     || provider === 'opencode'
-    || baseUrl.includes('opencode.ai');
+    || baseUrl.includes('opencode.ai')
+    || isCloudflareWorkersAI
+    || isCloudflareAiGateway;
   const compat = model.compat as { supportsDeveloperRole?: boolean } | undefined;
   return compat?.supportsDeveloperRole ?? !isNonStandard;
 }

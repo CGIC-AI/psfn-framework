@@ -31,6 +31,7 @@ import type {
 } from '../../faculties/memory/episodic/store-port.js';
 import type { ContactStorePort } from '../../core/contacts/contact-store-port.js';
 import type { ContactTrackingGate } from '../../core/contacts/tracking-gate.js';
+import type { HubIdentityEnrollmentStorePort } from '../../core/enrollment/enrollment-store-port.js';
 import type {
   IntentionRuntimeProviders,
   IntentionRuntimeWiring,
@@ -60,6 +61,8 @@ export interface BootstrapAgentCoreRuntimeOptions {
   memoryStore: MemoryStorePort;
   episodicStore: EpisodicStorePort;
   contactStore?: ContactStorePort;
+  /** Hub identity ↔ contact enrollment store (S10 D2a). Enables face identity-claim resolution (bead .13). */
+  hubIdentityEnrollmentStore?: HubIdentityEnrollmentStorePort;
   intentionRuntime?: IntentionRuntimeWiring;
   intentionProviders?: IntentionRuntimeProviders;
   capabilityRuntime: CapabilityRuntime;
@@ -131,6 +134,9 @@ export async function bootstrapAgentCoreRuntime(
     memoryStore,
     episodicStore,
     contactStore,
+    ...(options.hubIdentityEnrollmentStore
+      ? { hubIdentityEnrollmentStore: options.hubIdentityEnrollmentStore }
+      : {}),
     card,
     systemPrompt,
     capabilityRuntime,

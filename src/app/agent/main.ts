@@ -171,6 +171,7 @@ async function main(): Promise<void> {
     episodicStore: companionEpisodicStore,
     reflectionStore,
     contactStore: persistedContactStore,
+    hubIdentityEnrollmentStore: persistedHubIdentityEnrollmentStore,
     intentionRuntime: persistedIntentionRuntime,
     intentionProviders,
   } = persistenceRuntime;
@@ -241,6 +242,9 @@ async function main(): Promise<void> {
     contactTrackingGate,
     satelliteRegistryConfig,
     placesRegistryConfig,
+    ...(persistedHubIdentityEnrollmentStore
+      ? { hubIdentityEnrollmentStore: persistedHubIdentityEnrollmentStore }
+      : {}),
   });
   const {
     safeguardAuditTrail,

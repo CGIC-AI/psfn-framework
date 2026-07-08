@@ -94,6 +94,9 @@ import {
 } from '../../core/agent/tool-conformance/runner.js';
 import { getObserverEvalSidecarHealthSnapshot } from '../../core/eval/observer-sidecar/runtime.js';
 import { createSensorCognitionBridge } from '../../core/agent/perception/sensor-cognition-bridge.js';
+import { createIdentityClaimResolvingSink } from '../../core/agent/perception/identity-claim-resolver.js';
+import { HubIdentityEnrollmentService } from '../../core/enrollment/service.js';
+import type { HubIdentityEnrollmentStorePort } from '../../core/enrollment/enrollment-store-port.js';
 
 export interface AgentCoreRuntimeOptions {
   config: CoreSubstrateConfig;
@@ -121,6 +124,12 @@ export interface AgentCoreRuntimeOptions {
   satelliteRegistryConfig?: SatelliteRegistryConfig;
   /** Places soft-registry (S10). Absent behaves as an empty registry. */
   placesRegistryConfig?: PlacesRegistryConfig;
+  /**
+   * Hub identity ↔ contact enrollment binding store (S10 D2a). When present
+   * alongside a contact store, the perception path resolves face identity-claim
+   * events to contacts (bead .13); absent leaves the bridge sink a no-op.
+   */
+  hubIdentityEnrollmentStore?: HubIdentityEnrollmentStorePort;
 }
 
 export interface AgentCoreRuntime {
@@ -231,11 +240,6 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
   agentLoop.scratchpadProvider = memoryStore;
   agentLoop.setCapabilityRuntime(capabilityRuntime);
   wireDiagnosticsRuntime(eventBus);
-  createSensorCognitionBridge({
-    eventBus,
-    satelliteRegistry: options.satelliteRegistryConfig,
-    placesRegistry: options.placesRegistryConfig,
-  });
   // E5.5: persistent active-memory refresh failure raises an operator alert
   // through the system-derived gateway notification path. The threshold is
   // config-owned (settings.json memoryRefreshFailureAlertThreshold) and the
@@ -366,6 +370,28 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
     primaryUserId,
     contactRuntimeOptions,
   );
+
+  // Perception ingestion (S10 Workstream D). The bridge normalizes presence/face
+  // telemetry into PerceptionEvents; the identity-claim resolver (bead .13) turns
+  // a face identity claim into a fail-closed ResolvedPresence. Its downstream
+  // presence sink defaults to a no-op — note delivery is bead .14. Absent
+  // enrollment store leaves the sink a no-op; off/absent registry config leaves
+  // the bridge itself inactive.
+  const perceptionSink = options.hubIdentityEnrollmentStore
+    ? createIdentityClaimResolvingSink({
+      enrollmentService: new HubIdentityEnrollmentService(
+        options.hubIdentityEnrollmentStore,
+        contactStore,
+      ),
+      contactStore,
+    })
+    : undefined;
+  createSensorCognitionBridge({
+    eventBus,
+    satelliteRegistry: options.satelliteRegistryConfig,
+    placesRegistry: options.placesRegistryConfig,
+    ...(perceptionSink ? { sink: perceptionSink } : {}),
+  });
   const intentionRuntime = options.intentionRuntime ?? (() => {
     throw new Error('PostgreSQL core runtime requires injected intention persistence stores');
   })();

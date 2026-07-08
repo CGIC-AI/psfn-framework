@@ -74,6 +74,8 @@ interface StoredObservationRow {
   derived_telemetry_permitted: boolean;
   psfn_emotion_snapshot_ref: string | null;
   psfn_emotion_snapshot_json: unknown;
+  psfn_emotion_appraisal_entry_count: number | null;
+  psfn_emotion_snapshot_source: string | null;
   observer_input_json: unknown;
   projected_appraisal_json: unknown;
   emosim_output_json: unknown;
@@ -140,8 +142,12 @@ class FakeObserverEvalPool {
     if (normalized === 'begin' || normalized === 'commit' || normalized === 'rollback') {
       return queryResult([], normalized.toUpperCase());
     }
-    if (normalized.startsWith('create table') || normalized.startsWith('create index')) {
+    if (normalized.startsWith('create table') || normalized.startsWith('create index') || normalized.startsWith('alter table')) {
       return queryResult([], 'DDL');
+    }
+    if (normalized.startsWith('update observer_eval_sidecar_observations')) {
+      // Migration backfill no-op: fake rows always carry the psfn emotion columns.
+      return queryResult([], 'UPDATE');
     }
     if (normalized.startsWith('insert into observer_eval_sidecar_runs')) {
       const row: StoredRunRow = {
@@ -198,6 +204,8 @@ class FakeObserverEvalPool {
         retention_json: jsonValue(values[27]),
         retain_until_ms: Number(values[28]),
         created_at_ms: Number(values[29]),
+        psfn_emotion_appraisal_entry_count: values[30] === null ? null : Number(values[30]),
+        psfn_emotion_snapshot_source: values[31] === null ? null : String(values[31]),
       };
       this.observations.set(row.observation_id, row);
       return queryResult([], 'INSERT');
@@ -622,6 +630,53 @@ describe('observer sidecar eval persistence', () => {
     expect(pool.observations.get('observation-confidential')).not.toHaveProperty('request_id');
     expect(pool.observations.get('observation-confidential')).not.toHaveProperty('source_message_id');
     await expect(store.queryObservations({ privacyClass: 'closed' })).resolves.toEqual([observation]);
+  });
+
+  it('round-trips psfnEmotion metadata that differs from the sanitized input', async () => {
+    const pool = new FakeObserverEvalPool();
+    const store = makeStore(pool);
+    await store.upsertRun(makeRun());
+
+    const input = makeObservation({
+      observationId: 'observation-psfn-emotion',
+      psfnEmotion: {
+        snapshot: makeEmotionSnapshot(),
+        snapshotRef: 'emotion-snapshot-ref-1',
+        // Deliberately different from sanitizedInput.emotion.appraisalEntryCount (2)
+        // and sanitizedInput.provenance.emotionSnapshotSource ('observeEmotionState').
+        appraisalEntryCount: 7,
+        snapshotSource: 'observer-sanitized-input',
+      },
+    });
+    const written = await store.recordObservation(input);
+    const reloaded = await store.getObservation('observation-psfn-emotion');
+
+    expect(written.sanitizedInput.emotion.appraisalEntryCount).toBe(2);
+    expect(written.sanitizedInput.provenance.emotionSnapshotSource).toBe('observeEmotionState');
+    expect(reloaded?.psfnEmotion).toEqual({
+      snapshot: makeEmotionSnapshot(),
+      snapshotRef: 'emotion-snapshot-ref-1',
+      appraisalEntryCount: 7,
+      snapshotSource: 'observer-sanitized-input',
+    });
+    expect(reloaded).toEqual(written);
+    expect(pool.observations.get('observation-psfn-emotion')).toMatchObject({
+      psfn_emotion_appraisal_entry_count: 7,
+      psfn_emotion_snapshot_source: 'observer-sanitized-input',
+    });
+  });
+
+  it('rejects invalid persisted psfnEmotion snapshot sources on read', async () => {
+    const pool = new FakeObserverEvalPool();
+    const store = makeStore(pool);
+    await store.upsertRun(makeRun());
+    await store.recordObservation(makeObservation({ observationId: 'observation-bad-source' }));
+    const row = pool.observations.get('observation-bad-source');
+    if (!row) throw new Error('expected stored observation row');
+    row.psfn_emotion_snapshot_source = 'not-a-valid-source';
+
+    await expect(store.getObservation('observation-bad-source'))
+      .rejects.toThrow('psfn_emotion_snapshot_source is invalid');
   });
 
   it('prunes expired observation and run retention without touching active rows', async () => {

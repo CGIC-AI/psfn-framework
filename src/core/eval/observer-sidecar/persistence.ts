@@ -287,6 +287,8 @@ interface ObserverEvalObservationRow {
   derived_telemetry_permitted: boolean;
   psfn_emotion_snapshot_ref: string | null;
   psfn_emotion_snapshot_json: unknown;
+  psfn_emotion_appraisal_entry_count: number | string | null;
+  psfn_emotion_snapshot_source: string | null;
   observer_input_json: unknown;
   projected_appraisal_json: unknown;
   emosim_output_json: unknown;
@@ -458,7 +460,8 @@ implements ObserverEvalSidecarPersistencePort, ObserverEvalSidecarLeverPersisten
         psfn_emotion_snapshot_ref, psfn_emotion_snapshot_json, observer_input_json,
         projected_appraisal_json, emosim_output_json, crosswalk_json,
         comparison_metrics_json, divergence_score, error_json, degraded_state_json,
-        metadata_json, retention_json, retain_until_ms, created_at_ms
+        metadata_json, retention_json, retain_until_ms, created_at_ms,
+        psfn_emotion_appraisal_entry_count, psfn_emotion_snapshot_source
       )
       VALUES (
         $1, $2, $3, $4, $5,
@@ -468,7 +471,8 @@ implements ObserverEvalSidecarPersistencePort, ObserverEvalSidecarLeverPersisten
         $17, $18::jsonb, $19::jsonb,
         $20::jsonb, $21::jsonb, $22::jsonb,
         $23::jsonb, $24, $25::jsonb, $26::jsonb,
-        $27::jsonb, $28::jsonb, $29, $30
+        $27::jsonb, $28::jsonb, $29, $30,
+        $31, $32
       )
       ON CONFLICT (observation_id) DO UPDATE SET
         run_id = excluded.run_id,
@@ -485,6 +489,8 @@ implements ObserverEvalSidecarPersistencePort, ObserverEvalSidecarLeverPersisten
         derived_telemetry_permitted = excluded.derived_telemetry_permitted,
         psfn_emotion_snapshot_ref = excluded.psfn_emotion_snapshot_ref,
         psfn_emotion_snapshot_json = excluded.psfn_emotion_snapshot_json,
+        psfn_emotion_appraisal_entry_count = excluded.psfn_emotion_appraisal_entry_count,
+        psfn_emotion_snapshot_source = excluded.psfn_emotion_snapshot_source,
         observer_input_json = excluded.observer_input_json,
         projected_appraisal_json = excluded.projected_appraisal_json,
         emosim_output_json = excluded.emosim_output_json,
@@ -527,6 +533,8 @@ implements ObserverEvalSidecarPersistencePort, ObserverEvalSidecarLeverPersisten
       JSON.stringify(observation.retention),
       observation.retention.retainUntilMs,
       observation.createdAtMs,
+      observation.psfnEmotion.appraisalEntryCount,
+      observation.psfnEmotion.snapshotSource,
     ]);
     return observation;
   }
@@ -846,7 +854,7 @@ function normalizePsfnEmotion(
       snapshot: structuredClone(input.snapshot),
       ...(optionalText(input.snapshotRef) ? { snapshotRef: optionalText(input.snapshotRef) } : {}),
       appraisalEntryCount: nonNegativeInteger(input.appraisalEntryCount, 'psfnEmotion.appraisalEntryCount'),
-      snapshotSource: input.snapshotSource,
+      snapshotSource: normalizePsfnEmotionSnapshotSource(input.snapshotSource, 'psfnEmotion.snapshotSource'),
     };
   }
   return {
@@ -941,8 +949,14 @@ function mapObservationRow(row: ObserverEvalObservationRow): ObserverEvalSidecar
   const psfnEmotion: ObserverEvalPsfnEmotionReference = {
     snapshot: snapshot ?? null,
     ...(row.psfn_emotion_snapshot_ref ? { snapshotRef: row.psfn_emotion_snapshot_ref } : {}),
-    appraisalEntryCount: nonNegativeInteger(sanitizedInput.emotion.appraisalEntryCount, 'observer_input_json.emotion.appraisalEntryCount'),
-    snapshotSource: sanitizedInput.provenance.emotionSnapshotSource,
+    appraisalEntryCount: nonNegativeInteger(
+      row.psfn_emotion_appraisal_entry_count,
+      'observer_eval_sidecar_observations.psfn_emotion_appraisal_entry_count',
+    ),
+    snapshotSource: normalizePsfnEmotionSnapshotSource(
+      row.psfn_emotion_snapshot_source,
+      'observer_eval_sidecar_observations.psfn_emotion_snapshot_source',
+    ),
   };
   const privacy: ObserverEvalPrivacyDecision = {
     privacyClass: row.privacy_class,
@@ -1066,6 +1080,16 @@ function mapLeverEventRow(row: ObserverEvalLeverEventRow): ObserverEvalSidecarLe
     createdAtMs: normalizeEpochMs(row.created_at_ms, 'created_at_ms'),
     nonAuthoritativeNotice: OBSERVER_EVAL_SIDECAR_NON_AUTHORITATIVE_NOTICE,
   };
+}
+
+function normalizePsfnEmotionSnapshotSource(
+  value: unknown,
+  field: string,
+): ObserverEvalPsfnEmotionReference['snapshotSource'] {
+  if (value === 'observeEmotionState' || value === 'observer-sanitized-input') {
+    return value;
+  }
+  throw new Error(`${field} is invalid: ${String(value)}`);
 }
 
 function normalizeLeverName(value: unknown): ObserverEvalLeverName {

@@ -322,8 +322,12 @@ class FakeLeverPool {
     if (normalized === 'begin' || normalized === 'commit' || normalized === 'rollback') {
       return queryResult([], normalized.toUpperCase());
     }
-    if (normalized.startsWith('create table') || normalized.startsWith('create index')) {
+    if (normalized.startsWith('create table') || normalized.startsWith('create index') || normalized.startsWith('alter table')) {
       return queryResult([], 'DDL');
+    }
+    if (normalized.startsWith('update observer_eval_sidecar_observations')) {
+      // Migration backfill no-op: this fake stores no observation rows.
+      return queryResult([], 'UPDATE');
     }
     if (normalized.startsWith('insert into observer_eval_sidecar_lever_events')) {
       const row: StoredLeverEventRow = {

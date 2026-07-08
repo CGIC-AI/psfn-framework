@@ -25,6 +25,7 @@ import type {
   SocialGraphProposalStore,
   SocialGraphBuilderWatermarkStore,
 } from '../../faculties/memory/social-graph/proposals.js';
+import type { CompanionPresenceTurnPort } from '../../core/agent/companion-presence-runtime.js';
 import type { EventBus } from '../../shared/event-bus.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import type { EligibilityGate } from '../../system/capabilities/eligibility.js';
@@ -60,6 +61,13 @@ export interface BuildAgentSchedulerRuntimeOptions {
   concernStore?: ConcernStorePort | null;
   backupConfig: BackupRuntimeConfig;
   pathSnapshot: RuntimePathSnapshot;
+  /**
+   * Cross-companion presence runtime (multi-companion only; null flag-off).
+   * When present, the heartbeat lane bumps this agent's own presence row on the
+   * heartbeat cadence so an idle-but-alive emanation stays inside siblings'
+   * co-presence (read-side staleness TTL).
+   */
+  companionPresence?: CompanionPresenceTurnPort | null;
   // ── Social-graph builder worker (E4.2) ──
   contactStore?: ContactStorePort | null;
   socialGraphProposalStore?: SocialGraphProposalStore | null;
@@ -186,6 +194,11 @@ export function buildAgentSchedulerRuntime(
       timestamp: now,
       taskCount: scheduler.taskCount,
     });
+    // Multi-companion presence liveness beat. No-op flag-off (companionPresence
+    // is null) and when this agent has no current situated place. Refresh errors
+    // are logged loudly inside the runtime and never thrown, so they can never
+    // take down the heartbeat lane.
+    await options.companionPresence?.refreshOwnPresence();
   });
   registerAmbientPresenceTask({
     scheduler,

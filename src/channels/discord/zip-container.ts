@@ -161,7 +161,18 @@ export function readZipEntryData(input: {
   if (input.entry.compressionMethod === 0) {
     data = Buffer.from(compressed);
   } else if (input.entry.compressionMethod === 8) {
-    data = inflateRawSync(Buffer.from(compressed));
+    try {
+      // Bound allocation during inflate: the declared uncompressedSize is
+      // attacker-controlled, so a crafted entry could otherwise expand far
+      // beyond policy before the post-decompression size check runs.
+      data = inflateRawSync(Buffer.from(compressed), {
+        maxOutputLength: Math.max(1, input.maxUncompressedBytes),
+      });
+    } catch (error) {
+      throw new ZipContainerError(
+        `ZIP entry "${input.entry.name}" failed to decompress within the ${input.maxUncompressedBytes}-byte limit: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
   } else {
     throw new ZipContainerError(
       `ZIP entry "${input.entry.name}" uses unsupported compression method ${input.entry.compressionMethod}`,

@@ -10,6 +10,7 @@ import type { PostTurnActionRuntime } from '../../core/agent/post-turn-action-ru
 import type { OutreachOutboxStore } from '../../core/intention/outreach-outbox.js';
 import type { PendingContactApprovalStore } from '../../core/contacts/pending-contact-approvals.js';
 import type { SocialGraphProposalStore } from '../../faculties/memory/social-graph/proposals.js';
+import type { HubIdentityEnrollmentStorePort } from '../../core/enrollment/enrollment-store-port.js';
 import type { AgentCoreRuntime } from './core-runtime.js';
 import type { EventBus } from '../../shared/event-bus.js';
 import type { Scheduler } from '../../core/scheduler/scheduler.js';
@@ -44,6 +45,8 @@ export interface StartOptionalAdminTransportServerOptions {
   pendingContactApprovals?: PendingContactApprovalStore | null;
   /** Social-graph edge proposals from the graph-builder worker (E4.2). */
   socialGraphProposals?: SocialGraphProposalStore | null;
+  /** Hub-identity ↔ contact enrollment store (S10 D2a). Enables the Garden enrollment surface. */
+  hubIdentityEnrollmentStore?: HubIdentityEnrollmentStorePort | null;
   card: CharacterCardV2;
   shardManager: ShardExecutionPort;
   cardVersionStore: CharacterCardVersionStore;
@@ -94,6 +97,7 @@ export async function startOptionalAdminTransportServer(
     contactStore: options.coreRuntime.contactStore,
     pendingContactApprovals: options.pendingContactApprovals ?? null,
     socialGraphProposals: options.socialGraphProposals ?? null,
+    hubIdentityEnrollmentStore: options.hubIdentityEnrollmentStore ?? null,
     concernStore: options.coreRuntime.intentionRuntime.concernStore,
     characterCard: options.card,
     config: adminConfig,

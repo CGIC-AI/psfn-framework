@@ -171,6 +171,7 @@ async function main(): Promise<void> {
     episodicStore: companionEpisodicStore,
     reflectionStore,
     contactStore: persistedContactStore,
+    hubIdentityEnrollmentStore: persistedHubIdentityEnrollmentStore,
     intentionRuntime: persistedIntentionRuntime,
     intentionProviders,
   } = persistenceRuntime;
@@ -556,6 +557,7 @@ async function main(): Promise<void> {
     episodicStore,
     pendingContactApprovals,
     socialGraphProposals: socialGraphProposalStore,
+    hubIdentityEnrollmentStore: persistedHubIdentityEnrollmentStore,
     card,
     shardManager,
     cardVersionStore,

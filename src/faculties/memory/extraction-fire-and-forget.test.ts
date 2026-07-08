@@ -45,7 +45,7 @@ describe('MemoryExtractor fire-and-forget handling', () => {
         complete: vi.fn().mockResolvedValue({
           content: `<response>
 <fact>
-<text>User felt relieved after finishing the launch plan</text>
+<text>The user felt relieved after finishing the launch plan</text>
 <type>emotional</type>
 <importance>0.9</importance>
 <emotional_valence>0.7</emotional_valence>

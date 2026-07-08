@@ -44,6 +44,10 @@ import type {
   ContextManifestMemorySeed,
 } from '../context-manifest.js';
 import {
+  roomContentWindowFloorMs,
+  type RoomContentWindow,
+} from '../room-content-window.js';
+import {
   collectRecentEntriesWithinHistorySpan,
   DEFAULT_CONTINUITY_CONTEXT_LIMIT,
   applyTemporalSessionHistoryWindow,
@@ -448,6 +452,14 @@ export interface CaptureTurnSessionContextParams {
   /** Optional LLM provider for foreground history-budget summarization. */
   llmProvider?: LLMProviderPort;
   promptRegistry: PromptRegistryStatePort | null;
+  /**
+   * Presence-windowed room content gate (psfn-framework-s10rm). Absent or
+   * `unwindowed` keeps every surface byte-identical; `windowed`/`closed`
+   * restricts EVERY served room surface (history entries, compaction
+   * summaries, orientation scan, wake-return artifacts, room-origin
+   * continuity) to the recipient's current presence window.
+   */
+  roomContentWindow?: RoomContentWindow;
 }
 
 /**
@@ -480,11 +492,32 @@ export async function captureTurnSessionContext(
     estimatedCount: historyBudget.estimatedCount,
     maxHistorySpanMs,
   });
+  // Presence-window gate (psfn-framework-s10rm): on a windowed private room,
+  // nothing recorded before the recipient's current join (`since`) may be
+  // served — including a companion's OWN earlier windows (a rejoin opens a
+  // NEW window; earlier windows live on in extracted memory, not here).
+  const roomWindow = params.roomContentWindow ?? { kind: 'unwindowed' as const };
+  const roomWindowGated = roomWindow.kind !== 'unwindowed';
+  const roomWindowFloor = roomContentWindowFloorMs(roomWindow);
+  const windowedEntries = roomWindowGated
+    ? collected.entries.filter(entry => entry.timestamp >= roomWindowFloor)
+    : collected.entries;
+  const roomWindowFilteredEntryCount = collected.entries.length - windowedEntries.length;
+  // Focus knowledge/ranges carry no timestamps we can gate on, so on a
+  // windowed channel they are dropped wholesale (fail closed) rather than
+  // risking pre-join derived content in the room context.
+  const effectiveFocusCompactionRanges = roomWindowGated ? [] : params.focusCompactionRanges;
+  const effectiveFocusKnowledgeTexts = roomWindowGated ? [] : params.focusKnowledgeTexts;
+  const effectiveWakeReturnArtifacts = roomWindowGated
+    ? params.wakeReturnArtifacts.filter(
+      artifact => Date.parse(artifact.createdAt) >= roomWindowFloor,
+    )
+    : params.wakeReturnArtifacts;
   let recent = applyTemporalSessionHistoryWindow(
-    collected.entries,
+    windowedEntries,
     params.turnBudgetCharacteristics,
   );
-  const focusCompaction = applyFocusCompactionRanges(recent, params.focusCompactionRanges);
+  const focusCompaction = applyFocusCompactionRanges(recent, effectiveFocusCompactionRanges);
   recent = focusCompaction.entries;
   const intentionAppraisalArtifactCount = countIntentionAppraisalArtifacts(recent);
   recent = applyObservationMasking(
@@ -507,7 +540,7 @@ export async function captureTurnSessionContext(
   });
   recent = assembledHistory.verbatimEntries;
 
-  const continuityEntries = params.userId
+  const rawContinuityEntries = params.userId
     ? params.crossChannelContinuity.getMerged({
       canonicalUserId: params.userId,
       limit: params.config.continuityMessageLimit ?? DEFAULT_CONTINUITY_CONTEXT_LIMIT,
@@ -516,11 +549,20 @@ export async function captureTurnSessionContext(
       channelMeta: params.channelMeta,
     })
     : [];
+  // Continuity that ORIGINATED in this room must obey the same window: a
+  // mirrored pre-join room entry re-entering the room context would defeat the
+  // gate. Continuity from other channels is not room history and passes.
+  const continuityEntries = roomWindowGated
+    ? rawContinuityEntries.filter(entry => (
+      (entry.originChannelId ?? entry.channelId) !== params.channelId
+      || entry.timestamp >= roomWindowFloor
+    ))
+    : rawContinuityEntries;
   const orientationContinuityEntries = filterContinuityEntriesForChannel(
     params.sourceChannelId,
     continuityEntries,
   );
-  const orientationRecentActivityEntries = getOrientationRecentActivityEntries({
+  const rawOrientationRecentActivityEntries = getOrientationRecentActivityEntries({
     channelId: params.channelId,
     userId: params.userId,
     channelMeta: params.channelMeta,
@@ -529,14 +571,22 @@ export async function captureTurnSessionContext(
     config: params.config,
     crossChannelContinuity: params.crossChannelContinuity,
   });
+  // The orientation scan reads the raw store and its summaries feed the wake
+  // note — pre-window entries must not be summarized back into the room.
+  const orientationRecentActivityEntries = roomWindowGated
+    ? rawOrientationRecentActivityEntries.filter(entry => entry.timestamp >= roomWindowFloor)
+    : rawOrientationRecentActivityEntries;
+  // A compaction summary minted in an earlier presence window summarizes
+  // content from that window; gate on its creation time.
   const compactionSummaryTexts = params.store
     .getCompactionSummaries(params.channelId)
+    .filter(summary => !roomWindowGated || summary.createdAt >= roomWindowFloor)
     .map(summary => summary.summary);
   const orientation = buildOrientationNoteTelemetry({
     channelId: params.channelId,
     recentActivityEntries: orientationRecentActivityEntries,
     continuityEntries: orientationContinuityEntries,
-    focusKnowledgeTexts: params.focusKnowledgeTexts,
+    focusKnowledgeTexts: effectiveFocusKnowledgeTexts,
     characterName: params.characterName,
   });
 
@@ -544,6 +594,12 @@ export async function captureTurnSessionContext(
     channelId: params.channelId,
     recentEntries: recent.map(cloneSessionEntry),
     sourceEntryCount: collected.sourceCount,
+    ...(roomWindowGated
+      ? {
+        roomWindowFloorMs: roomWindowFloor,
+        roomWindowFilteredEntryCount,
+      }
+      : {}),
     ...(assembledHistory.summaryText
       ? { historySummaryText: assembledHistory.summaryText }
       : {}),
@@ -551,27 +607,28 @@ export async function captureTurnSessionContext(
       ? { historySummaryEntryCount: assembledHistory.summarizedEntryCount }
       : {}),
     compactionSummaryTexts: [...compactionSummaryTexts],
-    focusKnowledgeTexts: [...params.focusKnowledgeTexts],
+    focusKnowledgeTexts: [...effectiveFocusKnowledgeTexts],
     continuityEntries: continuityEntries.map(cloneSessionEntry),
-    wakeReturnArtifacts: params.wakeReturnArtifacts.map(cloneSessionContinuityArtifact),
+    wakeReturnArtifacts: effectiveWakeReturnArtifacts.map(cloneSessionContinuityArtifact),
     orientation,
     intentionAppraisalArtifactCount,
     compactionPromptText: params.compactionPromptText,
     versionPointer: buildSnapshotVersionPointer([
       params.channelId,
+      roomWindowGated ? `roomWindow:${roomWindowFloor}` : undefined,
       recent.at(-1)?.id,
       recent.at(-1)?.timestamp,
       assembledHistory.summaryText,
       assembledHistory.summarizedEntryCount,
       compactionSummaryTexts.join('\n'),
-      params.focusKnowledgeTexts.join('\n'),
+      effectiveFocusKnowledgeTexts.join('\n'),
       focusCompaction.compactedCount,
       continuityEntries.at(-1)?.id,
       continuityEntries.at(-1)?.timestamp,
-      params.wakeReturnArtifacts.at(0)?.id,
-      params.wakeReturnArtifacts.at(0)?.createdAt,
-      params.wakeReturnArtifacts.at(0)?.summary,
-      params.wakeReturnArtifacts.at(0)?.nextAnchor,
+      effectiveWakeReturnArtifacts.at(0)?.id,
+      effectiveWakeReturnArtifacts.at(0)?.createdAt,
+      effectiveWakeReturnArtifacts.at(0)?.summary,
+      effectiveWakeReturnArtifacts.at(0)?.nextAnchor,
       params.compactionPromptText,
       orientation.fired ? 'orientation:fired' : `orientation:${orientation.reason}`,
       orientation.idleGapMs,
@@ -971,9 +1028,11 @@ export async function buildSessionContext(params: BuildSessionContextParams): Pr
     historySummaryEntryCount,
   );
   const sessionMessageTokenCount = countMessageTokens(messages);
+  const roomWindowFilteredEntryCount = params.turnSessionContext.roomWindowFilteredEntryCount;
   const trimmedEntryCount = Math.max(
     0,
-    sourceEntryCount - recent.length - historySummaryEntryCount,
+    sourceEntryCount - recent.length - historySummaryEntryCount
+      - (roomWindowFilteredEntryCount ?? 0),
   );
   const seededMemoryHardLimit = params.memoryManifestSeed?.retrievalLimitMode === 'hard_limit'
     ? params.memoryManifestSeed.retrievalLimit
@@ -984,6 +1043,9 @@ export async function buildSessionContext(params: BuildSessionContextParams): Pr
     session: {
       sourceEntryCount,
       trimmedEntryCount,
+      ...(roomWindowFilteredEntryCount !== undefined
+        ? { roomWindowFilteredEntryCount }
+        : {}),
       maskedEntryCount: masking.maskedCount,
       compactedEntryCount: compactionManifest.compactedEntryCount,
       intentionAppraisalArtifactCount,

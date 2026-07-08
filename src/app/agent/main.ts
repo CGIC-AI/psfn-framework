@@ -53,6 +53,7 @@ import {
 import { createAgentPersistenceRuntime } from '../../persistence/runtime-factory.js';
 import { CompanionPresenceRuntime } from '../../core/agent/companion-presence-runtime.js';
 import { registerCompanionRoomEntryNotes } from '../../core/agent/companion-room-entry.js';
+import { createCompanionRoomContentWindowPort } from '../../core/agent/companion-room-window.js';
 import {
   resolveOutreachOutboxLedgerPath,
   resolvePendingContactApprovalsPath,
@@ -318,6 +319,18 @@ async function main(): Promise<void> {
       coPresence: (place) => companionPresenceRuntime.getCoPresent(place),
     });
     log.info('Companion room-entry notes wired to co-location events');
+
+    // Presence-windowed private-room delivery (psfn-framework-s10rm): the
+    // session layer serves a private companion-room channel only from this
+    // agent's CURRENT presence window (`since`) — a late joiner or rejoiner
+    // never sees pre-join content in context. Public places and every other
+    // channel resolve unwindowed (byte-identical). Flag-off, the port is
+    // never set and the session layer is untouched.
+    sessionManager.setRoomContentWindowPort(createCompanionRoomContentWindowPort({
+      placesRegistry: placesRegistryConfig,
+      presence: companionPresenceRuntime,
+    }));
+    log.info('Presence-windowed room content gate wired to session manager');
   }
 
   sessionManager.characterName = card.data.name;

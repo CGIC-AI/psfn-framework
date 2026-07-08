@@ -3,6 +3,7 @@ import {
   buildAutonomousActionMemoryContext,
   inferImportedMemoryType,
   initializeImportedMemorySalience,
+  memoryMatchesScopeQuery,
   normalizeMemoryProvenance,
 } from './types.js';
 
@@ -103,5 +104,53 @@ describe('memory import normalization policy', () => {
       sourceSpanStartMessageId: 12,
       sourceSpanEndMessageId: 14,
     });
+  });
+});
+
+describe('memoryMatchesScopeQuery', () => {
+  const scopedMemory = {
+    scopeRef: { kind: 'project', id: 'garden' },
+    scopeTags: ['project:garden'],
+  };
+
+  it('requires both refs and tags in only mode when both are specified', () => {
+    const query = {
+      refs: [{ kind: 'project', id: 'garden' }],
+      tags: ['project:atrium'],
+      mode: 'only' as const,
+    };
+    // Ref matches but the tag does not: only mode must reject.
+    expect(memoryMatchesScopeQuery(scopedMemory, query)).toBe(false);
+    // Tag matches but the ref does not: only mode must reject.
+    expect(memoryMatchesScopeQuery(scopedMemory, {
+      refs: [{ kind: 'project', id: 'atrium' }],
+      tags: ['project:garden'],
+      mode: 'only',
+    })).toBe(false);
+    // Both dimensions match: only mode accepts.
+    expect(memoryMatchesScopeQuery(scopedMemory, {
+      refs: [{ kind: 'project', id: 'garden' }],
+      tags: ['project:garden'],
+      mode: 'only',
+    })).toBe(true);
+  });
+
+  it('accepts a single specified dimension in only mode', () => {
+    expect(memoryMatchesScopeQuery(scopedMemory, {
+      refs: [{ kind: 'project', id: 'garden' }],
+      mode: 'only',
+    })).toBe(true);
+    expect(memoryMatchesScopeQuery(scopedMemory, {
+      tags: ['project:atrium'],
+      mode: 'only',
+    })).toBe(false);
+  });
+
+  it('keeps OR semantics for prefer mode', () => {
+    expect(memoryMatchesScopeQuery(scopedMemory, {
+      refs: [{ kind: 'project', id: 'atrium' }],
+      tags: ['project:garden'],
+      mode: 'prefer',
+    })).toBe(true);
   });
 });

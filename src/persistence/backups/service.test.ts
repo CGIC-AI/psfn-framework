@@ -60,6 +60,30 @@ function writeStubPgDump(root: string): string {
   return stubPath;
 }
 
+function writeRecordingStubPgDump(root: string): {
+  stubPath: string;
+  argvPath: string;
+  pgPasswordPath: string;
+} {
+  const stubPath = join(root, 'stub-pg-dump-recording.sh');
+  const argvPath = join(root, 'pg-dump-argv.txt');
+  const pgPasswordPath = join(root, 'pg-dump-pgpassword.txt');
+  writeFileSync(
+    stubPath,
+    [
+      '#!/bin/sh',
+      `printf '%s\\n' "$@" > '${argvPath}'`,
+      `printf '%s' "\${PGPASSWORD:-}" > '${pgPasswordPath}'`,
+      'out=""',
+      'for arg in "$@"; do case "$arg" in --file=*) out="${arg#--file=}";; esac; done',
+      'printf "stub-dump" > "$out"',
+      '',
+    ].join('\n'),
+    { mode: 0o755 },
+  );
+  return { stubPath, argvPath, pgPasswordPath };
+}
+
 function writeFailingStubPgDump(root: string): string {
   const stubPath = join(root, 'stub-pg-dump-fail.sh');
   writeFileSync(
@@ -232,6 +256,49 @@ describe('runBackupCycle', () => {
 
     expect(result.postgresDumpVerification).toBeDefined();
     expect(result.postgresDumpVerification?.tocEntryCount).toBe(2);
+  });
+
+  it('keeps Postgres credentials out of pg_dump argv and passes the password via PGPASSWORD', async () => {
+    const root = join(tmpdir(), `psfn-backup-pg-argv-${Date.now()}`);
+    roots.push(root);
+    const sessionsDir = join(root, 'sessions');
+    const backupRootDir = join(root, 'backups');
+    mkdirSync(sessionsDir, { recursive: true });
+    writeFileSync(join(sessionsDir, 'channel.jsonl'), '{}\n', 'utf-8');
+    const { stubPath, argvPath, pgPasswordPath } = writeRecordingStubPgDump(root);
+
+    const result = await runBackupCycle({
+      postgres: {
+        databaseUrl: 'postgresql://psfn:sup3r-secret@127.0.0.1:5432/psfn',
+        pgDumpBinary: stubPath,
+      },
+      sessionsDir,
+      backupRootDir,
+      now: () => Date.UTC(2026, 1, 26, 10, 11, 12, 123),
+    });
+
+    expect(existsSync(result.postgresDumpPath!)).toBe(true);
+    const argv = readFileSync(argvPath, 'utf-8');
+    expect(argv).not.toContain('sup3r-secret');
+    expect(argv).toContain('postgresql://psfn@127.0.0.1:5432/psfn');
+    expect(readFileSync(pgPasswordPath, 'utf-8')).toBe('sup3r-secret');
+  });
+
+  it('fails closed when the Postgres connection string is not a URL', async () => {
+    const root = join(tmpdir(), `psfn-backup-pg-nonurl-${Date.now()}`);
+    roots.push(root);
+    const sessionsDir = join(root, 'sessions');
+    mkdirSync(sessionsDir, { recursive: true });
+
+    await expect(runBackupCycle({
+      postgres: {
+        databaseUrl: 'host=127.0.0.1 dbname=psfn password=sup3r-secret',
+        pgDumpBinary: writeStubPgDump(root),
+      },
+      sessionsDir,
+      backupRootDir: join(root, 'backups'),
+      now: () => Date.UTC(2026, 1, 26, 10, 11, 12, 123),
+    })).rejects.toThrow('requires a URL connection string');
   });
 
   it('fails closed when pg_dump fails', async () => {

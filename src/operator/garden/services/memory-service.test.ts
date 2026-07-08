@@ -159,7 +159,7 @@ describe('AdminMemoryDataService', () => {
       memoryCount: 5,
     })]);
     // Every page request advances the offset by the rows actually returned.
-    expect(listAdminMemories.mock.calls.map(call => call[0]?.offset)).toEqual([0, 2, 4]);
+    expect(listAdminMemories.mock.calls.map(call => call[0].offset)).toEqual([0, 2, 4]);
 
     const detail = await service.forSession(OPERATOR_SESSION).getManagedScopeDetail('project', 'greenhouse');
     expect(detail?.scope.memoryCount).toBe(5);

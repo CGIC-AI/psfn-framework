@@ -192,7 +192,13 @@ function resolveStructuredFactRouting(
 
   const subject = resolveSubjectSpeaker(attribution, context.speakers);
   const roomContextScope = resolveRoomContextScope(attribution, context.entries);
-  if (attribution.subjectName && !subject && !attribution.subjectContactId) {
+  const subjectContactId = attribution.subjectContactId ?? subject?.contactId;
+  // A named subject whose contact could not be resolved — either no matching
+  // speaker, or a name-matched speaker that still lacks a contactId — must not
+  // fall back to the source speaker's contact, or the subject's fact would be
+  // misattributed to the source. Route room-scoped context where applicable,
+  // otherwise skip.
+  if (attribution.subjectName && !subjectContactId) {
     if (roomContextScope) {
       return buildStructuredRoute({
         attribution,
@@ -212,7 +218,6 @@ function resolveStructuredFactRouting(
     };
   }
 
-  const subjectContactId = attribution.subjectContactId ?? subject?.contactId;
   const routedContactId = subjectContactId ?? sourceSpeaker.contactId;
 
   return buildStructuredRoute({

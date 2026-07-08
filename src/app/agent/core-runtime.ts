@@ -313,6 +313,7 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
   registerFilesystemTools(agentLoop, new GatewayFilesystemOps(gatewayOps), { gatewayMode: true });
   const wikiRuntime = await wireWikiRuntime(agentLoop, pathSnapshot.workspaceRoot, {
     ...(config.postgresDatabaseUrl?.trim() ? { databaseUrl: config.postgresDatabaseUrl.trim() } : {}),
+    ...(config.postgresSchema?.trim() ? { postgresSchema: config.postgresSchema.trim() } : {}),
     embedding: gateway,
     eventBus,
     getConfig: () => config,

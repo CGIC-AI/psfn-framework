@@ -49,6 +49,14 @@ export interface WikiRuntimeDeps {
    * absence keeps retrieval scope unrestricted (byte-identical single-companion).
    */
   getMultiCompanion?: () => boolean;
+  /**
+   * Per-companion schema (multi-companion, sprint 10). Pins the personal
+   * projection pool's search_path so companion-private `wiki_document_chunks`
+   * rows never land in `public` and collide across companions. Absent =>
+   * byte-identical single-companion (default `public`). The shared-world
+   * projection ignores this: it always pins its own `shared` schema.
+   */
+  postgresSchema?: string;
 }
 
 export interface WikiRuntimeWiring {
@@ -83,6 +91,7 @@ export async function wireWikiRuntime(
     try {
       projection = await createWikiPgvectorProjectionStore(deps.databaseUrl, deps.embedding, {
         ...(deps.eventBus ? { eventBus: deps.eventBus } : {}),
+        ...(deps.postgresSchema ? { schema: deps.postgresSchema } : {}),
       });
     } catch (error) {
       log.warn('Wiki pgvector projection unavailable; semantic search disabled, text search still works', {

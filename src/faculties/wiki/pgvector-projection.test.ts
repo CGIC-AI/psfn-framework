@@ -1,9 +1,52 @@
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { EmbeddingProviderPort } from '../../core/agent/contracts.js';
 import {
   chunkWikiBody,
   computeWikiProjectionDrift,
+  createWikiPgvectorProjectionStore,
   DEFAULT_WIKI_CHUNK_MAX_CHARS,
 } from './pgvector-projection.js';
+
+// Schema-threading test seam: stub the Postgres port so the create function can
+// be exercised without a live database. Only the pool-construction call is under
+// test here; the pure chunk/drift tests below never touch these.
+const postgresMocks = vi.hoisted(() => ({
+  createPostgresPool: vi.fn(() => ({ query: vi.fn(async () => ({ rows: [] })) })),
+  ensurePostgresSchema: vi.fn(async () => undefined),
+}));
+
+vi.mock('../../persistence/postgres.js', () => ({
+  createPostgresPool: postgresMocks.createPostgresPool,
+  ensurePostgresSchema: postgresMocks.ensurePostgresSchema,
+  queryRows: vi.fn(async () => []),
+  withPostgresClient: vi.fn(),
+}));
+
+function fakeEmbedding(): EmbeddingProviderPort {
+  return { dims: 8, embed: vi.fn(), embedBatch: vi.fn() } as unknown as EmbeddingProviderPort;
+}
+
+describe('createWikiPgvectorProjectionStore (per-companion schema pinning, s10f9 reconciliation)', () => {
+  beforeEach(() => {
+    postgresMocks.createPostgresPool.mockClear();
+    postgresMocks.ensurePostgresSchema.mockClear();
+  });
+
+  it('pins the projection pool to the configured companion schema', async () => {
+    await createWikiPgvectorProjectionStore('postgres://db', fakeEmbedding(), { schema: 'companion_x' });
+    expect(postgresMocks.createPostgresPool).toHaveBeenCalledWith(
+      'postgres://db',
+      expect.objectContaining({ applicationName: 'psfn-wiki-projection', schema: 'companion_x' }),
+    );
+  });
+
+  it('omits the schema property entirely when none is configured (byte-identical single-companion)', async () => {
+    await createWikiPgvectorProjectionStore('postgres://db', fakeEmbedding(), {});
+    expect(postgresMocks.createPostgresPool).toHaveBeenCalledTimes(1);
+    const options = postgresMocks.createPostgresPool.mock.calls[0]?.[1];
+    expect(options).not.toHaveProperty('schema');
+  });
+});
 
 describe('chunkWikiBody', () => {
   it('splits on paragraph boundaries and preserves content order', () => {

@@ -50,6 +50,17 @@ export interface ContactTrustDriftApplyResult {
   reason: string;
 }
 
+/**
+ * Outcome of an atomic observation-driven machine-intelligence marking (E7.3).
+ * `override_preserved` means the latest `is_machine_intelligence` audit entry
+ * was a deliberate (non-`system:`) correction, so the observation did not write.
+ */
+export type MachineIntelligenceObservationMarkResult =
+  | 'marked'
+  | 'already_marked'
+  | 'override_preserved'
+  | 'not_found';
+
 export interface ContactStorePort {
   upsert(
     partial: Partial<Contact> & { displayName: string },
@@ -83,6 +94,15 @@ export interface ContactStorePort {
     options?: ContactTrustMutationOptions,
   ): Awaitable<boolean>;
   setMachineIntelligence(id: string, isMachineIntelligence: boolean, actor?: string): Awaitable<boolean>;
+  /**
+   * Atomically checks the latest `is_machine_intelligence` audit actor and sets
+   * the marker in the same critical section — a concurrent deliberate correction
+   * can never be clobbered by an observation (no check-then-write TOCTOU).
+   */
+  markMachineIntelligenceFromObservation(
+    id: string,
+    actor: string,
+  ): Awaitable<MachineIntelligenceObservationMarkResult>;
   updateLastSeen(id: string): Awaitable<void>;
   updateIdentityProfile(contactId: string, displayName: string, nickname?: string, actor?: string): Awaitable<boolean>;
   recordChannelActivity(

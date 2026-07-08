@@ -1,5 +1,6 @@
 import { isObjectRecord as isRecord } from '../../shared/utils/types.js';
 import { clampUnit } from '../../shared/utils/numeric.js';
+import { escapeXmlText } from '../../shared/utils/escaping.js';
 import { cloneInternalState, type InternalState } from './state.js';
 import { wrapPromptSectionXml } from '../identity/prompt-sections.js';
 
@@ -305,8 +306,10 @@ function detectAvoidanceFlag(
 
 function compactConcernExcerpt(text: string): string {
   const compact = text.replace(/\s+/g, ' ').trim();
-  if (compact.length <= 60) return compact;
-  return `${compact.slice(0, 57)}...`;
+  const truncated = compact.length <= 60 ? compact : `${compact.slice(0, 57)}...`;
+  // Concern text is free-form and flows into XML-wrapped prompt sections via
+  // flag evidence; escape after truncation so entities are never cut in half.
+  return escapeXmlText(truncated);
 }
 
 function detectHighEngagementFlag(

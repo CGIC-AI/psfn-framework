@@ -182,6 +182,27 @@ describe('weighted-thought outreach initiation', () => {
     expect(persisted.accumulatedWeight).toBeGreaterThan(0);
   });
 
+  it('persists decline dampening when an accepted nudge has blank content (no retry loop)', async () => {
+    const store = makeStore(strongThought());
+    const before = (await store.getById('wt-strong'))!.accumulatedWeight;
+    const evaluator = acceptEvaluator('   ');
+    const result = await runWeightedThoughtOutreachOnce(baseDeps(store, evaluator), T0);
+
+    expect(result.produced).toHaveLength(0);
+    expect(result.blocked).toEqual([
+      { thoughtId: 'wt-strong', reason: 'empty_nudge_content', channelId: 'dm-primary' },
+    ]);
+
+    const persisted = (await store.getById('wt-strong'))!;
+    expect(persisted.nudgeState).toBe('declined');
+    expect(persisted.accumulatedWeight).toBeCloseTo(before * 0.5, 6);
+
+    // The dampened thought no longer re-qualifies: the next run burns no LLM.
+    const second = await runWeightedThoughtOutreachOnce(baseDeps(store, evaluator), T0);
+    expect(second.nudgesEvaluated).toBe(0);
+    expect(evaluator.evaluate).toHaveBeenCalledTimes(1);
+  });
+
   it('respects quiet hours: defers with zero LLM', async () => {
     const quietHours: ProactiveQuietHoursConfig = {
       // T0 is 15:00 UTC — inside this window, which exits at 23:00.

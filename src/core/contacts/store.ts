@@ -37,6 +37,8 @@ import {
 import { createComponentLogger } from '../../shared/logger.js';
 import { writeJsonAtomic } from '../../shared/utils/fs.js';
 import { appendMutationAuditEntry, listMutationAuditEntries } from './store/audit.js';
+import { isDeliberateMachineIntelligenceCorrection } from './observed-machine-intelligence.js';
+import type { MachineIntelligenceObservationMarkResult } from './contact-store-port.js';
 import {
   appendEmotionalObservationToTimeSeries,
   computeUpdatedEmotionalBaseline,
@@ -591,6 +593,28 @@ export class ContactStore implements ContactStorePort {
       .run(isMachineIntelligence ? 1 : 0, id);
     appendMutationAuditEntry(this.db, id, 'is_machine_intelligence', String(current), String(isMachineIntelligence), actor);
     return true;
+  }
+
+  markMachineIntelligenceFromObservation(id: string, actor: string): MachineIntelligenceObservationMarkResult {
+    // Audit check + write share one immediate transaction so a deliberate
+    // operator correction can never land between check and write (charter law
+    // 26 — observation must not clobber the operator).
+    return this.db.transaction((): MachineIntelligenceObservationMarkResult => {
+      const latest = listMutationAuditEntries(this.db, {
+        contactId: id,
+        field: 'is_machine_intelligence',
+        limit: 1,
+      });
+      if (isDeliberateMachineIntelligenceCorrection(latest[0]?.actor)) {
+        return 'override_preserved';
+      }
+      const contact = this.getById(id);
+      if (!contact) return 'not_found';
+      if (contact.isMachineIntelligence === true) return 'already_marked';
+      this.db.prepare('UPDATE contacts SET is_machine_intelligence = 1 WHERE id = ?').run(id);
+      appendMutationAuditEntry(this.db, id, 'is_machine_intelligence', 'false', 'true', actor);
+      return 'marked';
+    }).immediate();
   }
 
   updateLastSeen(id: string): void {

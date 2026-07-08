@@ -280,6 +280,111 @@ describe('automated concern candidates', () => {
     expect(await concernStore.getActiveConcerns()).toHaveLength(7);
   });
 
+  it('attaches applied outcomes when apply fails partway through a batch', async () => {
+    const concernStore = makeConcernStore();
+    let createCalls = 0;
+    const flakyStore = {
+      ...concernStore,
+      create: (input: Parameters<typeof concernStore.create>[0]) => {
+        createCalls += 1;
+        if (createCalls === 2) {
+          throw new Error('transient store failure');
+        }
+        return concernStore.create(input);
+      },
+    };
+
+    const attempt = applyConcernCandidateReview({
+      concernStore: flakyStore,
+      candidates: [makeCandidate('a'), makeCandidate('b')],
+      decisions: [
+        { candidateId: 'a', action: 'create', reason: 'follow up soon' },
+        { candidateId: 'b', action: 'create', reason: 'follow up soon' },
+      ],
+      now: () => new Date('2026-06-29T12:00:00.000Z'),
+    });
+
+    await expect(attempt).rejects.toMatchObject({
+      name: 'ConcernCandidateApplyError',
+      failedCandidateId: 'b',
+      outcomes: [{ candidateId: 'a', status: 'created' }],
+    });
+    expect(await concernStore.getActiveConcerns()).toHaveLength(1);
+  });
+
+  it('requeues only unapplied candidates after a partial apply failure (no duplicate concerns on retry)', async () => {
+    const concernStore = makeConcernStore();
+    let createCalls = 0;
+    const flakyStore = {
+      ...concernStore,
+      create: (input: Parameters<typeof concernStore.create>[0]) => {
+        createCalls += 1;
+        if (createCalls === 2) {
+          throw new Error('transient store failure');
+        }
+        return concernStore.create(input);
+      },
+    };
+    const complete = vi.fn<LLMProviderPort['complete']>().mockImplementation(async () => ({
+      content: JSON.stringify({
+        decisions: [
+          { candidateId: 'a', action: 'create', reason: 'near-term follow-up' },
+          { candidateId: 'b', action: 'create', reason: 'near-term follow-up' },
+        ],
+      }),
+    }));
+    const queue = new ConcernCandidateQueue();
+    // Distinct texts so the store's similar-concern dedupe cannot mask a
+    // duplicate create — the retry must not re-create candidate 'a'.
+    queue.enqueueMany([
+      {
+        ...makeCandidate('a'),
+        title: 'Confirm Tuesday cardiology appointment logistics',
+        summary: 'Alex asked to confirm the cardiology appointment schedule.',
+      },
+      {
+        ...makeCandidate('b'),
+        title: 'Review database migration rollback checklist',
+        summary: 'The rollback checklist needs a fresh review before Friday.',
+      },
+    ]);
+    const worker = new ConcernCandidateWorker({
+      queue,
+      reviewer: new ConcernCandidateReviewer({ complete } as unknown as LLMProviderPort),
+      concernStore: flakyStore,
+    });
+
+    expect(worker.reviewPending().status).toBe('started');
+    await worker.waitForInFlight();
+
+    // Candidate 'a' was applied before the failure: it must NOT be requeued.
+    expect(queue.pendingCount()).toBe(1);
+    expect(await concernStore.getActiveConcerns()).toHaveLength(1);
+
+    // Retry drains only the unapplied candidate; queue gate needs >1 pending,
+    // so add a filler candidate and let the retry apply 'b' exactly once.
+    queue.enqueueMany([{
+      ...makeCandidate('c'),
+      title: 'Track hydration routine after medication change',
+      summary: 'Hydration follow up requested after the medication change.',
+    }]);
+    complete.mockImplementation(async () => ({
+      content: JSON.stringify({
+        decisions: [
+          { candidateId: 'b', action: 'create', reason: 'near-term follow-up' },
+          { candidateId: 'c', action: 'reject', reason: 'not enough signal' },
+        ],
+      }),
+    }));
+    expect(worker.reviewPending().status).toBe('started');
+    const retry = await worker.waitForInFlight();
+
+    expect(retry).toMatchObject({ status: 'completed', reviewedCount: 2 });
+    const active = await concernStore.getActiveConcerns();
+    expect(active).toHaveLength(2);
+    expect(active.filter(concern => concern.text.includes('cardiology'))).toHaveLength(1);
+  });
+
   it('allows explicit merge decisions even when the active concern cap is full', async () => {
     const concernStore = makeConcernStore();
     let targetConcernId = '';

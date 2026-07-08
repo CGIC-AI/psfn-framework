@@ -47,6 +47,10 @@ interface FrozenPromptPrefixCacheRecord extends FrozenPromptPrefix {
 export const STATIC_PROMPT_PREFIX_CACHE_KEY_PREFIX = 'prompt:static-prefix:v1:';
 const PROMPT_HASH_LENGTH = 16;
 const PROMPT_MACRO_PATTERN = /\{\{\s*([a-zA-Z0-9_.-]+(?:\(\))?)\s*\}\}/g;
+// {{#if var}} guard variables are referenced variables too: a guard-only
+// variable change alters the rendered output, so it must invalidate the
+// static-prefix cache and participate in macro cacheability classification.
+const PROMPT_MACRO_GUARD_PATTERN = /\{\{#if\s+([a-zA-Z0-9_.-]+(?:\(\))?)\s*\}\}/g;
 // Derived from the prompt macro manifest (PROMPT_RUNTIME_MACRO_HINTS): the clock
 // alias macros are the only tokens that re-render from the wall clock inside an
 // otherwise cached static prefix render. Other turn-volatile macros are rejected
@@ -73,6 +77,10 @@ function normalizePromptMacroToken(token: string): string {
 function collectPromptMacroTokens(text: string): string[] {
   const tokens = new Set<string>();
   text.replace(PROMPT_MACRO_PATTERN, (_match, rawToken: string) => {
+    tokens.add(normalizePromptMacroToken(rawToken));
+    return '';
+  });
+  text.replace(PROMPT_MACRO_GUARD_PATTERN, (_match, rawToken: string) => {
     tokens.add(normalizePromptMacroToken(rawToken));
     return '';
   });

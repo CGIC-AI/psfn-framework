@@ -117,6 +117,34 @@ describe('prompt-lifecycle cacheability', () => {
     expect(stableIdentityChange).not.toBe(baseline);
   });
 
+  it('includes {{#if}} guard variables in the static settings hash', () => {
+    const staticPrefixTemplate = [
+      '<identity>{{char_name}}</identity>',
+      '{{#if personality}}<style>Stay in voice.</style>{{/if}}',
+    ].join('\n');
+    const baseline = buildStaticPromptSettingsHash({
+      char_name: 'Companion',
+      personality: 'Warm and precise.',
+      user: 'Operator',
+    }, staticPrefixTemplate);
+    const guardVariableChange = buildStaticPromptSettingsHash({
+      char_name: 'Companion',
+      personality: '',
+      user: 'Operator',
+    }, staticPrefixTemplate);
+    const guardVariableSame = buildStaticPromptSettingsHash({
+      char_name: 'Companion',
+      personality: 'Warm and precise.',
+      user: 'Someone else — not referenced by the template',
+    }, staticPrefixTemplate);
+
+    // A variable used only inside a {{#if ...}} guard changes the rendered
+    // output, so it must invalidate the static-prefix cache.
+    expect(guardVariableChange).not.toBe(baseline);
+    // Unreferenced variables stay filtered out of the hash.
+    expect(guardVariableSame).toBe(baseline);
+  });
+
   it('annotates template sections with cacheability classes and breakers', () => {
     const promptComposer = {
       composeSplit: () => ({

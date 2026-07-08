@@ -101,7 +101,7 @@ Decided in review §3–§4:
 
 **One Garden per companion** — override of v1's fleet-router recommendation (UID-scoped routes + reworked UI data flow judged more complex than it's worth right now). Each companion gets its own Garden surface: today's operator-process shape × N, each bound to its companion's admin socket, ports/paths assigned from `companions.json`.
 
-**Add: a Garden fleet view** — an overall health view of all companions in one cluster (up/down, fatigue/charge posture), fed by the gateway's connection registry, linking out to each companion's Garden. Hosting lean: a thin page served by the gateway/operator side (remaining question Q-B).
+**Add: a Garden fleet view** — a thin gateway-served page (confirmed) giving an overall health view of all companions in one cluster: up/down, fatigue/charge posture, plus common health data — when things last ran, tool errors, etc. — fed by the gateway's connection registry and telemetry, linking out to each companion's Garden.
 
 Auth stays single-operator shared token; the operator is admin and can see everything (review §13).
 
@@ -112,7 +112,7 @@ Auth stays single-operator shared token; the operator is admin and can see every
 - **Rooms/environments are channels** with their own room ID; the room ID is part of a world ID. The session holds all info about who is present — exactly like existing Discord group rooms. Applies identically to virtual environments and physical ones (your house is one channel; virtual rooms behave like separate Discord rooms).
 - **Entry event:** a companion entering a room receives a **system-only message**: room ID, surroundings, who else is present.
 - **Public rooms:** participants see full conversation history.
-- **Private/invite rooms are time-gated:** someone joining later has no evidence of what happened before their join, and **memory generation is gated by join/exit times**. A private conversation stays private unless the participants choose to share it. (Implementation home: locations/session work — context manifests + session membership windows; the L0-extraction-respects-presence-intervals requirement is new and flagged in Q-C.)
+- **Private/invite rooms are time-gated — via delivery, not extraction filtering (decided):** entering a room, a companion receives chat only from entry until exit; their L0 naturally contains only what they saw while present, so downstream memory processing needs no new gating — you can only process the snippet you have. Someone joining later has no evidence of what happened before their join; a private conversation stays private unless participants choose to share it. **Exception: group chats** (public/group-marked channels), where everyone sees everything regardless of presence. Rationale for time-slicing over a simpler "public room = public info" rule: in-game/RP scenarios would break under the blanket rule. Memories can additionally be tagged with who they relate to and at what privacy level (already supported); expect tweaking, but presence-windowed delivery is the v1 mechanism.
 - **Navigation:** retro navigation via a top-level tool — the locations doc's `world` tool grows a `move` action that describes the environment and lists available rooms. Physical presence stays satellite-bound (see W7); `move` applies to virtual places.
 - **Cross-companion presence:** `companion_presence` in the **shared** schema (`companionId → siteId/placeId, kind: physical|virtual, since`), written on emanation/`move` changes, read by the situated-context block so "what do I perceive here" includes co-present companions; the durable authority behind the per-session presence view.
 - **Shared world wiki (review §8): world-info authority is separate from the companion core.** Companions *read* shared world info and *propose* writes — they never write directly. A **caretaker** layer (gateway-managed or a dedicated meta/assistant process) owns writes: deduplication, rebalancing, wiki rewrites, cleanup — mostly deterministic, some LLM-assisted. Flow: companion suggests entry → dedup → **operator approves** (human-in-the-loop) → independent background process keeps the space clean and evolving. The toaster test: tell one companion "I bought a new toaster, it's in the kitchen next to your satellite" → becomes world info → a second companion who wasn't present reads it later and knows. **No personal/memory information in the wiki, ever** — the caretaker/scrub layer enforces it (`filterPersonalFactProposals` is the existing deterministic guard) and drops companion-suggested entries containing personal info. Personal wiki stays in `companion-data/<id>/knowledge/wiki/`; scope filtering in `resolveWikiRetrievalPlan` keys off current place/site, so moving between areas swaps the shared scope without touching personal wiki. Coordinate with shared-world wiki MVP bead `psfn-framework-i5s2`. **Cross-cluster world sync: out of scope — one world = one cluster** (review §8, deferred in §7).
@@ -175,12 +175,12 @@ All twelve v1 open questions are resolved except the four in §6:
 
 Also confirmed: companion privacy leaks must surface loudly; full-review style approved.
 
-## 6. Remaining open questions
+## 6. Remaining open questions — all resolved (2026-07-08 follow-up)
 
-- **Q-A (config mirror):** mirror per-companion config into the DB for live read/update with files as write-time source of truth (review §3 open point) — v1 lean: files only, add the mirror when a concrete live-read need appears.
-- **Q-B (fleet view hosting):** where does the fleet-health view live given one-Garden-per-companion — gateway-served page (lean) vs. a small dedicated operator surface?
-- **Q-C (time-gated private-room memory):** gating memory generation by join/exit times means L0 extraction must respect per-participant presence intervals — new requirement on the extraction pipeline; belongs to locations/session work per the §14 rule, but needs explicit design there.
-- **Q-D (fleet charge ceiling):** per-companion lane quotas first; is a gateway-side aggregate ceiling needed once N companions heartbeat concurrently? Observe, then decide.
+- **Q-A (config mirror):** ✅ v1 is files only; add a DB mirror later if a concrete live-read need appears.
+- **Q-B (fleet view hosting):** ✅ gateway-served thin page, pulling common health data (last runs, tool errors, fatigue/charge posture) — see W4.
+- **Q-C (time-gated private-room memory):** ✅ solved by **presence-windowed delivery**, not extraction filtering: a companion only receives room chat between entry and exit, so L0 only ever holds what they witnessed — no extraction-pipeline change needed. Group chats are the exception (everyone sees all). Memories additionally carry who-it-relates-to + privacy-level tags for later tweaking. See W5.
+- **Q-D (fleet charge ceiling):** ✅ per-companion quotas are enough for now; a cluster-total budget is a possible later addition.
 
 ## 7. Deferred / follow-ups (tracked, not scoped into this sprint)
 
@@ -205,6 +205,6 @@ Per review §17:
 
 ## 9. Immediate next actions
 
-1. File the epic + issues in beads (from a checkout that reaches the beads server — `bd` has no database in this sandbox): locations-first ordering, W1–W7 as above, §7 follow-ups as future-idea beads.
-2. Fold the Q-C requirement (presence-interval-gated memory extraction) into the locations epic's session/context workstream.
+1. File the epic + issues in beads: locations-first ordering, W1–W7 as above, §7 follow-ups as future-idea beads.
+2. Fold the presence-windowed room delivery requirement (Q-C resolution) into the locations epic's session/context workstream.
 3. Spike (post-locations-threshold, or earlier if it doesn't touch location seams): two agent processes against one gateway with a hand-edited routing table — validates W1 and yields the first two-companion conversation demo.

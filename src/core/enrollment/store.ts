@@ -1,14 +1,30 @@
-import type Database from 'better-sqlite3';
+import { Pool } from 'pg';
+import {
+  createPostgresPool,
+  ensurePostgresSchema,
+  queryOne,
+  queryRows,
+  withPostgresClient,
+} from '../../persistence/postgres.js';
+import { POSTGRES_ENROLLMENT_MIGRATIONS } from '../../persistence/postgres/migrations.js';
 import type { HubIdentityEnrollmentStorePort } from './enrollment-store-port.js';
-import { initializeHubIdentityEnrollmentSchema } from './schema.js';
 import type {
   HubIdentityEnrollment,
-  HubIdentityEnrollmentAuditAction,
   HubIdentityEnrollmentAuditEntry,
   HubIdentityEnrollmentAuditQuery,
   HubIdentityEnrollmentInput,
   HubIdentityResolution,
 } from './types.js';
+
+/**
+ * Canonical Postgres persistence for hub-identity ↔ contact enrollment
+ * bindings (Sprint 10 D2a). PSFN runtime persistence is Postgres-only; the
+ * durable schema lives in {@link POSTGRES_ENROLLMENT_MIGRATIONS}. Biometrics
+ * stay at the Satellite Hub — core stores only the opaque handle → contact
+ * binding plus an audit trail. Fail-closed contact-existence policy lives one
+ * layer up in {@link HubIdentityEnrollmentService}; this store owns only durable
+ * storage behind the narrow {@link HubIdentityEnrollmentStorePort} seam.
+ */
 
 interface EnrollmentRow {
   hub_identity_id: string;
@@ -23,7 +39,7 @@ interface EnrollmentRow {
 }
 
 interface AuditRow {
-  id: number;
+  id: string | number;
   hub_identity_id: string;
   contact_id: string;
   action: string;
@@ -37,22 +53,6 @@ function normalizeActor(actor: string | undefined): string {
   const trimmed = actor?.trim();
   if (!trimmed) return 'system:unknown';
   return trimmed.slice(0, 120);
-}
-
-function requireHandle(hubIdentityId: string): string {
-  const trimmed = hubIdentityId.trim();
-  if (!trimmed) {
-    throw new Error('hubIdentityId is required and must be a non-empty opaque handle');
-  }
-  return trimmed;
-}
-
-function requireContactId(contactId: string): string {
-  const trimmed = contactId.trim();
-  if (!trimmed) {
-    throw new Error('canonicalContactId is required');
-  }
-  return trimmed;
 }
 
 function toEnrollment(row: EnrollmentRow): HubIdentityEnrollment {
@@ -71,7 +71,7 @@ function toEnrollment(row: EnrollmentRow): HubIdentityEnrollment {
 
 function toAuditEntry(row: AuditRow): HubIdentityEnrollmentAuditEntry {
   return {
-    id: row.id,
+    id: Number(row.id),
     hubIdentityId: row.hub_identity_id,
     contactId: row.contact_id,
     action: row.action === 'revoke' ? 'revoke' : 'enroll',
@@ -82,188 +82,201 @@ function toAuditEntry(row: AuditRow): HubIdentityEnrollmentAuditEntry {
   };
 }
 
-/**
- * Synchronous SQLite implementation. The async {@link HubIdentityEnrollmentStorePort}
- * wrapper is produced by {@link createSQLiteHubIdentityEnrollmentStore}.
- */
-export class HubIdentityEnrollmentStore {
-  constructor(private readonly db: Database.Database) {
-    initializeHubIdentityEnrollmentSchema(db);
-  }
+export class PostgresHubIdentityEnrollmentStore implements HubIdentityEnrollmentStorePort {
+  constructor(private readonly pool: Pool) {}
 
-  private appendAudit(
-    hubIdentityId: string,
-    contactId: string,
-    action: HubIdentityEnrollmentAuditAction,
-    actor: string,
-    satelliteId: string | null,
-    endpointId: string | null,
-  ): void {
-    this.db.prepare(`
-      INSERT INTO hub_identity_enrollment_audit (
-        hub_identity_id, contact_id, action, actor, satellite_id, endpoint_id, timestamp
-      ) VALUES (?, ?, ?, ?, ?, ?, ?)
-    `).run(hubIdentityId, contactId, action, actor, satelliteId, endpointId, new Date().toISOString());
-  }
-
-  enroll(input: HubIdentityEnrollmentInput): HubIdentityEnrollment {
-    const hubIdentityId = requireHandle(input.hubIdentityId);
-    const contactId = requireContactId(input.canonicalContactId);
+  async enroll(input: HubIdentityEnrollmentInput): Promise<HubIdentityEnrollment> {
+    const hubIdentityId = input.hubIdentityId.trim();
+    if (!hubIdentityId) {
+      throw new Error('hubIdentityId is required and must be a non-empty opaque handle');
+    }
+    const contactId = input.canonicalContactId.trim();
+    if (!contactId) {
+      throw new Error('canonicalContactId is required');
+    }
     const actor = normalizeActor(input.actor);
     const satelliteId = input.satelliteId?.trim() || null;
     const endpointId = input.endpointId?.trim() || null;
+    const now = new Date().toISOString();
 
-    return this.db.transaction((): HubIdentityEnrollment => {
-      const existing = this.db.prepare(
-        'SELECT * FROM hub_identity_enrollments WHERE hub_identity_id = ?',
-      ).get(hubIdentityId) as EnrollmentRow | undefined;
+    return withPostgresClient(this.pool, async (client) => {
+      const existing = (await client.query<EnrollmentRow>(
+        'SELECT * FROM hub_identity_enrollments WHERE hub_identity_id = $1',
+        [hubIdentityId],
+      )).rows.at(0);
 
-      // Fail closed: an active binding may never be silently re-pointed at a
-      // different contact. The owner must revoke first.
       if (existing && existing.status === 'enrolled' && existing.contact_id !== contactId) {
         throw new Error(
           `hub identity ${hubIdentityId} is already enrolled to a different contact; revoke it before re-binding`,
         );
       }
 
-      const now = new Date().toISOString();
-      this.db.prepare(`
+      await client.query(
+        `
         INSERT INTO hub_identity_enrollments (
           hub_identity_id, contact_id, status, satellite_id, endpoint_id,
           enrolled_by, enrolled_at, revoked_by, revoked_at
-        ) VALUES (?, ?, 'enrolled', ?, ?, ?, ?, NULL, NULL)
-        ON CONFLICT(hub_identity_id) DO UPDATE SET
-          contact_id = excluded.contact_id,
+        ) VALUES ($1, $2, 'enrolled', $3, $4, $5, $6, NULL, NULL)
+        ON CONFLICT (hub_identity_id) DO UPDATE SET
+          contact_id = EXCLUDED.contact_id,
           status = 'enrolled',
-          satellite_id = excluded.satellite_id,
-          endpoint_id = excluded.endpoint_id,
-          enrolled_by = excluded.enrolled_by,
-          enrolled_at = excluded.enrolled_at,
+          satellite_id = EXCLUDED.satellite_id,
+          endpoint_id = EXCLUDED.endpoint_id,
+          enrolled_by = EXCLUDED.enrolled_by,
+          enrolled_at = EXCLUDED.enrolled_at,
           revoked_by = NULL,
           revoked_at = NULL
-      `).run(hubIdentityId, contactId, satelliteId, endpointId, actor, now);
+        `,
+        [hubIdentityId, contactId, satelliteId, endpointId, actor, now],
+      );
 
-      this.appendAudit(hubIdentityId, contactId, 'enroll', actor, satelliteId, endpointId);
+      await client.query(
+        `
+        INSERT INTO hub_identity_enrollment_audit (
+          hub_identity_id, contact_id, action, actor, satellite_id, endpoint_id, timestamp
+        ) VALUES ($1, $2, 'enroll', $3, $4, $5, $6)
+        `,
+        [hubIdentityId, contactId, actor, satelliteId, endpointId, new Date().toISOString()],
+      );
 
-      const row = this.db.prepare(
-        'SELECT * FROM hub_identity_enrollments WHERE hub_identity_id = ?',
-      ).get(hubIdentityId) as EnrollmentRow;
+      const row = (await client.query<EnrollmentRow>(
+        'SELECT * FROM hub_identity_enrollments WHERE hub_identity_id = $1',
+        [hubIdentityId],
+      )).rows[0];
       return toEnrollment(row);
-    })();
+    });
   }
 
-  revoke(hubIdentityId: string, actor?: string): boolean {
-    const handle = requireHandle(hubIdentityId);
+  async revoke(hubIdentityId: string, actor?: string): Promise<boolean> {
+    const handle = hubIdentityId.trim();
+    if (!handle) {
+      throw new Error('hubIdentityId is required and must be a non-empty opaque handle');
+    }
     const normalizedActor = normalizeActor(actor);
 
-    return this.db.transaction((): boolean => {
-      const existing = this.db.prepare(
-        'SELECT * FROM hub_identity_enrollments WHERE hub_identity_id = ?',
-      ).get(handle) as EnrollmentRow | undefined;
-
+    return withPostgresClient(this.pool, async (client) => {
+      const existing = (await client.query<EnrollmentRow>(
+        'SELECT * FROM hub_identity_enrollments WHERE hub_identity_id = $1',
+        [handle],
+      )).rows.at(0);
       if (!existing || existing.status !== 'enrolled') {
         return false;
       }
 
-      const now = new Date().toISOString();
-      this.db.prepare(`
+      await client.query(
+        `
         UPDATE hub_identity_enrollments
-        SET status = 'revoked', revoked_by = ?, revoked_at = ?
-        WHERE hub_identity_id = ?
-      `).run(normalizedActor, now, handle);
-
-      this.appendAudit(
-        handle,
-        existing.contact_id,
-        'revoke',
-        normalizedActor,
-        existing.satellite_id,
-        existing.endpoint_id,
+        SET status = 'revoked', revoked_by = $1, revoked_at = $2
+        WHERE hub_identity_id = $3
+        `,
+        [normalizedActor, new Date().toISOString(), handle],
+      );
+      await client.query(
+        `
+        INSERT INTO hub_identity_enrollment_audit (
+          hub_identity_id, contact_id, action, actor, satellite_id, endpoint_id, timestamp
+        ) VALUES ($1, $2, 'revoke', $3, $4, $5, $6)
+        `,
+        [handle, existing.contact_id, normalizedActor, existing.satellite_id, existing.endpoint_id, new Date().toISOString()],
       );
       return true;
-    })();
+    });
   }
 
-  resolve(hubIdentityId: string): HubIdentityResolution {
+  async resolve(hubIdentityId: string): Promise<HubIdentityResolution> {
     const trimmed = hubIdentityId.trim();
     if (!trimmed) return { status: 'unenrolled' };
-    const row = this.db.prepare(
-      "SELECT * FROM hub_identity_enrollments WHERE hub_identity_id = ? AND status = 'enrolled'",
-    ).get(trimmed) as EnrollmentRow | undefined;
+    const row = await queryOne<EnrollmentRow>(
+      this.pool,
+      "SELECT * FROM hub_identity_enrollments WHERE hub_identity_id = $1 AND status = 'enrolled'",
+      [trimmed],
+    );
     if (!row) return { status: 'unenrolled' };
     return { status: 'enrolled', binding: toEnrollment(row) };
   }
 
-  getBinding(hubIdentityId: string): HubIdentityEnrollment | undefined {
+  async getBinding(hubIdentityId: string): Promise<HubIdentityEnrollment | undefined> {
     const trimmed = hubIdentityId.trim();
     if (!trimmed) return undefined;
-    const row = this.db.prepare(
-      'SELECT * FROM hub_identity_enrollments WHERE hub_identity_id = ?',
-    ).get(trimmed) as EnrollmentRow | undefined;
+    const row = await queryOne<EnrollmentRow>(
+      this.pool,
+      'SELECT * FROM hub_identity_enrollments WHERE hub_identity_id = $1',
+      [trimmed],
+    );
     return row ? toEnrollment(row) : undefined;
   }
 
-  listByContact(contactId: string): HubIdentityEnrollment[] {
+  async listByContact(contactId: string): Promise<HubIdentityEnrollment[]> {
     const trimmed = contactId.trim();
     if (!trimmed) return [];
-    const rows = this.db.prepare(
-      'SELECT * FROM hub_identity_enrollments WHERE contact_id = ? ORDER BY enrolled_at DESC',
-    ).all(trimmed) as EnrollmentRow[];
+    const rows = await queryRows<EnrollmentRow>(
+      this.pool,
+      'SELECT * FROM hub_identity_enrollments WHERE contact_id = $1 ORDER BY enrolled_at DESC',
+      [trimmed],
+    );
     return rows.map(toEnrollment);
   }
 
-  listAll(): HubIdentityEnrollment[] {
-    const rows = this.db.prepare(
+  async listAll(): Promise<HubIdentityEnrollment[]> {
+    const rows = await queryRows<EnrollmentRow>(
+      this.pool,
       'SELECT * FROM hub_identity_enrollments ORDER BY enrolled_at DESC',
-    ).all() as EnrollmentRow[];
+    );
     return rows.map(toEnrollment);
   }
 
-  listAudit(query: HubIdentityEnrollmentAuditQuery = {}): HubIdentityEnrollmentAuditEntry[] {
+  async listAudit(query: HubIdentityEnrollmentAuditQuery = {}): Promise<HubIdentityEnrollmentAuditEntry[]> {
     const limit = Number.isFinite(query.limit)
       ? Math.max(1, Math.min(Math.floor(query.limit ?? 50), 200))
       : 50;
     const clauses: string[] = [];
     const params: Array<string | number> = [];
+    let index = 1;
 
     const handle = query.hubIdentityId?.trim();
     if (handle) {
-      clauses.push('hub_identity_id = ?');
+      clauses.push(`hub_identity_id = $${index++}`);
       params.push(handle);
     }
     const contactId = query.contactId?.trim();
     if (contactId) {
-      clauses.push('contact_id = ?');
+      clauses.push(`contact_id = $${index++}`);
       params.push(contactId);
     }
     if (query.action) {
-      clauses.push('action = ?');
+      clauses.push(`action = $${index++}`);
       params.push(query.action);
     }
 
     const where = clauses.length > 0 ? `WHERE ${clauses.join(' AND ')}` : '';
-    const rows = this.db.prepare(`
+    const rows = await queryRows<AuditRow>(
+      this.pool,
+      `
       SELECT id, hub_identity_id, contact_id, action, actor, satellite_id, endpoint_id, timestamp
       FROM hub_identity_enrollment_audit
       ${where}
       ORDER BY timestamp DESC, id DESC
-      LIMIT ?
-    `).all(...params, limit) as AuditRow[];
+      LIMIT $${index}
+      `,
+      [...params, limit],
+    );
     return rows.map(toAuditEntry);
   }
 }
 
-export function createSQLiteHubIdentityEnrollmentStore(
-  db: Database.Database,
-): HubIdentityEnrollmentStorePort {
-  const store = new HubIdentityEnrollmentStore(db);
-  return {
-    enroll: async (input) => store.enroll(input),
-    revoke: async (hubIdentityId, actor) => store.revoke(hubIdentityId, actor),
-    resolve: async (hubIdentityId) => store.resolve(hubIdentityId),
-    getBinding: async (hubIdentityId) => store.getBinding(hubIdentityId),
-    listByContact: async (contactId) => store.listByContact(contactId),
-    listAll: async () => store.listAll(),
-    listAudit: async (query) => store.listAudit(query),
-  };
+export interface PostgresHubIdentityEnrollmentStoreOptions {
+  pool?: Pool;
+  applicationName?: string;
+}
+
+export async function createPostgresHubIdentityEnrollmentStore(
+  databaseUrl: string,
+  options: PostgresHubIdentityEnrollmentStoreOptions = {},
+): Promise<HubIdentityEnrollmentStorePort> {
+  const pool = options.pool ?? createPostgresPool(databaseUrl, {
+    applicationName: options.applicationName ?? 'psfn-enrollment',
+    allowExitOnIdle: true,
+  });
+  await ensurePostgresSchema(pool, POSTGRES_ENROLLMENT_MIGRATIONS);
+  return new PostgresHubIdentityEnrollmentStore(pool);
 }

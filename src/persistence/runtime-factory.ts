@@ -7,7 +7,7 @@ import {
 } from '../faculties/memory/episodic/index.js';
 import { createPostgresContactStore } from '../core/contacts/postgres-adapter.js';
 import type { ContactStorePort } from '../core/contacts/contact-store-port.js';
-import { createPostgresHubIdentityEnrollmentStore } from '../core/enrollment/postgres-adapter.js';
+import { createPostgresHubIdentityEnrollmentStore } from '../core/enrollment/store.js';
 import type { HubIdentityEnrollmentStorePort } from '../core/enrollment/enrollment-store-port.js';
 import { createPostgresIntentionPorts } from '../core/intention/postgres-adapters.js';
 import type {

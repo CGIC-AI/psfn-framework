@@ -136,6 +136,36 @@ describe('AdminMemoryDataService', () => {
     });
   });
 
+  it('pages managed-scope memory scans past the store page clamp', async () => {
+    // Simulates the Postgres listAdminMemories clamp: at most 2 rows per
+    // page here, regardless of the requested limit.
+    const clampedPageSize = 2;
+    const scoped = Array.from({ length: 5 }, (_, index) => makeMemory(`scoped-${index}`, {
+      scopeRef: { kind: 'project', id: 'greenhouse', label: 'Greenhouse' },
+      scopeTags: ['project:greenhouse'],
+    }));
+    const listAdminMemories = vi.fn(async (options: { limit: number; offset: number }) => ({
+      memories: scoped.slice(options.offset, options.offset + Math.min(options.limit, clampedPageSize)),
+      total: scoped.length,
+      privacySummary: makePrivacySummary(),
+    }));
+    const memoryStore = { listAdminMemories } as unknown as MemoryStorePort;
+    const service = new AdminMemoryDataService({ memoryStore });
+
+    const scopes = await service.forSession(OPERATOR_SESSION).listManagedScopes();
+    expect(scopes.scopes).toEqual([expect.objectContaining({
+      kind: 'project',
+      id: 'greenhouse',
+      memoryCount: 5,
+    })]);
+    // Every page request advances the offset by the rows actually returned.
+    expect(listAdminMemories.mock.calls.map(call => call[0]?.offset)).toEqual([0, 2, 4]);
+
+    const detail = await service.forSession(OPERATOR_SESSION).getManagedScopeDetail('project', 'greenhouse');
+    expect(detail?.scope.memoryCount).toBe(5);
+    expect(detail?.memories).toHaveLength(5);
+  });
+
   it('delegates retention-class bulk updates to the memory store bulk path', async () => {
     const memoryStore = {
       bulkUpdate: vi.fn(async () => 2),

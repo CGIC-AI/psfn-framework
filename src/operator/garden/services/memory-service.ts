@@ -15,7 +15,9 @@ import {
   VALID_MEMORY_TYPES,
   type MemoryRetentionClass,
   type MemoryType,
+  type PurrMemory,
 } from '../../../faculties/memory/types.js';
+import { createComponentLogger } from '../../../shared/logger.js';
 import { VALID_SENSITIVITY_LEVELS, type SensitivityLevel } from '../../../system/trust/types.js';
 import {
   collectSharedBackgroundUnion,
@@ -50,9 +52,13 @@ import type {
   MemoryMutationResult,
 } from './types.js';
 
+const log = createComponentLogger('AdminMemoryService');
+
 const DEFAULT_MEMORY_LIST_LIMIT = 50;
 const MAX_MEMORY_LIST_LIMIT = 200;
 const MAX_MANAGED_SCOPE_MEMORY_SCAN = 100_000;
+/** Matches the store-side listAdminMemories clamp so every page is full. */
+const MANAGED_SCOPE_MEMORY_PAGE_SIZE = 500;
 
 function parseMemoryTypeFilter(value: string | null | undefined): MemoryType | undefined {
   if (!value) return undefined;
@@ -218,11 +224,32 @@ export class AdminMemoryDataService implements AdminMemoryService {
     return map;
   }
 
-  private async listManagedScopeMemories() {
-    return (await this.deps.memoryStore.listAdminMemories({
-      limit: MAX_MANAGED_SCOPE_MEMORY_SCAN,
-      offset: 0,
-    })).memories;
+  private async listManagedScopeMemories(): Promise<PurrMemory[]> {
+    // Stores clamp listAdminMemories page sizes (Postgres caps at 500), so a
+    // single oversized request silently misses older memories. Page through
+    // the store until it is exhausted, bounded by the managed-scope scan cap.
+    const collected: PurrMemory[] = [];
+    let offset = 0;
+    let total = 0;
+    while (collected.length < MAX_MANAGED_SCOPE_MEMORY_SCAN) {
+      const page = await this.deps.memoryStore.listAdminMemories({
+        limit: MANAGED_SCOPE_MEMORY_PAGE_SIZE,
+        offset,
+      });
+      total = page.total;
+      if (page.memories.length === 0) break;
+      collected.push(...page.memories);
+      offset += page.memories.length;
+      if (offset >= page.total) break;
+    }
+    if (collected.length >= MAX_MANAGED_SCOPE_MEMORY_SCAN && total > collected.length) {
+      log.warn('Managed-scope memory scan hit its cap; scope counts exclude the overflow', {
+        cap: MAX_MANAGED_SCOPE_MEMORY_SCAN,
+        total,
+      });
+      collected.length = MAX_MANAGED_SCOPE_MEMORY_SCAN;
+    }
+    return collected;
   }
 
   private buildScopeAssignments(

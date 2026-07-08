@@ -171,7 +171,7 @@ Quick diagnostics for "she did not reply":
 ## Streamed tool-call argument accumulation (gu8m)
 
 Symptom: first-party required-action tools (`memory`, `orient`, `journal`,
-`scratchpad`, `toolset`, `notify`, `media`, `subagent`, `web`) intermittently
+`scratchpad`, `toolset`, `notify`, `generate_image`, `subagent`, `web`) intermittently
 executed with empty arguments — tools with a required `action` failed schema
 validation (`must have required property 'action'`), tools with a defaulted
 action silently ran as `list`/`status`. Every affected tool call recorded

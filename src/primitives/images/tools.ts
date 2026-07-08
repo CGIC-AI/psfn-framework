@@ -35,6 +35,7 @@ const IMAGE_ASPECT_RATIO_DESCRIPTION = [
   'Common values: 1:1 square, 3:4 portrait, 9:16 story, 4:3 landscape, 16:9 wide.',
   'Use only one of the supported presets.',
 ].join(' ');
+const GENERATE_IMAGE_TOOL_NAME = 'generate_image';
 const MEDIA_ACTION_VALUES = ['generate', 'edit', 'analyze'] as const;
 
 // Reference-selfie edit tiers come from the image model catalog. Every tier is
@@ -171,6 +172,9 @@ function buildToolContent(
 function providerPreferenceSchema() {
   return Type.Optional(Type.Union(
     IMAGE_PROVIDER_PREFERENCE_VALUES.map((value) => Type.Literal(value)),
+    {
+      description: 'Optional provider preference: auto picks the configured default, fal is the paid hosted provider, comfyui is the local pipeline.',
+    },
   ));
 }
 
@@ -220,7 +224,7 @@ function resolveMismatchedCurrentTurnUrlNotice(imageUrls: readonly string[]): st
 
     return [
       'Current turn already includes live image attachment bytes.',
-      'The URL passed to media action="analyze" does not match a current-turn attachment and may be stale or refer to a different image.',
+      `The URL passed to ${GENERATE_IMAGE_TOOL_NAME} action="analyze" does not match a current-turn attachment and may be stale or refer to a different image.`,
       'Do not use a mismatched prior-turn URL for this turn.',
       'Inspect the current attached image already in context, or ask the user to resend or paste the specific URL if they want a different image checked.',
     ].join(' ');
@@ -253,16 +257,16 @@ function resolveCurrentTurnVisionReviewFallback(
 
 function buildImageCreateDescription(selfImage: boolean): string {
   if (selfImage) {
-    return 'Generate a dedicated selfie or self-portrait of the companion. Requires prompt. Use this path for her own representation so appearance context and saved-reference anchoring are active. Default behavior uses the configured reference photo; set use_reference_image=false only when the user explicitly wants no saved reference, or use reference_image_id/reference_image_tags to choose one. Results include a vision review.';
+    return 'Send a selfie or self-portrait of yourself. Use it when the user wants an image OF YOU: "send me a selfie", "what do you look like right now", "show yourself in a summer dress". Requires prompt: combine your appearance context with pose, camera angle, lighting, background, and style; the saved-reference anchoring keeps your face consistent by default (set use_reference_image=false only if explicitly asked). Do NOT use this for anything that is not you — other people, scenes, objects, and photo edits belong to generate_image.';
   }
-  return 'Generate a new image. Write the prompt as the full image you want to create, including subject, framing, pose, lighting, setting, mood, and style. For selfies or self-portraits, use the first-class selfie_create tool instead of this generic path. Common aspect ratios: 1:1, 3:4, 9:16, 4:3, 16:9. Successful generations also return a vision review of the produced image, so use that instead of asking the user to check whether it looks like you unless you need their aesthetic preference.';
+  return 'Generate a new image. Write the prompt as the full image you want to create, including subject, framing, pose, lighting, setting, mood, and style. For selfies or self-portraits of yourself, use the first-class selfie_create tool instead of this generic path. Common aspect ratios: 1:1, 3:4, 9:16, 4:3, 16:9. Successful generations also return a vision review of the produced image, so use that instead of asking the user to check whether it looks like you unless you need their aesthetic preference.';
 }
 
 function buildImageCreatePromptDescription(selfImage: boolean): string {
   if (selfImage) {
     return 'Full generation prompt for a selfie or self-portrait. Combine the always-on appearance context with the desired pose, camera angle, lighting, background, and style.';
   }
-  return 'Full generation prompt. For selfies or self-portraits, use the first-class selfie_create tool instead of this generic path.';
+  return 'Full generation prompt. For selfies or self-portraits of yourself, use the first-class selfie_create tool instead of this generic path.';
 }
 
 function referenceSelectionSchema() {
@@ -498,6 +502,24 @@ function buildSelfImageContentPolicyFallbackPrompt(prompt: string): string {
   ].join(' ');
 }
 
+function resolveInvalidFalModelError(
+  action: 'generate' | 'edit',
+  provider: MediaToolParams['provider'],
+  model: string | undefined,
+  validModels: readonly string[],
+): AgentToolResult<MediaToolResultDetails> | null {
+  if (provider === 'comfyui') return null;
+  const normalizedModel = model?.trim();
+  if (!normalizedModel) return null;
+  if ((validModels as readonly string[]).includes(normalizedModel)) return null;
+  return textResultWithError(
+    `Invalid "model" value "${normalizedModel}" for ${GENERATE_IMAGE_TOOL_NAME} action="${action}". `
+    + `Valid ${action === 'generate' ? 'generation' : 'edit'} models: ${validModels.join(', ')}. `
+    + 'Omit "model" to use the default model chain, or set provider="comfyui" for a local ComfyUI model.',
+    true,
+  );
+}
+
 async function executeMediaGenerate(
   ops: ImageOperations,
   reviewer: ImageVisionReviewer | undefined,
@@ -507,11 +529,19 @@ async function executeMediaGenerate(
   const prompt = normalizePrompt(params.prompt);
   if (!prompt) {
     return textResultWithError(
-      'Missing required field "prompt" for media action="generate". '
+      `Missing required field "prompt" for ${GENERATE_IMAGE_TOOL_NAME} action="generate". `
       + 'Minimal valid JSON: {"action":"generate","prompt":"full image description"}.',
       true,
     );
   }
+
+  const invalidModelError = resolveInvalidFalModelError(
+    'generate',
+    params.provider,
+    params.model,
+    FAL_CREATE_MODELS,
+  );
+  if (invalidModelError) return invalidModelError;
 
   try {
     preflightPaidImageGeneration({
@@ -540,9 +570,9 @@ async function executeMediaGenerate(
       enableSafetyChecker: params.enable_safety_checker,
       negativePrompt: params.negative_prompt,
       useTurbo: params.use_turbo,
-      sourceToolName: 'media',
+      sourceToolName: GENERATE_IMAGE_TOOL_NAME,
     });
-    chargePaidImageGeneration(result, 'generate', { toolName: 'media', toolCallId });
+    chargePaidImageGeneration(result, 'generate', { toolName: GENERATE_IMAGE_TOOL_NAME, toolCallId });
     const review = await reviewGeneratedImages(reviewer, {
       imageUrls: result.images.map((image) => image.url),
       imageLocalPaths: result.images.map((image) => image.localPath?.trim() ?? ''),
@@ -555,9 +585,14 @@ async function executeMediaGenerate(
     };
   } catch (error) {
     if (isProviderContentPolicyError(error)) {
-      return contentPolicyBlockedResult<MediaToolResultDetails>('media generate', error);
+      return contentPolicyBlockedResult<MediaToolResultDetails>(`${GENERATE_IMAGE_TOOL_NAME} generate`, error);
     }
-    return textResultWithError(`media generate failed: ${toErrorMessage(error)}`, true);
+    return textResultWithError(
+      `${GENERATE_IMAGE_TOOL_NAME} generate failed: ${toErrorMessage(error)}. `
+      + 'Check the error above: fix the named parameter if one is cited, or retry once without optional overrides '
+      + '(model, provider, image_size, resolution).',
+      true,
+    );
   }
 }
 
@@ -571,7 +606,7 @@ async function executeMediaEdit(
   const prompt = normalizePrompt(params.prompt);
   if (!prompt) {
     return textResultWithError(
-      'Missing required field "prompt" for media action="edit". '
+      `Missing required field "prompt" for ${GENERATE_IMAGE_TOOL_NAME} action="edit". `
       + 'Minimal valid JSON: {"action":"edit","prompt":"edit instruction","input_urls":["https://example.test/image.png"]}.',
       true,
     );
@@ -580,7 +615,7 @@ async function executeMediaEdit(
   const inputUrls = normalizeInputUrls(params.input_urls);
   if (inputUrls.length === 0) {
     return textResultWithError(
-      'Missing required field "input_urls" for media action="edit"; provide at least one image URL. '
+      `Missing required field "input_urls" for ${GENERATE_IMAGE_TOOL_NAME} action="edit"; provide at least one image URL. `
       + 'Minimal valid JSON: {"action":"edit","prompt":"edit instruction","input_urls":["https://example.test/image.png"]}.',
       true,
     );
@@ -614,10 +649,10 @@ async function executeMediaEdit(
       maskImageUrl: params.mask_image_url,
       inputFidelity: params.input_fidelity,
       seed: params.seed,
-      sourceToolName: 'media',
+      sourceToolName: GENERATE_IMAGE_TOOL_NAME,
       ...(reference ? { referenceImageIds: [reference.id] } : {}),
     });
-    chargePaidImageGeneration(result, 'edit', { toolName: 'media', toolCallId });
+    chargePaidImageGeneration(result, 'edit', { toolName: GENERATE_IMAGE_TOOL_NAME, toolCallId });
     const review = await reviewGeneratedImages(reviewer, {
       imageUrls: result.images.map((image) => image.url),
       imageLocalPaths: result.images.map((image) => image.localPath?.trim() ?? ''),
@@ -630,9 +665,14 @@ async function executeMediaEdit(
     };
   } catch (error) {
     if (isProviderContentPolicyError(error)) {
-      return contentPolicyBlockedResult<MediaToolResultDetails>('media edit', error);
+      return contentPolicyBlockedResult<MediaToolResultDetails>(`${GENERATE_IMAGE_TOOL_NAME} edit`, error);
     }
-    return textResultWithError(`media edit failed: ${toErrorMessage(error)}`, true);
+    return textResultWithError(
+      `${GENERATE_IMAGE_TOOL_NAME} edit failed: ${toErrorMessage(error)}. `
+      + 'Check the error above: fix the named parameter if one is cited, verify every input_urls entry is a '
+      + 'reachable image URL, or retry once without optional overrides (model, mask_image_url, image_size).',
+      true,
+    );
   }
 }
 
@@ -647,7 +687,7 @@ async function executeMediaAnalyze(
   const inputUrls = normalizeInputUrls(params.input_urls);
   if (inputUrls.length === 0) {
     return textResultWithError(
-      'Missing required field "input_urls" for media action="analyze"; provide at least one image URL. '
+      `Missing required field "input_urls" for ${GENERATE_IMAGE_TOOL_NAME} action="analyze"; provide at least one image URL. `
       + 'Minimal valid JSON: {"action":"analyze","input_urls":["https://example.test/image.png"]}.',
       true,
     );
@@ -689,11 +729,15 @@ async function executeMediaAnalyze(
       details: { visionReview },
     };
   } catch (error) {
-    return textResultWithError(`media analyze failed: ${toErrorMessage(error)}`, true);
+    return textResultWithError(
+      `${GENERATE_IMAGE_TOOL_NAME} analyze failed: ${toErrorMessage(error)}. `
+      + 'Verify every input_urls entry is a reachable image URL from this conversation before retrying.',
+      true,
+    );
   }
 }
 
-export function createMediaTool(
+export function createGenerateImageTool(
   ops: ImageOperations,
   reviewer?: ImageVisionReviewer,
   options?: {
@@ -701,17 +745,20 @@ export function createMediaTool(
   },
 ): AgentTool<any> {
   const tool: AgentTool<any> = {
-    name: 'media',
-    label: 'media',
+    name: GENERATE_IMAGE_TOOL_NAME,
+    label: GENERATE_IMAGE_TOOL_NAME,
     description:
-      'Unified media surface for image generate, edit, and analyze actions. generate requires prompt. '
-      + 'edit requires prompt and input_urls. analyze requires input_urls and can include question. '
-      + 'For selfies, portraits, or self-representation, use selfie_create so the self-expression reference workflow is active.',
+      'Create or edit an image from a text prompt. Use this when the user asks you to draw, render, or make a picture: '
+      + '"draw me a...", "make an image of...", "edit this photo to...". '
+      + 'action="generate" requires prompt; action="edit" requires prompt and input_urls; '
+      + 'action="analyze" requires input_urls and describes an existing image (optional question). '
+      + 'Do NOT use this for images of yourself: selfies, self-portraits, and "what do you look like right now" '
+      + 'belong to selfie_create, which keeps your appearance context and saved-reference anchoring active.',
     parameters: Type.Object({
       action: Type.Union(
         MEDIA_ACTION_VALUES.map((value) => Type.Literal(value)),
         {
-          description: 'Select whether to generate new media, edit existing inputs, or analyze visible contents.',
+          description: 'generate = create a new image from prompt; edit = modify the images in input_urls per prompt; analyze = describe the visible contents of input_urls.',
         },
       ),
       prompt: Type.Optional(Type.String({
@@ -727,7 +774,7 @@ export function createMediaTool(
       })),
       provider: providerPreferenceSchema(),
       model: Type.Optional(Type.String({
-        description: 'Optional provider model override.',
+        description: 'Optional model override. Fal models must come from the configured image model catalog; an invalid value returns an error listing the valid models. Omit to use the default model chain.',
       })),
       num_images: Type.Optional(Type.Integer({ minimum: 1, maximum: 4 })),
       width: Type.Optional(Type.Integer({ minimum: 64, maximum: 4096 })),
@@ -764,7 +811,11 @@ export function createMediaTool(
         case 'analyze':
           return await executeMediaAnalyze(reviewer, params);
         default:
-          return textResultWithError(`Unsupported media action: ${String(params.action)}`, true);
+          return textResultWithError(
+            `Unsupported ${GENERATE_IMAGE_TOOL_NAME} action: ${String(params.action)}. `
+            + 'Valid actions: "generate" (new image), "edit" (modify input_urls), "analyze" (describe input_urls).',
+            true,
+          );
       }
     },
   };

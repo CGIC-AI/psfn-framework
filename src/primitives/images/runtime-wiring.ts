@@ -7,7 +7,7 @@ import { ImageReferenceStore } from './reference-store.js';
 import type { ImageOperations } from './ops.js';
 import { ImageService } from './service.js';
 import {
-  createMediaTool,
+  createGenerateImageTool,
   createSelfieTool,
   type ImageReferenceResolver,
 } from './tools.js';
@@ -32,7 +32,7 @@ function resolveRequiredGatewayMethods(
   includeVisionReview: boolean,
 ): string[] {
   switch (toolName) {
-    case 'media':
+    case 'generate_image':
       return ['image.create', 'image.edit', 'web.fetch_binary'];
     case 'selfie_create':
       return includeVisionReview
@@ -54,9 +54,12 @@ export function registerImageTools(
   ops: ImageOperations,
   options?: RegisterImagesToolsOptions,
 ): void {
+  // Social/expressive image tools are part of the default core stack: the
+  // selfie tool first, then generic generation. Core registration keeps them
+  // always active instead of hidden behind toolset activation.
   const tools: AgentTool<any>[] = [
-    createMediaTool(ops, options?.reviewer, { referenceResolver: options?.referenceResolver }),
     createSelfieTool(ops, options?.reviewer, { referenceResolver: options?.referenceResolver }),
+    createGenerateImageTool(ops, options?.reviewer, { referenceResolver: options?.referenceResolver }),
   ];
 
   for (const tool of tools) {
@@ -68,7 +71,7 @@ export function registerImageTools(
         ),
       });
     }
-    target.registerTool(tool, 'extended');
+    target.registerTool(tool, 'core');
   }
 }
 

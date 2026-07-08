@@ -37,7 +37,7 @@ The goal is not to expose more tools. The goal is to reduce tool-choice entropy 
 - `self_status`
 - `system`
 - `notify`
-- `media`
+- `generate_image`
 - `selfie_create`
 
 ## Current Stabilized Branch
@@ -73,7 +73,7 @@ Unified top-level direct tools in the current runtime:
 - `vault`
 - `beads`
 - `notify`
-- `media`
+- `generate_image`
 - `selfie_create`
 
 Important current-state notes:
@@ -83,7 +83,7 @@ Important current-state notes:
 - Transcript lookup stays on `session`; memory and scratchpad mutation stay on `memory` and `scratchpad`; contact mutation stays on `contact`; values and concerns stay on `orient`.
 - Safe companion-facing runtime introspection stays on `self_status`; guarded runtime settings and lifecycle actions stay on `system`.
 - `response_control action="no_reply"` is the explicit no-response disposition surface. It is for intentional non-replies, not hidden failure.
-- Generic image generation, editing, and analysis stay on `media`; `selfie_create` stays separate as the first-class self-expression image tool.
+- Generic image generation, editing, and analysis stay on `generate_image` (registered core, presented before admin/dev tooling); `selfie_create` stays separate as the first-class core self-expression image tool. The old `media` name is retired: activation attempts fail with an error naming `generate_image`.
 - `journal` is a core durable markdown note surface for companion-authored notes and longer-lived context that is not typed memory, active orientation, or scratch work.
 - `shard` is currently a reserved extended registry entry for future long-horizon shard lifecycle control. Shard execution internals, fold-review lineage, and satellite delegation exist, but bounded model-facing worker control is currently `subagent`.
 - Garden's Tools page must reflect the runtime catalog for canonical names only. It may show actions, required parameters, capability requirements, reversibility, interruptibility/concurrency, and bundle membership, but must not present retired aliases as callable tools.
@@ -223,15 +223,15 @@ The current runtime already exposes a unified model-facing `skill` tool for skil
 - `create` and `update` write personal managed skills under `WORKSPACE_PATH/skills/<category>/<name>/SKILL.md` and refresh the runtime snapshot; personal skills remain separate from repo-global skills
 - Creator workflows such as image creation, music creation, and future media variants belong here as creator-category skills loaded with `skill action="view"`
 
-## Canonical Media Surface
+## Canonical Image Surface
 
-The canonical model-facing `media` surface collapses generic media generation, transformation, and inspection into one tool. `selfie_create` remains a separate first-class self-expression image tool because it owns appearance context, saved-reference anchoring, and self-representation safeguards.
+The canonical model-facing `generate_image` surface (formerly `media`) collapses generic image generation, transformation, and inspection into one tool. `selfie_create` remains a separate first-class self-expression image tool because it owns appearance context, saved-reference anchoring, and self-representation safeguards. Both are core tools in the default stack, and their descriptions cross-reference each other in both directions: images of the companion herself belong to `selfie_create`; everything else belongs to `generate_image`.
 
 - Actions: `generate`, `edit`, `analyze`
-- `generate` creates a new media artifact from a prompt
-- `edit` transforms one or more existing input URLs
-- `analyze` inspects visible contents or consistency questions on explicit inputs
-- Current implementation is image-backed, but image creation, music creation, and future creator workflows all stay modeled as creator skills loaded with `skill action="view"`; the top-level tool surface stays intentionally generic
+- `generate` creates a new image from a prompt
+- `edit` transforms one or more existing input URLs (the retired `image_edit` capability lives here)
+- `analyze` inspects visible contents or consistency questions on explicit inputs (consumption-side behavior; a future `analyze_media` split may move it off this tool)
+- Detailed prompt craft for image creation, music creation, and future creator workflows stays modeled as creator skills loaded with `skill action="view"`
 
 ## Canonical Web Surface
 
@@ -412,10 +412,11 @@ The table below maps current or retired first-party tool names to the canonical 
 | `vault_read` | `vault` | hidden | Historical top-level name; use `vault action="read"` only for the external Obsidian bridge. |
 | `vault_search` | `vault` | hidden | Historical top-level name; use `vault action="search"` only for the external Obsidian bridge. |
 | `vault_daily` | `vault` | hidden | Historical top-level name; use `vault action="daily"` only for the external Obsidian bridge. |
-| `image_create` | `media` | retired | Use `media action="generate"`; detailed prompt craft belongs in creator skills, not runtime context. |
-| `image_edit` | `media` | retired | Use `media action="edit"` on the same surface. |
-| `image_analyze` | `media` | retired | Use `media action="analyze"` on the same surface. |
-| `selfie_create` | `selfie_create` | extended | First-class self-expression image tool with appearance context, saved-reference anchoring, and generated-output review. |
+| `media` | `generate_image` | retired | Renamed: the `media` name was too vague to route against `selfie_create`. Activation of the old name fails with an error naming `generate_image`. |
+| `image_create` | `generate_image` | retired | Use `generate_image action="generate"`; detailed prompt craft belongs in creator skills, not runtime context. |
+| `image_edit` | `generate_image` | retired | Use `generate_image action="edit"` on the same surface. |
+| `image_analyze` | `generate_image` | retired | Use `generate_image action="analyze"` on the same surface. |
+| `selfie_create` | `selfie_create` | core | First-class self-expression image tool with appearance context, saved-reference anchoring, and generated-output review. |
 
 ## Retirement Guidance
 

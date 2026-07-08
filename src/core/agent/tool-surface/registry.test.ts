@@ -8,6 +8,7 @@ import {
   getRetiredToolAlias,
   isCanonicalFirstPartyToolName,
   listRetiredToolAliases,
+  resolveToolPresentationRank,
 } from './registry.js';
 import { createJournalTool } from '../../../boundary/integrations/journal/tools.js';
 import { isRecord } from '../../../shared/utils/types.js';
@@ -135,7 +136,7 @@ describe('first-party tool surface registry', () => {
       'media',
       'spawn_subagent',
     ], 'test surface')).toThrow(
-      'test surface includes retired first-party tool aliases: session_new->session, spawn_subagent->subagent',
+      'test surface includes retired first-party tool aliases: session_new->session, media->generate_image, spawn_subagent->subagent',
     );
   });
 
@@ -151,11 +152,43 @@ describe('first-party tool surface registry', () => {
       exposure: 'retired',
     });
     expect(getRetiredToolAlias('image_analyze')).toMatchObject({
-      canonicalName: 'media',
+      canonicalName: 'generate_image',
       replacementAction: 'analyze',
       exposure: 'retired',
     });
+    expect(getRetiredToolAlias('image_edit')).toMatchObject({
+      canonicalName: 'generate_image',
+      replacementAction: 'edit',
+      exposure: 'retired',
+    });
+    expect(getRetiredToolAlias('image_create')).toMatchObject({
+      canonicalName: 'generate_image',
+      replacementAction: 'generate',
+      exposure: 'retired',
+    });
+    expect(getRetiredToolAlias('media')).toMatchObject({
+      canonicalName: 'generate_image',
+      replacementAction: 'generate',
+      exposure: 'retired',
+    });
+    expect(isCanonicalFirstPartyToolName('media')).toBe(false);
+    expect(isCanonicalFirstPartyToolName('generate_image')).toBe(true);
     expect(isCanonicalFirstPartyToolName('selfie_create')).toBe(true);
     expect(getRetiredToolAlias('selfie_create')).toBeUndefined();
+  });
+
+  it('registers the image tools as core surfaces ranked before admin/dev domains', () => {
+    expect(getCanonicalToolSurface('generate_image')?.exposure).toBe('core');
+    expect(getCanonicalToolSurface('selfie_create')?.exposure).toBe('core');
+    // Social/expressive tools present before admin/boundary/system machinery;
+    // selfie_create (self_expression) leads generate_image (media).
+    expect(resolveToolPresentationRank('selfie_create'))
+      .toBeLessThan(resolveToolPresentationRank('generate_image'));
+    for (const adminToolName of ['fs', 'repo', 'shell', 'web', 'system', 'self_status', 'toolset', 'tool_search']) {
+      expect(resolveToolPresentationRank('generate_image'))
+        .toBeLessThan(resolveToolPresentationRank(adminToolName));
+      expect(resolveToolPresentationRank('selfie_create'))
+        .toBeLessThan(resolveToolPresentationRank(adminToolName));
+    }
   });
 });

@@ -649,11 +649,12 @@ describe('self-presentation producer', () => {
     expect(resolveAppearanceContextFromTemplateVariables({})).toBe('');
   });
 
-  it('flags the self-image tool from promoted or loaded state and blanks appearance on internal turns', () => {
+  it('flags the self-image tool from core, promoted, or loaded state and blanks appearance on internal turns', () => {
     const promoted = buildSelfPresentationPromptVariables({
       internalTurn: false,
       templateVariables: { visual_description: 'A small black cat.' },
       skillsContext: '<skills_index>\nskill list body\n</skills_index>',
+      coreToolNames: new Set<string>(),
       loadedExtended: new Map(),
       promotedExtendedToolNames: new Set(['selfie_create']),
     });
@@ -661,9 +662,20 @@ describe('self-presentation producer', () => {
     expect(promoted.runtime_appearance_context_body).toBe('A small black cat.');
     expect(promoted.runtime_skills_index_body).toBe('skill list body');
 
+    // selfie_create registered in the default core stack also flags the tool.
+    const core = buildSelfPresentationPromptVariables({
+      internalTurn: false,
+      templateVariables: { visual_description: 'A small black cat.' },
+      coreToolNames: new Set(['selfie_create']),
+      loadedExtended: new Map(),
+      promotedExtendedToolNames: new Set(),
+    });
+    expect(core.runtime_self_image_tool_active).toBe('true');
+
     const internal = buildSelfPresentationPromptVariables({
       internalTurn: true,
       templateVariables: { visual_description: 'A small black cat.' },
+      coreToolNames: new Set<string>(),
       loadedExtended: new Map(),
       promotedExtendedToolNames: new Set(),
     });

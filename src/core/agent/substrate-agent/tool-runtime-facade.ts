@@ -60,13 +60,19 @@ import {
   type ValidateToolsOptions,
   type WirableTool,
 } from '../tool-wiring-validator.js';
-import { assertNoModelFacingDriftGuardToolAliases } from '../tool-surface/registry.js';
+import {
+  assertNoModelFacingDriftGuardToolAliases,
+  getRetiredToolAlias,
+} from '../tool-surface/registry.js';
+import { createComponentLogger } from '../../../shared/logger.js';
 import type { RuntimeServiceHealthStatus } from '../../../operator/tool-health/types.js';
 import {
   buildRuntimeToolCatalogEntry,
   type RuntimeToolCatalogSnapshot,
 } from '../tool-catalog.js';
 import { resolveTurnWorkerExecutionPolicy } from './model-runtime.js';
+
+const log = createComponentLogger('tool-runtime-facade');
 
 interface ToolRuntimeFacadeOptions {
   config: SubstrateConfig;
@@ -120,7 +126,7 @@ const MAINTENANCE_CORE_TOOL_POLICIES = new Map<string, MaintenanceCoreToolPolicy
 ]);
 
 const SATELLITE_VISUAL_TOOL_NAMES = new Set([
-  'media',
+  'generate_image',
   'selfie_create',
 ]);
 
@@ -561,18 +567,51 @@ export class ToolRuntimeFacade {
     }
 
     const disabledNames = validateAndLogToolWiring(options);
-    if (disabledNames.length === 0) return;
-
-    const disabledSet = new Set(disabledNames);
-    this.coreTools = this.coreTools.filter(t => !disabledSet.has(t.name));
-    this.extendedTools = this.extendedTools.filter(t => !disabledSet.has(t.name));
-    for (const disabledName of disabledSet) {
-      this.loadedExtended.delete(disabledName);
+    if (disabledNames.length > 0) {
+      const disabledSet = new Set(disabledNames);
+      this.coreTools = this.coreTools.filter(t => !disabledSet.has(t.name));
+      this.extendedTools = this.extendedTools.filter(t => !disabledSet.has(t.name));
+      for (const disabledName of disabledSet) {
+        this.loadedExtended.delete(disabledName);
+      }
+      const filteredPromoted = this
+        .getPromotedExtendedToolNamesInternal()
+        .filter(name => !disabledSet.has(name));
+      this.setPromotedExtendedToolNamesInternal(filteredPromoted);
     }
-    const filteredPromoted = this
-      .getPromotedExtendedToolNamesInternal()
-      .filter(name => !disabledSet.has(name));
-    this.setPromotedExtendedToolNamesInternal(filteredPromoted);
+    this.auditStoredPromotedToolNames();
+  }
+
+  // Stored promoted-tool state can reference names that no longer resolve
+  // (retired tool names after a rename, tools that became core, or tools
+  // removed entirely). Startup must not crash on stale entries, but it must
+  // say loudly why each one is being ignored so operators can clean up.
+  private auditStoredPromotedToolNames(): void {
+    const extendedNames = new Set(this.extendedTools.map(tool => tool.name));
+    const coreNames = new Set(this.coreTools.map(tool => tool.name));
+    for (const name of this.getPromotedExtendedToolNamesInternal()) {
+      if (extendedNames.has(name)) continue;
+      const retired = getRetiredToolAlias(name);
+      if (retired) {
+        log.warn(
+          `Stored promoted tool "${name}" is retired; "${retired.canonicalName}" replaces it. `
+          + 'The stale entry is ignored (never activated) — unpin it via toolset action="unpin".',
+          { toolName: name, canonicalName: retired.canonicalName },
+        );
+      } else if (coreNames.has(name)) {
+        log.warn(
+          `Stored promoted tool "${name}" is now a core tool and always active. `
+          + 'The promotion entry is redundant and ignored — unpin it via toolset action="unpin".',
+          { toolName: name },
+        );
+      } else {
+        log.warn(
+          `Stored promoted tool "${name}" is not a registered extended tool in this runtime. `
+          + 'The entry is ignored (never activated) — unpin it via toolset action="unpin".',
+          { toolName: name },
+        );
+      }
+    }
   }
 
   getExtendedTools(): readonly AgentTool<any>[] {

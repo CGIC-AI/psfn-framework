@@ -64,7 +64,6 @@ export const DEFAULT_EXTENDED_TOOL_AUTOLOAD_CANDIDATES: Readonly<Record<TurnInte
   ],
   reflection: [],
   social: [
-    'media',
     'vault',
   ],
 };

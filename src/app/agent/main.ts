@@ -49,6 +49,7 @@ import {
   wireHeartbeatRuntime,
 } from '../startup/composition/parity.js';
 import { createAgentPersistenceRuntime } from '../../persistence/runtime-factory.js';
+import { CompanionPresenceRuntime } from '../../core/agent/companion-presence-runtime.js';
 import {
   resolveOutreachOutboxLedgerPath,
   resolvePendingContactApprovalsPath,
@@ -185,6 +186,26 @@ async function main(): Promise<void> {
     persistenceBackend,
   });
 
+  // ── Cross-companion presence (sprint 10, W5a) ──
+  // Multi-companion only: the persistence factory hands back a shared-schema
+  // presence store IFF the flag is on (and has already provisioned the shared
+  // schema). The runtime writes this agent's own row on situated turns, serves
+  // co-presence to the situated context section, and emits co-location events.
+  // Fails closed here if COMPANION_ID is not the fleet-contract UUID format.
+  const companionPresenceRuntime = persistenceRuntime.companionPresenceStore
+    ? new CompanionPresenceRuntime({
+      store: persistenceRuntime.companionPresenceStore,
+      companionId: config.companionId ?? '',
+      eventBus,
+      placesRegistry: placesRegistryConfig,
+    })
+    : null;
+  if (companionPresenceRuntime) {
+    log.info('Cross-companion presence runtime enabled', {
+      companionId: config.companionId,
+    });
+  }
+
   // ── Contact-tracking policy gate (E3.4) ──
   // Per-channel contactTracking labels come from channels.json contextEnvelope
   // (default 'auto'). Approval-mode channels enqueue new speakers into a
@@ -272,6 +293,10 @@ async function main(): Promise<void> {
     appCache,
     toolConformanceRunner,
   } = coreRuntime;
+
+  // Wire cross-companion presence into the turn path (same late-wiring pattern
+  // as memory/contacts providers). Null flag-off: turns are byte-identical.
+  agentLoop.companionPresence = companionPresenceRuntime;
 
   sessionManager.characterName = card.data.name;
   writeStartupSessionMetadata(
@@ -623,6 +648,11 @@ async function main(): Promise<void> {
   };
   stopFn = async () => {
     disposeApiBackend();
+    // Graceful shutdown removes our own shared presence row (crash cleanup is
+    // the read-side staleness TTL — see companion-presence-runtime.ts).
+    if (companionPresenceRuntime) {
+      await companionPresenceRuntime.shutdown();
+    }
     await controlPlane.stopFn();
   };
   shutdownTargets.adminTransport = adminTransport;

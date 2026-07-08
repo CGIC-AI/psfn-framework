@@ -10,6 +10,7 @@ import type { RuntimeMode } from '../tool-wiring-validator.js';
 import type { EventBridge } from '../event-bridge.js';
 import type { LLMProviderPort, MemoryExtractor, MemoryProvider, WikiRetrievalPort } from '../contracts.js';
 import type { SatellitePresencePort } from '../satellite-adapter-port.js';
+import type { CompanionPresenceTurnPort } from '../companion-presence-runtime.js';
 import type { SkillsRuntime } from '../../../faculties/skills/runtime.js';
 import type { TurnToolSummary } from '../../../faculties/skills/reflection-nudge.js';
 import type { TrustLevel } from '../../../system/trust/types.js';
@@ -140,6 +141,8 @@ export interface TurnExecutionAdapterOptions {
   costTelemetry: CostTelemetryPort;
   fatigueBudget?: FatigueBudgetPort | null;
   satellitePresence: SatellitePresencePort;
+  /** Cross-companion presence (W5a); absent/null skips presence writes. */
+  companionPresence?: CompanionPresenceTurnPort | null;
   llmClient: LLMProviderPort;
   imageVisionReviewer: ImageVisionReviewer | null;
   sessionManager: SessionManager;
@@ -170,6 +173,7 @@ export function createTurnExecutionRuntimeAdapter(
     costTelemetry: options.costTelemetry,
     fatigueBudget: options.fatigueBudget ?? null,
     satellitePresence: options.satellitePresence,
+    companionPresence: options.companionPresence ?? null,
     llmClient: options.llmClient,
     imageVisionReviewer: options.imageVisionReviewer,
     sessionManager: options.sessionManager,

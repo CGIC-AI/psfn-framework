@@ -16,6 +16,7 @@ import type {
   AdaptiveToolSnapshotTelemetry,
 } from '../core/agent/adaptive-tools-telemetry.js';
 import type { CompletionHandoffRecord } from './contracts/completion-handoff.js';
+import type { PlaceKind } from './contracts/places-registry.js';
 import { createComponentLogger } from './logger.js';
 
 const log = createComponentLogger('EventBus');
@@ -668,6 +669,24 @@ export interface EventMap {
   'schedule.healthcheck': { timestamp: number; taskCount: number };
   'backup.failed': { taskId: string; taskName: string; error: string; timestamp: number };
   'internal_state.gap_detected': { offlineSince: string; gapMs: number; timestamp: number };
+  // Cross-companion co-location (sprint 10, W5a): the observing agent's
+  // presence refresh found a companion at its own place that was not there on
+  // the previous refresh (including everyone already present when the observer
+  // itself arrives). Emitted once per arrival, never on refreshes of an
+  // already-known co-present companion. Consumers (e.g. opening a shared room
+  // channel, W6) subscribe here.
+  'presence.companion.co_located': {
+    /** The companion newly observed at the observer's place. */
+    companionId: string;
+    /** The companion whose presence refresh made the observation. */
+    observerCompanionId: string;
+    siteId: string;
+    placeId: string;
+    kind: PlaceKind;
+    /** ISO-8601 arrival time (the observed companion's presence `since`). */
+    since: string;
+    timestamp: number;
+  };
   'intention.outbound.dispatched': { actionId: string; channelId: string; channelType: string; contentLength?: number; timestamp: number };
   'intention.outbound.blocked': { actionId: string; channelId: string; channelType: string; reason?: string; timestamp: number };
   // Internal-state-driven outreach nudges (Charter 6.24, bead 1xb.2). The

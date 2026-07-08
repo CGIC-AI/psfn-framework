@@ -26,13 +26,15 @@ export interface RetentionSemantics {
   retentionClass?: MemoryRetentionClass;
 }
 
-export function applyRetentionSemantics(input: {
+export interface RetentionSemanticsInput {
   text: string;
   type: MemoryType;
   importance: number;
   tags: readonly string[];
   retentionClass?: MemoryRetentionClass;
-}): RetentionSemantics {
+}
+
+export function applyRetentionSemantics(input: RetentionSemanticsInput): RetentionSemantics {
   const tags = normalizeMemoryTags([
     ...input.tags,
     ...inferPreferenceMemoryTags({

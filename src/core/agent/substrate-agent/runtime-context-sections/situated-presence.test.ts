@@ -6,13 +6,21 @@
 import { describe, expect, it } from 'vitest';
 import type { SubstrateMessage } from '../../../../shared/contracts/runtime.js';
 import type { PlacesRegistryConfig } from '../../../../shared/contracts/places-registry.js';
+import { resolveWikiRetrievalPlan } from '../../../../faculties/wiki/retrieval.js';
 import type { CompanionPresenceMetadata } from '../../presence-metadata.js';
-import { buildSituatedPresenceContextBlock, resolveSituatedPlaceRef } from './situated-presence.js';
+import {
+  buildSituatedPresenceContextBlock,
+  resolveSituatedPlaceRef,
+  resolveSituatedSiteId,
+} from './situated-presence.js';
 import { SituatedEmanationTracker } from './situated-emanation.js';
 
 const PLACES_REGISTRY: PlacesRegistryConfig = {
   schemaVersion: 1,
-  sites: [{ siteId: 'site.home', displayName: 'Home', kind: 'physical' }],
+  sites: [
+    { siteId: 'site.home', displayName: 'Home', kind: 'physical' },
+    { siteId: 'site.mud', displayName: 'The MUD', kind: 'virtual' },
+  ],
   places: [
     {
       placeId: 'place.living-room',
@@ -53,6 +61,14 @@ const PLACES_REGISTRY: PlacesRegistryConfig = {
           control: ['on', 'off'],
         },
       ],
+    },
+    {
+      placeId: 'place.mud-tavern',
+      siteId: 'site.mud',
+      displayName: 'The Rusty Tankard',
+      kind: 'virtual',
+      description: 'A low-beamed virtual tavern; a fire crackles in the hearth.',
+      affordances: [],
     },
   ],
 };
@@ -315,5 +331,95 @@ describe('situated-presence producer — active-emanation integration (B2)', () 
       emanationTracker: tracker,
     });
     expect(block).toBe('');
+  });
+});
+
+// ── Deliberate virtual `move` wire-through (vinz.26, contract s10wm) ──
+// Proves the world tool's move — which only touches the emanation tracker's
+// virtual overlay + the presence port — actually swaps what the NEXT turn
+// renders and retrieves, with no additional plumbing.
+describe('situated-presence + wiki scope after a virtual move (vinz.26)', () => {
+  function trackerEmanatedThenMoved(): SituatedEmanationTracker {
+    const tracker = new SituatedEmanationTracker();
+    // Physically emanated into the living room…
+    buildSituatedPresenceContextBlock({
+      message: makeMessage({
+        routing: routing({ placeId: 'place.living-room', presence: SATELLITE_PRESENCE }),
+      }),
+      placesRegistry: PLACES_REGISTRY,
+      emanationTracker: tracker,
+    });
+    // …then the world tool's move action walks into the virtual tavern.
+    tracker.moveToVirtualPlace('place.mud-tavern');
+    return tracker;
+  }
+
+  it('renders the virtual destination in the Here: block on the following placeless turn', () => {
+    const block = buildSituatedPresenceContextBlock({
+      message: makeMessage(),
+      placesRegistry: PLACES_REGISTRY,
+      emanationTracker: trackerEmanatedThenMoved(),
+    });
+    expect(block).toContain('Here: The Rusty Tankard (virtual place)');
+    expect(block).toContain('Site: The MUD');
+    expect(block).toContain('Surroundings: A low-beamed virtual tavern; a fire crackles in the hearth.');
+    expect(block).not.toContain('Living Room');
+  });
+
+  it('keeps physical-turn behavior intact: a satellite turn still renders its own place', () => {
+    const tracker = trackerEmanatedThenMoved();
+    const block = buildSituatedPresenceContextBlock({
+      message: makeMessage({
+        routing: routing({ placeId: 'place.kitchen', presence: KITCHEN_PRESENCE }),
+      }),
+      placesRegistry: PLACES_REGISTRY,
+      emanationTracker: tracker,
+    });
+    expect(block).toContain('Here: Kitchen (physical place)');
+    // …and the physical arrival superseded the virtual move (latest wins).
+    expect(tracker.resolveVirtualMovePlaceId()).toBeUndefined();
+  });
+
+  it('resolves the same place/site coordinates for co-presence and wiki via the fallback', () => {
+    const tracker = trackerEmanatedThenMoved();
+    const placelessTurn = makeMessage();
+
+    const ref = resolveSituatedPlaceRef(placelessTurn, PLACES_REGISTRY, tracker.resolvePlaceId());
+    expect(ref).toEqual({ siteId: 'site.mud', placeId: 'place.mud-tavern', kind: 'virtual' });
+
+    const siteId = resolveSituatedSiteId(placelessTurn, PLACES_REGISTRY, tracker.resolvePlaceId());
+    expect(siteId).toBe('site.mud');
+  });
+
+  it('swaps the wiki shared-world retrieval scope to the destination site (integration)', () => {
+    const tracker = trackerEmanatedThenMoved();
+    const currentSiteId = resolveSituatedSiteId(makeMessage(), PLACES_REGISTRY, tracker.resolvePlaceId());
+    const plan = resolveWikiRetrievalPlan({
+      settings: {
+        enabled: true,
+        chatTokenCap: 1000,
+        groupTokenCap: 500,
+        focusTokenCap: 2000,
+        similarityThreshold: 0.4,
+        groupSimilarityThreshold: 0.5,
+      },
+      isDirectMessage: true,
+      focusActive: false,
+      multiCompanion: true,
+      currentSiteId,
+    });
+    expect(plan?.allowedScopes).toContain('shared_world:site.mud');
+    expect(plan?.allowedScopes).toContain('personal');
+    expect(plan?.allowedScopes).not.toContain('shared_world:site.home');
+  });
+
+  it('the turn place still outranks the fallback for wiki scope (physical turn intact)', () => {
+    const tracker = trackerEmanatedThenMoved();
+    const satelliteTurn = makeMessage({
+      routing: routing({ placeId: 'place.kitchen', presence: KITCHEN_PRESENCE }),
+    });
+    expect(
+      resolveSituatedSiteId(satelliteTurn, PLACES_REGISTRY, tracker.resolvePlaceId()),
+    ).toBe('site.home');
   });
 });

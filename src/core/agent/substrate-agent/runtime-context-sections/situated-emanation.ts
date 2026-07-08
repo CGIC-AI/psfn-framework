@@ -47,6 +47,16 @@ function readTurnPlaceId(message: SubstrateMessage): string | undefined {
 export class SituatedEmanationTracker {
   private readonly authority = new ActiveEmanationAuthority();
   private current: SituatedEmanation | undefined;
+  /**
+   * Deliberate virtual navigation overlay (S10 vinz.26, contract s10wm). Set by
+   * the world tool's `move` action; NEVER touched by physical emanation turns
+   * except to be superseded: a later place-bearing (satellite) turn clears it
+   * (latest event wins — locations decision 13's blend default). The physical
+   * emanation in {@link current} is deliberately NOT modified by a virtual
+   * move: virtually walking into a MUD room does not move the satellite
+   * emanation, it only changes which place is foregrounded on placeless turns.
+   */
+  private virtualMove: { placeId: string } | undefined;
 
   /**
    * Fold a turn into the tracker. Presence-bearing turns update the canonical
@@ -76,11 +86,35 @@ export class SituatedEmanationTracker {
       ...(presence ? { presence } : {}),
       placeId,
     };
+    // Latest event wins: a fresh physical emanation supersedes a prior
+    // deliberate virtual move (decision 13 — the latent position defaults back
+    // to where you physically are until the next deliberate cue).
+    this.virtualMove = undefined;
   }
 
-  /** The current active emanation's place, if one has been established. */
+  /**
+   * Deliberate virtual navigation (world tool `move`, vinz.26). Foregrounds
+   * `placeId` for subsequent placeless turns WITHOUT touching the physical
+   * emanation: a satellite turn still renders its own bound place, and the next
+   * place-bearing turn supersedes (clears) this overlay. The caller has already
+   * validated `placeId` against the places registry (virtual kind only).
+   */
+  moveToVirtualPlace(placeId: string): void {
+    this.virtualMove = { placeId };
+  }
+
+  /** The deliberate virtual-move place, if one is active (inspection/tests). */
+  resolveVirtualMovePlaceId(): string | undefined {
+    return this.virtualMove?.placeId;
+  }
+
+  /**
+   * The place to foreground on a placeless turn: a deliberate virtual move
+   * outranks the physical emanation (it is by definition the later event —
+   * any newer physical emanation would have cleared it in {@link observe}).
+   */
   resolvePlaceId(): string | undefined {
-    return this.current?.placeId;
+    return this.virtualMove?.placeId ?? this.current?.placeId;
   }
 
   /** The presence that established the current active emanation, if any. */

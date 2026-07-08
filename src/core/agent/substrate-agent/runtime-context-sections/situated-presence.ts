@@ -83,15 +83,19 @@ function resolvePlace(
 /**
  * Resolve the companion's CURRENT site for this turn, from the exact same
  * situated seam the presence block renders: satellite routing `placeId` → place
- * → `siteId`. Returns `undefined` when not situated (no bound place). W5b wiki
- * scope keys off this so shared-world retrieval and the rendered "Here:" block
- * always agree on where the companion is.
+ * → `siteId`, falling back to `fallbackPlaceId` (the emanation tracker's
+ * current place — physical emanation or a deliberate virtual `move`, vinz.26)
+ * when the turn itself carries no place. Returns `undefined` when not situated
+ * (no bound place). W5b wiki scope keys off this so shared-world retrieval and
+ * the rendered "Here:" block always agree on where the companion is — including
+ * on placeless (Discord/Telegram) turns after a move or emanation handoff.
  */
 export function resolveSituatedSiteId(
   message: SubstrateMessage,
   registry: PlacesRegistryConfig | undefined,
+  fallbackPlaceId?: string,
 ): string | undefined {
-  const placeId = readSatellitePlaceId(message.routing?.satellite);
+  const placeId = readSatellitePlaceId(message.routing?.satellite) ?? fallbackPlaceId;
   const place = resolvePlace(registry, placeId);
   return place?.siteId;
 }
@@ -122,11 +126,21 @@ export interface SituatedPlaceRef {
   kind: PlaceConfig['kind'];
 }
 
+/**
+ * `fallbackPlaceId` (optional) is consulted only when the turn itself carries
+ * no place — pass the emanation tracker's current place so a placeless turn
+ * resolves to the companion's active emanation / deliberate virtual move
+ * (vinz.26), exactly like the rendered situated block does. Callers that must
+ * key on the TURN's own binding only (e.g. the presence writer's
+ * `observeTurnPlace`, where a Discord DM turn must not look like an arrival)
+ * simply omit it.
+ */
 export function resolveSituatedPlaceRef(
   message: SubstrateMessage,
   registry: PlacesRegistryConfig | undefined,
+  fallbackPlaceId?: string,
 ): SituatedPlaceRef | undefined {
-  const placeId = readSatellitePlaceId(message.routing?.satellite);
+  const placeId = readSatellitePlaceId(message.routing?.satellite) ?? fallbackPlaceId;
   const place = resolvePlace(registry, placeId);
   if (!place) return undefined;
   return { siteId: place.siteId, placeId: place.placeId, kind: place.kind };

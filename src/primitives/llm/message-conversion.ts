@@ -25,10 +25,12 @@ interface LooseContextMessage {
   api?: unknown;
   provider?: unknown;
   model?: unknown;
+  responseModel?: unknown;
   usage?: unknown;
   stopReason?: unknown;
   errorMessage?: unknown;
   responseId?: unknown;
+  diagnostics?: unknown;
 }
 
 interface GenericBlock {
@@ -178,7 +180,11 @@ function createAssistantMessage(
     api: typeof message.api === 'string' ? message.api : '',
     provider: typeof message.provider === 'string' ? message.provider : '',
     model: typeof message.model === 'string' ? message.model : '',
+    ...(typeof message.responseModel === 'string' ? { responseModel: message.responseModel } : {}),
     ...(typeof message.responseId === 'string' ? { responseId: message.responseId } : {}),
+    ...(Array.isArray(message.diagnostics)
+      ? { diagnostics: message.diagnostics as AssistantMessage['diagnostics'] }
+      : {}),
     usage: isRecord(message.usage)
       ? message.usage as unknown as AssistantMessage['usage']
       : {

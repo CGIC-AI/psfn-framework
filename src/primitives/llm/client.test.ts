@@ -842,6 +842,34 @@ describe('LLMClient empty-tool-args completion retry (mihm)', () => {
       { id: 'call-journal', name: 'journal', input: { action: 'list' } },
     ]);
   });
+
+  it('does not retry args that pi-ai 0.73 repaired into a valid non-empty object', async () => {
+    const usageRecorder = { recordUsageEvent: vi.fn(async () => undefined) };
+    const client = new LLMClient(makeConfig(), { usageRecorder });
+
+    mocks.streamSimple.mockImplementation(streamYielding(doneWithToolCall('journal', {
+      action: 'write',
+      note: 'line one\nline two with invalid \\q escape',
+    })));
+
+    const response = await client.stream({
+      systemPrompt: 'System',
+      messages: [{ role: 'user', content: 'journal please' }],
+      tools: [requiredActionTool],
+    });
+
+    expect(mocks.streamSimple).toHaveBeenCalledTimes(1);
+    expect(response.toolCalls).toEqual([
+      {
+        id: 'call-journal',
+        name: 'journal',
+        input: { action: 'write', note: 'line one\nline two with invalid \\q escape' },
+      },
+    ]);
+    expect(usageRecorder.recordUsageEvent).toHaveBeenCalledWith(expect.objectContaining({
+      metadata: expect.objectContaining({ emptyArgsRetries: 0 }),
+    }));
+  });
 });
 
 describe('LLMClient prompt caching', () => {
@@ -2199,7 +2227,7 @@ describe('LLMClient model budget gates and usage metering', () => {
     mocks.getEnvApiKey.mockReturnValue(undefined);
   });
 
-  it('normalizes OpenRouter streaming usage accounting into provider cost telemetry', async () => {
+  it('keeps pi-ai 0.73 streaming usage buckets stable in provider cost telemetry', async () => {
     const usageRecorder = { recordUsageEvent: vi.fn(async () => undefined) };
     const client = new LLMClient(makeConfig(), {
       litellmBaseUrl: 'http://litellm.test/v1',
@@ -2212,16 +2240,13 @@ describe('LLMClient model budget gates and usage metering', () => {
         message: {
           model: 'z-ai/glm-5',
           usage: {
-            completion_tokens: 2,
-            completion_tokens_details: { reasoning_tokens: 1 },
+            input: 176,
+            output: 2,
+            cacheRead: 7,
+            cacheWrite: 11,
+            totalTokens: 196,
             cost: 0.95,
             cost_details: { upstream_inference_cost: 19 },
-            prompt_tokens: 194,
-            prompt_tokens_details: {
-              cached_tokens: 7,
-              cache_write_tokens: 11,
-            },
-            total_tokens: 196,
           },
           content: [{ type: 'text', text: 'ok' }],
         },
@@ -2241,14 +2266,14 @@ describe('LLMClient model budget gates and usage metering', () => {
     });
 
     expect(response).toMatchObject({
-      inputTokens: 194,
+      inputTokens: 176,
       outputTokens: 2,
       providerObservability: {
         routeKind: 'configured_litellm_proxy',
         backendBaseUrl: 'http://litellm.test/v1',
       },
       usageDetails: {
-        input: 194,
+        input: 176,
         output: 2,
         cacheRead: 7,
         cacheWrite: 11,
@@ -2257,7 +2282,7 @@ describe('LLMClient model budget gates and usage metering', () => {
       },
     });
     expect(usageRecorder.recordUsageEvent).toHaveBeenCalledWith(expect.objectContaining({
-      inputTokens: 194,
+      inputTokens: 176,
       outputTokens: 2,
       cacheReadTokens: 7,
       cacheWriteTokens: 11,
@@ -2274,6 +2299,62 @@ describe('LLMClient model budget gates and usage metering', () => {
           cost_details: { upstream_inference_cost: 19 },
         }),
       }),
+    }));
+  });
+
+  it('normalizes raw OpenRouter streaming usage without double-counting reasoning tokens or cache writes', async () => {
+    const usageRecorder = { recordUsageEvent: vi.fn(async () => undefined) };
+    const client = new LLMClient(makeConfig(), {
+      litellmBaseUrl: 'http://litellm.test/v1',
+      usageRecorder,
+    });
+
+    mocks.streamSimple.mockImplementation(async function* () {
+      yield {
+        type: 'done',
+        message: {
+          model: 'z-ai/glm-5',
+          usage: {
+            prompt_tokens: 194,
+            completion_tokens: 2,
+            completion_tokens_details: { reasoning_tokens: 1 },
+            prompt_tokens_details: {
+              cached_tokens: 18,
+              cache_write_tokens: 11,
+            },
+            total_tokens: 196,
+            cost: 0.95,
+          },
+          content: [{ type: 'text', text: 'ok' }],
+        },
+        reason: 'stop',
+      };
+    });
+
+    const response = await client.stream({
+      systemPrompt: 'System',
+      messages: [{ role: 'user', content: 'Hello there' }],
+    });
+
+    expect(response).toMatchObject({
+      inputTokens: 176,
+      outputTokens: 2,
+      usageDetails: {
+        input: 176,
+        output: 2,
+        cacheRead: 7,
+        cacheWrite: 11,
+        totalTokens: 196,
+        cost: { total: 0.95 },
+      },
+    });
+    expect(usageRecorder.recordUsageEvent).toHaveBeenCalledWith(expect.objectContaining({
+      inputTokens: 176,
+      outputTokens: 2,
+      cacheReadTokens: 7,
+      cacheWriteTokens: 11,
+      totalTokens: 196,
+      providerCostUsd: 0.95,
     }));
   });
 
@@ -2307,10 +2388,10 @@ describe('LLMClient model budget gates and usage metering', () => {
     );
 
     expect(response).toMatchObject({
-      inputTokens: 25,
+      inputTokens: 22,
       outputTokens: 5,
       usageDetails: {
-        input: 25,
+        input: 22,
         output: 5,
         cacheRead: 3,
         cacheWrite: 0,
@@ -2320,7 +2401,7 @@ describe('LLMClient model budget gates and usage metering', () => {
     });
     expect(usageRecorder.recordUsageEvent).toHaveBeenCalledWith(expect.objectContaining({
       callKind: 'completion',
-      inputTokens: 25,
+      inputTokens: 22,
       outputTokens: 5,
       cacheReadTokens: 3,
       totalTokens: 30,

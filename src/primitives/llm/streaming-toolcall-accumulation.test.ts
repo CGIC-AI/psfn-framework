@@ -1,22 +1,21 @@
 import { describe, it, expect, afterEach } from 'vitest';
-import { createServer, type Server } from 'node:http';
 import { streamSimple } from '@mariozechner/pi-ai';
 import { createModel } from './models.js';
 
 // ── gu8m regression: streamed tool-call argument accumulation ──
 // Live Purrsephone (z-ai/glm-5.2 via OpenRouter, interleaved reasoning) intermittently
 // received EMPTY arguments for required-action first-party tools. Root cause was in
-// pi-ai's openai-completions streaming accumulator: it keyed tool-call continuation
-// fragments off `currentBlock`, so a reasoning/text delta arriving *between* a tool
-// call's name chunk and its argument fragments orphaned the fragments into blank blocks
-// and finalized the named call with `{}`. The patch (patches/@mariozechner+pi-ai+0.62.0)
-// routes fragments by their wire `index`.
+// pi-ai 0.62.0's openai-completions streaming accumulator: it keyed tool-call
+// continuation fragments off `currentBlock`, so a reasoning/text delta arriving
+// *between* a tool call's name chunk and its argument fragments orphaned the fragments
+// into blank blocks and finalized the named call with `{}`. pi-ai 0.73.1 replaces
+// that local patch with an upstream accumulator that routes by wire index or id.
 //
-// This exercises the REAL (patched) pi-ai accumulator + the real `openai` SDK end-to-end
-// against a local SSE server. (vitest externalizes node_modules, so module-mocking
-// `openai` would not reach pi-ai's internal import — a live SSE stream is faithful and
-// robust on both the OpenRouter-direct and LiteLLM-proxy code paths, which share this
-// openai-completions provider.)
+// This exercises the REAL pi-ai 0.73.1 accumulator + the real `openai` SDK end-to-end
+// against an in-process SSE fetch response. (vitest externalizes node_modules, so
+// module-mocking `openai` would not reach pi-ai's internal import; exercising the real
+// OpenAI SDK stream parser is faithful for both the OpenRouter-direct and LiteLLM-proxy
+// code paths, which share this provider.)
 
 interface WireChunk {
   id: string;
@@ -28,20 +27,21 @@ interface WireChunk {
   usage?: unknown;
 }
 
-let activeServer: Server | undefined;
+let originalFetch: typeof globalThis.fetch | undefined;
+
+function installSseFetch(body: string): void {
+  originalFetch ??= globalThis.fetch;
+  globalThis.fetch = (async () => new Response(body, {
+    status: 200,
+    headers: { 'content-type': 'text/event-stream' },
+  })) as typeof globalThis.fetch;
+}
 
 async function streamToolCalls(chunks: WireChunk[]): Promise<Array<{ name: string; arguments: Record<string, unknown> }>> {
   const body = `${chunks.map((c) => `data: ${JSON.stringify(c)}`).join('\n\n')}\n\ndata: [DONE]\n\n`;
-  const server = createServer((_req, res) => {
-    res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' });
-    res.end(body);
-  });
-  activeServer = server;
-  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
-  const address = server.address();
-  if (!address || typeof address === 'string') throw new Error('failed to bind test server');
-  const baseUrl = `http://127.0.0.1:${address.port}/v1`;
+  installSseFetch(body);
 
+  const baseUrl = 'http://pi-ai-streaming-toolcall-accumulation.test/v1';
   const model = createModel(baseUrl, 'z-ai/glm-5.2', 4096, 131072, 'openai-completions', { reasoning: true });
   const stream = streamSimple(model as never, {
     systemPrompt: 'system',
@@ -74,10 +74,24 @@ function toolNameChunk(index: number, id: string, name: string, args = ''): Wire
   };
 }
 
+function toolNameChunkWithoutIndex(id: string, name: string, args = ''): WireChunk {
+  return {
+    id: 'chatcmpl-x',
+    choices: [{ index: 0, delta: { tool_calls: [{ id, function: { name, arguments: args } }] }, finish_reason: null }],
+  };
+}
+
 function toolArgChunk(index: number, argsFragment: string): WireChunk {
   return {
     id: 'chatcmpl-x',
     choices: [{ index: 0, delta: { tool_calls: [{ index, function: { arguments: argsFragment } }] }, finish_reason: null }],
+  };
+}
+
+function toolArgChunkById(id: string, argsFragment: string): WireChunk {
+  return {
+    id: 'chatcmpl-x',
+    choices: [{ index: 0, delta: { tool_calls: [{ id, function: { arguments: argsFragment } }] }, finish_reason: null }],
   };
 }
 
@@ -89,11 +103,11 @@ function finishChunk(): WireChunk {
   };
 }
 
-describe('pi-ai openai-completions tool-call accumulation (gu8m patch)', () => {
-  afterEach(async () => {
-    if (activeServer) {
-      await new Promise<void>((resolve) => activeServer!.close(() => resolve()));
-      activeServer = undefined;
+describe('pi-ai openai-completions tool-call accumulation', () => {
+  afterEach(() => {
+    if (originalFetch) {
+      globalThis.fetch = originalFetch;
+      originalFetch = undefined;
     }
   });
 
@@ -122,6 +136,33 @@ describe('pi-ai openai-completions tool-call accumulation (gu8m patch)', () => {
     expect(byName.journal).toEqual({ action: 'list' });
     // No orphan blank-name tool blocks.
     expect(toolCalls.every((c) => c.name.length > 0)).toBe(true);
+  });
+
+  it('repairs malformed-but-recoverable streamed args instead of finalizing {}', async () => {
+    const toolCalls = await streamToolCalls([
+      toolNameChunk(0, 'chatcmpl-tool-jou', 'journal', '{"action":"write","note":"line one'),
+      toolArgChunk(0, '\nline two with invalid \\q escape"}'),
+      finishChunk(),
+    ]);
+
+    expect(toolCalls).toHaveLength(1);
+    expect(toolCalls[0]).toEqual({
+      name: 'journal',
+      arguments: { action: 'write', note: 'line one\nline two with invalid \\q escape' },
+    });
+  });
+
+  it('routes missing wire-index continuation chunks by id instead of defaulting to index zero', async () => {
+    const toolCalls = await streamToolCalls([
+      toolNameChunk(0, 'chatcmpl-tool-mem', 'memory', '{"action":"list"}'),
+      toolNameChunkWithoutIndex('chatcmpl-tool-jou', 'journal', '{"action":'),
+      toolArgChunkById('chatcmpl-tool-jou', '"write"}'),
+      finishChunk(),
+    ]);
+
+    const byName = Object.fromEntries(toolCalls.map((c) => [c.name, c.arguments]));
+    expect(byName.memory).toEqual({ action: 'list' });
+    expect(byName.journal).toEqual({ action: 'write' });
   });
 
   it('accumulates sequential parallel tool calls (no interleaving) without cross-contamination', async () => {

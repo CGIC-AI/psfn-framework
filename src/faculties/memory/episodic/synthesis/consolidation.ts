@@ -3,7 +3,7 @@ import type {
   EpisodeArcWriteInput,
   EpisodeArtifactRef,
   EpisodeSpanRef,
-} from '../../../shared/contracts/episodic-memory.js';
+} from '../../../../shared/contracts/episodic-memory.js';
 import type {
   EpisodeCreateInput,
   EpisodeUpdateInput,

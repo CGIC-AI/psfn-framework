@@ -151,7 +151,7 @@ function coalesceSameAuthorDiscordTurns(turns: PendingDiscordTurn[]): PendingDis
 function coalescePendingDiscordTurns(turns: PendingDiscordTurn[]): PendingDiscordTurn[] {
   const groups: PendingDiscordTurn[][] = [];
   for (const turn of turns) {
-    const current = groups[groups.length - 1];
+    const current = groups.at(-1);
     if (current && current[0]!.substrateMsg.authorId === turn.substrateMsg.authorId) {
       current.push(turn);
     } else {
@@ -665,7 +665,7 @@ export class DiscordAdapter implements ChannelAdapterPort {
       if (pendingQueue) {
         this.pendingByChannel.delete(channelId);
       }
-      const pending = coalescedTurns[0] ?? null;
+      const pending = coalescedTurns.at(0) ?? null;
       const remainder = coalescedTurns.slice(1);
       if (remainder.length > 0) {
         // Cross-author turns stay separate; re-queue them so each author's

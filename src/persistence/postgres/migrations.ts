@@ -1224,6 +1224,8 @@ export const POSTGRES_OBSERVER_EVAL_SIDECAR_MIGRATIONS = [
 // here, never in the per-companion chains. Current versions:
 //   1 — baseline (ledger only)
 //   2 — companion_presence (W5a cross-companion presence)
+//   3 — shared_wiki_chunks (s10f9 shared-world wiki projection; SEPARATE
+//       statement list, see POSTGRES_SHARED_WIKI_MIGRATIONS below)
 export const SHARED_SCHEMA_NAME = 'shared';
 
 export const POSTGRES_SHARED_MIGRATIONS: readonly string[] = [
@@ -1271,6 +1273,60 @@ export const POSTGRES_SHARED_MIGRATIONS: readonly string[] = [
   `
   INSERT INTO shared_schema_migrations (version, name)
   VALUES (2, 'companion-presence')
+  ON CONFLICT (version) DO NOTHING;
+  `,
+];
+
+// Version 3 (sprint 10, s10f9): shared-world wiki chunk projection. A
+// rebuildable pgvector mirror of the shared-world wiki filesystem tree
+// (<system-data>/shared-world/wiki/sites/<siteId>/) so companion retrieval can
+// serve `shared_world:<siteId>` scopes. The filesystem documents remain the
+// source of truth; rows are keyed by (site_id, document_id, chunk_index) and
+// carry body_sha256 so drift is detectable and the projection is rebuilt
+// per-site from the canonical files (delete-and-replace per document version).
+//
+// This lives in its OWN statement list, deliberately NOT appended to
+// POSTGRES_SHARED_MIGRATIONS: it requires the pgvector extension, and the base
+// shared chain must stay runnable on a plain Postgres so pgvector-free shared
+// consumers (companion_presence) never grow a hidden extension dependency.
+// Wiki surfaces provision it via `ensureSharedWikiSchema`, which runs the base
+// chain first and then this list under the same advisory lock, registering
+// version 3 in the same shared_schema_migrations ledger.
+//
+// Column shape mirrors the per-companion `wiki_document_chunks` table closely
+// (plus site_id) so chunk query code stays uniform across both projections.
+// The CHECK ties scope to site_id at the database layer: a personal-scoped (or
+// cross-site mis-scoped) row can never land in the shared table — that is the
+// W5b world-info leak surface, enforced fail-closed in the schema itself.
+export const POSTGRES_SHARED_WIKI_MIGRATIONS: readonly string[] = [
+  // Deterministic extension placement: shared migrations run with search_path
+  // pinned to `shared, public`, and shared/per-companion chains alike resolve
+  // vector types through `public`.
+  `CREATE EXTENSION IF NOT EXISTS vector WITH SCHEMA public;`,
+  `
+  CREATE TABLE IF NOT EXISTS shared_wiki_chunks (
+    site_id TEXT NOT NULL,
+    document_id TEXT NOT NULL,
+    chunk_index INTEGER NOT NULL,
+    body_sha256 TEXT NOT NULL,
+    title TEXT NOT NULL,
+    body_path TEXT NOT NULL,
+    source_class TEXT NOT NULL,
+    sensitivity TEXT NOT NULL DEFAULT 'personal',
+    scope TEXT NOT NULL,
+    chunk_text TEXT NOT NULL,
+    chunk_char_count INTEGER NOT NULL,
+    embedding VECTOR NOT NULL,
+    updated_at BIGINT NOT NULL,
+    PRIMARY KEY (site_id, document_id, chunk_index),
+    CHECK (scope = 'shared_world:' || site_id)
+  );
+  `,
+  `CREATE INDEX IF NOT EXISTS idx_shared_wiki_chunks_site ON shared_wiki_chunks(site_id);`,
+  `CREATE INDEX IF NOT EXISTS idx_shared_wiki_chunks_scope ON shared_wiki_chunks(scope);`,
+  `
+  INSERT INTO shared_schema_migrations (version, name)
+  VALUES (3, 'shared-wiki-chunks')
   ON CONFLICT (version) DO NOTHING;
   `,
 ];

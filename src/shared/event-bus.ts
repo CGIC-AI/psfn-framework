@@ -566,6 +566,8 @@ export interface EventMap {
    */
   'wiki.projection.sync': {
     documentId: string;
+    /** s10f9: present when the write hit the SHARED-WORLD projection for a site. */
+    siteId?: string;
     outcome: 'ran' | 'failed';
     chunkCount: number;
     error?: string;

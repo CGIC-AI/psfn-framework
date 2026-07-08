@@ -18,6 +18,12 @@ import {
   publishSiteWiki,
   type PlacesWikiPublicationReport,
 } from '../../faculties/wiki/places-wiki-publication.js';
+import {
+  runSharedWorldWikiWrite,
+  type SharedWikiProjectionContext,
+  type SharedWikiProjectionOutcome,
+} from '../../faculties/wiki/shared-pgvector-projection.js';
+import { resolveSharedWikiProjectionContext } from './shared-wiki-projection-context.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
 
 interface CliOptions {
@@ -62,13 +68,37 @@ function parseArgs(argv: string[]): CliOptions {
   return options;
 }
 
-function printReport(report: PlacesWikiPublicationReport): void {
+interface SitePublishResult {
+  report: PlacesWikiPublicationReport;
+  /** Absent for dry-run (nothing was written, nothing to project). */
+  projection?: SharedWikiProjectionOutcome;
+}
+
+function printReport(result: SitePublishResult): void {
+  const { report, projection } = result;
   console.log(`Site ${report.siteId}: `
     + `created=${report.created.length} updated=${report.updated.length} `
     + `unchanged=${report.unchanged.length} deleted=${report.deleted.length}`);
   for (const id of report.created) console.log(`  + ${id}`);
   for (const id of report.updated) console.log(`  ~ ${id}`);
   for (const id of report.deleted) console.log(`  - ${id}`);
+  if (projection) printProjection(projection);
+}
+
+function printProjection(projection: SharedWikiProjectionOutcome): void {
+  if (projection.status === 'projected') {
+    console.log(`  projection: projected (reembedded=${projection.projected.length} `
+      + `deleted=${projection.deleted.length} failed=${projection.failedDocuments.length})`);
+    for (const failure of projection.failedDocuments) {
+      console.log(`    ! ${failure.documentId}: ${failure.error}`);
+    }
+    return;
+  }
+  if (projection.status === 'skipped') {
+    console.log(`  projection: SKIPPED (${projection.reason ?? 'unknown'}) — shared docs are filesystem-only until projected`);
+    return;
+  }
+  console.log(`  projection: FAILED (${projection.error ?? 'unknown'}) — re-run once Postgres is reachable to heal`);
 }
 
 async function main(): Promise<void> {
@@ -88,32 +118,51 @@ async function main(): Promise<void> {
     return;
   }
 
-  const reports: PlacesWikiPublicationReport[] = [];
+  // s10f9: resolve projection deps ONCE before any write. Under multi-companion
+  // this fails closed here (no filesystem mutation) when Postgres/embedding is
+  // unconfigured; flag-off it lets the runner report an honest skip per site.
+  const projectionContext: SharedWikiProjectionContext | null = options.apply
+    ? resolveSharedWikiProjectionContext(config)
+    : null;
+
+  const results: SitePublishResult[] = [];
   for (const siteId of siteIds) {
-    if (!options.apply) {
+    if (!options.apply || !projectionContext) {
       // Dry-run: build the drafts (fails closed on unknown site) and report ids.
       const drafts = buildSiteWikiPages(registry, siteId);
-      const report: PlacesWikiPublicationReport = {
-        siteId,
-        created: drafts.map(draft => draft.id),
-        updated: [],
-        unchanged: [],
-        deleted: [],
-      };
-      reports.push(report);
+      results.push({
+        report: {
+          siteId,
+          created: drafts.map(draft => draft.id),
+          updated: [],
+          unchanged: [],
+          deleted: [],
+        },
+      });
       continue;
     }
     const store = new SharedWorldWikiStore(systemDataDir, siteId);
-    reports.push(publishSiteWiki(store, registry, siteId));
+    const { report, projection } = await runSharedWorldWikiWrite({
+      context: projectionContext,
+      store,
+      write: () => publishSiteWiki(store, registry, siteId),
+    });
+    results.push({ report, projection });
   }
 
   if (options.json) {
+    // Additive JSON shape: each report keeps its original fields and gains an
+    // optional `projection` block in apply mode.
+    const reports = results.map(result => ({
+      ...result.report,
+      ...(result.projection ? { projection: result.projection } : {}),
+    }));
     console.log(JSON.stringify({ mode: options.apply ? 'apply' : 'dry-run', systemDataDir, reports }, null, 2));
     return;
   }
   console.log(`Mode: ${options.apply ? 'apply' : 'dry-run (pass --apply to write)'}`);
   console.log(`System data dir: ${systemDataDir}`);
-  for (const report of reports) printReport(report);
+  for (const result of results) printReport(result);
 }
 
 main().catch((error) => {

@@ -5,7 +5,8 @@ import { createComponentLogger } from '../../shared/logger.js';
 import { countTokens } from '../../primitives/llm/tokens.js';
 import type { WikiRetrievalSettings } from '../../shared/context-budget.js';
 import type { WikiProjectionPort, WikiSemanticMatch } from './pgvector-projection.js';
-import { resolveReadableWikiScopes, type WikiScope } from './scope.js';
+import type { SharedWikiSearchPort } from './shared-pgvector-projection.js';
+import { isSharedWorldScope, resolveReadableWikiScopes, type WikiScope } from './scope.js';
 
 const log = createComponentLogger('WikiRetrieval');
 
@@ -92,6 +93,32 @@ export function resolveWikiRetrievalPlan(input: {
   };
 }
 
+/**
+ * Merge personal-projection and shared-projection matches into one ranked
+ * candidate list (s10f9 retrieval union). Pure: dedups on (scope, documentId)
+ * — document ids repeat across sites — keeping the best-scoring entry, then
+ * re-ranks with the SAME comparator the projection search uses (score desc,
+ * documentId asc tiebreak) and trims to the shared candidate limit. Never a
+ * blind concatenation: a weaker shared match can displace a weaker personal
+ * one and vice versa, exactly as if both lived in one table.
+ */
+export function mergeWikiSemanticMatches(
+  personal: readonly WikiSemanticMatch[],
+  shared: readonly WikiSemanticMatch[],
+  limit: number,
+): WikiSemanticMatch[] {
+  const bestByDoc = new Map<string, WikiSemanticMatch>();
+  for (const match of [...personal, ...shared]) {
+    const key = `${match.scope} ${match.documentId}`;
+    const existing = bestByDoc.get(key);
+    if (existing && existing.score >= match.score) continue;
+    bestByDoc.set(key, match);
+  }
+  return Array.from(bestByDoc.values())
+    .sort((left, right) => right.score - left.score || left.documentId.localeCompare(right.documentId))
+    .slice(0, Math.max(1, Math.floor(limit)));
+}
+
 export interface WikiContextBuildResult {
   block: string;
   tokenCount: number;
@@ -169,6 +196,13 @@ function truncateEntryToTokenBudget(entry: string, tokenBudget: number): string 
 
 export interface WikiRetrievalServiceDeps {
   projection: WikiProjectionPort;
+  /**
+   * s10f9: shared-world chunk projection (`shared.shared_wiki_chunks`).
+   * Consulted ONLY when the turn's plan grants a `shared_world:<siteId>` scope
+   * (multi-companion + situated); absent or unused it changes nothing — the
+   * personal-only path stays byte-identical.
+   */
+  sharedProjection?: SharedWikiSearchPort;
   embedding: EmbeddingProviderPort;
   eventBus?: Pick<EventBus, 'emit'>;
   getSettings: () => WikiRetrievalSettings;
@@ -259,11 +293,12 @@ export class WikiRetrievalService {
       return '';
     }
     let matches: WikiSemanticMatch[];
+    let queryEmbedding: Float32Array;
     try {
-      const embedding = await this.deps.embedding.embed(query);
+      queryEmbedding = await this.deps.embedding.embed(query);
       // plan.allowedScopes is undefined under flag-off → unrestricted, byte-identical.
       matches = await this.deps.projection.search(
-        embedding,
+        queryEmbedding,
         plan.similarityThreshold,
         this.searchLimit,
         plan.allowedScopes,
@@ -285,11 +320,45 @@ export class WikiRetrievalService {
       });
       return '';
     }
+    // s10f9 retrieval union: when the plan grants shared_world scopes, the
+    // shared-schema projection is queried with EXACTLY those scopes and the
+    // results are merged + re-ranked with the personal matches under the same
+    // scoring. With no shared scope granted (flag-off, or unsited) this block
+    // does not execute and the personal path above is byte-identical.
+    const sharedScopes = (plan.allowedScopes ?? []).filter(isSharedWorldScope);
+    let sharedDegradedReason: string | undefined;
+    if (sharedScopes.length > 0) {
+      if (!this.deps.sharedProjection) {
+        sharedDegradedReason = 'shared_projection_unavailable';
+        log.warn('Wiki retrieval granted shared scopes but no shared projection is wired; serving personal-only', {
+          channelId: request.channelId,
+          sharedScopes,
+        });
+      } else {
+        try {
+          const sharedMatches = await this.deps.sharedProjection.search(
+            queryEmbedding,
+            plan.similarityThreshold,
+            this.searchLimit,
+            sharedScopes,
+          );
+          matches = mergeWikiSemanticMatches(matches, sharedMatches, this.searchLimit);
+        } catch (error) {
+          // Partial fail-closed: the shared slice degrades to nothing while the
+          // personal matches still serve the turn; the event reports it.
+          sharedDegradedReason = 'shared_search_failed';
+          log.warn('Wiki shared-scope retrieval failed closed; serving personal-only for this turn', {
+            channelId: request.channelId,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }
+    }
     if (matches.length === 0) {
       this.emit({
         channelId: request.channelId,
-        outcome: 'skipped',
-        reason: 'below_threshold',
+        outcome: sharedDegradedReason ? 'degraded' : 'skipped',
+        reason: sharedDegradedReason ?? 'below_threshold',
         contextClass: plan.contextClass,
         candidateCount: 0,
         tokenCap: plan.tokenCap,
@@ -301,8 +370,8 @@ export class WikiRetrievalService {
     if (built.selectedCount === 0) {
       this.emit({
         channelId: request.channelId,
-        outcome: 'skipped',
-        reason: 'budget_exhausted',
+        outcome: sharedDegradedReason ? 'degraded' : 'skipped',
+        reason: sharedDegradedReason ?? 'budget_exhausted',
         contextClass: plan.contextClass,
         candidateCount: matches.length,
         tokenCap: plan.tokenCap,
@@ -310,9 +379,12 @@ export class WikiRetrievalService {
       });
       return '';
     }
+    // A shared-slice failure still serves the personal block, but the event is
+    // honest about the partial degrade (never a silent 'ran').
     this.emit({
       channelId: request.channelId,
-      outcome: 'ran',
+      outcome: sharedDegradedReason ? 'degraded' : 'ran',
+      ...(sharedDegradedReason ? { reason: sharedDegradedReason } : {}),
       contextClass: plan.contextClass,
       candidateCount: matches.length,
       selectedCount: built.selectedCount,

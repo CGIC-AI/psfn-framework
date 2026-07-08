@@ -271,6 +271,18 @@ export function createInProcessGardenAdminContract(
       ? new AdminWikiDataService({
         workspacePath: options.config.workspacePath,
         systemDataDir: resolveConfiguredSystemDataDir(options.config),
+        // s10f9: shared-world writes project into shared.shared_wiki_chunks via
+        // the SAME embedding port the runtime composed (gateway-backed in the
+        // agent process). Multi-companion + missing Postgres fails the write
+        // closed inside the projection runner.
+        sharedProjection: {
+          ...(options.config.postgresDatabaseUrl?.trim()
+            ? { databaseUrl: options.config.postgresDatabaseUrl.trim() }
+            : {}),
+          ...(options.embeddingService ? { embedding: options.embeddingService } : {}),
+          multiCompanion: options.config.multiCompanion === true,
+          eventBus: options.eventBus,
+        },
       })
       : null,
     episodicMemory: options.episodicStore

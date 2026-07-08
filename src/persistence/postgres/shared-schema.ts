@@ -4,7 +4,11 @@ import {
   createPostgresPool,
   withPostgresClient,
 } from '../postgres.js';
-import { POSTGRES_SHARED_MIGRATIONS, SHARED_SCHEMA_NAME } from './migrations.js';
+import {
+  POSTGRES_SHARED_MIGRATIONS,
+  POSTGRES_SHARED_WIKI_MIGRATIONS,
+  SHARED_SCHEMA_NAME,
+} from './migrations.js';
 
 /**
  * Cluster-wide advisory lock key serializing shared-schema provisioning.
@@ -39,6 +43,29 @@ const SHARED_SCHEMA_ADVISORY_LOCK_ID = 1;
  * search_path is untouched after commit.
  */
 export async function ensureSharedSchema(pool: Pool): Promise<void> {
+  await provisionSharedSchema(pool, [POSTGRES_SHARED_MIGRATIONS]);
+}
+
+/**
+ * Provision the shared schema INCLUDING the shared-world wiki chunk projection
+ * (ledger version 3, sprint 10 s10f9). The wiki statement list requires the
+ * pgvector extension, so it is a separate chain layered on top of the base
+ * shared chain: pgvector-free shared consumers (companion presence) keep
+ * calling {@link ensureSharedSchema}, while every shared-wiki surface calls
+ * this. Runs base + wiki chains in one transaction under the SAME advisory
+ * lock, so wiki provisioning serializes with presence provisioning and is
+ * idempotent under N concurrent callers. Fails closed (throws) when pgvector
+ * is unavailable — a shared-wiki surface must never silently come up without
+ * its projection table.
+ */
+export async function ensureSharedWikiSchema(pool: Pool): Promise<void> {
+  await provisionSharedSchema(pool, [POSTGRES_SHARED_MIGRATIONS, POSTGRES_SHARED_WIKI_MIGRATIONS]);
+}
+
+async function provisionSharedSchema(
+  pool: Pool,
+  chains: ReadonlyArray<readonly string[]>,
+): Promise<void> {
   const schema = assertValidPostgresSchemaName(SHARED_SCHEMA_NAME);
   await withPostgresClient(pool, async (client) => {
     await client.query(
@@ -52,8 +79,10 @@ export async function ensureSharedSchema(pool: Pool): Promise<void> {
     // MUST land in the shared schema even on a pool without a pinned
     // search_path (`public` is retained for shared extension types).
     await client.query(`SET LOCAL search_path TO "${schema}", public`);
-    for (const statement of POSTGRES_SHARED_MIGRATIONS) {
-      await client.query(statement);
+    for (const chain of chains) {
+      for (const statement of chain) {
+        await client.query(statement);
+      }
     }
   });
 }

@@ -1595,55 +1595,33 @@ describe('settings', () => {
     });
 
     it('parses canonical model registry JSON', () => {
+      const modelRegistry = makeCanonicalModelRegistry();
+      modelRegistry.models.push({
+        id: 'disabled-chat-candidate',
+        enabled: false,
+        rank: 20,
+        identity: {
+          model: 'openai/gpt-4.1-mini-disabled',
+          provider: 'openrouter',
+          source: { type: 'openrouter' },
+        },
+        purposes: [
+          { purpose: 'chat', primary: false },
+        ],
+        capabilities: { maxOutputTokens: 1024, contextWindow: 128000 },
+        tuning: { maxOutputTokens: 1024 },
+      });
       const params = new URLSearchParams({
-        modelRegistryJson: JSON.stringify({
-          schemaVersion: 1,
-          models: [
-            {
-              id: 'fast',
-              rank: 100,
-              identity: {
-                model: 'openai/gpt-4.1-mini',
-                provider: 'openrouter',
-                source: { type: 'openrouter' },
-              },
-              purposes: [
-                { purpose: 'chat', primary: true },
-                { purpose: 'summary', primary: true },
-                { purpose: 'reasoning', primary: true },
-                { purpose: 'longContext', primary: true },
-                { purpose: 'vision', primary: true },
-                { purpose: 'moa', primary: true },
-              ],
-              capabilities: { maxOutputTokens: 2048, contextWindow: 128000 },
-              tuning: { maxOutputTokens: 1536 },
-            },
-            {
-              id: 'extract',
-              rank: 80,
-              identity: {
-                model: 'deepseek/deepseek-v3.2',
-                provider: 'openrouter',
-                source: { type: 'openrouter' },
-              },
-              purposes: [
-                { purpose: 'background', primary: true },
-                { purpose: 'extraction', primary: true },
-                { purpose: 'import_processing', primary: true },
-              ],
-              capabilities: { maxOutputTokens: 1024, contextWindow: 128000 },
-              tuning: { maxOutputTokens: 1024 },
-            },
-          ],
-        }),
+        modelRegistryJson: JSON.stringify(modelRegistry),
       });
 
       const [settings, errors] = parseSettingsForm(params);
       expect(errors).toEqual([]);
-      expect(settings.modelRegistry?.models[0]?.id).toBe('fast');
-      expect(settings.modelCatalog?.fast.overrides?.maxTokens).toBe(1536);
-      expect(settings.modelRoleAssignments?.chat).toBe('fast');
-      expect(settings.modelRoleAssignments?.context).toBe('extract');
+      expect(settings.modelRegistry?.models[0]?.id).toBe('primary');
+      expect(settings.modelRegistry?.models.find(model => model.id === 'disabled-chat-candidate')?.enabled).toBe(false);
+      expect(settings.modelCatalog?.primary.overrides?.maxTokens).toBe(4096);
+      expect(settings.modelRoleAssignments?.chat).toBe('primary');
+      expect(settings.modelRoleAssignments?.context).toBe('extraction');
       expect(settings.primaryModel).toBe('openai/gpt-4.1-mini');
       expect(settings.extractionModel).toBe('deepseek/deepseek-v3.2');
     });

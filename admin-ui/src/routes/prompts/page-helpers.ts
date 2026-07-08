@@ -74,6 +74,10 @@ export const MACRO_GROUP_META: Record<PromptRuntimeMacroGroup, PromptRuntimeMacr
     label: 'Internal State',
     rationale: 'Cognitive, attentional, relational, and mood labels plus small prose helpers.',
   },
+  situated: {
+    label: 'Situated Location',
+    rationale: 'Durable last-known location macros, including place identity and staleness.',
+  },
   attention: {
     label: 'Attention & Memory',
     rationale: 'Open threads, appraisal history, behavioral notes, and skills context.',

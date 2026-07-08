@@ -437,6 +437,10 @@ function normalizeModelRegistryEntry(value: unknown, fieldPath: string): ModelRe
   if (rank === undefined) {
     throw new Error(`Invalid model registry at ${fieldPath}.rank: expected non-negative integer`);
   }
+  const enabled = value.enabled === undefined ? undefined : toBoolean(value.enabled);
+  if (value.enabled !== undefined && enabled === undefined) {
+    throw new Error(`Invalid model registry at ${fieldPath}.enabled: expected boolean`);
+  }
 
   if (!isRecord(value.identity)) {
     throw new Error(`Invalid model registry at ${fieldPath}.identity: expected object`);
@@ -500,6 +504,7 @@ function normalizeModelRegistryEntry(value: unknown, fieldPath: string): ModelRe
 
   return {
     id,
+    ...(enabled === false ? { enabled: false } : {}),
     rank,
     identity: {
       provider,
@@ -563,6 +568,7 @@ export function normalizeCanonicalModelRegistry(
     CANONICAL_MODEL_PURPOSES.map((purpose) => [purpose, 0]),
   );
   for (const model of models) {
+    if (model.enabled === false) continue;
     for (const purposeTag of model.purposes) {
       if (!purposeTag.primary) continue;
       const previous = primaryPurposeCounts.get(purposeTag.purpose) ?? 0;
@@ -588,14 +594,14 @@ export function normalizeCanonicalModelRegistry(
 }
 
 function backfillPrimaryMemoryPurpose(models: ModelRegistryEntry[]): void {
-  if (models.some((entry) => entry.purposes.some((tag) => tag.purpose === 'memory' && tag.primary))) {
+  if (models.some((entry) => entry.enabled !== false && entry.purposes.some((tag) => tag.purpose === 'memory' && tag.primary))) {
     return;
   }
 
   // Compatibility migration: before the dedicated memory route existed, extraction/background
   // carried this workload. Preserve loadability by projecting memory onto that primary model.
-  const target = models.find((entry) => entry.purposes.some((tag) => tag.purpose === 'extraction' && tag.primary))
-    ?? models.find((entry) => entry.purposes.some((tag) => tag.purpose === 'background' && tag.primary));
+  const target = models.find((entry) => entry.enabled !== false && entry.purposes.some((tag) => tag.purpose === 'extraction' && tag.primary))
+    ?? models.find((entry) => entry.enabled !== false && entry.purposes.some((tag) => tag.purpose === 'background' && tag.primary));
   if (!target) return;
 
   const existingMemoryIndex = target.purposes.findIndex((tag) => tag.purpose === 'memory');
@@ -613,6 +619,7 @@ function backfillPrimaryMemoryPurpose(models: ModelRegistryEntry[]): void {
 function resolvePrimaryModelIdsByPurpose(registry: CanonicalModelRegistry): Record<CanonicalModelPurpose, string> {
   const primaryByPurpose = {} as Record<CanonicalModelPurpose, string>;
   for (const model of registry.models) {
+    if (model.enabled === false) continue;
     for (const purposeTag of model.purposes) {
       if (!purposeTag.primary) continue;
       primaryByPurpose[purposeTag.purpose] = model.id;

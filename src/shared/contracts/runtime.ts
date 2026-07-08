@@ -952,6 +952,7 @@ export interface CanonicalProviderRegistry {
 
 export interface ModelRegistryEntry {
   id: string;
+  enabled?: boolean;
   rank: number;
   identity: ModelRegistryIdentityMetadata;
   purposes: ModelRegistryPurposeTag[];

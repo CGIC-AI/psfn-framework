@@ -112,12 +112,14 @@
     });
   });
   let hasDiscoveredModels = $derived.by(() => discoveredModels.length > 0);
+  let enabledModelCount = $derived.by(() => models.filter(modelIsEnabled).length);
 
   let purposePrimaryCounts = $derived.by(() => {
     const counts = Object.fromEntries(
       CANONICAL_PURPOSES.map((purpose) => [purpose, 0]),
     ) as Record<CanonicalModelPurpose, number>;
     for (const model of models) {
+      if (!modelIsEnabled(model)) continue;
       for (const tag of model.purposes) {
         if (tag.primary) {
           counts[tag.purpose] = (counts[tag.purpose] ?? 0) + 1;
@@ -280,6 +282,21 @@
         ? updater(cloneModelEntry(entry))
         : entry
     ));
+  }
+
+  function modelIsEnabled(entry: ModelRegistryEntry): boolean {
+    return entry.enabled !== false;
+  }
+
+  function setModelEnabled(index: number, enabled: boolean): void {
+    updateModelAt(index, (entry) => {
+      if (enabled) {
+        delete entry.enabled;
+      } else {
+        entry.enabled = false;
+      }
+      return entry;
+    });
   }
 
   function cyclePurposeTag(index: number, purpose: CanonicalModelPurpose): void {
@@ -734,11 +751,15 @@
 
     for (const purpose of CANONICAL_PURPOSES) {
       const primaryCount = entries.reduce((count, entry) => (
-        count + (entry.purposes.some((tag) => tag.purpose === purpose && tag.primary) ? 1 : 0)
+        count + (
+          modelIsEnabled(entry) && entry.purposes.some((tag) => tag.purpose === purpose && tag.primary)
+            ? 1
+            : 0
+        )
       ), 0);
       if (primaryCount !== 1) {
         errors.push(
-          `Purpose "${purpose}" must have exactly one primary model before save (found ${primaryCount}).`,
+          `Purpose "${purpose}" must have exactly one enabled primary model before save (found ${primaryCount}).`,
         );
       }
     }
@@ -780,6 +801,11 @@
           identity,
           purposes: normalizedPurposes,
         };
+        if (entry.enabled === false) {
+          nextEntry.enabled = false;
+        } else {
+          delete nextEntry.enabled;
+        }
         const normalizedRouting = normalizeRouting(entry.routing);
         if (normalizedRouting) {
           nextEntry.routing = normalizedRouting;
@@ -1090,26 +1116,32 @@
       />
 
       <div class="space-y-3">
-        <div class="flex items-center justify-between">
+        <div class="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
           <h2 class="text-sm font-serif font-semibold text-shadow-800">Model Registry</h2>
-          <button
-            onclick={addModel}
-            class="px-3 py-1.5 text-sm font-medium rounded border border-gold-400 text-gold-700 hover:bg-gold-50 transition-colors"
-          >
-            + Add Model
-          </button>
+          <div class="flex flex-wrap items-center gap-2">
+            <span class="rounded-full border border-bark-300 bg-bark-100 px-3 py-1 text-sm text-shadow-700">
+              {enabledModelCount} enabled / {models.length} total
+            </span>
+            <button
+              onclick={addModel}
+              class="px-3 py-1.5 text-sm font-medium rounded border border-gold-400 text-gold-700 hover:bg-gold-50 transition-colors"
+            >
+              + Add Model
+            </button>
+          </div>
         </div>
 
         {#each models as entry, index (entry.id)}
           {@const isExpanded = expandedModelIds.has(entry.id)}
           {@const currentDragOver = dragOverIndex === index}
+          {@const modelEnabled = modelIsEnabled(entry)}
           <article
             draggable="true"
             ondragstart={() => handleDragStart(index)}
             ondragover={(event) => handleDragOver(event, index)}
             ondrop={(event) => handleDrop(event, index)}
             ondragend={handleDragEnd}
-            class="card-garden overflow-hidden border {currentDragOver ? 'border-gold-400' : 'border-bark-300'}"
+            class="card-garden overflow-hidden border {currentDragOver ? 'border-gold-400' : 'border-bark-300'} {modelEnabled ? '' : 'bg-bark-50/80 opacity-80'}"
           >
             <div class="px-4 py-3 space-y-3">
               <div class="flex flex-wrap items-start justify-between gap-3">
@@ -1126,6 +1158,9 @@
                       class="px-2 py-1 rounded border border-bark-300 text-sm font-mono text-shadow-800 bg-white"
                     />
                     <span class="px-2 py-0.5 rounded-full text-xs bg-bark-100 text-shadow-600 border border-bark-300">rank {entry.rank}</span>
+                    <span class="px-2 py-0.5 rounded-full text-xs border {modelEnabled ? 'bg-moss-50 border-moss-300 text-moss-700' : 'bg-wilt-50 border-wilt-300 text-wilt-700'}">
+                      {modelEnabled ? 'enabled' : 'disabled'}
+                    </span>
                   </div>
                   <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-2 text-sm">
                     <div class="rounded-lg border border-bark-200 bg-bark-50 px-2 py-1.5">
@@ -1160,7 +1195,13 @@
                     </p>
                   </div>
                 </div>
-                <div class="flex items-center gap-2">
+                <div class="flex flex-wrap items-center gap-2">
+                  <button
+                    onclick={() => setModelEnabled(index, !modelEnabled)}
+                    class="px-3 py-1.5 text-sm rounded border font-medium transition-colors {modelEnabled ? 'border-wilt-300 text-wilt-700 hover:bg-wilt-50' : 'border-moss-300 text-moss-700 hover:bg-moss-50'}"
+                  >
+                    {modelEnabled ? 'Disable Model' : 'Enable Model'}
+                  </button>
                   <button
                     onclick={() => toggleExpanded(entry.id)}
                     class="px-3 py-1.5 text-sm rounded border border-bark-300 text-shadow-700 hover:bg-bark-100 transition-colors"

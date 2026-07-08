@@ -236,8 +236,18 @@ export async function prepareTurnIdentityState(input: {
   // `presence.companion.co_located` inside this call. No-op when unwired
   // (single-companion / flag-off) or when the turn resolves no place; the port
   // never throws (presence failures are logged, not turn-fatal).
+  //
+  // Dual presence (vinz.29): a mindspace (plain-chat) turn that foregrounds a
+  // VIRTUAL place through the situated fallback (the twin of the last-known
+  // physical room, or a deliberate virtual move) counts as presence at that
+  // twin — the port writes kind 'virtual' there. The fallback never produces a
+  // physical arrival (the port only accepts virtual fallback places), so a
+  // Discord DM still cannot look like walking into a physical room.
   if (runtime.companionPresence) {
-    await runtime.companionPresence.observeTurnPlace(message);
+    await runtime.companionPresence.observeTurnPlace(
+      message,
+      runtime.resolveSituatedFallbackPlaceId?.(message),
+    );
   }
 
   const authorContext = await runtime.resolveAuthorContext(message);

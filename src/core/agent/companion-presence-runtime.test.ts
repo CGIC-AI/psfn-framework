@@ -52,6 +52,14 @@ const PLACES_REGISTRY: PlacesRegistryConfig = {
       kind: 'virtual',
       affordances: [],
     },
+    {
+      placeId: 'place.living-room-twin',
+      siteId: 'site.mud',
+      displayName: 'Living Room (Twin)',
+      kind: 'virtual',
+      mirrorsPlaceId: 'place.living-room',
+      affordances: [],
+    },
   ],
 };
 
@@ -476,5 +484,113 @@ describe('CompanionPresenceRuntime', () => {
     expect(store.deleteCalls).toEqual([SELF_ID]);
     expect(store.rows.has(SELF_ID)).toBe(false);
     expect(store.closed).toBe(true);
+  });
+});
+
+// ── Dual presence: mindspace turns write kind 'virtual' at the twin (vinz.29) ──
+// A plain-chat turn foregrounding a mindspace twin through the situated
+// fallback IS presence at that twin, written through the same observeTurnPlace
+// seam (contract s10wm — never companion_presence directly). A physical
+// fallback place is never written: physical arrivals require the turn's own
+// satellite binding.
+describe('CompanionPresenceRuntime — mindspace fallback (vinz.29)', () => {
+  it('writes kind virtual at the twin place for a plain-chat turn with a mindspace fallback', async () => {
+    const store = new FakePresenceStore();
+    const { bus } = makeEventBus();
+    const runtime = makeRuntime(store, bus);
+
+    await runtime.observeTurnPlace(makeMessage(), 'place.living-room-twin');
+
+    expect(store.upsertCalls).toEqual([{
+      companionId: SELF_ID,
+      siteId: 'site.mud',
+      placeId: 'place.living-room-twin',
+      kind: 'virtual',
+    }]);
+  });
+
+  it('never writes a PHYSICAL fallback place (a chat turn is not a physical arrival)', async () => {
+    const store = new FakePresenceStore();
+    const { bus, emit } = makeEventBus();
+    const runtime = makeRuntime(store, bus);
+
+    await runtime.observeTurnPlace(makeMessage(), 'place.living-room');
+    await runtime.observeTurnPlace(makeMessage(), 'place.nowhere');
+
+    expect(store.upsertCalls).toHaveLength(0);
+    expect(emit).not.toHaveBeenCalled();
+  });
+
+  it("the turn's own satellite binding outranks the mindspace fallback", async () => {
+    const store = new FakePresenceStore();
+    const { bus } = makeEventBus();
+    const runtime = makeRuntime(store, bus);
+
+    await runtime.observeTurnPlace(makeMessage('place.kitchen'), 'place.living-room-twin');
+
+    expect(store.upsertCalls).toEqual([{
+      companionId: SELF_ID,
+      siteId: 'site.home',
+      placeId: 'place.kitchen',
+      kind: 'physical',
+    }]);
+  });
+
+  it('two companions foregrounding the same twin become co-present there', async () => {
+    const store = new FakePresenceStore();
+    const { bus: busA, emit: emitA } = makeEventBus();
+    const { bus: busB, emit: emitB } = makeEventBus();
+    const runtimeA = makeRuntime(store, busA);
+    const runtimeB = new CompanionPresenceRuntime({
+      store,
+      companionId: PEER_A,
+      eventBus: busB,
+      placesRegistry: PLACES_REGISTRY,
+      now: () => NOW,
+    });
+
+    // Companion A's chat turn foregrounds the twin first; B follows.
+    await runtimeA.observeTurnPlace(makeMessage(), 'place.living-room-twin');
+    await runtimeB.observeTurnPlace(makeMessage(), 'place.living-room-twin');
+    // A's next chat turn refreshes and now sees B.
+    await runtimeA.observeTurnPlace(makeMessage(), 'place.living-room-twin');
+
+    const twinRef = { siteId: 'site.mud', placeId: 'place.living-room-twin', kind: 'virtual' } as const;
+    expect(runtimeB.getCoPresent(twinRef)).toEqual([
+      { companionId: SELF_ID, displayName: SELF_ID },
+    ]);
+    expect(runtimeA.getCoPresent(twinRef)).toEqual([
+      { companionId: PEER_A, displayName: PEER_A },
+    ]);
+    // Arrival events fired for the peer already present, on each side once.
+    expect(emitB).toHaveBeenCalledWith('presence.companion.co_located', expect.objectContaining({
+      companionId: SELF_ID,
+      observerCompanionId: PEER_A,
+      placeId: 'place.living-room-twin',
+      kind: 'virtual',
+    }));
+    expect(emitA).toHaveBeenCalledWith('presence.companion.co_located', expect.objectContaining({
+      companionId: PEER_A,
+      observerCompanionId: SELF_ID,
+      placeId: 'place.living-room-twin',
+      kind: 'virtual',
+    }));
+  });
+
+  it('the mindspace write becomes the heartbeat-refresh target', async () => {
+    const store = new FakePresenceStore();
+    const { bus } = makeEventBus();
+    const runtime = makeRuntime(store, bus);
+
+    await runtime.observeTurnPlace(makeMessage(), 'place.living-room-twin');
+    store.upsertCalls.length = 0;
+
+    await runtime.refreshOwnPresence();
+    expect(store.upsertCalls).toEqual([{
+      companionId: SELF_ID,
+      siteId: 'site.mud',
+      placeId: 'place.living-room-twin',
+      kind: 'virtual',
+    }]);
   });
 });

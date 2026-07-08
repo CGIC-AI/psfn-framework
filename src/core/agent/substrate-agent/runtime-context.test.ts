@@ -983,6 +983,66 @@ describe('runtime subject identity', () => {
     });
   });
 
+  it('resolves a companion-lane peer as an ordinary contact and marks it machine-intelligence (W6)', async () => {
+    // The gateway stamps `routing.authorIsMachineIntelligence` on every
+    // companion-lane message; the sender companionId is the channel user id
+    // under the 'companion' contact channel. Trust is whatever the contact
+    // record says — no special-casing for peer companions.
+    const markMachineIntelligenceFromObservation = vi.fn(async () => 'marked' as const);
+    const authorContext = await resolveAuthorContext({
+      message: makeMessage({
+        channelId: 'companion-room:living_room',
+        channelType: 'companion',
+        authorId: 'comp-nova-uuid',
+        authorName: 'Nova',
+        isDirectMessage: false,
+        routing: {
+          source: 'companion',
+          authorIsMachineIntelligence: true,
+        },
+      }),
+      contactStore: {
+        resolveChannelIdentity: (channel: string, channelUserId: string) => {
+          expect(channel).toBe('companion');
+          expect(channelUserId).toBe('comp-nova-uuid');
+          return {
+            id: 'contact-nova',
+            displayName: 'Nova',
+            trustLevel: 'regular',
+            relationshipType: 'ai_companion',
+            firstSeen: '2026-07-08T12:00:00Z',
+            lastSeen: '2026-07-08T12:00:00Z',
+          };
+        },
+        markMachineIntelligenceFromObservation,
+        getConversationChannelPrivacy: () => undefined,
+        updateLastSeen: () => undefined,
+        recordChannelActivity: () => undefined,
+        getEmotionalTimeSeries: () => [],
+      } as never,
+      logger: {
+        warn: () => undefined,
+        debug: () => undefined,
+      },
+      companionIdentityKey: DEFAULT_COMPANION_ID,
+      companionDisplayName: 'Companion',
+    });
+
+    // Observed-MI auto-tagging ran with the provenance-honest channel actor.
+    expect(markMachineIntelligenceFromObservation).toHaveBeenCalledWith(
+      'contact-nova',
+      'system:channel_observation:companion',
+    );
+    expect(authorContext).toMatchObject({
+      speakerRole: 'user',
+      speakingWithIsMachineIntelligence: true,
+      canonicalContactKey: 'contact-nova',
+      relationshipType: 'ai_companion',
+      trustLevel: 'regular', // contact-owned, not special-cased
+      resolvedUserName: 'Nova',
+    });
+  });
+
   it('renders routed channel privacy through the prompt-owned runtime layers', () => {
     const message = makeMessage({
       channelId: 'api:admin-announcements',

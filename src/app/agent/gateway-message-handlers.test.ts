@@ -75,6 +75,9 @@ function createHarness(overrides?: {
   let onDiscordMessage:
     | ((message: SubstrateMessage) => void | Promise<void>)
     | undefined;
+  let onCompanionMessage:
+    | ((message: SubstrateMessage) => void | Promise<void>)
+    | undefined;
 
   const gateway = {
     onHandleMessage: vi.fn((handler: (message: SubstrateMessage) => Promise<AgentResponse>) => {
@@ -83,8 +86,12 @@ function createHarness(overrides?: {
     onDiscordMessage: vi.fn((handler: (message: SubstrateMessage) => void | Promise<void>) => {
       onDiscordMessage = handler;
     }),
+    onCompanionMessage: vi.fn((handler: (message: SubstrateMessage) => void | Promise<void>) => {
+      onCompanionMessage = handler;
+    }),
     discordSend: vi.fn(async () => {}),
     discordSendMedia: vi.fn(async () => {}),
+    companionSend: vi.fn(async () => ({})),
   };
   const agentLoop = {
     handleMessage: vi.fn(overrides?.handleMessage ?? (async () => makeResponse('primary response'))),
@@ -133,9 +140,10 @@ function createHarness(overrides?: {
     ...(overrides?.outboundReplyGuard
       ? { outboundReplyGuard: overrides.outboundReplyGuard }
       : {}),
+    companionAuthorName: 'Selene',
   });
 
-  if (!onHandleMessage || !onDiscordMessage) {
+  if (!onHandleMessage || !onDiscordMessage || !onCompanionMessage) {
     throw new Error('Expected gateway message handlers to be registered');
   }
 
@@ -150,6 +158,7 @@ function createHarness(overrides?: {
     outboundReplyGuard: overrides?.outboundReplyGuard,
     onHandleMessage,
     onDiscordMessage,
+    onCompanionMessage,
   };
 }
 
@@ -633,5 +642,112 @@ describe('registerGatewayMessageHandlers', () => {
       messageId: 'msg-dup-2',
       disposition: 'cached',
     });
+  });
+
+  // ── Inter-companion channel lane (sprint 10, W6) ──
+
+  function makeCompanionMessage(overrides?: Record<string, unknown>): SubstrateMessage {
+    return makeMessage({
+      id: 'cmsg-1',
+      channelId: 'companion-room:living_room',
+      channelType: 'companion',
+      authorId: 'peer-companion-uuid',
+      authorName: 'Nova',
+      content: 'hello from a peer companion',
+      isDirectMessage: false,
+      routing: {
+        source: 'companion',
+        authorIsMachineIntelligence: true,
+      },
+      ...overrides,
+    });
+  }
+
+  it('runs companion messages through the normal turn pipeline and replies via the companion lane', async () => {
+    const harness = createHarness({
+      handleMessage: async () => makeResponse('companion reply'),
+    });
+    const message = makeCompanionMessage({ timestamp: '2026-03-02T02:00:00.000Z' });
+
+    await harness.onCompanionMessage(message);
+
+    await vi.waitFor(() => {
+      expect(harness.agentLoop.handleMessage).toHaveBeenCalledTimes(1);
+      expect(harness.gateway.companionSend).toHaveBeenCalledWith(
+        'companion-room:living_room',
+        'companion reply',
+        'Selene',
+      );
+    });
+    // Timestamp deserialized before the turn pipeline sees it.
+    const handled = harness.agentLoop.handleMessage.mock.calls[0][0] as SubstrateMessage;
+    expect(handled.timestamp).toBeInstanceOf(Date);
+    expect(harness.trackSessionActivity).toHaveBeenCalledTimes(1);
+    // The reply never leaks onto another channel surface.
+    expect(harness.gateway.discordSend).not.toHaveBeenCalled();
+  });
+
+  it('sends nothing when the turn produces empty content (fatigue suppression terminates the exchange)', async () => {
+    const harness = createHarness({
+      handleMessage: async () => makeResponse(''),
+    });
+
+    await harness.onCompanionMessage(makeCompanionMessage());
+
+    await vi.waitFor(() => {
+      expect(harness.agentLoop.handleMessage).toHaveBeenCalledTimes(1);
+    });
+    expect(harness.gateway.companionSend).not.toHaveBeenCalled();
+  });
+
+  it('drops duplicate companion notifications and audits the disposition', async () => {
+    const gate = createDeferred<AgentResponse>();
+    const harness = createHarness({
+      handleMessage: async () => gate.promise,
+    });
+    const message = makeCompanionMessage({ id: 'cmsg-dup' });
+
+    await harness.onCompanionMessage(message);
+    await harness.onCompanionMessage(message);
+
+    expect(harness.safeguardAuditTrail.append).toHaveBeenCalledWith('gateway.message.duplicate', {
+      route: 'companion',
+      channelId: message.channelId,
+      messageId: 'cmsg-dup',
+      disposition: 'in_flight',
+    });
+    gate.resolve(makeResponse('late reply'));
+    await vi.waitFor(() => {
+      expect(harness.agentLoop.handleMessage).toHaveBeenCalledTimes(1);
+      expect(harness.gateway.companionSend).toHaveBeenCalledTimes(1);
+    });
+
+    await harness.onCompanionMessage(message);
+    expect(harness.safeguardAuditTrail.append).toHaveBeenCalledWith('gateway.message.duplicate', {
+      route: 'companion',
+      channelId: message.channelId,
+      messageId: 'cmsg-dup',
+      disposition: 'cached',
+    });
+    expect(harness.agentLoop.handleMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it('logs and audits companion turn errors without crashing the pump', async () => {
+    const harness = createHarness({
+      handleMessage: async () => {
+        throw new Error('turn exploded');
+      },
+    });
+
+    await harness.onCompanionMessage(makeCompanionMessage({ id: 'cmsg-err' }));
+
+    await vi.waitFor(() => {
+      expect(harness.safeguardAuditTrail.append).toHaveBeenCalledWith('companion.message.error', {
+        channelId: 'companion-room:living_room',
+        messageId: 'cmsg-err',
+        error: 'turn exploded',
+      });
+    });
+    expect(harness.gateway.companionSend).not.toHaveBeenCalled();
   });
 });

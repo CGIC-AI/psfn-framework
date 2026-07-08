@@ -11,6 +11,7 @@ import type { SubstrateConfig } from '../../system/config/runtime-config-contrac
 import { createPostgresGatewayAuditStore } from './postgres-audit.js';
 import type { GatewayBootstrapInput } from './bootstrap-input.js';
 import { createGatewayPrivilegedServiceRegistry } from './privileged-services.js';
+import type { GatewayCompanionChannelLane } from './companion-channels.js';
 import { GatewayServer } from './server.js';
 import type { StartupConfigHydrationResult } from '../../app/startup/support/bootstrap-helpers.js';
 
@@ -34,6 +35,8 @@ export interface GatewayPrivilegedCore {
     discordAdapter: ChannelOutboundDock;
     /** Multi-account discord (W1-P2): outbound dock per companionId. */
     discordAccountDocks?: ReadonlyMap<string, ChannelOutboundDock>;
+    /** Inter-companion channel lane (W6); multi-companion only. */
+    companionChannels?: GatewayCompanionChannelLane;
   }): GatewayServer;
 }
 
@@ -87,8 +90,9 @@ export async function buildGatewayPrivilegedCore(
     eligibilityGate,
     privilegedServices,
     auditDb: null,
-    createGatewayServer: ({ discordAdapter, discordAccountDocks }) => new GatewayServer({
+    createGatewayServer: ({ discordAdapter, discordAccountDocks, companionChannels }) => new GatewayServer({
       ...(discordAccountDocks ? { discordAccountDocks } : {}),
+      ...(companionChannels ? { companionChannels } : {}),
       socketPath: input.bootstrap.socketPath,
       gatewayRpcEndpoint: input.bootstrap.gatewayRpcEndpoint,
       llmProvider: privilegedServices.llmClient,

@@ -4,10 +4,12 @@ import { isRecord } from '../../shared/utils/types.js';
 
 import * as net from 'node:net';
 import type * as https from 'node:https';
+import { randomUUID } from 'node:crypto';
 import {
   JSONRPCServer,
   JSONRPCClient,
   JSONRPCServerAndClient,
+  JSONRPCErrorException,
 } from 'json-rpc-2.0';
 import type { LLMProviderPort, EmbeddingProviderPort } from '../../core/agent/contracts.js';
 import { DEFAULT_COMPANION_ID } from '../../core/identity/companion-naming.js';
@@ -18,6 +20,7 @@ import type { GatewayRpcConnection, GatewayRpcEndpoint } from './transport.js';
 import { createSocketServer, createWebSocketRpcServer } from './transport.js';
 import {
   GatewayErrors,
+  type CompanionMessageSendResult,
   type PolicyDecision,
   type RuntimeHealthResult,
   type VoiceHandleMessageResult,
@@ -28,6 +31,8 @@ import {
   type GatewayChannelSurface,
   type GatewayMultiCompanionConfig,
 } from './multi-companion.js';
+import type { GatewayCompanionChannelLane } from './companion-channels.js';
+import { COMPANION_CHANNEL_TYPE } from '../../shared/contracts/companion-channels.js';
 import type { GitOperations } from '../integrations/git/ops.js';
 import type { ImageRuntimeConfig } from '../../primitives/images/types.js';
 import type { ModelDiscoveryBackend } from '../../primitives/llm/discovery.js';
@@ -168,6 +173,14 @@ export interface GatewayServerOptions {
    * and any ambiguity fails closed.
    */
   multiCompanion?: GatewayMultiCompanionConfig;
+  /**
+   * Inter-companion channel lane (sprint-10 W6): resolves companion-room /
+   * companion-dm addressing for `companion.message.send`. Requires the
+   * multi-companion flag; providing it flag-off is a configuration error
+   * (fail closed). Absent while multi-companion is on, the lane RPC alarms
+   * and rejects every send.
+   */
+  companionChannels?: GatewayCompanionChannelLane;
 }
 
 export class GatewayServer {
@@ -193,6 +206,12 @@ export class GatewayServer {
     this.options = options;
     this.sessionHmacKeyring = options.sessionHmacKeyring;
     this.multiCompanion = options.multiCompanion ?? disabledGatewayMultiCompanionConfig();
+    if (options.companionChannels && !this.multiCompanion.enabled) {
+      throw new Error(
+        'GatewayServer received a companionChannels lane while multi-companion is disabled; '
+        + 'the inter-companion lane must not exist in single-companion topology',
+      );
+    }
     if (this.multiCompanion.enabled) {
       log.info('Multi-companion gateway routing enabled', {
         channelRouting: this.multiCompanion.channelRouting,
@@ -311,6 +330,15 @@ export class GatewayServer {
 
     registerGatewayMethods(runtime);
     target.addMethod('gateway.client.identify', (params: unknown) => this.identifyConnection(conn, params));
+    target.addMethod('companion.message.send', this.audited(
+      'companion.message.send',
+      (params: unknown) => this.handleCompanionMessageSend(conn, params),
+      (params: unknown) => ({
+        senderCompanionId: this.connectionStatuses.get(conn)?.companionId ?? '(unidentified)',
+        ...(isRecord(params) && typeof params.channelId === 'string' ? { channelId: params.channelId } : {}),
+        ...(isRecord(params) && typeof params.content === 'string' ? { contentLength: params.content.length } : {}),
+      }),
+    ));
     target.addMethod('api.stream.delta', (params: unknown) => {
       if (this.multiCompanion.enabled && !this.isConnectionAuthorizedForApiStream(conn)) {
         this.alarmCompanionViolation(
@@ -397,6 +425,147 @@ export class GatewayServer {
       return false;
     }
     return this.connectionStatuses.get(conn)?.companionId === routedCompanionId;
+  }
+
+  // ── Inter-companion channel lane (sprint-10 W6) ──
+  // `companion.message.send`: the ONLY way a companion message moves between
+  // agents. The sender identity is the connection's BOUND companionId (never a
+  // parameter); the lane resolves recipients (room = presence at the place,
+  // DM = the addressed peer); every delivery is an ordinary inbound channel
+  // notification (`companion.message`) so the receiving agent runs it through
+  // the normal turn pipeline — fatigue (MI↔MI charging, hard suppression),
+  // trust, and extraction apply with zero new mechanism. No side-channel
+  // dispatch exists (sprint doc §8 fatigue-bypass risk).
+
+  private async handleCompanionMessageSend(
+    conn: GatewayRpcConnection,
+    params: unknown,
+  ): Promise<CompanionMessageSendResult> {
+    if (!this.multiCompanion.enabled) {
+      throw new Error(
+        'Inter-companion channels do not exist in single-companion topology '
+        + '(enable multi-companion mode to use companion.message.send)',
+      );
+    }
+    const lane = this.options.companionChannels;
+    if (!lane) {
+      this.alarmCompanionViolation(
+        'companion_lane_unconfigured',
+        'companion.message.send rejected: multi-companion is enabled but no companion channel lane is wired',
+        {},
+      );
+      throw new JSONRPCErrorException(
+        'Inter-companion channel lane is not configured on this gateway',
+        GatewayErrors.COMPANION_ROUTING_UNAVAILABLE,
+      );
+    }
+
+    const status = this.connectionStatuses.get(conn);
+    const senderCompanionId = status?.role === 'agent' ? status.companionId : undefined;
+    if (!senderCompanionId) {
+      this.alarmCompanionViolation(
+        'companion_send_unidentified',
+        'companion.message.send rejected: connection has no bound agent companionId',
+        {},
+      );
+      throw new Error('companion.message.send requires an identified agent companion connection');
+    }
+
+    const { channelId, content, authorName } = parseCompanionMessageSendParams(params);
+
+    const resolution = await lane.resolveDelivery(senderCompanionId, channelId);
+    if (!resolution.ok) {
+      this.alarmCompanionViolation(
+        resolution.violation.event,
+        resolution.violation.message,
+        resolution.violation.details,
+      );
+      throw new JSONRPCErrorException(
+        resolution.violation.message,
+        GatewayErrors.COMPANION_ROUTING_UNAVAILABLE,
+      );
+    }
+
+    // Gateway-authoritative message envelope: id and timestamp are minted
+    // here, the author identity is the verified sender companionId, and the
+    // machine-intelligence marker is stamped by construction (every sender on
+    // this lane is a companion) so observed-MI contact tagging and fatigue
+    // relationship classes apply on the recipient with no trust in
+    // sender-supplied metadata.
+    const message = {
+      id: `companion-${randomUUID()}`,
+      channelId,
+      channelType: COMPANION_CHANNEL_TYPE,
+      authorId: senderCompanionId,
+      authorName: authorName ?? senderCompanionId,
+      content,
+      timestamp: new Date().toISOString(),
+      isDirectMessage: resolution.kind === 'dm',
+      routing: {
+        source: 'companion',
+        authorIsMachineIntelligence: true,
+      },
+    };
+
+    this.refreshConnectionHealth();
+    const deliveredTo: string[] = [];
+    const skippedOffline: string[] = [];
+    for (const recipientId of resolution.recipients) {
+      const recipientConn = this.resolveReadyCompanionConnection(recipientId);
+      if (!recipientConn) {
+        if (resolution.kind === 'dm') {
+          // DM to a disconnected peer fails closed back to the sender.
+          this.alarmCompanionViolation(
+            'companion_dm_peer_unavailable',
+            `Companion DM peer "${recipientId}" has no ready agent connection`,
+            { senderCompanionId, channelId, peerCompanionId: recipientId },
+          );
+          throw new JSONRPCErrorException(
+            `Companion DM peer "${recipientId}" is not connected`,
+            GatewayErrors.COMPANION_ROUTING_UNAVAILABLE,
+          );
+        }
+        // A room with an offline member still works: skip with a log.
+        log.info('Companion room recipient has no ready connection; skipping delivery', {
+          senderCompanionId,
+          channelId,
+          recipientCompanionId: recipientId,
+        });
+        skippedOffline.push(recipientId);
+        continue;
+      }
+      this.notifyOne(recipientConn, 'companion.message', { message });
+      deliveredTo.push(recipientId);
+    }
+
+    log.info('Companion message routed', {
+      senderCompanionId,
+      channelId,
+      kind: resolution.kind,
+      messageId: message.id,
+      deliveredTo,
+      skippedOffline,
+    });
+
+    return {
+      channelId,
+      messageId: message.id,
+      deliveredTo,
+      skippedOffline,
+    };
+  }
+
+  /** Ready+healthy agent connection for a companion, or null. Never throws. */
+  private resolveReadyCompanionConnection(companionId: string): GatewayRpcConnection | null {
+    const conn = this.companionConnections.get(companionId);
+    if (!conn) {
+      return null;
+    }
+    const status = this.connectionStatuses.get(conn);
+    if (!status || status.role !== 'agent' || status.state !== 'ready' || status.health !== 'healthy') {
+      return null;
+    }
+    return conn;
   }
 
   // ── Connection management ──
@@ -1229,6 +1398,51 @@ function extractViolationCompanionId(details: Record<string, unknown>): string |
     return trimmed;
   }
   return undefined;
+}
+
+const COMPANION_MESSAGE_MAX_CONTENT_CHARS = 65_536;
+const COMPANION_MESSAGE_MAX_AUTHOR_NAME_CHARS = 200;
+
+/**
+ * Fail-closed validation for companion.message.send params. Note the sender
+ * identity is NOT read from params — it always comes from the connection's
+ * bound companionId (a params.companionId that disagrees with the binding is
+ * already treated as spoofing by enforceCompanionFrameIdentity).
+ */
+function parseCompanionMessageSendParams(params: unknown): {
+  channelId: string;
+  content: string;
+  authorName?: string;
+} {
+  if (!isRecord(params)) {
+    throw new Error('companion.message.send requires an object params payload');
+  }
+  const channelId = typeof params.channelId === 'string' ? params.channelId.trim() : '';
+  if (!channelId) {
+    throw new Error('companion.message.send requires a non-empty channelId');
+  }
+  const content = typeof params.content === 'string' ? params.content : '';
+  if (!content.trim()) {
+    throw new Error('companion.message.send requires non-empty content');
+  }
+  if (content.length > COMPANION_MESSAGE_MAX_CONTENT_CHARS) {
+    throw new Error(
+      `companion.message.send content exceeds ${COMPANION_MESSAGE_MAX_CONTENT_CHARS} characters`,
+    );
+  }
+  let authorName: string | undefined;
+  if (params.authorName !== undefined) {
+    if (typeof params.authorName !== 'string') {
+      throw new Error('companion.message.send authorName must be a string when provided');
+    }
+    authorName = params.authorName.trim();
+    if (!authorName || authorName.length > COMPANION_MESSAGE_MAX_AUTHOR_NAME_CHARS) {
+      throw new Error(
+        `companion.message.send authorName must be 1-${COMPANION_MESSAGE_MAX_AUTHOR_NAME_CHARS} characters`,
+      );
+    }
+  }
+  return { channelId, content, ...(authorName ? { authorName } : {}) };
 }
 
 function extractGatewayCorrelation(

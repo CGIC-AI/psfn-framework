@@ -20,7 +20,7 @@ interface RecentHandleMessageResult {
   response: AgentResponse;
 }
 
-function buildMessageDedupKey(route: 'handle' | 'discord', message: SubstrateMessage): string | null {
+function buildMessageDedupKey(route: 'handle' | 'discord' | 'companion', message: SubstrateMessage): string | null {
   const messageId = message.id.trim();
   if (!messageId) return null;
   return `${route}:${message.channelId}:${messageId}`;
@@ -31,6 +31,9 @@ export interface GatewayMessageGateway {
   onDiscordMessage(handler: (message: SubstrateMessage) => void | Promise<void>): void;
   discordSend(channelId: string, content: string): Promise<void>;
   discordSendMedia(channelId: string, media: Attachment): Promise<void>;
+  /** Inter-companion lane (sprint 10, W6): inbound peer messages + outbound replies. */
+  onCompanionMessage(handler: (message: SubstrateMessage) => void | Promise<void>): void;
+  companionSend(channelId: string, content: string, authorName?: string): Promise<unknown>;
 }
 
 export interface GatewayMessageAgentLoop {
@@ -72,6 +75,11 @@ export interface GatewayMessageHandlersDeps {
    * an already-delivered reply. See `outbound-reply-dedupe.ts`.
    */
   outboundReplyGuard?: OutboundReplyGuardPort;
+  /**
+   * Display name stamped on companion-lane replies (the character card name).
+   * Identity is always the gateway-verified companionId; this is cosmetic.
+   */
+  companionAuthorName?: string;
 }
 
 export function registerGatewayMessageHandlers(deps: GatewayMessageHandlersDeps): void {
@@ -86,12 +94,15 @@ export function registerGatewayMessageHandlers(deps: GatewayMessageHandlersDeps)
     trackSessionActivity,
     observedGroupMemoryScheduler,
     outboundReplyGuard,
+    companionAuthorName,
   } = deps;
 
   const inFlightHandleMessages = new Map<string, Promise<AgentResponse>>();
   const recentHandleResponses = new Map<string, RecentHandleMessageResult>();
   const inFlightDiscordMessages = new Set<string>();
   const recentDiscordMessages = new Map<string, number>();
+  const inFlightCompanionMessages = new Set<string>();
+  const recentCompanionMessages = new Map<string, number>();
 
   const pruneDuplicateCaches = (now: number): void => {
     const minTimestamp = now - DUPLICATE_MESSAGE_WINDOW_MS;
@@ -103,6 +114,11 @@ export function registerGatewayMessageHandlers(deps: GatewayMessageHandlersDeps)
     for (const [key, seenAt] of recentDiscordMessages.entries()) {
       if (seenAt < minTimestamp) {
         recentDiscordMessages.delete(key);
+      }
+    }
+    for (const [key, seenAt] of recentCompanionMessages.entries()) {
+      if (seenAt < minTimestamp) {
+        recentCompanionMessages.delete(key);
       }
     }
   };
@@ -497,6 +513,108 @@ export function registerGatewayMessageHandlers(deps: GatewayMessageHandlersDeps)
     // work such as memory retrieval or model generation.
     void pumpDiscordQueue().catch((err: unknown) => {
       log.error('Discord message pump failed', {
+        channelId: message.channelId,
+        messageId: message.id,
+        error: toErrorMessage(err),
+      });
+    });
+  });
+
+  // ── Inter-companion channel lane (sprint 10, W6) ──
+  // Inbound peer messages run the NORMAL turn pipeline (fatigue, trust,
+  // extraction) via agentLoop.handleMessage; the reply — when there is one —
+  // goes back through the gateway's companion lane addressed to the same
+  // channel, so the peer receives it as its own ordinary inbound turn. A
+  // fatigue-suppressed turn returns empty content, which sends nothing: that
+  // is exactly how a bot↔bot exchange terminates. No side-channel dispatch.
+  const companionPromptQueue: SubstrateMessage[] = [];
+  let companionPumpActive = false;
+
+  const pumpCompanionQueue = async (): Promise<void> => {
+    if (companionPumpActive) return;
+    companionPumpActive = true;
+    try {
+      while (companionPromptQueue.length > 0) {
+        const message = companionPromptQueue.shift()!;
+        const dedupeKey = buildMessageDedupKey('companion', message);
+        try {
+          const response = await promptWhenIdle(message);
+          if (response.attachments?.length) {
+            // The companion lane carries text only for now; surface the drop
+            // loudly instead of silently losing media.
+            log.warn('Companion lane reply attachments are not deliverable; dropping media', {
+              channelId: message.channelId,
+              attachmentCount: response.attachments.length,
+            });
+          }
+          if (response.content.trim()) {
+            await gateway.companionSend(message.channelId, response.content, companionAuthorName);
+          }
+        } catch (err) {
+          const errorText = toErrorMessage(err);
+          log.error('Error handling companion message', {
+            channelId: message.channelId,
+            messageId: message.id,
+            error: errorText,
+          });
+          safeguardAuditTrail.append('companion.message.error', {
+            channelId: message.channelId,
+            messageId: message.id,
+            error: errorText,
+          });
+        } finally {
+          if (dedupeKey) {
+            inFlightCompanionMessages.delete(dedupeKey);
+            recentCompanionMessages.set(dedupeKey, Date.now());
+          }
+        }
+      }
+    } finally {
+      companionPumpActive = false;
+    }
+  };
+
+  gateway.onCompanionMessage((message: SubstrateMessage) => {
+    const dedupeKey = buildMessageDedupKey('companion', message);
+    const now = Date.now();
+    pruneDuplicateCaches(now);
+    if (dedupeKey) {
+      const seenAt = recentCompanionMessages.get(dedupeKey);
+      if ((seenAt && now - seenAt < DUPLICATE_MESSAGE_WINDOW_MS) || inFlightCompanionMessages.has(dedupeKey)) {
+        log.warn('Dropping duplicate companion notification message', {
+          channelId: message.channelId,
+          messageId: message.id,
+        });
+        safeguardAuditTrail.append('gateway.message.duplicate', {
+          route: 'companion',
+          channelId: message.channelId,
+          messageId: message.id,
+          disposition: inFlightCompanionMessages.has(dedupeKey) ? 'in_flight' : 'cached',
+        });
+        return;
+      }
+      inFlightCompanionMessages.add(dedupeKey);
+    }
+
+    // Deserialize Date if it came as string (gateway serializes for transport).
+    if (typeof message.timestamp === 'string') {
+      message.timestamp = new Date(message.timestamp);
+    }
+
+    log.info(`Companion message from ${message.authorName}: ${message.content.slice(0, 50)}...`, {
+      channelId: message.channelId,
+      authorId: message.authorId,
+    });
+    safeguardAuditTrail.append('companion.message.received', {
+      channelId: message.channelId,
+      messageId: message.id,
+      authorId: message.authorId,
+    });
+
+    trackSessionActivity(message);
+    companionPromptQueue.push(message);
+    void pumpCompanionQueue().catch((err: unknown) => {
+      log.error('Companion message pump failed', {
         channelId: message.channelId,
         messageId: message.id,
         error: toErrorMessage(err),

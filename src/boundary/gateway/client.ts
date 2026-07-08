@@ -66,6 +66,8 @@ import type {
   FsSearchResult,
   FsEditParams,
   FsEditResult,
+  CompanionMessageNotification,
+  CompanionMessageSendResult,
   DiscordMessageNotification,
   LLMChunkNotification,
   VoiceHandleMessageResult,
@@ -481,6 +483,27 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
     await this.rpcInstance.request('discord.typing', { channelId });
   }
 
+  // ── Inter-companion channel lane (sprint 10, W6) ──
+
+  /**
+   * Send a message into a companion room (`companion-room:<placeId>`) or a
+   * peer DM (`companion-dm:<a>:<b>`). The gateway verifies the sender against
+   * this connection's bound companionId and routes fail-closed; recipients get
+   * the message as an ordinary inbound channel turn (fatigue/trust apply).
+   */
+  async companionSend(
+    channelId: string,
+    content: string,
+    authorName?: string,
+  ): Promise<CompanionMessageSendResult> {
+    return await this.rpcInstance.request('companion.message.send', {
+      channelId,
+      content,
+      ...(authorName ? { authorName } : {}),
+      ...(this.companionId ? { companionId: this.companionId } : {}),
+    }) as CompanionMessageSendResult;
+  }
+
   // ── Web fetch ──
 
   async webFetch(
@@ -809,6 +832,14 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
   onDiscordMessage(handler: (message: SubstrateMessage) => void): () => void {
     return this.onNotification('discord.message', (params) => {
       const notification = params as DiscordMessageNotification;
+      handler(notification.message);
+    });
+  }
+
+  /** Inbound peer-companion messages (gateway `companion.message` lane, W6). */
+  onCompanionMessage(handler: (message: SubstrateMessage) => void): () => void {
+    return this.onNotification('companion.message', (params) => {
+      const notification = params as CompanionMessageNotification;
       handler(notification.message);
     });
   }

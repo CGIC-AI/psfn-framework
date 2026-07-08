@@ -44,6 +44,8 @@ import {
 } from './system-config-tree.js';
 import type { BackupRuntimeConfig } from './config.js';
 import { applyTieredRetention, type TieredRetentionResult } from './retention.js';
+import { assertValidPostgresSchemaName } from '../postgres.js';
+import { writeJsonAtomic } from '../../shared/utils/fs.js';
 
 const log = createComponentLogger('BackupService');
 const execFileAsync = promisify(execFile);
@@ -60,6 +62,14 @@ export interface BackupPostgresOptions {
    * database and asserts schema, pgvector, and critical-table fidelity.
    */
   restoreVerifyDatabaseUrl?: string;
+  /**
+   * When set, only this Postgres schema is dumped (`pg_dump --schema=<schema>`),
+   * yielding a per-schema slice that can be restored into another cluster on its
+   * own. The identifier is strictly validated ({@link assertValidPostgresSchemaName})
+   * before it reaches argv. When absent the whole database is dumped —
+   * byte-identical to the single-companion default.
+   */
+  schema?: string;
   /** Override the pg_dump binary (defaults to `pg_dump` on PATH). */
   pgDumpBinary?: string;
   /** Override the pg_restore binary used for dump verification (defaults to `pg_restore` on PATH). */
@@ -252,16 +262,17 @@ function verifyJsonlSnapshot(path: string): { lineCount: number } {
   return { lineCount };
 }
 
-function postgresDumpFileName(databaseUrl: string): string {
+function postgresDumpFileName(databaseUrl: string, schema?: string): string {
+  const schemaSuffix = schema ? `.${schema}` : '';
   try {
     const databaseName = new URL(databaseUrl).pathname.replace(/^\//, '').trim();
     if (databaseName) {
-      return `${databaseName.replace(/[^A-Za-z0-9._-]+/g, '-')}.dump`;
+      return `${databaseName.replace(/[^A-Za-z0-9._-]+/g, '-')}${schemaSuffix}.dump`;
     }
   } catch {
     // Fall through to the generic name for non-URL connection strings.
   }
-  return 'postgres.dump';
+  return `postgres${schemaSuffix}.dump`;
 }
 
 /**
@@ -289,13 +300,19 @@ async function dumpPostgresDatabase(
   databaseDir: string,
 ): Promise<string> {
   const binary = postgres.pgDumpBinary?.trim() || 'pg_dump';
-  const dumpPath = join(databaseDir, postgresDumpFileName(postgres.databaseUrl));
+  // Fail closed: a schema, when present, is strictly validated before it is
+  // interpolated into argv so a companion schema can never smuggle flags/SQL.
+  const schema = postgres.schema !== undefined
+    ? assertValidPostgresSchemaName(postgres.schema)
+    : undefined;
+  const dumpPath = join(databaseDir, postgresDumpFileName(postgres.databaseUrl, schema));
   const { connectionArg, password } = toCredentialFreePostgresConnection(postgres.databaseUrl);
   mkdirSync(databaseDir, { recursive: true });
   try {
     await execFileAsync(binary, [
       '--format=custom',
       '--no-password',
+      ...(schema ? [`--schema=${schema}`] : []),
       `--file=${dumpPath}`,
       connectionArg,
     ], {
@@ -637,4 +654,321 @@ export function registerScheduledBackupTask(
     },
     { skipFirstRun: options.skipFirstRun ?? true },
   );
+}
+
+// ---------------------------------------------------------------------------
+// Multi-companion fleet backups (sprint 10, W2)
+// ---------------------------------------------------------------------------
+//
+// Default = one companion, one backup. Each companion in a shared database is
+// captured as its own self-contained slice (its companion tree + a schema-scoped
+// `pg_dump --schema=<postgresSchema>`) so a single character can be lifted to
+// another cluster on its own. Shared world data and system-owned config live in
+// a SEPARATE `cluster` artifact — never inside a companion slice, so slices stay
+// pure and portable.
+//
+// Group mode collapses the whole family into ONE artifact: a whole-database
+// pg_dump (every companion schema + `shared`) plus the system tree plus every
+// companion's files under the common companion-data parent.
+//
+// Restore is intentionally out of scope for this phase; the fleet manifest below
+// records the exact artifact layout and the schema/tree → destination mapping a
+// future restore needs.
+
+export const FLEET_BACKUP_MANIFEST_NAME = 'fleet-backup-manifest.json';
+export const FLEET_BACKUP_MANIFEST_SCHEMA_VERSION = 1;
+export const FLEET_COMPANIONS_DIR_NAME = 'companions';
+export const FLEET_CLUSTER_DIR_NAME = 'cluster';
+export const FLEET_GROUP_DIR_NAME = 'group';
+export const DEFAULT_SHARED_WORLD_SCHEMA = 'shared';
+
+export interface FleetBackupCompanionUnit {
+  /** RFC-4122 companion id; also the per-companion artifact sub-directory name. */
+  companionId: string;
+  /** Postgres schema owning this companion's tenant tables. */
+  postgresSchema: string;
+  /** Absolute path to this companion's data directory. */
+  companionDataDir: string;
+  /** Absolute path to this companion's session JSONL directory. */
+  sessionsDir: string;
+  characterCardPath?: string;
+  characterCardHistoryPath?: string;
+  memoriesJournalPath?: string;
+}
+
+export interface FleetBackupRunOptions {
+  /** Base Postgres connection; the `schema` field is set per unit and ignored here. */
+  postgres: BackupPostgresOptions;
+  /** The fleet enumerated from companions.json (resolved to absolute paths). */
+  companions: FleetBackupCompanionUnit[];
+  /** System-data root captured into the cluster (or group) artifact. */
+  systemDataDir: string;
+  /** Shared world schema dumped into the cluster artifact. Defaults to `shared`. */
+  sharedSchema?: string;
+  backupRootDir: string;
+  /**
+   * When true, produce ONE whole-database family artifact instead of per-companion
+   * slices. Requires {@link groupCompanionDataDir}.
+   */
+  groupMode?: boolean;
+  /**
+   * The common companion-data parent (e.g. `.../companion-data`) whose subtree
+   * holds every companion. Captured whole in group mode. Required when
+   * `groupMode` is set.
+   */
+  groupCompanionDataDir?: string;
+  maxRotatingBackups?: number;
+  maxWeeklyBackups?: number;
+  maxMonthlyBackups?: number;
+  mirrorDir?: string;
+  verifyRestore?: boolean;
+  encryption?: BackupEncryptionRuntimeConfig;
+  now?: () => number;
+}
+
+export type FleetBackupUnitKind = 'companion' | 'cluster' | 'group';
+
+export interface FleetBackupUnitOutcome {
+  kind: FleetBackupUnitKind;
+  companionId?: string;
+  postgresSchema?: string;
+  status: 'success' | 'failure';
+  /** Artifact directory, relative to backupRootDir, when the unit succeeded. */
+  artifactDir?: string;
+  error?: string;
+}
+
+export interface FleetBackupRunResult {
+  mode: 'per-companion' | 'group';
+  backupRootDir: string;
+  fleetManifestPath: string;
+  overallStatus: 'success' | 'failure';
+  units: FleetBackupUnitOutcome[];
+  /** Detailed results for the units that completed successfully. */
+  results: BackupRunResult[];
+}
+
+/**
+ * Thrown when at least one unit in a fleet backup failed. The fleet manifest has
+ * already been written (recording every unit's per-unit outcome) before this is
+ * raised, so a partial run can never be mistaken for a full success.
+ */
+export class FleetBackupPartialFailureError extends Error {
+  readonly fleetManifestPath: string;
+  readonly units: FleetBackupUnitOutcome[];
+
+  constructor(fleetManifestPath: string, units: FleetBackupUnitOutcome[]) {
+    const failed = units.filter(unit => unit.status === 'failure');
+    const summary = failed
+      .map(unit => `${unit.kind}${unit.companionId ? `(${unit.companionId})` : ''}: ${unit.error ?? 'unknown error'}`)
+      .join('; ');
+    super(
+      `Fleet backup failed for ${failed.length} of ${units.length} unit(s): ${summary}. `
+      + `Per-unit outcomes recorded in ${fleetManifestPath}.`,
+    );
+    this.name = 'FleetBackupPartialFailureError';
+    this.fleetManifestPath = fleetManifestPath;
+    this.units = units;
+  }
+}
+
+interface FleetBackupManifest {
+  schemaVersion: typeof FLEET_BACKUP_MANIFEST_SCHEMA_VERSION;
+  capturedAt: string;
+  mode: 'per-companion' | 'group';
+  overallStatus: 'success' | 'failure';
+  sharedSchema?: string;
+  units: FleetBackupUnitOutcome[];
+  /** Human/tooling-readable layout + restore mapping (restore build-out is deferred). */
+  layout: Record<string, string>;
+}
+
+function fleetLayoutDoc(mode: 'per-companion' | 'group'): Record<string, string> {
+  if (mode === 'group') {
+    return {
+      mode: 'group',
+      artifact: `${FLEET_GROUP_DIR_NAME}/<timestamp>/`,
+      database: 'whole-database pg_dump (custom format) covering every companion schema and the shared schema',
+      systemConfig: 'system-config/ + manifest — system-data owner files',
+      companionTree: 'companion-tree/ — the whole companion-data parent, i.e. every companion\'s files',
+      restore: 'pg_restore the whole-database dump into a fresh cluster; unpack companion-tree into companion-data and system-config into system-data',
+    };
+  }
+  return {
+    mode: 'per-companion',
+    companionArtifact: `${FLEET_COMPANIONS_DIR_NAME}/<companionId>/<timestamp>/`,
+    companionDatabase: 'database/<db>.<schema>.dump — pg_dump --schema=<postgresSchema> (pure companion slice, restorable into any cluster)',
+    companionTree: 'companion-tree/ + manifest, sessions/, notes/, companion/ (character card) — this companion\'s files only',
+    clusterArtifact: `${FLEET_CLUSTER_DIR_NAME}/<timestamp>/`,
+    clusterDatabase: 'database/<db>.<sharedSchema>.dump — pg_dump --schema=<sharedSchema> (shared world data)',
+    clusterSystemConfig: 'system-config/ + manifest — system-data owner files',
+    restore: 'restore a companion slice by pg_restore of its schema dump into a target cluster + unpacking companion-tree into companion-data/<companionId>; restore shared+system from the cluster artifact',
+  };
+}
+
+/**
+ * Run a fleet-wide backup cycle.
+ *
+ * Per-companion mode (default) produces N companion slices + 1 cluster artifact
+ * = N+1 artifacts. Group mode produces a single whole-database family artifact.
+ *
+ * Fail-closed: every unit is attempted, its outcome recorded in the fleet
+ * manifest, and if ANY unit failed the manifest is written first and then
+ * {@link FleetBackupPartialFailureError} is thrown — a partial set can never be
+ * mistaken for a full success.
+ */
+export async function runFleetBackupCycle(
+  options: FleetBackupRunOptions,
+): Promise<FleetBackupRunResult> {
+  if (options.companions.length === 0) {
+    throw new Error(
+      'Fleet backup requires at least one companion — refusing to run an empty fleet backup',
+    );
+  }
+
+  const now = options.now ?? (() => Date.now());
+  const sharedSchema = options.sharedSchema?.trim() || DEFAULT_SHARED_WORLD_SCHEMA;
+  const mode: 'per-companion' | 'group' = options.groupMode ? 'group' : 'per-companion';
+
+  const retentionFields = {
+    ...(options.maxRotatingBackups !== undefined ? { maxRotatingBackups: options.maxRotatingBackups } : {}),
+    ...(options.maxWeeklyBackups !== undefined ? { maxWeeklyBackups: options.maxWeeklyBackups } : {}),
+    ...(options.maxMonthlyBackups !== undefined ? { maxMonthlyBackups: options.maxMonthlyBackups } : {}),
+    ...(options.mirrorDir !== undefined ? { mirrorDir: options.mirrorDir } : {}),
+    ...(options.verifyRestore !== undefined ? { verifyRestore: options.verifyRestore } : {}),
+    ...(options.encryption !== undefined ? { encryption: options.encryption } : {}),
+    now,
+  };
+
+  const basePostgres: BackupPostgresOptions = {
+    databaseUrl: options.postgres.databaseUrl,
+    ...(options.postgres.pgDumpBinary !== undefined ? { pgDumpBinary: options.postgres.pgDumpBinary } : {}),
+    ...(options.postgres.pgRestoreBinary !== undefined ? { pgRestoreBinary: options.postgres.pgRestoreBinary } : {}),
+    ...(options.postgres.psqlBinary !== undefined ? { psqlBinary: options.postgres.psqlBinary } : {}),
+  };
+
+  const outcomes: FleetBackupUnitOutcome[] = [];
+  const results: BackupRunResult[] = [];
+
+  const runUnit = async (
+    descriptor: { kind: FleetBackupUnitKind; companionId?: string; postgresSchema?: string },
+    runOptions: BackupRunOptions,
+  ): Promise<void> => {
+    try {
+      const result = await runBackupCycle(runOptions);
+      results.push(result);
+      outcomes.push({
+        kind: descriptor.kind,
+        ...(descriptor.companionId ? { companionId: descriptor.companionId } : {}),
+        ...(descriptor.postgresSchema ? { postgresSchema: descriptor.postgresSchema } : {}),
+        status: 'success',
+        artifactDir: relative(options.backupRootDir, result.backupDir),
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      log.error('Fleet backup unit failed', {
+        kind: descriptor.kind,
+        companionId: descriptor.companionId,
+        postgresSchema: descriptor.postgresSchema,
+        error: message,
+      });
+      outcomes.push({
+        kind: descriptor.kind,
+        ...(descriptor.companionId ? { companionId: descriptor.companionId } : {}),
+        ...(descriptor.postgresSchema ? { postgresSchema: descriptor.postgresSchema } : {}),
+        status: 'failure',
+        error: message,
+      });
+    }
+  };
+
+  // Cluster/group artifacts have no first-class session snapshot; point the
+  // (mandatory) sessionsDir at a path that does not exist so nothing is copied.
+  const noSessionsDir = join(options.systemDataDir, '.fleet-backup-no-sessions');
+
+  if (mode === 'group') {
+    const groupCompanionDataDir = options.groupCompanionDataDir?.trim();
+    if (!groupCompanionDataDir) {
+      throw new Error(
+        'Group backup mode requires groupCompanionDataDir (the common companion-data parent root)',
+      );
+    }
+    await runUnit(
+      { kind: 'group' },
+      {
+        postgres: basePostgres,
+        companionDataDir: groupCompanionDataDir,
+        systemDataDir: options.systemDataDir,
+        sessionsDir: noSessionsDir,
+        backupRootDir: join(options.backupRootDir, FLEET_GROUP_DIR_NAME),
+        ...retentionFields,
+      },
+    );
+  } else {
+    for (const companion of options.companions) {
+      await runUnit(
+        { kind: 'companion', companionId: companion.companionId, postgresSchema: companion.postgresSchema },
+        {
+          postgres: {
+            ...basePostgres,
+            schema: companion.postgresSchema,
+            ...(options.postgres.restoreVerifyDatabaseUrl !== undefined
+              ? { restoreVerifyDatabaseUrl: options.postgres.restoreVerifyDatabaseUrl }
+              : {}),
+          },
+          companionDataDir: companion.companionDataDir,
+          sessionsDir: companion.sessionsDir,
+          ...(companion.characterCardPath ? { characterCardPath: companion.characterCardPath } : {}),
+          ...(companion.characterCardHistoryPath ? { characterCardHistoryPath: companion.characterCardHistoryPath } : {}),
+          ...(companion.memoriesJournalPath ? { memoriesJournalPath: companion.memoriesJournalPath } : {}),
+          backupRootDir: join(options.backupRootDir, FLEET_COMPANIONS_DIR_NAME, companion.companionId),
+          ...retentionFields,
+        },
+      );
+    }
+
+    // Cluster artifact: shared world schema dump + system-owned config tree.
+    // Deliberately no companionDataDir and no restoreVerifyDatabaseUrl (the
+    // shared schema carries no companion critical tables to assert on).
+    await runUnit(
+      { kind: 'cluster', postgresSchema: sharedSchema },
+      {
+        postgres: { ...basePostgres, schema: sharedSchema },
+        systemDataDir: options.systemDataDir,
+        sessionsDir: noSessionsDir,
+        backupRootDir: join(options.backupRootDir, FLEET_CLUSTER_DIR_NAME),
+        ...retentionFields,
+      },
+    );
+  }
+
+  const overallStatus: 'success' | 'failure' = outcomes.some(unit => unit.status === 'failure')
+    ? 'failure'
+    : 'success';
+
+  const manifest: FleetBackupManifest = {
+    schemaVersion: FLEET_BACKUP_MANIFEST_SCHEMA_VERSION,
+    capturedAt: new Date(now()).toISOString(),
+    mode,
+    overallStatus,
+    ...(mode === 'per-companion' ? { sharedSchema } : {}),
+    units: outcomes,
+    layout: fleetLayoutDoc(mode),
+  };
+  mkdirSync(options.backupRootDir, { recursive: true });
+  const fleetManifestPath = join(options.backupRootDir, FLEET_BACKUP_MANIFEST_NAME);
+  writeJsonAtomic(fleetManifestPath, manifest);
+
+  if (overallStatus === 'failure') {
+    throw new FleetBackupPartialFailureError(fleetManifestPath, outcomes);
+  }
+
+  return {
+    mode,
+    backupRootDir: options.backupRootDir,
+    fleetManifestPath,
+    overallStatus,
+    units: outcomes,
+    results,
+  };
 }

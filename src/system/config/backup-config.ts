@@ -15,6 +15,14 @@ export interface BackupJsonConfig {
   maxMonthlyBackups: number;
   mirrorDir: string;
   verifyRestore: boolean;
+  /**
+   * Multi-companion backup shape. `false` (default) = one companion, one backup:
+   * each companion is captured as its own portable slice plus a separate cluster
+   * artifact. `true` = a single whole-database family artifact. Ignored in
+   * single-companion topology. Optional for backward compatibility; absent means
+   * `false`.
+   */
+  groupMode: boolean;
   encryption: BackupEncryptionJsonConfig;
 }
 
@@ -102,6 +110,8 @@ function validateBackupConfig(raw: unknown, sourcePath: string): BackupJsonConfi
     maxMonthlyBackups: toPositiveNumber(raw.maxMonthlyBackups, 'maxMonthlyBackups', 0),
     mirrorDir: toString(raw.mirrorDir, 'mirrorDir'),
     verifyRestore: toBoolean(raw.verifyRestore, 'verifyRestore'),
+    // Optional for backward compatibility: an absent value means group mode off.
+    groupMode: raw.groupMode === undefined ? false : toBoolean(raw.groupMode, 'groupMode'),
     encryption: validateEncryptionConfig(raw.encryption),
   };
 }

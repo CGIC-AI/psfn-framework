@@ -267,6 +267,10 @@ export async function runWeightedThoughtOutreachOnce(
     if (decision.action === 'accept') {
       const content = decision.content.trim();
       if (!content) {
+        // An accept with blank content cannot produce an outbound message.
+        // Persist decline dampening so the thought defers instead of
+        // re-qualifying (and burning an LLM nudge) on every run.
+        await deps.store.save(applyDeclineDampening(nudged, deps.lifecycleConfig, nowMs));
         result.blocked.push({ thoughtId: view.thought.id, reason: 'empty_nudge_content', channelId: channel.channelId });
         continue;
       }

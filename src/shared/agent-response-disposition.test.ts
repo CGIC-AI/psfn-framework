@@ -58,4 +58,67 @@ describe('resolveAgentResponseDisposition', () => {
     const disposition = resolveAgentResponseDisposition(makeResponse({}));
     expect(disposition.kind).toBe('empty_response_error');
   });
+
+  it('holds broadcast-approval responses even when they carry text', () => {
+    const disposition = resolveAgentResponseDisposition(makeResponse({
+      content: 'held broadcast reply',
+      metadata: {
+        broadcastSafety: {
+          visibilityScope: 'public_only',
+          operatorApproval: false,
+          risky: true,
+          signals: ['sensitive'],
+          approvalRequired: true,
+          provenanceRefs: [],
+        },
+      } as AgentResponse['metadata'],
+    }));
+    expect(disposition).toEqual({
+      kind: 'policy_suppressed',
+      reason: 'broadcast_approval_required',
+    });
+  });
+
+  it('holds broadcast-approval responses even when they carry attachments', () => {
+    const disposition = resolveAgentResponseDisposition(makeResponse({
+      attachments: [{ kind: 'image', fileName: 'held.png', localPath: '/tmp/held.png' }] as AgentResponse['attachments'],
+      metadata: {
+        broadcastSafety: {
+          visibilityScope: 'public_only',
+          operatorApproval: false,
+          risky: true,
+          signals: ['private'],
+          approvalRequired: true,
+          provenanceRefs: [],
+        },
+      } as AgentResponse['metadata'],
+    }));
+    expect(disposition).toEqual({
+      kind: 'policy_suppressed',
+      reason: 'broadcast_approval_required',
+    });
+  });
+
+  it('holds fatigue-suppressed responses even when they carry text', () => {
+    const disposition = resolveAgentResponseDisposition(makeResponse({
+      content: 'fatigued reply',
+      metadata: {
+        fatigue: { modelDisposition: 'suppressed' },
+      } as AgentResponse['metadata'],
+    }));
+    expect(disposition).toEqual({
+      kind: 'policy_suppressed',
+      reason: 'fatigue_suppressed',
+    });
+  });
+
+  it('still sends content when suppression flags are absent or inactive', () => {
+    const disposition = resolveAgentResponseDisposition(makeResponse({
+      content: 'normal reply',
+      metadata: {
+        fatigue: { modelDisposition: 'allowed' },
+      } as AgentResponse['metadata'],
+    }));
+    expect(disposition).toEqual({ kind: 'send', hasText: true, hasAttachments: false });
+  });
 });

@@ -14,6 +14,7 @@ import { buildAdminContactApprovalRoutes } from './api-routes-contact-approvals.
 import type { AdminPendingContactsService } from './services/pending-contacts-service.js';
 import { buildAdminRoomRoutes } from './api-routes-rooms.js';
 import { buildAdminPlacesRoutes } from './api-routes-places.js';
+import { buildAdminWikiScopeRoutes } from './api-routes-wiki-scopes.js';
 import { buildAdminEnrollmentRoutes } from './api-routes-enrollment.js';
 import { buildAdminGraphProposalRoutes } from './api-routes-graph-proposals.js';
 import type { AdminRoomsService } from './services/rooms-service.js';
@@ -674,9 +675,22 @@ export function buildAdminApiRoutes(options: {
     {
       method: 'GET',
       match: exactPath('/api/admin/wiki'),
-      handle: (_req, res) => {
+      handle: (req, res) => {
         if (!wikiService) {
           sendJson(res, 503, { error: WIKI_UNAVAILABLE_ERROR });
+          return;
+        }
+        // vinz.28: ?scope=shared_world:<siteId> filters to that shared scope;
+        // absent/personal keeps the byte-identical personal listing.
+        const url = parseRequestUrl(req, '/api/admin/wiki');
+        const scope = url.searchParams.get('scope')?.trim();
+        if (scope && scope.startsWith('shared_world:')) {
+          const siteId = scope.slice('shared_world:'.length);
+          if (!siteId) { sendJson(res, 400, { error: 'shared_world scope requires a siteId' }); return; }
+          wikiService.listSharedWorldWikiDocuments(siteId).then(
+            payload => sendJson(res, 200, payload, ADMIN_DYNAMIC_JSON_HEADERS),
+            error => sendJson(res, 400, { error: toSanitizedMessage(error, 'Failed to list shared-world wiki documents') }),
+          );
           return;
         }
         wikiService.listWikiDocuments().then(
@@ -685,6 +699,7 @@ export function buildAdminApiRoutes(options: {
         );
       },
     },
+    ...buildAdminWikiScopeRoutes({ wikiService, withBody }),
     {
       method: 'GET',
       match: exactPath('/api/admin/wiki/search'),

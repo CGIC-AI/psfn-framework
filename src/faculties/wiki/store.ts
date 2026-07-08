@@ -4,11 +4,13 @@ import {
   mkdirSync,
   readdirSync,
   readFileSync,
+  rmSync,
   writeFileSync,
 } from 'node:fs';
 import { basename, join, relative, resolve, sep } from 'node:path';
 import {
   resolvePersonalWikiDir,
+  resolveSharedWorldWikiSiteDir,
 } from '../../persistence/layout.js';
 import { resolveWorkspaceRoot } from '../../boundary/gateway/filesystem-paths.js';
 import { isRecord } from '../../shared/utils/types.js';
@@ -21,6 +23,7 @@ import {
   isPersonalScope,
   normalizeWikiScope,
   PERSONAL_WIKI_SCOPE,
+  sharedWorldScope,
   type WikiScope,
 } from './scope.js';
 import {
@@ -174,6 +177,48 @@ function assertPersonalScopeWrite(scope: WikiScope): void {
   }
 }
 
+/**
+ * A per-store scope write policy. The write policy is the ONLY thing that
+ * differs between the companion-facing personal store and the operator-owned
+ * shared-world store, so it is injected rather than branched: the engine below
+ * stays identical and cannot accidentally cross scopes.
+ */
+export interface WikiScopeWriteGuard {
+  assertWritable(scope: WikiScope): void;
+}
+
+/**
+ * The companion-facing personal write guard. Fail-closed rejects ANY
+ * non-personal scope — this is the W5b world-info leak surface and it stays
+ * intact: companion tools only ever construct a {@link WikiStore}, so they can
+ * never author shared world knowledge directly.
+ */
+export const PERSONAL_SCOPE_WRITE_GUARD: WikiScopeWriteGuard = {
+  assertWritable: assertPersonalScopeWrite,
+};
+
+/**
+ * The operator-owned SHARED-WORLD write guard — the deliberate inverse of the
+ * personal guard. It accepts EXACTLY one scope, `shared_world:<siteId>` for its
+ * own site, and rejects everything else (personal, or another site's shared
+ * scope). Only operator/caretaker maintenance surfaces (places→wiki publication,
+ * bulk import) ever construct a store with this guard; it does not weaken the
+ * personal store's rejection.
+ */
+export function sharedWorldScopeWriteGuard(siteId: string): WikiScopeWriteGuard {
+  const expected = sharedWorldScope(siteId);
+  return {
+    assertWritable(scope: WikiScope): void {
+      if (scope !== expected) {
+        throw new Error(
+          `shared-world wiki store for site "${siteId}" refuses a write to scope "${scope}"; `
+          + `only "${expected}" is permitted on this operator-owned surface.`,
+        );
+      }
+    },
+  };
+}
+
 function normalizeSensitivity(value: unknown): SensitivityLevel {
   if (value === undefined) return 'personal';
   if (typeof value !== 'string' || !VALID_SENSITIVITY_LEVELS.includes(value as SensitivityLevel)) {
@@ -269,30 +314,54 @@ function normalizePersistedMetadata(raw: unknown, body: string): WikiDocumentMet
   return metadata;
 }
 
-export class WikiStore implements WikiStorePort {
-  private readonly workspaceRoot: string;
-  private readonly wikiRoot: string;
+interface WikiDocumentStoreConfig extends WikiStoreOptions {
+  writeGuard: WikiScopeWriteGuard;
+}
+
+/**
+ * The shared engine backing both wiki stores. It owns the on-disk format
+ * (documents/ + metadata/, checksum-verified round-trip) and every generic
+ * operation; the ONLY per-store difference is the injected
+ * {@link WikiScopeWriteGuard}, so the personal and shared-world stores cannot
+ * drift in serialization or validation. The store is scope-agnostic on READ
+ * (a persisted scope round-trips) and scope-guarded on WRITE.
+ */
+export class WikiDocumentStore {
+  protected readonly wikiRoot: string;
   private readonly documentsDir: string;
   private readonly metadataDir: string;
   private readonly now: () => Date;
   private readonly onUpsert?: (document: WikiDocument) => void;
+  private readonly writeGuard: WikiScopeWriteGuard;
 
-  constructor(workspacePath: string, options: WikiStoreOptions = {}) {
-    this.workspaceRoot = resolveWorkspaceRoot(workspacePath);
-    this.wikiRoot = resolvePersonalWikiDir(this.workspaceRoot);
-    this.documentsDir = join(this.wikiRoot, WIKI_DOCUMENTS_DIRNAME);
-    this.metadataDir = join(this.wikiRoot, WIKI_METADATA_DIRNAME);
-    this.now = options.now ?? (() => new Date());
-    this.onUpsert = options.onUpsert;
+  constructor(wikiRoot: string, config: WikiDocumentStoreConfig) {
+    this.wikiRoot = wikiRoot;
+    this.documentsDir = join(wikiRoot, WIKI_DOCUMENTS_DIRNAME);
+    this.metadataDir = join(wikiRoot, WIKI_METADATA_DIRNAME);
+    this.now = config.now ?? (() => new Date());
+    this.onUpsert = config.onUpsert;
+    this.writeGuard = config.writeGuard;
   }
 
-  getRootInfo() {
+  getRootInfo(): { wikiRoot: string; documentsDir: string; metadataDir: string } {
     return {
-      workspaceRoot: this.workspaceRoot,
       wikiRoot: this.wikiRoot,
       documentsDir: this.documentsDir,
       metadataDir: this.metadataDir,
     };
+  }
+
+  /**
+   * Delete a document (body + metadata) if present. Used by the idempotent
+   * places→wiki publication to prune generated pages whose place was removed
+   * from the registry. No-op when the id does not exist.
+   */
+  delete(id: string): boolean {
+    const normalizedId = normalizeWikiDocumentId(id);
+    if (!existsSync(this.metadataPath(normalizedId))) return false;
+    rmSync(this.bodyPath(normalizedId), { force: true });
+    rmSync(this.metadataPath(normalizedId), { force: true });
+    return true;
   }
 
   list(): WikiDocumentListEntry[] {
@@ -321,10 +390,11 @@ export class WikiStore implements WikiStorePort {
     const sourceClass = normalizeSourceClass(input.sourceClass);
     const provenanceRefs = normalizeStringArray(input.provenanceRefs, 'provenanceRef', MAX_PROVENANCE_REF_CHARS);
     ensureProvenance(sourceClass, provenanceRefs);
-    // Fail-closed world-info leak guard: this personal store never writes shared
-    // world scope. Absent/personal is the norm; a shared_world scope is rejected.
+    // Fail-closed scope guard. The injected policy decides which scope this
+    // store may write: the personal store rejects any shared_world scope (the
+    // W5b leak surface); the shared-world store accepts only its own site scope.
     const scope = normalizeWikiScope(input.scope);
-    assertPersonalScopeWrite(scope);
+    this.writeGuard.assertWritable(scope);
 
     const existing = this.get(id);
     const timestamp = this.now().toISOString();
@@ -430,5 +500,64 @@ export class WikiStore implements WikiStorePort {
     const lines = document.body.split(/\r?\n/);
     const matchingLine = lines.find(line => line.toLowerCase().includes(lowerQuery));
     return previewText(matchingLine ?? document.summary ?? document.body);
+  }
+}
+
+/**
+ * The companion-facing personal wiki store. Backed by the companion's own
+ * knowledge/wiki subtree and locked to the personal scope. Its public surface
+ * and behavior are unchanged from pre-refactor: it is what every companion tool
+ * and background pass constructs, and its write guard fail-closed rejects any
+ * shared_world write.
+ */
+export class WikiStore extends WikiDocumentStore implements WikiStorePort {
+  private readonly workspaceRoot: string;
+
+  constructor(workspacePath: string, options: WikiStoreOptions = {}) {
+    const workspaceRoot = resolveWorkspaceRoot(workspacePath);
+    super(resolvePersonalWikiDir(workspaceRoot), { ...options, writeGuard: PERSONAL_SCOPE_WRITE_GUARD });
+    this.workspaceRoot = workspaceRoot;
+  }
+
+  override getRootInfo(): {
+    workspaceRoot: string;
+    wikiRoot: string;
+    documentsDir: string;
+    metadataDir: string;
+  } {
+    return { workspaceRoot: this.workspaceRoot, ...super.getRootInfo() };
+  }
+}
+
+/**
+ * The operator-owned SHARED-WORLD wiki store for a single site. It writes to a
+ * canonical per-site subtree under system-data (NOT companion-data) and locks
+ * every write to `shared_world:<siteId>`. This store is only ever constructed by
+ * operator/caretaker maintenance surfaces (places→wiki publication, bulk import)
+ * — never by a companion tool — so the companion-side rejection stays intact.
+ * The scope is injected on write, so callers cannot accidentally mis-scope a doc.
+ */
+export class SharedWorldWikiStore extends WikiDocumentStore {
+  readonly siteId: string;
+  readonly scope: WikiScope;
+
+  constructor(systemDataDir: string, siteId: string, options: WikiStoreOptions = {}) {
+    // sharedWorldScope validates the siteId token and fails closed on a bad id.
+    const scope = sharedWorldScope(siteId);
+    super(resolveSharedWorldWikiSiteDir(systemDataDir, siteId), {
+      ...options,
+      writeGuard: sharedWorldScopeWriteGuard(siteId),
+    });
+    this.siteId = siteId;
+    this.scope = scope;
+  }
+
+  /**
+   * Default an omitted scope to this store's shared-world scope. An explicitly
+   * provided scope is left for the write guard to validate, so a mismatched
+   * scope (personal, or another site) still fails closed.
+   */
+  override upsert(input: WikiDocumentUpsertInput): WikiDocument {
+    return super.upsert({ ...input, scope: input.scope ?? this.scope });
   }
 }

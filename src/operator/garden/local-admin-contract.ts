@@ -37,6 +37,7 @@ import { ReflectionMetacognitionJournalStore } from '../../persistence/journals/
 import { ReflectionDailyJournalStore } from '../../persistence/journals/reflection-substrate.js';
 import {
   resolveConfiguredCompanionDataDir,
+  resolveConfiguredSystemDataDir,
   resolveChargeLedgerPath,
   resolveFatigueLedgerPath,
   resolveLegacyValuesJournalPath,
@@ -267,7 +268,10 @@ export function createInProcessGardenAdminContract(
     shards: new AdminShardFoldReviewDataService(options.shardManager),
     adaptiveTools,
     wiki: options.config.workspacePath
-      ? new AdminWikiDataService(options.config.workspacePath)
+      ? new AdminWikiDataService({
+        workspacePath: options.config.workspacePath,
+        systemDataDir: resolveConfiguredSystemDataDir(options.config),
+      })
       : null,
     episodicMemory: options.episodicStore
       ? new AdminEpisodicMemoryDataService(options.episodicStore)

@@ -33,6 +33,10 @@ export type {
 export type {
   AdminWikiListData,
   AdminWikiService,
+  AdminWikiScopeSummary,
+  AdminWikiScopesData,
+  AdminSharedWorldWikiListData,
+  AdminWikiImportRequest,
 } from './types/wiki.js';
 
 export type {

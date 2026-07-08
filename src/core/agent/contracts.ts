@@ -107,6 +107,11 @@ export interface MemoryProvider {
 }
 
 export interface MemoryExtractor {
-  maybeExtract(channelId: string, canonicalContactId?: string, turnId?: TurnID): Promise<void>;
+  maybeExtract(
+    channelId: string,
+    canonicalContactId?: string,
+    turnId?: TurnID,
+    placeId?: string,
+  ): Promise<void>;
   getPendingExtractionPromise?(channelId: string): Promise<void> | null;
 }

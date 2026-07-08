@@ -102,7 +102,7 @@ const runChargeStorage = new AsyncLocalStorage<RunChargeContextState>();
 export const RUN_CHARGE_ROLLING_WINDOW_MS = 24 * 60 * 60_000;
 
 interface RollingChargeWindowEntry {
-  sourceKey: string;
+  eventId: string;
   timestampMs: number;
   lane: ChargePolicyRuntimeLane;
   amount: number;
@@ -148,23 +148,6 @@ function cloneSpentByLane(
   return { ...source };
 }
 
-function createRollingWindowEventKey(event: RunChargeEvent): string {
-  return JSON.stringify([
-    event.timestampMs,
-    event.lane,
-    event.surface,
-    event.amount,
-    event.lineage.runId,
-    event.lineage.rootRunId,
-    event.lineage.parentRunId ?? '',
-    event.requestId ?? '',
-    event.turnId ?? '',
-    event.toolCallId ?? '',
-    event.callType ?? '',
-    event.purpose ?? '',
-  ]);
-}
-
 function pruneRollingChargeWindow(nowMs: number): void {
   const cutoffMs = nowMs - RUN_CHARGE_ROLLING_WINDOW_MS;
   rollingChargeWindowEntries = rollingChargeWindowEntries.filter(entry => entry.timestampMs >= cutoffMs);
@@ -184,13 +167,18 @@ function recordRollingChargeEvent(event: RunChargeEvent): void {
   if (event.amount <= 0) {
     return;
   }
+  // Dedupe by stable per-event identity only: two legitimate charges with
+  // identical metadata must both count toward the rolling window.
+  const eventId = typeof event.eventId === 'string' ? event.eventId.trim() : '';
+  if (!eventId) {
+    throw new Error('RunChargeEvent.eventId is required for rolling charge accounting');
+  }
   pruneRollingChargeWindow(event.timestampMs);
-  const sourceKey = createRollingWindowEventKey(event);
-  if (rollingChargeWindowEntries.some(entry => entry.sourceKey === sourceKey)) {
+  if (rollingChargeWindowEntries.some(entry => entry.eventId === eventId)) {
     return;
   }
   rollingChargeWindowEntries.push({
-    sourceKey,
+    eventId,
     timestampMs: event.timestampMs,
     lane: event.lane,
     amount: event.amount,
@@ -353,6 +341,7 @@ function createChargeEvent(input: {
   quota: number;
 }): RunChargeEvent {
   return {
+    eventId: randomUUID(),
     timestampMs: input.timestampMs,
     lane: input.lane,
     surface: input.surface,

@@ -3,7 +3,9 @@ import type { RunChargeEvent } from '../contracts/runtime.js';
 import type { ChargePolicyConfig } from '../contracts/charge-policy.js';
 import {
   chargeSurface,
+  getRunChargeRollingWindowSnapshot,
   getRunChargeSnapshot,
+  hydrateRunChargeRollingWindowFromEvents,
   resetRunChargeRollingWindowForTests,
   RUN_CHARGE_ROLLING_WINDOW_MS,
   runWithChargeContext,
@@ -173,5 +175,72 @@ describe('run charge rolling window', () => {
 
     expect(event?.spentAfter).toBe(1);
     expect(event?.remainingAfter).toBe(2);
+  });
+
+  it('counts both of two identical charges instead of collapsing them by content', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW_MS);
+    const events: RunChargeEvent[] = [];
+    const eventBus = makeEventBus(events);
+    const chargePolicy = makeChargePolicy();
+
+    await runWithChargeContext({
+      chargePolicy,
+      eventBus,
+      lane: 'interactive',
+      runId: 'root-a',
+    }, async () => {
+      // Same run, surface, amount, correlation, and (fake-timer frozen)
+      // timestamp: identical metadata, two legitimate spends.
+      chargeSurface('externalModelConsult', { amount: 1 });
+      chargeSurface('externalModelConsult', { amount: 1 });
+    });
+
+    expect(events).toHaveLength(2);
+    expect(new Set(events.map(event => event.eventId)).size).toBe(2);
+    const window = getRunChargeRollingWindowSnapshot(NOW_MS);
+    expect(window.entryCount).toBe(2);
+    expect(window.spentByLane.interactive).toBe(2);
+  });
+
+  it('dedupes rehydrated events by eventId without dropping identical charges', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW_MS);
+    const events: RunChargeEvent[] = [];
+    const eventBus = makeEventBus(events);
+    const chargePolicy = makeChargePolicy();
+
+    await runWithChargeContext({
+      chargePolicy,
+      eventBus,
+      lane: 'interactive',
+      runId: 'root-a',
+    }, async () => {
+      chargeSurface('externalModelConsult', { amount: 1 });
+      chargeSurface('externalModelConsult', { amount: 1 });
+    });
+
+    // Rehydrating the same persisted events (exact identity) must not double
+    // count them against the live rolling window.
+    hydrateRunChargeRollingWindowFromEvents(events, NOW_MS);
+    const window = getRunChargeRollingWindowSnapshot(NOW_MS);
+    expect(window.entryCount).toBe(2);
+    expect(window.spentByLane.interactive).toBe(2);
+  });
+
+  it('fails closed when a charge event is missing its eventId', () => {
+    const events: RunChargeEvent[] = [{
+      timestampMs: NOW_MS,
+      lane: 'interactive',
+      surface: 'externalModelConsult',
+      amount: 1,
+      quota: 3,
+      spentAfter: 1,
+      remainingAfter: 2,
+      lineage: { runId: 'root-a', rootRunId: 'root-a' },
+    } as unknown as RunChargeEvent];
+
+    expect(() => hydrateRunChargeRollingWindowFromEvents(events, NOW_MS))
+      .toThrow('eventId is required');
   });
 });

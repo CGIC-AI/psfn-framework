@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -27,6 +28,7 @@ function makeTempDir(): string {
 
 function makeChargeEvent(overrides: Partial<RunChargeEvent> = {}): RunChargeEvent {
   return {
+    eventId: randomUUID(),
     timestampMs: 1_700_000_000_300,
     lane: 'interactive',
     surface: 'externalModelConsult',

@@ -35,6 +35,8 @@ interface MemoryRow {
   formation_vad: unknown;
   salience: number;
   source_ref: string;
+  source_type: string | null;
+  provenance_json: unknown;
   extracted_at: number;
   last_accessed: number;
   access_count: number;
@@ -338,24 +340,26 @@ class FakeMemoryPool {
         formation_vad: decodeJsonInput(values[6], null),
         salience: Number(values[7] ?? 0),
         source_ref: String(values[8] ?? ''),
-        extracted_at: Number(values[9] ?? 0),
-        last_accessed: Number(values[10] ?? 0),
-        access_count: Number(values[11] ?? 0),
-        superseded_by: values[12] == null ? null : String(values[12]),
-        tags: decodeJsonInput(values[13], []),
-        scope_ref_kind: values[14] == null ? null : String(values[14]),
-        scope_ref_id: values[15] == null ? null : String(values[15]),
-        scope_ref_label: values[16] == null ? null : String(values[16]),
-        scope_tags: decodeJsonInput(values[17], []),
-        provenance_refs: decodeJsonInput(values[18], []),
-        retention_class: values[19] == null ? null : (values[19] as PurrMemory['retentionClass']),
-        sensitivity: values[20] as PurrMemory['sensitivity'],
-        consent_flags: decodeJsonInput(values[21], {}),
-        contact_id: values[22] == null ? null : String(values[22]),
-        deleted_at: values[23] == null ? null : Number(values[23]),
-        deleted_by: values[24] == null ? null : String(values[24]),
-        delete_reason: values[25] == null ? null : String(values[25]),
-        embedding: typeof values[26] === 'string' ? values[26] : null,
+        source_type: values[9] == null ? null : String(values[9]),
+        provenance_json: decodeJsonInput(values[10], {}),
+        extracted_at: Number(values[11] ?? 0),
+        last_accessed: Number(values[12] ?? 0),
+        access_count: Number(values[13] ?? 0),
+        superseded_by: values[14] == null ? null : String(values[14]),
+        tags: decodeJsonInput(values[15], []),
+        scope_ref_kind: values[16] == null ? null : String(values[16]),
+        scope_ref_id: values[17] == null ? null : String(values[17]),
+        scope_ref_label: values[18] == null ? null : String(values[18]),
+        scope_tags: decodeJsonInput(values[19], []),
+        provenance_refs: decodeJsonInput(values[20], []),
+        retention_class: values[21] == null ? null : (values[21] as PurrMemory['retentionClass']),
+        sensitivity: values[22] as PurrMemory['sensitivity'],
+        consent_flags: decodeJsonInput(values[23], {}),
+        contact_id: values[24] == null ? null : String(values[24]),
+        deleted_at: values[25] == null ? null : Number(values[25]),
+        deleted_by: values[26] == null ? null : String(values[26]),
+        delete_reason: values[27] == null ? null : String(values[27]),
+        embedding: typeof values[28] === 'string' ? values[28] : null,
       };
       this.memories.set(row.id, row);
       return { rows: [], rowCount: 1, command: 'INSERT', oid: 0, fields: [] } as QueryResult;
@@ -512,6 +516,8 @@ function makeMemoryRow(memory: PurrMemory, embedding: string | null = null): Mem
     formation_vad: memory.formationVAD ?? null,
     salience: memory.salience,
     source_ref: memory.sourceRef,
+    source_type: memory.sourceType ?? null,
+    provenance_json: memory.provenance ?? {},
     extracted_at: memory.extractedAt,
     last_accessed: memory.lastAccessed,
     access_count: memory.accessCount,
@@ -823,6 +829,50 @@ describe('postgres memory store unit coverage', () => {
     expect(hydratedDeleted?.deletedAt).toBe(deleted.deletedAt);
     expect(typeof hydratedDeleted?.deletedAt).toBe('number');
     expect(await store.countActiveMemories()).toBe(1);
+  });
+
+  it('persists memory provenance and source type and re-hydrates them across restarts', async () => {
+    const pool = new FakeMemoryPool();
+    postgresMocks.activePool = pool;
+    const store = await createPostgresMemoryStore('postgres://unused', 4);
+    const provenance = {
+      channelId: 'room-channel-1',
+      sessionId: 'room-channel-1:session:20260707T000000Z-test',
+      sourceContactId: 'contact-source',
+      subjectContactId: 'contact-subject',
+      sourceSpeakerName: 'RoomMember',
+      addressMode: 'overheard_room_context' as const,
+      routingReason: 'speaker_name_prefix',
+    };
+    const memory = makeMemory('pg-provenance', 'Room member fact', {
+      sourceRef: 'room-channel-1:extract',
+      sourceType: 'turn',
+      provenance,
+    });
+    await store.insertMemory(memory, new Float32Array([0.1, 0.2, 0.3, 0.4]));
+
+    // The durable row must carry both fields (regression: the INSERT used to
+    // omit provenance_json/source_type, leaving the schema defaults forever).
+    const storedRow = pool.memories.get('pg-provenance');
+    expect(storedRow?.source_type).toBe('turn');
+    expect(storedRow?.provenance_json).toEqual(provenance);
+
+    // Simulate an agent restart: a fresh store hydrating from the same pool.
+    const rehydrated = await createPostgresMemoryStore('postgres://unused', 4);
+    const hydrated = await rehydrated.getById('pg-provenance');
+    expect(hydrated?.sourceType).toBe('turn');
+    expect(hydrated?.provenance).toEqual(provenance);
+
+    // Legacy rows (written before provenance persistence) hydrate without
+    // provenance and with an inferred source type instead of failing.
+    const legacyRow = makeMemoryRow(makeMemory('pg-legacy', 'Legacy memory'));
+    legacyRow.source_type = null;
+    legacyRow.provenance_json = {};
+    pool.memories.set('pg-legacy', legacyRow);
+    const legacyStore = await createPostgresMemoryStore('postgres://unused', 4);
+    const legacy = await legacyStore.getById('pg-legacy');
+    expect(legacy?.provenance).toBeUndefined();
+    expect(legacy?.sourceType).toBe('unknown');
   });
 
   it('expires Postgres scratchpad entries older than 24 hours during hydration', async () => {

@@ -176,7 +176,7 @@ export function buildAgentControlPlane(
     defaultBudgetChannel: 'discord',
   }), {
     gatewayMode: true,
-  }));
+  }), 'extended');
 
   return { lifecycleNotifier, stopFn };
 }

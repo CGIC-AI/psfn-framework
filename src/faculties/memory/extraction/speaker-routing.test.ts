@@ -249,3 +249,89 @@ describe('structured group fact routing', () => {
     )).toMatchObject({ status: 'route', addressMode: 'system_api' });
   });
 });
+
+describe('legacy (attribution-less) fact routing', () => {
+  it('carries source contact and inferred address mode on speaker-name-prefix routes', async () => {
+    const routingContext = await context([
+      entry(1, 'dragon', 'MemberOne', 'i have been growing tomatoes for years'),
+      entry(2, 'iki', 'MemberTwo', 'nice, mine always wilt'),
+    ]);
+
+    const decision = resolveFactRouting(
+      fact({ text: 'MemberOne has been growing tomatoes for years.' }),
+      routingContext,
+      undefined,
+      { companionNames: ['Companion'] },
+    );
+
+    expect(decision).toMatchObject({
+      status: 'route',
+      contactId: 'contact-dragon',
+      sourceContactId: 'contact-dragon',
+      sourceAuthorId: 'dragon',
+      sourceSpeakerName: 'MemberOne',
+      addressMode: 'overheard_room_context',
+      reason: 'speaker_name_prefix',
+    });
+  });
+
+  it('infers direct_to_companion for legacy routes when the speaker addressed the companion', async () => {
+    const routingContext = await context([
+      entry(1, 'dragon', 'MemberOne', 'Companion, remember that i like beekeeping'),
+      entry(2, 'iki', 'MemberTwo', 'cool hobby'),
+    ]);
+
+    const decision = resolveFactRouting(
+      fact({ text: 'MemberOne likes beekeeping.' }),
+      routingContext,
+      undefined,
+      { companionNames: ['Companion'] },
+    );
+
+    expect(decision).toMatchObject({
+      status: 'route',
+      sourceContactId: 'contact-dragon',
+      addressMode: 'direct_to_companion',
+      reason: 'speaker_name_prefix',
+    });
+  });
+
+  it('carries source metadata on single-speaker transcripts', async () => {
+    const routingContext = await context([
+      entry(1, 'dragon', 'MemberOne', 'i really love heirloom tomatoes'),
+    ]);
+
+    const decision = resolveFactRouting(
+      fact({ text: 'MemberOne loves heirloom tomatoes.' }),
+      routingContext,
+      'contact-trigger',
+      { companionNames: ['Companion'] },
+    );
+
+    expect(decision).toMatchObject({
+      status: 'route',
+      contactId: 'contact-trigger',
+      sourceContactId: 'contact-dragon',
+      sourceAuthorId: 'dragon',
+      sourceSpeakerName: 'MemberOne',
+      addressMode: 'overheard_room_context',
+      reason: 'single_speaker_transcript',
+    });
+  });
+
+  it('still skips ambiguous group speakers instead of guessing evidence fields', async () => {
+    const routingContext = await context([
+      entry(1, 'dragon', 'MemberOne', 'we should plant more basil'),
+      entry(2, 'iki', 'MemberTwo', 'agreed, basil is great'),
+    ]);
+
+    const decision = resolveFactRouting(
+      fact({ text: 'The garden needs more basil.' }),
+      routingContext,
+      undefined,
+      { companionNames: ['Companion'] },
+    );
+
+    expect(decision).toEqual({ status: 'skip', reason: 'ambiguous_group_speaker' });
+  });
+});

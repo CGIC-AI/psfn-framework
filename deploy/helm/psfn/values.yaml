@@ -327,7 +327,12 @@ liteLlm:
             api_key: "os.environ/OPENROUTER_API_KEY"
         - model_name: "z-ai/glm-5.2"
           litellm_params:
-            model: "openrouter/z-ai/glm-5.2"
+            # Route via OpenRouter ':exacto' variant, which orders upstream
+            # providers by measured tool-call reliability. Flaky vLLM-family
+            # upstreams intermittently return literal '{}' tool-call arguments;
+            # z-ai/glm-5.2:exacto evaluated 10/10 clean (bead psfn-framework-mihm).
+            # Keep model_name unprefixed so models.json/settings are unchanged.
+            model: "openrouter/z-ai/glm-5.2:exacto"
             api_key: "os.environ/OPENROUTER_API_KEY"
         - model_name: "moonshotai/kimi-k2.6"
           litellm_params:

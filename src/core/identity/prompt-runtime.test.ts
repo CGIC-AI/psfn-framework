@@ -150,6 +150,17 @@ const INTERNAL_STATE_MACRO_TOKENS = [
   '{{runtime_internal_state_emotional_telemetry_reasons}}',
 ] as const;
 
+const SITUATED_MACRO_TOKENS = [
+  '{{runtime_situated_location_present}}',
+  '{{runtime_situated_location_label}}',
+  '{{runtime_situated_location_kind}}',
+  '{{runtime_situated_location_place_id}}',
+  '{{runtime_situated_location_site_id}}',
+  '{{runtime_situated_location_updated_at}}',
+  '{{runtime_situated_location_age_label}}',
+  '{{runtime_situated_location_is_stale}}',
+] as const;
+
 const ATTENTION_MACRO_TOKENS = [
   '{{runtime_concerns_count}}',
   '{{runtime_concerns_top_lines}}',
@@ -636,6 +647,18 @@ describe('prompt runtime macro hints', () => {
       const hint = hintsByToken.get(token);
       expect(hint).toBeDefined();
       expect(hint?.group).toBe('internal_state');
+      expect(hint?.description).toBeTruthy();
+      expect(hint?.example).toBeTruthy();
+    }
+  });
+
+  it('documents the durable situated-location macros with descriptions and examples', () => {
+    const hintsByToken = new Map(PROMPT_RUNTIME_MACRO_HINTS.map(entry => [entry.token, entry]));
+
+    for (const token of SITUATED_MACRO_TOKENS) {
+      const hint = hintsByToken.get(token);
+      expect(hint).toBeDefined();
+      expect(hint?.group).toBe('situated');
       expect(hint?.description).toBeTruthy();
       expect(hint?.example).toBeTruthy();
     }

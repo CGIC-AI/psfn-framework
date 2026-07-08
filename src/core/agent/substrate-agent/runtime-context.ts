@@ -71,6 +71,7 @@ import {
 import { buildContinuityGapPromptVariables } from './runtime-context-sections/continuity-gap.js';
 import {
   buildInternalStatePromptVariables,
+  buildSituatedLocationPromptVariables,
   toEmotionSnapshotFromInternalState,
 } from './runtime-context-sections/internal-state.js';
 import { buildConcernPromptVariables } from './runtime-context-sections/concerns.js';
@@ -354,6 +355,7 @@ export function buildDynamicPromptTemplateVariables(
     }),
     ...buildMetacognitiveFlagPromptVariables(input.metacognitiveFlags ?? []),
     ...buildInternalStatePromptVariables(input.internalState),
+    ...buildSituatedLocationPromptVariables(input.internalState, now),
     ...buildConcernPromptVariables(input.activeConcerns),
     ...buildEmotionAppraisalPromptVariables(input.emotionAppraisalChain ?? []),
     ...buildBehavioralNotesPromptVariables(input.behavioralNotesBlock),

@@ -121,6 +121,9 @@ const TEST_INTERNAL_STATE: InternalState = {
     recentInteractionFrequency: 0.33,
     lastSeenDeltaSeconds: 240,
   },
+  situated: {
+    location: null,
+  },
 };
 
 const METACOGNITIVE_FLAG_NAMES = [
@@ -1331,6 +1334,9 @@ describe('runtime subject identity', () => {
           recentInteractionFrequency: 0.5,
           lastSeenDeltaSeconds: 42,
         },
+        situated: {
+          location: null,
+        },
       },
       activeToolCounts: {
         core: 0,
@@ -1384,6 +1390,9 @@ describe('runtime subject identity', () => {
           moodDrift: 0,
           recentInteractionFrequency: 0,
           lastSeenDeltaSeconds: 0,
+        },
+        situated: {
+          location: null,
         },
       },
       metacognitiveFlags: [],
@@ -2203,6 +2212,7 @@ describe('runtime subject identity', () => {
           ],
         },
         relational: TEST_INTERNAL_STATE.relational,
+        situated: TEST_INTERNAL_STATE.situated,
       },
       metacognitiveFlags: [
         {

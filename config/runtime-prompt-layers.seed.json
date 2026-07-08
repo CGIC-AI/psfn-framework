@@ -42,6 +42,13 @@
       "priority": 120,
       "required": true,
       "content": "<runtime_state>\n<last_message_received>\n<weekday>{{runtime_last_message_received_weekday}}</weekday>\n<date>{{runtime_last_message_received_date_human}}</date>\n<time>{{runtime_last_message_received_time_human}}</time>\n<timezone>{{runtime_last_message_received_timezone}}</timezone>\n<elapsed_time_since_last>{{runtime_last_message_received_ago}}</elapsed_time_since_last>\n<status>{{#if runtime_last_message_received_missing}}No earlier message is loaded for this channel.{{/if}}</status>\n</last_message_received>\n\n<internal_turn_context>\n<kind>{{runtime_internal_turn_kind}}</kind>\n</internal_turn_context>\n\n<conversation_state>\n<chat_type>{{runtime_chat_type}}</chat_type>\n<channel_id>{{runtime_room_id}}</channel_id>\n<channel_type>{{runtime_channel_type}}</channel_type>\n<channel_visibility>{{runtime_channel_visibility}}</channel_visibility>\n{{runtime_current_message_author_xml}}\n{{runtime_recent_active_participants_xml}}{{runtime_participant_relationships_xml}}\n</conversation_state>\n</runtime_state>"
+    },
+    {
+      "identifier": "runtime.situated_location",
+      "name": "Situated Location",
+      "priority": 122,
+      "required": false,
+      "content": "<runtime_situated_location>\n{{#if runtime_situated_location_present}}[Current location]\nRight now you are at {{runtime_situated_location_label}}. This was last confirmed {{runtime_situated_location_age_label}} ({{runtime_situated_location_updated_at}}).{{/if}}\n{{#if runtime_situated_location_is_stale}}That was a while ago — treat it as your best guess of where you are, not a fresh reading, and hold it lightly until a newer signal arrives.{{/if}}\n</runtime_situated_location>"
     }
   ]
 }

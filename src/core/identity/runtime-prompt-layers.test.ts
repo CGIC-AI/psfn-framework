@@ -164,6 +164,7 @@ describe('runtime prompt layer schema', () => {
       'runtime.tooling',
       'runtime.charge_budget',
       'runtime.state',
+      'runtime.situated_location',
     ]);
 
     expect(isRequiredRuntimePromptLayer('runtime.state')).toBe(true);
@@ -328,6 +329,7 @@ describe('runtime prompt layer schema', () => {
       'runtime.tooling',
       'runtime.charge_budget',
       'runtime.state',
+      'runtime.situated_location',
     ]);
     for (const definition of getRuntimePromptLayerDefinitions()) {
       const layer = store.getByType('runtime').find(entry => entry.identifier === definition.identifier);
@@ -343,6 +345,7 @@ describe('runtime prompt layer schema', () => {
         'runtime.tooling',
         'runtime.charge_budget',
         'runtime.state',
+        'runtime.situated_location',
       ],
     });
     expect(events).toEqual([
@@ -374,6 +377,7 @@ describe('runtime prompt layer schema', () => {
       'runtime.charge_budget',
       'runtime.continuity_notice',
       'runtime.response_style',
+      'runtime.situated_location',
       'runtime.state',
       'runtime.tooling',
     ]);

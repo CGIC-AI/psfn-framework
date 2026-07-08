@@ -458,6 +458,9 @@ const TEST_INTERNAL_STATE: InternalState = {
     recentInteractionFrequency: 0,
     lastSeenDeltaSeconds: null,
   },
+  situated: {
+    location: null,
+  },
 };
 
 function createRuntime(params: {

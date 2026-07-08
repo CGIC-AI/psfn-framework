@@ -8,6 +8,10 @@ source "${ROOT_DIR}/scripts/system/runtime-env.sh"
 
 DEBUG_MODE=0
 YOLO_MODE=0
+DRY_RUN_MODE=0
+if psfn_is_truthy_env_value "${PSFN_SUPERVISOR_DRY_RUN:-}"; then
+  DRY_RUN_MODE=1
+fi
 for arg in "$@"; do
   case "$arg" in
     --debug|-d)
@@ -15,6 +19,9 @@ for arg in "$@"; do
       ;;
     --yolo)
       YOLO_MODE=1
+      ;;
+    --dry-run)
+      DRY_RUN_MODE=1
       ;;
   esac
 done
@@ -117,6 +124,9 @@ AGENT_PID=""
 OPERATOR_PID=""
 LAUNCHED_PID=""
 AGENT_ENV=()
+SUPERVISOR_MODE=0
+AGENT_PIDS=()
+COMPANION_PLAN=()
 
 append_agent_env() {
   local name="$1"
@@ -151,6 +161,7 @@ build_agent_env() {
     CHARACTER_CARD_PATH \
     COMPANION_DATA_DIR \
     COMPANION_ID \
+    COMPANION_PG_SCHEMA \
     CONFIG_DIR \
     CONTINUITY_WATCHDOG_ENDPOINT \
     CONTINUITY_WATCHDOG_MAX_FAILURES \
@@ -183,6 +194,7 @@ build_agent_env() {
     PSFN_DEBUG_THINKING \
     PSFN_LIFECYCLE_RESTART_EXIT_CODE \
     PSFN_LOGS_DIR \
+    PSFN_MULTI_COMPANION \
     PSFN_RUNTIME_LAYOUT_MODE \
     PSFN_RUNTIME_MODE \
     PSFN_RUNTIME_ROOT \
@@ -370,14 +382,36 @@ start_gateway() {
   GATEWAY_PID="${LAUNCHED_PID}"
 }
 
-start_agent() {
+spawn_agent_process() {
   build_agent_env
   if [ -x "./node_modules/.bin/tsx" ]; then
     launch_background env -i "${AGENT_ENV[@]}" ./node_modules/.bin/tsx src/app/agent/main.ts
   else
     launch_background env -i "${AGENT_ENV[@]}" npm run agent
   fi
+}
+
+start_agent() {
+  spawn_agent_process
   AGENT_PID="${LAUNCHED_PID}"
+}
+
+# Spawn one agent for a single fleet entry. The four companion-scoped values are
+# exported into the launcher env so build_agent_env picks them up through the
+# existing non-secret allowlist, then env -i re-scrubs the child environment.
+start_companion_agent() {
+  local companion_id="$1"
+  local companion_data_dir="$2"
+  local character_card_path="$3"
+  local postgres_schema="$4"
+
+  export COMPANION_ID="${companion_id}"
+  export COMPANION_DATA_DIR="${companion_data_dir}"
+  export CHARACTER_CARD_PATH="${character_card_path}"
+  export COMPANION_PG_SCHEMA="${postgres_schema}"
+
+  spawn_agent_process
+  AGENT_PIDS+=("${LAUNCHED_PID}")
 }
 
 start_operator() {
@@ -387,6 +421,85 @@ start_operator() {
     launch_background npm run operator
   fi
   OPERATOR_PID="${LAUNCHED_PID}"
+}
+
+# Resolve the multi-companion fleet via the canonical TS helper. The helper owns
+# all flag parsing, path resolution, and validation (no duplicate logic here).
+# Empty stdout => single-companion topology (SUPERVISOR_MODE stays 0). Non-empty
+# stdout => one tab-delimited companion record per line. A non-zero helper exit
+# fails the launcher closed before anything is started.
+resolve_companion_fleet() {
+  # Byte-identical single-companion path: when the topology flag is not present
+  # at all, never invoke the helper.
+  if [ -z "${PSFN_MULTI_COMPANION:-}" ]; then
+    return 0
+  fi
+
+  local plan_output=""
+  if [ -x "./node_modules/.bin/tsx" ]; then
+    if ! plan_output="$(./node_modules/.bin/tsx scripts/resolve-companion-fleet.ts)"; then
+      echo "[${MODE_LABEL}] failed to resolve companion fleet from companions.json; refusing to start" >&2
+      exit 1
+    fi
+  else
+    if ! plan_output="$(npm run --silent resolve:companion-fleet)"; then
+      echo "[${MODE_LABEL}] failed to resolve companion fleet from companions.json; refusing to start" >&2
+      exit 1
+    fi
+  fi
+
+  if [ -z "${plan_output}" ]; then
+    # Flag parsed to off (e.g. PSFN_MULTI_COMPANION=0) with no fleet manifest.
+    return 0
+  fi
+
+  SUPERVISOR_MODE=1
+  COMPANION_PLAN=()
+  local line
+  while IFS= read -r line; do
+    if [ -n "${line}" ]; then
+      COMPANION_PLAN+=("${line}")
+    fi
+  done <<< "${plan_output}"
+
+  if [ "${#COMPANION_PLAN[@]}" -eq 0 ]; then
+    echo "[${MODE_LABEL}] multi-companion mode resolved an empty fleet; refusing to start" >&2
+    exit 1
+  fi
+}
+
+print_supervisor_plan() {
+  local record companion_id companion_data_dir character_card_path postgres_schema
+  echo "[supervisor] dry-run spawn plan (${#COMPANION_PLAN[@]} companion(s)):"
+  echo "[supervisor]   gateway: ${SOCKET_PATH}"
+  for record in "${COMPANION_PLAN[@]}"; do
+    IFS=$'\t' read -r companion_id companion_data_dir character_card_path postgres_schema <<< "${record}"
+    echo "[supervisor]   agent: companionId=${companion_id} schema=${postgres_schema} dataDir=${companion_data_dir} card=${character_card_path}"
+  done
+}
+
+supervise_companion_agents() {
+  local record companion_id companion_data_dir character_card_path postgres_schema
+  for record in "${COMPANION_PLAN[@]}"; do
+    IFS=$'\t' read -r companion_id companion_data_dir character_card_path postgres_schema <<< "${record}"
+    echo "[supervisor] starting agent for companion ${companion_id} (schema=${postgres_schema}, dataDir=${companion_data_dir})"
+    start_companion_agent "${companion_id}" "${companion_data_dir}" "${character_card_path}" "${postgres_schema}"
+  done
+
+  echo "[supervisor] running (gateway pid=${GATEWAY_PID}, agent pids=${AGENT_PIDS[*]})"
+
+  # Shared-fate: the first child (gateway OR any agent) to exit tears down the
+  # whole set. No silent auto-restart; a non-zero exit propagates loudly.
+  set +e
+  wait -n "${GATEWAY_PID}" "${AGENT_PIDS[@]}"
+  local exit_status=$?
+  set -e
+
+  echo "[supervisor] a supervised process exited (status=${exit_status}); shutting down the whole fleet (shared-fate)" >&2
+  cleanup_children
+  trap - INT TERM EXIT
+  release_launcher_lock
+  exit "${exit_status}"
 }
 
 stop_pid() {
@@ -422,6 +535,10 @@ stop_pid() {
 
 cleanup_children() {
   stop_pid "${OPERATOR_PID}"
+  local pid
+  for pid in "${AGENT_PIDS[@]:-}"; do
+    stop_pid "${pid}"
+  done
   stop_pid "${AGENT_PID}"
   stop_pid "${GATEWAY_PID}"
 }
@@ -441,6 +558,18 @@ handle_shutdown_signal() {
   fi
   exit 130
 }
+
+resolve_companion_fleet
+
+if [ "${DRY_RUN_MODE}" -eq 1 ]; then
+  if [ "${SUPERVISOR_MODE}" -eq 1 ]; then
+    print_supervisor_plan
+  else
+    echo "[${MODE_LABEL}] dry-run: single-companion topology (gateway + one agent + operator)"
+    echo "[${MODE_LABEL}]   gateway: ${SOCKET_PATH}"
+  fi
+  exit 0
+fi
 
 trap 'handle_shutdown_signal INT' INT
 trap 'handle_shutdown_signal TERM' TERM
@@ -476,6 +605,11 @@ if [ ! -S "${SOCKET_PATH}" ]; then
     exit 1
   fi
   echo "[${MODE_LABEL}] warning: gateway socket not detected yet, starting agent anyway"
+fi
+
+if [ "${SUPERVISOR_MODE}" -eq 1 ]; then
+  echo "[supervisor] multi-companion mode: spawning ${#COMPANION_PLAN[@]} agent(s)"
+  supervise_companion_agents
 fi
 
 echo "[${MODE_LABEL}] starting agent..."

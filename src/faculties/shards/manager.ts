@@ -18,27 +18,20 @@ import {
 } from '../../core/agent/satellite-adapter-port.js';
 import type { RuntimeMode } from '../../core/agent/tool-wiring-validator.js';
 import { normalizeCapabilityTier } from '../../system/capabilities/tiers.js';
-import { evaluateCompositionalPolicyForChannelId } from '../../system/capabilities/compositional-policy.js';
 import type { SessionStore } from '../../persistence/sessions/store.js';
 import { SessionManager } from '../../core/session/manager.js';
-import type { SessionEntry } from '../../core/session/types.js';
-import {
-  evaluateShardSessionMemorySyncPolicy,
-  type ShardSessionMemorySyncDecision,
-  type ShardSessionMemorySyncEnvelope,
+import type {
+  ShardSessionMemorySyncDecision,
+  ShardSessionMemorySyncEnvelope,
 } from '../../boundary/gateway/policy.js';
-import { appendShardSessionMemorySyncAudit } from '../../persistence/jsonl.js';
 import type { ShardExecutionPort } from './port.js';
 import { chargeSurface, getRunChargeContext, runWithChargeContext } from '../../shared/telemetry/run-charge.js';
 import type {
   ShardConfig,
-  ShardContextPack,
-  ShardContextPackEntry,
   ShardHealthState,
   ShardLifecycleState,
   ShardResult,
   ShardRuntimeRecord,
-  ShardSourceContext,
 } from './types.js';
 import { buildShardLineageEnvelope, deriveShardCompanionId } from './result-lineage.js';
 import { getRequestContext } from '../../primitives/llm/request-context.js';
@@ -77,19 +70,18 @@ import {
   resolveCompanionIdFromConfig,
   resolveCompanionNameFromConfig,
 } from '../../core/identity/companion-runtime.js';
+import {
+  ShardContextPackHelper,
+  SHARD_SYNC_MEMORY_TARGET,
+  SHARD_SYNC_POLICY_VERSION,
+} from './context-pack.js';
 
 const DEFAULT_MAX_CONCURRENT = 5;
 const DEFAULT_MAX_TURNS = 1;
 const DEFAULT_SHARD_HEARTBEAT_STALE_AFTER_MS = 60_000;
 const DEFAULT_SHARD_HEARTBEAT_DISCONNECT_MULTIPLIER = 3;
-const CONTEXT_PACK_SESSION_SCAN_LIMIT = 12;
-const CONTEXT_PACK_SESSION_ENTRY_LIMIT = 6;
-const CONTEXT_PACK_ENTRY_CONTENT_MAX_CHARS = 600;
-const CONTEXT_PACK_MEMORY_MAX_CHARS = 4_000;
 const DEFAULT_SHARD_CAPABILITIES = ['general'] as const;
 const SHARD_TOOLSET_ALL = '*';
-const SHARD_SYNC_POLICY_VERSION = 1;
-const SHARD_SYNC_MEMORY_TARGET = 'memory:index';
 const INTERNAL_SHARD_SOURCE_PARAM = '__psfnShardSource';
 const BLOCKED_SHARD_TOOL_NAMES = new Set([
   'subagent',
@@ -201,6 +193,7 @@ export class ShardManager implements ShardExecutionPort, SubagentExecutionPort {
   private auditTrail: ShardAuditTrail | null;
   private artifactReturnPort: ArtifactReturnPort;
   private satellitePresencePort: SatellitePresencePort;
+  private contextPackHelper: ShardContextPackHelper;
   private activeCount = 0;
   private maxConcurrent: number;
   private heartbeatStaleAfterMs: number;
@@ -224,6 +217,16 @@ export class ShardManager implements ShardExecutionPort, SubagentExecutionPort {
     this.auditTrail = deps.auditTrail ?? null;
     this.artifactReturnPort = deps.artifactReturnPort ?? createArtifactReturnPort();
     this.satellitePresencePort = deps.satellitePresencePort ?? createActiveEmanationSatellitePresencePort();
+    this.contextPackHelper = new ShardContextPackHelper({
+      config: deps.config,
+      parentSystemPrompt: deps.parentSystemPrompt,
+      sessionStore: deps.sessionStore,
+      sessionManager: deps.sessionManager,
+      memoryProvider: deps.memoryProvider,
+      auditTrail: this.auditTrail,
+      shardSessionMemorySyncAuditPath: deps.shardSessionMemorySyncAuditPath,
+      resolveCapabilityTier: () => this.resolveCapabilityTier(),
+    });
     this.foldReviewController = deps.foldReviewController ?? null;
     this.installAuditHooks();
   }
@@ -251,8 +254,8 @@ export class ShardManager implements ShardExecutionPort, SubagentExecutionPort {
       companionId: shardCompanionId,
     };
     const contextPack = shardConfig.contextPack
-      ? this.withCompanionNameForContextPack(shardConfig.contextPack, coreCompanionName)
-      : await this.buildContextPack(
+      ? this.contextPackHelper.withCompanionNameForContextPack(shardConfig.contextPack, coreCompanionName)
+      : await this.contextPackHelper.buildContextPack(
         shardId,
         channelId,
         shardConfig,
@@ -549,7 +552,7 @@ export class ShardManager implements ShardExecutionPort, SubagentExecutionPort {
         this.deps.eventBus,
       );
 
-      const systemPrompt = this.resolveSystemPrompt(shardConfig);
+      const systemPrompt = this.contextPackHelper.resolveSystemPrompt(shardConfig);
 
       const agentLoop = new SubstrateAgent(
         this.deps.eventBus,
@@ -1124,339 +1127,6 @@ export class ShardManager implements ShardExecutionPort, SubagentExecutionPort {
     return normalizeCapabilityTier(this.deps.config.capabilityTier);
   }
 
-  private async buildContextPack(
-    shardId: string,
-    shardChannelId: string,
-    shardConfig: ShardConfig,
-    companionName: string,
-  ): Promise<ShardContextPack | null> {
-    const source = this.normalizeSourceContext(shardConfig.sourceContext);
-    if (!source) {
-      return null;
-    }
-
-    const policyDecision = evaluateCompositionalPolicyForChannelId({
-      policy: this.deps.config.compositionalPolicy,
-      capabilityTier: this.resolveCapabilityTier(),
-      channelId: source.channelId,
-      purpose: 'shard_context',
-    });
-    if (!policyDecision.allowed) {
-      return null;
-    }
-
-    const sessionSyncEnvelope: ShardSessionMemorySyncEnvelope = {
-      version: SHARD_SYNC_POLICY_VERSION,
-      syncClass: 'transcript_fact',
-      direction: 'prime_to_shard',
-      authority: 'prime',
-      operation: 'context_pack_session',
-      shardId,
-      sourceId: source.channelId,
-      targetId: shardChannelId,
-      idempotencyKey: this.buildSyncIdempotencyKey([
-        'context_pack_session',
-        shardId,
-        source.channelId,
-        source.requestId,
-        source.turnId,
-      ]),
-      requestedAt: Date.now(),
-    };
-    const sessionSyncDecision = this.evaluateSyncPolicy(sessionSyncEnvelope);
-    const sessionEntries = sessionSyncDecision.allowed
-      ? this.buildContextPackEntries(source)
-      : [];
-
-    const memorySyncEnvelope: ShardSessionMemorySyncEnvelope = {
-      version: SHARD_SYNC_POLICY_VERSION,
-      syncClass: 'derived_memory',
-      direction: 'prime_to_shard',
-      authority: 'prime',
-      operation: 'context_pack_memory',
-      shardId,
-      sourceId: source.channelId,
-      targetId: shardChannelId,
-      idempotencyKey: this.buildSyncIdempotencyKey([
-        'context_pack_memory',
-        shardId,
-        source.channelId,
-        source.requestId,
-        source.turnId,
-        shardConfig.task,
-      ]),
-      requestedAt: Date.now(),
-    };
-    const memorySyncDecision = this.evaluateSyncPolicy(memorySyncEnvelope);
-    const memoryBlock = memorySyncDecision.allowed
-      ? await this.buildContextPackMemoryBlock(
-        shardConfig.task,
-        source.channelId,
-        this.resolveContextPackMemoryScopeQuery(source.channelId),
-      )
-      : '';
-    if (sessionEntries.length === 0 && memoryBlock.length === 0) {
-      return null;
-    }
-
-    return {
-      purpose: 'shard_context',
-      task: shardConfig.task,
-      source,
-      companionName,
-      sessionEntries,
-      ...(memoryBlock ? { memoryBlock } : {}),
-    };
-  }
-
-  private withCompanionNameForContextPack(
-    contextPack: ShardContextPack,
-    companionName: string,
-  ): ShardContextPack {
-    const existingCompanionName = contextPack.companionName?.trim();
-    return {
-      ...contextPack,
-      companionName: existingCompanionName || companionName,
-    };
-  }
-
-  private evaluateSyncPolicy(
-    envelope: ShardSessionMemorySyncEnvelope,
-  ): ShardSessionMemorySyncDecision {
-    const decision = evaluateShardSessionMemorySyncPolicy(envelope);
-    this.recordSyncPolicyDecision(envelope, decision);
-    return decision;
-  }
-
-  private recordSyncPolicyDecision(
-    envelope: ShardSessionMemorySyncEnvelope,
-    decision: ShardSessionMemorySyncDecision,
-  ): void {
-    const policyEvent = {
-      shardId: envelope.shardId,
-      syncClass: envelope.syncClass,
-      direction: envelope.direction,
-      authority: envelope.authority,
-      operation: envelope.operation,
-      sourceId: envelope.sourceId,
-      targetId: envelope.targetId,
-      idempotencyKey: envelope.idempotencyKey,
-      decision: decision.allowed ? 'ALLOW' : 'DENY',
-      reason: decision.reason,
-      requestedAt: envelope.requestedAt,
-    } as const;
-    this.auditTrail?.append('shard.sync.policy', policyEvent);
-
-    const path = this.deps.shardSessionMemorySyncAuditPath?.trim();
-    if (!path) {
-      return;
-    }
-
-    appendShardSessionMemorySyncAudit(path, {
-      timestamp: Date.now(),
-      shardId: envelope.shardId,
-      syncClass: envelope.syncClass,
-      direction: envelope.direction,
-      authority: envelope.authority,
-      operation: envelope.operation,
-      sourceId: envelope.sourceId,
-      targetId: envelope.targetId,
-      idempotencyKey: envelope.idempotencyKey,
-      decision: decision.allowed ? 'ALLOW' : 'DENY',
-      reason: decision.reason,
-    });
-  }
-
-  private buildSyncIdempotencyKey(parts: Array<string | undefined>): string {
-    const normalized = parts
-      .map(part => part?.trim())
-      .filter((part): part is string => Boolean(part))
-      .join('|');
-    if (normalized.length === 0) {
-      return `sync:${Date.now()}`;
-    }
-    if (normalized.length > 200) {
-      return normalized.slice(0, 200);
-    }
-    return normalized;
-  }
-
-  private normalizeSourceContext(
-    sourceContext: ShardSourceContext | undefined,
-  ): ShardSourceContext | null {
-    const channelId = sourceContext?.channelId.trim();
-    if (!channelId || !sourceContext) {
-      return null;
-    }
-
-    const requestId = sourceContext.requestId?.trim();
-    const turnId = sourceContext.turnId?.trim();
-    const embodimentContext = sourceContext.embodimentContext;
-    return {
-      channelId,
-      ...(requestId ? { requestId } : {}),
-      ...(turnId ? { turnId } : {}),
-      ...(embodimentContext ? { embodimentContext } : {}),
-    };
-  }
-
-  private buildContextPackEntries(source: ShardSourceContext): ShardContextPackEntry[] {
-    const recentEntries = this.deps.sessionStore.getRecent(
-      source.channelId,
-      CONTEXT_PACK_SESSION_SCAN_LIMIT,
-    );
-    const focusedEntries = this.selectContextPackEntries(recentEntries, source);
-    return focusedEntries.map(entry => ({
-      role: entry.role,
-      content: this.truncateContextText(entry.content, CONTEXT_PACK_ENTRY_CONTENT_MAX_CHARS),
-      ...(entry.authorName ? { authorName: entry.authorName } : {}),
-      timestamp: entry.timestamp,
-    }));
-  }
-
-  private selectContextPackEntries(
-    recentEntries: readonly SessionEntry[],
-    source: ShardSourceContext,
-  ): SessionEntry[] {
-    if (recentEntries.length <= CONTEXT_PACK_SESSION_ENTRY_LIMIT) {
-      return [...recentEntries];
-    }
-
-    const anchorIndex = this.findContextPackAnchorIndex(recentEntries, source);
-    if (anchorIndex < 0) {
-      return recentEntries.slice(-CONTEXT_PACK_SESSION_ENTRY_LIMIT);
-    }
-
-    const endExclusive = anchorIndex + 1;
-    const start = Math.max(0, endExclusive - CONTEXT_PACK_SESSION_ENTRY_LIMIT);
-    return recentEntries.slice(start, endExclusive);
-  }
-
-  private findContextPackAnchorIndex(
-    recentEntries: readonly SessionEntry[],
-    source: ShardSourceContext,
-  ): number {
-    for (let index = recentEntries.length - 1; index >= 0; index -= 1) {
-      const entry = recentEntries.at(index);
-      if (!entry) continue;
-      if (this.sessionEntryMatchesSource(entry, source)) {
-        return index;
-      }
-    }
-    return -1;
-  }
-
-  private sessionEntryMatchesSource(entry: SessionEntry, source: ShardSourceContext): boolean {
-    const metadata = entry.metadata;
-    if (!metadata) {
-      return false;
-    }
-
-    return this.metadataIncludesField(metadata, 'requestId', source.requestId)
-      || this.metadataIncludesField(metadata, 'turnId', source.turnId);
-  }
-
-  private metadataIncludesField(
-    metadata: string,
-    field: 'requestId' | 'turnId',
-    value: string | undefined,
-  ): boolean {
-    if (!value) {
-      return false;
-    }
-    return metadata.includes(`\"${field}\":${JSON.stringify(value)}`);
-  }
-
-  private async buildContextPackMemoryBlock(
-    task: string,
-    sourceChannelId: string,
-    scopeQuery: import('../memory/types.js').MemoryScopeQuery | undefined,
-  ): Promise<string> {
-    const query = task.trim();
-    if (!query || !this.deps.memoryProvider) {
-      return '';
-    }
-
-    const memoryBlock = await this.deps.memoryProvider.retrieve(
-      query,
-      sourceChannelId,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      scopeQuery,
-    );
-    return this.truncateContextText(memoryBlock, CONTEXT_PACK_MEMORY_MAX_CHARS);
-  }
-
-  private resolveContextPackMemoryScopeQuery(
-    sourceChannelId: string,
-  ): import('../memory/types.js').MemoryScopeQuery | undefined {
-    return this.deps.sessionManager?.getActiveFocusMemoryScopeQuery(sourceChannelId) ?? undefined;
-  }
-
-  private resolveSystemPrompt(shardConfig: ShardConfig): string {
-    const basePrompt = shardConfig.systemPrompt ?? this.deps.parentSystemPrompt;
-    if (!shardConfig.contextPack) {
-      return basePrompt;
-    }
-
-    return [basePrompt, this.renderContextPack(shardConfig.contextPack)]
-      .map(section => section.trim())
-      .filter(section => section.length > 0)
-      .join('\n\n');
-  }
-
-  private renderContextPack(contextPack: ShardContextPack): string {
-    const companionName = contextPack.companionName?.trim() || 'Assistant';
-    const sourceConversation = contextPack.sessionEntries
-      .map(entry => {
-        const speaker = entry.role === 'assistant'
-          ? entry.authorName?.trim() || companionName
-          : entry.role === 'system'
-            ? 'System'
-            : (entry.authorName?.trim() || 'User');
-        return `${speaker}: ${entry.content}`;
-      })
-      .join('\n');
-
-    return [
-      '[Shard context pack]',
-      'Use only this task-scoped source context while working the shard task.',
-      `Source channel: ${contextPack.source.channelId}`,
-      ...(contextPack.source.requestId ? [`Source requestId: ${contextPack.source.requestId}`] : []),
-      ...(contextPack.source.turnId ? [`Source turnId: ${contextPack.source.turnId}`] : []),
-      ...(contextPack.source.embodimentContext
-        ? [`Source embodiment: ${contextPack.source.embodimentContext.embodimentId}`]
-        : []),
-      `Task scope: ${this.truncateContextText(contextPack.task, CONTEXT_PACK_ENTRY_CONTENT_MAX_CHARS)}`,
-      ...(sourceConversation
-        ? [
-          '',
-          '[Focused source conversation]',
-          sourceConversation,
-        ]
-        : []),
-      ...(contextPack.memoryBlock
-        ? [
-          '',
-          '[Task-scoped memory]',
-          contextPack.memoryBlock,
-        ]
-        : []),
-    ].join('\n');
-  }
-
-  private truncateContextText(value: string, maxChars: number): string {
-    const normalized = value.trim();
-    if (normalized.length <= maxChars) {
-      return normalized;
-    }
-    return `${normalized.slice(0, maxChars - 3)}...`;
-  }
-
   private wrapShardTool(
     tool: AgentTool<any>,
     shardId: string,
@@ -1578,7 +1248,7 @@ export class ShardManager implements ShardExecutionPort, SubagentExecutionPort {
     shardId: string,
     toolCallId: string,
   ): ShardSessionMemorySyncDecision {
-    const decision = this.evaluateSyncPolicy({
+    const decision = this.contextPackHelper.evaluateSyncPolicy({
       version: SHARD_SYNC_POLICY_VERSION,
       syncClass: 'derived_memory',
       direction: 'shard_to_prime',
@@ -1587,7 +1257,7 @@ export class ShardManager implements ShardExecutionPort, SubagentExecutionPort {
       shardId,
       sourceId: `shard:${shardId}`,
       targetId: SHARD_SYNC_MEMORY_TARGET,
-      idempotencyKey: this.buildSyncIdempotencyKey([
+      idempotencyKey: this.contextPackHelper.buildSyncIdempotencyKey([
         'shard_tool_sync',
         shardId,
         toolCallId,
@@ -1623,7 +1293,7 @@ export class ShardManager implements ShardExecutionPort, SubagentExecutionPort {
       shardId,
       sourceId: `shard:${shardId}`,
       targetId: SHARD_SYNC_MEMORY_TARGET,
-      idempotencyKey: this.buildSyncIdempotencyKey([
+      idempotencyKey: this.contextPackHelper.buildSyncIdempotencyKey([
         'shard_tool_sync',
         shardId,
         toolCallId,
@@ -1631,7 +1301,7 @@ export class ShardManager implements ShardExecutionPort, SubagentExecutionPort {
       ]),
       requestedAt: Date.now(),
     };
-    const decision = this.evaluateSyncPolicy(envelope);
+    const decision = this.contextPackHelper.evaluateSyncPolicy(envelope);
     if (!decision.allowed) {
       throw new Error(
         `Shard session/memory sync denied for ${toolName} (${decision.reason}).`,

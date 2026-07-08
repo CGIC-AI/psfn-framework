@@ -6,6 +6,7 @@
 // Keep core construction through these helpers so behavior stays aligned across split entrypoints.
 
 import type { CoreSubstrateConfig, SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
+import type { PlacesRegistryConfig } from '../../../shared/contracts/places-registry.js';
 import type { EventBus } from '../../../shared/event-bus.js';
 import type { AppCache } from '../../../shared/cache/types.js';
 import { wireRuntimeDiagnosticsEventCapture } from '../../../shared/diagnostics/runtime-diagnostics.js';
@@ -224,6 +225,8 @@ export interface SubstrateAgentCompositionOptions {
   appCache?: AppCache;
   /** Contact-tracking policy gate (E3.4). Absent gate behaves as 'auto' everywhere. */
   contactTrackingGate?: ContactTrackingGate | null;
+  /** Places soft-registry (S10). Absent behaves as an empty registry. */
+  placesRegistryConfig?: PlacesRegistryConfig;
 }
 
 export function composeSubstrateAgent(options: SubstrateAgentCompositionOptions): SubstrateAgent {
@@ -247,6 +250,7 @@ export function composeSubstrateAgent(options: SubstrateAgentCompositionOptions)
       ...(options.streamTransport ? { streamTransport: options.streamTransport } : {}),
       ...(options.appCache ? { appCache: options.appCache } : {}),
       ...(options.contactTrackingGate ? { contactTrackingGate: options.contactTrackingGate } : {}),
+      ...(options.placesRegistryConfig ? { placesRegistryConfig: options.placesRegistryConfig } : {}),
     },
   );
 }

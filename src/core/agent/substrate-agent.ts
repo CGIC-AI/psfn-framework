@@ -24,6 +24,7 @@ import {
   INTENTION_FOLLOW_UP_AUTHOR_NAME,
 } from '../intention/appraisal.js';
 import type { AgentResponse, CorrelationMetadata, ModelBudgetBlockedEvent, MessagePromptOverride, ResponseStyle, SubstrateMessage } from '../../shared/contracts/runtime.js';
+import type { PlacesRegistryConfig } from '../../shared/contracts/places-registry.js';
 import type { CapabilityTier, CoreSubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type { ContactStorePort } from '../contacts/contact-store-port.js';
 import type { ContactTrackingGate } from '../contacts/tracking-gate.js';
@@ -217,6 +218,11 @@ export interface SubstrateAgentOptions {
   appCache?: AppCache;
   /** Contact-tracking policy gate (E3.4). Absent gate behaves as 'auto' everywhere. */
   contactTrackingGate?: ContactTrackingGate | null;
+  /**
+   * Places soft-registry (S10). Absent/undefined behaves as an empty registry,
+   * so a runtime with no `places.json` renders byte-identically.
+   */
+  placesRegistryConfig?: PlacesRegistryConfig;
 }
 const DEFAULT_TOOL_SCHEDULER_MAX_PARALLEL = 5;
 
@@ -296,6 +302,9 @@ export class SubstrateAgent {
   // Contact-tracking policy gate (E3.4) — null behaves as 'auto' everywhere
   private readonly contactTrackingGate: ContactTrackingGate | null;
 
+  // Places soft-registry (S10) — undefined behaves as an empty registry
+  private readonly placesRegistryConfig: PlacesRegistryConfig | undefined;
+
   // Prompt composition — null falls back to static systemPrompt
   promptComposer: PromptComposer | null = null;
 
@@ -329,6 +338,7 @@ export class SubstrateAgent {
     this.observerEvalSidecar = options?.observerEvalSidecar ?? null;
     this.fatigueBudget = options?.fatigueBudget ?? null;
     this.contactTrackingGate = options?.contactTrackingGate ?? null;
+    this.placesRegistryConfig = options?.placesRegistryConfig;
     this.emotionSelfModelRuntime = new EmotionSelfModelRuntime({
       sessionManager: this.sessionManager,
       llmProvider: this.llmClient,
@@ -1292,6 +1302,7 @@ export class SubstrateAgent {
       formatTopEmotions: (discrete) => this.emotionSelfModelRuntime.formatTopEmotions(discrete),
       config: this.config as unknown as Record<string, unknown>,
       substrateHealth: this.companionSubstrateHealthContext,
+      ...(this.placesRegistryConfig ? { placesRegistry: this.placesRegistryConfig } : {}),
     });
   }
 

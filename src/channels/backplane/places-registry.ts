@@ -7,6 +7,7 @@ import type {
   AffordanceRole,
   PlaceConfig,
   PlaceKind,
+  PlacePrivacy,
   PlacesRegistryConfig,
   SiteConfig,
 } from '../../shared/contracts/places-registry.js';
@@ -21,6 +22,7 @@ import { isRecord } from '../../shared/utils/types.js';
 
 const ID_TOKEN_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u;
 const PLACE_KINDS = new Set<string>(['physical', 'virtual']);
+const PLACE_PRIVACIES = new Set<string>(['public', 'private']);
 const AFFORDANCE_ROLES = new Set<string>(['perceiver', 'effector']);
 const AFFORDANCE_BACKENDS = new Set<string>(['ha', 'satellite', 'vr']);
 const AFFORDANCE_KIND_SET = new Set<string>(AFFORDANCE_KINDS);
@@ -60,6 +62,20 @@ function parsePlaceKind(value: unknown, fieldName: string): PlaceKind {
     throw new Error(`${fieldName} must be one of: physical, virtual`);
   }
   return parsed as PlaceKind;
+}
+
+/**
+ * Optional room-privacy field (psfn-framework-s10rm). Absent means `public`;
+ * an unknown value fails closed at parse time so a typo can never silently
+ * demote a private room to public delivery.
+ */
+function parsePlacePrivacy(value: unknown, fieldName: string): PlacePrivacy | undefined {
+  if (value === undefined) return undefined;
+  const parsed = parseConfiguredString(value, fieldName);
+  if (!PLACE_PRIVACIES.has(parsed)) {
+    throw new Error(`${fieldName} must be one of: public, private`);
+  }
+  return parsed as PlacePrivacy;
 }
 
 function parseAffordanceRole(value: unknown, fieldName: string): AffordanceRole {
@@ -155,6 +171,7 @@ function parsePlaceConfig(value: unknown, fieldName: string): PlaceConfig {
   const kind = parsePlaceKind(value.kind, `${fieldName}.kind`);
   const haAreaId = parseOptionalConfiguredString(value.haAreaId, `${fieldName}.haAreaId`);
   const description = parseOptionalConfiguredString(value.description, `${fieldName}.description`);
+  const privacy = parsePlacePrivacy(value.privacy, `${fieldName}.privacy`);
   if (value.affordances !== undefined && !Array.isArray(value.affordances)) {
     throw new Error(`${fieldName}.affordances must be an array`);
   }
@@ -178,6 +195,7 @@ function parsePlaceConfig(value: unknown, fieldName: string): PlaceConfig {
     kind,
     ...(haAreaId ? { haAreaId } : {}),
     ...(description ? { description } : {}),
+    ...(privacy ? { privacy } : {}),
     affordances,
   };
 }

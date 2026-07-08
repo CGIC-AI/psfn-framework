@@ -214,6 +214,14 @@ function makeWikiService(): AdminWikiService {
       updated: [],
       unchanged: [],
       deleted: [],
+      // s10f9: publish reports its shared-schema projection outcome.
+      projection: {
+        siteId,
+        status: 'projected' as const,
+        projected: ['site-overview', 'place-kitchen'],
+        deleted: [],
+        failedDocuments: [],
+      },
     })),
     importSharedWorldDirectory: vi.fn(async (siteId: string, request) => ({
       directory: request.directory,
@@ -221,6 +229,15 @@ function makeWikiService(): AdminWikiService {
       personalFactGuard: true,
       imported: [{ file: 'kitchen.md', id: 'kitchen', title: 'Kitchen' }],
       rejected: [{ file: 'partner.md', reason: 'contains a first-person relational marker (personal fact)' }],
+      // s10f9: dry-run import reports an honest skipped projection.
+      projection: {
+        siteId,
+        status: 'skipped' as const,
+        reason: 'dry_run',
+        projected: [],
+        deleted: [],
+        failedDocuments: [],
+      },
     })),
   };
 }
@@ -321,7 +338,12 @@ describe('wiki admin API scope delineation (vinz.28)', () => {
     const publish = await invokePost(routes, '/api/admin/wiki/shared-world/home/publish', {});
     expect(publish.status).toBe(200);
     expect(wikiService.publishSharedWorldSite).toHaveBeenCalledWith('home');
-    expect(JSON.parse(publish.body)).toMatchObject({ siteId: 'home', created: ['site-overview', 'place-kitchen'] });
+    expect(JSON.parse(publish.body)).toMatchObject({
+      siteId: 'home',
+      created: ['site-overview', 'place-kitchen'],
+      // s10f9: the projection outcome reaches the operator through the route.
+      projection: expect.objectContaining({ status: 'projected' }),
+    });
 
     const importResp = await invokePost(routes, '/api/admin/wiki/shared-world/home/import', {
       directory: '/tmp/world-notes',
@@ -335,6 +357,7 @@ describe('wiki admin API scope delineation (vinz.28)', () => {
     expect(JSON.parse(importResp.body)).toMatchObject({
       imported: [expect.objectContaining({ file: 'kitchen.md' })],
       rejected: [expect.objectContaining({ file: 'partner.md' })],
+      projection: expect.objectContaining({ status: 'skipped', reason: 'dry_run' }),
     });
   });
 

@@ -36,6 +36,8 @@ export type {
   AdminWikiScopeSummary,
   AdminWikiScopesData,
   AdminSharedWorldWikiListData,
+  AdminSharedWorldWikiPublishData,
+  AdminSharedWorldWikiImportData,
   AdminWikiImportRequest,
 } from './types/wiki.js';
 

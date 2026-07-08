@@ -443,7 +443,12 @@ function readTarOctal(bytes: Uint8Array, start: number, length: number): number 
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
-function listTarEntries(bytes: Uint8Array): string[] {
+interface ArchiveEntryListing {
+  entries: string[];
+  malformedReason?: string;
+}
+
+function listTarEntries(bytes: Uint8Array): ArchiveEntryListing {
   const entries: string[] = [];
   let offset = 0;
   while (offset + 512 <= bytes.byteLength && entries.length < MAX_ARCHIVE_ENTRIES_TO_REPORT * 4) {
@@ -454,23 +459,28 @@ function listTarEntries(bytes: Uint8Array): string[] {
     const fullName = prefix ? `${prefix}/${name}` : name;
     if (fullName) entries.push(fullName);
     const size = readTarOctal(block, 124, 12);
+    if (size < 0) {
+      // A negative size header would stall or reverse the scan offset; treat
+      // the archive as malformed and stop enumerating fail-closed.
+      return { entries, malformedReason: 'archive_malformed_entry:negative_tar_size' };
+    }
     offset += 512 + Math.ceil(size / 512) * 512;
   }
-  return entries;
+  return { entries };
 }
 
-function listZipLocalEntries(bytes: Uint8Array): string[] {
+function listZipLocalEntries(bytes: Uint8Array): ArchiveEntryListing {
   try {
-    return listZipEntryNames(bytes).slice(0, MAX_ARCHIVE_ENTRIES_TO_REPORT * 4);
+    return { entries: listZipEntryNames(bytes).slice(0, MAX_ARCHIVE_ENTRIES_TO_REPORT * 4) };
   } catch {
-    return [];
+    return { entries: [] };
   }
 }
 
-function listArchiveEntries(bytes: Uint8Array, sniffedContentType: string): string[] {
+function listArchiveEntries(bytes: Uint8Array, sniffedContentType: string): ArchiveEntryListing {
   if (sniffedContentType === 'application/zip') return listZipLocalEntries(bytes);
   if (sniffedContentType === 'application/x-tar') return listTarEntries(bytes);
-  return [];
+  return { entries: [] };
 }
 
 function appendArchiveEntryReasons(
@@ -478,7 +488,10 @@ function appendArchiveEntryReasons(
   sniffedContentType: string,
   reasons: Set<string>,
 ): void {
-  const entries = listArchiveEntries(bytes, sniffedContentType);
+  const { entries, malformedReason } = listArchiveEntries(bytes, sniffedContentType);
+  if (malformedReason) {
+    addReason(reasons, malformedReason);
+  }
   let reported = 0;
   for (const entry of entries) {
     if (reported >= MAX_ARCHIVE_ENTRIES_TO_REPORT) break;

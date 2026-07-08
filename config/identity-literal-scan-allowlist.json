@@ -845,6 +845,12 @@
       "contains": "'psfn-enrollment'",
       "reason": "Postgres application-name label for the enrollment store connection pool.",
       "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/boundary/integrations/world/tools.ts",
+      "contains": "See bead psfn-framework-vinz.10",
+      "reason": "Beads issue-ID reference in a code comment (Sprint 10 world tool follow-up).",
+      "pattern": "identity-legacy-slug"
     }
   ]
 }

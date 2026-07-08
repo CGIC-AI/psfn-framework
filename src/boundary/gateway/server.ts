@@ -17,10 +17,17 @@ import type { SubstrateMessage } from '../../shared/contracts/runtime.js';
 import type { GatewayRpcConnection, GatewayRpcEndpoint } from './transport.js';
 import { createSocketServer, createWebSocketRpcServer } from './transport.js';
 import {
+  GatewayErrors,
   type PolicyDecision,
   type RuntimeHealthResult,
   type VoiceHandleMessageResult,
 } from './protocol.js';
+import {
+  disabledGatewayMultiCompanionConfig,
+  resolveGatewaySurfaceForChannelType,
+  type GatewayChannelSurface,
+  type GatewayMultiCompanionConfig,
+} from './multi-companion.js';
 import type { GitOperations } from '../integrations/git/ops.js';
 import type { ImageRuntimeConfig } from '../../primitives/images/types.js';
 import type { ModelDiscoveryBackend } from '../../primitives/llm/discovery.js';
@@ -73,6 +80,8 @@ interface GatewayConnectionStatus {
   lastTransitionAt: number;
   healthcheckStaleAfterMs: number;
   failureReason?: string;
+  /** Multi-companion (W1): companionId this connection identified as. */
+  companionId?: string;
 }
 
 const GATEWAY_CONNECTION_STATE_TRANSITIONS:
@@ -105,6 +114,13 @@ export interface GatewayServerOptions {
   capabilityTierProvider?: () => CapabilityTier;
   wyomingShardRouting: WyomingShardRoutingConfig;
   companionId?: string;
+  /**
+   * Multi-companion (sprint-10 W1). When absent or disabled, the gateway keeps
+   * the single-agent semantics (first-ready routing + broadcast notifications)
+   * byte-identical. When enabled, every routed exchange is companion-addressed
+   * and any ambiguity fails closed.
+   */
+  multiCompanion?: GatewayMultiCompanionConfig;
 }
 
 export class GatewayServer {
@@ -121,10 +137,18 @@ export class GatewayServer {
   private readonly approvalBoundary: ApprovalBoundaryService;
   private readonly runtimeHealthTracker: GatewayRuntimeHealthTracker;
   private readonly apiStreamListeners = new Map<string, Set<(text: string) => void>>();
+  private readonly multiCompanion: GatewayMultiCompanionConfig;
+  private readonly companionConnections = new Map<string, GatewayRpcConnection>();
 
   constructor(options: GatewayServerOptions) {
     this.options = options;
     this.sessionHmacKeyring = options.sessionHmacKeyring;
+    this.multiCompanion = options.multiCompanion ?? disabledGatewayMultiCompanionConfig();
+    if (this.multiCompanion.enabled) {
+      log.info('Multi-companion gateway routing enabled', {
+        channelRouting: this.multiCompanion.channelRouting,
+      });
+    }
     this.capabilityTierProvider = options.capabilityTierProvider ?? (() => 'nursery');
     this.wyomingShardRouting = options.wyomingShardRouting;
     this.ntfyNotifier = new GatewayNtfyNotifier(options.ntfy);
@@ -209,7 +233,7 @@ export class GatewayServer {
       workspacePath: this.options.policyConfig.workspacePath,
       sessionHmacKeyring: this.sessionHmacKeyring,
       approvalBoundary: this.approvalBoundary,
-      notifyAll: (method, params) => this.notifyAll(method, params),
+      notifyRequester: (method, params) => this.notifyRequestingConnection(conn, method, params),
       listPendingConfirmations: () => this.approvalBoundary.listPendingConfirmations(),
       listConfirmationHistory: () => this.approvalBoundary.listConfirmationHistory(),
       resolveConfirmation: (params) => this.approvalBoundary.resolveConfirmation(params),
@@ -227,9 +251,28 @@ export class GatewayServer {
     registerGatewayMethods(runtime);
     target.addMethod('gateway.client.identify', (params: unknown) => this.identifyConnection(conn, params));
     target.addMethod('api.stream.delta', (params: unknown) => {
+      if (this.multiCompanion.enabled && !this.isConnectionAuthorizedForApiStream(conn)) {
+        this.alarmCompanionViolation(
+          'api_stream_delta_rejected',
+          'api.stream.delta rejected: sending connection is not the routed api companion',
+          {
+            senderCompanionId: this.connectionStatuses.get(conn)?.companionId ?? '(unidentified)',
+            routedApiCompanionId: this.multiCompanion.channelRouting.api ?? '(unrouted)',
+          },
+        );
+        return null;
+      }
       this.dispatchApiStreamDelta(params as ApiStreamDeltaNotification);
       return null;
     });
+  }
+
+  private isConnectionAuthorizedForApiStream(conn: GatewayRpcConnection): boolean {
+    const routedCompanionId = this.multiCompanion.channelRouting.api;
+    if (!routedCompanionId) {
+      return false;
+    }
+    return this.connectionStatuses.get(conn)?.companionId === routedCompanionId;
   }
 
   // ── Connection management ──
@@ -294,6 +337,12 @@ export class GatewayServer {
         );
         return;
       }
+      if (this.multiCompanion.enabled) {
+        const verdict = this.enforceCompanionFrameIdentity(conn, message as Record<string, unknown>);
+        if (verdict !== 'pass') {
+          return;
+        }
+      }
       const releaseInFlightHealthcheck = this.beginInFlightHealthcheck(conn);
       // json-rpc-2.0 receiveAndSend() payload param is typed as `any`; message is parsed JSON
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -352,7 +401,202 @@ export class GatewayServer {
     });
   }
 
+  /**
+   * Deliver an inbound channel message to its owning agent.
+   * Single-companion mode keeps today's broadcast semantics byte-identical;
+   * multi-companion mode resolves exactly one companion via the channels.json
+   * routing table and fails closed on any ambiguity.
+   */
+  notifyChannelMessage(surface: GatewayChannelSurface, method: string, params: unknown): void {
+    if (!this.multiCompanion.enabled) {
+      this.notifyAll(method, params);
+      return;
+    }
+    const route = this.resolveCompanionAgent(surface);
+    this.notifyOne(route.conn, method, params);
+  }
+
+  /**
+   * Notify the connection that originated the in-flight request (e.g.
+   * llm.chunk streaming deltas). Single-companion mode preserves the existing
+   * broadcast path byte-identically; multi-companion mode pins delivery to the
+   * requesting connection so one companion's stream can never reach another.
+   */
+  private notifyRequestingConnection(
+    conn: GatewayRpcConnection,
+    method: string,
+    params: unknown,
+  ): void {
+    if (this.multiCompanion.enabled) {
+      this.notifyOne(conn, method, params);
+      return;
+    }
+    this.notifyAll(method, params);
+  }
+
+  /**
+   * Fail-closed companion identity check applied to every inbound frame while
+   * multi-companion is active:
+   * - a frame claiming a companionId different from the connection's identified
+   *   companionId is treated as identity spoofing → audit + disconnect;
+   * - agent-role connections must identify with a companionId before any other
+   *   RPC → requests are rejected with COMPANION_IDENTIFY_REQUIRED.
+   * Responses to gateway-originated requests pass through untouched.
+   */
+  private enforceCompanionFrameIdentity(
+    conn: GatewayRpcConnection,
+    frame: Record<string, unknown>,
+  ): 'pass' | 'rejected' | 'disconnected' {
+    if (!hasOwn(frame, 'method')) {
+      return 'pass';
+    }
+    const method = typeof frame.method === 'string' ? frame.method : '';
+    if (method === 'gateway.client.identify') {
+      return 'pass';
+    }
+    const status = this.connectionStatuses.get(conn);
+    if (!status) {
+      return 'pass';
+    }
+    const boundCompanionId = status.companionId;
+    const params = isRecord(frame.params) ? frame.params : undefined;
+    const claimedRaw = params?.companionId;
+    const claimedCompanionId = typeof claimedRaw === 'string' ? claimedRaw.trim() : undefined;
+
+    if (claimedCompanionId && boundCompanionId && claimedCompanionId !== boundCompanionId) {
+      this.alarmCompanionViolation(
+        'identity_mismatch',
+        'Companion identity mismatch on RPC frame; disconnecting connection',
+        { method, boundCompanionId, claimedCompanionId },
+      );
+      this.transitionConnectionState(conn, 'degraded', 'companion_identity_mismatch');
+      this.transitionConnectionState(conn, 'offline', 'companion_identity_mismatch');
+      this.removeConnection(conn);
+      if (!conn.destroyed) {
+        conn.destroy();
+      }
+      return 'disconnected';
+    }
+
+    if (status.role === 'agent' && !boundCompanionId) {
+      this.alarmCompanionViolation(
+        'identify_required',
+        `RPC "${method}" rejected: agent connection has not identified a companionId`,
+        { method },
+      );
+      if (hasOwn(frame, 'id')) {
+        conn.send({
+          jsonrpc: '2.0' as const,
+          id: frame.id as string | number | null,
+          error: {
+            code: GatewayErrors.COMPANION_IDENTIFY_REQUIRED,
+            message: 'Multi-companion mode requires gateway.client.identify with a companionId before other RPC methods',
+          },
+        });
+      }
+      return 'rejected';
+    }
+
+    return 'pass';
+  }
+
+  /**
+   * Resolve the ready agent connection owning a channel surface. Fail-closed:
+   * unrouted surface, unknown/disconnected companion, or unhealthy connection
+   * all alarm loudly and throw — traffic is never rerouted to another agent.
+   */
+  private resolveCompanionAgent(surface: GatewayChannelSurface): {
+    conn: GatewayRpcConnection;
+    client: JSONRPCServerAndClient;
+    companionId: string;
+  } {
+    const companionId = this.multiCompanion.channelRouting[surface];
+    if (!companionId) {
+      this.alarmCompanionViolation(
+        'unrouted_channel',
+        `Channel surface "${surface}" has no companion routing entry in channels.json`,
+        { surface },
+      );
+      throw new Error(
+        `Multi-companion routing has no companion for channel surface "${surface}"`,
+      );
+    }
+    this.refreshConnectionHealth();
+    const conn = this.companionConnections.get(companionId);
+    if (!conn) {
+      this.alarmCompanionViolation(
+        'companion_not_connected',
+        `Companion "${companionId}" (surface "${surface}") has no connected agent`,
+        { surface, companionId },
+      );
+      throw new Error(`No agent connection for companion "${companionId}" (surface "${surface}")`);
+    }
+    const status = this.connectionStatuses.get(conn);
+    if (!status || status.role !== 'agent' || status.state !== 'ready' || status.health !== 'healthy') {
+      this.alarmCompanionViolation(
+        'companion_not_ready',
+        `Companion "${companionId}" (surface "${surface}") connection is not ready`,
+        {
+          surface,
+          companionId,
+          state: status?.state ?? 'missing',
+          health: status?.health ?? 'missing',
+        },
+      );
+      throw new Error(`Agent connection for companion "${companionId}" is not ready (surface "${surface}")`);
+    }
+    const client = this.rpcClients.get(conn);
+    if (!client) {
+      this.alarmCompanionViolation(
+        'companion_rpc_client_missing',
+        `Companion "${companionId}" (surface "${surface}") has no RPC client bound`,
+        { surface, companionId },
+      );
+      throw new Error(`No RPC client for companion "${companionId}" (surface "${surface}")`);
+    }
+    return { conn, client, companionId };
+  }
+
+  /**
+   * Loud fail-closed alarm for multi-companion routing/identity violations:
+   * synchronous error log, gateway audit entry (DENY), and an operator ntfy
+   * alert when configured. Never throws.
+   */
+  private alarmCompanionViolation(
+    event: string,
+    message: string,
+    details: Record<string, unknown>,
+  ): void {
+    log.error(`Multi-companion violation [${event}]: ${message}`, details);
+    const startedAt = Date.now();
+    void (async () => {
+      const auditId = await this.audit(`gateway.companion.${event}`, 'DENY', details);
+      await this.auditComplete(auditId, startedAt, message);
+      if (this.ntfyNotifier.isConfigured()) {
+        await this.ntfyNotifier.send({
+          message: `${message} (${JSON.stringify(details)})`,
+          title: 'Multi-companion routing violation',
+          priority: 5,
+          sender: {
+            kind: 'system',
+            provenance: 'system.operator_alert.multi_companion_routing',
+          },
+        });
+      }
+    })().catch((error: unknown) => {
+      log.error('Failed to record multi-companion violation alarm', {
+        event,
+        error: toErrorMessage(error),
+      });
+    });
+  }
+
   private removeConnection(conn: GatewayRpcConnection): void {
+    const status = this.connectionStatuses.get(conn);
+    if (status?.companionId && this.companionConnections.get(status.companionId) === conn) {
+      this.companionConnections.delete(status.companionId);
+      log.info('Companion connection unbound', { companionId: status.companionId });
+    }
     this.connections.delete(conn);
     this.rpcClients.delete(conn);
     this.connectionStatuses.delete(conn);
@@ -385,16 +629,24 @@ export class GatewayServer {
     }
   }
 
-  /** Send an RPC request to the first connected agent and await its response */
+  /**
+   * Send an RPC request to the agent and await its response. This is the
+   * gateway API-surface request path (api.chat.completion, api.health, …):
+   * single-companion mode targets the first ready agent (unchanged); under
+   * multi-companion it routes fail-closed to the companion that owns the
+   * `api` channel surface.
+   */
   async requestAgent<T = unknown>(
     method: string,
     params: unknown,
     timeoutMs = DEFAULT_AGENT_TIMEOUT_MS,
   ): Promise<T> {
-    const first = this.resolveReadyRpcClient();
+    const client = this.multiCompanion.enabled
+      ? this.resolveCompanionAgent('api').client
+      : this.resolveReadyRpcClient();
 
     const result = await Promise.race([
-      first.request(method, params),
+      client.request(method, params),
       new Promise<never>((_, reject) =>
         setTimeout(() => reject(new Error('Agent request timed out')), timeoutMs),
       ),
@@ -406,14 +658,33 @@ export class GatewayServer {
     message: SubstrateMessage,
     options: VoiceStreamRequestOptions = {},
   ): Promise<VoiceHandleMessageResult> {
-    const client = this.resolveReadyRpcClient();
+    let client: JSONRPCServerAndClient;
+    let companionId = this.options.companionId ?? DEFAULT_COMPANION_ID;
+    if (this.multiCompanion.enabled) {
+      const surface = resolveGatewaySurfaceForChannelType(message.channelType);
+      if (!surface) {
+        this.alarmCompanionViolation(
+          'unrouted_channel',
+          `Inbound message channelType "${message.channelType}" has no multi-companion routing surface`,
+          { channelType: message.channelType, channelId: message.channelId },
+        );
+        throw new Error(
+          `Multi-companion routing cannot map channelType "${message.channelType}" to a companion`,
+        );
+      }
+      const route = this.resolveCompanionAgent(surface);
+      client = route.client;
+      companionId = route.companionId;
+    } else {
+      client = this.resolveReadyRpcClient();
+    }
 
     return requestAgentVoiceStream({
       client,
       message,
       options,
       wyomingShardRouting: this.wyomingShardRouting,
-      companionId: this.options.companionId ?? DEFAULT_COMPANION_ID,
+      companionId,
       nextRequestCounter: () => ++this.streamRequestCounter,
     });
   }
@@ -571,7 +842,10 @@ export class GatewayServer {
     return this.runtimeHealthTracker.getSnapshot(this.getConnectionSummary());
   }
 
-  private identifyConnection(conn: GatewayRpcConnection, params: unknown): { success: true; role: GatewayConnectionRole } {
+  private identifyConnection(
+    conn: GatewayRpcConnection,
+    params: unknown,
+  ): { success: true; role: GatewayConnectionRole; companionId?: string } {
     if (!isRecord(params) || !isGatewayConnectionRole(params.role)) {
       throw new Error('gateway.client.identify requires a valid role');
     }
@@ -581,9 +855,66 @@ export class GatewayServer {
       throw new Error('Cannot identify an inactive gateway connection');
     }
 
+    if (params.companionId !== undefined
+      && (typeof params.companionId !== 'string' || !params.companionId.trim())) {
+      throw new Error('gateway.client.identify companionId must be a non-empty string');
+    }
+    const companionId = typeof params.companionId === 'string'
+      ? params.companionId.trim()
+      : undefined;
+
+    if (this.multiCompanion.enabled && params.role === 'agent') {
+      if (!companionId) {
+        this.alarmCompanionViolation(
+          'identify_missing_companion',
+          'Agent identified without a companionId while multi-companion is active; rejecting',
+          {},
+        );
+        throw new Error(
+          'Multi-companion mode requires a companionId in gateway.client.identify for agent connections',
+        );
+      }
+      if (status.companionId && status.companionId !== companionId) {
+        this.alarmCompanionViolation(
+          'identify_rebind_rejected',
+          'Connection attempted to re-identify as a different companion; rejecting',
+          { boundCompanionId: status.companionId, claimedCompanionId: companionId },
+        );
+        throw new Error(
+          `Connection is already identified as companion "${status.companionId}" and cannot rebind to "${companionId}"`,
+        );
+      }
+      const existing = this.companionConnections.get(companionId);
+      if (existing && existing !== conn) {
+        if (this.connections.has(existing)) {
+          this.alarmCompanionViolation(
+            'duplicate_identify',
+            `Duplicate identify for companion "${companionId}"; keeping the existing connection and rejecting the new one`,
+            { companionId },
+          );
+          throw new Error(
+            `Companion "${companionId}" already has an active gateway connection; duplicate identify rejected`,
+          );
+        }
+        // Stale registry entry from a connection that vanished without cleanup.
+        this.companionConnections.delete(companionId);
+      }
+      this.companionConnections.set(companionId, conn);
+      status.companionId = companionId;
+      log.info('Companion connection bound', { companionId });
+    } else if (companionId) {
+      // Flag off (or non-agent role): record for observability only — routing
+      // semantics stay byte-identical to single-companion behavior.
+      status.companionId = companionId;
+    }
+
     status.role = params.role;
     this.transitionConnectionState(conn, 'ready', `client_identified:${params.role}`);
-    return { success: true, role: params.role };
+    return {
+      success: true,
+      role: params.role,
+      ...(companionId ? { companionId } : {}),
+    };
   }
 
   async stop(): Promise<void> {
@@ -593,6 +924,7 @@ export class GatewayServer {
     this.connections.clear();
     this.rpcClients.clear();
     this.connectionStatuses.clear();
+    this.companionConnections.clear();
 
     if (this.rpcServer) {
       await new Promise<void>((resolve) => {
@@ -629,6 +961,7 @@ function extractGatewayCorrelation(
   if (!params) return {};
   const correlation: Record<string, string> = {};
   for (const key of [
+    'companionId',
     'turnId',
     'requestId',
     'channelId',

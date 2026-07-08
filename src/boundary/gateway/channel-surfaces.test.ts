@@ -25,7 +25,7 @@ function createInput(): {
         },
       } as any,
       gateway: {
-        notifyAll: vi.fn(),
+        notifyChannelMessage: vi.fn(),
         requestAgentVoiceStream: vi.fn(async () => ({
           content: 'voice reply',
           channelId: 'telegram-channel',
@@ -57,7 +57,7 @@ describe('wireGatewayChannelMessages', () => {
       timestamp: new Date('2026-03-28T00:00:00.000Z'),
     });
 
-    expect(setup.input.gateway.notifyAll).toHaveBeenCalledWith('discord.message', {
+    expect(setup.input.gateway.notifyChannelMessage).toHaveBeenCalledWith('discord', 'discord.message', {
       message: expect.objectContaining({
         channelId: 'discord-channel',
         serialized: true,

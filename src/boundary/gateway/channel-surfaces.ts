@@ -81,13 +81,16 @@ export async function loadGatewayChannelSurfaces(
 export interface WireGatewayChannelMessagesInput {
   discord: Pick<DiscordAdapter, 'onMessage'>;
   telegram?: Pick<TelegramAdapter, 'onMessage'>;
-  gateway: Pick<GatewayServer, 'notifyAll' | 'requestAgentVoiceStream'>;
+  gateway: Pick<GatewayServer, 'notifyChannelMessage' | 'requestAgentVoiceStream'>;
   serializeMessage: (message: SubstrateMessage) => Record<string, unknown>;
 }
 
 export function wireGatewayChannelMessages(input: WireGatewayChannelMessagesInput): void {
   input.discord.onMessage(async (message) => {
-    input.gateway.notifyAll('discord.message', {
+    // Single-companion mode broadcasts (historic behavior); multi-companion
+    // mode delivers to exactly the companion owning the discord surface and
+    // fails closed on any routing ambiguity.
+    input.gateway.notifyChannelMessage('discord', 'discord.message', {
       message: input.serializeMessage(message),
     });
     return {

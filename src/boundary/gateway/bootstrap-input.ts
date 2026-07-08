@@ -39,6 +39,10 @@ import {
   resolveGatewayRpcEndpointFromEnv,
   type GatewayRpcEndpoint,
 } from './transport.js';
+import {
+  resolveGatewayMultiCompanionConfig,
+  type GatewayMultiCompanionConfig,
+} from './multi-companion.js';
 
 const DEFAULT_SOCKET_PATH = '/run/psfn/gateway.sock';
 const DEFAULT_NTFY_TIMEOUT_MS = 8_000;
@@ -63,6 +67,7 @@ export interface GatewayBootstrapDiagnostics {
 export interface GatewayBootstrapServerInput {
   sessionHmacKeyring: SessionHmacKeyring;
   wyomingShardRouting: WyomingShardRoutingConfig;
+  multiCompanion: GatewayMultiCompanionConfig;
   ntfy?: GatewayNtfyConfig;
   confirmation: {
     expiryMs: number;
@@ -386,6 +391,7 @@ export function resolveGatewayBootstrapInput(
     server: {
       sessionHmacKeyring,
       wyomingShardRouting,
+      multiCompanion: resolveGatewayMultiCompanionConfig(config, channelsConfig),
       ...(ntfy ? { ntfy } : {}),
       confirmation: {
         expiryMs: confirmationExpiryMs,

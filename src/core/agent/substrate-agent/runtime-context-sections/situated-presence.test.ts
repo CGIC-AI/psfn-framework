@@ -20,6 +20,7 @@ const PLACES_REGISTRY: PlacesRegistryConfig = {
   sites: [
     { siteId: 'site.home', displayName: 'Home', kind: 'physical' },
     { siteId: 'site.mud', displayName: 'The MUD', kind: 'virtual' },
+    { siteId: 'site.mindspace', displayName: 'Home Mindspace', kind: 'virtual' },
   ],
   places: [
     {
@@ -68,6 +69,15 @@ const PLACES_REGISTRY: PlacesRegistryConfig = {
       displayName: 'The Rusty Tankard',
       kind: 'virtual',
       description: 'A low-beamed virtual tavern; a fire crackles in the hearth.',
+      affordances: [],
+    },
+    {
+      placeId: 'place.living-room-twin',
+      siteId: 'site.mindspace',
+      displayName: 'Living Room (Twin)',
+      kind: 'virtual',
+      description: 'A shared reflection of the living room.',
+      mirrorsPlaceId: 'place.living-room',
       affordances: [],
     },
   ],
@@ -421,5 +431,102 @@ describe('situated-presence + wiki scope after a virtual move (vinz.26)', () => 
     expect(
       resolveSituatedSiteId(satelliteTurn, PLACES_REGISTRY, tracker.resolvePlaceId()),
     ).toBe('site.home');
+  });
+});
+
+// ── Dual presence: mindspace twin foregrounding + display label (vinz.29) ──
+// The agent resolves the situated fallback per turn (classification lives in
+// turn-presence-mode.ts, tested there); these tests pin what the BLOCK does
+// with it: a mindspace turn renders the twin place, the operator's
+// character-facing label comes in from companion-data (never hardcoded — the
+// label strings below are test-local fixtures), and physical turns outrank.
+describe('situated-presence producer — mindspace twin (vinz.29)', () => {
+  const TWIN_FALLBACK = { situatedFallbackPlaceId: 'place.living-room-twin' };
+
+  it('foregrounds the twin place on a placeless turn via the situated fallback', () => {
+    const block = buildSituatedPresenceContextBlock({
+      message: makeMessage(),
+      placesRegistry: PLACES_REGISTRY,
+      ...TWIN_FALLBACK,
+    });
+    expect(block).toContain('Here: Living Room (Twin) (virtual place)');
+    expect(block).toContain('Site: Home Mindspace');
+    expect(block).toContain('Surroundings: A shared reflection of the living room.');
+    // Default label = the twin place's own displayName; grounded on the mirror.
+    expect(block).toContain('Shared mindspace: Living Room (Twin) (virtual twin of Living Room)');
+  });
+
+  it('renders the operator-authored label from companion-data when configured', () => {
+    const block = buildSituatedPresenceContextBlock({
+      message: makeMessage(),
+      placesRegistry: PLACES_REGISTRY,
+      ...TWIN_FALLBACK,
+      mindspaceLabel: 'Our Shared Loft',
+    });
+    expect(block).toContain('Shared mindspace: Our Shared Loft (virtual twin of Living Room)');
+    expect(block).not.toContain('Shared mindspace: Living Room (Twin)');
+  });
+
+  it('never renders the mindspace line for non-twin places', () => {
+    const physical = buildSituatedPresenceContextBlock({
+      message: makeMessage({ routing: routing({ placeId: 'place.living-room' }) }),
+      placesRegistry: PLACES_REGISTRY,
+      mindspaceLabel: 'Our Shared Loft',
+    });
+    expect(physical).not.toContain('Shared mindspace:');
+    expect(physical).not.toContain('Our Shared Loft');
+
+    const plainVirtual = buildSituatedPresenceContextBlock({
+      message: makeMessage(),
+      placesRegistry: PLACES_REGISTRY,
+      situatedFallbackPlaceId: 'place.mud-tavern',
+      mindspaceLabel: 'Our Shared Loft',
+    });
+    expect(plainVirtual).toContain('Here: The Rusty Tankard (virtual place)');
+    expect(plainVirtual).not.toContain('Shared mindspace:');
+  });
+
+  it('a satellite turn outranks the mindspace fallback (physical always wins)', () => {
+    const block = buildSituatedPresenceContextBlock({
+      message: makeMessage({
+        routing: routing({ placeId: 'place.kitchen', presence: KITCHEN_PRESENCE }),
+      }),
+      placesRegistry: PLACES_REGISTRY,
+      ...TWIN_FALLBACK,
+    });
+    expect(block).toContain('Here: Kitchen (physical place)');
+    expect(block).not.toContain('Shared mindspace:');
+  });
+
+  it('the situated fallback outranks the tracker fallback (twin over physical emanation)', () => {
+    const tracker = new SituatedEmanationTracker();
+    // Physically emanated into the living room earlier…
+    buildSituatedPresenceContextBlock({
+      message: makeMessage({
+        routing: routing({ placeId: 'place.living-room', presence: SATELLITE_PRESENCE }),
+      }),
+      placesRegistry: PLACES_REGISTRY,
+      emanationTracker: tracker,
+    });
+    // …then a plain-chat turn foregrounds the mindspace twin instead.
+    const block = buildSituatedPresenceContextBlock({
+      message: makeMessage(),
+      placesRegistry: PLACES_REGISTRY,
+      emanationTracker: tracker,
+      ...TWIN_FALLBACK,
+    });
+    expect(block).toContain('Here: Living Room (Twin) (virtual place)');
+    expect(block).not.toContain('Here: Living Room (physical place)');
+  });
+
+  it('co-presence coordinates agree with the rendered twin (shared resolution)', () => {
+    const ref = resolveSituatedPlaceRef(makeMessage(), PLACES_REGISTRY, 'place.living-room-twin');
+    expect(ref).toEqual({
+      siteId: 'site.mindspace',
+      placeId: 'place.living-room-twin',
+      kind: 'virtual',
+    });
+    expect(resolveSituatedSiteId(makeMessage(), PLACES_REGISTRY, 'place.living-room-twin'))
+      .toBe('site.mindspace');
   });
 });

@@ -614,15 +614,16 @@ export async function computePreTurnState(input: {
   // to '' on any error. Skipped on vision-bypass turns and when unwired.
   // W5b: resolve the companion's current site from the situated place seam so
   // wiki retrieval can add its shared-world scope. The fallback keeps a
-  // placeless turn on the same site the situated block foregrounds (active
-  // emanation or a deliberate virtual `move`, vinz.26) — the shared-scope swap
-  // follows the move with zero drift. Only meaningful under multi-companion;
-  // `resolveWikiRetrievalPlan` ignores it when the flag is off.
+  // placeless turn on the same site the situated block foregrounds (mindspace
+  // twin, active emanation, or a deliberate virtual `move` — vinz.29/vinz.26)
+  // — the shared-scope swap follows the foregrounded place with zero drift.
+  // Only meaningful under multi-companion; `resolveWikiRetrievalPlan` ignores
+  // it when the flag is off.
   const currentSiteId = runtime.config.multiCompanion === true
     ? resolveSituatedSiteId(
       message,
       runtime.placesRegistry,
-      runtime.resolveSituatedFallbackPlaceId?.(),
+      runtime.resolveSituatedFallbackPlaceId?.(message),
     )
     : undefined;
   const wikiContextBlock = runtime.wikiRetrieval && !bypassMemoryForVisionTurn

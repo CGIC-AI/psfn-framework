@@ -155,8 +155,8 @@ export interface TurnExecutionAdapterOptions {
   memoryExtractor: MemoryExtractor | null;
   wikiRetrieval: WikiRetrievalPort | null;
   placesRegistry?: import('../../../shared/contracts/places-registry.js').PlacesRegistryConfig | undefined;
-  /** Fallback situated place for placeless turns (emanation/virtual-move seam). */
-  resolveSituatedFallbackPlaceId?: () => string | undefined;
+  /** Fallback situated place for placeless turns (dual-presence seam, vinz.29). */
+  resolveSituatedFallbackPlaceId?: (message: SubstrateMessage) => string | undefined;
   skillsRuntime: SkillsRuntime | null;
   evaluateReflectionNudge: (toolSummary: TurnToolSummary) => string | null;
   emotionSelfModelRuntime: EmotionSelfModelRuntime;

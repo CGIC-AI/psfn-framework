@@ -55,6 +55,23 @@ export interface SituatedPresenceContextInput {
    * the pure B1 producer renders byte-identically from the turn alone.
    */
   emanationTracker?: SituatedEmanationTracker;
+  /**
+   * Dual-presence situated fallback for THIS turn (vinz.29), resolved by the
+   * agent (`resolveSituatedFallbackPlaceIdForTurn`): deliberate virtual move →
+   * mindspace twin of the last-known physical room (plain-chat turns) →
+   * active physical emanation. When present it outranks the tracker's own
+   * fallback so mindspace turns foreground the TWIN place; the turn's own
+   * bound place still outranks it. Absent ⇒ tracker fallback (B2 behavior).
+   */
+  situatedFallbackPlaceId?: string;
+  /**
+   * Character-facing display label for the shared-mindspace layer (decision
+   * 10) — operator-authored in companion-data (character card extension
+   * `mindspace_label`), never a code identifier. Rendered only when the
+   * foregrounded place is a mindspace twin; defaults to the twin place's
+   * displayName when absent.
+   */
+  mindspaceLabel?: string;
 }
 
 /**
@@ -128,12 +145,13 @@ export interface SituatedPlaceRef {
 
 /**
  * `fallbackPlaceId` (optional) is consulted only when the turn itself carries
- * no place — pass the emanation tracker's current place so a placeless turn
- * resolves to the companion's active emanation / deliberate virtual move
- * (vinz.26), exactly like the rendered situated block does. Callers that must
- * key on the TURN's own binding only (e.g. the presence writer's
- * `observeTurnPlace`, where a Discord DM turn must not look like an arrival)
- * simply omit it.
+ * no place — pass the agent's dual-presence situated fallback (deliberate
+ * virtual move / mindspace twin / active emanation, vinz.26+vinz.29) so a
+ * placeless turn resolves exactly like the rendered situated block does.
+ * Callers that must key on the TURN's own binding only simply omit it (the
+ * presence writer's `observeTurnPlace` resolves the turn binding without a
+ * fallback first, then separately accepts only a VIRTUAL fallback place so a
+ * Discord DM never looks like an arrival at a physical room).
  */
 export function resolveSituatedPlaceRef(
   message: SubstrateMessage,
@@ -155,12 +173,14 @@ export function buildSituatedPresenceContextBlock(input: SituatedPresenceContext
   tracker?.observe(input.message);
 
   // "Where am I right now" = the turn's own bound place/presence when it has
-  // one (a satellite turn), otherwise the companion's CURRENT active emanation
-  // (handoff-aware) so a Discord/Telegram turn still foregrounds the room it is
-  // emanating into. Fail closed: no tracker + no turn place → no fabrication.
+  // one (a satellite turn — physical always outranks), otherwise the
+  // dual-presence fallback resolved by the agent for this turn (vinz.29:
+  // deliberate virtual move → mindspace twin → physical emanation), otherwise
+  // the tracker's own fallback (B2). Fail closed: nothing resolvable → no
+  // fabrication.
   const turnPlaceId = readSatellitePlaceId(input.message.routing?.satellite);
   const turnPresence: CompanionPresenceMetadata | undefined = input.message.routing?.presence;
-  const placeId = turnPlaceId ?? tracker?.resolvePlaceId();
+  const placeId = turnPlaceId ?? input.situatedFallbackPlaceId ?? tracker?.resolvePlaceId();
   const presence: CompanionPresenceMetadata | undefined = turnPresence ?? tracker?.resolvePresence();
   const place = resolvePlace(registry, placeId);
   const coPresent = input.coPresent ?? [];
@@ -179,6 +199,17 @@ export function buildSituatedPresenceContextBlock(input: SituatedPresenceContext
     const description = place.description?.trim();
     if (description) {
       lines.push(`Surroundings: ${description}`);
+    }
+    // Mindspace twin (vinz.29): a virtual place mirroring a physical room is
+    // the shared-mindspace layer. Name it with the operator's character-facing
+    // label (companion-data) when configured, defaulting to the place's own
+    // displayName, and ground it against the mirrored physical room.
+    if (place.kind === 'virtual' && place.mirrorsPlaceId) {
+      const mirrored = resolvePlace(registry, place.mirrorsPlaceId);
+      const spaceLabel = input.mindspaceLabel?.trim() || place.displayName;
+      lines.push(mirrored
+        ? `Shared mindspace: ${spaceLabel} (virtual twin of ${mirrored.displayName})`
+        : `Shared mindspace: ${spaceLabel}`);
     }
   } else {
     // No place resolved: honest fallback to presence-derived hints only.

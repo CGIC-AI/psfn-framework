@@ -114,12 +114,15 @@ export interface TurnExecutionRuntime {
    */
   placesRegistry?: import('../../../../shared/contracts/places-registry.js').PlacesRegistryConfig | undefined;
   /**
-   * Fallback situated place for a placeless turn (the emanation tracker's
-   * current place: physical emanation or a deliberate virtual `move`, vinz.26).
-   * Keeps the wiki shared-world scope in lockstep with the rendered situated
-   * block. Absent ⇒ turn-message resolution only.
+   * Fallback situated place for a placeless turn — dual-presence aware
+   * (vinz.29): a deliberate virtual `move` (vinz.26), else on mindspace
+   * (plain-chat) turns the twin of the durable last-known physical room, else
+   * the active physical emanation. Takes the turn message because the mode is
+   * classified per turn from its routing origin. Keeps the wiki shared-world
+   * scope and the mindspace presence write in lockstep with the rendered
+   * situated block. Absent ⇒ turn-message resolution only.
    */
-  resolveSituatedFallbackPlaceId?: () => string | undefined;
+  resolveSituatedFallbackPlaceId?: (message: SubstrateMessage) => string | undefined;
   skillsRuntime: SkillsRuntime | null;
   evaluateReflectionNudge: (toolSummary: TurnToolSummary) => string | null;
   emotionSelfModelRuntime: EmotionSelfModelRuntime;

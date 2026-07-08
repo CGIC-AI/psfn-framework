@@ -10,6 +10,8 @@ import type {
   PlacesRegistryConfig,
   SiteConfig,
 } from '../../shared/contracts/places-registry.js';
+import type { SatelliteRegistryConfig } from '../../shared/contracts/satellite-registry.js';
+import { SATELLITE_REGISTRY_FILE_NAME } from '../../shared/contracts/satellite-registry.js';
 import {
   AFFORDANCE_KINDS,
   PLACES_REGISTRY_FILE_NAME,
@@ -264,4 +266,29 @@ export function resolveAffordancesForPlace(
   placeId: string,
 ): AffordanceConfig[] {
   return resolvePlaceById(registry, placeId)?.affordances ?? [];
+}
+
+/**
+ * Fail-closed cross-registry check: every satellite that declares a static
+ * `placeId` must resolve to a place in `places.json`. A bound placeId with an
+ * absent or EMPTY places registry resolves nothing and therefore throws — this
+ * single rule covers both unknown-placeId and missing-places.json. Satellites
+ * with no `placeId` are unaffected (binding is opt-in and static-only).
+ *
+ * Wire this at every entrypoint that loads both registries so agent and gateway
+ * boot paths reject the same misconfiguration.
+ */
+export function assertSatellitePlaceBindings(
+  satelliteRegistry: SatelliteRegistryConfig,
+  placesRegistry: PlacesRegistryConfig,
+): void {
+  for (const satellite of satelliteRegistry.satellites) {
+    if (satellite.placeId === undefined) continue;
+    if (!resolvePlaceById(placesRegistry, satellite.placeId)) {
+      throw new Error(
+        `${SATELLITE_REGISTRY_FILE_NAME} satellite "${satellite.satelliteId}" binds to placeId `
+        + `"${satellite.placeId}" which does not exist in ${PLACES_REGISTRY_FILE_NAME}`,
+      );
+    }
+  }
 }

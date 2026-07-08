@@ -301,6 +301,7 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
     embedding: gateway,
     eventBus,
     getConfig: () => config,
+    getMultiCompanion: () => config.multiCompanion === true,
   });
   // E8.3: attach the supplemental wiki RAG provider (null when the projection
   // is unavailable); pre-turn assembly consults it AFTER memory context.

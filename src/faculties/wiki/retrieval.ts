@@ -5,6 +5,7 @@ import { createComponentLogger } from '../../shared/logger.js';
 import { countTokens } from '../../primitives/llm/tokens.js';
 import type { WikiRetrievalSettings } from '../../shared/context-budget.js';
 import type { WikiProjectionPort, WikiSemanticMatch } from './pgvector-projection.js';
+import { resolveReadableWikiScopes, type WikiScope } from './scope.js';
 
 const log = createComponentLogger('WikiRetrieval');
 
@@ -25,6 +26,13 @@ export interface WikiRetrievalPlan {
   contextClass: WikiRetrievalContextClass;
   tokenCap: number;
   similarityThreshold: number;
+  /**
+   * W5b scope restriction for this turn. `undefined` means UNRESTRICTED —
+   * single-companion / flag-off, byte-identical to pre-W5b retrieval. When set,
+   * it is `personal` ALWAYS plus the current site's `shared_world:<siteId>` when
+   * the companion is situated at a site.
+   */
+  allowedScopes?: readonly WikiScope[];
 }
 
 /**
@@ -42,15 +50,28 @@ export function resolveWikiRetrievalPlan(input: {
   settings: WikiRetrievalSettings;
   isDirectMessage: boolean | undefined;
   focusActive: boolean;
+  /** W5b: multi-companion topology flag. Off (default) → unrestricted scope. */
+  multiCompanion?: boolean;
+  /** W5b: the companion's current site (from the situated place seam), if any. */
+  currentSiteId?: string | undefined;
 }): WikiRetrievalPlan | null {
   const { settings } = input;
   if (!settings.enabled) return null;
+  // Under flag-off this is `undefined` → the plan carries no scope restriction
+  // and retrieval is byte-identical to pre-W5b. Under the flag it is
+  // personal + the current site's shared scope (or personal-only when unsited).
+  const allowedScopes = resolveReadableWikiScopes({
+    multiCompanion: input.multiCompanion === true,
+    currentSiteId: input.currentSiteId,
+  });
+  const scopePart = allowedScopes ? { allowedScopes } : {};
   if (input.focusActive) {
     if (settings.focusTokenCap <= 0) return null;
     return {
       contextClass: 'focus',
       tokenCap: settings.focusTokenCap,
       similarityThreshold: settings.similarityThreshold,
+      ...scopePart,
     };
   }
   if (input.isDirectMessage === false) {
@@ -59,6 +80,7 @@ export function resolveWikiRetrievalPlan(input: {
       contextClass: 'group',
       tokenCap: settings.groupTokenCap,
       similarityThreshold: settings.groupSimilarityThreshold,
+      ...scopePart,
     };
   }
   if (settings.chatTokenCap <= 0) return null;
@@ -66,6 +88,7 @@ export function resolveWikiRetrievalPlan(input: {
     contextClass: 'dm',
     tokenCap: settings.chatTokenCap,
     similarityThreshold: settings.similarityThreshold,
+    ...scopePart,
   };
 }
 
@@ -149,6 +172,11 @@ export interface WikiRetrievalServiceDeps {
   embedding: EmbeddingProviderPort;
   eventBus?: Pick<EventBus, 'emit'>;
   getSettings: () => WikiRetrievalSettings;
+  /**
+   * W5b: live accessor for the multi-companion topology flag. Default off, so
+   * absence keeps retrieval unrestricted (byte-identical to single-companion).
+   */
+  getMultiCompanion?: () => boolean;
   searchLimit?: number;
 }
 
@@ -157,6 +185,12 @@ export interface WikiRetrievalRequest {
   queryText: string;
   isDirectMessage: boolean | undefined;
   focusActive: boolean;
+  /**
+   * W5b: the companion's current site resolved from the situated place seam
+   * (satellite `placeId` → place → `siteId`). Absent when not situated; only
+   * consulted under multi-companion mode.
+   */
+  currentSiteId?: string | undefined;
   correlation?: Partial<CorrelationMetadata>;
 }
 
@@ -205,6 +239,8 @@ export class WikiRetrievalService {
       settings,
       isDirectMessage: request.isDirectMessage,
       focusActive: request.focusActive,
+      multiCompanion: this.deps.getMultiCompanion?.() === true,
+      ...(request.currentSiteId ? { currentSiteId: request.currentSiteId } : {}),
     });
     if (!plan) {
       this.emit({ channelId: request.channelId, outcome: 'skipped', reason: 'disabled', correlation: request.correlation });
@@ -225,7 +261,13 @@ export class WikiRetrievalService {
     let matches: WikiSemanticMatch[];
     try {
       const embedding = await this.deps.embedding.embed(query);
-      matches = await this.deps.projection.search(embedding, plan.similarityThreshold, this.searchLimit);
+      // plan.allowedScopes is undefined under flag-off → unrestricted, byte-identical.
+      matches = await this.deps.projection.search(
+        embedding,
+        plan.similarityThreshold,
+        this.searchLimit,
+        plan.allowedScopes,
+      );
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       log.warn('Wiki retrieval failed closed; turn proceeds without wiki context', {

@@ -70,6 +70,22 @@ function resolvePlace(
   return registry.places.find((place) => place.placeId === placeId);
 }
 
+/**
+ * Resolve the companion's CURRENT site for this turn, from the exact same
+ * situated seam the presence block renders: satellite routing `placeId` → place
+ * → `siteId`. Returns `undefined` when not situated (no bound place). W5b wiki
+ * scope keys off this so shared-world retrieval and the rendered "Here:" block
+ * always agree on where the companion is.
+ */
+export function resolveSituatedSiteId(
+  message: SubstrateMessage,
+  registry: PlacesRegistryConfig | undefined,
+): string | undefined {
+  const placeId = readSatellitePlaceId(message.routing?.satellite);
+  const place = resolvePlace(registry, placeId);
+  return place?.siteId;
+}
+
 function resolveSite(
   registry: PlacesRegistryConfig | undefined,
   siteId: string,

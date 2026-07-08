@@ -101,6 +101,12 @@ export interface TurnExecutionRuntime {
   memoryExtractor: MemoryExtractor | null;
   /** E8.3: supplemental wiki RAG provider; null until the projection is wired. */
   wikiRetrieval: WikiRetrievalPort | null;
+  /**
+   * W5b: places soft-registry threaded from startup, used to resolve the
+   * companion's current site for wiki shared-world scope. Optional/undefined
+   * behaves as no situated site (personal-only retrieval).
+   */
+  placesRegistry?: import('../../../../shared/contracts/places-registry.js').PlacesRegistryConfig | undefined;
   skillsRuntime: SkillsRuntime | null;
   evaluateReflectionNudge: (toolSummary: TurnToolSummary) => string | null;
   emotionSelfModelRuntime: EmotionSelfModelRuntime;

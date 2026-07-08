@@ -23,6 +23,7 @@ import type {
   PromptCacheRetention,
   StreamCallbacks,
   ToolCall,
+  ToolSchema,
 } from '../../shared/contracts/runtime.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import { createModel, createOpenAICompatibleEndpointModel, type OpenAICompatibleApi } from './models.js';
@@ -93,6 +94,11 @@ import {
 import { classifyLLMError } from './error-classify.js';
 
 const log = createComponentLogger('LLMClient');
+// mihm: bound on how many times a single completion is re-run when its tool call
+// arrives with corrupt-empty arguments against a required-property schema. After this
+// many retries the (still corrupt) response is returned as-is so downstream validation
+// surfaces it — fail closed, never fabricate/drop/default.
+const MAX_EMPTY_TOOL_ARGS_COMPLETION_RETRIES = 2;
 const LLM_CIRCUIT_BREAKER_WINDOW_MS = 60_000;
 const LLM_CIRCUIT_BREAKER_COOLDOWN_MS = 30_000;
 const LLM_CIRCUIT_BREAKER_FAILURE_THRESHOLD = 3;
@@ -1174,6 +1180,7 @@ export class LLMClient {
     argumentFragmentBytes: number,
     candidate: RoutingCandidate,
     correlation: ResolvedCorrelationMetadata | undefined,
+    attempt: number,
   ): void {
     for (const toolCall of toolCalls) {
       const provenance = classifyToolArgumentProvenance({
@@ -1188,11 +1195,71 @@ export class LLMClient {
         toolName: toolCall.name,
         toolCallId: toolCall.id,
         argumentFragmentBytes,
+        // 0 = first completion attempt; ≥1 = mihm empty-args completion retry.
+        attempt,
         provider: candidate.provider,
         model: candidate.model,
         ...(correlation ? toDiagnosticCorrelationFields(correlation) : {}),
       });
     }
+  }
+
+  /**
+   * mihm fail-closed backstop. Some OpenRouter GLM upstreams intermittently emit a
+   * tool call whose streamed arguments are a literal empty object — the provider-side
+   * tool-template parser dropped them (nothing client-side can recover). Dispatching
+   * such a call fails AJV validation for required-property tools (or, worse, silently
+   * runs an optional-action tool's default). Because the flake is a per-request routing
+   * lottery, re-running the same completion usually lands a clean upstream. This wraps a
+   * single completion attempt and retries the WHOLE attempt (bounded) whenever the result
+   * carries a corrupt-empty tool call, then FAILS CLOSED by returning the last response
+   * as-is so downstream validation surfaces the error — never fabricating args, never
+   * dropping the call, never defaulting the action.
+   */
+  private async retryCompletionOnCorruptEmptyToolArgs<T>(input: {
+    attempt: (attemptIndex: number) => Promise<T>;
+    extractToolCalls: (result: T) => readonly ToolCall[];
+    tools: readonly ToolSchema[] | undefined;
+    candidate: RoutingCandidate;
+    correlation: ResolvedCorrelationMetadata | undefined;
+    purpose: string;
+    onRetriesResolved: (retries: number) => void;
+  }): Promise<T> {
+    let result = await input.attempt(0);
+    let retries = 0;
+    for (;;) {
+      const corrupt = findCorruptEmptyToolCalls(input.extractToolCalls(result), input.tools);
+      if (corrupt.length === 0) break;
+      if (retries >= MAX_EMPTY_TOOL_ARGS_COMPLETION_RETRIES) break;
+      retries += 1;
+      log.warn('Retrying completion: tool call arguments empty against a required-property schema', {
+        toolNames: corrupt.map((call) => call.name),
+        attempt: retries,
+        maxRetries: MAX_EMPTY_TOOL_ARGS_COMPLETION_RETRIES,
+        provider: input.candidate.provider,
+        model: input.candidate.model,
+        purpose: input.purpose,
+        ...(input.correlation ? toDiagnosticCorrelationFields(input.correlation) : {}),
+      });
+      result = await input.attempt(retries);
+    }
+
+    if (retries > 0) {
+      const stillCorrupt = findCorruptEmptyToolCalls(input.extractToolCalls(result), input.tools);
+      log.warn('Empty-args completion retry resolved', {
+        outcome: stillCorrupt.length > 0 ? 'exhausted_returned_corrupt' : 'recovered',
+        retries,
+        maxRetries: MAX_EMPTY_TOOL_ARGS_COMPLETION_RETRIES,
+        ...(stillCorrupt.length > 0 ? { corruptToolNames: stillCorrupt.map((call) => call.name) } : {}),
+        provider: input.candidate.provider,
+        model: input.candidate.model,
+        purpose: input.purpose,
+        ...(input.correlation ? toDiagnosticCorrelationFields(input.correlation) : {}),
+      });
+    }
+
+    input.onRetriesResolved(retries);
+    return result;
   }
 
   async stream(context: LLMContext, callbacks?: StreamCallbacks): Promise<LLMResponse> {
@@ -1202,6 +1269,10 @@ export class LLMClient {
     const modelHint = this.mergeModelHints(context.modelHint, undefined);
     const startedAtMs = Date.now();
     let firstTokenAtMs: number | undefined;
+    // mihm: retries spent re-running the winning completion because it carried a
+    // corrupt-empty tool call. Recorded into model-usage metadata_json so incidents
+    // are queryable. Stays 0 unless the empty-args backstop engaged.
+    let emptyArgsRetries = 0;
 
     try {
       const { result: finalResponse, candidate, attempts } = await this.runWithFallback(
@@ -1234,7 +1305,14 @@ export class LLMClient {
             promptCaching ?? undefined,
           );
 
-          return withRetry(async () => {
+          return this.retryCompletionOnCorruptEmptyToolArgs<LLMResponse>({
+            tools: context.tools,
+            candidate: candidateTarget,
+            correlation,
+            purpose: 'chat',
+            extractToolCalls: (result) => result.toolCalls,
+            onRetriesResolved: (retries) => { emptyArgsRetries = retries; },
+            attempt: (attemptIndex) => withRetry(async () => {
             const eventStream = streamSimple(
               model,
               piContext,
@@ -1368,6 +1446,7 @@ export class LLMClient {
                 toolArgumentFragmentBytes,
                 candidateTarget,
                 correlation,
+                attemptIndex,
               );
               return response;
             }
@@ -1406,6 +1485,7 @@ export class LLMClient {
                 purpose: 'chat',
               });
             },
+          }),
           });
         },
         {
@@ -1445,6 +1525,7 @@ export class LLMClient {
           metadata: {
             fallbackAttempts: attempts,
             toolCallCount: finalResponse.toolCalls.length,
+            emptyArgsRetries,
           },
         },
       );
@@ -1469,6 +1550,9 @@ export class LLMClient {
     const correlation = this.resolveCorrelation(context.correlation, options.correlation, purpose);
     const modelHint = this.mergeModelHints(context.modelHint, options.modelHint);
     const startedAtMs = Date.now();
+    // mihm: see stream(). disableRetry callers opt out of all retries, so the
+    // empty-args backstop only engages on the retrying path; stays 0 otherwise.
+    let emptyArgsRetries = 0;
 
     const { result: response, candidate, attempts } = await this.runWithFallback(
       routingPurpose,
@@ -1535,30 +1619,52 @@ export class LLMClient {
           };
         }
 
-        const response = await withRetry(request, llmRetryConfig(this.config), {
-          circuitBreaker: {
-            breaker: this.circuitBreaker,
-            key: this.resolveCircuitBreakerKey('llm.complete', candidateTarget),
-            method: 'llm.complete',
-            onTransition: transition => this.logCircuitBreakerTransition(transition),
-          },
-          shouldRetry: ({ error }) => shouldRetryWithinCandidate(error),
-          onRetry: ({ attempt, maxRetries, delayMs, error }) => {
-            log.warn('LLM complete failed, retrying', {
-              model: String(model.id),
-              provider: candidateTarget.provider,
-              attempt,
-              maxRetries,
-              delayMs,
-              error: error.message,
-              ...correlation,
-              purpose,
-              routingPurpose,
-            });
-          },
+        return this.retryCompletionOnCorruptEmptyToolArgs<{
+          response: Awaited<ReturnType<typeof completeSimple>>;
+          providerObservability: LLMProviderObservability;
+        }>({
+          tools: context.tools,
+          candidate: candidateTarget,
+          correlation,
+          purpose,
+          extractToolCalls: (result) => extractCompletionToolCalls(result.response),
+          onRetriesResolved: (retries) => { emptyArgsRetries = retries; },
+          attempt: (attemptIndex) => withRetry(async () => {
+            const attemptResponse = await request();
+            assertUsableProviderResponse(attemptResponse, candidateTarget);
+            this.logEmptyToolArgumentProvenance(
+              extractCompletionToolCalls(attemptResponse),
+              // Non-streaming: there is no fragment channel, so an empty payload is
+              // always a provider-emitted empty (never an accumulator drop).
+              0,
+              candidateTarget,
+              correlation,
+              attemptIndex,
+            );
+            return { response: attemptResponse, providerObservability };
+          }, llmRetryConfig(this.config), {
+            circuitBreaker: {
+              breaker: this.circuitBreaker,
+              key: this.resolveCircuitBreakerKey('llm.complete', candidateTarget),
+              method: 'llm.complete',
+              onTransition: transition => this.logCircuitBreakerTransition(transition),
+            },
+            shouldRetry: ({ error }) => shouldRetryWithinCandidate(error),
+            onRetry: ({ attempt, maxRetries, delayMs, error }) => {
+              log.warn('LLM complete failed, retrying', {
+                model: String(model.id),
+                provider: candidateTarget.provider,
+                attempt,
+                maxRetries,
+                delayMs,
+                error: error.message,
+                ...correlation,
+                purpose,
+                routingPurpose,
+              });
+            },
+          }),
         });
-        assertUsableProviderResponse(response, candidateTarget);
-        return { response, providerObservability };
       },
         {
           modelHint,
@@ -1637,6 +1743,7 @@ export class LLMClient {
           completionPurpose: purpose,
           routingPurpose,
           fallbackAttempts: attempts,
+          emptyArgsRetries,
         },
       },
     );
@@ -1898,11 +2005,13 @@ function normalizeSharedRouteKey(value: string | null | undefined): string {
 
 /**
  * Provenance of a tool call's arguments at the point it is diagnosed (empty-args
- * validation failure, or gateway-side stream inspection). See gu8m.
- *  - provider_emitted_empty: args empty AND no argument-fragment bytes were streamed
- *    (the model genuinely called the tool with no arguments).
- *  - stream_parse_dropped: args empty BUT argument-fragment bytes were streamed
- *    (fragments were lost during accumulation — the pre-patch failure mode).
+ * validation failure, or gateway-side stream inspection). See gu8m / mihm.
+ *  - provider_emitted_empty: args empty AND either no argument-fragment bytes were
+ *    streamed (the model genuinely called the tool with no arguments) OR the only
+ *    fragment on the wire was a literal empty JSON object '{}' (the provider-side
+ *    GLM tool-template parser failure — mihm; nothing was lost client-side).
+ *  - stream_parse_dropped: args empty BUT non-empty argument-fragment bytes were
+ *    streamed (fragments were lost during accumulation — the pre-patch failure mode).
  *  - validation_rejected: args are non-empty (any failure is a real schema mismatch,
  *    not lost/absent arguments).
  */
@@ -1910,6 +2019,12 @@ export type ToolArgumentProvenance =
   | 'provider_emitted_empty'
   | 'stream_parse_dropped'
   | 'validation_rejected';
+
+// Byte length of a literal empty JSON object ('{}'). A tool call whose *entire*
+// streamed argument payload is exactly these bytes came off the wire already empty
+// (mihm: provider emitted '{}'), so it is a provider-side empty, not an accumulator
+// drop — even though fragment bytes were technically observed.
+const EMPTY_JSON_OBJECT_ARGUMENT_BYTES = '{}'.length;
 
 export function classifyToolArgumentProvenance(input: {
   args: Record<string, unknown> | undefined | null;
@@ -1919,7 +2034,45 @@ export function classifyToolArgumentProvenance(input: {
   if (!isEmpty) {
     return 'validation_rejected';
   }
-  return input.argumentFragmentBytes > 0 ? 'stream_parse_dropped' : 'provider_emitted_empty';
+  if (
+    input.argumentFragmentBytes === 0
+    || input.argumentFragmentBytes === EMPTY_JSON_OBJECT_ARGUMENT_BYTES
+  ) {
+    return 'provider_emitted_empty';
+  }
+  return 'stream_parse_dropped';
+}
+
+/**
+ * A tool call is a mihm "corrupt-empty" call when its arguments are empty
+ * ({} / null / undefined) AND the tool's own schema declares required properties.
+ * Such a call can never satisfy validation, so it is retried (see
+ * LLMClient.retryCompletionOnCorruptEmptyToolArgs) rather than dispatched. Tool
+ * calls whose schema accepts {} are intentionally NOT flagged — an empty payload
+ * is valid for them and must dispatch normally.
+ */
+function toolInputIsEmpty(input: Record<string, unknown> | null | undefined): boolean {
+  return !input || Object.keys(input).length === 0;
+}
+
+function toolSchemaRequiresProperties(schema: Record<string, unknown> | undefined): boolean {
+  if (!schema) return false;
+  const required = schema.required;
+  return Array.isArray(required) && required.length > 0;
+}
+
+export function findCorruptEmptyToolCalls(
+  toolCalls: readonly ToolCall[],
+  tools: readonly ToolSchema[] | undefined,
+): ToolCall[] {
+  if (!tools || tools.length === 0) return [];
+  const schemaByName = new Map(tools.map((tool) => [tool.name, tool.inputSchema]));
+  return toolCalls.filter((call) => {
+    if (!toolInputIsEmpty(call.input)) return false;
+    // Unknown tool → we cannot prove it requires arguments, so do not flag it;
+    // any downstream failure surfaces normally (no behavior change vs. today).
+    return toolSchemaRequiresProperties(schemaByName.get(call.name));
+  });
 }
 
 function toDiagnosticCorrelationFields(
@@ -1930,6 +2083,17 @@ function toDiagnosticCorrelationFields(
   if (correlation.turnId) fields.turnId = correlation.turnId;
   if (correlation.channelId) fields.channelId = correlation.channelId;
   return fields;
+}
+
+/**
+ * Tool calls a non-streaming completion would dispatch. Matches complete()'s final
+ * derivation (the raw response's `toolCalls` field) so the mihm empty-args retry
+ * decision inspects exactly what would otherwise be sent to the tools.
+ */
+function extractCompletionToolCalls(raw: unknown): ToolCall[] {
+  if (!raw || typeof raw !== 'object') return [];
+  const toolCalls = (raw as { toolCalls?: unknown }).toolCalls;
+  return Array.isArray(toolCalls) ? toolCalls as ToolCall[] : [];
 }
 
 function extractToolCallsFromContentBlocks(blocks?: unknown[]): ToolCall[] {

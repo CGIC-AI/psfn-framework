@@ -216,7 +216,12 @@ export class RedisAppCache implements AppCache {
 
   private async ensureConnected(): Promise<void> {
     if (this.client.isOpen === true) return;
-    this.connectPromise ??= this.client.connect();
+    // Single-flight while a connect is in flight, but reset after settle so a
+    // failed connect does not wedge every future operation on the memoized
+    // rejection.
+    this.connectPromise ??= this.client.connect().finally(() => {
+      this.connectPromise = null;
+    });
     await this.connectPromise;
   }
 

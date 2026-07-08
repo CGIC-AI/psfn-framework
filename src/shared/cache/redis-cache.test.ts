@@ -133,6 +133,58 @@ describe('RedisAppCache', () => {
     });
   });
 
+  it('retries connect after a transient failure instead of memoizing the rejection', async () => {
+    let attempts = 0;
+    const client: RedisClientLike = {
+      isOpen: false,
+      connect: vi.fn(async () => {
+        attempts += 1;
+        if (attempts === 1) {
+          throw new Error('transient connect failure');
+        }
+        client.isOpen = true;
+      }),
+      get: vi.fn(async () => 'value'),
+      set: vi.fn(async () => {}),
+      del: vi.fn(async () => 0),
+      scanIterator: async function* () {},
+    };
+    const cache = new RedisAppCache({ client, keyPrefix: 'test:' });
+
+    await expect(cache.get('key')).rejects.toThrow('transient connect failure');
+    await expect(cache.get('key')).resolves.toBe('value');
+
+    expect(client.connect).toHaveBeenCalledTimes(2);
+    expect(cache.getStats()).toMatchObject({ hits: 1, errors: 1 });
+  });
+
+  it('shares one in-flight connect across concurrent operations', async () => {
+    let releaseConnect: () => void = () => {};
+    const connectGate = new Promise<void>(resolve => {
+      releaseConnect = resolve;
+    });
+    const client: RedisClientLike = {
+      isOpen: false,
+      connect: vi.fn(async () => {
+        await connectGate;
+        client.isOpen = true;
+      }),
+      get: vi.fn(async () => null),
+      set: vi.fn(async () => {}),
+      del: vi.fn(async () => 0),
+      scanIterator: async function* () {},
+    };
+    const cache = new RedisAppCache({ client, keyPrefix: 'test:' });
+
+    const first = cache.get('one');
+    const second = cache.get('two');
+    releaseConnect();
+    await expect(first).resolves.toBeNull();
+    await expect(second).resolves.toBeNull();
+
+    expect(client.connect).toHaveBeenCalledTimes(1);
+  });
+
   it('requires explicit URL and credentials in Redis mode', () => {
     expect(() => resolveAppCacheRuntimeConfigFromEnv({
       PSFN_APP_CACHE_MODE: 'redis',

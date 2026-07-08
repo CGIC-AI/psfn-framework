@@ -118,6 +118,9 @@ const TEST_INTERNAL_STATE: InternalState = {
     recentInteractionFrequency: 0.33,
     lastSeenDeltaSeconds: 240,
   },
+  situated: {
+    location: null,
+  },
 };
 
 const TEST_CHARGE_POLICY: ChargePolicyConfig = {

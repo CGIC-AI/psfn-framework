@@ -36,6 +36,9 @@ function buildInternalState(): InternalState {
       recentInteractionFrequency: 0.5,
       lastSeenDeltaSeconds: 120,
     },
+    situated: {
+      location: null,
+    },
   };
 }
 
@@ -149,6 +152,36 @@ describe('normalizePersistedInternalStateRecord', () => {
     expect(normalized.snapshotRef).toBe(record.snapshotRef);
     expect(normalized.metacognitiveFlags).toHaveLength(1);
     expect(normalized.state.relational.contactId).toBe('contact-1');
+  });
+
+  it('round-trips a durable situated location (persists across restart)', () => {
+    const state = buildInternalState();
+    state.situated = {
+      location: {
+        placeId: 'living-room',
+        siteId: 'home',
+        label: 'the living room',
+        kind: 'physical',
+        updatedAt: '2026-06-10T07:30:00.000Z',
+      },
+    };
+    const record: PersistedInternalStateRecord = {
+      state,
+      snapshotRef: buildInternalStateSnapshotRef(state),
+      metacognitiveFlags: [],
+      savedAt: '2026-06-10T08:00:00.000Z',
+    };
+
+    const normalized = normalizePersistedInternalStateRecord(record);
+    expect(normalized.state.situated.location).toEqual({
+      placeId: 'living-room',
+      siteId: 'home',
+      label: 'the living room',
+      kind: 'physical',
+      updatedAt: '2026-06-10T07:30:00.000Z',
+    });
+    // Snapshot ref is stable across the persistence round-trip.
+    expect(normalized.snapshotRef).toBe(record.snapshotRef);
   });
 
   it('rejects an empty snapshot ref', () => {

@@ -355,6 +355,7 @@ export class SubstrateAgent {
       getPendingFollowUpProvider: () => this.pendingFollowUpProvider,
       getContactStore: () => this.contactStore,
       getSelfModelRuntimeRequired: () => this.selfModelRuntimeRequired,
+      getPlacesRegistry: () => this.placesRegistryConfig,
       logger: log,
       onEmotionAppraisalGateEvent: (event) => {
         this.eventBus.emit('emotion.appraisal.gate', event).catch((error) => {
@@ -870,6 +871,9 @@ export class SubstrateAgent {
     this.currentMetacognitiveFlags = cloneMetacognitiveFlags(record.metacognitiveFlags);
     this.internalStateContinuityGap = null;
     this.internalStateContinuityGapRenderCount = 0;
+    // S10 B3: seed the durable situated location so a restored location survives
+    // a continuity gap (reload) and carries forward until a new routing signal.
+    this.emotionSelfModelRuntime.restoreSituatedLocation(this.currentInternalState.situated.location);
   }
 
   /** Records that persisted state was too stale to restore; surfaced to her on the next turn. */

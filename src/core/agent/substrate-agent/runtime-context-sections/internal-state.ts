@@ -5,6 +5,10 @@
 
 import type { EmotionStateSnapshot } from '../../../emotion/state.js';
 import type { InternalState } from '../../../self-model/state.js';
+import {
+  describeSituatedLocationAge,
+  isSituatedLocationStale,
+} from '../../../self-model/situated-location.js';
 
 function describeValence(value: number): string {
   if (value >= 0.45) return 'positive';
@@ -118,6 +122,44 @@ export function buildInternalStatePromptVariables(internalState?: InternalState)
     runtime_internal_state_emotional_secondary_emotions: secondaryEmotions.join(', '),
     runtime_internal_state_emotional_telemetry_status: emotionTelemetry.status,
     runtime_internal_state_emotional_telemetry_reasons: emotionTelemetry.reasons,
+  };
+}
+
+// ── Durable situated-location prompt variables (S10 B3) ──
+// Bare values (E2.5 purity) for the bottom-of-prompt standing "where am I right
+// now" reminder. Absent location → present:'false' so the seeded layer prunes
+// to nothing (no fabricated place). Always carries the confirmation age and
+// last-updated timestamp so a carried-forward location is never presented as a
+// fresh reading; `is_stale` lets the layer add hold-it-lightly wording.
+export function buildSituatedLocationPromptVariables(
+  internalState: InternalState | undefined,
+  now: Date,
+): Record<string, string> {
+  const empty = {
+    runtime_situated_location_present: 'false',
+    runtime_situated_location_label: '',
+    runtime_situated_location_kind: '',
+    runtime_situated_location_place_id: '',
+    runtime_situated_location_site_id: '',
+    runtime_situated_location_updated_at: '',
+    runtime_situated_location_age_label: '',
+    runtime_situated_location_is_stale: '',
+  } satisfies Record<string, string>;
+
+  const location = internalState?.situated.location;
+  if (!location) {
+    return empty;
+  }
+
+  return {
+    runtime_situated_location_present: 'true',
+    runtime_situated_location_label: location.label,
+    runtime_situated_location_kind: location.kind ?? '',
+    runtime_situated_location_place_id: location.placeId ?? '',
+    runtime_situated_location_site_id: location.siteId ?? '',
+    runtime_situated_location_updated_at: location.updatedAt,
+    runtime_situated_location_age_label: describeSituatedLocationAge(location, now),
+    runtime_situated_location_is_stale: isSituatedLocationStale(location, now) ? 'true' : '',
   };
 }
 

@@ -51,6 +51,10 @@ function makeInternalState(overrides?: Partial<InternalState>): InternalState {
       lastSeenDeltaSeconds: 1200,
       ...(overrides?.relational ?? {}),
     },
+    situated: {
+      location: null,
+      ...(overrides?.situated ?? {}),
+    },
   };
 }
 

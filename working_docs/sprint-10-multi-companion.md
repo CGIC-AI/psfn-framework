@@ -1,18 +1,19 @@
 # Sprint 10 — Multi-Companion Substrate
 
-Status: planning draft (2026-07-08). Produced from a five-way codebase survey (persistence, composition, shards/fatigue/trust, Garden, locations/wiki). File refs are as of `main` @ `277e8084`.
+Status: planning v2 (2026-07-08). v1 was produced from a five-way codebase survey (persistence, composition, shards/fatigue/trust, Garden, locations/wiki); this revision folds in the **2026-07-08 design review decisions**. Where the review overrode a v1 lean, the override is marked. File refs are as of `main` @ `277e8084`.
 
-Companion doc: [`SPRINT_10_LOCATIONS.md`](./SPRINT_10_LOCATIONS.md) (epic `psfn-framework-vinz`) defines the location/world-control surface for a **single** companion — the place/affordance model (`places.json`), situated context, the `world` tool, presence ingestion, and the MUD-over-Discord virtual testbed. This doc plans the **multi-companion substrate** and layers multi-companion semantics (co-presence, companion↔companion conversation, shared world wiki) on top of that model. Terminology here follows the locations doc: **site / place / affordance / presence** — not "rooms" (Garden rooms are conversation channels).
+Companion doc: [`SPRINT_10_LOCATIONS.md`](./SPRINT_10_LOCATIONS.md) (epic `psfn-framework-vinz`) defines the location/world-control surface for a **single** companion — the place/affordance model (`places.json`), situated context, the `world` tool, presence ingestion, and the MUD-over-Discord virtual testbed. This doc plans the **multi-companion substrate** and layers multi-companion semantics (co-presence, companion↔companion conversation, shared world wiki) on top of that model. Terminology here follows the locations doc: **site / place / affordance / presence** — not "rooms" (except where "room" means a conversation channel, which is exactly what it is — see the guiding model).
 
-## 1. Vision
+## 1. Vision and guiding model
 
 Move from "1 companion core, 1 garden, 1 gateway, 1 Postgres = one companion" to:
 
 - **One gateway, one database, many companions.** Each companion is distinct — not a shard. Own durable-object storage, own L0 session history, own memory, own character card, own config, potentially own models.
-- **Flag-gated, not default.** Single-companion remains the default topology; multi-companion is an explicit opt-in.
-- **Shared world, personal selves.** Companions share a world-info wiki and a locations model (virtual environments like a university or monastery with navigable rooms), while keeping personal wikis and personal memory strictly separate. World info swaps as a companion moves between areas (physical or virtual) without touching personal data.
-- **Inter-companion protocol (ICP).** Companions on the same cluster or different clusters converse — governed by the fatigue system (loop prevention) and the same trust/privacy machinery as every other contact.
-- **Purpose:** companions enjoy their own time inhabiting their own worlds, co-located conversation when in the same virtual room, and visits between physical-emanation companions and virtual-resident companions.
+- **Flag-gated, not default.** Single-companion remains the default topology; multi-companion is an explicit opt-in. Everything must work with the flag off; with the flag on, adding companions must also just work.
+- **Shared world, personal selves.** Companions share a world-info wiki and a locations model, while keeping personal wikis and personal memory strictly separate. World info swaps as a companion moves between areas (physical or virtual) without touching personal data. Memories and emotions always stay per-companion.
+- **Inter-companion communication** governed by the fatigue system (loop prevention) and the same trust/privacy machinery as every other contact.
+
+**Guiding model (review §1): the substrate is a MUD.** Everything is a channel-based chat core; avatars in virtual spaces and hardware devices with screens in physical spaces are *presentation layers* on top of it. A companion on a physical device is an **emanation** bound to that specific device — present only on that screen while bound. Moving between rooms ≡ moving between channels. The multi-channel/multi-user infrastructure already built for the group Discord context is the foundation, and cross-channel information sharing is already gated by privacy, relationship, and trust.
 
 ## 2. What the survey found (current state)
 
@@ -32,7 +33,7 @@ The codebase already anticipates much of this:
 | Companion-as-contact | `src/core/contacts/types.ts` — `isMachineIntelligence`, `relationshipType: 'ai_companion'`, auto-detection in `observed-machine-intelligence.ts` | Trust tiers + disclosure gating apply to peer companions almost for free |
 | Quarantine→review→promote ingestion | `src/faculties/shards/fold-review.ts`, `tool-sync.ts` | The right pattern for ingesting a *peer's* asserted memories/artifacts without trusting them |
 | Provenance envelope | `shard result lineage` (`lineage-contracts.ts:44-59`: `coreCompanionId`, `shardCompanionId`, provenance) | Ready model for tagging cross-companion assertions |
-| Authenticated cross-node transport | satellite backplane (`src/channels/backplane/satellite-registry.ts`, claim headers + client-cert fingerprints, capability tokens) | Strongest foundation for cross-cluster ICP |
+| Authenticated cross-node transport | satellite backplane (`src/channels/backplane/satellite-registry.ts`, claim headers + client-cert fingerprints, capability tokens) | Foundation for intra-cluster companion auth (shared signing certs) |
 | Channel adapter port abstraction | `src/channels/backplane/types.ts:66-90` (`ChannelAdapterPort`) | A companion-to-companion channel can be "just another channel," inheriting the whole turn pipeline (fatigue, trust, context envelope) |
 | Wiki system (= the world-info system) | `src/faculties/wiki/` — store, pgvector projection, retrieval plan with token caps, nightly `SleeptimeWikiPass`, `wiki` tool, Garden UI route | Mature. Charter Law 32 / §6.26: wiki is world knowledge, explicitly NOT lived memory (L0/L0.1/L2) |
 | Personal/world boundary filter | `sleeptime-wiki-pass.ts:302-342` (`filterPersonalFactProposals`) | Deterministic guard that already rejects personal facts leaking into world knowledge — exactly the shared-vs-personal boundary we need |
@@ -40,158 +41,170 @@ The codebase already anticipates much of this:
 
 ### 2.2 The hard gaps
 
-1. **Postgres has zero tenancy.** All ~35 tables in `src/persistence/postgres/migrations.ts` (memories, contacts, concerns, scheduler, scratchpad, wiki chunks, model usage…) lack any `companion_id` column. Worse, `internal_state_snapshots` uses a hardcoded `'current'` primary key (`internal-state-store.ts:15,37-63`) — two companions on one DB would overwrite each other's internal state every turn. Several unique constraints (e.g. `contact_channel_ids (channel, channel_user_id)`) would collide across companions.
+1. **Postgres has zero tenancy.** All ~35 tables in `src/persistence/postgres/migrations.ts` (memories, contacts, concerns, scheduler, scratchpad, wiki chunks, model usage…) lack any `companion_id` column. Worse, `internal_state_snapshots` uses a hardcoded `'current'` primary key (`internal-state-store.ts:15,37-63`) — two companions on one DB would overwrite each other's internal state every turn. Several unique constraints (e.g. `contact_channel_ids (channel, channel_user_id)`) would collide across companions. Review confirmed this also bites **shards** — the assumption that shard IDs already made fold-out/fold-in safe against the same database turned out to be false.
 2. **Gateway is single-peer.** `resolveReadyRpcClient` returns the *first* ready agent (`server.ts:420-435`); inbound Discord messages `notifyAll` to *every* connected agent (`channel-surfaces.ts:88-91`); RPC correlation params carry no companionId (`protocol.ts:56-66`). A second agent attaching today would silently contend and receive everything.
 3. **No channel→companion routing.** `channels.json` has no companion dimension; one gateway wires one Discord + one Telegram adapter.
-4. **Garden terminates in one live runtime.** The admin surface is closures over a single `AgentCoreRuntime`'s in-memory objects via one Unix socket (`src/app/agent/admin-surface.ts:67-127`, `operator-surface.ts:44-246`). Every `/api/admin/*` route family implicitly means "the one companion." Auth is a single shared bearer token, no authorization dimension.
-5. **Owner-config files are system-global singletons.** `models.json`, `settings.json`, `capability-tier.json`, `trust-policy.json`, `charge-policy.json` etc. live in `systemDataDir` per the owner-file contract (`settings-contract-guard.ts`, `startup-owner-files.ts`). "Own models per companion" needs a scoping decision here.
-6. **Locations are planned but not yet built — and planned single-companion.** [`SPRINT_10_LOCATIONS.md`](./SPRINT_10_LOCATIONS.md) (synced 2026-07-08, epic `psfn-framework-vinz`) fully specifies the place/affordance model, but no locations code exists in `src/` yet, and the plan models one companion: `places.json` is a per-deployment soft-registry, presence/emanation state is per-companion, and nothing answers "which *other companions* are in this place." The multi-companion deltas are additive (see W5) — the locations model itself needs no rework.
-7. **No stable companion identity for cross-cluster auth.** Contacts key on channel user IDs; the identity-link flow signs channel↔channel links but there is no companion↔companion handshake primitive. Trust is unidirectional/local (my trust of peer; no model of peer's trust of me).
+4. **Garden terminates in one live runtime.** The admin surface is closures over a single `AgentCoreRuntime`'s in-memory objects via one Unix socket (`src/app/agent/admin-surface.ts:67-127`, `operator-surface.ts:44-246`). Auth is a single shared bearer token, no authorization dimension.
+5. **Owner-config files are system-global singletons.** `models.json`, `settings.json`, `capability-tier.json`, `trust-policy.json`, `charge-policy.json` etc. live in `systemDataDir` per the owner-file contract (`settings-contract-guard.ts`, `startup-owner-files.ts`).
+6. **Locations are planned but not yet built — and planned single-companion.** [`SPRINT_10_LOCATIONS.md`](./SPRINT_10_LOCATIONS.md) fully specifies the place/affordance model, but no locations code exists in `src/` yet, and nothing answers "which *other companions* are in this place." The multi-companion deltas are additive (see W5).
+7. **No stable companion identity for cross-cluster auth.** Contacts key on channel user IDs; there is no companion↔companion handshake primitive. (Cross-cluster is now deferred — see §7 — but intra-cluster identity is still needed.)
 8. **Backups are single-tree + whole-DB dump.** `backups/service.ts:364-433` snapshots one companion tree, one system tree, one `pg_dump`; no per-companion restore unit.
 
-## 3. Architecture decision (recommended)
+## 3. Architecture decisions (✅ approved in review)
 
-### 3.1 Topology: N agent processes behind one gateway
+### 3.1 Topology: N agent processes behind one gateway — **approved**
 
-**Recommended: keep one `SubstrateAgent` per OS process; run N agent processes, each with its own `COMPANION_ID` + `COMPANION_DATA_DIR` + card, all connecting to one gateway over the existing socket protocol.**
+One `SubstrateAgent` per OS process; N agent processes, each with its own companion ID + data dir + card, all connecting to one gateway over the existing socket protocol. Per-companion state is already isolated by the process boundary; the gateway keeps sole ownership of secrets/egress; failure isolation is free. Costs accepted: N × process memory, supervisor launcher, one container per companion on k3s.
 
-Rationale:
+### 3.2 Identity & database — **approved, with overrides**
 
-- Per-companion state (sessions, memory faculties, scheduler, heartbeat, emotion, self-model, shard manager, tool registry, event bus) is *already* isolated by the process boundary + `companionDataDir`. Multiplexing N companions inside one agent process would require threading a companion key through every store builder in `composition.ts` — a rewrite with no offsetting benefit.
-- The gateway's per-connection RPC maps (`server.ts:113-114`) make companion-addressed routing a contained extension, and the gateway keeps sole ownership of secrets/egress — companions stay isolated from each other's credentials by construction, which matters once companions have different trust/privacy profiles.
-- Failure isolation: one companion crashing or being upgraded doesn't take down siblings.
+- **Companion ID = UUID** (review §2), consistent with the UUID scheme used everywhere else. Every companion — including ones entering the system from elsewhere — carries its own companion ID.
+- **One Postgres schema per companion + one `shared` schema** (option B from v1) — **approved**. Each agent process gets its Pool with `search_path = companion_<uuid>`; migrations run per schema; **queries don't change at all**; per-schema `pg_dump` gives per-companion restore; the `internal_state_snapshots.'current'` singleton becomes harmless. The `shared` schema holds world data (locations/presence, shared wiki chunks, world state).
+- **Shard alignment** (review §2): shards reuse the parent's ID namespace (`<companionId>.1`, `.2`, …) and get their own derived schema, so shards share the database without colliding with the main. This makes the multi-companion tenancy fix *also* the shard-collision fix — one mechanism, two problems.
+- **Flagship migrates off `public`** — **override of v1 lean** (v1 said "leave it in place"). The flagship companion's data moves into its own companion-ID schema. Rationale: it resolves the sharding issues too and keeps the difference between single- and multi-companion setups minimal. Cutover helper follows the `migrate-persistence-layout.ts` pattern.
 
-Costs to accept: N × process memory footprint; the launcher becomes a supervisor for N agents; k8s/pod topology grows one container per companion (this fits the existing k3s deployment model in `psfn-live-ops`).
+### 3.3 Filesystem: `companion-data/<companionId>/` roots — **approved**
 
-### 3.2 Database: one Postgres, schema-per-companion + one shared schema
-
-Two viable options; recommendation is **(B)**.
-
-- **(A) Column tenancy** — add `companion_id` to all ~35 tables, rework unique constraints and every query, change `internal_state_snapshots` PK. Pro: single schema, easy cross-companion queries. Con: invasive migration across every store, high regression risk, per-companion backup requires row-filtered dumps.
-- **(B) Schema-per-companion** — each agent process gets its Pool with `search_path = companion_<id>`; migrations run per schema, **queries don't change at all**. A separate `shared` schema holds world data (locations, shared wiki chunks, world state, ICP outbox). Pro: near-zero code churn in stores, hard isolation (no cross-companion leakage possible even under bugs), per-companion `pg_dump --schema` restore falls out naturally, `internal_state_snapshots.'current'` singleton becomes harmless. Con: N schemas to migrate/operate; deliberate cross-companion queries (Garden fleet views) must go through the shared schema or explicit fan-out.
-
-The isolation property aligns with "fail closed" and with the privacy stance (a companion's memories are theirs); shared-world data is *deliberately* placed in the shared schema rather than accidentally co-mingled. Single-companion default mode keeps today's `public` schema untouched.
-
-### 3.3 Filesystem: `companion-data/<companionId>/` roots
-
-Generalize `resolveRuntimePathLayout` (`layout.ts:224-340`): under the multi-companion flag, each agent's `companionDataDir` becomes `<root>/companion-data/<companionId>`. The overlap guards (`assertNoDuplicateRoots`/`assertNoOverlappingRoots`, `layout.ts:147-181`) generalize to validate N companion roots against each other and the system root. All ~50 path helpers are untouched.
+Companion ID becomes a route/directory; all per-companion data lives under the companion's own directory. Generalize `resolveRuntimePathLayout` (`layout.ts:224-340`); the overlap guards (`layout.ts:147-181`) validate N companion roots against each other and the system root. All ~50 path helpers untouched.
 
 ### 3.4 The flag
 
-`multiCompanion` is **process wiring / topology selection → `.env` scope** per the config model (like layout mode selection), not a JSON owner setting: e.g. `PSFN_MULTI_COMPANION=1` plus a `companions.json` **new system-owned owner file** enumerating the fleet:
-
-```jsonc
-// system-data/companions.json (only read when flag is on)
-{
-  "companions": [
-    {
-      "companionId": "aria",
-      "companionDataDir": "companion-data/aria",
-      "characterCardPath": "companion-data/aria/companion.json",
-      "modelsOverride": null,           // optional per-companion models override file
-      "postgresSchema": "companion_aria"
-    }
-  ]
-}
-```
-
-Fail closed: flag on + missing/invalid `companions.json` = refuse to start; flag off = `companions.json` must be absent (or ignored with a startup warning — decide; lean refuse, consistent with owner-file strictness).
+`PSFN_MULTI_COMPANION=1` (`.env` scope — process wiring/topology selection) plus a `companions.json` system-owned owner file enumerating the fleet (companionId, data dir, card path, postgres schema, per-companion selections — see W3). Fail closed: flag on + missing/invalid `companions.json` = refuse to start; flag off + `companions.json` present = refuse to start (owner-file strictness). Everything works flag-off byte-identically; flag-on, adding a companion entry just works.
 
 ## 4. Workstreams
 
-Ordered by dependency; W1–W3 are the substrate, W4–W5 make it operable, W6–W7 are the experience.
+### W1 — Gateway multiplexing (substrate; **primary repair area** per review §5)
 
-### W1 — Gateway multiplexing (substrate)
-
-- Add `companionId` to `gateway.client.identify` (`server.ts:574-587`) and to `GatewayCorrelationParams` (`protocol.ts:56-66`).
-- Replace first-ready-agent resolution with a `Map<companionId, connection>`; make `notifyAll` companion-addressed (`notifyOne` already exists, `server.ts:347`).
-- Channel→companion routing table: add an optional `companionId` per channel/account entry in `channels.json`; gateway resolves inbound `discord.message`/`telegram`/API/voice traffic to exactly one companion. Flag off ⇒ current broadcast behavior, byte-for-byte.
+- Add `companionId` to `gateway.client.identify` (`server.ts:574-587`) and to `GatewayCorrelationParams` (`protocol.ts:56-66`). Replace first-ready-agent resolution with a `Map<companionId, connection>`; make `notifyAll` companion-addressed (`notifyOne` exists, `server.ts:347`).
+- **Strict fail-closed routing (review §5):** a response for Companion A must return to Companion A, never B — crossover would leak secrets between companions. Any routing ambiguity fails closed and **alarms loudly** (telemetry + operator surface). Trust and privacy are the most critical parts of the system; add explicit crossover tests.
+- **Concurrency:** the gateway (with LiteLLM) must handle high concurrent load — two parallel in-flight requests must each land back on the correct companion. Correlation params carry companionId end-to-end; no shared mutable "current requester" state anywhere.
+- **Channel→companion routing table** in `channels.json`: every channel/account entry maps to exactly one companion. Room/chat membership is entirely per companion — companions may share rooms, occupy different room sets, and DM the same or different people.
+- **Per-companion Discord tokens (review §5 — upgraded from v1 "stretch" to required):** one Discord bot identity per companion via keyed `ChannelAdapterRegistry` instances; gateway holds all tokens; multi-threaded distinct conversations with correct per-companion routing.
 - Launcher: `start-gateway-agent.sh` grows a supervisor mode reading `companions.json` and spawning one agent process per entry (each with its scrubbed env).
-- Multiple adapter accounts (e.g. two Discord bot tokens) via the existing `ChannelAdapterRegistry` keyed instances — stretch, not required for v1 (one account, channels partitioned by routing table, is enough to start).
 
-### W2 — Postgres tenancy (substrate)
+### W2 — Postgres tenancy + backups (substrate)
 
-- Per-agent Pool with `search_path` (small change in `src/persistence/postgres.ts` + `runtime-factory.ts:61-98` accepting a schema).
-- Migration runner runs per companion schema; `shared` schema gets its own migration chain.
-- Move nothing in single-companion mode. Provide a cutover helper (pattern: `src/app/maintenance/migrate-persistence-layout.ts`) that adopts an existing single-companion DB as `companion_<id>` schema (or leaves it in `public` as the flagship companion — decide; lean: leave in place, new companions get new schemas, avoids risky data movement).
-- Backups: N companion-tree snapshots + per-schema dumps + one shared-schema dump + one system tree (`backups/service.ts:79-146` already models sources as a list).
+- Per-agent Pool with `search_path` (`src/persistence/postgres.ts` + `runtime-factory.ts:61-98` accepting a schema); migration runner runs per companion schema; `shared` schema has its own migration chain.
+- Flagship cutover helper: adopt the existing `public`-schema data into `companion_<uuid>` (decision §3.2). Shard schemas derive from the parent companion ID.
+- **Backups (review §11): one companion, one backup is the default.** Each companion in a shared DB/cluster saves as its own separate backup with its own durable goods, so a single character can be moved to another cluster as a slice. Whole-database **group backup** (companions as a family) available as an option. **Restore mirrors one-to-one**; restore functions still need build-out (tracked in §7 follow-ups).
 
 ### W3 — Config scoping (substrate)
 
-- Per-companion owners: `companion.json` (card — already per-companion), and *optional* per-companion `models.json` override resolved before the system one (agent-side load in `startup-context.ts:140,145`; gateway keeps the global provider registry and secrets — per-request model hints already carry model+provider).
-- Stays system-global: `providers.json` (secrets are gateway property), `channels.json` (gateway routing), `backup.json`, `scheduler.json` defaults (per-companion scheduler *state* is already in companion storage).
-- Decide per-companion vs global: `settings.json`, `capability-tier.json`, `trust-policy.json`, `charge-policy.json` (see Open Questions — lean: per-companion overrides layered on system defaults, same guard machinery, new owner map entries).
-- `settings-contract-guard.ts` / `startup-owner-files.ts` learn the "companion-scoped owner" tier.
+Decided in review §3–§4:
 
-### W4 — Garden multi-companion (operability)
+- **Per-companion:** capabilities (`capability-tier.json`), trust (`trust-policy.json`), charge (`charge-policy.json`), personality/character files, settings — assigned per companion. New "companion-scoped owner" tier in `settings-contract-guard.ts` / `startup-owner-files.ts`, same guard machinery.
+- **System-global:** `providers.json` (secrets are gateway property), `channels.json` (gateway routing), `backup.json`, and the **master models registry**: one global models file on the gateway lists every model available to the system across providers — the registry is the same for everyone. **Which** models a companion uses for which functions lives in that companion's own settings (most share the same models; some use better ones, some local ones).
+- **Hard files remain the source of truth.** Open design point (review §3): optionally mirror some per-companion config into the DB for live read, writing back to files only on actual updates — keeps hydrating a companion on a different substrate simple (files only, no full DB needed). Not required for v1.
+- Capability tiers (review §10): per-companion charge/trust/tier supports intentionally-limited "hang-out" companions (middle tier, limited self-modification, no full tool set) up through the existing autonomy tier. A **"management" tier above autonomy** (acting on *other* companions' settings via gateway/Garden APIs — the adult-and-child guardrail case) is explicitly deferred (§7); it needs more thought and strictly higher gating.
 
-Answer to the open question: **yes, one Garden can serve many companions — as a proxy fleet-router, not by making the admin contract multi-tenant.**
+### W4 — Gardens (operability) — **decision changed in review §6**
 
-- Garden's `GardenAdminTransportProxy` (`operator-surface.ts:47`) becomes a map of `companionId → admin transport endpoint` (each agent process already exposes its own admin socket via `startOptionalAdminTransportServer`). Routes gain a scope: `/api/admin/c/<companionId>/...`; unscoped routes keep working when the flag is off.
-- UI: `admin-ui/src/lib/api/client.ts` is the single HTTP chokepoint — inject the active companion id there. Add a companion switcher; the module-level rune singletons (`auth.svelte.ts`, `companion.svelte.ts`, telemetry socket) either become keyed by companion or the app remounts on switch (**remount is the cheap correct v1**).
-- Add a small fleet dashboard (list companions, up/down, fatigue/charge posture) fed by the gateway's connection registry.
-- Auth stays single-operator shared token for v1; per-companion authorization is explicitly out of scope (noted as future work).
+**One Garden per companion** — override of v1's fleet-router recommendation (UID-scoped routes + reworked UI data flow judged more complex than it's worth right now). Each companion gets its own Garden surface: today's operator-process shape × N, each bound to its companion's admin socket, ports/paths assigned from `companions.json`.
 
-### W5 — Multi-companion locations + shared world wiki (experience)
+**Add: a Garden fleet view** — an overall health view of all companions in one cluster (up/down, fatigue/charge posture), fed by the gateway's connection registry, linking out to each companion's Garden. Hosting lean: a thin page served by the gateway/operator side (remaining question Q-B).
 
-**Base model is [`SPRINT_10_LOCATIONS.md`](./SPRINT_10_LOCATIONS.md) (epic `psfn-framework-vinz`), which is single-companion. Do not re-model locations here — layer these deltas on it:**
+Auth stays single-operator shared token; the operator is admin and can see everything (review §13).
 
-- **`places.json` becomes fleet-shared, naturally.** It's a system-owned soft-registry loaded from `dataDir` (locations doc A1); in multi-companion mode all agent processes load the same file, so all companions share one world map for free. Delta: none required for v1 — flag a follow-up if companions ever need private places.
-- **Cross-companion presence.** The locations plan makes presence/emanation per-companion state (`active-emanation-state.ts`, durable `situated` self-model state, B3). Nothing can answer "who *else* is here." Add a `companion_presence` table in the **shared** schema (`companionId → siteId/placeId, kind: physical|virtual, since`), written by each agent on emanation/`world move` changes, read by the situated-context block (B1) so "what do I perceive here" includes co-present companions, and watched by the gateway for co-location events. This is the one genuinely new persistence surface.
-- **Virtual navigation for companions.** The locations doc's `world` tool covers `perceive/list/control`. Companions inhabiting virtual places need a `move` action (navigate to an adjacent/known place). Physical presence stays satellite-bound per Decision 6 (static bindings, no auto-rebinding) — `move` applies to `kind: 'virtual'` places only in this sprint.
-- **Co-location venue = the MUD-over-Discord testbed.** Locations doc A3 already puts virtual places on Discord channels. Multi-companion co-location v1: two companions whose presence is in the same virtual place are both routed (W1 routing table) into that place's channel — the fatigue `companion_room` channel classification then applies natively. No new venue machinery needed for the demo.
-- **Shared vs personal wiki:** coordinate with the shared-world wiki MVP bead **`psfn-framework-i5s2`** (referenced by locations doc A4) rather than inventing scope semantics here. The shape: add a scope dimension to `WikiDocumentMetadata` (`personal` | `shared_world:<siteId>`); personal wiki stays in `companion-data/<id>/knowledge/wiki/`; shared-world wiki lives in shared storage (shared schema chunks + system-owned markdown tree, seeded by A4's `places.json`→wiki publication). `resolveWikiRetrievalPlan` (`retrieval.ts`) gains scope filtering keyed off **current place/site**: personal scope always + the shared scope(s) bound to where the companion presently is. Moving between areas (physical or virtual) swaps which shared scope is queried — personal wiki untouched by construction. The existing `filterPersonalFactProposals` boundary filter (`sleeptime-wiki-pass.ts:302-342`) becomes the write-side guard for anything a companion proposes into shared scope, layered under whatever ACL/review gates `psfn-framework-i5s2` defines.
+### W5 — Locations, rooms & shared world wiki (experience)
 
-### W6 — Inter-companion protocol (experience)
+**Base model is [`SPRINT_10_LOCATIONS.md`](./SPRINT_10_LOCATIONS.md). Per review §14: anything that belongs to location is location work; multi-companion feeds off it and layers deltas.** Room mechanics decided in review §7:
 
-Composition (all pieces exist; the work is wiring, not invention):
+- **Rooms/environments are channels** with their own room ID; the room ID is part of a world ID. The session holds all info about who is present — exactly like existing Discord group rooms. Applies identically to virtual environments and physical ones (your house is one channel; virtual rooms behave like separate Discord rooms).
+- **Entry event:** a companion entering a room receives a **system-only message**: room ID, surroundings, who else is present.
+- **Public rooms:** participants see full conversation history.
+- **Private/invite rooms are time-gated:** someone joining later has no evidence of what happened before their join, and **memory generation is gated by join/exit times**. A private conversation stays private unless the participants choose to share it. (Implementation home: locations/session work — context manifests + session membership windows; the L0-extraction-respects-presence-intervals requirement is new and flagged in Q-C.)
+- **Navigation:** retro navigation via a top-level tool — the locations doc's `world` tool grows a `move` action that describes the environment and lists available rooms. Physical presence stays satellite-bound (see W7); `move` applies to virtual places.
+- **Cross-companion presence:** `companion_presence` in the **shared** schema (`companionId → siteId/placeId, kind: physical|virtual, since`), written on emanation/`move` changes, read by the situated-context block so "what do I perceive here" includes co-present companions; the durable authority behind the per-session presence view.
+- **Shared world wiki (review §8): world-info authority is separate from the companion core.** Companions *read* shared world info and *propose* writes — they never write directly. A **caretaker** layer (gateway-managed or a dedicated meta/assistant process) owns writes: deduplication, rebalancing, wiki rewrites, cleanup — mostly deterministic, some LLM-assisted. Flow: companion suggests entry → dedup → **operator approves** (human-in-the-loop) → independent background process keeps the space clean and evolving. The toaster test: tell one companion "I bought a new toaster, it's in the kitchen next to your satellite" → becomes world info → a second companion who wasn't present reads it later and knows. **No personal/memory information in the wiki, ever** — the caretaker/scrub layer enforces it (`filterPersonalFactProposals` is the existing deterministic guard) and drops companion-suggested entries containing personal info. Personal wiki stays in `companion-data/<id>/knowledge/wiki/`; scope filtering in `resolveWikiRetrievalPlan` keys off current place/site, so moving between areas swaps the shared scope without touching personal wiki. Coordinate with shared-world wiki MVP bead `psfn-framework-i5s2`. **Cross-cluster world sync: out of scope — one world = one cluster** (review §8, deferred in §7).
 
-- **Peer = Contact.** Each remote companion is a contact with `isMachineIntelligence: true`, `relationshipType: 'ai_companion'`, and an operator-assigned (later: earned) trust tier. Disclosure runs through the existing `evaluateMemoryPolicy` / context-envelope machinery — same privacy settings as everyone else, as required.
-- **Same-cluster transport:** a new `companion` `ChannelAdapterPort` backed by the gateway. A virtual room (from W5 co-location) materializes as a channel (`channelId` = `companion-room:<locationId>`); the gateway routes messages among the companions present. Because it's a normal channel through the normal turn pipeline, **fatigue is enforced with zero new mechanism**: `evaluateFatigueForTurn` (`turn-execution-runtime.ts:406-432`) charges MI↔MI turns against the `companion_room` budgets, soft-exhaustion injects the wrap-up alert in the companion's own voice, hard exhaustion suppresses the model call. Loop prevention is the existing invariant: bot-triggered-by-bot costs 1, human participation resets to free.
-- **Cross-cluster transport:** reuse the satellite backplane's authenticated claim pattern (client-cert fingerprint + capability tokens). A remote cluster's companion appears as an authenticated peer endpoint; messages carry a lineage-style provenance envelope (`coreCompanionId`, origin cluster, signature). Fatigue is charged on the **receiving** side before dispatching the peer-triggered turn (the one genuine new hook: the backplane inbound path must call the same fatigue evaluation the turn pipeline uses — verify it does once ICP messages arrive as channel turns; if they do, this is free too).
-- **Companion identity:** mint a stable companion identity (id + keypair) so cross-cluster peers aren't just channel user IDs. Extend the existing `ContactIdentityLinkVerification` (nonce+signature+expiry) pattern into a companion↔companion handshake.
-- **Nothing a peer asserts is trusted:** any memory/artifact/wiki-edit a peer companion offers goes through a fold-review-style quarantine→approve pipeline (reuse `ShardFoldReviewController` shape) rather than direct writes. Conversation itself is just conversation (normal L0/L2 extraction on each side, each companion remembers the exchange as *their own* lived experience — this is correct and needs no gating beyond normal channel privacy).
-- **Co-location triggers:** entering a place where another companion is present emits an event (event bus, from the shared `companion_presence` surface in W5) that can open/join that place's conversation channel; free-time/outreach scheduler lanes can choose to visit places — this is where "enjoying their own time" lives, governed by run-charge lane quotas (`charge-policy.seed.json` background lane) so world-wandering is budgeted too.
+### W6 — Inter-companion communication (experience)
 
-### Sequencing
+Approved in review §9/§15/§16 ("companion protocol — approved, looks very good"). Composition:
+
+- **Peer = Contact.** `isMachineIntelligence: true`, `relationshipType: 'ai_companion'`, operator-assigned trust tier. Disclosure runs through the existing `evaluateMemoryPolicy` / context-envelope machinery — same privacy settings as everyone else. Track MI vs. not rigorously; there shouldn't be fatigue bypasses, but stay alert to that risk (review §15).
+- **Intra-cluster trust is automatic:** companions on one cluster are siblings — same websocket + certificate-based authentication via shared signing certs.
+- **Two distinct shapes (review §9):**
+  - **IPC — one-to-one direct channel** (the SMS/DM/phone-call analogue). A companion in one room can IPC a companion elsewhere. Because fatigue keys on `{companion, peer, channelId, day}`, the DM channel has its own budget — the visitor is *not* fatigued by the room's activity (and DM loops are still independently bounded). What happens in the room doesn't leak into the DM by default; the trust matrix governs any sharing and skews toward keeping private conversations private.
+  - **Ad-hoc API chat rooms — many-to-many.** Several companions joined through the API form a session behaving as one chat room, using regular API chat with fatigue and everything else. So three companions can chat in a room on their room fatigue while a fourth IPCs one of them without touching that room's budget.
+- Both shapes are ordinary channels through the normal turn pipeline, so **fatigue is enforced with zero new mechanism**: MI↔MI turns charge `companion_room` budgets, human participation is free, hard exhaustion suppresses the model call.
+- **Nothing a peer asserts is trusted:** peer-offered memories/artifacts/wiki-edits go through fold-review-style quarantine→approve (reuse `ShardFoldReviewController` shape). Conversation itself is just conversation — normal L0/L2 extraction on each side.
+- **Co-location triggers:** entering a place where another companion is present emits an event (from shared `companion_presence`) that can open/join that place's channel; free-time/outreach lanes can choose to visit places, budgeted by run-charge lane quotas.
+- **Cross-cluster direct communication: deferred** (§7). When it comes: a different, higher trust model (shared-key vs OAuth-style open), possible DM key-exchange + secondary TCP-port validation, and the **gateway as arbiter** of all cross-cluster connections since traffic leaves the environment. Operator approval is required out-of-band before cross-cluster comms occur; tokens revocable at any time by companion or operator (review §13). The gateway will eventually host a **cognitive security firewall** (injected-command inspection, dangerous-actor channel cut) — future work; until then trust anchors on gateway routing + shared signing certs.
+
+### W7 — Voice & satellite binding (review §12)
+
+- Voice routes exactly like text: one-to-one to the specific endpoint/app/Discord-voice-chat the companion is generated on, even with multiple companions doing TTS/STT in one voice chat. (Voice stream path already carries a `companionId` tag: `server.ts:415-416` — verify it threads the W1 routing.)
+- **One companion per satellite, hard rule.** One emanation to one physical device — never two companions on one device (or one app). A satellite device + its ID act as a channel carrying its location info/surroundings; once bound, the companion's emanation speaks only through that device. If the operator moves rooms, the companion moves and binds to that room's device; future voice forwards to wherever the companion currently emanates.
+- The Wyoming-based voice-chat-to-satellite approach is likely not final; a voice subsystem rewrite is a tracked follow-up (§7).
+
+### Sequencing (review §14)
+
+**Build locations first.** Any schema work needed now goes into the locations work. Multi-companion modifications to location land afterward; once a threshold of locations work is complete, the two run in parallel.
 
 ```
-W1 gateway multiplexing ──┬─► W4 Garden fleet routing
+locations epic (psfn-framework-vinz) ──► threshold ──┬─► locations continues
+                                                     └─► multi-companion:
+W1 gateway multiplexing ──┬─► W4 Gardens + fleet view
 W2 postgres tenancy ──────┤
 W3 config scoping ────────┘
         │
         ▼
-W5 locations + shared wiki ──► W6 ICP same-cluster ──► W6 ICP cross-cluster
+W5 location deltas + shared wiki ──► W6 ICP intra-cluster        (cross-cluster deferred)
 ```
 
-W1–W3 land behind the flag with parity tests proving flag-off is byte-identical. W5 depends on the locations epic's A1/A2 (places registry + bindings) and coordinates with the shared-wiki bead `psfn-framework-i5s2`; the two sprints can run in parallel until the co-presence integration point. W6 same-cluster can start as soon as W1 exists (two companions, one hand-made room channel) — that's also the earliest demo: *two companions on one gateway holding a fatigue-bounded conversation*.
+W1–W3 land behind the flag with parity tests proving flag-off is byte-identical. Earliest demo remains: two agent processes on one gateway holding a fatigue-bounded conversation in one hand-made room channel.
 
-## 5. Open questions
+## 5. Decision log (from the 2026-07-08 review)
 
-1. ~~Where is the sprint-10 locations doc?~~ **Resolved 2026-07-08:** synced as [`SPRINT_10_LOCATIONS.md`](./SPRINT_10_LOCATIONS.md) (epic `psfn-framework-vinz`); W5 rewritten as deltas on its model. Remaining sub-question: sequencing between the two epics — does multi-companion substrate (W1–W3) land before, after, or interleaved with the locations MVP?
-2. **Postgres tenancy: schema-per-companion (recommended) or column tenancy?** §3.2 argues for schemas; needs sign-off since it shapes W2, backups, and Garden fleet views.
-3. **Does the flagship companion's existing data stay in `public` schema, or migrate into `companion_<id>`?** Lean: stays put (zero-risk), new companions get schemas. Cost: one special case in the fleet config.
-4. **Which owner files become per-companion?** Card and models-override are clear. `trust-policy.json` and `charge-policy.json` per companion would let companions have different social temperaments — desirable? `capability-tier.json` per companion (different tool tiers per companion) — desirable? Each adds guard/Garden surface.
-5. **One shared channel account vs per-companion accounts?** v1 routes channels of one Discord/Telegram account to companions via the routing table. Distinct bot identities per companion (multiple tokens) is more legible to humans but multiplies gateway adapter instances — v1.5?
-6. **Fatigue accounting for ICP sends.** Receiving side charging is the loop-breaker (both parties charge their own budget when responding to an MI trigger — symmetric and sufficient?). Do we *also* want a send-side cost in the run-charge lanes for initiating visits/outreach? Lean yes: free-time lane already has quotas; visiting a location = background lane spend.
-7. **Who writes the shared world wiki?** Operator-only at first? Companions via quarantine→operator-approve (fold-review pattern)? Or companion-autonomous within their "home" space and quarantined elsewhere? Lean: operator seeds; companion proposals quarantined; revisit after observing.
-8. **World state authority.** The locations plan needs no arbiter (one companion, its own presence state). Multi-companion co-presence does: which process arbitrates virtual `move`s and emits co-location events? Lean: gateway hosts a small world service reading/writing shared-schema `companion_presence` (it already owns cross-companion routing); agents call `world move` via RPC. Alternative: a fourth process. Cross-cluster worlds (one monastery spanning two clusters) — v1 says a world lives on one cluster and remote companions visit over ICP.
-9. **Garden auth over N companions.** Single operator token for v1 is assumed. Is per-companion operator delegation (different humans administer different companions) in scope for this sprint? Lean: no.
-10. **Companion identity format.** Stable id + keypair per companion for cross-cluster handshakes — self-signed and TOFU-pinned (satellite pattern) or operator-exchanged out of band? Lean: reuse satellite claim/fingerprint pattern, operator-exchanged.
-11. **Scheduler/heartbeat contention.** N companions × heartbeat/free-time lanes on one gateway = N × background LLM traffic. Is a fleet-level charge ceiling needed (gateway-side), or are per-companion lane quotas sufficient? Lean: per-companion quotas first, observe, add a gateway ceiling if needed.
-12. **Wyoming/voice in multi-companion mode.** Voice surfaces bind gateway-side; which companion answers a given Wyoming satellite? Presumably the routing table covers `siteId → companionId` — confirm the voice stream path threads companion routing (it already carries a `companionId` tag: `server.ts:415-416`).
+All twelve v1 open questions are resolved except the four in §6:
 
-## 6. Risks
+| # | v1 question | Resolution |
+|---|---|---|
+| 1 | Sequencing vs locations epic | Locations first; schema work goes into locations; split parallel after threshold (review §14) |
+| 2 | Schema-per-companion vs column tenancy | **Schema-per-companion approved**; + shard schema reuse via `<companionId>.N` (review §2) |
+| 3 | Flagship stays in `public`? | **No — migrate flagship** to its companion-ID schema (override; also fixes sharding) |
+| 4 | Which owner files per-companion | Capabilities, trust, charge, personality, capability tier, settings per companion; master models registry + providers/channels/backup global (review §3–4) |
+| 5 | Shared vs per-companion channel accounts | **Per-companion Discord tokens, required** (review §5) |
+| 6 | Fatigue accounting for ICP | Approved as suggested; IPC (DM) vs room budgets are naturally separate channels (review §9/§15) |
+| 7 | Who writes the shared wiki | Caretaker layer separate from companion core; companions propose → dedup → operator approves; background cleanup (review §8) |
+| 8 | World state authority | Rooms are channels; session holds presence; system-only entry messages; public vs time-gated private rooms; location system owns mechanics (review §7/§14) |
+| 9 | Garden auth / topology | **One Garden per companion** + cluster fleet-health view (override of fleet-router); single operator token, operator sees all (review §6/§13) |
+| 10 | Companion identity format | UUID companion IDs; intra-cluster trust automatic via shared signing certs; cross-cluster trust model deferred (review §2/§9) |
+| 11 | Fleet-level charge ceiling | Not addressed — keep v1 lean: per-companion quotas first, observe, add gateway ceiling if needed |
+| 12 | Voice/satellite routing | One companion per satellite/app; one-to-one routing like text; Wyoming approach non-final (review §12) |
 
-- **Flag-off regression risk** — every W1/W2 change must be provably inert when the flag is off. Mitigation: parity tests as part of each PR (pattern already used for runtime-mode parity), plus `verify:settings-contract` extension for the new owner file.
-- **Epic collision with `psfn-framework-vinz`** — the locations epic touches the same seams (satellite registry, presence, situated context, wiki). Mitigation: W5 is defined strictly as deltas on that epic's model; shared-schema `companion_presence` and wiki scope are the only new surfaces, and both are additive.
-- **Cross-companion privacy leaks via shared surfaces** — shared schema, shared wiki, Garden fleet views are the new leak surfaces. Mitigation: schema isolation for personal data (nothing personal in shared schema, ever), `filterPersonalFactProposals` on all shared-wiki writes, fold-review quarantine for peer assertions.
-- **Fatigue bypass** — any ICP path that doesn't enter the standard turn pipeline silently skips loop protection. Mitigation: hard rule — peer messages are channel turns, no side-channel dispatch; add a test that an ICP message with no human participation exhausts and suppresses (extend `two-companion-loop.test.ts` to the real channel).
-- **Operational blast radius** — one Postgres, one gateway = shared fate for N companions. Accepted for this sprint (it's the stated topology); per-schema backups keep restore blast radius per-companion.
+Also confirmed: companion privacy leaks must surface loudly; full-review style approved.
 
-## 7. Immediate next actions
+## 6. Remaining open questions
 
-1. Sign off §3 architecture decisions (topology, schema-per-companion, flag shape, flagship-data stays in `public`).
-2. Decide sequencing against epic `psfn-framework-vinz` (locations) — W1–W3 are independent of it and can start now; W5 waits on its A1/A2 and coordinates with `psfn-framework-i5s2` (shared-world wiki).
-3. File the W1–W6 epic + issues in beads (from a checkout that can reach the beads server — `bd` has no database in this sandbox).
-4. Spike: two agent processes against one gateway with a hand-edited routing table — validates W1's shape in days and yields the first two-companion conversation demo.
+- **Q-A (config mirror):** mirror per-companion config into the DB for live read/update with files as write-time source of truth (review §3 open point) — v1 lean: files only, add the mirror when a concrete live-read need appears.
+- **Q-B (fleet view hosting):** where does the fleet-health view live given one-Garden-per-companion — gateway-served page (lean) vs. a small dedicated operator surface?
+- **Q-C (time-gated private-room memory):** gating memory generation by join/exit times means L0 extraction must respect per-participant presence intervals — new requirement on the extraction pipeline; belongs to locations/session work per the §14 rule, but needs explicit design there.
+- **Q-D (fleet charge ceiling):** per-companion lane quotas first; is a gateway-side aggregate ceiling needed once N companions heartbeat concurrently? Observe, then decide.
+
+## 7. Deferred / follow-ups (tracked, not scoped into this sprint)
+
+Per review §17:
+
+- Cross-cluster direct companion communication trust model (shared key vs OAuth vs other; DM key exchange + secondary TCP-port validation; gateway as arbiter).
+- Cognitive security firewall at the gateway (injected-command inspection; dangerous-actor channel cut).
+- Cross-cluster / cross-world shared world-info sync (one world = one cluster for now).
+- "Management" capability tier above autonomy (acting on other companions' settings; strictly higher gating).
+- Detailed design of the shared-wiki caretaker/meta layer (dedup, rewrite, cleanup, LLM-assisted updates).
+- Voice subsystem rewrite.
+- Restore functions build-out.
+
+## 8. Risks
+
+- **Companion crossover = secret/privacy leak** — the top risk (review §5). Mitigation: companionId threaded through every correlation param, fail-closed routing, loud alarms, dedicated crossover tests under concurrent load.
+- **Flag-off regression** — every W1/W2 change must be provably inert when the flag is off. Mitigation: parity tests per PR + `verify:settings-contract` extension for `companions.json`.
+- **Epic collision with `psfn-framework-vinz`** — same seams (satellite registry, presence, situated context, wiki). Mitigation: locations-first sequencing (review §14); W5 is strictly deltas; `companion_presence` + wiki scope are the only new surfaces.
+- **Cross-companion privacy leaks via shared surfaces** — shared schema, shared wiki, fleet view. Mitigation: nothing personal in the shared schema ever; caretaker + `filterPersonalFactProposals` on all shared-wiki writes; fold-review quarantine for peer assertions; leaks must surface, never be silently dropped.
+- **Fatigue bypass** — any ICP path not entering the standard turn pipeline silently skips loop protection. Mitigation: hard rule — peer messages are channel turns, no side-channel dispatch; extend `two-companion-loop.test.ts` to the real channel path.
+- **Operational blast radius** — one Postgres, one gateway = shared fate for N companions. Accepted; per-schema backups keep restore blast radius per-companion.
+
+## 9. Immediate next actions
+
+1. File the epic + issues in beads (from a checkout that reaches the beads server — `bd` has no database in this sandbox): locations-first ordering, W1–W7 as above, §7 follow-ups as future-idea beads.
+2. Fold the Q-C requirement (presence-interval-gated memory extraction) into the locations epic's session/context workstream.
+3. Spike (post-locations-threshold, or earlier if it doesn't touch location seams): two agent processes against one gateway with a hand-edited routing table — validates W1 and yields the first two-companion conversation demo.

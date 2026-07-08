@@ -43,7 +43,11 @@ export function registerGitTools(
     attachWiringMeta(tool, { requiredGatewayMethods: GIT_TOOL_GATEWAY_METHODS[tool.name] });
   }
 
-  target.registerTool(tool, 'core');
+  // psfn img2 audit: repo is a deliberate dev surface, not part of the
+  // companion's default social/expressive stack. Registered extended so it
+  // sits behind toolset/load + promotion; dev-flavoured turns resurface it via
+  // the 'dev' autoload candidate list (extended-tool-autoload-policy).
+  target.registerTool(tool, 'extended');
 }
 
 export function wireGitRuntime(

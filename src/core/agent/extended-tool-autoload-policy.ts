@@ -52,7 +52,14 @@ export const DEFAULT_EXTENDED_TOOL_AUTOLOAD_MAX = 4;
 export const DEFAULT_BACKGROUND_ONLY_EXTENDED_TOOLS: ReadonlySet<string> = new Set();
 
 export const DEFAULT_EXTENDED_TOOL_AUTOLOAD_CANDIDATES: Readonly<Record<TurnIntent, readonly string[]>> = {
+  // psfn img2 audit: repo and shell were demoted from the always-core default
+  // stack to extended. They resurface automatically on dev-flavoured turns
+  // (DEV_PATTERN / code blocks / dev subagents) so coding workflows stay smooth
+  // without cluttering ordinary social turns. shell is listed for parity but is
+  // only selected once wired as a direct tool (skipped as not_registered here).
   dev: [
+    'repo',
+    'shell',
     'beads',
   ],
   memory: [

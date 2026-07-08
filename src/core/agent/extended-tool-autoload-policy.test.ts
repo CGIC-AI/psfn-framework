@@ -90,8 +90,11 @@ describe('extended-tool-autoload-policy', () => {
     const policy = createDefaultExtendedToolAutoloadPolicy(DEFAULT_EXTENDED_TOOL_AUTOLOAD_MAX);
     const devCandidates = policy.getCandidatesForIntent('dev');
     expect(devCandidates).toEqual(DEFAULT_EXTENDED_TOOL_AUTOLOAD_CANDIDATES.dev);
-    expect(devCandidates.slice(0, policy.maxPreloadCount)).toHaveLength(1);
-    expect(devCandidates[0]).toBe('beads');
+    // psfn img2 audit: repo + shell were demoted from always-core to extended
+    // and resurface on dev-flavoured turns ahead of beads.
+    expect(devCandidates).toEqual(['repo', 'shell', 'beads']);
+    expect(devCandidates.slice(0, policy.maxPreloadCount)).toHaveLength(3);
+    expect(devCandidates[0]).toBe('repo');
   });
 
   it('supports disabling preloads by setting max count to zero', () => {

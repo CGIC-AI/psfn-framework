@@ -1735,6 +1735,81 @@ describe('DiscordAdapter DM routing', () => {
       expect(interactive.sent).toEqual(['reply-dm-1', 'reply-dm-3']);
     });
   });
+
+  it('never merges queued messages from different authors into one attributed turn', async () => {
+    const eventBus = new EventBus();
+    const adapter = new DiscordAdapter(makeConfig(), eventBus);
+    await adapter.init();
+
+    const channelId = 'dm-mixed-author-channel';
+    const interactive = makeInteractiveTextChannel();
+    discordMock.channelsById.set(channelId, interactive.channel);
+
+    let releaseFirst: (() => void) | null = null;
+    const firstTurn = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+
+    const handler = vi.fn(async (message: SubstrateMessage) => {
+      if (message.id === 'mix-1') {
+        await firstTurn;
+      }
+      return {
+        content: `reply-${message.id}`,
+        channelId,
+        metadata: { model: 'test', inputTokens: 0, outputTokens: 0, durationMs: 1 },
+      };
+    });
+    adapter.onMessage(handler);
+
+    const firstDispatch = (adapter as any).onDiscordMessage(
+      makeDiscordIncomingMessage(channelId, interactive.channel, {
+        id: 'mix-1',
+        content: 'first',
+        authorId: 'author-a',
+      }),
+    );
+
+    await Promise.resolve();
+
+    await (adapter as any).onDiscordMessage(
+      makeDiscordIncomingMessage(channelId, interactive.channel, {
+        id: 'mix-2',
+        content: 'from author a',
+        authorId: 'author-a',
+      }),
+    );
+    await (adapter as any).onDiscordMessage(
+      makeDiscordIncomingMessage(channelId, interactive.channel, {
+        id: 'mix-3',
+        content: 'also from author a',
+        authorId: 'author-a',
+      }),
+    );
+    await (adapter as any).onDiscordMessage(
+      makeDiscordIncomingMessage(channelId, interactive.channel, {
+        id: 'mix-4',
+        content: 'from author b',
+        authorId: 'author-b',
+        authorDisplayName: 'AuthorB',
+      }),
+    );
+
+    expect(handler).toHaveBeenCalledTimes(1);
+    releaseFirst?.();
+    await firstDispatch;
+    await vi.waitFor(() => {
+      expect(handler).toHaveBeenCalledTimes(3);
+    });
+
+    const deferredTurns = handler.mock.calls.slice(1).map((call) => call[0]);
+    expect(deferredTurns.map((turn) => turn.authorId)).toEqual(['author-a', 'author-b']);
+    expect(deferredTurns[0]?.content).toBe('from author a\nalso from author a');
+    expect(deferredTurns[1]?.content).toBe('from author b');
+    await vi.waitFor(() => {
+      expect(interactive.sent).toEqual(['reply-mix-1', 'reply-mix-3', 'reply-mix-4']);
+    });
+  });
 });
 
 describe('DiscordAdapter status visibility', () => {

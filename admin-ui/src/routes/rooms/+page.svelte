@@ -7,6 +7,7 @@
     type RoomRosterMember,
   } from '$lib/api/endpoints/rooms';
   import { pushToast } from '$lib/stores/toast.svelte';
+  import { createRosterLoader } from './roster-loader';
 
   const ROSTER_PAGE_SIZE = 50;
 
@@ -40,26 +41,33 @@
     }
   }
 
-  async function loadRoster(room: RoomSummary, offset = 0) {
-    selected = room;
-    rosterOffset = offset;
-    rosterLoading = true;
-    rosterError = '';
-    try {
-      const data = await getRoomRoster(room.channelId, {
-        channel: room.channel,
-        limit: ROSTER_PAGE_SIZE,
-        offset,
-      });
+  // Sequence-guarded: only the latest room/page request may mutate roster
+  // state, so a slow response for a previously selected room cannot overwrite
+  // the roster shown for the current selection.
+  const loadRoster = createRosterLoader<RoomSummary, RoomRosterMember>({
+    fetchRoster: (room, offset) => getRoomRoster(room.channelId, {
+      channel: room.channel,
+      limit: ROSTER_PAGE_SIZE,
+      offset,
+    }),
+    onStart: (room, offset) => {
+      selected = room;
+      rosterOffset = offset;
+      rosterLoading = true;
+      rosterError = '';
+    },
+    onResult: (data) => {
       members = data.members;
       rosterTotal = data.total;
-    } catch (e) {
-      rosterError = e instanceof Error ? e.message : 'Failed to load roster';
-      pushToast(rosterError, 'error');
-    } finally {
+    },
+    onError: (message) => {
+      rosterError = message;
+      pushToast(message, 'error');
+    },
+    onSettled: () => {
       rosterLoading = false;
-    }
-  }
+    },
+  });
 
   function nextPage() {
     if (selected && rosterOffset + ROSTER_PAGE_SIZE < rosterTotal) {

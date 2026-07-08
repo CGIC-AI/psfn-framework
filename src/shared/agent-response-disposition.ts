@@ -49,10 +49,9 @@ export function resolveAgentResponseDisposition(
     };
   }
 
-  if (hasText || hasAttachments) {
-    return { kind: 'send', hasText, hasAttachments };
-  }
-
+  // Policy suppression must win over send eligibility: a response flagged for
+  // broadcast approval or fatigue suppression stays held even when it still
+  // carries text or attachments.
   if (response.metadata.broadcastSafety?.approvalRequired) {
     return {
       kind: 'policy_suppressed',
@@ -65,6 +64,10 @@ export function resolveAgentResponseDisposition(
       kind: 'policy_suppressed',
       reason: 'fatigue_suppressed',
     };
+  }
+
+  if (hasText || hasAttachments) {
+    return { kind: 'send', hasText, hasAttachments };
   }
 
   return { kind: 'empty_response_error' };

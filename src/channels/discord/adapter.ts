@@ -125,9 +125,8 @@ interface PendingDiscordTurn {
   respondToMessage: boolean;
 }
 
-function coalescePendingDiscordTurns(turns: PendingDiscordTurn[]): PendingDiscordTurn | null {
-  if (turns.length === 0) return null;
-  if (turns.length === 1) return turns[0];
+function coalesceSameAuthorDiscordTurns(turns: PendingDiscordTurn[]): PendingDiscordTurn {
+  if (turns.length === 1) return turns[0]!;
 
   const latest = turns[turns.length - 1]!;
   const messages = turns.map(turn => turn.substrateMsg);
@@ -144,6 +143,22 @@ function coalescePendingDiscordTurns(turns: PendingDiscordTurn[]): PendingDiscor
     replyToOriginal: turns.some(turn => turn.replyToOriginal),
     respondToMessage: turns.some(turn => turn.respondToMessage),
   };
+}
+
+// Only contiguous same-author turns may merge into one substrate message;
+// merging across authors would attribute one user's text to another for
+// downstream memory, policy, and audit paths.
+function coalescePendingDiscordTurns(turns: PendingDiscordTurn[]): PendingDiscordTurn[] {
+  const groups: PendingDiscordTurn[][] = [];
+  for (const turn of turns) {
+    const current = groups.at(-1);
+    if (current && current[0]!.substrateMsg.authorId === turn.substrateMsg.authorId) {
+      current.push(turn);
+    } else {
+      groups.push([turn]);
+    }
+  }
+  return groups.map(group => coalesceSameAuthorDiscordTurns(group));
 }
 
 export class DiscordAdapter implements ChannelAdapterPort {
@@ -646,9 +661,16 @@ export class DiscordAdapter implements ChannelAdapterPort {
       const pendingQueue = this.pendingByChannel.get(channelId);
       const coalescedQueueDepth = pendingQueue?.length ?? 0;
       const coalescedMessageIds = pendingQueue?.map(entry => entry.substrateMsg.id) ?? [];
-      const pending = pendingQueue ? coalescePendingDiscordTurns(pendingQueue.splice(0)) : null;
+      const coalescedTurns = pendingQueue ? coalescePendingDiscordTurns(pendingQueue.splice(0)) : [];
       if (pendingQueue) {
         this.pendingByChannel.delete(channelId);
+      }
+      const pending = coalescedTurns.at(0) ?? null;
+      const remainder = coalescedTurns.slice(1);
+      if (remainder.length > 0) {
+        // Cross-author turns stay separate; re-queue them so each author's
+        // coalesced turn is processed on its own once this one completes.
+        this.pendingByChannel.set(channelId, remainder);
       }
       if (pending) {
         if (coalescedQueueDepth > 1) {
@@ -656,9 +678,10 @@ export class DiscordAdapter implements ChannelAdapterPort {
             queueDepth: coalescedQueueDepth,
             waitMs: Math.max(0, Date.now() - lockStartMs),
           });
-          log.info('Coalescing queued Discord messages into one deferred turn', {
+          log.info('Coalescing queued Discord messages into deferred per-author turns', {
             channelId,
             queueDepth: coalescedQueueDepth,
+            deferredTurns: coalescedTurns.length,
             messageIds: coalescedMessageIds,
           });
         }

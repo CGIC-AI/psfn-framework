@@ -331,6 +331,9 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
   wireSessionToolsRuntime(agentLoop, sessionManager, pathSnapshot.companionDataDir, gateway, promptRegistry);
   const contactRuntimeOptions: ContactRuntimeOptions = {
     exportDir: resolveContactsDir(pathSnapshot.companionDataDir),
+    // Reuse the shared confirmation queue (also used by card/module proposals)
+    // so trusted-tier promotion proposals surface on the Garden Confirmations page.
+    proposalQueue: cardProposalQueue,
     ...(primaryTelegramUserId
       ? {
           bootstrapPrimaryIdentityLinks: [{

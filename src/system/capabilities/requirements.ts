@@ -116,6 +116,7 @@ function resolveScratchpadRequirement(action: string | null): CapabilityRequirem
 const CONTACT_WRITE_ACTIONS = new Set([
   'note',
   'set_trust',
+  'propose_trust',
   'link_identity',
   'set_channel_privacy',
   'set_machine_intelligence',

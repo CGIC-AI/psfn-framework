@@ -1,4 +1,5 @@
 import type { ToolRegistrar } from '../agent/tool-registrar.js';
+import type { ApprovalQueuePort } from '../../system/capabilities/approval-queue-port.js';
 import type { ContactStorePort } from './contact-store-port.js';
 import type { ChannelPrivacyLevel } from './types.js';
 import { createContactTool } from './tools.js';
@@ -17,6 +18,11 @@ export interface ContactRuntimeIdentityLink {
 export interface ContactRuntimeOptions {
   bootstrapPrimaryIdentityLinks?: ContactRuntimeIdentityLink[];
   exportDir?: string;
+  /**
+   * Shared confirmation queue for trusted-tier promotion proposals
+   * (contact action=propose_trust). Absent → propose_trust fails closed.
+   */
+  proposalQueue?: ApprovalQueuePort;
 }
 
 export async function registerContactRuntime(
@@ -43,7 +49,9 @@ export async function registerContactRuntime(
     }
   }
 
-  target.registerTool(createContactTool(contactStore));
+  target.registerTool(createContactTool(contactStore, {
+    proposalQueue: options.proposalQueue,
+  }));
 
   return contactStore;
 }

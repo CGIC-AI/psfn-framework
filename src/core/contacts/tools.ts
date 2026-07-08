@@ -6,6 +6,10 @@ import type { AgentTool, AgentToolResult } from '@mariozechner/pi-agent-core';
 import type { ContactStorePort } from './contact-store-port.js';
 import type { TrustLevel } from '../../system/trust/types.js';
 import { TRUST_LEVELS, isHighTierTrustLevel } from '../../system/trust/types.js';
+import type {
+  ApprovalQueuePort,
+  ConfirmationQueueEntry,
+} from '../../system/capabilities/approval-queue-port.js';
 import type { TrustDriftBehaviorSignals } from '../../system/trust/policy.js';
 import { CHANNEL_PRIVACY_LEVELS, type ChannelPrivacyLevel, type Contact } from './types.js';
 import { resolvePreferredContactName } from './preferred-name.js';
@@ -20,6 +24,7 @@ const CONTACT_ACTION_NAMES = [
   'lookup',
   'note',
   'set_trust',
+  'propose_trust',
   'link_identity',
   'set_channel_privacy',
   'set_machine_intelligence',
@@ -30,6 +35,7 @@ const CONTACT_ACTION_HELP = [
   'lookup',
   'note',
   'set_trust',
+  'propose_trust',
   'link_identity',
   'set_channel_privacy',
   'set_machine_intelligence',
@@ -42,9 +48,22 @@ type ContactAction =
   | 'lookup'
   | 'note'
   | 'set_trust'
+  | 'propose_trust'
   | 'link_identity'
   | 'set_channel_privacy'
   | 'set_machine_intelligence';
+
+// ── Trusted-tier promotion proposal (human-in-the-loop) ──
+// The agent can never write high-tier trust directly (store.ts / policy.ts
+// guards). Instead it proposes a promotion to 'trusted' onto the shared
+// ConfirmationQueue; the operator approves in Garden, and only the approval
+// execution — running under a manual-authorized actor — performs the write.
+const TRUSTED_PROMOTION_METHOD = 'contact.trust.promote';
+const TRUSTED_PROMOTION_ACTION = 'promote_trusted';
+const TRUSTED_PROMOTION_REQUESTED_LEVEL: TrustLevel = 'trusted';
+// Manual-authorized actor (operator: prefix) so the store's high-tier guard
+// (isManualHighTierTrustMutationAuthorized) passes on approval execution.
+const TRUSTED_PROMOTION_APPROVAL_ACTOR = 'operator:confirmation-queue';
 
 interface ContactSetTrustParams {
   contactId: string;
@@ -61,6 +80,7 @@ interface ContactToolParams extends Partial<ContactSetTrustParams> {
   channel?: string;
   channelUserId?: string;
   privacyLevel?: ChannelPrivacyLevel;
+  rationale?: string;
 }
 
 function errorMessage(error: unknown): string {
@@ -143,6 +163,8 @@ function normalizeContactAction(params: ContactToolParams): ContactAction {
       return 'note';
     case 'set_trust':
       return 'set_trust';
+    case 'propose_trust':
+      return 'propose_trust';
     case 'link_identity':
       return 'link_identity';
     case 'set_channel_privacy':
@@ -241,6 +263,125 @@ async function executeContactSetTrust(
   }
   return textResult(
     `Trust level for ${contactId} set to ${trustLevel}. Disclosure boundary and consent gates remain enforced.`,
+  );
+}
+
+async function executeContactProposeTrust(
+  contactStore: ContactStorePort,
+  proposalQueue: ApprovalQueuePort | undefined,
+  params: ContactToolParams,
+): Promise<AgentToolResult<{ isError?: boolean }>> {
+  const contactId = params.contactId?.trim() ?? '';
+  if (!contactId) {
+    return textResultWithError('Missing contactId', true);
+  }
+
+  // 'trusted' is the only tier the agent may propose. 'primary' stays
+  // owner-only via existing owner-identity authorization and can never be
+  // proposed through this path.
+  const requestedLevel = params.trustLevel;
+  if (requestedLevel !== undefined && requestedLevel !== TRUSTED_PROMOTION_REQUESTED_LEVEL) {
+    return textResultWithError(
+      `propose_trust can only propose promotion to 'trusted'. `
+      + `Requested level '${requestedLevel}' is not allowed`
+      + (requestedLevel === 'primary'
+        ? " ('primary' remains owner-only and can never be proposed)."
+        : '.'),
+      true,
+    );
+  }
+
+  const rationale = params.rationale?.trim() ?? '';
+  if (!rationale) {
+    return textResultWithError(
+      'Missing rationale. propose_trust requires a short rationale explaining why this contact should be promoted to trusted.',
+      true,
+    );
+  }
+
+  // Fail closed: without a wired confirmation queue there is no human-in-the-loop
+  // path, and the agent must never write high-tier trust directly.
+  if (!proposalQueue) {
+    return textResultWithError(
+      'Trusted-promotion proposals require a confirmation queue, but none is wired into the contact tool. '
+      + 'High-tier trust promotion cannot proceed.',
+      true,
+    );
+  }
+
+  const contact = await contactStore.getById(contactId);
+  if (!contact) {
+    return textResultWithError(`Contact ${contactId} not found`, true);
+  }
+
+  if (isHighTierTrustLevel(contact.trustLevel)) {
+    return textResultWithError(
+      `Contact ${contactId} is already at high-tier trust '${contact.trustLevel}'; no promotion to trusted is needed.`,
+      true,
+    );
+  }
+
+  const currentLevel = contact.trustLevel;
+  const contactName = resolvePreferredContactName(contact) ?? contact.displayName;
+
+  const entry = proposalQueue.enqueue(
+    {
+      method: TRUSTED_PROMOTION_METHOD,
+      action: TRUSTED_PROMOTION_ACTION,
+      scope: `${contactName} (${contactId}): ${currentLevel} -> ${TRUSTED_PROMOTION_REQUESTED_LEVEL}`,
+      params: {
+        contactId,
+        currentLevel,
+        requestedLevel: TRUSTED_PROMOTION_REQUESTED_LEVEL,
+        rationale,
+      },
+      companionReason: rationale,
+    },
+    async (approvedParams: Record<string, unknown>, queueEntry: ConfirmationQueueEntry) => {
+      const approvedContactId = typeof approvedParams.contactId === 'string'
+        ? approvedParams.contactId.trim()
+        : '';
+      if (!approvedContactId) {
+        throw new Error('Approved trusted-promotion proposal must include a contactId.');
+      }
+
+      const approvedLevel = approvedParams.requestedLevel;
+      if (approvedLevel !== TRUSTED_PROMOTION_REQUESTED_LEVEL) {
+        throw new Error(
+          `Trusted-promotion proposals can only set 'trusted'; refusing requested level '${String(approvedLevel)}'.`,
+        );
+      }
+
+      const target = await contactStore.getById(approvedContactId);
+      if (!target) {
+        throw new Error(`Contact ${approvedContactId} not found; cannot apply trusted promotion.`);
+      }
+      if (isHighTierTrustLevel(target.trustLevel)) {
+        throw new Error(
+          `Contact ${approvedContactId} is already at high-tier trust '${target.trustLevel}'; nothing to promote.`,
+        );
+      }
+
+      // Runs under a manual-authorized actor so the store's high-tier guard
+      // passes; setTrustLevel writes a trust_level mutation audit entry.
+      const applied = await contactStore.setTrustLevel(
+        approvedContactId,
+        TRUSTED_PROMOTION_REQUESTED_LEVEL,
+        TRUSTED_PROMOTION_APPROVAL_ACTOR,
+      );
+      if (!applied) {
+        throw new Error(
+          `Failed to promote contact ${approvedContactId} to trusted (proposal ${queueEntry.id}); trust unchanged.`,
+        );
+      }
+    },
+  );
+
+  return textResult(
+    `Trusted-promotion proposal queued for ${contactName} (${contactId}): ${currentLevel} -> `
+    + `${TRUSTED_PROMOTION_REQUESTED_LEVEL} (proposal id: ${entry.id}). `
+    + 'Trust is unchanged until the operator approves in the Garden Confirmations page. '
+    + 'Deny leaves trust untouched.',
   );
 }
 
@@ -523,6 +664,7 @@ async function executeContactSearch(
 async function executeUnifiedContactAction(
   contactStore: ContactStorePort,
   params: ContactToolParams = {},
+  proposalQueue?: ApprovalQueuePort,
 ): Promise<AgentToolResult<{ isError?: boolean }>> {
   const action = normalizeContactAction(params);
 
@@ -537,6 +679,8 @@ async function executeUnifiedContactAction(
       return await executeContactNote(contactStore, params);
     case 'set_trust':
       return await executeContactSetTrust(contactStore, params as ContactSetTrustParams);
+    case 'propose_trust':
+      return await executeContactProposeTrust(contactStore, proposalQueue, params);
     case 'link_identity':
       return await executeContactLinkIdentity(contactStore, params);
     case 'set_channel_privacy':
@@ -572,7 +716,20 @@ async function executeContactSetMachineIntelligence(
   );
 }
 
-export function createContactTool(contactStore: ContactStorePort): AgentTool<any> {
+export interface CreateContactToolOptions {
+  /**
+   * Shared confirmation queue used by action=propose_trust to enqueue a
+   * trusted-tier promotion for operator approval. When absent, propose_trust
+   * fails closed — the agent can never write high-tier trust directly.
+   */
+  proposalQueue?: ApprovalQueuePort;
+}
+
+export function createContactTool(
+  contactStore: ContactStorePort,
+  options: CreateContactToolOptions = {},
+): AgentTool<any> {
+  const proposalQueue = options.proposalQueue;
   const tool: AgentTool<any> = {
     name: 'contact',
     label: 'contact',
@@ -580,6 +737,9 @@ export function createContactTool(contactStore: ContactStorePort): AgentTool<any
       'Unified contact surface for browsing, searching, lookup, notes, trust, identity linking, and channel privacy. '
       + 'Use action=list to browse contactId values, action=search with query to find contacts by name/handle/channel/notes, '
       + 'then action=lookup with exact contactId for details. action=note and action=set_trust also require contactId. '
+      + 'set_trust can only apply low-tier trust changes autonomously; to promote a contact to trusted, use '
+      + 'action=propose_trust with contactId and rationale — this queues a proposal for operator approval in Garden and '
+      + 'never changes trust directly. '
       + 'link_identity and set_channel_privacy require contactId, channel, and channelUserId; privacy changes also require privacyLevel. '
       + 'set_machine_intelligence requires contactId and isMachineIntelligence. '
       + `Other actions: ${CONTACT_ACTION_HELP}. `
@@ -622,6 +782,12 @@ export function createContactTool(contactStore: ContactStorePort): AgentTool<any
       confirmSuggestion: Type.Optional(Type.Boolean({
         description: 'Apply a trust drift suggestion after preview when action=set_trust.',
       })),
+      rationale: Type.Optional(Type.String({
+        minLength: 1,
+        description:
+          'Required for action=propose_trust: short rationale for promoting this contact to trusted. '
+          + 'Surfaced to the operator on the Garden Confirmations page.',
+      })),
       channel: Type.Optional(Type.String({
         minLength: 1,
         description: 'Channel key for action=link_identity|set_channel_privacy.',
@@ -644,7 +810,7 @@ export function createContactTool(contactStore: ContactStorePort): AgentTool<any
       let actionForError = typeof params.action === 'string' ? params.action : undefined;
       try {
         actionForError = normalizeContactAction(params);
-        return await executeUnifiedContactAction(contactStore, params);
+        return await executeUnifiedContactAction(contactStore, params, proposalQueue);
       } catch (error) {
         const suffix = actionForError ? ` for action=${actionForError}` : '';
         return textResultWithError(`contact failed${suffix}: ${errorMessage(error)}`, true);
@@ -666,6 +832,7 @@ export function createContactTool(contactStore: ContactStorePort): AgentTool<any
           return 'identity.read';
         case 'note':
         case 'set_trust':
+        case 'propose_trust':
         case 'link_identity':
         case 'set_channel_privacy':
         case 'set_machine_intelligence':

@@ -1,6 +1,8 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import Database from 'better-sqlite3';
 import { ContactStore } from './store.js';
+import { ConfirmationQueue } from '../../system/capabilities/confirmation-queue.js';
+import { createApprovalQueuePortFromConfirmationQueue } from '../../system/capabilities/approval-queue-port.js';
 import {
   createContactTool,
   createContactLinkIdentityTool,
@@ -160,6 +162,184 @@ describe('contact tools', () => {
       expect(text).toContain('Minimal valid JSON: {"action":"search","query":"name, handle, channel, or note text"}');
       expect(text).toContain('do not retry action=search without a non-empty query');
       expect(result.details?.isError).toBe(true);
+    });
+  });
+
+  // ── action=propose_trust (human-in-the-loop trusted promotion) ──
+
+  describe('contact action=propose_trust', () => {
+    function toolWithQueue() {
+      const queue = new ConfirmationQueue({ idFactory: () => 'proposal-1' });
+      const proposalQueue = createApprovalQueuePortFromConfirmationQueue(queue);
+      const tool = createContactTool(store, { proposalQueue });
+      return { queue, proposalQueue, tool };
+    }
+
+    it('enqueues a trusted-promotion proposal without mutating trust', async () => {
+      const contact = store.upsert({ displayName: 'Rowan', discordUserId: 'rowan-discord' });
+      const { queue, tool } = toolWithQueue();
+
+      const result = await tool.execute('propose-1', {
+        action: 'propose_trust',
+        contactId: contact.id,
+        rationale: 'Sustained warm rapport over months.',
+      });
+      const text = resultText(result);
+
+      expect(result.details?.isError).toBeUndefined();
+      expect(text).toContain('Trusted-promotion proposal queued');
+      expect(text).toContain('regular -> trusted');
+      expect(text).toContain('proposal id: proposal-1');
+
+      // Trust is unchanged until approval.
+      expect(store.getById(contact.id)!.trustLevel).toBe('regular');
+
+      const pending = queue.listPending();
+      expect(pending).toHaveLength(1);
+      expect(pending[0].method).toBe('contact.trust.promote');
+      expect(pending[0].action).toBe('promote_trusted');
+      expect(pending[0].params).toMatchObject({
+        contactId: contact.id,
+        currentLevel: 'regular',
+        requestedLevel: 'trusted',
+        rationale: 'Sustained warm rapport over months.',
+      });
+    });
+
+    it('applies the trusted promotion with a manual actor when the operator approves', async () => {
+      const contact = store.upsert({ displayName: 'Rowan', discordUserId: 'rowan-discord' });
+      const { queue, tool } = toolWithQueue();
+
+      await tool.execute('propose-2', {
+        action: 'propose_trust',
+        contactId: contact.id,
+        rationale: 'Trusted after repeated verified interactions.',
+      });
+
+      const resolved = await queue.resolve({ id: 'proposal-1', decision: 'approve' });
+      expect(resolved.status).toBe('approved');
+      expect(resolved.executed).toBe(true);
+
+      expect(store.getById(contact.id)!.trustLevel).toBe('trusted');
+      expect(queue.listPending()).toHaveLength(0);
+
+      // Audit record written under the manual confirmation-queue actor.
+      const auditEntries = store.listMutationAuditEntries({ contactId: contact.id });
+      const trustAudit = auditEntries.find(entry => entry.field === 'trust_level');
+      expect(trustAudit).toBeDefined();
+      expect(trustAudit!.oldValue).toBe('regular');
+      expect(trustAudit!.newValue).toBe('trusted');
+      expect(trustAudit!.actor).toBe('operator:confirmation-queue');
+    });
+
+    it('leaves trust untouched when the operator denies', async () => {
+      const contact = store.upsert({ displayName: 'Rowan', discordUserId: 'rowan-discord' });
+      const { queue, tool } = toolWithQueue();
+
+      await tool.execute('propose-3', {
+        action: 'propose_trust',
+        contactId: contact.id,
+        rationale: 'Proposed but should be denied.',
+      });
+
+      const resolved = await queue.resolve({ id: 'proposal-1', decision: 'deny' });
+      expect(resolved.status).toBe('denied');
+      expect(resolved.executed).toBe(false);
+
+      expect(store.getById(contact.id)!.trustLevel).toBe('regular');
+      expect(queue.listPending()).toHaveLength(0);
+      const trustAudit = store
+        .listMutationAuditEntries({ contactId: contact.id })
+        .find(entry => entry.field === 'trust_level');
+      expect(trustAudit).toBeUndefined();
+    });
+
+    it('still rejects direct agent high-tier set_trust (guard untouched)', async () => {
+      const contact = store.upsert({ displayName: 'Rowan', discordUserId: 'rowan-discord' });
+      const { tool } = toolWithQueue();
+
+      const result = await tool.execute('direct-high-tier', {
+        action: 'set_trust',
+        contactId: contact.id,
+        trustLevel: 'trusted',
+      });
+
+      expect(result.details?.isError).toBe(true);
+      expect(resultText(result)).toContain('manual admin approval');
+      expect(store.getById(contact.id)!.trustLevel).toBe('regular');
+    });
+
+    it('rejects primary proposals (primary stays owner-only)', async () => {
+      const contact = store.upsert({ displayName: 'Rowan', discordUserId: 'rowan-discord' });
+      const { queue, tool } = toolWithQueue();
+
+      const result = await tool.execute('propose-primary', {
+        action: 'propose_trust',
+        contactId: contact.id,
+        trustLevel: 'primary',
+        rationale: 'Attempt to reach primary via proposal.',
+      });
+
+      expect(result.details?.isError).toBe(true);
+      expect(resultText(result)).toContain("can only propose promotion to 'trusted'");
+      expect(resultText(result)).toContain('owner-only');
+      expect(queue.listPending()).toHaveLength(0);
+      expect(store.getById(contact.id)!.trustLevel).toBe('regular');
+    });
+
+    it('fails closed when no confirmation queue is wired', async () => {
+      const contact = store.upsert({ displayName: 'Rowan', discordUserId: 'rowan-discord' });
+      const tool = createContactTool(store); // no proposalQueue
+
+      const result = await tool.execute('propose-no-queue', {
+        action: 'propose_trust',
+        contactId: contact.id,
+        rationale: 'No queue wired.',
+      });
+
+      expect(result.details?.isError).toBe(true);
+      expect(resultText(result)).toContain('require a confirmation queue');
+      expect(store.getById(contact.id)!.trustLevel).toBe('regular');
+    });
+
+    it('rejects proposals for contacts already at high-tier trust', async () => {
+      // Promote to trusted via a manual operator actor first.
+      const contact = store.upsert({ displayName: 'Rowan', discordUserId: 'rowan-discord' });
+      store.setTrustLevel(contact.id, 'trusted', 'operator:test-setup');
+      expect(store.getById(contact.id)!.trustLevel).toBe('trusted');
+      const { queue, tool } = toolWithQueue();
+
+      const result = await tool.execute('propose-already-trusted', {
+        action: 'propose_trust',
+        contactId: contact.id,
+        rationale: 'Already trusted.',
+      });
+
+      expect(result.details?.isError).toBe(true);
+      expect(resultText(result)).toContain("already at high-tier trust 'trusted'");
+      expect(queue.listPending()).toHaveLength(0);
+    });
+
+    it('requires a rationale', async () => {
+      const contact = store.upsert({ displayName: 'Rowan', discordUserId: 'rowan-discord' });
+      const { queue, tool } = toolWithQueue();
+
+      const result = await tool.execute('propose-no-rationale', {
+        action: 'propose_trust',
+        contactId: contact.id,
+      });
+
+      expect(result.details?.isError).toBe(true);
+      expect(resultText(result)).toContain('Missing rationale');
+      expect(queue.listPending()).toHaveLength(0);
+    });
+
+    it('declares propose_trust as an identity write capability', () => {
+      const tool = createContactTool(store) as ReturnType<typeof createContactTool> & {
+        requiredCapability?: (params: Record<string, unknown>) => unknown;
+      };
+      expect(tool.requiredCapability?.({ action: 'propose_trust', contactId: 'c-1' }))
+        .toBe('identity.write.runtime');
     });
   });
 

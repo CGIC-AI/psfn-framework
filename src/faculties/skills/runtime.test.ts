@@ -20,7 +20,7 @@ function writeSkill(path: string, description: string, body: string): void {
 function writeSkillsConfig(dataDir: string, seedDir: string): void {
   const payload = {
     enabled: true,
-    directories: ['companion/skills', 'skills'],
+    directories: ['skills'],
     extraDirectories: [],
     maxLoadedSkills: 32,
     maxSkillChars: 100_000,

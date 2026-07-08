@@ -175,13 +175,9 @@ ELEVENLABS_API_KEY=...
 
 Provider selection and tuning stay in `settings.json`.
 
-### Wyoming
+### Satellite Hub Endpoints
 
-```dotenv
-WYOMING_ENABLED=true
-WYOMING_HOST=127.0.0.1
-WYOMING_PORT=10400
-```
+Wyoming/OpenHome endpoint transports live in the Satellite Hub repository. Configure endpoint host/port/runtime wiring there, then configure PSFN's `satellites.json` registry for claim-validated hub/API traffic.
 
 ## Sanity Checks
 

@@ -1,34 +1,24 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { AgentResponse, SubstrateMessage } from '../../shared/contracts/runtime.js';
 import type { SatelliteRoutingMetadata } from '../../core/agent/satellite-adapter-port.js';
+import { createNoopSatelliteRoutingPort } from '../../core/agent/satellite-adapter-port.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import {
   registerGatewayMessageHandlers,
   type ObservedGroupMemorySchedulerPort,
 } from './gateway-message-handlers.js';
-import { createWyomingSatelliteRoutingPort } from '../../../satellites/wyoming/host/routing.js';
 
 function makeMessage(overrides?: Record<string, unknown>): SubstrateMessage {
   return {
     id: 'msg-1',
-    channelId: 'api:wyoming:ha-main:den',
+    channelId: 'api:test-channel',
     channelType: 'api',
     authorId: 'user-1',
     authorName: 'User',
-    content: 'hello from wyoming',
+    content: 'hello from api',
     timestamp: new Date('2026-03-02T00:00:00.000Z'),
     routing: {
-      wyoming: {
-        connectionId: 'conn-1',
-        sessionId: 'session-1',
-        turnId: 'turn-1',
-        siteId: 'ha-main',
-        satelliteId: 'den',
-        shardDelegation: {
-          eligible: true,
-          reason: 'gateway_allowed',
-        },
-      },
+      source: 'api',
     },
     ...overrides,
   } as SubstrateMessage;
@@ -105,7 +95,7 @@ function createHarness(overrides?: {
     delegateSatelliteSession: vi.fn(
       overrides?.delegateSatelliteSession
       ?? (async () => ({
-        shardId: 'wyoming-shard-1',
+        shardId: 'test-shard-1',
         content: 'delegated response',
         model: 'shard-model',
         inputTokens: 3,
@@ -114,7 +104,7 @@ function createHarness(overrides?: {
       })),
     ),
   };
-  const satelliteRouting = createWyomingSatelliteRoutingPort();
+  const satelliteRouting = createNoopSatelliteRoutingPort();
   const safeguardAuditTrail = {
     append: vi.fn(),
   };
@@ -126,7 +116,6 @@ function createHarness(overrides?: {
   const trackSessionActivity = vi.fn();
   const config = overrides?.config ?? ({
     companionId: 'companion-test',
-    wyomingShardRouting: { enabled: true },
   } as SubstrateConfig);
 
   registerGatewayMessageHandlers({
@@ -165,103 +154,6 @@ function createHarness(overrides?: {
 }
 
 describe('registerGatewayMessageHandlers', () => {
-  it('delegates eligible Wyoming voice messages to shard manager and returns delegated response', async () => {
-    const harness = createHarness();
-    const message = makeMessage();
-
-    const response = await harness.onHandleMessage(message);
-
-    expect(harness.trackSessionActivity).toHaveBeenCalledWith(message);
-    expect(harness.shardManager.delegateSatelliteSession).toHaveBeenCalledWith({
-      message,
-      routing: expect.objectContaining({
-        connectionId: 'conn-1',
-        sessionId: 'session-1',
-        turnId: 'turn-1',
-        siteId: 'ha-main',
-        satelliteId: 'den',
-        presence: expect.objectContaining({
-          kind: 'satellite',
-          siteId: 'ha-main',
-          satelliteId: 'den',
-        }),
-      }),
-    });
-    expect(harness.agentLoop.handleMessage).not.toHaveBeenCalled();
-    expect(response).toEqual({
-      content: 'delegated response',
-      channelId: message.channelId,
-      metadata: {
-        model: 'shard-model',
-        inputTokens: 3,
-        outputTokens: 7,
-        durationMs: 42,
-      },
-    });
-    expect(harness.safeguardAuditTrail.append).toHaveBeenNthCalledWith(1, 'satellite.routing.decision', {
-      channelId: message.channelId,
-      messageId: message.id,
-      delegated: true,
-      reason: 'delegation_enabled',
-      connectionId: 'conn-1',
-      sessionId: 'session-1',
-      turnId: 'turn-1',
-      siteId: 'ha-main',
-      satelliteId: 'den',
-    });
-    expect(harness.safeguardAuditTrail.append).toHaveBeenNthCalledWith(2, 'satellite.routing.delegated', {
-      channelId: message.channelId,
-      messageId: message.id,
-      shardId: 'wyoming-shard-1',
-      connectionId: 'conn-1',
-      sessionId: 'session-1',
-      turnId: 'turn-1',
-      siteId: 'ha-main',
-      satelliteId: 'den',
-    });
-  });
-
-  it('falls back to primary agent path when Wyoming delegation reports no ready shard', async () => {
-    const harness = createHarness({
-      delegateSatelliteSession: async () => {
-        throw new Error('No ready agent connected');
-      },
-      handleMessage: async () => makeResponse('fallback response'),
-    });
-    const message = makeMessage();
-
-    const response = await harness.onHandleMessage(message);
-
-    expect(response).toEqual(makeResponse('fallback response'));
-    expect(harness.agentLoop.handleMessage).toHaveBeenCalledWith(message);
-    expect(harness.log.warn).toHaveBeenCalledWith(
-      'Satellite delegation failed; falling back to primary path',
-      {
-        channelId: message.channelId,
-        error: 'No ready agent connected',
-      },
-    );
-    expect(harness.safeguardAuditTrail.append).toHaveBeenNthCalledWith(2, 'satellite.routing.fallback', {
-      channelId: message.channelId,
-      messageId: message.id,
-      reason: 'delegation_error',
-      error: 'No ready agent connected',
-      connectionId: 'conn-1',
-      sessionId: 'session-1',
-      turnId: 'turn-1',
-    });
-    expect(harness.safeguardAuditTrail.append).toHaveBeenNthCalledWith(3, 'satellite.routing.primary', {
-      channelId: message.channelId,
-      messageId: message.id,
-      reason: 'delegation_enabled',
-      connectionId: 'conn-1',
-      sessionId: 'session-1',
-      turnId: 'turn-1',
-      siteId: 'ha-main',
-      satelliteId: 'den',
-    });
-  });
-
   it('normalizes discord timestamp strings and sends the primary response', async () => {
     const harness = createHarness({
       handleMessage: async () => makeResponse('discord response'),
@@ -285,7 +177,7 @@ describe('registerGatewayMessageHandlers', () => {
     expect(message.timestamp).toBeInstanceOf(Date);
     expect(harness.trackSessionActivity).toHaveBeenCalledWith(message);
     expect(harness.log.info).toHaveBeenCalledWith(
-      'Message from User: hello from wyoming...',
+      'Message from User: hello from api...',
       {
         channelId: 'discord:general',
         attachmentCount: 1,
@@ -733,7 +625,8 @@ describe('registerGatewayMessageHandlers', () => {
 
     expect(first).toEqual(second);
     expect(harness.trackSessionActivity).toHaveBeenCalledTimes(1);
-    expect(harness.shardManager.delegateSatelliteSession).toHaveBeenCalledTimes(1);
+    expect(harness.agentLoop.handleMessage).toHaveBeenCalledTimes(1);
+    expect(harness.shardManager.delegateSatelliteSession).not.toHaveBeenCalled();
     expect(harness.safeguardAuditTrail.append).toHaveBeenCalledWith('gateway.message.duplicate', {
       route: 'handle',
       channelId: message.channelId,

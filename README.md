@@ -40,7 +40,7 @@ Most AI companion frameworks treat conversations as throwaway. PSFN treats every
 - **Prompt Assembly**: A single `PromptPlan` path with registered macros, static-prefix purity checks, Loom/provider payload visibility, and cache-aware prompt rendering
 - **Context and Charge Budgeting**: Token estimation, configurable context slices, model roster slots, model-usage telemetry, run-scoped charge accounting, and fatigue budgets for expensive/autonomous surfaces
 - **Capabilities System**: Runtime capability declarations gating tool access by tier (nursery/apprentice/autonomous)
-- **Skills System**: Self-authored workflow guidance documents managed through the unified `skill` tool and auto-filtered by eligibility
+- **Skills System**: Repo-global workflow guidance documents live under `skills/`; companion-authored skills live under `WORKSPACE_PATH/skills` and are managed through the unified `skill` tool with eligibility filtering
 - **Values, Journal, and Wiki**: Agent-authored principles, reflection journals, and workspace-backed durable reference knowledge with optional semantic wiki retrieval
 
 ### Privacy & Trust (Honne/Tatemae)
@@ -67,7 +67,7 @@ Most AI companion frameworks treat conversations as throwaway. PSFN treats every
 - **Telegram**: Polling and webhook modes, allowlist-aware inbound handling, thread and attachment support, long-running tool status updates
 - **OpenAI-Compatible API**: `/v1/chat/completions` with SSE streaming for WebUI integration
 - **WebSocket Voice Runtime**: Transport primitives for browser/app clients using `voice-wire-v1` session frames
-- **Wyoming**: TCP server and service registry for Home Assistant Voice PE integration
+- **Satellite Hub endpoints**: external Satellite Hub runtimes own endpoint transports such as Wyoming/OpenHome; PSFN exposes the registered satellite claim and config-pull boundary
 - **Satellite Hub PWA Client**: `companion-ui/` is a standalone mobile-first PWA client for the Satellite Hub websocket protocol
 - **Admin GUI (the Garden)**: Svelte 5 SPA on the admin host root (`/`, `/memory`, `/charge-budget`, `/episodic-memory`, `/settings`, etc.) when `admin-ui/build` is present, with pages for memory, L0.1 episodes, sessions, contacts, contact approvals, rooms, graph proposals, wiki, scheduler, settings, prompts, model discovery, charge budget, chat, subsystem health, and telemetry
 
@@ -270,12 +270,7 @@ ELEVENLABS_API_KEY=...
 
 STT/TTS provider selection, voices, and runtime tuning live in `settings.json`. Keep `.env` for provider secrets and target wiring only.
 
-**Wyoming (Home Assistant):**
-```bash
-WYOMING_ENABLED=true
-WYOMING_HOST=127.0.0.1
-WYOMING_PORT=10400
-```
+Wyoming/OpenHome endpoint transports now run from the Satellite Hub repository. Keep endpoint host/port wiring there; PSFN reads `satellites.json` and accepts claim-validated traffic from the hub/API boundary.
 
 **Obsidian Vault:**
 Configure vault name, CLI path, and auto-publish in `settings.json`, not `.env`.
@@ -318,7 +313,7 @@ Operator / Garden (localhost)          Satellite Hub / companion-ui
 | **Identity & Prompts** | Character card loader, 5-layer prompt stack, registered prompt macros, `PromptPlan`, prompt cache boundaries, versioning/rollback/admin UI/agent tools |
 | **Repository Work** | Unified `repo` surface for inspection and guarded mutation when policy/tier/runtime allow it |
 | **Module System** | Runtime module registry and loader |
-| **Channel Layer** | Discord (text + voice), Telegram, OpenAI API, Garden operator SPA, Satellite Hub/PWA, Wyoming |
+| **Channel Layer** | Discord (text + voice), Telegram, OpenAI API, Garden operator SPA, Satellite Hub/PWA |
 | **Scheduler** | Heartbeat, daily/weekly reflections, temporal wakeups, free-time blocks, near-turn memory, rest-window work, one-shot tasks, maintenance workers |
 
 ### Storage
@@ -367,7 +362,7 @@ src/
     operator/main.ts        # Garden/operator entry point
     startup/                # Shared composition helpers
   boundary/                 # Gateway RPC, policy, filesystem/git/web/shell/vault/beads adapters
-  channels/                 # API, Discord, Telegram, Wyoming, voice, backplane transports
+  channels/                 # API, Discord, Telegram, voice, backplane transports
   core/                     # SubstrateAgent, prompts, scheduler, turns, identity, tools
   faculties/                # Memory, skills, subagents, media, shard faculties
   operator/garden/          # Garden server, admin routes, services, audit/telemetry

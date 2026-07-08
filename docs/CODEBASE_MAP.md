@@ -27,7 +27,7 @@ graph TB
         Discord[Discord]
         Telegram[Telegram]
         API[OpenAI-compatible API + Voice WS]
-        Wyoming[Wyoming / Satellite Hub]
+        Wyoming[Satellite Hub]
         Browser[Garden admin browser]
     end
     subgraph Gateway["Gateway process (src/app/gateway) — holds secrets + egress"]
@@ -80,7 +80,6 @@ src/
 
 admin-ui/         Svelte 5 Garden SPA (served as static assets)
 companion-ui/     Standalone Satellite Hub PWA client
-satellites/       Satellite / remote-host integration
 config/           Seed owner files (templates only — NOT runtime authority)
 k8s/ docker/ proxy/ deployment/   Kubernetes/Helm manifests, container config, LiteLLM proxy, systemd artifacts
 docs/             This map + design docs; CHANGELOG.md at repo root

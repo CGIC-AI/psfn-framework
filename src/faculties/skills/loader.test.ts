@@ -14,7 +14,7 @@ import {
 function makeConfig(overrides?: Partial<SkillsRuntimeConfig>): SkillsRuntimeConfig {
   return {
     enabled: true,
-    directories: ['companion/skills', 'skills'],
+    directories: ['skills'],
     extraDirectories: [],
     maxLoadedSkills: 32,
     maxSkillChars: 24_000,
@@ -69,7 +69,7 @@ describe('skills loader', () => {
       '---',
       '# Incident',
       'Escalate quickly.',
-    ].join('\n'), 'data/skills/ops/incident-runbook/SKILL.md');
+    ].join('\n'), 'skills/ops/incident-runbook/SKILL.md');
 
     expect(parsed.frontmatter.category).toBe('ops');
     expect(parsed.frontmatter.version).toBe(4);
@@ -77,7 +77,7 @@ describe('skills loader', () => {
     expect(parsed.frontmatter.updatedAt).toBe('2026-02-26T11:00:00.000Z');
   });
 
-  it('resolves precedence directories with defaults first and extras appended', () => {
+  it('resolves root skills as the default global directory with extras appended', () => {
     const directories = resolveSkillDirectories(
       makeConfig({
         directories: ['skills'],
@@ -86,8 +86,7 @@ describe('skills loader', () => {
       '/repo',
     );
 
-    expect(directories[0]?.relativePath).toBe('companion/skills');
-    expect(directories[1]?.relativePath).toBe('skills');
+    expect(directories[0]?.relativePath).toBe('skills');
     expect(directories.at(-1)?.relativePath).toBe('vendor/skills');
   });
 
@@ -95,33 +94,35 @@ describe('skills loader', () => {
     expect(() => resolveSkillDirectories(makeConfig(), '')).toThrow(/explicit repoRoot/i);
   });
 
-  it('keeps higher-precedence skill definitions when names collide', () => {
+  it('keeps global root skills ahead of extra skill definitions when names collide', () => {
     const root = mkdtempSync(join(tmpdir(), 'skills-loader-'));
     try {
-      writeSkill(root, 'companion/skills/conversation', `
----
-name: conversation
-description: companion override
----
-# Companion
-`);
       writeSkill(root, 'skills/conversation', `
 ---
 name: conversation
-description: bundled version
+description: global root version
 ---
-# Bundled
+# Global
+`);
+      writeSkill(root, 'vendor/skills/conversation', `
+---
+name: conversation
+description: vendor version
+---
+# Vendor
 `);
 
-      const directories = resolveSkillDirectories(makeConfig(), root);
+      const directories = resolveSkillDirectories(makeConfig({
+        extraDirectories: ['vendor/skills'],
+      }), root);
       const files = scanSkillFiles(directories);
       const loaded = loadSkillEntries(files);
       const deduped = applySkillPrecedence(loaded.entries);
 
       expect(files.length).toBe(2);
       expect(deduped.entries).toHaveLength(1);
-      expect(deduped.entries[0]?.description).toBe('companion override');
-      expect(deduped.entries[0]?.relativePath).toContain('companion/skills/conversation/SKILL.md');
+      expect(deduped.entries[0]?.description).toBe('global root version');
+      expect(deduped.entries[0]?.relativePath).toContain('skills/conversation/SKILL.md');
       expect(deduped.skipped).toHaveLength(1);
       expect(deduped.skipped[0]?.kind).toBe('shadowed');
     } finally {

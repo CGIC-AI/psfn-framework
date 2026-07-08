@@ -6,7 +6,7 @@ import type { SkillEntry } from './types.js';
 function makeConfig(overrides?: Partial<SkillsRuntimeConfig>): SkillsRuntimeConfig {
   return {
     enabled: true,
-    directories: ['companion/skills', 'skills'],
+    directories: ['skills'],
     extraDirectories: [],
     maxLoadedSkills: 32,
     maxSkillChars: 24_000,

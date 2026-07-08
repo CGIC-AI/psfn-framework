@@ -10,7 +10,7 @@ import {
 
 describe('policy constants', () => {
   it('exposes canonical repo path allowlist', () => {
-    expect(REPO_ALLOWED_PATHS).toEqual(['src/', 'docs/', 'companion/', 'psfn/']);
+    expect(REPO_ALLOWED_PATHS).toEqual(['src/', 'docs/', 'skills/']);
   });
 
   it('defaults the module registry path when env is unset', () => {
@@ -29,8 +29,9 @@ describe('policy constants', () => {
   it('validates allowed repo-relative paths consistently', () => {
     expect(isAllowedRepoRelativePath('src/a.ts')).toBe(true);
     expect(isAllowedRepoRelativePath('./docs/readme.md')).toBe(true);
-    expect(isAllowedRepoRelativePath('companion/modules/x.json')).toBe(true);
-    expect(isAllowedRepoRelativePath('psfn/modules/x.json')).toBe(true);
+    expect(isAllowedRepoRelativePath('skills/web-fetch/SKILL.md')).toBe(true);
+    expect(isAllowedRepoRelativePath('companion/modules/x.json')).toBe(false);
+    expect(isAllowedRepoRelativePath('psfn/modules/x.json')).toBe(false);
     expect(isAllowedRepoRelativePath('config/secret.json')).toBe(false);
     expect(isAllowedRepoRelativePath('../escape.txt')).toBe(false);
   });

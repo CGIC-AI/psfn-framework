@@ -5,7 +5,7 @@ flowchart TB
     DISCORD["Discord text/voice"]
     TELEGRAM["Telegram"]
     API["OpenAI-compatible API"]
-    VOICE["WebSocket voice / Wyoming"]
+    VOICE["WebSocket voice / Satellite Hub"]
     GARDEN_BROWSER["Garden browser"]
   end
 
@@ -13,7 +13,7 @@ flowchart TB
     GW_RPC["GatewayServer\nNDJSON JSON-RPC socket"]
     LLM["LLM + embedding clients\nprovider secrets stay here"]
     POLICY["Gateway policy\nURL/SSRF/fs/shell/git/web/media"]
-    CHANNELS["Channel adapters\nDiscord, Telegram, API, voice, Wyoming"]
+    CHANNELS["Channel adapters\nDiscord, Telegram, API, voice, Satellite Hub claims"]
     HOST_TOOLS["Privileged host tools\nfs, repo, shell, web, vault, beads, media"]
   end
 

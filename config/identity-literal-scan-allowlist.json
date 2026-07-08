@@ -49,12 +49,6 @@
       "pattern": "identity-legacy-slug"
     },
     {
-      "path": "src/core/identity/companion-naming.ts",
-      "contains": "LEGACY_COMPANION_SKILLS_DIRECTORY = 'psfn/skills'",
-      "reason": "Legacy skills directory migration constant.",
-      "pattern": "identity-legacy-slug"
-    },
-    {
       "path": "src/identity/loader.ts",
       "contains": "LEGACY_BOOTSTRAP_NAME = 'PSFN'",
       "reason": "Legacy bootstrap identity migration marker.",
@@ -133,12 +127,6 @@
       "pattern": "identity-proper-name"
     },
     {
-      "path": "src/app/e2e/e2e-wyoming-roundtrip.ts",
-      "contains": "psfn",
-      "reason": "Wyoming smoke resources use the project slug in their names.",
-      "pattern": "identity-legacy-slug"
-    },
-    {
       "path": "src/app/startup/composition/channel-runtime.ts",
       "contains": "PSFN",
       "reason": "Startup channel wiring includes the PSFN Amica channel label.",
@@ -166,6 +154,12 @@
       "path": "src/boundary/gateway/client.ts",
       "contains": "psfn-rpc-v1",
       "reason": "Gateway client preserves the project-scoped RPC websocket subprotocol.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/boundary/gateway/session-integrity-worker-source.ts",
+      "contains": "psfn-rpc-v1",
+      "reason": "Gateway session-integrity worker preserves the project-scoped RPC websocket subprotocol.",
       "pattern": "identity-legacy-slug"
     },
     {

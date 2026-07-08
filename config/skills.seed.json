@@ -1,7 +1,6 @@
 {
   "enabled": true,
   "directories": [
-    "companion/skills",
     "skills"
   ],
   "extraDirectories": [],

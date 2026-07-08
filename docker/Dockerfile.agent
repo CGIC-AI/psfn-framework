@@ -37,7 +37,6 @@ RUN npm_config_nodedir=/usr/local npm ci
 
 COPY tsconfig.json tsup.config.ts ./
 COPY src/ ./src/
-COPY satellites/ ./satellites/
 COPY admin-ui/ ./admin-ui/
 
 # Contract-surface hash for per-component rollout skew detection: agent and

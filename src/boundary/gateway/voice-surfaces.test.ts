@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
-import { createDiscordReverseRpcVoiceModule } from './voice-surfaces.js';
+import {
+  createDiscordReverseRpcVoiceModule,
+} from './voice-surfaces.js';
 
 describe('createDiscordReverseRpcVoiceModule', () => {
   it('registers a discord voice handler that proxies through gateway voice streaming', async () => {

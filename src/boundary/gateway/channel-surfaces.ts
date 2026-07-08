@@ -10,7 +10,6 @@ import type { SubstrateConfig } from '../../system/config/runtime-config-contrac
 import type { SubstrateMessage } from '../../shared/contracts/runtime.js';
 import {
   createDiscordChannelAdapterFactoryEntry,
-  createOpenHomeChannelAdapterFactoryEntry,
   createTelegramChannelAdapterFactoryEntry,
   getOptionalChannelAdapter,
   requireChannelAdapter,
@@ -59,7 +58,6 @@ export async function loadGatewayChannelSurfaces(
       eligibilityGate: input.eligibilityGate,
       personalFilesDir: input.bootstrap.workspaceRoot,
     }),
-    createOpenHomeChannelAdapterFactoryEntry(),
     createTelegramChannelAdapterFactoryEntry({
       config: input.bootstrap.channelsConfig.telegram,
       eventBus: input.eventBus,

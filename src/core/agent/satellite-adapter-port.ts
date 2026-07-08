@@ -62,6 +62,12 @@ export interface SatelliteAdapterPort {
   channel?: SatelliteChannelAdapterPort;
 }
 
+export function createNoopSatelliteRoutingPort(): SatelliteRoutingPort {
+  return {
+    evaluateDelegation: () => undefined,
+  };
+}
+
 export function createActiveEmanationSatellitePresencePort(): SatellitePresencePort {
   return {
     resolveCanonicalEmbodiment(value) {

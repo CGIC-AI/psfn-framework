@@ -219,7 +219,8 @@ The current runtime already exposes a unified model-facing `skill` tool for skil
 - Retired action aliases must not be model-facing; the model-facing tool name is `skill`
 - `list` preserves discovery metadata, eligibility outcomes, and filtered-skill reasons
 - `view` loads one skill's full YAML + Markdown body on demand
-- `create` and `update` write personal managed skills under `WORKSPACE_PATH/skills/<category>/<name>/SKILL.md` and refresh the runtime snapshot; deployment/system skills remain separate
+- Global deployment skills live in the repository root `skills/` directory and are provided to the companion through `skills.json`
+- `create` and `update` write personal managed skills under `WORKSPACE_PATH/skills/<category>/<name>/SKILL.md` and refresh the runtime snapshot; personal skills remain separate from repo-global skills
 - Creator workflows such as image creation, music creation, and future media variants belong here as creator-category skills loaded with `skill action="view"`
 
 ## Canonical Media Surface

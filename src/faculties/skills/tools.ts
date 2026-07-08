@@ -30,7 +30,6 @@ type SkillToolAction = 'list' | 'view' | 'stats' | 'create' | 'update';
 
 function resolveSkillOwnership(source: SkillSource): SkillOwnership {
   switch (source) {
-    case 'companion':
     case 'custom':
       return 'personal';
     case 'bundled':

@@ -1,16 +1,10 @@
 // ── Security / Policy Constants ──
 // Canonical values reused across runtime, gateway, git, and REPL policy surfaces.
 
-import {
-  DEFAULT_COMPANION_SKILLS_DIRECTORY,
-  LEGACY_COMPANION_SKILLS_DIRECTORY,
-} from '../../core/identity/companion-naming.js';
-
 export const REPO_ALLOWED_PATHS = [
   'src/',
   'docs/',
-  DEFAULT_COMPANION_SKILLS_DIRECTORY.replace(/skills$/, ''),
-  LEGACY_COMPANION_SKILLS_DIRECTORY.replace(/skills$/, ''),
+  'skills/',
 ] as const;
 
 export const DEFAULT_GATEWAY_SOCKET_PATH = '/run/psfn/gateway.sock';

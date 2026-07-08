@@ -110,7 +110,7 @@ See [`docs/memory.md`](./memory.md) for the memory contract.
 ### Channels and voice
 
 - Channel adapters are manifest-driven and loaded through `src/app/startup/support/channel-lifecycle.ts`.
-- Current runtime surfaces include Discord, Telegram, the gateway-hosted OpenAI-compatible API, the operator-hosted Garden surface, Wyoming, and PSFN/OpenHome-related adapter entries.
+- Current runtime surfaces include Discord, Telegram, the gateway-hosted OpenAI-compatible API, the operator-hosted Garden surface, and the Satellite Hub claim/config boundary. Endpoint transports such as Wyoming/OpenHome are owned by the Satellite Hub repository.
 - Voice connectors are plugin-style STT/TTS adapters resolved from runtime settings and capability eligibility.
 
 ### Scheduler and background work

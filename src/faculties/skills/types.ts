@@ -1,4 +1,4 @@
-export type SkillSource = 'companion' | 'bundled' | 'extra' | 'custom';
+export type SkillSource = 'bundled' | 'extra' | 'custom';
 export type SkillOwnership = 'personal' | 'deployment';
 export type SkillInvocationOutcome = 'success' | 'failure';
 

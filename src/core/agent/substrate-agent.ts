@@ -341,6 +341,41 @@ export class SubstrateAgent {
   }
 
   /**
+   * The current PHYSICAL emanation's place (ignoring any virtual-move
+   * overlay). The presence-follow controller (vinz.20) compares a resolved
+   * presence claim's place against this to decide whether a handoff is a
+   * real move or a repeat detection.
+   */
+  resolveCurrentEmanationPlaceId(): string | undefined {
+    return this.situatedEmanationTracker.snapshot()?.placeId;
+  }
+
+  /**
+   * Presence-driven emanation handoff (conversation-follows-you, vinz.20):
+   * apply the LOCAL side of an auto-follow. Drives the same tracker
+   * transition a place-bearing satellite turn performs (establish the new
+   * emanation place, supersede any virtual-move overlay) and confirms the
+   * durable situated location so the vinz.29 mindspace-twin default follows
+   * the move. Trust/freshness/debounce gating and the shared presence write
+   * live in the controller (`createPresenceFollowSink`); this seam only
+   * applies an already-approved handoff.
+   */
+  applyEmanationFollowHandoff(input: {
+    placeId: string;
+    siteId: string;
+    placeDisplayName: string;
+  }): void {
+    this.situatedEmanationTracker.handoffToPlace(input.placeId);
+    this.emotionSelfModelRuntime.confirmSituatedLocation({
+      placeId: input.placeId,
+      siteId: input.siteId,
+      label: input.placeDisplayName.trim() || input.placeId,
+      kind: 'physical',
+      updatedAt: new Date().toISOString(),
+    });
+  }
+
+  /**
    * Dual-presence situated fallback for a turn (vinz.29, decisions 9-13): the
    * place foregrounded when the turn carries no place binding of its own.
    * Physical-origin turns keep the legacy chain (deliberate virtual move →

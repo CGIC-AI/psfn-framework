@@ -2,7 +2,6 @@ import { compactMemoryTextForPrompt } from '../../faculties/memory/retrieval/for
 import type { Scheduler } from './scheduler.js';
 import type { MessageSender } from '../../system/lifecycle/notifications.js';
 import { createComponentLogger } from '../../shared/logger.js';
-import type { ActiveConcernSnapshot } from '../intention/appraisal.js';
 import {
   HEARTBEAT_SILENT_REFLECTION_TOKEN,
   HeartbeatPolicyStore,
@@ -40,18 +39,12 @@ import {
 } from '../../persistence/journals/reflection-journal.js';
 import { ReflectionMetacognitionJournalStore } from '../../persistence/journals/reflection-metacognition-journal.js';
 import {
-  assembleReflectionContactContextBundle,
   assembleReflectionSubstrateContext,
   buildReflectionProcessId,
   ReflectionDailyJournalStore,
   ReflectionProcessLogStore,
-  type ReflectionContactActiveConcern,
-  type ReflectionContactContextBundle,
-  type ReflectionContactEmotionalSnapshot,
-  type ReflectionContactRecentMessage,
   type ReflectionSubstrateContext,
 } from '../../persistence/journals/reflection-substrate.js';
-import type { Contact } from '../contacts/types.js';
 import { isBusyTurnError } from '../../system/lifecycle/turn-contention.js';
 import { runDeliberation } from '../../primitives/llm/deliberation.js';
 import type { DeliberationResult } from '../../primitives/llm/deliberation.js';
@@ -70,11 +63,7 @@ import {
 import {
   formatReflectionIntrospectionPolicyBlock,
   resolveReflectionIntrospectionPolicy,
-  type ReflectionIntrospectionPolicy,
 } from './reflection-introspection-policy.js';
-import { runWithRequestContext } from '../../primitives/llm/request-context.js';
-import { evaluateDeterministicGate } from '../../shared/gating/deterministic-gate.js';
-import { DEFAULT_REFLECTION_NOVELTY_GATE } from '../../system/config/scheduler-config.js';
 import {
   REFLECTION_PROMPT_TOKENS,
   formatReflectionPersonaBlock,
@@ -97,20 +86,22 @@ import {
 import { runExperientialTemplateDeliberation } from './heartbeat-template-runtime/experiential-deliberation.js';
 import {
   HeartbeatTemplateLoopGuardError,
-  REFLECTION_NOVELTY_ENTRY_SCAN_LIMIT,
-  REFLECTION_NOVELTY_GATE_LANE,
-  REFLECTION_NOVELTY_WATERMARK_PROCESSOR,
-  buildReflectionNoveltyGateDefinition,
   buildUnsupportedReflectionSupportFlags,
   findReflectionTemplateById,
   getHeartbeatTemplateAuditProfile,
   isExperientialDeliberationTemplate,
   isHeartbeatTemplateLoopGuardError,
-  normalizeFiniteTimestamp,
-  resolveCompanionNameFromCharacterVariables,
-  selectFreshestLiveChatGapMs,
   type HeartbeatExecutionSource,
 } from './heartbeat-template-runtime/runtime-helpers.js';
+import {
+  resolveReflectionContactContextBundle,
+  type ReflectionContactTelemetryDiagnostics,
+} from './heartbeat-template-runtime/reflection-contact-context.js';
+import {
+  advanceReflectionNoveltyWatermark,
+  emitReflectionNoveltyGateEvent,
+  evaluateReflectionNoveltyGate,
+} from './heartbeat-template-runtime/reflection-novelty-gate.js';
 
 const log = createComponentLogger('HeartbeatTemplates');
 
@@ -123,25 +114,6 @@ const MIN_SCHEDULED_TEMPLATE_GAP_MS = 60_000;
 const TEMPLATE_EXECUTION_BURST_WINDOW_MS = 60_000;
 const TEMPLATE_EXECUTION_BURST_LIMIT = 4;
 const TEMPLATE_EXECUTION_COOLDOWN_MS = 10 * 60_000;
-const REFLECTION_MEMORY_EXTRACTION_DRAIN_TIMEOUT_MS = 2_500;
-const REFLECTION_CONTACT_EMOTIONAL_TIME_SERIES_LIMIT = 8;
-
-interface ReflectionMemoryRetrievalResult {
-  memoryBlock?: string;
-  provenanceRefs: string[];
-}
-
-interface ReflectionContactTelemetryDiagnostics {
-  primarySessionId?: string;
-  recentMessageCount: number;
-  freshestLiveChatGapMs?: number;
-  latestLiveActivityAgeMs?: number;
-}
-
-interface ReflectionContactContextResolution {
-  bundle: ReflectionContactContextBundle | null;
-  diagnostics: ReflectionContactTelemetryDiagnostics;
-}
 
 type ReflectionRequestSource = 'manual' | 'scheduled';
 type ReflectionDeliberationExecutionResult = {
@@ -149,13 +121,6 @@ type ReflectionDeliberationExecutionResult = {
   metadata: ValuesDeliberationMetadata;
   metacognitiveFlags: ReflectionMetacognitiveFlag[];
 };
-
-interface ReflectionNoveltyGateOutcome {
-  open: boolean;
-  reason: string;
-  inputs: Record<string, number | string>;
-  scopeKey: string;
-}
 
 export interface HeartbeatTemplateRuntime {
   policyStore: HeartbeatPolicyStore;
@@ -257,165 +222,6 @@ export function createHeartbeatTemplateRuntime(
     );
   };
 
-  const resolveReflectionNoveltyScopeKey = (
-    canonicalContactId: string | undefined,
-    groupScope: { channelId: string } | undefined,
-  ): string => {
-    if (groupScope) return `group:${groupScope.channelId}`;
-    if (canonicalContactId) return `contact:${canonicalContactId}`;
-    return 'substrate';
-  };
-
-  /**
-   * jpvd.4 novelty gate for cadence-fired reflection templates: deterministic
-   * "new scope entries since this template's last reflection" count against a
-   * per-template/scope watermark. Opens with an explicit bypass reason when a
-   * deterministic count is not available (no watermark store, no session
-   * signal, or no live activity stream bound to the scope) — the gate never
-   * guesses, and every consultation is visible through the typed gate event.
-   */
-  const evaluateReflectionNoveltyGate = async (
-    template: ReflectionTemplate,
-    reflectionChannelId: string,
-    canonicalContactId: string | undefined,
-    groupScope: { channelId: string } | undefined,
-  ): Promise<ReflectionNoveltyGateOutcome> => {
-    const scopeKey = resolveReflectionNoveltyScopeKey(canonicalContactId, groupScope);
-    const minNewEntries = runtimeOptions.reflectionNoveltyGate?.minNewEntries
-      ?? DEFAULT_REFLECTION_NOVELTY_GATE.minNewEntries;
-    const baseInputs: Record<string, number | string> = {
-      templateId: template.id,
-      scope: scopeKey,
-      minNewEntries,
-    };
-
-    const watermarkStore = runtimeOptions.episodicWatermarkStore;
-    if (!watermarkStore) {
-      return { open: true, reason: 'no_watermark_store', inputs: baseInputs, scopeKey };
-    }
-    const sessionManager = runtimeOptions.sessionManager;
-    if (!sessionManager?.getRecentMessages) {
-      return { open: true, reason: 'no_activity_signal', inputs: baseInputs, scopeKey };
-    }
-
-    let activitySessionId: string | undefined;
-    if (groupScope) {
-      activitySessionId = groupScope.channelId;
-    } else if (canonicalContactId) {
-      const contact = runtimeOptions.contactStore?.getById
-        ? await runtimeOptions.contactStore.getById(canonicalContactId) as Contact | undefined
-        : undefined;
-      activitySessionId = resolveReflectionContactSessionId(contact ?? null, reflectionChannelId);
-    }
-    // The internal reflection channel is the reflection's own output stream,
-    // not scope activity; counting it would let reflections feed themselves.
-    if (!activitySessionId || activitySessionId === reflectionChannelId) {
-      return { open: true, reason: 'no_activity_signal', inputs: baseInputs, scopeKey };
-    }
-
-    const watermark = await watermarkStore.getProcessingWatermark({
-      processor: REFLECTION_NOVELTY_WATERMARK_PROCESSOR,
-      sourceRef: template.id,
-      channelId: scopeKey,
-    });
-    const watermarkMs = watermark?.lastProcessedAt
-      ? Date.parse(watermark.lastProcessedAt)
-      : Number.NaN;
-
-    const newEntriesSinceLastReflection = sessionManager
-      .getRecentMessages(activitySessionId, REFLECTION_NOVELTY_ENTRY_SCAN_LIMIT)
-      .filter((entry) => {
-        if (entry.role !== 'user' && entry.role !== 'assistant') return false;
-        const timestamp = normalizeFiniteTimestamp((entry as { timestamp?: unknown }).timestamp);
-        if (timestamp === undefined) return false;
-        return !Number.isFinite(watermarkMs) || timestamp > watermarkMs;
-      })
-      .length;
-
-    const decision = evaluateDeterministicGate(
-      buildReflectionNoveltyGateDefinition(minNewEntries),
-      {
-        ...baseInputs,
-        newEntriesSinceLastReflection,
-        ...(Number.isFinite(watermarkMs)
-          ? { lastReflectionAt: new Date(watermarkMs).toISOString() }
-          : {}),
-      },
-    );
-    return { open: decision.open, reason: decision.reason, inputs: decision.inputs as Record<string, number | string>, scopeKey };
-  };
-
-  const emitReflectionNoveltyGateEvent = async (
-    outcome: 'ran' | 'skipped',
-    gate: Pick<ReflectionNoveltyGateOutcome, 'reason' | 'inputs'>,
-    reflectionChannelId: string,
-  ): Promise<void> => {
-    if (!runtimeOptions.eventBus) {
-      return;
-    }
-    try {
-      await runtimeOptions.eventBus.emit('reflection.template.novelty.gate', {
-        lane: REFLECTION_NOVELTY_GATE_LANE,
-        outcome,
-        reason: gate.reason,
-        inputs: gate.inputs,
-        timestamp: Date.now(),
-        channelId: reflectionChannelId,
-      });
-    } catch (error) {
-      log.warn('Failed to emit reflection novelty gate telemetry', {
-        outcome,
-        reason: gate.reason,
-        error: String(error),
-      });
-    }
-  };
-
-  /**
-   * Advance the per-template/scope novelty watermark after a completed
-   * reflection run (any execution source: a manual reflection also consumed
-   * the scope's novelty). Failures are loud but do not fail the delivered
-   * reflection; an unadvanced watermark only makes the next cadence run more
-   * likely to fire.
-   */
-  const advanceReflectionNoveltyWatermark = async (
-    template: ReflectionTemplate,
-    canonicalContactId: string | undefined,
-    groupScope: { channelId: string } | undefined,
-  ): Promise<void> => {
-    const watermarkStore = runtimeOptions.episodicWatermarkStore;
-    if (!watermarkStore) {
-      return;
-    }
-    const scopeKey = resolveReflectionNoveltyScopeKey(canonicalContactId, groupScope);
-    const watermarkScope = {
-      processor: REFLECTION_NOVELTY_WATERMARK_PROCESSOR,
-      sourceRef: template.id,
-      channelId: scopeKey,
-    };
-    try {
-      const existing = await watermarkStore.getProcessingWatermark(watermarkScope);
-      const nowIso = new Date().toISOString();
-      await watermarkStore.upsertProcessingWatermark({
-        ...watermarkScope,
-        ...(existing?.id ? { id: existing.id } : {}),
-        previousWatermarkJson: existing?.nextWatermarkJson ?? {},
-        nextWatermarkJson: {
-          lastReflection: { at: nowIso, templateId: template.id, scope: scopeKey },
-        },
-        status: 'active',
-        reconciliationStatus: 'clean',
-        lastProcessedAt: nowIso,
-      });
-    } catch (error) {
-      log.warn('Reflection novelty watermark advance skipped', {
-        templateId: template.id,
-        scope: scopeKey,
-        error: String(error),
-      });
-    }
-  };
-
   let latestMetacognitiveFlags: ReflectionMetacognitiveFlag[] = [];
 
   const normalizeCanonicalContactId = (
@@ -435,358 +241,6 @@ export function createHeartbeatTemplateRuntime(
       ?? agentLoop.getCurrentInternalState?.()?.relational.contactId
       ?? undefined,
   );
-
-  const awaitPendingReflectionExtractionDrain = async (
-    reflectionChannelId: string,
-    reflectionTemplate: ReflectionTemplate,
-    reflectionCanonicalContactId?: string,
-  ): Promise<void> => {
-    const pendingExtractionPromise = agentLoop.memoryExtractor?.getPendingExtractionPromise?.(reflectionChannelId);
-    if (!pendingExtractionPromise) {
-      return;
-    }
-
-    const startedAt = Date.now();
-    let timeoutHandle: NodeJS.Timeout | undefined;
-    const timeoutPromise = new Promise<
-      { phase: 'timeout' }
-    >((resolve) => {
-      timeoutHandle = setTimeout(() => resolve({ phase: 'timeout' }), REFLECTION_MEMORY_EXTRACTION_DRAIN_TIMEOUT_MS);
-    });
-    const drainPromise = pendingExtractionPromise.then(
-      () => ({ phase: 'completed' as const }),
-      (error) => ({ phase: 'failed' as const, error }),
-    );
-
-    const outcome = await Promise.race([drainPromise, timeoutPromise]);
-    if (timeoutHandle) {
-      clearTimeout(timeoutHandle);
-    }
-
-    const waitMs = Date.now() - startedAt;
-    const telemetry = {
-      channelId: reflectionChannelId,
-      templateId: reflectionTemplate.id,
-      templateName: reflectionTemplate.name,
-      ...(reflectionCanonicalContactId ? { canonicalContactId: reflectionCanonicalContactId } : {}),
-      timeoutMs: REFLECTION_MEMORY_EXTRACTION_DRAIN_TIMEOUT_MS,
-      waitMs,
-    };
-
-    if (outcome.phase === 'completed') {
-      log.debug('Pending memory extraction drained before reflection', telemetry);
-      if (runtimeOptions.eventBus) {
-        try {
-          await runtimeOptions.eventBus.emit('memory.extraction.flush', {
-            ...telemetry,
-            phase: 'completed',
-          });
-        } catch (error) {
-          log.warn('Failed to emit memory extraction flush telemetry', {
-            ...telemetry,
-            phase: 'completed',
-            error: String(error),
-          });
-        }
-      }
-      return;
-    }
-
-    const error = outcome.phase === 'failed' ? String(outcome.error) : undefined;
-    log.warn('Timed out waiting for pending memory extraction before reflection', {
-      ...telemetry,
-      phase: outcome.phase,
-      ...(error ? { error } : {}),
-    });
-    if (runtimeOptions.eventBus) {
-      try {
-        await runtimeOptions.eventBus.emit('memory.extraction.flush', {
-          ...telemetry,
-          phase: outcome.phase,
-          ...(error ? { error } : {}),
-        });
-      } catch (emitError) {
-        log.warn('Failed to emit memory extraction flush telemetry', {
-          ...telemetry,
-          phase: outcome.phase,
-          ...(error ? { error } : {}),
-          emitError: String(emitError),
-        });
-      }
-    }
-  };
-
-  const resolveReflectionContactSessionId = (
-    contact: Contact | null,
-    fallbackSessionId: string,
-  ): string => {
-    let bestSessionId = fallbackSessionId;
-    let bestLastSeen = Number.NEGATIVE_INFINITY;
-
-    for (const conversation of contact?.conversationChannels ?? []) {
-      const channelId = conversation.channelId.trim();
-      if (!channelId) {
-        continue;
-      }
-      const lastSeen = Date.parse(conversation.lastSeen);
-      if (Number.isNaN(lastSeen)) {
-        continue;
-      }
-      if (lastSeen > bestLastSeen || (lastSeen === bestLastSeen && channelId.localeCompare(bestSessionId) < 0)) {
-        bestLastSeen = lastSeen;
-        bestSessionId = channelId;
-      }
-    }
-
-    return bestSessionId;
-  };
-
-  const normalizeRecentReflectionMessage = (
-    entry: { role: string; content: string; authorName?: string },
-  ): ReflectionContactRecentMessage | null => {
-    if (entry.role !== 'user' && entry.role !== 'assistant') {
-      return null;
-    }
-    const content = entry.content.trim();
-    if (!content) {
-      return null;
-    }
-    return {
-      role: entry.role,
-      content,
-      ...(typeof entry.authorName === 'string' && entry.authorName.trim().length > 0
-        ? { authorName: entry.authorName.trim() }
-        : {}),
-    };
-  };
-
-  const normalizeReflectionConcern = (
-    concern: ActiveConcernSnapshot,
-  ): ReflectionContactActiveConcern | null => {
-    const title = typeof concern.title === 'string' ? concern.title.trim() : '';
-    const summary = typeof concern.summary === 'string' ? concern.summary.trim() : '';
-    const text = [title, summary].filter(Boolean).join(': ').trim();
-    if (!text) return null;
-    return {
-      ...(typeof concern.id === 'string' && concern.id.trim().length > 0 ? { id: concern.id.trim() } : {}),
-      text,
-      ...(typeof concern.priority === 'string'
-        ? { priority: concern.priority as ReflectionContactActiveConcern['priority'] }
-        : {}),
-      ...(typeof concern.status === 'string' ? { source: concern.status } : {}),
-      ...(typeof concern.dueAt === 'number' && Number.isFinite(concern.dueAt)
-        ? { expiresAt: new Date(concern.dueAt).toISOString() }
-        : {}),
-    };
-  };
-
-  const retrieveReflectionMemoryBlock = async (input: {
-    memoryProvider: { retrieve: (...args: any[]) => Promise<string> };
-    queryText: string;
-    reflectionChannelId: string;
-    trustLevel?: string;
-    reflectionCanonicalContactId: string;
-    currentVAD?: { valence: number; arousal: number; dominance: number };
-    reflectionPolicy: ReflectionIntrospectionPolicy;
-  }): Promise<ReflectionMemoryRetrievalResult> => {
-    const provenanceRefs = new Set<string>();
-    const unsubscribe = runtimeOptions.eventBus?.on('memory.retrieval', (payload) => {
-      if (payload.channelId !== input.reflectionChannelId) {
-        return;
-      }
-      for (const ref of payload.provenanceRefs ?? []) {
-        const normalized = ref.trim();
-        if (normalized) provenanceRefs.add(normalized);
-      }
-    });
-
-    try {
-      const memoryBlock = await runWithRequestContext({
-        channelId: input.reflectionChannelId,
-        callType: 'background',
-        originType: 'background',
-        originStage: 'heartbeat.reflection.memory_retrieval',
-        purpose: 'heartbeat.reflection.memory_retrieval',
-      }, () => input.memoryProvider.retrieve(
-        input.queryText,
-        input.reflectionChannelId,
-        input.trustLevel,
-        undefined,
-        input.reflectionCanonicalContactId,
-        undefined,
-        undefined,
-        input.currentVAD,
-        undefined,
-        { retrievalMode: input.reflectionPolicy.memoryRetrievalModes },
-        input.reflectionPolicy.memoryRetrievalModes,
-      ));
-
-      return {
-        memoryBlock,
-        provenanceRefs: [...provenanceRefs],
-      };
-    } finally {
-      unsubscribe?.();
-    }
-  };
-
-  const resolveReflectionContactContextBundle = async (
-    template: ReflectionTemplate,
-    reflectionPolicy: ReflectionIntrospectionPolicy,
-    internalStateContext: ReflectionInternalStateContext | null,
-    reflectionChannelId: string,
-    reflectionCanonicalContactId: string | undefined,
-  ): Promise<ReflectionContactContextResolution> => {
-    if (!reflectionCanonicalContactId) {
-      return {
-        bundle: null,
-        diagnostics: {
-          recentMessageCount: 0,
-        },
-      };
-    }
-
-    const nowMs = Date.now();
-    const contact = runtimeOptions.contactStore?.getById
-      ? await runtimeOptions.contactStore.getById(reflectionCanonicalContactId) as Contact | undefined
-      : undefined;
-    const primarySessionId = resolveReflectionContactSessionId(
-      contact ?? null,
-      reflectionChannelId,
-    );
-
-    const recentSessionEntries = runtimeOptions.sessionManager?.getRecentMessages
-      ? runtimeOptions.sessionManager.getRecentMessages(primarySessionId, 12)
-      : [];
-    const recentLiveActivityTimestamps = recentSessionEntries
-      .filter((entry) => entry.role === 'user' || entry.role === 'assistant')
-      .map(entry => normalizeFiniteTimestamp((entry as { timestamp?: unknown }).timestamp))
-      .filter((timestamp): timestamp is number => timestamp !== undefined);
-    const recentSessionMessages = recentSessionEntries
-      .map(normalizeRecentReflectionMessage)
-      .filter((message): message is ReflectionContactRecentMessage => message !== null);
-
-    await awaitPendingReflectionExtractionDrain(
-      primarySessionId,
-      template,
-      reflectionCanonicalContactId,
-    );
-
-    const currentInternalState = internalStateContext?.internalState
-      ?? agentLoop.getCurrentInternalState?.()
-      ?? null;
-    const currentVAD = currentInternalState?.emotional.vad;
-    const emotionalSnapshot = (
-      reflectionCanonicalContactId && runtimeOptions.contactStore?.getEmotionalSnapshot
-    )
-      ? await runtimeOptions.contactStore.getEmotionalSnapshot(reflectionCanonicalContactId) ?? null
-      : null;
-    const reflectionEmotionalSnapshot: ReflectionContactEmotionalSnapshot | null = emotionalSnapshot
-      ? {
-        baselineValence: emotionalSnapshot.baselineValence,
-        moodValence: emotionalSnapshot.moodValence,
-        moodDrift: emotionalSnapshot.moodDrift,
-        moodSamples: emotionalSnapshot.moodSamples,
-        ...(emotionalSnapshot.lastMoodUpdateEpochMs !== undefined
-          ? { lastMoodUpdateEpochMs: emotionalSnapshot.lastMoodUpdateEpochMs }
-          : {}),
-      }
-      : null;
-    const emotionalTimeSeries = (
-      reflectionCanonicalContactId && runtimeOptions.contactStore?.getEmotionalTimeSeries
-    )
-      ? await runtimeOptions.contactStore.getEmotionalTimeSeries(
-        reflectionCanonicalContactId,
-        REFLECTION_CONTACT_EMOTIONAL_TIME_SERIES_LIMIT,
-      )
-      : [];
-    const lastSeen = contact?.lastSeen ? contact.lastSeen.trim() : undefined;
-    const lastSeenTimestamp = lastSeen ? Date.parse(lastSeen) : Number.NaN;
-    const contactLastSeenGapMs = Number.isFinite(lastSeenTimestamp)
-      ? Math.max(0, nowMs - lastSeenTimestamp)
-      : undefined;
-    const stateLastSeenDeltaMs = currentInternalState?.relational.lastSeenDeltaSeconds !== null
-      && currentInternalState?.relational.lastSeenDeltaSeconds !== undefined
-      ? Math.max(0, currentInternalState.relational.lastSeenDeltaSeconds * 1000)
-      : undefined;
-    const latestLiveActivityAtMs = recentLiveActivityTimestamps.length > 0
-      ? Math.max(...recentLiveActivityTimestamps)
-      : undefined;
-    const latestLiveActivityAgeMs = latestLiveActivityAtMs !== undefined
-      ? Math.max(0, nowMs - latestLiveActivityAtMs)
-      : undefined;
-    const lastSeenDeltaSeconds = contactLastSeenGapMs !== undefined
-      ? Math.max(0, Math.floor(contactLastSeenGapMs / 1000))
-      : currentInternalState?.relational.lastSeenDeltaSeconds ?? null;
-    const trustLevel = contact?.trustLevel ?? currentInternalState?.relational.trustLevel;
-    const contactDisplayName = contact?.displayName ?? contact?.nickname ?? undefined;
-
-    const activeConcernsRaw = runtimeOptions.getActiveConcerns
-      ? await Promise.resolve(runtimeOptions.getActiveConcerns({
-        channelId: primarySessionId,
-        canonicalContactKey: reflectionCanonicalContactId,
-      }))
-      : [];
-    const activeConcerns = activeConcernsRaw
-      .map(normalizeReflectionConcern)
-      .filter((concern): concern is ReflectionContactActiveConcern => concern !== null);
-
-    const pendingFollowUps = runtimeOptions.pendingFollowUpStore
-      ? await runtimeOptions.pendingFollowUpStore.list({
-        contactId: reflectionCanonicalContactId,
-      })
-      : [];
-
-    const memoryProvider = (agentLoop as HeartbeatAgent & {
-      memoryProvider?: {
-        retrieve: (...args: any[]) => Promise<string>;
-      };
-    }).memoryProvider;
-
-    const memoryRetrieval = memoryProvider
-      ? await retrieveReflectionMemoryBlock({
-        memoryProvider,
-        queryText: [
-          template.prompt,
-          recentSessionMessages.map((message) => `${message.role}: ${message.content}`).join('\n'),
-        ].filter(Boolean).join('\n\n'),
-        reflectionChannelId,
-        trustLevel,
-        reflectionCanonicalContactId,
-        currentVAD,
-        reflectionPolicy,
-      })
-      : { provenanceRefs: [] };
-
-    return {
-      bundle: assembleReflectionContactContextBundle({
-        contactId: reflectionCanonicalContactId,
-        companionName: resolveCompanionNameFromCharacterVariables(runtimeOptions.characterPromptVariablesProvider),
-        contactDisplayName,
-        trustLevel,
-        primarySessionId,
-        lastSeen,
-        lastSeenDeltaSeconds,
-        emotionalSnapshot: reflectionEmotionalSnapshot,
-        emotionalTimeSeries,
-        recentSessionMessages,
-        memoryBlock: memoryRetrieval.memoryBlock,
-        memoryProvenanceRefs: memoryRetrieval.provenanceRefs,
-        activeConcerns,
-        pendingFollowUps,
-      }),
-      diagnostics: {
-        primarySessionId,
-        recentMessageCount: recentSessionMessages.length,
-        freshestLiveChatGapMs: selectFreshestLiveChatGapMs(
-          latestLiveActivityAgeMs,
-          contactLastSeenGapMs,
-          stateLastSeenDeltaMs,
-        ),
-        ...(latestLiveActivityAgeMs !== undefined ? { latestLiveActivityAgeMs } : {}),
-      },
-    };
-  };
 
   const resolveReflectionSubstratePromptContext = (
     template: ReflectionTemplate,
@@ -1247,12 +701,13 @@ export function createHeartbeatTemplateRuntime(
     // post-turn queue) bypass the gate — an explicit operator/model request is
     // its own justification.
     if (requestedSource === 'scheduled') {
-      const noveltyGate = await evaluateReflectionNoveltyGate(
+      const noveltyGate = await evaluateReflectionNoveltyGate({
         template,
         reflectionChannelId,
-        reflectionCanonicalContactId,
-        reflectionGroupScope,
-      );
+        canonicalContactId: reflectionCanonicalContactId,
+        groupScope: reflectionGroupScope,
+        runtimeOptions,
+      });
       if (!noveltyGate.open) {
         log.info('Skipped cadence reflection below novelty watermark', {
           templateId: template.id,
@@ -1261,7 +716,13 @@ export function createHeartbeatTemplateRuntime(
           reason: noveltyGate.reason,
           inputs: noveltyGate.inputs,
         });
-        await emitReflectionNoveltyGateEvent('skipped', noveltyGate, reflectionChannelId);
+        await emitReflectionNoveltyGateEvent({
+          outcome: 'skipped',
+          gate: noveltyGate,
+          reflectionChannelId,
+          runtimeOptions,
+          logger: log,
+        });
         return {
           templateId: template.id,
           templateName: template.name,
@@ -1269,7 +730,13 @@ export function createHeartbeatTemplateRuntime(
           noveltyGateSkipped: true,
         };
       }
-      await emitReflectionNoveltyGateEvent('ran', noveltyGate, reflectionChannelId);
+      await emitReflectionNoveltyGateEvent({
+        outcome: 'ran',
+        gate: noveltyGate,
+        reflectionChannelId,
+        runtimeOptions,
+        logger: log,
+      });
     }
 
     const plannedReflectionMode: 'agent' | 'deliberation' = shouldUseDeliberation(template)
@@ -1280,13 +747,16 @@ export function createHeartbeatTemplateRuntime(
       canonicalContactId: reflectionGroundingContactId,
       reflectionMode: plannedReflectionMode,
     });
-    const reflectionContactResolution = await resolveReflectionContactContextBundle(
+    const reflectionContactResolution = await resolveReflectionContactContextBundle({
       template,
       reflectionPolicy,
       internalStateContext,
       reflectionChannelId,
-      reflectionGroundingContactId,
-    );
+      reflectionCanonicalContactId: reflectionGroundingContactId,
+      runtimeOptions,
+      agentLoop,
+      logger: log,
+    });
     const reflectionContactContext = reflectionContactResolution.bundle;
     const reflectionSubstrateContext = resolveReflectionSubstratePromptContext(template);
     const reflectionCreatedAt = new Date(Date.now()).toISOString();
@@ -1630,11 +1100,13 @@ export function createHeartbeatTemplateRuntime(
       await sender.send(heartbeatChannelId, reflectionText);
     }
 
-    await advanceReflectionNoveltyWatermark(
+    await advanceReflectionNoveltyWatermark({
       template,
-      reflectionCanonicalContactId,
-      reflectionGroupScope,
-    );
+      canonicalContactId: reflectionCanonicalContactId,
+      groupScope: reflectionGroupScope,
+      runtimeOptions,
+      logger: log,
+    });
 
     return {
       templateId: template.id,

@@ -793,6 +793,12 @@
       "pattern": "identity-legacy-slug"
     },
     {
+      "path": "src/persistence/postgres/companion-presence-store.ts",
+      "contains": "applicationName: 'psfn-companion-presence'",
+      "reason": "Companion presence persistence uses a project-scoped PostgreSQL application_name label.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
       "path": "src/persistence/repair/memory-provenance-backfill.ts",
       "contains": "psfn-framework-27ut",
       "reason": "Memory provenance repair comment cites the bead that owns the backfill.",

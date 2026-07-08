@@ -36,6 +36,8 @@ import { PostgresParticipantTrendStore } from './postgres/participant-trend-stor
 import type { ParticipantTrendStorePort } from '../core/emotion/participant-trend-persistence.js';
 import { PostgresScheduledPromptStore } from './postgres/scheduled-prompt-store.js';
 import type { ScheduledPromptStorePort } from '../core/scheduler/scheduled-prompt-store-port.js';
+import { PostgresCompanionPresenceStore } from './postgres/companion-presence-store.js';
+import type { CompanionPresenceStorePort } from '../core/agent/companion-presence-store-port.js';
 import { createPostgresPool, ensurePostgresSchemaExists } from './postgres.js';
 
 export interface AgentPersistenceRuntime {
@@ -50,12 +52,18 @@ export interface AgentPersistenceRuntime {
   internalStateStore: InternalStateStorePort;
   participantTrendStore: ParticipantTrendStorePort;
   scheduledPromptStore: ScheduledPromptStorePort;
+  /**
+   * Shared-schema cross-companion presence store (sprint 10, W5a). Present
+   * ONLY when multi-companion mode is enabled; flag-off never touches the
+   * shared schema.
+   */
+  companionPresenceStore?: CompanionPresenceStorePort;
 }
 
 export interface CreateAgentPersistenceRuntimeOptions {
   config: Pick<
     SubstrateConfig,
-    'databasePath' | 'persistenceBackend' | 'postgresDatabaseUrl' | 'postgresSchema'
+    'databasePath' | 'persistenceBackend' | 'postgresDatabaseUrl' | 'postgresSchema' | 'multiCompanion'
   >;
   pathSnapshot: RuntimePathSnapshot;
   embeddingDims: number;
@@ -98,6 +106,14 @@ export async function createAgentPersistenceRuntime(
     }
   }
 
+  // Shared world schema (sprint 10, W5a). Multi-companion only: the store's
+  // connect provisions the `shared` schema (advisory-lock serialized, so N
+  // concurrently-starting agents are safe) before any presence access. With
+  // the flag off the shared schema is never created or touched.
+  const companionPresenceStore = options.config.multiCompanion === true
+    ? await PostgresCompanionPresenceStore.connect(databaseUrl)
+    : undefined;
+
   const intentionRuntime = await createPostgresIntentionPorts(databaseUrl, { schema });
   return {
     backend: 'postgres',
@@ -124,5 +140,6 @@ export async function createAgentPersistenceRuntime(
     internalStateStore: await PostgresInternalStateStore.connect(databaseUrl, { schema }),
     participantTrendStore: await PostgresParticipantTrendStore.connect(databaseUrl, { schema }),
     scheduledPromptStore: await PostgresScheduledPromptStore.connect(databaseUrl, { schema }),
+    ...(companionPresenceStore ? { companionPresenceStore } : {}),
   };
 }

@@ -18,10 +18,6 @@
   } from '$lib/types';
   import {
     SETTINGS_GARDEN_SECTION_FIELDS,
-    SETTINGS_GARDEN_RAW_EDITOR_FALLBACK_FILE_BY_KEY,
-    SETTINGS_GARDEN_RAW_EDITOR_KEYS,
-    SETTINGS_GARDEN_RAW_EDITOR_SUBSYSTEM_BY_KEY,
-    type GardenSettingsRawEditorKey,
   } from '$lib/settings-garden-contract';
   import {
     resolveBudgetContextWindowAuthority,
@@ -61,72 +57,35 @@
     updateProviderEntry as updateProviderRegistryEntry,
     validateProviderRegistry,
   } from '$lib/providers/editor';
-
-  const DISABLED_PROVIDER_ID = 'disabled';
-  const COMPOSITIONAL_TIER_OPTIONS = ['nursery', 'apprentice', 'autonomous', 'custom'] as const;
-  const COMPOSITIONAL_CHANNEL_TYPE_OPTIONS = ['discord', 'terminal', 'api', 'telegram'] as const;
-  const COMPOSITIONAL_PURPOSE_OPTIONS = [
-    'extraction',
-    'retrieval',
-    'appraisal',
-    'analysis_workbench',
-    'shard_context',
-  ] as const;
-  const DELEGATED_WORKSPACES = [
-    {
-      label: 'Models',
-      href: '/models',
-      description: 'Purpose slots, rosters, context windows',
-    },
-    {
-      label: 'Prompts',
-      href: '/prompts',
-      description: 'Prompt layers and authoring',
-    },
-    {
-      label: 'Scheduler',
-      href: '/scheduler',
-      description: 'Heartbeat, timers, maintenance work',
-    },
-    {
-      label: 'Theme',
-      href: '/theme',
-      description: 'Garden appearance controls',
-    },
-    {
-      label: 'Tools',
-      href: '/tools',
-      description: 'Tool registry, health, failures',
-    },
-    {
-      label: 'Prompt Monitor',
-      href: '/prompt-monitor',
-      description: 'Prompt assembly and turn observability',
-    },
-  ] as const;
-
-  type CompositionalListKey = 'allowedTiers' | 'allowedChannelTypes' | 'allowedPurposes';
-
-  interface CompositionalPolicyFormValue {
-    enabled: boolean;
-    allowedTiers: string[];
-    allowedChannelTypes: string[];
-    allowedPurposes: string[];
-  }
-
-  const ENUM_LABELS_BY_FIELD: Record<string, Record<string, string>> = {
-    importProcessingRouteMode: {
-      background: 'Background Routing (default)',
-      openrouter_zdr: 'OpenRouter ZDR-only',
-      local_endpoint: 'Local Endpoint Only',
-    },
-    sessionRestartBehavior: {
-      reuse_latest_session: 'Reuse latest session',
-      new_session: 'Always start a new session',
-    },
-  };
-
-  const SYSTEM_PROMPT_ESTIMATE_TOKENS = 2_500;
+  import {
+    COMPOSITIONAL_CHANNEL_TYPE_OPTIONS,
+    COMPOSITIONAL_PURPOSE_OPTIONS,
+    COMPOSITIONAL_TIER_OPTIONS,
+    DELEGATED_WORKSPACES,
+    DISABLED_PROVIDER_ID,
+    RAW_EDITORS,
+    SIMPLE_SECTION_ORDER,
+    SYSTEM_PROMPT_ESTIMATE_TOKENS,
+    buildRawEditorJsonMap,
+    fmtMs,
+    fmtTokens,
+    formatSettingOptionLabel,
+    humanizeSettingValue,
+    listDirtyRawEditorKeys,
+    normalizeDiscordListenWindowSeconds,
+    normalizeStringList,
+    numberFromConfigValue,
+    resolveRawEditorOwnerFile,
+    settingControlId,
+    settingLabelId,
+    splitCsv,
+    stringFromConfigValue,
+    summarizeCompositionalPolicy,
+    tryPrettyPrint,
+    type CompositionalListKey,
+    type CompositionalPolicyFormValue,
+    type RawEditorKey,
+  } from './settings-page-helpers';
 
   // ── Core state ──
   let data = $state<AdminSettingsData | null>(null);
@@ -148,15 +107,6 @@
   let advancedDirty = $state(false);
   let rawDirty = $state(false);
   let generalSettingsSaveDirty = $derived(curatedDirty || rawDirty);
-  type RawEditorKey = GardenSettingsRawEditorKey;
-
-  function buildRawEditorJsonMap(
-    resolveValue: (key: RawEditorKey) => string,
-  ): Record<RawEditorKey, string> {
-    return Object.fromEntries(
-      SETTINGS_GARDEN_RAW_EDITOR_KEYS.map((key) => [key, resolveValue(key)]),
-    ) as Record<RawEditorKey, string>;
-  }
 
   let initialRawJsonByKey = $state<Record<RawEditorKey, string>>(
     buildRawEditorJsonMap(() => ''),
@@ -329,28 +279,6 @@
   let validationErrorsByField = $state<Record<string, string[]>>({});
 
   // ── Section IA navigation ──
-  const SIMPLE_SECTION_ORDER: readonly SettingsSimpleSectionId[] = [
-    'models',
-    'providers',
-    'prompting',
-    'memory-budget',
-    'memory-extraction',
-    'memory-tuning',
-    'memory-profile',
-    'memory-sessions',
-    'tools-analysis-workbench',
-    'runtime-llm',
-    'runtime-import',
-    'runtime-fetch',
-    'advanced-fields',
-    'integrations-voice',
-    'integrations-obsidian',
-    'channels',
-    'advanced-trust',
-    'advanced-secrets',
-    'advanced-backup',
-    'owner-files',
-  ];
   const SIMPLE_SECTION_SCROLL_OFFSET_PX = 108;
   const SIMPLE_SECTION_ACTIVE_THRESHOLD_PX = 168;
   let activeSimpleSectionId = $state<SettingsSimpleSectionId>('models');
@@ -485,14 +413,6 @@
     SECTIONS.map((section) => [section.id, section.summary()]),
   ));
 
-  const RAW_EDITORS = SETTINGS_GARDEN_RAW_EDITOR_KEYS
-    .filter(
-      (key): key is Exclude<RawEditorKey, 'settings' | 'models'> => (
-        key !== 'settings' && key !== 'models'
-      ),
-    )
-    .map((key) => ({ key }));
-
   type SchedulerEditorConfig = {
     tickIntervalMs?: number;
     heartbeatIntervalMs?: number;
@@ -609,28 +529,8 @@
     return fieldContract(key)?.deprecated === true;
   }
 
-  function humanizeSettingValue(value: string): string {
-    return value
-      .replaceAll(/([a-z0-9])([A-Z])/g, '$1 $2')
-      .replaceAll('_', ' ')
-      .replaceAll(/\b\w/g, (letter) => letter.toUpperCase());
-  }
-
-  function formatSettingOptionLabel(field: string, value: string): string {
-    return ENUM_LABELS_BY_FIELD[field]?.[value] ?? humanizeSettingValue(value);
-  }
-
-  function settingControlId(key: string, suffix = 'input'): string {
-    return `settings-${key.replace(/[^a-zA-Z0-9_-]+/g, '-').toLowerCase()}-${suffix}`;
-  }
-
-  function settingLabelId(key: string): string {
-    return settingControlId(key, 'label');
-  }
-
   function rawEditorOwnerFile(key: RawEditorKey): string {
-    const subsystemId = SETTINGS_GARDEN_RAW_EDITOR_SUBSYSTEM_BY_KEY[key];
-    return subsystemOwnerFile(subsystemId) ?? SETTINGS_GARDEN_RAW_EDITOR_FALLBACK_FILE_BY_KEY[key];
+    return resolveRawEditorOwnerFile(key, subsystemOwnerFile);
   }
 
   function getSettingAuthority(key: string) {
@@ -660,37 +560,6 @@
     if (Array.isArray(value)) return 'array';
     if (value !== null && typeof value === 'object') return 'object';
     return 'text';
-  }
-
-  function summarizeCompositionalPolicy(value: unknown): string {
-    if (!value || typeof value !== 'object' || Array.isArray(value)) {
-      return 'Disabled';
-    }
-
-    const policy = value as {
-      enabled?: unknown;
-      allowedTiers?: unknown;
-      allowedChannelTypes?: unknown;
-      allowedPurposes?: unknown;
-    };
-    if (policy.enabled !== true) {
-      return 'Disabled';
-    }
-
-    const tierCount = Array.isArray(policy.allowedTiers) ? policy.allowedTiers.length : 0;
-    const channelCount = Array.isArray(policy.allowedChannelTypes) ? policy.allowedChannelTypes.length : 0;
-    const purposeCount = Array.isArray(policy.allowedPurposes) ? policy.allowedPurposes.length : 0;
-
-    return `Enabled, ${tierCount} tier${tierCount === 1 ? '' : 's'}, `
-      + `${channelCount} channel${channelCount === 1 ? '' : 's'}, `
-      + `${purposeCount} purpose${purposeCount === 1 ? '' : 's'}`;
-  }
-
-  function normalizeStringList(value: unknown): string[] {
-    if (!Array.isArray(value)) return [];
-    return [...new Set(
-      value.filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0),
-    )];
   }
 
   function getCompositionalPolicy(): CompositionalPolicyFormValue {
@@ -766,10 +635,6 @@
   let sessionRestartBehaviorOptions = $derived(
     fieldEnumValues('sessionRestartBehavior', [sessionRestartBehavior]),
   );
-
-  function clamp(value: number, min: number, max: number): number {
-    return Math.max(min, Math.min(max, value));
-  }
 
   function buildBudgetPreviewConfig(): ContextBudgetConfigLike | null {
     if (!data) return null;
@@ -881,10 +746,6 @@
     telegramAuthorizedUsers = String(config.telegramAuthorizedUsers ?? '');
   }
 
-  function tryPrettyPrint(raw: string): string {
-    try { return JSON.stringify(JSON.parse(raw), null, 2); } catch { return raw; }
-  }
-
   function flash(ok: boolean, msg: string) {
     saveOk = ok;
     saveMessage = msg;
@@ -903,20 +764,6 @@
   function configValue(key: string): unknown {
     if (!data) return undefined;
     return (data.config as Record<string, unknown>)[key];
-  }
-
-  function stringFromConfigValue(value: unknown): string {
-    if (Array.isArray(value)) {
-      return value
-        .filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0)
-        .join(', ');
-    }
-    return typeof value === 'string' ? value : String(value ?? '');
-  }
-
-  function numberFromConfigValue(value: unknown, fallback: number): number {
-    const next = Number(value);
-    return Number.isFinite(next) ? next : fallback;
   }
 
   // Advanced editors write data.config directly; keep overlapping curated controls from saving stale values.
@@ -1221,9 +1068,7 @@
 
   function dirtyRawEditorKeys(): RawEditorKey[] {
     const current = currentRawJsonByKey();
-    return SETTINGS_GARDEN_RAW_EDITOR_KEYS.filter(
-      key => current[key] !== initialRawJsonByKey[key],
-    );
+    return listDirtyRawEditorKeys(current, initialRawJsonByKey);
   }
 
   function rawEditorLabel(key: RawEditorKey): string {
@@ -1258,25 +1103,6 @@
       `Unsaved raw editor changes in ${dirtyKeys.map(rawEditorLabel).join(', ')}; save or discard them before using the general settings save.`,
     );
     return false;
-  }
-
-  function fmtTokens(n: number): string {
-    if (n >= 1000) return `${(n / 1000).toFixed(n >= 10000 ? 0 : 1)}K`;
-    return String(n);
-  }
-
-  function fmtMs(ms: number): string {
-    if (ms >= 60000) return `${(ms / 60000).toFixed(1)}min`;
-    return `${(ms / 1000).toFixed(1)}s`;
-  }
-
-  function splitCsv(str: string): string[] {
-    return str.split(',').map(s => s.trim()).filter(Boolean);
-  }
-
-  function normalizeDiscordListenWindowSeconds(value: number): number {
-    if (!Number.isFinite(value)) return 120;
-    return clamp(Math.round(value), 10, 600);
   }
 
   function collectSimplePayload(): Record<string, unknown> {

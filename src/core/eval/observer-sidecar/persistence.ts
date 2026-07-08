@@ -36,7 +36,9 @@ export const OBSERVER_EVAL_SIDECAR_NON_AUTHORITATIVE_NOTICE =
   'Observer sidecar persistence is eval-owned telemetry only; it is not companion memory, production EmotionState, InternalState, prompt state, contacts, or concerns.' as const;
 
 const DEFAULT_QUERY_LIMIT = 100;
-const MAX_QUERY_LIMIT = 1_000;
+// One above the Garden admin page cap (1_000) so the service's hasMore
+// probe row (limit + 1) is never clamped away at the maximum page size.
+const MAX_QUERY_LIMIT = 1_001;
 
 export const OBSERVER_EVAL_RETENTION_CLASSES = Object.freeze([
   'ephemeral',

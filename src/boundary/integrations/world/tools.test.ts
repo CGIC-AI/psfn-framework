@@ -5,6 +5,7 @@ import type {
   HomeAssistantGetStatesResult,
   HomeAssistantState,
 } from '../../gateway/protocol.js';
+import type { TrustLevel } from '../../../system/trust/types.js';
 import type { WorldOperations } from './ops.js';
 import { createWorldTool } from './tools.js';
 
@@ -86,6 +87,16 @@ function createMockOps(overrides: Partial<WorldOperations> = {}): WorldOperation
 
 function resultText(result: { content: Array<{ text: string }> }): string {
   return result.content.map((entry) => entry.text).join('');
+}
+
+// Effector control ships staged off and trust-gated; this helper opens both
+// gates so the deeper actuation/validation paths can be exercised directly.
+function createControlTool(ops: WorldOperations, trust: TrustLevel = 'primary') {
+  return createWorldTool(ops, {
+    placesRegistry: REGISTRY,
+    controlEnabled: true,
+    resolveRequesterTrust: () => trust,
+  });
 }
 
 describe('world tool', () => {
@@ -189,7 +200,7 @@ describe('world tool', () => {
 
   it('controls an effector by calling the derived HA domain/service through the gateway', async () => {
     const ops = createMockOps();
-    const tool = createWorldTool(ops, { placesRegistry: REGISTRY });
+    const tool = createControlTool(ops);
 
     const result = await tool.execute('call-control', {
       action: 'control',
@@ -211,7 +222,7 @@ describe('world tool', () => {
 
   it('rejects an affordanceId not in the registry BEFORE any RPC', async () => {
     const ops = createMockOps();
-    const tool = createWorldTool(ops, { placesRegistry: REGISTRY });
+    const tool = createControlTool(ops);
 
     const result = await tool.execute('call-control', {
       action: 'control',
@@ -226,7 +237,7 @@ describe('world tool', () => {
 
   it('rejects controlling a perceiver and a non-HA backend before any RPC', async () => {
     const ops = createMockOps();
-    const tool = createWorldTool(ops, { placesRegistry: REGISTRY });
+    const tool = createControlTool(ops);
 
     const perceiver = await tool.execute('call-control', {
       action: 'control',
@@ -247,12 +258,91 @@ describe('world tool', () => {
 
   it('rejects control without a command', async () => {
     const ops = createMockOps();
-    const tool = createWorldTool(ops, { placesRegistry: REGISTRY });
+    const tool = createControlTool(ops);
 
     const result = await tool.execute('call-control', { action: 'control', affordanceId: 'lr_lights' });
 
     expect(ops.callService).not.toHaveBeenCalled();
     expect(resultText(result)).toContain('requires command as one of: on, off, toggle');
+  });
+
+  it('stages control off by default: refuses control fail-closed while perceive/list stay live', async () => {
+    const ops = createMockOps();
+    // Default deps: no controlEnabled, no resolveRequesterTrust ⇒ control OFF.
+    const tool = createWorldTool(ops, {
+      placesRegistry: REGISTRY,
+      resolveSituatedPlaceId: () => 'place.living-room',
+    });
+
+    const control = await tool.execute('call-control', {
+      action: 'control',
+      affordanceId: 'lr_lights',
+      command: 'on',
+    });
+    expect(ops.callService).not.toHaveBeenCalled();
+    expect(control.details?.isError).toBe(true);
+    expect(resultText(control)).toContain('staged off');
+
+    // Read paths are unaffected by the staged-off control gate.
+    const perceive = await tool.execute('call-perceive', { action: 'perceive' });
+    expect(perceive.details?.isError).toBeFalsy();
+    const list = await tool.execute('call-list', { action: 'list', scope: 'site' });
+    expect(JSON.parse(resultText(list)).action).toBe('list');
+  });
+
+  it('with control enabled, rejects a low-trust requester and refuses before any RPC', async () => {
+    const ops = createMockOps();
+    for (const trust of ['regular', 'public'] as const) {
+      const tool = createControlTool(ops, trust);
+      const result = await tool.execute('call-control', {
+        action: 'control',
+        affordanceId: 'lr_lights',
+        command: 'on',
+      });
+      expect(result.details?.isError).toBe(true);
+      expect(resultText(result)).toContain('requires a primary or trusted requester');
+    }
+    expect(ops.callService).not.toHaveBeenCalled();
+  });
+
+  it('with control enabled and no trust resolver wired, refuses control fail-closed', async () => {
+    const ops = createMockOps();
+    const tool = createWorldTool(ops, { placesRegistry: REGISTRY, controlEnabled: true });
+    const result = await tool.execute('call-control', {
+      action: 'control',
+      affordanceId: 'lr_lights',
+      command: 'on',
+    });
+    expect(ops.callService).not.toHaveBeenCalled();
+    expect(resultText(result)).toContain('requires a primary or trusted requester');
+  });
+
+  it('with control enabled, allows primary and trusted requesters to drive effectors', async () => {
+    for (const trust of ['primary', 'trusted'] as const) {
+      const ops = createMockOps();
+      const tool = createControlTool(ops, trust);
+      const result = await tool.execute('call-control', {
+        action: 'control',
+        affordanceId: 'lr_lights',
+        command: 'on',
+      });
+      expect(result.details?.isError).toBeFalsy();
+      expect(ops.callService).toHaveBeenCalledTimes(1);
+      expect(JSON.parse(resultText(result)).action).toBe('control');
+    }
+  });
+
+  it('enforces the per-affordance command allowlist before any RPC', async () => {
+    const ops = createMockOps();
+    // lr_lights declares control: ['on','off']; "toggle" is not permitted.
+    const tool = createControlTool(ops);
+    const result = await tool.execute('call-control', {
+      action: 'control',
+      affordanceId: 'lr_lights',
+      command: 'toggle',
+    });
+    expect(ops.callService).not.toHaveBeenCalled();
+    expect(resultText(result)).toContain('is not permitted for affordance "lr_lights"');
   });
 
   it('returns an empty site list against an empty registry without inventing places', async () => {

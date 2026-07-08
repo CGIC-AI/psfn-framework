@@ -30,6 +30,11 @@ const APPRENTICE_TOKENS: readonly CapabilityToken[] = [
   'issue.write',
   'repl.execute',
   'shard.spawn',
+  // world.read grants live world perception (perceive/list) from apprentice up.
+  // world.control is deliberately WITHHELD from every default tier: effector
+  // actuation ships staged-off (see WORLD_CONTROL_RUNTIME_ENABLED) and must be
+  // granted by an explicit tier/custom-token change once proven end-to-end.
+  'world.read',
 ];
 
 const AUTONOMOUS_TOKENS: readonly CapabilityToken[] = [
@@ -52,6 +57,9 @@ const AUTONOMOUS_TOKENS: readonly CapabilityToken[] = [
   'lifecycle.rebuild',
   'repl.execute',
   'shard.spawn',
+  // world.read: live world perception. world.control stays withheld even at the
+  // autonomous tier — actuation is staged-off and enabled by explicit change.
+  'world.read',
 ];
 
 export const CAPABILITY_TIER_DEFAULTS: Readonly<Record<Exclude<CapabilityTier, 'custom'>, readonly CapabilityToken[]>> = {

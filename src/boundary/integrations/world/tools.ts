@@ -7,9 +7,10 @@ import type {
 } from '../../../shared/contracts/places-registry.js';
 import { textResult, textResultWithError } from '../../../core/tools/results.js';
 import { toErrorMessage } from '../../../shared/utils/errors.js';
+import { isHighTierTrustLevel, type TrustLevel } from '../../../system/trust/types.js';
 import type { WorldOperations } from './ops.js';
 
-// ── Agent-side `world` tool (Sprint 10, Workstream C2) ──
+// ── Agent-side `world` tool (Sprint 10, Workstream C2 + C3/C4) ──
 //
 // One action-dispatched tool over the physical/virtual world. Actions:
 //   perceive  — read Home-Assistant states for a place's affordances + summary
@@ -21,12 +22,29 @@ import type { WorldOperations } from './ops.js';
 // this tool proved is in the registry. An `affordanceId`/`placeId` absent from
 // the registry is rejected BEFORE any RPC crosses to the gateway.
 //
-// TODO(vinz.10): capability/trust gating (`world.read` / `world.control`) and
-// staged-off-by-default control attach at this dispatch boundary. Read
-// (perceive/list) may ship live; control must stay gated + off until proven
-// end-to-end against real hardware. See bead psfn-framework-vinz.10.
+// Control gating (bead vinz.10) — three independent, fail-closed gates guard
+// `action=control`; perceive/list are unaffected:
+//   1. Capability token `world.control` — enforced OUTSIDE this tool by the
+//      capability gate (see resolveWorldRequirement). Withheld from every
+//      default tier, so a regular/public tier cannot even surface control.
+//   2. Staged-off runtime flag `WORLD_CONTROL_RUNTIME_ENABLED` (robotics
+//      pattern) — control ships defined, wired, and OFF until the actuation
+//      path is proven end-to-end against real hardware. While off, control
+//      refuses fail-closed; read stays live.
+//   3. Requester trust — only primary/trusted requesters (owner/partner) may
+//      drive effectors; regular/public are refused.
 
 const WORLD_ACTION_HELP = 'perceive, list, control';
+
+/**
+ * Staged-off runtime gate for effector actuation (mirrors how `robotics` is
+ * excluded from `SATELLITE_RUNTIME_ENABLED_CAPABILITIES`). Ships `false`:
+ * `action=control` refuses fail-closed until the control path is proven
+ * end-to-end. Enable path: flip this to `true` AND grant the `world.control`
+ * capability token to the operating tier (both are required — defence in
+ * depth). Read (perceive/list) is unaffected.
+ */
+export const WORLD_CONTROL_RUNTIME_ENABLED = false;
 
 type WorldAction = 'perceive' | 'list' | 'control';
 type WorldCommand = 'on' | 'off' | 'toggle';
@@ -55,6 +73,18 @@ export interface WorldToolDeps {
    * without it, perceive/list default to explicit `placeId` or site-wide.
    */
   resolveSituatedPlaceId?: () => string | undefined;
+  /**
+   * Staged-off gate for `action=control`. Defaults to
+   * `WORLD_CONTROL_RUNTIME_ENABLED` (false). When false, control refuses
+   * fail-closed; perceive/list stay live.
+   */
+  controlEnabled?: boolean;
+  /**
+   * Resolves the current requester's trust level for the turn (owner/partner =
+   * primary/trusted). Supplied at runtime from the turn request context
+   * (`viewerTrustLevel`). Absent or non-high-tier ⇒ control is refused.
+   */
+  resolveRequesterTrust?: () => TrustLevel | undefined;
 }
 
 interface ResolvedAffordance {
@@ -201,6 +231,26 @@ async function runControl(
   deps: WorldToolDeps,
   params: WorldToolParams,
 ): Promise<string> {
+  // Gate 1 — staged-off runtime flag (robotics pattern). Fail closed while off.
+  const controlEnabled = deps.controlEnabled ?? WORLD_CONTROL_RUNTIME_ENABLED;
+  if (!controlEnabled) {
+    throw new Error(
+      'world control is staged off: effector actuation is disabled until proven end-to-end. '
+      + 'Perceive and list remain available. Enabling requires flipping WORLD_CONTROL_RUNTIME_ENABLED '
+      + 'and granting the world.control capability token to the operating tier.',
+    );
+  }
+
+  // Gate 2 — requester trust. Only primary/trusted (owner/partner) drive effectors.
+  const requesterTrust = deps.resolveRequesterTrust?.();
+  if (!requesterTrust || !isHighTierTrustLevel(requesterTrust)) {
+    const observed = requesterTrust ?? 'unknown';
+    throw new Error(
+      `world control requires a primary or trusted requester; the current requester is "${observed}". `
+      + 'Effector actuation is refused for regular/public requesters.',
+    );
+  }
+
   const affordanceId = requirePlainString(params, 'affordanceId', 'control', 'lr_lights');
   const placeId = typeof params.placeId === 'string' && params.placeId.trim()
     ? params.placeId.trim()
@@ -224,6 +274,14 @@ async function runControl(
   const command = params.command;
   if (command !== 'on' && command !== 'off' && command !== 'toggle') {
     throw new Error('action=control requires command as one of: on, off, toggle.');
+  }
+  // Per-affordance allowlist: when the affordance declares a `control` list,
+  // the requested command must be in it (fail-closed, defence in depth).
+  if (affordance.control && !affordance.control.includes(command)) {
+    throw new Error(
+      `command "${command}" is not permitted for affordance "${affordanceId}"; `
+      + `allowed: ${affordance.control.join(', ')}.`,
+    );
   }
   const service = COMMAND_TO_SERVICE[command];
   const domain = entityId.split('.')[0];

@@ -742,3 +742,55 @@ describe('capability tool gating', () => {
     expect(allowedListEligibility.missingTokens).toEqual([]);
   });
 });
+
+describe('world capability gating', () => {
+  it('grants world.read from apprentice up and withholds world.control from every default tier', () => {
+    expect(resolveTierCapabilityTokens('nursery')).not.toContain('world.read');
+    expect(resolveTierCapabilityTokens('apprentice')).toContain('world.read');
+    expect(resolveTierCapabilityTokens('autonomous')).toContain('world.read');
+
+    for (const tier of ['nursery', 'apprentice', 'autonomous'] as const) {
+      expect(resolveTierCapabilityTokens(tier)).not.toContain('world.control');
+    }
+  });
+
+  it('resolves per-action world requirements: perceive/list -> world.read, control -> world.control', () => {
+    const world = createTool('world');
+    expect(resolveToolRequiredCapabilities(world.tool, { action: 'perceive' })).toEqual(['world.read']);
+    expect(resolveToolRequiredCapabilities(world.tool, { action: 'list' })).toEqual(['world.read']);
+    expect(resolveToolRequiredCapabilities(world.tool, { action: 'control' })).toEqual(['world.control']);
+  });
+
+  it('hides control when world.control is absent while keeping perceive/list live', async () => {
+    const world = createTool('world');
+    // Autonomous grants world.read but never world.control.
+    const gated = gateToolWithCapabilities(world.tool, () => accessForTier('autonomous'));
+
+    await gated.execute('world-perceive', { action: 'perceive', placeId: 'place.living-room' });
+    await gated.execute('world-list', { action: 'list' });
+    expect(world.executeSpy).toHaveBeenCalledTimes(2);
+
+    const denied = await gated.execute('world-control', { action: 'control', affordanceId: 'lr_lights', command: 'on' });
+    expect(world.executeSpy).toHaveBeenCalledTimes(2);
+    expect((denied.details as any).capabilityDenied).toBe(true);
+    expect((denied.content[0] as any).text).toContain('world.control');
+  });
+
+  it('refuses world.read for nursery (no world.read token)', async () => {
+    const world = createTool('world');
+    const gated = gateToolWithCapabilities(world.tool, () => accessForTier('nursery'));
+    const denied = await gated.execute('world-perceive-nursery', { action: 'perceive', placeId: 'place.living-room' });
+    expect(world.executeSpy).not.toHaveBeenCalled();
+    expect((denied.content[0] as any).text).toContain('world.read');
+  });
+
+  it('allows control only when world.control is granted via a custom tier', async () => {
+    const world = createTool('world');
+    const gated = gateToolWithCapabilities(
+      world.tool,
+      () => accessForTier('custom', ['world.read', 'world.control']),
+    );
+    await gated.execute('world-control-granted', { action: 'control', affordanceId: 'lr_lights', command: 'on' });
+    expect(world.executeSpy).toHaveBeenCalledTimes(1);
+  });
+});

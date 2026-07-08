@@ -19,6 +19,8 @@ export const CAPABILITY_TOKENS = [
   'repl.execute',
   'subagent.spawn',
   'shard.spawn',
+  'world.read',
+  'world.control',
 ] as const;
 
 export type CapabilityToken = typeof CAPABILITY_TOKENS[number];

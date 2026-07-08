@@ -40,4 +40,24 @@ describe('createRateLimitedLogEmitter', () => {
 
     expect(emit).toHaveBeenCalledTimes(3);
   });
+
+  it('keeps evicting past a non-string oldest key so maxKeys stays enforced', () => {
+    const now = 9_000;
+    const emit = vi.fn();
+    const rateLimitedLog = createRateLimitedLogEmitter({
+      windowMs: 60_000,
+      maxKeys: 1,
+      now: () => now,
+    }) as unknown as (key: unknown, emit: () => void) => boolean;
+
+    // Simulate a caller that leaked a non-string key into the map.
+    expect(rateLimitedLog({ hostile: true }, emit)).toBe(true);
+    expect(rateLimitedLog('victim', emit)).toBe(true);
+    expect(rateLimitedLog('other', emit)).toBe(true);
+
+    // 'victim' must have been evicted by maxKeys pruning (not stranded behind
+    // the non-string key), so it emits again inside the window.
+    expect(rateLimitedLog('victim', emit)).toBe(true);
+    expect(emit).toHaveBeenCalledTimes(4);
+  });
 });

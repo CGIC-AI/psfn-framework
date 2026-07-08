@@ -1,4 +1,5 @@
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -8,6 +9,7 @@ import type { ChargePolicyConfig } from '../contracts/charge-policy.js';
 import { RunChargeLedger } from './charge-ledger.js';
 import {
   chargeSurface,
+  getRunChargeRollingWindowSnapshot,
   resetRunChargeRollingWindowForTests,
   runWithChargeContext,
 } from './run-charge.js';
@@ -23,6 +25,7 @@ function makeTempDir(): string {
 
 function makeEvent(overrides: Partial<RunChargeEvent> = {}): RunChargeEvent {
   return {
+    eventId: randomUUID(),
     timestampMs: 1_800_000_000_000,
     lane: 'interactive',
     surface: 'externalModelConsult',
@@ -188,6 +191,53 @@ describe('RunChargeLedger', () => {
       chargeSurface('externalModelConsult', { amount: 2 });
     })).rejects.toThrow('rolling 24-hour budget');
     rebootedLedger.close();
+  });
+
+  it('hydrates two persisted events with identical metadata as two spends', () => {
+    const nowMs = 1_800_000_000_000;
+    const ledgerPath = join(makeTempDir(), 'charge-ledger.jsonl');
+    const firstLedger = new RunChargeLedger(ledgerPath, null, { now: () => nowMs });
+    const identical = { timestampMs: nowMs - 60_000, amount: 1, quota: 3, spentAfter: 1, remainingAfter: 2 };
+    firstLedger.recordChargeEvent(makeEvent(identical));
+    firstLedger.recordChargeEvent(makeEvent(identical));
+    firstLedger.close();
+    resetRunChargeRollingWindowForTests();
+
+    const rebootedLedger = new RunChargeLedger(ledgerPath, null, { now: () => nowMs });
+    const window = getRunChargeRollingWindowSnapshot(nowMs);
+    expect(window.entryCount).toBe(2);
+    expect(window.spentByLane.interactive).toBe(2);
+    rebootedLedger.close();
+  });
+
+  it('reuses the ledger entry id as identity for rows persisted without an event eventId', () => {
+    const nowMs = 1_800_000_000_000;
+    const dir = join(makeTempDir(), 'state');
+    mkdirSync(dir, { recursive: true });
+    const ledgerPath = join(dir, 'charge-ledger.jsonl');
+    const { eventId: _dropped, ...legacyEvent } = makeEvent({
+      timestampMs: nowMs - 60_000,
+      amount: 2,
+      quota: 3,
+      spentAfter: 2,
+      remainingAfter: 1,
+    });
+    const legacyLine = JSON.stringify({
+      schemaVersion: 1,
+      recordType: 'charge_event',
+      eventId: 'ledger-entry-legacy-1',
+      recordedAtMs: nowMs - 60_000,
+      event: legacyEvent,
+    });
+    writeFileSync(ledgerPath, `${legacyLine}\n${legacyLine}\n`, 'utf-8');
+
+    const ledger = new RunChargeLedger(ledgerPath, null, { now: () => nowMs });
+    const window = getRunChargeRollingWindowSnapshot(nowMs);
+    // Same ledger entry id on both lines: exact identity, so it counts once.
+    expect(window.entryCount).toBe(1);
+    expect(window.spentByLane.interactive).toBe(2);
+    expect(ledger.listEntries()[0]?.event.eventId).toBe('ledger-entry-legacy-1');
+    ledger.close();
   });
 });
 

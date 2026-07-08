@@ -36,6 +36,25 @@ const SANDBOX_CHILD_ENV_ALLOWLIST = [
   'TZ',
   'USER',
 ] as const;
+// ponytail: env vars that can redirect executable/library resolution or
+// inject code into the child must never pass through from the parent env,
+// even when an operator allowlists them. Passing PATH through would let the
+// child resolve a different binary than the one policy validation approved
+// against the curated sandbox PATH.
+const RESERVED_SANDBOX_ENV_VARS = new Set([
+  'PATH',
+  'NODE_OPTIONS',
+  'BASH_ENV',
+  'ENV',
+  'SHELLOPTS',
+]);
+const RESERVED_SANDBOX_ENV_PREFIXES = ['LD_', 'DYLD_'] as const;
+
+function isReservedSandboxEnvVar(name: string): boolean {
+  const upper = name.toUpperCase();
+  if (RESERVED_SANDBOX_ENV_VARS.has(upper)) return true;
+  return RESERVED_SANDBOX_ENV_PREFIXES.some(prefix => upper.startsWith(prefix));
+}
 
 interface NormalizedShellAllowlist {
   names: Set<string>;
@@ -106,13 +125,13 @@ function buildSandboxChildEnv(
       nextEnv[key] = value;
     }
   }
-  // PATH is deliberately not inherited; use the curated sandbox PATH.
-  nextEnv.PATH = sandboxPath;
-
   const allowedEnvNames = new Set(envAllowlist.map((value) => value.trim()).filter(Boolean));
   for (const envVar of requestedEnvVars) {
     const trimmed = envVar.trim();
     if (!trimmed) continue;
+    if (isReservedSandboxEnvVar(trimmed)) {
+      throw new ShellExecPolicyError(`shell.exec env var is reserved and cannot be passed through: ${trimmed}`);
+    }
     if (!allowedEnvNames.has(trimmed)) {
       throw new ShellExecPolicyError(`shell.exec env var not allowlisted: ${trimmed}`);
     }
@@ -121,6 +140,10 @@ function buildSandboxChildEnv(
       nextEnv[trimmed] = value;
     }
   }
+
+  // PATH is deliberately not inherited; the curated sandbox PATH is applied
+  // after requested-env processing so nothing can shadow it.
+  nextEnv.PATH = sandboxPath;
 
   return nextEnv;
 }

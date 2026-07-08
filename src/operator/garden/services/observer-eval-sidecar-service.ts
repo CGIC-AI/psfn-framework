@@ -247,7 +247,9 @@ export class AdminObserverEvalSidecarDataService implements AdminObserverEvalSid
   ): Promise<AdminObserverEvalSidecarObservationListData> {
     const persistence = this.requirePersistence();
     const normalized = normalizeObservationFilters(filters);
-    const rows = await persistence.queryObservations(normalized);
+    // Overfetch one row past the page so hasMore reflects remaining data;
+    // the store would otherwise never return more than the exact limit.
+    const rows = await persistence.queryObservations({ ...normalized, limit: normalized.limit + 1 });
     return {
       observations: rows.slice(0, normalized.limit).map(toObservationView),
       filters: normalized,
@@ -262,7 +264,7 @@ export class AdminObserverEvalSidecarDataService implements AdminObserverEvalSid
   async queryRuns(filters: AdminObserverEvalSidecarRunFilters = {}): Promise<AdminObserverEvalSidecarRunListData> {
     const persistence = this.requirePersistence();
     const normalized = normalizeRunFilters(filters);
-    const rows = await persistence.queryRuns(normalized);
+    const rows = await persistence.queryRuns({ ...normalized, limit: normalized.limit + 1 });
     return {
       runs: rows.slice(0, normalized.limit).map(toRunView),
       filters: normalized,
@@ -292,7 +294,7 @@ export class AdminObserverEvalSidecarDataService implements AdminObserverEvalSid
   ): Promise<AdminObserverEvalSidecarLeverEventListData> {
     const leverEvents = this.requireLeverPersistence();
     const normalized = normalizeLeverEventFilters(filters);
-    const rows = await leverEvents.queryLeverEvents(normalized);
+    const rows = await leverEvents.queryLeverEvents({ ...normalized, limit: normalized.limit + 1 });
     return {
       events: rows.slice(0, normalized.limit).map(toLeverEventView),
       filters: normalized,
@@ -485,7 +487,11 @@ function toLeverEventView(record: ObserverEvalSidecarLeverEventRecord): AdminObs
   };
 }
 
+// Must stay below the persistence MAX_QUERY_LIMIT so the hasMore overfetch
+// (limit + 1) is never clamped by the store.
+const MAX_PAGE_LIMIT = 1_000;
+
 function normalizeLimit(limit: number | undefined): number {
   if (limit === undefined || !Number.isInteger(limit) || limit < 1) return 100;
-  return Math.min(limit, 1_000);
+  return Math.min(limit, MAX_PAGE_LIMIT);
 }

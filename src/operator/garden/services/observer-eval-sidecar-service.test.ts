@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type {
+  ObserverEvalSidecarLeverEventRecord,
+  ObserverEvalSidecarLeverPersistencePort,
   ObserverEvalSidecarObservationRecord,
   ObserverEvalSidecarPersistencePort,
   ObserverEvalSidecarRunRecord,
@@ -86,6 +88,66 @@ describe('AdminObserverEvalSidecarDataService', () => {
       },
     });
     expect(exported.observations).toHaveLength(1);
+  });
+
+  it('reports hasMore=false when the result set exactly fills the page', async () => {
+    const observations = [makeObservation('observation-1'), makeObservation('observation-2')];
+    const runs = [makeRunRecord('run-1'), makeRunRecord('run-2')];
+    const persistence = makePersistence({ observations, runs });
+    const leverEvents = makeLeverPersistence([makeLeverEvent('event-1'), makeLeverEvent('event-2')]);
+    const service = new AdminObserverEvalSidecarDataService({
+      persistence,
+      leverEvents,
+      nowMs: () => NOW_MS,
+    });
+
+    const observationList = await service.queryObservations({ limit: 2 });
+    expect(observationList.observations).toHaveLength(2);
+    expect(observationList.pagination).toEqual({ limit: 2, count: 2, hasMore: false });
+
+    const runList = await service.queryRuns({ limit: 2 });
+    expect(runList.runs).toHaveLength(2);
+    expect(runList.pagination).toEqual({ limit: 2, count: 2, hasMore: false });
+
+    const eventList = await service.queryLeverEvents({ limit: 2 });
+    expect(eventList.events).toHaveLength(2);
+    expect(eventList.pagination).toEqual({ limit: 2, count: 2, hasMore: false });
+  });
+
+  it('reports hasMore=true by overfetching one row past the page', async () => {
+    const observations = [
+      makeObservation('observation-1'),
+      makeObservation('observation-2'),
+      makeObservation('observation-3'),
+    ];
+    const runs = [makeRunRecord('run-1'), makeRunRecord('run-2'), makeRunRecord('run-3')];
+    const persistence = makePersistence({ observations, runs });
+    const leverEvents = makeLeverPersistence([
+      makeLeverEvent('event-1'),
+      makeLeverEvent('event-2'),
+      makeLeverEvent('event-3'),
+    ]);
+    const service = new AdminObserverEvalSidecarDataService({
+      persistence,
+      leverEvents,
+      nowMs: () => NOW_MS,
+    });
+
+    const observationList = await service.queryObservations({ limit: 2 });
+    expect(observationList.observations).toHaveLength(2);
+    expect(observationList.pagination).toEqual({ limit: 2, count: 2, hasMore: true });
+    expect(observationList.filters.limit).toBe(2);
+    expect(persistence.queryObservations).toHaveBeenCalledWith(expect.objectContaining({ limit: 3 }));
+
+    const runList = await service.queryRuns({ limit: 2 });
+    expect(runList.runs).toHaveLength(2);
+    expect(runList.pagination).toEqual({ limit: 2, count: 2, hasMore: true });
+    expect(persistence.queryRuns).toHaveBeenCalledWith(expect.objectContaining({ limit: 3 }));
+
+    const eventList = await service.queryLeverEvents({ limit: 2 });
+    expect(eventList.events).toHaveLength(2);
+    expect(eventList.pagination).toEqual({ limit: 2, count: 2, hasMore: true });
+    expect(leverEvents.queryLeverEvents).toHaveBeenCalledWith(expect.objectContaining({ limit: 3 }));
   });
 });
 
@@ -197,4 +259,71 @@ function makeObservation(id = 'observation-1'): ObserverEvalSidecarObservationRe
     createdAtMs: NOW_MS + 2,
     nonAuthoritativeNotice: OBSERVER_EVAL_SIDECAR_NON_AUTHORITATIVE_NOTICE,
   };
+}
+
+function makeRunRecord(runId: string): ObserverEvalSidecarRunRecord {
+  return {
+    schemaVersion: 1,
+    evalOwner: OBSERVER_EVAL_SIDECAR_EVAL_OWNER,
+    authoritative: false,
+    runId,
+    sidecarId: 'observer-sidecar-test',
+    deployment: 'test',
+    status: 'running',
+    startedAtMs: NOW_MS,
+    metadata: {},
+    retention: {
+      retentionClass: 'standard',
+      policyId: 'observer-sidecar-test',
+      capturedAtMs: NOW_MS,
+      retainUntilMs: NOW_MS + 86_400_000,
+      reason: 'test retention',
+    },
+    createdAtMs: NOW_MS,
+    updatedAtMs: NOW_MS,
+    nonAuthoritativeNotice: OBSERVER_EVAL_SIDECAR_NON_AUTHORITATIVE_NOTICE,
+  };
+}
+
+function makeLeverEvent(eventId: string): ObserverEvalSidecarLeverEventRecord {
+  return {
+    schemaVersion: 1,
+    evalOwner: OBSERVER_EVAL_SIDECAR_EVAL_OWNER,
+    authoritative: false,
+    eventId,
+    runId: 'run-1',
+    lever: 'would_message',
+    firedAtMs: NOW_MS,
+    observationId: 'observation-1',
+    detail: 'test lever event',
+    stateValues: { socialNeed: 0.8 },
+    sustainMs: 60_000,
+    firstCrossingMs: NOW_MS - 60_000,
+    cooldown: {
+      cooldownMs: 300_000,
+      previousFiredAtMs: null,
+      refireReason: 'first_fire',
+    },
+    retention: {
+      retentionClass: 'extended',
+      policyId: 'observer-sidecar-test',
+      capturedAtMs: NOW_MS,
+      retainUntilMs: NOW_MS + 90 * 86_400_000,
+      reason: 'test retention',
+    },
+    createdAtMs: NOW_MS,
+    nonAuthoritativeNotice: OBSERVER_EVAL_SIDECAR_NON_AUTHORITATIVE_NOTICE,
+  };
+}
+
+function makeLeverPersistence(
+  events: ObserverEvalSidecarLeverEventRecord[],
+): ObserverEvalSidecarLeverPersistencePort {
+  return {
+    recordLeverEvent: vi.fn(),
+    queryLeverEvents: vi.fn(async query => events.slice(0, query?.limit ?? events.length)),
+    loadLeverState: vi.fn(),
+    saveLeverState: vi.fn(),
+    pruneExpiredLeverEvents: vi.fn(),
+  } as unknown as ObserverEvalSidecarLeverPersistencePort;
 }

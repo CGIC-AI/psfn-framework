@@ -312,6 +312,8 @@ export interface RunChargeLineage {
 }
 
 export interface RunChargeEvent extends Partial<CorrelationMetadata> {
+  /** Stable per-event identity; rolling-window dedupe collapses only exact replays of the same event. */
+  eventId: string;
   timestampMs: number;
   lane: ChargePolicyRuntimeLane;
   surface: ChargePolicySurface;

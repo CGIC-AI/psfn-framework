@@ -203,10 +203,12 @@ function cloneChargeEvent(event: RunChargeEvent): RunChargeEvent {
 function createLedgerEntry(event: RunChargeEvent): RunChargeLedgerEntry {
   const clonedEvent = cloneChargeEvent(event);
   const metadata = extractMetadata(clonedEvent);
+  const eventId = normalizeOptionalString(clonedEvent.eventId) ?? randomUUID();
+  clonedEvent.eventId = eventId;
   return {
     schemaVersion: 1,
     recordType: 'charge_event',
-    eventId: randomUUID(),
+    eventId,
     recordedAtMs: Date.now(),
     event: clonedEvent,
     ...(metadata ? { metadata } : {}),
@@ -261,8 +263,18 @@ function readLedgerEntries(path: string): RunChargeLedgerEntry[] {
         throw new Error(`Invalid charge ledger JSON at line ${index + 1}: ${String(error)}`);
       }
       assertLedgerEntry(parsed, index + 1);
-      return parsed;
+      return withEventIdentity(parsed);
     });
+}
+
+// Rows persisted before RunChargeEvent carried its own eventId reuse the
+// ledger entry id (always present and unique) as the event identity so
+// rolling-window hydration dedupes by exact identity, never by content.
+function withEventIdentity(entry: RunChargeLedgerEntry): RunChargeLedgerEntry {
+  if (normalizeOptionalString(entry.event.eventId)) {
+    return entry;
+  }
+  return { ...entry, event: { ...entry.event, eventId: entry.eventId } };
 }
 
 function matchesQuery(entry: RunChargeLedgerEntry, query: RunChargeLedgerQuery): boolean {

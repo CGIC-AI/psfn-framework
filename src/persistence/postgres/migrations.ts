@@ -1026,6 +1026,8 @@ export const POSTGRES_OBSERVER_EVAL_SIDECAR_MIGRATIONS = [
     derived_telemetry_permitted BOOLEAN NOT NULL,
     psfn_emotion_snapshot_ref TEXT,
     psfn_emotion_snapshot_json JSONB,
+    psfn_emotion_appraisal_entry_count BIGINT,
+    psfn_emotion_snapshot_source TEXT,
     observer_input_json JSONB NOT NULL,
     projected_appraisal_json JSONB,
     emosim_output_json JSONB,
@@ -1104,5 +1106,24 @@ export const POSTGRES_OBSERVER_EVAL_SIDECAR_MIGRATIONS = [
     CHECK (authoritative = FALSE),
     CHECK (lever IN ('would_message', 'would_check_in', 'would_rest', 'rumination_watch'))
   );
+  `,
+  // psfnEmotion metadata columns: rows written before these existed are
+  // backfilled from observer_input_json, which is what the old read path
+  // reconstructed them from; new writes persist the caller's psfnEmotion.
+  `ALTER TABLE observer_eval_sidecar_observations ADD COLUMN IF NOT EXISTS psfn_emotion_appraisal_entry_count BIGINT;`,
+  `ALTER TABLE observer_eval_sidecar_observations ADD COLUMN IF NOT EXISTS psfn_emotion_snapshot_source TEXT;`,
+  `
+  UPDATE observer_eval_sidecar_observations
+  SET
+    psfn_emotion_appraisal_entry_count = COALESCE(
+      psfn_emotion_appraisal_entry_count,
+      (observer_input_json->'emotion'->>'appraisalEntryCount')::bigint
+    ),
+    psfn_emotion_snapshot_source = COALESCE(
+      psfn_emotion_snapshot_source,
+      observer_input_json->'provenance'->>'emotionSnapshotSource'
+    )
+  WHERE psfn_emotion_appraisal_entry_count IS NULL
+    OR psfn_emotion_snapshot_source IS NULL;
   `,
 ];

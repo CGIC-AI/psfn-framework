@@ -4,6 +4,7 @@ import { SHARED_SCHEMA_NAME } from './migrations.js';
 import { ensureSharedSchema } from './shared-schema.js';
 import {
   COMPANION_PRESENCE_COMPANION_ID_PATTERN,
+  DEFAULT_COMPANION_PRESENCE_STALE_TTL_MS,
   type CompanionPresenceRecord,
   type CompanionPresenceStorePort,
   type CompanionPresenceUpsertInput,
@@ -84,22 +85,39 @@ function mapRow(row: CompanionPresenceRow): CompanionPresenceRecord {
   };
 }
 
+export interface PostgresCompanionPresenceStoreOptions {
+  /**
+   * Staleness TTL applied to `since` continuity on same-place refreshes
+   * (write side of the read TTL — see the store-port doc). Tests only.
+   */
+  staleTtlMs?: number;
+}
+
 export class PostgresCompanionPresenceStore implements CompanionPresenceStorePort {
-  private constructor(private readonly pool: Pool) {}
+  private constructor(
+    private readonly pool: Pool,
+    private readonly staleTtlMs: number,
+  ) {}
 
   /**
    * Connect a shared-schema-pinned pool and provision the shared schema (the
    * provisioning is advisory-lock serialized, so N agents connecting
    * concurrently are safe) before any presence access.
    */
-  static async connect(databaseUrl: string): Promise<PostgresCompanionPresenceStore> {
+  static async connect(
+    databaseUrl: string,
+    options?: PostgresCompanionPresenceStoreOptions,
+  ): Promise<PostgresCompanionPresenceStore> {
     const pool = createPostgresPool(databaseUrl, {
       applicationName: 'psfn-companion-presence',
       allowExitOnIdle: true,
       schema: SHARED_SCHEMA_NAME,
     });
     await ensureSharedSchema(pool);
-    return new PostgresCompanionPresenceStore(pool);
+    return new PostgresCompanionPresenceStore(
+      pool,
+      options?.staleTtlMs ?? DEFAULT_COMPANION_PRESENCE_STALE_TTL_MS,
+    );
   }
 
   async upsertPresence(input: CompanionPresenceUpsertInput): Promise<CompanionPresenceRecord> {
@@ -108,9 +126,12 @@ export class PostgresCompanionPresenceStore implements CompanionPresenceStorePor
     const placeId = normalizeIdText(input.placeId, 'placeId');
     const kind = normalizeKind(input.kind);
 
-    // Same-place refresh keeps `since` (arrival time at the current place);
-    // a move resets it. `updated_at` always bumps — it is the freshness beat
-    // readers key their staleness TTL off.
+    // Same-place refresh keeps `since` (start of the current presence window)
+    // ONLY while the previous row is still fresh under the staleness TTL — a
+    // stale row already reads as "gone" everywhere, so refreshing it is a NEW
+    // arrival and `since` resets (psfn-framework-s10rm window semantics). A
+    // move always resets `since`. `updated_at` always bumps — it is the
+    // freshness beat readers key their staleness TTL off.
     const row = await queryOne<CompanionPresenceRow>(this.pool, `
       INSERT INTO companion_presence (companion_id, site_id, place_id, kind, since, updated_at)
       VALUES ($1, $2, $3, $4, now(), now())
@@ -121,12 +142,13 @@ export class PostgresCompanionPresenceStore implements CompanionPresenceStorePor
         since = CASE
           WHEN companion_presence.site_id = EXCLUDED.site_id
             AND companion_presence.place_id = EXCLUDED.place_id
+            AND companion_presence.updated_at >= now() - ($5::double precision * interval '1 millisecond')
           THEN companion_presence.since
           ELSE EXCLUDED.since
         END,
         updated_at = EXCLUDED.updated_at
       RETURNING companion_id, site_id, place_id, kind, since, updated_at
-    `, [companionId, siteId, placeId, kind]);
+    `, [companionId, siteId, placeId, kind, this.staleTtlMs]);
     if (!row) {
       throw new Error(`Failed to upsert companion presence for "${companionId}"`);
     }

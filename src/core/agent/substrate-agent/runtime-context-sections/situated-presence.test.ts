@@ -7,7 +7,7 @@ import { describe, expect, it } from 'vitest';
 import type { SubstrateMessage } from '../../../../shared/contracts/runtime.js';
 import type { PlacesRegistryConfig } from '../../../../shared/contracts/places-registry.js';
 import type { CompanionPresenceMetadata } from '../../presence-metadata.js';
-import { buildSituatedPresenceContextBlock } from './situated-presence.js';
+import { buildSituatedPresenceContextBlock, resolveSituatedPlaceRef } from './situated-presence.js';
 
 const PLACES_REGISTRY: PlacesRegistryConfig = {
   schemaVersion: 1,
@@ -151,6 +151,18 @@ describe('situated-presence producer', () => {
     expect(withCoPresent).toContain('Also here: operator');
   });
 
+  it('renders byte-identically with an empty coPresent and with none (flag-off parity)', () => {
+    const base = {
+      message: makeMessage({
+        routing: routing({ placeId: 'place.living-room', presence: SATELLITE_PRESENCE }),
+      }),
+      placesRegistry: PLACES_REGISTRY,
+    };
+    const withoutInput = buildSituatedPresenceContextBlock(base);
+    const withEmpty = buildSituatedPresenceContextBlock({ ...base, coPresent: [] });
+    expect(withEmpty).toBe(withoutInput);
+  });
+
   it('matches the rendered snapshot for a full place + presence + co-present turn', () => {
     const block = buildSituatedPresenceContextBlock({
       message: makeMessage({
@@ -172,5 +184,31 @@ describe('situated-presence producer', () => {
       Also here: operator
       </runtime_situated_presence>"
     `);
+  });
+});
+
+describe('resolveSituatedPlaceRef (W5a presence coordinates)', () => {
+  it('resolves the same place coordinates the block renders from', () => {
+    const ref = resolveSituatedPlaceRef(
+      makeMessage({ routing: routing({ placeId: 'place.living-room' }) }),
+      PLACES_REGISTRY,
+    );
+    expect(ref).toEqual({
+      siteId: 'site.home',
+      placeId: 'place.living-room',
+      kind: 'physical',
+    });
+  });
+
+  it('resolves nothing without a registry, without a satellite placeId, or for an unknown place', () => {
+    expect(resolveSituatedPlaceRef(
+      makeMessage({ routing: routing({ placeId: 'place.living-room' }) }),
+      undefined,
+    )).toBeUndefined();
+    expect(resolveSituatedPlaceRef(makeMessage(), PLACES_REGISTRY)).toBeUndefined();
+    expect(resolveSituatedPlaceRef(
+      makeMessage({ routing: routing({ placeId: 'place.nowhere' }) }),
+      PLACES_REGISTRY,
+    )).toBeUndefined();
   });
 });

@@ -100,6 +100,28 @@ function formatAffordanceLine(affordance: AffordanceConfig): string {
   return `- ${name} (${affordance.kind}, ${affordance.role})`;
 }
 
+/**
+ * The place a turn is situated at, as resolved from its satellite routing
+ * metadata against the places registry. This is the SAME resolution the
+ * situated block below performs, exported so the multi-companion presence
+ * writer (W5a) and the co-presence read key on identical coordinates.
+ */
+export interface SituatedPlaceRef {
+  siteId: string;
+  placeId: string;
+  kind: PlaceConfig['kind'];
+}
+
+export function resolveSituatedPlaceRef(
+  message: SubstrateMessage,
+  registry: PlacesRegistryConfig | undefined,
+): SituatedPlaceRef | undefined {
+  const placeId = readSatellitePlaceId(message.routing?.satellite);
+  const place = resolvePlace(registry, placeId);
+  if (!place) return undefined;
+  return { siteId: place.siteId, placeId: place.placeId, kind: place.kind };
+}
+
 export function buildSituatedPresenceContextBlock(input: SituatedPresenceContextInput): string {
   const registry = input.placesRegistry;
   const presence: CompanionPresenceMetadata | undefined = input.message.routing?.presence;

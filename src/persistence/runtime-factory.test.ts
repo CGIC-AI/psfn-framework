@@ -34,6 +34,8 @@ const runtimeFactoryMocks = vi.hoisted(() => ({
   connectPostgresParticipantTrendStore: vi.fn(async () => runtimeFactoryMocks.postgresParticipantTrendStore),
   postgresScheduledPromptStore: { kind: 'postgres-scheduled-prompt-store' },
   connectPostgresScheduledPromptStore: vi.fn(async () => runtimeFactoryMocks.postgresScheduledPromptStore),
+  postgresCompanionPresenceStore: { kind: 'postgres-companion-presence-store' },
+  connectPostgresCompanionPresenceStore: vi.fn(async () => runtimeFactoryMocks.postgresCompanionPresenceStore),
   bootstrapPool: { end: vi.fn(async () => undefined) },
   createPostgresPool: vi.fn(() => runtimeFactoryMocks.bootstrapPool),
   ensurePostgresSchemaExists: vi.fn(async () => undefined),
@@ -98,6 +100,12 @@ vi.mock('./postgres/scheduled-prompt-store.js', () => ({
   },
 }));
 
+vi.mock('./postgres/companion-presence-store.js', () => ({
+  PostgresCompanionPresenceStore: {
+    connect: runtimeFactoryMocks.connectPostgresCompanionPresenceStore,
+  },
+}));
+
 vi.mock('./postgres.js', () => ({
   createPostgresPool: runtimeFactoryMocks.createPostgresPool,
   ensurePostgresSchemaExists: runtimeFactoryMocks.ensurePostgresSchemaExists,
@@ -111,6 +119,7 @@ beforeEach(() => {
   runtimeFactoryMocks.createPostgresIntentionPorts.mockClear();
   runtimeFactoryMocks.connectPostgresReflectionMirror.mockClear();
   runtimeFactoryMocks.connectPostgresScheduledPromptStore.mockClear();
+  runtimeFactoryMocks.connectPostgresCompanionPresenceStore.mockClear();
   runtimeFactoryMocks.createSqliteEpisodicStore.mockClear();
   runtimeFactoryMocks.createReflectionMetacognitionJournalStore.mockClear();
   runtimeFactoryMocks.connectPostgresInternalStateStore.mockClear();
@@ -223,6 +232,37 @@ describe('createAgentPersistenceRuntime', () => {
     // No schema configured: no companion schema is provisioned up front.
     expect(runtimeFactoryMocks.ensurePostgresSchemaExists).not.toHaveBeenCalled();
     expect(runtimeFactoryMocks.createPostgresPool).not.toHaveBeenCalled();
+    // Multi-companion flag off: the shared schema is never touched and no
+    // presence store exists.
+    expect(runtimeFactoryMocks.connectPostgresCompanionPresenceStore).not.toHaveBeenCalled();
+    expect(runtime.companionPresenceStore).toBeUndefined();
+  });
+
+  it('connects the shared-schema companion presence store only when multi-companion is enabled', async () => {
+    const runtime = await createAgentPersistenceRuntime({
+      config: {
+        databasePath: '/tmp/ignored.db',
+        persistenceBackend: 'postgres',
+        postgresDatabaseUrl: 'postgres://postgres:secret@localhost:5432/psfn',
+        postgresSchema: 'companion_x',
+        multiCompanion: true,
+      },
+      pathSnapshot: {
+        systemDataDir: '/tmp/system-data',
+        companionDataDir: '/tmp/companion-data',
+        workspacePath: '/tmp/workspace',
+        tempDir: '/tmp/tmp',
+        logsDir: '/tmp/logs',
+        backupRootDir: '/tmp/backups',
+      },
+      embeddingDims: 1536,
+      primaryUserId: 'user-primary',
+    });
+
+    expect(runtimeFactoryMocks.connectPostgresCompanionPresenceStore).toHaveBeenCalledWith(
+      'postgres://postgres:secret@localhost:5432/psfn',
+    );
+    expect(runtime.companionPresenceStore).toBe(runtimeFactoryMocks.postgresCompanionPresenceStore);
   });
 
   it('threads the configured per-companion schema into every store and provisions it up front', async () => {

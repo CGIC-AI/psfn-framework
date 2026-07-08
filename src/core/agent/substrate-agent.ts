@@ -117,6 +117,8 @@ import {
   type IntentionPostTurnHook,
   type PostTurnActionInferer,
 } from './substrate-agent/post-turn-actions.js';
+import { resolveSituatedPlaceRef } from './substrate-agent/runtime-context-sections/situated-presence.js';
+import type { CompanionPresenceTurnPort } from './companion-presence-runtime.js';
 import {
   buildBehavioralNotesContextBlock as buildBehavioralNotesContextBlockForTurn,
   buildDynamicPromptTemplateVariables as buildDynamicPromptTemplateVariablesForTurn,
@@ -301,6 +303,12 @@ export class SubstrateAgent {
 
   // Contact-tracking policy gate (E3.4) — null behaves as 'auto' everywhere
   private readonly contactTrackingGate: ContactTrackingGate | null;
+
+  // Cross-companion presence (sprint 10, W5a) — null (single-companion /
+  // flag-off) leaves every turn byte-identical: no writes, no co-presence.
+  // Wired from the agent entrypoint after persistence bootstrap, like
+  // memoryProvider/contactStore above.
+  companionPresence: CompanionPresenceTurnPort | null = null;
 
   // Places soft-registry (S10) — undefined behaves as an empty registry
   private readonly placesRegistryConfig: PlacesRegistryConfig | undefined;
@@ -912,6 +920,7 @@ export class SubstrateAgent {
       costTelemetry: createEventBusCostTelemetryPort(this.eventBus),
       fatigueBudget: this.fatigueBudget,
       satellitePresence: this.satellitePresencePort,
+      companionPresence: this.companionPresence,
       llmClient: this.llmClient,
       imageVisionReviewer: this.imageVisionReviewer,
       sessionManager: this.sessionManager,
@@ -1271,6 +1280,15 @@ export class SubstrateAgent {
     conversationScope?: ConversationScope,
   ): string {
     const activeToolCounts = this.toolRuntimeFacade.resolveActiveToolCounts();
+    // Co-presence (W5a): resolved against the SAME place resolution the
+    // situated block performs; null companionPresence (flag-off) yields no
+    // coPresent input and byte-identical rendering.
+    const situatedPlace = this.companionPresence
+      ? resolveSituatedPlaceRef(message, this.placesRegistryConfig)
+      : undefined;
+    const coPresent = situatedPlace
+      ? this.companionPresence?.getCoPresent(situatedPlace)
+      : undefined;
     return buildRuntimeContextForTurn({
       message,
       ...(conversationScope ? { conversationScope } : {}),
@@ -1304,6 +1322,7 @@ export class SubstrateAgent {
       config: this.config as unknown as Record<string, unknown>,
       substrateHealth: this.companionSubstrateHealthContext,
       ...(this.placesRegistryConfig ? { placesRegistry: this.placesRegistryConfig } : {}),
+      ...(coPresent && coPresent.length > 0 ? { coPresent } : {}),
     });
   }
 

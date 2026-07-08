@@ -22,6 +22,7 @@ import type { TurnToolSummary } from '../../../faculties/skills/reflection-nudge
 import type { ChannelMeta } from '../../../system/trust/policy.js';
 import type { TrustLevel } from '../../../system/trust/types.js';
 import type { SatellitePresencePort } from '../satellite-adapter-port.js';
+import type { CompanionPresenceTurnPort } from '../companion-presence-runtime.js';
 import type { AgentResponse, CorrelationMetadata, FatigueEnforcementMetadata, InferredPostTurnAction, MessagePromptOverride, MessagePromptOverrideMode, ObservabilityCallType, ResponseStyle, SubstrateMessage, TurnID, TurnRecord, TurnUsage } from '../../../shared/contracts/runtime.js';
 import type { CoreSubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
 import type { ContextBudgetTurnCharacteristics } from '../../../shared/context-budget.js';
@@ -85,6 +86,11 @@ export interface TurnExecutionRuntime {
   costTelemetry: CostTelemetryPort;
   fatigueBudget?: FatigueBudgetPort | null;
   satellitePresence: SatellitePresencePort;
+  /**
+   * Cross-companion presence (sprint 10, W5a). Absent/null (single-companion,
+   * flag-off) skips the per-turn presence write entirely.
+   */
+  companionPresence?: CompanionPresenceTurnPort | null;
   llmClient: LLMProviderPort;
   imageVisionReviewer: ImageVisionReviewer | null;
   sessionManager: SessionManager;

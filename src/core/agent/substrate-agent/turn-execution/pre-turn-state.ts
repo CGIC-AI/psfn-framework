@@ -229,6 +229,17 @@ export async function prepareTurnIdentityState(input: {
     message.routing = nextRouting;
   }
 
+  // Cross-companion presence (sprint 10, W5a): a turn situated at a place
+  // (satellite-place binding) refreshes this companion's own row in the shared
+  // companion_presence table and the co-presence snapshot the situated context
+  // section renders later this same turn. New co-present companions emit
+  // `presence.companion.co_located` inside this call. No-op when unwired
+  // (single-companion / flag-off) or when the turn resolves no place; the port
+  // never throws (presence failures are logged, not turn-fatal).
+  if (runtime.companionPresence) {
+    await runtime.companionPresence.observeTurnPlace(message);
+  }
+
   const authorContext = await runtime.resolveAuthorContext(message);
   // E3.2: only adapter-declared routing privacy (X-Channel-Privacy header,
   // satellite registry) reaches ChannelMeta. Per-contact conversation-channel

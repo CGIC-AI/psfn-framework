@@ -87,7 +87,10 @@ import {
 } from './runtime-context-sections/notes-and-skills.js';
 import { buildSelfPresentationPromptVariables } from './runtime-context-sections/self-presentation.js';
 import { buildSatelliteEndpointContextBlock } from './runtime-context-sections/satellite.js';
-import { buildSituatedPresenceContextBlock } from './runtime-context-sections/situated-presence.js';
+import {
+  buildSituatedPresenceContextBlock,
+  type CoPresentCompanion,
+} from './runtime-context-sections/situated-presence.js';
 import type { PlacesRegistryConfig } from '../../../shared/contracts/places-registry.js';
 
 // The section producers moved into ./runtime-context-sections/ (E2.6). This
@@ -407,6 +410,12 @@ export function buildRuntimeContext(input: {
    * empty registry, so a runtime with no `places.json` renders byte-identically.
    */
   placesRegistry?: PlacesRegistryConfig;
+  /**
+   * Co-present companions at the turn's situated place, resolved from the
+   * shared `companion_presence` table (multi-companion W5a). Absent/empty
+   * (always the case flag-off) renders byte-identically to today.
+   */
+  coPresent?: ReadonlyArray<CoPresentCompanion>;
 }): string {
   const runtimeContextExtra = (() => {
     const raw = input.templateVariables?.runtime_context_extra;
@@ -429,10 +438,12 @@ export function buildRuntimeContext(input: {
   }
   // Situated-presence block (S10 B1): "where am I / what's here / who else is
   // here". First consumer of message.routing.presence + the places registry.
-  // coPresent stays [] until multi-companion W5 populates shared presence.
+  // coPresent is populated from shared companion_presence under
+  // multi-companion (W5a); absent/empty renders byte-identically.
   const situatedPresenceContext = buildSituatedPresenceContextBlock({
     message: input.message,
     ...(input.placesRegistry ? { placesRegistry: input.placesRegistry } : {}),
+    ...(input.coPresent && input.coPresent.length > 0 ? { coPresent: input.coPresent } : {}),
   });
   if (situatedPresenceContext) {
     sections.push(situatedPresenceContext);

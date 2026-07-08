@@ -47,6 +47,7 @@ interface CircuitEntry {
   state: CircuitBreakerState;
   failures: number[];
   halfOpenAttempts: number;
+  halfOpenSuccesses: number;
   openedAtMs?: number;
   openUntilMs?: number;
 }
@@ -128,6 +129,7 @@ function createEntry(): CircuitEntry {
     state: 'closed',
     failures: [],
     halfOpenAttempts: 0,
+    halfOpenSuccesses: 0,
   };
 }
 
@@ -216,6 +218,14 @@ export class SlidingWindowCircuitBreaker {
       return;
     }
 
+    // Close only once every allowed half-open probe has succeeded; otherwise a
+    // first probe success would close the circuit while concurrent probe
+    // failures are still in flight, weakening the half-open failure gate.
+    entry.halfOpenSuccesses += 1;
+    if (entry.halfOpenSuccesses < this.options.halfOpenMaxAttempts) {
+      return;
+    }
+
     entry.failures = [];
     entry.openedAtMs = undefined;
     entry.openUntilMs = undefined;
@@ -272,6 +282,7 @@ export class SlidingWindowCircuitBreaker {
     if (to !== 'half_open') {
       entry.halfOpenAttempts = 0;
     }
+    entry.halfOpenSuccesses = 0;
 
     options.onTransition?.({
       ...this.toSnapshot(options.key, entry, options.method),

@@ -8,6 +8,7 @@ import type { SubstrateMessage } from '../../../../shared/contracts/runtime.js';
 import type { PlacesRegistryConfig } from '../../../../shared/contracts/places-registry.js';
 import type { CompanionPresenceMetadata } from '../../presence-metadata.js';
 import { buildSituatedPresenceContextBlock } from './situated-presence.js';
+import { SituatedEmanationTracker } from './situated-emanation.js';
 
 const PLACES_REGISTRY: PlacesRegistryConfig = {
   schemaVersion: 1,
@@ -37,7 +38,31 @@ const PLACES_REGISTRY: PlacesRegistryConfig = {
         },
       ],
     },
+    {
+      placeId: 'place.kitchen',
+      siteId: 'site.home',
+      displayName: 'Kitchen',
+      kind: 'physical',
+      affordances: [
+        {
+          affordanceId: 'aff.kitchen-light',
+          role: 'effector',
+          kind: 'light',
+          backend: 'ha',
+          displayName: 'Ceiling Light',
+          control: ['on', 'off'],
+        },
+      ],
+    },
   ],
+};
+
+const KITCHEN_PRESENCE: CompanionPresenceMetadata = {
+  kind: 'satellite',
+  satelliteId: 'sat.kitchen',
+  companionId: 'companion.self',
+  siteId: 'site.home',
+  label: 'Kitchen satellite',
 };
 
 const SATELLITE_PRESENCE: CompanionPresenceMetadata = {
@@ -172,5 +197,85 @@ describe('situated-presence producer', () => {
       Also here: operator
       </runtime_situated_presence>"
     `);
+  });
+});
+
+describe('situated-presence producer — active-emanation integration (B2)', () => {
+  it('foregrounds the current active emanation on a placeless (non-satellite) turn', () => {
+    const tracker = new SituatedEmanationTracker();
+    // A satellite turn establishes the emanation into the living room.
+    buildSituatedPresenceContextBlock({
+      message: makeMessage({
+        routing: routing({ placeId: 'place.living-room', presence: SATELLITE_PRESENCE }),
+      }),
+      placesRegistry: PLACES_REGISTRY,
+      emanationTracker: tracker,
+    });
+    // A subsequent Discord/Telegram turn carries no place of its own, yet the
+    // block still foregrounds the living room from the active emanation.
+    const block = buildSituatedPresenceContextBlock({
+      message: makeMessage(),
+      placesRegistry: PLACES_REGISTRY,
+      emanationTracker: tracker,
+    });
+    expect(block).toContain('Here: Living Room (physical place)');
+    expect(block).toContain('- Floor Lamp (light, effector)');
+  });
+
+  it('updates the active emanation when a satellite turn establishes location', () => {
+    const tracker = new SituatedEmanationTracker();
+    buildSituatedPresenceContextBlock({
+      message: makeMessage({
+        routing: routing({ placeId: 'place.living-room', presence: SATELLITE_PRESENCE }),
+      }),
+      placesRegistry: PLACES_REGISTRY,
+      emanationTracker: tracker,
+    });
+    expect(tracker.resolvePlaceId()).toBe('place.living-room');
+  });
+
+  it('switching active emanation between two satellites changes the foregrounded place', () => {
+    const tracker = new SituatedEmanationTracker();
+    // Emanate into the living room, then read it on a placeless turn.
+    buildSituatedPresenceContextBlock({
+      message: makeMessage({
+        routing: routing({ placeId: 'place.living-room', presence: SATELLITE_PRESENCE }),
+      }),
+      placesRegistry: PLACES_REGISTRY,
+      emanationTracker: tracker,
+    });
+    const first = buildSituatedPresenceContextBlock({
+      message: makeMessage(),
+      placesRegistry: PLACES_REGISTRY,
+      emanationTracker: tracker,
+    });
+    expect(first).toContain('Here: Living Room (physical place)');
+
+    // Hand off to the kitchen satellite; the next placeless turn foregrounds it.
+    buildSituatedPresenceContextBlock({
+      message: makeMessage({
+        routing: routing({ placeId: 'place.kitchen', presence: KITCHEN_PRESENCE }),
+      }),
+      placesRegistry: PLACES_REGISTRY,
+      emanationTracker: tracker,
+    });
+    const second = buildSituatedPresenceContextBlock({
+      message: makeMessage(),
+      placesRegistry: PLACES_REGISTRY,
+      emanationTracker: tracker,
+    });
+    expect(second).toContain('Here: Kitchen (physical place)');
+    expect(second).not.toContain('Living Room');
+  });
+
+  it('falls back to the honest empty block when nothing has established a place', () => {
+    const tracker = new SituatedEmanationTracker();
+    // Placeless turn, empty tracker, no presence → no fabricated location.
+    const block = buildSituatedPresenceContextBlock({
+      message: makeMessage(),
+      placesRegistry: PLACES_REGISTRY,
+      emanationTracker: tracker,
+    });
+    expect(block).toBe('');
   });
 });

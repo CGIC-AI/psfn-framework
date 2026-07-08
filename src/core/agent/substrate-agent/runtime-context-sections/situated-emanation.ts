@@ -1,0 +1,95 @@
+// ── Active-emanation → situated-place tracker (S10, Workstream B2) ──
+//
+// The situated block (B1) foregrounds "where am I right now". On a satellite
+// turn the answer is the turn's own bound place. But most turns arrive over a
+// placeless channel (Discord/Telegram): those must still foreground the
+// companion's CURRENT active emanation — the room it last emanated into — not
+// nothing. This tracker is that handoff-aware memory of the current emanation.
+//
+// It wraps the canonical `ActiveEmanationAuthority` so switching emanation is
+// modeled the same way the rest of the runtime models it (source-keyed,
+// handoff-aware), and layers the place binding on top: an emanation turn that
+// carries a `placeId` ESTABLISHES the current situated place; a later placeless
+// turn CONSUMES it.
+//
+// Fail closed: only a turn that carries a resolvable place (routing.satellite
+// .placeId) updates the current emanation. A conflicting/unresolvable presence
+// never establishes a location. Nothing is fabricated — when nothing has ever
+// established a place, the situated block renders its honest B1 fallback.
+//
+// Durability is OUT OF SCOPE here (bead .7): this tracker is per-process
+// in-memory only. A fresh process starts with no current emanation and the
+// first placeless turn falls back honestly until a placed turn arrives.
+
+import { ActiveEmanationAuthority } from '../../active-emanation-state.js';
+import {
+  resolvePresenceSubjectId,
+  type CompanionPresenceMetadata,
+} from '../../presence-metadata.js';
+import type { SubstrateMessage } from '../../../../shared/contracts/runtime.js';
+
+/** The companion's current active emanation, resolved to a situated place. */
+export interface SituatedEmanation {
+  /** Presence that established this emanation, when the turn carried one. */
+  presence?: CompanionPresenceMetadata;
+  /** `PlaceConfig.placeId` this emanation is bound to (static satellite binding). */
+  placeId: string;
+}
+
+/** Reads the turn's own bound place off satellite routing, trimmed/guarded. */
+function readTurnPlaceId(message: SubstrateMessage): string | undefined {
+  const placeId = message.routing?.satellite?.placeId;
+  if (typeof placeId !== 'string') return undefined;
+  const trimmed = placeId.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+export class SituatedEmanationTracker {
+  private readonly authority = new ActiveEmanationAuthority();
+  private current: SituatedEmanation | undefined;
+
+  /**
+   * Fold a turn into the tracker. Presence-bearing turns update the canonical
+   * emanation authority (handoff-aware continuity); a turn that also carries a
+   * resolvable `placeId` becomes the current situated emanation. Placeless turns
+   * (Discord/Telegram) leave the current emanation untouched so it can be
+   * consumed by {@link resolvePlaceId}/{@link resolvePresence}.
+   */
+  observe(message: SubstrateMessage): void {
+    const presence = message.routing?.presence;
+    if (presence) {
+      const sourceKey = resolvePresenceSubjectId(presence);
+      const resolution = this.authority.resolve(presence, {
+        ...(sourceKey ? { sourceKey } : {}),
+        // Situated foregrounding is explicitly handoff-aware: emanating into a
+        // new place supersedes the previous one rather than erroring.
+        allowPrimaryEmbodimentHandoff: true,
+      });
+      // A conflicting/unresolvable presence never establishes a location.
+      if (resolution.error) return;
+    }
+
+    const placeId = readTurnPlaceId(message);
+    // Only a place-bearing turn (a bound satellite emanation) moves the marker.
+    if (!placeId) return;
+    this.current = {
+      ...(presence ? { presence } : {}),
+      placeId,
+    };
+  }
+
+  /** The current active emanation's place, if one has been established. */
+  resolvePlaceId(): string | undefined {
+    return this.current?.placeId;
+  }
+
+  /** The presence that established the current active emanation, if any. */
+  resolvePresence(): CompanionPresenceMetadata | undefined {
+    return this.current?.presence;
+  }
+
+  /** Snapshot of the current active emanation (copy), for inspection/tests. */
+  snapshot(): SituatedEmanation | undefined {
+    return this.current ? { ...this.current } : undefined;
+  }
+}

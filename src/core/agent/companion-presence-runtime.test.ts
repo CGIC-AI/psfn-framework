@@ -66,6 +66,8 @@ class FakePresenceStore implements CompanionPresenceStorePort {
   deleteCalls: string[] = [];
   closed = false;
   failNext: Error | null = null;
+  /** Server-side updated_at stamp; defaults to NOW, overridable to prove bumps. */
+  nowIso: string | null = null;
 
   seed(record: CompanionPresenceRecord): void {
     this.rows.set(record.companionId, record);
@@ -88,7 +90,7 @@ class FakePresenceStore implements CompanionPresenceStorePort {
       placeId: input.placeId,
       kind: input.kind,
       since: samePlace ? previous.since : NOW.toISOString(),
-      updatedAt: NOW.toISOString(),
+      updatedAt: this.nowIso ?? NOW.toISOString(),
     };
     this.rows.set(input.companionId, record);
     return record;
@@ -288,6 +290,77 @@ describe('CompanionPresenceRuntime', () => {
     await expect(runtime.observeTurnPlace(makeMessage('place.living-room')))
       .resolves.toBeUndefined();
     expect(emit).not.toHaveBeenCalled();
+  });
+
+  it('heartbeat refresh bumps its own updated_at at the last situated place, no event', async () => {
+    const store = new FakePresenceStore();
+    const { bus, emit } = makeEventBus();
+    const runtime = makeRuntime(store, bus);
+
+    // Situate at the living room; the initial own-row write is stamped at T0.
+    store.nowIso = new Date(NOW.getTime() - 5 * 60_000).toISOString();
+    await runtime.observeTurnPlace(makeMessage('place.living-room'));
+    expect(store.rows.get(SELF_ID)?.updatedAt).toBe(store.nowIso);
+    const emitCallsAfterTurn = emit.mock.calls.length;
+    const sinceAfterTurn = store.rows.get(SELF_ID)?.since;
+
+    // Later heartbeat with no turn: the same place is re-upserted (updated_at
+    // advances) but it is NOT an arrival — no co-location event is emitted.
+    store.nowIso = NOW.toISOString();
+    await runtime.refreshOwnPresence();
+
+    expect(store.upsertCalls).toHaveLength(2);
+    expect(store.upsertCalls[1]).toEqual({
+      companionId: SELF_ID,
+      siteId: 'site.home',
+      placeId: 'place.living-room',
+      kind: 'physical',
+    });
+    expect(store.rows.get(SELF_ID)?.updatedAt).toBe(NOW.toISOString());
+    // since is preserved (not reset) across the same-place refresh.
+    expect(store.rows.get(SELF_ID)?.since).toBe(sinceAfterTurn);
+    expect(emit.mock.calls.length).toBe(emitCallsAfterTurn);
+  });
+
+  it('heartbeat refresh never emits co-location even when a new peer has arrived', async () => {
+    const store = new FakePresenceStore();
+    const { bus, emit } = makeEventBus();
+    const runtime = makeRuntime(store, bus);
+
+    await runtime.observeTurnPlace(makeMessage('place.living-room'));
+    expect(emit).not.toHaveBeenCalled();
+
+    // A sibling arrives at our place after our last situated turn. A refresh is
+    // a liveness beat only — it must not read co-presence or fire an arrival.
+    store.seed(peerRecord(PEER_A));
+    await runtime.refreshOwnPresence();
+
+    expect(emit).not.toHaveBeenCalled();
+  });
+
+  it('heartbeat refresh is a no-op when never situated (no shared-schema traffic)', async () => {
+    const store = new FakePresenceStore();
+    const { bus, emit } = makeEventBus();
+    const runtime = makeRuntime(store, bus);
+
+    await runtime.refreshOwnPresence();
+    // An unsituated turn must not arm the refresh either.
+    await runtime.observeTurnPlace(makeMessage());
+    await runtime.refreshOwnPresence();
+
+    expect(store.upsertCalls).toHaveLength(0);
+    expect(emit).not.toHaveBeenCalled();
+  });
+
+  it('heartbeat refresh never throws on store failure (logged, heartbeat survives)', async () => {
+    const store = new FakePresenceStore();
+    const { bus } = makeEventBus();
+    const runtime = makeRuntime(store, bus);
+
+    await runtime.observeTurnPlace(makeMessage('place.living-room'));
+    store.failNext = new Error('shared schema unavailable');
+
+    await expect(runtime.refreshOwnPresence()).resolves.toBeUndefined();
   });
 
   it('deletes its own row and closes the store on graceful shutdown', async () => {

@@ -358,6 +358,7 @@ async function main(): Promise<void> {
     concernStore: intentionRuntime.concernStore,
     backupConfig,
     pathSnapshot,
+    companionPresence: companionPresenceRuntime,
     contactStore,
     socialGraphProposalStore,
     socialGraphWatermarkStore,

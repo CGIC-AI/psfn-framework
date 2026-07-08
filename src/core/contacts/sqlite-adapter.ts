@@ -36,6 +36,7 @@ function asyncContactStore(store: ContactStore): ContactStorePort {
       isMachineIntelligence,
       actor,
     ),
+    markMachineIntelligenceFromObservation: async (id, actor) => store.markMachineIntelligenceFromObservation(id, actor),
     getEmotionalSnapshot: async (id) => store.getEmotionalSnapshot(id),
     getEmotionalTimeSeries: async (id, limit) => store.getEmotionalTimeSeries(id, limit),
     updateRelationshipType: async (id, relationshipType, actor) => store.updateRelationshipType(id, relationshipType, actor),

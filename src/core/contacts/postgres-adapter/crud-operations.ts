@@ -18,7 +18,8 @@ import type {
 import type { TrustLevel } from '../../../system/trust/types.js';
 import { isHighTierTrustLevel } from '../../../system/trust/types.js';
 import { isManualHighTierTrustMutationAuthorized, resolveTrustMutationSource } from '../../../system/trust/policy.js';
-import type { ContactUpsertMutationOptions } from '../contact-store-port.js';
+import type { ContactUpsertMutationOptions, MachineIntelligenceObservationMarkResult } from '../contact-store-port.js';
+import { isDeliberateMachineIntelligenceCorrection } from '../observed-machine-intelligence.js';
 import type { EmotionalSnapshot, EmotionalTimeSeriesPoint } from '../store/emotional-baseline.js';
 import {
   appendEmotionalObservationToTimeSeries,
@@ -44,6 +45,7 @@ import type { ContactIdentityVerificationRow, ContactMutationAuditRow, ContactRo
 import {
   chooseMoreRestrictiveSensitivity,
   contactMutationAuditRowToEntry,
+  normalizeAuditActor,
   normalizeJsonObject,
   normalizeLimit,
   socialGraphEdgeRowToEdge,
@@ -322,6 +324,56 @@ const postgresContactCrudOperations: PostgresContactOperationMap = {
     );
     await this.syncContactExports();
     return true;
+  },
+
+  async markMachineIntelligenceFromObservation(
+    id: string,
+    actor: string,
+  ): Promise<MachineIntelligenceObservationMarkResult> {
+    // Row-lock + audit check + write in one transaction: a concurrent deliberate
+    // correction either commits first (and the audit check preserves it) or
+    // blocks on the row lock and lands after this observation (correction wins).
+    const result = await withPostgresClient(this.pool, async (client): Promise<MachineIntelligenceObservationMarkResult> => {
+      const contact = await client.query<{ is_machine_intelligence: boolean | null }>(
+        'SELECT is_machine_intelligence FROM contacts WHERE id = $1 FOR UPDATE',
+        [id],
+      );
+      if (contact.rows.length === 0) return 'not_found';
+      const latest = await client.query<{ actor: string }>(
+        `
+          SELECT actor
+          FROM contact_mutation_audit
+          WHERE contact_id = $1 AND field = 'is_machine_intelligence'
+          ORDER BY timestamp DESC, id DESC
+          LIMIT 1
+        `,
+        [id],
+      );
+      if (isDeliberateMachineIntelligenceCorrection(latest.rows[0]?.actor)) {
+        return 'override_preserved';
+      }
+      if (contact.rows[0]?.is_machine_intelligence === true) return 'already_marked';
+      await client.query('UPDATE contacts SET is_machine_intelligence = TRUE WHERE id = $1', [id]);
+      await client.query(
+        `
+          INSERT INTO contact_mutation_audit (
+            contact_id,
+            actor,
+            field,
+            old_value,
+            new_value,
+            timestamp
+          )
+          VALUES ($1, $2, 'is_machine_intelligence', 'false', 'true', $3)
+        `,
+        [id, normalizeAuditActor(actor), new Date().toISOString()],
+      );
+      return 'marked';
+    });
+    if (result === 'marked') {
+      await this.syncContactExports();
+    }
+    return result;
   },
 
   async updateIdentityProfile(contactId: string, displayName: string, nickname?: string, actor?: string): Promise<boolean> {

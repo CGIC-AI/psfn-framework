@@ -6,13 +6,15 @@
 //
 // Precedence (charter §8.10 / law 26 — the guard must not override the
 // operator): observation only ever ADDS the marker, and only when the field has
-// not been deliberately corrected. `is_machine_intelligence` is mutated solely
-// through setMachineIntelligence, which writes a contact_mutation_audit row (with
-// the mutating actor) whenever the value actually CHANGES. Observed markings use
-// a `system:` actor; a deliberate correction (operator via Garden/contacts, or
-// the set_machine_intelligence contact tool) uses a non-`system:` actor. If the
-// most recent `is_machine_intelligence` audit entry was written by a non-`system:`
-// actor, re-observation must NOT clobber it.
+// not been deliberately corrected. `is_machine_intelligence` mutations write a
+// contact_mutation_audit row (with the mutating actor) whenever the value
+// actually CHANGES. Observed markings use a `system:` actor; a deliberate
+// correction (operator via Garden/contacts, or the set_machine_intelligence
+// contact tool) uses a non-`system:` actor. If the most recent
+// `is_machine_intelligence` audit entry was written by a non-`system:` actor,
+// re-observation must NOT clobber it. The audit check and the marker write are
+// a single atomic store operation (markMachineIntelligenceFromObservation), so
+// a correction landing concurrently with an observation can never be lost.
 //
 // Scope note: the surviving-override guarantee covers the realistic correction —
 // an auto-tagged MI contact the operator flips back to not-MI (a real value
@@ -36,7 +38,7 @@ export type ObservedMachineIntelligenceDisposition =
   | 'store_error';
 
 export interface ApplyObservedMachineIntelligenceInput {
-  contactStore: Pick<ContactStorePort, 'listMutationAuditEntries' | 'setMachineIntelligence'>;
+  contactStore: Pick<ContactStorePort, 'markMachineIntelligenceFromObservation'>;
   contact: Contact;
   /** True when channel metadata identifies the author as a machine intelligence. */
   observedIsMachineIntelligence: boolean;
@@ -77,27 +79,32 @@ export async function applyObservedMachineIntelligence(
   }
 
   try {
-    const audit = await input.contactStore.listMutationAuditEntries({
-      contactId: input.contact.id,
-      field: 'is_machine_intelligence',
-      limit: 1,
-    });
-    if (isDeliberateMachineIntelligenceCorrection(audit[0]?.actor)) {
-      return { contact: input.contact, disposition: 'operator_override' };
-    }
-
-    const applied = await input.contactStore.setMachineIntelligence(
+    // The override check and the write happen atomically inside the store —
+    // a concurrent deliberate correction can never be clobbered (no TOCTOU).
+    const outcome = await input.contactStore.markMachineIntelligenceFromObservation(
       input.contact.id,
-      true,
       observedMachineIntelligenceActor(input.channelType),
     );
-    if (!applied) {
-      return { contact: input.contact, disposition: 'store_error' };
+    switch (outcome) {
+      case 'override_preserved':
+        return { contact: input.contact, disposition: 'operator_override' };
+      case 'not_found':
+        input.logger.warn('Observed machine-intelligence marker targeted a missing contact', {
+          contactId: input.contact.id,
+          channelType: input.channelType,
+        });
+        return { contact: input.contact, disposition: 'store_error' };
+      case 'already_marked':
+        return {
+          contact: { ...input.contact, isMachineIntelligence: true },
+          disposition: 'already_marked',
+        };
+      case 'marked':
+        return {
+          contact: { ...input.contact, isMachineIntelligence: true },
+          disposition: 'marked',
+        };
     }
-    return {
-      contact: { ...input.contact, isMachineIntelligence: true },
-      disposition: 'marked',
-    };
   } catch (error) {
     input.logger.warn('Failed to apply observed machine-intelligence marker', {
       contactId: input.contact.id,

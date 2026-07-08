@@ -7,7 +7,6 @@ import {
   HEARTBEAT_SILENT_REFLECTION_TOKEN,
   HeartbeatPolicyStore,
   isValuesReflectionTemplateId,
-  resolveConsolidatedReflectionTemplateId,
   type HeartbeatPolicy,
   type ReflectionTemplate,
 } from './heartbeat-policy.js';
@@ -75,10 +74,7 @@ import {
   type ReflectionIntrospectionPolicy,
 } from './reflection-introspection-policy.js';
 import { runWithRequestContext } from '../../primitives/llm/request-context.js';
-import {
-  evaluateDeterministicGate,
-  type DeterministicGateDefinition,
-} from '../../shared/gating/deterministic-gate.js';
+import { evaluateDeterministicGate } from '../../shared/gating/deterministic-gate.js';
 import { DEFAULT_REFLECTION_NOVELTY_GATE } from '../../system/config/scheduler-config.js';
 import {
   REFLECTION_PROMPT_TOKENS,
@@ -95,7 +91,6 @@ import {
   formatInternalStateTopEmotions,
   formatMetacognitiveFlagForPrompt,
   formatReflectionPersonaBlock,
-  hasAssertionHeavyIntrospectiveOutput,
   joinReflectionPromptSections,
   mergeMetacognitiveFlags,
   mergeReflectionGroundingProvenanceRefs,
@@ -108,6 +103,22 @@ import {
   type ReflectionPromptContext,
   type ReflectionPromptSectionBundle,
 } from './heartbeat-template-runtime/prompt-formatting.js';
+import {
+  HeartbeatTemplateLoopGuardError,
+  REFLECTION_NOVELTY_ENTRY_SCAN_LIMIT,
+  REFLECTION_NOVELTY_GATE_LANE,
+  REFLECTION_NOVELTY_WATERMARK_PROCESSOR,
+  buildReflectionNoveltyGateDefinition,
+  buildUnsupportedReflectionSupportFlags,
+  findReflectionTemplateById,
+  getHeartbeatTemplateAuditProfile,
+  isExperientialDeliberationTemplate,
+  isHeartbeatTemplateLoopGuardError,
+  normalizeFiniteTimestamp,
+  resolveCompanionNameFromCharacterVariables,
+  selectFreshestLiveChatGapMs,
+  type HeartbeatExecutionSource,
+} from './heartbeat-template-runtime/runtime-helpers.js';
 
 const log = createComponentLogger('HeartbeatTemplates');
 
@@ -122,15 +133,8 @@ const TEMPLATE_EXECUTION_BURST_LIMIT = 4;
 const TEMPLATE_EXECUTION_COOLDOWN_MS = 10 * 60_000;
 const REFLECTION_MEMORY_EXTRACTION_DRAIN_TIMEOUT_MS = 2_500;
 const REFLECTION_CONTACT_EMOTIONAL_TIME_SERIES_LIMIT = 8;
-const RICH_DELIBERATION_TEMPLATE_IDS = new Set(['daily-review', 'weekly-review']);
 const DELIBERATION_DEFAULT_INPUT_USD_PER_MILLION_TOKENS = 2;
 const DELIBERATION_DEFAULT_OUTPUT_USD_PER_MILLION_TOKENS = 8;
-// jpvd.4 novelty gate for cadence-fired reflection templates: lane id for the
-// typed gate event, watermark processor key, and how many recent session
-// entries the deterministic "new entries since last reflection" count scans.
-const REFLECTION_NOVELTY_GATE_LANE = 'reflection.template.novelty';
-const REFLECTION_NOVELTY_WATERMARK_PROCESSOR = 'reflection_template_novelty';
-const REFLECTION_NOVELTY_ENTRY_SCAN_LIMIT = 50;
 
 interface ReflectionMemoryRetrievalResult {
   memoryBlock?: string;
@@ -149,13 +153,6 @@ interface ReflectionContactContextResolution {
   diagnostics: ReflectionContactTelemetryDiagnostics;
 }
 
-function getHeartbeatTemplateAuditProfile(
-  _template: ReflectionTemplate,
-): { allowSilentInterval: boolean } {
-  return { allowSilentInterval: false };
-}
-
-type HeartbeatExecutionSource = 'manual' | 'scheduled' | 'deferred_scheduler' | 'deferred_post_turn';
 type ReflectionRequestSource = 'manual' | 'scheduled';
 type ReflectionDeliberationExecutionResult = {
   reflection: string;
@@ -163,101 +160,11 @@ type ReflectionDeliberationExecutionResult = {
   metacognitiveFlags: ReflectionMetacognitiveFlag[];
 };
 
-class HeartbeatTemplateLoopGuardError extends Error {
-  readonly templateId: string;
-  readonly source: HeartbeatExecutionSource;
-  readonly cooldownUntil: number;
-
-  constructor(
-    templateId: string,
-    source: HeartbeatExecutionSource,
-    cooldownUntil: number,
-    message: string,
-  ) {
-    super(message);
-    this.name = 'HeartbeatTemplateLoopGuardError';
-    this.templateId = templateId;
-    this.source = source;
-    this.cooldownUntil = cooldownUntil;
-  }
-}
-
-function isHeartbeatTemplateLoopGuardError(
-  error: unknown,
-): error is HeartbeatTemplateLoopGuardError {
-  return error instanceof HeartbeatTemplateLoopGuardError;
-}
-
-function normalizeFiniteTimestamp(value: unknown): number | undefined {
-  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : undefined;
-}
-
-function selectFreshestLiveChatGapMs(...values: Array<number | null | undefined>): number | undefined {
-  const finiteValues = values
-    .filter((value): value is number => typeof value === 'number' && Number.isFinite(value) && value >= 0);
-  if (finiteValues.length === 0) {
-    return undefined;
-  }
-  return Math.min(...finiteValues);
-}
-
-function isExperientialDeliberationTemplate(template: ReflectionTemplate): boolean {
-  return RICH_DELIBERATION_TEMPLATE_IDS.has(template.id);
-}
-
-function buildReflectionNoveltyGateDefinition(minNewEntries: number): DeterministicGateDefinition {
-  return {
-    lane: REFLECTION_NOVELTY_GATE_LANE,
-    openWhenAny: [{
-      input: 'newEntriesSinceLastReflection',
-      comparator: 'gte',
-      threshold: minNewEntries,
-    }],
-    closedReason: 'insufficient_new_entries',
-  };
-}
-
 interface ReflectionNoveltyGateOutcome {
   open: boolean;
   reason: string;
   inputs: Record<string, number | string>;
   scopeKey: string;
-}
-
-function findReflectionTemplateById(
-  policy: HeartbeatPolicy,
-  templateId: string,
-): ReflectionTemplate | undefined {
-  const consolidatedTemplateId = resolveConsolidatedReflectionTemplateId(templateId);
-  return policy.templates.find(candidate => candidate.id === consolidatedTemplateId);
-}
-
-function buildUnsupportedReflectionSupportFlags(
-  reflection: string,
-  supportProvenanceRefs: readonly string[],
-): ReflectionMetacognitiveFlag[] {
-  if (supportProvenanceRefs.length > 0 || !hasAssertionHeavyIntrospectiveOutput(reflection)) {
-    return [];
-  }
-
-  return [{
-    flag: 'support_gap_confabulation_risk',
-    confidence: 0.82,
-    evidence: 'Reflection contains first-person introspective assertions but no persisted grounding provenance refs were available.',
-  }];
-}
-
-function resolveCompanionNameFromCharacterVariables(
-  provider: HeartbeatRuntimeOptions['characterPromptVariablesProvider'] | undefined,
-): string | undefined {
-  if (!provider) return undefined;
-  const variables = provider();
-  for (const key of ['char', 'character_name', 'name', 'character', 'character.name']) {
-    const raw = variables[key];
-    const candidate = typeof raw === 'string' ? raw.trim() : '';
-    if (candidate) return candidate;
-  }
-  return undefined;
 }
 
 export interface HeartbeatTemplateRuntime {

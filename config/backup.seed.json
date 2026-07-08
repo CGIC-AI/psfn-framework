@@ -5,6 +5,7 @@
   "maxMonthlyBackups": 1,
   "mirrorDir": "",
   "verifyRestore": true,
+  "groupMode": false,
   "encryption": {
     "mode": "required",
     "keyRef": {

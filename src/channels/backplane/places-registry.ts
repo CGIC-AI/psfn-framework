@@ -155,6 +155,14 @@ function parsePlaceConfig(value: unknown, fieldName: string): PlaceConfig {
   const kind = parsePlaceKind(value.kind, `${fieldName}.kind`);
   const haAreaId = parseOptionalConfiguredString(value.haAreaId, `${fieldName}.haAreaId`);
   const description = parseOptionalConfiguredString(value.description, `${fieldName}.description`);
+  const rawMirrorsPlaceId = parseOptionalConfiguredString(value.mirrorsPlaceId, `${fieldName}.mirrorsPlaceId`);
+  const mirrorsPlaceId = rawMirrorsPlaceId === undefined
+    ? undefined
+    : assertIdToken(rawMirrorsPlaceId, `${fieldName}.mirrorsPlaceId`);
+  if (mirrorsPlaceId !== undefined && kind !== 'virtual') {
+    // Twin links are declared FROM the virtual mirror only (vinz.29 D10).
+    throw new Error(`${fieldName}.mirrorsPlaceId is only allowed on virtual places (kind "${kind}")`);
+  }
   if (value.affordances !== undefined && !Array.isArray(value.affordances)) {
     throw new Error(`${fieldName}.affordances must be an array`);
   }
@@ -178,6 +186,7 @@ function parsePlaceConfig(value: unknown, fieldName: string): PlaceConfig {
     kind,
     ...(haAreaId ? { haAreaId } : {}),
     ...(description ? { description } : {}),
+    ...(mirrorsPlaceId ? { mirrorsPlaceId } : {}),
     affordances,
   };
 }
@@ -200,6 +209,34 @@ function assertUniqueRegistryBindings(config: PlacesRegistryConfig): void {
     if (!siteIds.has(place.siteId)) {
       throw new Error(`${PLACES_REGISTRY_FILE_NAME} place "${place.placeId}" references unknown siteId "${place.siteId}"`);
     }
+  }
+
+  // Twin-link validation (vinz.29 D10, fail closed): every `mirrorsPlaceId`
+  // must resolve to an existing PHYSICAL place, and a physical place may have
+  // at most ONE virtual twin. (Virtual-declarer-only is enforced at parse.)
+  const placesById = new Map(config.places.map((place) => [place.placeId, place]));
+  const twinByPhysicalPlaceId = new Map<string, string>();
+  for (const place of config.places) {
+    if (place.mirrorsPlaceId === undefined) continue;
+    const target = placesById.get(place.mirrorsPlaceId);
+    if (!target) {
+      throw new Error(
+        `${PLACES_REGISTRY_FILE_NAME} place "${place.placeId}" mirrors unknown placeId "${place.mirrorsPlaceId}"`,
+      );
+    }
+    if (target.kind !== 'physical') {
+      throw new Error(
+        `${PLACES_REGISTRY_FILE_NAME} place "${place.placeId}" mirrors "${place.mirrorsPlaceId}" which is not a physical place`,
+      );
+    }
+    const existingTwin = twinByPhysicalPlaceId.get(place.mirrorsPlaceId);
+    if (existingTwin !== undefined) {
+      throw new Error(
+        `${PLACES_REGISTRY_FILE_NAME} physical place "${place.mirrorsPlaceId}" has more than one twin `
+        + `("${existingTwin}" and "${place.placeId}"); one twin per physical place`,
+      );
+    }
+    twinByPhysicalPlaceId.set(place.mirrorsPlaceId, place.placeId);
   }
 }
 

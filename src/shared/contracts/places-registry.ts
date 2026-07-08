@@ -77,6 +77,20 @@ export interface PlaceConfig {
   haAreaId?: string;
   /** Optional operator-authored place description (surroundings summary). */
   description?: string;
+  /**
+   * Twin link (S10 vinz.29, decisions 9-13): a VIRTUAL place may declare that
+   * it is the shared-mindspace mirror ("twin") of exactly one PHYSICAL place.
+   * `mirrorsPlaceId` is the chosen canonical identifier for this link (over
+   * the `twinOf` alternate) — neutral and directional: this virtual place
+   * mirrors that physical placeId. The registry loader fails closed when the
+   * declaring place is not virtual, the target does not exist, the target is
+   * not physical, or a physical place is mirrored by more than one twin.
+   *
+   * Any character-facing name for the mindspace concept (e.g. what the
+   * operator calls the shared virtual layer) is a DISPLAY LABEL living in
+   * companion-data (character card extensions), never a code identifier here.
+   */
+  mirrorsPlaceId?: string;
   affordances: AffordanceConfig[];
 }
 
@@ -100,4 +114,21 @@ export const PLACE_ID_TOKEN_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u;
 /** True when `value` is a syntactically valid place/site/affordance ID token. */
 export function isValidPlaceIdToken(value: string): boolean {
   return PLACE_ID_TOKEN_PATTERN.test(value);
+}
+
+/**
+ * Resolve the virtual mindspace twin of a physical place: the (at most one,
+ * loader-enforced) virtual place whose `mirrorsPlaceId` names `physicalPlaceId`.
+ * Pure lookup over the parsed registry — usable from core modules without a
+ * value-level dependency on the `channels` loader. Returns undefined when the
+ * physical place has no declared twin.
+ */
+export function resolveTwinPlaceOf(
+  registry: PlacesRegistryConfig | undefined,
+  physicalPlaceId: string,
+): PlaceConfig | undefined {
+  if (!registry) return undefined;
+  return registry.places.find(
+    (place) => place.kind === 'virtual' && place.mirrorsPlaceId === physicalPlaceId,
+  );
 }

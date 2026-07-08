@@ -18,6 +18,12 @@ import {
   type SensitivityLevel,
 } from '../../system/trust/types.js';
 import {
+  isPersonalScope,
+  normalizeWikiScope,
+  PERSONAL_WIKI_SCOPE,
+  type WikiScope,
+} from './scope.js';
+import {
   WIKI_BODY_FORMATS,
   WIKI_SOURCE_CLASSES,
   type WikiDocument,
@@ -151,6 +157,23 @@ function normalizeSourceClass(value: unknown): WikiSourceClass {
   return value as WikiSourceClass;
 }
 
+/**
+ * The personal WikiStore is scope-`personal` ONLY. Reading a persisted scope is
+ * tolerant (an out-of-band `shared_world:*` doc round-trips), but writing one
+ * through this store is the world-info leak surface and is fail-closed rejected:
+ * companions never author shared world knowledge directly — that is the deferred
+ * caretaker layer's job (dedup + operator approval). See W5b / decision-log §8.
+ */
+function assertPersonalScopeWrite(scope: WikiScope): void {
+  if (!isPersonalScope(scope)) {
+    throw new Error(
+      `wiki store is personal-scope only: refusing direct write to scope "${scope}". `
+      + 'Shared world knowledge must go through the caretaker layer (operator-approved); '
+      + 'companions never write shared_world scope directly.',
+    );
+  }
+}
+
 function normalizeSensitivity(value: unknown): SensitivityLevel {
   if (value === undefined) return 'personal';
   if (typeof value !== 'string' || !VALID_SENSITIVITY_LEVELS.includes(value as SensitivityLevel)) {
@@ -225,6 +248,11 @@ function normalizePersistedMetadata(raw: unknown, body: string): WikiDocumentMet
       MAX_PROVENANCE_REF_CHARS,
     ),
     sensitivity: normalizeSensitivity(raw.sensitivity),
+    // Absent scope == personal; a personal document omits the field entirely so
+    // it is byte-identical to a pre-W5b document.
+    ...(normalizeWikiScope(raw.scope) !== PERSONAL_WIKI_SCOPE
+      ? { scope: normalizeWikiScope(raw.scope) }
+      : {}),
     ...(typeof raw.summary === 'string' && raw.summary.trim()
       ? { summary: normalizeNonEmptyString(raw.summary, 'summary', MAX_SUMMARY_CHARS) }
       : {}),
@@ -293,6 +321,10 @@ export class WikiStore implements WikiStorePort {
     const sourceClass = normalizeSourceClass(input.sourceClass);
     const provenanceRefs = normalizeStringArray(input.provenanceRefs, 'provenanceRef', MAX_PROVENANCE_REF_CHARS);
     ensureProvenance(sourceClass, provenanceRefs);
+    // Fail-closed world-info leak guard: this personal store never writes shared
+    // world scope. Absent/personal is the norm; a shared_world scope is rejected.
+    const scope = normalizeWikiScope(input.scope);
+    assertPersonalScopeWrite(scope);
 
     const existing = this.get(id);
     const timestamp = this.now().toISOString();
@@ -307,6 +339,9 @@ export class WikiStore implements WikiStorePort {
       sourceClass,
       provenanceRefs,
       sensitivity: normalizeSensitivity(input.sensitivity),
+      // Personal scope is the default and is omitted from serialized metadata so
+      // companion-authored documents stay byte-identical to pre-W5b documents.
+      ...(scope !== PERSONAL_WIKI_SCOPE ? { scope } : {}),
       ...(input.summary !== undefined
         ? { summary: normalizeNonEmptyString(input.summary, 'summary', MAX_SUMMARY_CHARS) }
         : {}),

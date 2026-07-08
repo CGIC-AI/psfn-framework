@@ -26,6 +26,7 @@ import { createComponentLogger } from '../../../../shared/logger.js';
 import { toErrorMessage } from '../../../../shared/utils/errors.js';
 import { resolveActiveEmanationState } from '../../active-emanation-state.js';
 import { resolveContinuitySubjectKey, type ResolvedAuthorContext } from '../runtime-context.js';
+import { resolveSituatedSiteId } from '../runtime-context-sections/situated-presence.js';
 import { collectVisionTurnImageUrls, hasVisionTurnInputs } from '../vision-attachments.js';
 import type { TurnExecutionObservability } from './observability.js';
 
@@ -600,12 +601,19 @@ export async function computePreTurnState(input: {
   // content/budget is already fixed at this point, so wiki can never displace
   // it; wiki carries its own bounded, config-owned token cap and fails closed
   // to '' on any error. Skipped on vision-bypass turns and when unwired.
+  // W5b: resolve the companion's current site from the situated place seam so
+  // wiki retrieval can add its shared-world scope. Only meaningful under
+  // multi-companion; `resolveWikiRetrievalPlan` ignores it when the flag is off.
+  const currentSiteId = runtime.config.multiCompanion === true
+    ? resolveSituatedSiteId(message, runtime.placesRegistry)
+    : undefined;
   const wikiContextBlock = runtime.wikiRetrieval && !bypassMemoryForVisionTurn
     ? await runtime.wikiRetrieval.retrieveContextBlock({
       channelId: message.channelId,
       queryText: memoryRetrievalContextText,
       isDirectMessage: channelMeta.isDirectMessage,
       focusActive: focusMemoryScopeQuery != null,
+      ...(currentSiteId ? { currentSiteId } : {}),
       correlation: turnCorrelationBase,
     })
     : '';

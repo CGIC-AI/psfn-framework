@@ -57,6 +57,11 @@ export interface WikiRetrievalPort {
     queryText: string;
     isDirectMessage: boolean | undefined;
     focusActive: boolean;
+    /**
+     * W5b: companion's current site (from the situated place seam). Consulted
+     * only under multi-companion mode to add the site's shared-world scope.
+     */
+    currentSiteId?: string | undefined;
     correlation?: Partial<CorrelationMetadata>;
   }): Promise<string>;
 }

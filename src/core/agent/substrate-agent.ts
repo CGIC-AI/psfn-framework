@@ -923,6 +923,7 @@ export class SubstrateAgent {
       memoryProvider: this.memoryProvider,
       memoryExtractor: this.memoryExtractor,
       wikiRetrieval: this.wikiRetrieval,
+      placesRegistry: this.placesRegistryConfig,
       skillsRuntime: this.skillsRuntime,
       evaluateReflectionNudge: (toolSummary) => this.reflectionNudge.evaluate(toolSummary),
       emotionSelfModelRuntime: this.emotionSelfModelRuntime,

@@ -151,6 +151,7 @@ export interface TurnExecutionAdapterOptions {
   memoryProvider: MemoryProvider | null;
   memoryExtractor: MemoryExtractor | null;
   wikiRetrieval: WikiRetrievalPort | null;
+  placesRegistry?: import('../../../shared/contracts/places-registry.js').PlacesRegistryConfig | undefined;
   skillsRuntime: SkillsRuntime | null;
   evaluateReflectionNudge: (toolSummary: TurnToolSummary) => string | null;
   emotionSelfModelRuntime: EmotionSelfModelRuntime;
@@ -183,6 +184,7 @@ export function createTurnExecutionRuntimeAdapter(
     memoryProvider: options.memoryProvider,
     memoryExtractor: options.memoryExtractor,
     wikiRetrieval: options.wikiRetrieval,
+    placesRegistry: options.placesRegistry,
     skillsRuntime: options.skillsRuntime,
     evaluateReflectionNudge: (toolSummary) => options.evaluateReflectionNudge(toolSummary),
     emotionSelfModelRuntime: options.emotionSelfModelRuntime,

@@ -119,6 +119,45 @@ describe('WikiPgvectorProjectionStore (integration)', () => {
     expect(projectedAfter.some(row => row.documentId === 'orphan')).toBe(false);
   }, INTEGRATION_TIMEOUT_MS);
 
+  it('W5b: scope filter includes shared_world only for the matching site; personal always', async () => {
+    const store = new WikiPgvectorProjectionStore(pool, deterministicEmbedding);
+    await pool.query('DELETE FROM wiki_document_chunks');
+
+    // A shared body distinct enough that the same query embeds close to all three.
+    const body = 'The kitchen has a new toaster next to the satellite. Toaster kitchen satellite.';
+    const personal = makeDocument('p-note', body);
+    const studio = makeDocument('studio-note', body, { scope: 'shared_world:studio' } as Partial<WikiDocument>);
+    const cabin = makeDocument('cabin-note', body, { scope: 'shared_world:cabin' } as Partial<WikiDocument>);
+    await store.syncDocument(personal);
+    await store.syncDocument(studio);
+    await store.syncDocument(cabin);
+
+    const query = embed(body);
+
+    // Unfiltered (flag-off path): all three participate.
+    const all = await store.search(query, 0.1, 10);
+    expect(new Set(all.map(m => m.documentId))).toEqual(new Set(['p-note', 'studio-note', 'cabin-note']));
+
+    // At studio: personal + studio shared, never cabin.
+    const atStudio = await store.search(query, 0.1, 10, ['personal', 'shared_world:studio']);
+    const studioIds = new Set(atStudio.map(m => m.documentId));
+    expect(studioIds.has('p-note')).toBe(true);
+    expect(studioIds.has('studio-note')).toBe(true);
+    expect(studioIds.has('cabin-note')).toBe(false);
+    expect(atStudio.find(m => m.documentId === 'studio-note')?.scope).toBe('shared_world:studio');
+
+    // Scope swap: moving to cabin swaps the shared scope, personal untouched.
+    const atCabin = await store.search(query, 0.1, 10, ['personal', 'shared_world:cabin']);
+    const cabinIds = new Set(atCabin.map(m => m.documentId));
+    expect(cabinIds.has('p-note')).toBe(true);
+    expect(cabinIds.has('cabin-note')).toBe(true);
+    expect(cabinIds.has('studio-note')).toBe(false);
+
+    // Unsited: personal-only, no shared world leaks in.
+    const personalOnly = await store.search(query, 0.1, 10, ['personal']);
+    expect(new Set(personalOnly.map(m => m.documentId))).toEqual(new Set(['p-note']));
+  }, INTEGRATION_TIMEOUT_MS);
+
   it('fails closed for search when embedding throws, without corrupting existing rows', async () => {
     const failingEmbedding: EmbeddingProviderPort = {
       dims: EMBEDDING_DIMS,

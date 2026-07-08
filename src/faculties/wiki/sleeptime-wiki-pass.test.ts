@@ -217,6 +217,9 @@ describe('SleeptimeWikiPass writing', () => {
       'memory:mem-1',
     ]));
     expect(doc?.tags).toContain('wiki-pass');
+    // W5b: the pass writes to the PERSONAL store — a sleeptime entry never targets
+    // shared world scope (scope is absent == personal, never serialized shared).
+    expect(doc).not.toHaveProperty('scope');
     // Watermark advanced so the same material is not re-reviewed next night.
     expect(episodicStore.getProcessingWatermark({ processor: 'wiki_pass', sourceRef: SESSION_ID })).toBeDefined();
     expect(gateEvents.some(event => event.outcome === 'ran' && event.lane === 'wiki_pass')).toBe(true);

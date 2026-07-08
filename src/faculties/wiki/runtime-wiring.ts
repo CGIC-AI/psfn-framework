@@ -40,6 +40,11 @@ export interface WikiRuntimeDeps {
   eventBus?: Pick<EventBus, 'emit'>;
   /** Live config accessor for wiki retrieval settings (caps, thresholds, enable). */
   getConfig?: () => WikiRetrievalConfigLike;
+  /**
+   * W5b: live accessor for the multi-companion topology flag. Default off, so
+   * absence keeps retrieval scope unrestricted (byte-identical single-companion).
+   */
+  getMultiCompanion?: () => boolean;
 }
 
 export interface WikiRuntimeWiring {
@@ -126,6 +131,7 @@ export async function wireWikiRuntime(
         embedding,
         ...(deps.eventBus ? { eventBus: deps.eventBus } : {}),
         getSettings: () => resolveWikiRetrievalSettings(getConfig()),
+        ...(deps.getMultiCompanion ? { getMultiCompanion: deps.getMultiCompanion } : {}),
       });
     }
   }

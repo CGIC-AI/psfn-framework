@@ -1,23 +1,61 @@
 import type { Pool } from 'pg';
-import { createPostgresPool, runPostgresMigrations } from '../postgres.js';
+import {
+  assertValidPostgresSchemaName,
+  createPostgresPool,
+  withPostgresClient,
+} from '../postgres.js';
 import { POSTGRES_SHARED_MIGRATIONS, SHARED_SCHEMA_NAME } from './migrations.js';
 
 /**
- * Provision the shared world schema and run its (currently infrastructure-only)
- * migration chain.
+ * Cluster-wide advisory lock key serializing shared-schema provisioning.
  *
- * This is the sprint-10 W2 scaffold for the single `shared` schema that holds
- * cross-companion world data. It creates the `shared` schema if missing and
- * runs {@link POSTGRES_SHARED_MIGRATIONS} inside it. The chain has no world
- * tables yet — only its own version ledger — so this is safe to run repeatedly
- * and against an existing database.
+ * `CREATE SCHEMA IF NOT EXISTS` / `CREATE TABLE IF NOT EXISTS` are *not* safe
+ * under a concurrent first-creation race: two sessions can both observe the
+ * object as missing and one then fails with a duplicate-key error on the
+ * catalog (pg_namespace / pg_type). With N companion agent processes starting
+ * simultaneously against one database (the multi-companion topology), that
+ * race is real, so provisioning takes a transaction-scoped advisory lock and
+ * the losers simply wait and then no-op through the IF NOT EXISTS chain.
  *
- * The caller owns the pool. If the pool was created with
- * `{ schema: SHARED_SCHEMA_NAME }` the search_path is already pinned; otherwise
- * {@link runPostgresMigrations} still targets the schema explicitly.
+ * Key split: classid 0x5053464e (a fixed project tag), objid 1 (shared-schema
+ * provisioning).
+ */
+const SHARED_SCHEMA_ADVISORY_LOCK_CLASS = 0x5053464e;
+const SHARED_SCHEMA_ADVISORY_LOCK_ID = 1;
+
+/**
+ * Provision the shared world schema and run its migration chain.
+ *
+ * This is the single provisioning path for the `shared` schema that holds
+ * cross-companion world data (sprint 10 W2/W5a). It creates the schema if
+ * missing and runs {@link POSTGRES_SHARED_MIGRATIONS} inside it, all within
+ * one transaction guarded by a transaction-scoped advisory lock, so it is
+ * idempotent AND safe under N concurrently-starting agent processes.
+ *
+ * The caller owns the pool. The transaction pins its own `SET LOCAL
+ * search_path` to the shared schema, so the unqualified migration statements
+ * always resolve into `shared` — regardless of whether the pool itself was
+ * created with `{ schema: SHARED_SCHEMA_NAME }` — and the pool's own
+ * search_path is untouched after commit.
  */
 export async function ensureSharedSchema(pool: Pool): Promise<void> {
-  await runPostgresMigrations(pool, POSTGRES_SHARED_MIGRATIONS, { schema: SHARED_SCHEMA_NAME });
+  const schema = assertValidPostgresSchemaName(SHARED_SCHEMA_NAME);
+  await withPostgresClient(pool, async (client) => {
+    await client.query(
+      'SELECT pg_advisory_xact_lock($1, $2)',
+      [SHARED_SCHEMA_ADVISORY_LOCK_CLASS, SHARED_SCHEMA_ADVISORY_LOCK_ID],
+    );
+    // The identifier is already restricted to a safe character set; the quotes
+    // are belt-and-suspenders so reserved words would still be legal.
+    await client.query(`CREATE SCHEMA IF NOT EXISTS "${schema}"`);
+    // Transaction-local pin: migration statements below are unqualified and
+    // MUST land in the shared schema even on a pool without a pinned
+    // search_path (`public` is retained for shared extension types).
+    await client.query(`SET LOCAL search_path TO "${schema}", public`);
+    for (const statement of POSTGRES_SHARED_MIGRATIONS) {
+      await client.query(statement);
+    }
+  });
 }
 
 /**

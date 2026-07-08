@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   POSTGRES_CONTACT_MIGRATIONS,
   POSTGRES_MEMORY_MIGRATIONS,
+  POSTGRES_SHARED_MIGRATIONS,
 } from './migrations.js';
 
 function migrationSql(statements: readonly string[]): string {
@@ -81,5 +82,28 @@ describe('Postgres live schema migrations', () => {
     expect(sql).toContain('CREATE TABLE IF NOT EXISTS social_relationship_edges');
     expect(sql).toContain('contact_id TEXT UNIQUE');
     expect(sql).toContain('evidence_memory_ids JSONB NOT NULL DEFAULT');
+  });
+
+  it('extends the shared chain with companion_presence as versioned migration 2 (W5a)', () => {
+    const sql = migrationSql(POSTGRES_SHARED_MIGRATIONS);
+
+    expect(sql).toContain('CREATE TABLE IF NOT EXISTS companion_presence');
+    expect(sql).toContain('companion_id UUID PRIMARY KEY');
+    expect(sql).toContain("CHECK (kind IN ('physical', 'virtual'))");
+    expect(sql).toContain('since TIMESTAMPTZ NOT NULL DEFAULT now()');
+    expect(sql).toContain('updated_at TIMESTAMPTZ NOT NULL DEFAULT now()');
+    // Co-presence read path is always keyed by (site_id, place_id).
+    expect(sql).toContain('CREATE INDEX IF NOT EXISTS idx_companion_presence_place');
+    expect(sql).toContain('ON companion_presence (site_id, place_id)');
+
+    // The versioned ledger chain stays intact: ledger first, then baseline,
+    // then the presence version.
+    expect(sql.indexOf('CREATE TABLE IF NOT EXISTS shared_schema_migrations')).toBeLessThan(
+      sql.indexOf("VALUES (1, 'shared-schema-baseline')"),
+    );
+    expect(sql.indexOf("VALUES (1, 'shared-schema-baseline')")).toBeLessThan(
+      sql.indexOf('CREATE TABLE IF NOT EXISTS companion_presence'),
+    );
+    expect(sql).toContain("VALUES (2, 'companion-presence')");
   });
 });

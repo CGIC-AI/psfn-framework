@@ -1175,11 +1175,11 @@ export const POSTGRES_OBSERVER_EVAL_SIDECAR_MIGRATIONS = [
 // schema holds cross-companion world data (locations/presence, shared wiki
 // chunks, world state). This is the SEPARATE migration chain for that schema.
 //
-// Phase 1 (this workstream) is plumbing only: the chain is intentionally empty
-// of world tables. It establishes the schema's own version ledger so shared
-// migrations can be registered and tracked independently of the per-companion
-// chains. World tables (e.g. `companion_presence`) land in later workstreams
-// (W5) and must be appended here, never to the per-companion chains.
+// The chain owns its own version ledger so shared migrations are registered
+// and tracked independently of the per-companion chains. World tables belong
+// here, never in the per-companion chains. Current versions:
+//   1 — baseline (ledger only)
+//   2 — companion_presence (W5a cross-companion presence)
 export const SHARED_SCHEMA_NAME = 'shared';
 
 export const POSTGRES_SHARED_MIGRATIONS: readonly string[] = [
@@ -1198,6 +1198,35 @@ export const POSTGRES_SHARED_MIGRATIONS: readonly string[] = [
   `
   INSERT INTO shared_schema_migrations (version, name)
   VALUES (1, 'shared-schema-baseline')
+  ON CONFLICT (version) DO NOTHING;
+  `,
+  // Version 2 (sprint 10, W5a): cross-companion presence. The durable authority
+  // for "which companion is at which place". One row per companion, written by
+  // that companion's own agent process only. NOTHING personal ever lands in
+  // this table — presence is companion id + place coordinates + timestamps.
+  //
+  // `since` is when the companion arrived at its CURRENT place (preserved on
+  // same-place refreshes, reset on moves); `updated_at` is the freshness beat —
+  // readers treat rows older than a TTL as stale so a crashed agent never
+  // leaves a permanent ghost (graceful shutdown deletes the row outright).
+  `
+  CREATE TABLE IF NOT EXISTS companion_presence (
+    companion_id UUID PRIMARY KEY,
+    site_id TEXT NOT NULL,
+    place_id TEXT NOT NULL,
+    kind TEXT NOT NULL CHECK (kind IN ('physical', 'virtual')),
+    since TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+  );
+  `,
+  // Co-presence reads are always "who else is at THIS place".
+  `
+  CREATE INDEX IF NOT EXISTS idx_companion_presence_place
+    ON companion_presence (site_id, place_id);
+  `,
+  `
+  INSERT INTO shared_schema_migrations (version, name)
+  VALUES (2, 'companion-presence')
   ON CONFLICT (version) DO NOTHING;
   `,
 ];

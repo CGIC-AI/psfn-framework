@@ -1,6 +1,6 @@
 # PSFN - Persona Substrate Formation Network
 
-Last updated: 2026-07-03
+Last updated: 2026-07-07
 Package version: `0.1.0`
 Current status: early alpha; see [`docs/development-status.md`](./docs/development-status.md) for baseline milestones and [`CHANGELOG.md`](./CHANGELOG.md) for the current foundation branch delta.
 
@@ -17,7 +17,9 @@ Built with love for companions who deserve to remember, to grow, and to decide f
 - **Context Envelope privacy**: each turn carries channel privacy, audience size, audience knowledge, broadcast status, delivery style, and contact-tracking policy before any prompt or memory gate runs.
 - **L0.1 memory maturation**: daytime candidate episodes, hard message claims, topic cutting, nightly sleep consolidation, dream meaning, and audited cross-day arc membership are wired as separate lanes.
 - **Group-room intelligence**: group extraction, speaker attribution, shared-background retrieval, room rosters, and operator-reviewed social-graph proposals support multi-person rooms without treating all room traffic as direct chat.
-- **Operator and client surfaces**: Garden gained lazy-loaded pages for subsystem health, room rosters, graph proposals, contact approvals, session recovery, wiki, and observer evaluations; `companion-ui/` adds a standalone Satellite Hub PWA client.
+- **Operator and client surfaces**: Garden gained lazy-loaded pages for subsystem health, room rosters, graph proposals, contact approvals, session recovery, wiki, observer evaluations, and read-only reflection journals; `companion-ui/` adds a standalone Satellite Hub PWA client.
+- **Live-deploy pipeline**: a component-selective `ship:kube` lane targets a live Kubernetes shard with a topology-aware pre-ship gate, contract-skew guard, in-image tool pinning, two-way companion beads sync, and an operator-side post-rollout validation gate.
+- **Self-diagnosis and reliability**: `self_status` exposes a companion self-diagnosis surface, a bounded/redacted runtime diagnostics service runs behind the admin transport, scheduled prompts persist in Postgres and survive agent restarts, and tool-call handling retries fail-closed on corrupt-empty args.
 
 ## What Makes This Different
 
@@ -51,6 +53,7 @@ Most AI companion frameworks treat conversations as throwaway. PSFN treats every
 - **Contact approval mode**: channels can require operator approval before new speakers become tracked contacts, profile subjects, or social-graph entities
 - **Persona adaptation**: authentic self (honne) with trusted people, social self (tatemae) in public
 - **Contact management**: companion tracks relationships and trust levels via agent tools
+- **Deliberate trust ratchet**: relationship trust changes through a deliberate, auditable ratchet; a nightly trust-drift review lane derives behavior signals and trusted-tier promotions require human-in-the-loop approval
 
 ### Self-Modification
 - **Layered Prompt Stack**: 5-layer editable prompt system (base to operator to runtime to channel to task) with versioning, rollback, and admin UI
@@ -72,9 +75,9 @@ Most AI companion frameworks treat conversations as throwaway. PSFN treats every
 - **Gateway/Agent Split**: Defense-in-depth: gateway holds secrets, agent runs `--network=none` in Docker
 - **Bidirectional RPC**: Voice turns get real agent responses via reverse RPC; WSS gateway/admin transports support SPIFFE mTLS validation
 - **SSRF Defenses**: Private IP blocking, DNS rebinding protection, redirect validation
-- **Scheduler**: Heartbeat, recurring tasks, one-shot timers, temporal wakeups, free-time blocks, near-turn memory, rest-window memory consolidation, wiki passes, and configurable maintenance
+- **Scheduler**: Heartbeat, recurring tasks, restart-durable one-shot/scheduled prompts (persisted in Postgres and rehydrated at startup), temporal wakeups, free-time blocks, near-turn memory, rest-window memory consolidation, wiki passes, novelty-gated reflection cadences, and configurable maintenance
 - **Backups and Restore Verification**: Scheduled encrypted backup sets cover PostgreSQL dumps, companion files, workspace files, system owner files, and restore-fidelity checks
-- **Kubernetes and Helm**: Base manifests, overlays, Helm chart contracts, LiteLLM/TEI/LightLLM routes, model prefetching, and network-policy templates
+- **Kubernetes and Helm**: Base manifests, overlays, Helm chart contracts, LiteLLM/TEI/LightLLM routes, model prefetching, and network-policy templates, plus a component-selective `ship:kube` lane (topology-aware pre-ship gate, contract-skew guard, values overlay, post-rollout validation)
 - **Lifecycle Notifications**: Discord messages on restart, ready, and shutdown
 - **Structured Logging and Resilience**: Winston component loggers, LLM circuit breakers, unreachable-route cooldowns, cost capture, and explicit degraded-state events
 

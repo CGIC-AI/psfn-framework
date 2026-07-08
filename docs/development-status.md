@@ -1,8 +1,8 @@
 # Development Status
 
-Last updated: 2026-06-29
+Last updated: 2026-07-07
 Package version: `0.1.0`
-Code audit anchor: `sprint_9_final` at `1956b844`; this document may be updated by later doc-only commits.
+Code audit anchor: `sprint_9_final` at `1956b844`; this document may be updated by later doc-only commits. Foundation-branch delta through `82b66467` (2026-07-07) is summarized in [`CHANGELOG.md`](../CHANGELOG.md).
 
 This document summarizes where PSFN stands today. It is not the issue tracker. The live task graph is `bd`; use `bd ready --json`, `bd show <id> --json`, and `bd list --status=open --json` for executable work.
 
@@ -37,6 +37,12 @@ Current operational shape:
 | Values loop | Values journal read-back into prompt composition is wired and covered by acceptance tests. | Shipped |
 | Minimal proactive outbound | Appraisal can produce guarded outbound actions through the proactive dispatcher for configured allowlisted delivery. | Shipped minimal slice |
 | Live Pi NVMe migration | Write-heavy live paths are bind-mounted from `/mnt/psfn-nvme`; service registration caveats are documented in operations. | Shipped operationally |
+| Live-deploy ship lane | Component-selective `ship:kube` targets a live Kubernetes shard with a topology-aware pre-ship gate, contract-skew guard, in-image tool pinning, two-way companion beads sync, and an operator-side post-rollout validation gate. | Shipped operationally |
+| Companion self-diagnosis | `self_status` self-diagnosis surface plus a bounded, redacted runtime diagnostics service behind the agent admin transport, with a live tool-surface conformance harness. | Shipped |
+| Durable scheduled prompts | Scheduled/one-shot prompts persist in Postgres (`scheduler_scheduled_prompts`) and rehydrate at startup, so they survive frequent agent restarts; completion is recorded only after successful delivery. | Shipped |
+| Deliberate trust ratchet | Nightly contact trust-drift review lane derives behavior signals; trusted-tier promotions require human-in-the-loop approval; social-graph edges are backed by persisted memory provenance. | Shipped |
+| Tool-call reliability | Fail-closed retry on corrupt-empty tool-call args, fix for streamed args lost on interleaved reasoning, GLM-5.2 via OpenRouter `:exacto`, backed by a per-provider tool-call eval harness. | Shipped |
+| SQLite retirement | SQLite-only maintenance/importer commands retired and dead SQLite bridges severed; SQLite remains only for migration tooling and adapter tests. | Shipped |
 
 ## Active Risks And Near-Term Work
 

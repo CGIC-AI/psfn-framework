@@ -9,9 +9,18 @@
 
 import '../../shared/utils/load-dotenv.js';
 import { join } from 'node:path';
-import { mkdirSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync } from 'node:fs';
 import type { SubstrateMessage } from '../../shared/contracts/runtime.js';
 import { sanitizeCoreSubstrateConfig } from '../../system/config/runtime-config-contracts.js';
+import {
+  COMPANIONS_SEED_FILE_NAME,
+  companionsFilePath,
+  isMultiCompanionEnabled,
+  resolveCompanionFleet,
+} from '../../system/config/companions-config.js';
+import { createPostgresPool, ensurePostgresSchemaExists } from '../../persistence/postgres.js';
+import { SHARED_SCHEMA_NAME } from '../../persistence/postgres/migrations.js';
+import { hasUniqueSchemas, summarizeCompanionFleet } from './multi-companion-e2e.js';
 import { EventBus } from '../../shared/event-bus.js';
 import { SessionStore } from '../../persistence/sessions/store.js';
 import { DEFAULT_REPL_CONFIG } from '../../core/tools/analysis-workbench/types.js';
@@ -435,6 +444,92 @@ async function main(): Promise<void> {
       'REPL did not hit max iterations (found answer)');
   } catch (err) {
     assert(false, 'REPL memory access works', String(err));
+  }
+
+  // ────────────────────────────────────────
+  // TEST 11: Multi-companion fleet (flag-gated)
+  // ────────────────────────────────────────
+  // No-op in single-companion runs: skipped and logged, leaving existing e2e
+  // behavior untouched. Runs only under PSFN_MULTI_COMPANION=1, exercising
+  // fleet resolution and per-companion + shared Postgres schema provisioning.
+  section('Test 11: Multi-Companion Fleet (flag-gated)');
+
+  if (!isMultiCompanionEnabled(process.env)) {
+    console.log('  ⊘ Skipped — PSFN_MULTI_COMPANION not enabled (single-companion run untouched)');
+  } else {
+    try {
+      // The isolated harness ships no fleet manifest; seed one from the
+      // canonical seed so the section exercises real resolution. Guarded by the
+      // explicit flag, so single-companion e2e never reaches this write.
+      const manifestPath = companionsFilePath(runtime.systemDataDir);
+      if (!existsSync(manifestPath)) {
+        copyFileSync(join(runtime.seedDir, COMPANIONS_SEED_FILE_NAME), manifestPath);
+        console.log(`  ℹ Seeded fleet manifest from ${COMPANIONS_SEED_FILE_NAME}`);
+      }
+
+      const fleet = resolveCompanionFleet({
+        dataDir: runtime.systemDataDir,
+        multiCompanion: true,
+        seedDir: runtime.seedDir,
+      });
+      assert(fleet !== undefined && fleet.companions.length >= 1,
+        'Fleet resolves to at least one companion',
+        fleet ? `${fleet.companions.length} companion(s)` : 'resolved undefined');
+
+      if (fleet) {
+        const summary = summarizeCompanionFleet(fleet);
+        assert(summary.schemas.length === summary.companionCount,
+          `Every companion carries a Postgres schema (${summary.schemas.length})`);
+        assert(hasUniqueSchemas(summary),
+          'Companion Postgres schemas are unique across the fleet');
+
+        const databaseUrl = config.postgresDatabaseUrl?.trim();
+        if (databaseUrl) {
+          const schema = fleet.companions[0].postgresSchema;
+          const pool = createPostgresPool(databaseUrl, {
+            applicationName: 'psfn-e2e-mc-schema',
+            allowExitOnIdle: true,
+            max: 1,
+            schema,
+          });
+          try {
+            await ensurePostgresSchemaExists(pool, schema);
+            const provisioned = await pool.query(
+              'SELECT 1 FROM information_schema.schemata WHERE schema_name = $1',
+              [schema],
+            );
+            assert(provisioned.rowCount === 1,
+              `Per-companion schema provisioned: ${schema}`);
+
+            const searchPath = await pool.query<{ search_path: string }>('SHOW search_path');
+            assert((searchPath.rows[0]?.search_path ?? '').includes(schema),
+              `Pool search_path pinned to ${schema}`,
+              searchPath.rows[0]?.search_path);
+
+            await ensurePostgresSchemaExists(pool, SHARED_SCHEMA_NAME);
+            const sharedProvisioned = await pool.query(
+              'SELECT 1 FROM information_schema.schemata WHERE schema_name = $1',
+              [SHARED_SCHEMA_NAME],
+            );
+            assert(sharedProvisioned.rowCount === 1,
+              `Shared world schema provisioned: ${SHARED_SCHEMA_NAME}`);
+          } finally {
+            await pool.end();
+          }
+        } else {
+          console.log('  ⊘ Schema provisioning skipped — no POSTGRES_DATABASE_URL configured');
+        }
+      }
+
+      // A full companion-room message round-trip needs the gateway companion
+      // lane (companion.message.send fan-out), which this in-process
+      // single-agent harness does not wire. It is covered by the live fleet
+      // e2e (bead psfn-framework-s10f8); here we assert the substrate it rides
+      // on (fleet + schema tenancy) instead.
+      console.log('  ℹ Companion-room round-trip is exercised by the live fleet harness (s10f8)');
+    } catch (err) {
+      assert(false, 'Multi-companion fleet section completed', String(err));
+    }
   }
 
   // ────────────────────────────────────────

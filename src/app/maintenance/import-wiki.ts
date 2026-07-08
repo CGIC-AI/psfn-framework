@@ -31,6 +31,11 @@ import {
   importMarkdownDirectory,
   type WikiImportReport,
 } from '../../faculties/wiki/bulk-import.js';
+import {
+  runSharedWorldWikiWrite,
+  type SharedWikiProjectionOutcome,
+} from '../../faculties/wiki/shared-pgvector-projection.js';
+import { resolveSharedWikiProjectionContext } from './shared-wiki-projection-context.js';
 import { sharedWorldScope } from '../../faculties/wiki/scope.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
 
@@ -94,13 +99,27 @@ function parseArgs(argv: string[]): CliOptions {
   return options;
 }
 
-function printReport(report: WikiImportReport, mode: string): void {
+function printReport(report: WikiImportReport, mode: string, projection?: SharedWikiProjectionOutcome): void {
   console.log(`Mode: ${mode}`);
   console.log(`Directory: ${report.directory}`);
   console.log(`Scope: ${report.scope} (personal-fact guard: ${report.personalFactGuard ? 'on' : 'off'})`);
   console.log(`Imported: ${report.imported.length}  Rejected: ${report.rejected.length}`);
   for (const entry of report.imported) console.log(`  + ${entry.file} → ${entry.id}`);
   for (const rejection of report.rejected) console.log(`  ✗ ${rejection.file}: ${rejection.reason}`);
+  if (!projection) return;
+  if (projection.status === 'projected') {
+    console.log(`Projection: projected (reembedded=${projection.projected.length} `
+      + `deleted=${projection.deleted.length} failed=${projection.failedDocuments.length})`);
+    for (const failure of projection.failedDocuments) {
+      console.log(`  ! ${failure.documentId}: ${failure.error}`);
+    }
+    return;
+  }
+  if (projection.status === 'skipped') {
+    console.log(`Projection: SKIPPED (${projection.reason ?? 'unknown'}) — shared docs are filesystem-only until projected`);
+    return;
+  }
+  console.log(`Projection: FAILED (${projection.error ?? 'unknown'}) — re-run once Postgres is reachable to heal`);
 }
 
 async function main(): Promise<void> {
@@ -111,6 +130,7 @@ async function main(): Promise<void> {
   const config = loadConfig();
 
   let store: WikiDocumentStore;
+  let sharedStore: SharedWorldWikiStore | null = null;
   let scopeLabel: 'personal' | `shared_world:${string}`;
   let personalFactGuard: boolean;
 
@@ -123,7 +143,8 @@ async function main(): Promise<void> {
     if (!resolveSiteById(registry, siteId)) {
       throw new Error(`unknown siteId "${siteId}" — not present in places.json sites (fail closed)`);
     }
-    store = new SharedWorldWikiStore(systemDataDir, siteId);
+    sharedStore = new SharedWorldWikiStore(systemDataDir, siteId);
+    store = sharedStore;
     scopeLabel = sharedWorldScope(siteId);
     personalFactGuard = true;
   } else {
@@ -136,19 +157,40 @@ async function main(): Promise<void> {
     personalFactGuard = false;
   }
 
-  const report = importMarkdownDirectory({
-    directory: options.directory,
+  const runImport = (): WikiImportReport => importMarkdownDirectory({
+    directory: options.directory as string,
     store,
     scope: scopeLabel,
     personalFactGuard,
     dryRun: !options.apply,
   });
 
+  let report: WikiImportReport;
+  let projection: SharedWikiProjectionOutcome | undefined;
+  if (sharedStore && options.apply) {
+    // s10f9: shared-world apply runs write + projection together so the
+    // filesystem tree and shared.shared_wiki_chunks cannot drift silently.
+    // Under multi-companion an unavailable projection fails closed BEFORE the
+    // filesystem write; flag-off it is reported honestly (skipped/failed).
+    const outcome = await runSharedWorldWikiWrite({
+      context: resolveSharedWikiProjectionContext(config),
+      store: sharedStore,
+      write: runImport,
+    });
+    report = outcome.report;
+    projection = outcome.projection;
+  } else {
+    report = runImport();
+  }
+
   if (options.json) {
-    console.log(JSON.stringify({ mode: options.apply ? 'apply' : 'dry-run', report }, null, 2));
+    console.log(JSON.stringify({
+      mode: options.apply ? 'apply' : 'dry-run',
+      report: { ...report, ...(projection ? { projection } : {}) },
+    }, null, 2));
     return;
   }
-  printReport(report, options.apply ? 'apply' : 'dry-run (pass --apply to write)');
+  printReport(report, options.apply ? 'apply' : 'dry-run (pass --apply to write)', projection);
 }
 
 main().catch((error) => {

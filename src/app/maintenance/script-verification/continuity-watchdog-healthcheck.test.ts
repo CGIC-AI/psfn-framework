@@ -239,7 +239,7 @@ describe('continuity watchdog healthcheck paging', () => {
     expect(ntfyRequests).toHaveLength(1);
   });
 
-  it('refuses to run when ntfy target or required token is missing', async () => {
+  it('reports healthy runtime state even when ntfy config is missing', async () => {
     const stateFile = await makeStateFile();
     const config = makeConfig(stateFile, {
       CONTINUITY_WATCHDOG_NTFY_BASE_URL: '',
@@ -252,10 +252,57 @@ describe('continuity watchdog healthcheck paging', () => {
 
     const result = await runWatchdogOnce(config, { fetchImpl });
 
+    expect(result.exitCode).toBe(0);
+    expect(result.status).toBe('healthy');
+    expect(ntfyRequests).toHaveLength(0);
+  });
+
+  it('rejects missing ntfy target or required token in --check-config mode', async () => {
+    const stateFile = await makeStateFile();
+    const config = resolveWatchdogConfig({
+      CONTINUITY_WATCHDOG_ENDPOINT: 'http://runtime.local/health',
+      CONTINUITY_WATCHDOG_STATE_FILE: stateFile,
+      CONTINUITY_WATCHDOG_NTFY_TOPIC: 'ops',
+    }, ['--check-config']);
+    const { fetchImpl, ntfyRequests } = makeFetch({
+      healthStatus: 200,
+      healthPayload: healthyPayload(),
+    });
+
+    const result = await runWatchdogOnce(config, { fetchImpl });
+
     expect(result.exitCode).toBe(2);
     expect(result.status).toBe('config_error');
     expect(result.errors).toContain('NTFY_BASE_URL or CONTINUITY_WATCHDOG_NTFY_BASE_URL is required');
     expect(result.errors).toContain('NTFY_TOKEN or CONTINUITY_WATCHDOG_NTFY_TOKEN is required');
+    expect(ntfyRequests).toHaveLength(0);
+  });
+
+  it('fails the page but still reports the incident when paging config is missing', async () => {
+    const stateFile = await makeStateFile();
+    const config = makeConfig(stateFile, {
+      CONTINUITY_WATCHDOG_NTFY_BASE_URL: '',
+      CONTINUITY_WATCHDOG_NTFY_TOKEN: '',
+    });
+    const { fetchImpl, ntfyRequests } = makeFetch({
+      healthStatus: 503,
+      healthPayload: staleSchedulerPayload(),
+    });
+
+    const result = await runWatchdogOnce(config, {
+      fetchImpl,
+      now: () => Date.parse('2026-06-29T12:06:00.000Z'),
+    });
+
+    const state = JSON.parse(await readFile(stateFile, 'utf8')) as {
+      lastNtfyFailure?: string;
+    };
+    expect(result.exitCode).toBe(2);
+    expect(result.status).toBe('unhealthy');
+    expect(result.reason).toContain('schedulerHealthcheck');
+    expect(result.pageStatus).toBe('failed');
+    expect(result.pageError).toContain('paging config invalid');
+    expect(state.lastNtfyFailure).toContain('paging config invalid');
     expect(ntfyRequests).toHaveLength(0);
   });
 });

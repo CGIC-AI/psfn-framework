@@ -616,18 +616,20 @@ export async function runWatchdogOnce(config, deps = {}) {
   const now = deps.now ?? Date.now;
   const nowMs = now();
   const logger = deps.logger ?? (() => {});
-  const validationErrors = validatePagingConfig(config);
-  if (validationErrors.length > 0) {
-    const result = {
-      exitCode: 2,
-      status: 'config_error',
-      errors: validationErrors,
-    };
-    logResult(result, logger, config.outputJson);
-    return result;
-  }
-
+  // Paging config is only validated in --check-config mode and on the paging
+  // path below: ordinary health probes must stay observable (e.g. as the
+  // Docker healthcheck) even when ntfy env vars are absent.
   if (config.checkConfigOnly) {
+    const validationErrors = validatePagingConfig(config);
+    if (validationErrors.length > 0) {
+      const result = {
+        exitCode: 2,
+        status: 'config_error',
+        errors: validationErrors,
+      };
+      logResult(result, logger, config.outputJson);
+      return result;
+    }
     const result = {
       exitCode: 0,
       status: 'healthy',
@@ -679,28 +681,42 @@ export async function runWatchdogOnce(config, deps = {}) {
 
   if (consecutiveFailures >= config.maxFailures) {
     if (shouldPageIncident(failedState, incident.fingerprint, nowMs, config.repeatPageAfterMs)) {
-      try {
-        const pageResult = await sendNtfyPage(
-          config,
-          incident,
-          failures,
-          consecutiveFailures,
-          deps.fetchImpl ?? fetch,
-        );
-        pageStatus = pageResult.status;
-        if (pageResult.status === 'sent') {
-          nextState = markPageSent(failedState, incident, new Date(nowMs).toISOString());
-          await writeWatchdogState(config.stateFile, nextState);
-        }
-      } catch (error) {
+      const pagingConfigErrors = validatePagingConfig(config);
+      if (pagingConfigErrors.length > 0) {
+        // Fail closed on the paging path: the incident is still reported as
+        // unhealthy and the unsendable page surfaces as a page failure.
         pageStatus = 'failed';
-        pageError = error instanceof Error ? error.message : String(error);
+        pageError = `paging config invalid: ${pagingConfigErrors.join('; ')}`;
         nextState = {
           ...failedState,
           lastNtfyFailureAt: new Date(nowMs).toISOString(),
           lastNtfyFailure: pageError,
         };
         await writeWatchdogState(config.stateFile, nextState);
+      } else {
+        try {
+          const pageResult = await sendNtfyPage(
+            config,
+            incident,
+            failures,
+            consecutiveFailures,
+            deps.fetchImpl ?? fetch,
+          );
+          pageStatus = pageResult.status;
+          if (pageResult.status === 'sent') {
+            nextState = markPageSent(failedState, incident, new Date(nowMs).toISOString());
+            await writeWatchdogState(config.stateFile, nextState);
+          }
+        } catch (error) {
+          pageStatus = 'failed';
+          pageError = error instanceof Error ? error.message : String(error);
+          nextState = {
+            ...failedState,
+            lastNtfyFailureAt: new Date(nowMs).toISOString(),
+            lastNtfyFailure: pageError,
+          };
+          await writeWatchdogState(config.stateFile, nextState);
+        }
       }
     } else {
       pageStatus = 'debounced';

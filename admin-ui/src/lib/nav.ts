@@ -29,6 +29,7 @@ export const navGroups: NavGroup[] = [
     { id: 'sessions', path: '/sessions', defaultLabel: 'Sessions', icon: '\u{1F332}' },
     { id: 'scheduler', path: '/scheduler', defaultLabel: 'Scheduler', icon: '\u{23F0}' },
     { id: 'satellites', path: '/satellites', defaultLabel: 'Satellites', icon: '\u{1F6F0}\u{FE0F}' },
+    { id: 'places', path: '/places', defaultLabel: 'Places', icon: '\u{1F5FA}\u{FE0F}' },
     { id: 'action-pipe', path: '/action-pipe', defaultLabel: 'Action Pipe', icon: '\u{1F39B}\u{FE0F}' },
   ]),
   navGroup('memory', 'Memory & Identity', [
@@ -37,6 +38,7 @@ export const navGroups: NavGroup[] = [
     { id: 'wiki', path: '/wiki', defaultLabel: 'Wiki', icon: '\u{1F4D8}' },
     { id: 'contacts', path: '/contacts', defaultLabel: 'Contacts', icon: '\u{1F6AA}' },
     { id: 'contact-approvals', path: '/contact-approvals', defaultLabel: 'Contact Approvals', icon: '\u{1F91D}' },
+    { id: 'enrollment', path: '/enrollment', defaultLabel: 'Enrollment', icon: '\u{1FAAA}' },
     { id: 'rooms', path: '/rooms', defaultLabel: 'Rooms', icon: '\u{1F6CB}\u{FE0F}' },
     { id: 'graph-proposals', path: '/graph-proposals', defaultLabel: 'Graph Proposals', icon: '\u{1F578}\u{FE0F}' },
     { id: 'identity', path: '/identity', defaultLabel: 'Identity', icon: '\u{1F331}' },

@@ -33,6 +33,7 @@ import {
 import { HeartbeatPolicyStore } from './heartbeat-policy.js';
 import { Scheduler } from './scheduler.js';
 import { createHeartbeatTemplateRuntime } from './heartbeat-template-runtime.js';
+import { createGroupConversationScope } from '../session/conversation-scope.js';
 
 describe('createHeartbeatTemplateRuntime reflection metacognition journal', () => {
   let tempDir: string;
@@ -1059,6 +1060,166 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
       ]));
     },
   );
+
+  it('suppresses DM-style canonical-contact grounding for a group-scoped reflection', async () => {
+    tempDir = mkdtempSync(join(tmpdir(), 'heartbeat-template-runtime-'));
+    const capturedPrompts: string[] = [];
+    const recentSessionMessages = [
+      {
+        id: 1,
+        channelId: 'discord:primary-session',
+        role: 'user' as const,
+        content: 'I was here yesterday.',
+        timestamp: 1_700_000_000_000,
+        authorName: 'Ari',
+      },
+    ];
+    const eventBus = new EventBus();
+    const memoryRetrieve = vi.fn(async (_contextText: string, channelId: string) => {
+      await eventBus.emit('memory.retrieval', {
+        channelId,
+        count: 1,
+        provenanceRefs: ['memory:seeded-public-profile'],
+      });
+      return '[Reflection Memory Retrieval]\n- reflection-only memory';
+    });
+    const currentContact = {
+      id: 'contact-1',
+      displayName: 'Ari',
+      nickname: 'Ari',
+      trustLevel: 'trusted' as const,
+      relationshipType: 'friend' as const,
+      firstSeen: '2026-01-01T00:00:00.000Z',
+      lastSeen: '2026-03-31T12:00:00.000Z',
+      conversationChannels: [{
+        channel: 'discord',
+        channelId: 'discord:primary-session',
+        firstSeen: '2026-01-01T00:00:00.000Z',
+        lastSeen: '2026-03-31T12:00:00.000Z',
+      }],
+    };
+    const currentInternalState = new InternalStateComputer().computeState({
+      emotionState: {
+        vad: { valence: 0.2, arousal: 0.15, dominance: 0.1 },
+        mood: { valence: 0.25, arousal: 0.2, dominance: 0.15 },
+        discrete: { curiosity: 0.5, calm: 0.4 },
+        confidence: 0.75,
+      },
+      activeConcerns: [],
+      trustLevel: 'trusted',
+      contactId: 'contact-1',
+      sessionMetrics: {
+        userMessageText: 'Recent conversations matter.',
+        responseText: 'Keep continuity with the primary contact.',
+        toolCallCount: 0,
+        recentTurnCount: 3,
+        lastSeenDeltaSeconds: 120,
+      },
+    });
+    const currentSnapshotRef = buildInternalStateSnapshotRef(currentInternalState);
+    const handleMessage = vi.fn(async (message) => {
+      capturedPrompts.push(message.content);
+      const responseInternalState = new InternalStateComputer().computeState({
+        emotionState: {
+          vad: { valence: 0.2, arousal: 0.15, dominance: 0.1 },
+          mood: { valence: 0.25, arousal: 0.2, dominance: 0.15 },
+          discrete: { curiosity: 0.5, calm: 0.4 },
+          confidence: 0.75,
+        },
+        activeConcerns: [],
+        trustLevel: 'primary',
+        contactId: message.routing?.canonicalContactId ?? message.authorId,
+        sessionMetrics: {
+          userMessageText: message.content,
+          responseText: 'Room reflection',
+          toolCallCount: 0,
+          recentTurnCount: 1,
+          lastSeenDeltaSeconds: 30,
+        },
+      });
+      return {
+        content: 'Room reflection',
+        metadata: {
+          internalState: responseInternalState,
+          internalStateSnapshotRef: buildInternalStateSnapshotRef(responseInternalState),
+          metacognitiveFlags: [],
+        },
+      };
+    });
+
+    const runtime = createHeartbeatTemplateRuntime({
+      scheduler: new Scheduler(new EventBus(), { tickIntervalMs: 100, heartbeatIntervalMs: 1_000 }),
+      agentLoop: {
+        handleMessage,
+        memoryProvider: {
+          retrieve: memoryRetrieve,
+        },
+        getCurrentInternalState: () => currentInternalState,
+        getCurrentInternalStateSnapshotRef: () => currentSnapshotRef,
+        getCurrentMetacognitiveFlags: () => [],
+      } as any,
+      sender: { send: vi.fn(async () => undefined) },
+      dataDir: tempDir,
+      runtimeOptions: {
+        eventBus,
+        sessionManager: {
+          resolveSessionChannelId: (channelId: string) => channelId,
+          getRecentMessages: (channelId: string, limit?: number) => (
+            channelId === 'discord:primary-session'
+              ? recentSessionMessages.slice(0, limit ?? recentSessionMessages.length)
+              : []
+          ),
+        },
+        contactStore: {
+          getById: async (id: string) => (id === 'contact-1' ? currentContact : undefined),
+          getEmotionalSnapshot: async () => undefined,
+          getEmotionalTimeSeries: async () => [],
+        },
+      } as any,
+    });
+
+    await runtime.runTemplateNow('daily-review', {
+      sendToDiscordOverride: false,
+      deferIfBusy: false,
+      conversationScope: createGroupConversationScope({
+        channelId: 'discord:room-42',
+        roomName: 'launch-room',
+      }),
+    });
+
+    // Final agent turn carries the room scope hint, not a canonical contact.
+    expect(handleMessage).toHaveBeenCalledWith(expect.objectContaining({
+      authorId: 'scheduler',
+      routing: expect.objectContaining({
+        reflectionScope: expect.objectContaining({
+          kind: 'group',
+          roomId: 'discord:room-42',
+          roomName: 'launch-room',
+        }),
+      }),
+    }));
+    const routingArg = handleMessage.mock.calls[0]?.[0]?.routing ?? {};
+    expect(routingArg).not.toHaveProperty('canonicalContactId');
+
+    // Introspection policy drops the DM temporal retrieval binding; contact
+    // evidence grounding is absent entirely.
+    const prompt = capturedPrompts[0];
+    const introspectionPolicySection = getPromptSection(prompt, '[Reflection Introspection Policy]');
+    expect(introspectionPolicySection).toContain('memory_retrieval_modes: reflection');
+    expect(introspectionPolicySection).not.toContain('memory_retrieval_modes: temporal, reflection');
+    expect(getPromptSection(prompt, '[Reflection Contact Evidence]')).toBe('');
+    if (memoryRetrieve.mock.calls.length > 0) {
+      expect(memoryRetrieve.mock.calls[0]?.[10]).toEqual(['reflection']);
+    }
+
+    // Journal provenance must not inherit the single-contact binding.
+    const raw = readFileSync(resolveReflectionJournalPath(tempDir), 'utf-8').trim();
+    const entry = JSON.parse(raw.split('\n').at(-1) ?? '{}') as {
+      substrateProvenanceRefs?: string[];
+    };
+    expect(entry.substrateProvenanceRefs ?? []).not.toContain('reflection_contact:contact-1');
+    expect(entry.substrateProvenanceRefs ?? []).not.toContain('reflection_contact_memory:contact-1');
+  });
 
   it('records internal-state grounding for contactless daily reflection output', async () => {
     tempDir = mkdtempSync(join(tmpdir(), 'heartbeat-template-runtime-'));

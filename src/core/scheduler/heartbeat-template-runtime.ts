@@ -560,7 +560,11 @@ export interface HeartbeatTemplateRuntime {
   initialPolicy: HeartbeatPolicy;
   runTemplateNow(
     templateId: string,
-    options?: { sendToDiscordOverride?: boolean; deferIfBusy?: boolean },
+    options?: {
+      sendToDiscordOverride?: boolean;
+      deferIfBusy?: boolean;
+      conversationScope?: ConversationScope;
+    },
   ): Promise<HeartbeatRunTemplateResult>;
   runDeferredTemplate(
     templateId: string,
@@ -1989,6 +1993,15 @@ export function createHeartbeatTemplateRuntime(
         ...(reflectionGroupScope.roomName ? { roomName: reflectionGroupScope.roomName } : {}),
       }
       : undefined;
+    // E1.7: a group-scoped reflection reflects on the ROOM, not a single
+    // canonical contact. Suppress the DM-style canonical-contact binding so
+    // introspection policy, contact-context grounding, and journal provenance
+    // don't inherit a single-contact identity. The novelty gate still takes the
+    // group scope separately, and the turn pipeline rebuilds the
+    // ConversationScope from reflectionScopeHint.
+    const reflectionGroundingContactId = reflectionGroupScope
+      ? undefined
+      : reflectionCanonicalContactId;
 
     // jpvd.4: only cadence-fired runs are novelty-gated. Manual run_template
     // invocations (including manual runs deferred through the scheduler or
@@ -2025,7 +2038,7 @@ export function createHeartbeatTemplateRuntime(
       : 'agent';
     const reflectionPolicy = resolveReflectionIntrospectionPolicy({
       template,
-      canonicalContactId: reflectionCanonicalContactId,
+      canonicalContactId: reflectionGroundingContactId,
       reflectionMode: plannedReflectionMode,
     });
     const reflectionContactResolution = await resolveReflectionContactContextBundle(
@@ -2033,7 +2046,7 @@ export function createHeartbeatTemplateRuntime(
       reflectionPolicy,
       internalStateContext,
       reflectionChannelId,
-      reflectionCanonicalContactId,
+      reflectionGroundingContactId,
     );
     const reflectionContactContext = reflectionContactResolution.bundle;
     const reflectionSubstrateContext = resolveReflectionSubstratePromptContext(template);
@@ -2231,7 +2244,7 @@ export function createHeartbeatTemplateRuntime(
         ...(persistenceContext?.internalStateSnapshotRef
           ? { internalStateSnapshotRef: persistenceContext.internalStateSnapshotRef }
           : {}),
-        ...(reflectionCanonicalContactId ? { canonicalContactId: reflectionCanonicalContactId } : {}),
+        ...(reflectionGroundingContactId ? { canonicalContactId: reflectionGroundingContactId } : {}),
       },
     );
     const supportGapFlags = buildUnsupportedReflectionSupportFlags(
@@ -2505,7 +2518,11 @@ export function createHeartbeatTemplateRuntime(
 
   const runTemplateNow = async (
     templateId: string,
-    options: { sendToDiscordOverride?: boolean; deferIfBusy?: boolean } = {},
+    options: {
+      sendToDiscordOverride?: boolean;
+      deferIfBusy?: boolean;
+      conversationScope?: ConversationScope;
+    } = {},
   ): Promise<HeartbeatRunTemplateResult> => {
     const current = store.load();
     const template = findReflectionTemplateById(current, templateId);

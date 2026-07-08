@@ -239,6 +239,7 @@ async function main(): Promise<void> {
     intentionProviders,
     capabilityRuntime,
     contactTrackingGate,
+    satelliteRegistryConfig,
     placesRegistryConfig,
   });
   const {

@@ -1,5 +1,6 @@
 import type { CoreSubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type { PlacesRegistryConfig } from '../../shared/contracts/places-registry.js';
+import type { SatelliteRegistryConfig } from '../../shared/contracts/satellite-registry.js';
 import type { EventBus } from '../../shared/event-bus.js';
 import type { EpisodicStorePort } from '../../faculties/memory/episodic/index.js';
 import {
@@ -92,6 +93,7 @@ import {
   type ToolConformanceRunner,
 } from '../../core/agent/tool-conformance/runner.js';
 import { getObserverEvalSidecarHealthSnapshot } from '../../core/eval/observer-sidecar/runtime.js';
+import { createSensorCognitionBridge } from '../../core/agent/perception/sensor-cognition-bridge.js';
 
 export interface AgentCoreRuntimeOptions {
   config: CoreSubstrateConfig;
@@ -115,6 +117,8 @@ export interface AgentCoreRuntimeOptions {
   primaryTelegramUserId?: string;
   /** Contact-tracking policy gate (E3.4). Absent gate behaves as 'auto' everywhere. */
   contactTrackingGate?: ContactTrackingGate | null;
+  /** Satellite security registry (S10). Used by perception ingestion to resolve static place binding. */
+  satelliteRegistryConfig?: SatelliteRegistryConfig;
   /** Places soft-registry (S10). Absent behaves as an empty registry. */
   placesRegistryConfig?: PlacesRegistryConfig;
 }
@@ -227,6 +231,11 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
   agentLoop.scratchpadProvider = memoryStore;
   agentLoop.setCapabilityRuntime(capabilityRuntime);
   wireDiagnosticsRuntime(eventBus);
+  createSensorCognitionBridge({
+    eventBus,
+    satelliteRegistry: options.satelliteRegistryConfig,
+    placesRegistry: options.placesRegistryConfig,
+  });
   // E5.5: persistent active-memory refresh failure raises an operator alert
   // through the system-derived gateway notification path. The threshold is
   // config-owned (settings.json memoryRefreshFailureAlertThreshold) and the

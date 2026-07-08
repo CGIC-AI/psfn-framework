@@ -18,6 +18,7 @@ import type { GatewayClient } from '../../boundary/gateway/client.js';
 import type { CharacterCardV2 } from '../../core/identity/types.js';
 import type { CapabilityRuntime } from '../../system/capabilities/runtime.js';
 import type { PlacesRegistryConfig } from '../../shared/contracts/places-registry.js';
+import type { SatelliteRegistryConfig } from '../../shared/contracts/satellite-registry.js';
 import { ConfirmationQueue } from '../../system/capabilities/confirmation-queue.js';
 import {
   createApprovalQueuePortFromConfirmationQueue,
@@ -64,6 +65,8 @@ export interface BootstrapAgentCoreRuntimeOptions {
   capabilityRuntime: CapabilityRuntime;
   /** Contact-tracking policy gate (E3.4). Absent gate behaves as 'auto' everywhere. */
   contactTrackingGate?: ContactTrackingGate | null;
+  /** Satellite security registry (S10). Used by perception ingestion to resolve static place binding. */
+  satelliteRegistryConfig?: SatelliteRegistryConfig;
   /** Places soft-registry (S10). Absent behaves as an empty registry. */
   placesRegistryConfig?: PlacesRegistryConfig;
 }
@@ -149,6 +152,7 @@ export async function bootstrapAgentCoreRuntime(
       ?? ''
     ).trim() || undefined,
     contactTrackingGate: options.contactTrackingGate ?? null,
+    ...(options.satelliteRegistryConfig ? { satelliteRegistryConfig: options.satelliteRegistryConfig } : {}),
     ...(options.placesRegistryConfig ? { placesRegistryConfig: options.placesRegistryConfig } : {}),
   });
 

@@ -1,7 +1,7 @@
 import { isRecord } from '../../shared/utils/types.js';
 import { join } from 'node:path';
 import { appendJsonLine, readJsonLines } from '../jsonl.js';
-import { CHANNEL_TYPES, type ChannelType, type TurnID, type TurnRecord, type TurnRecordMessage, type TurnRecordToolCall, type TurnRecordVersionPointers } from '../../shared/contracts/runtime.js';
+import { CHANNEL_TYPES, type ChannelType, type TurnID, type TurnRecord, type TurnRecordLocation, type TurnRecordMessage, type TurnRecordToolCall, type TurnRecordVersionPointers } from '../../shared/contracts/runtime.js';
 import { sanitizeChannelId } from './store-file-contracts.js';
 import { backfillLegacyTurnId, parseTurnId } from '../../core/turns/id.js';
 import type {
@@ -108,6 +108,20 @@ function parseRequiredJsonRecord(value: unknown, fieldName: string): Record<stri
     throw new Error(`TurnRecord field \"${fieldName}\" must be an object`);
   }
   return cloneUnknownValue(value) as Record<string, unknown>;
+}
+
+function parseOptionalLocation(value: unknown): TurnRecordLocation | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (!isRecord(value)) {
+    throw new Error('TurnRecord field "location" must be an object');
+  }
+  const placeId = parseOptionalString(value.placeId, 'location.placeId');
+  const satelliteId = parseOptionalString(value.satelliteId, 'location.satelliteId');
+  if (!placeId && !satelliteId) return undefined;
+  return {
+    ...(placeId ? { placeId } : {}),
+    ...(satelliteId ? { satelliteId } : {}),
+  };
 }
 
 function parseTurnRecordMessage(value: unknown, fieldName: string): TurnRecordMessage {
@@ -409,6 +423,7 @@ function normalizeTurnRecord(raw: unknown, expectedChannelId: string): TurnRecor
     channelId,
   });
   const roleEnvelopeRefs = parseOptionalStringArray(raw.roleEnvelopeRefs, 'roleEnvelopeRefs');
+  const location = parseOptionalLocation(raw.location);
 
   return {
     schemaVersion: TURN_RECORD_SCHEMA_VERSION,
@@ -419,6 +434,7 @@ function normalizeTurnRecord(raw: unknown, expectedChannelId: string): TurnRecor
     startedAt,
     completedAt,
     status: status as TurnRecord['status'],
+    ...(location ? { location } : {}),
     userMessage,
     ...(assistantMessage ? { assistantMessage } : {}),
     toolCalls,

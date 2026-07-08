@@ -59,6 +59,20 @@ export interface TurnRecordVersionPointers {
   sessionState?: string;
 }
 
+/**
+ * Durable satellite/place origin recorded on a turn for long-lived history.
+ * Sourced from the message's satellite routing metadata (`placeId` is the
+ * static foreign key into `places.json` established by the satellite→place
+ * binding). Fail-closed: the field is absent unless the turn actually carried a
+ * bound `placeId`; nothing is fabricated for non-satellite turns.
+ */
+export interface TurnRecordLocation {
+  /** Static place binding carried onto the turn (`SatelliteConfig.placeId`). */
+  placeId?: string;
+  /** Originating satellite, recorded alongside the place for durable provenance. */
+  satelliteId?: string;
+}
+
 export interface TurnRecord {
   schemaVersion: 1;
   turnId: TurnID;
@@ -68,6 +82,8 @@ export interface TurnRecord {
   startedAt: number;
   completedAt: number;
   status: 'completed' | 'failed';
+  /** Durable satellite/place origin; absent on non-satellite (or unbound) turns. */
+  location?: TurnRecordLocation;
   userMessage: TurnRecordMessage;
   assistantMessage?: TurnRecordMessage;
   toolCalls: TurnRecordToolCall[];

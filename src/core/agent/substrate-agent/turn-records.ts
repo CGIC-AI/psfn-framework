@@ -204,6 +204,20 @@ export function buildTurnRecord(input: {
 
   const observability = cloneTurnObservabilityForRecord(input.turnObservability);
 
+  // Durable satellite/place origin. Fail-closed: only recorded when the turn
+  // actually carried a bound placeId (see satellite→place binding). Nothing is
+  // fabricated for non-satellite or unbound turns.
+  const satelliteRouting = input.message.routing?.satellite;
+  const boundPlaceId = satelliteRouting?.placeId?.trim();
+  const location = boundPlaceId
+    ? {
+      placeId: boundPlaceId,
+      ...(satelliteRouting?.satelliteId.trim()
+        ? { satelliteId: satelliteRouting.satelliteId.trim() }
+        : {}),
+    }
+    : undefined;
+
   return {
     schemaVersion: 1,
     turnId: input.turnId,
@@ -213,6 +227,7 @@ export function buildTurnRecord(input: {
     startedAt: input.startedAt,
     completedAt: Math.max(input.startedAt, input.completedAt),
     status,
+    ...(location ? { location } : {}),
     userMessage: {
       role: input.speakerRole,
       content: input.persistedUserMessageContent ?? input.message.content,

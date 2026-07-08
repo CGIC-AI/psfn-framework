@@ -194,8 +194,9 @@ async function identifyAgent(
 
 function multiCompanion(
   channelRouting: GatewayMultiCompanionConfig['channelRouting'],
+  discordAccounts: GatewayMultiCompanionConfig['discordAccounts'] = {},
 ): GatewayMultiCompanionConfig {
-  return { enabled: true, channelRouting };
+  return { enabled: true, channelRouting, discordAccounts };
 }
 
 function methodFrames(conn: MockConnection, method: string): any[] {
@@ -273,6 +274,7 @@ describe('resolveGatewayMultiCompanionConfig', () => {
     expect(resolveGatewayMultiCompanionConfig({}, baseChannels())).toEqual({
       enabled: false,
       channelRouting: {},
+      discordAccounts: {},
     });
   });
 
@@ -284,6 +286,36 @@ describe('resolveGatewayMultiCompanionConfig', () => {
     expect(resolveGatewayMultiCompanionConfig({ multiCompanion: true }, channels)).toEqual({
       enabled: true,
       channelRouting: { discord: 'comp-a', telegram: 'comp-b', api: 'comp-b' },
+      discordAccounts: {},
+    });
+  });
+
+  it('builds per-account discord routing from channels.json discord.accounts when enabled', () => {
+    const channels = baseChannels();
+    channels.discord.accounts = [
+      {
+        accountId: 'acct-a',
+        companionId: 'comp-a',
+        tokenEnvVar: 'DISCORD_TOKEN_A',
+        token: 'token-a',
+        heartbeatChannelId: '',
+        allowedBotUserIds: [],
+        groupMemory: { channelOverrides: {} } as any,
+      },
+      {
+        accountId: 'acct-b',
+        companionId: 'comp-b',
+        tokenEnvVar: 'DISCORD_TOKEN_B',
+        token: 'token-b',
+        heartbeatChannelId: '',
+        allowedBotUserIds: [],
+        groupMemory: { channelOverrides: {} } as any,
+      },
+    ];
+    expect(resolveGatewayMultiCompanionConfig({ multiCompanion: true }, channels)).toEqual({
+      enabled: true,
+      channelRouting: {},
+      discordAccounts: { 'acct-a': 'comp-a', 'acct-b': 'comp-b' },
     });
   });
 
@@ -292,6 +324,22 @@ describe('resolveGatewayMultiCompanionConfig', () => {
     channels.discord.companionId = 'comp-a';
     expect(() => resolveGatewayMultiCompanionConfig({}, channels)).toThrow(
       /PSFN_MULTI_COMPANION is not enabled/,
+    );
+  });
+
+  it('fails closed when discord.accounts is declared while the flag is off', () => {
+    const channels = baseChannels();
+    channels.discord.accounts = [{
+      accountId: 'acct-a',
+      companionId: 'comp-a',
+      tokenEnvVar: 'DISCORD_TOKEN_A',
+      token: 'token-a',
+      heartbeatChannelId: '',
+      allowedBotUserIds: [],
+      groupMemory: { channelOverrides: {} } as any,
+    }];
+    expect(() => resolveGatewayMultiCompanionConfig({}, channels)).toThrow(
+      /discord\.accounts \[acct-a\] but PSFN_MULTI_COMPANION is not enabled/,
     );
   });
 
@@ -655,6 +703,222 @@ describe('GatewayServer multi-companion routing (flag on)', () => {
     });
     await new Promise(r => setTimeout(r, 10));
     expect(received).toEqual(['legit']);
+  });
+});
+
+describe('GatewayServer multi-account discord routing (flag on, W1-P2)', () => {
+  function createAccountDock(id: string): {
+    dock: any;
+    sendText: ReturnType<typeof vi.fn>;
+    sendMedia: ReturnType<typeof vi.fn>;
+  } {
+    const sendText = vi.fn(async () => undefined);
+    const sendMedia = vi.fn(async () => undefined);
+    return {
+      dock: {
+        id,
+        outbound: { textChunkLimit: 2000, sendText, sendMedia },
+      },
+      sendText,
+      sendMedia,
+    };
+  }
+
+  function createMultiAccountOptions(): {
+    options: GatewayServerOptions;
+    dockA: ReturnType<typeof createAccountDock>;
+    dockB: ReturnType<typeof createAccountDock>;
+  } {
+    const dockA = createAccountDock('discord:acct-a');
+    const dockB = createAccountDock('discord:acct-b');
+    const options: GatewayServerOptions = {
+      ...createMinimalOptions(),
+      discordAccountDocks: new Map([
+        ['comp-a', dockA.dock],
+        ['comp-b', dockB.dock],
+      ]),
+      multiCompanion: multiCompanion({}, { 'acct-a': 'comp-a', 'acct-b': 'comp-b' }),
+    };
+    return { options, dockA, dockB };
+  }
+
+  it('fails closed at construction when a routed companion has no outbound dock', () => {
+    expect(() => new GatewayServer({
+      ...createMinimalOptions(),
+      multiCompanion: multiCompanion({}, { 'acct-a': 'comp-a' }),
+    })).toThrow(/missing docks for: comp-a/);
+  });
+
+  it('delivers inbound account messages to exactly the routed companion per account', async () => {
+    const { options } = createMultiAccountOptions();
+    const { server, connect } = await setupServer(options);
+    const connA = await connect();
+    const connB = await connect();
+    await identifyAgent(connA, 'comp-a', 1);
+    await identifyAgent(connB, 'comp-b', 2);
+
+    server.notifyChannelMessage('discord', 'discord.message', { message: { id: 'm-a' } }, 'acct-a');
+    server.notifyChannelMessage('discord', 'discord.message', { message: { id: 'm-b' } }, 'acct-b');
+
+    const aFrames = methodFrames(connA, 'discord.message');
+    const bFrames = methodFrames(connB, 'discord.message');
+    expect(aFrames).toHaveLength(1);
+    expect(aFrames[0].params.message.id).toBe('m-a');
+    expect(bFrames).toHaveLength(1);
+    expect(bFrames[0].params.message.id).toBe('m-b');
+  });
+
+  it('fails closed when the inbound discord message carries no accountId', async () => {
+    const auditAppend = vi.fn(async () => 21);
+    const { options } = createMultiAccountOptions();
+    const { server, connect } = await setupServer({
+      ...options,
+      auditStore: createMockAuditStore({ append: auditAppend }),
+    });
+    const connA = await connect();
+    await identifyAgent(connA, 'comp-a', 1);
+
+    expect(() => server.notifyChannelMessage('discord', 'discord.message', { message: { id: 'm1' } }))
+      .toThrow('Multi-account discord routing requires an accountId');
+    expect(methodFrames(connA, 'discord.message')).toHaveLength(0);
+
+    await new Promise(r => setTimeout(r, 10));
+    expect(auditAppend).toHaveBeenCalledWith(expect.objectContaining({
+      method: 'gateway.companion.unrouted_discord_account',
+      decision: 'DENY',
+    }));
+  });
+
+  it('fails closed for an unknown discord accountId', async () => {
+    const auditAppend = vi.fn(async () => 22);
+    const { options } = createMultiAccountOptions();
+    const { server, connect } = await setupServer({
+      ...options,
+      auditStore: createMockAuditStore({ append: auditAppend }),
+    });
+    const connA = await connect();
+    await identifyAgent(connA, 'comp-a', 1);
+
+    expect(() => server.notifyChannelMessage('discord', 'discord.message', { message: { id: 'm1' } }, 'acct-x'))
+      .toThrow('no companion for discord account "acct-x"');
+    expect(methodFrames(connA, 'discord.message')).toHaveLength(0);
+
+    await new Promise(r => setTimeout(r, 10));
+    expect(auditAppend).toHaveBeenCalledWith(expect.objectContaining({
+      method: 'gateway.companion.unrouted_discord_account',
+      decision: 'DENY',
+    }));
+  });
+
+  it('fails closed when an accountId is supplied but no account routing is configured', async () => {
+    const { server, connect } = await setupServer({
+      ...createMinimalOptions(),
+      multiCompanion: multiCompanion({ discord: 'comp-a' }),
+    });
+    const connA = await connect();
+    await identifyAgent(connA, 'comp-a', 1);
+
+    expect(() => server.notifyChannelMessage('discord', 'discord.message', { message: { id: 'm1' } }, 'acct-a'))
+      .toThrow('No discord account routing configured for account "acct-a"');
+    expect(methodFrames(connA, 'discord.message')).toHaveLength(0);
+  });
+
+  it('fails closed for discord voice-stream requests, which have no per-account lane yet', async () => {
+    const { options } = createMultiAccountOptions();
+    const { server, connect } = await setupServer(options);
+    const connA = await connect();
+    await identifyAgent(connA, 'comp-a', 1);
+
+    await expect(server.requestAgentVoiceStream(makeChannelMessage('discord')))
+      .rejects.toThrow('Multi-account discord routing requires an accountId');
+  });
+
+  it('sends outbound discord.send through the calling companion\'s own bot account', async () => {
+    const { options, dockA, dockB } = createMultiAccountOptions();
+    const { connect } = await setupServer(options);
+    const connA = await connect();
+    const connB = await connect();
+    await identifyAgent(connA, 'comp-a', 1);
+    await identifyAgent(connB, 'comp-b', 2);
+
+    const responseA = await invokeRpc(connA, 10, 'discord.send', {
+      channelId: 'ch-1',
+      content: 'from companion a',
+      companionId: 'comp-a',
+    });
+    expect(responseA.result).toEqual({ success: true });
+    const responseB = await invokeRpc(connB, 11, 'discord.send', {
+      channelId: 'ch-1',
+      content: 'from companion b',
+      companionId: 'comp-b',
+    });
+    expect(responseB.result).toEqual({ success: true });
+
+    expect(dockA.sendText).toHaveBeenCalledTimes(1);
+    expect(dockA.sendText).toHaveBeenCalledWith({ channelId: 'ch-1' }, 'from companion a');
+    expect(dockB.sendText).toHaveBeenCalledTimes(1);
+    expect(dockB.sendText).toHaveBeenCalledWith({ channelId: 'ch-1' }, 'from companion b');
+  });
+
+  it('rejects outbound discord sends from a companion that owns no bot account', async () => {
+    const auditAppend = vi.fn(async () => 23);
+    const { options, dockA, dockB } = createMultiAccountOptions();
+    const { connect } = await setupServer({
+      ...options,
+      auditStore: createMockAuditStore({ append: auditAppend }),
+    });
+    const connC = await connect();
+    await identifyAgent(connC, 'comp-c', 1);
+
+    const response = await invokeRpc(connC, 12, 'discord.send', {
+      channelId: 'ch-1',
+      content: 'stolen egress',
+      companionId: 'comp-c',
+    });
+    expect(response.error).toBeDefined();
+    expect(response.error.message).toContain('has no discord bot account');
+    expect(dockA.sendText).not.toHaveBeenCalled();
+    expect(dockB.sendText).not.toHaveBeenCalled();
+
+    await new Promise(r => setTimeout(r, 10));
+    expect(auditAppend).toHaveBeenCalledWith(expect.objectContaining({
+      method: 'gateway.companion.discord_send_no_account',
+      decision: 'DENY',
+    }));
+  });
+
+  it('routes discord.sendMedia through the calling companion\'s own bot account', async () => {
+    const { options, dockA, dockB } = createMultiAccountOptions();
+    const { connect } = await setupServer(options);
+    const connB = await connect();
+    await identifyAgent(connB, 'comp-b', 1);
+
+    const response = await invokeRpc(connB, 13, 'discord.sendMedia', {
+      channelId: 'ch-2',
+      media: { kind: 'image', name: 'pic.png', url: 'https://example.test/pic.png' },
+      companionId: 'comp-b',
+    });
+    expect(response.result).toEqual({ success: true });
+    expect(dockB.sendMedia).toHaveBeenCalledTimes(1);
+    expect(dockA.sendMedia).not.toHaveBeenCalled();
+  });
+
+  it('keeps flag-off outbound discord sends on the shared adapter (parity)', async () => {
+    const options = createMinimalOptions();
+    const sendText = vi.fn(async () => undefined);
+    options.discordAdapter = {
+      id: 'discord',
+      outbound: { textChunkLimit: 2000, sendText },
+    } as any;
+    const { connect } = await setupServer(options);
+    const conn = await connect();
+
+    const response = await invokeRpc(conn, 14, 'discord.send', {
+      channelId: 'ch-3',
+      content: 'single mode send',
+    });
+    expect(response.result).toEqual({ success: true });
+    expect(sendText).toHaveBeenCalledWith({ channelId: 'ch-3' }, 'single mode send');
   });
 });
 

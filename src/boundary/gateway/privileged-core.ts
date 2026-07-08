@@ -32,6 +32,8 @@ export interface GatewayPrivilegedCore {
   auditDb: null;
   createGatewayServer(input: {
     discordAdapter: ChannelOutboundDock;
+    /** Multi-account discord (W1-P2): outbound dock per companionId. */
+    discordAccountDocks?: ReadonlyMap<string, ChannelOutboundDock>;
   }): GatewayServer;
 }
 
@@ -85,7 +87,8 @@ export async function buildGatewayPrivilegedCore(
     eligibilityGate,
     privilegedServices,
     auditDb: null,
-    createGatewayServer: ({ discordAdapter }) => new GatewayServer({
+    createGatewayServer: ({ discordAdapter, discordAccountDocks }) => new GatewayServer({
+      ...(discordAccountDocks ? { discordAccountDocks } : {}),
       socketPath: input.bootstrap.socketPath,
       gatewayRpcEndpoint: input.bootstrap.gatewayRpcEndpoint,
       llmProvider: privilegedServices.llmClient,

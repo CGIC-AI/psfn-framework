@@ -3,6 +3,7 @@ import { resolve } from 'node:path';
 import type { SubstrateConfig, WyomingShardRoutingConfig } from '../../system/config/runtime-config-contracts.js';
 import { getIgnoredJsonBackedConfigEnvKeys } from '../../system/config/legacy-env.js';
 import {
+  assertDiscordAccountTokensConfigured,
   loadRuntimeChannelsConfig,
   type RuntimeChannelsConfig,
   type RuntimeChannelsConfigOverrides,
@@ -351,6 +352,9 @@ export function resolveGatewayBootstrapInput(
     buildGatewayChannelsConfigOverrides(config, settingsDomains.runtime),
     { credentialVault: config.credentialVault },
   );
+  // W1-P2: the gateway is the secret holder — every configured discord bot
+  // account must have resolved its token from env, or startup stops here.
+  assertDiscordAccountTokensConfigured(channelsConfig.discord);
   // E3.2: publish channel-owned Context Envelope labels so gateway-side
   // classification consumers see the same precedence as the agent process.
   setRuntimeChannelEnvelopeLabels(channelsConfig.contextEnvelope.channels);

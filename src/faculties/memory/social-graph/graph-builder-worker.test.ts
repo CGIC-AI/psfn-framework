@@ -6,6 +6,7 @@ import type { Contact, SocialGraphEntity, SocialRelationshipEdge, SocialRelation
 import type { PurrMemory } from '../types.js';
 import {
   SocialGraphBuilderWorker,
+  createSocialGraphBuilderMemoryReader,
   type SocialGraphBuilderMemoryReader,
 } from './graph-builder-worker.js';
 import {
@@ -310,6 +311,53 @@ describe('SocialGraphBuilderWorker', () => {
     expect(proposals[0].relationshipType).toBe('sibling');
     expect(proposals[0].directional).toBe(false);
     expect(proposals[0].confidence).toBeCloseTo(0.7);
+  });
+
+  it('reader scans oldest unprocessed room memories when a channel exceeds the scan limit', async () => {
+    // A channel with more room memories than the scan limit. getMemoriesByChannel
+    // returns the NEWEST `limit` (extractedAt DESC) — a single capped call would
+    // only ever see the newest window, and advancing the watermark to that batch
+    // max would strand the older unprocessed memories forever.
+    const total = 620;
+    const scanLimit = 500;
+    const roomMemories: PurrMemory[] = [];
+    for (let i = 1; i <= total; i += 1) {
+      roomMemories.push(makeMemory({
+        id: `m-${String(i).padStart(4, '0')}`,
+        extractedAt: i,
+        provenance: { channelId: 'room-1', addressMode: 'reply_to_user', sourceContactId: ALICE },
+      }));
+    }
+    const getMemoriesByChannel = async (channelId: string, limit: number): Promise<PurrMemory[]> => (
+      channelId === 'room-1'
+        ? [...roomMemories].sort((a, b) => b.extractedAt - a.extractedAt).slice(0, limit)
+        : []
+    );
+    const reader = createSocialGraphBuilderMemoryReader({
+      listRoomChannelIds: async () => ['room-1'],
+      getMemoriesByChannel,
+    });
+
+    // First run: the oldest unprocessed memories are returned (ascending), not
+    // the newest window.
+    const firstBatch = await reader.listRoomScopedMemoriesSince(0, scanLimit);
+    expect(firstBatch).toHaveLength(scanLimit);
+    expect(firstBatch[0].extractedAt).toBe(1);
+    expect(firstBatch.at(-1)?.extractedAt).toBe(scanLimit);
+    // The newest memory must NOT be in the first batch (it is not stranded — it
+    // is simply processed later, oldest-first).
+    expect(firstBatch.some(memory => memory.extractedAt === total)).toBe(false);
+
+    // Second run after advancing the watermark to the first batch's max: the
+    // remaining (newer) memories are picked up. No memory is stranded.
+    const watermark = firstBatch.reduce((max, memory) => Math.max(max, memory.extractedAt), 0);
+    const secondBatch = await reader.listRoomScopedMemoriesSince(watermark, scanLimit);
+    expect(secondBatch).toHaveLength(total - scanLimit);
+    expect(secondBatch[0].extractedAt).toBe(scanLimit + 1);
+    expect(secondBatch.at(-1)?.extractedAt).toBe(total);
+
+    const covered = new Set([...firstBatch, ...secondBatch].map(memory => memory.extractedAt));
+    expect(covered.size).toBe(total);
   });
 
   it('proposes a single-direction edge for an asymmetric named relationship (my mom)', async () => {

@@ -492,18 +492,64 @@ export function createSocialGraphBuilderMemoryReader(deps: {
       const channelIds = await deps.listRoomChannelIds();
       const collected: PurrMemory[] = [];
       for (const channelId of channelIds) {
-        const memories = await deps.getMemoriesByChannel(channelId, limit);
-        for (const memory of memories) {
-          if (memory.extractedAt <= sinceMs) continue;
-          const addressMode = memory.provenance?.addressMode;
-          if (!addressMode || !ROOM_ADDRESS_MODES.has(addressMode)) continue;
-          if (!memory.provenance?.channelId) continue;
-          collected.push(memory);
-        }
+        const roomMemories = await readRoomChannelMemoriesSince(
+          deps.getMemoriesByChannel,
+          channelId,
+          sinceMs,
+        );
+        collected.push(...roomMemories);
       }
+      // Oldest-first: successive runs advance the watermark forward through
+      // history instead of only ever seeing the newest window and stranding
+      // older unprocessed memories behind the watermark. Id is a deterministic
+      // tie-break for same-timestamp rows.
       return collected
-        .sort((left, right) => left.extractedAt - right.extractedAt)
+        .sort(compareByExtractedAtThenId)
         .slice(0, limit);
     },
   };
 }
+
+function compareByExtractedAtThenId(left: PurrMemory, right: PurrMemory): number {
+  if (left.extractedAt !== right.extractedAt) return left.extractedAt - right.extractedAt;
+  return left.id < right.id ? -1 : left.id > right.id ? 1 : 0;
+}
+
+/**
+ * Fetch every room-context memory for one channel with extractedAt > sinceMs.
+ *
+ * `getMemoriesByChannel` returns the newest `limit` memories (extractedAt
+ * descending) with no since/offset, so a single capped call can miss older
+ * unprocessed memories when a channel has more than `limit` rows newer than the
+ * watermark. Grow the fetch window (doubling) until it reaches past the
+ * watermark — the returned batch is smaller than the requested window (channel
+ * exhausted) or its oldest row is already at/behind the watermark — so no
+ * unprocessed room memory newer than the watermark is stranded.
+ */
+async function readRoomChannelMemoriesSince(
+  getMemoriesByChannel: (channelId: string, limit: number) => Promise<PurrMemory[]>,
+  channelId: string,
+  sinceMs: number,
+): Promise<PurrMemory[]> {
+  let fetchLimit = ROOM_CHANNEL_FETCH_PAGE;
+  let batch: PurrMemory[] = [];
+  for (;;) {
+    batch = await getMemoriesByChannel(channelId, fetchLimit);
+    const oldest = batch.at(-1);
+    const reachedWatermark = batch.length < fetchLimit
+      || (oldest !== undefined && oldest.extractedAt <= sinceMs);
+    if (reachedWatermark) break;
+    fetchLimit *= 2;
+  }
+  const roomMemories: PurrMemory[] = [];
+  for (const memory of batch) {
+    if (memory.extractedAt <= sinceMs) continue;
+    const addressMode = memory.provenance?.addressMode;
+    if (!addressMode || !ROOM_ADDRESS_MODES.has(addressMode)) continue;
+    if (!memory.provenance?.channelId) continue;
+    roomMemories.push(memory);
+  }
+  return roomMemories;
+}
+
+const ROOM_CHANNEL_FETCH_PAGE = 500;

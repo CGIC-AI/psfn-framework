@@ -20,6 +20,7 @@ import type {
   AdminGroupMemoryChannelDiagnostics,
   AdminGroupMemoryService,
   AdminMemoryService,
+  AdminMemorySessionService,
   AdminSettingsData,
   AdminSettingsService,
   AdminShardFoldReviewService,
@@ -198,6 +199,10 @@ const relatedArc: EpisodeArc = {
 };
 
 function makeMemoryService(memory: PurrMemory): AdminMemoryService {
+  return { forSession: () => makeMemorySessionService(memory) };
+}
+
+function makeMemorySessionService(memory: PurrMemory): AdminMemorySessionService {
   const privacySummary = {
     activeMemoryCount: 1,
     matchingMemoryCount: 1,

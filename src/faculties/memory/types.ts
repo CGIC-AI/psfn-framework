@@ -591,6 +591,11 @@ export function memoryMatchesScopeQuery(
   )) ?? false;
   const memoryScopeTags = new Set(normalizeMemoryScopeTags(memory.scopeTags));
   const tagMatch = normalized.tags?.some(tag => memoryScopeTags.has(tag)) ?? false;
+  if (normalized.mode === 'only') {
+    // Only-mode mirrors the store-level scope filters: every specified
+    // dimension must match, so refs AND tags are required when both are set.
+    return (!normalized.refs || refMatch) && (!normalized.tags || tagMatch);
+  }
   return refMatch || tagMatch;
 }
 

@@ -122,11 +122,54 @@ function cosineSimilarity(left: readonly number[], right: readonly number[]): nu
   return dot / Math.sqrt(leftNorm * rightNorm);
 }
 
+class FakeTransactionClient {
+  readonly statements: string[] = [];
+  released = false;
+  private snapshot: {
+    memories: Map<string, MemoryRow>;
+    patchEvents: Array<Record<string, unknown>>;
+  } | null = null;
+
+  constructor(private readonly pool: FakeMemoryPool) {}
+
+  async query(text: string, values: readonly unknown[] = []): Promise<QueryResult> {
+    const normalized = text.replace(/\s+/g, ' ').trim().toLowerCase();
+    this.statements.push(normalized);
+    if (normalized === 'begin') {
+      this.snapshot = {
+        memories: new Map(this.pool.memories),
+        patchEvents: [...this.pool.patchEvents],
+      };
+      return { rows: [], rowCount: 0, command: 'BEGIN', oid: 0, fields: [] } as QueryResult;
+    }
+    if (normalized === 'commit') {
+      this.snapshot = null;
+      return { rows: [], rowCount: 0, command: 'COMMIT', oid: 0, fields: [] } as QueryResult;
+    }
+    if (normalized === 'rollback') {
+      if (this.snapshot) {
+        this.pool.memories.clear();
+        for (const [id, row] of this.snapshot.memories) this.pool.memories.set(id, row);
+        this.pool.patchEvents.splice(0, this.pool.patchEvents.length, ...this.snapshot.patchEvents);
+        this.snapshot = null;
+      }
+      return { rows: [], rowCount: 0, command: 'ROLLBACK', oid: 0, fields: [] } as QueryResult;
+    }
+    return this.pool.query(text, values);
+  }
+
+  release(): void {
+    this.released = true;
+  }
+}
+
 class FakeMemoryPool {
   readonly memories = new Map<string, MemoryRow>();
   readonly evolutionLinks = new Map<string, MemoryEvolutionLinkRow>();
   readonly maintenanceReviews = new Map<string, Record<string, unknown>>();
   readonly scratchpadEntries = new Map<string, ScratchpadTestRow>();
+  readonly patchEvents: Array<Record<string, unknown>> = [];
+  readonly clients: FakeTransactionClient[] = [];
   readonly queryFailures: Array<{ fragment: string; error: Error }>;
   readonly schemaHasEmbeddingColumn: boolean;
   readonly schemaHasLegacyEmbeddingTable: boolean;
@@ -149,6 +192,12 @@ class FakeMemoryPool {
 
   failNextQuery(fragment: string, errorMessage: string): void {
     this.queryFailures.push({ fragment, error: new Error(errorMessage) });
+  }
+
+  async connect(): Promise<FakeTransactionClient> {
+    const client = new FakeTransactionClient(this);
+    this.clients.push(client);
+    return client;
   }
 
   async query(text: string, values: readonly unknown[] = []): Promise<QueryResult> {
@@ -389,6 +438,15 @@ class FakeMemoryPool {
       return { rows: [], rowCount: 1, command: 'INSERT', oid: 0, fields: [] } as QueryResult;
     }
 
+    if (normalized.startsWith('insert into l2_memory_patch_events')) {
+      this.patchEvents.push({
+        id: String(values[0] ?? ''),
+        memory_id: String(values[1] ?? ''),
+        source_ref: String(values[2] ?? ''),
+      });
+      return { rows: [], rowCount: 1, command: 'INSERT', oid: 0, fields: [] } as QueryResult;
+    }
+
     if (normalized.startsWith('insert into l2_memory_maintenance_reviews')) {
       const row = {
         id: String(values[0] ?? ''),
@@ -611,6 +669,118 @@ describe('postgres memory store unit coverage', () => {
       allowExitOnIdle: true,
     });
     expect(postgresMocks.ensurePostgresSchema).toHaveBeenCalled();
+  });
+
+  it('wraps transactional writes in BEGIN/COMMIT on one checked-out client', async () => {
+    const pool = new FakeMemoryPool();
+    const memory = makeMemory('txn-commit-source', 'Original transactional body');
+    pool.memories.set(memory.id, makeMemoryRow(memory));
+    postgresMocks.activePool = pool;
+    const store = await createPostgresMemoryStore('postgres://unused', 4);
+
+    await store.runInTransaction(async () => {
+      await store.updateMemory('txn-commit-source', { supersededBy: 'txn-commit-replacement' });
+      await store.recordPatchEvent({
+        id: 'patch-commit-1',
+        memoryId: 'txn-commit-source',
+        sourceRef: 'tool:memory_patch',
+        sourceType: 'turn',
+        patch: { text: 'next' },
+        previousValues: { text: 'Original transactional body' },
+        nextValues: { text: 'next' },
+        createdAt: Date.now(),
+      });
+    });
+
+    expect(pool.clients).toHaveLength(1);
+    const client = pool.clients[0];
+    expect(client.statements[0]).toBe('begin');
+    expect(client.statements.at(-1)).toBe('commit');
+    expect(client.statements.some(statement => statement.startsWith('insert into l2_memories'))).toBe(true);
+    expect(client.statements.some(statement => statement.startsWith('insert into l2_memory_patch_events'))).toBe(true);
+    expect(client.released).toBe(true);
+    expect(pool.memories.get('txn-commit-source')?.superseded_by).toBe('txn-commit-replacement');
+    expect(pool.patchEvents).toHaveLength(1);
+    expect((await store.getById('txn-commit-source'))?.supersededBy).toBe('txn-commit-replacement');
+  });
+
+  it('awaits fire-and-forget transactional writes before COMMIT', async () => {
+    const pool = new FakeMemoryPool();
+    const memory = makeMemory('txn-untracked-source', 'Fire and forget body');
+    pool.memories.set(memory.id, makeMemoryRow(memory));
+    postgresMocks.activePool = pool;
+    const store = await createPostgresMemoryStore('postgres://unused', 4);
+
+    // Legacy handler style (memory writer patch flows): operations are not
+    // awaited inside the handler but must still land before COMMIT.
+    await store.runInTransaction(() => {
+      void store.updateMemory('txn-untracked-source', { supersededBy: 'txn-untracked-replacement' });
+      void store.recordPatchEvent({
+        id: 'patch-untracked-1',
+        memoryId: 'txn-untracked-source',
+        sourceRef: 'tool:memory_patch',
+        sourceType: 'turn',
+        patch: {},
+        previousValues: {},
+        nextValues: {},
+        createdAt: Date.now(),
+      });
+    });
+
+    const client = pool.clients[0];
+    const commitIndex = client.statements.indexOf('commit');
+    expect(commitIndex).toBeGreaterThan(0);
+    const memoryInsertIndex = client.statements.findIndex(statement => statement.startsWith('insert into l2_memories'));
+    const patchInsertIndex = client.statements.findIndex(statement => statement.startsWith('insert into l2_memory_patch_events'));
+    expect(memoryInsertIndex).toBeGreaterThan(-1);
+    expect(patchInsertIndex).toBeGreaterThan(-1);
+    expect(memoryInsertIndex).toBeLessThan(commitIndex);
+    expect(patchInsertIndex).toBeLessThan(commitIndex);
+    expect(pool.patchEvents).toHaveLength(1);
+  });
+
+  it('rolls back the first write and the cache when a later transactional write fails', async () => {
+    const pool = new FakeMemoryPool();
+    const memory = makeMemory('txn-rollback-source', 'Body that must survive rollback');
+    pool.memories.set(memory.id, makeMemoryRow(memory));
+    postgresMocks.activePool = pool;
+    const store = await createPostgresMemoryStore('postgres://unused', 4);
+
+    pool.failNextQuery('insert into l2_memory_patch_events', 'simulated patch-event failure');
+
+    await expect(store.runInTransaction(async () => {
+      await store.updateMemory('txn-rollback-source', { supersededBy: 'txn-rollback-replacement' });
+      await store.recordPatchEvent({
+        id: 'patch-rollback-1',
+        memoryId: 'txn-rollback-source',
+        sourceRef: 'tool:memory_patch',
+        sourceType: 'turn',
+        patch: {},
+        previousValues: {},
+        nextValues: {},
+        createdAt: Date.now(),
+      });
+    })).rejects.toThrow('simulated patch-event failure');
+
+    const client = pool.clients[0];
+    expect(client.statements).toContain('rollback');
+    expect(client.statements).not.toContain('commit');
+    expect(client.released).toBe(true);
+    // The first write is not committed and the in-memory cache is restored.
+    expect(pool.memories.get('txn-rollback-source')?.superseded_by).toBeNull();
+    expect(pool.patchEvents).toHaveLength(0);
+    expect((await store.getById('txn-rollback-source'))?.supersededBy).toBeUndefined();
+    // Post-rollback writes work normally again.
+    await store.updateMemory('txn-rollback-source', { salience: 0.42 });
+    expect((await store.getById('txn-rollback-source'))?.salience).toBe(0.42);
+  });
+
+  it('rejects nested memory-store transactions', async () => {
+    postgresMocks.activePool = new FakeMemoryPool();
+    const store = await createPostgresMemoryStore('postgres://unused', 4);
+
+    await expect(store.runInTransaction(() => store.runInTransaction(() => undefined)))
+      .rejects.toThrow('Nested memory-store transactions are not supported');
   });
 
   it('hydrates pg BIGINT memory fields as numbers and excludes soft-deleted rows', async () => {

@@ -1,5 +1,6 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { randomUUID } from 'node:crypto';
-import type { Pool } from 'pg';
+import type { Pool, PoolClient } from 'pg';
 import { writeJsonAtomic } from '../../shared/utils/fs.js';
 import {
   createPostgresPool,
@@ -720,6 +721,11 @@ async function validatePostgresMemorySchema(pool: Pool): Promise<void> {
   }
 }
 
+interface MemoryStoreTransactionState {
+  client: PoolClient;
+  operations: Array<Promise<unknown>>;
+}
+
 class PostgresMemoryStore implements MemoryStorePort {
   private readonly pool: Pool;
   private readonly embeddingDims: number;
@@ -727,6 +733,8 @@ class PostgresMemoryStore implements MemoryStorePort {
   private readonly scratchpadMirrorPath: string | null;
   private persistChain: Promise<void> = Promise.resolve();
   private readonly initialization: Promise<void>;
+  /** Active transaction scope: writes issued inside a runInTransaction handler join its client. */
+  private readonly transactionContext = new AsyncLocalStorage<MemoryStoreTransactionState>();
 
   private memories = new Map<string, PurrMemory>();
   private embeddings = new Map<string, Float32Array>();
@@ -884,12 +892,36 @@ class PostgresMemoryStore implements MemoryStorePort {
     return operation;
   }
 
+  /**
+   * Routes a write either into the active transaction (eager, on the
+   * checked-out client, awaited by runInTransaction before COMMIT) or onto
+   * the serialized persist chain when no transaction is open.
+   */
+  private runWrite<T>(task: () => Promise<T>): Promise<T> {
+    const transaction = this.transactionContext.getStore();
+    if (transaction) {
+      const operation = task();
+      transaction.operations.push(operation);
+      return operation;
+    }
+    return this.persist(task);
+  }
+
+  private async executeWrite(text: string, values: readonly unknown[]): Promise<void> {
+    const transaction = this.transactionContext.getStore();
+    if (transaction) {
+      await transaction.client.query(text, [...values]);
+      return;
+    }
+    await executeQuery(this.pool, text, values);
+  }
+
   private async upsertMemoryRow(memory: PurrMemory, embedding?: Float32Array): Promise<void> {
     if (embedding) {
       validateEmbeddingDimensions(embedding, this.embeddingDims, 'write');
     }
     const row = toMemoryRow(memory, embedding);
-    await executeQuery(this.pool, `
+    await this.executeWrite(`
       INSERT INTO l2_memories (
         id, text, type, importance, confidence, emotional_valence, formation_vad, salience,
         source_ref, extracted_at, last_accessed, access_count, superseded_by, tags,
@@ -1052,7 +1084,7 @@ class PostgresMemoryStore implements MemoryStorePort {
 
   async insertMemory(memory: PurrMemory, embedding: Float32Array): Promise<void> {
     validateEmbeddingDimensions(embedding, this.embeddingDims, 'insert');
-    await this.persist(() => this.upsertMemoryRow(memory, embedding));
+    await this.runWrite(() => this.upsertMemoryRow(memory, embedding));
     this.memories.set(memory.id, memory);
     this.embeddings.set(memory.id, embedding);
     this.journal?.onInsert(memory);
@@ -1065,12 +1097,53 @@ class PostgresMemoryStore implements MemoryStorePort {
     await this.insertMemory(input.memory, input.embedding);
   }
 
+  /**
+   * Runs the handler inside a real database transaction: a dedicated client
+   * is checked out, BEGIN/COMMIT wrap the handler's writes, and any failure
+   * rolls back both the database statements and the in-memory cache. Writes
+   * issued inside the handler (awaited or fire-and-forget) are captured via
+   * AsyncLocalStorage and awaited before COMMIT. The whole transaction holds
+   * the persist chain so unrelated writes never interleave with it. The
+   * append-only JSONL journal is an audit mirror, not a restore primitive,
+   * so entries it may have recorded for rolled-back writes are tolerated.
+   */
   async runInTransaction<T>(handler: () => T): Promise<T> {
-    return handler();
+    if (this.transactionContext.getStore()) {
+      throw new Error('Nested memory-store transactions are not supported');
+    }
+    return this.persist(async () => {
+      const client = await this.pool.connect();
+      const state: MemoryStoreTransactionState = { client, operations: [] };
+      const memoriesSnapshot = new Map(this.memories);
+      const embeddingsSnapshot = new Map(this.embeddings);
+      try {
+        await client.query('BEGIN');
+        const result = await this.transactionContext.run(state, () => handler());
+        await Promise.all(state.operations);
+        await client.query('COMMIT');
+        return result;
+      } catch (error) {
+        // Let in-flight statements settle before rolling back; their
+        // failures are subsumed by the transaction failure being thrown.
+        await Promise.allSettled(state.operations);
+        try {
+          await client.query('ROLLBACK');
+        } catch (rollbackError) {
+          log.error('Failed to roll back memory-store transaction', {
+            error: String(rollbackError),
+          });
+        }
+        this.memories = memoriesSnapshot;
+        this.embeddings = embeddingsSnapshot;
+        throw error;
+      } finally {
+        client.release();
+      }
+    });
   }
 
   async recordPatchEvent(event: MemoryPatchEvent): Promise<void> {
-    await this.persist(() => executeQuery(this.pool, `
+    await this.runWrite(() => this.executeWrite(`
       INSERT INTO l2_memory_patch_events (
         id, memory_id, source_ref, source_type, provenance_json, reason, patch_json, previous_json, next_json, created_at
       )
@@ -1177,7 +1250,7 @@ class PostgresMemoryStore implements MemoryStorePort {
     if (updates.deletedBy !== undefined) next.deletedBy = updates.deletedBy;
     if (updates.deleteReason !== undefined) next.deleteReason = updates.deleteReason;
     const embedding = this.embeddings.get(id);
-    await this.persist(() => this.upsertMemoryRow(next, embedding));
+    await this.runWrite(() => this.upsertMemoryRow(next, embedding));
     this.memories.set(id, next);
   }
 

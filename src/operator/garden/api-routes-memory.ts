@@ -1,4 +1,6 @@
+import { createHash, randomUUID } from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
+import { getCookieValue } from '../../channels/backplane/http/auth.js';
 import { sendJson } from '../../channels/backplane/http/primitives.js';
 import { VALID_MEMORY_TYPES, type MemoryRetentionClass, type MemoryType } from '../../faculties/memory/types.js';
 import { VALID_SENSITIVITY_LEVELS, type SensitivityLevel } from '../../system/trust/types.js';
@@ -11,7 +13,44 @@ import {
 } from './route-matchers.js';
 import { toSanitizedMessage } from './routes/shared.js';
 import type { AdminApiRoute } from './routes/types.js';
-import type { AdminMemoryService } from './services/types.js';
+import type { AdminMemoryService, AdminMemorySessionKey } from './services/types.js';
+
+/**
+ * Per-browser admin session cookie keying Garden memory body-gate grants.
+ * Admin auth itself is a single shared token, so this cookie is the only
+ * thing distinguishing concurrent operator sessions; it carries no secret
+ * (grants still require passing admin auth) and is minted lazily when a
+ * grant-creating route runs without one.
+ */
+export const GARDEN_MEMORY_SESSION_COOKIE = 'psfn_garden_session';
+
+function resolveAdminMemorySessionKey(req: IncomingMessage): AdminMemorySessionKey {
+  const cookieValue = getCookieValue(req, GARDEN_MEMORY_SESSION_COOKIE)?.trim();
+  if (cookieValue) return `cookie:${cookieValue}`;
+  const authorization = req.headers.authorization?.trim();
+  if (authorization) {
+    // Bearer clients all present the same shared admin token; keying their
+    // grants by the credential digest keeps browser sessions isolated from
+    // programmatic clients without persisting the raw header value.
+    return `bearer:${createHash('sha256').update(authorization).digest('hex').slice(0, 24)}`;
+  }
+  return null;
+}
+
+/**
+ * Resolves the admin session key for grant-creating routes, minting a new
+ * session cookie when the request carries no session identity yet.
+ */
+function ensureAdminMemorySessionKey(req: IncomingMessage, res: ServerResponse): AdminMemorySessionKey {
+  const existing = resolveAdminMemorySessionKey(req);
+  if (existing !== null) return existing;
+  const minted = randomUUID();
+  res.setHeader(
+    'Set-Cookie',
+    `${GARDEN_MEMORY_SESSION_COOKIE}=${minted}; Path=/; HttpOnly; SameSite=Strict; Max-Age=86400`,
+  );
+  return `cookie:${minted}`;
+}
 
 function toMemoryType(value: string | null): MemoryType | undefined {
   if (!value) return undefined;
@@ -109,7 +148,7 @@ export function buildAdminMemoryRoutes(options: {
           sendJson(res, 400, { error: 'startDate must be before or equal to endDate' });
           return;
         }
-        memoryService.listMemories(url.searchParams).then(
+        memoryService.forSession(resolveAdminMemorySessionKey(req)).listMemories(url.searchParams).then(
           (data) => sendJson(res, 200, {
             ...data,
             contactsById: Object.fromEntries(data.contactsById.entries()),
@@ -128,7 +167,7 @@ export function buildAdminMemoryRoutes(options: {
           sendJson(res, 400, { error: 'Missing q query parameter' });
           return;
         }
-        memoryService.searchMemories(query).then(
+        memoryService.forSession(resolveAdminMemorySessionKey(req)).searchMemories(query).then(
           result => sendJson(res, 200, {
             ...result,
             contactsById: Object.fromEntries(result.contactsById.entries()),
@@ -163,7 +202,7 @@ export function buildAdminMemoryRoutes(options: {
           }
           limit = parsed;
         }
-        memoryService.sharedBackground(contactAId, contactBId, limit).then(
+        memoryService.forSession(resolveAdminMemorySessionKey(req)).sharedBackground(contactAId, contactBId, limit).then(
           (data) => sendJson(res, 200, {
             ...data,
             contactsById: Object.fromEntries(data.contactsById.entries()),
@@ -176,22 +215,23 @@ export function buildAdminMemoryRoutes(options: {
     {
       method: 'GET',
       match: exactPath('/api/admin/memory/elevation'),
-      handle: (_req, res) => {
-        sendJson(res, 200, memoryService.getBodyElevationStatus());
+      handle: (req, res) => {
+        sendJson(res, 200, memoryService.forSession(resolveAdminMemorySessionKey(req)).getBodyElevationStatus());
       },
     },
     {
       method: 'POST',
       match: exactPath('/api/admin/memory/elevation'),
-      handle: (_req, res) => {
-        sendJson(res, 200, memoryService.elevateBodyAccess());
+      handle: (req, res) => {
+        const sessionKey = ensureAdminMemorySessionKey(req, res);
+        sendJson(res, 200, memoryService.forSession(sessionKey).elevateBodyAccess());
       },
     },
     {
       method: 'DELETE',
       match: exactPath('/api/admin/memory/elevation'),
-      handle: (_req, res) => {
-        sendJson(res, 200, memoryService.dropBodyElevation());
+      handle: (req, res) => {
+        sendJson(res, 200, memoryService.forSession(resolveAdminMemorySessionKey(req)).dropBodyElevation());
       },
     },
     {
@@ -204,7 +244,7 @@ export function buildAdminMemoryRoutes(options: {
           sendJson(res, 400, { error: 'Invalid managed memory scope kind' });
           return;
         }
-        memoryService.listManagedScopes(url.searchParams).then(
+        memoryService.forSession(resolveAdminMemorySessionKey(req)).listManagedScopes(url.searchParams).then(
           (data) => sendJson(res, 200, data),
           (error) => sendJson(res, 500, { error: toSanitizedMessage(error, 'Failed to list managed scopes') }),
         );
@@ -213,11 +253,11 @@ export function buildAdminMemoryRoutes(options: {
     {
       method: 'GET',
       match: paramWithSuffix('/api/admin/memory/scopes/', 'scopeKey', '/detail'),
-      handle: (_req, res, { scopeKey }) => {
+      handle: (req, res, { scopeKey }) => {
         const separator = scopeKey.indexOf(':');
         const kind = separator >= 0 ? scopeKey.slice(0, separator) : '';
         const id = separator >= 0 ? scopeKey.slice(separator + 1) : '';
-        memoryService.getManagedScopeDetail(kind, id).then(
+        memoryService.forSession(resolveAdminMemorySessionKey(req)).getManagedScopeDetail(kind, id).then(
           (detail) => {
             if (!detail) {
               sendJson(res, 404, { error: 'Managed memory scope not found' });
@@ -263,7 +303,7 @@ export function buildAdminMemoryRoutes(options: {
             return;
           }
 
-          memoryService.updateMemoryScope(id, { scopeRef, scopeTags, repair }).then(
+          memoryService.forSession(resolveAdminMemorySessionKey(req)).updateMemoryScope(id, { scopeRef, scopeTags, repair }).then(
             (result) => {
               if (!result.ok) {
                 const status = result.message === 'Memory not found' ? 404 : 400;
@@ -298,7 +338,7 @@ export function buildAdminMemoryRoutes(options: {
             return;
           }
 
-          memoryService.linkMemories(id1, id2, linkType).then(
+          memoryService.forSession(resolveAdminMemorySessionKey(req)).linkMemories(id1, id2, linkType).then(
             (result) => {
               if (!result.ok) {
                 sendJson(res, 400, { error: result.message ?? 'Failed to create link' });
@@ -330,7 +370,7 @@ export function buildAdminMemoryRoutes(options: {
             return;
           }
 
-          memoryService.unlinkMemories(id1, id2).then(
+          memoryService.forSession(resolveAdminMemorySessionKey(req)).unlinkMemories(id1, id2).then(
             (result) => {
               if (!result.ok) {
                 sendJson(res, 404, { error: result.message ?? 'Link not found' });
@@ -364,7 +404,7 @@ export function buildAdminMemoryRoutes(options: {
             return;
           }
 
-          memoryService.bulkDelete(ids).then(
+          memoryService.forSession(resolveAdminMemorySessionKey(req)).bulkDelete(ids).then(
             (result) => {
               if (!result.ok) {
                 sendJson(res, 400, { error: result.message ?? 'Bulk delete failed' });
@@ -409,7 +449,7 @@ export function buildAdminMemoryRoutes(options: {
             return;
           }
 
-          memoryService.bulkUpdate(ids, { memoryType, sensitivity, retentionClass }).then(
+          memoryService.forSession(resolveAdminMemorySessionKey(req)).bulkUpdate(ids, { memoryType, sensitivity, retentionClass }).then(
             (result) => {
               if (!result.ok) {
                 sendJson(res, 400, { error: result.message ?? 'Bulk update failed' });
@@ -426,8 +466,9 @@ export function buildAdminMemoryRoutes(options: {
     {
       method: 'POST',
       match: paramWithSuffix('/api/admin/memory/', 'id', '/reveal'),
-      handle: (_req, res, { id }) => {
-        memoryService.revealMemory(id).then(
+      handle: (req, res, { id }) => {
+        const sessionKey = ensureAdminMemorySessionKey(req, res);
+        memoryService.forSession(sessionKey).revealMemory(id).then(
           (detail) => {
             if (!detail) {
               sendJson(res, 404, { error: 'Memory not found' });
@@ -442,8 +483,8 @@ export function buildAdminMemoryRoutes(options: {
     {
       method: 'GET',
       match: paramWithSuffix('/api/admin/memory/', 'id', '/links'),
-      handle: (_req, res, { id }) => {
-        memoryService.getMemoryLinks(id).then(
+      handle: (req, res, { id }) => {
+        memoryService.forSession(resolveAdminMemorySessionKey(req)).getMemoryLinks(id).then(
           (links) => sendJson(res, 200, { links }),
           (error) => sendJson(res, 500, { error: toSanitizedMessage(error, 'Failed to load memory links') }),
         );
@@ -484,7 +525,7 @@ export function buildAdminMemoryRoutes(options: {
           // Fail closed: the body of a redacted high-intimacy memory cannot
           // be edited without an explicit (audited) reveal or elevation --
           // you cannot honestly edit what you cannot see.
-          void memoryService.getMemoryDetail(id)
+          void memoryService.forSession(resolveAdminMemorySessionKey(req)).getMemoryDetail(id)
             .then((detail) => {
               if (!detail) {
                 sendJson(res, 404, { error: 'Memory not found' });
@@ -517,8 +558,8 @@ export function buildAdminMemoryRoutes(options: {
     {
       method: 'GET',
       match: prefixedParamPath('/api/admin/memory/', 'id'),
-      handle: (_req, res, { id }) => {
-        memoryService.getMemoryDetail(id).then(
+      handle: (req, res, { id }) => {
+        memoryService.forSession(resolveAdminMemorySessionKey(req)).getMemoryDetail(id).then(
           (detail) => {
             if (!detail) {
               sendJson(res, 404, { error: 'Memory not found' });
@@ -535,8 +576,8 @@ export function buildAdminMemoryRoutes(options: {
     {
       method: 'DELETE',
       match: prefixedParamPath('/api/admin/memory/', 'id'),
-      handle: (_req, res, { id }) => {
-        memoryService.supersedeMemory(id).then(
+      handle: (req, res, { id }) => {
+        memoryService.forSession(resolveAdminMemorySessionKey(req)).supersedeMemory(id).then(
           (result) => {
             if (!result.ok) {
               sendJson(res, 404, { error: result.message ?? 'Memory not found' });

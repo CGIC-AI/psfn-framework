@@ -157,6 +157,18 @@ function parseArtifact(raw: unknown, ref: string): CogSecForensicArtifact {
   if (!Number.isInteger(raw.byteLength) || (raw.byteLength as number) < 0) {
     throw new Error('artifact.byteLength must be a non-negative integer');
   }
+  // Fail closed on tampering: the stored digest/length are only trustworthy
+  // if they still match a recomputation over the stored payload.
+  const payloadText = stableJson(raw.payload);
+  if (typeof payloadText !== 'string') {
+    throw new Error('artifact.payload must be JSON-serializable');
+  }
+  if (sha256(payloadText) !== hash) {
+    throw new Error('CogSec forensic artifact payload does not match its sealed sha256 digest');
+  }
+  if (Buffer.byteLength(payloadText, 'utf-8') !== raw.byteLength) {
+    throw new Error('CogSec forensic artifact payload does not match its sealed byte length');
+  }
   return {
     version: COGSEC_FORENSIC_ARTIFACT_VERSION,
     ref,

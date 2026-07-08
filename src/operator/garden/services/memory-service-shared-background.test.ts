@@ -88,7 +88,7 @@ function makeService() {
 describe('AdminMemoryDataService.sharedBackground', () => {
   it('returns the union with sources and inherits E3.5 body redaction for intimate bodies', async () => {
     const service = makeService();
-    const result = await service.sharedBackground('contact-a', 'contact-b');
+    const result = await service.forSession('cookie:operator-a').sharedBackground('contact-a', 'contact-b');
 
     expect(result.resolved).toBe(true);
     expect(result.contactADisplayName).toBe('Ada');
@@ -106,8 +106,8 @@ describe('AdminMemoryDataService.sharedBackground', () => {
 
   it('reveals intimate bodies after body-access elevation', async () => {
     const service = makeService();
-    service.elevateBodyAccess();
-    const result = await service.sharedBackground('contact-a', 'contact-b');
+    service.forSession('cookie:operator-a').elevateBodyAccess();
+    const result = await service.forSession('cookie:operator-a').sharedBackground('contact-a', 'contact-b');
     const intimate = result.items.find(item => item.memory.id === 'mem-intimate')!.memory;
     expect(intimate.bodyRedacted).toBeUndefined();
     expect(intimate.text).toBe('a very private detail about them both');
@@ -115,7 +115,7 @@ describe('AdminMemoryDataService.sharedBackground', () => {
 
   it('bounds the result to the requested limit', async () => {
     const service = makeService();
-    const result = await service.sharedBackground('contact-a', 'contact-b', 1);
+    const result = await service.forSession('cookie:operator-a').sharedBackground('contact-a', 'contact-b', 1);
     expect(result.items).toHaveLength(1);
     expect(result.limit).toBe(1);
     expect(result.truncated).toBe(true);

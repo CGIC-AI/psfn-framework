@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -91,6 +91,72 @@ describe('CogSecForensicArchive', () => {
 
     expect(existsSync(filePath)).toBe(true);
     expect(readFileSync(filePath, 'utf-8')).toContain('"payload"');
+  });
+
+  it('fails closed when the stored payload no longer matches the sealed sha256 digest', () => {
+    const root = makeTempRoot();
+    const archiveDir = resolveCogSecForensicArchiveDir(root);
+    const archive = new CogSecForensicArchive(archiveDir);
+
+    const sealed = archive.sealArtifact({
+      caseId: 'cogsec_20260701T000000Z_tamper',
+      kind: 'summary',
+      payload: { text: 'original sealed summary' },
+    });
+    const filePath = join(archiveDir, 'cogsec_20260701T000000Z_tamper', `${sealed.artifactId}.json`);
+
+    const stored = JSON.parse(readFileSync(filePath, 'utf-8')) as { payload: { text: string } };
+    stored.payload.text = 'tampered sealed summary!!';
+    writeFileSync(filePath, `${JSON.stringify(stored, null, 2)}\n`, 'utf-8');
+
+    expect(() => archive.readArtifact(sealed.ref)).toThrow(
+      'CogSec forensic artifact payload does not match its sealed sha256 digest',
+    );
+    expect(() => archive.getArtifactMetadata(sealed.ref)).toThrow(
+      'CogSec forensic artifact payload does not match its sealed sha256 digest',
+    );
+  });
+
+  it('fails closed when the sealed byte length no longer matches the stored payload', () => {
+    const root = makeTempRoot();
+    const archiveDir = resolveCogSecForensicArchiveDir(root);
+    const archive = new CogSecForensicArchive(archiveDir);
+
+    const sealed = archive.sealArtifact({
+      caseId: 'cogsec_20260701T000000Z_length',
+      kind: 'summary',
+      payload: { text: 'length-checked payload' },
+    });
+    const filePath = join(archiveDir, 'cogsec_20260701T000000Z_length', `${sealed.artifactId}.json`);
+
+    const stored = JSON.parse(readFileSync(filePath, 'utf-8')) as { byteLength: number };
+    stored.byteLength = sealed.byteLength + 1;
+    writeFileSync(filePath, `${JSON.stringify(stored, null, 2)}\n`, 'utf-8');
+
+    expect(() => archive.readArtifact(sealed.ref)).toThrow(
+      'CogSec forensic artifact payload does not match its sealed byte length',
+    );
+  });
+
+  it('fails closed when the stored payload is removed entirely', () => {
+    const root = makeTempRoot();
+    const archiveDir = resolveCogSecForensicArchiveDir(root);
+    const archive = new CogSecForensicArchive(archiveDir);
+
+    const sealed = archive.sealArtifact({
+      caseId: 'cogsec_20260701T000000Z_missing',
+      kind: 'summary',
+      payload: { text: 'payload to remove' },
+    });
+    const filePath = join(archiveDir, 'cogsec_20260701T000000Z_missing', `${sealed.artifactId}.json`);
+
+    const stored = JSON.parse(readFileSync(filePath, 'utf-8')) as Record<string, unknown>;
+    delete stored.payload;
+    writeFileSync(filePath, `${JSON.stringify(stored, null, 2)}\n`, 'utf-8');
+
+    expect(() => archive.readArtifact(sealed.ref)).toThrow(
+      'artifact.payload must be JSON-serializable',
+    );
   });
 
   it('rejects malformed or traversal refs', () => {

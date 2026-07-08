@@ -111,6 +111,22 @@ describe('resolveBackupRuntimeConfig', () => {
     });
   });
 
+  it('defaults groupMode off and honours the BACKUP_GROUP_MODE override', () => {
+    withBackupOwnerFile((dataDir) => {
+      const off = resolveBackupRuntimeConfig({
+        dataDir,
+        env: { PSFN_BACKUP_TEST_KEY: 'backup-secret' },
+      });
+      expect(off.groupMode).toBe(false);
+
+      const on = resolveBackupRuntimeConfig({
+        dataDir,
+        env: { PSFN_BACKUP_TEST_KEY: 'backup-secret', BACKUP_GROUP_MODE: 'true' },
+      });
+      expect(on.groupMode).toBe(true);
+    });
+  });
+
   it('uses layout-provided backup root when env override is absent', () => {
     withBackupOwnerFile((dataDir) => {
       const config = resolveBackupRuntimeConfig({

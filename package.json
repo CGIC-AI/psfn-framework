@@ -69,7 +69,8 @@
     "verify:settings-contract": "tsx scripts/verify-settings-contract.ts",
     "verify:backup-restore": "tsx scripts/verify-backup-restore.ts",
     "verify:agent-docker-isolation": "node scripts/verify-agent-docker-isolation.mjs",
-    "ship:kube": "bash scripts/ops/ship-kube-update.sh"
+    "ship:kube": "bash scripts/ops/ship-kube-update.sh",
+    "shakedown:artemis:helm": "bash scripts/ops/setup-local-artemis-shakedown.sh"
   },
   "dependencies": {
     "@character-foundry/character-foundry": "0.5.0",

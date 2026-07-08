@@ -13,6 +13,7 @@ EXPECT_TAG=""
 SOFT=false
 SMOKE=false
 VERBOSE=false
+CHECK_PROVIDER_ROUTING=true
 KUBE_MODE_REQUESTED="auto"
 KUBE_MODE=""
 GARDEN_PORT="${GARDEN_PORT:-10054}"
@@ -47,6 +48,8 @@ Options:
       --garden-port PORT     Garden localhost port on the node (default: 10054)
       --gateway-port PORT    Gateway localhost port on the node (default: 10053)
       --companion-pattern RE Regex for the expected /v1/models companion route
+      --skip-provider-routing
+                            Skip latest chat model_usage_events provider check
       --smoke                Run a two-turn gateway chat smoke
       --smoke-timeout SEC    Per-smoke request timeout (default: 180)
       --soft                 Continue after failures and summarize at the end
@@ -126,6 +129,10 @@ parse_args() {
         [[ $# -ge 2 ]] || die "$1 requires a value"
         COMPANION_MODEL_PATTERN=$2
         shift 2
+        ;;
+      --skip-provider-routing)
+        CHECK_PROVIDER_ROUTING=false
+        shift
         ;;
       --smoke)
         SMOKE=true
@@ -332,9 +339,10 @@ run_check() {
     fi
     rm -f "$tmp"
     return 0
+  else
+    status=$?
   fi
 
-  status=$?
   FAIL_COUNT=$((FAIL_COUNT + 1))
   FAILED_CHECKS+=("$name")
   printf 'FAIL %s\n' "$name"
@@ -993,12 +1001,16 @@ main() {
   run_check "gateway models" check_gateway_models
   run_check "postgres pgvector and redis" check_postgres_and_redis
   run_check "agent log scan" check_agent_logs
-  run_check "provider routing" check_provider_routing
-  run_check "zero bookkeeping writes" check_zero_bookkeeping_writes
-  run_check "emosim service (optional)" check_emosim_service
   if [[ "$SMOKE" == true ]]; then
     run_check "gateway chat smoke" check_gateway_smoke
   fi
+  if [[ "$CHECK_PROVIDER_ROUTING" == true ]]; then
+    run_check "provider routing" check_provider_routing
+  else
+    warn_line "provider routing check skipped"
+  fi
+  run_check "zero bookkeeping writes" check_zero_bookkeeping_writes
+  run_check "emosim service (optional)" check_emosim_service
 
   print_summary
   if (( FAIL_COUNT > 0 )); then

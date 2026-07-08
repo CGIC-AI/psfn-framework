@@ -45,9 +45,13 @@ describe('verifyPostgresDumpRestore', () => {
    * Stub psql that answers the verification queries; restored-side counts come
    * from URLs containing `restore_verify`, source-side counts otherwise.
    */
-  function writeStubPsql(root: string, behavior: { emptyRestoredMemories?: boolean; failOnReflections?: boolean } = {}): string {
+  function writeStubPsql(
+    root: string,
+    behavior: { emptyRestoredMemories?: boolean; failOnReflections?: boolean; missingVectorExtension?: boolean } = {},
+  ): string {
     const stubPath = join(root, 'stub-psql.sh');
     const restoredMemories = behavior.emptyRestoredMemories ? '0' : '1200';
+    const vectorExtensionCount = behavior.missingVectorExtension ? '0' : '1';
     const reflectionsCase = behavior.failOnReflections
       ? '    echo "ERROR: relation \\"reflections\\" does not exist" >&2; exit 1 ;;'
       : '    echo 7 ;;';
@@ -64,7 +68,7 @@ describe('verifyPostgresDumpRestore', () => {
       '  *information_schema.tables*)',
       '    echo 33 ;;',
       '  *pg_extension*)',
-      '    echo 1 ;;',
+      `    echo ${vectorExtensionCount} ;;`,
       '  *typname*)',
       '    echo "l2_memories.embedding" ;;',
       '  *"<=>"*)',
@@ -124,6 +128,16 @@ describe('verifyPostgresDumpRestore', () => {
       psqlBinary: writeStubPsql(root, { failOnReflections: true }),
       pgRestoreBinary: writeStubPgRestore(root),
     })).rejects.toThrow('Critical table missing after restore: reflections');
+  });
+
+  it('fails closed when the pgvector extension is missing from the scratch database', async () => {
+    const root = makeRoot();
+    await expect(verifyPostgresDumpRestore({
+      dumpPath: writeDump(root),
+      scratchDatabaseUrl: 'postgresql://u:p@127.0.0.1:5432/psfn_restore_verify',
+      psqlBinary: writeStubPsql(root, { missingVectorExtension: true }),
+      pgRestoreBinary: writeStubPgRestore(root),
+    })).rejects.toThrow('pgvector extension is missing in the scratch database');
   });
 
   it('fails closed when the dump archive is missing', async () => {

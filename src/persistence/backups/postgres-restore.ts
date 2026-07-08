@@ -166,6 +166,14 @@ export async function verifyPostgresDumpRestore(
       options.scratchDatabaseUrl,
       "SELECT count(*) FROM pg_extension WHERE extname='vector'",
     ) === '1';
+    if (!vectorExtensionPresent) {
+      // Vector-dependent restores would fail later; a verified backup must
+      // prove pgvector is available in the scratch database, not record its
+      // absence and pass anyway.
+      throw new Error(
+        `Restore verification failed: pgvector extension is missing in the scratch database (dump: ${options.dumpPath}) — run CREATE EXTENSION vector there as superuser`,
+      );
+    }
 
     const tableCounts: PostgresRestoreTableCount[] = [];
     for (const table of criticalTables) {

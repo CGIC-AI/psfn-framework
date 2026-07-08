@@ -6,8 +6,11 @@ import { MemoryExtractor } from '../extraction.js';
 import { DEFAULT_EMBEDDING_CONFIG } from '../embedding.js';
 import { MemoryStore } from '../store.js';
 import type { ExtractedFact } from '../types.js';
+import type { RelationshipType } from '../../../core/contacts/types.js';
 import {
+  __test as mentionOnlyTestHooks,
   extractMentionOnlyContactCandidate,
+  resolveInterlocutorRelationshipRatchet,
   resolveMentionOnlyContactForFact,
 } from './mention-only-contacts.js';
 
@@ -358,5 +361,250 @@ describe('MemoryExtractor group-room speaker ownership', () => {
       'Marlow believes that if Aster is put on a livestream, guardrails are needed.',
     );
     expect(memoryStore.getMemoriesByContact(rowan.id, 10)).toHaveLength(0);
+  });
+});
+
+describe('factStatesInterlocutorBond', () => {
+  const { factStatesInterlocutorBond } = mentionOnlyTestHooks;
+
+  it('accepts second-person bonds addressed at the companion', () => {
+    expect(factStatesInterlocutorBond(makeFact("You're my best friend"), 'Aster')).toBe(true);
+    expect(factStatesInterlocutorBond(makeFact('You are like family to Juno'), 'Aster')).toBe(true);
+  });
+
+  it('accepts bonds that name the companion', () => {
+    expect(
+      factStatesInterlocutorBond(makeFact('Juno considers Aster their closest friend'), 'Aster'),
+    ).toBe(true);
+  });
+
+  it('rejects generic relational chatter about other people', () => {
+    expect(factStatesInterlocutorBond(makeFact('Juno met a new friend at the gym'), 'Aster')).toBe(false);
+    expect(
+      factStatesInterlocutorBond(makeFact("Juno mentioned their sister's wedding"), 'Aster'),
+    ).toBe(false);
+  });
+});
+
+describe('resolveInterlocutorRelationshipRatchet', () => {
+  let db: Database.Database;
+  let contactStore: ContactStore;
+
+  beforeEach(() => {
+    db = new Database(':memory:');
+    sqliteVec.load(db);
+    contactStore = new ContactStore(db, PRIMARY_USER_ID);
+  });
+
+  it('ratchets a stranger interlocutor upward on a companion bond fact', async () => {
+    const juno = contactStore.upsert({
+      displayName: 'Juno',
+      relationshipType: 'stranger',
+    });
+
+    const result = await resolveInterlocutorRelationshipRatchet({
+      fact: makeFact('Juno considers Aster their closest friend'),
+      interlocutorContactId: juno.id,
+      contactStore,
+      canonicalContactName: 'Juno',
+      companionName: 'Aster',
+    });
+
+    expect(result).toBe('friend');
+    expect(contactStore.getById(juno.id)?.relationshipType).toBe('friend');
+  });
+
+  it('never downgrades an interlocutor with a stronger existing relationship', async () => {
+    const juno = contactStore.upsert({
+      displayName: 'Juno',
+      relationshipType: 'family',
+    });
+
+    const result = await resolveInterlocutorRelationshipRatchet({
+      fact: makeFact("You're my best friend, Aster"),
+      interlocutorContactId: juno.id,
+      contactStore,
+      canonicalContactName: 'Juno',
+      companionName: 'Aster',
+    });
+
+    expect(result).toBeUndefined();
+    expect(contactStore.getById(juno.id)?.relationshipType).toBe('family');
+  });
+
+  it('does not ratchet the interlocutor when the fact names a third party (exclusion unchanged)', async () => {
+    const juno = contactStore.upsert({
+      displayName: 'Juno',
+      relationshipType: 'stranger',
+    });
+
+    const result = await resolveInterlocutorRelationshipRatchet({
+      fact: makeFact("Juno's friend Sam is visiting this weekend"),
+      interlocutorContactId: juno.id,
+      contactStore,
+      canonicalContactName: 'Juno',
+      companionName: 'Aster',
+    });
+
+    expect(result).toBeUndefined();
+    expect(contactStore.getById(juno.id)?.relationshipType).toBe('stranger');
+  });
+
+  it('does not ratchet on generic relational chatter about other people', async () => {
+    const juno = contactStore.upsert({
+      displayName: 'Juno',
+      relationshipType: 'stranger',
+    });
+
+    const result = await resolveInterlocutorRelationshipRatchet({
+      fact: makeFact('Juno met a new friend at the gym'),
+      interlocutorContactId: juno.id,
+      contactStore,
+      canonicalContactName: 'Juno',
+      companionName: 'Aster',
+    });
+
+    expect(result).toBeUndefined();
+    expect(contactStore.getById(juno.id)?.relationshipType).toBe('stranger');
+  });
+
+  it('never ratchets to family/partner from single weak evidence (ceiling is friend)', async () => {
+    const juno = contactStore.upsert({
+      displayName: 'Juno',
+      relationshipType: 'stranger',
+    });
+
+    const result = await resolveInterlocutorRelationshipRatchet({
+      fact: makeFact('You are like family to me, Aster'),
+      interlocutorContactId: juno.id,
+      contactStore,
+      canonicalContactName: 'Juno',
+      companionName: 'Aster',
+    });
+
+    expect(result).toBeUndefined();
+    expect(contactStore.getById(juno.id)?.relationshipType).toBe('stranger');
+  });
+
+  it('respects the primary-contact guard (primary interlocutor unchanged)', async () => {
+    const primary = contactStore.upsert({
+      displayName: 'Juno',
+      discordUserId: PRIMARY_USER_ID,
+    });
+    expect(contactStore.getById(primary.id)?.relationshipType).toBe('partner');
+
+    const result = await resolveInterlocutorRelationshipRatchet({
+      fact: makeFact('Juno considers Aster their closest friend'),
+      interlocutorContactId: primary.id,
+      contactStore,
+      canonicalContactName: 'Juno',
+      companionName: 'Aster',
+    });
+
+    expect(result).toBeUndefined();
+    expect(contactStore.getById(primary.id)?.relationshipType).toBe('partner');
+  });
+
+  it('returns undefined and reports no promotion when the store refuses the update', async () => {
+    const updateRelationshipType = vi.fn().mockResolvedValue(false);
+    const stubStore = {
+      getById: vi.fn().mockResolvedValue({
+        id: 'contact-stub',
+        displayName: 'Juno',
+        relationshipType: 'stranger' as RelationshipType,
+        trustLevel: 'primary',
+      }),
+      updateRelationshipType,
+    };
+
+    const result = await resolveInterlocutorRelationshipRatchet({
+      fact: makeFact('Juno considers Aster their closest friend'),
+      interlocutorContactId: 'contact-stub',
+      contactStore: stubStore as any,
+      canonicalContactName: 'Juno',
+      companionName: 'Aster',
+    });
+
+    expect(updateRelationshipType).toHaveBeenCalledWith(
+      'contact-stub',
+      'friend',
+      'system:memory_extraction:interlocutor',
+    );
+    expect(result).toBeUndefined();
+  });
+});
+
+describe('MemoryExtractor interlocutor relationship ratchet', () => {
+  let db: Database.Database;
+  let memoryStore: MemoryStore;
+  let contactStore: ContactStore;
+
+  beforeEach(() => {
+    db = new Database(':memory:');
+    sqliteVec.load(db);
+    memoryStore = new MemoryStore(db);
+    contactStore = new ContactStore(db, PRIMARY_USER_ID);
+  });
+
+  function makeExtractor(): MemoryExtractor {
+    return new MemoryExtractor(
+      { complete: vi.fn() } as any,
+      { characterName: 'Aster' } as any,
+      memoryStore,
+      {
+        embed: vi.fn().mockResolvedValue(makeEmbedding()),
+        embedBatch: vi.fn(),
+        dims: EMBEDDING_DIMS,
+      } as any,
+      { emit: vi.fn().mockResolvedValue(undefined) } as any,
+      { extractionInterval: 5 },
+      null,
+      null,
+      contactStore,
+    );
+  }
+
+  it('ratchets the routed interlocutor through the live processFact path', async () => {
+    const juno = contactStore.upsert({
+      displayName: 'Juno',
+      relationshipType: 'stranger',
+    });
+
+    const extractor = makeExtractor();
+
+    await (extractor as any).processFact(
+      makeFact('Juno considers Aster their closest friend'),
+      'discord:juno-dm:1',
+      juno.id,
+      undefined,
+      'discord:juno-dm',
+      undefined,
+      juno.displayName,
+      'Aster',
+    );
+
+    expect(contactStore.getById(juno.id)?.relationshipType).toBe('friend');
+  });
+
+  it('does not ratchet the interlocutor from a third-party mention on the live path', async () => {
+    const juno = contactStore.upsert({
+      displayName: 'Juno',
+      relationshipType: 'stranger',
+    });
+
+    const extractor = makeExtractor();
+
+    await (extractor as any).processFact(
+      makeFact("Juno's friend Sam stopped by the studio"),
+      'discord:juno-dm:2',
+      juno.id,
+      undefined,
+      'discord:juno-dm',
+      undefined,
+      juno.displayName,
+      'Aster',
+    );
+
+    expect(contactStore.getById(juno.id)?.relationshipType).toBe('stranger');
   });
 });

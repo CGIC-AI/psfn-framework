@@ -52,7 +52,10 @@ import {
 } from './extraction/orchestrator.js';
 import { refreshContactProfile as runProfileRefresh } from './extraction/profile-synthesis.js';
 import { persistEmotionalStateFromExtraction } from './extraction/emotional.js';
-import { resolveMentionOnlyContactForFact } from './extraction/mention-only-contacts.js';
+import {
+  resolveInterlocutorRelationshipRatchet,
+  resolveMentionOnlyContactForFact,
+} from './extraction/mention-only-contacts.js';
 import {
   advanceExtractionWatermarkForCoverage,
   emitExtractionEnd as emitExtractionEndEvent,
@@ -656,6 +659,32 @@ export class MemoryExtractor {
       if (mentionOnlyContact) {
         factContactId = mentionOnlyContact.id;
       }
+    }
+
+    // Deliberate interlocutor progression path (psfn-framework-kada.1). When a
+    // relational fact stays attributed to the routed contact (the mention-only
+    // path did not divert it to a third party) and is not attributed to a
+    // distinct third-party subject, that contact is the conversation partner
+    // themselves. Facts about their own bond with the companion may ratchet
+    // their relationshipType upward. Gated by the same ContactTrackingGate as
+    // the mention path; the ratchet's own conservative evidence bar and the
+    // store's primary-contact guard do the rest.
+    if (
+      fact.type === 'relational'
+      && this.contactStore
+      && channelId
+      && contactCreationAllowed
+      && canonicalContactId
+      && factContactId === canonicalContactId
+      && !routing?.subjectContactId
+    ) {
+      await resolveInterlocutorRelationshipRatchet({
+        fact,
+        interlocutorContactId: canonicalContactId,
+        contactStore: this.contactStore,
+        canonicalContactName,
+        companionName,
+      });
     }
 
     if (routing && this.isTelemetryEnabled()) {

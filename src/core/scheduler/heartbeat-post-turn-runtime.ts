@@ -15,6 +15,12 @@ import {
 } from '../agent/deferred-post-turn-inference.js';
 import { evaluateCompositionalPolicyForChannelId } from '../../system/capabilities/compositional-policy.js';
 import {
+  ContactTrustDriftReviewLane,
+  CONTACT_TRUST_DRIFT_REVIEW_ACTION_KIND,
+  CONTACT_TRUST_DRIFT_REVIEW_CHANNEL_ID,
+  type ContactTrustDriftReviewStore,
+} from '../contacts/trust-drift-review-lane.js';
+import {
   SleeptimeMemoryAgent,
   SLEEPTIME_MEMORY_ACTION_KIND,
 } from '../../faculties/memory/sleeptime-agent.js';
@@ -68,6 +74,7 @@ import type { Scheduler } from './scheduler.js';
 const log = createComponentLogger('HeartbeatPostTurn');
 export const SLEEPTIME_REST_WINDOW_TASK_ID = 'memory.sleeptime.rest-window';
 const SLEEPTIME_REST_WINDOW_POLL_INTERVAL_MS = 5 * 60_000;
+export const CONTACT_TRUST_DRIFT_REVIEW_TASK_ID = 'contacts.trust-drift-review.rest-window';
 export const INTENTION_FOLLOW_UP_ACTIVATION_MIN_INTERVAL_MS = 5 * 60_000;
 
 interface WireHeartbeatPostTurnRuntimeOptions {
@@ -1353,6 +1360,105 @@ export function wireHeartbeatPostTurnRuntime(
       hasSessionManager: Boolean(runtimeOptions.sessionManager),
       hasCoreMemoryStore: Boolean(runtimeOptions.coreMemoryStore),
       hasRestWindow: Boolean(runtimeOptions.episodicProcessingRestWindow),
+    });
+  }
+
+  // Nightly contact trust-drift review (kada.2): scheduler-owned rest-window
+  // work, same trigger surface as sleeptime. Computes drift signals from
+  // recorded evidence and surfaces suggestions for the companion to decide on;
+  // it never mutates trust itself.
+  const driftContactStore = runtimeOptions.contactStore;
+  const driftReviewStore: ContactTrustDriftReviewStore | null = (
+    driftContactStore
+    && driftContactStore.listAll
+    && driftContactStore.countVerifiedIdentityLinks
+    && driftContactStore.getContactMaintenanceWatermark
+    && driftContactStore.setContactMaintenanceWatermark
+  )
+    ? {
+      listAll: driftContactStore.listAll.bind(driftContactStore),
+      getEmotionalTimeSeries: driftContactStore.getEmotionalTimeSeries.bind(driftContactStore),
+      countVerifiedIdentityLinks: driftContactStore.countVerifiedIdentityLinks.bind(driftContactStore),
+      getContactMaintenanceWatermark: driftContactStore.getContactMaintenanceWatermark.bind(driftContactStore),
+      setContactMaintenanceWatermark: driftContactStore.setContactMaintenanceWatermark.bind(driftContactStore),
+    }
+    : null;
+  const driftReviewLane = (
+    driftReviewStore
+    && runtimeOptions.episodicProcessingRestWindow
+    && agentLoop.followUp
+  )
+    ? new ContactTrustDriftReviewLane({
+      contactStore: driftReviewStore,
+      restWindow: runtimeOptions.episodicProcessingRestWindow,
+      deliverReview: (review) => {
+        agentLoop.followUp?.({
+          id: `contact-drift-review:${Date.now()}`,
+          channelId: CONTACT_TRUST_DRIFT_REVIEW_CHANNEL_ID,
+          channelType: 'terminal',
+          authorId: 'scheduler',
+          authorName: 'Contact Trust Review',
+          content: review.content,
+          timestamp: new Date(),
+        });
+      },
+    })
+    : null;
+  if (driftReviewLane) {
+    if (telemetryEventBus && !scheduler.getTask(CONTACT_TRUST_DRIFT_REVIEW_TASK_ID)) {
+      scheduler.register({
+        id: CONTACT_TRUST_DRIFT_REVIEW_TASK_ID,
+        name: 'Contact Trust-Drift Review',
+        type: 'every',
+        intervalMs: SLEEPTIME_REST_WINDOW_POLL_INTERVAL_MS,
+        handler: async () => {
+          const actions = await driftReviewLane.inferIdleActions();
+          for (const action of actions) {
+            const syntheticMessage = {
+              id: `contact-drift-review-poll:${Date.now()}`,
+              channelId: CONTACT_TRUST_DRIFT_REVIEW_CHANNEL_ID,
+              channelType: 'terminal' as const,
+              authorId: 'system:contact-drift-review',
+              authorName: 'Contact Trust Review',
+              content: 'Nightly contact trust-drift review became eligible.',
+              timestamp: new Date(),
+            };
+            await telemetryEventBus.emit('agent.post_turn.actions.inferred', {
+              message: syntheticMessage,
+              response: {
+                content: '',
+                channelId: CONTACT_TRUST_DRIFT_REVIEW_CHANNEL_ID,
+                metadata: {
+                  model: 'scheduler:contact-drift-review',
+                  inputTokens: 0,
+                  outputTokens: 0,
+                  durationMs: 0,
+                },
+              },
+              actions: toInferredPostTurnActions([action], syntheticMessage),
+            });
+          }
+        },
+        eligibility: { requiredTokens: ['identity.read'] },
+        state: 'idle',
+      }, { skipFirstRun: true });
+    }
+    runtimeOptions.postTurnActions.registerHandler(
+      CONTACT_TRUST_DRIFT_REVIEW_ACTION_KIND,
+      async (action) => {
+        await driftReviewLane.execute(action);
+      },
+      {
+        executionMode: 'background',
+        runtimeClass: MAINTENANCE_REFLECTION_RUNTIME_CLASS,
+      },
+    );
+  } else {
+    log.info('Contact trust-drift review wiring skipped: missing post-turn dependencies', {
+      hasContactStore: Boolean(runtimeOptions.contactStore),
+      hasDriftStoreSurface: Boolean(driftContactStore?.listAll && driftContactStore.setContactMaintenanceWatermark),
+      hasRestWindow: Boolean(runtimeOptions.episodicProcessingRestWindow),
+      hasFollowUp: Boolean(agentLoop.followUp),
     });
   }
 

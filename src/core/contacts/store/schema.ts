@@ -159,6 +159,11 @@ export function initializeContactStoreSchema(db: Database.Database): void {
       FOREIGN KEY (target_entity_id) REFERENCES social_graph_entities(id) ON DELETE CASCADE
     );
 
+    CREATE TABLE IF NOT EXISTS contact_maintenance_watermarks (
+      processor TEXT PRIMARY KEY,
+      last_run_at TEXT NOT NULL
+    );
+
     CREATE INDEX IF NOT EXISTS idx_contacts_trust ON contacts(trust_level);
     CREATE INDEX IF NOT EXISTS idx_contacts_discord ON contacts(discord_user_id);
     CREATE INDEX IF NOT EXISTS idx_contact_channel_ids_contact ON contact_channel_ids(contact_id);

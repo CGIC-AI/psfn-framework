@@ -115,6 +115,47 @@ export function listIdentityLinkVerifications(
   return rows.map(row => toIdentityLinkVerification(row));
 }
 
+export function countVerifiedIdentityLinks(
+  db: Database.Database,
+  contactId: string,
+): number {
+  const row = db.prepare(`
+    SELECT COUNT(*) AS count
+    FROM contact_identity_link_verifications
+    WHERE contact_id = ? AND status = 'verified'
+  `).get(contactId) as { count: number };
+  return row.count;
+}
+
+export function getContactMaintenanceWatermark(
+  db: Database.Database,
+  processor: string,
+): string | undefined {
+  const row = db.prepare(
+    'SELECT last_run_at FROM contact_maintenance_watermarks WHERE processor = ?',
+  ).get(processor) as { last_run_at: string } | undefined;
+  return row?.last_run_at;
+}
+
+export function setContactMaintenanceWatermark(
+  db: Database.Database,
+  processor: string,
+  lastRunAt: string,
+): void {
+  const trimmedProcessor = processor.trim();
+  if (!trimmedProcessor) {
+    throw new Error('Contact maintenance watermark processor must be a non-empty string');
+  }
+  if (!Number.isFinite(Date.parse(lastRunAt))) {
+    throw new Error(`Contact maintenance watermark lastRunAt "${lastRunAt}" is not a valid timestamp`);
+  }
+  db.prepare(`
+    INSERT INTO contact_maintenance_watermarks (processor, last_run_at)
+    VALUES (?, ?)
+    ON CONFLICT(processor) DO UPDATE SET last_run_at = excluded.last_run_at
+  `).run(trimmedProcessor, lastRunAt);
+}
+
 export function getCanonicalContactKey(
   db: Database.Database,
   channel: ContactChannel,

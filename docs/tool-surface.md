@@ -186,7 +186,7 @@ This keeps transcript lookup, gentle checkpointing, wake/return recaps, and focu
 
 The canonical model-facing `contact` surface collapses relationship operations and canonical contact continuity into one tool.
 
-- Actions: `list`, `lookup`, `note`, `set_trust`, `link_identity`, `set_channel_privacy`, `set_machine_intelligence`
+- Actions: `list`, `lookup`, `note`, `set_trust`, `propose_trust`, `link_identity`, `set_channel_privacy`, `set_machine_intelligence`
 - Retired aliases that must not be model-facing:
   `contact_list` -> `list`
   `contact_lookup` -> `lookup`
@@ -196,6 +196,8 @@ The canonical model-facing `contact` surface collapses relationship operations a
   `contact_set_channel_privacy` -> `set_channel_privacy`
 
 This keeps contact lookup, typed notes, trust drift handling, cross-channel identity linking, and per-channel privacy on one semantic relationship surface instead of scattering them across micro-tools. Trust/disclosure invariants and typed contact semantics remain enforced by the underlying contact store.
+
+`set_trust` can only apply low-tier trust changes autonomously; high-tier promotion stays blocked (policy/store guards). To promote a contact to `trusted`, the agent uses `propose_trust` (requires `contactId` and `rationale`), which enqueues a proposal onto the shared confirmation queue for operator approval in the Garden Confirmations page. The write happens only on approval, under a manual-authorized `operator:` actor, and is audited like any other trust mutation. `primary` can never be proposed — it remains owner-only.
 
 ## Canonical Notify Surface
 

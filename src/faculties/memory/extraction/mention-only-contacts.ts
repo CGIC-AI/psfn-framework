@@ -47,6 +47,39 @@ const RELATIONSHIP_PRIORITY: Readonly<Record<RelationshipType, number>> = {
   ai_companion: 5,
 };
 
+// Relationship ceiling for the deliberate interlocutor auto-ratchet
+// (psfn-framework-kada.1). A single extracted relational fact about the
+// conversation partner's OWN bond with the companion may raise their
+// relationshipType up to 'friend', but never beyond. 'family', 'partner', and
+// 'ai_companion' are deliberately excluded: a single weak keyword/tag inference
+// is not strong enough to justify them, and 'ai_companion' is never inferred
+// from human relational language. Reaching those tiers stays a deliberate human
+// action (admin API) or the primary-user promotion to 'partner' handled inside
+// the contact store.
+const INTERLOCUTOR_AUTO_RATCHET_TYPES: ReadonlySet<RelationshipType> = new Set([
+  'acquaintance',
+  'friend',
+]);
+
+// Second-person reference to the companion ("you", "you're", "your"). The
+// interlocutor ratchet only fires when the relational evidence is addressed at
+// the companion, not when it is generic relational chatter about other people.
+const SECOND_PERSON_COMPANION_REFERENCE = /\byou\b|\byou['’]re\b|\byour\b|\byours\b/u;
+
+// "you're my best friend" / "you are like family" — a second-person address that
+// claims a relationship keyword.
+const SECOND_PERSON_BOND = new RegExp(
+  String.raw`\byou(?:['’]re| are| re)?\b[^.]{0,30}?\b(?:${RELATIONSHIP_KEYWORD_PATTERN})\b`,
+  'u',
+);
+
+// "my best friend ..." / "our closest friend ..." — a first-person possessive
+// claim over a relationship keyword (paired with a companion reference).
+const FIRST_PERSON_POSSESSIVE_BOND = new RegExp(
+  String.raw`\b(?:my|our)\b[^.]{0,30}?\b(?:${RELATIONSHIP_KEYWORD_PATTERN})\b`,
+  'u',
+);
+
 export interface MentionOnlyContactCandidate {
   name: string;
   relationshipType: RelationshipType;
@@ -376,6 +409,127 @@ export async function resolveMentionOnlyContactForFact(
   return created;
 }
 
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * True when the relational fact is stated as a bond between the interlocutor and
+ * the companion themselves — the deliberate signal the interlocutor ratchet
+ * requires. This is what distinguishes "you're my best friend" (a bond with the
+ * companion) from generic relational chatter like "enjoys time with friends".
+ *
+ * Accepts the fact when EITHER:
+ *  - the companion is named in the fact (guard #5 in
+ *    resolveInterlocutorRelationshipRatchet already guarantees no OTHER named
+ *    third party carries the relationship, so a naming reference means the
+ *    relation is ascribed involving the companion); OR
+ *  - a second-person address ("you're my best friend") or first-person
+ *    possessive claim ("my best friend, you") ties a relationship keyword to the
+ *    companion.
+ */
+function factStatesInterlocutorBond(
+  fact: ExtractedFact,
+  companionName: string | undefined,
+): boolean {
+  const lowerText = fact.text.toLowerCase();
+
+  const normalizedCompanion = companionName ? normalizeNameKey(companionName) : '';
+  const companionNamePresent = normalizedCompanion.length > 0
+    && new RegExp(`(^| )${escapeRegExp(normalizedCompanion)}( |$)`, 'u')
+      .test(normalizeNameKey(fact.text));
+  if (companionNamePresent) return true;
+
+  if (!SECOND_PERSON_COMPANION_REFERENCE.test(lowerText)) return false;
+  return SECOND_PERSON_BOND.test(lowerText) || FIRST_PERSON_POSSESSIVE_BOND.test(lowerText);
+}
+
+export interface InterlocutorRelationshipRatchetParams {
+  fact: ExtractedFact;
+  /** The contact the relational fact is attributed to (the conversation partner). */
+  interlocutorContactId: string;
+  contactStore: Pick<ContactStorePort, 'getById' | 'updateRelationshipType'> | null;
+  canonicalContactName?: string;
+  companionName?: string;
+}
+
+/**
+ * Deliberate interlocutor relationship progression path (psfn-framework-kada.1).
+ *
+ * The mention-only path (resolveMentionOnlyContactForFact) structurally excludes
+ * the canonical contact so third-party facts like "my brother Marcus" never
+ * mis-target the speaker — a load-bearing exclusion that must stay. As a result
+ * the person actually chatting with the companion was created as 'stranger' and
+ * never progressed. This path fills that gap: relational evidence that is ABOUT
+ * the interlocutor's own bond with the companion may ratchet their own
+ * relationshipType upward, monotonic up only.
+ *
+ * The evidence bar is deliberately conservative. The ratchet fires only when ALL
+ * hold:
+ *  1. the fact is relational;
+ *  2. inferRelationshipTypeFromFact yields a type (same keyword/tag inference
+ *     quality as the mention path);
+ *  3. that type is within INTERLOCUTOR_AUTO_RATCHET_TYPES (never family/partner/
+ *     ai_companion from single weak evidence);
+ *  4. (guard #5) the fact names NO third party — if the relationship keyword is
+ *     attached to a named third party ("my brother Marcus"), we defer to the
+ *     mention path and never touch the interlocutor;
+ *  5. (guard #6) the fact states a bond with the companion themselves
+ *     (factStatesInterlocutorBond);
+ *  6. the new type strictly outranks the current one.
+ *
+ * Uses a distinct actor string so the audit trail separates it from the mention
+ * path. The primary-contact guard (a primary contact may only become 'partner')
+ * is enforced inside ContactStore.updateRelationshipType / the Postgres adapter,
+ * so a primary interlocutor is simply a no-op here — never fought.
+ */
+export async function resolveInterlocutorRelationshipRatchet(
+  params: InterlocutorRelationshipRatchetParams,
+): Promise<RelationshipType | undefined> {
+  const { contactStore } = params;
+  if (!contactStore) return undefined;
+  if (
+    typeof contactStore.getById !== 'function'
+    || typeof contactStore.updateRelationshipType !== 'function'
+  ) {
+    return undefined;
+  }
+  if (params.fact.type !== 'relational') return undefined;
+
+  const inferred = inferRelationshipTypeFromFact(params.fact);
+  if (!inferred) return undefined;
+  if (!INTERLOCUTOR_AUTO_RATCHET_TYPES.has(inferred)) return undefined;
+
+  const contact = await contactStore.getById(params.interlocutorContactId);
+  if (!contact) return undefined;
+
+  // Guard #5 — load-bearing third-party exclusion. Reuse the mention-only
+  // candidate extractor with the interlocutor's OWN names (display + nickname)
+  // and the companion name excluded. If it still finds a named candidate, the
+  // relationship keyword belongs to a third party, so this path must not act.
+  const thirdPartyCandidate = extractMentionOnlyContactCandidate({
+    fact: params.fact,
+    canonicalContactName: params.canonicalContactName,
+    canonicalContactNames: contactNames(contact),
+    companionName: params.companionName,
+  });
+  if (thirdPartyCandidate) return undefined;
+
+  // Guard #6 — the evidence must be about the interlocutor's own bond with the
+  // companion, not generic relational chatter.
+  if (!factStatesInterlocutorBond(params.fact, params.companionName)) return undefined;
+
+  if (!shouldPromoteRelationship(contact.relationshipType, inferred)) return undefined;
+
+  const updated = await contactStore.updateRelationshipType(
+    contact.id,
+    inferred,
+    'system:memory_extraction:interlocutor',
+  );
+  return updated ? inferred : undefined;
+}
+
 export const __test = {
   extractMentionOnlyContactCandidate,
+  factStatesInterlocutorBond,
 };

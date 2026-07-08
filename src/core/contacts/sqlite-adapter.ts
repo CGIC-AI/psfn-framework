@@ -49,6 +49,11 @@ function asyncContactStore(store: ContactStore): ContactStorePort {
     linkChannelIdentity: async (contactId, channel, channelUserId, options, actor) => store.linkChannelIdentity(contactId, channel, channelUserId, options, actor),
     listAll: async () => store.listAll(),
     listIdentityLinkVerifications: async (limit) => store.listIdentityLinkVerifications(limit),
+    countVerifiedIdentityLinks: async (contactId) => store.countVerifiedIdentityLinks(contactId),
+    getContactMaintenanceWatermark: async (processor) => store.getContactMaintenanceWatermark(processor),
+    setContactMaintenanceWatermark: async (processor, lastRunAt) => {
+      store.setContactMaintenanceWatermark(processor, lastRunAt);
+    },
     listMutationAuditEntries: async (query) => store.listMutationAuditEntries(query),
     resolveChannelIdentity: async (channel, channelUserId, displayName) => store.resolveChannelIdentity(channel, channelUserId, displayName),
     resolveUserId: async (discordUserId) => store.resolveUserId(discordUserId),

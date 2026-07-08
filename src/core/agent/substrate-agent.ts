@@ -17,14 +17,14 @@ import { getRunChargeContext, runWithChargeContext } from '../../shared/telemetr
 import { createMemoryAppCache } from '../../shared/cache/memory-cache.js';
 import type { AppCache } from '../../shared/cache/types.js';
 import type { SessionManager } from '../session/manager.js';
-import type { ConversationScope, ConversationScopeSpeaker } from '../session/conversation-scope.js';
+import type { ConversationScope } from '../session/conversation-scope.js';
 import { formatAttributedSystemContent } from '../session/entry-attribution.js';
 import {
   INTENTION_FOLLOW_UP_AUTHOR_ID,
   INTENTION_FOLLOW_UP_AUTHOR_NAME,
 } from '../intention/appraisal.js';
 import type { AgentResponse, CorrelationMetadata, ModelBudgetBlockedEvent, MessagePromptOverride, ResponseStyle, SubstrateMessage } from '../../shared/contracts/runtime.js';
-import type { CapabilityTier, CoreSubstrateConfig, SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
+import type { CapabilityTier, CoreSubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type { ContactStorePort } from '../contacts/contact-store-port.js';
 import type { ContactTrackingGate } from '../contacts/tracking-gate.js';
 import type { ImageVisionReviewer } from '../../primitives/images/types.js';
@@ -34,15 +34,10 @@ import {
   resolveChannelResponseStyle,
   type ChannelMeta,
 } from '../../system/trust/policy.js';
-import { getRuntimeTrustPolicy } from '../../system/trust/runtime-policy.js';
 import type { ChannelPromptRegistryPort } from '../../channels/backplane/registry-port.js';
 import {
   type PromptComposer,
 } from '../identity/prompt-composer.js';
-import {
-  resolveCachedPromptRuntimeLayoutStore,
-} from '../identity/prompt-runtime-store-cache.js';
-import type { ComposeContext } from '../identity/prompt-types.js';
 import { resolveCompanionIdFromConfig } from '../identity/companion-runtime.js';
 import {
   createSubstrateStreamFn,
@@ -80,7 +75,6 @@ import type {
 } from './adaptive-tools-telemetry.js';
 import type { RuntimeToolCatalogSnapshot } from './tool-catalog.js';
 import { createTurnId } from '../turns/id.js';
-import type { TurnPromptSnapshot } from '../turns/snapshot.js';
 import { EmotionState } from '../emotion/state.js';
 import type { EmotionObserver } from '../emotion/observer.js';
 import { EmotionAppraisal, type EmotionAppraisalEntry } from '../emotion/appraisal.js';
@@ -107,9 +101,17 @@ import {
   captureTurnPromptSnapshot as captureTurnPromptSnapshotForTurn,
   hashPromptText as hashPromptTextForTurn,
   resolveStaticPromptPrefixFromAppCache as resolveStaticPromptPrefixForTurn,
-  STATIC_PROMPT_PREFIX_CACHE_KEY_PREFIX,
-  type StaticPromptPrefixCacheEvent,
 } from './substrate-agent/prompt-lifecycle.js';
+import {
+  invalidateStaticPromptPrefixCache,
+  logStaticPromptPrefixCacheEvent,
+  resolveConfiguredCharacterName,
+  resolveRuntimePromptGuidanceVariables,
+} from './substrate-agent/prompt-runtime-helpers.js';
+import {
+  countResolvableSpeakerContactsForTurn,
+  resolveParticipantRelationshipsForTurn,
+} from './substrate-agent/participant-relationships.js';
 import {
   type IntentionPostTurnHook,
   type PostTurnActionInferer,
@@ -124,7 +126,6 @@ import {
   resolveActiveConcernsRuntimeData as resolveActiveConcernsRuntimeDataForTurn,
   resolveContinuitySubjectKey,
   resolveAuthorContext as resolveAuthorContextForTurn,
-  resolveIdentityChannel as resolveIdentityChannelForTurn,
   type CompanionSubstrateHealthContext,
   type ParticipantRelationshipEdgeInput,
   type ResolvedAuthorContext,
@@ -168,21 +169,6 @@ import type { FatigueBudgetPort } from './fatigue/fatigue-budget.js';
 import type { RuntimeServiceHealthStatus } from '../../operator/tool-health/types.js';
 
 const log = createComponentLogger('SubstrateAgent');
-
-function resolveRuntimePromptGuidanceVariables(config: SubstrateConfig): Record<string, string> {
-  const store = resolveCachedPromptRuntimeLayoutStore(config);
-  return {
-    runtime_persona_adaptation_extra: store.getEditableBlockContent('runtime.persona_adaptation'),
-    runtime_context_extra: store.getEditableBlockContent('runtime.context'),
-  };
-}
-
-function resolveConfiguredCharacterName(config: CoreSubstrateConfig): string | undefined {
-  const candidate = typeof config.characterName === 'string'
-    ? config.characterName.trim()
-    : '';
-  return candidate || undefined;
-}
 
 export type {
   LLMProviderPort,
@@ -388,7 +374,7 @@ export class SubstrateAgent {
     this.turnSupportRuntime = new TurnSupportRuntime({
       eventBus: this.eventBus,
       sessionManager: this.sessionManager,
-      hashPromptText: (text) => this.hashPromptText(text),
+      hashPromptText: hashPromptTextForTurn,
       resolveContextWindow: () => resolveContextWindowForRuntime(
         this.config,
         this.agent.state.model as { contextWindow?: unknown } | undefined,
@@ -471,16 +457,16 @@ export class SubstrateAgent {
       refreshModels: () => {
         priorRefreshModels?.();
         this.refreshRuntimeModels();
-        this.invalidatePromptPrefixCache('runtime.refreshModels');
+        invalidateStaticPromptPrefixCache(this.appCache, 'runtime.refreshModels', log);
       },
       refreshCapabilities: () => {
         priorRefreshCapabilities?.();
         this.refreshCapabilityRuntime();
-        this.invalidatePromptPrefixCache('runtime.refreshCapabilities');
+        invalidateStaticPromptPrefixCache(this.appCache, 'runtime.refreshCapabilities', log);
       },
       invalidatePromptPrefixCache: (reason = 'runtime.invalidatePromptPrefixCache') => {
         priorInvalidatePromptPrefixCache?.(reason);
-        this.invalidatePromptPrefixCache(reason);
+        invalidateStaticPromptPrefixCache(this.appCache, reason, log);
       },
     };
   }
@@ -651,7 +637,7 @@ export class SubstrateAgent {
 
   setChannelRegistry(registry: ChannelPromptRegistryPort): void {
     this.channelRegistry = registry;
-    this.invalidatePromptPrefixCache('channel-registry-updated');
+    invalidateStaticPromptPrefixCache(this.appCache, 'channel-registry-updated', log);
   }
 
   setCapabilityRuntime(runtime: CapabilityRuntime | null): void {
@@ -942,18 +928,24 @@ export class SubstrateAgent {
           taskKind,
         ),
         resolveAuthorContext: (turnMessage) => this.resolveAuthorContext(turnMessage),
-        countResolvableSpeakerContacts: (turnMessage, speakers) => this.countResolvableSpeakerContacts(
-          turnMessage,
+        countResolvableSpeakerContacts: (turnMessage, speakers) => countResolvableSpeakerContactsForTurn({
+          message: turnMessage,
           speakers,
-        ),
-        resolveParticipantRelationships: (turnMessage, scope, trustLevel) => this.resolveParticipantRelationships(
-          turnMessage,
-          scope,
+          contactStore: this.contactStore,
+        }),
+        resolveParticipantRelationships: (turnMessage, scope, trustLevel) => resolveParticipantRelationshipsForTurn({
+          message: turnMessage,
+          conversationScope: scope,
           trustLevel,
-        ),
+          contactStore: this.contactStore,
+        }),
         resolveChannelType: (turnMessage) => resolveChannelTypeForRuntime(turnMessage, this.channelRegistry),
         ensureModel: (turnMessage) => this.ensureModel(turnMessage),
-        captureTurnPromptSnapshot: (ctx) => this.captureTurnPromptSnapshot(ctx),
+        captureTurnPromptSnapshot: (ctx) => captureTurnPromptSnapshotForTurn({
+          promptComposer: this.promptComposer,
+          composeContext: ctx,
+          systemPrompt: this.systemPrompt,
+        }),
         buildScratchpadContextBlock: () => this.buildScratchpadContextBlock(),
         normalizeTurnPromptOverride: (turnMessage) => this.normalizeTurnPromptOverride(turnMessage),
         resolveResponseStyle: (turnMessage, channelType, channelMeta) => this.resolveResponseStyle(
@@ -1059,23 +1051,19 @@ export class SubstrateAgent {
           emotionAppraisalChain,
           conversationScope,
         ),
-        buildPromptPrefixCacheKey: (
-          turnMessage,
-          channelType,
-          canonicalContactKey,
-          subjectIdentityKey,
-        ) => this.buildPromptPrefixCacheKey(
-          turnMessage,
-          channelType,
-          canonicalContactKey,
-          subjectIdentityKey,
-        ),
-        buildStaticPromptSettingsHash: (templateVariables, staticPrefixTemplate) => this.buildStaticPromptSettingsHash(
-          templateVariables,
-          staticPrefixTemplate,
-        ),
-        resolveStaticPromptPrefix: (params) => this.resolveStaticPromptPrefix(params),
-        hashPromptText: (text) => this.hashPromptText(text),
+        buildPromptPrefixCacheKey: buildPromptPrefixCacheKeyForTurn,
+        buildStaticPromptSettingsHash: buildStaticPromptSettingsHashForTurn,
+        resolveStaticPromptPrefix: (params) => resolveStaticPromptPrefixForTurn({
+          cache: this.appCache,
+          cacheKey: params.cacheKey,
+          staticPrefixTemplate: params.staticPrefixTemplate,
+          staticHash: params.staticHash,
+          settingsHash: params.settingsHash,
+          now: params.now,
+          variables: params.variables,
+          onCacheEvent: event => logStaticPromptPrefixCacheEvent(this.appCache, event, log),
+        }),
+        hashPromptText: hashPromptTextForTurn,
         getPersonaAdaptation: (
           trustLevel,
           internalState,
@@ -1122,93 +1110,6 @@ export class SubstrateAgent {
   }
 
   // ── Private helpers ──
-
-  private captureTurnPromptSnapshot(ctx: ComposeContext): TurnPromptSnapshot {
-    return captureTurnPromptSnapshotForTurn({
-      promptComposer: this.promptComposer,
-      composeContext: ctx,
-      systemPrompt: this.systemPrompt,
-    });
-  }
-
-  private buildPromptPrefixCacheKey(
-    message: SubstrateMessage,
-    channelType: string | undefined,
-    canonicalContactKey: string | undefined,
-    subjectIdentityKey?: string,
-  ): string {
-    return buildPromptPrefixCacheKeyForTurn(
-      message,
-      channelType,
-      canonicalContactKey,
-      subjectIdentityKey,
-    );
-  }
-
-  private buildStaticPromptSettingsHash(
-    templateVariables: Record<string, string>,
-    staticPrefixTemplate?: string,
-  ): string {
-    return buildStaticPromptSettingsHashForTurn(templateVariables, staticPrefixTemplate);
-  }
-
-  private async resolveStaticPromptPrefix(params: {
-    cacheKey: string;
-    staticPrefixTemplate: string;
-    staticHash: string;
-    settingsHash: string;
-    now: Date;
-    variables: Record<string, string>;
-  }): Promise<string> {
-    return resolveStaticPromptPrefixForTurn({
-      cache: this.appCache,
-      cacheKey: params.cacheKey,
-      staticPrefixTemplate: params.staticPrefixTemplate,
-      staticHash: params.staticHash,
-      settingsHash: params.settingsHash,
-      now: params.now,
-      variables: params.variables,
-      onCacheEvent: event => this.logPromptCacheEvent(event),
-    });
-  }
-
-  private invalidatePromptPrefixCache(reason: string): void {
-    this.appCache.invalidatePrefix(STATIC_PROMPT_PREFIX_CACHE_KEY_PREFIX)
-      .then((deleted) => {
-        const stats = this.appCache.getStats();
-        log.info('Invalidated static prompt-prefix cache', {
-          reason,
-          backend: this.appCache.backend,
-          deleted,
-          invalidations: stats.invalidations,
-        });
-      })
-      .catch((error: unknown) => {
-        log.error('Failed to invalidate static prompt-prefix cache', {
-          reason,
-          backend: this.appCache.backend,
-          error: toErrorMessage(error),
-        });
-      });
-  }
-
-  private logPromptCacheEvent(event: StaticPromptPrefixCacheEvent): void {
-    const stats = this.appCache.getStats();
-    log.debug('Static prompt-prefix cache event', {
-      event: event.event,
-      backend: event.backend,
-      cacheKeyHash: event.cacheKeyHash,
-      staticHash: event.staticHash,
-      settingsHash: event.settingsHash,
-      hits: stats.hits,
-      misses: stats.misses,
-      invalidations: stats.invalidations,
-    });
-  }
-
-  private hashPromptText(text: string): string {
-    return hashPromptTextForTurn(text);
-  }
 
   /**
    * Index into agent state messages where internal follow-up continuation
@@ -1443,123 +1344,4 @@ export class SubstrateAgent {
     });
   }
 
-  /**
-   * E3.3 envelope derivation input: count the recent-speaker window entries
-   * that resolve to contacts through the same channel-identity path the turn
-   * uses for its author. Fail closed: no contact store, an empty window, or a
-   * failed lookup contributes zero resolved speakers (the envelope derivation
-   * then classifies audienceKnowledge as anonymous/partially_known, never
-   * all_known).
-   */
-  private async countResolvableSpeakerContacts(
-    message: SubstrateMessage,
-    speakers: readonly ConversationScopeSpeaker[],
-  ): Promise<number> {
-    if (!this.contactStore || speakers.length === 0) return 0;
-    const identityChannel = resolveIdentityChannelForTurn(message);
-    let resolved = 0;
-    for (const speaker of speakers) {
-      try {
-        const contact = await this.contactStore.getByChannelIdentity(identityChannel, speaker.authorId);
-        if (contact) resolved += 1;
-      } catch (error) {
-        log.warn('Speaker contact resolvability lookup failed; counting speaker as unresolved (fail closed)', {
-          channelId: message.channelId,
-          identityChannel,
-          speakerAuthorId: speaker.authorId,
-          error: error instanceof Error ? error.message : String(error),
-        });
-      }
-    }
-    return resolved;
-  }
-
-  /**
-   * E4.4 orchestrator fetch: gather live, high-confidence social-relationship
-   * edges BETWEEN currently listed participants (the <=5 recentSpeakers set) so
-   * the conversation-state producer can render a compact participant_relationships
-   * block. The producer never fetches — this async pre-prompt step runs the
-   * bounded query and hands candidates through.
-   *
-   * Only group turns are eligible (a DM has one participant). Fail closed: no
-   * contact store, no resolved participants, or a lookup error yields an empty
-   * set (the block is then absent entirely). The confidence threshold is
-   * config-owned (trust-policy.json → participantRelationshipConfidenceThreshold,
-   * default 0.7) and applied as the query's minConfidence; the room
-   * sensitivity rule (public/personal only) is enforced deterministically in
-   * the producer gate. One bounded list call, not a per-pair fan-out.
-   */
-  private async resolveParticipantRelationships(
-    message: SubstrateMessage,
-    conversationScope: ConversationScope,
-    trustLevel: TrustLevel,
-  ): Promise<ParticipantRelationshipEdgeInput[]> {
-    if (conversationScope.kind !== 'group') return [];
-    const store = this.contactStore;
-    if (!store) return [];
-    const speakers = conversationScope.recentSpeakers;
-    if (speakers.length < 2) return [];
-
-    const identityChannel = resolveIdentityChannelForTurn(message);
-    const threshold = getRuntimeTrustPolicy().participantRelationshipConfidenceThreshold;
-
-    // Resolve each currently listed participant to its social-graph entity id
-    // (authorId -> contact -> entity). Display uses the present speaker name.
-    const nameByEntityId = new Map<string, string>();
-    try {
-      for (const speaker of speakers) {
-        const contact = await store.getByChannelIdentity(identityChannel, speaker.authorId);
-        if (!contact) continue;
-        const entity = await store.getSocialGraphEntityByContactId(contact.id);
-        if (!entity) continue;
-        if (!nameByEntityId.has(entity.id)) {
-          nameByEntityId.set(entity.id, speaker.name);
-        }
-      }
-    } catch (error) {
-      log.warn('Participant relationship entity resolution failed; rendering no relationships (fail closed)', {
-        channelId: message.channelId,
-        error: error instanceof Error ? error.message : String(error),
-      });
-      return [];
-    }
-    if (nameByEntityId.size < 2) return [];
-
-    let edges;
-    try {
-      edges = await store.listSocialRelationshipEdges({
-        viewerTrustLevel: trustLevel,
-        viewerChannelPrivacy: conversationScope.envelope.channelPrivacy,
-        minConfidence: threshold,
-      });
-    } catch (error) {
-      log.warn('Participant relationship edge listing failed; rendering no relationships (fail closed)', {
-        channelId: message.channelId,
-        error: error instanceof Error ? error.message : String(error),
-      });
-      return [];
-    }
-
-    const candidates: ParticipantRelationshipEdgeInput[] = [];
-    const seen = new Set<string>();
-    for (const edge of edges) {
-      const aName = nameByEntityId.get(edge.sourceEntityId);
-      const bName = nameByEntityId.get(edge.targetEntityId);
-      // Both endpoints must be currently listed participants.
-      if (!aName || !bName || edge.sourceEntityId === edge.targetEntityId) continue;
-      if (edge.confidence < threshold) continue;
-      const dedupeKey = `${edge.sourceEntityId} ${edge.targetEntityId} ${edge.relationshipType}`;
-      if (seen.has(dedupeKey)) continue;
-      seen.add(dedupeKey);
-      candidates.push({
-        aName,
-        bName,
-        relationshipType: edge.relationshipType,
-        sensitivity: edge.sensitivity,
-        confidence: edge.confidence,
-        updatedAt: edge.updatedAt,
-      });
-    }
-    return candidates;
-  }
 }

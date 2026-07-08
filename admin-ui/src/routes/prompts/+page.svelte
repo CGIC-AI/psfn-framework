@@ -1,5 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
+  import ConstitutionBuilderPanel from './ConstitutionBuilderPanel.svelte';
+  import NorthStarEditorPanel from './NorthStarEditorPanel.svelte';
   import {
     listPrompts,
     getConstitutionSnapshot,
@@ -21,75 +23,34 @@
     PromptRuntimeLayerCoverageEntry,
     PromptRuntimeMacroHint,
     AdminPromptDetailData,
-    PromptHistoryEntry,
     PromptDiffResult,
     PromptUpdateResult,
     ConstitutionSnapshotData,
     ConstitutionCompanionLayer,
     ConstitutionImmutableBlock,
-    NorthStarItem,
-    NorthStarScope,
     NorthStarSnapshotData,
   } from '$lib/types';
-
-  // ── Macro catalog ──
-  type PromptRuntimeMacroGroup = PromptRuntimeMacroHint['group'];
-  const MACRO_GROUP_META: Record<PromptRuntimeMacroGroup, { label: string; rationale: string }> = {
-    global_aliases: {
-      label: 'Core Aliases',
-      rationale: 'Stable card-backed fields plus the shared clock and channel aliases.',
-    },
-    runtime_state: {
-      label: 'Runtime State',
-      rationale: 'Per-turn situational facts: time, speaker, channel, and capability tier.',
-    },
-    trust: {
-      label: 'Trust Gates',
-      rationale: 'Use these booleans to branch prose cleanly instead of hardcoding relationship text.',
-    },
-    response_style: {
-      label: 'Response Style',
-      rationale: 'Delivery and expansion signals for concise vs expressive turns.',
-    },
-    affect: {
-      label: 'Affect',
-      rationale: 'Atomic emotional signals. Write your own prose around them instead of pasting monolithic paragraphs.',
-    },
-    metacognition: {
-      label: 'Metacognition',
-      rationale: 'Flags, confidence, and evidence helpers for uncertainty, avoidance, repetition, and confabulation risk.',
-    },
-    internal_state: {
-      label: 'Internal State',
-      rationale: 'Cognitive, attentional, relational, and mood labels plus small prose helpers.',
-    },
-    attention: {
-      label: 'Attention & Memory',
-      rationale: 'Open threads, appraisal history, behavioral notes, and skills context.',
-    },
-    tooling: {
-      label: 'Tooling & Self-Image',
-      rationale: 'Tool counts, appearance context, self-image activation, and extended-tool directory macros.',
-    },
-  };
-
-  // ── Layer type badge colors ──
-  const LAYER_BADGE: Record<string, { bg: string; text: string; label: string }> = {
-    base:     { bg: 'bg-[#8B6914]', text: 'text-white', label: 'BASE' },
-    operator: { bg: 'bg-[#4A7C59]', text: 'text-white', label: 'OPERATOR' },
-    system_language: { bg: 'bg-[#6B6F33]', text: 'text-white', label: 'LANGUAGE' },
-    runtime:  { bg: 'bg-[#4A5C8B]', text: 'text-white', label: 'RUNTIME' },
-    channel:  { bg: 'bg-[#6C5B7B]', text: 'text-white', label: 'CHANNEL' },
-    task:     { bg: 'bg-[#C44569]', text: 'text-white', label: 'TASK' },
-  };
-  const LAYER_TYPE_ORDER: Record<string, number> = {
-    base: 0,
-    operator: 1,
-    system_language: 2,
-    runtime: 3,
-    channel: 4,
-    task: 5,
-  };
+  import {
+    buildNorthStarPreview,
+    buildReorderedLayerIds,
+    buildReorderedRuntimeBlockIds,
+    buildStackEntries,
+    comparePromptLayers,
+    compareRuntimeBlocks,
+    computeDiffLines,
+    estimateTokens,
+    formatTokenCount,
+    groupRuntimeMacroHints,
+    isProtected,
+    layerBadge,
+    reorderNorthStarItems,
+    roleBadge,
+    runtimeBlockStatusLabel,
+    runtimePlacementBadge,
+    runtimePlacementLabel,
+    runtimeVisibilityLabel,
+  } from './page-helpers';
+  import type { NorthStarDraftItem, StackEntry } from './page-helpers';
 
   // ── State ──
   let layers = $state<PromptLayer[]>([]);
@@ -115,7 +76,6 @@
   let showNorthStarSection = $state(true);
   let northStarLimit = $state(3);
 
-  type NorthStarDraftItem = Omit<NorthStarItem, 'id'> & { id?: string; clientKey: string };
   let northStarItems = $state<NorthStarDraftItem[]>([]);
   let northStarServerPreview = $state('');
 
@@ -158,40 +118,14 @@
 
   // ── Derived ──
   let sortedLayers = $derived(
-    [...layers]
-      .sort((a, b) => {
-        const typeOrder = (LAYER_TYPE_ORDER[a.type] ?? Number.MAX_SAFE_INTEGER)
-          - (LAYER_TYPE_ORDER[b.type] ?? Number.MAX_SAFE_INTEGER);
-        if (typeOrder !== 0) return typeOrder;
-        return a.priority - b.priority;
-      })
+    [...layers].sort(comparePromptLayers)
   );
 
   let editCharCount = $derived(editRawContent.length);
-  let groupedRuntimeMacroHints = $derived.by(() => {
-    const groups = new Map<PromptRuntimeMacroGroup, PromptRuntimeMacroHint[]>();
-    for (const hint of runtimeMacroHints) {
-      const existing = groups.get(hint.group) ?? [];
-      existing.push(hint);
-      groups.set(hint.group, existing);
-    }
-    return (Object.entries(MACRO_GROUP_META) as Array<[PromptRuntimeMacroGroup, { label: string; rationale: string }]>)
-      .map(([group, meta]) => ({
-        group,
-        label: meta.label,
-        rationale: meta.rationale,
-        hints: groups.get(group) ?? [],
-      }))
-      .filter(section => section.hints.length > 0);
-  });
+  let groupedRuntimeMacroHints = $derived(groupRuntimeMacroHints(runtimeMacroHints));
 
   let orderedRuntimeBlocks = $derived(
-    [...runtimeBlocks].sort((a, b) => {
-      if (a.effectiveOrder !== b.effectiveOrder) {
-        return a.effectiveOrder - b.effectiveOrder;
-      }
-      return a.label.localeCompare(b.label);
-    })
+    [...runtimeBlocks].sort(compareRuntimeBlocks)
   );
 
   function syncRuntimeBlockDrafts(blocks: PromptRuntimeBlock[]) {
@@ -224,138 +158,24 @@
     return sections.join('\n\n');
   });
 
-  function buildNorthStarPreview(items: Array<Pick<NorthStarDraftItem, 'title' | 'content' | 'scope' | 'enabled'>>): string {
-    const enabledItems = items.filter(item => item.enabled);
-    if (enabledItems.length === 0) return '';
-    return [
-      '[North Star]',
-      'Keep these long-term goals in view across planning, maintenance, and independent action.',
-      '',
-      ...enabledItems.flatMap((item, index) => {
-        const block = `${index + 1}. [${item.scope}] ${item.title}\n${item.content.trim()}`;
-        return index === enabledItems.length - 1 ? [block] : [block, ''];
-      }),
-    ].join('\n');
-  }
-
   let northStarPreviewText = $derived.by(() => {
     const preview = buildNorthStarPreview(northStarItems);
     return preview || northStarServerPreview;
   });
-
-  // Build interleaved list of layers + markers
-  interface FixedStackEntry {
-    id: 'constitution' | 'north-star';
-    label: string;
-    description: string;
-    tokenCount: number;
-    preview: string;
-    status: string;
-  }
-
-  type StackEntry =
-    | { kind: 'fixed'; fixed: FixedStackEntry }
-    | { kind: 'layer'; layer: PromptLayer; idx: number }
-    | { kind: 'runtime'; block: PromptRuntimeBlock; idx: number };
+  let constitutionPreviewTokenCount = $derived(formatTokenCount(estimateTokens(constitutionPreviewText)));
+  let northStarPreviewTokenCount = $derived(formatTokenCount(estimateTokens(northStarPreviewText)));
 
   let stackEntries = $derived.by((): StackEntry[] => {
-    const entries: StackEntry[] = [];
-
-    entries.push({
-      kind: 'fixed',
-      fixed: {
-        id: 'constitution',
-        label: 'CONSTITUTION',
-        description: 'Immutable human-care law. Mutable operator policy now lives in the composition stack.',
-        tokenCount: estimateTokens(constitutionPreviewText),
-        preview: constitutionPreviewText,
-        status: `${constitutionImmutableBlocks.length} immutable`,
-      },
+    return buildStackEntries({
+      constitutionPreviewText,
+      constitutionImmutableBlockCount: constitutionImmutableBlocks.length,
+      northStarPreviewText,
+      northStarActiveCount: northStarItems.filter(item => item.enabled).length,
+      northStarLimit,
+      sortedLayers,
+      orderedRuntimeBlocks,
     });
-
-    entries.push({
-      kind: 'fixed',
-      fixed: {
-        id: 'north-star',
-        label: 'NORTH STAR',
-        description: 'Long-term goals layer. Fixed immediately after Constitution.',
-        tokenCount: estimateTokens(northStarPreviewText),
-        preview: northStarPreviewText || 'No enabled North Star goals.',
-        status: `${northStarItems.filter(item => item.enabled).length}/${northStarLimit} active`,
-      },
-    });
-
-    for (let i = 0; i < sortedLayers.length; i++) {
-      const layer = sortedLayers[i];
-      entries.push({ kind: 'layer', layer, idx: i });
-    }
-
-    for (let i = 0; i < orderedRuntimeBlocks.length; i++) {
-      entries.push({ kind: 'runtime', block: orderedRuntimeBlocks[i], idx: i });
-    }
-
-    return entries;
   });
-
-  function runtimePlacementLabel(block: PromptRuntimeBlock): string {
-    if (block.placement === 'system_prompt') return 'System Prompt';
-    if (block.placement === 'context_messages') return 'Context Messages';
-    return 'Tool Schemas';
-  }
-
-  function runtimeVisibilityLabel(block: PromptRuntimeBlock): string {
-    if (block.visibility === 'runtime_generated') return 'Runtime-generated';
-    if (block.visibility === 'provider_managed') return 'Provider-managed';
-    return 'Hidden';
-  }
-
-  function runtimeBlockStatusLabel(block: PromptRuntimeBlock): string {
-    if (!block.companionEditable) return block.contentVisible ? 'Built in' : 'Hidden';
-    return block.customContent?.trim() ? 'Companion override active' : 'Using built-in guidance';
-  }
-
-  function runtimeSchemaLabel(block: PromptRuntimeBlock): string {
-    if (block.immutable) return 'Immutable';
-    return block.required ? 'Required' : 'Optional';
-  }
-
-  function runtimeSchemaBadge(block: PromptRuntimeBlock): string {
-    if (block.immutable) return 'bg-bark-300 text-shadow-700';
-    return block.required ? 'bg-wilt-100 text-wilt-700' : 'bg-moss-100 text-moss-700';
-  }
-
-  function runtimeLayerStatusBadge(entry: PromptRuntimeLayerCoverageEntry): string {
-    if (entry.status === 'valid') return 'bg-moss-100 text-moss-700';
-    if (entry.status === 'missing') return 'bg-wilt-100 text-wilt-700';
-    return 'bg-gold-100 text-gold-800';
-  }
-
-  function runtimePlacementBadge(block: PromptRuntimeBlock): string {
-    if (block.placement === 'system_prompt') return 'bg-[#4A5C8B] text-white';
-    if (block.placement === 'context_messages') return 'bg-[#4A7C59] text-white';
-    return 'bg-[#8B7355] text-white';
-  }
-
-  function buildReorderedRuntimeBlockIds(sourceIdx: number, targetIdx: number): string[] | null {
-    if (sourceIdx === targetIdx) return null;
-    if (sourceIdx < 0 || sourceIdx >= orderedRuntimeBlocks.length) return null;
-    if (targetIdx < 0 || targetIdx >= orderedRuntimeBlocks.length) return null;
-
-    const movableBlocks = orderedRuntimeBlocks.filter(block => block.reorderable);
-    const source = orderedRuntimeBlocks[sourceIdx];
-    const target = orderedRuntimeBlocks[targetIdx];
-    if (!source?.reorderable || !target?.reorderable) return null;
-
-    const movableSourceIdx = movableBlocks.findIndex(block => block.id === source.id);
-    const movableTargetIdx = movableBlocks.findIndex(block => block.id === target.id);
-    if (movableSourceIdx < 0 || movableTargetIdx < 0) return null;
-
-    const nextOrder = movableBlocks.map(block => block.id);
-    const [movedId] = nextOrder.splice(movableSourceIdx, 1);
-    if (!movedId) return null;
-    nextOrder.splice(movableTargetIdx, 0, movedId);
-    return nextOrder;
-  }
 
   async function reorderRuntimeBlocks(runtimeBlockIds: string[]) {
     await apiPost<PromptUpdateResult>('/api/admin/prompts/reorder', { runtimeBlockIds });
@@ -410,7 +230,7 @@
       if (orderedRuntimeBlocks[swapIdx]?.reorderable) break;
     }
 
-    const nextOrder = buildReorderedRuntimeBlockIds(idx, swapIdx);
+    const nextOrder = buildReorderedRuntimeBlockIds(orderedRuntimeBlocks, idx, swapIdx);
     if (!nextOrder) return;
     try {
       await reorderRuntimeBlocks(nextOrder);
@@ -422,19 +242,6 @@
   }
 
   // ── Helpers ──
-  function isProtected(layer: PromptLayer): boolean {
-    return false;
-  }
-
-  function estimateTokens(text: string): number {
-    return Math.ceil(text.length / 4);
-  }
-
-  function formatTokenCount(n: number): string {
-    if (n >= 1000) return `${(n / 1000).toFixed(1)}k`;
-    return String(n);
-  }
-
   function showToast(msg: string) {
     toastMessage = msg;
     if (toastTimeout) clearTimeout(toastTimeout);
@@ -447,24 +254,6 @@
     }).catch(() => {
       showToast('Failed to copy');
     });
-  }
-
-  function layerBadge(type: string) {
-    return LAYER_BADGE[type] ?? { bg: 'bg-bark-400', text: 'text-white', label: type.toUpperCase() };
-  }
-
-  function roleBadge(role: string | undefined): { label: string; cls: string } | null {
-    if (!role) return null;
-    const map: Record<string, string> = {
-      system: 'bg-[#4A5C8B] text-white',
-      user: 'bg-[#4A7C59] text-white',
-      assistant: 'bg-[#6C5B7B] text-white',
-    };
-    return { label: role, cls: map[role] ?? 'bg-bark-400 text-white' };
-  }
-
-  function isConstitutionOwnedLayer(layer: PromptLayer): boolean {
-    return false;
   }
 
   function applyConstitutionSnapshot(snapshot: ConstitutionSnapshotData) {
@@ -556,13 +345,9 @@
   }
 
   function moveNorthStarItem(index: number, direction: 'up' | 'down') {
-    const target = direction === 'up' ? index - 1 : index + 1;
-    if (target < 0 || target >= northStarItems.length) return;
-    const next = [...northStarItems];
-    const [item] = next.splice(index, 1);
-    if (!item) return;
-    next.splice(target, 0, item);
-    northStarItems = next.map((entry, idx) => ({ ...entry, priority: idx }));
+    const nextItems = reorderNorthStarItems(northStarItems, index, direction);
+    if (nextItems === northStarItems) return;
+    northStarItems = nextItems;
   }
 
   async function saveNorthStar() {
@@ -595,25 +380,6 @@
     } finally {
       northStarSaving = false;
     }
-  }
-
-  // ── Diff computation ──
-  function computeDiffLines(oldText: string, newText: string): Array<{ kind: 'same' | 'remove' | 'add'; line: string }> {
-    const oldLines = oldText.split('\n');
-    const newLines = newText.split('\n');
-    const max = Math.max(oldLines.length, newLines.length);
-    const rows: Array<{ kind: 'same' | 'remove' | 'add'; line: string }> = [];
-    for (let i = 0; i < max; i++) {
-      const oldLine = oldLines[i];
-      const newLine = newLines[i];
-      if (oldLine === newLine) {
-        rows.push({ kind: 'same', line: oldLine ?? '' });
-      } else {
-        if (oldLine !== undefined) rows.push({ kind: 'remove', line: oldLine });
-        if (newLine !== undefined) rows.push({ kind: 'add', line: newLine });
-      }
-    }
-    return rows;
   }
 
   // ── Lifecycle ──
@@ -772,18 +538,6 @@
     }
   }
 
-  function buildReorderedLayerIds(sourceIdx: number, targetIdx: number): string[] | null {
-    if (sourceIdx === targetIdx) return null;
-    if (sourceIdx < 0 || sourceIdx >= sortedLayers.length) return null;
-    if (targetIdx < 0 || targetIdx >= sortedLayers.length) return null;
-
-    const nextOrder = sortedLayers.map(layer => layer.id);
-    const [movedLayerId] = nextOrder.splice(sourceIdx, 1);
-    if (!movedLayerId) return null;
-    nextOrder.splice(targetIdx, 0, movedLayerId);
-    return nextOrder;
-  }
-
   async function reorderLayers(layerIds: string[]) {
     await apiPost<PromptUpdateResult>('/api/admin/prompts/reorder', { layerIds });
   }
@@ -817,7 +571,7 @@
       return;
     }
 
-    const nextOrder = buildReorderedLayerIds(dragSourceIdx, targetIdx);
+    const nextOrder = buildReorderedLayerIds(sortedLayers, dragSourceIdx, targetIdx);
     if (!nextOrder) {
       dragSourceIdx = null;
       return;
@@ -845,7 +599,7 @@
     if (idx < 0) return;
     const swapIdx = direction === 'up' ? idx - 1 : idx + 1;
     if (swapIdx < 0 || swapIdx >= sortedLayers.length) return;
-    const nextOrder = buildReorderedLayerIds(idx, swapIdx);
+    const nextOrder = buildReorderedLayerIds(sortedLayers, idx, swapIdx);
     if (!nextOrder) return;
     try {
       await reorderLayers(nextOrder);
@@ -954,227 +708,34 @@
       {/each}
     </div>
   {:else}
-    <!-- ─── Constitution Builder ─── -->
-    <div id="constitution-builder" class="card-garden overflow-hidden">
-      <button
-        onclick={() => showConstitutionSection = !showConstitutionSection}
-        class="w-full px-5 py-3.5 flex items-center justify-between text-left hover:bg-bark-100 transition-colors"
-      >
-        <div>
-          <h2 class="text-base font-serif font-semibold text-shadow-800">Constitution Builder</h2>
-          <p class="text-sm text-shadow-600 mt-0.5">Immutable amendments are locked. Constitution content is fixed here; editable runtime/operator layers live in the composition stack below.</p>
-        </div>
-        <svg class="w-4 h-4 text-shadow-600 transition-transform shrink-0 ml-4 {showConstitutionSection ? 'rotate-180' : ''}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <path d="M19 9l-7 7-7-7" />
-        </svg>
-      </button>
+    <ConstitutionBuilderPanel
+      {showConstitutionSection}
+      {constitutionLoading}
+      {constitutionError}
+      {constitutionImmutableBlocks}
+      {constitutionCompanionLayer}
+      {constitutionPreviewText}
+      {constitutionPreviewTokenCount}
+      onToggleConstitutionSection={() => showConstitutionSection = !showConstitutionSection}
+    />
 
-      {#if showConstitutionSection}
-        <div class="border-t border-bark-300 p-5 space-y-4">
-          {#if constitutionLoading}
-            <div class="space-y-2">
-              {#each Array(3) as _}
-                <div class="h-16 rounded-lg bg-bark-200 animate-pulse"></div>
-              {/each}
-            </div>
-          {:else}
-            {#if constitutionError}
-              <div class="px-3 py-2 rounded-lg border border-wilt-400 bg-wilt-50 text-sm text-wilt-700">
-                {constitutionError}
-              </div>
-            {/if}
-
-            <div class="space-y-3">
-              <h3 class="text-sm font-semibold text-shadow-700 uppercase tracking-wider">Immutable Amendments</h3>
-              {#each constitutionImmutableBlocks as block (block.id)}
-                <div class="rounded-lg border border-bark-300 bg-bark-100 p-3">
-                  <div class="flex items-center justify-between mb-1.5">
-                    <span class="text-sm font-medium text-shadow-800">{block.title}</span>
-                    <span class="px-1.5 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider bg-bark-300 text-shadow-700">Read only</span>
-                  </div>
-                  <p class="text-sm text-shadow-700 leading-relaxed whitespace-pre-wrap">{block.content}</p>
-                </div>
-              {/each}
-
-              {#if constitutionCompanionLayer}
-                <div class="rounded-lg border border-bark-300 bg-bark-100 p-3">
-                  <div class="flex items-center justify-between mb-1.5">
-                    <span class="text-sm font-medium text-shadow-800">{constitutionCompanionLayer.title}</span>
-                    <span class="px-1.5 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider bg-bark-300 text-shadow-700">Derived</span>
-                  </div>
-                  <pre class="text-sm font-mono text-shadow-700 whitespace-pre-wrap bg-white/60 p-2 rounded border border-bark-200 max-h-48 overflow-y-auto">{constitutionCompanionLayer.content}</pre>
-                </div>
-              {/if}
-            </div>
-
-            <div class="rounded-lg border border-bark-300 bg-bark-100 p-3">
-              <div class="flex items-center justify-between mb-2">
-                <h3 class="text-sm font-semibold text-shadow-700 uppercase tracking-wider">Preview Output</h3>
-                <span class="text-sm text-shadow-600">~{formatTokenCount(estimateTokens(constitutionPreviewText))} tokens</span>
-              </div>
-              <pre class="text-sm font-mono text-shadow-800 whitespace-pre-wrap bg-white/60 p-3 rounded border border-bark-200 max-h-64 overflow-y-auto leading-relaxed">{constitutionPreviewText}</pre>
-            </div>
-
-            <div class="rounded-lg border border-bark-300 bg-bark-50 p-3 text-sm text-shadow-700 leading-relaxed">
-              Editable policy and runtime prompt layers belong in the composition stack, not inside Constitution Builder. This section is read-only by design except for direct file edits to the immutable source.
-            </div>
-          {/if}
-        </div>
-      {/if}
-    </div>
-
-    <!-- ─── North Star ─── -->
-    <div id="north-star-editor" class="card-garden overflow-hidden">
-      <button
-        onclick={() => showNorthStarSection = !showNorthStarSection}
-        class="w-full px-5 py-3.5 flex items-center justify-between text-left hover:bg-bark-100 transition-colors"
-      >
-        <div>
-          <h2 class="text-base font-serif font-semibold text-shadow-800">North Star</h2>
-          <p class="text-sm text-shadow-600 mt-0.5">Three long-term goals max. This prompt block sits immediately after constitution.</p>
-        </div>
-        <svg class="w-4 h-4 text-shadow-600 transition-transform shrink-0 ml-4 {showNorthStarSection ? 'rotate-180' : ''}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <path d="M19 9l-7 7-7-7" />
-        </svg>
-      </button>
-
-      {#if showNorthStarSection}
-        <div class="border-t border-bark-300 p-5 space-y-4">
-          {#if northStarLoading}
-            <div class="space-y-2">
-              {#each Array(2) as _}
-                <div class="h-16 rounded-lg bg-bark-200 animate-pulse"></div>
-              {/each}
-            </div>
-          {:else}
-            {#if northStarError}
-              <div class="px-3 py-2 rounded-lg border border-wilt-400 bg-wilt-50 text-sm text-wilt-700">
-                {northStarError}
-              </div>
-            {/if}
-
-            <div class="flex items-center justify-between">
-              <div class="text-sm text-shadow-600">
-                {northStarItems.length} / {northStarLimit} goals
-              </div>
-              <button
-                onclick={addNorthStarItem}
-                disabled={northStarItems.length >= northStarLimit}
-                class="px-3 py-1.5 rounded-lg border border-bark-300 text-shadow-700 text-sm hover:bg-bark-100 disabled:opacity-50 transition-colors"
-              >
-                Add Goal
-              </button>
-            </div>
-
-            <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
-              <div class="space-y-3">
-                {#if northStarItems.length === 0}
-                  <div class="rounded-lg border border-dashed border-bark-300 bg-bark-50 p-4 text-sm text-shadow-600">
-                    No North Star goals yet.
-                  </div>
-                {:else}
-                  {#each northStarItems as item, idx (item.clientKey)}
-                    <div class="rounded-lg border border-bark-300 bg-white p-3 space-y-3">
-                      <div class="flex items-center gap-2">
-                        <span class="px-1.5 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider bg-gold-200 text-shadow-800">
-                          #{idx + 1}
-                        </span>
-                        <span class="text-sm text-shadow-600">{item.scope === 'shared' ? 'Shared' : 'Companion'}</span>
-                        <div class="ml-auto flex items-center gap-2">
-                          <button
-                            onclick={() => moveNorthStarItem(idx, 'up')}
-                            disabled={idx === 0}
-                            class="px-2 py-0.5 rounded border border-bark-300 text-sm text-shadow-700 hover:bg-bark-100 disabled:opacity-40"
-                          >
-                            Up
-                          </button>
-                          <button
-                            onclick={() => moveNorthStarItem(idx, 'down')}
-                            disabled={idx === northStarItems.length - 1}
-                            class="px-2 py-0.5 rounded border border-bark-300 text-sm text-shadow-700 hover:bg-bark-100 disabled:opacity-40"
-                          >
-                            Down
-                          </button>
-                          <button
-                            onclick={() => removeNorthStarItem(item.clientKey)}
-                            class="px-2 py-0.5 rounded border border-wilt-300 text-sm text-wilt-700 hover:bg-wilt-50"
-                          >
-                            Delete
-                          </button>
-                        </div>
-                      </div>
-
-                      <div class="grid grid-cols-1 md:grid-cols-[1fr_11rem] gap-3">
-                        <label class="block">
-                          <span class="block text-sm font-medium text-shadow-700 mb-1">Title</span>
-                          <input
-                            type="text"
-                            value={item.title}
-                            oninput={(e) => updateNorthStarItem(item.clientKey, 'title', (e.target as HTMLInputElement).value)}
-                            class="w-full px-3 py-1.5 rounded-lg border border-bark-300 bg-white text-shadow-800 text-sm focus:outline-none focus:ring-2 focus:ring-gold-300 focus:border-gold-400"
-                          />
-                        </label>
-                        <label class="block">
-                          <span class="block text-sm font-medium text-shadow-700 mb-1">Scope</span>
-                          <select
-                            value={item.scope}
-                            onchange={(e) => updateNorthStarItem(item.clientKey, 'scope', (e.target as HTMLSelectElement).value as NorthStarScope)}
-                            class="w-full px-3 py-1.5 rounded-lg border border-bark-300 bg-white text-shadow-800 text-sm focus:outline-none focus:ring-2 focus:ring-gold-300 focus:border-gold-400"
-                          >
-                            <option value="shared">Shared</option>
-                            <option value="companion">Companion</option>
-                          </select>
-                        </label>
-                      </div>
-
-                      <label class="block">
-                        <span class="block text-sm font-medium text-shadow-700 mb-1">Guidance</span>
-                        <textarea
-                          rows={4}
-                          value={item.content}
-                          oninput={(e) => updateNorthStarItem(item.clientKey, 'content', (e.target as HTMLTextAreaElement).value)}
-                          class="w-full px-3 py-2 rounded-lg border border-bark-300 bg-bark-50 text-shadow-800 text-sm font-mono resize-vertical leading-relaxed focus:outline-none focus:ring-2 focus:ring-gold-300 focus:border-gold-400"
-                        ></textarea>
-                      </label>
-
-                      <label class="inline-flex items-center gap-1.5 text-sm text-shadow-700">
-                        <input
-                          type="checkbox"
-                          checked={item.enabled}
-                          onchange={(e) => updateNorthStarItem(item.clientKey, 'enabled', (e.target as HTMLInputElement).checked)}
-                        />
-                        enabled in prompt
-                      </label>
-                    </div>
-                  {/each}
-                {/if}
-              </div>
-
-              <div class="rounded-lg border border-bark-300 bg-bark-100 p-3">
-                <div class="flex items-center justify-between mb-2">
-                  <h3 class="text-sm font-semibold text-shadow-700 uppercase tracking-wider">Preview Output</h3>
-                  <span class="text-sm text-shadow-600">~{formatTokenCount(estimateTokens(northStarPreviewText))} tokens</span>
-                </div>
-                <pre class="text-sm font-mono text-shadow-800 whitespace-pre-wrap bg-white/60 p-3 rounded border border-bark-200 max-h-80 overflow-y-auto leading-relaxed">{northStarPreviewText || 'No enabled North Star goals.'}</pre>
-              </div>
-            </div>
-
-            <div class="flex items-center gap-3">
-              <button
-                onclick={saveNorthStar}
-                disabled={northStarSaving}
-                class="px-4 py-1.5 rounded-lg bg-gold-600 text-white text-sm font-medium hover:bg-gold-700 disabled:opacity-50 transition-colors"
-              >
-                {northStarSaving ? 'Saving...' : 'Save North Star'}
-              </button>
-              {#if northStarSaveMessage}
-                <span class="text-sm text-moss-700">{northStarSaveMessage}</span>
-              {/if}
-            </div>
-          {/if}
-        </div>
-      {/if}
-    </div>
+    <NorthStarEditorPanel
+      {showNorthStarSection}
+      {northStarLoading}
+      {northStarError}
+      {northStarItems}
+      {northStarLimit}
+      {northStarPreviewText}
+      {northStarPreviewTokenCount}
+      {northStarSaving}
+      {northStarSaveMessage}
+      onToggleNorthStarSection={() => showNorthStarSection = !showNorthStarSection}
+      {addNorthStarItem}
+      {moveNorthStarItem}
+      {removeNorthStarItem}
+      {updateNorthStarItem}
+      {saveNorthStar}
+    />
 
     <!-- ─── Prompt Composition Stack ─── -->
     <div>

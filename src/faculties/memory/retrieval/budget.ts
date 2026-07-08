@@ -1,7 +1,11 @@
 import { countTokens } from '../../../primitives/llm/tokens.js';
 import {
   MEMORY_RETRIEVAL_MIN_ITEMS,
+  resolveMemoryRetrievalBudget,
+  type ContextBudgetConfigLike,
+  type ContextBudgetTurnCharacteristics,
 } from '../../../shared/context-budget.js';
+import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
 import type { PurrMemory } from '../types.js';
 import { SCORE_GUARANTEE_MIN_K } from './scoring.js';
 import type {
@@ -24,6 +28,28 @@ export function resolveGuaranteedSelectionFloor(
     return Math.min(rankedLength, Math.max(MEMORY_RETRIEVAL_MIN_ITEMS, SCORE_GUARANTEE_MIN_K));
   }
   return Math.min(rankedLength, MEMORY_RETRIEVAL_MIN_ITEMS);
+}
+
+export function resolveMemoryRetrieverBudget(
+  runtimeConfig: SubstrateConfig | null,
+  fallbackBudgetConfig: ContextBudgetConfigLike | null,
+  turnBudgetCharacteristics?: ContextBudgetTurnCharacteristics,
+): ReturnType<typeof resolveMemoryRetrievalBudget> {
+  if (runtimeConfig) {
+    return resolveMemoryRetrievalBudget(runtimeConfig, {
+      ...(turnBudgetCharacteristics ? { turn: turnBudgetCharacteristics } : {}),
+    });
+  }
+
+  return resolveMemoryRetrievalBudget(
+    fallbackBudgetConfig ?? {
+      defaultContextWindow: 128_000,
+      modelRoster: {},
+    },
+    {
+      ...(turnBudgetCharacteristics ? { turn: turnBudgetCharacteristics } : {}),
+    },
+  );
 }
 
 export function selectWithinRelevanceAndTokenBudget(

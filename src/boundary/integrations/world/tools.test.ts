@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
+import type { CompanionPresenceTurnPort } from '../../../core/agent/companion-presence-runtime.js';
+import type { SituatedPlaceRef } from '../../../core/agent/substrate-agent/runtime-context-sections/situated-presence.js';
 import type { PlacesRegistryConfig } from '../../../shared/contracts/places-registry.js';
+import { runWithRequestContext } from '../../../primitives/llm/request-context.js';
 import type {
   HomeAssistantCallServiceResult,
   HomeAssistantGetStatesResult,
@@ -10,7 +13,10 @@ import { createWorldTool } from './tools.js';
 
 const REGISTRY: PlacesRegistryConfig = {
   schemaVersion: 1,
-  sites: [{ siteId: 'site.home', displayName: 'Home', kind: 'physical' }],
+  sites: [
+    { siteId: 'site.home', displayName: 'Home', kind: 'physical' },
+    { siteId: 'site.mud', displayName: 'The MUD', kind: 'virtual' },
+  ],
   places: [
     {
       placeId: 'place.living-room',
@@ -58,6 +64,29 @@ const REGISTRY: PlacesRegistryConfig = {
           entityId: 'light.kitchen',
         },
       ],
+    },
+    {
+      placeId: 'place.mud-tavern',
+      siteId: 'site.mud',
+      displayName: 'The Rusty Tankard',
+      kind: 'virtual',
+      description: 'A low-beamed virtual tavern; a fire crackles in the hearth.',
+      affordances: [
+        {
+          affordanceId: 'tv_dartboard',
+          role: 'effector',
+          kind: 'virtual_object',
+          backend: 'vr',
+          displayName: 'Dartboard',
+        },
+      ],
+    },
+    {
+      placeId: 'place.mud-cellar',
+      siteId: 'site.mud',
+      displayName: 'The Cellar',
+      kind: 'virtual',
+      affordances: [],
     },
   ],
 };
@@ -184,7 +213,7 @@ describe('world tool', () => {
 
     expect(payload.scope).toBe('site');
     expect(payload.places.map((p: { placeId: string }) => p.placeId))
-      .toEqual(['place.living-room', 'place.kitchen']);
+      .toEqual(['place.living-room', 'place.kitchen', 'place.mud-tavern', 'place.mud-cellar']);
   });
 
   it('controls an effector by calling the derived HA domain/service through the gateway', async () => {
@@ -270,5 +299,243 @@ describe('world tool', () => {
     const result = await tool.execute('call-bad', { action: 'teleport' } as never);
 
     expect(resultText(result)).toContain('action must be one of');
+  });
+});
+
+// ── `move` — deliberate virtual navigation (vinz.26, contract s10wm) ──
+
+/** Recording fake of the presence turn port; the ONLY presence seam move may use. */
+function makeFakePresencePort(coPresent: Array<{ companionId: string; displayName: string }> = []): {
+  port: CompanionPresenceTurnPort;
+  moves: SituatedPlaceRef[];
+} {
+  const moves: SituatedPlaceRef[] = [];
+  const port: CompanionPresenceTurnPort = {
+    observeTurnPlace: vi.fn(async () => undefined),
+    refreshOwnPresence: vi.fn(async () => undefined),
+    recordDeliberateMove: vi.fn(async (place: SituatedPlaceRef) => {
+      moves.push(place);
+    }),
+    getCoPresent: vi.fn(() => coPresent),
+  };
+  return { port, moves };
+}
+
+function makeNoteSink(): {
+  sink: { appendContextSystemNote: ReturnType<typeof vi.fn> };
+  notes: Array<{ channelId: string; note: string; source: string }>;
+} {
+  const notes: Array<{ channelId: string; note: string; source: string }> = [];
+  const appendContextSystemNote = vi.fn((channelId: string, note: string, source: string) => {
+    notes.push({ channelId, note, source });
+  });
+  return { sink: { appendContextSystemNote }, notes };
+}
+
+const TAVERN_REF: SituatedPlaceRef = {
+  siteId: 'site.mud',
+  placeId: 'place.mud-tavern',
+  kind: 'virtual',
+};
+
+describe('world tool — move', () => {
+  it('fails closed on an unknown destination (no port write, no local state)', async () => {
+    const { port } = makeFakePresencePort();
+    const applyVirtualMove = vi.fn();
+    const tool = createWorldTool(createMockOps(), {
+      placesRegistry: REGISTRY,
+      companionPresence: port,
+      applyVirtualMove,
+    });
+
+    const result = await tool.execute('call-move', { action: 'move', placeId: 'place.nowhere' });
+
+    expect(resultText(result)).toContain('placeId "place.nowhere" is not in places.json');
+    expect(result.details?.isError).toBe(true);
+    expect(port.recordDeliberateMove).not.toHaveBeenCalled();
+    expect(applyVirtualMove).not.toHaveBeenCalled();
+  });
+
+  it('fails closed on a physical destination with an explain-why error', async () => {
+    const { port } = makeFakePresencePort();
+    const applyVirtualMove = vi.fn();
+    const tool = createWorldTool(createMockOps(), {
+      placesRegistry: REGISTRY,
+      companionPresence: port,
+      applyVirtualMove,
+    });
+
+    const result = await tool.execute('call-move', { action: 'move', placeId: 'place.kitchen' });
+
+    const text = resultText(result);
+    expect(result.details?.isError).toBe(true);
+    expect(text).toContain('it is a physical place');
+    expect(text).toContain('emanation-driven');
+    expect(text).toContain('move applies to virtual places only');
+    expect(port.recordDeliberateMove).not.toHaveBeenCalled();
+    expect(applyVirtualMove).not.toHaveBeenCalled();
+  });
+
+  it('requires a placeId', async () => {
+    const tool = createWorldTool(createMockOps(), {
+      placesRegistry: REGISTRY,
+      applyVirtualMove: vi.fn(),
+    });
+    const result = await tool.execute('call-move', { action: 'move' });
+    expect(resultText(result)).toContain('action=move requires placeId');
+    expect(result.details?.isError).toBe(true);
+  });
+
+  it('moves to a virtual place through the presence port ONLY and applies the local overlay', async () => {
+    const { port, moves } = makeFakePresencePort([
+      { companionId: 'companion-b', displayName: 'companion-b' },
+    ]);
+    const applyVirtualMove = vi.fn();
+    const { sink, notes } = makeNoteSink();
+    const tool = createWorldTool(createMockOps(), {
+      placesRegistry: REGISTRY,
+      companionPresence: port,
+      applyVirtualMove,
+      roomEntryNoteSink: sink,
+    });
+
+    const result = await runWithRequestContext(
+      { channelId: 'discord:room-1' },
+      async () => tool.execute('call-move', { action: 'move', placeId: 'place.mud-tavern' }),
+    );
+    const payload = JSON.parse(resultText(result));
+
+    // Presence written through the turn port, virtual kind — the single seam.
+    expect(port.recordDeliberateMove).toHaveBeenCalledTimes(1);
+    expect(moves).toEqual([TAVERN_REF]);
+    // Local situated overlay applied AFTER the shared write succeeded.
+    expect(applyVirtualMove).toHaveBeenCalledWith('place.mud-tavern');
+
+    // MUD-style result: destination description + who's here + exits.
+    expect(payload.action).toBe('move');
+    expect(payload.placeId).toBe('place.mud-tavern');
+    expect(payload.kind).toBe('virtual');
+    expect(payload.description).toContain('low-beamed virtual tavern');
+    expect(payload.alsoHere).toEqual(['companion-b']);
+    expect(payload.exits).toEqual([
+      {
+        placeId: 'place.mud-cellar',
+        displayName: 'The Cellar',
+        kind: 'virtual',
+        movable: true,
+      },
+    ]);
+    expect(payload.presenceWrite).toBe('shared');
+    expect(payload.summary).toContain('You are now in The Rusty Tankard.');
+    expect(payload.summary).toContain('Also here: companion-b.');
+    expect(payload.summary).toContain('The Cellar (place.mud-cellar)');
+
+    // Room-entry note fired into the invoking session with correct occupants.
+    expect(payload.roomEntryNote).toBe('delivered');
+    expect(notes).toHaveLength(1);
+    expect(notes[0].channelId).toBe('discord:room-1');
+    expect(notes[0].source).toBe('room_entry');
+    expect(notes[0].note).toContain('[Room entry]');
+    expect(notes[0].note).toContain('You have entered room place.mud-tavern — The Rusty Tankard (virtual).');
+    expect(notes[0].note).toContain('Also present: companion-b (companion).');
+    expect(notes[0].note).toContain('You can act on Dartboard here.');
+  });
+
+  it('exits list spans the destination SITE (v1 adjacency = same-site siblings)', async () => {
+    // Move within the physical/virtual mixed registry: a virtual place whose
+    // site has no siblings reports no exits rather than inventing adjacency.
+    const soloRegistry: PlacesRegistryConfig = {
+      schemaVersion: 1,
+      sites: [{ siteId: 'site.solo', displayName: 'Solo', kind: 'virtual' }],
+      places: [{
+        placeId: 'place.solo-room',
+        siteId: 'site.solo',
+        displayName: 'Solo Room',
+        kind: 'virtual',
+        affordances: [],
+      }],
+    };
+    const tool = createWorldTool(createMockOps(), {
+      placesRegistry: soloRegistry,
+      applyVirtualMove: vi.fn(),
+    });
+
+    const result = await tool.execute('call-move', { action: 'move', placeId: 'place.solo-room' });
+    const payload = JSON.parse(resultText(result));
+
+    expect(payload.exits).toEqual([]);
+    expect(payload.summary).toContain('There are no other places at this site.');
+  });
+
+  it('flag-off (no port): move is local-only — overlay updates, no shared write, honest note', async () => {
+    const applyVirtualMove = vi.fn();
+    const { sink, notes } = makeNoteSink();
+    const tool = createWorldTool(createMockOps(), {
+      placesRegistry: REGISTRY,
+      companionPresence: null,
+      applyVirtualMove,
+      roomEntryNoteSink: sink,
+    });
+
+    const result = await runWithRequestContext(
+      { channelId: 'discord:room-1' },
+      async () => tool.execute('call-move', { action: 'move', placeId: 'place.mud-tavern' }),
+    );
+    const payload = JSON.parse(resultText(result));
+
+    expect(result.details?.isError).toBeUndefined();
+    expect(applyVirtualMove).toHaveBeenCalledWith('place.mud-tavern');
+    expect(payload.presenceWrite).toBe('local_only');
+    expect(payload.alsoHere).toEqual([]);
+    expect(notes[0].note).toContain('No one else is here.');
+  });
+
+  it('aborts the move BEFORE local state when the shared presence write fails', async () => {
+    const applyVirtualMove = vi.fn();
+    const { sink, notes } = makeNoteSink();
+    const port: CompanionPresenceTurnPort = {
+      observeTurnPlace: vi.fn(async () => undefined),
+      refreshOwnPresence: vi.fn(async () => undefined),
+      recordDeliberateMove: vi.fn(async () => {
+        throw new Error('shared schema unavailable');
+      }),
+      getCoPresent: vi.fn(() => []),
+    };
+    const tool = createWorldTool(createMockOps(), {
+      placesRegistry: REGISTRY,
+      companionPresence: port,
+      applyVirtualMove,
+      roomEntryNoteSink: sink,
+    });
+
+    const result = await tool.execute('call-move', { action: 'move', placeId: 'place.mud-tavern' });
+
+    expect(result.details?.isError).toBe(true);
+    expect(resultText(result)).toContain('shared schema unavailable');
+    expect(applyVirtualMove).not.toHaveBeenCalled();
+    expect(notes).toHaveLength(0);
+  });
+
+  it('fails closed when the local situated seam is unwired (no silent partial move)', async () => {
+    const tool = createWorldTool(createMockOps(), { placesRegistry: REGISTRY });
+    const result = await tool.execute('call-move', { action: 'move', placeId: 'place.mud-tavern' });
+    expect(result.details?.isError).toBe(true);
+    expect(resultText(result)).toContain('move is not wired');
+  });
+
+  it('reports the note as skipped when no invoking channel resolves (no silent pretend)', async () => {
+    const { sink, notes } = makeNoteSink();
+    const tool = createWorldTool(createMockOps(), {
+      placesRegistry: REGISTRY,
+      applyVirtualMove: vi.fn(),
+      roomEntryNoteSink: sink,
+    });
+
+    // No ambient request context: the note cannot target a session.
+    const result = await tool.execute('call-move', { action: 'move', placeId: 'place.mud-tavern' });
+    const payload = JSON.parse(resultText(result));
+
+    expect(payload.roomEntryNote).toBe('skipped_no_channel');
+    expect(notes).toHaveLength(0);
   });
 });

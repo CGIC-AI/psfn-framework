@@ -320,6 +320,25 @@ export class SubstrateAgent {
   // persistence is bead .7's concern.
   private readonly situatedEmanationTracker = new SituatedEmanationTracker();
 
+  /**
+   * Deliberate virtual navigation (vinz.26): the world tool's `move` action
+   * applies its LOCAL situated effect through this seam. The virtual overlay
+   * never touches the physical emanation; a later place-bearing turn
+   * supersedes it (see SituatedEmanationTracker.moveToVirtualPlace).
+   */
+  applyDeliberateVirtualMove(placeId: string): void {
+    this.situatedEmanationTracker.moveToVirtualPlace(placeId);
+  }
+
+  /**
+   * The companion's current situated place, as the situated block foregrounds
+   * it on a placeless turn (deliberate virtual move, else active emanation).
+   * Serves the world tool's deictic defaults (perceive/list without placeId).
+   */
+  resolveCurrentSituatedPlaceId(): string | undefined {
+    return this.situatedEmanationTracker.resolvePlaceId();
+  }
+
   // Prompt composition — null falls back to static systemPrompt
   promptComposer: PromptComposer | null = null;
 
@@ -944,6 +963,7 @@ export class SubstrateAgent {
       memoryExtractor: this.memoryExtractor,
       wikiRetrieval: this.wikiRetrieval,
       placesRegistry: this.placesRegistryConfig,
+      resolveSituatedFallbackPlaceId: () => this.situatedEmanationTracker.resolvePlaceId(),
       skillsRuntime: this.skillsRuntime,
       evaluateReflectionNudge: (toolSummary) => this.reflectionNudge.evaluate(toolSummary),
       emotionSelfModelRuntime: this.emotionSelfModelRuntime,
@@ -1292,10 +1312,17 @@ export class SubstrateAgent {
   ): string {
     const activeToolCounts = this.toolRuntimeFacade.resolveActiveToolCounts();
     // Co-presence (W5a): resolved against the SAME place resolution the
-    // situated block performs; null companionPresence (flag-off) yields no
-    // coPresent input and byte-identical rendering.
+    // situated block performs — turn place first, then the emanation tracker
+    // (physical emanation or deliberate virtual move, vinz.26) — so "Also
+    // here:" agrees with the rendered "Here:" on placeless turns too; null
+    // companionPresence (flag-off) yields no coPresent input and
+    // byte-identical rendering.
     const situatedPlace = this.companionPresence
-      ? resolveSituatedPlaceRef(message, this.placesRegistryConfig)
+      ? resolveSituatedPlaceRef(
+        message,
+        this.placesRegistryConfig,
+        this.situatedEmanationTracker.resolvePlaceId(),
+      )
       : undefined;
     const coPresent = situatedPlace
       ? this.companionPresence?.getCoPresent(situatedPlace)

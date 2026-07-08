@@ -528,15 +528,23 @@ async function main(): Promise<void> {
   log.info('Beads issue-management tools enabled');
 
   // World tool — perceive/list/control physical & virtual affordances via the
-  // places registry and the privileged Home Assistant gateway method (bead .8).
+  // places registry and the privileged Home Assistant gateway method (bead .8),
+  // plus deliberate virtual navigation (`move`, vinz.26 / contract s10wm).
   // Affordance→entity resolution is agent-side against places.json (defence in depth).
-  // TODO(vinz.10): capability/trust gating + staged-off control + a live
-  // situated-place resolver from the emanation/self-model runtime.
+  // `move` writes presence through the CompanionPresenceTurnPort seam only
+  // (null flag-off ⇒ local-only move), applies its local situated effect
+  // through the emanation tracker's virtual overlay, and fires the room-entry
+  // system note through the session context-note lane.
+  // TODO(vinz.10): capability/trust gating + staged-off control.
   registerWorldTools(agentLoop, new GatewayWorldOps(gatewayOps), {
     placesRegistry: placesRegistryConfig,
+    resolveSituatedPlaceId: () => agentLoop.resolveCurrentSituatedPlaceId(),
+    companionPresence: companionPresenceRuntime,
+    applyVirtualMove: (placeId) => agentLoop.applyDeliberateVirtualMove(placeId),
+    roomEntryNoteSink: sessionManager,
     gatewayMode: true,
   });
-  log.info('World perceive/list/control tool enabled');
+  log.info('World perceive/list/control/move tool enabled');
 
   // Journal tools — durable markdown notes in the personal workspace.
   registerMarkdownJournalTools(agentLoop, pathSnapshot.workspaceRoot);

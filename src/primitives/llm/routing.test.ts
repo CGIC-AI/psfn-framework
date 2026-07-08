@@ -11,6 +11,7 @@ interface RegistryModelInput {
   source?: ModelRegistryEntry['identity']['source'];
   maxOutputTokens: number;
   contextWindow: number;
+  supportsVision?: boolean;
   purposes: Array<{ purpose: CanonicalModelPurpose; primary: boolean }>;
   cost?: { inputPer1MUsd?: number; outputPer1MUsd?: number };
 }
@@ -30,6 +31,7 @@ function makeRegistry(models: RegistryModelInput[]): CanonicalModelRegistry {
       capabilities: {
         maxOutputTokens: model.maxOutputTokens,
         contextWindow: model.contextWindow,
+        ...(model.supportsVision !== undefined ? { supportsVision: model.supportsVision } : {}),
       },
       tuning: {
         maxOutputTokens: model.maxOutputTokens,
@@ -54,8 +56,20 @@ function makeBaseRegistry(): CanonicalModelRegistry {
         { purpose: 'summary', primary: true },
         { purpose: 'reasoning', primary: true },
         { purpose: 'longContext', primary: true },
-        { purpose: 'vision', primary: true },
         { purpose: 'moa', primary: true },
+      ],
+      cost: { inputPer1MUsd: 1, outputPer1MUsd: 2 },
+    },
+    {
+      id: 'vision-primary',
+      rank: 25,
+      provider: 'openrouter',
+      model: 'vision/model',
+      maxOutputTokens: 4096,
+      contextWindow: 1_000_000,
+      supportsVision: true,
+      purposes: [
+        { purpose: 'vision', primary: true },
       ],
       cost: { inputPer1MUsd: 1, outputPer1MUsd: 2 },
     },
@@ -318,6 +332,51 @@ describe('resolveRoutingCandidates(background)', () => {
       model: 'z-ai/glm-5.2',
       requestApiKeyEnv: 'CUSTOM_OPENROUTER_KEY',
     }));
+  });
+});
+
+describe('resolveRoutingCandidates(vision)', () => {
+  it('uses only registry candidates that explicitly support vision input', () => {
+    const candidates = resolveRoutingCandidates(makeConfig({
+      modelRegistry: makeRegistry([
+        {
+          id: 'text-tagged-primary',
+          rank: 1,
+          provider: 'openrouter',
+          model: 'text/tagged-primary',
+          maxOutputTokens: 4096,
+          contextWindow: 128_000,
+          purposes: [{ purpose: 'vision', primary: true }],
+        },
+        {
+          id: 'vision-secondary',
+          rank: 2,
+          provider: 'openrouter',
+          model: 'vision/secondary',
+          maxOutputTokens: 4096,
+          contextWindow: 1_000_000,
+          supportsVision: true,
+          purposes: [{ purpose: 'vision', primary: false }],
+        },
+        {
+          id: 'vision-false',
+          rank: 3,
+          provider: 'openrouter',
+          model: 'vision/false',
+          maxOutputTokens: 4096,
+          contextWindow: 1_000_000,
+          supportsVision: false,
+          purposes: [{ purpose: 'vision', primary: false }],
+        },
+      ]),
+    }), 'vision');
+
+    expect(candidates).toEqual([
+      expect.objectContaining({
+        model: 'vision/secondary',
+        supportsVision: true,
+      }),
+    ]);
   });
 });
 

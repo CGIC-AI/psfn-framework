@@ -491,6 +491,14 @@ function normalizeModelRegistryEntry(value: unknown, fieldPath: string): ModelRe
   if (capabilities && capabilityMaxTokens !== undefined) {
     capabilities.maxOutputTokens = capabilityMaxTokens;
   }
+  if (capabilities?.supportsVision !== undefined && typeof capabilities.supportsVision !== 'boolean') {
+    throw new Error(`Invalid model registry at ${fieldPath}.capabilities.supportsVision: expected boolean`);
+  }
+  if (purposes.some((tag) => tag.purpose === 'vision') && capabilities?.supportsVision !== true) {
+    throw new Error(
+      `Invalid model registry at ${fieldPath}.capabilities.supportsVision: models with purpose "vision" must set supportsVision true`,
+    );
+  }
   if (tuning) {
     tuning.maxOutputTokens = maxOutputTokens;
     if (tuningContextWindow !== undefined) {

@@ -148,6 +148,7 @@ function buildRegistryFromConfig(config: SubstrateConfig): CanonicalModelRegistr
     capabilities: {
       maxOutputTokens: slot.maxTokens,
       ...(slot.contextWindow !== undefined ? { contextWindow: slot.contextWindow } : {}),
+      ...(purposes.some((purpose) => purpose.purpose === 'vision') ? { supportsVision: true } : {}),
     },
     tuning: {
       maxOutputTokens: slot.maxTokens,
@@ -2026,7 +2027,7 @@ describe('LLMClient correlation metadata', () => {
               source: { type: 'openrouter' },
             },
             purposes: [{ purpose: 'vision', primary: true }],
-            capabilities: { maxOutputTokens: 4096, contextWindow: 128_000 },
+            capabilities: { maxOutputTokens: 4096, contextWindow: 128_000, supportsVision: true },
             tuning: { maxOutputTokens: 4096 },
           },
         ],

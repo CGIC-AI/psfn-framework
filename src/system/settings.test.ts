@@ -116,7 +116,7 @@ function makeCanonicalModelRegistry(options?: {
           { purpose: 'vision', primary: true },
           { purpose: 'moa', primary: true },
         ],
-        capabilities: { maxOutputTokens: 4096, contextWindow: 128_000 },
+        capabilities: { maxOutputTokens: 4096, contextWindow: 128_000, supportsVision: true },
         tuning: {
           maxOutputTokens: 4096,
           ...(options?.primaryTuning ?? {}),
@@ -402,7 +402,7 @@ describe('settings', () => {
                 { purpose: 'vision', primary: true },
                 { purpose: 'moa', primary: true },
               ],
-              capabilities: { maxOutputTokens: 4096, contextWindow: 128_000 },
+              capabilities: { maxOutputTokens: 4096, contextWindow: 128_000, supportsVision: true },
               tuning: { maxOutputTokens: 4096 },
             },
             {
@@ -827,7 +827,7 @@ describe('settings', () => {
                 { purpose: 'vision', primary: true },
                 { purpose: 'moa', primary: true },
               ],
-              capabilities: { maxOutputTokens: 4096, contextWindow: 128_000 },
+              capabilities: { maxOutputTokens: 4096, contextWindow: 128_000, supportsVision: true },
               tuning: { maxOutputTokens: 4096 },
             },
             {
@@ -879,7 +879,7 @@ describe('settings', () => {
                 { purpose: 'vision', primary: true },
                 { purpose: 'moa', primary: true },
               ],
-              capabilities: { maxOutputTokens: 4096, contextWindow: 128_000 },
+              capabilities: { maxOutputTokens: 4096, contextWindow: 128_000, supportsVision: true },
               tuning: { maxOutputTokens: 4096 },
             },
             {
@@ -936,7 +936,7 @@ describe('settings', () => {
                 { purpose: 'vision', primary: true },
                 { purpose: 'moa', primary: true },
               ],
-              capabilities: { maxOutputTokens: 4096, contextWindow: 128_000 },
+              capabilities: { maxOutputTokens: 4096, contextWindow: 128_000, supportsVision: true },
               tuning: { maxOutputTokens: 4096 },
             },
             {
@@ -992,6 +992,15 @@ describe('settings', () => {
       expect(primaryTuning?.frequency_penalty).toBeUndefined();
       expect(primaryTuning?.repetition_penalty).toBeUndefined();
       expect(primaryTuning?.thinking).toBeUndefined();
+    });
+
+    it('fails closed when a vision registry model lacks explicit vision support', () => {
+      const registry = makeCanonicalModelRegistry();
+      delete registry.models[0]?.capabilities?.supportsVision;
+
+      expect(() => normalizeEditableSettings({
+        modelRegistry: registry,
+      })).toThrow('models with purpose "vision" must set supportsVision true');
     });
 
     it('fails closed for out-of-range tuning knob values', () => {
@@ -1277,7 +1286,7 @@ describe('settings', () => {
                 { purpose: 'vision', primary: true },
                 { purpose: 'moa', primary: true },
               ],
-              capabilities: { maxOutputTokens: 2048, contextWindow: 128_000 },
+              capabilities: { maxOutputTokens: 2048, contextWindow: 128_000, supportsVision: true },
               tuning: { maxOutputTokens: 2048 },
             },
             {
@@ -1615,7 +1624,7 @@ describe('settings', () => {
                 { purpose: 'vision', primary: true },
                 { purpose: 'moa', primary: true },
               ],
-              capabilities: { maxOutputTokens: 2048, contextWindow: 128000 },
+              capabilities: { maxOutputTokens: 2048, contextWindow: 128000, supportsVision: true },
               tuning: { maxOutputTokens: 1536 },
             },
             {

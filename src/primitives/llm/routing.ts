@@ -374,6 +374,9 @@ function candidateFromRegistryEntry(
   const supportsVision = typeof entry.capabilities?.supportsVision === 'boolean'
     ? entry.capabilities.supportsVision
     : undefined;
+  if (purpose === 'vision' && supportsVision !== true) {
+    return null;
+  }
   const supportsReasoning = typeof entry.capabilities?.supportsReasoning === 'boolean'
     ? entry.capabilities.supportsReasoning
     : undefined;

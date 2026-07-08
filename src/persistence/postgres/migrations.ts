@@ -530,6 +530,12 @@ export const POSTGRES_WIKI_PROJECTION_MIGRATIONS = [
   `,
   `CREATE INDEX IF NOT EXISTS idx_wiki_document_chunks_doc ON wiki_document_chunks(document_id);`,
   `CREATE INDEX IF NOT EXISTS idx_wiki_document_chunks_sha ON wiki_document_chunks(document_id, body_sha256);`,
+  // W5b scope dimension: chunks carry their document's scope so retrieval can
+  // filter at query time (personal always, plus the current site's shared world
+  // scope). Additive with a `personal` default: pre-W5b rows and the flag-off
+  // (unfiltered) query path are byte-identical.
+  `ALTER TABLE wiki_document_chunks ADD COLUMN IF NOT EXISTS scope TEXT NOT NULL DEFAULT 'personal';`,
+  `CREATE INDEX IF NOT EXISTS idx_wiki_document_chunks_scope ON wiki_document_chunks(scope);`,
 ];
 
 export const POSTGRES_CONTACT_MIGRATIONS = [

@@ -85,3 +85,19 @@ export interface PlacesRegistryConfig {
   sites: SiteConfig[];
   places: PlaceConfig[];
 }
+
+/**
+ * Canonical validation rule for a `siteId` / `placeId` / `affordanceId` token.
+ * This is the single source of truth for the ID grammar the registry loaders
+ * (`channels/backplane/places-registry`, `satellite-registry`) enforce: a
+ * leading alphanumeric, then letters/numbers/dot/underscore/dash/colon, ≤128
+ * chars. Other subsystems that must reference a place/site ID out of band (e.g.
+ * the wiki `shared_world:<siteId>` scope) reuse {@link isValidPlaceIdToken} so
+ * the grammar cannot drift between producers and consumers.
+ */
+export const PLACE_ID_TOKEN_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u;
+
+/** True when `value` is a syntactically valid place/site/affordance ID token. */
+export function isValidPlaceIdToken(value: string): boolean {
+  return PLACE_ID_TOKEN_PATTERN.test(value);
+}

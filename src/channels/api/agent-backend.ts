@@ -106,6 +106,8 @@ interface IdentityClaimHeaders {
 
 interface ActiveRequestState {
   channelId: string;
+  /** Direct model-room completions abort via their own controller instead of the agent loop. */
+  abort?: () => void;
 }
 
 interface ObservedTurnCompletion {
@@ -205,6 +207,14 @@ export class AgentApiBackend {
     const active = this.activeRequests.get(params.requestId);
     if (!active) {
       return { cancelled: false };
+    }
+    if (active.abort) {
+      active.abort();
+      this.eventBus.emit('api.turn.abort', {
+        channelId: active.channelId,
+        reason: 'client_disconnected',
+      }).catch(() => undefined);
+      return { cancelled: true };
     }
     this.abortActiveTurn(active.channelId, 'client_disconnected');
     return { cancelled: true };
@@ -355,6 +365,7 @@ export class AgentApiBackend {
       request: ChatCompletionRequest;
       headers: ApiRpcHeaders;
       onDelta?: (text: string) => void | Promise<void>;
+      signal?: AbortSignal;
       timeoutMs?: number;
     },
     overrides: TurnRoutingOverrides,
@@ -410,14 +421,40 @@ export class AgentApiBackend {
       },
     };
 
+    // Direct completions must stay cancellable: register in activeRequests so
+    // cancelChatCompletion can find them, and chain the caller's AbortSignal
+    // into a per-request controller that settles the turn on cancel.
+    const abortController = new AbortController();
+    const onExternalAbort = () => abortController.abort();
+    if (params.signal) {
+      if (params.signal.aborted) {
+        abortController.abort();
+      } else {
+        params.signal.addEventListener('abort', onExternalAbort, { once: true });
+      }
+    }
+    this.activeRequests.set(params.requestId, {
+      channelId,
+      abort: () => abortController.abort(),
+    });
+    const abortPromise = new Promise<never>((_, reject) => {
+      const rejectCancelled = () => reject(new Error('api_chat_completion_cancelled'));
+      if (abortController.signal.aborted) {
+        rejectCancelled();
+      } else {
+        abortController.signal.addEventListener('abort', rejectCancelled, { once: true });
+      }
+    });
+
     const timeoutMs = this.normalizeChatCompletionTimeoutMs(params.timeoutMs);
     let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
     try {
       const completion = this.llmProvider.complete(context, 'reasoning');
       const response = timeoutMs === null
-        ? await completion
+        ? await Promise.race([completion, abortPromise])
         : await Promise.race([
           completion,
+          abortPromise,
           new Promise<never>((_, reject) => {
             timeoutHandle = setTimeout(() => {
               reject(new Error('api_chat_completion_timeout'));
@@ -441,14 +478,21 @@ export class AgentApiBackend {
         },
       };
     } catch (error) {
+      if (error instanceof Error && error.message === 'api_chat_completion_cancelled') {
+        return this.fail(499, 'request_cancelled', 'Direct model completion cancelled');
+      }
       if (error instanceof Error && error.message === 'api_chat_completion_timeout') {
         return this.fail(504, 'request_timeout', 'Direct model completion timed out');
       }
       return this.fail(502, 'model_error', `Direct model ${modelOverride.provider}/${modelOverride.model} failed: ${toErrorMessage(error)}`);
     } finally {
+      if (params.signal) {
+        params.signal.removeEventListener('abort', onExternalAbort);
+      }
       if (timeoutHandle) {
         clearTimeout(timeoutHandle);
       }
+      this.activeRequests.delete(params.requestId);
     }
   }
 

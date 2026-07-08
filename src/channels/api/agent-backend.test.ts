@@ -292,6 +292,79 @@ describe('AgentApiBackend direct model completions', () => {
     }
   });
 
+  it('cancels an in-flight direct completion via cancelChatCompletion', async () => {
+    const complete = vi.fn(() => new Promise<never>(() => undefined));
+    const { backend } = createBackend({ complete });
+
+    const resultPromise = backend.handleChatCompletion({
+      requestId: 'req-direct-cancel-1',
+      request: { ...participantRequest, system_prompt_mode: 'none' },
+      principal: { id: 'principal-1', mode: 'api_key' },
+      headers: { 'x-channel-id': 'model-room:room-1:claude-fable' },
+    });
+
+    await Promise.resolve();
+    const cancelResult = await backend.cancelChatCompletion({ requestId: 'req-direct-cancel-1' });
+    expect(cancelResult).toEqual({ cancelled: true });
+
+    const result = await resultPromise;
+    expect(complete).toHaveBeenCalledTimes(1);
+    expect(result).toEqual({
+      ok: false,
+      error: {
+        status: 499,
+        type: 'request_cancelled',
+        message: 'Direct model completion cancelled',
+      },
+    });
+
+    const repeatCancel = await backend.cancelChatCompletion({ requestId: 'req-direct-cancel-1' });
+    expect(repeatCancel).toEqual({ cancelled: false });
+  });
+
+  it('cancels an in-flight direct completion when the caller AbortSignal fires', async () => {
+    const complete = vi.fn(() => new Promise<never>(() => undefined));
+    const { backend } = createBackend({ complete });
+    const controller = new AbortController();
+
+    const resultPromise = backend.runChatCompletion({
+      request: { ...participantRequest, system_prompt_mode: 'none' },
+      principal: { id: 'principal-1', mode: 'api_key' },
+      headers: {},
+      signal: controller.signal,
+    });
+
+    await Promise.resolve();
+    controller.abort();
+
+    const result = await resultPromise;
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.status).toBe(499);
+      expect(result.error.type).toBe('request_cancelled');
+    }
+  });
+
+  it('rejects direct completions immediately when the signal is already aborted', async () => {
+    const complete = vi.fn(() => new Promise<never>(() => undefined));
+    const { backend } = createBackend({ complete });
+    const controller = new AbortController();
+    controller.abort();
+
+    const result = await backend.runChatCompletion({
+      request: { ...participantRequest, system_prompt_mode: 'none' },
+      principal: { id: 'principal-1', mode: 'api_key' },
+      headers: {},
+      signal: controller.signal,
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.status).toBe(499);
+      expect(result.error.type).toBe('request_cancelled');
+    }
+  });
+
   it('surfaces pinned-model failures instead of falling back', async () => {
     const complete = vi.fn(async () => {
       throw new Error('404 No endpoints available');

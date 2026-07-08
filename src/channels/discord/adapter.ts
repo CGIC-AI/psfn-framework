@@ -83,11 +83,25 @@ function createSuppressedDiscordResponse(channelId: string): AgentResponse {
   };
 }
 
+/**
+ * Multi-companion (sprint-10 W1-P2): binds this adapter instance to one
+ * per-companion bot account. The token comes from the account's own env var
+ * (resolved gateway-side); sibling bot user ids are provided lazily so bots
+ * that log in later are still recognized as companions, not foreign bots.
+ */
+export interface DiscordAdapterAccountBinding {
+  accountId: string;
+  token: string;
+  /** Live bot user ids of the other companion accounts on this gateway. */
+  siblingBotUserIds?: () => readonly string[];
+}
+
 interface DiscordAdapterOptions {
   sessionStore?: SessionStore;
   eligibilityGate?: EligibilityGate;
   allowedBotUserIds?: string[];
   personalFilesDir?: string;
+  account?: DiscordAdapterAccountBinding;
 }
 
 interface LongRunningToolState {
@@ -144,8 +158,9 @@ function coalescePendingDiscordTurns(turns: PendingDiscordTurn[]): PendingDiscor
 }
 
 export class DiscordAdapter implements ChannelAdapterPort {
-  readonly id = 'discord';
-  readonly name = this.id;
+  /** Registry key: 'discord' single-account, 'discord:<accountId>' per-account. */
+  readonly id: string;
+  readonly name: string;
   readonly meta = {
     label: 'Discord',
     emoji: ':speech_balloon:',
@@ -186,20 +201,26 @@ export class DiscordAdapter implements ChannelAdapterPort {
   private allowedBotUserIds: Set<string>;
   private personalFilesDir: string | null;
   private initialized = false;
+  private readonly account: DiscordAdapterAccountBinding | null;
 
   constructor(config: SubstrateConfig, eventBus: EventBus, options: DiscordAdapterOptions = {}) {
     this.runtimeConfig = config;
     this.eventBus = eventBus;
     this.sessionStore = options.sessionStore ?? null;
     this.personalFilesDir = options.personalFilesDir?.trim() || null;
+    this.account = options.account ?? null;
+    this.id = this.account ? `discord:${this.account.accountId}` : 'discord';
+    this.name = this.id;
     this.allowedBotUserIds = new Set(
       (options.allowedBotUserIds ?? [])
         .map(id => id.trim())
         .filter(id => id.length > 0),
     );
     this.config = {
-      enabled: Boolean(config.discordToken),
-      accountId: config.discordBotId || undefined,
+      enabled: Boolean(this.resolveLoginToken()),
+      accountId: this.account
+        ? this.account.accountId
+        : config.discordBotId || undefined,
       connectionLabel: 'discord',
     };
     this.outbound = {
@@ -302,14 +323,32 @@ export class DiscordAdapter implements ChannelAdapterPort {
   }
 
   async start(): Promise<void> {
-    if (!this.runtimeConfig.discordToken) {
+    const token = this.resolveLoginToken();
+    if (!token) {
+      if (this.account) {
+        // Per-account bots are explicit config — a missing token must never
+        // silently disable a companion's Discord identity.
+        throw new Error(
+          `Discord account "${this.account.accountId}" has no token; refusing to start`,
+        );
+      }
       log.warn('Discord adapter disabled: DISCORD_TOKEN not configured');
       return;
     }
-    await this.client.login(this.runtimeConfig.discordToken);
+    await this.client.login(token);
     if (this.runtimeConfig.discordBackfillOnStartup !== false) {
       await this.backfillOnStartup();
     }
+  }
+
+  private resolveLoginToken(): string {
+    if (this.account) return this.account.token;
+    return this.runtimeConfig.discordToken ?? '';
+  }
+
+  /** Live bot user id once logged in (used for sibling-account recognition). */
+  getBotUserId(): string | undefined {
+    return this.client.user?.id;
   }
 
   async stop(): Promise<void> {
@@ -380,11 +419,12 @@ export class DiscordAdapter implements ChannelAdapterPort {
   private async onDiscordMessage(msg: Message): Promise<void> {
     const runtimeBotId = this.resolveRuntimeBotId();
     const isAllowedBotAuthor = msg.author.bot
-      ? this.isAllowedExternalBotAuthor(msg.author.id, runtimeBotId)
+      ? this.isPermittedBotAuthor(msg.author.id, runtimeBotId)
       : false;
 
-    // Ignore self + unapproved bots. Approved companion bots are observed in
-    // guild channels, but only a direct mention is allowed to produce egress.
+    // Ignore self + unapproved bots. Approved companion bots (allowlisted or
+    // sibling companion accounts) are observed in guild channels, but only a
+    // direct mention is allowed to produce egress.
     if (runtimeBotId && msg.author.id === runtimeBotId) return;
     if (msg.author.bot && !isAllowedBotAuthor) return;
     if (!this.handler) return;
@@ -431,7 +471,7 @@ export class DiscordAdapter implements ChannelAdapterPort {
   ): Promise<void> {
     const runtimeBotId = this.resolveRuntimeBotId();
     const isAllowedBotReactor = user.bot
-      ? this.isAllowedExternalBotAuthor(user.id, runtimeBotId)
+      ? this.isPermittedBotAuthor(user.id, runtimeBotId)
       : false;
     if (runtimeBotId && user.id === runtimeBotId) return;
     if (user.bot && !isAllowedBotReactor) return;
@@ -469,7 +509,7 @@ export class DiscordAdapter implements ChannelAdapterPort {
 
     if (runtimeBotId && targetMessage.author.id === runtimeBotId) return;
     const isAllowedBotTarget = targetMessage.author.bot
-      ? this.isAllowedExternalBotAuthor(targetMessage.author.id, runtimeBotId)
+      ? this.isPermittedBotAuthor(targetMessage.author.id, runtimeBotId)
       : false;
     if (targetMessage.author.bot && !isAllowedBotTarget) return;
 
@@ -804,8 +844,29 @@ export class DiscordAdapter implements ChannelAdapterPort {
   private resolveRuntimeBotId(): string | undefined {
     const liveBotId = this.client.user?.id;
     if (liveBotId) return liveBotId;
+    if (this.account) {
+      // Per-account bots have no env-configured fallback id: DISCORD_BOT_ID is
+      // the single-account identity and would misattribute self-detection.
+      return undefined;
+    }
     const configuredBotId = this.runtimeConfig.discordBotId?.trim() ?? '';
     return configuredBotId.length > 0 ? configuredBotId : undefined;
+  }
+
+  /**
+   * Bot-author admission policy, applied after the self check at every ingest
+   * site (messages, reactions, backfill):
+   * - this account's OWN messages are always filtered (self echo);
+   * - operator-allowlisted external bots are ingested (existing behavior);
+   * - sibling companion bots (other per-companion accounts on this gateway)
+   *   are ingested like allowed companion bots — this is how companions
+   *   converse in shared rooms, with egress still gated to direct mentions
+   *   and MI-to-MI fatigue charged downstream.
+   * Every other bot author is dropped.
+   */
+  private isPermittedBotAuthor(authorId: string, runtimeBotId?: string): boolean {
+    return this.isAllowedExternalBotAuthor(authorId, runtimeBotId)
+      || this.isSiblingCompanionBot(authorId, runtimeBotId);
   }
 
   private isAllowedExternalBotAuthor(authorId: string, runtimeBotId?: string): boolean {
@@ -813,6 +874,15 @@ export class DiscordAdapter implements ChannelAdapterPort {
     if (!normalized) return false;
     if (runtimeBotId && normalized === runtimeBotId) return false;
     return this.allowedBotUserIds.has(normalized);
+  }
+
+  private isSiblingCompanionBot(authorId: string, runtimeBotId?: string): boolean {
+    const provider = this.account?.siblingBotUserIds;
+    if (!provider) return false;
+    const normalized = authorId.trim();
+    if (!normalized) return false;
+    if (runtimeBotId && normalized === runtimeBotId) return false;
+    return provider().includes(normalized);
   }
 
   private listeningWindowKey(channelId: string, userId: string): string {
@@ -1203,7 +1273,7 @@ export class DiscordAdapter implements ChannelAdapterPort {
 
         for (const msg of sorted) {
           if (runtimeBotId && msg.author.id === runtimeBotId) continue;
-          if (msg.author.bot && !this.isAllowedExternalBotAuthor(msg.author.id, runtimeBotId)) continue;
+          if (msg.author.bot && !this.isPermittedBotAuthor(msg.author.id, runtimeBotId)) continue;
           if (dedupIds.has(msg.id)) continue;
 
           this.sessionStore.append({

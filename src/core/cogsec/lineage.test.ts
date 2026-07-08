@@ -145,6 +145,78 @@ describe('buildCogSecLineagePreview', () => {
     expect(preview.memories[0]?.reason).toBe('structured_ref_line_range_intersects_affected_range');
   });
 
+  it('keeps scanning provenance spans after a session-matched non-intersecting span', async () => {
+    const preview = await buildCogSecLineagePreview({
+      event: event({
+        affectedMessageRanges: [
+          {
+            logicalSessionId: 'logical-session',
+            messageIds: [4],
+          },
+          {
+            logicalSessionId: 'logical-session',
+            messageIds: [20],
+          },
+        ],
+      }),
+      memoryStore: memoryStore([
+        makeMemory({
+          id: 'memory-later-span-ids',
+          provenance: {
+            sessionId: 'logical-session',
+            channelId: 'discord-room',
+            sourceMessageIds: [20],
+          },
+        }),
+        makeMemory({
+          id: 'memory-later-span-range',
+          provenance: {
+            sessionId: 'logical-session',
+            channelId: 'discord-room',
+            sourceSpanStartMessageId: 19,
+            sourceSpanEndMessageId: 21,
+          },
+        }),
+      ]),
+    });
+
+    expect(preview.memories.map(memory => [memory.id, memory.classification, memory.reason])).toEqual([
+      ['memory-later-span-ids', 'tainted', 'provenance_message_id_intersects_affected_range'],
+      ['memory-later-span-range', 'tainted', 'provenance_span_intersects_affected_range'],
+    ]);
+  });
+
+  it('prefers a later tainted session match over an earlier uncertain granular span', async () => {
+    const preview = await buildCogSecLineagePreview({
+      event: event({
+        affectedMessageRanges: [
+          {
+            logicalSessionId: 'logical-session',
+            messageIds: [4],
+          },
+          {
+            logicalSessionId: 'logical-session',
+          },
+        ],
+      }),
+      memoryStore: memoryStore([
+        makeMemory({
+          id: 'memory-session-only-provenance',
+          provenance: {
+            sessionId: 'logical-session',
+            channelId: 'discord-room',
+          },
+        }),
+      ]),
+    });
+
+    expect(preview.memories).toEqual([expect.objectContaining({
+      id: 'memory-session-only-provenance',
+      classification: 'tainted',
+      reason: 'provenance_matches_affected_session',
+    })]);
+  });
+
   it('returns affected L0, transcript projection, and compaction refs without row or summary content', async () => {
     const preview = await buildCogSecLineagePreview({
       event: event({

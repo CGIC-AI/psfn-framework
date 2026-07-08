@@ -321,6 +321,7 @@ function provenanceMatchesSpans(
   spans: readonly AffectedSpan[],
 ): MatchResult | null {
   if (!provenance) return null;
+  let sessionMatchWithoutGranularity: MatchResult | null = null;
   for (const span of spans) {
     const sessionMatches = provenance.sessionId === span.logicalSessionId
       || provenance.channelId === span.logicalSessionId
@@ -355,13 +356,15 @@ function provenanceMatchesSpans(
         reason: 'provenance_span_intersects_affected_range',
       };
     }
-    if (hasSourceMessageIds || hasSourceSpan) return null;
-    return {
+    // A session-matched span that does not intersect must not end the scan:
+    // a later span in the same case may still intersect (fail closed).
+    if (hasSourceMessageIds || hasSourceSpan) continue;
+    sessionMatchWithoutGranularity = {
       classification: 'uncertain',
       reason: 'provenance_session_match_without_message_granularity',
     };
   }
-  return null;
+  return sessionMatchWithoutGranularity;
 }
 
 function memoryMatchesSpans(memory: PurrMemory, spans: readonly AffectedSpan[]): MatchResult | null {

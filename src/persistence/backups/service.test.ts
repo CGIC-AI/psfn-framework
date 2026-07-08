@@ -544,6 +544,27 @@ describe('runBackupCycle', () => {
     })).rejects.toThrow('Workspace backup root');
   });
 
+  it('fails closed when workspace backup root overlaps systemDataDir without explicit protected paths', async () => {
+    const root = join(tmpdir(), `psfn-backup-workspace-systemdata-overlap-${Date.now()}`);
+    roots.push(root);
+    const systemDataDir = join(root, 'system-data');
+    const sessionsDir = join(root, 'companion-data', 'state', 'sessions');
+    mkdirSync(systemDataDir, { recursive: true });
+    mkdirSync(sessionsDir, { recursive: true });
+
+    await expect(runBackupCycle({
+      postgres: {
+        databaseUrl: 'postgresql://psfn:secret@127.0.0.1:5432/psfn',
+        pgDumpBinary: writeStubPgDump(root),
+      },
+      workspacePath: join(systemDataDir, 'workspace'),
+      systemDataDir,
+      sessionsDir,
+      backupRootDir: join(root, 'backups'),
+      now: () => Date.UTC(2026, 5, 28, 10, 11, 12, 123),
+    })).rejects.toThrow('Workspace backup root');
+  });
+
   it('refuses to run without any database backup source', async () => {
     const root = join(tmpdir(), `psfn-backup-no-source-${Date.now()}`);
     roots.push(root);

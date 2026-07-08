@@ -362,6 +362,7 @@ export async function runBackupCycle(
       ...(options.mirrorDir?.trim() ? [options.mirrorDir.trim()] : []),
       options.sessionsDir,
       ...(options.companionDataDir?.trim() ? [options.companionDataDir.trim()] : []),
+      ...(options.systemDataDir?.trim() ? [options.systemDataDir.trim()] : []),
       ...(options.workspaceProtectedPaths ?? []),
     ]);
   }

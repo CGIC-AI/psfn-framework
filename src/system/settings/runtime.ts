@@ -318,6 +318,8 @@ function getWebAndGardenSettingsSnapshot(config: SubstrateConfig) {
       config.webFetchAllowInternalNetwork ??
       config.webFetchLocalCrawlerEnabled ??
       false,
+    homeAssistantEnabled: config.homeAssistantEnabled ?? false,
+    homeAssistantBaseUrl: config.homeAssistantBaseUrl ?? null,
     webFetchLocalCrawlerEnabled: config.webFetchLocalCrawlerEnabled ?? false,
     webFetchLocalCrawlerAllowHttp:
       config.webFetchLocalCrawlerAllowHttp ?? false,
@@ -339,6 +341,8 @@ function getWebAndGardenSettingsSnapshot(config: SubstrateConfig) {
     | 'webFetchAllowHttp'
     | 'webFetchDomainAllowlist'
     | 'webFetchAllowInternalNetwork'
+    | 'homeAssistantEnabled'
+    | 'homeAssistantBaseUrl'
     | 'webFetchLocalCrawlerEnabled'
     | 'webFetchLocalCrawlerAllowHttp'
     | 'webFetchLocalCrawlerHostAllowlist'
@@ -654,6 +658,15 @@ function applyWebAndGardenSettings(
     config.webFetchAllowInternalNetwork =
       settings.webFetchAllowInternalNetwork ?? false;
   }
+  if ('homeAssistantEnabled' in settings) {
+    config.homeAssistantEnabled = settings.homeAssistantEnabled ?? false;
+  }
+  applyTrimmedSetting(
+    config,
+    'homeAssistantBaseUrl',
+    settings,
+    'homeAssistantBaseUrl',
+  );
   if ('webFetchLocalCrawlerEnabled' in settings) {
     config.webFetchLocalCrawlerEnabled =
       settings.webFetchLocalCrawlerEnabled ?? false;

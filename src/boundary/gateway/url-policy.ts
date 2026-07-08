@@ -72,13 +72,14 @@ export function isAlwaysBlockedIP(ip: string): boolean {
   return ALWAYS_BLOCKED_RANGES.some(r => r.test(ip));
 }
 
-export type UrlPolicyLane = 'default' | 'local_crawler' | 'discovery';
+export type UrlPolicyLane = 'default' | 'local_crawler' | 'discovery' | 'home_assistant';
 export const DEFAULT_MAX_REDIRECT_HOPS = 5;
 export const MAX_REDIRECT_HOPS = 20;
 
 export interface UrlPolicyConfig {
   allowHttp?: boolean;           // default false (require HTTPS)
   domainAllowlist?: string[];    // if set, only these domains allowed
+  hostAllowlist?: string[];      // if set, only these exact hosts allowed
   allowInternalNetwork?: boolean; // allow RFC1918/loopback access (still blocks cloud metadata)
   maxRedirectHops?: number;      // default 5, bounded to [0, 20]
   /** @deprecated Use allowInternalNetwork + domainAllowlist instead */
@@ -223,7 +224,7 @@ export function evaluateUrlPolicy(
     : config.domainAllowlist);
   const hostAllowlist = toLowerList(isLocalCrawlerLane
     ? localCrawler?.hostAllowlist
-    : undefined);
+    : config.hostAllowlist);
 
   // Protocol check
   if (parsed.protocol === 'http:' && !allowHttp) {
@@ -255,9 +256,19 @@ export function evaluateUrlPolicy(
     return { allowed: true };
   }
 
-  // Domain allowlist
-  if (domainAllowlist.length > 0 && !matchesDomainAllowlist(hostname, domainAllowlist)) {
-    return { allowed: false, reason: `Domain ${hostname} not in allowlist` };
+  // Host/domain allowlists
+  if (hostAllowlist.length > 0 || domainAllowlist.length > 0) {
+    const hostAllowed = hostAllowlist.includes(hostname);
+    const domainAllowed = matchesDomainAllowlist(hostname, domainAllowlist);
+    if (!hostAllowed && !domainAllowed) {
+      if (hostAllowlist.length > 0 && domainAllowlist.length === 0) {
+        return { allowed: false, reason: `Host ${hostname} not in allowlist` };
+      }
+      if (hostAllowlist.length === 0) {
+        return { allowed: false, reason: `Domain ${hostname} not in allowlist` };
+      }
+      return { allowed: false, reason: `Host ${hostname} not in host/domain allowlist` };
+    }
   }
 
   // Internal network access mode: allow private IPs and localhost except always-blocked ranges

@@ -253,6 +253,8 @@ export interface SubstrateConfig {
   webFetchAllowHttp?: boolean;
   webFetchDomainAllowlist?: string[];
   webFetchAllowInternalNetwork?: boolean;
+  homeAssistantEnabled?: boolean;
+  homeAssistantBaseUrl?: string;
   /** @deprecated Use webFetchAllowInternalNetwork + webFetchDomainAllowlist instead */
   webFetchLocalCrawlerEnabled?: boolean;
   /** @deprecated Use webFetchAllowHttp instead */

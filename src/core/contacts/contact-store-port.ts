@@ -66,6 +66,16 @@ export interface ContactStorePort {
   upsertSocialRelationshipEdge(input: SocialRelationshipEdgeUpsertInput): Awaitable<SocialRelationshipEdge>;
   listSocialRelationshipEdges(query?: SocialRelationshipEdgeQuery): Awaitable<SocialRelationshipEdge[]>;
   listRelatedContacts(contactId: string, query?: SocialRelationshipEdgeQuery): Awaitable<Contact[]>;
+  /** Count of identity-link challenges this contact has completed with status 'verified'. */
+  countVerifiedIdentityLinks(contactId: string): Awaitable<number>;
+  /**
+   * Durable per-processor maintenance watermark (ISO timestamp of the last
+   * completed run). Used by scheduler-owned contact maintenance lanes (e.g.
+   * the nightly trust-drift review) to run at most once per calendar day
+   * across restarts. Unknown processor → undefined.
+   */
+  getContactMaintenanceWatermark(processor: string): Awaitable<string | undefined>;
+  setContactMaintenanceWatermark(processor: string, lastRunAt: string): Awaitable<void>;
   suggestLowTierTrustDrift(
     id: string,
     signals: TrustDriftBehaviorSignals,

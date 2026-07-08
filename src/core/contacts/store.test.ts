@@ -1244,4 +1244,47 @@ describe('ContactStore machine-intelligence flag', () => {
     expect(migrated.getById('legacy-1')?.isMachineIntelligence).toBe(true);
     legacy.close();
   });
+
+  describe('countVerifiedIdentityLinks', () => {
+    function insertVerification(contactId: string, id: string, status: string): void {
+      db.prepare(`
+        INSERT INTO contact_identity_link_verifications (
+          id, contact_id, source_channel, source_user_id, target_channel, target_user_id,
+          nonce, expires_at, signature, status, created_at, updated_at
+        ) VALUES (?, ?, 'discord', 'src-user', 'telegram', 'tgt-user',
+          'nonce', '2026-12-31T00:00:00.000Z', 'sig', ?, '2026-07-01T00:00:00.000Z', '2026-07-01T00:00:00.000Z')
+      `).run(id, contactId, status);
+    }
+
+    it('counts only verified rows for the given contact', () => {
+      const contact = store.upsert({ displayName: 'Fixture Verified' });
+      const other = store.upsert({ displayName: 'Fixture Other' });
+      insertVerification(contact.id, 'v1', 'verified');
+      insertVerification(contact.id, 'v2', 'pending');
+      insertVerification(other.id, 'v3', 'verified');
+      expect(store.countVerifiedIdentityLinks(contact.id)).toBe(1);
+      expect(store.countVerifiedIdentityLinks(other.id)).toBe(1);
+      expect(store.countVerifiedIdentityLinks('unknown')).toBe(0);
+    });
+  });
+
+  describe('contact maintenance watermarks', () => {
+    it('returns undefined for an unknown processor', () => {
+      expect(store.getContactMaintenanceWatermark('contacts.trust_drift.review')).toBeUndefined();
+    });
+
+    it('round-trips and upserts a watermark', () => {
+      store.setContactMaintenanceWatermark('contacts.trust_drift.review', '2026-07-07T03:00:00.000Z');
+      expect(store.getContactMaintenanceWatermark('contacts.trust_drift.review'))
+        .toBe('2026-07-07T03:00:00.000Z');
+      store.setContactMaintenanceWatermark('contacts.trust_drift.review', '2026-07-08T03:00:00.000Z');
+      expect(store.getContactMaintenanceWatermark('contacts.trust_drift.review'))
+        .toBe('2026-07-08T03:00:00.000Z');
+    });
+
+    it('rejects an empty processor and an invalid timestamp', () => {
+      expect(() => store.setContactMaintenanceWatermark('  ', '2026-07-07T03:00:00.000Z')).toThrow(/processor/);
+      expect(() => store.setContactMaintenanceWatermark('contacts.trust_drift.review', 'garbage')).toThrow(/timestamp/);
+    });
+  });
 });

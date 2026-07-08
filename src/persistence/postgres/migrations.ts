@@ -605,6 +605,12 @@ export const POSTGRES_CONTACT_MIGRATIONS = [
   `,
   `CREATE INDEX IF NOT EXISTS idx_contact_identity_link_verifications_contact ON contact_identity_link_verifications(contact_id, created_at DESC);`,
   `
+  CREATE TABLE IF NOT EXISTS contact_maintenance_watermarks (
+    processor TEXT PRIMARY KEY,
+    last_run_at TEXT NOT NULL
+  );
+  `,
+  `
   CREATE TABLE IF NOT EXISTS contact_mutation_audit (
     id BIGSERIAL PRIMARY KEY,
     contact_id TEXT NOT NULL REFERENCES contacts(id) ON DELETE CASCADE,

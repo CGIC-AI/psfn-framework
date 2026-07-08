@@ -75,8 +75,10 @@ import {
 import {
   countKnownRooms,
   countRoomRoster,
+  countVerifiedIdentityLinks,
   getCanonicalContactKey,
   getContactByChannelIdentity,
+  getContactMaintenanceWatermark,
   getConversationChannelPrivacy,
   getContactByDiscordUserId,
   getContactById,
@@ -85,6 +87,7 @@ import {
   listIdentityLinkVerifications,
   listKnownRooms,
   listRoomRoster,
+  setContactMaintenanceWatermark,
 } from './store/read-operations.js';
 import { initializeContactStoreSchema } from './store/schema.js';
 import {
@@ -950,6 +953,18 @@ export class ContactStore implements ContactStorePort {
 
   listIdentityLinkVerifications(limit = 25): ContactIdentityLinkVerification[] {
     return listIdentityLinkVerifications(this.db, limit);
+  }
+
+  countVerifiedIdentityLinks(contactId: string): number {
+    return countVerifiedIdentityLinks(this.db, contactId);
+  }
+
+  getContactMaintenanceWatermark(processor: string): string | undefined {
+    return getContactMaintenanceWatermark(this.db, processor);
+  }
+
+  setContactMaintenanceWatermark(processor: string, lastRunAt: string): void {
+    setContactMaintenanceWatermark(this.db, processor, lastRunAt);
   }
 
   listMutationAuditEntries(query: ContactMutationAuditQuery = {}): ContactMutationAuditEntry[] {

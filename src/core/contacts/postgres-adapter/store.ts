@@ -69,6 +69,9 @@ export class PostgresContactStore implements ContactStorePort {
   declare linkChannelIdentity: ContactStorePort['linkChannelIdentity'];
   declare listAll: ContactStorePort['listAll'];
   declare listIdentityLinkVerifications: ContactStorePort['listIdentityLinkVerifications'];
+  declare countVerifiedIdentityLinks: ContactStorePort['countVerifiedIdentityLinks'];
+  declare getContactMaintenanceWatermark: ContactStorePort['getContactMaintenanceWatermark'];
+  declare setContactMaintenanceWatermark: ContactStorePort['setContactMaintenanceWatermark'];
   declare listMutationAuditEntries: ContactStorePort['listMutationAuditEntries'];
   declare resolveChannelIdentity: ContactStorePort['resolveChannelIdentity'];
   declare resolveUserId: ContactStorePort['resolveUserId'];

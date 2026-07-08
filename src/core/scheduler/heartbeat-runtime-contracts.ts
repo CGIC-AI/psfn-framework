@@ -85,7 +85,11 @@ export interface HeartbeatRuntimeOptions {
   reflectionStore?: ReflectionMetacognitionJournalStore;
   sessionManager?: Pick<SessionManager, 'resolveSessionChannelId' | 'getRecentMessages'> & Partial<Pick<SessionManager, 'recordSystemMessage' | 'recordAssistantMessage'>>;
   emotionState?: { getState(): EmotionStateSnapshot };
-  contactStore?: Pick<ContactStorePort, 'getById' | 'getEmotionalSnapshot' | 'getEmotionalTimeSeries'>;
+  contactStore?: Pick<ContactStorePort, 'getById' | 'getEmotionalSnapshot' | 'getEmotionalTimeSeries'>
+    & Partial<Pick<
+      ContactStorePort,
+      'listAll' | 'countVerifiedIdentityLinks' | 'getContactMaintenanceWatermark' | 'setContactMaintenanceWatermark'
+    >>;
   getActiveConcerns?: (input: {
     channelId: string;
     canonicalContactKey?: string;

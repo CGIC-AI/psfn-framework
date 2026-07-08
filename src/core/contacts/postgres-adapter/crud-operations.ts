@@ -1143,6 +1143,51 @@ const postgresContactCrudOperations: PostgresContactOperationMap = {
     return rows.map(row => this.toVerification(row));
   },
 
+  async countVerifiedIdentityLinks(contactId: string): Promise<number> {
+    const rows = await queryRows<{ count: string | number }>(
+      this.pool,
+      `
+        SELECT COUNT(*) AS count
+        FROM contact_identity_link_verifications
+        WHERE contact_id = $1 AND status = 'verified'
+      `,
+      [contactId],
+    );
+    const raw = rows[0]?.count ?? 0;
+    const parsed = typeof raw === 'number' ? raw : Number.parseInt(raw, 10);
+    if (!Number.isFinite(parsed)) {
+      throw new Error(`Verified identity link count for contact ${contactId} is not numeric`);
+    }
+    return parsed;
+  },
+
+  async getContactMaintenanceWatermark(processor: string): Promise<string | undefined> {
+    const rows = await queryRows<{ last_run_at: string }>(
+      this.pool,
+      'SELECT last_run_at FROM contact_maintenance_watermarks WHERE processor = $1',
+      [processor],
+    );
+    return rows[0]?.last_run_at;
+  },
+
+  async setContactMaintenanceWatermark(processor: string, lastRunAt: string): Promise<void> {
+    const trimmedProcessor = processor.trim();
+    if (!trimmedProcessor) {
+      throw new Error('Contact maintenance watermark processor must be a non-empty string');
+    }
+    if (!Number.isFinite(Date.parse(lastRunAt))) {
+      throw new Error(`Contact maintenance watermark lastRunAt "${lastRunAt}" is not a valid timestamp`);
+    }
+    await this.pool.query(
+      `
+        INSERT INTO contact_maintenance_watermarks (processor, last_run_at)
+        VALUES ($1, $2)
+        ON CONFLICT (processor) DO UPDATE SET last_run_at = EXCLUDED.last_run_at
+      `,
+      [trimmedProcessor, lastRunAt],
+    );
+  },
+
   async listMutationAuditEntries(query: ContactMutationAuditQuery = {}): Promise<ContactMutationAuditEntry[]> {
     const normalizedLimit = normalizeLimit(query.limit, 25, 1, 200);
     const clauses: string[] = [];

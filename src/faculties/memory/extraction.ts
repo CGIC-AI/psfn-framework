@@ -67,6 +67,7 @@ import {
   scheduleProfileRefresh,
 } from './extraction/runtime-helpers.js';
 import { applyEmotionalIntensityImportanceMultiplier } from './extraction/importance.js';
+import { applyLocationTag } from './extraction/location-tags.js';
 import { resolveExtractionParticipantNames } from './extraction/naming.js';
 import {
   computeNoveltyScore,
@@ -238,7 +239,12 @@ export class MemoryExtractor {
     }
   }
 
-  async maybeExtract(channelId: string, canonicalContactId?: string, turnId?: TurnID): Promise<void> {
+  async maybeExtract(
+    channelId: string,
+    canonicalContactId?: string,
+    turnId?: TurnID,
+    placeId?: string,
+  ): Promise<void> {
     if (!this.acceptingExtractions) {
       log.debug('Skipping extraction trigger while extractor is draining', { channelId });
       return;
@@ -266,16 +272,21 @@ export class MemoryExtractor {
       });
     }
 
-    await this.trackExtraction(channelId, trigger.triggerReason, canonicalContactId, undefined, turnId);
+    await this.trackExtraction(channelId, trigger.triggerReason, canonicalContactId, undefined, turnId, undefined, placeId);
   }
 
-  async extract(channelId: string, canonicalContactId?: string, turnId?: TurnID): Promise<void> {
+  async extract(
+    channelId: string,
+    canonicalContactId?: string,
+    turnId?: TurnID,
+    placeId?: string,
+  ): Promise<void> {
     if (!this.acceptingExtractions) {
       log.debug('Skipping extraction request while extractor is draining', { channelId });
       return;
     }
 
-    await this.trackExtraction(channelId, 'manual', canonicalContactId, undefined, turnId);
+    await this.trackExtraction(channelId, 'manual', canonicalContactId, undefined, turnId, undefined, placeId);
   }
 
   async extractObservedGroupRange(options: ObservedGroupExtractionOptions): Promise<boolean> {
@@ -399,6 +410,7 @@ export class MemoryExtractor {
     recoveredEntries?: SessionEntry[],
     turnId?: TurnID,
     groupOptions?: MemoryExtractorGroupOptions,
+    placeId?: string,
   ): Promise<void> {
     const logicalSessionId = this.resolveExtractionLogicalSessionId(channelId);
     const existing = this.inFlightByChannel.get(logicalSessionId);
@@ -415,6 +427,7 @@ export class MemoryExtractor {
       recoveredEntries,
       turnId,
       groupOptions,
+      placeId,
     );
     this.inFlightExtractions.add(promise);
     this.inFlightByChannel.set(logicalSessionId, promise);
@@ -445,6 +458,7 @@ export class MemoryExtractor {
     recoveredEntries?: SessionEntry[],
     turnId?: TurnID,
     groupOptions?: MemoryExtractorGroupOptions,
+    placeId?: string,
   ): Promise<void> {
     if (!this.isExtractionSessionCurrent(channelId, logicalSessionId)) {
       log.debug('Skipping stale extraction after session route changed', {
@@ -527,6 +541,7 @@ export class MemoryExtractor {
           triggerReason,
           turnId,
           routing,
+          placeId,
         )
       ),
       emitExtractionStart: (extractionChannelId, reason, extractionTurnId) => (
@@ -638,6 +653,7 @@ export class MemoryExtractor {
     triggerReason?: ExtractionTriggerReason,
     turnId?: TurnID,
     routing?: ExtractionFactRouting,
+    placeId?: string,
   ): Promise<WriteResult> {
     let factContactId = canonicalContactId;
     // Contact-tracking policy gate (E3.4): non-'auto' channels must not have
@@ -716,7 +732,10 @@ export class MemoryExtractor {
       emotionalValence: fact.emotionalValence,
       formationVAD,
       confidence: fact.confidence,
-      tags: fact.tags,
+      // Location tagging (S10): when the turn carried a resolved satellite place,
+      // add a `location:<placeId>` marker to the existing generic tags array
+      // (tags-based, no schema change). Absent a placeId this is a no-op copy.
+      tags: applyLocationTag(fact.tags, placeId),
       retentionClass: fact.retentionClass,
       sourceRef,
       sourceType: triggerReason === 'pre_compaction' ? 'compaction_summary' : undefined,

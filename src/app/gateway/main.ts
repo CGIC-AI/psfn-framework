@@ -32,6 +32,7 @@ import { resolveStartupPreflightBundle } from '../startup/support/startup-prefli
 import { runShutdownSequence } from '../startup/support/shutdown-helpers.js';
 import { createSignalShutdownHandler, registerProcessErrorHandlers } from '../startup/support/signal-shutdown.js';
 import { resolveGatewayApiSurfaceBindings, startOptionalGatewayApiServer } from './api-surface.js';
+import { startOptionalFleetStatusServer } from '../../boundary/gateway/fleet-status.js';
 import { loadSatelliteRegistryConfig } from '../../channels/backplane/satellite-registry.js';
 import { assertSatellitePlaceBindings, loadPlacesRegistryConfig } from '../../channels/backplane/places-registry.js';
 import { CHARGE_POLICY_FILE_NAME } from '../../system/config/charge-policy-config.js';
@@ -222,6 +223,15 @@ async function main(): Promise<void> {
 
   await initGatewayChannelSurfaces(channelSurfaces);
   gateway.start();
+  // Fleet-status surface (sprint-10 W4): config-gated, read-only cluster
+  // health view over the connection registry. Absent FLEET_STATUS_PORT keeps
+  // single-companion behavior byte-identical.
+  const fleetStatusServer = await startOptionalFleetStatusServer({
+    env: process.env,
+    multiCompanion: config.multiCompanion === true,
+    ...(config.companionFleet ? { fleet: config.companionFleet.companions } : {}),
+    source: gateway,
+  });
   const apiServer = await startOptionalGatewayApiServer({
     apiHost,
     apiPort,
@@ -252,6 +262,7 @@ async function main(): Promise<void> {
     stopPromise = (async () => {
       await runShutdownSequence([
         { step: 'stop debug observer', action: () => stopDebugObserver() },
+        { step: 'stop fleet status server', action: () => fleetStatusServer?.stop() },
         { step: 'stop public api server', action: () => apiServer?.stop() },
         { step: 'stop voice surfaces', action: () => voiceSurfaces.stop() },
         { step: 'stop gateway server', action: () => gateway.stop() },

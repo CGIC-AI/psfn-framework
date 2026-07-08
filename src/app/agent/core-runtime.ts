@@ -96,6 +96,7 @@ import { getObserverEvalSidecarHealthSnapshot } from '../../core/eval/observer-s
 import { createSensorCognitionBridge } from '../../core/agent/perception/sensor-cognition-bridge.js';
 import { createIdentityClaimResolvingSink } from '../../core/agent/perception/identity-claim-resolver.js';
 import { createPerceptionNoteDeliverer } from '../../core/agent/perception/presence-note-delivery.js';
+import { createPresenceFollowSink } from '../../core/agent/perception/presence-follow.js';
 import { HubIdentityEnrollmentService } from '../../core/enrollment/service.js';
 import type { HubIdentityEnrollmentStorePort } from '../../core/enrollment/enrollment-store-port.js';
 
@@ -381,6 +382,20 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
   // Absent enrollment store leaves the sink a no-op; off/absent registry config
   // leaves the bridge itself inactive.
   const perceptionNoteDeliverer = createPerceptionNoteDeliverer(sessionManager);
+  // Physical conversation-follows-you (vinz.20): resolved presences pass
+  // through the follow decorator BEFORE note delivery — a fresh, trusted
+  // (primary/trusted, human) identity claim at another satellite-bound
+  // physical place auto-hands the emanation off to that satellite. The
+  // companion-presence port is read lazily because the agent entrypoint wires
+  // it after this composition; null (single-companion / flag-off) keeps the
+  // follow local-only, which is the pre-multi-companion behavior.
+  const presenceFollowSink = createPresenceFollowSink({
+    inner: perceptionNoteDeliverer,
+    target: agentLoop,
+    getCompanionPresence: () => agentLoop.companionPresence,
+    ...(options.placesRegistryConfig ? { placesRegistry: options.placesRegistryConfig } : {}),
+    eventBus,
+  });
   const perceptionSink = options.hubIdentityEnrollmentStore
     ? createIdentityClaimResolvingSink({
       enrollmentService: new HubIdentityEnrollmentService(
@@ -388,7 +403,7 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
         contactStore,
       ),
       contactStore,
-      presenceSink: perceptionNoteDeliverer,
+      presenceSink: presenceFollowSink,
       inner: perceptionNoteDeliverer,
     })
     : undefined;

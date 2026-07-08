@@ -134,4 +134,57 @@ describe('SituatedEmanationTracker', () => {
     tracker.observe(makeTurn({ placeId: 'place.living-room', presence: conflicting }));
     expect(tracker.resolvePlaceId()).toBeUndefined();
   });
+
+  // ── Presence-driven emanation handoff (conversation-follows-you, vinz.20) ──
+
+  it('hands the emanation off to a new place without a turn (presence follow)', () => {
+    const tracker = new SituatedEmanationTracker();
+    tracker.observe(makeTurn({
+      placeId: 'place.living-room',
+      presence: satellitePresence('sat.living-room', 'Living Room satellite'),
+    }));
+
+    tracker.handoffToPlace('place.kitchen');
+
+    expect(tracker.resolvePlaceId()).toBe('place.kitchen');
+    expect(tracker.snapshot()?.placeId).toBe('place.kitchen');
+    // The old satellite's presence metadata does not survive the handoff —
+    // only a real device turn can honestly carry presence for the new place.
+    expect(tracker.resolvePresence()).toBeUndefined();
+  });
+
+  it('establishes a first emanation via handoff when never situated', () => {
+    const tracker = new SituatedEmanationTracker();
+    tracker.handoffToPlace('place.kitchen');
+    expect(tracker.resolvePlaceId()).toBe('place.kitchen');
+  });
+
+  it('supersedes a deliberate virtual move on handoff (fresh physical emanation wins)', () => {
+    const tracker = new SituatedEmanationTracker();
+    tracker.observe(makeTurn({
+      placeId: 'place.living-room',
+      presence: satellitePresence('sat.living-room', 'Living Room satellite'),
+    }));
+    tracker.moveToVirtualPlace('place.mud-tavern');
+    expect(tracker.resolvePlaceId()).toBe('place.mud-tavern');
+
+    tracker.handoffToPlace('place.kitchen');
+
+    expect(tracker.resolveVirtualMovePlaceId()).toBeUndefined();
+    expect(tracker.resolvePlaceId()).toBe('place.kitchen');
+  });
+
+  it('keeps a handed-off place across placeless turns until superseded', () => {
+    const tracker = new SituatedEmanationTracker();
+    tracker.handoffToPlace('place.kitchen');
+    tracker.observe(makeTurn({}));
+    expect(tracker.resolvePlaceId()).toBe('place.kitchen');
+
+    // The next place-bearing satellite turn supersedes the handoff normally.
+    tracker.observe(makeTurn({
+      placeId: 'place.living-room',
+      presence: satellitePresence('sat.living-room', 'Living Room satellite'),
+    }));
+    expect(tracker.resolvePlaceId()).toBe('place.living-room');
+  });
 });

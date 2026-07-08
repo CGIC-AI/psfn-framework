@@ -708,6 +708,28 @@ export interface EventMap {
     since: string;
     timestamp: number;
   };
+  // Presence-driven automatic movement (sprint 10, vinz.20/vinz.21 —
+  // "conversation follows you"). Emitted exactly once per APPLIED auto-move so
+  // an operator can always see WHY the companion moved: `physical_presence` =
+  // a resolved, trusted identity claim at a satellite-bound place pulled the
+  // emanation there; `virtual_activity` = trusted partner activity in a
+  // place-bound virtual room pulled the companion's virtual presence there.
+  // Suppressed/no-op decisions (anonymous, untrusted, stale, debounced,
+  // already present) never emit — only real movement is announced.
+  'presence.emanation.follow': {
+    trigger: 'physical_presence' | 'virtual_activity';
+    /** Contact whose presence/activity the companion followed. */
+    contactId: string;
+    /** Satellite that sensed the presence (physical trigger only). */
+    satelliteId?: string;
+    /** Channel whose activity pulled the move (virtual trigger only). */
+    channelId?: string;
+    fromPlaceId?: string;
+    toPlaceId: string;
+    siteId: string;
+    kind: PlaceKind;
+    timestamp: number;
+  };
   'intention.outbound.dispatched': { actionId: string; channelId: string; channelType: string; contentLength?: number; timestamp: number };
   'intention.outbound.blocked': { actionId: string; channelId: string; channelType: string; reason?: string; timestamp: number };
   // Internal-state-driven outreach nudges (Charter 6.24, bead 1xb.2). The

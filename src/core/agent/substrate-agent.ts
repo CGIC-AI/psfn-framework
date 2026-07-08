@@ -140,6 +140,7 @@ import {
   type ExtendedToolActivationResult,
 } from './substrate-agent/adaptive-tools-runtime.js';
 import { SituatedEmanationTracker } from './substrate-agent/runtime-context-sections/situated-emanation.js';
+import { createVirtualRoomFollower, type VirtualRoomFollower } from './virtual-room-follow.js';
 import { EmotionSelfModelRuntime } from './substrate-agent/emotion-self-model-runtime.js';
 import {
   type BackgroundContinuationTaskRecord,
@@ -321,6 +322,12 @@ export class SubstrateAgent {
   // persistence is bead .7's concern.
   private readonly situatedEmanationTracker = new SituatedEmanationTracker();
 
+  // Virtual-activity presence follow (vinz.21): pulls the companion's virtual
+  // presence to a place-bound companion-room when the trusted partner is
+  // active there. Constructed in the constructor (needs sessionManager /
+  // registry); invoked from the pre-turn path after author/trust resolution.
+  private readonly virtualRoomFollower: VirtualRoomFollower;
+
   /**
    * Deliberate virtual navigation (vinz.26): the world tool's `move` action
    * applies its LOCAL situated effect through this seam. The virtual overlay
@@ -338,6 +345,41 @@ export class SubstrateAgent {
    */
   resolveCurrentSituatedPlaceId(): string | undefined {
     return this.situatedEmanationTracker.resolvePlaceId();
+  }
+
+  /**
+   * The current PHYSICAL emanation's place (ignoring any virtual-move
+   * overlay). The presence-follow controller (vinz.20) compares a resolved
+   * presence claim's place against this to decide whether a handoff is a
+   * real move or a repeat detection.
+   */
+  resolveCurrentEmanationPlaceId(): string | undefined {
+    return this.situatedEmanationTracker.snapshot()?.placeId;
+  }
+
+  /**
+   * Presence-driven emanation handoff (conversation-follows-you, vinz.20):
+   * apply the LOCAL side of an auto-follow. Drives the same tracker
+   * transition a place-bearing satellite turn performs (establish the new
+   * emanation place, supersede any virtual-move overlay) and confirms the
+   * durable situated location so the vinz.29 mindspace-twin default follows
+   * the move. Trust/freshness/debounce gating and the shared presence write
+   * live in the controller (`createPresenceFollowSink`); this seam only
+   * applies an already-approved handoff.
+   */
+  applyEmanationFollowHandoff(input: {
+    placeId: string;
+    siteId: string;
+    placeDisplayName: string;
+  }): void {
+    this.situatedEmanationTracker.handoffToPlace(input.placeId);
+    this.emotionSelfModelRuntime.confirmSituatedLocation({
+      placeId: input.placeId,
+      siteId: input.siteId,
+      label: input.placeDisplayName.trim() || input.placeId,
+      kind: 'physical',
+      updatedAt: new Date().toISOString(),
+    });
   }
 
   /**
@@ -398,6 +440,14 @@ export class SubstrateAgent {
     this.fatigueBudget = options?.fatigueBudget ?? null;
     this.contactTrackingGate = options?.contactTrackingGate ?? null;
     this.placesRegistryConfig = options?.placesRegistryConfig;
+    this.virtualRoomFollower = createVirtualRoomFollower({
+      ...(this.placesRegistryConfig ? { placesRegistry: this.placesRegistryConfig } : {}),
+      getCompanionPresence: () => this.companionPresence,
+      applyVirtualMove: (placeId) => this.applyDeliberateVirtualMove(placeId),
+      resolveSituatedFallbackPlaceId: (message) => this.resolveSituatedFallbackPlaceIdForTurn(message),
+      roomEntryNoteSink: this.sessionManager,
+      eventBus: this.eventBus,
+    });
     this.emotionSelfModelRuntime = new EmotionSelfModelRuntime({
       sessionManager: this.sessionManager,
       llmProvider: this.llmClient,
@@ -989,6 +1039,7 @@ export class SubstrateAgent {
       wikiRetrieval: this.wikiRetrieval,
       placesRegistry: this.placesRegistryConfig,
       resolveSituatedFallbackPlaceId: (message) => this.resolveSituatedFallbackPlaceIdForTurn(message),
+      followVirtualRoomActivity: (message, author) => this.virtualRoomFollower.maybeFollow(message, author),
       skillsRuntime: this.skillsRuntime,
       evaluateReflectionNudge: (toolSummary) => this.reflectionNudge.evaluate(toolSummary),
       emotionSelfModelRuntime: this.emotionSelfModelRuntime,

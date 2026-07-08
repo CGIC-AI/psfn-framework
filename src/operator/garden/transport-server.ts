@@ -98,6 +98,8 @@ export class GardenAdminTransportServer implements Lifecycle {
       contactsService: config.services.contacts,
       pendingContactsService: config.services.pendingContacts ?? null,
       roomsService: config.services.rooms ?? null,
+      placesService: config.services.places ?? null,
+      enrollmentService: config.services.enrollment ?? null,
       graphProposalsService: config.services.graphProposals ?? null,
       subsystemHealthService: config.services.subsystemHealth ?? null,
       toolConformanceService: config.services.toolConformance ?? null,

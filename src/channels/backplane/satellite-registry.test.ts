@@ -1,9 +1,14 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { principalFromApiKeyToken } from './http/auth.js';
 import {
+  loadSatelliteRegistryConfig,
   parseSatelliteRegistryConfig,
   resolveSatelliteConfigPull,
   resolveSatelliteClaim,
+  saveSatelliteRegistryConfig,
 } from './satellite-registry.js';
 
 const principal = principalFromApiKeyToken('test-secret-key');
@@ -610,5 +615,67 @@ describe('satellite registry', () => {
 
     expect(result.ok && result.value.satellite.capabilities.effective).toEqual(['text']);
     expect(result.ok && result.value.satellite.capabilities.policyDenied).toEqual(['robotics']);
+  });
+});
+
+describe('saveSatelliteRegistryConfig', () => {
+  let dataDir: string;
+
+  beforeEach(() => {
+    dataDir = mkdtempSync(join(tmpdir(), 'psfn-sat-'));
+  });
+
+  afterEach(() => {
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  it('round-trips a registry through save then load', () => {
+    const registry = exampleRegistry();
+    saveSatelliteRegistryConfig(dataDir, registry);
+    const reloaded = loadSatelliteRegistryConfig(dataDir);
+    expect(reloaded).toEqual(registry);
+  });
+
+  it('re-loads cleanly even when an endpoint has no telemetry scopes', () => {
+    const registry = exampleRegistry({
+      satellites: [
+        {
+          satelliteId: 'pi-min',
+          displayName: 'Minimal Pi',
+          mobility: 'static',
+          endpoints: [
+            {
+              endpointId: 'ep-min',
+              displayName: 'Minimal Endpoint',
+              claimTypes: ['voice-min'],
+              promptChannelType: 'voice_satellite',
+              auth: { mode: 'api_key' },
+              defaultIdentity: {
+                authorId: 'primary-user',
+                authorName: 'Primary User',
+                canonicalContactId: 'contact-primary-user',
+                channelPrivacy: 'private',
+              },
+              maxCapabilities: ['text'],
+            },
+          ],
+        },
+      ],
+    });
+    // A parsed endpoint carries telemetryScopes: [] which the parser rejects on
+    // re-parse; the save path must emit a re-loadable wire form.
+    expect(() => saveSatelliteRegistryConfig(dataDir, registry)).not.toThrow();
+    expect(loadSatelliteRegistryConfig(dataDir)).toEqual(registry);
+  });
+
+  it('persists a changed placeId binding', () => {
+    const registry = exampleRegistry();
+    const next = {
+      ...registry,
+      satellites: registry.satellites.map(satellite => ({ ...satellite, placeId: 'kitchen' })),
+    };
+    saveSatelliteRegistryConfig(dataDir, next);
+    const reloaded = loadSatelliteRegistryConfig(dataDir);
+    expect(reloaded.satellites[0]?.placeId).toBe('kitchen');
   });
 });

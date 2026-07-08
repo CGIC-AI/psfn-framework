@@ -573,6 +573,7 @@ async function main(): Promise<void> {
     episodicStore,
     pendingContactApprovals,
     socialGraphProposals: socialGraphProposalStore,
+    hubIdentityEnrollmentStore: persistedHubIdentityEnrollmentStore,
     card,
     shardManager,
     cardVersionStore,

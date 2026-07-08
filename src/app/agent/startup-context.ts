@@ -26,6 +26,7 @@ import {
   loadSatelliteRegistryConfig,
 } from '../../channels/backplane/satellite-registry.js';
 import {
+  assertSatellitePlaceBindings,
   loadPlacesRegistryConfig,
 } from '../../channels/backplane/places-registry.js';
 import { setRuntimeChannelEnvelopeLabels } from '../../system/trust/runtime-channel-labels.js';
@@ -142,6 +143,7 @@ export function prepareAgentStartupContext(input: {
   });
   const satelliteRegistryConfig = loadSatelliteRegistryConfig(pathSnapshot.systemDataDir);
   const placesRegistryConfig = loadPlacesRegistryConfig(pathSnapshot.systemDataDir);
+  assertSatellitePlaceBindings(satelliteRegistryConfig, placesRegistryConfig);
   const backupConfig = resolveBackupRuntimeConfig({
     dataDir: pathSnapshot.systemDataDir,
     defaultRootDir: pathSnapshot.runtimePathLayout.backupsDir,

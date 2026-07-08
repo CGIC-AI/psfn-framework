@@ -33,7 +33,7 @@ import { runShutdownSequence } from '../startup/support/shutdown-helpers.js';
 import { createSignalShutdownHandler, registerProcessErrorHandlers } from '../startup/support/signal-shutdown.js';
 import { resolveGatewayApiSurfaceBindings, startOptionalGatewayApiServer } from './api-surface.js';
 import { loadSatelliteRegistryConfig } from '../../channels/backplane/satellite-registry.js';
-import { loadPlacesRegistryConfig } from '../../channels/backplane/places-registry.js';
+import { assertSatellitePlaceBindings, loadPlacesRegistryConfig } from '../../channels/backplane/places-registry.js';
 import { CHARGE_POLICY_FILE_NAME } from '../../system/config/charge-policy-config.js';
 import { ensurePersonalFilesLayout } from '../../persistence/layout.js';
 
@@ -82,6 +82,7 @@ async function main(): Promise<void> {
   });
   const satelliteRegistryConfig = loadSatelliteRegistryConfig(startupHydration.pathSnapshot.systemDataDir);
   const placesRegistryConfig = loadPlacesRegistryConfig(startupHydration.pathSnapshot.systemDataDir);
+  assertSatellitePlaceBindings(satelliteRegistryConfig, placesRegistryConfig);
   log.info('Loaded places registry', {
     siteCount: placesRegistryConfig.sites.length,
     placeCount: placesRegistryConfig.places.length,

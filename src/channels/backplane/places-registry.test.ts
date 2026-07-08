@@ -3,6 +3,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
+  assertSatellitePlaceBindings,
   EMPTY_PLACES_REGISTRY_CONFIG,
   loadPlacesRegistryConfig,
   parsePlacesRegistryConfig,
@@ -10,6 +11,7 @@ import {
   resolvePlaceById,
   resolveSiteById,
 } from './places-registry.js';
+import { parseSatelliteRegistryConfig } from './satellite-registry.js';
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 
@@ -159,5 +161,60 @@ describe('config/places.seed.json', () => {
     for (const place of config.places) {
       expect(place.siteId).toBe('home');
     }
+  });
+});
+
+describe('assertSatellitePlaceBindings', () => {
+  function satelliteRegistry(placeId?: string) {
+    return parseSatelliteRegistryConfig({
+      schemaVersion: 1,
+      enabled: true,
+      satellites: [
+        {
+          satelliteId: 'pi-voice',
+          displayName: 'Living Room Voice Pi',
+          mobility: 'static',
+          ...(placeId ? { placeId } : {}),
+          endpoints: [
+            {
+              endpointId: 'wyoming-voice',
+              displayName: 'Wyoming Voice Endpoint',
+              claimTypes: ['voice-pi'],
+              promptChannelType: 'voice_satellite',
+              auth: { mode: 'api_key' },
+              defaultIdentity: {
+                authorId: 'operator',
+                authorName: 'Operator',
+                canonicalContactId: 'contact-operator',
+                channelPrivacy: 'private',
+              },
+              maxCapabilities: ['text'],
+            },
+          ],
+        },
+      ],
+    });
+  }
+
+  const places = parsePlacesRegistryConfig(exampleRegistry());
+
+  it('accepts a satellite bound to a place that exists', () => {
+    expect(() => assertSatellitePlaceBindings(satelliteRegistry('living_room'), places)).not.toThrow();
+  });
+
+  it('is a no-op when no satellite declares a placeId, even with an empty places registry', () => {
+    expect(() => assertSatellitePlaceBindings(satelliteRegistry(), EMPTY_PLACES_REGISTRY_CONFIG)).not.toThrow();
+  });
+
+  it('fails closed when a bound placeId does not exist in places.json', () => {
+    expect(() => assertSatellitePlaceBindings(satelliteRegistry('ghost_room'), places)).toThrow(
+      /satellite "pi-voice" binds to placeId "ghost_room" which does not exist/u,
+    );
+  });
+
+  it('fails closed when a satellite binds a placeId but places.json is absent (empty registry)', () => {
+    expect(() => assertSatellitePlaceBindings(satelliteRegistry('living_room'), EMPTY_PLACES_REGISTRY_CONFIG)).toThrow(
+      /binds to placeId "living_room" which does not exist/u,
+    );
   });
 });

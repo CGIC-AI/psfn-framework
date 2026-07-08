@@ -425,6 +425,14 @@ export function buildRuntimeContext(input: {
    * absent, the situated block resolves from the turn alone (B1 behaviour).
    */
   emanationTracker?: SituatedEmanationTracker;
+  /**
+   * Dual-presence situated fallback for this turn (vinz.29), resolved once by
+   * the agent so the rendered block, the co-presence read, and the presence
+   * write all foreground the same place. On mindspace (plain-chat) turns this
+   * is the twin of the last-known physical room; a deliberate virtual move
+   * outranks it. Absent ⇒ tracker fallback (B2 behaviour).
+   */
+  situatedFallbackPlaceId?: string;
 }): string {
   const runtimeContextExtra = (() => {
     const raw = input.templateVariables?.runtime_context_extra;
@@ -449,11 +457,22 @@ export function buildRuntimeContext(input: {
   // here". First consumer of message.routing.presence + the places registry.
   // coPresent is populated from shared companion_presence under
   // multi-companion (W5a); absent/empty renders byte-identically.
+  //
+  // vinz.29: the character-facing name of the shared-mindspace layer is an
+  // operator-authored character-card extension (`mindspace_label`) living in
+  // companion-data — it reaches this block through the flattened card
+  // template variables, exactly like `visual_description`. Never hardcoded.
+  const mindspaceLabel = (() => {
+    const raw = input.templateVariables?.extensions_mindspace_label;
+    return typeof raw === 'string' ? raw.trim() : '';
+  })();
   const situatedPresenceContext = buildSituatedPresenceContextBlock({
     message: input.message,
     ...(input.placesRegistry ? { placesRegistry: input.placesRegistry } : {}),
     ...(input.coPresent && input.coPresent.length > 0 ? { coPresent: input.coPresent } : {}),
     ...(input.emanationTracker ? { emanationTracker: input.emanationTracker } : {}),
+    ...(input.situatedFallbackPlaceId ? { situatedFallbackPlaceId: input.situatedFallbackPlaceId } : {}),
+    ...(mindspaceLabel ? { mindspaceLabel } : {}),
   });
   if (situatedPresenceContext) {
     sections.push(situatedPresenceContext);

@@ -118,6 +118,7 @@ import {
   type PostTurnActionInferer,
 } from './substrate-agent/post-turn-actions.js';
 import { resolveSituatedPlaceRef } from './substrate-agent/runtime-context-sections/situated-presence.js';
+import { resolveTurnSituatedFallbackPlaceId } from './substrate-agent/runtime-context-sections/turn-presence-mode.js';
 import type { CompanionPresenceTurnPort } from './companion-presence-runtime.js';
 import {
   buildBehavioralNotesContextBlock as buildBehavioralNotesContextBlockForTurn,
@@ -337,6 +338,30 @@ export class SubstrateAgent {
    */
   resolveCurrentSituatedPlaceId(): string | undefined {
     return this.situatedEmanationTracker.resolvePlaceId();
+  }
+
+  /**
+   * Dual-presence situated fallback for a turn (vinz.29, decisions 9-13): the
+   * place foregrounded when the turn carries no place binding of its own.
+   * Physical-origin turns keep the legacy chain (deliberate virtual move →
+   * active emanation); mindspace turns (plain chat) default to the TWIN of the
+   * durable last-known physical room, still outranked by a deliberate virtual
+   * move. Single seam for the situated block, co-presence read, wiki
+   * shared-world scope, and the mindspace presence write — they must all agree
+   * on where the companion is.
+   */
+  resolveSituatedFallbackPlaceIdForTurn(message: SubstrateMessage): string | undefined {
+    return resolveTurnSituatedFallbackPlaceId({
+      message,
+      ...(this.placesRegistryConfig ? { placesRegistry: this.placesRegistryConfig } : {}),
+      ...(this.situatedEmanationTracker.resolveVirtualMovePlaceId()
+        ? { virtualMovePlaceId: this.situatedEmanationTracker.resolveVirtualMovePlaceId() }
+        : {}),
+      ...(this.situatedEmanationTracker.snapshot()?.placeId
+        ? { emanationPlaceId: this.situatedEmanationTracker.snapshot()?.placeId }
+        : {}),
+      durableLocation: this.emotionSelfModelRuntime.getCurrentSituatedLocation(),
+    });
   }
 
   // Prompt composition — null falls back to static systemPrompt
@@ -963,7 +988,7 @@ export class SubstrateAgent {
       memoryExtractor: this.memoryExtractor,
       wikiRetrieval: this.wikiRetrieval,
       placesRegistry: this.placesRegistryConfig,
-      resolveSituatedFallbackPlaceId: () => this.situatedEmanationTracker.resolvePlaceId(),
+      resolveSituatedFallbackPlaceId: (message) => this.resolveSituatedFallbackPlaceIdForTurn(message),
       skillsRuntime: this.skillsRuntime,
       evaluateReflectionNudge: (toolSummary) => this.reflectionNudge.evaluate(toolSummary),
       emotionSelfModelRuntime: this.emotionSelfModelRuntime,
@@ -1311,17 +1336,22 @@ export class SubstrateAgent {
     conversationScope?: ConversationScope,
   ): string {
     const activeToolCounts = this.toolRuntimeFacade.resolveActiveToolCounts();
+    // Dual-presence fallback (vinz.29): single per-turn resolution shared by
+    // the co-presence read below AND the rendered situated block, so "Also
+    // here:" always agrees with "Here:" — including on mindspace (plain-chat)
+    // turns that foreground the twin of the last-known physical room.
+    const situatedFallbackPlaceId = this.resolveSituatedFallbackPlaceIdForTurn(message);
     // Co-presence (W5a): resolved against the SAME place resolution the
-    // situated block performs — turn place first, then the emanation tracker
-    // (physical emanation or deliberate virtual move, vinz.26) — so "Also
-    // here:" agrees with the rendered "Here:" on placeless turns too; null
-    // companionPresence (flag-off) yields no coPresent input and
-    // byte-identical rendering.
+    // situated block performs — turn place first, then the dual-presence
+    // fallback (deliberate virtual move, mindspace twin, or physical
+    // emanation) — so "Also here:" agrees with the rendered "Here:" on
+    // placeless turns too; null companionPresence (flag-off) yields no
+    // coPresent input and byte-identical rendering.
     const situatedPlace = this.companionPresence
       ? resolveSituatedPlaceRef(
         message,
         this.placesRegistryConfig,
-        this.situatedEmanationTracker.resolvePlaceId(),
+        situatedFallbackPlaceId,
       )
       : undefined;
     const coPresent = situatedPlace
@@ -1362,6 +1392,7 @@ export class SubstrateAgent {
       ...(this.placesRegistryConfig ? { placesRegistry: this.placesRegistryConfig } : {}),
       ...(coPresent && coPresent.length > 0 ? { coPresent } : {}),
       emanationTracker: this.situatedEmanationTracker,
+      ...(situatedFallbackPlaceId ? { situatedFallbackPlaceId } : {}),
     });
   }
 

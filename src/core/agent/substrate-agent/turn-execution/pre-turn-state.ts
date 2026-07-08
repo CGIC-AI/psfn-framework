@@ -236,8 +236,18 @@ export async function prepareTurnIdentityState(input: {
   // `presence.companion.co_located` inside this call. No-op when unwired
   // (single-companion / flag-off) or when the turn resolves no place; the port
   // never throws (presence failures are logged, not turn-fatal).
+  //
+  // Dual presence (vinz.29): a mindspace (plain-chat) turn that foregrounds a
+  // VIRTUAL place through the situated fallback (the twin of the last-known
+  // physical room, or a deliberate virtual move) counts as presence at that
+  // twin — the port writes kind 'virtual' there. The fallback never produces a
+  // physical arrival (the port only accepts virtual fallback places), so a
+  // Discord DM still cannot look like walking into a physical room.
   if (runtime.companionPresence) {
-    await runtime.companionPresence.observeTurnPlace(message);
+    await runtime.companionPresence.observeTurnPlace(
+      message,
+      runtime.resolveSituatedFallbackPlaceId?.(message),
+    );
   }
 
   const authorContext = await runtime.resolveAuthorContext(message);
@@ -614,15 +624,16 @@ export async function computePreTurnState(input: {
   // to '' on any error. Skipped on vision-bypass turns and when unwired.
   // W5b: resolve the companion's current site from the situated place seam so
   // wiki retrieval can add its shared-world scope. The fallback keeps a
-  // placeless turn on the same site the situated block foregrounds (active
-  // emanation or a deliberate virtual `move`, vinz.26) — the shared-scope swap
-  // follows the move with zero drift. Only meaningful under multi-companion;
-  // `resolveWikiRetrievalPlan` ignores it when the flag is off.
+  // placeless turn on the same site the situated block foregrounds (mindspace
+  // twin, active emanation, or a deliberate virtual `move` — vinz.29/vinz.26)
+  // — the shared-scope swap follows the foregrounded place with zero drift.
+  // Only meaningful under multi-companion; `resolveWikiRetrievalPlan` ignores
+  // it when the flag is off.
   const currentSiteId = runtime.config.multiCompanion === true
     ? resolveSituatedSiteId(
       message,
       runtime.placesRegistry,
-      runtime.resolveSituatedFallbackPlaceId?.(),
+      runtime.resolveSituatedFallbackPlaceId?.(message),
     )
     : undefined;
   const wikiContextBlock = runtime.wikiRetrieval && !bypassMemoryForVisionTurn

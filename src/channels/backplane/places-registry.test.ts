@@ -12,6 +12,7 @@ import {
   resolveSiteById,
 } from './places-registry.js';
 import { parseSatelliteRegistryConfig } from './satellite-registry.js';
+import { resolveTwinPlaceOf } from '../../shared/contracts/places-registry.js';
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 
@@ -125,6 +126,87 @@ describe('parsePlacesRegistryConfig', () => {
   });
 });
 
+describe('twin links (mirrorsPlaceId, vinz.29)', () => {
+  function twinRegistry(overrides: {
+    twinKind?: string;
+    mirrors?: string;
+    extraTwin?: boolean;
+  } = {}) {
+    const raw = exampleRegistry({
+      sites: [
+        { siteId: 'home', displayName: 'Home', kind: 'physical' },
+        { siteId: 'home_mindspace', displayName: 'Home Mindspace', kind: 'virtual' },
+      ],
+    });
+    (raw.places as any).push({
+      placeId: 'living_room_twin',
+      siteId: 'home_mindspace',
+      displayName: 'Living Room (Twin)',
+      kind: overrides.twinKind ?? 'virtual',
+      mirrorsPlaceId: overrides.mirrors ?? 'living_room',
+      affordances: [],
+    });
+    if (overrides.extraTwin) {
+      (raw.places as any).push({
+        placeId: 'living_room_twin_2',
+        siteId: 'home_mindspace',
+        displayName: 'Living Room (Second Twin)',
+        kind: 'virtual',
+        mirrorsPlaceId: 'living_room',
+        affordances: [],
+      });
+    }
+    return raw;
+  }
+
+  it('accepts a virtual place mirroring an existing physical place', () => {
+    const config = parsePlacesRegistryConfig(twinRegistry());
+    const twin = resolvePlaceById(config, 'living_room_twin');
+    expect(twin?.mirrorsPlaceId).toBe('living_room');
+    expect(twin?.kind).toBe('virtual');
+  });
+
+  it('resolves the twin of a physical place via resolveTwinPlaceOf', () => {
+    const config = parsePlacesRegistryConfig(twinRegistry());
+    expect(resolveTwinPlaceOf(config, 'living_room')?.placeId).toBe('living_room_twin');
+    expect(resolveTwinPlaceOf(config, 'nowhere')).toBeUndefined();
+    expect(resolveTwinPlaceOf(undefined, 'living_room')).toBeUndefined();
+  });
+
+  it('fails closed when a physical place declares mirrorsPlaceId', () => {
+    expect(() => parsePlacesRegistryConfig(twinRegistry({ twinKind: 'physical' }))).toThrow(
+      /mirrorsPlaceId is only allowed on virtual places/u,
+    );
+  });
+
+  it('fails closed on a dangling twin target', () => {
+    expect(() => parsePlacesRegistryConfig(twinRegistry({ mirrors: 'ghost_room' }))).toThrow(
+      /"living_room_twin" mirrors unknown placeId "ghost_room"/u,
+    );
+  });
+
+  it('fails closed when the twin target is not a physical place', () => {
+    const raw = twinRegistry();
+    (raw.places as any).push({
+      placeId: 'tavern',
+      siteId: 'home_mindspace',
+      displayName: 'Tavern',
+      kind: 'virtual',
+      affordances: [],
+    });
+    (raw.places as any).find((p: any) => p.placeId === 'living_room_twin').mirrorsPlaceId = 'tavern';
+    expect(() => parsePlacesRegistryConfig(raw)).toThrow(
+      /mirrors "tavern" which is not a physical place/u,
+    );
+  });
+
+  it('fails closed when a physical place has more than one twin', () => {
+    expect(() => parsePlacesRegistryConfig(twinRegistry({ extraTwin: true }))).toThrow(
+      /physical place "living_room" has more than one twin/u,
+    );
+  });
+});
+
 describe('resolvers', () => {
   const config = parsePlacesRegistryConfig(exampleRegistry());
 
@@ -149,7 +231,7 @@ describe('loadPlacesRegistryConfig', () => {
 });
 
 describe('config/places.seed.json', () => {
-  it('parses cleanly with the 4-room reference scenario', () => {
+  it('parses cleanly with the 4-room reference scenario plus a mindspace twin', () => {
     const text = readFileSync(join(REPO_ROOT, 'config', 'places.seed.json'), 'utf8');
     const config = parsePlacesRegistryConfig(JSON.parse(text), 'places.seed.json');
     expect(config.places.map((place) => place.placeId)).toEqual([
@@ -157,10 +239,13 @@ describe('config/places.seed.json', () => {
       'kitchen',
       'office',
       'bedroom',
+      'living_room_twin',
     ]);
-    for (const place of config.places) {
+    for (const place of config.places.filter((entry) => entry.kind === 'physical')) {
       expect(place.siteId).toBe('home');
     }
+    // The seed's twin example (vinz.29): a virtual mirror of the living room.
+    expect(resolveTwinPlaceOf(config, 'living_room')?.placeId).toBe('living_room_twin');
   });
 });
 

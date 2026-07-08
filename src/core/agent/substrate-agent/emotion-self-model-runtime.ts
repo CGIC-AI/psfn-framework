@@ -295,6 +295,17 @@ export class EmotionSelfModelRuntime {
     this.currentSituatedLocation = location;
   }
 
+  /**
+   * The durable last-known situated location (S10 B3): restored persisted
+   * state at startup, refreshed by each turn's carry-forward resolution.
+   * vinz.29 keys the shared-mindspace default off this — the twin of the
+   * last-known PHYSICAL room is the mindspace room a plain-chat turn
+   * foregrounds. Null when the companion has no known place.
+   */
+  getCurrentSituatedLocation(): SituatedLocation | null {
+    return this.currentSituatedLocation;
+  }
+
   async computeInternalStateForTurn(input: {
     message: SubstrateMessage;
     responseText: string;

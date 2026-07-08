@@ -1,7 +1,8 @@
 {
   "schemaVersion": 1,
   "sites": [
-    { "siteId": "home", "displayName": "Home", "kind": "physical" }
+    { "siteId": "home", "displayName": "Home", "kind": "physical" },
+    { "siteId": "home_mindspace", "displayName": "Home (Shared Mindspace)", "kind": "virtual" }
   ],
   "places": [
     {
@@ -92,6 +93,15 @@
           "control": ["on", "off", "brightness"]
         }
       ]
+    },
+    {
+      "placeId": "living_room_twin",
+      "siteId": "home_mindspace",
+      "displayName": "Living Room (Twin)",
+      "kind": "virtual",
+      "mirrorsPlaceId": "living_room",
+      "description": "A shared virtual reflection of the living room, co-inhabited during plain chat.",
+      "affordances": []
     }
   ]
 }

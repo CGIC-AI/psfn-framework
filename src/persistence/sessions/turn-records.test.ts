@@ -52,4 +52,30 @@ describe('turn-records', () => {
 
     expect(turnRecordStore.readRecentTurnRecords(record.channelId, 5)).toEqual([record]);
   });
+
+  it('round-trips a durable satellite/place location', () => {
+    const sessionsDir = mkdtempSync(join(tmpdir(), 'psfn-turn-records-location-'));
+    const record = createTurnRecord({
+      location: { placeId: 'living_room', satelliteId: 'pi-voice' },
+    });
+    const turnRecordStore = createFilesystemTurnRecordStorePort(sessionsDir);
+
+    turnRecordStore.appendTurnRecord(record);
+
+    const read = turnRecordStore.readRecentTurnRecords(record.channelId, 5);
+    expect(read).toEqual([record]);
+    expect(read[0]?.location).toEqual({ placeId: 'living_room', satelliteId: 'pi-voice' });
+  });
+
+  it('omits location for turns that carried no place binding (legacy rows load fine)', () => {
+    const sessionsDir = mkdtempSync(join(tmpdir(), 'psfn-turn-records-nolocation-'));
+    const record = createTurnRecord();
+    const turnRecordStore = createFilesystemTurnRecordStorePort(sessionsDir);
+
+    turnRecordStore.appendTurnRecord(record);
+
+    const read = turnRecordStore.readRecentTurnRecords(record.channelId, 5);
+    expect(read).toEqual([record]);
+    expect(read[0]).not.toHaveProperty('location');
+  });
 });

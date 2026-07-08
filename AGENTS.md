@@ -211,6 +211,10 @@ Expanded meaning in this repo:
 - Gateway policy and path checks must deny by default.
 - If a capability or confirmation requirement is missing, stop the action.
 
+## Bugfixing And Adversarial Review
+
+For high-risk bugfixes, recent-commit reviews, or recurring bug classes, use the practices in `docs/adversarial-review-and-bugfixing-practices.md`. Do not load that document on every session start; consult it when the task involves adversarial review, process repair, regression-first fixes, or changes to config ownership, gateway policy, trust/privacy, persistence, deployment, or durable memory writes.
+
 ## Live Alpha Migration Boundary
 
 Temporary migration support is allowed during alpha only when it is named in the live boundary in `docs/specifications.md`.

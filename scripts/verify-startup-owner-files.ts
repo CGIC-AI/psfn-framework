@@ -84,6 +84,7 @@ try {
     dataDir: config.dataDir,
     seedDir,
     defaultContextWindow: config.defaultContextWindow,
+    multiCompanion: config.multiCompanion,
   });
 
   if (!result.ok) {

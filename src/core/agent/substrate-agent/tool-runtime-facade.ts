@@ -98,9 +98,32 @@ interface ToolRuntimeFacadeOptions {
 }
 
 interface MaintenanceCoreToolPolicy {
-  readonly allowedActions: readonly string[];
-  readonly resolveAction: (params: Record<string, unknown>) => string | null;
+  // When present, the core tool survives a maintenance-restricted turn but its
+  // actions are constrained to this allowlist. When absent, the tool passes
+  // through unrestricted (used for expressive tools whose whole point is a
+  // single spontaneous action).
+  readonly allowedActions?: readonly string[];
+  readonly resolveAction?: (params: Record<string, unknown>) => string | null;
+  // Turn classes on which this core tool survives at all. Defaults to every
+  // maintenance-restricted class (heartbeat, reflection, maintenance). Narrow
+  // it to scope a tool to specific self-directed turn classes.
+  readonly allowedTaskKinds?: readonly string[];
 }
+
+// psfn img2 audit / img1 follow-up: maintenance-restricted turns (heartbeat,
+// reflection, maintenance) drop every core tool not listed here. The expressive
+// image tools live in core (img1), so without an explicit policy they would be
+// dropped from these turns entirely -- killing spontaneous inline self-portraits
+// during self-directed thinking. Decision, deliberate per turn class:
+//   - heartbeat  -> expressive tools available (unrestricted). Heartbeat is the
+//                   self-directed "free-time-flavoured" cognition turn where the
+//                   companion decides to reach out; inline generation belongs
+//                   here. (free-time/outreach lanes already allow them: their
+//                   channels carry no maintenance-restricted taskKind.)
+//   - reflection -> NOT available. Silent introspection over memory/self-model;
+//                   no outward image expression.
+//   - maintenance-> NOT available. Pure ops/housekeeping.
+const MAINTENANCE_EXPRESSIVE_TASK_KINDS = ['heartbeat'] as const;
 
 const MAINTENANCE_CORE_TOOL_POLICIES = new Map<string, MaintenanceCoreToolPolicy>([
   ['contact', {
@@ -122,6 +145,12 @@ const MAINTENANCE_CORE_TOOL_POLICIES = new Map<string, MaintenanceCoreToolPolicy
   ['system', {
     allowedActions: ['read'],
     resolveAction: resolveMaintenanceSystemAction,
+  }],
+  ['generate_image', {
+    allowedTaskKinds: MAINTENANCE_EXPRESSIVE_TASK_KINDS,
+  }],
+  ['selfie_create', {
+    allowedTaskKinds: MAINTENANCE_EXPRESSIVE_TASK_KINDS,
   }],
 ]);
 
@@ -993,20 +1022,33 @@ export class ToolRuntimeFacade {
       return null;
     }
 
+    // Turn-class scoping: a tool with allowedTaskKinds survives only on those
+    // classes (expressive tools are heartbeat-only); otherwise it survives all
+    // maintenance-restricted classes.
+    if (policy.allowedTaskKinds && !policy.allowedTaskKinds.includes(taskKind)) {
+      return null;
+    }
+
+    // No action allowlist => unrestricted pass-through on allowed turn classes.
+    if (!policy.allowedActions || !policy.resolveAction) {
+      return tool;
+    }
+
+    const { allowedActions, resolveAction } = policy;
     return {
       ...tool,
       execute: async (toolCallId, params, signal) => {
         const normalizedParams = isPlainRecord(params) ? params : {};
-        const requestedAction = policy.resolveAction(normalizedParams);
-        if (!requestedAction || !policy.allowedActions.includes(requestedAction)) {
+        const requestedAction = resolveAction(normalizedParams);
+        if (!requestedAction || !allowedActions.includes(requestedAction)) {
           const companionMessage = `${tool.name} is limited to read-only introspection during ${taskKind} turns. `
-            + `Allowed actions: ${policy.allowedActions.join(', ')}.`;
+            + `Allowed actions: ${allowedActions.join(', ')}.`;
           this.emitTelemetry('agent.tools.core_guardrail.denied', {
             ...this.withAdaptiveCorrelation(correlation ?? undefined, 'agent.tools.core_guardrail.denied'),
             toolName: tool.name,
             taskKind,
             requestedAction: requestedAction ?? null,
-            allowedActions: [...policy.allowedActions],
+            allowedActions: [...allowedActions],
             reason: 'maintenance_turn_allowlist',
           });
           return textResultWithError(
@@ -1019,7 +1061,7 @@ export class ToolRuntimeFacade {
                 toolName: tool.name,
                 taskKind,
                 requestedAction: requestedAction ?? null,
-                allowedActions: [...policy.allowedActions],
+                allowedActions: [...allowedActions],
                 reason: 'maintenance_turn_allowlist',
               },
             },

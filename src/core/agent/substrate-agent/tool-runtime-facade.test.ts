@@ -161,6 +161,53 @@ describe('ToolRuntimeFacade maintenance core tool policy', () => {
     ]));
   });
 
+  it('keeps expressive image tools available on heartbeat turns (psfn img2)', () => {
+    const { facade, agent, correlation } = createFacade('heartbeat');
+    facade.registerTool(makeTool('selfie_create'), 'core');
+    facade.registerTool(makeTool('generate_image'), 'core');
+    facade.registerTool(makeTool('subagent'), 'core');
+
+    facade.applyActiveToolsToAgentForTurn({
+      id: 'msg-hb-expressive',
+      channelId: 'internal:heartbeat',
+      channelType: 'api',
+      authorId: 'runtime',
+      authorName: 'Runtime',
+      content: 'heartbeat',
+      timestamp: new Date('2026-04-23T12:00:00Z'),
+    }, 'heartbeat', 'background', correlation, { intent: null, skipped: [] });
+
+    const names = (agent.setTools.mock.calls.at(-1)?.[0] as Array<{ name: string }>).map(t => t.name);
+    // Expressive tools survive the heartbeat self-directed turn; non-allowlisted
+    // core tools (subagent) are still dropped.
+    expect(names).toContain('selfie_create');
+    expect(names).toContain('generate_image');
+    expect(names).not.toContain('subagent');
+  });
+
+  it('drops expressive image tools from silent reflection turns (psfn img2)', () => {
+    const { facade, agent, correlation } = createFacade('reflection');
+    facade.registerTool(makeTool('selfie_create'), 'core');
+    facade.registerTool(makeTool('generate_image'), 'core');
+    facade.registerTool(makeTool('self_status'), 'core');
+
+    facade.applyActiveToolsToAgentForTurn({
+      id: 'msg-refl-expressive',
+      channelId: 'internal:reflection:test',
+      channelType: 'api',
+      authorId: 'runtime',
+      authorName: 'Runtime',
+      content: 'reflect',
+      timestamp: new Date('2026-04-23T12:00:00Z'),
+    }, 'reflection', 'background', correlation, { intent: null, skipped: [] });
+
+    const names = (agent.setTools.mock.calls.at(-1)?.[0] as Array<{ name: string }>).map(t => t.name);
+    // Reflection is silent introspection; no outward image expression.
+    expect(names).not.toContain('selfie_create');
+    expect(names).not.toContain('generate_image');
+    expect(names).toContain('self_status');
+  });
+
   it('routes analysis_workbench away from non-worker parent turns', () => {
     const { facade, agent, emitTelemetry, correlation } = createFacade(null);
     facade.registerTool(makeTool('identity'), 'core');

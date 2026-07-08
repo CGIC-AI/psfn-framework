@@ -26,7 +26,7 @@ class FakeTarget implements GitRuntimeTarget {
 }
 
 describe('wireGitRuntime', () => {
-  it('registers the unified repo tool as core', () => {
+  it('registers the unified repo tool as an extended dev surface (psfn img2 audit)', () => {
     const target = new FakeTarget();
     const registerTool = vi.spyOn(target, 'registerTool');
 
@@ -37,7 +37,7 @@ describe('wireGitRuntime', () => {
 
     expect(target.tools.map(t => t.name)).toEqual(['repo']);
     expect(registerTool.mock.calls.map(([tool, category]) => [tool.name, category])).toEqual([
-      ['repo', 'core'],
+      ['repo', 'extended'],
     ]);
   });
 

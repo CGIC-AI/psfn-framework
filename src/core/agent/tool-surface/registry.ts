@@ -161,7 +161,7 @@ export const CANONICAL_FIRST_PARTY_TOOL_SURFACES: readonly CanonicalToolSurfaceE
   {
     name: 'repo',
     domain: 'boundary',
-    exposure: 'core',
+    exposure: 'extended',
     description: 'Canonical repository inspection and guarded mutation surface.',
     actions: ['inspect', 'patch', 'commit', 'branch', 'publish'],
     capabilityMetadata: { kind: 'action_aware', source: CAPABILITIES_REQUIREMENTS },
@@ -177,7 +177,7 @@ export const CANONICAL_FIRST_PARTY_TOOL_SURFACES: readonly CanonicalToolSurfaceE
   {
     name: 'shell',
     domain: 'boundary',
-    exposure: 'core',
+    exposure: 'extended',
     description: 'Canonical shell execution surface.',
     actions: ['exec'],
     capabilityMetadata: { kind: 'action_aware', source: CAPABILITIES_REQUIREMENTS },
@@ -494,8 +494,10 @@ export const CANONICAL_FIRST_PARTY_TOOL_SURFACES: readonly CanonicalToolSurfaceE
 //
 // The active tool list handed to the model is ordered social/expressive
 // first and admin/boundary/system last, with name as the tie-breaker inside
-// each domain. Non-canonical tools (plugins, channel extras) rank between
-// the first-party feature domains and the boundary/system tail.
+// each domain. Non-canonical tools (plugins, channel extras) are unaudited
+// third-party surfaces; they rank at the very tail, after every first-party
+// domain including boundary/system, so the model's attention anchors on the
+// companion's own audited toolset before any plugin verb (psfn img2 audit).
 const TOOL_PRESENTATION_DOMAIN_RANK: Readonly<Record<FirstPartyToolDomain, number>> = {
   self_expression: 10,
   media: 20,
@@ -515,7 +517,7 @@ const TOOL_PRESENTATION_DOMAIN_RANK: Readonly<Record<FirstPartyToolDomain, numbe
   system: 170,
 };
 
-export const TOOL_PRESENTATION_RANK_UNKNOWN = 150;
+export const TOOL_PRESENTATION_RANK_UNKNOWN = 200;
 
 export function resolveToolPresentationRank(toolName: string): number {
   const canonical = CANONICAL_BY_NAME.get(toolName);

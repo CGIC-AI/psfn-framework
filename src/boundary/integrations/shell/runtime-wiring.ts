@@ -33,6 +33,9 @@ export function registerShellTools(
     if (options?.gatewayMode) {
       attachWiringMeta(tool, { requiredGatewayMethods: SHELL_TOOL_GATEWAY_METHODS[tool.name] });
     }
-    target.registerTool(tool, 'core');
+    // psfn img2 audit: shell is the heaviest/most-dangerous boundary surface
+    // and a deliberate dev/ops tool, never part of the default social stack.
+    // Registered extended so it stays behind toolset/load + promotion.
+    target.registerTool(tool, 'extended');
   }
 }

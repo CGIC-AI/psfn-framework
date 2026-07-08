@@ -10,7 +10,7 @@ function createMockTarget(): ShellRuntimeTarget & { registerTool: ReturnType<typ
 }
 
 describe('shell runtime wiring', () => {
-  it('registers shell as a core tool', () => {
+  it('registers shell as an extended dev/ops tool (psfn img2 audit)', () => {
     const target = createMockTarget();
     const ops = {
       exec: vi.fn(),
@@ -19,7 +19,7 @@ describe('shell runtime wiring', () => {
     registerShellTools(target, ops);
 
     expect(target.registerTool.mock.calls.map((call: any[]) => call[0].name)).toEqual(['shell']);
-    expect(target.registerTool.mock.calls.every((call: any[]) => call[1] === 'core')).toBe(true);
+    expect(target.registerTool.mock.calls.every((call: any[]) => call[1] === 'extended')).toBe(true);
   });
 
   it('attaches gateway wiring metadata in gateway mode', () => {

@@ -23,6 +23,7 @@ import {
   classifyExtendedToolForTurn as classifyDefaultExtendedToolForTurn,
   type ExtendedToolTurnClass,
 } from '../extended-tool-autoload-policy.js';
+import { resolveToolPresentationRank } from '../tool-surface/registry.js';
 import type { ToolCategory } from '../tool-registrar.js';
 import type {
   ToolConcurrencyClass,
@@ -385,8 +386,16 @@ export function resolveActiveTools(
     }
   }
 
+  // Present social/expressive tools first and admin/boundary/system last so
+  // the model reads for-the-user surfaces (selfie_create, generate_image,
+  // notify, contact) before dev/ops machinery; names break ties.
   const orderedActiveEntries = [...activeByName.values()]
-    .sort((left, right) => left.tool.name.localeCompare(right.tool.name));
+    .sort((left, right) => {
+      const rankDelta = resolveToolPresentationRank(left.tool.name)
+        - resolveToolPresentationRank(right.tool.name);
+      if (rankDelta !== 0) return rankDelta;
+      return left.tool.name.localeCompare(right.tool.name);
+    });
 
   const snapshotTools: AdaptiveToolSnapshotTool[] = orderedActiveEntries
     .map((entry) => ({

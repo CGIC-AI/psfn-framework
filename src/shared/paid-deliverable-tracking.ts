@@ -15,7 +15,7 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 export interface PendingPaidDeliverable {
   /** Charge surface that produced the artifact, e.g. 'paidImageGeneration'. */
   surface: string;
-  /** Tool that produced the artifact, e.g. 'selfie_create' or 'media'. */
+  /** Tool that produced the artifact, e.g. 'selfie_create' or 'generate_image'. */
   toolName?: string;
   /** Tool call id that produced the artifact, when known. */
   toolCallId?: string;

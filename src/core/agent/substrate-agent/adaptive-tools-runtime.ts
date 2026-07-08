@@ -23,6 +23,7 @@ import type {
 import {
   normalizeDeferredToolHandoffIntent,
   normalizeToolNameList,
+  normalizeToolNameListKeepingRetired,
   type DeferredToolHandoffIntent,
 } from '../deferred-tool-handoff.js';
 import {
@@ -34,10 +35,16 @@ import {
 } from '../extended-tool-autoload-policy.js';
 import {
   buildRuntimeToolCatalogEntry,
+  buildRuntimeToolListingEntry,
   type RuntimeToolCatalogEntry,
+  type RuntimeToolListingEntry,
 } from '../tool-catalog.js';
 import { suggestToolsForIntent } from '../tool-suggestion.js';
-import { isRetiredFirstPartyToolAlias } from '../tool-surface/registry.js';
+import {
+  getRetiredToolAlias,
+  isRetiredFirstPartyToolAlias,
+  type RetiredToolAlias,
+} from '../tool-surface/registry.js';
 import type {
   AutoloadTurnOutcome,
   PromotedToolMutationResult,
@@ -412,12 +419,36 @@ async function maybeRecordToolsetMutationMemory(input: {
 
 function createToolsetListPayload(runtime: ToolsetToolRuntime): Record<string, unknown> {
   const state = runtime.getAdaptiveToolRuntimeState();
+  // Compact listing entries (name, one-line description, action names) come
+  // from the same catalog metadata the Garden admin tool page renders, so the
+  // companion-facing enumeration and the operator surface cannot drift.
+  const listingByName = new Map<string, RuntimeToolListingEntry>();
+  for (const tool of runtime.getCoreTools?.() ?? []) {
+    listingByName.set(tool.name, buildRuntimeToolListingEntry(tool, 'core'));
+  }
+  for (const tool of filterCanonicalDiscoverableTools(runtime.getExtendedTools())) {
+    listingByName.set(tool.name, buildRuntimeToolListingEntry(tool, 'extended'));
+  }
+  const withListingMetadata = <T extends { toolName: string }>(entry: T): T & {
+    description?: string;
+    actions?: string[];
+  } => {
+    const listing = listingByName.get(entry.toolName);
+    if (!listing) return { ...entry };
+    return {
+      ...entry,
+      description: listing.description,
+      ...(listing.actions ? { actions: [...listing.actions] } : {}),
+    };
+  };
   const activeTools = state.activeTools
     .filter(entry => !isRetiredFirstPartyToolAlias(entry.toolName))
-    .map(entry => ({ ...entry }));
+    .map(withListingMetadata);
   const loadedTools = state.loadedExtendedTools
     .filter(entry => !isRetiredFirstPartyToolAlias(entry.toolName))
-    .map(entry => ({ ...entry }));
+    .map(withListingMetadata);
+  const availableExtendedTools = filterCanonicalToolNames(state.extendedTools)
+    .map(toolName => listingByName.get(toolName) ?? { name: toolName, description: '' });
   return {
     action: 'list',
     maxPinnedTools: runtime.getPromotedExtendedToolsLimit(),
@@ -425,7 +456,7 @@ function createToolsetListPayload(runtime: ToolsetToolRuntime): Record<string, u
     activePinnedTools: filterCanonicalToolNames(state.promotedToolsActive),
     activeTools,
     loadedTools,
-    availableExtendedTools: filterCanonicalToolNames(state.extendedTools),
+    availableExtendedTools,
     nextStep: 'Use tool_search to discover non-default tools, toolset action="describe" for schemas, then toolset action="activate" for this runtime or action="pin"/"unpin" across turns.',
   };
 }
@@ -508,7 +539,47 @@ async function executeToolsetActivateAction(
     maxRetries?: number;
   },
 ): Promise<AgentToolResult<{ isError?: boolean; deferredToolHandoff?: DeferredToolHandoffIntent }>> {
-  const requestedTools = normalizeToolNameList(executeParams.tools ?? []);
+  const rawRequestedTools = normalizeToolNameListKeepingRetired(executeParams.tools ?? []);
+
+  // Retired tool names fail loudly with the canonical replacement instead of
+  // being silently dropped: the model must be able to self-correct in-turn.
+  const retiredRequested = rawRequestedTools
+    .map(name => ({ name, retired: getRetiredToolAlias(name) }))
+    .filter((entry): entry is { name: string; retired: RetiredToolAlias } => entry.retired !== undefined);
+  if (retiredRequested.length > 0) {
+    const coreToolNames = new Set((runtime.getCoreTools?.() ?? []).map(tool => tool.name));
+    return toolsetResult({
+      action: 'activate',
+      retiredTools: retiredRequested.map(({ name, retired }) => ({
+        name,
+        useInstead: retired.canonicalName,
+        ...(retired.replacementAction ? { replacementAction: retired.replacementAction } : {}),
+      })),
+      message: retiredRequested
+        .map(({ name, retired }) => {
+          const replacement = retired.replacementAction
+            ? `"${retired.canonicalName}" (action="${retired.replacementAction}")`
+            : `"${retired.canonicalName}"`;
+          return coreToolNames.has(retired.canonicalName)
+            ? `Tool "${name}" is retired; ${replacement} replaces it and is a core tool that is already active — call it directly.`
+            : `Tool "${name}" is retired; use ${replacement} instead.`;
+        })
+        .join(' '),
+    }, { isError: true });
+  }
+
+  // Core tools are always active and never need activation; report them
+  // explicitly instead of letting them surface as confusing missing tools.
+  const coreNames = new Set((runtime.getCoreTools?.() ?? []).map(tool => tool.name));
+  const alreadyCoreTools = rawRequestedTools.filter(name => coreNames.has(name));
+  const requestedTools = rawRequestedTools.filter(name => !coreNames.has(name));
+  if (requestedTools.length === 0 && alreadyCoreTools.length > 0) {
+    return toolsetResult({
+      action: 'activate',
+      alreadyCoreTools,
+      message: `Core tools are always active and do not need activation: ${alreadyCoreTools.map(name => `"${name}"`).join(', ')}. Call them directly.`,
+    });
+  }
   if (requestedTools.length === 0) {
     const availableToolNames = filterCanonicalDiscoverableTools(runtime.getExtendedTools())
       .map(tool => tool.name);
@@ -639,6 +710,7 @@ async function executeToolsetActivateAction(
     return toolsetResult({
       action: 'activate',
       requestedTools,
+      ...(alreadyCoreTools.length > 0 ? { alreadyCoreTools } : {}),
       activatedTools: activation.activatedTools,
       alreadyActiveTools: activation.alreadyActiveTools,
       missingTools: activation.missingTools,
@@ -757,7 +829,7 @@ export function createToolsetTool(runtime: ToolsetToolRuntime): AgentTool<any> {
       if (action === 'activate') {
         return executeToolsetActivateAction(runtime, {
           ...executeParams,
-          tools: normalizeToolNameList(executeParams.tools ?? []),
+          tools: normalizeToolNameListKeepingRetired(executeParams.tools ?? []),
         });
       }
 

@@ -99,8 +99,8 @@ describe('createToolSearchTool', () => {
     const toolSearch = createToolSearchTool({
       getExtendedTools: () => [
         {
-          name: 'media',
-          description: 'Generate, edit, or analyze media.',
+          name: 'generate_image',
+          description: 'Create or edit an image from a text prompt. Second sentence stays out of compact listings.',
           parameters: {} as any,
           execute: vi.fn(),
         } as any,
@@ -114,7 +114,7 @@ describe('createToolSearchTool', () => {
       getAdaptiveToolRuntimeState: () => ({
         generatedAt: 1,
         coreTools: ['tool_search', 'toolset'],
-        extendedTools: ['media', 'image_create'],
+        extendedTools: ['generate_image', 'image_create'],
         promotedToolsConfigured: [],
         promotedToolsActive: [],
         promotedToolsSkipped: [],
@@ -135,9 +135,9 @@ describe('createToolSearchTool', () => {
     const result = await (toolSearch as any).execute('tool-search-3', { limit: 5 });
     const text = result.content?.[0]?.text as string;
 
-    expect(text).toContain('media');
+    expect(text).toContain('generate_image');
     expect(text).not.toContain('image_create');
-    expect(result.details?.toolSearch?.matches.map((match: { name: string }) => match.name)).toEqual(['media']);
+    expect(result.details?.toolSearch?.matches.map((match: { name: string }) => match.name)).toEqual(['generate_image']);
   });
 });
 
@@ -156,8 +156,8 @@ describe('createToolsetTool', () => {
         execute: vi.fn(),
       }] as any,
       getExtendedTools: () => [{
-        name: 'media',
-        description: 'Generate, edit, or analyze media.',
+        name: 'generate_image',
+        description: 'Create or edit an image from a text prompt. Second sentence stays out of compact listings.',
         parameters: Type.Object({
           action: Type.Union([
             Type.Literal('generate'),
@@ -172,7 +172,7 @@ describe('createToolsetTool', () => {
       getAdaptiveToolRuntimeState: () => ({
         generatedAt: 1,
         coreTools: ['tool_search', 'toolset', 'session'],
-        extendedTools: ['media'],
+        extendedTools: ['generate_image'],
         promotedToolsConfigured: [],
         promotedToolsActive: [],
         promotedToolsSkipped: [],
@@ -404,14 +404,14 @@ describe('createToolsetTool', () => {
     const activateExtendedTools = vi.fn();
     const runtimeState = createRuntimeState({
       coreTools: ['toolset'],
-      extendedTools: ['media'],
+      extendedTools: ['generate_image'],
       activeTools: [{ toolName: 'toolset', source: 'core' }],
     });
     const toolset = createBaseToolset({
       getCoreTools: () => [],
       getExtendedTools: () => [{
-        name: 'media',
-        description: 'Generate, edit, or analyze media and images.',
+        name: 'generate_image',
+        description: 'Create or edit an image from a text prompt. Second sentence stays out of compact listings.',
         parameters: Type.Object({
           action: Type.Union([
             Type.Literal('generate'),
@@ -432,7 +432,7 @@ describe('createToolsetTool', () => {
     const payload = JSON.parse(result.content?.[0]?.text as string);
 
     expect(payload.recommendations[0]).toMatchObject({
-      toolName: 'media',
+      toolName: 'generate_image',
       action: 'generate',
       availabilityStatus: 'requires_activation',
     });
@@ -446,13 +446,13 @@ describe('createToolsetTool', () => {
 
     const result = await (toolset as any).execute('toolset-describe-1', {
       action: 'describe',
-      tool: 'media',
+      tool: 'generate_image',
     });
     const payload = JSON.parse(result.content?.[0]?.text as string);
 
     expect(payload.tools).toHaveLength(1);
     expect(payload.tools[0]).toMatchObject({
-      name: 'media',
+      name: 'generate_image',
       scope: 'extended',
       schema: {
         actions: [
@@ -478,8 +478,8 @@ describe('createToolsetTool', () => {
     const toolset = createBaseToolset({
       getExtendedTools: () => [
         {
-          name: 'media',
-          description: 'Generate, edit, or analyze media.',
+          name: 'generate_image',
+          description: 'Create or edit an image from a text prompt. Second sentence stays out of compact listings.',
           parameters: {} as any,
           execute: vi.fn(),
         },
@@ -493,16 +493,16 @@ describe('createToolsetTool', () => {
       getAdaptiveToolRuntimeState: () => ({
         generatedAt: 1,
         coreTools: ['tool_search', 'toolset'],
-        extendedTools: ['media', 'image_create'],
-        promotedToolsConfigured: ['media', 'image_create'],
-        promotedToolsActive: ['media', 'image_create'],
+        extendedTools: ['generate_image', 'image_create'],
+        promotedToolsConfigured: ['generate_image', 'image_create'],
+        promotedToolsActive: ['generate_image', 'image_create'],
         promotedToolsSkipped: [],
         loadedExtendedTools: [
-          { toolName: 'media', source: 'extended_loaded', activatedAt: 1, lastActivatedAt: 1 },
+          { toolName: 'generate_image', source: 'extended_loaded', activatedAt: 1, lastActivatedAt: 1 },
           { toolName: 'image_create', source: 'extended_loaded', activatedAt: 1, lastActivatedAt: 1 },
         ],
         activeTools: [
-          { toolName: 'media', source: 'extended_loaded' },
+          { toolName: 'generate_image', source: 'extended_loaded' },
           { toolName: 'image_create', source: 'extended_loaded' },
         ],
         lastSnapshot: null,
@@ -513,8 +513,20 @@ describe('createToolsetTool', () => {
     const listResult = await (toolset as any).execute('toolset-list-1', { action: 'list' });
     const listPayload = JSON.parse(listResult.content?.[0]?.text as string);
     expect(JSON.stringify(listPayload)).not.toContain('image_create');
-    expect(listPayload.availableExtendedTools).toEqual(['media']);
-    expect(listPayload.pinnedTools).toEqual(['media']);
+    // Enumeration entries carry a compact first-sentence description plus
+    // action names — the same catalog metadata the Garden tool page renders.
+    expect(listPayload.availableExtendedTools).toEqual([{
+      name: 'generate_image',
+      description: 'Create or edit an image from a text prompt.',
+      actions: ['generate', 'edit', 'analyze'],
+    }]);
+    expect(listPayload.activeTools).toEqual([{
+      toolName: 'generate_image',
+      source: 'extended_loaded',
+      description: 'Create or edit an image from a text prompt.',
+      actions: ['generate', 'edit', 'analyze'],
+    }]);
+    expect(listPayload.pinnedTools).toEqual(['generate_image']);
 
     const activateResult = await (toolset as any).execute('toolset-activate-retired-1', {
       action: 'activate',
@@ -522,7 +534,32 @@ describe('createToolsetTool', () => {
     });
     expect(activateExtendedTools).not.toHaveBeenCalled();
     expect(activateResult.details?.isError).toBe(true);
-    expect(activateResult.content?.[0]?.text).not.toContain('image_create');
+    // Retired names fail with an actionable error naming the canonical
+    // replacement instead of being silently hidden.
+    const activatePayload = JSON.parse(activateResult.content?.[0]?.text as string);
+    expect(activatePayload.message).toContain('Tool "image_create" is retired');
+    expect(activatePayload.message).toContain('generate_image');
+  });
+
+  it('fails a retired media activation with an error naming generate_image', async () => {
+    const activateExtendedTools = vi.fn();
+    const toolset = createBaseToolset({ activateExtendedTools });
+
+    const result = await (toolset as any).execute('toolset-activate-media-1', {
+      action: 'activate',
+      tools: ['media'],
+    });
+    const payload = JSON.parse(result.content?.[0]?.text as string);
+
+    expect(activateExtendedTools).not.toHaveBeenCalled();
+    expect(result.details?.isError).toBe(true);
+    expect(payload.retiredTools).toEqual([{
+      name: 'media',
+      useInstead: 'generate_image',
+      replacementAction: 'generate',
+    }]);
+    expect(payload.message).toContain('"media" is retired');
+    expect(payload.message).toContain('generate_image');
   });
 
   it('explains the required tools array when activate is called without tool names', async () => {
@@ -537,12 +574,12 @@ describe('createToolsetTool', () => {
     expect(payload).toMatchObject({
       action: 'activate',
       requiredField: 'tools',
-      minimalValidJson: { action: 'activate', tools: ['media'] },
-      availableTools: ['media'],
+      minimalValidJson: { action: 'activate', tools: ['generate_image'] },
+      availableTools: ['generate_image'],
     });
     expect(payload.message).toContain('Missing required field "tools" for action="activate"');
     expect(payload.message).toContain('Provide a non-empty tools array');
-    expect(payload.message).toContain('Minimal valid JSON: {"action":"activate","tools":["media"]}');
+    expect(payload.message).toContain('Minimal valid JSON: {"action":"activate","tools":["generate_image"]}');
     expect(payload.message).toContain('Use {"action":"list"} to see valid extended tool names');
     expect(payload.message).toContain('do not repeat activate without tools');
   });
@@ -556,8 +593,8 @@ describe('createToolsetTool', () => {
     }));
     const toolset = createToolsetTool({
       getExtendedTools: () => [{
-        name: 'media',
-        description: 'Generate, edit, or analyze media.',
+        name: 'generate_image',
+        description: 'Create or edit an image from a text prompt. Second sentence stays out of compact listings.',
         parameters: {} as any,
         execute: vi.fn(),
       }],
@@ -565,7 +602,7 @@ describe('createToolsetTool', () => {
       getAdaptiveToolRuntimeState: () => ({
         generatedAt: 1,
         coreTools: ['tool_search', 'toolset'],
-        extendedTools: ['media'],
+        extendedTools: ['generate_image'],
         promotedToolsConfigured: [],
         promotedToolsActive: [],
         promotedToolsSkipped: [],
@@ -607,7 +644,7 @@ describe('createToolsetTool', () => {
 
     const params = {
       action: 'activate',
-      tools: [{ name: 'media' }],
+      tools: [{ name: 'generate_image' }],
     };
 
     expect(Value.Check((toolset as any).parameters, params)).toBe(true);
@@ -615,8 +652,8 @@ describe('createToolsetTool', () => {
     const result = await (toolset as any).execute('toolset-activate-1', params);
     const payload = JSON.parse(result.content?.[0]?.text as string);
 
-    expect(activateExtendedTools).toHaveBeenCalledWith(['media'], expect.any(Object));
-    expect(payload.requestedTools).toEqual(['media']);
-    expect(payload.activatedTools).toEqual(['media']);
+    expect(activateExtendedTools).toHaveBeenCalledWith(['generate_image'], expect.any(Object));
+    expect(payload.requestedTools).toEqual(['generate_image']);
+    expect(payload.activatedTools).toEqual(['generate_image']);
   });
 });

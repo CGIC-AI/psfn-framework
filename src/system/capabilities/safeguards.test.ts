@@ -31,7 +31,7 @@ describe('tool reversibility tagging', () => {
     expect(resolveToolReversibility('repo')).toBe('irreversible');
     expect(resolveToolReversibility('repo_commit')).toBe('irreversible');
     expect(resolveToolReversibility('skill')).toBe('irreversible');
-    expect(resolveToolReversibility('media')).toBe('irreversible');
+    expect(resolveToolReversibility('generate_image')).toBe('irreversible');
     expect(resolveToolReversibility('selfie_create')).toBe('irreversible');
   });
 

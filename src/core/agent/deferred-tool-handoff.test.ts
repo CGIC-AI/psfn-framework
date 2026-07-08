@@ -13,25 +13,26 @@ import {
 describe('normalizeToolNameList', () => {
   it('accepts mixed string and object tool name entries', () => {
     expect(normalizeToolNameList([
-      ' media ',
+      ' generate_image ',
       { name: 'selfie_create' },
+      // Retired first-party aliases are dropped from normalized lists.
       { name: 'media' },
       { name: '   ' },
       { tool: 'ignored' },
       null,
-    ])).toEqual(['media', 'selfie_create']);
+    ])).toEqual(['generate_image', 'selfie_create']);
   });
 });
 
 describe('normalizeDeferredToolHandoffIntent', () => {
   it('accepts object tool name entries in deferred payloads', () => {
     expect(normalizeDeferredToolHandoffIntent({
-      toolNames: [{ name: 'media' }],
+      toolNames: [{ name: 'generate_image' }],
       intendedAction: 'continue edit flow',
       maxRetries: 2,
       sessionId: 'session-1',
     })).toEqual({
-      toolNames: ['media'],
+      toolNames: ['generate_image'],
       intendedAction: 'continue edit flow',
       maxRetries: 2,
       sessionId: 'session-1',
@@ -57,7 +58,7 @@ describe('buildDeferredToolHandoffMessage', () => {
     };
 
     const candidate = buildDeferredToolHandoffCandidate({
-      toolNames: ['media'],
+      toolNames: ['generate_image'],
       intendedAction: 'continue the deferred image edit',
     }, sourceMessage, 'chat');
     const payload = normalizeDeferredToolHandoffPayload(candidate.payload);

@@ -188,7 +188,7 @@ export const DEFAULT_GATEWAY_TOOL_METADATA_COVERAGE: GatewayToolMetadataCoverage
   issue_update: Object.freeze(['beads.update']),
   issue_close: Object.freeze(['beads.close']),
   issue_sync: Object.freeze(['beads.sync']),
-  media: Object.freeze(['image.create', 'image.edit', 'web.fetch_binary']),
+  generate_image: Object.freeze(['image.create', 'image.edit', 'web.fetch_binary']),
   selfie_create: Object.freeze(['image.create', 'image.edit', 'web.fetch_binary']),
   world: Object.freeze(['home_assistant.get_states', 'home_assistant.call_service']),
 });

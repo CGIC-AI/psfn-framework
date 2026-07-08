@@ -202,8 +202,8 @@ const TOOL_HINTS: Readonly<Partial<Record<string, {
       close: ['close issue', 'close bead'],
     },
   },
-  media: {
-    terms: ['image', 'media', 'picture', 'photo', 'visual'],
+  generate_image: {
+    terms: ['image', 'media', 'picture', 'photo', 'visual', 'draw'],
     actions: {
       generate: ['generate image', 'create image', 'make picture'],
       edit: ['edit image', 'modify image'],

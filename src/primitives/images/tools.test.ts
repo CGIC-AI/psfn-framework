@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AgentToolResult } from '@mariozechner/pi-agent-core';
 import type { TextContent } from '@mariozechner/pi-ai';
 import { runWithVisionToolRequestContext } from './request-context.js';
-import { createMediaTool, createSelfieTool } from './tools.js';
+import { createGenerateImageTool, createSelfieTool } from './tools.js';
 import { IMAGE_ASPECT_RATIO_VALUES, type ImageToolResultDetails, type ImageVisionReviewer, type MediaToolResultDetails } from './types.js';
 import {
   chargeSurface,
@@ -45,7 +45,7 @@ function readAspectRatios(tool: { parameters: unknown }): string[] {
     .filter((value): value is string => typeof value === 'string');
 }
 
-function readActions(tool: ReturnType<typeof createMediaTool>): string[] {
+function readActions(tool: ReturnType<typeof createGenerateImageTool>): string[] {
   const schema = (tool.parameters as {
     properties?: Record<string, { anyOf?: Array<{ const?: string }> }>;
   }).properties?.action;
@@ -109,32 +109,65 @@ function makeInteractiveQuotaPolicy(quota: number): ChargePolicyConfig {
 }
 
 describe('image tools', () => {
-  it('exposes generate, edit, and analyze actions on the unified media surface', () => {
-    const tool = createMediaTool({
+  it('exposes generate, edit, and analyze actions on generate_image and cross-references selfie_create', () => {
+    const tool = createGenerateImageTool({
       create: vi.fn(),
       edit: vi.fn(),
     });
 
+    expect(tool.name).toBe('generate_image');
     expect(readActions(tool)).toEqual(['generate', 'edit', 'analyze']);
-    expect(tool.description).toContain('generate requires prompt');
-    expect(tool.description).toContain('edit requires prompt and input_urls');
-    expect(tool.description).toContain('analyze requires input_urls');
+    expect(tool.description).toContain('action="generate" requires prompt');
+    expect(tool.description).toContain('action="edit" requires prompt and input_urls');
+    expect(tool.description).toContain('action="analyze" requires input_urls');
+    // Concrete user trigger phrasing plus an explicit when-NOT-to-use line
+    // that routes self-images to selfie_create.
+    expect(tool.description).toContain('"draw me a..."');
+    expect(tool.description).toContain('Do NOT use this for images of yourself');
+    expect(tool.description).toContain('selfie_create');
+    expect(tool.description).toContain('what do you look like right now');
     expect((tool.parameters as any).properties.prompt.description).toContain('Required for action=generate');
     expect((tool.parameters as any).properties.input_urls.description).toContain('Required for action=edit');
   });
 
-  it('keeps selfie_create concise and focused on required prompt/reference behavior', () => {
+  it('keeps selfie_create self-image-only and cross-references generate_image for everything else', () => {
     const tool = createSelfieTool({
       create: vi.fn(),
       edit: vi.fn(),
     });
 
-    expect(tool.description.length).toBeLessThan(520);
+    expect(tool.name).toBe('selfie_create');
+    expect(tool.description.length).toBeLessThan(600);
     expect(tool.description).toContain('Requires prompt');
     expect(tool.description).toContain('saved-reference anchoring');
+    // Concrete user trigger phrasing plus an explicit when-NOT-to-use line
+    // that routes non-self images to generate_image.
+    expect(tool.description).toContain('"send me a selfie"');
+    expect(tool.description).toContain('what do you look like right now');
+    expect(tool.description).toContain('Do NOT use this for anything that is not you');
+    expect(tool.description).toContain('generate_image');
     expect(tool.description).not.toContain('content policy');
     expect((tool.parameters as any).properties.edit_model.description.length).toBeLessThan(220);
     expect((tool.parameters as any).properties.edit_model.description).not.toContain('gpt-image-2');
+  });
+
+  it('rejects an unknown fal model with an error listing the valid models', async () => {
+    const create = vi.fn();
+    const tool = createGenerateImageTool({
+      create,
+      edit: vi.fn(),
+    });
+
+    const result = await tool.execute('call-model', {
+      action: 'generate',
+      prompt: 'a lighthouse at dusk',
+      model: 'not-a-real-model',
+    }, undefined as any);
+
+    expect(create).not.toHaveBeenCalled();
+    expect(result.details?.isError).toBe(true);
+    expect(resultText(result)).toContain('Invalid "model" value "not-a-real-model"');
+    expect(resultText(result)).toContain('Valid generation models:');
   });
 
   it('returns minimal valid examples for missing media arguments', async () => {
@@ -146,7 +179,7 @@ describe('image tools', () => {
         imageCount: 1,
       })),
     };
-    const tool = createMediaTool({
+    const tool = createGenerateImageTool({
       create: vi.fn(),
       edit: vi.fn(),
     }, reviewer);
@@ -166,11 +199,11 @@ describe('image tools', () => {
       action: 'analyze',
     }) as AgentToolResult<MediaToolResultDetails>;
 
-    expect(resultText(missingGeneratePrompt)).toContain('Missing required field "prompt" for media action="generate"');
+    expect(resultText(missingGeneratePrompt)).toContain('Missing required field "prompt" for generate_image action="generate"');
     expect(resultText(missingGeneratePrompt)).toContain('{"action":"generate","prompt":"full image description"}');
-    expect(resultText(missingEditPrompt)).toContain('Missing required field "prompt" for media action="edit"');
-    expect(resultText(missingEditInput)).toContain('Missing required field "input_urls" for media action="edit"');
-    expect(resultText(missingAnalyzeInput)).toContain('Missing required field "input_urls" for media action="analyze"');
+    expect(resultText(missingEditPrompt)).toContain('Missing required field "prompt" for generate_image action="edit"');
+    expect(resultText(missingEditInput)).toContain('Missing required field "input_urls" for generate_image action="edit"');
+    expect(resultText(missingAnalyzeInput)).toContain('Missing required field "input_urls" for generate_image action="analyze"');
     expect(missingGeneratePrompt.details.isError).toBe(true);
     expect(missingEditPrompt.details.isError).toBe(true);
     expect(missingEditInput.details.isError).toBe(true);
@@ -178,7 +211,7 @@ describe('image tools', () => {
   });
 
   it('does not capability-gate benign media and selfie actions', () => {
-    const mediaTool = createMediaTool({
+    const mediaTool = createGenerateImageTool({
       create: vi.fn(),
       edit: vi.fn(),
     });
@@ -225,7 +258,7 @@ describe('image tools', () => {
       }),
     } as any;
 
-    const tool = createMediaTool(ops, reviewer);
+    const tool = createGenerateImageTool(ops, reviewer);
     const result = await runWithChargeContext({
       chargePolicy: makeChargePolicy(),
       eventBus,
@@ -277,7 +310,7 @@ describe('image tools', () => {
       })),
     };
 
-    const tool = createMediaTool({
+    const tool = createGenerateImageTool({
       create: vi.fn(),
       edit: vi.fn(),
     }, reviewer);
@@ -311,7 +344,7 @@ describe('image tools', () => {
       }),
     } as any;
 
-    const tool = createMediaTool(ops);
+    const tool = createGenerateImageTool(ops);
     await runWithChargeContext({
       chargePolicy: makeChargePolicy(),
       eventBus,
@@ -366,7 +399,7 @@ describe('image tools', () => {
       chargeSurface('paidImageGeneration');
     });
 
-    const tool = createMediaTool(ops);
+    const tool = createGenerateImageTool(ops);
     const result = await runWithChargeContext({
       chargePolicy,
       lane: 'interactive',
@@ -378,14 +411,14 @@ describe('image tools', () => {
 
     expect(ops.create).not.toHaveBeenCalled();
     expect(result.details.isError).toBe(true);
-    expect(resultText(result)).toContain('media generate failed: Charge quota exceeded');
+    expect(resultText(result)).toContain('generate_image generate failed: Charge quota exceeded');
     expect(resultText(result)).toContain('rolling 24-hour budget');
     expect(existsSync(artifactPath)).toBe(false);
     expect(existsSync(sidecarPath)).toBe(false);
   });
 
   it('constrains aspect_ratio to the supported preset list for media and selfie tools', () => {
-    const mediaTool = createMediaTool({
+    const mediaTool = createGenerateImageTool({
       create: vi.fn(),
       edit: vi.fn(),
     });
@@ -424,7 +457,7 @@ describe('image tools', () => {
       })),
     };
 
-    const tool = createMediaTool(ops, reviewer);
+    const tool = createGenerateImageTool(ops, reviewer);
     const result = await tool.execute('tool-call-1', {
       action: 'generate',
       prompt: 'a cute mirror selfie of me in warm morning light',
@@ -958,7 +991,7 @@ describe('image tools', () => {
       })),
     };
 
-    const tool = createMediaTool(ops, undefined, { referenceResolver });
+    const tool = createGenerateImageTool(ops, undefined, { referenceResolver });
     const result = await tool.execute('tool-call-edit-ref', {
       action: 'edit',
       prompt: 'keep the pose, update the hairstyle to match the reference',
@@ -975,7 +1008,7 @@ describe('image tools', () => {
         'https://images.example.test/source.png',
         'data:image/png;base64,c2hvcnQ=',
       ],
-      sourceToolName: 'media',
+      sourceToolName: 'generate_image',
       referenceImageIds: ['ref-short-hair'],
     }));
     expect(result.details.mediaResult?.requestId).toBe('req-edit-ref-1');
@@ -991,7 +1024,7 @@ describe('image tools', () => {
       })),
     };
 
-    const tool = createMediaTool({
+    const tool = createGenerateImageTool({
       create: vi.fn(),
       edit: vi.fn(),
     }, reviewer);
@@ -1020,7 +1053,7 @@ describe('image tools', () => {
       })),
     };
 
-    const tool = createMediaTool({
+    const tool = createGenerateImageTool({
       create: vi.fn(),
       edit: vi.fn(),
     }, reviewer);
@@ -1062,7 +1095,7 @@ describe('image tools', () => {
       })),
     };
 
-    const tool = createMediaTool({
+    const tool = createGenerateImageTool({
       create: vi.fn(),
       edit: vi.fn(),
     }, reviewer);
@@ -1098,7 +1131,7 @@ describe('image tools', () => {
       })),
     };
 
-    const tool = createMediaTool({
+    const tool = createGenerateImageTool({
       create: vi.fn(),
       edit: vi.fn(),
     }, reviewer);
@@ -1131,7 +1164,7 @@ describe('image tools', () => {
     };
     const explicitUrl = 'https://images.example.test/review/explicit-image.png?token=current';
 
-    const tool = createMediaTool({
+    const tool = createGenerateImageTool({
       create: vi.fn(),
       edit: vi.fn(),
     }, reviewer);

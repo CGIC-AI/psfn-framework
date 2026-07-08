@@ -206,7 +206,7 @@ The direct first-party surface is declared in `src/core/agent/tool-surface/regis
 - adaptive control: `tool_search`, `toolset`, and `response_control action=no_reply`
 - workspace and external primitives: `fs`, `repo`, `shell`, `web`, `analysis_workbench`
 - companion state: `memory`, `scratchpad`, `contact`, `session`, `identity`, `orient`, `north_star`, `schedule`, `self_status`, `system`, `skill`, `wiki`, `journal`
-- operations and lifecycle: `beads`, `notify`, `media`, `selfie_create`, `vault`
+- operations and lifecycle: `beads`, `notify`, `generate_image`, `selfie_create`, `vault`
 - bounded workers: `subagent action=spawn|message|wait|cancel|status`
 
 Shard execution is implemented as an internal long-horizon runtime with fold-back lineage and review, but the direct model-facing `shard` surface is still a reserved extended control-plane entry. Use `subagent` for bounded worker control until the shard surface is fully registered and documented as live.

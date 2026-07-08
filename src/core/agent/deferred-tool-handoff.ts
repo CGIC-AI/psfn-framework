@@ -76,7 +76,9 @@ function normalizeSessionId(raw: unknown): string | undefined {
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
-export function normalizeToolNameList(raw: unknown): string[] {
+// Trim/dedupe only — retired first-party aliases are KEPT so callers that
+// need to fail loudly on them (toolset activate) can name the replacement.
+export function normalizeToolNameListKeepingRetired(raw: unknown): string[] {
   if (!Array.isArray(raw)) {
     return [];
   }
@@ -92,10 +94,15 @@ export function normalizeToolNameList(raw: unknown): string[] {
           ? (entry as { name: string }).name.trim()
           : ''
     );
-    if (!trimmed || isRetiredFirstPartyToolAlias(trimmed)) continue;
+    if (!trimmed) continue;
     deduped.add(trimmed);
   }
   return [...deduped];
+}
+
+export function normalizeToolNameList(raw: unknown): string[] {
+  return normalizeToolNameListKeepingRetired(raw)
+    .filter(name => !isRetiredFirstPartyToolAlias(name));
 }
 
 export function normalizeDeferredToolHandoffIntent(raw: unknown): DeferredToolHandoffIntent | null {

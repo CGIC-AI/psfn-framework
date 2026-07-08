@@ -60,13 +60,19 @@ import {
   type ValidateToolsOptions,
   type WirableTool,
 } from '../tool-wiring-validator.js';
-import { assertNoModelFacingDriftGuardToolAliases } from '../tool-surface/registry.js';
+import {
+  assertNoModelFacingDriftGuardToolAliases,
+  getRetiredToolAlias,
+} from '../tool-surface/registry.js';
+import { createComponentLogger } from '../../../shared/logger.js';
 import type { RuntimeServiceHealthStatus } from '../../../operator/tool-health/types.js';
 import {
   buildRuntimeToolCatalogEntry,
   type RuntimeToolCatalogSnapshot,
 } from '../tool-catalog.js';
 import { resolveTurnWorkerExecutionPolicy } from './model-runtime.js';
+
+const log = createComponentLogger('tool-runtime-facade');
 
 interface ToolRuntimeFacadeOptions {
   config: SubstrateConfig;
@@ -92,9 +98,32 @@ interface ToolRuntimeFacadeOptions {
 }
 
 interface MaintenanceCoreToolPolicy {
-  readonly allowedActions: readonly string[];
-  readonly resolveAction: (params: Record<string, unknown>) => string | null;
+  // When present, the core tool survives a maintenance-restricted turn but its
+  // actions are constrained to this allowlist. When absent, the tool passes
+  // through unrestricted (used for expressive tools whose whole point is a
+  // single spontaneous action).
+  readonly allowedActions?: readonly string[];
+  readonly resolveAction?: (params: Record<string, unknown>) => string | null;
+  // Turn classes on which this core tool survives at all. Defaults to every
+  // maintenance-restricted class (heartbeat, reflection, maintenance). Narrow
+  // it to scope a tool to specific self-directed turn classes.
+  readonly allowedTaskKinds?: readonly string[];
 }
+
+// psfn img2 audit / img1 follow-up: maintenance-restricted turns (heartbeat,
+// reflection, maintenance) drop every core tool not listed here. The expressive
+// image tools live in core (img1), so without an explicit policy they would be
+// dropped from these turns entirely -- killing spontaneous inline self-portraits
+// during self-directed thinking. Decision, deliberate per turn class:
+//   - heartbeat  -> expressive tools available (unrestricted). Heartbeat is the
+//                   self-directed "free-time-flavoured" cognition turn where the
+//                   companion decides to reach out; inline generation belongs
+//                   here. (free-time/outreach lanes already allow them: their
+//                   channels carry no maintenance-restricted taskKind.)
+//   - reflection -> NOT available. Silent introspection over memory/self-model;
+//                   no outward image expression.
+//   - maintenance-> NOT available. Pure ops/housekeeping.
+const MAINTENANCE_EXPRESSIVE_TASK_KINDS = ['heartbeat'] as const;
 
 const MAINTENANCE_CORE_TOOL_POLICIES = new Map<string, MaintenanceCoreToolPolicy>([
   ['contact', {
@@ -117,10 +146,16 @@ const MAINTENANCE_CORE_TOOL_POLICIES = new Map<string, MaintenanceCoreToolPolicy
     allowedActions: ['read'],
     resolveAction: resolveMaintenanceSystemAction,
   }],
+  ['generate_image', {
+    allowedTaskKinds: MAINTENANCE_EXPRESSIVE_TASK_KINDS,
+  }],
+  ['selfie_create', {
+    allowedTaskKinds: MAINTENANCE_EXPRESSIVE_TASK_KINDS,
+  }],
 ]);
 
 const SATELLITE_VISUAL_TOOL_NAMES = new Set([
-  'media',
+  'generate_image',
   'selfie_create',
 ]);
 
@@ -561,18 +596,51 @@ export class ToolRuntimeFacade {
     }
 
     const disabledNames = validateAndLogToolWiring(options);
-    if (disabledNames.length === 0) return;
-
-    const disabledSet = new Set(disabledNames);
-    this.coreTools = this.coreTools.filter(t => !disabledSet.has(t.name));
-    this.extendedTools = this.extendedTools.filter(t => !disabledSet.has(t.name));
-    for (const disabledName of disabledSet) {
-      this.loadedExtended.delete(disabledName);
+    if (disabledNames.length > 0) {
+      const disabledSet = new Set(disabledNames);
+      this.coreTools = this.coreTools.filter(t => !disabledSet.has(t.name));
+      this.extendedTools = this.extendedTools.filter(t => !disabledSet.has(t.name));
+      for (const disabledName of disabledSet) {
+        this.loadedExtended.delete(disabledName);
+      }
+      const filteredPromoted = this
+        .getPromotedExtendedToolNamesInternal()
+        .filter(name => !disabledSet.has(name));
+      this.setPromotedExtendedToolNamesInternal(filteredPromoted);
     }
-    const filteredPromoted = this
-      .getPromotedExtendedToolNamesInternal()
-      .filter(name => !disabledSet.has(name));
-    this.setPromotedExtendedToolNamesInternal(filteredPromoted);
+    this.auditStoredPromotedToolNames();
+  }
+
+  // Stored promoted-tool state can reference names that no longer resolve
+  // (retired tool names after a rename, tools that became core, or tools
+  // removed entirely). Startup must not crash on stale entries, but it must
+  // say loudly why each one is being ignored so operators can clean up.
+  private auditStoredPromotedToolNames(): void {
+    const extendedNames = new Set(this.extendedTools.map(tool => tool.name));
+    const coreNames = new Set(this.coreTools.map(tool => tool.name));
+    for (const name of this.getPromotedExtendedToolNamesInternal()) {
+      if (extendedNames.has(name)) continue;
+      const retired = getRetiredToolAlias(name);
+      if (retired) {
+        log.warn(
+          `Stored promoted tool "${name}" is retired; "${retired.canonicalName}" replaces it. `
+          + 'The stale entry is ignored (never activated) — unpin it via toolset action="unpin".',
+          { toolName: name, canonicalName: retired.canonicalName },
+        );
+      } else if (coreNames.has(name)) {
+        log.warn(
+          `Stored promoted tool "${name}" is now a core tool and always active. `
+          + 'The promotion entry is redundant and ignored — unpin it via toolset action="unpin".',
+          { toolName: name },
+        );
+      } else {
+        log.warn(
+          `Stored promoted tool "${name}" is not a registered extended tool in this runtime. `
+          + 'The entry is ignored (never activated) — unpin it via toolset action="unpin".',
+          { toolName: name },
+        );
+      }
+    }
   }
 
   getExtendedTools(): readonly AgentTool<any>[] {
@@ -954,20 +1022,33 @@ export class ToolRuntimeFacade {
       return null;
     }
 
+    // Turn-class scoping: a tool with allowedTaskKinds survives only on those
+    // classes (expressive tools are heartbeat-only); otherwise it survives all
+    // maintenance-restricted classes.
+    if (policy.allowedTaskKinds && !policy.allowedTaskKinds.includes(taskKind)) {
+      return null;
+    }
+
+    // No action allowlist => unrestricted pass-through on allowed turn classes.
+    if (!policy.allowedActions || !policy.resolveAction) {
+      return tool;
+    }
+
+    const { allowedActions, resolveAction } = policy;
     return {
       ...tool,
       execute: async (toolCallId, params, signal) => {
         const normalizedParams = isPlainRecord(params) ? params : {};
-        const requestedAction = policy.resolveAction(normalizedParams);
-        if (!requestedAction || !policy.allowedActions.includes(requestedAction)) {
+        const requestedAction = resolveAction(normalizedParams);
+        if (!requestedAction || !allowedActions.includes(requestedAction)) {
           const companionMessage = `${tool.name} is limited to read-only introspection during ${taskKind} turns. `
-            + `Allowed actions: ${policy.allowedActions.join(', ')}.`;
+            + `Allowed actions: ${allowedActions.join(', ')}.`;
           this.emitTelemetry('agent.tools.core_guardrail.denied', {
             ...this.withAdaptiveCorrelation(correlation ?? undefined, 'agent.tools.core_guardrail.denied'),
             toolName: tool.name,
             taskKind,
             requestedAction: requestedAction ?? null,
-            allowedActions: [...policy.allowedActions],
+            allowedActions: [...allowedActions],
             reason: 'maintenance_turn_allowlist',
           });
           return textResultWithError(
@@ -980,7 +1061,7 @@ export class ToolRuntimeFacade {
                 toolName: tool.name,
                 taskKind,
                 requestedAction: requestedAction ?? null,
-                allowedActions: [...policy.allowedActions],
+                allowedActions: [...allowedActions],
                 reason: 'maintenance_turn_allowlist',
               },
             },

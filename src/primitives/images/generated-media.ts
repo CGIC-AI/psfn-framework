@@ -15,8 +15,9 @@ import type {
 } from './types.js';
 
 const log = createComponentLogger('ImageGeneratedMedia');
-// Retired names stay here only so old turn records can still attach generated files.
-const IMAGE_TOOL_NAMES = new Set(['media', 'image_create', 'selfie_create', 'image_edit']);
+// Live tool names first; retired names ('media', 'image_create', 'image_edit')
+// stay here only so old turn records can still attach generated files.
+const IMAGE_TOOL_NAMES = new Set(['generate_image', 'selfie_create', 'media', 'image_create', 'image_edit']);
 const GENERATED_IMAGE_META_SUFFIX = '.image-meta.json';
 
 export interface GeneratedImageGalleryContext {

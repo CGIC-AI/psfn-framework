@@ -30,7 +30,7 @@ const TOOL_REVERSIBILITY_BY_NAME: Readonly<Record<string, ToolReversibility>> = 
   settings_get: 'reversible',
   self_status: 'reversible',
   contact: 'irreversible',
-  media: 'irreversible',
+  generate_image: 'irreversible',
   selfie_create: 'irreversible',
   memory: 'irreversible',
   scratchpad: 'irreversible',

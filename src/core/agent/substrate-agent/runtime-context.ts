@@ -259,6 +259,7 @@ export interface DynamicPromptTemplateVariablesInput {
   capabilityTier: CapabilityTier;
   activeToolCounts: RuntimeContextActiveToolCounts;
   extendedTools: AgentTool<any>[];
+  coreToolNames: ReadonlySet<string>;
   loadedExtended: Map<string, AdaptiveLoadedExtendedToolState>;
   classifyExtendedToolForTurn: (toolName: string) => ExtendedToolTurnClass;
   promotedExtendedToolNames: Set<string>;
@@ -369,6 +370,7 @@ export function buildDynamicPromptTemplateVariables(
       internalTurn,
       templateVariables: input.templateVariables,
       skillsContext: input.skillsContext,
+      coreToolNames: input.coreToolNames,
       loadedExtended: input.loadedExtended,
       promotedExtendedToolNames: input.promotedExtendedToolNames,
     }),
@@ -400,6 +402,7 @@ export function buildRuntimeContext(input: {
   capabilityTier: CapabilityTier;
   activeToolCounts: RuntimeContextActiveToolCounts;
   extendedTools: AgentTool<any>[];
+  coreToolNames: ReadonlySet<string>;
   loadedExtended: Map<string, AdaptiveLoadedExtendedToolState>;
   classifyExtendedToolForTurn: (toolName: string) => ExtendedToolTurnClass;
   promotedExtendedToolNames: Set<string>;

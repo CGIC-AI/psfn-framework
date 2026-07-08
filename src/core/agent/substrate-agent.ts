@@ -1324,6 +1324,9 @@ export class SubstrateAgent {
       this.toolRuntimeFacade.getLoadedExtendedTools(),
     );
     const extendedTools = [...this.toolRuntimeFacade.getExtendedTools()];
+    const coreToolNames = new Set(
+      this.toolRuntimeFacade.getToolCatalog().core.map(tool => tool.name),
+    );
 
     // A continuity gap stays visible for the first turn after restart, then
     // clears (see setCurrentSelfModelState). The gap variables render through
@@ -1352,6 +1355,7 @@ export class SubstrateAgent {
       capabilityTier: this.resolveCapabilityAccess().getTier(),
       activeToolCounts,
       extendedTools,
+      coreToolNames,
       loadedExtended,
       classifyExtendedToolForTurn: (toolName) => this.classifyExtendedToolForTurn(toolName),
       promotedExtendedToolNames: this.getCapabilityEligiblePromotedToolNames(),
@@ -1432,6 +1436,7 @@ export class SubstrateAgent {
       capabilityTier: this.resolveCapabilityAccess().getTier(),
       activeToolCounts,
       extendedTools: [...this.toolRuntimeFacade.getExtendedTools()],
+      coreToolNames: new Set(this.toolRuntimeFacade.getToolCatalog().core.map(tool => tool.name)),
       loadedExtended: new Map(this.toolRuntimeFacade.getLoadedExtendedTools()),
       classifyExtendedToolForTurn: (toolName) => this.classifyExtendedToolForTurn(toolName),
       promotedExtendedToolNames: this.getCapabilityEligiblePromotedToolNames(),

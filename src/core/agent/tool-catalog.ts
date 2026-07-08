@@ -164,3 +164,46 @@ export function buildRuntimeToolCatalogEntry(
     schema: buildRuntimeToolSchemaDescription(tool, scope),
   };
 }
+
+// ── Compact model-facing tool listing ──
+//
+// The toolset listing the companion enumerates must let it choose tools by
+// what they do, not by name alone. Each entry carries the first sentence of
+// the tool description, hard-capped at TOOL_LISTING_DESCRIPTION_MAX_CHARS
+// (160 chars ≈ 40 tokens), plus the tool's action names (names only; per-
+// action detail stays in toolset action="describe"). Entries derive from
+// buildRuntimeToolCatalogEntry — the same metadata source the Garden admin
+// tool page renders — so the two surfaces cannot drift.
+
+export const TOOL_LISTING_DESCRIPTION_MAX_CHARS = 160;
+
+export interface RuntimeToolListingEntry {
+  name: string;
+  description: string;
+  actions?: string[];
+}
+
+export function buildConciseToolDescription(
+  description: string,
+  maxChars: number = TOOL_LISTING_DESCRIPTION_MAX_CHARS,
+): string {
+  const normalized = description.replace(/\s+/g, ' ').trim();
+  if (!normalized) return '';
+  const sentenceMatch = /^.*?[.!?](?=\s|$)/.exec(normalized);
+  const firstSentence = sentenceMatch ? sentenceMatch[0] : normalized;
+  if (firstSentence.length <= maxChars) return firstSentence;
+  return `${firstSentence.slice(0, Math.max(1, maxChars - 1)).trimEnd()}…`;
+}
+
+export function buildRuntimeToolListingEntry(
+  tool: AgentTool<any>,
+  scope: RuntimeToolScope,
+): RuntimeToolListingEntry {
+  const catalogEntry = buildRuntimeToolCatalogEntry(tool, scope);
+  const actions = (catalogEntry.schema?.actions ?? []).map(action => action.name);
+  return {
+    name: catalogEntry.name,
+    description: buildConciseToolDescription(catalogEntry.description),
+    ...(actions.length > 0 ? { actions } : {}),
+  };
+}

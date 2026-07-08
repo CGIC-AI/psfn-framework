@@ -63,7 +63,41 @@ describe('ToolRuntimeFacade maintenance core tool policy', () => {
     expect(() => facade.registerTool(makeTool('session_new'), 'core')).toThrow(
       'core tool registration includes retired first-party tool aliases: session_new->session',
     );
-    expect(() => facade.registerTool(makeTool('selfie_create'), 'extended')).not.toThrow();
+    // The retired media name can never re-enter the model-facing surface.
+    expect(() => facade.registerTool(makeTool('media'), 'core')).toThrow(
+      'core tool registration includes retired first-party tool aliases: media->generate_image',
+    );
+    expect(() => facade.registerTool(makeTool('selfie_create'), 'core')).not.toThrow();
+  });
+
+  it('presents social/expressive tools before admin and boundary tools', () => {
+    const { facade, agent, correlation } = createFacade(null);
+    facade.registerTool(makeTool('system'), 'core');
+    facade.registerTool(makeTool('fs'), 'core');
+    facade.registerTool(makeTool('memory'), 'core');
+    facade.registerTool(makeTool('generate_image'), 'core');
+    facade.registerTool(makeTool('contact'), 'core');
+    facade.registerTool(makeTool('selfie_create'), 'core');
+
+    facade.applyActiveToolsToAgentForTurn({
+      id: 'msg-ordering-1',
+      channelId: 'discord:general',
+      channelType: 'discord',
+      authorId: 'primary-user',
+      authorName: 'Primary User',
+      content: 'hey there',
+      timestamp: new Date('2026-04-23T12:00:00Z'),
+    } as never, undefined, 'chat', correlation, { intent: null, skipped: [] });
+
+    const tools = agent.setTools.mock.calls.at(-1)?.[0] as Array<{ name: string }>;
+    expect(tools.map(tool => tool.name)).toEqual([
+      'selfie_create',
+      'generate_image',
+      'contact',
+      'memory',
+      'fs',
+      'system',
+    ]);
   });
 
   it('rejects widened drift-guard aliases for concerns, north_star, and lifecycle', () => {
@@ -117,7 +151,7 @@ describe('ToolRuntimeFacade maintenance core tool policy', () => {
     }, 'reflection', 'background', correlation, { intent: null, skipped: [] });
 
     const tools = agent.setTools.mock.calls.at(-1)?.[0] as Array<{ name: string }>;
-    expect(tools.map(tool => tool.name)).toEqual(['contact', 'identity', 'self_status', 'session', 'system']);
+    expect(tools.map(tool => tool.name)).toEqual(['contact', 'session', 'identity', 'self_status', 'system']);
 
     const skippedEvents = emitTelemetry.mock.calls
       .filter(([eventName]) => eventName === 'agent.tools.core_guardrail.skipped');
@@ -125,6 +159,53 @@ describe('ToolRuntimeFacade maintenance core tool policy', () => {
       ['agent.tools.core_guardrail.skipped', expect.objectContaining({ toolName: 'subagent', taskKind: 'reflection' })],
       ['agent.tools.core_guardrail.skipped', expect.objectContaining({ toolName: 'analysis_workbench', taskKind: 'reflection' })],
     ]));
+  });
+
+  it('keeps expressive image tools available on heartbeat turns (psfn img2)', () => {
+    const { facade, agent, correlation } = createFacade('heartbeat');
+    facade.registerTool(makeTool('selfie_create'), 'core');
+    facade.registerTool(makeTool('generate_image'), 'core');
+    facade.registerTool(makeTool('subagent'), 'core');
+
+    facade.applyActiveToolsToAgentForTurn({
+      id: 'msg-hb-expressive',
+      channelId: 'internal:heartbeat',
+      channelType: 'api',
+      authorId: 'runtime',
+      authorName: 'Runtime',
+      content: 'heartbeat',
+      timestamp: new Date('2026-04-23T12:00:00Z'),
+    }, 'heartbeat', 'background', correlation, { intent: null, skipped: [] });
+
+    const names = (agent.setTools.mock.calls.at(-1)?.[0] as Array<{ name: string }>).map(t => t.name);
+    // Expressive tools survive the heartbeat self-directed turn; non-allowlisted
+    // core tools (subagent) are still dropped.
+    expect(names).toContain('selfie_create');
+    expect(names).toContain('generate_image');
+    expect(names).not.toContain('subagent');
+  });
+
+  it('drops expressive image tools from silent reflection turns (psfn img2)', () => {
+    const { facade, agent, correlation } = createFacade('reflection');
+    facade.registerTool(makeTool('selfie_create'), 'core');
+    facade.registerTool(makeTool('generate_image'), 'core');
+    facade.registerTool(makeTool('self_status'), 'core');
+
+    facade.applyActiveToolsToAgentForTurn({
+      id: 'msg-refl-expressive',
+      channelId: 'internal:reflection:test',
+      channelType: 'api',
+      authorId: 'runtime',
+      authorName: 'Runtime',
+      content: 'reflect',
+      timestamp: new Date('2026-04-23T12:00:00Z'),
+    }, 'reflection', 'background', correlation, { intent: null, skipped: [] });
+
+    const names = (agent.setTools.mock.calls.at(-1)?.[0] as Array<{ name: string }>).map(t => t.name);
+    // Reflection is silent introspection; no outward image expression.
+    expect(names).not.toContain('selfie_create');
+    expect(names).not.toContain('generate_image');
+    expect(names).toContain('self_status');
   });
 
   it('routes analysis_workbench away from non-worker parent turns', () => {
@@ -147,7 +228,7 @@ describe('ToolRuntimeFacade maintenance core tool policy', () => {
     }, undefined, 'chat', correlation, { intent: null, skipped: [] });
 
     const tools = agent.setTools.mock.calls.at(-1)?.[0] as Array<{ name: string }>;
-    expect(tools.map(tool => tool.name)).toEqual(['contact', 'identity', 'session', 'subagent', 'system']);
+    expect(tools.map(tool => tool.name)).toEqual(['contact', 'session', 'identity', 'subagent', 'system']);
     expect(emitTelemetry).toHaveBeenCalledWith(
       'agent.tools.core_guardrail.skipped',
       expect.objectContaining({
@@ -204,7 +285,7 @@ describe('ToolRuntimeFacade maintenance core tool policy', () => {
     }, 'maintenance', 'background', correlation, { intent: null, skipped: [] });
 
     const tools = agent.setTools.mock.calls.at(-1)?.[0] as Array<{ name: string }>;
-    expect(tools.map(tool => tool.name)).toEqual(['identity', 'session', 'system']);
+    expect(tools.map(tool => tool.name)).toEqual(['session', 'identity', 'system']);
     expect(emitTelemetry).toHaveBeenCalledWith(
       'agent.tools.core_guardrail.skipped',
       expect.objectContaining({
@@ -261,7 +342,7 @@ describe('ToolRuntimeFacade maintenance core tool policy', () => {
     }, undefined, 'background', correlation, { intent: 'memory', skipped: [] });
 
     const tools = agent.setTools.mock.calls.at(-1)?.[0] as Array<{ name: string }>;
-    expect(tools.map(tool => tool.name)).toEqual(['analysis_workbench', 'session']);
+    expect(tools.map(tool => tool.name)).toEqual(['session', 'analysis_workbench']);
     expect(emitTelemetry).not.toHaveBeenCalledWith(
       'agent.tools.core_guardrail.skipped',
       expect.objectContaining({
@@ -274,7 +355,7 @@ describe('ToolRuntimeFacade maintenance core tool policy', () => {
   it('removes visual tools from audio-only satellite turns', () => {
     const { facade, agent, emitTelemetry, correlation } = createFacade(null);
     facade.registerTool(makeTool('session'), 'core');
-    facade.registerTool(makeTool('media'), 'core');
+    facade.registerTool(makeTool('generate_image'), 'core');
     facade.registerTool(makeTool('selfie_create'), 'core');
 
     facade.applyActiveToolsToAgentForTurn({
@@ -318,7 +399,7 @@ describe('ToolRuntimeFacade maintenance core tool policy', () => {
     expect(emitTelemetry).toHaveBeenCalledWith(
       'agent.tools.core_guardrail.skipped',
       expect.objectContaining({
-        toolName: 'media',
+        toolName: 'generate_image',
         satelliteId: 'pi-voice',
         reason: 'satellite_capability_denied',
       }),

@@ -469,6 +469,24 @@ export function parseConcernCandidateReviewResponse(
   return decisions;
 }
 
+/**
+ * Thrown when applying review decisions fails partway through a batch. Carries
+ * the outcomes already applied so the caller can requeue ONLY unapplied
+ * candidates — requeueing an applied candidate would duplicate its side
+ * effects (created/merged concerns, routed handoffs) on retry.
+ */
+export class ConcernCandidateApplyError extends Error {
+  readonly outcomes: readonly ConcernCandidateApplyOutcome[];
+  readonly failedCandidateId: string;
+
+  constructor(failedCandidateId: string, outcomes: readonly ConcernCandidateApplyOutcome[], cause: unknown) {
+    super(`Concern candidate apply failed at candidate ${failedCandidateId}: ${String(cause)}`, { cause });
+    this.name = 'ConcernCandidateApplyError';
+    this.outcomes = outcomes;
+    this.failedCandidateId = failedCandidateId;
+  }
+}
+
 export interface ApplyConcernCandidateReviewOptions {
   concernStore: ConcernStorePort;
   candidates: readonly ConcernCandidate[];
@@ -491,13 +509,19 @@ export async function applyConcernCandidateReview(
   for (const decision of options.decisions) {
     const candidate = candidatesById.get(decision.candidateId);
     if (!candidate) continue;
-    outcomes.push(await applyConcernCandidateDecision({
-      concernStore: options.concernStore,
-      candidate,
-      decision,
-      ...(options.routeDispatcher ? { routeDispatcher: options.routeDispatcher } : {}),
-      now: options.now,
-    }));
+    try {
+      outcomes.push(await applyConcernCandidateDecision({
+        concernStore: options.concernStore,
+        candidate,
+        decision,
+        ...(options.routeDispatcher ? { routeDispatcher: options.routeDispatcher } : {}),
+        now: options.now,
+      }));
+    } catch (error) {
+      // Fail loudly but keep the already-applied outcomes attached so the
+      // caller can avoid duplicating their side effects on retry.
+      throw new ConcernCandidateApplyError(candidate.id, outcomes, error);
+    }
   }
   return outcomes;
 }
@@ -750,31 +774,40 @@ export class ConcernCandidateWorker {
 
   private async runReview(): Promise<ConcernCandidateWorkerRunResult> {
     const candidates = this.options.queue.drainPending(this.maxReviewBatch);
+    let outcomes: ConcernCandidateApplyOutcome[];
     try {
       const review = await this.options.reviewer.review(candidates);
-      const outcomes = await applyConcernCandidateReview({
+      outcomes = await applyConcernCandidateReview({
         concernStore: this.options.concernStore,
         candidates,
         decisions: review.decisions,
         ...(this.options.routeDispatcher ? { routeDispatcher: this.options.routeDispatcher } : {}),
         now: this.now,
       });
-      await this.options.eventBus?.emit('intention.concern_candidate.reviewed', {
-        candidateCount: candidates.length,
-        outcomeCount: outcomes.length,
-        outcomes,
-        timestamp: this.now().getTime(),
-      });
-      return {
-        status: 'completed',
-        pendingCount: this.options.queue.pendingCount(),
-        reviewedCount: candidates.length,
-        outcomes,
-      };
     } catch (error) {
-      this.options.queue.requeue(candidates);
+      // Requeue only candidates whose apply did NOT complete — requeueing an
+      // applied candidate would duplicate its side effects (e.g. a created
+      // concern) on the retry run.
+      const appliedIds = error instanceof ConcernCandidateApplyError
+        ? new Set(error.outcomes.map(outcome => outcome.candidateId))
+        : new Set<string>();
+      this.options.queue.requeue(candidates.filter(candidate => !appliedIds.has(candidate.id)));
       throw error;
     }
+    // The reviewed event is telemetry: an emit failure must not requeue an
+    // already-applied batch, so it stays outside the requeue scope.
+    await this.options.eventBus?.emit('intention.concern_candidate.reviewed', {
+      candidateCount: candidates.length,
+      outcomeCount: outcomes.length,
+      outcomes,
+      timestamp: this.now().getTime(),
+    });
+    return {
+      status: 'completed',
+      pendingCount: this.options.queue.pendingCount(),
+      reviewedCount: candidates.length,
+      outcomes,
+    };
   }
 }
 

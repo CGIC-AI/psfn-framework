@@ -55,6 +55,7 @@
     "walkthrough": "tsx src/app/e2e/e2e-walkthrough.ts",
     "lint": "eslint .",
     "verify:startup-owner-files": "tsx scripts/verify-startup-owner-files.ts",
+    "resolve:companion-fleet": "tsx scripts/resolve-companion-fleet.ts",
     "garden:dev": "npm --prefix admin-ui run dev",
     "garden:build": "npm --prefix admin-ui run build",
     "garden:preview": "npm --prefix admin-ui run preview",

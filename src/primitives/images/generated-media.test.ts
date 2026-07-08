@@ -106,7 +106,7 @@ describe('collectGeneratedImageAttachments', () => {
     ]));
   });
 
-  it('uses structured media tool details when available', async () => {
+  it('attaches generate_image results from structured tool details', async () => {
     const companionDataDir = mkdtempSync(join(tmpdir(), 'psfn-generated-media-'));
     tempDirs.push(companionDataDir);
 
@@ -115,7 +115,7 @@ describe('collectGeneratedImageAttachments', () => {
       turnMessages: [
         {
           role: 'toolResult',
-          toolName: 'media',
+          toolName: 'generate_image',
           content: [{ type: 'text', text: 'not-json' }],
           details: {
             mediaResult: {
@@ -150,7 +150,7 @@ describe('collectGeneratedImageAttachments', () => {
     expect(readFileSync(attachments[0]!.localPath!)).toEqual(Buffer.from('png-two'));
   });
 
-  it('uses structured unified media tool details when available', async () => {
+  it('still attaches legacy media turn-record results (retired name)', async () => {
     const companionDataDir = mkdtempSync(join(tmpdir(), 'psfn-generated-media-'));
     tempDirs.push(companionDataDir);
 

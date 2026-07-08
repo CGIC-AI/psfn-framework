@@ -22,10 +22,14 @@ const CURRENT_SNAPSHOT_ID = 'current';
 export class PostgresInternalStateStore implements InternalStateStorePort {
   private constructor(private readonly pool: Pool) {}
 
-  static async connect(databaseUrl: string): Promise<PostgresInternalStateStore> {
+  static async connect(
+    databaseUrl: string,
+    options: { schema?: string } = {},
+  ): Promise<PostgresInternalStateStore> {
     const pool = createPostgresPool(databaseUrl, {
       applicationName: 'psfn-internal-state',
       allowExitOnIdle: true,
+      schema: options.schema,
     });
     await ensurePostgresSchema(pool, POSTGRES_INTERNAL_STATE_MIGRATIONS);
     return new PostgresInternalStateStore(pool);

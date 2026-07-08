@@ -130,10 +130,14 @@ function mapRow(row: ScheduledPromptRow): ScheduledPromptRecord {
 export class PostgresScheduledPromptStore implements ScheduledPromptStorePort {
   private constructor(private readonly pool: Pool) {}
 
-  static async connect(databaseUrl: string): Promise<PostgresScheduledPromptStore> {
+  static async connect(
+    databaseUrl: string,
+    options: { schema?: string } = {},
+  ): Promise<PostgresScheduledPromptStore> {
     const pool = createPostgresPool(databaseUrl, {
       applicationName: 'psfn-scheduled-prompts',
       allowExitOnIdle: true,
+      schema: options.schema,
     });
     await ensurePostgresSchema(pool, POSTGRES_SCHEDULED_PROMPT_MIGRATIONS);
     return new PostgresScheduledPromptStore(pool);

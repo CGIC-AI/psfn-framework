@@ -122,6 +122,8 @@ export interface PostgresMemoryStoreOptions {
   notesDir?: string;
   scratchpadMirrorPath?: string;
   journal?: MemoryJournal;
+  /** Optional per-companion Postgres schema; pins the pool's search_path. */
+  schema?: string;
 }
 
 export async function createPostgresMemoryStore(
@@ -129,7 +131,11 @@ export async function createPostgresMemoryStore(
   embeddingDims: number,
   options: PostgresMemoryStoreOptions = {},
 ): Promise<MemoryStorePort> {
-  const pool = createPostgresPool(databaseUrl, { applicationName: 'psfn-memory', allowExitOnIdle: true });
+  const pool = createPostgresPool(databaseUrl, {
+    applicationName: 'psfn-memory',
+    allowExitOnIdle: true,
+    schema: options.schema,
+  });
   return await createPostgresMemoryStoreFromPool(pool, embeddingDims, options);
 }
 

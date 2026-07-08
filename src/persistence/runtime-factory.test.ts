@@ -34,6 +34,9 @@ const runtimeFactoryMocks = vi.hoisted(() => ({
   connectPostgresParticipantTrendStore: vi.fn(async () => runtimeFactoryMocks.postgresParticipantTrendStore),
   postgresScheduledPromptStore: { kind: 'postgres-scheduled-prompt-store' },
   connectPostgresScheduledPromptStore: vi.fn(async () => runtimeFactoryMocks.postgresScheduledPromptStore),
+  bootstrapPool: { end: vi.fn(async () => undefined) },
+  createPostgresPool: vi.fn(() => runtimeFactoryMocks.bootstrapPool),
+  ensurePostgresSchemaExists: vi.fn(async () => undefined),
   createSqliteEpisodicStore: vi.fn(function EpisodicStore() {
     return runtimeFactoryMocks.sqliteEpisodicStore;
   }),
@@ -95,6 +98,11 @@ vi.mock('./postgres/scheduled-prompt-store.js', () => ({
   },
 }));
 
+vi.mock('./postgres.js', () => ({
+  createPostgresPool: runtimeFactoryMocks.createPostgresPool,
+  ensurePostgresSchemaExists: runtimeFactoryMocks.ensurePostgresSchemaExists,
+}));
+
 beforeEach(() => {
   runtimeFactoryMocks.createSqliteCompanionStore.mockClear();
   runtimeFactoryMocks.createPostgresMemoryStore.mockClear();
@@ -105,6 +113,11 @@ beforeEach(() => {
   runtimeFactoryMocks.connectPostgresScheduledPromptStore.mockClear();
   runtimeFactoryMocks.createSqliteEpisodicStore.mockClear();
   runtimeFactoryMocks.createReflectionMetacognitionJournalStore.mockClear();
+  runtimeFactoryMocks.connectPostgresInternalStateStore.mockClear();
+  runtimeFactoryMocks.connectPostgresParticipantTrendStore.mockClear();
+  runtimeFactoryMocks.createPostgresPool.mockClear();
+  runtimeFactoryMocks.ensurePostgresSchemaExists.mockClear();
+  runtimeFactoryMocks.bootstrapPool.end.mockClear();
 });
 
 describe('createAgentPersistenceRuntime', () => {
@@ -179,9 +192,11 @@ describe('createAgentPersistenceRuntime', () => {
     );
     expect(runtimeFactoryMocks.createPostgresEpisodicStore).toHaveBeenCalledWith(
       'postgres://postgres:secret@localhost:5432/psfn',
+      { schema: undefined },
     );
     expect(runtimeFactoryMocks.connectPostgresReflectionMirror).toHaveBeenCalledWith(
       'postgres://postgres:secret@localhost:5432/psfn',
+      { schema: undefined },
     );
     expect(runtimeFactoryMocks.createReflectionMetacognitionJournalStore).toHaveBeenCalledWith(
       '/tmp/companion-data/state/notes/reflections/metacognition/journal.jsonl',
@@ -194,13 +209,86 @@ describe('createAgentPersistenceRuntime', () => {
       'user-primary',
       {
         exportDir: '/tmp/companion-data/state/contacts',
+        schema: undefined,
       },
     );
     expect(runtimeFactoryMocks.createPostgresIntentionPorts).toHaveBeenCalledWith(
       'postgres://postgres:secret@localhost:5432/psfn',
+      { schema: undefined },
     );
     expect(runtimeFactoryMocks.connectPostgresScheduledPromptStore).toHaveBeenCalledWith(
       'postgres://postgres:secret@localhost:5432/psfn',
+      { schema: undefined },
+    );
+    // No schema configured: no companion schema is provisioned up front.
+    expect(runtimeFactoryMocks.ensurePostgresSchemaExists).not.toHaveBeenCalled();
+    expect(runtimeFactoryMocks.createPostgresPool).not.toHaveBeenCalled();
+  });
+
+  it('threads the configured per-companion schema into every store and provisions it up front', async () => {
+    await createAgentPersistenceRuntime({
+      config: {
+        databasePath: '/tmp/ignored.db',
+        persistenceBackend: 'postgres',
+        postgresDatabaseUrl: 'postgres://postgres:secret@localhost:5432/psfn',
+        postgresSchema: 'companion_x',
+      },
+      pathSnapshot: {
+        systemDataDir: '/tmp/system-data',
+        companionDataDir: '/tmp/companion-data',
+        workspacePath: '/tmp/workspace',
+        tempDir: '/tmp/tmp',
+        logsDir: '/tmp/logs',
+        backupRootDir: '/tmp/backups',
+      },
+      embeddingDims: 1536,
+      primaryUserId: 'user-primary',
+    });
+
+    // The schema is created once, before any store connects.
+    expect(runtimeFactoryMocks.createPostgresPool).toHaveBeenCalledWith(
+      'postgres://postgres:secret@localhost:5432/psfn',
+      expect.objectContaining({ schema: 'companion_x' }),
+    );
+    expect(runtimeFactoryMocks.ensurePostgresSchemaExists).toHaveBeenCalledWith(
+      runtimeFactoryMocks.bootstrapPool,
+      'companion_x',
+    );
+
+    // Every runtime store receives the same schema.
+    expect(runtimeFactoryMocks.createPostgresMemoryStore).toHaveBeenCalledWith(
+      'postgres://postgres:secret@localhost:5432/psfn',
+      1536,
+      expect.objectContaining({ schema: 'companion_x' }),
+    );
+    expect(runtimeFactoryMocks.createPostgresEpisodicStore).toHaveBeenCalledWith(
+      'postgres://postgres:secret@localhost:5432/psfn',
+      { schema: 'companion_x' },
+    );
+    expect(runtimeFactoryMocks.connectPostgresReflectionMirror).toHaveBeenCalledWith(
+      'postgres://postgres:secret@localhost:5432/psfn',
+      { schema: 'companion_x' },
+    );
+    expect(runtimeFactoryMocks.createPostgresContactStore).toHaveBeenCalledWith(
+      'postgres://postgres:secret@localhost:5432/psfn',
+      'user-primary',
+      expect.objectContaining({ schema: 'companion_x' }),
+    );
+    expect(runtimeFactoryMocks.createPostgresIntentionPorts).toHaveBeenCalledWith(
+      'postgres://postgres:secret@localhost:5432/psfn',
+      { schema: 'companion_x' },
+    );
+    expect(runtimeFactoryMocks.connectPostgresInternalStateStore).toHaveBeenCalledWith(
+      'postgres://postgres:secret@localhost:5432/psfn',
+      { schema: 'companion_x' },
+    );
+    expect(runtimeFactoryMocks.connectPostgresParticipantTrendStore).toHaveBeenCalledWith(
+      'postgres://postgres:secret@localhost:5432/psfn',
+      { schema: 'companion_x' },
+    );
+    expect(runtimeFactoryMocks.connectPostgresScheduledPromptStore).toHaveBeenCalledWith(
+      'postgres://postgres:secret@localhost:5432/psfn',
+      { schema: 'companion_x' },
     );
   });
 });

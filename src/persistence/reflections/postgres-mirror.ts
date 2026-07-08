@@ -17,10 +17,14 @@ function toJson(value: unknown): string {
 export class PostgresReflectionMetacognitionMirrorStore implements ReflectionMetacognitionMirrorStore {
   private constructor(private readonly pool: Pool) {}
 
-  static async connect(databaseUrl: string): Promise<PostgresReflectionMetacognitionMirrorStore> {
+  static async connect(
+    databaseUrl: string,
+    options: { schema?: string } = {},
+  ): Promise<PostgresReflectionMetacognitionMirrorStore> {
     const pool = createPostgresPool(databaseUrl, {
       applicationName: 'psfn-reflections',
       allowExitOnIdle: true,
+      schema: options.schema,
     });
     await ensurePostgresSchema(pool, POSTGRES_REFLECTION_MIGRATIONS);
     return new PostgresReflectionMetacognitionMirrorStore(pool);

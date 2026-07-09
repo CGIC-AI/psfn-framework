@@ -17,6 +17,8 @@ import {
   type GatewayIntakeScreeningComposition,
 } from './intake/compose-screening.js';
 import { GatewayServer } from './server.js';
+import { CogSecEventStore } from '../../core/cogsec/events.js';
+import { resolveCogSecEventsPath } from '../../persistence/layout.js';
 import type { StartupConfigHydrationResult } from '../../app/startup/support/bootstrap-helpers.js';
 
 export interface GatewayPrivilegedCoreBuildInput {
@@ -103,6 +105,13 @@ export async function buildGatewayPrivilegedCore(
     companionDataDir: input.startupHydration.companionDataDir,
   });
 
+  // htm9.18: durable CogSec event store for the canary egress tripwire. Shares
+  // the same cogsec-events.json the contact-block gate and L3 screener use
+  // (multi-writer, reloads from disk per op).
+  const cogSecEvents = new CogSecEventStore(
+    resolveCogSecEventsPath(input.startupHydration.companionDataDir),
+  );
+
   return {
     eventBus,
     capabilityRuntime,
@@ -124,6 +133,7 @@ export async function buildGatewayPrivilegedCore(
       ...(privilegedServices.modelUsageStore ? { modelUsageRecorder: privilegedServices.modelUsageStore } : {}),
       ...(input.config.credentialVault ? { credentialVault: input.config.credentialVault } : {}),
       ...(intakeScreening.screening ? { intakeScreening: intakeScreening.screening } : {}),
+      cogSecEvents,
       policyConfig: {
         ...input.bootstrap.policyConfig,
         ...(privilegedServices.vaultOps

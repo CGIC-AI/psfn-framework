@@ -60,6 +60,8 @@ import type { ApiStreamDeltaNotification } from '../../channels/api/types.js';
 import type { ModelUsageRecorder } from '../../shared/telemetry/model-usage.js';
 import type { CredentialVaultPort } from '../custody/credential-vault.js';
 import type { IntakeScreeningService } from '../../core/cogsec/intake/screening.js';
+import type { CogSecEventStore } from '../../core/cogsec/events.js';
+import { createCanaryEgressGuard, type CanaryEgressGuard } from './canary-egress-guard.js';
 
 const log = createComponentLogger('Gateway');
 const DEFAULT_CONNECTION_HEALTHCHECK_STALE_AFTER_MS = 90_000;
@@ -161,6 +163,13 @@ export interface GatewayServerOptions {
   credentialVault?: CredentialVaultPort;
   /** Cognition intake firewall screening (htm9.2); absent when mode is 'off'. */
   intakeScreening?: IntakeScreeningService;
+  /**
+   * CogSec event store (htm9.18). When present, a canary token leaking into an
+   * outbound method is recorded as a durable CogSecEvent (token sha256 only)
+   * before the action is held. Absent ⇒ the tripwire still holds the action,
+   * but writes no durable event.
+   */
+  cogSecEvents?: Pick<CogSecEventStore, 'createEvent'>;
   policyConfig: PolicyConfig;
   ntfy?: GatewayNtfyConfig;
   auditStore?: GatewayAuditStorePort;
@@ -198,6 +207,7 @@ export class GatewayServer {
   private readonly wyomingShardRouting: WyomingShardRoutingConfig;
   private readonly ntfyNotifier: GatewayNtfyNotifier;
   private readonly approvalBoundary: ApprovalBoundaryService;
+  private readonly canaryEgressGuard: CanaryEgressGuard;
   private readonly runtimeHealthTracker: GatewayRuntimeHealthTracker;
   private readonly apiStreamListeners = new Map<string, Set<(text: string) => void>>();
   private readonly multiCompanion: GatewayMultiCompanionConfig;
@@ -234,12 +244,17 @@ export class GatewayServer {
     this.capabilityTierProvider = options.capabilityTierProvider ?? (() => 'nursery');
     this.wyomingShardRouting = options.wyomingShardRouting;
     this.ntfyNotifier = new GatewayNtfyNotifier(options.ntfy);
+    this.canaryEgressGuard = createCanaryEgressGuard({
+      ...(options.cogSecEvents ? { cogSecEvents: options.cogSecEvents } : {}),
+      log,
+    });
     this.approvalBoundary = createGatewayApprovalBoundaryService({
       policyConfig: options.policyConfig,
       ntfyNotifier: this.ntfyNotifier,
       discordAdapter: options.discordAdapter,
       capabilityTierProvider: this.capabilityTierProvider,
       confirmation: options.confirmation,
+      canaryEgressGuard: this.canaryEgressGuard,
       audit: this.audit.bind(this),
       auditComplete: this.auditComplete.bind(this),
       recordMethodSuccess: (method) => this.runtimeHealthTracker.recordMethodSuccess(method),
@@ -264,11 +279,23 @@ export class GatewayServer {
     paramsSummary?: (params: P) => Record<string, unknown>,
   ): (params: P) => Promise<R> {
     return async (params: P) => {
-      const summary = paramsSummary ? paramsSummary(params) : undefined;
+      // htm9.18 egress tripwire: hold the action if the session canary leaked
+      // into an outbound method, and strip the carrier before it reaches the
+      // handler or any audit summary.
+      let cleaned: P;
+      try {
+        cleaned = this.canaryEgressGuard.inspect(method, params) as P;
+      } catch (err) {
+        this.runtimeHealthTracker.recordMethodFailure(method, err);
+        const heldAuditId = await this.audit(method, 'DENY', { canaryEgressHeld: true });
+        await this.auditComplete(heldAuditId, Date.now(), toErrorMessage(err));
+        throw err;
+      }
+      const summary = paramsSummary ? paramsSummary(cleaned) : undefined;
       const auditId = await this.audit(method, 'ALLOW', summary);
       const startTime = Date.now();
       try {
-        const result = await handler(params);
+        const result = await handler(cleaned);
         this.runtimeHealthTracker.recordMethodSuccess(method);
         await this.auditComplete(auditId, startTime);
         return result;

@@ -818,4 +818,8 @@ export const GatewayErrors = {
   COMPANION_IDENTIFY_REQUIRED: -32009,
   COMPANION_IDENTITY_MISMATCH: -32010,
   COMPANION_ROUTING_UNAVAILABLE: -32011,
+  // htm9.18: an outbound action was HELD because the session canary token
+  // leaked into egress (prompt leak / hijack tripwire). The error message is
+  // the calm companion-facing soft notice.
+  EGRESS_HELD: -32012,
 } as const;

@@ -12,9 +12,33 @@ import {
   createWebSocketRpcClient,
 } from './transport.js';
 import { createComponentLogger } from '../../shared/logger.js';
+import { getActiveCanaryToken, CANARY_CARRIER_PARAM_KEY } from '../../core/cogsec/canary/canary-token.js';
+import { isEgressCanaryMethod } from '../../core/cogsec/canary/egress-scan.js';
 import { BoundedQueue, QueueOverflowError, type QueueOverflowPolicy } from './backpressure.js';
 import { registerReverseGatewayMethods } from './reverse-methods.js';
 const log = createComponentLogger('GatewayClient');
+
+/**
+ * htm9.18: attach the live session canary token to outbound egress requests so
+ * the gateway egress guard can scan for a prompt leak. Only egress methods and
+ * only when a turn-scoped canary context is active; the raw token rides in a
+ * reserved param the gateway strips before the handler and never logs. LLM and
+ * other non-egress calls are untouched (the canary lives in the prompt there
+ * legitimately).
+ */
+function attachCanaryToEgressRequest<T>(request: T): T {
+  const rpc = request as unknown as { method?: unknown; params?: unknown };
+  if (typeof rpc.method !== 'string' || !isEgressCanaryMethod(rpc.method)) {
+    return request;
+  }
+  const token = getActiveCanaryToken();
+  if (!token) return request;
+  if (!rpc.params || typeof rpc.params !== 'object' || Array.isArray(rpc.params)) {
+    return request;
+  }
+  (rpc.params as Record<string, unknown>)[CANARY_CARRIER_PARAM_KEY] = token;
+  return request;
+}
 import type { JournalIntegrityVerificationResult } from '../../persistence/journals/journal-utils.js';
 import type {
   ApiChatCompletionCancelRpcParams,
@@ -213,7 +237,7 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
     // server handles incoming requests from gateway like discord.handleMessage)
     this.rpcInstance = new JSONRPCServerAndClient(
       new JSONRPCServer(),
-      new JSONRPCClient((request) => { this.conn.send(request); }),
+      new JSONRPCClient((request) => { this.conn.send(attachCanaryToEgressRequest(request)); }),
     );
 
     // Route incoming messages

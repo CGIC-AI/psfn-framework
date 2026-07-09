@@ -60,6 +60,10 @@ import {
   resolveRuntimeLaneClassForTurn,
 } from '../worker-lanes.js';
 import { runWithPaidDeliverableTracking } from '../../../shared/paid-deliverable-tracking.js';
+import {
+  SessionCanaryRegistry,
+  runWithCanaryContext,
+} from '../../cogsec/canary/canary-token.js';
 import { summarizeChargedImageDeliverables } from '../../../primitives/images/generated-media.js';
 import { invokeAgentForTurn, type AgentInvocationMutableState } from './turn-execution/agent-invocation.js';
 import { createTurnExecutionObservability } from './turn-execution/observability.js';
@@ -76,6 +80,11 @@ import type { SessionEntry } from '../../session/types.js';
 import type { ConversationScopeSpeaker } from '../../session/conversation-scope.js';
 
 const log = createComponentLogger('SubstrateAgent');
+
+// htm9.18: process-scoped per-session canary registry. Keyed by the session
+// channel id so the same token is planted on every turn of a session and
+// rotates when a new session begins.
+const sessionCanaryRegistry = new SessionCanaryRegistry();
 
 function cloneComputedInternalStateForResponse(internalState: InternalState): InternalState {
   return JSON.parse(JSON.stringify(internalState)) as InternalState;
@@ -783,6 +792,9 @@ export async function handleMessageForTurn(
       autoloadOutcome,
     );
     const responseStyle = runtime.resolveResponseStyle(message, channelType, channelMeta);
+    // htm9.18: resolve (or mint) this session's canary token. It is planted in
+    // the prompt below and rides with egress calls made during the invocation.
+    const canaryToken = sessionCanaryRegistry.ensure(emotionSessionId);
     const promptAssembly = await assembleTurnPrompt({
       runtime,
       message,
@@ -808,6 +820,7 @@ export async function handleMessageForTurn(
       turnSnapshot,
       memoryManifestSeed: preTurnState.memoryManifestSeed ?? observability.getMemoryManifestSeed(),
       ...(fatigueDecision ? { fatigue: fatigueDecision.metadata } : {}),
+      canaryToken,
       getRetrievalProvenanceRefs: observability.getRetrievalProvenanceRefs,
       getObservedTurnRetrievals: observability.getObservedTurnRetrievals,
       observability,
@@ -821,7 +834,7 @@ export async function handleMessageForTurn(
     // invocation so charged tools (e.g. paid image generation) can record an
     // undelivered artifact and the in-turn response_control tool can refuse a
     // no-reply that would silently drop it.
-    const invocationResult = await runWithPaidDeliverableTracking(() => invokeAgentForTurn({
+    const invocationResult = await runWithCanaryContext(canaryToken, () => runWithPaidDeliverableTracking(() => invokeAgentForTurn({
       runtime,
       message,
       context: promptAssembly.context,
@@ -842,7 +855,7 @@ export async function handleMessageForTurn(
       speakerRole,
       mutableState: invocationState,
       observability,
-    }));
+    })));
     turnMessages = invocationResult.turnMessages;
     responseModel = invocationResult.responseModel;
     persistedUserMessageContent = invocationResult.persistedUserMessageContent;

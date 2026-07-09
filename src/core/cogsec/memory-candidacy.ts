@@ -1,4 +1,5 @@
 import type { MemorySourceType, MemoryType } from '../../faculties/memory/types.js';
+import { isIntakeFirewallNoticeText } from './intake-firewall-notice-templates.js';
 
 export type CogSecMemoryRiskClass =
   | 'A_harmless_fact'
@@ -131,6 +132,19 @@ export function evaluateCogSecMemoryCandidacy(
       riskClass: 'A_harmless_fact',
       reasonCodes: ['empty_text'],
       safeSummary: 'Rejected empty memory candidate.',
+    };
+  }
+
+  // Intake-firewall quarantine notices must never become durable memory: a
+  // firewall event must not leave a lasting "memory of threat". Reject before
+  // any allow path (htm9.12). The notice text itself is harmless soft wording,
+  // so this is not a security risk class — it is a well-being exclusion.
+  if (isIntakeFirewallNoticeText(text)) {
+    return {
+      disposition: 'reject',
+      riskClass: 'A_harmless_fact',
+      reasonCodes: ['intake_firewall_quarantine_notice'],
+      safeSummary: 'Excluded intake-firewall quarantine notice from memory extraction.',
     };
   }
 

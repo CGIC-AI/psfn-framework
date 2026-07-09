@@ -6,6 +6,7 @@ import type {
   CogSecResultCounters,
 } from './events.js';
 import type { CogSecPersonaConformanceEventRecord } from './persona-conformance.js';
+import { renderIntakeFirewallNotice } from './intake-firewall-notice-templates.js';
 import {
   escapeXmlAttributeWithApostrophe as escapeXmlAttribute,
   escapeXmlText,
@@ -202,7 +203,30 @@ function formatArtifactCounts(counts: Partial<Record<CogSecArtifactClass, number
   return parts.length > 0 ? parts.join(', ') : 'none';
 }
 
+/**
+ * Truthful count of items held aside for an intake-firewall event, derived only
+ * from the agent-visible (already redacted) event fields. Prefers real held
+ * message counts, then affected ranges, then tombstoned rows; falls back to 1
+ * because the existence of the event attests that at least one item was held.
+ */
+function resolveIntakeFirewallHeldItemCount(event: CogSecAgentVisibleEvent): number {
+  const rangeMessageCount = event.affectedRanges.reduce(
+    (total, range) => total + Math.max(range.messageIdCount, range.discordMessageIdCount, 0),
+    0,
+  );
+  if (rangeMessageCount > 0) return rangeMessageCount;
+  if (event.affectedRanges.length > 0) return event.affectedRanges.length;
+  if (event.tombstonedL0RowCount > 0) return event.tombstonedL0RowCount;
+  return 1;
+}
+
 export function formatCogSecNotice(event: CogSecAgentVisibleEvent): string {
+  // Intake-firewall notices use the fixed, operator-reviewed soft-notice wording
+  // (see intake-firewall-notice-templates.ts). No forensic/operational detail is
+  // exposed to the companion — only that something is held aside for their human.
+  if (event.type === 'intake_firewall') {
+    return renderIntakeFirewallNotice(resolveIntakeFirewallHeldItemCount(event));
+  }
   const cleanActions = formatActions(event.actions);
   const artifactCounts = formatArtifactCounts(event.affectedArtifactCounts);
   const rowCount = event.tombstonedL0RowCount;

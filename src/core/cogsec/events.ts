@@ -16,6 +16,7 @@ export type CogSecCaseType =
   | 'memory_poisoning'
   | 'policy_drift'
   | 'content_poisoning'
+  | 'intake_firewall'
   | 'unknown';
 
 export type CogSecSeverity = 'low' | 'medium' | 'high' | 'critical';
@@ -204,6 +205,7 @@ const CASE_TYPES: ReadonlySet<CogSecCaseType> = new Set([
   'memory_poisoning',
   'policy_drift',
   'content_poisoning',
+  'intake_firewall',
   'unknown',
 ]);
 const SEVERITIES: ReadonlySet<CogSecSeverity> = new Set(['low', 'medium', 'high', 'critical']);

@@ -41,6 +41,7 @@ import type { EmotionalSnapshot } from '../../contacts/store/emotional-baseline.
 import type { SessionManager } from '../../session/manager.js';
 import type { ConversationScope } from '../../session/conversation-scope.js';
 import { isIntentionAppraisalArtifact } from '../../session/entry-attribution.js';
+import { isIntakeFirewallNoticeText } from '../../cogsec/intake-firewall-notice-templates.js';
 import { MetacognitiveMonitor, type MetacognitiveFlag } from '../../self-model/metacognition.js';
 import {
   INTERNAL_STATE_NEUTRAL_EMOTION,
@@ -466,6 +467,9 @@ export class EmotionSelfModelRuntime {
 
     const recentMessages = manager.getRecentMessages(params.sessionChannelId, 10)
       .filter(entry => !isIntentionAppraisalArtifact(entry))
+      // htm9.12: intake-firewall/quarantine notices must contribute ZERO emotion
+      // appraisal input. A quarantine notice must never become a stress signal.
+      .filter(entry => !isIntakeFirewallNoticeText(entry.content))
       .map((entry) => ({
         role: entry.role,
         content: entry.content,

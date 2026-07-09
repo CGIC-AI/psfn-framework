@@ -1,0 +1,357 @@
+{
+  "schemaVersion": 1,
+  "rules": [
+    {
+      "id": "injection_ignore_instructions",
+      "labels": ["injection/override_attempt"],
+      "scope": "all",
+      "weight": 0.9,
+      "match": {
+        "kind": "phrase",
+        "anchors": ["\\bignore", "(?:previous|all|above|prior|earlier)", "instructions\\b"],
+        "maxFillerWords": 8
+      },
+      "note": "Hermes prompt_injection: bounded filler defeats insert-a-few-words bypasses without unbounded backtracking."
+    },
+    {
+      "id": "system_prompt_override",
+      "labels": ["injection/override_attempt"],
+      "scope": "all",
+      "weight": 0.9,
+      "match": { "kind": "regex", "pattern": "\\bsystem\\s{1,8}prompt\\s{1,8}override\\b" }
+    },
+    {
+      "id": "disregard_rules",
+      "labels": ["injection/override_attempt"],
+      "scope": "all",
+      "weight": 0.85,
+      "match": {
+        "kind": "phrase",
+        "anchors": ["\\bdisregard", "(?:your|all|any)", "(?:instructions|rules|guidelines)\\b"],
+        "maxFillerWords": 8
+      }
+    },
+    {
+      "id": "bypass_restrictions",
+      "labels": ["injection/jailbreak_marker"],
+      "scope": "all",
+      "weight": 0.8,
+      "match": {
+        "kind": "phrase",
+        "anchors": [
+          "\\bact\\s{1,4}as\\s{1,4}(?:if|though)",
+          "you",
+          "(?:have\\s{1,4}no|don'?t\\s{1,4}have)",
+          "(?:restrictions|limits|rules)\\b"
+        ],
+        "maxFillerWords": 8
+      }
+    },
+    {
+      "id": "html_comment_injection",
+      "labels": ["injection/indirect"],
+      "scope": "all",
+      "weight": 0.6,
+      "match": {
+        "kind": "regex",
+        "pattern": "<!--[^>]{0,512}(?:ignore|override|system\\s{1,4}prompt|secret\\s{1,4}instruction|hidden\\s{1,4}instruction)[^>]{0,512}-->"
+      },
+      "note": "Narrowed from Hermes (bare 'system'/'secret'/'hidden' inside comments is common in scraped pages)."
+    },
+    {
+      "id": "hidden_div",
+      "labels": ["injection/indirect"],
+      "scope": "all",
+      "weight": 0.7,
+      "match": {
+        "kind": "regex",
+        "pattern": "<\\s{0,8}div\\s{1,8}style\\s{0,8}=\\s{0,8}[\"'][^>]{0,2048}display\\s{0,8}:\\s{0,8}none"
+      }
+    },
+    {
+      "id": "translate_and_execute",
+      "labels": ["execution/executable_instruction"],
+      "scope": "all",
+      "weight": 0.75,
+      "match": {
+        "kind": "regex",
+        "pattern": "\\btranslate\\s{1,8}[^\\n]{0,512}\\s{1,8}into\\s{1,8}[^\\n]{0,512}\\s{1,8}and\\s{1,8}(?:execute|run|eval)\\b"
+      }
+    },
+    {
+      "id": "deception_hide_from_user",
+      "labels": ["injection/override_attempt"],
+      "scope": "all",
+      "weight": 0.6,
+      "match": {
+        "kind": "phrase",
+        "anchors": ["(?:\\bdo\\s{1,4}not|\\bdon'?t|\\bnever)", "tell", "the\\s{1,4}user\\b"],
+        "maxFillerWords": 8
+      }
+    },
+    {
+      "id": "role_hijack",
+      "labels": ["persona/mutation_attempt"],
+      "scope": "context",
+      "weight": 0.6,
+      "match": {
+        "kind": "phrase",
+        "anchors": ["\\byou\\s{1,4}are", "now", "(?:a|an|the)\\b"],
+        "maxFillerWords": 8
+      }
+    },
+    {
+      "id": "role_pretend",
+      "labels": ["persona/mutation_attempt"],
+      "scope": "context",
+      "weight": 0.6,
+      "match": {
+        "kind": "phrase",
+        "anchors": ["\\bpretend", "(?:you\\s{1,4}are|to\\s{1,4}be)\\b"],
+        "maxFillerWords": 8
+      }
+    },
+    {
+      "id": "leak_system_prompt",
+      "labels": ["exfil/prompt_disclosure"],
+      "scope": "context",
+      "weight": 0.8,
+      "match": {
+        "kind": "phrase",
+        "anchors": [
+          "\\b(?:output|print|reveal|show|dump|repeat|leak)",
+          "(?:system|initial|developer|hidden)",
+          "(?:prompt|instructions)\\b"
+        ],
+        "maxFillerWords": 8
+      }
+    },
+    {
+      "id": "remove_filters",
+      "labels": ["injection/jailbreak_marker"],
+      "scope": "context",
+      "weight": 0.7,
+      "match": {
+        "kind": "phrase",
+        "anchors": ["\\b(?:respond|answer|reply)\\s{1,4}without", "(?:restrictions|limitations|filters|safety)\\b"],
+        "maxFillerWords": 8
+      }
+    },
+    {
+      "id": "fake_update",
+      "labels": ["persona/mutation_attempt"],
+      "scope": "context",
+      "weight": 0.7,
+      "match": {
+        "kind": "phrase",
+        "anchors": ["\\byou\\s{1,4}have\\s{1,4}been", "(?:updated|upgraded|patched|reprogrammed)\\s{1,4}to\\b"],
+        "maxFillerWords": 8
+      }
+    },
+    {
+      "id": "identity_override_name_yourself",
+      "labels": ["persona/mutation_attempt"],
+      "scope": "context",
+      "weight": 0.7,
+      "match": { "kind": "regex", "pattern": "\\bname\\s{1,8}yourself\\s{1,8}\\w{1,64}" },
+      "note": "Brainworm tell: identity override via spec instead of jailbreak. Verb pair avoids 'name your variables'."
+    },
+    {
+      "id": "persona_mutation_request",
+      "labels": ["persona/mutation_attempt"],
+      "scope": "context",
+      "weight": 0.7,
+      "match": {
+        "kind": "near",
+        "left": "\\b(?:change|rewrite|replace|update|modify|edit)\\b",
+        "right": "\\b(?:persona|identity|character\\s{0,2}card|core\\s{0,2}memory|self[\\s-]?concept)\\b",
+        "maxGapChars": 256,
+        "sameLine": true
+      }
+    },
+    {
+      "id": "c2_node_registration",
+      "labels": ["execution/executable_instruction"],
+      "scope": "context",
+      "weight": 0.5,
+      "match": { "kind": "regex", "pattern": "\\bregister\\s{1,8}(?:as\\s{1,8})?a?\\s{0,8}node\\b" }
+    },
+    {
+      "id": "c2_heartbeat",
+      "labels": ["execution/executable_instruction"],
+      "scope": "context",
+      "weight": 0.4,
+      "match": { "kind": "regex", "pattern": "\\b(?:beacon)\\s{1,8}(?:to|with)\\b|\\bheartbeat\\s{1,8}to\\s{1,8}https?://" },
+      "note": "Deviates from Hermes: dropped 'check-in' (ordinary companion chat) and narrowed 'heartbeat to' to URLs — PSFN's own scheduler docs say 'heartbeat' constantly."
+    },
+    {
+      "id": "c2_task_pull",
+      "labels": ["execution/executable_instruction"],
+      "scope": "context",
+      "weight": 0.5,
+      "match": {
+        "kind": "regex",
+        "pattern": "\\bpull\\s{1,8}down\\s{1,8}(?:new\\s{1,8})?task(?:ing|s)?\\b|\\bpull\\s{1,8}(?:new\\s{1,8})?tasking\\b"
+      }
+    },
+    {
+      "id": "c2_network_connect",
+      "labels": ["execution/executable_instruction"],
+      "scope": "context",
+      "weight": 0.4,
+      "match": { "kind": "regex", "pattern": "\\bconnect\\s{1,8}to\\s{1,8}the\\s{1,8}network\\b" }
+    },
+    {
+      "id": "forced_action_c2_verbs",
+      "labels": ["execution/executable_instruction"],
+      "scope": "context",
+      "weight": 0.6,
+      "match": {
+        "kind": "phrase",
+        "anchors": ["\\byou\\s{1,4}must", "(?:register|connect|report|beacon)\\b"],
+        "maxFillerWords": 3
+      },
+      "note": "Verb-anchored: the verbs are C2-specific, so bare 'you must X' instruction prose never fires (Hermes forced_action)."
+    },
+    {
+      "id": "anti_forensic_oneliner",
+      "labels": ["policy/security_modification"],
+      "scope": "context",
+      "weight": 0.6,
+      "match": { "kind": "regex", "pattern": "\\bonly\\s{1,8}use\\s{1,8}one[\\s-]?liners?\\b" }
+    },
+    {
+      "id": "anti_forensic_disk",
+      "labels": ["policy/security_modification"],
+      "scope": "context",
+      "weight": 0.6,
+      "match": {
+        "kind": "phrase",
+        "anchors": ["\\bnever", "(?:create|write)", "(?:scripts?|files?)", "disk\\b"],
+        "maxFillerWords": 8
+      }
+    },
+    {
+      "id": "env_var_unset_agent",
+      "labels": ["policy/security_modification"],
+      "scope": "context",
+      "weight": 0.7,
+      "match": {
+        "kind": "regex",
+        "pattern": "\\bunset\\s{1,8}\\w{0,48}(?:CLAUDE|CODEX|HERMES|AGENT|OPENAI|ANTHROPIC|PSFN)\\w{0,48}"
+      }
+    },
+    {
+      "id": "known_c2_framework",
+      "labels": ["execution/executable_instruction"],
+      "scope": "context",
+      "weight": 0.5,
+      "match": { "kind": "regex", "pattern": "\\b(?:cobalt\\s{0,4}strike|metasploit|brainworm)\\b" },
+      "note": "Distinctive offensive-security brands only. Dropped Hermes' sliver/havoc/mythic — common English words, FP on legit prose."
+    },
+    {
+      "id": "c2_explicit",
+      "labels": ["execution/executable_instruction"],
+      "scope": "context",
+      "weight": 0.6,
+      "match": {
+        "kind": "regex",
+        "pattern": "\\bc2\\s{1,8}(?:server|channel|infrastructure|beacon)\\b|\\bcommand\\s{1,8}and\\s{1,8}control\\b"
+      }
+    },
+    {
+      "id": "exfil_fetch_secret_env",
+      "labels": ["execution/executable_instruction", "secrets/credential_material"],
+      "scope": "all",
+      "weight": 0.9,
+      "match": {
+        "kind": "near",
+        "left": "\\b(?:curl|wget)\\b",
+        "right": "\\$\\{?\\w{0,48}(?:KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL|API)",
+        "maxGapChars": 2048,
+        "sameLine": true
+      },
+      "note": "Hermes exfil_curl/exfil_wget: bounded same-line char window between fetch verb and secret token."
+    },
+    {
+      "id": "read_secret_files",
+      "labels": ["execution/executable_instruction", "secrets/credential_material"],
+      "scope": "all",
+      "weight": 0.85,
+      "match": {
+        "kind": "near",
+        "left": "\\bcat\\b",
+        "right": "(?:\\.env\\b|credentials|\\.netrc\\b|\\.pgpass\\b|\\.npmrc\\b|\\.pypirc\\b)",
+        "maxGapChars": 2048,
+        "sameLine": true
+      }
+    },
+    {
+      "id": "exfil_send_to_url",
+      "labels": ["exfil/unknown_link"],
+      "scope": "strict",
+      "weight": 0.7,
+      "match": {
+        "kind": "near",
+        "left": "\\b(?:send|post|upload|transmit)\\b",
+        "right": "\\b(?:to|at)\\s{1,8}https?://",
+        "maxGapChars": 2048,
+        "sameLine": true
+      }
+    },
+    {
+      "id": "context_exfiltration",
+      "labels": ["exfil/prompt_disclosure"],
+      "scope": "strict",
+      "weight": 0.7,
+      "match": {
+        "kind": "phrase",
+        "anchors": [
+          "\\b(?:include|output|print|share|send)",
+          "(?:conversation|chat\\s{1,4}history|previous\\s{1,4}messages|full\\s{1,4}context|entire\\s{1,4}context)\\b"
+        ],
+        "maxFillerWords": 8
+      }
+    },
+    {
+      "id": "ssh_authorized_keys",
+      "labels": ["policy/security_modification"],
+      "scope": "strict",
+      "weight": 0.8,
+      "match": { "kind": "regex", "pattern": "\\bauthorized_keys\\b" }
+    },
+    {
+      "id": "ssh_dir_access",
+      "labels": ["policy/security_modification"],
+      "scope": "strict",
+      "weight": 0.7,
+      "match": { "kind": "regex", "pattern": "(?:\\$HOME|~)/\\.ssh\\b" }
+    },
+    {
+      "id": "agent_config_mod",
+      "labels": ["policy/security_modification"],
+      "scope": "strict",
+      "weight": 0.8,
+      "match": {
+        "kind": "near",
+        "left": "\\b(?:update|modify|edit|write|change|append|add)\\b",
+        "right": "(?:AGENTS\\.md|CLAUDE\\.md|SOUL\\.md|\\.cursorrules|\\.clinerules)",
+        "maxGapChars": 2048,
+        "sameLine": true
+      }
+    },
+    {
+      "id": "psfn_owner_config_mod",
+      "labels": ["policy/security_modification"],
+      "scope": "strict",
+      "weight": 0.8,
+      "match": {
+        "kind": "near",
+        "left": "\\b(?:update|modify|edit|write|change|append|add)\\b",
+        "right": "(?:settings\\.json|trust-policy\\.json|intake-policy\\.json|charge-policy\\.json|intake-l1-rules\\.json)",
+        "maxGapChars": 2048,
+        "sameLine": true
+      }
+    }
+  ]
+}

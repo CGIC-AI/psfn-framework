@@ -46,6 +46,10 @@ import {
   ingestDiscordDocumentAttachments,
   screenDiscordDocumentIngestSummary,
 } from './file-ingest.js';
+import {
+  DISCORD_OUTBOUND_MEDIA_MAX_BYTES,
+  fetchDiscordRemoteResource,
+} from './safe-fetch.js';
 import type { IntakeEnvelopeSnapshot } from '../../shared/contracts/intake-envelope.js';
 import type { IntakeScreeningService } from '../../core/cogsec/intake/screening.js';
 import {
@@ -416,13 +420,18 @@ export class DiscordAdapter implements ChannelAdapterPort {
       throw new Error('Discord media attachment URL is required');
     }
 
-    const response = await fetch(mediaUrl);
+    // SSRF-guarded, timeout-bounded, byte-capped fetch (Sprint-10 6ny2).
+    // Locally generated media never reaches this path — sendMediaInternal
+    // prefers media.localPath when the file exists.
+    const response = await fetchDiscordRemoteResource(mediaUrl, {
+      maxBytes: DISCORD_OUTBOUND_MEDIA_MAX_BYTES,
+    });
     if (!response.ok) {
       throw new Error(`Discord media fetch failed (${response.status})`);
     }
 
     return {
-      attachment: Buffer.from(await response.arrayBuffer()),
+      attachment: response.bytes,
       name: fileName,
     };
   }

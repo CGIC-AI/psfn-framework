@@ -65,6 +65,17 @@ vi.mock('discord.js', () => {
     };
   });
 
+// The SSRF-guarded attachment/media fetch path (safe-fetch.ts) resolves
+// hostnames before fetching. Pin DNS to a public address so tests never
+// touch the live resolver network.
+vi.mock('node:dns/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:dns/promises')>();
+  return {
+    ...actual,
+    lookup: vi.fn(async () => ({ address: '93.184.216.34', family: 4 })),
+  };
+});
+
 vi.mock('./voice.js', () => {
   return {
     DiscordVoiceRuntime: class MockVoiceRuntime {
@@ -795,7 +806,10 @@ describe('DiscordAdapter DM routing', () => {
         }),
       );
 
-      expect(fetchMock).toHaveBeenCalledWith('https://cdn.discordapp.com/attachments/a/b/field-notes.md');
+      expect(fetchMock).toHaveBeenCalledWith(
+        'https://cdn.discordapp.com/attachments/a/b/field-notes.md',
+        expect.objectContaining({ redirect: 'manual' }),
+      );
       expect(handler).toHaveBeenCalledTimes(1);
       const message = handler.mock.calls[0][0] as SubstrateMessage;
       expect(message.content).toContain('please read this');
@@ -861,7 +875,10 @@ describe('DiscordAdapter DM routing', () => {
         }),
       );
 
-      expect(fetchMock).toHaveBeenCalledWith('https://cdn.discordapp.com/attachments/a/b/photo.png');
+      expect(fetchMock).toHaveBeenCalledWith(
+        'https://cdn.discordapp.com/attachments/a/b/photo.png',
+        expect.objectContaining({ redirect: 'manual' }),
+      );
       expect(handler).toHaveBeenCalledTimes(1);
       const message = handler.mock.calls[0][0] as SubstrateMessage;
       expect(message.attachments).toBeUndefined();
@@ -1896,6 +1913,73 @@ describe('DiscordAdapter status visibility', () => {
     expect(interactive.sentPayloads[0]).toEqual(expect.objectContaining({
       files: [mediaPath],
     }));
+  });
+
+  // ── Sprint-10 6ny2: outbound media fetch is SSRF-guarded and byte-capped ──
+
+  it('denies outbound media fetches to internal addresses', async () => {
+    const eventBus = new EventBus();
+    const adapter = new DiscordAdapter(makeConfig(), eventBus);
+    await adapter.init();
+
+    const channelId = 'facet-media-ssrf-channel';
+    const interactive = makeInteractiveTextChannel();
+    discordMock.channelsById.set(channelId, interactive.channel);
+
+    for (const blockedUrl of [
+      'https://192.168.1.10/internal.png',
+      'https://169.254.169.254/latest/meta-data/',
+      'https://[fd00:ec2::254]/imds.png',
+    ]) {
+      await expect(adapter.outbound.sendMedia?.(
+        { channelId },
+        {
+          url: blockedUrl,
+          contentType: 'image/png',
+          name: 'internal.png',
+        },
+      )).rejects.toThrow(/blocked/);
+    }
+
+    expect(interactive.sentPayloads).toHaveLength(0);
+  });
+
+  it('byte-caps outbound media fetches while streaming', async () => {
+    const originalFetch = globalThis.fetch;
+    // One byte over the 25 MiB outbound cap, served without a trustworthy
+    // content-length (Response streams it).
+    const oversized = Buffer.alloc(25 * 1024 * 1024 + 1, 0x61);
+    const fetchMock = vi.fn(async () => new Response(oversized, {
+      headers: { 'content-type': 'image/png' },
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    try {
+      const eventBus = new EventBus();
+      const adapter = new DiscordAdapter(makeConfig(), eventBus);
+      await adapter.init();
+
+      const channelId = 'facet-media-cap-channel';
+      const interactive = makeInteractiveTextChannel();
+      discordMock.channelsById.set(channelId, interactive.channel);
+
+      await expect(adapter.outbound.sendMedia?.(
+        { channelId },
+        {
+          url: 'https://images.example.test/huge.png',
+          contentType: 'image/png',
+          name: 'huge.png',
+        },
+      )).rejects.toThrow(/too large/);
+
+      expect(fetchMock).toHaveBeenCalledWith(
+        'https://images.example.test/huge.png',
+        expect.objectContaining({ redirect: 'manual' }),
+      );
+      expect(interactive.sentPayloads).toHaveLength(0);
+    } finally {
+      vi.stubGlobal('fetch', originalFetch);
+    }
   });
 
   it('sends response attachments after text replies', async () => {

@@ -19,6 +19,7 @@ import {
   isSupportedOfficeDocumentContentType,
   parseDocxDocument,
 } from './office-document.js';
+import { fetchDiscordRemoteResource } from './safe-fetch.js';
 
 const DISCORD_DOCUMENT_MAX_BYTES = 16 * 1024 * 1024;
 const DISCORD_TEXT_DOCUMENT_MAX_BYTES = 4 * 1024 * 1024;
@@ -307,12 +308,19 @@ async function ingestDiscordDocumentAttachment(
     throw new Error(`text attachment is too large (${candidate.sizeBytes} bytes; max ${DISCORD_TEXT_DOCUMENT_MAX_BYTES})`);
   }
 
-  const response = await fetch(candidate.url);
+  // SSRF-guarded, timeout-bounded fetch with the byte cap enforced while
+  // streaming (Sprint-10 6ny2) — the declared size above cannot be trusted.
+  const maxDownloadBytes = isTextDocument(candidate.contentType)
+    ? DISCORD_TEXT_DOCUMENT_MAX_BYTES
+    : DISCORD_DOCUMENT_MAX_BYTES;
+  const response = await fetchDiscordRemoteResource(candidate.url, {
+    maxBytes: maxDownloadBytes,
+  });
   if (!response.ok) {
     throw new Error(`attachment download failed (${response.status})`);
   }
 
-  const bytes = Buffer.from(await response.arrayBuffer());
+  const bytes = response.bytes;
   if (bytes.byteLength > DISCORD_DOCUMENT_MAX_BYTES) {
     throw new Error(`downloaded attachment is too large (${bytes.byteLength} bytes; max ${DISCORD_DOCUMENT_MAX_BYTES})`);
   }

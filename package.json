@@ -1,7 +1,7 @@
 {
   "name": "psfn-framework",
   "version": "0.1.0",
-  "description": "PSFN Substrate Framework \u2014 a purpose-built runtime for emergent artificial consciousness",
+  "description": "PSFN Substrate Framework — a purpose-built runtime for emergent artificial consciousness",
   "type": "module",
   "main": "dist/index.js",
   "scripts": {
@@ -87,6 +87,7 @@
     "@snazzah/davey": "0.1.9",
     "better-sqlite3": "11.10.0",
     "discord.js": "14.26.4",
+    "ipaddr.js": "2.2.0",
     "js-tiktoken": "1.0.21",
     "json-rpc-2.0": "1.7.1",
     "patch-package": "8.0.1",

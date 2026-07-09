@@ -3,73 +3,89 @@
 
 import { isIP } from 'node:net';
 import { lookup } from 'node:dns/promises';
+import ipaddr from 'ipaddr.js';
 import { sleep } from '../../shared/utils/timing.js';
 
-const PRIVATE_RANGES = [
-  // IPv4
-  /^127\./,                          // loopback
-  /^10\./,                           // RFC1918 Class A
-  /^172\.(1[6-9]|2\d|3[01])\./,     // RFC1918 Class B
-  /^192\.168\./,                     // RFC1918 Class C
-  /^169\.254\./,                     // link-local (cloud metadata!)
-  /^0\./,                            // "this" network
-  // IPv6
-  /^::1$/,                           // loopback
-  /^fe80:/i,                         // link-local
-  /^fc00:/i,                         // unique local
-  /^fd/i,                            // unique local
-];
+// ── Normalized CIDR classification (Sprint-10 H1) ──
+// The previous literal-regex classifier missed IPv6 forms the URL parser and
+// DNS can normalize past it (`::`, ULA `fc00::/7`, the IPv6 IMDS at
+// `fd00:ec2::254`, hex-form mapped addresses, NAT64/6to4/Teredo embeddings).
+// ipaddr.js parses the address into its canonical form first, so every
+// spelling of the same address classifies identically.
+//
+// Classification tiers:
+// - 'always_blocked': refused in EVERY lane, including allowInternalNetwork
+//   (cloud metadata / link-local / unspecified / ULA / IPv4-embedding forms).
+// - 'private':        refused by default, reachable only with
+//   allowInternalNetwork (RFC1918, loopback, CGNAT, reserved).
+// - 'public':         globally routable unicast.
+export type IpClassification = 'public' | 'private' | 'always_blocked';
 
-/** Always-blocked ranges even when allowInternalNetwork is true.
- *  These are dangerous (cloud metadata, link-local, "this" network). */
-const ALWAYS_BLOCKED_RANGES = [
-  /^169\.254\./,                     // link-local / cloud metadata
-  /^0\./,                            // "this" network
-  /^fe80:/i,                         // IPv6 link-local
-];
+// Deprecated IPv6 site-local (fec0::/10). ipaddr.js 2.2.0 classifies it as
+// plain unicast, but it is an internal-only range like ULA — always block.
+const IPV6_SITE_LOCAL = ipaddr.parseCIDR('fec0::/10');
 
-function decodeIPv4MappedIPv6(ip: string): string | null {
-  const dottedMapped = ip.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/i);
-  if (dottedMapped) {
-    return dottedMapped[1];
+function classifyIPv4(address: ipaddr.IPv4): IpClassification {
+  switch (address.range()) {
+    case 'unicast':
+      return 'public';
+    case 'unspecified':   // 0.0.0.0/8 "this" network
+    case 'linkLocal':     // 169.254.0.0/16 (cloud metadata!)
+    case 'broadcast':
+    case 'multicast':
+      return 'always_blocked';
+    default:
+      // private (RFC1918), loopback, carrierGradeNat, reserved, as112, ...
+      return 'private';
   }
-
-  const hexMapped = ip.match(/^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/i);
-  if (!hexMapped) {
-    return null;
-  }
-
-  const upper = Number.parseInt(hexMapped[1], 16);
-  const lower = Number.parseInt(hexMapped[2], 16);
-  if (!Number.isFinite(upper) || !Number.isFinite(lower)) {
-    return null;
-  }
-
-  return [
-    (upper >>> 8) & 0xff,
-    upper & 0xff,
-    (lower >>> 8) & 0xff,
-    lower & 0xff,
-  ].join('.');
 }
 
+function classifyIPv6(address: ipaddr.IPv6): IpClassification {
+  if (address.isIPv4MappedAddress()) {
+    // Covers dotted (::ffff:127.0.0.1) and hex (::ffff:7f00:1) forms alike:
+    // classify the embedded IPv4 address.
+    return classifyIPv4(address.toIPv4Address());
+  }
+  if (address.match(IPV6_SITE_LOCAL)) {
+    return 'always_blocked';
+  }
+  switch (address.range()) {
+    case 'unicast':
+      return 'public';
+    case 'loopback':      // ::1 — reachable with allowInternalNetwork
+      return 'private';
+    default:
+      // unspecified (::), linkLocal (fe80::/10), uniqueLocal (fc00::/7 —
+      // includes the IPv6 IMDS fd00:ec2::254), multicast, and every
+      // IPv4-embedding/transition range (rfc6052 NAT64, rfc6145, 6to4,
+      // teredo) plus reserved/benchmarking/orchid2/... — fail closed.
+      return 'always_blocked';
+  }
+}
+
+/** Classify an IP-address string. Unparseable input fails closed. */
+export function classifyIpAddress(ip: string): IpClassification {
+  let parsed: ipaddr.IPv4 | ipaddr.IPv6;
+  try {
+    parsed = ipaddr.parse(ip);
+  } catch {
+    return 'always_blocked';
+  }
+  return parsed.kind() === 'ipv4'
+    ? classifyIPv4(parsed as ipaddr.IPv4)
+    : classifyIPv6(parsed as ipaddr.IPv6);
+}
+
+/** True for any address that is not globally-routable public unicast. */
 export function isPrivateIP(ip: string): boolean {
-  // Handle IPv4-mapped IPv6 (e.g. ::ffff:127.0.0.1 or ::ffff:7f00:1)
-  const mapped4 = decodeIPv4MappedIPv6(ip);
-  if (mapped4) return isPrivateIP(mapped4);
-  if (/^::ffff:/i.test(ip)) return true; // hex-form mapped addresses (::ffff:7f00:1) — block conservatively
-
-  return PRIVATE_RANGES.some(r => r.test(ip));
+  return classifyIpAddress(ip) !== 'public';
 }
 
-/** Check if an IP is in an always-blocked range (cloud metadata, link-local).
+/** Check if an IP is in an always-blocked range (cloud metadata, link-local,
+ *  unspecified, ULA, IPv4-embedding transition ranges).
  *  These are blocked even when internal network access is allowed. */
 export function isAlwaysBlockedIP(ip: string): boolean {
-  const mapped4 = decodeIPv4MappedIPv6(ip);
-  if (mapped4) return isAlwaysBlockedIP(mapped4);
-  if (/^::ffff:/i.test(ip)) return true; // conservatively block unknown mapped form
-
-  return ALWAYS_BLOCKED_RANGES.some(r => r.test(ip));
+  return classifyIpAddress(ip) === 'always_blocked';
 }
 
 export type UrlPolicyLane = 'default' | 'local_crawler' | 'discovery' | 'home_assistant';
@@ -123,6 +139,69 @@ function toLowerList(values: readonly string[] | undefined): string[] {
   return values
     .map(value => value.trim().toLowerCase())
     .filter(Boolean);
+}
+
+// ── Host allowlist entries (Sprint-10 01-M2) ──
+// Entries may pin a port: `host`, `host:port`, `[v6literal]`, `[v6literal]:port`.
+// A port-pinned entry matches only that exact effective port, so a redirect to
+// another port of an allowlisted host (e.g. the Home Assistant host) is
+// rejected instead of silently staying "in allowlist".
+interface HostAllowlistEntry {
+  host: string;
+  port?: string;
+}
+
+function parseHostAllowlistEntry(raw: string): HostAllowlistEntry | null {
+  const value = raw.trim().toLowerCase();
+  if (!value) return null;
+
+  const bracketWithPort = value.match(/^\[([^\]]+)\]:(\d{1,5})$/);
+  if (bracketWithPort) {
+    return { host: bracketWithPort[1], port: String(Number.parseInt(bracketWithPort[2], 10)) };
+  }
+  const bracketOnly = value.match(/^\[([^\]]+)\]$/);
+  if (bracketOnly) {
+    return { host: bracketOnly[1] };
+  }
+
+  const colonCount = (value.match(/:/g) ?? []).length;
+  if (colonCount === 1) {
+    const [host, port] = value.split(':');
+    if (!host || !/^\d{1,5}$/.test(port)) {
+      // Malformed host:port entry. Keep it as a never-matching literal host
+      // (hostnames cannot contain ':') so the allowlist stays non-empty and
+      // enforcement remains active — dropping it would fail open.
+      return { host: value };
+    }
+    return { host, port: String(Number.parseInt(port, 10)) };
+  }
+
+  // Zero colons: plain hostname/IPv4. Multiple colons: bare IPv6 literal.
+  return { host: value };
+}
+
+function toHostAllowlist(values: readonly string[] | undefined): HostAllowlistEntry[] {
+  if (!values || values.length === 0) return [];
+  return values
+    .map(parseHostAllowlistEntry)
+    .filter((entry): entry is HostAllowlistEntry => entry !== null);
+}
+
+/** Effective TCP port of a parsed http(s) URL (explicit port or scheme default). */
+export function effectiveUrlPort(parsed: URL): string {
+  if (parsed.port) return parsed.port;
+  return parsed.protocol === 'https:' ? '443' : '80';
+}
+
+function matchesHostAllowlist(
+  hostname: string,
+  parsed: URL,
+  entries: readonly HostAllowlistEntry[],
+): boolean {
+  if (entries.length === 0) return false;
+  const port = effectiveUrlPort(parsed);
+  return entries.some(entry =>
+    entry.host === hostname && (entry.port === undefined || entry.port === port));
 }
 
 function normalizeAbsoluteHttpUrl(value: string): string | null {
@@ -222,7 +301,7 @@ export function evaluateUrlPolicy(
   const domainAllowlist = toLowerList(isLocalCrawlerLane
     ? localCrawler?.domainAllowlist
     : config.domainAllowlist);
-  const hostAllowlist = toLowerList(isLocalCrawlerLane
+  const hostAllowlist = toHostAllowlist(isLocalCrawlerLane
     ? localCrawler?.hostAllowlist
     : config.hostAllowlist);
 
@@ -241,7 +320,7 @@ export function evaluateUrlPolicy(
       return { allowed: false, reason: 'Local crawler lane requires host or domain allowlist' };
     }
 
-    const hostAllowed = hostAllowlist.includes(hostname);
+    const hostAllowed = matchesHostAllowlist(hostname, parsed, hostAllowlist);
     const domainAllowed = matchesDomainAllowlist(hostname, domainAllowlist);
     if (!hostAllowed && !domainAllowed) {
       return { allowed: false, reason: `Host ${hostname} not allowlisted for local crawler lane` };
@@ -258,7 +337,7 @@ export function evaluateUrlPolicy(
 
   // Host/domain allowlists
   if (hostAllowlist.length > 0 || domainAllowlist.length > 0) {
-    const hostAllowed = hostAllowlist.includes(hostname);
+    const hostAllowed = matchesHostAllowlist(hostname, parsed, hostAllowlist);
     const domainAllowed = matchesDomainAllowlist(hostname, domainAllowlist);
     if (!hostAllowed && !domainAllowed) {
       if (hostAllowlist.length > 0 && domainAllowlist.length === 0) {

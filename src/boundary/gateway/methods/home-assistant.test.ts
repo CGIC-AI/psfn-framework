@@ -208,7 +208,9 @@ describe('registerHomeAssistantMethods', () => {
     expect(call[3]).toEqual({
       allowHttp: true,
       allowInternalNetwork: true,
-      hostAllowlist: ['ha.allowed.test'],
+      // Port-pinned (Sprint-10 01-M2): a redirect to another port of the HA
+      // host must not stay in-allowlist and replay the Bearer token.
+      hostAllowlist: ['ha.allowed.test:8123'],
     });
     expect(call[5]).toMatchObject({ Authorization: 'Bearer ha-test-token' });
     expect(JSON.stringify(harness.recordAuditEvent.mock.calls)).not.toContain('ha-test-token');

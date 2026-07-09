@@ -11,6 +11,17 @@ import {
 import { classifyDiscordAttachmentQuarantineRisk } from './file-quarantine.js';
 import { DOCM_CONTENT_TYPE, DOCX_CONTENT_TYPE } from './office-document.js';
 
+// The SSRF-guarded attachment fetch path (safe-fetch.ts) resolves hostnames
+// before fetching. Pin DNS to a public address so tests never touch the live
+// resolver network.
+vi.mock('node:dns/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:dns/promises')>();
+  return {
+    ...actual,
+    lookup: vi.fn(async () => ({ address: '93.184.216.34', family: 4 })),
+  };
+});
+
 function buildSimplePdf(text: string): Buffer {
   const escaped = text.replace(/[\\()]/g, match => `\\${match}`);
   const stream = `BT /F1 24 Tf 100 700 Td (${escaped}) Tj ET`;
@@ -264,6 +275,42 @@ describe('Discord document file ingest', () => {
 
     expect(decision.quarantined).toBe(false);
     expect(decision.sniffedContentType).toBe(DOCX_CONTENT_TYPE);
+  });
+
+  // ── Sprint-10 6ny2: inbound attachment downloads are SSRF-guarded ──
+  it('refuses attachment downloads from internal addresses', async () => {
+    const personalFilesDir = mkdtempSync(join(tmpdir(), 'psfn-discord-ssrf-'));
+    const originalFetch = globalThis.fetch;
+    const fetchMock = vi.fn(async () => new Response('should never be fetched', {
+      headers: { 'content-type': 'text/plain' },
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    try {
+      const summary = await ingestDiscordDocumentAttachments([{
+        id: 'att-internal',
+        name: 'notes.txt',
+        url: 'https://192.168.1.10/notes.txt',
+        contentType: 'text/plain',
+        declaredContentType: 'text/plain',
+        sizeBytes: 24,
+      }], {
+        personalFilesDir,
+        channelId: 'discord-channel',
+        messageId: 'message-ssrf',
+        authorId: 'user-1',
+        createdAt: new Date('2026-06-29T12:00:00.000Z'),
+      });
+
+      expect(summary.results).toHaveLength(0);
+      expect(summary.quarantined).toHaveLength(0);
+      expect(summary.failures).toHaveLength(1);
+      expect(summary.failures[0]!.reason).toMatch(/blocked/);
+      expect(fetchMock).not.toHaveBeenCalled();
+    } finally {
+      vi.stubGlobal('fetch', originalFetch);
+      rmSync(personalFilesDir, { recursive: true, force: true });
+    }
   });
 
   it('quarantines shebang scripts and withholds the body from prompt context', async () => {

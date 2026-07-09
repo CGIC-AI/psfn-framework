@@ -59,6 +59,8 @@ import {
   gateToolWithCapabilities,
   type CapabilityAccess,
 } from '../../system/capabilities/gate.js';
+import { assertToolCapabilityRequirementDeclared } from '../../system/capabilities/requirements.js';
+import { isCanonicalFirstPartyToolName } from './tool-surface/registry.js';
 import { CapabilityRuntime } from '../../system/capabilities/runtime.js';
 import { normalizeCapabilityTier, resolveTierCapabilityTokens } from '../../system/capabilities/tiers.js';
 import type { CapabilityToken } from '../../system/capabilities/tokens.js';
@@ -621,6 +623,13 @@ export class SubstrateAgent {
     return tools.map((tool) => {
       const cached = this.gatedToolCache.get(tool);
       if (cached) return cached;
+      // Fail closed at registration for audited first-party tools that forgot to
+      // declare a capability requirement (02-M2). Third-party/plugin tools are
+      // still refused, but at gate-evaluation time so one bad plugin cannot take
+      // down the whole runtime at startup.
+      if (isCanonicalFirstPartyToolName(tool.name)) {
+        assertToolCapabilityRequirementDeclared(tool);
+      }
       const wrapped = gateToolWithCapabilities(tool, () => this.resolveCapabilityAccess());
       this.gatedToolCache.set(tool, wrapped);
       return wrapped;

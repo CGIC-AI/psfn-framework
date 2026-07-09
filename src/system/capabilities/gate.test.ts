@@ -9,7 +9,13 @@ import {
   type CapabilityAccess,
 } from './gate.js';
 import { resolveTierCapabilityTokens } from './tiers.js';
-import { resolveToolRequiredCapabilities, withCapabilityRequirement } from './requirements.js';
+import {
+  assertToolCapabilityRequirementDeclared,
+  resolveToolCapabilityRequirement,
+  resolveToolRequiredCapabilities,
+  toolHasDeclaredCapabilityRequirement,
+  withCapabilityRequirement,
+} from './requirements.js';
 import { MODEL_FACING_DRIFT_GUARD_RETIRED_TOOL_ALIASES } from '../../core/agent/tool-surface/registry.js';
 
 function accessForTier(
@@ -327,7 +333,9 @@ describe('capability tool gating', () => {
   });
 
   it('leaves benign media and web tools ungated across tiers', async () => {
-    for (const toolName of ['media', 'selfie_create', 'web', 'web_fetch']) {
+    // `generate_image` is the canonical media surface; the old `media` alias is
+    // retired and now correctly fails closed as undeclared (02-M2).
+    for (const toolName of ['generate_image', 'selfie_create', 'web', 'web_fetch']) {
       const tool = createTool(toolName);
       const gated = gateToolWithCapabilities(
         tool.tool,
@@ -740,6 +748,89 @@ describe('capability tool gating', () => {
     );
     expect(allowedListEligibility.allowed).toBe(true);
     expect(allowedListEligibility.missingTokens).toEqual([]);
+  });
+});
+
+describe('undeclared capability fail-closed (02-M2)', () => {
+  it('refuses a tool that declares no capability requirement at all', async () => {
+    const rogue = createTool('tool_with_no_requirement_path');
+    // Autonomous is the most-privileged default tier; even it must not run an
+    // undeclared tool (an empty requirement set is otherwise allowed everywhere).
+    const gated = gateToolWithCapabilities(rogue.tool, () => accessForTier('autonomous'));
+    const denied = await gated.execute('call-rogue', { action: 'anything' });
+
+    expect(rogue.executeSpy).not.toHaveBeenCalled();
+    expect((denied.details as any).isError).toBe(true);
+    expect((denied.details as any).capabilityDenied).toBe(true);
+    expect((denied.details as any).capabilityUndeclared).toBe(true);
+    expect((denied.content[0] as any).text).toContain('declares no capability requirement');
+  });
+
+  it('resolveToolCapabilityRequirement marks unknown tools undeclared and known tools declared', () => {
+    expect(resolveToolCapabilityRequirement(createTool('tool_with_no_requirement_path').tool, {}).declared)
+      .toBe(false);
+    expect(toolHasDeclaredCapabilityRequirement(createTool('tool_with_no_requirement_path').tool))
+      .toBe(false);
+
+    // Static explicit "no requirement" entry => declared, empty tokens.
+    expect(resolveToolCapabilityRequirement(createTool('tool_search').tool, {}))
+      .toEqual({ declared: true, tokens: [] });
+    // Unified resolver => declared.
+    expect(resolveToolCapabilityRequirement(createTool('memory').tool, { action: 'write' }).declared)
+      .toBe(true);
+  });
+
+  it('allows a tool with an explicit empty ("none") declaration', async () => {
+    // tool_search declares NO_CAPABILITY_REQUIREMENT via the static map.
+    const toolSearch = createTool('tool_search');
+    const gated = gateToolWithCapabilities(toolSearch.tool, () => accessForTier('nursery'));
+    await gated.execute('call-tool-search', { query: 'memory' });
+    expect(toolSearch.executeSpy).toHaveBeenCalledTimes(1);
+
+    // Explicit empty annotation is also a valid declaration.
+    const annotatedNone = withCapabilityRequirement(createTool('annotated_none').tool, []);
+    expect(resolveToolCapabilityRequirement(annotatedNone, {})).toEqual({ declared: true, tokens: [] });
+    const annotatedGated = gateToolWithCapabilities(annotatedNone, () => accessForTier('nursery'));
+    const annotatedResult = await annotatedGated.execute('call-annotated-none', {});
+    expect((annotatedResult.details as any)?.capabilityUndeclared).toBeUndefined();
+  });
+
+  it('assertToolCapabilityRequirementDeclared throws for undeclared, passes for declared', () => {
+    expect(() => assertToolCapabilityRequirementDeclared(createTool('tool_with_no_requirement_path').tool))
+      .toThrow(/no declared capability requirement/);
+    expect(() => assertToolCapabilityRequirementDeclared(createTool('tool_search').tool)).not.toThrow();
+    expect(() => assertToolCapabilityRequirementDeclared(createTool('journal').tool)).not.toThrow();
+  });
+
+  it('gates the journal tool by read versus runtime-write capability tokens', async () => {
+    expect(resolveToolRequiredCapabilities(createTool('journal').tool, { action: 'read' }))
+      .toEqual(['identity.read']);
+    expect(resolveToolRequiredCapabilities(createTool('journal').tool, { action: 'search' }))
+      .toEqual(['identity.read']);
+    expect(resolveToolRequiredCapabilities(createTool('journal').tool, { action: 'write' }))
+      .toEqual(['identity.write.runtime']);
+    expect(resolveToolRequiredCapabilities(createTool('journal').tool, { action: 'append' }))
+      .toEqual(['identity.write.runtime']);
+
+    const journal = createTool('journal');
+    const writeDeniedGated = gateToolWithCapabilities(
+      journal.tool,
+      () => accessForTier('custom', ['identity.read']),
+    );
+    const writeDenied = await writeDeniedGated.execute('journal-write-denied', {
+      action: 'write',
+      title: 'A note',
+      content: 'hello',
+    });
+    expect(journal.executeSpy).not.toHaveBeenCalled();
+    expect((writeDenied.content[0] as any).text).toContain('identity.write.runtime');
+
+    const readAllowedGated = gateToolWithCapabilities(
+      journal.tool,
+      () => accessForTier('custom', ['identity.read']),
+    );
+    await readAllowedGated.execute('journal-read-allowed', { action: 'read', path: 'a-note' });
+    expect(journal.executeSpy).toHaveBeenCalledTimes(1);
   });
 });
 

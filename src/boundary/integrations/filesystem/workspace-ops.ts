@@ -1,4 +1,5 @@
 import { glob as fsGlob, open, readFile, stat, writeFile } from 'node:fs/promises';
+import { setImmediate as yieldToEventLoop } from 'node:timers/promises';
 import { join, relative } from 'node:path';
 import {
   normalizeWorkspaceRelativeGlob,
@@ -35,6 +36,141 @@ const MAX_SEARCH_MAX_BYTES_PER_FILE = 200_000;
 const DEFAULT_SEARCH_CONTEXT_LINES = 0;
 const MAX_SEARCH_CONTEXT_LINES = 2;
 const MAX_PREVIEW_CHARS = 500;
+
+// ── fs.search ReDoS containment (nw90) ──
+//
+// Agent-supplied regex patterns run in the gateway event loop. A single
+// catastrophically-backtracking regex (e.g. `(a+)+$` against `aaaa…b`) can
+// pin the loop for the whole scan. Without a native RE2 dependency we bound
+// the blast radius three ways:
+//   (a) reject the classic nested-unbounded-quantifier ReDoS signature up
+//       front (cheap static lint — a genuinely pathological regex never runs);
+//   (b) cap the length of each line handed to the regex, so no single exec can
+//       chew through a megabyte-long line;
+//   (c) enforce a wall-clock budget checked between lines/files and yield to
+//       the event loop periodically, so a slow-but-not-nested pattern is
+//       aborted with a clear error instead of hanging.
+const MAX_SEARCH_LINE_CHARS = 8_192;
+const MAX_SEARCH_REGEX_PATTERN_CHARS = 1_000;
+const SEARCH_TIME_BUDGET_MS = 2_000;
+const SEARCH_YIELD_INTERVAL = 256;
+
+export class SearchBudgetExceededError extends Error {
+  constructor() {
+    super('fs search budget exceeded: pattern took too long to evaluate and was aborted');
+    this.name = 'SearchBudgetExceededError';
+  }
+}
+
+export class UnsafeSearchRegexError extends Error {
+  constructor(detail: string) {
+    super(`fs search regex rejected: ${detail}`);
+    this.name = 'UnsafeSearchRegexError';
+  }
+}
+
+interface SearchBudget {
+  readonly deadline: number;
+  readonly now: () => number;
+  ticks: number;
+}
+
+function createSearchBudget(now: () => number = Date.now): SearchBudget {
+  return { deadline: now() + SEARCH_TIME_BUDGET_MS, now, ticks: 0 };
+}
+
+// Cooperative checkpoint: abort past the wall-clock budget, and hand the event
+// loop back every SEARCH_YIELD_INTERVAL checkpoints so a slow scan cannot
+// monopolize it for the entire duration.
+async function checkpointSearchBudget(budget: SearchBudget): Promise<void> {
+  budget.ticks += 1;
+  if (budget.now() > budget.deadline) {
+    throw new SearchBudgetExceededError();
+  }
+  if (budget.ticks % SEARCH_YIELD_INTERVAL === 0) {
+    await yieldToEventLoop();
+  }
+}
+
+// Returns the char length of an UNBOUNDED quantifier starting at `index`
+// (`*`, `+`, or open-ended `{n,}`), else 0. Bounded forms (`?`, `{m}`,
+// `{m,n}`) are not flagged.
+function unboundedQuantifierLength(pattern: string, index: number): number {
+  const char = pattern[index];
+  if (char === '*' || char === '+') return 1;
+  if (char !== '{') return 0;
+  const close = pattern.indexOf('}', index + 1);
+  if (close === -1) return 0;
+  const spec = pattern.slice(index + 1, close);
+  const match = /^(\d+),(\d*)$/.exec(spec);
+  return match && match[2] === '' ? close - index + 1 : 0;
+}
+
+/**
+ * Cheap fail-closed lint for the classic exponential-ReDoS signature: an
+ * unbounded quantifier applied to a group whose body itself contains an
+ * unbounded quantifier (`(a+)+`, `(a*)*`, `((a+))+`, `(\w+)*`, …). Ordinary
+ * search patterns (`foo.*bar`, `\w+`, `(abc)+`) are left untouched so normal
+ * search semantics are preserved. Escapes and character classes are skipped so
+ * a literal `\+` or `[+*]` is never treated as a quantifier.
+ */
+export function assertSafeSearchRegex(pattern: string): void {
+  if (pattern.length > MAX_SEARCH_REGEX_PATTERN_CHARS) {
+    throw new UnsafeSearchRegexError(
+      `pattern exceeds ${String(MAX_SEARCH_REGEX_PATTERN_CHARS)} characters`,
+    );
+  }
+  const groups: { hasUnbounded: boolean }[] = [];
+  const markCurrentGroupUnbounded = (): void => {
+    if (groups.length > 0) groups[groups.length - 1].hasUnbounded = true;
+  };
+  let inClass = false;
+  let index = 0;
+  while (index < pattern.length) {
+    const char = pattern[index];
+    if (char === '\\') {
+      index += 2;
+      continue;
+    }
+    if (inClass) {
+      if (char === ']') inClass = false;
+      index += 1;
+      continue;
+    }
+    if (char === '[') {
+      inClass = true;
+      index += 1;
+      continue;
+    }
+    if (char === '(') {
+      groups.push({ hasUnbounded: false });
+      index += 1;
+      continue;
+    }
+    if (char === ')') {
+      const group = groups.pop() ?? { hasUnbounded: false };
+      const quantifierLength = unboundedQuantifierLength(pattern, index + 1);
+      if (quantifierLength > 0 && group.hasUnbounded) {
+        throw new UnsafeSearchRegexError(
+          'nested unbounded quantifier can backtrack catastrophically; '
+          + 'bound the inner repetition (e.g. use {0,n}) or simplify the pattern',
+        );
+      }
+      // A group that either wraps an unbounded quantifier or is itself
+      // unbounded-quantified contributes an unbounded repetition to its parent.
+      if (group.hasUnbounded || quantifierLength > 0) markCurrentGroupUnbounded();
+      index += 1 + quantifierLength;
+      continue;
+    }
+    const quantifierLength = unboundedQuantifierLength(pattern, index);
+    if (quantifierLength > 0) {
+      markCurrentGroupUnbounded();
+      index += quantifierLength;
+      continue;
+    }
+    index += 1;
+  }
+}
 const SEARCHABLE_TEXT_EXTENSIONS = [
   'md',
   'mdx',
@@ -204,14 +340,15 @@ function normalizeSearchPreview(lines: string[], lineIndex: number, contextLines
   return `${preview.slice(0, MAX_PREVIEW_CHARS)}\n... (truncated)`;
 }
 
-function collectLineMatches(
+async function collectLineMatches(
   path: string,
   content: string,
   query: string,
   mode: FilesystemSearchMode,
   contextLines: number,
   remainingMatches: number,
-): FilesystemSearchMatch[] {
+  budget: SearchBudget,
+): Promise<FilesystemSearchMatch[]> {
   const lines = content.split('\n');
   const matches: FilesystemSearchMatch[] = [];
   const regex = mode === 'regex'
@@ -219,8 +356,14 @@ function collectLineMatches(
     : new RegExp(escapeRegExp(query), 'g');
 
   for (let lineIndex = 0; lineIndex < lines.length; lineIndex += 1) {
+    await checkpointSearchBudget(budget);
     regex.lastIndex = 0;
-    const line = lines[lineIndex] ?? '';
+    const rawLine = lines[lineIndex] ?? '';
+    // Cap the slice handed to the regex so no single exec can scan an
+    // unbounded-length line (nw90 mitigation (b)).
+    const line = rawLine.length > MAX_SEARCH_LINE_CHARS
+      ? rawLine.slice(0, MAX_SEARCH_LINE_CHARS)
+      : rawLine;
     let match: RegExpExecArray | null = regex.exec(line);
     while (match) {
       matches.push({
@@ -352,6 +495,9 @@ export async function searchWorkspaceFiles(root: string, options: FilesystemSear
 
   const mode = normalizeSearchMode(options.mode);
   if (mode === 'regex') {
+    // Reject the classic exponential-ReDoS signature before compiling or
+    // scanning — a genuinely pathological pattern never reaches the engine.
+    assertSafeSearchRegex(query);
     try {
       // Compile once so invalid patterns fail closed before scanning files.
       new RegExp(query, 'g');
@@ -382,8 +528,10 @@ export async function searchWorkspaceFiles(root: string, options: FilesystemSear
   const matches: FilesystemSearchMatch[] = [];
   const truncatedFiles: string[] = [];
   let scannedFiles = 0;
+  const budget = createSearchBudget(options.now);
 
   for (const path of paths) {
+    await checkpointSearchBudget(budget);
     const absolutePath = resolveWorkspaceFsPathFromRoot(path, root);
     const fileStat = await stat(absolutePath);
     if (!fileStat.isFile()) {
@@ -403,13 +551,14 @@ export async function searchWorkspaceFiles(root: string, options: FilesystemSear
       break;
     }
 
-    const fileMatches = collectLineMatches(
+    const fileMatches = await collectLineMatches(
       path,
       readResult.content,
       query,
       mode,
       contextLines,
       remainingMatches,
+      budget,
     );
     matches.push(...fileMatches);
     if (matches.length >= maxMatches) {

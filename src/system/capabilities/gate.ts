@@ -3,7 +3,7 @@ import type { TextContent } from '@mariozechner/pi-ai';
 import type { CapabilityTier } from '../config/runtime-config-contracts.js';
 import type { CapabilityAccess, CapabilityAccessProvider } from './access.js';
 import type { CapabilityToken } from './tokens.js';
-import { resolveToolRequiredCapabilities } from './requirements.js';
+import { resolveToolCapabilityRequirement } from './requirements.js';
 import { evaluateEligibilityDecision } from './eligibility.js';
 
 export type { CapabilityAccess, CapabilityAccessProvider } from './access.js';
@@ -12,6 +12,13 @@ export interface ToolCapabilityEligibility {
   allowed: boolean;
   requiredTokens: CapabilityToken[];
   missingTokens: CapabilityToken[];
+  /**
+   * True when the tool declares no capability-requirement path at all. Such a
+   * tool is refused fail-closed rather than treated as unrestricted (02-M2):
+   * an empty requirement set is otherwise allowed at every tier, so a tool with
+   * no resolver/annotation/static entry would silently bypass gating.
+   */
+  undeclared?: boolean;
 }
 
 export function evaluateToolCapabilityEligibility(
@@ -19,15 +26,23 @@ export function evaluateToolCapabilityEligibility(
   params: unknown,
   access: CapabilityAccess,
 ): ToolCapabilityEligibility {
-  const requiredTokens = resolveToolRequiredCapabilities(tool, params);
+  const resolution = resolveToolCapabilityRequirement(tool, params);
+  if (!resolution.declared) {
+    return {
+      allowed: false,
+      requiredTokens: [],
+      missingTokens: [],
+      undeclared: true,
+    };
+  }
   const decision = evaluateEligibilityDecision(
     access,
     { kind: 'tool.execute', toolName: tool.name },
-    { requiredTokens },
+    { requiredTokens: resolution.tokens },
   );
   return {
     allowed: decision.allowed,
-    requiredTokens,
+    requiredTokens: resolution.tokens,
     missingTokens: decision.missingTokens,
   };
 }
@@ -40,6 +55,23 @@ function toTextResult(
     content: [{ type: 'text', text }] satisfies TextContent[],
     details,
   };
+}
+
+function undeclaredResult(
+  toolName: string,
+  tier: CapabilityTier,
+): AgentToolResult<Record<string, unknown>> {
+  return toTextResult(
+    `Capability denied: tool "${toolName}" declares no capability requirement and is refused fail-closed. `
+    + `A tool must declare a required capability (or an explicit "no requirement") to be eligible; an `
+    + `undeclared tool would otherwise be allowed at every tier.`,
+    {
+      isError: true,
+      capabilityDenied: true,
+      capabilityUndeclared: true,
+      tier,
+    },
+  );
 }
 
 function deniedResult(
@@ -75,6 +107,9 @@ export function gateToolWithCapabilities<T extends AgentTool<any>>(
       const access = getAccess();
       const eligibility = evaluateToolCapabilityEligibility(tool, params, access);
       if (!eligibility.allowed) {
+        if (eligibility.undeclared) {
+          return undeclaredResult(tool.name, access.getTier());
+        }
         return deniedResult(
           tool.name,
           access.getTier(),

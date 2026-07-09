@@ -32,6 +32,8 @@ export interface FilesystemSearchOptions {
   maxFiles?: number;
   maxBytesPerFile?: number;
   contextLines?: number;
+  /** Clock override for the cooperative search time budget (tests only). */
+  now?: () => number;
 }
 
 export interface FilesystemSearchMatch {

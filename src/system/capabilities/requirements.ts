@@ -202,6 +202,15 @@ function resolveFsRequirement(action: string | null): CapabilityRequirement {
   return GIT_READ_WRITE;
 }
 
+const JOURNAL_READ_ACTIONS = new Set(['list', 'read', 'search']);
+const JOURNAL_WRITE_ACTIONS = new Set(['write', 'append']);
+
+function resolveJournalRequirement(action: string | null): CapabilityRequirement {
+  if (action === null || actionIn(action, JOURNAL_READ_ACTIONS)) return 'identity.read';
+  if (actionIn(action, JOURNAL_WRITE_ACTIONS)) return 'identity.write.runtime';
+  return IDENTITY_READ_RUNTIME_WRITE;
+}
+
 const REPO_READ_ACTIONS = new Set(['inspect', 'status', 'diff']);
 const REPO_WRITE_ACTIONS = new Set(['patch', 'branch', 'create_branch', 'commit', 'publish', 'open_pr']);
 
@@ -271,15 +280,8 @@ const UNIFIED_TOOL_REQUIREMENT_RESOLVERS: Readonly<Partial<Record<string, Unifie
   beads: (action) => resolveBeadsRequirement(action),
   world: (action) => resolveWorldRequirement(action),
   notify: resolveNotifyRequirement,
+  journal: (action) => resolveJournalRequirement(action),
 };
-
-function resolveUnifiedToolRequirement(
-  toolName: string,
-  params: Record<string, unknown>,
-): CapabilityRequirement | null {
-  const resolver = UNIFIED_TOOL_REQUIREMENT_RESOLVERS[toolName];
-  return resolver ? resolver(normalizeAction(params), params) : null;
-}
 
 const STATIC_TOOL_REQUIREMENTS: Readonly<Record<string, CapabilityRequirement>> = {
   identity_changelog: 'identity.read',
@@ -306,6 +308,11 @@ const STATIC_TOOL_REQUIREMENTS: Readonly<Record<string, CapabilityRequirement>> 
   self_status: 'internal.read',
   response_control: 'identity.read',
   analysis_workbench: 'repl.execute',
+  // tool_search is a pure non-default-catalog discovery surface. It is
+  // legitimately unrestricted, but it must DECLARE that explicitly so it is
+  // distinguishable from a tool that has no requirement path at all (which
+  // fails closed). An explicit empty declaration keeps it allowed at every tier.
+  tool_search: NO_CAPABILITY_REQUIREMENT,
   web: NO_CAPABILITY_REQUIREMENT,
   web_fetch: NO_CAPABILITY_REQUIREMENT,
   vault_write: 'identity.write.runtime',
@@ -332,24 +339,74 @@ export function withCapabilityRequirement<T extends SubstrateAgentTool>(
   return tool;
 }
 
+export interface ToolCapabilityRequirementResolution {
+  /**
+   * True when the tool DECLARES a capability-requirement path: an explicit
+   * annotation, a unified action-aware resolver, or a static requirement entry
+   * (an explicit "no requirement" declaration counts). False only when the tool
+   * has no requirement path at all — that case must fail closed rather than be
+   * treated as "unrestricted", because an empty requirement set is allowed at
+   * every tier (02-M2).
+   */
+  declared: boolean;
+  tokens: CapabilityToken[];
+}
+
+export function resolveToolCapabilityRequirement(
+  tool: AgentTool<any>,
+  params: unknown,
+): ToolCapabilityRequirementResolution {
+  const normalizedParams = toRecord(params);
+  const annotated = (tool as AgentTool<any> & CapabilityAnnotatedTool).requiredCapability;
+  if (annotated !== undefined) {
+    if (typeof annotated === 'function') {
+      return { declared: true, tokens: normalizeRequirement(annotated(normalizedParams)) };
+    }
+    return { declared: true, tokens: normalizeRequirement(annotated) };
+  }
+
+  const resolver = UNIFIED_TOOL_REQUIREMENT_RESOLVERS[tool.name];
+  if (resolver) {
+    return {
+      declared: true,
+      tokens: normalizeRequirement(resolver(normalizeAction(normalizedParams), normalizedParams)),
+    };
+  }
+
+  if (Object.prototype.hasOwnProperty.call(STATIC_TOOL_REQUIREMENTS, tool.name)) {
+    return { declared: true, tokens: normalizeRequirement(STATIC_TOOL_REQUIREMENTS[tool.name]) };
+  }
+
+  return { declared: false, tokens: [] };
+}
+
 export function resolveToolRequiredCapabilities(
   tool: AgentTool<any>,
   params: unknown,
 ): CapabilityToken[] {
-  const normalizedParams = toRecord(params);
-  const annotated = (tool as AgentTool<any> & CapabilityAnnotatedTool).requiredCapability;
-  if (annotated) {
-    if (typeof annotated === 'function') {
-      return normalizeRequirement(annotated(normalizedParams));
-    }
-    return normalizeRequirement(annotated);
-  }
+  return resolveToolCapabilityRequirement(tool, params).tokens;
+}
 
-  const unifiedRequirement = resolveUnifiedToolRequirement(tool.name, normalizedParams);
-  if (unifiedRequirement) {
-    return normalizeRequirement(unifiedRequirement);
-  }
+/**
+ * Whether the tool declares any capability-requirement path. A tool that does
+ * not is refused fail-closed at gating time (and, for first-party tools, at
+ * registration time) instead of being silently allowed at every tier.
+ */
+export function toolHasDeclaredCapabilityRequirement(tool: AgentTool<any>): boolean {
+  return resolveToolCapabilityRequirement(tool, {}).declared;
+}
 
-  const fallback = STATIC_TOOL_REQUIREMENTS[tool.name];
-  return normalizeRequirement(fallback);
+/**
+ * Registration-time guard: throws (loud, fail-closed) when a tool has no
+ * declared capability requirement. Legitimately unrestricted tools must carry
+ * an explicit "no requirement" declaration to satisfy this.
+ */
+export function assertToolCapabilityRequirementDeclared(tool: AgentTool<any>): void {
+  if (toolHasDeclaredCapabilityRequirement(tool)) return;
+  throw new Error(
+    `Tool "${tool.name}" has no declared capability requirement. Every gated tool must declare one `
+    + `(an annotation, a unified action-aware resolver, or a static requirement entry); use an explicit `
+    + `empty declaration for legitimately unrestricted tools. Refusing to register a tool that would `
+    + `otherwise be allowed at every capability tier.`,
+  );
 }

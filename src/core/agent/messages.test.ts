@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import type { UserMessage, AssistantMessage, ToolResultMessage } from '@mariozechner/pi-ai';
-import type { AgentMessage } from '@mariozechner/pi-agent-core';
+import type { AgentMessage } from '../../boundary/pi-agent/index.js';
 import {
   convertToLlm,
   sessionEntryToMessage,

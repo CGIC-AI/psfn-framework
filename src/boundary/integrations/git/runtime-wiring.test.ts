@@ -1,6 +1,6 @@
 import { resolve } from 'node:path';
 import { describe, it, expect, vi } from 'vitest';
-import type { AgentTool } from '@mariozechner/pi-agent-core';
+import type { AgentTool } from '../../pi-agent/index.js';
 import { wireGitRuntime, type GitRuntimeTarget } from './runtime-wiring.js';
 
 vi.mock('node:child_process', () => ({

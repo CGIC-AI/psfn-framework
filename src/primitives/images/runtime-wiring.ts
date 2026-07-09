@@ -1,4 +1,4 @@
-import type { AgentTool } from '@mariozechner/pi-agent-core';
+import type { AgentTool } from '../../boundary/pi-agent/index.js';
 import type { ToolRegistrar } from '../../core/agent/tool-registrar.js';
 import type { ToolWiringMeta, WirableTool } from '../../core/agent/tool-wiring-validator.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';

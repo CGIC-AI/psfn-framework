@@ -2,8 +2,8 @@
 // Unified model-facing contact surface plus internal helper factories for domain operations.
 
 import { Type } from '@sinclair/typebox';
-import type { AgentToolResult } from '@mariozechner/pi-agent-core';
-import type { SubstrateAgentTool } from '../../shared/contracts/agent-tools.js';
+import type { AgentToolResult } from '../../boundary/pi-agent/index.js';
+import type { SubstrateAgentTool } from '../../boundary/pi-agent/index.js';
 import type { ContactStorePort } from './contact-store-port.js';
 import type { TrustLevel } from '../../system/trust/types.js';
 import { TRUST_LEVELS, isHighTierTrustLevel } from '../../system/trust/types.js';

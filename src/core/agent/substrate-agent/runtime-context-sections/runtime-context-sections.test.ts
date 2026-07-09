@@ -4,7 +4,7 @@
 // variable record / rendered block out), not new behavior.
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import type { AgentTool } from '@mariozechner/pi-agent-core';
+import type { AgentTool } from '../../../../boundary/pi-agent/index.js';
 import type { SubstrateMessage } from '../../../../shared/contracts/runtime.js';
 import type { ChargePolicyConfig } from '../../../../shared/contracts/charge-policy.js';
 import type { RunChargeSnapshot } from '../../../../shared/telemetry/run-charge.js';

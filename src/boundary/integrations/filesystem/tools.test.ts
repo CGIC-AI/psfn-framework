@@ -1,7 +1,7 @@
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import type { AgentToolResult } from '@mariozechner/pi-agent-core';
+import type { AgentToolResult } from '../../pi-agent/index.js';
 import type { TextContent } from '@mariozechner/pi-ai';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { WorkspaceFilesystemOps } from './local-ops.js';

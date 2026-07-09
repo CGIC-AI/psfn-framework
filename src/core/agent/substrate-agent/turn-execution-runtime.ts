@@ -1,4 +1,4 @@
-import type { Agent, AgentMessage } from '@mariozechner/pi-agent-core';
+import type { Agent, AgentMessage } from '../../../boundary/pi-agent/index.js';
 import type { AssistantMessage } from '@mariozechner/pi-ai';
 import { classifyBroadcastDraft } from '../../../system/trust/broadcast-safety.js';
 import type { EventBus, EventMap } from '../../../shared/event-bus.js';
@@ -60,12 +60,20 @@ import type {
 import {
   resolveRuntimeLaneClassForTurn,
 } from '../worker-lanes.js';
-import { runWithPaidDeliverableTracking } from '../../../shared/paid-deliverable-tracking.js';
+import {
+  listPendingPaidDeliverables,
+  runWithPaidDeliverableTracking,
+  type PendingPaidDeliverable,
+} from '../../../shared/paid-deliverable-tracking.js';
 import {
   SessionCanaryRegistry,
   runWithCanaryContext,
 } from '../../cogsec/canary/canary-token.js';
-import { summarizeChargedImageDeliverables } from '../../../primitives/images/generated-media.js';
+import {
+  mergeChargedImageDeliverableSummaries,
+  summarizeChargedImageDeliverables,
+  summarizePendingPaidImageDeliverables,
+} from '../../../primitives/images/generated-media.js';
 import { invokeAgentForTurn, type AgentInvocationMutableState } from './turn-execution/agent-invocation.js';
 import { createTurnExecutionObservability } from './turn-execution/observability.js';
 import { assembleTurnPrompt } from './turn-execution/prompt-assembly.js';
@@ -656,6 +664,7 @@ export async function handleMessageForTurn(
   let wikiContextBlock = '';
   let turnSnapshot: TurnSnapshot | undefined;
   let turnMessages: AgentMessage[] = [];
+  let pendingPaidDeliverables: readonly PendingPaidDeliverable[] = [];
   let responseModel = runtime.agent.state.model.id;
   let userSessionEntryId = preparedUserSessionEntryId;
   let assistantSessionEntryId: number | null = null;
@@ -837,28 +846,39 @@ export async function handleMessageForTurn(
     // invocation so charged tools (e.g. paid image generation) can record an
     // undelivered artifact and the in-turn response_control tool can refuse a
     // no-reply that would silently drop it.
-    const invocationResult = await runWithCanaryContext(canaryToken, () => runWithPaidDeliverableTracking(() => invokeAgentForTurn({
-      runtime,
-      message,
-      context: promptAssembly.context,
-      providerSystemPrompt: promptAssembly.providerSystemPrompt,
-      piMessages: promptAssembly.piMessages,
-      startTime,
-      promptStageStart,
-      turnId,
-      requestId,
-      taskKind,
-      turnCallType,
-      turnCorrelationBase,
-      viewerRequestContext,
-      baseVisionToolRequestContext,
-      autoloadOutcome,
-      turnSnapshot,
-      templateVariables: promptAssembly.templateVariables,
-      speakerRole,
-      mutableState: invocationState,
-      observability,
-    })));
+    let scopedPendingPaidDeliverables: readonly PendingPaidDeliverable[] = [];
+    // htm9.18: the canary context wraps the whole invocation so every gateway
+    // egress RPC issued during the turn carries this session's token.
+    const invocationResult = await runWithCanaryContext(canaryToken, () => runWithPaidDeliverableTracking(async () => {
+      try {
+        return await invokeAgentForTurn({
+          runtime,
+          message,
+          context: promptAssembly.context,
+          providerSystemPrompt: promptAssembly.providerSystemPrompt,
+          piMessages: promptAssembly.piMessages,
+          startTime,
+          promptStageStart,
+          turnId,
+          requestId,
+          taskKind,
+          turnCallType,
+          turnCorrelationBase,
+          viewerRequestContext,
+          baseVisionToolRequestContext,
+          autoloadOutcome,
+          turnSnapshot,
+          templateVariables: promptAssembly.templateVariables,
+          speakerRole,
+          mutableState: invocationState,
+          observability,
+        });
+      } finally {
+        scopedPendingPaidDeliverables = listPendingPaidDeliverables();
+        pendingPaidDeliverables = scopedPendingPaidDeliverables;
+      }
+    }));
+    pendingPaidDeliverables = scopedPendingPaidDeliverables;
     turnMessages = invocationResult.turnMessages;
     responseModel = invocationResult.responseModel;
     persistedUserMessageContent = invocationResult.persistedUserMessageContent;
@@ -991,6 +1011,7 @@ export async function handleMessageForTurn(
       : await collectTurnResponseAttachments({
           runtime,
           turnMessages,
+          paidDeliverables: pendingPaidDeliverables,
           galleryContext: {
             channelId: message.channelId,
             channelType: message.channelType,
@@ -1004,7 +1025,10 @@ export async function handleMessageForTurn(
     // Fail loud, never silently: if a charged image deliverable was produced this
     // turn but is not riding out on the reply, surface it. The response_control
     // guard should prevent the no-reply case; this is the last-resort audit trail.
-    const chargedImageDeliverables = summarizeChargedImageDeliverables(turnMessages);
+    const chargedImageDeliverables = mergeChargedImageDeliverableSummaries(
+      summarizeChargedImageDeliverables(turnMessages),
+      summarizePendingPaidImageDeliverables(pendingPaidDeliverables),
+    );
     if (chargedImageDeliverables.length > 0) {
       if (honorNoReply) {
         log.warn('Paid image deliverable dropped by intentional no-reply', {

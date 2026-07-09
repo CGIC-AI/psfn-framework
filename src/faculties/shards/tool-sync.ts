@@ -1,4 +1,4 @@
-import type { AgentTool, AgentToolResult } from '@mariozechner/pi-agent-core';
+import type { AgentTool, AgentToolResult } from '../../boundary/pi-agent/index.js';
 import type {
   ShardSessionMemorySyncDecision,
   ShardSessionMemorySyncEnvelope,

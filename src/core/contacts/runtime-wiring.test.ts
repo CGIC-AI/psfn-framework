@@ -1,6 +1,6 @@
 import Database from 'better-sqlite3';
 import { describe, it, expect } from 'vitest';
-import type { AgentTool } from '@mariozechner/pi-agent-core';
+import type { AgentTool } from '../../boundary/pi-agent/index.js';
 import type Database from 'better-sqlite3';
 import {
   registerContactRuntime,

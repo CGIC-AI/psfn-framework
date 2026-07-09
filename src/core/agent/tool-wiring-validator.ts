@@ -4,7 +4,7 @@
 // where a tool appears available but crashes at invocation because its
 // backing service (e.g. gateway RPC method) is not wired.
 
-import type { AgentTool } from '@mariozechner/pi-agent-core';
+import type { AgentTool } from '../../boundary/pi-agent/index.js';
 import { createComponentLogger } from '../../shared/logger.js';
 
 const log = createComponentLogger('ToolWiringValidator');

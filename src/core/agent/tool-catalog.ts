@@ -1,4 +1,4 @@
-import type { AgentTool } from '@mariozechner/pi-agent-core';
+import type { AgentTool } from '../../boundary/pi-agent/index.js';
 import { resolveToolRequiredCapabilities } from '../../system/capabilities/requirements.js';
 import { getToolReversibility, type ToolReversibility } from '../../system/capabilities/safeguards.js';
 import type { CapabilityToken } from '../../system/capabilities/tokens.js';

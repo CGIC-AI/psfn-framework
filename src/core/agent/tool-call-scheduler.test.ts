@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { Type } from '@sinclair/typebox';
-import type { AgentTool } from '@mariozechner/pi-agent-core';
+import type { AgentTool } from '../../boundary/pi-agent/index.js';
 import type { ToolResultMessage } from '@mariozechner/pi-ai';
 import type { ToolConcurrencyMeta, WirableTool } from './tool-wiring-validator.js';
 import { createToolCallExecutionGuard, executeToolCallsWithScheduler } from './tool-call-scheduler.js';

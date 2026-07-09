@@ -3,7 +3,7 @@
 // extended-tool directory variables. Tool state (loaded/promoted/turn class)
 // is passed in as declared inputs; nothing here reads the runtime.
 
-import type { AgentTool } from '@mariozechner/pi-agent-core';
+import type { AgentTool } from '../../../../boundary/pi-agent/index.js';
 import type { CapabilityTier } from '../../../../system/config/runtime-config-contracts.js';
 import { resolveTierCapabilityTokens } from '../../../../system/capabilities/tiers.js';
 import { resolveToolRequiredCapabilities } from '../../../../system/capabilities/requirements.js';

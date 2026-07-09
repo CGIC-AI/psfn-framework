@@ -5,7 +5,7 @@
 // the sweep with a ToolConformanceHarnessError (distinct from per-tool
 // conformance failures, which are recorded as ok:false result entries).
 
-import type { AgentTool, AgentToolResult } from '@mariozechner/pi-agent-core';
+import type { AgentTool, AgentToolResult } from '../../../boundary/pi-agent/index.js';
 import { isRecord } from '../../../shared/utils/types.js';
 import { extractRequiredParameterNames } from '../tool-catalog.js';
 import { getToolProbeSpec, type ToolProbeSpec } from './probe-registry.js';

@@ -1,4 +1,4 @@
-import type { AgentMessage } from '@mariozechner/pi-agent-core';
+import type { AgentMessage } from '../../../../boundary/pi-agent/index.js';
 import type { AssistantMessage, UserMessage } from '@mariozechner/pi-ai';
 import { enforceUntrustedCompactionGuard } from '../../../identity/prompt-composer.js';
 import {

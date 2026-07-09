@@ -2,7 +2,7 @@ import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { AgentToolResult } from '@mariozechner/pi-agent-core';
+import type { AgentToolResult } from '../../boundary/pi-agent/index.js';
 import type { TextContent } from '@mariozechner/pi-ai';
 import { runWithVisionToolRequestContext } from './request-context.js';
 import { createGenerateImageTool, createSelfieTool } from './tools.js';
@@ -594,13 +594,23 @@ describe('image tools', () => {
       return listPendingPaidDeliverables();
     });
 
-    expect(pending).toEqual([{
+    expect(pending).toEqual([expect.objectContaining({
       surface: 'paidImageGeneration',
       toolName: 'selfie_create',
       toolCallId: 'tool-call-deliverable',
       identifier: 'req-deliverable-1',
       artifactCount: 1,
-    }]);
+      artifactKind: 'image',
+      provider: 'fal',
+      mode: 'create',
+      model: 'fal-ai/nano-banana-2',
+      artifacts: [{
+        url: 'https://images.example.test/deliverable.png',
+        contentType: 'image/png',
+        fileName: 'deliverable.png',
+        localPath: '/tmp/deliverable.png',
+      }],
+    })]);
   });
 
   it('does not register a pending paid deliverable for a free comfyui generation', async () => {

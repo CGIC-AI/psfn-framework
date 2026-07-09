@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import type { AgentToolResult } from '@mariozechner/pi-agent-core';
+import type { AgentToolResult } from '../../boundary/pi-agent/index.js';
 import type { TextContent } from '@mariozechner/pi-ai';
 import type { CapabilityTier } from '../../system/config/runtime-config-contracts.js';
 import type { CapabilityToken } from '../../system/capabilities/tokens.js';

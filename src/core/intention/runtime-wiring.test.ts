@@ -1,6 +1,6 @@
 import Database from 'better-sqlite3';
 import { describe, expect, it, vi } from 'vitest';
-import type { AgentTool } from '@mariozechner/pi-agent-core';
+import type { AgentTool } from '../../boundary/pi-agent/index.js';
 import {
   createIntentionAppraisalHooks,
   createIntentionBehavioralPatternHooks,

@@ -1,4 +1,4 @@
-import type { AgentToolResult } from '@mariozechner/pi-agent-core';
+import type { AgentToolResult } from '../../boundary/pi-agent/index.js';
 import type {
   ActiveConcernEvidenceRef,
   ActiveConcernOwner,

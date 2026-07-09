@@ -67,4 +67,25 @@ export default [
       '@typescript-eslint/no-unnecessary-condition': 'error',
     },
   },
+  {
+    // pi-agent-core version-coupling boundary: only src/boundary/pi-agent may
+    // import the package directly. Everything else goes through that module,
+    // so a version bump touches one directory. See src/boundary/pi-agent/index.ts.
+    files: ['src/**/*.ts'],
+    ignores: ['src/boundary/pi-agent/**'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          patterns: [
+            {
+              group: ['@mariozechner/pi-agent-core', '@mariozechner/pi-agent-core/*'],
+              message:
+                'Import pi-agent-core symbols from src/boundary/pi-agent (the version-coupling boundary), not from the package directly.',
+            },
+          ],
+        },
+      ],
+    },
+  },
 ];

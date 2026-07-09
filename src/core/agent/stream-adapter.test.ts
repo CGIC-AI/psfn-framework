@@ -2,8 +2,8 @@ import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, it, expect, beforeEach, vi } from 'vitest';
-import { Agent } from '@mariozechner/pi-agent-core';
-import type { AgentEvent } from '@mariozechner/pi-agent-core';
+import { Agent } from '../../boundary/pi-agent/index.js';
+import type { AgentEvent } from '../../boundary/pi-agent/index.js';
 import { validateToolArguments } from '@mariozechner/pi-ai';
 import { Type } from '@sinclair/typebox';
 import type { CanonicalModelRegistry, LLMContext, LLMResponse, ModelRegistryEntry, ModelSlot, StreamCallbacks } from '../../shared/contracts/runtime.js';
@@ -280,6 +280,65 @@ describe('createSubstrateStreamFn', () => {
         arguments: { query: 'hello world' },
       },
     ]);
+  });
+
+  it('normalizes pi-agent tool parameters to PSFN inputSchema before gateway transport', async () => {
+    const config = makeConfig();
+    const transport = {
+      stream: vi.fn<any>().mockResolvedValue({
+        content: 'done',
+        toolCalls: [],
+        model: 'gateway-model',
+        inputTokens: 3,
+        outputTokens: 1,
+        stopReason: 'stop',
+      }),
+    };
+    const streamFn = createSubstrateStreamFn(config, { transport });
+    const selfieSchema = Type.Object({
+      prompt: Type.String(),
+    });
+    const psfnSchema = {
+      type: 'object',
+      properties: {
+        query: { type: 'string' },
+      },
+      required: ['query'],
+    };
+
+    const stream = await streamFn(resolveModel(config, 'chat'), {
+      systemPrompt: 'System',
+      messages: [{ role: 'user', content: 'try a selfie' }],
+      tools: [
+        {
+          name: 'selfie_create',
+          description: 'Create a self-image.',
+          parameters: selfieSchema,
+        },
+        {
+          name: 'memory_lookup',
+          description: 'Search memory.',
+          inputSchema: psfnSchema,
+        },
+      ],
+    } as any, {});
+    await collectStreamEvents(stream as AsyncIterable<unknown>);
+
+    const forwardedContext = transport.stream.mock.calls[0]?.[0] as LLMContext;
+    expect(forwardedContext.tools).toEqual([
+      {
+        name: 'selfie_create',
+        description: 'Create a self-image.',
+        inputSchema: selfieSchema,
+      },
+      {
+        name: 'memory_lookup',
+        description: 'Search memory.',
+        inputSchema: psfnSchema,
+      },
+    ]);
+    expect(forwardedContext.tools?.[0]).not.toHaveProperty('parameters');
+    expect(forwardedContext.tools?.[1]).not.toHaveProperty('parameters');
   });
 
   it('repairs JSON-stringified array tool arguments before agent validation', async () => {

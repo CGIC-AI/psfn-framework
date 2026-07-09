@@ -1,4 +1,4 @@
-import type { AgentMessage } from '@mariozechner/pi-agent-core';
+import type { AgentMessage } from '../../../boundary/pi-agent/index.js';
 import { createComponentLogger } from '../../../shared/logger.js';
 import type { EventBus, EventMap } from '../../../shared/event-bus.js';
 import type { SessionManager } from '../../session/manager.js';

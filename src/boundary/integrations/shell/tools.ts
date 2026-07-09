@@ -1,6 +1,6 @@
 import { Type } from '@sinclair/typebox';
-import type { AgentToolResult } from '@mariozechner/pi-agent-core';
-import type { SubstrateAgentTool } from '../../../shared/contracts/agent-tools.js';
+import type { AgentToolResult } from '../../pi-agent/index.js';
+import type { SubstrateAgentTool } from '../../pi-agent/index.js';
 import { withCapabilityRequirement } from '../../../system/capabilities/requirements.js';
 import { tagToolWithReversibility } from '../../../system/capabilities/safeguards.js';
 import type { ShellOperations } from './ops.js';

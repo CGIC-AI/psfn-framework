@@ -1,5 +1,5 @@
 import { isRecord } from '../../../shared/utils/types.js';
-import type { AgentTool } from '@mariozechner/pi-agent-core';
+import type { AgentTool } from '../../../boundary/pi-agent/index.js';
 import type {
   GeneratedMessageProvenanceMetadata,
   RequesterProvenance,

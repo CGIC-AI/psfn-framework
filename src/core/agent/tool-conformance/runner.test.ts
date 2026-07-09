@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { AgentTool, AgentToolResult } from '@mariozechner/pi-agent-core';
+import type { AgentTool, AgentToolResult } from '../../../boundary/pi-agent/index.js';
 import { createToolConformanceRunner } from './runner.js';
 import { readToolConformanceLatest } from './store.js';
 import { ToolConformanceHarnessError } from './types.js';

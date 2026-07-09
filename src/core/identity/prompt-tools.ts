@@ -3,8 +3,8 @@
 // Policy: read access is always available; writes are tier-gated by capabilities.
 
 import { Type } from '@sinclair/typebox';
-import type { AgentToolResult } from '@mariozechner/pi-agent-core';
-import type { SubstrateAgentTool } from '../../shared/contracts/agent-tools.js';
+import type { AgentToolResult } from '../../boundary/pi-agent/index.js';
+import type { SubstrateAgentTool } from '../../boundary/pi-agent/index.js';
 import type { PromptLayerStatePort } from './prompt-state-port.js';
 import type { PromptLayer, PromptHistoryEntry } from './prompt-types.js';
 import {

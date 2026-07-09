@@ -1,4 +1,5 @@
 import type { AgentTool } from '@mariozechner/pi-agent-core';
+import type { SubstrateAgentTool } from '../../shared/contracts/agent-tools.js';
 import { isRecord } from '../../shared/utils/types.js';
 import type { CapabilityToken } from './tokens.js';
 
@@ -323,7 +324,7 @@ function normalizeRequirement(input: CapabilityRequirement | null | undefined): 
   return [input as CapabilityToken];
 }
 
-export function withCapabilityRequirement<T extends AgentTool<any>>(
+export function withCapabilityRequirement<T extends SubstrateAgentTool>(
   tool: T,
   requirement: CapabilityRequirementInput,
 ): T {

@@ -3,6 +3,61 @@ import { createInitialHubStreamState, reduceHubStreamState } from './stream/hub-
 import { deriveOperationalTraces } from './traces.js';
 
 describe('operational traces', () => {
+  it('uses session participant names in visible message and interrupt summaries', () => {
+    let state = reduceHubStreamState(createInitialHubStreamState(), {
+      type: 'hub.inbound',
+      at: '2026-06-17T00:00:00.000Z',
+      event: {
+        message: {
+          type: 'session.ready',
+          sessionId: 'session-1',
+          channelId: 'channel-1',
+          deviceId: 'device-1',
+          deviceName: 'Device',
+          satelliteId: 'satellite-1',
+          audioFormat: 'pcm16',
+          identity: {
+            source: 'framework',
+            companion: { id: 'companion-1', name: 'Purrsephone' },
+            user: { id: 'contact-1', name: 'Ada' },
+          },
+        },
+      },
+    });
+    state = reduceHubStreamState(state, {
+      type: 'hub.inbound',
+      at: '2026-06-17T00:00:01.000Z',
+      event: {
+        message: {
+          type: 'message',
+          data: { role: 'assistant', content: 'hello', final: true },
+        },
+      },
+    });
+    state = reduceHubStreamState(state, {
+      type: 'hub.inbound',
+      at: '2026-06-17T00:00:02.000Z',
+      event: {
+        message: {
+          type: 'assistant.interrupted',
+          sessionId: 'session-1',
+        },
+      },
+    });
+
+    const traces = deriveOperationalTraces(state);
+
+    expect(traces[1]).toMatchObject({
+      operationClass: 'assistant_message',
+      summary: 'Purrsephone message',
+      metadata: { role: 'assistant' },
+    });
+    expect(traces[2]).toMatchObject({
+      operationClass: 'assistant_interrupt',
+      summary: 'Purrsephone interrupted',
+    });
+  });
+
   it('redacts message content while preserving operational metadata', () => {
     const secretText = 'do not show this raw text';
     const state = reduceHubStreamState(createInitialHubStreamState(), {

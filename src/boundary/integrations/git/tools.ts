@@ -1,5 +1,6 @@
 import { Type } from '@sinclair/typebox';
-import type { AgentTool, AgentToolResult } from '@mariozechner/pi-agent-core';
+import type { AgentToolResult } from '@mariozechner/pi-agent-core';
+import type { SubstrateAgentTool } from '../../../shared/contracts/agent-tools.js';
 import type { GitOperations, GitStatusResult, GitDiffResult } from './ops.js';
 import { textResult, textResultWithError } from '../../../core/tools/results.js';
 import { toErrorMessage } from '../../../shared/utils/errors.js';
@@ -163,7 +164,7 @@ export interface CreateRepoToolOptions {
 export function createRepoTool(
   gitOps: GitOperations,
   options: CreateRepoToolOptions = {},
-): AgentTool<any> {
+): SubstrateAgentTool {
   const access = options.access ?? 'full';
 
   return {

@@ -1,5 +1,6 @@
 import { Type } from '@sinclair/typebox';
-import type { AgentTool, AgentToolResult } from '@mariozechner/pi-agent-core';
+import type { AgentToolResult } from '@mariozechner/pi-agent-core';
+import type { SubstrateAgentTool } from '../../../shared/contracts/agent-tools.js';
 import type {
   AffordanceConfig,
   PlaceConfig,
@@ -491,7 +492,7 @@ async function runMove(deps: WorldToolDeps, params: WorldToolParams): Promise<st
   }, null, 2);
 }
 
-export function createWorldTool(ops: WorldOperations, deps: WorldToolDeps): AgentTool<any> {
+export function createWorldTool(ops: WorldOperations, deps: WorldToolDeps): SubstrateAgentTool {
   return {
     name: 'world',
     label: 'world',

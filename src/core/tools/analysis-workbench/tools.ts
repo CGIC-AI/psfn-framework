@@ -2,7 +2,8 @@
 // Registered on the parent SubstrateAgent. Runs an ephemeral RLM loop for bounded analysis.
 
 import { Type } from '@sinclair/typebox';
-import type { AgentTool, AgentToolResult } from '@mariozechner/pi-agent-core';
+import type { AgentToolResult } from '@mariozechner/pi-agent-core';
+import type { SubstrateAgentTool } from '../../../shared/contracts/agent-tools.js';
 import type { TextContent } from '@mariozechner/pi-ai';
 import type { REPLDeps } from './types.js';
 import { runRLMLoop } from './loop.js';
@@ -10,7 +11,7 @@ import { textResultWithError } from '../results.js';
 import { toErrorMessage } from '../../../shared/utils/errors.js';
 import { getRequestContext } from '../../../primitives/llm/request-context.js';
 
-export function createAnalysisWorkbenchTool(deps: REPLDeps): AgentTool<any> {
+export function createAnalysisWorkbenchTool(deps: REPLDeps): SubstrateAgentTool {
   return {
     name: 'analysis_workbench',
     description:

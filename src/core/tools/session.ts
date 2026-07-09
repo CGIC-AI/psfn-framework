@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { Type } from '@sinclair/typebox';
-import type { AgentTool, AgentToolResult } from '@mariozechner/pi-agent-core';
+import type { AgentToolResult } from '@mariozechner/pi-agent-core';
+import type { SubstrateAgentTool } from '../../shared/contracts/agent-tools.js';
 import type { TextContent } from '@mariozechner/pi-ai';
 import type { LLMProviderPort } from '../agent/contracts.js';
 import type { PromptRegistryStatePort } from '../identity/prompt-state-port.js';
@@ -409,7 +410,7 @@ async function executeSessionResumeAction(
   }, null, 2));
 }
 
-export function createSessionTool(options: UnifiedSessionToolOptions): AgentTool<any> {
+export function createSessionTool(options: UnifiedSessionToolOptions): SubstrateAgentTool {
   const now = options.now ?? Date.now;
   const grepOptions: SessionGrepToolOptions = {
     sessionsDir: options.sessionsDir,

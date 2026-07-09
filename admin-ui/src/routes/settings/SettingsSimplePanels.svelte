@@ -1269,9 +1269,9 @@
                 </label>
               </div>
               <div class="md:col-span-2">
-                <SettingFieldLabel label="Telegram Authorized Users" keys="telegramAuthorizedUsers" forId={settingControlId('telegramAuthorizedUsers')} class={LABEL_CLS} />
+                <SettingFieldLabel label="Telegram Authorized Accounts" keys="telegramAuthorizedUsers" forId={settingControlId('telegramAuthorizedUsers')} class={LABEL_CLS} />
                 <input id={settingControlId('telegramAuthorizedUsers')} type="text" bind:value={telegramAuthorizedUsers} class={INPUT_CLS} placeholder="12345678, 87654321" />
-                <p class="text-sm text-shadow-500 mt-1">Comma-separated Telegram user IDs allowed to interact.</p>
+                <p class="text-sm text-shadow-500 mt-1">Comma-separated Telegram account IDs allowed to interact.</p>
               </div>
             </div>
             <div class="bg-bark-100 rounded-lg p-4 border border-bark-200">

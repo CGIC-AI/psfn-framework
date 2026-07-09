@@ -115,6 +115,12 @@ describe('first-party tool surface registry', () => {
     );
   });
 
+  it('declares virtual navigation on the canonical world surface', () => {
+    expect(getCanonicalToolSurface('world')?.actions).toEqual(
+      expect.arrayContaining(['perceive', 'list', 'control', 'move']),
+    );
+  });
+
   it('keeps journal canonical actions aligned with the actual tool schema', () => {
     const journalTool = createJournalTool({
       list: async () => ({ root: '/tmp/journal', notes: [] }),

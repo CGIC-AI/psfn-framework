@@ -203,7 +203,7 @@ export const CANONICAL_FIRST_PARTY_TOOL_SURFACES: readonly CanonicalToolSurfaceE
     domain: 'boundary',
     exposure: 'extended',
     description: 'Canonical physical/virtual world surface for perceiving and controlling place affordances via Home Assistant.',
-    actions: ['perceive', 'list', 'control'],
+    actions: ['perceive', 'list', 'control', 'move'],
     capabilityMetadata: { kind: 'action_aware', source: CAPABILITIES_REQUIREMENTS },
     retiredAliases: [],
   },

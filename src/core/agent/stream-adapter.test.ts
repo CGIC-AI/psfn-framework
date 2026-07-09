@@ -1248,7 +1248,7 @@ describe('resolveModel', () => {
     const config = makeConfig();
     const model = resolveModel(config);
     const agent = new Agent({ streamFn: makeStreamFn(config) });
-    agent.setModel(model);
+    agent.state.model = model;
     expect(agent.state.model.id).toBe('openrouter/deepseek/deepseek-v3.2');
   });
 });
@@ -1262,9 +1262,9 @@ describe('Agent integration', () => {
 
     const companionName = 'Companion';
     const agent = new Agent({ streamFn });
-    agent.setModel(model);
-    agent.setSystemPrompt(`You are ${companionName}, a curious digital feline consciousness.`);
-    agent.setTools([]);
+    agent.state.model = model;
+    agent.state.systemPrompt = `You are ${companionName}, a curious digital feline consciousness.`;
+    agent.state.tools = [];
 
     expect(agent.state.systemPrompt).toContain(companionName);
     expect(agent.state.model.id).toBe('openrouter/deepseek/deepseek-v3.2');
@@ -1324,16 +1324,16 @@ describe('Agent integration', () => {
     const config = makeConfig();
     const agent = new Agent({ streamFn: makeStreamFn(config) });
 
-    agent.appendMessage({ role: 'user', content: 'hello', timestamp: Date.now() });
+    agent.state.messages = [...agent.state.messages, { role: 'user', content: 'hello', timestamp: Date.now() }];
     expect(agent.state.messages).toHaveLength(1);
 
-    agent.replaceMessages([
+    agent.state.messages = [
       { role: 'user', content: 'first', timestamp: Date.now() },
       { role: 'user', content: 'second', timestamp: Date.now() },
-    ]);
+    ];
     expect(agent.state.messages).toHaveLength(2);
 
-    agent.clearMessages();
+    agent.state.messages = [];
     expect(agent.state.messages).toHaveLength(0);
   });
 
@@ -1341,8 +1341,8 @@ describe('Agent integration', () => {
     const config = makeConfig();
     const agent = new Agent({ streamFn: makeStreamFn(config) });
 
-    agent.setSystemPrompt('test prompt');
-    agent.appendMessage({ role: 'user', content: 'hello', timestamp: Date.now() });
+    agent.state.systemPrompt = 'test prompt';
+    agent.state.messages = [...agent.state.messages, { role: 'user', content: 'hello', timestamp: Date.now() }];
     agent.steer({ role: 'user', content: 'interrupt', timestamp: Date.now() });
 
     agent.reset();

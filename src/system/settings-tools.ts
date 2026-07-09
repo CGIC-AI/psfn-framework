@@ -1,5 +1,6 @@
 import { Type } from '@sinclair/typebox';
-import type { AgentTool, AgentToolResult } from '@mariozechner/pi-agent-core';
+import type { AgentToolResult } from '@mariozechner/pi-agent-core';
+import type { SubstrateAgentTool } from '../shared/contracts/agent-tools.js';
 import type { SubstrateConfig } from './config/runtime-config-contracts.js';
 import type { PromotedToolMutationResult } from '../core/agent/substrate-agent.js';
 import {
@@ -103,7 +104,7 @@ export function executeSystemReadAction(
   );
 }
 
-export function createSettingsGetTool(config: SubstrateConfig): AgentTool<any> {
+export function createSettingsGetTool(config: SubstrateConfig): SubstrateAgentTool {
   return {
     name: 'settings_get',
     label: 'settings_get',
@@ -123,7 +124,7 @@ export function createSettingsGetTool(config: SubstrateConfig): AgentTool<any> {
 
 export function createPromotedToolsListTool(
   manager: PromotedExtendedToolsManager,
-): AgentTool<any> {
+): SubstrateAgentTool {
   return {
     name: 'promoted_tools_list',
     label: 'promoted_tools_list',
@@ -143,7 +144,7 @@ export function createPromotedToolsListTool(
 
 export function createPromotedToolsAddTool(
   manager: PromotedExtendedToolsManager,
-): AgentTool<any> {
+): SubstrateAgentTool {
   return {
     name: 'promoted_tools_add',
     label: 'promoted_tools_add',
@@ -166,7 +167,7 @@ export function createPromotedToolsAddTool(
 
 export function createPromotedToolsRemoveTool(
   manager: PromotedExtendedToolsManager,
-): AgentTool<any> {
+): SubstrateAgentTool {
   return {
     name: 'promoted_tools_remove',
     label: 'promoted_tools_remove',
@@ -189,7 +190,7 @@ export function createPromotedToolsRemoveTool(
 
 export function createPromotedToolsSwapTool(
   manager: PromotedExtendedToolsManager,
-): AgentTool<any> {
+): SubstrateAgentTool {
   return {
     name: 'promoted_tools_swap',
     label: 'promoted_tools_swap',

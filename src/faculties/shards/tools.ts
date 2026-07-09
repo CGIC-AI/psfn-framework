@@ -2,7 +2,8 @@
 // Registered on parent SubstrateAgent only. Child subagents don't get this tool (no recursion).
 
 import { Type } from '@sinclair/typebox';
-import type { AgentTool, AgentToolResult } from '@mariozechner/pi-agent-core';
+import type { AgentToolResult } from '@mariozechner/pi-agent-core';
+import type { SubstrateAgentTool } from '../../shared/contracts/agent-tools.js';
 import type { TextContent } from '@mariozechner/pi-ai';
 import type {
   BoundedSubagentLaunchEnvelope,
@@ -26,7 +27,7 @@ interface BoundedSubagentLaunchToolDetails {
 
 export function createBoundedSubagentLaunchTool(
   manager: SubagentExecutionPort,
-): AgentTool<any, BoundedSubagentLaunchToolDetails> {
+): SubstrateAgentTool<BoundedSubagentLaunchToolDetails> {
   return {
     name: BOUNDED_SUBAGENT_LAUNCH_TOOL_NAME,
     description:

@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { Type } from '@sinclair/typebox';
-import type { AgentTool, AgentToolResult } from '@mariozechner/pi-agent-core';
+import type { AgentToolResult } from '@mariozechner/pi-agent-core';
+import type { SubstrateAgentTool } from '../../shared/contracts/agent-tools.js';
 import type { CapabilityTier } from '../../system/config/runtime-config-contracts.js';
 import { textResult, textResultWithError } from '../tools/results.js';
 import { withCapabilityRequirement } from '../../system/capabilities/requirements.js';
@@ -524,8 +525,8 @@ function enqueueCharacterCardUpdateProposal(
 export function createPersonaUpdateTool(
   store: CharacterCardVersionStore,
   options: PersonaUpdateToolOptions = {},
-): AgentTool<any> {
-  const tool: AgentTool<any> = {
+): SubstrateAgentTool {
+  const tool: SubstrateAgentTool = {
     name: 'persona_update',
     description:
       'Dangerous: persona edits can radically alter or erase the companion\'s identity. '

@@ -35,9 +35,57 @@ const TEST_ASSISTANT_RESPONSE = `Mock response from ${TEST_COMPANION_NAME}`;
 // We mock Agent.prototype.prompt so it doesn't actually call the LLM.
 // It appends a fake assistant response to state.messages so extractResponseText works.
 
+// pi-agent-core 0.73 removed the Agent mutator methods (setModel/setSystemPrompt/
+// setTools); mutations now flow through assignments on `agent.state`. This helper
+// intercepts property assignments on a live Agent state object so tests can keep
+// call-style assertions.
+function spyOnAgentStateSet<T>(agentInstance: { state: unknown }, prop: string): {
+  mock: { calls: Array<[T]> };
+  mockRestore: () => void;
+} {
+  const state = agentInstance.state as Record<string, unknown>;
+  const original = Object.getOwnPropertyDescriptor(state, prop);
+  if (!original || !original.configurable) {
+    throw new Error(`Cannot spy on agent state property "${prop}"`);
+  }
+  const calls: Array<[T]> = [];
+  if (original.get || original.set) {
+    Object.defineProperty(state, prop, {
+      configurable: true,
+      enumerable: original.enumerable,
+      get: () => original.get!.call(state),
+      set: (value: T) => {
+        calls.push([value]);
+        original.set!.call(state, value);
+      },
+    });
+  } else {
+    let current = original.value as T;
+    Object.defineProperty(state, prop, {
+      configurable: true,
+      enumerable: original.enumerable,
+      get: () => current,
+      set: (value: T) => {
+        calls.push([value]);
+        current = value;
+      },
+    });
+  }
+  return {
+    mock: { calls },
+    mockRestore: () => {
+      if (original.get || original.set) {
+        Object.defineProperty(state, prop, original);
+      } else {
+        Object.defineProperty(state, prop, { ...original, value: state[prop] });
+      }
+    },
+  };
+}
+
 const promptSpy = vi.spyOn(Agent.prototype, 'prompt').mockImplementation(async function (this: Agent) {
   // Simulate adding an assistant response to the agent's messages
-  this.appendMessage({
+  this.state.messages.push({
     role: 'assistant',
     content: [{ type: 'text' as const, text: TEST_ASSISTANT_RESPONSE }],
     api: '' as any,
@@ -51,7 +99,7 @@ const promptSpy = vi.spyOn(Agent.prototype, 'prompt').mockImplementation(async f
 
 function mockAssistantResponse(text: string): void {
   promptSpy.mockImplementationOnce(async function (this: Agent) {
-    this.appendMessage({
+    this.state.messages.push({
       role: 'assistant',
       content: [{ type: 'text' as const, text }],
       api: '' as any,
@@ -73,7 +121,7 @@ function mockAssistantResponse(text: string): void {
 
 function mockAssistantErrorResponse(errorMessage: string): void {
   promptSpy.mockImplementationOnce(async function (this: Agent) {
-    this.appendMessage({
+    this.state.messages.push({
       role: 'assistant',
       content: [],
       api: '' as any,
@@ -597,10 +645,10 @@ describe('SubstrateAgent construction', () => {
     const llmClient = makeMockLLMProvider();
     const sessionManager = makeMockSessionManager();
 
-    const setModelSpy = vi.spyOn(Agent.prototype, 'setModel');
     const agent = new SubstrateAgent(
       eventBus, llmClient, sessionManager, 'System prompt', config,
     );
+    const setModelSpy = spyOnAgentStateSet<{ id: string }>((agent as any).agent, 'model');
 
     expect(agent).toBeDefined();
     expect(config.runtimeHooks?.refreshModels).toBeTypeOf('function');
@@ -1127,16 +1175,15 @@ describe('SubstrateAgent.handleMessage', () => {
       messages: [{ role: 'user', content: 'Hello' }],
     } satisfies LLMContext);
 
-    const setSystemPromptSpy = vi.spyOn(Agent.prototype, 'setSystemPrompt');
+    const agent = new SubstrateAgent(
+      new EventBus(),
+      makeMockLLMProvider(),
+      sessionManager,
+      'test',
+      config,
+    );
+    const setSystemPromptSpy = spyOnAgentStateSet<string>((agent as any).agent, 'systemPrompt');
     try {
-      const agent = new SubstrateAgent(
-        new EventBus(),
-        makeMockLLMProvider(),
-        sessionManager,
-        'test',
-        config,
-      );
-
       await agent.handleMessage(makeMessage());
 
       const prompt = setSystemPromptSpy.mock.calls.at(-1)?.[0] as string;
@@ -1846,7 +1893,7 @@ describe('SubstrateAgent.handleMessage', () => {
       await new Promise<void>((resolve) => {
         releaseBackgroundTurn = resolve;
       });
-      this.appendMessage({
+      this.state.messages.push({
         role: 'assistant',
         content: [{ type: 'text' as const, text: 'background done' }],
         api: '' as any,
@@ -1993,7 +2040,7 @@ describe('SubstrateAgent.handleMessage', () => {
 
     promptSpy.mockImplementationOnce(async function (this: Agent) {
       await (eventBus as any).emit('agent.stream.delta', { channelId: 'test-channel', text: 'M' });
-      this.appendMessage({
+      this.state.messages.push({
         role: 'assistant',
         content: [{ type: 'text' as const, text: TEST_ASSISTANT_RESPONSE }],
         api: '' as any,
@@ -2034,7 +2081,7 @@ describe('SubstrateAgent.handleMessage', () => {
     if (config.modelRoster.chat) config.modelRoster.chat.contextWindow = 200;
 
     promptSpy.mockImplementationOnce(async function (this: Agent) {
-      this.appendMessage({
+      this.state.messages.push({
         role: 'assistant',
         content: [{ type: 'toolCall', id: 'tool-1', name: 'analysis_workbench', arguments: { task: 'loop' } }],
         api: '' as any,
@@ -2051,7 +2098,7 @@ describe('SubstrateAgent.handleMessage', () => {
         stopReason: 'toolUse' as any,
         timestamp: Date.now(),
       });
-      this.appendMessage({
+      this.state.messages.push({
         role: 'toolResult',
         toolCallId: 'tool-1',
         toolName: 'analysis_workbench',
@@ -2059,7 +2106,7 @@ describe('SubstrateAgent.handleMessage', () => {
         isError: false,
         timestamp: Date.now(),
       } as any);
-      this.appendMessage({
+      this.state.messages.push({
         role: 'assistant',
         content: [{ type: 'text', text: 'Final response' }],
         api: '' as any,
@@ -2201,7 +2248,7 @@ describe('SubstrateAgent.handleMessage', () => {
     const sessionManager = makeMockSessionManager();
 
     promptSpy.mockImplementationOnce(async function (this: Agent) {
-      this.appendMessage({
+      this.state.messages.push({
         role: 'assistant',
         content: [{ type: 'toolCall', id: 'tool-1', name: 'analysis_workbench', arguments: { task: 'loop' } }],
         api: '' as any,
@@ -2218,7 +2265,7 @@ describe('SubstrateAgent.handleMessage', () => {
         stopReason: 'toolUse' as any,
         timestamp: Date.now(),
       });
-      this.appendMessage({
+      this.state.messages.push({
         role: 'toolResult',
         toolCallId: 'tool-1',
         toolName: 'analysis_workbench',
@@ -2226,7 +2273,7 @@ describe('SubstrateAgent.handleMessage', () => {
         isError: false,
         timestamp: Date.now(),
       } as any);
-      this.appendMessage({
+      this.state.messages.push({
         role: 'assistant',
         content: [{ type: 'text', text: 'Final response' }],
         api: '' as any,
@@ -3336,13 +3383,12 @@ describe('SubstrateAgent.handleMessage', () => {
 
   it('emits a runtime contradiction signal when a draft disputes the authoritative current_datetime anchor', async () => {
     const config = makeConfig();
-    const setSystemPromptSpy = vi.spyOn(Agent.prototype, 'setSystemPrompt');
+    const agent = new SubstrateAgent(
+      new EventBus(), makeMockLLMProvider(), makeMockSessionManager(), 'test', config,
+    );
+    const setSystemPromptSpy = spyOnAgentStateSet<string>((agent as any).agent, 'systemPrompt');
 
     try {
-      const agent = new SubstrateAgent(
-        new EventBus(), makeMockLLMProvider(), makeMockSessionManager(), 'test', config,
-      );
-
       mockAssistantResponse('The clock is off, that cannot be right.');
       mockAssistantResponse('The runtime current_datetime block says it is Thursday, March 18, 2026 at 9:30 AM.');
 
@@ -3372,13 +3418,12 @@ describe('SubstrateAgent.handleMessage', () => {
 
   it('strengthens the runtime anchor on retry and returns the retried answer', async () => {
     const config = makeConfig();
-    const setSystemPromptSpy = vi.spyOn(Agent.prototype, 'setSystemPrompt');
+    const agent = new SubstrateAgent(
+      new EventBus(), makeMockLLMProvider(), makeMockSessionManager(), 'test', config,
+    );
+    const setSystemPromptSpy = spyOnAgentStateSet<string>((agent as any).agent, 'systemPrompt');
 
     try {
-      const agent = new SubstrateAgent(
-        new EventBus(), makeMockLLMProvider(), makeMockSessionManager(), 'test', config,
-      );
-
       mockAssistantResponse('Time is wrong. Are you sure this is right?');
       mockAssistantResponse('The authoritative runtime current_datetime block says it is Thursday, March 18, 2026 at 9:30 AM.');
 
@@ -3969,7 +4014,7 @@ describe('SubstrateAgent.handleMessage', () => {
     expect(toolset).toBeDefined();
     await (toolset as any).execute('load-1', { action: 'activate', tools: ['extended_probe_tool'] });
 
-    const setToolsSpy = vi.spyOn((agent as any).agent, 'setTools');
+    const setToolsSpy = spyOnAgentStateSet<Array<{ name: string }>>((agent as any).agent, 'tools');
     await agent.handleMessage(makeMessage({ id: 'msg-load-persist-1' }));
     await agent.handleMessage(makeMessage({ id: 'msg-load-persist-2' }));
 
@@ -4114,7 +4159,7 @@ describe('SubstrateAgent.handleMessage', () => {
     } as any;
     agent.registerTool(extendedProbeTool, 'extended');
 
-    const setToolsSpy = vi.spyOn((agent as any).agent, 'setTools');
+    const setToolsSpy = spyOnAgentStateSet<Array<{ name: string }>>((agent as any).agent, 'tools');
     await agent.handleMessage(makeMessage({ id: 'msg-promoted-1' }));
     await agent.handleMessage(makeMessage({ id: 'msg-promoted-2' }));
 
@@ -4140,7 +4185,7 @@ describe('SubstrateAgent.handleMessage', () => {
 
     agent.registerTool(makeExtendedProbeTool('beads'), 'extended');
 
-    const setToolsSpy = vi.spyOn((agent as any).agent, 'setTools');
+    const setToolsSpy = spyOnAgentStateSet<Array<{ name: string }>>((agent as any).agent, 'tools');
 
     await agent.handleMessage(makeMessage({
       id: 'msg-autoload-order',
@@ -4167,7 +4212,7 @@ describe('SubstrateAgent.handleMessage', () => {
     const autoloadSummaries: any[] = [];
     (eventBus as any).on('agent.tools.autoload', (payload: any) => { autoloadSummaries.push(payload); });
 
-    const setToolsSpy = vi.spyOn((agent as any).agent, 'setTools');
+    const setToolsSpy = spyOnAgentStateSet<Array<{ name: string }>>((agent as any).agent, 'tools');
 
     await agent.handleMessage(makeMessage({
       id: 'msg-autoload-fallback',
@@ -4202,7 +4247,7 @@ describe('SubstrateAgent.handleMessage', () => {
     const autoloadSkips: any[] = [];
     (eventBus as any).on('agent.tools.autoload', (payload: any) => { autoloadSummaries.push(payload); });
     (eventBus as any).on('agent.tools.autoload.skipped', (payload: any) => { autoloadSkips.push(payload); });
-    const setToolsSpy = vi.spyOn((agent as any).agent, 'setTools');
+    const setToolsSpy = spyOnAgentStateSet<Array<{ name: string }>>((agent as any).agent, 'tools');
 
     await agent.handleMessage(makeMessage({
       id: 'msg-autoload-ops-overlay',
@@ -4337,7 +4382,7 @@ describe('SubstrateAgent.handleMessage', () => {
     expect(toolset).toBeDefined();
     await (toolset as any).execute('load-promoted-dedupe', { action: 'activate', tools: ['extended_probe_tool'] });
 
-    const setToolsSpy = vi.spyOn((agent as any).agent, 'setTools');
+    const setToolsSpy = spyOnAgentStateSet<Array<{ name: string }>>((agent as any).agent, 'tools');
     await agent.handleMessage(makeMessage({ id: 'msg-promoted-dedupe' }));
 
     for (const call of setToolsSpy.mock.calls) {

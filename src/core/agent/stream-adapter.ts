@@ -64,7 +64,7 @@ export interface SubstrateStreamRuntimeOptions {
  * Create a StreamFn for pi-agent-core's Agent.
  *
  * The model is passed in by the Agent — use `resolveModel()` to create it
- * from SubstrateConfig and set it via `agent.setModel()`.
+ * from SubstrateConfig and set it via `agent.state.model = model`.
  */
 export function createSubstrateStreamFn(
   config: CoreSubstrateConfig,

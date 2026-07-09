@@ -253,7 +253,7 @@ export class SatelliteHubClient {
   sendUserText(text: string, options: { interrupt?: boolean } = {}): void {
     const normalized = text.trim();
     if (!normalized) {
-      throw this.emitLocalError('Typed user text is empty', false);
+      throw this.emitLocalError('Typed message is empty', false);
     }
     this.send({
       type: 'user.text',

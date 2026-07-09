@@ -2,7 +2,8 @@
 // Legacy external Obsidian bridge for bounded source access and compatibility.
 
 import { Type } from '@sinclair/typebox';
-import type { AgentTool, AgentToolResult } from '@mariozechner/pi-agent-core';
+import type { AgentToolResult } from '@mariozechner/pi-agent-core';
+import type { SubstrateAgentTool } from '../../../shared/contracts/agent-tools.js';
 import type { VaultOperations } from './ops.js';
 import { textResult, textResultWithError } from '../../../core/tools/results.js';
 import { toErrorMessage } from '../../../shared/utils/errors.js';
@@ -137,7 +138,7 @@ async function executeVaultDaily(
   return textResult(`Appended to daily note (${result.date})`);
 }
 
-export function createVaultTool(ops: VaultOperations): AgentTool<any> {
+export function createVaultTool(ops: VaultOperations): SubstrateAgentTool {
   return {
     name: 'vault',
     label: 'vault',

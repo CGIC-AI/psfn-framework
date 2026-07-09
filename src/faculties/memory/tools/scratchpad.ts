@@ -1,5 +1,6 @@
 import { Type } from '@sinclair/typebox';
-import type { AgentTool, AgentToolResult } from '@mariozechner/pi-agent-core';
+import type { AgentToolResult } from '@mariozechner/pi-agent-core';
+import type { SubstrateAgentTool } from '../../../shared/contracts/agent-tools.js';
 
 import { textResult, textResultWithError } from '../../../core/tools/results.js';
 import { toErrorMessage } from '../../../shared/utils/errors.js';
@@ -37,7 +38,7 @@ function formatScratchpadList(
   return lines.join('\n');
 }
 
-export function createScratchpadTool(memoryStore: MemoryStorePort): AgentTool<any> {
+export function createScratchpadTool(memoryStore: MemoryStorePort): SubstrateAgentTool {
   return {
     name: 'scratchpad',
     description:
@@ -155,7 +156,7 @@ export function createScratchpadTool(memoryStore: MemoryStorePort): AgentTool<an
   };
 }
 
-export function createScratchpadReadTool(memoryStore: MemoryStorePort): AgentTool<any> {
+export function createScratchpadReadTool(memoryStore: MemoryStorePort): SubstrateAgentTool {
   return {
     name: 'scratchpad_read',
     description:
@@ -188,7 +189,7 @@ export function createScratchpadReadTool(memoryStore: MemoryStorePort): AgentToo
 type ScratchpadWriteOperation = 'add' | 'replace' | 'remove';
 const SCRATCHPAD_WRITE_OPERATIONS: ScratchpadWriteOperation[] = ['add', 'replace', 'remove'];
 
-export function createScratchpadWriteTool(memoryStore: MemoryStorePort): AgentTool<any> {
+export function createScratchpadWriteTool(memoryStore: MemoryStorePort): SubstrateAgentTool {
   return {
     name: 'scratchpad_write',
     description:

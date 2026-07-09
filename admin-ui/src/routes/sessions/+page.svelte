@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount, tick } from 'svelte';
   import { listSessions, getSessionMessages, SESSION_MESSAGE_PAGE_SIZE } from '$lib/api/endpoints/sessions';
+  import { getCompanionName } from '$lib/stores/companion.svelte';
   import type {
     ChannelInfo,
     AdminSessionMessagesData,
@@ -27,6 +28,7 @@
   let channelSearch = $state('');
   let channelSort = $state<'recent' | 'messages_desc' | 'messages_asc' | 'name_asc' | 'name_desc'>('recent');
   let messageSearch = $state('');
+  const companionName = $derived(getCompanionName());
   const selectedChannel = $derived(channels.find(channel => channel.sessionId === selectedSessionId) ?? null);
 
   // Channel type labels matching the htmx admin
@@ -230,10 +232,10 @@
     // Use authorName if available (from backend)
     if (msg.authorName) return msg.authorName;
 
-    // For assistant role, use a neutral fallback when authorName is unavailable.
-    if (msg.role === 'assistant') return 'Assistant';
+    // For companion replies, use the live character-card name when authorName is unavailable.
+    if (msg.role === 'assistant') return companionName;
 
-    // For user role, try to use the linked contact name from the selected channel
+    // For person turns, try to use the linked contact name from the selected channel.
     if (msg.role === 'user') {
       const channel = channels.find(c => c.sessionId === selectedSessionId);
       if (channel?.linkedContactName) return channel.linkedContactName;

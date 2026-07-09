@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import type { AgentTool } from '@mariozechner/pi-agent-core';
+import type { SubstrateAgentTool } from '../../shared/contracts/agent-tools.js';
 import type { CapabilityTier } from '../config/runtime-config-contracts.js';
 import { appendJsonLine } from '../../persistence/jsonl.js';
 import { resolveSafeguardAuditTrailPath } from '../../persistence/layout.js';
@@ -144,7 +145,7 @@ export function hasExplicitToolReversibility(toolName: string): boolean {
   return Object.prototype.hasOwnProperty.call(TOOL_REVERSIBILITY_BY_NAME, toolName);
 }
 
-export function tagToolWithReversibility<T extends AgentTool<any>>(
+export function tagToolWithReversibility<T extends SubstrateAgentTool>(
   tool: T,
   explicitReversibility?: ToolReversibility,
 ): T {

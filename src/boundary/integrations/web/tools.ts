@@ -1,5 +1,6 @@
 import { Type } from '@sinclair/typebox';
-import type { AgentTool, AgentToolResult } from '@mariozechner/pi-agent-core';
+import type { AgentToolResult } from '@mariozechner/pi-agent-core';
+import type { SubstrateAgentTool } from '../../../shared/contracts/agent-tools.js';
 import type { WebFetchLane } from '../../gateway/protocol.js';
 import type { WebFetchOperations } from './ops.js';
 import { textResult, textResultFromError } from '../../../core/tools/results.js';
@@ -66,7 +67,7 @@ export function createWebTool(
   ops: WebFetchOperations,
   searchQueryJson?: WebSearchQueryJson,
   backend: WebToolBackend = 'self_hosted',
-): AgentTool<any> {
+): SubstrateAgentTool {
   return {
     name: 'web',
     label: 'web',
@@ -148,7 +149,7 @@ export function createWebTool(
   };
 }
 
-export function createWebFetchTool(ops: WebFetchOperations): AgentTool<any> {
+export function createWebFetchTool(ops: WebFetchOperations): SubstrateAgentTool {
   return {
     name: 'web_fetch',
     label: 'web_fetch',

@@ -1,5 +1,6 @@
 import { Type } from '@sinclair/typebox';
-import type { AgentTool, AgentToolResult } from '@mariozechner/pi-agent-core';
+import type { AgentToolResult } from '@mariozechner/pi-agent-core';
+import type { SubstrateAgentTool } from '../../../shared/contracts/agent-tools.js';
 import { withCapabilityRequirement } from '../../../system/capabilities/requirements.js';
 import { tagToolWithReversibility } from '../../../system/capabilities/safeguards.js';
 import type { ShellOperations } from './ops.js';
@@ -33,8 +34,8 @@ function requireArgs(value: unknown): string[] {
   return value;
 }
 
-export function createShellTool(ops: ShellOperations): AgentTool<any> {
-  const tool: AgentTool<any> = {
+export function createShellTool(ops: ShellOperations): SubstrateAgentTool {
+  const tool: SubstrateAgentTool = {
     name: 'shell',
     label: 'shell',
     description:

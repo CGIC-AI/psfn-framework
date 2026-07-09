@@ -887,7 +887,7 @@
                   <thead>
                     <tr class="border-b border-bark-300">
                       <th class="text-left py-1.5 pr-2 text-shadow-700 font-medium text-sm">Channel</th>
-                      <th class="text-left py-1.5 pr-2 text-shadow-700 font-medium text-sm">User ID</th>
+                      <th class="text-left py-1.5 pr-2 text-shadow-700 font-medium text-sm">Account ID</th>
                       <th class="text-left py-1.5 pr-2 text-shadow-700 font-medium text-sm">Privacy</th>
                       <th class="text-left py-1.5 text-shadow-700 font-medium text-sm">Seen</th>
                       <th class="text-right py-1.5 text-shadow-700 font-medium text-sm">Actions</th>
@@ -1258,7 +1258,7 @@
                         {/if}
                       </div>
                       <div>
-                        <label for="new-ch-userid" class="text-sm text-shadow-700">User ID</label>
+                        <label for="new-ch-userid" class="text-sm text-shadow-700">Account ID</label>
                         <input id="new-ch-userid" type="text" bind:value={newChannelUserId} placeholder="123456789"
                           class="w-full px-2 py-1 text-sm rounded border border-bark-300 bg-white text-shadow-900
                                  focus:outline-none focus:ring-1 focus:ring-gold-300" />

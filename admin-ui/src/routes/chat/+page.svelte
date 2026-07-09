@@ -4,6 +4,10 @@
   import { applyIdentityOnboardingAction } from '$lib/api/endpoints/identity';
   import { getSessionMessages } from '$lib/api/endpoints/sessions';
   import { getToken } from '$lib/stores/auth.svelte';
+  import {
+    getCompanionName,
+    setCompanionNameFromChatBootstrap,
+  } from '$lib/stores/companion.svelte';
   import type { AdminChatBootstrapResponse, SessionEntry } from '$lib/types';
 
   // ── State ──
@@ -43,6 +47,7 @@
     description: '',
     personality: '',
   });
+  const companionName = $derived(getCompanionName());
 
   // Computed channel options for the identity selector
   const GARDEN_CHAT_CHANNEL = 'api';
@@ -134,9 +139,9 @@
       onboardingError = '';
       return;
     }
-    const assistantName = bs.assistantName?.trim() || 'Companion';
+    const loadedCompanionName = setCompanionNameFromChatBootstrap(bs);
     onboardingDraft = {
-      name: onboardingDraft.name.trim().length > 0 ? onboardingDraft.name : assistantName,
+      name: onboardingDraft.name.trim().length > 0 ? onboardingDraft.name : loadedCompanionName,
       description: onboardingDraft.description,
       personality: onboardingDraft.personality,
     };
@@ -145,6 +150,7 @@
   async function refreshBootstrapFromServer(options: { reloadSession?: boolean } = {}) {
     const previousSessionId = bootstrap?.defaultSessionId ?? '';
     bootstrap = await getChatBootstrap();
+    setCompanionNameFromChatBootstrap(bootstrap);
     selectedContactId = bootstrap.canonicalContactId;
     selectedPrivacyLevel = bootstrap.privacy.selectedLevel;
     selectedChannelIdentity = targetKey(bootstrap.selectedTarget);
@@ -240,7 +246,7 @@
       if (data.messages && data.messages.length > 0) {
         const loaded: ChatMessage[] = [];
         for (const entry of data.messages) {
-          // Skip system/compaction messages, only load user + assistant
+          // Skip system/compaction messages, only load person + companion turns.
           if (entry.role !== 'user' && entry.role !== 'assistant') continue;
           loaded.push({
             id: `hist-${loaded.length}-${Date.now()}`,
@@ -262,6 +268,7 @@
   onMount(async () => {
     try {
       bootstrap = await getChatBootstrap();
+      setCompanionNameFromChatBootstrap(bootstrap);
       selectedContactId = bootstrap.canonicalContactId;
       selectedPrivacyLevel = bootstrap.privacy.selectedLevel;
       initializeOnboardingDraft(bootstrap);
@@ -277,6 +284,7 @@
           userId: GARDEN_CHAT_USER_ID,
         });
         bootstrap = await getChatBootstrap();
+        setCompanionNameFromChatBootstrap(bootstrap);
         initializeOnboardingDraft(bootstrap);
       }
       selectedChannelIdentity = targetKey(bootstrap.selectedTarget);
@@ -406,7 +414,7 @@
     const userText = inputText.trim();
     inputText = '';
 
-    // Add user message
+    // Add the person's message locally.
     const userMsg: ChatMessage = {
       id: `user-${Date.now()}`,
       role: 'user',
@@ -488,7 +496,7 @@
 
       if (!streamingContent) throw new Error('Completion stream did not produce any text');
 
-      // Finalize assistant message
+      // Finalize the companion message.
       const assistantMsg: ChatMessage = {
         id: `asst-${Date.now()}`,
         role: 'assistant',
@@ -613,9 +621,8 @@
     return opt.nickname ? `${opt.displayName} (${opt.nickname})` : opt.displayName;
   }
 
-  function activeAssistantName(): string {
-    const value = bootstrap?.assistantName?.trim();
-    return value && value.length > 0 ? value : 'Assistant';
+  function activeCompanionName(): string {
+    return companionName;
   }
 
   function toggleThinking(id: string) {
@@ -854,7 +861,7 @@
             {#if bootstrap.selectedTarget.targetKind === 'conversation'}
               <p class="text-shadow-800">Channel ID: <span class="font-mono">{bootstrap.selectedTarget.channelId}</span></p>
             {:else}
-              <p class="text-shadow-800">User ID: <span class="font-mono">{bootstrap.selectedTarget.userId}</span></p>
+              <p class="text-shadow-800">Account ID: <span class="font-mono">{bootstrap.selectedTarget.userId}</span></p>
             {/if}
             <p class="text-shadow-800">Privacy: {bootstrap.selectedTarget.privacyLevel}</p>
           </div>
@@ -883,7 +890,7 @@
         <div class="flex items-center justify-center h-full">
           <div class="text-center">
             <p class="text-bark-700 text-sm font-medium">No messages in this session yet.</p>
-            <p class="text-bark-600 text-sm mt-1">Type a message below to start chatting with {activeAssistantName()}.</p>
+            <p class="text-bark-600 text-sm mt-1">Type a message below to start chatting with {activeCompanionName()}.</p>
             {#if bootstrap}
               <p class="text-bark-500 text-sm mt-2 font-mono">{bootstrap.defaultSessionId}</p>
             {/if}
@@ -1001,7 +1008,7 @@
                 <div class="max-w-[85%] bg-white border border-bark-300 rounded-2xl rounded-bl-md px-4 py-2.5 shadow-sm">
                   <div class="flex items-center gap-2 text-sm text-shadow-600">
                     <span class="inline-block w-2 h-2 bg-gold-400 rounded-full animate-pulse"></span>
-                    Waiting for {activeAssistantName()}...
+                    Waiting for {activeCompanionName()}...
                   </div>
                 </div>
               </div>

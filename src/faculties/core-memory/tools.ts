@@ -1,5 +1,6 @@
 import { Type } from '@sinclair/typebox';
-import type { AgentTool, AgentToolResult } from '@mariozechner/pi-agent-core';
+import type { AgentToolResult } from '@mariozechner/pi-agent-core';
+import type { SubstrateAgentTool } from '../../shared/contracts/agent-tools.js';
 import { textResult, textResultWithError } from '../../core/tools/results.js';
 import {
   ACTIVE_CONCERN_EVIDENCE_KINDS,
@@ -190,7 +191,7 @@ function resolveCurrentCoreMemoryScope(): CoreMemoryScopeDescriptor | null {
 export function createOrientTool(
   store: CoreMemoryToolStore,
   options: OrientToolOptions = {},
-): AgentTool<any> {
+): SubstrateAgentTool {
   return {
     name: 'orient',
     label: 'orient',

@@ -1189,8 +1189,8 @@
                                 class="w-full px-3 py-1.5 rounded-lg border border-bark-300 bg-white text-shadow-800 text-sm focus:outline-none focus:ring-2 focus:ring-gold-300 focus:border-gold-400">
                                 <option value="">system (default)</option>
                                 <option value="system">system</option>
-                                <option value="user">user</option>
-                                <option value="assistant">assistant</option>
+                                <option value="user">person turn</option>
+                                <option value="assistant">companion turn</option>
                               </select>
                             </label>
                             <label class="block">

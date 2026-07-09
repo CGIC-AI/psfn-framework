@@ -62,7 +62,7 @@ import type { ApiAuthPrincipal } from '../backplane/http/auth.js';
 
 const DEFAULT_SCHEDULER_HEALTHCHECK_STALE_AFTER_MS = 65 * 60_000;
 const IDENTITY_LINK_CHALLENGE_TTL_MS = 5 * 60_000;
-const DIRECT_PROVIDER_OVERRIDE_ALLOWLIST = new Set(['anthropic', 'openai', 'google']);
+const DIRECT_PROVIDER_OVERRIDE_ALLOWLIST = new Set(['anthropic', 'openai', 'google', 'openrouter']);
 const MIN_CHAT_COMPLETION_TIMEOUT_MS = 1_000;
 
 const IDENTITY_CLAIM_HEADERS = {

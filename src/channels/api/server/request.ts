@@ -23,7 +23,7 @@ import {
   type ApiServerLogger,
 } from './http.js';
 
-const DIRECT_PROVIDER_OVERRIDE_ALLOWLIST = new Set(['anthropic', 'openai', 'google']);
+const DIRECT_PROVIDER_OVERRIDE_ALLOWLIST = new Set(['anthropic', 'openai', 'google', 'openrouter']);
 
 export interface TurnRoutingOverrides {
   modelOverride?: MessageModelOverride;

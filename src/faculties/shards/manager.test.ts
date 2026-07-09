@@ -38,9 +38,10 @@ let mockShardDelayMs = 0;
 let mockShardError: Error | null = null;
 
 const promptSpy = vi.spyOn(Agent.prototype, 'prompt').mockImplementation(async function (this: Agent) {
+  recordAgentRunConfig(this);
   if (mockShardError) throw mockShardError;
   if (mockShardDelayMs > 0) await new Promise(r => setTimeout(r, mockShardDelayMs));
-  this.appendMessage({
+  this.state.messages.push({
     role: 'assistant',
     content: [{ type: 'text' as const, text: mockShardContent }],
     api: '' as any,
@@ -52,14 +53,25 @@ const promptSpy = vi.spyOn(Agent.prototype, 'prompt').mockImplementation(async f
   });
 });
 
-const setSystemPromptSpy = vi.spyOn(Agent.prototype, 'setSystemPrompt');
-const setToolsSpy = vi.spyOn(Agent.prototype, 'setTools');
+// pi-agent-core 0.73 removed Agent.setSystemPrompt()/setTools(); shard agent
+// configuration now flows through `agent.state` assignments, so capture the
+// effective config of each inner Agent at prompt time instead of spying on
+// the removed prototype methods.
+type AgentRunConfig = { systemPrompt: string; tools: Array<{ name: string; execute: (...args: any[]) => Promise<any> }> };
+const agentRunConfigs: AgentRunConfig[] = [];
+function recordAgentRunConfig(agent: Agent): void {
+  agentRunConfigs.push({
+    systemPrompt: agent.state.systemPrompt,
+    tools: agent.state.tools as unknown as AgentRunConfig['tools'],
+  });
+}
 
 function restoreDefaultPromptMock(): void {
   promptSpy.mockImplementation(async function (this: Agent) {
+    recordAgentRunConfig(this);
     if (mockShardError) throw mockShardError;
     if (mockShardDelayMs > 0) await new Promise(r => setTimeout(r, mockShardDelayMs));
-    this.appendMessage({
+    this.state.messages.push({
       role: 'assistant',
       content: [{ type: 'text' as const, text: mockShardContent }],
       api: '' as any,
@@ -90,10 +102,9 @@ function makeTestTool(name: string) {
 }
 
 function lastSetToolNames(): string[] {
-  const call = setToolsSpy.mock.calls.at(-1);
-  if (!call) return [];
-  const tools = call[0] as Array<{ name: string }>;
-  return tools.map((tool) => tool.name);
+  const config = agentRunConfigs.at(-1);
+  if (!config) return [];
+  return config.tools.map((tool) => tool.name);
 }
 
 function parseEntryMetadata(entry: { metadata?: string | null | undefined }): Record<string, unknown> {
@@ -232,8 +243,7 @@ describe('ShardManager', () => {
     mockShardDelayMs = 0;
     mockShardError = null;
     promptSpy.mockClear();
-    setSystemPromptSpy.mockClear();
-    setToolsSpy.mockClear();
+    agentRunConfigs.length = 0;
     restoreDefaultPromptMock();
     resetCompletionHandoffDedupeForTests();
   });
@@ -671,8 +681,8 @@ describe('ShardManager', () => {
 
     // SubstrateAgent calls agent.setSystemPrompt() with the system prompt
     // from buildContext, which includes the base prompt
-    expect(setSystemPromptSpy).toHaveBeenCalled();
-    const setPromptCall = setSystemPromptSpy.mock.calls[0];
+    expect(agentRunConfigs.length).toBeGreaterThan(0);
+    const setPromptCall = [agentRunConfigs[0]!.systemPrompt];
     expect(setPromptCall[0]).toContain(companionPrompt);
   });
 
@@ -694,8 +704,8 @@ describe('ShardManager', () => {
       systemPrompt: 'You are a research shard.',
     });
 
-    expect(setSystemPromptSpy).toHaveBeenCalled();
-    const setPromptCall = setSystemPromptSpy.mock.calls[0];
+    expect(agentRunConfigs.length).toBeGreaterThan(0);
+    const setPromptCall = [agentRunConfigs[0]!.systemPrompt];
     expect(setPromptCall[0]).toContain('You are a research shard.');
     expect(setPromptCall[0]).not.toContain(companionPrompt);
   });
@@ -707,11 +717,12 @@ describe('ShardManager', () => {
     // Track concurrency via the prompt mock
     mockShardDelayMs = 50;
     promptSpy.mockImplementation(async function (this: Agent) {
+      recordAgentRunConfig(this);
       currentActive++;
       concurrentPeak = Math.max(concurrentPeak, currentActive);
       await new Promise(r => setTimeout(r, 50));
       currentActive--;
-      this.appendMessage({
+      this.state.messages.push({
         role: 'assistant',
         content: [{ type: 'text' as const, text: 'done' }],
         api: '' as any, provider: '' as any, model: '',
@@ -743,8 +754,9 @@ describe('ShardManager', () => {
   it('enforces max concurrency limit', async () => {
     // Slow prompt mock for this test
     promptSpy.mockImplementation(async function (this: Agent) {
+      recordAgentRunConfig(this);
       await new Promise(r => setTimeout(r, 100));
-      this.appendMessage({
+      this.state.messages.push({
         role: 'assistant',
         content: [{ type: 'text' as const, text: 'done' }],
         api: '' as any, provider: '' as any, model: '',
@@ -1011,8 +1023,8 @@ describe('ShardManager', () => {
       undefined,
       undefined,
     );
-    expect(setSystemPromptSpy).toHaveBeenCalled();
-    const setPromptCall = setSystemPromptSpy.mock.calls[0];
+    expect(agentRunConfigs.length).toBeGreaterThan(0);
+    const setPromptCall = [agentRunConfigs[0]!.systemPrompt];
     expect(setPromptCall).toBeDefined();
     const [setPromptText] = setPromptCall;
     expect(setPromptText).toContain('[Shard context pack]');
@@ -1379,7 +1391,7 @@ describe('ShardManager', () => {
     });
 
     const result = await manager.spawn({ name: 'provenance', task: 'test' });
-    const tools = (setToolsSpy.mock.calls.at(-1)?.[0] as Array<{ name: string; execute: (...args: any[]) => Promise<any> }>);
+    const tools = (agentRunConfigs.at(-1)?.tools as Array<{ name: string; execute: (...args: any[]) => Promise<any> }>);
     const wrappedMemory = tools.find((tool) => tool.name === 'memory');
     expect(wrappedMemory).toBeDefined();
 
@@ -1465,7 +1477,7 @@ describe('ShardManager', () => {
     });
 
     await manager.spawn({ name: 'memory-import', task: 'test' });
-    const tools = (setToolsSpy.mock.calls.at(-1)?.[0] as Array<{ name: string; execute: (...args: any[]) => Promise<any> }>);
+    const tools = (agentRunConfigs.at(-1)?.tools as Array<{ name: string; execute: (...args: any[]) => Promise<any> }>);
     const wrappedMemory = tools.find((tool) => tool.name === 'memory');
     if (!wrappedMemory) {
       throw new Error('Expected wrapped memory tool to be present');
@@ -1532,7 +1544,7 @@ describe('ShardManager', () => {
     });
 
     const result = await manager.spawn({ name: 'persist-fold-review', task: 'test' });
-    const tools = setToolsSpy.mock.calls.at(-1)?.[0] as Array<{
+    const tools = agentRunConfigs.at(-1)?.tools as Array<{
       name: string;
       execute: (toolCallId: string, params: Record<string, unknown>) => Promise<unknown>;
     }>;
@@ -1783,7 +1795,7 @@ describe('ShardManager', () => {
     });
 
     const result = await manager.spawn({ name: 'policy-deny', task: 'test' });
-    const tools = setToolsSpy.mock.calls.at(-1)?.[0] as Array<{
+    const tools = agentRunConfigs.at(-1)?.tools as Array<{
       name: string;
       execute: (toolCallId: string, params: Record<string, unknown>) => Promise<unknown>;
     }>;
@@ -2169,7 +2181,7 @@ describe('createBoundedSubagentLaunchTool', () => {
     mockShardDelayMs = 0;
     mockShardError = null;
     promptSpy.mockClear();
-    setToolsSpy.mockClear();
+    agentRunConfigs.length = 0;
     restoreDefaultPromptMock();
   });
 

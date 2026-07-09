@@ -49,12 +49,27 @@ import {
 } from '../../../system/config/intake-policy-config.js';
 import { INTAKE_FIREWALL_NOTICE_TEMPLATES } from '../intake-firewall-notice-templates.js';
 import {
+  INTAKE_QUARANTINE_RISK_LABELS,
+  INTAKE_SANITIZE_RISK_LABELS,
+} from './risk-label-families.js';
+import {
+  INTAKE_MARKING_SOURCE_CLASSES,
+  resolveMarkingPlan,
+  type IntakeMarkingPlan,
+} from './marking.js';
+import {
+  adjustSourceRiskTierForSourceLists,
+  matchIntakeSourceLists,
+} from './source-lists.js';
+import {
   createIntakeL1Scanner,
   type IntakeL1Scanner,
   type IntakeL1ScannerConfig,
   type IntakeL1ScanReport,
   type IntakeScanScope,
 } from './scanners/index.js';
+
+export { INTAKE_QUARANTINE_RISK_LABELS, INTAKE_SANITIZE_RISK_LABELS } from './risk-label-families.js';
 
 const log = createComponentLogger('IntakeScreening');
 
@@ -72,44 +87,8 @@ export interface IntakeInjectionScorerPort {
   classify(text: string): Promise<{ score: number; labels: IntakeRiskLabel[] }>;
 }
 
-// ── Decision label families (interim htm9.2 policy; htm9.3 refines) ──
-
-/**
- * L1 labels that alone justify a quarantine decision. The deterministic rule
- * engine's high-risk families: instruction override/injection markers, persona
- * and policy mutation attempts, executable instructions, canary leaks, and
- * slow-poisoning patterns.
- */
-export const INTAKE_QUARANTINE_RISK_LABELS: readonly IntakeRiskLabel[] = [
-  'injection/override_attempt',
-  'injection/indirect',
-  'injection/encoded_smuggling',
-  'injection/role_confusion',
-  'injection/jailbreak_marker',
-  'persona/mutation_attempt',
-  'policy/security_modification',
-  'execution/executable_instruction',
-  'exfil/canary_leak',
-  'poisoning/memory_write_pressure',
-  'poisoning/trust_grooming',
-  'poisoning/source_drift',
-];
-
-/**
- * L1 labels whose findings the sanitized text actually removes (stripped
- * invisible codepoints, redacted secrets/PII) — these justify a 'sanitize'
- * decision when the sanitized text differs.
- */
-export const INTAKE_SANITIZE_RISK_LABELS: readonly IntakeRiskLabel[] = [
-  'injection/invisible_text',
-  'secrets/api_key',
-  'secrets/credential_material',
-  'pii/credential_adjacent',
-  'pii/financial',
-  'pii/personal_identifier',
-];
-
 // ── Screening input/result ──
+// (Decision label families live in risk-label-families.ts, re-exported above.)
 
 export interface IntakeScreeningInput {
   sourceClass: IntakeSourceClass;
@@ -118,6 +97,11 @@ export interface IntakeScreeningInput {
   scope: IntakeScanScope;
   /** What the envelope covers on the carrying message. Default `{kind:'body'}`. */
   subject?: IntakeEnvelopeSubject;
+  /**
+   * Canonical contact id of the sender, when the surface knows one. Matched
+   * against the trustedPeople/deniedPeople source lists (htm9.13).
+   */
+  canonicalContactId?: string;
   atMs?: number;
 }
 
@@ -141,6 +125,15 @@ export interface IntakeScreeningResult {
   injectionScore?: number;
   /** Visible-not-swallowed L1.5 failure (screening continued on L1 signals). */
   injectionScorerError?: string;
+  /**
+   * Data-marking plan (htm9.13) for markable source classes
+   * (INTAKE_MARKING_SOURCE_CLASSES): a pure function of the screening labels,
+   * max score, and effective tier. Computed and audited in BOTH modes; never
+   * applied to effectiveText here — the prompt-assembly read side
+   * (intake-sink-gating.ts) applies it in enforce mode, so inbound re-scans
+   * never see legitimate markers.
+   */
+  markingPlan?: IntakeMarkingPlan;
 }
 
 export interface IntakeScreeningService {
@@ -264,7 +257,21 @@ export function createIntakeScreeningService(
       scannerId?: string;
     },
   ): IntakeScreeningResult {
-    const sourceRiskTier = policy.sourceRiskTiers[input.sourceClass];
+    // htm9.13: scrutiny scales with SOURCE risk. The operator-curated source
+    // lists adjust the policy tier — a trusted-site/person hit lowers it ONE
+    // step (never below 'trusted'; L1 already ran unconditionally above), a
+    // denied hit raises it to 'hostile'. The ADJUSTED tier is what the
+    // envelope carries and what every escalation threshold reads.
+    const baseTier = policy.sourceRiskTiers[input.sourceClass];
+    const listMatch = matchIntakeSourceLists({
+      lists: policy.sourceLists,
+      originRef: input.origin.ref,
+      ...(input.canonicalContactId !== undefined
+        ? { canonicalContactId: input.canonicalContactId }
+        : {}),
+    });
+    const adjusted = adjustSourceRiskTierForSourceLists(baseTier, listMatch);
+    const sourceRiskTier = adjusted.tier;
     const atMs = input.atMs ?? now();
 
     let envelope = createIntakeEnvelope({
@@ -295,6 +302,25 @@ export function createIntakeScreeningService(
     if (scorerOutcome.error && scorerOutcome.scannerId) {
       extractedFields[`${scorerOutcome.scannerId}.error`] = scorerOutcome.error.slice(0, 4096);
     }
+    if (adjusted.adjustment) {
+      extractedFields['source_list.match'] =
+        `${adjusted.adjustment.match.kind}:${adjusted.adjustment.match.list}:${adjusted.adjustment.match.pattern}`
+          .slice(0, 4096);
+      extractedFields['source_list.tier_adjustment'] =
+        `${adjusted.adjustment.from}->${sourceRiskTier} (${adjusted.adjustment.kind})`;
+    }
+
+    // htm9.13: the marking plan is a pure function of (labels, max score,
+    // effective tier), computed for markable classes in both modes.
+    const allRiskLabels = [...report.riskLabels, ...scorerOutcome.labels];
+    const maxScore = Math.min(1, Math.max(0, ...Object.values(scores)));
+    const markingPlan = INTAKE_MARKING_SOURCE_CLASSES.has(input.sourceClass)
+      ? resolveMarkingPlan({ labels: allRiskLabels, score: maxScore, tier: sourceRiskTier })
+      : undefined;
+    if (markingPlan) {
+      extractedFields['marking.intensity'] = markingPlan.intensity;
+      extractedFields['marking.provenance'] = markingPlan.provenanceNote.slice(0, 4096);
+    }
 
     envelope = transitionIntakeEnvelope(envelope, {
       to: 'screened',
@@ -302,7 +328,7 @@ export function createIntakeScreeningService(
       reason: decision.reason.slice(0, 1024),
       atMs,
       decision: intakeDecision,
-      riskLabels: [...report.riskLabels, ...scorerOutcome.labels],
+      riskLabels: allRiskLabels,
       scores,
       extractedFields,
     });
@@ -341,6 +367,13 @@ export function createIntakeScreeningService(
       withheld,
       truncated: report.truncated,
       elapsedMs: report.elapsedMs,
+      ...(adjusted.adjustment
+        ? {
+          sourceListMatch: `${adjusted.adjustment.match.kind}:${adjusted.adjustment.match.list}:${adjusted.adjustment.match.pattern}`,
+          sourceTierAdjustment: `${adjusted.adjustment.from}->${sourceRiskTier}`,
+        }
+        : {}),
+      ...(markingPlan ? { markingIntensity: markingPlan.intensity } : {}),
       ...(report.scannerErrors.length > 0 ? { scannerErrors: report.scannerErrors } : {}),
       ...(scorerOutcome.error ? { injectionScorerError: scorerOutcome.error } : {}),
     };
@@ -367,6 +400,7 @@ export function createIntakeScreeningService(
       withheld,
       ...(scorerOutcome.score !== undefined ? { injectionScore: scorerOutcome.score } : {}),
       ...(scorerOutcome.error ? { injectionScorerError: scorerOutcome.error } : {}),
+      ...(markingPlan ? { markingPlan } : {}),
     };
   }
 

@@ -17,6 +17,12 @@
     "shard_foldback": "standard",
     "mcp_tool_description": "hostile"
   },
+  "sourceLists": {
+    "trustedSites": [],
+    "deniedSites": [],
+    "trustedPeople": [],
+    "deniedPeople": []
+  },
   "quarantine": {
     "itemTtlHours": 168,
     "maxHeldItems": 500

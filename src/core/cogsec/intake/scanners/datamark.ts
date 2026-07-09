@@ -24,6 +24,18 @@ import {
 
 export const DATAMARK_SCANNER_ID = 'l1.datamark';
 
+/**
+ * THE active datamark token (htm9.13) — the single marker the interleave
+ * renderer (src/core/cogsec/intake/marking.ts) inserts between untrusted
+ * content segments at prompt-assembly time. Built from Private Use Area
+ * codepoints on purpose: this scanner strips ALL PUA material (and this
+ * marker specifically, at the higher forgery weight) from every INBOUND item
+ * before it can reach a prompt, so the marker is structurally unforgeable —
+ * it only ever exists in text the firewall itself marked AFTER screening.
+ * Do not define a second marker anywhere.
+ */
+export const INTAKE_DATAMARK_MARKER = '\u{E1D5}\u{E2A7}';
+
 function isPrivateUseCodePoint(codePoint: number): boolean {
   return (codePoint >= 0xE000 && codePoint <= 0xF8FF)
     || (codePoint >= 0xF0000 && codePoint <= 0xFFFFD)

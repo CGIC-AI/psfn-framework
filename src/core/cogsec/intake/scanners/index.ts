@@ -36,7 +36,7 @@ import {
   type IntakeRuleEngineStatus,
 } from './rule-engine.js';
 import { scanInvisibleText } from './invisible-text.js';
-import { scanDatamark } from './datamark.js';
+import { INTAKE_DATAMARK_MARKER, scanDatamark } from './datamark.js';
 import { scanEncodingSmuggling } from './encoding-smuggling.js';
 import { scanUrls } from './urls.js';
 import { scanSecretsPii } from './secrets-pii.js';
@@ -66,7 +66,7 @@ export type {
   IntakeRuleEngineStatus,
 } from './rule-engine.js';
 export { INVISIBLE_TEXT_SCANNER_ID, scanInvisibleText, stripInvisibleCodePoints } from './invisible-text.js';
-export { DATAMARK_SCANNER_ID, scanDatamark } from './datamark.js';
+export { DATAMARK_SCANNER_ID, INTAKE_DATAMARK_MARKER, scanDatamark } from './datamark.js';
 export { ENCODING_SMUGGLING_SCANNER_ID, scanEncodingSmuggling } from './encoding-smuggling.js';
 export { scanUrls, URL_SCANNER_ID } from './urls.js';
 export { scanSecretsPii, SECRETS_PII_SCANNER_ID } from './secrets-pii.js';
@@ -180,12 +180,16 @@ export function createIntakeL1Scanner(config: IntakeL1ScannerConfig = {}): Intak
     const invisibleResult = run('l1.invisible_text', () => scanInvisibleText(capped, scope));
     const afterInvisible = invisibleResult?.sanitized ?? capped;
 
-    // 2. Datamark forgery stripping on the stripped raw text.
-    const markers = options.datamarkMarkers ?? config.datamarkMarkers;
+    // 2. Datamark forgery stripping on the stripped raw text. The active
+    //    marker (htm9.13) is always in scope: inbound occurrences are forged
+    //    by definition, since the renderer marks only AFTER screening.
+    const markers = options.datamarkMarkers
+      ?? config.datamarkMarkers
+      ?? [INTAKE_DATAMARK_MARKER];
     const datamarkResult = run('l1.datamark', () => scanDatamark(
       afterInvisible,
       scope,
-      markers === undefined ? {} : { markers },
+      { markers },
     ));
     const afterDatamark = datamarkResult?.sanitized ?? afterInvisible;
 

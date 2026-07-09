@@ -160,6 +160,289 @@ export interface IntakeL3ScreenerPolicyConfig {
   maxOutputTokens: number;
 }
 
+// ── Source lists (htm9.13): trusted/denied sites and people ──
+
+/**
+ * Operator-curated source lists (htm9.13). A trusted-site/person hit lowers
+ * the EFFECTIVE source risk tier ONE step (never below 'trusted', never
+ * skipping L1 — every item is still scanned); a denied hit raises it to
+ * 'hostile'. Fed by Garden flywheel decisions (htm9.11) through the
+ * /api/admin/intake/source-lists routes; tuned for "your friends who happen
+ * to be AI", not agency-run businesses — trusted origin != safe (npm/GitHub
+ * supply-chain attacks are the counterexample), so trust only lightens the
+ * escalation layers, it never waives deterministic screening.
+ */
+export const INTAKE_SOURCE_LIST_NAMES = [
+  'trustedSites',
+  'deniedSites',
+  'trustedPeople',
+  'deniedPeople',
+] as const;
+export type IntakeSourceListName = typeof INTAKE_SOURCE_LIST_NAMES[number];
+
+export function isIntakeSourceListName(value: unknown): value is IntakeSourceListName {
+  return typeof value === 'string'
+    && (INTAKE_SOURCE_LIST_NAMES as readonly string[]).includes(value);
+}
+
+export interface IntakeSourceListEntry {
+  /**
+   * Sites: an exact lowercase host ('arxiv.org') or a registrable-domain
+   * suffix ('*.arxiv.org' — matches the apex and every subdomain). No
+   * schemes, ports, paths, or regex — malformed patterns fail closed at
+   * validation. People: the canonical contact id, matched exactly.
+   */
+  pattern: string;
+  /** Who added the entry ('operator', 'garden-flywheel', ...). */
+  addedBy: string;
+  /** Epoch milliseconds when the entry was added. */
+  addedAt: number;
+  note?: string;
+}
+
+export type IntakeSourceListsConfig = Record<IntakeSourceListName, IntakeSourceListEntry[]>;
+
+const MAX_SOURCE_LIST_ENTRIES = 512;
+const MAX_SOURCE_LIST_NOTE_CHARS = 512;
+const MAX_SOURCE_LIST_ADDED_BY_CHARS = 128;
+const MAX_SITE_PATTERN_CHARS = 255;
+const MAX_PERSON_PATTERN_CHARS = 256;
+const SITE_LABEL_PATTERN = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
+
+/**
+ * Normalizes and validates a site pattern: exact host or `*.domain.tld`
+ * suffix only. No regex from config — anything else throws (fail closed).
+ */
+export function normalizeIntakeSitePattern(value: unknown, context = 'site pattern'): string {
+  if (typeof value !== 'string') {
+    throw new Error(`${context} must be a string`);
+  }
+  const pattern = value.trim().toLowerCase();
+  if (!pattern) {
+    throw new Error(`${context} must be non-empty`);
+  }
+  if (pattern.length > MAX_SITE_PATTERN_CHARS) {
+    throw new Error(`${context} exceeds ${String(MAX_SITE_PATTERN_CHARS)} characters`);
+  }
+  const host = pattern.startsWith('*.') ? pattern.slice(2) : pattern;
+  if (host.includes('*')) {
+    throw new Error(
+      `${context} '${pattern}' is malformed: wildcard is only allowed as a leading '*.' suffix`,
+    );
+  }
+  const labels = host.split('.');
+  if (labels.length < 2) {
+    throw new Error(
+      `${context} '${pattern}' must include a registrable domain (e.g. 'arxiv.org' or '*.arxiv.org')`,
+    );
+  }
+  for (const label of labels) {
+    if (!SITE_LABEL_PATTERN.test(label)) {
+      throw new Error(
+        `${context} '${pattern}' is malformed: exact host or '*.domain.tld' suffix only `
+        + '(no schemes, ports, paths, or regex)',
+      );
+    }
+  }
+  return pattern;
+}
+
+/**
+ * Normalizes and validates a person pattern: a canonical contact id, matched
+ * exactly. Whitespace/control characters are rejected (fail closed).
+ */
+export function normalizeIntakePersonPattern(value: unknown, context = 'person pattern'): string {
+  if (typeof value !== 'string') {
+    throw new Error(`${context} must be a string`);
+  }
+  const pattern = value.trim();
+  if (!pattern) {
+    throw new Error(`${context} must be non-empty`);
+  }
+  if (pattern.length > MAX_PERSON_PATTERN_CHARS) {
+    throw new Error(`${context} exceeds ${String(MAX_PERSON_PATTERN_CHARS)} characters`);
+  }
+  if (/[\s\p{Cc}]/u.test(pattern)) {
+    throw new Error(`${context} '${pattern}' must not contain whitespace or control characters`);
+  }
+  return pattern;
+}
+
+function normalizeSourceListPattern(
+  list: IntakeSourceListName,
+  value: unknown,
+  context: string,
+): string {
+  return list === 'trustedSites' || list === 'deniedSites'
+    ? normalizeIntakeSitePattern(value, context)
+    : normalizeIntakePersonPattern(value, context);
+}
+
+function validateSourceListEntry(
+  raw: unknown,
+  sourcePath: string,
+  field: string,
+  list: IntakeSourceListName,
+): IntakeSourceListEntry {
+  if (!isRecord(raw)) {
+    throw invalid(sourcePath, `${field} must be an object`);
+  }
+  const unknownKeys = Object.keys(raw)
+    .filter((key) => !['pattern', 'addedBy', 'addedAt', 'note'].includes(key));
+  if (unknownKeys.length > 0) {
+    throw invalid(sourcePath, `${field} has unsupported keys: ${unknownKeys.join(', ')}`);
+  }
+  let pattern: string;
+  try {
+    pattern = normalizeSourceListPattern(list, raw.pattern, `${field}.pattern`);
+  } catch (error) {
+    throw invalid(sourcePath, error instanceof Error ? error.message : String(error));
+  }
+  const addedBy = raw.addedBy;
+  if (typeof addedBy !== 'string' || !addedBy.trim()
+    || addedBy.trim().length > MAX_SOURCE_LIST_ADDED_BY_CHARS) {
+    throw invalid(
+      sourcePath,
+      `${field}.addedBy must be a non-empty string of at most ${String(MAX_SOURCE_LIST_ADDED_BY_CHARS)} characters`,
+    );
+  }
+  if (typeof raw.addedAt !== 'number' || !Number.isFinite(raw.addedAt) || raw.addedAt <= 0) {
+    throw invalid(sourcePath, `${field}.addedAt must be a positive epoch-milliseconds number`);
+  }
+  const entry: IntakeSourceListEntry = {
+    pattern,
+    addedBy: addedBy.trim(),
+    addedAt: raw.addedAt,
+  };
+  if (raw.note !== undefined) {
+    if (typeof raw.note !== 'string' || raw.note.length > MAX_SOURCE_LIST_NOTE_CHARS) {
+      throw invalid(
+        sourcePath,
+        `${field}.note must be a string of at most ${String(MAX_SOURCE_LIST_NOTE_CHARS)} characters`,
+      );
+    }
+    entry.note = raw.note;
+  }
+  return entry;
+}
+
+function validateSourceLists(raw: unknown, sourcePath: string): IntakeSourceListsConfig {
+  if (!isRecord(raw)) {
+    throw invalid(sourcePath, 'sourceLists must be an object');
+  }
+  const unknownKeys = Object.keys(raw)
+    .filter((key) => !(INTAKE_SOURCE_LIST_NAMES as readonly string[]).includes(key));
+  if (unknownKeys.length > 0) {
+    throw invalid(sourcePath, `sourceLists has unsupported keys: ${unknownKeys.join(', ')}`);
+  }
+  const lists = {} as IntakeSourceListsConfig;
+  for (const list of INTAKE_SOURCE_LIST_NAMES) {
+    const entries = raw[list];
+    if (entries === undefined) {
+      throw invalid(sourcePath, `sourceLists.${list} is required (use an empty array)`);
+    }
+    if (!Array.isArray(entries)) {
+      throw invalid(sourcePath, `sourceLists.${list} must be an array`);
+    }
+    if (entries.length > MAX_SOURCE_LIST_ENTRIES) {
+      throw invalid(sourcePath, `sourceLists.${list} exceeds ${String(MAX_SOURCE_LIST_ENTRIES)} entries`);
+    }
+    const seen = new Set<string>();
+    lists[list] = entries.map((entry, index) => {
+      const validated = validateSourceListEntry(
+        entry,
+        sourcePath,
+        `sourceLists.${list}[${String(index)}]`,
+        list,
+      );
+      if (seen.has(validated.pattern)) {
+        throw invalid(sourcePath, `sourceLists.${list} has a duplicate pattern '${validated.pattern}'`);
+      }
+      seen.add(validated.pattern);
+      return validated;
+    });
+  }
+  // A pattern in BOTH the trusted and denied list of the same domain is an
+  // operator contradiction — fail closed instead of silently letting the
+  // denied hit win at runtime.
+  for (const [trustedName, deniedName] of [
+    ['trustedSites', 'deniedSites'],
+    ['trustedPeople', 'deniedPeople'],
+  ] as const) {
+    const denied = new Set(lists[deniedName].map((entry) => entry.pattern));
+    for (const entry of lists[trustedName]) {
+      if (denied.has(entry.pattern)) {
+        throw invalid(
+          sourcePath,
+          `sourceLists pattern '${entry.pattern}' appears in both ${trustedName} and ${deniedName}`,
+        );
+      }
+    }
+  }
+  return lists;
+}
+
+// ── Source list mutation (Garden admin routes; htm9.11 UI builds on this) ──
+
+export interface IntakeSourceListMutation {
+  action: 'add' | 'remove';
+  list: IntakeSourceListName;
+  pattern: string;
+  note?: string;
+  /** Acting principal recorded on added entries. */
+  addedBy: string;
+  atMs: number;
+}
+
+/**
+ * Applies one add/remove mutation to the source lists and returns a fully
+ * re-validated config (fail closed: malformed patterns, duplicates, and
+ * trusted/denied contradictions all throw). Pure — the caller persists.
+ */
+export function applyIntakeSourceListMutation(
+  config: IntakePolicyConfig,
+  mutation: IntakeSourceListMutation,
+): IntakePolicyConfig {
+  if (!isIntakeSourceListName(mutation.list)) {
+    throw new Error(
+      `Intake source list mutation list must be one of: ${INTAKE_SOURCE_LIST_NAMES.join(', ')}`,
+    );
+  }
+  const pattern = normalizeSourceListPattern(
+    mutation.list,
+    mutation.pattern,
+    `sourceLists.${mutation.list} pattern`,
+  );
+  const current = config.sourceLists[mutation.list];
+  let nextEntries: IntakeSourceListEntry[];
+  if (mutation.action === 'add') {
+    if (current.some((entry) => entry.pattern === pattern)) {
+      throw new Error(`sourceLists.${mutation.list} already contains '${pattern}'`);
+    }
+    const addedBy = mutation.addedBy.trim();
+    if (!addedBy) {
+      throw new Error('Intake source list mutation addedBy must be non-empty');
+    }
+    const entry: IntakeSourceListEntry = { pattern, addedBy, addedAt: mutation.atMs };
+    if (mutation.note !== undefined && mutation.note.trim().length > 0) {
+      entry.note = mutation.note.trim();
+    }
+    nextEntries = [...current, entry];
+  } else {
+    if (!current.some((entry) => entry.pattern === pattern)) {
+      throw new Error(`sourceLists.${mutation.list} does not contain '${pattern}'`);
+    }
+    nextEntries = current.filter((entry) => entry.pattern !== pattern);
+  }
+  return validateIntakePolicy(
+    {
+      ...config,
+      sourceLists: { ...config.sourceLists, [mutation.list]: nextEntries },
+    },
+    `${INTAKE_POLICY_FILE_NAME} (source list mutation)`,
+  );
+}
+
 /**
  * Enforce-mode action for content that reaches a gated sink WITHOUT an
  * envelope (legacy/unscreened paths). Shadow mode never blocks regardless;
@@ -221,6 +504,8 @@ export interface IntakePolicyConfig {
    * instead of silently trusting a new surface.
    */
   sourceRiskTiers: Record<IntakeSourceClass, IntakeSourceRiskTier>;
+  /** Operator-curated trusted/denied sites and people (htm9.13). */
+  sourceLists: IntakeSourceListsConfig;
   quarantine: IntakePolicyQuarantineConfig;
   injectionClassifier: IntakeInjectionClassifierPolicyConfig;
   l2Screener: IntakeL2ScreenerPolicyConfig;
@@ -652,8 +937,8 @@ export function validateIntakePolicy(raw: unknown, sourcePath: string): IntakePo
     throw invalid(sourcePath, 'expected object');
   }
   const knownKeys = [
-    'schemaVersion', 'mode', 'sourceRiskTiers', 'quarantine', 'injectionClassifier',
-    'l2Screener', 'l3Screener', 'sinkGates',
+    'schemaVersion', 'mode', 'sourceRiskTiers', 'sourceLists', 'quarantine',
+    'injectionClassifier', 'l2Screener', 'l3Screener', 'sinkGates',
   ];
   const unknownKeys = Object.keys(raw).filter((key) => !knownKeys.includes(key));
   if (unknownKeys.length > 0) {
@@ -670,6 +955,7 @@ export function validateIntakePolicy(raw: unknown, sourcePath: string): IntakePo
     schemaVersion: 1,
     mode: mode as IntakeFirewallMode,
     sourceRiskTiers: validateSourceRiskTiers(raw.sourceRiskTiers, sourcePath),
+    sourceLists: validateSourceLists(raw.sourceLists, sourcePath),
     quarantine: validateQuarantine(raw.quarantine, sourcePath),
     injectionClassifier: validateInjectionClassifier(raw.injectionClassifier, sourcePath),
     l2Screener: validateL2Screener(raw.l2Screener, sourcePath),

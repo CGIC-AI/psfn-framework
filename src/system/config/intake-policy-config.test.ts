@@ -10,7 +10,11 @@ import {
 import {
   INTAKE_POLICY_FILE_NAME,
   INTAKE_POLICY_SEED_FILE_NAME,
+  INTAKE_SOURCE_LIST_NAMES,
+  applyIntakeSourceListMutation,
   injectionScoreThresholdForTier,
+  normalizeIntakePersonPattern,
+  normalizeIntakeSitePattern,
   isL3MandatoryTier,
   l2EscalationThresholdForTier,
   l2FailClosedActionForTier,
@@ -421,5 +425,149 @@ describe('intake policy owner file', () => {
       },
       INTAKE_POLICY_FILE_NAME,
     )).toThrow(/trifecta\.enforcementByTier\.untrusted is required/);
+  });
+
+  // ── htm9.13: sourceLists ──
+
+  const listEntry = (pattern: string) => ({
+    pattern,
+    addedBy: 'operator',
+    addedAt: 1_700_000_000_000,
+  });
+
+  function withLists(lists: Partial<IntakePolicyConfig['sourceLists']>): unknown {
+    return {
+      ...seedPolicy(),
+      sourceLists: {
+        trustedSites: [],
+        deniedSites: [],
+        trustedPeople: [],
+        deniedPeople: [],
+        ...lists,
+      },
+    };
+  }
+
+  it('validates the seed sourceLists (all four lists required, seeded empty)', () => {
+    const policy = seedPolicy();
+    for (const list of INTAKE_SOURCE_LIST_NAMES) {
+      expect(policy.sourceLists[list]).toEqual([]);
+    }
+
+    const { trustedSites: _omitted, ...partial } = policy.sourceLists;
+    expect(() => validateIntakePolicy(
+      { ...policy, sourceLists: partial },
+      INTAKE_POLICY_FILE_NAME,
+    )).toThrow(/sourceLists\.trustedSites is required/);
+    expect(() => validateIntakePolicy(
+      { ...seedPolicy(), sourceLists: undefined },
+      INTAKE_POLICY_FILE_NAME,
+    )).toThrow(/sourceLists must be an object/);
+  });
+
+  it('accepts exact hosts and *.suffix site patterns, normalized lowercase', () => {
+    const policy = validateIntakePolicy(withLists({
+      trustedSites: [listEntry('ArXiv.org'), listEntry('*.Example.Test')],
+    }), INTAKE_POLICY_FILE_NAME);
+    expect(policy.sourceLists.trustedSites.map((entry) => entry.pattern))
+      .toEqual(['arxiv.org', '*.example.test']);
+  });
+
+  it('fails closed on malformed site patterns (no regex, schemes, ports, or paths)', () => {
+    for (const bad of [
+      'https://arxiv.org',
+      'arxiv.org/path',
+      'arxiv.org:443',
+      'arxiv',
+      '*.org.*',
+      'a b.test',
+      '.*\\.arxiv\\.org',
+      '*.*.org',
+      '',
+    ]) {
+      expect(
+        () => validateIntakePolicy(withLists({ trustedSites: [listEntry(bad)] }), INTAKE_POLICY_FILE_NAME),
+        `pattern ${JSON.stringify(bad)} must be rejected`,
+      ).toThrow();
+    }
+  });
+
+  it('fails closed on malformed person patterns and entry fields', () => {
+    expect(() => validateIntakePolicy(
+      withLists({ trustedPeople: [listEntry('contact id with spaces')] }),
+      INTAKE_POLICY_FILE_NAME,
+    )).toThrow(/whitespace or control characters/);
+    expect(() => validateIntakePolicy(
+      withLists({ trustedPeople: [{ pattern: 'contact:alice', addedBy: '', addedAt: 1 }] }),
+      INTAKE_POLICY_FILE_NAME,
+    )).toThrow(/addedBy/);
+    expect(() => validateIntakePolicy(
+      withLists({ trustedPeople: [{ pattern: 'contact:alice', addedBy: 'op', addedAt: -5 }] }),
+      INTAKE_POLICY_FILE_NAME,
+    )).toThrow(/addedAt/);
+    expect(() => validateIntakePolicy(
+      withLists({ trustedPeople: [{ pattern: 'contact:alice', addedBy: 'op', addedAt: 1, extra: true }] }),
+      INTAKE_POLICY_FILE_NAME,
+    )).toThrow(/unsupported keys/);
+  });
+
+  it('rejects duplicates within a list and trusted/denied contradictions', () => {
+    expect(() => validateIntakePolicy(
+      withLists({ trustedSites: [listEntry('arxiv.org'), listEntry('ARXIV.org')] }),
+      INTAKE_POLICY_FILE_NAME,
+    )).toThrow(/duplicate pattern/);
+    expect(() => validateIntakePolicy(
+      withLists({ trustedSites: [listEntry('arxiv.org')], deniedSites: [listEntry('arxiv.org')] }),
+      INTAKE_POLICY_FILE_NAME,
+    )).toThrow(/both trustedSites and deniedSites/);
+    expect(() => validateIntakePolicy(
+      withLists({ trustedPeople: [listEntry('contact:x')], deniedPeople: [listEntry('contact:x')] }),
+      INTAKE_POLICY_FILE_NAME,
+    )).toThrow(/both trustedPeople and deniedPeople/);
+  });
+
+  it('applyIntakeSourceListMutation adds, removes, and fails closed', () => {
+    const base = seedPolicy();
+    const added = applyIntakeSourceListMutation(base, {
+      action: 'add',
+      list: 'trustedSites',
+      pattern: ' ArXiv.org ',
+      note: 'preprint host',
+      addedBy: 'operator',
+      atMs: 1_720_000_000_000,
+    });
+    expect(added.sourceLists.trustedSites).toEqual([{
+      pattern: 'arxiv.org',
+      addedBy: 'operator',
+      addedAt: 1_720_000_000_000,
+      note: 'preprint host',
+    }]);
+    // The original config is untouched (pure).
+    expect(base.sourceLists.trustedSites).toEqual([]);
+
+    expect(() => applyIntakeSourceListMutation(added, {
+      action: 'add', list: 'trustedSites', pattern: 'arxiv.org', addedBy: 'operator', atMs: 1,
+    })).toThrow(/already contains/);
+    expect(() => applyIntakeSourceListMutation(added, {
+      action: 'add', list: 'deniedSites', pattern: 'arxiv.org', addedBy: 'operator', atMs: 1,
+    })).toThrow(/both trustedSites and deniedSites/);
+    expect(() => applyIntakeSourceListMutation(added, {
+      action: 'add', list: 'trustedSites', pattern: 'not a host', addedBy: 'operator', atMs: 1,
+    })).toThrow();
+    expect(() => applyIntakeSourceListMutation(added, {
+      action: 'remove', list: 'trustedSites', pattern: 'other.test', addedBy: 'operator', atMs: 1,
+    })).toThrow(/does not contain/);
+
+    const removed = applyIntakeSourceListMutation(added, {
+      action: 'remove', list: 'trustedSites', pattern: 'arxiv.org', addedBy: 'operator', atMs: 1,
+    });
+    expect(removed.sourceLists.trustedSites).toEqual([]);
+  });
+
+  it('normalizers are exported for admin-route reuse and fail closed', () => {
+    expect(normalizeIntakeSitePattern('*.Example.ORG')).toBe('*.example.org');
+    expect(() => normalizeIntakeSitePattern('bad_host!.org')).toThrow();
+    expect(normalizeIntakePersonPattern('contact:alice')).toBe('contact:alice');
+    expect(() => normalizeIntakePersonPattern('a b')).toThrow();
   });
 });

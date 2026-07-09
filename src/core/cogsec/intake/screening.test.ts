@@ -194,3 +194,160 @@ describe('intake screening service (htm9.2)', () => {
     expect(tool.snapshot.subject).toEqual({ kind: 'body' });
   });
 });
+
+// ── htm9.13: source lists + light-touch data marking ──
+
+function makePolicyWithLists(
+  mode: 'shadow' | 'enforce',
+  lists: Partial<IntakePolicyConfig['sourceLists']>,
+): IntakePolicyConfig {
+  const seed = JSON.parse(readFileSync(POLICY_SEED_PATH, 'utf8')) as Record<string, unknown>;
+  return validateIntakePolicy({
+    ...seed,
+    mode,
+    sourceLists: {
+      trustedSites: [],
+      deniedSites: [],
+      trustedPeople: [],
+      deniedPeople: [],
+      ...lists,
+    },
+  }, 'intake-policy.test');
+}
+
+function makeListService(
+  mode: 'shadow' | 'enforce',
+  lists: Partial<IntakePolicyConfig['sourceLists']>,
+  scorer?: IntakeInjectionScorerPort,
+) {
+  return createIntakeScreeningService({
+    policy: makePolicyWithLists(mode, lists),
+    l1: createIntakeL1Scanner({ rulesPath: RULES_PATH, reloadCheckIntervalMs: -1 }),
+    ...(scorer ? { injectionScorer: scorer } : {}),
+    actor: 'test:intake-screening',
+  });
+}
+
+const listEntry = (pattern: string) => ({ pattern, addedBy: 'test', addedAt: 1_700_000_000_000 });
+
+describe('source-risk-scaled scrutiny via source lists (htm9.13)', () => {
+  it('lowers the effective tier one step on a trusted-site hit and records the adjustment', async () => {
+    const service = makeListService('shadow', { trustedSites: [listEntry('*.arxiv.org')] });
+    const result = await service.screen(CLEAN_TEXT, {
+      sourceClass: 'web_fetch',
+      origin: { ref: 'https://export.arxiv.org/abs/2403.14720' },
+      scope: 'context',
+    });
+    // web_fetch maps to 'untrusted' in the seed; the trusted hit lowers ONE step.
+    expect(result.snapshot.sourceRiskTier).toBe('standard');
+    expect(result.envelope.extractedFields['source_list.match'])
+      .toBe('trusted:trustedSites:*.arxiv.org');
+    expect(result.envelope.extractedFields['source_list.tier_adjustment'])
+      .toBe('untrusted->standard (lowered_one_step)');
+  });
+
+  it('raises the effective tier to hostile on a denied-site hit', async () => {
+    const service = makeListService('shadow', { deniedSites: [listEntry('malware.example')] });
+    const result = await service.screen(CLEAN_TEXT, {
+      sourceClass: 'web_fetch',
+      origin: { ref: 'https://malware.example/page' },
+      scope: 'context',
+    });
+    expect(result.snapshot.sourceRiskTier).toBe('hostile');
+    expect(result.envelope.extractedFields['source_list.tier_adjustment'])
+      .toBe('untrusted->hostile (raised_to_hostile)');
+  });
+
+  it('lowers the tier on a trusted-person hit by canonical contact id', async () => {
+    const service = makeListService('shadow', { trustedPeople: [listEntry('contact:alice')] });
+    const result = await service.screen(CLEAN_TEXT, {
+      sourceClass: 'document',
+      origin: { ref: 'discord:chan:msg:paper.pdf' },
+      canonicalContactId: 'contact:alice',
+      scope: 'context',
+    });
+    expect(result.snapshot.sourceRiskTier).toBe('standard');
+  });
+
+  it('trusted origin != safe: L1 still runs and quarantines hostile text from a trusted site', async () => {
+    const service = makeListService('enforce', { trustedSites: [listEntry('*.arxiv.org')] });
+    const result = await service.screen(HOSTILE_TEXT, {
+      sourceClass: 'web_fetch',
+      origin: { ref: 'https://arxiv.org/abs/1' },
+      scope: 'context',
+    });
+    expect(result.snapshot.sourceRiskTier).toBe('standard');
+    expect(result.action).toBe('quarantine');
+    expect(result.withheld).toBe(true);
+  });
+
+  it('applies the ADJUSTED tier to the L1.5 score threshold (lighter handling for trusted sites)', async () => {
+    // Seed thresholds: untrusted 0.75, standard 0.9 — a 0.8 score is a signal
+    // only for the unlisted origin.
+    const scorer: IntakeInjectionScorerPort = {
+      scannerId: 'onnx-prompt-injection',
+      classify: async () => ({ score: 0.8, labels: [] }),
+    };
+    const service = makeListService('shadow', { trustedSites: [listEntry('*.arxiv.org')] }, scorer);
+
+    const unlisted = await service.screen(CLEAN_TEXT, {
+      sourceClass: 'web_fetch',
+      origin: { ref: 'https://random-blog.example/post' },
+      scope: 'context',
+    });
+    expect(unlisted.action).toBe('sanitize'); // uncorroborated score signal
+
+    const listed = await service.screen(CLEAN_TEXT, {
+      sourceClass: 'web_fetch',
+      origin: { ref: 'https://arxiv.org/abs/2' },
+      scope: 'context',
+    });
+    expect(listed.action).toBe('pass'); // 0.8 < standard threshold 0.9
+  });
+});
+
+describe('data-marking plan on screening results (htm9.13)', () => {
+  it('computes a marking plan for markable classes from the adjusted tier', async () => {
+    const service = makeListService('shadow', { trustedSites: [listEntry('*.arxiv.org')] });
+
+    const unlisted = await service.screen(CLEAN_TEXT, {
+      sourceClass: 'web_fetch',
+      origin: { ref: 'https://random-blog.example/post' },
+      scope: 'context',
+    });
+    expect(unlisted.markingPlan?.intensity).toBe('wrap'); // untrusted + clean
+
+    const listed = await service.screen(CLEAN_TEXT, {
+      sourceClass: 'web_fetch',
+      origin: { ref: 'https://arxiv.org/abs/3' },
+      scope: 'context',
+    });
+    expect(listed.markingPlan?.intensity).toBe('wrap'); // standard + clean
+    expect(listed.envelope.extractedFields['marking.intensity']).toBe('wrap');
+    expect(listed.envelope.extractedFields['marking.provenance']).toBeTruthy();
+  });
+
+  it('computes no marking plan for conversational source classes', async () => {
+    const service = makeService('shadow');
+    const result = await service.screen(CLEAN_TEXT, {
+      sourceClass: 'primary_user',
+      origin: { ref: 'discord:chan:msg' },
+      scope: 'context',
+    });
+    expect(result.markingPlan).toBeUndefined();
+  });
+
+  it('never applies marking to effectiveText at screening time (read-time seam), in either mode', async () => {
+    for (const mode of ['shadow', 'enforce'] as const) {
+      const service = makeListService(mode, {});
+      const result = await service.screen(CLEAN_TEXT, {
+        sourceClass: 'web_fetch',
+        origin: { ref: 'https://random-blog.example/post' },
+        scope: 'context',
+      });
+      expect(result.markingPlan?.intensity).toBe('wrap');
+      expect(result.effectiveText).toBe(CLEAN_TEXT);
+      expect(result.effectiveText).not.toContain('<external_content');
+    }
+  });
+});

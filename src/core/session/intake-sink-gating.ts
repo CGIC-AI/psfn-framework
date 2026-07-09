@@ -18,6 +18,7 @@ import { createComponentLogger } from '../../shared/logger.js';
 import type { SessionEntry } from './types.js';
 import { INTAKE_FIREWALL_NOTICE_TEMPLATES } from '../cogsec/intake-firewall-notice-templates.js';
 import type { IntakeSinkGate } from '../cogsec/intake/sink-gates.js';
+import { renderMarkedContent } from '../cogsec/intake/marking.js';
 import {
   INTAKE_SCREENING_METADATA_KEY,
   parseIntakeScreeningMetadata,
@@ -32,6 +33,8 @@ export interface PromptAssemblyGateSummary {
   withheldEntryIds: number[];
   /** Entries whose gate verdict was deny (includes shadow-mode would-denies). */
   deniedEntryIds: number[];
+  /** Entries whose content was wrapped/interleaved by data marking (enforce mode; htm9.13). */
+  markedEntryIds: number[];
 }
 
 /**
@@ -47,7 +50,11 @@ export function applyPromptAssemblySinkGate(
   gate: IntakeSinkGate | null,
   context: { channelId: string },
 ): { entries: SessionEntry[]; summary: PromptAssemblyGateSummary } {
-  const summary: PromptAssemblyGateSummary = { withheldEntryIds: [], deniedEntryIds: [] };
+  const summary: PromptAssemblyGateSummary = {
+    withheldEntryIds: [],
+    deniedEntryIds: [],
+    markedEntryIds: [],
+  };
   if (!gate) return { entries, summary };
 
   const mutatedRef: { entries: SessionEntry[] | null } = { entries: null };
@@ -88,6 +95,30 @@ export function applyPromptAssemblySinkGate(
     if (decision.verdict === 'deny') {
       summary.deniedEntryIds.push(entry.id);
       withholdEntry(index, entry);
+      continue;
+    }
+
+    // htm9.13: light-touch data marking, applied at READ time so the marker
+    // never exists in persisted content and inbound re-scans only ever see
+    // forged markers. Enforce mode applies the plan; shadow mode audits it.
+    if (screening.marking && screening.marking.intensity !== 'none' && !screening.withheld) {
+      if (gate.mode !== 'enforce') {
+        log.debug('Shadow mode: data-marking plan computed but not applied', {
+          channelId: context.channelId,
+          entryId: entry.id,
+          intensity: screening.marking.intensity,
+        });
+        continue;
+      }
+      const sourceRef = screening.envelopes[0]?.envelopeId;
+      mutatedRef.entries ??= [...entries];
+      mutatedRef.entries[index] = {
+        ...entry,
+        content: renderMarkedContent(entry.content, screening.marking, {
+          ...(sourceRef ? { sourceRef: `intake-envelope:${sourceRef}` } : {}),
+        }),
+      };
+      summary.markedEntryIds.push(entry.id);
     }
   }
 

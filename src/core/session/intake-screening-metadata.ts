@@ -22,6 +22,10 @@ import {
   isIntakeSourceRiskTier,
   type IntakeEnvelopeSnapshot,
 } from '../../shared/contracts/intake-envelope.js';
+import {
+  isIntakeMarkingIntensity,
+  type IntakeMarkingPlan,
+} from '../cogsec/intake/marking.js';
 
 export const INTAKE_SCREENING_METADATA_KEY = 'intakeScreening';
 const INTAKE_SCREENING_METADATA_SCHEMA_VERSION = 1;
@@ -33,6 +37,12 @@ export interface IntakeScreeningSessionMetadata {
   /** True when enforce-mode quarantine replaced the entry content. */
   withheld: boolean;
   envelopes: IntakeEnvelopeSnapshot[];
+  /**
+   * Data-marking plan for the entry body (htm9.13), computed at screening
+   * time. The prompt-assembly sink gate applies it at read time in enforce
+   * mode; shadow mode audits it only.
+   */
+  marking?: IntakeMarkingPlan;
 }
 
 interface SessionMetadataEnvelope {
@@ -60,6 +70,7 @@ export function buildSessionMetadataWithIntakeScreening(
     mode: 'shadow' | 'enforce';
     withheld: boolean;
     envelopes: readonly IntakeEnvelopeSnapshot[];
+    marking?: IntakeMarkingPlan;
   },
 ): string {
   if (screening.envelopes.length === 0) {
@@ -71,6 +82,7 @@ export function buildSessionMetadataWithIntakeScreening(
     mode: screening.mode,
     withheld: screening.withheld,
     envelopes: [...screening.envelopes],
+    ...(screening.marking ? { marking: { ...screening.marking } } : {}),
   };
   return JSON.stringify({
     ...base,
@@ -138,10 +150,27 @@ export function parseIntakeScreeningMetadata(
   if (!Array.isArray(raw.envelopes) || raw.envelopes.length === 0) {
     throw new Error('Intake screening metadata envelopes must be a non-empty array');
   }
+  let marking: IntakeMarkingPlan | undefined;
+  if (raw.marking !== undefined) {
+    if (!isRecord(raw.marking)) {
+      throw new Error('Intake screening metadata marking must be an object');
+    }
+    if (!isIntakeMarkingIntensity(raw.marking.intensity)) {
+      throw new Error('Intake screening metadata marking.intensity is not a known intensity');
+    }
+    if (typeof raw.marking.provenanceNote !== 'string') {
+      throw new Error('Intake screening metadata marking.provenanceNote must be a string');
+    }
+    marking = {
+      intensity: raw.marking.intensity,
+      provenanceNote: raw.marking.provenanceNote,
+    };
+  }
   return {
     schemaVersion: INTAKE_SCREENING_METADATA_SCHEMA_VERSION,
     mode: raw.mode,
     withheld: raw.withheld,
     envelopes: raw.envelopes.map((snapshot, index) => parseSnapshot(snapshot, index)),
+    ...(marking ? { marking } : {}),
   };
 }

@@ -857,6 +857,9 @@ export class SessionManager {
         mode: screened.mode,
         withheld: screened.withheld,
         envelopes: [screened.snapshot],
+        // htm9.13: the marking plan rides the metadata so prompt assembly can
+        // apply it at read time (enforce) or audit it (shadow).
+        ...(screened.markingPlan ? { marking: screened.markingPlan } : {}),
       });
     }
 

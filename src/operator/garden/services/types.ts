@@ -191,6 +191,7 @@ export type {
   SettingsValidationError,
   ConfigUpdateResult,
   AdminSettingsService,
+  AdminIntakeSourceListMutationInput,
   AdminChannelEnvelopeRow,
   AdminChannelEnvelopeData,
 } from './types/settings.js';

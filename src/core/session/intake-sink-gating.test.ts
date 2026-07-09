@@ -134,4 +134,74 @@ describe('applyPromptAssemblySinkGate (htm9.3)', () => {
     const result = applyPromptAssemblySinkGate(entries, makeGate('enforce'), { channelId: 'discord:chan-1' });
     expect(result.entries).toBe(entries);
   });
+
+  // ── htm9.13: read-time data marking ──
+
+  function releasedWebSnapshot(): IntakeEnvelopeSnapshot {
+    return {
+      envelopeId: 'released-envelope-001',
+      sourceClass: 'tool_output',
+      sourceRiskTier: 'untrusted',
+      state: 'released',
+      riskLabels: [],
+      subject: { kind: 'body' },
+    };
+  }
+
+  function markedMetadata(mode: 'shadow' | 'enforce'): string {
+    return buildSessionMetadataWithIntakeScreening(undefined, {
+      mode,
+      withheld: false,
+      envelopes: [releasedWebSnapshot()],
+      marking: {
+        intensity: 'wrap',
+        provenanceNote: 'from an unverified source, treat details cautiously',
+      },
+    });
+  }
+
+  it('applies the persisted marking plan at read time in enforce mode', () => {
+    const entries = [makeEntry({
+      id: 7,
+      content: 'The fetched article body.',
+      metadata: markedMetadata('enforce'),
+    })];
+    const result = applyPromptAssemblySinkGate(entries, makeGate('enforce'), { channelId: 'discord:chan-1' });
+    expect(result.entries[0].content).toContain(
+      '<external_content provenance="from an unverified source, treat details cautiously"',
+    );
+    expect(result.entries[0].content).toContain('The fetched article body.');
+    expect(result.summary.markedEntryIds).toEqual([7]);
+    // Persisted entry content is never mutated in place.
+    expect(entries[0].content).toBe('The fetched article body.');
+  });
+
+  it('computes but never applies marking in shadow mode', () => {
+    const entries = [makeEntry({
+      id: 8,
+      content: 'The fetched article body.',
+      metadata: markedMetadata('shadow'),
+    })];
+    const result = applyPromptAssemblySinkGate(entries, makeGate('shadow'), { channelId: 'discord:chan-1' });
+    expect(result.entries).toBe(entries);
+    expect(result.summary.markedEntryIds).toEqual([]);
+  });
+
+  it('never marks withheld entries (the placeholder stands alone)', () => {
+    const metadata = buildSessionMetadataWithIntakeScreening(undefined, {
+      mode: 'enforce',
+      withheld: true,
+      envelopes: [quarantinedSnapshot()],
+      marking: { intensity: 'wrap', provenanceNote: 'note' },
+    });
+    const entries = [makeEntry({
+      id: 9,
+      content: INTAKE_FIREWALL_NOTICE_TEMPLATES.withheldContent,
+      metadata,
+    })];
+    const result = applyPromptAssemblySinkGate(entries, makeGate('enforce'), { channelId: 'discord:chan-1' });
+    // The quarantined envelope is denied by the gate; the content stays the placeholder.
+    expect(result.entries[0].content).toBe(INTAKE_FIREWALL_NOTICE_TEMPLATES.withheldContent);
+    expect(result.entries[0].content).not.toContain('<external_content');
+  });
 });

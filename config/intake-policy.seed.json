@@ -47,5 +47,20 @@
     },
     "timeoutMs": 8000,
     "maxContentChars": 24000
+  },
+  "l3Screener": {
+    "model": "z-ai/glm-4.5-air",
+    "dualModel": false,
+    "secondaryModel": null,
+    "escalationConfidenceThresholdsByTier": {
+      "trusted": 0.9,
+      "standard": 0.8,
+      "untrusted": 0.7,
+      "hostile": 0.6
+    },
+    "mandatoryTiers": ["hostile"],
+    "timeoutMs": 30000,
+    "maxContentChars": 48000,
+    "maxOutputTokens": 1200
   }
 }

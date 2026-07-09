@@ -73,6 +73,18 @@ function testPolicy(): IntakePolicyConfig {
         timeoutMs: 8000,
         maxContentChars: 24000,
       },
+      l3Screener: {
+        model: 'z-ai/glm-4.5-air',
+        dualModel: false,
+        secondaryModel: null,
+        escalationConfidenceThresholdsByTier: {
+          trusted: 0.9, standard: 0.8, untrusted: 0.7, hostile: 0.6,
+        },
+        mandatoryTiers: ['hostile'],
+        timeoutMs: 30000,
+        maxContentChars: 48000,
+        maxOutputTokens: 1200,
+      },
     },
     'test-policy',
   );
@@ -127,6 +139,13 @@ const GOOD_RESPONSE = JSON.stringify({
   labels: ['injection/override_attempt', 'injection/role_confusion'],
   injectionConfidence: 0.91,
   summary: 'Content tries to override the assistant instructions and assume a new role.',
+});
+
+/** A verdict that flags nothing — stays 'classified', never escalates to L3. */
+const BENIGN_RESPONSE = JSON.stringify({
+  labels: [],
+  injectionConfidence: 0.1,
+  summary: 'A short article about container gardening on balconies.',
 });
 
 // ── screenL2: successful classification ──
@@ -281,24 +300,71 @@ describe('evaluateL2 routing', () => {
     const outcome = await evaluateL2(evalInput({
       context: baseContext({ sourceClass: 'web_fetch', sourceRiskTier: 'untrusted' }),
       priorScore: 0.8, // >= untrusted escalation threshold (0.6)
-      fetch: fetchReturning(GOOD_RESPONSE, captured),
+      fetch: fetchReturning(BENIGN_RESPONSE, captured),
     }));
     expect(outcome.kind).toBe('classified');
     if (outcome.kind === 'classified') {
-      expect(outcome.classification.injectionConfidence).toBe(0.91);
+      expect(outcome.classification.injectionConfidence).toBe(0.1);
     }
     expect(captured).toHaveLength(1);
   });
 
-  it('escalates a mandatory (hostile) tier even at zero prior score', async () => {
+  it('escalates a mandatory (hostile) tier to L2, then hands off to L3 (l3-mandatory)', async () => {
     const captured: CapturedRequest[] = [];
     const outcome = await evaluateL2(evalInput({
       context: baseContext({ sourceClass: 'image_ocr', sourceRiskTier: 'hostile' }),
       priorScore: 0,
-      fetch: fetchReturning(GOOD_RESPONSE, captured),
+      fetch: fetchReturning(BENIGN_RESPONSE, captured),
     }));
-    expect(outcome.kind).toBe('classified');
+    // hostile is in l3Screener.mandatoryTiers: even a benign L2 verdict must
+    // continue into mandatory L3 deep screening.
+    expect(outcome.kind).toBe('escalate_l3');
     expect(captured).toHaveLength(1);
+  });
+});
+
+// ── evaluateL2: L3 escalation seam (htm9.7) ──
+
+describe('evaluateL2 L3 escalation', () => {
+  function evalInput(overrides: Partial<EvaluateL2Input>): EvaluateL2Input {
+    return {
+      text: 'some untrusted content',
+      context: baseContext(),
+      priorScore: 1,
+      config: testPolicy(),
+      backend: BACKEND,
+      ...overrides,
+    };
+  }
+
+  it('escalates to L3 when the L2 verdict carries a quarantine-family label', async () => {
+    const outcome = await evaluateL2(evalInput({
+      fetch: fetchReturning(GOOD_RESPONSE),
+    }));
+    expect(outcome.kind).toBe('escalate_l3');
+    if (outcome.kind === 'escalate_l3') {
+      // The L2 classification rides along for the L3 tier and the audit trail.
+      expect(outcome.classification.labels).toContain('injection/override_attempt');
+      expect(outcome.reason).toContain('l2-labels:');
+    }
+  });
+
+  it('escalates to L3 on high injection confidence without a flagged label', async () => {
+    const response = JSON.stringify({
+      labels: ['content/harmless_fact'],
+      injectionConfidence: 0.75, // >= untrusted L3 confidence threshold (0.7)
+      summary: 'Suspiciously persuasive text without a clear injection marker.',
+    });
+    const outcome = await evaluateL2(evalInput({ fetch: fetchReturning(response) }));
+    expect(outcome.kind).toBe('escalate_l3');
+    if (outcome.kind === 'escalate_l3') {
+      expect(outcome.reason).toContain('l2-confidence');
+    }
+  });
+
+  it('does NOT escalate a benign verdict on a non-mandatory tier', async () => {
+    const outcome = await evaluateL2(evalInput({ fetch: fetchReturning(BENIGN_RESPONSE) }));
+    expect(outcome.kind).toBe('classified');
   });
 });
 

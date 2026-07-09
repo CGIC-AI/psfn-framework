@@ -5,8 +5,8 @@
 // screener is a TOOL-LESS OpenRouter chat call: dual-LLM discipline (CaMeL,
 // arXiv 2503.18813) — it SEES untrusted content but holds NO tools and NO
 // capabilities, so a successful injection inside the content cannot make it act.
-// The request body carries no `tools` field; that invariant is asserted here
-// and pinned by the tests.
+// The request body carries no `tools` field; that invariant lives in the shared
+// transport (screener-transport.ts) and is pinned by the tests.
 //
 // Placement: gateway process. The gateway is the secret holder, so it resolves
 // the OpenRouter base URL + API key (never logged) and passes them in as the
@@ -31,10 +31,12 @@
 //   extractedFields) so the decision layer can fold it into the `screened`
 //   transition without this module owning the state machine.
 //
-// L3 seam (htm9.7): `evaluateL2` returns a `classified` outcome carrying the raw
-// classification; htm9.7 will inspect that classification (and its own config)
-// at the marked seam below to add an `escalate_l3` outcome for deeper screening.
-// This module deliberately does NOT decide L3 — it only produces the L2 verdict.
+// L3 escalation (htm9.7): a successful L2 verdict that FLAGS the content — a
+// quarantine-family risk label, or an injection confidence at/above the tier's
+// `l3Screener.escalationConfidenceThresholdsByTier` — or a tier listed in
+// `l3Screener.mandatoryTiers` returns an `escalate_l3` outcome instead of
+// `classified`. The decision layer then runs the L3 heavy screener
+// (l3-screener.ts); this module only routes, it never decides the L3 verdict.
 
 import { createComponentLogger } from '../../../shared/logger.js';
 import {
@@ -50,6 +52,13 @@ import {
   type IntakeL2FailClosedAction,
   type IntakePolicyConfig,
 } from '../../../system/config/intake-policy-config.js';
+import {
+  callToolLessJsonScreener,
+  stripJsonFences,
+  type ScreenerBackend,
+  type ScreenerFetch,
+} from './screener-transport.js';
+import { shouldEscalateToL3 } from './l3-screener.js';
 
 const log = createComponentLogger('GatewayIntakeL2');
 
@@ -70,12 +79,7 @@ const DEFAULT_MAX_CONTENT_CHARS = 24000;
 // ── Public types ──
 
 /** Gateway-resolved OpenRouter connection for the L2 screener (secret-bearing). */
-export interface L2ScreenerBackend {
-  /** OpenRouter API base URL, e.g. https://openrouter.ai/api/v1 */
-  apiBaseUrl: string;
-  /** Resolved OpenRouter API key (never logged). */
-  apiKey: string;
-}
+export type L2ScreenerBackend = ScreenerBackend;
 
 /** Provenance metadata handed to the screener alongside the untrusted content. */
 export interface L2ScreenerContext {
@@ -98,20 +102,7 @@ export interface L2Classification {
 }
 
 /** Minimal fetch surface so tests inject a stub — no live network in tests. */
-export type L2ScreenerFetch = (
-  input: string,
-  init: {
-    method: string;
-    headers: Record<string, string>;
-    body: string;
-    signal?: AbortSignal;
-  },
-) => Promise<{
-  ok: boolean;
-  status: number;
-  statusText: string;
-  text(): Promise<string>;
-}>;
+export type L2ScreenerFetch = ScreenerFetch;
 
 export interface L2ScreenerDeps {
   backend: L2ScreenerBackend;
@@ -178,126 +169,7 @@ function buildUserMessage(text: string, context: L2ScreenerContext): string {
   ].join('\n');
 }
 
-// ── OpenRouter call ──
-
-function resolveFetch(deps: L2ScreenerDeps): L2ScreenerFetch {
-  if (deps.fetch) return deps.fetch;
-  const globalFetch = (globalThis as { fetch?: unknown }).fetch;
-  if (typeof globalFetch !== 'function') {
-    throw new L2ScreenerError('L2 screener requires a fetch implementation');
-  }
-  return globalFetch as unknown as L2ScreenerFetch;
-}
-
-function buildChatCompletionsUrl(apiBaseUrl: string): string {
-  const base = apiBaseUrl.endsWith('/') ? apiBaseUrl : `${apiBaseUrl}/`;
-  return new URL('chat/completions', base).toString();
-}
-
-interface OpenRouterChoiceMessage {
-  content?: unknown;
-}
-
-function extractMessageText(message: OpenRouterChoiceMessage | undefined): string {
-  if (!message) return '';
-  const { content } = message;
-  if (typeof content === 'string') return content;
-  if (Array.isArray(content)) {
-    return content
-      .map((part) => {
-        if (typeof part === 'string') return part;
-        if (part && typeof part === 'object' && 'text' in part) {
-          const partText = (part as { text?: unknown }).text;
-          return typeof partText === 'string' ? partText : '';
-        }
-        return '';
-      })
-      .join('');
-  }
-  return '';
-}
-
-async function callScreener(
-  text: string,
-  context: L2ScreenerContext,
-  deps: L2ScreenerDeps,
-): Promise<string> {
-  const fetchImpl = resolveFetch(deps);
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), deps.timeoutMs);
-
-  // Tool-less request body (dual-LLM discipline). There is intentionally NO
-  // `tools` key: the screener sees untrusted content but holds no capabilities.
-  const body: Record<string, unknown> = {
-    model: deps.model,
-    temperature: 0,
-    response_format: { type: 'json_object' },
-    messages: [
-      { role: 'system', content: CLASSIFIER_SYSTEM_PROMPT },
-      { role: 'user', content: buildUserMessage(text, context) },
-    ],
-  };
-
-  let response: Awaited<ReturnType<L2ScreenerFetch>>;
-  try {
-    response = await fetchImpl(buildChatCompletionsUrl(deps.backend.apiBaseUrl), {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${deps.backend.apiKey}`,
-      },
-      body: JSON.stringify(body),
-      signal: controller.signal,
-    });
-  } catch (error) {
-    const detail = error instanceof Error ? error.message : String(error);
-    const aborted = controller.signal.aborted;
-    throw new L2ScreenerError(
-      aborted
-        ? `L2 screener call timed out after ${String(deps.timeoutMs)}ms`
-        : `L2 screener call failed: ${detail}`,
-    );
-  } finally {
-    clearTimeout(timeout);
-  }
-
-  if (!response.ok) {
-    const detail = await response.text().catch(() => '');
-    throw new L2ScreenerError(
-      `L2 screener returned ${String(response.status)} ${response.statusText}`
-      + (detail ? `: ${detail.slice(0, 500)}` : ''),
-    );
-  }
-
-  const rawText = await response.text();
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(rawText);
-  } catch (error) {
-    throw new L2ScreenerError(`L2 screener returned non-JSON response: ${String(error)}`);
-  }
-  const choices = (parsed as { choices?: unknown }).choices;
-  if (!Array.isArray(choices) || choices.length === 0) {
-    throw new L2ScreenerError('L2 screener response contained no choices');
-  }
-  const message = (choices[0] as { message?: OpenRouterChoiceMessage }).message;
-  const content = extractMessageText(message);
-  if (content.trim().length === 0) {
-    throw new L2ScreenerError('L2 screener response contained no assistant content');
-  }
-  return content;
-}
-
 // ── Response schema validation (fail closed) ──
-
-function stripJsonFences(content: string): string {
-  const trimmed = content.trim();
-  if (!trimmed.startsWith('```')) return trimmed;
-  // Tolerate ```json ... ``` fencing some models emit despite json_object mode.
-  const withoutOpen = trimmed.replace(/^```[a-zA-Z0-9]*\s*\n?/u, '');
-  const closeIndex = withoutOpen.lastIndexOf('```');
-  return (closeIndex >= 0 ? withoutOpen.slice(0, closeIndex) : withoutOpen).trim();
-}
 
 function sanitizeSummary(value: unknown): string {
   if (typeof value !== 'string') {
@@ -387,7 +259,16 @@ export async function screenL2(
   const bounded = text.length > maxChars ? text.slice(0, maxChars) : text;
 
   const startedAt = performance.now();
-  const content = await callScreener(bounded, context, deps);
+  const content = await callToolLessJsonScreener({
+    backend: deps.backend,
+    model: deps.model,
+    timeoutMs: deps.timeoutMs,
+    systemPrompt: CLASSIFIER_SYSTEM_PROMPT,
+    userMessage: buildUserMessage(bounded, context),
+    ...(deps.fetch ? { fetch: deps.fetch } : {}),
+    screenerName: 'L2 screener',
+    makeError: (message) => new L2ScreenerError(message),
+  });
   const latencyMs = performance.now() - startedAt;
   const classification = parseClassification(content, deps.model, latencyMs);
 
@@ -417,6 +298,12 @@ export interface EvaluateL2Input {
 export type L2ScreeningOutcome =
   | { kind: 'skipped'; reason: string }
   | { kind: 'classified'; classification: L2Classification }
+  /**
+   * The L2 verdict (or the tier's mandatory-deep-screening policy) demands the
+   * L3 heavy screener. The caller MUST run L3 (l3-screener.ts `evaluateL3`);
+   * the L2 classification is carried for the L3 routing decision and audit.
+   */
+  | { kind: 'escalate_l3'; classification: L2Classification; reason: string }
   | { kind: 'failed_closed'; action: IntakeL2FailClosedAction; error: string };
 
 /**
@@ -426,9 +313,9 @@ export type L2ScreeningOutcome =
  * source tier's configured `failClosedActionByTier` (quarantine for high-risk,
  * L1-labels-only for trusted). Never silent-pass.
  *
- * L3 seam (htm9.7): a `classified` outcome carries the full classification;
- * htm9.7 will add an `escalate_l3` branch here keyed off that classification
- * and its own config, without changing L2's verdict semantics.
+ * L3 escalation (htm9.7): a successful classification that flags the content —
+ * or a tier that mandates deep screening — returns `escalate_l3` instead of
+ * `classified`, carrying the L2 verdict for the L3 tier to consume.
  */
 export async function evaluateL2(input: EvaluateL2Input): Promise<L2ScreeningOutcome> {
   const { config, context } = input;
@@ -450,10 +337,19 @@ export async function evaluateL2(input: EvaluateL2Input): Promise<L2ScreeningOut
       maxContentChars: config.l2Screener.maxContentChars,
       ...(input.fetch ? { fetch: input.fetch } : {}),
     });
-    // ── htm9.7 L3 seam ──
-    // A successful L2 verdict is available here. htm9.7 will decide whether
-    // this classification warrants heavy L3 escalation and, if so, return an
-    // `escalate_l3` outcome instead of `classified`.
+    // ── htm9.7 L3 escalation ──
+    // A flagged L2 verdict — or a tier whose policy mandates deep screening —
+    // hands off to the L3 heavy screener instead of standing as the final word.
+    const trigger = shouldEscalateToL3(config, tier, {
+      labels: classification.labels,
+      injectionConfidence: classification.injectionConfidence,
+    });
+    if (trigger.escalate) {
+      log.warn(
+        `L2 verdict escalates to L3 for ${context.sourceClass}/${tier}: ${trigger.reason}`,
+      );
+      return { kind: 'escalate_l3', classification, reason: trigger.reason };
+    }
     return { kind: 'classified', classification };
   } catch (error) {
     const action = l2FailClosedActionForTier(config, tier);

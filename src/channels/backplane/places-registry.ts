@@ -19,6 +19,7 @@ import {
 } from '../../shared/contracts/places-registry.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
 import { isRecord } from '../../shared/utils/types.js';
+import { assertNoUnknownKeys } from './config-validation.js';
 
 const ID_TOKEN_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u;
 const PLACE_KINDS = new Set<string>(['physical', 'virtual']);
@@ -66,8 +67,20 @@ function parsePlaceKind(value: unknown, fieldName: string): PlaceKind {
 
 /**
  * Optional room-privacy field (psfn-framework-s10rm). Absent means `public`;
- * an unknown value fails closed at parse time so a typo can never silently
+ * an unknown *value* fails closed at parse time so a typo can never silently
  * demote a private room to public delivery.
+ *
+ * 08-L3 note: a MISSPELLED privacy *key* (e.g. `"privicy"`) is now caught by
+ * `assertNoUnknownKeys` in `parsePlaceConfig` — it throws before this function
+ * ever sees an undefined value, closing the real fail-open. The absent-means-
+ * `public` default itself is deliberately left intact: `resolvePlacePrivacy`
+ * (`shared/contracts/places-registry`) is the single canonical normalizer and
+ * is depended on by BOTH the gateway delivery lane
+ * (`boundary/gateway/companion-channels`) and the agent-side room-window gate
+ * (`core/agent/companion-room-window`). Flipping the default to `private`
+ * would narrow delivery across every place that omits the field and is a
+ * deliberate product change owning those two consumers — out of scope here and
+ * intentionally NOT done, to avoid silently changing existing deployments.
  */
 function parsePlacePrivacy(value: unknown, fieldName: string): PlacePrivacy | undefined {
   if (value === undefined) return undefined;
@@ -128,6 +141,11 @@ function parseAffordanceConfig(value: unknown, fieldName: string): AffordanceCon
   if (!isRecord(value)) {
     throw new Error(`${fieldName} must be an object`);
   }
+  assertNoUnknownKeys(
+    value,
+    ['affordanceId', 'role', 'kind', 'backend', 'displayName', 'entityId', 'control'],
+    fieldName,
+  );
   const affordanceId = assertIdToken(
     parseConfiguredString(value.affordanceId, `${fieldName}.affordanceId`),
     `${fieldName}.affordanceId`,
@@ -154,6 +172,7 @@ function parseSiteConfig(value: unknown, fieldName: string): SiteConfig {
   if (!isRecord(value)) {
     throw new Error(`${fieldName} must be an object`);
   }
+  assertNoUnknownKeys(value, ['siteId', 'displayName', 'kind'], fieldName);
   return {
     siteId: assertIdToken(parseConfiguredString(value.siteId, `${fieldName}.siteId`), `${fieldName}.siteId`),
     displayName: parseConfiguredString(value.displayName, `${fieldName}.displayName`),
@@ -165,6 +184,15 @@ function parsePlaceConfig(value: unknown, fieldName: string): PlaceConfig {
   if (!isRecord(value)) {
     throw new Error(`${fieldName} must be an object`);
   }
+  // Fail closed on unknown keys (H9/T1, 08-L3). A typo'd `privacy` key
+  // (e.g. `"privicy"`) would otherwise be silently dropped, leaving
+  // `value.privacy` undefined and the room defaulting to `public` — a silent
+  // privacy demotion. Rejecting unknown keys means a typo throws here instead.
+  assertNoUnknownKeys(
+    value,
+    ['placeId', 'siteId', 'displayName', 'kind', 'haAreaId', 'description', 'mirrorsPlaceId', 'privacy', 'affordances'],
+    fieldName,
+  );
   const placeId = assertIdToken(parseConfiguredString(value.placeId, `${fieldName}.placeId`), `${fieldName}.placeId`);
   const siteId = assertIdToken(parseConfiguredString(value.siteId, `${fieldName}.siteId`), `${fieldName}.siteId`);
   const displayName = parseConfiguredString(value.displayName, `${fieldName}.displayName`);
@@ -265,6 +293,7 @@ export function parsePlacesRegistryConfig(
   if (!isRecord(rawConfig)) {
     throw new Error(`${sourceLabel} must contain a JSON object at the root`);
   }
+  assertNoUnknownKeys(rawConfig, ['schemaVersion', 'sites', 'places'], sourceLabel);
   if (rawConfig.schemaVersion !== 1) {
     throw new Error(`${sourceLabel}.schemaVersion must be 1`);
   }

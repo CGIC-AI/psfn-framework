@@ -34,6 +34,7 @@ import type { ApiAuthPrincipal } from './http/auth.js';
 import { normalizeChannelPrivacy, type ChannelPrivacy } from '../../system/trust/context-envelope.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
 import { isRecord } from '../../shared/utils/types.js';
+import { assertNoUnknownKeys } from './config-validation.js';
 
 const ID_TOKEN_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u;
 const CLAIM_TYPE_PATTERN = /^[a-z0-9][a-z0-9._-]{0,63}$/u;
@@ -203,6 +204,22 @@ function parseAuthConfig(value: unknown, fieldName: string): SatelliteEndpointAu
   if (!isRecord(value)) {
     throw new Error(`${fieldName} must be an object`);
   }
+  // Fail closed on unknown keys (H9/T1, 03-M2). These are the exact keys the
+  // C1/H4 per-endpoint credential logic reads: a typo'd `apiKeyPrincipalIds`
+  // or `clientCert*` binding must throw, never be silently dropped into an
+  // unauthenticated / over-broad auth posture.
+  assertNoUnknownKeys(
+    value,
+    [
+      'mode',
+      'apiKeyPrincipalIds',
+      'clientCertFingerprintSha256',
+      'clientCertSpkiSha256',
+      'clientCertSubject',
+      'clientCertSan',
+    ],
+    fieldName,
+  );
   const mode = parseConfiguredString(value.mode, `${fieldName}.mode`);
   if (mode !== 'api_key' && mode !== 'mtls') {
     throw new Error(`${fieldName}.mode must be one of: api_key, mtls`);
@@ -279,6 +296,7 @@ function parseEndpointTransportConfig(value: unknown, fieldName: string): Satell
   if (!isRecord(value)) {
     throw new Error(`${fieldName} must be an object`);
   }
+  assertNoUnknownKeys(value, ['mode', 'chatCompletionsPath', 'voiceWebSocketPath'], fieldName);
   const transport: SatelliteEndpointTransportConfig = {
     mode: parseTransportMode(value.mode, `${fieldName}.mode`),
     ...(value.chatCompletionsPath !== undefined
@@ -303,6 +321,11 @@ function parseEndpointAudioRuntimeConfig(value: unknown, fieldName: string): Sat
   if (!isRecord(value)) {
     throw new Error(`${fieldName} must be an object`);
   }
+  assertNoUnknownKeys(
+    value,
+    ['inputDevice', 'outputDevice', 'sampleRateHz', 'channelCount', 'frameMs', 'wakeWordEnabled'],
+    fieldName,
+  );
   return {
     ...(value.inputDevice !== undefined
       ? { inputDevice: parseConfiguredString(value.inputDevice, `${fieldName}.inputDevice`) }
@@ -329,6 +352,7 @@ function parseEndpointRefreshConfig(value: unknown, fieldName: string): Satellit
   if (!isRecord(value)) {
     throw new Error(`${fieldName} must be an object`);
   }
+  assertNoUnknownKeys(value, ['intervalMs', 'jitterMs', 'restartPolicy', 'restartGraceMs'], fieldName);
   const refresh: SatelliteEndpointRefreshConfig = {
     intervalMs: parsePositiveInteger(value.intervalMs, `${fieldName}.intervalMs`),
     ...(value.jitterMs !== undefined
@@ -350,6 +374,7 @@ function parseEndpointRuntimeConfig(value: unknown, fieldName: string): Satellit
   if (!isRecord(value)) {
     throw new Error(`${fieldName} must be an object`);
   }
+  assertNoUnknownKeys(value, ['schemaVersion', 'transport', 'audio', 'refresh'], fieldName);
   if (value.schemaVersion !== 1) {
     throw new Error(`${fieldName}.schemaVersion must be 1`);
   }
@@ -367,6 +392,21 @@ function parseEndpointConfig(value: unknown, fieldName: string): SatelliteEndpoi
   if (!isRecord(value)) {
     throw new Error(`${fieldName} must be an object`);
   }
+  assertNoUnknownKeys(
+    value,
+    [
+      'endpointId',
+      'displayName',
+      'claimTypes',
+      'promptChannelType',
+      'auth',
+      'defaultIdentity',
+      'maxCapabilities',
+      'telemetryScopes',
+      'runtime',
+    ],
+    fieldName,
+  );
   const endpointId = assertIdToken(parseConfiguredString(value.endpointId, `${fieldName}.endpointId`), `${fieldName}.endpointId`);
   const displayName = parseConfiguredString(value.displayName, `${fieldName}.displayName`);
   const claimTypes = parseStringArray(value.claimTypes, `${fieldName}.claimTypes`)
@@ -382,6 +422,13 @@ function parseEndpointConfig(value: unknown, fieldName: string): SatelliteEndpoi
   if (!isRecord(value.defaultIdentity)) {
     throw new Error(`${fieldName}.defaultIdentity must be an object`);
   }
+  // The identity object carries `channelPrivacy`; a typo'd key here would be
+  // the same privacy fail-open, so reject unknown keys (H9/T1).
+  assertNoUnknownKeys(
+    value.defaultIdentity,
+    ['authorId', 'authorName', 'canonicalContactId', 'channelPrivacy'],
+    `${fieldName}.defaultIdentity`,
+  );
   const defaultIdentity = {
     authorId: assertIdToken(
       parseConfiguredString(value.defaultIdentity.authorId, `${fieldName}.defaultIdentity.authorId`),
@@ -412,6 +459,11 @@ function parseSatelliteConfig(value: unknown, fieldName: string): SatelliteConfi
   if (!isRecord(value)) {
     throw new Error(`${fieldName} must be an object`);
   }
+  assertNoUnknownKeys(
+    value,
+    ['satelliteId', 'displayName', 'mobility', 'staticLocationLabel', 'placeId', 'endpoints'],
+    fieldName,
+  );
   const satelliteId = assertIdToken(
     parseConfiguredString(value.satelliteId, `${fieldName}.satelliteId`),
     `${fieldName}.satelliteId`,
@@ -474,6 +526,7 @@ export function parseSatelliteRegistryConfig(
   if (!isRecord(rawConfig)) {
     throw new Error(`${sourceLabel} must contain a JSON object at the root`);
   }
+  assertNoUnknownKeys(rawConfig, ['schemaVersion', 'enabled', 'satellites'], sourceLabel);
   if (rawConfig.schemaVersion !== 1) {
     throw new Error(`${sourceLabel}.schemaVersion must be 1`);
   }

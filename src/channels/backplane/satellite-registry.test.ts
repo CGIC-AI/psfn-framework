@@ -957,3 +957,92 @@ describe('satellite per-endpoint credential isolation (Sprint-10 H4)', () => {
     expect(sharedKey.ok).toBe(true);
   });
 });
+
+describe('satellite registry unknown-key rejection (H9/T1, 03-M2)', () => {
+  const FINGERPRINT = 'a1'.repeat(32);
+
+  function registryWith(satelliteOverride: (base: Record<string, unknown>) => Record<string, unknown>) {
+    const baseSatellite: Record<string, unknown> = {
+      satelliteId: 'pi-voice',
+      displayName: 'Kitchen Voice Pi',
+      mobility: 'static',
+      endpoints: [
+        {
+          endpointId: 'wyoming-voice',
+          displayName: 'Wyoming Voice Endpoint',
+          claimTypes: ['voice-pi'],
+          promptChannelType: 'voice_satellite',
+          auth: { mode: 'mtls', clientCertFingerprintSha256: FINGERPRINT, apiKeyPrincipalIds: ['api-key-pi'] },
+          defaultIdentity: {
+            authorId: 'primary-user',
+            authorName: 'Primary User',
+            canonicalContactId: 'contact-primary-user',
+            channelPrivacy: 'private',
+          },
+          maxCapabilities: ['text'],
+        },
+      ],
+    };
+    return { schemaVersion: 1, enabled: true, satellites: [satelliteOverride(baseSatellite)] };
+  }
+
+  it('loads a VALID config exercising the C1/H4 per-endpoint credential keys (non-regression)', () => {
+    // Proves the unknown-key allowlist did NOT break the just-landed auth work:
+    // every credential key (apiKeyPrincipalIds + the clientCert* bindings) is
+    // legitimately read and must pass.
+    const registry = parseSatelliteRegistryConfig(registryWith((base) => {
+      (base.endpoints as Record<string, unknown>[])[0].auth = {
+        mode: 'mtls',
+        apiKeyPrincipalIds: ['api-key-pi'],
+        clientCertFingerprintSha256: FINGERPRINT,
+        clientCertSpkiSha256: 'b2'.repeat(32),
+        clientCertSubject: 'CN=pi-voice, O=PSFN',
+        clientCertSan: 'DNS:pi-voice.local',
+      };
+      return base;
+    }));
+    expect(registry.satellites[0]?.endpoints[0]?.auth).toMatchObject({
+      mode: 'mtls',
+      apiKeyPrincipalIds: ['api-key-pi'],
+      clientCertFingerprintSha256: FINGERPRINT,
+    });
+  });
+
+  it('throws naming a misspelled credential key in auth (a typo must never silently drop a binding)', () => {
+    expect(() => parseSatelliteRegistryConfig(registryWith((base) => {
+      (base.endpoints as Record<string, unknown>[])[0].auth = {
+        mode: 'mtls',
+        clientCertFingerprintSha256: FINGERPRINT,
+        apiKeyPrincipleIds: ['api-key-pi'], // typo: Principle vs Principal
+      };
+      return base;
+    }))).toThrow(/unknown key\(s\): "apiKeyPrincipleIds"/);
+  });
+
+  it('throws naming a misspelled channelPrivacy key in defaultIdentity', () => {
+    expect(() => parseSatelliteRegistryConfig(registryWith((base) => {
+      (base.endpoints as Record<string, unknown>[])[0].defaultIdentity = {
+        authorId: 'primary-user',
+        authorName: 'Primary User',
+        canonicalContactId: 'contact-primary-user',
+        chanelPrivacy: 'private', // typo
+      };
+      return base;
+    }))).toThrow(/unknown key\(s\): "chanelPrivacy"/);
+  });
+
+  it('throws on an unknown top-level satellite key', () => {
+    expect(() => parseSatelliteRegistryConfig(registryWith((base) => {
+      base.mobilty = 'static'; // typo
+      return base;
+    }))).toThrow(/unknown key\(s\): "mobilty"/);
+  });
+
+  it('throws on an unknown root registry key', () => {
+    expect(() => parseSatelliteRegistryConfig({
+      schemaVersion: 1,
+      enabled: true,
+      sattelites: [], // typo for satellites
+    })).toThrow(/unknown key\(s\): "sattelites"/);
+  });
+});

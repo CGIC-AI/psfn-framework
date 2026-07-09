@@ -48,4 +48,12 @@ describe('places registry room privacy (psfn-framework-s10rm)', () => {
     expect(() => parsePlacesRegistryConfig(registryWithPlace({ privacy: '' })))
       .toThrow(/privacy must not be empty/);
   });
+
+  it('fails closed on a MISSPELLED privacy KEY instead of silently demoting to public (H9/T1, 08-L3)', () => {
+    // Before the fix, `"privicy":"private"` was silently dropped: `value.privacy`
+    // stayed undefined and the room defaulted to `public` — a silent privacy
+    // fail-open. It must now throw at parse time, naming the offending key.
+    expect(() => parsePlacesRegistryConfig(registryWithPlace({ privicy: 'private' })))
+      .toThrow(/unknown key\(s\): "privicy"/);
+  });
 });

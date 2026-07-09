@@ -20,6 +20,7 @@ import { parseBooleanEnv, parseEnvList, parsePositiveIntEnv } from '../../shared
 import { buildShellExecPolicyConfig } from '../sandbox/execution/shell-policy-config.js';
 import {
   buildProviderCredentialEnv,
+  resolveOptionalCredentialReference,
   resolveOptionalEnvCredential,
 } from '../custody/credential-vault.js';
 import { requireGatewaySessionHmacKeyring } from './session-hmac-env.js';
@@ -28,7 +29,7 @@ import {
   buildRuntimeChannelsConfigOverrides,
   type StartupConfigHydrationResult,
 } from '../../app/startup/support/bootstrap-helpers.js';
-import type { PolicyConfig } from './policy.js';
+import type { PolicyConfig, WebBackendPolicy } from './policy.js';
 import type { GatewayNtfyConfig } from './ntfy-notifier.js';
 import type { SessionHmacKeyring } from '../../persistence/journals/journal-utils.js';
 import { resolveCompanionStateDir } from '../../persistence/layout.js';
@@ -238,6 +239,56 @@ function parseVaultActionsEnv(value: string | undefined): Array<(typeof ALL_VAUL
   return actions;
 }
 
+// Resolve the explicit web backend (bead psfn-framework-htm9.10). When the
+// OpenRouter web tools are enabled in providers.json, the gateway resolves the
+// OpenRouter base URL + API key here (the gateway is the secret holder) and
+// fails closed if any required piece is missing — there is no silent fallback
+// to the self-hosted lane. When not enabled, the self-hosted path is selected.
+function resolveWebBackendPolicy(
+  config: SubstrateConfig,
+  env: GatewayBootstrapOptions['env'],
+): WebBackendPolicy {
+  const webTools = config.openRouterWebTools;
+  if (!webTools?.enabled) {
+    return { kind: 'self_hosted' };
+  }
+
+  const apiBaseUrl = config.openRouterApiBaseUrl?.trim();
+  if (!apiBaseUrl) {
+    throw new Error(
+      'OpenRouter web backend is enabled (providers.json openrouter.metadata.webTools) '
+      + 'but no OpenRouter apiBaseUrl is configured on the openrouter provider.',
+    );
+  }
+  if (!config.openRouterApiKeyRef) {
+    throw new Error(
+      'OpenRouter web backend is enabled but the openrouter provider has no apiKeyRef; '
+      + 'the gateway cannot resolve an OpenRouter API key for web search/fetch.',
+    );
+  }
+  const apiKey = resolveOptionalCredentialReference(
+    config.credentialVault,
+    config.openRouterApiKeyRef,
+    env,
+  );
+  if (!apiKey) {
+    throw new Error(
+      'OpenRouter web backend is enabled but the OpenRouter API key '
+      + `(${config.openRouterApiKeyRef.envName}) is not resolvable.`,
+    );
+  }
+  if (!webTools.model) {
+    throw new Error(
+      'OpenRouter web backend is enabled but metadata.webTools.model is missing.',
+    );
+  }
+
+  return {
+    kind: 'openrouter',
+    openRouter: { apiBaseUrl, apiKey, model: webTools.model },
+  };
+}
+
 function buildGatewayPolicyConfig(
   config: SubstrateConfig,
   env: GatewayBootstrapOptions['env'],
@@ -292,6 +343,7 @@ function buildGatewayPolicyConfig(
     ...(config.webFetchTlsCaCertPaths && config.webFetchTlsCaCertPaths.length > 0
       ? { webFetchTlsCaCertPaths: config.webFetchTlsCaCertPaths }
       : {}),
+    webBackend: resolveWebBackendPolicy(config, env),
     shellExec: shellExecPolicy,
     beads: {
       enabled: beadsToolsEnabled,

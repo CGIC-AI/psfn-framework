@@ -60,6 +60,9 @@ function createGatewayOpsPort(port: GatewayOpsPort): GatewayOpsPort {
     },
     web: {
       fetch: (url: string, options?: { lane?: WebFetchLane; prompt?: string }) => port.web.fetch(url, options),
+      ...(port.web.search
+        ? { search: (query: string, options?: { maxResults?: number }) => port.web.search!(query, options) }
+        : {}),
     },
     filesystem: {
       read: (path: string, options?: { maxBytes?: number }) => port.filesystem.read(path, options),
@@ -103,6 +106,10 @@ export function createGatewayOpsPortFromClient(gateway: GatewayClient): GatewayO
       fetch: (url: string, options: { lane?: WebFetchLane; prompt?: string } = {}) => (
         gateway.webFetch(url, options.prompt, options.lane ?? 'default')
       ),
+      search: async (query: string, options: { maxResults?: number } = {}) => {
+        const result = await gateway.webSearch(query, options.maxResults);
+        return { content: result.content, citations: result.citations };
+      },
     },
     filesystem: {
       read: (path: string, options?: { maxBytes?: number }) => gateway.fsReadDetailed(path, options),

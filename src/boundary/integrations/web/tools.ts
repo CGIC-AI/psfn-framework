@@ -48,9 +48,24 @@ function formatSearchResults(
   }, null, 2);
 }
 
+function normalizeSearchMaxResults(value: unknown): number | undefined {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return undefined;
+  }
+  return Math.max(1, Math.floor(value));
+}
+
+/**
+ * Web backend selection (bead psfn-framework-htm9.10). Explicit config chooses
+ * how the search action discovers sources: `openrouter` uses the gateway
+ * web.search server-tool path; `self_hosted` keeps the LLM planner + fetch loop.
+ */
+export type WebToolBackend = 'self_hosted' | 'openrouter';
+
 export function createWebTool(
   ops: WebFetchOperations,
   searchQueryJson?: WebSearchQueryJson,
+  backend: WebToolBackend = 'self_hosted',
 ): AgentTool<any> {
   return {
     name: 'web',
@@ -97,6 +112,18 @@ export function createWebTool(
               ...(prompt ? { prompt } : {}),
             }));
           case 'search': {
+            // Explicit backend selection — no silent fallback between paths.
+            if (backend === 'openrouter') {
+              if (!ops.search) {
+                throw new Error('search action unavailable: gateway web search is not wired');
+              }
+              const maxResults = normalizeSearchMaxResults(rawParams.max_urls);
+              const result = await ops.search(target, maxResults !== undefined ? { maxResults } : {});
+              const citations = result.citations.length > 0
+                ? `\n\nCitations:\n${result.citations.map((url) => `- ${url}`).join('\n')}`
+                : '';
+              return textResult(`${result.content}${citations}`);
+            }
             if (!searchQueryJson) {
               throw new Error('search action unavailable: web search planner is not configured');
             }

@@ -167,6 +167,12 @@ export interface HomeAssistantCallServiceParams extends GatewayCorrelationParams
 
 export type HomeAssistantCheckConnectionParams = GatewayCorrelationParams;
 
+export interface WebSearchParams {
+  query: string;
+  maxResults?: number;
+}
+
+
 export interface FsReadParams {
   path: string;
   maxBytes?: number;
@@ -456,6 +462,12 @@ export interface HomeAssistantCheckConnectionResult {
   message: string;
 }
 
+export interface WebSearchResult {
+  content: string;
+  sanitized: boolean;
+  citations: string[];
+}
+
 export interface FsReadResult {
   content: string;
   truncated: boolean;
@@ -640,6 +652,7 @@ export interface GatewayMethods {
   'home_assistant.get_states': [HomeAssistantGetStatesParams, HomeAssistantGetStatesResult];
   'home_assistant.call_service': [HomeAssistantCallServiceParams, HomeAssistantCallServiceResult];
   'home_assistant.check_connection': [HomeAssistantCheckConnectionParams, HomeAssistantCheckConnectionResult];
+  'web.search': [WebSearchParams, WebSearchResult];
   'shell.exec': [ShellExecParams, ShellExecResult];
   'vault.write': [VaultWriteParams, VaultWriteResult];
   'vault.read': [VaultReadParams, VaultReadResult];

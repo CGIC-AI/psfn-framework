@@ -241,9 +241,30 @@ The canonical model-facing `web` surface collapses outward web work while keepin
 - `fetch` is the ordinary external-web read path and maps to the gateway default lane
 - `browse` is the explicit local-crawler/webpage traversal path and maps to the gateway `local_crawler` lane
 - `search` is lightweight research discovery that returns a small fetched URL set without collapsing into session continuity or transcript search semantics
-- Gateway RPC methods remain split as `web.fetch` and `web.fetch_binary`; that transport split is deliberate so URL policy, binary size limits, redirect auditing, and lane-specific allowlists stay fail-closed
+- Gateway RPC methods remain split as `web.fetch`, `web.fetch_binary`, and `web.search`; that transport split is deliberate so URL policy, binary size limits, redirect auditing, and lane-specific allowlists stay fail-closed
 
 This keeps ordinary page retrieval, crawler-style browsing, and small-scope web research under one semantic tool family instead of exposing multiple near-duplicate web micro-tools to the model.
+
+### Web backend selection (bead psfn-framework-htm9.10)
+
+The `web` tool's fetch/search backend is selected by explicit config in the
+`providers.json` owner — there is no silent fallback between backends.
+
+- Default (`self_hosted`): `fetch` uses the gateway default lane (direct HTTPS),
+  `browse` uses the `local_crawler` lane, and `search` discovers URLs via the
+  agent-side planner then fetches them. This is the historical path (Crawl4AI /
+  self-hosted search engine reachable through the crawler lane).
+- `openrouter`: set `openrouter.metadata.webTools.enabled = true` (and
+  `webTools.model`) on the enabled OpenRouter provider. The gateway then routes
+  `web.fetch` through OpenRouter's `web_fetch` server tool and `web.search`
+  through OpenRouter's `web_search` server tool. The OpenRouter API base URL and
+  API key are taken from the same provider entry (the gateway is the secret
+  holder). If enabled but the base URL / key / model are missing, gateway
+  startup fails closed.
+
+In both modes, backend output still passes `sanitizeWebContent` before reaching
+the model; the htm9.2 cogsec intake envelope will wrap that same screened output
+once it lands (seam marked in `src/boundary/gateway/methods/web.ts`).
 
 ## Canonical Wiki Surface
 

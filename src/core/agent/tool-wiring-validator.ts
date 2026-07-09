@@ -263,6 +263,7 @@ const RPC_TO_CLIENT_METHOD: Record<string, string> = {
   'discord.typing': 'discordTyping',
   'web.fetch': 'webFetch',
   'web.fetch_binary': 'webFetchBinary',
+  'web.search': 'webSearch',
   'shell.exec': 'shellExec',
   'fs.read': 'fsRead',
   'fs.write': 'fsWrite',

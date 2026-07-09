@@ -55,6 +55,7 @@ import type {
   WebFetchResult,
   WebFetchBinaryResult,
   WebRequestBinaryResult,
+  WebSearchResult,
   WebFetchLane,
   ShellExecResult,
   ShardBackendRequestParams,
@@ -517,6 +518,18 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
       lane,
     }) as WebFetchResult;
     return result.content;
+  }
+
+  async webSearch(
+    query: string,
+    maxResults?: number,
+  ): Promise<WebSearchResult> {
+    return await this.rpcInstance.request('web.search', {
+      query,
+      ...(typeof maxResults === 'number' && Number.isFinite(maxResults)
+        ? { maxResults: Math.max(1, Math.floor(maxResults)) }
+        : {}),
+    }) as WebSearchResult;
   }
 
   async webFetchBinary(

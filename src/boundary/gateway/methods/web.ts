@@ -19,7 +19,14 @@ import {
   type WebFetchBinaryParams,
   type WebFetchParams,
   type WebRequestBinaryParams,
+  type WebSearchParams,
 } from '../protocol.js';
+import type { WebBackendPolicy } from '../policy.js';
+import {
+  normalizeSearchMaxResults,
+  openRouterWebFetch,
+  openRouterWebSearch,
+} from './openrouter-web.js';
 import type { GatewayMethodRuntime, GatedMethodDescriptor } from './types.js';
 import { createComponentLogger } from '../../../shared/logger.js';
 import {
@@ -612,10 +619,58 @@ export async function fetchWithValidatedRedirectChain(
   }
 }
 
+// ── Web backend selection (bead psfn-framework-htm9.10) ──
+// Explicit config selects the backend (providers.json openrouter.metadata.webTools);
+// there is no silent fallback. Absent config preserves the self-hosted direct/
+// crawler path so existing deployments and tests are unchanged.
+function resolveWebBackend(runtime: GatewayMethodRuntime): WebBackendPolicy {
+  return runtime.policyConfig.webBackend ?? { kind: 'self_hosted' };
+}
+
+function requireSearchQuery(value: unknown): string {
+  if (typeof value !== 'string' || value.trim().length === 0) {
+    throw new JSONRPCErrorException(
+      'web.search requires a non-empty query',
+      GatewayErrors.POLICY_DENIED,
+    );
+  }
+  return value.trim();
+}
+
+// Route web.fetch through OpenRouter's web_fetch server tool. Results still pass
+// sanitizeWebContent below; the htm9.2 cogsec intake envelope will wrap this
+// same screened output once it lands (seam: sanitized content is the handoff
+// point — do not return an unscreened path).
+async function fetchViaOpenRouter(
+  backend: Extract<WebBackendPolicy, { kind: 'openrouter' }>,
+  params: WebFetchParams,
+): Promise<{ content: string; sanitized: boolean }> {
+  let rawContent: string;
+  try {
+    rawContent = await openRouterWebFetch(backend.openRouter, params.url, params.prompt);
+  } catch (err) {
+    throw new JSONRPCErrorException(
+      formatFetchProviderError(err),
+      GatewayErrors.PROVIDER_ERROR,
+    );
+  }
+  const result = sanitizeWebContent(rawContent, params.url);
+  if (result.injectionPatternsFound > 0) {
+    log.warn(`Sanitized ${result.injectionPatternsFound} injection patterns from ${params.url} (openrouter)`);
+  }
+  // TODO(htm9.2): wrap `result` in the cogsec intake envelope here once it lands.
+  return { content: result.content, sanitized: result.sanitized };
+}
+
 const webDescriptors: Array<GatedMethodDescriptor<any, unknown>> = [
   {
     name: 'web.fetch',
     handler: async (params: WebFetchParams, runtime) => {
+      const backend = resolveWebBackend(runtime);
+      if (backend.kind === 'openrouter') {
+        return await fetchViaOpenRouter(backend, params);
+      }
+
       const lane = requireLane(params.lane);
       const urlPolicyConfig = resolveUrlPolicyConfig(runtime);
       const dnsResolver = resolveDnsResolver(runtime);
@@ -814,6 +869,52 @@ const webDescriptors: Array<GatedMethodDescriptor<any, unknown>> = [
     }),
     approvalAction: 'fetch',
     approvalScope: (p: WebRequestBinaryParams) => `${describeLane(p.lane)}:${normalizeRequestMethod(p.method)}:${p.url}`,
+  },
+  {
+    // Web search via OpenRouter's web_search server tool (bead psfn-framework-htm9.10).
+    // Only available when the OpenRouter web backend is explicitly configured;
+    // self-hosted deployments keep discovery in the agent-side search planner
+    // (no silent fallback here — this method fails closed).
+    name: 'web.search',
+    handler: async (params: WebSearchParams, runtime) => {
+      const backend = resolveWebBackend(runtime);
+      if (backend.kind !== 'openrouter') {
+        throw new JSONRPCErrorException(
+          'web.search backend not configured: enable OpenRouter web tools '
+          + '(providers.json openrouter.metadata.webTools) to use gateway web search',
+          GatewayErrors.PROVIDER_ERROR,
+        );
+      }
+      const query = requireSearchQuery(params.query);
+      const maxResults = normalizeSearchMaxResults(params.maxResults);
+
+      let searchResult: Awaited<ReturnType<typeof openRouterWebSearch>>;
+      try {
+        searchResult = await openRouterWebSearch(backend.openRouter, query, maxResults);
+      } catch (err) {
+        throw new JSONRPCErrorException(
+          formatFetchProviderError(err),
+          GatewayErrors.PROVIDER_ERROR,
+        );
+      }
+
+      const result = sanitizeWebContent(searchResult.content, `search:${query}`);
+      if (result.injectionPatternsFound > 0) {
+        log.warn(`Sanitized ${result.injectionPatternsFound} injection patterns from web.search (openrouter)`);
+      }
+      // TODO(htm9.2): wrap `result` in the cogsec intake envelope here once it lands.
+      return {
+        content: result.content,
+        sanitized: result.sanitized,
+        citations: searchResult.citations,
+      };
+    },
+    summary: (p: WebSearchParams) => ({
+      query: p.query,
+      maxResults: normalizeSearchMaxResults(p.maxResults),
+    }),
+    approvalAction: 'fetch',
+    approvalScope: (p: WebSearchParams) => `search:${typeof p.query === 'string' ? p.query : ''}`,
   },
 ];
 

@@ -1,7 +1,7 @@
 import type { AgentTool } from '@mariozechner/pi-agent-core';
 import type { ToolRegistrar } from '../../../core/agent/tool-registrar.js';
 import type { ToolWiringMeta, WirableTool } from '../../../core/agent/tool-wiring-validator.js';
-import { createWebTool } from './tools.js';
+import { createWebTool, type WebToolBackend } from './tools.js';
 import type { WebFetchOperations } from './ops.js';
 import type { WebSearchQueryJson } from './search.js';
 
@@ -18,6 +18,8 @@ function attachWiringMeta(tool: AgentTool<any>, meta: ToolWiringMeta): WirableTo
 export interface RegisterWebToolsOptions {
   gatewayMode?: boolean;
   searchQueryJson?: WebSearchQueryJson;
+  /** Explicit web backend selection (bead psfn-framework-htm9.10). */
+  backend?: WebToolBackend;
 }
 
 export function registerWebTools(
@@ -25,9 +27,13 @@ export function registerWebTools(
   ops: WebFetchOperations,
   options?: RegisterWebToolsOptions,
 ): void {
-  const tool = createWebTool(ops, options?.searchQueryJson);
+  const backend = options?.backend ?? 'self_hosted';
+  const tool = createWebTool(ops, options?.searchQueryJson, backend);
   if (options?.gatewayMode) {
-    attachWiringMeta(tool, { requiredGatewayMethods: ['web.fetch'] });
+    const requiredGatewayMethods = backend === 'openrouter'
+      ? ['web.fetch', 'web.search']
+      : ['web.fetch'];
+    attachWiringMeta(tool, { requiredGatewayMethods });
   }
   target.registerTool(tool, 'core');
 }

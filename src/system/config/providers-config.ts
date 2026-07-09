@@ -25,6 +25,18 @@ const KNOWN_PROVIDER_TYPES = new Set<CanonicalProviderType>([
   'generic_openai',
 ]);
 
+/**
+ * OpenRouter server-tools web backend selection (bead psfn-framework-htm9.10).
+ * Sourced from the enabled openrouter provider's `metadata.webTools`. When
+ * `enabled` is true the gateway routes web search/fetch through OpenRouter's
+ * built-in server tools instead of the self-hosted crawler lane.
+ */
+export interface OpenRouterWebToolsConfig {
+  enabled: boolean;
+  /** OpenRouter model slug driving the server tools; required when enabled. */
+  model: string;
+}
+
 export interface ProvidersRuntimeConfig {
   registry: CanonicalProviderRegistry;
   litellmBaseUrl?: string;
@@ -32,6 +44,7 @@ export interface ProvidersRuntimeConfig {
   openRouterApiBaseUrl?: string;
   openRouterModelsApiUrl?: string;
   openRouterApiKeyRef?: CredentialReference;
+  openRouterWebTools?: OpenRouterWebToolsConfig;
 }
 
 interface ProvidersConfigLoadOptions {
@@ -199,9 +212,31 @@ export function normalizeCanonicalProviderRegistry(
   };
 }
 
+function projectOpenRouterWebTools(
+  openrouter: ProviderRegistryEntry | undefined,
+): OpenRouterWebToolsConfig | undefined {
+  const metadata = openrouter?.metadata;
+  const webTools = isRecord(metadata) ? metadata.webTools : undefined;
+  if (!isRecord(webTools)) {
+    return undefined;
+  }
+  if (webTools.enabled !== undefined && typeof webTools.enabled !== 'boolean') {
+    throw new Error('Invalid providers config: openrouter.metadata.webTools.enabled must be a boolean');
+  }
+  const enabled = webTools.enabled === true;
+  const model = toNonEmptyString(webTools.model);
+  if (enabled && !model) {
+    throw new Error(
+      'Invalid providers config: openrouter.metadata.webTools.model is required when webTools.enabled is true',
+    );
+  }
+  return { enabled, model: model ?? '' };
+}
+
 function projectProvidersRuntimeConfig(registry: CanonicalProviderRegistry): ProvidersRuntimeConfig {
   const litellm = registry.providers.find((entry) => entry.enabled && entry.type === 'litellm_proxy');
   const openrouter = registry.providers.find((entry) => entry.enabled && entry.type === 'openrouter');
+  const openRouterWebTools = projectOpenRouterWebTools(openrouter);
   return {
     registry,
     ...(litellm?.apiBaseUrl ? { litellmBaseUrl: litellm.apiBaseUrl } : {}),
@@ -209,6 +244,7 @@ function projectProvidersRuntimeConfig(registry: CanonicalProviderRegistry): Pro
     ...(openrouter?.apiBaseUrl ? { openRouterApiBaseUrl: openrouter.apiBaseUrl } : {}),
     ...(openrouter?.modelsApiUrl ? { openRouterModelsApiUrl: openrouter.modelsApiUrl } : {}),
     ...(openrouter?.apiKeyRef ? { openRouterApiKeyRef: openrouter.apiKeyRef } : {}),
+    ...(openRouterWebTools ? { openRouterWebTools } : {}),
   };
 }
 
@@ -257,6 +293,7 @@ export function applyProvidersRuntimeConfig(
   config.litellmApiKeyRef = providers.litellmApiKeyRef;
   config.openRouterApiBaseUrl = providers.openRouterApiBaseUrl;
   config.openRouterApiKeyRef = providers.openRouterApiKeyRef;
+  config.openRouterWebTools = providers.openRouterWebTools;
   if (providers.openRouterModelsApiUrl) {
     config.openRouterModelsApiUrl = providers.openRouterModelsApiUrl;
   }

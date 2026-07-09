@@ -205,6 +205,13 @@ export interface SubstrateConfig {
   litellmApiKeyRef?: CredentialReference;
   openRouterApiBaseUrl?: string;
   openRouterApiKeyRef?: CredentialReference;
+  /**
+   * OpenRouter server-tools web backend selection (bead psfn-framework-htm9.10),
+   * projected from providers.json `openrouter.metadata.webTools`. When enabled,
+   * the gateway routes web search/fetch through OpenRouter's built-in server
+   * tools instead of the self-hosted crawler lane.
+   */
+  openRouterWebTools?: { enabled: boolean; model: string };
   responseStyleOverrides?: ResponseStyleOverrides;
   runtimeHooks?: RuntimeConfigHooks;
   promotedExtendedTools?: string[];

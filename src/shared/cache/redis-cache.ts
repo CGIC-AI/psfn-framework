@@ -1,4 +1,6 @@
 import { readFileSync } from 'node:fs';
+import { createComponentLogger } from '../logger.js';
+import { RUNTIME_LAYOUT_MODE, resolveRuntimeLayoutMode } from '../../persistence/layout.js';
 import {
   cloneAppCacheStats,
   createEmptyAppCacheStats,
@@ -6,6 +8,8 @@ import {
   type AppCacheSetOptions,
   type AppCacheStats,
 } from './types.js';
+
+const log = createComponentLogger('RedisAppCache');
 
 export const APP_CACHE_MODE_ENV = 'PSFN_APP_CACHE_MODE';
 export const REDIS_URL_ENV = 'PSFN_REDIS_URL';
@@ -143,6 +147,25 @@ export function resolveAppCacheRuntimeConfigFromEnv(
     env[REDIS_TLS_REJECT_UNAUTHORIZED_ENV],
     true,
   );
+  if (tlsRejectUnauthorized === false) {
+    const layoutMode = resolveRuntimeLayoutMode({
+      mode: env.PSFN_RUNTIME_LAYOUT_MODE,
+      nodeEnv: env.NODE_ENV,
+    });
+    if (layoutMode === RUNTIME_LAYOUT_MODE.PRODUCTION) {
+      // Fail closed: disabling Redis TLS certificate verification opens the
+      // cache connection to MITM. Mirror the production TLS guards in
+      // src/system/config/load-config.ts and refuse to start.
+      throw new Error(
+        `${REDIS_TLS_REJECT_UNAUTHORIZED_ENV}=false is not supported in production runtime layout; ` +
+        `configure ${REDIS_TLS_CA_CERT_PATH_ENV} with the Redis CA instead of disabling verification.`,
+      );
+    }
+    log.warn(
+      `${REDIS_TLS_REJECT_UNAUTHORIZED_ENV}=false disables Redis TLS certificate verification; ` +
+      'the cache connection is exposed to man-in-the-middle attacks. Only acceptable in non-production.',
+    );
+  }
   const tlsCaCertPath = trimOptionalEnv(env[REDIS_TLS_CA_CERT_PATH_ENV]);
   if (tlsCaCertPath && !urlUsesTls) {
     throw new Error(`${REDIS_TLS_CA_CERT_PATH_ENV} requires a rediss:// ${REDIS_URL_ENV}`);

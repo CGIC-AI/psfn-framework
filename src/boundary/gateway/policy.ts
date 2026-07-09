@@ -351,9 +351,12 @@ export function evaluatePolicy(ctx: PolicyContext, policyConfig: PolicyConfig): 
 
     case 'home_assistant.call_service': {
       const ha = policyConfig.homeAssistant;
-      return ha?.enabled === true && Boolean(ha.baseUrl?.trim()) && ha.tokenConfigured === true
-        ? 'NEEDS_APPROVAL'
-        : 'ALLOW';
+      const configured =
+        ha?.enabled === true && Boolean(ha.baseUrl?.trim()) && ha.tokenConfigured === true;
+      // Fail closed: when Home Assistant is not fully configured the policy layer
+      // itself must DENY rather than defer to the handler recheck. A configured
+      // service call is human-gated via NEEDS_APPROVAL.
+      return configured ? 'NEEDS_APPROVAL' : 'DENY';
     }
 
     case 'vault.write':

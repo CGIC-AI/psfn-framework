@@ -3,6 +3,7 @@ import type { Duplex } from 'node:stream';
 import type { Lifecycle } from '../../shared/contracts/runtime.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
+import { timingSafeStringEqual } from '../../shared/utils/secret-compare.js';
 import {
   readBodyWithLimit,
   sendJson,
@@ -166,7 +167,7 @@ export class GardenOperatorSurface implements Lifecycle {
 
         const params = new URLSearchParams(body);
         const token = params.get('token') ?? '';
-        if (token === this.config.token) {
+        if (timingSafeStringEqual(token, this.config.token)) {
           const encodedToken = encodeURIComponent(token);
           sendRedirect(res, '/', 302, {
             'Set-Cookie': `psfn_token=${encodedToken}; Path=/; HttpOnly; SameSite=Strict; Max-Age=86400`,

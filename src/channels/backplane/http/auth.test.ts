@@ -39,6 +39,19 @@ describe('hasCookieValue', () => {
     const req = requestWithCookie('psfn_token=test-admin-secret%3Aphase4');
     expect(hasCookieValue(req, 'psfn_token', 'test-admin-secret:phase4')).toBe(true);
   });
+
+  it('rejects mismatched or absent cookie without throwing on length differences', () => {
+    const wrong = requestWithCookie('psfn_token=wrong');
+    expect(hasCookieValue(wrong, 'psfn_token', 'test-admin-secret:phase4')).toBe(false);
+
+    // A cookie far longer than expected must return false, not throw
+    // (timingSafeEqual over raw buffers throws on unequal lengths).
+    const longer = requestWithCookie(`psfn_token=${'x'.repeat(4096)}`);
+    expect(hasCookieValue(longer, 'psfn_token', 'test-admin-secret:phase4')).toBe(false);
+
+    const missing = { headers: {} } as IncomingMessage;
+    expect(hasCookieValue(missing, 'psfn_token', 'test-admin-secret:phase4')).toBe(false);
+  });
 });
 
 describe('bearer auth helpers', () => {

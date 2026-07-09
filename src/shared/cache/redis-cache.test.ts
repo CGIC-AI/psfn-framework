@@ -218,6 +218,36 @@ describe('RedisAppCache', () => {
     })).toThrow('must be true or false');
   });
 
+  it('rejects PSFN_REDIS_TLS_REJECT_UNAUTHORIZED=false in production runtime layout', () => {
+    expect(() => resolveAppCacheRuntimeConfigFromEnv({
+      PSFN_APP_CACHE_MODE: 'redis',
+      PSFN_REDIS_URL: 'rediss://cache.internal:6380',
+      PSFN_REDIS_PASSWORD: 'secret',
+      PSFN_REDIS_TLS_REJECT_UNAUTHORIZED: 'false',
+      PSFN_RUNTIME_LAYOUT_MODE: 'production',
+    })).toThrow('not supported in production runtime layout');
+
+    // NODE_ENV=production selects production layout too.
+    expect(() => resolveAppCacheRuntimeConfigFromEnv({
+      PSFN_APP_CACHE_MODE: 'redis',
+      PSFN_REDIS_URL: 'rediss://cache.internal:6380',
+      PSFN_REDIS_PASSWORD: 'secret',
+      PSFN_REDIS_TLS_REJECT_UNAUTHORIZED: 'false',
+      NODE_ENV: 'production',
+    })).toThrow('not supported in production runtime layout');
+  });
+
+  it('allows PSFN_REDIS_TLS_REJECT_UNAUTHORIZED=false outside production', () => {
+    const config = resolveAppCacheRuntimeConfigFromEnv({
+      PSFN_APP_CACHE_MODE: 'redis',
+      PSFN_REDIS_URL: 'rediss://cache.internal:6380',
+      PSFN_REDIS_PASSWORD: 'secret',
+      PSFN_REDIS_TLS_REJECT_UNAUTHORIZED: 'false',
+      PSFN_RUNTIME_LAYOUT_MODE: 'continuous',
+    });
+    expect(config.redis?.tlsRejectUnauthorized).toBe(false);
+  });
+
   it('builds Redis client options without leaking dedicated credentials into logs', () => {
     const config = resolveAppCacheRuntimeConfigFromEnv({
       PSFN_APP_CACHE_MODE: 'redis',

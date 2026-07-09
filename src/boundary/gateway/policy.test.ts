@@ -337,6 +337,46 @@ describe('evaluatePolicy', () => {
     )).toBe('DENY');
   });
 
+  // ── Home Assistant: fail closed when unconfigured ──
+
+  it('denies home_assistant.call_service when Home Assistant is not configured', () => {
+    expect(evaluatePolicy(
+      { method: 'home_assistant.call_service', params: { domain: 'light', service: 'turn_on' } },
+      policyConfig,
+    )).toBe('DENY');
+  });
+
+  it('denies home_assistant.call_service when config is incomplete', () => {
+    // enabled but no base URL
+    expect(evaluatePolicy(
+      { method: 'home_assistant.call_service', params: {} },
+      { ...policyConfig, homeAssistant: { enabled: true, tokenConfigured: true } },
+    )).toBe('DENY');
+    // base URL present but token not configured
+    expect(evaluatePolicy(
+      { method: 'home_assistant.call_service', params: {} },
+      { ...policyConfig, homeAssistant: { enabled: true, baseUrl: 'http://ha.local:8123' } },
+    )).toBe('DENY');
+    // disabled outright
+    expect(evaluatePolicy(
+      { method: 'home_assistant.call_service', params: {} },
+      {
+        ...policyConfig,
+        homeAssistant: { enabled: false, baseUrl: 'http://ha.local:8123', tokenConfigured: true },
+      },
+    )).toBe('DENY');
+  });
+
+  it('requires approval for home_assistant.call_service when fully configured', () => {
+    expect(evaluatePolicy(
+      { method: 'home_assistant.call_service', params: { domain: 'light', service: 'turn_on' } },
+      {
+        ...policyConfig,
+        homeAssistant: { enabled: true, baseUrl: 'http://ha.local:8123', tokenConfigured: true },
+      },
+    )).toBe('NEEDS_APPROVAL');
+  });
+
   // ── Filesystem: workspace paths ──
 
   it('allows fs.read inside workspace', () => {

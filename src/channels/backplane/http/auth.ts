@@ -1,5 +1,6 @@
 import { createHash, timingSafeEqual } from 'node:crypto';
 import type { IncomingMessage } from 'node:http';
+import { timingSafeStringEqual } from '../../../shared/utils/secret-compare.js';
 
 const API_KEY_PRINCIPAL_DIGEST_LENGTH = 24;
 const MIN_SATELLITE_API_KEY_LENGTH = 16;
@@ -160,7 +161,9 @@ export function hasCookieValue(
   cookieName: string,
   expected: string,
 ): boolean {
-  return getCookieValue(req, cookieName) === expected;
+  const actual = getCookieValue(req, cookieName);
+  if (actual === null) return false;
+  return timingSafeStringEqual(actual, expected);
 }
 
 export function isHtmxRequest(req: IncomingMessage): boolean {

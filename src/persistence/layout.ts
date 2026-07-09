@@ -796,6 +796,17 @@ export function resolveIntakeQuarantinePath(companionDataDir: string): string {
   return join(resolveCompanionStateDir(companionDataDir), 'intake-quarantine.json');
 }
 
+/**
+ * Slow-poisoning drift-velocity review cards (htm9.14): batched evidence cards
+ * the nightly drift lane raises for operator review in the Garden Cognitive
+ * Security tab. Co-located with cogsec-events.json / intake-quarantine.json
+ * under companion-data/state; written by the agent-side scheduler lane,
+ * read/resolved by the Garden drift-review surface.
+ */
+export function resolveDriftReviewCardsPath(companionDataDir: string): string {
+  return join(resolveCompanionStateDir(companionDataDir), 'cogsec-drift-reviews.json');
+}
+
 export function resolveCogSecForensicArchiveDir(companionDataDir: string): string {
   return join(resolveCompanionVaultDir(companionDataDir), 'cogsec-forensics');
 }

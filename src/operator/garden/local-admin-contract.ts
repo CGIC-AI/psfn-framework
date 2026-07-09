@@ -40,6 +40,7 @@ import {
   resolveConfiguredSystemDataDir,
   resolveChargeLedgerPath,
   resolveCogSecEventsPath,
+  resolveDriftReviewCardsPath,
   resolveFatigueLedgerPath,
   resolveIntakeQuarantinePath,
   resolveLegacyValuesJournalPath,
@@ -110,6 +111,8 @@ import { AdminSessionDataService } from './services/session-service.js';
 import { AdminSettingsDataService } from './services/settings-service.js';
 import { createAdminIntakeQuarantineService } from './services/intake-quarantine-service.js';
 import { createIntakeQuarantineStore } from '../../core/cogsec/intake/quarantine-store.js';
+import { createAdminDriftReviewService } from './services/drift-review-service.js';
+import { createDriftReviewCardStore } from '../../core/cogsec/drift/drift-review-card-store.js';
 import { CogSecEventStore } from '../../core/cogsec/events.js';
 import { AdminShardFoldReviewDataService } from './services/shard-fold-review-service.js';
 import { AdminWikiDataService } from './services/wiki-service.js';
@@ -281,6 +284,15 @@ export function createInProcessGardenAdminContract(
     cogSecEvents: () => new CogSecEventStore(resolveCogSecEventsPath(companionDataDir)),
   });
 
+  // ── Drift review cards (htm9.14 Cognitive Security tab) ──
+  // Reads the same companion-data card file the nightly drift-velocity lane
+  // writes (the store reloads from disk on every operation) and records the
+  // operator acknowledge/dismiss decision. Nothing here mutates memories,
+  // trust, or emotion — cards are evidence for a human, not actions.
+  const driftReviews = createAdminDriftReviewService({
+    store: createDriftReviewCardStore(resolveDriftReviewCardsPath(companionDataDir)),
+  });
+
   return {
     dashboard: new AdminDashboardDataService({
       memoryStore: options.memoryStore,
@@ -408,6 +420,7 @@ export function createInProcessGardenAdminContract(
       : null,
     settings: settingsService,
     intakeQuarantine,
+    driftReviews,
     identity: new AdminIdentityDataService({
       characterCard: options.characterCard,
       config: options.config,

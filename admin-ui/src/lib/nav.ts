@@ -65,6 +65,7 @@ export const navGroups: NavGroup[] = [
   navGroup('cognitive-security', 'Cognitive Security', [
     { id: 'cogsec-approvals', path: '/cognitive-security/approvals', defaultLabel: 'Approvals', icon: '\u{1F6E1}\u{FE0F}' },
     { id: 'cogsec-firewall', path: '/cognitive-security/firewall', defaultLabel: 'Firewall', icon: '\u{1F9F1}' },
+    { id: 'cogsec-drift', path: '/cognitive-security/drift', defaultLabel: 'Drift Review', icon: '\u{1F4C9}' },
     { id: 'cogsec-remediation', path: '/cognitive-security/remediation', defaultLabel: 'Remediation', icon: '\u{1FA79}' },
   ]),
   navGroup('configure', 'Configure Garden', [

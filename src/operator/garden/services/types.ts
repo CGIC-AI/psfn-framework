@@ -208,6 +208,15 @@ export type {
 } from './intake-quarantine-service.js';
 
 export type {
+  AdminDriftReviewListData,
+  AdminDriftReviewResolveRequest,
+  AdminDriftReviewResolveResult,
+  AdminDriftReviewService,
+  DriftReviewCard,
+  DriftReviewCardResolution,
+} from './drift-review-service.js';
+
+export type {
   AdminContactListData,
   AdminContactDetailData,
   ContactUpdateResult,

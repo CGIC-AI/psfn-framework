@@ -36,6 +36,8 @@ import { buildAdminChannelEnvelopeRoutes } from './routes/channel-envelope-route
 import { buildAdminIntakeSourceListRoutes } from './routes/intake-source-list-routes.js';
 import { buildAdminIntakeQuarantineRoutes } from './routes/intake-quarantine-routes.js';
 import type { AdminIntakeQuarantineService } from './services/intake-quarantine-service.js';
+import { buildAdminDriftReviewRoutes } from './routes/drift-review-routes.js';
+import type { AdminDriftReviewService } from './services/drift-review-service.js';
 import type { AdminApiRoute } from './routes/types.js';
 import type {
   AdminActionPipeService,
@@ -275,6 +277,8 @@ export function buildAdminApiRoutes(options: {
   settingsService: AdminSettingsService;
   /** Intake quarantine approval queue (htm9.11); always wired in production. */
   intakeQuarantineService?: AdminIntakeQuarantineService | null;
+  /** Slow-poisoning drift review cards (htm9.14). */
+  driftReviewService?: AdminDriftReviewService | null;
   identityService: AdminIdentityService;
   promptsService: AdminPromptsService;
   modelDiscovery?: AdminModelDiscoveryApi | null;
@@ -323,6 +327,7 @@ export function buildAdminApiRoutes(options: {
     toolConformanceService,
     settingsService,
     intakeQuarantineService,
+    driftReviewService,
     identityService,
     promptsService,
     modelDiscovery,
@@ -779,6 +784,13 @@ export function buildAdminApiRoutes(options: {
       ? buildAdminIntakeQuarantineRoutes({
         quarantineService: intakeQuarantineService,
         settingsService,
+        appendAuditTimelineEntry,
+        withBody,
+      })
+      : []),
+    ...(driftReviewService
+      ? buildAdminDriftReviewRoutes({
+        driftReviewService,
         appendAuditTimelineEntry,
         withBody,
       })

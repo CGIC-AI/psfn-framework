@@ -11,6 +11,7 @@ const GARDEN_CLIENT_ROUTES = new Set([
   '/charge-budget',
   '/chat',
   '/cognitive-security/approvals',
+  '/cognitive-security/drift',
   '/cognitive-security/firewall',
   '/cognitive-security/remediation',
   '/confirmations',

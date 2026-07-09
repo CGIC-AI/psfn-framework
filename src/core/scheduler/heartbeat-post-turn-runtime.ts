@@ -54,6 +54,7 @@ import {
 
 export {
   CONTACT_TRUST_DRIFT_REVIEW_TASK_ID,
+  DRIFT_VELOCITY_REVIEW_TASK_ID,
   SLEEPTIME_REST_WINDOW_TASK_ID,
 } from './heartbeat-post-turn-runtime/scheduler-lanes.js';
 

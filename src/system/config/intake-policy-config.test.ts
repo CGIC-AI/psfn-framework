@@ -175,6 +175,53 @@ describe('intake policy owner file', () => {
     expect(() => loadIntakePolicyConfig(dataDir)).toThrow(/Missing required JSON owner file/);
   });
 
+  // ── Slow-poisoning drift detection (htm9.14) ──
+
+  it('validates the driftDetection seed section', () => {
+    const policy = seedPolicy();
+    expect(policy.driftDetection.enabled).toBe(true);
+    expect(policy.driftDetection.valenceVelocity.shortWindowPoints).toBeGreaterThanOrEqual(1);
+    expect(policy.driftDetection.valenceVelocity.velocitySigmaThreshold).toBeGreaterThan(0);
+    expect(policy.driftDetection.memoryWriteRate.burstMultiplier).toBeGreaterThan(0);
+    expect(policy.driftDetection.labelFrequency.minCount).toBeGreaterThanOrEqual(1);
+    expect(policy.driftDetection.retrievalShare.maxLowTrustShare).toBeLessThanOrEqual(1);
+  });
+
+  it('fails closed on missing, unknown-keyed, or malformed driftDetection config', () => {
+    const policy = seedPolicy();
+    const { driftDetection: _dropped, ...withoutDrift } = policy;
+    expect(() => validateIntakePolicy(withoutDrift, INTAKE_POLICY_FILE_NAME))
+      .toThrow(/driftDetection must be an object/);
+    expect(() => validateIntakePolicy(
+      { ...policy, driftDetection: { ...policy.driftDetection, autoRemediate: true } },
+      INTAKE_POLICY_FILE_NAME,
+    )).toThrow(/driftDetection has unsupported keys: autoRemediate/);
+    expect(() => validateIntakePolicy(
+      {
+        ...policy,
+        driftDetection: {
+          ...policy.driftDetection,
+          valenceVelocity: { ...policy.driftDetection.valenceVelocity, velocitySigmaThreshold: 0 },
+        },
+      },
+      INTAKE_POLICY_FILE_NAME,
+    )).toThrow(/velocitySigmaThreshold must be a finite number > 0/);
+    expect(() => validateIntakePolicy(
+      {
+        ...policy,
+        driftDetection: {
+          ...policy.driftDetection,
+          valenceVelocity: { ...policy.driftDetection.valenceVelocity, monotonicityMin: 1.5 },
+        },
+      },
+      INTAKE_POLICY_FILE_NAME,
+    )).toThrow(/monotonicityMin must be a finite number in \[0, 1\]/);
+    expect(() => validateIntakePolicy(
+      { ...policy, driftDetection: { ...policy.driftDetection, enabled: 'yes' } },
+      INTAKE_POLICY_FILE_NAME,
+    )).toThrow(/driftDetection\.enabled must be a boolean/);
+  });
+
   // ── L2 API screener policy (htm9.6) ──
 
   it('validates the L2 screener seed and covers every tier', () => {

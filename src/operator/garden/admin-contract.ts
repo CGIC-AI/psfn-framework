@@ -44,6 +44,7 @@ import type {
 } from './services/types.js';
 import type { AdminObserverEvalSidecarService } from './services/observer-eval-sidecar-service.js';
 import type { AdminIntakeQuarantineService } from './services/intake-quarantine-service.js';
+import type { AdminDriftReviewService } from './services/drift-review-service.js';
 import type { AdminPendingContactsService } from './services/pending-contacts-service.js';
 import type { AdminRoomsService } from './services/rooms-service.js';
 import type { AdminPlacesService } from './services/places-service.js';
@@ -185,6 +186,8 @@ export interface GardenAdminDomainServices {
   settings: AdminSettingsService;
   /** Intake quarantine approval queue (htm9.11 Cognitive Security tab). */
   intakeQuarantine: AdminIntakeQuarantineService;
+  /** Slow-poisoning drift review cards (htm9.14 Cognitive Security tab). */
+  driftReviews: AdminDriftReviewService;
   identity: AdminIdentityService;
   prompts: AdminPromptsService;
   scheduler: AdminSchedulerApi;

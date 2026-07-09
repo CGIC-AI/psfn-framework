@@ -87,6 +87,12 @@ export type {
   AdminIntakeSourceListMutationInput,
 } from '../../../../src/operator/garden/services/types.js';
 export type {
+  AdminDriftReviewListData,
+  DriftReviewCard,
+  DriftReviewCardResolution,
+} from '../../../../src/operator/garden/services/types.js';
+export type { DriftSignalResult } from '../../../../src/core/cogsec/drift/drift-signals.js';
+export type {
   IntakePolicyConfig,
   IntakeSourceListEntry,
   IntakeSourceListName,

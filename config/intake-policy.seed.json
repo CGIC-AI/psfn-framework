@@ -166,5 +166,31 @@
         "hostile": "hard"
       }
     }
+  },
+  "driftDetection": {
+    "enabled": true,
+    "valenceVelocity": {
+      "shortWindowPoints": 6,
+      "minLongWindowPoints": 12,
+      "velocitySigmaThreshold": 3,
+      "monotonicityMin": 0.7,
+      "minBaselineStd": 0.05,
+      "minPointConfidence": 0.35
+    },
+    "memoryWriteRate": {
+      "recentWindowHours": 24,
+      "baselineWindowDays": 14,
+      "burstMultiplier": 4,
+      "minRecentWrites": 8
+    },
+    "labelFrequency": {
+      "windowDays": 7,
+      "minCount": 3
+    },
+    "retrievalShare": {
+      "windowHours": 48,
+      "minRetrievals": 10,
+      "maxLowTrustShare": 0.6
+    }
   }
 }

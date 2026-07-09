@@ -150,6 +150,7 @@ export function buildAdminRoutes(deps: AdminRouteDependencies): AdminRoute[] {
       toolConformanceService: deps.services.toolConformance ?? null,
       settingsService: deps.services.settings,
       intakeQuarantineService: deps.services.intakeQuarantine,
+      driftReviewService: deps.services.driftReviews,
       identityService: deps.services.identity,
       promptsService: deps.services.prompts,
       scheduler: deps.services.scheduler,

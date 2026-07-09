@@ -55,6 +55,7 @@ import { CompanionPresenceRuntime } from '../../core/agent/companion-presence-ru
 import { registerCompanionRoomEntryNotes } from '../../core/agent/companion-room-entry.js';
 import { createCompanionRoomContentWindowPort } from '../../core/agent/companion-room-window.js';
 import {
+  resolveDriftReviewCardsPath,
   resolveIntakeQuarantinePath,
   resolveOutreachOutboxLedgerPath,
   resolvePendingContactApprovalsPath,
@@ -100,6 +101,8 @@ import { hydrateStartupActiveMemoryContexts } from '../../faculties/memory/start
 import { loadIntakePolicyConfig } from '../../system/config/intake-policy-config.js';
 import { maybeCreateIntakeScreeningService } from '../../core/cogsec/intake/screening.js';
 import { createIntakeQuarantineStore } from '../../core/cogsec/intake/quarantine-store.js';
+import { createDriftReviewCardStore } from '../../core/cogsec/drift/drift-review-card-store.js';
+import { createDriftVelocityEvidencePort } from '../../core/cogsec/drift/drift-evidence-adapters.js';
 import { hydrateStartupActiveCoreMemoryBlocks } from '../../faculties/core-memory/startup-hydration.js';
 import { enforceNetworkIsolationOnStartup } from './startup-guards.js';
 import {
@@ -987,6 +990,43 @@ async function main(): Promise<void> {
     ...(config.groupMemory ? { groupMemory: config.groupMemory } : {}),
   });
 
+  // ── Slow-poisoning drift-velocity review lane (htm9.14) ──
+  // Deterministic nightly aggregation (zero LLM, zero turn latency) over the
+  // per-contact valence series, memory-write rows, quarantine risk labels,
+  // and retrieval recency. Findings become operator review cards on the
+  // Garden Cognitive Security tab; the lane never mutates memories, trust,
+  // or emotion, and the companion never sees it.
+  const driftVelocityReview = intakePolicy.driftDetection.enabled
+    ? {
+      evidence: createDriftVelocityEvidencePort({
+        contactStore,
+        memoryStore,
+        quarantineStore: intakePolicy.mode !== 'off'
+          ? createIntakeQuarantineStore(
+            resolveIntakeQuarantinePath(pathSnapshot.companionDataDir),
+            {
+              itemTtlHours: intakePolicy.quarantine.itemTtlHours,
+              maxHeldItems: intakePolicy.quarantine.maxHeldItems,
+            },
+          )
+          : null,
+      }),
+      cardStore: createDriftReviewCardStore(
+        resolveDriftReviewCardsPath(pathSnapshot.companionDataDir),
+      ),
+      config: intakePolicy.driftDetection,
+      watermarks: {
+        getContactMaintenanceWatermark: (processor: string) =>
+          contactStore.getContactMaintenanceWatermark(processor),
+        setContactMaintenanceWatermark: (processor: string, lastRunAt: string) =>
+          contactStore.setContactMaintenanceWatermark(processor, lastRunAt),
+      },
+    }
+    : null;
+  if (!driftVelocityReview) {
+    log.info('Drift-velocity review lane disabled by intake-policy driftDetection.enabled');
+  }
+
   // Heartbeat reflections — policy-driven multi-template reflection system
   await wireHeartbeatRuntime(
     agentLoop,
@@ -1029,6 +1069,7 @@ async function main(): Promise<void> {
       episodicDiagnosticsStore: episodicStore,
       postTurnActions,
       episodicProcessingRestWindow: schedulerConfig.episodicProcessing,
+      driftVelocityReview,
       orientationRewriteGate: schedulerConfig.orientationRewrite,
       reflectionNoveltyGate: schedulerConfig.reflectionNovelty,
       nearTurnMemoryCadence: schedulerConfig.nearTurnMemory,

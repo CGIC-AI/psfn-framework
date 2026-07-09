@@ -495,6 +495,59 @@ export interface IntakeSinkGatesPolicyConfig {
   };
 }
 
+/**
+ * Slow-poisoning drift-velocity detection (htm9.14,
+ * src/core/cogsec/drift/). Deterministic nightly aggregation over persisted
+ * evidence — zero LLM calls, zero synchronous-turn latency. Each block tunes
+ * one of the four scored signals; the lane raises an operator review card in
+ * the Garden Cognitive Security tab and NEVER mutates memories/trust/emotion.
+ */
+export interface IntakeDriftDetectionPolicyConfig {
+  /** Master switch for the nightly drift-velocity review lane. */
+  enabled: boolean;
+  /** Emotional-valence trajectory velocity per contact. */
+  valenceVelocity: {
+    /** Recent points compared against the baseline (the "short window"). */
+    shortWindowPoints: number;
+    /** Minimum baseline points required before the signal can evaluate. */
+    minLongWindowPoints: number;
+    /**
+     * K: the short-window mean must shift at least K x the contact's own
+     * long-window standard deviation to count as drift velocity.
+     */
+    velocitySigmaThreshold: number;
+    /** Fraction of short-window steps that must move WITH the shift (0-1). */
+    monotonicityMin: number;
+    /** Volatility floor so ultra-stable baselines don't divide toward infinity. */
+    minBaselineStd: number;
+    /** Time-series points below this classifier confidence are ignored (0-1). */
+    minPointConfidence: number;
+  };
+  /** Memory-write rate per source vs its own baseline rate. */
+  memoryWriteRate: {
+    recentWindowHours: number;
+    baselineWindowDays: number;
+    /** Recent daily rate must exceed baseline daily rate by this multiple. */
+    burstMultiplier: number;
+    /** Absolute floor of recent writes before the signal can trigger. */
+    minRecentWrites: number;
+  };
+  /** Trust-lobbying envelope-label recurrence (poisoning/*, persona pressure). */
+  labelFrequency: {
+    windowDays: number;
+    /** Trust-lobbying labels observed in the window before triggering. */
+    minCount: number;
+  };
+  /** Retrieval share of low-trust sources in the working belief base. */
+  retrievalShare: {
+    windowHours: number;
+    /** Absolute floor of recent retrievals before the signal can trigger. */
+    minRetrievals: number;
+    /** Share (0-1) of recent retrievals from one low-trust source to trigger. */
+    maxLowTrustShare: number;
+  };
+}
+
 export interface IntakePolicyConfig {
   schemaVersion: 1;
   mode: IntakeFirewallMode;
@@ -511,6 +564,7 @@ export interface IntakePolicyConfig {
   l2Screener: IntakeL2ScreenerPolicyConfig;
   l3Screener: IntakeL3ScreenerPolicyConfig;
   sinkGates: IntakeSinkGatesPolicyConfig;
+  driftDetection: IntakeDriftDetectionPolicyConfig;
 }
 
 interface IntakePolicyLoadOptions {
@@ -932,13 +986,137 @@ export function isL3MandatoryTier(
   return config.l3Screener.mandatoryTiers.includes(tier);
 }
 
+function validatePositiveNumber(value: unknown, sourcePath: string, field: string): number {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
+    throw invalid(sourcePath, `${field} must be a finite number > 0`);
+  }
+  return value;
+}
+
+function validateDriftDetection(
+  raw: unknown,
+  sourcePath: string,
+): IntakeDriftDetectionPolicyConfig {
+  if (!isRecord(raw)) {
+    throw invalid(sourcePath, 'driftDetection must be an object');
+  }
+  const knownKeys = ['enabled', 'valenceVelocity', 'memoryWriteRate', 'labelFrequency', 'retrievalShare'];
+  const unknownKeys = Object.keys(raw).filter((key) => !knownKeys.includes(key));
+  if (unknownKeys.length > 0) {
+    throw invalid(sourcePath, `driftDetection has unsupported keys: ${unknownKeys.join(', ')}`);
+  }
+  if (typeof raw.enabled !== 'boolean') {
+    throw invalid(sourcePath, 'driftDetection.enabled must be a boolean (no implicit default)');
+  }
+
+  const valence = raw.valenceVelocity;
+  if (!isRecord(valence)) {
+    throw invalid(sourcePath, 'driftDetection.valenceVelocity must be an object');
+  }
+  const valenceKeys = [
+    'shortWindowPoints', 'minLongWindowPoints', 'velocitySigmaThreshold',
+    'monotonicityMin', 'minBaselineStd', 'minPointConfidence',
+  ];
+  const unknownValenceKeys = Object.keys(valence).filter((key) => !valenceKeys.includes(key));
+  if (unknownValenceKeys.length > 0) {
+    throw invalid(sourcePath, `driftDetection.valenceVelocity has unsupported keys: ${unknownValenceKeys.join(', ')}`);
+  }
+
+  const writeRate = raw.memoryWriteRate;
+  if (!isRecord(writeRate)) {
+    throw invalid(sourcePath, 'driftDetection.memoryWriteRate must be an object');
+  }
+  const writeRateKeys = ['recentWindowHours', 'baselineWindowDays', 'burstMultiplier', 'minRecentWrites'];
+  const unknownWriteRateKeys = Object.keys(writeRate).filter((key) => !writeRateKeys.includes(key));
+  if (unknownWriteRateKeys.length > 0) {
+    throw invalid(sourcePath, `driftDetection.memoryWriteRate has unsupported keys: ${unknownWriteRateKeys.join(', ')}`);
+  }
+
+  const labels = raw.labelFrequency;
+  if (!isRecord(labels)) {
+    throw invalid(sourcePath, 'driftDetection.labelFrequency must be an object');
+  }
+  const labelKeys = ['windowDays', 'minCount'];
+  const unknownLabelKeys = Object.keys(labels).filter((key) => !labelKeys.includes(key));
+  if (unknownLabelKeys.length > 0) {
+    throw invalid(sourcePath, `driftDetection.labelFrequency has unsupported keys: ${unknownLabelKeys.join(', ')}`);
+  }
+
+  const retrieval = raw.retrievalShare;
+  if (!isRecord(retrieval)) {
+    throw invalid(sourcePath, 'driftDetection.retrievalShare must be an object');
+  }
+  const retrievalKeys = ['windowHours', 'minRetrievals', 'maxLowTrustShare'];
+  const unknownRetrievalKeys = Object.keys(retrieval).filter((key) => !retrievalKeys.includes(key));
+  if (unknownRetrievalKeys.length > 0) {
+    throw invalid(sourcePath, `driftDetection.retrievalShare has unsupported keys: ${unknownRetrievalKeys.join(', ')}`);
+  }
+
+  return {
+    enabled: raw.enabled,
+    valenceVelocity: {
+      shortWindowPoints: validatePositiveInteger(
+        valence.shortWindowPoints, sourcePath, 'driftDetection.valenceVelocity.shortWindowPoints',
+      ),
+      minLongWindowPoints: validatePositiveInteger(
+        valence.minLongWindowPoints, sourcePath, 'driftDetection.valenceVelocity.minLongWindowPoints',
+      ),
+      velocitySigmaThreshold: validatePositiveNumber(
+        valence.velocitySigmaThreshold, sourcePath, 'driftDetection.valenceVelocity.velocitySigmaThreshold',
+      ),
+      monotonicityMin: validateProbability(
+        valence.monotonicityMin, sourcePath, 'driftDetection.valenceVelocity.monotonicityMin',
+      ),
+      minBaselineStd: validatePositiveNumber(
+        valence.minBaselineStd, sourcePath, 'driftDetection.valenceVelocity.minBaselineStd',
+      ),
+      minPointConfidence: validateProbability(
+        valence.minPointConfidence, sourcePath, 'driftDetection.valenceVelocity.minPointConfidence',
+      ),
+    },
+    memoryWriteRate: {
+      recentWindowHours: validatePositiveInteger(
+        writeRate.recentWindowHours, sourcePath, 'driftDetection.memoryWriteRate.recentWindowHours',
+      ),
+      baselineWindowDays: validatePositiveInteger(
+        writeRate.baselineWindowDays, sourcePath, 'driftDetection.memoryWriteRate.baselineWindowDays',
+      ),
+      burstMultiplier: validatePositiveNumber(
+        writeRate.burstMultiplier, sourcePath, 'driftDetection.memoryWriteRate.burstMultiplier',
+      ),
+      minRecentWrites: validatePositiveInteger(
+        writeRate.minRecentWrites, sourcePath, 'driftDetection.memoryWriteRate.minRecentWrites',
+      ),
+    },
+    labelFrequency: {
+      windowDays: validatePositiveInteger(
+        labels.windowDays, sourcePath, 'driftDetection.labelFrequency.windowDays',
+      ),
+      minCount: validatePositiveInteger(
+        labels.minCount, sourcePath, 'driftDetection.labelFrequency.minCount',
+      ),
+    },
+    retrievalShare: {
+      windowHours: validatePositiveInteger(
+        retrieval.windowHours, sourcePath, 'driftDetection.retrievalShare.windowHours',
+      ),
+      minRetrievals: validatePositiveInteger(
+        retrieval.minRetrievals, sourcePath, 'driftDetection.retrievalShare.minRetrievals',
+      ),
+      maxLowTrustShare: validateProbability(
+        retrieval.maxLowTrustShare, sourcePath, 'driftDetection.retrievalShare.maxLowTrustShare',
+      ),
+    },
+  };
+}
+
 export function validateIntakePolicy(raw: unknown, sourcePath: string): IntakePolicyConfig {
   if (!isRecord(raw)) {
     throw invalid(sourcePath, 'expected object');
   }
   const knownKeys = [
     'schemaVersion', 'mode', 'sourceRiskTiers', 'sourceLists', 'quarantine',
-    'injectionClassifier', 'l2Screener', 'l3Screener', 'sinkGates',
+    'injectionClassifier', 'l2Screener', 'l3Screener', 'sinkGates', 'driftDetection',
   ];
   const unknownKeys = Object.keys(raw).filter((key) => !knownKeys.includes(key));
   if (unknownKeys.length > 0) {
@@ -961,6 +1139,7 @@ export function validateIntakePolicy(raw: unknown, sourcePath: string): IntakePo
     l2Screener: validateL2Screener(raw.l2Screener, sourcePath),
     l3Screener: validateL3Screener(raw.l3Screener, sourcePath),
     sinkGates: validateSinkGates(raw.sinkGates, sourcePath),
+    driftDetection: validateDriftDetection(raw.driftDetection, sourcePath),
   };
 }
 

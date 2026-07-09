@@ -669,6 +669,48 @@ describe('GatewayClient reverse RPC (onHandleMessage)', () => {
     expect(messages).toHaveLength(1);
     expect((messages[0] as any).content).toBe('test notification');
   });
+
+  it('routes companion delivery failure notifications to their observe-only handler', () => {
+    const failures: unknown[] = [];
+    client.onCompanionDeliveryFailure((failure) => failures.push(failure));
+
+    conn._emit({
+      method: 'companion.message.delivery_failure',
+      params: {
+        channelId: 'companion-dm:comp-a:comp-b',
+        messageId: 'companion-1',
+        reportingCompanionId: 'comp-b',
+        reason: 'processing_failed',
+        reportedAt: '2026-07-09T18:00:00.000Z',
+      },
+    });
+
+    expect(failures).toEqual([expect.objectContaining({
+      messageId: 'companion-1',
+      reportingCompanionId: 'comp-b',
+      reason: 'processing_failed',
+    })]);
+  });
+
+  it('sends structured companion failure reports through the gateway RPC', async () => {
+    const reportPromise = client.companionReportFailure({
+      channelId: 'companion-dm:comp-a:comp-b',
+      messageId: 'companion-1',
+      reason: 'reply_delivery_failed',
+    });
+    const request = conn.sent[0] as { id: number; method: string; params: Record<string, unknown> };
+
+    expect(request).toMatchObject({
+      method: 'companion.message.report_failure',
+      params: {
+        channelId: 'companion-dm:comp-a:comp-b',
+        messageId: 'companion-1',
+        reason: 'reply_delivery_failed',
+      },
+    });
+    conn._emit({ jsonrpc: '2.0', id: request.id, result: { reportedTo: 'comp-a' } });
+    await expect(reportPromise).resolves.toEqual({ reportedTo: 'comp-a' });
+  });
 });
 
 describe('GatewayClient session integrity RPC', () => {

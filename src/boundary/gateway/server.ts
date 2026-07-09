@@ -20,6 +20,8 @@ import type { GatewayRpcConnection, GatewayRpcEndpoint } from './transport.js';
 import { createSocketServer, createWebSocketRpcServer } from './transport.js';
 import {
   GatewayErrors,
+  type CompanionMessageDeliveryFailureNotification,
+  type CompanionMessageFailureReportResult,
   type CompanionMessageSendResult,
   type PolicyDecision,
   type RuntimeHealthResult,
@@ -59,6 +61,10 @@ import { evaluatePolicy } from './policy.js';
 import type { ApiStreamDeltaNotification } from '../../channels/api/types.js';
 import type { ModelUsageRecorder } from '../../shared/telemetry/model-usage.js';
 import type { CredentialVaultPort } from '../custody/credential-vault.js';
+import {
+  CompanionDeliveryFailureReceipts,
+  parseCompanionMessageFailureReport,
+} from './companion-delivery-failures.js';
 
 const log = createComponentLogger('Gateway');
 const DEFAULT_CONNECTION_HEALTHCHECK_STALE_AFTER_MS = 90_000;
@@ -201,6 +207,7 @@ export class GatewayServer {
   private readonly companionConnections = new Map<string, GatewayRpcConnection>();
   private readonly companionLastSeen = new Map<string, number>();
   private readonly companionViolationLog: CompanionViolationEvent[] = [];
+  private readonly companionDeliveryFailureReceipts = new CompanionDeliveryFailureReceipts();
 
   constructor(options: GatewayServerOptions) {
     this.options = options;
@@ -337,6 +344,16 @@ export class GatewayServer {
         senderCompanionId: this.connectionStatuses.get(conn)?.companionId ?? '(unidentified)',
         ...(isRecord(params) && typeof params.channelId === 'string' ? { channelId: params.channelId } : {}),
         ...(isRecord(params) && typeof params.content === 'string' ? { contentLength: params.content.length } : {}),
+      }),
+    ));
+    target.addMethod('companion.message.report_failure', this.audited(
+      'companion.message.report_failure',
+      (params: unknown) => this.handleCompanionMessageFailureReport(conn, params),
+      (params: unknown) => ({
+        reportingCompanionId: this.connectionStatuses.get(conn)?.companionId ?? '(unidentified)',
+        ...(isRecord(params) && typeof params.channelId === 'string' ? { channelId: params.channelId } : {}),
+        ...(isRecord(params) && typeof params.messageId === 'string' ? { messageId: params.messageId } : {}),
+        ...(isRecord(params) && typeof params.reason === 'string' ? { reason: params.reason } : {}),
       }),
     ));
     target.addMethod('api.stream.delta', (params: unknown) => {
@@ -541,7 +558,19 @@ export class GatewayServer {
         skippedOffline.push(recipientId);
         continue;
       }
-      this.notifyOne(recipientConn, 'companion.message', { message });
+      this.companionDeliveryFailureReceipts.record({
+        channelId,
+        messageId: message.id,
+        senderCompanionId,
+        recipientCompanionId: recipientId,
+        deliveredAt: mintedAt.getTime(),
+      });
+      try {
+        this.notifyOne(recipientConn, 'companion.message', { message });
+      } catch (error) {
+        this.companionDeliveryFailureReceipts.consume(recipientId, message.id);
+        throw error;
+      }
       deliveredTo.push(recipientId);
     }
 
@@ -572,6 +601,62 @@ export class GatewayServer {
       deliveredTo,
       skippedOffline,
     };
+  }
+
+  private async handleCompanionMessageFailureReport(
+    conn: GatewayRpcConnection,
+    params: unknown,
+  ): Promise<CompanionMessageFailureReportResult> {
+    if (!this.multiCompanion.enabled || !this.options.companionChannels) {
+      throw new JSONRPCErrorException(
+        'Inter-companion channel lane is not configured on this gateway',
+        GatewayErrors.COMPANION_ROUTING_UNAVAILABLE,
+      );
+    }
+
+    const status = this.connectionStatuses.get(conn);
+    const reportingCompanionId = status?.role === 'agent' ? status.companionId : undefined;
+    if (!reportingCompanionId) {
+      throw new Error('companion.message.report_failure requires an identified agent companion connection');
+    }
+
+    const { channelId, messageId, reason } = parseCompanionMessageFailureReport(params);
+    const receipt = this.companionDeliveryFailureReceipts.findVerified(
+      reportingCompanionId,
+      { channelId, messageId, reason },
+    );
+    if (!receipt) {
+      this.alarmCompanionViolation(
+        'companion_failure_report_unverified',
+        'Companion failure report does not match a gateway delivery receipt',
+        { reportingCompanionId, channelId, messageId },
+      );
+      throw new JSONRPCErrorException(
+        'Companion failure report does not match a gateway delivery receipt',
+        GatewayErrors.COMPANION_ROUTING_UNAVAILABLE,
+      );
+    }
+
+    this.refreshConnectionHealth();
+    const senderConn = this.resolveReadyCompanionConnection(receipt.senderCompanionId);
+    if (!senderConn) {
+      throw new JSONRPCErrorException(
+        `Original companion sender "${receipt.senderCompanionId}" is not connected`,
+        GatewayErrors.COMPANION_ROUTING_UNAVAILABLE,
+      );
+    }
+
+    const notification: CompanionMessageDeliveryFailureNotification = {
+      channelId,
+      messageId,
+      reportingCompanionId,
+      reason,
+      reportedAt: new Date().toISOString(),
+    };
+    this.notifyOne(senderConn, 'companion.message.delivery_failure', notification);
+    this.companionDeliveryFailureReceipts.consume(reportingCompanionId, messageId);
+    log.warn('Companion message delivery failure reported to original sender', notification);
+    return { reportedTo: receipt.senderCompanionId };
   }
 
   /** Ready+healthy agent connection for a companion, or null. Never throws. */
@@ -1373,6 +1458,7 @@ export class GatewayServer {
     this.rpcClients.clear();
     this.connectionStatuses.clear();
     this.companionConnections.clear();
+    this.companionDeliveryFailureReceipts.clear();
 
     if (this.rpcServer) {
       await new Promise<void>((resolve) => {

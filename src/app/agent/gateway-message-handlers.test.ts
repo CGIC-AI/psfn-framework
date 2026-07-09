@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { AgentResponse, SubstrateMessage } from '../../shared/contracts/runtime.js';
+import type { AgentResponse, Attachment, SubstrateMessage } from '../../shared/contracts/runtime.js';
 import type { SatelliteRoutingMetadata } from '../../core/agent/satellite-adapter-port.js';
 import { createNoopSatelliteRoutingPort } from '../../core/agent/satellite-adapter-port.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
@@ -7,6 +7,10 @@ import {
   registerGatewayMessageHandlers,
   type ObservedGroupMemorySchedulerPort,
 } from './gateway-message-handlers.js';
+import type {
+  CompanionMessageDeliveryFailureNotification,
+  CompanionMessageFailureReportParams,
+} from '../../boundary/gateway/protocol.js';
 
 function makeMessage(overrides?: Record<string, unknown>): SubstrateMessage {
   return {
@@ -64,6 +68,10 @@ function createHarness(overrides?: {
   observeMessage?: (message: SubstrateMessage) => Promise<void>;
   waitForIdle?: () => Promise<void>;
   observedGroupMemoryScheduler?: ObservedGroupMemorySchedulerPort;
+  discordSend?: (channelId: string, content: string) => Promise<void>;
+  discordSendMedia?: (channelId: string, media: Attachment) => Promise<void>;
+  companionSend?: (channelId: string, content: string, authorName?: string) => Promise<unknown>;
+  companionReportFailure?: (params: CompanionMessageFailureReportParams) => Promise<unknown>;
   outboundReplyGuard?: {
     noteDelivered: ReturnType<typeof vi.fn>;
     evaluate: ReturnType<typeof vi.fn>;
@@ -78,6 +86,9 @@ function createHarness(overrides?: {
   let onCompanionMessage:
     | ((message: SubstrateMessage) => void | Promise<void>)
     | undefined;
+  let onCompanionDeliveryFailure:
+    | ((notification: CompanionMessageDeliveryFailureNotification) => void | Promise<void>)
+    | undefined;
 
   const gateway = {
     onHandleMessage: vi.fn((handler: (message: SubstrateMessage) => Promise<AgentResponse>) => {
@@ -89,9 +100,15 @@ function createHarness(overrides?: {
     onCompanionMessage: vi.fn((handler: (message: SubstrateMessage) => void | Promise<void>) => {
       onCompanionMessage = handler;
     }),
-    discordSend: vi.fn(async () => {}),
-    discordSendMedia: vi.fn(async () => {}),
-    companionSend: vi.fn(async () => ({})),
+    onCompanionDeliveryFailure: vi.fn((
+      handler: (notification: CompanionMessageDeliveryFailureNotification) => void | Promise<void>,
+    ) => {
+      onCompanionDeliveryFailure = handler;
+    }),
+    discordSend: vi.fn(overrides?.discordSend ?? (async () => {})),
+    discordSendMedia: vi.fn(overrides?.discordSendMedia ?? (async () => {})),
+    companionSend: vi.fn(overrides?.companionSend ?? (async () => ({}))),
+    companionReportFailure: vi.fn(overrides?.companionReportFailure ?? (async () => ({}))),
   };
   const agentLoop = {
     handleMessage: vi.fn(overrides?.handleMessage ?? (async () => makeResponse('primary response'))),
@@ -143,7 +160,7 @@ function createHarness(overrides?: {
     companionAuthorName: 'Selene',
   });
 
-  if (!onHandleMessage || !onDiscordMessage || !onCompanionMessage) {
+  if (!onHandleMessage || !onDiscordMessage || !onCompanionMessage || !onCompanionDeliveryFailure) {
     throw new Error('Expected gateway message handlers to be registered');
   }
 
@@ -159,6 +176,7 @@ function createHarness(overrides?: {
     onHandleMessage,
     onDiscordMessage,
     onCompanionMessage,
+    onCompanionDeliveryFailure,
   };
 }
 
@@ -253,6 +271,16 @@ describe('registerGatewayMessageHandlers', () => {
     });
     expect(harness.gateway.discordSend).not.toHaveBeenCalled();
     expect(outboundReplyGuard.noteDelivered).not.toHaveBeenCalled();
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await harness.onDiscordMessage(message);
+    expect(harness.agentLoop.handleMessage).toHaveBeenCalledTimes(1);
+    expect(harness.safeguardAuditTrail.append).toHaveBeenCalledWith('gateway.message.duplicate', {
+      route: 'discord',
+      channelId: 'discord:general',
+      messageId: 'discord-msg-43',
+      disposition: 'cached',
+    });
   });
 
   it('returns from discord notification receipt before backend turn work finishes', async () => {
@@ -444,15 +472,114 @@ describe('registerGatewayMessageHandlers', () => {
         channelId: 'discord:general',
         messageId: 'msg-1',
         error: 'agent handling failure',
+        stage: 'handle_message',
       });
     });
     expect(harness.safeguardAuditTrail.append).toHaveBeenCalledWith('discord.message.error', {
       channelId: 'discord:general',
       messageId: 'msg-1',
       error: 'agent handling failure',
+      stage: 'handle_message',
     });
-    expect(harness.gateway.discordSend).not.toHaveBeenCalled();
+    expect(harness.gateway.discordSend).toHaveBeenCalledWith(
+      'discord:general',
+      '[System delivery error] The runtime could not complete that turn. Please retry your message.',
+    );
     expect(harness.gateway.discordSendMedia).not.toHaveBeenCalled();
+  });
+
+  it('keeps a discord message retryable when agent handling fails', async () => {
+    const handleMessage = vi.fn()
+      .mockRejectedValueOnce(new Error('transient model failure'))
+      .mockResolvedValueOnce(makeResponse('recovered response'));
+    const harness = createHarness({ handleMessage });
+    const message = makeMessage({
+      id: 'msg-handle-retry',
+      channelId: 'discord:general',
+      channelType: 'discord',
+      routing: undefined,
+    });
+
+    await harness.onDiscordMessage(message);
+    await vi.waitFor(() => {
+      expect(harness.safeguardAuditTrail.append).toHaveBeenCalledWith(
+        'discord.message.error',
+        expect.objectContaining({ messageId: 'msg-handle-retry', stage: 'handle_message' }),
+      );
+    });
+
+    await harness.onDiscordMessage(message);
+    await vi.waitFor(() => {
+      expect(handleMessage).toHaveBeenCalledTimes(2);
+      expect(harness.gateway.discordSend).toHaveBeenCalledWith('discord:general', 'recovered response');
+    });
+  });
+
+  it('retries failed discord text delivery without rerunning the completed turn', async () => {
+    const discordSend = vi.fn()
+      .mockRejectedValueOnce(new Error('discord text unavailable'))
+      .mockResolvedValue(undefined);
+    const handleMessage = vi.fn(async () => makeResponse('deliver me once'));
+    const harness = createHarness({ handleMessage, discordSend });
+    const message = makeMessage({
+      id: 'msg-text-retry',
+      channelId: 'discord:general',
+      channelType: 'discord',
+      routing: undefined,
+    });
+
+    await harness.onDiscordMessage(message);
+    await vi.waitFor(() => {
+      expect(harness.safeguardAuditTrail.append).toHaveBeenCalledWith(
+        'discord.message.error',
+        expect.objectContaining({ messageId: 'msg-text-retry', stage: 'text_delivery' }),
+      );
+    });
+
+    await harness.onDiscordMessage(message);
+    await vi.waitFor(() => {
+      expect(discordSend).toHaveBeenCalledWith('discord:general', 'deliver me once');
+      expect(discordSend).toHaveBeenCalledTimes(3);
+    });
+    expect(handleMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it('resumes failed discord media delivery without duplicating delivered text', async () => {
+    const attachment: Attachment = {
+      url: 'https://images.example.test/retry.png',
+      contentType: 'image/png',
+      name: 'retry.png',
+    };
+    const discordSendMedia = vi.fn()
+      .mockRejectedValueOnce(new Error('discord media unavailable'))
+      .mockResolvedValue(undefined);
+    const handleMessage = vi.fn(async () => ({
+      ...makeResponse('text already delivered'),
+      attachments: [attachment],
+    }));
+    const harness = createHarness({ handleMessage, discordSendMedia });
+    const message = makeMessage({
+      id: 'msg-media-retry',
+      channelId: 'discord:general',
+      channelType: 'discord',
+      routing: undefined,
+    });
+
+    await harness.onDiscordMessage(message);
+    await vi.waitFor(() => {
+      expect(harness.safeguardAuditTrail.append).toHaveBeenCalledWith(
+        'discord.message.error',
+        expect.objectContaining({ messageId: 'msg-media-retry', stage: 'media_delivery' }),
+      );
+    });
+
+    await harness.onDiscordMessage(message);
+    await vi.waitFor(() => {
+      expect(discordSendMedia).toHaveBeenCalledTimes(2);
+    });
+    expect(handleMessage).toHaveBeenCalledTimes(1);
+    expect(harness.gateway.discordSend.mock.calls.filter(([, content]) => content === 'text already delivered'))
+      .toHaveLength(1);
   });
 
   it('holds a discord message until the in-flight turn finishes instead of dropping it', async () => {
@@ -615,6 +742,7 @@ describe('registerGatewayMessageHandlers', () => {
       expect(harness.gateway.discordSend).toHaveBeenCalledTimes(1);
     });
 
+    await new Promise((resolve) => setTimeout(resolve, 0));
     await harness.onDiscordMessage(message);
 
     expect(harness.safeguardAuditTrail.append).toHaveBeenCalledWith('gateway.message.duplicate', {
@@ -698,6 +826,9 @@ describe('registerGatewayMessageHandlers', () => {
       expect(harness.agentLoop.handleMessage).toHaveBeenCalledTimes(1);
     });
     expect(harness.gateway.companionSend).not.toHaveBeenCalled();
+
+    await harness.onCompanionMessage(makeCompanionMessage());
+    expect(harness.agentLoop.handleMessage).toHaveBeenCalledTimes(1);
   });
 
   it('drops duplicate companion notifications and audits the disposition', async () => {
@@ -732,22 +863,83 @@ describe('registerGatewayMessageHandlers', () => {
     expect(harness.agentLoop.handleMessage).toHaveBeenCalledTimes(1);
   });
 
-  it('logs and audits companion turn errors without crashing the pump', async () => {
+  it('reports companion turn failures and keeps the source message retryable', async () => {
+    const handleMessage = vi.fn()
+      .mockRejectedValueOnce(new Error('turn exploded'))
+      .mockResolvedValueOnce(makeResponse(''));
     const harness = createHarness({
-      handleMessage: async () => {
-        throw new Error('turn exploded');
-      },
+      handleMessage,
     });
+    const message = makeCompanionMessage({ id: 'cmsg-err' });
 
-    await harness.onCompanionMessage(makeCompanionMessage({ id: 'cmsg-err' }));
+    await harness.onCompanionMessage(message);
 
     await vi.waitFor(() => {
       expect(harness.safeguardAuditTrail.append).toHaveBeenCalledWith('companion.message.error', {
         channelId: 'companion-room:living_room',
         messageId: 'cmsg-err',
         error: 'turn exploded',
+        reason: 'processing_failed',
       });
     });
-    expect(harness.gateway.companionSend).not.toHaveBeenCalled();
+    expect(harness.gateway.companionReportFailure).toHaveBeenCalledWith({
+      channelId: 'companion-room:living_room',
+      messageId: 'cmsg-err',
+      reason: 'processing_failed',
+    });
+
+    await harness.onCompanionMessage(message);
+    await vi.waitFor(() => {
+      expect(handleMessage).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  it('reports companion reply delivery failures without sending conversational error text', async () => {
+    const harness = createHarness({
+      handleMessage: async () => makeResponse('reply that cannot be delivered'),
+      companionSend: async () => {
+        throw new Error('peer route unavailable');
+      },
+    });
+
+    await harness.onCompanionMessage(makeCompanionMessage({ id: 'cmsg-send-err' }));
+
+    await vi.waitFor(() => {
+      expect(harness.gateway.companionReportFailure).toHaveBeenCalledWith({
+        channelId: 'companion-room:living_room',
+        messageId: 'cmsg-send-err',
+        reason: 'reply_delivery_failed',
+      });
+    });
+    expect(harness.gateway.companionSend).toHaveBeenCalledTimes(1);
+  });
+
+  it('records companion delivery failures as system observations without a reply turn', async () => {
+    const harness = createHarness();
+    const notification: CompanionMessageDeliveryFailureNotification = {
+      channelId: 'companion-room:living_room',
+      messageId: 'cmsg-origin',
+      reportingCompanionId: 'comp-b',
+      reason: 'processing_failed',
+      reportedAt: '2026-07-09T18:00:00.000Z',
+    };
+
+    await harness.onCompanionDeliveryFailure(notification);
+
+    expect(harness.agentLoop.handleMessage).not.toHaveBeenCalled();
+    expect(harness.agentLoop.observeMessage).toHaveBeenCalledWith(expect.objectContaining({
+      id: 'companion-delivery-failure:cmsg-origin:comp-b',
+      channelId: 'companion-room:living_room',
+      channelType: 'companion',
+      authorId: 'system:companion-delivery',
+      routing: {
+        source: 'companion',
+        responseMode: 'observe',
+      },
+    }));
+    expect(harness.safeguardAuditTrail.append).toHaveBeenCalledWith(
+      'companion.message.delivery_failed',
+      notification,
+    );
   });
 });

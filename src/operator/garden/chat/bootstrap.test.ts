@@ -307,7 +307,7 @@ describe('AdminChatBootstrapService', () => {
       modelCatalog: {
         primary: {
           model: 'test-model-room',
-          provider: 'openrouter',
+          provider: 'litellm',
         },
       },
     }))).rejects.toThrow('no direct model-room participants are configured');

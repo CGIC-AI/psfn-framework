@@ -35,7 +35,7 @@ const VOICE_WEBSOCKET_PATH = '/v1/voice/ws';
 const OPENAI_API_BASE_PATH = '/v1';
 const DEFAULT_MODEL_ROOM_ID = 'garden-model-room';
 const STARTER_IDENTITY_ONBOARDING_MESSAGE = 'Starter identity is active. Import a character card or edit Identity to personalize your companion.';
-const MODEL_ROOM_DIRECT_PROVIDERS = new Set(['anthropic', 'openai', 'google']);
+const MODEL_ROOM_DIRECT_PROVIDERS = new Set(['anthropic', 'openai', 'google', 'openrouter']);
 
 export class AdminChatBootstrapSetupError extends Error {
   readonly issues: string[];
@@ -211,7 +211,7 @@ export class AdminChatBootstrapService {
       participants,
       constraints: {
         allowedProviders: [...MODEL_ROOM_DIRECT_PROVIDERS],
-        deniedProviders: ['openrouter'],
+        deniedProviders: [],
       },
     };
   }

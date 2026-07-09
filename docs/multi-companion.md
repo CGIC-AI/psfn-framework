@@ -1,6 +1,6 @@
 # Multi-Companion Substrate
 
-Last updated: 2026-07-08.
+Last updated: 2026-07-09.
 
 This is the canonical page for running more than one companion on a single PSFN
 cluster: the topology, the opt-in flag, the fleet manifest, and the fleet
@@ -50,13 +50,19 @@ carries exactly:
 | Field | Meaning | Validation |
 |---|---|---|
 | `companionId` | UUID identifying the companion across the fleet | lowercase RFC-4122 UUID |
-| `companionDataDir` | companion's data root, relative to the persistence root | relative path, may not escape the root |
-| `characterCardPath` | companion's character card | relative path |
+| `companionDataDir` | companion's data root, relative to the canonical persistence root (`PSFN_RUNTIME_ROOT`, or the selected layout's runtime root) | relative path, may not escape the root |
+| `characterCardPath` | companion's character card, relative to the same canonical persistence root | relative path, may not escape the root |
 | `postgresSchema` | Postgres schema owning this companion's tenant tables | lowercase identifier, ≤63 chars, no `pg_` prefix |
 | `gardenPort` | optional TCP port for this companion's own Garden operator surface | integer 1–65535, unique across the fleet |
 
 Cross-entry validation rejects duplicate `companionId`, duplicate
 `postgresSchema`, duplicate `gardenPort`, and overlapping `companionDataDir`.
+Before any process is spawned, the supervisor resolves both path fields to
+canonical absolute strict subpaths of the runtime root. Existing symlink
+ancestors are resolved and an escape outside that root is rejected. Agent and
+operator startup then bind `COMPANION_ID`, both paths, `COMPANION_PG_SCHEMA`,
+and the per-companion admin socket back to that one manifest entry; an unknown
+ID or any drift refuses startup before persistence or character-card loading.
 
 **What is NOT in `companions.json`:** per-companion Discord tokens and per-companion
 model/settings selections. Discord identity + channel→companion routing live in
@@ -99,8 +105,9 @@ fleet and spawns one agent process per companion.
 
 - Fleet plan: `npm run resolve:companion-fleet`
   (`scripts/resolve-companion-fleet.ts`) reuses `resolveCompanionFleet` and emits
-  a tab-delimited spawn plan, one line per companion:
+  an internal tab-delimited spawn plan, one line per companion:
   `companionId, companionDataDir, characterCardPath, postgresSchema,
+  role-bound agent proof, role-bound session-integrity proof,
   adminTransportSocket, gardenPort` (`gardenPort` is `-` when absent). A
   single-companion topology prints nothing — the launcher reads empty stdout as
   "stay in single-agent mode." The admin socket is derived from
@@ -109,10 +116,21 @@ fleet and spawns one agent process per companion.
 - Per-agent env: each spawned agent gets a scrubbed environment
   (`env -i` from an allowlist) plus `COMPANION_ID`, `COMPANION_DATA_DIR`,
   `CHARACTER_CARD_PATH`, `COMPANION_PG_SCHEMA`, `ADMIN_TRANSPORT_SOCKET`, and
-  `ADMIN_PORT` from the plan.
+  `ADMIN_PORT` from the plan. The gateway proofs are derived from the gateway
+  session keyring and companion ID; they are passed only to the agent and its
+  isolated session-integrity worker and are omitted from dry-run output.
+  The default single-companion launcher derives the same role separation for
+  its isolated worker even though normal agent methods retain local-socket
+  trust for flag-off compatibility.
 - `--dry-run` (or `PSFN_SUPERVISOR_DRY_RUN=1`) prints the spawn plan and exits
   without launching anything.
 - Shared fate: any supervised process exit tears down the whole fleet.
+
+Gateway registration is authenticated in multi-companion mode. The gateway
+accepts only IDs present in the resolved fleet and verifies a role-bound HMAC
+proof before routing any request. General agent RPC methods and the two
+session-integrity signing methods have disjoint role policies in both
+topologies; selecting the internal role always requires its proof.
 
 Network admin-transport mode is rejected fail-closed under the supervisor:
 per-companion Gardens currently support socket mode only.
@@ -139,6 +157,10 @@ Each companion has its own Discord bot identity. Discord accounts in
   (`garden-admin-<companionId>.sock`) and listening on its `gardenPort`. The
   supervisor spawns them; a companion with no `gardenPort` gets no operator
   process. Auth stays single-operator token; the operator sees everything.
+  Operator processes start from a least-privilege `env -i` allowlist, do not
+  load the repo `.env`, and do not retain gateway, provider, channel, database,
+  or companion-auth credentials. Credential status in Settings is a boolean-only
+  snapshot queried from the gateway over the authenticated admin path.
 - **Gateway fleet-status surface.** A thin, read-only, loopback-only page served
   by the gateway (`src/boundary/gateway/fleet-status.ts`,
   `startOptionalFleetStatusServer`), enabled by `FLEET_STATUS_PORT` (host

@@ -1,4 +1,4 @@
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { DEFAULT_GATEWAY_SOCKET_PATH } from '../../system/security/policy-constants.js';
 import { parseOptionalPositiveIntEnv, parseOptionalStringEnv } from '../../shared/utils/env.js';
 import { normalizeSpiffeUri } from '../../shared/net/mtls.js';
@@ -88,6 +88,21 @@ export function resolveCompanionAdminTransportSocketPath(
   }
   const baseSocketPath = resolveAdminTransportSocketPath(env);
   return join(dirname(baseSocketPath), `garden-admin-${trimmed}.sock`);
+}
+
+export function assertCompanionAdminTransportSocketPath(
+  companionId: string,
+  env: NodeJS.ProcessEnv = process.env,
+): string {
+  const actual = resolveAdminTransportSocketPath(env);
+  const expected = resolveCompanionAdminTransportSocketPath(companionId, env);
+  if (resolve(actual) !== resolve(expected)) {
+    throw new Error(
+      `Multi-companion admin transport mismatch: expected ${expected} for companion `
+      + `${JSON.stringify(companionId)}, got ${actual}`,
+    );
+  }
+  return actual;
 }
 
 export function resolveAdminTransportMode(

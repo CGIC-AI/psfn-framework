@@ -121,6 +121,7 @@ export async function buildGatewayPrivilegedCore(
       sessionHmacKeyring: input.bootstrap.server.sessionHmacKeyring,
       wyomingShardRouting: input.bootstrap.server.wyomingShardRouting,
       multiCompanion: input.bootstrap.server.multiCompanion,
+      credentialPresence: input.bootstrap.server.credentialPresence,
     }),
   };
 }

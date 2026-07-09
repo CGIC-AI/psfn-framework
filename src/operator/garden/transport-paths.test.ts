@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
+  assertCompanionAdminTransportSocketPath,
+  resolveCompanionAdminTransportSocketPath,
   resolveAdminTransportClientEndpoint,
   resolveAdminTransportMode,
   resolveAdminTransportServerEndpoint,
@@ -28,6 +30,18 @@ describe('Garden admin transport endpoint resolution', () => {
       socketPath: '/run/psfn/garden-admin.sock',
       timeoutMs: 15_000,
     });
+  });
+
+  it('derives and enforces the companion-bound admin socket name', () => {
+    const env = {
+      ADMIN_TRANSPORT_SOCKET: '/run/psfn/garden-admin-comp-a.sock',
+    };
+    expect(resolveCompanionAdminTransportSocketPath('comp-a', env))
+      .toBe('/run/psfn/garden-admin-comp-a.sock');
+    expect(assertCompanionAdminTransportSocketPath('comp-a', env))
+      .toBe('/run/psfn/garden-admin-comp-a.sock');
+    expect(() => assertCompanionAdminTransportSocketPath('comp-b', env))
+      .toThrow(/Multi-companion admin transport mismatch/);
   });
 
   it('keeps socket mode cert-free and rejects network-only TLS env without network mode', () => {

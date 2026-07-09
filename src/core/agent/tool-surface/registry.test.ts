@@ -12,6 +12,7 @@ import {
 } from './registry.js';
 import { createJournalTool } from '../../../boundary/integrations/journal/tools.js';
 import { isRecord } from '../../../shared/utils/types.js';
+import { hasDeclaredCapabilityPolicyForToolName } from '../../../system/capabilities/requirements.js';
 
 const FORBIDDEN_LEGACY_ACTION_NAMES = [
   'session_new',
@@ -69,6 +70,14 @@ describe('first-party tool surface registry', () => {
         expect(entry.actions.length).toBeGreaterThan(0);
       }
     }
+  });
+
+  it('keeps every canonical first-party tool covered by an executable capability policy', () => {
+    const missing = CANONICAL_FIRST_PARTY_TOOL_SURFACES
+      .map(entry => entry.name)
+      .filter(name => !hasDeclaredCapabilityPolicyForToolName(name));
+
+    expect(missing, `canonical tools missing capability policy: ${missing.join(', ')}`).toEqual([]);
   });
 
   it('maps every retired alias to a canonical surface without name collisions', () => {

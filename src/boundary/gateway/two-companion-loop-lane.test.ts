@@ -5,6 +5,7 @@ import type { GatewayRpcConnection } from './transport.js';
 import type { SessionHmacKeyring } from '../../persistence/journals/journal-utils.js';
 import type { GatewayMultiCompanionConfig } from './multi-companion.js';
 import { GatewayCompanionChannelLane } from './companion-channels.js';
+import { deriveCompanionAuthToken } from './companion-auth.js';
 import type { PlacesRegistryConfig } from '../../shared/contracts/places-registry.js';
 import type {
   FatigueBudgetEvent,
@@ -165,6 +166,7 @@ function createMockConnection(
 function createServerOptions(lane: GatewayCompanionChannelLane): GatewayServerOptions {
   const multiCompanionConfig: GatewayMultiCompanionConfig = {
     enabled: true,
+    fleetCompanionIds: ['comp-nova', 'comp-selene'],
     channelRouting: {},
     discordAccounts: {},
   };
@@ -227,7 +229,15 @@ class LaneAgent {
       jsonrpc: '2.0',
       id: ++this.rpcCounter + 1_000,
       method: 'gateway.client.identify',
-      params: { role: 'agent', companionId: this.companionId },
+      params: {
+        role: 'agent',
+        companionId: this.companionId,
+        authToken: deriveCompanionAuthToken(
+          this.companionId,
+          'agent',
+          TEST_SESSION_HMAC_KEYRING,
+        ),
+      },
     });
     await new Promise(r => setTimeout(r, 10));
   }

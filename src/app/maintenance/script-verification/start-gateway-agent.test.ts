@@ -3,6 +3,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, wr
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it } from 'vitest';
+import { deriveCompanionAuthToken } from '../../../boundary/gateway/companion-auth.js';
 
 const repoRoot = process.cwd();
 const runtimeEnvPath = join(repoRoot, 'scripts/system/runtime-env.sh');
@@ -99,6 +100,7 @@ describe('start-gateway-agent launcher supervision', () => {
         '#!/usr/bin/env bash',
         'case "$1" in',
         '  scripts/verify-startup-owner-files.ts) exit 0 ;;',
+        '  scripts/resolve-single-companion-auth.ts) printf "v1.agent-proof\\tv1.worker-proof\\n"; exit 0 ;;',
         '  *) sleep 30 ;;',
         'esac',
       ].join('\n'),
@@ -196,21 +198,64 @@ describe('start-gateway-agent launcher supervision', () => {
 
   it('launches the agent with a non-secret environment allowlist', () => {
     const launcher = readFileSync(join(repoRoot, 'scripts/start-gateway-agent.sh'), 'utf8');
+    const agentAllowlist = launcher.slice(
+      launcher.indexOf('build_agent_env()'),
+      launcher.indexOf('# Operator processes receive only'),
+    );
     expect(launcher).toContain('launch_background env -i "${AGENT_ENV[@]}" ./node_modules/.bin/tsx src/app/agent/main.ts');
-    expect(launcher).toContain('build_agent_env');
-    expect(launcher).toContain('GATEWAY_SOCKET');
-    expect(launcher).toContain('SYSTEM_DATA_DIR');
-    expect(launcher).toContain('COMPANION_DATA_DIR');
-    expect(launcher).not.toMatch(/\n\s*API_KEY\s*\\/);
-    expect(launcher).not.toMatch(/\n\s*ADMIN_TOKEN\s*\\/);
-    expect(launcher).not.toMatch(/\n\s*OPENROUTER_API_KEY\s*\\/);
-    expect(launcher).not.toMatch(/\n\s*LITELLM_API_KEY\s*\\/);
-    expect(launcher).not.toMatch(/\n\s*FAL_API_KEY\s*\\/);
+    expect(agentAllowlist).toContain('GATEWAY_SOCKET');
+    expect(agentAllowlist).toContain('SYSTEM_DATA_DIR');
+    expect(agentAllowlist).toContain('COMPANION_DATA_DIR');
+    expect(agentAllowlist).not.toMatch(/\n\s*API_KEY\s*\\/);
+    expect(agentAllowlist).not.toMatch(/\n\s*ADMIN_TOKEN\s*\\/);
+    expect(agentAllowlist).not.toMatch(/\n\s*OPENROUTER_API_KEY\s*\\/);
+    expect(agentAllowlist).not.toMatch(/\n\s*LITELLM_API_KEY\s*\\/);
+    expect(agentAllowlist).not.toMatch(/\n\s*FAL_API_KEY\s*\\/);
   });
 
   it('does not inject npm run split as an unsafe lifecycle restart command', () => {
     const launcher = readFileSync(join(repoRoot, 'scripts/start-gateway-agent.sh'), 'utf8');
     expect(launcher).not.toContain('export LIFECYCLE_RESTART_COMMAND="npm run');
+  });
+
+  it('does not load repo dotenv secrets into an operator config process', () => {
+    const workDir = mkdtempSync(join(tmpdir(), 'psfn-operator-secret-probe-'));
+    writeFileSync(join(workDir, '.env'), [
+      'OPENROUTER_API_KEY=sentinel-openrouter',
+      'DISCORD_TOKEN=sentinel-discord',
+      'POSTGRES_DATABASE_URL=postgres://sentinel@localhost/db',
+    ].join('\n'), 'utf8');
+    const loaderPath = join(repoRoot, 'src/system/config/load-config.ts');
+    try {
+      const output = execFileSync(join(repoRoot, 'node_modules/.bin/tsx'), [
+        '--eval',
+        [
+          `import(${JSON.stringify(loaderPath)}).then(({ loadOperatorConfig }) => {`,
+          '  const config = loadOperatorConfig();',
+          '  console.log(JSON.stringify({',
+          '    processOpenrouter: process.env.OPENROUTER_API_KEY,',
+          '    processDiscord: process.env.DISCORD_TOKEN,',
+          '    processPostgres: process.env.POSTGRES_DATABASE_URL,',
+          '    configOpenrouter: config.openRouterApiKey,',
+          '    configDiscord: config.discordToken,',
+          '    configPostgres: config.postgresDatabaseUrl,',
+          '  }));',
+          '});',
+        ].join('\n'),
+      ], {
+        cwd: workDir,
+        encoding: 'utf8',
+        env: {
+          PATH: process.env.PATH,
+          HOME: process.env.HOME,
+          COMPANION_ID: 'operator-probe',
+        },
+      });
+
+      expect(JSON.parse(output.trim())).toEqual({});
+    } finally {
+      rmSync(workDir, { recursive: true, force: true });
+    }
   });
 
   it('checks Node.js before running TypeScript entrypoints', () => {
@@ -282,12 +327,16 @@ describe('start-gateway-agent multi-companion supervisor', () => {
     ],
   });
 
-  it('keeps the single-companion path byte-identical when the flag is absent', () => {
+  it('keeps the single-companion process topology when the flag is absent', () => {
     const launcher = readFileSync(join(repoRoot, 'scripts/start-gateway-agent.sh'), 'utf8');
     // The helper is only invoked when the topology flag is present at all.
     expect(launcher).toContain('if [ -z "${PSFN_MULTI_COMPANION:-}" ]; then');
     // Supervisor branch never runs unless the flag resolved a fleet.
     expect(launcher).toContain('if [ "${SUPERVISOR_MODE}" -eq 1 ]; then');
+    // The normal topology still derives a separate proof for its isolated
+    // session-integrity worker before either child receives scrubbed env.
+    expect(launcher).toContain('scripts/resolve-single-companion-auth.ts');
+    expect(launcher).toContain('resolve_single_companion_auth');
   });
 
   it('delegates all fleet validation to the canonical TS helper', () => {
@@ -300,6 +349,8 @@ describe('start-gateway-agent multi-companion supervisor', () => {
   it('passes the companion-scoped and topology env through the scrubbed allowlist', () => {
     const launcher = readFileSync(join(repoRoot, 'scripts/start-gateway-agent.sh'), 'utf8');
     expect(launcher).toContain('COMPANION_PG_SCHEMA \\');
+    expect(launcher).toContain('GATEWAY_COMPANION_AUTH_TOKEN \\');
+    expect(launcher).toContain('GATEWAY_SESSION_INTEGRITY_AUTH_TOKEN \\');
     expect(launcher).toContain('PSFN_MULTI_COMPANION \\');
     expect(launcher).toContain('export COMPANION_ID="${companion_id}"');
     expect(launcher).toContain('export COMPANION_DATA_DIR="${companion_data_dir}"');
@@ -333,8 +384,34 @@ describe('start-gateway-agent multi-companion supervisor', () => {
     );
     // The operator allowlist may carry its own admin auth material but never
     // upstream provider secrets.
-    expect(launcher).toContain('ADMIN_TOKEN; do');
-    expect(launcher).not.toMatch(/OPERATOR_ENV[^\n]*OPENROUTER_API_KEY/);
+    const operatorAllowlist = launcher.slice(
+      launcher.indexOf('build_operator_env()'),
+      launcher.indexOf('launch_background()'),
+    );
+    expect(operatorAllowlist).toContain('ADMIN_TOKEN \\');
+    for (const secret of [
+      'OPENROUTER_API_KEY',
+      'LITELLM_API_KEY',
+      'FAL_API_KEY',
+      'DISCORD_TOKEN',
+      'TELEGRAM_BOT_TOKEN',
+      'POSTGRES_DATABASE_URL',
+      'GATEWAY_COMPANION_AUTH_TOKEN',
+      'GATEWAY_SESSION_INTEGRITY_AUTH_TOKEN',
+      'GATEWAY_SESSION_HMAC_KEY',
+    ]) {
+      expect(operatorAllowlist).not.toContain(secret);
+    }
+    expect(launcher).toContain(
+      'launch_background env -i "${OPERATOR_ENV[@]}" ./node_modules/.bin/tsx src/app/operator/main.ts',
+    );
+  });
+
+  it('keeps the operator entrypoint independent of the repo dotenv and gateway loader', () => {
+    const entrypoint = readFileSync(join(repoRoot, 'src/app/operator/main.ts'), 'utf8');
+    expect(entrypoint).not.toContain('load-dotenv');
+    expect(entrypoint).not.toMatch(/\bloadConfig\b/u);
+    expect(entrypoint).toContain('loadOperatorConfig');
   });
 
   it('emits a tab-delimited spawn plan from the canonical fleet validator', () => {
@@ -347,17 +424,24 @@ describe('start-gateway-agent multi-companion supervisor', () => {
           PATH: process.env.PATH,
           HOME: process.env.HOME,
           PSFN_MULTI_COMPANION: '1',
+          PSFN_RUNTIME_ROOT: workDir,
           SYSTEM_DATA_DIR: systemDataDir,
           COMPANION_DATA_DIR: companionDataDir,
+          GATEWAY_SESSION_HMAC_KEY: 'test-session-secret',
           ADMIN_TRANSPORT_SOCKET: join(workDir, 'run', 'garden-admin.sock'),
         },
       });
       const socketDir = join(workDir, 'run');
+      const keyring = { activeVersion: 'v1', keys: { v1: 'test-session-secret' } };
       expect(output).toBe(
         [
-          '11111111-1111-4111-8111-111111111111\talpha\talpha/card.json\tcompanion_alpha'
+          `11111111-1111-4111-8111-111111111111\t${workDir}/alpha\t${workDir}/alpha/card.json\tcompanion_alpha`
+          + `\t${deriveCompanionAuthToken('11111111-1111-4111-8111-111111111111', 'agent', keyring)}`
+          + `\t${deriveCompanionAuthToken('11111111-1111-4111-8111-111111111111', 'internal_session_integrity', keyring)}`
           + `\t${socketDir}/garden-admin-11111111-1111-4111-8111-111111111111.sock\t10061`,
-          '22222222-2222-4222-8222-222222222222\tbeta\tbeta/card.json\tcompanion_beta'
+          `22222222-2222-4222-8222-222222222222\t${workDir}/beta\t${workDir}/beta/card.json\tcompanion_beta`
+          + `\t${deriveCompanionAuthToken('22222222-2222-4222-8222-222222222222', 'agent', keyring)}`
+          + `\t${deriveCompanionAuthToken('22222222-2222-4222-8222-222222222222', 'internal_session_integrity', keyring)}`
           + `\t${socketDir}/garden-admin-22222222-2222-4222-8222-222222222222.sock\t-`,
           '',
         ].join('\n'),
@@ -365,6 +449,26 @@ describe('start-gateway-agent multi-companion supervisor', () => {
     } finally {
       rmSync(workDir, { recursive: true, force: true });
     }
+  });
+
+  it('derives role-bound credentials for the single-companion launcher', () => {
+    const keyring = { activeVersion: 'v1', keys: { v1: 'test-session-secret' } };
+    const companionId = 'single-companion';
+    const output = execFileSync(tsxBin, ['scripts/resolve-single-companion-auth.ts'], {
+      cwd: repoRoot,
+      encoding: 'utf8',
+      env: {
+        PATH: process.env.PATH,
+        HOME: process.env.HOME,
+        COMPANION_ID: companionId,
+        GATEWAY_SESSION_HMAC_KEY: 'test-session-secret',
+      },
+    });
+
+    expect(output).toBe(
+      `${deriveCompanionAuthToken(companionId, 'agent', keyring)}\t`
+      + `${deriveCompanionAuthToken(companionId, 'internal_session_integrity', keyring)}\n`,
+    );
   });
 
   it('fails closed when multi-companion is combined with network admin transport', () => {
@@ -476,8 +580,10 @@ describe('start-gateway-agent multi-companion supervisor', () => {
           HOME: process.env.HOME,
           PSFN_SKIP_DOTENV: 'true',
           PSFN_MULTI_COMPANION: '1',
+          PSFN_RUNTIME_ROOT: workDir,
           SYSTEM_DATA_DIR: systemDataDir,
           COMPANION_DATA_DIR: companionDataDir,
+          GATEWAY_SESSION_HMAC_KEY: 'test-session-secret',
           XDG_RUNTIME_DIR: join(workDir, 'run'),
         },
         timeout: 30000,
@@ -497,6 +603,8 @@ describe('start-gateway-agent multi-companion supervisor', () => {
       expect(output).not.toContain('starting gateway');
       expect(output).not.toContain('starting agent');
       expect(output).not.toContain('starting operator');
+      expect(output).not.toContain('test-session-secret');
+      expect(output).not.toMatch(/v1\.[a-f0-9]{64}/u);
     } finally {
       rmSync(workDir, { recursive: true, force: true });
     }

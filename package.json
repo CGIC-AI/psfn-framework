@@ -59,6 +59,7 @@
     "lint": "eslint .",
     "verify:startup-owner-files": "tsx scripts/verify-startup-owner-files.ts",
     "resolve:companion-fleet": "tsx scripts/resolve-companion-fleet.ts",
+    "resolve:single-companion-auth": "tsx scripts/resolve-single-companion-auth.ts",
     "garden:dev": "npm --prefix admin-ui run dev",
     "garden:build": "npm --prefix admin-ui run build",
     "garden:preview": "npm --prefix admin-ui run preview",

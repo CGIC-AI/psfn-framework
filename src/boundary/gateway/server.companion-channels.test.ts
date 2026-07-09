@@ -11,6 +11,7 @@ import {
   type CompanionPresenceReadRow,
 } from './companion-channels.js';
 import type { PlacesRegistryConfig } from '../../shared/contracts/places-registry.js';
+import { deriveCompanionAuthToken } from './companion-auth.js';
 
 // ── W6 inter-companion channel lane: gateway routing tests ──
 // The lane is the ONLY path between companions: sends resolve fail-closed
@@ -124,7 +125,12 @@ function createMinimalOptions(): GatewayServerOptions {
 }
 
 function multiCompanion(): GatewayMultiCompanionConfig {
-  return { enabled: true, channelRouting: {}, discordAccounts: {} };
+  return {
+    enabled: true,
+    fleetCompanionIds: ['comp-a', 'comp-b', 'comp-c'],
+    channelRouting: {},
+    discordAccounts: {},
+  };
 }
 
 function makeLane(input: {
@@ -181,7 +187,11 @@ async function invokeRpc(
 }
 
 async function identifyAgent(conn: MockConnection, companionId: string, rpcId = 900): Promise<any> {
-  return await invokeRpc(conn, rpcId, 'gateway.client.identify', { role: 'agent', companionId });
+  return await invokeRpc(conn, rpcId, 'gateway.client.identify', {
+    role: 'agent',
+    companionId,
+    authToken: deriveCompanionAuthToken(companionId, 'agent', TEST_SESSION_HMAC_KEYRING),
+  });
 }
 
 function methodFrames(conn: MockConnection, method: string): any[] {
@@ -402,6 +412,61 @@ describe('companion.message.send routing (W6)', () => {
     expect(reply.result).toMatchObject({ deliveredTo: ['comp-a'] });
     expect(methodFrames(agentA, 'companion.message')[0].params.message.channelId)
       .toBe('companion-dm:comp-a:comp-b');
+  });
+
+  it('routes a verified delivery failure to the original sender as a structured notification', async () => {
+    const { connect } = await setupServer({
+      ...createMinimalOptions(),
+      multiCompanion: multiCompanion(),
+      companionChannels: makeLane({ fleet: ['comp-a', 'comp-b'] }),
+    });
+    const agentA = await connect();
+    const agentB = await connect();
+    await identifyAgent(agentA, 'comp-a');
+    await identifyAgent(agentB, 'comp-b', 901);
+
+    const send = await invokeRpc(agentA, 22, 'companion.message.send', {
+      channelId: 'companion-dm:comp-a:comp-b',
+      content: 'message that fails remotely',
+      companionId: 'comp-a',
+    });
+    const report = await invokeRpc(agentB, 23, 'companion.message.report_failure', {
+      channelId: 'companion-dm:comp-a:comp-b',
+      messageId: send.result.messageId,
+      reason: 'processing_failed',
+      companionId: 'comp-b',
+    });
+
+    expect(report.result).toEqual({ reportedTo: 'comp-a' });
+    const failures = methodFrames(agentA, 'companion.message.delivery_failure');
+    expect(failures).toHaveLength(1);
+    expect(failures[0].params).toMatchObject({
+      channelId: 'companion-dm:comp-a:comp-b',
+      messageId: send.result.messageId,
+      reportingCompanionId: 'comp-b',
+      reason: 'processing_failed',
+      reportedAt: expect.any(String),
+    });
+    expect(methodFrames(agentB, 'companion.message.delivery_failure')).toHaveLength(0);
+  });
+
+  it('rejects a failure report without a matching delivery receipt', async () => {
+    const { connect } = await setupServer({
+      ...createMinimalOptions(),
+      multiCompanion: multiCompanion(),
+      companionChannels: makeLane({ fleet: ['comp-a', 'comp-b'] }),
+    });
+    const agentB = await connect();
+    await identifyAgent(agentB, 'comp-b');
+
+    const report = await invokeRpc(agentB, 24, 'companion.message.report_failure', {
+      channelId: 'companion-dm:comp-a:comp-b',
+      messageId: 'companion-not-delivered-here',
+      reason: 'processing_failed',
+      companionId: 'comp-b',
+    });
+
+    expect(report.error?.code).toBe(GatewayErrors.COMPANION_ROUTING_UNAVAILABLE);
   });
 
   it('fails a DM closed when the sender is not a participant of the pair', async () => {

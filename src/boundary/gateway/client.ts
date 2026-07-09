@@ -67,6 +67,9 @@ import type {
   FsEditParams,
   FsEditResult,
   CompanionMessageNotification,
+  CompanionMessageDeliveryFailureNotification,
+  CompanionMessageFailureReportParams,
+  CompanionMessageFailureReportResult,
   CompanionMessageSendResult,
   DiscordMessageNotification,
   LLMChunkNotification,
@@ -76,6 +79,7 @@ import type {
   ConfirmationListResult,
   ConfirmationResolveParams,
   RuntimeHealthResult,
+  GatewayCredentialPresenceResult,
   RpcSubstrateMessage,
   VoiceStreamStartParams,
   VoiceStreamChunkParams,
@@ -130,6 +134,10 @@ export interface GatewayClientOptions {
    * LLM correlation params so the gateway can verify companion identity.
    */
   companionId?: string;
+  /** Fleet-scoped proof paired with companionId during gateway identification. */
+  companionAuthToken?: string;
+  /** Role-bound proof exposed only to the isolated session-integrity worker. */
+  sessionIntegrityAuthToken?: string;
 }
 
 interface VoiceStreamState {
@@ -176,6 +184,8 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
   private closedNotified = false;
   private isDestroying = false;
   private readonly companionId?: string;
+  private readonly companionAuthToken?: string;
+  private readonly sessionIntegrityAuthToken?: string;
 
   constructor(conn: GatewayRpcConnection, embeddingDims: number, options: GatewayClientOptions = {}) {
     this.conn = conn;
@@ -186,6 +196,20 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
         throw new Error('GatewayClient companionId must be a non-empty string when provided');
       }
       this.companionId = trimmed;
+    }
+    if (options.companionAuthToken !== undefined) {
+      const trimmed = options.companionAuthToken.trim();
+      if (!trimmed) {
+        throw new Error('GatewayClient companionAuthToken must be a non-empty string when provided');
+      }
+      this.companionAuthToken = trimmed;
+    }
+    if (options.sessionIntegrityAuthToken !== undefined) {
+      const trimmed = options.sessionIntegrityAuthToken.trim();
+      if (!trimmed) {
+        throw new Error('GatewayClient sessionIntegrityAuthToken must be a non-empty string when provided');
+      }
+      this.sessionIntegrityAuthToken = trimmed;
     }
     this.voiceStreamQueueSize = options.voiceStreamQueueSize ?? DEFAULT_VOICE_STREAM_QUEUE_SIZE;
     this.voiceStreamOverflowPolicy = options.voiceStreamOverflowPolicy ?? DEFAULT_VOICE_STREAM_OVERFLOW_POLICY;
@@ -283,6 +307,7 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
     await this.rpcInstance.request('gateway.client.identify', {
       role: 'agent',
       ...(this.companionId ? { companionId: this.companionId } : {}),
+      ...(this.companionAuthToken ? { authToken: this.companionAuthToken } : {}),
     });
   }
 
@@ -502,6 +527,16 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
       ...(authorName ? { authorName } : {}),
       ...(this.companionId ? { companionId: this.companionId } : {}),
     }) as CompanionMessageSendResult;
+  }
+
+  /** Report a failed inbound companion turn without creating a reply turn. */
+  async companionReportFailure(
+    params: CompanionMessageFailureReportParams,
+  ): Promise<CompanionMessageFailureReportResult> {
+    return await this.rpcInstance.request('companion.message.report_failure', {
+      ...params,
+      ...(this.companionId ? { companionId: this.companionId } : {}),
+    }) as CompanionMessageFailureReportResult;
   }
 
   // ── Web fetch ──
@@ -765,6 +800,13 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
     return await this.rpcInstance.request('runtime.health', {}) as RuntimeHealthResult;
   }
 
+  async getCredentialPresence(): Promise<GatewayCredentialPresenceResult> {
+    return await this.rpcInstance.request(
+      'runtime.credential_presence',
+      {},
+    ) as GatewayCredentialPresenceResult;
+  }
+
   async listConfirmationQueue(): Promise<ConfirmationListResult> {
     return await this.rpcInstance.request('confirmation.list', {}) as ConfirmationListResult;
   }
@@ -841,6 +883,15 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
     return this.onNotification('companion.message', (params) => {
       const notification = params as CompanionMessageNotification;
       handler(notification.message);
+    });
+  }
+
+  /** Observe-only negative acknowledgement for a companion message we sent. */
+  onCompanionDeliveryFailure(
+    handler: (notification: CompanionMessageDeliveryFailureNotification) => void,
+  ): () => void {
+    return this.onNotification('companion.message.delivery_failure', (params) => {
+      handler(params as CompanionMessageDeliveryFailureNotification);
     });
   }
 
@@ -1268,6 +1319,8 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
       endpoint: this.sessionIntegrityEndpoint,
       method,
       params,
+      companionId: this.companionId,
+      companionAuthToken: this.sessionIntegrityAuthToken,
       requestId,
       timeoutMs: this.sessionIntegrityRpcTimeoutMs,
     });

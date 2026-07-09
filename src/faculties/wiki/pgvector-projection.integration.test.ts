@@ -54,6 +54,7 @@ function makeDocument(id: string, body: string, overrides: Partial<WikiDocument>
     version: overrides.version ?? 1,
     bodySha256: createHash('sha256').update(body).digest('hex'),
     body,
+    ...(overrides.scope !== undefined ? { scope: overrides.scope } : {}),
   };
 }
 

@@ -355,6 +355,21 @@ export interface ConfirmationHistoryListResult {
 
 export type RuntimeHealthResult = RuntimeServiceHealthSnapshot;
 
+export type GatewayCredentialPresenceParams = Record<string, never>;
+
+/** Redacted credential inventory. Raw values never cross the gateway boundary. */
+export interface GatewayCredentialPresenceResult {
+  discordToken: boolean;
+  apiKey: boolean;
+  adminToken: boolean;
+  openrouterApiKey: boolean;
+  litellmBaseUrl: boolean;
+  litellmApiKey: boolean;
+  importProcessingLocalApiKey: boolean;
+  falApiKey: boolean;
+  telegramBotToken: boolean;
+}
+
 export interface ConfirmationResolveParams {
   id: string;
   decision: ConfirmationDecision;
@@ -618,6 +633,35 @@ export interface CompanionMessageSendResult {
   skippedOffline: string[];
 }
 
+export type CompanionDeliveryFailureReason = 'processing_failed' | 'reply_delivery_failed';
+
+/**
+ * Recipient-to-gateway negative acknowledgement for a previously delivered
+ * companion message. The gateway derives both reporter and original sender
+ * from connection-bound identity and its delivery receipt; neither is trusted
+ * from this payload.
+ */
+export interface CompanionMessageFailureReportParams {
+  channelId: string;
+  messageId: string;
+  reason: CompanionDeliveryFailureReason;
+  /** Client-stamped identity for the gateway's generic frame mismatch guard. */
+  companionId?: string;
+}
+
+export interface CompanionMessageFailureReportResult {
+  reportedTo: string;
+}
+
+/** Structured, observe-only failure evidence sent to the original companion. */
+export interface CompanionMessageDeliveryFailureNotification {
+  channelId: string;
+  messageId: string;
+  reportingCompanionId: string;
+  reason: CompanionDeliveryFailureReason;
+  reportedAt: string;
+}
+
 export interface CompanionMessageNotification {
   message: SubstrateMessage;
 }
@@ -634,6 +678,7 @@ export interface GatewayMethods {
   'discord.sendMedia': [DiscordSendMediaParams, DiscordSendMediaResult];
   'discord.typing': [DiscordTypingParams, DiscordTypingResult];
   'companion.message.send': [CompanionMessageSendParams, CompanionMessageSendResult];
+  'companion.message.report_failure': [CompanionMessageFailureReportParams, CompanionMessageFailureReportResult];
   'web.fetch': [WebFetchParams, WebFetchResult];
   'web.fetch_binary': [WebFetchBinaryParams, WebFetchBinaryResult];
   'web.request_binary': [WebRequestBinaryParams, WebRequestBinaryResult];
@@ -671,6 +716,7 @@ export interface GatewayMethods {
   'confirmation.history': [ConfirmationHistoryListParams, ConfirmationHistoryListResult];
   'confirmation.resolve': [ConfirmationResolveParams, ConfirmationResolveResult];
   'runtime.health': [RuntimeHealthParams, RuntimeHealthResult];
+  'runtime.credential_presence': [GatewayCredentialPresenceParams, GatewayCredentialPresenceResult];
   'session.hmac.sign': [SessionHmacSignParams, SessionHmacSignResult];
   'session.hmac.verify': [SessionHmacVerifyParams, SessionHmacVerifyResult];
 }
@@ -679,6 +725,7 @@ export interface GatewayNotifications {
   'llm.chunk': LLMChunkNotification;
   'discord.message': DiscordMessageNotification;
   'companion.message': CompanionMessageNotification;
+  'companion.message.delivery_failure': CompanionMessageDeliveryFailureNotification;
   'api.stream.delta': ApiStreamDeltaNotification;
 }
 
@@ -787,4 +834,6 @@ export const GatewayErrors = {
   COMPANION_IDENTIFY_REQUIRED: -32009,
   COMPANION_IDENTITY_MISMATCH: -32010,
   COMPANION_ROUTING_UNAVAILABLE: -32011,
+  CONNECTION_ROLE_DENIED: -32012,
+  COMPANION_AUTH_FAILED: -32013,
 } as const;

@@ -14,6 +14,7 @@ import { loadSettings } from '../../../system/settings.js';
 import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
 import { makeTestFatiguePolicyConfig } from '../../../test-support/charge-policy.js';
 import { AdminSettingsDataService } from './settings-service.js';
+import type { GatewayCredentialPresenceResult } from '../../../boundary/gateway/protocol.js';
 
 let tempDir: string | null = null;
 
@@ -88,13 +89,17 @@ function buildConfig(
   };
 }
 
-function buildService(config: SubstrateConfig): AdminSettingsDataService {
+function buildService(
+  config: SubstrateConfig,
+  getCredentialPresence?: () => Promise<GatewayCredentialPresenceResult>,
+): AdminSettingsDataService {
   return new AdminSettingsDataService({
     config,
     configStore: createOwnerFileConfigStore({
       dataDir: config.dataDir,
       defaultContextWindow: config.defaultContextWindow,
     }),
+    ...(getCredentialPresence ? { getCredentialPresence } : {}),
   });
 }
 
@@ -246,6 +251,34 @@ describe('AdminSettingsDataService', () => {
 
     expect(settingsData.env.apiKey).toBe('[set]');
     expect(settingsData.env.adminToken).toBe('[set]');
+  });
+
+  it('renders gateway-redacted credential presence without reading provider secrets locally', async () => {
+    const root = makeTempDir();
+    vi.stubEnv('DISCORD_TOKEN', 'must-not-be-read');
+    const service = buildService(buildConfig(root), async () => ({
+      discordToken: false,
+      apiKey: true,
+      adminToken: true,
+      openrouterApiKey: true,
+      litellmBaseUrl: true,
+      litellmApiKey: true,
+      importProcessingLocalApiKey: true,
+      falApiKey: true,
+      telegramBotToken: true,
+    }));
+
+    const env = (await service.getSettingsData()).env;
+
+    expect(env.discordToken).toBe('[not set]');
+    expect(env.apiKey).toBe('[set]');
+    expect(env.adminToken).toBe('[set]');
+    expect(env.openrouterApiKey).toBe('[set]');
+    expect(env.litellmBaseUrl).toBe('[set]');
+    expect(env.litellmApiKey).toBe('[set]');
+    expect(env.importProcessingLocalApiKey).toBe('[set]');
+    expect(env.falApiKey).toBe('[set]');
+    expect(env.telegramBotToken).toBe('[set]');
   });
 
   it('round-trips model-control runtime settings with persistence and reload guarantees', async () => {

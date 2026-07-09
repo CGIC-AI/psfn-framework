@@ -13,6 +13,7 @@ import { GatewayErrors } from './protocol.js';
 import type { GatewayRpcConnection } from './transport.js';
 import type { SessionHmacKeyring } from '../../persistence/journals/journal-utils.js';
 import type { GatewayAuditStorePort } from './audit-port.js';
+import { deriveCompanionAuthToken } from './companion-auth.js';
 
 // Mock the transport module to avoid real socket operations
 vi.mock('./transport.js', () => ({
@@ -205,6 +206,20 @@ async function invokeRpc(
   throw new Error(`No RPC response found for id ${id}`);
 }
 
+async function identifySessionIntegrityConnection(
+  conn: ReturnType<typeof createMockConnection>,
+  id: number,
+  keyring: SessionHmacKeyring = TEST_SESSION_HMAC_KEYRING,
+): Promise<void> {
+  const companionId = 'single-companion';
+  const response = await invokeRpc(conn, id, 'gateway.client.identify', {
+    role: 'internal_session_integrity',
+    companionId,
+    authToken: deriveCompanionAuthToken(companionId, 'internal_session_integrity', keyring),
+  });
+  expect(response.error).toBeUndefined();
+}
+
 describe('resolveGatewaySessionHmacKeyring', () => {
   it('parses versioned keyrings with explicit active version', () => {
     const keyring = resolveGatewaySessionHmacKeyring({
@@ -306,13 +321,15 @@ describe('GatewayServer', () => {
 
   describe('session.hmac RPC', () => {
     it('signs and verifies entries using the gateway keyring', async () => {
+      const keyring = {
+        activeVersion: 'v1',
+        keys: { v1: 'integration-secret' },
+      };
       const { conn } = await setupServerConnection({
         ...createMinimalOptions(),
-        sessionHmacKeyring: {
-          activeVersion: 'v1',
-          keys: { v1: 'integration-secret' },
-        },
+        sessionHmacKeyring: keyring,
       });
+      await identifySessionIntegrityConnection(conn, 899, keyring);
 
       const signResponse = await invokeRpc(conn, 900, 'session.hmac.sign', {
         entry: {
@@ -340,6 +357,7 @@ describe('GatewayServer', () => {
 
     it('returns failed verification for unsigned entries', async () => {
       const { conn } = await setupServerConnection(createMinimalOptions());
+      await identifySessionIntegrityConnection(conn, 899);
       const verifyResponse = await invokeRpc(conn, 902, 'session.hmac.verify', {
         entry: {
           type: 'message',
@@ -369,6 +387,7 @@ describe('GatewayServer', () => {
           complete: auditComplete,
         }),
       });
+      await identifySessionIntegrityConnection(conn, 899);
 
       const verifyResponse = await invokeRpc(conn, 903, 'session.hmac.verify', {
         entry: {
@@ -1224,17 +1243,35 @@ describe('GatewayServer', () => {
 
       const internalConn = createMockConnection();
       onConnectionCb!(internalConn.conn);
-      const identifyResponse = await invokeRpc(internalConn, 300, 'gateway.client.identify', {
+      const missingProofResponse = await invokeRpc(internalConn, 300, 'gateway.client.identify', {
         role: 'internal_session_integrity',
+        companionId: 'single-companion',
+      });
+      expect(missingProofResponse.error).toMatchObject({
+        code: GatewayErrors.COMPANION_AUTH_FAILED,
+      });
+
+      const identifyResponse = await invokeRpc(internalConn, 301, 'gateway.client.identify', {
+        role: 'internal_session_integrity',
+        companionId: 'single-companion',
+        authToken: deriveCompanionAuthToken(
+          'single-companion',
+          'internal_session_integrity',
+          TEST_SESSION_HMAC_KEYRING,
+        ),
       });
       expect(identifyResponse.result).toEqual({
         success: true,
         role: 'internal_session_integrity',
+        companionId: 'single-companion',
       });
 
       const agentConn = createMockConnection();
       onConnectionCb!(agentConn.conn);
       await new Promise(resolve => setTimeout(resolve, 10));
+
+      const agentSigning = await invokeRpc(agentConn, 302, 'session.hmac.sign', {});
+      expect(agentSigning.error).toMatchObject({ code: GatewayErrors.CONNECTION_ROLE_DENIED });
 
       const statuses = (server as any).connectionStatuses as Map<GatewayRpcConnection, any>;
       const internalStatus = statuses.get(internalConn.conn);

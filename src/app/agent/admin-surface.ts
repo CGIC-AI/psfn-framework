@@ -14,7 +14,10 @@ import type { HubIdentityEnrollmentStorePort } from '../../core/enrollment/enrol
 import type { AgentCoreRuntime } from './core-runtime.js';
 import type { EventBus } from '../../shared/event-bus.js';
 import type { Scheduler } from '../../core/scheduler/scheduler.js';
-import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
+import {
+  sanitizeCoreSubstrateConfig,
+  type SubstrateConfig,
+} from '../../system/config/runtime-config-contracts.js';
 import type { SatelliteRegistryConfig } from '../../shared/contracts/satellite-registry.js';
 import type { ChannelGroupMemoryConfig } from '../../system/config/group-memory-config.js';
 import type { ApprovalQueuePort } from '../../system/capabilities/approval-queue-port.js';
@@ -81,6 +84,7 @@ export async function startOptionalAdminTransportServer(
     ...options.config,
     satelliteRegistry: options.satelliteRegistryConfig,
   };
+  const publicAdminConfig = sanitizeCoreSubstrateConfig(adminConfig) as SubstrateConfig;
   const services = createInProcessGardenAdminContract({
     apiBaseUrl: env.API_BASE_URL,
     apiHost: options.apiHost,
@@ -116,13 +120,14 @@ export async function startOptionalAdminTransportServer(
     cardVersionStore: options.cardVersionStore,
     adaptiveToolsStateProvider: options.coreRuntime.agentLoop,
     toolHealthProvider: createGatewayAdminToolHealthProvider(options.gateway),
+    getCredentialPresence: () => options.gateway.getCredentialPresence(),
     ...(env.PSFN_LOGS_DIR ? { logsDir: env.PSFN_LOGS_DIR } : {}),
     toolConformanceRunner: options.coreRuntime.toolConformanceRunner,
   });
   const adminTransport = new GardenAdminTransportServer({
     endpoint: resolveAdminTransportServerEndpoint(env),
     eventBus: options.eventBus,
-    config: adminConfig,
+    config: publicAdminConfig,
     services,
   });
   await adminTransport.init();

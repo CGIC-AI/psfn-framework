@@ -429,34 +429,69 @@ function sendRpc(connection, method, params, id, timeoutMs) {
   });
 }
 
-async function identifySessionIntegrityConnection(connection, requestId, timeoutMs) {
+async function identifySessionIntegrityConnection(
+  connection,
+  requestId,
+  timeoutMs,
+  companionId,
+  companionAuthToken,
+) {
   if (activeConnectionIdentified) {
     return;
   }
   await sendRpc(
     connection,
     'gateway.client.identify',
-    { role: 'internal_session_integrity' },
+    {
+      role: 'internal_session_integrity',
+      ...(companionId ? { companionId } : {}),
+      ...(companionAuthToken ? { authToken: companionAuthToken } : {}),
+    },
     'session-integrity-identify-' + requestId,
     timeoutMs,
   );
   activeConnectionIdentified = true;
 }
 
-async function requestRpc(endpoint, method, params, id, timeoutMs) {
+async function requestRpc(endpoint, method, params, id, timeoutMs, companionId, companionAuthToken) {
   const connection = await ensureConnection(endpoint);
-  await identifySessionIntegrityConnection(connection, id, timeoutMs);
+  await identifySessionIntegrityConnection(
+    connection,
+    id,
+    timeoutMs,
+    companionId,
+    companionAuthToken,
+  );
   return await sendRpc(connection, method, params, id, timeoutMs);
 }
 
 parentPort.on('message', async (job) => {
-  const { stateBuffer, payloadBuffer, socketPath, endpoint, method, params, requestId, timeoutMs } = job || {};
+  const {
+    stateBuffer,
+    payloadBuffer,
+    socketPath,
+    endpoint,
+    method,
+    params,
+    companionId,
+    companionAuthToken,
+    requestId,
+    timeoutMs,
+  } = job || {};
   const resolvedEndpoint = endpoint || (socketPath ? { kind: 'unix', socketPath } : null);
   if (!stateBuffer || !payloadBuffer || !resolvedEndpoint || !method) {
     return;
   }
   try {
-    const response = await requestRpc(resolvedEndpoint, method, params, requestId, timeoutMs);
+    const response = await requestRpc(
+      resolvedEndpoint,
+      method,
+      params,
+      requestId,
+      timeoutMs,
+      companionId,
+      companionAuthToken,
+    );
     writeResponse(stateBuffer, payloadBuffer, { ok: true, response });
   } catch (error) {
     const message = errorMessage(error);

@@ -33,10 +33,16 @@ import { createDefaultEmotionScopingSettings } from './emotion-scoping-config.js
 import {
   isMultiCompanionEnabled,
   resolveCompanionFleet,
+  resolveCompanionFleetPaths,
+  resolveCompanionRuntimeIdentity,
 } from './companions-config.js';
 import {
   DEFAULT_COMPANION_CARD_FILE_NAME,
 } from '../../core/identity/companion-naming.js';
+import {
+  GATEWAY_COMPANION_AUTH_TOKEN_ENV,
+  GATEWAY_SESSION_INTEGRITY_AUTH_TOKEN_ENV,
+} from '../../boundary/gateway/companion-auth.js';
 
 const DEFAULT_MODEL_ROLE_ASSIGNMENTS: ModelRoleAssignments = {
   chat: 'primary',
@@ -87,7 +93,7 @@ const DEFAULT_SESSION_MIRROR_ACTIVE_WINDOW_MS = 1_800_000;
 const DEFAULT_THINK_MAX_TOKENS = 76_000;
 const DEFAULT_THINK_MAX_WALL_TIME_MS = 300_000;
 const DEFAULT_THINK_MAX_SUB_QUERIES = 24;
-type LoadConfigMode = 'gateway' | 'agent';
+type LoadConfigMode = 'gateway' | 'agent' | 'operator';
 
 function isNodeTlsVerificationGloballyDisabled(value: string | undefined): boolean {
   return value?.trim() === '0';
@@ -272,30 +278,61 @@ function loadConfigForMode(mode: LoadConfigMode, env: NodeJS.ProcessEnv = proces
     }
   }
   const dataDir = runtimePathLayout.systemDataDir;
-  const companionDataDir = runtimePathLayout.companionDataDir;
   const companionId = requireCompanionId(env);
-  const characterCardPath = env.CHARACTER_CARD_PATH
-    ?? `${companionDataDir}/${DEFAULT_COMPANION_CARD_FILE_NAME}`;
+  const configuredCompanionDataDir = runtimePathLayout.companionDataDir;
+  const configuredCharacterCardPath = env.CHARACTER_CARD_PATH
+    ?? `${configuredCompanionDataDir}/${DEFAULT_COMPANION_CARD_FILE_NAME}`;
+  const configuredPostgresSchema = parsePostgresSchemaEnv(env.COMPANION_PG_SCHEMA);
+
+  const multiCompanion = isMultiCompanionEnabled(env);
+  const rawCompanionFleet = resolveCompanionFleet({
+    dataDir,
+    multiCompanion,
+    seedDir: parseOptionalStringEnv(env.CONFIG_DIR),
+  });
+  const companionFleet = rawCompanionFleet
+    ? resolveCompanionFleetPaths(rawCompanionFleet, runtimePathLayout.runtimeRootDir)
+    : undefined;
+  const companionRuntimeIdentity = companionFleet
+    ? resolveCompanionRuntimeIdentity({
+      fleet: companionFleet,
+      companionId,
+      companionDataDir: configuredCompanionDataDir,
+      characterCardPath: configuredCharacterCardPath,
+      postgresSchema: configuredPostgresSchema,
+    })
+    : undefined;
+  const companionDataDir = companionRuntimeIdentity?.companionDataDir ?? configuredCompanionDataDir;
+  const characterCardPath = companionRuntimeIdentity?.characterCardPath ?? configuredCharacterCardPath;
+  const postgresSchema = companionRuntimeIdentity?.postgresSchema ?? configuredPostgresSchema;
+  const gatewayCompanionAuthToken = parseOptionalStringEnv(env[GATEWAY_COMPANION_AUTH_TOKEN_ENV]);
+  const gatewaySessionIntegrityAuthToken = parseOptionalStringEnv(
+    env[GATEWAY_SESSION_INTEGRITY_AUTH_TOKEN_ENV],
+  );
+  if (mode === 'agent' && !gatewaySessionIntegrityAuthToken) {
+    throw new Error(
+      `${GATEWAY_SESSION_INTEGRITY_AUTH_TOKEN_ENV} is required for the isolated session-integrity role`,
+    );
+  }
+  if (multiCompanion && mode === 'agent' && !gatewayCompanionAuthToken) {
+    throw new Error(
+      `${GATEWAY_COMPANION_AUTH_TOKEN_ENV} is required for multi-companion agent authentication`,
+    );
+  }
+
   const databaseBasename = sanitizeDatabaseBasename(env.DATABASE_BASENAME);
   const databasePath = env.DATABASE_PATH
     ?? `${resolveCompanionStateDir(companionDataDir)}/${databaseBasename}.db`;
   const persistenceBackend = parsePersistenceBackendEnv(env.PERSISTENCE_BACKEND);
   const postgresDatabaseUrl = parseOptionalStringEnv(env.POSTGRES_DATABASE_URL);
-  if (!postgresDatabaseUrl) {
+  if (!postgresDatabaseUrl && mode !== 'operator') {
     throw new Error('POSTGRES_DATABASE_URL is required for runtime persistence');
   }
-  const postgresSchema = parsePostgresSchemaEnv(env.COMPANION_PG_SCHEMA);
-
-  const multiCompanion = isMultiCompanionEnabled(env);
-  const companionFleet = resolveCompanionFleet({
-    dataDir,
-    multiCompanion,
-    seedDir: parseOptionalStringEnv(env.CONFIG_DIR),
-  });
 
   return {
     multiCompanion,
     ...(companionFleet ? { companionFleet } : {}),
+    ...(companionRuntimeIdentity ? { companionRuntimeIdentity } : {}),
     primaryModel,
     primaryProvider,
     extractionModel,
@@ -310,6 +347,8 @@ function loadConfigForMode(mode: LoadConfigMode, env: NodeJS.ProcessEnv = proces
       : {}),
     characterCardPath,
     companionId,
+    ...(gatewayCompanionAuthToken ? { gatewayCompanionAuthToken } : {}),
+    ...(gatewaySessionIntegrityAuthToken ? { gatewaySessionIntegrityAuthToken } : {}),
     systemDataDir: runtimePathLayout.systemDataDir,
     companionDataDir,
     workspacePath: runtimePathLayout.workspacePath,
@@ -436,12 +475,16 @@ function loadConfigForMode(mode: LoadConfigMode, env: NodeJS.ProcessEnv = proces
   };
 }
 
-export function loadConfig(): SubstrateConfig {
-  return loadConfigForMode('gateway');
+export function loadConfig(env: NodeJS.ProcessEnv = process.env): SubstrateConfig {
+  return loadConfigForMode('gateway', env);
 }
 
-export function loadAgentConfig(): SubstrateConfig {
-  return sanitizeCoreSubstrateConfig(loadConfigForMode('agent')) as SubstrateConfig;
+export function loadAgentConfig(env: NodeJS.ProcessEnv = process.env): SubstrateConfig {
+  return loadConfigForMode('agent', env);
+}
+
+export function loadOperatorConfig(env: NodeJS.ProcessEnv = process.env): SubstrateConfig {
+  return sanitizeCoreSubstrateConfig(loadConfigForMode('operator', env)) as SubstrateConfig;
 }
 
 function parseIntegerEnv(value: string | undefined, fallback: number, min: number): number {

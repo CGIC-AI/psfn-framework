@@ -595,8 +595,12 @@ async function main(): Promise<void> {
     roomEntryNoteSink: sessionManager,
     gatewayMode: true,
     resolveRequesterTrust: () => getRequestContext()?.viewerTrustLevel,
+    // Human-in-the-loop provenance for control Gate 2a: self-directed/heartbeat
+    // turns carry trustLevel 'primary' for scoping but no human requester, so
+    // effector control must read provenance, not trust level alone.
+    resolveRequesterProvenance: () => getRequestContext()?.requesterProvenance,
   });
-  log.info('World tool enabled (perceive/list/move live; control staged off, trust-gated)');
+  log.info('World tool enabled (perceive/list/move live; control staged off, human+trust-gated)');
 
   // Journal tools — durable markdown notes in the personal workspace.
   registerMarkdownJournalTools(agentLoop, pathSnapshot.workspaceRoot);

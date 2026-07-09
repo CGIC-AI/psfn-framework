@@ -17,6 +17,7 @@ import { textResult, textResultWithError } from '../../../core/tools/results.js'
 import { getRequestContext } from '../../../primitives/llm/request-context.js';
 import { toErrorMessage } from '../../../shared/utils/errors.js';
 import { isHighTierTrustLevel, type TrustLevel } from '../../../system/trust/types.js';
+import type { RequesterProvenance } from '../../../shared/contracts/runtime.js';
 import type { WorldOperations } from './ops.js';
 
 // ── Agent-side `world` tool (Sprint 10, Workstream C2 + C3/C4) ──
@@ -52,8 +53,13 @@ import type { WorldOperations } from './ops.js';
 //      pattern) — control ships defined, wired, and OFF until the actuation
 //      path is proven end-to-end against real hardware. While off, control
 //      refuses fail-closed; read stays live.
-//   3. Requester trust — only primary/trusted requesters (owner/partner) may
-//      drive effectors; regular/public are refused.
+//   3. Requester provenance + trust — only a LIVE HUMAN owner/partner may drive
+//      effectors. Gate 2 requires BOTH (a) requesterProvenance === 'human' and
+//      (b) a primary/trusted trust level. Self-directed/system turns (heartbeat,
+//      reflection, system-injected) carry trustLevel 'primary' for memory/prompt
+//      scoping but have no human in the loop, so they are refused here EVEN at
+//      'primary' — trust level alone must never satisfy a human-in-the-loop gate.
+//      Regular/public human requesters are also refused (trust).
 
 const WORLD_ACTION_HELP = 'perceive, list, control, move';
 
@@ -126,6 +132,14 @@ export interface WorldToolDeps {
    * (`viewerTrustLevel`). Absent or non-high-tier ⇒ control is refused.
    */
   resolveRequesterTrust?: () => TrustLevel | undefined;
+  /**
+   * Resolves the current requester's PROVENANCE (human vs machine/self-directed),
+   * orthogonal to trust level. Supplied at runtime from the turn request context
+   * (`requesterProvenance`). Human-in-the-loop effector control (Gate 2) requires
+   * `'human'`; self-directed/system turns are refused even when trust is 'primary'.
+   * Fail closed: absent ⇒ treated as non-human ⇒ control is refused.
+   */
+  resolveRequesterProvenance?: () => RequesterProvenance | undefined;
 }
 
 interface ResolvedAffordance {
@@ -282,7 +296,22 @@ async function runControl(
     );
   }
 
-  // Gate 2 — requester trust. Only primary/trusted (owner/partner) drive effectors.
+  // Gate 2a — requester provenance (human-in-the-loop). Only a LIVE HUMAN may
+  // drive effectors. Self-directed/system turns (heartbeat/reflection/system-
+  // injected) carry trustLevel 'primary' for memory/prompt scoping but have no
+  // human in the loop, so they are refused HERE — trust level alone must never
+  // satisfy a human-in-the-loop gate. Fail closed: absent provenance ⇒ non-human.
+  const requesterProvenance = deps.resolveRequesterProvenance?.();
+  if (requesterProvenance !== 'human') {
+    const observed = requesterProvenance ?? 'unknown';
+    throw new Error(
+      `world control requires a live human requester; the current turn is "${observed}"-originated `
+      + '(self-directed/system turns are refused even at primary trust). '
+      + 'Effector actuation is a human-in-the-loop action.',
+    );
+  }
+
+  // Gate 2b — requester trust. Only primary/trusted (owner/partner) drive effectors.
   const requesterTrust = deps.resolveRequesterTrust?.();
   if (!requesterTrust || !isHighTierTrustLevel(requesterTrust)) {
     const observed = requesterTrust ?? 'unknown';

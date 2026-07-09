@@ -196,10 +196,30 @@ export interface LLMRequestMetadata {
   originStage?: string;
 }
 
+/**
+ * Requester provenance — WHO is driving this turn, orthogonal to `viewerTrustLevel`
+ * (which is a scoping label). Self-directed and system-injected turns carry a
+ * high `viewerTrustLevel` ('primary') so memory/prompt scoping resolves to the
+ * companion's own subject, but they have NO live human in the loop. Human-in-the-loop
+ * effector gates (e.g. `world.control` Gate 2) MUST read this signal — never trust
+ * level alone — so an unattended heartbeat can never satisfy "only a human owner/
+ * partner may drive effectors". Fail closed: absence is treated as non-human.
+ *   - 'human'        live human speaker (speakerRole === 'user')
+ *   - 'self_directed' scheduler-driven heartbeat/reflection (internal: channel)
+ *   - 'system'       system-injected turn (system: author, e.g. deferred handoff)
+ */
+export type RequesterProvenance = 'human' | 'self_directed' | 'system';
+
 export interface CorrelationMetadata extends LLMRequestMetadata {
   callType: ObservabilityCallType;
   purpose: string;
   viewerTrustLevel?: TrustLevel;
+  /**
+   * Origin of the requester driving this turn, independent of `viewerTrustLevel`.
+   * Human-in-the-loop effector gates require `'human'`; self-directed/system turns
+   * are refused even at `viewerTrustLevel: 'primary'`. See {@link RequesterProvenance}.
+   */
+  requesterProvenance?: RequesterProvenance;
   viewerChannelPrivacy?: ChannelPrivacy;
   viewerIsDirectMessage?: boolean;
   embodimentContext?: EmbodimentPresenceMetadata;

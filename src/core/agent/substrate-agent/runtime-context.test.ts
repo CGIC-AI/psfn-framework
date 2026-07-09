@@ -26,6 +26,7 @@ import {
   resolveActiveConcernsRuntimeData,
   resolveAuthorContext,
   resolveIdentityChannel,
+  resolveRequesterProvenance,
   resolveUnverifiedSpeakerName,
 } from './runtime-context.js';
 import {
@@ -490,6 +491,42 @@ describe('runtime subject identity', () => {
       subjectIdentityKey: DEFAULT_COMPANION_ID,
       continuitySubjectKey: DEFAULT_COMPANION_ID,
     });
+  });
+
+  // ── H3 (Sprint-10 latent-High): requester provenance is orthogonal to trust ──
+  // A self-directed reflection/heartbeat turn resolves trustLevel 'primary' for
+  // memory/prompt scoping (unchanged), but its provenance must read as machine-
+  // origin so the world.control human-in-the-loop gate refuses it.
+  it('H3: a self-directed reflection turn keeps trustLevel primary but resolves non-human provenance', async () => {
+    const authorContext = await resolveAuthorContext({
+      message: makeMessage(),
+      contactStore: null,
+      logger: { warn: () => undefined, debug: () => undefined },
+      companionIdentityKey: DEFAULT_COMPANION_ID,
+      companionDisplayName: 'Companion',
+    });
+
+    // Scoping is unchanged: trustLevel stays 'primary' (regression guard).
+    expect(authorContext.trustLevel).toBe('primary');
+    expect(authorContext.speakerRole).toBe('system');
+    // Provenance is the orthogonal signal the effector gate reads.
+    expect(resolveRequesterProvenance(authorContext, makeMessage())).toBe('self_directed');
+  });
+
+  it('H3: derives provenance from speaker role and channel origin', () => {
+    // Live human speaker → 'human' regardless of channel.
+    expect(resolveRequesterProvenance({ speakerRole: 'user' }, { channelId: 'discord:dm:alice' }))
+      .toBe('human');
+    expect(resolveRequesterProvenance({ speakerRole: 'user' }, { channelId: 'internal:heartbeat' }))
+      .toBe('human');
+    // System speaker on an internal channel → scheduler-driven self-directed.
+    expect(resolveRequesterProvenance({ speakerRole: 'system' }, { channelId: 'internal:heartbeat' }))
+      .toBe('self_directed');
+    expect(resolveRequesterProvenance({ speakerRole: 'system' }, { channelId: 'internal:reflection:whisper' }))
+      .toBe('self_directed');
+    // System speaker off an internal channel → system-injected turn.
+    expect(resolveRequesterProvenance({ speakerRole: 'system' }, { channelId: 'discord:group:ops' }))
+      .toBe('system');
   });
 
   // ── E1.7: reflection/heartbeat turns take a ConversationScope ──

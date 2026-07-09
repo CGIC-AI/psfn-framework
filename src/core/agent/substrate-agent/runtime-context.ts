@@ -2,6 +2,7 @@ import { isRecord } from '../../../shared/utils/types.js';
 import type { AgentTool } from '@mariozechner/pi-agent-core';
 import type {
   GeneratedMessageProvenanceMetadata,
+  RequesterProvenance,
   SubstrateMessage,
   ResponseStyle,
 } from '../../../shared/contracts/runtime.js';
@@ -165,6 +166,29 @@ export interface ResolvedAuthorContext {
 
 function isInternalJournalChannel(channelId: string): boolean {
   return channelId === 'internal:heartbeat' || channelId.startsWith('internal:reflection:');
+}
+
+/**
+ * Derive requester provenance from an already-resolved author context. This is
+ * the SINGLE source of the human-vs-machine origin signal that human-in-the-loop
+ * effector gates read (`world.control` Gate 2). It reuses the existing
+ * `speakerRole` decision made in {@link resolveAuthorContext} rather than adding a
+ * parallel flag at every return site:
+ *   - speakerRole 'user'   → a live human is driving the turn ('human')
+ *   - speakerRole 'system' on an `internal:` channel → scheduler-driven
+ *     heartbeat/reflection ('self_directed')
+ *   - speakerRole 'system' otherwise → system-injected turn ('system')
+ * Fail closed: only 'human' unlocks human-gated effectors; both machine buckets
+ * are refused even when `trustLevel` is 'primary' for scoping.
+ */
+export function resolveRequesterProvenance(
+  authorContext: Pick<ResolvedAuthorContext, 'speakerRole'>,
+  message: Pick<SubstrateMessage, 'channelId'>,
+): RequesterProvenance {
+  if (authorContext.speakerRole === 'user') {
+    return 'human';
+  }
+  return message.channelId.startsWith('internal:') ? 'self_directed' : 'system';
 }
 
 function resolveMessageChannelMeta(message: Pick<SubstrateMessage, 'isDirectMessage' | 'routing'>): ChannelMeta | undefined {

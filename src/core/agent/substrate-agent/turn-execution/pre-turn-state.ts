@@ -25,7 +25,7 @@ import type { ObserverEvalLifecycleState } from '../../../eval/observer-sidecar/
 import { createComponentLogger } from '../../../../shared/logger.js';
 import { toErrorMessage } from '../../../../shared/utils/errors.js';
 import { resolveActiveEmanationState } from '../../active-emanation-state.js';
-import { resolveContinuitySubjectKey, type ResolvedAuthorContext } from '../runtime-context.js';
+import { resolveContinuitySubjectKey, resolveRequesterProvenance, type ResolvedAuthorContext } from '../runtime-context.js';
 import { resolveSituatedSiteId } from '../runtime-context-sections/situated-presence.js';
 import { collectVisionTurnImageUrls, hasVisionTurnInputs } from '../vision-attachments.js';
 import type { TurnExecutionObservability } from './observability.js';
@@ -390,6 +390,10 @@ export async function prepareTurnIdentityState(input: {
 
   const viewerRequestContext: Partial<CorrelationMetadata> = {
     viewerTrustLevel: authorContext.trustLevel,
+    // Requester provenance is orthogonal to trust level: self-directed/system
+    // turns carry trustLevel 'primary' for scoping but have no human in the loop.
+    // Human-in-the-loop effector gates (world.control Gate 2) read THIS, not trust.
+    requesterProvenance: resolveRequesterProvenance(authorContext, message),
     viewerChannelPrivacy: conversationScope.envelope.channelPrivacy,
     ...(message.isDirectMessage !== undefined ? { viewerIsDirectMessage: message.isDirectMessage } : {}),
     ...(canonicalEmbodimentContext ? { embodimentContext: canonicalEmbodimentContext } : {}),

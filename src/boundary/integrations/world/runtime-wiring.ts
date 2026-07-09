@@ -4,6 +4,7 @@ import type { ToolRegistrar } from '../../../core/agent/tool-registrar.js';
 import type { ToolWiringMeta, WirableTool } from '../../../core/agent/tool-wiring-validator.js';
 import type { RoomEntryNoteSink } from '../../../core/session/room-entry-note.js';
 import type { PlacesRegistryConfig } from '../../../shared/contracts/places-registry.js';
+import type { RequesterProvenance } from '../../../shared/contracts/runtime.js';
 import type { TrustLevel } from '../../../system/trust/types.js';
 import type { WorldOperations } from './ops.js';
 import { createWorldTool } from './tools.js';
@@ -44,6 +45,11 @@ export interface RegisterWorldToolsOptions {
   controlEnabled?: boolean;
   /** Resolves the current requester's trust level for effector-control gating. */
   resolveRequesterTrust?: () => TrustLevel | undefined;
+  /**
+   * Resolves the current requester's provenance (human vs machine/self-directed)
+   * for the human-in-the-loop half of effector-control gating (Gate 2a).
+   */
+  resolveRequesterProvenance?: () => RequesterProvenance | undefined;
   /** In gateway mode, attach requiredGatewayMethods so the wiring validator can check them. */
   gatewayMode?: boolean;
 }
@@ -61,6 +67,7 @@ export function registerWorldTools(
     ...(options.roomEntryNoteSink ? { roomEntryNoteSink: options.roomEntryNoteSink } : {}),
     ...(options.controlEnabled !== undefined ? { controlEnabled: options.controlEnabled } : {}),
     ...(options.resolveRequesterTrust ? { resolveRequesterTrust: options.resolveRequesterTrust } : {}),
+    ...(options.resolveRequesterProvenance ? { resolveRequesterProvenance: options.resolveRequesterProvenance } : {}),
   });
   if (options.gatewayMode) {
     attachWiringMeta(tool, { requiredGatewayMethods: [...WORLD_TOOL_GATEWAY_METHODS] });

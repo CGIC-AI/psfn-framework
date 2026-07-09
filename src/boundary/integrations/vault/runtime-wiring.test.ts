@@ -4,7 +4,7 @@ import type { VaultOperations } from './ops.js';
 import type { VaultRuntimeTarget } from './runtime-wiring.js';
 
 vi.mock('node:child_process', () => ({
-  execSync: vi.fn().mockReturnValue(''),
+  execFileSync: vi.fn().mockReturnValue(''),
 }));
 
 function createMockTarget(): VaultRuntimeTarget & { registerTool: ReturnType<typeof vi.fn> } {

@@ -23,6 +23,7 @@ import {
   COMPACTION_THRESHOLD_PCT_RANGE,
   EXTRACTION_THRESHOLD_PCT_RANGE,
   MOOD_CONGRUENCE_WEIGHT_RANGE,
+  validateObsidianCliPathSetting,
   type EditableSettings,
 } from './contracts.js';
 
@@ -551,7 +552,13 @@ export function parseSettingsForm(
 
     const obsidianCliPathRaw = params.get('obsidianCliPath');
     if (obsidianCliPathRaw !== null) {
-      settings.obsidianCliPath = obsidianCliPathRaw.trim() || 'obsidian';
+      // Reject shell-injection payloads at the form boundary (bead lget/w3pj).
+      const candidate = obsidianCliPathRaw.trim() || 'obsidian';
+      try {
+        settings.obsidianCliPath = validateObsidianCliPathSetting(candidate);
+      } catch (err) {
+        errors.push(err instanceof Error ? err.message : String(err));
+      }
     }
 
     const obsidianAutoPublishRaw = params.get('obsidianAutoPublish');

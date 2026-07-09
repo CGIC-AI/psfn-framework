@@ -105,6 +105,7 @@ export class GardenAdminTransportServer implements Lifecycle {
       toolConformanceService: config.services.toolConformance ?? null,
       diagnosticsService: config.services.diagnostics,
       settingsService: config.services.settings,
+      intakeQuarantineService: config.services.intakeQuarantine,
       identityService: config.services.identity,
       promptsService: config.services.prompts,
       modelDiscovery: config.services.modelDiscovery,

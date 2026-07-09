@@ -62,6 +62,11 @@ export const navGroups: NavGroup[] = [
     { id: 'subsystem-health', path: '/subsystem-health', defaultLabel: 'Subsystem Health', icon: '\u{1FAC0}' },
     { id: 'telemetry', path: '/telemetry', defaultLabel: 'Events & Audit', icon: '\u{1F4A7}' },
   ]),
+  navGroup('cognitive-security', 'Cognitive Security', [
+    { id: 'cogsec-approvals', path: '/cognitive-security/approvals', defaultLabel: 'Approvals', icon: '\u{1F6E1}\u{FE0F}' },
+    { id: 'cogsec-firewall', path: '/cognitive-security/firewall', defaultLabel: 'Firewall', icon: '\u{1F9F1}' },
+    { id: 'cogsec-remediation', path: '/cognitive-security/remediation', defaultLabel: 'Remediation', icon: '\u{1FA79}' },
+  ]),
   navGroup('configure', 'Configure Garden', [
     { id: 'settings', path: '/settings', defaultLabel: 'Settings', icon: '\u{2600}\u{FE0F}' },
     { id: 'channels', path: '/channels', defaultLabel: 'Channels', icon: '\u{1F4E1}' },

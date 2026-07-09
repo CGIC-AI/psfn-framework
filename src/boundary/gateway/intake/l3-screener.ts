@@ -66,6 +66,7 @@ import {
   renderIntakeWithheldContentPlaceholder,
 } from '../../../core/cogsec/intake/screening.js';
 import type { CogSecEvent, CogSecEventStore, CogSecSeverity } from '../../../core/cogsec/events.js';
+import type { IntakeQuarantineHoldPort } from '../../../core/cogsec/intake/quarantine-store.js';
 import {
   callToolLessJsonScreener,
   neutralizeUntrustedDelimiters,
@@ -738,6 +739,15 @@ export interface ApplyL3ScreeningOutcomeInput {
   config: IntakePolicyConfig;
   /** Every L3 invocation writes an auditable CogSecEvent through this port. */
   cogSecEvents: Pick<CogSecEventStore, 'createEvent'>;
+  /**
+   * Durable quarantine store (htm9.11). When provided, a quarantine decision
+   * MUST land the item in the store — a failed hold throws and the caller
+   * withholds (same posture as a failed CogSecEvent write: an unreviewable
+   * quarantine hold is a broken guarantee, never a silent degradation).
+   */
+  quarantine?: IntakeQuarantineHoldPort;
+  /** Canonical contact id of the sender, when known (people-list flywheel). */
+  canonicalContactId?: string;
   /** Acting principal for envelope transitions. Default 'gateway:intake-l3'. */
   actor?: string;
   /** What the envelope covers on the carrying message. Default `{kind:'body'}`. */
@@ -764,7 +774,7 @@ export interface L3EscalationResult {
   cogSecCaseId: string;
 }
 
-function buildContentRef(text: string): {
+function buildContentRef(text: string, store: string): {
   store: string;
   ref: string;
   sha256: string;
@@ -773,10 +783,10 @@ function buildContentRef(text: string): {
 } {
   const sha256 = createHash('sha256').update(text, 'utf8').digest('hex');
   return {
-    // No durable quarantine store exists yet (htm9.3 owns the held-item store
-    // + human release flow); the hash identifies the content without carrying
-    // raw bytes on the envelope.
-    store: 'unpersisted',
+    // With a quarantine store configured (htm9.11), 'intake-quarantine' can
+    // resolve the hash handle for held items; without one the hash still
+    // identifies the content without carrying raw bytes on the envelope.
+    store,
     ref: `sha256:${sha256}`,
     sha256,
     sizeBytes: Buffer.byteLength(text, 'utf8'),
@@ -841,7 +851,10 @@ export function applyL3ScreeningOutcome(
     decidedAtMs: atMs,
   };
   const contribution = l3ScreeningContribution(outcome);
-  const contentRef = buildContentRef(input.text);
+  const contentRef = buildContentRef(
+    input.text,
+    input.quarantine ? 'intake-quarantine' : 'unpersisted',
+  );
 
   let envelope = createIntakeEnvelope({
     sourceClass: input.sourceClass,
@@ -920,6 +933,34 @@ export function applyL3ScreeningOutcome(
       : {}),
     sealedForensicPayloadHashes: [`sha256:${contentRef.sha256}`],
   });
+
+  // Durable hold for the Garden approval queue (htm9.11). Part of the hard
+  // rule when a store is wired: a quarantined L3 item the operator can never
+  // review is a broken guarantee, so a failed hold THROWS and the caller
+  // withholds. Cleared (released_sanitized) items are delivered as the safe
+  // representation and need no hold. A failed-closed outcome has no safe
+  // representation, so release_sanitized is explicitly unavailable for it.
+  if (input.quarantine && action === 'quarantine') {
+    input.quarantine.hold({
+      envelope,
+      mode,
+      rawText: input.text,
+      ...(outcome.kind === 'screened'
+        ? {
+          safeRepresentationText: renderIntakeSafeRepresentation(
+            outcome.aggregate.safeRepresentation,
+            { sourceRef: input.origin.ref },
+          ),
+        }
+        : {}),
+      ...(input.canonicalContactId !== undefined
+        ? { canonicalContactId: input.canonicalContactId }
+        : {}),
+      sourceChannelId: input.sourceChannelId,
+      cogSecCaseId: event.caseId,
+      atMs,
+    });
+  }
 
   const auditPayload = {
     envelopeId: envelope.id,

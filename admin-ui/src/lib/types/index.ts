@@ -79,6 +79,20 @@ export type {
   AdminEpisodicThreadSummary,
 } from '../../../../src/operator/garden/services/types.js';
 export type {
+  AdminIntakeQuarantineDecisionRequest,
+  AdminIntakeQuarantineFlywheelTarget,
+  AdminIntakeQuarantineItemDetail,
+  AdminIntakeQuarantineItemView,
+  AdminIntakeQuarantineSourceListAction,
+  AdminIntakeSourceListMutationInput,
+} from '../../../../src/operator/garden/services/types.js';
+export type {
+  IntakePolicyConfig,
+  IntakeSourceListEntry,
+  IntakeSourceListName,
+  IntakeSourceListsConfig,
+} from '../../../../src/system/config/intake-policy-config.js';
+export type {
   AdminDashboardData,
   AdminCogSecEventListData,
   AdminCogSecRemediationApplyData,

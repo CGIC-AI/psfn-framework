@@ -9,7 +9,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { readFileSync } from 'node:fs';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   L3_FIELD_ERROR,
   L3_FIELD_KEY_ENTITIES,
@@ -47,6 +47,7 @@ import {
 import { renderIntakeWithheldContentPlaceholder } from '../../../core/cogsec/intake/screening.js';
 import { isIntakeFirewallNoticeText } from '../../../core/cogsec/intake-firewall-notice-templates.js';
 import { CogSecEventStore } from '../../../core/cogsec/events.js';
+import type { IntakeQuarantineHoldPort } from '../../../core/cogsec/intake/quarantine-store.js';
 import { formatToolObservationForContext } from '../../../core/session/tool-observation.js';
 import {
   createPromptPlanBlock,
@@ -765,6 +766,84 @@ describe('applyL3ScreeningOutcome', () => {
     expect(() => applyL3ScreeningOutcome(applyInput(
       outcome, config, brokenEvents as unknown as CogSecEventStore,
     ))).toThrow(/event store unavailable/);
+  });
+
+  // ── htm9.11: durable quarantine hold for the Garden approval queue ──
+
+  it('flagged: holds the item in the quarantine store with the rendered safe representation', async () => {
+    const config = testPolicy({ mode: 'enforce' });
+    const events = makeEventStore();
+    const outcome = await screenedOutcome(FLAGGED_RESPONSE, config);
+    const holds: Array<Parameters<IntakeQuarantineHoldPort['hold']>[0]> = [];
+    const quarantine: IntakeQuarantineHoldPort = {
+      hold: (input) => {
+        holds.push(input);
+        return {} as never;
+      },
+    };
+    const result = applyL3ScreeningOutcome(applyInput(outcome, config, events, {
+      quarantine,
+      canonicalContactId: 'contact:mallory',
+    }));
+
+    expect(result.envelope.contentRef.store).toBe('intake-quarantine');
+    expect(holds).toHaveLength(1);
+    expect(holds[0].envelope.id).toBe(result.envelope.id);
+    expect(holds[0].mode).toBe('enforce');
+    expect(holds[0].rawText).toBe(HOSTILE_CONTENT);
+    // Flagged L3 items DO carry a safe representation → release_sanitized available.
+    expect(holds[0].safeRepresentationText).toContain('Summary:');
+    expect(holds[0].canonicalContactId).toBe('contact:mallory');
+    expect(holds[0].cogSecCaseId).toBe(result.cogSecCaseId);
+  });
+
+  it('failed_closed: holds WITHOUT a safe representation (release_sanitized explicitly unavailable)', async () => {
+    const config = testPolicy({ mode: 'enforce' });
+    const events = makeEventStore();
+    const outcome = await evaluateL3({
+      text: HOSTILE_CONTENT,
+      context: baseContext(),
+      l2: L2_FLAGGED,
+      config,
+      backend: BACKEND,
+      fetch: fetchHttpError(503, 'Service Unavailable'),
+    });
+    const holds: Array<Parameters<IntakeQuarantineHoldPort['hold']>[0]> = [];
+    const quarantine: IntakeQuarantineHoldPort = {
+      hold: (input) => {
+        holds.push(input);
+        return {} as never;
+      },
+    };
+    applyL3ScreeningOutcome(applyInput(
+      outcome as Exclude<L3ScreeningOutcome, { kind: 'skipped' }>, config, events, { quarantine },
+    ));
+    expect(holds).toHaveLength(1);
+    expect(holds[0].safeRepresentationText).toBeUndefined();
+  });
+
+  it('cleared items are not held (delivered as safe representation, nothing to review)', async () => {
+    const config = testPolicy({ mode: 'enforce' });
+    const events = makeEventStore();
+    const outcome = await screenedOutcome(CLEAR_RESPONSE, config);
+    const hold = vi.fn();
+    applyL3ScreeningOutcome(applyInput(outcome, config, events, {
+      quarantine: { hold } as unknown as IntakeQuarantineHoldPort,
+    }));
+    expect(hold).not.toHaveBeenCalled();
+  });
+
+  it('fails closed when the quarantine hold fails: the result never materializes', async () => {
+    const config = testPolicy({ mode: 'enforce' });
+    const events = makeEventStore();
+    const outcome = await screenedOutcome(FLAGGED_RESPONSE, config);
+    const quarantine: IntakeQuarantineHoldPort = {
+      hold: () => {
+        throw new Error('quarantine store unavailable');
+      },
+    };
+    expect(() => applyL3ScreeningOutcome(applyInput(outcome, config, events, { quarantine })))
+      .toThrow(/quarantine store unavailable/);
   });
 });
 

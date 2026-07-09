@@ -55,6 +55,7 @@ import { CompanionPresenceRuntime } from '../../core/agent/companion-presence-ru
 import { registerCompanionRoomEntryNotes } from '../../core/agent/companion-room-entry.js';
 import { createCompanionRoomContentWindowPort } from '../../core/agent/companion-room-window.js';
 import {
+  resolveIntakeQuarantinePath,
   resolveOutreachOutboxLedgerPath,
   resolvePendingContactApprovalsPath,
   resolveSocialGraphProposalsPath,
@@ -98,6 +99,7 @@ import {
 import { hydrateStartupActiveMemoryContexts } from '../../faculties/memory/startup-hydration.js';
 import { loadIntakePolicyConfig } from '../../system/config/intake-policy-config.js';
 import { maybeCreateIntakeScreeningService } from '../../core/cogsec/intake/screening.js';
+import { createIntakeQuarantineStore } from '../../core/cogsec/intake/quarantine-store.js';
 import { hydrateStartupActiveCoreMemoryBlocks } from '../../faculties/core-memory/startup-hydration.js';
 import { enforceNetworkIsolationOnStartup } from './startup-guards.js';
 import {
@@ -346,6 +348,19 @@ async function main(): Promise<void> {
   const intakeScreening = maybeCreateIntakeScreeningService({
     policy: intakePolicy,
     actor: 'agent:intake-screening',
+    // Durable quarantine hold (htm9.11): agent-side quarantine decisions land
+    // in the same companion-data store the gateway writes and Garden reviews.
+    ...(intakePolicy.mode !== 'off'
+      ? {
+        quarantine: createIntakeQuarantineStore(
+          resolveIntakeQuarantinePath(pathSnapshot.companionDataDir),
+          {
+            itemTtlHours: intakePolicy.quarantine.itemTtlHours,
+            maxHeldItems: intakePolicy.quarantine.maxHeldItems,
+          },
+        ),
+      }
+      : {}),
   });
   sessionManager.intakeScreening = intakeScreening;
   if (sessionManager.intakeScreening) {

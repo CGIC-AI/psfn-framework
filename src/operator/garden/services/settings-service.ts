@@ -14,6 +14,7 @@ import type { ConfigStorePort } from '../../../system/config/config-store.js';
 import type { ChargePolicyConfig } from '../../../system/config/charge-policy-config.js';
 import {
   applyIntakeSourceListMutation,
+  type IntakePolicyConfig,
   type IntakeSourceListsConfig,
 } from '../../../system/config/intake-policy-config.js';
 import {
@@ -1152,5 +1153,10 @@ export class AdminSettingsDataService implements AdminSettingsService {
     } catch (error) {
       return { ok: false, message: toErrorMessage(error) };
     }
+  }
+
+  /** Read-only typed intake-policy view for the Garden firewall page (htm9.11). */
+  getIntakePolicyOverview(): IntakePolicyConfig {
+    return this.deps.configStore.loadIntakePolicy();
   }
 }

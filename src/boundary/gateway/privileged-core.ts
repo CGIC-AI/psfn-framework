@@ -100,6 +100,7 @@ export async function buildGatewayPrivilegedCore(
   // a null service; a provisioned-but-broken L1.5 model fails startup.
   const intakeScreening = await composeGatewayIntakeScreening({
     systemDataDir: input.startupHydration.systemDataDir,
+    companionDataDir: input.startupHydration.companionDataDir,
   });
 
   return {

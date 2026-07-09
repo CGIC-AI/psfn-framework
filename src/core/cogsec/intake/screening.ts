@@ -68,6 +68,7 @@ import {
   type IntakeL1ScanReport,
   type IntakeScanScope,
 } from './scanners/index.js';
+import type { IntakeQuarantineHoldPort } from './quarantine-store.js';
 
 export { INTAKE_QUARANTINE_RISK_LABELS, INTAKE_SANITIZE_RISK_LABELS } from './risk-label-families.js';
 
@@ -126,6 +127,12 @@ export interface IntakeScreeningResult {
   /** Visible-not-swallowed L1.5 failure (screening continued on L1 signals). */
   injectionScorerError?: string;
   /**
+   * Visible-not-swallowed failure writing a quarantined item to the durable
+   * quarantine store (htm9.11). The content stays withheld in enforce mode
+   * regardless (fail closed) — only the operator review copy was lost.
+   */
+  quarantineHoldError?: string;
+  /**
    * Data-marking plan (htm9.13) for markable source classes
    * (INTAKE_MARKING_SOURCE_CLASSES): a pure function of the screening labels,
    * max score, and effective tier. Computed and audited in BOTH modes; never
@@ -152,6 +159,12 @@ export interface IntakeScreeningServiceOptions {
   policy: IntakePolicyConfig;
   l1: IntakeL1Scanner;
   injectionScorer?: IntakeInjectionScorerPort;
+  /**
+   * Durable quarantine store (htm9.11): quarantine decisions HOLD the raw
+   * item here for the Garden approval queue. Absent (tests, minimal
+   * compositions) quarantined content is withheld without a review copy.
+   */
+  quarantine?: IntakeQuarantineHoldPort;
   /** Acting principal for envelope transitions, e.g. 'gateway:intake-screening'. */
   actor: string;
   now?: () => number;
@@ -213,7 +226,7 @@ function decideAction(signals: ScreeningSignals): { action: IntakeDecisionAction
 
 // ── Service ──
 
-function buildContentRef(text: string): {
+function buildContentRef(text: string, store: string): {
   store: string;
   ref: string;
   sha256: string;
@@ -222,10 +235,10 @@ function buildContentRef(text: string): {
 } {
   const sha256 = createHash('sha256').update(text, 'utf8').digest('hex');
   return {
-    // No durable quarantine store exists yet (htm9.3 owns the held-item store
-    // + human release flow); the hash identifies the content without carrying
-    // raw bytes on the envelope.
-    store: 'unpersisted',
+    // With a quarantine store configured (htm9.11), 'intake-quarantine' can
+    // resolve the hash handle for held items; without one the hash still
+    // identifies the content without carrying raw bytes on the envelope.
+    store,
     ref: `sha256:${sha256}`,
     sha256,
     sizeBytes: Buffer.byteLength(text, 'utf8'),
@@ -236,7 +249,7 @@ function buildContentRef(text: string): {
 export function createIntakeScreeningService(
   options: IntakeScreeningServiceOptions,
 ): IntakeScreeningService {
-  const { policy, l1, injectionScorer, actor } = options;
+  const { policy, l1, injectionScorer, quarantine, actor } = options;
   if (policy.mode === 'off') {
     throw new Error(
       "Intake screening service must not be constructed with mode 'off'; "
@@ -277,7 +290,7 @@ export function createIntakeScreeningService(
     let envelope = createIntakeEnvelope({
       sourceClass: input.sourceClass,
       sourceRiskTier,
-      contentRef: buildContentRef(text),
+      contentRef: buildContentRef(text, quarantine ? 'intake-quarantine' : 'unpersisted'),
       origin: input.origin,
       atMs,
     });
@@ -350,6 +363,33 @@ export function createIntakeScreeningService(
       }
     }
 
+    // Durable hold for the Garden approval queue (htm9.11): quarantine
+    // decisions land the raw item in the quarantine store so the operator can
+    // review, release, or discard it. Hold failure mirrors the L1.5 posture:
+    // recorded on the result and logged as an error, never swallowed — and the
+    // content stays withheld in enforce mode regardless (fail closed).
+    let quarantineHoldError: string | undefined;
+    if (quarantine && envelope.state === 'quarantined') {
+      try {
+        quarantine.hold({
+          envelope,
+          mode,
+          rawText: text,
+          ...(input.canonicalContactId !== undefined
+            ? { canonicalContactId: input.canonicalContactId }
+            : {}),
+          atMs,
+        });
+      } catch (error) {
+        quarantineHoldError = error instanceof Error ? error.message : String(error);
+        log.error('Intake quarantine hold failed; item stays withheld without a review copy', {
+          envelopeId: envelope.id,
+          originRef: input.origin.ref,
+          error: quarantineHoldError,
+        });
+      }
+    }
+
     const snapshot = snapshotIntakeEnvelope(envelope, input.subject ?? { kind: 'body' });
 
     // Every decision is audited; findings and enforcement escalate severity.
@@ -376,6 +416,7 @@ export function createIntakeScreeningService(
       ...(markingPlan ? { markingIntensity: markingPlan.intensity } : {}),
       ...(report.scannerErrors.length > 0 ? { scannerErrors: report.scannerErrors } : {}),
       ...(scorerOutcome.error ? { injectionScorerError: scorerOutcome.error } : {}),
+      ...(quarantineHoldError ? { quarantineHoldError } : {}),
     };
     if (decision.action === 'pass') {
       log.debug('Intake screening decision', auditPayload);
@@ -400,6 +441,7 @@ export function createIntakeScreeningService(
       withheld,
       ...(scorerOutcome.score !== undefined ? { injectionScore: scorerOutcome.score } : {}),
       ...(scorerOutcome.error ? { injectionScorerError: scorerOutcome.error } : {}),
+      ...(quarantineHoldError ? { quarantineHoldError } : {}),
       ...(markingPlan ? { markingPlan } : {}),
     };
   }
@@ -449,6 +491,8 @@ export interface MaybeCreateIntakeScreeningOptions {
   actor: string;
   l1Config?: IntakeL1ScannerConfig;
   injectionScorer?: IntakeInjectionScorerPort;
+  /** Durable quarantine store (htm9.11) for held-item review in Garden. */
+  quarantine?: IntakeQuarantineHoldPort;
   now?: () => number;
 }
 
@@ -468,6 +512,7 @@ export function maybeCreateIntakeScreeningService(
     policy: options.policy,
     l1: createIntakeL1Scanner(options.l1Config ?? {}),
     ...(options.injectionScorer ? { injectionScorer: options.injectionScorer } : {}),
+    ...(options.quarantine ? { quarantine: options.quarantine } : {}),
     actor: options.actor,
     ...(options.now ? { now: options.now } : {}),
   });

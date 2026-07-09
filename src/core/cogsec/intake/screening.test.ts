@@ -20,6 +20,7 @@ import {
   type IntakeInjectionScorerPort,
 } from './screening.js';
 import { createIntakeL1Scanner } from './scanners/index.js';
+import type { IntakeQuarantineHoldPort } from './quarantine-store.js';
 
 const RULES_PATH = join(process.cwd(), 'config', 'intake-l1-rules.json');
 const POLICY_SEED_PATH = join(process.cwd(), 'config', 'intake-policy.seed.json');
@@ -303,6 +304,61 @@ describe('source-risk-scaled scrutiny via source lists (htm9.13)', () => {
       scope: 'context',
     });
     expect(listed.action).toBe('pass'); // 0.8 < standard threshold 0.9
+  });
+});
+
+// ── htm9.11: durable quarantine hold on screening quarantine decisions ──
+
+describe('quarantine hold on screening decisions (htm9.11)', () => {
+  function makeHoldingService(mode: 'shadow' | 'enforce', hold: IntakeQuarantineHoldPort['hold']) {
+    return createIntakeScreeningService({
+      policy: makePolicy(mode),
+      l1: createIntakeL1Scanner({ rulesPath: RULES_PATH, reloadCheckIntervalMs: -1 }),
+      quarantine: { hold },
+      actor: 'test:intake-screening',
+    });
+  }
+
+  it('holds quarantined items with the raw text and contact id, in both modes', async () => {
+    for (const mode of ['shadow', 'enforce'] as const) {
+      const holds: Array<Parameters<IntakeQuarantineHoldPort['hold']>[0]> = [];
+      const service = makeHoldingService(mode, (input) => {
+        holds.push(input);
+        return {} as never;
+      });
+      const result = await service.screen(HOSTILE_TEXT, {
+        ...screenInput,
+        canonicalContactId: 'contact:mallory',
+      });
+      expect(result.action).toBe('quarantine');
+      expect(result.envelope.contentRef.store).toBe('intake-quarantine');
+      expect(holds).toHaveLength(1);
+      expect(holds[0].envelope.id).toBe(result.envelope.id);
+      expect(holds[0].mode).toBe(mode);
+      expect(holds[0].rawText).toBe(HOSTILE_TEXT);
+      expect(holds[0].canonicalContactId).toBe('contact:mallory');
+    }
+  });
+
+  it('does not hold pass/sanitize decisions', async () => {
+    const holds: unknown[] = [];
+    const service = makeHoldingService('enforce', (input) => {
+      holds.push(input);
+      return {} as never;
+    });
+    await service.screen(CLEAN_TEXT, screenInput);
+    await service.screen(INVISIBLE_TEXT, screenInput);
+    expect(holds).toHaveLength(0);
+  });
+
+  it('records a hold failure visibly and keeps the content withheld (fail closed)', async () => {
+    const service = makeHoldingService('enforce', () => {
+      throw new Error('quarantine disk full');
+    });
+    const result = await service.screen(HOSTILE_TEXT, screenInput);
+    expect(result.quarantineHoldError).toContain('quarantine disk full');
+    expect(result.withheld).toBe(true);
+    expect(result.effectiveText).toBe(renderIntakeWithheldContentPlaceholder());
   });
 });
 

@@ -20,6 +20,11 @@ import {
   type IntakeScreeningService,
 } from '../../../core/cogsec/intake/screening.js';
 import { createIntakeL1Scanner } from '../../../core/cogsec/intake/scanners/index.js';
+import {
+  createIntakeQuarantineStore,
+  type IntakeQuarantineStore,
+} from '../../../core/cogsec/intake/quarantine-store.js';
+import { resolveIntakeQuarantinePath } from '../../../persistence/layout.js';
 import { loadIntakePolicyConfig } from '../../../system/config/intake-policy-config.js';
 import {
   createInjectionClassifier,
@@ -43,19 +48,33 @@ function isInjectionModelProvisioned(modelDir: string): boolean {
 
 export interface GatewayIntakeScreeningComposition {
   screening: IntakeScreeningService | null;
+  /** Durable quarantine store (htm9.11); null when the firewall is off. */
+  quarantine: IntakeQuarantineStore | null;
   /** For shutdown: disposes the ONNX session when one was loaded. */
   dispose(): Promise<void>;
 }
 
 export async function composeGatewayIntakeScreening(input: {
   systemDataDir: string;
+  /** Companion data root; hosts the durable quarantine store (htm9.11). */
+  companionDataDir: string;
   env?: NodeJS.ProcessEnv;
 }): Promise<GatewayIntakeScreeningComposition> {
   const policy = loadIntakePolicyConfig(input.systemDataDir);
   if (policy.mode === 'off') {
     log.warn("Intake firewall mode is 'off': gateway intake screening is not wired");
-    return { screening: null, dispose: async () => {} };
+    return { screening: null, quarantine: null, dispose: async () => {} };
   }
+
+  // Held items land in companion-data/state/intake-quarantine.json; the
+  // Garden approval queue reads the same file through its own instance.
+  const quarantine = createIntakeQuarantineStore(
+    resolveIntakeQuarantinePath(input.companionDataDir),
+    {
+      itemTtlHours: policy.quarantine.itemTtlHours,
+      maxHeldItems: policy.quarantine.maxHeldItems,
+    },
+  );
 
   let classifier: InjectionClassifier | null = null;
   const modelDir = resolveInjectionModelDir(input.env ?? process.env);
@@ -87,6 +106,7 @@ export async function composeGatewayIntakeScreening(input: {
         },
       }
       : {}),
+    quarantine,
     actor: 'gateway:intake-screening',
   });
   log.info('Gateway intake screening composed', {
@@ -96,6 +116,7 @@ export async function composeGatewayIntakeScreening(input: {
 
   return {
     screening,
+    quarantine,
     dispose: async () => {
       await classifier?.dispose();
     },

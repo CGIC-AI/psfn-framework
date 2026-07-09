@@ -34,6 +34,8 @@ import { ADMIN_DYNAMIC_JSON_HEADERS, toSanitizedMessage } from './routes/shared.
 import { buildAdminSettingsRoutes } from './routes/settings-routes.js';
 import { buildAdminChannelEnvelopeRoutes } from './routes/channel-envelope-routes.js';
 import { buildAdminIntakeSourceListRoutes } from './routes/intake-source-list-routes.js';
+import { buildAdminIntakeQuarantineRoutes } from './routes/intake-quarantine-routes.js';
+import type { AdminIntakeQuarantineService } from './services/intake-quarantine-service.js';
 import type { AdminApiRoute } from './routes/types.js';
 import type {
   AdminActionPipeService,
@@ -271,6 +273,8 @@ export function buildAdminApiRoutes(options: {
   subsystemHealthService?: AdminSubsystemHealthService | null;
   toolConformanceService?: AdminToolConformanceService | null;
   settingsService: AdminSettingsService;
+  /** Intake quarantine approval queue (htm9.11); always wired in production. */
+  intakeQuarantineService?: AdminIntakeQuarantineService | null;
   identityService: AdminIdentityService;
   promptsService: AdminPromptsService;
   modelDiscovery?: AdminModelDiscoveryApi | null;
@@ -318,6 +322,7 @@ export function buildAdminApiRoutes(options: {
     subsystemHealthService,
     toolConformanceService,
     settingsService,
+    intakeQuarantineService,
     identityService,
     promptsService,
     modelDiscovery,
@@ -770,6 +775,14 @@ export function buildAdminApiRoutes(options: {
     ...buildAdminSettingsRoutes({ settingsService, appendAuditTimelineEntry, withBody }),
     ...buildAdminChannelEnvelopeRoutes({ settingsService, appendAuditTimelineEntry, withBody }),
     ...buildAdminIntakeSourceListRoutes({ settingsService, appendAuditTimelineEntry, withBody }),
+    ...(intakeQuarantineService
+      ? buildAdminIntakeQuarantineRoutes({
+        quarantineService: intakeQuarantineService,
+        settingsService,
+        appendAuditTimelineEntry,
+        withBody,
+      })
+      : []),
     ...buildAdminIdentityRoutes({ identityService, appendAuditTimelineEntry, withBody }),
     ...buildAdminPromptRoutes({ promptsService, withBody }),
     ...buildAdminSchedulerRoutes({ scheduler, withBody }),

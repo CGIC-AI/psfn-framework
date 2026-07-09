@@ -786,6 +786,16 @@ export function resolveCogSecEventsPath(companionDataDir: string): string {
   return join(resolveCompanionStateDir(companionDataDir), 'cogsec-events.json');
 }
 
+/**
+ * Durable intake quarantine queue (htm9.11): held items awaiting the operator
+ * release/discard decision in the Garden Cognitive Security tab. Co-located
+ * with cogsec-events.json under companion-data/state; written by the gateway
+ * and agent screening pipelines, read/mutated by the Garden approval surface.
+ */
+export function resolveIntakeQuarantinePath(companionDataDir: string): string {
+  return join(resolveCompanionStateDir(companionDataDir), 'intake-quarantine.json');
+}
+
 export function resolveCogSecForensicArchiveDir(companionDataDir: string): string {
   return join(resolveCompanionVaultDir(companionDataDir), 'cogsec-forensics');
 }

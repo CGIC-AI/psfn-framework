@@ -60,6 +60,7 @@ import type {
 import { parseContextEnvelopeSection } from '../../../channels/backplane/config.js';
 import { validateChannelEnvelopeLabel } from '../../../system/trust/context-envelope.js';
 import { resolveChannelEnvelopeClassification } from '../../../system/trust/policy.js';
+import type { GatewayCredentialPresenceResult } from '../../../boundary/gateway/protocol.js';
 
 const IMPORT_ROUTE_MODE_VALUES = new Set(IMPORT_PROCESSING_ROUTE_MODE_VALUES);
 const SESSION_RESTART_BEHAVIOR_VALUES_SET = new Set(SESSION_RESTART_BEHAVIOR_VALUES);
@@ -338,6 +339,7 @@ export class AdminSettingsDataService implements AdminSettingsService {
   constructor(private readonly deps: {
     config: SubstrateConfig;
     configStore: ConfigStorePort;
+    getCredentialPresence?: () => Promise<GatewayCredentialPresenceResult>;
   }) {}
 
   private updateDivergences(
@@ -380,19 +382,34 @@ export class AdminSettingsDataService implements AdminSettingsService {
     };
   }
 
-  private getEnvInfo() {
+  private async getEnvInfo() {
+    const presence = this.deps.getCredentialPresence
+      ? await this.deps.getCredentialPresence()
+      : {
+          discordToken: false,
+          apiKey: Boolean(this.deps.config.localApiKey),
+          adminToken: Boolean(this.deps.config.adminAuthToken),
+          openrouterApiKey: false,
+          litellmBaseUrl: Boolean(this.deps.config.litellmBaseUrl),
+          litellmApiKey: false,
+          importProcessingLocalApiKey: false,
+          falApiKey: false,
+          telegramBotToken: false,
+        };
+    const marker = (configured: boolean): '[set]' | '[not set]' =>
+      configured ? '[set]' : '[not set]';
     return {
       salienceFloor: Number(process.env.SALIENCE_FLOOR ?? MEMORY_CONFIG.salienceFloor),
       maintenanceIntervalMs: this.deps.config.maintenanceIntervalMs,
-      discordToken: process.env.DISCORD_TOKEN ? '[set]' : '[not set]',
-      apiKey: this.deps.config.localApiKey ? '[set]' : '[not set]',
-      adminToken: this.deps.config.adminAuthToken ? '[set]' : '[not set]',
-      openrouterApiKey: process.env.OPENROUTER_API_KEY ? '[set]' : '[not set]',
-      litellmBaseUrl: process.env.LITELLM_BASE_URL ? '[set]' : '[not set]',
-      litellmApiKey: process.env.LITELLM_API_KEY ? '[set]' : '[not set]',
-      importProcessingLocalApiKey: process.env.IMPORT_PROCESSING_LOCAL_API_KEY ? '[set]' : '[not set]',
-      falApiKey: process.env.FAL_API_KEY ? '[set]' : '[not set]',
-      telegramBotToken: process.env.TELEGRAM_BOT_TOKEN ? '[set]' : '[not set]',
+      discordToken: marker(presence.discordToken),
+      apiKey: marker(presence.apiKey),
+      adminToken: marker(presence.adminToken),
+      openrouterApiKey: marker(presence.openrouterApiKey),
+      litellmBaseUrl: marker(presence.litellmBaseUrl),
+      litellmApiKey: marker(presence.litellmApiKey),
+      importProcessingLocalApiKey: marker(presence.importProcessingLocalApiKey),
+      falApiKey: marker(presence.falApiKey),
+      telegramBotToken: marker(presence.telegramBotToken),
     };
   }
 
@@ -796,7 +813,7 @@ export class AdminSettingsDataService implements AdminSettingsService {
     const editors = this.loadSettingsConfigEditors();
     return {
       config: runtimeConfig,
-      env: this.getEnvInfo(),
+      env: await this.getEnvInfo(),
       editors,
       voiceProviders: this.loadVoiceProviderData(),
       status: this.buildSettingsStatus(),

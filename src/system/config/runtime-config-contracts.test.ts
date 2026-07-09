@@ -21,6 +21,9 @@ describe('sanitizeCoreSubstrateConfig', () => {
       modelRoster: {},
       discordToken: 'discord-secret',
       discordBotId: 'bot-id',
+      gatewayCompanionAuthToken: 'gateway-agent-secret',
+      gatewaySessionIntegrityAuthToken: 'gateway-worker-secret',
+      postgresDatabaseUrl: 'postgres://user:database-secret@localhost/psfn',
       credentialVault: { resolve: () => undefined },
       litellmApiKeyRef: { env: 'LITELLM_API_KEY' },
       openRouterApiKeyRef: { env: 'OPENROUTER_API_KEY' },
@@ -35,6 +38,9 @@ describe('sanitizeCoreSubstrateConfig', () => {
     expect(sanitized.credentialVault).toBeUndefined();
     expect(sanitized.discordToken).toBeUndefined();
     expect(sanitized.discordBotId).toBeUndefined();
+    expect(sanitized.gatewayCompanionAuthToken).toBeUndefined();
+    expect(sanitized.gatewaySessionIntegrityAuthToken).toBeUndefined();
+    expect(sanitized.postgresDatabaseUrl).toBeUndefined();
     expect(sanitized.litellmApiKeyRef).toBeUndefined();
     expect(sanitized.openRouterApiKeyRef).toBeUndefined();
     expect(sanitized.deepgramApiKey).toBeUndefined();

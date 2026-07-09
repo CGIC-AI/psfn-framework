@@ -20,7 +20,8 @@
  *     The launcher reads empty stdout as "stay in single-agent mode".
  *   - Multi-companion topology: one line per companion, fields tab-separated in
  *     the order companionId, companionDataDir, characterCardPath, postgresSchema,
- *     adminTransportSocket, gardenPort. gardenPort is "-" when the companion has
+ *     companionAuthToken, sessionIntegrityAuthToken, adminTransportSocket,
+ *     gardenPort. gardenPort is "-" when the companion has
  *     no Garden operator surface configured (companions.json gardenPort absent).
  *     Tabs/newlines inside any field are rejected (fail closed) so the launcher
  *     can parse the plan with a plain `IFS=$'\t' read`.
@@ -34,12 +35,15 @@ import { resolveRuntimePathLayout } from '../src/persistence/layout.js';
 import {
   isMultiCompanionEnabled,
   resolveCompanionFleet,
-  type CompanionFleetEntry,
+  resolveCompanionFleetPaths,
+  type ResolvedCompanionFleetEntry,
 } from '../src/system/config/companions-config.js';
 import {
   resolveAdminTransportMode,
   resolveCompanionAdminTransportSocketPath,
 } from '../src/operator/garden/transport-paths.js';
+import { requireGatewaySessionHmacKeyring } from '../src/boundary/gateway/session-hmac-env.js';
+import { deriveCompanionAuthToken } from '../src/boundary/gateway/companion-auth.js';
 
 const FIELD_SEPARATOR = '\t';
 const NO_GARDEN_PORT_SENTINEL = '-';
@@ -53,13 +57,20 @@ function assertPlanSafe(value: string, field: string, companionId: string): void
   }
 }
 
-function formatPlanLine(entry: CompanionFleetEntry, env: NodeJS.ProcessEnv): string {
+function formatPlanLine(
+  entry: ResolvedCompanionFleetEntry,
+  companionAuthToken: string,
+  sessionIntegrityAuthToken: string,
+  env: NodeJS.ProcessEnv,
+): string {
   const adminTransportSocket = resolveCompanionAdminTransportSocketPath(entry.companionId, env);
   const fields: Array<[string, string]> = [
     ['companionId', entry.companionId],
     ['companionDataDir', entry.companionDataDir],
     ['characterCardPath', entry.characterCardPath],
     ['postgresSchema', entry.postgresSchema],
+    ['companionAuthToken', companionAuthToken],
+    ['sessionIntegrityAuthToken', sessionIntegrityAuthToken],
     ['adminTransportSocket', adminTransportSocket],
     [
       'gardenPort',
@@ -91,17 +102,18 @@ function main(): void {
   });
 
   const multiCompanion = isMultiCompanionEnabled(env);
-  const fleet = resolveCompanionFleet({
+  const rawFleet = resolveCompanionFleet({
     dataDir: runtimePathLayout.systemDataDir,
     multiCompanion,
     seedDir: env.CONFIG_DIR?.trim() ? env.CONFIG_DIR : undefined,
   });
 
-  if (!fleet) {
+  if (!rawFleet) {
     // Single-companion topology: emit nothing; the launcher keeps its existing
     // single-agent behavior byte-identically.
     return;
   }
+  const fleet = resolveCompanionFleetPaths(rawFleet, runtimePathLayout.runtimeRootDir);
 
   // Per-companion Gardens bind one admin transport socket per agent process;
   // a single shared network admin transport cannot serve N agents. Fail closed
@@ -113,7 +125,13 @@ function main(): void {
     );
   }
 
-  const plan = fleet.companions.map((entry) => formatPlanLine(entry, env)).join('\n');
+  const keyring = requireGatewaySessionHmacKeyring(env);
+  const plan = fleet.companions.map((entry) => formatPlanLine(
+    entry,
+    deriveCompanionAuthToken(entry.companionId, 'agent', keyring),
+    deriveCompanionAuthToken(entry.companionId, 'internal_session_integrity', keyring),
+    env,
+  )).join('\n');
   process.stdout.write(`${plan}\n`);
 }
 

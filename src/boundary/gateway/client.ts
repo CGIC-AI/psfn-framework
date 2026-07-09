@@ -76,6 +76,7 @@ import type {
   ConfirmationListResult,
   ConfirmationResolveParams,
   RuntimeHealthResult,
+  GatewayCredentialPresenceResult,
   RpcSubstrateMessage,
   VoiceStreamStartParams,
   VoiceStreamChunkParams,
@@ -130,6 +131,10 @@ export interface GatewayClientOptions {
    * LLM correlation params so the gateway can verify companion identity.
    */
   companionId?: string;
+  /** Fleet-scoped proof paired with companionId during gateway identification. */
+  companionAuthToken?: string;
+  /** Role-bound proof exposed only to the isolated session-integrity worker. */
+  sessionIntegrityAuthToken?: string;
 }
 
 interface VoiceStreamState {
@@ -176,6 +181,8 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
   private closedNotified = false;
   private isDestroying = false;
   private readonly companionId?: string;
+  private readonly companionAuthToken?: string;
+  private readonly sessionIntegrityAuthToken?: string;
 
   constructor(conn: GatewayRpcConnection, embeddingDims: number, options: GatewayClientOptions = {}) {
     this.conn = conn;
@@ -186,6 +193,20 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
         throw new Error('GatewayClient companionId must be a non-empty string when provided');
       }
       this.companionId = trimmed;
+    }
+    if (options.companionAuthToken !== undefined) {
+      const trimmed = options.companionAuthToken.trim();
+      if (!trimmed) {
+        throw new Error('GatewayClient companionAuthToken must be a non-empty string when provided');
+      }
+      this.companionAuthToken = trimmed;
+    }
+    if (options.sessionIntegrityAuthToken !== undefined) {
+      const trimmed = options.sessionIntegrityAuthToken.trim();
+      if (!trimmed) {
+        throw new Error('GatewayClient sessionIntegrityAuthToken must be a non-empty string when provided');
+      }
+      this.sessionIntegrityAuthToken = trimmed;
     }
     this.voiceStreamQueueSize = options.voiceStreamQueueSize ?? DEFAULT_VOICE_STREAM_QUEUE_SIZE;
     this.voiceStreamOverflowPolicy = options.voiceStreamOverflowPolicy ?? DEFAULT_VOICE_STREAM_OVERFLOW_POLICY;
@@ -283,6 +304,7 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
     await this.rpcInstance.request('gateway.client.identify', {
       role: 'agent',
       ...(this.companionId ? { companionId: this.companionId } : {}),
+      ...(this.companionAuthToken ? { authToken: this.companionAuthToken } : {}),
     });
   }
 
@@ -763,6 +785,13 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
 
   async runtimeHealth(): Promise<RuntimeHealthResult> {
     return await this.rpcInstance.request('runtime.health', {}) as RuntimeHealthResult;
+  }
+
+  async getCredentialPresence(): Promise<GatewayCredentialPresenceResult> {
+    return await this.rpcInstance.request(
+      'runtime.credential_presence',
+      {},
+    ) as GatewayCredentialPresenceResult;
   }
 
   async listConfirmationQueue(): Promise<ConfirmationListResult> {
@@ -1268,6 +1297,8 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
       endpoint: this.sessionIntegrityEndpoint,
       method,
       params,
+      companionId: this.companionId,
+      companionAuthToken: this.sessionIntegrityAuthToken,
       requestId,
       timeoutMs: this.sessionIntegrityRpcTimeoutMs,
     });

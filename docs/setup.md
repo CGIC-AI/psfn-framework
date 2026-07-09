@@ -146,6 +146,9 @@ these process-wiring env vars come into play (documented in full in
   process. Explicit opt-in, not derived from `COMPANION_ID`; unset means the
   `public` schema (single-companion). The supervisor launcher sets this per
   spawned agent from the fleet manifest.
+- `PSFN_RUNTIME_ROOT` — canonical persistence root for manifest-relative
+  `companionDataDir` and `characterCardPath`. The fleet resolver emits absolute
+  paths beneath this root and rejects traversal or symlink escapes.
 - `FLEET_STATUS_PORT` / `FLEET_STATUS_HOST` — the gateway's read-only,
   loopback-only fleet-status page (host defaults to `127.0.0.1`). Setting the
   port while `PSFN_MULTI_COMPANION` is off fails closed.
@@ -155,6 +158,10 @@ these process-wiring env vars come into play (documented in full in
   `DISCORD_TOKEN_ARIA`); the token secret stays gateway-owned.
 
 Leave all of these unset for the default single-companion topology.
+Use the supervisor launcher for multi-companion deployments. It derives and
+injects role-bound gateway authentication proofs; a direct `npm run agent`
+launch must provide the exact fleet tuple and both gateway proof variables or
+startup fails closed.
 
 ## Common Launch Commands
 

@@ -200,5 +200,6 @@ export interface EnvInfo {
   litellmBaseUrl: string;
   litellmApiKey: string;
   importProcessingLocalApiKey: string;
+  falApiKey: string;
   telegramBotToken: string;
 }

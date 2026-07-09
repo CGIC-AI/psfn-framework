@@ -4,7 +4,10 @@ import type { StreamingSttProvider } from '../../primitives/voice/connectors/stt
 import type { StreamingTtsProvider } from '../../primitives/voice/connectors/tts/index.js';
 import type { CapabilityTier } from '../capabilities/tier-types.js';
 import type { ChargePolicyConfig } from './charge-policy-config.js';
-import type { CompanionsFleetConfig } from './companions-config.js';
+import type {
+  CompanionRuntimeIdentity,
+  ResolvedCompanionsFleetConfig,
+} from './companions-config.js';
 import type { SatelliteRegistryConfig } from '../../shared/contracts/satellite-registry.js';
 import type { GroupMemorySettings } from './group-memory-config.js';
 import type { EmotionScopingSettings } from './emotion-scoping-config.js';
@@ -129,7 +132,13 @@ export interface SubstrateConfig {
   /** True when the multi-companion topology flag (PSFN_MULTI_COMPANION) is enabled. */
   multiCompanion?: boolean;
   /** Validated fleet manifest; present only when multi-companion mode is enabled. */
-  companionFleet?: CompanionsFleetConfig;
+  companionFleet?: ResolvedCompanionsFleetConfig;
+  /** Fleet-bound process identity; present only in multi-companion mode. */
+  companionRuntimeIdentity?: CompanionRuntimeIdentity;
+  /** Per-companion proof used only during gateway connection authentication. */
+  gatewayCompanionAuthToken?: string;
+  /** Role-bound proof delegated only to the session-integrity worker. */
+  gatewaySessionIntegrityAuthToken?: string;
   systemDataDir?: string;
   companionDataDir?: string;
   workspacePath?: string;
@@ -318,6 +327,9 @@ export const CORE_SECRET_BEARING_CONFIG_KEYS = [
   'credentialVault',
   'discordToken',
   'discordBotId',
+  'gatewayCompanionAuthToken',
+  'gatewaySessionIntegrityAuthToken',
+  'postgresDatabaseUrl',
   'litellmApiKeyRef',
   'openRouterApiKeyRef',
   'deepgramApiKey',
@@ -331,6 +343,9 @@ export interface CoreSubstrateConfig extends SubstrateConfig {
   credentialVault?: never;
   discordToken?: never;
   discordBotId?: never;
+  gatewayCompanionAuthToken?: never;
+  gatewaySessionIntegrityAuthToken?: never;
+  postgresDatabaseUrl?: never;
   litellmApiKeyRef?: never;
   openRouterApiKeyRef?: never;
   deepgramApiKey?: never;
@@ -343,6 +358,9 @@ export function sanitizeCoreSubstrateConfig(config: SubstrateConfig): CoreSubstr
     credentialVault: _credentialVault,
     discordToken: _discordToken,
     discordBotId: _discordBotId,
+    gatewayCompanionAuthToken: _gatewayCompanionAuthToken,
+    gatewaySessionIntegrityAuthToken: _gatewaySessionIntegrityAuthToken,
+    postgresDatabaseUrl: _postgresDatabaseUrl,
     litellmApiKeyRef: _litellmApiKeyRef,
     openRouterApiKeyRef: _openRouterApiKeyRef,
     deepgramApiKey: _deepgramApiKey,

@@ -44,6 +44,8 @@ import {
   resolveGatewayMultiCompanionConfig,
   type GatewayMultiCompanionConfig,
 } from './multi-companion.js';
+import { resolveGatewayCredentialPresence } from './credential-presence.js';
+import type { GatewayCredentialPresenceResult } from './protocol.js';
 
 const DEFAULT_SOCKET_PATH = '/run/psfn/gateway.sock';
 const DEFAULT_NTFY_TIMEOUT_MS = 8_000;
@@ -69,6 +71,7 @@ export interface GatewayBootstrapServerInput {
   sessionHmacKeyring: SessionHmacKeyring;
   wyomingShardRouting: WyomingShardRoutingConfig;
   multiCompanion: GatewayMultiCompanionConfig;
+  credentialPresence: GatewayCredentialPresenceResult;
   ntfy?: GatewayNtfyConfig;
   confirmation: {
     expiryMs: number;
@@ -407,6 +410,12 @@ export function resolveGatewayBootstrapInput(
       sessionHmacKeyring,
       wyomingShardRouting,
       multiCompanion: resolveGatewayMultiCompanionConfig(config, channelsConfig),
+      credentialPresence: resolveGatewayCredentialPresence({
+        config,
+        channelsConfig,
+        providerEnv,
+        env,
+      }),
       ...(ntfy ? { ntfy } : {}),
       confirmation: {
         expiryMs: confirmationExpiryMs,

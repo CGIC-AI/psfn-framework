@@ -355,6 +355,21 @@ export interface ConfirmationHistoryListResult {
 
 export type RuntimeHealthResult = RuntimeServiceHealthSnapshot;
 
+export type GatewayCredentialPresenceParams = Record<string, never>;
+
+/** Redacted credential inventory. Raw values never cross the gateway boundary. */
+export interface GatewayCredentialPresenceResult {
+  discordToken: boolean;
+  apiKey: boolean;
+  adminToken: boolean;
+  openrouterApiKey: boolean;
+  litellmBaseUrl: boolean;
+  litellmApiKey: boolean;
+  importProcessingLocalApiKey: boolean;
+  falApiKey: boolean;
+  telegramBotToken: boolean;
+}
+
 export interface ConfirmationResolveParams {
   id: string;
   decision: ConfirmationDecision;
@@ -671,6 +686,7 @@ export interface GatewayMethods {
   'confirmation.history': [ConfirmationHistoryListParams, ConfirmationHistoryListResult];
   'confirmation.resolve': [ConfirmationResolveParams, ConfirmationResolveResult];
   'runtime.health': [RuntimeHealthParams, RuntimeHealthResult];
+  'runtime.credential_presence': [GatewayCredentialPresenceParams, GatewayCredentialPresenceResult];
   'session.hmac.sign': [SessionHmacSignParams, SessionHmacSignResult];
   'session.hmac.verify': [SessionHmacVerifyParams, SessionHmacVerifyResult];
 }
@@ -787,4 +803,6 @@ export const GatewayErrors = {
   COMPANION_IDENTIFY_REQUIRED: -32009,
   COMPANION_IDENTITY_MISMATCH: -32010,
   COMPANION_ROUTING_UNAVAILABLE: -32011,
+  CONNECTION_ROLE_DENIED: -32012,
+  COMPANION_AUTH_FAILED: -32013,
 } as const;

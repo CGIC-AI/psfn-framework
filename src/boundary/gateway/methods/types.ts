@@ -11,6 +11,7 @@ import type {
 } from '../../../system/capabilities/confirmation-queue.js';
 import type {
   ConfirmationResolveParams,
+  GatewayCredentialPresenceResult,
   NotifyNtfyParams,
   NotifyNtfyResult,
   PolicyDecision,
@@ -47,6 +48,7 @@ export interface GatewayMethodRuntime {
   resolveConfirmation(params: ConfirmationResolveParams): Promise<ConfirmationResolveResult>;
   sendNtfy(params: NotifyNtfyParams): Promise<NotifyNtfyResult>;
   getRuntimeHealth(): RuntimeHealthResult;
+  getCredentialPresence?(): GatewayCredentialPresenceResult;
   nextStreamRequestId(): string;
   recordAuditEvent?(entry: {
     method: string;

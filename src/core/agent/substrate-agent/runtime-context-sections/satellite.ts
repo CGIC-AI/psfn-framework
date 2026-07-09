@@ -4,25 +4,36 @@
 // input; turns without satellite routing render nothing.
 
 import type { SubstrateMessage } from '../../../../shared/contracts/runtime.js';
+import { sanitizePromptEmbeddedText } from '../../../../shared/utils/escaping.js';
 import { wrapPromptSectionXml } from '../../../identity/prompt-sections.js';
 
 export function buildSatelliteEndpointContextBlock(message: SubstrateMessage): string {
   const satellite = message.routing?.satellite;
   if (!satellite) return '';
 
+  // Cogsec (S10 finding 03-L1): satellite/endpoint display names and the
+  // static location label are registry-supplied free-text interpolated into
+  // this XML-framed block — sanitize them so they cannot break the frame or
+  // forge `[SYSTEM …]`-style text. Ids/enums come from validated contracts.
+  const satelliteName = sanitizePromptEmbeddedText(satellite.satelliteDisplayName) || satellite.satelliteId;
+  const endpointName = sanitizePromptEmbeddedText(satellite.endpointDisplayName) || satellite.endpointId;
+  const staticLocationLabel = satellite.staticLocationLabel
+    ? sanitizePromptEmbeddedText(satellite.staticLocationLabel)
+    : '';
+
   const effectiveCapabilities = satellite.capabilities.effective.join(', ') || 'none';
   const policyDeniedCapabilities = satellite.capabilities.policyDenied.join(', ') || 'none';
   const telemetryScopes = satellite.telemetryScopes.join(', ') || 'none';
-  const locationLine = satellite.staticLocationLabel
-    ? `Static location label: ${satellite.staticLocationLabel}`
+  const locationLine = staticLocationLabel
+    ? `Static location label: ${staticLocationLabel}`
     : `Mobility: ${satellite.mobility}`;
 
   return wrapPromptSectionXml({
     id: 'runtime_satellite_endpoint',
     content: [
       '[Satellite endpoint]',
-      `Satellite: ${satellite.satelliteDisplayName} (${satellite.satelliteId})`,
-      `Endpoint: ${satellite.endpointDisplayName} (${satellite.endpointId}); claim ${satellite.claimType}; session ${satellite.sessionId}`,
+      `Satellite: ${satelliteName} (${satellite.satelliteId})`,
+      `Endpoint: ${endpointName} (${satellite.endpointId}); claim ${satellite.claimType}; session ${satellite.sessionId}`,
       `Prompt channel type: ${satellite.promptChannelType}`,
       locationLine,
       `Effective capabilities: ${effectiveCapabilities}`,

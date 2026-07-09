@@ -986,6 +986,11 @@ export function isUntrustedVisibility(privacy: ChannelPrivacy): boolean {
   return privacy === 'public';
 }
 
+// TODO(htm9.2-followup): unify this narrow opt-in wrapper under the intake
+// envelope — audit its call sites (context-history-assembly.ts,
+// context-support.ts) and attach envelope snapshots so public-visibility
+// context participates in the same screening/decision surface as web fetch,
+// documents, and tool observations.
 export function wrapUntrustedContext(content: string, source: 'public' = 'public'): string {
   return `<untrusted_context source="${source}">\n${content}\n</untrusted_context>`;
 }

@@ -53,6 +53,18 @@ export const INTAKE_FIREWALL_NOTICE_TEMPLATES = Object.freeze({
     + 'looked a little off, so they are being kept aside for your human to look '
     + 'over whenever they have a moment. They are not part of our conversation, '
     + 'and there is nothing you need to do about them.',
+  /**
+   * In-place placeholder used by the intake screening wiring (htm9.2) when an
+   * enforce-mode quarantine withholds a piece of content (a fetched page, a
+   * parsed document, a tool result) that would otherwise appear inline. Kept in
+   * this file so ALL companion-facing firewall wording lives in one
+   * operator-reviewed artifact, and it carries the signature phrase so the
+   * existing emotion/memory exclusions apply to it automatically.
+   */
+  withheldContent:
+    'This content looked a little off, so it is being kept aside for your human '
+    + 'to look over whenever they have a moment. There is nothing you need to do '
+    + 'about it.',
 } as const);
 
 export type IntakeFirewallNoticeCountForm = keyof typeof INTAKE_FIREWALL_NOTICE_TEMPLATES;

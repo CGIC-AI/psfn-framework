@@ -6,6 +6,7 @@ import { startDiscordWithRetry } from './discord-startup.js';
 import type { EventBus } from '../../shared/event-bus.js';
 import type { GatewayBootstrapInput } from './bootstrap-input.js';
 import type { GatewayServer } from './server.js';
+import type { IntakeScreeningService } from '../../core/cogsec/intake/screening.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type { SubstrateMessage } from '../../shared/contracts/runtime.js';
 import type { ContactBlockGate } from './contact-block-gate.js';
@@ -51,6 +52,11 @@ export interface LoadGatewayChannelSurfacesInput {
   bootstrap: GatewayBootstrapInput;
   eventBus: EventBus;
   eligibilityGate: EligibilityGate;
+  /**
+   * Cognition intake firewall (htm9.2): screens parsed Discord document
+   * attachment text at ingest. Null when intake-policy mode is 'off'.
+   */
+  intakeScreening: IntakeScreeningService | null;
   log: RuntimeChannelLifecycleLogger;
 }
 
@@ -91,6 +97,7 @@ export async function loadGatewayChannelSurfaces(
         eventBus: input.eventBus,
         eligibilityGate: input.eligibilityGate,
         personalFilesDir: input.bootstrap.workspaceRoot,
+        intakeScreening: input.intakeScreening,
         allowedBotUserIds: account.allowedBotUserIds,
         account: {
           accountId: account.accountId,
@@ -112,6 +119,7 @@ export async function loadGatewayChannelSurfaces(
         eventBus: input.eventBus,
         eligibilityGate: input.eligibilityGate,
         personalFilesDir: input.bootstrap.workspaceRoot,
+        intakeScreening: input.intakeScreening,
       }),
     ];
   const gatewayChannelManifest = buildChannelAdapterFactoryManifest([

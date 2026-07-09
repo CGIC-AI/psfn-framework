@@ -11,6 +11,11 @@ import { buildShardValidationPath, type StagedShardMemoryOutput } from './output
 import type { ShardResultLineageEnvelope } from './result-lineage.js';
 import type { ShardTaggedOutput, ShardTaggedOutputReviewState } from './types.js';
 
+// TODO(htm9.2-followup): fold review gates the shard's OUTPUT, but nothing
+// screens what the shard INGESTED. Propagate intake envelope taint through
+// shard workspace content: screen folded-back text through the intake
+// screening service (sourceClass 'shard_foldback') and derive child envelopes
+// from the shard's ingested-source envelopes (CaMeL rule) before promotion.
 const SHARD_FOLD_REVIEW_STORE_SCHEMA_VERSION = 1;
 const EMOTIONAL_REVIEW_TAG = 'interpretive:emotional_or_relational';
 const ARTIFACT_PENDING_REASON = 'artifact_output_pending_merge_review';

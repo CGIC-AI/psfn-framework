@@ -44,7 +44,10 @@ import { toErrorMessage } from '../../shared/utils/errors.js';
 import {
   appendDiscordDocumentIngestToContent,
   ingestDiscordDocumentAttachments,
+  screenDiscordDocumentIngestSummary,
 } from './file-ingest.js';
+import type { IntakeEnvelopeSnapshot } from '../../shared/contracts/intake-envelope.js';
+import type { IntakeScreeningService } from '../../core/cogsec/intake/screening.js';
 import {
   DISCORD_MAX_IMAGE_ATTACHMENTS_PER_MESSAGE,
   extractDiscordDocumentAttachmentCandidates,
@@ -102,6 +105,12 @@ interface DiscordAdapterOptions {
   allowedBotUserIds?: string[];
   personalFilesDir?: string;
   account?: DiscordAdapterAccountBinding;
+  /**
+   * Cognition intake firewall (htm9.2): screens parsed document attachment
+   * text before it enters <parsed_attachment_text>. Absent when the firewall
+   * mode is 'off' — ingest behavior is then unchanged.
+   */
+  intakeScreening?: IntakeScreeningService;
 }
 
 interface LongRunningToolState {
@@ -202,12 +211,14 @@ export class DiscordAdapter implements ChannelAdapterPort {
   private personalFilesDir: string | null;
   private initialized = false;
   private readonly account: DiscordAdapterAccountBinding | null;
+  private readonly intakeScreening: IntakeScreeningService | null;
 
   constructor(config: SubstrateConfig, eventBus: EventBus, options: DiscordAdapterOptions = {}) {
     this.runtimeConfig = config;
     this.eventBus = eventBus;
     this.sessionStore = options.sessionStore ?? null;
     this.personalFilesDir = options.personalFilesDir?.trim() || null;
+    this.intakeScreening = options.intakeScreening ?? null;
     this.account = options.account ?? null;
     this.id = this.account ? `discord:${this.account.accountId}` : 'discord';
     this.name = this.id;
@@ -761,15 +772,31 @@ export class DiscordAdapter implements ChannelAdapterPort {
       }
     }
     let content = this.sanitizeMessageContent(msg.content, runtimeBotId);
+    let intakeEnvelopes: IntakeEnvelopeSnapshot[] = [];
     const documentCandidates = extractDiscordDocumentAttachmentCandidates(msg);
     if (documentCandidates.length > 0 && this.personalFilesDir) {
-      const documentSummary = await ingestDiscordDocumentAttachments(documentCandidates, {
+      let documentSummary = await ingestDiscordDocumentAttachments(documentCandidates, {
         personalFilesDir: this.personalFilesDir,
         channelId: msg.channelId,
         messageId: msg.id,
         authorId: msg.author.id,
         createdAt: msg.createdAt,
       });
+      // htm9.2: screen accepted parsed text before it lands in
+      // <parsed_attachment_text>; the binary-level quarantine above stays.
+      if (this.intakeScreening && documentSummary.results.length > 0) {
+        const screened = await screenDiscordDocumentIngestSummary(
+          documentSummary,
+          this.intakeScreening,
+          {
+            channelId: msg.channelId,
+            messageId: msg.id,
+            attachmentIndexBase: attachments.length,
+          },
+        );
+        documentSummary = screened.summary;
+        intakeEnvelopes = screened.snapshots;
+      }
       attachments.push(...documentSummary.results.map(result => result.attachment));
       content = appendDiscordDocumentIngestToContent(content, documentSummary);
       if (documentSummary.failures.length > 0) {
@@ -818,6 +845,9 @@ export class DiscordAdapter implements ChannelAdapterPort {
         // machine-intelligence auto-tagging. Consumed by author-context
         // resolution to mark the contact (operator corrections survive).
         ...(msg.author.bot ? { authorIsMachineIntelligence: true } : {}),
+        // htm9.2: intake-firewall envelope snapshots for screened parsed
+        // document attachments; the envelope journal stays authoritative.
+        ...(intakeEnvelopes.length > 0 ? { intakeEnvelopes } : {}),
       },
     };
   }

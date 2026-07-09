@@ -18,9 +18,11 @@ import {
   GatewayErrors,
   type WebFetchBinaryParams,
   type WebFetchParams,
+  type WebIntakeScreeningSummary,
   type WebRequestBinaryParams,
   type WebSearchParams,
 } from '../protocol.js';
+import type { IntakeSourceClass } from '../../../shared/contracts/intake-envelope.js';
 import type { WebBackendPolicy } from '../policy.js';
 import {
   normalizeSearchMaxResults,
@@ -619,6 +621,61 @@ export async function fetchWithValidatedRedirectChain(
   }
 }
 
+// ── Cognition intake firewall wiring (bead psfn-framework-htm9.2) ──
+// Web content is screened AFTER sanitizeWebContent (regex strip stays as a
+// first pass) and BEFORE returning to the agent. Shadow mode records the
+// envelope decision in the gateway audit journal without altering content;
+// enforce mode substitutes the screening's effectiveText, so quarantined
+// pages never cross the RPC boundary into prompt/memory/emotion.
+async function screenWebContent(
+  runtime: GatewayMethodRuntime,
+  input: {
+    rpcMethod: 'web.fetch' | 'web.search';
+    sourceClass: IntakeSourceClass;
+    content: string;
+    originRef: string;
+  },
+): Promise<{ content: string; sanitizedByIntake: boolean; intake?: WebIntakeScreeningSummary }> {
+  const screening = runtime.intakeScreening;
+  if (!screening) {
+    return { content: input.content, sanitizedByIntake: false };
+  }
+  const startedAt = Date.now();
+  const screened = await screening.screen(input.content, {
+    sourceClass: input.sourceClass,
+    origin: { ref: input.originRef.slice(0, 2048) },
+    scope: 'context',
+  });
+  await runtime.recordAuditEvent?.({
+    method: `${input.rpcMethod}.intake_screening`,
+    decision: screened.withheld ? 'DENY' : 'ALLOW',
+    params: {
+      envelopeId: screened.envelope.id,
+      originRef: input.originRef.slice(0, 2048),
+      mode: screened.mode,
+      action: screened.action,
+      state: screened.envelope.state,
+      riskLabels: [...screened.envelope.riskLabels],
+      scores: screened.envelope.scores,
+      withheld: screened.withheld,
+      ...(screened.injectionScorerError ? { injectionScorerError: screened.injectionScorerError } : {}),
+    },
+    durationMs: Date.now() - startedAt,
+  });
+  return {
+    content: screened.effectiveText,
+    sanitizedByIntake: screened.effectiveText !== input.content,
+    intake: {
+      envelopeId: screened.envelope.id,
+      action: screened.action,
+      state: screened.envelope.state,
+      riskLabels: [...screened.envelope.riskLabels],
+      mode: screened.mode,
+      withheld: screened.withheld,
+    },
+  };
+}
+
 // ── Web backend selection (bead psfn-framework-htm9.10) ──
 // Explicit config selects the backend (providers.json openrouter.metadata.webTools);
 // there is no silent fallback. Absent config preserves the self-hosted direct/
@@ -638,9 +695,9 @@ function requireSearchQuery(value: unknown): string {
 }
 
 // Route web.fetch through OpenRouter's web_fetch server tool. Results still pass
-// sanitizeWebContent below; the htm9.2 cogsec intake envelope will wrap this
-// same screened output once it lands (seam: sanitized content is the handoff
-// point — do not return an unscreened path).
+// sanitizeWebContent below; the caller then routes this sanitized output
+// through the htm9.2 intake screening (screenWebContent) — do not return an
+// unscreened path.
 async function fetchViaOpenRouter(
   backend: Extract<WebBackendPolicy, { kind: 'openrouter' }>,
   params: WebFetchParams,
@@ -658,7 +715,6 @@ async function fetchViaOpenRouter(
   if (result.injectionPatternsFound > 0) {
     log.warn(`Sanitized ${result.injectionPatternsFound} injection patterns from ${params.url} (openrouter)`);
   }
-  // TODO(htm9.2): wrap `result` in the cogsec intake envelope here once it lands.
   return { content: result.content, sanitized: result.sanitized };
 }
 
@@ -668,7 +724,18 @@ const webDescriptors: Array<GatedMethodDescriptor<any, unknown>> = [
     handler: async (params: WebFetchParams, runtime) => {
       const backend = resolveWebBackend(runtime);
       if (backend.kind === 'openrouter') {
-        return await fetchViaOpenRouter(backend, params);
+        const fetched = await fetchViaOpenRouter(backend, params);
+        const screened = await screenWebContent(runtime, {
+          rpcMethod: 'web.fetch',
+          sourceClass: 'web_fetch',
+          content: fetched.content,
+          originRef: params.url,
+        });
+        return {
+          content: screened.content,
+          sanitized: fetched.sanitized || screened.sanitizedByIntake,
+          ...(screened.intake ? { intake: screened.intake } : {}),
+        };
       }
 
       const lane = requireLane(params.lane);
@@ -710,7 +777,17 @@ const webDescriptors: Array<GatedMethodDescriptor<any, unknown>> = [
         if (result.injectionPatternsFound > 0) {
           log.warn(`Sanitized ${result.injectionPatternsFound} injection patterns from ${finalUrl}`);
         }
-        return { content: result.content, sanitized: result.sanitized };
+        const screened = await screenWebContent(runtime, {
+          rpcMethod: 'web.fetch',
+          sourceClass: 'web_fetch',
+          content: result.content,
+          originRef: finalUrl,
+        });
+        return {
+          content: screened.content,
+          sanitized: result.sanitized || screened.sanitizedByIntake,
+          ...(screened.intake ? { intake: screened.intake } : {}),
+        };
       });
     },
     summary: (p: WebFetchParams) => ({ url: p.url, lane: describeLane(p.lane) }),
@@ -902,11 +979,17 @@ const webDescriptors: Array<GatedMethodDescriptor<any, unknown>> = [
       if (result.injectionPatternsFound > 0) {
         log.warn(`Sanitized ${result.injectionPatternsFound} injection patterns from web.search (openrouter)`);
       }
-      // TODO(htm9.2): wrap `result` in the cogsec intake envelope here once it lands.
-      return {
+      const screened = await screenWebContent(runtime, {
+        rpcMethod: 'web.search',
+        sourceClass: 'web_search',
         content: result.content,
-        sanitized: result.sanitized,
+        originRef: `search:${query}`,
+      });
+      return {
+        content: screened.content,
+        sanitized: result.sanitized || screened.sanitizedByIntake,
         citations: searchResult.citations,
+        ...(screened.intake ? { intake: screened.intake } : {}),
       };
     },
     summary: (p: WebSearchParams) => ({

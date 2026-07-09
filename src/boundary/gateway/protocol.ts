@@ -417,9 +417,26 @@ export interface DiscordTypingResult {
   success: boolean;
 }
 
+/**
+ * Cognition intake firewall (htm9.2): screening outcome attached to web
+ * content results. Absent when intake-policy mode is 'off'. In shadow mode
+ * the decision is recorded but `content` is unaltered; in enforce mode a
+ * quarantine decision replaces `content` with the fixed withheld-content
+ * placeholder (`withheld: true`).
+ */
+export interface WebIntakeScreeningSummary {
+  envelopeId: string;
+  action: 'pass' | 'sanitize' | 'quarantine' | 'block';
+  state: string;
+  riskLabels: string[];
+  mode: 'shadow' | 'enforce';
+  withheld: boolean;
+}
+
 export interface WebFetchResult {
   content: string;
   sanitized: boolean;
+  intake?: WebIntakeScreeningSummary;
 }
 
 export interface WebFetchBinaryResult {
@@ -466,6 +483,7 @@ export interface WebSearchResult {
   content: string;
   sanitized: boolean;
   citations: string[];
+  intake?: WebIntakeScreeningSummary;
 }
 
 export interface FsReadResult {

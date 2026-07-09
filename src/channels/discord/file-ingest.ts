@@ -3,6 +3,8 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { basename, dirname, extname, join } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import type { Attachment } from '../../shared/contracts/runtime.js';
+import type { IntakeEnvelopeSnapshot } from '../../shared/contracts/intake-envelope.js';
+import type { IntakeScreeningService } from '../../core/cogsec/intake/screening.js';
 import { resolvePersonalDownloadsDir } from '../../persistence/layout.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
 import {
@@ -207,6 +209,61 @@ export function toDiscordDocumentAttachmentCandidate(raw: {
     declaredContentType,
     sizeBytes,
     ...(typeof raw.mode === 'number' ? { mode: raw.mode } : {}),
+  };
+}
+
+// ── Intake screening of parsed document text (bead psfn-framework-htm9.2) ──
+//
+// Runs AFTER the binary-level quarantine (file-quarantine.ts, unchanged) and
+// AFTER parsing, on the text that would otherwise land raw inside
+// <parsed_attachment_text>. Each accepted document gets its own intake
+// envelope (source class 'document'); the returned summary carries the
+// screening's effectiveText as promptText — identical to the input in shadow
+// mode, sanitized or replaced by the fixed withheld-content placeholder in
+// enforce mode — and the snapshots are stamped onto the message's
+// routing.intakeEnvelopes by the adapter.
+export interface ScreenedDiscordDocumentIngest {
+  summary: DiscordDocumentIngestSummary;
+  snapshots: IntakeEnvelopeSnapshot[];
+}
+
+export async function screenDiscordDocumentIngestSummary(
+  summary: DiscordDocumentIngestSummary,
+  screening: IntakeScreeningService,
+  context: {
+    channelId: string;
+    messageId: string;
+    /** Index of the first document attachment within the message's attachment list. */
+    attachmentIndexBase: number;
+  },
+): Promise<ScreenedDiscordDocumentIngest> {
+  const snapshots: IntakeEnvelopeSnapshot[] = [];
+  const screenedResults: DiscordDocumentIngestResult[] = [];
+
+  for (const [index, result] of summary.results.entries()) {
+    const screened = await screening.screen(result.promptText, {
+      sourceClass: 'document',
+      origin: {
+        ref: `discord:${context.channelId}:${context.messageId}:${result.attachment.name}`.slice(0, 2048),
+        detail: `content-type:${result.attachment.contentType}`.slice(0, 512),
+      },
+      scope: 'context',
+      subject: { kind: 'attachment', index: context.attachmentIndexBase + index },
+    });
+    snapshots.push(screened.snapshot);
+    screenedResults.push(
+      screened.effectiveText === result.promptText
+        ? result
+        : { ...result, promptText: screened.effectiveText },
+    );
+  }
+
+  return {
+    summary: {
+      ...summary,
+      results: screenedResults,
+    },
+    snapshots,
   };
 }
 

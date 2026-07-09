@@ -87,6 +87,9 @@ import {
   normalizeToolObservation,
   type ToolObservationInput,
 } from './tool-observation.js';
+import { buildSessionMetadataWithIntakeScreening } from './intake-screening-metadata.js';
+// Type-only structural port: the session layer never imports cogsec runtime code.
+import type { IntakeScreeningService } from '../cogsec/intake/screening.js';
 import type { ContextManifestMemorySeed } from './context-manifest.js';
 import {
   applyFocusCompactionRanges,
@@ -195,6 +198,13 @@ export class SessionManager {
    * default) means every channel is unwindowed — byte-identical behavior.
    */
   private roomContentWindowPort: RoomContentWindowPort | null = null;
+  /**
+   * Intake firewall screening for persisted tool observations (htm9.2).
+   * Assigned by composition (agent main) from intake-policy.json; null means
+   * the firewall is off or predates this wiring — recording is unchanged.
+   * Must be an L1-only (synchronous) service: recordToolObservation is sync.
+   */
+  intakeScreening: Pick<IntakeScreeningService, 'mode' | 'screenSync'> | null = null;
   private internalRoleEnvelopeLedger: InternalRoleEnvelopeLedger | null;
   private activeContextSessionId: string | null = null;
   private pendingAutoCompactions = new Map<string, Promise<void>>();
@@ -792,9 +802,36 @@ export class SessionManager {
     const envelopeMetadata = options.roleEnvelopePreview
       ? buildSessionMetadataWithRoleEnvelopePreview(turnMetadata, options.roleEnvelopePreview)
       : turnMetadata;
-    const normalizedObservation = normalizeToolObservation(observation);
+
+    // htm9.2: screen the RAW tool output before it becomes persisted session
+    // content. What lands in the entry is the screening's effectiveText —
+    // shadow mode records the original (observe-only) while stamping the
+    // envelope snapshot; enforce-mode quarantine records only the fixed
+    // withheld-content placeholder, so raw hostile tool output never reaches
+    // context assembly, memory extraction, or the emotion-appraisal feed.
+    let observationForRecord = observation;
+    let metadataBase = envelopeMetadata;
+    if (this.intakeScreening) {
+      const toolCallSuffix = observation.toolCallId?.trim() ? `:${observation.toolCallId.trim()}` : '';
+      const screened = this.intakeScreening.screenSync(observation.content, {
+        sourceClass: 'tool_output',
+        origin: {
+          ref: `tool:${observation.toolName.trim()}${toolCallSuffix}`.slice(0, 2048),
+          detail: `channel:${resolvedChannelId}`.slice(0, 512),
+        },
+        scope: 'context',
+      });
+      observationForRecord = { ...observation, content: screened.effectiveText };
+      metadataBase = buildSessionMetadataWithIntakeScreening(envelopeMetadata, {
+        mode: screened.mode,
+        withheld: screened.withheld,
+        envelopes: [screened.snapshot],
+      });
+    }
+
+    const normalizedObservation = normalizeToolObservation(observationForRecord);
     const metadata = buildToolObservationMetadata(
-      envelopeMetadata,
+      metadataBase,
       normalizedObservation.metadata,
     );
 

@@ -181,6 +181,7 @@ async function main(): Promise<void> {
     bootstrap,
     eventBus,
     eligibilityGate,
+    intakeScreening: privilegedCore.intakeScreening.screening,
     log,
   });
   log.info('Embedding provider initialized', {
@@ -320,6 +321,7 @@ async function main(): Promise<void> {
         { step: 'stop gateway server', action: () => gateway.stop() },
         { step: 'close companion presence reader', action: async () => { await companionPresenceStore?.close(); } },
         { step: 'stop channel adapters', action: () => stopGatewayChannelSurfaces(channelSurfaces) },
+        { step: 'dispose intake screening', action: () => privilegedCore.intakeScreening.dispose() },
       ], log);
       log.info('Stopped');
     })();

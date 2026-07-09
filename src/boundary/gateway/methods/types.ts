@@ -18,6 +18,7 @@ import type {
 } from '../protocol.js';
 import type { SessionHmacKeyring } from '../../../persistence/journals/journal-utils.js';
 import type { ApprovalBoundaryService } from '../approval-boundary.js';
+import type { IntakeScreeningService } from '../../../core/cogsec/intake/screening.js';
 import type { PolicyConfig } from '../policy.js';
 import type { ModelUsageRecorder } from '../../../shared/telemetry/model-usage.js';
 import type { CredentialVaultPort } from '../../custody/credential-vault.js';
@@ -32,6 +33,11 @@ export interface GatewayMethodRuntime {
   imageConfig?: ImageRuntimeConfig;
   modelUsageRecorder?: ModelUsageRecorder;
   credentialVault?: CredentialVaultPort;
+  /**
+   * Cognition intake firewall screening (htm9.2). Absent when intake-policy
+   * mode is 'off'; shadow mode screens/audits without altering content.
+   */
+  intakeScreening?: IntakeScreeningService;
   policyConfig: PolicyConfig;
   workspacePath: string;
   sessionHmacKeyring: SessionHmacKeyring;

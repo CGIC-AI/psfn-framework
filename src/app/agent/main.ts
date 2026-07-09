@@ -96,6 +96,8 @@ import {
   writeStartupSessionMetadata,
 } from './session-activity.js';
 import { hydrateStartupActiveMemoryContexts } from '../../faculties/memory/startup-hydration.js';
+import { loadIntakePolicyConfig } from '../../system/config/intake-policy-config.js';
+import { maybeCreateIntakeScreeningService } from '../../core/cogsec/intake/screening.js';
 import { hydrateStartupActiveCoreMemoryBlocks } from '../../faculties/core-memory/startup-hydration.js';
 import { enforceNetworkIsolationOnStartup } from './startup-guards.js';
 import {
@@ -331,6 +333,24 @@ async function main(): Promise<void> {
       presence: companionPresenceRuntime,
     }));
     log.info('Presence-windowed room content gate wired to session manager');
+  }
+
+  // ── Cognition intake firewall (htm9.2): agent-side L1-only screening ──
+  // Screens tool outputs at session-entry recording time so persisted context
+  // (and its downstream consumers: emotion appraisal, memory extraction)
+  // carries screened/labeled content. Mode 'off' wires nothing; shadow mode
+  // (the default) records envelopes without altering content. The L1.5 ONNX
+  // classifier stays gateway-side; the agent process runs deterministic L1
+  // scanners only.
+  const intakePolicy = loadIntakePolicyConfig(pathSnapshot.systemDataDir);
+  sessionManager.intakeScreening = maybeCreateIntakeScreeningService({
+    policy: intakePolicy,
+    actor: 'agent:intake-screening',
+  });
+  if (sessionManager.intakeScreening) {
+    log.info('Intake screening wired to session tool observations', {
+      mode: sessionManager.intakeScreening.mode,
+    });
   }
 
   sessionManager.characterName = card.data.name;

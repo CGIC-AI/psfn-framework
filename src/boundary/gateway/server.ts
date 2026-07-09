@@ -59,6 +59,7 @@ import { evaluatePolicy } from './policy.js';
 import type { ApiStreamDeltaNotification } from '../../channels/api/types.js';
 import type { ModelUsageRecorder } from '../../shared/telemetry/model-usage.js';
 import type { CredentialVaultPort } from '../custody/credential-vault.js';
+import type { IntakeScreeningService } from '../../core/cogsec/intake/screening.js';
 
 const log = createComponentLogger('Gateway');
 const DEFAULT_CONNECTION_HEALTHCHECK_STALE_AFTER_MS = 90_000;
@@ -158,6 +159,8 @@ export interface GatewayServerOptions {
   imageConfig?: ImageRuntimeConfig;
   modelUsageRecorder?: ModelUsageRecorder;
   credentialVault?: CredentialVaultPort;
+  /** Cognition intake firewall screening (htm9.2); absent when mode is 'off'. */
+  intakeScreening?: IntakeScreeningService;
   policyConfig: PolicyConfig;
   ntfy?: GatewayNtfyConfig;
   auditStore?: GatewayAuditStorePort;
@@ -309,6 +312,7 @@ export class GatewayServer {
       imageConfig: this.options.imageConfig,
       ...(this.options.modelUsageRecorder ? { modelUsageRecorder: this.options.modelUsageRecorder } : {}),
       ...(this.options.credentialVault ? { credentialVault: this.options.credentialVault } : {}),
+      ...(this.options.intakeScreening ? { intakeScreening: this.options.intakeScreening } : {}),
       policyConfig: this.options.policyConfig,
       workspacePath: this.options.policyConfig.workspacePath,
       sessionHmacKeyring: this.sessionHmacKeyring,

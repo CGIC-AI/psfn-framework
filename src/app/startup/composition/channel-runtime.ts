@@ -13,6 +13,7 @@ import type {
 } from '../../../channels/backplane/types.js';
 import type { ChannelAdapterRegistryPort } from '../../../channels/backplane/registry-port.js';
 import type { SessionStore } from '../../../persistence/sessions/store.js';
+import type { IntakeScreeningService } from '../../../core/cogsec/intake/screening.js';
 
 export interface DiscordChannelAdapterFactoryOptions {
   config: SubstrateConfig;
@@ -24,6 +25,8 @@ export interface DiscordChannelAdapterFactoryOptions {
   onVoiceMessage?: MessageHandler | null;
   eligibilityGate?: EligibilityGate;
   personalFilesDir?: string;
+  /** Cognition intake firewall (htm9.2): screens parsed document attachment text. */
+  intakeScreening?: IntakeScreeningService | null;
   /**
    * Multi-companion (sprint-10 W1-P2): bind this adapter instance to one
    * per-companion bot account. The registry/manifest key becomes
@@ -54,6 +57,7 @@ export function createDiscordChannelAdapterFactoryEntry(
         ...(options.eligibilityGate ? { eligibilityGate: options.eligibilityGate } : {}),
         ...(allowedBotUserIds ? { allowedBotUserIds } : {}),
         ...(options.personalFilesDir ? { personalFilesDir: options.personalFilesDir } : {}),
+        ...(options.intakeScreening ? { intakeScreening: options.intakeScreening } : {}),
         ...(options.account ? { account: options.account } : {}),
       });
       if (options.agentLoop) {

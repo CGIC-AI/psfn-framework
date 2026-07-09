@@ -1,5 +1,6 @@
 import type { Agent, AgentTool } from '../../../boundary/pi-agent/index.js';
 import { tagToolWithReversibility } from '../../../system/capabilities/safeguards.js';
+import { assertToolsHaveDeclaredCapabilityPolicies } from '../../../system/capabilities/requirements.js';
 import type { CapabilityAccess } from '../../../system/capabilities/gate.js';
 import type { CorrelationMetadata, ObservabilityCallType, SubstrateMessage } from '../../../shared/contracts/runtime.js';
 import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
@@ -584,6 +585,7 @@ export class ToolRuntimeFacade {
     requiredGatewayMetadataCoverage?: GatewayToolMetadataCoverage,
   ): void {
     const allTools = [...this.coreTools, ...this.extendedTools];
+    assertToolsHaveDeclaredCapabilityPolicies(allTools);
     const options: ValidateToolsOptions = {
       mode,
       tools: allTools,

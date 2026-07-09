@@ -46,6 +46,10 @@ import {
   resolveAppearanceContextFromTemplateVariables,
 } from './self-presentation.js';
 import { buildSatelliteEndpointContextBlock } from './satellite.js';
+import {
+  NO_CAPABILITY_REQUIREMENT,
+  withCapabilityRequirement,
+} from '../../../../system/capabilities/requirements.js';
 
 const TEST_TZ = 'America/New_York';
 // 2026-07-01T16:00:00Z is Wednesday 12:00 PM in America/New_York.
@@ -167,7 +171,10 @@ const TEST_CHARGE_POLICY: ChargePolicyConfig = {
 } as ChargePolicyConfig;
 
 function makeExtendedTool(name: string, description: string): AgentTool<any> {
-  return { name, description } as AgentTool<any>;
+  return withCapabilityRequirement(
+    { name, description } as AgentTool<any>,
+    NO_CAPABILITY_REQUIREMENT,
+  );
 }
 
 describe('datetime producers', () => {

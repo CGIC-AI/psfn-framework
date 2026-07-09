@@ -20,5 +20,14 @@
   "quarantine": {
     "itemTtlHours": 168,
     "maxHeldItems": 500
+  },
+  "injectionClassifier": {
+    "labelThreshold": 0.5,
+    "scoreThresholdsByTier": {
+      "trusted": 0.98,
+      "standard": 0.9,
+      "untrusted": 0.75,
+      "hostile": 0.6
+    }
   }
 }

@@ -37,6 +37,25 @@ export interface IntakePolicyQuarantineConfig {
   maxHeldItems: number;
 }
 
+/**
+ * Thresholds for the L1.5 ONNX prompt-injection classifier (htm9.5,
+ * src/boundary/gateway/intake/injection-classifier.ts). The classifier emits
+ * a calibrated 0-1 score into `envelope.scores`; these thresholds tell the
+ * DECISION layers (htm9.2/9.3) when that score counts as a screening signal.
+ * The score never hard-blocks alone — it is one weighted input (known
+ * over-defense / false-positive behavior, InjecGuard arXiv 2410.22770).
+ */
+export interface IntakeInjectionClassifierPolicyConfig {
+  /** Probability at/above which the classifier attaches its `injection/*` risk label. */
+  labelThreshold: number;
+  /**
+   * Per-source-risk-tier score threshold for screening policy. Riskier tiers
+   * get lower thresholds (more sensitive screening). Every tier must be
+   * mapped explicitly — no implicit defaults.
+   */
+  scoreThresholdsByTier: Record<IntakeSourceRiskTier, number>;
+}
+
 export interface IntakePolicyConfig {
   schemaVersion: 1;
   mode: IntakeFirewallMode;
@@ -47,6 +66,7 @@ export interface IntakePolicyConfig {
    */
   sourceRiskTiers: Record<IntakeSourceClass, IntakeSourceRiskTier>;
   quarantine: IntakePolicyQuarantineConfig;
+  injectionClassifier: IntakeInjectionClassifierPolicyConfig;
 }
 
 interface IntakePolicyLoadOptions {
@@ -108,11 +128,71 @@ function validateQuarantine(raw: unknown, sourcePath: string): IntakePolicyQuara
   };
 }
 
+function validateProbability(value: unknown, sourcePath: string, field: string): number {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0 || value > 1) {
+    throw invalid(sourcePath, `${field} must be a finite number in [0, 1]`);
+  }
+  return value;
+}
+
+function validateInjectionClassifier(
+  raw: unknown,
+  sourcePath: string,
+): IntakeInjectionClassifierPolicyConfig {
+  if (!isRecord(raw)) {
+    throw invalid(sourcePath, 'injectionClassifier must be an object');
+  }
+  const unknownKeys = Object.keys(raw)
+    .filter((key) => !['labelThreshold', 'scoreThresholdsByTier'].includes(key));
+  if (unknownKeys.length > 0) {
+    throw invalid(sourcePath, `injectionClassifier has unsupported keys: ${unknownKeys.join(', ')}`);
+  }
+  const rawThresholds = raw.scoreThresholdsByTier;
+  if (!isRecord(rawThresholds)) {
+    throw invalid(sourcePath, 'injectionClassifier.scoreThresholdsByTier must be an object');
+  }
+  const unknownTiers = Object.keys(rawThresholds)
+    .filter((key) => !(INTAKE_SOURCE_RISK_TIERS as readonly string[]).includes(key));
+  if (unknownTiers.length > 0) {
+    throw invalid(
+      sourcePath,
+      `injectionClassifier.scoreThresholdsByTier has unsupported tiers: ${unknownTiers.join(', ')}`,
+    );
+  }
+  const scoreThresholdsByTier = {} as Record<IntakeSourceRiskTier, number>;
+  for (const tier of INTAKE_SOURCE_RISK_TIERS) {
+    const threshold = rawThresholds[tier];
+    if (threshold === undefined) {
+      throw invalid(
+        sourcePath,
+        `injectionClassifier.scoreThresholdsByTier.${tier} is required (no implicit threshold defaults)`,
+      );
+    }
+    scoreThresholdsByTier[tier] = validateProbability(
+      threshold,
+      sourcePath,
+      `injectionClassifier.scoreThresholdsByTier.${tier}`,
+    );
+  }
+  return {
+    labelThreshold: validateProbability(raw.labelThreshold, sourcePath, 'injectionClassifier.labelThreshold'),
+    scoreThresholdsByTier,
+  };
+}
+
+/** Screening threshold for the injection-classifier score at a given source risk tier. */
+export function injectionScoreThresholdForTier(
+  config: IntakePolicyConfig,
+  tier: IntakeSourceRiskTier,
+): number {
+  return config.injectionClassifier.scoreThresholdsByTier[tier];
+}
+
 export function validateIntakePolicy(raw: unknown, sourcePath: string): IntakePolicyConfig {
   if (!isRecord(raw)) {
     throw invalid(sourcePath, 'expected object');
   }
-  const knownKeys = ['schemaVersion', 'mode', 'sourceRiskTiers', 'quarantine'];
+  const knownKeys = ['schemaVersion', 'mode', 'sourceRiskTiers', 'quarantine', 'injectionClassifier'];
   const unknownKeys = Object.keys(raw).filter((key) => !knownKeys.includes(key));
   if (unknownKeys.length > 0) {
     throw invalid(sourcePath, `has unsupported keys: ${unknownKeys.join(', ')}`);
@@ -129,6 +209,7 @@ export function validateIntakePolicy(raw: unknown, sourcePath: string): IntakePo
     mode: mode as IntakeFirewallMode,
     sourceRiskTiers: validateSourceRiskTiers(raw.sourceRiskTiers, sourcePath),
     quarantine: validateQuarantine(raw.quarantine, sourcePath),
+    injectionClassifier: validateInjectionClassifier(raw.injectionClassifier, sourcePath),
   };
 }
 

@@ -2,10 +2,14 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { INTAKE_SOURCE_CLASSES } from '../../shared/contracts/intake-envelope.js';
+import {
+  INTAKE_SOURCE_CLASSES,
+  INTAKE_SOURCE_RISK_TIERS,
+} from '../../shared/contracts/intake-envelope.js';
 import {
   INTAKE_POLICY_FILE_NAME,
   INTAKE_POLICY_SEED_FILE_NAME,
+  injectionScoreThresholdForTier,
   loadIntakePolicyConfig,
   saveIntakePolicyConfig,
   validateIntakePolicy,
@@ -41,6 +45,60 @@ describe('intake policy owner file', () => {
     expect(Object.keys(policy.sourceRiskTiers).sort()).toEqual([...INTAKE_SOURCE_CLASSES].sort());
     expect(policy.quarantine.itemTtlHours).toBeGreaterThanOrEqual(1);
     expect(policy.quarantine.maxHeldItems).toBeGreaterThanOrEqual(1);
+  });
+
+  it('validates injection classifier thresholds in the seed and covers every tier', () => {
+    const policy = seedPolicy();
+    expect(policy.injectionClassifier.labelThreshold).toBeGreaterThan(0);
+    expect(policy.injectionClassifier.labelThreshold).toBeLessThanOrEqual(1);
+    expect(Object.keys(policy.injectionClassifier.scoreThresholdsByTier).sort())
+      .toEqual([...INTAKE_SOURCE_RISK_TIERS].sort());
+    // Riskier tiers must not be screened LESS sensitively than safer tiers.
+    const thresholds = policy.injectionClassifier.scoreThresholdsByTier;
+    expect(thresholds.hostile).toBeLessThanOrEqual(thresholds.untrusted);
+    expect(thresholds.untrusted).toBeLessThanOrEqual(thresholds.standard);
+    expect(thresholds.standard).toBeLessThanOrEqual(thresholds.trusted);
+    expect(injectionScoreThresholdForTier(policy, 'hostile')).toBe(thresholds.hostile);
+  });
+
+  it('fails closed on missing or invalid injection classifier config', () => {
+    const policy = seedPolicy();
+    const { injectionClassifier: _dropped, ...withoutClassifier } = policy;
+    expect(() => validateIntakePolicy(withoutClassifier, INTAKE_POLICY_FILE_NAME))
+      .toThrow(/injectionClassifier must be an object/);
+
+    const { trusted: _tier, ...partialTiers } = policy.injectionClassifier.scoreThresholdsByTier;
+    expect(() => validateIntakePolicy(
+      {
+        ...policy,
+        injectionClassifier: { ...policy.injectionClassifier, scoreThresholdsByTier: partialTiers },
+      },
+      INTAKE_POLICY_FILE_NAME,
+    )).toThrow(/scoreThresholdsByTier\.trusted is required/);
+
+    expect(() => validateIntakePolicy(
+      { ...policy, injectionClassifier: { ...policy.injectionClassifier, labelThreshold: 1.5 } },
+      INTAKE_POLICY_FILE_NAME,
+    )).toThrow(/labelThreshold must be a finite number in \[0, 1\]/);
+
+    expect(() => validateIntakePolicy(
+      {
+        ...policy,
+        injectionClassifier: {
+          ...policy.injectionClassifier,
+          scoreThresholdsByTier: {
+            ...policy.injectionClassifier.scoreThresholdsByTier,
+            medium: 0.5,
+          },
+        },
+      },
+      INTAKE_POLICY_FILE_NAME,
+    )).toThrow(/scoreThresholdsByTier has unsupported tiers: medium/);
+
+    expect(() => validateIntakePolicy(
+      { ...policy, injectionClassifier: { ...policy.injectionClassifier, hardBlock: true } },
+      INTAKE_POLICY_FILE_NAME,
+    )).toThrow(/injectionClassifier has unsupported keys: hardBlock/);
   });
 
   it('round-trips through save and load', () => {

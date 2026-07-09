@@ -383,6 +383,38 @@ npm run verify:backup-restore
 
 Validate retrieval quality after the migration, not just command success.
 
+## Intake Injection-Classifier Model Provisioning
+
+The gateway-side L1.5 prompt-injection classifier
+(`src/boundary/gateway/intake/injection-classifier.ts`) runs
+`protectai/deberta-v3-base-prompt-injection-v2` (Apache-2.0) in-process via
+the pinned `@huggingface/transformers` ONNX runtime. Model weights (~704 MiB)
+are not committed to git and are never downloaded at runtime — the classifier
+fails closed at startup when the model directory is missing.
+
+Provision (pinned revision, every file sha256-verified):
+
+```bash
+npm run provision:injection-model -- --dest ./models/prompt-injection-v2
+```
+
+Notes:
+
+- The pinned revision and hashes live in `scripts/provision-injection-model.ts`;
+  re-pin them deliberately when upgrading the model.
+- Screening thresholds per source risk tier live in `intake-policy.json` under
+  `injectionClassifier` (owner-file validated). The classifier score is one
+  weighted screening signal — it never hard-blocks on its own.
+- The golden-set parity test
+  (`src/boundary/gateway/intake/injection-classifier.test.ts`) runs whenever
+  `PSFN_INJECTION_MODEL_DIR` points at a provisioned directory and skips
+  loudly otherwise:
+
+```bash
+PSFN_INJECTION_MODEL_DIR=./models/prompt-injection-v2 \
+  npx vitest run src/boundary/gateway/intake/injection-classifier.test.ts
+```
+
 ## Shared-World Wiki And Places Maintenance
 
 The shared-world wiki is operator-owned. Companions read shared world knowledge

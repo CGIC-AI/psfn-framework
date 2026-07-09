@@ -1,9 +1,11 @@
 // ── Gateway intake screening composition (htm9.2) ──
 //
 // Builds the gateway process's IntakeScreeningService from intake-policy.json
-// (system-data owner file): the deterministic L1 scanner pipeline plus — when
-// the ONNX model has been provisioned out-of-band — the L1.5 injection
-// classifier as an async scorer.
+// (system-data owner file): the deterministic L1 scanner pipeline, plus —
+// when the ONNX model has been provisioned out-of-band — the L1.5 injection
+// classifier as an async scorer, plus — when an OpenRouter backend is
+// resolvable — the L2/L3 escalation port (htm9.6/htm9.7, escalation.ts) so
+// the layered firewall actually escalates at runtime.
 //
 // L1.5 provisioning posture (from the htm9.2 wiring contract): weights are
 // OPTIONAL for this wiring. When `npm run provision:injection-model` has not
@@ -17,6 +19,7 @@ import { join, resolve } from 'node:path';
 import { createComponentLogger } from '../../../shared/logger.js';
 import {
   createIntakeScreeningService,
+  type IntakeEscalationPort,
   type IntakeScreeningService,
 } from '../../../core/cogsec/intake/screening.js';
 import { createIntakeL1Scanner } from '../../../core/cogsec/intake/scanners/index.js';
@@ -24,7 +27,8 @@ import {
   createIntakeQuarantineStore,
   type IntakeQuarantineStore,
 } from '../../../core/cogsec/intake/quarantine-store.js';
-import { resolveIntakeQuarantinePath } from '../../../persistence/layout.js';
+import { CogSecEventStore } from '../../../core/cogsec/events.js';
+import { resolveCogSecEventsPath, resolveIntakeQuarantinePath } from '../../../persistence/layout.js';
 import { loadIntakePolicyConfig } from '../../../system/config/intake-policy-config.js';
 import { resolveOptionalCredentialReference } from '../../custody/credential-vault.js';
 import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
@@ -34,7 +38,8 @@ import {
   INJECTION_CLASSIFIER_SCANNER_ID,
   type InjectionClassifier,
 } from './injection-classifier.js';
-import type { ScreenerBackend } from './screener-transport.js';
+import type { ScreenerBackend, ScreenerFetch } from './screener-transport.js';
+import { createGatewayIntakeEscalationPort } from './escalation.js';
 import {
   evaluateVisionIntake,
   toVisionIntakeImageScreenResult,
@@ -112,11 +117,14 @@ export async function composeGatewayIntakeScreening(input: {
   /** Companion data root; hosts the durable quarantine store (htm9.11). */
   companionDataDir: string;
   /**
-   * OpenRouter backend for the vision intake screener (htm9.8), resolved by
-   * the caller via `resolveIntakeScreenerBackend`. Null/absent means no
-   * backend is available.
+   * OpenRouter backend for the L2/L3 escalation screeners (htm9.6/htm9.7)
+   * and the vision intake screener (htm9.8), resolved by the caller via
+   * `resolveIntakeScreenerBackend`. Null/absent means no backend is
+   * available.
    */
   screenerBackend?: ScreenerBackend | null;
+  /** Test seam for the L2/L3/vision screener transports; production uses global fetch. */
+  screenerFetch?: ScreenerFetch;
   env?: NodeJS.ProcessEnv;
 }): Promise<GatewayIntakeScreeningComposition> {
   const policy = loadIntakePolicyConfig(input.systemDataDir);
@@ -154,6 +162,53 @@ export async function composeGatewayIntakeScreening(input: {
     );
   }
 
+  // ── L2/L3 escalation port (htm9.6/htm9.7) ──
+  // backend present  → composed; screen() escalates per the policy's
+  //                    thresholds, mandatory tiers, and fail-closed actions.
+  // backend absent   → enforce mode with mandatory escalation tiers FAILS
+  //                    STARTUP: the policy unconditionally demands deep
+  //                    screening that cannot run, and an enforce surface must
+  //                    never silently deliver what policy says to deep-screen
+  //                    (same posture as the vision screener below). Otherwise
+  //                    the escalation layers are skipped LOUDLY (same posture
+  //                    as unprovisioned L1.5 weights).
+  const backend = input.screenerBackend ?? null;
+  let escalation: IntakeEscalationPort | null = null;
+  if (backend) {
+    // Multi-writer JSON store (same file the gateway core, contact-block
+    // gate, and Garden use); reloads from disk per operation, so a second
+    // instance here is safe.
+    const cogSecEvents = new CogSecEventStore(
+      resolveCogSecEventsPath(input.companionDataDir),
+    );
+    escalation = createGatewayIntakeEscalationPort({
+      policy,
+      backend,
+      quarantine,
+      cogSecEvents,
+      ...(input.screenerFetch ? { fetch: input.screenerFetch } : {}),
+    });
+  } else {
+    const mandatoryTiers = [...new Set([
+      ...policy.l2Screener.mandatoryTiers,
+      ...policy.l3Screener.mandatoryTiers,
+    ])];
+    if (policy.mode === 'enforce' && mandatoryTiers.length > 0) {
+      throw new Error(
+        `Intake policy mandates L2/L3 deep screening for tiers [${mandatoryTiers.join(', ')}] `
+        + 'with mode=enforce but no OpenRouter backend is resolvable '
+        + '(providers.json openrouter apiBaseUrl/apiKeyRef). Configure the '
+        + 'openrouter provider or remove the l2Screener/l3Screener '
+        + 'mandatoryTiers from intake-policy.json.',
+      );
+    }
+    log.warn(
+      'Intake L2/L3 escalation screeners have no OpenRouter backend; gateway '
+      + 'intake screening runs without escalation. Configure the openrouter '
+      + 'provider (providers.json apiBaseUrl/apiKeyRef) to enable L2/L3.',
+    );
+  }
+
   const screening = createIntakeScreeningService({
     policy,
     l1: createIntakeL1Scanner(),
@@ -165,6 +220,7 @@ export async function composeGatewayIntakeScreening(input: {
         },
       }
       : {}),
+    ...(escalation ? { escalation } : {}),
     quarantine,
     actor: 'gateway:intake-screening',
   });
@@ -177,7 +233,6 @@ export async function composeGatewayIntakeScreening(input: {
   //                            states); shadow: loud skip, observe-only.
   // disabled                 → not wired (pre-htm9.8 behavior, explicit knob).
   let visionIntake: GatewayVisionIntakeScreener | null = null;
-  const backend = input.screenerBackend ?? null;
   if (policy.visionScreener.enabled) {
     if (backend) {
       visionIntake = {
@@ -200,6 +255,7 @@ export async function composeGatewayIntakeScreening(input: {
             screening,
             backend,
             quarantine,
+            ...(input.screenerFetch ? { fetch: input.screenerFetch } : {}),
           }),
         ),
       };
@@ -222,6 +278,7 @@ export async function composeGatewayIntakeScreening(input: {
   log.info('Gateway intake screening composed', {
     mode: policy.mode,
     l15Enabled: classifier !== null,
+    escalationWired: escalation !== null,
     visionScreenerEnabled: policy.visionScreener.enabled,
     visionIntakeWired: visionIntake !== null,
   });

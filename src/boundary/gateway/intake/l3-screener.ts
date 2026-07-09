@@ -737,6 +737,23 @@ export interface ApplyL3ScreeningOutcomeInput {
   /** An EXECUTED L3 outcome — `skipped` throws (nothing was invoked). */
   outcome: Exclude<L3ScreeningOutcome, { kind: 'skipped' }>;
   config: IntakePolicyConfig;
+  /**
+   * Effective source risk tier for the envelope: the source-list ADJUSTED
+   * tier (htm9.13) when the item came through the screening-service
+   * escalation seam. Defaults to the static class tier from policy.
+   */
+  sourceRiskTier?: IntakeSourceRiskTier;
+  /**
+   * Screening fields from the layers that ran before L3 (L1 report, L1.5
+   * score, prior signals, the L2 verdict), folded into the envelope's
+   * `screened` transition so ONE envelope carries the full layered history.
+   * L3's own fields win on key collision (they are `l3_*`-namespaced).
+   */
+  priorContribution?: {
+    riskLabels: IntakeRiskLabel[];
+    scores: Record<string, number>;
+    extractedFields: Record<string, string>;
+  };
   /** Every L3 invocation writes an auditable CogSecEvent through this port. */
   cogSecEvents: Pick<CogSecEventStore, 'createEvent'>;
   /**
@@ -820,7 +837,7 @@ export function applyL3ScreeningOutcome(
   const mode = config.mode;
   const actor = input.actor ?? 'gateway:intake-l3';
   const atMs = input.atMs ?? Date.now();
-  const sourceRiskTier = config.sourceRiskTiers[input.sourceClass];
+  const sourceRiskTier = input.sourceRiskTier ?? config.sourceRiskTiers[input.sourceClass];
 
   let action: Extract<IntakeDecisionAction, 'quarantine' | 'sanitize'>;
   let reason: string;
@@ -869,9 +886,16 @@ export function applyL3ScreeningOutcome(
     reason,
     atMs,
     decision,
-    riskLabels: contribution.riskLabels,
-    scores: contribution.scores,
+    riskLabels: [...new Set([
+      ...(input.priorContribution?.riskLabels ?? []),
+      ...contribution.riskLabels,
+    ])],
+    scores: {
+      ...(input.priorContribution?.scores ?? {}),
+      ...contribution.scores,
+    },
     extractedFields: {
+      ...(input.priorContribution?.extractedFields ?? {}),
       ...contribution.extractedFields,
       [L3_FIELD_SOURCE_REF]: input.origin.ref.slice(0, 4096),
     },

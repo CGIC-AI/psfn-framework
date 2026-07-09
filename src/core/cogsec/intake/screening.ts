@@ -1,10 +1,11 @@
 // ── Cognition Intake Firewall: intake screening service (htm9.2) ──
 //
 // The wiring keystone between the already-built pieces: it consumes the L1
-// deterministic scanner pipeline (htm9.4) and, when provided, the gateway-side
-// L1.5 injection scorer (htm9.5), produces an IntakeEnvelope (htm9.1) for every
-// screened item, records an auditable screening decision, and routes the
-// envelope through its post-screening state.
+// deterministic scanner pipeline (htm9.4), the gateway-side L1.5 injection
+// scorer (htm9.5) when provided, and the gateway-side L2/L3 escalation port
+// (htm9.6/htm9.7) when provided; it produces an IntakeEnvelope (htm9.1) for
+// every screened item, records an auditable screening decision, and routes
+// the envelope through its post-screening state.
 //
 // MODE SEMANTICS (intake-policy.json `mode`):
 // - 'off':     no service is constructed (see maybe-create helpers at the
@@ -42,6 +43,7 @@ import {
   type IntakeEnvelopeSubject,
   type IntakeRiskLabel,
   type IntakeSourceClass,
+  type IntakeSourceRiskTier,
 } from '../../../shared/contracts/intake-envelope.js';
 import {
   injectionScoreThresholdForTier,
@@ -60,6 +62,7 @@ import {
 import {
   adjustSourceRiskTierForSourceLists,
   matchIntakeSourceLists,
+  type AdjustedSourceRiskTier,
 } from './source-lists.js';
 import {
   createIntakeL1Scanner,
@@ -86,6 +89,88 @@ export interface IntakeInjectionScorerPort {
   /** Key for the score in `envelope.scores` (INJECTION_CLASSIFIER_SCANNER_ID). */
   scannerId: string;
   classify(text: string): Promise<{ score: number; labels: IntakeRiskLabel[] }>;
+}
+
+/**
+ * Screening-field contribution from an escalation layer (labels, per-scanner
+ * scores, audit fields), folded into the item's envelope exactly like the
+ * L1 report and prior signals are.
+ */
+export interface IntakeEscalationContribution {
+  riskLabels: IntakeRiskLabel[];
+  scores: Record<string, number>;
+  extractedFields: Record<string, string>;
+}
+
+/**
+ * One escalation request from `screen()` to the gateway-side L2/L3 port,
+ * issued AFTER the L1 scanners and the L1.5 scorer ran and only when the
+ * cheaper layers did not already withhold the item. Routing state:
+ * `sourceRiskTier` is the source-list ADJUSTED tier (htm9.13) — the tier
+ * every escalation threshold and mandatory-tier rule reads — and
+ * `priorScore` is the max of the L1/L1.5/prior-signal scores that gates L2.
+ */
+export interface IntakeEscalationRequest {
+  text: string;
+  sourceClass: IntakeSourceClass;
+  sourceRiskTier: IntakeSourceRiskTier;
+  priorScore: number;
+  origin: { ref: string; detail?: string };
+  subject?: IntakeEnvelopeSubject;
+  canonicalContactId?: string;
+  /** Carrying channel id for the L3 CogSecEvent, when the surface knows one. */
+  sourceChannelId?: string;
+  /**
+   * The L1/L1.5/prior-signal screening fields, so an executed L3 outcome can
+   * fold the full layered history onto the ONE envelope it delivers.
+   */
+  priorContribution: IntakeEscalationContribution;
+  atMs: number;
+}
+
+/**
+ * What the escalation port decided for one item:
+ * - 'skipped':      no escalation layer ran (below threshold, non-mandatory
+ *                   tier) — the L1/L1.5 decision stands untouched.
+ * - 'contribution': L2 ran and did not flag (or failed closed to
+ *                   l1_labels_only on a trusted tier); the L1/L1.5 decision
+ *                   stands and the L2 verdict/error is recorded on the
+ *                   envelope.
+ * - 'quarantine':   L2 failed and the tier's fail-closed action is
+ *                   quarantine; the service forces a quarantine decision
+ *                   through its normal envelope + hold machinery.
+ * - 'final':        L3 was INVOKED (htm9.7 hard rule): the port already
+ *                   produced the envelope, the CogSecEvent, and the
+ *                   quarantine hold via `applyL3ScreeningOutcome`; the
+ *                   returned result replaces the service's own finalize.
+ */
+export type IntakeEscalationDecision =
+  | { kind: 'skipped'; reason: string }
+  | { kind: 'contribution'; contribution: IntakeEscalationContribution }
+  | { kind: 'quarantine'; reason: string; contribution: IntakeEscalationContribution }
+  | {
+    kind: 'final';
+    result: {
+      envelope: IntakeEnvelope;
+      snapshot: IntakeEnvelopeSnapshot;
+      action: IntakeDecisionAction;
+      effectiveText: string;
+      withheld: boolean;
+      /** The auditable CogSecEvent written for the L3 invocation. */
+      cogSecCaseId: string;
+    };
+  };
+
+/**
+ * Structural port for the gateway-side L2 fast screener + L3 heavy screener
+ * escalation chain (htm9.6/htm9.7), mirroring `IntakeInjectionScorerPort` so
+ * this core module never imports gateway internals. The gateway composition
+ * (src/boundary/gateway/intake/compose-screening.ts) adapts the l2-screener/
+ * l3-screener evaluators onto this shape; the agent process runs L1-only and
+ * never composes one.
+ */
+export interface IntakeEscalationPort {
+  escalate(request: IntakeEscalationRequest): Promise<IntakeEscalationDecision>;
 }
 
 // ── Screening input/result ──
@@ -128,6 +213,12 @@ export interface IntakeScreeningInput {
    * force a quarantine decision (fail closed across layers).
    */
   priorSignals?: readonly IntakePriorScreeningSignal[];
+  /**
+   * Carrying channel id, when the surface knows one. Recorded on the
+   * CogSecEvent when the item reaches the L3 heavy screener (htm9.7 hard
+   * rule); absent, the escalation port derives a source-class identifier.
+   */
+  sourceChannelId?: string;
   atMs?: number;
 }
 
@@ -166,6 +257,12 @@ export interface IntakeScreeningResult {
    * never see legitimate markers.
    */
   markingPlan?: IntakeMarkingPlan;
+  /**
+   * The auditable CogSecEvent written when the item reached the L3 heavy
+   * screener (htm9.7 hard rule: every L3 invocation writes one). Absent for
+   * items that never escalated to L3.
+   */
+  cogSecCaseId?: string;
 }
 
 export interface IntakeScreeningService {
@@ -184,6 +281,12 @@ export interface IntakeScreeningServiceOptions {
   policy: IntakePolicyConfig;
   l1: IntakeL1Scanner;
   injectionScorer?: IntakeInjectionScorerPort;
+  /**
+   * Gateway-side L2/L3 escalation chain (htm9.6/htm9.7). Absent (agent
+   * process, tests, no OpenRouter backend) screening stops at L1/L1.5 —
+   * the agent process must NEVER compose one (it has no external egress).
+   */
+  escalation?: IntakeEscalationPort;
   /**
    * Durable quarantine store (htm9.11): quarantine decisions HOLD the raw
    * item here for the Garden approval queue. Absent (tests, minimal
@@ -290,10 +393,25 @@ function buildContentRef(text: string, store: string): {
   };
 }
 
+interface ScorerOutcome {
+  score?: number;
+  labels: IntakeRiskLabel[];
+  error?: string;
+  scannerId?: string;
+}
+
+/** Escalation results folded into `finalize` (never alters the L1 report). */
+interface EscalationExtras {
+  /** L2 verdict / recorded L2 failure merged onto the envelope fields. */
+  contribution?: IntakeEscalationContribution;
+  /** Fail-closed override of the L1/L1.5 decision (L2 per-tier quarantine). */
+  forced?: { action: Extract<IntakeDecisionAction, 'quarantine'>; reason: string };
+}
+
 export function createIntakeScreeningService(
   options: IntakeScreeningServiceOptions,
 ): IntakeScreeningService {
-  const { policy, l1, injectionScorer, quarantine, actor } = options;
+  const { policy, l1, injectionScorer, escalation, quarantine, actor } = options;
   if (policy.mode === 'off') {
     throw new Error(
       "Intake screening service must not be constructed with mode 'off'; "
@@ -303,22 +421,12 @@ export function createIntakeScreeningService(
   const mode = policy.mode;
   const now = options.now ?? Date.now;
 
-  function finalize(
-    text: string,
-    input: IntakeScreeningInput,
-    report: IntakeL1ScanReport,
-    scorerOutcome: {
-      score?: number;
-      labels: IntakeRiskLabel[];
-      error?: string;
-      scannerId?: string;
-    },
-  ): IntakeScreeningResult {
-    // htm9.13: scrutiny scales with SOURCE risk. The operator-curated source
-    // lists adjust the policy tier — a trusted-site/person hit lowers it ONE
-    // step (never below 'trusted'; L1 already ran unconditionally above), a
-    // denied hit raises it to 'hostile'. The ADJUSTED tier is what the
-    // envelope carries and what every escalation threshold reads.
+  // htm9.13: scrutiny scales with SOURCE risk. The operator-curated source
+  // lists adjust the policy tier — a trusted-site/person hit lowers it ONE
+  // step (never below 'trusted'; L1 always runs unconditionally), a denied
+  // hit raises it to 'hostile'. The ADJUSTED tier is what the envelope
+  // carries and what every escalation threshold and mandatory-tier rule reads.
+  function resolveTier(input: IntakeScreeningInput): AdjustedSourceRiskTier {
     const baseTier = policy.sourceRiskTiers[input.sourceClass];
     const listMatch = matchIntakeSourceLists({
       lists: policy.sourceLists,
@@ -327,32 +435,16 @@ export function createIntakeScreeningService(
         ? { canonicalContactId: input.canonicalContactId }
         : {}),
     });
-    const adjusted = adjustSourceRiskTierForSourceLists(baseTier, listMatch);
-    const sourceRiskTier = adjusted.tier;
-    const atMs = input.atMs ?? now();
+    return adjustSourceRiskTierForSourceLists(baseTier, listMatch);
+  }
 
-    let envelope = createIntakeEnvelope({
-      sourceClass: input.sourceClass,
-      sourceRiskTier,
-      contentRef: buildContentRef(text, quarantine ? 'intake-quarantine' : 'unpersisted'),
-      origin: input.origin,
-      atMs,
-    });
-
-    const priorSignals = input.priorSignals ?? [];
-    const decision = decideAction({
-      report,
-      injectionScore: scorerOutcome.score,
-      injectionScoreThreshold: injectionScoreThresholdForTier(policy, sourceRiskTier),
-      priorSignals,
-    });
-    const intakeDecision: IntakeDecision = {
-      action: decision.action,
-      reason: decision.reason.slice(0, 1024),
-      decidedBy: 'screening',
-      decidedAtMs: atMs,
-    };
-
+  /** Folds L1 report + L1.5 scorer + prior signals + tier adjustment into envelope fields. */
+  function collectSignalContribution(
+    report: IntakeL1ScanReport,
+    scorerOutcome: ScorerOutcome,
+    priorSignals: readonly IntakePriorScreeningSignal[],
+    adjusted: AdjustedSourceRiskTier,
+  ): IntakeEscalationContribution {
     const scores: Record<string, number> = { ...report.scores };
     if (scorerOutcome.score !== undefined && scorerOutcome.scannerId) {
       scores[scorerOutcome.scannerId] = scorerOutcome.score;
@@ -374,15 +466,70 @@ export function createIntakeScreeningService(
         `${adjusted.adjustment.match.kind}:${adjusted.adjustment.match.list}:${adjusted.adjustment.match.pattern}`
           .slice(0, 4096);
       extractedFields['source_list.tier_adjustment'] =
-        `${adjusted.adjustment.from}->${sourceRiskTier} (${adjusted.adjustment.kind})`;
+        `${adjusted.adjustment.from}->${adjusted.tier} (${adjusted.adjustment.kind})`;
     }
+    const riskLabels = [
+      ...report.riskLabels,
+      ...scorerOutcome.labels,
+      ...priorSignals.flatMap((signal) => signal.labels),
+    ];
+    return { riskLabels, scores, extractedFields };
+  }
+
+  function finalize(
+    text: string,
+    input: IntakeScreeningInput,
+    report: IntakeL1ScanReport,
+    scorerOutcome: ScorerOutcome,
+    escalationExtras?: EscalationExtras,
+  ): IntakeScreeningResult {
+    const adjusted = resolveTier(input);
+    const sourceRiskTier = adjusted.tier;
+    const atMs = input.atMs ?? now();
+
+    let envelope = createIntakeEnvelope({
+      sourceClass: input.sourceClass,
+      sourceRiskTier,
+      contentRef: buildContentRef(text, quarantine ? 'intake-quarantine' : 'unpersisted'),
+      origin: input.origin,
+      atMs,
+    });
+
+    const priorSignals = input.priorSignals ?? [];
+    // An escalation fail-closed override (L2 error on a quarantine-action
+    // tier, or an escalation-port failure) replaces the L1/L1.5 decision;
+    // otherwise the decision derives from the cheaper layers exactly as it
+    // did before escalation was wired.
+    const decision = escalationExtras?.forced
+      ? { action: escalationExtras.forced.action, reason: escalationExtras.forced.reason }
+      : decideAction({
+        report,
+        injectionScore: scorerOutcome.score,
+        injectionScoreThreshold: injectionScoreThresholdForTier(policy, sourceRiskTier),
+        priorSignals,
+      });
+    const intakeDecision: IntakeDecision = {
+      action: decision.action,
+      reason: decision.reason.slice(0, 1024),
+      decidedBy: 'screening',
+      decidedAtMs: atMs,
+    };
+
+    const base = collectSignalContribution(report, scorerOutcome, priorSignals, adjusted);
+    const scores: Record<string, number> = {
+      ...base.scores,
+      ...(escalationExtras?.contribution?.scores ?? {}),
+    };
+    const extractedFields: Record<string, string> = {
+      ...base.extractedFields,
+      ...(escalationExtras?.contribution?.extractedFields ?? {}),
+    };
 
     // htm9.13: the marking plan is a pure function of (labels, max score,
     // effective tier), computed for markable classes in both modes.
     const allRiskLabels = [
-      ...report.riskLabels,
-      ...scorerOutcome.labels,
-      ...priorSignals.flatMap((signal) => signal.labels),
+      ...base.riskLabels,
+      ...(escalationExtras?.contribution?.riskLabels ?? []),
     ];
     const maxScore = Math.min(1, Math.max(0, ...Object.values(scores)));
     const markingPlan = INTAKE_MARKING_SOURCE_CLASSES.has(input.sourceClass)
@@ -504,35 +651,155 @@ export function createIntakeScreeningService(
     };
   }
 
-  async function screen(text: string, input: IntakeScreeningInput): Promise<IntakeScreeningResult> {
-    const report = l1.scan(text, { scope: input.scope });
-    if (!injectionScorer || !text.trim()) {
-      return finalize(text, input, report, { labels: [] });
+  // ── L2/L3 escalation (htm9.6/htm9.7, gateway-side port only) ──
+  // Ordering: L1 scanners → L1.5 score → source-list-adjusted tier →
+  // shouldEscalateToL2 → evaluateL2 → (escalate_l3 / mandatory tier) →
+  // evaluateL3 → applyL3ScreeningOutcome. All routing lives in the port and
+  // the l2/l3 evaluators it wraps; this function only folds the outcome back
+  // into the screening result.
+  async function escalateAndFinalize(
+    text: string,
+    input: IntakeScreeningInput,
+    report: IntakeL1ScanReport,
+    scorerOutcome: ScorerOutcome,
+    port: IntakeEscalationPort,
+  ): Promise<IntakeScreeningResult> {
+    // Freeze the timestamp so the escalation request and the finalize path
+    // record the same decision time.
+    const atMs = input.atMs ?? now();
+    const timedInput: IntakeScreeningInput = { ...input, atMs };
+    const adjusted = resolveTier(input);
+    const priorSignals = input.priorSignals ?? [];
+
+    // Items the cheaper layers already withhold skip escalation: L2/L3 exist
+    // to refine UNCERTAIN items, and a quarantine decision is already the
+    // fail-closed terminal pending operator review — re-screening it would
+    // spend API calls to reach the same outcome and duplicate the held item.
+    const preliminary = decideAction({
+      report,
+      injectionScore: scorerOutcome.score,
+      injectionScoreThreshold: injectionScoreThresholdForTier(policy, adjusted.tier),
+      priorSignals,
+    });
+    if (preliminary.action === 'quarantine' || preliminary.action === 'block') {
+      return finalize(text, timedInput, report, scorerOutcome);
     }
+
+    const prior = collectSignalContribution(report, scorerOutcome, priorSignals, adjusted);
+    const priorScore = Math.min(1, Math.max(0, ...Object.values(prior.scores)));
+
+    let escalationDecision: IntakeEscalationDecision;
     try {
-      const classified = await injectionScorer.classify(text);
-      return finalize(text, input, report, {
-        score: classified.score,
-        labels: classified.labels,
-        scannerId: injectionScorer.scannerId,
+      escalationDecision = await port.escalate({
+        text,
+        sourceClass: input.sourceClass,
+        sourceRiskTier: adjusted.tier,
+        priorScore,
+        origin: input.origin,
+        ...(input.subject ? { subject: input.subject } : {}),
+        ...(input.canonicalContactId !== undefined
+          ? { canonicalContactId: input.canonicalContactId }
+          : {}),
+        ...(input.sourceChannelId !== undefined
+          ? { sourceChannelId: input.sourceChannelId }
+          : {}),
+        priorContribution: prior,
+        atMs,
       });
     } catch (error) {
-      // L1.5 mirrors L1's fail-open-advisory posture: the failure is recorded
-      // on the envelope and logged as an error, never swallowed, and the
-      // deterministic L1 signals still drive the decision.
-      return finalize(text, input, report, {
-        labels: [],
-        scannerId: injectionScorer.scannerId,
-        error: error instanceof Error ? error.message : String(error),
+      // The port throws only where the htm9.7 hard rule is at stake (a failed
+      // CogSecEvent write or quarantine hold inside applyL3ScreeningOutcome):
+      // fail closed — the item is quarantined with the failure on the
+      // envelope, never delivered on a broken audit guarantee.
+      const message = error instanceof Error ? error.message : String(error);
+      log.error('Intake escalation port failed; failing closed to quarantine', {
+        sourceClass: input.sourceClass,
+        sourceRiskTier: adjusted.tier,
+        originRef: input.origin.ref,
+        error: message,
       });
+      return finalize(text, timedInput, report, scorerOutcome, {
+        forced: {
+          action: 'quarantine',
+          reason: `escalation-fail-closed:${message}`.slice(0, 1024),
+        },
+        contribution: {
+          riskLabels: [],
+          scores: {},
+          extractedFields: { 'escalation.error': message.slice(0, 4096) },
+        },
+      });
+    }
+
+    switch (escalationDecision.kind) {
+      case 'skipped':
+        return finalize(text, timedInput, report, scorerOutcome);
+      case 'contribution':
+        return finalize(text, timedInput, report, scorerOutcome, {
+          contribution: escalationDecision.contribution,
+        });
+      case 'quarantine':
+        return finalize(text, timedInput, report, scorerOutcome, {
+          forced: { action: 'quarantine', reason: escalationDecision.reason.slice(0, 1024) },
+          contribution: escalationDecision.contribution,
+        });
+      case 'final': {
+        // L3 was invoked: the port already owns the envelope, the CogSecEvent,
+        // and the quarantine hold (applyL3ScreeningOutcome hard rule). Its
+        // effectiveText contract matches this service's: original in shadow,
+        // withheld notice / safe representation in enforce — the L3-reached
+        // raw content string never ships in enforce mode.
+        const final = escalationDecision.result;
+        return {
+          envelope: final.envelope,
+          snapshot: final.snapshot,
+          report,
+          action: final.action,
+          mode,
+          effectiveText: final.effectiveText,
+          withheld: final.withheld,
+          ...(scorerOutcome.score !== undefined ? { injectionScore: scorerOutcome.score } : {}),
+          ...(scorerOutcome.error ? { injectionScorerError: scorerOutcome.error } : {}),
+          cogSecCaseId: final.cogSecCaseId,
+        };
+      }
     }
   }
 
+  async function screen(text: string, input: IntakeScreeningInput): Promise<IntakeScreeningResult> {
+    const report = l1.scan(text, { scope: input.scope });
+    let scorerOutcome: ScorerOutcome = { labels: [] };
+    if (injectionScorer && text.trim()) {
+      try {
+        const classified = await injectionScorer.classify(text);
+        scorerOutcome = {
+          score: classified.score,
+          labels: classified.labels,
+          scannerId: injectionScorer.scannerId,
+        };
+      } catch (error) {
+        // L1.5 mirrors L1's fail-open-advisory posture: the failure is recorded
+        // on the envelope and logged as an error, never swallowed, and the
+        // deterministic L1 signals still drive the decision.
+        scorerOutcome = {
+          labels: [],
+          scannerId: injectionScorer.scannerId,
+          error: error instanceof Error ? error.message : String(error),
+        };
+      }
+    }
+    if (!escalation || !text.trim()) {
+      return finalize(text, input, report, scorerOutcome);
+    }
+    return escalateAndFinalize(text, input, report, scorerOutcome, escalation);
+  }
+
   function screenSync(text: string, input: IntakeScreeningInput): IntakeScreeningResult {
-    if (injectionScorer) {
+    if (injectionScorer || escalation) {
       throw new Error(
         'screenSync is only available on L1-only intake screening services; '
-        + 'this service has an async injection scorer configured — use screen()',
+        + 'this service has an async injection scorer or escalation port '
+        + 'configured — use screen()',
       );
     }
     const report = l1.scan(text, { scope: input.scope });
@@ -543,6 +810,12 @@ export function createIntakeScreeningService(
 }
 
 // ── Composition helper (L1-only; agent process and tests) ──
+//
+// Deliberately carries NO `escalation` option: the agent process composes
+// through this helper and must never hold an L2/L3 escalation port (the
+// escalation screeners are OpenRouter calls, and only the gateway holds
+// external egress). Gateway composition uses createIntakeScreeningService
+// directly (src/boundary/gateway/intake/compose-screening.ts).
 
 export interface MaybeCreateIntakeScreeningOptions {
   policy: IntakePolicyConfig;

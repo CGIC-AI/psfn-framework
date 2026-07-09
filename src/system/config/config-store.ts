@@ -43,6 +43,7 @@ import {
 } from './skills-config.js';
 import {
   loadStartupCapabilityTierOwnerFile,
+  loadStartupIntakePolicyOwnerFile,
   loadStartupModelsOwnerFile,
   loadStartupProvidersOwnerFile,
   loadStartupRuntimeSettingsOwnerFile,
@@ -51,6 +52,11 @@ import {
   loadStartupChargePolicyOwnerFile,
   type StartupOwnerFileState,
 } from './startup-owner-files.js';
+import type { IntakePolicyConfig } from './intake-policy-config.js';
+import {
+  loadIntakePolicyConfig,
+  saveIntakePolicyConfig,
+} from './intake-policy-config.js';
 import type { TrustPolicyConfig } from './trust-policy-config.js';
 import {
   loadTrustPolicyConfig,
@@ -79,6 +85,8 @@ export interface ConfigStorePort {
   saveSkills(nextConfig: unknown): SkillsRuntimeConfig;
   loadTrustPolicy(): TrustPolicyConfig;
   saveTrustPolicy(nextConfig: unknown): TrustPolicyConfig;
+  loadIntakePolicy(): IntakePolicyConfig;
+  saveIntakePolicy(nextConfig: unknown): IntakePolicyConfig;
   loadStartupRuntimeSettings(): Pick<StartupOwnerFileState, 'runtimeSettings' | 'settingsDomains'>;
   loadStartupModels(): ModelsLoadResult;
   loadStartupProviders(): ProvidersLoadResult;
@@ -86,6 +94,7 @@ export interface ConfigStorePort {
   loadStartupScheduler(): SchedulerRuntimeConfig;
   loadStartupCapabilityTier(): CapabilityTierConfig;
   loadStartupChargePolicy(): ChargePolicyConfig;
+  loadStartupIntakePolicy(): IntakePolicyConfig;
 }
 
 export interface OwnerFileConfigStoreOptions {
@@ -129,6 +138,8 @@ export function createOwnerFileConfigStore(
     saveSkills: (nextConfig) => saveSkillsConfig(options.dataDir, nextConfig),
     loadTrustPolicy: () => loadTrustPolicyConfig(options.dataDir, loadOptions),
     saveTrustPolicy: (nextConfig) => saveTrustPolicyConfig(options.dataDir, nextConfig),
+    loadIntakePolicy: () => loadIntakePolicyConfig(options.dataDir, loadOptions),
+    saveIntakePolicy: (nextConfig) => saveIntakePolicyConfig(options.dataDir, nextConfig),
     loadStartupRuntimeSettings: () => loadStartupRuntimeSettingsOwnerFile({
       dataDir: options.dataDir,
       seedDir: options.seedDir,
@@ -149,6 +160,10 @@ export function createOwnerFileConfigStore(
       options.seedDir,
     ),
     loadStartupChargePolicy: () => loadStartupChargePolicyOwnerFile(
+      options.dataDir,
+      options.seedDir,
+    ),
+    loadStartupIntakePolicy: () => loadStartupIntakePolicyOwnerFile(
       options.dataDir,
       options.seedDir,
     ),

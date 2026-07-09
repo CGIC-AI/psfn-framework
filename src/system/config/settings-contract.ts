@@ -8,6 +8,7 @@ import {
 import { BACKUP_FILE_NAME } from './backup-config.js';
 import { CAPABILITY_TIER_FILE_NAME } from './capability-tier-config.js';
 import { CHARGE_POLICY_FILE_NAME } from './charge-policy-config.js';
+import { INTAKE_POLICY_FILE_NAME } from './intake-policy-config.js';
 import { MODELS_FILE_NAME } from './models-config.js';
 import { PROVIDERS_FILE_NAME } from './providers-config.js';
 import { SCHEDULER_FILE_NAME } from './scheduler-config.js';
@@ -34,6 +35,7 @@ export type SettingsSubsystemId =
   | 'chargePolicy'
   | 'skills'
   | 'trustPolicy'
+  | 'intakePolicy'
   | 'backup'
   | 'channels';
 
@@ -108,6 +110,11 @@ export const SETTINGS_SUBSYSTEMS: Record<SettingsSubsystemId, SettingsContractSu
   trustPolicy: {
     id: 'trustPolicy',
     ownerFile: TRUST_POLICY_FILE_NAME,
+    mode: 'raw_only',
+  },
+  intakePolicy: {
+    id: 'intakePolicy',
+    ownerFile: INTAKE_POLICY_FILE_NAME,
     mode: 'raw_only',
   },
   backup: {

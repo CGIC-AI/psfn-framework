@@ -174,6 +174,33 @@ describe('MemoryWriter', () => {
       });
     });
 
+    it('stamps the originating intake envelope id as a canonical provenance ref (htm9.1)', async () => {
+      const result = await writer.write({
+        text: 'Fact extracted from a screened web fetch',
+        type: 'semantic',
+        provenanceRefs: ['session:chan-1:42'],
+        intakeEnvelopeId: 'e1f5c1a2-4242-4141-9999-abcdefabcdef',
+      });
+
+      expect(result.memory.provenanceRefs).toEqual(expect.arrayContaining([
+        'session:chan-1:42',
+        'intake-envelope:e1f5c1a2-4242-4141-9999-abcdefabcdef',
+      ]));
+      const [insertedMemory] = store.insertMemory.mock.calls[0];
+      expect(insertedMemory.provenanceRefs).toContain(
+        'intake-envelope:e1f5c1a2-4242-4141-9999-abcdefabcdef',
+      );
+    });
+
+    it('fails closed on a malformed intake envelope id instead of dropping it', async () => {
+      await expect(writer.write({
+        text: 'Fact with a broken envelope stamp',
+        type: 'semantic',
+        intakeEnvelopeId: 'not a valid id!!',
+      })).rejects.toThrow(/Invalid intake envelope: id/);
+      expect(store.insertMemory).not.toHaveBeenCalled();
+    });
+
     it('uses default values for optional fields', async () => {
       const result = await writer.write({ text: 'A simple fact', type: 'episodic' });
 
@@ -842,6 +869,18 @@ describe('MemoryWriter', () => {
       expect(result.memory.text).toBe('A brand new fact');
       expect(result.memory.sourceRef).toBe('tool:memory_upsert');
       expect(store.insertMemory).toHaveBeenCalledOnce();
+    });
+
+    it('stamps the originating intake envelope id on upsert writes (htm9.1)', async () => {
+      const result = await writer.upsert({
+        text: 'Upserted fact from a screened document',
+        type: 'semantic',
+        intakeEnvelopeId: 'a1b2c3d4-1111-2222-3333-444455556666',
+      });
+
+      expect(result.memory.provenanceRefs).toContain(
+        'intake-envelope:a1b2c3d4-1111-2222-3333-444455556666',
+      );
     });
 
     it('applies durable retention semantics during upsert', async () => {

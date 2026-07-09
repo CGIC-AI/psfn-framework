@@ -33,6 +33,7 @@ describe('startup owner-file loaders', () => {
     'charge-policy.json',
     'backup.json',
     'skills.json',
+    'intake-policy.json',
   ] as const;
 
   afterEach(() => {

@@ -30,6 +30,7 @@ export const SYSTEM_CONFIG_OWNER_FILES = [
   'skills.json',
   'trust-policy.json',
   'charge-policy.json',
+  'intake-policy.json',
 ] as const;
 
 export interface CaptureSystemConfigSnapshotOptions {

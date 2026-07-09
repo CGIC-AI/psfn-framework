@@ -43,6 +43,7 @@ import {
   evaluateCogSecMemoryCandidacy,
   type CogSecMemoryCandidacyDecision,
 } from '../../core/cogsec/memory-candidacy.js';
+import { appendIntakeEnvelopeProvenanceRef } from '../../shared/contracts/intake-envelope.js';
 import {
   buildEvolutionLinkInput,
   chooseWriteAction,
@@ -90,6 +91,14 @@ export interface MemoryWriteOptions {
   scopeRef?: MemoryScopeRef;
   scopeTags?: string[];
   extractedAt?: number;
+  /**
+   * htm9.1: originating cognition-intake envelope id. When set, the write is
+   * stamped with the canonical `intake-envelope:<id>` provenance ref so a
+   * poisoned source's lineage stays excisable through the existing
+   * revocation/regeneration machinery (src/core/cogsec/lineage.ts).
+   * A malformed id fails the write (fail closed), never silently drops.
+   */
+  intakeEnvelopeId?: string;
 }
 
 export interface WriteResult {
@@ -383,7 +392,10 @@ export class MemoryWriter {
       fallbackRef: 'tool:memory_write',
     });
     const normalizedSourceRef = normalizedSource.sourceRef;
-    const incomingProvenanceRefs = normalizeProvenanceRefs(provenanceRefs, normalizedSourceRef);
+    const incomingProvenanceRefs = normalizeProvenanceRefs(
+      appendIntakeEnvelopeProvenanceRef(provenanceRefs, opts.intakeEnvelopeId),
+      normalizedSourceRef,
+    );
     const normalizedScopeRef = normalizeMemoryScopeRef(scopeRef);
     const normalizedScopeTags = normalizeMemoryScopeTags(scopeTags);
     const targetSalience = clampUnit(salience ?? importance, importance);
@@ -672,7 +684,10 @@ export class MemoryWriter {
       fallbackRef: 'tool:memory_upsert',
     });
     const normalizedSourceRef = normalizedSource.sourceRef;
-    const normalizedProvenanceRefs = normalizeProvenanceRefs(provenanceRefs, normalizedSourceRef);
+    const normalizedProvenanceRefs = normalizeProvenanceRefs(
+      appendIntakeEnvelopeProvenanceRef(provenanceRefs, opts.intakeEnvelopeId),
+      normalizedSourceRef,
+    );
     const normalizedScopeRef = normalizeMemoryScopeRef(scopeRef);
     const normalizedScopeTags = normalizeMemoryScopeTags(scopeTags);
     const targetSalience = clampUnit(salience ?? importance, importance);

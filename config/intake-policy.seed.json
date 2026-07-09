@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "mode": "shadow",
+  "sourceRiskTiers": {
+    "operator": "trusted",
+    "primary_user": "trusted",
+    "trusted_contact": "standard",
+    "regular_contact": "standard",
+    "public_contact": "untrusted",
+    "web_fetch": "untrusted",
+    "web_search": "untrusted",
+    "document": "untrusted",
+    "image_ocr": "hostile",
+    "audio_transcript": "standard",
+    "tool_output": "untrusted",
+    "subagent_output": "untrusted",
+    "shard_foldback": "standard",
+    "mcp_tool_description": "hostile"
+  },
+  "quarantine": {
+    "itemTtlHours": 168,
+    "maxHeldItems": 500
+  }
+}

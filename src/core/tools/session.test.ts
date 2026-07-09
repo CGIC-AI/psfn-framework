@@ -189,8 +189,9 @@ describe('session tool list/resume actions', () => {
     manager = new SessionManager(store, makeConfig({ dataDir: dir }));
   });
 
-  afterEach(() => {
-    rmSync(dir, { recursive: true, force: true });
+  afterEach(async () => {
+    await new Promise(resolve => setTimeout(resolve, 10));
+    rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 10 });
   });
 
   it('session_list orders sessions by recent activity and includes metadata', async () => {
@@ -384,8 +385,9 @@ class InMemoryTranscriptSearch {
     manager = new SessionManager(store, makeConfig({ dataDir: dir }), undefined, undefined, transcriptSearch);
   });
 
-  afterEach(() => {
-    rmSync(dir, { recursive: true, force: true });
+  afterEach(async () => {
+    await new Promise(resolve => setTimeout(resolve, 10));
+    rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 10 });
   });
 
   it('defaults to list and dispatches new/resume actions through one tool surface', async () => {

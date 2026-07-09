@@ -1,5 +1,8 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { loadAgentConfig, loadConfig } from './load-config.js';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { loadAgentConfig, loadConfig, loadOperatorConfig } from './load-config.js';
 import { createDefaultObserverEvalSidecarSettings } from './runtime-config-contracts.js';
 
 const ORIGINAL_ENV = { ...process.env };
@@ -17,6 +20,7 @@ function restoreEnv(): void {
 
 function clearRuntimePathEnv(): void {
   delete process.env.COMPANION_ID;
+  delete process.env.COMPANION_PG_SCHEMA;
   delete process.env.CREDENTIAL_VAULT_BACKEND;
   delete process.env.DATA_DIR;
   delete process.env.SYSTEM_DATA_DIR;
@@ -43,6 +47,9 @@ function clearRuntimePathEnv(): void {
   delete process.env.GATEWAY_TLS_CA_PATH;
   delete process.env.GATEWAY_TLS_REJECT_UNAUTHORIZED;
   delete process.env.NODE_TLS_REJECT_UNAUTHORIZED;
+  delete process.env.PSFN_MULTI_COMPANION;
+  delete process.env.GATEWAY_COMPANION_AUTH_TOKEN;
+  delete process.env.GATEWAY_SESSION_INTEGRITY_AUTH_TOKEN;
   process.env.COMPANION_ID = 'test-companion';
   process.env.POSTGRES_DATABASE_URL = 'postgres://postgres:secret@localhost:5432/psfn_test';
 }
@@ -52,6 +59,51 @@ afterEach(() => {
 });
 
 describe('loadConfig path defaults', () => {
+  const tempDirs: string[] = [];
+
+  function configureMultiCompanionEnv(): {
+    root: string;
+    companionId: string;
+    dataDir: string;
+    cardPath: string;
+    postgresSchema: string;
+  } {
+    clearRuntimePathEnv();
+    const root = mkdtempSync(join(tmpdir(), 'psfn-load-config-fleet-'));
+    tempDirs.push(root);
+    const systemDataDir = join(root, 'system-data');
+    mkdirSync(systemDataDir, { recursive: true });
+    const companionId = '11111111-1111-4111-8111-111111111111';
+    const dataDir = join(root, 'companions/flagship');
+    const cardPath = join(dataDir, 'character-card.json');
+    const postgresSchema = 'companion_flagship';
+    writeFileSync(join(systemDataDir, 'companions.json'), `${JSON.stringify({
+      companions: [{
+        companionId,
+        companionDataDir: 'companions/flagship',
+        characterCardPath: 'companions/flagship/character-card.json',
+        postgresSchema,
+      }],
+    })}\n`);
+    process.env.PSFN_RUNTIME_ROOT = root;
+    process.env.SYSTEM_DATA_DIR = systemDataDir;
+    process.env.COMPANION_DATA_DIR = dataDir;
+    process.env.WORKSPACE_PATH = join(root, 'workspace');
+    process.env.COMPANION_ID = companionId;
+    process.env.CHARACTER_CARD_PATH = cardPath;
+    process.env.COMPANION_PG_SCHEMA = postgresSchema;
+    process.env.PSFN_MULTI_COMPANION = '1';
+    process.env.GATEWAY_COMPANION_AUTH_TOKEN = 'v1.agent-token';
+    process.env.GATEWAY_SESSION_INTEGRITY_AUTH_TOKEN = 'v1.worker-token';
+    return { root, companionId, dataDir, cardPath, postgresSchema };
+  }
+
+  afterEach(() => {
+    for (const dir of tempDirs.splice(0)) {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('uses data-dir-relative defaults when explicit paths are not set', () => {
     clearRuntimePathEnv();
 
@@ -355,6 +407,7 @@ describe('loadConfig path defaults', () => {
     process.env.DEEPGRAM_API_KEY = 'deepgram-secret';
     process.env.ELEVENLABS_API_KEY = 'eleven-secret';
     process.env.FAL_API_KEY = 'fal-secret';
+    process.env.GATEWAY_SESSION_INTEGRITY_AUTH_TOKEN = 'v1.worker-token';
 
     const config = loadAgentConfig() as Record<string, unknown>;
 
@@ -365,6 +418,71 @@ describe('loadConfig path defaults', () => {
     expect(config.deepgramApiKey).toBeUndefined();
     expect(config.elevenLabsApiKey).toBeUndefined();
     expect(config.falApiKey).toBeUndefined();
+  });
+
+  it('requires the isolated session-integrity credential for every agent topology', () => {
+    clearRuntimePathEnv();
+
+    expect(() => loadAgentConfig()).toThrow(/GATEWAY_SESSION_INTEGRITY_AUTH_TOKEN/);
+  });
+
+  it('binds a multi-companion agent to its canonical fleet tuple', () => {
+    const expected = configureMultiCompanionEnv();
+
+    const config = loadAgentConfig();
+
+    expect(config.companionRuntimeIdentity).toMatchObject({
+      companionId: expected.companionId,
+      companionDataDir: expected.dataDir,
+      characterCardPath: expected.cardPath,
+      postgresSchema: expected.postgresSchema,
+    });
+    expect(config.gatewayCompanionAuthToken).toBe('v1.agent-token');
+    expect(config.gatewaySessionIntegrityAuthToken).toBe('v1.worker-token');
+  });
+
+  it('rejects direct multi-companion agent launches with tuple drift', () => {
+    const expected = configureMultiCompanionEnv();
+    process.env.COMPANION_DATA_DIR = join(expected.root, 'companions/other');
+    expect(() => loadAgentConfig()).toThrow(/COMPANION_DATA_DIR/);
+
+    configureMultiCompanionEnv();
+    process.env.CHARACTER_CARD_PATH = join(expected.root, 'companions/other/card.json');
+    expect(() => loadAgentConfig()).toThrow(/CHARACTER_CARD_PATH/);
+
+    configureMultiCompanionEnv();
+    process.env.COMPANION_PG_SCHEMA = 'companion_other';
+    expect(() => loadAgentConfig()).toThrow(/COMPANION_PG_SCHEMA/);
+  });
+
+  it('requires both role-bound gateway credentials for multi-companion agents', () => {
+    configureMultiCompanionEnv();
+    delete process.env.GATEWAY_SESSION_INTEGRITY_AUTH_TOKEN;
+
+    expect(() => loadAgentConfig()).toThrow(/GATEWAY_SESSION_INTEGRITY_AUTH_TOKEN/);
+  });
+
+  it('projects operator config without provider, channel, gateway, or database secrets', () => {
+    const config = loadOperatorConfig({
+      COMPANION_ID: 'operator-test',
+      DISCORD_TOKEN: 'sentinel-discord',
+      DISCORD_BOT_ID: 'sentinel-bot',
+      DEEPGRAM_API_KEY: 'sentinel-deepgram',
+      ELEVENLABS_API_KEY: 'sentinel-eleven',
+      FAL_API_KEY: 'sentinel-fal',
+      POSTGRES_DATABASE_URL: 'postgres://sentinel-secret@localhost/db',
+      GATEWAY_COMPANION_AUTH_TOKEN: 'sentinel-agent-token',
+      GATEWAY_SESSION_INTEGRITY_AUTH_TOKEN: 'sentinel-worker-token',
+    }) as Record<string, unknown>;
+
+    expect(config.discordToken).toBeUndefined();
+    expect(config.discordBotId).toBeUndefined();
+    expect(config.deepgramApiKey).toBeUndefined();
+    expect(config.elevenLabsApiKey).toBeUndefined();
+    expect(config.falApiKey).toBeUndefined();
+    expect(config.postgresDatabaseUrl).toBeUndefined();
+    expect(config.gatewayCompanionAuthToken).toBeUndefined();
+    expect(config.gatewaySessionIntegrityAuthToken).toBeUndefined();
   });
 
   it('fails closed when DISCORD_TOKEN is set without DISCORD_BOT_ID', () => {

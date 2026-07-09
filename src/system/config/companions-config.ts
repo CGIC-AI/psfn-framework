@@ -1,5 +1,5 @@
-import { isAbsolute, join, normalize, resolve } from 'node:path';
-import { existsSync } from 'node:fs';
+import { isAbsolute, join, normalize, relative, resolve } from 'node:path';
+import { existsSync, realpathSync, statSync } from 'node:fs';
 import { loadRequiredJson } from './load-or-seed.js';
 import { assertNoUnknownKeys } from './validators.js';
 import { writeJsonAtomic } from '../../shared/utils/fs.js';
@@ -73,6 +73,20 @@ export interface CompanionFleetEntry {
 export interface CompanionsFleetConfig {
   companions: CompanionFleetEntry[];
 }
+
+export interface ResolvedCompanionFleetEntry extends Omit<CompanionFleetEntry, 'companionDataDir' | 'characterCardPath'> {
+  /** Absolute companion data root resolved beneath the runtime persistence root. */
+  companionDataDir: string;
+  /** Absolute character-card path resolved beneath the runtime persistence root. */
+  characterCardPath: string;
+}
+
+export interface ResolvedCompanionsFleetConfig {
+  persistenceRoot: string;
+  companions: ResolvedCompanionFleetEntry[];
+}
+
+export type CompanionRuntimeIdentity = ResolvedCompanionFleetEntry;
 
 export interface CompanionsConfigLoadOptions {
   seedDir?: string;
@@ -348,4 +362,131 @@ export function resolveCompanionFleet(
     );
   }
   return undefined;
+}
+
+function assertResolvedPathInsideRoot(
+  candidatePath: string,
+  persistenceRoot: string,
+  field: string,
+): string {
+  if (!isStrictSubpath(candidatePath, persistenceRoot)) {
+    throw new Error(
+      `${COMPANIONS_ERROR_PREFIX}: ${field} must resolve beneath persistence root ${persistenceRoot}, `
+      + `got ${candidatePath}`,
+    );
+  }
+
+  const realRoot = realpathSync(persistenceRoot);
+  let existingAncestor = candidatePath;
+  while (!existsSync(existingAncestor)) {
+    const parent = resolve(existingAncestor, '..');
+    if (parent === existingAncestor || !isStrictSubpath(parent, persistenceRoot)) {
+      existingAncestor = persistenceRoot;
+      break;
+    }
+    existingAncestor = parent;
+  }
+  const realAncestor = realpathSync(existingAncestor);
+  if (realAncestor !== realRoot && !isStrictSubpath(realAncestor, realRoot)) {
+    throw new Error(
+      `${COMPANIONS_ERROR_PREFIX}: ${field} resolves through a symlink outside persistence root `
+      + `${persistenceRoot}`,
+    );
+  }
+
+  const canonicalPath = resolve(realAncestor, relative(existingAncestor, candidatePath));
+  if (!isStrictSubpath(canonicalPath, realRoot)) {
+    throw new Error(
+      `${COMPANIONS_ERROR_PREFIX}: ${field} must resolve beneath persistence root ${realRoot}, `
+      + `got ${canonicalPath}`,
+    );
+  }
+  return canonicalPath;
+}
+
+function resolveFleetPath(
+  persistenceRoot: string,
+  relativePath: string,
+  field: string,
+): string {
+  const candidatePath = resolve(persistenceRoot, relativePath);
+  return assertResolvedPathInsideRoot(candidatePath, persistenceRoot, field);
+}
+
+/**
+ * Resolve owner-file-relative fleet paths against one canonical runtime root.
+ * The returned paths are absolute and checked against existing symlink
+ * ancestors so the launcher and runtime never reinterpret them via process CWD.
+ */
+export function resolveCompanionFleetPaths(
+  fleet: CompanionsFleetConfig,
+  persistenceRoot: string,
+): ResolvedCompanionsFleetConfig {
+  const requestedRoot = resolve(persistenceRoot);
+  if (!existsSync(requestedRoot) || !statSync(requestedRoot).isDirectory()) {
+    throw new Error(
+      `${COMPANIONS_ERROR_PREFIX}: persistence root must be an existing directory, got ${requestedRoot}`,
+    );
+  }
+  const resolvedRoot = realpathSync(requestedRoot);
+
+  const companions = fleet.companions.map((entry, index) => ({
+    ...entry,
+    companionDataDir: resolveFleetPath(
+      resolvedRoot,
+      entry.companionDataDir,
+      `companions[${index}].companionDataDir`,
+    ),
+    characterCardPath: resolveFleetPath(
+      resolvedRoot,
+      entry.characterCardPath,
+      `companions[${index}].characterCardPath`,
+    ),
+  }));
+  assertNoOverlappingDataDirs(companions);
+
+  return {
+    persistenceRoot: resolvedRoot,
+    companions,
+  };
+}
+
+function assertRuntimeIdentityValue(
+  field: string,
+  actual: string | undefined,
+  expected: string,
+  pathValue = false,
+): void {
+  const normalizedActual = actual?.trim();
+  const matches = pathValue
+    ? normalizedActual !== undefined && resolve(normalizedActual) === expected
+    : normalizedActual === expected;
+  if (!matches) {
+    throw new Error(
+      `Multi-companion runtime identity mismatch for ${field}: expected ${JSON.stringify(expected)} `
+      + `from ${COMPANIONS_FILE_NAME}, got ${JSON.stringify(actual)}`,
+    );
+  }
+}
+
+/** Bind one process to exactly one resolved fleet entry or fail startup. */
+export function resolveCompanionRuntimeIdentity(input: {
+  fleet: ResolvedCompanionsFleetConfig;
+  companionId: string;
+  companionDataDir?: string;
+  characterCardPath?: string;
+  postgresSchema?: string;
+}): CompanionRuntimeIdentity {
+  const companionId = input.companionId.trim();
+  const identity = input.fleet.companions.find(entry => entry.companionId === companionId);
+  if (!identity) {
+    throw new Error(
+      `Multi-companion runtime identity ${JSON.stringify(companionId)} is not present in ${COMPANIONS_FILE_NAME}`,
+    );
+  }
+
+  assertRuntimeIdentityValue('COMPANION_DATA_DIR', input.companionDataDir, identity.companionDataDir, true);
+  assertRuntimeIdentityValue('CHARACTER_CARD_PATH', input.characterCardPath, identity.characterCardPath, true);
+  assertRuntimeIdentityValue('COMPANION_PG_SCHEMA', input.postgresSchema, identity.postgresSchema);
+  return identity;
 }

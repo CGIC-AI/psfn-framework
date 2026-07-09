@@ -6,6 +6,21 @@ import type { ObservedGroupMemoryScheduleDecision } from '../../faculties/memory
 import { toErrorMessage } from '../../shared/utils/errors.js';
 import { resolveCompanionIdFromConfig } from '../../core/identity/companion-runtime.js';
 import type { OutboundReplyGuardPort } from '../../system/lifecycle/outbound-reply-dedupe.js';
+import type {
+  CompanionDeliveryFailureReason,
+  CompanionMessageDeliveryFailureNotification,
+  CompanionMessageFailureReportParams,
+} from '../../boundary/gateway/protocol.js';
+import {
+  createDiscordDeliveryCheckpoint,
+  deliverDiscordReply,
+  DiscordFailedDeliveryCache,
+  DiscordReplyDeliveryError,
+  DISCORD_DELIVERY_FAILURE_NOTICE,
+  DISCORD_TURN_FAILURE_NOTICE,
+  type DiscordDeliveryCheckpoint,
+  type DiscordFailureStage,
+} from './discord-reply-delivery.js';
 
 const DUPLICATE_MESSAGE_WINDOW_MS = 2 * 60_000;
 const AGENT_BUSY_PATTERN = /already processing a prompt/i;
@@ -13,6 +28,7 @@ const AGENT_BUSY_PATTERN = /already processing a prompt/i;
 interface QueuedDiscordMessage {
   message: SubstrateMessage;
   dedupeKey: string | null;
+  retryDelivery?: DiscordDeliveryCheckpoint;
 }
 
 interface RecentHandleMessageResult {
@@ -34,6 +50,10 @@ export interface GatewayMessageGateway {
   /** Inter-companion lane (sprint 10, W6): inbound peer messages + outbound replies. */
   onCompanionMessage(handler: (message: SubstrateMessage) => void | Promise<void>): void;
   companionSend(channelId: string, content: string, authorName?: string): Promise<unknown>;
+  companionReportFailure(params: CompanionMessageFailureReportParams): Promise<unknown>;
+  onCompanionDeliveryFailure(
+    handler: (notification: CompanionMessageDeliveryFailureNotification) => void | Promise<void>,
+  ): void;
 }
 
 export interface GatewayMessageAgentLoop {
@@ -101,6 +121,7 @@ export function registerGatewayMessageHandlers(deps: GatewayMessageHandlersDeps)
   const recentHandleResponses = new Map<string, RecentHandleMessageResult>();
   const inFlightDiscordMessages = new Set<string>();
   const recentDiscordMessages = new Map<string, number>();
+  const failedDiscordDeliveries = new DiscordFailedDeliveryCache();
   const inFlightCompanionMessages = new Set<string>();
   const recentCompanionMessages = new Map<string, number>();
 
@@ -116,6 +137,7 @@ export function registerGatewayMessageHandlers(deps: GatewayMessageHandlersDeps)
         recentDiscordMessages.delete(key);
       }
     }
+    failedDiscordDeliveries.prune(minTimestamp);
     for (const [key, seenAt] of recentCompanionMessages.entries()) {
       if (seenAt < minTimestamp) {
         recentCompanionMessages.delete(key);
@@ -152,9 +174,11 @@ export function registerGatewayMessageHandlers(deps: GatewayMessageHandlersDeps)
     const first = discordPromptQueue.shift();
     if (!first) return [];
     const bundle = [first];
+    if (first.retryDelivery) return bundle;
     let index = 0;
     while (index < discordPromptQueue.length) {
       const entry = discordPromptQueue[index];
+      if (entry.retryDelivery) break;
       if (entry.message.channelId === first.message.channelId) {
         if (entry.message.authorId !== first.message.authorId) break;
         bundle.push(entry);
@@ -200,41 +224,84 @@ export function registerGatewayMessageHandlers(deps: GatewayMessageHandlersDeps)
             count: entries.length,
           });
         }
+        let completed = false;
+        let failureStage: DiscordFailureStage = 'handle_message';
+        let checkpoint = entries[0].retryDelivery;
+        const dedupeKeys = checkpoint?.dedupeKeys
+          ?? entries.flatMap((entry) => entry.dedupeKey ? [entry.dedupeKey] : []);
         try {
-          const response = await promptWhenIdle(message);
-          if (response.content.trim()) {
-            await gateway.discordSend(message.channelId, response.content);
-            // Record the primary reply so a later replay-prone turn (the
-            // deferred-tool-handoff continuation) can recognise and suppress a
-            // duplicate of what the operator already received.
-            outboundReplyGuard?.noteDelivered({
-              channelId: message.channelId,
-              content: response.content,
-              sourceTurnId: message.id,
-              senderKind: 'discord_inbound_reply',
-            });
+          if (!checkpoint) {
+            const response = await promptWhenIdle(message);
+            checkpoint = createDiscordDeliveryCheckpoint(response, dedupeKeys);
           }
-          for (const attachment of response.attachments ?? []) {
-            await gateway.discordSendMedia(message.channelId, attachment);
-          }
+          await deliverDiscordReply(message.channelId, checkpoint, {
+            sendText: (channelId, content) => gateway.discordSend(channelId, content),
+            sendMedia: (channelId, attachment) => gateway.discordSendMedia(channelId, attachment),
+            onTextDelivered: (content) => {
+              // A deferred-tool-handoff continuation can now suppress a replay
+              // of the primary text even when later media delivery fails.
+              outboundReplyGuard?.noteDelivered({
+                channelId: message.channelId,
+                content,
+                sourceTurnId: message.id,
+                senderKind: 'discord_inbound_reply',
+              });
+            },
+          });
+          completed = true;
         } catch (err) {
+          if (err instanceof DiscordReplyDeliveryError) {
+            failureStage = err.stage;
+          }
           const errorText = toErrorMessage(err);
           log.error('Error handling message', {
             channelId: message.channelId,
             messageId: message.id,
             error: errorText,
+            stage: failureStage,
           });
           safeguardAuditTrail.append('discord.message.error', {
             channelId: message.channelId,
             messageId: message.id,
             error: errorText,
+            stage: failureStage,
           });
+          if (checkpoint) {
+            failedDiscordDeliveries.recordFailure(checkpoint, Date.now());
+          }
+          const failureNotice = failureStage === 'handle_message'
+            ? DISCORD_TURN_FAILURE_NOTICE
+            : DISCORD_DELIVERY_FAILURE_NOTICE;
+          try {
+            await gateway.discordSend(message.channelId, failureNotice);
+            safeguardAuditTrail.append('discord.message.failure_notice', {
+              channelId: message.channelId,
+              messageId: message.id,
+              stage: failureStage,
+              delivered: true,
+            });
+          } catch (noticeError) {
+            const noticeErrorText = toErrorMessage(noticeError);
+            log.error('Failed to deliver system-derived discord failure notice', {
+              channelId: message.channelId,
+              messageId: message.id,
+              error: noticeErrorText,
+            });
+            safeguardAuditTrail.append('discord.message.failure_notice', {
+              channelId: message.channelId,
+              messageId: message.id,
+              stage: failureStage,
+              delivered: false,
+              error: noticeErrorText,
+            });
+          }
         } finally {
-          const completedAt = Date.now();
-          for (const entry of entries) {
-            if (entry.dedupeKey) {
-              inFlightDiscordMessages.delete(entry.dedupeKey);
-              recentDiscordMessages.set(entry.dedupeKey, completedAt);
+          const finishedAt = Date.now();
+          for (const key of dedupeKeys) {
+            inFlightDiscordMessages.delete(key);
+            if (completed) {
+              failedDiscordDeliveries.delete(key);
+              recentDiscordMessages.set(key, finishedAt);
             }
           }
         }
@@ -387,6 +454,7 @@ export function registerGatewayMessageHandlers(deps: GatewayMessageHandlersDeps)
     const dedupeKey = buildMessageDedupKey('discord', message);
     const now = Date.now();
     pruneDuplicateCaches(now);
+    const retryDelivery = dedupeKey ? failedDiscordDeliveries.find(dedupeKey) : undefined;
     if (dedupeKey) {
       const seenAt = recentDiscordMessages.get(dedupeKey);
       if (seenAt && now - seenAt < DUPLICATE_MESSAGE_WINDOW_MS) {
@@ -403,7 +471,8 @@ export function registerGatewayMessageHandlers(deps: GatewayMessageHandlersDeps)
         });
         return;
       }
-      if (inFlightDiscordMessages.has(dedupeKey)) {
+      const deliveryKeys = retryDelivery?.dedupeKeys ?? [dedupeKey];
+      if (deliveryKeys.some((key) => inFlightDiscordMessages.has(key))) {
         log.warn('Dropping duplicate discord notification message while first copy is in-flight', {
           channelId: message.channelId,
           messageId: message.id,
@@ -416,7 +485,9 @@ export function registerGatewayMessageHandlers(deps: GatewayMessageHandlersDeps)
         });
         return;
       }
-      inFlightDiscordMessages.add(dedupeKey);
+      for (const key of deliveryKeys) {
+        inFlightDiscordMessages.add(key);
+      }
     }
 
     // Deserialize Date if it came as string
@@ -435,6 +506,7 @@ export function registerGatewayMessageHandlers(deps: GatewayMessageHandlersDeps)
     });
 
     if (isObservationOnly) {
+      let completed = false;
       try {
         trackSessionActivity(message);
         await agentLoop.observeMessage(message);
@@ -485,6 +557,7 @@ export function registerGatewayMessageHandlers(deps: GatewayMessageHandlersDeps)
             });
           }
         }
+        completed = true;
       } catch (err) {
         const errorText = toErrorMessage(err);
         log.error('Error handling message', {
@@ -500,14 +573,16 @@ export function registerGatewayMessageHandlers(deps: GatewayMessageHandlersDeps)
       } finally {
         if (dedupeKey) {
           inFlightDiscordMessages.delete(dedupeKey);
-          recentDiscordMessages.set(dedupeKey, Date.now());
+          if (completed) {
+            recentDiscordMessages.set(dedupeKey, Date.now());
+          }
         }
       }
       return;
     }
 
     trackSessionActivity(message);
-    discordPromptQueue.push({ message, dedupeKey });
+    discordPromptQueue.push({ message, dedupeKey, ...(retryDelivery ? { retryDelivery } : {}) });
     // The pump owns reply delivery, error reporting, and dedupe bookkeeping
     // for everything queued. Notification receipt must not await backend turn
     // work such as memory retrieval or model generation.
@@ -537,6 +612,8 @@ export function registerGatewayMessageHandlers(deps: GatewayMessageHandlersDeps)
       while (companionPromptQueue.length > 0) {
         const message = companionPromptQueue.shift()!;
         const dedupeKey = buildMessageDedupKey('companion', message);
+        let completed = false;
+        let failureReason: CompanionDeliveryFailureReason = 'processing_failed';
         try {
           const response = await promptWhenIdle(message);
           if (response.attachments?.length) {
@@ -548,8 +625,10 @@ export function registerGatewayMessageHandlers(deps: GatewayMessageHandlersDeps)
             });
           }
           if (response.content.trim()) {
+            failureReason = 'reply_delivery_failed';
             await gateway.companionSend(message.channelId, response.content, companionAuthorName);
           }
+          completed = true;
         } catch (err) {
           const errorText = toErrorMessage(err);
           log.error('Error handling companion message', {
@@ -561,11 +640,39 @@ export function registerGatewayMessageHandlers(deps: GatewayMessageHandlersDeps)
             channelId: message.channelId,
             messageId: message.id,
             error: errorText,
+            reason: failureReason,
           });
+          try {
+            await gateway.companionReportFailure({
+              channelId: message.channelId,
+              messageId: message.id,
+              reason: failureReason,
+            });
+            safeguardAuditTrail.append('companion.message.failure_reported', {
+              channelId: message.channelId,
+              messageId: message.id,
+              reason: failureReason,
+            });
+          } catch (reportError) {
+            const reportErrorText = toErrorMessage(reportError);
+            log.error('Failed to report companion message delivery failure', {
+              channelId: message.channelId,
+              messageId: message.id,
+              error: reportErrorText,
+            });
+            safeguardAuditTrail.append('companion.message.failure_report_error', {
+              channelId: message.channelId,
+              messageId: message.id,
+              reason: failureReason,
+              error: reportErrorText,
+            });
+          }
         } finally {
           if (dedupeKey) {
             inFlightCompanionMessages.delete(dedupeKey);
-            recentCompanionMessages.set(dedupeKey, Date.now());
+            if (completed) {
+              recentCompanionMessages.set(dedupeKey, Date.now());
+            }
           }
         }
       }
@@ -620,5 +727,40 @@ export function registerGatewayMessageHandlers(deps: GatewayMessageHandlersDeps)
         error: toErrorMessage(err),
       });
     });
+  });
+
+  gateway.onCompanionDeliveryFailure(async (notification) => {
+    log.warn('Peer companion could not process or answer a delivered message', notification);
+    safeguardAuditTrail.append('companion.message.delivery_failed', notification);
+    const observation: SubstrateMessage = {
+      id: `companion-delivery-failure:${notification.messageId}:${notification.reportingCompanionId}`,
+      channelId: notification.channelId,
+      channelType: 'companion',
+      authorId: 'system:companion-delivery',
+      authorName: 'Companion Delivery',
+      content: `Message ${notification.messageId} could not be completed by companion `
+        + `${notification.reportingCompanionId} (${notification.reason}).`,
+      timestamp: new Date(notification.reportedAt),
+      routing: {
+        source: 'companion',
+        responseMode: 'observe',
+      },
+    };
+    try {
+      trackSessionActivity(observation);
+      await agentLoop.observeMessage(observation);
+    } catch (err) {
+      const errorText = toErrorMessage(err);
+      log.error('Failed to record companion delivery failure observation', {
+        channelId: notification.channelId,
+        messageId: notification.messageId,
+        error: errorText,
+      });
+      safeguardAuditTrail.append('companion.message.delivery_failure_observation_error', {
+        channelId: notification.channelId,
+        messageId: notification.messageId,
+        error: errorText,
+      });
+    }
   });
 }

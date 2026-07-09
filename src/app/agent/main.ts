@@ -146,6 +146,12 @@ async function main(): Promise<void> {
   log.info(`Connecting to gateway at ${formatGatewayRpcEndpoint(gatewayRpcEndpoint)}...`);
   const gateway = await GatewayClient.connectEndpoint(gatewayRpcEndpoint, embeddingDims, {
     ...(config.companionId ? { companionId: config.companionId } : {}),
+    ...(config.gatewayCompanionAuthToken
+      ? { companionAuthToken: config.gatewayCompanionAuthToken }
+      : {}),
+    ...(config.gatewaySessionIntegrityAuthToken
+      ? { sessionIntegrityAuthToken: config.gatewaySessionIntegrityAuthToken }
+      : {}),
   });
   // Self-report companion identity before any other traffic. Multi-companion
   // gateways reject unidentified agents fail-closed; a failure here is fatal.

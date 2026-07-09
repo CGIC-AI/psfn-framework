@@ -15,6 +15,8 @@ export type GatewayChannelSurface = (typeof GATEWAY_CHANNEL_SURFACES)[number];
 
 export interface GatewayMultiCompanionConfig {
   enabled: boolean;
+  /** companions.json-owned identities accepted at the RPC authentication boundary. */
+  fleetCompanionIds: readonly string[];
   /** channels.json-owned surface→companionId routing table. */
   channelRouting: Partial<Record<GatewayChannelSurface, string>>;
   /**
@@ -26,7 +28,7 @@ export interface GatewayMultiCompanionConfig {
 }
 
 export function disabledGatewayMultiCompanionConfig(): GatewayMultiCompanionConfig {
-  return { enabled: false, channelRouting: {}, discordAccounts: {} };
+  return { enabled: false, fleetCompanionIds: [], channelRouting: {}, discordAccounts: {} };
 }
 
 /**
@@ -59,10 +61,15 @@ export function resolveGatewaySurfaceForChannelType(
  * surface→companion routing table from channels.json on top of that flag.
  */
 export function resolveGatewayMultiCompanionConfig(
-  config: Pick<SubstrateConfig, 'multiCompanion'>,
+  config: Pick<SubstrateConfig, 'multiCompanion' | 'companionFleet'>,
   channelsConfig: RuntimeChannelsConfig,
 ): GatewayMultiCompanionConfig {
   const enabled = config.multiCompanion === true;
+  const fleetCompanionIds = config.companionFleet?.companions.map(entry => entry.companionId) ?? [];
+  if (enabled && fleetCompanionIds.length === 0) {
+    throw new Error('Multi-companion gateway routing requires a non-empty resolved companions.json fleet');
+  }
+  const fleetIds = new Set(fleetCompanionIds);
 
   const channelRouting: Partial<Record<GatewayChannelSurface, string>> = {
     ...(channelsConfig.discord.companionId ? { discord: channelsConfig.discord.companionId } : {}),
@@ -92,5 +99,24 @@ export function resolveGatewayMultiCompanionConfig(
     );
   }
 
-  return { enabled, channelRouting, discordAccounts };
+  if (enabled) {
+    for (const [surface, companionId] of Object.entries(channelRouting)) {
+      if (!fleetIds.has(companionId)) {
+        throw new Error(
+          `channels.json routes ${surface} to companionId ${JSON.stringify(companionId)}, `
+          + 'which is absent from companions.json',
+        );
+      }
+    }
+    for (const [accountId, companionId] of Object.entries(discordAccounts)) {
+      if (!fleetIds.has(companionId)) {
+        throw new Error(
+          `channels.json routes discord account ${JSON.stringify(accountId)} to companionId `
+          + `${JSON.stringify(companionId)}, which is absent from companions.json`,
+        );
+      }
+    }
+  }
+
+  return { enabled, fleetCompanionIds, channelRouting, discordAccounts };
 }

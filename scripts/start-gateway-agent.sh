@@ -184,6 +184,8 @@ build_agent_env() {
     EMBEDDING_DIMS \
     EXTRACTION_DRAIN_TIMEOUT_MS \
     GATEWAY_SOCKET \
+    GATEWAY_COMPANION_AUTH_TOKEN \
+    GATEWAY_SESSION_INTEGRITY_AUTH_TOKEN \
     HOME \
     LANG \
     LC_ALL \
@@ -232,18 +234,59 @@ build_agent_env() {
   done
 }
 
-# Operator processes reuse the agent's non-secret allowlist plus the admin auth
-# variables the Garden surface itself owns (ADMIN_TOKEN is the operator's own
-# login secret, never an upstream provider credential). Like the agent spawn,
-# env -i re-scrubs the child environment; the operator's dotenv loader fills in
-# any remaining .env values without overriding these explicit exports.
+# Operator processes receive only Garden auth, runtime layout, owner-file, and
+# admin-transport wiring. They never inherit provider, channel, database,
+# companion-auth, shell, or gateway signing credentials.
 build_operator_env() {
-  build_agent_env
-  OPERATOR_ENV=("${AGENT_ENV[@]}")
+  OPERATOR_ENV=()
   local name
   for name in \
     ADMIN_ALLOW_INSECURE \
-    ADMIN_TOKEN; do
+    ADMIN_HOST \
+    ADMIN_PORT \
+    ADMIN_TOKEN \
+    ADMIN_TRANSPORT_LISTEN_HOST \
+    ADMIN_TRANSPORT_LISTEN_PORT \
+    ADMIN_TRANSPORT_MODE \
+    ADMIN_TRANSPORT_PEER_AUTH_MODE \
+    ADMIN_TRANSPORT_SOCKET \
+    ADMIN_TRANSPORT_TIMEOUT_MS \
+    ADMIN_TRANSPORT_TLS_CA_PATH \
+    ADMIN_TRANSPORT_TLS_CERT_PATH \
+    ADMIN_TRANSPORT_TLS_EXPECTED_PEER_SPIFFE_URI \
+    ADMIN_TRANSPORT_TLS_KEY_PATH \
+    ADMIN_TRANSPORT_URL \
+    BACKUP_ROOT_DIR \
+    CHARACTER_CARD_PATH \
+    COMPANION_DATA_DIR \
+    COMPANION_ID \
+    COMPANION_PG_SCHEMA \
+    CONFIG_DIR \
+    DATA_DIR \
+    GATEWAY_SOCKET \
+    HOME \
+    LANG \
+    LC_ALL \
+    LC_CTYPE \
+    LOG_LEVEL \
+    LOGNAME \
+    NODE_ENV \
+    NODE_OPTIONS \
+    PATH \
+    PSFN_LOGS_DIR \
+    PSFN_MULTI_COMPANION \
+    PSFN_RUNTIME_LAYOUT_MODE \
+    PSFN_RUNTIME_MODE \
+    PSFN_RUNTIME_ROOT \
+    PSFN_TEMP_DIR \
+    PWD \
+    SYSTEM_DATA_DIR \
+    TERM \
+    TMP \
+    TMPDIR \
+    TZ \
+    USER \
+    WORKSPACE_PATH; do
     append_operator_env "${name}"
   done
 }
@@ -432,13 +475,17 @@ export_companion_env() {
   local companion_data_dir="$2"
   local character_card_path="$3"
   local postgres_schema="$4"
-  local admin_transport_socket="$5"
-  local garden_port="$6"
+  local companion_auth_token="$5"
+  local session_integrity_auth_token="$6"
+  local admin_transport_socket="$7"
+  local garden_port="$8"
 
   export COMPANION_ID="${companion_id}"
   export COMPANION_DATA_DIR="${companion_data_dir}"
   export CHARACTER_CARD_PATH="${character_card_path}"
   export COMPANION_PG_SCHEMA="${postgres_schema}"
+  export GATEWAY_COMPANION_AUTH_TOKEN="${companion_auth_token}"
+  export GATEWAY_SESSION_INTEGRITY_AUTH_TOKEN="${session_integrity_auth_token}"
   export ADMIN_TRANSPORT_SOCKET="${admin_transport_socket}"
   if [ "${garden_port}" != "-" ]; then
     export ADMIN_PORT="${garden_port}"
@@ -469,10 +516,11 @@ start_companion_operator() {
 }
 
 start_operator() {
+  build_operator_env
   if [ -x "./node_modules/.bin/tsx" ]; then
-    launch_background ./node_modules/.bin/tsx src/app/operator/main.ts
+    launch_background env -i "${OPERATOR_ENV[@]}" ./node_modules/.bin/tsx src/app/operator/main.ts
   else
-    launch_background npm run operator
+    launch_background env -i "${OPERATOR_ENV[@]}" npm run operator
   fi
   OPERATOR_PID="${LAUNCHED_PID}"
 }
@@ -522,12 +570,41 @@ resolve_companion_fleet() {
   fi
 }
 
+resolve_single_companion_auth() {
+  if [ "${SUPERVISOR_MODE}" -eq 1 ]; then
+    return 0
+  fi
+
+  local auth_output=""
+  if [ -x "./node_modules/.bin/tsx" ]; then
+    if ! auth_output="$(./node_modules/.bin/tsx scripts/resolve-single-companion-auth.ts)"; then
+      echo "[${MODE_LABEL}] failed to derive role-bound gateway credentials; refusing to start" >&2
+      exit 1
+    fi
+  else
+    if ! auth_output="$(npm run --silent resolve:single-companion-auth)"; then
+      echo "[${MODE_LABEL}] failed to derive role-bound gateway credentials; refusing to start" >&2
+      exit 1
+    fi
+  fi
+
+  local companion_auth_token=""
+  local session_integrity_auth_token=""
+  IFS=$'\t' read -r companion_auth_token session_integrity_auth_token <<< "${auth_output}"
+  if [ -z "${companion_auth_token}" ] || [ -z "${session_integrity_auth_token}" ]; then
+    echo "[${MODE_LABEL}] gateway credential helper returned an invalid response; refusing to start" >&2
+    exit 1
+  fi
+  export GATEWAY_COMPANION_AUTH_TOKEN="${companion_auth_token}"
+  export GATEWAY_SESSION_INTEGRITY_AUTH_TOKEN="${session_integrity_auth_token}"
+}
+
 print_supervisor_plan() {
-  local record companion_id companion_data_dir character_card_path postgres_schema admin_transport_socket garden_port
+  local record companion_id companion_data_dir character_card_path postgres_schema companion_auth_token session_integrity_auth_token admin_transport_socket garden_port
   echo "[supervisor] dry-run spawn plan (${#COMPANION_PLAN[@]} companion(s)):"
   echo "[supervisor]   gateway: ${SOCKET_PATH}"
   for record in "${COMPANION_PLAN[@]}"; do
-    IFS=$'\t' read -r companion_id companion_data_dir character_card_path postgres_schema admin_transport_socket garden_port <<< "${record}"
+    IFS=$'\t' read -r companion_id companion_data_dir character_card_path postgres_schema companion_auth_token session_integrity_auth_token admin_transport_socket garden_port <<< "${record}"
     echo "[supervisor]   agent: companionId=${companion_id} schema=${postgres_schema} dataDir=${companion_data_dir} card=${character_card_path} adminSocket=${admin_transport_socket}"
     if [ "${garden_port}" != "-" ]; then
       echo "[supervisor]   operator: companionId=${companion_id} gardenPort=${garden_port} adminSocket=${admin_transport_socket}"
@@ -538,14 +615,14 @@ print_supervisor_plan() {
 }
 
 supervise_companion_agents() {
-  local record companion_id companion_data_dir character_card_path postgres_schema admin_transport_socket garden_port
+  local record companion_id companion_data_dir character_card_path postgres_schema companion_auth_token session_integrity_auth_token admin_transport_socket garden_port
   for record in "${COMPANION_PLAN[@]}"; do
-    IFS=$'\t' read -r companion_id companion_data_dir character_card_path postgres_schema admin_transport_socket garden_port <<< "${record}"
+    IFS=$'\t' read -r companion_id companion_data_dir character_card_path postgres_schema companion_auth_token session_integrity_auth_token admin_transport_socket garden_port <<< "${record}"
     echo "[supervisor] starting agent for companion ${companion_id} (schema=${postgres_schema}, dataDir=${companion_data_dir})"
-    start_companion_agent "${companion_id}" "${companion_data_dir}" "${character_card_path}" "${postgres_schema}" "${admin_transport_socket}" "${garden_port}"
+    start_companion_agent "${companion_id}" "${companion_data_dir}" "${character_card_path}" "${postgres_schema}" "${companion_auth_token}" "${session_integrity_auth_token}" "${admin_transport_socket}" "${garden_port}"
     if [ "${garden_port}" != "-" ]; then
       echo "[supervisor] starting operator for companion ${companion_id} (gardenPort=${garden_port}, adminSocket=${admin_transport_socket})"
-      start_companion_operator "${companion_id}" "${companion_data_dir}" "${character_card_path}" "${postgres_schema}" "${admin_transport_socket}" "${garden_port}"
+      start_companion_operator "${companion_id}" "${companion_data_dir}" "${character_card_path}" "${postgres_schema}" "${companion_auth_token}" "${session_integrity_auth_token}" "${admin_transport_socket}" "${garden_port}"
     fi
   done
 
@@ -627,6 +704,7 @@ handle_shutdown_signal() {
 }
 
 resolve_companion_fleet
+resolve_single_companion_auth
 
 if [ "${DRY_RUN_MODE}" -eq 1 ]; then
   if [ "${SUPERVISOR_MODE}" -eq 1 ]; then

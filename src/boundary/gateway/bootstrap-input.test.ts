@@ -157,17 +157,31 @@ describe('resolveGatewayBootstrapInput', () => {
     });
     expect(flagOff.server.multiCompanion).toEqual({
       enabled: false,
+      fleetCompanionIds: [],
       channelRouting: {},
       discordAccounts: {},
     });
 
     const flagOn = resolveGatewayBootstrapInput({
-      config: { ...createConfig(), multiCompanion: true },
+      config: {
+        ...createConfig(),
+        multiCompanion: true,
+        companionFleet: {
+          persistenceRoot: '/runtime',
+          companions: [{
+            companionId: 'comp-a',
+            companionDataDir: '/runtime/comp-a',
+            characterCardPath: '/runtime/comp-a/companion.json',
+            postgresSchema: 'companion_a',
+          }],
+        },
+      },
       env: { ...baseEnv },
       startupHydration: createStartupHydration(),
     });
     expect(flagOn.server.multiCompanion).toEqual({
       enabled: true,
+      fleetCompanionIds: ['comp-a'],
       channelRouting: {},
       discordAccounts: {},
     });

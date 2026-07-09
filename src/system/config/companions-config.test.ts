@@ -1,5 +1,12 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  mkdtempSync,
+  mkdirSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
@@ -8,6 +15,8 @@ import {
   isMultiCompanionEnabled,
   loadCompanionsConfig,
   resolveCompanionFleet,
+  resolveCompanionFleetPaths,
+  resolveCompanionRuntimeIdentity,
   validateCompanionsConfig,
   type CompanionsFleetConfig,
 } from './companions-config.js';
@@ -243,6 +252,79 @@ describe('companions owner-file config', () => {
       writeCompanionsFile(dataDir, { companions: [{ companionId: 'bad' }] });
       expect(() => resolveCompanionFleet({ dataDir, multiCompanion: true }))
         .toThrow(/Invalid companions config/);
+    });
+  });
+
+  describe('resolved fleet paths and runtime identity', () => {
+    it('resolves every manifest path beneath the canonical persistence root', () => {
+      const root = makeDataDir();
+      const resolved = resolveCompanionFleetPaths(VALID_FLEET, root);
+      const canonicalRoot = realpathSync(root);
+
+      expect(resolved.persistenceRoot).toBe(canonicalRoot);
+      expect(resolved.companions[0]).toMatchObject({
+        companionDataDir: join(canonicalRoot, 'companions/flagship'),
+        characterCardPath: join(canonicalRoot, 'companions/flagship/character-card.json'),
+      });
+    });
+
+    it('rejects paths that traverse an existing symlink outside the persistence root', () => {
+      const root = makeDataDir();
+      const outside = makeDataDir();
+      mkdirSync(join(root, 'companions'), { recursive: true });
+      symlinkSync(outside, join(root, 'companions/flagship'));
+
+      expect(() => resolveCompanionFleetPaths(VALID_FLEET, root))
+        .toThrow(/resolves through a symlink outside persistence root/);
+    });
+
+    it('rejects distinct fleet paths that resolve to the same physical data root', () => {
+      const root = makeDataDir();
+      const actual = join(root, 'companions/actual');
+      mkdirSync(actual, { recursive: true });
+      symlinkSync(actual, join(root, 'companions/alias'));
+      const fleet = clone(VALID_FLEET);
+      fleet.companions[0].companionDataDir = 'companions/actual';
+      fleet.companions[0].characterCardPath = 'companions/actual/character-card.json';
+      fleet.companions[1].companionDataDir = 'companions/alias';
+      fleet.companions[1].characterCardPath = 'companions/alias/character-card.json';
+
+      expect(() => resolveCompanionFleetPaths(fleet, root))
+        .toThrow(/must not overlap companionDataDir/);
+    });
+
+    it('binds one runtime to the complete selected fleet tuple', () => {
+      const fleet = resolveCompanionFleetPaths(VALID_FLEET, makeDataDir());
+      const expected = fleet.companions[0];
+
+      expect(resolveCompanionRuntimeIdentity({
+        fleet,
+        companionId: expected.companionId,
+        companionDataDir: expected.companionDataDir,
+        characterCardPath: expected.characterCardPath,
+        postgresSchema: expected.postgresSchema,
+      })).toEqual(expected);
+    });
+
+    it('rejects unknown identities and every mismatched tuple field', () => {
+      const fleet = resolveCompanionFleetPaths(VALID_FLEET, makeDataDir());
+      const expected = fleet.companions[0];
+      const valid = {
+        fleet,
+        companionId: expected.companionId,
+        companionDataDir: expected.companionDataDir,
+        characterCardPath: expected.characterCardPath,
+        postgresSchema: expected.postgresSchema,
+      };
+
+      expect(() => resolveCompanionRuntimeIdentity({ ...valid, companionId: 'missing' }))
+        .toThrow(/is not present in companions\.json/);
+      expect(() => resolveCompanionRuntimeIdentity({ ...valid, companionDataDir: fleet.companions[1].companionDataDir }))
+        .toThrow(/COMPANION_DATA_DIR/);
+      expect(() => resolveCompanionRuntimeIdentity({ ...valid, characterCardPath: fleet.companions[1].characterCardPath }))
+        .toThrow(/CHARACTER_CARD_PATH/);
+      expect(() => resolveCompanionRuntimeIdentity({ ...valid, postgresSchema: fleet.companions[1].postgresSchema }))
+        .toThrow(/COMPANION_PG_SCHEMA/);
     });
   });
 

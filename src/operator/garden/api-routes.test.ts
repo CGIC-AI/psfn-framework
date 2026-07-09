@@ -428,6 +428,8 @@ const testConfig: SubstrateConfig = {
   extractionProvider: 'test',
   discordToken: '',
   discordBotId: '123',
+  gatewayCompanionAuthToken: 'gateway-agent-secret',
+  gatewaySessionIntegrityAuthToken: 'gateway-worker-secret',
   characterCardPath: '',
   dataDir: './data',
   databasePath: '',
@@ -3499,8 +3501,13 @@ describe('AdminServer JSON API routes', () => {
 
     const identityRes = await request(port, 'GET', '/api/admin/identity', undefined, authHeaders);
     expect(identityRes.status).toBe(200);
-    const identityPayload = JSON.parse(identityRes.body) as { card: { data: { name: string } } };
+    const identityPayload = JSON.parse(identityRes.body) as {
+      card: { data: { name: string } };
+      config: Record<string, unknown>;
+    };
     expect(identityPayload.card.data.name).toBe('ApiTestBot');
+    expect(identityPayload.config.gatewayCompanionAuthToken).toBeUndefined();
+    expect(identityPayload.config.gatewaySessionIntegrityAuthToken).toBeUndefined();
 
     const appearancePatchRes = await request(
       port,

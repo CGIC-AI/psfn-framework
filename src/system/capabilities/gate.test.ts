@@ -213,8 +213,8 @@ describe('capability tool gating', () => {
     expect(resolveToolRequiredCapabilities(createTool('contact').tool, { action: 'lookup', contactId: 'contact-1' })).toEqual(['identity.read']);
     expect(resolveToolRequiredCapabilities(createTool('memory').tool, { action: 'timeline' })).toEqual(['identity.read']);
     expect(resolveToolRequiredCapabilities(createTool('contact').tool, { action: 'note', contactId: 'contact-1' })).toEqual(['identity.write.runtime']);
-    expect(resolveToolRequiredCapabilities(createTool('media').tool, { action: 'generate' })).toEqual([]);
-    expect(resolveToolRequiredCapabilities(createTool('media').tool, { action: 'analyze' })).toEqual([]);
+    expect(resolveToolRequiredCapabilities(createTool('generate_image').tool, { action: 'generate' })).toEqual([]);
+    expect(resolveToolRequiredCapabilities(createTool('generate_image').tool, { action: 'analyze' })).toEqual([]);
     expect(resolveToolRequiredCapabilities(createTool('selfie_create').tool, {})).toEqual([]);
     expect(resolveToolRequiredCapabilities(createTool('web').tool, { action: 'search' })).toEqual([]);
     expect(resolveToolRequiredCapabilities(createTool('web_fetch').tool, {})).toEqual([]);
@@ -226,6 +226,36 @@ describe('capability tool gating', () => {
     expect(resolveToolRequiredCapabilities(createTool('skill').tool, { action: 'stats' })).toEqual(['identity.read']);
     expect(resolveToolRequiredCapabilities(createTool('skill').tool, { action: 'skill_view' })).toEqual(['identity.read']);
     expect(resolveToolRequiredCapabilities(createTool('skill').tool, { action: 'update' })).toEqual(['identity.write.runtime']);
+    expect(resolveToolRequiredCapabilities(createTool('journal').tool, { action: 'list' })).toEqual(['identity.read']);
+    expect(resolveToolRequiredCapabilities(createTool('journal').tool, { action: 'read' })).toEqual(['identity.read']);
+    expect(resolveToolRequiredCapabilities(createTool('journal').tool, { action: 'search' })).toEqual(['identity.read']);
+    expect(resolveToolRequiredCapabilities(createTool('journal').tool, { action: 'write' })).toEqual(['memory.write']);
+    expect(resolveToolRequiredCapabilities(createTool('journal').tool, { action: 'append' })).toEqual(['memory.write']);
+  });
+
+  it('fails closed when an executable tool has no capability policy', () => {
+    expect(() => resolveToolRequiredCapabilities(
+      createTool('unclassified_plugin_tool').tool,
+      {},
+    )).toThrow('Tool "unclassified_plugin_tool" has no declared capability policy');
+  });
+
+  it('denies journal writes when a custom tier grants no tokens', async () => {
+    const journal = createTool('journal');
+    const gated = gateToolWithCapabilities(
+      journal.tool,
+      () => accessForTier('custom', []),
+    );
+
+    const denied = await gated.execute('journal-write', {
+      action: 'write',
+      path: 'reflection.md',
+      content: 'durable reflection',
+    });
+
+    expect(journal.executeSpy).not.toHaveBeenCalled();
+    expect((denied.details as any).capabilityDenied).toBe(true);
+    expect((denied.content[0] as any).text).toContain('memory.write');
   });
 
   it('gates unified skill stats as read-oriented and mutations as runtime writes', async () => {
@@ -255,7 +285,7 @@ describe('capability tool gating', () => {
     expect((updateDenied.content[0] as any).text).toContain('identity.write.runtime');
   });
 
-  it('does not grant static capability metadata to retired model-facing split aliases', () => {
+  it('fails closed for retired model-facing split aliases without executable policy', () => {
     const retiredMetadataAliases = [
       ...MODEL_FACING_DRIFT_GUARD_RETIRED_TOOL_ALIASES,
       'promoted_tools_list',
@@ -265,7 +295,10 @@ describe('capability tool gating', () => {
     ];
 
     for (const alias of retiredMetadataAliases) {
-      expect(resolveToolRequiredCapabilities(createTool(alias).tool, {}), alias).toEqual([]);
+      expect(
+        () => resolveToolRequiredCapabilities(createTool(alias).tool, {}),
+        alias,
+      ).toThrow(`Tool "${alias}" has no declared capability policy`);
     }
   });
 
@@ -326,8 +359,8 @@ describe('capability tool gating', () => {
     expect(repoCommit.executeSpy).toHaveBeenCalledTimes(1);
   });
 
-  it('leaves benign media and web tools ungated across tiers', async () => {
-    for (const toolName of ['media', 'selfie_create', 'web', 'web_fetch']) {
+  it('leaves explicitly reviewed image and web tools ungated across tiers', async () => {
+    for (const toolName of ['generate_image', 'selfie_create', 'web', 'web_fetch']) {
       const tool = createTool(toolName);
       const gated = gateToolWithCapabilities(
         tool.tool,

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { Agent } from '../../boundary/pi-agent/index.js';
+import { Agent, type AgentTool } from '../../boundary/pi-agent/index.js';
 import type { CanonicalModelRegistry, LLMContext, LLMResponse, ModelRegistryEntry, ModelSlot, SubstrateMessage } from '../../shared/contracts/runtime.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type { MemoryProvider, MemoryExtractor, LLMProviderPort } from './substrate-agent.js';
@@ -25,6 +25,11 @@ import {
   notePendingPaidDeliverable,
   runWithPaidDeliverableTracking,
 } from '../../shared/paid-deliverable-tracking.js';
+import {
+  hasDeclaredCapabilityPolicyForToolName,
+  NO_CAPABILITY_REQUIREMENT,
+  withCapabilityRequirement,
+} from '../../system/capabilities/requirements.js';
 
 const TEST_COMPANION_NAME = 'Companion';
 const TEST_SYSTEM_PROMPT = `You are ${TEST_COMPANION_NAME}.`;
@@ -506,17 +511,20 @@ function makeScriptedMoaProvider(steps: ScriptedCompletionStep[]): {
   };
 }
 
-function makeExtendedProbeTool(name: string): any {
-  return {
+function makeExtendedProbeTool(name: string): AgentTool<any> {
+  const tool = {
     name,
     label: name,
     description: `${name} test probe`,
     parameters: {} as any,
     execute: vi.fn(async () => ({
-      role: 'tool',
       content: [{ type: 'text', text: 'ok' }],
+      details: {},
     })),
-  };
+  } as AgentTool<any>;
+  return hasDeclaredCapabilityPolicyForToolName(name)
+    ? tool
+    : withCapabilityRequirement(tool, NO_CAPABILITY_REQUIREMENT);
 }
 
 function makeActiveMemorySnapshot(overrides: Record<string, unknown> = {}): any {
@@ -3998,16 +4006,7 @@ describe('SubstrateAgent.handleMessage', () => {
       'Base prompt',
       config,
     );
-    const extendedProbeTool = {
-      name: 'extended_probe_tool',
-      label: 'extended_probe_tool',
-      description: 'test-only probe tool',
-      parameters: {} as any,
-      execute: vi.fn(async () => ({
-        role: 'tool',
-        content: [{ type: 'text', text: 'ok' }],
-      })),
-    } as any;
+    const extendedProbeTool = makeExtendedProbeTool('extended_probe_tool');
     agent.registerTool(extendedProbeTool, 'extended');
 
     const toolset = agent.getToolCatalog().core.find((tool) => tool.name === 'toolset');
@@ -4036,16 +4035,7 @@ describe('SubstrateAgent.handleMessage', () => {
       'Base prompt',
       config,
     );
-    const extendedProbeTool = {
-      name: 'extended_probe_tool',
-      label: 'extended_probe_tool',
-      description: 'test-only probe tool',
-      parameters: {} as any,
-      execute: vi.fn(async () => ({
-        role: 'tool',
-        content: [{ type: 'text', text: 'ok' }],
-      })),
-    } as any;
+    const extendedProbeTool = makeExtendedProbeTool('extended_probe_tool');
     agent.registerTool(extendedProbeTool, 'extended');
 
     const toolset = agent.getToolCatalog().core.find((tool) => tool.name === 'toolset');
@@ -4147,16 +4137,7 @@ describe('SubstrateAgent.handleMessage', () => {
       'Base prompt',
       config,
     );
-    const extendedProbeTool = {
-      name: 'extended_probe_tool',
-      label: 'extended_probe_tool',
-      description: 'test-only probe tool',
-      parameters: {} as any,
-      execute: vi.fn(async () => ({
-        role: 'tool',
-        content: [{ type: 'text', text: 'ok' }],
-      })),
-    } as any;
+    const extendedProbeTool = makeExtendedProbeTool('extended_probe_tool');
     agent.registerTool(extendedProbeTool, 'extended');
 
     const setToolsSpy = spyOnAgentStateSet<Array<{ name: string }>>((agent as any).agent, 'tools');
@@ -4366,16 +4347,7 @@ describe('SubstrateAgent.handleMessage', () => {
       'Base prompt',
       config,
     );
-    const extendedProbeTool = {
-      name: 'extended_probe_tool',
-      label: 'extended_probe_tool',
-      description: 'test-only probe tool',
-      parameters: {} as any,
-      execute: vi.fn(async () => ({
-        role: 'tool',
-        content: [{ type: 'text', text: 'ok' }],
-      })),
-    } as any;
+    const extendedProbeTool = makeExtendedProbeTool('extended_probe_tool');
     agent.registerTool(extendedProbeTool, 'extended');
 
     const toolset = agent.getToolCatalog().core.find((tool) => tool.name === 'toolset');
@@ -4407,13 +4379,7 @@ describe('SubstrateAgent.handleMessage', () => {
     );
 
     for (const name of ['tool_one', 'tool_two', 'tool_three', 'tool_four', 'tool_five']) {
-      agent.registerTool({
-        name,
-        label: name,
-        description: `${name} test tool`,
-        parameters: {} as any,
-        execute: vi.fn(async () => ({ content: [{ type: 'text', text: 'ok' }], details: {} })),
-      } as any, 'extended');
+      agent.registerTool(makeExtendedProbeTool(name), 'extended');
     }
 
     expect(agent.addPromotedExtendedTool('tool_one').ok).toBe(true);
@@ -4465,13 +4431,7 @@ describe('SubstrateAgent.handleMessage', () => {
     expect(denied.errorCode).toBe('capability_denied');
     expect(denied.missingTokens).toContain('git.write');
 
-    const backgroundTool = {
-      name: 'schedule_task',
-      label: 'schedule_task',
-      description: 'background scheduler tool',
-      parameters: {} as any,
-      execute: vi.fn(async () => ({ content: [{ type: 'text', text: 'ok' }], details: {} })),
-    } as any;
+    const backgroundTool = makeExtendedProbeTool('schedule_task');
     agent.registerTool(backgroundTool, 'extended');
 
     // schedule_task stopped being background-only with the scheduler
@@ -4496,13 +4456,7 @@ describe('SubstrateAgent.handleMessage', () => {
       config,
     );
 
-    agent.registerTool({
-      name: 'tool_one',
-      label: 'tool_one',
-      description: 'tool one',
-      parameters: {} as any,
-      execute: vi.fn(async () => ({ content: [{ type: 'text', text: 'ok' }], details: {} })),
-    } as any, 'extended');
+    agent.registerTool(makeExtendedProbeTool('tool_one'), 'extended');
 
     const result = agent.addPromotedExtendedTool('tool_one');
     expect(result.ok).toBe(false);

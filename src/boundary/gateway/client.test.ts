@@ -354,6 +354,35 @@ describe('GatewayClient streaming', () => {
   });
 });
 
+describe('GatewayClient authenticated identification', () => {
+  it('sends the companion-bound agent proof and keeps the worker proof off the agent frame', async () => {
+    const conn = createMockConnection();
+    const client = new GatewayClient(conn.conn, 1024, {
+      companionId: 'comp-a',
+      companionAuthToken: 'v1.agent-proof',
+      sessionIntegrityAuthToken: 'v1.worker-proof',
+    });
+
+    const identified = client.identifyAsAgent();
+    const request = conn.sent[0] as {
+      id: number;
+      method: string;
+      params: Record<string, unknown>;
+    };
+    expect(request).toMatchObject({
+      method: 'gateway.client.identify',
+      params: {
+        role: 'agent',
+        companionId: 'comp-a',
+        authToken: 'v1.agent-proof',
+      },
+    });
+    expect(JSON.stringify(request)).not.toContain('worker-proof');
+    conn._emit({ jsonrpc: '2.0', id: request.id, result: { success: true } });
+    await expect(identified).resolves.toBeUndefined();
+  });
+});
+
 describe('GatewayClient reverse RPC (onHandleMessage)', () => {
   let conn: ReturnType<typeof createMockConnection>;
   let client: GatewayClient;
@@ -668,6 +697,48 @@ describe('GatewayClient reverse RPC (onHandleMessage)', () => {
 
     expect(messages).toHaveLength(1);
     expect((messages[0] as any).content).toBe('test notification');
+  });
+
+  it('routes companion delivery failure notifications to their observe-only handler', () => {
+    const failures: unknown[] = [];
+    client.onCompanionDeliveryFailure((failure) => failures.push(failure));
+
+    conn._emit({
+      method: 'companion.message.delivery_failure',
+      params: {
+        channelId: 'companion-dm:comp-a:comp-b',
+        messageId: 'companion-1',
+        reportingCompanionId: 'comp-b',
+        reason: 'processing_failed',
+        reportedAt: '2026-07-09T18:00:00.000Z',
+      },
+    });
+
+    expect(failures).toEqual([expect.objectContaining({
+      messageId: 'companion-1',
+      reportingCompanionId: 'comp-b',
+      reason: 'processing_failed',
+    })]);
+  });
+
+  it('sends structured companion failure reports through the gateway RPC', async () => {
+    const reportPromise = client.companionReportFailure({
+      channelId: 'companion-dm:comp-a:comp-b',
+      messageId: 'companion-1',
+      reason: 'reply_delivery_failed',
+    });
+    const request = conn.sent[0] as { id: number; method: string; params: Record<string, unknown> };
+
+    expect(request).toMatchObject({
+      method: 'companion.message.report_failure',
+      params: {
+        channelId: 'companion-dm:comp-a:comp-b',
+        messageId: 'companion-1',
+        reason: 'reply_delivery_failed',
+      },
+    });
+    conn._emit({ jsonrpc: '2.0', id: request.id, result: { reportedTo: 'comp-a' } });
+    await expect(reportPromise).resolves.toEqual({ reportedTo: 'comp-a' });
   });
 });
 
@@ -1101,6 +1172,25 @@ describe('GatewayClient runtime health RPC wrapper', () => {
         },
       ],
     });
+  });
+
+  it('requests only redacted credential-presence booleans', async () => {
+    const presencePromise = client.getCredentialPresence();
+    const request = conn.sent[0] as { id: number; method: string; params: Record<string, unknown> };
+    expect(request).toMatchObject({ method: 'runtime.credential_presence', params: {} });
+    const result = {
+      discordToken: true,
+      apiKey: false,
+      adminToken: true,
+      openrouterApiKey: true,
+      litellmBaseUrl: true,
+      litellmApiKey: true,
+      importProcessingLocalApiKey: false,
+      falApiKey: false,
+      telegramBotToken: true,
+    };
+    conn._emit({ jsonrpc: '2.0', id: request.id, result });
+    await expect(presencePromise).resolves.toEqual(result);
   });
 });
 

@@ -11,6 +11,7 @@ import {
   resolveGatewaySurfaceForChannelType,
 } from './multi-companion.js';
 import type { RuntimeChannelsConfig } from '../../channels/backplane/config.js';
+import { deriveCompanionAuthToken } from './companion-auth.js';
 
 // Mock the transport module to avoid real socket operations
 vi.mock('./transport.js', () => ({
@@ -189,6 +190,23 @@ async function identifyAgent(
   return await invokeRpc(conn, rpcId, 'gateway.client.identify', {
     role: 'agent',
     companionId,
+    authToken: deriveCompanionAuthToken(companionId, 'agent', TEST_SESSION_HMAC_KEYRING),
+  });
+}
+
+async function identifySessionIntegrityWorker(
+  conn: MockConnection,
+  companionId: string,
+  rpcId = 950,
+): Promise<any> {
+  return await invokeRpc(conn, rpcId, 'gateway.client.identify', {
+    role: 'internal_session_integrity',
+    companionId,
+    authToken: deriveCompanionAuthToken(
+      companionId,
+      'internal_session_integrity',
+      TEST_SESSION_HMAC_KEYRING,
+    ),
   });
 }
 
@@ -196,7 +214,24 @@ function multiCompanion(
   channelRouting: GatewayMultiCompanionConfig['channelRouting'],
   discordAccounts: GatewayMultiCompanionConfig['discordAccounts'] = {},
 ): GatewayMultiCompanionConfig {
-  return { enabled: true, channelRouting, discordAccounts };
+  return {
+    enabled: true,
+    fleetCompanionIds: ['comp-a', 'comp-b', 'comp-c'],
+    channelRouting,
+    discordAccounts,
+  };
+}
+
+function resolvedFleet(companionIds: readonly string[]) {
+  return {
+    persistenceRoot: '/runtime',
+    companions: companionIds.map((companionId, index) => ({
+      companionId,
+      companionDataDir: `/runtime/companions/${index}`,
+      characterCardPath: `/runtime/companions/${index}/companion.json`,
+      postgresSchema: `companion_${index}`,
+    })),
+  };
 }
 
 function methodFrames(conn: MockConnection, method: string): any[] {
@@ -273,6 +308,7 @@ describe('resolveGatewayMultiCompanionConfig', () => {
   it('defaults to disabled with no routing', () => {
     expect(resolveGatewayMultiCompanionConfig({}, baseChannels())).toEqual({
       enabled: false,
+      fleetCompanionIds: [],
       channelRouting: {},
       discordAccounts: {},
     });
@@ -283,8 +319,12 @@ describe('resolveGatewayMultiCompanionConfig', () => {
     channels.discord.companionId = 'comp-a';
     channels.telegram.companionId = 'comp-b';
     channels.api.companionId = 'comp-b';
-    expect(resolveGatewayMultiCompanionConfig({ multiCompanion: true }, channels)).toEqual({
+    expect(resolveGatewayMultiCompanionConfig({
+      multiCompanion: true,
+      companionFleet: resolvedFleet(['comp-a', 'comp-b']),
+    }, channels)).toEqual({
       enabled: true,
+      fleetCompanionIds: ['comp-a', 'comp-b'],
       channelRouting: { discord: 'comp-a', telegram: 'comp-b', api: 'comp-b' },
       discordAccounts: {},
     });
@@ -312,8 +352,12 @@ describe('resolveGatewayMultiCompanionConfig', () => {
         groupMemory: { channelOverrides: {} } as any,
       },
     ];
-    expect(resolveGatewayMultiCompanionConfig({ multiCompanion: true }, channels)).toEqual({
+    expect(resolveGatewayMultiCompanionConfig({
+      multiCompanion: true,
+      companionFleet: resolvedFleet(['comp-a', 'comp-b']),
+    }, channels)).toEqual({
       enabled: true,
+      fleetCompanionIds: ['comp-a', 'comp-b'],
       channelRouting: {},
       discordAccounts: { 'acct-a': 'comp-a', 'acct-b': 'comp-b' },
     });
@@ -341,6 +385,20 @@ describe('resolveGatewayMultiCompanionConfig', () => {
     expect(() => resolveGatewayMultiCompanionConfig({}, channels)).toThrow(
       /discord\.accounts \[acct-a\] but PSFN_MULTI_COMPANION is not enabled/,
     );
+  });
+
+  it('fails closed when enabled without a resolved fleet', () => {
+    expect(() => resolveGatewayMultiCompanionConfig({ multiCompanion: true }, baseChannels()))
+      .toThrow(/non-empty resolved companions\.json fleet/);
+  });
+
+  it('fails closed when channel routing names a companion outside the fleet', () => {
+    const channels = baseChannels();
+    channels.api.companionId = 'comp-b';
+    expect(() => resolveGatewayMultiCompanionConfig({
+      multiCompanion: true,
+      companionFleet: resolvedFleet(['comp-a']),
+    }, channels)).toThrow(/absent from companions\.json/);
   });
 
   it('maps channel types onto routable surfaces fail-closed', () => {
@@ -437,6 +495,131 @@ describe('GatewayServer multi-companion identify (flag on)', () => {
     expect(response.error.message).toContain('requires a companionId');
   });
 
+  it('rejects a companionId outside the active fleet', async () => {
+    const { connect } = await setupServer({
+      ...createMinimalOptions(),
+      multiCompanion: multiCompanion({}),
+    });
+    const conn = await connect();
+
+    const response = await identifyAgent(conn, 'comp-unknown', 2);
+    expect(response.error).toMatchObject({ code: GatewayErrors.COMPANION_AUTH_FAILED });
+    expect(response.error.message).toContain('active fleet');
+  });
+
+  it('rejects missing or invalid companion authentication', async () => {
+    const { connect } = await setupServer({
+      ...createMinimalOptions(),
+      multiCompanion: multiCompanion({}),
+    });
+    const missing = await connect();
+    const invalid = await connect();
+
+    const missingResponse = await invokeRpc(missing, 3, 'gateway.client.identify', {
+      role: 'agent',
+      companionId: 'comp-a',
+    });
+    const invalidResponse = await invokeRpc(invalid, 4, 'gateway.client.identify', {
+      role: 'agent',
+      companionId: 'comp-a',
+      authToken: 'v1.not-a-valid-token',
+    });
+
+    expect(missingResponse.error).toMatchObject({ code: GatewayErrors.COMPANION_AUTH_FAILED });
+    expect(invalidResponse.error).toMatchObject({ code: GatewayErrors.COMPANION_AUTH_FAILED });
+  });
+
+  it('binds authentication tokens to the requested connection role', async () => {
+    const { connect } = await setupServer({
+      ...createMinimalOptions(),
+      multiCompanion: multiCompanion({}),
+    });
+    const workerAsAgent = await connect();
+    const agentAsWorker = await connect();
+
+    const workerEscalation = await invokeRpc(workerAsAgent, 6, 'gateway.client.identify', {
+      role: 'agent',
+      companionId: 'comp-a',
+      authToken: deriveCompanionAuthToken(
+        'comp-a',
+        'internal_session_integrity',
+        TEST_SESSION_HMAC_KEYRING,
+      ),
+    });
+    const agentEscalation = await invokeRpc(agentAsWorker, 7, 'gateway.client.identify', {
+      role: 'internal_session_integrity',
+      companionId: 'comp-a',
+      authToken: deriveCompanionAuthToken('comp-a', 'agent', TEST_SESSION_HMAC_KEYRING),
+    });
+
+    expect(workerEscalation.error).toMatchObject({ code: GatewayErrors.COMPANION_AUTH_FAILED });
+    expect(agentEscalation.error).toMatchObject({ code: GatewayErrors.COMPANION_AUTH_FAILED });
+  });
+
+  it('restricts agent and session-integrity roles to disjoint method surfaces', async () => {
+    const { connect } = await setupServer({
+      ...createMinimalOptions(),
+      multiCompanion: multiCompanion({}),
+    });
+    const agent = await connect();
+    const worker = await connect();
+    await identifyAgent(agent, 'comp-a', 8);
+    await identifySessionIntegrityWorker(worker, 'comp-a', 9);
+
+    const entry = {
+      type: 'message',
+      id: 1,
+      channelId: 'api:test',
+      role: 'user',
+      content: 'hello',
+      timestamp: 1_000,
+    };
+    const agentSigning = await invokeRpc(agent, 10, 'session.hmac.sign', {
+      entry,
+      previousHmac: null,
+    });
+    const workerProvider = await invokeRpc(worker, 11, 'llm.embed', { texts: ['x'] });
+    const workerCompanionSend = await invokeRpc(worker, 12, 'companion.message.send', {
+      channelId: 'companion-room:test',
+      content: 'should not route',
+    });
+    const workerSigning = await invokeRpc(worker, 13, 'session.hmac.sign', {
+      entry,
+      previousHmac: null,
+    });
+
+    expect(agentSigning.error).toMatchObject({ code: GatewayErrors.CONNECTION_ROLE_DENIED });
+    expect(workerProvider.error).toMatchObject({ code: GatewayErrors.CONNECTION_ROLE_DENIED });
+    expect(workerCompanionSend.error).toMatchObject({ code: GatewayErrors.CONNECTION_ROLE_DENIED });
+    expect(workerSigning.result.entry._hmac).toMatch(/^[a-f0-9]{64}$/u);
+  });
+
+  it('returns only the configured redacted credential-presence snapshot to an agent', async () => {
+    const credentialPresence = {
+      discordToken: true,
+      apiKey: false,
+      adminToken: true,
+      openrouterApiKey: false,
+      litellmBaseUrl: true,
+      litellmApiKey: true,
+      importProcessingLocalApiKey: false,
+      falApiKey: true,
+      telegramBotToken: false,
+    };
+    const { connect } = await setupServer({
+      ...createMinimalOptions(),
+      multiCompanion: multiCompanion({}),
+      credentialPresence,
+    });
+    const agent = await connect();
+    await identifyAgent(agent, 'comp-a', 14);
+
+    const response = await invokeRpc(agent, 15, 'runtime.credential_presence', {});
+
+    expect(response.result).toEqual(credentialPresence);
+    expect(Object.values(response.result).every(value => typeof value === 'boolean')).toBe(true);
+  });
+
   it('rejects a duplicate companionId identify without evicting the first connection', async () => {
     const auditAppend = vi.fn(async () => 7);
     const { server, connect } = await setupServer({
@@ -476,7 +659,7 @@ describe('GatewayServer multi-companion identify (flag on)', () => {
     await identifyAgent(conn, 'comp-a', 1);
     const rebind = await identifyAgent(conn, 'comp-b', 2);
     expect(rebind.error).toBeDefined();
-    expect(rebind.error.message).toContain('cannot rebind');
+    expect(rebind.error.message).toContain('cannot change role or companion identity');
   });
 
   it('rejects non-identify RPCs from agent connections that have not identified', async () => {

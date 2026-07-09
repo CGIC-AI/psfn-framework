@@ -58,6 +58,7 @@ import { createPostgresObserverEvalSidecarStore } from '../../core/eval/observer
 import { createOwnerFileConfigStore } from '../../system/config/config-store.js';
 import {
   createDefaultObserverEvalSidecarSettings,
+  sanitizeCoreSubstrateConfig,
   type SubstrateConfig,
 } from '../../system/config/runtime-config-contracts.js';
 import type {
@@ -109,6 +110,7 @@ import { AdminSettingsDataService } from './services/settings-service.js';
 import { AdminShardFoldReviewDataService } from './services/shard-fold-review-service.js';
 import { AdminWikiDataService } from './services/wiki-service.js';
 import type { AdminToolHealthProvider } from './tool-health-provider.js';
+import type { GatewayCredentialPresenceResult } from '../../boundary/gateway/protocol.js';
 
 export interface InProcessGardenAdminContractOptions {
   apiBaseUrl?: string;
@@ -133,6 +135,7 @@ export interface InProcessGardenAdminContractOptions {
   confirmationQueueApi?: ConfirmationQueueAdminApi | null;
   adaptiveToolsStateProvider?: AdaptiveToolsStateProvider | null;
   toolHealthProvider?: AdminToolHealthProvider | null;
+  getCredentialPresence?: () => Promise<GatewayCredentialPresenceResult>;
   toolConformanceRunner?: ToolConformanceRunner | null;
   postTurnActions?: PostTurnActionRuntime | null;
   outreachOutbox?: OutreachOutboxStore | null;
@@ -157,6 +160,7 @@ export interface InProcessGardenAdminContractOptions {
 export function createInProcessGardenAdminContract(
   options: InProcessGardenAdminContractOptions,
 ): GardenAdminDomainServices {
+  const publicConfig = sanitizeCoreSubstrateConfig(options.config) as SubstrateConfig;
   const promptState = options.promptState ?? createPromptStatePort({});
   const configStore = createOwnerFileConfigStore({
     dataDir: options.config.dataDir,
@@ -364,10 +368,11 @@ export function createInProcessGardenAdminContract(
     settings: new AdminSettingsDataService({
       config: options.config,
       configStore,
+      ...(options.getCredentialPresence ? { getCredentialPresence: options.getCredentialPresence } : {}),
     }),
     identity: new AdminIdentityDataService({
       characterCard: options.characterCard,
-      config: options.config,
+      config: publicConfig,
       cardVersionStore: options.cardVersionStore,
       promptStore: promptState.layers,
     }),

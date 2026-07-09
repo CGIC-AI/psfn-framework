@@ -2,6 +2,10 @@ import { describe, expect, it, vi } from 'vitest';
 import type { AgentTool } from '../../../boundary/pi-agent/index.js';
 import { ToolRuntimeFacade } from './tool-runtime-facade.js';
 import { createWorkerExecutionPolicy, SUBAGENT_WORKER_LANE } from '../worker-lanes.js';
+import {
+  NO_CAPABILITY_REQUIREMENT,
+  withCapabilityRequirement,
+} from '../../../system/capabilities/requirements.js';
 
 function makeTool(name: string, execute = vi.fn(async () => ({
   content: [{ type: 'text', text: `${name} ok` }],
@@ -70,6 +74,26 @@ function createFacade(taskKind: string | null = null) {
 }
 
 describe('ToolRuntimeFacade maintenance core tool policy', () => {
+  it('fails startup validation for an unclassified executable tool', () => {
+    const { facade } = createFacade(null);
+    facade.registerTool(makeTool('unclassified_plugin_tool'), 'extended');
+
+    expect(() => facade.validateToolWiring('gateway')).toThrow(
+      'Tool "unclassified_plugin_tool" has no declared capability policy',
+    );
+  });
+
+  it('accepts an explicitly reviewed no-capability policy', () => {
+    const { facade } = createFacade(null);
+    const tool = withCapabilityRequirement(
+      makeTool('reviewed_unrestricted_tool'),
+      NO_CAPABILITY_REQUIREMENT,
+    );
+    facade.registerTool(tool, 'extended');
+
+    expect(() => facade.validateToolWiring('gateway')).not.toThrow();
+  });
+
   it('rejects high-risk retired first-party aliases at the model-facing registration boundary', () => {
     const { facade } = createFacade(null);
     expect(() => facade.registerTool(makeTool('session_new'), 'core')).toThrow(

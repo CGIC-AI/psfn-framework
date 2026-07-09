@@ -17,7 +17,7 @@ npm run agent:docker:continuous # Continuous/dev profile (isolated internal netw
 ```
 
 - `split` is the standard gateway + agent + operator launcher.
-- `split` loads `.env` for gateway/operator processes and launches the agent with a curated non-secret environment allowlist; provider credentials, API keys, and admin tokens must not be agent-owned.
+- `split` loads `.env` in the launcher/gateway boundary, then starts agents and operators from separate explicit allowlists. Operators do not reload `.env`; provider and channel credential status reaches Garden only as redacted booleans over the admin transport.
 - `yolo` keeps the split runtime but broadens gateway `fs.read` scope across the codebase.
 - `operator` runs only the Garden operator surface when you want it separate from the launcher.
 - `agent:docker` is the production profile (`network_mode: "none"`).
@@ -40,21 +40,21 @@ to start.
 `npm run split` (`scripts/start-gateway-agent.sh`) resolves the fleet and, when
 multi-companion is enabled, enters supervisor mode: it spawns one agent process
 per companion plus one Garden operator process per companion that declares a
-`gardenPort`. The spawn plan is produced by:
+`gardenPort`. Preview the redacted spawn plan with:
 
 ```bash
-npm run resolve:companion-fleet   # tab-delimited plan; empty stdout = single-companion
+scripts/start-gateway-agent.sh --dry-run   # prints the plan; launches nothing
 ```
 
 Each spawned agent gets a scrubbed environment plus `COMPANION_ID`,
 `COMPANION_DATA_DIR`, `CHARACTER_CARD_PATH`, `COMPANION_PG_SCHEMA`,
 `ADMIN_TRANSPORT_SOCKET`, and `ADMIN_PORT` from the plan. The supervisor is
 shared-fate: if any supervised process exits, the whole fleet is torn down.
-Preview without launching:
-
-```bash
-scripts/start-gateway-agent.sh --dry-run   # prints the spawn plan, launches nothing
-```
+Manifest-relative data/card paths are resolved to absolute strict subpaths of
+`PSFN_RUNTIME_ROOT`; symlink escapes and tuple drift fail before startup. The
+launcher also derives separate role-bound gateway proofs for the agent and its
+session-integrity worker in both single- and multi-companion topologies. These
+proofs are not printed by `--dry-run` and are never passed to Garden operators.
 
 Per-companion Gardens use socket admin transport only; network admin-transport
 mode is rejected fail-closed under the supervisor.

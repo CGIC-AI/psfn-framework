@@ -1,9 +1,8 @@
-// ── SSRF-guarded remote fetch for Discord media/attachments (Sprint-10 6ny2) ──
+// ── SSRF-guarded remote fetch for channel media/attachments ──
 //
-// Both the outbound media path (adapter.ts sendMedia) and the inbound document
-// ingest path (file-ingest.ts) previously called bare `fetch(url)` with no URL
-// policy, no resolved-IP check, no timeout, and (outbound) no byte cap. This
-// helper routes both through the gateway URL policy / SSRF guard:
+// Extracted from the Discord-only helper (Sprint-10 6ny2) so every channel
+// adapter (Discord, Telegram, ...) downloads remote attachment bytes through
+// the same gateway URL policy / SSRF guard instead of bare `fetch(url)`:
 //
 // - `evaluateUrlPolicy` in the strict default lane (HTTPS only, private hosts
 //   blocked) unless the caller explicitly relaxes it (tests only),
@@ -20,13 +19,11 @@ import {
   type UrlPolicyConfig,
 } from '../../boundary/gateway/url-policy.js';
 
-export const DISCORD_REMOTE_FETCH_TIMEOUT_MS = 30_000;
-/** Cap for outbound media re-uploads (Discord bot upload ceiling). */
-export const DISCORD_OUTBOUND_MEDIA_MAX_BYTES = 25 * 1024 * 1024;
+export const REMOTE_FETCH_TIMEOUT_MS = 30_000;
 const MAX_REDIRECT_HOPS = 3;
 const REDIRECT_STATUS_CODES = new Set([301, 302, 303, 307, 308]);
 
-export interface DiscordRemoteFetchOptions {
+export interface RemoteFetchOptions {
   /** Hard response-body cap in bytes, enforced during streaming. */
   maxBytes: number;
   timeoutMs?: number;
@@ -36,7 +33,7 @@ export interface DiscordRemoteFetchOptions {
   dnsResolver?: DnsResolver;
 }
 
-export interface DiscordRemoteFetchResult {
+export interface RemoteFetchResult {
   ok: boolean;
   status: number;
   /** Response body; empty when `ok` is false (error bodies are discarded). */
@@ -51,14 +48,14 @@ async function validateRemoteUrl(
 ): Promise<void> {
   const decision = evaluateUrlPolicy(url, policy, 'default');
   if (!decision.allowed) {
-    throw new Error(`Discord remote fetch blocked: ${decision.reason}`);
+    throw new Error(`Remote fetch blocked: ${decision.reason}`);
   }
   const parsed = new URL(url);
   const resolved = await checkResolvedIP(parsed.hostname, dnsResolver, {
     allowPrivateResolvedIp: policy.allowInternalNetwork === true,
   });
   if (!resolved.allowed) {
-    throw new Error(`Discord remote fetch blocked: ${resolved.reason}`);
+    throw new Error(`Remote fetch blocked: ${resolved.reason}`);
   }
 }
 
@@ -81,7 +78,7 @@ async function readBodyWithCap(
       receivedBytes += chunk.byteLength;
       if (receivedBytes > maxBytes) {
         abort.abort();
-        throw new Error(`Discord remote fetch body too large: exceeded ${maxBytes} bytes`);
+        throw new Error(`Remote fetch body too large: exceeded ${maxBytes} bytes`);
       }
       chunks.push(chunk);
     }
@@ -99,14 +96,14 @@ async function readBodyWithCap(
  * Non-2xx terminal responses return `{ ok: false, status }` with an empty
  * body so callers keep their own status-specific error messages.
  */
-export async function fetchDiscordRemoteResource(
+export async function fetchRemoteResource(
   url: string,
-  options: DiscordRemoteFetchOptions,
-): Promise<DiscordRemoteFetchResult> {
+  options: RemoteFetchOptions,
+): Promise<RemoteFetchResult> {
   if (!Number.isFinite(options.maxBytes) || options.maxBytes < 1) {
-    throw new Error('Discord remote fetch requires a positive maxBytes cap');
+    throw new Error('Remote fetch requires a positive maxBytes cap');
   }
-  const timeoutMs = options.timeoutMs ?? DISCORD_REMOTE_FETCH_TIMEOUT_MS;
+  const timeoutMs = options.timeoutMs ?? REMOTE_FETCH_TIMEOUT_MS;
   const policy = options.urlPolicy ?? {};
 
   const abort = new AbortController();
@@ -130,13 +127,13 @@ export async function fetchDiscordRemoteResource(
       if (REDIRECT_STATUS_CODES.has(response.status) && location) {
         await response.body?.cancel();
         if (hop >= MAX_REDIRECT_HOPS) {
-          throw new Error(`Discord remote fetch exceeded ${MAX_REDIRECT_HOPS} redirect hops`);
+          throw new Error(`Remote fetch exceeded ${MAX_REDIRECT_HOPS} redirect hops`);
         }
         let redirectUrl: string;
         try {
           redirectUrl = new URL(location, currentUrl).href;
         } catch {
-          throw new Error(`Discord remote fetch received invalid redirect location: ${location}`);
+          throw new Error(`Remote fetch received invalid redirect location: ${location}`);
         }
         currentUrl = redirectUrl;
         continue;
@@ -153,7 +150,7 @@ export async function fetchDiscordRemoteResource(
     }
   } catch (error) {
     if (state.timedOut) {
-      throw new Error(`Discord remote fetch timed out after ${timeoutMs}ms`);
+      throw new Error(`Remote fetch timed out after ${timeoutMs}ms`);
     }
     throw error;
   } finally {

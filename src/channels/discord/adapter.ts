@@ -42,14 +42,11 @@ import {
 } from '../../system/lifecycle/turn-contention.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
 import {
-  appendDiscordDocumentIngestToContent,
-  ingestDiscordDocumentAttachments,
-  screenDiscordDocumentIngestSummary,
-} from './file-ingest.js';
-import {
-  DISCORD_OUTBOUND_MEDIA_MAX_BYTES,
-  fetchDiscordRemoteResource,
-} from './safe-fetch.js';
+  appendDocumentIngestToContent,
+  ingestDocumentAttachments,
+  screenDocumentIngestSummary,
+} from '../../faculties/file-ingest/index.js';
+import { fetchRemoteResource } from '../backplane/safe-remote-fetch.js';
 import type { IntakeEnvelopeSnapshot } from '../../shared/contracts/intake-envelope.js';
 import type { IntakeScreeningService } from '../../core/cogsec/intake/screening.js';
 import {
@@ -72,6 +69,8 @@ const DISCORD_LISTEN_WINDOW_DEFAULT_MS = 120_000;
 const DISCORD_LISTEN_WINDOW_MIN_MS = 10_000;
 const DISCORD_LISTEN_WINDOW_MAX_MS = 600_000;
 const DISCORD_TRIGGER_OPT_OUT_PREFIX = '!i';
+/** Cap for outbound media re-uploads (Discord bot upload ceiling). */
+const DISCORD_OUTBOUND_MEDIA_MAX_BYTES = 25 * 1024 * 1024;
 const LONG_RUNNING_STATUS_INITIAL_DELAY_MS = 12_000;
 const LONG_RUNNING_STATUS_POLL_MS = 5_000;
 const LONG_RUNNING_STATUS_UPDATE_MIN_INTERVAL_MS = 20_000;
@@ -290,6 +289,8 @@ export class DiscordAdapter implements ChannelAdapterPort {
       eventBus,
       getHandler: () => this.voiceHandler ?? this.handler,
       eligibilityGate: options.eligibilityGate,
+      // htm9.9: voice transcripts are screened as 'audio_transcript' intake.
+      intakeScreening: this.intakeScreening,
     });
   }
 
@@ -423,7 +424,7 @@ export class DiscordAdapter implements ChannelAdapterPort {
     // SSRF-guarded, timeout-bounded, byte-capped fetch (Sprint-10 6ny2).
     // Locally generated media never reaches this path — sendMediaInternal
     // prefers media.localPath when the file exists.
-    const response = await fetchDiscordRemoteResource(mediaUrl, {
+    const response = await fetchRemoteResource(mediaUrl, {
       maxBytes: DISCORD_OUTBOUND_MEDIA_MAX_BYTES,
     });
     if (!response.ok) {
@@ -784,20 +785,23 @@ export class DiscordAdapter implements ChannelAdapterPort {
     let intakeEnvelopes: IntakeEnvelopeSnapshot[] = [];
     const documentCandidates = extractDiscordDocumentAttachmentCandidates(msg);
     if (documentCandidates.length > 0 && this.personalFilesDir) {
-      let documentSummary = await ingestDiscordDocumentAttachments(documentCandidates, {
+      let documentSummary = await ingestDocumentAttachments(documentCandidates, {
+        channel: 'discord',
         personalFilesDir: this.personalFilesDir,
         channelId: msg.channelId,
         messageId: msg.id,
         authorId: msg.author.id,
         createdAt: msg.createdAt,
+        fetchResource: fetchRemoteResource,
       });
       // htm9.2: screen accepted parsed text before it lands in
       // <parsed_attachment_text>; the binary-level quarantine above stays.
       if (this.intakeScreening && documentSummary.results.length > 0) {
-        const screened = await screenDiscordDocumentIngestSummary(
+        const screened = await screenDocumentIngestSummary(
           documentSummary,
           this.intakeScreening,
           {
+            channel: 'discord',
             channelId: msg.channelId,
             messageId: msg.id,
             attachmentIndexBase: attachments.length,
@@ -807,7 +811,7 @@ export class DiscordAdapter implements ChannelAdapterPort {
         intakeEnvelopes = screened.snapshots;
       }
       attachments.push(...documentSummary.results.map(result => result.attachment));
-      content = appendDiscordDocumentIngestToContent(content, documentSummary);
+      content = appendDocumentIngestToContent(content, documentSummary);
       if (documentSummary.failures.length > 0) {
         log.warn('Some Discord document attachments failed to ingest', {
           channelId: msg.channelId,

@@ -3,13 +3,14 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { describe, expect, it, vi } from 'vitest';
 import {
-  appendDiscordDocumentIngestToContent,
-  ingestDiscordDocumentAttachments,
-  parseDiscordDocumentBytes,
-  toDiscordDocumentAttachmentCandidate,
-} from './file-ingest.js';
-import { classifyDiscordAttachmentQuarantineRisk } from './file-quarantine.js';
+  appendDocumentIngestToContent,
+  ingestDocumentAttachments,
+  parseDocumentBytes,
+  toDocumentAttachmentCandidate,
+} from './document-ingest.js';
+import { classifyAttachmentQuarantineRisk } from './quarantine.js';
 import { DOCM_CONTENT_TYPE, DOCX_CONTENT_TYPE } from './office-document.js';
+import { fetchRemoteResource } from '../../channels/backplane/safe-remote-fetch.js';
 
 // The SSRF-guarded attachment fetch path (safe-fetch.ts) resolves hostnames
 // before fetching. Pin DNS to a public address so tests never touch the live
@@ -168,21 +169,21 @@ function buildDocx(paragraphs: string[], options: {
   });
 }
 
-describe('Discord document file ingest', () => {
+describe('document file ingest faculty (extracted from Discord, htm9.9)', () => {
   it('parses UTF-8 text and markdown attachment bytes', async () => {
     await expect(
-      parseDiscordDocumentBytes(Buffer.from('# Notes\n\nhello purr', 'utf8'), 'text/markdown'),
+      parseDocumentBytes(Buffer.from('# Notes\n\nhello purr', 'utf8'), 'text/markdown'),
     ).resolves.toBe('# Notes\n\nhello purr');
   });
 
   it('parses PDF attachment text', async () => {
-    const parsed = await parseDiscordDocumentBytes(buildSimplePdf('Hello PDF'), 'application/pdf');
+    const parsed = await parseDocumentBytes(buildSimplePdf('Hello PDF'), 'application/pdf');
 
     expect(parsed).toContain('Hello PDF');
   });
 
   it('parses DOCX attachment text', async () => {
-    const parsed = await parseDiscordDocumentBytes(
+    const parsed = await parseDocumentBytes(
       buildDocx(['Hello DOCX', 'Second paragraph & more']),
       DOCX_CONTENT_TYPE,
     );
@@ -192,7 +193,7 @@ describe('Discord document file ingest', () => {
   });
 
   it('infers supported document type from filename when Discord sends octet-stream', () => {
-    expect(toDiscordDocumentAttachmentCandidate({
+    expect(toDocumentAttachmentCandidate({
       id: 'att-1',
       name: 'briefing.md',
       url: 'https://cdn.discordapp.com/attachments/a/b/briefing.md',
@@ -204,7 +205,7 @@ describe('Discord document file ingest', () => {
       contentType: 'text/markdown',
     }));
 
-    expect(toDiscordDocumentAttachmentCandidate({
+    expect(toDocumentAttachmentCandidate({
       id: 'att-docx',
       name: 'briefing.docx',
       url: 'https://cdn.discordapp.com/attachments/a/b/briefing.docx',
@@ -227,7 +228,7 @@ describe('Discord document file ingest', () => {
     vi.stubGlobal('fetch', fetchMock);
 
     try {
-      const summary = await ingestDiscordDocumentAttachments([{
+      const summary = await ingestDocumentAttachments([{
         id: 'att-docx',
         name: 'briefing.docx',
         url: 'https://cdn.discordapp.com/attachments/a/b/briefing.docx',
@@ -235,6 +236,8 @@ describe('Discord document file ingest', () => {
         declaredContentType: DOCX_CONTENT_TYPE,
         sizeBytes: docx.byteLength,
       }], {
+        channel: 'discord' as const,
+        fetchResource: fetchRemoteResource,
         personalFilesDir,
         channelId: 'discord-channel',
         messageId: 'message-docx',
@@ -255,7 +258,7 @@ describe('Discord document file ingest', () => {
       expect(result.parsedTextPath).toBe(`${localPath}.parsed.txt`);
       expect(readFileSync(result.parsedTextPath, 'utf8')).toContain('DOCX text enters prompt safely');
 
-      const promptText = appendDiscordDocumentIngestToContent('please inspect this', summary);
+      const promptText = appendDocumentIngestToContent('please inspect this', summary);
       expect(promptText).toContain('[Attached file: briefing.docx]');
       expect(promptText).toContain('Office briefing');
       expect(promptText).toContain('DOCX text enters prompt safely');
@@ -266,7 +269,7 @@ describe('Discord document file ingest', () => {
   });
 
   it('allows clean DOCX containers through quarantine inspection', () => {
-    const decision = classifyDiscordAttachmentQuarantineRisk({
+    const decision = classifyAttachmentQuarantineRisk({
       name: 'briefing.docx',
       contentType: DOCX_CONTENT_TYPE,
       declaredContentType: DOCX_CONTENT_TYPE,
@@ -287,7 +290,7 @@ describe('Discord document file ingest', () => {
     vi.stubGlobal('fetch', fetchMock);
 
     try {
-      const summary = await ingestDiscordDocumentAttachments([{
+      const summary = await ingestDocumentAttachments([{
         id: 'att-internal',
         name: 'notes.txt',
         url: 'https://192.168.1.10/notes.txt',
@@ -295,6 +298,8 @@ describe('Discord document file ingest', () => {
         declaredContentType: 'text/plain',
         sizeBytes: 24,
       }], {
+        channel: 'discord' as const,
+        fetchResource: fetchRemoteResource,
         personalFilesDir,
         channelId: 'discord-channel',
         messageId: 'message-ssrf',
@@ -323,7 +328,7 @@ describe('Discord document file ingest', () => {
     vi.stubGlobal('fetch', fetchMock);
 
     try {
-      const summary = await ingestDiscordDocumentAttachments([{
+      const summary = await ingestDocumentAttachments([{
         id: 'att-script',
         name: 'notes.txt',
         url: 'https://cdn.discordapp.com/attachments/a/b/notes.txt',
@@ -331,6 +336,8 @@ describe('Discord document file ingest', () => {
         declaredContentType: 'text/plain',
         sizeBytes: script.length,
       }], {
+        channel: 'discord' as const,
+        fetchResource: fetchRemoteResource,
         personalFilesDir,
         channelId: 'discord-channel',
         messageId: 'message-1',
@@ -360,7 +367,7 @@ describe('Discord document file ingest', () => {
       expect(metadata.review.status).toBe('quarantined_pending_review');
       expect(metadata.reasons).toContain('shebang');
 
-      const promptText = appendDiscordDocumentIngestToContent('please inspect this', summary);
+      const promptText = appendDocumentIngestToContent('please inspect this', summary);
       expect(promptText).toContain('[Attached file quarantined: notes.txt]');
       expect(promptText).toContain(`SHA-256: ${quarantined.sha256}`);
       expect(promptText).toContain('Quarantine reasons:');
@@ -373,7 +380,7 @@ describe('Discord document file ingest', () => {
   });
 
   it('detects extension spoofing and MIME/sniff mismatch before parsing', () => {
-    const decision = classifyDiscordAttachmentQuarantineRisk({
+    const decision = classifyAttachmentQuarantineRisk({
       name: 'release-notes.md',
       contentType: 'text/markdown',
       declaredContentType: 'text/markdown',
@@ -393,7 +400,7 @@ describe('Discord document file ingest', () => {
   });
 
   it('allows Discord image subtype disagreements when extension and bytes are still images', () => {
-    const decision = classifyDiscordAttachmentQuarantineRisk({
+    const decision = classifyAttachmentQuarantineRisk({
       name: 'image.png',
       contentType: 'image/webp',
       declaredContentType: 'image/webp',
@@ -406,7 +413,7 @@ describe('Discord document file ingest', () => {
   });
 
   it('allows metadata-only image subtype disagreements before byte sniffing', () => {
-    const decision = classifyDiscordAttachmentQuarantineRisk({
+    const decision = classifyAttachmentQuarantineRisk({
       name: 'image.png',
       contentType: 'image/webp',
       declaredContentType: 'image/webp',
@@ -417,7 +424,7 @@ describe('Discord document file ingest', () => {
   });
 
   it('detects archives containing skill and plugin manifests', () => {
-    const decision = classifyDiscordAttachmentQuarantineRisk({
+    const decision = classifyAttachmentQuarantineRisk({
       name: 'bundle.zip',
       contentType: 'application/zip',
       declaredContentType: 'application/zip',
@@ -445,7 +452,7 @@ describe('Discord document file ingest', () => {
     block.set(encoder.encode('-0001000\0'), 124);
     block.set(encoder.encode('ustar'), 257);
 
-    const decision = classifyDiscordAttachmentQuarantineRisk({
+    const decision = classifyAttachmentQuarantineRisk({
       name: 'data.tar',
       contentType: 'application/x-tar',
       declaredContentType: 'application/x-tar',
@@ -471,7 +478,7 @@ describe('Discord document file ingest', () => {
     block.set(encoder.encode('00000001\0'), 512 + 124);
     block.set(encoder.encode('ustar'), 512 + 257);
 
-    const decision = classifyDiscordAttachmentQuarantineRisk({
+    const decision = classifyAttachmentQuarantineRisk({
       name: 'data.tar',
       contentType: 'application/x-tar',
       declaredContentType: 'application/x-tar',
@@ -498,7 +505,7 @@ describe('Discord document file ingest', () => {
     vi.stubGlobal('fetch', fetchMock);
 
     try {
-      const summary = await ingestDiscordDocumentAttachments([{
+      const summary = await ingestDocumentAttachments([{
         id: 'att-docm',
         name: 'macro.docm',
         url: 'https://cdn.discordapp.com/attachments/a/b/macro.docm',
@@ -506,6 +513,8 @@ describe('Discord document file ingest', () => {
         declaredContentType: DOCM_CONTENT_TYPE,
         sizeBytes: docm.byteLength,
       }], {
+        channel: 'discord' as const,
+        fetchResource: fetchRemoteResource,
         personalFilesDir,
         channelId: 'discord-channel',
         messageId: 'message-docm',
@@ -527,10 +536,10 @@ describe('Discord document file ingest', () => {
       expect(quarantined.reasons).not.toContain('archive_signature:application/zip');
       expect(existsSync(quarantined.quarantinePath)).toBe(true);
 
-      await expect(parseDiscordDocumentBytes(docm, DOCX_CONTENT_TYPE)).rejects.toThrow(
+      await expect(parseDocumentBytes(docm, DOCX_CONTENT_TYPE)).rejects.toThrow(
         'unsupported or unsafe Office document container',
       );
-      const promptText = appendDiscordDocumentIngestToContent('please inspect this', summary);
+      const promptText = appendDocumentIngestToContent('please inspect this', summary);
       expect(promptText).toContain('[Attached file quarantined: macro.docm]');
       expect(promptText).not.toContain('MACRO_BODY_SHOULD_NOT_ENTER_PROMPT');
       expect(promptText).not.toContain(quarantined.quarantinePath);
@@ -541,7 +550,7 @@ describe('Discord document file ingest', () => {
   });
 
   it('detects plugin manifest content and executable mode bits', () => {
-    const pluginDecision = classifyDiscordAttachmentQuarantineRisk({
+    const pluginDecision = classifyAttachmentQuarantineRisk({
       name: 'plugin.json',
       contentType: 'application/json',
       declaredContentType: 'application/json',
@@ -558,7 +567,7 @@ describe('Discord document file ingest', () => {
       'plugin_manifest_content',
     ]));
 
-    const executableDecision = classifyDiscordAttachmentQuarantineRisk({
+    const executableDecision = classifyAttachmentQuarantineRisk({
       name: 'README.txt',
       contentType: 'text/plain',
       declaredContentType: 'text/plain',

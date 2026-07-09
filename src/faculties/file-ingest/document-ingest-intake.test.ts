@@ -1,4 +1,4 @@
-// ── Discord parsed-document intake screening tests (htm9.2) ──
+// ── Parsed-document intake screening tests (htm9.2 / htm9.9) ──
 //
 // Proves that accepted parsed attachment text is screened before it lands in
 // <parsed_attachment_text>: enforce-mode quarantine replaces the prompt text
@@ -9,10 +9,10 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
-  appendDiscordDocumentIngestToContent,
-  screenDiscordDocumentIngestSummary,
-  type DiscordDocumentIngestSummary,
-} from './file-ingest.js';
+  appendDocumentIngestToContent,
+  screenDocumentIngestSummary,
+  type DocumentIngestSummary,
+} from './document-ingest.js';
 import {
   createIntakeScreeningService,
   renderIntakeWithheldContentPlaceholder,
@@ -41,7 +41,7 @@ function makeScreening(mode: Exclude<IntakeFirewallMode, 'off'>): IntakeScreenin
   });
 }
 
-function makeSummary(promptTexts: string[]): DiscordDocumentIngestSummary {
+function makeSummary(promptTexts: string[]): DocumentIngestSummary {
   return {
     results: promptTexts.map((promptText, index) => ({
       attachment: {
@@ -61,12 +61,12 @@ function makeSummary(promptTexts: string[]): DiscordDocumentIngestSummary {
   };
 }
 
-const context = { channelId: '123', messageId: '456', attachmentIndexBase: 2 };
+const context = { channel: 'discord' as const, channelId: '123', messageId: '456', attachmentIndexBase: 2 };
 
-describe('Discord parsed-document intake screening (htm9.2)', () => {
+describe('parsed-document intake screening (htm9.2)', () => {
   it('enforce mode: hostile parsed text never reaches <parsed_attachment_text>', async () => {
     const summary = makeSummary([HOSTILE_DOC_TEXT, CLEAN_DOC_TEXT]);
-    const screened = await screenDiscordDocumentIngestSummary(summary, makeScreening('enforce'), context);
+    const screened = await screenDocumentIngestSummary(summary, makeScreening('enforce'), context);
 
     expect(screened.snapshots).toHaveLength(2);
     expect(screened.snapshots[0]).toMatchObject({
@@ -83,7 +83,7 @@ describe('Discord parsed-document intake screening (htm9.2)', () => {
     expect(screened.summary.results[0]!.promptText).toBe(renderIntakeWithheldContentPlaceholder());
     expect(screened.summary.results[1]!.promptText).toBe(CLEAN_DOC_TEXT);
 
-    const content = appendDiscordDocumentIngestToContent('Here are the files', screened.summary);
+    const content = appendDocumentIngestToContent('Here are the files', screened.summary);
     expect(content).toContain('<parsed_attachment_text>');
     expect(content).not.toContain('ignore all previous instructions');
     expect(content).toContain(renderIntakeWithheldContentPlaceholder());
@@ -92,12 +92,12 @@ describe('Discord parsed-document intake screening (htm9.2)', () => {
 
   it('shadow mode: parsed text is unchanged while envelopes record the decision', async () => {
     const summary = makeSummary([HOSTILE_DOC_TEXT]);
-    const screened = await screenDiscordDocumentIngestSummary(summary, makeScreening('shadow'), context);
+    const screened = await screenDocumentIngestSummary(summary, makeScreening('shadow'), context);
 
     expect(screened.summary.results[0]!.promptText).toBe(HOSTILE_DOC_TEXT);
     expect(screened.snapshots[0]!.state).toBe('quarantined');
 
-    const content = appendDiscordDocumentIngestToContent('Here are the files', screened.summary);
+    const content = appendDocumentIngestToContent('Here are the files', screened.summary);
     expect(content).toContain('ignore all previous instructions');
   });
 });

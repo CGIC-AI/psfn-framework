@@ -343,10 +343,11 @@ async function main(): Promise<void> {
   // classifier stays gateway-side; the agent process runs deterministic L1
   // scanners only.
   const intakePolicy = loadIntakePolicyConfig(pathSnapshot.systemDataDir);
-  sessionManager.intakeScreening = maybeCreateIntakeScreeningService({
+  const intakeScreening = maybeCreateIntakeScreeningService({
     policy: intakePolicy,
     actor: 'agent:intake-screening',
   });
+  sessionManager.intakeScreening = intakeScreening;
   if (sessionManager.intakeScreening) {
     log.info('Intake screening wired to session tool observations', {
       mode: sessionManager.intakeScreening.mode,
@@ -653,6 +654,12 @@ async function main(): Promise<void> {
     externalChannelProfiles: buildExternalChannelProfiles(channelsConfig),
     satelliteRegistry: satelliteRegistryConfig,
     onStreamDelta: (requestId, text) => gateway.notifyApiStreamDelta(requestId, text),
+    // htm9.9: OpenAI-compatible `file` content parts run the shared
+    // file-ingest pipeline with the agent-side (L1-only) intake screening.
+    documentIngest: {
+      personalFilesDir: pathSnapshot.workspaceRoot,
+      intakeScreening,
+    },
   });
   gateway.onApiChatCompletion((params) => apiBackend.handleChatCompletion(params));
   gateway.onApiChatCancel((params) => apiBackend.cancelChatCompletion(params));

@@ -42,8 +42,12 @@ import type {
 import {
   getLastUserMessage as getChatLastUserMessage,
   getLastUserMessageAttachments,
+  getLastUserMessageFileParts,
   getMessageTextContent,
+  ingestApiDocumentFileParts,
+  type ApiDocumentIngestConfig,
 } from './server/session.js';
+import type { IntakeEnvelopeSnapshot } from '../../shared/contracts/intake-envelope.js';
 import { buildApiHealthResponse } from './server-health.js';
 import {
   type FifoChannelLease,
@@ -130,6 +134,8 @@ export interface AgentApiBackendConfig {
   satelliteRegistry?: SatelliteRegistryConfig;
   sensorIngest?: SensorIngestPort;
   onStreamDelta?: (requestId: string, text: string) => void | Promise<void>;
+  /** htm9.9: shared document file-part ingestion; null when not configured. */
+  documentIngest?: ApiDocumentIngestConfig | null;
 }
 
 export class AgentApiBackend {
@@ -143,6 +149,7 @@ export class AgentApiBackend {
   private readonly externalChannelProfiles: Partial<Record<ChannelType, ExternalChannelProfileConfig>>;
   private readonly satelliteRegistry: SatelliteRegistryConfig | undefined;
   private readonly sensorIngest: SensorIngestPort;
+  private readonly documentIngest: ApiDocumentIngestConfig | null;
   private readonly onStreamDelta?: (requestId: string, text: string) => void | Promise<void>;
   private readonly channelTurnLock = new FifoChannelLock();
   private readonly processingChannels = new Set<string>();
@@ -163,6 +170,7 @@ export class AgentApiBackend {
     this.externalChannelProfiles = config.externalChannelProfiles ?? {};
     this.satelliteRegistry = config.satelliteRegistry;
     this.sensorIngest = config.sensorIngest ?? createEventBusSensorIngestPort(config.eventBus);
+    this.documentIngest = config.documentIngest ?? null;
     this.onStreamDelta = config.onStreamDelta;
     this.unregisterSchedulerHealthcheck = this.eventBus.on('schedule.healthcheck', ({ timestamp }) => {
       if (Number.isFinite(timestamp) && timestamp > 0) {
@@ -998,6 +1006,8 @@ export class AgentApiBackend {
     canonicalContactId?: string;
     satellite?: SatelliteRoutingMetadata;
     attachments?: Attachment[];
+    /** htm9.9: intake-firewall envelope snapshots for screened document attachments. */
+    intakeEnvelopes?: IntakeEnvelopeSnapshot[];
   }): SubstrateMessage {
     const approvalToken = this.readHeader(params.headers, 'x-broadcast-approval-token', 256);
     const requestedScope = this.readHeader(params.headers, 'x-broadcast-visibility-scope', 64);
@@ -1020,6 +1030,9 @@ export class AgentApiBackend {
       ...(params.overrides.promptOverride ? { promptOverride: params.overrides.promptOverride } : {}),
       ...(params.overrides.responseStyle ? { responseStyle: params.overrides.responseStyle } : {}),
       ...(params.canonicalContactId ? { canonicalContactId: params.canonicalContactId } : {}),
+      ...(params.intakeEnvelopes && params.intakeEnvelopes.length > 0
+        ? { intakeEnvelopes: params.intakeEnvelopes }
+        : {}),
     };
     const hasRouting = params.source !== 'api'
       || routing.broadcast
@@ -1028,7 +1041,8 @@ export class AgentApiBackend {
       || routing.modelOverride
       || routing.promptOverride
       || routing.responseStyle
-      || routing.canonicalContactId;
+      || routing.canonicalContactId
+      || routing.intakeEnvelopes;
 
     return {
       id: `api-${randomUUID()}`,
@@ -1111,11 +1125,23 @@ export class AgentApiBackend {
       }
     }
 
+    const lastUserAttachments = getLastUserMessageAttachments(request.messages);
+    // htm9.9: `file` content parts run the shared file-ingest pipeline
+    // (quarantine -> parse -> intake screening) before prompt assembly.
+    const ingestedFiles = await ingestApiDocumentFileParts({
+      extraction: getLastUserMessageFileParts(request.messages),
+      content: this.getLastUserMessage(request.messages),
+      channelId,
+      messageId: `api-file-${randomUUID()}`,
+      authorId,
+      attachmentIndexBase: lastUserAttachments.length,
+      documentIngest: this.documentIngest,
+    });
     const substrateMsg = this.buildSubstrateMessage({
       channelId,
       channelType,
       source,
-      content: this.getLastUserMessage(request.messages),
+      content: ingestedFiles.content,
       authorId,
       authorName,
       headers,
@@ -1123,7 +1149,8 @@ export class AgentApiBackend {
       channelPrivacy: resolvedChannelPrivacy,
       canonicalContactId,
       satellite,
-      attachments: getLastUserMessageAttachments(request.messages),
+      attachments: [...lastUserAttachments, ...ingestedFiles.attachments],
+      intakeEnvelopes: ingestedFiles.intakeEnvelopes,
     });
     this.seedSession(channelId, request.messages, authorId, authorName, resolvedChannelPrivacy);
 

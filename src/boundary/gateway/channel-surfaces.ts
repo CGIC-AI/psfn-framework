@@ -127,6 +127,8 @@ export async function loadGatewayChannelSurfaces(
     createTelegramChannelAdapterFactoryEntry({
       config: input.bootstrap.channelsConfig.telegram,
       eventBus: input.eventBus,
+      personalFilesDir: input.bootstrap.workspaceRoot,
+      intakeScreening: input.intakeScreening,
     }),
   ]);
 

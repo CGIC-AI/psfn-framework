@@ -66,6 +66,7 @@ import {
 import type { ExternalChannelProfileConfig } from '../backplane/config.js';
 import { resolveCompanionIdFromConfig } from '../../core/identity/companion-runtime.js';
 import { ApiChatCompletionsHandler } from './server/chat-completions.js';
+import type { ApiDocumentIngestConfig } from './server/session.js';
 import {
   applyApiCorsPolicy,
   canWriteResponse,
@@ -378,6 +379,12 @@ export interface ApiServerConfig {
   trustedProxyClientCertToken?: string;
   /** Direct-TLS listener config (`API_TLS_CERT_PATH`/`API_TLS_KEY_PATH`/`API_TLS_CLIENT_CA_PATH`). */
   tls?: ApiHttpServerTlsConfig;
+  /**
+   * htm9.9: document ingestion for OpenAI-compatible `file` content parts
+   * (personal-files root + intake screening). Absent means file parts fail
+   * closed into soft in-content notices.
+   */
+  documentIngest?: ApiDocumentIngestConfig | null;
 }
 
 export class ApiServer implements ChannelAdapterPort {
@@ -475,6 +482,7 @@ export class ApiServer implements ChannelAdapterPort {
       externalChannelProfiles: config.externalChannelProfiles ?? {},
       satelliteRegistry: config.satelliteRegistry,
       logger: log,
+      documentIngest: config.documentIngest ?? null,
     });
     this.config = {
       enabled: true,

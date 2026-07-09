@@ -11,6 +11,12 @@ const MAX_CHAT_COMPLETION_TOKENS = 1_000_000;
 const MAX_N = 128;
 const MAX_SEED_ABS = 9_007_199_254_740_991;
 const MAX_LOGIT_BIAS_KEYS = 10_000;
+// Base64 ceiling for one `file` content part: 16 MiB decoded (the shared
+// file-ingest DOCUMENT_MAX_BYTES cap) at 4/3 base64 expansion.
+const MAX_FILE_DATA_CHARS = 22_400_000;
+const MAX_FILE_NAME_CHARS = 512;
+const FILE_DATA_URL_PREFIX_PATTERN = /^data:[a-z0-9.+/-]+;base64,/i;
+const STRICT_BASE64_PATTERN = /^[A-Za-z0-9+/]+={0,2}$/;
 
 export interface ChatCompletionValidationSuccess {
   ok: true;
@@ -186,7 +192,44 @@ function validateContentPart(value: unknown, path: string): ChatCompletionValida
   if (type === 'image_url') {
     return validateImageUrl(value.image_url, `${path}.image_url`);
   }
-  return validationError(`${path}.type must be one of: text, image, image_url`, { path: `${path}.type` });
+  if (type === 'file') {
+    return validateFilePart(value.file, `${path}.file`);
+  }
+  return validationError(`${path}.type must be one of: text, image, image_url, file`, { path: `${path}.type` });
+}
+
+/**
+ * htm9.9: fail-closed validation for OpenAI-compatible `file` content parts.
+ * The payload must be strict base64 (optionally a data: URL) within the
+ * document byte cap, so malformed uploads are refused at the boundary instead
+ * of decaying into garbage bytes downstream.
+ */
+function validateFilePart(value: unknown, path: string): ChatCompletionValidationError | null {
+  if (!isRecord(value)) {
+    return validationError(`${path} must be an object`, { path });
+  }
+  if (value.filename !== undefined
+    && (typeof value.filename !== 'string' || value.filename.length > MAX_FILE_NAME_CHARS)) {
+    return validationError(`${path}.filename must be a string of at most ${MAX_FILE_NAME_CHARS} characters`, {
+      path: `${path}.filename`,
+    });
+  }
+  const fileData = value.file_data;
+  if (typeof fileData !== 'string' || !fileData.trim()) {
+    return validationError(`${path}.file_data must be a non-empty string`, { path: `${path}.file_data` });
+  }
+  if (fileData.length > MAX_FILE_DATA_CHARS) {
+    return validationError(`${path}.file_data exceeds the ${MAX_FILE_DATA_CHARS} character limit`, {
+      path: `${path}.file_data`,
+    });
+  }
+  const base64 = fileData.trim().replace(FILE_DATA_URL_PREFIX_PATTERN, '').replace(/\s+/g, '');
+  if (!base64 || base64.length % 4 !== 0 || !STRICT_BASE64_PATTERN.test(base64)) {
+    return validationError(`${path}.file_data must be base64 or a base64 data: URL`, {
+      path: `${path}.file_data`,
+    });
+  }
+  return null;
 }
 
 function validateMessageContent(value: unknown, path: string): ChatCompletionValidationError | null {

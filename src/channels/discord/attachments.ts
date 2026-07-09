@@ -1,10 +1,10 @@
 import type { Message } from 'discord.js';
 import type { Attachment } from '../../shared/contracts/runtime.js';
 import {
-  toDiscordDocumentAttachmentCandidate,
-  type DiscordDocumentAttachmentCandidate,
-} from './file-ingest.js';
-import { hasDiscordAttachmentMetadataQuarantineRisk } from './file-quarantine.js';
+  hasAttachmentMetadataQuarantineRisk,
+  toDocumentAttachmentCandidate,
+  type DocumentAttachmentCandidate,
+} from '../../faculties/file-ingest/index.js';
 
 export const DISCORD_MAX_IMAGE_ATTACHMENTS_PER_MESSAGE = 4;
 
@@ -42,7 +42,7 @@ export function extractDiscordImageAttachments(
   const attachments: Attachment[] = [];
   for (const raw of rawAttachments) {
     if (attachments.length >= DISCORD_MAX_IMAGE_ATTACHMENTS_PER_MESSAGE) break;
-    if (hasDiscordAttachmentMetadataQuarantineRisk(raw)) {
+    if (hasAttachmentMetadataQuarantineRisk(raw)) {
       logger.debug('Skipping metadata-risky Discord image attachment until quarantine review', {
         channelId: msg.channelId,
         messageId: msg.id,
@@ -87,11 +87,19 @@ export function extractDiscordImageAttachments(
 
 export function extractDiscordDocumentAttachmentCandidates(
   msg: Message,
-): DiscordDocumentAttachmentCandidate[] {
-  const candidates: DiscordDocumentAttachmentCandidate[] = [];
+): DocumentAttachmentCandidate[] {
+  const candidates: DocumentAttachmentCandidate[] = [];
   for (const raw of msg.attachments.values()) {
     if (candidates.length >= DISCORD_MAX_DOCUMENT_ATTACHMENTS_PER_MESSAGE) break;
-    const candidate = toDiscordDocumentAttachmentCandidate(raw);
+    // Prefer the canonical CDN URL over Discord's transient proxy URL.
+    const candidate = toDocumentAttachmentCandidate({
+      id: raw.id,
+      name: raw.name,
+      // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- discord.js types claim non-null but mocks/edge cases disagree
+      url: (raw.url ?? raw.proxyURL ?? '').trim() || null,
+      contentType: raw.contentType,
+      size: raw.size,
+    });
     if (!candidate) continue;
     candidates.push(candidate);
   }

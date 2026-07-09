@@ -25,9 +25,30 @@ export interface OpenAIImageUrlContentPart {
   };
 }
 
+/**
+ * OpenAI-compatible file attachment part (htm9.9). `file_data` carries the
+ * document bytes as base64 (optionally a `data:<mime>;base64,` URL). Parsed
+ * server-side through the shared file-ingest faculty — never handed to the
+ * model raw.
+ */
+export interface OpenAIFileContentPart {
+  type: 'file';
+  file: {
+    /** Attachment filename; used for format inference alongside the data URL MIME. */
+    filename?: string;
+    /** Base64 payload, optionally wrapped as a data: URL with the declared MIME. */
+    file_data: string;
+  };
+}
+
 export type OpenAIMessageContent =
   | string
-  | Array<OpenAITextContentPart | OpenAIInlineImageContentPart | OpenAIImageUrlContentPart>;
+  | Array<
+    | OpenAITextContentPart
+    | OpenAIInlineImageContentPart
+    | OpenAIImageUrlContentPart
+    | OpenAIFileContentPart
+  >;
 
 export interface OpenAIMessage {
   role: 'system' | 'user' | 'assistant';

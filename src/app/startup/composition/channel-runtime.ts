@@ -78,6 +78,10 @@ export interface TelegramChannelAdapterFactoryOptions {
   config: TelegramChannelConfig;
   eventBus: EventBus;
   onMessage?: MessageHandler | null;
+  /** Personal-files root for document attachment ingestion (htm9.9). */
+  personalFilesDir?: string;
+  /** Cognition intake firewall (htm9.2/htm9.9): screens parsed document attachment text. */
+  intakeScreening?: IntakeScreeningService | null;
 }
 
 export function createTelegramChannelAdapterFactoryEntry(
@@ -92,7 +96,10 @@ export function createTelegramChannelAdapterFactoryEntry(
       eligibility: {},
     },
     create: async (): Promise<ChannelAdapterPort> => {
-      const adapter = new TelegramAdapter(options.config, options.eventBus);
+      const adapter = new TelegramAdapter(options.config, options.eventBus, {
+        ...(options.personalFilesDir ? { personalFilesDir: options.personalFilesDir } : {}),
+        ...(options.intakeScreening ? { intakeScreening: options.intakeScreening } : {}),
+      });
       if (options.onMessage) {
         adapter.onMessage(options.onMessage);
       }

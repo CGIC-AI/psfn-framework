@@ -34,6 +34,7 @@ import {
   resolveRuntimeVoiceTtsProvider,
 } from '../../app/startup/support/bootstrap-helpers.js';
 import type { StreamingSttConnector, SttStreamSession } from '../../primitives/voice/connectors/stt/index.js';
+import type { IntakeScreeningService } from '../../core/cogsec/intake/screening.js';
 import type {
   ActiveVoiceTurn,
   DiscordVoiceRuntimeConfig,
@@ -104,6 +105,7 @@ export class DiscordVoiceRuntime {
   private readonly decryptionFailureTolerance: number;
   private readonly preferredTtsProviderId: RuntimeVoiceTtsProvider;
   private readonly sttConnector?: StreamingSttConnector;
+  readonly intakeScreening: IntakeScreeningService | null;
   private readonly ttsConnectors: StreamingTtsConnector[];
   private readonly reliabilityBudgets: VoiceReliabilityBudgets;
   private readonly securityLimits: VoiceSecurityLimits;
@@ -128,12 +130,13 @@ export class DiscordVoiceRuntime {
   /** Per-user stream error counters for isolation and graceful teardown. */
   private streamErrorCounts = new Map<string, number>();
 
-  constructor({ client, config, eventBus, getHandler, eligibilityGate }: DiscordVoiceRuntimeConfig) {
+  constructor({ client, config, eventBus, getHandler, eligibilityGate, intakeScreening }: DiscordVoiceRuntimeConfig) {
     this.client = client;
     this.config = config;
     this.eventBus = eventBus;
     this.getHandler = getHandler;
     this.eligibilityGate = eligibilityGate;
+    this.intakeScreening = intakeScreening ?? null;
     this.reliabilityBudgets = resolveVoiceReliabilityBudgets();
     this.securityLimits = resolveVoiceSecurityLimits();
 

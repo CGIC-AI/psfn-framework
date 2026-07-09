@@ -8,6 +8,7 @@ import type { StreamingSttConnector, SttStreamSession } from '../../primitives/v
 import type { StreamingTtsConnector, TtsSynthesisSession } from '../../primitives/voice/connectors/tts/index.js';
 import type { VoiceReliabilityBudgets } from '../../primitives/voice/policy/reliability.js';
 import type { VoiceSecurityLimits } from '../../primitives/voice/policy/security.js';
+import type { IntakeScreeningService } from '../../core/cogsec/intake/screening.js';
 import type { MessageHandler } from '../backplane/types.js';
 
 export const CAPTURE_SILENCE_MS = 1_200;
@@ -50,6 +51,12 @@ export interface DiscordVoiceRuntimeConfig {
   eventBus: EventBus;
   getHandler: () => MessageHandler | null;
   eligibilityGate?: EligibilityGate;
+  /**
+   * htm9.9: intake screening for voice transcripts (sourceClass
+   * 'audio_transcript') — a transcript becomes prompt text, so audio is a
+   * real injection channel. Null when the firewall mode is 'off'.
+   */
+  intakeScreening?: IntakeScreeningService | null;
 }
 
 export interface VoiceConnectionStateChange {
@@ -89,6 +96,8 @@ export interface VoiceTurnRuntimeContext extends VoiceRuntimeBaseContext {
   activeTurn: ActiveVoiceTurn | null;
   capturing: boolean;
   preferredTtsProviderId: RuntimeVoiceTtsProvider;
+  /** htm9.9: screens transcripts as 'audio_transcript' intake before prompt use. */
+  intakeScreening: IntakeScreeningService | null;
   getHandler: () => MessageHandler | null;
   emitTurnObservation(params: {
     turnId?: string;

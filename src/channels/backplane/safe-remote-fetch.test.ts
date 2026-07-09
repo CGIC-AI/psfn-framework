@@ -1,7 +1,7 @@
 import { createServer, type Server } from 'node:http';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { DnsResolver } from '../../boundary/gateway/url-policy.js';
-import { fetchDiscordRemoteResource } from './safe-fetch.js';
+import { fetchRemoteResource } from './safe-remote-fetch.js';
 
 // Local test-server policy: the strict production default (no override) blocks
 // loopback, so tests that need a live local server opt in explicitly.
@@ -23,7 +23,7 @@ async function listen(
   return { server, url: `http://127.0.0.1:${address.port}` };
 }
 
-describe('fetchDiscordRemoteResource (Sprint-10 6ny2)', () => {
+describe('fetchRemoteResource (Sprint-10 6ny2, shared across channel adapters)', () => {
   const servers: Server[] = [];
 
   afterEach(async () => {
@@ -36,40 +36,40 @@ describe('fetchDiscordRemoteResource (Sprint-10 6ny2)', () => {
   // ── SSRF policy: strict default lane ──
 
   it('denies internal IPv4 targets with the default policy', async () => {
-    await expect(fetchDiscordRemoteResource('https://10.0.0.5/cat.png', { maxBytes: 1024 }))
+    await expect(fetchRemoteResource('https://10.0.0.5/cat.png', { maxBytes: 1024 }))
       .rejects.toThrow(/blocked/);
-    await expect(fetchDiscordRemoteResource('https://192.168.1.10/cat.png', { maxBytes: 1024 }))
+    await expect(fetchRemoteResource('https://192.168.1.10/cat.png', { maxBytes: 1024 }))
       .rejects.toThrow(/blocked/);
-    await expect(fetchDiscordRemoteResource('https://127.0.0.1/cat.png', { maxBytes: 1024 }))
+    await expect(fetchRemoteResource('https://127.0.0.1/cat.png', { maxBytes: 1024 }))
       .rejects.toThrow(/blocked/);
-    await expect(fetchDiscordRemoteResource('https://169.254.169.254/latest/meta-data/', { maxBytes: 1024 }))
+    await expect(fetchRemoteResource('https://169.254.169.254/latest/meta-data/', { maxBytes: 1024 }))
       .rejects.toThrow(/blocked/);
   });
 
   it('denies IPv6 loopback, unspecified, and IMDS targets', async () => {
-    await expect(fetchDiscordRemoteResource('https://[::1]/cat.png', { maxBytes: 1024 }))
+    await expect(fetchRemoteResource('https://[::1]/cat.png', { maxBytes: 1024 }))
       .rejects.toThrow(/blocked/);
-    await expect(fetchDiscordRemoteResource('https://[::]/cat.png', { maxBytes: 1024 }))
+    await expect(fetchRemoteResource('https://[::]/cat.png', { maxBytes: 1024 }))
       .rejects.toThrow(/blocked/);
-    await expect(fetchDiscordRemoteResource('https://[fd00:ec2::254]/cat.png', { maxBytes: 1024 }))
+    await expect(fetchRemoteResource('https://[fd00:ec2::254]/cat.png', { maxBytes: 1024 }))
       .rejects.toThrow(/blocked/);
   });
 
   it('denies plain HTTP with the default policy', async () => {
-    await expect(fetchDiscordRemoteResource('http://example.com/cat.png', { maxBytes: 1024 }))
+    await expect(fetchRemoteResource('http://example.com/cat.png', { maxBytes: 1024 }))
       .rejects.toThrow(/blocked/);
   });
 
   it('denies hostnames that resolve to private addresses', async () => {
     const dnsResolver: DnsResolver = async () => ({ address: '10.0.0.5', family: 4 });
-    await expect(fetchDiscordRemoteResource('https://rebind.evil.test/cat.png', {
+    await expect(fetchRemoteResource('https://rebind.evil.test/cat.png', {
       maxBytes: 1024,
       dnsResolver,
     })).rejects.toThrow(/blocked/);
   });
 
   it('rejects a non-positive byte cap', async () => {
-    await expect(fetchDiscordRemoteResource('https://example.com/cat.png', { maxBytes: 0 }))
+    await expect(fetchRemoteResource('https://example.com/cat.png', { maxBytes: 0 }))
       .rejects.toThrow(/positive maxBytes/);
   });
 
@@ -98,7 +98,7 @@ describe('fetchDiscordRemoteResource (Sprint-10 6ny2)', () => {
     });
     servers.push(server);
 
-    await expect(fetchDiscordRemoteResource(`${url}/huge.png`, {
+    await expect(fetchRemoteResource(`${url}/huge.png`, {
       maxBytes: 4096,
       urlPolicy: localServerPolicy,
     })).rejects.toThrow(/too large/);
@@ -112,7 +112,7 @@ describe('fetchDiscordRemoteResource (Sprint-10 6ny2)', () => {
     });
     servers.push(server);
 
-    await expect(fetchDiscordRemoteResource(`${url}/stall.png`, {
+    await expect(fetchRemoteResource(`${url}/stall.png`, {
       maxBytes: 1024,
       timeoutMs: 100,
       urlPolicy: localServerPolicy,
@@ -129,7 +129,7 @@ describe('fetchDiscordRemoteResource (Sprint-10 6ny2)', () => {
     });
     servers.push(server);
 
-    await expect(fetchDiscordRemoteResource(`${url}/start.png`, {
+    await expect(fetchRemoteResource(`${url}/start.png`, {
       maxBytes: 1024,
       urlPolicy: localServerPolicy,
     })).rejects.toThrow(/blocked/);
@@ -144,7 +144,7 @@ describe('fetchDiscordRemoteResource (Sprint-10 6ny2)', () => {
     });
     servers.push(server);
 
-    await expect(fetchDiscordRemoteResource(`${url}/0`, {
+    await expect(fetchRemoteResource(`${url}/0`, {
       maxBytes: 1024,
       urlPolicy: localServerPolicy,
     })).rejects.toThrow(/redirect hops/);
@@ -160,7 +160,7 @@ describe('fetchDiscordRemoteResource (Sprint-10 6ny2)', () => {
     });
     servers.push(server);
 
-    const result = await fetchDiscordRemoteResource(`${url}/ok.png`, {
+    const result = await fetchRemoteResource(`${url}/ok.png`, {
       maxBytes: 1024,
       urlPolicy: localServerPolicy,
     });
@@ -177,7 +177,7 @@ describe('fetchDiscordRemoteResource (Sprint-10 6ny2)', () => {
     });
     servers.push(server);
 
-    const result = await fetchDiscordRemoteResource(`${url}/missing.png`, {
+    const result = await fetchRemoteResource(`${url}/missing.png`, {
       maxBytes: 1024,
       urlPolicy: localServerPolicy,
     });

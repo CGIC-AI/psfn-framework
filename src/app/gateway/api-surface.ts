@@ -35,6 +35,7 @@ import type { SubstrateAgent } from '../../core/agent/substrate-agent.js';
 import type { SensorIngestPort } from '../../shared/telemetry/sensor-ingest-port.js';
 import { parseOptionalPositiveIntEnv } from '../../shared/utils/env.js';
 import { isExplicitTrue, parseCommaSeparatedEnv } from '../startup/support/env-parsing.js';
+import type { IntakeScreeningService } from '../../core/cogsec/intake/screening.js';
 
 const DISABLED_VOICE_WEBSOCKET_PATH = '/v1/voice/ws-disabled';
 const GATEWAY_API_REQUEST_TIMEOUT_MS = 240_000;
@@ -53,6 +54,38 @@ export interface StartOptionalGatewayApiServerOptions extends GatewayApiSurfaceB
   gateway: Pick<GatewayServer, 'requestAgent' | 'subscribeApiStream' | 'requestAgentVoiceStream'>;
   channelsConfig?: RuntimeChannelsConfig;
   satelliteRegistry?: SatelliteRegistryConfig;
+  /**
+   * htm9.9: intake screening for voice transcripts (sourceClass
+   * 'audio_transcript') — a transcript becomes prompt text, so audio is a
+   * real injection channel. Null when the firewall mode is 'off'.
+   */
+  intakeScreening?: IntakeScreeningService | null;
+}
+
+/**
+ * Screens a voice transcript through the intake firewall before it becomes a
+ * prompt-bearing message. Shadow mode records the envelope without altering
+ * the transcript; enforce-mode quarantine substitutes the fixed withheld-
+ * content placeholder. The envelope snapshot rides routing.intakeEnvelopes.
+ */
+async function screenVoiceTranscriptMessage(
+  message: SubstrateMessage,
+  intakeScreening: IntakeScreeningService | null | undefined,
+): Promise<SubstrateMessage> {
+  if (!intakeScreening || !message.content.trim()) return message;
+  const screened = await intakeScreening.screen(message.content, {
+    sourceClass: 'audio_transcript',
+    origin: { ref: `api-voice:${message.channelId}:${message.id}`.slice(0, 2048) },
+    scope: 'context',
+  });
+  return {
+    ...message,
+    content: screened.effectiveText,
+    routing: {
+      ...(message.routing ?? {}),
+      intakeEnvelopes: [screened.snapshot],
+    },
+  };
 }
 
 function singleHeader(value: string | string[] | undefined): string | undefined {
@@ -242,7 +275,7 @@ export async function startOptionalGatewayApiServer(
     config: options.config,
     eligibilityGate: options.eligibilityGate,
     handleAssistantTurn: async ({ request, principal, transportSession, sessionId, transcript, signal, channelPrefix }) => {
-      const message = buildVoiceMessage({
+      const message = await screenVoiceTranscriptMessage(buildVoiceMessage({
         request,
         principal,
         connectionId: transportSession.connectionId,
@@ -251,7 +284,7 @@ export async function startOptionalGatewayApiServer(
         channelPrefix,
         satelliteRegistry: options.satelliteRegistry,
         ...(trustedProxyClientCertToken ? { trustedProxyClientCertToken } : {}),
-      });
+      }), options.intakeScreening);
       const result = await options.gateway.requestAgentVoiceStream(message, { signal });
       return result.content;
     },

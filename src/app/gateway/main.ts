@@ -296,6 +296,8 @@ async function main(): Promise<void> {
     gateway,
     channelsConfig: bootstrap.channelsConfig,
     satelliteRegistry: satelliteRegistryConfig,
+    // htm9.9: voice transcripts are screened as 'audio_transcript' intake.
+    intakeScreening: privilegedCore.intakeScreening.screening,
   });
   await voiceSurfaces.start();
   await startGatewayChannelSurfaces(channelSurfaces, bootstrap, log);

@@ -51,7 +51,10 @@ import {
   deriveChannelId,
   getLastUserMessage,
   getLastUserMessageAttachments,
+  getLastUserMessageFileParts,
+  ingestApiDocumentFileParts,
   seedSession,
+  type ApiDocumentIngestConfig,
 } from './session.js';
 import { SseStreamingTransport } from './streaming.js';
 
@@ -111,6 +114,8 @@ export interface ApiChatCompletionsHandlerConfig {
   externalChannelProfiles: Partial<Record<ChannelType, ExternalChannelProfileConfig>>;
   satelliteRegistry: SatelliteRegistryConfig | undefined;
   logger: ApiServerLogger;
+  /** htm9.9: shared document file-part ingestion; null when not configured. */
+  documentIngest: ApiDocumentIngestConfig | null;
 }
 
 export class ApiChatCompletionsHandler {
@@ -124,6 +129,7 @@ export class ApiChatCompletionsHandler {
   private readonly externalChannelProfiles: Partial<Record<ChannelType, ExternalChannelProfileConfig>>;
   private readonly satelliteRegistry: SatelliteRegistryConfig | undefined;
   private readonly logger: ApiServerLogger;
+  private readonly documentIngest: ApiDocumentIngestConfig | null;
   private readonly channelTurnLock = new FifoChannelLock();
   private readonly processingChannels = new Set<string>();
 
@@ -138,6 +144,7 @@ export class ApiChatCompletionsHandler {
     this.externalChannelProfiles = config.externalChannelProfiles;
     this.satelliteRegistry = config.satelliteRegistry;
     this.logger = config.logger;
+    this.documentIngest = config.documentIngest;
   }
 
   externalChannelProfile(channelType: ChannelType): ExternalChannelProfileConfig | undefined {
@@ -712,11 +719,22 @@ export class ApiChatCompletionsHandler {
     }
     const lastUserMsg = getLastUserMessage(request.messages);
     const lastUserAttachments = getLastUserMessageAttachments(request.messages);
+    // htm9.9: `file` content parts run the shared file-ingest pipeline
+    // (quarantine -> parse -> intake screening) before prompt assembly.
+    const ingestedFiles = await ingestApiDocumentFileParts({
+      extraction: getLastUserMessageFileParts(request.messages),
+      content: lastUserMsg,
+      channelId,
+      messageId: `api-file-${randomUUID()}`,
+      authorId,
+      attachmentIndexBase: lastUserAttachments.length,
+      documentIngest: this.documentIngest,
+    });
     const substrateMsg = buildSubstrateMessage({
       channelId,
       channelType,
       source,
-      content: lastUserMsg,
+      content: ingestedFiles.content,
       authorId,
       authorName,
       req,
@@ -724,7 +742,8 @@ export class ApiChatCompletionsHandler {
       channelPrivacy: resolvedChannelPrivacy,
       canonicalContactId,
       satellite,
-      attachments: lastUserAttachments,
+      attachments: [...lastUserAttachments, ...ingestedFiles.attachments],
+      intakeEnvelopes: ingestedFiles.intakeEnvelopes,
     });
 
     const acquiredChannel = await this.acquireChannel(channelId, req, res);

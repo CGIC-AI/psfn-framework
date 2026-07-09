@@ -1,5 +1,5 @@
-import type { AgentTool } from '@mariozechner/pi-agent-core';
-import type { SubstrateAgentTool } from '../../shared/contracts/agent-tools.js';
+import type { AgentTool } from '../../boundary/pi-agent/index.js';
+import type { SubstrateAgentTool } from '../../boundary/pi-agent/index.js';
 import { isRecord } from '../../shared/utils/types.js';
 import type { CapabilityToken } from './tokens.js';
 

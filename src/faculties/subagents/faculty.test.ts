@@ -3,7 +3,7 @@ import { CompletionNoticeBuffer } from '../../core/agent/completion-notices.js';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { Agent } from '@mariozechner/pi-agent-core';
+import { Agent } from '../../boundary/pi-agent/index.js';
 import { EventBus } from '../../shared/event-bus.js';
 import { SessionStore } from '../../persistence/sessions/store.js';
 import type { LLMProviderPort as LLMProvider } from '../../core/agent/contracts.js';

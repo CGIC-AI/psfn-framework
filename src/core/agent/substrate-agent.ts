@@ -8,8 +8,8 @@
 // MemoryExtractor) are re-exported here for callers that import contracts
 // from the SubstrateAgent module.
 
-import { Agent } from '@mariozechner/pi-agent-core';
-import type { AgentTool, StreamFn } from '@mariozechner/pi-agent-core';
+import { Agent } from '../../boundary/pi-agent/index.js';
+import type { AgentTool, StreamFn } from '../../boundary/pi-agent/index.js';
 import type { UserMessage } from '@mariozechner/pi-ai';
 import type { EventBus } from '../../shared/event-bus.js';
 import { createEventBusCostTelemetryPort } from '../../shared/telemetry/cost-telemetry-port.js';
@@ -46,7 +46,7 @@ import {
   type SubstrateStreamRuntimeOptions,
 } from './stream-adapter.js';
 import { createActiveEmanationSatellitePresencePort } from './satellite-adapter-port.js';
-import { installAgentToolSchedulerPatch } from './agent-loop-patch.js';
+import { installAgentToolSchedulerPatch } from '../../boundary/pi-agent/agent-loop-patch.js';
 import { PromptCacheTurnRuntime } from './substrate-agent/turn-execution/prompt-cache-runtime.js';
 import { convertToLlm, type InternalWhisperMessage } from './messages.js';
 import { MESSAGE_CLASSES } from './message-classes.js';

@@ -11,6 +11,10 @@
 // that validated-params contract. It is mutually assignable with
 // `AgentTool<any>` so tools flow unchanged into pi-agent-core APIs
 // (`AgentState.tools`, the scheduler loop, wiring validators).
+//
+// This file lives inside the pi-agent boundary (see ./index.ts) because it
+// mirrors `AgentTool`'s execute signature; re-check that mirror on every
+// pi-agent-core bump.
 
 import type {
   AgentTool,

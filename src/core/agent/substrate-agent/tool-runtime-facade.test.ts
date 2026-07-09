@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { AgentTool } from '@mariozechner/pi-agent-core';
+import type { AgentTool } from '../../../boundary/pi-agent/index.js';
 import { ToolRuntimeFacade } from './tool-runtime-facade.js';
 import { createWorkerExecutionPolicy, SUBAGENT_WORKER_LANE } from '../worker-lanes.js';
 

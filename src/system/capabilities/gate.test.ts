@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { Type } from '@sinclair/typebox';
-import type { AgentTool } from '@mariozechner/pi-agent-core';
+import type { AgentTool } from '../../boundary/pi-agent/index.js';
 import type { CapabilityTier } from '../config/runtime-config-contracts.js';
 import type { CapabilityToken } from './tokens.js';
 import {

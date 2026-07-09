@@ -3,7 +3,7 @@ import { CompletionNoticeBuffer } from '../../core/agent/completion-notices.js';
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { Agent } from '@mariozechner/pi-agent-core';
+import { Agent } from '../../boundary/pi-agent/index.js';
 import { Type } from '@sinclair/typebox';
 import { EventBus } from '../../shared/event-bus.js';
 import { SessionStore } from '../../persistence/sessions/store.js';

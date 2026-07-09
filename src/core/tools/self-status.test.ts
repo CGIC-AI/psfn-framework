@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import type { AgentToolResult } from '@mariozechner/pi-agent-core';
+import type { AgentToolResult } from '../../boundary/pi-agent/index.js';
 import {
   chargeSurface,
   resetRunChargeRollingWindowForTests,

@@ -1,4 +1,4 @@
-import type { AgentMessage } from '@mariozechner/pi-agent-core';
+import type { AgentMessage } from '../../../../boundary/pi-agent/index.js';
 import { resolveConfiguredCompanionDataDir } from '../../../../persistence/layout.js';
 import { collectGeneratedImageAttachments } from '../../../../primitives/images/generated-media.js';
 import type {

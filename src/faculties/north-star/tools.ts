@@ -1,6 +1,6 @@
 import { Type } from '@sinclair/typebox';
-import type { AgentToolResult } from '@mariozechner/pi-agent-core';
-import type { SubstrateAgentTool } from '../../shared/contracts/agent-tools.js';
+import type { AgentToolResult } from '../../boundary/pi-agent/index.js';
+import type { SubstrateAgentTool } from '../../boundary/pi-agent/index.js';
 import {
   MAX_NORTH_STAR_ITEMS,
   NORTH_STAR_SCOPES,

@@ -4,7 +4,7 @@
 // the core runtime boundary.
 
 import type { AssistantMessage, AssistantMessageEvent, Model, StopReason, ThinkingLevel } from '@mariozechner/pi-ai';
-import type { StreamFn } from '@mariozechner/pi-agent-core';
+import type { StreamFn } from '../../boundary/pi-agent/index.js';
 import type { LLMContext, LLMResponse, ModelBudgetBlockedEvent, MessageModelOverride, ModelPurpose, CorrelationMetadata, StreamCallbacks, ToolCall } from '../../shared/contracts/runtime.js';
 import type { CoreSubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import { createModel, createOpenAICompatibleEndpointModel, resolveRegisteredModel } from '../../primitives/llm/models.js';

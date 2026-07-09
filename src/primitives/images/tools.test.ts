@@ -2,7 +2,7 @@ import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { AgentToolResult } from '@mariozechner/pi-agent-core';
+import type { AgentToolResult } from '../../boundary/pi-agent/index.js';
 import type { TextContent } from '@mariozechner/pi-ai';
 import { runWithVisionToolRequestContext } from './request-context.js';
 import { createGenerateImageTool, createSelfieTool } from './tools.js';

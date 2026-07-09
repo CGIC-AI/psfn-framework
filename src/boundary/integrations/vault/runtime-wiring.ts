@@ -1,7 +1,7 @@
 // ── Vault Runtime Wiring ──
 // Instantiates VaultOps and registers all 4 vault tools on a target (SubstrateAgent).
 
-import type { AgentTool } from '@mariozechner/pi-agent-core';
+import type { AgentTool } from '../../pi-agent/index.js';
 import type { ToolRegistrar } from '../../../core/agent/tool-registrar.js';
 import type { WirableTool, ToolWiringMeta } from '../../../core/agent/tool-wiring-validator.js';
 import { VaultOps, type VaultOpsConfig, type VaultOperations } from './ops.js';

@@ -1,4 +1,4 @@
-import type { Agent, AgentTool } from '@mariozechner/pi-agent-core';
+import type { Agent, AgentTool } from '../../../boundary/pi-agent/index.js';
 import { tagToolWithReversibility } from '../../../system/capabilities/safeguards.js';
 import type { CapabilityAccess } from '../../../system/capabilities/gate.js';
 import type { CorrelationMetadata, ObservabilityCallType, SubstrateMessage } from '../../../shared/contracts/runtime.js';

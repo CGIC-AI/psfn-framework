@@ -1,4 +1,4 @@
-import type { Agent } from '@mariozechner/pi-agent-core';
+import type { Agent } from '../../../boundary/pi-agent/index.js';
 import type { AssistantMessage } from '@mariozechner/pi-ai';
 import type { EventBus } from '../../../shared/event-bus.js';
 import type { CostTelemetryPort } from '../../../shared/telemetry/cost-telemetry-port.js';

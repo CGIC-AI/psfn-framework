@@ -2,7 +2,7 @@
 // Bridges pi-agent-core's AgentEvent stream to our EventBus.
 // Persistent subscription — set/clear channel around each prompt call.
 
-import type { Agent, AgentEvent } from '@mariozechner/pi-agent-core';
+import type { Agent, AgentEvent } from '../../boundary/pi-agent/index.js';
 import type { ToolCall } from '@mariozechner/pi-ai';
 import type { EventBus } from '../../shared/event-bus.js';
 import type { CorrelationMetadata, ObservabilityCallType } from '../../shared/contracts/runtime.js';

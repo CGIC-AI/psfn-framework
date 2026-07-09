@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
-import type { AgentToolResult } from '@mariozechner/pi-agent-core';
+import type { AgentToolResult } from '../../boundary/pi-agent/index.js';
 import type { LLMProviderPort } from '../agent/contracts.js';
 import type { SessionEntry, JournalEntry } from '../session/types.js';
 import { getRequestContext } from '../../primitives/llm/request-context.js';

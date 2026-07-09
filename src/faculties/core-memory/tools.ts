@@ -1,6 +1,6 @@
 import { Type } from '@sinclair/typebox';
-import type { AgentToolResult } from '@mariozechner/pi-agent-core';
-import type { SubstrateAgentTool } from '../../shared/contracts/agent-tools.js';
+import type { AgentToolResult } from '../../boundary/pi-agent/index.js';
+import type { SubstrateAgentTool } from '../../boundary/pi-agent/index.js';
 import { textResult, textResultWithError } from '../../core/tools/results.js';
 import {
   ACTIVE_CONCERN_EVIDENCE_KINDS,

@@ -1,4 +1,4 @@
-import type { AgentMessage } from '@mariozechner/pi-agent-core';
+import type { AgentMessage } from '../../../boundary/pi-agent/index.js';
 import type { AssistantMessage, TextContent, ToolResultMessage } from '@mariozechner/pi-ai';
 import type { SessionManager } from '../../session/manager.js';
 import type { AgentResponse, MessagePromptOverrideMode, SubstrateMessage, TurnID, TurnRecord, TurnRecordToolCall, TurnUsage } from '../../../shared/contracts/runtime.js';

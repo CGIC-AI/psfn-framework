@@ -1,5 +1,5 @@
-import type { AgentTool, AgentToolResult } from '@mariozechner/pi-agent-core';
-import type { SubstrateAgentTool } from '../../../shared/contracts/agent-tools.js';
+import type { AgentTool, AgentToolResult } from '../../../boundary/pi-agent/index.js';
+import type { SubstrateAgentTool } from '../../../boundary/pi-agent/index.js';
 import { Type } from '@sinclair/typebox';
 import type { CapabilityAccess } from '../../../system/capabilities/gate.js';
 import type { CapabilityToken } from '../../../system/capabilities/tokens.js';

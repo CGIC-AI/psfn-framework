@@ -2,8 +2,8 @@
 // Legacy external Obsidian bridge for bounded source access and compatibility.
 
 import { Type } from '@sinclair/typebox';
-import type { AgentToolResult } from '@mariozechner/pi-agent-core';
-import type { SubstrateAgentTool } from '../../../shared/contracts/agent-tools.js';
+import type { AgentToolResult } from '../../pi-agent/index.js';
+import type { SubstrateAgentTool } from '../../pi-agent/index.js';
 import type { VaultOperations } from './ops.js';
 import { textResult, textResultWithError } from '../../../core/tools/results.js';
 import { toErrorMessage } from '../../../shared/utils/errors.js';

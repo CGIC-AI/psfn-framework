@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { Agent } from '@mariozechner/pi-agent-core';
+import { Agent } from '../../boundary/pi-agent/index.js';
 import { EventBus } from '../../shared/event-bus.js';
 import { createEventBridge } from './event-bridge.js';
 

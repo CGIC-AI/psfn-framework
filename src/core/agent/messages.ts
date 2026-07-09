@@ -9,7 +9,7 @@ import type {
   AssistantMessage as PiAssistantMessage,
   ToolResultMessage,
 } from '@mariozechner/pi-ai';
-import type { AgentMessage } from '@mariozechner/pi-agent-core';
+import type { AgentMessage } from '../../boundary/pi-agent/index.js';
 import type { SessionEntry, CompactionSummary } from '../session/types.js';
 import { parseToolObservationMetadata } from '../session/tool-observation.js';
 import {
@@ -107,6 +107,12 @@ function createInternalAssistantMessage(
 }
 
 // ── Declaration merging ──
+// Sanctioned direct pi-agent-core coupling: module augmentation must target
+// the real package name (a re-export path cannot be augmented), so this block
+// stays outside src/boundary/pi-agent. It is not an import statement, so the
+// no-restricted-imports boundary rule does not apply. On a pi-agent-core
+// bump, confirm upstream still exposes the `CustomAgentMessages` extension
+// hook (see src/boundary/pi-agent/index.ts).
 
 declare module '@mariozechner/pi-agent-core' {
   interface CustomAgentMessages {

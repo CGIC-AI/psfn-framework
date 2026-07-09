@@ -1,4 +1,4 @@
-import type { AgentTool } from '@mariozechner/pi-agent-core';
+import type { AgentTool } from '../../../boundary/pi-agent/index.js';
 import {
   evaluateToolCapabilityEligibility,
   type CapabilityAccess,

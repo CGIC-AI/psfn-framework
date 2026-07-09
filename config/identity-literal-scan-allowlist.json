@@ -643,7 +643,7 @@
       "pattern": "identity-legacy-slug"
     },
     {
-      "path": "src/core/agent/agent-loop-patch.ts",
+      "path": "src/boundary/pi-agent/agent-loop-patch.ts",
       "contains": "psfn-framework-ay73",
       "reason": "Implementation comment cites the bead that owns internal follow-up reply handling.",
       "pattern": "identity-legacy-slug"

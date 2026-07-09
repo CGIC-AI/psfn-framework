@@ -7,7 +7,7 @@
 // unreachable catalog, write failure) propagate so callers can distinguish an
 // operational fault from per-tool conformance failures.
 
-import type { AgentTool } from '@mariozechner/pi-agent-core';
+import type { AgentTool } from '../../../boundary/pi-agent/index.js';
 import { runToolConformanceSweep, DEFAULT_PER_PROBE_TIMEOUT_MS } from './harness.js';
 import { readToolConformanceLatest, writeToolConformanceResult } from './store.js';
 import type { ToolConformanceRunResult, ToolConformanceTrigger } from './types.js';

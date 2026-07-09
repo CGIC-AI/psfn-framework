@@ -1,7 +1,19 @@
+// ── pi-agent-core Agent-Loop Graft ──
+// Part of the pi-agent version-coupling boundary (see ./index.ts). This file
+// monkey-patches PRIVATE pi-agent-core Agent internals, which no semver
+// contract protects — the patch can silently no-op or corrupt agent state
+// across a version bump even when the build stays green.
+//
+// ON EVERY pi-agent-core BUMP, re-audit these private internals against the
+// upstream Agent source and the `PatchedAgent` shape below:
+//   runPromptMessages / runContinuation / createLoopConfig / processEvents /
+//   activeRun / _state (model, systemPrompt, messages, tools, isStreaming,
+//   streamingMessage, pendingToolCalls, errorMessage) / streamFn.
+
 import type { Agent, AgentLoopConfig, AgentMessage, AgentTool } from '@mariozechner/pi-agent-core';
 import type { LLMSystemPromptCacheBoundaries } from '../../shared/contracts/runtime.js';
-import { agentLoopContinueWithScheduler, agentLoopWithScheduler } from './scheduled-agent-loop.js';
-import type { ToolCallSchedulerOptions } from './tool-call-scheduler.js';
+import { agentLoopContinueWithScheduler, agentLoopWithScheduler } from '../../core/agent/scheduled-agent-loop.js';
+import type { ToolCallSchedulerOptions } from '../../core/agent/tool-call-scheduler.js';
 
 export interface AgentLoopPromptCacheHooks {
   /**

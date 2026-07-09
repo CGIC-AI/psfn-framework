@@ -2,7 +2,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { AgentTool } from '@mariozechner/pi-agent-core';
+import type { AgentTool } from '../../../boundary/pi-agent/index.js';
 import { EventBus } from '../../../shared/event-bus.js';
 import { ConfirmationQueue } from '../../../system/capabilities/confirmation-queue.js';
 import { ModuleLoader } from '../../../system/modules/loader.js';

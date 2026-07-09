@@ -1,4 +1,4 @@
-import type { AgentTool } from '@mariozechner/pi-agent-core';
+import type { AgentTool } from '../../pi-agent/index.js';
 import type { CompanionPresenceTurnPort } from '../../../core/agent/companion-presence-runtime.js';
 import type { ToolRegistrar } from '../../../core/agent/tool-registrar.js';
 import type { ToolWiringMeta, WirableTool } from '../../../core/agent/tool-wiring-validator.js';

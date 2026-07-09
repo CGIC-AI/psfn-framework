@@ -1,4 +1,4 @@
-import type { SubstrateAgentTool } from '../../shared/contracts/agent-tools.js';
+import type { SubstrateAgentTool } from '../../boundary/pi-agent/index.js';
 import { Type } from '@sinclair/typebox';
 import { textResult, textResultWithError } from '../../core/tools/results.js';
 import type { SkillsRuntime } from './runtime.js';

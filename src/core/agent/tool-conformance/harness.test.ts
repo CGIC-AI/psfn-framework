@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { AgentTool, AgentToolResult } from '@mariozechner/pi-agent-core';
+import type { AgentTool, AgentToolResult } from '../../../boundary/pi-agent/index.js';
 import { runToolConformanceSweep } from './harness.js';
 import type { ToolProbeSpec } from './probe-registry.js';
 import { ToolConformanceHarnessError } from './types.js';

@@ -1,5 +1,5 @@
 import { validateToolArguments } from '@mariozechner/pi-ai';
-import type { AgentMessage, AgentTool } from '@mariozechner/pi-agent-core';
+import type { AgentMessage, AgentTool } from '../../boundary/pi-agent/index.js';
 import type { ToolResultMessage } from '@mariozechner/pi-ai';
 import { isInternalWhisperMessage, isSystemNoteMessage } from './messages.js';
 import type { ToolConcurrencyMeta, WirableTool } from './tool-wiring-validator.js';

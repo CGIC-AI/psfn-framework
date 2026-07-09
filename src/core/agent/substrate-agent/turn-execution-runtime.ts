@@ -1,4 +1,4 @@
-import type { Agent, AgentMessage } from '@mariozechner/pi-agent-core';
+import type { Agent, AgentMessage } from '../../../boundary/pi-agent/index.js';
 import type { AssistantMessage } from '@mariozechner/pi-ai';
 import { classifyBroadcastDraft } from '../../../system/trust/broadcast-safety.js';
 import type { EventBus, EventMap } from '../../../shared/event-bus.js';

@@ -1,5 +1,5 @@
 import { EventStream, type AssistantMessage } from '@mariozechner/pi-ai';
-import type { AgentContext, AgentLoopConfig, AgentMessage, AgentTool, StreamFn } from '@mariozechner/pi-agent-core';
+import type { AgentContext, AgentLoopConfig, AgentMessage, AgentTool, StreamFn } from '../../boundary/pi-agent/index.js';
 import type { LLMSystemPromptCacheBoundaries } from '../../shared/contracts/runtime.js';
 import {
   createToolCallExecutionGuard,

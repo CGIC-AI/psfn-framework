@@ -68,10 +68,15 @@ import {
 import type { CogSecEvent, CogSecEventStore, CogSecSeverity } from '../../../core/cogsec/events.js';
 import {
   callToolLessJsonScreener,
+  neutralizeUntrustedDelimiters,
   stripJsonFences,
   type ScreenerBackend,
   type ScreenerFetch,
 } from './screener-transport.js';
+
+// Re-exported from the shared transport so both screeners frame untrusted
+// content identically; existing importers of this symbol are unaffected.
+export { neutralizeUntrustedDelimiters };
 
 const log = createComponentLogger('GatewayIntakeL3');
 
@@ -243,26 +248,6 @@ const L3_CLASSIFIER_SYSTEM_PROMPT = [
   '  "whyFlagged": when flagged, one short sentence in your own words saying',
   '    why (under 250 characters). When not flagged, an empty string.',
 ].join('\n');
-
-/**
- * Neutralizes delimiter collisions before the content is embedded between
- * `<untrusted_content>` markers: any tag-like `untrusted_content` sequence
- * inside the hostile text is replaced so it cannot forge, or break out of,
- * the delimiter the screener is told to trust.
- */
-export function neutralizeUntrustedDelimiters(
-  text: string,
-): { text: string; collisions: number } {
-  let collisions = 0;
-  const neutralized = text.replace(
-    /<\s*\/?\s*untrusted_content\b[^<>]*>?/giu,
-    () => {
-      collisions += 1;
-      return '[delimiter-collision-removed]';
-    },
-  );
-  return { text: neutralized, collisions };
-}
 
 function buildUserMessage(text: string, context: L3ScreenerContext): string {
   return [

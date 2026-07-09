@@ -54,6 +54,7 @@ import {
 } from '../../../system/config/intake-policy-config.js';
 import {
   callToolLessJsonScreener,
+  neutralizeUntrustedDelimiters,
   stripJsonFences,
   type ScreenerBackend,
   type ScreenerFetch,
@@ -257,6 +258,13 @@ export async function screenL2(
   }
   const maxChars = deps.maxContentChars ?? DEFAULT_MAX_CONTENT_CHARS;
   const bounded = text.length > maxChars ? text.slice(0, maxChars) : text;
+  const { text: neutralized, collisions } = neutralizeUntrustedDelimiters(bounded);
+  if (collisions > 0) {
+    log.warn(
+      `L2 screen ${context.sourceClass}/${context.sourceRiskTier}: neutralized `
+      + `${String(collisions)} untrusted-content delimiter collision(s) before screening`,
+    );
+  }
 
   const startedAt = performance.now();
   const content = await callToolLessJsonScreener({
@@ -264,7 +272,7 @@ export async function screenL2(
     model: deps.model,
     timeoutMs: deps.timeoutMs,
     systemPrompt: CLASSIFIER_SYSTEM_PROMPT,
-    userMessage: buildUserMessage(bounded, context),
+    userMessage: buildUserMessage(neutralized, context),
     ...(deps.fetch ? { fetch: deps.fetch } : {}),
     screenerName: 'L2 screener',
     makeError: (message) => new L2ScreenerError(message),

@@ -167,6 +167,28 @@ export async function callToolLessJsonScreener(
   return content;
 }
 
+/**
+ * Neutralizes delimiter collisions before untrusted content is embedded between
+ * `<untrusted_content>` markers in a screener prompt: any tag-like
+ * `untrusted_content` sequence inside the hostile text is replaced so it cannot
+ * forge, or break out of, the delimiter the screener is told to trust. Shared
+ * by the L2 fast screener and the L3 heavy screener so both frame untrusted
+ * content identically.
+ */
+export function neutralizeUntrustedDelimiters(
+  text: string,
+): { text: string; collisions: number } {
+  let collisions = 0;
+  const neutralized = text.replace(
+    /<\s*\/?\s*untrusted_content\b[^<>]*>?/giu,
+    () => {
+      collisions += 1;
+      return '[delimiter-collision-removed]';
+    },
+  );
+  return { text: neutralized, collisions };
+}
+
 /** Tolerate ```json ... ``` fencing some models emit despite json_object mode. */
 export function stripJsonFences(content: string): string {
   const trimmed = content.trim();

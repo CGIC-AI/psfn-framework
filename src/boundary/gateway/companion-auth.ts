@@ -3,7 +3,7 @@ import type { SessionHmacKeyring } from '../../persistence/journals/journal-util
 
 export const GATEWAY_COMPANION_AUTH_TOKEN_ENV = 'GATEWAY_COMPANION_AUTH_TOKEN';
 export const GATEWAY_SESSION_INTEGRITY_AUTH_TOKEN_ENV = 'GATEWAY_SESSION_INTEGRITY_AUTH_TOKEN';
-const COMPANION_AUTH_CONTEXT = 'psfn-gateway-companion-auth-v1';
+const COMPANION_AUTH_CONTEXT = 'substrate-gateway-companion-auth-v1';
 const TOKEN_PATTERN = /^([A-Za-z0-9_-]+)\.([a-f0-9]{64})$/u;
 export type AuthenticatedGatewayRole = 'agent' | 'internal_session_integrity';
 

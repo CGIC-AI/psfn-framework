@@ -5,6 +5,7 @@ import { GatewayServer, type GatewayServerOptions } from './server.js';
 import type { GatewayRpcConnection } from './transport.js';
 import type { SessionHmacKeyring } from '../../persistence/journals/journal-utils.js';
 import type { GatewayMultiCompanionConfig } from './multi-companion.js';
+import { deriveCompanionAuthToken } from './companion-auth.js';
 import {
   FleetStatusServer,
   buildFleetStatusPayload,
@@ -143,13 +144,19 @@ async function identifyAgent(conn: MockConnection, companionId: string, rpcId = 
   return await invokeRpc(conn, rpcId, 'gateway.client.identify', {
     role: 'agent',
     companionId,
+    authToken: deriveCompanionAuthToken(companionId, 'agent', TEST_SESSION_HMAC_KEYRING),
   });
 }
 
 function multiCompanion(
   channelRouting: GatewayMultiCompanionConfig['channelRouting'],
 ): GatewayMultiCompanionConfig {
-  return { enabled: true, channelRouting, discordAccounts: {} };
+  return {
+    enabled: true,
+    fleetCompanionIds: [COMPANION_A, COMPANION_B],
+    channelRouting,
+    discordAccounts: {},
+  };
 }
 
 async function fetchJson(port: number, path: string): Promise<{ status: number; body: any }> {

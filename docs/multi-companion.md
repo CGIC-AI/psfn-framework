@@ -119,6 +119,9 @@ fleet and spawns one agent process per companion.
   `ADMIN_PORT` from the plan. The gateway proofs are derived from the gateway
   session keyring and companion ID; they are passed only to the agent and its
   isolated session-integrity worker and are omitted from dry-run output.
+  The default single-companion launcher derives the same role separation for
+  its isolated worker even though normal agent methods retain local-socket
+  trust for flag-off compatibility.
 - `--dry-run` (or `PSFN_SUPERVISOR_DRY_RUN=1`) prints the spawn plan and exits
   without launching anything.
 - Shared fate: any supervised process exit tears down the whole fleet.
@@ -126,7 +129,8 @@ fleet and spawns one agent process per companion.
 Gateway registration is authenticated in multi-companion mode. The gateway
 accepts only IDs present in the resolved fleet and verifies a role-bound HMAC
 proof before routing any request. General agent RPC methods and the two
-session-integrity signing methods have disjoint role policies.
+session-integrity signing methods have disjoint role policies in both
+topologies; selecting the internal role always requires its proof.
 
 Network admin-transport mode is rejected fail-closed under the supervisor:
 per-companion Gardens currently support socket mode only.

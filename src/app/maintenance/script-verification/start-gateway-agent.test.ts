@@ -100,6 +100,7 @@ describe('start-gateway-agent launcher supervision', () => {
         '#!/usr/bin/env bash',
         'case "$1" in',
         '  scripts/verify-startup-owner-files.ts) exit 0 ;;',
+        '  scripts/resolve-single-companion-auth.ts) printf "v1.agent-proof\\tv1.worker-proof\\n"; exit 0 ;;',
         '  *) sleep 30 ;;',
         'esac',
       ].join('\n'),
@@ -326,12 +327,16 @@ describe('start-gateway-agent multi-companion supervisor', () => {
     ],
   });
 
-  it('keeps the single-companion path byte-identical when the flag is absent', () => {
+  it('keeps the single-companion process topology when the flag is absent', () => {
     const launcher = readFileSync(join(repoRoot, 'scripts/start-gateway-agent.sh'), 'utf8');
     // The helper is only invoked when the topology flag is present at all.
     expect(launcher).toContain('if [ -z "${PSFN_MULTI_COMPANION:-}" ]; then');
     // Supervisor branch never runs unless the flag resolved a fleet.
     expect(launcher).toContain('if [ "${SUPERVISOR_MODE}" -eq 1 ]; then');
+    // The normal topology still derives a separate proof for its isolated
+    // session-integrity worker before either child receives scrubbed env.
+    expect(launcher).toContain('scripts/resolve-single-companion-auth.ts');
+    expect(launcher).toContain('resolve_single_companion_auth');
   });
 
   it('delegates all fleet validation to the canonical TS helper', () => {
@@ -444,6 +449,26 @@ describe('start-gateway-agent multi-companion supervisor', () => {
     } finally {
       rmSync(workDir, { recursive: true, force: true });
     }
+  });
+
+  it('derives role-bound credentials for the single-companion launcher', () => {
+    const keyring = { activeVersion: 'v1', keys: { v1: 'test-session-secret' } };
+    const companionId = 'single-companion';
+    const output = execFileSync(tsxBin, ['scripts/resolve-single-companion-auth.ts'], {
+      cwd: repoRoot,
+      encoding: 'utf8',
+      env: {
+        PATH: process.env.PATH,
+        HOME: process.env.HOME,
+        COMPANION_ID: companionId,
+        GATEWAY_SESSION_HMAC_KEY: 'test-session-secret',
+      },
+    });
+
+    expect(output).toBe(
+      `${deriveCompanionAuthToken(companionId, 'agent', keyring)}\t`
+      + `${deriveCompanionAuthToken(companionId, 'internal_session_integrity', keyring)}\n`,
+    );
   });
 
   it('fails closed when multi-companion is combined with network admin transport', () => {

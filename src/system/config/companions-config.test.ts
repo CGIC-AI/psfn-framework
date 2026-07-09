@@ -278,6 +278,21 @@ describe('companions owner-file config', () => {
         .toThrow(/resolves through a symlink outside persistence root/);
     });
 
+    it('rejects distinct fleet paths that resolve to the same physical data root', () => {
+      const root = makeDataDir();
+      const actual = join(root, 'companions/actual');
+      mkdirSync(actual, { recursive: true });
+      symlinkSync(actual, join(root, 'companions/alias'));
+      const fleet = clone(VALID_FLEET);
+      fleet.companions[0].companionDataDir = 'companions/actual';
+      fleet.companions[0].characterCardPath = 'companions/actual/character-card.json';
+      fleet.companions[1].companionDataDir = 'companions/alias';
+      fleet.companions[1].characterCardPath = 'companions/alias/character-card.json';
+
+      expect(() => resolveCompanionFleetPaths(fleet, root))
+        .toThrow(/must not overlap companionDataDir/);
+    });
+
     it('binds one runtime to the complete selected fleet tuple', () => {
       const fleet = resolveCompanionFleetPaths(VALID_FLEET, makeDataDir());
       const expected = fleet.companions[0];

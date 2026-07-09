@@ -761,6 +761,9 @@ export class GatewayServer {
       if (verdict !== 'pass') {
         return;
       }
+      if ((message as Record<string, unknown>).method !== 'gateway.client.identify') {
+        this.transitionConnectionState(conn, 'ready', 'rpc_message_received');
+      }
       const releaseInFlightHealthcheck = this.beginInFlightHealthcheck(conn);
       // json-rpc-2.0 receiveAndSend() payload param is typed as `any`; message is parsed JSON
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -889,13 +892,6 @@ export class GatewayServer {
     const claimedRaw = params?.companionId;
     const claimedCompanionId = typeof claimedRaw === 'string' ? claimedRaw.trim() : undefined;
 
-    // Single-companion mode intentionally retains the existing socket-trust
-    // contract for normal agents. An explicitly selected internal role is
-    // still restricted below to its two signing methods.
-    if (!this.multiCompanion.enabled && status.role === 'agent') {
-      return 'pass';
-    }
-
     if (status.role === 'unidentified') {
       this.alarmCompanionViolation(
         'identify_required',
@@ -936,6 +932,12 @@ export class GatewayServer {
         });
       }
       return 'rejected';
+    }
+
+    // Single-companion mode retains its existing socket-trust contract for
+    // normal agent methods, but never grants that socket the signing oracle.
+    if (!this.multiCompanion.enabled && status.role === 'agent') {
+      return 'pass';
     }
 
     if (claimedCompanionId && boundCompanionId && claimedCompanionId !== boundCompanionId) {
@@ -1485,18 +1487,21 @@ export class GatewayServer {
       };
     }
 
-    if (this.multiCompanion.enabled) {
+    const requiresRoleProof = this.multiCompanion.enabled
+      || params.role === 'internal_session_integrity';
+    if (requiresRoleProof) {
       if (!companionId) {
+        const missingCompanionMessage = this.multiCompanion.enabled
+          ? 'Multi-companion mode requires a companionId in gateway.client.identify'
+          : 'The internal session-integrity role requires a companionId in gateway.client.identify';
         this.alarmCompanionViolation(
           'identify_missing_companion',
-          'Connection identified without a companionId while multi-companion is active; rejecting',
+          'Authenticated gateway role identified without a companionId; rejecting',
           {},
         );
-        throw new Error(
-          'Multi-companion mode requires a companionId in gateway.client.identify',
-        );
+        throw new Error(missingCompanionMessage);
       }
-      if (!this.fleetCompanionIds.has(companionId)) {
+      if (this.multiCompanion.enabled && !this.fleetCompanionIds.has(companionId)) {
         this.alarmCompanionViolation(
           'identify_unknown_companion',
           'Connection claimed a companionId absent from companions.json; rejecting',
@@ -1518,6 +1523,9 @@ export class GatewayServer {
           GatewayErrors.COMPANION_AUTH_FAILED,
         );
       }
+    }
+
+    if (this.multiCompanion.enabled) {
       if (status.companionId && status.companionId !== companionId) {
         this.alarmCompanionViolation(
           'identify_rebind_rejected',

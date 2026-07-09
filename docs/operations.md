@@ -53,8 +53,8 @@ shared-fate: if any supervised process exits, the whole fleet is torn down.
 Manifest-relative data/card paths are resolved to absolute strict subpaths of
 `PSFN_RUNTIME_ROOT`; symlink escapes and tuple drift fail before startup. The
 launcher also derives separate role-bound gateway proofs for the agent and its
-session-integrity worker. These proofs are not printed by `--dry-run` and are
-never passed to Garden operators.
+session-integrity worker in both single- and multi-companion topologies. These
+proofs are not printed by `--dry-run` and are never passed to Garden operators.
 
 Per-companion Gardens use socket admin transport only; network admin-transport
 mode is rejected fail-closed under the supervisor.

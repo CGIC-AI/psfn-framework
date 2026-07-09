@@ -570,6 +570,35 @@ resolve_companion_fleet() {
   fi
 }
 
+resolve_single_companion_auth() {
+  if [ "${SUPERVISOR_MODE}" -eq 1 ]; then
+    return 0
+  fi
+
+  local auth_output=""
+  if [ -x "./node_modules/.bin/tsx" ]; then
+    if ! auth_output="$(./node_modules/.bin/tsx scripts/resolve-single-companion-auth.ts)"; then
+      echo "[${MODE_LABEL}] failed to derive role-bound gateway credentials; refusing to start" >&2
+      exit 1
+    fi
+  else
+    if ! auth_output="$(npm run --silent resolve:single-companion-auth)"; then
+      echo "[${MODE_LABEL}] failed to derive role-bound gateway credentials; refusing to start" >&2
+      exit 1
+    fi
+  fi
+
+  local companion_auth_token=""
+  local session_integrity_auth_token=""
+  IFS=$'\t' read -r companion_auth_token session_integrity_auth_token <<< "${auth_output}"
+  if [ -z "${companion_auth_token}" ] || [ -z "${session_integrity_auth_token}" ]; then
+    echo "[${MODE_LABEL}] gateway credential helper returned an invalid response; refusing to start" >&2
+    exit 1
+  fi
+  export GATEWAY_COMPANION_AUTH_TOKEN="${companion_auth_token}"
+  export GATEWAY_SESSION_INTEGRITY_AUTH_TOKEN="${session_integrity_auth_token}"
+}
+
 print_supervisor_plan() {
   local record companion_id companion_data_dir character_card_path postgres_schema companion_auth_token session_integrity_auth_token admin_transport_socket garden_port
   echo "[supervisor] dry-run spawn plan (${#COMPANION_PLAN[@]} companion(s)):"
@@ -675,6 +704,7 @@ handle_shutdown_signal() {
 }
 
 resolve_companion_fleet
+resolve_single_companion_auth
 
 if [ "${DRY_RUN_MODE}" -eq 1 ]; then
   if [ "${SUPERVISOR_MODE}" -eq 1 ]; then

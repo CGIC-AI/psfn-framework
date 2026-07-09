@@ -1,4 +1,4 @@
-import { isAbsolute, join, normalize, resolve } from 'node:path';
+import { isAbsolute, join, normalize, relative, resolve } from 'node:path';
 import { existsSync, realpathSync, statSync } from 'node:fs';
 import { loadRequiredJson } from './load-or-seed.js';
 import { assertNoUnknownKeys } from './validators.js';
@@ -368,7 +368,7 @@ function assertResolvedPathInsideRoot(
   candidatePath: string,
   persistenceRoot: string,
   field: string,
-): void {
+): string {
   if (!isStrictSubpath(candidatePath, persistenceRoot)) {
     throw new Error(
       `${COMPANIONS_ERROR_PREFIX}: ${field} must resolve beneath persistence root ${persistenceRoot}, `
@@ -393,6 +393,15 @@ function assertResolvedPathInsideRoot(
       + `${persistenceRoot}`,
     );
   }
+
+  const canonicalPath = resolve(realAncestor, relative(existingAncestor, candidatePath));
+  if (!isStrictSubpath(canonicalPath, realRoot)) {
+    throw new Error(
+      `${COMPANIONS_ERROR_PREFIX}: ${field} must resolve beneath persistence root ${realRoot}, `
+      + `got ${canonicalPath}`,
+    );
+  }
+  return canonicalPath;
 }
 
 function resolveFleetPath(
@@ -401,8 +410,7 @@ function resolveFleetPath(
   field: string,
 ): string {
   const candidatePath = resolve(persistenceRoot, relativePath);
-  assertResolvedPathInsideRoot(candidatePath, persistenceRoot, field);
-  return candidatePath;
+  return assertResolvedPathInsideRoot(candidatePath, persistenceRoot, field);
 }
 
 /**
@@ -422,21 +430,24 @@ export function resolveCompanionFleetPaths(
   }
   const resolvedRoot = realpathSync(requestedRoot);
 
+  const companions = fleet.companions.map((entry, index) => ({
+    ...entry,
+    companionDataDir: resolveFleetPath(
+      resolvedRoot,
+      entry.companionDataDir,
+      `companions[${index}].companionDataDir`,
+    ),
+    characterCardPath: resolveFleetPath(
+      resolvedRoot,
+      entry.characterCardPath,
+      `companions[${index}].characterCardPath`,
+    ),
+  }));
+  assertNoOverlappingDataDirs(companions);
+
   return {
     persistenceRoot: resolvedRoot,
-    companions: fleet.companions.map((entry, index) => ({
-      ...entry,
-      companionDataDir: resolveFleetPath(
-        resolvedRoot,
-        entry.companionDataDir,
-        `companions[${index}].companionDataDir`,
-      ),
-      characterCardPath: resolveFleetPath(
-        resolvedRoot,
-        entry.characterCardPath,
-        `companions[${index}].characterCardPath`,
-      ),
-    })),
+    companions,
   };
 }
 

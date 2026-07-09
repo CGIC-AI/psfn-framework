@@ -157,11 +157,12 @@ these process-wiring env vars come into play (documented in full in
   token to `.env` under the env var name its account references (for example
   `DISCORD_TOKEN_ARIA`); the token secret stays gateway-owned.
 
-Leave all of these unset for the default single-companion topology.
-Use the supervisor launcher for multi-companion deployments. It derives and
-injects role-bound gateway authentication proofs; a direct `npm run agent`
-launch must provide the exact fleet tuple and both gateway proof variables or
-startup fails closed.
+Leave the multi-companion topology variables unset for the default topology.
+The standard launcher derives and injects role-bound gateway authentication
+proofs in both topologies so the isolated session-integrity worker never shares
+the normal agent role. A direct `npm run agent` launch must provide
+`GATEWAY_SESSION_INTEGRITY_AUTH_TOKEN`; in multi-companion mode it must also
+provide the exact fleet tuple and `GATEWAY_COMPANION_AUTH_TOKEN`.
 
 ## Common Launch Commands
 

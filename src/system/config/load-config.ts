@@ -309,11 +309,14 @@ function loadConfigForMode(mode: LoadConfigMode, env: NodeJS.ProcessEnv = proces
   const gatewaySessionIntegrityAuthToken = parseOptionalStringEnv(
     env[GATEWAY_SESSION_INTEGRITY_AUTH_TOKEN_ENV],
   );
-  if (multiCompanion && mode === 'agent'
-    && (!gatewayCompanionAuthToken || !gatewaySessionIntegrityAuthToken)) {
+  if (mode === 'agent' && !gatewaySessionIntegrityAuthToken) {
     throw new Error(
-      `${GATEWAY_COMPANION_AUTH_TOKEN_ENV} and ${GATEWAY_SESSION_INTEGRITY_AUTH_TOKEN_ENV} `
-      + 'are required for multi-companion agent authentication',
+      `${GATEWAY_SESSION_INTEGRITY_AUTH_TOKEN_ENV} is required for the isolated session-integrity role`,
+    );
+  }
+  if (multiCompanion && mode === 'agent' && !gatewayCompanionAuthToken) {
+    throw new Error(
+      `${GATEWAY_COMPANION_AUTH_TOKEN_ENV} is required for multi-companion agent authentication`,
     );
   }
 

@@ -407,6 +407,7 @@ describe('loadConfig path defaults', () => {
     process.env.DEEPGRAM_API_KEY = 'deepgram-secret';
     process.env.ELEVENLABS_API_KEY = 'eleven-secret';
     process.env.FAL_API_KEY = 'fal-secret';
+    process.env.GATEWAY_SESSION_INTEGRITY_AUTH_TOKEN = 'v1.worker-token';
 
     const config = loadAgentConfig() as Record<string, unknown>;
 
@@ -417,6 +418,12 @@ describe('loadConfig path defaults', () => {
     expect(config.deepgramApiKey).toBeUndefined();
     expect(config.elevenLabsApiKey).toBeUndefined();
     expect(config.falApiKey).toBeUndefined();
+  });
+
+  it('requires the isolated session-integrity credential for every agent topology', () => {
+    clearRuntimePathEnv();
+
+    expect(() => loadAgentConfig()).toThrow(/GATEWAY_SESSION_INTEGRITY_AUTH_TOKEN/);
   });
 
   it('binds a multi-companion agent to its canonical fleet tuple', () => {

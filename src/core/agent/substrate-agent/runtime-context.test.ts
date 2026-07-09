@@ -26,6 +26,7 @@ import {
   resolveActiveConcernsRuntimeData,
   resolveAuthorContext,
   resolveIdentityChannel,
+  resolveUnverifiedSpeakerName,
 } from './runtime-context.js';
 import {
   resetRunChargeRollingWindowForTests,
@@ -383,6 +384,25 @@ function buildMinimalRuntimeContextInput() {
     formatTopEmotions: () => '',
   };
 }
+
+describe('unverified speaker name rendering (07-M1)', () => {
+  const baseMessage = {
+    id: 'm1',
+    channelId: 'discord:room',
+    authorId: 'stranger-1',
+    content: 'hi',
+  } as unknown as SubstrateMessage;
+
+  it('tags a self-asserted channel name as unverified rather than rendering it bare', () => {
+    const message = { ...baseMessage, authorName: 'System Administrator' } as SubstrateMessage;
+    expect(resolveUnverifiedSpeakerName(message)).toBe('System Administrator (unverified)');
+  });
+
+  it('falls back to a generic label when no name is asserted', () => {
+    const message = { ...baseMessage, authorName: '   ' } as SubstrateMessage;
+    expect(resolveUnverifiedSpeakerName(message)).toBe('an unrecognized person');
+  });
+});
 
 describe('active concerns runtime data resolution', () => {
   it('still skips active-concern provider failures without crashing a turn', () => {

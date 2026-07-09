@@ -794,11 +794,13 @@ describe('ContactStore', () => {
   });
 
   describe('resolveUserId', () => {
-    it('creates new contact for unknown user', () => {
+    it('creates new contact for unknown user at the public trust floor', () => {
       const contact = store.resolveUserId('discord-new');
       expect(contact.discordUserId).toBe('discord-new');
       expect(contact.displayName).toBe('discord-new');  // Placeholder
-      expect(contact.trustLevel).toBe('regular');
+      // Sprint-10 privacy regression H7: a never-seen, non-primary speaker is
+      // minted at the PUBLIC trust floor, never the disclosing 'regular' tier.
+      expect(contact.trustLevel).toBe('public');
       expect(contact.relationshipType).toBe('stranger');
     });
 

@@ -277,7 +277,14 @@ export function resolveChannelIdentity(
     }],
     channelIdentities: [identity],
     discordUserId: identity.channel === LEGACY_DISCORD_CHANNEL ? identity.userId : undefined,
-    trustLevel: isPrimary ? 'primary' : 'regular',
+    // Sprint-10 privacy regression H7: a never-seen, non-primary speaker is minted
+    // at the PUBLIC trust floor, never 'regular'. Under the runtime trust ceiling
+    // 'regular' clears the 'personal'-sensitivity disclosure gate, so auto-minting a
+    // stranger as 'regular' let an unknown/unauthenticated author read personal-tier
+    // content on first contact. Minting at 'public' fails closed: a stranger only
+    // clears the 'public' ceiling. Promotion to 'regular'+ now requires an explicit
+    // operator/tool action. Primary auto-detect is preserved (isPrimary → 'primary').
+    trustLevel: isPrimary ? 'primary' : 'public',
     relationshipType: isPrimary ? 'partner' : 'stranger',
   });
 }

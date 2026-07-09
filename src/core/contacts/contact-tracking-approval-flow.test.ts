@@ -87,11 +87,14 @@ describe('contact-tracking approval flow (E3.4)', () => {
   it('AC1: a new speaker in an approval room stays untracked, enqueues, and notifies', async () => {
     const authorContext = await resolveWithGate(makeMessage());
 
-    // Untracked: transcript/prefix attribution only.
+    // Untracked: transcript/prefix attribution only. Sprint-10 privacy regression
+    // H7/07-M1: an approval-pending untracked speaker resolves at the PUBLIC trust
+    // floor (never 'regular') and their self-asserted channel name is rendered
+    // marked-unverified rather than as a bare trusted identity.
     expect(authorContext).toMatchObject({
-      trustLevel: 'regular',
+      trustLevel: 'public',
       speakerRole: 'user',
-      resolvedUserName: 'vtubegooner69',
+      resolvedUserName: 'vtubegooner69 (unverified)',
       continuitySubjectKey: 'stranger-42',
       continuityFallbackKeys: [],
     });
@@ -132,7 +135,10 @@ describe('contact-tracking approval flow (E3.4)', () => {
     const contact = await contactStore.getByChannelIdentity('discord', 'stranger-42');
     expect(contact).toBeDefined();
     expect(contact?.displayName).toBe('vtubegooner69');
-    expect(contact?.trustLevel).toBe('regular');
+    // Sprint-10 privacy regression H7: operator approval enrolls via the normal
+    // resolveChannelIdentity upsert, which now mints at the PUBLIC trust floor.
+    // Promotion to 'regular'+ is a separate, explicit operator/tool action.
+    expect(contact?.trustLevel).toBe('public');
 
     // Queue entry consumed.
     expect((await service.listPendingContactApprovals()).entries).toHaveLength(0);
@@ -140,7 +146,7 @@ describe('contact-tracking approval flow (E3.4)', () => {
     // Subsequent messages resolve normally (canonical contact key bound).
     const postApproval = await resolveWithGate(makeMessage({ id: 'msg-3', content: 'hello again' }));
     expect(postApproval.canonicalContactKey).toBe(contact!.id);
-    expect(postApproval.trustLevel).toBe('regular');
+    expect(postApproval.trustLevel).toBe('public');
     expect(postApproval.relationshipType).toBe('stranger');
   });
 

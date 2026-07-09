@@ -2863,6 +2863,120 @@ describe('ApiServer with auth', () => {
     expect(seen[0].receivedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
   });
 
+  it('rejects biometric-shaped telemetry payloads before any emit (H5)', async () => {
+    const cases: Array<{ label: string; payload: Record<string, unknown> }> = [
+      { label: 'faceVector key', payload: { status: 'ok', faceVector: [0.1, 0.2, 0.3] } },
+      { label: 'embedding key', payload: { status: 'ok', embedding: 'AAA' } },
+      { label: 'descriptor key', payload: { status: 'ok', descriptor: 'x' } },
+      { label: 'iris key', payload: { status: 'ok', iris: 'x' } },
+      { label: 'raw image blob key', payload: { status: 'ok', image: 'x' } },
+      {
+        label: 'deeply nested vector',
+        payload: { status: 'ok', origin: { satelliteId: 'sat', meta: { data: { faceVector: [1, 2] } } } },
+      },
+      {
+        label: 'renamed numeric vector under innocuous key',
+        payload: { status: 'ok', load: [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9] },
+      },
+    ];
+
+    for (const { label, payload } of cases) {
+      const seen: Array<any> = [];
+      const unsub = eventBus.on('external.telemetry.ingested', ({ event }) => {
+        seen.push(event);
+      });
+
+      const res = await request(port, 'POST', '/v1/telemetry/ingest', {
+        source: 'sensor-a',
+        eventType: 'external.telemetry.status',
+        timestamp: new Date().toISOString(),
+        nonce: `nonce-bio-${label.replace(/\s+/g, '-')}-${Date.now()}`,
+        payload,
+      }, {
+        Authorization: 'Bearer test-secret-key',
+      });
+
+      expect(res.status, label).toBe(400);
+      const body = JSON.parse(res.body);
+      expect(body.error.type, label).toBe('biometric_payload_rejected');
+      expect(seen, `${label}: must not emit`).toHaveLength(0);
+      unsub();
+    }
+  });
+
+  it('rejects oversized telemetry payloads before any emit (H5)', async () => {
+    const seen: Array<any> = [];
+    const unsub = eventBus.on('external.telemetry.ingested', ({ event }) => {
+      seen.push(event);
+    });
+
+    const res = await request(port, 'POST', '/v1/telemetry/ingest', {
+      source: 'sensor-a',
+      eventType: 'external.telemetry.status',
+      timestamp: new Date().toISOString(),
+      nonce: `nonce-oversize-${Date.now()}`,
+      payload: { status: 'ok', detail: 'x'.repeat(20 * 1024) },
+    }, {
+      Authorization: 'Bearer test-secret-key',
+    });
+
+    // 20KB single string trips the per-field string-length cap first.
+    expect([400, 413]).toContain(res.status);
+    expect(seen).toHaveLength(0);
+    unsub();
+  });
+
+  it('rejects telemetry payloads with fields outside the per-eventType allowlist (H5)', async () => {
+    const seen: Array<any> = [];
+    const unsub = eventBus.on('external.telemetry.ingested', ({ event }) => {
+      seen.push(event);
+    });
+
+    const res = await request(port, 'POST', '/v1/telemetry/ingest', {
+      source: 'sensor-a',
+      eventType: 'external.telemetry.heartbeat',
+      timestamp: new Date().toISOString(),
+      nonce: `nonce-unknown-field-${Date.now()}`,
+      payload: { status: 'ok', ssn: '123-45-6789' },
+    }, {
+      Authorization: 'Bearer test-secret-key',
+    });
+
+    expect(res.status).toBe(400);
+    const body = JSON.parse(res.body);
+    expect(body.error.type).toBe('payload_field_not_allowed');
+    expect(seen).toHaveLength(0);
+    unsub();
+  });
+
+  it('accepts a legit presence status payload after screening (H5)', async () => {
+    const seen: Array<any> = [];
+    const unsub = eventBus.on('external.telemetry.ingested', ({ event }) => {
+      seen.push(event);
+    });
+
+    const res = await request(port, 'POST', '/v1/telemetry/ingest', {
+      source: 'sensor-a',
+      eventType: 'external.telemetry.status',
+      timestamp: new Date().toISOString(),
+      nonce: `nonce-presence-ok-${Date.now()}`,
+      payload: { satelliteId: 'sat-a', present: true, confidence: 0.91, occupancyCount: 1 },
+      scope: 'presence',
+    }, {
+      Authorization: 'Bearer test-secret-key',
+    });
+
+    expect(res.status).toBe(202);
+    expect(seen).toHaveLength(1);
+    expect(seen[0].payload).toEqual({
+      satelliteId: 'sat-a',
+      present: true,
+      confidence: 0.91,
+      occupancyCount: 1,
+    });
+    unsub();
+  });
+
   it('rejects replayed telemetry nonces', async () => {
     const body = {
       source: 'sensor-a',

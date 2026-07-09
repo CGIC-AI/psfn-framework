@@ -197,6 +197,77 @@ describe('sensor cognition bridge normalization', () => {
     });
   });
 
+  it('fails closed via whitelist on non-biometric but non-whitelisted claim fields (04-M3)', () => {
+    const result = normalize(telemetryEvent({
+      id: 'event-extra-field',
+      scope: 'face',
+      payload: {
+        satelliteId: 'sat.living',
+        type: 'identity-claim.observed',
+        claim: {
+          hubIdentityId: 'hub.identity.sample',
+          confidence: 0.8,
+          // Not a denylisted biometric key, but not whitelisted either: a
+          // denylist would have missed this; the whitelist fails closed.
+          gaitSignature: 'abc',
+        },
+      },
+    }));
+
+    expect(result).toEqual({
+      ok: false,
+      kind: 'malformed',
+      reason: 'raw_biometric_payload_rejected',
+      satelliteId: 'sat.living',
+      placeId: 'place.living',
+    });
+  });
+
+  it('fails closed via whitelist on deeply nested non-whitelisted material (04-M3)', () => {
+    const result = normalize(telemetryEvent({
+      id: 'event-deep-nested',
+      scope: 'face',
+      payload: {
+        satelliteId: 'sat.living',
+        type: 'identity-claim.observed',
+        claim: {
+          hubIdentityId: 'hub.identity.sample',
+          confidence: 0.8,
+          // faceVector is not in the depth-4 legacy denylist key set; the
+          // whitelist rejects it regardless of nesting.
+          meta: { deep: { faceVector: [0.1, 0.2] } },
+        },
+      },
+    }));
+
+    expect(result.ok).toBe(false);
+    expect(result).toMatchObject({ kind: 'malformed', reason: 'raw_biometric_payload_rejected' });
+  });
+
+  it('accepts a whitelisted identity claim carrying only hubIdentityId + confidence (04-M3)', () => {
+    const result = normalize(telemetryEvent({
+      id: 'event-clean-claim',
+      scope: 'face',
+      payload: {
+        origin: { satelliteId: 'sat.living', siteId: 'site.home' },
+        type: 'identity-claim.observed',
+        claim: {
+          hubIdentityId: 'hub.identity.sample',
+          confidence: 0.77,
+        },
+      },
+    }));
+
+    expect(result).toMatchObject({
+      ok: true,
+      event: {
+        kind: 'identity_claim',
+        hubIdentityId: 'hub.identity.sample',
+        confidence: 0.77,
+      },
+    });
+  });
+
   it('fails closed on site claims that conflict with the satellite place binding', () => {
     const result = normalize(telemetryEvent({
       payload: {

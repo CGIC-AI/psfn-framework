@@ -108,6 +108,238 @@ const telemetryIngestSchema = Type.Object({
 
 type TelemetryIngestInput = Static<typeof telemetryIngestSchema>;
 
+// ── Sprint-10 H5: telemetry payload screening at the ingest boundary ──
+// Raw biometrics (face vectors/embeddings/descriptors, iris/retina templates,
+// image blobs) must NOT cross the door. The ingest schema deliberately accepts
+// an open `payload` object, but before that payload is copied verbatim into the
+// emitted `external.telemetry.ingested` event (and thence onto every Garden
+// admin WebSocket client), we fail closed on:
+//   - biometric-shaped keys anywhere in the object graph,
+//   - raw-media/blob keys,
+//   - value shapes that look like embeddings (long numeric arrays) or raw media
+//     (very long strings),
+//   - oversized / over-deep / over-wide structures,
+//   - top-level keys outside the per-eventType allowlist.
+const TELEMETRY_PAYLOAD_MAX_BYTES = 16 * 1024;
+const TELEMETRY_PAYLOAD_MAX_DEPTH = 6;
+const TELEMETRY_PAYLOAD_MAX_KEYS = 64;
+const TELEMETRY_PAYLOAD_MAX_ARRAY_LENGTH = 16;
+const TELEMETRY_PAYLOAD_MAX_STRING_LENGTH = 2_048;
+// A numeric array this long or longer is treated as an embedding/descriptor,
+// regardless of the (possibly innocuous) key it hides behind.
+const TELEMETRY_PAYLOAD_NUMERIC_VECTOR_THRESHOLD = 8;
+
+const TELEMETRY_BIOMETRIC_KEY_PATTERNS: readonly RegExp[] = [
+  /vector/i,
+  /embedding/i,
+  /descriptor/i,
+  /template/i,
+  /biometric/i,
+  /faceprint/i,
+  /faceid/i,
+  /landmark/i,
+  /iris/i,
+  /retina/i,
+  /fingerprint/i,
+  /minutiae/i,
+];
+const TELEMETRY_RAW_MEDIA_KEY_PATTERNS: readonly RegExp[] = [
+  /^image$/i,
+  /image[_-]?bytes/i,
+  /^frame$/i,
+  /^photo$/i,
+  /photo[_-]?bytes/i,
+  /raw[_-]?image/i,
+  /^jpe?g$/i,
+  /^png$/i,
+  /^bytes$/i,
+  /^blob$/i,
+  /pixels/i,
+];
+
+// Origin-binding and event-descriptor fields shared by every accepted event
+// type. These are also the fields the sensor-cognition bridge reads to resolve
+// a satellite/place origin and normalize presence/identity-claim perceptions.
+const TELEMETRY_COMMON_PAYLOAD_KEYS: ReadonlySet<string> = new Set([
+  'satelliteId', 'satellite_id',
+  'placeId', 'place_id',
+  'siteId', 'site_id',
+  'affordanceId', 'affordance_id',
+  'origin', 'satellite', 'site', 'sensor',
+  'channelId',
+  'type', 'kind', 'event', 'eventType', 'action', 'state', 'status',
+  'timestamp', 'ts', 'sequence', 'seq',
+]);
+
+const TELEMETRY_PAYLOAD_KEYS_BY_EVENT_TYPE: ReadonlyMap<string, ReadonlySet<string>> = new Map([
+  ['external.telemetry.heartbeat', new Set([
+    'uptime', 'uptimeMs', 'uptime_ms', 'load', 'cpu', 'cpuLoad',
+    'memory', 'memoryMb', 'battery', 'batteryPct', 'rssi', 'signal',
+    'firmware', 'version', 'online', 'healthy',
+  ])],
+  ['external.telemetry.status', new Set([
+    // presence + identity-claim perceptions ride the status event type
+    'present', 'detected', 'occupied', 'presence',
+    'confidence', 'score', 'probability',
+    'occupancyCount', 'occupancy_count', 'count',
+    'identityClaim', 'identity_claim', 'claim',
+    'hubIdentityId', 'hub_identity_id',
+    'load', 'battery', 'online', 'healthy', 'detail', 'message',
+  ])],
+  ['external.telemetry.incident', new Set([
+    'severity', 'level', 'code', 'category',
+    'message', 'detail', 'reason', 'error',
+    'count', 'confidence',
+  ])],
+]);
+
+export interface TelemetryPayloadScreenFailure {
+  ok: false;
+  errorType: string;
+  message: string;
+}
+
+export type TelemetryPayloadScreenResult = { ok: true } | TelemetryPayloadScreenFailure;
+
+function keyMatchesAny(key: string, patterns: readonly RegExp[]): boolean {
+  return patterns.some((pattern) => pattern.test(key));
+}
+
+function screenTelemetryPayloadNode(
+  value: unknown,
+  depth: number,
+): TelemetryPayloadScreenFailure | undefined {
+  if (depth > TELEMETRY_PAYLOAD_MAX_DEPTH) {
+    return {
+      ok: false,
+      errorType: 'payload_shape_invalid',
+      message: `payload nesting exceeds ${TELEMETRY_PAYLOAD_MAX_DEPTH} levels`,
+    };
+  }
+
+  if (typeof value === 'string') {
+    if (value.length > TELEMETRY_PAYLOAD_MAX_STRING_LENGTH) {
+      return {
+        ok: false,
+        errorType: 'biometric_payload_rejected',
+        message: 'payload contains an oversized string (possible raw media/biometric blob)',
+      };
+    }
+    return undefined;
+  }
+
+  if (Array.isArray(value)) {
+    if (value.length > TELEMETRY_PAYLOAD_MAX_ARRAY_LENGTH) {
+      return {
+        ok: false,
+        errorType: 'payload_shape_invalid',
+        message: `payload array exceeds ${TELEMETRY_PAYLOAD_MAX_ARRAY_LENGTH} elements`,
+      };
+    }
+    if (
+      value.length >= TELEMETRY_PAYLOAD_NUMERIC_VECTOR_THRESHOLD
+      && value.every((entry) => typeof entry === 'number')
+    ) {
+      return {
+        ok: false,
+        errorType: 'biometric_payload_rejected',
+        message: 'payload contains a numeric vector (possible embedding/descriptor)',
+      };
+    }
+    for (const entry of value) {
+      const failure = screenTelemetryPayloadNode(entry, depth + 1);
+      if (failure) return failure;
+    }
+    return undefined;
+  }
+
+  if (value !== null && typeof value === 'object') {
+    for (const [key, nested] of Object.entries(value as Record<string, unknown>)) {
+      if (keyMatchesAny(key, TELEMETRY_BIOMETRIC_KEY_PATTERNS)) {
+        return {
+          ok: false,
+          errorType: 'biometric_payload_rejected',
+          message: `payload key "${key}" is a raw-biometric-shaped field and is not accepted`,
+        };
+      }
+      if (keyMatchesAny(key, TELEMETRY_RAW_MEDIA_KEY_PATTERNS)) {
+        return {
+          ok: false,
+          errorType: 'biometric_payload_rejected',
+          message: `payload key "${key}" is a raw-media/blob field and is not accepted`,
+        };
+      }
+      const failure = screenTelemetryPayloadNode(nested, depth + 1);
+      if (failure) return failure;
+    }
+    return undefined;
+  }
+
+  return undefined;
+}
+
+function countTelemetryPayloadKeys(value: unknown): number {
+  if (Array.isArray(value)) {
+    return value.reduce<number>((total, entry) => total + countTelemetryPayloadKeys(entry), 0);
+  }
+  if (value !== null && typeof value === 'object') {
+    const entries = Object.entries(value as Record<string, unknown>);
+    return entries.reduce<number>(
+      (total, [, nested]) => total + 1 + countTelemetryPayloadKeys(nested),
+      0,
+    );
+  }
+  return 0;
+}
+
+export function screenTelemetryIngestPayload(
+  eventType: string,
+  payload: Record<string, unknown>,
+): TelemetryPayloadScreenResult {
+  // Size ceiling (well under the 1MB body limit): telemetry heartbeats/status/
+  // incidents are small. Anything larger is an exfiltration/blob vector.
+  const serializedBytes = Buffer.byteLength(JSON.stringify(payload), 'utf8');
+  if (serializedBytes > TELEMETRY_PAYLOAD_MAX_BYTES) {
+    return {
+      ok: false,
+      errorType: 'payload_too_large',
+      message: `payload exceeds ${TELEMETRY_PAYLOAD_MAX_BYTES} bytes`,
+    };
+  }
+  if (countTelemetryPayloadKeys(payload) > TELEMETRY_PAYLOAD_MAX_KEYS) {
+    return {
+      ok: false,
+      errorType: 'payload_shape_invalid',
+      message: `payload exceeds ${TELEMETRY_PAYLOAD_MAX_KEYS} keys`,
+    };
+  }
+
+  // Biometric / raw-media / vector screening across the whole object graph.
+  const structuralFailure = screenTelemetryPayloadNode(payload, 0);
+  if (structuralFailure) return structuralFailure;
+
+  // Per-eventType top-level shape allowlist (fail closed on unknown fields).
+  const allowedForEventType = TELEMETRY_PAYLOAD_KEYS_BY_EVENT_TYPE.get(eventType);
+  if (!allowedForEventType) {
+    return {
+      ok: false,
+      errorType: 'event_type_not_allowed',
+      message: `no payload shape is defined for eventType ${eventType}`,
+    };
+  }
+  for (const key of Object.keys(payload)) {
+    if (TELEMETRY_COMMON_PAYLOAD_KEYS.has(key)) continue;
+    if (allowedForEventType.has(key)) continue;
+    return {
+      ok: false,
+      errorType: 'payload_field_not_allowed',
+      message: `payload key "${key}" is not allowed for eventType ${eventType}`,
+    };
+  }
+
+  return { ok: true };
+}
+
 export interface ApiServerConfig {
   port: number;
   host?: string;
@@ -690,6 +922,16 @@ export class ApiServer implements ChannelAdapterPort {
         'event_type_not_allowed',
         `eventType must be one of: ${Array.from(TELEMETRY_EVENT_TYPE_ALLOWLIST).join(', ')}`,
       );
+      return;
+    }
+
+    // Sprint-10 H5: screen the open payload for raw biometrics, oversized/blob
+    // shapes, and out-of-allowlist fields BEFORE it is copied verbatim into the
+    // emitted event. Biometrics must not cross the ingest door. Fail closed.
+    const payloadScreen = screenTelemetryIngestPayload(telemetry.eventType, telemetry.payload);
+    if (!payloadScreen.ok) {
+      const status = payloadScreen.errorType === 'payload_too_large' ? 413 : 400;
+      sendApiError(res, status, payloadScreen.errorType, payloadScreen.message);
       return;
     }
 

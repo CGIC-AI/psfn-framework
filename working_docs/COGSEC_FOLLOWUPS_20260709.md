@@ -2,7 +2,7 @@
 
 - **Date:** 2026-07-09
 - **Author:** Fable (orchestrator), after integrating the 18-bead `htm9` cognition-intake-firewall epic
-- **Bead batch:** [`cogsec-followup-beads.jsonl`](./cogsec-followup-beads.jsonl) — epic `psfn-framework-cgsf` + 13 children
+- **Bead batch:** [`cogsec-followup-beads.jsonl`](./cogsec-followup-beads.jsonl) — epic `psfn-framework-cgsf` + 14 children (`cgsf.1` closed same-day)
 - **Branch:** `feat/cogsec-intake-firewall` (merged with `origin/main`, tip moving)
 - **Related:** [`COGSEC_INTAKE_FIREWALL_RESEARCH_20260709.md`](./COGSEC_INTAKE_FIREWALL_RESEARCH_20260709.md) (design brief), `FABLE_AUDIT_REVIEW_S10.md` (on branch `docs/fable-audit-review-s10`), [`cogsec-intake-firewall-beads.jsonl`](./cogsec-intake-firewall-beads.jsonl) (the epic itself), [`cogsec-evals-beads.json`](./cogsec-evals-beads.json) (eval-repo items)
 
@@ -24,11 +24,26 @@ Not from memory or intent. Every bead below is anchored to a command that was ru
 
 The rest come from the implementing agents' own final reports, where each explicitly named what it left undone. Those admissions are the most valuable artifact of the whole session; they are quoted verbatim in the bead descriptions rather than paraphrased.
 
-## The one that matters: L2/L3 were dead code (`cgsf.1`)
+## The one that matters: L2/L3 were dead code (`cgsf.1` — **now fixed**, commit `2837dd2e`)
 
-`evaluateL2`, `evaluateL3`, and `applyL3ScreeningOutcome` are fully implemented and heavily unit-tested. **Nothing called them.** The live path is `IntakeScreeningService.screen()`, which runs L1 scanners plus the L1.5 ONNX scorer and returns; `compose-screening.ts` never constructs an escalator.
+> **Resolved 2026-07-09.** Escalation is live gateway-side via an
+> `IntakeEscalationPort` (`src/boundary/gateway/intake/escalation.ts`), composed
+> in `compose-screening.ts`. The agent process holds no escalation port and
+> stays L1-only by construction. Re-verified after integration: the call-site
+> grep below now resolves, and the chain `gateway/main.ts` →
+> `privileged-core.ts` → `composeGatewayIntakeScreening` → escalation port →
+> `evaluateL2`/`evaluateL3` is complete. The section below is kept as written
+> because the *lesson* outlives the bug.
+>
+> One consequence surfaced by the fix and beaded as `cgsf.14`: `image_ocr` is
+> `hostile` tier and mandatory at both L2 and L3, so in enforce mode every
+> benign image is delivered as an L3 safe representation rather than verbatim
+> OCR. That is what the shipped policy demands; whether it is what we *want* is
+> a product decision that needs `cgsf.2`'s data.
 
-So the firewall as merged is its **deterministic half** — envelope + taint, L1 scanners, L1.5 classifier, vision screening, sink gates, quarantine, drift lanes, canary — while every L2/L3 policy knob in `intake-policy.json` sits inert.
+`evaluateL2`, `evaluateL3`, and `applyL3ScreeningOutcome` were fully implemented and heavily unit-tested. **Nothing called them.** The live path was `IntakeScreeningService.screen()`, which ran L1 scanners plus the L1.5 ONNX scorer and returned; `compose-screening.ts` never constructed an escalator.
+
+So the firewall, as first merged, was only its **deterministic half** — envelope + taint, L1 scanners, L1.5 classifier, vision screening, sink gates, quarantine, drift lanes, canary — while every L2/L3 policy knob in `intake-policy.json` sat inert.
 
 **Why it happened, because this will happen again.** `htm9.6` (L2) and `htm9.7` (L3) each ended their reports with a variant of *"runtime wiring into the live screening service remains with the htm9.3 decision layer."* `htm9.3` (sink gates) scoped itself, correctly per its own bead, to sinks. Neither agent was wrong about its bead. The wiring lived in the seam between two tickets, and **unit tests could not see the seam** — each screener's tests passed against a directly-constructed instance.
 
@@ -49,11 +64,12 @@ Secondary lesson: an agent that says "wiring belongs to another bead" is filing 
 ## Sequencing
 
 ```
-cgsf.1 (L2/L3 wiring, P0, in-flight)
+cgsf.1 (L2/L3 wiring, P0)  [CLOSED 2026-07-09, commit 2837dd2e]
    └─> cgsf.2 (measure cost/latency in shadow)
-          └─> cgsf.4 (flip shadow -> enforce)   <-- the bead that makes the epic real
-cgsf.3 (per-sink unscreened posture)  ────────────┘
-cgsf.9 (ONNX weights + owner file on hosts) ──────┘
+          ├─> cgsf.14 (benign-image delivery: OCR vs safe representation)
+          └─> cgsf.4  (flip shadow -> enforce)   <-- the bead that makes the epic real
+cgsf.3  (per-sink unscreened posture)  ──────────┘
+cgsf.9  (ONNX weights + owner file on hosts) ─────┘
 
 cgsf.10 (satellite certs) — deploy-blocking the moment the branch merges
 cgsf.7  (identity-literals sweep) — do once, post-merge

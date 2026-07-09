@@ -18,12 +18,13 @@ Design brief and prior-art survey:
 `working_docs/COGSEC_INTAKE_FIREWALL_RESEARCH_20260709.md`.
 
 > **Wiring status note (2026-07-09).** Everything described here is wired to
-> runtime entrypoints, with one exception called out inline: the L2 and L3
-> escalation screeners (`evaluateL2`/`evaluateL3`) are fully implemented,
-> config-schema'd, and test-pinned, but currently have **no runtime call
-> sites** — their escalation wiring is landing separately. Until it lands,
-> live screening decisions come from L1 + L1.5, the vision screener, and the
-> sink gates.
+> runtime entrypoints. L2/L3 escalation runs **gateway-side only**, through the
+> `IntakeEscalationPort` composed in
+> `src/boundary/gateway/intake/compose-screening.ts`; the agent process holds no
+> escalation port and stays L1-only by construction. When no OpenRouter backend
+> is resolvable, escalation is not composed (loud warning) — except under
+> `mode: "enforce"` with non-empty `mandatoryTiers`, which fails startup rather
+> than silently skipping screening the policy demands.
 
 ## Threat Model
 
@@ -76,9 +77,9 @@ L1.5 ONNX injection classifier (milliseconds, gateway-side, optional)
         +---> screening decision: pass | sanitize | quarantine | block
         |     (screening.ts; block = fail-closed hold, same as quarantine)
         |
-L2   fast API LLM screener      \   implemented + policy-owned; escalation
-L3   heavy escalation screener   |  wiring landing separately (no runtime
-     + safe representation      /   call sites yet -- see status note)
+L2   fast API LLM screener      \   gateway-side only, via IntakeEscalationPort
+L3   heavy escalation screener   |  (escalation.ts). Skipped when L1/L1.5 have
+     + safe representation      /   already decided quarantine/block.
 L2.5 vision screener (per inbound image; WIRED via intake.screen_image RPC;
      OCR transcript re-enters the text stack as sourceClass image_ocr)
         |
@@ -267,11 +268,11 @@ default `./models/prompt-injection-v2`. There is no RPC method for the
 classifier — it runs inside the gateway's `screen()`; the agent-side L1-only
 service never runs it.
 
-### L2 — fast API LLM screener (implemented; escalation wiring landing separately)
+### L2 — fast API LLM screener
 
-> **Status:** `evaluateL2` in `src/boundary/gateway/intake/l2-screener.ts`
-> currently has no runtime call sites (tests only). The section describes the
-> implemented, test-pinned contract that the in-flight wiring composes.
+> **Status:** live gateway-side. `evaluateL2`
+> (`src/boundary/gateway/intake/l2-screener.ts`) is invoked from the
+> `IntakeEscalationPort` in `src/boundary/gateway/intake/escalation.ts`.
 
 The mid-weight tier for items whose L1/L1.5 prior score crosses the per-tier
 escalation threshold (`l2Screener.escalationThresholdsByTier`) or whose tier
@@ -299,11 +300,10 @@ actions (`failClosedActionByTier`): `quarantine` for high-risk tiers,
 `l1_labels_only` for trusted tiers. A verdict that flags the content — or a
 tier in `l3Screener.mandatoryTiers` — returns an `escalate_l3` outcome.
 
-### L3 — heavy escalation screener + safe representation (implemented; escalation wiring landing separately)
+### L3 — heavy escalation screener + safe representation
 
-> **Status:** `evaluateL3` in `src/boundary/gateway/intake/l3-screener.ts`
-> currently has no runtime call sites (tests only). Same in-flight wiring as
-> L2.
+> **Status:** live gateway-side, reached from L2's `escalate_l3` outcome or a
+> mandatory tier, via the same `IntakeEscalationPort` as L2.
 
 The deep second/third pass for items L2 flags, or for tiers mandating deep
 screening. Same tool-less transport; model is a larger open model
@@ -711,7 +711,7 @@ Seed `sourceRiskTiers`: `operator`/`primary_user` → `trusted`;
 | `labelThreshold` | `0.5` | P(injection) at/above which the classifier attaches its `injection/override_attempt` label. |
 | `scoreThresholdsByTier` | trusted `0.98`, standard `0.9`, untrusted `0.75`, hostile `0.6` | Per-tier score threshold for the score to count as a screening signal (riskier tiers are more sensitive). The score never hard-blocks alone. |
 
-### `l2Screener` (escalation wiring landing separately)
+### `l2Screener`
 
 | Knob | Seed default | What it does |
 | --- | --- | --- |
@@ -722,7 +722,7 @@ Seed `sourceRiskTiers`: `operator`/`primary_user` → `trusted`;
 | `timeoutMs` | `8000` | Per-call timeout. |
 | `maxContentChars` | `24000` | Input cap sent to the screener. |
 
-### `l3Screener` (escalation wiring landing separately)
+### `l3Screener`
 
 | Knob | Seed default | What it does |
 | --- | --- | --- |

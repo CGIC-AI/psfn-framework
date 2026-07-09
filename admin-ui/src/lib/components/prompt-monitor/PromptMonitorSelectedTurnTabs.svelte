@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { GardenEventEnvelope } from '$lib/events/envelope';
+  import { getCompanionName } from '$lib/stores/companion.svelte';
   import {
     buildStaticPrefixHashTimeline,
     diffPromptPlanBlocks,
@@ -63,6 +64,7 @@
   const promptLoom = $derived(resolvePromptMonitorPromptLoom(turn));
   const plan = $derived(resolvePromptMonitorPlan(turn));
   const isLegacyTurn = $derived(plan === null);
+  const companionName = $derived(getCompanionName());
   const LEGACY_TURN_LABEL = 'Legacy turn (pre-plan): this record predates the PromptPlan snapshot; views degrade to recorded strings.';
 
   $effect(() => {
@@ -328,9 +330,9 @@
             maxHeightClass="max-h-[20rem]"
           />
           <PromptMonitorTextBlock
-            title="Assistant Response"
+            title={`${companionName} Response`}
             value={turn.snapshot?.promptContext?.response?.content ?? turn.record?.assistantMessage?.content}
-            emptyText="No assistant response snapshot recorded."
+            emptyText={`No ${companionName} response snapshot recorded.`}
             maxHeightClass="max-h-[20rem]"
           />
           <PromptMonitorTextBlock

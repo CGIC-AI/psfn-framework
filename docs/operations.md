@@ -471,6 +471,66 @@ Key runtime wiring:
 
 If you enable HTTPS on the bundled proxy, update the proxy compose mounts and keep the certs under the repo-owned tree.
 
+## Dependency Update Policy (pin-then-plan)
+
+PSFN does **not** auto-update dependencies. Every dependency is pinned to an
+exact version in `package.json`/`package-lock.json`, and updates are planned and
+applied deliberately. This is a supply-chain control, not inertia.
+
+### Why no auto-updates
+
+Public supply-chain compromises (a maintainer account takeover, a malicious
+post-install script, a backdoored transitive dep) usually surface publicly
+within roughly an hour of being noticed. The real risk window is an
+**auto-update pulling a compromised package before anyone has flagged it**. By
+pinning and updating deliberately, the compromise almost always has a public
+advisory by the time we choose to move — so we can check for it. Auto-updating
+would spend that safety margin for us.
+
+### The deliberate update workflow
+
+Update dependencies in a dedicated change, never mixed into a feature commit:
+
+1. Edit the target versions in `package.json` (change exact pins deliberately).
+2. `npm install` to update `package-lock.json`.
+3. `npm run verify:supply-chain` — this is the gate. It runs when the lockfile
+   changes: it computes the `(name, version)` pairs **added or changed** between
+   the git HEAD lockfile and the working-tree lockfile, and cross-references
+   them against published advisories.
+4. Review the report. If clean, commit the lockfile change. If it flags a hit,
+   **do not commit** — see below.
+
+The check is wired as an npm script and is intentionally **not** an in-app or
+always-on scanner: it belongs to the update cycle, not the runtime.
+
+### The advisory feed
+
+`verify:supply-chain` queries the **OSV.dev batch query API**
+(`https://api.osv.dev/v1/querybatch`) — a free, keyless feed. OSV aggregates the
+**GitHub Advisory Database**, so GHSA identifiers surface directly in OSV
+responses (the report prints both the OSV/GHSA ids and any CVE aliases). One API
+therefore covers the two intended free feeds (OSV.dev + GitHub Advisory
+Database) with no token required.
+
+### What to do on a hit
+
+If the report names a changed package version that matches an advisory, the
+command exits nonzero and prints the package, version, advisory ids (GHSA/CVE),
+severity, summary, and references. Do not commit the update. Pin the affected
+package to a known-safe version (or hold the upgrade entirely), re-run
+`npm install`, and re-run `npm run verify:supply-chain` until it is clean. Record
+the advisory id in the update commit or the tracking issue.
+
+### The offline escape hatch
+
+The check **fails closed**: if it cannot reach the advisory feed, it exits
+nonzero with a "could not verify" message, because an unverifiable update is not
+a verified update. For a confirmed feed outage you can pass
+`npm run verify:supply-chain -- --allow-offline`, which downgrades the failure to
+a prominent warning and exits 0. This is only acceptable when you have
+independently confirmed the outage and are accepting the risk; re-run without the
+flag once connectivity is restored.
+
 ## Validation Commands
 
 These are the common operational checks:
@@ -483,6 +543,7 @@ npm run smoke:chat
 npm run e2e
 npm run e2e:voice
 npm run verify:settings-contract
+npm run verify:supply-chain      # dependency-update gate; see "Dependency Update Policy"
 npm run verify:repository-hygiene
 npm run verify:agent-docker-isolation
 npm run test:group-harness

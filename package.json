@@ -74,6 +74,7 @@
     "verify:shared-type-guards": "node scripts/verify-shared-type-guards.mjs",
     "verify:repository-hygiene": "npm run verify:public-sanitize && npm run verify:identity-literals && npm run verify:dependency-cycles && npm run verify:shared-type-guards",
     "verify:settings-contract": "tsx scripts/verify-settings-contract.ts",
+    "verify:supply-chain": "tsx scripts/verify-supply-chain.ts",
     "verify:backup-restore": "tsx scripts/verify-backup-restore.ts",
     "verify:agent-docker-isolation": "node scripts/verify-agent-docker-isolation.mjs",
     "ship:kube": "bash scripts/ops/ship-kube-update.sh"

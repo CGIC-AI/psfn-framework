@@ -1,5 +1,4 @@
 import type { AgentTool } from '../../boundary/pi-agent/index.js';
-import type { SubstrateAgentTool } from '../../boundary/pi-agent/index.js';
 import { isRecord } from '../../shared/utils/types.js';
 import type { CapabilityToken } from './tokens.js';
 
@@ -26,7 +25,7 @@ type UnifiedToolRequirementResolver = (
 ) => CapabilityRequirement | null;
 
 const IDENTITY_READ_RUNTIME_WRITE = ['identity.read', 'identity.write.runtime'] as const;
-const NO_CAPABILITY_REQUIREMENT = [] as const;
+export const NO_CAPABILITY_REQUIREMENT: readonly CapabilityToken[] = Object.freeze([]);
 const IDENTITY_LAYER_WRITE_REQUIREMENTS = [
   'identity.write.runtime',
   'identity.write.base',
@@ -112,6 +111,16 @@ function resolveScratchpadRequirement(action: string | null): CapabilityRequirem
   if (actionIn(action, SCRATCHPAD_READ_ACTIONS)) return 'identity.read';
   if (actionIn(action, SCRATCHPAD_WRITE_ACTIONS)) return 'memory.write';
   return SCRATCHPAD_REQUIREMENTS;
+}
+
+const JOURNAL_READ_ACTIONS = new Set(['list', 'read', 'search']);
+const JOURNAL_WRITE_ACTIONS = new Set(['write', 'append']);
+const JOURNAL_REQUIREMENTS = ['identity.read', 'memory.write'] as const;
+
+function resolveJournalRequirement(action: string | null): CapabilityRequirement {
+  if (actionIn(action, JOURNAL_READ_ACTIONS)) return 'identity.read';
+  if (actionIn(action, JOURNAL_WRITE_ACTIONS)) return 'memory.write';
+  return JOURNAL_REQUIREMENTS;
 }
 
 const CONTACT_WRITE_ACTIONS = new Set([
@@ -261,6 +270,7 @@ const UNIFIED_TOOL_REQUIREMENT_RESOLVERS: Readonly<Partial<Record<string, Unifie
   session: (action) => resolveSessionRequirement(action),
   skill: (action) => resolveSkillRequirement(action),
   subagent: (action) => resolveSubagentRequirement(action),
+  shard: () => 'shard.spawn',
   generate_image: () => NO_CAPABILITY_REQUIREMENT,
   selfie_create: () => NO_CAPABILITY_REQUIREMENT,
   vault: (action) => resolveVaultRequirement(action),
@@ -269,17 +279,11 @@ const UNIFIED_TOOL_REQUIREMENT_RESOLVERS: Readonly<Partial<Record<string, Unifie
   beads: (action) => resolveBeadsRequirement(action),
   world: (action) => resolveWorldRequirement(action),
   notify: resolveNotifyRequirement,
+  journal: (action) => resolveJournalRequirement(action),
 };
 
-function resolveUnifiedToolRequirement(
-  toolName: string,
-  params: Record<string, unknown>,
-): CapabilityRequirement | null {
-  const resolver = UNIFIED_TOOL_REQUIREMENT_RESOLVERS[toolName];
-  return resolver ? resolver(normalizeAction(params), params) : null;
-}
-
 const STATIC_TOOL_REQUIREMENTS: Readonly<Record<string, CapabilityRequirement>> = {
+  tool_search: 'identity.read',
   identity_changelog: 'identity.read',
   identity_diff: 'identity.read',
   notify_operator: 'external.web',
@@ -312,6 +316,50 @@ const STATIC_TOOL_REQUIREMENTS: Readonly<Record<string, CapabilityRequirement>> 
   vault_daily: 'identity.write.runtime',
 };
 
+// These canonical tools keep their policy beside their implementation because
+// it depends on implementation-specific action semantics. Runtime validation
+// still verifies the actual executable tool carries the annotation.
+const IMPLEMENTATION_ANNOTATED_TOOL_CAPABILITY_POLICIES = new Set([
+  'schedule',
+  'toolset',
+  'wiki',
+]);
+
+function hasOwn(object: object, key: PropertyKey): boolean {
+  return Object.prototype.hasOwnProperty.call(object, key);
+}
+
+function hasCentralCapabilityPolicy(toolName: string): boolean {
+  return hasOwn(UNIFIED_TOOL_REQUIREMENT_RESOLVERS, toolName)
+    || hasOwn(STATIC_TOOL_REQUIREMENTS, toolName);
+}
+
+function hasAnnotatedCapabilityPolicy(tool: AgentTool<any>): boolean {
+  if (!hasOwn(tool, 'requiredCapability')) return false;
+  return (tool as AgentTool<any> & CapabilityAnnotatedTool).requiredCapability !== undefined;
+}
+
+export function hasDeclaredCapabilityPolicyForToolName(toolName: string): boolean {
+  return hasCentralCapabilityPolicy(toolName)
+    || IMPLEMENTATION_ANNOTATED_TOOL_CAPABILITY_POLICIES.has(toolName);
+}
+
+export function assertToolHasDeclaredCapabilityPolicy(tool: AgentTool<any>): void {
+  if (hasAnnotatedCapabilityPolicy(tool) || hasCentralCapabilityPolicy(tool.name)) return;
+  throw new Error(
+    `Tool "${tool.name}" has no declared capability policy. `
+    + 'Add an action-aware requirement or the reviewed NO_CAPABILITY_REQUIREMENT marker.',
+  );
+}
+
+export function assertToolsHaveDeclaredCapabilityPolicies(
+  tools: readonly AgentTool<any>[],
+): void {
+  for (const tool of tools) {
+    assertToolHasDeclaredCapabilityPolicy(tool);
+  }
+}
+
 function toRecord(value: unknown): Record<string, unknown> {
   return isRecord(value) ? value : {};
 }
@@ -322,7 +370,7 @@ function normalizeRequirement(input: CapabilityRequirement | null | undefined): 
   return [input as CapabilityToken];
 }
 
-export function withCapabilityRequirement<T extends SubstrateAgentTool>(
+export function withCapabilityRequirement<T extends AgentTool<any>>(
   tool: T,
   requirement: CapabilityRequirementInput,
 ): T {
@@ -335,19 +383,24 @@ export function resolveToolRequiredCapabilities(
   params: unknown,
 ): CapabilityToken[] {
   const normalizedParams = toRecord(params);
-  const annotated = (tool as AgentTool<any> & CapabilityAnnotatedTool).requiredCapability;
-  if (annotated) {
+  const annotatedTool = tool as AgentTool<any> & CapabilityAnnotatedTool;
+  if (hasAnnotatedCapabilityPolicy(tool)) {
+    const annotated = annotatedTool.requiredCapability;
     if (typeof annotated === 'function') {
       return normalizeRequirement(annotated(normalizedParams));
     }
     return normalizeRequirement(annotated);
   }
 
-  const unifiedRequirement = resolveUnifiedToolRequirement(tool.name, normalizedParams);
-  if (unifiedRequirement) {
-    return normalizeRequirement(unifiedRequirement);
+  const unifiedResolver = UNIFIED_TOOL_REQUIREMENT_RESOLVERS[tool.name];
+  if (unifiedResolver) {
+    return normalizeRequirement(unifiedResolver(normalizeAction(normalizedParams), normalizedParams));
   }
 
-  const fallback = STATIC_TOOL_REQUIREMENTS[tool.name];
-  return normalizeRequirement(fallback);
+  if (hasOwn(STATIC_TOOL_REQUIREMENTS, tool.name)) {
+    return normalizeRequirement(STATIC_TOOL_REQUIREMENTS[tool.name]);
+  }
+
+  assertToolHasDeclaredCapabilityPolicy(tool);
+  throw new Error(`Tool "${tool.name}" capability policy resolution failed`);
 }

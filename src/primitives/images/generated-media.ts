@@ -13,6 +13,10 @@ import type {
   MediaToolResultDetails,
   ImageToolResultDetails,
 } from './types.js';
+import type {
+  PendingPaidDeliverable,
+  PendingPaidDeliverableArtifact,
+} from '../../shared/paid-deliverable-tracking.js';
 
 const log = createComponentLogger('ImageGeneratedMedia');
 // Live tool names first; retired names ('media', 'image_create', 'image_edit')
@@ -40,6 +44,78 @@ interface CollectedImageGenerationResult {
     content: unknown;
   };
   result: ImageGenerationResult;
+}
+
+function normalizeImageMode(value: unknown): ImageGenerationResult['mode'] {
+  return value === 'edit' ? 'edit' : 'create';
+}
+
+function normalizeImageProvider(value: unknown): ImageGenerationResult['provider'] {
+  return value === 'comfyui' ? 'comfyui' : 'fal';
+}
+
+function collectImageResultKey(entry: CollectedImageGenerationResult): string {
+  const requestId = entry.result.requestId?.trim();
+  if (requestId) return `request:${requestId}`;
+  const toolCallIdValue = (entry.message as { toolCallId?: unknown }).toolCallId;
+  const toolCallId = typeof toolCallIdValue === 'string' ? toolCallIdValue.trim() : '';
+  if (toolCallId) return `tool:${toolCallId}`;
+  return `assets:${entry.message.toolName}:${
+    entry.result.images.map((asset) => asset.localPath?.trim() || asset.url.trim()).join('|')
+  }`;
+}
+
+function collectImageResultUnique(
+  entries: CollectedImageGenerationResult[],
+  seen: Set<string>,
+  entry: CollectedImageGenerationResult | null,
+): void {
+  if (!entry) return;
+  const key = collectImageResultKey(entry);
+  if (seen.has(key)) return;
+  seen.add(key);
+  entries.push(entry);
+}
+
+function imageResultFromPendingDeliverable(
+  deliverable: PendingPaidDeliverable,
+): CollectedImageGenerationResult | null {
+  if (deliverable.surface !== 'paidImageGeneration') return null;
+  if (deliverable.artifactKind !== 'image') return null;
+  const toolName = deliverable.toolName?.trim();
+  if (!toolName || !IMAGE_TOOL_NAMES.has(toolName)) return null;
+
+  const images = (deliverable.artifacts ?? [])
+    .filter((artifact): artifact is PendingPaidDeliverableArtifact => (
+      artifact.url.trim().length > 0
+    ))
+    .map((artifact): ImageResultAsset => ({
+      url: artifact.url.trim(),
+      ...(artifact.contentType?.trim() ? { contentType: artifact.contentType.trim() } : {}),
+      ...(artifact.fileName?.trim() ? { fileName: artifact.fileName.trim() } : {}),
+      ...(artifact.localPath?.trim() ? { localPath: artifact.localPath.trim() } : {}),
+    }));
+  if (images.length === 0) return null;
+
+  const result: ImageGenerationResult = {
+    provider: normalizeImageProvider(deliverable.provider),
+    mode: normalizeImageMode(deliverable.mode),
+    ...(deliverable.model?.trim() ? { model: deliverable.model.trim() } : {}),
+    fallbackUsed: false,
+    ...(deliverable.identifier?.trim() ? { requestId: deliverable.identifier.trim() } : {}),
+    images,
+  };
+  return {
+    message: {
+      role: 'toolResult',
+      toolName,
+      ...(deliverable.toolCallId?.trim() ? { toolCallId: deliverable.toolCallId.trim() } : {}),
+      content: [],
+      details: { imageResult: result },
+      isError: false,
+    },
+    result,
+  };
 }
 
 
@@ -341,13 +417,53 @@ export function summarizeChargedImageDeliverables(
   return summaries;
 }
 
+export function summarizePendingPaidImageDeliverables(
+  deliverables: readonly PendingPaidDeliverable[],
+): ChargedImageDeliverableSummary[] {
+  const summaries: ChargedImageDeliverableSummary[] = [];
+  const seen = new Set<string>();
+  for (const deliverable of deliverables) {
+    const imageResult = imageResultFromPendingDeliverable(deliverable);
+    if (!imageResult || imageResult.result.provider !== 'fal') continue;
+    const summary: ChargedImageDeliverableSummary = {
+      toolName: imageResult.message.toolName,
+      ...(imageResult.message.toolCallId ? { toolCallId: imageResult.message.toolCallId } : {}),
+      ...(imageResult.result.requestId ? { requestId: imageResult.result.requestId } : {}),
+      imageCount: imageResult.result.images.length,
+    };
+    const key = summary.requestId ?? summary.toolCallId ?? `${summary.toolName}:${summary.imageCount}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    summaries.push(summary);
+  }
+  return summaries;
+}
+
+export function mergeChargedImageDeliverableSummaries(
+  primary: readonly ChargedImageDeliverableSummary[],
+  fallback: readonly ChargedImageDeliverableSummary[],
+): ChargedImageDeliverableSummary[] {
+  const merged: ChargedImageDeliverableSummary[] = [];
+  const seen = new Set<string>();
+  for (const summary of [...primary, ...fallback]) {
+    const key = summary.requestId ?? summary.toolCallId ?? `${summary.toolName}:${summary.imageCount}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    merged.push({ ...summary });
+  }
+  return merged;
+}
+
 export async function collectGeneratedImageAttachments(params: {
   turnMessages: AgentMessage[];
   companionDataDir: string;
   fetchImpl?: typeof fetch;
   galleryContext?: GeneratedImageGalleryContext;
+  paidDeliverables?: readonly PendingPaidDeliverable[];
 }): Promise<Attachment[]> {
-  const imageResults = params.turnMessages
+  const imageResults: CollectedImageGenerationResult[] = [];
+  const seenImageResults = new Set<string>();
+  for (const message of params.turnMessages
     .filter((message): message is AgentMessage & {
       role: 'toolResult';
       toolName: string;
@@ -357,13 +473,23 @@ export async function collectGeneratedImageAttachments(params: {
       content: unknown;
     } => isToolResultMessage(message))
     .filter((message) => IMAGE_TOOL_NAMES.has(message.toolName))
-    .filter((message) => message.isError !== true)
-    .map((message): CollectedImageGenerationResult | null => {
-      const result = resolveImageResultFromDetails(message.details)
-        ?? parseImageGenerationResult(extractToolResultText(message.content));
-      return result ? { message, result } : null;
-    })
-    .filter((entry): entry is CollectedImageGenerationResult => entry !== null);
+    .filter((message) => message.isError !== true)) {
+    const result = resolveImageResultFromDetails(message.details)
+      ?? parseImageGenerationResult(extractToolResultText(message.content));
+    collectImageResultUnique(
+      imageResults,
+      seenImageResults,
+      result ? { message, result } : null,
+    );
+  }
+
+  for (const deliverable of params.paidDeliverables ?? []) {
+    collectImageResultUnique(
+      imageResults,
+      seenImageResults,
+      imageResultFromPendingDeliverable(deliverable),
+    );
+  }
 
   if (imageResults.length === 0) {
     return [];

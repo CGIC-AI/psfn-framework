@@ -426,6 +426,18 @@ function chargePaidImageGeneration(
     ...(source.toolCallId ? { toolCallId: source.toolCallId } : {}),
     ...(generationId ? { identifier: generationId } : {}),
     artifactCount: result.images.length,
+    artifactKind: 'image',
+    provider: result.provider,
+    mode: result.mode,
+    ...(result.model ? { model: result.model } : {}),
+    artifacts: result.images
+      .filter((image) => image.url.trim().length > 0)
+      .map((image) => ({
+        url: image.url,
+        ...(image.contentType ? { contentType: image.contentType } : {}),
+        ...(image.fileName ? { fileName: image.fileName } : {}),
+        ...(image.localPath ? { localPath: image.localPath } : {}),
+      })),
   });
 }
 

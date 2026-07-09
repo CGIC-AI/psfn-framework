@@ -39,10 +39,19 @@ describe('paid-deliverable-tracking', () => {
 
   it('returns a defensive copy that cannot mutate the store', async () => {
     await runWithPaidDeliverableTracking(async () => {
-      notePendingPaidDeliverable({ surface: 'paidImageGeneration' });
+      notePendingPaidDeliverable({
+        surface: 'paidImageGeneration',
+        artifactKind: 'image',
+        artifacts: [{
+          url: 'https://images.example.test/original.png',
+          fileName: 'original.png',
+        }],
+      });
       const first = listPendingPaidDeliverables();
       (first as { surface: string }[]).push({ surface: 'spoofed' });
+      first[0]!.artifacts![0]!.fileName = 'mutated.png';
       expect(listPendingPaidDeliverables()).toHaveLength(1);
+      expect(listPendingPaidDeliverables()[0]?.artifacts?.[0]?.fileName).toBe('original.png');
     });
   });
 

@@ -11,6 +11,7 @@ import type {
   TurnID,
   TurnUsage,
 } from '../../../../shared/contracts/runtime.js';
+import type { PendingPaidDeliverable } from '../../../../shared/paid-deliverable-tracking.js';
 import type { ContextBudgetTurnCharacteristics } from '../../../../shared/context-budget.js';
 import { createComponentLogger } from '../../../../shared/logger.js';
 import { toErrorMessage } from '../../../../shared/utils/errors.js';
@@ -43,6 +44,7 @@ interface PostTurnBackgroundTask {
 export async function collectTurnResponseAttachments(input: {
   runtime: TurnExecutionRuntime;
   turnMessages: AgentMessage[];
+  paidDeliverables?: readonly PendingPaidDeliverable[];
   galleryContext?: {
     channelId?: string;
     channelType?: string;
@@ -56,6 +58,7 @@ export async function collectTurnResponseAttachments(input: {
   return collectGeneratedImageAttachments({
     turnMessages: input.turnMessages,
     companionDataDir: resolveConfiguredCompanionDataDir(input.runtime.config),
+    paidDeliverables: input.paidDeliverables,
     galleryContext: input.galleryContext,
   });
 }

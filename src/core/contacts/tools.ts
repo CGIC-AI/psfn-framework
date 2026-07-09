@@ -2,7 +2,8 @@
 // Unified model-facing contact surface plus internal helper factories for domain operations.
 
 import { Type } from '@sinclair/typebox';
-import type { AgentTool, AgentToolResult } from '@mariozechner/pi-agent-core';
+import type { AgentToolResult } from '@mariozechner/pi-agent-core';
+import type { SubstrateAgentTool } from '../../shared/contracts/agent-tools.js';
 import type { ContactStorePort } from './contact-store-port.js';
 import type { TrustLevel } from '../../system/trust/types.js';
 import { TRUST_LEVELS, isHighTierTrustLevel } from '../../system/trust/types.js';
@@ -728,9 +729,9 @@ export interface CreateContactToolOptions {
 export function createContactTool(
   contactStore: ContactStorePort,
   options: CreateContactToolOptions = {},
-): AgentTool<any> {
+): SubstrateAgentTool {
   const proposalQueue = options.proposalQueue;
-  const tool: AgentTool<any> = {
+  const tool: SubstrateAgentTool = {
     name: 'contact',
     label: 'contact',
     description:
@@ -845,7 +846,7 @@ export function createContactTool(
   );
 }
 
-export function createContactSetTrustTool(contactStore: ContactStorePort): AgentTool<any> {
+export function createContactSetTrustTool(contactStore: ContactStorePort): SubstrateAgentTool {
   return {
     name: 'contact_set_trust',
     description:
@@ -886,7 +887,7 @@ export function createContactSetTrustTool(contactStore: ContactStorePort): Agent
   };
 }
 
-export function createContactNoteTool(contactStore: ContactStorePort): AgentTool<any> {
+export function createContactNoteTool(contactStore: ContactStorePort): SubstrateAgentTool {
   return {
     name: 'contact_note',
     description:
@@ -911,7 +912,7 @@ export function createContactNoteTool(contactStore: ContactStorePort): AgentTool
   };
 }
 
-export function createContactSetChannelPrivacyTool(contactStore: ContactStorePort): AgentTool<any> {
+export function createContactSetChannelPrivacyTool(contactStore: ContactStorePort): SubstrateAgentTool {
   return {
     name: 'contact_set_channel_privacy',
     description:
@@ -946,7 +947,7 @@ export function createContactSetChannelPrivacyTool(contactStore: ContactStorePor
   };
 }
 
-export function createContactLookupTool(contactStore: ContactStorePort): AgentTool<any> {
+export function createContactLookupTool(contactStore: ContactStorePort): SubstrateAgentTool {
   return {
     name: 'contact_lookup',
     description:
@@ -970,7 +971,7 @@ export function createContactLookupTool(contactStore: ContactStorePort): AgentTo
   };
 }
 
-export function createContactLinkIdentityTool(contactStore: ContactStorePort): AgentTool<any> {
+export function createContactLinkIdentityTool(contactStore: ContactStorePort): SubstrateAgentTool {
   return {
     name: 'contact_link_identity',
     description:
@@ -1005,7 +1006,7 @@ export function createContactLinkIdentityTool(contactStore: ContactStorePort): A
   };
 }
 
-export function createContactListTool(contactStore: ContactStorePort): AgentTool<any> {
+export function createContactListTool(contactStore: ContactStorePort): SubstrateAgentTool {
   return {
     name: 'contact_list',
     description: 'List all known contacts with their trust levels and relationship types.',

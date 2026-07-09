@@ -676,7 +676,7 @@ export class SubstrateAgent {
         modelSignature: this.modelSignature,
       },
       message,
-      setAgentModel: model => this.agent.setModel(model),
+      setAgentModel: model => { this.agent.state.model = model; },
       getCurrentModelId: () => this.agent.state.model.id,
       logger: log,
     });

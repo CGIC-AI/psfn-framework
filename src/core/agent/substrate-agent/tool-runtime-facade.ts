@@ -555,7 +555,7 @@ export class ToolRuntimeFacade {
     applyActiveToolsToAgent({
       resolution: satelliteResolution,
       withCapabilityGates: tools => this.withCapabilityGates(tools),
-      setAgentTools: tools => this.agent.setTools(tools),
+      setAgentTools: tools => { this.agent.state.tools = tools; },
     });
 
     const snapshot = buildAdaptiveToolSnapshot({
@@ -728,7 +728,7 @@ export class ToolRuntimeFacade {
     applyActiveToolsToAgent({
       resolution,
       withCapabilityGates: tools => this.withCapabilityGates(tools),
-      setAgentTools: tools => this.agent.setTools(tools),
+      setAgentTools: tools => { this.agent.state.tools = tools; },
     });
   }
 

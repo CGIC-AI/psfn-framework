@@ -5,7 +5,8 @@ import { spawn } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { Type } from '@sinclair/typebox';
-import type { AgentTool, AgentToolResult, AgentMessage } from '@mariozechner/pi-agent-core';
+import type { AgentToolResult, AgentMessage } from '@mariozechner/pi-agent-core';
+import type { SubstrateAgentTool } from '../../shared/contracts/agent-tools.js';
 import type { TextContent, ToolResultMessage } from '@mariozechner/pi-ai';
 import type { LifecycleNotifier } from '../../system/lifecycle/notifications.js';
 import { createComponentLogger } from '../../shared/logger.js';
@@ -412,7 +413,7 @@ function normalizeSystemAction(params: SystemToolParams): SystemAction {
 export function createSystemTool(
   config: SubstrateConfig,
   options: SystemToolOptions = {},
-): AgentTool<any> {
+): SubstrateAgentTool {
   return {
     name: 'system',
     label: 'system',

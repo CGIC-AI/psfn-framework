@@ -1,5 +1,6 @@
 import { Type } from '@sinclair/typebox';
-import type { AgentTool, AgentToolResult } from '@mariozechner/pi-agent-core';
+import type { AgentToolResult } from '@mariozechner/pi-agent-core';
+import type { SubstrateAgentTool } from '../../shared/contracts/agent-tools.js';
 import type { CapabilityTier, SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type { SessionActivitySummary } from '../../persistence/sessions/store.js';
 import type { MemoryStoreStats } from '../../faculties/memory/memory-store-port.js';
@@ -515,7 +516,7 @@ export async function buildSelfStatusResult(
   return buildSelfStatusSnapshot(runtime, params);
 }
 
-export function createSelfStatusTool(runtime: SelfStatusToolRuntime): AgentTool<any> {
+export function createSelfStatusTool(runtime: SelfStatusToolRuntime): SubstrateAgentTool {
   return {
     name: 'self_status',
     label: 'self_status',

@@ -1,4 +1,4 @@
-import type { Agent, AgentMessage } from '@mariozechner/pi-agent-core';
+import type { Agent, AgentLoopConfig, AgentMessage, AgentTool } from '@mariozechner/pi-agent-core';
 import type { LLMSystemPromptCacheBoundaries } from '../../shared/contracts/runtime.js';
 import { agentLoopContinueWithScheduler, agentLoopWithScheduler } from './scheduled-agent-loop.js';
 import type { ToolCallSchedulerOptions } from './tool-call-scheduler.js';
@@ -13,25 +13,43 @@ export interface AgentLoopPromptCacheHooks {
   resolvePromptCacheBoundaries?: (systemPrompt: string) => LLMSystemPromptCacheBoundaries | undefined;
 }
 
+type PatchedRunOptions = { skipInitialSteeringPoll?: boolean };
+
+/**
+ * Private pi-agent-core Agent internals (0.73.x) the scheduler graft relies on.
+ *
+ * `prompt()` and `continue()` both funnel into `runPromptMessages` /
+ * `runContinuation`; overriding those two methods swaps the stock agent loop
+ * for PSFN's scheduled loop while keeping the public Agent surface
+ * (steer/followUp queues, abort, waitForIdle, subscribe) intact.
+ */
 type PatchedAgent = {
   __psfnToolSchedulerPatched?: boolean;
-  _runLoop: (messages?: AgentMessage[], options?: { skipInitialSteeringPoll?: boolean }) => Promise<void>;
-  emit: (event: unknown) => void;
-  appendMessage: (message: AgentMessage) => void;
-  dequeueSteeringMessages: () => AgentMessage[];
-  dequeueFollowUpMessages: () => AgentMessage[];
-  abortController?: AbortController;
-  runningPrompt?: Promise<void>;
-  resolveRunningPrompt?: () => void;
-  _state: any;
-  _sessionId?: string;
-  _thinkingBudgets?: any;
-  _transport?: any;
-  _maxRetryDelayMs?: number;
-  convertToLlm: any;
-  transformContext?: any;
-  getApiKey?: any;
-  streamFn?: any;
+  runPromptMessages: (messages: AgentMessage[], options?: PatchedRunOptions) => Promise<void>;
+  runContinuation: () => Promise<void>;
+  createLoopConfig: (options?: PatchedRunOptions) => AgentLoopConfig;
+  processEvents: (event: unknown) => Promise<void>;
+  activeRun?: {
+    promise: Promise<void>;
+    resolve: () => void;
+    abortController: AbortController;
+  };
+  _state: {
+    model: unknown;
+    systemPrompt: string;
+    messages: AgentMessage[];
+    tools: AgentTool<any>[];
+    isStreaming: boolean;
+    streamingMessage?: AgentMessage;
+    pendingToolCalls: ReadonlySet<string>;
+    errorMessage?: string;
+    /**
+     * PSFN extension: index into messages where internal follow-up
+     * continuation begins for this run (null = no internal continuation).
+     */
+    userFacingBoundaryIndex?: number | null;
+  };
+  streamFn: Parameters<typeof agentLoopWithScheduler>[4];
 };
 
 export function installAgentToolSchedulerPatch(
@@ -44,28 +62,32 @@ export function installAgentToolSchedulerPatch(
     return;
   }
 
-  target._runLoop = async function patchedRunLoop(
+  async function runScheduledLoop(
     this: PatchedAgent,
-    messages?: AgentMessage[],
-    options?: { skipInitialSteeringPoll?: boolean },
+    messages: AgentMessage[] | undefined,
+    options?: PatchedRunOptions,
   ): Promise<void> {
     const model = this._state.model;
     if (!model) throw new Error('No model configured');
+    if (this.activeRun) {
+      throw new Error('Agent is already processing.');
+    }
 
-    this.runningPrompt = new Promise<void>((resolve) => {
-      this.resolveRunningPrompt = resolve;
+    const abortController = new AbortController();
+    let resolveRun: () => void = () => {};
+    const runPromise = new Promise<void>((resolve) => {
+      resolveRun = resolve;
     });
-    this.abortController = new AbortController();
+    this.activeRun = { promise: runPromise, resolve: resolveRun, abortController };
     this._state.isStreaming = true;
-    this._state.streamMessage = null;
-    this._state.error = undefined;
+    this._state.streamingMessage = undefined;
+    this._state.errorMessage = undefined;
     // User-facing boundary: index into _state.messages where internal
     // follow-up continuation begins for this run (null = no internal
     // continuation). Reset per run; set once when the loop drains queued
     // internal follow-ups (psfn-framework-ay73).
     this._state.userFacingBoundaryIndex = null;
 
-    const reasoning = this._state.thinkingLevel === 'off' ? undefined : this._state.thinkingLevel;
     const promptCacheBoundaries = promptCacheHooks?.resolvePromptCacheBoundaries?.(
       typeof this._state.systemPrompt === 'string' ? this._state.systemPrompt : '',
     );
@@ -76,82 +98,38 @@ export function installAgentToolSchedulerPatch(
       getTools: () => this._state.tools,
       ...(promptCacheBoundaries ? { promptCacheBoundaries } : {}),
     };
-    let skipInitialSteeringPoll = options?.skipInitialSteeringPoll === true;
-
-    const config = {
-      model,
-      reasoning,
-      sessionId: this._sessionId,
-      transport: this._transport,
-      thinkingBudgets: this._thinkingBudgets,
-      maxRetryDelayMs: this._maxRetryDelayMs,
-      convertToLlm: this.convertToLlm,
-      transformContext: this.transformContext,
-      getApiKey: this.getApiKey,
-      getSteeringMessages: async () => {
-        if (skipInitialSteeringPoll) {
-          skipInitialSteeringPoll = false;
-          return [];
-        }
-        return this.dequeueSteeringMessages();
-      },
-      getFollowUpMessages: async () => this.dequeueFollowUpMessages(),
-    };
+    const config = this.createLoopConfig(options);
 
     let partial: any = null;
     let terminalStreamError: Error | null = null;
     let sawTerminalStreamError = false;
     try {
       const stream = messages
-        ? agentLoopWithScheduler(messages, context, config, this.abortController.signal, this.streamFn, schedulerOptions)
-        : agentLoopContinueWithScheduler(context, config, this.abortController.signal, this.streamFn, schedulerOptions);
+        ? agentLoopWithScheduler(messages, context, config, abortController.signal, this.streamFn, schedulerOptions)
+        : agentLoopContinueWithScheduler(context, config, abortController.signal, this.streamFn, schedulerOptions);
 
       for await (const rawEvent of stream) {
         const event = rawEvent as any;
         switch (event.type) {
           case 'message_start':
-            partial = event.message;
-            this._state.streamMessage = event.message;
-            break;
           case 'message_update':
             partial = event.message;
-            this._state.streamMessage = event.message;
             break;
           case 'message_end':
             partial = null;
-            this._state.streamMessage = null;
-            this.appendMessage(event.message);
             break;
-          case 'tool_execution_start': {
-            const pending = new Set(this._state.pendingToolCalls);
-            pending.add(event.toolCallId);
-            this._state.pendingToolCalls = pending;
-            break;
-          }
-          case 'tool_execution_end': {
-            const pending = new Set(this._state.pendingToolCalls);
-            pending.delete(event.toolCallId);
-            this._state.pendingToolCalls = pending;
-            break;
-          }
-          case 'turn_end':
-            if (event.message.role === 'assistant' && event.message.errorMessage) {
-              this._state.error = event.message.errorMessage;
-            }
-            break;
-          case 'agent_error':
+          case 'agent_error': {
             const normalizedError = event.error instanceof Error
               ? event.error
               : new Error(String(event.error));
             terminalStreamError = normalizedError;
             sawTerminalStreamError = true;
             partial = null;
-            this._state.error = normalizedError.message;
-            this._state.streamMessage = null;
+            this._state.errorMessage = normalizedError.message;
             break;
+          }
           case 'agent_end':
             this._state.isStreaming = false;
-            this._state.streamMessage = null;
             break;
           case 'user_facing_boundary':
             if (this._state.userFacingBoundaryIndex == null) {
@@ -163,7 +141,11 @@ export function installAgentToolSchedulerPatch(
           default:
             break;
         }
-        this.emit(event);
+        // processEvents applies the stock state reduction (streamingMessage,
+        // transcript append on message_end, pendingToolCalls, errorMessage on
+        // turn_end) and awaits subscribed listeners. Custom events without a
+        // stock case (e.g. agent_error) still reach listeners.
+        await this.processEvents(event);
       }
 
       if (terminalStreamError) {
@@ -177,29 +159,46 @@ export function installAgentToolSchedulerPatch(
           || (entry.type === 'toolCall' && entry.name.trim().length > 0)
         ));
         if (!onlyEmpty) {
-          this.appendMessage(partial);
-        } else if (this.abortController.signal.aborted) {
+          this._state.messages = [...this._state.messages, partial];
+        } else if (abortController.signal.aborted) {
           throw new Error('Request was aborted');
         }
       }
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
-      this._state.error = errorMessage;
+      this._state.errorMessage = errorMessage;
       partial = null;
       if (!sawTerminalStreamError) {
-        this.emit({ type: 'agent_error', error: error instanceof Error ? error : new Error(errorMessage), messages: [] } as any);
-        this.emit({ type: 'agent_end', messages: [] } as any);
+        await this.processEvents({
+          type: 'agent_error',
+          error: error instanceof Error ? error : new Error(errorMessage),
+          messages: [],
+        });
+        await this.processEvents({ type: 'agent_end', messages: [] });
       }
       throw error;
     } finally {
       this._state.isStreaming = false;
-      this._state.streamMessage = null;
+      this._state.streamingMessage = undefined;
       this._state.pendingToolCalls = new Set();
-      this.resolveRunningPrompt?.();
-      this.runningPrompt = undefined;
-      this.resolveRunningPrompt = undefined;
-      this.abortController = undefined;
+      const run = this.activeRun;
+      this.activeRun = undefined;
+      run.resolve();
     }
+  }
+
+  target.runPromptMessages = async function patchedRunPromptMessages(
+    this: PatchedAgent,
+    messages: AgentMessage[],
+    options?: PatchedRunOptions,
+  ): Promise<void> {
+    await runScheduledLoop.call(this, messages, options);
+  };
+
+  target.runContinuation = async function patchedRunContinuation(
+    this: PatchedAgent,
+  ): Promise<void> {
+    await runScheduledLoop.call(this, undefined, undefined);
   };
 
   target.__psfnToolSchedulerPatched = true;

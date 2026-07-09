@@ -1,4 +1,5 @@
 import type { AgentTool, AgentToolResult } from '@mariozechner/pi-agent-core';
+import type { SubstrateAgentTool } from '../../../shared/contracts/agent-tools.js';
 import { Type } from '@sinclair/typebox';
 import type { CapabilityAccess } from '../../../system/capabilities/gate.js';
 import type { CapabilityToken } from '../../../system/capabilities/tokens.js';
@@ -731,7 +732,7 @@ async function executeToolsetActivateAction(
   }, { isError: true });
 }
 
-export function createToolsetTool(runtime: ToolsetToolRuntime): AgentTool<any> {
+export function createToolsetTool(runtime: ToolsetToolRuntime): SubstrateAgentTool {
   return withCapabilityRequirement({
     name: 'toolset',
     label: 'toolset',
@@ -899,7 +900,7 @@ interface SearchToolsToolRuntime {
   emitTelemetry: (event: string, payload: Record<string, unknown>) => void;
 }
 
-export function createToolSearchTool(runtime: SearchToolsToolRuntime): AgentTool<any> {
+export function createToolSearchTool(runtime: SearchToolsToolRuntime): SubstrateAgentTool {
   return {
     name: 'tool_search',
     label: 'tool_search',

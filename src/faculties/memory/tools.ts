@@ -2,7 +2,8 @@
 // Agent-accessible tools for intentional memory creation.
 
 import { Type } from '@sinclair/typebox';
-import type { AgentTool, AgentToolResult } from '@mariozechner/pi-agent-core';
+import type { AgentToolResult } from '@mariozechner/pi-agent-core';
+import type { SubstrateAgentTool } from '../../shared/contracts/agent-tools.js';
 import type { MemoryWriter, MemoryWriteOptions } from './writer.js';
 import type { MemoryStorePort } from './memory-store-port.js';
 import type {
@@ -332,7 +333,7 @@ interface MemoryToolParams {
 export function createMemoryWriteTool(
   writer: MemoryWriter,
   options: MemoryWriteToolOptions = {},
-): AgentTool<any> {
+): SubstrateAgentTool {
   return {
     name: 'memory_write',
     description:
@@ -447,7 +448,7 @@ export function createMemoryWriteTool(
   };
 }
 
-export function createMemoryImportTool(writer: MemoryWriter): AgentTool<any> {
+export function createMemoryImportTool(writer: MemoryWriter): SubstrateAgentTool {
   return {
     name: 'memory_import_batch',
     description:
@@ -540,7 +541,7 @@ export function createMemoryImportTool(writer: MemoryWriter): AgentTool<any> {
   };
 }
 
-export function createMemoryPatchTool(writer: MemoryWriter): AgentTool<any> {
+export function createMemoryPatchTool(writer: MemoryWriter): SubstrateAgentTool {
   return {
     name: 'memory_patch',
     description:
@@ -625,7 +626,7 @@ export function createMemoryPatchTool(writer: MemoryWriter): AgentTool<any> {
   };
 }
 
-export function createMemoryRedactTool(writer: MemoryWriter): AgentTool<any> {
+export function createMemoryRedactTool(writer: MemoryWriter): SubstrateAgentTool {
   return {
     name: 'memory_redact',
     description:
@@ -698,7 +699,7 @@ export function createMemoryRedactTool(writer: MemoryWriter): AgentTool<any> {
   };
 }
 
-export function createMemoryDeleteTool(memoryStore: MemoryStorePort): AgentTool<any> {
+export function createMemoryDeleteTool(memoryStore: MemoryStorePort): SubstrateAgentTool {
   return {
     name: 'memory_delete',
     description:
@@ -744,7 +745,7 @@ export function createMemoryDeleteTool(memoryStore: MemoryStorePort): AgentTool<
   };
 }
 
-export function createUndoMemoryDeleteTool(memoryStore: MemoryStorePort): AgentTool<any> {
+export function createUndoMemoryDeleteTool(memoryStore: MemoryStorePort): SubstrateAgentTool {
   return {
     name: 'undo_memory_delete',
     description:
@@ -786,7 +787,7 @@ export function createMemoryTool(
   writer: MemoryWriter,
   memoryStore: MemoryStorePort,
   options: MemoryToolOptions = {},
-): AgentTool<any> {
+): SubstrateAgentTool {
   return {
     name: 'memory',
     description:

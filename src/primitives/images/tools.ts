@@ -1,5 +1,6 @@
 import { Type } from '@sinclair/typebox';
-import type { AgentTool, AgentToolResult } from '@mariozechner/pi-agent-core';
+import type { AgentToolResult } from '@mariozechner/pi-agent-core';
+import type { SubstrateAgentTool } from '../../shared/contracts/agent-tools.js';
 import type { TextContent } from '@mariozechner/pi-ai';
 import type { ImageOperations } from './ops.js';
 import { isFalContentPolicyError, isTransientFalError } from './fal.js';
@@ -743,8 +744,8 @@ export function createGenerateImageTool(
   options?: {
     referenceResolver?: ImageReferenceResolver;
   },
-): AgentTool<any> {
-  const tool: AgentTool<any> = {
+): SubstrateAgentTool {
+  const tool: SubstrateAgentTool = {
     name: GENERATE_IMAGE_TOOL_NAME,
     label: GENERATE_IMAGE_TOOL_NAME,
     description:
@@ -831,7 +832,7 @@ function createImageGenerationTool(
     toolName?: string;
     referenceResolver?: ImageReferenceResolver;
   },
-): AgentTool<any> {
+): SubstrateAgentTool {
   const selfImage = options?.selfImage ?? false;
   const toolName = options?.toolName ?? 'selfie_create';
   const parameterShape = {
@@ -1074,7 +1075,7 @@ export function createSelfieTool(
   options?: {
     referenceResolver?: ImageReferenceResolver;
   },
-): AgentTool<any> {
+): SubstrateAgentTool {
   return createImageGenerationTool(ops, reviewer, {
     selfImage: true,
     toolName: 'selfie_create',

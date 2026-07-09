@@ -1,5 +1,6 @@
 import { Type } from '@sinclair/typebox';
-import type { AgentTool, AgentToolResult } from '@mariozechner/pi-agent-core';
+import type { AgentToolResult } from '@mariozechner/pi-agent-core';
+import type { SubstrateAgentTool } from '../../../shared/contracts/agent-tools.js';
 import type { JournalOperations } from './ops.js';
 import { textResult, textResultWithError } from '../../../core/tools/results.js';
 import { toErrorMessage } from '../../../shared/utils/errors.js';
@@ -52,7 +53,7 @@ function slugifyTitle(title: string): string {
   return slug;
 }
 
-export function createJournalTool(ops: JournalOperations): AgentTool<any> {
+export function createJournalTool(ops: JournalOperations): SubstrateAgentTool {
   return {
     name: 'journal',
     label: 'journal',

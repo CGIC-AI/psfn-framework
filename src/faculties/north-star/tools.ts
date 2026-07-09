@@ -1,5 +1,6 @@
 import { Type } from '@sinclair/typebox';
-import type { AgentTool, AgentToolResult } from '@mariozechner/pi-agent-core';
+import type { AgentToolResult } from '@mariozechner/pi-agent-core';
+import type { SubstrateAgentTool } from '../../shared/contracts/agent-tools.js';
 import {
   MAX_NORTH_STAR_ITEMS,
   NORTH_STAR_SCOPES,
@@ -95,8 +96,8 @@ function resolveNorthStarCapabilityRequirement(params: Record<string, unknown>):
   }
 }
 
-export function createNorthStarTool(store: NorthStarStore): AgentTool<any> {
-  const tool: AgentTool<any> = {
+export function createNorthStarTool(store: NorthStarStore): SubstrateAgentTool {
+  const tool: SubstrateAgentTool = {
     name: 'north_star',
     label: 'north_star',
     description:

@@ -1,5 +1,6 @@
 import { Type } from '@sinclair/typebox';
-import type { AgentTool, AgentToolResult } from '@mariozechner/pi-agent-core';
+import type { AgentToolResult } from '@mariozechner/pi-agent-core';
+import type { SubstrateAgentTool } from '../../shared/contracts/agent-tools.js';
 import { withCapabilityRequirement, type CapabilityRequirement } from '../../system/capabilities/requirements.js';
 import { tagToolWithReversibility } from '../../system/capabilities/safeguards.js';
 import {
@@ -490,8 +491,8 @@ function resolveScheduleRequirement(params: Record<string, unknown>): Capability
   }
 }
 
-export function createScheduleTool(options: ScheduleToolOptions): AgentTool<any, ScheduleToolResultDetails> {
-  const tool: AgentTool<any, ScheduleToolResultDetails> = {
+export function createScheduleTool(options: ScheduleToolOptions): SubstrateAgentTool<ScheduleToolResultDetails> {
+  const tool: SubstrateAgentTool<ScheduleToolResultDetails> = {
     name: 'schedule',
     label: 'schedule',
     description:

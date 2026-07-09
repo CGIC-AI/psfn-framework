@@ -3,7 +3,8 @@
 // Policy: read access is always available; writes are tier-gated by capabilities.
 
 import { Type } from '@sinclair/typebox';
-import type { AgentTool, AgentToolResult } from '@mariozechner/pi-agent-core';
+import type { AgentToolResult } from '@mariozechner/pi-agent-core';
+import type { SubstrateAgentTool } from '../../shared/contracts/agent-tools.js';
 import type { PromptLayerStatePort } from './prompt-state-port.js';
 import type { PromptLayer, PromptHistoryEntry } from './prompt-types.js';
 import {
@@ -520,10 +521,10 @@ export interface IdentityToolOptions extends PromptLayerUpdateToolOptions, Pick<
 export function createIdentityTool(
   store: PromptLayerStatePort,
   options: IdentityToolOptions = {},
-): AgentTool<any> {
+): SubstrateAgentTool {
   const identityCoolingOff = options.identityCoolingOff;
 
-  const tool: AgentTool<any> = {
+  const tool: SubstrateAgentTool = {
     name: 'identity',
     description:
       'Unified identity surface for prompt-layer inspection, prompt-layer mutation, staged prompt commits/cancels, and persona updates. '

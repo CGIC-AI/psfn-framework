@@ -1,5 +1,6 @@
 import { Type } from '@sinclair/typebox';
-import type { AgentTool, AgentToolResult } from '@mariozechner/pi-agent-core';
+import type { AgentToolResult } from '@mariozechner/pi-agent-core';
+import type { SubstrateAgentTool } from '../../shared/contracts/agent-tools.js';
 import type { NotifyNtfyParams, NotifyNtfyResult } from '../../boundary/gateway/protocol.js';
 import type { WirableTool } from '../agent/tool-wiring-validator.js';
 import type {
@@ -626,8 +627,8 @@ export interface NotifyToolOptions {
 export function createNotifyTool(
   dispatcher: NotifyDispatcher,
   options: NotifyToolOptions = {},
-): AgentTool<any> {
-  const tool: AgentTool<any> = {
+): SubstrateAgentTool {
+  const tool: SubstrateAgentTool = {
     name: 'notify',
     label: 'notify',
     description:

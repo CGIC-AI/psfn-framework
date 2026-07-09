@@ -1,5 +1,6 @@
 import { Type } from '@sinclair/typebox';
-import type { AgentTool, AgentToolResult } from '@mariozechner/pi-agent-core';
+import type { AgentToolResult } from '@mariozechner/pi-agent-core';
+import type { SubstrateAgentTool } from '../../shared/contracts/agent-tools.js';
 import { textResult, textResultWithError } from '../../core/tools/results.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
 import {
@@ -105,9 +106,9 @@ function resolveWikiCapabilityRequirement(params: Record<string, unknown>): Capa
   }
 }
 
-export function createWikiTool(store: WikiStorePort, deps: WikiToolDeps = {}): AgentTool<any> {
+export function createWikiTool(store: WikiStorePort, deps: WikiToolDeps = {}): SubstrateAgentTool {
   const semanticSearch = deps.semanticSearch;
-  const tool: AgentTool<any> = {
+  const tool: SubstrateAgentTool = {
     name: 'wiki',
     label: 'wiki',
     description:

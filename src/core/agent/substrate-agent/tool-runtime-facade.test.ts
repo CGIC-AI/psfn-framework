@@ -16,8 +16,20 @@ function makeTool(name: string, execute = vi.fn(async () => ({
 }
 
 function createFacade(taskKind: string | null = null) {
+  // pi-agent-core 0.73 replaced Agent.setTools() with assignment to
+  // agent.state.tools; the mock records each assignment via setTools so the
+  // existing call-style assertions keep working.
+  const setTools = vi.fn();
   const agent = {
-    setTools: vi.fn(),
+    setTools,
+    state: {
+      get tools(): unknown[] {
+        return (setTools.mock.calls.at(-1)?.[0] as unknown[] | undefined) ?? [];
+      },
+      set tools(tools: unknown[]) {
+        setTools(tools);
+      },
+    },
   };
   const emitTelemetry = vi.fn();
   const activeTurnCorrelation = {

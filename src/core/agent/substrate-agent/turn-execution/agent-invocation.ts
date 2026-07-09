@@ -364,7 +364,7 @@ function appendRuntimeFallbackAssistantMessage(
     stopReason: 'stop',
     timestamp: Date.now(),
   };
-  runtime.agent.appendMessage(message);
+  runtime.agent.state.messages = [...runtime.agent.state.messages, message];
   return message;
 }
 
@@ -486,7 +486,7 @@ export async function invokeAgentForTurn(input: {
     };
   }
 
-  runtime.agent.setSystemPrompt(enforceUntrustedCompactionGuard(providerSystemPrompt));
+  runtime.agent.state.systemPrompt = enforceUntrustedCompactionGuard(providerSystemPrompt);
   const adaptiveToolSnapshot = cloneObservedAdaptiveToolSnapshot(
     runtime.getAdaptiveToolRuntimeState().lastSnapshot,
   );
@@ -509,7 +509,7 @@ export async function invokeAgentForTurn(input: {
 
   const agentMessages: AgentMessage[] = piMessages;
   const historyMessages = agentMessages.length > 0 ? agentMessages.slice(0, -1) : [];
-  runtime.agent.replaceMessages(historyMessages);
+  runtime.agent.state.messages = historyMessages;
   mutableState.turnStartMessageIndex = runtime.agent.state.messages.length;
 
   let streamFirstTokenAt: number | null = null;
@@ -693,8 +693,8 @@ export async function invokeAgentForTurn(input: {
 
     const preRetryTurnUsage = turnUsage;
     const strengthenedSystemPrompt = buildRuntimeDatetimeAnchorRetryPrompt(providerSystemPrompt);
-    runtime.agent.replaceMessages(historyMessages);
-    runtime.agent.setSystemPrompt(enforceUntrustedCompactionGuard(strengthenedSystemPrompt));
+    runtime.agent.state.messages = historyMessages;
+    runtime.agent.state.systemPrompt = enforceUntrustedCompactionGuard(strengthenedSystemPrompt);
 
     const contradictionRetryBridgeToken = runtime.bridge.setChannel(message.channelId, {
       turnId,
@@ -786,7 +786,7 @@ export async function invokeAgentForTurn(input: {
 
     try {
       const recoveryModel = resolveModel(runtime.config, 'chat');
-      runtime.agent.setModel(recoveryModel);
+      runtime.agent.state.model = recoveryModel;
       responseModel = recoveryModel.id;
     } catch (error) {
       log.warn('Vision recovery model resolution failed; keeping current model', {
@@ -794,7 +794,7 @@ export async function invokeAgentForTurn(input: {
         error: toErrorMessage(error),
       });
     }
-    runtime.agent.replaceMessages(historyMessages);
+    runtime.agent.state.messages = historyMessages;
     mutableState.turnStartMessageIndex = runtime.agent.state.messages.length;
 
     const replayTransportContent = message.content.trim();

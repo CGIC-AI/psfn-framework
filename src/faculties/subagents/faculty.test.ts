@@ -28,7 +28,7 @@ const promptSpy = vi.spyOn(Agent.prototype, 'prompt').mockImplementation(async f
   if (mockSubagentDelayMs > 0) {
     await new Promise(resolve => setTimeout(resolve, mockSubagentDelayMs));
   }
-  this.appendMessage({
+  this.state.messages.push({
     role: 'assistant',
     content: [{ type: 'text' as const, text: mockSubagentContent }],
     api: '' as any,

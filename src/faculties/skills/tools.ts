@@ -1,4 +1,4 @@
-import type { AgentTool } from '@mariozechner/pi-agent-core';
+import type { SubstrateAgentTool } from '../../shared/contracts/agent-tools.js';
 import { Type } from '@sinclair/typebox';
 import { textResult, textResultWithError } from '../../core/tools/results.js';
 import type { SkillsRuntime } from './runtime.js';
@@ -297,7 +297,7 @@ function buildSkillViewPayload(runtime: SkillsRuntime, name: string): Record<str
   };
 }
 
-export function createSkillTool(runtime: SkillsRuntime): AgentTool<any> {
+export function createSkillTool(runtime: SkillsRuntime): SubstrateAgentTool {
   return {
     name: 'skill',
     label: 'skill',

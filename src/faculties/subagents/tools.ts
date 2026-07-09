@@ -1,5 +1,6 @@
 import { Type } from '@sinclair/typebox';
-import type { AgentTool, AgentToolResult } from '@mariozechner/pi-agent-core';
+import type { AgentToolResult } from '@mariozechner/pi-agent-core';
+import type { SubstrateAgentTool } from '../../shared/contracts/agent-tools.js';
 import { withCapabilityRequirement } from '../../system/capabilities/requirements.js';
 import { tagToolWithReversibility } from '../../system/capabilities/safeguards.js';
 import type { SubagentControlPort } from './port.js';
@@ -24,8 +25,8 @@ interface SubagentToolParams {
   transcript_limit?: number;
 }
 
-export function createSubagentTool(port: SubagentControlPort): AgentTool<any> {
-  const tool: AgentTool<any> = {
+export function createSubagentTool(port: SubagentControlPort): SubstrateAgentTool {
+  const tool: SubstrateAgentTool = {
     name: 'subagent',
     label: 'subagent',
     description:

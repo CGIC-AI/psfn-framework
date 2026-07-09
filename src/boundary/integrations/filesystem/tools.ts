@@ -1,5 +1,6 @@
 import { Type } from '@sinclair/typebox';
-import type { AgentTool, AgentToolResult } from '@mariozechner/pi-agent-core';
+import type { AgentToolResult } from '@mariozechner/pi-agent-core';
+import type { SubstrateAgentTool } from '../../../shared/contracts/agent-tools.js';
 import type { FilesystemOperations } from './ops.js';
 import { textResult, textResultWithError } from '../../../core/tools/results.js';
 import { toErrorMessage } from '../../../shared/utils/errors.js';
@@ -73,7 +74,7 @@ function normalizeListGlobParam(value: unknown): string | undefined {
   return value;
 }
 
-export function createFsTool(ops: FilesystemOperations): AgentTool<any> {
+export function createFsTool(ops: FilesystemOperations): SubstrateAgentTool {
   return {
     name: 'fs',
     label: 'fs',

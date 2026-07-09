@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -31,6 +31,7 @@ import type { SubstrateConfig } from '../../../system/config/runtime-config-cont
 import type { ChargePolicyConfig } from '../../../system/config/charge-policy-config.js';
 import type { IntentionalNoReplyMetadata, SubstrateMessage } from '../../../shared/contracts/runtime.js';
 import { createEventBusCostTelemetryPort } from '../../../shared/telemetry/cost-telemetry-port.js';
+import { notePendingPaidDeliverable } from '../../../shared/paid-deliverable-tracking.js';
 import { createActiveEmanationSatellitePresencePort } from '../satellite-adapter-port.js';
 import type { FatigueBudgetEvent } from '../../../shared/contracts/runtime.js';
 import {
@@ -892,6 +893,88 @@ describe('handleMessageForTurn generated media delivery', () => {
       response: expect.objectContaining({
         attachments: [expectedAttachment],
       }),
+    }));
+  });
+
+  it('recovers response attachments from tracked paid deliverables when the turn transcript misses the tool result', async () => {
+    const eventBus = new EventBus();
+    const companionDataDir = makeTempDir();
+    const localPath = join(companionDataDir, 'missed-transcript-purr.png');
+    writeFileSync(localPath, Buffer.from('png-bytes'));
+    const buildContext = vi.fn(async () => ({
+      systemPrompt: 'System prompt',
+      messages: [],
+      manifest: undefined,
+    }));
+    const runtime = createRuntime({
+      eventBus,
+      sessionManager: {} as SessionManager,
+      buildContext,
+      scheduleAutoCompactionBetweenTurns: vi.fn(async () => undefined),
+      awaitPendingAutoCompaction: vi.fn(async () => undefined),
+      recordUserMessage: vi.fn(() => 1),
+      recordAssistantMessage: vi.fn(() => 2),
+      configOverrides: {
+        companionDataDir,
+      },
+    });
+    (runtime.agent.prompt as ReturnType<typeof vi.fn>).mockImplementationOnce(async (promptMessage: { content: string }) => {
+      notePendingPaidDeliverable({
+        surface: 'paidImageGeneration',
+        toolName: 'selfie_create',
+        toolCallId: 'call-missed-transcript',
+        identifier: 'image-request-missed-transcript',
+        artifactCount: 1,
+        artifactKind: 'image',
+        provider: 'fal',
+        mode: 'edit',
+        artifacts: [{
+          url: 'https://images.example.test/missed-transcript-purr.png',
+          contentType: 'image/png',
+          fileName: 'missed-transcript-purr.png',
+          localPath,
+        }],
+      });
+      (runtime.agent.state.messages as any[]).push({ role: 'user', content: promptMessage.content });
+      (runtime.agent.state.messages as any[]).push({
+        role: 'assistant',
+        content: 'Here is the recovered image.',
+      });
+    });
+    runtime.extractResponseText = vi.fn(() => 'Here is the recovered image.');
+
+    const response = await handleMessageForTurn(runtime, createMessage('msg-missed-tool-result'));
+
+    const expectedAttachment = {
+      url: 'https://images.example.test/missed-transcript-purr.png',
+      contentType: 'image/png',
+      name: 'missed-transcript-purr.png',
+      localPath,
+    };
+    expect(response.content).toBe('Here is the recovered image.');
+    expect(response.attachments).toEqual([expectedAttachment]);
+    expect(runtime.recordToolObservations).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'msg-missed-tool-result' }),
+      expect.any(String),
+      'msg-missed-tool-result',
+      expect.not.arrayContaining([
+        expect.objectContaining({
+          role: 'toolResult',
+          toolName: 'selfie_create',
+        }),
+      ]),
+      'regular',
+    );
+    expect(runtime.buildTurnRecord).toHaveBeenCalledWith(expect.objectContaining({
+      response: expect.objectContaining({
+        attachments: [expectedAttachment],
+      }),
+      turnMessages: expect.not.arrayContaining([
+        expect.objectContaining({
+          role: 'toolResult',
+          toolName: 'selfie_create',
+        }),
+      ]),
     }));
   });
 

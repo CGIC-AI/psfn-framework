@@ -4,7 +4,9 @@ import { tmpdir } from 'node:os';
 import { describe, expect, it, afterEach } from 'vitest';
 import {
   collectGeneratedImageAttachments,
+  mergeChargedImageDeliverableSummaries,
   summarizeChargedImageDeliverables,
+  summarizePendingPaidImageDeliverables,
 } from './generated-media.js';
 import { resolveGeneratedImagesDir } from '../../persistence/layout.js';
 
@@ -239,6 +241,120 @@ describe('collectGeneratedImageAttachments', () => {
     expect(existsSync(resolveGeneratedImagesDir(companionDataDir))).toBe(false);
   });
 
+  it('recovers paid image attachments from tracked deliverables when turn messages miss the tool result', async () => {
+    const companionDataDir = mkdtempSync(join(tmpdir(), 'psfn-generated-media-'));
+    const personalDir = mkdtempSync(join(tmpdir(), 'psfn-personal-images-'));
+    tempDirs.push(companionDataDir, personalDir);
+    const localPath = join(personalDir, 'missed-transcript.jpg');
+
+    const attachments = await collectGeneratedImageAttachments({
+      companionDataDir,
+      turnMessages: [],
+      paidDeliverables: [{
+        surface: 'paidImageGeneration',
+        toolName: 'selfie_create',
+        toolCallId: 'call-missed-transcript',
+        identifier: 'req-missed-transcript',
+        artifactCount: 1,
+        artifactKind: 'image',
+        provider: 'fal',
+        mode: 'edit',
+        model: 'xai/grok-imagine-image/quality/edit',
+        artifacts: [{
+          url: 'https://images.example.test/missed-transcript.jpg',
+          contentType: 'image/jpeg',
+          fileName: 'missed-transcript.jpg',
+          localPath,
+        }],
+      }],
+      galleryContext: {
+        channelId: 'discord:gallery',
+        channelType: 'discord',
+        turnId: 'turn-missed-transcript',
+        requestId: 'request-missed-transcript',
+        sourceMessageId: 'message-missed-transcript',
+      },
+      fetchImpl: async () => {
+        throw new Error('fetch should not be called for tracked local image artifacts');
+      },
+    });
+
+    expect(attachments).toEqual([{
+      url: 'https://images.example.test/missed-transcript.jpg',
+      contentType: 'image/jpeg',
+      name: 'missed-transcript.jpg',
+      localPath,
+    }]);
+    const metadata = JSON.parse(readFileSync(`${localPath}.image-meta.json`, 'utf-8')) as {
+      toolCallId: string;
+      requestId: string;
+      conversation: { requestId: string; turnId: string };
+    };
+    expect(metadata).toMatchObject({
+      toolCallId: 'call-missed-transcript',
+      requestId: 'req-missed-transcript',
+      conversation: {
+        requestId: 'request-missed-transcript',
+        turnId: 'turn-missed-transcript',
+      },
+    });
+  });
+
+  it('dedupes tracked paid deliverables that are already present in turn messages', async () => {
+    const companionDataDir = mkdtempSync(join(tmpdir(), 'psfn-generated-media-'));
+    tempDirs.push(companionDataDir);
+
+    const attachments = await collectGeneratedImageAttachments({
+      companionDataDir,
+      turnMessages: [
+        {
+          role: 'toolResult',
+          toolName: 'selfie_create',
+          toolCallId: 'call-dedupe',
+          details: {
+            imageResult: {
+              provider: 'fal',
+              mode: 'edit',
+              requestId: 'req-dedupe',
+              fallbackUsed: false,
+              images: [{
+                url: 'https://images.example.test/dedupe.jpg',
+                contentType: 'image/jpeg',
+                fileName: 'dedupe.jpg',
+              }],
+            },
+          },
+          content: [],
+        } as any,
+      ],
+      paidDeliverables: [{
+        surface: 'paidImageGeneration',
+        toolName: 'selfie_create',
+        toolCallId: 'call-dedupe',
+        identifier: 'req-dedupe',
+        artifactCount: 1,
+        artifactKind: 'image',
+        provider: 'fal',
+        mode: 'edit',
+        artifacts: [{
+          url: 'https://images.example.test/dedupe.jpg',
+          contentType: 'image/jpeg',
+          fileName: 'dedupe.jpg',
+        }],
+      }],
+      fetchImpl: async () => (
+        new Response(Buffer.from('jpg-dedupe'), {
+          status: 200,
+          headers: { 'content-type': 'image/jpeg' },
+        })
+      ) as Response,
+    });
+
+    expect(attachments).toHaveLength(1);
+    expect(attachments[0]?.name).toBe('dedupe.jpg');
+    expect(readFileSync(attachments[0]!.localPath!)).toEqual(Buffer.from('jpg-dedupe'));
+  });
+
   it('ignores non-image tool results and malformed payloads', async () => {
     const companionDataDir = mkdtempSync(join(tmpdir(), 'psfn-generated-media-'));
     tempDirs.push(companionDataDir);
@@ -291,6 +407,39 @@ describe('summarizeChargedImageDeliverables', () => {
       toolCallId: 'call-paid-1',
       requestId: 'req-paid-1',
       imageCount: 2,
+    }]);
+  });
+
+  it('summarizes tracked paid image deliverables and merges them with transcript summaries', () => {
+    const pendingSummaries = summarizePendingPaidImageDeliverables([{
+      surface: 'paidImageGeneration',
+      toolName: 'selfie_create',
+      toolCallId: 'call-tracked',
+      identifier: 'req-tracked',
+      artifactCount: 1,
+      artifactKind: 'image',
+      provider: 'fal',
+      mode: 'edit',
+      artifacts: [{
+        url: 'https://images.example.test/tracked.jpg',
+        fileName: 'tracked.jpg',
+      }],
+    }]);
+
+    expect(pendingSummaries).toEqual([{
+      toolName: 'selfie_create',
+      toolCallId: 'call-tracked',
+      requestId: 'req-tracked',
+      imageCount: 1,
+    }]);
+    expect(mergeChargedImageDeliverableSummaries(
+      [{ toolName: 'selfie_create', toolCallId: 'call-tracked', requestId: 'req-tracked', imageCount: 1 }],
+      pendingSummaries,
+    )).toEqual([{
+      toolName: 'selfie_create',
+      toolCallId: 'call-tracked',
+      requestId: 'req-tracked',
+      imageCount: 1,
     }]);
   });
 

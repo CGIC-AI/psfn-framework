@@ -23,6 +23,23 @@ export interface PendingPaidDeliverable {
   identifier?: string;
   /** Number of artifacts produced by this deliverable. */
   artifactCount?: number;
+  /** Artifact class when the deliverable can be rehydrated for outbound chat. */
+  artifactKind?: 'image';
+  /** Provider that produced the artifact, when domain-specific recovery needs it. */
+  provider?: string;
+  /** Generation mode, when domain-specific recovery needs it. */
+  mode?: string;
+  /** Model that produced the artifact, when known. */
+  model?: string;
+  /** Local or remote image assets that can be attached if the transcript is incomplete. */
+  artifacts?: PendingPaidDeliverableArtifact[];
+}
+
+export interface PendingPaidDeliverableArtifact {
+  url: string;
+  contentType?: string;
+  fileName?: string;
+  localPath?: string;
 }
 
 interface PaidDeliverableTrackingState {
@@ -61,5 +78,8 @@ export function listPendingPaidDeliverables(): readonly PendingPaidDeliverable[]
   if (!state) {
     return [];
   }
-  return state.pending.map((entry) => ({ ...entry }));
+  return state.pending.map((entry) => ({
+    ...entry,
+    ...(entry.artifacts ? { artifacts: entry.artifacts.map((artifact) => ({ ...artifact })) } : {}),
+  }));
 }

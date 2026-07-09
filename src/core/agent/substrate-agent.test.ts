@@ -4002,6 +4002,8 @@ describe('SubstrateAgent.handleMessage', () => {
       name: 'extended_probe_tool',
       label: 'extended_probe_tool',
       description: 'test-only probe tool',
+      // Explicit "no requirement" declaration (02-M2): undeclared tools fail closed.
+      requiredCapability: [],
       parameters: {} as any,
       execute: vi.fn(async () => ({
         role: 'tool',
@@ -4040,6 +4042,8 @@ describe('SubstrateAgent.handleMessage', () => {
       name: 'extended_probe_tool',
       label: 'extended_probe_tool',
       description: 'test-only probe tool',
+      // Explicit "no requirement" declaration (02-M2): undeclared tools fail closed.
+      requiredCapability: [],
       parameters: {} as any,
       execute: vi.fn(async () => ({
         role: 'tool',
@@ -4151,6 +4155,8 @@ describe('SubstrateAgent.handleMessage', () => {
       name: 'extended_probe_tool',
       label: 'extended_probe_tool',
       description: 'test-only probe tool',
+      // Explicit "no requirement" declaration (02-M2): undeclared tools fail closed.
+      requiredCapability: [],
       parameters: {} as any,
       execute: vi.fn(async () => ({
         role: 'tool',
@@ -4370,6 +4376,8 @@ describe('SubstrateAgent.handleMessage', () => {
       name: 'extended_probe_tool',
       label: 'extended_probe_tool',
       description: 'test-only probe tool',
+      // Explicit "no requirement" declaration (02-M2): undeclared tools fail closed.
+      requiredCapability: [],
       parameters: {} as any,
       execute: vi.fn(async () => ({
         role: 'tool',
@@ -4411,6 +4419,7 @@ describe('SubstrateAgent.handleMessage', () => {
         name,
         label: name,
         description: `${name} test tool`,
+        requiredCapability: [],
         parameters: {} as any,
         execute: vi.fn(async () => ({ content: [{ type: 'text', text: 'ok' }], details: {} })),
       } as any, 'extended');
@@ -4469,6 +4478,9 @@ describe('SubstrateAgent.handleMessage', () => {
       name: 'schedule_task',
       label: 'schedule_task',
       description: 'background scheduler tool',
+      // The real factory annotates via withCapabilityRequirement; bare mocks
+      // must declare explicitly or fail closed (02-M2).
+      requiredCapability: [],
       parameters: {} as any,
       execute: vi.fn(async () => ({ content: [{ type: 'text', text: 'ok' }], details: {} })),
     } as any;
@@ -4500,6 +4512,7 @@ describe('SubstrateAgent.handleMessage', () => {
       name: 'tool_one',
       label: 'tool_one',
       description: 'tool one',
+      requiredCapability: [],
       parameters: {} as any,
       execute: vi.fn(async () => ({ content: [{ type: 'text', text: 'ok' }], details: {} })),
     } as any, 'extended');

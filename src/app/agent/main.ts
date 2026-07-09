@@ -457,6 +457,9 @@ async function main(): Promise<void> {
 
   // Memory write/import tools — intentional memory creation
   const memoryWriter = new MemoryWriter(memoryStore, gateway);
+  // htm9.3: direct memory-write tools gate at the memory_write sink (explicit
+  // unscreened path until envelopes flow into tool params).
+  memoryWriter.intakeSinkGateProvider = () => sessionManager.intakeSinkGate;
   const episodicStore = companionEpisodicStore;
   // Episodic lane tuning is JSON-owned (scheduler.json episodeSynthesis /
   // sleepConsolidation / arcFormation) — no hardcoded cadences or windows.

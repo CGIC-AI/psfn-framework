@@ -2,6 +2,7 @@ import { isRecord } from '../../shared/utils/types.js';
 import { clampUnit } from '../../shared/utils/numeric.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type { TurnID } from '../../shared/contracts/runtime.js';
+import type { IntakeEnvelopeSnapshot } from '../../shared/contracts/intake-envelope.js';
 import type { SessionRoleEnvelopePreview } from '../internal-role-envelopes/projections.js';
 import { countTokens } from '../../primitives/llm/tokens.js';
 import {
@@ -129,6 +130,12 @@ export interface SessionMessageRecordOptions {
   metadata?: string;
   roleEnvelopePreview?: SessionRoleEnvelopePreview;
   channelMeta?: ChannelMeta;
+  /**
+   * htm9.3: intake-envelope snapshots covering the recorded content
+   * (screened upstream by the channel adapter). Persisted onto the entry's
+   * `intakeScreening` metadata so sink gates can consult them downstream.
+   */
+  intakeEnvelopes?: readonly IntakeEnvelopeSnapshot[];
 }
 
 export interface MirrorEntryMetadata {

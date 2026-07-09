@@ -3,6 +3,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
+  INTAKE_SINKS,
   INTAKE_SOURCE_CLASSES,
   INTAKE_SOURCE_RISK_TIERS,
 } from '../../shared/contracts/intake-envelope.js';
@@ -17,6 +18,8 @@ import {
   loadIntakePolicyConfig,
   saveIntakePolicyConfig,
   shouldEscalateToL2,
+  sinkRuleForSink,
+  trifectaEnforcementForTier,
   validateIntakePolicy,
   type IntakePolicyConfig,
 } from './intake-policy-config.js';
@@ -336,5 +339,87 @@ describe('intake policy owner file', () => {
     const { l3Screener: _droppedL3, ...withoutL3 } = policy;
     expect(() => validateIntakePolicy(withoutL3, INTAKE_POLICY_FILE_NAME))
       .toThrow(/l3Screener must be an object/);
+  });
+
+  it('validates the sink-gate seed: every sink mapped, explicit unscreened defaults, trifecta tiers (htm9.3)', () => {
+    const policy = seedPolicy();
+    expect(Object.keys(policy.sinkGates.sinks).sort()).toEqual([...INTAKE_SINKS].sort());
+    for (const sink of INTAKE_SINKS) {
+      const rule = sinkRuleForSink(policy, sink);
+      expect(INTAKE_SOURCE_RISK_TIERS).toContain(rule.maxSourceRiskTier);
+      expect(['allow', 'deny']).toContain(rule.unscreened);
+    }
+    // Inform-not-instruct: state-mutation sinks cap below the inform sinks.
+    expect(policy.sinkGates.sinks.persona_mutation.maxSourceRiskTier).toBe('standard');
+    expect(policy.sinkGates.sinks.trust_mutation.maxSourceRiskTier).toBe('standard');
+    expect(policy.sinkGates.sinks.prompt_assembly.maxSourceRiskTier).toBe('hostile');
+    // Trifecta: hard for public/untrusted sources, soft for trusted sources.
+    expect(Object.keys(policy.sinkGates.trifecta.enforcementByTier).sort())
+      .toEqual([...INTAKE_SOURCE_RISK_TIERS].sort());
+    expect(trifectaEnforcementForTier(policy, 'untrusted')).toBe('hard');
+    expect(trifectaEnforcementForTier(policy, 'hostile')).toBe('hard');
+    expect(trifectaEnforcementForTier(policy, 'trusted')).toBe('soft');
+  });
+
+  it('fails closed on missing/unknown sink-gate config (htm9.3)', () => {
+    const policy = seedPolicy();
+
+    const { sinkGates: _dropped, ...withoutSinkGates } = policy;
+    expect(() => validateIntakePolicy(withoutSinkGates, INTAKE_POLICY_FILE_NAME))
+      .toThrow(/sinkGates must be an object/);
+
+    const { memory_write: _sink, ...partialSinks } = policy.sinkGates.sinks;
+    expect(() => validateIntakePolicy(
+      { ...policy, sinkGates: { ...policy.sinkGates, sinks: partialSinks } },
+      INTAKE_POLICY_FILE_NAME,
+    )).toThrow(/sinkGates\.sinks\.memory_write is required/);
+
+    expect(() => validateIntakePolicy(
+      {
+        ...policy,
+        sinkGates: {
+          ...policy.sinkGates,
+          sinks: { ...policy.sinkGates.sinks, side_channel: policy.sinkGates.sinks.memory_write },
+        },
+      },
+      INTAKE_POLICY_FILE_NAME,
+    )).toThrow(/unsupported sinks: side_channel/);
+
+    expect(() => validateIntakePolicy(
+      {
+        ...policy,
+        sinkGates: {
+          ...policy.sinkGates,
+          sinks: {
+            ...policy.sinkGates.sinks,
+            memory_write: { ...policy.sinkGates.sinks.memory_write, denyRiskLabels: ['made/up_label'] },
+          },
+        },
+      },
+      INTAKE_POLICY_FILE_NAME,
+    )).toThrow(/unsupported risk label 'made\/up_label'/);
+
+    expect(() => validateIntakePolicy(
+      {
+        ...policy,
+        sinkGates: {
+          ...policy.sinkGates,
+          sinks: {
+            ...policy.sinkGates.sinks,
+            memory_write: { ...policy.sinkGates.sinks.memory_write, unscreened: 'maybe' },
+          },
+        },
+      },
+      INTAKE_POLICY_FILE_NAME,
+    )).toThrow(/unscreened must be one of: allow, deny/);
+
+    const { untrusted: _tier, ...partialTrifecta } = policy.sinkGates.trifecta.enforcementByTier;
+    expect(() => validateIntakePolicy(
+      {
+        ...policy,
+        sinkGates: { ...policy.sinkGates, trifecta: { enforcementByTier: partialTrifecta } },
+      },
+      INTAKE_POLICY_FILE_NAME,
+    )).toThrow(/trifecta\.enforcementByTier\.untrusted is required/);
   });
 });

@@ -7,9 +7,14 @@
 
 import { join } from 'node:path';
 import {
+  INTAKE_RISK_LABELS,
+  INTAKE_SINKS,
   INTAKE_SOURCE_CLASSES,
   INTAKE_SOURCE_RISK_TIERS,
+  isIntakeRiskLabel,
   isIntakeSourceRiskTier,
+  type IntakeRiskLabel,
+  type IntakeSink,
   type IntakeSourceClass,
   type IntakeSourceRiskTier,
 } from '../../shared/contracts/intake-envelope.js';
@@ -155,6 +160,58 @@ export interface IntakeL3ScreenerPolicyConfig {
   maxOutputTokens: number;
 }
 
+/**
+ * Enforce-mode action for content that reaches a gated sink WITHOUT an
+ * envelope (legacy/unscreened paths). Shadow mode never blocks regardless;
+ * this default only bites in enforce mode. Every sink must map to one of
+ * these explicitly — there is no implicit fail-open.
+ */
+export const INTAKE_UNSCREENED_SINK_ACTIONS = ['allow', 'deny'] as const;
+export type IntakeUnscreenedSinkAction = typeof INTAKE_UNSCREENED_SINK_ACTIONS[number];
+
+export function isIntakeUnscreenedSinkAction(value: unknown): value is IntakeUnscreenedSinkAction {
+  return typeof value === 'string'
+    && (INTAKE_UNSCREENED_SINK_ACTIONS as readonly string[]).includes(value);
+}
+
+/**
+ * Lethal-trifecta enforcement strength (htm9.3): when untrusted content,
+ * private data, and egress meet in one uncontrolled path, 'hard' denies the
+ * egress outright (public/untrusted sources) while 'soft' allows it but
+ * flags the invocation for operator review (trusted sources —
+ * release-prompt/review posture, never a silent pass).
+ */
+export const INTAKE_TRIFECTA_ENFORCEMENTS = ['hard', 'soft'] as const;
+export type IntakeTrifectaEnforcement = typeof INTAKE_TRIFECTA_ENFORCEMENTS[number];
+
+export function isIntakeTrifectaEnforcement(value: unknown): value is IntakeTrifectaEnforcement {
+  return typeof value === 'string'
+    && (INTAKE_TRIFECTA_ENFORCEMENTS as readonly string[]).includes(value);
+}
+
+/**
+ * Per-sink gate rule. `maxSourceRiskTier` encodes the inform-vs-instruct
+ * structural rule: content whose source risk tier exceeds the sink's cap may
+ * never drive that sink (state-mutation sinks cap lower than inform sinks).
+ * `denyRiskLabels` refuses specific screening findings at this sink even for
+ * released content. `unscreened` is the explicit enforce-mode default for
+ * non-enveloped content.
+ */
+export interface IntakeSinkRuleConfig {
+  maxSourceRiskTier: IntakeSourceRiskTier;
+  denyRiskLabels: IntakeRiskLabel[];
+  unscreened: IntakeUnscreenedSinkAction;
+}
+
+export interface IntakeSinkGatesPolicyConfig {
+  /** Every consequential sink must be mapped explicitly — no implicit defaults. */
+  sinks: Record<IntakeSink, IntakeSinkRuleConfig>;
+  trifecta: {
+    /** Trifecta enforcement strength per source risk tier of the untrusted content. */
+    enforcementByTier: Record<IntakeSourceRiskTier, IntakeTrifectaEnforcement>;
+  };
+}
+
 export interface IntakePolicyConfig {
   schemaVersion: 1;
   mode: IntakeFirewallMode;
@@ -168,6 +225,7 @@ export interface IntakePolicyConfig {
   injectionClassifier: IntakeInjectionClassifierPolicyConfig;
   l2Screener: IntakeL2ScreenerPolicyConfig;
   l3Screener: IntakeL3ScreenerPolicyConfig;
+  sinkGates: IntakeSinkGatesPolicyConfig;
 }
 
 interface IntakePolicyLoadOptions {
@@ -410,6 +468,128 @@ function validateL3Screener(raw: unknown, sourcePath: string): IntakeL3ScreenerP
   };
 }
 
+function validateDenyRiskLabels(
+  raw: unknown,
+  sourcePath: string,
+  field: string,
+): IntakeRiskLabel[] {
+  if (!Array.isArray(raw)) {
+    throw invalid(sourcePath, `${field} must be an array`);
+  }
+  const labels = new Set<IntakeRiskLabel>();
+  for (const label of raw) {
+    if (!isIntakeRiskLabel(label)) {
+      throw invalid(
+        sourcePath,
+        `${field} contains unsupported risk label '${String(label)}' `
+        + `(expected labels from the intake-envelope contract: ${INTAKE_RISK_LABELS.join(', ')})`,
+      );
+    }
+    labels.add(label);
+  }
+  return [...labels];
+}
+
+function validateSinkRule(raw: unknown, sourcePath: string, field: string): IntakeSinkRuleConfig {
+  if (!isRecord(raw)) {
+    throw invalid(sourcePath, `${field} must be an object`);
+  }
+  const unknownKeys = Object.keys(raw)
+    .filter((key) => !['maxSourceRiskTier', 'denyRiskLabels', 'unscreened'].includes(key));
+  if (unknownKeys.length > 0) {
+    throw invalid(sourcePath, `${field} has unsupported keys: ${unknownKeys.join(', ')}`);
+  }
+  if (!isIntakeSourceRiskTier(raw.maxSourceRiskTier)) {
+    throw invalid(
+      sourcePath,
+      `${field}.maxSourceRiskTier must be one of: ${INTAKE_SOURCE_RISK_TIERS.join(', ')}`,
+    );
+  }
+  if (!isIntakeUnscreenedSinkAction(raw.unscreened)) {
+    throw invalid(
+      sourcePath,
+      `${field}.unscreened must be one of: ${INTAKE_UNSCREENED_SINK_ACTIONS.join(', ')} (no implicit fail-open)`,
+    );
+  }
+  return {
+    maxSourceRiskTier: raw.maxSourceRiskTier,
+    denyRiskLabels: validateDenyRiskLabels(raw.denyRiskLabels, sourcePath, `${field}.denyRiskLabels`),
+    unscreened: raw.unscreened,
+  };
+}
+
+function validateTrifectaEnforcement(
+  value: unknown,
+  sourcePath: string,
+  field: string,
+): IntakeTrifectaEnforcement {
+  if (!isIntakeTrifectaEnforcement(value)) {
+    throw invalid(sourcePath, `${field} must be one of: ${INTAKE_TRIFECTA_ENFORCEMENTS.join(', ')}`);
+  }
+  return value;
+}
+
+function validateSinkGates(raw: unknown, sourcePath: string): IntakeSinkGatesPolicyConfig {
+  if (!isRecord(raw)) {
+    throw invalid(sourcePath, 'sinkGates must be an object');
+  }
+  const unknownKeys = Object.keys(raw).filter((key) => !['sinks', 'trifecta'].includes(key));
+  if (unknownKeys.length > 0) {
+    throw invalid(sourcePath, `sinkGates has unsupported keys: ${unknownKeys.join(', ')}`);
+  }
+  if (!isRecord(raw.sinks)) {
+    throw invalid(sourcePath, 'sinkGates.sinks must be an object');
+  }
+  const unknownSinks = Object.keys(raw.sinks)
+    .filter((key) => !(INTAKE_SINKS as readonly string[]).includes(key));
+  if (unknownSinks.length > 0) {
+    throw invalid(sourcePath, `sinkGates.sinks has unsupported sinks: ${unknownSinks.join(', ')}`);
+  }
+  const sinks = {} as Record<IntakeSink, IntakeSinkRuleConfig>;
+  for (const sink of INTAKE_SINKS) {
+    const rule = raw.sinks[sink];
+    if (rule === undefined) {
+      throw invalid(sourcePath, `sinkGates.sinks.${sink} is required (every consequential sink must be mapped)`);
+    }
+    sinks[sink] = validateSinkRule(rule, sourcePath, `sinkGates.sinks.${sink}`);
+  }
+  if (!isRecord(raw.trifecta)) {
+    throw invalid(sourcePath, 'sinkGates.trifecta must be an object');
+  }
+  const unknownTrifectaKeys = Object.keys(raw.trifecta)
+    .filter((key) => !['enforcementByTier'].includes(key));
+  if (unknownTrifectaKeys.length > 0) {
+    throw invalid(sourcePath, `sinkGates.trifecta has unsupported keys: ${unknownTrifectaKeys.join(', ')}`);
+  }
+  return {
+    sinks,
+    trifecta: {
+      enforcementByTier: validateTierRecord(
+        raw.trifecta.enforcementByTier,
+        sourcePath,
+        'sinkGates.trifecta.enforcementByTier',
+        validateTrifectaEnforcement,
+      ),
+    },
+  };
+}
+
+/** Gate rule for one consequential sink. */
+export function sinkRuleForSink(
+  config: IntakePolicyConfig,
+  sink: IntakeSink,
+): IntakeSinkRuleConfig {
+  return config.sinkGates.sinks[sink];
+}
+
+/** Trifecta enforcement strength for untrusted content at a given source risk tier. */
+export function trifectaEnforcementForTier(
+  config: IntakePolicyConfig,
+  tier: IntakeSourceRiskTier,
+): IntakeTrifectaEnforcement {
+  return config.sinkGates.trifecta.enforcementByTier[tier];
+}
+
 /** Screening threshold for the injection-classifier score at a given source risk tier. */
 export function injectionScoreThresholdForTier(
   config: IntakePolicyConfig,
@@ -473,7 +653,7 @@ export function validateIntakePolicy(raw: unknown, sourcePath: string): IntakePo
   }
   const knownKeys = [
     'schemaVersion', 'mode', 'sourceRiskTiers', 'quarantine', 'injectionClassifier',
-    'l2Screener', 'l3Screener',
+    'l2Screener', 'l3Screener', 'sinkGates',
   ];
   const unknownKeys = Object.keys(raw).filter((key) => !knownKeys.includes(key));
   if (unknownKeys.length > 0) {
@@ -494,6 +674,7 @@ export function validateIntakePolicy(raw: unknown, sourcePath: string): IntakePo
     injectionClassifier: validateInjectionClassifier(raw.injectionClassifier, sourcePath),
     l2Screener: validateL2Screener(raw.l2Screener, sourcePath),
     l3Screener: validateL3Screener(raw.l3Screener, sourcePath),
+    sinkGates: validateSinkGates(raw.sinkGates, sourcePath),
   };
 }
 

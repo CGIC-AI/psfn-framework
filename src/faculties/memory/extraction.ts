@@ -164,6 +164,10 @@ export class MemoryExtractor {
     this.sessionManager = sessionManager;
     this.memoryStore = memoryStore;
     this.writer = new MemoryWriter(memoryStore, embeddingService);
+    // htm9.3: the extractor's writes gate at the memory_write sink. The gate
+    // is late-bound onto the session manager by composition, so the writer
+    // follows it through a provider closure.
+    this.writer.intakeSinkGateProvider = () => this.sessionManager.intakeSinkGate;
     const resolvedTelemetry = normalizeCostTelemetryPort(costTelemetry);
     if (!resolvedTelemetry) {
       throw new Error('MemoryExtractor requires a cost telemetry port');

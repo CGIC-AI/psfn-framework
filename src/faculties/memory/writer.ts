@@ -44,6 +44,8 @@ import {
   type CogSecMemoryCandidacyDecision,
 } from '../../core/cogsec/memory-candidacy.js';
 import { appendIntakeEnvelopeProvenanceRef } from '../../shared/contracts/intake-envelope.js';
+import type { IntakeEnvelopeSnapshot } from '../../shared/contracts/intake-envelope.js';
+import type { IntakeSinkGate } from '../../core/cogsec/intake/sink-gates.js';
 import {
   buildEvolutionLinkInput,
   chooseWriteAction,
@@ -99,6 +101,14 @@ export interface MemoryWriteOptions {
    * A malformed id fails the write (fail closed), never silently drops.
    */
   intakeEnvelopeId?: string;
+  /**
+   * htm9.3: intake envelope snapshots covering the SOURCE content this memory
+   * derives from. When the writer has an intake sink gate wired, these are
+   * evaluated at the `memory_write` sink before candidacy; an empty/absent
+   * list is explicit unscreened content and resolves per the sink's policy
+   * default.
+   */
+  intakeEnvelopes?: readonly IntakeEnvelopeSnapshot[];
 }
 
 export interface WriteResult {
@@ -230,6 +240,14 @@ export interface MemoryRedactionResult {
 
 export class MemoryWriter {
   private readonly maintenanceScheduler: MemoryMaintenanceScheduler | null;
+  /**
+   * Intake sink gate provider (htm9.3), late-bound by composition (the gate
+   * is constructed from intake-policy.json after stores exist). Null means
+   * the firewall is off or predates this wiring — candidacy behavior is
+   * unchanged. The provider shape lets the writer follow a gate that is
+   * assigned onto the session manager after this writer was constructed.
+   */
+  intakeSinkGateProvider: (() => IntakeSinkGate | null) | null = null;
 
   constructor(
     private memoryStore: MemoryStorePort,
@@ -306,12 +324,23 @@ export class MemoryWriter {
     opts: MemoryWriteOptions,
     options: { logRejection?: boolean } = {},
   ): void {
+    // htm9.3: the memory_write sink gate consumes the upstream envelope
+    // labels (or the explicit unscreened policy default) before candidacy.
+    const intakeSinkGate = this.intakeSinkGateProvider?.() ?? null;
+    const intakeGateDecision = intakeSinkGate
+      ? intakeSinkGate.evaluate('memory_write', opts.intakeEnvelopes ?? [], {
+        sourceRef: opts.sourceRef,
+        sourceType: opts.sourceType,
+        memoryType: opts.type,
+      })
+      : undefined;
     const decision = evaluateCogSecMemoryCandidacy({
       text: opts.text,
       type: opts.type,
       tags: opts.tags,
       sourceRef: opts.sourceRef,
       sourceType: opts.sourceType,
+      ...(intakeGateDecision ? { intakeGateDecision } : {}),
     });
     if (decision.disposition === 'allow') return;
     if (options.logRejection ?? true) {

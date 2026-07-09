@@ -17,6 +17,10 @@ import {
   validateIntakePolicy,
   type IntakePolicyConfig,
 } from '../../../system/config/intake-policy-config.js';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+
+const POLICY_SEED_PATH = join(process.cwd(), 'config', 'intake-policy.seed.json');
 
 // ── Fixtures ──
 
@@ -31,8 +35,12 @@ function baseContext(overrides: Partial<L2ScreenerContext> = {}): L2ScreenerCont
 
 /** A canonical, fully-mapped policy for routing tests. */
 function testPolicy(): IntakePolicyConfig {
+  // Sections this suite doesn't exercise (sinkGates) come from the real seed so
+  // the fixture stays valid as the policy contract grows.
+  const seed = JSON.parse(readFileSync(POLICY_SEED_PATH, 'utf8')) as Record<string, unknown>;
   return validateIntakePolicy(
     {
+      ...seed,
       schemaVersion: 1,
       mode: 'enforce',
       sourceRiskTiers: {

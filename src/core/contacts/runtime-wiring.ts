@@ -3,6 +3,7 @@ import type { ApprovalQueuePort } from '../../system/capabilities/approval-queue
 import type { ContactStorePort } from './contact-store-port.js';
 import type { ChannelPrivacyLevel } from './types.js';
 import type { ContactBlockListStore } from '../cogsec/contact-block-list.js';
+import type { IntakeSinkGate } from '../cogsec/intake/sink-gates.js';
 import { createContactTool } from './tools.js';
 
 export interface ContactRuntimeTarget {
@@ -30,6 +31,11 @@ export interface ContactRuntimeOptions {
    * blocked inbound before it reaches the agent.
    */
   blockList?: ContactBlockListStore;
+  /**
+   * Intake sink gate provider (htm9.3): trust_mutation gate for
+   * contact action=set_trust. Absent/null = firewall off.
+   */
+  getIntakeSinkGate?: () => IntakeSinkGate | null;
 }
 
 export async function registerContactRuntime(
@@ -59,6 +65,7 @@ export async function registerContactRuntime(
   target.registerTool(createContactTool(contactStore, {
     proposalQueue: options.proposalQueue,
     ...(options.blockList ? { blockList: options.blockList } : {}),
+    ...(options.getIntakeSinkGate ? { getIntakeSinkGate: options.getIntakeSinkGate } : {}),
   }));
 
   return contactStore;

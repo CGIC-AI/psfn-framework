@@ -90,6 +90,7 @@ import {
 import { buildSessionMetadataWithIntakeScreening } from './intake-screening-metadata.js';
 // Type-only structural port: the session layer never imports cogsec runtime code.
 import type { IntakeScreeningService } from '../cogsec/intake/screening.js';
+import type { IntakeSinkGate } from '../cogsec/intake/sink-gates.js';
 import type { ContextManifestMemorySeed } from './context-manifest.js';
 import {
   applyFocusCompactionRanges,
@@ -205,6 +206,15 @@ export class SessionManager {
    * Must be an L1-only (synchronous) service: recordToolObservation is sync.
    */
   intakeScreening: Pick<IntakeScreeningService, 'mode' | 'screenSync'> | null = null;
+  /**
+   * Intake sink gate (htm9.3). Assigned by composition from
+   * intake-policy.json alongside `intakeScreening`; null means the firewall
+   * is off. Consumed at context build (prompt_assembly sink: entries whose
+   * intake envelopes fail the gate render as the withheld placeholder in
+   * enforce mode) and read by downstream memory-write gating through
+   * `sessionManager.intakeSinkGate`.
+   */
+  intakeSinkGate: IntakeSinkGate | null = null;
   private internalRoleEnvelopeLedger: InternalRoleEnvelopeLedger | null;
   private activeContextSessionId: string | null = null;
   private pendingAutoCompactions = new Map<string, Promise<void>>();
@@ -439,9 +449,30 @@ export class SessionManager {
         role: 'user',
       })
       : options.metadata;
-    const metadata = options.roleEnvelopePreview
+    const previewMetadata = options.roleEnvelopePreview
       ? buildSessionMetadataWithRoleEnvelopePreview(turnMetadata, options.roleEnvelopePreview)
       : turnMetadata;
+    // htm9.3: persist the message's intake-envelope snapshots (screened
+    // upstream by the channel adapter, e.g. Discord document ingest) onto the
+    // session entry, so context assembly and memory extraction can consult
+    // the prompt_assembly / memory_write sink gates without re-screening.
+    // Envelopes arriving with no screening service wired is an invariant
+    // break (both derive from the same intake-policy.json) — fail closed.
+    let metadata = previewMetadata;
+    if (options.intakeEnvelopes && options.intakeEnvelopes.length > 0) {
+      if (!this.intakeScreening) {
+        throw new Error(
+          'Session recording received intake envelope snapshots while intake screening is off; '
+          + 'refusing to persist unattributable screening state (fail closed)',
+        );
+      }
+      metadata = buildSessionMetadataWithIntakeScreening(previewMetadata, {
+        mode: this.intakeScreening.mode,
+        withheld: this.intakeScreening.mode === 'enforce'
+          && options.intakeEnvelopes.some((snapshot) => snapshot.state === 'quarantined'),
+        envelopes: options.intakeEnvelopes,
+      });
+    }
     const continuityKey = continuityUserId ?? authorId;
 
     // Authorship integrity guard (charter laws 17/19): internal-origin
@@ -1046,6 +1077,7 @@ export class SessionManager {
       compactionMode: 'deferred',
       pendingCompaction: this.pendingAutoCompactions.has(resolvedChannelId),
       wakeSummaryConfig: this.wakeSummaryConfig,
+      intakeSinkGate: this.intakeSinkGate,
     });
   }
 

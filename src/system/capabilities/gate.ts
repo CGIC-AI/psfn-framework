@@ -93,9 +93,27 @@ function deniedResult(
   );
 }
 
+/**
+ * Structural egress-guard port (htm9.3). The intake firewall's tool-egress
+ * sink gate plugs in here without this module importing cogsec internals.
+ * `evaluate` returns null when the guard does not apply to this invocation
+ * (non-egress tool, no guard active this turn); a non-null denied result
+ * carries the operator-reviewed notice text returned to the model instead of
+ * executing the tool.
+ */
+export interface EgressToolGuard {
+  evaluate(input: {
+    toolName: string;
+    requiredTokens: readonly CapabilityToken[];
+  }): { allowed: boolean; noticeText: string } | null;
+}
+
+export type EgressToolGuardProvider = () => EgressToolGuard | null;
+
 export function gateToolWithCapabilities<T extends AgentTool<any>>(
   tool: T,
   getAccess: CapabilityAccessProvider,
+  getEgressGuard?: EgressToolGuardProvider,
 ): T {
   const gated = {
     ...tool,
@@ -116,6 +134,25 @@ export function gateToolWithCapabilities<T extends AgentTool<any>>(
           eligibility.missingTokens,
           access.getGrantedTokens(),
         );
+      }
+
+      // htm9.3: tool-egress sink gate (lethal-trifecta invariant). Evaluated
+      // per invocation with the current turn's intake context; a denied
+      // egress returns the calm notice text instead of executing. Soft
+      // (review) verdicts return allowed=true from the guard and are audited
+      // there.
+      const egressGuard = getEgressGuard?.() ?? null;
+      if (egressGuard) {
+        const egressDecision = egressGuard.evaluate({
+          toolName: tool.name,
+          requiredTokens: eligibility.requiredTokens,
+        });
+        if (egressDecision && !egressDecision.allowed) {
+          return toTextResult(egressDecision.noticeText, {
+            egressGated: true,
+            toolName: tool.name,
+          });
+        }
       }
 
       // params is unknown from the gated wrapper; tool.execute expects Static<TSchema>

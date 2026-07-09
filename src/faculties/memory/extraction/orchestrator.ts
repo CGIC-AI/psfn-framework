@@ -50,6 +50,11 @@ import {
 } from './signals.js';
 import { evaluateCogSecMemoryCandidacy } from '../../../core/cogsec/memory-candidacy.js';
 import { isNonConversationalSessionEntry } from '../../../core/session/manager-primitives.js';
+import {
+  INTAKE_SCREENING_METADATA_KEY,
+  parseIntakeScreeningMetadata,
+} from '../../../core/session/intake-screening-metadata.js';
+import type { IntakeEnvelopeSnapshot } from '../../../shared/contracts/intake-envelope.js';
 import type {
   AcceptedFactCandidate,
   AcceptedFactWrite,
@@ -109,6 +114,73 @@ function createEmptyRejectionBreakdown(): Record<ExtractionRejectionReason, numb
     cogsec_risk: 0,
     ambiguous_speaker: 0,
     write_cap: 0,
+  };
+}
+
+// ── Intake sink-gate index (htm9.3) ──
+//
+// Maps session-entry ids to the intake-envelope snapshots persisted on their
+// `intakeScreening` metadata, so each extracted fact can be gated at the
+// memory_write sink against the envelopes covering its SOURCE entries
+// (fact.attribution.sourceMessageIds) instead of re-deriving risk. Malformed
+// metadata is unknowable screening state: it is tracked and fails closed in
+// enforce mode.
+
+interface ExtractionIntakeGateIndex {
+  envelopesByEntryId: Map<number, readonly IntakeEnvelopeSnapshot[]>;
+  malformedEntryIds: Set<number>;
+  allEnvelopes: IntakeEnvelopeSnapshot[];
+}
+
+function buildExtractionIntakeGateIndex(
+  entries: readonly SessionEntry[],
+  channelId: string,
+): ExtractionIntakeGateIndex {
+  const index: ExtractionIntakeGateIndex = {
+    envelopesByEntryId: new Map(),
+    malformedEntryIds: new Set(),
+    allEnvelopes: [],
+  };
+  const marker = `"${INTAKE_SCREENING_METADATA_KEY}"`;
+  for (const entry of entries) {
+    if (!entry.metadata || !entry.metadata.includes(marker)) continue;
+    try {
+      const screening = parseIntakeScreeningMetadata(entry.metadata);
+      if (!screening) continue;
+      index.envelopesByEntryId.set(entry.id, screening.envelopes);
+      index.allEnvelopes.push(...screening.envelopes);
+    } catch (error) {
+      log.error('Malformed intake screening metadata on extraction source entry; treated as gate-denied in enforce mode', {
+        channelId,
+        entryId: entry.id,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      index.malformedEntryIds.add(entry.id);
+    }
+  }
+  return index;
+}
+
+function resolveFactIntakeEnvelopes(
+  index: ExtractionIntakeGateIndex,
+  fact: ExtractedFact,
+): { envelopes: readonly IntakeEnvelopeSnapshot[]; coversMalformedEntry: boolean } {
+  const sourceIds = fact.attribution?.sourceMessageIds;
+  if (sourceIds && sourceIds.length > 0) {
+    const envelopes: IntakeEnvelopeSnapshot[] = [];
+    let coversMalformedEntry = false;
+    for (const id of sourceIds) {
+      envelopes.push(...(index.envelopesByEntryId.get(id) ?? []));
+      if (index.malformedEntryIds.has(id)) coversMalformedEntry = true;
+    }
+    return { envelopes, coversMalformedEntry };
+  }
+  // An unattributed fact may derive from any entry in the window: it inherits
+  // every envelope in the window (fail closed — derivation never launders
+  // provenance away).
+  return {
+    envelopes: index.allEnvelopes,
+    coversMalformedEntry: index.malformedEntryIds.size > 0,
   };
 }
 
@@ -386,6 +458,11 @@ export async function runExtractionOrchestration(options: ExtractionRunOptions):
     let ambiguousSpeakerSkippedCount = 0;
     const ambiguousSpeakerSkipReasons: Record<string, number> = {};
     const acceptedCandidates: RoutedAcceptedFactCandidate[] = [];
+    // htm9.3: memory_write sink gate over the upstream intake envelopes.
+    const intakeSinkGate = options.sessionManager.intakeSinkGate;
+    const intakeGateIndex = intakeSinkGate
+      ? buildExtractionIntakeGateIndex(recentEntries, options.channelId)
+      : null;
     for (const [index, fact] of facts.entries()) {
       const decision = evaluateFactAcceptance(fact, noveltyCorpus, options.gateConfig);
       if (!decision.accepted) {
@@ -406,10 +483,33 @@ export async function runExtractionOrchestration(options: ExtractionRunOptions):
         continue;
       }
 
+      let intakeGateDecision;
+      if (intakeSinkGate && intakeGateIndex) {
+        const factIntake = resolveFactIntakeEnvelopes(intakeGateIndex, fact);
+        if (factIntake.coversMalformedEntry && intakeSinkGate.mode === 'enforce') {
+          // Unknowable screening state on a source entry fails closed.
+          rejectionBreakdown.cogsec_risk++;
+          log.warn('Rejected extracted fact: source entry carries malformed intake screening metadata', {
+            channelId: options.channelId,
+            triggerReason: options.triggerReason,
+            factIndex: index,
+            factType: fact.type,
+          });
+          continue;
+        }
+        intakeGateDecision = intakeSinkGate.evaluate('memory_write', factIntake.envelopes, {
+          channelId: options.channelId,
+          triggerReason: options.triggerReason,
+          factIndex: index,
+          factType: fact.type,
+        });
+      }
+
       const cogSecCandidacy = evaluateCogSecMemoryCandidacy({
         text: fact.text,
         type: fact.type,
         tags: fact.tags,
+        ...(intakeGateDecision ? { intakeGateDecision } : {}),
       });
       if (cogSecCandidacy.disposition !== 'allow') {
         rejectionBreakdown.cogsec_risk++;

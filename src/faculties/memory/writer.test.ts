@@ -1,5 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import Database from 'better-sqlite3';
+import { createIntakeSinkGate } from '../../core/cogsec/intake/sink-gates.js';
+import { validateIntakePolicy } from '../../system/config/intake-policy-config.js';
 import * as sqliteVec from 'sqlite-vec';
 import { MemoryCandidacyPolicyError, MemoryWriter, MemoryWritePolicyError } from './writer.js';
 import type { MemoryWriteOptions } from './writer.js';
@@ -111,6 +115,50 @@ describe('MemoryWriter', () => {
     store = mockMemoryStore();
     embeddings = mockEmbeddingService();
     writer = new MemoryWriter(store as unknown as MemoryStorePort, embeddings);
+  });
+
+  describe('intake sink gate (htm9.3)', () => {
+    function seedGate(mode: 'shadow' | 'enforce', mutate?: (raw: Record<string, unknown>) => void) {
+      const seed = JSON.parse(
+        readFileSync(join(process.cwd(), 'config', 'intake-policy.seed.json'), 'utf8'),
+      ) as Record<string, unknown>;
+      const raw = { ...seed, mode };
+      mutate?.(raw);
+      return createIntakeSinkGate({
+        policy: validateIntakePolicy(raw, 'intake-policy.test'),
+        actor: 'test:intake-sink-gate',
+      });
+    }
+
+    it('rejects writes covered by a quarantined intake envelope in enforce mode', async () => {
+      writer.intakeSinkGateProvider = () => seedGate('enforce');
+      await expect(writer.write({
+        text: 'An innocuous-looking fact extracted from held content.',
+        type: 'semantic',
+        intakeEnvelopes: [{
+          envelopeId: 'held-envelope-001',
+          sourceClass: 'web_fetch',
+          sourceRiskTier: 'untrusted',
+          state: 'quarantined',
+          riskLabels: ['injection/override_attempt'],
+          subject: { kind: 'body' },
+        }],
+      })).rejects.toBeInstanceOf(MemoryCandidacyPolicyError);
+      expect(store.insertMemory).not.toHaveBeenCalled();
+    });
+
+    it('never blocks in shadow mode and honors the explicit unscreened policy default', async () => {
+      writer.intakeSinkGateProvider = () => seedGate('shadow');
+      const shadowResult = await writer.write({ text: 'Ordinary fact.', type: 'semantic' });
+      expect(shadowResult.action).toBe('created');
+
+      writer.intakeSinkGateProvider = () => seedGate('enforce', (raw) => {
+        const sinkGates = raw.sinkGates as { sinks: Record<string, { unscreened: string }> };
+        sinkGates.sinks.memory_write.unscreened = 'deny';
+      });
+      await expect(writer.write({ text: 'Another ordinary fact.', type: 'semantic' }))
+        .rejects.toBeInstanceOf(MemoryCandidacyPolicyError);
+    });
   });
 
   describe('write()', () => {

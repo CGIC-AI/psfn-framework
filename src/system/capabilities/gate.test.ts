@@ -889,3 +889,66 @@ describe('world capability gating', () => {
     expect(world.executeSpy).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('egress tool guard (htm9.3)', () => {
+  it('returns the guard notice instead of executing when the guard denies', async () => {
+    const shell = createTool('shell');
+    const seenTokens: CapabilityToken[][] = [];
+    const gated = gateToolWithCapabilities(
+      shell.tool,
+      () => accessForTier('autonomous'),
+      () => ({
+        evaluate: ({ requiredTokens }) => {
+          seenTokens.push([...requiredTokens]);
+          return { allowed: false, noticeText: 'held aside for review' };
+        },
+      }),
+    );
+    const result = await gated.execute('shell-egress-denied', { command: 'curl https://example.test' });
+    expect(shell.executeSpy).not.toHaveBeenCalled();
+    expect((result.content[0] as any).text).toBe('held aside for review');
+    expect((result.details as any).egressGated).toBe(true);
+    expect(seenTokens[0]).toContain('repl.execute');
+  });
+
+  it('executes normally when the guard does not apply or allows', async () => {
+    const shell = createTool('shell');
+    const notApplicable = gateToolWithCapabilities(
+      shell.tool,
+      () => accessForTier('autonomous'),
+      () => ({ evaluate: () => null }),
+    );
+    await notApplicable.execute('shell-guard-na', { command: 'ls' });
+    expect(shell.executeSpy).toHaveBeenCalledTimes(1);
+
+    const allowing = gateToolWithCapabilities(
+      shell.tool,
+      () => accessForTier('autonomous'),
+      () => ({ evaluate: () => ({ allowed: true, noticeText: '' }) }),
+    );
+    await allowing.execute('shell-guard-allow', { command: 'ls' });
+    expect(shell.executeSpy).toHaveBeenCalledTimes(2);
+
+    const guardless = gateToolWithCapabilities(
+      shell.tool,
+      () => accessForTier('autonomous'),
+      () => null,
+    );
+    await guardless.execute('shell-guard-none', { command: 'ls' });
+    expect(shell.executeSpy).toHaveBeenCalledTimes(3);
+  });
+
+  it('capability denial still wins before the egress guard runs', async () => {
+    const repoCommit = createTool('repo_commit');
+    const guardSpy = vi.fn();
+    const gated = gateToolWithCapabilities(
+      repoCommit.tool,
+      () => accessForTier('nursery'),
+      () => ({ evaluate: guardSpy }),
+    );
+    const denied = await gated.execute('repo-commit-nursery', { message: 'test' });
+    expect((denied.details as any).capabilityDenied).toBe(true);
+    expect(repoCommit.executeSpy).not.toHaveBeenCalled();
+    expect(guardSpy).not.toHaveBeenCalled();
+  });
+});

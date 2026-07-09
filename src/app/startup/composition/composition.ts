@@ -436,9 +436,13 @@ export interface ToolRuntimeOptions {
 
 export function wireShardAndThinkRuntime(options: ToolRuntimeOptions): ShardExecutionPort {
   const companionDataDir = options.companionDataDir ?? resolveConfiguredCompanionDataDir(options.config);
+  // htm9.3: shard fold-back memory writes gate at the memory_write sink; the
+  // gate is late-bound onto the session manager by composition.
+  const foldReviewMemoryWriter = new MemoryWriter(options.memoryStore, options.embeddingService);
+  foldReviewMemoryWriter.intakeSinkGateProvider = () => options.sessionManager.intakeSinkGate;
   const foldReviewController = new ShardFoldReviewController(
     resolveShardFoldReviewStorePath(companionDataDir),
-    new MemoryWriter(options.memoryStore, options.embeddingService),
+    foldReviewMemoryWriter,
   );
   const shardManager = new ShardManager({
     eventBus: options.eventBus,

@@ -8,6 +8,8 @@ import {
   type CapabilityRequirement,
 } from '../../system/capabilities/requirements.js';
 import { VALID_SENSITIVITY_LEVELS } from '../../system/trust/types.js';
+import { INTAKE_FIREWALL_NOTICE_TEMPLATES } from '../../core/cogsec/intake-firewall-notice-templates.js';
+import type { IntakeSinkGate } from '../../core/cogsec/intake/sink-gates.js';
 import {
   WIKI_SOURCE_CLASSES,
   type WikiDocumentUpsertInput,
@@ -26,6 +28,15 @@ export interface WikiToolDeps {
    * with guidance rather than silently downgrading.
    */
   semanticSearch?: WikiSemanticSearchFn;
+  /**
+   * Intake sink gate provider (htm9.3). Wiki writes are a consequential sink:
+   * before any upsert the `wiki_write` gate is evaluated. No envelope flows
+   * into this tool yet (agent-authored params), so the evaluation is the
+   * EXPLICIT unscreened path — the sink's `unscreened` policy default decides
+   * in enforce mode, and every decision is audited. Null/absent = firewall
+   * off.
+   */
+  getIntakeSinkGate?: () => IntakeSinkGate | null;
 }
 
 interface WikiToolParams {
@@ -221,6 +232,19 @@ export function createWikiTool(store: WikiStorePort, deps: WikiToolDeps = {}): S
           }
           case 'write':
           case 'import': {
+            const intakeSinkGate = deps.getIntakeSinkGate?.() ?? null;
+            if (intakeSinkGate) {
+              const gateDecision = intakeSinkGate.evaluate('wiki_write', [], {
+                tool: 'wiki',
+                action,
+                documentId: typeof params.id === 'string' ? params.id : undefined,
+              });
+              if (!gateDecision.allowed) {
+                // Soft, truthful, operator-reviewed wording (htm9.12); not an
+                // error so the model does not spiral into retries.
+                return textResult(INTAKE_FIREWALL_NOTICE_TEMPLATES.sinkHeld);
+              }
+            }
             const document = store.upsert(buildUpsertInput(params, action === 'import'));
             return textResult(JSON.stringify({
               action,

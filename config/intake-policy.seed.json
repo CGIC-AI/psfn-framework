@@ -62,5 +62,103 @@
     "timeoutMs": 30000,
     "maxContentChars": 48000,
     "maxOutputTokens": 1200
+  },
+  "sinkGates": {
+    "sinks": {
+      "prompt_assembly": {
+        "maxSourceRiskTier": "hostile",
+        "denyRiskLabels": [],
+        "unscreened": "allow"
+      },
+      "memory_write": {
+        "maxSourceRiskTier": "hostile",
+        "denyRiskLabels": [
+          "injection/override_attempt",
+          "injection/indirect",
+          "injection/encoded_smuggling",
+          "injection/role_confusion",
+          "injection/jailbreak_marker",
+          "persona/mutation_attempt",
+          "policy/security_modification",
+          "execution/executable_instruction",
+          "exfil/canary_leak",
+          "poisoning/memory_write_pressure",
+          "poisoning/trust_grooming",
+          "poisoning/source_drift"
+        ],
+        "unscreened": "allow"
+      },
+      "wiki_write": {
+        "maxSourceRiskTier": "hostile",
+        "denyRiskLabels": [
+          "injection/override_attempt",
+          "injection/indirect",
+          "injection/encoded_smuggling",
+          "injection/role_confusion",
+          "injection/jailbreak_marker",
+          "persona/mutation_attempt",
+          "policy/security_modification",
+          "execution/executable_instruction",
+          "exfil/canary_leak",
+          "poisoning/memory_write_pressure",
+          "poisoning/trust_grooming",
+          "poisoning/source_drift"
+        ],
+        "unscreened": "allow"
+      },
+      "persona_mutation": {
+        "maxSourceRiskTier": "standard",
+        "denyRiskLabels": [
+          "injection/override_attempt",
+          "injection/indirect",
+          "injection/encoded_smuggling",
+          "injection/invisible_text",
+          "injection/role_confusion",
+          "injection/jailbreak_marker",
+          "persona/mutation_attempt",
+          "policy/security_modification",
+          "execution/executable_instruction",
+          "exfil/canary_leak",
+          "poisoning/memory_write_pressure",
+          "poisoning/trust_grooming",
+          "poisoning/source_drift"
+        ],
+        "unscreened": "allow"
+      },
+      "trust_mutation": {
+        "maxSourceRiskTier": "standard",
+        "denyRiskLabels": [
+          "injection/override_attempt",
+          "injection/indirect",
+          "injection/encoded_smuggling",
+          "injection/invisible_text",
+          "injection/role_confusion",
+          "injection/jailbreak_marker",
+          "persona/mutation_attempt",
+          "policy/security_modification",
+          "execution/executable_instruction",
+          "exfil/canary_leak",
+          "poisoning/memory_write_pressure",
+          "poisoning/trust_grooming",
+          "poisoning/source_drift"
+        ],
+        "unscreened": "allow"
+      },
+      "tool_egress": {
+        "maxSourceRiskTier": "hostile",
+        "denyRiskLabels": [
+          "exfil/canary_leak"
+        ],
+        "unscreened": "allow"
+      }
+    },
+    "trifecta": {
+      "enforcementByTier": {
+        "trusted": "soft",
+        "standard": "soft",
+        "untrusted": "hard",
+        "hostile": "hard"
+      }
+    }
   }
 }

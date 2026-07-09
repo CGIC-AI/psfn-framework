@@ -7,6 +7,7 @@ import {
   type WikiRetrievalConfigLike,
 } from '../../shared/context-budget.js';
 import { createWikiTool } from './tools.js';
+import type { IntakeSinkGate } from '../../core/cogsec/intake/sink-gates.js';
 import { WikiStore } from './store.js';
 import {
   createWikiPgvectorProjectionStore,
@@ -57,6 +58,11 @@ export interface WikiRuntimeDeps {
    * projection ignores this: it always pins its own `shared` schema.
    */
   postgresSchema?: string;
+  /**
+   * Intake sink gate provider (htm9.3), threaded to the wiki tool's
+   * wiki_write gate. Absent/null = firewall off.
+   */
+  getIntakeSinkGate?: () => IntakeSinkGate | null;
 }
 
 export interface WikiRuntimeWiring {
@@ -176,7 +182,10 @@ export async function wireWikiRuntime(
     }
   }
 
-  target.registerTool(createWikiTool(store, semanticSearch ? { semanticSearch } : {}), 'core');
+  target.registerTool(createWikiTool(store, {
+    ...(semanticSearch ? { semanticSearch } : {}),
+    ...(deps.getIntakeSinkGate ? { getIntakeSinkGate: deps.getIntakeSinkGate } : {}),
+  }), 'core');
 
   if (projection) {
     // Startup repair pass: rebuild the projection from the canonical workspace

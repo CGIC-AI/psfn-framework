@@ -22,6 +22,8 @@ import { resolvePreferredContactName } from './preferred-name.js';
 import { textResult, textResultWithError } from '../tools/results.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
 import { withCapabilityRequirement } from '../../system/capabilities/requirements.js';
+import { INTAKE_FIREWALL_NOTICE_TEMPLATES } from '../cogsec/intake-firewall-notice-templates.js';
+import type { IntakeSinkGate } from '../cogsec/intake/sink-gates.js';
 import { tagToolWithReversibility } from '../../system/capabilities/safeguards.js';
 
 const CONTACT_ACTION_NAMES = [
@@ -198,11 +200,31 @@ function normalizeContactAction(params: ContactToolParams): ContactAction {
 async function executeContactSetTrust(
   contactStore: ContactStorePort,
   params: ContactSetTrustParams,
+  getIntakeSinkGate?: () => IntakeSinkGate | null,
 ): Promise<AgentToolResult<{ isError?: boolean }>> {
   const { contactId, trustLevel, behaviorSignals, confirmSuggestion } = params;
 
   if (!contactId.trim()) {
     return textResultWithError('Missing contactId', true);
+  }
+
+  // htm9.3: trust-state mutation is a consequential sink. No envelope flows
+  // into this tool yet (agent-authored params), so this is the EXPLICIT
+  // unscreened path — the sink's `unscreened` policy default decides in
+  // enforce mode; every decision is audited.
+  const intakeSinkGate = getIntakeSinkGate?.() ?? null;
+  if (intakeSinkGate) {
+    const gateDecision = intakeSinkGate.evaluate('trust_mutation', [], {
+      tool: 'contact',
+      action: 'set_trust',
+      contactId,
+      ...(trustLevel ? { requestedTrustLevel: trustLevel } : {}),
+    });
+    if (!gateDecision.allowed) {
+      // Soft, truthful, operator-reviewed wording (htm9.12); not an error so
+      // the model does not spiral into retries.
+      return textResult(INTAKE_FIREWALL_NOTICE_TEMPLATES.sinkHeld);
+    }
   }
 
   if (!behaviorSignals && !trustLevel) {
@@ -685,6 +707,7 @@ async function executeUnifiedContactAction(
   params: ContactToolParams = {},
   proposalQueue?: ApprovalQueuePort,
   blockList?: ContactBlockListStore,
+  getIntakeSinkGate?: () => IntakeSinkGate | null,
 ): Promise<AgentToolResult<{ isError?: boolean }>> {
   const action = normalizeContactAction(params);
 
@@ -698,7 +721,7 @@ async function executeUnifiedContactAction(
     case 'note':
       return await executeContactNote(contactStore, params);
     case 'set_trust':
-      return await executeContactSetTrust(contactStore, params as ContactSetTrustParams);
+      return await executeContactSetTrust(contactStore, params as ContactSetTrustParams, getIntakeSinkGate);
     case 'propose_trust':
       return await executeContactProposeTrust(contactStore, proposalQueue, params);
     case 'link_identity':
@@ -923,6 +946,11 @@ export interface CreateContactToolOptions {
    * blocked inbound before it reaches the agent process.
    */
   blockList?: ContactBlockListStore;
+  /**
+   * Intake sink gate provider (htm9.3): trust_mutation gate evaluated before
+   * action=set_trust applies. Null/absent = firewall off.
+   */
+  getIntakeSinkGate?: () => IntakeSinkGate | null;
 }
 
 export function createContactTool(
@@ -931,6 +959,7 @@ export function createContactTool(
 ): SubstrateAgentTool {
   const proposalQueue = options.proposalQueue;
   const blockList = options.blockList;
+  const getIntakeSinkGate = options.getIntakeSinkGate;
   const tool: SubstrateAgentTool = {
     name: 'contact',
     label: 'contact',
@@ -1033,7 +1062,7 @@ export function createContactTool(
       let actionForError = typeof params.action === 'string' ? params.action : undefined;
       try {
         actionForError = normalizeContactAction(params);
-        return await executeUnifiedContactAction(contactStore, params, proposalQueue, blockList);
+        return await executeUnifiedContactAction(contactStore, params, proposalQueue, blockList, getIntakeSinkGate);
       } catch (error) {
         const suffix = actionForError ? ` for action=${actionForError}` : '';
         return textResultWithError(`contact failed${suffix}: ${errorMessage(error)}`, true);

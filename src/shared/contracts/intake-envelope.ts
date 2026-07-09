@@ -144,6 +144,47 @@ export const INTAKE_RISK_LABEL_CATEGORIES = [...new Set(
   INTAKE_RISK_LABELS.map((label) => label.slice(0, label.indexOf('/'))),
 )] as readonly string[];
 
+// ── Consequential sinks (htm9.3) ──
+
+/**
+ * The consequential sinks that must check envelope state/labels before
+ * consuming content. Sink-gate POLICY (per-sink tier caps, deny labels,
+ * unscreened-content defaults) lives in intake-policy.json; this contract
+ * only owns the closed sink vocabulary so policy, gates, and Garden share
+ * one list.
+ */
+export const INTAKE_SINKS = [
+  'prompt_assembly',
+  'memory_write',
+  'wiki_write',
+  'persona_mutation',
+  'trust_mutation',
+  'tool_egress',
+] as const;
+
+export type IntakeSink = typeof INTAKE_SINKS[number];
+
+export function isIntakeSink(value: unknown): value is IntakeSink {
+  return typeof value === 'string'
+    && (INTAKE_SINKS as readonly string[]).includes(value);
+}
+
+/**
+ * Envelope states whose content a sink may consume. Everything else —
+ * received (unscreened), screened (not yet routed), quarantined, discarded,
+ * expired — is invisible to ALL sinks (structural rule, not policy).
+ */
+export const INTAKE_SINK_CONSUMABLE_STATES: readonly IntakeEnvelopeState[] = [
+  'released',
+  'released_sanitized',
+  'human_released',
+  'human_released_sanitized',
+];
+
+export function isIntakeSinkConsumableState(state: IntakeEnvelopeState): boolean {
+  return INTAKE_SINK_CONSUMABLE_STATES.includes(state);
+}
+
 // ── Decision ──
 
 export const INTAKE_DECISION_ACTIONS = ['pass', 'sanitize', 'quarantine', 'block'] as const;

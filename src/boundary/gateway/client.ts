@@ -67,6 +67,9 @@ import type {
   FsEditParams,
   FsEditResult,
   CompanionMessageNotification,
+  CompanionMessageDeliveryFailureNotification,
+  CompanionMessageFailureReportParams,
+  CompanionMessageFailureReportResult,
   CompanionMessageSendResult,
   DiscordMessageNotification,
   LLMChunkNotification,
@@ -526,6 +529,16 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
     }) as CompanionMessageSendResult;
   }
 
+  /** Report a failed inbound companion turn without creating a reply turn. */
+  async companionReportFailure(
+    params: CompanionMessageFailureReportParams,
+  ): Promise<CompanionMessageFailureReportResult> {
+    return await this.rpcInstance.request('companion.message.report_failure', {
+      ...params,
+      ...(this.companionId ? { companionId: this.companionId } : {}),
+    }) as CompanionMessageFailureReportResult;
+  }
+
   // ── Web fetch ──
 
   async webFetch(
@@ -870,6 +883,15 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
     return this.onNotification('companion.message', (params) => {
       const notification = params as CompanionMessageNotification;
       handler(notification.message);
+    });
+  }
+
+  /** Observe-only negative acknowledgement for a companion message we sent. */
+  onCompanionDeliveryFailure(
+    handler: (notification: CompanionMessageDeliveryFailureNotification) => void,
+  ): () => void {
+    return this.onNotification('companion.message.delivery_failure', (params) => {
+      handler(params as CompanionMessageDeliveryFailureNotification);
     });
   }
 

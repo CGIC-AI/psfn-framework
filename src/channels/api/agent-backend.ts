@@ -13,6 +13,7 @@ import type {
 } from '../../shared/contracts/runtime.js';
 import type { LLMProviderPort } from '../../core/agent/contracts.js';
 import type {
+  SatelliteClientCertIdentity,
   SatelliteRegistryConfig,
   SatelliteRoutingMetadata,
 } from '../../shared/contracts/satellite-registry.js';
@@ -228,6 +229,7 @@ export class AgentApiBackend {
       request: params.request,
       principal: params.principal,
       headers: params.headers,
+      clientCert: params.clientCert,
       timeoutMs: params.timeoutMs,
       onDelta: params.request.stream && this.onStreamDelta
         ? (text) => this.onStreamDelta?.(params.requestId, text)
@@ -241,6 +243,7 @@ export class AgentApiBackend {
       request: input.request,
       principal: input.principal,
       headers: input.headers,
+      clientCert: input.clientCert,
       onDelta: input.onDelta,
       signal: input.signal,
     });
@@ -251,6 +254,7 @@ export class AgentApiBackend {
     request: ChatCompletionRequest;
     principal: ApiAuthPrincipal;
     headers: ApiRpcHeaders;
+    clientCert?: SatelliteClientCertIdentity;
     onDelta?: (text: string) => void | Promise<void>;
     signal?: AbortSignal;
     timeoutMs?: number;
@@ -271,6 +275,7 @@ export class AgentApiBackend {
       params.request,
       params.headers,
       params.principal,
+      params.clientCert,
     );
     if (!pendingTurn.ok) {
       return pendingTurn.error;
@@ -1042,6 +1047,7 @@ export class AgentApiBackend {
     request: ChatCompletionRequest,
     headers: ApiRpcHeaders,
     principal: ApiAuthPrincipal,
+    clientCert: SatelliteClientCertIdentity | undefined,
   ): Promise<{ ok: true; value: PendingTurn } | { ok: false; error: ApiRpcFailure }> {
     const routingOverrides = this.parseTurnRoutingOverrides(request);
     if (!routingOverrides.ok) {
@@ -1063,6 +1069,7 @@ export class AgentApiBackend {
       defaultAuthorName: defaultAuthor.authorName,
       externalChannelProfiles: this.externalChannelProfiles,
       satelliteRegistry: this.satelliteRegistry,
+      ...(clientCert ? { clientCert } : {}),
     });
     if (!turnIdentity.ok) {
       return {

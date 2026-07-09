@@ -19,6 +19,7 @@ import type {
   SatelliteConfig,
   SatelliteRegistryConfig,
 } from '../../../shared/contracts/satellite-registry.js';
+import { satelliteAdmitsAuthenticatedOrigin } from '../../../shared/contracts/satellite-registry.js';
 import { createComponentLogger } from '../../../shared/logger.js';
 import { toErrorMessage } from '../../../shared/utils/errors.js';
 import { isRecord } from '../../../shared/utils/types.js';
@@ -235,6 +236,19 @@ function resolveTelemetryOrigin(
   if (!satellite) {
     return { ok: false, kind: 'malformed', reason: 'unregistered_satellite_origin', satelliteId };
   }
+
+  // Sprint-10 04-M1: the payload-claimed satellite origin is only honored
+  // when the credential that authenticated the ingest request is admitted by
+  // that satellite's registered endpoint auth (principal binding, and cert
+  // binding for mTLS endpoints). Telemetry without an authenticated origin
+  // context fails closed.
+  if (!event.auth) {
+    return { ok: false, kind: 'malformed', reason: 'missing_authenticated_origin', satelliteId };
+  }
+  if (!satelliteAdmitsAuthenticatedOrigin(satellite, event.auth)) {
+    return { ok: false, kind: 'malformed', reason: 'satellite_origin_not_authorized_for_principal', satelliteId };
+  }
+
   if (!satellite.placeId) {
     return { ok: false, kind: 'malformed', reason: 'satellite_has_no_place_binding', satelliteId };
   }

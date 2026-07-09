@@ -3,13 +3,22 @@
 // Uses Node.js built-in http module — no framework dependency.
 
 import { randomUUID } from 'node:crypto';
-import type { IncomingMessage, Server, ServerResponse } from 'node:http';
+import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { Duplex } from 'node:stream';
 import { Type, type Static } from '@sinclair/typebox';
 import { Value } from '@sinclair/typebox/value';
 import type { ChannelType } from '../../shared/contracts/runtime.js';
-import type { SatelliteRegistryConfig } from '../../shared/contracts/satellite-registry.js';
-import type { ApiAuthPrincipal } from '../backplane/http/auth.js';
+import type {
+  SatelliteClientCertIdentity,
+  SatelliteRegistryConfig,
+  SatelliteTelemetryAuthContext,
+} from '../../shared/contracts/satellite-registry.js';
+import { validateSatelliteApiKeys, type ApiAuthPrincipal } from '../backplane/http/auth.js';
+import {
+  deriveClientCertIdentity,
+  parseTrustedProxyClientCertToken,
+  stripClientCertHeaders,
+} from '../backplane/http/client-cert.js';
 import type { ContactStorePort } from '../../core/contacts/contact-store-port.js';
 import type { SubstrateAgent } from '../../core/agent/substrate-agent.js';
 import type { EventBus, ExternalTelemetryEvent } from '../../shared/event-bus.js';
@@ -67,6 +76,8 @@ import {
   parseSchedulerHealthcheckStaleAfterMs,
   sendApiError,
   stopApiHttpServer,
+  type ApiHttpServer,
+  type ApiHttpServerTlsConfig,
 } from './server/http.js';
 import {
   resolveApiServerRequestPrincipal,
@@ -121,6 +132,20 @@ export interface ApiServerConfig {
   externalChannelProfiles?: Partial<Record<ChannelType, ExternalChannelProfileConfig>>;
   satelliteRegistry?: SatelliteRegistryConfig;
   sensorIngest?: SensorIngestPort;
+  /**
+   * Per-satellite bearer credentials (`API_SATELLITE_KEYS`), each yielding a
+   * distinct satellite-scoped principal (Sprint-10 finding H4).
+   */
+  satelliteApiKeys?: string[];
+  /**
+   * Shared secret a TLS-terminating proxy must present in
+   * `X-PSFN-Trusted-Proxy-Token` for its `X-PSFN-Client-Cert-*` headers to be
+   * honored (`API_TRUSTED_PROXY_CLIENT_CERT_TOKEN`). Unset means
+   * header-asserted client certificates are never accepted.
+   */
+  trustedProxyClientCertToken?: string;
+  /** Direct-TLS listener config (`API_TLS_CERT_PATH`/`API_TLS_KEY_PATH`/`API_TLS_CLIENT_CA_PATH`). */
+  tls?: ApiHttpServerTlsConfig;
 }
 
 export class ApiServer implements ChannelAdapterPort {
@@ -143,7 +168,7 @@ export class ApiServer implements ChannelAdapterPort {
   readonly gateway: ChannelGatewayAdapter;
   readonly prompt: ChannelPromptAdapter;
 
-  private server: Server;
+  private server: ApiHttpServer;
   private port: number;
   private host: string;
   private eventBus: EventBus;
@@ -152,6 +177,8 @@ export class ApiServer implements ChannelAdapterPort {
   private runtime: ApiServerRuntime | null;
   private apiKey?: string;
   private adminToken?: string;
+  private satelliteApiKeys: string[];
+  private trustedProxyClientCertToken?: string;
   private allowInsecureWithoutAuth: boolean;
   private corsAllowedOrigins: ReturnType<typeof normalizeCorsAllowedOrigins>;
   private modelName: string;
@@ -175,6 +202,13 @@ export class ApiServer implements ChannelAdapterPort {
     this.runtime = config.runtime ?? null;
     this.apiKey = clampHeaderValue(config.apiKey, 512);
     this.adminToken = clampHeaderValue(config.adminToken, 512);
+    // Re-validate satellite keys at the trust boundary (fail closed on weak
+    // keys or collisions with the shared credentials), even when the caller
+    // already parsed them from env.
+    this.satelliteApiKeys = validateSatelliteApiKeys(config.satelliteApiKeys ?? [], {
+      reservedTokens: [this.apiKey, this.adminToken],
+    });
+    this.trustedProxyClientCertToken = parseTrustedProxyClientCertToken(config.trustedProxyClientCertToken);
     this.allowInsecureWithoutAuth = config.allowInsecureWithoutAuth === true;
     this.corsAllowedOrigins = normalizeCorsAllowedOrigins(config.corsAllowedOrigins);
     this.modelName = config.modelName ?? resolveCompanionIdFromConfig(config);
@@ -229,7 +263,7 @@ export class ApiServer implements ChannelAdapterPort {
     this.server = createApiHttpServer({
       handleRequest: (req, res) => this.handleRequest(req, res),
       handleUpgrade: (req, socket, head) => this.handleUpgrade(req, socket, head),
-    });
+    }, config.tls);
   }
 
   async send(channelId: string, content: string): Promise<void> {
@@ -279,29 +313,57 @@ export class ApiServer implements ChannelAdapterPort {
       return;
     }
 
+    // Sprint-10 C1: derive the client-certificate identity from the ONLY
+    // trusted sources (real TLS peer cert, or a proxy that authenticated
+    // itself with the trusted-proxy token), then unconditionally strip the
+    // inbound X-PSFN-Client-Cert-* headers so nothing downstream can trust
+    // caller-supplied certificate assertions.
+    const clientCert = deriveClientCertIdentity(req, {
+      ...(this.trustedProxyClientCertToken ? { trustedProxyToken: this.trustedProxyClientCertToken } : {}),
+    });
+    stripClientCertHeaders(req.headers);
+
     const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);
     const path = url.pathname;
     const isTelemetryIngest = req.method === 'POST' && path === '/v1/telemetry/ingest';
     const principal = resolveApiServerRequestPrincipal(req, res, {
       apiKey: this.apiKey,
       adminToken: this.adminToken,
+      ...(this.satelliteApiKeys.length > 0 ? { satelliteApiKeys: this.satelliteApiKeys } : {}),
       allowInsecureWithoutAuth: this.allowInsecureWithoutAuth,
       isTelemetryIngest,
     });
     if (!principal) return;
+
+    // Satellite-scoped credentials are only valid on satellite surfaces
+    // (fail closed): claims-bearing chat turns, config pulls, and telemetry.
+    if (principal.scope === 'satellite') {
+      const satelliteSurface = (req.method === 'GET' && path === '/v1/satellites/config')
+        || (req.method === 'POST' && path === '/v1/chat/completions')
+        || isTelemetryIngest;
+      if (!satelliteSurface) {
+        sendApiError(
+          res,
+          403,
+          'satellite_scoped_principal_not_allowed',
+          'Satellite-scoped API keys may only access satellite surfaces',
+        );
+        return;
+      }
+    }
 
     if (req.method === 'GET' && path === '/v1/models') {
       handleModelsEndpoint(res, this.modelName);
     } else if (req.method === 'GET' && path === '/v1/identity') {
       this.handleIdentity(res);
     } else if (req.method === 'GET' && path === '/v1/satellites/config') {
-      this.handleSatelliteConfigPull(req, res, url, principal);
+      this.handleSatelliteConfigPull(res, url, principal, clientCert);
     } else if (req.method === 'GET' && path === '/health') {
       void this.handleHealth(res);
     } else if (req.method === 'POST' && path === '/v1/chat/completions') {
-      void this.chatCompletions.handle(req, res, principal);
+      void this.chatCompletions.handle(req, res, principal, clientCert);
     } else if (isTelemetryIngest) {
-      void this.handleTelemetryIngest(req, res);
+      void this.handleTelemetryIngest(req, res, principal, clientCert);
     } else {
       sendApiError(res, 404, 'not_found', `No route for ${req.method} ${path}`);
     }
@@ -337,18 +399,18 @@ export class ApiServer implements ChannelAdapterPort {
   }
 
   private handleSatelliteConfigPull(
-    req: IncomingMessage,
     res: ServerResponse,
     url: URL,
     principal: ApiAuthPrincipal,
+    clientCert: SatelliteClientCertIdentity | undefined,
   ): void {
     const resolution = resolveSatelliteConfigPull({
-      headers: req.headers,
       principal,
       registry: this.satelliteRegistry,
       satelliteId: url.searchParams.get('satelliteId') ?? undefined,
       endpointId: url.searchParams.get('endpointId') ?? undefined,
       claimType: url.searchParams.get('claimType') ?? undefined,
+      ...(clientCert ? { clientCert } : {}),
     });
     if (!resolution.ok) {
       sendApiError(res, resolution.status, resolution.type, resolution.message);
@@ -575,7 +637,12 @@ export class ApiServer implements ChannelAdapterPort {
     };
   }
 
-  private async handleTelemetryIngest(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  private async handleTelemetryIngest(
+    req: IncomingMessage,
+    res: ServerResponse,
+    principal: ApiAuthPrincipal,
+    clientCert: SatelliteClientCertIdentity | undefined,
+  ): Promise<void> {
     const parsedBody = await readJsonBodyWithLimit(req, res, {
       maxBytes: MAX_BODY_SIZE,
       logger: log,
@@ -595,10 +662,15 @@ export class ApiServer implements ChannelAdapterPort {
       return;
     }
 
-    await this.ingestTelemetryPayload(parsedBody.value, res);
+    await this.ingestTelemetryPayload(parsedBody.value, res, principal, clientCert);
   }
 
-  private async ingestTelemetryPayload(parsed: unknown, res: ServerResponse): Promise<void> {
+  private async ingestTelemetryPayload(
+    parsed: unknown,
+    res: ServerResponse,
+    principal: ApiAuthPrincipal,
+    clientCert: SatelliteClientCertIdentity | undefined,
+  ): Promise<void> {
     if (!Value.Check(telemetryIngestSchema, parsed)) {
       sendApiError(
         res,
@@ -646,6 +718,15 @@ export class ApiServer implements ChannelAdapterPort {
     }
     this.seenTelemetryNonces.set(nonceKey, now);
 
+    // Sprint-10 04-M1: stamp the authenticated origin so downstream
+    // consumers (perception bridge) can bind any payload-claimed satelliteId
+    // to the credential that actually authenticated this request.
+    const authContext: SatelliteTelemetryAuthContext = {
+      principalId: principal.id,
+      principalMode: principal.mode,
+      satelliteScoped: principal.scope === 'satellite',
+      ...(clientCert ? { clientCert } : {}),
+    };
     const normalizedEvent: ExternalTelemetryEvent = {
       id: `ext-${randomUUID()}`,
       source: telemetry.source,
@@ -656,6 +737,7 @@ export class ApiServer implements ChannelAdapterPort {
       nonce: telemetry.nonce,
       channelId: telemetry.channelId,
       scope: telemetry.scope,
+      auth: authContext,
     };
 
     if (this.runtime) {

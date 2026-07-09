@@ -1,6 +1,7 @@
 import type { IncomingHttpHeaders } from 'node:http';
 import { CHANNEL_TYPES, type ChannelType, type MessageRoutingMetadata } from '../../shared/contracts/runtime.js';
 import type {
+  SatelliteClientCertIdentity,
   SatelliteRegistryConfig,
   SatelliteRoutingMetadata,
 } from '../../shared/contracts/satellite-registry.js';
@@ -66,6 +67,11 @@ export function resolveApiTurnIdentity(options: {
   defaultAuthorName: string;
   externalChannelProfiles?: Partial<Record<ChannelType, ExternalChannelProfileConfig>>;
   satelliteRegistry?: SatelliteRegistryConfig;
+  /**
+   * Authenticated client-certificate identity derived at the HTTP ingress
+   * (`deriveClientCertIdentity`); never read from raw request headers.
+   */
+  clientCert?: SatelliteClientCertIdentity;
 }): ApiTurnIdentityResolution {
   const {
     headers,
@@ -75,6 +81,7 @@ export function resolveApiTurnIdentity(options: {
     defaultAuthorName,
     externalChannelProfiles,
     satelliteRegistry,
+    clientCert,
   } = options;
 
   if (hasSatelliteClaimHeaders(headers)) {
@@ -82,6 +89,7 @@ export function resolveApiTurnIdentity(options: {
       headers,
       principal,
       registry: satelliteRegistry,
+      ...(clientCert ? { clientCert } : {}),
     });
     if (!satelliteClaim.ok) {
       return satelliteClaim;
@@ -98,6 +106,18 @@ export function resolveApiTurnIdentity(options: {
         canonicalContactId: satelliteClaim.value.canonicalContactId,
         satellite: satelliteClaim.value.satellite,
       },
+    };
+  }
+
+  // Satellite-scoped credentials only exist to authenticate satellite
+  // claims; without one they must not fall through to the default API
+  // identity or an external channel claim (Sprint-10 finding H4).
+  if (principal.scope === 'satellite') {
+    return {
+      ok: false,
+      status: 403,
+      type: 'satellite_scoped_principal_requires_satellite_claim',
+      message: 'Satellite-scoped API keys must present satellite claim headers',
     };
   }
 

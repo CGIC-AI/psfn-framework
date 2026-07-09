@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { createHash } from 'node:crypto';
 import http from 'node:http';
 import net from 'node:net';
 import WebSocket from 'ws';
@@ -2882,5 +2883,346 @@ describe('ApiServer with auth', () => {
     expect(second.status).toBe(409);
     const secondBody = JSON.parse(second.body);
     expect(secondBody.error.type).toBe('replay_detected');
+  });
+});
+
+// ── Sprint-10 C1/H4/04-M1: satellite auth hardening ──
+
+describe('ApiServer satellite auth hardening (Sprint-10 C1/H4/04-M1)', () => {
+  const FINGERPRINT = 'a1'.repeat(32);
+  const SUBJECT = 'CN=pi-voice, O=PSFN';
+  const PROXY_TOKEN = 'proxy-shared-secret-of-32-chars!';
+  const KEY_A = 'satellite-key-alpha-0001';
+  const KEY_B = 'satellite-key-beta-0002';
+  const PRINCIPAL_A = `api-key-${createHash('sha256').update(KEY_A).digest('hex').slice(0, 24)}`;
+  const PRINCIPAL_B = `api-key-${createHash('sha256').update(KEY_B).digest('hex').slice(0, 24)}`;
+
+  const MTLS_REGISTRY = parseSatelliteRegistryConfig({
+    schemaVersion: 1,
+    enabled: true,
+    satellites: [
+      {
+        satelliteId: 'pi-voice',
+        displayName: 'Kitchen Voice Pi',
+        mobility: 'static',
+        endpoints: [
+          {
+            endpointId: 'wyoming-voice',
+            displayName: 'Wyoming Voice Endpoint',
+            claimTypes: ['voice-pi'],
+            promptChannelType: 'voice_satellite',
+            auth: {
+              mode: 'mtls',
+              clientCertFingerprintSha256: FINGERPRINT,
+              clientCertSubject: SUBJECT,
+            },
+            defaultIdentity: {
+              authorId: 'primary-user',
+              authorName: 'Primary User',
+              canonicalContactId: 'contact-primary-user',
+              channelPrivacy: 'private',
+            },
+            maxCapabilities: ['text'],
+            runtime: {
+              schemaVersion: 1,
+              transport: { mode: 'openhome_bridge' },
+              refresh: { intervalMs: 300000, restartPolicy: 'manual' },
+            },
+          },
+        ],
+      },
+    ],
+  });
+
+  const PER_KEY_REGISTRY = parseSatelliteRegistryConfig({
+    schemaVersion: 1,
+    enabled: true,
+    satellites: [
+      {
+        satelliteId: 'sat-a',
+        displayName: 'Satellite A',
+        mobility: 'static',
+        endpoints: [
+          {
+            endpointId: 'endpoint-a',
+            displayName: 'Endpoint A',
+            claimTypes: ['claim-a'],
+            promptChannelType: 'voice_satellite',
+            auth: { mode: 'api_key', apiKeyPrincipalIds: [PRINCIPAL_A] },
+            defaultIdentity: {
+              authorId: 'user-a',
+              authorName: 'User A',
+              canonicalContactId: 'contact-a',
+              channelPrivacy: 'private',
+            },
+            maxCapabilities: ['text'],
+          },
+        ],
+      },
+      {
+        satelliteId: 'sat-b',
+        displayName: 'Satellite B',
+        mobility: 'static',
+        endpoints: [
+          {
+            endpointId: 'endpoint-b',
+            displayName: 'Endpoint B',
+            claimTypes: ['claim-b'],
+            promptChannelType: 'voice_satellite',
+            auth: { mode: 'api_key', apiKeyPrincipalIds: [PRINCIPAL_B] },
+            defaultIdentity: {
+              authorId: 'user-b',
+              authorName: 'User B',
+              canonicalContactId: 'contact-b',
+              channelPrivacy: 'private',
+            },
+            maxCapabilities: ['text'],
+          },
+        ],
+      },
+    ],
+  });
+
+  let eventBus: EventBus;
+  let server: ApiServer;
+  let port: number;
+
+  beforeEach(async () => {
+    eventBus = new EventBus();
+    port = await allocatePort();
+  });
+
+  afterEach(async () => {
+    await stopServer(server);
+  });
+
+  async function startServer(config: Partial<ConstructorParameters<typeof ApiServer>[0]> = {}): Promise<void> {
+    server = createApiServer({
+      port,
+      agentLoop: createMockAgentLoop(eventBus),
+      eventBus,
+      sessionManager: createMockSessionManager(),
+      apiKey: 'test-secret-key',
+      ...config,
+    });
+    await server.init();
+    await server.start();
+  }
+
+  const CONFIG_PULL_PATH = '/v1/satellites/config?satelliteId=pi-voice&endpointId=wyoming-voice&claimType=voice-pi';
+
+  it('REJECTS mTLS config pulls that present only forged X-PSFN-Client-Cert-* headers (C1)', async () => {
+    await startServer({ satelliteRegistry: MTLS_REGISTRY });
+
+    const res = await request(port, 'GET', CONFIG_PULL_PATH, undefined, {
+      Authorization: 'Bearer test-secret-key',
+      'X-PSFN-Client-Cert-Fingerprint-SHA256': FINGERPRINT,
+      'X-PSFN-Client-Cert-Subject': SUBJECT,
+      'X-PSFN-Client-Cert-SPKI-SHA256': 'b2'.repeat(32),
+      'X-PSFN-Client-Cert-SAN': 'DNS:pi-voice.local',
+    });
+
+    expect(res.status).toBe(403);
+    expect(JSON.parse(res.body).error.type).toBe('satellite_client_certificate_required');
+  });
+
+  it('REJECTS mTLS satellite chat claims that replay cert headers without an authenticated cert (C1)', async () => {
+    await startServer({ satelliteRegistry: MTLS_REGISTRY });
+
+    const res = await request(port, 'POST', '/v1/chat/completions', {
+      model: DEFAULT_COMPANION_ID,
+      messages: [{ role: 'user', content: 'hello' }],
+    }, {
+      Authorization: 'Bearer test-secret-key',
+      'X-PSFN-Satellite-Claim-Type': 'voice-pi',
+      'X-PSFN-Satellite-ID': 'pi-voice',
+      'X-PSFN-Satellite-Endpoint-ID': 'wyoming-voice',
+      'X-PSFN-Satellite-Session-ID': 'kitchen',
+      'X-PSFN-Client-Cert-Fingerprint-SHA256': FINGERPRINT,
+      'X-PSFN-Client-Cert-Subject': SUBJECT,
+    });
+
+    expect(res.status).toBe(403);
+    expect(JSON.parse(res.body).error.type).toBe('satellite_client_certificate_required');
+  });
+
+  it('accepts trusted-proxy asserted certs only with the proxy token, and requires ALL bindings to match (C1)', async () => {
+    await startServer({
+      satelliteRegistry: MTLS_REGISTRY,
+      trustedProxyClientCertToken: PROXY_TOKEN,
+    });
+
+    // Full binding set + authenticated proxy → allowed.
+    const allowed = await request(port, 'GET', CONFIG_PULL_PATH, undefined, {
+      Authorization: 'Bearer test-secret-key',
+      'X-PSFN-Trusted-Proxy-Token': PROXY_TOKEN,
+      'X-PSFN-Client-Cert-Fingerprint-SHA256': FINGERPRINT,
+      'X-PSFN-Client-Cert-Subject': SUBJECT,
+    });
+    expect(allowed.status).toBe(200);
+    expect(JSON.parse(allowed.body).auth.certBound).toBe(true);
+
+    // Same headers WITHOUT the proxy token → rejected.
+    const noToken = await request(port, 'GET', CONFIG_PULL_PATH, undefined, {
+      Authorization: 'Bearer test-secret-key',
+      'X-PSFN-Client-Cert-Fingerprint-SHA256': FINGERPRINT,
+      'X-PSFN-Client-Cert-Subject': SUBJECT,
+    });
+    expect(noToken.status).toBe(403);
+    expect(JSON.parse(noToken.body).error.type).toBe('satellite_client_certificate_required');
+
+    // Single-attribute match (fingerprint only, subject binding unmet) → rejected.
+    const partial = await request(port, 'GET', CONFIG_PULL_PATH, undefined, {
+      Authorization: 'Bearer test-secret-key',
+      'X-PSFN-Trusted-Proxy-Token': PROXY_TOKEN,
+      'X-PSFN-Client-Cert-Fingerprint-SHA256': FINGERPRINT,
+    });
+    expect(partial.status).toBe(403);
+    expect(JSON.parse(partial.body).error.type).toBe('satellite_certificate_not_allowed');
+  });
+
+  it('strips inbound client-cert headers before anything downstream sees them (C1)', async () => {
+    const forwardedHeaders: Array<Record<string, string | undefined>> = [];
+    await startServer({
+      runtime: {
+        handleHealth: async () => { throw new Error('not under test'); },
+        handleTelemetryIngest: async () => { throw new Error('not under test'); },
+        handleChatCompletion: async (input) => {
+          forwardedHeaders.push({ ...input.headers });
+          return {
+            ok: true,
+            response: { content: 'ok', channelId: 'api:test', inputTokens: 1, outputTokens: 1 },
+          };
+        },
+      },
+    });
+
+    const res = await request(port, 'POST', '/v1/chat/completions', {
+      model: DEFAULT_COMPANION_ID,
+      messages: [{ role: 'user', content: 'hello' }],
+    }, {
+      Authorization: 'Bearer test-secret-key',
+      'X-PSFN-Client-Cert-Fingerprint-SHA256': FINGERPRINT,
+      'X-PSFN-Client-Cert-Subject': SUBJECT,
+      'X-PSFN-Trusted-Proxy-Token': PROXY_TOKEN,
+      'X-Harmless-Header': 'kept',
+    });
+
+    expect(res.status).toBe(200);
+    expect(forwardedHeaders).toHaveLength(1);
+    const headerNames = Object.keys(forwardedHeaders[0]!);
+    expect(headerNames).toContain('x-harmless-header');
+    expect(headerNames.filter(name => name.startsWith('x-psfn-client-cert-'))).toEqual([]);
+    expect(headerNames).not.toContain('x-psfn-trusted-proxy-token');
+  });
+
+  it('gives distinct satellite keys distinct principals; a header swap cannot claim the other endpoint (H4)', async () => {
+    const mockAgent = createMockAgentLoop(eventBus);
+    await startServer({
+      agentLoop: mockAgent,
+      satelliteRegistry: PER_KEY_REGISTRY,
+      satelliteApiKeys: [KEY_A, KEY_B],
+    });
+
+    const claimHeaders = (key: string, satelliteId: string, endpointId: string, claimType: string) => ({
+      Authorization: `Bearer ${key}`,
+      'X-PSFN-Satellite-Claim-Type': claimType,
+      'X-PSFN-Satellite-ID': satelliteId,
+      'X-PSFN-Satellite-Endpoint-ID': endpointId,
+      'X-PSFN-Satellite-Session-ID': 'session-1',
+    });
+    const chatBody = {
+      model: DEFAULT_COMPANION_ID,
+      messages: [{ role: 'user', content: 'hello' }],
+    };
+
+    // Key A on its own endpoint → accepted with endpoint A's identity.
+    const own = await request(port, 'POST', '/v1/chat/completions', chatBody,
+      claimHeaders(KEY_A, 'sat-a', 'endpoint-a', 'claim-a'));
+    expect(own.status).toBe(200);
+    const call = (mockAgent.handleMessage as any).mock.calls[0][0];
+    expect(call.authorId).toBe('user-a');
+    expect(call.routing?.satellite?.auth?.principalId).toBe(PRINCIPAL_A);
+
+    // Key A swapping headers to endpoint B → rejected.
+    const swapped = await request(port, 'POST', '/v1/chat/completions', chatBody,
+      claimHeaders(KEY_A, 'sat-b', 'endpoint-b', 'claim-b'));
+    expect(swapped.status).toBe(403);
+    expect(JSON.parse(swapped.body).error.type).toBe('satellite_principal_not_allowed');
+    expect((mockAgent.handleMessage as any).mock.calls).toHaveLength(1);
+  });
+
+  it('confines satellite-scoped keys to satellite surfaces (H4)', async () => {
+    await startServer({
+      satelliteRegistry: PER_KEY_REGISTRY,
+      satelliteApiKeys: [KEY_A],
+    });
+
+    const models = await request(port, 'GET', '/v1/models', undefined, {
+      Authorization: `Bearer ${KEY_A}`,
+    });
+    expect(models.status).toBe(403);
+    expect(JSON.parse(models.body).error.type).toBe('satellite_scoped_principal_not_allowed');
+
+    const chatWithoutClaim = await request(port, 'POST', '/v1/chat/completions', {
+      model: DEFAULT_COMPANION_ID,
+      messages: [{ role: 'user', content: 'hello' }],
+    }, {
+      Authorization: `Bearer ${KEY_A}`,
+    });
+    expect(chatWithoutClaim.status).toBe(403);
+    expect(JSON.parse(chatWithoutClaim.body).error.type).toBe('satellite_scoped_principal_requires_satellite_claim');
+
+    // The shared operator key keeps full API access.
+    const sharedModels = await request(port, 'GET', '/v1/models', undefined, {
+      Authorization: 'Bearer test-secret-key',
+    });
+    expect(sharedModels.status).toBe(200);
+  });
+
+  it('refuses to start with satellite keys colliding with the shared API key (H4, fail closed)', async () => {
+    expect(() => createApiServer({
+      port,
+      agentLoop: createMockAgentLoop(eventBus),
+      eventBus,
+      sessionManager: createMockSessionManager(),
+      apiKey: 'test-secret-key-16ch',
+      satelliteApiKeys: ['test-secret-key-16ch'],
+    })).toThrow('must not reuse API_KEY or ADMIN_TOKEN');
+    // afterEach stop guard: give it something stoppable.
+    server = createApiServer({
+      port,
+      agentLoop: createMockAgentLoop(eventBus),
+      eventBus,
+      sessionManager: createMockSessionManager(),
+      allowInsecureWithoutAuth: true,
+    });
+  });
+
+  it('stamps telemetry with the authenticated origin context (04-M1)', async () => {
+    await startServer({ satelliteApiKeys: [KEY_A] });
+
+    const ingested: any[] = [];
+    eventBus.on('external.telemetry.ingested', ({ event }) => {
+      ingested.push(event);
+    });
+
+    const res = await request(port, 'POST', '/v1/telemetry/ingest', {
+      source: 'sat-a',
+      eventType: 'external.telemetry.status',
+      timestamp: new Date().toISOString(),
+      nonce: `nonce-${Date.now()}`,
+      payload: { satelliteId: 'sat-a', present: true },
+    }, {
+      Authorization: `Bearer ${KEY_A}`,
+    });
+
+    expect(res.status).toBe(202);
+    expect(ingested).toHaveLength(1);
+    expect(ingested[0].auth).toEqual({
+      principalId: PRINCIPAL_A,
+      principalMode: 'api_key',
+      satelliteScoped: true,
+    });
   });
 });

@@ -2,6 +2,7 @@
 
 import type { ExternalTelemetryEvent } from '../../shared/event-bus.js';
 import type { IntentionalNoReplyMetadata } from '../../shared/contracts/runtime.js';
+import type { SatelliteClientCertIdentity } from '../../shared/contracts/satellite-registry.js';
 import type { ApiAuthPrincipal } from '../backplane/http/auth.js';
 
 export interface OpenAITextContentPart {
@@ -167,6 +168,12 @@ export interface ApiChatCompletionRpcParams {
   request: ChatCompletionRequest;
   principal: ApiAuthPrincipal;
   headers: ApiRpcHeaders;
+  /**
+   * Client-certificate identity authenticated by the gateway HTTP ingress
+   * (real TLS peer cert or trusted proxy). Forwarded over the internal
+   * gateway-agent RPC; never reconstructed from headers on the agent side.
+   */
+  clientCert?: SatelliteClientCertIdentity;
   timeoutMs?: number;
 }
 
@@ -218,6 +225,8 @@ export interface ApiRuntimeChatRequest {
   request: ChatCompletionRequest;
   principal: ApiAuthPrincipal;
   headers: ApiRpcHeaders;
+  /** See `ApiChatCompletionRpcParams.clientCert`. */
+  clientCert?: SatelliteClientCertIdentity;
   onDelta?: (text: string) => void;
   signal?: AbortSignal;
 }

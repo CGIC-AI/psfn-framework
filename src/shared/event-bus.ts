@@ -17,6 +17,7 @@ import type {
 } from '../core/agent/adaptive-tools-telemetry.js';
 import type { CompletionHandoffRecord } from './contracts/completion-handoff.js';
 import type { PlaceKind } from './contracts/places-registry.js';
+import type { SatelliteTelemetryAuthContext } from './contracts/satellite-registry.js';
 import { createComponentLogger } from './logger.js';
 
 const log = createComponentLogger('EventBus');
@@ -33,6 +34,13 @@ export interface ExternalTelemetryEvent {
   nonce: string;
   channelId?: string;
   scope?: string;
+  /**
+   * Authenticated origin context stamped at the API telemetry ingress
+   * (Sprint-10 finding 04-M1). Consumers that resolve a satellite origin
+   * MUST fail closed when this is absent: payload-claimed satellite ids are
+   * never trusted without the credential that authenticated the request.
+   */
+  auth?: SatelliteTelemetryAuthContext;
 }
 
 export type PerceptionBridgeTelemetryCounter =

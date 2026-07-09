@@ -2,6 +2,7 @@ import type { ToolRegistrar } from '../agent/tool-registrar.js';
 import type { ApprovalQueuePort } from '../../system/capabilities/approval-queue-port.js';
 import type { ContactStorePort } from './contact-store-port.js';
 import type { ChannelPrivacyLevel } from './types.js';
+import type { ContactBlockListStore } from '../cogsec/contact-block-list.js';
 import { createContactTool } from './tools.js';
 
 export interface ContactRuntimeTarget {
@@ -23,6 +24,12 @@ export interface ContactRuntimeOptions {
    * (contact action=propose_trust). Absent → propose_trust fails closed.
    */
   proposalQueue?: ApprovalQueuePort;
+  /**
+   * System-owned contact block list (htm9.16). Absent → contact action=block
+   * and action=unblock fail closed. The gateway reads the same store to drop
+   * blocked inbound before it reaches the agent.
+   */
+  blockList?: ContactBlockListStore;
 }
 
 export async function registerContactRuntime(
@@ -51,6 +58,7 @@ export async function registerContactRuntime(
 
   target.registerTool(createContactTool(contactStore, {
     proposalQueue: options.proposalQueue,
+    ...(options.blockList ? { blockList: options.blockList } : {}),
   }));
 
   return contactStore;

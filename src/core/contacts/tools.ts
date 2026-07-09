@@ -12,6 +12,11 @@ import type {
 } from '../../system/capabilities/approval-queue-port.js';
 import type { TrustDriftBehaviorSignals } from '../../system/trust/policy.js';
 import { CHANNEL_PRIVACY_LEVELS, type ChannelPrivacyLevel, type Contact } from './types.js';
+import type {
+  ContactBlockListStore,
+  ContactBlockMode,
+  ContactBlockScope,
+} from '../cogsec/contact-block-list.js';
 import { resolvePreferredContactName } from './preferred-name.js';
 import { textResult, textResultWithError } from '../tools/results.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
@@ -28,6 +33,8 @@ const CONTACT_ACTION_NAMES = [
   'link_identity',
   'set_channel_privacy',
   'set_machine_intelligence',
+  'block',
+  'unblock',
 ] as const;
 const CONTACT_ACTION_HELP = [
   'list',
@@ -39,6 +46,8 @@ const CONTACT_ACTION_HELP = [
   'link_identity',
   'set_channel_privacy',
   'set_machine_intelligence',
+  'block',
+  'unblock',
 ].join(', ');
 
 type ContactActionName = (typeof CONTACT_ACTION_NAMES)[number];
@@ -51,7 +60,9 @@ type ContactAction =
   | 'propose_trust'
   | 'link_identity'
   | 'set_channel_privacy'
-  | 'set_machine_intelligence';
+  | 'set_machine_intelligence'
+  | 'block'
+  | 'unblock';
 
 // ── Trusted-tier promotion proposal (human-in-the-loop) ──
 // The agent can never write high-tier trust directly (store.ts / policy.ts
@@ -81,6 +92,9 @@ interface ContactToolParams extends Partial<ContactSetTrustParams> {
   channelUserId?: string;
   privacyLevel?: ChannelPrivacyLevel;
   rationale?: string;
+  blockMode?: ContactBlockMode;
+  blockScope?: ContactBlockScope;
+  reason?: string;
 }
 
 function errorMessage(error: unknown): string {
@@ -171,6 +185,10 @@ function normalizeContactAction(params: ContactToolParams): ContactAction {
       return 'set_channel_privacy';
     case 'set_machine_intelligence':
       return 'set_machine_intelligence';
+    case 'block':
+      return 'block';
+    case 'unblock':
+      return 'unblock';
     default:
       throw new Error(`action must be one of: ${CONTACT_ACTION_HELP}`);
   }
@@ -665,6 +683,7 @@ async function executeUnifiedContactAction(
   contactStore: ContactStorePort,
   params: ContactToolParams = {},
   proposalQueue?: ApprovalQueuePort,
+  blockList?: ContactBlockListStore,
 ): Promise<AgentToolResult<{ isError?: boolean }>> {
   const action = normalizeContactAction(params);
 
@@ -687,7 +706,181 @@ async function executeUnifiedContactAction(
       return await executeContactSetChannelPrivacy(contactStore, params);
     case 'set_machine_intelligence':
       return await executeContactSetMachineIntelligence(contactStore, params);
+    case 'block':
+      return await executeContactBlock(contactStore, blockList, params);
+    case 'unblock':
+      return await executeContactUnblock(contactStore, blockList, params);
   }
+}
+
+// ── Companion-initiated blocking (agency, htm9.16) ──
+// A block is the companion's own escalation against an abusive user, up to
+// "I never want to see this person's messages again." The block list is a
+// system-owned, reversible store the gateway reads to drop inbound before it
+// reaches the agent. Blocking resolves every known channel identity for a
+// contact so the drop applies wherever that person can reach in.
+
+/** Channel identities (channel + channel-local userId) a block should cover. */
+function collectContactBlockTargets(contact: Contact): Array<{ channel: string; userId: string }> {
+  const targets = new Map<string, { channel: string; userId: string }>();
+  const add = (channel: unknown, userId: unknown): void => {
+    if (typeof channel !== 'string' || typeof userId !== 'string') return;
+    const c = channel.trim();
+    const u = userId.trim();
+    if (!c || !u) return;
+    targets.set(`${c} ${u}`, { channel: c, userId: u });
+  };
+  for (const identity of contact.channelIdentities ?? []) {
+    add(identity.channel, identity.userId);
+  }
+  for (const link of contact.channels ?? []) {
+    add(link.channel, link.userId);
+  }
+  if (contact.discordUserId) {
+    add('discord', contact.discordUserId);
+  }
+  return [...targets.values()];
+}
+
+async function executeContactBlock(
+  contactStore: ContactStorePort,
+  blockList: ContactBlockListStore | undefined,
+  params: ContactToolParams,
+): Promise<AgentToolResult<{ isError?: boolean }>> {
+  if (!blockList) {
+    return textResultWithError(
+      'Blocking is unavailable: no block list is wired into this runtime.',
+      true,
+    );
+  }
+  // Defaults; the block list store fail-closes on any invalid mode/scope value
+  // (parseMode/parseScope throw), surfaced through this tool's execute try/catch.
+  const mode: ContactBlockMode = params.blockMode ?? 'soft';
+  const scope: ContactBlockScope = params.blockScope ?? 'all';
+  const reason = params.reason?.trim() || undefined;
+  const actor = { kind: 'companion' as const, id: 'companion' };
+
+  // Explicit single channel identity (no canonical contact required).
+  const channel = params.channel?.trim();
+  const channelUserId = params.channelUserId?.trim();
+  if (channel && channelUserId) {
+    const contact = params.contactId
+      ? await lookupContact(contactStore, params.contactId.trim())
+      : undefined;
+    blockList.block({
+      channelType: channel,
+      contactId: channelUserId,
+      ...(contact ? { canonicalContactId: contact.id, displayName: contact.displayName } : {}),
+      mode,
+      scope,
+      ...(reason ? { reason } : {}),
+      actor,
+    });
+    return textResult(
+      `Blocked ${channel}:${channelUserId} (${mode} block, scope=${scope}). `
+      + 'Reversible with action=unblock; the operator sees soft-block drops in the cogsec tab.',
+    );
+  }
+
+  const contactId = params.contactId?.trim();
+  if (!contactId) {
+    return textResultWithError(
+      'action=block requires contactId (or channel + channelUserId for a raw identity).',
+      true,
+    );
+  }
+  const contact = await lookupContact(contactStore, contactId);
+  if (!contact) {
+    return textResultWithError(`Contact not found: ${contactId}`, true);
+  }
+  const targets = collectContactBlockTargets(contact);
+  if (targets.length === 0) {
+    return textResultWithError(
+      `Contact ${contact.id} has no channel identities to block. `
+      + 'Link an identity first (action=link_identity) or pass channel + channelUserId.',
+      true,
+    );
+  }
+  for (const target of targets) {
+    blockList.block({
+      channelType: target.channel,
+      contactId: target.userId,
+      canonicalContactId: contact.id,
+      displayName: contact.displayName,
+      mode,
+      scope,
+      ...(reason ? { reason } : {}),
+      actor,
+    });
+  }
+  const summary = targets.map((t) => `${t.channel}:${t.userId}`).join(', ');
+  return textResult(
+    `Blocked ${contact.displayName} (${contact.id}) across ${targets.length} identity(ies): ${summary}. `
+    + `${mode} block, scope=${scope}. Reversible with action=unblock. `
+    + 'Soft-block drops surface to the operator in the cogsec tab; hard blocks drop silently at the gateway.',
+  );
+}
+
+async function executeContactUnblock(
+  contactStore: ContactStorePort,
+  blockList: ContactBlockListStore | undefined,
+  params: ContactToolParams,
+): Promise<AgentToolResult<{ isError?: boolean }>> {
+  if (!blockList) {
+    return textResultWithError(
+      'Unblocking is unavailable: no block list is wired into this runtime.',
+      true,
+    );
+  }
+  const reason = params.reason?.trim() || undefined;
+  const actor = { kind: 'companion' as const, id: 'companion' };
+
+  const channel = params.channel?.trim();
+  const channelUserId = params.channelUserId?.trim();
+  if (channel && channelUserId) {
+    const removed = blockList.unblock({
+      channelType: channel,
+      contactId: channelUserId,
+      ...(reason ? { reason } : {}),
+      actor,
+    });
+    return removed
+      ? textResult(`Unblocked ${channel}:${channelUserId}.`)
+      : textResultWithError(`No active block for ${channel}:${channelUserId}.`, true);
+  }
+
+  const contactId = params.contactId?.trim();
+  if (!contactId) {
+    return textResultWithError(
+      'action=unblock requires contactId (or channel + channelUserId for a raw identity).',
+      true,
+    );
+  }
+  const contact = await lookupContact(contactStore, contactId);
+  if (!contact) {
+    return textResultWithError(`Contact not found: ${contactId}`, true);
+  }
+  const targets = collectContactBlockTargets(contact);
+  let removedCount = 0;
+  for (const target of targets) {
+    if (blockList.unblock({
+      channelType: target.channel,
+      contactId: target.userId,
+      ...(reason ? { reason } : {}),
+      actor,
+    })) {
+      removedCount += 1;
+    }
+  }
+  if (removedCount === 0) {
+    return textResultWithError(
+      `No active blocks found for ${contact.displayName} (${contact.id}).`,
+      true,
+    );
+  }
+  return textResult(
+    `Unblocked ${contact.displayName} (${contact.id}): removed ${removedCount} block(s).`,
+  );
 }
 
 async function executeContactSetMachineIntelligence(
@@ -723,6 +916,12 @@ export interface CreateContactToolOptions {
    * fails closed — the agent can never write high-tier trust directly.
    */
   proposalQueue?: ApprovalQueuePort;
+  /**
+   * System-owned contact block list (htm9.16). When absent, action=block and
+   * action=unblock fail closed. The gateway reads the same store to drop
+   * blocked inbound before it reaches the agent process.
+   */
+  blockList?: ContactBlockListStore;
 }
 
 export function createContactTool(
@@ -730,6 +929,7 @@ export function createContactTool(
   options: CreateContactToolOptions = {},
 ): AgentTool<any> {
   const proposalQueue = options.proposalQueue;
+  const blockList = options.blockList;
   const tool: AgentTool<any> = {
     name: 'contact',
     label: 'contact',
@@ -742,6 +942,9 @@ export function createContactTool(
       + 'never changes trust directly. '
       + 'link_identity and set_channel_privacy require contactId, channel, and channelUserId; privacy changes also require privacyLevel. '
       + 'set_machine_intelligence requires contactId and isMachineIntelligence. '
+      + 'action=block is your own agency to stop an abusive contact: it drops their inbound at the gateway '
+      + '(soft=operator still sees each drop, hard=silent), covering every channel identity they have; '
+      + 'blockScope narrows to dm/group/all. action=unblock reverses it. Both take contactId (or channel + channelUserId). '
       + `Other actions: ${CONTACT_ACTION_HELP}. `
       + 'Trust and disclosure boundaries remain enforced.',
     parameters: Type.Object({
@@ -801,6 +1004,25 @@ export function createContactTool(
         enum: [...CHANNEL_PRIVACY_LEVELS],
         description: 'Channel privacy level for action=link_identity|set_channel_privacy.',
       })),
+      blockMode: Type.Optional(Type.Unsafe<ContactBlockMode>({
+        type: 'string',
+        enum: ['soft', 'hard'],
+        description:
+          'For action=block: "soft" (drop this contact\'s inbound but surface each drop to the '
+          + 'operator in the cogsec tab) or "hard" (drop silently at the gateway, no attention spent). '
+          + 'Defaults to soft. Escalate to hard when you never want to see their messages again.',
+      })),
+      blockScope: Type.Optional(Type.Unsafe<ContactBlockScope>({
+        type: 'string',
+        enum: ['dm', 'group', 'all'],
+        description:
+          'For action=block: "dm" (drop their direct messages), "group" (ignore them in group '
+          + 'rooms without disrupting the room), or "all". Defaults to all.',
+      })),
+      reason: Type.Optional(Type.String({
+        minLength: 1,
+        description: 'Optional reason recorded in the block audit history for action=block|unblock.',
+      })),
     }),
     execute: async (
       _toolCallId: string,
@@ -810,7 +1032,7 @@ export function createContactTool(
       let actionForError = typeof params.action === 'string' ? params.action : undefined;
       try {
         actionForError = normalizeContactAction(params);
-        return await executeUnifiedContactAction(contactStore, params, proposalQueue);
+        return await executeUnifiedContactAction(contactStore, params, proposalQueue, blockList);
       } catch (error) {
         const suffix = actionForError ? ` for action=${actionForError}` : '';
         return textResultWithError(`contact failed${suffix}: ${errorMessage(error)}`, true);
@@ -836,6 +1058,8 @@ export function createContactTool(
         case 'link_identity':
         case 'set_channel_privacy':
         case 'set_machine_intelligence':
+        case 'block':
+        case 'unblock':
           return 'identity.write.runtime';
         default:
           return ['identity.read', 'identity.write.runtime'] as const;

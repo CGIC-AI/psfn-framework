@@ -790,6 +790,16 @@ export function resolveCogSecForensicArchiveDir(companionDataDir: string): strin
   return join(resolveCompanionVaultDir(companionDataDir), 'cogsec-forensics');
 }
 
+/**
+ * Companion-initiated contact block list (cogsec agency, htm9.16). Co-located
+ * with cogsec-events.json under companion-data/state so the Garden cogsec tab
+ * (htm9.11) surfaces it alongside firewall events, the agent-side contact tool
+ * can write it, and the gateway inbound gate can read it to drop blocked DMs.
+ */
+export function resolveContactBlockListPath(companionDataDir: string): string {
+  return join(resolveCompanionStateDir(companionDataDir), 'contact-block-list.json');
+}
+
 export function resolveIdentityAssetsDir(companionDataDir: string): string {
   return join(resolveCompanionStateDir(companionDataDir), 'identity-assets');
 }

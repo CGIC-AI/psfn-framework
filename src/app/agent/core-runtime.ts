@@ -80,8 +80,10 @@ import { createObserverEvalSidecarRuntimeFromConfig } from '../../core/eval/obse
 import type { ObserverEvalSidecarRuntime } from '../../core/eval/observer-sidecar/types.js';
 import {
   resolveContactsDir,
+  resolveContactBlockListPath,
   resolvePersonalSkillsDir,
 } from '../../persistence/layout.js';
+import { ContactBlockListStore } from '../../core/cogsec/contact-block-list.js';
 import { createSelfStatusTool } from '../../core/tools/self-status.js';
 import {
   createPostgresModelUsageStoreFromConfig,
@@ -359,6 +361,11 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
     // Reuse the shared confirmation queue (also used by card/module proposals)
     // so trusted-tier promotion proposals surface on the Garden Confirmations page.
     proposalQueue: cardProposalQueue,
+    // htm9.16: companion-initiated block list. Same on-disk store the gateway
+    // reads to drop blocked inbound before it reaches this agent process.
+    blockList: new ContactBlockListStore(
+      resolveContactBlockListPath(pathSnapshot.companionDataDir),
+    ),
     ...(primaryTelegramUserId
       ? {
           bootstrapPrimaryIdentityLinks: [{

@@ -38,7 +38,14 @@ import { assertSatellitePlaceBindings, loadPlacesRegistryConfig } from '../../ch
 import { GatewayCompanionChannelLane } from '../../boundary/gateway/companion-channels.js';
 import { PostgresCompanionPresenceStore } from '../../persistence/postgres/companion-presence-store.js';
 import { CHARGE_POLICY_FILE_NAME } from '../../system/config/charge-policy-config.js';
-import { ensurePersonalFilesLayout } from '../../persistence/layout.js';
+import {
+  ensurePersonalFilesLayout,
+  resolveCogSecEventsPath,
+  resolveContactBlockListPath,
+} from '../../persistence/layout.js';
+import { ContactBlockListStore } from '../../core/cogsec/contact-block-list.js';
+import { CogSecEventStore } from '../../core/cogsec/events.js';
+import { createGatewayContactBlockGate } from '../../boundary/gateway/contact-block-gate.js';
 
 const log = createComponentLogger('Gateway');
 
@@ -240,6 +247,19 @@ async function main(): Promise<void> {
     eligibilityGate,
     log,
   });
+  // htm9.16: companion-initiated block gate. The block list is a system-owned,
+  // reversible store the agent-side contact tool writes; the gateway reads it to
+  // drop blocked DMs before they cross the RPC boundary. Soft blocks emit an
+  // operator-visible cogsec event on each enforcement.
+  const contactBlockGate = createGatewayContactBlockGate({
+    blockList: new ContactBlockListStore(
+      resolveContactBlockListPath(startupHydration.companionDataDir),
+    ),
+    cogSecEvents: new CogSecEventStore(
+      resolveCogSecEventsPath(startupHydration.companionDataDir),
+    ),
+    log,
+  });
   wireGatewayChannelMessages({
     discord,
     ...(channelSurfaces.discordAccounts
@@ -248,6 +268,7 @@ async function main(): Promise<void> {
     telegram,
     gateway,
     serializeMessage,
+    blockGate: contactBlockGate,
   });
 
   // ── Start everything ──

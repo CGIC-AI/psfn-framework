@@ -8,6 +8,7 @@ import type { GatewayBootstrapInput } from './bootstrap-input.js';
 import type { GatewayServer } from './server.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type { SubstrateMessage } from '../../shared/contracts/runtime.js';
+import type { ContactBlockGate } from './contact-block-gate.js';
 import { assertDiscordAccountTokensConfigured } from '../../channels/backplane/config.js';
 import {
   createDiscordChannelAdapterFactoryEntry,
@@ -160,34 +161,63 @@ export interface WireGatewayChannelMessagesInput {
   telegram?: Pick<TelegramAdapter, 'onMessage'>;
   gateway: Pick<GatewayServer, 'notifyChannelMessage' | 'requestAgentVoiceStream'>;
   serializeMessage: (message: SubstrateMessage) => Record<string, unknown>;
+  /**
+   * Companion-initiated block gate (htm9.16). When present, inbound from a
+   * blocked contact is dropped (DM) or downgraded to observe-only (group)
+   * here at the gateway, before the message is forwarded to the agent process.
+   */
+  blockGate?: ContactBlockGate;
 }
 
 export function wireGatewayChannelMessages(input: WireGatewayChannelMessagesInput): void {
+  const emptyAck = (channelId: string) => ({
+    content: '',
+    channelId,
+    metadata: {
+      model: '',
+      inputTokens: 0,
+      outputTokens: 0,
+      durationMs: 0,
+    },
+  });
+
   const wireDiscordInbound = (
     adapter: Pick<DiscordAdapter, 'onMessage'>,
     accountId?: string,
   ): void => {
     adapter.onMessage(async (message) => {
+      // htm9.16 backstop: enforce companion blocks before anything crosses the
+      // RPC boundary to the agent process.
+      let outbound = message;
+      if (input.blockGate) {
+        const decision = input.blockGate.evaluate(message);
+        if (decision.action === 'drop') {
+          // Blocked DM: soft blocks emit an operator-visible cogsec event, hard
+          // blocks stay silent. Either way the agent never sees the message.
+          input.blockGate.recordSoftBlockEnforcement(message, decision);
+          return emptyAck(message.channelId);
+        }
+        if (decision.action === 'observe') {
+          // Blocked group message: the companion ignores it (observe-only)
+          // rather than dropping and disrupting the room for everyone else.
+          input.blockGate.recordSoftBlockEnforcement(message, decision);
+          outbound = {
+            ...message,
+            routing: { ...(message.routing ?? {}), responseMode: 'observe' as const },
+          };
+        }
+      }
       // Single-companion mode broadcasts (historic behavior); multi-companion
       // mode delivers to exactly the companion owning the discord surface —
       // per bot account when accounts are configured — and fails closed on
       // any routing ambiguity.
-      const payload = { message: input.serializeMessage(message) };
+      const payload = { message: input.serializeMessage(outbound) };
       if (accountId) {
         input.gateway.notifyChannelMessage('discord', 'discord.message', payload, accountId);
       } else {
         input.gateway.notifyChannelMessage('discord', 'discord.message', payload);
       }
-      return {
-        content: '',
-        channelId: message.channelId,
-        metadata: {
-          model: '',
-          inputTokens: 0,
-          outputTokens: 0,
-          durationMs: 0,
-        },
-      };
+      return emptyAck(message.channelId);
     });
   };
 
@@ -207,6 +237,16 @@ export function wireGatewayChannelMessages(input: WireGatewayChannelMessagesInpu
   }
 
   input.telegram.onMessage(async (message) => {
+    // htm9.16 backstop: a blocked telegram DM is dropped before it reaches the
+    // agent. Group observe-downgrade is not modeled on the telegram
+    // request/response path; blocked group messages fall through unchanged.
+    if (input.blockGate) {
+      const decision = input.blockGate.evaluate(message);
+      if (decision.action === 'drop') {
+        input.blockGate.recordSoftBlockEnforcement(message, decision);
+        return emptyAck(message.channelId);
+      }
+    }
     const result = await input.gateway.requestAgentVoiceStream(message);
     return {
       content: result.content,

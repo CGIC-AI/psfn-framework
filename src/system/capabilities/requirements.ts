@@ -120,6 +120,8 @@ const CONTACT_WRITE_ACTIONS = new Set([
   'link_identity',
   'set_channel_privacy',
   'set_machine_intelligence',
+  'block',
+  'unblock',
 ]);
 
 function resolveContactRequirement(

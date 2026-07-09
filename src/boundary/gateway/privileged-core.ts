@@ -14,6 +14,7 @@ import { createGatewayPrivilegedServiceRegistry } from './privileged-services.js
 import type { GatewayCompanionChannelLane } from './companion-channels.js';
 import {
   composeGatewayIntakeScreening,
+  resolveIntakeScreenerBackend,
   type GatewayIntakeScreeningComposition,
 } from './intake/compose-screening.js';
 import { GatewayServer } from './server.js';
@@ -103,6 +104,10 @@ export async function buildGatewayPrivilegedCore(
   const intakeScreening = await composeGatewayIntakeScreening({
     systemDataDir: input.startupHydration.systemDataDir,
     companionDataDir: input.startupHydration.companionDataDir,
+    // htm9.8: the vision intake screener shares the gateway's OpenRouter
+    // credentials (providers.json openrouter apiBaseUrl + apiKeyRef, key
+    // resolved through the credential vault with process-env fallback).
+    screenerBackend: resolveIntakeScreenerBackend(input.config),
   });
 
   // htm9.18: durable CogSec event store for the canary egress tripwire. Shares
@@ -134,6 +139,7 @@ export async function buildGatewayPrivilegedCore(
       ...(input.config.credentialVault ? { credentialVault: input.config.credentialVault } : {}),
       ...(intakeScreening.screening ? { intakeScreening: intakeScreening.screening } : {}),
       cogSecEvents,
+      ...(intakeScreening.visionIntake ? { visionIntake: intakeScreening.visionIntake } : {}),
       policyConfig: {
         ...input.bootstrap.policyConfig,
         ...(privilegedServices.vaultOps

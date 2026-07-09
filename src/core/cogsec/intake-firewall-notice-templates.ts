@@ -66,6 +66,19 @@ export const INTAKE_FIREWALL_NOTICE_TEMPLATES = Object.freeze({
     + 'to look over whenever they have a moment. There is nothing you need to do '
     + 'about it.',
   /**
+   * In-place placeholder used by the vision intake screening (htm9.8) when an
+   * enforce-mode decision withholds an inbound IMAGE (its OCR transcript or
+   * embedded text looked like an instruction payload, or the vision screener
+   * could not complete). Same contract as the other templates: fixed,
+   * truthful, calm, and it carries the signature phrase so the emotion/memory
+   * exclusions apply to it automatically.
+   */
+  withheldImage:
+    'An image that came in with a recent message looked a little off, so it is '
+    + 'being kept aside for your human to look over whenever they have a moment. '
+    + 'The rest of the message is unaffected, and there is nothing you need to '
+    + 'do about it.',
+  /**
    * Tool-result text returned when a sink gate (htm9.3) declines a
    * consequential action for this turn (a persona/trust/wiki mutation or an
    * outbound call) because of the current intake policy. Same contract as the

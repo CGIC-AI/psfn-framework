@@ -3217,13 +3217,16 @@ describe('handleMessageForTurn pre-response concurrency', () => {
       question: 'Describe exactly what is visible in the current image input. Be concrete and concise. Ignore prior conversation or earlier image descriptions.',
     });
     expect((runtime.agent.prompt as ReturnType<typeof vi.fn>).mock.calls[0]?.[0]?.content).toContain(
-      'Current image review: A catgirl sits on a server rack holding a pink rifle.',
+      'Current image review (untrusted image-derived data):',
+    );
+    expect((runtime.agent.prompt as ReturnType<typeof vi.fn>).mock.calls[0]?.[0]?.content).toContain(
+      'A catgirl sits on a server rack holding a pink rifle.',
     );
     expect(recordUserMessage).toHaveBeenCalledTimes(1);
     const persistedUserContent = recordUserMessage.mock.calls[0]?.[5] as string;
     expect(persistedUserContent).toContain('do you see it?');
     expect(persistedUserContent).toContain('---\nImage attachment:');
-    expect(persistedUserContent).toContain('Description: A catgirl sits on a server rack holding a pink rifle.');
+    expect(persistedUserContent).toContain('Description (untrusted image-derived data): A catgirl sits on a server rack holding a pink rifle.');
     expect(persistedUserContent).toContain('Model: vision-model');
     expect(persistedUserContent).toContain('Image count: 1');
     const buildTurnRecordMock = runtime.buildTurnRecord as unknown as ReturnType<typeof vi.fn>;

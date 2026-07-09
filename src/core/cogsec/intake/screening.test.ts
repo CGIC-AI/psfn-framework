@@ -407,3 +407,58 @@ describe('data-marking plan on screening results (htm9.13)', () => {
     }
   });
 });
+
+describe('prior screening signals (htm9.8 vision screener seam)', () => {
+  const imageInput = {
+    sourceClass: 'image_ocr' as const,
+    origin: { ref: 'discord:chan:msg:attachment:0' },
+    scope: 'context' as const,
+  };
+
+  it('quarantines on a quarantine-family prior label even when L1 finds nothing', async () => {
+    const service = makeService('enforce');
+    const result = await service.screen(CLEAN_TEXT, {
+      ...imageInput,
+      priorSignals: [{
+        scannerId: 'vision-screener',
+        labels: ['injection/indirect'],
+        extractedFields: { 'vision_screener.flags': 'embedded_instruction_text' },
+      }],
+    });
+
+    expect(result.action).toBe('quarantine');
+    expect(result.withheld).toBe(true);
+    expect(result.envelope.state).toBe('quarantined');
+    expect(result.envelope.riskLabels).toContain('injection/indirect');
+    expect(result.envelope.decision?.reason).toContain('prior:vision-screener:injection/indirect');
+    expect(result.envelope.extractedFields['vision_screener.flags']).toBe('embedded_instruction_text');
+  });
+
+  it('records non-quarantine prior labels and scores without changing a pass decision', async () => {
+    const service = makeService('enforce');
+    const result = await service.screen(CLEAN_TEXT, {
+      ...imageInput,
+      priorSignals: [{
+        scannerId: 'vision-screener',
+        labels: ['exfil/unknown_link'],
+        score: 0.25,
+        extractedFields: { 'vision_screener.latency_ms': '812.4' },
+      }],
+    });
+
+    expect(result.action).toBe('pass');
+    expect(result.envelope.riskLabels).toContain('exfil/unknown_link');
+    expect(result.envelope.scores['vision-screener']).toBe(0.25);
+    expect(result.envelope.extractedFields['vision_screener.latency_ms']).toBe('812.4');
+  });
+
+  it('still quarantines on L1 findings when prior signals are clean', async () => {
+    const service = makeService('enforce');
+    const result = await service.screen(HOSTILE_TEXT, {
+      ...imageInput,
+      priorSignals: [{ scannerId: 'vision-screener', labels: [] }],
+    });
+    expect(result.action).toBe('quarantine');
+    expect(result.envelope.decision?.reason).toContain('l1:');
+  });
+});

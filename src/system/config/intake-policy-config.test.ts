@@ -286,6 +286,47 @@ describe('intake policy owner file', () => {
     )).toThrow(/mandatoryTiers contains unsupported tier 'galaxy'/);
   });
 
+  // ── Vision intake screener policy (htm9.8) ──
+
+  it('validates the vision screener seed: enabled, multimodal model, call knobs', () => {
+    const policy = seedPolicy();
+    expect(policy.visionScreener.enabled).toBe(true);
+    expect(policy.visionScreener.model.length).toBeGreaterThan(0);
+    expect(policy.visionScreener.timeoutMs).toBeGreaterThanOrEqual(1);
+    expect(policy.visionScreener.maxOutputTokens).toBeGreaterThanOrEqual(1);
+  });
+
+  it('fails closed when the vision screener block is missing entirely', () => {
+    const policy = seedPolicy();
+    const { visionScreener: _dropped, ...withoutVision } = policy;
+    expect(() => validateIntakePolicy(withoutVision, INTAKE_POLICY_FILE_NAME))
+      .toThrow(/visionScreener must be an object/);
+  });
+
+  it('rejects a vision screener block with unknown keys, missing enabled, or bad knobs', () => {
+    const policy = seedPolicy();
+    expect(() => validateIntakePolicy(
+      { ...policy, visionScreener: { ...policy.visionScreener, ocrEngine: 'tesseract' } },
+      INTAKE_POLICY_FILE_NAME,
+    )).toThrow(/visionScreener has unsupported keys: ocrEngine/);
+
+    const { enabled: _enabled, ...withoutEnabled } = policy.visionScreener;
+    expect(() => validateIntakePolicy(
+      { ...policy, visionScreener: withoutEnabled },
+      INTAKE_POLICY_FILE_NAME,
+    )).toThrow(/visionScreener\.enabled must be a boolean/);
+
+    expect(() => validateIntakePolicy(
+      { ...policy, visionScreener: { ...policy.visionScreener, model: '  ' } },
+      INTAKE_POLICY_FILE_NAME,
+    )).toThrow(/visionScreener\.model must be a non-empty string/);
+
+    expect(() => validateIntakePolicy(
+      { ...policy, visionScreener: { ...policy.visionScreener, timeoutMs: 0 } },
+      INTAKE_POLICY_FILE_NAME,
+    )).toThrow(/visionScreener\.timeoutMs must be an integer >= 1/);
+  });
+
   it('fails closed when the L2 screener block is missing entirely', () => {
     const policy = seedPolicy();
     const { l2Screener: _dropped, ...withoutL2 } = policy;

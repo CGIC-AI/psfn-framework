@@ -69,6 +69,12 @@
     "maxContentChars": 48000,
     "maxOutputTokens": 1200
   },
+  "visionScreener": {
+    "enabled": true,
+    "model": "google/gemini-2.5-flash-lite",
+    "timeoutMs": 20000,
+    "maxOutputTokens": 1600
+  },
   "sinkGates": {
     "sinks": {
       "prompt_assembly": {

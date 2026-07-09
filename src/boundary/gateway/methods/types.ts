@@ -19,6 +19,7 @@ import type {
 import type { SessionHmacKeyring } from '../../../persistence/journals/journal-utils.js';
 import type { ApprovalBoundaryService } from '../approval-boundary.js';
 import type { IntakeScreeningService } from '../../../core/cogsec/intake/screening.js';
+import type { GatewayVisionIntakeScreener } from '../intake/compose-screening.js';
 import type { PolicyConfig } from '../policy.js';
 import type { ModelUsageRecorder } from '../../../shared/telemetry/model-usage.js';
 import type { CredentialVaultPort } from '../../custody/credential-vault.js';
@@ -38,6 +39,14 @@ export interface GatewayMethodRuntime {
    * mode is 'off'; shadow mode screens/audits without altering content.
    */
   intakeScreening?: IntakeScreeningService;
+  /**
+   * Vision intake screener (htm9.8): images are screened through a small VLM
+   * (OCR + description) with the transcript routed through the L1/L1.5 text
+   * stack before any vision block reaches the main model. Absent when the
+   * firewall is off, the visionScreener policy is disabled, or (shadow mode)
+   * no OpenRouter backend is resolvable.
+   */
+  visionIntake?: GatewayVisionIntakeScreener;
   policyConfig: PolicyConfig;
   workspacePath: string;
   sessionHmacKeyring: SessionHmacKeyring;

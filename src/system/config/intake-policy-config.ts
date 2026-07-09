@@ -160,6 +160,31 @@ export interface IntakeL3ScreenerPolicyConfig {
   maxOutputTokens: number;
 }
 
+/**
+ * Policy for the L2.5/L3 VISION intake screener (htm9.8,
+ * src/boundary/gateway/intake/vision-screener.ts): a small multimodal model
+ * that OCRs AND describes an inbound image in ONE tool-less call. The
+ * resulting transcript is itself untrusted (taint rule) and runs through the
+ * L1 text scanners + L1.5 before anything image-derived becomes
+ * prompt-visible. Model choice is CONFIG, never hardcoded — a cheap capable
+ * multimodal model (Gemini Flash-Lite class); one call costs a fraction of a
+ * cent.
+ *
+ * `enabled: false` restores the pre-htm9.8 behavior (images bypass VLM
+ * screening entirely); with `enabled: true` the pipeline fails CLOSED in
+ * enforce mode — an unreachable vision model means the image is withheld,
+ * never delivered unscreened.
+ */
+export interface IntakeVisionScreenerPolicyConfig {
+  enabled: boolean;
+  /** OpenRouter model slug for the vision screener (must be multimodal). */
+  model: string;
+  /** Per-call timeout for one vision screen, in milliseconds. */
+  timeoutMs: number;
+  /** Max completion tokens for the OCR+description verdict (output cap). */
+  maxOutputTokens: number;
+}
+
 // ── Source lists (htm9.13): trusted/denied sites and people ──
 
 /**
@@ -563,6 +588,7 @@ export interface IntakePolicyConfig {
   injectionClassifier: IntakeInjectionClassifierPolicyConfig;
   l2Screener: IntakeL2ScreenerPolicyConfig;
   l3Screener: IntakeL3ScreenerPolicyConfig;
+  visionScreener: IntakeVisionScreenerPolicyConfig;
   sinkGates: IntakeSinkGatesPolicyConfig;
   driftDetection: IntakeDriftDetectionPolicyConfig;
 }
@@ -804,6 +830,33 @@ function validateL3Screener(raw: unknown, sourcePath: string): IntakeL3ScreenerP
     timeoutMs: validatePositiveInteger(raw.timeoutMs, sourcePath, 'l3Screener.timeoutMs'),
     maxContentChars: validatePositiveInteger(raw.maxContentChars, sourcePath, 'l3Screener.maxContentChars'),
     maxOutputTokens: validatePositiveInteger(raw.maxOutputTokens, sourcePath, 'l3Screener.maxOutputTokens'),
+  };
+}
+
+function validateVisionScreener(
+  raw: unknown,
+  sourcePath: string,
+): IntakeVisionScreenerPolicyConfig {
+  if (!isRecord(raw)) {
+    throw invalid(sourcePath, 'visionScreener must be an object');
+  }
+  const knownKeys = ['enabled', 'model', 'timeoutMs', 'maxOutputTokens'];
+  const unknownKeys = Object.keys(raw).filter((key) => !knownKeys.includes(key));
+  if (unknownKeys.length > 0) {
+    throw invalid(sourcePath, `visionScreener has unsupported keys: ${unknownKeys.join(', ')}`);
+  }
+  if (typeof raw.enabled !== 'boolean') {
+    throw invalid(sourcePath, 'visionScreener.enabled must be a boolean (no implicit default)');
+  }
+  return {
+    enabled: raw.enabled,
+    model: validateNonEmptyString(raw.model, sourcePath, 'visionScreener.model'),
+    timeoutMs: validatePositiveInteger(raw.timeoutMs, sourcePath, 'visionScreener.timeoutMs'),
+    maxOutputTokens: validatePositiveInteger(
+      raw.maxOutputTokens,
+      sourcePath,
+      'visionScreener.maxOutputTokens',
+    ),
   };
 }
 
@@ -1116,7 +1169,8 @@ export function validateIntakePolicy(raw: unknown, sourcePath: string): IntakePo
   }
   const knownKeys = [
     'schemaVersion', 'mode', 'sourceRiskTiers', 'sourceLists', 'quarantine',
-    'injectionClassifier', 'l2Screener', 'l3Screener', 'sinkGates', 'driftDetection',
+    'injectionClassifier', 'l2Screener', 'l3Screener', 'visionScreener', 'sinkGates',
+    'driftDetection',
   ];
   const unknownKeys = Object.keys(raw).filter((key) => !knownKeys.includes(key));
   if (unknownKeys.length > 0) {
@@ -1138,6 +1192,7 @@ export function validateIntakePolicy(raw: unknown, sourcePath: string): IntakePo
     injectionClassifier: validateInjectionClassifier(raw.injectionClassifier, sourcePath),
     l2Screener: validateL2Screener(raw.l2Screener, sourcePath),
     l3Screener: validateL3Screener(raw.l3Screener, sourcePath),
+    visionScreener: validateVisionScreener(raw.visionScreener, sourcePath),
     sinkGates: validateSinkGates(raw.sinkGates, sourcePath),
     driftDetection: validateDriftDetection(raw.driftDetection, sourcePath),
   };

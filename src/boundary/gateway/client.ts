@@ -50,6 +50,7 @@ import type {
   ApiTelemetryIngestRpcResult,
 } from '../../channels/api/types.js';
 import type { SessionIntegrityProvider } from '../../persistence/sessions/store.js';
+import type { VisionIntakeImageScreenResult } from './intake/vision-screener.js';
 import type { JournalEntry } from '../../core/session/types.js';
 import type { ConfirmationResolveResult } from '../../system/capabilities/confirmation-queue.js';
 import type {
@@ -572,6 +573,32 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
         : {}),
       ...(options.headers ? { headers: options.headers } : {}),
     }) as WebFetchBinaryResult;
+  }
+
+  /**
+   * htm9.8: screens one inbound image through the gateway's vision intake
+   * screener BEFORE it may become a vision block in the main model context.
+   * The gateway answers with the decision (withheld / promptBlock / notice);
+   * flagged transcripts never cross this boundary.
+   */
+  async screenImageIntake(input: {
+    imageUrl?: string;
+    imageBase64?: string;
+    mimeType?: string;
+    originRef: string;
+    originDetail?: string;
+    subjectIndex?: number;
+    canonicalContactId?: string;
+  }): Promise<VisionIntakeImageScreenResult> {
+    return await this.rpcInstance.request('intake.screen_image', {
+      ...(input.imageUrl ? { imageUrl: input.imageUrl } : {}),
+      ...(input.imageBase64 ? { imageBase64: input.imageBase64 } : {}),
+      ...(input.mimeType ? { mimeType: input.mimeType } : {}),
+      originRef: input.originRef,
+      ...(input.originDetail ? { originDetail: input.originDetail } : {}),
+      ...(typeof input.subjectIndex === 'number' ? { subjectIndex: input.subjectIndex } : {}),
+      ...(input.canonicalContactId ? { canonicalContactId: input.canonicalContactId } : {}),
+    }) as VisionIntakeImageScreenResult;
   }
 
   async webRequestBinary(

@@ -29,6 +29,7 @@ import type { CapabilityTier, CoreSubstrateConfig } from '../../system/config/ru
 import type { ContactStorePort } from '../contacts/contact-store-port.js';
 import type { ContactTrackingGate } from '../contacts/tracking-gate.js';
 import type { ImageVisionReviewer } from '../../primitives/images/types.js';
+import type { VisionIntakeImageScreenerPort } from './substrate-agent/vision-attachments.js';
 import type { LLMProviderPort, MemoryProvider, MemoryExtractor, ScratchpadProvider, WikiRetrievalPort } from './contracts.js';
 import type { TrustLevel } from '../../system/trust/types.js';
 import {
@@ -434,6 +435,8 @@ export class SubstrateAgent {
   // SKILL.md runtime — null until skills system is wired
   skillsRuntime: SkillsRuntime | null = null;
   imageVisionReviewer: ImageVisionReviewer | null = null;
+  /** htm9.8 vision intake screener (gateway-backed); null when not wired. */
+  visionIntakeScreener: VisionIntakeImageScreenerPort | null = null;
   observerEvalSidecar: ObserverEvalSidecarRuntime | null = null;
 
   constructor(
@@ -1101,6 +1104,7 @@ export class SubstrateAgent {
       companionPresence: this.companionPresence,
       llmClient: this.llmClient,
       imageVisionReviewer: this.imageVisionReviewer,
+      visionIntakeScreener: this.visionIntakeScreener,
       sessionManager: this.sessionManager,
       config: this.config,
       runtimeMode: this.runtimeMode,

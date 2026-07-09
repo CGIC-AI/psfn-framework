@@ -36,6 +36,15 @@ export type ScreenerFetch = (
   text(): Promise<string>;
 }>;
 
+/**
+ * OpenAI-style chat content part for multimodal screener calls (htm9.8 vision
+ * screener). Image parts carry an https URL or a `data:` URI; the request
+ * stays tool-less either way.
+ */
+export type ScreenerUserContentPart =
+  | { type: 'text'; text: string }
+  | { type: 'image_url'; image_url: { url: string } };
+
 export interface ToolLessScreenerCallInput {
   backend: ScreenerBackend;
   /** OpenRouter model slug (always config-resolved, never hardcoded). */
@@ -43,7 +52,8 @@ export interface ToolLessScreenerCallInput {
   /** Per-call timeout in milliseconds. */
   timeoutMs: number;
   systemPrompt: string;
-  userMessage: string;
+  /** Plain-text user message, or multimodal content parts (vision screener). */
+  userMessage: string | ScreenerUserContentPart[];
   /** Optional completion-token cap (`max_tokens`). */
   maxOutputTokens?: number;
   /** Test seam; production uses the global fetch. */

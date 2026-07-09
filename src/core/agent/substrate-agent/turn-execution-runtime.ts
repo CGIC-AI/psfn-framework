@@ -5,6 +5,7 @@ import type { EventBus, EventMap } from '../../../shared/event-bus.js';
 import type { CostTelemetryPort } from '../../../shared/telemetry/cost-telemetry-port.js';
 import type { ComposeContext } from '../../identity/prompt-types.js';
 import type { ImageVisionReviewer } from '../../../primitives/images/types.js';
+import type { VisionIntakeImageScreenerPort } from './vision-attachments.js';
 import { resolveCompanionIdFromConfig } from '../../identity/companion-runtime.js';
 import { createComponentLogger } from '../../../shared/logger.js';
 import { toErrorMessage } from '../../../shared/utils/errors.js';
@@ -102,6 +103,8 @@ export interface TurnExecutionRuntime {
   companionPresence?: CompanionPresenceTurnPort | null;
   llmClient: LLMProviderPort;
   imageVisionReviewer: ImageVisionReviewer | null;
+  /** htm9.8 vision intake screener; null when the firewall is not wired. */
+  visionIntakeScreener: VisionIntakeImageScreenerPort | null;
   sessionManager: SessionManager;
   config: CoreSubstrateConfig;
   runtimeMode: RuntimeMode;

@@ -91,6 +91,25 @@ export interface IntakeInjectionScorerPort {
 // ── Screening input/result ──
 // (Decision label families live in risk-label-families.ts, re-exported above.)
 
+/**
+ * A screening signal produced by an UPSTREAM screener that ran before this
+ * service — e.g. the htm9.8 vision screener whose VLM flags an image's
+ * embedded instruction text before the OCR transcript is L1-scanned here.
+ * Prior labels are folded into the envelope and participate in the decision:
+ * a quarantine-family prior label quarantines exactly like an L1 finding
+ * (fail-closed aggregation across screening layers — a cleaner transcript
+ * never launders a flagged image).
+ */
+export interface IntakePriorScreeningSignal {
+  /** Scanner identity for `envelope.scores` / extracted-field attribution. */
+  scannerId: string;
+  labels: IntakeRiskLabel[];
+  /** Optional calibrated score recorded under `scannerId` in `scores`. */
+  score?: number;
+  /** Audit fields merged onto the envelope (caller owns key naming). */
+  extractedFields?: Record<string, string>;
+}
+
 export interface IntakeScreeningInput {
   sourceClass: IntakeSourceClass;
   /** Origin locator: url, `discord:<channel>:<message>`, tool call id, ... */
@@ -103,6 +122,12 @@ export interface IntakeScreeningInput {
    * against the trustedPeople/deniedPeople source lists (htm9.13).
    */
   canonicalContactId?: string;
+  /**
+   * Signals from screeners that already ran on this content upstream (htm9.8
+   * vision screener). Folded into the envelope; quarantine-family prior labels
+   * force a quarantine decision (fail closed across layers).
+   */
+  priorSignals?: readonly IntakePriorScreeningSignal[];
   atMs?: number;
 }
 
@@ -181,10 +206,11 @@ interface ScreeningSignals {
   report: IntakeL1ScanReport;
   injectionScore: number | undefined;
   injectionScoreThreshold: number;
+  priorSignals: readonly IntakePriorScreeningSignal[];
 }
 
 function decideAction(signals: ScreeningSignals): { action: IntakeDecisionAction; reason: string } {
-  const { report, injectionScore, injectionScoreThreshold } = signals;
+  const { report, injectionScore, injectionScoreThreshold, priorSignals } = signals;
   const quarantineLabels = report.riskLabels
     .filter((label) => INTAKE_QUARANTINE_RISK_LABELS.includes(label));
   const sanitizeLabels = report.riskLabels
@@ -199,6 +225,24 @@ function decideAction(signals: ScreeningSignals): { action: IntakeDecisionAction
     return {
       action: 'quarantine',
       reason: `l1:${quarantineLabels.join('+')}${scoreNote}${truncationNote}`,
+    };
+  }
+  // Upstream-screener findings quarantine exactly like L1 findings: a
+  // quarantine-family label from a prior layer (e.g. the vision screener's
+  // embedded-instruction flag) is a deterministic finding, not a raw score.
+  const priorQuarantine = priorSignals
+    .map((signal) => ({
+      scannerId: signal.scannerId,
+      labels: signal.labels.filter((label) => INTAKE_QUARANTINE_RISK_LABELS.includes(label)),
+    }))
+    .filter((signal) => signal.labels.length > 0);
+  if (priorQuarantine.length > 0) {
+    const detail = priorQuarantine
+      .map((signal) => `${signal.scannerId}:${signal.labels.join('+')}`)
+      .join(',');
+    return {
+      action: 'quarantine',
+      reason: `prior:${detail}${scoreNote}${truncationNote}`,
     };
   }
   if (scorerSignal && report.riskLabels.length > 0) {
@@ -295,10 +339,12 @@ export function createIntakeScreeningService(
       atMs,
     });
 
+    const priorSignals = input.priorSignals ?? [];
     const decision = decideAction({
       report,
       injectionScore: scorerOutcome.score,
       injectionScoreThreshold: injectionScoreThresholdForTier(policy, sourceRiskTier),
+      priorSignals,
     });
     const intakeDecision: IntakeDecision = {
       action: decision.action,
@@ -315,6 +361,14 @@ export function createIntakeScreeningService(
     if (scorerOutcome.error && scorerOutcome.scannerId) {
       extractedFields[`${scorerOutcome.scannerId}.error`] = scorerOutcome.error.slice(0, 4096);
     }
+    for (const signal of priorSignals) {
+      if (signal.score !== undefined) {
+        scores[signal.scannerId] = signal.score;
+      }
+      for (const [key, value] of Object.entries(signal.extractedFields ?? {})) {
+        extractedFields[key] = value.slice(0, 4096);
+      }
+    }
     if (adjusted.adjustment) {
       extractedFields['source_list.match'] =
         `${adjusted.adjustment.match.kind}:${adjusted.adjustment.match.list}:${adjusted.adjustment.match.pattern}`
@@ -325,7 +379,11 @@ export function createIntakeScreeningService(
 
     // htm9.13: the marking plan is a pure function of (labels, max score,
     // effective tier), computed for markable classes in both modes.
-    const allRiskLabels = [...report.riskLabels, ...scorerOutcome.labels];
+    const allRiskLabels = [
+      ...report.riskLabels,
+      ...scorerOutcome.labels,
+      ...priorSignals.flatMap((signal) => signal.labels),
+    ];
     const maxScore = Math.min(1, Math.max(0, ...Object.values(scores)));
     const markingPlan = INTAKE_MARKING_SOURCE_CLASSES.has(input.sourceClass)
       ? resolveMarkingPlan({ labels: allRiskLabels, score: maxScore, tier: sourceRiskTier })

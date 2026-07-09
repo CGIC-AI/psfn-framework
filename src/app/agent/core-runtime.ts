@@ -364,6 +364,12 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
     referenceResolver: new ImageReferenceStore(pathSnapshot.companionDataDir),
   });
   agentLoop.imageVisionReviewer = imageVisionReviewer;
+  // htm9.8: vision intake screening — every inbound image attachment is
+  // screened via the gateway (`intake.screen_image`) before it can become a
+  // vision block; the gateway answers 'skipped' when the firewall is off.
+  agentLoop.visionIntakeScreener = {
+    screenImageIntake: (input) => gateway.screenImageIntake(input),
+  };
   const promptStore = wirePromptRuntime(
     agentLoop,
     pathSnapshot.companionDataDir,

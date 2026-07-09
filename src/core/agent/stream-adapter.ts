@@ -5,7 +5,7 @@
 
 import type { AssistantMessage, AssistantMessageEvent, Model, StopReason, ThinkingLevel } from '@mariozechner/pi-ai';
 import type { StreamFn } from '../../boundary/pi-agent/index.js';
-import type { LLMContext, LLMResponse, ModelBudgetBlockedEvent, MessageModelOverride, ModelPurpose, CorrelationMetadata, StreamCallbacks, ToolCall } from '../../shared/contracts/runtime.js';
+import type { LLMContext, LLMResponse, ModelBudgetBlockedEvent, MessageModelOverride, ModelPurpose, CorrelationMetadata, StreamCallbacks, ToolCall, ToolSchema } from '../../shared/contracts/runtime.js';
 import type { CoreSubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import { createModel, createOpenAICompatibleEndpointModel, resolveRegisteredModel } from '../../primitives/llm/models.js';
 import { resolveRoutingCandidates, type RoutingCandidate, type RoutingPurpose } from '../../primitives/llm/routing.js';
@@ -35,6 +35,7 @@ import {
 } from '../../system/config/providers-config.js';
 import { countMessageTokens } from '../../primitives/llm/tokens.js';
 import { repairStringifiedJsonArrayToolArguments } from './tool-argument-repair.js';
+import { isRecord } from '../../shared/utils/types.js';
 
 const log = createComponentLogger('StreamAdapter');
 const FULL_KNOB_PASSTHROUGH_PROVIDERS = new Set(['openrouter', 'litellm', 'local_endpoint']);
@@ -384,15 +385,54 @@ function buildTransportContext(
   requestOptions: Record<string, unknown>,
 ): LLMContext {
   const llmContext = context as LLMContext;
+  const tools = normalizeTransportTools((context as { tools?: unknown }).tools);
   return {
     systemPrompt: llmContext.systemPrompt,
     messages: llmContext.messages,
-    ...(llmContext.tools?.length ? { tools: llmContext.tools } : {}),
+    ...(tools ? { tools } : {}),
     ...(llmContext.promptCacheBoundaries
       ? { promptCacheBoundaries: llmContext.promptCacheBoundaries }
       : {}),
     modelHint: buildTransportModelHint(candidate, requestOptions),
     ...(requestContext ? { correlation: requestContext as CorrelationMetadata } : {}),
+  };
+}
+
+interface StreamToolCandidate {
+  name?: unknown;
+  description?: unknown;
+  inputSchema?: unknown;
+  parameters?: unknown;
+}
+
+function normalizeTransportTools(tools: unknown): ToolSchema[] | undefined {
+  if (tools === undefined) return undefined;
+  if (!Array.isArray(tools)) {
+    throw new Error('Invalid stream context tools: tools must be an array');
+  }
+  if (tools.length === 0) return undefined;
+  return tools.map(normalizeTransportTool);
+}
+
+function normalizeTransportTool(tool: unknown): ToolSchema {
+  if (!isRecord(tool)) {
+    throw new Error('Invalid stream tool schema: tool must be an object');
+  }
+  const candidate = tool as StreamToolCandidate;
+  if (typeof candidate.name !== 'string' || candidate.name.trim().length === 0) {
+    throw new Error('Invalid stream tool schema: tool.name must be a non-empty string');
+  }
+  if (typeof candidate.description !== 'string' || candidate.description.trim().length === 0) {
+    throw new Error(`Invalid stream tool schema for ${candidate.name}: tool.description must be a non-empty string`);
+  }
+  const inputSchema = candidate.inputSchema ?? candidate.parameters;
+  if (!isRecord(inputSchema)) {
+    throw new Error(`Invalid stream tool schema for ${candidate.name}: inputSchema or parameters must be an object`);
+  }
+  return {
+    name: candidate.name,
+    description: candidate.description,
+    inputSchema,
   };
 }
 

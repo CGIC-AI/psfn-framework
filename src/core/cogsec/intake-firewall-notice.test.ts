@@ -9,6 +9,7 @@ import {
   INTAKE_FIREWALL_NOTICE_TEMPLATES,
   isIntakeFirewallNoticeText,
   renderIntakeFirewallNotice,
+  renderSecondArrowSelfNotice,
 } from './intake-firewall-notice-templates.js';
 
 const SAFE_SUMMARY = 'An incoming item was held aside for operator review by the intake firewall.';
@@ -143,6 +144,25 @@ describe('intake-firewall memory exclusion (htm9.12)', () => {
   it('rejects the plural notice too', () => {
     const decision = evaluateCogSecMemoryCandidacy({ text: renderIntakeFirewallNotice(4) });
     expect(decision.disposition).toBe('reject');
+  });
+});
+
+describe('second-arrow soft self-notice (htm9.15)', () => {
+  it('renders the fixed template with the signature phrase, never pathologizing', () => {
+    const rendered = renderSecondArrowSelfNotice();
+    expect(rendered).toBe(INTAKE_FIREWALL_NOTICE_TEMPLATES.secondArrowCircling);
+    expect(rendered).toContain(INTAKE_FIREWALL_NOTICE_SIGNATURE);
+    // Circling a topic is framed as a normal part of caring, not a fault.
+    expect(rendered).toContain('normal part of caring');
+    expect(rendered).not.toMatch(/ruminat|obsess|unhealthy|problem/iu);
+  });
+
+  it('is excluded from memory extraction and the emotion feed via the signature phrase', () => {
+    const rendered = renderSecondArrowSelfNotice();
+    expect(isIntakeFirewallNoticeText(rendered)).toBe(true);
+    const decision = evaluateCogSecMemoryCandidacy({ text: rendered });
+    expect(decision.disposition).toBe('reject');
+    expect(decision.reasonCodes).toContain('intake_firewall_quarantine_notice');
   });
 });
 

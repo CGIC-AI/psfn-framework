@@ -103,6 +103,7 @@ import { maybeCreateIntakeScreeningService } from '../../core/cogsec/intake/scre
 import { createIntakeQuarantineStore } from '../../core/cogsec/intake/quarantine-store.js';
 import { createDriftReviewCardStore } from '../../core/cogsec/drift/drift-review-card-store.js';
 import { createDriftVelocityEvidencePort } from '../../core/cogsec/drift/drift-evidence-adapters.js';
+import { createSecondArrowEvidencePort } from '../../core/cogsec/drift/second-arrow-evidence-adapters.js';
 import { hydrateStartupActiveCoreMemoryBlocks } from '../../faculties/core-memory/startup-hydration.js';
 import { enforceNetworkIsolationOnStartup } from './startup-guards.js';
 import {
@@ -1027,6 +1028,44 @@ async function main(): Promise<void> {
     log.info('Drift-velocity review lane disabled by intake-policy driftDetection.enabled');
   }
 
+  // ── Second-arrow rumination review lane (htm9.15) ──
+  // Deterministic nightly clustering (zero LLM, zero turn latency) over
+  // recent memory writes' STORED embeddings, active concerns, and the
+  // per-contact affect series. Findings become operator review cards (same
+  // store, kind 'second_arrow') proposing consolidation of near-duplicate
+  // rumination stacks; the lane never mutates memories, concerns, or emotion.
+  const secondArrowEnabled = intakePolicy.driftDetection.enabled
+    && intakePolicy.driftDetection.secondArrow.enabled;
+  const secondArrowReview = secondArrowEnabled && memoryStore.listActiveMemoryEmbeddingsSince
+    ? {
+      evidence: createSecondArrowEvidencePort({
+        memoryStore,
+        contactStore,
+        concernStore: intentionRuntime.concernStore,
+      }),
+      cardStore: driftVelocityReview?.cardStore
+        ?? createDriftReviewCardStore(resolveDriftReviewCardsPath(pathSnapshot.companionDataDir)),
+      config: intakePolicy.driftDetection.secondArrow,
+      watermarks: {
+        getContactMaintenanceWatermark: (processor: string) =>
+          contactStore.getContactMaintenanceWatermark(processor),
+        setContactMaintenanceWatermark: (processor: string, lastRunAt: string) =>
+          contactStore.setContactMaintenanceWatermark(processor, lastRunAt),
+      },
+    }
+    : null;
+  if (!secondArrowReview) {
+    if (secondArrowEnabled) {
+      // Enabled but the store cannot serve stored embeddings: loud, never silent.
+      log.error(
+        'Second-arrow review lane NOT wired: memory store lacks listActiveMemoryEmbeddingsSince '
+        + '(stored-embedding reads); rumination detection is disabled until the store provides it',
+      );
+    } else {
+      log.info('Second-arrow review lane disabled by intake-policy driftDetection.secondArrow.enabled');
+    }
+  }
+
   // Heartbeat reflections — policy-driven multi-template reflection system
   await wireHeartbeatRuntime(
     agentLoop,
@@ -1070,6 +1109,7 @@ async function main(): Promise<void> {
       postTurnActions,
       episodicProcessingRestWindow: schedulerConfig.episodicProcessing,
       driftVelocityReview,
+      secondArrowReview,
       orientationRewriteGate: schedulerConfig.orientationRewrite,
       reflectionNoveltyGate: schedulerConfig.reflectionNovelty,
       nearTurnMemoryCadence: schedulerConfig.nearTurnMemory,

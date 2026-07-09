@@ -197,6 +197,24 @@
       "windowHours": 48,
       "minRetrievals": 10,
       "maxLowTrustShare": 0.6
+    },
+    "secondArrow": {
+      "enabled": true,
+      "windowHours": 72,
+      "minClusterSize": 4,
+      "similarityThreshold": 0.87,
+      "baselineWindowDays": 14,
+      "velocityMultiplier": 3,
+      "minSelfSourcedShare": 0.5,
+      "concernSimilarityMin": 0.3,
+      "stressAttribution": {
+        "minPoints": 4,
+        "deltaSigmaThreshold": 1.5,
+        "minBaselineStd": 0.05
+      },
+      "selfNotice": {
+        "enabled": false
+      }
     }
   }
 }

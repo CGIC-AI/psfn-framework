@@ -53,8 +53,12 @@ import type {
   DriftVelocityEvidencePort,
   DriftVelocityWatermarkStore,
 } from '../cogsec/drift/drift-review-lane.js';
+import type { SecondArrowEvidencePort } from '../cogsec/drift/second-arrow-review-lane.js';
 import type { DriftReviewCardStore } from '../cogsec/drift/drift-review-card-store.js';
-import type { IntakeDriftDetectionPolicyConfig } from '../../system/config/intake-policy-config.js';
+import type {
+  IntakeDriftDetectionPolicyConfig,
+  IntakeSecondArrowPolicyConfig,
+} from '../../system/config/intake-policy-config.js';
 
 export const DEFERRED_HEARTBEAT_ACTION_KIND = 'heartbeat.run_template';
 
@@ -229,6 +233,19 @@ export interface HeartbeatRuntimeOptions {
     evidence: DriftVelocityEvidencePort;
     cardStore: DriftReviewCardStore;
     config: IntakeDriftDetectionPolicyConfig;
+    watermarks: DriftVelocityWatermarkStore;
+  } | null;
+  /**
+   * Second-arrow rumination review lane (htm9.15): pre-bound evidence reads
+   * (memory embeddings, concerns, affect series), the SAME operator review-
+   * card store as the drift-velocity lane, the `driftDetection.secondArrow`
+   * knobs, and the durable daily watermark (own processor id). Absent ⇒ the
+   * lane is not wired (logged, never silent).
+   */
+  secondArrowReview?: {
+    evidence: SecondArrowEvidencePort;
+    cardStore: DriftReviewCardStore;
+    config: IntakeSecondArrowPolicyConfig;
     watermarks: DriftVelocityWatermarkStore;
   } | null;
   orientationRewriteGate?: OrientationRewriteGateConfig;

@@ -214,6 +214,7 @@ export type {
   AdminDriftReviewService,
   DriftReviewCard,
   DriftReviewCardResolution,
+  SecondArrowReviewCard,
 } from './drift-review-service.js';
 
 export type {

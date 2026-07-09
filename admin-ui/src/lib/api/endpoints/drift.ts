@@ -1,7 +1,10 @@
-// Cognitive Security drift review endpoints (htm9.14): batched review cards
-// the nightly slow-poisoning drift-velocity lane raises, with the operator
-// acknowledge/dismiss decision. Cards are evidence only — resolving one never
-// mutates memories, trust, or emotion.
+// Cognitive Security drift review endpoints (htm9.14, htm9.15): batched
+// review cards the nightly drift lanes raise (per-contact slow poisoning and
+// second-arrow rumination stacks), with the operator decision. Acknowledge
+// and dismiss never mutate memories, trust, or emotion; approving a
+// second-arrow card's consolidation ('consolidated') applies its proposed
+// supersession server-side through the existing memory machinery (audited,
+// never deletion).
 
 import { apiGet, apiPost } from '$lib/api/client';
 import type { DriftReviewCard, DriftReviewCardResolution } from '$lib/types';
@@ -18,6 +21,8 @@ export interface DriftReviewCardData {
 export interface DriftReviewResolveResult {
   ok: boolean;
   card: DriftReviewCard;
+  /** Present after an approved second-arrow consolidation: the superseded ids. */
+  consolidatedMemoryIds?: string[];
 }
 
 /** All drift review cards (open first, newest first). */

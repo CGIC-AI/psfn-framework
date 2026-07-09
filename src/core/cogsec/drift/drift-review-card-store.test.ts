@@ -4,10 +4,21 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   createDriftReviewCardStore,
+  type DriftReviewCard,
   type DriftReviewCardCreateInput,
   type DriftReviewCardStore,
+  type SecondArrowReviewCardCreateInput,
+  type SourceDriftReviewCard,
 } from './drift-review-card-store.js';
 import type { DriftSignalResult } from './drift-signals.js';
+import type { SecondArrowSignalResult } from './second-arrow-signals.js';
+
+function asSourceDrift(card: DriftReviewCard | undefined): SourceDriftReviewCard {
+  if (!card || card.kind !== 'source_drift') {
+    throw new Error(`expected a source_drift card, got ${card?.kind ?? 'nothing'}`);
+  }
+  return card;
+}
 
 const NOW_MS = Date.UTC(2026, 6, 9, 3, 0, 0);
 
@@ -63,7 +74,7 @@ describe('createDriftReviewCardStore', () => {
 
     const cards = store.list();
     expect(cards).toHaveLength(2);
-    expect(cards[0]!.contactId).toBe('contact-2');
+    expect(asSourceDrift(cards[0]).contactId).toBe('contact-2');
     expect(store.getById(cards[0]!.id)?.evidenceHash).toBe('hash-2');
     // Evidence survives the round-trip for the Garden card renderer.
     expect(cards[1]!.signals[0]!.evidence.zShift).toBe(-4.8);
@@ -147,5 +158,138 @@ describe('createDriftReviewCardStore', () => {
     const raw = JSON.parse(readFileSync(filePath, 'utf8')) as { version: number; entries: unknown[] };
     expect(raw.version).toBe(1);
     expect(raw.entries).toHaveLength(1);
+  });
+
+  it('normalizes pre-kind (htm9.14) cards on disk to source_drift', () => {
+    const created = store.create(cardInput());
+    const raw = JSON.parse(readFileSync(filePath, 'utf8')) as { version: number; entries: Record<string, unknown>[] };
+    delete raw.entries[0]!.kind;
+    writeFileSync(filePath, JSON.stringify(raw), 'utf8');
+    const reloaded = store.getById(created.card.id);
+    expect(reloaded?.kind).toBe('source_drift');
+  });
+
+  // ── Second-arrow (htm9.15) cards in the same store ──
+
+  function secondArrowSignal(overrides: Partial<SecondArrowSignalResult> = {}): SecondArrowSignalResult {
+    return {
+      id: 'similarity_cluster',
+      triggered: true,
+      score: 0.7,
+      summary: '5 near-duplicate writes',
+      evidence: { meanMutualSimilarity: 0.93 },
+      ...overrides,
+    };
+  }
+
+  function secondArrowInput(
+    overrides: Partial<SecondArrowReviewCardCreateInput> = {},
+  ): SecondArrowReviewCardCreateInput {
+    return {
+      topicLabel: 'worried about the memory bug',
+      clusterKey: 'cluster-1',
+      memberMemoryIds: ['mem-1', 'mem-2', 'mem-3'],
+      members: [
+        { id: 'mem-1', textPreview: 'worried about the memory bug', type: 'emotional', extractedAtMs: NOW_MS - 3000, sourceType: 'heartbeat', similarityToCentroid: 0.97 },
+        { id: 'mem-2', textPreview: 'the memory bug worries me', type: 'emotional', extractedAtMs: NOW_MS - 2000, sourceType: 'reflection', similarityToCentroid: 0.96 },
+        { id: 'mem-3', textPreview: 'still thinking about the memory bug', type: 'emotional', extractedAtMs: NOW_MS - 1000, sourceType: 'heartbeat', similarityToCentroid: 0.95 },
+      ],
+      evidenceHash: 'sa-hash-1',
+      compositeScore: 0.7,
+      triggeredSignalIds: ['similarity_cluster', 'creation_velocity'],
+      signals: [secondArrowSignal(), secondArrowSignal({ id: 'creation_velocity', summary: '9x baseline' })],
+      proposedConsolidation: {
+        canonicalMemoryId: 'mem-1',
+        supersededMemoryIds: ['mem-2', 'mem-3'],
+        mechanism: 'memory_supersession',
+      },
+      atMs: NOW_MS,
+      ...overrides,
+    };
+  }
+
+  it('creates second-arrow cards alongside source-drift cards and round-trips the cluster evidence', () => {
+    store.create(cardInput());
+    const created = store.createSecondArrow(secondArrowInput());
+    expect(created.created).toBe(true);
+    expect(store.list()).toHaveLength(2);
+
+    const reloaded = store.getById(created.card.id);
+    if (!reloaded || reloaded.kind !== 'second_arrow') throw new Error('expected a second_arrow card');
+    expect(reloaded.topicLabel).toBe('worried about the memory bug');
+    expect(reloaded.memberMemoryIds).toEqual(['mem-1', 'mem-2', 'mem-3']);
+    expect(reloaded.members[1]!.similarityToCentroid).toBe(0.96);
+    expect(reloaded.proposedConsolidation).toEqual({
+      canonicalMemoryId: 'mem-1',
+      supersededMemoryIds: ['mem-2', 'mem-3'],
+      mechanism: 'memory_supersession',
+    });
+  });
+
+  it('is idempotent by evidence hash and dedupes onto open cards with overlapping members', () => {
+    const first = store.createSecondArrow(secondArrowInput());
+    const replay = store.createSecondArrow(secondArrowInput());
+    expect(replay.created).toBe(false);
+    expect(replay.created === false && replay.reason).toBe('duplicate_evidence');
+    expect(replay.card.id).toBe(first.card.id);
+
+    // Next night the cluster picked up a fourth member: still ONE open card.
+    const grown = store.createSecondArrow(secondArrowInput({
+      evidenceHash: 'sa-hash-2',
+      clusterKey: 'cluster-1b',
+      memberMemoryIds: ['mem-2', 'mem-3', 'mem-4', 'mem-5'],
+    }));
+    expect(grown.created).toBe(false);
+    expect(grown.created === false && grown.reason).toBe('open_card_overlap');
+    expect(store.list()).toHaveLength(1);
+
+    // A disjoint cluster is a different stack and gets its own card.
+    const disjoint = store.createSecondArrow(secondArrowInput({
+      evidenceHash: 'sa-hash-3',
+      clusterKey: 'cluster-2',
+      memberMemoryIds: ['mem-7', 'mem-8', 'mem-9'],
+      proposedConsolidation: {
+        canonicalMemoryId: 'mem-7',
+        supersededMemoryIds: ['mem-8', 'mem-9'],
+        mechanism: 'memory_supersession',
+      },
+    }));
+    expect(disjoint.created).toBe(true);
+  });
+
+  it('enforces kind-compatible resolutions (consolidated is second-arrow only)', () => {
+    const sourceDrift = store.create(cardInput());
+    expect(() => store.resolve({
+      id: sourceDrift.card.id,
+      resolution: 'consolidated',
+      actor: 'operator:garden',
+    })).toThrow(/does not accept resolution 'consolidated'/);
+
+    const secondArrow = store.createSecondArrow(secondArrowInput());
+    const resolved = store.resolve({
+      id: secondArrow.card.id,
+      resolution: 'consolidated',
+      actor: 'operator:garden',
+      atMs: NOW_MS + 1000,
+    });
+    expect(resolved.status).toBe('consolidated');
+    expect(resolved.resolutionRecord?.resolution).toBe('consolidated');
+  });
+
+  it('fails closed on malformed second-arrow cards (self-superseding proposal, bad members)', () => {
+    expect(() => store.createSecondArrow(secondArrowInput({
+      proposedConsolidation: {
+        canonicalMemoryId: 'mem-1',
+        supersededMemoryIds: ['mem-1', 'mem-2'],
+        mechanism: 'memory_supersession',
+      },
+    }))).toThrow(/must not supersede its own canonical memory/);
+
+    const created = store.createSecondArrow(secondArrowInput());
+    const raw = JSON.parse(readFileSync(filePath, 'utf8')) as { version: number; entries: Record<string, unknown>[] };
+    const entry = raw.entries.find((candidate) => candidate.id === created.card.id)!;
+    (entry.members as Record<string, unknown>[])[0]!.extractedAtMs = 'yesterday';
+    writeFileSync(filePath, JSON.stringify(raw), 'utf8');
+    expect(() => store.list()).toThrow(/extractedAtMs must be a finite number/);
   });
 });

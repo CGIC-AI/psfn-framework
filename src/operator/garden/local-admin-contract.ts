@@ -284,13 +284,16 @@ export function createInProcessGardenAdminContract(
     cogSecEvents: () => new CogSecEventStore(resolveCogSecEventsPath(companionDataDir)),
   });
 
-  // ── Drift review cards (htm9.14 Cognitive Security tab) ──
-  // Reads the same companion-data card file the nightly drift-velocity lane
-  // writes (the store reloads from disk on every operation) and records the
-  // operator acknowledge/dismiss decision. Nothing here mutates memories,
-  // trust, or emotion — cards are evidence for a human, not actions.
+  // ── Drift review cards (htm9.14/htm9.15 Cognitive Security tab) ──
+  // Reads the same companion-data card file the nightly drift lanes write
+  // (the store reloads from disk on every operation) and records the
+  // operator decision. Acknowledge/dismiss never mutate memories, trust, or
+  // emotion; the operator-approved second-arrow consolidation is the single
+  // exception, applied through the live memory store's existing supersession
+  // machinery (same in-process instance the agent runtime uses).
   const driftReviews = createAdminDriftReviewService({
     store: createDriftReviewCardStore(resolveDriftReviewCardsPath(companionDataDir)),
+    memoryStore: options.memoryStore,
   });
 
   return {

@@ -1,14 +1,19 @@
-// ── Garden drift review card routes (htm9.14) ──
+// ── Garden drift review card routes (htm9.14, htm9.15) ──
 //
 // The admin API for the Cognitive Security drift-review section:
 //   GET  /api/admin/intake/drift-reviews              card list (open first)
 //   GET  /api/admin/intake/drift-reviews/:id          full card (evidence)
-//   POST /api/admin/intake/drift-reviews/:id/resolve  acknowledge / dismiss
+//   POST /api/admin/intake/drift-reviews/:id/resolve  acknowledge / dismiss /
+//                                                     consolidate (2nd-arrow)
 //
 // Every resolution attempt (allowed AND denied) writes a Garden audit-
-// timeline entry with actor, decision, card id, and resolution. Resolving a
-// card records the operator decision only — the drift lane never auto-
-// mutates memories, trust, or emotion, and neither do these routes.
+// timeline entry with actor, decision, card id, and resolution. Acknowledge
+// and dismiss record the operator decision only — the drift lanes never
+// auto-mutate memories, trust, or emotion. The one deliberate exception is
+// the operator-approved second-arrow consolidation ('consolidated'), which
+// applies the card's proposed supersession through the existing memory-
+// supersession machinery (service-side, never deletion, memory ids audited
+// here).
 
 import { sendJson } from '../../../channels/backplane/http/primitives.js';
 import { parseAdminJsonBody } from '../request-body.js';
@@ -141,12 +146,11 @@ export function buildAdminDriftReviewRoutes(options: {
             sendJson(res, 400, { error: input.error });
             return;
           }
-          try {
-            const result = driftReviewService.resolveCard({
-              id,
-              resolution: input.value.resolution,
-              ...(input.value.note !== undefined ? { note: input.value.note } : {}),
-            });
+          driftReviewService.resolveCard({
+            id,
+            resolution: input.value.resolution,
+            ...(input.value.note !== undefined ? { note: input.value.note } : {}),
+          }).then((result) => {
             if (!result.ok) {
               appendDriftAudit(
                 'denied',
@@ -165,13 +169,30 @@ export function buildAdminDriftReviewRoutes(options: {
               `Operator ${input.value.resolution} a drift review card.`,
               [
                 `cardId=${id}`,
-                `contactId=${result.card.contactId}`,
+                `cardKind=${result.card.kind}`,
+                result.card.kind === 'source_drift'
+                  ? `contactId=${result.card.contactId}`
+                  : `clusterKey=${result.card.clusterKey}`,
                 `resolution=${input.value.resolution}`,
                 `triggeredSignals=${result.card.triggeredSignalIds.join('+')}`,
+                ...(result.consolidatedMemoryIds !== undefined
+                  ? [
+                    `canonicalMemoryId=${result.card.kind === 'second_arrow'
+                      ? result.card.proposedConsolidation.canonicalMemoryId
+                      : ''}`,
+                    `supersededMemoryIds=${result.consolidatedMemoryIds.join('+')}`,
+                  ]
+                  : []),
               ],
             );
-            sendJson(res, 200, { ok: true, card: result.card }, ADMIN_DYNAMIC_JSON_HEADERS);
-          } catch (error) {
+            sendJson(res, 200, {
+              ok: true,
+              card: result.card,
+              ...(result.consolidatedMemoryIds !== undefined
+                ? { consolidatedMemoryIds: result.consolidatedMemoryIds }
+                : {}),
+            }, ADMIN_DYNAMIC_JSON_HEADERS);
+          }).catch((error: unknown) => {
             appendDriftAudit(
               'denied',
               'Operator drift review resolution failed with a server error.',
@@ -180,7 +201,7 @@ export function buildAdminDriftReviewRoutes(options: {
             sendJson(res, 500, {
               error: toSanitizedMessage(error, 'Failed to resolve drift review card'),
             });
-          }
+          });
         });
       },
     },

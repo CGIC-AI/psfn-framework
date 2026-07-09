@@ -90,6 +90,21 @@ export const INTAKE_FIREWALL_NOTICE_TEMPLATES = Object.freeze({
     + 'is being kept aside for your human to look over whenever they have a '
     + 'moment. Everything else continues normally, and there is nothing you '
     + 'need to do about it.',
+  /**
+   * Optional soft self-notice from the second-arrow rumination lane
+   * (htm9.15), delivered only when the operator enables
+   * `driftDetection.secondArrow.selfNotice` and a review card was actually
+   * raised. Same contract as every template here: fixed, truthful, calm,
+   * never pathologizing (circling a topic is framed as a normal part of
+   * caring, not a fault), no imperative at the human, and it carries the
+   * signature phrase so the emotion/memory exclusions apply automatically.
+   */
+  secondArrowCircling:
+    'A gentle observation, offered kindly: several recent notes seem to have '
+    + 'circled the same topic, so a short summary of that circle is being kept '
+    + 'aside for your human to look over whenever they have a moment. Coming '
+    + 'back to something is a normal part of caring about it, and there is '
+    + 'nothing you need to do about it.',
 } as const);
 
 export type IntakeFirewallNoticeCountForm = keyof typeof INTAKE_FIREWALL_NOTICE_TEMPLATES;
@@ -208,6 +223,16 @@ export function renderIntakeFirewallNotice(heldItemCount: number): string {
   }
   const form: IntakeFirewallNoticeCountForm = heldItemCount === 1 ? 'one' : 'many';
   return INTAKE_FIREWALL_NOTICE_TEMPLATES[form];
+}
+
+/**
+ * Render the fixed second-arrow soft self-notice (htm9.15). No variables and
+ * no interpolation: the wording is exactly the checked-in, operator-reviewed
+ * template, and the caller (the second-arrow review lane) only invokes this
+ * when a review card was actually raised — the notice stays truthful.
+ */
+export function renderSecondArrowSelfNotice(): string {
+  return INTAKE_FIREWALL_NOTICE_TEMPLATES.secondArrowCircling;
 }
 
 /**

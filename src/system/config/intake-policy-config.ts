@@ -571,6 +571,61 @@ export interface IntakeDriftDetectionPolicyConfig {
     /** Share (0-1) of recent retrievals from one low-trust source to trigger. */
     maxLowTrustShare: number;
   };
+  /**
+   * Second-arrow (self-poisoning) rumination detection (htm9.15,
+   * src/core/cogsec/drift/second-arrow-*): near-duplicate memory stacking
+   * around one concern, detected by embedding-proximity clustering over
+   * recent memory writes. Same never-auto-mutate lane charter as the rest of
+   * driftDetection; the card proposes consolidation, the operator decides.
+   */
+  secondArrow: IntakeSecondArrowPolicyConfig;
+}
+
+/** Knobs for the second-arrow rumination review lane (htm9.15). */
+export interface IntakeSecondArrowPolicyConfig {
+  /** Switch for the nightly second-arrow scan (driftDetection.enabled still gates the family). */
+  enabled: boolean;
+  /** Recent-write window scanned for rumination stacks. */
+  windowHours: number;
+  /** Minimum stack size inside the window before a cluster can flag. */
+  minClusterSize: number;
+  /**
+   * Embedding cosine threshold (0-1) for both single-link cluster growth and
+   * the mean mutual-similarity gate. Rumination stacks are near-duplicates
+   * (very high mutual similarity); healthy recurring topics carry new
+   * information per write and sit well below this.
+   */
+  similarityThreshold: number;
+  /** Topic-baseline window preceding the recent window. */
+  baselineWindowDays: number;
+  /** Recent topic write rate must exceed the topic's own baseline rate by this multiple. */
+  velocityMultiplier: number;
+  /**
+   * Minimum share (0-1) of cluster writes that are self-sourced (reflection/
+   * heartbeat/autonomous/shard/tool writes rather than conversation turns).
+   * 0 disables the gate. Rumination stacks are self-generated; a topic the
+   * human genuinely raises every day arrives as turn-sourced writes.
+   */
+  minSelfSourcedShare: number;
+  /** Lexical (token-dice) similarity floor tying a cluster to one active concern. */
+  concernSimilarityMin: number;
+  /** Deterministic affect-correlation evidence over the cluster's creation window. */
+  stressAttribution: {
+    /** Minimum affect points required in BOTH window and baseline to evaluate. */
+    minPoints: number;
+    /** Window-vs-baseline shift (in baseline std units) that marks the evidence as notable. */
+    deltaSigmaThreshold: number;
+    /** Volatility floor so ultra-stable baselines don't divide toward infinity. */
+    minBaselineStd: number;
+  };
+  /**
+   * Optional companion-facing soft self-notice when a card is raised, worded
+   * per the htm9.12 language contract (fixed template, signature phrase, so
+   * the emotion/memory exclusions apply). Default OFF — the operator decides.
+   */
+  selfNotice: {
+    enabled: boolean;
+  };
 }
 
 export interface IntakePolicyConfig {
@@ -1046,6 +1101,95 @@ function validatePositiveNumber(value: unknown, sourcePath: string, field: strin
   return value;
 }
 
+function validateSecondArrow(
+  raw: unknown,
+  sourcePath: string,
+): IntakeSecondArrowPolicyConfig {
+  if (!isRecord(raw)) {
+    throw invalid(sourcePath, 'driftDetection.secondArrow must be an object');
+  }
+  const knownKeys = [
+    'enabled', 'windowHours', 'minClusterSize', 'similarityThreshold',
+    'baselineWindowDays', 'velocityMultiplier', 'minSelfSourcedShare',
+    'concernSimilarityMin', 'stressAttribution', 'selfNotice',
+  ];
+  const unknownKeys = Object.keys(raw).filter((key) => !knownKeys.includes(key));
+  if (unknownKeys.length > 0) {
+    throw invalid(sourcePath, `driftDetection.secondArrow has unsupported keys: ${unknownKeys.join(', ')}`);
+  }
+  if (typeof raw.enabled !== 'boolean') {
+    throw invalid(sourcePath, 'driftDetection.secondArrow.enabled must be a boolean (no implicit default)');
+  }
+
+  const stress = raw.stressAttribution;
+  if (!isRecord(stress)) {
+    throw invalid(sourcePath, 'driftDetection.secondArrow.stressAttribution must be an object');
+  }
+  const stressKeys = ['minPoints', 'deltaSigmaThreshold', 'minBaselineStd'];
+  const unknownStressKeys = Object.keys(stress).filter((key) => !stressKeys.includes(key));
+  if (unknownStressKeys.length > 0) {
+    throw invalid(
+      sourcePath,
+      `driftDetection.secondArrow.stressAttribution has unsupported keys: ${unknownStressKeys.join(', ')}`,
+    );
+  }
+
+  const notice = raw.selfNotice;
+  if (!isRecord(notice)) {
+    throw invalid(sourcePath, 'driftDetection.secondArrow.selfNotice must be an object');
+  }
+  const noticeKeys = ['enabled'];
+  const unknownNoticeKeys = Object.keys(notice).filter((key) => !noticeKeys.includes(key));
+  if (unknownNoticeKeys.length > 0) {
+    throw invalid(
+      sourcePath,
+      `driftDetection.secondArrow.selfNotice has unsupported keys: ${unknownNoticeKeys.join(', ')}`,
+    );
+  }
+  if (typeof notice.enabled !== 'boolean') {
+    throw invalid(sourcePath, 'driftDetection.secondArrow.selfNotice.enabled must be a boolean (no implicit default)');
+  }
+
+  return {
+    enabled: raw.enabled,
+    windowHours: validatePositiveInteger(
+      raw.windowHours, sourcePath, 'driftDetection.secondArrow.windowHours',
+    ),
+    minClusterSize: validatePositiveInteger(
+      raw.minClusterSize, sourcePath, 'driftDetection.secondArrow.minClusterSize',
+    ),
+    similarityThreshold: validateProbability(
+      raw.similarityThreshold, sourcePath, 'driftDetection.secondArrow.similarityThreshold',
+    ),
+    baselineWindowDays: validatePositiveInteger(
+      raw.baselineWindowDays, sourcePath, 'driftDetection.secondArrow.baselineWindowDays',
+    ),
+    velocityMultiplier: validatePositiveNumber(
+      raw.velocityMultiplier, sourcePath, 'driftDetection.secondArrow.velocityMultiplier',
+    ),
+    minSelfSourcedShare: validateProbability(
+      raw.minSelfSourcedShare, sourcePath, 'driftDetection.secondArrow.minSelfSourcedShare',
+    ),
+    concernSimilarityMin: validateProbability(
+      raw.concernSimilarityMin, sourcePath, 'driftDetection.secondArrow.concernSimilarityMin',
+    ),
+    stressAttribution: {
+      minPoints: validatePositiveInteger(
+        stress.minPoints, sourcePath, 'driftDetection.secondArrow.stressAttribution.minPoints',
+      ),
+      deltaSigmaThreshold: validatePositiveNumber(
+        stress.deltaSigmaThreshold, sourcePath, 'driftDetection.secondArrow.stressAttribution.deltaSigmaThreshold',
+      ),
+      minBaselineStd: validatePositiveNumber(
+        stress.minBaselineStd, sourcePath, 'driftDetection.secondArrow.stressAttribution.minBaselineStd',
+      ),
+    },
+    selfNotice: {
+      enabled: notice.enabled,
+    },
+  };
+}
+
 function validateDriftDetection(
   raw: unknown,
   sourcePath: string,
@@ -1053,7 +1197,7 @@ function validateDriftDetection(
   if (!isRecord(raw)) {
     throw invalid(sourcePath, 'driftDetection must be an object');
   }
-  const knownKeys = ['enabled', 'valenceVelocity', 'memoryWriteRate', 'labelFrequency', 'retrievalShare'];
+  const knownKeys = ['enabled', 'valenceVelocity', 'memoryWriteRate', 'labelFrequency', 'retrievalShare', 'secondArrow'];
   const unknownKeys = Object.keys(raw).filter((key) => !knownKeys.includes(key));
   if (unknownKeys.length > 0) {
     throw invalid(sourcePath, `driftDetection has unsupported keys: ${unknownKeys.join(', ')}`);
@@ -1160,6 +1304,7 @@ function validateDriftDetection(
         retrieval.maxLowTrustShare, sourcePath, 'driftDetection.retrievalShare.maxLowTrustShare',
       ),
     },
+    secondArrow: validateSecondArrow(raw.secondArrow, sourcePath),
   };
 }
 

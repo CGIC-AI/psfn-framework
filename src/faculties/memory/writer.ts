@@ -430,6 +430,27 @@ export class MemoryWriter {
     const targetSalience = clampUnit(salience ?? importance, importance);
 
     // 1. Check for exact duplicates (high threshold per type)
+    //
+    // ── htm9.15 dedup-gap finding (second-arrow rumination incident) ──
+    // This stage suppresses a write ONLY when the embedding neighbor ALSO has
+    // byte-identical normalized text (whitespace/case-folded, below). A
+    // restated worry — same topic, new phrasing, cosine ~0.9 — fails the text
+    // equality every time, and stage 2 (evolution reconciliation) only
+    // supersedes on explicit heuristic cues ("now/changed", negation, higher
+    // confidence), so plain restatements insert as `created` rows. Three
+    // compounding gaps let the historical concern-stack grow: (a) the top-3
+    // neighbor limit here means an already-stacked topic crowds genuine
+    // duplicates out of view; (b) writes across different memory `type`s
+    // (emotional vs semantic restatements) are never compared; (c) extraction
+    // runs are fire-and-forget with no cross-run lock, so two concurrent runs
+    // can both pass this check before either persists (TOCTOU). These are
+    // DESIGN choices that keep healthy paraphrase evolution alive, not simple
+    // bugs — so they are deliberately NOT changed here. The near-duplicate
+    // maintenance reviews queued below already flag these stacks as
+    // merge_candidates, and the second-arrow drift lane
+    // (src/core/cogsec/drift/second-arrow-signals.ts) now detects the
+    // rumination shape and routes an operator-reviewed consolidation proposal
+    // through Garden instead of auto-tightening dedup.
     const duplicates = await this.memoryStore.searchByEmbedding(
       embedding,
       DEDUP_THRESHOLD[type],

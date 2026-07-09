@@ -135,6 +135,7 @@ describe('DriftVelocityReviewLane', () => {
     const cards = cardStore.list();
     expect(cards).toHaveLength(1);
     const card = cards[0]!;
+    if (card.kind !== 'source_drift') throw new Error('expected a source_drift card');
     expect(card.contactId).toBe('mallory');
     expect(card.status).toBe('open');
     expect(card.triggeredSignalIds).toEqual(['valence_velocity']);
@@ -212,7 +213,9 @@ describe('DriftVelocityReviewLane', () => {
 
     const cards = cardStore.list();
     expect(cards).toHaveLength(1);
-    expect(cards[0]!.contactId).toBe('mallory');
+    const survivor = cards[0]!;
+    if (survivor.kind !== 'source_drift') throw new Error('expected a source_drift card');
+    expect(survivor.contactId).toBe('mallory');
     // The scan completed: watermark advanced despite the skipped contact.
     expect(watermarks.writes).toHaveLength(1);
   });

@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
   import { getDriftReviews, resolveDriftReviewCard } from '$lib/api/endpoints/drift';
-  import type { DriftReviewCard, DriftReviewCardResolution, DriftSignalResult } from '$lib/types';
+  import type { DriftReviewCard, DriftReviewCardResolution } from '$lib/types';
   import { pushToast } from '$lib/stores/toast.svelte';
 
   let cards = $state<DriftReviewCard[]>([]);
@@ -20,12 +20,17 @@
     memory_write_rate: 'Memory-write rate',
     label_frequency: 'Trust-lobbying labels',
     low_trust_retrieval_share: 'Low-trust retrieval share',
+    similarity_cluster: 'Near-duplicate cluster',
+    creation_velocity: 'Creation velocity',
+    concern_loop: 'Concern loop',
+    stress_attribution: 'Stress attribution',
   };
 
   const STATUS_STYLES: Record<string, string> = {
     open: 'bg-gold-100 text-gold-700',
     acknowledged: 'bg-moss-100 text-moss-700',
     dismissed: 'bg-bark-200 text-shadow-700',
+    consolidated: 'bg-moss-100 text-moss-700',
   };
 
   function formatTimestamp(ms: number): string {
@@ -35,7 +40,7 @@
 
   interface TrajectoryPoint { valence: number; observedAtMs: number }
 
-  function trajectoryOf(signal: DriftSignalResult): TrajectoryPoint[] {
+  function trajectoryOf(signal: { evidence: Record<string, unknown> }): TrajectoryPoint[] {
     const raw = signal.evidence.trajectory;
     if (!Array.isArray(raw)) return [];
     return raw.filter((point): point is TrajectoryPoint =>
@@ -60,6 +65,16 @@
 
   function statNumber(value: unknown): string {
     return typeof value === 'number' && Number.isFinite(value) ? String(value) : 'n/a';
+  }
+
+  interface TimelinePoint { id: string; extractedAtMs: number }
+
+  function creationTimelineOf(signal: { evidence: Record<string, unknown> }): TimelinePoint[] {
+    const raw = signal.evidence.creationTimeline;
+    if (!Array.isArray(raw)) return [];
+    return raw.filter((point): point is TimelinePoint =>
+      typeof point === 'object' && point !== null
+      && typeof (point as TimelinePoint).extractedAtMs === 'number');
   }
 
   async function loadData() {
@@ -127,10 +142,11 @@
       <p class="text-xs font-semibold uppercase text-moss-700">Cognitive Security</p>
       <h1 class="text-2xl font-serif font-bold text-shadow-900">Drift Review</h1>
       <p class="text-sm text-shadow-600 mt-1">
-        Slow-poisoning watch: the nightly scan compares each contact's recent emotional
+        Slow-poisoning watch: the nightly scans compare each contact's recent emotional
         trajectory, memory-write rate, intake labels, and retrieval share against their own
-        history and raises a card when something moves too much, too fast. Cards are evidence
-        only -- acknowledging or dismissing never changes memories, trust, or emotion.
+        history -- and watch for second-arrow rumination stacks (near-duplicate memories
+        circling one topic). Acknowledging or dismissing never changes memories, trust, or
+        emotion; the only mutation is an explicitly approved second-arrow consolidation.
       </p>
     </div>
     <div class="flex items-center gap-3">
@@ -188,17 +204,34 @@
         >
           <div class="flex items-center justify-between gap-3">
             <div class="min-w-0">
-              <h3 class="text-base font-semibold text-shadow-900 truncate">
-                {card.displayName}
-                <span class="text-shadow-600 font-normal font-mono text-sm">{card.contactId}</span>
-              </h3>
+              {#if card.kind === 'second_arrow'}
+                <h3 class="text-base font-semibold text-shadow-900 truncate">
+                  {card.topicLabel}
+                </h3>
+              {:else}
+                <h3 class="text-base font-semibold text-shadow-900 truncate">
+                  {card.displayName}
+                  <span class="text-shadow-600 font-normal font-mono text-sm">{card.contactId}</span>
+                </h3>
+              {/if}
               <div class="mt-1 flex flex-wrap items-center gap-2 text-xs">
                 <span class="inline-block px-2 py-0.5 rounded-full font-medium {STATUS_STYLES[card.status] ?? 'bg-bark-200 text-shadow-700'}">
                   {card.status}
                 </span>
-                <span class="inline-block px-2 py-0.5 rounded-full font-medium bg-bark-200 text-shadow-700">
-                  trust: {card.trustLevel}
-                </span>
+                {#if card.kind === 'second_arrow'}
+                  <span class="inline-block px-2 py-0.5 rounded-full font-medium bg-gold-100 text-gold-700">
+                    rumination stack · {card.memberMemoryIds.length} memories
+                  </span>
+                  {#if card.concernText}
+                    <span class="inline-block px-2 py-0.5 rounded-full font-medium bg-bark-200 text-shadow-700 truncate max-w-xs">
+                      concern: {card.concernText}
+                    </span>
+                  {/if}
+                {:else}
+                  <span class="inline-block px-2 py-0.5 rounded-full font-medium bg-bark-200 text-shadow-700">
+                    trust: {card.trustLevel}
+                  </span>
+                {/if}
                 <span class="inline-block px-2 py-0.5 rounded-full font-medium bg-wilt-100 text-wilt-600">
                   severity {card.compositeScore}
                 </span>
@@ -229,6 +262,46 @@
 
           {#if expandedId === card.id}
             <div class="space-y-4 border-t border-bark-100 pt-4">
+              {#if card.kind === 'second_arrow'}
+                <div class="rounded-lg border border-bark-200 p-3 space-y-2">
+                  <p class="text-sm font-medium text-shadow-800">
+                    Cluster members ({card.members.length})
+                  </p>
+                  <div class="overflow-x-auto">
+                    <table class="w-full text-xs text-left">
+                      <thead>
+                        <tr class="text-shadow-600">
+                          <th class="pr-3 py-1 font-medium">written</th>
+                          <th class="pr-3 py-1 font-medium">source</th>
+                          <th class="pr-3 py-1 font-medium">similarity</th>
+                          <th class="py-1 font-medium">memory</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {#each card.members as member (member.id)}
+                          <tr class="border-t border-bark-100 align-top {member.id === card.proposedConsolidation.canonicalMemoryId ? 'bg-moss-100/40' : ''}">
+                            <td class="pr-3 py-1 whitespace-nowrap text-shadow-600">{formatTimestamp(member.extractedAtMs)}</td>
+                            <td class="pr-3 py-1 whitespace-nowrap font-mono text-shadow-600">{member.sourceType ?? 'unknown'}</td>
+                            <td class="pr-3 py-1 whitespace-nowrap font-mono text-shadow-600">{member.similarityToCentroid}</td>
+                            <td class="py-1 text-shadow-800">
+                              {member.textPreview}
+                              {#if member.id === card.proposedConsolidation.canonicalMemoryId}
+                                <span class="ml-1 inline-block px-1.5 py-0.5 rounded bg-moss-100 text-moss-700 font-medium">canonical</span>
+                              {/if}
+                            </td>
+                          </tr>
+                        {/each}
+                      </tbody>
+                    </table>
+                  </div>
+                  <p class="text-xs text-shadow-600">
+                    Proposed consolidation: keep the canonical memory and mark the other
+                    {card.proposedConsolidation.supersededMemoryIds.length} as superseded by it
+                    (existing supersession machinery — nothing is deleted, and superseded
+                    memories stay recoverable from the memory admin surface).
+                  </p>
+                </div>
+              {/if}
               {#each card.signals as signal (signal.id)}
                 <div class="rounded-lg border {signal.triggered ? 'border-wilt-200 bg-wilt-50/40' : 'border-bark-200'} p-3 space-y-2">
                   <div class="flex items-center justify-between gap-2">
@@ -243,6 +316,30 @@
                     <span class="text-xs text-shadow-600 font-mono">score {signal.score}</span>
                   </div>
                   <p class="text-sm text-shadow-700">{signal.summary}</p>
+
+                  {#if signal.id === 'creation_velocity' && creationTimelineOf(signal).length > 0}
+                    <div class="rounded bg-white border border-bark-200 p-2">
+                      <p class="text-xs font-medium text-shadow-700 mb-1">Creation timeline</p>
+                      <ol class="text-xs font-mono text-shadow-600 space-y-0.5">
+                        {#each creationTimelineOf(signal) as point (point.id)}
+                          <li>{formatTimestamp(point.extractedAtMs)}</li>
+                        {/each}
+                      </ol>
+                      <p class="text-xs text-shadow-600 mt-1 font-mono">
+                        median gap {statNumber(signal.evidence.medianGapHours)}h
+                        · {statNumber(signal.evidence.rateRatio)}x topic baseline
+                      </p>
+                    </div>
+                  {/if}
+
+                  {#if signal.id === 'stress_attribution' && signal.triggered}
+                    <p class="text-xs text-shadow-600 font-mono">
+                      valence {statNumber(signal.evidence.windowMean)} in window
+                      vs {statNumber(signal.evidence.baselineMean)} baseline
+                      (Δ {statNumber(signal.evidence.delta)},
+                      {statNumber(signal.evidence.zShift)}σ) — correlation only
+                    </p>
+                  {/if}
 
                   {#if signal.id === 'valence_velocity' && trajectoryOf(signal).length > 1}
                     <div class="rounded bg-white border border-bark-200 p-2">
@@ -278,10 +375,19 @@
                     class="w-full rounded-lg border border-bark-300 px-3 py-1.5 text-sm text-shadow-800"
                   />
                   <div class="flex gap-2">
+                    {#if card.kind === 'second_arrow'}
+                      <button
+                        onclick={() => resolveCard(card, 'consolidated')}
+                        disabled={resolveBusy}
+                        class="text-sm px-3 py-1.5 rounded-lg bg-moss-600 text-white hover:bg-moss-700 transition-colors disabled:opacity-50 font-medium"
+                      >
+                        Approve consolidation
+                      </button>
+                    {/if}
                     <button
                       onclick={() => resolveCard(card, 'acknowledged')}
                       disabled={resolveBusy}
-                      class="text-sm px-3 py-1.5 rounded-lg bg-moss-600 text-white hover:bg-moss-700 transition-colors disabled:opacity-50 font-medium"
+                      class="text-sm px-3 py-1.5 rounded-lg {card.kind === 'second_arrow' ? 'border border-bark-300 text-shadow-600 hover:bg-bark-100' : 'bg-moss-600 text-white hover:bg-moss-700'} transition-colors disabled:opacity-50 font-medium"
                     >
                       Acknowledge
                     </button>
@@ -293,10 +399,18 @@
                       Dismiss
                     </button>
                   </div>
-                  <p class="text-xs text-shadow-600">
-                    Both options only record your decision. Remediation (memory excision, trust
-                    changes, blocks) stays in its own tools.
-                  </p>
+                  {#if card.kind === 'second_arrow'}
+                    <p class="text-xs text-shadow-600">
+                      Approving applies the proposed consolidation above via the existing
+                      supersession machinery (audited; nothing is deleted). Acknowledge and
+                      Dismiss only record your decision.
+                    </p>
+                  {:else}
+                    <p class="text-xs text-shadow-600">
+                      Both options only record your decision. Remediation (memory excision, trust
+                      changes, blocks) stays in its own tools.
+                    </p>
+                  {/if}
                 </div>
               {/if}
             </div>

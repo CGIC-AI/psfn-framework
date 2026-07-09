@@ -90,8 +90,13 @@ export type {
   AdminDriftReviewListData,
   DriftReviewCard,
   DriftReviewCardResolution,
+  SecondArrowReviewCard,
 } from '../../../../src/operator/garden/services/types.js';
 export type { DriftSignalResult } from '../../../../src/core/cogsec/drift/drift-signals.js';
+export type {
+  SecondArrowClusterMember,
+  SecondArrowSignalResult,
+} from '../../../../src/core/cogsec/drift/second-arrow-signals.js';
 export type {
   IntakePolicyConfig,
   IntakeSourceListEntry,

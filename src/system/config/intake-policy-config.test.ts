@@ -187,6 +187,77 @@ describe('intake policy owner file', () => {
     expect(policy.driftDetection.retrievalShare.maxLowTrustShare).toBeLessThanOrEqual(1);
   });
 
+  it('validates the driftDetection.secondArrow seed section (htm9.15)', () => {
+    const policy = seedPolicy();
+    const secondArrow = policy.driftDetection.secondArrow;
+    expect(secondArrow.enabled).toBe(true);
+    expect(secondArrow.minClusterSize).toBeGreaterThanOrEqual(2);
+    expect(secondArrow.similarityThreshold).toBeGreaterThan(0);
+    expect(secondArrow.similarityThreshold).toBeLessThanOrEqual(1);
+    expect(secondArrow.velocityMultiplier).toBeGreaterThan(0);
+    expect(secondArrow.stressAttribution.minPoints).toBeGreaterThanOrEqual(1);
+    // The soft self-notice ships OFF: the operator opts in explicitly.
+    expect(secondArrow.selfNotice.enabled).toBe(false);
+  });
+
+  it('fails closed on missing, unknown-keyed, or malformed secondArrow config', () => {
+    const policy = seedPolicy();
+    const { secondArrow: _dropped, ...withoutSecondArrow } = policy.driftDetection;
+    expect(() => validateIntakePolicy(
+      { ...policy, driftDetection: withoutSecondArrow },
+      INTAKE_POLICY_FILE_NAME,
+    )).toThrow(/driftDetection.secondArrow must be an object/);
+    expect(() => validateIntakePolicy(
+      {
+        ...policy,
+        driftDetection: {
+          ...policy.driftDetection,
+          secondArrow: { ...policy.driftDetection.secondArrow, autoConsolidate: true },
+        },
+      },
+      INTAKE_POLICY_FILE_NAME,
+    )).toThrow(/secondArrow has unsupported keys: autoConsolidate/);
+    expect(() => validateIntakePolicy(
+      {
+        ...policy,
+        driftDetection: {
+          ...policy.driftDetection,
+          secondArrow: { ...policy.driftDetection.secondArrow, similarityThreshold: 1.2 },
+        },
+      },
+      INTAKE_POLICY_FILE_NAME,
+    )).toThrow(/similarityThreshold must be a finite number in \[0, 1\]/);
+    expect(() => validateIntakePolicy(
+      {
+        ...policy,
+        driftDetection: {
+          ...policy.driftDetection,
+          secondArrow: {
+            ...policy.driftDetection.secondArrow,
+            selfNotice: { enabled: 'yes' },
+          },
+        },
+      },
+      INTAKE_POLICY_FILE_NAME,
+    )).toThrow(/selfNotice.enabled must be a boolean/);
+    expect(() => validateIntakePolicy(
+      {
+        ...policy,
+        driftDetection: {
+          ...policy.driftDetection,
+          secondArrow: {
+            ...policy.driftDetection.secondArrow,
+            stressAttribution: {
+              ...policy.driftDetection.secondArrow.stressAttribution,
+              minPoints: 0,
+            },
+          },
+        },
+      },
+      INTAKE_POLICY_FILE_NAME,
+    )).toThrow(/stressAttribution.minPoints must be an integer >= 1/);
+  });
+
   it('fails closed on missing, unknown-keyed, or malformed driftDetection config', () => {
     const policy = seedPolicy();
     const { driftDetection: _dropped, ...withoutDrift } = policy;

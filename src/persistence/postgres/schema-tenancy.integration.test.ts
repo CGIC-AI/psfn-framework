@@ -144,7 +144,7 @@ describe('Postgres schema tenancy plumbing', () => {
   );
 
   it(
-    'provisions the shared world schema with its own version ledger and no world tables',
+    'provisions the base shared world schema with its current version ledger',
     async () => {
       const databaseUrl = await freshDatabaseUrl();
       await bootstrapSharedSchema(databaseUrl);
@@ -160,23 +160,30 @@ describe('Postgres schema tenancy plumbing', () => {
         );
         expect(schemaExists.rows).toHaveLength(1);
 
-        // Version ledger seeded with the baseline; no world tables yet.
+        // The base shared chain owns presence. Optional pgvector-backed shared
+        // wiki tables run through a separate migration list and are absent.
         const version = await pool.query<{ version: number; name: string }>(
           `SELECT version, name FROM shared.shared_schema_migrations ORDER BY version`,
         );
-        expect(version.rows).toEqual([{ version: 1, name: 'shared-schema-baseline' }]);
+        expect(version.rows).toEqual([
+          { version: 1, name: 'shared-schema-baseline' },
+          { version: 2, name: 'companion-presence' },
+        ]);
 
         const sharedTables = await pool.query<{ table_name: string }>(
           `SELECT table_name FROM information_schema.tables WHERE table_schema = 'shared' ORDER BY table_name`,
         );
-        expect(sharedTables.rows.map(r => r.table_name)).toEqual(['shared_schema_migrations']);
+        expect(sharedTables.rows.map(r => r.table_name)).toEqual([
+          'companion_presence',
+          'shared_schema_migrations',
+        ]);
 
         // Idempotent: re-running does not duplicate the ledger row.
         await ensureSharedSchema(pool);
         const versionAgain = await pool.query<{ count: string }>(
           `SELECT COUNT(*)::text AS count FROM shared.shared_schema_migrations`,
         );
-        expect(versionAgain.rows[0]?.count).toBe('1');
+        expect(versionAgain.rows[0]?.count).toBe('2');
       } finally {
         await pool.end();
       }

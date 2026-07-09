@@ -184,9 +184,9 @@ describe('GitOps', () => {
       expect(() => ops.validatePath('docs/README.md')).not.toThrow();
     });
 
-    it('allows paths in psfn/', () => {
+    it('blocks paths in psfn/ outside the canonical repo edit allowlist', () => {
       const ops = createGitOps();
-      expect(() => ops.validatePath('psfn/x.ts')).not.toThrow();
+      expect(() => ops.validatePath('psfn/x.ts')).toThrow('Path not in allowed directories');
     });
 
     it('blocks path traversal with ../', () => {

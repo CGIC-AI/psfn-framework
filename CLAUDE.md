@@ -91,6 +91,7 @@ Canonical mutable config owners live in the system-owned config domain:
 - `channels.json`
 - `skills.json`
 - `trust-policy.json`
+- `intake-policy.json`
 - `charge-policy.json`
 - `backup.json`
 

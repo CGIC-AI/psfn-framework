@@ -19,6 +19,7 @@ import {
   VALID_SENSITIVITY_LEVELS,
   type SensitivityLevel,
 } from '../../system/trust/types.js';
+import { appendIntakeEnvelopeProvenanceRef } from '../../shared/contracts/intake-envelope.js';
 import {
   isPersonalScope,
   normalizeWikiScope,
@@ -388,7 +389,16 @@ export class WikiDocumentStore {
     const id = normalizeWikiDocumentId(input.id, title);
     const body = normalizeBody(input.body);
     const sourceClass = normalizeSourceClass(input.sourceClass);
-    const provenanceRefs = normalizeStringArray(input.provenanceRefs, 'provenanceRef', MAX_PROVENANCE_REF_CHARS);
+    // htm9.1: stamp the originating intake-envelope id as a canonical
+    // provenance ref so poisoned-source lineage stays excisable.
+    const provenanceRefs = normalizeStringArray(
+      appendIntakeEnvelopeProvenanceRef(
+        typeof input.provenanceRefs === 'string' ? input.provenanceRefs.split(',') : input.provenanceRefs,
+        input.intakeEnvelopeId,
+      ),
+      'provenanceRef',
+      MAX_PROVENANCE_REF_CHARS,
+    );
     ensureProvenance(sourceClass, provenanceRefs);
     // Fail-closed scope guard. The injected policy decides which scope this
     // store may write: the personal store rejects any shared_world scope (the

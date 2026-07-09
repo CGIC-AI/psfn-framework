@@ -70,6 +70,13 @@ export interface WikiDocumentUpsertInput {
   scope?: WikiScope;
   summary?: string;
   updatedBy?: string;
+  /**
+   * htm9.1: originating cognition-intake envelope id. When set, the write is
+   * stamped with the canonical `intake-envelope:<id>` provenance ref so a
+   * poisoned source's lineage stays excisable later. A malformed id fails
+   * the write (fail closed), never silently drops.
+   */
+  intakeEnvelopeId?: string;
 }
 
 export interface WikiSearchInput {

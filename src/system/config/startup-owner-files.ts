@@ -49,6 +49,12 @@ import {
   isMultiCompanionEnabled,
   resolveCompanionFleet,
 } from './companions-config.js';
+import {
+  loadIntakePolicyConfig,
+  type IntakePolicyConfig,
+  INTAKE_POLICY_FILE_NAME,
+  INTAKE_POLICY_SEED_FILE_NAME,
+} from './intake-policy-config.js';
 
 export interface StartupOwnerFileLoadOptions {
   dataDir: string;
@@ -187,6 +193,13 @@ export function loadStartupCompanionsOwnerFile(
   });
 }
 
+export function loadStartupIntakePolicyOwnerFile(
+  dataDir: string,
+  seedDir?: string,
+): IntakePolicyConfig {
+  return loadIntakePolicyConfig(dataDir, seedDir ? { seedDir } : undefined);
+}
+
 export function verifyStartupOwnerFiles(
   options: StartupOwnerFileLoadOptions,
 ): StartupOwnerFileVerificationResult {
@@ -262,6 +275,12 @@ export function verifyStartupOwnerFiles(
         seedDir: options.seedDir,
         multiCompanion: options.multiCompanion,
       }),
+    },
+    {
+      label: 'intake-policy',
+      dataPath: join(options.dataDir, INTAKE_POLICY_FILE_NAME),
+      seedPath: join(seedDir, INTAKE_POLICY_SEED_FILE_NAME),
+      run: () => loadStartupIntakePolicyOwnerFile(options.dataDir, options.seedDir),
     },
   ];
 

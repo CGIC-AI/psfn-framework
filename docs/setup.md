@@ -54,6 +54,7 @@ Mutable runtime/admin configuration lives under the system-data config domain:
 - `channels.json`
 - `skills.json`
 - `trust-policy.json`
+- `intake-policy.json`
 - `charge-policy.json`
 - `backup.json`
 
@@ -84,6 +85,7 @@ Startup verifies the seed-backed owner files before the split runtime comes up. 
    cp config/scheduler.seed.json ./data/scheduler.json
    cp config/capability-tier.seed.json ./data/capability-tier.json
    cp config/trust-policy.seed.json ./data/trust-policy.json
+   cp config/intake-policy.seed.json ./data/intake-policy.json
    cp config/charge-policy.seed.json ./data/charge-policy.json
    cp config/backup.seed.json ./data/backup.json
    cp config/skills.seed.json ./data/skills.json

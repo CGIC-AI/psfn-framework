@@ -1006,6 +1006,8 @@ export class AdminSettingsDataService implements AdminSettingsService {
           return JSON.stringify(this.deps.configStore.loadScheduler(), null, 2);
         case 'trust-policy':
           return JSON.stringify(this.deps.configStore.loadTrustPolicy(), null, 2);
+        case 'intake-policy':
+          return JSON.stringify(this.deps.configStore.loadIntakePolicy(), null, 2);
         case 'capabilities':
           return JSON.stringify(this.deps.configStore.loadCapabilityTier(), null, 2);
         case 'charge-policy':
@@ -1099,6 +1101,10 @@ export class AdminSettingsDataService implements AdminSettingsService {
           this.deps.configStore.saveTrustPolicy(parsed);
           invalidatePromptCacheAfterOwnerMutation(this.deps.config, 'owner-file:trust-policy');
           return { ok: true, message: 'trust-policy.json saved' };
+        }
+        case 'intake-policy': {
+          this.deps.configStore.saveIntakePolicy(parsed);
+          return { ok: true, message: 'intake-policy.json saved' };
         }
         default:
           return { ok: false, message: `Unknown settings subsystem: ${key}` };

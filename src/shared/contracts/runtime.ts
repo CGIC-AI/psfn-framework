@@ -15,6 +15,7 @@ import type {
 } from './charge-policy.js';
 import type { SatelliteRoutingMetadata } from './satellite-registry.js';
 import type { GatewayRoutingEnvelope } from '../routing/envelope.js';
+import type { IntakeEnvelopeSnapshot } from './intake-envelope.js';
 
 // ── Channel-agnostic message types ──
 
@@ -271,6 +272,16 @@ export interface MessageRoutingMetadata {
     modelPurpose: ModelPurpose;
     failClosed: boolean;
   };
+  /**
+   * htm9.1: cognition intake firewall envelope references. Point-in-time
+   * snapshots of the IntakeEnvelope(s) covering this message's body and/or
+   * attachments (see src/shared/contracts/intake-envelope.ts). Optional and
+   * additive: adapters/gateway stamp it as the firewall epic lands (htm9.2+);
+   * absence means the message predates or bypasses intake screening. The
+   * envelope journal stays authoritative — this is a cheap read for sink
+   * gates and prompt assembly.
+   */
+  intakeEnvelopes?: readonly IntakeEnvelopeSnapshot[];
 }
 
 export interface SubstrateMessage {

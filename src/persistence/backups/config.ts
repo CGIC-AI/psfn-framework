@@ -27,6 +27,12 @@ export interface BackupRuntimeConfig {
   /** When non-empty, completed backups are mirrored here. */
   mirrorDir: string;
   verifyRestore: boolean;
+  /**
+   * Multi-companion backup shape (see {@link BackupJsonConfig.groupMode}). Only
+   * consulted by the fleet backup orchestrator under the multi-companion flag;
+   * inert in single-companion topology.
+   */
+  groupMode: boolean;
   encryption: BackupEncryptionRuntimeConfig;
 }
 
@@ -94,6 +100,10 @@ export function resolveBackupRuntimeConfig(
     verifyRestore: parseBooleanEnv(
       env.BACKUP_VERIFY_RESTORE,
       jsonConfig.verifyRestore,
+    ),
+    groupMode: parseBooleanEnv(
+      env.BACKUP_GROUP_MODE,
+      jsonConfig.groupMode,
     ),
     encryption: {
       mode: 'required',

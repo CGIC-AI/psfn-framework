@@ -22,6 +22,8 @@ export interface PostgresIntentionPorts {
 export interface PostgresIntentionPortOptions {
   pool?: Pool;
   applicationName?: string;
+  /** Optional per-companion Postgres schema; pins the pool's search_path. */
+  schema?: string;
   now?: () => Date;
   idFactory?: () => string;
   promotionHook?: BehavioralPatternPromotionHook | null;

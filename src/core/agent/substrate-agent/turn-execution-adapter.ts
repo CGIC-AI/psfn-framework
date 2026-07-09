@@ -10,6 +10,7 @@ import type { RuntimeMode } from '../tool-wiring-validator.js';
 import type { EventBridge } from '../event-bridge.js';
 import type { LLMProviderPort, MemoryExtractor, MemoryProvider, WikiRetrievalPort } from '../contracts.js';
 import type { SatellitePresencePort } from '../satellite-adapter-port.js';
+import type { CompanionPresenceTurnPort } from '../companion-presence-runtime.js';
 import type { SkillsRuntime } from '../../../faculties/skills/runtime.js';
 import type { TurnToolSummary } from '../../../faculties/skills/reflection-nudge.js';
 import type { TrustLevel } from '../../../system/trust/types.js';
@@ -140,6 +141,8 @@ export interface TurnExecutionAdapterOptions {
   costTelemetry: CostTelemetryPort;
   fatigueBudget?: FatigueBudgetPort | null;
   satellitePresence: SatellitePresencePort;
+  /** Cross-companion presence (W5a); absent/null skips presence writes. */
+  companionPresence?: CompanionPresenceTurnPort | null;
   llmClient: LLMProviderPort;
   imageVisionReviewer: ImageVisionReviewer | null;
   sessionManager: SessionManager;
@@ -151,6 +154,14 @@ export interface TurnExecutionAdapterOptions {
   memoryProvider: MemoryProvider | null;
   memoryExtractor: MemoryExtractor | null;
   wikiRetrieval: WikiRetrievalPort | null;
+  placesRegistry?: import('../../../shared/contracts/places-registry.js').PlacesRegistryConfig | undefined;
+  /** Fallback situated place for placeless turns (dual-presence seam, vinz.29). */
+  resolveSituatedFallbackPlaceId?: (message: SubstrateMessage) => string | undefined;
+  /** Virtual-activity presence follow (vinz.21); absent skips the evaluation. */
+  followVirtualRoomActivity?: (
+    message: SubstrateMessage,
+    author: import('../virtual-room-follow.js').VirtualFollowAuthorContext,
+  ) => Promise<void>;
   skillsRuntime: SkillsRuntime | null;
   evaluateReflectionNudge: (toolSummary: TurnToolSummary) => string | null;
   emotionSelfModelRuntime: EmotionSelfModelRuntime;
@@ -170,6 +181,7 @@ export function createTurnExecutionRuntimeAdapter(
     costTelemetry: options.costTelemetry,
     fatigueBudget: options.fatigueBudget ?? null,
     satellitePresence: options.satellitePresence,
+    companionPresence: options.companionPresence ?? null,
     llmClient: options.llmClient,
     imageVisionReviewer: options.imageVisionReviewer,
     sessionManager: options.sessionManager,
@@ -183,6 +195,13 @@ export function createTurnExecutionRuntimeAdapter(
     memoryProvider: options.memoryProvider,
     memoryExtractor: options.memoryExtractor,
     wikiRetrieval: options.wikiRetrieval,
+    placesRegistry: options.placesRegistry,
+    ...(options.resolveSituatedFallbackPlaceId
+      ? { resolveSituatedFallbackPlaceId: options.resolveSituatedFallbackPlaceId }
+      : {}),
+    ...(options.followVirtualRoomActivity
+      ? { followVirtualRoomActivity: options.followVirtualRoomActivity }
+      : {}),
     skillsRuntime: options.skillsRuntime,
     evaluateReflectionNudge: (toolSummary) => options.evaluateReflectionNudge(toolSummary),
     emotionSelfModelRuntime: options.emotionSelfModelRuntime,

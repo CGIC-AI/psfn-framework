@@ -2,7 +2,10 @@ import { describe, expect, it } from 'vitest';
 
 import {
   POSTGRES_CONTACT_MIGRATIONS,
+  POSTGRES_ENROLLMENT_MIGRATIONS,
   POSTGRES_MEMORY_MIGRATIONS,
+  POSTGRES_SHARED_MIGRATIONS,
+  POSTGRES_SHARED_WIKI_MIGRATIONS,
 } from './migrations.js';
 
 function migrationSql(statements: readonly string[]): string {
@@ -81,5 +84,96 @@ describe('Postgres live schema migrations', () => {
     expect(sql).toContain('CREATE TABLE IF NOT EXISTS social_relationship_edges');
     expect(sql).toContain('contact_id TEXT UNIQUE');
     expect(sql).toContain('evidence_memory_ids JSONB NOT NULL DEFAULT');
+  });
+
+  it('extends the shared chain with companion_presence as versioned migration 2 (W5a)', () => {
+    const sql = migrationSql(POSTGRES_SHARED_MIGRATIONS);
+
+    expect(sql).toContain('CREATE TABLE IF NOT EXISTS companion_presence');
+    expect(sql).toContain('companion_id UUID PRIMARY KEY');
+    expect(sql).toContain("CHECK (kind IN ('physical', 'virtual'))");
+    expect(sql).toContain('since TIMESTAMPTZ NOT NULL DEFAULT now()');
+    expect(sql).toContain('updated_at TIMESTAMPTZ NOT NULL DEFAULT now()');
+    // Co-presence read path is always keyed by (site_id, place_id).
+    expect(sql).toContain('CREATE INDEX IF NOT EXISTS idx_companion_presence_place');
+    expect(sql).toContain('ON companion_presence (site_id, place_id)');
+
+    // The versioned ledger chain stays intact: ledger first, then baseline,
+    // then the presence version.
+    expect(sql.indexOf('CREATE TABLE IF NOT EXISTS shared_schema_migrations')).toBeLessThan(
+      sql.indexOf("VALUES (1, 'shared-schema-baseline')"),
+    );
+    expect(sql.indexOf("VALUES (1, 'shared-schema-baseline')")).toBeLessThan(
+      sql.indexOf('CREATE TABLE IF NOT EXISTS companion_presence'),
+    );
+    expect(sql).toContain("VALUES (2, 'companion-presence')");
+  });
+
+  it('extends the shared ledger with shared_wiki_chunks as versioned migration 3 (s10f9)', () => {
+    const sql = migrationSql(POSTGRES_SHARED_WIKI_MIGRATIONS);
+
+    expect(sql).toContain('CREATE TABLE IF NOT EXISTS shared_wiki_chunks');
+    // Document ids repeat across sites (`site-overview`), so the key is
+    // site-qualified — never (document_id, chunk_index) alone.
+    expect(sql).toContain('PRIMARY KEY (site_id, document_id, chunk_index)');
+    // Shape mirrors the per-companion wiki_document_chunks table (+ site_id)
+    // so chunk query code stays uniform across both projections.
+    for (const column of [
+      'site_id TEXT NOT NULL',
+      'document_id TEXT NOT NULL',
+      'chunk_index INTEGER NOT NULL',
+      'body_sha256 TEXT NOT NULL',
+      'title TEXT NOT NULL',
+      'body_path TEXT NOT NULL',
+      'source_class TEXT NOT NULL',
+      "sensitivity TEXT NOT NULL DEFAULT 'personal'",
+      'scope TEXT NOT NULL',
+      'chunk_text TEXT NOT NULL',
+      'chunk_char_count INTEGER NOT NULL',
+      'embedding VECTOR NOT NULL',
+      'updated_at BIGINT NOT NULL',
+    ]) {
+      expect(sql).toContain(column);
+    }
+    // The DB itself refuses a personal-scoped (or cross-site mis-scoped) row:
+    // scope is derived from site_id, closing the W5b leak surface in-schema.
+    expect(sql).toContain("CHECK (scope = 'shared_world:' || site_id)");
+    expect(sql).toContain('CREATE INDEX IF NOT EXISTS idx_shared_wiki_chunks_site ON shared_wiki_chunks(site_id)');
+    expect(sql).toContain('CREATE INDEX IF NOT EXISTS idx_shared_wiki_chunks_scope ON shared_wiki_chunks(scope)');
+    // Deterministic pgvector placement for the shared chain.
+    expect(sql).toContain('CREATE EXTENSION IF NOT EXISTS vector WITH SCHEMA public;');
+    // Ledger discipline: table before its version registration.
+    expect(sql.indexOf('CREATE TABLE IF NOT EXISTS shared_wiki_chunks')).toBeLessThan(
+      sql.indexOf("VALUES (3, 'shared-wiki-chunks')"),
+    );
+    expect(sql).toContain("VALUES (3, 'shared-wiki-chunks')");
+
+    // The wiki chain is deliberately SEPARATE from the base shared chain: the
+    // base chain must stay runnable on plain Postgres (no pgvector) for
+    // pgvector-free shared consumers like companion_presence.
+    const baseSql = migrationSql(POSTGRES_SHARED_MIGRATIONS);
+    expect(baseSql).not.toMatch(/vector/i);
+    expect(baseSql).not.toContain('shared_wiki_chunks');
+  });
+
+  it('creates the hub-identity enrollment binding + audit tables bound to contacts', () => {
+    const sql = migrationSql(POSTGRES_ENROLLMENT_MIGRATIONS);
+
+    expect(sql).toContain('CREATE TABLE IF NOT EXISTS hub_identity_enrollments');
+    expect(sql).toContain('hub_identity_id TEXT PRIMARY KEY');
+    expect(sql).toContain('contact_id TEXT NOT NULL REFERENCES contacts(id) ON DELETE CASCADE');
+    expect(sql).toContain('CREATE TABLE IF NOT EXISTS hub_identity_enrollment_audit');
+
+    for (const column of ['satellite_id', 'endpoint_id']) {
+      expectAddColumn(sql, 'hub_identity_enrollments', column);
+    }
+
+    // The binding table must exist before its indexes are created.
+    expect(sql.indexOf('CREATE TABLE IF NOT EXISTS hub_identity_enrollments')).toBeLessThan(
+      sql.indexOf('CREATE INDEX IF NOT EXISTS idx_hub_identity_enrollments_contact'),
+    );
+
+    // No biometric/template column is ever declared — core stores only the handle.
+    expect(sql).not.toMatch(/biometric|embedding|template|face_vector/i);
   });
 });

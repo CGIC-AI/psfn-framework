@@ -155,6 +155,48 @@ Notes:
 - Heavy memory passes (sleep consolidation, arc weaving, dream meaning,
   orientation rewrite) are rest-window only — see `docs/architecture.md`.
 
+## 5. Situated presence and companion-room delivery
+
+Two location-aware surfaces enter the turn: the situated-presence context block
+(prompt assembly) and presence-windowed delivery for private companion rooms
+(inbound + context serving). The block and per-turn presence classification are
+always on; co-presence and windowed cross-companion delivery activate only under
+the multi-companion flag.
+
+- **Prompt assembly — presence mode + situated block.** Each turn is classified
+  into a presence mode from its device origin (`classifyTurnPresenceMode`,
+  `runtime-context-sections/turn-presence-mode.ts`): `physical` when the inbound
+  origin is a satellite/voice endpoint (the companion emanates into that real
+  room, whose `placeId` foregrounds directly), or `mindspace` for a plain chat
+  channel (the companion is co-located with the partner in a virtual twin of the
+  last-known physical room, resolved via `mirrorsPlaceId`;
+  `resolveTurnSituatedFallbackPlaceId`). The situated block
+  (`runtime-context-sections/situated-presence.ts`) then renders where the
+  companion is, its perceivers/effectors, and — under multi-companion — who else
+  is co-present (`Also here:`). A turn with no resolvable place renders no block;
+  the companion never fabricates a location.
+- **Co-presence.** Cross-companion presence is read from `companion_presence` in
+  the shared schema (`CompanionPresenceRuntime`,
+  `src/core/agent/companion-presence-runtime.ts`); a companion arriving where a
+  peer is present emits a `presence.companion.co_located` event once per arrival.
+- **Windowed private-room delivery (Q-C).** A place with `privacy: "private"`
+  (`places-registry.ts`) delivers its `companion-room:<placeId>` chat
+  presence-windowed at two points: the gateway fan-out excludes recipients whose
+  presence `since` is later than the message timestamp
+  (`GatewayCompanionChannelLane.resolveDelivery`,
+  `src/boundary/gateway/companion-channels.ts`), and context serving floors the
+  visible window at the occupant's own current `since`
+  (`createCompanionRoomContentWindowPort`,
+  `src/core/agent/companion-room-window.ts`). An occupant only ever sees what was
+  said between their join and exit, so downstream memory processing needs no new
+  gating — L0 only holds what they witnessed. A companion not present (or with
+  unknown presence) fails closed to a closed window. Public rooms and ordinary
+  Discord/Telegram group channels are never windowed (byte-identical prior
+  behavior).
+
+Multi-companion topology, fleet operations, and the shared-world wiki are
+documented in [`docs/multi-companion.md`](./multi-companion.md).
+
 ## Reading live behavior
 
 Quick diagnostics for "she did not reply":

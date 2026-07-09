@@ -360,6 +360,7 @@ function candidateFromRegistryEntry(
   entry: ModelRegistryEntry,
   purpose: CanonicalModelPurpose,
 ): SelectorCandidate | null {
+  if (entry.enabled === false) return null;
   const purposeTag = resolvePurposeTag(entry, purpose);
   if (!purposeTag) return null;
 

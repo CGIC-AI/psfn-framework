@@ -114,8 +114,8 @@ export function Composer({
 }
 
 /**
- * Voice playback stop keeps priority; otherwise an in-flight assistant turn
- * with no drafted text exposes an explicit stop-generation control so users
+ * Voice playback stop keeps priority; otherwise an in-flight companion turn
+ * with no drafted text exposes an explicit stop-generation control so people
  * can interrupt without sending a new message or disconnecting. Drafted text
  * keeps the send affordance, which already interrupts on send.
  */

@@ -37,6 +37,7 @@ import { ReflectionMetacognitionJournalStore } from '../../persistence/journals/
 import { ReflectionDailyJournalStore } from '../../persistence/journals/reflection-substrate.js';
 import {
   resolveConfiguredCompanionDataDir,
+  resolveConfiguredSystemDataDir,
   resolveChargeLedgerPath,
   resolveFatigueLedgerPath,
   resolveLegacyValuesJournalPath,
@@ -80,6 +81,10 @@ import { AdminContactsDataService } from './services/contacts-service.js';
 import { createContactRelationshipScoreReader } from '../../core/contacts/trust-drift-signals.js';
 import { createAdminPendingContactsService } from './services/pending-contacts-service.js';
 import { createAdminRoomsService } from './services/rooms-service.js';
+import { createAdminPlacesService } from './services/places-service.js';
+import { createAdminEnrollmentService } from './services/enrollment-service.js';
+import { HubIdentityEnrollmentService } from '../../core/enrollment/service.js';
+import type { HubIdentityEnrollmentStorePort } from '../../core/enrollment/enrollment-store-port.js';
 import { createAdminGraphProposalsService } from './services/graph-proposals-service.js';
 import type { SocialGraphProposalStore } from '../../faculties/memory/social-graph/proposals.js';
 import { AdminDashboardDataService } from './services/dashboard-service.js';
@@ -139,6 +144,12 @@ export interface InProcessGardenAdminContractOptions {
   pendingContactApprovals?: PendingContactApprovalStore | null;
   /** Social-graph edge proposals emitted by the graph-builder worker (E4.2). */
   socialGraphProposals?: SocialGraphProposalStore | null;
+  /**
+   * Hub-identity ↔ contact enrollment store (S10 D2a). When present (and a
+   * contact store is wired) the Garden enrollment surface is live; absent, the
+   * enrollment routes are simply not mounted. Biometrics never enter core.
+   */
+  hubIdentityEnrollmentStore?: HubIdentityEnrollmentStorePort | null;
   /** Runtime log directory for bounded diagnostics reads. Defaults to /app/logs when absent. */
   logsDir?: string;
 }
@@ -257,7 +268,22 @@ export function createInProcessGardenAdminContract(
     shards: new AdminShardFoldReviewDataService(options.shardManager),
     adaptiveTools,
     wiki: options.config.workspacePath
-      ? new AdminWikiDataService(options.config.workspacePath)
+      ? new AdminWikiDataService({
+        workspacePath: options.config.workspacePath,
+        systemDataDir: resolveConfiguredSystemDataDir(options.config),
+        // s10f9: shared-world writes project into shared.shared_wiki_chunks via
+        // the SAME embedding port the runtime composed (gateway-backed in the
+        // agent process). Multi-companion + missing Postgres fails the write
+        // closed inside the projection runner.
+        sharedProjection: {
+          ...(options.config.postgresDatabaseUrl?.trim()
+            ? { databaseUrl: options.config.postgresDatabaseUrl.trim() }
+            : {}),
+          ...(options.embeddingService ? { embedding: options.embeddingService } : {}),
+          multiCompanion: options.config.multiCompanion === true,
+          eventBus: options.eventBus,
+        },
+      })
       : null,
     episodicMemory: options.episodicStore
       ? new AdminEpisodicMemoryDataService(options.episodicStore)
@@ -317,6 +343,15 @@ export function createInProcessGardenAdminContract(
     rooms: createAdminRoomsService({
       contactStore: options.contactStore ?? null,
     }),
+    places: createAdminPlacesService({ dataDir: options.config.dataDir }),
+    enrollment: options.hubIdentityEnrollmentStore && options.contactStore
+      ? createAdminEnrollmentService({
+        enrollmentService: new HubIdentityEnrollmentService(
+          options.hubIdentityEnrollmentStore,
+          options.contactStore,
+        ),
+      })
+      : null,
     graphProposals: options.socialGraphProposals
       ? createAdminGraphProposalsService({
         proposalStore: options.socialGraphProposals,

@@ -20,6 +20,7 @@ import type { SessionHmacKeyring } from '../../../persistence/journals/journal-u
 import type { ApprovalBoundaryService } from '../approval-boundary.js';
 import type { PolicyConfig } from '../policy.js';
 import type { ModelUsageRecorder } from '../../../shared/telemetry/model-usage.js';
+import type { CredentialVaultPort } from '../../custody/credential-vault.js';
 
 export interface GatewayMethodRuntime {
   target: JSONRPCServerAndClient;
@@ -30,11 +31,17 @@ export interface GatewayMethodRuntime {
   gitOps?: GitOperations;
   imageConfig?: ImageRuntimeConfig;
   modelUsageRecorder?: ModelUsageRecorder;
+  credentialVault?: CredentialVaultPort;
   policyConfig: PolicyConfig;
   workspacePath: string;
   sessionHmacKeyring: SessionHmacKeyring;
   approvalBoundary: ApprovalBoundaryService;
-  notifyAll(method: string, params: unknown): void;
+  /**
+   * Notify the connection that originated the current request. Single-companion
+   * mode preserves the historical broadcast; multi-companion mode pins delivery
+   * to the requesting connection (companion crossover would leak secrets).
+   */
+  notifyRequester(method: string, params: unknown): void;
   listPendingConfirmations(): ConfirmationQueueEntry[];
   listConfirmationHistory(): ConfirmationQueueHistoryEntry[];
   resolveConfirmation(params: ConfirmationResolveParams): Promise<ConfirmationResolveResult>;

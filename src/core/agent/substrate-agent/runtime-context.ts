@@ -71,6 +71,7 @@ import {
 import { buildContinuityGapPromptVariables } from './runtime-context-sections/continuity-gap.js';
 import {
   buildInternalStatePromptVariables,
+  buildSituatedLocationPromptVariables,
   toEmotionSnapshotFromInternalState,
 } from './runtime-context-sections/internal-state.js';
 import { buildConcernPromptVariables } from './runtime-context-sections/concerns.js';
@@ -87,6 +88,12 @@ import {
 } from './runtime-context-sections/notes-and-skills.js';
 import { buildSelfPresentationPromptVariables } from './runtime-context-sections/self-presentation.js';
 import { buildSatelliteEndpointContextBlock } from './runtime-context-sections/satellite.js';
+import {
+  buildSituatedPresenceContextBlock,
+  type CoPresentCompanion,
+} from './runtime-context-sections/situated-presence.js';
+import type { SituatedEmanationTracker } from './runtime-context-sections/situated-emanation.js';
+import type { PlacesRegistryConfig } from '../../../shared/contracts/places-registry.js';
 
 // The section producers moved into ./runtime-context-sections/ (E2.6). This
 // module stays the public entry point for the names other modules consume.
@@ -353,6 +360,7 @@ export function buildDynamicPromptTemplateVariables(
     }),
     ...buildMetacognitiveFlagPromptVariables(input.metacognitiveFlags ?? []),
     ...buildInternalStatePromptVariables(input.internalState),
+    ...buildSituatedLocationPromptVariables(input.internalState, now),
     ...buildConcernPromptVariables(input.activeConcerns),
     ...buildEmotionAppraisalPromptVariables(input.emotionAppraisalChain ?? []),
     ...buildBehavioralNotesPromptVariables(input.behavioralNotesBlock),
@@ -403,6 +411,31 @@ export function buildRuntimeContext(input: {
   formatTopEmotions: (discrete: Record<string, number>) => string;
   config?: Record<string, unknown>;
   substrateHealth?: CompanionSubstrateHealthContext | null;
+  /**
+   * Places soft-registry threaded from startup. Optional/undefined behaves as an
+   * empty registry, so a runtime with no `places.json` renders byte-identically.
+   */
+  placesRegistry?: PlacesRegistryConfig;
+  /**
+   * Co-present companions at the turn's situated place, resolved from the
+   * shared `companion_presence` table (multi-companion W5a). Absent/empty
+   * (always the case flag-off) renders byte-identically to today.
+   */
+  coPresent?: ReadonlyArray<CoPresentCompanion>;
+  /**
+   * Handoff-aware active-emanation tracker (S10 B2). Threaded from the agent so
+   * a placeless turn foregrounds the companion's current active emanation. When
+   * absent, the situated block resolves from the turn alone (B1 behaviour).
+   */
+  emanationTracker?: SituatedEmanationTracker;
+  /**
+   * Dual-presence situated fallback for this turn (vinz.29), resolved once by
+   * the agent so the rendered block, the co-presence read, and the presence
+   * write all foreground the same place. On mindspace (plain-chat) turns this
+   * is the twin of the last-known physical room; a deliberate virtual move
+   * outranks it. Absent ⇒ tracker fallback (B2 behaviour).
+   */
+  situatedFallbackPlaceId?: string;
 }): string {
   const runtimeContextExtra = (() => {
     const raw = input.templateVariables?.runtime_context_extra;
@@ -422,6 +455,30 @@ export function buildRuntimeContext(input: {
   const satelliteEndpointContext = buildSatelliteEndpointContextBlock(input.message);
   if (satelliteEndpointContext) {
     sections.push(satelliteEndpointContext);
+  }
+  // Situated-presence block (S10 B1): "where am I / what's here / who else is
+  // here". First consumer of message.routing.presence + the places registry.
+  // coPresent is populated from shared companion_presence under
+  // multi-companion (W5a); absent/empty renders byte-identically.
+  //
+  // vinz.29: the character-facing name of the shared-mindspace layer is an
+  // operator-authored character-card extension (`mindspace_label`) living in
+  // companion-data — it reaches this block through the flattened card
+  // template variables, exactly like `visual_description`. Never hardcoded.
+  const mindspaceLabel = (() => {
+    const raw = input.templateVariables?.extensions_mindspace_label;
+    return typeof raw === 'string' ? raw.trim() : '';
+  })();
+  const situatedPresenceContext = buildSituatedPresenceContextBlock({
+    message: input.message,
+    ...(input.placesRegistry ? { placesRegistry: input.placesRegistry } : {}),
+    ...(input.coPresent && input.coPresent.length > 0 ? { coPresent: input.coPresent } : {}),
+    ...(input.emanationTracker ? { emanationTracker: input.emanationTracker } : {}),
+    ...(input.situatedFallbackPlaceId ? { situatedFallbackPlaceId: input.situatedFallbackPlaceId } : {}),
+    ...(mindspaceLabel ? { mindspaceLabel } : {}),
+  });
+  if (situatedPresenceContext) {
+    sections.push(situatedPresenceContext);
   }
   return sections.join('\n\n');
 }

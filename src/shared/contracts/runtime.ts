@@ -18,7 +18,10 @@ import type { GatewayRoutingEnvelope } from '../routing/envelope.js';
 
 // ── Channel-agnostic message types ──
 
-export const CHANNEL_TYPES = ['discord', 'terminal', 'api', 'telegram', 'psfn-amica'] as const;
+// 'companion' is the same-cluster inter-companion lane (sprint 10, W6): peer
+// messages routed by the gateway enter the receiving agent as ordinary inbound
+// channel turns so fatigue/trust apply with zero new mechanism.
+export const CHANNEL_TYPES = ['discord', 'terminal', 'api', 'telegram', 'psfn-amica', 'companion'] as const;
 export type ChannelType = typeof CHANNEL_TYPES[number];
 export type { TurnID } from '../../core/turns/types.js';
 export type { ModelContextBudgetConfig } from '../context-budget-contracts.js';
@@ -59,6 +62,20 @@ export interface TurnRecordVersionPointers {
   sessionState?: string;
 }
 
+/**
+ * Durable satellite/place origin recorded on a turn for long-lived history.
+ * Sourced from the message's satellite routing metadata (`placeId` is the
+ * static foreign key into `places.json` established by the satellite→place
+ * binding). Fail-closed: the field is absent unless the turn actually carried a
+ * bound `placeId`; nothing is fabricated for non-satellite turns.
+ */
+export interface TurnRecordLocation {
+  /** Static place binding carried onto the turn (`SatelliteConfig.placeId`). */
+  placeId?: string;
+  /** Originating satellite, recorded alongside the place for durable provenance. */
+  satelliteId?: string;
+}
+
 export interface TurnRecord {
   schemaVersion: 1;
   turnId: TurnID;
@@ -68,6 +85,8 @@ export interface TurnRecord {
   startedAt: number;
   completedAt: number;
   status: 'completed' | 'failed';
+  /** Durable satellite/place origin; absent on non-satellite (or unbound) turns. */
+  location?: TurnRecordLocation;
   userMessage: TurnRecordMessage;
   assistantMessage?: TurnRecordMessage;
   toolCalls: TurnRecordToolCall[];
@@ -206,7 +225,7 @@ export type ReflectionScopeHint =
   | { kind: 'group'; roomId: string; roomName?: string };
 
 export interface MessageRoutingMetadata {
-  source?: 'wyoming' | 'discord' | 'api' | 'psfn-amica' | 'satellite' | 'unknown';
+  source?: 'wyoming' | 'discord' | 'api' | 'psfn-amica' | 'satellite' | 'companion' | 'unknown';
   /**
    * Transport-level response disposition. `observe` messages are recorded as
    * context but must not trigger model response generation or channel egress.
@@ -933,6 +952,7 @@ export interface CanonicalProviderRegistry {
 
 export interface ModelRegistryEntry {
   id: string;
+  enabled?: boolean;
   rank: number;
   identity: ModelRegistryIdentityMetadata;
   purposes: ModelRegistryPurposeTag[];

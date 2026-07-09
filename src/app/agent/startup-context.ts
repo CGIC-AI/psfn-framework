@@ -25,6 +25,10 @@ import {
 import {
   loadSatelliteRegistryConfig,
 } from '../../channels/backplane/satellite-registry.js';
+import {
+  assertSatellitePlaceBindings,
+  loadPlacesRegistryConfig,
+} from '../../channels/backplane/places-registry.js';
 import { setRuntimeChannelEnvelopeLabels } from '../../system/trust/runtime-channel-labels.js';
 import { CHARGE_POLICY_FILE_NAME } from '../../system/config/charge-policy-config.js';
 import {
@@ -40,6 +44,7 @@ import {
 import type { RuntimeChannelsConfig } from '../../channels/backplane/config.js';
 import type { RuntimePathSnapshot } from '../../persistence/layout.js';
 import type { SatelliteRegistryConfig } from '../../shared/contracts/satellite-registry.js';
+import type { PlacesRegistryConfig } from '../../shared/contracts/places-registry.js';
 
 interface AgentStartupLogger {
   info(message: string, meta?: Record<string, unknown>): void;
@@ -62,6 +67,7 @@ export interface AgentStartupContext {
   trustPolicyConfig: ReturnType<typeof resolveStartupPreflightBundle>['startupHydration']['trustPolicyConfig'];
   channelsConfig: RuntimeChannelsConfig;
   satelliteRegistryConfig: SatelliteRegistryConfig;
+  placesRegistryConfig: PlacesRegistryConfig;
   backupConfig: ReturnType<typeof resolveBackupRuntimeConfig>;
   capabilityRuntime: CapabilityRuntime;
   eligibilityGate: EligibilityGate;
@@ -136,6 +142,8 @@ export function prepareAgentStartupContext(input: {
     labeledChannelCount: Object.keys(channelsConfig.contextEnvelope.channels).length,
   });
   const satelliteRegistryConfig = loadSatelliteRegistryConfig(pathSnapshot.systemDataDir);
+  const placesRegistryConfig = loadPlacesRegistryConfig(pathSnapshot.systemDataDir);
+  assertSatellitePlaceBindings(satelliteRegistryConfig, placesRegistryConfig);
   const backupConfig = resolveBackupRuntimeConfig({
     dataDir: pathSnapshot.systemDataDir,
     defaultRootDir: pathSnapshot.runtimePathLayout.backupsDir,
@@ -179,6 +187,7 @@ export function prepareAgentStartupContext(input: {
     trustPolicyConfig,
     channelsConfig,
     satelliteRegistryConfig,
+    placesRegistryConfig,
     backupConfig,
     capabilityRuntime,
     eligibilityGate,

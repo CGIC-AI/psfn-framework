@@ -2,8 +2,8 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it } from 'vitest';
-import { resolvePersonalWikiDir } from '../../persistence/layout.js';
-import { WikiStore, normalizeWikiDocumentId } from './store.js';
+import { resolvePersonalWikiDir, resolveSharedWorldWikiSiteDir } from '../../persistence/layout.js';
+import { SharedWorldWikiStore, WikiStore, normalizeWikiDocumentId } from './store.js';
 
 const tempDirs: string[] = [];
 
@@ -98,5 +98,92 @@ describe('WikiStore', () => {
       title: 'Escape',
       body: 'nope',
     })).toThrow('invalid characters');
+  });
+
+  // ── W5b scope dimension ──
+
+  it('default (personal) writes omit scope from serialized metadata (byte-identical to pre-W5b)', () => {
+    const workspace = makeWorkspace();
+    const store = new WikiStore(workspace);
+    const doc = store.upsert({ title: 'World Note', body: 'Some durable world fact.' });
+    // In-memory: absent scope == personal, so the field is not set.
+    expect(doc).not.toHaveProperty('scope');
+    const metadataPath = join(resolvePersonalWikiDir(workspace), 'metadata', `${doc.id}.json`);
+    const persisted = JSON.parse(readFileSync(metadataPath, 'utf-8')) as Record<string, unknown>;
+    expect('scope' in persisted).toBe(false);
+    // Round-trips cleanly through read (checksum + metadata validation).
+    expect(store.get(doc.id)?.body).toContain('durable world fact');
+  });
+
+  it('accepts an explicit personal scope (still omitted, still byte-identical)', () => {
+    const store = new WikiStore(makeWorkspace());
+    const doc = store.upsert({ title: 'Personal Note', body: 'A note.', scope: 'personal' });
+    expect(doc).not.toHaveProperty('scope');
+  });
+
+  it('fail-closed REJECTS any direct shared_world scope write (the leak surface)', () => {
+    const store = new WikiStore(makeWorkspace());
+    expect(() => store.upsert({
+      title: 'Kitchen Toaster',
+      body: 'A new toaster sits next to the satellite in the kitchen.',
+      scope: 'shared_world:home',
+    })).toThrow(/personal-scope only/);
+  });
+
+  it('rejects a malformed scope value before writing anything', () => {
+    const store = new WikiStore(makeWorkspace());
+    expect(() => store.upsert({
+      title: 'Bad Scope',
+      body: 'x',
+      scope: 'shared_world:bad site!' as unknown as 'personal',
+    })).toThrow(/valid siteId/);
+  });
+});
+
+// ── Shared-world wiki store (operator-owned; vinz.4/.27) ──
+
+describe('SharedWorldWikiStore', () => {
+  it('writes shared-world-scoped docs under system-data (not companion-data)', () => {
+    const systemDataDir = makeWorkspace();
+    const store = new SharedWorldWikiStore(systemDataDir, 'home', {
+      now: () => new Date('2026-07-08T00:00:00.000Z'),
+    });
+    const doc = store.upsert({
+      id: 'toaster',
+      title: 'Kitchen Toaster',
+      body: 'A new toaster sits next to the satellite in the kitchen.',
+      sourceClass: 'system_seed',
+      updatedBy: 'operator',
+    });
+    expect(doc.scope).toBe('shared_world:home');
+
+    const siteDir = resolveSharedWorldWikiSiteDir(systemDataDir, 'home');
+    expect(existsSync(join(siteDir, 'documents', 'toaster.md'))).toBe(true);
+    const persisted = JSON.parse(
+      readFileSync(join(siteDir, 'metadata', 'toaster.json'), 'utf-8'),
+    ) as Record<string, unknown>;
+    // The shared scope IS serialized (unlike personal, which omits it).
+    expect(persisted.scope).toBe('shared_world:home');
+    expect(store.get('toaster')?.scope).toBe('shared_world:home');
+  });
+
+  it('rejects a personal write and another site\'s scope (guarded to its own site)', () => {
+    const store = new SharedWorldWikiStore(makeWorkspace(), 'home');
+    // upsert forces the store scope, so an explicit personal scope is overridden
+    // to the site scope and accepted — but a DIFFERENT site scope is refused.
+    expect(() => store.upsert({
+      title: 'Cross Site',
+      body: 'nope',
+      scope: 'shared_world:studio',
+    })).toThrow(/refuses a write to scope/);
+  });
+
+  it('supports delete for idempotent republication', () => {
+    const store = new SharedWorldWikiStore(makeWorkspace(), 'home');
+    store.upsert({ id: 'ephemeral', title: 'Ephemeral', body: 'gone soon', sourceClass: 'system_seed' });
+    expect(store.get('ephemeral')).not.toBeNull();
+    expect(store.delete('ephemeral')).toBe(true);
+    expect(store.get('ephemeral')).toBeNull();
+    expect(store.delete('ephemeral')).toBe(false);
   });
 });

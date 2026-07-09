@@ -5,6 +5,7 @@ import { evaluateImportPolicy, resolveRoutingCandidates } from './routing.js';
 
 interface RegistryModelInput {
   id: string;
+  enabled?: boolean;
   rank: number;
   provider: string;
   model: string;
@@ -20,6 +21,7 @@ function makeRegistry(models: RegistryModelInput[]): CanonicalModelRegistry {
     schemaVersion: 1,
     models: models.map((model): ModelRegistryEntry => ({
       id: model.id,
+      ...(model.enabled === false ? { enabled: false } : {}),
       rank: model.rank,
       identity: {
         provider: model.provider,
@@ -101,6 +103,35 @@ function makeConfig(overrides: Partial<SubstrateConfig> = {}): SubstrateConfig {
 }
 
 describe('resolveRoutingCandidates(background)', () => {
+  it('skips disabled model registry entries', () => {
+    const config = makeConfig({
+      modelRegistry: makeRegistry([
+        {
+          id: 'disabled-primary',
+          enabled: false,
+          rank: 1,
+          provider: 'openrouter',
+          model: 'background/disabled',
+          maxOutputTokens: 8192,
+          contextWindow: 128_000,
+          purposes: [{ purpose: 'background', primary: true }],
+        },
+        {
+          id: 'enabled-primary',
+          rank: 50,
+          provider: 'openrouter',
+          model: 'background/enabled',
+          maxOutputTokens: 2048,
+          contextWindow: 32_000,
+          purposes: [{ purpose: 'background', primary: true }],
+        },
+      ]),
+    });
+
+    const candidates = resolveRoutingCandidates(config, 'background');
+    expect(candidates.map(candidate => candidate.model)).toEqual(['background/enabled']);
+  });
+
   it('orders candidates with primary first, then lower rank, then capability fit, then cost', () => {
     const config = makeConfig({
       modelRegistry: makeRegistry([

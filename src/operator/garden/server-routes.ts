@@ -141,6 +141,8 @@ export function buildAdminRoutes(deps: AdminRouteDependencies): AdminRoute[] {
       contactsService: deps.services.contacts,
       pendingContactsService: deps.services.pendingContacts ?? null,
       roomsService: deps.services.rooms ?? null,
+      placesService: deps.services.places ?? null,
+      enrollmentService: deps.services.enrollment ?? null,
       graphProposalsService: deps.services.graphProposals ?? null,
       concernService: deps.services.concerns,
       subsystemHealthService: deps.services.subsystemHealth ?? null,

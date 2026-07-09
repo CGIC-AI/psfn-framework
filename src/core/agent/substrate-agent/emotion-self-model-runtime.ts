@@ -46,7 +46,10 @@ import {
   INTERNAL_STATE_NEUTRAL_EMOTION,
   InternalStateComputer,
   type InternalState,
+  type SituatedLocation,
 } from '../../self-model/state.js';
+import { resolveTurnSituatedLocation } from '../../self-model/situated-location.js';
+import type { PlacesRegistryConfig } from '../../../shared/contracts/places-registry.js';
 import type { SubstrateMessage, TurnID } from '../../../shared/contracts/runtime.js';
 import type { TrustLevel } from '../../../system/trust/types.js';
 import { toErrorMessage } from '../../../shared/utils/errors.js';
@@ -93,6 +96,13 @@ export interface EmotionSelfModelRuntimeOptions {
   getPendingFollowUpProvider: () => PendingFollowUpContextProvider | null;
   getContactStore: () => ContactStorePort | null;
   getSelfModelRuntimeRequired: () => boolean;
+  /**
+   * S10 B3 places soft-registry accessor. Used to resolve a satellite→place
+   * binding into a durable situated location. Optional so callers without a
+   * `places.json` (tests, minimal runtimes) keep working; when absent, location
+   * resolves only from honest presence hints or carries the prior forward.
+   */
+  getPlacesRegistry?: () => PlacesRegistryConfig | undefined;
   logger: EmotionSelfModelRuntimeLogger;
   /**
    * Typed emotion-appraisal gate telemetry sink (jpvd.4). Forwarded to the
@@ -144,6 +154,13 @@ export class EmotionSelfModelRuntime {
   private readonly getPendingFollowUpProvider: () => PendingFollowUpContextProvider | null;
   private readonly getContactStore: () => ContactStorePort | null;
   private readonly getSelfModelRuntimeRequired: () => boolean;
+  private readonly getPlacesRegistry: () => PlacesRegistryConfig | undefined;
+  // ── S10 B3 durable situated location ──
+  // Last-known location, carried across turns as the source for carry-forward
+  // when a turn arrives with no fresh routing signal. Seeded from restored
+  // persisted state at startup (restoreSituatedLocation) so location survives a
+  // continuity gap (reload); refreshed each turn by computeInternalStateForTurn.
+  private currentSituatedLocation: SituatedLocation | null = null;
   private readonly logger: EmotionSelfModelRuntimeLogger;
 
   constructor(options: EmotionSelfModelRuntimeOptions) {
@@ -152,6 +169,7 @@ export class EmotionSelfModelRuntime {
     this.getPendingFollowUpProvider = options.getPendingFollowUpProvider;
     this.getContactStore = options.getContactStore;
     this.getSelfModelRuntimeRequired = options.getSelfModelRuntimeRequired;
+    this.getPlacesRegistry = options.getPlacesRegistry ?? (() => undefined);
     this.logger = options.logger;
     this.emotionScopingConfig = options.emotionScopingConfig
       ?? createDefaultEmotionScopingSettings();
@@ -268,6 +286,39 @@ export class EmotionSelfModelRuntime {
     return effective;
   }
 
+  /**
+   * S10 B3: seed the carry-forward location from restored persisted state at
+   * startup so the companion remembers where it was across a continuity gap
+   * (reload) even before any new routing signal arrives.
+   */
+  restoreSituatedLocation(location: SituatedLocation | null): void {
+    this.currentSituatedLocation = location;
+  }
+
+  /**
+   * Presence-driven emanation follow (vinz.20): confirm a fresh situated
+   * location OUTSIDE a turn. An auto-follow moves the emanation between
+   * turns, so the durable last-known location must move with it — otherwise
+   * the next plain-chat turn would still twin the OLD room (vinz.29 keys the
+   * mindspace default off this). The next turn's carry-forward resolution
+   * (computeInternalStateForTurn) picks this up as the prior location and
+   * persists it through the normal internal-state snapshot path.
+   */
+  confirmSituatedLocation(location: SituatedLocation): void {
+    this.currentSituatedLocation = location;
+  }
+
+  /**
+   * The durable last-known situated location (S10 B3): restored persisted
+   * state at startup, refreshed by each turn's carry-forward resolution.
+   * vinz.29 keys the shared-mindspace default off this — the twin of the
+   * last-known PHYSICAL room is the mindspace room a plain-chat turn
+   * foregrounds. Null when the companion has no known place.
+   */
+  getCurrentSituatedLocation(): SituatedLocation | null {
+    return this.currentSituatedLocation;
+  }
+
   async computeInternalStateForTurn(input: {
     message: SubstrateMessage;
     responseText: string;
@@ -296,6 +347,16 @@ export class EmotionSelfModelRuntime {
     const recentTurnCount = this.resolveRecentTurnCount(input.sessionChannelId);
     const emotionState = input.emotionSnapshot ?? INTERNAL_STATE_NEUTRAL_EMOTION;
     const emotionObservedAtMs = input.emotionSnapshot ? this.emotionStateUpdatedAtMs : null;
+
+    // S10 B3: resolve this turn's durable location (carry-forward merged) and
+    // remember it as the source for the next turn's carry-forward.
+    const situatedLocation = resolveTurnSituatedLocation({
+      message: input.message,
+      ...(this.getPlacesRegistry() ? { placesRegistry: this.getPlacesRegistry() } : {}),
+      priorLocation: this.currentSituatedLocation,
+      now: new Date(),
+    });
+    this.currentSituatedLocation = situatedLocation;
 
     return this.internalStateComputer.computeState({
       emotionState,
@@ -326,6 +387,7 @@ export class EmotionSelfModelRuntime {
       trustLevel: input.trustLevel,
       ...(input.canonicalContactKey ? { contactId: input.canonicalContactKey } : {}),
       contactEmotionalSnapshot,
+      situatedLocation,
       sessionMetrics: {
         userMessageText: input.message.content,
         responseText: input.responseText,

@@ -8,6 +8,10 @@ source "${ROOT_DIR}/scripts/system/runtime-env.sh"
 
 DEBUG_MODE=0
 YOLO_MODE=0
+DRY_RUN_MODE=0
+if psfn_is_truthy_env_value "${PSFN_SUPERVISOR_DRY_RUN:-}"; then
+  DRY_RUN_MODE=1
+fi
 for arg in "$@"; do
   case "$arg" in
     --debug|-d)
@@ -15,6 +19,9 @@ for arg in "$@"; do
       ;;
     --yolo)
       YOLO_MODE=1
+      ;;
+    --dry-run)
+      DRY_RUN_MODE=1
       ;;
   esac
 done
@@ -117,11 +124,24 @@ AGENT_PID=""
 OPERATOR_PID=""
 LAUNCHED_PID=""
 AGENT_ENV=()
+OPERATOR_ENV=()
+SUPERVISOR_MODE=0
+AGENT_PIDS=()
+OPERATOR_PIDS=()
+COMPANION_PLAN=()
+LAUNCHER_ADMIN_PORT="${ADMIN_PORT:-}"
 
 append_agent_env() {
   local name="$1"
   if [ "${!name+x}" = "x" ]; then
     AGENT_ENV+=("${name}=${!name}")
+  fi
+}
+
+append_operator_env() {
+  local name="$1"
+  if [ "${!name+x}" = "x" ]; then
+    OPERATOR_ENV+=("${name}=${!name}")
   fi
 }
 
@@ -151,6 +171,7 @@ build_agent_env() {
     CHARACTER_CARD_PATH \
     COMPANION_DATA_DIR \
     COMPANION_ID \
+    COMPANION_PG_SCHEMA \
     CONFIG_DIR \
     CONTINUITY_WATCHDOG_ENDPOINT \
     CONTINUITY_WATCHDOG_MAX_FAILURES \
@@ -183,6 +204,7 @@ build_agent_env() {
     PSFN_DEBUG_THINKING \
     PSFN_LIFECYCLE_RESTART_EXIT_CODE \
     PSFN_LOGS_DIR \
+    PSFN_MULTI_COMPANION \
     PSFN_RUNTIME_LAYOUT_MODE \
     PSFN_RUNTIME_MODE \
     PSFN_RUNTIME_ROOT \
@@ -207,6 +229,22 @@ build_agent_env() {
     USER \
     WORKSPACE_PATH; do
     append_agent_env "${name}"
+  done
+}
+
+# Operator processes reuse the agent's non-secret allowlist plus the admin auth
+# variables the Garden surface itself owns (ADMIN_TOKEN is the operator's own
+# login secret, never an upstream provider credential). Like the agent spawn,
+# env -i re-scrubs the child environment; the operator's dotenv loader fills in
+# any remaining .env values without overriding these explicit exports.
+build_operator_env() {
+  build_agent_env
+  OPERATOR_ENV=("${AGENT_ENV[@]}")
+  local name
+  for name in \
+    ADMIN_ALLOW_INSECURE \
+    ADMIN_TOKEN; do
+    append_operator_env "${name}"
   done
 }
 
@@ -370,14 +408,64 @@ start_gateway() {
   GATEWAY_PID="${LAUNCHED_PID}"
 }
 
-start_agent() {
+spawn_agent_process() {
   build_agent_env
   if [ -x "./node_modules/.bin/tsx" ]; then
     launch_background env -i "${AGENT_ENV[@]}" ./node_modules/.bin/tsx src/app/agent/main.ts
   else
     launch_background env -i "${AGENT_ENV[@]}" npm run agent
   fi
+}
+
+start_agent() {
+  spawn_agent_process
   AGENT_PID="${LAUNCHED_PID}"
+}
+
+# Export one fleet entry's companion-scoped values into the launcher env so the
+# spawn allowlists pick them up, then env -i re-scrubs the child environment.
+# The per-companion admin transport socket comes from the plan (derived by the
+# canonical TS helper, never here); ADMIN_PORT carries the companion's Garden
+# port when configured, else the launcher-wide default.
+export_companion_env() {
+  local companion_id="$1"
+  local companion_data_dir="$2"
+  local character_card_path="$3"
+  local postgres_schema="$4"
+  local admin_transport_socket="$5"
+  local garden_port="$6"
+
+  export COMPANION_ID="${companion_id}"
+  export COMPANION_DATA_DIR="${companion_data_dir}"
+  export CHARACTER_CARD_PATH="${character_card_path}"
+  export COMPANION_PG_SCHEMA="${postgres_schema}"
+  export ADMIN_TRANSPORT_SOCKET="${admin_transport_socket}"
+  if [ "${garden_port}" != "-" ]; then
+    export ADMIN_PORT="${garden_port}"
+  else
+    export ADMIN_PORT="${LAUNCHER_ADMIN_PORT}"
+  fi
+}
+
+# Spawn one agent for a single fleet entry.
+start_companion_agent() {
+  export_companion_env "$@"
+  spawn_agent_process
+  AGENT_PIDS+=("${LAUNCHED_PID}")
+}
+
+# Spawn one Garden operator process for a single fleet entry (sprint-10 W4:
+# one Garden per companion). Bound to the companion's own admin transport
+# socket; listens on the companion's gardenPort from companions.json.
+start_companion_operator() {
+  export_companion_env "$@"
+  build_operator_env
+  if [ -x "./node_modules/.bin/tsx" ]; then
+    launch_background env -i "${OPERATOR_ENV[@]}" ./node_modules/.bin/tsx src/app/operator/main.ts
+  else
+    launch_background env -i "${OPERATOR_ENV[@]}" npm run operator
+  fi
+  OPERATOR_PIDS+=("${LAUNCHED_PID}")
 }
 
 start_operator() {
@@ -387,6 +475,95 @@ start_operator() {
     launch_background npm run operator
   fi
   OPERATOR_PID="${LAUNCHED_PID}"
+}
+
+# Resolve the multi-companion fleet via the canonical TS helper. The helper owns
+# all flag parsing, path resolution, and validation (no duplicate logic here).
+# Empty stdout => single-companion topology (SUPERVISOR_MODE stays 0). Non-empty
+# stdout => one tab-delimited companion record per line. A non-zero helper exit
+# fails the launcher closed before anything is started.
+resolve_companion_fleet() {
+  # Byte-identical single-companion path: when the topology flag is not present
+  # at all, never invoke the helper.
+  if [ -z "${PSFN_MULTI_COMPANION:-}" ]; then
+    return 0
+  fi
+
+  local plan_output=""
+  if [ -x "./node_modules/.bin/tsx" ]; then
+    if ! plan_output="$(./node_modules/.bin/tsx scripts/resolve-companion-fleet.ts)"; then
+      echo "[${MODE_LABEL}] failed to resolve companion fleet from companions.json; refusing to start" >&2
+      exit 1
+    fi
+  else
+    if ! plan_output="$(npm run --silent resolve:companion-fleet)"; then
+      echo "[${MODE_LABEL}] failed to resolve companion fleet from companions.json; refusing to start" >&2
+      exit 1
+    fi
+  fi
+
+  if [ -z "${plan_output}" ]; then
+    # Flag parsed to off (e.g. PSFN_MULTI_COMPANION=0) with no fleet manifest.
+    return 0
+  fi
+
+  SUPERVISOR_MODE=1
+  COMPANION_PLAN=()
+  local line
+  while IFS= read -r line; do
+    if [ -n "${line}" ]; then
+      COMPANION_PLAN+=("${line}")
+    fi
+  done <<< "${plan_output}"
+
+  if [ "${#COMPANION_PLAN[@]}" -eq 0 ]; then
+    echo "[${MODE_LABEL}] multi-companion mode resolved an empty fleet; refusing to start" >&2
+    exit 1
+  fi
+}
+
+print_supervisor_plan() {
+  local record companion_id companion_data_dir character_card_path postgres_schema admin_transport_socket garden_port
+  echo "[supervisor] dry-run spawn plan (${#COMPANION_PLAN[@]} companion(s)):"
+  echo "[supervisor]   gateway: ${SOCKET_PATH}"
+  for record in "${COMPANION_PLAN[@]}"; do
+    IFS=$'\t' read -r companion_id companion_data_dir character_card_path postgres_schema admin_transport_socket garden_port <<< "${record}"
+    echo "[supervisor]   agent: companionId=${companion_id} schema=${postgres_schema} dataDir=${companion_data_dir} card=${character_card_path} adminSocket=${admin_transport_socket}"
+    if [ "${garden_port}" != "-" ]; then
+      echo "[supervisor]   operator: companionId=${companion_id} gardenPort=${garden_port} adminSocket=${admin_transport_socket}"
+    else
+      echo "[supervisor]   operator: companionId=${companion_id} (none — no gardenPort in companions.json)"
+    fi
+  done
+}
+
+supervise_companion_agents() {
+  local record companion_id companion_data_dir character_card_path postgres_schema admin_transport_socket garden_port
+  for record in "${COMPANION_PLAN[@]}"; do
+    IFS=$'\t' read -r companion_id companion_data_dir character_card_path postgres_schema admin_transport_socket garden_port <<< "${record}"
+    echo "[supervisor] starting agent for companion ${companion_id} (schema=${postgres_schema}, dataDir=${companion_data_dir})"
+    start_companion_agent "${companion_id}" "${companion_data_dir}" "${character_card_path}" "${postgres_schema}" "${admin_transport_socket}" "${garden_port}"
+    if [ "${garden_port}" != "-" ]; then
+      echo "[supervisor] starting operator for companion ${companion_id} (gardenPort=${garden_port}, adminSocket=${admin_transport_socket})"
+      start_companion_operator "${companion_id}" "${companion_data_dir}" "${character_card_path}" "${postgres_schema}" "${admin_transport_socket}" "${garden_port}"
+    fi
+  done
+
+  echo "[supervisor] running (gateway pid=${GATEWAY_PID}, agent pids=${AGENT_PIDS[*]}, operator pids=${OPERATOR_PIDS[*]:-none})"
+
+  # Shared-fate: the first child (gateway, any agent, OR any operator) to exit
+  # tears down the whole set. No silent auto-restart; a non-zero exit propagates
+  # loudly.
+  set +e
+  wait -n "${GATEWAY_PID}" "${AGENT_PIDS[@]}" ${OPERATOR_PIDS[@]+"${OPERATOR_PIDS[@]}"}
+  local exit_status=$?
+  set -e
+
+  echo "[supervisor] a supervised process exited (status=${exit_status}); shutting down the whole fleet (shared-fate)" >&2
+  cleanup_children
+  trap - INT TERM EXIT
+  release_launcher_lock
+  exit "${exit_status}"
 }
 
 stop_pid() {
@@ -422,6 +599,13 @@ stop_pid() {
 
 cleanup_children() {
   stop_pid "${OPERATOR_PID}"
+  local pid
+  for pid in "${OPERATOR_PIDS[@]:-}"; do
+    stop_pid "${pid}"
+  done
+  for pid in "${AGENT_PIDS[@]:-}"; do
+    stop_pid "${pid}"
+  done
   stop_pid "${AGENT_PID}"
   stop_pid "${GATEWAY_PID}"
 }
@@ -441,6 +625,18 @@ handle_shutdown_signal() {
   fi
   exit 130
 }
+
+resolve_companion_fleet
+
+if [ "${DRY_RUN_MODE}" -eq 1 ]; then
+  if [ "${SUPERVISOR_MODE}" -eq 1 ]; then
+    print_supervisor_plan
+  else
+    echo "[${MODE_LABEL}] dry-run: single-companion topology (gateway + one agent + operator)"
+    echo "[${MODE_LABEL}]   gateway: ${SOCKET_PATH}"
+  fi
+  exit 0
+fi
 
 trap 'handle_shutdown_signal INT' INT
 trap 'handle_shutdown_signal TERM' TERM
@@ -476,6 +672,11 @@ if [ ! -S "${SOCKET_PATH}" ]; then
     exit 1
   fi
   echo "[${MODE_LABEL}] warning: gateway socket not detected yet, starting agent anyway"
+fi
+
+if [ "${SUPERVISOR_MODE}" -eq 1 ]; then
+  echo "[supervisor] multi-companion mode: spawning ${#COMPANION_PLAN[@]} agent(s)"
+  supervise_companion_agents
 fi
 
 echo "[${MODE_LABEL}] starting agent..."

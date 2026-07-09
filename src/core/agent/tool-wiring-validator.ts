@@ -190,6 +190,7 @@ export const DEFAULT_GATEWAY_TOOL_METADATA_COVERAGE: GatewayToolMetadataCoverage
   issue_sync: Object.freeze(['beads.sync']),
   generate_image: Object.freeze(['image.create', 'image.edit', 'web.fetch_binary']),
   selfie_create: Object.freeze(['image.create', 'image.edit', 'web.fetch_binary']),
+  world: Object.freeze(['home_assistant.get_states', 'home_assistant.call_service']),
 });
 
 // ── Validation Types ──
@@ -251,6 +252,8 @@ const RPC_TO_CLIENT_METHOD: Record<string, string> = {
   'beads.update': 'beadsUpdate',
   'beads.close': 'beadsClose',
   'beads.sync': 'beadsSync',
+  'home_assistant.get_states': 'homeAssistantGetStates',
+  'home_assistant.call_service': 'homeAssistantCallService',
   'image.create': 'imageCreate',
   'image.edit': 'imageEdit',
   'llm.chat': 'stream',

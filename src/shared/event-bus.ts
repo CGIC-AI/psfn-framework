@@ -16,6 +16,7 @@ import type {
   AdaptiveToolSnapshotTelemetry,
 } from '../core/agent/adaptive-tools-telemetry.js';
 import type { CompletionHandoffRecord } from './contracts/completion-handoff.js';
+import type { PlaceKind } from './contracts/places-registry.js';
 import { createComponentLogger } from './logger.js';
 
 const log = createComponentLogger('EventBus');
@@ -32,6 +33,27 @@ export interface ExternalTelemetryEvent {
   nonce: string;
   channelId?: string;
   scope?: string;
+}
+
+export type PerceptionBridgeTelemetryCounter =
+  | 'delivered'
+  | 'malformed'
+  | 'unrecognized'
+  | 'duplicate'
+  | 'sink_error';
+
+export interface PerceptionBridgeTelemetryEvent {
+  counter: PerceptionBridgeTelemetryCounter;
+  reason: string;
+  eventId?: string;
+  rawEventType?: string;
+  source?: string;
+  scope?: string;
+  channelId?: string;
+  satelliteId?: string;
+  placeId?: string;
+  perceptionKind?: 'presence' | 'identity_claim';
+  timestamp: number;
 }
 
 type EventCorrelationFields = Partial<CorrelationMetadata>;
@@ -544,6 +566,8 @@ export interface EventMap {
    */
   'wiki.projection.sync': {
     documentId: string;
+    /** s10f9: present when the write hit the SHARED-WORLD projection for a site. */
+    siteId?: string;
     outcome: 'ran' | 'failed';
     chunkCount: number;
     error?: string;
@@ -668,6 +692,46 @@ export interface EventMap {
   'schedule.healthcheck': { timestamp: number; taskCount: number };
   'backup.failed': { taskId: string; taskName: string; error: string; timestamp: number };
   'internal_state.gap_detected': { offlineSince: string; gapMs: number; timestamp: number };
+  // Cross-companion co-location (sprint 10, W5a): the observing agent's
+  // presence refresh found a companion at its own place that was not there on
+  // the previous refresh (including everyone already present when the observer
+  // itself arrives). Emitted once per arrival, never on refreshes of an
+  // already-known co-present companion. Consumers (e.g. opening a shared room
+  // channel, W6) subscribe here.
+  'presence.companion.co_located': {
+    /** The companion newly observed at the observer's place. */
+    companionId: string;
+    /** The companion whose presence refresh made the observation. */
+    observerCompanionId: string;
+    siteId: string;
+    placeId: string;
+    kind: PlaceKind;
+    /** ISO-8601 arrival time (the observed companion's presence `since`). */
+    since: string;
+    timestamp: number;
+  };
+  // Presence-driven automatic movement (sprint 10, vinz.20/vinz.21 —
+  // "conversation follows you"). Emitted exactly once per APPLIED auto-move so
+  // an operator can always see WHY the companion moved: `physical_presence` =
+  // a resolved, trusted identity claim at a satellite-bound place pulled the
+  // emanation there; `virtual_activity` = trusted partner activity in a
+  // place-bound virtual room pulled the companion's virtual presence there.
+  // Suppressed/no-op decisions (anonymous, untrusted, stale, debounced,
+  // already present) never emit — only real movement is announced.
+  'presence.emanation.follow': {
+    trigger: 'physical_presence' | 'virtual_activity';
+    /** Contact whose presence/activity the companion followed. */
+    contactId: string;
+    /** Satellite that sensed the presence (physical trigger only). */
+    satelliteId?: string;
+    /** Channel whose activity pulled the move (virtual trigger only). */
+    channelId?: string;
+    fromPlaceId?: string;
+    toPlaceId: string;
+    siteId: string;
+    kind: PlaceKind;
+    timestamp: number;
+  };
   'intention.outbound.dispatched': { actionId: string; channelId: string; channelType: string; contentLength?: number; timestamp: number };
   'intention.outbound.blocked': { actionId: string; channelId: string; channelType: string; reason?: string; timestamp: number };
   // Internal-state-driven outreach nudges (Charter 6.24, bead 1xb.2). The
@@ -877,6 +941,7 @@ export interface EventMap {
     timestampMs: number;
   };
   'external.telemetry.ingested': { event: ExternalTelemetryEvent } & EventCorrelationFields;
+  'agent.perception.bridge.telemetry': PerceptionBridgeTelemetryEvent & EventCorrelationFields;
   'module.install': {
     id: string;
     name: string;

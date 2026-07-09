@@ -15,10 +15,27 @@ export interface OperationalTrace {
 }
 
 export function deriveOperationalTraces(stream: HubStreamState): OperationalTrace[] {
-  return stream.events.map((event) => eventToTrace(event));
+  const companionName = normalizeParticipantName(stream.session?.identity?.companion?.name, 'Companion');
+  const personName = normalizeParticipantName(stream.session?.identity?.user?.name, 'Person');
+  return stream.events.map((event) => eventToTrace(event, { companionName, personName }));
 }
 
-function eventToTrace(event: HubStreamEventLogEntry): OperationalTrace {
+function normalizeParticipantName(value: string | undefined, fallback: string): string {
+  const trimmed = value?.trim();
+  return trimmed && trimmed.length > 0 ? trimmed : fallback;
+}
+
+function roleDisplayName(
+  role: 'user' | 'assistant',
+  labels: { companionName: string; personName: string },
+): string {
+  return role === 'assistant' ? labels.companionName : labels.personName;
+}
+
+function eventToTrace(
+  event: HubStreamEventLogEntry,
+  labels: { companionName: string; personName: string },
+): OperationalTrace {
   const { message } = event;
   const common = {
     id: `${event.sequence}:${message.type}`,
@@ -67,7 +84,7 @@ function eventToTrace(event: HubStreamEventLogEntry): OperationalTrace {
         ...common,
         operationClass: `${message.data.role}_message`,
         status: message.data.final ? 'done' : 'active',
-        summary: `${message.data.role} message`,
+        summary: `${roleDisplayName(message.data.role, labels)} message`,
         metadata: {
           role: message.data.role,
           live: message.data.live ?? false,
@@ -170,7 +187,7 @@ function eventToTrace(event: HubStreamEventLogEntry): OperationalTrace {
         ...common,
         operationClass: 'assistant_interrupt',
         status: 'failed',
-        summary: 'Assistant interrupted',
+        summary: `${labels.companionName} interrupted`,
         metadata: {
           sessionId: message.sessionId,
         },

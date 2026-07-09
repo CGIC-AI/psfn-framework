@@ -12,6 +12,10 @@ import {
   createWikiPgvectorProjectionStore,
   type WikiPgvectorProjectionStore,
 } from './pgvector-projection.js';
+import {
+  createSharedWikiPgvectorProjectionStore,
+  type SharedWikiPgvectorProjectionStore,
+} from './shared-pgvector-projection.js';
 import { WikiRetrievalService } from './retrieval.js';
 import type {
   WikiDocument,
@@ -40,11 +44,30 @@ export interface WikiRuntimeDeps {
   eventBus?: Pick<EventBus, 'emit'>;
   /** Live config accessor for wiki retrieval settings (caps, thresholds, enable). */
   getConfig?: () => WikiRetrievalConfigLike;
+  /**
+   * W5b: live accessor for the multi-companion topology flag. Default off, so
+   * absence keeps retrieval scope unrestricted (byte-identical single-companion).
+   */
+  getMultiCompanion?: () => boolean;
+  /**
+   * Per-companion schema (multi-companion, sprint 10). Pins the personal
+   * projection pool's search_path so companion-private `wiki_document_chunks`
+   * rows never land in `public` and collide across companions. Absent =>
+   * byte-identical single-companion (default `public`). The shared-world
+   * projection ignores this: it always pins its own `shared` schema.
+   */
+  postgresSchema?: string;
 }
 
 export interface WikiRuntimeWiring {
   store: WikiStore;
   projection: WikiPgvectorProjectionStore | null;
+  /**
+   * s10f9: read-side handle on `shared.shared_wiki_chunks` for the retrieval
+   * union. Built ONLY under multi-companion (flag-off never touches the shared
+   * schema, matching the runtime-factory presence invariant).
+   */
+  sharedProjection: SharedWikiPgvectorProjectionStore | null;
   retrievalService: WikiRetrievalService | null;
 }
 
@@ -68,12 +91,33 @@ export async function wireWikiRuntime(
     try {
       projection = await createWikiPgvectorProjectionStore(deps.databaseUrl, deps.embedding, {
         ...(deps.eventBus ? { eventBus: deps.eventBus } : {}),
+        ...(deps.postgresSchema ? { schema: deps.postgresSchema } : {}),
       });
     } catch (error) {
       log.warn('Wiki pgvector projection unavailable; semantic search disabled, text search still works', {
         error: String(error),
       });
       projection = null;
+    }
+  }
+
+  // s10f9: shared-world chunk projection for the retrieval union. Multi-
+  // companion only — flag-off the shared schema is never created or touched,
+  // and retrieval never grants a shared scope anyway (resolveReadableWikiScopes
+  // returns undefined), so the personal path stays byte-identical. Best-effort
+  // like the personal projection: retrieval degrades loudly when it is down;
+  // shared WRITES fail closed separately on the operator surfaces.
+  let sharedProjection: SharedWikiPgvectorProjectionStore | null = null;
+  if (deps.databaseUrl && deps.embedding && deps.getMultiCompanion?.() === true) {
+    try {
+      sharedProjection = await createSharedWikiPgvectorProjectionStore(deps.databaseUrl, deps.embedding, {
+        ...(deps.eventBus ? { eventBus: deps.eventBus } : {}),
+      });
+    } catch (error) {
+      log.warn('Shared-world wiki projection unavailable; shared-scope retrieval will degrade to personal-only', {
+        error: String(error),
+      });
+      sharedProjection = null;
     }
   }
 
@@ -123,9 +167,11 @@ export async function wireWikiRuntime(
       const getConfig = deps.getConfig;
       retrievalService = new WikiRetrievalService({
         projection: activeProjection,
+        ...(sharedProjection ? { sharedProjection } : {}),
         embedding,
         ...(deps.eventBus ? { eventBus: deps.eventBus } : {}),
         getSettings: () => resolveWikiRetrievalSettings(getConfig()),
+        ...(deps.getMultiCompanion ? { getMultiCompanion: deps.getMultiCompanion } : {}),
       });
     }
   }
@@ -160,5 +206,5 @@ export async function wireWikiRuntime(
     })();
   }
 
-  return { store, projection, retrievalService };
+  return { store, projection, sharedProjection, retrievalService };
 }

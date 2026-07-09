@@ -636,6 +636,7 @@ describe('AdminSettingsDataService', () => {
       maxMonthlyBackups: 3,
       mirrorDir: '/srv/backup-mirror',
       verifyRestore: false,
+      groupMode: false,
       encryption: {
         mode: 'required',
         keyRef: {

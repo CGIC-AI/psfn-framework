@@ -5,6 +5,11 @@ import {
   registerScheduledBackupTask,
 } from '../../persistence/backups/service.js';
 import { deriveRestoreVerifyDatabaseUrl } from '../../persistence/backups/postgres-restore.js';
+import {
+  buildFleetBackupRunOptions,
+  isFleetBackupLeader,
+  registerScheduledFleetBackupTask,
+} from '../../persistence/backups/fleet-scheduler.js';
 import { wirePostTurnActionRuntime } from '../startup/composition/post-turn-actions.js';
 import type { PostTurnActionRuntime } from '../../core/agent/post-turn-action-runtime.js';
 import type { GatewayClient } from '../../boundary/gateway/client.js';
@@ -25,6 +30,7 @@ import type {
   SocialGraphProposalStore,
   SocialGraphBuilderWatermarkStore,
 } from '../../faculties/memory/social-graph/proposals.js';
+import type { CompanionPresenceTurnPort } from '../../core/agent/companion-presence-runtime.js';
 import type { EventBus } from '../../shared/event-bus.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import type { EligibilityGate } from '../../system/capabilities/eligibility.js';
@@ -60,6 +66,13 @@ export interface BuildAgentSchedulerRuntimeOptions {
   concernStore?: ConcernStorePort | null;
   backupConfig: BackupRuntimeConfig;
   pathSnapshot: RuntimePathSnapshot;
+  /**
+   * Cross-companion presence runtime (multi-companion only; null flag-off).
+   * When present, the heartbeat lane bumps this agent's own presence row on the
+   * heartbeat cadence so an idle-but-alive emanation stays inside siblings'
+   * co-presence (read-side staleness TTL).
+   */
+  companionPresence?: CompanionPresenceTurnPort | null;
   // ── Social-graph builder worker (E4.2) ──
   contactStore?: ContactStorePort | null;
   socialGraphProposalStore?: SocialGraphProposalStore | null;
@@ -121,64 +134,114 @@ export function buildAgentSchedulerRuntime(
       'PostgreSQL scheduled backups require config.postgresDatabaseUrl — refusing to run without a database backup source',
     );
   }
-  registerScheduledBackupTask({
-    scheduler,
-    ...(postgresDatabaseUrl
-      ? {
-        postgres: {
-          databaseUrl: postgresDatabaseUrl,
-          ...(options.backupConfig.verifyRestore
-            ? {
-              restoreVerifyDatabaseUrl: (() => {
-                const derived = deriveRestoreVerifyDatabaseUrl(postgresDatabaseUrl);
-                if (!derived) {
-                  throw new Error(
-                    'Backup verifyRestore is enabled but the restore-verify scratch database URL cannot be derived from config.postgresDatabaseUrl',
-                  );
-                }
-                return derived;
-              })(),
-            }
-            : {}),
-        },
-      }
-      : {}),
-    companionDataDir: options.pathSnapshot.companionDataDir,
-    systemDataDir: options.pathSnapshot.systemDataDir,
-    workspacePath: options.pathSnapshot.workspacePath,
-    workspaceProtectedPaths: [
-      options.pathSnapshot.systemDataDir,
-      options.pathSnapshot.companionDataDir,
-      options.pathSnapshot.runtimePathLayout.logsDir,
-      options.pathSnapshot.runtimePathLayout.tempDir,
-      options.pathSnapshot.runtimePathLayout.backupsDir,
-    ],
-    sessionsDir: resolveSessionsDir(options.pathSnapshot.companionDataDir),
-    memoriesJournalPath: resolveMemoryJournalPath(options.pathSnapshot.companionDataDir),
-    characterCardPath: options.config.characterCardPath,
-    characterCardHistoryPath: resolveCharacterCardHistoryPath(options.pathSnapshot.companionDataDir),
-    config: options.backupConfig,
-    onBackupFailure: (error) => {
-      void options.eventBus.emit('backup.failed', {
-        taskId: SCHEDULED_BACKUP_TASK_ID,
-        taskName: SCHEDULED_BACKUP_TASK_NAME,
-        error: error instanceof Error ? error.message : String(error),
-        timestamp: Date.now(),
+  const onBackupFailure = (error: unknown): void => {
+    void options.eventBus.emit('backup.failed', {
+      taskId: SCHEDULED_BACKUP_TASK_ID,
+      taskName: SCHEDULED_BACKUP_TASK_NAME,
+      error: error instanceof Error ? error.message : String(error),
+      timestamp: Date.now(),
+    });
+  };
+
+  // ── Backup lane selection (sprint 10, W2) ──
+  // Multi-companion: exactly ONE process — the fleet leader (first companion in
+  // companions.json order) — runs a single fleet backup capturing every
+  // companion slice (+ cluster/shared, or one whole-database family artifact in
+  // group mode). Follower processes register no backup lane. Flag-off, this
+  // whole branch is skipped and the single-companion path below runs
+  // byte-identically.
+  const fleet = options.config.multiCompanion ? options.config.companionFleet : undefined;
+  if (options.config.multiCompanion && !fleet) {
+    // Fail closed: multi-companion selects the fleet backup path; a missing
+    // fleet manifest here means config resolution is inconsistent. Never fall
+    // back silently to a single-companion backup that would miss siblings.
+    throw new Error(
+      'Multi-companion mode is enabled but the resolved config carries no companion fleet — refusing to register a single-companion backup lane',
+    );
+  }
+  if (fleet) {
+    if (isFleetBackupLeader(options.config.companionId, fleet)) {
+      const fleetOptions = buildFleetBackupRunOptions({
+        fleet,
+        ownCompanionId: options.config.companionId,
+        ownResolvedCompanionDataDir: options.pathSnapshot.companionDataDir,
+        systemDataDir: options.pathSnapshot.systemDataDir,
+        postgres: { databaseUrl: postgresDatabaseUrl },
+        backupConfig: options.backupConfig,
       });
-    },
-  });
-  log.info('Scheduled backups enabled', {
-    intervalMs: options.backupConfig.intervalMs,
-    postgresSource: Boolean(postgresDatabaseUrl),
-    maxRotatingBackups: options.backupConfig.maxRotatingBackups,
-    maxWeeklyBackups: options.backupConfig.maxWeeklyBackups,
-    maxMonthlyBackups: options.backupConfig.maxMonthlyBackups,
-    backupRootDir: options.backupConfig.rootDir,
-    mirrorDir: options.backupConfig.mirrorDir || '(none)',
-    verifyRestore: options.backupConfig.verifyRestore,
-    encryption: options.backupConfig.encryption.mode,
-    workspacePath: options.pathSnapshot.workspacePath,
-  });
+      registerScheduledFleetBackupTask({
+        scheduler,
+        fleetOptions,
+        config: options.backupConfig,
+        onBackupFailure,
+      });
+      log.info('Fleet backups enabled (leader)', {
+        companionCount: fleet.companions.length,
+        mode: fleetOptions.groupMode ? 'group' : 'per-companion',
+        intervalMs: options.backupConfig.intervalMs,
+        backupRootDir: options.backupConfig.rootDir,
+        verifyRestore: options.backupConfig.verifyRestore,
+        encryption: options.backupConfig.encryption.mode,
+      });
+    } else {
+      log.info('Fleet backup delegated to leader companion; no backup lane registered in this follower process', {
+        companionId: options.config.companionId,
+        leaderCompanionId: fleet.companions[0].companionId,
+      });
+    }
+  } else {
+    registerScheduledBackupTask({
+      scheduler,
+      ...(postgresDatabaseUrl
+        ? {
+          postgres: {
+            databaseUrl: postgresDatabaseUrl,
+            ...(options.backupConfig.verifyRestore
+              ? {
+                restoreVerifyDatabaseUrl: (() => {
+                  const derived = deriveRestoreVerifyDatabaseUrl(postgresDatabaseUrl);
+                  if (!derived) {
+                    throw new Error(
+                      'Backup verifyRestore is enabled but the restore-verify scratch database URL cannot be derived from config.postgresDatabaseUrl',
+                    );
+                  }
+                  return derived;
+                })(),
+              }
+              : {}),
+          },
+        }
+        : {}),
+      companionDataDir: options.pathSnapshot.companionDataDir,
+      systemDataDir: options.pathSnapshot.systemDataDir,
+      workspacePath: options.pathSnapshot.workspacePath,
+      workspaceProtectedPaths: [
+        options.pathSnapshot.systemDataDir,
+        options.pathSnapshot.companionDataDir,
+        options.pathSnapshot.runtimePathLayout.logsDir,
+        options.pathSnapshot.runtimePathLayout.tempDir,
+        options.pathSnapshot.runtimePathLayout.backupsDir,
+      ],
+      sessionsDir: resolveSessionsDir(options.pathSnapshot.companionDataDir),
+      memoriesJournalPath: resolveMemoryJournalPath(options.pathSnapshot.companionDataDir),
+      characterCardPath: options.config.characterCardPath,
+      characterCardHistoryPath: resolveCharacterCardHistoryPath(options.pathSnapshot.companionDataDir),
+      config: options.backupConfig,
+      onBackupFailure,
+    });
+    log.info('Scheduled backups enabled', {
+      intervalMs: options.backupConfig.intervalMs,
+      postgresSource: Boolean(postgresDatabaseUrl),
+      maxRotatingBackups: options.backupConfig.maxRotatingBackups,
+      maxWeeklyBackups: options.backupConfig.maxWeeklyBackups,
+      maxMonthlyBackups: options.backupConfig.maxMonthlyBackups,
+      backupRootDir: options.backupConfig.rootDir,
+      mirrorDir: options.backupConfig.mirrorDir || '(none)',
+      verifyRestore: options.backupConfig.verifyRestore,
+      encryption: options.backupConfig.encryption.mode,
+      workspacePath: options.pathSnapshot.workspacePath,
+    });
+  }
 
   scheduler.registerHeartbeat(async () => {
     const now = Date.now();
@@ -186,6 +249,11 @@ export function buildAgentSchedulerRuntime(
       timestamp: now,
       taskCount: scheduler.taskCount,
     });
+    // Multi-companion presence liveness beat. No-op flag-off (companionPresence
+    // is null) and when this agent has no current situated place. Refresh errors
+    // are logged loudly inside the runtime and never thrown, so they can never
+    // take down the heartbeat lane.
+    await options.companionPresence?.refreshOwnPresence();
   });
   registerAmbientPresenceTask({
     scheduler,

@@ -3,6 +3,7 @@ import { resolve } from 'node:path';
 import type { SubstrateConfig, WyomingShardRoutingConfig } from '../../system/config/runtime-config-contracts.js';
 import { getIgnoredJsonBackedConfigEnvKeys } from '../../system/config/legacy-env.js';
 import {
+  assertDiscordAccountTokensConfigured,
   loadRuntimeChannelsConfig,
   type RuntimeChannelsConfig,
   type RuntimeChannelsConfigOverrides,
@@ -39,6 +40,10 @@ import {
   resolveGatewayRpcEndpointFromEnv,
   type GatewayRpcEndpoint,
 } from './transport.js';
+import {
+  resolveGatewayMultiCompanionConfig,
+  type GatewayMultiCompanionConfig,
+} from './multi-companion.js';
 
 const DEFAULT_SOCKET_PATH = '/run/psfn/gateway.sock';
 const DEFAULT_NTFY_TIMEOUT_MS = 8_000;
@@ -63,6 +68,7 @@ export interface GatewayBootstrapDiagnostics {
 export interface GatewayBootstrapServerInput {
   sessionHmacKeyring: SessionHmacKeyring;
   wyomingShardRouting: WyomingShardRoutingConfig;
+  multiCompanion: GatewayMultiCompanionConfig;
   ntfy?: GatewayNtfyConfig;
   confirmation: {
     expiryMs: number;
@@ -291,6 +297,17 @@ function buildGatewayPolicyConfig(
       enabled: beadsToolsEnabled,
       ...(beadsAllowActions ? { allowActions: beadsAllowActions } : {}),
     },
+    homeAssistant: {
+      enabled: config.homeAssistantEnabled === true,
+      ...(config.homeAssistantBaseUrl?.trim()
+        ? { baseUrl: config.homeAssistantBaseUrl.trim() }
+        : {}),
+      tokenConfigured: Boolean(resolveOptionalEnvCredential(
+        config.credentialVault,
+        'HOME_ASSISTANT_TOKEN',
+        env,
+      )),
+    },
     vault: {
       enabled: vaultToolsEnabled,
       ...(vaultAllowActions ? { allowActions: vaultAllowActions } : {}),
@@ -346,6 +363,9 @@ export function resolveGatewayBootstrapInput(
     buildGatewayChannelsConfigOverrides(config, settingsDomains.runtime),
     { credentialVault: config.credentialVault },
   );
+  // W1-P2: the gateway is the secret holder — every configured discord bot
+  // account must have resolved its token from env, or startup stops here.
+  assertDiscordAccountTokensConfigured(channelsConfig.discord);
   // E3.2: publish channel-owned Context Envelope labels so gateway-side
   // classification consumers see the same precedence as the agent process.
   setRuntimeChannelEnvelopeLabels(channelsConfig.contextEnvelope.channels);
@@ -386,6 +406,7 @@ export function resolveGatewayBootstrapInput(
     server: {
       sessionHmacKeyring,
       wyomingShardRouting,
+      multiCompanion: resolveGatewayMultiCompanionConfig(config, channelsConfig),
       ...(ntfy ? { ntfy } : {}),
       confirmation: {
         expiryMs: confirmationExpiryMs,

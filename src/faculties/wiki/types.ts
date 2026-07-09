@@ -1,4 +1,7 @@
 import type { SensitivityLevel } from '../../system/trust/types.js';
+import type { WikiScope } from './scope.js';
+
+export type { WikiScope } from './scope.js';
 
 export const WIKI_SOURCE_CLASSES = [
   'companion_authored_note',
@@ -25,6 +28,14 @@ export interface WikiDocumentMetadata {
   sourceClass: WikiSourceClass;
   provenanceRefs: string[];
   sensitivity: SensitivityLevel;
+  /**
+   * W5b scope dimension. Absent == `personal` (the default for every existing
+   * document and every companion write path). Non-personal `shared_world:<siteId>`
+   * documents are only ever produced by the caretaker layer, never serialized by
+   * companion-driven writes — so a personal document is byte-identical to a
+   * pre-W5b document (the field is omitted, not written as `personal`).
+   */
+  scope?: WikiScope;
   summary?: string;
   createdAt: string;
   updatedAt: string;
@@ -50,6 +61,13 @@ export interface WikiDocumentUpsertInput {
   sourceClass?: WikiSourceClass;
   provenanceRefs?: readonly string[] | string;
   sensitivity?: SensitivityLevel;
+  /**
+   * Optional W5b scope. Defaults to `personal`. The personal WikiStore
+   * fail-closed REJECTS any non-personal (`shared_world:*`) scope on write —
+   * companions never write shared world knowledge directly; that is the
+   * deferred caretaker layer's job (operator-approved).
+   */
+  scope?: WikiScope;
   summary?: string;
   updatedBy?: string;
 }

@@ -1,0 +1,107 @@
+{
+  "schemaVersion": 1,
+  "sites": [
+    { "siteId": "home", "displayName": "Home", "kind": "physical" },
+    { "siteId": "home_mindspace", "displayName": "Home (Shared Mindspace)", "kind": "virtual" }
+  ],
+  "places": [
+    {
+      "placeId": "living_room",
+      "siteId": "home",
+      "displayName": "Living Room",
+      "kind": "physical",
+      "haAreaId": "living_room",
+      "description": "The main shared living space.",
+      "affordances": [
+        {
+          "affordanceId": "lr_lights",
+          "role": "effector",
+          "kind": "light",
+          "backend": "ha",
+          "displayName": "Living Room Lights",
+          "entityId": "light.living_room",
+          "control": ["on", "off", "brightness"]
+        },
+        {
+          "affordanceId": "lr_presence",
+          "role": "perceiver",
+          "kind": "presence",
+          "backend": "ha",
+          "displayName": "Living Room Presence",
+          "entityId": "binary_sensor.living_room_mmwave"
+        }
+      ]
+    },
+    {
+      "placeId": "kitchen",
+      "siteId": "home",
+      "displayName": "Kitchen",
+      "kind": "physical",
+      "haAreaId": "kitchen",
+      "affordances": [
+        {
+          "affordanceId": "kitchen_lights",
+          "role": "effector",
+          "kind": "light",
+          "backend": "ha",
+          "displayName": "Kitchen Lights",
+          "entityId": "light.kitchen",
+          "control": ["on", "off", "brightness"]
+        },
+        {
+          "affordanceId": "kitchen_presence",
+          "role": "perceiver",
+          "kind": "presence",
+          "backend": "ha",
+          "displayName": "Kitchen Presence",
+          "entityId": "binary_sensor.kitchen_mmwave"
+        }
+      ]
+    },
+    {
+      "placeId": "office",
+      "siteId": "home",
+      "displayName": "Office",
+      "kind": "physical",
+      "haAreaId": "office",
+      "affordances": [
+        {
+          "affordanceId": "office_lights",
+          "role": "effector",
+          "kind": "light",
+          "backend": "ha",
+          "displayName": "Office Lights",
+          "entityId": "light.office",
+          "control": ["on", "off", "brightness"]
+        }
+      ]
+    },
+    {
+      "placeId": "bedroom",
+      "siteId": "home",
+      "displayName": "Bedroom",
+      "kind": "physical",
+      "haAreaId": "bedroom",
+      "affordances": [
+        {
+          "affordanceId": "bedroom_lights",
+          "role": "effector",
+          "kind": "light",
+          "backend": "ha",
+          "displayName": "Bedroom Lights",
+          "entityId": "light.bedroom",
+          "control": ["on", "off", "brightness"]
+        }
+      ]
+    },
+    {
+      "placeId": "living_room_twin",
+      "siteId": "home_mindspace",
+      "displayName": "Living Room (Twin)",
+      "kind": "virtual",
+      "mirrorsPlaceId": "living_room",
+      "description": "A shared virtual reflection of the living room, co-inhabited during plain chat.",
+      "affordances": []
+    }
+  ]
+}

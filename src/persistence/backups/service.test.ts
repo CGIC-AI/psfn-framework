@@ -46,6 +46,7 @@ function makeBackupRuntimeConfig(rootDir: string, verifyRestore = false) {
     rootDir,
     mirrorDir: '',
     verifyRestore,
+    groupMode: false,
     encryption: TEST_BACKUP_ENCRYPTION,
   };
 }
@@ -282,6 +283,50 @@ describe('runBackupCycle', () => {
     expect(argv).not.toContain('sup3r-secret');
     expect(argv).toContain('postgresql://psfn@127.0.0.1:5432/psfn');
     expect(readFileSync(pgPasswordPath, 'utf-8')).toBe('sup3r-secret');
+  });
+
+  it('passes --schema and writes a schema-qualified dump when a schema is set', async () => {
+    const root = join(tmpdir(), `psfn-backup-pg-schema-${Date.now()}`);
+    roots.push(root);
+    const sessionsDir = join(root, 'sessions');
+    const backupRootDir = join(root, 'backups');
+    mkdirSync(sessionsDir, { recursive: true });
+    writeFileSync(join(sessionsDir, 'channel.jsonl'), '{}\n', 'utf-8');
+    const { stubPath, argvPath } = writeRecordingStubPgDump(root);
+
+    const result = await runBackupCycle({
+      postgres: {
+        databaseUrl: 'postgresql://psfn:secret@127.0.0.1:5432/psfn',
+        pgDumpBinary: stubPath,
+        schema: 'companion_alpha',
+      },
+      sessionsDir,
+      backupRootDir,
+      now: () => Date.UTC(2026, 1, 26, 10, 11, 12, 123),
+    });
+
+    const argv = readFileSync(argvPath, 'utf-8');
+    expect(argv).toContain('--schema=companion_alpha');
+    expect(result.postgresDumpPath).toContain(join('database', 'psfn.companion_alpha.dump'));
+    expect(existsSync(result.postgresDumpPath!)).toBe(true);
+  });
+
+  it('fails closed when the schema identifier is invalid', async () => {
+    const root = join(tmpdir(), `psfn-backup-pg-schema-invalid-${Date.now()}`);
+    roots.push(root);
+    const sessionsDir = join(root, 'sessions');
+    mkdirSync(sessionsDir, { recursive: true });
+
+    await expect(runBackupCycle({
+      postgres: {
+        databaseUrl: 'postgresql://psfn:secret@127.0.0.1:5432/psfn',
+        pgDumpBinary: writeStubPgDump(root),
+        schema: 'public; DROP SCHEMA companion',
+      },
+      sessionsDir,
+      backupRootDir: join(root, 'backups'),
+      now: () => Date.UTC(2026, 1, 26, 10, 11, 12, 123),
+    })).rejects.toThrow(/Invalid Postgres schema name/);
   });
 
   it('fails closed when the Postgres connection string is not a URL', async () => {

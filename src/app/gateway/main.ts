@@ -32,7 +32,11 @@ import { resolveStartupPreflightBundle } from '../startup/support/startup-prefli
 import { runShutdownSequence } from '../startup/support/shutdown-helpers.js';
 import { createSignalShutdownHandler, registerProcessErrorHandlers } from '../startup/support/signal-shutdown.js';
 import { resolveGatewayApiSurfaceBindings, startOptionalGatewayApiServer } from './api-surface.js';
+import { startOptionalFleetStatusServer } from '../../boundary/gateway/fleet-status.js';
 import { loadSatelliteRegistryConfig } from '../../channels/backplane/satellite-registry.js';
+import { assertSatellitePlaceBindings, loadPlacesRegistryConfig } from '../../channels/backplane/places-registry.js';
+import { GatewayCompanionChannelLane } from '../../boundary/gateway/companion-channels.js';
+import { PostgresCompanionPresenceStore } from '../../persistence/postgres/companion-presence-store.js';
 import { CHARGE_POLICY_FILE_NAME } from '../../system/config/charge-policy-config.js';
 import { ensurePersonalFilesLayout } from '../../persistence/layout.js';
 
@@ -80,6 +84,12 @@ async function main(): Promise<void> {
     logger: log,
   });
   const satelliteRegistryConfig = loadSatelliteRegistryConfig(startupHydration.pathSnapshot.systemDataDir);
+  const placesRegistryConfig = loadPlacesRegistryConfig(startupHydration.pathSnapshot.systemDataDir);
+  assertSatellitePlaceBindings(satelliteRegistryConfig, placesRegistryConfig);
+  log.info('Loaded places registry', {
+    siteCount: placesRegistryConfig.sites.length,
+    placeCount: placesRegistryConfig.places.length,
+  });
   logStartupHydrationDiagnostics(startupHydration.diagnostics);
   const bootstrap = resolveGatewayBootstrapInput({
     config,
@@ -178,7 +188,44 @@ async function main(): Promise<void> {
 
   // ── Create gateway server ──
 
-  const gateway = createGatewayServer({ discordAdapter: discord });
+  // Multi-account discord (W1-P2): one outbound dock per companionId so
+  // agent-originated discord sends egress through their own bot identity only.
+  const discordAccountDocks = channelSurfaces.discordAccounts
+    ? new Map(channelSurfaces.discordAccounts.map(account => [account.companionId, account.adapter]))
+    : undefined;
+
+  // ── Inter-companion channel lane (sprint-10 W6) ──
+  // Multi-companion only: the gateway owns cross-companion routing. Room
+  // membership resolves from shared-schema presence; DM peers validate against
+  // the fleet manifest. Flag-off, none of this exists and companion sends fail
+  // closed at the RPC surface.
+  let companionPresenceStore: PostgresCompanionPresenceStore | null = null;
+  let companionChannelLane: GatewayCompanionChannelLane | undefined;
+  if (config.multiCompanion === true) {
+    const databaseUrl = config.postgresDatabaseUrl?.trim();
+    if (!databaseUrl) {
+      throw new Error('Multi-companion inter-companion channels require config.postgresDatabaseUrl');
+    }
+    if (!config.companionFleet) {
+      throw new Error('Multi-companion inter-companion channels require the companions.json fleet manifest');
+    }
+    companionPresenceStore = await PostgresCompanionPresenceStore.connect(databaseUrl);
+    companionChannelLane = new GatewayCompanionChannelLane({
+      placesRegistry: placesRegistryConfig,
+      presence: companionPresenceStore,
+      fleetCompanionIds: new Set(config.companionFleet.companions.map((entry) => entry.companionId)),
+    });
+    log.info('Inter-companion channel lane enabled', {
+      fleetSize: config.companionFleet.companions.length,
+      placeCount: placesRegistryConfig.places.length,
+    });
+  }
+
+  const gateway = createGatewayServer({
+    discordAdapter: discord,
+    ...(discordAccountDocks ? { discordAccountDocks } : {}),
+    ...(companionChannelLane ? { companionChannels: companionChannelLane } : {}),
+  });
   const {
     apiHost,
     apiPort,
@@ -195,6 +242,9 @@ async function main(): Promise<void> {
   });
   wireGatewayChannelMessages({
     discord,
+    ...(channelSurfaces.discordAccounts
+      ? { discordAccounts: channelSurfaces.discordAccounts }
+      : {}),
     telegram,
     gateway,
     serializeMessage,
@@ -204,6 +254,15 @@ async function main(): Promise<void> {
 
   await initGatewayChannelSurfaces(channelSurfaces);
   gateway.start();
+  // Fleet-status surface (sprint-10 W4): config-gated, read-only cluster
+  // health view over the connection registry. Absent FLEET_STATUS_PORT keeps
+  // single-companion behavior byte-identical.
+  const fleetStatusServer = await startOptionalFleetStatusServer({
+    env: process.env,
+    multiCompanion: config.multiCompanion === true,
+    ...(config.companionFleet ? { fleet: config.companionFleet.companions } : {}),
+    source: gateway,
+  });
   const apiServer = await startOptionalGatewayApiServer({
     apiHost,
     apiPort,
@@ -234,9 +293,11 @@ async function main(): Promise<void> {
     stopPromise = (async () => {
       await runShutdownSequence([
         { step: 'stop debug observer', action: () => stopDebugObserver() },
+        { step: 'stop fleet status server', action: () => fleetStatusServer?.stop() },
         { step: 'stop public api server', action: () => apiServer?.stop() },
         { step: 'stop voice surfaces', action: () => voiceSurfaces.stop() },
         { step: 'stop gateway server', action: () => gateway.stop() },
+        { step: 'close companion presence reader', action: async () => { await companionPresenceStore?.close(); } },
         { step: 'stop channel adapters', action: () => stopGatewayChannelSurfaces(channelSurfaces) },
       ], log);
       log.info('Stopped');

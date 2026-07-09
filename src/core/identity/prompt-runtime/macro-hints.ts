@@ -31,6 +31,7 @@ export interface PromptRuntimeMacroHint {
     | 'affect'
     | 'metacognition'
     | 'internal_state'
+    | 'situated'
     | 'attention'
     | 'tooling';
   token: string;
@@ -90,6 +91,7 @@ const responseStyleTurnHint = createTurnMacroHintFactory('response_style', RESPO
 const affectTurnHint = createTurnMacroHintFactory('affect', AFFECT_PRODUCER);
 const metacognitionTurnHint = createTurnMacroHintFactory('metacognition', METACOGNITION_PRODUCER);
 const internalStateTurnHint = createTurnMacroHintFactory('internal_state', DYNAMIC_TURN_PRODUCER);
+const situatedTurnHint = createTurnMacroHintFactory('situated', DYNAMIC_TURN_PRODUCER);
 const attentionTurnHint = createTurnMacroHintFactory('attention', DYNAMIC_TURN_PRODUCER);
 const toolingTurnHint = createTurnMacroHintFactory('tooling', DYNAMIC_TURN_PRODUCER);
 
@@ -312,6 +314,17 @@ export const INTERNAL_STATE_PROMPT_RUNTIME_MACRO_HINTS: PromptRuntimeMacroHint[]
   internalStateTurnHint('{{runtime_internal_state_emotional_telemetry_reasons}}', 'Comma-joined degraded emotion-telemetry reasons; empty when telemetry is trusted (bare list).', 'uncalibrated'),
 ];
 
+export const SITUATED_PROMPT_RUNTIME_MACRO_HINTS: PromptRuntimeMacroHint[] = [
+  situatedTurnHint('{{runtime_situated_location_present}}', 'Whether a durable situated location is known for the current turn.', 'true'),
+  situatedTurnHint('{{runtime_situated_location_label}}', 'Human-readable label of the durable last-known location.', 'the living room'),
+  situatedTurnHint('{{runtime_situated_location_kind}}', 'Place kind (physical/virtual); empty when only a presence label is known.', 'physical'),
+  situatedTurnHint('{{runtime_situated_location_place_id}}', 'Resolved place id of the durable location; empty when unbound.', 'living-room'),
+  situatedTurnHint('{{runtime_situated_location_site_id}}', 'Site id of the durable location; empty when unknown.', 'home'),
+  situatedTurnHint('{{runtime_situated_location_updated_at}}', 'ISO timestamp of when the location was last confirmed by a routing signal.', '2026-07-08T18:04:12.000Z'),
+  situatedTurnHint('{{runtime_situated_location_age_label}}', 'How long ago the location was last confirmed (honest staleness).', 'about 2 hours ago'),
+  situatedTurnHint('{{runtime_situated_location_is_stale}}', 'Set when the location is older than the freshness window; empty otherwise.', 'true'),
+];
+
 export const ATTENTION_PROMPT_RUNTIME_MACRO_HINTS: PromptRuntimeMacroHint[] = [
   attentionTurnHint('{{runtime_concerns_count}}', 'Total deduplicated active concern count available to the current turn.', '2'),
   attentionTurnHint('{{runtime_concerns_top_lines}}', 'Top active concern bullet lines without the prose opener.', '- medication reminder logistics [high; revisit before Friday, March 27, 2026 at 10:27 PM]'),
@@ -360,6 +373,7 @@ export const PROMPT_RUNTIME_MACRO_HINTS: PromptRuntimeMacroHint[] = [
   ...AFFECT_PROMPT_RUNTIME_MACRO_HINTS,
   ...METACOGNITIVE_FLAG_RUNTIME_MACRO_HINTS,
   ...INTERNAL_STATE_PROMPT_RUNTIME_MACRO_HINTS,
+  ...SITUATED_PROMPT_RUNTIME_MACRO_HINTS,
   ...ATTENTION_PROMPT_RUNTIME_MACRO_HINTS,
   ...TOOLING_PROMPT_RUNTIME_MACRO_HINTS,
 ];

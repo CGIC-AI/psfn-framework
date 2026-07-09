@@ -24,6 +24,7 @@ import {
   INTENTION_FOLLOW_UP_AUTHOR_NAME,
 } from '../intention/appraisal.js';
 import type { AgentResponse, CorrelationMetadata, ModelBudgetBlockedEvent, MessagePromptOverride, ResponseStyle, SubstrateMessage } from '../../shared/contracts/runtime.js';
+import type { PlacesRegistryConfig } from '../../shared/contracts/places-registry.js';
 import type { CapabilityTier, CoreSubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type { ContactStorePort } from '../contacts/contact-store-port.js';
 import type { ContactTrackingGate } from '../contacts/tracking-gate.js';
@@ -116,6 +117,9 @@ import {
   type IntentionPostTurnHook,
   type PostTurnActionInferer,
 } from './substrate-agent/post-turn-actions.js';
+import { resolveSituatedPlaceRef } from './substrate-agent/runtime-context-sections/situated-presence.js';
+import { resolveTurnSituatedFallbackPlaceId } from './substrate-agent/runtime-context-sections/turn-presence-mode.js';
+import type { CompanionPresenceTurnPort } from './companion-presence-runtime.js';
 import {
   buildBehavioralNotesContextBlock as buildBehavioralNotesContextBlockForTurn,
   buildDynamicPromptTemplateVariables as buildDynamicPromptTemplateVariablesForTurn,
@@ -135,6 +139,8 @@ import {
   type ExtendedToolActivationOptions,
   type ExtendedToolActivationResult,
 } from './substrate-agent/adaptive-tools-runtime.js';
+import { SituatedEmanationTracker } from './substrate-agent/runtime-context-sections/situated-emanation.js';
+import { createVirtualRoomFollower, type VirtualRoomFollower } from './virtual-room-follow.js';
 import { EmotionSelfModelRuntime } from './substrate-agent/emotion-self-model-runtime.js';
 import {
   type BackgroundContinuationTaskRecord,
@@ -217,6 +223,11 @@ export interface SubstrateAgentOptions {
   appCache?: AppCache;
   /** Contact-tracking policy gate (E3.4). Absent gate behaves as 'auto' everywhere. */
   contactTrackingGate?: ContactTrackingGate | null;
+  /**
+   * Places soft-registry (S10). Absent/undefined behaves as an empty registry,
+   * so a runtime with no `places.json` renders byte-identically.
+   */
+  placesRegistryConfig?: PlacesRegistryConfig;
 }
 const DEFAULT_TOOL_SCHEDULER_MAX_PARALLEL = 5;
 
@@ -296,6 +307,105 @@ export class SubstrateAgent {
   // Contact-tracking policy gate (E3.4) — null behaves as 'auto' everywhere
   private readonly contactTrackingGate: ContactTrackingGate | null;
 
+  // Cross-companion presence (sprint 10, W5a) — null (single-companion /
+  // flag-off) leaves every turn byte-identical: no writes, no co-presence.
+  // Wired from the agent entrypoint after persistence bootstrap, like
+  // memoryProvider/contactStore above.
+  companionPresence: CompanionPresenceTurnPort | null = null;
+
+  // Places soft-registry (S10) — undefined behaves as an empty registry
+  private readonly placesRegistryConfig: PlacesRegistryConfig | undefined;
+
+  // Handoff-aware active-emanation tracker (S10 B2) — remembers the companion's
+  // current situated place so placeless turns (Discord/Telegram) still
+  // foreground the room it is emanating into. In-memory per process; durable
+  // persistence is bead .7's concern.
+  private readonly situatedEmanationTracker = new SituatedEmanationTracker();
+
+  // Virtual-activity presence follow (vinz.21): pulls the companion's virtual
+  // presence to a place-bound companion-room when the trusted partner is
+  // active there. Constructed in the constructor (needs sessionManager /
+  // registry); invoked from the pre-turn path after author/trust resolution.
+  private readonly virtualRoomFollower: VirtualRoomFollower;
+
+  /**
+   * Deliberate virtual navigation (vinz.26): the world tool's `move` action
+   * applies its LOCAL situated effect through this seam. The virtual overlay
+   * never touches the physical emanation; a later place-bearing turn
+   * supersedes it (see SituatedEmanationTracker.moveToVirtualPlace).
+   */
+  applyDeliberateVirtualMove(placeId: string): void {
+    this.situatedEmanationTracker.moveToVirtualPlace(placeId);
+  }
+
+  /**
+   * The companion's current situated place, as the situated block foregrounds
+   * it on a placeless turn (deliberate virtual move, else active emanation).
+   * Serves the world tool's deictic defaults (perceive/list without placeId).
+   */
+  resolveCurrentSituatedPlaceId(): string | undefined {
+    return this.situatedEmanationTracker.resolvePlaceId();
+  }
+
+  /**
+   * The current PHYSICAL emanation's place (ignoring any virtual-move
+   * overlay). The presence-follow controller (vinz.20) compares a resolved
+   * presence claim's place against this to decide whether a handoff is a
+   * real move or a repeat detection.
+   */
+  resolveCurrentEmanationPlaceId(): string | undefined {
+    return this.situatedEmanationTracker.snapshot()?.placeId;
+  }
+
+  /**
+   * Presence-driven emanation handoff (conversation-follows-you, vinz.20):
+   * apply the LOCAL side of an auto-follow. Drives the same tracker
+   * transition a place-bearing satellite turn performs (establish the new
+   * emanation place, supersede any virtual-move overlay) and confirms the
+   * durable situated location so the vinz.29 mindspace-twin default follows
+   * the move. Trust/freshness/debounce gating and the shared presence write
+   * live in the controller (`createPresenceFollowSink`); this seam only
+   * applies an already-approved handoff.
+   */
+  applyEmanationFollowHandoff(input: {
+    placeId: string;
+    siteId: string;
+    placeDisplayName: string;
+  }): void {
+    this.situatedEmanationTracker.handoffToPlace(input.placeId);
+    this.emotionSelfModelRuntime.confirmSituatedLocation({
+      placeId: input.placeId,
+      siteId: input.siteId,
+      label: input.placeDisplayName.trim() || input.placeId,
+      kind: 'physical',
+      updatedAt: new Date().toISOString(),
+    });
+  }
+
+  /**
+   * Dual-presence situated fallback for a turn (vinz.29, decisions 9-13): the
+   * place foregrounded when the turn carries no place binding of its own.
+   * Physical-origin turns keep the legacy chain (deliberate virtual move →
+   * active emanation); mindspace turns (plain chat) default to the TWIN of the
+   * durable last-known physical room, still outranked by a deliberate virtual
+   * move. Single seam for the situated block, co-presence read, wiki
+   * shared-world scope, and the mindspace presence write — they must all agree
+   * on where the companion is.
+   */
+  resolveSituatedFallbackPlaceIdForTurn(message: SubstrateMessage): string | undefined {
+    return resolveTurnSituatedFallbackPlaceId({
+      message,
+      ...(this.placesRegistryConfig ? { placesRegistry: this.placesRegistryConfig } : {}),
+      ...(this.situatedEmanationTracker.resolveVirtualMovePlaceId()
+        ? { virtualMovePlaceId: this.situatedEmanationTracker.resolveVirtualMovePlaceId() }
+        : {}),
+      ...(this.situatedEmanationTracker.snapshot()?.placeId
+        ? { emanationPlaceId: this.situatedEmanationTracker.snapshot()?.placeId }
+        : {}),
+      durableLocation: this.emotionSelfModelRuntime.getCurrentSituatedLocation(),
+    });
+  }
+
   // Prompt composition — null falls back to static systemPrompt
   promptComposer: PromptComposer | null = null;
 
@@ -329,6 +439,15 @@ export class SubstrateAgent {
     this.observerEvalSidecar = options?.observerEvalSidecar ?? null;
     this.fatigueBudget = options?.fatigueBudget ?? null;
     this.contactTrackingGate = options?.contactTrackingGate ?? null;
+    this.placesRegistryConfig = options?.placesRegistryConfig;
+    this.virtualRoomFollower = createVirtualRoomFollower({
+      ...(this.placesRegistryConfig ? { placesRegistry: this.placesRegistryConfig } : {}),
+      getCompanionPresence: () => this.companionPresence,
+      applyVirtualMove: (placeId) => this.applyDeliberateVirtualMove(placeId),
+      resolveSituatedFallbackPlaceId: (message) => this.resolveSituatedFallbackPlaceIdForTurn(message),
+      roomEntryNoteSink: this.sessionManager,
+      eventBus: this.eventBus,
+    });
     this.emotionSelfModelRuntime = new EmotionSelfModelRuntime({
       sessionManager: this.sessionManager,
       llmProvider: this.llmClient,
@@ -338,6 +457,7 @@ export class SubstrateAgent {
       getPendingFollowUpProvider: () => this.pendingFollowUpProvider,
       getContactStore: () => this.contactStore,
       getSelfModelRuntimeRequired: () => this.selfModelRuntimeRequired,
+      getPlacesRegistry: () => this.placesRegistryConfig,
       logger: log,
       onEmotionAppraisalGateEvent: (event) => {
         this.eventBus.emit('emotion.appraisal.gate', event).catch((error) => {
@@ -853,6 +973,9 @@ export class SubstrateAgent {
     this.currentMetacognitiveFlags = cloneMetacognitiveFlags(record.metacognitiveFlags);
     this.internalStateContinuityGap = null;
     this.internalStateContinuityGapRenderCount = 0;
+    // S10 B3: seed the durable situated location so a restored location survives
+    // a continuity gap (reload) and carries forward until a new routing signal.
+    this.emotionSelfModelRuntime.restoreSituatedLocation(this.currentInternalState.situated.location);
   }
 
   /** Records that persisted state was too stale to restore; surfaced to her on the next turn. */
@@ -902,6 +1025,7 @@ export class SubstrateAgent {
       costTelemetry: createEventBusCostTelemetryPort(this.eventBus),
       fatigueBudget: this.fatigueBudget,
       satellitePresence: this.satellitePresencePort,
+      companionPresence: this.companionPresence,
       llmClient: this.llmClient,
       imageVisionReviewer: this.imageVisionReviewer,
       sessionManager: this.sessionManager,
@@ -913,6 +1037,9 @@ export class SubstrateAgent {
       memoryProvider: this.memoryProvider,
       memoryExtractor: this.memoryExtractor,
       wikiRetrieval: this.wikiRetrieval,
+      placesRegistry: this.placesRegistryConfig,
+      resolveSituatedFallbackPlaceId: (message) => this.resolveSituatedFallbackPlaceIdForTurn(message),
+      followVirtualRoomActivity: (message, author) => this.virtualRoomFollower.maybeFollow(message, author),
       skillsRuntime: this.skillsRuntime,
       evaluateReflectionNudge: (toolSummary) => this.reflectionNudge.evaluate(toolSummary),
       emotionSelfModelRuntime: this.emotionSelfModelRuntime,
@@ -1264,6 +1391,27 @@ export class SubstrateAgent {
     conversationScope?: ConversationScope,
   ): string {
     const activeToolCounts = this.toolRuntimeFacade.resolveActiveToolCounts();
+    // Dual-presence fallback (vinz.29): single per-turn resolution shared by
+    // the co-presence read below AND the rendered situated block, so "Also
+    // here:" always agrees with "Here:" — including on mindspace (plain-chat)
+    // turns that foreground the twin of the last-known physical room.
+    const situatedFallbackPlaceId = this.resolveSituatedFallbackPlaceIdForTurn(message);
+    // Co-presence (W5a): resolved against the SAME place resolution the
+    // situated block performs — turn place first, then the dual-presence
+    // fallback (deliberate virtual move, mindspace twin, or physical
+    // emanation) — so "Also here:" agrees with the rendered "Here:" on
+    // placeless turns too; null companionPresence (flag-off) yields no
+    // coPresent input and byte-identical rendering.
+    const situatedPlace = this.companionPresence
+      ? resolveSituatedPlaceRef(
+        message,
+        this.placesRegistryConfig,
+        situatedFallbackPlaceId,
+      )
+      : undefined;
+    const coPresent = situatedPlace
+      ? this.companionPresence?.getCoPresent(situatedPlace)
+      : undefined;
     return buildRuntimeContextForTurn({
       message,
       ...(conversationScope ? { conversationScope } : {}),
@@ -1297,6 +1445,10 @@ export class SubstrateAgent {
       formatTopEmotions: (discrete) => this.emotionSelfModelRuntime.formatTopEmotions(discrete),
       config: this.config as unknown as Record<string, unknown>,
       substrateHealth: this.companionSubstrateHealthContext,
+      ...(this.placesRegistryConfig ? { placesRegistry: this.placesRegistryConfig } : {}),
+      ...(coPresent && coPresent.length > 0 ? { coPresent } : {}),
+      emanationTracker: this.situatedEmanationTracker,
+      ...(situatedFallbackPlaceId ? { situatedFallbackPlaceId } : {}),
     });
   }
 

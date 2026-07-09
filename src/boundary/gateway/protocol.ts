@@ -54,6 +54,12 @@ import type { NotificationSenderMetadata } from './notification-sender.js';
 // ── Request parameter types (agent → gateway) ──
 
 export interface GatewayCorrelationParams {
+  /**
+   * Multi-companion (sprint-10 W1): companion the request acts for. Agents
+   * self-stamp this from COMPANION_ID; the gateway verifies it against the
+   * connection's identified companionId and disconnects on mismatch.
+   */
+  companionId?: string;
   turnId?: string;
   requestId?: string;
   channelId?: string;
@@ -146,6 +152,20 @@ export interface WebRequestBinaryParams extends WebFetchBinaryParams {
   method?: string;
   bodyBase64?: string;
 }
+
+export interface HomeAssistantGetStatesParams extends GatewayCorrelationParams {
+  entityId?: string;
+}
+
+export interface HomeAssistantCallServiceParams extends GatewayCorrelationParams {
+  domain: string;
+  service: string;
+  entityId?: string;
+  entityIds?: string[];
+  data?: Record<string, unknown>;
+}
+
+export type HomeAssistantCheckConnectionParams = GatewayCorrelationParams;
 
 export interface FsReadParams {
   path: string;
@@ -408,6 +428,34 @@ export interface WebRequestBinaryResult extends WebFetchBinaryResult {
   ok: boolean;
 }
 
+export interface HomeAssistantState {
+  entity_id: string;
+  state: string;
+  attributes?: Record<string, unknown>;
+  last_changed?: string;
+  last_updated?: string;
+  context?: Record<string, unknown>;
+  [key: string]: unknown;
+}
+
+export interface HomeAssistantGetStatesResult {
+  states: HomeAssistantState[];
+  count: number;
+  entityId?: string;
+}
+
+export interface HomeAssistantCallServiceResult {
+  domain: string;
+  service: string;
+  entityIds?: string[];
+  response: unknown;
+}
+
+export interface HomeAssistantCheckConnectionResult {
+  ok: true;
+  message: string;
+}
+
 export interface FsReadResult {
   content: string;
   truncated: boolean;
@@ -547,6 +595,33 @@ export interface DiscordMessageNotification {
   message: SubstrateMessage;
 }
 
+// ── Inter-companion channel lane (sprint 10, W6) ──
+// Agent → gateway send; gateway → recipient agents as an ordinary inbound
+// channel message notification so the normal turn pipeline (fatigue, trust,
+// extraction) applies with zero new mechanism.
+
+export interface CompanionMessageSendParams {
+  /** `companion-room:<placeId>` or canonical `companion-dm:<a>:<b>`. */
+  channelId: string;
+  content: string;
+  /** Display-only sender name (identity is the connection-bound companionId). */
+  authorName?: string;
+  /** Client-stamped companion identity; verified against the connection binding. */
+  companionId?: string;
+}
+
+export interface CompanionMessageSendResult {
+  channelId: string;
+  messageId: string;
+  deliveredTo: string[];
+  /** Room recipients present at the place but without a live agent connection. */
+  skippedOffline: string[];
+}
+
+export interface CompanionMessageNotification {
+  message: SubstrateMessage;
+}
+
 // ── Method map for typed RPC ──
 
 export interface GatewayMethods {
@@ -558,9 +633,13 @@ export interface GatewayMethods {
   'discord.send': [DiscordSendParams, DiscordSendResult];
   'discord.sendMedia': [DiscordSendMediaParams, DiscordSendMediaResult];
   'discord.typing': [DiscordTypingParams, DiscordTypingResult];
+  'companion.message.send': [CompanionMessageSendParams, CompanionMessageSendResult];
   'web.fetch': [WebFetchParams, WebFetchResult];
   'web.fetch_binary': [WebFetchBinaryParams, WebFetchBinaryResult];
   'web.request_binary': [WebRequestBinaryParams, WebRequestBinaryResult];
+  'home_assistant.get_states': [HomeAssistantGetStatesParams, HomeAssistantGetStatesResult];
+  'home_assistant.call_service': [HomeAssistantCallServiceParams, HomeAssistantCallServiceResult];
+  'home_assistant.check_connection': [HomeAssistantCheckConnectionParams, HomeAssistantCheckConnectionResult];
   'shell.exec': [ShellExecParams, ShellExecResult];
   'vault.write': [VaultWriteParams, VaultWriteResult];
   'vault.read': [VaultReadParams, VaultReadResult];
@@ -599,6 +678,7 @@ export interface GatewayMethods {
 export interface GatewayNotifications {
   'llm.chunk': LLMChunkNotification;
   'discord.message': DiscordMessageNotification;
+  'companion.message': CompanionMessageNotification;
   'api.stream.delta': ApiStreamDeltaNotification;
 }
 
@@ -704,4 +784,7 @@ export const GatewayErrors = {
   VOICE_STREAM_CANCELLED: -32006,
   VOICE_STREAM_OVERFLOW: -32007,
   VOICE_STREAM_SEQUENCE: -32008,
+  COMPANION_IDENTIFY_REQUIRED: -32009,
+  COMPANION_IDENTITY_MISMATCH: -32010,
+  COMPANION_ROUTING_UNAVAILABLE: -32011,
 } as const;

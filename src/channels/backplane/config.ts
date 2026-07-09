@@ -53,12 +53,53 @@ export interface TelegramChannelConfig {
   mode: TelegramMode;
   pollIntervalMs: number;
   webhook: TelegramWebhookConfig;
+  /** Multi-companion (sprint-10 W1): companion that owns this channel account. */
+  companionId?: string;
+}
+
+/**
+ * Multi-companion (sprint-10 W1-P2): one Discord bot identity per companion.
+ * Each account references its token by env var name only — the secret itself
+ * lives in the gateway's .env, never in channels.json.
+ */
+export interface DiscordAccountConfig {
+  /** Stable operator-chosen key for this bot account (registry/routing key). */
+  accountId: string;
+  /** Companion that owns this bot identity. */
+  companionId: string;
+  /** Env var name the bot token resolves from (gateway-side secret). */
+  tokenEnvVar: string;
+  /**
+   * Resolved token value. May be empty when the loading process does not hold
+   * the secret (agent-side loads); the gateway asserts non-empty at startup
+   * via {@link assertDiscordAccountTokensConfigured}.
+   */
+  token: string;
+  heartbeatChannelId: string;
+  allowedBotUserIds: string[];
+  groupMemory: ChannelGroupMemoryConfig;
 }
 
 export interface DiscordChannelConfig {
   heartbeatChannelId: string;
   allowedBotUserIds: string[];
   groupMemory: ChannelGroupMemoryConfig;
+  /** Multi-companion (sprint-10 W1): companion that owns this channel account. */
+  companionId?: string;
+  /**
+   * Multi-companion (sprint-10 W1-P2): per-companion bot accounts. Mutually
+   * exclusive with every single-account discord key (including companionId);
+   * per-account settings live on each entry.
+   */
+  accounts?: DiscordAccountConfig[];
+}
+
+/**
+ * Multi-companion (sprint-10 W1): routing for the gateway-hosted API surface
+ * (OpenAI-compatible chat, API voice websocket, Wyoming-tagged api traffic).
+ */
+export interface ApiChannelConfig {
+  companionId?: string;
 }
 
 export interface ExternalChannelProfileConfig {
@@ -89,6 +130,7 @@ export interface ChannelContextEnvelopeConfig {
 export interface RuntimeChannelsConfig {
   discord: DiscordChannelConfig;
   telegram: TelegramChannelConfig;
+  api: ApiChannelConfig;
   psfnAmica: PsfnAmicaChannelConfig;
   contextEnvelope: ChannelContextEnvelopeConfig;
 }
@@ -329,6 +371,173 @@ function parseExternalChannelProfile(
   return profile;
 }
 
+const DISCORD_ACCOUNT_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
+const DISCORD_ACCOUNT_ALLOWED_KEYS = new Set([
+  'accountId',
+  'companionId',
+  'tokenRef',
+  'heartbeatChannelId',
+  'allowedBotUserIds',
+  'groupMemory',
+]);
+
+/**
+ * Fail-closed parser for the channels.json `discord.accounts` section
+ * (multi-companion W1-P2). Structural validation only: token env vars are
+ * resolved here, but presence of the secret is asserted by the gateway via
+ * {@link assertDiscordAccountTokensConfigured} — agent-side loads run without
+ * the gateway's secret env.
+ */
+function parseDiscordAccountsSection(
+  discordConfig: Record<string, unknown>,
+  env: NodeJS.ProcessEnv,
+  credentialVault?: CredentialVaultPort,
+): DiscordAccountConfig[] | undefined {
+  if (!Object.hasOwn(discordConfig, 'accounts')) return undefined;
+
+  const singleAccountKeys = Object.keys(discordConfig).filter(key => key !== 'accounts');
+  if (singleAccountKeys.length > 0) {
+    throw new Error(
+      'channels.json.discord must not combine "accounts" with single-account keys '
+      + `[${singleAccountKeys.join(', ')}] — per-account settings live on each accounts[] entry`,
+    );
+  }
+
+  const raw = discordConfig.accounts;
+  if (!Array.isArray(raw) || raw.length === 0) {
+    throw new Error('channels.json.discord.accounts must be a non-empty array');
+  }
+
+  const seenAccountIds = new Set<string>();
+  const seenCompanionIds = new Set<string>();
+  const seenTokenEnvVars = new Set<string>();
+  const accounts: DiscordAccountConfig[] = [];
+
+  raw.forEach((entry, index) => {
+    const fieldName = `channels.json.discord.accounts[${index}]`;
+    if (!isRecord(entry)) {
+      throw new Error(`${fieldName} must be an object`);
+    }
+    rejectInlineSecretField(entry, 'token', `${fieldName}.tokenRef`);
+    const unknownKeys = Object.keys(entry).filter(key => !DISCORD_ACCOUNT_ALLOWED_KEYS.has(key));
+    if (unknownKeys.length > 0) {
+      throw new Error(`${fieldName} has unsupported keys: ${unknownKeys.join(', ')}`);
+    }
+
+    const accountId = parseConfiguredString(entry.accountId, `${fieldName}.accountId`);
+    if (!accountId || !DISCORD_ACCOUNT_ID_PATTERN.test(accountId)) {
+      throw new Error(
+        `${fieldName}.accountId must match ${DISCORD_ACCOUNT_ID_PATTERN} (alphanumeric with -/_)`,
+      );
+    }
+    if (seenAccountIds.has(accountId)) {
+      throw new Error(`channels.json.discord.accounts declares duplicate accountId "${accountId}"`);
+    }
+    seenAccountIds.add(accountId);
+
+    const companionId = parseConfiguredString(entry.companionId, `${fieldName}.companionId`);
+    if (!companionId) {
+      throw new Error(`${fieldName}.companionId must be configured`);
+    }
+    if (seenCompanionIds.has(companionId)) {
+      throw new Error(
+        `channels.json.discord.accounts maps companion "${companionId}" to more than one bot `
+        + 'account — one Discord identity per companion',
+      );
+    }
+    seenCompanionIds.add(companionId);
+
+    const tokenRef = parseConfiguredCredentialReference(entry.tokenRef, `${fieldName}.tokenRef`);
+    if (!tokenRef) {
+      throw new Error(`${fieldName}.tokenRef must be configured`);
+    }
+    if (seenTokenEnvVars.has(tokenRef.envName)) {
+      throw new Error(
+        `channels.json.discord.accounts reuses token env var ${tokenRef.envName} — every bot `
+        + 'account needs its own token',
+      );
+    }
+    seenTokenEnvVars.add(tokenRef.envName);
+
+    accounts.push({
+      accountId,
+      companionId,
+      tokenEnvVar: tokenRef.envName,
+      token: resolveCredentialValue(tokenRef, env, credentialVault).trim(),
+      heartbeatChannelId: parseConfiguredString(entry.heartbeatChannelId, `${fieldName}.heartbeatChannelId`)
+        ?? '',
+      allowedBotUserIds: parseConfiguredStringArray(entry.allowedBotUserIds, `${fieldName}.allowedBotUserIds`)
+        ?? [],
+      groupMemory: normalizeChannelGroupMemoryConfig(entry.groupMemory, `${fieldName}.groupMemory`)
+        ?? createDefaultChannelGroupMemoryConfig(),
+    });
+  });
+
+  return accounts;
+}
+
+/**
+ * Gateway-side startup assertion: every configured discord account must have
+ * resolved a non-empty token from its env var. Fail closed — a configured
+ * account without a secret must never fall back to another account's identity.
+ */
+export function assertDiscordAccountTokensConfigured(discord: DiscordChannelConfig): void {
+  const missing = (discord.accounts ?? []).filter(account => !account.token);
+  if (missing.length === 0) return;
+  throw new Error(
+    'Discord multi-account tokens missing: '
+    + missing
+      .map(account => `account "${account.accountId}" requires env var ${account.tokenEnvVar}`)
+      .join('; '),
+  );
+}
+
+/** Per-companion projection of the discord channel config. */
+export interface DiscordCompanionChannelView {
+  /** Present only when resolved from a multi-account entry. */
+  accountId?: string;
+  heartbeatChannelId: string;
+  allowedBotUserIds: string[];
+  groupMemory: ChannelGroupMemoryConfig;
+}
+
+/**
+ * Resolve the discord settings that apply to one companion. Single-account
+ * config (flag off, or W1 single-account routing) projects the top-level
+ * fields unchanged; multi-account config selects the companion's own account
+ * entry. A companion without a discord account gets inert defaults — that is
+ * a legitimate topology (companion with no Discord surface), not an error.
+ */
+export function resolveDiscordCompanionView(
+  discord: DiscordChannelConfig,
+  companionId: string | undefined,
+): DiscordCompanionChannelView {
+  const accounts = discord.accounts;
+  if (!accounts || accounts.length === 0) {
+    return {
+      heartbeatChannelId: discord.heartbeatChannelId,
+      allowedBotUserIds: discord.allowedBotUserIds,
+      groupMemory: discord.groupMemory,
+    };
+  }
+  const account = companionId
+    ? accounts.find(entry => entry.companionId === companionId)
+    : undefined;
+  if (!account) {
+    return {
+      heartbeatChannelId: '',
+      allowedBotUserIds: [],
+      groupMemory: createDefaultChannelGroupMemoryConfig(),
+    };
+  }
+  return {
+    accountId: account.accountId,
+    heartbeatChannelId: account.heartbeatChannelId,
+    allowedBotUserIds: account.allowedBotUserIds,
+    groupMemory: account.groupMemory,
+  };
+}
+
 function parseSectionObject(
   root: Record<string, unknown>,
   key: string,
@@ -372,6 +581,12 @@ export function saveChannelsOwnerFile(
   // runtime load validation are rejected fail-closed instead of persisted.
   const scopedRoot = parseSectionObject(nextConfig, 'channels') ?? nextConfig;
   parseContextEnvelopeSection(scopedRoot);
+  // W1-P2: structural validation of discord.accounts on save (secrets are env
+  // resolved at load, so an empty env here only skips token presence checks).
+  const discordSection = parseSectionObject(scopedRoot, 'discord');
+  if (discordSection) {
+    parseDiscordAccountsSection(discordSection, {});
+  }
 
   const filePath = join(dataDir, CHANNELS_FILE_NAME);
   writeJsonAtomic(filePath, nextConfig);
@@ -421,6 +636,17 @@ export function loadRuntimeChannelsConfig(
   // classification consumes them in E3.2.
   const contextEnvelope = parseContextEnvelopeSection(scopedRoot);
   const discordConfig = parseSectionObject(scopedRoot, 'discord') ?? {};
+  const discordAccounts = parseDiscordAccountsSection(
+    discordConfig,
+    env,
+    options.credentialVault,
+  );
+  const apiConfig = parseSectionObject(scopedRoot, 'api') ?? {};
+  const unknownApiKeys = Object.keys(apiConfig).filter(key => key !== 'companionId');
+  if (unknownApiKeys.length > 0) {
+    throw new Error(`channels.json.api has unsupported keys: ${unknownApiKeys.join(', ')}`);
+  }
+  const apiCompanionId = parseConfiguredString(apiConfig.companionId, 'channels.json.api.companionId');
   const psfnAmicaConfig = parseSectionObject(scopedRoot, 'psfnAmica') ?? {};
   if (Object.keys(psfnAmicaConfig).length > 0 && !Object.hasOwn(psfnAmicaConfig, 'enabled')) {
     throw new Error('channels.json.psfnAmica.enabled must be configured when psfnAmica settings are present');
@@ -527,6 +753,15 @@ export function loadRuntimeChannelsConfig(
     }
   }
 
+  const discordCompanionId = parseConfiguredString(
+    discordConfig.companionId,
+    'channels.json.discord.companionId',
+  );
+  const telegramCompanionId = parseConfiguredString(
+    telegramConfig.companionId,
+    'channels.json.telegram.companionId',
+  );
+
   return {
     discord: {
       heartbeatChannelId: parseConfiguredString(discordConfig.heartbeatChannelId, 'channels.json.discord.heartbeatChannelId')
@@ -537,6 +772,11 @@ export function loadRuntimeChannelsConfig(
         discordConfig.groupMemory,
         'channels.json.discord.groupMemory',
       ) ?? createDefaultChannelGroupMemoryConfig(),
+      ...(discordCompanionId ? { companionId: discordCompanionId } : {}),
+      ...(discordAccounts ? { accounts: discordAccounts } : {}),
+    },
+    api: {
+      ...(apiCompanionId ? { companionId: apiCompanionId } : {}),
     },
     psfnAmica: {
       enabled: psfnAmicaEnabled,
@@ -548,6 +788,7 @@ export function loadRuntimeChannelsConfig(
       allowedUsers,
       mode,
       pollIntervalMs,
+      ...(telegramCompanionId ? { companionId: telegramCompanionId } : {}),
       webhook: {
         url: webhookUrl,
         secret: webhookSecret,

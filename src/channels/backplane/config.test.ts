@@ -3,9 +3,11 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
+  assertDiscordAccountTokensConfigured,
   buildExternalChannelProfiles,
   loadRuntimeChannelsConfig,
   loadChannelsOwnerFile,
+  resolveDiscordCompanionView,
   saveChannelsOwnerFile,
 } from './config.js';
 
@@ -227,6 +229,77 @@ describe('loadRuntimeChannelsConfig', () => {
         allowedBotUserIds: ['1050938702622375987', '1467253459387678963'],
         groupMemory: { channelOverrides: {} },
       });
+    } finally {
+      rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  it('loads multi-companion companionId routing fields from channels.json', () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'psfn-channel-config-'));
+    try {
+      writeFileSync(join(dataDir, 'channels.json'), JSON.stringify({
+        discord: {
+          heartbeatChannelId: '1312460007211536394',
+          companionId: ' comp-a ',
+        },
+        telegram: {
+          enabled: false,
+          companionId: 'comp-b',
+        },
+        api: {
+          companionId: 'comp-b',
+        },
+      }));
+
+      const config = loadRuntimeChannelsConfig(dataDir, {});
+
+      expect(config.discord.companionId).toBe('comp-a');
+      expect(config.telegram.companionId).toBe('comp-b');
+      expect(config.api).toEqual({ companionId: 'comp-b' });
+    } finally {
+      rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  it('omits companionId routing fields when channels.json does not declare them', () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'psfn-channel-config-'));
+    try {
+      const config = loadRuntimeChannelsConfig(dataDir, {});
+      expect(config.discord.companionId).toBeUndefined();
+      expect(config.telegram.companionId).toBeUndefined();
+      expect(config.api).toEqual({});
+    } finally {
+      rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects empty or non-string companionId routing values fail-closed', () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'psfn-channel-config-'));
+    try {
+      writeFileSync(join(dataDir, 'channels.json'), JSON.stringify({
+        discord: { companionId: '   ' },
+      }));
+      expect(() => loadRuntimeChannelsConfig(dataDir, {}))
+        .toThrow('channels.json.discord.companionId must not be empty');
+
+      writeFileSync(join(dataDir, 'channels.json'), JSON.stringify({
+        api: { companionId: 42 },
+      }));
+      expect(() => loadRuntimeChannelsConfig(dataDir, {}))
+        .toThrow('channels.json.api.companionId must be a string');
+    } finally {
+      rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects unsupported keys in the channels.json api section', () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'psfn-channel-config-'));
+    try {
+      writeFileSync(join(dataDir, 'channels.json'), JSON.stringify({
+        api: { companionId: 'comp-a', token: 'nope' },
+      }));
+      expect(() => loadRuntimeChannelsConfig(dataDir, {}))
+        .toThrow('channels.json.api has unsupported keys: token');
     } finally {
       rmSync(dataDir, { recursive: true, force: true });
     }
@@ -738,5 +811,218 @@ describe('loadRuntimeChannelsConfig', () => {
     } finally {
       rmSync(dataDir, { recursive: true, force: true });
     }
+  });
+});
+
+describe('discord multi-account config (multi-companion W1-P2)', () => {
+  function withDataDir(run: (dataDir: string) => void): void {
+    const dataDir = mkdtempSync(join(tmpdir(), 'psfn-channel-config-'));
+    try {
+      run(dataDir);
+    } finally {
+      rmSync(dataDir, { recursive: true, force: true });
+    }
+  }
+
+  function writeAccounts(dataDir: string, accounts: unknown): void {
+    writeFileSync(join(dataDir, 'channels.json'), JSON.stringify({
+      discord: { accounts },
+    }));
+  }
+
+  const accountA = {
+    accountId: 'acct-a',
+    companionId: 'comp-a',
+    tokenRef: { kind: 'env', envName: 'DISCORD_TOKEN_A' },
+  };
+  const accountB = {
+    accountId: 'acct-b',
+    companionId: 'comp-b',
+    tokenRef: { kind: 'env', envName: 'DISCORD_TOKEN_B' },
+    heartbeatChannelId: '222',
+    allowedBotUserIds: [' 999 '],
+  };
+
+  it('loads per-companion bot accounts and resolves tokens from named env vars', () => {
+    withDataDir((dataDir) => {
+      writeAccounts(dataDir, [accountA, accountB]);
+
+      const config = loadRuntimeChannelsConfig(dataDir, {
+        DISCORD_TOKEN_A: ' token-a ',
+        DISCORD_TOKEN_B: 'token-b',
+      });
+
+      expect(config.discord.accounts).toEqual([
+        {
+          accountId: 'acct-a',
+          companionId: 'comp-a',
+          tokenEnvVar: 'DISCORD_TOKEN_A',
+          token: 'token-a',
+          heartbeatChannelId: '',
+          allowedBotUserIds: [],
+          groupMemory: { channelOverrides: {} },
+        },
+        {
+          accountId: 'acct-b',
+          companionId: 'comp-b',
+          tokenEnvVar: 'DISCORD_TOKEN_B',
+          token: 'token-b',
+          heartbeatChannelId: '222',
+          allowedBotUserIds: ['999'],
+          groupMemory: { channelOverrides: {} },
+        },
+      ]);
+      expect(() => assertDiscordAccountTokensConfigured(config.discord)).not.toThrow();
+    });
+  });
+
+  it('keeps the single-account shape byte-identical when accounts are absent', () => {
+    withDataDir((dataDir) => {
+      writeFileSync(join(dataDir, 'channels.json'), JSON.stringify({
+        discord: {
+          heartbeatChannelId: '111',
+          allowedBotUserIds: ['555'],
+        },
+      }));
+
+      const config = loadRuntimeChannelsConfig(dataDir, {});
+      expect(config.discord).toEqual({
+        heartbeatChannelId: '111',
+        allowedBotUserIds: ['555'],
+        groupMemory: { channelOverrides: {} },
+      });
+      expect(config.discord.accounts).toBeUndefined();
+    });
+  });
+
+  it('rejects combining accounts with any single-account discord key', () => {
+    withDataDir((dataDir) => {
+      writeFileSync(join(dataDir, 'channels.json'), JSON.stringify({
+        discord: {
+          companionId: 'comp-a',
+          heartbeatChannelId: '111',
+          accounts: [accountA],
+        },
+      }));
+      expect(() => loadRuntimeChannelsConfig(dataDir, { DISCORD_TOKEN_A: 'token-a' }))
+        .toThrow(/must not combine "accounts" with single-account keys \[companionId, heartbeatChannelId\]/);
+    });
+  });
+
+  it('rejects an empty accounts array', () => {
+    withDataDir((dataDir) => {
+      writeAccounts(dataDir, []);
+      expect(() => loadRuntimeChannelsConfig(dataDir, {}))
+        .toThrow('channels.json.discord.accounts must be a non-empty array');
+    });
+  });
+
+  it('rejects an account without a tokenRef', () => {
+    withDataDir((dataDir) => {
+      writeAccounts(dataDir, [{ accountId: 'acct-a', companionId: 'comp-a' }]);
+      expect(() => loadRuntimeChannelsConfig(dataDir, {}))
+        .toThrow('channels.json.discord.accounts[0].tokenRef must be configured');
+    });
+  });
+
+  it('rejects inline account tokens — secrets stay in env', () => {
+    withDataDir((dataDir) => {
+      writeAccounts(dataDir, [{ ...accountA, token: 'inline-secret' }]);
+      expect(() => loadRuntimeChannelsConfig(dataDir, { DISCORD_TOKEN_A: 'token-a' }))
+        .toThrow('channels.json.discord.accounts[0].tokenRef must be used instead');
+    });
+  });
+
+  it('rejects duplicate accountIds, companionIds, and token env vars', () => {
+    withDataDir((dataDir) => {
+      writeAccounts(dataDir, [accountA, { ...accountB, accountId: 'acct-a' }]);
+      expect(() => loadRuntimeChannelsConfig(dataDir, {}))
+        .toThrow('duplicate accountId "acct-a"');
+
+      writeAccounts(dataDir, [accountA, { ...accountB, companionId: 'comp-a' }]);
+      expect(() => loadRuntimeChannelsConfig(dataDir, {}))
+        .toThrow('maps companion "comp-a" to more than one bot account');
+
+      writeAccounts(dataDir, [
+        accountA,
+        { ...accountB, tokenRef: { kind: 'env', envName: 'DISCORD_TOKEN_A' } },
+      ]);
+      expect(() => loadRuntimeChannelsConfig(dataDir, {}))
+        .toThrow('reuses token env var DISCORD_TOKEN_A');
+    });
+  });
+
+  it('rejects malformed accountIds and unknown account keys', () => {
+    withDataDir((dataDir) => {
+      writeAccounts(dataDir, [{ ...accountA, accountId: 'bad id!' }]);
+      expect(() => loadRuntimeChannelsConfig(dataDir, {}))
+        .toThrow(/accounts\[0\]\.accountId must match/);
+
+      writeAccounts(dataDir, [{ ...accountA, botToken: 'x' }]);
+      expect(() => loadRuntimeChannelsConfig(dataDir, {}))
+        .toThrow('channels.json.discord.accounts[0] has unsupported keys: botToken');
+    });
+  });
+
+  it('parses accounts without secrets present but fails the gateway token assertion', () => {
+    withDataDir((dataDir) => {
+      writeAccounts(dataDir, [accountA, accountB]);
+
+      // Agent-side load: no gateway secrets in env — structural parse succeeds.
+      const config = loadRuntimeChannelsConfig(dataDir, { DISCORD_TOKEN_B: 'token-b' });
+      expect(config.discord.accounts?.[0]?.token).toBe('');
+
+      // Gateway-side startup assertion fails closed on the missing env var.
+      expect(() => assertDiscordAccountTokensConfigured(config.discord))
+        .toThrow('account "acct-a" requires env var DISCORD_TOKEN_A');
+    });
+  });
+
+  it('validates accounts structurally on owner-file save', () => {
+    withDataDir((dataDir) => {
+      expect(() => saveChannelsOwnerFile(dataDir, {
+        discord: { accounts: [{ accountId: 'acct-a', companionId: 'comp-a' }] },
+      })).toThrow('channels.json.discord.accounts[0].tokenRef must be configured');
+
+      expect(() => saveChannelsOwnerFile(dataDir, {
+        discord: { accounts: [accountA] },
+      })).not.toThrow();
+    });
+  });
+
+  it('projects per-companion discord views from accounts and single-account config', () => {
+    withDataDir((dataDir) => {
+      writeAccounts(dataDir, [accountA, accountB]);
+      const config = loadRuntimeChannelsConfig(dataDir, {
+        DISCORD_TOKEN_A: 'token-a',
+        DISCORD_TOKEN_B: 'token-b',
+      });
+
+      expect(resolveDiscordCompanionView(config.discord, 'comp-b')).toEqual({
+        accountId: 'acct-b',
+        heartbeatChannelId: '222',
+        allowedBotUserIds: ['999'],
+        groupMemory: { channelOverrides: {} },
+      });
+      // Companion without a bot account: inert defaults, not an error.
+      expect(resolveDiscordCompanionView(config.discord, 'comp-x')).toEqual({
+        heartbeatChannelId: '',
+        allowedBotUserIds: [],
+        groupMemory: { channelOverrides: {} },
+      });
+    });
+
+    withDataDir((dataDir) => {
+      writeFileSync(join(dataDir, 'channels.json'), JSON.stringify({
+        discord: { heartbeatChannelId: '111', allowedBotUserIds: ['555'] },
+      }));
+      const config = loadRuntimeChannelsConfig(dataDir, {});
+      // Single-account shape: identical projection regardless of companionId.
+      expect(resolveDiscordCompanionView(config.discord, undefined)).toEqual({
+        heartbeatChannelId: '111',
+        allowedBotUserIds: ['555'],
+        groupMemory: { channelOverrides: {} },
+      });
+    });
   });
 });

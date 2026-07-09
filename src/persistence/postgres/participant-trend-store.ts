@@ -22,10 +22,14 @@ import {
 export class PostgresParticipantTrendStore implements ParticipantTrendStorePort {
   private constructor(private readonly pool: Pool) {}
 
-  static async connect(databaseUrl: string): Promise<PostgresParticipantTrendStore> {
+  static async connect(
+    databaseUrl: string,
+    options: { schema?: string } = {},
+  ): Promise<PostgresParticipantTrendStore> {
     const pool = createPostgresPool(databaseUrl, {
       applicationName: 'psfn-participant-trends',
       allowExitOnIdle: true,
+      schema: options.schema,
     });
     await ensurePostgresSchema(pool, POSTGRES_PARTICIPANT_TREND_MIGRATIONS);
     return new PostgresParticipantTrendStore(pool);

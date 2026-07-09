@@ -530,6 +530,12 @@ export const POSTGRES_WIKI_PROJECTION_MIGRATIONS = [
   `,
   `CREATE INDEX IF NOT EXISTS idx_wiki_document_chunks_doc ON wiki_document_chunks(document_id);`,
   `CREATE INDEX IF NOT EXISTS idx_wiki_document_chunks_sha ON wiki_document_chunks(document_id, body_sha256);`,
+  // W5b scope dimension: chunks carry their document's scope so retrieval can
+  // filter at query time (personal always, plus the current site's shared world
+  // scope). Additive with a `personal` default: pre-W5b rows and the flag-off
+  // (unfiltered) query path are byte-identical.
+  `ALTER TABLE wiki_document_chunks ADD COLUMN IF NOT EXISTS scope TEXT NOT NULL DEFAULT 'personal';`,
+  `CREATE INDEX IF NOT EXISTS idx_wiki_document_chunks_scope ON wiki_document_chunks(scope);`,
 ];
 
 export const POSTGRES_CONTACT_MIGRATIONS = [
@@ -655,6 +661,44 @@ export const POSTGRES_CONTACT_MIGRATIONS = [
   `CREATE INDEX IF NOT EXISTS idx_social_relationship_edges_source ON social_relationship_edges(source_entity_id, updated_at DESC);`,
   `CREATE INDEX IF NOT EXISTS idx_social_relationship_edges_target ON social_relationship_edges(target_entity_id, updated_at DESC);`,
   `CREATE INDEX IF NOT EXISTS idx_social_relationship_edges_type ON social_relationship_edges(relationship_type, updated_at DESC);`,
+];
+
+// Sprint 10 D2a — hub identity ↔ contact enrollment. Biometrics stay at the
+// Satellite Hub; core stores only the opaque handle → contact binding plus an
+// audit trail. Semantically separate from the conversational contact_channel_*
+// tables.
+export const POSTGRES_ENROLLMENT_MIGRATIONS = [
+  `
+  CREATE TABLE IF NOT EXISTS hub_identity_enrollments (
+    hub_identity_id TEXT PRIMARY KEY,
+    contact_id TEXT NOT NULL REFERENCES contacts(id) ON DELETE CASCADE,
+    status TEXT NOT NULL DEFAULT 'enrolled',
+    satellite_id TEXT,
+    endpoint_id TEXT,
+    enrolled_by TEXT NOT NULL DEFAULT 'system:unknown',
+    enrolled_at TEXT NOT NULL,
+    revoked_by TEXT,
+    revoked_at TEXT
+  );
+  `,
+  `ALTER TABLE hub_identity_enrollments ADD COLUMN IF NOT EXISTS satellite_id TEXT;`,
+  `ALTER TABLE hub_identity_enrollments ADD COLUMN IF NOT EXISTS endpoint_id TEXT;`,
+  `CREATE INDEX IF NOT EXISTS idx_hub_identity_enrollments_contact ON hub_identity_enrollments(contact_id);`,
+  `CREATE INDEX IF NOT EXISTS idx_hub_identity_enrollments_status ON hub_identity_enrollments(status);`,
+  `
+  CREATE TABLE IF NOT EXISTS hub_identity_enrollment_audit (
+    id BIGSERIAL PRIMARY KEY,
+    hub_identity_id TEXT NOT NULL,
+    contact_id TEXT NOT NULL,
+    action TEXT NOT NULL,
+    actor TEXT NOT NULL,
+    satellite_id TEXT,
+    endpoint_id TEXT,
+    timestamp TEXT NOT NULL
+  );
+  `,
+  `CREATE INDEX IF NOT EXISTS idx_hub_identity_enrollment_audit_handle ON hub_identity_enrollment_audit(hub_identity_id, timestamp DESC);`,
+  `CREATE INDEX IF NOT EXISTS idx_hub_identity_enrollment_audit_contact ON hub_identity_enrollment_audit(contact_id, timestamp DESC);`,
 ];
 
 export const POSTGRES_INTENTION_MIGRATIONS = [
@@ -1167,5 +1211,122 @@ export const POSTGRES_OBSERVER_EVAL_SIDECAR_MIGRATIONS = [
     )
   WHERE psfn_emotion_appraisal_entry_count IS NULL
     OR psfn_emotion_snapshot_source IS NULL;
+  `,
+];
+
+// Multi-companion world schema (sprint 10, W2). Every companion gets its own
+// per-companion schema running the migration chains above; the single `shared`
+// schema holds cross-companion world data (locations/presence, shared wiki
+// chunks, world state). This is the SEPARATE migration chain for that schema.
+//
+// The chain owns its own version ledger so shared migrations are registered
+// and tracked independently of the per-companion chains. World tables belong
+// here, never in the per-companion chains. Current versions:
+//   1 — baseline (ledger only)
+//   2 — companion_presence (W5a cross-companion presence)
+//   3 — shared_wiki_chunks (s10f9 shared-world wiki projection; SEPARATE
+//       statement list, see POSTGRES_SHARED_WIKI_MIGRATIONS below)
+export const SHARED_SCHEMA_NAME = 'shared';
+
+export const POSTGRES_SHARED_MIGRATIONS: readonly string[] = [
+  // Version ledger for the shared schema. Independent of the per-companion
+  // chains (which are idempotent CREATE ... IF NOT EXISTS lists); this table is
+  // the registration point that lets the shared chain track applied versions as
+  // world tables are added.
+  `
+  CREATE TABLE IF NOT EXISTS shared_schema_migrations (
+    version INTEGER PRIMARY KEY,
+    name TEXT NOT NULL,
+    applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
+  );
+  `,
+  // Register the baseline (infrastructure-only) version. No world tables yet.
+  `
+  INSERT INTO shared_schema_migrations (version, name)
+  VALUES (1, 'shared-schema-baseline')
+  ON CONFLICT (version) DO NOTHING;
+  `,
+  // Version 2 (sprint 10, W5a): cross-companion presence. The durable authority
+  // for "which companion is at which place". One row per companion, written by
+  // that companion's own agent process only. NOTHING personal ever lands in
+  // this table — presence is companion id + place coordinates + timestamps.
+  //
+  // `since` is when the companion arrived at its CURRENT place (preserved on
+  // same-place refreshes, reset on moves); `updated_at` is the freshness beat —
+  // readers treat rows older than a TTL as stale so a crashed agent never
+  // leaves a permanent ghost (graceful shutdown deletes the row outright).
+  `
+  CREATE TABLE IF NOT EXISTS companion_presence (
+    companion_id UUID PRIMARY KEY,
+    site_id TEXT NOT NULL,
+    place_id TEXT NOT NULL,
+    kind TEXT NOT NULL CHECK (kind IN ('physical', 'virtual')),
+    since TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+  );
+  `,
+  // Co-presence reads are always "who else is at THIS place".
+  `
+  CREATE INDEX IF NOT EXISTS idx_companion_presence_place
+    ON companion_presence (site_id, place_id);
+  `,
+  `
+  INSERT INTO shared_schema_migrations (version, name)
+  VALUES (2, 'companion-presence')
+  ON CONFLICT (version) DO NOTHING;
+  `,
+];
+
+// Version 3 (sprint 10, s10f9): shared-world wiki chunk projection. A
+// rebuildable pgvector mirror of the shared-world wiki filesystem tree
+// (<system-data>/shared-world/wiki/sites/<siteId>/) so companion retrieval can
+// serve `shared_world:<siteId>` scopes. The filesystem documents remain the
+// source of truth; rows are keyed by (site_id, document_id, chunk_index) and
+// carry body_sha256 so drift is detectable and the projection is rebuilt
+// per-site from the canonical files (delete-and-replace per document version).
+//
+// This lives in its OWN statement list, deliberately NOT appended to
+// POSTGRES_SHARED_MIGRATIONS: it requires the pgvector extension, and the base
+// shared chain must stay runnable on a plain Postgres so pgvector-free shared
+// consumers (companion_presence) never grow a hidden extension dependency.
+// Wiki surfaces provision it via `ensureSharedWikiSchema`, which runs the base
+// chain first and then this list under the same advisory lock, registering
+// version 3 in the same shared_schema_migrations ledger.
+//
+// Column shape mirrors the per-companion `wiki_document_chunks` table closely
+// (plus site_id) so chunk query code stays uniform across both projections.
+// The CHECK ties scope to site_id at the database layer: a personal-scoped (or
+// cross-site mis-scoped) row can never land in the shared table — that is the
+// W5b world-info leak surface, enforced fail-closed in the schema itself.
+export const POSTGRES_SHARED_WIKI_MIGRATIONS: readonly string[] = [
+  // Deterministic extension placement: shared migrations run with search_path
+  // pinned to `shared, public`, and shared/per-companion chains alike resolve
+  // vector types through `public`.
+  `CREATE EXTENSION IF NOT EXISTS vector WITH SCHEMA public;`,
+  `
+  CREATE TABLE IF NOT EXISTS shared_wiki_chunks (
+    site_id TEXT NOT NULL,
+    document_id TEXT NOT NULL,
+    chunk_index INTEGER NOT NULL,
+    body_sha256 TEXT NOT NULL,
+    title TEXT NOT NULL,
+    body_path TEXT NOT NULL,
+    source_class TEXT NOT NULL,
+    sensitivity TEXT NOT NULL DEFAULT 'personal',
+    scope TEXT NOT NULL,
+    chunk_text TEXT NOT NULL,
+    chunk_char_count INTEGER NOT NULL,
+    embedding VECTOR NOT NULL,
+    updated_at BIGINT NOT NULL,
+    PRIMARY KEY (site_id, document_id, chunk_index),
+    CHECK (scope = 'shared_world:' || site_id)
+  );
+  `,
+  `CREATE INDEX IF NOT EXISTS idx_shared_wiki_chunks_site ON shared_wiki_chunks(site_id);`,
+  `CREATE INDEX IF NOT EXISTS idx_shared_wiki_chunks_scope ON shared_wiki_chunks(scope);`,
+  `
+  INSERT INTO shared_schema_migrations (version, name)
+  VALUES (3, 'shared-wiki-chunks')
+  ON CONFLICT (version) DO NOTHING;
   `,
 ];

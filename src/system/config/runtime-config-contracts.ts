@@ -4,6 +4,7 @@ import type { StreamingSttProvider } from '../../primitives/voice/connectors/stt
 import type { StreamingTtsProvider } from '../../primitives/voice/connectors/tts/index.js';
 import type { CapabilityTier } from '../capabilities/tier-types.js';
 import type { ChargePolicyConfig } from './charge-policy-config.js';
+import type { CompanionsFleetConfig } from './companions-config.js';
 import type { SatelliteRegistryConfig } from '../../shared/contracts/satellite-registry.js';
 import type { GroupMemorySettings } from './group-memory-config.js';
 import type { EmotionScopingSettings } from './emotion-scoping-config.js';
@@ -125,6 +126,10 @@ export interface SubstrateConfig {
   discordBotId?: string;
   characterCardPath: string;
   companionId?: string;
+  /** True when the multi-companion topology flag (PSFN_MULTI_COMPANION) is enabled. */
+  multiCompanion?: boolean;
+  /** Validated fleet manifest; present only when multi-companion mode is enabled. */
+  companionFleet?: CompanionsFleetConfig;
   systemDataDir?: string;
   companionDataDir?: string;
   workspacePath?: string;
@@ -132,6 +137,15 @@ export interface SubstrateConfig {
   databasePath: string;
   persistenceBackend?: PersistenceBackend;
   postgresDatabaseUrl?: string;
+  /**
+   * Optional per-companion Postgres schema (sprint 10, W2 multi-companion
+   * tenancy). When set, the agent's runtime persistence pools pin their
+   * search_path to this schema so all queries run inside it unchanged; the
+   * schema is created on startup if missing. When unset, runtime persistence
+   * uses the default (`public`) schema — byte-identical to single-companion
+   * behavior. Sourced from the `COMPANION_PG_SCHEMA` env var (see load-config).
+   */
+  postgresSchema?: string;
   sessionMessageLimit?: number;
   sessionRestartBehavior?: SessionRestartBehavior;
   continuityMessageLimit?: number;
@@ -253,6 +267,8 @@ export interface SubstrateConfig {
   webFetchAllowHttp?: boolean;
   webFetchDomainAllowlist?: string[];
   webFetchAllowInternalNetwork?: boolean;
+  homeAssistantEnabled?: boolean;
+  homeAssistantBaseUrl?: string;
   /** @deprecated Use webFetchAllowInternalNetwork + webFetchDomainAllowlist instead */
   webFetchLocalCrawlerEnabled?: boolean;
   /** @deprecated Use webFetchAllowHttp instead */

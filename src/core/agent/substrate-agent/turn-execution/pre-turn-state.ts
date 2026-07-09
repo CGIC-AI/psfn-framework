@@ -26,6 +26,7 @@ import { createComponentLogger } from '../../../../shared/logger.js';
 import { toErrorMessage } from '../../../../shared/utils/errors.js';
 import { resolveActiveEmanationState } from '../../active-emanation-state.js';
 import { resolveContinuitySubjectKey, type ResolvedAuthorContext } from '../runtime-context.js';
+import { resolveSituatedSiteId } from '../runtime-context-sections/situated-presence.js';
 import { collectVisionTurnImageUrls, hasVisionTurnInputs } from '../vision-attachments.js';
 import type { TurnExecutionObservability } from './observability.js';
 
@@ -228,7 +229,40 @@ export async function prepareTurnIdentityState(input: {
     message.routing = nextRouting;
   }
 
+  // Cross-companion presence (sprint 10, W5a): a turn situated at a place
+  // (satellite-place binding) refreshes this companion's own row in the shared
+  // companion_presence table and the co-presence snapshot the situated context
+  // section renders later this same turn. New co-present companions emit
+  // `presence.companion.co_located` inside this call. No-op when unwired
+  // (single-companion / flag-off) or when the turn resolves no place; the port
+  // never throws (presence failures are logged, not turn-fatal).
+  //
+  // Dual presence (vinz.29): a mindspace (plain-chat) turn that foregrounds a
+  // VIRTUAL place through the situated fallback (the twin of the last-known
+  // physical room, or a deliberate virtual move) counts as presence at that
+  // twin — the port writes kind 'virtual' there. The fallback never produces a
+  // physical arrival (the port only accepts virtual fallback places), so a
+  // Discord DM still cannot look like walking into a physical room.
+  if (runtime.companionPresence) {
+    await runtime.companionPresence.observeTurnPlace(
+      message,
+      runtime.resolveSituatedFallbackPlaceId?.(message),
+    );
+  }
+
   const authorContext = await runtime.resolveAuthorContext(message);
+
+  // Virtual-activity presence follow (vinz.21): now that the author's trust
+  // is resolved, trusted-partner activity in a place-bound virtual
+  // companion-room the companion is not present at pulls her virtual presence
+  // there (same port path as a deliberate move — arrival semantics +
+  // room-entry note into this channel's session, so this turn's context
+  // assembly already sees the arrival). Physical-origin turns and every
+  // fail-closed case no-op inside the follower; it never throws.
+  if (runtime.followVirtualRoomActivity) {
+    await runtime.followVirtualRoomActivity(message, authorContext);
+  }
+
   // E3.2: only adapter-declared routing privacy (X-Channel-Privacy header,
   // satellite registry) reaches ChannelMeta. Per-contact conversation-channel
   // privacy is provenance evidence and never gates (docs/context-envelope.md).
@@ -600,12 +634,27 @@ export async function computePreTurnState(input: {
   // content/budget is already fixed at this point, so wiki can never displace
   // it; wiki carries its own bounded, config-owned token cap and fails closed
   // to '' on any error. Skipped on vision-bypass turns and when unwired.
+  // W5b: resolve the companion's current site from the situated place seam so
+  // wiki retrieval can add its shared-world scope. The fallback keeps a
+  // placeless turn on the same site the situated block foregrounds (mindspace
+  // twin, active emanation, or a deliberate virtual `move` — vinz.29/vinz.26)
+  // — the shared-scope swap follows the foregrounded place with zero drift.
+  // Only meaningful under multi-companion; `resolveWikiRetrievalPlan` ignores
+  // it when the flag is off.
+  const currentSiteId = runtime.config.multiCompanion === true
+    ? resolveSituatedSiteId(
+      message,
+      runtime.placesRegistry,
+      runtime.resolveSituatedFallbackPlaceId?.(message),
+    )
+    : undefined;
   const wikiContextBlock = runtime.wikiRetrieval && !bypassMemoryForVisionTurn
     ? await runtime.wikiRetrieval.retrieveContextBlock({
       channelId: message.channelId,
       queryText: memoryRetrievalContextText,
       isDirectMessage: channelMeta.isDirectMessage,
       focusActive: focusMemoryScopeQuery != null,
+      ...(currentSiteId ? { currentSiteId } : {}),
       correlation: turnCorrelationBase,
     })
     : '';

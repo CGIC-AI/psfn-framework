@@ -2239,3 +2239,198 @@ describe('DiscordAdapter status visibility', () => {
     }));
   });
 });
+
+describe('DiscordAdapter multi-account bindings (multi-companion W1-P2)', () => {
+  beforeEach(() => {
+    discordMock.channelsById.clear();
+    discordMock.createdClients.length = 0;
+  });
+
+  function makeAccountAdapter(overrides?: {
+    token?: string;
+    siblings?: () => readonly string[];
+    allowedBotUserIds?: string[];
+  }): { adapter: DiscordAdapter; eventBus: EventBus } {
+    const eventBus = new EventBus();
+    const adapter = new DiscordAdapter(makeConfig(), eventBus, {
+      ...(overrides?.allowedBotUserIds ? { allowedBotUserIds: overrides.allowedBotUserIds } : {}),
+      account: {
+        accountId: 'acct-a',
+        token: overrides?.token ?? 'token-acct-a',
+        ...(overrides?.siblings ? { siblingBotUserIds: overrides.siblings } : {}),
+      },
+    });
+    return { adapter, eventBus };
+  }
+
+  it('keys the adapter and registry id per account', () => {
+    const { adapter } = makeAccountAdapter();
+    expect(adapter.id).toBe('discord:acct-a');
+    expect(adapter.name).toBe('discord:acct-a');
+    expect(adapter.config.accountId).toBe('acct-a');
+    expect(adapter.config.enabled).toBe(true);
+  });
+
+  it('logs in with the account token, never the shared env token', async () => {
+    const { adapter } = makeAccountAdapter({ token: 'token-acct-a' });
+    await adapter.init();
+    await adapter.start();
+
+    const client = discordMock.createdClients.at(-1);
+    expect(client.login).toHaveBeenCalledTimes(1);
+    expect(client.login).toHaveBeenCalledWith('token-acct-a');
+  });
+
+  it('fails closed when an account has no token instead of silently disabling', async () => {
+    const { adapter } = makeAccountAdapter({ token: '' });
+    await adapter.init();
+
+    await expect(adapter.start()).rejects.toThrow(
+      'Discord account "acct-a" has no token; refusing to start',
+    );
+    const client = discordMock.createdClients.at(-1);
+    expect(client.login).not.toHaveBeenCalled();
+  });
+
+  it('delivers sibling companion bot messages while still filtering its own messages', async () => {
+    const { adapter } = makeAccountAdapter({ siblings: () => ['bot-b'] });
+    await adapter.init();
+    (adapter as any).client.user = { id: 'bot-a' };
+
+    const channelId = 'guild-shared-room';
+    const interactive = makeInteractiveTextChannel();
+    discordMock.channelsById.set(channelId, interactive.channel);
+
+    const handler = vi.fn(async (message: SubstrateMessage) => ({
+      content: `reply-${message.id}`,
+      channelId,
+      metadata: { model: 'test', inputTokens: 0, outputTokens: 0, durationMs: 1 },
+    }));
+    adapter.onMessage(handler);
+
+    // Own message: filtered (self echo), never ingested.
+    await (adapter as any).onDiscordMessage(
+      makeDiscordIncomingMessage(channelId, interactive.channel, {
+        id: 'own-message',
+        guildId: 'guild-1',
+        authorId: 'bot-a',
+        bot: true,
+        content: 'my own outbound echo',
+      }),
+    );
+    expect(handler).not.toHaveBeenCalled();
+
+    // Sibling companion bot message: ingested as a normal inbound observation.
+    await (adapter as any).onDiscordMessage(
+      makeDiscordIncomingMessage(channelId, interactive.channel, {
+        id: 'sibling-observed',
+        guildId: 'guild-1',
+        authorId: 'bot-b',
+        authorDisplayName: 'Sibling Companion',
+        bot: true,
+        content: 'hello room, sibling here',
+      }),
+    );
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(handler.mock.calls[0][0]).toEqual(expect.objectContaining({
+      id: 'sibling-observed',
+      authorId: 'bot-b',
+      routing: expect.objectContaining({
+        source: 'discord',
+        responseMode: 'observe',
+        authorIsMachineIntelligence: true,
+      }),
+    }));
+    expect(interactive.sent).toHaveLength(0);
+
+    // Sibling mention: normal respond-mode turn (companions conversing).
+    await (adapter as any).onDiscordMessage(
+      makeDiscordIncomingMessage(channelId, interactive.channel, {
+        id: 'sibling-mention',
+        guildId: 'guild-1',
+        authorId: 'bot-b',
+        bot: true,
+        content: '<@!bot-a> what do you think?',
+        mentioned: true,
+      }),
+    );
+    expect(handler).toHaveBeenCalledTimes(2);
+    expect(handler.mock.calls[1][0]).toEqual(expect.objectContaining({
+      id: 'sibling-mention',
+      routing: expect.objectContaining({ responseMode: 'respond' }),
+    }));
+    expect(interactive.sent).toContain('reply-sibling-mention');
+
+    // Unknown bot: still dropped — sibling status never leaks to foreign bots.
+    await (adapter as any).onDiscordMessage(
+      makeDiscordIncomingMessage(channelId, interactive.channel, {
+        id: 'foreign-bot',
+        guildId: 'guild-1',
+        authorId: 'bot-z',
+        bot: true,
+        content: 'unrelated bot chatter',
+      }),
+    );
+    expect(handler).toHaveBeenCalledTimes(2);
+  });
+
+  it('resolves siblings lazily so bots that log in later are recognized', async () => {
+    const siblingIds: string[] = [];
+    const { adapter } = makeAccountAdapter({ siblings: () => siblingIds });
+    await adapter.init();
+    (adapter as any).client.user = { id: 'bot-a' };
+
+    const channelId = 'guild-late-sibling';
+    const interactive = makeInteractiveTextChannel();
+    discordMock.channelsById.set(channelId, interactive.channel);
+    const handler = vi.fn(async () => ({
+      content: '',
+      channelId,
+      metadata: { model: 'test', inputTokens: 0, outputTokens: 0, durationMs: 1 },
+    }));
+    adapter.onMessage(handler);
+
+    const siblingMessage = () => makeDiscordIncomingMessage(channelId, interactive.channel, {
+      id: `late-${Math.random()}`,
+      guildId: 'guild-1',
+      authorId: 'bot-late',
+      bot: true,
+      content: 'sibling that logged in later',
+    });
+
+    await (adapter as any).onDiscordMessage(siblingMessage());
+    expect(handler).not.toHaveBeenCalled();
+
+    siblingIds.push('bot-late');
+    await (adapter as any).onDiscordMessage(siblingMessage());
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not treat any bot as sibling without an account binding (single-account parity)', async () => {
+    const eventBus = new EventBus();
+    const adapter = new DiscordAdapter(makeConfig(), eventBus);
+    expect(adapter.id).toBe('discord');
+    await adapter.init();
+
+    const channelId = 'guild-parity';
+    const interactive = makeInteractiveTextChannel();
+    discordMock.channelsById.set(channelId, interactive.channel);
+    const handler = vi.fn(async () => ({
+      content: '',
+      channelId,
+      metadata: { model: 'test', inputTokens: 0, outputTokens: 0, durationMs: 1 },
+    }));
+    adapter.onMessage(handler);
+
+    await (adapter as any).onDiscordMessage(
+      makeDiscordIncomingMessage(channelId, interactive.channel, {
+        id: 'parity-bot-message',
+        guildId: 'guild-1',
+        authorId: 'bot-b',
+        bot: true,
+        content: 'not allowlisted, not sibling',
+      }),
+    );
+    expect(handler).not.toHaveBeenCalled();
+  });
+});

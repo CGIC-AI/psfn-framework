@@ -38,6 +38,8 @@ import { registerGitTools } from '../../boundary/integrations/git/runtime-wiring
 import { GatewayGitOps } from '../../boundary/integrations/git/gateway-ops.js';
 import { registerBeadsTools } from '../../boundary/integrations/beads/runtime-wiring.js';
 import { GatewayBeadsOps } from '../../boundary/integrations/beads/gateway-ops.js';
+import { registerWorldTools } from '../../boundary/integrations/world/runtime-wiring.js';
+import { GatewayWorldOps } from '../../boundary/integrations/world/gateway-ops.js';
 import { createBehavioralPatternMemoryPromotionHook } from '../../core/intention/patterns.js';
 import {
   wireShardAndThinkRuntime,
@@ -49,6 +51,9 @@ import {
   wireHeartbeatRuntime,
 } from '../startup/composition/parity.js';
 import { createAgentPersistenceRuntime } from '../../persistence/runtime-factory.js';
+import { CompanionPresenceRuntime } from '../../core/agent/companion-presence-runtime.js';
+import { registerCompanionRoomEntryNotes } from '../../core/agent/companion-room-entry.js';
+import { createCompanionRoomContentWindowPort } from '../../core/agent/companion-room-window.js';
 import {
   resolveOutreachOutboxLedgerPath,
   resolvePendingContactApprovalsPath,
@@ -100,7 +105,7 @@ import {
 import { prepareAgentStartupContext } from './startup-context.js';
 import { AgentApiBackend } from '../../channels/api/agent-backend.js';
 import { resolveActiveHealthProbeConfig } from '../../channels/api/active-health-probe.js';
-import { buildExternalChannelProfiles } from '../../channels/backplane/config.js';
+import { buildExternalChannelProfiles, resolveDiscordCompanionView } from '../../channels/backplane/config.js';
 
 const log = createComponentLogger('Agent');
 ensureActiveTimezone();
@@ -116,6 +121,7 @@ async function main(): Promise<void> {
     schedulerConfig,
     channelsConfig,
     satelliteRegistryConfig,
+    placesRegistryConfig,
     backupConfig,
     capabilityRuntime,
     eligibilityGate,
@@ -138,10 +144,17 @@ async function main(): Promise<void> {
   const primaryUserId = config.voiceTargetUserId?.trim() || process.env.PRIMARY_USER_ID;
 
   log.info(`Connecting to gateway at ${formatGatewayRpcEndpoint(gatewayRpcEndpoint)}...`);
-  const gateway = await GatewayClient.connectEndpoint(gatewayRpcEndpoint, embeddingDims);
+  const gateway = await GatewayClient.connectEndpoint(gatewayRpcEndpoint, embeddingDims, {
+    ...(config.companionId ? { companionId: config.companionId } : {}),
+  });
+  // Self-report companion identity before any other traffic. Multi-companion
+  // gateways reject unidentified agents fail-closed; a failure here is fatal.
+  await gateway.identifyAsAgent();
   const llmProvider = createLLMProviderPort(gateway);
   const gatewayOps = createGatewayOpsPortFromClient(gateway);
-  log.info('Connected to gateway');
+  log.info('Connected to gateway', {
+    ...(config.companionId ? { companionId: config.companionId } : {}),
+  });
   let shuttingDown = false;
   let stopFn: () => Promise<void> = async () => {};
   const unregisterGatewayDisconnect = gateway.onDisconnect(async (event) => {
@@ -170,12 +183,33 @@ async function main(): Promise<void> {
     episodicStore: companionEpisodicStore,
     reflectionStore,
     contactStore: persistedContactStore,
+    hubIdentityEnrollmentStore: persistedHubIdentityEnrollmentStore,
     intentionRuntime: persistedIntentionRuntime,
     intentionProviders,
   } = persistenceRuntime;
   log.info('PostgreSQL persistence backend selected; skipping SQLite startup checks', {
     persistenceBackend,
   });
+
+  // ── Cross-companion presence (sprint 10, W5a) ──
+  // Multi-companion only: the persistence factory hands back a shared-schema
+  // presence store IFF the flag is on (and has already provisioned the shared
+  // schema). The runtime writes this agent's own row on situated turns, serves
+  // co-presence to the situated context section, and emits co-location events.
+  // Fails closed here if COMPANION_ID is not the fleet-contract UUID format.
+  const companionPresenceRuntime = persistenceRuntime.companionPresenceStore
+    ? new CompanionPresenceRuntime({
+      store: persistenceRuntime.companionPresenceStore,
+      companionId: config.companionId ?? '',
+      eventBus,
+      placesRegistry: placesRegistryConfig,
+    })
+    : null;
+  if (companionPresenceRuntime) {
+    log.info('Cross-companion presence runtime enabled', {
+      companionId: config.companionId,
+    });
+  }
 
   // ── Contact-tracking policy gate (E3.4) ──
   // Per-channel contactTracking labels come from channels.json contextEnvelope
@@ -238,6 +272,11 @@ async function main(): Promise<void> {
     intentionProviders,
     capabilityRuntime,
     contactTrackingGate,
+    satelliteRegistryConfig,
+    placesRegistryConfig,
+    ...(persistedHubIdentityEnrollmentStore
+      ? { hubIdentityEnrollmentStore: persistedHubIdentityEnrollmentStore }
+      : {}),
   });
   const {
     safeguardAuditTrail,
@@ -263,6 +302,36 @@ async function main(): Promise<void> {
     appCache,
     toolConformanceRunner,
   } = coreRuntime;
+
+  // Wire cross-companion presence into the turn path (same late-wiring pattern
+  // as memory/contacts providers). Null flag-off: turns are byte-identical.
+  agentLoop.companionPresence = companionPresenceRuntime;
+
+  // Co-location → room-entry note (W6): an observed arrival appends the W5
+  // system-only entry note to the place's companion-room channel session.
+  // Context only, never a triggered turn (no auto-greeting loops); flag-off
+  // the event never fires and nothing is registered.
+  if (companionPresenceRuntime) {
+    registerCompanionRoomEntryNotes({
+      eventBus,
+      sink: sessionManager,
+      placesRegistry: placesRegistryConfig,
+      coPresence: (place) => companionPresenceRuntime.getCoPresent(place),
+    });
+    log.info('Companion room-entry notes wired to co-location events');
+
+    // Presence-windowed private-room delivery (psfn-framework-s10rm): the
+    // session layer serves a private companion-room channel only from this
+    // agent's CURRENT presence window (`since`) — a late joiner or rejoiner
+    // never sees pre-join content in context. Public places and every other
+    // channel resolve unwindowed (byte-identical). Flag-off, the port is
+    // never set and the session layer is untouched.
+    sessionManager.setRoomContentWindowPort(createCompanionRoomContentWindowPort({
+      placesRegistry: placesRegistryConfig,
+      presence: companionPresenceRuntime,
+    }));
+    log.info('Presence-windowed room content gate wired to session manager');
+  }
 
   sessionManager.characterName = card.data.name;
   writeStartupSessionMetadata(
@@ -324,6 +393,7 @@ async function main(): Promise<void> {
     concernStore: intentionRuntime.concernStore,
     backupConfig,
     pathSnapshot,
+    companionPresence: companionPresenceRuntime,
     contactStore,
     socialGraphProposalStore,
     socialGraphWatermarkStore,
@@ -485,6 +555,29 @@ async function main(): Promise<void> {
   registerBeadsTools(agentLoop, new GatewayBeadsOps(gatewayOps), { gatewayMode: true });
   log.info('Beads issue-management tools enabled');
 
+  // World tool — perceive/list/control physical & virtual affordances via the
+  // places registry and the privileged Home Assistant gateway method (bead .8),
+  // plus deliberate virtual navigation (`move`, vinz.26 / contract s10wm).
+  // Affordance→entity resolution is agent-side against places.json (defence in depth).
+  // `move` writes presence through the CompanionPresenceTurnPort seam only
+  // (null flag-off ⇒ local-only move), applies its local situated effect
+  // through the emanation tracker's virtual overlay, and fires the room-entry
+  // system note through the session context-note lane.
+  // Capability gating: perceive/list/move->world.read, control->world.control
+  // (resolveWorldRequirement). Effector control is staged OFF by default
+  // (WORLD_CONTROL_RUNTIME_ENABLED) and, once enabled, additionally requires a
+  // primary/trusted requester — resolved from the live turn request context.
+  registerWorldTools(agentLoop, new GatewayWorldOps(gatewayOps), {
+    placesRegistry: placesRegistryConfig,
+    resolveSituatedPlaceId: () => agentLoop.resolveCurrentSituatedPlaceId(),
+    companionPresence: companionPresenceRuntime,
+    applyVirtualMove: (placeId) => agentLoop.applyDeliberateVirtualMove(placeId),
+    roomEntryNoteSink: sessionManager,
+    gatewayMode: true,
+    resolveRequesterTrust: () => getRequestContext()?.viewerTrustLevel,
+  });
+  log.info('World tool enabled (perceive/list/move live; control staged off, trust-gated)');
+
   // Journal tools — durable markdown notes in the personal workspace.
   registerMarkdownJournalTools(agentLoop, pathSnapshot.workspaceRoot);
 
@@ -515,6 +608,14 @@ async function main(): Promise<void> {
     scheduler,
     runtimeStatusMeta,
   }, resolveActiveHealthProbeConfig(process.env));
+  // Multi-companion (W1-P2): project the discord settings that belong to THIS
+  // companion. Single-account config passes through unchanged; multi-account
+  // config selects this companion's own bot account entry.
+  const discordChannelView = resolveDiscordCompanionView(
+    channelsConfig.discord,
+    config.companionId,
+  );
+
   const apiBackend = new AgentApiBackend({
     agentLoop,
     eventBus,
@@ -544,7 +645,7 @@ async function main(): Promise<void> {
     env: process.env,
     config,
     satelliteRegistryConfig,
-    channelGroupMemory: channelsConfig.discord.groupMemory,
+    channelGroupMemory: discordChannelView.groupMemory,
     gateway,
     eventBus,
     scheduler,
@@ -553,6 +654,7 @@ async function main(): Promise<void> {
     episodicStore,
     pendingContactApprovals,
     socialGraphProposals: socialGraphProposalStore,
+    hubIdentityEnrollmentStore: persistedHubIdentityEnrollmentStore,
     card,
     shardManager,
     cardVersionStore,
@@ -577,7 +679,7 @@ async function main(): Promise<void> {
     });
   }
 
-  const heartbeatChannelId = channelsConfig.discord.heartbeatChannelId || undefined;
+  const heartbeatChannelId = discordChannelView.heartbeatChannelId || undefined;
   const shutdownTargets: AgentControlPlaneShutdownTargets = {};
   const controlPlane = buildAgentControlPlane({
     heartbeatChannelId,
@@ -614,6 +716,11 @@ async function main(): Promise<void> {
   };
   stopFn = async () => {
     disposeApiBackend();
+    // Graceful shutdown removes our own shared presence row (crash cleanup is
+    // the read-side staleness TTL — see companion-presence-runtime.ts).
+    if (companionPresenceRuntime) {
+      await companionPresenceRuntime.shutdown();
+    }
     await controlPlane.stopFn();
   };
   shutdownTargets.adminTransport = adminTransport;
@@ -819,7 +926,7 @@ async function main(): Promise<void> {
   // scope classifier for sleeptime cadence, so it is built before the heartbeat
   // runtime wiring below.
   const observedGroupMemoryScheduler = new ObservedGroupMemoryScheduler({
-    channelGroupMemory: channelsConfig.discord.groupMemory,
+    channelGroupMemory: discordChannelView.groupMemory,
     sessionReader: sessionStore,
     watermarkStore: new JsonGroupMemoryWatermarkStore(
       join(pathSnapshot.companionDataDir, 'group-memory-watermarks.json'),
@@ -904,6 +1011,7 @@ async function main(): Promise<void> {
     trackSessionActivity,
     observedGroupMemoryScheduler,
     outboundReplyGuard,
+    companionAuthorName: card.data.name,
   });
 
   await eventBus.emit('system.init', {});

@@ -1448,6 +1448,74 @@ describe('MemoryExtractor provenance and trust caps', () => {
     }));
   });
 
+  describe('location tagging (S10)', () => {
+    const buildLocationExtractor = (writeSpy: ReturnType<typeof vi.fn>) => {
+      const llmClient = {
+        complete: vi.fn().mockResolvedValue({
+          content: `<response>
+<fact>
+<text>User is a software engineer</text>
+<type>semantic</type>
+<importance>0.8</importance>
+<emotional_valence>0.0</emotional_valence>
+<confidence>0.9</confidence>
+<tags>identity, profession</tags>
+</fact>
+</response>`,
+        }),
+      } as any;
+      const sessionManager = {
+        getRecentMessages: vi.fn().mockReturnValue([
+          { id: 1, role: 'user', authorName: 'user', content: 'I work as a software engineer', timestamp: 1_000 },
+        ]),
+      } as any;
+      const memoryStore = {
+        getMemoriesByChannel: vi.fn().mockReturnValue([]),
+      } as any;
+      const embeddingService = {
+        embed: vi.fn().mockResolvedValue(new Float32Array(8)),
+        embedBatch: vi.fn(),
+        dims: 8,
+      } as any;
+      const eventBus = { emit: vi.fn().mockResolvedValue(undefined) } as any;
+      const extractor = new MemoryExtractor(
+        llmClient,
+        sessionManager,
+        memoryStore,
+        embeddingService,
+        eventBus,
+        { extractionInterval: 5 },
+      );
+      (extractor as any).writer = { write: writeSpy };
+      return extractor;
+    };
+
+    it('tags a memory formed on a placed turn with location:<placeId>', async () => {
+      const write = vi.fn(async () => ({ action: 'created', memory: { id: 'm-loc-1' } }));
+      const extractor = buildLocationExtractor(write);
+
+      await extractor.extract('api:loc-placed', undefined, undefined, 'living_room');
+
+      expect(write).toHaveBeenCalledTimes(1);
+      const writtenTags = write.mock.calls[0][0].tags as string[];
+      expect(writtenTags).toContain('location:living_room');
+      // Additive: the fact's own tags survive alongside the location marker.
+      expect(writtenTags).toEqual(expect.arrayContaining(['identity', 'profession', 'location:living_room']));
+    });
+
+    it('adds no location tag for a placeless turn (fail-closed, no fabrication)', async () => {
+      const write = vi.fn(async () => ({ action: 'created', memory: { id: 'm-loc-2' } }));
+      const extractor = buildLocationExtractor(write);
+
+      await extractor.extract('api:loc-placeless');
+
+      expect(write).toHaveBeenCalledTimes(1);
+      const writtenTags = write.mock.calls[0][0].tags as string[];
+      expect(writtenTags.some(tag => tag.startsWith('location:'))).toBe(false);
+      expect(writtenTags).toEqual(['identity', 'profession']);
+    });
+  });
+
   it('applies emotional intensity multiplier to extracted importance before writing', async () => {
     const llmClient = {
       complete: vi.fn().mockResolvedValue({

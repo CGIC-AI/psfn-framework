@@ -132,6 +132,30 @@ Startup verifies the seed-backed owner files before the split runtime comes up. 
 
 Production does not fall back to local/continuous layout. Partial split-root config, overlapping roots, malformed owner files, and mutable settings in `.env` should be fixed directly rather than papered over with compatibility paths.
 
+### Multi-companion (optional)
+
+Multi-companion is an opt-in topology and is off by default. When you enable it,
+these process-wiring env vars come into play (documented in full in
+[`docs/multi-companion.md`](./multi-companion.md) and
+[`docs/operations.md`](./operations.md)):
+
+- `PSFN_MULTI_COMPANION` — topology opt-in. When on, a system-owned
+  `companions.json` fleet manifest is required; when off, `companions.json` must
+  be absent. Both mismatches fail closed at startup.
+- `COMPANION_PG_SCHEMA` — per-companion Postgres schema for a single agent
+  process. Explicit opt-in, not derived from `COMPANION_ID`; unset means the
+  `public` schema (single-companion). The supervisor launcher sets this per
+  spawned agent from the fleet manifest.
+- `FLEET_STATUS_PORT` / `FLEET_STATUS_HOST` — the gateway's read-only,
+  loopback-only fleet-status page (host defaults to `127.0.0.1`). Setting the
+  port while `PSFN_MULTI_COMPANION` is off fails closed.
+- Per-companion Discord tokens are referenced by env-var name from
+  `channels.json` (`tokenRef.envName`), not inline. Add each companion's bot
+  token to `.env` under the env var name its account references (for example
+  `DISCORD_TOKEN_ARIA`); the token secret stays gateway-owned.
+
+Leave all of these unset for the default single-companion topology.
+
 ## Common Launch Commands
 
 ```bash

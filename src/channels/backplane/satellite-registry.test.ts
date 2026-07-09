@@ -1,9 +1,14 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { principalFromApiKeyToken } from './http/auth.js';
 import {
+  loadSatelliteRegistryConfig,
   parseSatelliteRegistryConfig,
   resolveSatelliteConfigPull,
   resolveSatelliteClaim,
+  saveSatelliteRegistryConfig,
 } from './satellite-registry.js';
 
 const principal = principalFromApiKeyToken('test-secret-key');
@@ -18,6 +23,7 @@ function exampleRegistry(overrides: Record<string, unknown> = {}) {
         displayName: 'Kitchen Voice Pi',
         mobility: 'static',
         staticLocationLabel: 'kitchen',
+        placeId: 'living_room',
         endpoints: [
           {
             endpointId: 'wyoming-voice',
@@ -163,6 +169,73 @@ describe('satellite registry', () => {
         restartPolicy: 'restart_on_runtime_change',
       },
     });
+  });
+
+  it('parses a static placeId binding and threads it onto routing metadata', () => {
+    const registry = exampleRegistry();
+    expect(registry.satellites[0]?.placeId).toBe('living_room');
+    expect(registry.satellites[1]?.placeId).toBeUndefined();
+
+    const result = resolveSatelliteClaim({
+      registry,
+      principal,
+      headers: {
+        'x-psfn-satellite-claim-type': 'voice-pi',
+        'x-psfn-satellite-id': 'pi-voice',
+        'x-psfn-satellite-endpoint-id': 'wyoming-voice',
+        'x-psfn-satellite-session-id': 'kitchen',
+        'x-psfn-satellite-capabilities': 'text,audio_input,speech_to_text,audio_output,text_to_speech',
+      },
+    });
+
+    expect(result.ok && result.value.satellite.placeId).toBe('living_room');
+    expect(result.ok && result.value.satellite.staticLocationLabel).toBe('kitchen');
+  });
+
+  it('omits placeId from routing metadata when the satellite declares no binding', () => {
+    const result = resolveSatelliteClaim({
+      registry: exampleRegistry(),
+      principal,
+      headers: {
+        'x-psfn-satellite-claim-type': 'avatar-vision',
+        'x-psfn-satellite-id': 'voxta-avatar',
+        'x-psfn-satellite-endpoint-id': 'avatar-display',
+        'x-psfn-satellite-session-id': 'lounge',
+      },
+    });
+
+    expect(result.ok && 'placeId' in result.value.satellite).toBe(false);
+  });
+
+  it('rejects a malformed satellite placeId token', () => {
+    expect(() => parseSatelliteRegistryConfig({
+      schemaVersion: 1,
+      enabled: true,
+      satellites: [
+        {
+          satelliteId: 'bad-place',
+          displayName: 'Bad Place Satellite',
+          mobility: 'static',
+          placeId: 'living room',
+          endpoints: [
+            {
+              endpointId: 'voice',
+              displayName: 'Voice Endpoint',
+              claimTypes: ['voice-pi'],
+              promptChannelType: 'voice_satellite',
+              auth: { mode: 'api_key' },
+              defaultIdentity: {
+                authorId: 'primary-user',
+                authorName: 'Primary User',
+                canonicalContactId: 'contact-primary-user',
+                channelPrivacy: 'private',
+              },
+              maxCapabilities: ['text'],
+            },
+          ],
+        },
+      ],
+    })).toThrow('placeId');
   });
 
   it('rejects unknown capabilities and empty mTLS bindings', () => {
@@ -542,5 +615,67 @@ describe('satellite registry', () => {
 
     expect(result.ok && result.value.satellite.capabilities.effective).toEqual(['text']);
     expect(result.ok && result.value.satellite.capabilities.policyDenied).toEqual(['robotics']);
+  });
+});
+
+describe('saveSatelliteRegistryConfig', () => {
+  let dataDir: string;
+
+  beforeEach(() => {
+    dataDir = mkdtempSync(join(tmpdir(), 'psfn-sat-'));
+  });
+
+  afterEach(() => {
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  it('round-trips a registry through save then load', () => {
+    const registry = exampleRegistry();
+    saveSatelliteRegistryConfig(dataDir, registry);
+    const reloaded = loadSatelliteRegistryConfig(dataDir);
+    expect(reloaded).toEqual(registry);
+  });
+
+  it('re-loads cleanly even when an endpoint has no telemetry scopes', () => {
+    const registry = exampleRegistry({
+      satellites: [
+        {
+          satelliteId: 'pi-min',
+          displayName: 'Minimal Pi',
+          mobility: 'static',
+          endpoints: [
+            {
+              endpointId: 'ep-min',
+              displayName: 'Minimal Endpoint',
+              claimTypes: ['voice-min'],
+              promptChannelType: 'voice_satellite',
+              auth: { mode: 'api_key' },
+              defaultIdentity: {
+                authorId: 'primary-user',
+                authorName: 'Primary User',
+                canonicalContactId: 'contact-primary-user',
+                channelPrivacy: 'private',
+              },
+              maxCapabilities: ['text'],
+            },
+          ],
+        },
+      ],
+    });
+    // A parsed endpoint carries telemetryScopes: [] which the parser rejects on
+    // re-parse; the save path must emit a re-loadable wire form.
+    expect(() => saveSatelliteRegistryConfig(dataDir, registry)).not.toThrow();
+    expect(loadSatelliteRegistryConfig(dataDir)).toEqual(registry);
+  });
+
+  it('persists a changed placeId binding', () => {
+    const registry = exampleRegistry();
+    const next = {
+      ...registry,
+      satellites: registry.satellites.map(satellite => ({ ...satellite, placeId: 'kitchen' })),
+    };
+    saveSatelliteRegistryConfig(dataDir, next);
+    const reloaded = loadSatelliteRegistryConfig(dataDir);
+    expect(reloaded.satellites[0]?.placeId).toBe('kitchen');
   });
 });

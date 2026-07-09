@@ -21,14 +21,29 @@ import type {
   BeadsShowParams,
   BeadsSyncParams,
   BeadsUpdateParams,
+  HomeAssistantCallServiceParams,
+  HomeAssistantCallServiceResult,
+  HomeAssistantGetStatesParams,
+  HomeAssistantGetStatesResult,
   WebFetchLane,
 } from './protocol.js';
+
+/**
+ * Privileged Home Assistant operations (Sprint 10, bead .8) exposed to the
+ * agent process as a thin RPC forward. The gateway holds the HA token and owns
+ * the SSRF lane; the agent only ever supplies validated entity_ids/services.
+ */
+export interface HomeAssistantOperations {
+  getStates(params?: HomeAssistantGetStatesParams): Promise<HomeAssistantGetStatesResult>;
+  callService(params: HomeAssistantCallServiceParams): Promise<HomeAssistantCallServiceResult>;
+}
 
 export interface GatewayOpsPort {
   git: GitOperations;
   web: WebFetchOperations;
   filesystem: FilesystemOperations;
   beads: BeadsOperations;
+  homeAssistant: HomeAssistantOperations;
 }
 
 function createGatewayOpsPort(port: GatewayOpsPort): GatewayOpsPort {
@@ -62,6 +77,14 @@ function createGatewayOpsPort(port: GatewayOpsPort): GatewayOpsPort {
       update: (params: BeadsUpdateParams): Promise<BeadsActionResult> => port.beads.update(params),
       close: (params: BeadsCloseParams): Promise<BeadsActionResult> => port.beads.close(params),
       sync: (params?: BeadsSyncParams): Promise<BeadsActionResult> => port.beads.sync(params),
+    },
+    homeAssistant: {
+      getStates: (params?: HomeAssistantGetStatesParams): Promise<HomeAssistantGetStatesResult> => (
+        port.homeAssistant.getStates(params)
+      ),
+      callService: (params: HomeAssistantCallServiceParams): Promise<HomeAssistantCallServiceResult> => (
+        port.homeAssistant.callService(params)
+      ),
     },
   };
 }
@@ -133,6 +156,10 @@ export function createGatewayOpsPortFromClient(gateway: GatewayClient): GatewayO
       update: (params: BeadsUpdateParams) => gateway.beadsUpdate(params),
       close: (params: BeadsCloseParams) => gateway.beadsClose(params),
       sync: (params: BeadsSyncParams = {}) => gateway.beadsSync(params),
+    },
+    homeAssistant: {
+      getStates: (params: HomeAssistantGetStatesParams = {}) => gateway.homeAssistantGetStates(params),
+      callService: (params: HomeAssistantCallServiceParams) => gateway.homeAssistantCallService(params),
     },
   });
 }

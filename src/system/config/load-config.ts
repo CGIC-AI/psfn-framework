@@ -8,6 +8,7 @@ import {
   resolveOptionalEnvCredential,
 } from '../../boundary/custody/credential-vault.js';
 import { RUNTIME_LAYOUT_MODE, resolveCompanionStateDir, resolveRuntimePathLayout } from '../../persistence/layout.js';
+import { assertValidPostgresSchemaName } from '../../persistence/postgres.js';
 import { parseOptionalStringEnv } from '../../shared/utils/env.js';
 import type {
   CanonicalModelRegistry,
@@ -29,6 +30,10 @@ import {
 } from './runtime-config-contracts.js';
 import { createDefaultGroupMemorySettings } from './group-memory-config.js';
 import { createDefaultEmotionScopingSettings } from './emotion-scoping-config.js';
+import {
+  isMultiCompanionEnabled,
+  resolveCompanionFleet,
+} from './companions-config.js';
 import {
   DEFAULT_COMPANION_CARD_FILE_NAME,
 } from '../../core/identity/companion-naming.js';
@@ -94,6 +99,22 @@ function requireCompanionId(env: NodeJS.ProcessEnv): string {
   throw new Error(
     'COMPANION_ID is required. Set an explicit deployment identity in .env before startup.',
   );
+}
+
+// Multi-companion Postgres tenancy (sprint 10, W2). The per-companion schema is
+// an EXPLICIT opt-in via COMPANION_PG_SCHEMA — it is deliberately NOT derived
+// from COMPANION_ID. COMPANION_ID is already required for every deployment, so
+// auto-deriving a schema from it would silently move every existing
+// single-companion runtime off `public` (where its data lives), which would be
+// both a behavior change and a data-visibility break. Fail-closed: when the var
+// is present it must be a valid schema identifier or startup aborts; when it is
+// absent, runtime persistence uses `public` exactly as today.
+function parsePostgresSchemaEnv(value: string | undefined): string | undefined {
+  const schema = parseOptionalStringEnv(value);
+  if (schema === undefined) {
+    return undefined;
+  }
+  return assertValidPostgresSchemaName(schema);
 }
 
 function parsePersistenceBackendEnv(value: string | undefined): PersistenceBackend {
@@ -263,8 +284,18 @@ function loadConfigForMode(mode: LoadConfigMode, env: NodeJS.ProcessEnv = proces
   if (!postgresDatabaseUrl) {
     throw new Error('POSTGRES_DATABASE_URL is required for runtime persistence');
   }
+  const postgresSchema = parsePostgresSchemaEnv(env.COMPANION_PG_SCHEMA);
+
+  const multiCompanion = isMultiCompanionEnabled(env);
+  const companionFleet = resolveCompanionFleet({
+    dataDir,
+    multiCompanion,
+    seedDir: parseOptionalStringEnv(env.CONFIG_DIR),
+  });
 
   return {
+    multiCompanion,
+    ...(companionFleet ? { companionFleet } : {}),
     primaryModel,
     primaryProvider,
     extractionModel,
@@ -286,6 +317,7 @@ function loadConfigForMode(mode: LoadConfigMode, env: NodeJS.ProcessEnv = proces
     databasePath,
     persistenceBackend,
     ...(postgresDatabaseUrl ? { postgresDatabaseUrl } : {}),
+    ...(postgresSchema ? { postgresSchema } : {}),
     sessionMessageLimit: 30,
     sessionRestartBehavior: 'reuse_latest_session',
     continuityMessageLimit: DEFAULT_CONTINUITY_MESSAGE_LIMIT,
@@ -385,6 +417,8 @@ function loadConfigForMode(mode: LoadConfigMode, env: NodeJS.ProcessEnv = proces
     observerEvalSidecar: createDefaultObserverEvalSidecarSettings(),
     webFetchAllowHttp: false,
     webFetchAllowInternalNetwork: false,
+    homeAssistantEnabled: false,
+    homeAssistantBaseUrl: undefined,
     webFetchLocalCrawlerEnabled: false,
     webFetchLocalCrawlerAllowHttp: false,
     ...(gatewayTlsCaPath ? { gatewayTlsCaPath } : {}),

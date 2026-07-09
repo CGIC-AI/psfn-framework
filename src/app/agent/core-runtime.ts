@@ -1,4 +1,6 @@
 import type { CoreSubstrateConfig } from '../../system/config/runtime-config-contracts.js';
+import type { PlacesRegistryConfig } from '../../shared/contracts/places-registry.js';
+import type { SatelliteRegistryConfig } from '../../shared/contracts/satellite-registry.js';
 import type { EventBus } from '../../shared/event-bus.js';
 import type { EpisodicStorePort } from '../../faculties/memory/episodic/index.js';
 import {
@@ -91,6 +93,12 @@ import {
   type ToolConformanceRunner,
 } from '../../core/agent/tool-conformance/runner.js';
 import { getObserverEvalSidecarHealthSnapshot } from '../../core/eval/observer-sidecar/runtime.js';
+import { createSensorCognitionBridge } from '../../core/agent/perception/sensor-cognition-bridge.js';
+import { createIdentityClaimResolvingSink } from '../../core/agent/perception/identity-claim-resolver.js';
+import { createPerceptionNoteDeliverer } from '../../core/agent/perception/presence-note-delivery.js';
+import { createPresenceFollowSink } from '../../core/agent/perception/presence-follow.js';
+import { HubIdentityEnrollmentService } from '../../core/enrollment/service.js';
+import type { HubIdentityEnrollmentStorePort } from '../../core/enrollment/enrollment-store-port.js';
 
 export interface AgentCoreRuntimeOptions {
   config: CoreSubstrateConfig;
@@ -114,6 +122,16 @@ export interface AgentCoreRuntimeOptions {
   primaryTelegramUserId?: string;
   /** Contact-tracking policy gate (E3.4). Absent gate behaves as 'auto' everywhere. */
   contactTrackingGate?: ContactTrackingGate | null;
+  /** Satellite security registry (S10). Used by perception ingestion to resolve static place binding. */
+  satelliteRegistryConfig?: SatelliteRegistryConfig;
+  /** Places soft-registry (S10). Absent behaves as an empty registry. */
+  placesRegistryConfig?: PlacesRegistryConfig;
+  /**
+   * Hub identity ↔ contact enrollment binding store (S10 D2a). When present
+   * alongside a contact store, the perception path resolves face identity-claim
+   * events to contacts (bead .13); absent leaves the bridge sink a no-op.
+   */
+  hubIdentityEnrollmentStore?: HubIdentityEnrollmentStorePort;
 }
 
 export interface AgentCoreRuntime {
@@ -219,6 +237,7 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
     observerEvalSidecar,
     appCache,
     contactTrackingGate,
+    ...(options.placesRegistryConfig ? { placesRegistryConfig: options.placesRegistryConfig } : {}),
   });
   agentLoop.scratchpadProvider = memoryStore;
   agentLoop.setCapabilityRuntime(capabilityRuntime);
@@ -294,9 +313,11 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
   registerFilesystemTools(agentLoop, new GatewayFilesystemOps(gatewayOps), { gatewayMode: true });
   const wikiRuntime = await wireWikiRuntime(agentLoop, pathSnapshot.workspaceRoot, {
     ...(config.postgresDatabaseUrl?.trim() ? { databaseUrl: config.postgresDatabaseUrl.trim() } : {}),
+    ...(config.postgresSchema?.trim() ? { postgresSchema: config.postgresSchema.trim() } : {}),
     embedding: gateway,
     eventBus,
     getConfig: () => config,
+    getMultiCompanion: () => config.multiCompanion === true,
   });
   // E8.3: attach the supplemental wiki RAG provider (null when the projection
   // is unavailable); pre-turn assembly consults it AFTER memory context.
@@ -353,6 +374,46 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
     primaryUserId,
     contactRuntimeOptions,
   );
+
+  // Perception ingestion (S10 Workstream D). The bridge normalizes presence/face
+  // telemetry into PerceptionEvents; the identity-claim resolver (bead .13) turns
+  // a face identity claim into a fail-closed ResolvedPresence. Bead .14 delivers
+  // both resolved presences and raw presence detected/cleared events as
+  // context-visible `[Presence] ...` notes on the satellite session channel.
+  // Absent enrollment store leaves the sink a no-op; off/absent registry config
+  // leaves the bridge itself inactive.
+  const perceptionNoteDeliverer = createPerceptionNoteDeliverer(sessionManager);
+  // Physical conversation-follows-you (vinz.20): resolved presences pass
+  // through the follow decorator BEFORE note delivery — a fresh, trusted
+  // (primary/trusted, human) identity claim at another satellite-bound
+  // physical place auto-hands the emanation off to that satellite. The
+  // companion-presence port is read lazily because the agent entrypoint wires
+  // it after this composition; null (single-companion / flag-off) keeps the
+  // follow local-only, which is the pre-multi-companion behavior.
+  const presenceFollowSink = createPresenceFollowSink({
+    inner: perceptionNoteDeliverer,
+    target: agentLoop,
+    getCompanionPresence: () => agentLoop.companionPresence,
+    ...(options.placesRegistryConfig ? { placesRegistry: options.placesRegistryConfig } : {}),
+    eventBus,
+  });
+  const perceptionSink = options.hubIdentityEnrollmentStore
+    ? createIdentityClaimResolvingSink({
+      enrollmentService: new HubIdentityEnrollmentService(
+        options.hubIdentityEnrollmentStore,
+        contactStore,
+      ),
+      contactStore,
+      presenceSink: presenceFollowSink,
+      inner: perceptionNoteDeliverer,
+    })
+    : undefined;
+  createSensorCognitionBridge({
+    eventBus,
+    satelliteRegistry: options.satelliteRegistryConfig,
+    placesRegistry: options.placesRegistryConfig,
+    ...(perceptionSink ? { sink: perceptionSink } : {}),
+  });
   const intentionRuntime = options.intentionRuntime ?? (() => {
     throw new Error('PostgreSQL core runtime requires injected intention persistence stores');
   })();

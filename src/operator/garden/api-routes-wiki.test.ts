@@ -43,6 +43,8 @@ function makeRequest(url: string): IncomingMessage {
   } as IncomingMessage;
 }
 
+let nextRequestBody = '';
+
 function makeRoutes(wikiService?: AdminWikiService | null): AdminApiRoute[] {
   return buildAdminApiRoutes({
     config: {} as SubstrateConfig,
@@ -57,7 +59,7 @@ function makeRoutes(wikiService?: AdminWikiService | null): AdminApiRoute[] {
     identityService: {} as AdminIdentityService,
     promptsService: {} as AdminPromptsService,
     chatBootstrapService: {} as AdminChatBootstrapApi,
-    withBody: () => {},
+    withBody: (_req, _res, cb) => cb(nextRequestBody),
   });
 }
 
@@ -69,6 +71,22 @@ async function invokeRoute(
   const route = routes.find(candidate => candidate.method === 'GET' && candidate.match(path));
   expect(route).toBeDefined();
   const response = new CapturingResponse();
+  nextRequestBody = '';
+  route!.handle(makeRequest(url), response as unknown as ServerResponse, route!.match(path) ?? {});
+  await new Promise(resolve => setImmediate(resolve));
+  return response;
+}
+
+async function invokePost(
+  routes: AdminApiRoute[],
+  url: string,
+  body: unknown,
+): Promise<CapturingResponse> {
+  const path = new URL(url, 'http://localhost').pathname;
+  const route = routes.find(candidate => candidate.method === 'POST' && candidate.match(path));
+  expect(route).toBeDefined();
+  const response = new CapturingResponse();
+  nextRequestBody = JSON.stringify(body);
   route!.handle(makeRequest(url), response as unknown as ServerResponse, route!.match(path) ?? {});
   await new Promise(resolve => setImmediate(resolve));
   return response;
@@ -134,6 +152,93 @@ function makeWikiService(): AdminWikiService {
         preview: 'Wiki stays separate from memory.',
       }],
     })),
+    listWikiScopes: vi.fn(async () => ({
+      boundary: 'Wiki/reference knowledge is workspace-backed durable reference material, separate from L0/L0.1/L2 memory.',
+      scopes: [
+        { scope: 'personal', displayName: 'Personal (companion)', documentCount: 1 },
+        { scope: 'shared_world:home', siteId: 'home', displayName: 'Home (shared world)', documentCount: 2 },
+      ],
+    })),
+    listSharedWorldWikiDocuments: vi.fn(async (siteId: string) => ({
+      scope: `shared_world:${siteId}` as const,
+      siteId,
+      roots: {
+        wikiRoot: `/system-data/shared-world/wiki/sites/${siteId}`,
+        documentsDir: `/system-data/shared-world/wiki/sites/${siteId}/documents`,
+        metadataDir: `/system-data/shared-world/wiki/sites/${siteId}/metadata`,
+      },
+      boundary: 'Wiki/reference knowledge is workspace-backed durable reference material, separate from L0/L0.1/L2 memory.',
+      documents: [{
+        schemaVersion: 1,
+        id: 'site-overview',
+        title: 'Home — World Overview',
+        bodyPath: 'documents/site-overview.md',
+        bodyFormat: 'markdown',
+        tags: ['generated:places', 'site:home', 'overview'],
+        sourceClass: 'system_seed',
+        provenanceRefs: [],
+        sensitivity: 'personal',
+        scope: `shared_world:${siteId}` as const,
+        createdAt: '2026-07-08T00:00:00.000Z',
+        updatedAt: '2026-07-08T00:00:00.000Z',
+        updatedBy: 'places-wiki-publisher',
+        version: 1,
+        bodySha256: 'sha256',
+        preview: 'Browsable world overview for Home.',
+        bodyCharCount: 40,
+      }],
+    })),
+    getSharedWorldWikiDocument: vi.fn(async (_siteId: string, id: string) => (id === 'site-overview'
+      ? {
+        schemaVersion: 1 as const,
+        id,
+        title: 'Home — World Overview',
+        bodyPath: 'documents/site-overview.md',
+        bodyFormat: 'markdown' as const,
+        tags: ['generated:places'],
+        sourceClass: 'system_seed' as const,
+        provenanceRefs: [],
+        sensitivity: 'personal' as const,
+        scope: 'shared_world:home' as const,
+        createdAt: '2026-07-08T00:00:00.000Z',
+        updatedAt: '2026-07-08T00:00:00.000Z',
+        updatedBy: 'places-wiki-publisher',
+        version: 1,
+        bodySha256: 'sha256',
+        body: 'World overview body.',
+      }
+      : null)),
+    publishSharedWorldSite: vi.fn(async (siteId: string) => ({
+      siteId,
+      created: ['site-overview', 'place-kitchen'],
+      updated: [],
+      unchanged: [],
+      deleted: [],
+      // s10f9: publish reports its shared-schema projection outcome.
+      projection: {
+        siteId,
+        status: 'projected' as const,
+        projected: ['site-overview', 'place-kitchen'],
+        deleted: [],
+        failedDocuments: [],
+      },
+    })),
+    importSharedWorldDirectory: vi.fn(async (siteId: string, request) => ({
+      directory: request.directory,
+      scope: `shared_world:${siteId}` as const,
+      personalFactGuard: true,
+      imported: [{ file: 'kitchen.md', id: 'kitchen', title: 'Kitchen' }],
+      rejected: [{ file: 'partner.md', reason: 'contains a first-person relational marker (personal fact)' }],
+      // s10f9: dry-run import reports an honest skipped projection.
+      projection: {
+        siteId,
+        status: 'skipped' as const,
+        reason: 'dry_run',
+        projected: [],
+        deleted: [],
+        failedDocuments: [],
+      },
+    })),
   };
 }
 
@@ -180,5 +285,86 @@ describe('wiki admin API routes', () => {
     const unavailable = await invokeRoute(makeRoutes(null), '/api/admin/wiki');
     expect(unavailable.status).toBe(503);
     expect(JSON.parse(unavailable.body)).toEqual({ error: 'Wiki backend unavailable' });
+  });
+});
+
+describe('wiki admin API scope delineation (vinz.28)', () => {
+  it('enumerates scopes and resolves personal scope on document metadata', async () => {
+    const wikiService = makeWikiService();
+    const routes = makeRoutes(wikiService);
+
+    const scopes = await invokeRoute(routes, '/api/admin/wiki/scopes');
+    expect(scopes.status).toBe(200);
+    expect(JSON.parse(scopes.body)).toMatchObject({
+      scopes: [
+        expect.objectContaining({ scope: 'personal' }),
+        expect.objectContaining({ scope: 'shared_world:home', siteId: 'home' }),
+      ],
+    });
+
+    // The personal list route resolves scope explicitly on each entry.
+    const list = await invokeRoute(routes, '/api/admin/wiki');
+    expect(list.status).toBe(200);
+    expect(JSON.parse(list.body).documents[0]).toMatchObject({ id: 'garden-boundary' });
+  });
+
+  it('filters the list by a shared_world scope and reads a shared doc', async () => {
+    const wikiService = makeWikiService();
+    const routes = makeRoutes(wikiService);
+
+    const filtered = await invokeRoute(routes, '/api/admin/wiki?scope=shared_world:home');
+    expect(filtered.status).toBe(200);
+    expect(wikiService.listSharedWorldWikiDocuments).toHaveBeenCalledWith('home');
+    expect(JSON.parse(filtered.body)).toMatchObject({
+      scope: 'shared_world:home',
+      siteId: 'home',
+      documents: [expect.objectContaining({ id: 'site-overview', scope: 'shared_world:home' })],
+    });
+
+    const sharedList = await invokeRoute(routes, '/api/admin/wiki/shared-world/home');
+    expect(sharedList.status).toBe(200);
+    expect(JSON.parse(sharedList.body).siteId).toBe('home');
+
+    const sharedDoc = await invokeRoute(routes, '/api/admin/wiki/shared-world/home?id=site-overview');
+    expect(sharedDoc.status).toBe(200);
+    expect(wikiService.getSharedWorldWikiDocument).toHaveBeenCalledWith('home', 'site-overview');
+    expect(JSON.parse(sharedDoc.body)).toMatchObject({ id: 'site-overview', scope: 'shared_world:home' });
+  });
+
+  it('runs publication and personal-fact-guarded import through admin routes', async () => {
+    const wikiService = makeWikiService();
+    const routes = makeRoutes(wikiService);
+
+    const publish = await invokePost(routes, '/api/admin/wiki/shared-world/home/publish', {});
+    expect(publish.status).toBe(200);
+    expect(wikiService.publishSharedWorldSite).toHaveBeenCalledWith('home');
+    expect(JSON.parse(publish.body)).toMatchObject({
+      siteId: 'home',
+      created: ['site-overview', 'place-kitchen'],
+      // s10f9: the projection outcome reaches the operator through the route.
+      projection: expect.objectContaining({ status: 'projected' }),
+    });
+
+    const importResp = await invokePost(routes, '/api/admin/wiki/shared-world/home/import', {
+      directory: '/tmp/world-notes',
+      dryRun: true,
+    });
+    expect(importResp.status).toBe(200);
+    expect(wikiService.importSharedWorldDirectory).toHaveBeenCalledWith('home', {
+      directory: '/tmp/world-notes',
+      dryRun: true,
+    });
+    expect(JSON.parse(importResp.body)).toMatchObject({
+      imported: [expect.objectContaining({ file: 'kitchen.md' })],
+      rejected: [expect.objectContaining({ file: 'partner.md' })],
+      projection: expect.objectContaining({ status: 'skipped', reason: 'dry_run' }),
+    });
+  });
+
+  it('rejects an import with no directory', async () => {
+    const routes = makeRoutes(makeWikiService());
+    const bad = await invokePost(routes, '/api/admin/wiki/shared-world/home/import', { dryRun: true });
+    expect(bad.status).toBe(400);
+    expect(JSON.parse(bad.body).error).toBe('directory (string) is required');
   });
 });

@@ -8,6 +8,7 @@ import type { GatewayBootstrapInput } from './bootstrap-input.js';
 import type { GatewayServer } from './server.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type { SubstrateMessage } from '../../shared/contracts/runtime.js';
+import { assertDiscordAccountTokensConfigured } from '../../channels/backplane/config.js';
 import {
   createDiscordChannelAdapterFactoryEntry,
   createTelegramChannelAdapterFactoryEntry,
@@ -20,9 +21,28 @@ import {
   type RuntimeChannelLifecycleLogger,
 } from '../../app/startup/support/channel-lifecycle.js';
 
+/** One per-companion discord bot account surface (multi-companion W1-P2). */
+export interface GatewayDiscordAccountSurface {
+  accountId: string;
+  companionId: string;
+  adapter: DiscordAdapter;
+}
+
 export interface GatewayChannelSurfaces {
+  /**
+   * Single-account adapter, or the primary (first configured) account in
+   * multi-account mode — used for gateway-level surfaces (operator
+   * notifications, voice modules) that predate per-companion accounts.
+   */
   discord: DiscordAdapter;
+  /** Present only in multi-account mode; includes the primary account. */
+  discordAccounts?: GatewayDiscordAccountSurface[];
   telegram?: TelegramAdapter;
+}
+
+/** All discord adapter instances owned by the gateway, in configured order. */
+function listDiscordAdapters(surfaces: GatewayChannelSurfaces): DiscordAdapter[] {
+  return surfaces.discordAccounts?.map(account => account.adapter) ?? [surfaces.discord];
 }
 
 export interface LoadGatewayChannelSurfacesInput {
@@ -43,21 +63,58 @@ export async function initGatewayChannelSurfaces(
   if (surfaces.telegram) {
     await surfaces.telegram.init();
   }
-  await surfaces.discord.init();
+  for (const discord of listDiscordAdapters(surfaces)) {
+    await discord.init();
+  }
 }
 
 export async function loadGatewayChannelSurfaces(
   input: LoadGatewayChannelSurfacesInput,
 ): Promise<GatewayChannelSurfaces> {
+  const discordChannelConfig = input.bootstrap.channelsConfig.discord;
+  const accountConfigs = discordChannelConfig.accounts ?? [];
+  const multiAccount = accountConfigs.length > 0;
+  if (multiAccount) {
+    // Fail closed before constructing any adapter: a configured account whose
+    // token env var is unset must stop gateway startup, never degrade.
+    assertDiscordAccountTokensConfigured(discordChannelConfig);
+  }
+
   const gatewayChannelRegistry = new ChannelAdapterRegistry();
+  const accountRegistryIds = accountConfigs.map(account => `discord:${account.accountId}`);
+  const discordEntries = multiAccount
+    ? accountConfigs.map((account, index) => {
+      const selfRegistryId = accountRegistryIds[index]!;
+      return createDiscordChannelAdapterFactoryEntry({
+        config: input.config,
+        eventBus: input.eventBus,
+        eligibilityGate: input.eligibilityGate,
+        personalFilesDir: input.bootstrap.workspaceRoot,
+        allowedBotUserIds: account.allowedBotUserIds,
+        account: {
+          accountId: account.accountId,
+          token: account.token,
+          // Live sibling lookup through the registry: every other companion
+          // account's logged-in bot user id counts as a sibling companion bot.
+          siblingBotUserIds: () => accountRegistryIds
+            .filter(registryId => registryId !== selfRegistryId)
+            .map(registryId => gatewayChannelRegistry
+              .optional<DiscordAdapter>(registryId)?.getBotUserId())
+            .filter((botUserId): botUserId is string => Boolean(botUserId)),
+        },
+      });
+    })
+    : [
+      createDiscordChannelAdapterFactoryEntry({
+        config: input.config,
+        discordConfig: discordChannelConfig,
+        eventBus: input.eventBus,
+        eligibilityGate: input.eligibilityGate,
+        personalFilesDir: input.bootstrap.workspaceRoot,
+      }),
+    ];
   const gatewayChannelManifest = buildChannelAdapterFactoryManifest([
-    createDiscordChannelAdapterFactoryEntry({
-      config: input.config,
-      discordConfig: input.bootstrap.channelsConfig.discord,
-      eventBus: input.eventBus,
-      eligibilityGate: input.eligibilityGate,
-      personalFilesDir: input.bootstrap.workspaceRoot,
-    }),
+    ...discordEntries,
     createTelegramChannelAdapterFactoryEntry({
       config: input.bootstrap.channelsConfig.telegram,
       eventBus: input.eventBus,
@@ -72,6 +129,19 @@ export async function loadGatewayChannelSurfaces(
     input.eligibilityGate,
   );
 
+  if (multiAccount) {
+    const discordAccounts: GatewayDiscordAccountSurface[] = accountConfigs.map((account, index) => ({
+      accountId: account.accountId,
+      companionId: account.companionId,
+      adapter: requireChannelAdapter<DiscordAdapter>(gatewayChannelRegistry, accountRegistryIds[index]!),
+    }));
+    return {
+      discord: discordAccounts[0]!.adapter,
+      discordAccounts,
+      telegram: getOptionalChannelAdapter<TelegramAdapter>(gatewayChannelRegistry, 'telegram') ?? undefined,
+    };
+  }
+
   return {
     discord: requireChannelAdapter<DiscordAdapter>(gatewayChannelRegistry, 'discord'),
     telegram: getOptionalChannelAdapter<TelegramAdapter>(gatewayChannelRegistry, 'telegram') ?? undefined,
@@ -80,27 +150,54 @@ export async function loadGatewayChannelSurfaces(
 
 export interface WireGatewayChannelMessagesInput {
   discord: Pick<DiscordAdapter, 'onMessage'>;
+  /**
+   * Multi-account mode (W1-P2): wire each account's adapter with its own
+   * accountId so inbound messages route to exactly that account's companion.
+   * The primary `discord` adapter is part of this list and must not be wired
+   * separately when accounts are present.
+   */
+  discordAccounts?: Array<{ accountId: string; adapter: Pick<DiscordAdapter, 'onMessage'> }>;
   telegram?: Pick<TelegramAdapter, 'onMessage'>;
-  gateway: Pick<GatewayServer, 'notifyAll' | 'requestAgentVoiceStream'>;
+  gateway: Pick<GatewayServer, 'notifyChannelMessage' | 'requestAgentVoiceStream'>;
   serializeMessage: (message: SubstrateMessage) => Record<string, unknown>;
 }
 
 export function wireGatewayChannelMessages(input: WireGatewayChannelMessagesInput): void {
-  input.discord.onMessage(async (message) => {
-    input.gateway.notifyAll('discord.message', {
-      message: input.serializeMessage(message),
+  const wireDiscordInbound = (
+    adapter: Pick<DiscordAdapter, 'onMessage'>,
+    accountId?: string,
+  ): void => {
+    adapter.onMessage(async (message) => {
+      // Single-companion mode broadcasts (historic behavior); multi-companion
+      // mode delivers to exactly the companion owning the discord surface —
+      // per bot account when accounts are configured — and fails closed on
+      // any routing ambiguity.
+      const payload = { message: input.serializeMessage(message) };
+      if (accountId) {
+        input.gateway.notifyChannelMessage('discord', 'discord.message', payload, accountId);
+      } else {
+        input.gateway.notifyChannelMessage('discord', 'discord.message', payload);
+      }
+      return {
+        content: '',
+        channelId: message.channelId,
+        metadata: {
+          model: '',
+          inputTokens: 0,
+          outputTokens: 0,
+          durationMs: 0,
+        },
+      };
     });
-    return {
-      content: '',
-      channelId: message.channelId,
-      metadata: {
-        model: '',
-        inputTokens: 0,
-        outputTokens: 0,
-        durationMs: 0,
-      },
-    };
-  });
+  };
+
+  if (input.discordAccounts && input.discordAccounts.length > 0) {
+    for (const account of input.discordAccounts) {
+      wireDiscordInbound(account.adapter, account.accountId);
+    }
+  } else {
+    wireDiscordInbound(input.discord);
+  }
 
   if (!input.telegram) {
     return;
@@ -130,31 +227,48 @@ export async function startGatewayChannelSurfaces(
   bootstrap: GatewayBootstrapInput,
   log: GatewayChannelStartupLogger,
 ): Promise<void> {
-  let discordStartAttempts = 0;
-  await startDiscordWithRetry(
-    async () => {
-      discordStartAttempts += 1;
-      await surfaces.discord.start();
-    },
-    {
-      baseDelayMs: bootstrap.discordStartRetry.baseDelayMs,
-      maxDelayMs: bootstrap.discordStartRetry.maxDelayMs,
-      maxAttempts: bootstrap.discordStartRetry.maxAttempts,
-      onRetry: ({ attempt, delayMs, maxAttempts, error }) => {
-        const rawCode = (error as Error & { code?: unknown }).code;
-        const code = typeof rawCode === 'string' ? rawCode : undefined;
-        log.warn('Discord startup failed; retrying', {
-          attempt,
-          ...(maxAttempts > 0 ? { maxAttempts } : { maxAttempts: 'unbounded' }),
-          delayMs,
-          ...(code ? { code } : {}),
-          error: error.message,
-        });
+  const discordAdapters = listDiscordAdapters(surfaces);
+  for (const [index, discord] of discordAdapters.entries()) {
+    const accountId = surfaces.discordAccounts?.[index]?.accountId;
+    let discordStartAttempts = 0;
+    await startDiscordWithRetry(
+      async () => {
+        discordStartAttempts += 1;
+        await discord.start();
       },
-    },
-  );
-  if (discordStartAttempts > 1) {
-    log.info('Discord startup recovered after retries', { attempts: discordStartAttempts });
+      {
+        baseDelayMs: bootstrap.discordStartRetry.baseDelayMs,
+        maxDelayMs: bootstrap.discordStartRetry.maxDelayMs,
+        maxAttempts: bootstrap.discordStartRetry.maxAttempts,
+        onRetry: ({ attempt, delayMs, maxAttempts, error }) => {
+          const rawCode = (error as Error & { code?: unknown }).code;
+          const code = typeof rawCode === 'string' ? rawCode : undefined;
+          log.warn('Discord startup failed; retrying', {
+            attempt,
+            ...(accountId ? { accountId } : {}),
+            ...(maxAttempts > 0 ? { maxAttempts } : { maxAttempts: 'unbounded' }),
+            delayMs,
+            ...(code ? { code } : {}),
+            error: error.message,
+          });
+        },
+      },
+    );
+    if (discordStartAttempts > 1) {
+      log.info('Discord startup recovered after retries', {
+        attempts: discordStartAttempts,
+        ...(accountId ? { accountId } : {}),
+      });
+    }
+  }
+  if (surfaces.discordAccounts && surfaces.discordAccounts.length > 0) {
+    log.info('Discord multi-account surfaces started', {
+      accounts: surfaces.discordAccounts.map(account => ({
+        accountId: account.accountId,
+        companionId: account.companionId,
+        botUserId: account.adapter.getBotUserId(),
+      })),
+    });
   }
 
   if (!surfaces.telegram) {
@@ -172,5 +286,7 @@ export async function stopGatewayChannelSurfaces(
   surfaces: GatewayChannelSurfaces,
 ): Promise<void> {
   await surfaces.telegram?.stop();
-  await surfaces.discord.stop();
+  for (const discord of [...listDiscordAdapters(surfaces)].reverse()) {
+    await discord.stop();
+  }
 }

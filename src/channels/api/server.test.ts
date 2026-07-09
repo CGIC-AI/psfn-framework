@@ -960,7 +960,7 @@ describe('ApiServer', () => {
     it('rejects provider overrides outside the direct-provider allowlist', async () => {
       const res = await request(port, 'POST', '/v1/chat/completions', {
         model: 'deepseek/deepseek-v3.2',
-        provider: 'openrouter',
+        provider: 'litellm',
         messages: [{ role: 'user', content: 'This should be rejected.' }],
       });
 

@@ -63,6 +63,101 @@ describe('turn-records tool persistence', () => {
     expect(record.userMessage.content).not.toBe('what did i send?');
   });
 
+  it('records a durable location when the turn carried a bound satellite placeId', () => {
+    const record = buildTurnRecord({
+      message: {
+        id: 'source-message-satellite',
+        channelId: 'psfn-amica:test',
+        channelType: 'psfn-amica',
+        authorId: 'user-1',
+        authorName: 'User',
+        content: 'lights?',
+        timestamp: new Date(1_700_000_000_000),
+        routing: {
+          source: 'satellite',
+          satellite: {
+            schemaVersion: 1,
+            satelliteId: 'pi-voice',
+            satelliteDisplayName: 'Pi Voice',
+            endpointId: 'endpoint-1',
+            endpointDisplayName: 'Endpoint 1',
+            claimType: 'voice',
+            sessionId: 'sess-1',
+            mobility: 'static',
+            promptChannelType: 'psfn-amica',
+            placeId: 'living_room',
+            capabilities: {
+              advertised: [],
+              registryMax: [],
+              effective: [],
+              policyDenied: [],
+            },
+            telemetryScopes: [],
+            auth: { mode: 'api_key', principalId: 'anon', certBound: false },
+          },
+        },
+      },
+      turnId: '019d2326-d9e1-701d-bcee-250d2cbb0e4e',
+      requestId: 'req-turn-records-satellite',
+      startedAt: 1_700_000_000_000,
+      completedAt: 1_700_000_000_250,
+      userSessionEntryId: 1,
+      assistantSessionEntryId: 2,
+      response: {
+        content: 'On it.',
+        channelId: 'psfn-amica:test',
+        metadata: { model: 'test-model', inputTokens: 5, outputTokens: 3, durationMs: 250 },
+      },
+      turnMessages: [],
+      promptMode: 'default',
+      promptText: 'prompt',
+      contextMessageCount: 1,
+      memoryContextChars: 0,
+      trustLevel: 'regular',
+      speakerRole: 'user',
+      retrievalProvenanceRefs: [],
+      hashPromptText: () => 'prompt-hash',
+    });
+
+    expect(record.location).toEqual({ placeId: 'living_room', satelliteId: 'pi-voice' });
+  });
+
+  it('omits location when the turn carried no satellite place binding', () => {
+    const record = buildTurnRecord({
+      message: {
+        id: 'source-message-nolocation',
+        channelId: 'api:test',
+        channelType: 'api',
+        authorId: 'user-1',
+        authorName: 'User',
+        content: 'hi',
+        timestamp: new Date(1_700_000_000_000),
+      },
+      turnId: '019d2326-d9e1-701d-bcee-250d2cbb0e4e',
+      requestId: 'req-turn-records-nolocation',
+      startedAt: 1_700_000_000_000,
+      completedAt: 1_700_000_000_250,
+      userSessionEntryId: 1,
+      assistantSessionEntryId: 2,
+      response: {
+        content: 'hey',
+        channelId: 'api:test',
+        metadata: { model: 'test-model', inputTokens: 5, outputTokens: 3, durationMs: 250 },
+      },
+      turnMessages: [],
+      promptMode: 'default',
+      promptText: 'prompt',
+      contextMessageCount: 1,
+      memoryContextChars: 0,
+      trustLevel: 'regular',
+      speakerRole: 'user',
+      retrievalProvenanceRefs: [],
+      hashPromptText: () => 'prompt-hash',
+    });
+
+    expect(record.location).toBeUndefined();
+  });
+
   it('preserves tool arguments, results, and rationale in the turn record', () => {
     const record = buildTurnRecord({
       message: {

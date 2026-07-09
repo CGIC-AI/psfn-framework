@@ -20,6 +20,7 @@ Built with love for companions who deserve to remember, to grow, and to decide f
 - **Operator and client surfaces**: Garden gained lazy-loaded pages for subsystem health, room rosters, graph proposals, contact approvals, session recovery, wiki, observer evaluations, and read-only reflection journals; `companion-ui/` adds a standalone Satellite Hub PWA client.
 - **Live-deploy pipeline**: a component-selective `ship:kube` lane targets a live Kubernetes shard with a topology-aware pre-ship gate, contract-skew guard, in-image tool pinning, two-way companion beads sync, and an operator-side post-rollout validation gate.
 - **Self-diagnosis and reliability**: `self_status` exposes a companion self-diagnosis surface, a bounded/redacted runtime diagnostics service runs behind the admin transport, scheduled prompts persist in Postgres and survive agent restarts, and tool-call handling retries fail-closed on corrupt-empty args.
+- **Multi-companion substrate (opt-in)**: behind `PSFN_MULTI_COMPANION` plus a `companions.json` fleet manifest, one gateway fronts N agent processes — each a distinct companion with its own Postgres schema (plus one `shared` schema for world data), its own Discord identity, and its own Garden, with a read-only gateway fleet-status page, presence/co-presence, companion↔companion rooms/DMs, and a shared-world wiki. Inert and byte-identical to single-companion when the flag is off. See [`docs/multi-companion.md`](./docs/multi-companion.md).
 
 ## What Makes This Different
 
@@ -434,6 +435,7 @@ If you're building a companion on this framework, check out:
 - **`docs/setup.md`**: Bootstrap and local bring-up
 - **`docs/PSFN_PROJECT_CHARTER.md`**: Project identity, architectural laws, boundary rules, and contributor guardrails
 - **`docs/architecture.md`**: Current runtime shape and subsystem map
+- **`docs/multi-companion.md`**: Multi-companion topology, fleet manifest, and fleet operations
 - **`docs/memory.md`**: Implemented memory model
 - **`docs/specifications.md`**: Config, persistence, and fail-closed contracts
 - **`docs/operations.md`**: Deployment, migration, TLS, and validation

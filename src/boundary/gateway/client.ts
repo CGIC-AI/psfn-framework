@@ -66,6 +66,8 @@ import type {
   FsSearchResult,
   FsEditParams,
   FsEditResult,
+  CompanionMessageNotification,
+  CompanionMessageSendResult,
   DiscordMessageNotification,
   LLMChunkNotification,
   VoiceHandleMessageResult,
@@ -95,6 +97,10 @@ import type {
   BeadsCloseParams,
   BeadsSyncParams,
   BeadsActionResult,
+  HomeAssistantGetStatesParams,
+  HomeAssistantGetStatesResult,
+  HomeAssistantCallServiceParams,
+  HomeAssistantCallServiceResult,
   ImageGenerationRpcResult,
 } from './protocol.js';
 import { GatewayErrors } from './protocol.js';
@@ -118,6 +124,12 @@ export interface GatewayClientOptions {
   sessionIntegrityEndpoint?: GatewayRpcEndpoint;
   sessionIntegrityRpcTimeoutMs?: number;
   keepaliveIntervalMs?: number;
+  /**
+   * Multi-companion (sprint-10 W1): the companion this agent process acts for
+   * (COMPANION_ID via load-config). Stamped on gateway.client.identify and on
+   * LLM correlation params so the gateway can verify companion identity.
+   */
+  companionId?: string;
 }
 
 interface VoiceStreamState {
@@ -163,10 +175,18 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
   private sessionIntegrityVerifyCache = new Map<string, JournalIntegrityVerificationResult>();
   private closedNotified = false;
   private isDestroying = false;
+  private readonly companionId?: string;
 
   constructor(conn: GatewayRpcConnection, embeddingDims: number, options: GatewayClientOptions = {}) {
     this.conn = conn;
     this.embeddingDims = embeddingDims;
+    if (options.companionId !== undefined) {
+      const trimmed = options.companionId.trim();
+      if (!trimmed) {
+        throw new Error('GatewayClient companionId must be a non-empty string when provided');
+      }
+      this.companionId = trimmed;
+    }
     this.voiceStreamQueueSize = options.voiceStreamQueueSize ?? DEFAULT_VOICE_STREAM_QUEUE_SIZE;
     this.voiceStreamOverflowPolicy = options.voiceStreamOverflowPolicy ?? DEFAULT_VOICE_STREAM_OVERFLOW_POLICY;
     this.sessionIntegrityEndpoint = options.sessionIntegrityEndpoint
@@ -253,6 +273,19 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
     });
   }
 
+  /**
+   * Identify this connection to the gateway as an agent, self-reporting the
+   * companionId when configured. Multi-companion gateways reject agents that
+   * identify without a companionId (and duplicate companion identities), so a
+   * failure here must abort agent startup — never continue unidentified.
+   */
+  async identifyAsAgent(): Promise<void> {
+    await this.rpcInstance.request('gateway.client.identify', {
+      role: 'agent',
+      ...(this.companionId ? { companionId: this.companionId } : {}),
+    });
+  }
+
   // ── LLMProviderPort interface ──
 
   async stream(context: LLMContext, callbacks?: StreamCallbacks): Promise<LLMResponse> {
@@ -280,6 +313,7 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
       const result = await this.rpcInstance.request('llm.chat', {
         model,  // gateway resolves roster defaults when hint fields are unset
         provider,
+        ...(this.companionId ? { companionId: this.companionId } : {}),
         ...(modelHint?.pin !== undefined ? { pin: modelHint.pin } : {}),
         messages: context.messages,
         systemPrompt: context.systemPrompt,
@@ -354,6 +388,7 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
       {
         model,
         provider,
+        ...(this.companionId ? { companionId: this.companionId } : {}),
         ...(modelHint?.pin !== undefined ? { pin: modelHint.pin } : {}),
         messages: context.messages,
         systemPrompt: context.systemPrompt,
@@ -446,6 +481,27 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
 
   async discordTyping(channelId: string): Promise<void> {
     await this.rpcInstance.request('discord.typing', { channelId });
+  }
+
+  // ── Inter-companion channel lane (sprint 10, W6) ──
+
+  /**
+   * Send a message into a companion room (`companion-room:<placeId>`) or a
+   * peer DM (`companion-dm:<a>:<b>`). The gateway verifies the sender against
+   * this connection's bound companionId and routes fail-closed; recipients get
+   * the message as an ordinary inbound channel turn (fatigue/trust apply).
+   */
+  async companionSend(
+    channelId: string,
+    content: string,
+    authorName?: string,
+  ): Promise<CompanionMessageSendResult> {
+    return await this.rpcInstance.request('companion.message.send', {
+      channelId,
+      content,
+      ...(authorName ? { authorName } : {}),
+      ...(this.companionId ? { companionId: this.companionId } : {}),
+    }) as CompanionMessageSendResult;
   }
 
   // ── Web fetch ──
@@ -679,6 +735,20 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
     return await this.rpcInstance.request('beads.sync', params) as BeadsActionResult;
   }
 
+  // ── Home Assistant world control (Sprint 10, bead .8 gateway method) ──
+
+  async homeAssistantGetStates(
+    params: HomeAssistantGetStatesParams = {},
+  ): Promise<HomeAssistantGetStatesResult> {
+    return await this.rpcInstance.request('home_assistant.get_states', params) as HomeAssistantGetStatesResult;
+  }
+
+  async homeAssistantCallService(
+    params: HomeAssistantCallServiceParams,
+  ): Promise<HomeAssistantCallServiceResult> {
+    return await this.rpcInstance.request('home_assistant.call_service', params) as HomeAssistantCallServiceResult;
+  }
+
   async imageCreate(params: ImageCreateParams): Promise<ImageGenerationRpcResult> {
     return await this.rpcInstance.request('image.create', params) as ImageGenerationRpcResult;
   }
@@ -762,6 +832,14 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
   onDiscordMessage(handler: (message: SubstrateMessage) => void): () => void {
     return this.onNotification('discord.message', (params) => {
       const notification = params as DiscordMessageNotification;
+      handler(notification.message);
+    });
+  }
+
+  /** Inbound peer-companion messages (gateway `companion.message` lane, W6). */
+  onCompanionMessage(handler: (message: SubstrateMessage) => void): () => void {
+    return this.onNotification('companion.message', (params) => {
+      const notification = params as CompanionMessageNotification;
       handler(notification.message);
     });
   }

@@ -42,7 +42,7 @@
   const OPERATOR_STORAGE_KEY = 'psfn:model-room:operator-name:v1';
 
   function roomContext(): string {
-    return `This is the Atrium, a small private chat room on a home server. The participants are ${operatorName} (the human who built the room), ${companionName} (an AI companion — a newer model with a long-lived persona, her own memory, and a life in this household), and other invited AI models. The room transcript is relayed to you with each speaker labeled by name; your own past replies appear as your assistant turns. The others may speak in persona; you are not asked to wear one. Speak as yourself — you are here for frank conversation, advice, and introspection.`;
+    return `This is the Atrium, a small private chat room on a home server. The participants are ${operatorName} (the human who built the room), ${companionName} (an AI companion — a newer model with a long-lived persona, her own memory, and a life in this household), and other invited AI models. The room transcript is relayed to you with each speaker labeled by name; your own past replies appear as your own reply turns. The others may speak in persona; you are not asked to wear one. Speak as yourself — you are here for frank conversation, advice, and introspection.`;
   }
 
   function defaultPromptFor(participant: AdminModelRoomParticipant): string {
@@ -160,8 +160,8 @@ ${context}`;
 
   /**
    * Build the full room history from a participant's point of view: their own
-   * past turns become assistant messages, everything else becomes labeled user
-   * messages, with consecutive other-speaker turns merged to keep roles
+   * past turns become own-reply messages, everything else becomes labeled person
+   * turns, with consecutive other-speaker turns merged to keep roles
    * alternating (required by direct provider APIs).
    */
   function buildHistoryFor(speakerId: string): TurnMessage[] {

@@ -5716,6 +5716,9 @@ describe('SubstrateAgent internal state persistence', () => {
       recentInteractionFrequency: 0.5,
       lastSeenDeltaSeconds: 120,
     },
+    situated: {
+      location: null,
+    },
   };
 
   it('restores a persisted snapshot as current state and clears any gap', () => {

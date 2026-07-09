@@ -13,8 +13,13 @@ import { buildAdminContactRoutes } from './routes/contact-routes.js';
 import { buildAdminContactApprovalRoutes } from './api-routes-contact-approvals.js';
 import type { AdminPendingContactsService } from './services/pending-contacts-service.js';
 import { buildAdminRoomRoutes } from './api-routes-rooms.js';
+import { buildAdminPlacesRoutes } from './api-routes-places.js';
+import { buildAdminWikiScopeRoutes } from './api-routes-wiki-scopes.js';
+import { buildAdminEnrollmentRoutes } from './api-routes-enrollment.js';
 import { buildAdminGraphProposalRoutes } from './api-routes-graph-proposals.js';
 import type { AdminRoomsService } from './services/rooms-service.js';
+import type { AdminPlacesService } from './services/places-service.js';
+import type { AdminEnrollmentService } from './services/enrollment-service.js';
 import type { AdminGraphProposalsService } from './services/graph-proposals-service.js';
 import { buildAdminConcernRoutes } from './routes/concern-routes.js';
 import { buildAdminIdentityRoutes } from './routes/identity-routes.js';
@@ -258,6 +263,8 @@ export function buildAdminApiRoutes(options: {
   contactsService: AdminContactsService;
   pendingContactsService?: AdminPendingContactsService | null;
   roomsService?: AdminRoomsService | null;
+  placesService?: AdminPlacesService | null;
+  enrollmentService?: AdminEnrollmentService | null;
   graphProposalsService?: AdminGraphProposalsService | null;
   concernService?: AdminConcernService | null;
   subsystemHealthService?: AdminSubsystemHealthService | null;
@@ -303,6 +310,8 @@ export function buildAdminApiRoutes(options: {
     contactsService,
     pendingContactsService,
     roomsService,
+    placesService,
+    enrollmentService,
     graphProposalsService,
     concernService,
     subsystemHealthService,
@@ -666,9 +675,22 @@ export function buildAdminApiRoutes(options: {
     {
       method: 'GET',
       match: exactPath('/api/admin/wiki'),
-      handle: (_req, res) => {
+      handle: (req, res) => {
         if (!wikiService) {
           sendJson(res, 503, { error: WIKI_UNAVAILABLE_ERROR });
+          return;
+        }
+        // vinz.28: ?scope=shared_world:<siteId> filters to that shared scope;
+        // absent/personal keeps the byte-identical personal listing.
+        const url = parseRequestUrl(req, '/api/admin/wiki');
+        const scope = url.searchParams.get('scope')?.trim();
+        if (scope && scope.startsWith('shared_world:')) {
+          const siteId = scope.slice('shared_world:'.length);
+          if (!siteId) { sendJson(res, 400, { error: 'shared_world scope requires a siteId' }); return; }
+          wikiService.listSharedWorldWikiDocuments(siteId).then(
+            payload => sendJson(res, 200, payload, ADMIN_DYNAMIC_JSON_HEADERS),
+            error => sendJson(res, 400, { error: toSanitizedMessage(error, 'Failed to list shared-world wiki documents') }),
+          );
           return;
         }
         wikiService.listWikiDocuments().then(
@@ -677,6 +699,7 @@ export function buildAdminApiRoutes(options: {
         );
       },
     },
+    ...buildAdminWikiScopeRoutes({ wikiService, withBody }),
     {
       method: 'GET',
       match: exactPath('/api/admin/wiki/search'),
@@ -732,6 +755,12 @@ export function buildAdminApiRoutes(options: {
       : []),
     ...(roomsService
       ? buildAdminRoomRoutes({ roomsService })
+      : []),
+    ...(placesService
+      ? buildAdminPlacesRoutes({ placesService, withBody })
+      : []),
+    ...(enrollmentService
+      ? buildAdminEnrollmentRoutes({ enrollmentService, withBody })
       : []),
     ...(graphProposalsService
       ? buildAdminGraphProposalRoutes({ graphProposalsService, withBody })

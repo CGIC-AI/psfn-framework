@@ -22,6 +22,7 @@ import type { TurnToolSummary } from '../../../faculties/skills/reflection-nudge
 import type { ChannelMeta } from '../../../system/trust/policy.js';
 import type { TrustLevel } from '../../../system/trust/types.js';
 import type { SatellitePresencePort } from '../satellite-adapter-port.js';
+import type { CompanionPresenceTurnPort } from '../companion-presence-runtime.js';
 import type { AgentResponse, CorrelationMetadata, FatigueEnforcementMetadata, InferredPostTurnAction, MessagePromptOverride, MessagePromptOverrideMode, ObservabilityCallType, ResponseStyle, SubstrateMessage, TurnID, TurnRecord, TurnUsage } from '../../../shared/contracts/runtime.js';
 import type { CoreSubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
 import type { ContextBudgetTurnCharacteristics } from '../../../shared/context-budget.js';
@@ -85,6 +86,11 @@ export interface TurnExecutionRuntime {
   costTelemetry: CostTelemetryPort;
   fatigueBudget?: FatigueBudgetPort | null;
   satellitePresence: SatellitePresencePort;
+  /**
+   * Cross-companion presence (sprint 10, W5a). Absent/null (single-companion,
+   * flag-off) skips the per-turn presence write entirely.
+   */
+  companionPresence?: CompanionPresenceTurnPort | null;
   llmClient: LLMProviderPort;
   imageVisionReviewer: ImageVisionReviewer | null;
   sessionManager: SessionManager;
@@ -101,6 +107,35 @@ export interface TurnExecutionRuntime {
   memoryExtractor: MemoryExtractor | null;
   /** E8.3: supplemental wiki RAG provider; null until the projection is wired. */
   wikiRetrieval: WikiRetrievalPort | null;
+  /**
+   * W5b: places soft-registry threaded from startup, used to resolve the
+   * companion's current site for wiki shared-world scope. Optional/undefined
+   * behaves as no situated site (personal-only retrieval).
+   */
+  placesRegistry?: import('../../../../shared/contracts/places-registry.js').PlacesRegistryConfig | undefined;
+  /**
+   * Fallback situated place for a placeless turn — dual-presence aware
+   * (vinz.29): a deliberate virtual `move` (vinz.26), else on mindspace
+   * (plain-chat) turns the twin of the durable last-known physical room, else
+   * the active physical emanation. Takes the turn message because the mode is
+   * classified per turn from its routing origin. Keeps the wiki shared-world
+   * scope and the mindspace presence write in lockstep with the rendered
+   * situated block. Absent ⇒ turn-message resolution only.
+   */
+  resolveSituatedFallbackPlaceId?: (message: SubstrateMessage) => string | undefined;
+  /**
+   * Virtual-activity presence follow (vinz.21): evaluated once per turn on
+   * the pre-turn path AFTER author/trust resolution. When the trusted partner
+   * is active in a place-bound virtual companion-room the companion is not
+   * present at, this pulls her virtual presence there through the same port
+   * path a deliberate move uses (arrival semantics + room-entry note).
+   * Never throws (the follower fails closed internally). Absent ⇒ no
+   * evaluation (minimal runtimes/tests).
+   */
+  followVirtualRoomActivity?: (
+    message: SubstrateMessage,
+    author: import('../virtual-room-follow.js').VirtualFollowAuthorContext,
+  ) => Promise<void>;
   skillsRuntime: SkillsRuntime | null;
   evaluateReflectionNudge: (toolSummary: TurnToolSummary) => string | null;
   emotionSelfModelRuntime: EmotionSelfModelRuntime;

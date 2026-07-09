@@ -245,6 +245,296 @@ describe('start-gateway-agent launcher supervision', () => {
   });
 });
 
+describe('start-gateway-agent multi-companion supervisor', () => {
+  const tsxBin = join(repoRoot, 'node_modules/.bin/tsx');
+
+  function makeFleetWorkspace(companionsJson: string | undefined): {
+    workDir: string;
+    systemDataDir: string;
+    companionDataDir: string;
+  } {
+    const workDir = mkdtempSync(join(tmpdir(), 'psfn-supervisor-'));
+    const systemDataDir = join(workDir, 'system-data');
+    const companionDataDir = join(workDir, 'companion-data');
+    mkdirSync(systemDataDir, { recursive: true });
+    mkdirSync(companionDataDir, { recursive: true });
+    if (companionsJson !== undefined) {
+      writeFileSync(join(systemDataDir, 'companions.json'), companionsJson, 'utf8');
+    }
+    return { workDir, systemDataDir, companionDataDir };
+  }
+
+  const twoCompanionFleet = JSON.stringify({
+    companions: [
+      {
+        companionId: '11111111-1111-4111-8111-111111111111',
+        companionDataDir: 'alpha',
+        characterCardPath: 'alpha/card.json',
+        postgresSchema: 'companion_alpha',
+        gardenPort: 10061,
+      },
+      {
+        companionId: '22222222-2222-4222-8222-222222222222',
+        companionDataDir: 'beta',
+        characterCardPath: 'beta/card.json',
+        postgresSchema: 'companion_beta',
+      },
+    ],
+  });
+
+  it('keeps the single-companion path byte-identical when the flag is absent', () => {
+    const launcher = readFileSync(join(repoRoot, 'scripts/start-gateway-agent.sh'), 'utf8');
+    // The helper is only invoked when the topology flag is present at all.
+    expect(launcher).toContain('if [ -z "${PSFN_MULTI_COMPANION:-}" ]; then');
+    // Supervisor branch never runs unless the flag resolved a fleet.
+    expect(launcher).toContain('if [ "${SUPERVISOR_MODE}" -eq 1 ]; then');
+  });
+
+  it('delegates all fleet validation to the canonical TS helper', () => {
+    const launcher = readFileSync(join(repoRoot, 'scripts/start-gateway-agent.sh'), 'utf8');
+    expect(launcher).toContain('./node_modules/.bin/tsx scripts/resolve-companion-fleet.ts');
+    expect(launcher).toContain('npm run --silent resolve:companion-fleet');
+    expect(launcher).toContain('failed to resolve companion fleet from companions.json; refusing to start');
+  });
+
+  it('passes the companion-scoped and topology env through the scrubbed allowlist', () => {
+    const launcher = readFileSync(join(repoRoot, 'scripts/start-gateway-agent.sh'), 'utf8');
+    expect(launcher).toContain('COMPANION_PG_SCHEMA \\');
+    expect(launcher).toContain('PSFN_MULTI_COMPANION \\');
+    expect(launcher).toContain('export COMPANION_ID="${companion_id}"');
+    expect(launcher).toContain('export COMPANION_DATA_DIR="${companion_data_dir}"');
+    expect(launcher).toContain('export CHARACTER_CARD_PATH="${character_card_path}"');
+    expect(launcher).toContain('export COMPANION_PG_SCHEMA="${postgres_schema}"');
+  });
+
+  it('supervises the fleet with shared-fate shutdown and no silent restart', () => {
+    const launcher = readFileSync(join(repoRoot, 'scripts/start-gateway-agent.sh'), 'utf8');
+    expect(launcher).toContain(
+      'wait -n "${GATEWAY_PID}" "${AGENT_PIDS[@]}" ${OPERATOR_PIDS[@]+"${OPERATOR_PIDS[@]}"}',
+    );
+    expect(launcher).toContain('shutting down the whole fleet (shared-fate)');
+    // The supervisor path must tear down the whole set, not re-exec/auto-restart.
+    expect(launcher).toContain('cleanup_children');
+  });
+
+  it('spawns one scrubbed operator per fleet entry with a gardenPort (W4)', () => {
+    const launcher = readFileSync(join(repoRoot, 'scripts/start-gateway-agent.sh'), 'utf8');
+    // Operator spawns run through env -i with the operator allowlist, after the
+    // companion's agent, only when companions.json assigns a gardenPort.
+    expect(launcher).toContain(
+      'launch_background env -i "${OPERATOR_ENV[@]}" ./node_modules/.bin/tsx src/app/operator/main.ts',
+    );
+    expect(launcher).toContain('build_operator_env');
+    expect(launcher).toContain('start_companion_operator');
+    expect(launcher).toContain('export ADMIN_TRANSPORT_SOCKET="${admin_transport_socket}"');
+    expect(launcher).toContain('export ADMIN_PORT="${garden_port}"');
+    expect(launcher.indexOf('start_companion_agent "${companion_id}"')).toBeLessThan(
+      launcher.indexOf('start_companion_operator "${companion_id}"'),
+    );
+    // The operator allowlist may carry its own admin auth material but never
+    // upstream provider secrets.
+    expect(launcher).toContain('ADMIN_TOKEN; do');
+    expect(launcher).not.toMatch(/OPERATOR_ENV[^\n]*OPENROUTER_API_KEY/);
+  });
+
+  it('emits a tab-delimited spawn plan from the canonical fleet validator', () => {
+    const { workDir, systemDataDir, companionDataDir } = makeFleetWorkspace(twoCompanionFleet);
+    try {
+      const output = execFileSync(tsxBin, ['scripts/resolve-companion-fleet.ts'], {
+        cwd: repoRoot,
+        encoding: 'utf8',
+        env: {
+          PATH: process.env.PATH,
+          HOME: process.env.HOME,
+          PSFN_MULTI_COMPANION: '1',
+          SYSTEM_DATA_DIR: systemDataDir,
+          COMPANION_DATA_DIR: companionDataDir,
+          ADMIN_TRANSPORT_SOCKET: join(workDir, 'run', 'garden-admin.sock'),
+        },
+      });
+      const socketDir = join(workDir, 'run');
+      expect(output).toBe(
+        [
+          '11111111-1111-4111-8111-111111111111\talpha\talpha/card.json\tcompanion_alpha'
+          + `\t${socketDir}/garden-admin-11111111-1111-4111-8111-111111111111.sock\t10061`,
+          '22222222-2222-4222-8222-222222222222\tbeta\tbeta/card.json\tcompanion_beta'
+          + `\t${socketDir}/garden-admin-22222222-2222-4222-8222-222222222222.sock\t-`,
+          '',
+        ].join('\n'),
+      );
+    } finally {
+      rmSync(workDir, { recursive: true, force: true });
+    }
+  });
+
+  it('fails closed when multi-companion is combined with network admin transport', () => {
+    const { workDir, systemDataDir, companionDataDir } = makeFleetWorkspace(twoCompanionFleet);
+    let error: unknown;
+    try {
+      execFileSync(tsxBin, ['scripts/resolve-companion-fleet.ts'], {
+        cwd: repoRoot,
+        encoding: 'utf8',
+        stdio: 'pipe',
+        env: {
+          PATH: process.env.PATH,
+          HOME: process.env.HOME,
+          PSFN_MULTI_COMPANION: '1',
+          SYSTEM_DATA_DIR: systemDataDir,
+          COMPANION_DATA_DIR: companionDataDir,
+          ADMIN_TRANSPORT_MODE: 'network',
+        },
+      });
+    } catch (caught) {
+      error = caught;
+    } finally {
+      rmSync(workDir, { recursive: true, force: true });
+    }
+    expect(error).toBeDefined();
+    expect(String((error as { stderr?: Buffer }).stderr)).toContain(
+      'Multi-companion mode requires ADMIN_TRANSPORT_MODE=socket',
+    );
+  });
+
+  it('prints nothing for single-companion topology (empty fleet signal)', () => {
+    const { workDir, systemDataDir, companionDataDir } = makeFleetWorkspace(undefined);
+    try {
+      const output = execFileSync(tsxBin, ['scripts/resolve-companion-fleet.ts'], {
+        cwd: repoRoot,
+        encoding: 'utf8',
+        env: {
+          PATH: process.env.PATH,
+          HOME: process.env.HOME,
+          SYSTEM_DATA_DIR: systemDataDir,
+          COMPANION_DATA_DIR: companionDataDir,
+        },
+      });
+      expect(output).toBe('');
+    } finally {
+      rmSync(workDir, { recursive: true, force: true });
+    }
+  });
+
+  it('fails closed when the flag is on but companions.json is missing', () => {
+    const { workDir, systemDataDir, companionDataDir } = makeFleetWorkspace(undefined);
+    let error: unknown;
+    try {
+      execFileSync(tsxBin, ['scripts/resolve-companion-fleet.ts'], {
+        cwd: repoRoot,
+        encoding: 'utf8',
+        stdio: 'pipe',
+        env: {
+          PATH: process.env.PATH,
+          HOME: process.env.HOME,
+          PSFN_MULTI_COMPANION: '1',
+          SYSTEM_DATA_DIR: systemDataDir,
+          COMPANION_DATA_DIR: companionDataDir,
+        },
+      });
+    } catch (caught) {
+      error = caught;
+    } finally {
+      rmSync(workDir, { recursive: true, force: true });
+    }
+    expect(error).toBeDefined();
+    expect(String((error as { stderr?: Buffer }).stderr)).toContain('the fleet manifest is missing');
+  });
+
+  it('fails closed when companions.json is present but the flag is off', () => {
+    const { workDir, systemDataDir, companionDataDir } = makeFleetWorkspace(twoCompanionFleet);
+    let error: unknown;
+    try {
+      execFileSync(tsxBin, ['scripts/resolve-companion-fleet.ts'], {
+        cwd: repoRoot,
+        encoding: 'utf8',
+        stdio: 'pipe',
+        env: {
+          PATH: process.env.PATH,
+          HOME: process.env.HOME,
+          SYSTEM_DATA_DIR: systemDataDir,
+          COMPANION_DATA_DIR: companionDataDir,
+        },
+      });
+    } catch (caught) {
+      error = caught;
+    } finally {
+      rmSync(workDir, { recursive: true, force: true });
+    }
+    expect(error).toBeDefined();
+    expect(String((error as { stderr?: Buffer }).stderr)).toContain(
+      'A fleet manifest is present',
+    );
+  });
+
+  it('prints the supervisor spawn plan on --dry-run without starting anything', () => {
+    const { workDir, systemDataDir, companionDataDir } = makeFleetWorkspace(twoCompanionFleet);
+    try {
+      const output = execFileSync('bash', ['scripts/start-gateway-agent.sh', '--dry-run'], {
+        cwd: repoRoot,
+        encoding: 'utf8',
+        env: {
+          PATH: process.env.PATH,
+          HOME: process.env.HOME,
+          PSFN_SKIP_DOTENV: 'true',
+          PSFN_MULTI_COMPANION: '1',
+          SYSTEM_DATA_DIR: systemDataDir,
+          COMPANION_DATA_DIR: companionDataDir,
+          XDG_RUNTIME_DIR: join(workDir, 'run'),
+        },
+        timeout: 30000,
+      });
+      expect(output).toContain('dry-run spawn plan (2 companion(s))');
+      expect(output).toContain('companionId=11111111-1111-4111-8111-111111111111 schema=companion_alpha');
+      expect(output).toContain('companionId=22222222-2222-4222-8222-222222222222 schema=companion_beta');
+      // W4: the plan enumerates one operator per companion with a gardenPort,
+      // each bound to its companion's own admin transport socket.
+      expect(output).toContain(
+        'operator: companionId=11111111-1111-4111-8111-111111111111 gardenPort=10061',
+      );
+      expect(output).toContain('garden-admin-11111111-1111-4111-8111-111111111111.sock');
+      expect(output).toContain(
+        'operator: companionId=22222222-2222-4222-8222-222222222222 (none — no gardenPort in companions.json)',
+      );
+      expect(output).not.toContain('starting gateway');
+      expect(output).not.toContain('starting agent');
+      expect(output).not.toContain('starting operator');
+    } finally {
+      rmSync(workDir, { recursive: true, force: true });
+    }
+  });
+
+  it('refuses to start the fleet on --dry-run when companions.json is missing', () => {
+    const { workDir, systemDataDir, companionDataDir } = makeFleetWorkspace(undefined);
+    let error: unknown;
+    try {
+      execFileSync('bash', ['scripts/start-gateway-agent.sh', '--dry-run'], {
+        cwd: repoRoot,
+        encoding: 'utf8',
+        stdio: 'pipe',
+        env: {
+          PATH: process.env.PATH,
+          HOME: process.env.HOME,
+          PSFN_SKIP_DOTENV: 'true',
+          PSFN_MULTI_COMPANION: '1',
+          SYSTEM_DATA_DIR: systemDataDir,
+          COMPANION_DATA_DIR: companionDataDir,
+          XDG_RUNTIME_DIR: join(workDir, 'run'),
+        },
+        timeout: 30000,
+      });
+    } catch (caught) {
+      error = caught;
+    } finally {
+      rmSync(workDir, { recursive: true, force: true });
+    }
+    expect(error).toBeDefined();
+    const combined =
+      String((error as { stdout?: Buffer }).stdout ?? '')
+      + String((error as { stderr?: Buffer }).stderr ?? '');
+    expect(combined).toContain('refusing to start');
+    expect(combined).not.toContain('starting gateway');
+  });
+});
+
 describe('psfn_source_dotenv_preserving_existing_env', () => {
   const tempDirs: string[] = [];
 

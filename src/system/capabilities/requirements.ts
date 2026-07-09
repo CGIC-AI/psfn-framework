@@ -219,6 +219,18 @@ function resolveBeadsRequirement(action: string | null): CapabilityRequirement {
   return ISSUE_REQUIREMENTS;
 }
 
+// `move` (vinz.26) is deliberate VIRTUAL navigation — it gates read-tier with
+// perceive/list, not with effector control (locations decision 12 / s10wm).
+const WORLD_READ_ACTIONS = new Set(['perceive', 'list', 'move']);
+const WORLD_CONTROL_ACTIONS = new Set(['control']);
+const WORLD_REQUIREMENTS = ['world.read', 'world.control'] as const;
+
+function resolveWorldRequirement(action: string | null): CapabilityRequirement {
+  if (action === null || actionIn(action, WORLD_READ_ACTIONS)) return 'world.read';
+  if (actionIn(action, WORLD_CONTROL_ACTIONS)) return 'world.control';
+  return WORLD_REQUIREMENTS;
+}
+
 function resolveNotifyRequirement(
   action: string | null,
   params: Record<string, unknown>,
@@ -254,6 +266,7 @@ const UNIFIED_TOOL_REQUIREMENT_RESOLVERS: Readonly<Partial<Record<string, Unifie
   fs: (action) => resolveFsRequirement(action),
   repo: (action) => resolveRepoRequirement(action),
   beads: (action) => resolveBeadsRequirement(action),
+  world: (action) => resolveWorldRequirement(action),
   notify: resolveNotifyRequirement,
 };
 

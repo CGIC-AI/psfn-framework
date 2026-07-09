@@ -33,6 +33,7 @@ export interface ModelRegistryIdentityMetadata extends Record<string, unknown> {
 
 export interface ModelRegistryEntry extends Record<string, unknown> {
   id: string;
+  enabled?: boolean;
   rank: number;
   identity: ModelRegistryIdentityMetadata;
   purposes: ModelRegistryPurposeTag[];
@@ -156,6 +157,8 @@ export function normalizePurposes(value: unknown): ModelRegistryPurposeTag[] {
 
 export function normalizeModelEntry(value: unknown, index: number): ModelRegistryEntry {
   const raw = isRecord(value) ? value : {};
+  const restRaw = { ...raw };
+  delete restRaw.enabled;
   const identityRaw = isRecord(raw.identity) ? raw.identity : {};
   const sourceRaw = isRecord(identityRaw.source) ? identityRaw.source : {};
   const baseId = toNonEmptyString(raw.id) ?? `model-${index + 1}`;
@@ -165,8 +168,9 @@ export function normalizeModelEntry(value: unknown, index: number): ModelRegistr
   const sourceType = toNonEmptyString(sourceRaw.type) ?? '';
   const purposes = normalizePurposes(raw.purposes);
   return {
-    ...raw,
+    ...restRaw,
     id: baseId,
+    ...(raw.enabled === false ? { enabled: false } : {}),
     rank: rank !== undefined ? Math.max(0, Math.round(rank)) : Math.max(0, (index + 1) * 10),
     identity: {
       ...identityRaw,

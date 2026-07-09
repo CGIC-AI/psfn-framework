@@ -12,6 +12,7 @@ describe('model registry helpers', () => {
       models: [
         {
           id: 'extraction',
+          enabled: false,
           rank: 20,
           identity: {
             provider: 'openrouter',
@@ -51,6 +52,8 @@ describe('model registry helpers', () => {
     }));
 
     expect(registry.models.map(model => model.id)).toEqual(['primary', 'extraction']);
+    expect(registry.models.find(model => model.id === 'extraction')?.enabled).toBe(false);
+    expect(registry.models.find(model => model.id === 'primary')?.enabled).toBeUndefined();
     expect(registry.models[0]?.identity).toEqual(expect.objectContaining({
       provider: 'openrouter',
       model: 'z-ai/glm-5',
@@ -69,10 +72,11 @@ describe('model registry helpers', () => {
       modelRegistry: {
         schemaVersion: 1,
         models: [
-          {
-            id: 'primary',
-            rank: 10,
-            identity: {
+        {
+          id: 'primary',
+          enabled: true,
+          rank: 10,
+          identity: {
               provider: 'openrouter',
               model: 'z-ai/glm-5',
               source: { type: 'openrouter' },

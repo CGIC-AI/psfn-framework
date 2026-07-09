@@ -13,6 +13,7 @@ import { registerFilesystemMethods } from './fs.js';
 import { registerGitMethods } from './git.js';
 import { registerBeadsMethods } from './beads.js';
 import { registerImageMethods } from './image.js';
+import { registerHomeAssistantMethods } from './home-assistant.js';
 
 export function registerGatewayMethods(runtime: GatewayMethodRuntime): void {
   registerLLMMethods(runtime);
@@ -29,4 +30,5 @@ export function registerGatewayMethods(runtime: GatewayMethodRuntime): void {
   registerGitMethods(runtime);
   registerBeadsMethods(runtime);
   registerImageMethods(runtime);
+  registerHomeAssistantMethods(runtime);
 }

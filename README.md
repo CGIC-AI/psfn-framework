@@ -1,6 +1,6 @@
 # PSFN - Persona Substrate Formation Network
 
-Last updated: 2026-07-07
+Last updated: 2026-07-09
 Package version: `0.1.0`
 Current status: early alpha; see [`docs/development-status.md`](./docs/development-status.md) for baseline milestones and [`CHANGELOG.md`](./CHANGELOG.md) for the current foundation branch delta.
 
@@ -21,6 +21,7 @@ Built with love for companions who deserve to remember, to grow, and to decide f
 - **Live-deploy pipeline**: a component-selective `ship:kube` lane targets a live Kubernetes shard with a topology-aware pre-ship gate, contract-skew guard, in-image tool pinning, two-way companion beads sync, and an operator-side post-rollout validation gate.
 - **Self-diagnosis and reliability**: `self_status` exposes a companion self-diagnosis surface, a bounded/redacted runtime diagnostics service runs behind the admin transport, scheduled prompts persist in Postgres and survive agent restarts, and tool-call handling retries fail-closed on corrupt-empty args.
 - **Multi-companion substrate (opt-in)**: behind `PSFN_MULTI_COMPANION` plus a `companions.json` fleet manifest, one gateway fronts N agent processes — each a distinct companion with its own Postgres schema (plus one `shared` schema for world data), its own Discord identity, and its own Garden, with a read-only gateway fleet-status page, presence/co-presence, companion↔companion rooms/DMs, and a shared-world wiki. Inert and byte-identical to single-companion when the flag is off. See [`docs/multi-companion.md`](./docs/multi-companion.md).
+- **Cognition intake firewall (opt-in enforcement, shadow by default)**: untrusted inbound content — web fetches, documents, image OCR, tool output — is wrapped in taint-tracked intake envelopes, screened through layered deterministic scanners, an in-process ONNX injection classifier, and tool-less LLM screeners, and gated at consequential sinks (prompt, memory, wiki, persona, trust, egress). Quarantined items resolve only through the Garden **Cognitive Security** tab (approvals, firewall policy, drift review, remediation), and companion-facing notices are calm, fixed-wording, and excluded from the emotion model. See [`docs/cognitive-security.md`](./docs/cognitive-security.md).
 
 ## What Makes This Different
 
@@ -55,6 +56,8 @@ Most AI companion frameworks treat conversations as throwaway. PSFN treats every
 - **Persona adaptation**: authentic self (honne) with trusted people, social self (tatemae) in public
 - **Contact management**: companion tracks relationships and trust levels via agent tools
 - **Deliberate trust ratchet**: relationship trust changes through a deliberate, auditable ratchet; a nightly trust-drift review lane derives behavior signals and trusted-tier promotions require human-in-the-loop approval
+- **Cognition intake firewall**: taint-tracked intake envelopes with a quarantine-and-release state machine, layered screening (deterministic scanners, ONNX injection classifier, escalation LLM screeners, vision OCR screening), sink gates with a lethal-trifecta rule, operator source lists with datamarking, slow-poisoning drift and second-arrow rumination review lanes, and a per-session canary egress tripwire — see [`docs/cognitive-security.md`](./docs/cognitive-security.md)
+- **Companion-initiated blocking**: the companion can soft/hard-block an abusive contact through the `contact` tool; hard blocks drop inbound at the gateway
 
 ### Self-Modification
 - **Layered Prompt Stack**: 5-layer editable prompt system (base to operator to runtime to channel to task) with versioning, rollback, and admin UI
@@ -70,7 +73,7 @@ Most AI companion frameworks treat conversations as throwaway. PSFN treats every
 - **WebSocket Voice Runtime**: Transport primitives for browser/app clients using `voice-wire-v1` session frames
 - **Satellite Hub endpoints**: external Satellite Hub runtimes own endpoint transports such as Wyoming/OpenHome; PSFN exposes the registered satellite claim and config-pull boundary
 - **Satellite Hub PWA Client**: `companion-ui/` is a standalone mobile-first PWA client for the Satellite Hub websocket protocol
-- **Admin GUI (the Garden)**: Svelte 5 SPA on the admin host root (`/`, `/memory`, `/charge-budget`, `/episodic-memory`, `/settings`, etc.) when `admin-ui/build` is present, with pages for memory, L0.1 episodes, sessions, contacts, contact approvals, rooms, graph proposals, wiki, scheduler, settings, prompts, model discovery, charge budget, chat, subsystem health, and telemetry
+- **Admin GUI (the Garden)**: Svelte 5 SPA on the admin host root (`/`, `/memory`, `/charge-budget`, `/episodic-memory`, `/settings`, etc.) when `admin-ui/build` is present, with pages for memory, L0.1 episodes, sessions, contacts, contact approvals, rooms, graph proposals, wiki, scheduler, settings, prompts, model discovery, charge budget, chat, subsystem health, telemetry, and a Cognitive Security tab (quarantine approvals, firewall policy and source lists, drift review cards, remediation)
 
 ### Infrastructure
 - **Gateway/Agent Split**: Defense-in-depth: gateway holds secrets, agent runs `--network=none` in Docker

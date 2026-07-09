@@ -1,15 +1,16 @@
 # Architecture
 
-Last updated: 2026-07-05.
+Last updated: 2026-07-09.
 
 This is the current runtime shape. For the component graph, see [`docs/architecture-diagram.mmd`](./architecture-diagram.mmd). For the end-to-end anatomy of a single chat turn (inbound queueing, in-turn continuations, reply disposition, post-turn lanes), see [`docs/chat-turn-lifecycle.md`](./chat-turn-lifecycle.md). For the post-Sprint 8 source-backed snapshot, see [`docs/sprint-8-architecture-report.md`](./sprint-8-architecture-report.md); for current feature status and active work, see [`docs/development-status.md`](./development-status.md).
 
 ## Canonical Runtime Model
 
 - `src/app/startup/index.ts` is disabled and exits fail-closed.
-- `src/app/gateway/main.ts` is the host-side process. It owns secrets, outbound network access, policy checks, SSRF defense, confirmation queues, audit logging, gateway-backed tool execution, and the public OpenAI-compatible API edge.
+- `src/app/gateway/main.ts` is the host-side process. It owns secrets, outbound network access, policy checks, SSRF defense, confirmation queues, audit logging, gateway-backed tool execution, intake screening for boundary-crossing content, and the public OpenAI-compatible API edge.
 - `src/app/operator/main.ts` is the operator-plane process. It hosts Garden HTTP/UI and proxies admin traffic over the private admin transport.
 - `src/app/agent/main.ts` is the isolated agent process. It loads companion state, enforces startup network isolation, connects to the gateway over the Unix socket, and runs the companion loop plus the private admin transport.
+- `src/app/cert-manager/main.ts` is an optional sidecar process hosting the private CA for the satellite backplane: a token-authenticated loopback API (`npm run cert-manager`) that issues and auto-renews the mTLS certificates `satellites.json` client-cert bindings pin. It shares only `src/shared/` with the runtime. See [`docs/certificates.md`](./certificates.md).
 
 ```text
 External channels / API / Garden
@@ -106,6 +107,34 @@ See [`docs/memory.md`](./memory.md) for the memory contract.
 - Channel privacy vocabulary is `private | invite_only | public` plus a `broadcast` flag; the Context Envelope contract (dimensions, derivation, precedence, migration) is documented in [context-envelope.md](./context-envelope.md).
 - Eligibility gates and capability tiers are enforced before privileged tools run.
 - Safeguards audit cooling-off, restart protection, and external communication rate limits.
+
+### Cognitive security (intake firewall)
+
+- Untrusted inbound content — web fetches, parsed documents, image OCR
+  transcripts, tool observations, and voice transcripts — is wrapped in a
+  taint-tracked `IntakeEnvelope` (`src/shared/contracts/intake-envelope.ts`)
+  and screened before it can reach prompt assembly, memory, wiki, persona,
+  trust state, or tool egress.
+- Screening composes on both sides of the socket: the gateway builds the full
+  L1 deterministic scanner pipeline plus the optional in-process ONNX
+  injection classifier (`src/boundary/gateway/intake/compose-screening.ts`);
+  the agent process runs an L1-only screening service for in-process surfaces
+  (`src/app/agent/main.ts`). Inbound images are screened through the
+  `intake.screen_image` gateway RPC.
+- Six sink gates (`src/core/cogsec/intake/sink-gates.ts`,
+  `src/core/session/intake-sink-gating.ts`) consume envelope state/labels,
+  including a lethal-trifecta assessment on tool egress; a per-session canary
+  token (`src/core/cogsec/canary/`) plants an egress tripwire at the gateway.
+- Quarantined items are held in a durable store and resolve only through the
+  Garden Cognitive Security queue with a server-side double-confirm release.
+- Rollout mode is owned by `intake-policy.json` (`off`/`shadow`/`enforce`;
+  the seed ships `shadow`, which screens and journals but changes no delivered
+  content). Companion-facing firewall notices use fixed, operator-reviewed
+  wording and are structurally excluded from emotion appraisal and memory
+  candidacy.
+
+See [`docs/cognitive-security.md`](./cognitive-security.md) for the threat
+model, layer-by-layer contract, quarantine lifecycle, and operator runbook.
 
 ### Channels and voice
 

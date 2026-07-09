@@ -2,7 +2,7 @@
 
 This is the operator-facing runtime guide for the current repo-owned deployment model.
 
-Last updated: 2026-06-29.
+Last updated: 2026-07-09.
 
 ## Daily Runtime Commands
 
@@ -389,8 +389,10 @@ The gateway-side L1.5 prompt-injection classifier
 (`src/boundary/gateway/intake/injection-classifier.ts`) runs
 `protectai/deberta-v3-base-prompt-injection-v2` (Apache-2.0) in-process via
 the pinned `@huggingface/transformers` ONNX runtime. Model weights (~704 MiB)
-are not committed to git and are never downloaded at runtime — the classifier
-fails closed at startup when the model directory is missing.
+are not committed to git and are never downloaded at runtime. When the model
+directory is absent the gateway skips L1.5 scoring with a loud startup warning
+and screens on the deterministic L1 layer alone; a present-but-broken model
+directory fails startup closed (`src/boundary/gateway/intake/compose-screening.ts`).
 
 Provision (pinned revision, every file sha256-verified):
 
@@ -414,6 +416,76 @@ Notes:
 PSFN_INJECTION_MODEL_DIR=./models/prompt-injection-v2 \
   npx vitest run src/boundary/gateway/intake/injection-classifier.test.ts
 ```
+
+## Cognitive Security Operations
+
+The cognition intake firewall is policy-owned by `intake-policy.json` and
+operated from the Garden **Cognitive Security** tab (Approvals / Firewall /
+Drift / Remediation pages). The full design — layers, envelope contract, sink
+gates, quarantine lifecycle, and the companion-wellbeing language contract —
+is in [`docs/cognitive-security.md`](./cognitive-security.md); this section is
+the operator quick reference.
+
+### Mode flip (shadow → enforce)
+
+`intake-policy.json` `mode` is `off` / `shadow` / `enforce`; the seed ships
+`shadow`. Shadow creates, screens, journals, and audits envelopes but never
+alters delivered content — it is the observe-only rollout posture. Enforce
+substitutes sanitized text or the fixed withheld-content notice per the
+screening decision and makes sink-gate denials real. Flip the mode by editing
+the owner file (schema-validated on load; an invalid file fails closed) and
+restarting. Before enforcing, run in shadow long enough to review would-deny
+volume on the Firewall page and the quarantine queue — see the rollout runbook
+in [`docs/cognitive-security.md`](./cognitive-security.md).
+
+### Quarantine review (Approvals page)
+
+Quarantined items land in `companion-data/state/intake-quarantine.json` and
+surface at `GET /api/admin/intake/quarantine`. Every resolution is a
+server-side double-confirm: `POST /api/admin/intake/quarantine/<id>/confirm`
+issues a single-use token (2-minute TTL, bound to the item's content hash and
+the current source lists), then `POST .../decide` executes with that token, the
+chosen `action` (`release_raw` / `release_sanitized` / `discard`), and a
+mandatory `reason`. An optional `sourceList` field (`always_allow` /
+`always_deny`) feeds the decision back into the `sourceLists` policy — the
+flywheel — before the release applies. Items expire per
+`quarantine.itemTtlHours` (default 168h) and the queue is capped at
+`quarantine.maxHeldItems` (default 500). Direct source-list CRUD lives at
+`/api/admin/intake/source-lists`.
+
+### Drift and second-arrow review cards (Drift page)
+
+The nightly drift-velocity lane (htm9.14) and second-arrow rumination lane
+(htm9.15) run from the rest-window scheduler poll, at most once per local
+calendar day, and write batched evidence cards to
+`companion-data/state/cogsec-drift-reviews.json`. They never mutate memories,
+trust, or emotion state. Cards resolve through
+`POST /api/admin/intake/drift-reviews/<id>/resolve` with `acknowledged`,
+`dismissed`, or — second-arrow cards only — `consolidated`, which applies
+memory supersession (supersede-not-delete, audited evolution links) through the
+normal memory store. Tune thresholds under `driftDetection` in
+`intake-policy.json`.
+
+### Canary egress events
+
+Every session plants a per-session canary token in privileged prompt material;
+the gateway scans outbound egress methods (`discord.send`, `notify.ntfy`,
+`web.*`, `companion.message.send`) for it. A hit is a prompt-leak/hijack
+signal: the action is held and a CogSec event is written. Review canary and
+firewall events on the Firewall page (`GET
+/api/admin/session-routes/cogsec/events`); remediation of tainted content
+(seal/tombstone, revocation, regeneration) runs from the Remediation page.
+Known gap: the main conversational reply travels a reverse-RPC seam the egress
+scan does not yet cover — see the residual-risk list in
+[`docs/cognitive-security.md`](./cognitive-security.md).
+
+### Injection-classifier model
+
+Provisioning the L1.5 ONNX model is covered in "Intake Injection-Classifier
+Model Provisioning" above. Supply-chain verification for dependency updates is
+covered in "Dependency Update Policy (pin-then-plan)" below — the same
+`npm run verify:supply-chain` gate applies to firewall dependencies like the
+ONNX runtime.
 
 ## Shared-World Wiki And Places Maintenance
 

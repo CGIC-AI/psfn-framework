@@ -153,6 +153,11 @@ src/
 - emotion state, active concerns, self-model snapshots, metacognitive flags, background continuation, and shard lifecycle management are first-class runtime surfaces
 - key files: `src/core/emotion/`, `src/core/intention/`, `src/core/self-model/`, `src/core/agent/post-turn-action-runtime.ts`, `src/core/scheduler/heartbeat-post-turn-runtime.ts`, `src/faculties/shards/manager.ts`
 
+### Cognitive security (intake firewall)
+
+- untrusted inbound content (web, documents, images, tool output) is wrapped in taint-tracked intake envelopes, screened through layered scanners/classifiers, and gated at consequential sinks; quarantined items resolve only through the Garden Cognitive Security queue; firewall notices are excluded from emotion appraisal and memory candidacy — see [`docs/cognitive-security.md`](./docs/cognitive-security.md)
+- key files: `src/shared/contracts/intake-envelope.ts`, `src/core/cogsec/intake/`, `src/boundary/gateway/intake/`, `src/system/config/intake-policy-config.ts`, `src/core/session/intake-sink-gating.ts`
+
 ## Channels And Interfaces
 
 Implemented runtime surfaces:
@@ -216,6 +221,7 @@ npm run lint
 npm run verify:repository-hygiene
 npm run verify:settings-contract
 npm run verify:backup-restore
+npm run verify:supply-chain
 npm run smoke:chat
 npm run e2e
 npm run e2e:voice

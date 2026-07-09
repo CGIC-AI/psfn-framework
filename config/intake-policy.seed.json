@@ -29,5 +29,23 @@
       "untrusted": 0.75,
       "hostile": 0.6
     }
+  },
+  "l2Screener": {
+    "model": "google/gemini-2.5-flash-lite",
+    "escalationThresholdsByTier": {
+      "trusted": 0.95,
+      "standard": 0.85,
+      "untrusted": 0.6,
+      "hostile": 0.5
+    },
+    "mandatoryTiers": ["hostile"],
+    "failClosedActionByTier": {
+      "trusted": "l1_labels_only",
+      "standard": "l1_labels_only",
+      "untrusted": "quarantine",
+      "hostile": "quarantine"
+    },
+    "timeoutMs": 8000,
+    "maxContentChars": 24000
   }
 }

@@ -56,6 +56,59 @@ export interface IntakeInjectionClassifierPolicyConfig {
   scoreThresholdsByTier: Record<IntakeSourceRiskTier, number>;
 }
 
+/**
+ * Fail-closed action for the L2 API screener (htm9.6) when its call
+ * errors/times out. `quarantine` holds the item (high-risk sources);
+ * `l1_labels_only` keeps the deterministic L1/L1.5 findings and drops the L2
+ * contribution (trusted sources). There is no silent-pass option — every tier
+ * must map to one of these.
+ */
+export const INTAKE_L2_FAIL_CLOSED_ACTIONS = ['quarantine', 'l1_labels_only'] as const;
+export type IntakeL2FailClosedAction = typeof INTAKE_L2_FAIL_CLOSED_ACTIONS[number];
+
+export function isIntakeL2FailClosedAction(value: unknown): value is IntakeL2FailClosedAction {
+  return typeof value === 'string'
+    && (INTAKE_L2_FAIL_CLOSED_ACTIONS as readonly string[]).includes(value);
+}
+
+/**
+ * Escalation and fail-closed policy for the L2 fast API LLM screener (htm9.6,
+ * src/boundary/gateway/intake/l2-screener.ts). The L2 screener is a tool-less
+ * OpenRouter call (dual-LLM discipline) reached ONLY when a cheaper L1/L1.5
+ * signal crosses the per-tier escalation threshold (or the tier is mandatory).
+ * Below-threshold trusted-tier items skip L2 entirely — the fast path must not
+ * pay this latency.
+ *
+ * Model choice is config, never hardcoded: pick a fast, cheap model (Gemini
+ * Flash-Lite / Gemma / Qwen ~27B class, under ~50-100B); speed is the gating
+ * criterion.
+ */
+export interface IntakeL2ScreenerPolicyConfig {
+  /** OpenRouter model slug for the L2 screener (e.g. 'google/gemini-2.5-flash-lite'). */
+  model: string;
+  /**
+   * Per-source-risk-tier prior-score threshold (max of L1/L1.5 scores) at/above
+   * which an item escalates to the L2 API screener. Every tier must be mapped
+   * explicitly — no implicit defaults.
+   */
+  escalationThresholdsByTier: Record<IntakeSourceRiskTier, number>;
+  /**
+   * Tiers that ALWAYS escalate to L2 regardless of prior score (mandatory deep
+   * screening for the riskiest surfaces).
+   */
+  mandatoryTiers: IntakeSourceRiskTier[];
+  /**
+   * Per-tier fail-closed action when the L2 API errors/times out. High-risk
+   * tiers should quarantine; trusted tiers fall back to L1 labels only. Every
+   * tier must be mapped explicitly; never silent-pass.
+   */
+  failClosedActionByTier: Record<IntakeSourceRiskTier, IntakeL2FailClosedAction>;
+  /** Per-call timeout for the L2 API screener, in milliseconds. */
+  timeoutMs: number;
+  /** Max characters of untrusted content sent to the L2 screener (input cap). */
+  maxContentChars: number;
+}
+
 export interface IntakePolicyConfig {
   schemaVersion: 1;
   mode: IntakeFirewallMode;
@@ -67,6 +120,7 @@ export interface IntakePolicyConfig {
   sourceRiskTiers: Record<IntakeSourceClass, IntakeSourceRiskTier>;
   quarantine: IntakePolicyQuarantineConfig;
   injectionClassifier: IntakeInjectionClassifierPolicyConfig;
+  l2Screener: IntakeL2ScreenerPolicyConfig;
 }
 
 interface IntakePolicyLoadOptions {
@@ -135,6 +189,35 @@ function validateProbability(value: unknown, sourcePath: string, field: string):
   return value;
 }
 
+/**
+ * Validates a fully-mapped per-source-risk-tier record: every tier required
+ * (no implicit defaults), no unsupported tier keys, each value run through
+ * `validateValue`. Shared by the injection-classifier and L2 screener policies.
+ */
+function validateTierRecord<T>(
+  raw: unknown,
+  sourcePath: string,
+  field: string,
+  validateValue: (value: unknown, sourcePath: string, field: string) => T,
+): Record<IntakeSourceRiskTier, T> {
+  if (!isRecord(raw)) {
+    throw invalid(sourcePath, `${field} must be an object`);
+  }
+  const unknownTiers = Object.keys(raw)
+    .filter((key) => !(INTAKE_SOURCE_RISK_TIERS as readonly string[]).includes(key));
+  if (unknownTiers.length > 0) {
+    throw invalid(sourcePath, `${field} has unsupported tiers: ${unknownTiers.join(', ')}`);
+  }
+  const out = {} as Record<IntakeSourceRiskTier, T>;
+  for (const tier of INTAKE_SOURCE_RISK_TIERS) {
+    if (raw[tier] === undefined) {
+      throw invalid(sourcePath, `${field}.${tier} is required (no implicit defaults)`);
+    }
+    out[tier] = validateValue(raw[tier], sourcePath, `${field}.${tier}`);
+  }
+  return out;
+}
+
 function validateInjectionClassifier(
   raw: unknown,
   sourcePath: string,
@@ -147,36 +230,85 @@ function validateInjectionClassifier(
   if (unknownKeys.length > 0) {
     throw invalid(sourcePath, `injectionClassifier has unsupported keys: ${unknownKeys.join(', ')}`);
   }
-  const rawThresholds = raw.scoreThresholdsByTier;
-  if (!isRecord(rawThresholds)) {
-    throw invalid(sourcePath, 'injectionClassifier.scoreThresholdsByTier must be an object');
-  }
-  const unknownTiers = Object.keys(rawThresholds)
-    .filter((key) => !(INTAKE_SOURCE_RISK_TIERS as readonly string[]).includes(key));
-  if (unknownTiers.length > 0) {
-    throw invalid(
-      sourcePath,
-      `injectionClassifier.scoreThresholdsByTier has unsupported tiers: ${unknownTiers.join(', ')}`,
-    );
-  }
-  const scoreThresholdsByTier = {} as Record<IntakeSourceRiskTier, number>;
-  for (const tier of INTAKE_SOURCE_RISK_TIERS) {
-    const threshold = rawThresholds[tier];
-    if (threshold === undefined) {
-      throw invalid(
-        sourcePath,
-        `injectionClassifier.scoreThresholdsByTier.${tier} is required (no implicit threshold defaults)`,
-      );
-    }
-    scoreThresholdsByTier[tier] = validateProbability(
-      threshold,
-      sourcePath,
-      `injectionClassifier.scoreThresholdsByTier.${tier}`,
-    );
-  }
   return {
     labelThreshold: validateProbability(raw.labelThreshold, sourcePath, 'injectionClassifier.labelThreshold'),
-    scoreThresholdsByTier,
+    scoreThresholdsByTier: validateTierRecord(
+      raw.scoreThresholdsByTier,
+      sourcePath,
+      'injectionClassifier.scoreThresholdsByTier',
+      validateProbability,
+    ),
+  };
+}
+
+function validateNonEmptyString(value: unknown, sourcePath: string, field: string): string {
+  if (typeof value !== 'string' || value.trim().length === 0) {
+    throw invalid(sourcePath, `${field} must be a non-empty string`);
+  }
+  return value.trim();
+}
+
+function validateFailClosedAction(
+  value: unknown,
+  sourcePath: string,
+  field: string,
+): IntakeL2FailClosedAction {
+  if (!isIntakeL2FailClosedAction(value)) {
+    throw invalid(sourcePath, `${field} must be one of: ${INTAKE_L2_FAIL_CLOSED_ACTIONS.join(', ')}`);
+  }
+  return value;
+}
+
+function validateMandatoryTiers(
+  raw: unknown,
+  sourcePath: string,
+): IntakeSourceRiskTier[] {
+  if (!Array.isArray(raw)) {
+    throw invalid(sourcePath, 'l2Screener.mandatoryTiers must be an array');
+  }
+  const tiers = new Set<IntakeSourceRiskTier>();
+  for (const entry of raw) {
+    if (!isIntakeSourceRiskTier(entry)) {
+      throw invalid(
+        sourcePath,
+        `l2Screener.mandatoryTiers contains unsupported tier '${String(entry)}' `
+        + `(expected one of: ${INTAKE_SOURCE_RISK_TIERS.join(', ')})`,
+      );
+    }
+    tiers.add(entry);
+  }
+  return [...tiers];
+}
+
+function validateL2Screener(raw: unknown, sourcePath: string): IntakeL2ScreenerPolicyConfig {
+  if (!isRecord(raw)) {
+    throw invalid(sourcePath, 'l2Screener must be an object');
+  }
+  const knownKeys = [
+    'model', 'escalationThresholdsByTier', 'mandatoryTiers',
+    'failClosedActionByTier', 'timeoutMs', 'maxContentChars',
+  ];
+  const unknownKeys = Object.keys(raw).filter((key) => !knownKeys.includes(key));
+  if (unknownKeys.length > 0) {
+    throw invalid(sourcePath, `l2Screener has unsupported keys: ${unknownKeys.join(', ')}`);
+  }
+  return {
+    model: validateNonEmptyString(raw.model, sourcePath, 'l2Screener.model'),
+    escalationThresholdsByTier: validateTierRecord(
+      raw.escalationThresholdsByTier,
+      sourcePath,
+      'l2Screener.escalationThresholdsByTier',
+      validateProbability,
+    ),
+    mandatoryTiers: validateMandatoryTiers(raw.mandatoryTiers, sourcePath),
+    failClosedActionByTier: validateTierRecord(
+      raw.failClosedActionByTier,
+      sourcePath,
+      'l2Screener.failClosedActionByTier',
+      validateFailClosedAction,
+    ),
+    timeoutMs: validatePositiveInteger(raw.timeoutMs, sourcePath, 'l2Screener.timeoutMs'),
+    maxContentChars: validatePositiveInteger(raw.maxContentChars, sourcePath, 'l2Screener.maxContentChars'),
   };
 }
 
@@ -188,11 +320,46 @@ export function injectionScoreThresholdForTier(
   return config.injectionClassifier.scoreThresholdsByTier[tier];
 }
 
+/** Prior-score escalation threshold for the L2 API screener at a given source risk tier. */
+export function l2EscalationThresholdForTier(
+  config: IntakePolicyConfig,
+  tier: IntakeSourceRiskTier,
+): number {
+  return config.l2Screener.escalationThresholdsByTier[tier];
+}
+
+/** Fail-closed action for the L2 API screener at a given source risk tier. */
+export function l2FailClosedActionForTier(
+  config: IntakePolicyConfig,
+  tier: IntakeSourceRiskTier,
+): IntakeL2FailClosedAction {
+  return config.l2Screener.failClosedActionByTier[tier];
+}
+
+/**
+ * L2 escalation gate: an item escalates to the L2 API screener when its tier is
+ * mandatory OR its prior (max L1/L1.5) score meets the tier's escalation
+ * threshold. Below-threshold, non-mandatory items skip L2 entirely — this is
+ * the trusted-tier fast path.
+ */
+export function shouldEscalateToL2(
+  config: IntakePolicyConfig,
+  tier: IntakeSourceRiskTier,
+  priorScore: number,
+): boolean {
+  if (config.l2Screener.mandatoryTiers.includes(tier)) {
+    return true;
+  }
+  return priorScore >= config.l2Screener.escalationThresholdsByTier[tier];
+}
+
 export function validateIntakePolicy(raw: unknown, sourcePath: string): IntakePolicyConfig {
   if (!isRecord(raw)) {
     throw invalid(sourcePath, 'expected object');
   }
-  const knownKeys = ['schemaVersion', 'mode', 'sourceRiskTiers', 'quarantine', 'injectionClassifier'];
+  const knownKeys = [
+    'schemaVersion', 'mode', 'sourceRiskTiers', 'quarantine', 'injectionClassifier', 'l2Screener',
+  ];
   const unknownKeys = Object.keys(raw).filter((key) => !knownKeys.includes(key));
   if (unknownKeys.length > 0) {
     throw invalid(sourcePath, `has unsupported keys: ${unknownKeys.join(', ')}`);
@@ -210,6 +377,7 @@ export function validateIntakePolicy(raw: unknown, sourcePath: string): IntakePo
     sourceRiskTiers: validateSourceRiskTiers(raw.sourceRiskTiers, sourcePath),
     quarantine: validateQuarantine(raw.quarantine, sourcePath),
     injectionClassifier: validateInjectionClassifier(raw.injectionClassifier, sourcePath),
+    l2Screener: validateL2Screener(raw.l2Screener, sourcePath),
   };
 }
 

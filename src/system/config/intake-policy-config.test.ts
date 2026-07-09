@@ -10,8 +10,11 @@ import {
   INTAKE_POLICY_FILE_NAME,
   INTAKE_POLICY_SEED_FILE_NAME,
   injectionScoreThresholdForTier,
+  l2EscalationThresholdForTier,
+  l2FailClosedActionForTier,
   loadIntakePolicyConfig,
   saveIntakePolicyConfig,
+  shouldEscalateToL2,
   validateIntakePolicy,
   type IntakePolicyConfig,
 } from './intake-policy-config.js';
@@ -161,5 +164,76 @@ describe('intake policy owner file', () => {
     expect(() => saveIntakePolicyConfig(dataDir, { schemaVersion: 2 }))
       .toThrow(/schemaVersion must be 1/);
     expect(() => loadIntakePolicyConfig(dataDir)).toThrow(/Missing required JSON owner file/);
+  });
+
+  // ── L2 API screener policy (htm9.6) ──
+
+  it('validates the L2 screener seed and covers every tier', () => {
+    const policy = seedPolicy();
+    expect(policy.l2Screener.model.length).toBeGreaterThan(0);
+    expect(Object.keys(policy.l2Screener.escalationThresholdsByTier).sort())
+      .toEqual([...INTAKE_SOURCE_RISK_TIERS].sort());
+    expect(Object.keys(policy.l2Screener.failClosedActionByTier).sort())
+      .toEqual([...INTAKE_SOURCE_RISK_TIERS].sort());
+    // High-risk tiers quarantine; trusted falls back to L1 labels only.
+    expect(l2FailClosedActionForTier(policy, 'untrusted')).toBe('quarantine');
+    expect(l2FailClosedActionForTier(policy, 'hostile')).toBe('quarantine');
+    expect(l2FailClosedActionForTier(policy, 'trusted')).toBe('l1_labels_only');
+    expect(policy.l2Screener.timeoutMs).toBeGreaterThanOrEqual(1);
+    expect(policy.l2Screener.maxContentChars).toBeGreaterThanOrEqual(1);
+  });
+
+  it('gates L2 escalation on per-tier thresholds and mandatory tiers', () => {
+    const policy = seedPolicy();
+    const trustedThreshold = l2EscalationThresholdForTier(policy, 'trusted');
+    // Below-threshold trusted item takes the fast path (no L2).
+    expect(shouldEscalateToL2(policy, 'trusted', trustedThreshold - 0.01)).toBe(false);
+    // At/above threshold escalates.
+    expect(shouldEscalateToL2(policy, 'trusted', trustedThreshold)).toBe(true);
+    // Hostile is mandatory: escalates even at zero prior score.
+    expect(policy.l2Screener.mandatoryTiers).toContain('hostile');
+    expect(shouldEscalateToL2(policy, 'hostile', 0)).toBe(true);
+  });
+
+  it('fails closed on an unmapped L2 tier and unknown L2 keys', () => {
+    const policy = seedPolicy();
+    const { trusted: _dropped, ...partialThresholds } = policy.l2Screener.escalationThresholdsByTier;
+    expect(() => validateIntakePolicy(
+      { ...policy, l2Screener: { ...policy.l2Screener, escalationThresholdsByTier: partialThresholds } },
+      INTAKE_POLICY_FILE_NAME,
+    )).toThrow(/l2Screener\.escalationThresholdsByTier\.trusted is required/);
+
+    expect(() => validateIntakePolicy(
+      { ...policy, l2Screener: { ...policy.l2Screener, retries: 3 } },
+      INTAKE_POLICY_FILE_NAME,
+    )).toThrow(/l2Screener has unsupported keys: retries/);
+
+    expect(() => validateIntakePolicy(
+      { ...policy, l2Screener: { ...policy.l2Screener, model: '' } },
+      INTAKE_POLICY_FILE_NAME,
+    )).toThrow(/l2Screener\.model must be a non-empty string/);
+
+    expect(() => validateIntakePolicy(
+      {
+        ...policy,
+        l2Screener: {
+          ...policy.l2Screener,
+          failClosedActionByTier: { ...policy.l2Screener.failClosedActionByTier, untrusted: 'pass' },
+        },
+      },
+      INTAKE_POLICY_FILE_NAME,
+    )).toThrow(/l2Screener\.failClosedActionByTier\.untrusted must be one of/);
+
+    expect(() => validateIntakePolicy(
+      { ...policy, l2Screener: { ...policy.l2Screener, mandatoryTiers: ['galaxy'] } },
+      INTAKE_POLICY_FILE_NAME,
+    )).toThrow(/mandatoryTiers contains unsupported tier 'galaxy'/);
+  });
+
+  it('fails closed when the L2 screener block is missing entirely', () => {
+    const policy = seedPolicy();
+    const { l2Screener: _dropped, ...withoutL2 } = policy;
+    expect(() => validateIntakePolicy(withoutL2, INTAKE_POLICY_FILE_NAME))
+      .toThrow(/l2Screener must be an object/);
   });
 });

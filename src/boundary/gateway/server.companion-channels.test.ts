@@ -11,6 +11,7 @@ import {
   type CompanionPresenceReadRow,
 } from './companion-channels.js';
 import type { PlacesRegistryConfig } from '../../shared/contracts/places-registry.js';
+import { deriveCompanionAuthToken } from './companion-auth.js';
 
 // ── W6 inter-companion channel lane: gateway routing tests ──
 // The lane is the ONLY path between companions: sends resolve fail-closed
@@ -124,7 +125,12 @@ function createMinimalOptions(): GatewayServerOptions {
 }
 
 function multiCompanion(): GatewayMultiCompanionConfig {
-  return { enabled: true, channelRouting: {}, discordAccounts: {} };
+  return {
+    enabled: true,
+    fleetCompanionIds: ['comp-a', 'comp-b', 'comp-c'],
+    channelRouting: {},
+    discordAccounts: {},
+  };
 }
 
 function makeLane(input: {
@@ -181,7 +187,11 @@ async function invokeRpc(
 }
 
 async function identifyAgent(conn: MockConnection, companionId: string, rpcId = 900): Promise<any> {
-  return await invokeRpc(conn, rpcId, 'gateway.client.identify', { role: 'agent', companionId });
+  return await invokeRpc(conn, rpcId, 'gateway.client.identify', {
+    role: 'agent',
+    companionId,
+    authToken: deriveCompanionAuthToken(companionId, 'agent', TEST_SESSION_HMAC_KEYRING),
+  });
 }
 
 function methodFrames(conn: MockConnection, method: string): any[] {

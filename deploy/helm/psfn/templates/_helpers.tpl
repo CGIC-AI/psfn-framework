@@ -234,6 +234,10 @@ app.kubernetes.io/component: {{ .component }}
 {{- printf "spiffe://%s/psfn/garden/%s" .Values.certificates.trustDomain .Values.runtime.companionId -}}
 {{- end -}}
 
+{{- define "psfn.spiffeSatelliteHub" -}}
+{{- printf "spiffe://%s/psfn/satellite-hub/%s" .Values.certificates.trustDomain .Values.runtime.companionId -}}
+{{- end -}}
+
 {{- define "psfn.certIssuerName" -}}
 {{- if .Values.certificates.issuer.existingIssuerRef.name -}}
 {{- .Values.certificates.issuer.existingIssuerRef.name -}}
@@ -273,6 +277,32 @@ group: cert-manager.io
 
 {{- define "psfn.gardenAdminClientCertSecretName" -}}
 {{- printf "%s-garden-admin-client-tls" (include "psfn.fullname" .) -}}
+{{- end -}}
+
+{{- define "psfn.satelliteHubClientCertSecretName" -}}
+{{- printf "%s-satellite-hub-client-tls" (include "psfn.fullname" .) -}}
+{{- end -}}
+
+{{- define "psfn.gatewayApiBaseUrl" -}}
+{{- printf "http://%s:%v/v1" (include "psfn.gatewayApiServiceName" .) .Values.ports.gatewayApi -}}
+{{- end -}}
+
+{{- /* Comma-separated API_SATELLITE_KEYS list: the dedicated hub key plus any
+       extra per-satellite keys. Blank segments from stray commas are dropped;
+       weak/duplicate keys still fail closed at gateway startup
+       (validateSatelliteApiKeys). */ -}}
+{{- define "psfn.satelliteApiKeysValue" -}}
+{{- $keys := list -}}
+{{- with .Values.secrets.values.satelliteHubApiKey -}}
+{{- $keys = append $keys (trim .) -}}
+{{- end -}}
+{{- range splitList "," (.Values.secrets.values.extraSatelliteApiKeys | default "") -}}
+{{- $entry := trim . -}}
+{{- if $entry -}}
+{{- $keys = append $keys $entry -}}
+{{- end -}}
+{{- end -}}
+{{- join "," $keys -}}
 {{- end -}}
 
 {{- define "psfn.databaseUrlSecretName" -}}

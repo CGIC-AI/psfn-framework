@@ -121,4 +121,32 @@ spec:
     - {{ include "psfn.spiffeGarden" . | quote }}
   issuerRef:
     {{- include "psfn.certIssuerRef" . | nindent 4 }}
+{{- if .Values.satelliteHub.enabled }}
+---
+# Satellite-hub client identity for the mTLS satellite auth path (Sprint-10
+# C1/0061b5e2). Issued and auto-renewed by cert-manager and mounted into the
+# hub pod today; satellites.json binds the SPIFFE URI SAN (clientCertSan),
+# which stays stable across renewals, unlike fingerprint/SPKI pins that change
+# whenever cert-manager rotates the private key. Runtime auth remains the
+# scoped bearer key until the gateway /v1 edge terminates direct TLS
+# (API_TLS_*, gated on the TLS-reload hardening tracked in
+# psfn-framework-zlon); see docs/satellite-hub-kube.md.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ include "psfn.fullname" . }}-satellite-hub-client
+  labels:
+    {{- include "psfn.labels" . | nindent 4 }}
+spec:
+  secretName: {{ include "psfn.satelliteHubClientCertSecretName" . }}
+  duration: {{ .Values.certificates.duration | quote }}
+  renewBefore: {{ .Values.certificates.renewBefore | quote }}
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+  uris:
+    - {{ include "psfn.spiffeSatelliteHub" . | quote }}
+  issuerRef:
+    {{- include "psfn.certIssuerRef" . | nindent 4 }}
+{{- end }}
 {{- end }}

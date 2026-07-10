@@ -47,7 +47,10 @@ For Pi/k3s testing, build/import an ARM64 image and set
 Default values render with `CHANGE_ME_*` placeholders so `helm lint` and
 `helm template` stay usable. Replace these before an actual install:
 
-- `secrets.values.apiKey` -> `API_KEY`, consumed by gateway and satellite hub
+- `secrets.values.apiKey` -> `API_KEY`, consumed by gateway
+- `secrets.values.satelliteHubApiKey` -> `SATELLITE_HUB_API_KEY` (hub
+  `PSFN_API_KEY`) and the gateway `API_SATELLITE_KEYS` list; required when
+  `satelliteHub.enabled=true` and never the same value as `apiKey`/`adminToken`
 - `secrets.values.adminToken` -> `ADMIN_TOKEN`, consumed by gateway/Garden
 - `secrets.values.gatewaySessionHmacKey` -> `GATEWAY_SESSION_HMAC_KEY`, consumed by gateway
 - `secrets.values.gatewaySessionIntegrityAuthToken` ->
@@ -402,6 +405,10 @@ helm upgrade --install psfn deploy/helm/psfn \
   --set satelliteHub.enabled=true \
   --set satelliteHub.image.repository=localhost/psfn-satellite-hub \
   --set satelliteHub.image.tag=0.1.0-kube-<source-sha12> \
+  --set satelliteHub.identity.satelliteId=hub-test \
+  --set satelliteHub.identity.endpointId=hub-test-main \
+  --set satelliteHub.identity.claimType=voice-only \
+  --set-string secrets.values.satelliteHubApiKey=<dedicated-hub-key-16plus-chars> \
   --set satelliteHub.elevenLabsVoiceId=<elevenlabs-voice-id> \
   --set-string secrets.values.deepgramApiKey=<deepgram-key> \
   --set-string secrets.values.elevenLabsApiKey=<elevenlabs-key> \
@@ -413,15 +420,49 @@ curl http://127.0.0.1:8787/
 ```
 
 The rendered hub container runs `node dist/ts/hub/main.js`, listens on
-`REALTIME_VOICE_PORT=<ports.satelliteHub>`, and points
-`PSFN_API_BASE_URL` at the in-cluster Gateway Service:
+`REALTIME_VOICE_PORT=<ports.satelliteHub>`, and points both
+`PSFN_API_BASE_URL` and `PSFN_COMPANION_BASE_URL` (companion event relay
+bridge, `satelliteHub.companionBridge.enabled`) at the in-cluster Gateway
+Service:
 
 ```text
 http://<release>-psfn-gateway:<ports.gatewayApi>/v1
 ```
 
+Hub configuration surface:
+
+- `satelliteHub.identity.{satelliteId,endpointId,claimType}` (required) are
+  injected as `PSFN_SATELLITE_ID`/`PSFN_ENDPOINT_ID`/`PSFN_CLAIM_TYPE` and must
+  match a `satellites.json` endpoint entry; the hub never falls back to its
+  built-in default identity.
+- `secrets.values.satelliteHubApiKey` (required) is the hub's dedicated bearer
+  credential. It reaches the hub as `PSFN_API_KEY` and the gateway inside
+  `API_SATELLITE_KEYS`, yielding a satellite-scoped principal
+  (`api-key-<sha256(key)[:24]>`) that the registry endpoint must list in
+  `auth.apiKeyPrincipalIds`. `secrets.values.extraSatelliteApiKeys` appends
+  more per-satellite keys to the gateway list.
+- `satelliteHub.textOnly=true` sets `HUB_TEXT_ONLY=true`; Deepgram/ElevenLabs
+  secrets and `satelliteHub.elevenLabsVoiceId` become optional. Voice mode
+  requires all three.
+- `hostPorts.satelliteHub` exposes `ws://<node>:8787` for LAN satellite
+  devices, following the same single-node hostPort mechanism as the gateway
+  API; set `sourceCIDRs` to the trusted subnet.
+- A cert-manager client Certificate
+  (`spiffe://<trustDomain>/psfn/satellite-hub/<companionId>`) is issued from
+  the chart CA/issuer and mounted at
+  `<certificates.mountBasePath>/psfn-client`. It stages the satellite mTLS
+  upgrade path; runtime auth today is the scoped bearer key. See
+  [`../../../docs/satellite-hub-kube.md`](../../../docs/satellite-hub-kube.md)
+  for the full Pi runbook, the satellites.json entry pattern (including the
+  companion relay scopes), and the mTLS flip procedure.
+
+A ready-to-use Pi overlay with pinned-tag placeholders lives at
+`overlays/pi-satellite-hub.values.yaml` (kept out of chart packaging via
+`.helmignore`).
+
 The hub NetworkPolicy allows ingress only from the configured ingress
-controller selector, egress to kube-dns, egress to the Gateway API Service, and
+controller selector (plus `hostPorts.satelliteHub.sourceCIDRs` when the
+hostPort is enabled), egress to kube-dns, egress to the Gateway API Service, and
 optional external HTTPS egress for Deepgram/ElevenLabs provider calls. The agent
 NetworkPolicy remains separate and still has no broad outbound egress.
 

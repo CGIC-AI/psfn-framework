@@ -421,6 +421,16 @@ spec:
       ports:
         - port: {{ .Values.ports.satelliteHub }}
           protocol: TCP
+    {{- if and .Values.hostPorts.satelliteHub.enabled .Values.hostPorts.satelliteHub.sourceCIDRs }}
+    - from:
+        {{- range .Values.hostPorts.satelliteHub.sourceCIDRs }}
+        - ipBlock:
+            cidr: {{ . | quote }}
+        {{- end }}
+      ports:
+        - port: {{ .Values.ports.satelliteHub }}
+          protocol: TCP
+    {{- end }}
   egress:
     - to:
         - namespaceSelector:

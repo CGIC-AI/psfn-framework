@@ -88,6 +88,16 @@ hostPorts:
     port: 10054
     hostIP: ""
     sourceCIDRs: []
+  # LAN satellite devices/browsers reach the hub websocket as ws://<node>:8787.
+  # This follows the same single-node exposure mechanism as the gateway API
+  # hostPort (Traefik ingress stays available for name-based HTTP, but LAN
+  # devices speak raw ws:// to the node IP). Set sourceCIDRs to the trusted
+  # satellite subnet when networkPolicy.enabled=true.
+  satelliteHub:
+    enabled: false
+    port: 8787
+    hostIP: ""
+    sourceCIDRs: []
 
 workloads:
   gateway:
@@ -198,6 +208,17 @@ secrets:
     # COMPANION_ID. Production operators may supply it through an existing
     # Secret instead of persisting it in Helm values.
     gatewaySessionIntegrityAuthToken: ""
+    # Dedicated satellite-hub bearer credential (Sprint-10 H4: never reuse the
+    # shared API_KEY for satellites). Injected into the hub as PSFN_API_KEY and
+    # into the gateway inside API_SATELLITE_KEYS, so the hub authenticates as a
+    # DISTINCT satellite-scoped principal (api-key-<sha256(key)[:24]>) that the
+    # matching satellites.json endpoint must list in auth.apiKeyPrincipalIds.
+    # Required when satelliteHub.enabled=true (>=16 chars).
+    satelliteHubApiKey: ""
+    # Optional comma-separated additional per-satellite bearer keys appended to
+    # the gateway's API_SATELLITE_KEYS list (for LAN satellites that are not
+    # the hub). Each key must be >=16 chars and distinct.
+    extraSatelliteApiKeys: ""
     openRouterApiKey: ""
     openAiApiKey: ""
     liteLlmApiKey: CHANGE_ME_LITELLM_API_KEY
@@ -215,6 +236,8 @@ secrets:
     adminToken: ADMIN_TOKEN
     gatewaySessionHmacKey: GATEWAY_SESSION_HMAC_KEY
     gatewaySessionIntegrityAuthToken: GATEWAY_SESSION_INTEGRITY_AUTH_TOKEN
+    satelliteHubApiKey: SATELLITE_HUB_API_KEY
+    satelliteApiKeys: API_SATELLITE_KEYS
     openRouterApiKey: OPENROUTER_API_KEY
     openAiApiKey: OPENAI_API_KEY
     liteLlmApiKey: LITELLM_API_KEY
@@ -467,6 +490,35 @@ satelliteHub:
   command: ["node", "dist/ts/hub/main.js"]
   agentRuntime: psfn
   psfnModel: psfn
+  # Registry-aligned satellite identity injected as PSFN_SATELLITE_ID /
+  # PSFN_ENDPOINT_ID / PSFN_CLAIM_TYPE. All three are required when the hub is
+  # enabled (fail closed: the hub must never fall back to its built-in default
+  # satellite identity) and must match the satellites.json endpoint entry that
+  # lists the hub's satellite-scoped principal.
+  identity:
+    satelliteId: ""
+    endpointId: ""
+    claimType: ""
+  # Optional PSFN_CAPABILITY_PROFILE override (e.g. text-only, voice-only).
+  # Empty keeps the hub default profile; the claim type above still governs
+  # which registry claim binding is used.
+  capabilityProfile: ""
+  # HUB_TEXT_ONLY=true runs the hub without Deepgram/ElevenLabs: voice secrets
+  # and elevenLabsVoiceId become optional. false (voice mode) requires
+  # deepgramApiKey, elevenLabsApiKey, and elevenLabsVoiceId.
+  textOnly: false
+  # Companion event relay bridge (approvals/artifacts/tool_activity). Points
+  # PSFN_COMPANION_BASE_URL at the in-cluster gateway /v1 edge; the API key
+  # falls back to the hub's PSFN_API_KEY (the dedicated satelliteHubApiKey).
+  # Requires the satellites.json endpoint to grant the approvals, artifacts,
+  # and tool_activity telemetry scopes.
+  companionBridge:
+    enabled: true
+  # A cert-manager client Certificate (chain: chart CA / existing psfn-ca
+  # Issuer) is issued for the hub whenever it is enabled and mounted at
+  # <certificates.mountBasePath>/psfn-client. Runtime auth currently uses the
+  # scoped bearer key; the mounted, auto-renewing certificate stages the mTLS
+  # upgrade path documented in docs/satellite-hub-kube.md.
   elevenLabsVoiceId: ""
   artifactRoot: /app/.artifacts/runtime-ts
   resources: {}

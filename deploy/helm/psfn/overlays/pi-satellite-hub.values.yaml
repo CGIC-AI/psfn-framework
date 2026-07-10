@@ -1,0 +1,61 @@
+# Pi (single-node k3s, arm64) overlay: enable the PSFN-Satellite-Hub workload.
+#
+# Usage (NEVER --reuse-values with a changed chart; always re-supply the full
+# values stack):
+#
+#   helm upgrade psfn deploy/helm/psfn \
+#     --namespace psfn \
+#     -f <live-base-values>.yaml \
+#     -f deploy/helm/psfn/overlays/pi-satellite-hub.values.yaml \
+#     --set-string secrets.values.satelliteHubApiKey="$(cat /path/to/hub-key)"
+#
+# SECRETS NEVER GO IN THIS FILE. Supply secrets.values.satelliteHubApiKey (and
+# voice keys for voice mode) via the live base values file, an existingSecret,
+# or --set-string at upgrade time. Generate a key with: openssl rand -hex 24
+#
+# Full runbook: docs/satellite-hub-kube.md
+
+satelliteHub:
+  enabled: true
+  image:
+    repository: localhost/psfn-satellite-hub
+    # Pinned tag produced by docker/satellite-hub/build-image.sh
+    # (0.1.0-kube-<hub source sha12>). Floating tags are rejected.
+    tag: 0.1.0-kube-CHANGEME_HUB_SHA12
+    # Strongly recommended: pin the imported image digest too
+    # (sudo k3s ctr images ls | grep psfn-satellite-hub).
+    digest: ""
+  # Registry-aligned identity: must match the satellites.json endpoint entry
+  # that lists the hub's satellite-scoped principal id.
+  identity:
+    satelliteId: hub-pi
+    endpointId: hub-pi-main
+    claimType: text-only
+  capabilityProfile: text-only
+  # Ship text-only first: no Deepgram/ElevenLabs required. For voice mode set
+  # textOnly=false, capabilityProfile/claimType to voice-only, supply
+  # secrets.values.deepgramApiKey + secrets.values.elevenLabsApiKey, and set
+  # satelliteHub.elevenLabsVoiceId.
+  textOnly: true
+  companionBridge:
+    enabled: true
+  elevenLabsVoiceId: ""
+
+# LAN satellites (browsers/devices) connect to ws://<pi>:8787 directly, the
+# same single-node exposure mechanism the gateway API uses for its /v1 edge.
+hostPorts:
+  satelliteHub:
+    enabled: true
+    port: 8787
+    sourceCIDRs:
+      # Trusted LAN subnet that may reach the hub websocket.
+      - 192.168.1.0/24
+
+# The Traefik ingress host stays disabled on the Pi: LAN devices dial the raw
+# node port; there is no psfn-hub.local name on the LAN.
+ingress:
+  satelliteHub:
+    enabled: false
+
+# The live cluster already runs with the chart-created CA Issuer (psfn-ca).
+# The hub client Certificate renders automatically from satelliteHub.enabled.

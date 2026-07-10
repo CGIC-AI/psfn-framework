@@ -99,6 +99,17 @@ spec:
                 secretKeyRef:
                   name: {{ include "psfn.appSecretName" . }}
                   key: {{ .Values.secrets.keys.gatewaySessionHmacKey }}
+            {{- /* Per-satellite bearer keys (Sprint-10 H4): each key yields a
+                 distinct satellite-scoped principal referenced by
+                 satellites.json auth.apiKeyPrincipalIds. Optional like the
+                 provider secrets: when absent, no satellite-scoped principal
+                 exists and satellite endpoints reject those credentials. */}}
+            - name: API_SATELLITE_KEYS
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "psfn.appSecretName" . }}
+                  key: {{ .Values.secrets.keys.satelliteApiKeys }}
+                  optional: true
             - name: GATEWAY_RPC_ENDPOINT
               value: {{ include "psfn.gatewayRpcUrlForServer" . | quote }}
             - name: GATEWAY_RPC_TLS_CA_PATH
@@ -451,6 +462,11 @@ metadata:
     {{- include "psfn.labels" . | nindent 4 }}
 spec:
   replicas: 1
+  # Recreate keeps single-node hostPort rollouts from deadlocking (the old and
+  # new pod would otherwise both need hostPort {{ .Values.hostPorts.satelliteHub.port }}) and guarantees one
+  # live hub instance per satellite identity.
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       {{- include "psfn.componentLabels" (dict "root" . "component" "satellite-hub") | nindent 6 }}
@@ -479,6 +495,12 @@ spec:
           ports:
             - name: hub-ws
               containerPort: {{ .Values.ports.satelliteHub }}
+              {{- if .Values.hostPorts.satelliteHub.enabled }}
+              hostPort: {{ .Values.hostPorts.satelliteHub.port }}
+              {{- with .Values.hostPorts.satelliteHub.hostIP }}
+              hostIP: {{ . | quote }}
+              {{- end }}
+              {{- end }}
           env:
             - name: AGENT_RUNTIME
               value: {{ .Values.satelliteHub.agentRuntime | quote }}
@@ -486,15 +508,59 @@ spec:
               value: "0.0.0.0"
             - name: REALTIME_VOICE_PORT
               value: {{ .Values.ports.satelliteHub | quote }}
+            {{- if .Values.satelliteHub.textOnly }}
+            - name: HUB_TEXT_ONLY
+              value: "true"
+            {{- end }}
             - name: PSFN_API_BASE_URL
-              value: {{ printf "http://%s:%v/v1" (include "psfn.gatewayApiServiceName" .) .Values.ports.gatewayApi | quote }}
+              value: {{ include "psfn.gatewayApiBaseUrl" . | quote }}
+            {{- /* Dedicated satellite-scoped credential (Sprint-10 H4); the
+                 shared operator API_KEY is never handed to the hub. */}}
             - name: PSFN_API_KEY
               valueFrom:
                 secretKeyRef:
                   name: {{ include "psfn.appSecretName" . }}
-                  key: {{ .Values.secrets.keys.apiKey }}
+                  key: {{ .Values.secrets.keys.satelliteHubApiKey }}
             - name: PSFN_MODEL
               value: {{ .Values.satelliteHub.psfnModel | quote }}
+            - name: PSFN_SATELLITE_ID
+              value: {{ required "satelliteHub.identity.satelliteId is required when satelliteHub.enabled=true" .Values.satelliteHub.identity.satelliteId | quote }}
+            - name: PSFN_ENDPOINT_ID
+              value: {{ required "satelliteHub.identity.endpointId is required when satelliteHub.enabled=true" .Values.satelliteHub.identity.endpointId | quote }}
+            - name: PSFN_CLAIM_TYPE
+              value: {{ required "satelliteHub.identity.claimType is required when satelliteHub.enabled=true" .Values.satelliteHub.identity.claimType | quote }}
+            {{- with .Values.satelliteHub.capabilityProfile }}
+            - name: PSFN_CAPABILITY_PROFILE
+              value: {{ . | quote }}
+            {{- end }}
+            {{- if .Values.satelliteHub.companionBridge.enabled }}
+            {{- /* Companion event relay bridge: SSE + approval/artifact relay
+                 against the same in-cluster /v1 edge. The bridge API key
+                 falls back to PSFN_API_KEY inside the hub (documented hub
+                 behavior, commit 9999af5). */}}
+            - name: PSFN_COMPANION_BASE_URL
+              value: {{ include "psfn.gatewayApiBaseUrl" . | quote }}
+            {{- end }}
+            {{- if .Values.satelliteHub.textOnly }}
+            {{- /* Text-only mode: voice providers are genuinely optional
+                 (HUB_TEXT_ONLY, hub commit 2b8d234). */}}
+            - name: DEEPGRAM_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "psfn.appSecretName" . }}
+                  key: {{ .Values.secrets.keys.deepgramApiKey }}
+                  optional: true
+            - name: ELEVENLABS_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "psfn.appSecretName" . }}
+                  key: {{ .Values.secrets.keys.elevenLabsApiKey }}
+                  optional: true
+            {{- with .Values.satelliteHub.elevenLabsVoiceId }}
+            - name: ELEVENLABS_VOICE_ID
+              value: {{ . | quote }}
+            {{- end }}
+            {{- else }}
             - name: DEEPGRAM_API_KEY
               valueFrom:
                 secretKeyRef:
@@ -506,7 +572,8 @@ spec:
                   name: {{ include "psfn.appSecretName" . }}
                   key: {{ .Values.secrets.keys.elevenLabsApiKey }}
             - name: ELEVENLABS_VOICE_ID
-              value: {{ required "satelliteHub.elevenLabsVoiceId is required when satelliteHub.enabled=true" .Values.satelliteHub.elevenLabsVoiceId | quote }}
+              value: {{ required "satelliteHub.elevenLabsVoiceId is required when satelliteHub.enabled=true and satelliteHub.textOnly=false" .Values.satelliteHub.elevenLabsVoiceId | quote }}
+            {{- end }}
             - name: ARTIFACT_ROOT
               value: {{ .Values.satelliteHub.artifactRoot | quote }}
           readinessProbe:
@@ -527,8 +594,18 @@ spec:
             - name: runtime
               mountPath: /app/.artifacts
               subPath: satellite-hub-artifacts
+            {{- /* Staged mTLS client identity: issued and auto-renewed by
+                 cert-manager now, consumed once the gateway /v1 edge runs
+                 direct TLS (API_TLS_*). Until then runtime auth is the scoped
+                 bearer key; see docs/satellite-hub-kube.md for the flip. */}}
+            - name: psfn-client-tls
+              mountPath: {{ printf "%s/psfn-client" .Values.certificates.mountBasePath }}
+              readOnly: true
       volumes:
         - name: runtime
           persistentVolumeClaim:
             claimName: {{ include "psfn.fullname" . }}-runtime
+        - name: psfn-client-tls
+          secret:
+            secretName: {{ include "psfn.satelliteHubClientCertSecretName" . }}
 {{- end }}

@@ -319,6 +319,14 @@ assertNotIncludes(externalRendered, 'name: psfn-postgres\n', 'bundled Postgres r
 assertNotIncludes(externalRendered, 'name: psfn-redis\n', 'bundled Redis resources in external mode');
 
 const hubDigest = 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+const hubIdentityArgs = [
+  '--set',
+  'satelliteHub.identity.satelliteId=hub-verify',
+  '--set',
+  'satelliteHub.identity.endpointId=hub-verify-main',
+  '--set',
+  'satelliteHub.identity.claimType=voice-only',
+];
 const hubRendered = render([
   '--set',
   'satelliteHub.enabled=true',
@@ -330,6 +338,11 @@ const hubRendered = render([
   `satelliteHub.image.digest=${hubDigest}`,
   '--set-string',
   'satelliteHub.elevenLabsVoiceId=voice-verify',
+  ...hubIdentityArgs,
+  '--set-string',
+  'secrets.values.satelliteHubApiKey=verify-hub-satellite-key',
+  '--set-string',
+  'secrets.values.extraSatelliteApiKeys=verify-extra-satellite-key',
   '--set-string',
   'secrets.values.deepgramApiKey=verify-deepgram',
   '--set-string',
@@ -338,19 +351,35 @@ const hubRendered = render([
   'ingress.satelliteHub.enabled=true',
   '--set',
   'ingress.satelliteHub.path=/satellite',
+  '--set',
+  'hostPorts.satelliteHub.enabled=true',
+  '--set',
+  'hostPorts.satelliteHub.sourceCIDRs[0]=192.168.1.0/24',
 ]);
 
 const hubSecret = findDocumentByKindName(hubRendered, 'Secret', 'psfn-app');
 assertIncludes(hubSecret, 'DEEPGRAM_API_KEY: "verify-deepgram"', 'satellite hub Deepgram secret');
 assertIncludes(hubSecret, 'ELEVENLABS_API_KEY: "verify-eleven"', 'satellite hub ElevenLabs secret');
+assertIncludes(hubSecret, 'SATELLITE_HUB_API_KEY: "verify-hub-satellite-key"', 'satellite hub dedicated API key secret');
+assertIncludes(
+  hubSecret,
+  'API_SATELLITE_KEYS: "verify-hub-satellite-key,verify-extra-satellite-key"',
+  'gateway satellite key list composed from hub key plus extras',
+);
+
+const hubGatewayDeployment = findDocumentByKindName(hubRendered, 'Deployment', 'psfn-gateway');
+assertIncludes(hubGatewayDeployment, 'name: API_SATELLITE_KEYS', 'gateway satellite keys env');
+assertIncludes(hubGatewayDeployment, 'key: API_SATELLITE_KEYS', 'gateway satellite keys secret key');
 
 const hubDeployment = findDocumentByKindName(hubRendered, 'Deployment', 'psfn-satellite-hub');
 assertIncludes(hubDeployment, `image: "localhost/psfn-satellite-hub:0.1.0-kube-de65b21dfbc3@${hubDigest}"`, 'satellite hub pinned image');
 assertIncludes(hubDeployment, '- node', 'satellite hub command node');
 assertIncludes(hubDeployment, '- dist/ts/hub/main.js', 'satellite hub command entrypoint');
 assertIncludes(hubDeployment, 'runAsUser: 999', 'satellite hub numeric user');
+assertIncludes(hubDeployment, 'type: Recreate', 'satellite hub Recreate strategy');
 assertIncludes(hubDeployment, 'name: hub-ws', 'satellite hub websocket port');
 assertIncludes(hubDeployment, 'containerPort: 8787', 'satellite hub websocket container port');
+assertIncludes(hubDeployment, 'hostPort: 8787', 'satellite hub websocket hostPort');
 assertIncludes(hubDeployment, 'path: /', 'satellite hub health probe path');
 assertIncludes(hubDeployment, 'mountPath: /app/.artifacts', 'satellite hub artifact mount');
 assertIncludes(hubDeployment, 'name: AGENT_RUNTIME', 'satellite hub agent runtime env');
@@ -360,7 +389,15 @@ assertIncludes(hubDeployment, 'value: "8787"', 'satellite hub listen port value'
 assertIncludes(hubDeployment, 'name: PSFN_API_BASE_URL', 'satellite hub PSFN API env');
 assertIncludes(hubDeployment, 'value: "http://psfn-gateway:10053/v1"', 'satellite hub in-cluster gateway API wiring');
 assertIncludes(hubDeployment, 'name: PSFN_API_KEY', 'satellite hub API key env');
-assertIncludes(hubDeployment, 'key: API_KEY', 'satellite hub API key secret key');
+assertIncludes(hubDeployment, 'key: SATELLITE_HUB_API_KEY', 'satellite hub dedicated (H4) API key secret key');
+assertNotIncludes(hubDeployment, 'key: API_KEY\n', 'satellite hub shared operator API key');
+assertIncludes(hubDeployment, 'name: PSFN_SATELLITE_ID', 'satellite hub registry satellite id env');
+assertIncludes(hubDeployment, 'value: "hub-verify"', 'satellite hub registry satellite id value');
+assertIncludes(hubDeployment, 'name: PSFN_ENDPOINT_ID', 'satellite hub registry endpoint id env');
+assertIncludes(hubDeployment, 'value: "hub-verify-main"', 'satellite hub registry endpoint id value');
+assertIncludes(hubDeployment, 'name: PSFN_CLAIM_TYPE', 'satellite hub claim type env');
+assertIncludes(hubDeployment, 'value: "voice-only"', 'satellite hub claim type value');
+assertIncludes(hubDeployment, 'name: PSFN_COMPANION_BASE_URL', 'satellite hub companion bridge env');
 assertIncludes(hubDeployment, 'name: DEEPGRAM_API_KEY', 'satellite hub Deepgram env');
 assertIncludes(hubDeployment, 'key: DEEPGRAM_API_KEY', 'satellite hub Deepgram secret key');
 assertIncludes(hubDeployment, 'name: ELEVENLABS_API_KEY', 'satellite hub ElevenLabs env');
@@ -368,7 +405,58 @@ assertIncludes(hubDeployment, 'key: ELEVENLABS_API_KEY', 'satellite hub ElevenLa
 assertIncludes(hubDeployment, 'name: ELEVENLABS_VOICE_ID', 'satellite hub ElevenLabs voice env');
 assertIncludes(hubDeployment, 'value: "voice-verify"', 'satellite hub ElevenLabs voice value');
 assertIncludes(hubDeployment, 'name: ARTIFACT_ROOT', 'satellite hub artifact env');
+assertNotIncludes(hubDeployment, 'HUB_TEXT_ONLY', 'voice-mode hub text-only env');
 assertNotIncludes(hubDeployment, 'optional: true', 'satellite hub secret refs');
+assertIncludes(hubDeployment, 'mountPath: /run/psfn/tls/psfn-client', 'satellite hub staged mTLS client cert mount');
+assertIncludes(hubDeployment, 'secretName: psfn-satellite-hub-client-tls', 'satellite hub client cert secret volume');
+
+const hubClientCert = findDocumentByKindName(hubRendered, 'Certificate', 'psfn-satellite-hub-client');
+assertIncludes(hubClientCert, 'secretName: psfn-satellite-hub-client-tls', 'satellite hub client Certificate secret');
+assertIncludes(hubClientCert, 'spiffe://cluster.local/psfn/satellite-hub/companion', 'satellite hub client Certificate SPIFFE URI');
+assertIncludes(hubClientCert, 'renewBefore:', 'satellite hub client Certificate renewal');
+
+const hubTextOnlyRendered = render([
+  '--set',
+  'satelliteHub.enabled=true',
+  '--set',
+  'satelliteHub.image.repository=localhost/psfn-satellite-hub',
+  '--set',
+  'satelliteHub.image.tag=0.1.0-kube-de65b21dfbc3',
+  ...hubIdentityArgs,
+  '--set',
+  'satelliteHub.textOnly=true',
+  '--set-string',
+  'secrets.values.satelliteHubApiKey=verify-hub-satellite-key',
+]);
+const hubTextOnlyDeployment = findDocumentByKindName(hubTextOnlyRendered, 'Deployment', 'psfn-satellite-hub');
+assertIncludes(hubTextOnlyDeployment, 'name: HUB_TEXT_ONLY', 'text-only hub mode env');
+assertIncludes(hubTextOnlyDeployment, 'value: "true"', 'text-only hub mode value');
+assertNotIncludes(hubTextOnlyDeployment, 'ELEVENLABS_VOICE_ID', 'text-only hub voice id env');
+// Voice provider refs must be tolerated as absent in text-only mode.
+assertIncludes(hubTextOnlyDeployment, 'optional: true', 'text-only hub optional voice secret refs');
+
+// Fail-closed guards: registry identity is mandatory, voice mode requires the
+// ElevenLabs voice id, and weak hub keys are rejected at render time.
+assertRenderFails(
+  [
+    '--set',
+    'satelliteHub.enabled=true',
+    '--set',
+    'satelliteHub.image.repository=localhost/psfn-satellite-hub',
+    '--set',
+    'satelliteHub.image.tag=0.1.0-kube-de65b21dfbc3',
+    '--set-string',
+    'satelliteHub.elevenLabsVoiceId=voice-verify',
+  ],
+  'satelliteHub.identity.satelliteId is required when satelliteHub.enabled=true',
+);
+assertRenderFails(
+  [
+    '--set-string',
+    'secrets.values.satelliteHubApiKey=short',
+  ],
+  'secrets.values.satelliteHubApiKey must be at least 16 characters',
+);
 
 const hubService = findDocumentByKindName(hubRendered, 'Service', 'psfn-satellite-hub');
 assertIncludes(hubService, 'name: hub-ws', 'satellite hub Service websocket port');
@@ -399,6 +487,7 @@ const hubDigestOnlyRendered = render([
   `satelliteHub.image.digest=${hubDigest}`,
   '--set-string',
   'satelliteHub.elevenLabsVoiceId=voice-verify',
+  ...hubIdentityArgs,
 ]);
 const hubDigestOnlyDeployment = findDocumentByKindName(hubDigestOnlyRendered, 'Deployment', 'psfn-satellite-hub');
 assertIncludes(hubDigestOnlyDeployment, `image: "localhost/psfn-satellite-hub@${hubDigest}"`, 'satellite hub digest-only image');
@@ -449,6 +538,7 @@ const prefetchHubRendered = render([
   'satelliteHub.image.tag=0.1.0-kube-de65b21dfbc3',
   '--set-string',
   'satelliteHub.elevenLabsVoiceId=voice-verify',
+  ...hubIdentityArgs,
 ]);
 assertServiceSelectorsDoNotSelectPrefetch(prefetchHubRendered, 'prefetch plus satellite hub render');
 
@@ -627,8 +717,9 @@ assertRenderFails(
     'satelliteHub.image.repository=localhost/psfn-satellite-hub',
     '--set',
     'satelliteHub.image.tag=0.1.0-kube-de65b21dfbc3',
+    ...hubIdentityArgs,
   ],
-  'satelliteHub.elevenLabsVoiceId is required when satelliteHub.enabled=true',
+  'satelliteHub.elevenLabsVoiceId is required when satelliteHub.enabled=true and satelliteHub.textOnly=false',
 );
 assertRenderFails(
   [
@@ -642,6 +733,7 @@ assertRenderFails(
     'satelliteHub.image.tag=0.1.0-kube-de65b21dfbc3',
     '--set-string',
     'satelliteHub.elevenLabsVoiceId=voice-verify',
+    ...hubIdentityArgs,
   ],
   'satelliteHub.agentRuntime must be psfn',
 );
@@ -655,6 +747,7 @@ assertRenderFails(
     'satelliteHub.image.tag=0.1.0-kube-de65b21dfbc3',
     '--set-string',
     'satelliteHub.elevenLabsVoiceId=voice-verify',
+    ...hubIdentityArgs,
     '--set',
     'secrets.allowMissingRequired=false',
     '--set-string',

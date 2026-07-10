@@ -47,6 +47,13 @@ import { evaluatePolicy } from './policy.js';
 import type { ApiStreamDeltaNotification } from '../../channels/api/types.js';
 import type { ModelUsageRecorder } from '../../shared/telemetry/model-usage.js';
 import type { CredentialVaultPort } from '../custody/credential-vault.js';
+import type { EventBus } from '../../shared/event-bus.js';
+import type {
+  ConfirmationQueueHistoryEntry,
+  ConfirmationResolveResult,
+} from '../../system/capabilities/confirmation-queue.js';
+import type { AuditSummaryEntry } from './audit-port.js';
+import { parseCompanionRelayPublishParams } from '../../channels/backplane/companion-relay/relay.js';
 
 const log = createComponentLogger('Gateway');
 const DEFAULT_CONNECTION_HEALTHCHECK_STALE_AFTER_MS = 90_000;
@@ -107,6 +114,13 @@ export interface GatewayServerOptions {
   capabilityTierProvider?: () => CapabilityTier;
   wyomingShardRouting: WyomingShardRoutingConfig;
   companionId?: string;
+  /**
+   * Gateway-process event bus. Carries the redacted `companion.*` relay
+   * events: approval lifecycle emitted at the confirmation-queue choke
+   * points, plus agent-forwarded tool/artifact events re-published from
+   * `companion.event.publish` (w9hj.1).
+   */
+  eventBus: EventBus;
 }
 
 export class GatewayServer {
@@ -136,6 +150,7 @@ export class GatewayServer {
       discordAdapter: options.discordAdapter,
       capabilityTierProvider: this.capabilityTierProvider,
       confirmation: options.confirmation,
+      eventBus: options.eventBus,
       audit: this.audit.bind(this),
       auditComplete: this.auditComplete.bind(this),
       recordMethodSuccess: (method) => this.runtimeHealthTracker.recordMethodSuccess(method),
@@ -233,6 +248,60 @@ export class GatewayServer {
       this.dispatchApiStreamDelta(params as ApiStreamDeltaNotification);
       return null;
     });
+    target.addMethod('companion.event.publish', async (params: unknown) => {
+      await this.dispatchCompanionEventPublish(params);
+      return null;
+    });
+  }
+
+  /**
+   * Agent-forwarded redacted companion events (tool activity, artifacts).
+   * The params are re-validated and payloads reconstructed field-by-field at
+   * this process boundary; malformed frames are rejected, never partially
+   * published. Approval events cannot arrive here — they originate inside
+   * the gateway approval boundary.
+   */
+  private async dispatchCompanionEventPublish(params: unknown): Promise<void> {
+    const parsed = parseCompanionRelayPublishParams(params);
+    if (parsed.kind === 'tool.activity') {
+      await this.options.eventBus.emit('companion.tool.activity', {
+        payload: parsed.payload,
+        ...(parsed.channelId ? { channelId: parsed.channelId } : {}),
+        timestamp: Date.now(),
+      });
+      return;
+    }
+    await this.options.eventBus.emit('companion.artifact.created', {
+      payload: parsed.payload,
+      ...(parsed.preview ? { preview: parsed.preview } : {}),
+      ...(parsed.channelId ? { channelId: parsed.channelId } : {}),
+      timestamp: Date.now(),
+    });
+  }
+
+  /**
+   * Companion relay approval surface (w9hj.1): decisions from the Satellite
+   * Hub resolve through the SAME approval boundary / confirmation queue as
+   * operator decisions — no bypass of the capability-tier path.
+   */
+  resolveCompanionApproval(params: {
+    id: string;
+    decision: 'approve' | 'deny';
+  }): Promise<ConfirmationResolveResult> {
+    return this.approvalBoundary.resolveConfirmation(params);
+  }
+
+  findConfirmationHistoryEntry(id: string): ConfirmationQueueHistoryEntry | null {
+    return this.approvalBoundary.listConfirmationHistory()
+      .find((entry) => entry.id === id) ?? null;
+  }
+
+  /** Fail-closed audit hook for companion relay decisions. */
+  async recordCompanionAuditSummary(entry: AuditSummaryEntry): Promise<void> {
+    if (!this.options.auditStore) {
+      throw new Error('Gateway audit store is not configured');
+    }
+    await this.options.auditStore.recordSummary(entry);
   }
 
   // ── Connection management ──

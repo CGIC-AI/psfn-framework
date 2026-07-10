@@ -993,3 +993,134 @@ export function resolveSatelliteConfigPull(options: {
     return satelliteConfigPullError(503, 'satellite_runtime_config_not_configured', toErrorMessage(error));
   }
 }
+
+// ── Companion event relay access (w9hj.1) ──
+
+export interface CompanionRelayAccess {
+  satellite: SatelliteConfig;
+  endpoint: SatelliteEndpointConfig;
+  telemetryScopes: SatelliteTelemetryScope[];
+}
+
+export type CompanionRelayAccessResolution = { ok: true; value: CompanionRelayAccess } | {
+  ok: false;
+  status: number;
+  type: string;
+  message: string;
+};
+
+function companionRelayError(status: number, type: string, message: string): CompanionRelayAccessResolution {
+  return { ok: false, status, type, message };
+}
+
+/**
+ * Resolves which registry endpoint an authenticated caller of the companion
+ * relay surface is acting as (`GET /v1/companion/events`, artifact preview).
+ * Deny by default: unknown satellites/endpoints, principals not allowed for
+ * the endpoint, and mismatched claim types are all rejected. The caller then
+ * gates event kinds on the returned `telemetryScopes`.
+ */
+export function resolveCompanionRelayAccess(options: {
+  headers: HeaderMap;
+  principal: ApiAuthPrincipal;
+  registry?: SatelliteRegistryConfig;
+  satelliteId: string | undefined;
+  endpointId: string | undefined;
+  claimType: string | undefined;
+}): CompanionRelayAccessResolution {
+  const { headers, principal, registry } = options;
+  if (!registry?.enabled) {
+    return companionRelayError(503, 'satellite_registry_not_configured', 'Companion relay access requires an enabled satellites.json registry');
+  }
+  if (!options.satelliteId || !options.endpointId || !options.claimType) {
+    return companionRelayError(
+      400,
+      'invalid_companion_relay_request',
+      'Companion relay access requires satelliteId, endpointId, and claimType query parameters',
+    );
+  }
+
+  let satelliteId: string;
+  let endpointId: string;
+  let claimType: string;
+  try {
+    satelliteId = assertIdToken(options.satelliteId.trim(), 'satelliteId');
+    endpointId = assertIdToken(options.endpointId.trim(), 'endpointId');
+    claimType = assertClaimType(options.claimType, 'claimType');
+  } catch (error) {
+    return companionRelayError(400, 'invalid_companion_relay_request', toErrorMessage(error));
+  }
+
+  const match = findEndpoint({ registry, satelliteId, endpointId, claimType });
+  if (!match) {
+    return companionRelayError(403, 'companion_relay_not_registered', 'Companion relay access is not registered for this satellite endpoint');
+  }
+
+  const authError = verifySatelliteAuth(match.endpoint.auth, headers, principal);
+  if (authError) {
+    return companionRelayError(authError.status, authError.type, authError.message);
+  }
+
+  return {
+    ok: true,
+    value: {
+      satellite: match.satellite,
+      endpoint: match.endpoint,
+      telemetryScopes: [...new Set(match.endpoint.telemetryScopes)],
+    },
+  };
+}
+
+/**
+ * Resolves the acting endpoint for an approval decision, where the hub sends
+ * only `satelliteId` in the request body (per the hub protocol contract).
+ * The decision is authorized when the satellite has at least one endpoint
+ * whose auth admits the presented principal AND that is granted the
+ * `approvals` telemetry scope. Deny by default.
+ */
+export function resolveCompanionApprovalActor(options: {
+  headers: HeaderMap;
+  principal: ApiAuthPrincipal;
+  registry?: SatelliteRegistryConfig;
+  satelliteId: string | undefined;
+}): CompanionRelayAccessResolution {
+  const { headers, principal, registry } = options;
+  if (!registry?.enabled) {
+    return companionRelayError(503, 'satellite_registry_not_configured', 'Companion approval decisions require an enabled satellites.json registry');
+  }
+  if (!options.satelliteId) {
+    return companionRelayError(400, 'invalid_companion_approval_request', 'Companion approval decisions require satelliteId');
+  }
+
+  let satelliteId: string;
+  try {
+    satelliteId = assertIdToken(options.satelliteId.trim(), 'satelliteId');
+  } catch (error) {
+    return companionRelayError(400, 'invalid_companion_approval_request', toErrorMessage(error));
+  }
+
+  const satellite = registry.satellites.find((candidate) => candidate.satelliteId === satelliteId);
+  if (!satellite) {
+    return companionRelayError(403, 'companion_relay_not_registered', 'Companion approval decision is not registered for this satellite');
+  }
+
+  for (const endpoint of satellite.endpoints) {
+    if (!endpoint.telemetryScopes.includes('approvals')) continue;
+    const authError = verifySatelliteAuth(endpoint.auth, headers, principal);
+    if (authError) continue;
+    return {
+      ok: true,
+      value: {
+        satellite,
+        endpoint,
+        telemetryScopes: [...new Set(endpoint.telemetryScopes)],
+      },
+    };
+  }
+
+  return companionRelayError(
+    403,
+    'companion_approvals_not_allowed',
+    'No satellite endpoint authorizes this principal for approval decisions',
+  );
+}

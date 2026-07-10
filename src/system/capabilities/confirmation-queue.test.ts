@@ -317,3 +317,72 @@ describe('ConfirmationQueue', () => {
     expect(entry.expiresAt).toBe(5_000 + DEFAULT_CONFIRMATION_EXPIRY_MS);
   });
 });
+
+describe('ConfirmationQueue observer (companion relay seam)', () => {
+  function buildQueue(nowRef: { value: number }) {
+    const enqueued: string[] = [];
+    const resolved: Array<{ id: string; status: string; resolvedAt: number }> = [];
+    const queue = new ConfirmationQueue({
+      now: () => nowRef.value,
+      defaultExpiryMs: 1_000,
+      observer: {
+        onEnqueued: (entry) => enqueued.push(entry.id),
+        onResolved: (outcome) => resolved.push({
+          id: outcome.id,
+          status: outcome.status,
+          resolvedAt: outcome.resolvedAt,
+        }),
+      },
+    });
+    return { queue, enqueued, resolved };
+  }
+
+  const request = {
+    method: 'fs.write',
+    action: 'write',
+    scope: '/tmp/observed.txt',
+    params: { path: '/tmp/observed.txt' },
+    companionReason: 'Observer test fixture',
+  };
+
+  it('notifies enqueue and approve resolution', async () => {
+    const now = { value: 1_000 };
+    const { queue, enqueued, resolved } = buildQueue(now);
+    const entry = queue.enqueue(request, async () => undefined);
+    expect(enqueued).toEqual([entry.id]);
+
+    await queue.resolve({ id: entry.id, decision: 'approve' });
+    expect(resolved).toEqual([{ id: entry.id, status: 'approved', resolvedAt: 1_000 }]);
+  });
+
+  it('notifies deny, execution failure, and expiry sweep outcomes', async () => {
+    const now = { value: 1_000 };
+    const { queue, resolved } = buildQueue(now);
+
+    const denied = queue.enqueue(request, async () => undefined);
+    await queue.resolve({ id: denied.id, decision: 'deny' });
+
+    const failing = queue.enqueue(request, async () => {
+      throw new Error('execution blocked');
+    });
+    await queue.resolve({ id: failing.id, decision: 'approve' });
+
+    const expiring = queue.enqueue(request, async () => undefined);
+    now.value = 10_000;
+    queue.expirePending();
+
+    expect(resolved.map((r) => [r.id, r.status])).toEqual([
+      [denied.id, 'denied'],
+      [failing.id, 'failed'],
+      [expiring.id, 'expired'],
+    ]);
+  });
+
+  it('does not notify resolution for unknown ids', async () => {
+    const now = { value: 1_000 };
+    const { queue, resolved } = buildQueue(now);
+    const result = await queue.resolve({ id: 'missing', decision: 'approve' });
+    expect(result.status).toBe('not_found');
+    expect(resolved).toEqual([]);
+  });
+});

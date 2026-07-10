@@ -113,6 +113,7 @@ export async function buildGatewayPrivilegedCore(
       auditStore,
       sessionHmacKeyring: input.bootstrap.server.sessionHmacKeyring,
       wyomingShardRouting: input.bootstrap.server.wyomingShardRouting,
+      eventBus,
     }),
   };
 }

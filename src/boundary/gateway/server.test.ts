@@ -12,6 +12,7 @@ import {
 import { GatewayErrors } from './protocol.js';
 import type { GatewayRpcConnection } from './transport.js';
 import type { SessionHmacKeyring } from '../../persistence/journals/journal-utils.js';
+import { EventBus } from '../../shared/event-bus.js';
 import type { GatewayAuditStorePort } from './audit-port.js';
 
 // Mock the transport module to avoid real socket operations
@@ -133,6 +134,7 @@ function createMinimalOptions(): GatewayServerOptions {
     },
     sessionHmacKeyring: TEST_SESSION_HMAC_KEYRING,
     wyomingShardRouting: TEST_WYOMING_SHARD_ROUTING,
+    eventBus: new EventBus(),
   };
 }
 

@@ -83,7 +83,7 @@
     </a>
     <a
       href={`${base}/prompt-monitor`}
-      class="inline-flex items-center rounded-lg border border-bark-300 bg-white px-3 py-1.5 text-sm font-medium text-shadow-700 hover:bg-bark-100 transition-colors"
+      class="inline-flex items-center rounded-lg border border-bark-300 bg-bark-50 px-3 py-1.5 text-sm font-medium text-shadow-700 hover:bg-bark-100 transition-colors"
     >
       Open Prompt Monitor
     </a>

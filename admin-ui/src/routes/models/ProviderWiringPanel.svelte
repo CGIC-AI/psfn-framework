@@ -65,7 +65,7 @@
       </span>
       <a
         href={settingsHref}
-        class="inline-flex items-center rounded-lg border border-bark-300 bg-white px-3 py-1.5 text-sm font-medium text-shadow-700 hover:bg-bark-100 transition-colors"
+        class="inline-flex items-center rounded-lg border border-bark-300 bg-bark-50 px-3 py-1.5 text-sm font-medium text-shadow-700 hover:bg-bark-100 transition-colors"
       >
         Open Settings Mirror
       </a>
@@ -90,7 +90,7 @@
   {/if}
   <div class="space-y-4">
     {#each providerRegistry.providers as entry, index (entry.id)}
-      <article class="rounded-2xl border border-bark-300 bg-white/90 p-4 space-y-4">
+      <article class="rounded-2xl border border-bark-300 bg-bark-50/90 p-4 space-y-4">
         <div class="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
           <div class="space-y-2">
             <div class="flex flex-wrap items-center gap-2">
@@ -137,7 +137,7 @@
               type="text"
               value={entry.id}
               oninput={(event) => setProviderField(index, 'id', (event.currentTarget as HTMLInputElement).value)}
-              class="w-full rounded border border-bark-300 bg-white px-2 py-1 text-sm focus:border-gold-400 focus:outline-none"
+              class="w-full rounded border border-bark-300 bg-bark-50 px-2 py-1 text-sm focus:border-gold-400 focus:outline-none"
               placeholder="openrouter"
             />
           </div>
@@ -147,7 +147,7 @@
               id={`provider-type-${index}`}
               value={entry.type}
               onchange={(event) => setProviderType(index, (event.currentTarget as HTMLSelectElement).value)}
-              class="w-full rounded border border-bark-300 bg-white px-2 py-1 text-sm focus:border-gold-400 focus:outline-none"
+              class="w-full rounded border border-bark-300 bg-bark-50 px-2 py-1 text-sm focus:border-gold-400 focus:outline-none"
             >
               {#each PROVIDER_TYPES as type}
                 <option value={type}>{PROVIDER_TYPE_LABELS[type]}</option>
@@ -161,7 +161,7 @@
               type="text"
               value={entry.label ?? ''}
               oninput={(event) => setProviderField(index, 'label', (event.currentTarget as HTMLInputElement).value)}
-              class="w-full rounded border border-bark-300 bg-white px-2 py-1 text-sm focus:border-gold-400 focus:outline-none"
+              class="w-full rounded border border-bark-300 bg-bark-50 px-2 py-1 text-sm focus:border-gold-400 focus:outline-none"
               placeholder="LiteLLM primary"
             />
           </div>
@@ -172,7 +172,7 @@
               type="text"
               value={entry.apiBaseUrl ?? ''}
               oninput={(event) => setProviderField(index, 'apiBaseUrl', (event.currentTarget as HTMLInputElement).value)}
-              class="w-full rounded border border-bark-300 bg-white px-2 py-1 text-sm focus:border-gold-400 focus:outline-none"
+              class="w-full rounded border border-bark-300 bg-bark-50 px-2 py-1 text-sm focus:border-gold-400 focus:outline-none"
               placeholder="https://..."
             />
           </div>
@@ -183,7 +183,7 @@
               type="text"
               value={entry.modelsApiUrl ?? ''}
               oninput={(event) => setProviderField(index, 'modelsApiUrl', (event.currentTarget as HTMLInputElement).value)}
-              class="w-full rounded border border-bark-300 bg-white px-2 py-1 text-sm focus:border-gold-400 focus:outline-none disabled:bg-bark-100"
+              class="w-full rounded border border-bark-300 bg-bark-50 px-2 py-1 text-sm focus:border-gold-400 focus:outline-none disabled:bg-bark-100"
               placeholder={providerSupportsModelsApi(entry.type) ? 'https://.../models' : 'Only used for LiteLLM/OpenRouter catalogs'}
               disabled={!providerSupportsModelsApi(entry.type)}
             />
@@ -195,7 +195,7 @@
               type="text"
               value={entry.apiKeyRef?.kind === 'env' ? entry.apiKeyRef.envName : ''}
               oninput={(event) => setProviderField(index, 'apiKeyRef', (event.currentTarget as HTMLInputElement).value)}
-              class="w-full rounded border border-bark-300 bg-white px-2 py-1 text-sm focus:border-gold-400 focus:outline-none"
+              class="w-full rounded border border-bark-300 bg-bark-50 px-2 py-1 text-sm focus:border-gold-400 focus:outline-none"
               placeholder="LITELLM_API_KEY"
             />
           </div>
@@ -219,7 +219,7 @@
     <button
       onclick={discardProviderRegistryChanges}
       disabled={!providerDirty || saving}
-      class="px-4 py-2 rounded-lg border border-bark-300 bg-white text-sm font-medium text-shadow-700 hover:bg-bark-100 disabled:opacity-50 transition-colors"
+      class="px-4 py-2 rounded-lg border border-bark-300 bg-bark-50 text-sm font-medium text-shadow-700 hover:bg-bark-100 disabled:opacity-50 transition-colors"
     >
       Discard
     </button>

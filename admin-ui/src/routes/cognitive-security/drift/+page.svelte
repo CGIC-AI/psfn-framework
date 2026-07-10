@@ -318,7 +318,7 @@
                   <p class="text-sm text-shadow-700">{signal.summary}</p>
 
                   {#if signal.id === 'creation_velocity' && creationTimelineOf(signal).length > 0}
-                    <div class="rounded bg-white border border-bark-200 p-2">
+                    <div class="rounded bg-bark-50 border border-bark-200 p-2">
                       <p class="text-xs font-medium text-shadow-700 mb-1">Creation timeline</p>
                       <ol class="text-xs font-mono text-shadow-600 space-y-0.5">
                         {#each creationTimelineOf(signal) as point (point.id)}
@@ -342,7 +342,7 @@
                   {/if}
 
                   {#if signal.id === 'valence_velocity' && trajectoryOf(signal).length > 1}
-                    <div class="rounded bg-white border border-bark-200 p-2">
+                    <div class="rounded bg-bark-50 border border-bark-200 p-2">
                       <svg viewBox="0 0 240 48" class="w-full h-12" preserveAspectRatio="none" role="img" aria-label="Valence trajectory sparkline">
                         <line x1="0" y1="24" x2="240" y2="24" stroke="currentColor" class="text-bark-300" stroke-width="0.5" stroke-dasharray="3 3" />
                         <path d={sparklinePath(trajectoryOf(signal))} fill="none" stroke="currentColor" class="{signal.triggered ? 'text-wilt-500' : 'text-moss-600'}" stroke-width="1.5" />

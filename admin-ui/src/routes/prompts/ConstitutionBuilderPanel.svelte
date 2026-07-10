@@ -77,7 +77,7 @@
                 <span class="text-sm font-medium text-shadow-800">{constitutionCompanionLayer.title}</span>
                 <span class="px-1.5 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider bg-bark-300 text-shadow-700">Derived</span>
               </div>
-              <pre class="text-sm font-mono text-shadow-700 whitespace-pre-wrap bg-white/60 p-2 rounded border border-bark-200 max-h-48 overflow-y-auto">{constitutionCompanionLayer.content}</pre>
+              <pre class="text-sm font-mono text-shadow-700 whitespace-pre-wrap bg-bark-50/60 p-2 rounded border border-bark-200 max-h-48 overflow-y-auto">{constitutionCompanionLayer.content}</pre>
             </div>
           {/if}
         </div>
@@ -87,7 +87,7 @@
             <h3 class="text-sm font-semibold text-shadow-700 uppercase tracking-wider">Preview Output</h3>
             <span class="text-sm text-shadow-600">~{constitutionPreviewTokenCount} tokens</span>
           </div>
-          <pre class="text-sm font-mono text-shadow-800 whitespace-pre-wrap bg-white/60 p-3 rounded border border-bark-200 max-h-64 overflow-y-auto leading-relaxed">{constitutionPreviewText}</pre>
+          <pre class="text-sm font-mono text-shadow-800 whitespace-pre-wrap bg-bark-50/60 p-3 rounded border border-bark-200 max-h-64 overflow-y-auto leading-relaxed">{constitutionPreviewText}</pre>
         </div>
 
         <div class="rounded-lg border border-bark-300 bg-bark-50 p-3 text-sm text-shadow-700 leading-relaxed">

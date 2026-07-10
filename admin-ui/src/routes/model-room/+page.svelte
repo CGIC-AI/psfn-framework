@@ -441,7 +441,7 @@ ${context}`;
           <input
             id="room-id"
             bind:value={roomId}
-            class="rounded-lg border border-bark-300 bg-white px-3 py-1.5 text-sm text-shadow-900
+            class="rounded-lg border border-bark-300 bg-bark-50 px-3 py-1.5 text-sm text-shadow-900
                    focus:outline-none focus:ring-2 focus:ring-gold-400 focus:border-gold-400"
           />
         </div>
@@ -451,7 +451,7 @@ ${context}`;
             id="operator-name"
             value={operatorName}
             onchange={(event) => persistOperatorName((event.currentTarget as HTMLInputElement).value)}
-            class="rounded-lg border border-bark-300 bg-white px-3 py-1.5 text-sm text-shadow-900
+            class="rounded-lg border border-bark-300 bg-bark-50 px-3 py-1.5 text-sm text-shadow-900
                    focus:outline-none focus:ring-2 focus:ring-gold-400 focus:border-gold-400"
           />
         </div>
@@ -477,7 +477,7 @@ ${context}`;
       {:else}
         <div class="grid grid-cols-1 lg:grid-cols-2 gap-3">
           {#each bootstrap.participants as participant}
-            <div class="rounded-lg border border-bark-300 bg-white p-3">
+            <div class="rounded-lg border border-bark-300 bg-bark-50 p-3">
               <div class="flex items-center justify-between gap-2 mb-2">
                 <label class="flex items-center gap-2 text-sm text-shadow-800 font-medium">
                   <input
@@ -503,7 +503,7 @@ ${context}`;
                 placeholder="System prompt (blank = raw, no system prompt at all)"
                 value={participantPrompts[participant.id] ?? ''}
                 oninput={(event) => updateParticipantPrompt(participant.id, (event.currentTarget as HTMLTextAreaElement).value)}
-                class="w-full rounded-lg border border-bark-300 bg-white px-3 py-2 text-sm text-shadow-900 resize-y
+                class="w-full rounded-lg border border-bark-300 bg-bark-50 px-3 py-2 text-sm text-shadow-900 resize-y
                        focus:outline-none focus:ring-2 focus:ring-gold-400 focus:border-gold-400"
               ></textarea>
             </div>
@@ -530,7 +530,7 @@ ${context}`;
             <div class="flex justify-start">
               <div class="max-w-[90%] px-4 py-2.5 rounded-2xl border shadow-sm {message.isError
                 ? 'bg-wilt-50 border-wilt-200'
-                : 'bg-white border-bark-300'}">
+                : 'bg-bark-50 border-bark-300'}">
                 <p class="text-sm font-semibold text-shadow-800 mb-1">{message.speakerName}</p>
                 <p class="text-sm text-shadow-800 whitespace-pre-wrap break-words">{message.content}</p>
                 <p class="text-xs text-shadow-500 mt-1">{formatTime(message.timestamp)}</p>
@@ -552,7 +552,7 @@ ${context}`;
           disabled={sending}
           rows={2}
           placeholder="Send an opening turn to the room... (Enter to run round, Shift+Enter for newline)"
-          class="flex-1 px-3 py-2 rounded-lg border border-bark-300 bg-white text-shadow-900 text-sm resize-none
+          class="flex-1 px-3 py-2 rounded-lg border border-bark-300 bg-bark-50 text-shadow-900 text-sm resize-none
                  placeholder:text-shadow-400
                  focus:outline-none focus:ring-2 focus:ring-gold-400 focus:border-gold-400
                  disabled:opacity-50 disabled:cursor-not-allowed"

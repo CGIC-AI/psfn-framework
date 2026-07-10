@@ -361,11 +361,10 @@
   <title>Cognitive Security: Remediation</title>
 </svelte:head>
 
-<main class="min-h-screen bg-moss-50 px-4 py-6 text-shadow-950">
-  <div class="mx-auto flex w-full max-w-6xl flex-col gap-5">
-    <header class="flex flex-col gap-2 border-b border-moss-200 pb-4">
-      <p class="text-xs font-semibold uppercase text-moss-700">Cognitive Security</p>
-      <h1 class="text-2xl font-semibold">CogSec Remediation</h1>
+<div class="flex w-full flex-col gap-5">
+    <header class="flex flex-col gap-2 border-b border-bark-200 pb-4">
+      <p class="text-xs font-semibold uppercase tracking-wide text-shadow-500">Cognitive Security</p>
+      <h1 class="font-serif text-2xl font-semibold text-bark-900">CogSec Remediation</h1>
       <p class="max-w-3xl text-sm text-shadow-700">
         Post-incident cleanup: seal selected companion L0 rows, replace them with tombstones,
         revoke derived cognition, and optionally cut a fresh lane. For a simple fresh lane without
@@ -382,14 +381,14 @@
 
     <section class="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(320px,420px)]">
       <div class="flex min-w-0 flex-col gap-4">
-        <div class="rounded border border-moss-200 bg-white p-4 shadow-sm">
+        <div class="card-garden p-4">
           <div class="mb-4 flex items-center justify-between gap-3">
             <div>
               <h2 class="text-lg font-semibold">Active Routes</h2>
               <p class="text-sm text-shadow-600">{routes.length} routed source channel{routes.length === 1 ? '' : 's'}</p>
             </div>
             <button
-              class="rounded border border-moss-300 px-3 py-2 text-sm font-medium text-moss-800 hover:bg-moss-50 disabled:opacity-50"
+              class="rounded border border-bark-300 px-3 py-2 text-sm font-medium text-shadow-700 hover:bg-bark-100 disabled:opacity-50"
               type="button"
               disabled={loading}
               onclick={loadRoutes}
@@ -405,7 +404,7 @@
           {:else}
             <div class="overflow-x-auto">
               <table class="w-full min-w-[760px] text-left text-sm">
-                <thead class="border-b border-moss-200 text-xs uppercase text-shadow-600">
+                <thead class="border-b border-bark-200 text-xs uppercase text-shadow-600">
                   <tr>
                     <th class="px-2 py-2 font-semibold">Source Channel</th>
                     <th class="px-2 py-2 font-semibold">Active Logical Session</th>
@@ -416,10 +415,10 @@
                 </thead>
                 <tbody>
                   {#each routes as route}
-                    <tr class="border-b border-moss-100 align-top">
+                    <tr class="border-b border-bark-100 align-top">
                       <td class="px-2 py-3">
                         <button
-                          class="text-left font-mono text-xs text-moss-800 underline-offset-2 hover:underline"
+                          class="text-left font-mono text-xs text-gold-700 underline-offset-2 hover:underline"
                           type="button"
                           onclick={() => { selectedSourceChannelId = route.sourceChannelId; }}
                         >
@@ -438,7 +437,7 @@
           {/if}
         </div>
 
-        <div class="rounded border border-moss-200 bg-white p-4 shadow-sm">
+        <div class="card-garden p-4">
           <div class="flex flex-wrap items-center justify-between gap-3">
             <div class="min-w-0">
               <h2 class="text-lg font-semibold">Select Rows to Redact</h2>
@@ -447,7 +446,7 @@
               </p>
             </div>
             <button
-              class="rounded border border-moss-300 px-3 py-2 text-sm font-medium text-moss-800 hover:bg-moss-50 disabled:opacity-50"
+              class="rounded border border-bark-300 px-3 py-2 text-sm font-medium text-shadow-700 hover:bg-bark-100 disabled:opacity-50"
               type="button"
               disabled={browserLoading || !selectedLogicalSessionId.trim()}
               onclick={() => { browserLoadedSessionId = ''; void loadBrowserMessages(); }}
@@ -461,13 +460,13 @@
             onsubmit={(event) => { event.preventDefault(); void runBrowserSearch(); }}
           >
             <input
-              class="w-full rounded border border-moss-300 px-3 py-2 text-sm"
+              class="w-full rounded border border-bark-300 px-3 py-2 text-sm"
               type="search"
               bind:value={browserSearchQuery}
               placeholder="Search the whole session (server-side)..."
             />
             <button
-              class="rounded border border-moss-300 px-3 py-2 text-sm font-medium text-moss-800 hover:bg-moss-50 disabled:opacity-50"
+              class="rounded border border-bark-300 px-3 py-2 text-sm font-medium text-shadow-700 hover:bg-bark-100 disabled:opacity-50"
               type="submit"
               disabled={browserSearching || !browserSearchQuery.trim() || !selectedLogicalSessionId.trim()}
             >
@@ -475,7 +474,7 @@
             </button>
             {#if browserSearchResults}
               <button
-                class="rounded border border-moss-300 px-3 py-2 text-sm font-medium text-moss-800 hover:bg-moss-50"
+                class="rounded border border-bark-300 px-3 py-2 text-sm font-medium text-shadow-700 hover:bg-bark-100"
                 type="button"
                 onclick={clearBrowserSearch}
               >
@@ -487,7 +486,7 @@
           <div class="mt-3 flex flex-wrap items-center gap-3 text-sm text-shadow-700">
             <span><span class="font-semibold">{selectedMessageIds.size}</span> selected</span>
             <button
-              class="text-moss-800 underline-offset-2 hover:underline disabled:opacity-50"
+              class="text-gold-700 underline-offset-2 hover:underline disabled:opacity-50"
               type="button"
               disabled={browserRows.length === 0}
               onclick={selectAllShownRows}
@@ -495,7 +494,7 @@
               Select all shown
             </button>
             <button
-              class="text-moss-800 underline-offset-2 hover:underline disabled:opacity-50"
+              class="text-gold-700 underline-offset-2 hover:underline disabled:opacity-50"
               type="button"
               disabled={selectedMessageIds.size === 0}
               onclick={clearMessageSelection}
@@ -515,7 +514,7 @@
             {/if}
           </div>
 
-          <div class="mt-3 max-h-[28rem] overflow-y-auto rounded border border-moss-100">
+          <div class="mt-3 max-h-[28rem] overflow-y-auto rounded border border-bark-200">
             {#if browserLoading}
               <p class="p-3 text-sm text-shadow-600">Loading messages...</p>
             {:else if !selectedLogicalSessionId.trim()}
@@ -526,9 +525,9 @@
               </p>
             {:else}
               {#if !browserSearchResults && browserHasMoreOlder}
-                <div class="border-b border-moss-100 p-2 text-center">
+                <div class="border-b border-bark-100 p-2 text-center">
                   <button
-                    class="text-sm text-shadow-600 hover:text-moss-800 disabled:cursor-wait"
+                    class="text-sm text-shadow-600 hover:text-shadow-800 disabled:cursor-wait"
                     type="button"
                     disabled={browserLoadingOlder}
                     onclick={() => void loadOlderBrowserMessages()}
@@ -538,9 +537,9 @@
                 </div>
               {/if}
               {#each browserRows as row (row.id)}
-                <label class="flex cursor-pointer items-start gap-3 border-b border-moss-100 px-3 py-2 hover:bg-moss-50 {selectedMessageIds.has(row.id) ? 'bg-wilt-50' : ''}">
+                <label class="flex cursor-pointer items-start gap-3 border-b border-bark-100 px-3 py-2 hover:bg-bark-100 {selectedMessageIds.has(row.id) ? 'bg-wilt-50' : ''}">
                   <input
-                    class="mt-1 h-4 w-4 shrink-0 rounded border-moss-300"
+                    class="mt-1 h-4 w-4 shrink-0 rounded border-bark-300"
                     type="checkbox"
                     checked={selectedMessageIds.has(row.id)}
                     onchange={() => toggleMessageSelection(row.id)}
@@ -565,7 +564,7 @@
       </div>
 
       <div class="flex flex-col gap-4">
-        <form class="rounded border border-wilt-200 bg-white p-4 shadow-sm" onsubmit={(event) => { event.preventDefault(); void previewCogSec(); }}>
+        <form class="rounded border border-wilt-200 bg-bark-50 p-4 shadow-sm" onsubmit={(event) => { event.preventDefault(); void previewCogSec(); }}>
           <h2 class="text-lg font-semibold">CogSec Remediation</h2>
           <p class="mt-1 text-sm text-shadow-600">
             Seal selected companion L0 rows, replace them with tombstones, revoke derived cognition, and cut a fresh lane.
@@ -574,7 +573,7 @@
           <label class="mt-4 block text-sm font-medium text-shadow-800" for="cogsec-source-channel">Source channel</label>
           <input
             id="cogsec-source-channel"
-            class="mt-1 w-full rounded border border-moss-300 px-3 py-2 font-mono text-sm"
+            class="mt-1 w-full rounded border border-bark-300 px-3 py-2 font-mono text-sm"
             list="source-channel-options"
             bind:value={selectedSourceChannelId}
             placeholder="discord:channel-id"
@@ -588,7 +587,7 @@
           <label class="mt-4 block text-sm font-medium text-shadow-800" for="cogsec-logical-session">Logical session</label>
           <input
             id="cogsec-logical-session"
-            class="mt-1 w-full rounded border border-moss-300 px-3 py-2 font-mono text-sm"
+            class="mt-1 w-full rounded border border-bark-300 px-3 py-2 font-mono text-sm"
             bind:value={cogSecLogicalSessionId}
             placeholder={selectedRoute?.activeLogicalSessionId || selectedSourceChannelId || 'active logical session'}
           />
@@ -596,7 +595,7 @@
           <div class="mt-4 grid gap-3 sm:grid-cols-2">
             <label class="block text-sm font-medium text-shadow-800" for="cogsec-type">
               Type
-              <select id="cogsec-type" class="mt-1 w-full rounded border border-moss-300 px-3 py-2 text-sm" bind:value={cogSecType}>
+              <select id="cogsec-type" class="mt-1 w-full rounded border border-bark-300 px-3 py-2 text-sm" bind:value={cogSecType}>
                 <option value="content_poisoning">Content poisoning</option>
                 <option value="prompt_injection">Prompt injection</option>
                 <option value="persona_poisoning">Persona poisoning</option>
@@ -607,7 +606,7 @@
             </label>
             <label class="block text-sm font-medium text-shadow-800" for="cogsec-severity">
               Severity
-              <select id="cogsec-severity" class="mt-1 w-full rounded border border-moss-300 px-3 py-2 text-sm" bind:value={cogSecSeverity}>
+              <select id="cogsec-severity" class="mt-1 w-full rounded border border-bark-300 px-3 py-2 text-sm" bind:value={cogSecSeverity}>
                 <option value="high">High</option>
                 <option value="critical">Critical</option>
                 <option value="medium">Medium</option>
@@ -619,7 +618,7 @@
           <label class="mt-4 block text-sm font-medium text-shadow-800" for="cogsec-message-ids">Message IDs</label>
           <input
             id="cogsec-message-ids"
-            class="mt-1 w-full rounded border border-moss-300 px-3 py-2 font-mono text-sm"
+            class="mt-1 w-full rounded border border-bark-300 px-3 py-2 font-mono text-sm"
             bind:value={cogSecMessageIds}
             placeholder="12, 13, 14"
           />
@@ -630,44 +629,44 @@
           <div class="mt-4 grid gap-3 sm:grid-cols-2">
             <label class="block text-sm font-medium text-shadow-800" for="cogsec-start">
               Start entry
-              <input id="cogsec-start" class="mt-1 w-full rounded border border-moss-300 px-3 py-2 font-mono text-sm" bind:value={cogSecStartEntryId} />
+              <input id="cogsec-start" class="mt-1 w-full rounded border border-bark-300 px-3 py-2 font-mono text-sm" bind:value={cogSecStartEntryId} />
             </label>
             <label class="block text-sm font-medium text-shadow-800" for="cogsec-end">
               End entry
-              <input id="cogsec-end" class="mt-1 w-full rounded border border-moss-300 px-3 py-2 font-mono text-sm" bind:value={cogSecEndEntryId} />
+              <input id="cogsec-end" class="mt-1 w-full rounded border border-bark-300 px-3 py-2 font-mono text-sm" bind:value={cogSecEndEntryId} />
             </label>
           </div>
 
           <label class="mt-4 block text-sm font-medium text-shadow-800" for="cogsec-actor">Actor</label>
           <input
             id="cogsec-actor"
-            class="mt-1 w-full rounded border border-moss-300 px-3 py-2 text-sm"
+            class="mt-1 w-full rounded border border-bark-300 px-3 py-2 text-sm"
             bind:value={cogSecActor}
           />
 
           <label class="mt-4 block text-sm font-medium text-shadow-800" for="cogsec-reason">Reason</label>
           <textarea
             id="cogsec-reason"
-            class="mt-1 min-h-24 w-full rounded border border-moss-300 px-3 py-2 text-sm"
+            class="mt-1 min-h-24 w-full rounded border border-bark-300 px-3 py-2 text-sm"
             bind:value={cogSecReason}
             placeholder="Safe operator reason. Do not paste the poisoned content."
           ></textarea>
 
           <label class="mt-4 flex items-center gap-2 text-sm text-shadow-800">
-            <input class="h-4 w-4 rounded border-moss-300" type="checkbox" bind:checked={cogSecCutEpoch} />
+            <input class="h-4 w-4 rounded border-bark-300" type="checkbox" bind:checked={cogSecCutEpoch} />
             Cut fresh lane after remediation
           </label>
 
           <div class="mt-5 grid gap-2 sm:grid-cols-2">
             <button
-              class="rounded border border-moss-300 px-4 py-2 text-sm font-semibold text-moss-800 hover:bg-moss-50 disabled:cursor-not-allowed disabled:opacity-50"
+              class="rounded border border-bark-300 px-4 py-2 text-sm font-semibold text-shadow-700 hover:bg-bark-100 disabled:cursor-not-allowed disabled:opacity-50"
               type="submit"
               disabled={loading || cogSecSubmitting}
             >
               {cogSecSubmitting ? 'Working...' : 'Preview Impact'}
             </button>
             <button
-              class="rounded bg-wilt-700 px-4 py-2 text-sm font-semibold text-white hover:bg-wilt-800 disabled:cursor-not-allowed disabled:opacity-50"
+              class="rounded bg-wilt-600 px-4 py-2 text-sm font-semibold text-white hover:bg-wilt-700 disabled:cursor-not-allowed disabled:opacity-50"
               type="button"
               disabled={loading || cogSecSubmitting}
               onclick={requestApplyCogSec}
@@ -678,7 +677,7 @@
         </form>
 
         {#if cogSecPreview}
-          <div class="rounded border border-moss-200 bg-white p-4 text-sm shadow-sm">
+          <div class="card-garden p-4 text-sm">
             <h3 class="font-semibold">Preview</h3>
             <p class="mt-1 font-mono text-xs text-shadow-700">{cogSecPreview.draft.caseId}</p>
             <div class="mt-3 grid grid-cols-2 gap-2 text-xs">
@@ -705,14 +704,14 @@
           </div>
         {/if}
 
-        <div class="rounded border border-moss-200 bg-white p-4 text-sm shadow-sm">
+        <div class="card-garden p-4 text-sm">
           <h3 class="font-semibold">Safe CogSec Event Log</h3>
           {#if cogSecEvents.length === 0}
             <p class="mt-2 text-shadow-600">No CogSec events recorded.</p>
           {:else}
             <div class="mt-3 flex flex-col gap-2">
               {#each cogSecEvents.slice(0, 5) as event}
-                <div class="rounded border border-moss-100 bg-moss-50 p-3">
+                <div class="rounded border border-bark-200 bg-bark-100 p-3">
                   <p class="font-mono text-xs">{event.caseId}</p>
                   <p class="mt-1 text-xs text-shadow-700">{event.type} / {event.severity} / {event.status}</p>
                   <p class="mt-1 text-xs text-shadow-700">
@@ -725,8 +724,7 @@
         </div>
       </div>
     </section>
-  </div>
-</main>
+</div>
 
 <ConfirmationModal
   open={applyConfirmOpen}

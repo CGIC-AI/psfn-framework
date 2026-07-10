@@ -64,7 +64,7 @@
   <div class="fixed inset-0 z-50 flex items-center justify-center p-4">
     <button
       type="button"
-      class="absolute inset-0 bg-shadow-900/45"
+      class="absolute inset-0 bg-black/45"
       aria-label="Cancel confirmation dialog"
       onclick={handleBackdropClick}
       disabled={busy}
@@ -73,7 +73,7 @@
       role="dialog"
       aria-modal="true"
       aria-labelledby="identity-confirmation-title"
-      class="relative w-full max-w-xl rounded-xl border border-bark-300 bg-white shadow-2xl"
+      class="relative w-full max-w-xl rounded-xl border border-bark-300 bg-bark-50 shadow-2xl"
     >
       <div class="p-5 border-b border-bark-200">
         <h2 id="identity-confirmation-title" class="text-lg font-serif font-semibold text-shadow-900">{title}</h2>

@@ -177,7 +177,7 @@
       <button
         aria-label="Close navigation"
         onclick={() => mobileNavOpen = false}
-        class="fixed inset-0 z-30 bg-shadow-900/20 backdrop-blur-[1px] lg:hidden"
+        class="fixed inset-0 z-30 bg-black/20 backdrop-blur-[1px] lg:hidden"
       ></button>
     {/if}
 

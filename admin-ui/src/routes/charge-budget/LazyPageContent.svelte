@@ -415,14 +415,14 @@
       <button
         type="button"
         onclick={() => activeTab = 'charges'}
-        class="rounded-lg px-3 py-2 text-sm font-medium transition-colors {activeTab === 'charges' ? 'bg-shadow-900 text-white' : 'border border-bark-300 text-shadow-700 hover:bg-bark-100'}"
+        class="rounded-lg px-3 py-2 text-sm font-medium transition-colors {activeTab === 'charges' ? 'bg-shadow-900 text-bark-50' : 'border border-bark-300 text-shadow-700 hover:bg-bark-100'}"
       >
         Charge Policy
       </button>
       <button
         type="button"
         onclick={() => activeTab = 'token-usage'}
-        class="rounded-lg px-3 py-2 text-sm font-medium transition-colors {activeTab === 'token-usage' ? 'bg-shadow-900 text-white' : 'border border-bark-300 text-shadow-700 hover:bg-bark-100'}"
+        class="rounded-lg px-3 py-2 text-sm font-medium transition-colors {activeTab === 'token-usage' ? 'bg-shadow-900 text-bark-50' : 'border border-bark-300 text-shadow-700 hover:bg-bark-100'}"
       >
         Token Usage
       </button>
@@ -476,7 +476,7 @@
             value={rawJson}
             oninput={(event) => rawJson = (event.currentTarget as HTMLTextAreaElement).value}
             rows="20"
-            class="w-full resize-y border-0 bg-white p-4 font-mono text-sm text-shadow-800 focus:outline-none focus:ring-2 focus:ring-gold-300 focus:ring-inset"
+            class="w-full resize-y border-0 bg-bark-50 p-4 font-mono text-sm text-shadow-800 focus:outline-none focus:ring-2 focus:ring-gold-300 focus:ring-inset"
             spellcheck="false"
           ></textarea>
         {:else}
@@ -495,7 +495,7 @@
                       value={policy.runChargeQuotaByLane[lane]}
                       aria-label={`${policyKey('runChargeQuotaByLane', lane)} quota`}
                       oninput={(event) => setLaneQuota(lane, (event.currentTarget as HTMLInputElement).value)}
-                      class="mt-2 w-full rounded-lg border border-bark-300 bg-white px-3 py-2 text-sm text-shadow-800 focus:border-gold-400 focus:outline-none"
+                      class="mt-2 w-full rounded-lg border border-bark-300 bg-bark-50 px-3 py-2 text-sm text-shadow-800 focus:border-gold-400 focus:outline-none"
                     />
                   </label>
                 {/each}
@@ -514,7 +514,7 @@
                       <th class="px-4 py-3 font-semibold">Required rationale</th>
                     </tr>
                   </thead>
-                  <tbody class="divide-y divide-bark-200 bg-white">
+                  <tbody class="divide-y divide-bark-200 bg-bark-50">
                     {#each SURFACE_VALUES as surface}
                       <tr>
                         <td class="px-4 py-3">
@@ -569,7 +569,7 @@
                         value={policy.moa.perRoundMultiplierByReferenceModelClass[referenceClass]}
                         aria-label={`${policyKey('moa.perRoundMultiplierByReferenceModelClass', referenceClass)} multiplier`}
                         oninput={(event) => setMoaMultiplier(referenceClass, (event.currentTarget as HTMLInputElement).value)}
-                        class="w-32 rounded-lg border border-bark-300 bg-white px-3 py-2 text-sm focus:border-gold-400 focus:outline-none"
+                        class="w-32 rounded-lg border border-bark-300 bg-bark-50 px-3 py-2 text-sm focus:border-gold-400 focus:outline-none"
                       />
                     </label>
                   {/each}
@@ -596,7 +596,7 @@
                           value={policy.referenceModelClassPricing[referenceClass]}
                           aria-label={`${policyKey('referenceModelClassPricing', referenceClass)} price`}
                           oninput={(event) => setReferencePricing(referenceClass, (event.currentTarget as HTMLInputElement).value)}
-                          class="w-32 rounded-lg border border-bark-300 bg-white px-3 py-2 text-sm focus:border-gold-400 focus:outline-none"
+                          class="w-32 rounded-lg border border-bark-300 bg-bark-50 px-3 py-2 text-sm focus:border-gold-400 focus:outline-none"
                         />
                       </div>
                       <input
@@ -605,7 +605,7 @@
                         placeholder={policy.referenceModelClassPricing[referenceClass] > 0 ? 'Required pricing rationale' : 'Optional rationale'}
                         aria-label={`${policyKey('referenceModelClassPricingRationales', referenceClass)} rationale`}
                         oninput={(event) => setReferenceRationale(referenceClass, (event.currentTarget as HTMLInputElement).value)}
-                        class="mt-3 w-full rounded-lg border border-bark-300 bg-white px-3 py-2 text-sm focus:border-gold-400 focus:outline-none"
+                        class="mt-3 w-full rounded-lg border border-bark-300 bg-bark-50 px-3 py-2 text-sm focus:border-gold-400 focus:outline-none"
                         class:border-wilt-400={policy.referenceModelClassPricing[referenceClass] > 0 && !policy.referenceModelClassPricingRationales?.[referenceClass]?.trim()}
                       />
                     </div>

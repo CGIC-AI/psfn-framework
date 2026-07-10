@@ -697,7 +697,7 @@
         <div class="mt-3 flex flex-wrap gap-2">
           <a
             href="/identity"
-            class="inline-flex items-center rounded-lg border border-bark-300 bg-white px-3 py-1.5 text-sm font-medium text-shadow-800 hover:bg-bark-100"
+            class="inline-flex items-center rounded-lg border border-bark-300 bg-bark-50 px-3 py-1.5 text-sm font-medium text-shadow-800 hover:bg-bark-100"
           >
             Import Character Card
           </a>
@@ -719,7 +719,7 @@
                 type="text"
                 bind:value={onboardingDraft.name}
                 disabled={onboardingSaving}
-                class="rounded-lg border border-bark-300 bg-white px-3 py-1.5 text-sm text-shadow-900 focus:outline-none focus:ring-2 focus:ring-gold-400 focus:border-gold-400 disabled:opacity-50 disabled:cursor-not-allowed"
+                class="rounded-lg border border-bark-300 bg-bark-50 px-3 py-1.5 text-sm text-shadow-900 focus:outline-none focus:ring-2 focus:ring-gold-400 focus:border-gold-400 disabled:opacity-50 disabled:cursor-not-allowed"
                 placeholder="Companion name"
               />
             </label>
@@ -729,7 +729,7 @@
                 type="text"
                 bind:value={onboardingDraft.description}
                 disabled={onboardingSaving}
-                class="rounded-lg border border-bark-300 bg-white px-3 py-1.5 text-sm text-shadow-900 focus:outline-none focus:ring-2 focus:ring-gold-400 focus:border-gold-400 disabled:opacity-50 disabled:cursor-not-allowed"
+                class="rounded-lg border border-bark-300 bg-bark-50 px-3 py-1.5 text-sm text-shadow-900 focus:outline-none focus:ring-2 focus:ring-gold-400 focus:border-gold-400 disabled:opacity-50 disabled:cursor-not-allowed"
                 placeholder="Short description"
               />
             </label>
@@ -740,7 +740,7 @@
               bind:value={onboardingDraft.personality}
               disabled={onboardingSaving}
               rows={2}
-              class="rounded-lg border border-bark-300 bg-white px-3 py-2 text-sm text-shadow-900 resize-y focus:outline-none focus:ring-2 focus:ring-gold-400 focus:border-gold-400 disabled:opacity-50 disabled:cursor-not-allowed"
+              class="rounded-lg border border-bark-300 bg-bark-50 px-3 py-2 text-sm text-shadow-900 resize-y focus:outline-none focus:ring-2 focus:ring-gold-400 focus:border-gold-400 disabled:opacity-50 disabled:cursor-not-allowed"
               placeholder="Core personality traits"
             ></textarea>
           </label>
@@ -771,7 +771,7 @@
             bind:value={selectedContactId}
             onchange={onContactChange}
             disabled={saving}
-            class="rounded-lg border border-bark-300 bg-white px-3 py-1.5 text-sm text-shadow-900
+            class="rounded-lg border border-bark-300 bg-bark-50 px-3 py-1.5 text-sm text-shadow-900
                    focus:outline-none focus:ring-2 focus:ring-gold-400 focus:border-gold-400
                    disabled:opacity-50 disabled:cursor-not-allowed"
           >
@@ -789,7 +789,7 @@
             bind:value={selectedPrivacyLevel}
             onchange={onPrivacyChange}
             disabled={saving}
-            class="rounded-lg border border-bark-300 bg-white px-3 py-1.5 text-sm text-shadow-900
+            class="rounded-lg border border-bark-300 bg-bark-50 px-3 py-1.5 text-sm text-shadow-900
                    focus:outline-none focus:ring-2 focus:ring-gold-400 focus:border-gold-400
                    disabled:opacity-50 disabled:cursor-not-allowed"
           >
@@ -807,7 +807,7 @@
             bind:value={selectedChannelIdentity}
             onchange={onChannelIdentityChange}
             disabled={saving}
-            class="rounded-lg border border-bark-300 bg-white px-3 py-1.5 text-sm text-shadow-900
+            class="rounded-lg border border-bark-300 bg-bark-50 px-3 py-1.5 text-sm text-shadow-900
                    focus:outline-none focus:ring-2 focus:ring-gold-400 focus:border-gold-400
                    disabled:opacity-50 disabled:cursor-not-allowed"
           >
@@ -953,7 +953,7 @@
             <div class="flex {msg.role === 'user' ? 'justify-end' : 'justify-start'}">
               <div class="max-w-[85%] {msg.role === 'user'
                 ? 'bg-gold-50 border border-gold-200 rounded-2xl rounded-br-md'
-                : 'bg-white border border-bark-300 rounded-2xl rounded-bl-md'} px-4 py-2.5 shadow-sm">
+                : 'bg-bark-50 border border-bark-300 rounded-2xl rounded-bl-md'} px-4 py-2.5 shadow-sm">
                 <div class="text-sm text-shadow-800 whitespace-pre-wrap leading-relaxed break-words">{msg.content}</div>
                 <div class="text-right mt-1">
                   <span class="text-sm text-shadow-500">{formatTime(msg.timestamp)}</span>
@@ -999,13 +999,13 @@
             <!-- Streaming content bubble -->
             {#if streamingContent}
               <div class="flex justify-start">
-                <div class="max-w-[85%] bg-white border border-bark-300 rounded-2xl rounded-bl-md px-4 py-2.5 shadow-sm">
+                <div class="max-w-[85%] bg-bark-50 border border-bark-300 rounded-2xl rounded-bl-md px-4 py-2.5 shadow-sm">
                   <div class="text-sm text-shadow-800 whitespace-pre-wrap leading-relaxed break-words">{streamingContent}</div>
                 </div>
               </div>
             {:else if !streamingThinking && pendingToolCalls.length === 0}
               <div class="flex justify-start">
-                <div class="max-w-[85%] bg-white border border-bark-300 rounded-2xl rounded-bl-md px-4 py-2.5 shadow-sm">
+                <div class="max-w-[85%] bg-bark-50 border border-bark-300 rounded-2xl rounded-bl-md px-4 py-2.5 shadow-sm">
                   <div class="flex items-center gap-2 text-sm text-shadow-600">
                     <span class="inline-block w-2 h-2 bg-gold-400 rounded-full animate-pulse"></span>
                     Waiting for {activeCompanionName()}...
@@ -1028,7 +1028,7 @@
           disabled={isStreaming}
           rows={2}
           placeholder="Type a message... (Enter to send, Shift+Enter for newline)"
-          class="flex-1 px-3 py-2 rounded-lg border border-bark-300 bg-white text-shadow-900 text-sm resize-none
+          class="flex-1 px-3 py-2 rounded-lg border border-bark-300 bg-bark-50 text-shadow-900 text-sm resize-none
                  placeholder:text-shadow-400
                  focus:outline-none focus:ring-2 focus:ring-gold-400 focus:border-gold-400
                  disabled:opacity-50 disabled:cursor-not-allowed"

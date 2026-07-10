@@ -317,7 +317,7 @@
             <p class="text-sm font-medium text-wilt-700">Expected but not registered</p>
             <div class="mt-3 flex flex-wrap gap-2">
               {#each missingMemoryWorkflowTools as toolName}
-                <span class="rounded-full border border-wilt-200 bg-white px-2.5 py-1 text-xs font-medium text-wilt-700">
+                <span class="rounded-full border border-wilt-200 bg-bark-50 px-2.5 py-1 text-xs font-medium text-wilt-700">
                   {toolName}
                 </span>
               {/each}
@@ -390,7 +390,7 @@
                 type="search"
                 bind:value={inventoryFilters.query}
                 placeholder="Search name or description"
-                class="mt-2 w-full rounded-xl border border-bark-300 bg-white px-3 py-2 text-sm text-shadow-900 outline-none transition-colors placeholder:text-shadow-400 focus:border-gold-400"
+                class="mt-2 w-full rounded-xl border border-bark-300 bg-bark-50 px-3 py-2 text-sm text-shadow-900 outline-none transition-colors placeholder:text-shadow-400 focus:border-gold-400"
               />
             </label>
 
@@ -398,7 +398,7 @@
               <span class="text-xs font-semibold uppercase tracking-[0.16em] text-shadow-500">Inventory Group</span>
               <select
                 bind:value={inventoryFilters.groupKey}
-                class="mt-2 w-full rounded-xl border border-bark-300 bg-white px-3 py-2 text-sm text-shadow-900 outline-none transition-colors focus:border-gold-400"
+                class="mt-2 w-full rounded-xl border border-bark-300 bg-bark-50 px-3 py-2 text-sm text-shadow-900 outline-none transition-colors focus:border-gold-400"
               >
                 <option value={ALL_TOOL_FILTERS}>All groups ({inventoryTotalCount})</option>
                 {#each inventoryFilterOptions.groups as option}
@@ -413,7 +413,7 @@
               <span class="text-xs font-semibold uppercase tracking-[0.16em] text-shadow-500">Scope</span>
               <select
                 bind:value={inventoryFilters.scope}
-                class="mt-2 w-full rounded-xl border border-bark-300 bg-white px-3 py-2 text-sm text-shadow-900 outline-none transition-colors focus:border-gold-400"
+                class="mt-2 w-full rounded-xl border border-bark-300 bg-bark-50 px-3 py-2 text-sm text-shadow-900 outline-none transition-colors focus:border-gold-400"
               >
                 <option value={ALL_TOOL_FILTERS}>All scopes ({inventoryTotalCount})</option>
                 {#each inventoryFilterOptions.scopes as option}
@@ -428,7 +428,7 @@
               <span class="text-xs font-semibold uppercase tracking-[0.16em] text-shadow-500">Health</span>
               <select
                 bind:value={inventoryFilters.healthStatus}
-                class="mt-2 w-full rounded-xl border border-bark-300 bg-white px-3 py-2 text-sm text-shadow-900 outline-none transition-colors focus:border-gold-400"
+                class="mt-2 w-full rounded-xl border border-bark-300 bg-bark-50 px-3 py-2 text-sm text-shadow-900 outline-none transition-colors focus:border-gold-400"
               >
                 <option value={ALL_TOOL_FILTERS}>All health states ({inventoryTotalCount})</option>
                 {#each inventoryFilterOptions.healthStatuses as option}
@@ -443,7 +443,7 @@
               <span class="text-xs font-semibold uppercase tracking-[0.16em] text-shadow-500">Chat Availability</span>
               <select
                 bind:value={inventoryFilters.chatStatus}
-                class="mt-2 w-full rounded-xl border border-bark-300 bg-white px-3 py-2 text-sm text-shadow-900 outline-none transition-colors focus:border-gold-400"
+                class="mt-2 w-full rounded-xl border border-bark-300 bg-bark-50 px-3 py-2 text-sm text-shadow-900 outline-none transition-colors focus:border-gold-400"
               >
                 <option value={ALL_TOOL_FILTERS}>All chat states ({inventoryTotalCount})</option>
                 {#each inventoryFilterOptions.chatStatuses as option}
@@ -458,7 +458,7 @@
               <span class="text-xs font-semibold uppercase tracking-[0.16em] text-shadow-500">Heartbeat Availability</span>
               <select
                 bind:value={inventoryFilters.heartbeatStatus}
-                class="mt-2 w-full rounded-xl border border-bark-300 bg-white px-3 py-2 text-sm text-shadow-900 outline-none transition-colors focus:border-gold-400"
+                class="mt-2 w-full rounded-xl border border-bark-300 bg-bark-50 px-3 py-2 text-sm text-shadow-900 outline-none transition-colors focus:border-gold-400"
               >
                 <option value={ALL_TOOL_FILTERS}>All heartbeat states ({inventoryTotalCount})</option>
                 {#each inventoryFilterOptions.heartbeatStatuses as option}
@@ -589,7 +589,7 @@
                   <div class="rounded-2xl border border-gold-200 bg-gold-50 px-4 py-3">
                     <div class="flex items-center justify-between gap-3">
                       <code class="text-sm font-medium text-shadow-900">{skip.toolName}</code>
-                      <span class="rounded-full border border-gold-200 bg-white px-2 py-0.5 text-xs font-medium text-gold-700">
+                      <span class="rounded-full border border-gold-200 bg-bark-50 px-2 py-0.5 text-xs font-medium text-gold-700">
                         {skip.reason}
                       </span>
                     </div>

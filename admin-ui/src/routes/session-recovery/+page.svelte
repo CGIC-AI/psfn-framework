@@ -256,7 +256,7 @@
         {/if}
 
         <button
-          class="mt-5 w-full rounded bg-wilt-700 px-4 py-2 text-sm font-semibold text-white hover:bg-wilt-800 disabled:cursor-not-allowed disabled:opacity-50"
+          class="mt-5 w-full rounded bg-wilt-600 px-4 py-2 text-sm font-semibold text-white hover:bg-wilt-700 disabled:cursor-not-allowed disabled:opacity-50"
           type="submit"
           disabled={loading || submitting}
         >

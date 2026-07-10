@@ -340,7 +340,7 @@
     <div class="card-garden p-5">
       <h2 class="text-base font-serif font-semibold text-shadow-900 mb-3">Shard Event Log</h2>
       <div class="space-y-0.5 max-h-80 overflow-y-auto">
-        <div class="sticky top-0 bg-white z-10 pb-2 mb-1 border-b border-bark-200">
+        <div class="sticky top-0 bg-bark-50 z-10 pb-2 mb-1 border-b border-bark-200">
           <div class="flex items-center gap-4 text-sm font-medium text-shadow-600 uppercase tracking-wide px-1">
             <span class="w-20">Time</span>
             <span class="w-36">Event</span>

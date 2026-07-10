@@ -712,7 +712,7 @@
 
   <!-- Toast -->
   {#if toastMessage}
-    <div class="fixed bottom-6 right-6 z-50 px-4 py-2.5 rounded-lg bg-shadow-800 text-white text-sm shadow-lg transition-all">
+    <div class="fixed bottom-6 right-6 z-50 px-4 py-2.5 rounded-lg bg-shadow-800 text-bark-50 text-sm shadow-lg transition-all">
       {toastMessage}
     </div>
   {/if}
@@ -795,12 +795,12 @@
             <label class="block">
               <span class="block text-sm font-medium text-shadow-700 mb-1">Name <span class="text-wilt-500">*</span></span>
               <input type="text" bind:value={newLayerName} placeholder="My Custom Layer"
-                class="w-full px-3 py-1.5 rounded-lg border border-bark-300 bg-white text-shadow-800 text-sm focus:outline-none focus:ring-2 focus:ring-gold-300 focus:border-gold-400" />
+                class="w-full px-3 py-1.5 rounded-lg border border-bark-300 bg-bark-50 text-shadow-800 text-sm focus:outline-none focus:ring-2 focus:ring-gold-300 focus:border-gold-400" />
             </label>
             <label class="block">
               <span class="block text-sm font-medium text-shadow-700 mb-1">Type <span class="text-wilt-500">*</span></span>
               <select bind:value={newLayerType}
-                class="w-full px-3 py-1.5 rounded-lg border border-bark-300 bg-white text-shadow-800 text-sm focus:outline-none focus:ring-2 focus:ring-gold-300 focus:border-gold-400">
+                class="w-full px-3 py-1.5 rounded-lg border border-bark-300 bg-bark-50 text-shadow-800 text-sm focus:outline-none focus:ring-2 focus:ring-gold-300 focus:border-gold-400">
                 <option value="runtime">Runtime</option>
                 <option value="channel">Channel</option>
                 <option value="task">Task</option>
@@ -809,7 +809,7 @@
             <label class="block">
               <span class="block text-sm font-medium text-shadow-700 mb-1">Priority</span>
               <input type="number" min="0" step="1" bind:value={newLayerPriority}
-                class="w-full px-3 py-1.5 rounded-lg border border-bark-300 bg-white text-shadow-800 text-sm focus:outline-none focus:ring-2 focus:ring-gold-300 focus:border-gold-400" />
+                class="w-full px-3 py-1.5 rounded-lg border border-bark-300 bg-bark-50 text-shadow-800 text-sm focus:outline-none focus:ring-2 focus:ring-gold-300 focus:border-gold-400" />
             </label>
           </div>
 
@@ -817,14 +817,14 @@
             <label class="block mb-3">
               <span class="block text-sm font-medium text-shadow-700 mb-1">Channel Type <span class="text-shadow-500">(optional -- e.g. discord_text, api, admin)</span></span>
               <input type="text" bind:value={newLayerChannelType} placeholder="discord_text"
-                class="w-full px-3 py-1.5 rounded-lg border border-bark-300 bg-white text-shadow-800 text-sm focus:outline-none focus:ring-2 focus:ring-gold-300 focus:border-gold-400" />
+                class="w-full px-3 py-1.5 rounded-lg border border-bark-300 bg-bark-50 text-shadow-800 text-sm focus:outline-none focus:ring-2 focus:ring-gold-300 focus:border-gold-400" />
             </label>
           {/if}
           {#if newLayerType === 'task'}
             <label class="block mb-3">
               <span class="block text-sm font-medium text-shadow-700 mb-1">Task Kind <span class="text-shadow-500">(optional -- e.g. heartbeat, reflection)</span></span>
               <input type="text" bind:value={newLayerTaskKind} placeholder="heartbeat"
-                class="w-full px-3 py-1.5 rounded-lg border border-bark-300 bg-white text-shadow-800 text-sm focus:outline-none focus:ring-2 focus:ring-gold-300 focus:border-gold-400" />
+                class="w-full px-3 py-1.5 rounded-lg border border-bark-300 bg-bark-50 text-shadow-800 text-sm focus:outline-none focus:ring-2 focus:ring-gold-300 focus:border-gold-400" />
             </label>
           {/if}
 
@@ -882,7 +882,7 @@
                   {/if}
                 </div>
                 <p class="text-sm text-shadow-700">{fixed.description}</p>
-                <pre class="text-xs font-mono text-shadow-700 whitespace-pre-wrap bg-white/70 p-2 rounded border border-bark-200 max-h-56 overflow-y-auto leading-relaxed">{fixed.preview}</pre>
+                <pre class="text-xs font-mono text-shadow-700 whitespace-pre-wrap bg-bark-50/70 p-2 rounded border border-bark-200 max-h-56 overflow-y-auto leading-relaxed">{fixed.preview}</pre>
               </div>
             </CollapsibleSection>
           {:else if entry.kind === 'runtime'}
@@ -952,7 +952,7 @@
               </div>
 
               {#if block.companionEditable}
-                <div class="mt-3 border-t border-dashed border-bark-300 bg-white/70 rounded-b-lg px-3 py-3 space-y-3">
+                <div class="mt-3 border-t border-dashed border-bark-300 bg-bark-50/70 rounded-b-lg px-3 py-3 space-y-3">
                   <div class="flex items-center justify-between gap-3 flex-wrap">
                     <div class="space-y-0.5">
                       <p class="text-sm font-medium text-shadow-800">Companion override</p>
@@ -985,7 +985,7 @@
                           [block.id]: '',
                         };
                       }}
-                      class="w-full px-3 py-2 rounded-lg border border-bark-300 bg-white text-shadow-800 text-sm font-mono resize-vertical leading-relaxed focus:outline-none focus:ring-2 focus:ring-gold-300 focus:border-gold-400"
+                      class="w-full px-3 py-2 rounded-lg border border-bark-300 bg-bark-50 text-shadow-800 text-sm font-mono resize-vertical leading-relaxed focus:outline-none focus:ring-2 focus:ring-gold-300 focus:border-gold-400"
                       placeholder="Add companion-specific guidance for this runtime block..."
                     ></textarea>
                   </label>
@@ -1096,7 +1096,7 @@
                       aria-checked={layer.enabled}
                       title={layer.enabled ? 'Disable layer' : 'Enable layer'}
                     >
-                      <span class="pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out {layer.enabled ? 'translate-x-4' : 'translate-x-0'}"></span>
+                      <span class="pointer-events-none inline-block h-4 w-4 transform rounded-full bg-bark-50 shadow ring-0 transition duration-200 ease-in-out {layer.enabled ? 'translate-x-4' : 'translate-x-0'}"></span>
                     </button>
                   </div>
                 {/if}
@@ -1214,12 +1214,12 @@
                             <label class="block">
                               <span class="block text-sm font-medium text-shadow-700 mb-1">Name</span>
                               <input type="text" bind:value={editName} disabled={locked}
-                                class="w-full px-3 py-1.5 rounded-lg border border-bark-300 bg-white text-shadow-800 text-sm focus:outline-none focus:ring-2 focus:ring-gold-300 focus:border-gold-400 disabled:opacity-50 disabled:cursor-not-allowed" />
+                                class="w-full px-3 py-1.5 rounded-lg border border-bark-300 bg-bark-50 text-shadow-800 text-sm focus:outline-none focus:ring-2 focus:ring-gold-300 focus:border-gold-400 disabled:opacity-50 disabled:cursor-not-allowed" />
                             </label>
                             <label class="block">
                               <span class="block text-sm font-medium text-shadow-700 mb-1">Role</span>
                               <select bind:value={editRole}
-                                class="w-full px-3 py-1.5 rounded-lg border border-bark-300 bg-white text-shadow-800 text-sm focus:outline-none focus:ring-2 focus:ring-gold-300 focus:border-gold-400">
+                                class="w-full px-3 py-1.5 rounded-lg border border-bark-300 bg-bark-50 text-shadow-800 text-sm focus:outline-none focus:ring-2 focus:ring-gold-300 focus:border-gold-400">
                                 <option value="">system (default)</option>
                                 <option value="system">system</option>
                                 <option value="user">person turn</option>
@@ -1229,14 +1229,14 @@
                             <label class="block">
                               <span class="block text-sm font-medium text-shadow-700 mb-1">Identifier</span>
                               <input type="text" bind:value={editIdentifier} placeholder="main"
-                                class="w-full px-3 py-1.5 rounded-lg border border-bark-300 bg-white text-shadow-800 text-sm focus:outline-none focus:ring-2 focus:ring-gold-300 focus:border-gold-400" />
+                                class="w-full px-3 py-1.5 rounded-lg border border-bark-300 bg-bark-50 text-shadow-800 text-sm focus:outline-none focus:ring-2 focus:ring-gold-300 focus:border-gold-400" />
                             </label>
                             <label class="block">
                               <span class="block text-sm font-medium text-shadow-700 mb-1">Prompt Order</span>
                               <input type="number" min="0" step="1"
                                 value={editPromptOrder ?? ''}
                                 onchange={(e) => { const v = (e.target as HTMLInputElement).value; editPromptOrder = v ? Number(v) : undefined; }}
-                                class="w-full px-3 py-1.5 rounded-lg border border-bark-300 bg-white text-shadow-800 text-sm focus:outline-none focus:ring-2 focus:ring-gold-300 focus:border-gold-400" />
+                                class="w-full px-3 py-1.5 rounded-lg border border-bark-300 bg-bark-50 text-shadow-800 text-sm focus:outline-none focus:ring-2 focus:ring-gold-300 focus:border-gold-400" />
                             </label>
                           </div>
 
@@ -1344,7 +1344,7 @@
           bind:value={macroFilter}
           placeholder="Filter by token, description, or example..."
           aria-label="Filter macros"
-          class="ml-auto w-full sm:w-80 px-3 py-1.5 rounded-lg border border-bark-300 bg-white text-shadow-800 text-sm focus:outline-none focus:ring-2 focus:ring-gold-300 focus:border-gold-400"
+          class="ml-auto w-full sm:w-80 px-3 py-1.5 rounded-lg border border-bark-300 bg-bark-50 text-shadow-800 text-sm focus:outline-none focus:ring-2 focus:ring-gold-300 focus:border-gold-400"
         />
       </div>
       <div class="px-5 py-3 bg-bark-50 border-b border-bark-200">

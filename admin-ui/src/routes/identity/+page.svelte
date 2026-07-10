@@ -858,7 +858,7 @@
             <textarea
               bind:value={editAppearanceValue}
               rows={4}
-              class="w-full px-3 py-2 rounded-lg border border-gold-300 bg-white text-shadow-900 text-sm resize-y
+              class="w-full px-3 py-2 rounded-lg border border-gold-300 bg-bark-50 text-shadow-900 text-sm resize-y
                      focus:outline-none focus:ring-2 focus:ring-gold-300 focus:border-gold-400"
             ></textarea>
           {:else if appearanceValue}
@@ -910,7 +910,7 @@
                 bind:value={referenceUploadDescription}
                 maxlength="240"
                 placeholder="Short description"
-                class="w-full rounded-lg border border-bark-300 bg-white px-3 py-2 text-sm text-shadow-900 placeholder:text-shadow-400 focus:border-gold-400 focus:outline-none focus:ring-2 focus:ring-gold-300"
+                class="w-full rounded-lg border border-bark-300 bg-bark-50 px-3 py-2 text-sm text-shadow-900 placeholder:text-shadow-400 focus:border-gold-400 focus:outline-none focus:ring-2 focus:ring-gold-300"
               />
             </div>
             <div class="grid grid-cols-1 gap-3 lg:grid-cols-[1fr_auto_auto] lg:items-center">
@@ -918,7 +918,7 @@
                 type="text"
                 bind:value={referenceUploadTags}
                 placeholder="tags, comma separated"
-                class="w-full rounded-lg border border-bark-300 bg-white px-3 py-2 text-sm text-shadow-900 placeholder:text-shadow-400 focus:border-gold-400 focus:outline-none focus:ring-2 focus:ring-gold-300"
+                class="w-full rounded-lg border border-bark-300 bg-bark-50 px-3 py-2 text-sm text-shadow-900 placeholder:text-shadow-400 focus:border-gold-400 focus:outline-none focus:ring-2 focus:ring-gold-300"
               />
               <label class="inline-flex items-center gap-2 text-sm font-medium text-shadow-700">
                 <input
@@ -963,7 +963,7 @@
             {:else}
               <div class="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
                 {#each referencePhotos as reference (reference.id)}
-                  <div class="rounded-lg border border-bark-300 bg-white p-3">
+                  <div class="rounded-lg border border-bark-300 bg-bark-50 p-3">
                     <div class="relative overflow-hidden rounded bg-bark-100">
                       <img
                         src={referenceBlobUrl(reference)}
@@ -1088,7 +1088,7 @@
               <textarea
                 bind:value={editFieldValue}
                 rows={field.rows}
-                class="w-full px-3 py-2 rounded-lg border border-gold-300 bg-white text-shadow-900 text-sm resize-y
+                class="w-full px-3 py-2 rounded-lg border border-gold-300 bg-bark-50 text-shadow-900 text-sm resize-y
                        {field.mono ? 'font-mono' : ''}
                        focus:outline-none focus:ring-2 focus:ring-gold-300 focus:border-gold-400"
               ></textarea>
@@ -1157,7 +1157,7 @@
                       <textarea
                         bind:value={editGreetingValue}
                         rows={4}
-                        class="w-full px-3 py-2 rounded-lg border border-gold-300 bg-white text-shadow-900 text-sm resize-y
+                        class="w-full px-3 py-2 rounded-lg border border-gold-300 bg-bark-50 text-shadow-900 text-sm resize-y
                                focus:outline-none focus:ring-2 focus:ring-gold-300 focus:border-gold-400"
                       ></textarea>
                       <div class="flex gap-1.5 mt-2">
@@ -1186,7 +1186,7 @@
                     <textarea
                       bind:value={editGreetingValue}
                       rows={4}
-                      class="w-full px-3 py-2 rounded-lg border border-gold-300 bg-white text-shadow-900 text-sm resize-y
+                      class="w-full px-3 py-2 rounded-lg border border-gold-300 bg-bark-50 text-shadow-900 text-sm resize-y
                              focus:outline-none focus:ring-2 focus:ring-gold-300 focus:border-gold-400"
                     ></textarea>
                     <div class="flex gap-1.5 mt-2">

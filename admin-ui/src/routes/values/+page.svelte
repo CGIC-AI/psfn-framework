@@ -256,7 +256,7 @@
         bind:value={searchQuery}
         placeholder="Search loaded entries..."
         aria-label="Search loaded journal entries"
-        class="w-full max-w-sm text-sm px-3 py-1.5 rounded-lg border border-bark-300 bg-white
+        class="w-full max-w-sm text-sm px-3 py-1.5 rounded-lg border border-bark-300 bg-bark-50
                text-shadow-800 placeholder:text-shadow-500
                focus:outline-none focus:border-gold-300"
       />

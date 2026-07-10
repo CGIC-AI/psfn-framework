@@ -137,8 +137,8 @@
             onclick={() => activeTab = tab.id}
             class="rounded-t-xl border px-3 py-2 text-sm font-medium transition-colors
               {activeTab === tab.id
-                ? 'border-gold-300 bg-white text-shadow-900 shadow-sm'
-                : 'border-bark-300 bg-bark-50 text-shadow-600 hover:bg-white hover:text-shadow-900'}"
+                ? 'border-gold-300 bg-bark-50 text-shadow-900 shadow-sm'
+                : 'border-bark-300 bg-bark-50 text-shadow-600 hover:bg-bark-50 hover:text-shadow-900'}"
           >
             {tab.label}
           </button>
@@ -150,25 +150,25 @@
   <div class="space-y-5 p-5">
     {#if activeTab === 'summary'}
       <div class="grid grid-cols-2 gap-3 xl:grid-cols-4">
-        <div class="rounded-xl border border-bark-200 bg-white p-3">
+        <div class="rounded-xl border border-bark-200 bg-bark-50 p-3">
           <p class="text-sm text-shadow-600">Provider Route</p>
           <p class="mt-1 text-shadow-900">
             {humanizeToken(turn.snapshot?.promptContext?.providerObservability?.routeKind)}
           </p>
         </div>
-        <div class="rounded-xl border border-bark-200 bg-white p-3">
+        <div class="rounded-xl border border-bark-200 bg-bark-50 p-3">
           <p class="text-sm text-shadow-600">Backend Model</p>
           <p class="mt-1 break-all text-shadow-900">
             {turn.snapshot?.promptContext?.providerObservability?.backendModel ?? '—'}
           </p>
         </div>
-        <div class="rounded-xl border border-bark-200 bg-white p-3">
+        <div class="rounded-xl border border-bark-200 bg-bark-50 p-3">
           <p class="text-sm text-shadow-600">Prompt Stack</p>
           <p class="mt-1 font-mono text-sm text-shadow-900">
             {truncateValue(metrics?.promptVersionPointer, 20)}
           </p>
         </div>
-        <div class="rounded-xl border border-bark-200 bg-white p-3">
+        <div class="rounded-xl border border-bark-200 bg-bark-50 p-3">
           <p class="text-sm text-shadow-600">Static Hash</p>
           <p class="mt-1 font-mono text-sm text-shadow-900">
             {truncateValue(metrics?.staticHash, 20)}
@@ -177,7 +177,7 @@
       </div>
 
       <div class="grid grid-cols-1 gap-4 xl:grid-cols-2">
-        <div class="rounded-xl border border-bark-200 bg-white p-4">
+        <div class="rounded-xl border border-bark-200 bg-bark-50 p-4">
           <h3 class="font-medium text-shadow-900">Route & Prompt Identity</h3>
           <div class="mt-3 grid grid-cols-2 gap-3 text-sm">
             <div>
@@ -219,7 +219,7 @@
           </div>
         </div>
 
-        <div class="rounded-xl border border-bark-200 bg-white p-4">
+        <div class="rounded-xl border border-bark-200 bg-bark-50 p-4">
           <h3 class="font-medium text-shadow-900">Timings & Tokens</h3>
           <div class="mt-3 grid grid-cols-2 gap-3 text-sm">
             <div>
@@ -263,7 +263,7 @@
       </div>
 
       <div class="grid grid-cols-1 gap-4 xl:grid-cols-2">
-        <div class="rounded-xl border border-bark-200 bg-white p-4">
+        <div class="rounded-xl border border-bark-200 bg-bark-50 p-4">
           <h3 class="font-medium text-shadow-900">Context Load</h3>
           <div class="mt-3 grid grid-cols-2 gap-3 text-sm">
             <div>
@@ -301,7 +301,7 @@
           </div>
         </div>
 
-        <div class="rounded-xl border border-bark-200 bg-white p-4">
+        <div class="rounded-xl border border-bark-200 bg-bark-50 p-4">
           <h3 class="font-medium text-shadow-900">Provider Result</h3>
           <div class="mt-3 grid grid-cols-2 gap-3 text-sm">
             <div>
@@ -336,7 +336,7 @@
         </div>
       </div>
 
-      <div class="rounded-xl border border-bark-200 bg-white p-4">
+      <div class="rounded-xl border border-bark-200 bg-bark-50 p-4">
         <h3 class="font-medium text-shadow-900">Turn Exchange</h3>
         <div class="mt-3 space-y-3 text-sm">
           <PromptMonitorTextBlock
@@ -370,7 +370,7 @@
           </p>
         </div>
       {:else}
-        <div class="rounded-xl border border-bark-200 bg-white p-3 text-xs text-shadow-700">
+        <div class="rounded-xl border border-bark-200 bg-bark-50 p-3 text-xs text-shadow-700">
           <span class="font-medium text-shadow-900">PromptPlan v{plan.schemaVersion}:</span>
           {plan.blocks.length} ordered blocks · {regionTokens(plan.blocks)} tokens (est.) ·
           cache boundaries static&lt;{plan.cachePlan.staticBoundary} · session_stable&lt;{plan.cachePlan.sessionStableBoundary}.
@@ -378,9 +378,9 @@
         </div>
         <div class="space-y-3">
           {#each plan.blocks as block, index (block.id)}
-            <div class="rounded-xl border border-bark-200 bg-white p-4">
+            <div class="rounded-xl border border-bark-200 bg-bark-50 p-4">
               <div class="flex flex-wrap items-center gap-2">
-                <span class="rounded-full border border-bark-300 bg-white px-2 py-0.5 text-xs text-shadow-700">#{index + 1}</span>
+                <span class="rounded-full border border-bark-300 bg-bark-50 px-2 py-0.5 text-xs text-shadow-700">#{index + 1}</span>
                 <span class="font-mono text-sm font-medium text-shadow-900">{block.id}</span>
                 <span class={`rounded-full border px-2 py-0.5 text-xs font-medium uppercase tracking-wide ${volatilityTone(block.volatility)}`}>
                   {block.volatility.replace('_', ' ')}
@@ -432,7 +432,7 @@
                 {:else}
                   <div class="mt-2 flex flex-wrap gap-2">
                     {#each region.blocks as block (block.id)}
-                      <span class="rounded-full border border-bark-300 bg-white px-2 py-0.5 font-mono text-xs text-shadow-800" title={`producer ${block.producer} · scope ${block.scopeKey ?? '—'} · ${block.tokensEst} tokens (est.)`}>
+                      <span class="rounded-full border border-bark-300 bg-bark-50 px-2 py-0.5 font-mono text-xs text-shadow-800" title={`producer ${block.producer} · scope ${block.scopeKey ?? '—'} · ${block.tokensEst} tokens (est.)`}>
                         {block.id}
                       </span>
                     {/each}
@@ -455,7 +455,7 @@
           <div class="space-y-2">
             {#each staticHashTimeline as entry (entry.turnId)}
               <div class="flex flex-wrap items-center justify-between gap-2 rounded-lg border px-3 py-2
-                {entry.turnId === turn.turnId ? 'border-gold-400 bg-gold-50' : 'border-bark-200 bg-white'}">
+                {entry.turnId === turn.turnId ? 'border-gold-400 bg-gold-50' : 'border-bark-200 bg-bark-50'}">
                 <div class="min-w-0">
                   <p class="truncate font-mono text-sm text-shadow-900">{truncateValue(entry.turnId, 24)}</p>
                   <p class="mt-0.5 font-mono text-xs text-shadow-600">{truncateValue(entry.staticHash, 24)}</p>
@@ -494,7 +494,7 @@
       </CollapsibleSection>
     {:else if activeTab === 'prompt'}
       <div class="grid grid-cols-1 gap-4 xl:grid-cols-2">
-        <div class="rounded-xl border border-bark-200 bg-white p-4">
+        <div class="rounded-xl border border-bark-200 bg-bark-50 p-4">
           <div class="flex flex-wrap items-center gap-2">
             <h3 class="font-medium text-shadow-900">Prompt-Soil Layers</h3>
             <span class="rounded-full border border-gold-300 bg-gold-50 px-2 py-0.5 text-xs font-medium uppercase tracking-wide text-shadow-900">
@@ -545,7 +545,7 @@
           </div>
         </div>
 
-        <div class="rounded-xl border border-bark-200 bg-white p-4">
+        <div class="rounded-xl border border-bark-200 bg-bark-50 p-4">
           <h3 class="font-medium text-shadow-900">Runtime Additions</h3>
           <p class="mt-1 text-xs text-shadow-600">
             Per-turn context blocks the runtime folds into the layered prompt soil.
@@ -576,7 +576,7 @@
       </div>
 
       <div class="grid grid-cols-1 gap-4 xl:grid-cols-2">
-        <div class="rounded-xl border border-bark-200 bg-white p-4">
+        <div class="rounded-xl border border-bark-200 bg-bark-50 p-4">
           <h3 class="font-medium text-shadow-900">Assembled Prompt</h3>
           <p class="mt-1 text-xs text-shadow-600">
             Pre-Session Prompt is the assembly before session-managed context folding; Final System
@@ -650,7 +650,7 @@
             </span>
           {/if}
           {#if promptLoom.providerWire.systemRoleTransport}
-            <span class="rounded-full border border-bark-300 bg-white px-2 py-0.5 text-xs text-shadow-700">
+            <span class="rounded-full border border-bark-300 bg-bark-50 px-2 py-0.5 text-xs text-shadow-700">
               transport: {promptLoom.providerWire.systemRoleTransport}
             </span>
           {/if}
@@ -732,7 +732,7 @@
       </div>
 
       <div class="grid grid-cols-1 gap-4 xl:grid-cols-2">
-        <div class="rounded-xl border border-bark-200 bg-white p-4">
+        <div class="rounded-xl border border-bark-200 bg-bark-50 p-4">
           <h3 class="font-medium text-shadow-900">Session Prompt Inputs</h3>
           <div class="mt-3 space-y-3">
             <PromptMonitorTextBlock
@@ -755,7 +755,7 @@
           </div>
         </div>
 
-        <div class="rounded-xl border border-bark-200 bg-white p-4">
+        <div class="rounded-xl border border-bark-200 bg-bark-50 p-4">
           <h3 class="font-medium text-shadow-900">Context Metadata</h3>
           <div class="mt-3 space-y-3">
             <PromptMonitorTextBlock
@@ -775,7 +775,7 @@
       </div>
 
       <div class="grid grid-cols-1 gap-4 xl:grid-cols-2">
-        <div class="rounded-xl border border-bark-200 bg-white p-4">
+        <div class="rounded-xl border border-bark-200 bg-bark-50 p-4">
           <h3 class="font-medium text-shadow-900">Memory Withholds</h3>
           <div class="mt-3 space-y-3">
             <PromptMonitorTextBlock
@@ -786,7 +786,7 @@
           </div>
         </div>
 
-        <div class="rounded-xl border border-bark-200 bg-white p-4">
+        <div class="rounded-xl border border-bark-200 bg-bark-50 p-4">
           <h3 class="font-medium text-shadow-900">Context Counts</h3>
           <div class="mt-3 grid grid-cols-2 gap-3 text-sm">
             <div>
@@ -864,7 +864,7 @@
         </div>
       </CollapsibleSection>
     {:else if activeTab === 'tools'}
-      <div class="rounded-xl border border-bark-200 bg-white p-3 text-xs text-shadow-700">
+      <div class="rounded-xl border border-bark-200 bg-bark-50 p-3 text-xs text-shadow-700">
         <span class="font-medium text-shadow-900">Tool surface:</span>
         The schemas below are <span class="font-medium">direct</span> tools serialized to the provider
         exactly as shown (name, description, input schema). REPL-only helpers (e.g.
@@ -888,7 +888,7 @@
             : turn.snapshot?.toolContext?.activeTools ?? []}
         />
 
-        <div class="rounded-xl border border-bark-200 bg-white p-4">
+        <div class="rounded-xl border border-bark-200 bg-bark-50 p-4">
           <h3 class="font-medium text-shadow-900">Adaptive Tool State</h3>
           <div class="mt-3 grid grid-cols-2 gap-3 text-sm">
             <div>
@@ -938,7 +938,7 @@
         </div>
       </div>
 
-      <div class="rounded-xl border border-bark-200 bg-white p-4">
+      <div class="rounded-xl border border-bark-200 bg-bark-50 p-4">
         <div class="flex flex-wrap items-center justify-between gap-2">
           <h3 class="font-medium text-shadow-900">Skipped / Withheld Tools</h3>
           <span class="text-sm text-shadow-600">{skippedToolCount(turn)} skipped</span>
@@ -951,8 +951,8 @@
               <div class="rounded-lg border border-wilt-200 bg-wilt-50 p-3">
                 <div class="flex flex-wrap items-center gap-2">
                   <span class="font-mono text-sm font-medium text-shadow-900">{skip.toolName}</span>
-                  <span class="rounded-full border border-bark-300 bg-white px-2 py-0.5 text-xs text-shadow-700">{skip.source}</span>
-                  <span class="rounded-full border border-wilt-300 bg-white px-2 py-0.5 text-xs font-medium text-wilt-700" title="Reason code">{skip.reason}</span>
+                  <span class="rounded-full border border-bark-300 bg-bark-50 px-2 py-0.5 text-xs text-shadow-700">{skip.source}</span>
+                  <span class="rounded-full border border-wilt-300 bg-bark-50 px-2 py-0.5 text-xs font-medium text-wilt-700" title="Reason code">{skip.reason}</span>
                 </div>
                 {#if skip.missingTokens && skip.missingTokens.length > 0}
                   <p class="mt-1 text-xs text-shadow-600">Missing capability tokens: <span class="font-mono">{skip.missingTokens.join(', ')}</span></p>
@@ -963,7 +963,7 @@
         {/if}
       </div>
 
-      <div class="rounded-xl border border-bark-200 bg-white p-4">
+      <div class="rounded-xl border border-bark-200 bg-bark-50 p-4">
         <div class="flex flex-wrap items-center justify-between gap-2">
           <h3 class="font-medium text-shadow-900">Tool Call Sequence</h3>
           <span class="text-sm text-shadow-600">{toolInvocations(turn).length} call{toolInvocations(turn).length === 1 ? '' : 's'}</span>
@@ -976,7 +976,7 @@
             {#each toolInvocations(turn) as call (call.sequence)}
               <div class="rounded-lg border border-bark-200 bg-bark-50 p-3">
                 <div class="flex flex-wrap items-center gap-2">
-                  <span class="rounded-full border border-bark-300 bg-white px-2 py-0.5 text-xs text-shadow-700">#{call.sequence}</span>
+                  <span class="rounded-full border border-bark-300 bg-bark-50 px-2 py-0.5 text-xs text-shadow-700">#{call.sequence}</span>
                   <span class="font-mono text-sm font-medium text-shadow-900">{call.toolName}</span>
                   <span
                     class={`rounded-full border px-2 py-0.5 text-xs font-medium ${
@@ -1017,7 +1017,7 @@
         {/if}
       </div>
     {:else if activeTab === 'diff'}
-      <div class="rounded-xl border border-bark-200 bg-white p-4">
+      <div class="rounded-xl border border-bark-200 bg-bark-50 p-4">
         <div class="flex flex-wrap items-center justify-between gap-3">
           <div>
             <h3 class="font-medium text-shadow-900">Turn Diff (block-level)</h3>
@@ -1029,7 +1029,7 @@
           <label class="flex items-center gap-2 text-sm text-shadow-700">
             <span>Baseline</span>
             <select
-              class="rounded-lg border border-bark-300 bg-white px-2 py-1.5 font-mono text-sm text-shadow-900"
+              class="rounded-lg border border-bark-300 bg-bark-50 px-2 py-1.5 font-mono text-sm text-shadow-900"
               value={diffBaselineTurn?.turnId ?? ''}
               onchange={(event) => diffBaselineTurnId = (event.currentTarget as HTMLSelectElement).value || null}
               disabled={diffCandidates.length === 0}
@@ -1065,19 +1065,19 @@
           </div>
         {:else}
           <div class="mt-4 grid grid-cols-2 gap-3 text-sm sm:grid-cols-5">
-            <div class="rounded-lg border border-bark-200 bg-white p-3">
+            <div class="rounded-lg border border-bark-200 bg-bark-50 p-3">
               <p class="text-shadow-600">Added</p>
               <p class="mt-1 font-serif text-2xl {blockDiff.addedCount > 0 ? 'text-moss-700' : 'text-shadow-900'}">{blockDiff.addedCount}</p>
             </div>
-            <div class="rounded-lg border border-bark-200 bg-white p-3">
+            <div class="rounded-lg border border-bark-200 bg-bark-50 p-3">
               <p class="text-shadow-600">Removed</p>
               <p class="mt-1 font-serif text-2xl {blockDiff.removedCount > 0 ? 'text-wilt-600' : 'text-shadow-900'}">{blockDiff.removedCount}</p>
             </div>
-            <div class="rounded-lg border border-bark-200 bg-white p-3">
+            <div class="rounded-lg border border-bark-200 bg-bark-50 p-3">
               <p class="text-shadow-600">Changed</p>
               <p class="mt-1 font-serif text-2xl {blockDiff.changedCount > 0 ? 'text-shadow-900' : 'text-shadow-900'}">{blockDiff.changedCount}</p>
             </div>
-            <div class="rounded-lg border border-bark-200 bg-white p-3">
+            <div class="rounded-lg border border-bark-200 bg-bark-50 p-3">
               <p class="text-shadow-600">Unchanged</p>
               <p class="mt-1 font-serif text-2xl text-shadow-900">{blockDiff.unchangedCount}</p>
             </div>
@@ -1098,7 +1098,7 @@
 
           <div class="mt-4 space-y-2">
             {#each blockDiff.entries as entry (entry.id)}
-              <div class="rounded-lg border border-bark-200 bg-white px-3 py-2">
+              <div class="rounded-lg border border-bark-200 bg-bark-50 px-3 py-2">
                 <div class="flex flex-wrap items-center gap-2">
                   <span class={`rounded-full border px-2 py-0.5 text-xs font-medium uppercase tracking-wide ${diffStatusTone(entry.status)}`}>
                     {entry.status}

@@ -64,7 +64,7 @@
       value={settingsJson}
       oninput={(event) => setSettingsJson((event.target as HTMLTextAreaElement).value)}
       rows="18"
-      class="w-full font-mono text-sm text-shadow-800 bg-white p-4
+      class="w-full font-mono text-sm text-shadow-800 bg-bark-50 p-4
              focus:outline-none focus:ring-2 focus:ring-gold-300 focus:ring-inset
              resize-y border-0"
       spellcheck="false"
@@ -108,7 +108,7 @@
         value={getRawJson(editor.key)}
         oninput={(event) => setRawJson(editor.key, (event.target as HTMLTextAreaElement).value)}
         rows="14"
-        class="w-full font-mono text-sm text-shadow-800 bg-white p-4
+        class="w-full font-mono text-sm text-shadow-800 bg-bark-50 p-4
                focus:outline-none focus:ring-2 focus:ring-gold-300 focus:ring-inset
                resize-y border-0"
         spellcheck="false"

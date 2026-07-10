@@ -44,13 +44,13 @@
         <div class="min-w-0">
           <p class="text-sm font-medium text-shadow-900 truncate">{graph.entity.displayName}</p>
           <div class="flex flex-wrap items-center gap-1.5 mt-1">
-            <span class="inline-flex items-center rounded-full bg-white px-2 py-0.5 text-xs font-medium text-shadow-700 border border-bark-200">
+            <span class="inline-flex items-center rounded-full bg-bark-50 px-2 py-0.5 text-xs font-medium text-shadow-700 border border-bark-200">
               {graphSourceLabel(graph.entity.source)}
             </span>
-            <span class="inline-flex items-center rounded-full bg-white px-2 py-0.5 text-xs font-medium text-shadow-700 border border-bark-200">
+            <span class="inline-flex items-center rounded-full bg-bark-50 px-2 py-0.5 text-xs font-medium text-shadow-700 border border-bark-200">
               {graph.entity.sensitivity}
             </span>
-            <span class="inline-flex items-center rounded-full bg-white px-2 py-0.5 text-xs font-medium text-shadow-700 border border-bark-200">
+            <span class="inline-flex items-center rounded-full bg-bark-50 px-2 py-0.5 text-xs font-medium text-shadow-700 border border-bark-200">
               {formatConfidence(graph.entity.confidence)} confidence
             </span>
           </div>
@@ -73,7 +73,7 @@
           </summary>
           <div class="mt-1 flex flex-wrap gap-1">
             {#each graph.entity.provenanceRefs as ref}
-              <span class="rounded bg-white px-1.5 py-0.5 text-xs text-shadow-700 border border-bark-200 break-all">{ref}</span>
+              <span class="rounded bg-bark-50 px-1.5 py-0.5 text-xs text-shadow-700 border border-bark-200 break-all">{ref}</span>
             {/each}
           </div>
         </details>
@@ -83,7 +83,7 @@
     {#if graph.connections.length > 0}
       <div class="mt-2 space-y-2">
         {#each graph.connections as connection (connection.edgeId)}
-          <div class="rounded-xl border border-bark-200 p-3 bg-white/70">
+          <div class="rounded-xl border border-bark-200 p-3 bg-bark-50/70">
             <div class="flex items-start justify-between gap-3">
               <div class="min-w-0">
                 <p class="text-sm font-medium text-shadow-900 truncate">{connection.neighbor.displayName}</p>
@@ -91,7 +91,7 @@
                   <span class="inline-flex items-center rounded-full bg-gold-50 px-2 py-0.5 text-xs font-medium text-gold-800 border border-gold-200">
                     {formatRelType(connection.relationshipType)}
                   </span>
-                  <span class="inline-flex items-center rounded-full bg-white px-2 py-0.5 text-xs font-medium text-shadow-700 border border-bark-200">
+                  <span class="inline-flex items-center rounded-full bg-bark-50 px-2 py-0.5 text-xs font-medium text-shadow-700 border border-bark-200">
                     {formatGraphDirection(connection)}
                   </span>
                   {#if connection.neighbor.trustLevel}
@@ -102,7 +102,7 @@
                     </span>
                   {/if}
                   {#if connection.neighbor.relationshipType}
-                    <span class="inline-flex items-center rounded-full bg-white px-2 py-0.5 text-xs font-medium text-shadow-700 border border-bark-200">
+                    <span class="inline-flex items-center rounded-full bg-bark-50 px-2 py-0.5 text-xs font-medium text-shadow-700 border border-bark-200">
                       {formatRelType(connection.neighbor.relationshipType)}
                     </span>
                   {/if}

@@ -111,7 +111,7 @@
         onkeydown={(event) => {
           if (event.key === 'Enter') void runSearch();
         }}
-        class="w-full max-w-xs rounded-xl border border-bark-300 bg-white px-3 py-1.5 text-sm text-shadow-900 outline-none transition-colors placeholder:text-shadow-400 focus:border-gold-400"
+        class="w-full max-w-xs rounded-xl border border-bark-300 bg-bark-50 px-3 py-1.5 text-sm text-shadow-900 outline-none transition-colors placeholder:text-shadow-400 focus:border-gold-400"
         placeholder="Search wiki text"
         aria-label="Search wiki text"
       />
@@ -216,7 +216,7 @@
             <button
               type="button"
               onclick={() => selectDocument(document.id)}
-              class="flex flex-col rounded-xl border px-4 py-3 text-left transition-colors {selectedId === document.id ? 'border-gold-300 bg-gold-50' : 'border-bark-200 bg-white hover:bg-bark-50'}"
+              class="flex flex-col rounded-xl border px-4 py-3 text-left transition-colors {selectedId === document.id ? 'border-gold-300 bg-gold-50' : 'border-bark-200 bg-bark-50 hover:bg-bark-50'}"
             >
               <div class="flex items-start justify-between gap-2">
                 <p class="min-w-0 truncate text-sm font-semibold text-shadow-900">{document.title}</p>
@@ -282,7 +282,7 @@
         </div>
       {/if}
 
-      <pre class="mt-4 max-h-[36rem] overflow-auto whitespace-pre-wrap rounded-xl border border-bark-200 bg-white p-4 text-sm leading-relaxed text-shadow-800">{selected.body}</pre>
+      <pre class="mt-4 max-h-[36rem] overflow-auto whitespace-pre-wrap rounded-xl border border-bark-200 bg-bark-50 p-4 text-sm leading-relaxed text-shadow-800">{selected.body}</pre>
     {:else}
       <p class="text-sm text-shadow-600">Select a wiki document.</p>
     {/if}

@@ -95,7 +95,7 @@
               </div>
             {:else}
               {#each northStarItems as item, idx (item.clientKey)}
-                <div class="rounded-lg border border-bark-300 bg-white p-3 space-y-3">
+                <div class="rounded-lg border border-bark-300 bg-bark-50 p-3 space-y-3">
                   <div class="flex items-center gap-2">
                     <span class="px-1.5 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider bg-gold-200 text-shadow-800">
                       #{idx + 1}
@@ -132,7 +132,7 @@
                         type="text"
                         value={item.title}
                         oninput={(e) => updateNorthStarItem(item.clientKey, 'title', (e.target as HTMLInputElement).value)}
-                        class="w-full px-3 py-1.5 rounded-lg border border-bark-300 bg-white text-shadow-800 text-sm focus:outline-none focus:ring-2 focus:ring-gold-300 focus:border-gold-400"
+                        class="w-full px-3 py-1.5 rounded-lg border border-bark-300 bg-bark-50 text-shadow-800 text-sm focus:outline-none focus:ring-2 focus:ring-gold-300 focus:border-gold-400"
                       />
                     </label>
                     <label class="block">
@@ -140,7 +140,7 @@
                       <select
                         value={item.scope}
                         onchange={(e) => updateNorthStarItem(item.clientKey, 'scope', (e.target as HTMLSelectElement).value as NorthStarScope)}
-                        class="w-full px-3 py-1.5 rounded-lg border border-bark-300 bg-white text-shadow-800 text-sm focus:outline-none focus:ring-2 focus:ring-gold-300 focus:border-gold-400"
+                        class="w-full px-3 py-1.5 rounded-lg border border-bark-300 bg-bark-50 text-shadow-800 text-sm focus:outline-none focus:ring-2 focus:ring-gold-300 focus:border-gold-400"
                       >
                         <option value="shared">Shared</option>
                         <option value="companion">Companion</option>
@@ -176,7 +176,7 @@
               <h3 class="text-sm font-semibold text-shadow-700 uppercase tracking-wider">Preview Output</h3>
               <span class="text-sm text-shadow-600">~{northStarPreviewTokenCount} tokens</span>
             </div>
-            <pre class="text-sm font-mono text-shadow-800 whitespace-pre-wrap bg-white/60 p-3 rounded border border-bark-200 max-h-80 overflow-y-auto leading-relaxed">{northStarPreviewText || 'No enabled North Star goals.'}</pre>
+            <pre class="text-sm font-mono text-shadow-800 whitespace-pre-wrap bg-bark-50/60 p-3 rounded border border-bark-200 max-h-80 overflow-y-auto leading-relaxed">{northStarPreviewText || 'No enabled North Star goals.'}</pre>
           </div>
         </div>
 

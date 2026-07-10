@@ -358,14 +358,14 @@
       type="button"
       onclick={refresh}
       disabled={refreshing || loading}
-      class="rounded-lg border border-bark-300 px-3 py-2 text-sm font-medium text-shadow-700 transition-colors hover:bg-white disabled:cursor-not-allowed disabled:opacity-50"
+      class="rounded-lg border border-bark-300 px-3 py-2 text-sm font-medium text-shadow-700 transition-colors hover:bg-bark-50 disabled:cursor-not-allowed disabled:opacity-50"
     >
       {refreshing ? 'Refreshing' : 'Refresh'}
     </button>
     <a
       href={currentExportPath}
       download="observer-eval-sidecar-export.json"
-      class="rounded-lg border border-bark-300 px-3 py-2 text-sm font-medium text-shadow-700 transition-colors hover:bg-white"
+      class="rounded-lg border border-bark-300 px-3 py-2 text-sm font-medium text-shadow-700 transition-colors hover:bg-bark-50"
     >
       Export
     </a>
@@ -549,7 +549,7 @@
         <div class="grid gap-3 md:grid-cols-4 xl:grid-cols-6">
           <label class="space-y-1 text-sm text-shadow-700">
             <span class="font-medium">Time</span>
-            <select bind:value={timeRange} class="w-full rounded-lg border border-bark-300 bg-white px-3 py-2">
+            <select bind:value={timeRange} class="w-full rounded-lg border border-bark-300 bg-bark-50 px-3 py-2">
               {#each TIME_RANGE_OPTIONS as option}
                 <option value={option.value}>{option.label}</option>
               {/each}
@@ -557,7 +557,7 @@
           </label>
           <label class="space-y-1 text-sm text-shadow-700">
             <span class="font-medium">Deployment</span>
-            <select bind:value={deploymentFilter} class="w-full rounded-lg border border-bark-300 bg-white px-3 py-2">
+            <select bind:value={deploymentFilter} class="w-full rounded-lg border border-bark-300 bg-bark-50 px-3 py-2">
               {#each DEPLOYMENT_OPTIONS as option}
                 <option value={option.value}>{option.label}</option>
               {/each}
@@ -565,7 +565,7 @@
           </label>
           <label class="space-y-1 text-sm text-shadow-700">
             <span class="font-medium">Privacy</span>
-            <select bind:value={privacyClass} class="w-full rounded-lg border border-bark-300 bg-white px-3 py-2">
+            <select bind:value={privacyClass} class="w-full rounded-lg border border-bark-300 bg-bark-50 px-3 py-2">
               {#each PRIVACY_OPTIONS as option}
                 <option value={option}>{option ? labelizeObserverEval(option) : 'All privacy'}</option>
               {/each}
@@ -573,7 +573,7 @@
           </label>
           <label class="space-y-1 text-sm text-shadow-700">
             <span class="font-medium">Status</span>
-            <select bind:value={observationStatus} class="w-full rounded-lg border border-bark-300 bg-white px-3 py-2">
+            <select bind:value={observationStatus} class="w-full rounded-lg border border-bark-300 bg-bark-50 px-3 py-2">
               {#each OBSERVATION_STATUS_OPTIONS as option}
                 <option value={option}>{option ? labelizeObserverEval(option) : 'All statuses'}</option>
               {/each}
@@ -581,31 +581,31 @@
           </label>
           <label class="space-y-1 text-sm text-shadow-700">
             <span class="font-medium">Min divergence</span>
-            <input bind:value={minDivergenceScore} inputmode="decimal" class="w-full rounded-lg border border-bark-300 bg-white px-3 py-2" placeholder="0.40" />
+            <input bind:value={minDivergenceScore} inputmode="decimal" class="w-full rounded-lg border border-bark-300 bg-bark-50 px-3 py-2" placeholder="0.40" />
           </label>
           <label class="space-y-1 text-sm text-shadow-700">
             <span class="font-medium">Limit</span>
-            <input bind:value={observationLimit} inputmode="numeric" class="w-full rounded-lg border border-bark-300 bg-white px-3 py-2" />
+            <input bind:value={observationLimit} inputmode="numeric" class="w-full rounded-lg border border-bark-300 bg-bark-50 px-3 py-2" />
           </label>
           <label class="space-y-1 text-sm text-shadow-700">
             <span class="font-medium">Run</span>
-            <input bind:value={runId} class="w-full rounded-lg border border-bark-300 bg-white px-3 py-2" placeholder="run id" />
+            <input bind:value={runId} class="w-full rounded-lg border border-bark-300 bg-bark-50 px-3 py-2" placeholder="run id" />
           </label>
           <label class="space-y-1 text-sm text-shadow-700">
             <span class="font-medium">Turn</span>
-            <input bind:value={turnId} class="w-full rounded-lg border border-bark-300 bg-white px-3 py-2" placeholder="turn id" />
+            <input bind:value={turnId} class="w-full rounded-lg border border-bark-300 bg-bark-50 px-3 py-2" placeholder="turn id" />
           </label>
           <label class="space-y-1 text-sm text-shadow-700">
             <span class="font-medium">Eval session</span>
-            <input bind:value={evalSessionId} class="w-full rounded-lg border border-bark-300 bg-white px-3 py-2" />
+            <input bind:value={evalSessionId} class="w-full rounded-lg border border-bark-300 bg-bark-50 px-3 py-2" />
           </label>
           <label class="space-y-1 text-sm text-shadow-700">
             <span class="font-medium">Scenario</span>
-            <input bind:value={scenarioId} class="w-full rounded-lg border border-bark-300 bg-white px-3 py-2" />
+            <input bind:value={scenarioId} class="w-full rounded-lg border border-bark-300 bg-bark-50 px-3 py-2" />
           </label>
           <label class="space-y-1 text-sm text-shadow-700">
             <span class="font-medium">Test run</span>
-            <input bind:value={testRunId} class="w-full rounded-lg border border-bark-300 bg-white px-3 py-2" />
+            <input bind:value={testRunId} class="w-full rounded-lg border border-bark-300 bg-bark-50 px-3 py-2" />
           </label>
         </div>
         <div class="mt-4 flex gap-2">
@@ -658,7 +658,7 @@
         <div class="grid gap-3 md:grid-cols-4 xl:grid-cols-6">
           <label class="space-y-1 text-sm text-shadow-700">
             <span class="font-medium">Time</span>
-            <select bind:value={timeRange} class="w-full rounded-lg border border-bark-300 bg-white px-3 py-2">
+            <select bind:value={timeRange} class="w-full rounded-lg border border-bark-300 bg-bark-50 px-3 py-2">
               {#each TIME_RANGE_OPTIONS as option}
                 <option value={option.value}>{option.label}</option>
               {/each}
@@ -666,7 +666,7 @@
           </label>
           <label class="space-y-1 text-sm text-shadow-700">
             <span class="font-medium">Deployment</span>
-            <select bind:value={deploymentFilter} class="w-full rounded-lg border border-bark-300 bg-white px-3 py-2">
+            <select bind:value={deploymentFilter} class="w-full rounded-lg border border-bark-300 bg-bark-50 px-3 py-2">
               {#each DEPLOYMENT_OPTIONS as option}
                 <option value={option.value}>{option.label}</option>
               {/each}
@@ -674,7 +674,7 @@
           </label>
           <label class="space-y-1 text-sm text-shadow-700">
             <span class="font-medium">Status</span>
-            <select bind:value={runStatus} class="w-full rounded-lg border border-bark-300 bg-white px-3 py-2">
+            <select bind:value={runStatus} class="w-full rounded-lg border border-bark-300 bg-bark-50 px-3 py-2">
               {#each RUN_STATUS_OPTIONS as option}
                 <option value={option}>{option ? labelizeObserverEval(option) : 'All statuses'}</option>
               {/each}
@@ -682,15 +682,15 @@
           </label>
           <label class="space-y-1 text-sm text-shadow-700">
             <span class="font-medium">Limit</span>
-            <input bind:value={runLimit} inputmode="numeric" class="w-full rounded-lg border border-bark-300 bg-white px-3 py-2" />
+            <input bind:value={runLimit} inputmode="numeric" class="w-full rounded-lg border border-bark-300 bg-bark-50 px-3 py-2" />
           </label>
           <label class="space-y-1 text-sm text-shadow-700">
             <span class="font-medium">Eval session</span>
-            <input bind:value={evalSessionId} class="w-full rounded-lg border border-bark-300 bg-white px-3 py-2" />
+            <input bind:value={evalSessionId} class="w-full rounded-lg border border-bark-300 bg-bark-50 px-3 py-2" />
           </label>
           <label class="space-y-1 text-sm text-shadow-700">
             <span class="font-medium">Scenario</span>
-            <input bind:value={scenarioId} class="w-full rounded-lg border border-bark-300 bg-white px-3 py-2" />
+            <input bind:value={scenarioId} class="w-full rounded-lg border border-bark-300 bg-bark-50 px-3 py-2" />
           </label>
         </div>
         <div class="mt-4 flex gap-2">
@@ -733,7 +733,7 @@
         <div class="mt-4 grid gap-3 md:grid-cols-4">
           <label class="space-y-1 text-sm text-shadow-700">
             <span class="font-medium">Time</span>
-            <select bind:value={timeRange} class="w-full rounded-lg border border-bark-300 bg-white px-3 py-2">
+            <select bind:value={timeRange} class="w-full rounded-lg border border-bark-300 bg-bark-50 px-3 py-2">
               {#each TIME_RANGE_OPTIONS as option}
                 <option value={option.value}>{option.label}</option>
               {/each}
@@ -741,7 +741,7 @@
           </label>
           <label class="space-y-1 text-sm text-shadow-700">
             <span class="font-medium">Lever</span>
-            <select bind:value={leverFilter} class="w-full rounded-lg border border-bark-300 bg-white px-3 py-2">
+            <select bind:value={leverFilter} class="w-full rounded-lg border border-bark-300 bg-bark-50 px-3 py-2">
               {#each LEVER_OPTIONS as option}
                 <option value={option}>{option ? labelizeObserverEval(option) : 'All levers'}</option>
               {/each}
@@ -749,11 +749,11 @@
           </label>
           <label class="space-y-1 text-sm text-shadow-700">
             <span class="font-medium">Run</span>
-            <input bind:value={runId} class="w-full rounded-lg border border-bark-300 bg-white px-3 py-2" placeholder="run id" />
+            <input bind:value={runId} class="w-full rounded-lg border border-bark-300 bg-bark-50 px-3 py-2" placeholder="run id" />
           </label>
           <label class="space-y-1 text-sm text-shadow-700">
             <span class="font-medium">Limit</span>
-            <input bind:value={leverLimit} inputmode="numeric" class="w-full rounded-lg border border-bark-300 bg-white px-3 py-2" />
+            <input bind:value={leverLimit} inputmode="numeric" class="w-full rounded-lg border border-bark-300 bg-bark-50 px-3 py-2" />
           </label>
         </div>
         <div class="mt-4 flex gap-2">

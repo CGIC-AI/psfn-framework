@@ -1032,7 +1032,7 @@
             inputmode="decimal"
             value={budgetPolicy.dailyUsdLimit}
             oninput={(event) => setBudgetPolicyLimit('dailyUsdLimit', (event.currentTarget as HTMLInputElement).value)}
-            class="mt-1 w-full rounded border border-bark-300 bg-white px-2 py-1 text-sm focus:border-gold-400 focus:outline-none"
+            class="mt-1 w-full rounded border border-bark-300 bg-bark-50 px-2 py-1 text-sm focus:border-gold-400 focus:outline-none"
           />
           <input
             type="range"
@@ -1054,7 +1054,7 @@
             inputmode="decimal"
             value={budgetPolicy.monthlyUsdLimit}
             oninput={(event) => setBudgetPolicyLimit('monthlyUsdLimit', (event.currentTarget as HTMLInputElement).value)}
-            class="mt-1 w-full rounded border border-bark-300 bg-white px-2 py-1 text-sm focus:border-gold-400 focus:outline-none"
+            class="mt-1 w-full rounded border border-bark-300 bg-bark-50 px-2 py-1 text-sm focus:border-gold-400 focus:outline-none"
           />
           <input
             type="range"
@@ -1155,7 +1155,7 @@
                         nextEntry.id = (event.target as HTMLInputElement).value;
                         return nextEntry;
                       })}
-                      class="px-2 py-1 rounded border border-bark-300 text-sm font-mono text-shadow-800 bg-white"
+                      class="px-2 py-1 rounded border border-bark-300 text-sm font-mono text-shadow-800 bg-bark-50"
                     />
                     <span class="px-2 py-0.5 rounded-full text-xs bg-bark-100 text-shadow-600 border border-bark-300">rank {entry.rank}</span>
                     <span class="px-2 py-0.5 rounded-full text-xs border {modelEnabled ? 'bg-moss-50 border-moss-300 text-moss-700' : 'bg-wilt-50 border-wilt-300 text-wilt-700'}">
@@ -1227,7 +1227,7 @@
                         ? 'bg-gold-100 border-gold-400 text-gold-800'
                         : (state === 'standard'
                           ? 'bg-moss-50 border-moss-300 text-moss-700'
-                          : 'bg-white border-bark-300 text-shadow-600 hover:bg-bark-100')}"
+                          : 'bg-bark-50 border-bark-300 text-shadow-600 hover:bg-bark-100')}"
                     title="Cycle: off → standard → primary"
                   >
                     {PURPOSE_LABELS[purpose]}{state === 'primary' ? ' ★' : ''}
@@ -1246,7 +1246,7 @@
                       list="provider-id-list"
                       value={entry.identity.provider}
                       onchange={(event) => setIdentityField(index, 'provider', (event.target as HTMLInputElement).value)}
-                      class="w-full px-3 py-2 rounded border border-bark-300 bg-white text-sm text-shadow-800 font-mono"
+                      class="w-full px-3 py-2 rounded border border-bark-300 bg-bark-50 text-sm text-shadow-800 font-mono"
                     />
                     <p class="mt-1 text-xs text-shadow-500">
                       {providerAvailability(providerForModel(entry))}{#if providerForModel(entry)} · {providerLabel(providerForModel(entry))}{/if}
@@ -1259,7 +1259,7 @@
                       list="discovered-model-list"
                       value={entry.identity.model}
                       oninput={(event) => setIdentityField(index, 'model', (event.target as HTMLInputElement).value)}
-                      class="w-full px-3 py-2 rounded border border-bark-300 bg-white text-sm text-shadow-800 font-mono"
+                      class="w-full px-3 py-2 rounded border border-bark-300 bg-bark-50 text-sm text-shadow-800 font-mono"
                     />
                   </div>
                   <div>
@@ -1268,7 +1268,7 @@
                       type="text"
                       value={entry.identity.family ?? ''}
                       onchange={(event) => setIdentityField(index, 'family', (event.target as HTMLInputElement).value)}
-                      class="w-full px-3 py-2 rounded border border-bark-300 bg-white text-sm text-shadow-800"
+                      class="w-full px-3 py-2 rounded border border-bark-300 bg-bark-50 text-sm text-shadow-800"
                     />
                   </div>
                   <div>
@@ -1278,7 +1278,7 @@
                       list="provider-type-list"
                       value={entry.identity.source.type}
                       onchange={(event) => setSourceField(index, 'type', (event.target as HTMLInputElement).value)}
-                      class="w-full px-3 py-2 rounded border border-bark-300 bg-white text-sm text-shadow-800 font-mono"
+                      class="w-full px-3 py-2 rounded border border-bark-300 bg-bark-50 text-sm text-shadow-800 font-mono"
                     />
                   </div>
                   <div>
@@ -1287,7 +1287,7 @@
                       type="text"
                       value={entry.identity.source.label ?? ''}
                       onchange={(event) => setSourceField(index, 'label', (event.target as HTMLInputElement).value)}
-                      class="w-full px-3 py-2 rounded border border-bark-300 bg-white text-sm text-shadow-800"
+                      class="w-full px-3 py-2 rounded border border-bark-300 bg-bark-50 text-sm text-shadow-800"
                     />
                   </div>
                   <div>
@@ -1296,7 +1296,7 @@
                       type="text"
                       value={entry.identity.source.baseUrl ?? ''}
                       onchange={(event) => setSourceField(index, 'baseUrl', (event.target as HTMLInputElement).value)}
-                      class="w-full px-3 py-2 rounded border border-bark-300 bg-white text-sm text-shadow-800 font-mono"
+                      class="w-full px-3 py-2 rounded border border-bark-300 bg-bark-50 text-sm text-shadow-800 font-mono"
                     />
                   </div>
                   <div class="md:col-span-2 xl:col-span-3">
@@ -1305,7 +1305,7 @@
                       type="text"
                       value={routingProviderOrderValue(entry)}
                       onchange={(event) => setRoutingProviderOrder(index, (event.target as HTMLInputElement).value)}
-                      class="w-full px-3 py-2 rounded border border-bark-300 bg-white text-sm text-shadow-800 font-mono"
+                      class="w-full px-3 py-2 rounded border border-bark-300 bg-bark-50 text-sm text-shadow-800 font-mono"
                       placeholder="comma-separated provider ids for fallback routing"
                     />
                     <div class="mt-2 flex flex-wrap gap-2">
@@ -1314,7 +1314,7 @@
                         <button
                           type="button"
                           onclick={() => toggleRoutingProvider(index, provider.id)}
-                          class="rounded-full border px-2.5 py-1 text-xs font-medium transition-colors {selected ? 'border-gold-400 bg-gold-100 text-gold-800' : 'border-bark-300 bg-white text-shadow-600 hover:bg-bark-100'}"
+                          class="rounded-full border px-2.5 py-1 text-xs font-medium transition-colors {selected ? 'border-gold-400 bg-gold-100 text-gold-800' : 'border-bark-300 bg-bark-50 text-shadow-600 hover:bg-bark-100'}"
                         >
                           {provider.id}
                         </button>
@@ -1330,7 +1330,7 @@
                       step="1"
                       value={numberFromContainer(entry, 'capabilities', 'contextWindow') ?? ''}
                       onchange={(event) => setContainerNumber(index, 'capabilities', 'contextWindow', (event.target as HTMLInputElement).value, true)}
-                      class="w-full px-3 py-2 rounded border border-bark-300 bg-white text-sm text-shadow-800 font-mono"
+                      class="w-full px-3 py-2 rounded border border-bark-300 bg-bark-50 text-sm text-shadow-800 font-mono"
                     />
                   </div>
                   <div>
@@ -1341,7 +1341,7 @@
                       step="1"
                       value={numberFromContainer(entry, 'capabilities', 'maxOutputTokens') ?? ''}
                       onchange={(event) => setContainerNumber(index, 'capabilities', 'maxOutputTokens', (event.target as HTMLInputElement).value, true)}
-                      class="w-full px-3 py-2 rounded border border-bark-300 bg-white text-sm text-shadow-800 font-mono"
+                      class="w-full px-3 py-2 rounded border border-bark-300 bg-bark-50 text-sm text-shadow-800 font-mono"
                     />
                   </div>
                   <div>
@@ -1352,7 +1352,7 @@
                       step="1"
                       value={numberFromContainer(entry, 'tuning', 'maxOutputTokens') ?? ''}
                       onchange={(event) => setContainerNumber(index, 'tuning', 'maxOutputTokens', (event.target as HTMLInputElement).value, true)}
-                      class="w-full px-3 py-2 rounded border border-bark-300 bg-white text-sm text-shadow-800 font-mono"
+                      class="w-full px-3 py-2 rounded border border-bark-300 bg-bark-50 text-sm text-shadow-800 font-mono"
                     />
                   </div>
                 </div>
@@ -1382,7 +1382,7 @@
                         step={field.step}
                         value={numberFromContainer(entry, 'tuning', field.key) ?? ''}
                         onchange={(event) => setContainerNumber(index, 'tuning', field.key, (event.target as HTMLInputElement).value, field.integer)}
-                        class="w-full px-3 py-2 rounded border border-bark-300 bg-white text-sm text-shadow-800 font-mono"
+                        class="w-full px-3 py-2 rounded border border-bark-300 bg-bark-50 text-sm text-shadow-800 font-mono"
                       />
                     </div>
                   {/each}
@@ -1394,7 +1394,7 @@
                       step="0.000001"
                       value={numberFromContainer(entry, 'cost', 'inputPer1MUsd') ?? ''}
                       onchange={(event) => setContainerNumber(index, 'cost', 'inputPer1MUsd', (event.target as HTMLInputElement).value)}
-                      class="w-full px-3 py-2 rounded border border-bark-300 bg-white text-sm text-shadow-800 font-mono"
+                      class="w-full px-3 py-2 rounded border border-bark-300 bg-bark-50 text-sm text-shadow-800 font-mono"
                     />
                   </div>
                   <div>
@@ -1405,7 +1405,7 @@
                       step="0.000001"
                       value={numberFromContainer(entry, 'cost', 'outputPer1MUsd') ?? ''}
                       onchange={(event) => setContainerNumber(index, 'cost', 'outputPer1MUsd', (event.target as HTMLInputElement).value)}
-                      class="w-full px-3 py-2 rounded border border-bark-300 bg-white text-sm text-shadow-800 font-mono"
+                      class="w-full px-3 py-2 rounded border border-bark-300 bg-bark-50 text-sm text-shadow-800 font-mono"
                     />
                   </div>
                 </div>

@@ -90,7 +90,7 @@
     </span>
     <a
       href={modelsHref}
-      class="inline-flex items-center rounded-lg border border-bark-300 bg-white px-3 py-1.5 text-sm font-medium text-shadow-700 hover:bg-bark-100 transition-colors"
+      class="inline-flex items-center rounded-lg border border-bark-300 bg-bark-50 px-3 py-1.5 text-sm font-medium text-shadow-700 hover:bg-bark-100 transition-colors"
     >
       Open Models
     </a>
@@ -254,7 +254,7 @@
   <button
     onclick={discardProviderRegistryChanges}
     disabled={!isDirty || saving}
-    class="px-4 py-2 rounded-lg border border-bark-300 bg-white text-sm font-medium text-shadow-700 hover:bg-bark-100 disabled:opacity-50 transition-colors"
+    class="px-4 py-2 rounded-lg border border-bark-300 bg-bark-50 text-sm font-medium text-shadow-700 hover:bg-bark-100 disabled:opacity-50 transition-colors"
   >
     Discard
   </button>

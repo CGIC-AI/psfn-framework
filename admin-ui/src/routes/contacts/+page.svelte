@@ -732,7 +732,7 @@
           <div>
             <label for="create-name" class="block text-sm font-medium text-shadow-800 mb-1">Display Name</label>
             <input id="create-name" type="text" bind:value={createDisplayName}
-              class="w-full px-3 py-2 rounded-lg border border-bark-300 bg-white text-shadow-900 text-sm
+              class="w-full px-3 py-2 rounded-lg border border-bark-300 bg-bark-50 text-shadow-900 text-sm
                      focus:outline-none focus:ring-2 focus:ring-gold-300 focus:border-gold-400"
               placeholder="Required" />
           </div>
@@ -740,7 +740,7 @@
             <div>
               <label for="create-trust" class="block text-sm font-medium text-shadow-800 mb-1">Trust Level</label>
               <select id="create-trust" bind:value={createTrustLevel}
-                class="w-full px-3 py-2 rounded-lg border border-bark-300 bg-white text-shadow-900 text-sm
+                class="w-full px-3 py-2 rounded-lg border border-bark-300 bg-bark-50 text-shadow-900 text-sm
                        focus:outline-none focus:ring-2 focus:ring-gold-300 focus:border-gold-400">
                 {#each TRUST_LEVELS.filter(l => l !== 'primary') as level}
                   <option value={level}>{level.charAt(0).toUpperCase() + level.slice(1)}</option>
@@ -750,7 +750,7 @@
             <div>
               <label for="create-rel" class="block text-sm font-medium text-shadow-800 mb-1">Relationship</label>
               <select id="create-rel" bind:value={createRelationshipType}
-                class="w-full px-3 py-2 rounded-lg border border-bark-300 bg-white text-shadow-900 text-sm
+                class="w-full px-3 py-2 rounded-lg border border-bark-300 bg-bark-50 text-shadow-900 text-sm
                        focus:outline-none focus:ring-2 focus:ring-gold-300 focus:border-gold-400">
                 {#each RELATIONSHIP_TYPES as rt}
                   <option value={rt}>{formatRelType(rt)}</option>
@@ -761,7 +761,7 @@
           <div>
             <label for="create-notes" class="block text-sm font-medium text-shadow-800 mb-1">Notes</label>
             <textarea id="create-notes" bind:value={createNotes} rows={2}
-              class="w-full px-3 py-2 rounded-lg border border-bark-300 bg-white text-shadow-900 text-sm resize-y
+              class="w-full px-3 py-2 rounded-lg border border-bark-300 bg-bark-50 text-shadow-900 text-sm resize-y
                      focus:outline-none focus:ring-2 focus:ring-gold-300 focus:border-gold-400"
               placeholder="Optional notes..."
             ></textarea>
@@ -810,7 +810,7 @@
               <div class="flex items-center gap-1.5 shrink-0">
                 <select bind:value={quickTrustValue}
                   class="text-sm px-2 py-1 rounded-lg border border-gold-300
-                         bg-white text-shadow-800
+                         bg-bark-50 text-shadow-800
                          focus:outline-none focus:ring-2 focus:ring-gold-300">
                   {#each TRUST_LEVELS as level}
                     <option value={level}>{level.charAt(0).toUpperCase() + level.slice(1)}</option>
@@ -1077,7 +1077,7 @@
               <div>
                 <label for="edit-name-{contact.id}" class="block text-sm font-medium text-shadow-800 mb-1">Display Name</label>
                 <input id="edit-name-{contact.id}" type="text" bind:value={editDisplayName}
-                  class="w-full px-3 py-2 rounded-lg border border-bark-300 bg-white text-shadow-900 text-sm
+                  class="w-full px-3 py-2 rounded-lg border border-bark-300 bg-bark-50 text-shadow-900 text-sm
                          focus:outline-none focus:ring-2 focus:ring-gold-300 focus:border-gold-400"
                   placeholder="Display name (required)" />
               </div>
@@ -1086,7 +1086,7 @@
               <div>
                 <label for="edit-nick-{contact.id}" class="block text-sm font-medium text-shadow-800 mb-1">Nickname</label>
                 <input id="edit-nick-{contact.id}" type="text" bind:value={editNickname}
-                  class="w-full px-3 py-2 rounded-lg border border-bark-300 bg-white text-shadow-900 text-sm
+                  class="w-full px-3 py-2 rounded-lg border border-bark-300 bg-bark-50 text-shadow-900 text-sm
                          focus:outline-none focus:ring-2 focus:ring-gold-300 focus:border-gold-400"
                   placeholder="Optional nickname" />
               </div>
@@ -1095,7 +1095,7 @@
               <div>
                 <label for="edit-trust-{contact.id}" class="block text-sm font-medium text-shadow-800 mb-1">Trust Level</label>
                 <select id="edit-trust-{contact.id}" bind:value={editTrustLevel}
-                  class="w-full px-3 py-2 rounded-lg border border-bark-300 bg-white text-shadow-900 text-sm
+                  class="w-full px-3 py-2 rounded-lg border border-bark-300 bg-bark-50 text-shadow-900 text-sm
                          focus:outline-none focus:ring-2 focus:ring-gold-300 focus:border-gold-400">
                   {#each TRUST_LEVELS as level}
                     <option value={level}>{level.charAt(0).toUpperCase() + level.slice(1)}</option>
@@ -1107,7 +1107,7 @@
               <div>
                 <label for="edit-rel-{contact.id}" class="block text-sm font-medium text-shadow-800 mb-1">Relationship Type</label>
                 <select id="edit-rel-{contact.id}" bind:value={editRelationshipType}
-                  class="w-full px-3 py-2 rounded-lg border border-bark-300 bg-white text-shadow-900 text-sm
+                  class="w-full px-3 py-2 rounded-lg border border-bark-300 bg-bark-50 text-shadow-900 text-sm
                          focus:outline-none focus:ring-2 focus:ring-gold-300 focus:border-gold-400">
                   {#each RELATIONSHIP_TYPES as rt}
                     <option value={rt}>{formatRelType(rt)}</option>
@@ -1119,7 +1119,7 @@
               <div>
                 <label for="edit-notes-{contact.id}" class="block text-sm font-medium text-shadow-800 mb-1">Notes</label>
                 <textarea id="edit-notes-{contact.id}" bind:value={editNotes} rows={3}
-                  class="w-full px-3 py-2 rounded-lg border border-bark-300 bg-white text-shadow-900 text-sm resize-y
+                  class="w-full px-3 py-2 rounded-lg border border-bark-300 bg-bark-50 text-shadow-900 text-sm resize-y
                          focus:outline-none focus:ring-2 focus:ring-gold-300 focus:border-gold-400"
                   placeholder="Notes about this contact..."
                 ></textarea>
@@ -1139,7 +1139,7 @@
                           onchange={(e) => {
                             channelPrivacyEdits[key] = (e.target as HTMLSelectElement).value as ChannelPrivacyLevel;
                           }}
-                          class="text-sm px-2 py-1 rounded-lg border border-bark-300 bg-white text-shadow-800
+                          class="text-sm px-2 py-1 rounded-lg border border-bark-300 bg-bark-50 text-shadow-800
                                  focus:outline-none focus:ring-2 focus:ring-gold-300 focus:border-gold-400">
                           {#each CHANNEL_PRIVACY_LEVELS as pl}
                             <option value={pl}>{pl.replace('_', ' ')}</option>
@@ -1175,7 +1175,7 @@
                             onchange={(e) => {
                               channelPrivacyEdits[key] = (e.target as HTMLSelectElement).value as ChannelPrivacyLevel;
                             }}
-                            class="text-sm px-2 py-1 rounded-lg border border-bark-300 bg-white text-shadow-800
+                            class="text-sm px-2 py-1 rounded-lg border border-bark-300 bg-bark-50 text-shadow-800
                                    focus:outline-none focus:ring-2 focus:ring-gold-300 focus:border-gold-400">
                             {#each CHANNEL_PRIVACY_LEVELS as pl}
                               <option value={pl}>{pl.replace('_', ' ')}</option>
@@ -1210,7 +1210,7 @@
                             onchange={(e) => {
                               channelPrivacyEdits[key] = (e.target as HTMLSelectElement).value as ChannelPrivacyLevel;
                             }}
-                            class="text-sm px-2 py-1 rounded-lg border border-bark-300 bg-white text-shadow-800
+                            class="text-sm px-2 py-1 rounded-lg border border-bark-300 bg-bark-50 text-shadow-800
                                    focus:outline-none focus:ring-2 focus:ring-gold-300 focus:border-gold-400">
                             {#each CHANNEL_PRIVACY_LEVELS as pl}
                               <option value={pl}>{pl.replace('_', ' ')}</option>
@@ -1243,7 +1243,7 @@
                             const val = (e.target as HTMLSelectElement).value;
                             newChannelName = val === '__custom__' ? '' : val;
                           }}
-                          class="w-full px-2 py-1 text-sm rounded border border-bark-300 bg-white text-shadow-900
+                          class="w-full px-2 py-1 text-sm rounded border border-bark-300 bg-bark-50 text-shadow-900
                                  focus:outline-none focus:ring-1 focus:ring-gold-300">
                           <option value="">Select...</option>
                           {#each KNOWN_CHANNEL_TYPES as ct}
@@ -1253,20 +1253,20 @@
                         </select>
                         {#if newChannelName === '' || !KNOWN_CHANNEL_TYPES.includes(newChannelName)}
                           <input type="text" bind:value={newChannelName} placeholder="custom channel"
-                            class="w-full px-2 py-1 mt-1 text-sm rounded border border-bark-300 bg-white text-shadow-900
+                            class="w-full px-2 py-1 mt-1 text-sm rounded border border-bark-300 bg-bark-50 text-shadow-900
                                    focus:outline-none focus:ring-1 focus:ring-gold-300" />
                         {/if}
                       </div>
                       <div>
                         <label for="new-ch-userid" class="text-sm text-shadow-700">Account ID</label>
                         <input id="new-ch-userid" type="text" bind:value={newChannelUserId} placeholder="123456789"
-                          class="w-full px-2 py-1 text-sm rounded border border-bark-300 bg-white text-shadow-900
+                          class="w-full px-2 py-1 text-sm rounded border border-bark-300 bg-bark-50 text-shadow-900
                                  focus:outline-none focus:ring-1 focus:ring-gold-300" />
                       </div>
                       <div>
                         <label for="new-ch-privacy" class="text-sm text-shadow-700">Privacy</label>
                         <select id="new-ch-privacy" bind:value={newChannelPrivacy}
-                          class="w-full px-2 py-1 text-sm rounded border border-bark-300 bg-white text-shadow-900
+                          class="w-full px-2 py-1 text-sm rounded border border-bark-300 bg-bark-50 text-shadow-900
                                  focus:outline-none focus:ring-1 focus:ring-gold-300">
                           {#each CHANNEL_PRIVACY_LEVELS as pl}
                             <option value={pl}>{pl.replace('_', ' ')}</option>
@@ -1292,7 +1292,7 @@
                     <div>
                       <label for="merge-source-{contact.id}" class="text-sm text-shadow-700">Source Contact ID</label>
                       <input id="merge-source-{contact.id}" type="text" bind:value={mergeSourceId}
-                        class="w-full px-2 py-1 text-sm rounded border border-bark-300 bg-white text-shadow-900
+                        class="w-full px-2 py-1 text-sm rounded border border-bark-300 bg-bark-50 text-shadow-900
                                focus:outline-none focus:ring-1 focus:ring-gold-300 font-mono"
                         placeholder="UUID of contact to absorb" />
                     </div>
@@ -1302,7 +1302,7 @@
                         <select id="merge-source-select-{contact.id}"
                           value={mergeSourceId}
                           onchange={(e) => mergeSourceId = (e.target as HTMLSelectElement).value}
-                          class="w-full px-2 py-1 text-sm rounded border border-bark-300 bg-white text-shadow-900
+                          class="w-full px-2 py-1 text-sm rounded border border-bark-300 bg-bark-50 text-shadow-900
                                  focus:outline-none focus:ring-1 focus:ring-gold-300">
                           <option value="">Select...</option>
                           {#each data.contacts.filter(c => c.id !== contact.id) as other}

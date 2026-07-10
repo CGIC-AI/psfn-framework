@@ -451,7 +451,7 @@
                 bind:value={newName}
                 placeholder="my-skill"
                 class="w-full px-3 py-2 text-sm border border-bark-300 rounded-lg
-                       bg-white text-shadow-800 placeholder-shadow-400
+                       bg-bark-50 text-shadow-800 placeholder-shadow-400
                        focus:outline-none focus:ring-2 focus:ring-gold-300 focus:border-gold-400"
               />
             </div>
@@ -463,7 +463,7 @@
                 bind:value={newCategory}
                 placeholder="custom"
                 class="w-full px-3 py-2 text-sm border border-bark-300 rounded-lg
-                       bg-white text-shadow-800 placeholder-shadow-400
+                       bg-bark-50 text-shadow-800 placeholder-shadow-400
                        focus:outline-none focus:ring-2 focus:ring-gold-300 focus:border-gold-400"
               />
             </div>
@@ -475,7 +475,7 @@
                 bind:value={newDescription}
                 placeholder="Optional (derived from content if omitted)"
                 class="w-full px-3 py-2 text-sm border border-bark-300 rounded-lg
-                       bg-white text-shadow-800 placeholder-shadow-400
+                       bg-bark-50 text-shadow-800 placeholder-shadow-400
                        focus:outline-none focus:ring-2 focus:ring-gold-300 focus:border-gold-400"
               />
             </div>
@@ -488,7 +488,7 @@
               rows="8"
               placeholder="# My Skill&#10;&#10;Skill prompt content in markdown..."
               class="w-full px-3 py-2 text-sm border border-bark-300 rounded-lg font-mono
-                     bg-white text-shadow-800 placeholder-shadow-400 resize-y
+                     bg-bark-50 text-shadow-800 placeholder-shadow-400 resize-y
                      focus:outline-none focus:ring-2 focus:ring-gold-300 focus:border-gold-400"
             ></textarea>
           </div>
@@ -521,7 +521,7 @@
       <select
         id="filter-source"
         bind:value={filterSource}
-        class="text-sm px-2 py-1 border border-bark-300 rounded-lg bg-white text-shadow-800
+        class="text-sm px-2 py-1 border border-bark-300 rounded-lg bg-bark-50 text-shadow-800
                focus:outline-none focus:ring-2 focus:ring-gold-300"
       >
         <option value="all">All</option>
@@ -534,7 +534,7 @@
       <select
         id="filter-status"
         bind:value={filterStatus}
-        class="text-sm px-2 py-1 border border-bark-300 rounded-lg bg-white text-shadow-800
+        class="text-sm px-2 py-1 border border-bark-300 rounded-lg bg-bark-50 text-shadow-800
                focus:outline-none focus:ring-2 focus:ring-gold-300"
       >
         <option value="all">All</option>
@@ -700,7 +700,7 @@
                         type="text"
                         bind:value={editDescription}
                         class="w-full px-3 py-2 text-sm border border-bark-300 rounded-lg
-                               bg-white text-shadow-800
+                               bg-bark-50 text-shadow-800
                                focus:outline-none focus:ring-2 focus:ring-gold-300 focus:border-gold-400"
                       />
                     </div>
@@ -711,7 +711,7 @@
                         bind:value={editContent}
                         rows="12"
                         class="w-full px-3 py-2 text-sm border border-bark-300 rounded-lg font-mono
-                               bg-white text-shadow-800 resize-y
+                               bg-bark-50 text-shadow-800 resize-y
                                focus:outline-none focus:ring-2 focus:ring-gold-300 focus:border-gold-400"
                       ></textarea>
                     </div>

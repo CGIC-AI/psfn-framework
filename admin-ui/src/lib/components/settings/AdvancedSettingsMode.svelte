@@ -82,7 +82,7 @@
     saveAdvanced: () => void | Promise<void>;
   }>();
 
-  const FIELD_INPUT_CLASS = 'flex-1 px-3 py-1.5 rounded-lg border border-bark-300 bg-white text-shadow-800 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-gold-300';
+  const FIELD_INPUT_CLASS = 'flex-1 px-3 py-1.5 rounded-lg border border-bark-300 bg-bark-50 text-shadow-800 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-gold-300';
 
   function visibleSectionKeys(section: AdvancedSettingsSection): string[] {
     return section.keys.filter((key) => (
@@ -184,7 +184,7 @@
                         <div class="flex flex-wrap gap-2">
                           {#each capabilityTierOptions as option}
                             <label
-                              class="inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-sm cursor-pointer transition-colors {hasCompositionalPolicyValue('allowedTiers', option) ? 'border-gold-400 bg-gold-100 text-shadow-800' : 'border-bark-300 bg-white text-shadow-600 hover:bg-bark-100'}"
+                              class="inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-sm cursor-pointer transition-colors {hasCompositionalPolicyValue('allowedTiers', option) ? 'border-gold-400 bg-gold-100 text-shadow-800' : 'border-bark-300 bg-bark-50 text-shadow-600 hover:bg-bark-100'}"
                             >
                               <input
                                 aria-label={`Toggle ${option} compositional tier`}
@@ -204,7 +204,7 @@
                         <div class="flex flex-wrap gap-2">
                           {#each compositionalChannelTypeOptions as option}
                             <label
-                              class="inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-sm cursor-pointer transition-colors {hasCompositionalPolicyValue('allowedChannelTypes', option) ? 'border-gold-400 bg-gold-100 text-shadow-800' : 'border-bark-300 bg-white text-shadow-600 hover:bg-bark-100'}"
+                              class="inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-sm cursor-pointer transition-colors {hasCompositionalPolicyValue('allowedChannelTypes', option) ? 'border-gold-400 bg-gold-100 text-shadow-800' : 'border-bark-300 bg-bark-50 text-shadow-600 hover:bg-bark-100'}"
                             >
                               <input
                                 aria-label={`Toggle ${option} compositional channel`}
@@ -224,7 +224,7 @@
                         <div class="flex flex-wrap gap-2">
                           {#each compositionalPurposeOptions as option}
                             <label
-                              class="inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-sm cursor-pointer transition-colors {hasCompositionalPolicyValue('allowedPurposes', option) ? 'border-gold-400 bg-gold-100 text-shadow-800' : 'border-bark-300 bg-white text-shadow-600 hover:bg-bark-100'}"
+                              class="inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-sm cursor-pointer transition-colors {hasCompositionalPolicyValue('allowedPurposes', option) ? 'border-gold-400 bg-gold-100 text-shadow-800' : 'border-bark-300 bg-bark-50 text-shadow-600 hover:bg-bark-100'}"
                             >
                               <input
                                 aria-label={`Toggle ${option} compositional purpose`}
@@ -252,7 +252,7 @@
                     <div class="w-9 h-5 bg-bark-400 rounded-full peer
                                 peer-checked:bg-gold-500 peer-focus:ring-2 peer-focus:ring-gold-300
                                 after:content-[''] after:absolute after:top-0.5 after:start-[2px]
-                                after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all
+                                after:bg-bark-50 after:rounded-full after:h-4 after:w-4 after:transition-all
                                 peer-checked:after:translate-x-full"></div>
                   </label>
                 {:else if editorType === 'enum'}
@@ -366,7 +366,7 @@
                     <div class="w-9 h-5 bg-bark-400 rounded-full peer
                                 peer-checked:bg-gold-500 peer-focus:ring-2 peer-focus:ring-gold-300
                                 after:content-[''] after:absolute after:top-0.5 after:start-[2px]
-                                after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all
+                                after:bg-bark-50 after:rounded-full after:h-4 after:w-4 after:transition-all
                                 peer-checked:after:translate-x-full"></div>
                   </label>
                 {:else if editorType === 'enum'}

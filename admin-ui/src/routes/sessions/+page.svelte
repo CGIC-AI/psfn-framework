@@ -370,12 +370,12 @@
             type="search"
             bind:value={channelSearch}
             placeholder="Search channels..."
-            class="w-full px-2.5 py-1.5 rounded-lg border border-bark-300 bg-white text-sm text-shadow-800
+            class="w-full px-2.5 py-1.5 rounded-lg border border-bark-300 bg-bark-50 text-sm text-shadow-800
                    focus:outline-none focus:ring-2 focus:ring-gold-300"
           />
           <select
             bind:value={channelSort}
-            class="w-full px-2.5 py-1.5 rounded-lg border border-bark-300 bg-white text-sm text-shadow-800
+            class="w-full px-2.5 py-1.5 rounded-lg border border-bark-300 bg-bark-50 text-sm text-shadow-800
                    focus:outline-none focus:ring-2 focus:ring-gold-300"
           >
             <option value="recent">Sort: Recent Activity</option>
@@ -472,7 +472,7 @@
             type="search"
             bind:value={messageSearch}
             placeholder="Filter messages (content, role, author)..."
-            class="w-full px-2.5 py-1.5 rounded-lg border border-bark-300 bg-white text-sm text-shadow-800
+            class="w-full px-2.5 py-1.5 rounded-lg border border-bark-300 bg-bark-50 text-sm text-shadow-800
                    focus:outline-none focus:ring-2 focus:ring-gold-300"
           />
         </div>
@@ -530,7 +530,7 @@
                       <span class="inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-medium {ontologyTone(ontology)}">
                         {ontology.displayLabel}
                       </span>
-                      <span class="inline-flex items-center rounded-full border border-bark-300 bg-white/75 px-2 py-0.5 text-xs text-shadow-700">
+                      <span class="inline-flex items-center rounded-full border border-bark-300 bg-bark-50/75 px-2 py-0.5 text-xs text-shadow-700">
                         {promptVisibilityLabel(ontology)}
                       </span>
                     {/if}

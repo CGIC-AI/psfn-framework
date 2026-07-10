@@ -1,6 +1,7 @@
 import type { AgentMessage } from '../../../../boundary/pi-agent/index.js';
 import { resolveConfiguredCompanionDataDir } from '../../../../persistence/layout.js';
 import { collectGeneratedImageAttachments } from '../../../../primitives/images/generated-media.js';
+import { emitCompanionArtifactCreatedEvents } from '../../../../channels/backplane/companion-relay/artifact-emission.js';
 import type {
   AgentResponse,
   CorrelationMetadata,
@@ -55,12 +56,29 @@ export async function collectTurnResponseAttachments(input: {
     assistantSessionEntryId?: number;
   };
 }): Promise<NonNullable<AgentResponse['attachments']>> {
-  return collectGeneratedImageAttachments({
+  const attachments = await collectGeneratedImageAttachments({
     turnMessages: input.turnMessages,
     companionDataDir: resolveConfiguredCompanionDataDir(input.runtime.config),
     paidDeliverables: input.paidDeliverables,
     galleryContext: input.galleryContext,
   });
+  if (attachments.length > 0) {
+    // Companion relay artifact announcement choke point (w9hj.1): redacted at
+    // emission; never blocks the outbound reply.
+    try {
+      await emitCompanionArtifactCreatedEvents({
+        eventBus: input.runtime.eventBus,
+        attachments,
+        ...(input.galleryContext?.channelId ? { channelId: input.galleryContext.channelId } : {}),
+      });
+    } catch (error) {
+      log.error('Failed to emit companion artifact events', {
+        channelId: input.galleryContext?.channelId,
+        error: toErrorMessage(error),
+      });
+    }
+  }
+  return attachments;
 }
 
 function createPostTurnBackgroundTask(input: {

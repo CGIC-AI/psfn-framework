@@ -58,10 +58,35 @@ export interface ConfirmationResolveResult {
   executed: boolean;
 }
 
+/**
+ * Resolution outcome delivered to a queue observer. `not_found` never reaches
+ * observers — it does not correspond to a live entry. A failed `modify` with
+ * invalid params also does not notify: the entry stays pending.
+ */
+export interface ConfirmationQueueResolutionOutcome {
+  id: string;
+  status: Exclude<ConfirmationResolutionStatus, 'not_found'>;
+  resolvedAt: number;
+  decision?: ConfirmationDecision;
+  entry: ConfirmationQueueEntry;
+}
+
+/**
+ * Lifecycle observer for the confirmation queue — the single choke point for
+ * approval enqueue/resolve/expiry (w9hj.1 companion relay emission seam).
+ * Callbacks run synchronously inside queue operations and MUST NOT throw;
+ * wire asynchronous work (event-bus emission) behind them.
+ */
+export interface ConfirmationQueueObserver {
+  onEnqueued?(entry: ConfirmationQueueEntry): void;
+  onResolved?(outcome: ConfirmationQueueResolutionOutcome): void;
+}
+
 export interface ConfirmationQueueOptions {
   defaultExpiryMs?: number;
   now?: () => number;
   idFactory?: () => string;
+  observer?: ConfirmationQueueObserver;
 }
 
 type ConfirmationExecutor = (
@@ -92,6 +117,7 @@ export class ConfirmationQueue {
   private readonly defaultExpiryMs: number;
   private readonly now: () => number;
   private readonly idFactory: () => string;
+  private readonly observer: ConfirmationQueueObserver | null;
   private readonly pending = new Map<string, PendingEntry>();
   private readonly history: ConfirmationQueueHistoryEntry[] = [];
 
@@ -102,6 +128,14 @@ export class ConfirmationQueue {
     );
     this.now = options.now ?? Date.now;
     this.idFactory = options.idFactory ?? randomUUID;
+    this.observer = options.observer ?? null;
+  }
+
+  private notifyResolved(outcome: ConfirmationQueueResolutionOutcome): void {
+    this.observer?.onResolved?.({
+      ...outcome,
+      entry: this.snapshot(outcome.entry),
+    });
   }
 
   enqueue(
@@ -122,6 +156,7 @@ export class ConfirmationQueue {
       expiresAt: requestedAt + expiresInMs,
     };
     this.pending.set(entry.id, { entry, execute });
+    this.observer?.onEnqueued?.(this.snapshot(entry));
     return this.snapshot(entry);
   }
 
@@ -172,6 +207,13 @@ export class ConfirmationQueue {
         executed: false,
         message: 'Confirmation request expired before resolution.',
       }));
+      this.notifyResolved({
+        id: request.id,
+        status: 'expired',
+        resolvedAt: now,
+        decision: request.decision,
+        entry: pending.entry,
+      });
       this.expirePending();
       return {
         id: request.id,
@@ -191,6 +233,13 @@ export class ConfirmationQueue {
         executed: false,
         message: 'Action denied by operator.',
       }));
+      this.notifyResolved({
+        id: request.id,
+        status: 'denied',
+        resolvedAt: now,
+        decision: request.decision,
+        entry: pending.entry,
+      });
       return {
         id: request.id,
         status: 'denied',
@@ -227,36 +276,53 @@ export class ConfirmationQueue {
 
     try {
       await pending.execute(nextParams, runEntry);
+      const resolvedAt = this.now();
+      const status = request.decision === 'modify' ? 'modified' : 'approved';
       this.history.push(this.snapshotHistory({
         ...pending.entry,
-        status: request.decision === 'modify' ? 'modified' : 'approved',
+        status,
         decision: request.decision,
-        resolvedAt: this.now(),
+        resolvedAt,
         executed: true,
         message: request.decision === 'modify'
           ? 'Action executed with modified parameters.'
           : 'Action approved and executed.',
         appliedParams: nextParams,
       }));
+      this.notifyResolved({
+        id: request.id,
+        status,
+        resolvedAt,
+        decision: request.decision,
+        entry: pending.entry,
+      });
       return {
         id: request.id,
-        status: request.decision === 'modify' ? 'modified' : 'approved',
+        status,
         message: request.decision === 'modify'
           ? 'Action executed with modified parameters.'
           : 'Action approved and executed.',
         executed: true,
       };
     } catch (error) {
+      const resolvedAt = this.now();
       this.history.push(this.snapshotHistory({
         ...pending.entry,
         status: 'failed',
         decision: request.decision,
-        resolvedAt: this.now(),
+        resolvedAt,
         executed: false,
         message: toErrorMessage(error),
         appliedParams: nextParams,
         error: toErrorMessage(error),
       }));
+      this.notifyResolved({
+        id: request.id,
+        status: 'failed',
+        resolvedAt,
+        decision: request.decision,
+        entry: pending.entry,
+      });
       return {
         id: request.id,
         status: 'failed',
@@ -279,6 +345,12 @@ export class ConfirmationQueue {
           executed: false,
           message: 'Confirmation request expired before resolution.',
         }));
+        this.notifyResolved({
+          id,
+          status: 'expired',
+          resolvedAt: now,
+          entry: pending.entry,
+        });
         expired += 1;
       }
     }

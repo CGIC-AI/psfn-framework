@@ -1,6 +1,7 @@
 import { JSONRPCErrorException } from 'json-rpc-2.0';
 import type { CapabilityTier } from '../../system/config/runtime-config-contracts.js';
 import type { ChannelOutboundDock } from '../../channels/backplane/types.js';
+import type { EventBus } from '../../shared/event-bus.js';
 import type {
   ConfirmationQueueEntry,
   ConfirmationQueueHistoryEntry,
@@ -9,6 +10,11 @@ import {
   ConfirmationQueue,
   DEFAULT_CONFIRMATION_EXPIRY_MS,
 } from '../../system/capabilities/confirmation-queue.js';
+import {
+  redactApprovalRequested,
+  redactApprovalResolved,
+} from '../../channels/backplane/companion-relay/redaction.js';
+import { createComponentLogger } from '../../shared/logger.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
 import { evaluatePolicy, type PolicyConfig } from './policy.js';
 import { GatewayErrors, type PolicyDecision } from './protocol.js';
@@ -31,6 +37,12 @@ interface ApprovalBoundaryOptions extends ApprovalBoundaryAuditHooks {
   discordAdapter: ChannelOutboundDock;
   capabilityTierProvider: () => CapabilityTier;
   confirmation?: Partial<GatewayConfirmationConfig>;
+  /**
+   * Companion relay emission seam (w9hj.1): every confirmation-queue
+   * enqueue/resolution/expiry is redacted at emission and published as a
+   * typed `companion.approval.*` event.
+   */
+  eventBus: EventBus;
 }
 
 export interface GatewayConfirmationConfig {
@@ -60,11 +72,41 @@ export interface ApprovalBoundaryService {
   gate<P, R>(options: ApprovalBoundaryGateOptions<P, R>): (params: P) => Promise<R>;
 }
 
+const approvalLog = createComponentLogger('ApprovalBoundary');
+
 export function createGatewayApprovalBoundaryService(
   options: ApprovalBoundaryOptions,
 ): ApprovalBoundaryService {
   const confirmationQueue = new ConfirmationQueue({
     defaultExpiryMs: options.confirmation?.expiryMs ?? DEFAULT_CONFIRMATION_EXPIRY_MS,
+    observer: {
+      onEnqueued: (entry) => {
+        options.eventBus.emit('companion.approval.requested', {
+          payload: redactApprovalRequested(entry),
+          timestamp: Date.now(),
+        }).catch((error) => {
+          approvalLog.error('Failed to emit companion.approval.requested', {
+            id: entry.id,
+            error: toErrorMessage(error),
+          });
+        });
+      },
+      onResolved: (outcome) => {
+        options.eventBus.emit('companion.approval.resolved', {
+          payload: redactApprovalResolved({
+            id: outcome.id,
+            status: outcome.status,
+            resolvedAt: outcome.resolvedAt,
+          }),
+          timestamp: Date.now(),
+        }).catch((error) => {
+          approvalLog.error('Failed to emit companion.approval.resolved', {
+            id: outcome.id,
+            error: toErrorMessage(error),
+          });
+        });
+      },
+    },
   });
   const confirmationConfig = {
     expiryMs: options.confirmation?.expiryMs ?? DEFAULT_CONFIRMATION_EXPIRY_MS,

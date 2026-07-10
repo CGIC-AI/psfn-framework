@@ -17,6 +17,13 @@ import type {
 } from '../core/agent/adaptive-tools-telemetry.js';
 import type { CompletionHandoffRecord } from './contracts/completion-handoff.js';
 import type { PlaceKind } from './contracts/places-registry.js';
+import type {
+  CompanionApprovalRequestedPayload,
+  CompanionApprovalResolvedPayload,
+  CompanionArtifactCreatedPayload,
+  CompanionArtifactPreviewSource,
+  CompanionToolActivityPayload,
+} from './contracts/companion-relay.js';
 import { createComponentLogger } from './logger.js';
 
 const log = createComponentLogger('EventBus');
@@ -940,6 +947,22 @@ export interface EventMap {
     error?: string;
     timestampMs: number;
   };
+  // Companion event relay (w9hj.1). Payloads are ALREADY redacted at emission
+  // via channels/backplane/companion-relay/redaction.ts — these events must never
+  // carry raw tool params, file contents, or transcript text. Approval events
+  // fire at the confirmation-queue choke points (gateway process); artifact
+  // events fire when generated media is persisted post-turn (agent process);
+  // tool activity re-emits on the gateway bus after crossing the RPC boundary.
+  'companion.approval.requested': { payload: CompanionApprovalRequestedPayload; timestamp: number };
+  'companion.approval.resolved': { payload: CompanionApprovalResolvedPayload; timestamp: number };
+  'companion.artifact.created': {
+    payload: CompanionArtifactCreatedPayload;
+    /** In-process preview source; stripped before anything leaves for the hub. */
+    preview?: CompanionArtifactPreviewSource;
+    channelId?: string;
+    timestamp: number;
+  };
+  'companion.tool.activity': { payload: CompanionToolActivityPayload; channelId?: string; timestamp: number };
   'external.telemetry.ingested': { event: ExternalTelemetryEvent } & EventCorrelationFields;
   'agent.perception.bridge.telemetry': PerceptionBridgeTelemetryEvent & EventCorrelationFields;
   'module.install': {

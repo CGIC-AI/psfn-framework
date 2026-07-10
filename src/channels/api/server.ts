@@ -73,6 +73,13 @@ import {
   validateApiServerAuthConfig,
 } from './server/auth.js';
 import { handleModelsEndpoint } from './server/models.js';
+import {
+  handleCompanionApprovalDecision,
+  handleCompanionArtifactPreview,
+  handleCompanionEventsStream,
+  matchCompanionRelayRoute,
+  type CompanionRelayHttpDeps,
+} from './server/companion-relay-routes.js';
 import { resolveSatelliteConfigPull } from '../backplane/satellite-registry.js';
 
 const log = createComponentLogger('ApiServer');
@@ -121,6 +128,11 @@ export interface ApiServerConfig {
   externalChannelProfiles?: Partial<Record<ChannelType, ExternalChannelProfileConfig>>;
   satelliteRegistry?: SatelliteRegistryConfig;
   sensorIngest?: SensorIngestPort;
+  /**
+   * Companion event relay surface (w9hj.1). When absent the
+   * `/v1/companion/*` routes fail closed with 503.
+   */
+  companionRelay?: CompanionRelayHttpDeps;
 }
 
 export class ApiServer implements ChannelAdapterPort {
@@ -161,6 +173,7 @@ export class ApiServer implements ChannelAdapterPort {
   private voiceWebSocket: ApiVoiceWebSocketAdapter;
   private chatCompletions: ApiChatCompletionsHandler;
   private satelliteRegistry?: SatelliteRegistryConfig;
+  private companionRelay?: CompanionRelayHttpDeps;
   private healthChecks: ApiServerHealthChecks;
   private schedulerHealthcheckStaleAfterMs: number;
   private lastSchedulerHealthcheckAtMs: number | null = null;
@@ -182,6 +195,7 @@ export class ApiServer implements ChannelAdapterPort {
     this.requestTimeoutMs = parseChatRequestTimeoutMs(config.requestTimeoutMs);
     this.healthChecks = config.healthChecks ?? {};
     this.satelliteRegistry = config.satelliteRegistry;
+    this.companionRelay = config.companionRelay;
     this.schedulerHealthcheckStaleAfterMs = parseSchedulerHealthcheckStaleAfterMs(
       config.schedulerHealthcheckStaleAfterMs,
     );
@@ -303,8 +317,57 @@ export class ApiServer implements ChannelAdapterPort {
     } else if (isTelemetryIngest) {
       void this.handleTelemetryIngest(req, res);
     } else {
+      const companionRoute = matchCompanionRelayRoute(req.method, path);
+      if (companionRoute) {
+        this.handleCompanionRelayRoute(req, res, url, principal, companionRoute);
+        return;
+      }
       sendApiError(res, 404, 'not_found', `No route for ${req.method} ${path}`);
     }
+  }
+
+  private handleCompanionRelayRoute(
+    req: IncomingMessage,
+    res: ServerResponse,
+    url: URL,
+    principal: ApiAuthPrincipal,
+    route: ReturnType<typeof matchCompanionRelayRoute> & object,
+  ): void {
+    if (!this.companionRelay) {
+      sendApiError(res, 503, 'companion_relay_not_configured', 'Companion event relay is not configured on this runtime');
+      return;
+    }
+    const ctx = {
+      req,
+      res,
+      url,
+      principal,
+      ...(this.satelliteRegistry ? { registry: this.satelliteRegistry } : {}),
+      deps: this.companionRelay,
+    };
+    if (route.route === 'events') {
+      handleCompanionEventsStream(ctx);
+      return;
+    }
+    if (route.route === 'approval_decision' && route.id) {
+      void handleCompanionApprovalDecision(ctx, route.id).catch((error) => {
+        log.error('Companion approval decision handler failed', { error: toErrorMessage(error) });
+        if (canWriteResponse(res)) {
+          sendApiError(res, 500, 'internal_error', 'Approval decision failed');
+        }
+      });
+      return;
+    }
+    if (route.route === 'artifact_preview' && route.id) {
+      void handleCompanionArtifactPreview(ctx, route.id).catch((error) => {
+        log.error('Companion artifact preview handler failed', { error: toErrorMessage(error) });
+        if (canWriteResponse(res)) {
+          sendApiError(res, 500, 'internal_error', 'Artifact preview failed');
+        }
+      });
+      return;
+    }
+    sendApiError(res, 404, 'not_found', 'Unknown companion relay route');
   }
 
   private handleIdentity(res: ServerResponse): void {

@@ -98,8 +98,14 @@ ssh <pi> 'sudo k3s ctr images tag \
   localhost/psfn-satellite-hub:0.1.0-kube-<sha12>'
 ```
 
-Optionally capture the digest for pinning in the overlay
-(`satelliteHub.image.digest`).
+**Do NOT set `satelliteHub.image.digest` for tar-imported images.** The chart
+renders `repo:tag@digest`, and a `ctr images import`ed image is only known to
+containerd by its `repo:tag` name — kubelet treats the digest reference as
+needing a registry pull from the (nonexistent) `localhost` registry and the
+pod sticks in `ErrImagePull`/`ImagePullBackOff` (hit live 2026-07-10, helm
+rev 34). Digest pinning is for images served from a real registry. With tar
+imports, the commit-tied tag is the pin; leave `digest: ""`. The same applies
+to `companionUiTest.image.digest`.
 
 ## 3. Generate The Hub Credential And Principal Id
 

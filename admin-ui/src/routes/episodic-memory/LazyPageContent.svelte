@@ -1,5 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
+  import BoundedList from '$lib/components/garden/BoundedList.svelte';
+  import CollapsibleSection from '$lib/components/garden/CollapsibleSection.svelte';
   import {
     getEpisodicEpisodeDetail,
     getEpisodicThreadDetail,
@@ -58,17 +60,13 @@
     });
   }
 
+  function formatRange(start: string | undefined, end: string | undefined): string {
+    return `${formatInstant(start)} -- ${formatInstant(end)}`;
+  }
+
   function percent(value: number | undefined): string {
     const clamped = Math.max(0, Math.min(1, value ?? 0));
     return `${Math.round(clamped * 100)}%`;
-  }
-
-  function compactId(value: string): string {
-    return value.length > 28 ? `${value.slice(0, 12)}...${value.slice(-10)}` : value;
-  }
-
-  function themePreview(themes: readonly string[]): string {
-    return themes.length > 0 ? themes.slice(0, 4).join(', ') : 'none';
   }
 
   function hasInvalidDateRange(): boolean {
@@ -301,37 +299,36 @@
         {:else if threadData.length === 0}
           <p class="rounded-lg border border-bark-200 bg-bark-50 p-3 text-sm text-shadow-600">No threaded episodes found.</p>
         {:else}
-          <div class="space-y-2 max-h-[22rem] overflow-y-auto pr-1">
-            {#each threadData as thread (thread.threadId)}
-              <button
-                onclick={() => { void openThread(thread.threadId, true); }}
-                class={`w-full rounded-xl border p-3 text-left transition-colors ${
-                  selectedThreadId === thread.threadId
-                    ? 'border-gold-500 bg-gold-50'
-                    : 'border-bark-200 bg-bark-50 hover:bg-bark-100'
-                }`}
-              >
-                <div class="flex items-start justify-between gap-3">
-                  <div class="min-w-0">
-                    <p class="font-medium text-shadow-900 truncate">{thread.threadId}</p>
-                    <p class="mt-1 text-xs text-shadow-600 truncate">{thread.latestEpisodeTitle}</p>
+          <BoundedList maxHeight="16rem" label="Woven threads">
+            <div class="space-y-2 pr-1">
+              {#each threadData as thread (thread.threadId)}
+                <button
+                  onclick={() => { void openThread(thread.threadId, true); }}
+                  class={`w-full rounded-xl border p-3 text-left transition-colors ${
+                    selectedThreadId === thread.threadId
+                      ? 'border-gold-500 bg-gold-50'
+                      : 'border-bark-200 bg-bark-50 hover:bg-bark-100'
+                  }`}
+                >
+                  <div class="flex items-start justify-between gap-3">
+                    <div class="min-w-0">
+                      <p class="font-medium text-shadow-900 truncate">{thread.latestEpisodeTitle}</p>
+                      <p class="mt-1 text-xs text-shadow-600">{formatRange(thread.startedAt, thread.endedAt)}</p>
+                    </div>
+                    <span class="shrink-0 rounded-full bg-bark-200 px-2 py-0.5 text-xs text-shadow-700">
+                      {thread.episodeCount} eps
+                    </span>
                   </div>
-                  <span class="rounded-full bg-bark-200 px-2 py-0.5 text-xs text-shadow-700">
-                    {thread.episodeCount} eps
-                  </span>
-                </div>
-                <p class="mt-2 text-xs text-shadow-600">
-                  {thread.arcCount} arcs - salience {percent(thread.salienceScore)} - {themePreview(thread.topThemes)}
-                </p>
-              </button>
-            {/each}
-          </div>
+                </button>
+              {/each}
+            </div>
+          </BoundedList>
         {/if}
       </div>
 
       <div class="space-y-3">
         {#if loadingEpisodes}
-          {#each Array(5) as _}
+          {#each Array(3) as _}
             <div class="card-garden p-4 animate-pulse">
               <div class="h-4 bg-bark-200 rounded w-2/3 mb-2"></div>
               <div class="h-3 bg-bark-200 rounded w-full mb-1"></div>
@@ -343,34 +340,27 @@
             <p class="text-shadow-600 text-sm">No L0.1 episodes match the current filters.</p>
           </div>
         {:else}
-          {#each episodes as episode (episode.id)}
-            <button
-              onclick={() => { void openEpisode(episode.id); }}
-              class={`card-garden w-full p-4 text-left transition-all ${
-                selectedEpisodeId === episode.id ? 'border-gold-500 shadow-md' : 'hover:border-gold-300'
-              }`}
-            >
-              <div class="flex items-start justify-between gap-3">
-                <div class="min-w-0">
-                  <p class="text-xs uppercase tracking-[0.18em] text-shadow-500">
-                    episode.id <code class="normal-case tracking-normal">{compactId(episode.id)}</code>
-                  </p>
-                  <h3 class="mt-1 font-serif text-lg font-semibold text-shadow-900">{episode.title}</h3>
-                </div>
-                <span class="rounded-full bg-gold-100 px-2.5 py-0.5 text-xs font-medium text-gold-800">
-                  {percent(episode.salience.score)}
-                </span>
-              </div>
-              <p class="mt-2 text-sm text-shadow-700 line-clamp-2">{episode.landmark}</p>
-              <div class="mt-3 flex flex-wrap gap-2 text-xs">
-                {#if episode.threadId}
-                  <span class="rounded-full bg-bark-200 px-2 py-0.5 text-shadow-700">threadId {compactId(episode.threadId)}</span>
-                {/if}
-                <span class="rounded-full bg-bark-200 px-2 py-0.5 text-shadow-700">{formatInstant(episode.startedAt)}</span>
-                <span class="rounded-full bg-moss-50 px-2 py-0.5 text-moss-700 border border-moss-200">{themePreview(episode.themes)}</span>
-              </div>
-            </button>
-          {/each}
+          <BoundedList maxHeight="24rem" label="Canonical episodes">
+            <div class="space-y-3 pr-1">
+              {#each episodes as episode (episode.id)}
+                <button
+                  onclick={() => { void openEpisode(episode.id); }}
+                  class={`card-garden w-full p-4 text-left transition-all ${
+                    selectedEpisodeId === episode.id ? 'border-gold-500 shadow-md' : 'hover:border-gold-300'
+                  }`}
+                >
+                  <div class="flex items-start justify-between gap-3">
+                    <h3 class="min-w-0 font-serif text-lg font-semibold text-shadow-900">{episode.title}</h3>
+                    <span class="shrink-0 rounded-full bg-bark-200 px-2 py-0.5 text-xs text-shadow-700">
+                      {episode.spanRefs.length + episode.artifactRefs.length} refs
+                    </span>
+                  </div>
+                  <p class="mt-2 text-sm text-shadow-700 line-clamp-2">{episode.landmark}</p>
+                  <p class="mt-2 text-xs text-shadow-600">{formatRange(episode.startedAt, episode.endedAt)}</p>
+                </button>
+              {/each}
+            </div>
+          </BoundedList>
         {/if}
       </div>
 
@@ -400,150 +390,175 @@
     </section>
 
     <section class="space-y-4">
-      <div class="card-garden p-5">
-        {#if loadingDetail}
-          <div class="space-y-2">
-            <div class="h-5 w-1/3 rounded bg-bark-200 animate-pulse"></div>
-            <div class="h-3 w-full rounded bg-bark-200 animate-pulse"></div>
-            <div class="h-3 w-5/6 rounded bg-bark-200 animate-pulse"></div>
-          </div>
-        {:else if detailError}
+      {#if loadingDetail}
+        <div class="card-garden p-5 space-y-2">
+          <div class="h-5 w-1/3 rounded bg-bark-200 animate-pulse"></div>
+          <div class="h-3 w-full rounded bg-bark-200 animate-pulse"></div>
+          <div class="h-3 w-5/6 rounded bg-bark-200 animate-pulse"></div>
+        </div>
+      {:else if detailError}
+        <div class="card-garden p-5">
           <p class="text-sm text-wilt-600">{detailError}</p>
-        {:else if selectedEpisode}
-          <div class="space-y-5">
-            <div>
-              <p class="text-xs uppercase tracking-[0.18em] text-shadow-500">episode.id <code>{selectedEpisode.episode.id}</code></p>
-              <h2 class="mt-1 font-serif text-2xl font-semibold text-shadow-900">{selectedEpisode.episode.title}</h2>
-              <p class="mt-2 text-sm leading-relaxed text-shadow-700">{selectedEpisode.episode.landmark}</p>
-            </div>
-
-            <div class="grid grid-cols-1 gap-3 md:grid-cols-3">
-              <div class="rounded-xl border border-bark-200 bg-bark-50 p-3">
-                <p class="text-xs uppercase tracking-[0.16em] text-shadow-500">startedAt</p>
-                <p class="mt-1 text-sm text-shadow-900">{formatInstant(selectedEpisode.episode.startedAt)}</p>
-              </div>
-              <div class="rounded-xl border border-bark-200 bg-bark-50 p-3">
-                <p class="text-xs uppercase tracking-[0.16em] text-shadow-500">salience.score</p>
-                <p class="mt-1 text-sm text-shadow-900">{percent(selectedEpisode.episode.salience.score)}</p>
-              </div>
-              <div class="rounded-xl border border-bark-200 bg-bark-50 p-3">
-                <p class="text-xs uppercase tracking-[0.16em] text-shadow-500">threadId</p>
-                <p class="mt-1 text-sm text-shadow-900 break-all">{selectedEpisode.episode.threadId ?? 'none'}</p>
-              </div>
-            </div>
-
-            <div class="grid grid-cols-1 gap-3 lg:grid-cols-2">
-              <div class="rounded-xl border border-bark-200 bg-bark-50 p-4">
-                <h3 class="font-medium text-shadow-900">themes <span class="text-shadow-600">(episode topics)</span></h3>
-                <div class="mt-3 flex flex-wrap gap-2">
-                  {#each selectedEpisode.episode.themes as theme}
-                    <span class="rounded-full bg-moss-50 px-2.5 py-0.5 text-xs text-moss-700 border border-moss-200">{theme}</span>
-                  {/each}
-                </div>
-              </div>
-              <div class="rounded-xl border border-bark-200 bg-bark-50 p-4">
-                <h3 class="font-medium text-shadow-900">affect <span class="text-shadow-600">(VAD labels)</span></h3>
-                <p class="mt-2 text-sm text-shadow-700">
-                  valence {selectedEpisode.episode.affect.valence ?? 'n/a'} -
-                  arousal {selectedEpisode.episode.affect.arousal ?? 'n/a'} -
-                  dominance {selectedEpisode.episode.affect.dominance ?? 'n/a'}
-                </p>
-                <p class="mt-1 text-sm text-shadow-700">labels: {selectedEpisode.episode.affect.labels.join(', ') || 'none'}</p>
-              </div>
-            </div>
-
-            <div class="grid grid-cols-1 gap-4 lg:grid-cols-3">
-              {@render ReferenceList('spanRefs', 'L0 spans', selectedEpisode.spanRefs)}
-              {@render ReferenceList('artifactRefs', 'L0 artifacts', selectedEpisode.artifactRefs)}
-              {@render ProvenanceList(selectedEpisode.provenanceRefs)}
-            </div>
-
-            <div class="rounded-xl border border-bark-200 bg-bark-50 p-4 space-y-3">
-              <h3 class="font-medium text-shadow-900">l01_episode_arcs <span class="text-shadow-600">(related graph links)</span></h3>
-              {#if selectedEpisode.relatedArcs.length === 0}
-                <p class="text-sm text-shadow-600">No graph links are recorded for this episode.</p>
-              {:else}
-                <div class="space-y-2">
-                  {#each selectedEpisode.relatedArcs as view}
-                    <div class="rounded-lg border border-bark-200 bg-white/70 p-3">
-                      <div class="flex flex-wrap items-center gap-2">
-                        <span class="rounded-full bg-gold-100 px-2 py-0.5 text-xs text-gold-800">{view.direction}</span>
-                        <span class="rounded-full bg-bark-200 px-2 py-0.5 text-xs text-shadow-700">{view.arc.arcKind}</span>
-                        <code class="text-xs text-shadow-700">{view.arc.id}</code>
-                      </div>
-                      <p class="mt-2 text-sm text-shadow-800">
-                        {view.arc.sourceEpisodeId} -> {view.arc.targetEpisodeId}
-                      </p>
-                      <p class="mt-1 text-xs text-shadow-600">
-                        relatedEpisode.id {relatedEpisodeId(view)} -
-                        confidence {percent(view.arc.confidence)} -
-                        salience {percent(view.arc.salience)}
-                      </p>
-                      {#if view.relatedEpisode}
-                        <button
-                          onclick={() => openRelatedEpisode(view)}
-                          class="mt-2 text-sm font-medium text-gold-700 hover:text-gold-600"
-                        >
-                          Open related episode
-                        </button>
-                      {/if}
-                    </div>
-                  {/each}
-                </div>
-              {/if}
-            </div>
+        </div>
+      {:else if selectedEpisode}
+        <div class="card-garden p-5 space-y-4">
+          <div>
+            <h2 class="font-serif text-2xl font-semibold text-shadow-900">{selectedEpisode.episode.title}</h2>
+            <p class="mt-1 text-sm text-shadow-600">{formatRange(selectedEpisode.episode.startedAt, selectedEpisode.episode.endedAt)}</p>
           </div>
-        {:else}
+
+          <p class="text-sm leading-relaxed text-shadow-800">{selectedEpisode.episode.landmark}</p>
+
+          {#if selectedEpisode.episode.meaning}
+            <div class="rounded-xl border border-moss-200 bg-moss-50 p-4">
+              <p class="text-xs uppercase tracking-[0.16em] text-moss-700">meaning <span class="normal-case tracking-normal">(her own take)</span></p>
+              <p class="mt-1 text-sm leading-relaxed text-shadow-800">{selectedEpisode.episode.meaning.text}</p>
+            </div>
+          {/if}
+
+          {#if selectedEpisode.episode.themes.length > 0}
+            <div class="flex flex-wrap gap-2">
+              {#each selectedEpisode.episode.themes as theme}
+                <span class="rounded-full bg-moss-50 px-2.5 py-0.5 text-xs text-moss-700 border border-moss-200">{theme}</span>
+              {/each}
+            </div>
+          {/if}
+        </div>
+
+        <CollapsibleSection
+          title="Provenance"
+          subtitle="spanRefs, artifactRefs, provenanceRefs -- how this episode formed"
+          count={selectedEpisode.spanRefs.length + selectedEpisode.artifactRefs.length + selectedEpisode.provenanceRefs.length}
+        >
+          <div class="grid grid-cols-1 gap-4 lg:grid-cols-3">
+            {@render ReferenceList('spanRefs', 'L0 spans', selectedEpisode.spanRefs)}
+            {@render ReferenceList('artifactRefs', 'L0 artifacts', selectedEpisode.artifactRefs)}
+            {@render ProvenanceList(selectedEpisode.provenanceRefs)}
+          </div>
+        </CollapsibleSection>
+
+        <CollapsibleSection
+          title="Related arcs"
+          subtitle="l01_episode_arcs graph links"
+          count={selectedEpisode.relatedArcs.length}
+        >
+          {#if selectedEpisode.relatedArcs.length === 0}
+            <p class="text-sm text-shadow-600">No graph links are recorded for this episode.</p>
+          {:else}
+            <div class="space-y-2">
+              {#each selectedEpisode.relatedArcs as view}
+                <div class="rounded-lg border border-bark-200 bg-bark-50 p-3">
+                  <div class="flex flex-wrap items-center gap-2">
+                    <span class="rounded-full bg-gold-100 px-2 py-0.5 text-xs text-gold-800">{view.direction}</span>
+                    <span class="rounded-full bg-bark-200 px-2 py-0.5 text-xs text-shadow-700">{view.arc.arcKind}</span>
+                    <code class="text-xs text-shadow-700">{view.arc.id}</code>
+                  </div>
+                  <p class="mt-2 text-sm text-shadow-800">
+                    {view.arc.sourceEpisodeId} -> {view.arc.targetEpisodeId}
+                  </p>
+                  <p class="mt-1 text-xs text-shadow-600">
+                    relatedEpisode.id {relatedEpisodeId(view)} -
+                    confidence {percent(view.arc.confidence)} -
+                    salience {percent(view.arc.salience)}
+                  </p>
+                  {#if view.relatedEpisode}
+                    <button
+                      onclick={() => openRelatedEpisode(view)}
+                      class="mt-2 text-sm font-medium text-gold-700 hover:text-gold-600"
+                    >
+                      Open related episode
+                    </button>
+                  {/if}
+                </div>
+              {/each}
+            </div>
+          {/if}
+        </CollapsibleSection>
+
+        <CollapsibleSection title="Details" subtitle="ids, scores, and raw fields">
+          <div class="grid grid-cols-1 gap-3 md:grid-cols-2">
+            {@render DetailField('episode.id', selectedEpisode.episode.id)}
+            {@render DetailField('threadId', selectedEpisode.episode.threadId ?? 'none')}
+            {@render DetailField('channelId', selectedEpisode.episode.channelId ?? 'none')}
+            {@render DetailField(
+              'participantContactIds',
+              selectedEpisode.episode.participantContactIds.join(', ') || 'none',
+            )}
+            {@render DetailField(
+              'salience (score / novelty / emotionalIntensity)',
+              `${percent(selectedEpisode.episode.salience.score)} / ${selectedEpisode.episode.salience.novelty ?? 'n/a'} / ${selectedEpisode.episode.salience.emotionalIntensity ?? 'n/a'}`,
+            )}
+            {@render DetailField(
+              'affect (VAD)',
+              `valence ${selectedEpisode.episode.affect.valence ?? 'n/a'} - arousal ${selectedEpisode.episode.affect.arousal ?? 'n/a'} - dominance ${selectedEpisode.episode.affect.dominance ?? 'n/a'}`,
+            )}
+            {@render DetailField('affect.labels', selectedEpisode.episode.affect.labels.join(', ') || 'none')}
+            {@render DetailField(
+              'createdAt / updatedAt',
+              `${formatInstant(selectedEpisode.episode.createdAt)} / ${formatInstant(selectedEpisode.episode.updatedAt)}`,
+            )}
+          </div>
+        </CollapsibleSection>
+      {:else}
+        <div class="card-garden p-5">
           <p class="text-sm text-shadow-600">Select an episode to inspect its canonical contract, provenance, and graph links.</p>
-        {/if}
-      </div>
+        </div>
+      {/if}
 
       {#if selectedThread}
         <div class="card-garden p-5 space-y-4">
           <div>
             <h2 class="font-serif text-xl font-semibold text-shadow-900">threadId <span class="text-shadow-600">(selected thread)</span></h2>
             <p class="mt-1 break-all text-sm text-shadow-700">{selectedThread.thread.threadId}</p>
-          </div>
-          <div class="grid grid-cols-2 gap-3 md:grid-cols-4">
-            <div class="rounded-lg bg-bark-50 border border-bark-200 p-3">
-              <p class="text-xs uppercase tracking-[0.16em] text-shadow-500">episodes</p>
-              <p class="font-serif text-lg text-shadow-900">{selectedThread.thread.episodeCount}</p>
-            </div>
-            <div class="rounded-lg bg-bark-50 border border-bark-200 p-3">
-              <p class="text-xs uppercase tracking-[0.16em] text-shadow-500">arcs</p>
-              <p class="font-serif text-lg text-shadow-900">{selectedThread.thread.arcCount}</p>
-            </div>
-            <div class="rounded-lg bg-bark-50 border border-bark-200 p-3">
-              <p class="text-xs uppercase tracking-[0.16em] text-shadow-500">salience</p>
-              <p class="font-serif text-lg text-shadow-900">{percent(selectedThread.thread.salienceScore)}</p>
-            </div>
-            <div class="rounded-lg bg-bark-50 border border-bark-200 p-3">
-              <p class="text-xs uppercase tracking-[0.16em] text-shadow-500">themes</p>
-              <p class="text-sm text-shadow-900">{themePreview(selectedThread.thread.topThemes)}</p>
-            </div>
+            <p class="mt-1 text-xs text-shadow-600">
+              {selectedThread.thread.episodeCount} episodes - {selectedThread.thread.arcCount} arcs -
+              {formatRange(selectedThread.thread.startedAt, selectedThread.thread.endedAt)}
+            </p>
           </div>
 
-          <div class="space-y-2">
-            {#each selectedThread.episodes as episode (episode.id)}
-              <button
-                onclick={() => { void openEpisode(episode.id); }}
-                class="w-full rounded-lg border border-bark-200 bg-bark-50 px-3 py-2 text-left hover:bg-bark-100 transition-colors"
-              >
-                <div class="flex items-start justify-between gap-3">
-                  <div>
-                    <p class="text-sm font-medium text-shadow-900">{episode.title}</p>
-                    <p class="mt-0.5 text-xs text-shadow-600">{formatInstant(episode.startedAt)} - episode.id {compactId(episode.id)}</p>
+          {#if selectedThread.thread.topThemes.length > 0}
+            <div class="flex flex-wrap gap-2">
+              {#each selectedThread.thread.topThemes as theme}
+                <span class="rounded-full bg-moss-50 px-2.5 py-0.5 text-xs text-moss-700 border border-moss-200">{theme}</span>
+              {/each}
+            </div>
+          {/if}
+
+          <BoundedList maxHeight="12rem" label="Episodes in thread">
+            <div class="space-y-2 pr-1">
+              {#each selectedThread.episodes as episode (episode.id)}
+                <button
+                  onclick={() => { void openEpisode(episode.id); }}
+                  class="w-full rounded-lg border border-bark-200 bg-bark-50 px-3 py-2 text-left hover:bg-bark-100 transition-colors"
+                >
+                  <div class="flex items-start justify-between gap-3">
+                    <p class="min-w-0 truncate text-sm font-medium text-shadow-900">{episode.title}</p>
+                    <span class="shrink-0 text-xs text-shadow-600">{formatInstant(episode.startedAt)}</span>
                   </div>
-                  <span class="text-xs text-shadow-700">{percent(episode.salience.score)}</span>
-                </div>
-              </button>
-            {/each}
-          </div>
+                </button>
+              {/each}
+            </div>
+          </BoundedList>
         </div>
+
+        <CollapsibleSection title="Thread details" subtitle="scores and raw fields">
+          <div class="grid grid-cols-1 gap-3 md:grid-cols-2">
+            {@render DetailField('salienceScore', percent(selectedThread.thread.salienceScore))}
+            {@render DetailField('latestEpisodeId', selectedThread.thread.latestEpisodeId)}
+            {@render DetailField('latestEpisodeTitle', selectedThread.thread.latestEpisodeTitle)}
+          </div>
+        </CollapsibleSection>
       {/if}
     </section>
   </div>
 </div>
+
+{#snippet DetailField(label: string, value: string)}
+  <div class="rounded-lg border border-bark-200 bg-bark-50 p-3">
+    <p class="text-xs uppercase tracking-[0.16em] text-shadow-500">{label}</p>
+    <p class="mt-1 break-all text-sm text-shadow-900">{value}</p>
+  </div>
+{/snippet}
 
 {#snippet ReferenceList(title: string, subtitle: string, refs: EpisodeSpanRef[] | EpisodeArtifactRef[])}
   <div class="rounded-xl border border-bark-200 bg-bark-50 p-4">
@@ -553,7 +568,7 @@
     {:else}
       <div class="mt-3 space-y-2">
         {#each refs as ref}
-          <div class="rounded border border-bark-200 bg-white/70 p-2 text-xs text-shadow-700">
+          <div class="rounded border border-bark-200 bg-bark-100 p-2 text-xs text-shadow-700">
             {#if 'spanId' in ref}
               <p><span class="font-medium text-shadow-900">spanId</span> <code>{ref.spanId}</code></p>
               {#if ref.channelId}<p>channelId <code>{ref.channelId}</code></p>{/if}
@@ -578,7 +593,7 @@
     {:else}
       <div class="mt-3 space-y-2">
         {#each refs as ref}
-          <div class="rounded border border-bark-200 bg-white/70 p-2 text-xs text-shadow-700">
+          <div class="rounded border border-bark-200 bg-bark-100 p-2 text-xs text-shadow-700">
             <p>
               <span class="font-medium text-shadow-900">{ref.kind}</span>
               <span class="text-shadow-600">({provenanceKindLabel(ref)})</span>

@@ -186,7 +186,7 @@ describe('settings contract guard', () => {
 // assertions fail closed if a future change drops the HA fields' owner-file
 // assignment, Garden exposure metadata, or seed defaults out of sync.
 describe('home assistant connection settings compliance', () => {
-  const HA_FIELD_KEYS = ['homeAssistantEnabled', 'homeAssistantBaseUrl'] as const;
+  const HA_FIELD_KEYS = ['homeAssistantEnabled'] as const;
 
   it('registers the HA connection settings as runtime-owned contract fields', () => {
     const contractData = buildSettingsContractData();
@@ -197,13 +197,6 @@ describe('home assistant connection settings compliance', () => {
       ownerFile: 'settings.json',
       type: 'boolean',
     });
-    expect(contractData.fields.homeAssistantBaseUrl).toEqual({
-      key: 'homeAssistantBaseUrl',
-      ownerSubsystem: 'runtime',
-      ownerFile: 'settings.json',
-      type: 'string',
-    });
-
     for (const key of HA_FIELD_KEYS) {
       expect(contractData.fields[key].deprecated).toBeUndefined();
     }
@@ -235,7 +228,6 @@ describe('home assistant connection settings compliance', () => {
     const contractData = buildSettingsContractData();
 
     expect(seed.homeAssistantEnabled).toBe(false);
-    expect(seed.homeAssistantBaseUrl).toBe('');
 
     for (const key of HA_FIELD_KEYS) {
       expect(key in seed).toBe(true);

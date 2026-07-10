@@ -201,9 +201,10 @@ export interface LLMRequestMetadata {
  * (which is a scoping label). Self-directed and system-injected turns carry a
  * high `viewerTrustLevel` ('primary') so memory/prompt scoping resolves to the
  * companion's own subject, but they have NO live human in the loop. Human-in-the-loop
- * effector gates (e.g. `world.control` Gate 2) MUST read this signal — never trust
- * level alone — so an unattended heartbeat can never satisfy "only a human owner/
- * partner may drive effectors". Fail closed: absence is treated as non-human.
+ * effector gates MUST read this signal rather than trust level alone. For
+ * `world.control`, unattended turns require an explicit autonomous intent and
+ * audit reason and remain limited to safe registered lighting. Fail closed:
+ * absence is treated as unknown provenance.
  *   - 'human'        live human speaker (speakerRole === 'user')
  *   - 'self_directed' scheduler-driven heartbeat/reflection (internal: channel)
  *   - 'system'       system-injected turn (system: author, e.g. deferred handoff)

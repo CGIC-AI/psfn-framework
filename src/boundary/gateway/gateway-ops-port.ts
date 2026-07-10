@@ -29,9 +29,9 @@ import type {
 } from './protocol.js';
 
 /**
- * Privileged Home Assistant operations (Sprint 10, bead .8) exposed to the
- * agent process as a thin RPC forward. The gateway holds the HA token and owns
- * the SSRF lane; the agent only ever supplies validated entity_ids/services.
+ * Privileged world operations exposed to the agent as a thin RPC forward. The
+ * gateway holds the Satellite Hub control credential and revalidates every
+ * registry affordance; Home Assistant credentials never enter this process.
  */
 export interface HomeAssistantOperations {
   getStates(params?: HomeAssistantGetStatesParams): Promise<HomeAssistantGetStatesResult>;

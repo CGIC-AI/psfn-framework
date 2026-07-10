@@ -41,6 +41,7 @@ import { registerBeadsTools } from '../../boundary/integrations/beads/runtime-wi
 import { GatewayBeadsOps } from '../../boundary/integrations/beads/gateway-ops.js';
 import { registerWorldTools } from '../../boundary/integrations/world/runtime-wiring.js';
 import { GatewayWorldOps } from '../../boundary/integrations/world/gateway-ops.js';
+import { registerPresenceLightAutomation } from '../../boundary/integrations/world/presence-light-automation.js';
 import { createBehavioralPatternMemoryPromotionHook } from '../../core/intention/patterns.js';
 import {
   wireShardAndThinkRuntime,
@@ -613,7 +614,7 @@ async function main(): Promise<void> {
   log.info('Beads issue-management tools enabled');
 
   // World tool — perceive/list/control physical & virtual affordances via the
-  // places registry and the privileged Home Assistant gateway method (bead .8),
+  // places registry and the privileged Satellite Hub world transport,
   // plus deliberate virtual navigation (`move`, vinz.26 / contract s10wm).
   // Affordance→entity resolution is agent-side against places.json (defence in depth).
   // `move` writes presence through the CompanionPresenceTurnPort seam only
@@ -624,7 +625,8 @@ async function main(): Promise<void> {
   // (resolveWorldRequirement). Effector control is staged OFF by default
   // (WORLD_CONTROL_RUNTIME_ENABLED) and, once enabled, additionally requires a
   // primary/trusted requester — resolved from the live turn request context.
-  registerWorldTools(agentLoop, new GatewayWorldOps(gatewayOps), {
+  const worldOps = new GatewayWorldOps(gatewayOps);
+  registerWorldTools(agentLoop, worldOps, {
     placesRegistry: placesRegistryConfig,
     resolveSituatedPlaceId: () => agentLoop.resolveCurrentSituatedPlaceId(),
     companionPresence: companionPresenceRuntime,
@@ -637,7 +639,15 @@ async function main(): Promise<void> {
     // effector control must read provenance, not trust level alone.
     resolveRequesterProvenance: () => getRequestContext()?.requesterProvenance,
   });
-  log.info('World tool enabled (perceive/list/move live; control staged off, human+trust-gated)');
+  registerPresenceLightAutomation({
+    eventBus,
+    placesRegistry: placesRegistryConfig,
+    operations: worldOps,
+    enabled: config.capabilityTier === 'autonomous',
+  });
+  log.info('World tool enabled', {
+    autonomousLightControl: config.capabilityTier === 'autonomous',
+  });
 
   // Journal tools — durable markdown notes in the personal workspace.
   registerMarkdownJournalTools(agentLoop, pathSnapshot.workspaceRoot);

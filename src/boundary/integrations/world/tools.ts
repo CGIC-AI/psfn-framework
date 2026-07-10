@@ -48,34 +48,25 @@ import type { WorldOperations } from './ops.js';
 // `action=control`; perceive/list — and `move`, which gates read-tier like
 // them, NOT like control — are unaffected:
 //   1. Capability token `world.control` — enforced OUTSIDE this tool by the
-//      capability gate (see resolveWorldRequirement). Withheld from every
-//      default tier, so a regular/public tier cannot even surface control.
-//   2. Staged-off runtime flag `WORLD_CONTROL_RUNTIME_ENABLED` (robotics
-//      pattern) — control ships defined, wired, and OFF until the actuation
-//      path is proven end-to-end against real hardware. While off, control
-//      refuses fail-closed; read stays live.
-//   3. Requester provenance + trust — only a LIVE HUMAN owner/partner may drive
-//      effectors. Gate 2 requires BOTH (a) requesterProvenance === 'human' and
-//      (b) a primary/trusted trust level. Self-directed/system turns (heartbeat,
-//      reflection, system-injected) carry trustLevel 'primary' for memory/prompt
-//      scoping but have no human in the loop, so they are refused here EVEN at
-//      'primary' — trust level alone must never satisfy a human-in-the-loop gate.
-//      Regular/public human requesters are also refused (trust).
+//      capability gate (see resolveWorldRequirement). Only autonomous and an
+//      explicitly configured custom tier can surface control.
+//   2. Runtime master gate `WORLD_CONTROL_RUNTIME_ENABLED`; an embedding may
+//      override it to false as an emergency stop without disabling perception.
+//   3. Requester provenance + trust. All callers need primary/trusted scope.
+//      Self-directed/system turns additionally need a recognized intent and
+//      audit reason and are restricted to registered light affordances.
 
 const WORLD_ACTION_HELP = 'perceive, list, control, move';
 
 /**
- * Staged-off runtime gate for effector actuation (mirrors how `robotics` is
- * excluded from `SATELLITE_RUNTIME_ENABLED_CAPABILITIES`). Ships `false`:
- * `action=control` refuses fail-closed until the control path is proven
- * end-to-end. Enable path: flip this to `true` AND grant the `world.control`
- * capability token to the operating tier (both are required — defence in
- * depth). Read (perceive/list/move) is unaffected.
+ * Runtime master gate for effector actuation. Capability and gateway policy
+ * remain independent fail-closed controls; read paths are unaffected.
  */
-export const WORLD_CONTROL_RUNTIME_ENABLED = false;
+export const WORLD_CONTROL_RUNTIME_ENABLED = true;
 
 type WorldAction = 'perceive' | 'list' | 'control' | 'move';
 type WorldCommand = 'on' | 'off' | 'toggle';
+type WorldControlIntent = 'direct' | 'presence_enter' | 'presence_exit' | 'attention' | 'sleep' | 'wake';
 
 const COMMAND_TO_SERVICE: Readonly<Record<WorldCommand, string>> = Object.freeze({
   on: 'turn_on',
@@ -88,6 +79,8 @@ export interface WorldToolParams {
   placeId?: string;
   affordanceId?: string;
   command?: WorldCommand;
+  intent?: WorldControlIntent;
+  reason?: string;
   scope?: 'place' | 'site';
   data?: Record<string, unknown>;
 }
@@ -287,7 +280,7 @@ async function runControl(
   deps: WorldToolDeps,
   params: WorldToolParams,
 ): Promise<string> {
-  // Gate 1 — staged-off runtime flag (robotics pattern). Fail closed while off.
+  // Gate 1 — runtime master switch. Fail closed while off.
   const controlEnabled = deps.controlEnabled ?? WORLD_CONTROL_RUNTIME_ENABLED;
   if (!controlEnabled) {
     throw new Error(
@@ -297,18 +290,15 @@ async function runControl(
     );
   }
 
-  // Gate 2a — requester provenance (human-in-the-loop). Only a LIVE HUMAN may
-  // drive effectors. Self-directed/system turns (heartbeat/reflection/system-
-  // injected) carry trustLevel 'primary' for memory/prompt scoping but have no
-  // human in the loop, so they are refused HERE — trust level alone must never
-  // satisfy a human-in-the-loop gate. Fail closed: absent provenance ⇒ non-human.
   const requesterProvenance = deps.resolveRequesterProvenance?.();
-  if (requesterProvenance !== 'human') {
-    const observed = requesterProvenance ?? 'unknown';
+  if (!requesterProvenance) {
+    throw new Error('world control requires known requester provenance.');
+  }
+  const intent = params.intent ?? (requesterProvenance === 'human' ? 'direct' : undefined);
+  const reason = typeof params.reason === 'string' ? params.reason.trim() : '';
+  if (requesterProvenance !== 'human' && (!intent || !reason)) {
     throw new Error(
-      `world control requires a live human requester; the current turn is "${observed}"-originated `
-      + '(self-directed/system turns are refused even at primary trust). '
-      + 'Effector actuation is a human-in-the-loop action.',
+      `autonomous world control from "${requesterProvenance}" requires explicit intent and reason.`,
     );
   }
 
@@ -357,9 +347,17 @@ async function runControl(
   const service = COMMAND_TO_SERVICE[command];
   const domain = entityId.split('.')[0];
 
+  if (requesterProvenance !== 'human' && affordance.kind !== 'light') {
+    throw new Error('autonomous world control is limited to registered light affordances.');
+  }
+
   const response = await ops.callService({
     domain,
     service,
+    placeId: place.placeId,
+    affordanceId,
+    reason: reason || 'Direct request from a trusted human',
+    ...(intent ? { intent } : {}),
     entityId,
     ...(params.data ? { data: params.data } : {}),
   });
@@ -525,6 +523,21 @@ export function createWorldTool(ops: WorldOperations, deps: WorldToolDeps): Subs
         Type.Literal('toggle'),
       ], {
         description: 'Used with action=control. Effector command.',
+      })),
+      intent: Type.Optional(Type.Union([
+        Type.Literal('direct'),
+        Type.Literal('presence_enter'),
+        Type.Literal('presence_exit'),
+        Type.Literal('attention'),
+        Type.Literal('sleep'),
+        Type.Literal('wake'),
+      ], {
+        description: 'Why control is being initiated. Required for unattended companion actions.',
+      })),
+      reason: Type.Optional(Type.String({
+        description: 'Human-readable audit reason. Required for unattended companion actions.',
+        minLength: 1,
+        maxLength: 240,
       })),
       scope: Type.Optional(Type.Union([
         Type.Literal('place'),

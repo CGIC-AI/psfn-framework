@@ -71,6 +71,7 @@ ports:
   garden: 10054
   agentAdmin: 10055
   satelliteHub: 8787
+  satelliteHubControl: 8788
   companionUiTest: 8080
   postgres: 5432
   redis: 6379
@@ -216,6 +217,8 @@ secrets:
     # matching satellites.json endpoint must list in auth.apiKeyPrincipalIds.
     # Required when satelliteHub.enabled=true (>=16 chars).
     satelliteHubApiKey: ""
+    homeAssistantToken: ""
+    satelliteHubControlToken: ""
     # Optional comma-separated additional per-satellite bearer keys appended to
     # the gateway's API_SATELLITE_KEYS list (for LAN satellites that are not
     # the hub). Each key must be >=16 chars and distinct.
@@ -238,6 +241,8 @@ secrets:
     gatewaySessionHmacKey: GATEWAY_SESSION_HMAC_KEY
     gatewaySessionIntegrityAuthToken: GATEWAY_SESSION_INTEGRITY_AUTH_TOKEN
     satelliteHubApiKey: SATELLITE_HUB_API_KEY
+    homeAssistantToken: HOME_ASSISTANT_TOKEN
+    satelliteHubControlToken: SATELLITE_HUB_CONTROL_TOKEN
     satelliteApiKeys: API_SATELLITE_KEYS
     openRouterApiKey: OPENROUTER_API_KEY
     openAiApiKey: OPENAI_API_KEY
@@ -520,6 +525,12 @@ satelliteHub:
   # and tool_activity telemetry scopes.
   companionBridge:
     enabled: true
+  homeAssistant:
+    enabled: false
+    baseUrl: ""
+    # Server-owned device identities. credentialSha256 is a digest, never the
+    # plaintext HUB_DEVICE_TOKEN used by the satellite.
+    devices: []
   # A cert-manager client Certificate (chain: chart CA / existing psfn-ca
   # Issuer) is issued for the hub whenever it is enabled and mounted at
   # <certificates.mountBasePath>/psfn-client. Runtime auth currently uses the

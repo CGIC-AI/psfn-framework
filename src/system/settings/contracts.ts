@@ -191,7 +191,6 @@ export interface EditableSettings {
   webFetchDomainAllowlist?: string[];
   webFetchAllowInternalNetwork?: boolean;
   homeAssistantEnabled?: boolean;
-  homeAssistantBaseUrl?: string;
   /** @deprecated Use webFetchAllowInternalNetwork + webFetchDomainAllowlist instead */
   webFetchLocalCrawlerEnabled?: boolean;
   /** @deprecated Use webFetchAllowHttp instead */
@@ -324,7 +323,6 @@ export const RUNTIME_SETTINGS_KEYS = [
   'webFetchDomainAllowlist',
   'webFetchAllowInternalNetwork',
   'homeAssistantEnabled',
-  'homeAssistantBaseUrl',
   'webFetchLocalCrawlerEnabled',
   'webFetchLocalCrawlerAllowHttp',
   'webFetchLocalCrawlerHostAllowlist',

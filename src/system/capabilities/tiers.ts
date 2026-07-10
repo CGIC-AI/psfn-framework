@@ -57,9 +57,10 @@ const AUTONOMOUS_TOKENS: readonly CapabilityToken[] = [
   'lifecycle.rebuild',
   'repl.execute',
   'shard.spawn',
-  // world.read: live world perception. world.control stays withheld even at the
-  // autonomous tier — actuation is staged-off and enabled by explicit change.
   'world.read',
+  // Reversible, registry-bound world actuation. The world tool and gateway
+  // independently restrict unattended control to safe lighting operations.
+  'world.control',
 ];
 
 export const CAPABILITY_TIER_DEFAULTS: Readonly<Record<Exclude<CapabilityTier, 'custom'>, readonly CapabilityToken[]>> = {

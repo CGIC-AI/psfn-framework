@@ -160,6 +160,10 @@ export interface HomeAssistantGetStatesParams extends GatewayCorrelationParams {
 export interface HomeAssistantCallServiceParams extends GatewayCorrelationParams {
   domain: string;
   service: string;
+  placeId: string;
+  affordanceId: string;
+  reason: string;
+  intent?: 'direct' | 'presence_enter' | 'presence_exit' | 'attention' | 'sleep' | 'wake';
   entityId?: string;
   entityIds?: string[];
   data?: Record<string, unknown>;

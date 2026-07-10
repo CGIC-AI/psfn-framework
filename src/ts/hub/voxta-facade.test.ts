@@ -820,6 +820,7 @@ function testHubConfig(overrides: {
       satelliteClaim,
     },
     hermes: null,
+    companion: null,
     voxta: {
       enabled: true,
       satelliteId: "voxta-vam",

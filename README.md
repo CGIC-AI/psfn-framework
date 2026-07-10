@@ -264,6 +264,10 @@ Important settings for the Python ESPHome fallback path:
 - `PSFN_CHANNEL_TYPE` for the compatibility channel header, defaulting to the claim namespace instead of an authoritative endpoint type
 - `PSFN_CLIENT_CERT_PATH`, `PSFN_CLIENT_KEY_PATH`, and optional `PSFN_CA_CERT_PATH` for PSFN client certificate identity
 - `PSFN_TELEMETRY_MODE` and `PSFN_TELEMETRY_CATEGORIES` for configured telemetry advertisement
+- `PSFN_COMPANION_BASE_URL` enables the companion backplane bridge (approvals, artifact events, tool activity relay) on the TS realtime path; unset disables the bridge and the hub relays nothing
+- `PSFN_COMPANION_API_KEY` for companion backplane bearer auth, defaulting to `PSFN_API_KEY`
+- `PSFN_COMPANION_PREVIEW_MAX_BYTES` caps artifact preview payloads relayed to satellites, defaulting to 1048576
+- `PSFN_COMPANION_RECONNECT_BASE_MS` and `PSFN_COMPANION_RECONNECT_MAX_MS` tune the companion SSE reconnect backoff
 - `HERMES_API_BASE_URL` or `HERMES_API_SERVER_URL` for `AGENT_RUNTIME=hermes`, defaulting to `http://127.0.0.1:8642/v1`
 - `HERMES_API_KEY` or `API_SERVER_KEY` for Hermes API-server auth and stable `X-Hermes-Session-Id` continuation
 - `HERMES_MODEL` for the advertised Hermes API-server model, defaulting to `hermes-agent`

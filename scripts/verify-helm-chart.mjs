@@ -147,6 +147,7 @@ assertIncludes(agentPolicy, 'component: postgres', 'agent policy postgres flow')
 assertIncludes(agentPolicy, 'component: redis', 'agent policy redis flow');
 assertNotIncludes(agentPolicy, 'component: litellm', 'agent policy LiteLLM direct egress');
 assertNotIncludes(rendered, 'psfn-satellite-hub', 'default disabled satellite hub');
+assertNotIncludes(rendered, 'psfn-companion-ui-test', 'default disabled companion-ui test surface');
 
 const gatewayDeployment = findDocumentByKindName(rendered, 'Deployment', 'psfn-gateway');
 assertIncludes(gatewayDeployment, 'name: wait-for-postgres', 'gateway Postgres startup wait init container');
@@ -402,6 +403,59 @@ const hubDigestOnlyRendered = render([
 ]);
 const hubDigestOnlyDeployment = findDocumentByKindName(hubDigestOnlyRendered, 'Deployment', 'psfn-satellite-hub');
 assertIncludes(hubDigestOnlyDeployment, `image: "localhost/psfn-satellite-hub@${hubDigest}"`, 'satellite hub digest-only image');
+
+const companionUiDigest = 'sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
+const companionUiRendered = render([
+  '--set',
+  'companionUiTest.enabled=true',
+  '--set',
+  'companionUiTest.image.repository=localhost/psfn-companion-ui',
+  '--set',
+  'companionUiTest.image.tag=0.1.0-kube-abcdef012345',
+  '--set-string',
+  `companionUiTest.image.digest=${companionUiDigest}`,
+  '--set',
+  'ingress.companionUiTest.enabled=true',
+  '--set',
+  'ingress.companionUiTest.path=/companion',
+]);
+
+const companionUiDeployment = findDocumentByKindName(companionUiRendered, 'Deployment', 'psfn-companion-ui-test');
+assertIncludes(companionUiDeployment, `image: "localhost/psfn-companion-ui:0.1.0-kube-abcdef012345@${companionUiDigest}"`, 'companion-ui test pinned image');
+assertIncludes(companionUiDeployment, 'runAsUser: 999', 'companion-ui test numeric user');
+assertIncludes(companionUiDeployment, 'runAsGroup: 999', 'companion-ui test numeric group');
+assertIncludes(companionUiDeployment, 'name: http-ui', 'companion-ui test port name');
+assertIncludes(companionUiDeployment, 'containerPort: 8080', 'companion-ui test container port');
+assertIncludes(companionUiDeployment, 'path: /', 'companion-ui test health probe path');
+assertNotIncludes(companionUiDeployment, 'POSTGRES_DATABASE_URL', 'companion-ui test has no runtime secret wiring');
+assertNotIncludes(companionUiDeployment, 'secretKeyRef', 'companion-ui test has no secret references');
+
+const companionUiService = findDocumentByKindName(companionUiRendered, 'Service', 'psfn-companion-ui-test');
+assertIncludes(companionUiService, 'name: http-ui', 'companion-ui test Service port name');
+assertIncludes(companionUiService, 'port: 8080', 'companion-ui test Service port value');
+assertIncludes(companionUiService, 'targetPort: http-ui', 'companion-ui test Service target port');
+
+const companionUiIngress = findDocumentByKindName(companionUiRendered, 'Ingress', 'psfn-companion-ui-test');
+assertIncludes(companionUiIngress, 'path: "/companion"', 'companion-ui test configured Ingress path');
+assertIncludes(companionUiIngress, 'name: http-ui', 'companion-ui test Ingress service port');
+
+const companionUiPolicy = findDocumentByKindName(companionUiRendered, 'NetworkPolicy', 'psfn-companion-ui-test');
+assertIncludes(companionUiPolicy, 'app.kubernetes.io/name: traefik', 'companion-ui test ingress controller policy');
+assertIncludes(companionUiPolicy, 'port: 8080', 'companion-ui test policy ingress port');
+assertIncludes(companionUiPolicy, 'egress: []', 'companion-ui test policy denies all egress');
+assertNotIncludes(companionUiPolicy, '0.0.0.0/0', 'companion-ui test policy has no broad egress');
+assertNotIncludes(companionUiPolicy, 'component: gateway', 'companion-ui test policy has no gateway egress');
+
+const companionUiDigestOnlyRendered = render([
+  '--set',
+  'companionUiTest.enabled=true',
+  '--set',
+  'companionUiTest.image.repository=localhost/psfn-companion-ui',
+  '--set-string',
+  `companionUiTest.image.digest=${companionUiDigest}`,
+]);
+const companionUiDigestOnlyDeployment = findDocumentByKindName(companionUiDigestOnlyRendered, 'Deployment', 'psfn-companion-ui-test');
+assertIncludes(companionUiDigestOnlyDeployment, `image: "localhost/psfn-companion-ui@${companionUiDigest}"`, 'companion-ui test digest-only image');
 
 const prefetchRendered = render([
   '--set',
@@ -665,6 +719,42 @@ assertRenderFails(
     'secrets.values.gatewaySessionHmacKey=verify-hmac-key',
   ],
   'secrets.values.deepgramApiKey is required for satelliteHub.enabled=true',
+);
+
+assertRenderFails(
+  ['--set', 'companionUiTest.enabled=true'],
+  'companionUiTest.image.repository is required when companionUiTest.enabled=true',
+);
+assertRenderFails(
+  [
+    '--set',
+    'companionUiTest.enabled=true',
+    '--set',
+    'companionUiTest.image.repository=localhost/psfn-companion-ui',
+  ],
+  'companionUiTest.image.tag or companionUiTest.image.digest is required when companionUiTest.enabled=true',
+);
+assertRenderFails(
+  [
+    '--set',
+    'companionUiTest.enabled=true',
+    '--set',
+    'companionUiTest.image.repository=localhost/psfn-companion-ui',
+    '--set',
+    'companionUiTest.image.tag=latest',
+  ],
+  'companionUiTest.image.tag must be pinned',
+);
+assertRenderFails(
+  [
+    '--set',
+    'companionUiTest.enabled=true',
+    '--set',
+    'companionUiTest.image.repository=localhost/psfn-companion-ui',
+    '--set-string',
+    'companionUiTest.image.digest=deadbeef',
+  ],
+  'companionUiTest.image.digest must start with sha256:',
 );
 
 console.log('Helm chart verification passed.');

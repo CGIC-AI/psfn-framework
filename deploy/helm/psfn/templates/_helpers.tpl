@@ -130,6 +130,29 @@ app.kubernetes.io/component: {{ .component }}
 {{- end -}}
 {{- end -}}
 
+{{- define "psfn.companionUiTestImage" -}}
+{{- $image := .Values.companionUiTest.image -}}
+{{- $repository := required "companionUiTest.image.repository is required when companionUiTest.enabled=true" $image.repository -}}
+{{- $tag := default "" $image.tag -}}
+{{- $digest := default "" $image.digest -}}
+{{- if and (not $tag) (not $digest) -}}
+{{- fail "companionUiTest.image.tag or companionUiTest.image.digest is required when companionUiTest.enabled=true" -}}
+{{- end -}}
+{{- if and $tag (or (eq $tag "latest") (eq $tag "main") (eq $tag "main-latest")) -}}
+{{- fail "companionUiTest.image.tag must be pinned and must not be latest/main/main-latest" -}}
+{{- end -}}
+{{- if and $digest (not (hasPrefix "sha256:" $digest)) -}}
+{{- fail "companionUiTest.image.digest must start with sha256:" -}}
+{{- end -}}
+{{- if and $tag $digest -}}
+{{- printf "%s:%s@%s" $repository $tag $digest -}}
+{{- else if $digest -}}
+{{- printf "%s@%s" $repository $digest -}}
+{{- else -}}
+{{- printf "%s:%s" $repository $tag -}}
+{{- end -}}
+{{- end -}}
+
 {{- define "psfn.appSecretName" -}}
 {{- default (printf "%s-app" (include "psfn.fullname" .)) .Values.secrets.existingSecret -}}
 {{- end -}}
@@ -192,6 +215,10 @@ app.kubernetes.io/component: {{ .component }}
 
 {{- define "psfn.satelliteHubServiceName" -}}
 {{- printf "%s-satellite-hub" (include "psfn.fullname" .) -}}
+{{- end -}}
+
+{{- define "psfn.companionUiTestServiceName" -}}
+{{- printf "%s-companion-ui-test" (include "psfn.fullname" .) -}}
 {{- end -}}
 
 {{- define "psfn.liteLlmBaseUrl" -}}

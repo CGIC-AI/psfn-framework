@@ -532,3 +532,67 @@ spec:
           persistentVolumeClaim:
             claimName: {{ include "psfn.fullname" . }}-runtime
 {{- end }}
+{{- if .Values.companionUiTest.enabled }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "psfn.companionUiTestServiceName" . }}
+  labels:
+    {{- include "psfn.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - name: http-ui
+      port: {{ .Values.ports.companionUiTest }}
+      targetPort: http-ui
+  selector:
+    {{- include "psfn.componentLabels" (dict "root" . "component" "companion-ui-test") | nindent 4 }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "psfn.fullname" . }}-companion-ui-test
+  labels:
+    {{- include "psfn.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "psfn.componentLabels" (dict "root" . "component" "companion-ui-test") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "psfn.componentLabels" (dict "root" . "component" "companion-ui-test") | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "psfn.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: companion-ui-test
+          image: {{ include "psfn.companionUiTestImage" . | quote }}
+          imagePullPolicy: {{ .Values.companionUiTest.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          ports:
+            - name: http-ui
+              containerPort: {{ .Values.ports.companionUiTest }}
+          readinessProbe:
+            httpGet:
+              path: /
+              port: http-ui
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /
+              port: http-ui
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          resources:
+            {{- toYaml .Values.companionUiTest.resources | nindent 12 }}
+{{- end }}

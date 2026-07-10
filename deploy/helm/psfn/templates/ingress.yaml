@@ -82,4 +82,32 @@ spec:
                 port:
                   name: hub-ws
 {{- end }}
+{{- if and .Values.companionUiTest.enabled .Values.ingress.companionUiTest.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "psfn.fullname" . }}-companion-ui-test
+  labels:
+    {{- include "psfn.labels" . | nindent 4 }}
+  {{- with .Values.ingress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- with .Values.ingress.className }}
+  ingressClassName: {{ . | quote }}
+  {{- end }}
+  rules:
+    - host: {{ .Values.ingress.companionUiTest.host | quote }}
+      http:
+        paths:
+          - path: {{ .Values.ingress.companionUiTest.path | quote }}
+            pathType: {{ .Values.ingress.companionUiTest.pathType }}
+            backend:
+              service:
+                name: {{ include "psfn.companionUiTestServiceName" . }}
+                port:
+                  name: http-ui
+{{- end }}
 {{- end }}

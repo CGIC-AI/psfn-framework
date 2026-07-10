@@ -9,6 +9,8 @@ This chart renders the first PSFN Kubernetes/k3s topology for one companion:
 - bundled Redis StatefulSet for app cache, or external Redis Secret reference
 - bundled LiteLLM Deployment/Service for provider routing, or external LiteLLM URL
 - optional emo_sim observer-eval engine Deployment/Service/PVC (`emosim.enabled`)
+- optional companion-ui test web Deployment/Service/Ingress serving the PWA
+  static build (`companionUiTest.enabled`)
 - PVC-backed system-data, companion-data, workspace, runtime, and model-cache roots
 - cert-manager Issuer/Certificate resources for internal SPIFFE mTLS
 - default-deny NetworkPolicies for gateway/agent/garden/Postgres/Redis/LiteLLM flows
@@ -311,6 +313,7 @@ The chart renders default deny plus workload policies for:
 - agent -> Redis
 - gateway -> LiteLLM, when internal LiteLLM is enabled
 - optional satellite hub -> gateway API
+- optional companion-ui test surface: ingress -> port 8080, egress denied
 
 The agent policy does not contain broad `0.0.0.0/0` egress and the chart does
 not set `ALLOW_AGENT_OUTBOUND_NETWORK=true`. The agent policy also has no
@@ -424,6 +427,81 @@ The hub NetworkPolicy allows ingress only from the configured ingress
 controller selector, egress to kube-dns, egress to the Gateway API Service, and
 optional external HTTPS egress for Deepgram/ElevenLabs provider calls. The agent
 NetworkPolicy remains separate and still has no broad outbound egress.
+
+## Companion UI Test Surface
+
+`companionUiTest.enabled` defaults to `false`. It renders an optional in-cluster
+static web container that serves the `companion-ui` PWA so the operator can open
+it in a browser and chat through the Satellite Hub. The container serves the
+pre-built Vite `dist/` tree only — no server logic, no admin API, no outbound
+calls. The browser talks to the hub directly. This is a stopgap test surface to
+be replaced by a packaged app.
+
+Build the image (ARM64 for the Pi) from this repo's `companion-ui/` source with
+the repo-owned Dockerfile and build script:
+
+```bash
+COMPANION_UI_PLATFORM=linux/arm64 \
+docker/companion-ui/build-image.sh
+```
+
+The script tags the image `0.1.0-kube-<repo-sha12>`, refuses a dirty tree
+(override with `COMPANION_UI_ALLOW_DIRTY=true` only for throwaway probes) and
+floating tags, and passes the source commit as `SOURCE_REVISION`. The hub
+websocket URL is baked as a build-time default
+(`COMPANION_UI_HUB_WS_URL`, default `ws://psfn-hub.local:8787/`) but stays
+editable at runtime in the in-app Settings drawer, so the baked value is a
+convenience, not a constraint. The runtime stage uses the pinned
+`nginxinc/nginx-unprivileged` image (manifest-list digest, resolves the ARM64
+sub-image on the Pi) and serves on port 8080 as uid 999, with the service worker
+served no-cache and the PWA manifest served as `application/manifest+json`.
+
+Import the image into k3s (containerd) and retag it under the `localhost/`
+prefix the chart expects, then enable the workload:
+
+```bash
+docker save localhost/psfn-companion-ui:0.1.0-kube-<repo-sha12> \
+  | sudo k3s ctr images import -
+# containerd stores it as docker.io/localhost/... ; retag to the bare localhost/ ref:
+sudo k3s ctr images tag \
+  docker.io/localhost/psfn-companion-ui:0.1.0-kube-<repo-sha12> \
+  localhost/psfn-companion-ui:0.1.0-kube-<repo-sha12>
+
+helm upgrade --install psfn deploy/helm/psfn \
+  --namespace psfn \
+  --set companionUiTest.enabled=true \
+  --set companionUiTest.image.repository=localhost/psfn-companion-ui \
+  --set companionUiTest.image.tag=0.1.0-kube-<repo-sha12> \
+  --set companionUiTest.image.pullPolicy=Never \
+  --set ingress.companionUiTest.enabled=true
+
+kubectl -n psfn rollout status deploy/psfn-companion-ui-test
+```
+
+Pinning is enforced: the chart rejects a missing repository, a missing
+tag/digest, floating tags (`latest`/`main`/`main-latest`), and a digest that
+does not start with `sha256:` when the workload is enabled. Prefer setting
+`companionUiTest.image.digest` for a fully pinned deploy.
+
+Reach it from a browser through the enabled Ingress host
+(`ingress.companionUiTest.host`, default `psfn-companion.local`), or port-forward
+for a quick check:
+
+```bash
+kubectl -n psfn port-forward svc/psfn-companion-ui-test 8080:8080
+# open http://127.0.0.1:8080/ in a browser
+```
+
+Then open the in-app Settings drawer (floating gear button) and point the hub
+websocket URL at the Satellite Hub — for example the in-cluster hub Ingress
+(`ws://psfn-hub.local:8787/`, per `ingress.satelliteHub.host`) or a
+port-forwarded hub. The companion-ui test pod itself needs the Satellite Hub
+enabled (`satelliteHub.enabled=true`, see above) to have something to chat with.
+
+The companion-ui test NetworkPolicy allows ingress only from the configured
+ingress controller selector on port 8080 and denies all egress: the static
+server never makes outbound calls, so the browser — not the pod — connects to
+the hub.
 
 ## Shakedown Runbook
 

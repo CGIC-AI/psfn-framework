@@ -39,6 +39,21 @@ export interface PsfnRuntimeConfig {
   satelliteClaim: PsfnSatelliteClaimConfig;
 }
 
+export interface CompanionBridgeIdentity {
+  satelliteId: string;
+  endpointId: string;
+  claimType: string;
+}
+
+export interface CompanionBridgeConfig {
+  baseUrl: string;
+  apiKey?: string;
+  identity: CompanionBridgeIdentity;
+  previewMaxBytes: number;
+  reconnectBaseMs: number;
+  reconnectMaxMs: number;
+}
+
 export interface HubConfig {
   agentRuntime: "psfn" | "hermes";
   textOnlyMode: boolean;
@@ -51,6 +66,7 @@ export interface HubConfig {
   artifactsRoot: string;
   psfn: PsfnRuntimeConfig | null;
   hermes: HermesRuntimeConfig | null;
+  companion: CompanionBridgeConfig | null;
   voxta: VoxtaFacadeConfig;
   sessionTtlSeconds: number;
 }
@@ -188,11 +204,56 @@ export function loadHermesRuntime(_projectRoot: string): HermesRuntimeConfig {
   };
 }
 
+export function loadCompanionBridgeConfig(
+  satelliteClaim: PsfnSatelliteClaimConfig | null,
+): CompanionBridgeConfig | null {
+  const baseUrl = optional("PSFN_COMPANION_BASE_URL");
+  if (!baseUrl) {
+    return null;
+  }
+  if (!satelliteClaim) {
+    throw new Error("PSFN_COMPANION_BASE_URL requires AGENT_RUNTIME=psfn");
+  }
+  const identity: CompanionBridgeIdentity = {
+    satelliteId: satelliteClaim.satelliteId?.trim() || "",
+    endpointId: satelliteClaim.endpointId?.trim() || "",
+    claimType: satelliteClaim.type?.trim() || "",
+  };
+  if (!identity.satelliteId || !identity.endpointId || !identity.claimType) {
+    throw new Error(
+      "PSFN_COMPANION_BASE_URL requires a complete satellite registry identity "
+      + "(PSFN_SATELLITE_ID, PSFN_ENDPOINT_ID, and PSFN_CLAIM_TYPE or PSFN_CAPABILITY_PROFILE)",
+    );
+  }
+  const normalizedBaseUrl = new URL(baseUrl).toString().replace(/\/+$/, "");
+  const previewMaxBytes = Number.parseInt(process.env.PSFN_COMPANION_PREVIEW_MAX_BYTES || "1048576", 10);
+  if (!Number.isInteger(previewMaxBytes) || previewMaxBytes <= 0) {
+    throw new Error("PSFN_COMPANION_PREVIEW_MAX_BYTES must be a positive integer");
+  }
+  const reconnectBaseMs = Number.parseInt(process.env.PSFN_COMPANION_RECONNECT_BASE_MS || "1000", 10);
+  if (!Number.isInteger(reconnectBaseMs) || reconnectBaseMs <= 0) {
+    throw new Error("PSFN_COMPANION_RECONNECT_BASE_MS must be a positive integer");
+  }
+  const reconnectMaxMs = Number.parseInt(process.env.PSFN_COMPANION_RECONNECT_MAX_MS || "30000", 10);
+  if (!Number.isInteger(reconnectMaxMs) || reconnectMaxMs < reconnectBaseMs) {
+    throw new Error("PSFN_COMPANION_RECONNECT_MAX_MS must be an integer >= PSFN_COMPANION_RECONNECT_BASE_MS");
+  }
+  return {
+    baseUrl: normalizedBaseUrl,
+    apiKey: optional("PSFN_COMPANION_API_KEY") ?? optional("PSFN_API_KEY"),
+    identity,
+    previewMaxBytes,
+    reconnectBaseMs,
+    reconnectMaxMs,
+  };
+}
+
 export function loadHubConfig(projectRoot: string): HubConfig {
   loadProjectEnv(projectRoot);
   const agentRuntime = loadAgentRuntime();
   const psfn = agentRuntime === "psfn" ? loadPsfnRuntime(projectRoot) : null;
   const hermes = agentRuntime === "hermes" ? loadHermesRuntime(projectRoot) : null;
+  const companion = loadCompanionBridgeConfig(psfn?.satelliteClaim ?? null);
   const textOnlyMode = process.env.HUB_TEXT_ONLY?.trim() === "true";
 
   return {
@@ -207,6 +268,7 @@ export function loadHubConfig(projectRoot: string): HubConfig {
     artifactsRoot: resolvePath(projectRoot, process.env.ARTIFACT_ROOT || ".artifacts/runtime-ts"),
     psfn,
     hermes,
+    companion,
     voxta: loadVoxtaFacadeConfig(projectRoot),
     sessionTtlSeconds: Number.parseInt(process.env.SESSION_TTL_SECONDS || "300", 10),
   };

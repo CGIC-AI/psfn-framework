@@ -150,6 +150,18 @@ export function canReceiveStreamingAudio(capabilities: SatelliteCapabilities): b
   return Boolean(capabilities.output?.includes("streamed_audio"));
 }
 
+export function canUseApprovals(capabilities: SatelliteCapabilities): boolean {
+  return Boolean(capabilities.control?.includes("approvals"));
+}
+
+export function canReceiveArtifacts(capabilities: SatelliteCapabilities): boolean {
+  return Boolean(capabilities.output?.includes("artifact"));
+}
+
+export function canReceiveToolActivity(capabilities: SatelliteCapabilities): boolean {
+  return Boolean(capabilities.output?.includes("tool_activity"));
+}
+
 export function deriveChannelId(channelType: string, sessionId: string): string {
   const normalizedType = normalizeRequired(channelType, "channelType");
   const normalizedSession = normalizeRequired(sessionId, "sessionId");

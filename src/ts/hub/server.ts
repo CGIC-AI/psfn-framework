@@ -28,12 +28,20 @@ import {
   type TranscriptResult,
 } from "./deepgram-live.js";
 import type { AgentRuntimeAdapter } from "./agent-runtime.js";
+import {
+  CompanionBridge,
+  CompanionRequestError,
+  type CompanionEvent,
+} from "./companion-bridge.js";
 import { ElevenLabsStream } from "./elevenlabs-stream.js";
 import { HermesApiModelAdapter } from "./hermes-api-model.js";
 import { PsfnModelAdapter } from "./psfn-model.js";
 import { VoxtaFacade, type VoxtaSttAdapter, type VoxtaTtsAdapter } from "./voxta-facade.js";
 import {
+  canReceiveArtifacts,
   canReceiveStreamingAudio,
+  canReceiveToolActivity,
+  canUseApprovals,
   DEFAULT_REALTIME_CAPABILITIES,
   EmbodiedSessionRegistry,
 } from "./embodied-session.js";
@@ -52,6 +60,7 @@ export class RealtimeHubServer {
   private readonly agent: AgentRuntimeAdapter;
   private readonly tts: ElevenLabsStream;
   private readonly voxta: VoxtaFacade;
+  private readonly companion: CompanionBridge | null;
 
   constructor(
     private readonly config: HubConfig,
@@ -59,11 +68,15 @@ export class RealtimeHubServer {
       agent?: AgentRuntimeAdapter;
       voxtaTts?: VoxtaTtsAdapter | null;
       voxtaStt?: VoxtaSttAdapter | null;
+      companion?: CompanionBridge | null;
     } = {},
   ) {
     this.sessions = new SessionStore(config.sessionTtlSeconds);
     this.embodiedSessions = new EmbodiedSessionRegistry(resolveChannelType(config));
     this.agent = options.agent ?? createAgentRuntime(config);
+    this.companion = options.companion !== undefined
+      ? options.companion
+      : (config.companion ? new CompanionBridge(config.companion) : null);
     this.tts = new ElevenLabsStream(
       config.elevenlabsApiKey ?? "",
       config.elevenlabsModelId,
@@ -96,6 +109,7 @@ export class RealtimeHubServer {
   }
 
   async start(): Promise<void> {
+    this.companion?.start();
     this.wsServer.on("connection", (socket) => {
       const connection = new RealtimeConnection(
         socket,
@@ -104,6 +118,7 @@ export class RealtimeHubServer {
         this.embodiedSessions,
         this.agent,
         this.tts,
+        this.companion,
       );
       connection.run().catch((error) => {
         console.error("Realtime connection failed:", error);
@@ -129,6 +144,7 @@ export class RealtimeHubServer {
   }
 
   async close(): Promise<void> {
+    await this.companion?.stop();
     await this.agent.close();
     await this.tts.close();
     await new Promise<void>((resolve, reject) => {
@@ -210,6 +226,7 @@ class RealtimeConnection {
   private replyTask: Promise<void> | null = null;
   private messageChain: Promise<void> = Promise.resolve();
   private identityTask: Promise<RuntimeIdentity | undefined> | null = null;
+  private unsubscribeCompanion: (() => void) | null = null;
 
   constructor(
     private readonly socket: WebSocket,
@@ -218,8 +235,16 @@ class RealtimeConnection {
     private readonly embodiedSessions: EmbodiedSessionRegistry,
     private readonly agent: AgentRuntimeAdapter,
     private readonly tts: ElevenLabsStream,
+    private readonly companion: CompanionBridge | null = null,
   ) {
     this.attachSatellite();
+    this.unsubscribeCompanion = this.companion?.addListener((event) => {
+      this.messageChain = this.messageChain
+        .then(() => this.relayCompanionEvent(event))
+        .catch((error) => {
+          console.error("Companion event relay failed:", error);
+        });
+    }) ?? null;
   }
 
   async run(): Promise<void> {
@@ -303,6 +328,12 @@ class RealtimeConnection {
         return;
       case "turn.start":
       case "turn.end":
+        return;
+      case "approval.decision":
+        await this.handleApprovalDecision(message);
+        return;
+      case "artifact.preview":
+        await this.handleArtifactPreviewRequest(message);
         return;
       default:
         await this.send({
@@ -462,6 +493,124 @@ class RealtimeConnection {
       });
     } catch (error) {
       await this.sendRelayError("tts", message.requestId, error);
+    }
+  }
+
+  private async relayCompanionEvent(event: CompanionEvent): Promise<void> {
+    switch (event.kind) {
+      case "approval.requested":
+        if (!canUseApprovals(this.capabilities)) {
+          return;
+        }
+        await this.send({ type: "approval.requested", data: event.payload });
+        return;
+      case "approval.resolved":
+        if (!canUseApprovals(this.capabilities)) {
+          return;
+        }
+        await this.send({ type: "approval.resolved", data: event.payload });
+        return;
+      case "artifact.created":
+        if (!canReceiveArtifacts(this.capabilities)) {
+          return;
+        }
+        await this.send({ type: "artifact.created", data: event.payload });
+        return;
+      case "tool.activity":
+        if (!canReceiveToolActivity(this.capabilities)) {
+          return;
+        }
+        await this.send({ type: "tool.activity", data: event.payload });
+        return;
+    }
+  }
+
+  private async handleApprovalDecision(
+    message: Extract<ClientToHubMessage, { type: "approval.decision" }>,
+  ): Promise<void> {
+    if (!canUseApprovals(this.capabilities)) {
+      await this.send({
+        type: "error-event",
+        data: { message: "Satellite did not advertise the approvals capability" },
+      });
+      return;
+    }
+    if (!this.companion) {
+      await this.send({
+        type: "error-event",
+        data: { message: "Companion bridge is not configured on this hub" },
+      });
+      return;
+    }
+    const approvalId = typeof message.id === "string" ? message.id.trim() : "";
+    if (!approvalId) {
+      await this.send({
+        type: "error-event",
+        data: { message: "Approval decision requires a non-empty id" },
+      });
+      return;
+    }
+    if (message.decision !== "approve" && message.decision !== "deny") {
+      await this.send({
+        type: "error-event",
+        data: { message: "Approval decision must be 'approve' or 'deny'" },
+      });
+      return;
+    }
+    try {
+      await this.companion.submitApprovalDecision({
+        approvalId,
+        decision: message.decision,
+        satelliteId: this.satelliteId,
+        deviceId: this.deviceId,
+      });
+    } catch (error) {
+      const detail = error instanceof CompanionRequestError
+        ? error.message
+        : `Approval decision failed: ${error instanceof Error ? error.message : String(error)}`;
+      await this.send({
+        type: "error-event",
+        data: { message: detail },
+      });
+    }
+  }
+
+  private async handleArtifactPreviewRequest(
+    message: Extract<ClientToHubMessage, { type: "artifact.preview" }>,
+  ): Promise<void> {
+    const requestId = typeof message.requestId === "string" ? message.requestId : "";
+    const artifactId = typeof message.artifactId === "string" ? message.artifactId.trim() : "";
+    const sendError = async (detail: string): Promise<void> => {
+      await this.send({
+        type: "artifact.preview.error",
+        requestId,
+        artifactId,
+        message: detail,
+      });
+    };
+    if (!canReceiveArtifacts(this.capabilities)) {
+      await sendError("Satellite did not advertise the artifact capability");
+      return;
+    }
+    if (!this.companion) {
+      await sendError("Companion bridge is not configured on this hub");
+      return;
+    }
+    if (!requestId.trim() || !artifactId) {
+      await sendError("Artifact preview requires non-empty requestId and artifactId");
+      return;
+    }
+    try {
+      const preview = await this.companion.fetchArtifactPreview(artifactId);
+      await this.send({
+        type: "artifact.preview.result",
+        requestId,
+        artifactId,
+        mediaType: preview.mediaType,
+        data: preview.dataBase64,
+      });
+    } catch (error) {
+      await sendError(error instanceof Error ? error.message : String(error));
     }
   }
 
@@ -745,6 +894,8 @@ class RealtimeConnection {
   }
 
   private async cleanup(): Promise<void> {
+    this.unsubscribeCompanion?.();
+    this.unsubscribeCompanion = null;
     await this.cancelReply("connection_closed");
     this.activeTurn = null;
     if (this.sttSession) {

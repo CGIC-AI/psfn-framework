@@ -375,14 +375,19 @@ text, microphone_pcm, final_transcript, vision_upload, wake_event
 Output:
 
 ```text
-text, subtitle, streamed_audio, local_file_audio, animation, action, expression, gaze, servo
+text, subtitle, streamed_audio, local_file_audio, animation, action, expression, gaze, servo, artifact, tool_activity
 ```
 
 Control:
 
 ```text
-interrupt, mute, sleep_wake, presence, session_attach
+interrupt, mute, sleep_wake, presence, session_attach, approvals
 ```
+
+`artifact`, `tool_activity`, and `approvals` opt a satellite into the companion
+relay messages described in `docs/realtime-client-protocol.md`. Satellites that
+do not advertise them receive none of those events, and `approval.decision`
+from a satellite without `approvals` is rejected.
 
 Safety:
 

@@ -8,7 +8,9 @@ export type ClientToHubMessage =
   | RelaySttRequestMessage
   | RelayTtsRequestMessage
   | TurnStartMessage
-  | TurnEndMessage;
+  | TurnEndMessage
+  | ApprovalDecisionMessage
+  | ArtifactPreviewRequestMessage;
 
 export type HubToClientMessage =
   | SessionReadyMessage
@@ -24,7 +26,13 @@ export type HubToClientMessage =
   | RelayTtsDoneMessage
   | RelayRequestErrorMessage
   | PongMessage
-  | AssistantInterruptedCompatMessage;
+  | AssistantInterruptedCompatMessage
+  | ApprovalRequestedMessage
+  | ApprovalResolvedMessage
+  | ArtifactCreatedMessage
+  | ArtifactPreviewResultMessage
+  | ArtifactPreviewErrorMessage
+  | ToolActivityMessage;
 
 export interface HelloMessage {
   type: "hello";
@@ -186,6 +194,81 @@ export interface PongMessage {
   sentAt: number;
 }
 
+export type ApprovalResolutionStatus = "approved" | "denied" | "expired" | "blocked";
+
+export type ToolActivityPhase = "started" | "progress" | "completed" | "failed";
+
+export interface ApprovalRequestedMessage {
+  type: "approval.requested";
+  data: {
+    id: string;
+    title: string;
+    requestedAt: string;
+    expiresAt?: string;
+    redactedContext: string;
+    status: "pending";
+  };
+}
+
+export interface ApprovalResolvedMessage {
+  type: "approval.resolved";
+  data: {
+    id: string;
+    status: ApprovalResolutionStatus;
+    resolvedAt: string;
+  };
+}
+
+export interface ArtifactCreatedMessage {
+  type: "artifact.created";
+  data: {
+    id: string;
+    label: string;
+    mediaType: string;
+    provenance: string;
+    createdAt: string;
+    previewable: boolean;
+  };
+}
+
+export interface ArtifactPreviewResultMessage {
+  type: "artifact.preview.result";
+  requestId: string;
+  artifactId: string;
+  mediaType: string;
+  data: string;
+}
+
+export interface ArtifactPreviewErrorMessage {
+  type: "artifact.preview.error";
+  requestId: string;
+  artifactId: string;
+  message: string;
+}
+
+export interface ToolActivityMessage {
+  type: "tool.activity";
+  data: {
+    id: string;
+    tool: string;
+    phase: ToolActivityPhase;
+    detail?: string;
+    timestamp: string;
+  };
+}
+
+export interface ApprovalDecisionMessage {
+  type: "approval.decision";
+  id: string;
+  decision: "approve" | "deny";
+}
+
+export interface ArtifactPreviewRequestMessage {
+  type: "artifact.preview";
+  requestId: string;
+  artifactId: string;
+}
+
 export type SatelliteInputCapability =
   | "text"
   | "microphone_pcm"
@@ -202,14 +285,17 @@ export type SatelliteOutputCapability =
   | "action"
   | "expression"
   | "gaze"
-  | "servo";
+  | "servo"
+  | "artifact"
+  | "tool_activity";
 
 export type SatelliteControlCapability =
   | "interrupt"
   | "mute"
   | "sleep_wake"
   | "presence"
-  | "session_attach";
+  | "session_attach"
+  | "approvals";
 
 export type SatelliteSafetyCapability =
   | "action_allowlist"

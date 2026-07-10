@@ -1,5 +1,8 @@
 <script lang="ts">
   import { onMount } from 'svelte';
+  import BoundedList from '$lib/components/garden/BoundedList.svelte';
+  import CollapsibleSection from '$lib/components/garden/CollapsibleSection.svelte';
+  import GardenTabBar, { type GardenTabItem } from '$lib/components/garden/GardenTabBar.svelte';
   import ConstitutionBuilderPanel from './ConstitutionBuilderPanel.svelte';
   import NorthStarEditorPanel from './NorthStarEditorPanel.svelte';
   import {
@@ -65,7 +68,8 @@
   let error = $state('');
   let constitutionLoading = $state(true);
   let constitutionError = $state('');
-  let showConstitutionSection = $state(true);
+  // Read-only by design: starts collapsed on its own tab.
+  let showConstitutionSection = $state(false);
   let constitutionImmutableBlocks = $state<ConstitutionImmutableBlock[]>([]);
   let constitutionCompanionLayer = $state<ConstitutionCompanionLayer | null>(null);
   let constitutionServerPreview = $state('');
@@ -104,8 +108,12 @@
   let diffData = $state<PromptDiffResult | null>(null);
   let diffLoading = $state(false);
 
-  // Section toggles
-  let showMacroCatalog = $state(true);
+  // Tabs
+  type PromptTabId = 'stack' | 'macros' | 'north-star' | 'constitution';
+  let activeTab = $state<PromptTabId>('stack');
+
+  // Macro catalog filter
+  let macroFilter = $state('');
 
   // Drag state
   let dragSourceIdx = $state<number | null>(null);
@@ -122,7 +130,16 @@
   );
 
   let editCharCount = $derived(editRawContent.length);
-  let groupedRuntimeMacroHints = $derived(groupRuntimeMacroHints(runtimeMacroHints));
+
+  let filteredMacroHints = $derived.by(() => {
+    const query = macroFilter.trim().toLowerCase();
+    if (!query) return runtimeMacroHints;
+    return runtimeMacroHints.filter(hint =>
+      hint.token.toLowerCase().includes(query)
+      || hint.description.toLowerCase().includes(query)
+      || hint.example.toLowerCase().includes(query));
+  });
+  let groupedRuntimeMacroHints = $derived(groupRuntimeMacroHints(filteredMacroHints));
 
   let orderedRuntimeBlocks = $derived(
     [...runtimeBlocks].sort(compareRuntimeBlocks)
@@ -176,6 +193,13 @@
       orderedRuntimeBlocks,
     });
   });
+
+  let promptTabs = $derived<GardenTabItem[]>([
+    { id: 'stack', label: 'Composition Stack', count: stackEntries.length },
+    { id: 'macros', label: 'Macros', count: runtimeMacroHints.length },
+    { id: 'north-star', label: 'North Star', count: northStarItems.length },
+    { id: 'constitution', label: 'Constitution' },
+  ]);
 
   async function reorderRuntimeBlocks(runtimeBlockIds: string[]) {
     await apiPost<PromptUpdateResult>('/api/admin/prompts/reorder', { runtimeBlockIds });
@@ -708,17 +732,14 @@
       {/each}
     </div>
   {:else}
-    <ConstitutionBuilderPanel
-      {showConstitutionSection}
-      {constitutionLoading}
-      {constitutionError}
-      {constitutionImmutableBlocks}
-      {constitutionCompanionLayer}
-      {constitutionPreviewText}
-      {constitutionPreviewTokenCount}
-      onToggleConstitutionSection={() => showConstitutionSection = !showConstitutionSection}
+    <GardenTabBar
+      tabs={promptTabs}
+      activeId={activeTab}
+      onSelect={(id) => activeTab = id as PromptTabId}
+      label="Prompt soil views"
     />
 
+    {#if activeTab === 'north-star'}
     <NorthStarEditorPanel
       {showNorthStarSection}
       {northStarLoading}
@@ -736,7 +757,18 @@
       {updateNorthStarItem}
       {saveNorthStar}
     />
-
+    {:else if activeTab === 'constitution'}
+    <ConstitutionBuilderPanel
+      {showConstitutionSection}
+      {constitutionLoading}
+      {constitutionError}
+      {constitutionImmutableBlocks}
+      {constitutionCompanionLayer}
+      {constitutionPreviewText}
+      {constitutionPreviewTokenCount}
+      onToggleConstitutionSection={() => showConstitutionSection = !showConstitutionSection}
+    />
+    {:else if activeTab === 'stack'}
     <!-- ─── Prompt Composition Stack ─── -->
     <div>
       <div class="flex items-center justify-between mb-3">
@@ -827,40 +859,42 @@
       {/if}
 
       <div class="space-y-1">
-        {#each stackEntries as entry}
+        {#each stackEntries as entry (entry.kind === 'fixed' ? `fixed:${entry.fixed.id}` : entry.kind === 'layer' ? `layer:${entry.layer.id}` : `runtime:${entry.block.id}`)}
           {#if entry.kind === 'fixed'}
             {@const fixed = entry.fixed}
-            <div class="card-garden overflow-hidden border-bark-300 bg-bark-50">
-              <div class="px-3 py-3 flex items-start gap-3">
-                <div class="flex items-center justify-center w-8 h-8 shrink-0 rounded-lg bg-bark-200 text-shadow-700">
-                  <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <path d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
-                  </svg>
+            <CollapsibleSection
+              title={fixed.id === 'constitution' ? 'Constitution' : 'North Star'}
+              subtitle={`Fixed position · ${fixed.status} · ~${formatTokenCount(fixed.tokenCount)} tokens`}
+              class="border-bark-300 bg-bark-50"
+            >
+              <div class="space-y-2">
+                <div class="flex items-center gap-2 flex-wrap">
+                  <span class="px-2 py-0.5 rounded text-[11px] font-bold uppercase tracking-wider bg-bark-400 text-white">
+                    {fixed.label}
+                  </span>
+                  <span class="px-1.5 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider bg-bark-200 text-shadow-700">
+                    Fixed Position
+                  </span>
+                  {#if fixed.id === 'constitution'}
+                    <span class="px-1.5 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider bg-bark-300 text-shadow-700">
+                      Read only
+                    </span>
+                  {/if}
                 </div>
-                <div class="min-w-0 flex-1 space-y-1">
-                  <div class="flex items-center gap-2 flex-wrap">
-                    <span class="px-2 py-0.5 rounded text-[11px] font-bold uppercase tracking-wider bg-bark-400 text-white">
-                      {fixed.label}
-                    </span>
-                    <span class="px-1.5 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider bg-bark-200 text-shadow-700">
-                      Fixed Position
-                    </span>
-                    <span class="text-sm text-shadow-600">{fixed.status}</span>
-                    <span class="ml-auto text-sm font-mono text-shadow-600 shrink-0">
-                      {formatTokenCount(fixed.tokenCount)}t
-                    </span>
-                  </div>
-                  <p class="text-sm text-shadow-700">{fixed.description}</p>
-                  <pre class="text-xs font-mono text-shadow-700 whitespace-pre-wrap bg-white/70 p-2 rounded border border-bark-200 max-h-28 overflow-y-auto leading-relaxed">{fixed.preview}</pre>
-                </div>
+                <p class="text-sm text-shadow-700">{fixed.description}</p>
+                <pre class="text-xs font-mono text-shadow-700 whitespace-pre-wrap bg-white/70 p-2 rounded border border-bark-200 max-h-56 overflow-y-auto leading-relaxed">{fixed.preview}</pre>
               </div>
-            </div>
+            </CollapsibleSection>
           {:else if entry.kind === 'runtime'}
             {@const block = entry.block}
             {@const canMoveUp = block.reorderable && orderedRuntimeBlocks.slice(0, entry.idx).some(candidate => candidate.reorderable)}
             {@const canMoveDown = block.reorderable && orderedRuntimeBlocks.slice(entry.idx + 1).some(candidate => candidate.reorderable)}
-            <div class="card-garden overflow-hidden border-dashed border-bark-400 bg-bark-50">
-              <div class="px-3 py-3 flex items-start gap-3">
+            <CollapsibleSection
+              title={block.label}
+              subtitle={`${runtimePlacementLabel(block)} · ${runtimeVisibilityLabel(block)} · ${runtimeBlockStatusLabel(block)} · #${block.effectiveOrder + 1}`}
+              class="border-dashed border-bark-400 bg-bark-50"
+            >
+              <div class="flex items-start gap-3">
                 <div class="flex items-center justify-center w-8 h-8 shrink-0 rounded-lg bg-bark-200 text-shadow-700">
                   <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                     <path d="M13 10V3L4 14h7v7l9-11h-7z"/>
@@ -883,7 +917,6 @@
                         Fixed
                       </span>
                     {/if}
-                    <span class="text-sm font-medium text-shadow-800">{block.label}</span>
                     <span class="ml-auto text-sm font-mono text-shadow-600 shrink-0">
                       #{block.effectiveOrder + 1}
                     </span>
@@ -919,7 +952,7 @@
               </div>
 
               {#if block.companionEditable}
-                <div class="border-t border-dashed border-bark-300 bg-white/70 px-3 py-3 space-y-3">
+                <div class="mt-3 border-t border-dashed border-bark-300 bg-white/70 rounded-b-lg px-3 py-3 space-y-3">
                   <div class="flex items-center justify-between gap-3 flex-wrap">
                     <div class="space-y-0.5">
                       <p class="text-sm font-medium text-shadow-800">Companion override</p>
@@ -971,7 +1004,7 @@
                   </div>
                 </div>
               {/if}
-            </div>
+            </CollapsibleSection>
           {:else}
             {@const layer = entry.layer}
             {@const idx = entry.idx}
@@ -1291,32 +1324,42 @@
       </div>
     </div>
 
+    {:else if activeTab === 'macros'}
     <!-- ─── Macro Catalog ─── -->
-    <hr class="divider-filigree my-6" />
-
     <div class="card-garden overflow-hidden">
-      <button
-        onclick={() => showMacroCatalog = !showMacroCatalog}
-        class="w-full flex items-center justify-between px-5 py-3.5 text-left hover:bg-bark-100 transition-colors"
-      >
-        <div class="flex items-center gap-3">
-          <span class="flex items-center justify-center w-7 h-7 rounded-full bg-gold-100 text-gold-700 text-sm font-bold border border-gold-300">{'{}'}</span>
+      <div class="flex flex-wrap items-center gap-3 px-5 py-3.5 border-b border-bark-300">
+        <span class="flex items-center justify-center w-7 h-7 rounded-full bg-gold-100 text-gold-700 text-sm font-bold border border-gold-300 shrink-0">{'{}'}</span>
+        <div class="min-w-0">
           <h2 class="text-sm font-serif font-semibold text-shadow-800">Macro Catalog</h2>
-          <span class="text-sm text-shadow-600">{runtimeMacroHints.length} runtime macros</span>
+          <span class="text-sm text-shadow-600">
+            {#if macroFilter.trim()}
+              {filteredMacroHints.length} of {runtimeMacroHints.length} runtime macros
+            {:else}
+              {runtimeMacroHints.length} runtime macros
+            {/if}
+          </span>
         </div>
-        <svg class="w-4 h-4 text-shadow-600 transition-transform {showMacroCatalog ? 'rotate-180' : ''}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <path d="M19 9l-7 7-7-7" />
-        </svg>
-      </button>
-      {#if showMacroCatalog}
-        <div class="border-t border-bark-300">
-          <div class="px-5 py-3 bg-bark-50 border-b border-bark-200">
-            <p class="text-sm text-shadow-700 leading-relaxed">
-              Prefer the atomic-signal-plus-prose pattern: reach for booleans, labels, counts, and short fragments first, then wrap them in companion-authored prose inside the layer template. The families below mirror the live runtime payload.
-            </p>
+        <input
+          type="search"
+          bind:value={macroFilter}
+          placeholder="Filter by token, description, or example..."
+          aria-label="Filter macros"
+          class="ml-auto w-full sm:w-80 px-3 py-1.5 rounded-lg border border-bark-300 bg-white text-shadow-800 text-sm focus:outline-none focus:ring-2 focus:ring-gold-300 focus:border-gold-400"
+        />
+      </div>
+      <div class="px-5 py-3 bg-bark-50 border-b border-bark-200">
+        <p class="text-sm text-shadow-700 leading-relaxed">
+          Prefer the atomic-signal-plus-prose pattern: reach for booleans, labels, counts, and short fragments first, then wrap them in companion-authored prose inside the layer template. The families below mirror the live runtime payload.
+        </p>
+      </div>
+      <BoundedList maxHeight="34rem" label="Macro catalog">
+        {#if groupedRuntimeMacroHints.length === 0}
+          <div class="px-5 py-8 text-center text-sm text-shadow-600 italic">
+            No macros match "{macroFilter.trim()}".
           </div>
+        {:else}
           <div class="grid gap-0 divide-y divide-bark-200">
-            {#each groupedRuntimeMacroHints as section}
+            {#each groupedRuntimeMacroHints as section (section.group)}
               <div>
                 <div class="px-5 py-3.5 bg-bark-50 border-b border-bark-200">
                   <div class="flex items-center justify-between gap-4">
@@ -1326,7 +1369,7 @@
                   <p class="mt-1 text-sm text-shadow-600 leading-relaxed">{section.rationale}</p>
                 </div>
                 <div class="grid gap-0 divide-y divide-bark-200">
-                  {#each section.hints as macro}
+                  {#each section.hints as macro (macro.token)}
                     <!-- svelte-ignore a11y_no_static_element_interactions -->
                     <div
                       class="flex items-center gap-4 px-5 py-3 hover:bg-bark-100 transition-colors cursor-pointer group"
@@ -1351,8 +1394,9 @@
               </div>
             {/each}
           </div>
-        </div>
-      {/if}
+        {/if}
+      </BoundedList>
     </div>
+    {/if}
   {/if}
 </div>

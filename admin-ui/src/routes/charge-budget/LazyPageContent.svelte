@@ -429,6 +429,29 @@
     </div>
 
     {#if activeTab === 'charges'}
+    <section class="flex flex-wrap items-center gap-2" aria-label="Quick charge stats">
+      <span class="inline-flex items-center gap-2 rounded-full border border-bark-300 bg-bark-50 px-3 py-1.5 text-xs font-medium text-shadow-700">
+        <span class="h-2 w-2 rounded-full {activeRun ? 'bg-moss-500' : 'bg-bark-300'}" aria-hidden="true"></span>
+        {#if activeRun}
+          Active run <span class="font-semibold text-shadow-900">{formatCharge(activeRun.amount)}</span>
+          <span class="text-shadow-500">· {formatInteger(activeRun.eventCount)} events</span>
+        {:else}
+          No active run
+        {/if}
+      </span>
+      <span class="inline-flex items-center gap-1.5 rounded-full border border-bark-300 bg-bark-50 px-3 py-1.5 text-xs font-medium text-shadow-700">
+        Last 24h <span class="font-semibold text-petal-500">{formatCharge(dayWindow?.aggregates.amount)}</span>
+        <span class="text-shadow-500">· {formatInteger(dayWindow?.aggregates.eventCount)} events</span>
+      </span>
+      {#each LANE_VALUES as lane}
+        <span class="inline-flex items-center gap-1.5 rounded-full border border-bark-300 bg-bark-50 px-3 py-1.5 text-xs font-medium text-shadow-700">
+          {labelize(lane)}
+          <span class="font-semibold text-shadow-900">{formatCharge(rollingWindowLaneSpend(lane))}</span>
+          <span class="text-shadow-500">/ {formatCharge(policy?.runChargeQuotaByLane[lane] ?? 0)}</span>
+        </span>
+      {/each}
+    </section>
+
     <section class="card-garden overflow-hidden" aria-labelledby="policy-heading">
       <div class="flex flex-wrap items-start justify-between gap-3 border-b border-bark-300 px-5 py-4">
         <div>

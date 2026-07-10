@@ -504,13 +504,11 @@
               </div>
             </div>
 
-            <BoundedList maxHeight="34rem" label={`${group.title} tools`}>
-              <div class="grid gap-4 lg:grid-cols-2">
-                {#each group.tools as tool}
-                  <ToolCard {tool} />
-                {/each}
-              </div>
-            </BoundedList>
+            <div class="grid gap-4 lg:grid-cols-2">
+              {#each group.tools as tool}
+                <ToolCard {tool} />
+              {/each}
+            </div>
           </section>
         {/each}
       {:else if inventoryGroups.length}

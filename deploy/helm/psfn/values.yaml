@@ -71,6 +71,7 @@ ports:
   garden: 10054
   agentAdmin: 10055
   satelliteHub: 8787
+  companionUiTest: 8080
   postgres: 5432
   redis: 6379
   liteLlm: 4000
@@ -476,6 +477,11 @@ ingress:
     host: psfn-hub.local
     path: /
     pathType: Prefix
+  companionUiTest:
+    enabled: false
+    host: psfn-companion.local
+    path: /
+    pathType: Prefix
 
 satelliteHub:
   enabled: false
@@ -521,6 +527,23 @@ satelliteHub:
   # upgrade path documented in docs/satellite-hub-kube.md.
   elevenLabsVoiceId: ""
   artifactRoot: /app/.artifacts/runtime-ts
+  resources: {}
+
+companionUiTest:
+  # Optional in-cluster static web surface that serves the companion-ui PWA so
+  # the operator can reach it from a browser and chat through the Satellite Hub.
+  # It serves pre-built static files only (no server logic) and makes no
+  # outbound calls: the browser talks to the hub directly. This is a stopgap
+  # test surface, to be replaced by a packaged app.
+  enabled: false
+  image:
+    # Build with docker/companion-ui/build-image.sh, then set repository plus a
+    # pinned tag or digest. Floating tags such as latest/main are rejected when
+    # enabled.
+    repository: ""
+    tag: ""
+    digest: ""
+    pullPolicy: IfNotPresent
   resources: {}
 
 backupTools:

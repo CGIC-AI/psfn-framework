@@ -90,6 +90,25 @@ npm run preview
 Build output goes to `dist/`. The PWA manifest and service worker are in
 `public/`.
 
+## In-Cluster Test Deployment
+
+For a browser-reachable test of this PWA against an in-cluster Satellite Hub,
+the repo ships an optional static web container and Helm workload. This is a
+stopgap test surface, to be replaced by a packaged app; it serves the built
+`dist/` tree only and holds no server logic.
+
+- Image: `docker/companion-ui/Dockerfile` (multi-stage — builds this package,
+  serves it with a pinned `nginx-unprivileged` base on port 8080 as uid 999).
+- Build script: `docker/companion-ui/build-image.sh` (ARM64 by default for the
+  Pi; commit-tied tag; refuses dirty tree and floating tags).
+- Chart workload: `companionUiTest.enabled` in `deploy/helm/psfn` (disabled by
+  default, pinned image enforced, ClusterIP Service, optional Ingress,
+  egress-denied NetworkPolicy).
+
+The full build/import/enable/reach flow, including pointing the in-app Settings
+drawer at the hub websocket URL, is documented under "Companion UI Test Surface"
+in `deploy/helm/psfn/README.md`.
+
 ## Validation
 
 Use these checks for this package:

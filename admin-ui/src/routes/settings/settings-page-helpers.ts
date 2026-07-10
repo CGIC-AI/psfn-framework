@@ -1,5 +1,4 @@
 import {
-  SETTINGS_GARDEN_SECTION_FIELDS,
   SETTINGS_GARDEN_RAW_EDITOR_FALLBACK_FILE_BY_KEY,
   SETTINGS_GARDEN_RAW_EDITOR_KEYS,
   SETTINGS_GARDEN_RAW_EDITOR_SUBSYSTEM_BY_KEY,
@@ -9,8 +8,7 @@ import type {
   AdminSettingsData,
   CanonicalProviderRegistry,
 } from '$lib/types';
-import type { SettingsSimpleSectionId } from '$lib/components/settings/navigation';
-import type { ContextBudgetConfigLike } from '../../../../src/shared/context-budget.js';
+import { SETTINGS_ADVANCED_SECTIONS } from './settings-section-definitions';
 import { resolveVoiceProviderSelection } from './voice-provider-selection';
 
 export const DISABLED_PROVIDER_ID = 'disabled';
@@ -22,39 +20,6 @@ export const COMPOSITIONAL_PURPOSE_OPTIONS = [
   'appraisal',
   'analysis_workbench',
   'shard_context',
-] as const;
-
-export const DELEGATED_WORKSPACES = [
-  {
-    label: 'Models',
-    href: '/models',
-    description: 'Purpose slots, rosters, context windows',
-  },
-  {
-    label: 'Prompts',
-    href: '/prompts',
-    description: 'Prompt layers and authoring',
-  },
-  {
-    label: 'Scheduler',
-    href: '/scheduler',
-    description: 'Heartbeat, timers, maintenance work',
-  },
-  {
-    label: 'Theme',
-    href: '/theme',
-    description: 'Garden appearance controls',
-  },
-  {
-    label: 'Tools',
-    href: '/tools',
-    description: 'Tool registry, health, failures',
-  },
-  {
-    label: 'Prompt Monitor',
-    href: '/prompt-monitor',
-    description: 'Prompt assembly and turn observability',
-  },
 ] as const;
 
 export type CompositionalListKey = 'allowedTiers' | 'allowedChannelTypes' | 'allowedPurposes';
@@ -77,31 +42,6 @@ const ENUM_LABELS_BY_FIELD: Record<string, Record<string, string>> = {
     new_session: 'Always start a new session',
   },
 };
-
-export const SYSTEM_PROMPT_ESTIMATE_TOKENS = 2_500;
-
-export const SIMPLE_SECTION_ORDER: readonly SettingsSimpleSectionId[] = [
-  'models',
-  'providers',
-  'prompting',
-  'memory-budget',
-  'memory-extraction',
-  'memory-tuning',
-  'memory-profile',
-  'memory-sessions',
-  'tools-analysis-workbench',
-  'runtime-llm',
-  'runtime-import',
-  'runtime-fetch',
-  'advanced-fields',
-  'integrations-voice',
-  'integrations-obsidian',
-  'channels',
-  'advanced-trust',
-  'advanced-secrets',
-  'advanced-backup',
-  'owner-files',
-];
 
 export type RawEditorKey = GardenSettingsRawEditorKey;
 type RawSettingsEditorKey = Exclude<RawEditorKey, 'settings' | 'models'>;
@@ -246,8 +186,6 @@ export type SchedulerEditorConfig = {
   salienceDecayIntervalMs?: number;
 };
 
-export type ModelsEditorConfig = Pick<ContextBudgetConfigLike, 'modelCatalog' | 'modelRoleAssignments' | 'modelRoster'>;
-
 export type CapabilitiesEditorConfig = {
   tier?: string;
   customTokens?: string[];
@@ -323,97 +261,48 @@ export function buildAdvancedSettingsSections(input: {
   compositionalPolicySummary: string;
 }): AdvancedSettingsSectionDef[] {
   const { state } = input;
-  return [
-    {
-      id: 'budget', title: 'Context Budget', icon: 'B',
-      keys: SETTINGS_GARDEN_SECTION_FIELDS.budget,
-      summary: () => `Session ${state.sessionHistoryBudgetPct}%, Memory ${state.memoryRetrievalBudgetPct}%`,
+  const summaryBySectionId: Record<string, () => string> = {
+    budget: () => `Session ${state.sessionHistoryBudgetPct}%, Memory ${state.memoryRetrievalBudgetPct}%`,
+    memory: () => `Extract at ${state.extractionThresholdPct}% every ${state.extractionInterval} turn${state.extractionInterval === 1 ? '' : 's'}`,
+    sessions: () => (
+      `Compaction at ${state.compactionThresholdPct}%, `
+      + `Maintenance ${Math.round(state.maintenanceIntervalMs / 1000)}s, `
+      + `Restart ${state.sessionRestartBehavior === 'new_session' ? 'new session' : 'reuse latest'}`
+    ),
+    'extraction-tuning': () => `Min importance: ${state.memoryExtractionMinImportance}, Max writes: ${state.memoryExtractionMaxWrites}`,
+    profile: () => state.profileSynthesisEnabled ? `Enabled, refresh ${Math.round(state.profileSynthesisRefreshIntervalMs / 60000)}min` : 'Disabled',
+    'analysis-workbench': () => `Max tokens: ${state.analysisWorkbenchMaxTokens.toLocaleString()}, Wall time: ${Math.round(state.analysisWorkbenchMaxWallTimeMs / 1000)}s`,
+    compositional: () => input.compositionalPolicySummary,
+    trust: () => `Tier: ${state.capabilityTier}`,
+    llm: () => `Max retries: ${state.retryMaxAttempts}, Base delay: ${state.retryBaseDelayMs}ms`,
+    import: () => `Route: ${state.importRouteMode}${state.importStrictPolicy ? ' (strict)' : ''}`,
+    fetch: () => {
+      const parts: string[] = [];
+      parts.push(state.webFetchAllowHttp ? 'HTTP allowed' : 'HTTPS only');
+      if (state.webFetchAllowInternalNetwork) parts.push('internal LAN');
+      return parts.join(', ');
     },
-    {
-      id: 'memory', title: 'Memory & Extraction', icon: 'E',
-      keys: SETTINGS_GARDEN_SECTION_FIELDS.memory,
-      summary: () => `Extract at ${state.extractionThresholdPct}% every ${state.extractionInterval} turn${state.extractionInterval === 1 ? '' : 's'}`,
+    voice: () => `TTS: ${state.ttsProvider}, STT: ${state.sttProvider}`,
+    obsidian: () => state.obsidianVaultName ? `External vault: ${state.obsidianVaultName}${state.obsidianAutoPublish ? ', auto-publish' : ''}` : 'Disabled',
+    channels: () => {
+      const wordsCount = splitCsv(state.discordTriggerWords).length;
+      const reactionsCount = splitCsv(state.discordTriggerReactions).length;
+      const windowSeconds = normalizeDiscordListenWindowSeconds(state.discordTriggerListenWindowSeconds);
+      return [
+        state.telegramEnabled ? 'Telegram on' : 'Telegram off',
+        `${wordsCount} word trigger${wordsCount === 1 ? '' : 's'}`,
+        `${reactionsCount} reaction trigger${reactionsCount === 1 ? '' : 's'}`,
+        `${windowSeconds}s listen window`,
+      ].join(', ');
     },
-    {
-      id: 'sessions', title: 'Sessions & Compaction', icon: 'S',
-      keys: SETTINGS_GARDEN_SECTION_FIELDS.sessions,
-      summary: () => (
-        `Compaction at ${state.compactionThresholdPct}%, `
-        + `Maintenance ${Math.round(state.maintenanceIntervalMs / 1000)}s, `
-        + `Restart ${state.sessionRestartBehavior === 'new_session' ? 'new session' : 'reuse latest'}`
-      ),
-    },
-    {
-      id: 'extraction-tuning', title: 'Memory Extraction Tuning', icon: 'X',
-      keys: SETTINGS_GARDEN_SECTION_FIELDS['extraction-tuning'],
-      summary: () => `Min importance: ${state.memoryExtractionMinImportance}, Max writes: ${state.memoryExtractionMaxWrites}`,
-    },
-    {
-      id: 'profile', title: 'Profile Synthesis', icon: 'P',
-      keys: SETTINGS_GARDEN_SECTION_FIELDS.profile,
-      summary: () => state.profileSynthesisEnabled ? `Enabled, refresh ${Math.round(state.profileSynthesisRefreshIntervalMs / 60000)}min` : 'Disabled',
-    },
-    {
-      id: 'analysis-workbench', title: 'Analysis Workbench', icon: 'R',
-      keys: SETTINGS_GARDEN_SECTION_FIELDS['analysis-workbench'],
-      summary: () => `Max tokens: ${state.analysisWorkbenchMaxTokens.toLocaleString()}, Wall time: ${Math.round(state.analysisWorkbenchMaxWallTimeMs / 1000)}s`,
-    },
-    {
-      id: 'compositional', title: 'Compositional Cognition', icon: 'K',
-      keys: SETTINGS_GARDEN_SECTION_FIELDS.compositional,
-      summary: () => input.compositionalPolicySummary,
-    },
-    {
-      id: 'trust', title: 'Trust & Capabilities', icon: 'T',
-      keys: SETTINGS_GARDEN_SECTION_FIELDS.trust,
-      summary: () => `Tier: ${state.capabilityTier}`,
-    },
-    {
-      id: 'llm', title: 'LLM Retries & Behavior', icon: 'L',
-      keys: SETTINGS_GARDEN_SECTION_FIELDS.llm,
-      summary: () => `Max retries: ${state.retryMaxAttempts}, Base delay: ${state.retryBaseDelayMs}ms`,
-    },
-    {
-      id: 'import', title: 'Import Processing', icon: 'I',
-      keys: SETTINGS_GARDEN_SECTION_FIELDS.import,
-      summary: () => `Route: ${state.importRouteMode}${state.importStrictPolicy ? ' (strict)' : ''}`,
-    },
-    {
-      id: 'fetch', title: 'Web Fetch Policy', icon: 'W',
-      keys: SETTINGS_GARDEN_SECTION_FIELDS.fetch,
-      summary: () => {
-        const parts: string[] = [];
-        parts.push(state.webFetchAllowHttp ? 'HTTP allowed' : 'HTTPS only');
-        if (state.webFetchAllowInternalNetwork) parts.push('internal LAN');
-        return parts.join(', ');
-      },
-    },
-    {
-      id: 'voice', title: 'Voice & Speech', icon: 'V',
-      keys: SETTINGS_GARDEN_SECTION_FIELDS.voice,
-      summary: () => `TTS: ${state.ttsProvider}, STT: ${state.sttProvider}`,
-    },
-    {
-      id: 'obsidian', title: 'External Obsidian', icon: 'O',
-      keys: SETTINGS_GARDEN_SECTION_FIELDS.obsidian,
-      summary: () => state.obsidianVaultName ? `External vault: ${state.obsidianVaultName}${state.obsidianAutoPublish ? ', auto-publish' : ''}` : 'Disabled',
-    },
-    {
-      id: 'channels', title: 'Channels', icon: 'C',
-      keys: SETTINGS_GARDEN_SECTION_FIELDS.channels,
-      summary: () => {
-        const wordsCount = splitCsv(state.discordTriggerWords).length;
-        const reactionsCount = splitCsv(state.discordTriggerReactions).length;
-        const windowSeconds = normalizeDiscordListenWindowSeconds(state.discordTriggerListenWindowSeconds);
-        return [
-          state.telegramEnabled ? 'Telegram on' : 'Telegram off',
-          `${wordsCount} word trigger${wordsCount === 1 ? '' : 's'}`,
-          `${reactionsCount} reaction trigger${reactionsCount === 1 ? '' : 's'}`,
-          `${windowSeconds}s listen window`,
-        ].join(', ');
-      },
-    },
-  ];
+  };
+  return SETTINGS_ADVANCED_SECTIONS.map((section) => {
+    const summary = summaryBySectionId[section.id];
+    if (!summary) {
+      throw new Error(`Missing advanced settings summary for section '${section.id}'`);
+    }
+    return { ...section, summary };
+  });
 }
 
 export function populateSimpleSettingsForm(settingsData: AdminSettingsData): SettingsSimpleFormState {

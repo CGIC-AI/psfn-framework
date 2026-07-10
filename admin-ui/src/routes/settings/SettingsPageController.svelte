@@ -1,6 +1,5 @@
 <script lang="ts">
-  import { onMount, onDestroy } from 'svelte';
-  import { base } from '$app/paths';
+  import { onMount, onDestroy, tick } from 'svelte';
   import {
     getSettings,
     getSettingsSchema,
@@ -16,25 +15,29 @@
     SettingsContractData,
     SettingsContractField,
   } from '$lib/types';
-  import { SETTINGS_GARDEN_SECTION_FIELDS } from '$lib/settings-garden-contract';
-  import {
-    resolveBudgetContextWindowAuthority,
-    resolveSettingAuthority,
-  } from '$lib/settings/authority';
+  import { resolveSettingAuthority } from '$lib/settings/authority';
+  import GardenTabBar, { type GardenTabItem } from '$lib/components/garden/GardenTabBar.svelte';
   import SettingsAdvancedOwnerPanels from './SettingsAdvancedOwnerPanels.svelte';
+  import SettingsDelegatedPanels from './SettingsDelegatedPanels.svelte';
   import SettingsEnvironmentSummary from '$lib/components/settings/SettingsEnvironmentSummary.svelte';
+  import SettingsIntegrationsPanels from './SettingsIntegrationsPanels.svelte';
+  import SettingsMemoryPanels from './SettingsMemoryPanels.svelte';
   import SettingsPageChrome from '$lib/components/settings/SettingsPageChrome.svelte';
-  import SettingsSidebarNav from '$lib/components/settings/SettingsSidebarNav.svelte';
-  import SettingsSimplePanels from './SettingsSimplePanels.svelte';
+  import SettingsRuntimePanels from './SettingsRuntimePanels.svelte';
+  import SettingsTrustBackupPanels from './SettingsTrustBackupPanels.svelte';
   import {
-    buildSettingsSimpleSectionGroups,
-    isSettingsSimpleSectionId,
     parseSettingsSimpleSectionHash,
-    resolveActiveSettingsSimpleSection,
     settingsSimpleSectionAnchorId,
     type SettingsSimpleSectionId,
   } from '$lib/components/settings/navigation';
-  import { buildContextBudgetPreview } from '$lib/settings/context-budget-preview';
+  import {
+    CURATED_SETTINGS_TAB_IDS,
+    MODEL_OWNED_FIELDS,
+    SETTINGS_TAB_DEFINITIONS,
+    isSettingsTabId,
+    settingsTabForSection,
+    type SettingsTabId,
+  } from './settings-section-definitions';
   import {
     normalizeProvidersRuntimeConfig,
   } from '$lib/providers/registry';
@@ -54,11 +57,8 @@
     COMPOSITIONAL_CHANNEL_TYPE_OPTIONS,
     COMPOSITIONAL_PURPOSE_OPTIONS,
     COMPOSITIONAL_TIER_OPTIONS,
-    DELEGATED_WORKSPACES,
     DISABLED_PROVIDER_ID,
     RAW_EDITORS,
-    SIMPLE_SECTION_ORDER,
-    SYSTEM_PROMPT_ESTIMATE_TOKENS,
     buildAdvancedSettingsSections,
     buildBackupSettingsPayload,
     buildCapabilitiesSettingsPayload,
@@ -78,7 +78,6 @@
     type CapabilitiesEditorConfig,
     type CompositionalListKey,
     type CompositionalPolicyFormValue,
-    type ModelsEditorConfig,
     type RawEditorKey,
     type SchedulerEditorConfig,
     type SettingsSimpleFormState,
@@ -370,35 +369,56 @@
     if (next.backupVerifyRestore !== undefined) backupVerifyRestore = next.backupVerifyRestore;
   }
 
-  // ── Section IA navigation ──
-  const SIMPLE_SECTION_SCROLL_OFFSET_PX = 108;
-  const SIMPLE_SECTION_ACTIVE_THRESHOLD_PX = 168;
-  let activeSimpleSectionId = $state<SettingsSimpleSectionId>('models');
-  const simpleSectionNodes = new Map<SettingsSimpleSectionId, HTMLElement>();
-  let suppressSimpleSectionSyncUntil = 0;
-  let simpleViewportChangeHandler: (() => void) | null = null;
-  let simpleHashChangeHandler: (() => void) | null = null;
+  // ── Tab navigation ──
+  // One navigation scheme: every settings section lives on exactly one tab
+  // (see SETTINGS_TAB_DEFINITIONS). Section hash deep links resolve to the
+  // owning tab and scroll to the section anchor.
+  let activeTabId = $state<SettingsTabId>(SETTINGS_TAB_DEFINITIONS[0].id);
+  let hashChangeHandler: (() => void) | null = null;
 
-  let visibleSimpleSectionIds = $derived.by(() => {
-    const ids = new Set<SettingsSimpleSectionId>(SIMPLE_SECTION_ORDER);
-    if (!data?.env) {
-      ids.delete('advanced-secrets');
+  const settingsTabs: GardenTabItem[] = SETTINGS_TAB_DEFINITIONS.map((tab) => ({
+    id: tab.id,
+    label: tab.label,
+  }));
+
+  let activeTabIsCurated = $derived(CURATED_SETTINGS_TAB_IDS.includes(activeTabId));
+
+  function selectTab(tabId: string): void {
+    if (!isSettingsTabId(tabId)) return;
+    activeTabId = tabId;
+    if (typeof window !== 'undefined') {
+      window.history.replaceState(null, '', `#${tabId}`);
     }
-    return ids;
-  });
+  }
 
-  let simpleSectionGroups = $derived.by(() => (
-    buildSettingsSimpleSectionGroups({ includeSections: visibleSimpleSectionIds })
-  ));
+  async function jumpToSection(
+    sectionId: SettingsSimpleSectionId,
+    behavior: ScrollBehavior = 'smooth',
+  ): Promise<void> {
+    activeTabId = settingsTabForSection(sectionId);
+    await tick();
+    if (typeof document === 'undefined') return;
+    document
+      .getElementById(settingsSimpleSectionAnchorId(sectionId))
+      ?.scrollIntoView({ behavior, block: 'start' });
+  }
 
-  let simpleQuickJumpSections = $derived.by(() => (
-    SIMPLE_SECTION_ORDER.filter((sectionId) => visibleSimpleSectionIds.has(sectionId))
-  ));
+  function applyLocationHash(behavior: ScrollBehavior = 'auto'): void {
+    if (typeof window === 'undefined') return;
+    const rawHash = window.location.hash.trim().replace(/^#/, '');
+    if (!rawHash) return;
+    if (isSettingsTabId(rawHash)) {
+      activeTabId = rawHash;
+      return;
+    }
+    const sectionId = parseSettingsSimpleSectionHash(window.location.hash);
+    if (sectionId) {
+      void jumpToSection(sectionId, behavior);
+    }
+  }
 
   // ── Collapsible sections ──
   let openSections = $state(new Set<string>(['budget']));
-
-  const MODEL_OWNED_FIELDS = new Set<string>(SETTINGS_GARDEN_SECTION_FIELDS.models);
 
   let SECTIONS = $derived.by(() => buildAdvancedSettingsSections({
     state: currentSimpleFormState(),
@@ -413,16 +433,8 @@
     return (data?.editors?.scheduler as SchedulerEditorConfig | undefined) ?? {};
   }
 
-  const EMPTY_MODELS_EDITOR_CONFIG: ModelsEditorConfig = {
-    modelRoster: {},
-  };
-
   function getCapabilitiesEditorConfig(): CapabilitiesEditorConfig {
     return (data?.editors?.capabilities as CapabilitiesEditorConfig | undefined) ?? {};
-  }
-
-  function getModelsEditorConfig(): ModelsEditorConfig {
-    return (data?.editors?.models as ModelsEditorConfig | undefined) ?? EMPTY_MODELS_EDITOR_CONFIG;
   }
 
   function fieldErrors(field: string): string[] {
@@ -524,10 +536,6 @@
     return getSettingAuthority(key).sourceLabel;
   }
 
-  function getBudgetContextWindowAuthority() {
-    return resolveBudgetContextWindowAuthority(data, budgetPreview);
-  }
-
   function fieldEditorType(
     key: string,
     value: unknown,
@@ -619,31 +627,6 @@
     fieldEnumValues('sessionRestartBehavior', [sessionRestartBehavior]),
   );
 
-  function buildBudgetPreviewConfig() {
-    if (!data) return null;
-    const models = getModelsEditorConfig();
-    return {
-      defaultContextWindow: 128_000,
-      modelRoster: models.modelRoster ?? {},
-      ...(models.modelCatalog ? { modelCatalog: models.modelCatalog } : {}),
-      ...(models.modelRoleAssignments ? { modelRoleAssignments: models.modelRoleAssignments } : {}),
-      sessionHistoryBudgetPct,
-      memoryRetrievalBudgetPct,
-      ...(data.config.adaptiveContextBudgetsEnabled !== undefined
-        ? { adaptiveContextBudgetsEnabled: data.config.adaptiveContextBudgetsEnabled === true }
-        : {}),
-    };
-  }
-
-  let budgetPreview = $derived.by(() => {
-    const budgetConfig = buildBudgetPreviewConfig();
-    if (!budgetConfig) return null;
-    return buildContextBudgetPreview(budgetConfig, {
-      systemPromptTokens: SYSTEM_PROMPT_ESTIMATE_TOKENS,
-      maxResponseTokens,
-    });
-  });
-
   // ── Helpers ──
   function populateSimpleFields(settingsData: AdminSettingsData): void {
     applySimpleFormState(populateSimpleSettingsForm(settingsData));
@@ -685,77 +668,6 @@
     if (next.has(id)) next.delete(id);
     else next.add(id);
     openSections = next;
-  }
-
-  function syncActiveSimpleSection(): void {
-    if (typeof window === 'undefined') return;
-    if (Date.now() < suppressSimpleSectionSyncUntil) return;
-
-    const topBySectionId: Partial<Record<SettingsSimpleSectionId, number>> = {};
-    for (const sectionId of simpleQuickJumpSections) {
-      const node = simpleSectionNodes.get(sectionId);
-      if (!node) continue;
-      topBySectionId[sectionId] = node.getBoundingClientRect().top;
-    }
-    const resolved = resolveActiveSettingsSimpleSection(
-      simpleQuickJumpSections,
-      topBySectionId,
-      SIMPLE_SECTION_ACTIVE_THRESHOLD_PX,
-    );
-    if (resolved) {
-      activeSimpleSectionId = resolved;
-    }
-  }
-
-  function jumpToSimpleSection(
-    sectionId: SettingsSimpleSectionId,
-    behavior: ScrollBehavior = 'smooth',
-  ): void {
-    if (typeof window === 'undefined') return;
-    const node = simpleSectionNodes.get(sectionId);
-    if (!node) return;
-
-    activeSimpleSectionId = sectionId;
-    suppressSimpleSectionSyncUntil = Date.now() + 900;
-    const top = window.scrollY + node.getBoundingClientRect().top - SIMPLE_SECTION_SCROLL_OFFSET_PX;
-    window.history.replaceState(null, '', `#${settingsSimpleSectionAnchorId(sectionId)}`);
-    window.scrollTo({
-      top: Math.max(0, top),
-      behavior,
-    });
-  }
-
-  function jumpToHashSection(behavior: ScrollBehavior = 'auto'): void {
-    if (typeof window === 'undefined') return;
-    const sectionId = parseSettingsSimpleSectionHash(window.location.hash);
-    if (!sectionId || !visibleSimpleSectionIds.has(sectionId)) return;
-    jumpToSimpleSection(sectionId, behavior);
-  }
-
-  function simpleSectionAnchor(node: HTMLElement, sectionId: SettingsSimpleSectionId) {
-    let currentId = sectionId;
-    simpleSectionNodes.set(currentId, node);
-    syncActiveSimpleSection();
-
-    return {
-      update(nextSectionId: SettingsSimpleSectionId) {
-        if (nextSectionId === currentId) return;
-        simpleSectionNodes.delete(currentId);
-        currentId = nextSectionId;
-        simpleSectionNodes.set(currentId, node);
-        syncActiveSimpleSection();
-      },
-      destroy() {
-        simpleSectionNodes.delete(currentId);
-      },
-    };
-  }
-
-  function handleSimpleQuickJump(event: Event): void {
-    const sectionId = (event.currentTarget as HTMLSelectElement).value;
-    if (isSettingsSimpleSectionId(sectionId) && visibleSimpleSectionIds.has(sectionId)) {
-      jumpToSimpleSection(sectionId);
-    }
   }
 
   function getRawJson(key: string): string {
@@ -1032,7 +944,7 @@
       );
       flash(result.ok, result.message);
       if (!result.ok && result.invalidFieldCount > 0) {
-        jumpToSimpleSection('advanced-fields');
+        void jumpToSection('advanced-fields');
       }
     } catch (e) {
       flash(false, e instanceof Error ? e.message : 'Failed to save');
@@ -1049,7 +961,7 @@
       const result = await saveSettingsContract(collectCanonicalPayload());
       flash(result.ok, result.message);
       if (!result.ok && result.invalidFieldCount > 0) {
-        jumpToSimpleSection('advanced-fields');
+        void jumpToSection('advanced-fields');
       }
     } catch (e) {
       flash(false, e instanceof Error ? e.message : 'Failed to save');
@@ -1108,24 +1020,11 @@
     }
   }
 
-  $effect(() => {
-    if (!visibleSimpleSectionIds.has(activeSimpleSectionId)) {
-      const fallback = simpleQuickJumpSections[0];
-      if (fallback) {
-        activeSimpleSectionId = fallback;
-      }
-    }
-    syncActiveSimpleSection();
-  });
-
   // ── Init ──
   onMount(async () => {
     window.addEventListener('beforeunload', handleBeforeUnload);
-    simpleViewportChangeHandler = () => syncActiveSimpleSection();
-    simpleHashChangeHandler = () => jumpToHashSection('auto');
-    window.addEventListener('scroll', simpleViewportChangeHandler, { passive: true });
-    window.addEventListener('resize', simpleViewportChangeHandler);
-    window.addEventListener('hashchange', simpleHashChangeHandler);
+    hashChangeHandler = () => applyLocationHash('auto');
+    window.addEventListener('hashchange', hashChangeHandler);
     try {
       const [settingsData, schemaData] = await Promise.all([
         getSettings(),
@@ -1161,8 +1060,7 @@
     } finally {
       loading = false;
       window.requestAnimationFrame(() => {
-        syncActiveSimpleSection();
-        jumpToHashSection('auto');
+        applyLocationHash('auto');
       });
     }
   });
@@ -1170,12 +1068,8 @@
   onDestroy(() => {
     if (typeof window !== 'undefined') {
       window.removeEventListener('beforeunload', handleBeforeUnload);
-      if (simpleViewportChangeHandler) {
-        window.removeEventListener('scroll', simpleViewportChangeHandler);
-        window.removeEventListener('resize', simpleViewportChangeHandler);
-      }
-      if (simpleHashChangeHandler) {
-        window.removeEventListener('hashchange', simpleHashChangeHandler);
+      if (hashChangeHandler) {
+        window.removeEventListener('hashchange', hashChangeHandler);
       }
     }
   });
@@ -1225,83 +1119,71 @@
 
   {:else}
     <div class="space-y-5">
-      <div class="card-garden p-3 lg:hidden">
-        <label class="block text-sm font-medium text-shadow-700 mb-1.5" for="settings-jump-select">
-          Quick jump
-        </label>
-        <select
-          id="settings-jump-select"
-          class={INPUT_CLS}
-          value={activeSimpleSectionId}
-          onchange={handleSimpleQuickJump}
-        >
-          {#each simpleSectionGroups as group}
-            <optgroup label={group.label}>
-              {#each group.sections as section}
-                <option value={section.id}>{section.title}</option>
-              {/each}
-            </optgroup>
-          {/each}
-        </select>
-      </div>
+      <GardenTabBar
+        tabs={settingsTabs}
+        activeId={activeTabId}
+        onSelect={selectTab}
+        label="Settings domains"
+      />
 
-      <div class="card-garden p-4 space-y-3">
-        <div>
-          <p class="text-xs uppercase tracking-[0.16em] text-shadow-500">Delegated Workspaces</p>
-          <p class="text-sm text-shadow-700 mt-1">
-            Settings keeps runtime owner-file controls here; related operator surfaces stay in their dedicated workspaces.
-          </p>
-        </div>
-        <div class="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-3">
-          {#each DELEGATED_WORKSPACES as workspace}
-            <a
-              href={`${base}${workspace.href}`}
-              class="rounded-xl border border-bark-200 bg-white px-3 py-2 text-sm transition-colors hover:border-gold-300 hover:bg-gold-50"
-            >
-              <span class="block font-medium text-shadow-800">{workspace.label}</span>
-              <span class="block text-xs text-shadow-600 mt-0.5">{workspace.description}</span>
-            </a>
-          {/each}
-        </div>
-      </div>
-
-      <div class="grid grid-cols-1 lg:grid-cols-[18rem_minmax(0,1fr)] gap-5 items-start">
-        <aside class="hidden lg:block lg:sticky lg:top-4">
-          <SettingsSidebarNav
-            groups={simpleSectionGroups}
-            activeSectionId={activeSimpleSectionId}
-            onNavigate={jumpToSimpleSection}
-          />
-        </aside>
-
-        <div class="space-y-5 min-w-0">
-          <SettingsSimplePanels
-            {data} {simpleSectionAnchor} {providerRegistry} {providerValidationErrors} {providerRegistryDirty}
-            {saving} {dirty} {generalSettingsSaveDirty} {openSections} {budgetPreview}
-            inputClass={INPUT_CLS} labelClass={LABEL_CLS} sliderClass={SLIDER_CLS}
-            compactInputClass={COMPACT_INPUT_CLS} toggleClass={TOGGLE_CLS} providerCardClass={PROVIDER_CARD_CLS}
-            {capabilityTierOptions} {importRouteModeOptions} {sessionRestartBehaviorOptions}
-            {getBudgetContextWindowAuthority} {getSource} {getSettingAuthority} {rawEditorLabel} {toggleSection}
+      <div class="space-y-5 min-w-0">
+        {#if activeTabId === 'providers'}
+          <SettingsDelegatedPanels
+            {providerRegistry} {providerValidationErrors} {providerRegistryDirty} {saving}
+            inputClass={INPUT_CLS} labelClass={LABEL_CLS} toggleClass={TOGGLE_CLS} providerCardClass={PROVIDER_CARD_CLS}
             {addProviderEntry} {removeProviderEntry} {updateProviderEntry} {setProviderType} {setProviderField}
-            {saveProviderRegistry} {discardProviderRegistryChanges} {saveSimple}
-            bind:sessionHistoryBudgetPct bind:memoryRetrievalBudgetPct bind:extractionThresholdPct bind:extractionInterval
-            bind:compactionEmotionalSalienceThresholdPct bind:compactionThresholdPct bind:maintenanceIntervalMs bind:sessionRestartBehavior
-            bind:memoryExtractionMinImportance bind:memoryExtractionMinConfidence bind:memoryExtractionMinNovelty bind:memoryExtractionMaxWrites
-            bind:memoryExtractionTelemetryEnabled bind:memoryRetrievalTelemetryEnabled bind:profileSynthesisEnabled bind:profileSynthesisRefreshIntervalMs
-            bind:profileSynthesisCooldownMs bind:profileSynthesisMinWrites bind:profileSynthesisMinImportance bind:profileSynthesisMinConfidence
+            {saveProviderRegistry} {discardProviderRegistryChanges}
+          />
+        {:else if activeTabId === 'memory'}
+          <SettingsMemoryPanels
+            {openSections} {sessionRestartBehaviorOptions}
+            inputClass={INPUT_CLS} labelClass={LABEL_CLS} sliderClass={SLIDER_CLS}
+            compactInputClass={COMPACT_INPUT_CLS} toggleClass={TOGGLE_CLS}
+            {getSource} {getSettingAuthority} {toggleSection}
+            bind:sessionRestartBehavior bind:sessionHistoryBudgetPct bind:memoryRetrievalBudgetPct
+            bind:extractionThresholdPct bind:compactionThresholdPct bind:extractionInterval
+            bind:compactionEmotionalSalienceThresholdPct bind:maintenanceIntervalMs
+            bind:memoryExtractionMinImportance bind:memoryExtractionMinConfidence bind:memoryExtractionMinNovelty
+            bind:memoryExtractionMaxWrites bind:memoryExtractionTelemetryEnabled bind:memoryRetrievalTelemetryEnabled
+            bind:profileSynthesisEnabled bind:profileSynthesisRefreshIntervalMs bind:profileSynthesisCooldownMs
+            bind:profileSynthesisMinWrites bind:profileSynthesisMinImportance bind:profileSynthesisMinConfidence
             bind:profileSynthesisMinNovelty bind:profileSynthesisSourceMemoryLimit bind:profileSynthesisMinSourceMemories
             bind:analysisWorkbenchMaxTokens bind:analysisWorkbenchMaxWallTimeMs bind:analysisWorkbenchMaxSubQueries
-            bind:capabilityTier bind:capabilityCustomTokens bind:backupIntervalHours bind:backupMaxRotating bind:backupMaxWeekly
-            bind:backupMaxMonthly bind:backupMirrorDir bind:backupVerifyRestore bind:retryMaxAttempts bind:retryBaseDelayMs
-            bind:importRouteMode bind:importStrictPolicy bind:openRouterProviderOrder bind:importLocalEndpointUrl bind:importLocalModel
-            bind:webFetchAllowInternalNetwork bind:webFetchAllowHttp bind:webFetchDomainAllowlist bind:webFetchTlsCaCertPaths
-            bind:ttsProvider bind:sttProvider bind:voiceId bind:deepgramModel bind:echoTtsUrl bind:echoTtsVoice bind:echoTtsPreset
-            bind:obsidianVaultName bind:obsidianCliPath bind:obsidianAutoPublish bind:obsidianTimeoutMs
-            bind:discordTriggerWords bind:discordTriggerReactions bind:discordTriggerListenWindowSeconds bind:telegramEnabled bind:telegramAuthorizedUsers
           />
-
+        {:else if activeTabId === 'runtime'}
+          <SettingsRuntimePanels
+            {openSections} {importRouteModeOptions}
+            inputClass={INPUT_CLS} labelClass={LABEL_CLS} toggleClass={TOGGLE_CLS}
+            {getSource} {toggleSection}
+            bind:retryMaxAttempts bind:retryBaseDelayMs
+            bind:importRouteMode bind:importStrictPolicy bind:importLocalEndpointUrl bind:importLocalModel
+            bind:openRouterProviderOrder
+            bind:webFetchAllowHttp bind:webFetchDomainAllowlist bind:webFetchAllowInternalNetwork bind:webFetchTlsCaCertPaths
+          />
+        {:else if activeTabId === 'integrations'}
+          <SettingsIntegrationsPanels
+            {openSections}
+            inputClass={INPUT_CLS} labelClass={LABEL_CLS} toggleClass={TOGGLE_CLS}
+            {toggleSection}
+            bind:ttsProvider bind:sttProvider bind:voiceId bind:deepgramModel
+            bind:echoTtsUrl bind:echoTtsVoice bind:echoTtsPreset
+            bind:obsidianVaultName bind:obsidianCliPath bind:obsidianAutoPublish bind:obsidianTimeoutMs
+            bind:discordTriggerWords bind:discordTriggerReactions bind:discordTriggerListenWindowSeconds
+            bind:telegramEnabled bind:telegramAuthorizedUsers
+          />
+        {:else if activeTabId === 'trust'}
+          <SettingsTrustBackupPanels
+            {data} {openSections} {capabilityTierOptions}
+            inputClass={INPUT_CLS} labelClass={LABEL_CLS} toggleClass={TOGGLE_CLS}
+            {getSource} {getSettingAuthority} {rawEditorLabel} {toggleSection}
+            bind:capabilityTier bind:capabilityCustomTokens
+            bind:backupIntervalHours bind:backupMaxRotating bind:backupMaxWeekly bind:backupMaxMonthly
+            bind:backupMirrorDir bind:backupVerifyRestore
+          />
+        {:else}
           <SettingsAdvancedOwnerPanels
-            {data} {simpleSectionAnchor} {SECTIONS} {advancedSectionSummaries} {openSections} {MODEL_OWNED_FIELDS}
+            view={activeTabId === 'advanced' ? 'fields' : 'raw'}
+            {data} {SECTIONS} {advancedSectionSummaries} {openSections} {MODEL_OWNED_FIELDS}
             {saving} {capabilityTierOptions} {COMPOSITIONAL_CHANNEL_TYPE_OPTIONS} {COMPOSITIONAL_PURPOSE_OPTIONS}
             {toggleSection} {configValue} {setConfigValue} {fieldEditorType} {fieldEnumValues} {fieldContract}
             {fieldMinimum} {fieldMaximum} {isDeprecatedField} {getSource} {hasFieldErrors} {fieldErrors}
@@ -1310,7 +1192,23 @@
             {rawEditorViews} {rawSaveStatus} {validationErrorsByField} {setSettingsJson} {getRawJson} {setRawJson}
             {saveRawSettings} {saveRawConfig}
           />
-        </div>
+        {/if}
+
+        {#if activeTabIsCurated}
+          <div class="flex items-center gap-3 pt-2">
+            <button onclick={saveSimple} disabled={saving || !generalSettingsSaveDirty}
+              class="px-5 py-2.5 rounded-lg text-sm font-medium transition-colors shadow-sm
+                {generalSettingsSaveDirty
+                  ? 'bg-gold-600 text-white hover:bg-gold-700'
+                  : 'bg-bark-300 text-shadow-500 cursor-not-allowed'}"
+            >
+              {saving ? 'Saving...' : 'Save Curated Settings'}
+            </button>
+            {#if dirty}
+              <span class="text-sm text-shadow-500">You have unsaved changes</span>
+            {/if}
+          </div>
+        {/if}
       </div>
     </div>
   {/if}

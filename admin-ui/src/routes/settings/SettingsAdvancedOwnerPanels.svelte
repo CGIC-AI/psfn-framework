@@ -1,5 +1,4 @@
 <script lang="ts">
-  import type { Action } from 'svelte/action';
   import type {
     AdminSettingsData,
     SettingsContractField,
@@ -8,10 +7,7 @@
     type AdvancedSettingEditorType,
   } from '$lib/components/settings/AdvancedSettingsMode.svelte';
   import RawSettingsMode from '$lib/components/settings/RawSettingsMode.svelte';
-  import {
-    settingsSimpleSectionAnchorId,
-    type SettingsSimpleSectionId,
-  } from '$lib/components/settings/navigation';
+  import { settingsSimpleSectionAnchorId } from '$lib/components/settings/navigation';
   import type {
     AdvancedSettingsSectionDef,
     CompositionalListKey,
@@ -20,8 +16,8 @@
   } from './settings-page-helpers';
 
   let {
+    view,
     data,
-    simpleSectionAnchor,
     SECTIONS,
     advancedSectionSummaries,
     openSections,
@@ -59,8 +55,8 @@
     saveRawSettings,
     saveRawConfig,
   } = $props<{
+    view: 'fields' | 'raw';
     data: AdminSettingsData | null;
-    simpleSectionAnchor: Action<HTMLElement, SettingsSimpleSectionId>;
     SECTIONS: AdvancedSettingsSectionDef[];
     advancedSectionSummaries: Record<string, string>;
     openSections: Set<string>;
@@ -100,9 +96,9 @@
   }>();
 </script>
 
+{#if view === 'fields'}
           <section
             id={settingsSimpleSectionAnchorId('advanced-fields')}
-            use:simpleSectionAnchor={'advanced-fields'}
             class="space-y-4"
             data-settings-section="advanced-fields"
           >
@@ -145,10 +141,9 @@
               {saveAdvanced}
             />
           </section>
-
+{:else}
           <section
             id={settingsSimpleSectionAnchorId('owner-files')}
-            use:simpleSectionAnchor={'owner-files'}
             class="space-y-4"
             data-settings-section="owner-files"
           >
@@ -173,3 +168,4 @@
               {saveRawConfig}
             />
           </section>
+{/if}

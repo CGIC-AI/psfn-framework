@@ -33,6 +33,20 @@ export interface SkillDirectorySpec {
   precedence: number;
 }
 
+/**
+ * Scan provenance for a single skills root: whether the directory was
+ * actually present at scan time and how many SKILL.md files it contributed.
+ * `exists` is true only when the path is an existing directory.
+ */
+export interface SkillRootScan {
+  path: string;
+  absolutePath: string;
+  exists: boolean;
+  skillCount: number;
+  source: SkillSource;
+  precedence: number;
+}
+
 export interface SkillFileCandidate {
   absolutePath: string;
   relativePath: string;
@@ -103,6 +117,7 @@ export interface SkillSnapshot {
   configEnabled: boolean;
   budget: SkillBudget;
   directories: SkillDirectorySpec[];
+  roots: SkillRootScan[];
   scannedFiles: number;
   loadedSkills: number;
   includedSkills: SkillEntry[];

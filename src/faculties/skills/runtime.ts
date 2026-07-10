@@ -13,7 +13,7 @@ import {
   buildSkillFileSignature,
   loadSkillEntries,
   resolveSkillDirectories,
-  scanSkillFiles,
+  scanSkillRoots,
 } from './loader.js';
 import { SkillStore } from './store.js';
 import { SkillUsageTelemetryStore } from './telemetry.js';
@@ -211,7 +211,8 @@ export class SkillsRuntime {
     const repoRoot = requireSkillsRepoRoot(this.options.repoRoot);
     const configuredDirectories = resolveSkillDirectories(runtimeConfig, repoRoot);
     const directories = this.mergeManagedDirectory(configuredDirectories);
-    const files = scanSkillFiles(directories);
+    const scan = scanSkillRoots(directories);
+    const files = scan.files;
 
     const signaturePayload = JSON.stringify({
       config: {
@@ -226,6 +227,10 @@ export class SkillsRuntime {
         relativePath: directory.relativePath,
         precedence: directory.precedence,
         source: directory.source,
+      })),
+      roots: scan.roots.map(root => ({
+        path: root.path,
+        exists: root.exists,
       })),
       files: buildSkillFileSignature(files),
     });
@@ -257,6 +262,7 @@ export class SkillsRuntime {
         maxChars: runtimeConfig.maxSkillChars,
       },
       directories,
+      roots: scan.roots,
       scannedFiles: files.length,
       loadedSkills: deduped.entries.length,
       includedSkills: formatted.included,

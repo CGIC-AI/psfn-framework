@@ -198,7 +198,9 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
   const appCache = await createAppCacheFromEnv();
   const llmProvider = createLLMProviderPort(gateway);
   const gatewayOps = createGatewayOpsPortFromClient(gateway);
-  const observerEvalSidecar = createObserverEvalSidecarRuntimeFromConfig(config);
+  const observerEvalSidecar = createObserverEvalSidecarRuntimeFromConfig(config, {
+    postgresDatabaseUrl,
+  });
   const sessionComposition = await composeSessionRuntimeAsync({
     config,
     postgresDatabaseUrl,

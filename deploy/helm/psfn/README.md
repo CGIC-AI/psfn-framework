@@ -50,6 +50,10 @@ Default values render with `CHANGE_ME_*` placeholders so `helm lint` and
 - `secrets.values.apiKey` -> `API_KEY`, consumed by gateway and satellite hub
 - `secrets.values.adminToken` -> `ADMIN_TOKEN`, consumed by gateway/Garden
 - `secrets.values.gatewaySessionHmacKey` -> `GATEWAY_SESSION_HMAC_KEY`, consumed by gateway
+- `secrets.values.gatewaySessionIntegrityAuthToken` ->
+  `GATEWAY_SESSION_INTEGRITY_AUTH_TOKEN`, the role-bound worker proof consumed
+  by the agent; derive it for the configured companion as documented in
+  `docs/setup.md`, or provide the same key through `secrets.existingSecret`
 - `secrets.values.backupEncryptionKey` -> `PSFN_BACKUP_ENCRYPTION_KEY`, consumed by app workloads
 - provider/channel secrets as needed: `OPENROUTER_API_KEY`, `OPENAI_API_KEY`,
   `LITELLM_API_KEY`, `DISCORD_TOKEN`, `DISCORD_BOT_ID`, `DEEPGRAM_API_KEY`,

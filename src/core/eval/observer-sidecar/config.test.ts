@@ -22,7 +22,7 @@ describe('createObserverEvalSidecarRuntimeFromConfig', () => {
   it('keeps the observer detached when the sidecar is disabled', () => {
     const runtime = createObserverEvalSidecarRuntimeFromConfig({
       observerEvalSidecar: createDefaultObserverEvalSidecarSettings(),
-    });
+    }, {});
 
     expect(runtime.config?.enabled).toBe(false);
     expect(runtime.observer).toBeNull();
@@ -49,7 +49,7 @@ describe('createObserverEvalSidecarRuntimeFromConfig', () => {
           maxStoredObservations: 10_000,
         },
       },
-    });
+    }, {});
 
     expect(runtime.config?.enabled).toBe(true);
     expect(runtime.observer).not.toBeNull();
@@ -68,8 +68,24 @@ describe('createObserverEvalSidecarRuntimeFromConfig', () => {
           includeWorldState: false,
         },
       },
-    })).toThrow(
+    }, {})).toThrow(
       'observerEvalSidecar.adapter requires serverUrl, sessionLabel, and agentName for kind=emosim_server',
+    );
+  });
+
+  it('fails closed when persistence is enabled without the scoped PostgreSQL dependency', () => {
+    expect(() => createObserverEvalSidecarRuntimeFromConfig({
+      persistenceBackend: 'postgres',
+      observerEvalSidecar: {
+        ...createDefaultObserverEvalSidecarSettings(),
+        persistence: {
+          enabled: true,
+          retentionDays: 14,
+          maxStoredObservations: 10_000,
+        },
+      },
+    }, {})).toThrow(
+      'observerEvalSidecar.persistence requires an explicit PostgreSQL database URL',
     );
   });
 

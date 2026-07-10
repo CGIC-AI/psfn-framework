@@ -260,12 +260,19 @@ const strictSecretRendered = render([
   '--set-string',
   'secrets.values.gatewaySessionHmacKey=verify-hmac-key',
   '--set-string',
+  'secrets.values.gatewaySessionIntegrityAuthToken=verify-worker-proof',
+  '--set-string',
   'secrets.values.backupEncryptionKey=verify-backup-key',
 ]);
 
 assertIncludes(strictSecretRendered, 'API_KEY: "verify-api-key"', 'strict app secret API key');
 assertIncludes(strictSecretRendered, 'ADMIN_TOKEN: "verify-admin-token"', 'strict app secret admin token');
 assertIncludes(strictSecretRendered, 'GATEWAY_SESSION_HMAC_KEY: "verify-hmac-key"', 'strict app secret HMAC key');
+assertIncludes(
+  strictSecretRendered,
+  'GATEWAY_SESSION_INTEGRITY_AUTH_TOKEN: "verify-worker-proof"',
+  'strict app secret isolated session-integrity proof',
+);
 assertIncludes(strictSecretRendered, 'PSFN_BACKUP_ENCRYPTION_KEY: "verify-backup-key"', 'strict app secret backup encryption key');
 
 const strictAgent = findDocumentByKindName(strictSecretRendered, 'Deployment', 'psfn-agent');
@@ -486,6 +493,8 @@ assertRenderFails(
     '--set-string',
     'secrets.values.gatewaySessionHmacKey=verify-hmac-key',
     '--set-string',
+    'secrets.values.gatewaySessionIntegrityAuthToken=verify-worker-proof',
+    '--set-string',
     'secrets.values.backupEncryptionKey=verify-backup-key',
   ],
   'secrets.values.apiKey is required when secrets.allowMissingRequired=false',
@@ -501,9 +510,28 @@ assertRenderFails(
     '--set-string',
     'secrets.values.gatewaySessionHmacKey=verify-hmac-key',
     '--set-string',
+    'secrets.values.gatewaySessionIntegrityAuthToken=verify-worker-proof',
+    '--set-string',
     'secrets.values.backupEncryptionKey=',
   ],
   'secrets.values.backupEncryptionKey is required when secrets.allowMissingRequired=false',
+);
+assertRenderFails(
+  [
+    '--set',
+    'secrets.allowMissingRequired=false',
+    '--set-string',
+    'secrets.values.apiKey=verify-api-key',
+    '--set-string',
+    'secrets.values.adminToken=verify-admin-token',
+    '--set-string',
+    'secrets.values.gatewaySessionHmacKey=verify-hmac-key',
+    '--set-string',
+    'secrets.values.gatewaySessionIntegrityAuthToken=',
+    '--set-string',
+    'secrets.values.backupEncryptionKey=verify-backup-key',
+  ],
+  'secrets.values.gatewaySessionIntegrityAuthToken is required when secrets.allowMissingRequired=false',
 );
 assertRenderFails(
   ['--set', 'postgres.enabled=false'],

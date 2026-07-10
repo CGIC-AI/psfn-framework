@@ -41,12 +41,17 @@ const DAY_MS = 86_400_000;
 const OBSERVER_EVAL_LEVER_MIN_RETENTION_DAYS = 90;
 
 export function createObserverEvalSidecarRuntimeFromConfig(
-  config: Pick<SubstrateConfig, 'observerEvalSidecar' | 'persistenceBackend' | 'postgresDatabaseUrl'>,
+  config: Pick<SubstrateConfig, 'observerEvalSidecar' | 'persistenceBackend'>,
+  dependencies: { postgresDatabaseUrl?: string },
 ): ObserverEvalSidecarRuntime {
   const settings = structuredClone(
     config.observerEvalSidecar ?? createDefaultObserverEvalSidecarSettings(),
   );
-  const persistence = createObserverEvalSidecarPersistence(config, settings);
+  const persistence = createObserverEvalSidecarPersistence(
+    config,
+    settings,
+    dependencies.postgresDatabaseUrl,
+  );
 
   return {
     config: settings,
@@ -88,15 +93,23 @@ function createObserverEvalSidecarPort(
 }
 
 function createObserverEvalSidecarPersistence(
-  config: Pick<SubstrateConfig, 'persistenceBackend' | 'postgresDatabaseUrl'>,
+  config: Pick<SubstrateConfig, 'persistenceBackend'>,
   settings: ObserverEvalSidecarConfig,
+  postgresDatabaseUrlInput: string | undefined,
 ): ObserverEvalSidecarPersistencePort | null {
   if (settings.persistence?.enabled !== true) {
     return null;
   }
-  const postgresDatabaseUrl = config.postgresDatabaseUrl?.trim();
-  if (config.persistenceBackend !== 'postgres' || !postgresDatabaseUrl) {
-    return null;
+  if (config.persistenceBackend !== 'postgres') {
+    throw new Error(
+      'observerEvalSidecar.persistence requires persistenceBackend=postgres',
+    );
+  }
+  const postgresDatabaseUrl = postgresDatabaseUrlInput?.trim();
+  if (!postgresDatabaseUrl) {
+    throw new Error(
+      'observerEvalSidecar.persistence requires an explicit PostgreSQL database URL',
+    );
   }
   return createPostgresObserverEvalSidecarStore(postgresDatabaseUrl);
 }

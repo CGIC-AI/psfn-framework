@@ -1,5 +1,8 @@
 import { describe, it, expect, vi } from 'vitest';
 import { createServer, type AddressInfo } from 'node:net';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { EventBus } from '../../shared/event-bus.js';
 import type { AgentResponse, SubstrateMessage } from '../../shared/contracts/runtime.js';
 import type { TelegramChannelConfig } from '../backplane/config.js';
@@ -415,38 +418,70 @@ describe('TelegramAdapter', () => {
   });
 
   it('provides media receive mapping and native media send method selection', async () => {
+    const personalFilesDir = mkdtempSync(join(tmpdir(), 'psfn-telegram-media-'));
     const { fetchImpl, calls } = makeFetchMock({
       sendChatAction: () => true,
       sendMessage: () => ({ message_id: 700 }),
       sendPhoto: () => ({ message_id: 701 }),
       sendVoice: () => ({ message_id: 702 }),
       sendDocument: () => ({ message_id: 703 }),
+      getFile: (body) => ({
+        file_id: body.file_id,
+        file_path: body.file_id === 'photo-file' ? 'photos/p.jpg' : 'documents/notes.md',
+      }),
+    });
+    const imageBytes = Buffer.from([0xff, 0xd8, 0xff, 0xe0]);
+    const remoteFetch = vi.fn(async (url: string) => {
+      expect(url).toContain('https://api.telegram.org/file/bottelegram-token/');
+      return {
+        ok: true,
+        status: 200,
+        bytes: url.includes('photos/') ? imageBytes : Buffer.from('hello from telegram', 'utf8'),
+        contentType: url.includes('photos/') ? 'image/jpeg' : 'text/markdown',
+      };
     });
     const received: SubstrateMessage[] = [];
 
-    const adapter = new TelegramAdapter(makeConfig(), new EventBus(), { fetchImpl });
+    const adapter = new TelegramAdapter(makeConfig(), new EventBus(), {
+      fetchImpl,
+      personalFilesDir,
+      remoteFetch,
+    });
     adapter.onMessage(async (message) => {
       received.push(message);
       return okResponse(message.channelId);
     });
 
-    await (adapter as any).handleUpdate({
-      update_id: 1,
-      message: {
-        message_id: 10,
-        date: 1_700_000_000,
-        chat: { id: 321, type: 'private' },
-        from: { id: 7, is_bot: false, username: 'media_user' },
-        photo: [{ file_id: 'photo-file', file_unique_id: 'u-photo' }],
-        voice: { file_id: 'voice-file', mime_type: 'audio/ogg' },
-        document: { file_id: 'doc-file', file_name: 'spec.pdf', mime_type: 'application/pdf' },
-      },
-    });
+    try {
+      await (adapter as any).handleUpdate({
+        update_id: 1,
+        message: {
+          message_id: 10,
+          date: 1_700_000_000,
+          chat: { id: 321, type: 'private' },
+          from: { id: 7, is_bot: false, username: 'media_user' },
+          photo: [{ file_id: 'photo-file', file_unique_id: 'u-photo' }],
+          voice: { file_id: 'voice-file', mime_type: 'audio/ogg' },
+          document: { file_id: 'doc-file', file_name: 'notes.md', mime_type: 'text/markdown' },
+        },
+      });
 
-    expect(received).toHaveLength(1);
-    expect(received[0].content).toBe('[media message]');
-    expect(received[0].attachments).toHaveLength(3);
-    expect(received[0].attachments?.[0].url).toContain('photo-file');
+      expect(received).toHaveLength(1);
+      // htm9.9: the parsed document text enters prompt content wrapped in
+      // <parsed_attachment_text>, never as a bare unparsed attachment.
+      expect(received[0].content).toContain('[media message]');
+      expect(received[0].content).toContain('<parsed_attachment_text>');
+      expect(received[0].content).toContain('hello from telegram');
+      expect(received[0].attachments).toHaveLength(3);
+      expect(received[0].attachments?.[0].url).toContain('photo-file');
+      // Photo bytes are resolved inline so the vision path can consume them.
+      expect(received[0].attachments?.[0].dataBase64).toBe(imageBytes.toString('base64'));
+      expect(received[0].attachments?.[1].url).toContain('voice-file');
+      expect(received[0].attachments?.[2].name).toBe('notes.md');
+      expect(received[0].attachments?.[2].localPath).toBeTruthy();
+    } finally {
+      rmSync(personalFilesDir, { recursive: true, force: true });
+    }
 
     await adapter.outbound.sendMedia?.(
       {

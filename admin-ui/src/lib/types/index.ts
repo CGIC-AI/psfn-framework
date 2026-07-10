@@ -79,6 +79,31 @@ export type {
   AdminEpisodicThreadSummary,
 } from '../../../../src/operator/garden/services/types.js';
 export type {
+  AdminIntakeQuarantineDecisionRequest,
+  AdminIntakeQuarantineFlywheelTarget,
+  AdminIntakeQuarantineItemDetail,
+  AdminIntakeQuarantineItemView,
+  AdminIntakeQuarantineSourceListAction,
+  AdminIntakeSourceListMutationInput,
+} from '../../../../src/operator/garden/services/types.js';
+export type {
+  AdminDriftReviewListData,
+  DriftReviewCard,
+  DriftReviewCardResolution,
+  SecondArrowReviewCard,
+} from '../../../../src/operator/garden/services/types.js';
+export type { DriftSignalResult } from '../../../../src/core/cogsec/drift/drift-signals.js';
+export type {
+  SecondArrowClusterMember,
+  SecondArrowSignalResult,
+} from '../../../../src/core/cogsec/drift/second-arrow-signals.js';
+export type {
+  IntakePolicyConfig,
+  IntakeSourceListEntry,
+  IntakeSourceListName,
+  IntakeSourceListsConfig,
+} from '../../../../src/system/config/intake-policy-config.js';
+export type {
   AdminDashboardData,
   AdminCogSecEventListData,
   AdminCogSecRemediationApplyData,

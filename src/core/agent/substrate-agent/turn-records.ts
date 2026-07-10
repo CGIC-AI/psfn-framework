@@ -47,6 +47,18 @@ export function recordUserMessage(input: {
   contentOverride?: string;
 }): number | null {
   const content = input.contentOverride ?? input.message.content;
+  // htm9.3: intake-envelope snapshots screened by the channel adapter ride
+  // the routing metadata; persisting them onto the session entry lets the
+  // prompt_assembly and memory_write sink gates consult them downstream.
+  const intakeEnvelopes = input.message.routing?.intakeEnvelopes;
+  const recordOptions = {
+    trustLevel: input.trustLevel,
+    turnId: input.turnId,
+    requestId: input.requestId,
+    sourceMessageId: input.message.id,
+    channelMeta: resolveSessionChannelMeta(input.message),
+    ...(intakeEnvelopes && intakeEnvelopes.length > 0 ? { intakeEnvelopes } : {}),
+  };
   if (input.continuityUserId) {
     return input.sessionManager.recordUserMessage(
       input.message.channelId,
@@ -55,13 +67,7 @@ export function recordUserMessage(input: {
       input.message.authorName,
       input.message.isDirectMessage,
       input.continuityUserId,
-      {
-        trustLevel: input.trustLevel,
-        turnId: input.turnId,
-        requestId: input.requestId,
-        sourceMessageId: input.message.id,
-        channelMeta: resolveSessionChannelMeta(input.message),
-      },
+      recordOptions,
     );
   }
 
@@ -72,13 +78,7 @@ export function recordUserMessage(input: {
     input.message.authorName,
     input.message.isDirectMessage,
     undefined,
-    {
-      trustLevel: input.trustLevel,
-      turnId: input.turnId,
-      requestId: input.requestId,
-      sourceMessageId: input.message.id,
-      channelMeta: resolveSessionChannelMeta(input.message),
-    },
+    recordOptions,
   );
 }
 

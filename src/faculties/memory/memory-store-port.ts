@@ -341,6 +341,22 @@ export interface MemoryWriteCommit {
   supersededMemoryIds?: string[];
 }
 
+/**
+ * One active memory paired with its STORED embedding, for deterministic
+ * evidence reads (cogsec second-arrow clustering, htm9.15). Embeddings are
+ * already persisted at write time; this is a pure read, never a re-embed.
+ */
+export interface MemoryEmbeddingSample {
+  id: string;
+  text: string;
+  type: PurrMemory['type'];
+  extractedAt: number;
+  contactId?: string;
+  sourceType?: MemorySourceType;
+  salience: number;
+  embedding: Float32Array;
+}
+
 type Awaitable<T> = T | Promise<T>;
 
 interface MemoryStorePortBackend extends ScratchpadProvider {
@@ -424,6 +440,14 @@ interface MemoryStorePortBackend extends ScratchpadProvider {
   ): Awaitable<MemoryMaintenanceReview[]>;
   getMemoryMaintenanceReview?(id: string): Awaitable<MemoryMaintenanceReview | undefined>;
   getMemoryMaintenanceDiagnostics?(options?: MemoryMaintenanceDiagnosticsOptions): Awaitable<MemoryMaintenanceDiagnostics>;
+  /**
+   * Active memories written at/after `sinceMs`, paired with their stored
+   * embeddings (rows without a persisted embedding are excluded), oldest
+   * first. Optional in the same style as the maintenance-review surface;
+   * consumers (the second-arrow drift lane) fail closed — loudly skip their
+   * scan — when the backing store does not provide it.
+   */
+  listActiveMemoryEmbeddingsSince?(sinceMs: number, limit?: number): Awaitable<MemoryEmbeddingSample[]>;
 }
 
 export interface MemoryStorePort extends ScratchpadProvider {
@@ -498,6 +522,8 @@ export interface MemoryStorePort extends ScratchpadProvider {
   listMemoryMaintenanceReviews?(options?: MemoryMaintenanceReviewListOptions): Promise<MemoryMaintenanceReview[]>;
   getMemoryMaintenanceReview?(id: string): Promise<MemoryMaintenanceReview | undefined>;
   getMemoryMaintenanceDiagnostics?(options?: MemoryMaintenanceDiagnosticsOptions): Promise<MemoryMaintenanceDiagnostics>;
+  /** See MemoryStorePortBackend.listActiveMemoryEmbeddingsSince (htm9.15 evidence read). */
+  listActiveMemoryEmbeddingsSince?(sinceMs: number, limit?: number): Promise<MemoryEmbeddingSample[]>;
 }
 
 export interface CoreMemoryStorePort {
@@ -601,6 +627,13 @@ export function createMemoryStorePort(store: MemoryStorePortBackend): MemoryStor
       ? {
         getMemoryMaintenanceDiagnostics: async (options) => (
           await store.getMemoryMaintenanceDiagnostics!(options)
+        ),
+      }
+      : {}),
+    ...(store.listActiveMemoryEmbeddingsSince
+      ? {
+        listActiveMemoryEmbeddingsSince: async (sinceMs, limit) => (
+          await store.listActiveMemoryEmbeddingsSince!(sinceMs, limit)
         ),
       }
       : {}),

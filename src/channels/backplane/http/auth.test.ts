@@ -6,6 +6,8 @@ import {
   getCookieValue,
   hasBearerToken,
   hasCookieValue,
+  parseSatelliteApiKeys,
+  principalFromSatelliteApiKeyToken,
 } from './auth.js';
 
 function requestWithCookie(cookie: string): IncomingMessage {
@@ -37,6 +39,19 @@ describe('hasCookieValue', () => {
     const req = requestWithCookie('psfn_token=test-admin-secret%3Aphase4');
     expect(hasCookieValue(req, 'psfn_token', 'test-admin-secret:phase4')).toBe(true);
   });
+
+  it('rejects mismatched or absent cookie without throwing on length differences', () => {
+    const wrong = requestWithCookie('psfn_token=wrong');
+    expect(hasCookieValue(wrong, 'psfn_token', 'test-admin-secret:phase4')).toBe(false);
+
+    // A cookie far longer than expected must return false, not throw
+    // (timingSafeEqual over raw buffers throws on unequal lengths).
+    const longer = requestWithCookie(`psfn_token=${'x'.repeat(4096)}`);
+    expect(hasCookieValue(longer, 'psfn_token', 'test-admin-secret:phase4')).toBe(false);
+
+    const missing = { headers: {} } as IncomingMessage;
+    expect(hasCookieValue(missing, 'psfn_token', 'test-admin-secret:phase4')).toBe(false);
+  });
 });
 
 describe('bearer auth helpers', () => {
@@ -57,5 +72,30 @@ describe('bearer auth helpers', () => {
     const req = requestWithAuthorization('Bearer wrong-key');
     expect(getBearerPrincipal(req, 'test-secret-key')).toBeNull();
     expect(hasBearerToken(req, 'test-secret-key')).toBe(false);
+  });
+});
+
+describe('parseSatelliteApiKeys (Sprint-10 H4)', () => {
+  it('parses distinct keys into distinct satellite-scoped principals', () => {
+    const keys = parseSatelliteApiKeys('satellite-key-alpha-0001, satellite-key-beta-0002');
+    expect(keys).toEqual(['satellite-key-alpha-0001', 'satellite-key-beta-0002']);
+    const principalA = principalFromSatelliteApiKeyToken(keys[0]!);
+    const principalB = principalFromSatelliteApiKeyToken(keys[1]!);
+    expect(principalA.scope).toBe('satellite');
+    expect(principalB.scope).toBe('satellite');
+    expect(principalA.id).not.toBe(principalB.id);
+  });
+
+  it('returns empty for unset config', () => {
+    expect(parseSatelliteApiKeys(undefined)).toEqual([]);
+    expect(parseSatelliteApiKeys('  ')).toEqual([]);
+  });
+
+  it('fails closed on weak, duplicate, or shared-credential-colliding keys', () => {
+    expect(() => parseSatelliteApiKeys('short')).toThrow('at least 16 characters');
+    expect(() => parseSatelliteApiKeys('satellite-key-alpha-0001,satellite-key-alpha-0001')).toThrow('distinct');
+    expect(() => parseSatelliteApiKeys('satellite-key-alpha-0001', {
+      reservedTokens: ['satellite-key-alpha-0001'],
+    })).toThrow('must not reuse API_KEY or ADMIN_TOKEN');
   });
 });

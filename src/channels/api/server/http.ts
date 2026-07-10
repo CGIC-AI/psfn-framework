@@ -1,4 +1,6 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
+import { createServer as createHttpsServer, type Server as HttpsServer } from 'node:https';
+import { readFileSync } from 'node:fs';
 import type { Duplex } from 'node:stream';
 import { sendJson } from '../../backplane/http/primitives.js';
 import {
@@ -25,8 +27,25 @@ export interface ApiHttpServerHandlers {
   handleUpgrade(req: IncomingMessage, socket: Duplex, head: Buffer): void;
 }
 
+export type ApiHttpServer = Server | HttpsServer;
+
+/**
+ * Optional direct-TLS termination for the API listener. When configured, the
+ * server requests (but does not require) a client certificate so satellite
+ * mTLS bindings can be verified against the REAL peer certificate.
+ * `rejectUnauthorized` stays false because non-satellite API clients present
+ * no client certificate; identity is enforced by fail-closed binding
+ * matching: fingerprint/SPKI pins are self-authenticating, and subject/SAN
+ * attributes are only honored when the chain validates against `caPath`.
+ */
+export interface ApiHttpServerTlsConfig {
+  certPath: string;
+  keyPath: string;
+  caPath?: string;
+}
+
 export interface ListenApiHttpServerOptions {
-  server: Server;
+  server: ApiHttpServer;
   host: string;
   port: number;
   apiKey?: string;
@@ -34,10 +53,50 @@ export interface ListenApiHttpServerOptions {
   logger: ApiServerLogger;
 }
 
-export function createApiHttpServer(handlers: ApiHttpServerHandlers): Server {
-  const server = createServer((req, res) => handlers.handleRequest(req, res));
+export function createApiHttpServer(
+  handlers: ApiHttpServerHandlers,
+  tls?: ApiHttpServerTlsConfig,
+): ApiHttpServer {
+  const server = tls
+    ? createHttpsServer(
+      {
+        cert: readFileSync(tls.certPath),
+        key: readFileSync(tls.keyPath),
+        ...(tls.caPath ? { ca: readFileSync(tls.caPath) } : {}),
+        requestCert: true,
+        rejectUnauthorized: false,
+        minVersion: 'TLSv1.2',
+      },
+      (req, res) => handlers.handleRequest(req, res),
+    )
+    : createServer((req, res) => handlers.handleRequest(req, res));
   server.on('upgrade', (req, socket, head) => handlers.handleUpgrade(req, socket, head));
   return server;
+}
+
+/**
+ * Parse API TLS listener config from env. Partial configuration is a startup
+ * error: cert and key must be configured together, and a client CA without a
+ * cert/key pair is meaningless.
+ */
+export function resolveApiHttpServerTlsConfig(env: NodeJS.ProcessEnv): ApiHttpServerTlsConfig | undefined {
+  const certPath = env.API_TLS_CERT_PATH?.trim() || undefined;
+  const keyPath = env.API_TLS_KEY_PATH?.trim() || undefined;
+  const caPath = env.API_TLS_CLIENT_CA_PATH?.trim() || undefined;
+  if (!certPath && !keyPath) {
+    if (caPath) {
+      throw new Error('API_TLS_CLIENT_CA_PATH requires API_TLS_CERT_PATH and API_TLS_KEY_PATH');
+    }
+    return undefined;
+  }
+  if (!certPath || !keyPath) {
+    throw new Error('API_TLS_CERT_PATH and API_TLS_KEY_PATH must be configured together');
+  }
+  return {
+    certPath,
+    keyPath,
+    ...(caPath ? { caPath } : {}),
+  };
 }
 
 export function parseChatRequestTimeoutMs(value: number | undefined): number {
@@ -111,7 +170,7 @@ export function listenApiHttpServer(options: ListenApiHttpServerOptions): Promis
   });
 }
 
-export function stopApiHttpServer(server: Server): Promise<void> {
+export function stopApiHttpServer(server: ApiHttpServer): Promise<void> {
   return new Promise((resolve, reject) => {
     server.close((err) => {
       if (err) reject(err);

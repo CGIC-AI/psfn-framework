@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   INSECURE_LOCAL_API_PRINCIPAL,
   principalFromApiKeyToken,
+  principalFromSatelliteApiKeyToken,
 } from '../backplane/http/auth.js';
 import { parseSatelliteRegistryConfig } from '../backplane/satellite-registry.js';
 import { resolveApiTurnIdentity } from './external-channel-claim.js';
@@ -243,5 +244,37 @@ describe('resolveApiTurnIdentity', () => {
       type: 'external_channel_claim_requires_api_key',
       message: 'External channel claims require API key authentication',
     });
+  });
+});
+
+describe('satellite-scoped principals (Sprint-10 H4)', () => {
+  it('rejects satellite-scoped principals that do not present a satellite claim', () => {
+    const result = resolveApiTurnIdentity({
+      headers: {},
+      principal: principalFromSatelliteApiKeyToken('satellite-key-alpha-0001'),
+      defaultChannelId: 'api:default',
+      defaultAuthorId: 'api-user',
+      defaultAuthorName: 'API User',
+      satelliteRegistry,
+    });
+    expect(result.ok).toBe(false);
+    expect(!result.ok && result.status).toBe(403);
+    expect(!result.ok && result.type).toBe('satellite_scoped_principal_requires_satellite_claim');
+  });
+
+  it('rejects satellite-scoped principals presenting an external channel claim instead of a satellite claim', () => {
+    const result = resolveApiTurnIdentity({
+      headers: {
+        'x-psfn-channel-type': 'psfn-amica',
+        'x-psfn-channel-id': 'psfn-amica:test:display',
+      },
+      principal: principalFromSatelliteApiKeyToken('satellite-key-alpha-0001'),
+      defaultChannelId: 'api:default',
+      defaultAuthorId: 'api-user',
+      defaultAuthorName: 'API User',
+      satelliteRegistry,
+    });
+    expect(result.ok).toBe(false);
+    expect(!result.ok && result.type).toBe('satellite_scoped_principal_requires_satellite_claim');
   });
 });

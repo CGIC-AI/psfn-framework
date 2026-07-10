@@ -743,6 +743,206 @@ describe('registerWebMethods', () => {
     });
   });
 
+  // ── Sprint-10 H2: response byte caps enforced DURING streaming ──
+  // The server streams chunked bodies (no content-length header) and never
+  // calls end(), so only in-flight enforcement can reject: a post-buffer
+  // check would hang until the request timeout.
+
+  async function listenStreamingHttp(
+    chunk: Buffer,
+    maxWrites: number,
+  ): Promise<{ server: Server; url: string; stats: { writes: number; closed: boolean } }> {
+    const stats = { writes: 0, closed: false };
+    const server = createServer((_req, res) => {
+      res.statusCode = 200;
+      res.setHeader('content-type', 'application/octet-stream');
+      res.on('close', () => {
+        stats.closed = true;
+      });
+      // Respect backpressure so `stats.writes` tracks actual delivery: once
+      // the client destroys the socket, no further chunks are written.
+      const writeNext = (): void => {
+        if (stats.closed || stats.writes >= maxWrites) return;
+        stats.writes += 1;
+        if (res.write(chunk)) {
+          setImmediate(writeNext);
+        } else {
+          res.once('drain', writeNext);
+        }
+      };
+      writeNext();
+    });
+
+    await new Promise<void>((resolve, reject) => {
+      server.listen(0, '127.0.0.1', () => resolve());
+      server.once('error', reject);
+    });
+    const address = server.address();
+    if (!address || typeof address === 'string') {
+      server.close();
+      throw new Error('failed to bind streaming test http server');
+    }
+    return { server, url: `http://127.0.0.1:${address.port}`, stats };
+  }
+
+  const localCrawlerPolicy = {
+    workspacePath: process.cwd(),
+    urlPolicy: {
+      localCrawlerLane: {
+        enabled: true,
+        allowHttp: true,
+        hostAllowlist: ['127.0.0.1', 'localhost'],
+      },
+    },
+  };
+
+  it('destroys and rejects a chunked length-omitted text response exceeding the cap', async () => {
+    // Text-lane cap is 8 MiB; stream 1 MiB chunks with no content-length.
+    const { server, url, stats } = await listenStreamingHttp(Buffer.alloc(1024 * 1024, 0x61), 32);
+    servers.push(server);
+
+    const harness = createRuntimeHarness(localCrawlerPolicy);
+
+    await expect(harness.invoke({
+      url: `${url}/unbounded-text`,
+      lane: 'local_crawler',
+    })).rejects.toMatchObject({
+      code: GatewayErrors.PROVIDER_ERROR,
+      message: expect.stringContaining('too large'),
+    });
+
+    // The socket was destroyed mid-stream: the server observed the close and
+    // stopped well before its 32 MiB write budget.
+    await vi.waitFor(() => {
+      expect(stats.closed).toBe(true);
+    });
+    expect(stats.writes).toBeLessThan(32);
+  });
+
+  it('destroys and rejects a chunked length-omitted binary response exceeding maxBytes', async () => {
+    const { server, url, stats } = await listenStreamingHttp(Buffer.alloc(1024, 0x62), 64);
+    servers.push(server);
+
+    const harness = createRuntimeHarness(localCrawlerPolicy);
+
+    await expect(harness.invokeBinary({
+      url: `${url}/unbounded-binary`,
+      lane: 'local_crawler',
+      maxBytes: 2048,
+    })).rejects.toMatchObject({
+      code: GatewayErrors.PROVIDER_ERROR,
+      message: expect.stringContaining('too large'),
+    });
+
+    await vi.waitFor(() => {
+      expect(stats.closed).toBe(true);
+    });
+    expect(stats.writes).toBeLessThan(64);
+  });
+
+  // ── Sprint-10 01-M1: credentials dropped on origin-changing redirects ──
+
+  it('drops Authorization/Cookie on a cross-port redirect but keeps benign headers', async () => {
+    let targetHeaders: Record<string, string | string[] | undefined> | null = null;
+    const { server: targetServer, url: targetUrl } = await listenHttp((_reqUrl, headers) => {
+      targetHeaders = headers;
+      return { body: Buffer.from([1]), contentType: 'application/octet-stream' };
+    });
+    servers.push(targetServer);
+
+    const { server: originServer, url: originUrl } = await listenHttp(() => ({
+      status: 302,
+      headers: { location: `${targetUrl}/target` },
+      body: 'redirecting',
+    }));
+    servers.push(originServer);
+
+    const harness = createRuntimeHarness(localCrawlerPolicy);
+    await harness.invokeBinary({
+      url: `${originUrl}/start`,
+      lane: 'local_crawler',
+      headers: {
+        Authorization: 'Bearer secret-token',
+        Cookie: 'session=abc',
+        'Proxy-Authorization': 'Basic cHJveHk=',
+        'X-Keep': 'benign',
+      },
+    });
+
+    expect(targetHeaders).toBeTruthy();
+    expect(targetHeaders!.authorization).toBeUndefined();
+    expect(targetHeaders!.cookie).toBeUndefined();
+    expect(targetHeaders!['proxy-authorization']).toBeUndefined();
+    expect(targetHeaders!['x-keep']).toBe('benign');
+  });
+
+  it('drops Authorization/Cookie on a cross-host redirect (same port)', async () => {
+    const seen: Array<{ path: string; headers: Record<string, string | string[] | undefined> }> = [];
+    const { server, url } = await listenHttp((reqUrl, headers) => {
+      seen.push({ path: reqUrl, headers });
+      if (reqUrl === '/start') {
+        const port = new URL(url).port;
+        return {
+          status: 302,
+          // Same server socket, but a different hostname = different origin.
+          headers: { location: `http://localhost:${port}/target` },
+          body: 'redirecting',
+        };
+      }
+      return { body: Buffer.from([1]), contentType: 'application/octet-stream' };
+    });
+    servers.push(server);
+
+    // Pin `localhost` to the IPv4 test server (system resolvers may prefer ::1).
+    const dnsResolver: DnsResolver = async () => ({ address: '127.0.0.1', family: 4 });
+    const harness = createRuntimeHarness({
+      ...localCrawlerPolicy,
+      webFetchDnsResolver: dnsResolver,
+    } as PolicyConfig & { webFetchDnsResolver: DnsResolver });
+    await harness.invokeBinary({
+      url: `${url}/start`,
+      lane: 'local_crawler',
+      headers: {
+        Authorization: 'Bearer secret-token',
+        Cookie: 'session=abc',
+      },
+    });
+
+    const start = seen.find(entry => entry.path === '/start');
+    const target = seen.find(entry => entry.path === '/target');
+    expect(start?.headers.authorization).toBe('Bearer secret-token');
+    expect(target).toBeTruthy();
+    expect(target!.headers.authorization).toBeUndefined();
+    expect(target!.headers.cookie).toBeUndefined();
+  });
+
+  it('keeps Authorization across same-origin redirects', async () => {
+    const seen: Array<{ path: string; headers: Record<string, string | string[] | undefined> }> = [];
+    const { server, url } = await listenHttp((reqUrl, headers) => {
+      seen.push({ path: reqUrl, headers });
+      if (reqUrl === '/start') {
+        return {
+          status: 302,
+          headers: { location: '/same-origin-target' },
+          body: 'redirecting',
+        };
+      }
+      return { body: Buffer.from([1]), contentType: 'application/octet-stream' };
+    });
+    servers.push(server);
+
+    const harness = createRuntimeHarness(localCrawlerPolicy);
+    await harness.invokeBinary({
+      url: `${url}/start`,
+      lane: 'local_crawler',
+      headers: { Authorization: 'Bearer secret-token' },
+    });
+
+    const target = seen.find(entry => entry.path === '/same-origin-target');
+    expect(target).toBeTruthy();
+    expect(target!.headers.authorization).toBe('Bearer secret-token');
+  });
+
   it('pins outbound connection to validated DNS address to avoid TOCTOU rebind', async () => {
     const { server, url } = await listenHttp(() => ({
       body: 'pinned ok',

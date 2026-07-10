@@ -1,4 +1,6 @@
 import type { MemorySourceType, MemoryType } from '../../faculties/memory/types.js';
+import { isIntakeFirewallNoticeText } from './intake-firewall-notice-templates.js';
+import type { IntakeSinkGateDecision } from './intake/sink-gates.js';
 
 export type CogSecMemoryRiskClass =
   | 'A_harmless_fact'
@@ -15,6 +17,16 @@ export interface CogSecMemoryCandidacyInput {
   tags?: readonly string[];
   sourceRef?: string;
   sourceType?: MemorySourceType;
+  /**
+   * Upstream intake sink-gate decision for the `memory_write` sink (htm9.3).
+   * When the source content carried intake envelopes, the caller evaluates
+   * the gate (src/core/cogsec/intake/sink-gates.ts) and passes the decision
+   * here, so candidacy reads the upstream screening verdict instead of
+   * re-deriving it. A mode-aware denied decision rejects the candidate
+   * outright; the local pattern heuristics still run afterwards as defense
+   * in depth for extraction-synthesized text.
+   */
+  intakeGateDecision?: IntakeSinkGateDecision;
 }
 
 export interface CogSecMemoryCandidacyDecision {
@@ -131,6 +143,38 @@ export function evaluateCogSecMemoryCandidacy(
       riskClass: 'A_harmless_fact',
       reasonCodes: ['empty_text'],
       safeSummary: 'Rejected empty memory candidate.',
+    };
+  }
+
+  // Upstream sink-gate verdict (htm9.3): when the memory_write gate denied
+  // the source content's envelopes, the candidate is rejected on that
+  // decision — no local re-derivation. The decision is mode-aware (shadow
+  // mode never denies), so this path only fires under enforce.
+  if (input.intakeGateDecision && input.intakeGateDecision.sink !== 'memory_write') {
+    throw new Error(
+      `Memory candidacy received a sink-gate decision for '${input.intakeGateDecision.sink}'; `
+      + "expected 'memory_write'",
+    );
+  }
+  if (input.intakeGateDecision && !input.intakeGateDecision.allowed) {
+    return {
+      disposition: 'reject',
+      riskClass: 'D_policy_security_modification',
+      reasonCodes: ['intake_sink_gate_denied'],
+      safeSummary: 'Rejected memory candidate denied by the intake memory-write sink gate.',
+    };
+  }
+
+  // Intake-firewall quarantine notices must never become durable memory: a
+  // firewall event must not leave a lasting "memory of threat". Reject before
+  // any allow path (htm9.12). The notice text itself is harmless soft wording,
+  // so this is not a security risk class — it is a well-being exclusion.
+  if (isIntakeFirewallNoticeText(text)) {
+    return {
+      disposition: 'reject',
+      riskClass: 'A_harmless_fact',
+      reasonCodes: ['intake_firewall_quarantine_notice'],
+      safeSummary: 'Excluded intake-firewall quarantine notice from memory extraction.',
     };
   }
 

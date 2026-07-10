@@ -14,6 +14,7 @@ PSFN boots through the split runtime. The legacy `src/app/startup/index.ts` entr
   - `ADMIN_TOKEN`
   - `DEEPGRAM_API_KEY`
   - `ELEVENLABS_API_KEY`
+  - `API_SATELLITE_KEYS` — comma-separated per-satellite bearer keys (each >=16 chars); each key yields a distinct satellite-scoped principal that `satellites.json` endpoints must list in `auth.apiKeyPrincipalIds`. Only needed when running satellites; leave unset otherwise.
 - Required deployment identity wiring:
   - `COMPANION_ID`
 
@@ -54,6 +55,7 @@ Mutable runtime/admin configuration lives under the system-data config domain:
 - `channels.json`
 - `skills.json`
 - `trust-policy.json`
+- `intake-policy.json`
 - `charge-policy.json`
 - `backup.json`
 
@@ -84,16 +86,25 @@ Startup verifies the seed-backed owner files before the split runtime comes up. 
    cp config/scheduler.seed.json ./data/scheduler.json
    cp config/capability-tier.seed.json ./data/capability-tier.json
    cp config/trust-policy.seed.json ./data/trust-policy.json
+   cp config/intake-policy.seed.json ./data/intake-policy.json
    cp config/charge-policy.seed.json ./data/charge-policy.json
    cp config/backup.seed.json ./data/backup.json
    cp config/skills.seed.json ./data/skills.json
    ```
 
-3. Provide the explicit character card at `CHARACTER_CARD_PATH`. Startup fails if the configured identity file is missing. Keep this active identity file under runtime data, not under the personal writable workspace.
+3. Provision the intake firewall's L1.5 prompt-injection classifier model (optional but recommended; ~704 MiB, gitignored, never downloaded at runtime):
 
-4. Keep the backup encryption key secret in `.env` or your deployment secret manager. `backup.json` should contain only the env key reference. Generate a local key with `openssl rand -base64 48`.
+   ```bash
+   npm run provision:injection-model -- --dest ./models/prompt-injection-v2
+   ```
 
-5. Start the split runtime (gateway + agent + operator):
+   Without it the gateway skips L1.5 scoring with a loud startup warning and screens on the deterministic L1 layer alone; a present-but-broken model directory fails startup closed. Override the location with `PSFN_INJECTION_MODEL_DIR`. The `intake-policy.json` owner file copied above controls the firewall mode (`off`/`shadow`/`enforce`; the seed ships `shadow`) — see [`docs/cognitive-security.md`](./cognitive-security.md).
+
+4. Provide the explicit character card at `CHARACTER_CARD_PATH`. Startup fails if the configured identity file is missing. Keep this active identity file under runtime data, not under the personal writable workspace.
+
+5. Keep the backup encryption key secret in `.env` or your deployment secret manager. `backup.json` should contain only the env key reference. Generate a local key with `openssl rand -base64 48`.
+
+6. Start the split runtime (gateway + agent + operator):
 
    ```bash
    npm run split
@@ -101,13 +112,13 @@ Startup verifies the seed-backed owner files before the split runtime comes up. 
 
    The launcher loads `.env` for gateway/operator processes, then starts the agent with a curated non-secret environment allowlist. Provider credentials, API keys, and admin tokens stay gateway/operator-owned.
 
-6. If you want the integrated Garden SPA served by the admin host, build it once:
+7. If you want the integrated Garden SPA served by the admin host, build it once:
 
    ```bash
    npm run garden:build
    ```
 
-7. If you want the standalone Garden dev server instead:
+8. If you want the standalone Garden dev server instead:
 
    ```bash
    npm run garden:dev
@@ -210,6 +221,11 @@ Provider selection and tuning stay in `settings.json`.
 ### Satellite Hub Endpoints
 
 Wyoming/OpenHome endpoint transports live in the Satellite Hub repository. Configure endpoint host/port/runtime wiring there, then configure PSFN's `satellites.json` registry for claim-validated hub/API traffic.
+
+Satellite authentication has two layers:
+
+- **Per-satellite bearer keys**: set `API_SATELLITE_KEYS` (comma-separated, each >=16 chars). Each key yields a distinct satellite-scoped principal id that the matching `satellites.json` endpoint must list in `auth.apiKeyPrincipalIds`. Satellite keys are only valid on satellite surfaces.
+- **Mutual TLS**: satellite client-cert identity is bound to the API listener's real TLS peer certificate (or to `X-PSFN-Client-Cert-*` headers only behind a trusted proxy presenting `API_TRUSTED_PROXY_CLIENT_CERT_TOKEN`). Certificate issuance, renewal, and revocation run through the cert-manager sidecar (`npm run cert-manager`, `src/app/cert-manager/`) — see [`docs/certificates.md`](./certificates.md) for the full bootstrap.
 
 ## Sanity Checks
 

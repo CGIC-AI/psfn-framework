@@ -9,6 +9,7 @@ import type {
   HomeAssistantState,
 } from '../../gateway/protocol.js';
 import type { TrustLevel } from '../../../system/trust/types.js';
+import type { RequesterProvenance } from '../../../shared/contracts/runtime.js';
 import type { WorldOperations } from './ops.js';
 import { createWorldTool } from './tools.js';
 
@@ -118,13 +119,20 @@ function resultText(result: { content: Array<{ text: string }> }): string {
   return result.content.map((entry) => entry.text).join('');
 }
 
-// Effector control ships staged off and trust-gated; this helper opens both
-// gates so the deeper actuation/validation paths can be exercised directly.
-function createControlTool(ops: WorldOperations, trust: TrustLevel = 'primary') {
+// Effector control ships staged off, provenance-gated (Gate 2a) and trust-gated
+// (Gate 2b); this helper opens the staged-off gate and, by default, presents a
+// LIVE HUMAN primary requester so the deeper actuation/validation paths and the
+// trust gate can be exercised directly. Pass `provenance` to probe Gate 2a.
+function createControlTool(
+  ops: WorldOperations,
+  trust: TrustLevel = 'primary',
+  provenance: RequesterProvenance = 'human',
+) {
   return createWorldTool(ops, {
     placesRegistry: REGISTRY,
     controlEnabled: true,
     resolveRequesterTrust: () => trust,
+    resolveRequesterProvenance: () => provenance,
   });
 }
 
@@ -336,7 +344,13 @@ describe('world tool', () => {
 
   it('with control enabled and no trust resolver wired, refuses control fail-closed', async () => {
     const ops = createMockOps();
-    const tool = createWorldTool(ops, { placesRegistry: REGISTRY, controlEnabled: true });
+    // Present a live human so Gate 2a passes; the absent trust resolver must then
+    // still fail closed at Gate 2b.
+    const tool = createWorldTool(ops, {
+      placesRegistry: REGISTRY,
+      controlEnabled: true,
+      resolveRequesterProvenance: () => 'human',
+    });
     const result = await tool.execute('call-control', {
       action: 'control',
       affordanceId: 'lr_lights',
@@ -344,6 +358,55 @@ describe('world tool', () => {
     });
     expect(ops.callService).not.toHaveBeenCalled();
     expect(resultText(result)).toContain('requires a primary or trusted requester');
+  });
+
+  // ── Gate 2a — human-in-the-loop provenance (H3, Sprint-10 latent-High) ──
+  // Self-directed/heartbeat/system turns carry trustLevel 'primary' for memory/
+  // prompt scoping but have NO human requester. Effector control must refuse them
+  // on provenance, EVEN at primary trust — trust level alone must never satisfy a
+  // human-in-the-loop gate.
+  it('refuses a self-directed heartbeat turn at primary trust (Gate 2a provenance)', async () => {
+    const ops = createMockOps();
+    const tool = createControlTool(ops, 'primary', 'self_directed');
+    const result = await tool.execute('call-control', {
+      action: 'control',
+      affordanceId: 'lr_lights',
+      command: 'on',
+    });
+    expect(ops.callService).not.toHaveBeenCalled();
+    expect(result.details?.isError).toBe(true);
+    expect(resultText(result)).toContain('requires a live human requester');
+    expect(resultText(result)).toContain('self_directed');
+  });
+
+  it('refuses a system-injected turn at primary trust (Gate 2a provenance)', async () => {
+    const ops = createMockOps();
+    const tool = createControlTool(ops, 'primary', 'system');
+    const result = await tool.execute('call-control', {
+      action: 'control',
+      affordanceId: 'lr_lights',
+      command: 'on',
+    });
+    expect(ops.callService).not.toHaveBeenCalled();
+    expect(resultText(result)).toContain('requires a live human requester');
+  });
+
+  it('with control enabled and no provenance resolver wired, refuses control fail-closed', async () => {
+    const ops = createMockOps();
+    // Trust resolver present (primary) but provenance absent ⇒ Gate 2a treats it
+    // as non-human and refuses before the trust gate.
+    const tool = createWorldTool(ops, {
+      placesRegistry: REGISTRY,
+      controlEnabled: true,
+      resolveRequesterTrust: () => 'primary',
+    });
+    const result = await tool.execute('call-control', {
+      action: 'control',
+      affordanceId: 'lr_lights',
+      command: 'on',
+    });
+    expect(ops.callService).not.toHaveBeenCalled();
+    expect(resultText(result)).toContain('requires a live human requester');
   });
 
   it('with control enabled, allows primary and trusted requesters to drive effectors', async () => {

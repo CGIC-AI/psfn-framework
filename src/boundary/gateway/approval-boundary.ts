@@ -17,6 +17,7 @@ import {
   notifyOperatorForPendingAction,
 } from './ntfy-notifier.js';
 import { executeQueuedAction, resolveCompanionReason } from './confirmation-actions.js';
+import type { CanaryEgressGuard } from './canary-egress-guard.js';
 
 interface ApprovalBoundaryAuditHooks {
   audit(method: string, decision: PolicyDecision, params?: Record<string, unknown>): Promise<number>;
@@ -31,6 +32,11 @@ interface ApprovalBoundaryOptions extends ApprovalBoundaryAuditHooks {
   discordAdapter: ChannelOutboundDock;
   capabilityTierProvider: () => CapabilityTier;
   confirmation?: Partial<GatewayConfirmationConfig>;
+  /**
+   * htm9.18 egress tripwire. Gated egress methods (e.g. web.fetch) run their
+   * handlers through this boundary, so the canary scan must also apply here.
+   */
+  canaryEgressGuard?: CanaryEgressGuard;
 }
 
 export interface GatewayConfirmationConfig {
@@ -77,7 +83,21 @@ export function createGatewayApprovalBoundaryService(
     listConfirmationHistory: () => confirmationQueue.listHistory(),
     resolveConfirmation: (params) => confirmationQueue.resolve(params),
     gate<P, R>(gateOptions: ApprovalBoundaryGateOptions<P, R>): (params: P) => Promise<R> {
-      return async (params: P) => {
+      return async (rawParams: P) => {
+        // htm9.18 egress tripwire: hold the action if the session canary leaked
+        // into this outbound method, and strip the carrier before policy eval,
+        // approval enqueue, or the handler ever sees it.
+        let params: P;
+        try {
+          params = (options.canaryEgressGuard
+            ? options.canaryEgressGuard.inspect(gateOptions.method, rawParams)
+            : rawParams) as P;
+        } catch (err) {
+          options.recordMethodFailure(gateOptions.method, err);
+          const heldAuditId = await options.audit(gateOptions.method, 'DENY', { canaryEgressHeld: true });
+          await options.auditComplete(heldAuditId, Date.now(), toErrorMessage(err));
+          throw err;
+        }
         const decision = evaluatePolicy(
           { method: gateOptions.method, params: params as unknown as Record<string, unknown> },
           options.policyConfig,

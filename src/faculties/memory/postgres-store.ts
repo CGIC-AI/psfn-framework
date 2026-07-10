@@ -43,6 +43,7 @@ import type {
   ScratchpadEntry,
   ScratchpadEntryCreateOptions,
   ScratchpadEntryReplaceOptions,
+  MemoryEmbeddingSample,
   MemoryWriteCommit,
 } from './memory-store-port.js';
 import { normalizeMemorySalienceUpdates } from './memory-store-port.js';
@@ -700,6 +701,37 @@ class PostgresMemoryStore implements MemoryStorePort {
     return Array.from(this.memories.values())
       .filter(memory => !memory.supersededBy && !memory.deletedAt)
       .sort((left, right) => right.extractedAt - left.extractedAt || left.id.localeCompare(right.id))
+      .slice(0, limit);
+  }
+
+  /**
+   * Active memories written at/after `sinceMs`, paired with their stored
+   * embeddings (htm9.15 second-arrow evidence read). Pure read over hydrated
+   * state — rows lacking a persisted embedding are excluded, never re-embedded.
+   */
+  async listActiveMemoryEmbeddingsSince(
+    sinceMs: number,
+    limit: number = 4096,
+  ): Promise<MemoryEmbeddingSample[]> {
+    const samples: MemoryEmbeddingSample[] = [];
+    for (const memory of this.memories.values()) {
+      if (memory.supersededBy || memory.deletedAt) continue;
+      if (!Number.isFinite(memory.extractedAt) || memory.extractedAt < sinceMs) continue;
+      const embedding = this.embeddings.get(memory.id);
+      if (!embedding) continue;
+      samples.push({
+        id: memory.id,
+        text: memory.text,
+        type: memory.type,
+        extractedAt: memory.extractedAt,
+        ...(memory.contactId !== undefined ? { contactId: memory.contactId } : {}),
+        ...(memory.sourceType !== undefined ? { sourceType: memory.sourceType } : {}),
+        salience: memory.salience,
+        embedding,
+      });
+    }
+    return samples
+      .sort((left, right) => left.extractedAt - right.extractedAt || left.id.localeCompare(right.id))
       .slice(0, limit);
   }
 

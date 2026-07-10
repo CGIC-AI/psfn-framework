@@ -19,28 +19,38 @@ import type {
   SatelliteConfig,
   SatelliteRegistryConfig,
 } from '../../../shared/contracts/satellite-registry.js';
+import { satelliteAdmitsAuthenticatedOrigin } from '../../../shared/contracts/satellite-registry.js';
 import { createComponentLogger } from '../../../shared/logger.js';
 import { toErrorMessage } from '../../../shared/utils/errors.js';
 import { isRecord } from '../../../shared/utils/types.js';
 
 const log = createComponentLogger('SensorCognitionBridge');
 const MAX_SEEN_EVENT_KEYS = 1_024;
-const RAW_BIOMETRIC_KEYS = new Set([
-  'biometricTemplate',
-  'biometric_template',
-  'descriptor',
-  'embedding',
-  'faceDescriptor',
-  'face_descriptor',
-  'faceEmbedding',
-  'face_embedding',
-  'frame',
-  'image',
-  'imageBytes',
-  'image_bytes',
-  'photo',
-  'template',
+
+// Sprint-10 04-M3: identity-claim payloads are screened with a fail-closed
+// WHITELIST, not a denylist. The only content cognition consumes from a face
+// identity claim is `hubIdentityId` + `confidence`; the rest of the payload is
+// origin-routing/descriptor scaffolding the bridge itself reads. Any key that
+// is not on this list — including raw-biometric fields like faceVector, iris,
+// descriptors, or deeply nested blobs a denylist would miss — fails the claim
+// closed before it can reach core cognition.
+const IDENTITY_CLAIM_WHITELISTED_KEYS: ReadonlySet<string> = new Set([
+  // Origin routing (resolveTelemetryOrigin reads these, incl. nested `origin`).
+  'satelliteId', 'satellite_id',
+  'placeId', 'place_id',
+  'siteId', 'site_id',
+  'affordanceId', 'affordance_id',
+  'origin', 'satellite', 'site', 'sensor',
+  'id',
+  // Event descriptor (looksLikeIdentityClaim reads these).
+  'type', 'kind', 'event', 'eventType', 'action',
+  // Claim container.
+  'identityClaim', 'identity_claim', 'claim',
+  // Claim content — the ONLY fields consumed by cognition.
+  'hubIdentityId', 'hub_identity_id',
+  'confidence', 'score', 'probability',
 ]);
+const IDENTITY_CLAIM_MAX_DEPTH = 4;
 
 type PerceptionScope = 'presence' | 'face';
 
@@ -201,17 +211,20 @@ function hasActiveBridgeConfig(input: {
   });
 }
 
-function containsRawBiometricPayload(value: unknown, depth = 0): boolean {
-  if (depth > 4) return false;
-  if (Array.isArray(value)) {
-    return value.some(entry => containsRawBiometricPayload(entry, depth + 1));
-  }
-  if (!isRecord(value)) return false;
+// Fail-closed whitelist: returns true only when EVERY key in the identity-claim
+// payload graph is expected scaffolding or claim content. Arrays and
+// over-deep nesting are rejected (an identity claim is a flat set of scalar
+// routing/claim fields), so raw biometric material — however it is named or
+// nested — cannot pass.
+function identityClaimPayloadIsWhitelisted(value: unknown, depth = 0): boolean {
+  if (depth > IDENTITY_CLAIM_MAX_DEPTH) return false;
+  if (Array.isArray(value)) return false;
+  if (!isRecord(value)) return true;
   for (const [key, nested] of Object.entries(value)) {
-    if (RAW_BIOMETRIC_KEYS.has(key)) return true;
-    if (containsRawBiometricPayload(nested, depth + 1)) return true;
+    if (!IDENTITY_CLAIM_WHITELISTED_KEYS.has(key)) return false;
+    if (!identityClaimPayloadIsWhitelisted(nested, depth + 1)) return false;
   }
-  return false;
+  return true;
 }
 
 function readOriginRecord(payload: Record<string, unknown>): Record<string, unknown> | undefined {
@@ -235,6 +248,19 @@ function resolveTelemetryOrigin(
   if (!satellite) {
     return { ok: false, kind: 'malformed', reason: 'unregistered_satellite_origin', satelliteId };
   }
+
+  // Sprint-10 04-M1: the payload-claimed satellite origin is only honored
+  // when the credential that authenticated the ingest request is admitted by
+  // that satellite's registered endpoint auth (principal binding, and cert
+  // binding for mTLS endpoints). Telemetry without an authenticated origin
+  // context fails closed.
+  if (!event.auth) {
+    return { ok: false, kind: 'malformed', reason: 'missing_authenticated_origin', satelliteId };
+  }
+  if (!satelliteAdmitsAuthenticatedOrigin(satellite, event.auth)) {
+    return { ok: false, kind: 'malformed', reason: 'satellite_origin_not_authorized_for_principal', satelliteId };
+  }
+
   if (!satellite.placeId) {
     return { ok: false, kind: 'malformed', reason: 'satellite_has_no_place_binding', satelliteId };
   }
@@ -392,7 +418,7 @@ function normalizeIdentityClaimEvent(
       placeId: origin.placeId,
     };
   }
-  if (containsRawBiometricPayload(event.payload)) {
+  if (!identityClaimPayloadIsWhitelisted(event.payload)) {
     return {
       ok: false,
       kind: 'malformed',

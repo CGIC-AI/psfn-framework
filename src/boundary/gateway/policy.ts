@@ -36,6 +36,27 @@ export interface VaultPolicyConfig {
   ops?: VaultOperations;
 }
 
+/**
+ * Resolved OpenRouter server-tools web backend (bead psfn-framework-htm9.10).
+ * Secret-bearing; gateway-internal only — never serialized to the agent process
+ * or written to audit logs.
+ */
+export interface OpenRouterWebBackendPolicy {
+  apiBaseUrl: string;
+  apiKey: string;
+  model: string;
+}
+
+/**
+ * Explicit web backend selection. `self_hosted` preserves the direct-fetch /
+ * local-crawler lane path; `openrouter` routes search/fetch through OpenRouter's
+ * built-in server tools. Selection is explicit config (providers.json) — there
+ * is no silent fallback between them.
+ */
+export type WebBackendPolicy =
+  | { kind: 'self_hosted' }
+  | { kind: 'openrouter'; openRouter: OpenRouterWebBackendPolicy };
+
 export interface PolicyConfig {
   workspacePath: string;
   allowedReadPaths?: string[];
@@ -43,6 +64,7 @@ export interface PolicyConfig {
   fullCodebaseReadRoot?: string;
   urlPolicy?: UrlPolicyConfig;
   webFetchTlsCaCertPaths?: string[];
+  webBackend?: WebBackendPolicy;
   shellExec?: ShellExecPolicyConfig;
   beads?: BeadsPolicyConfig;
   homeAssistant?: HomeAssistantPolicyConfig;
@@ -268,6 +290,17 @@ export function evaluatePolicy(ctx: PolicyContext, policyConfig: PolicyConfig): 
       return 'ALLOW';
     }
 
+    case 'web.search': {
+      // Backend enforcement (OpenRouter configured vs self-hosted) is applied in
+      // the handler, which fails closed when the backend is not configured. The
+      // policy gate only validates the query shape.
+      const query = (params as Record<string, unknown>).query;
+      if (typeof query !== 'string' || query.trim().length === 0) {
+        return 'DENY';
+      }
+      return 'ALLOW';
+    }
+
     case 'shell.exec': {
       if (!policyConfig.shellExec?.enabled) {
         return 'DENY';
@@ -318,9 +351,12 @@ export function evaluatePolicy(ctx: PolicyContext, policyConfig: PolicyConfig): 
 
     case 'home_assistant.call_service': {
       const ha = policyConfig.homeAssistant;
-      return ha?.enabled === true && Boolean(ha.baseUrl?.trim()) && ha.tokenConfigured === true
-        ? 'NEEDS_APPROVAL'
-        : 'ALLOW';
+      const configured =
+        ha?.enabled === true && Boolean(ha.baseUrl?.trim()) && ha.tokenConfigured === true;
+      // Fail closed: when Home Assistant is not fully configured the policy layer
+      // itself must DENY rather than defer to the handler recheck. A configured
+      // service call is human-gated via NEEDS_APPROVAL.
+      return configured ? 'NEEDS_APPROVAL' : 'DENY';
     }
 
     case 'vault.write':

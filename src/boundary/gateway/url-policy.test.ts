@@ -81,10 +81,55 @@ describe('isPrivateIP', () => {
   });
 });
 
+describe('isPrivateIP (Sprint-10 H1 regressions)', () => {
+  it('detects the IPv6 unspecified address (::)', () => {
+    expect(isPrivateIP('::')).toBe(true);
+    expect(isPrivateIP('::0')).toBe(true);
+    expect(isPrivateIP('0:0:0:0:0:0:0:0')).toBe(true);
+  });
+
+  it('detects the IPv6 IMDS address (fd00:ec2::254)', () => {
+    expect(isPrivateIP('fd00:ec2::254')).toBe(true);
+  });
+
+  it('fails closed on unparseable input', () => {
+    expect(isPrivateIP('not-an-ip')).toBe(true);
+    expect(isPrivateIP('')).toBe(true);
+  });
+});
+
 describe('isAlwaysBlockedIP', () => {
   it('blocks cloud metadata IP (169.254.x)', () => {
     expect(isAlwaysBlockedIP('169.254.169.254')).toBe(true);
     expect(isAlwaysBlockedIP('169.254.0.1')).toBe(true);
+  });
+
+  // ── Sprint-10 H1: IPv6 parity with the IPv4 always-blocked set ──
+
+  it('blocks the IPv6 unspecified address (::) in every spelling', () => {
+    expect(isAlwaysBlockedIP('::')).toBe(true);
+    expect(isAlwaysBlockedIP('::0')).toBe(true);
+    expect(isAlwaysBlockedIP('0:0:0:0:0:0:0:0')).toBe(true);
+  });
+
+  it('blocks IPv6 unique-local addresses (fc00::/7) including the IPv6 IMDS', () => {
+    expect(isAlwaysBlockedIP('fc00::1')).toBe(true);
+    expect(isAlwaysBlockedIP('fd12:3456::1')).toBe(true);
+    expect(isAlwaysBlockedIP('fd00:ec2::254')).toBe(true); // AWS IMDS over IPv6
+  });
+
+  it('blocks deprecated IPv6 site-local (fec0::/10)', () => {
+    expect(isAlwaysBlockedIP('fec0::1')).toBe(true);
+  });
+
+  it('blocks IPv4-embedding transition ranges (NAT64, 6to4, Teredo)', () => {
+    expect(isAlwaysBlockedIP('64:ff9b::7f00:1')).toBe(true);  // NAT64 rfc6052
+    expect(isAlwaysBlockedIP('2002:7f00:1::1')).toBe(true);   // 6to4
+    expect(isAlwaysBlockedIP('2001:0::1')).toBe(true);        // Teredo
+  });
+
+  it('fails closed on unparseable input', () => {
+    expect(isAlwaysBlockedIP('not-an-ip')).toBe(true);
   });
 
   it('blocks "this" network (0.x)', () => {
@@ -143,6 +188,23 @@ describe('evaluateUrlPolicy', () => {
     const result = evaluateUrlPolicy('https://[::1]/');
     expect(result.allowed).toBe(false);
     expect(result.reason).toContain('Private IP');
+  });
+
+  // ── Sprint-10 H1 regressions ──
+
+  it('blocks the IPv6 unspecified address http://[::]/ in the default lane', () => {
+    const result = evaluateUrlPolicy('http://[::]/', { allowHttp: true });
+    expect(result.allowed).toBe(false);
+  });
+
+  it('blocks https://[::]/ in the default lane', () => {
+    const result = evaluateUrlPolicy('https://[::]/');
+    expect(result.allowed).toBe(false);
+  });
+
+  it('blocks the IPv6 IMDS address in the default lane', () => {
+    const result = evaluateUrlPolicy('http://[fd00:ec2::254]/latest/meta-data/', { allowHttp: true });
+    expect(result.allowed).toBe(false);
   });
 
   it('blocks 10.0.0.1 (RFC1918)', () => {
@@ -343,6 +405,64 @@ describe('evaluateUrlPolicy', () => {
       const result = evaluateUrlPolicy('https://8.8.8.8/', internalConfig);
       expect(result.allowed).toBe(true);
     });
+
+    // ── Sprint-10 H1 regressions: IPv6 parity under allowInternalNetwork ──
+
+    it('still blocks the IPv6 unspecified address (::) even with internal network', () => {
+      const result = evaluateUrlPolicy('http://[::]/', internalConfig);
+      expect(result.allowed).toBe(false);
+      expect(result.reason).toContain('blocked');
+    });
+
+    it('still blocks the IPv6 IMDS (fd00:ec2::254) even with internal network', () => {
+      const result = evaluateUrlPolicy('http://[fd00:ec2::254]/latest/meta-data/', internalConfig);
+      expect(result.allowed).toBe(false);
+      expect(result.reason).toContain('blocked');
+    });
+
+    it('still blocks IPv6 unique-local (fc00::/7) even with internal network', () => {
+      expect(evaluateUrlPolicy('https://[fc00::1]/', internalConfig).allowed).toBe(false);
+      expect(evaluateUrlPolicy('https://[fd12:3456::1]/', internalConfig).allowed).toBe(false);
+    });
+
+    it('allows IPv6 loopback (::1) with internal network (parity with 127.0.0.1)', () => {
+      const result = evaluateUrlPolicy('https://[::1]/', internalConfig);
+      expect(result.allowed).toBe(true);
+    });
+  });
+
+  // ── Sprint-10 01-M2: port-pinned host allowlist entries ──
+
+  describe('host allowlist port pinning', () => {
+    it('rejects another port of an allowlisted host when the entry pins a port', () => {
+      const config = { allowInternalNetwork: true, allowHttp: true, hostAllowlist: ['ha.local:8123'] };
+      expect(evaluateUrlPolicy('http://ha.local:8123/api/', config).allowed).toBe(true);
+      expect(evaluateUrlPolicy('http://ha.local:9000/api/', config).allowed).toBe(false);
+      expect(evaluateUrlPolicy('http://ha.local/api/', config).allowed).toBe(false); // effective port 80
+    });
+
+    it('matches scheme-default effective ports for pinned entries', () => {
+      const httpsConfig = { hostAllowlist: ['api.example.com:443'] };
+      expect(evaluateUrlPolicy('https://api.example.com/v1', httpsConfig).allowed).toBe(true);
+      expect(evaluateUrlPolicy('https://api.example.com:8443/v1', httpsConfig).allowed).toBe(false);
+    });
+
+    it('keeps port-agnostic behavior for entries without a port', () => {
+      const config = { allowInternalNetwork: true, allowHttp: true, hostAllowlist: ['ha.local'] };
+      expect(evaluateUrlPolicy('http://ha.local:8123/api/', config).allowed).toBe(true);
+      expect(evaluateUrlPolicy('http://ha.local:9000/api/', config).allowed).toBe(true);
+    });
+
+    it('supports bracketed IPv6 entries with pinned ports', () => {
+      const config = { allowInternalNetwork: true, allowHttp: true, hostAllowlist: ['[::1]:8123'] };
+      expect(evaluateUrlPolicy('http://[::1]:8123/api/', config).allowed).toBe(true);
+      expect(evaluateUrlPolicy('http://[::1]:9000/api/', config).allowed).toBe(false);
+    });
+
+    it('fails closed on malformed host:port entries', () => {
+      const config = { allowHttp: true, hostAllowlist: ['ha.local:not-a-port'] };
+      expect(evaluateUrlPolicy('http://ha.local:8123/api/', config).allowed).toBe(false);
+    });
   });
 
   describe('local crawler lane', () => {
@@ -409,6 +529,18 @@ describe('evaluateUrlPolicy', () => {
       );
       expect(result.allowed).toBe(false);
       expect(result.reason).toContain('cloud metadata');
+    });
+
+    it('still blocks the IPv6 unspecified/ULA targets even when explicitly allowlisted', () => {
+      const config = {
+        localCrawlerLane: {
+          enabled: true,
+          allowHttp: true,
+          hostAllowlist: ['::', 'fd00:ec2::254'],
+        },
+      };
+      expect(evaluateUrlPolicy('http://[::]/', config, 'local_crawler').allowed).toBe(false);
+      expect(evaluateUrlPolicy('http://[fd00:ec2::254]/', config, 'local_crawler').allowed).toBe(false);
     });
 
     it('denies local crawler host outside allowlist', () => {
@@ -557,6 +689,20 @@ describe('checkResolvedIP', () => {
       { allowPrivateResolvedIp: true },
     );
     expect(result.allowed).toBe(true);
+  });
+
+  it('blocks the raw IPv6 unspecified address even when private resolution is allowed', async () => {
+    const result = await checkResolvedIP('[::]', fakeResolver('93.184.216.34'), {
+      allowPrivateResolvedIp: true,
+    });
+    expect(result.allowed).toBe(false);
+  });
+
+  it('blocks hostname resolving to IPv6 IMDS even when private resolution is allowed', async () => {
+    const result = await checkResolvedIP('imds.evil.com', fakeResolver('fd00:ec2::254'), {
+      allowPrivateResolvedIp: true,
+    });
+    expect(result.allowed).toBe(false);
   });
 
   it('still blocks metadata DNS resolution when private resolution is enabled', async () => {

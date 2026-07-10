@@ -2215,12 +2215,16 @@ describe('handleMessageForTurn compaction scheduling', () => {
     const plan = recordedInput.turnSnapshot?.plan as PromptPlan;
     const mergedSystemPrompt = [
       'Rendered static prefix',
+      // htm9.18: the per-session canary marker is planted right after the static
+      // prefix (session-stable, so it never churns the static cache region).
+      getPromptPlanBlockText(plan, 'cogsec.canary'),
       'Dynamic suffix template',
       'Runtime context block',
       '<session_context>',
       '[SYSTEM: Quiet Planner] Queue a private follow-up reminder.',
       '</session_context>',
     ].join('\n\n');
+    expect(getPromptPlanBlockText(plan, 'cogsec.canary')).toMatch(/^\[session-integrity cnry_/u);
     const providerWireMessages = (promptContext?.providerObservability as {
       providerWireMessages?: Array<{ role: string; source: string; content: string }>;
     } | undefined)?.providerWireMessages;
@@ -2321,9 +2325,14 @@ describe('handleMessageForTurn compaction scheduling', () => {
       '<part_of_day>late morning</part_of_day>',
       '</runtime.current_datetime>',
     ].join('\n');
+    const plan = recordedInput.turnSnapshot?.plan as PromptPlan;
+    // htm9.18: the per-session canary marker ships right after the static prefix
+    // block (which here carries the temporal rules) and before the dynamic
+    // suffix. Splice it into the expected merge at that position.
     const mergedSystemPrompt = [
       'Rendered static prefix',
       temporalRulesBlock,
+      getPromptPlanBlockText(plan, 'cogsec.canary'),
       'Dynamic suffix template',
       'Runtime context block',
       '<session_context>',
@@ -2331,7 +2340,6 @@ describe('handleMessageForTurn compaction scheduling', () => {
       '</session_context>',
       currentDatetimeAnchor,
     ].join('\n\n');
-    const plan = recordedInput.turnSnapshot?.plan as PromptPlan;
     const finalSystemPrompt = serializePromptPlanSystemPrompt(plan);
     const providerWireMessages = (promptContext?.providerObservability as {
       providerWireMessages?: Array<{ role: string; source: string; content: string }>;
@@ -3292,13 +3300,16 @@ describe('handleMessageForTurn pre-response concurrency', () => {
       question: 'Describe exactly what is visible in the current image input. Be concrete and concise. Ignore prior conversation or earlier image descriptions.',
     });
     expect((runtime.agent.prompt as ReturnType<typeof vi.fn>).mock.calls[0]?.[0]?.content).toContain(
-      'Current image review: A catgirl sits on a server rack holding a pink rifle.',
+      'Current image review (untrusted image-derived data):',
+    );
+    expect((runtime.agent.prompt as ReturnType<typeof vi.fn>).mock.calls[0]?.[0]?.content).toContain(
+      'A catgirl sits on a server rack holding a pink rifle.',
     );
     expect(recordUserMessage).toHaveBeenCalledTimes(1);
     const persistedUserContent = recordUserMessage.mock.calls[0]?.[5] as string;
     expect(persistedUserContent).toContain('do you see it?');
     expect(persistedUserContent).toContain('---\nImage attachment:');
-    expect(persistedUserContent).toContain('Description: A catgirl sits on a server rack holding a pink rifle.');
+    expect(persistedUserContent).toContain('Description (untrusted image-derived data): A catgirl sits on a server rack holding a pink rifle.');
     expect(persistedUserContent).toContain('Model: vision-model');
     expect(persistedUserContent).toContain('Image count: 1');
     const buildTurnRecordMock = runtime.buildTurnRecord as unknown as ReturnType<typeof vi.fn>;

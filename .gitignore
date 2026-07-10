@@ -58,3 +58,9 @@ admin-ui/.svelte-kit/
 
 # Beads / Dolt files (added by bd init)
 .beads-credential-key
+
+# ephemeral agent worktrees
+.claude/worktrees/
+
+# Provisioned ML model weights (never committed; see npm run provision:injection-model)
+models/

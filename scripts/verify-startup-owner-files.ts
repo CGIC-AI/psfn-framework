@@ -13,6 +13,7 @@ const OWNER_FILE_SEEDS = [
   ['charge-policy.seed.json', 'charge-policy.json'],
   ['backup.seed.json', 'backup.json'],
   ['skills.seed.json', 'skills.json'],
+  ['intake-policy.seed.json', 'intake-policy.json'],
 ] as const;
 
 function unquoteEnvValue(value: string): string {

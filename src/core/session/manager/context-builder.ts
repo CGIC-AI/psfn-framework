@@ -1,4 +1,6 @@
 import type { LLMProviderPort } from '../../agent/contracts.js';
+import type { IntakeSinkGate } from '../../cogsec/intake/sink-gates.js';
+import { applyPromptAssemblySinkGate } from '../intake-sink-gating.js';
 import { countMessageTokens, countTokens } from '../../../primitives/llm/tokens.js';
 import { createComponentLogger } from '../../../shared/logger.js';
 import type { ContextMessage, LLMContext } from '../../../shared/contracts/runtime.js';
@@ -679,6 +681,13 @@ interface BuildSessionContextParams {
   pendingCompaction?: boolean;
   cogSecEvents?: readonly CogSecEvent[];
   /**
+   * Intake sink gate (htm9.3). When present, entries carrying persisted
+   * intake-screening metadata are checked against the prompt_assembly sink
+   * before context assembly; enforce-mode denials render as the withheld
+   * placeholder. Null/absent = firewall off, byte-identical behavior.
+   */
+  intakeSinkGate?: IntakeSinkGate | null;
+  /**
    * JSON-owned wake summary budgets and continuity entry floor
    * (scheduler.json temporalWakeup.wakeSummary). Falls back to the validated
    * scheduler defaults when composition has not threaded scheduler config.
@@ -706,6 +715,15 @@ export async function buildSessionContext(params: BuildSessionContextParams): Pr
     adaptiveProfile: adaptiveBudgetProfile,
   });
   let recent = params.turnSessionContext.recentEntries.map(cloneSessionEntry);
+  // htm9.3: prompt_assembly sink gate. Applied to the cloned entries before
+  // any downstream use (history messages, compaction, summaries), so a
+  // gate-denied entry's content never reaches the assembled prompt in
+  // enforce mode.
+  recent = applyPromptAssemblySinkGate(
+    recent,
+    params.intakeSinkGate ?? null,
+    { channelId: params.channelId },
+  ).entries;
   const historySummaryEntryCountFromSnapshot = params.turnSessionContext.historySummaryEntryCount ?? 0;
   const sourceEntryCount = params.turnSessionContext.sourceEntryCount
     ?? (recent.length + historySummaryEntryCountFromSnapshot);

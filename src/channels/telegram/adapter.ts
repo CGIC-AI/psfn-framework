@@ -13,11 +13,22 @@ import type {
   OutboundContext,
 } from '../backplane/types.js';
 import type { SubstrateMessage } from '../../shared/contracts/runtime.js';
+import type { IntakeEnvelopeSnapshot } from '../../shared/contracts/intake-envelope.js';
+import type { IntakeScreeningService } from '../../core/cogsec/intake/screening.js';
 import type { EventBus } from '../../shared/event-bus.js';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { TelegramChannelConfig } from '../backplane/config.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
+import { fetchRemoteResource } from '../backplane/safe-remote-fetch.js';
+import {
+  appendDocumentIngestToContent,
+  ingestDocumentAttachments,
+  screenDocumentIngestSummary,
+  toDocumentAttachmentCandidate,
+  type DocumentAttachmentCandidate,
+  type DocumentResourceFetch,
+} from '../../faculties/file-ingest/index.js';
 import {
   DeferredLatestByChannel,
   emitTurnContentionTelemetry,
@@ -36,6 +47,12 @@ const MAX_POLL_BACKOFF_MS = 30_000;
 const LONG_RUNNING_STATUS_INITIAL_DELAY_MS = 12_000;
 const LONG_RUNNING_STATUS_POLL_MS = 5_000;
 const LONG_RUNNING_STATUS_UPDATE_MIN_INTERVAL_MS = 20_000;
+/** Pseudo-URL scheme carried on Telegram attachments until bytes are resolved. */
+export const TELEGRAM_FILE_URL_PREFIX = 'telegram://file/';
+/** Bot API `file_path` values are relative slash paths; anything else is refused. */
+const TELEGRAM_FILE_PATH_PATTERN = /^[A-Za-z0-9_\-./]+$/;
+/** Inline image cap for the vision path (mirrors the Discord image cap). */
+const TELEGRAM_MAX_INLINE_IMAGE_BYTES = 8 * 1024 * 1024;
 
 type FetchLike = typeof fetch;
 type TelegramChatType = 'private' | 'group' | 'supergroup' | 'channel';
@@ -66,6 +83,19 @@ interface TelegramAdapterOptions {
   fetchImpl?: FetchLike;
   commandRouter?: TelegramCommandRouter;
   longPollTimeoutSeconds?: number;
+  /** Personal-files root for document downloads/quarantine (htm9.9). */
+  personalFilesDir?: string;
+  /**
+   * Cognition intake firewall (htm9.2/htm9.9): screens parsed document
+   * attachment text before it enters <parsed_attachment_text>. Absent when
+   * the firewall mode is 'off'.
+   */
+  intakeScreening?: IntakeScreeningService | null;
+  /**
+   * SSRF-guarded remote fetch seam (tests only). Production uses the shared
+   * URL-policy-checked, byte-capped fetch.
+   */
+  remoteFetch?: DocumentResourceFetch;
 }
 
 interface TelegramApiResponse<T> {
@@ -90,17 +120,45 @@ interface TelegramChat {
 interface TelegramPhotoSize {
   file_id: string;
   file_unique_id?: string;
+  file_size?: number;
 }
 
 interface TelegramVoice {
   file_id: string;
   mime_type?: string;
+  file_size?: number;
 }
 
 interface TelegramDocument {
   file_id: string;
   file_name?: string;
   mime_type?: string;
+  file_size?: number;
+}
+
+/** `getFile` Bot API result (fields we consume). */
+interface TelegramFileInfo {
+  file_id: string;
+  file_path?: string;
+  file_size?: number;
+}
+
+/**
+ * Maps a Telegram document attachment onto the shared file-ingest candidate
+ * shape (htm9.9). Returns null for attachments that are neither a supported
+ * document format nor a metadata-level quarantine risk. Exported so the
+ * adapter-parity test can drive the exact mapping the adapter uses.
+ */
+export function toTelegramDocumentCandidate(
+  document: Pick<TelegramDocument, 'file_id' | 'file_name' | 'mime_type' | 'file_size'>,
+): DocumentAttachmentCandidate | null {
+  return toDocumentAttachmentCandidate({
+    id: document.file_id,
+    name: document.file_name ?? `document-${document.file_id}`,
+    url: `${TELEGRAM_FILE_URL_PREFIX}${document.file_id}`,
+    contentType: document.mime_type ?? 'application/octet-stream',
+    size: document.file_size ?? null,
+  });
 }
 
 interface TelegramIncomingMessage {
@@ -257,6 +315,9 @@ export class TelegramAdapter implements ChannelAdapterPort {
   private allowlist = new Set<string>();
   private longPollTimeoutSeconds: number;
   private commandRouter?: TelegramCommandRouter;
+  private personalFilesDir: string | null;
+  private intakeScreening: IntakeScreeningService | null;
+  private remoteFetch: DocumentResourceFetch;
   private consecutivePollFailures = 0;
   private attemptedPollingConflictRecovery = false;
   private statusUnsubscribers: Array<() => void> = [];
@@ -274,6 +335,9 @@ export class TelegramAdapter implements ChannelAdapterPort {
     this.fetchImpl = options.fetchImpl ?? fetch;
     this.commandRouter = options.commandRouter;
     this.longPollTimeoutSeconds = options.longPollTimeoutSeconds ?? DEFAULT_LONG_POLL_TIMEOUT_SECONDS;
+    this.personalFilesDir = options.personalFilesDir ?? null;
+    this.intakeScreening = options.intakeScreening ?? null;
+    this.remoteFetch = options.remoteFetch ?? fetchRemoteResource;
 
     for (const entry of telegramConfig.allowedUsers) {
       const normalized = normalizeAllowlistEntry(entry);
@@ -719,6 +783,15 @@ export class TelegramAdapter implements ChannelAdapterPort {
     });
 
     const typingInterval = this.startTypingLoop(channelId);
+    // htm9.9: resolve inline image bytes and push document attachments through
+    // the shared file-ingest faculty (download → quarantine → parse → intake
+    // screening). Never throws — failures become soft in-content notices.
+    const prepared = await this.prepareIncomingAttachments({
+      message,
+      content,
+      channelId,
+      messageId,
+    });
     const substrateMessage: SubstrateMessage = {
       id: messageId,
       channelId,
@@ -726,9 +799,12 @@ export class TelegramAdapter implements ChannelAdapterPort {
       isDirectMessage: message.chat.type === 'private',
       authorId: String(message.from.id),
       authorName: resolveAuthorName(message.from),
-      content,
-      ...(attachments.length > 0 ? { attachments } : {}),
+      content: prepared.content,
+      ...(prepared.attachments.length > 0 ? { attachments: prepared.attachments } : {}),
       timestamp: new Date(message.date * 1000),
+      ...(prepared.intakeEnvelopes.length > 0
+        ? { routing: { intakeEnvelopes: prepared.intakeEnvelopes } }
+        : {}),
     };
     const replyContext: OutboundContext = {
       channelId,
@@ -1277,6 +1353,252 @@ export class TelegramAdapter implements ChannelAdapterPort {
       return mediaUrl.slice(prefix.length);
     }
     return mediaUrl;
+  }
+
+  // ── htm9.9: inbound attachment resolution + document ingest ──
+
+  /**
+   * Strips the bot token from any outward-facing error text. The Bot API
+   * download URL embeds the token, so raw fetch errors must never propagate
+   * verbatim into logs or companion-visible notices.
+   */
+  private redactBotToken(text: string): string {
+    if (!this.telegram.token) return text;
+    return text.split(this.telegram.token).join('<redacted-bot-token>');
+  }
+
+  /** Resolves a Telegram file_id to its short-lived Bot API download URL. */
+  private async resolveTelegramFileDownloadUrl(fileId: string): Promise<string> {
+    const file = await this.callApi<TelegramFileInfo>('getFile', { file_id: fileId });
+    const filePath = (file.file_path ?? '').trim();
+    if (!filePath) {
+      throw new Error('Telegram getFile returned no file_path');
+    }
+    if (filePath.startsWith('/') || filePath.includes('..') || !TELEGRAM_FILE_PATH_PATTERN.test(filePath)) {
+      throw new Error('Telegram getFile returned an unsafe file_path');
+    }
+    return `https://api.telegram.org/file/bot${this.telegram.token}/${filePath}`;
+  }
+
+  /**
+   * SSRF-guarded byte fetch port for `telegram://file/<file_id>` pseudo-URLs:
+   * getFile → validated file_path → shared URL-policy-checked, byte-capped
+   * download. Errors are token-redacted before they leave this port.
+   */
+  private createDocumentFetchPort(): DocumentResourceFetch {
+    return async (url, options) => {
+      if (!url.startsWith(TELEGRAM_FILE_URL_PREFIX)) {
+        throw new Error(`unsupported Telegram attachment URL: expected ${TELEGRAM_FILE_URL_PREFIX}<file_id>`);
+      }
+      const fileId = url.slice(TELEGRAM_FILE_URL_PREFIX.length);
+      if (!fileId) {
+        throw new Error('Telegram attachment URL is missing its file_id');
+      }
+      try {
+        const downloadUrl = await this.resolveTelegramFileDownloadUrl(fileId);
+        return await this.remoteFetch(downloadUrl, options);
+      } catch (error) {
+        throw new Error(this.redactBotToken(toErrorMessage(error)));
+      }
+    };
+  }
+
+  /**
+   * Downloads inline image bytes so the vision path can consume Telegram
+   * photos (telegram:// pseudo-URLs are not fetchable downstream). Download
+   * failure keeps the unresolved metadata attachment — visible as an
+   * unresolved-image note in the vision prompt, never a crashed turn.
+   */
+  private async resolveInlineImageAttachment(
+    attachment: MediaAttachment,
+    channelId: string,
+    messageId: string,
+  ): Promise<MediaAttachment> {
+    try {
+      const result = await this.createDocumentFetchPort()(attachment.url, {
+        maxBytes: TELEGRAM_MAX_INLINE_IMAGE_BYTES,
+      });
+      if (!result.ok) {
+        throw new Error(`image download failed (${result.status})`);
+      }
+      return { ...attachment, dataBase64: result.bytes.toString('base64') };
+    } catch (error) {
+      log.warn('Telegram image download failed; passing unresolved attachment metadata', {
+        channelId,
+        messageId,
+        name: attachment.name,
+        error: this.redactBotToken(toErrorMessage(error)),
+      });
+      return attachment;
+    }
+  }
+
+  /**
+   * Resolves the message's attachments for the substrate message: photos get
+   * inline bytes for vision, voice notes pass through unchanged, and document
+   * attachments run the shared file-ingest pipeline (download → quarantine →
+   * parse → intake screening). Deliberately never throws: every failure is a
+   * soft, truthful in-content notice, and unscreenable document text is
+   * withheld (fail closed).
+   */
+  private async prepareIncomingAttachments(input: {
+    message: TelegramIncomingMessage;
+    content: string;
+    channelId: string;
+    messageId: string;
+  }): Promise<{
+    attachments: MediaAttachment[];
+    content: string;
+    intakeEnvelopes: IntakeEnvelopeSnapshot[];
+  }> {
+    const { message, channelId, messageId } = input;
+    const attachments: MediaAttachment[] = [];
+    let content = input.content;
+    let intakeEnvelopes: IntakeEnvelopeSnapshot[] = [];
+
+    if (message.photo && message.photo.length > 0) {
+      const photo = message.photo[message.photo.length - 1];
+      attachments.push(await this.resolveInlineImageAttachment({
+        url: `${TELEGRAM_FILE_URL_PREFIX}${photo.file_id}`,
+        contentType: 'image/jpeg',
+        name: `photo-${photo.file_unique_id ?? photo.file_id}.jpg`,
+      }, channelId, messageId));
+    }
+
+    if (message.voice) {
+      attachments.push({
+        url: `${TELEGRAM_FILE_URL_PREFIX}${message.voice.file_id}`,
+        contentType: message.voice.mime_type ?? 'audio/ogg',
+        name: `voice-${message.voice.file_id}.ogg`,
+      });
+    }
+
+    if (message.document) {
+      const ingested = await this.ingestTelegramDocument({
+        document: message.document,
+        message,
+        channelId,
+        messageId,
+        attachmentIndexBase: attachments.length,
+        content,
+      });
+      attachments.push(...ingested.attachments);
+      content = ingested.content;
+      intakeEnvelopes = ingested.intakeEnvelopes;
+    }
+
+    return { attachments, content, intakeEnvelopes };
+  }
+
+  private async ingestTelegramDocument(input: {
+    document: TelegramDocument;
+    message: TelegramIncomingMessage;
+    channelId: string;
+    messageId: string;
+    attachmentIndexBase: number;
+    content: string;
+  }): Promise<{
+    attachments: MediaAttachment[];
+    content: string;
+    intakeEnvelopes: IntakeEnvelopeSnapshot[];
+  }> {
+    const { document } = input;
+    const candidate = toTelegramDocumentCandidate(document);
+    if (!candidate) {
+      // Not a supported document format and not metadata-risky: pass the bare
+      // metadata attachment through (pre-htm9.9 behavior, e.g. audio files).
+      return {
+        attachments: [{
+          url: `${TELEGRAM_FILE_URL_PREFIX}${document.file_id}`,
+          contentType: document.mime_type ?? 'application/octet-stream',
+          name: document.file_name ?? `document-${document.file_id}`,
+        }],
+        content: input.content,
+        intakeEnvelopes: [],
+      };
+    }
+
+    const failClosed = (reason: string): {
+      attachments: MediaAttachment[];
+      content: string;
+      intakeEnvelopes: IntakeEnvelopeSnapshot[];
+    } => ({
+      attachments: [],
+      content: appendDocumentIngestToContent(input.content, {
+        results: [],
+        quarantined: [],
+        failures: [{ name: candidate.name, contentType: candidate.contentType, reason }],
+      }),
+      intakeEnvelopes: [],
+    });
+
+    if (!this.personalFilesDir) {
+      log.warn('Telegram document attachment withheld because personal files root is not configured', {
+        channelId: input.channelId,
+        messageId: input.messageId,
+        name: candidate.name,
+      });
+      return failClosed('document ingestion is not configured on this runtime (missing personal files root)');
+    }
+
+    try {
+      let summary = await ingestDocumentAttachments([candidate], {
+        channel: 'telegram',
+        personalFilesDir: this.personalFilesDir,
+        channelId: input.channelId,
+        messageId: input.messageId,
+        authorId: input.message.from ? String(input.message.from.id) : 'unknown',
+        createdAt: new Date(input.message.date * 1000),
+        fetchResource: this.createDocumentFetchPort(),
+      });
+      let intakeEnvelopes: IntakeEnvelopeSnapshot[] = [];
+      // htm9.2: screen accepted parsed text before it lands in
+      // <parsed_attachment_text>; the binary-level quarantine stays.
+      if (this.intakeScreening && summary.results.length > 0) {
+        const screened = await screenDocumentIngestSummary(summary, this.intakeScreening, {
+          channel: 'telegram',
+          channelId: input.channelId,
+          messageId: input.messageId,
+          attachmentIndexBase: input.attachmentIndexBase,
+        });
+        summary = screened.summary;
+        intakeEnvelopes = screened.snapshots;
+      }
+      if (summary.failures.length > 0) {
+        log.warn('Some Telegram document attachments failed to ingest', {
+          channelId: input.channelId,
+          messageId: input.messageId,
+          failures: summary.failures,
+        });
+      }
+      if (summary.quarantined.length > 0) {
+        log.warn('Telegram attachments quarantined pending operator review', {
+          channelId: input.channelId,
+          messageId: input.messageId,
+          quarantined: summary.quarantined.map(attachment => ({
+            name: attachment.name,
+            sha256: attachment.sha256,
+            reasons: attachment.reasons,
+          })),
+        });
+      }
+      return {
+        attachments: summary.results.map(result => result.attachment),
+        content: appendDocumentIngestToContent(input.content, summary),
+        intakeEnvelopes,
+      };
+    } catch (error) {
+      // Fail closed: parsed text must never enter the prompt unscreened. The
+      // companion sees a soft parse-failed notice instead of a crashed turn.
+      const reason = this.redactBotToken(toErrorMessage(error));
+      log.error('Telegram document ingestion failed; withholding attachment content', {
+        channelId: input.channelId,
+        messageId: input.messageId,
+        name: candidate.name,
+        error: reason,
+      });
+      return failClosed(reason);
+    }
   }
 
   private extractAttachments(message: TelegramIncomingMessage): MediaAttachment[] {

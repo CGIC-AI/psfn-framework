@@ -1,9 +1,19 @@
 import { randomUUID } from 'node:crypto';
 import type { IncomingMessage } from 'node:http';
 import type { SubstrateMessage } from '../../shared/contracts/runtime.js';
-import type { SatelliteRegistryConfig } from '../../shared/contracts/satellite-registry.js';
+import type {
+  SatelliteClientCertIdentity,
+  SatelliteRegistryConfig,
+} from '../../shared/contracts/satellite-registry.js';
 import { ApiServer } from '../../channels/api/server.js';
 import { clampHttpHeader, resolveApiCorsAllowedOrigins } from '../../channels/api/http-policy.js';
+import { parseSatelliteApiKeys } from '../../channels/backplane/http/auth.js';
+import {
+  deriveClientCertIdentity,
+  parseTrustedProxyClientCertToken,
+  stripClientCertHeaders,
+} from '../../channels/backplane/http/client-cert.js';
+import { resolveApiHttpServerTlsConfig } from '../../channels/api/server/http.js';
 import {
   hasSatelliteClaimHeaders,
   resolveSatelliteClaim,
@@ -25,6 +35,7 @@ import type { SubstrateAgent } from '../../core/agent/substrate-agent.js';
 import type { SensorIngestPort } from '../../shared/telemetry/sensor-ingest-port.js';
 import { parseOptionalPositiveIntEnv } from '../../shared/utils/env.js';
 import { isExplicitTrue, parseCommaSeparatedEnv } from '../startup/support/env-parsing.js';
+import type { IntakeScreeningService } from '../../core/cogsec/intake/screening.js';
 
 const DISABLED_VOICE_WEBSOCKET_PATH = '/v1/voice/ws-disabled';
 const GATEWAY_API_REQUEST_TIMEOUT_MS = 240_000;
@@ -43,6 +54,38 @@ export interface StartOptionalGatewayApiServerOptions extends GatewayApiSurfaceB
   gateway: Pick<GatewayServer, 'requestAgent' | 'subscribeApiStream' | 'requestAgentVoiceStream'>;
   channelsConfig?: RuntimeChannelsConfig;
   satelliteRegistry?: SatelliteRegistryConfig;
+  /**
+   * htm9.9: intake screening for voice transcripts (sourceClass
+   * 'audio_transcript') — a transcript becomes prompt text, so audio is a
+   * real injection channel. Null when the firewall mode is 'off'.
+   */
+  intakeScreening?: IntakeScreeningService | null;
+}
+
+/**
+ * Screens a voice transcript through the intake firewall before it becomes a
+ * prompt-bearing message. Shadow mode records the envelope without altering
+ * the transcript; enforce-mode quarantine substitutes the fixed withheld-
+ * content placeholder. The envelope snapshot rides routing.intakeEnvelopes.
+ */
+async function screenVoiceTranscriptMessage(
+  message: SubstrateMessage,
+  intakeScreening: IntakeScreeningService | null | undefined,
+): Promise<SubstrateMessage> {
+  if (!intakeScreening || !message.content.trim()) return message;
+  const screened = await intakeScreening.screen(message.content, {
+    sourceClass: 'audio_transcript',
+    origin: { ref: `api-voice:${message.channelId}:${message.id}`.slice(0, 2048) },
+    scope: 'context',
+  });
+  return {
+    ...message,
+    content: screened.effectiveText,
+    routing: {
+      ...(message.routing ?? {}),
+      intakeEnvelopes: [screened.snapshot],
+    },
+  };
 }
 
 function singleHeader(value: string | string[] | undefined): string | undefined {
@@ -88,6 +131,11 @@ function buildSatelliteClaimHeaders(
   sessionId: string,
 ): IncomingMessage['headers'] {
   const headers: IncomingMessage['headers'] = { ...request.headers };
+  // Sprint-10 C1: certificate identity is derived from the TLS socket or an
+  // authenticated trusted proxy BEFORE this map is built; caller-supplied
+  // X-PSFN-Client-Cert-* headers (and the proxy token) must never flow into
+  // claim resolution, and are never accepted via query parameters.
+  stripClientCertHeaders(headers);
   const copy = (headerName: string, queryNames: string[], maxLength: number) => {
     if (clampHttpHeader(singleHeader(headers[headerName]), maxLength)) return;
     const value = readQueryParam(request, queryNames);
@@ -102,10 +150,6 @@ function buildSatelliteClaimHeaders(
   copy(SATELLITE_CLAIM_HEADERS.sessionId, ['satellite_session_id', 'satellite_thread_id'], 128);
   copy(SATELLITE_CLAIM_HEADERS.capabilities, ['satellite_capabilities'], 1024);
   copy(SATELLITE_CLAIM_HEADERS.telemetryScopes, ['satellite_telemetry_scopes'], 1024);
-  copy(SATELLITE_CLAIM_HEADERS.clientCertFingerprintSha256, ['client_cert_fingerprint_sha256'], 160);
-  copy(SATELLITE_CLAIM_HEADERS.clientCertSpkiSha256, ['client_cert_spki_sha256'], 160);
-  copy(SATELLITE_CLAIM_HEADERS.clientCertSubject, ['client_cert_subject'], 512);
-  copy(SATELLITE_CLAIM_HEADERS.clientCertSan, ['client_cert_san'], 512);
 
   const hasSatelliteEnvelope = Boolean(
     clampHttpHeader(singleHeader(headers[SATELLITE_CLAIM_HEADERS.claimType]), 64)
@@ -120,19 +164,29 @@ function buildSatelliteClaimHeaders(
 
 function buildVoiceMessage(params: {
   request: IncomingMessage;
-  principal: { id: string; mode: 'api_key' | 'insecure_local' };
+  principal: { id: string; mode: 'api_key' | 'insecure_local'; scope?: 'satellite' };
   connectionId: string;
   sessionId: string;
   transcript: string;
   channelPrefix: string;
   satelliteRegistry?: SatelliteRegistryConfig;
+  trustedProxyClientCertToken?: string;
 }): SubstrateMessage {
+  // Derive the authenticated client-cert identity from the original request
+  // (TLS peer cert or token-authenticated trusted proxy) before the claim
+  // header map is built with cert headers stripped.
+  const clientCert: SatelliteClientCertIdentity | undefined = deriveClientCertIdentity(params.request, {
+    ...(params.trustedProxyClientCertToken
+      ? { trustedProxyToken: params.trustedProxyClientCertToken }
+      : {}),
+  });
   const satelliteHeaders = buildSatelliteClaimHeaders(params.request, params.sessionId);
   if (hasSatelliteClaimHeaders(satelliteHeaders)) {
     const satelliteClaim = resolveSatelliteClaim({
       headers: satelliteHeaders,
       principal: params.principal,
       registry: params.satelliteRegistry,
+      ...(clientCert ? { clientCert } : {}),
     });
     if (!satelliteClaim.ok) {
       throw new Error(`${satelliteClaim.type}: ${satelliteClaim.message}`);
@@ -205,6 +259,13 @@ export async function startOptionalGatewayApiServer(
 
   const env = options.env ?? process.env;
   const allowInsecureWithoutAuth = isExplicitTrue(env.ALLOW_INSECURE_LOCAL_API);
+  // Sprint-10 C1/H4: fail-closed parsing — a malformed trusted-proxy token,
+  // weak/colliding satellite keys, or partial TLS config abort startup.
+  const trustedProxyClientCertToken = parseTrustedProxyClientCertToken(env.API_TRUSTED_PROXY_CLIENT_CERT_TOKEN);
+  const satelliteApiKeys = parseSatelliteApiKeys(env.API_SATELLITE_KEYS, {
+    reservedTokens: [env.API_KEY, env.ADMIN_TOKEN],
+  });
+  const apiTlsConfig = resolveApiHttpServerTlsConfig(env);
   const corsAllowedOrigins = resolveApiCorsAllowedOrigins({
     explicitAllowlist: parseCommaSeparatedEnv(env.API_CORS_ALLOWLIST),
     adminHost: options.adminHost,
@@ -214,7 +275,7 @@ export async function startOptionalGatewayApiServer(
     config: options.config,
     eligibilityGate: options.eligibilityGate,
     handleAssistantTurn: async ({ request, principal, transportSession, sessionId, transcript, signal, channelPrefix }) => {
-      const message = buildVoiceMessage({
+      const message = await screenVoiceTranscriptMessage(buildVoiceMessage({
         request,
         principal,
         connectionId: transportSession.connectionId,
@@ -222,7 +283,8 @@ export async function startOptionalGatewayApiServer(
         transcript,
         channelPrefix,
         satelliteRegistry: options.satelliteRegistry,
-      });
+        ...(trustedProxyClientCertToken ? { trustedProxyClientCertToken } : {}),
+      }), options.intakeScreening);
       const result = await options.gateway.requestAgentVoiceStream(message, { signal });
       return result.content;
     },
@@ -258,6 +320,9 @@ export async function startOptionalGatewayApiServer(
     sensorIngest: inertSensorIngest,
     apiKey: env.API_KEY || undefined,
     adminToken: env.ADMIN_TOKEN || undefined,
+    ...(satelliteApiKeys.length > 0 ? { satelliteApiKeys } : {}),
+    ...(trustedProxyClientCertToken ? { trustedProxyClientCertToken } : {}),
+    ...(apiTlsConfig ? { tls: apiTlsConfig } : {}),
     allowInsecureWithoutAuth,
     corsAllowedOrigins,
     voiceWebSocketPath,

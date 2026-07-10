@@ -2,6 +2,7 @@
 
 import type { ExternalTelemetryEvent } from '../../shared/event-bus.js';
 import type { IntentionalNoReplyMetadata } from '../../shared/contracts/runtime.js';
+import type { SatelliteClientCertIdentity } from '../../shared/contracts/satellite-registry.js';
 import type { ApiAuthPrincipal } from '../backplane/http/auth.js';
 
 export interface OpenAITextContentPart {
@@ -24,9 +25,30 @@ export interface OpenAIImageUrlContentPart {
   };
 }
 
+/**
+ * OpenAI-compatible file attachment part (htm9.9). `file_data` carries the
+ * document bytes as base64 (optionally a `data:<mime>;base64,` URL). Parsed
+ * server-side through the shared file-ingest faculty — never handed to the
+ * model raw.
+ */
+export interface OpenAIFileContentPart {
+  type: 'file';
+  file: {
+    /** Attachment filename; used for format inference alongside the data URL MIME. */
+    filename?: string;
+    /** Base64 payload, optionally wrapped as a data: URL with the declared MIME. */
+    file_data: string;
+  };
+}
+
 export type OpenAIMessageContent =
   | string
-  | Array<OpenAITextContentPart | OpenAIInlineImageContentPart | OpenAIImageUrlContentPart>;
+  | Array<
+    | OpenAITextContentPart
+    | OpenAIInlineImageContentPart
+    | OpenAIImageUrlContentPart
+    | OpenAIFileContentPart
+  >;
 
 export interface OpenAIMessage {
   role: 'system' | 'user' | 'assistant';
@@ -167,6 +189,12 @@ export interface ApiChatCompletionRpcParams {
   request: ChatCompletionRequest;
   principal: ApiAuthPrincipal;
   headers: ApiRpcHeaders;
+  /**
+   * Client-certificate identity authenticated by the gateway HTTP ingress
+   * (real TLS peer cert or trusted proxy). Forwarded over the internal
+   * gateway-agent RPC; never reconstructed from headers on the agent side.
+   */
+  clientCert?: SatelliteClientCertIdentity;
   timeoutMs?: number;
 }
 
@@ -218,6 +246,8 @@ export interface ApiRuntimeChatRequest {
   request: ChatCompletionRequest;
   principal: ApiAuthPrincipal;
   headers: ApiRpcHeaders;
+  /** See `ApiChatCompletionRpcParams.clientCert`. */
+  clientCert?: SatelliteClientCertIdentity;
   onDelta?: (text: string) => void;
   signal?: AbortSignal;
 }

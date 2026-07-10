@@ -2,7 +2,10 @@ import { randomUUID } from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { ChannelType, SubstrateMessage } from '../../../shared/contracts/runtime.js';
 import { isIntentionalNoReplyResponse } from '../../../shared/agent-response-disposition.js';
-import type { SatelliteRegistryConfig } from '../../../shared/contracts/satellite-registry.js';
+import type {
+  SatelliteClientCertIdentity,
+  SatelliteRegistryConfig,
+} from '../../../shared/contracts/satellite-registry.js';
 import type { ContactStorePort } from '../../../core/contacts/contact-store-port.js';
 import type { SubstrateAgent } from '../../../core/agent/substrate-agent.js';
 import type { EventBus } from '../../../shared/event-bus.js';
@@ -48,7 +51,10 @@ import {
   deriveChannelId,
   getLastUserMessage,
   getLastUserMessageAttachments,
+  getLastUserMessageFileParts,
+  ingestApiDocumentFileParts,
   seedSession,
+  type ApiDocumentIngestConfig,
 } from './session.js';
 import { SseStreamingTransport } from './streaming.js';
 
@@ -108,6 +114,8 @@ export interface ApiChatCompletionsHandlerConfig {
   externalChannelProfiles: Partial<Record<ChannelType, ExternalChannelProfileConfig>>;
   satelliteRegistry: SatelliteRegistryConfig | undefined;
   logger: ApiServerLogger;
+  /** htm9.9: shared document file-part ingestion; null when not configured. */
+  documentIngest: ApiDocumentIngestConfig | null;
 }
 
 export class ApiChatCompletionsHandler {
@@ -121,6 +129,7 @@ export class ApiChatCompletionsHandler {
   private readonly externalChannelProfiles: Partial<Record<ChannelType, ExternalChannelProfileConfig>>;
   private readonly satelliteRegistry: SatelliteRegistryConfig | undefined;
   private readonly logger: ApiServerLogger;
+  private readonly documentIngest: ApiDocumentIngestConfig | null;
   private readonly channelTurnLock = new FifoChannelLock();
   private readonly processingChannels = new Set<string>();
 
@@ -135,6 +144,7 @@ export class ApiChatCompletionsHandler {
     this.externalChannelProfiles = config.externalChannelProfiles;
     this.satelliteRegistry = config.satelliteRegistry;
     this.logger = config.logger;
+    this.documentIngest = config.documentIngest;
   }
 
   externalChannelProfile(channelType: ChannelType): ExternalChannelProfileConfig | undefined {
@@ -145,14 +155,15 @@ export class ApiChatCompletionsHandler {
     req: IncomingMessage,
     res: ServerResponse,
     principal: ApiAuthPrincipal,
+    clientCert?: SatelliteClientCertIdentity,
   ): Promise<void> {
     const parsed = await readChatCompletionRequest(req, res, this.logger);
     if (!parsed) return;
 
     if (parsed.stream) {
-      await this.handleStreaming(parsed, req, res, principal);
+      await this.handleStreaming(parsed, req, res, principal, clientCert);
     } else {
-      await this.handleNonStreaming(parsed, req, res, principal);
+      await this.handleNonStreaming(parsed, req, res, principal, clientCert);
     }
   }
 
@@ -638,6 +649,7 @@ export class ApiChatCompletionsHandler {
     req: IncomingMessage,
     res: ServerResponse,
     principal: ApiAuthPrincipal,
+    clientCert: SatelliteClientCertIdentity | undefined,
   ): Promise<PendingTurn | null> {
     const routingOverrides = parseTurnRoutingOverrides(request);
     if (!routingOverrides.ok) {
@@ -660,6 +672,7 @@ export class ApiChatCompletionsHandler {
       defaultAuthorName: defaultAuthor.authorName,
       externalChannelProfiles: this.externalChannelProfiles,
       satelliteRegistry: this.satelliteRegistry,
+      ...(clientCert ? { clientCert } : {}),
     });
     if (!turnIdentity.ok) {
       sendApiError(res, turnIdentity.status, turnIdentity.type, turnIdentity.message);
@@ -706,11 +719,22 @@ export class ApiChatCompletionsHandler {
     }
     const lastUserMsg = getLastUserMessage(request.messages);
     const lastUserAttachments = getLastUserMessageAttachments(request.messages);
+    // htm9.9: `file` content parts run the shared file-ingest pipeline
+    // (quarantine -> parse -> intake screening) before prompt assembly.
+    const ingestedFiles = await ingestApiDocumentFileParts({
+      extraction: getLastUserMessageFileParts(request.messages),
+      content: lastUserMsg,
+      channelId,
+      messageId: `api-file-${randomUUID()}`,
+      authorId,
+      attachmentIndexBase: lastUserAttachments.length,
+      documentIngest: this.documentIngest,
+    });
     const substrateMsg = buildSubstrateMessage({
       channelId,
       channelType,
       source,
-      content: lastUserMsg,
+      content: ingestedFiles.content,
       authorId,
       authorName,
       req,
@@ -718,7 +742,8 @@ export class ApiChatCompletionsHandler {
       channelPrivacy: resolvedChannelPrivacy,
       canonicalContactId,
       satellite,
-      attachments: lastUserAttachments,
+      attachments: [...lastUserAttachments, ...ingestedFiles.attachments],
+      intakeEnvelopes: ingestedFiles.intakeEnvelopes,
     });
 
     const acquiredChannel = await this.acquireChannel(channelId, req, res);
@@ -798,8 +823,9 @@ export class ApiChatCompletionsHandler {
     req: IncomingMessage,
     res: ServerResponse,
     principal: ApiAuthPrincipal,
+    clientCert: SatelliteClientCertIdentity | undefined,
   ): Promise<PreparedTurn | null> {
-    const pending = await this.prepareTurn(request, req, res, principal);
+    const pending = await this.prepareTurn(request, req, res, principal, clientCert);
     if (!pending) return null;
     return this.beginPreparedTurn(pending);
   }
@@ -851,6 +877,7 @@ export class ApiChatCompletionsHandler {
     req: IncomingMessage,
     res: ServerResponse,
     principal: ApiAuthPrincipal,
+    clientCert: SatelliteClientCertIdentity | undefined,
   ): Promise<void> {
     const runtime = this.runtime;
     if (runtime) {
@@ -862,6 +889,7 @@ export class ApiChatCompletionsHandler {
             request,
             principal,
             headers: extractRpcHeaders(req),
+            ...(clientCert ? { clientCert } : {}),
             signal,
           }),
         );
@@ -902,7 +930,7 @@ export class ApiChatCompletionsHandler {
       return;
     }
 
-    const turn = await this.startTurn(request, req, res, principal);
+    const turn = await this.startTurn(request, req, res, principal, clientCert);
     if (!turn) return;
 
     try {
@@ -938,6 +966,7 @@ export class ApiChatCompletionsHandler {
     req: IncomingMessage,
     res: ServerResponse,
     principal: ApiAuthPrincipal,
+    clientCert: SatelliteClientCertIdentity | undefined,
   ): Promise<void> {
     const completionId = `chatcmpl-${randomUUID()}`;
     const created = Math.floor(Date.now() / 1000);
@@ -960,6 +989,7 @@ export class ApiChatCompletionsHandler {
             request,
             principal,
             headers: extractRpcHeaders(req),
+            ...(clientCert ? { clientCert } : {}),
             signal,
             onDelta: (text) => {
               transport.writeContent(text);
@@ -986,7 +1016,7 @@ export class ApiChatCompletionsHandler {
       return;
     }
 
-    const pendingTurn = await this.prepareTurn(request, req, res, principal);
+    const pendingTurn = await this.prepareTurn(request, req, res, principal, clientCert);
     if (!pendingTurn) return;
 
     transport.open();

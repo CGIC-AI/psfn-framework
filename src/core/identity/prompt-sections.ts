@@ -39,11 +39,27 @@ export function humanizePromptSectionId(value: string): string {
     .join(' ');
 }
 
+/**
+ * Cogsec backstop (S10 finding H6): content that contains the section's OWN
+ * opening/closing tag would break the XML frame (an early `</tag>` terminates
+ * the section; a nested `<tag>` forges a second one). Section producers are
+ * responsible for sanitizing interpolated free-text (see
+ * `sanitizePromptEmbeddedText`); this defensively neutralizes only the
+ * wrapping tag itself — swapping its `<` for the frame-inert `‹` — so
+ * legitimate nested markup for OTHER tags passes through unchanged.
+ */
+function neutralizeWrappingTagBreakout(content: string, tag: string): string {
+  // `tag` comes from normalizePromptSectionId: strictly [a-z0-9_], so it is
+  // safe to embed in a regex without escaping.
+  const breakout = new RegExp(`<(?=\\s*/?\\s*${tag}(?:[\\s/][^<>]*)?\\s*>)`, 'gi');
+  return content.replace(breakout, '‹');
+}
+
 export function wrapPromptSectionXml(input: PromptSectionInput): string {
   const content = normalizeLineEndings(input.content).trim();
   if (!content) return '';
   const tag = normalizePromptSectionId(input.id);
-  return `<${tag}>\n${content}\n</${tag}>`;
+  return `<${tag}>\n${neutralizeWrappingTagBreakout(content, tag)}\n</${tag}>`;
 }
 
 export function isSingleWrappedPromptSection(text: string): boolean {

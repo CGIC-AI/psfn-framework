@@ -22,6 +22,16 @@ import {
   EPISODE_SYNTHESIS_TIMER_TASK_ID,
   type EpisodeSynthesisGateEvent,
 } from '../../../faculties/memory/episodic/synthesis-lane.js';
+import {
+  DriftVelocityReviewLane,
+  DRIFT_VELOCITY_REVIEW_ACTION_KIND,
+  DRIFT_VELOCITY_REVIEW_CHANNEL_ID,
+} from '../../cogsec/drift/drift-review-lane.js';
+import {
+  SecondArrowReviewLane,
+  SECOND_ARROW_REVIEW_ACTION_KIND,
+  SECOND_ARROW_REVIEW_CHANNEL_ID,
+} from '../../cogsec/drift/second-arrow-review-lane.js';
 import { toInferredPostTurnActions } from '../../intention/appraisal.js';
 import { MAINTENANCE_REFLECTION_RUNTIME_CLASS } from '../../agent/worker-lanes.js';
 import type {
@@ -35,12 +45,16 @@ const log = createComponentLogger('HeartbeatPostTurn');
 export const SLEEPTIME_REST_WINDOW_TASK_ID = 'memory.sleeptime.rest-window';
 const SLEEPTIME_REST_WINDOW_POLL_INTERVAL_MS = 5 * 60_000;
 export const CONTACT_TRUST_DRIFT_REVIEW_TASK_ID = 'contacts.trust-drift-review.rest-window';
+export const DRIFT_VELOCITY_REVIEW_TASK_ID = 'cogsec.drift-velocity-review.rest-window';
+export const SECOND_ARROW_REVIEW_TASK_ID = 'cogsec.second-arrow-review.rest-window';
 
 export interface SchedulerOwnedPostTurnLanes {
   sleeptimeAgent: SleeptimeMemoryAgent | null;
   nearTurnLane: NearTurnMemoryLane | null;
   episodeSynthesisLane: EpisodeSynthesisLane | null;
   driftReviewLane: ContactTrustDriftReviewLane | null;
+  driftVelocityLane: DriftVelocityReviewLane | null;
+  secondArrowLane: SecondArrowReviewLane | null;
 }
 
 interface CreateSchedulerOwnedPostTurnLanesOptions {
@@ -220,11 +234,63 @@ export function createSchedulerOwnedPostTurnLanes(
     })
     : null;
 
+  // Slow-poisoning drift-velocity lane (htm9.14): operator-facing sibling of
+  // the trust-drift review above. Same rest-window/watermark cadence, but it
+  // writes Garden review cards instead of delivering to the companion — the
+  // companion never sees this lane (firewall stress-isolation requirement).
+  const driftVelocityLane = (
+    runtimeOptions.driftVelocityReview
+    && runtimeOptions.episodicProcessingRestWindow
+  )
+    ? new DriftVelocityReviewLane({
+      evidence: runtimeOptions.driftVelocityReview.evidence,
+      cardStore: runtimeOptions.driftVelocityReview.cardStore,
+      config: runtimeOptions.driftVelocityReview.config,
+      watermarks: runtimeOptions.driftVelocityReview.watermarks,
+      restWindow: runtimeOptions.episodicProcessingRestWindow,
+    })
+    : null;
+
+  // Second-arrow rumination lane (htm9.15): same operator-card charter as the
+  // drift-velocity lane above, with one operator-gated exception — an OPTIONAL
+  // soft self-notice (fixed htm9.12-contract wording, default OFF) delivered
+  // through the follow-up channel when a card is raised. The lane itself
+  // never mutates memories, concerns, or emotion.
+  const secondArrowLane = (
+    runtimeOptions.secondArrowReview
+    && runtimeOptions.episodicProcessingRestWindow
+  )
+    ? new SecondArrowReviewLane({
+      evidence: runtimeOptions.secondArrowReview.evidence,
+      cardStore: runtimeOptions.secondArrowReview.cardStore,
+      config: runtimeOptions.secondArrowReview.config,
+      watermarks: runtimeOptions.secondArrowReview.watermarks,
+      restWindow: runtimeOptions.episodicProcessingRestWindow,
+      ...(agentLoop.followUp
+        ? {
+          deliverSelfNotice: (content: string) => {
+            agentLoop.followUp?.({
+              id: `second-arrow-self-notice:${Date.now()}`,
+              channelId: SECOND_ARROW_REVIEW_CHANNEL_ID,
+              channelType: 'terminal',
+              authorId: 'scheduler',
+              authorName: 'Quiet Notes',
+              content,
+              timestamp: new Date(),
+            });
+          },
+        }
+        : {}),
+    })
+    : null;
+
   return {
     sleeptimeAgent,
     nearTurnLane,
     episodeSynthesisLane,
     driftReviewLane,
+    driftVelocityLane,
+    secondArrowLane,
   };
 }
 
@@ -368,6 +434,120 @@ export function registerSchedulerOwnedPostTurnLanes(
       hasDriftStoreSurface: Boolean(driftContactStore?.listAll && driftContactStore.setContactMaintenanceWatermark),
       hasRestWindow: Boolean(runtimeOptions.episodicProcessingRestWindow),
       hasFollowUp: Boolean(agentLoop.followUp),
+    });
+  }
+
+  if (lanes.driftVelocityLane) {
+    const driftVelocityLane = lanes.driftVelocityLane;
+    if (telemetryEventBus && !scheduler.getTask(DRIFT_VELOCITY_REVIEW_TASK_ID)) {
+      scheduler.register({
+        id: DRIFT_VELOCITY_REVIEW_TASK_ID,
+        name: 'CogSec Drift-Velocity Review',
+        type: 'every',
+        intervalMs: SLEEPTIME_REST_WINDOW_POLL_INTERVAL_MS,
+        handler: async () => {
+          const actions = await driftVelocityLane.inferIdleActions();
+          for (const action of actions) {
+            const syntheticMessage = {
+              id: `drift-velocity-review-poll:${Date.now()}`,
+              channelId: DRIFT_VELOCITY_REVIEW_CHANNEL_ID,
+              channelType: 'terminal' as const,
+              authorId: 'system:drift-velocity-review',
+              authorName: 'CogSec Drift Review',
+              content: 'Nightly drift-velocity review became eligible.',
+              timestamp: new Date(),
+            };
+            await telemetryEventBus.emit('agent.post_turn.actions.inferred', {
+              message: syntheticMessage,
+              response: {
+                content: '',
+                channelId: DRIFT_VELOCITY_REVIEW_CHANNEL_ID,
+                metadata: {
+                  model: 'scheduler:drift-velocity-review',
+                  inputTokens: 0,
+                  outputTokens: 0,
+                  durationMs: 0,
+                },
+              },
+              actions: toInferredPostTurnActions([action], syntheticMessage),
+            });
+          }
+        },
+        eligibility: { requiredTokens: ['identity.read'] },
+        state: 'idle',
+      }, { skipFirstRun: true });
+    }
+    postTurnActions.registerHandler(
+      DRIFT_VELOCITY_REVIEW_ACTION_KIND,
+      async (action) => {
+        await driftVelocityLane.execute(action);
+      },
+      {
+        executionMode: 'background',
+        runtimeClass: MAINTENANCE_REFLECTION_RUNTIME_CLASS,
+      },
+    );
+  } else {
+    log.info('Drift-velocity review wiring skipped: missing post-turn dependencies', {
+      hasDriftVelocityBundle: Boolean(runtimeOptions.driftVelocityReview),
+      hasRestWindow: Boolean(runtimeOptions.episodicProcessingRestWindow),
+    });
+  }
+
+  if (lanes.secondArrowLane) {
+    const secondArrowLane = lanes.secondArrowLane;
+    if (telemetryEventBus && !scheduler.getTask(SECOND_ARROW_REVIEW_TASK_ID)) {
+      scheduler.register({
+        id: SECOND_ARROW_REVIEW_TASK_ID,
+        name: 'CogSec Second-Arrow Review',
+        type: 'every',
+        intervalMs: SLEEPTIME_REST_WINDOW_POLL_INTERVAL_MS,
+        handler: async () => {
+          const actions = await secondArrowLane.inferIdleActions();
+          for (const action of actions) {
+            const syntheticMessage = {
+              id: `second-arrow-review-poll:${Date.now()}`,
+              channelId: SECOND_ARROW_REVIEW_CHANNEL_ID,
+              channelType: 'terminal' as const,
+              authorId: 'system:second-arrow-review',
+              authorName: 'CogSec Second-Arrow Review',
+              content: 'Nightly second-arrow rumination review became eligible.',
+              timestamp: new Date(),
+            };
+            await telemetryEventBus.emit('agent.post_turn.actions.inferred', {
+              message: syntheticMessage,
+              response: {
+                content: '',
+                channelId: SECOND_ARROW_REVIEW_CHANNEL_ID,
+                metadata: {
+                  model: 'scheduler:second-arrow-review',
+                  inputTokens: 0,
+                  outputTokens: 0,
+                  durationMs: 0,
+                },
+              },
+              actions: toInferredPostTurnActions([action], syntheticMessage),
+            });
+          }
+        },
+        eligibility: { requiredTokens: ['identity.read'] },
+        state: 'idle',
+      }, { skipFirstRun: true });
+    }
+    postTurnActions.registerHandler(
+      SECOND_ARROW_REVIEW_ACTION_KIND,
+      async (action) => {
+        await secondArrowLane.execute(action);
+      },
+      {
+        executionMode: 'background',
+        runtimeClass: MAINTENANCE_REFLECTION_RUNTIME_CLASS,
+      },
+    );
+  } else {
+    log.info('Second-arrow review wiring skipped: missing post-turn dependencies', {
+      hasSecondArrowBundle: Boolean(runtimeOptions.secondArrowReview),
+      hasRestWindow: Boolean(runtimeOptions.episodicProcessingRestWindow),
     });
   }
 

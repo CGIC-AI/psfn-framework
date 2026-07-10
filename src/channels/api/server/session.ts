@@ -7,6 +7,16 @@ import type {
   MessageRoutingMetadata,
   SubstrateMessage,
 } from '../../../shared/contracts/runtime.js';
+import type { IntakeEnvelopeSnapshot } from '../../../shared/contracts/intake-envelope.js';
+import type { IntakeScreeningService } from '../../../core/cogsec/intake/screening.js';
+import {
+  appendDocumentIngestToContent,
+  ingestDocumentAttachments,
+  screenDocumentIngestSummary,
+  toDocumentAttachmentCandidate,
+  type DocumentAttachmentCandidate,
+  type DocumentIngestFailure,
+} from '../../../faculties/file-ingest/index.js';
 import type { SatelliteRoutingMetadata } from '../../../shared/contracts/satellite-registry.js';
 import type { SessionManager } from '../../../core/session/manager.js';
 import type { ChannelPrivacy } from '../../../system/trust/context-envelope.js';
@@ -16,6 +26,8 @@ import type { TurnRoutingOverrides } from './request.js';
 import { clampApiHeader, singleApiHeader } from './request.js';
 
 const MAX_INLINE_CHAT_IMAGES = 4;
+const MAX_INLINE_CHAT_FILES = 4;
+const FILE_DATA_URL_PATTERN = /^data:([a-z0-9.+/-]+);base64,(.+)$/is;
 const DATA_IMAGE_URL_PATTERN = /^data:(image\/[a-z0-9.+-]+);base64,(.+)$/is;
 const IMAGE_EXTENSION_CONTENT_TYPES: Record<string, string> = {
   '.jpg': 'image/jpeg',
@@ -94,6 +106,167 @@ export function getMessageImageAttachments(
   return attachments;
 }
 
+// ── htm9.9: OpenAI-compatible `file` content parts → shared file ingest ──
+
+export interface ApiDocumentIngestConfig {
+  personalFilesDir: string;
+  /** Null when the intake firewall mode is 'off'. */
+  intakeScreening: IntakeScreeningService | null;
+}
+
+export interface ApiFilePartExtraction {
+  candidates: DocumentAttachmentCandidate[];
+  /** File parts refused before ingest (unsupported type, over the count cap). */
+  rejected: DocumentIngestFailure[];
+}
+
+export function getLastUserMessageFileParts(
+  messages: ChatCompletionRequest['messages'],
+): ApiFilePartExtraction {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i].role === 'user') return getMessageFileParts(messages[i]);
+  }
+  return getMessageFileParts(messages[messages.length - 1]);
+}
+
+export function getMessageFileParts(
+  message: ChatCompletionRequest['messages'][number],
+): ApiFilePartExtraction {
+  const extraction: ApiFilePartExtraction = { candidates: [], rejected: [] };
+  const content = message.content;
+  if (!Array.isArray(content)) return extraction;
+
+  for (const part of content) {
+    if (!isRecord(part) || part.type !== 'file') continue;
+    const file: Record<string, unknown> = isRecord(part.file) ? part.file : {};
+    const ordinal = extraction.candidates.length + extraction.rejected.length + 1;
+    const filename = typeof file.filename === 'string' && file.filename.trim()
+      ? file.filename.trim()
+      : `file-${ordinal}`;
+    if (extraction.candidates.length >= MAX_INLINE_CHAT_FILES) {
+      extraction.rejected.push({
+        name: filename,
+        contentType: 'application/octet-stream',
+        reason: `too many file attachments (max ${MAX_INLINE_CHAT_FILES} per message)`,
+      });
+      continue;
+    }
+    const rawData = typeof file.file_data === 'string' ? file.file_data.trim() : '';
+    const dataUrl = FILE_DATA_URL_PATTERN.exec(rawData);
+    const declaredMime = dataUrl ? dataUrl[1].trim().toLowerCase() : '';
+    const base64 = (dataUrl ? dataUrl[2] : rawData).replace(/\s+/g, '');
+    // Request validation already enforced strict base64; this guard keeps the
+    // helper safe for direct callers.
+    if (!base64) {
+      extraction.rejected.push({
+        name: filename,
+        contentType: declaredMime || 'application/octet-stream',
+        reason: 'file_data must be base64 or a base64 data: URL',
+      });
+      continue;
+    }
+    const bytes = Buffer.from(base64, 'base64');
+    const candidate = toDocumentAttachmentCandidate({
+      id: `inline-file-${ordinal}`,
+      name: filename,
+      url: `inline:file:${ordinal}`,
+      contentType: declaredMime || null,
+      size: bytes.byteLength,
+      bytes,
+    });
+    if (!candidate) {
+      extraction.rejected.push({
+        name: filename,
+        contentType: declaredMime || 'application/octet-stream',
+        reason: 'unsupported file attachment type (supported: PDF, DOCX, plain text, markdown, CSV)',
+      });
+      continue;
+    }
+    extraction.candidates.push(candidate);
+  }
+  return extraction;
+}
+
+export interface ApiDocumentIngestOutcome {
+  content: string;
+  attachments: Attachment[];
+  intakeEnvelopes: IntakeEnvelopeSnapshot[];
+}
+
+/**
+ * Runs extracted API file parts through the shared file-ingest pipeline
+ * (quarantine → parse → intake screening) and renders soft in-content notices
+ * for quarantined/failed items. Fails closed when document ingestion is not
+ * configured: the bytes are dropped and the companion sees a truthful notice —
+ * raw file content never reaches the prompt around the screening layers.
+ */
+export async function ingestApiDocumentFileParts(input: {
+  extraction: ApiFilePartExtraction;
+  content: string;
+  channelId: string;
+  messageId: string;
+  authorId: string;
+  attachmentIndexBase: number;
+  documentIngest: ApiDocumentIngestConfig | null;
+}): Promise<ApiDocumentIngestOutcome> {
+  const { extraction } = input;
+  if (extraction.candidates.length === 0 && extraction.rejected.length === 0) {
+    return { content: input.content, attachments: [], intakeEnvelopes: [] };
+  }
+
+  if (!input.documentIngest) {
+    return {
+      content: appendDocumentIngestToContent(input.content, {
+        results: [],
+        quarantined: [],
+        failures: [
+          ...extraction.candidates.map(candidate => ({
+            name: candidate.name,
+            contentType: candidate.contentType,
+            reason: 'document ingestion is not configured on this runtime',
+          })),
+          ...extraction.rejected,
+        ],
+      }),
+      attachments: [],
+      intakeEnvelopes: [],
+    };
+  }
+
+  let summary = await ingestDocumentAttachments(extraction.candidates, {
+    channel: 'api',
+    personalFilesDir: input.documentIngest.personalFilesDir,
+    channelId: input.channelId,
+    messageId: input.messageId,
+    authorId: input.authorId,
+    createdAt: new Date(),
+  });
+  let intakeEnvelopes: IntakeEnvelopeSnapshot[] = [];
+  // htm9.2: screen accepted parsed text before it lands in
+  // <parsed_attachment_text>; the binary-level quarantine stays.
+  if (input.documentIngest.intakeScreening && summary.results.length > 0) {
+    const screened = await screenDocumentIngestSummary(
+      summary,
+      input.documentIngest.intakeScreening,
+      {
+        channel: 'api',
+        channelId: input.channelId,
+        messageId: input.messageId,
+        attachmentIndexBase: input.attachmentIndexBase,
+      },
+    );
+    summary = screened.summary;
+    intakeEnvelopes = screened.snapshots;
+  }
+  summary = { ...summary, failures: [...summary.failures, ...extraction.rejected] };
+
+  return {
+    content: appendDocumentIngestToContent(input.content, summary),
+    attachments: summary.results.map(result => result.attachment),
+    intakeEnvelopes,
+  };
+}
+
 export function seedSession(params: {
   sessionManager: SessionManager;
   channelId: string;
@@ -168,6 +341,8 @@ export function buildSubstrateMessage(params: {
   canonicalContactId?: string;
   satellite?: SatelliteRoutingMetadata;
   attachments?: Attachment[];
+  /** htm9.9: intake-firewall envelope snapshots for screened document attachments. */
+  intakeEnvelopes?: IntakeEnvelopeSnapshot[];
 }): SubstrateMessage {
   const {
     channelId,
@@ -182,6 +357,7 @@ export function buildSubstrateMessage(params: {
     canonicalContactId,
     satellite,
     attachments,
+    intakeEnvelopes,
   } = params;
   const approvalToken = clampApiHeader(
     singleApiHeader(req.headers['x-broadcast-approval-token']),
@@ -210,6 +386,7 @@ export function buildSubstrateMessage(params: {
     ...(overrides.promptOverride ? { promptOverride: overrides.promptOverride } : {}),
     ...(overrides.responseStyle ? { responseStyle: overrides.responseStyle } : {}),
     ...(canonicalContactId ? { canonicalContactId } : {}),
+    ...(intakeEnvelopes && intakeEnvelopes.length > 0 ? { intakeEnvelopes } : {}),
   };
   const hasRouting = source !== 'api'
     || routing.broadcast
@@ -218,7 +395,8 @@ export function buildSubstrateMessage(params: {
     || routing.modelOverride
     || routing.promptOverride
     || routing.responseStyle
-    || routing.canonicalContactId;
+    || routing.canonicalContactId
+    || routing.intakeEnvelopes;
 
   return {
     id: `api-${randomUUID()}`,

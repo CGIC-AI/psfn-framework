@@ -39,7 +39,10 @@ import {
   resolveConfiguredCompanionDataDir,
   resolveConfiguredSystemDataDir,
   resolveChargeLedgerPath,
+  resolveCogSecEventsPath,
+  resolveDriftReviewCardsPath,
   resolveFatigueLedgerPath,
+  resolveIntakeQuarantinePath,
   resolveLegacyValuesJournalPath,
   resolveNorthStarPath,
   resolveReflectionDailyJournalsDir,
@@ -107,6 +110,11 @@ import { createAdminToolConformanceService } from './services/tool-conformance-s
 import type { ToolConformanceRunner } from '../../core/agent/tool-conformance/runner.js';
 import { AdminSessionDataService } from './services/session-service.js';
 import { AdminSettingsDataService } from './services/settings-service.js';
+import { createAdminIntakeQuarantineService } from './services/intake-quarantine-service.js';
+import { createIntakeQuarantineStore } from '../../core/cogsec/intake/quarantine-store.js';
+import { createAdminDriftReviewService } from './services/drift-review-service.js';
+import { createDriftReviewCardStore } from '../../core/cogsec/drift/drift-review-card-store.js';
+import { CogSecEventStore } from '../../core/cogsec/events.js';
 import { AdminShardFoldReviewDataService } from './services/shard-fold-review-service.js';
 import { AdminWikiDataService } from './services/wiki-service.js';
 import type { AdminToolHealthProvider } from './tool-health-provider.js';
@@ -239,6 +247,58 @@ export function createInProcessGardenAdminContract(
   const toolConformance = options.toolConformanceRunner
     ? createAdminToolConformanceService(options.toolConformanceRunner)
     : null;
+  const settingsService = new AdminSettingsDataService({
+    config: options.config,
+    configStore,
+  });
+
+  // ── Intake quarantine approval queue (htm9.11 Cognitive Security tab) ──
+  // Reads the same companion-data quarantine file the gateway/agent screening
+  // pipelines write (the store reloads from disk on every operation), applies
+  // human release/discard decisions through the envelope state machine, and
+  // persists flywheel always-allow/always-deny into intake-policy sourceLists
+  // through the settings owner-file path. The underlying store is constructed
+  // LAZILY on first use: intake-policy.json is loaded on request (same lazy
+  // posture as the settings service), so a missing owner file fails the
+  // quarantine API call loudly instead of failing every Garden startup.
+  let quarantineStore: ReturnType<typeof createIntakeQuarantineStore> | null = null;
+  const getQuarantineStore = (): ReturnType<typeof createIntakeQuarantineStore> => {
+    if (!quarantineStore) {
+      const intakePolicy = configStore.loadIntakePolicy();
+      quarantineStore = createIntakeQuarantineStore(
+        resolveIntakeQuarantinePath(companionDataDir),
+        {
+          itemTtlHours: intakePolicy.quarantine.itemTtlHours,
+          maxHeldItems: intakePolicy.quarantine.maxHeldItems,
+        },
+      );
+    }
+    return quarantineStore;
+  };
+  const intakeQuarantine = createAdminIntakeQuarantineService({
+    store: {
+      hold: (input) => getQuarantineStore().hold(input),
+      list: () => getQuarantineStore().list(),
+      getById: (id) => getQuarantineStore().getById(id),
+      applyDecision: (input) => getQuarantineStore().applyDecision(input),
+    },
+    settingsService,
+    // Fresh store per decision: CogSecEventStore snapshots the file at
+    // construction and the gateway writes the same file concurrently.
+    cogSecEvents: () => new CogSecEventStore(resolveCogSecEventsPath(companionDataDir)),
+  });
+
+  // ── Drift review cards (htm9.14/htm9.15 Cognitive Security tab) ──
+  // Reads the same companion-data card file the nightly drift lanes write
+  // (the store reloads from disk on every operation) and records the
+  // operator decision. Acknowledge/dismiss never mutate memories, trust, or
+  // emotion; the operator-approved second-arrow consolidation is the single
+  // exception, applied through the live memory store's existing supersession
+  // machinery (same in-process instance the agent runtime uses).
+  const driftReviews = createAdminDriftReviewService({
+    store: createDriftReviewCardStore(resolveDriftReviewCardsPath(companionDataDir)),
+    memoryStore: options.memoryStore,
+  });
 
   return {
     dashboard: new AdminDashboardDataService({
@@ -365,11 +425,9 @@ export function createInProcessGardenAdminContract(
     concerns: options.concernStore
       ? new AdminConcernDataService(options.concernStore)
       : null,
-    settings: new AdminSettingsDataService({
-      config: options.config,
-      configStore,
-      ...(options.getCredentialPresence ? { getCredentialPresence: options.getCredentialPresence } : {}),
-    }),
+    settings: settingsService,
+    intakeQuarantine,
+    driftReviews,
     identity: new AdminIdentityDataService({
       characterCard: options.characterCard,
       config: publicConfig,

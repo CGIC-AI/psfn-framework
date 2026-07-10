@@ -3,13 +3,22 @@
 // Uses Node.js built-in http module — no framework dependency.
 
 import { randomUUID } from 'node:crypto';
-import type { IncomingMessage, Server, ServerResponse } from 'node:http';
+import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { Duplex } from 'node:stream';
 import { Type, type Static } from '@sinclair/typebox';
 import { Value } from '@sinclair/typebox/value';
 import type { ChannelType } from '../../shared/contracts/runtime.js';
-import type { SatelliteRegistryConfig } from '../../shared/contracts/satellite-registry.js';
-import type { ApiAuthPrincipal } from '../backplane/http/auth.js';
+import type {
+  SatelliteClientCertIdentity,
+  SatelliteRegistryConfig,
+  SatelliteTelemetryAuthContext,
+} from '../../shared/contracts/satellite-registry.js';
+import { validateSatelliteApiKeys, type ApiAuthPrincipal } from '../backplane/http/auth.js';
+import {
+  deriveClientCertIdentity,
+  parseTrustedProxyClientCertToken,
+  stripClientCertHeaders,
+} from '../backplane/http/client-cert.js';
 import type { ContactStorePort } from '../../core/contacts/contact-store-port.js';
 import type { SubstrateAgent } from '../../core/agent/substrate-agent.js';
 import type { EventBus, ExternalTelemetryEvent } from '../../shared/event-bus.js';
@@ -57,6 +66,7 @@ import {
 import type { ExternalChannelProfileConfig } from '../backplane/config.js';
 import { resolveCompanionIdFromConfig } from '../../core/identity/companion-runtime.js';
 import { ApiChatCompletionsHandler } from './server/chat-completions.js';
+import type { ApiDocumentIngestConfig } from './server/session.js';
 import {
   applyApiCorsPolicy,
   canWriteResponse,
@@ -67,6 +77,8 @@ import {
   parseSchedulerHealthcheckStaleAfterMs,
   sendApiError,
   stopApiHttpServer,
+  type ApiHttpServer,
+  type ApiHttpServerTlsConfig,
 } from './server/http.js';
 import {
   resolveApiServerRequestPrincipal,
@@ -97,6 +109,238 @@ const telemetryIngestSchema = Type.Object({
 
 type TelemetryIngestInput = Static<typeof telemetryIngestSchema>;
 
+// ── Sprint-10 H5: telemetry payload screening at the ingest boundary ──
+// Raw biometrics (face vectors/embeddings/descriptors, iris/retina templates,
+// image blobs) must NOT cross the door. The ingest schema deliberately accepts
+// an open `payload` object, but before that payload is copied verbatim into the
+// emitted `external.telemetry.ingested` event (and thence onto every Garden
+// admin WebSocket client), we fail closed on:
+//   - biometric-shaped keys anywhere in the object graph,
+//   - raw-media/blob keys,
+//   - value shapes that look like embeddings (long numeric arrays) or raw media
+//     (very long strings),
+//   - oversized / over-deep / over-wide structures,
+//   - top-level keys outside the per-eventType allowlist.
+const TELEMETRY_PAYLOAD_MAX_BYTES = 16 * 1024;
+const TELEMETRY_PAYLOAD_MAX_DEPTH = 6;
+const TELEMETRY_PAYLOAD_MAX_KEYS = 64;
+const TELEMETRY_PAYLOAD_MAX_ARRAY_LENGTH = 16;
+const TELEMETRY_PAYLOAD_MAX_STRING_LENGTH = 2_048;
+// A numeric array this long or longer is treated as an embedding/descriptor,
+// regardless of the (possibly innocuous) key it hides behind.
+const TELEMETRY_PAYLOAD_NUMERIC_VECTOR_THRESHOLD = 8;
+
+const TELEMETRY_BIOMETRIC_KEY_PATTERNS: readonly RegExp[] = [
+  /vector/i,
+  /embedding/i,
+  /descriptor/i,
+  /template/i,
+  /biometric/i,
+  /faceprint/i,
+  /faceid/i,
+  /landmark/i,
+  /iris/i,
+  /retina/i,
+  /fingerprint/i,
+  /minutiae/i,
+];
+const TELEMETRY_RAW_MEDIA_KEY_PATTERNS: readonly RegExp[] = [
+  /^image$/i,
+  /image[_-]?bytes/i,
+  /^frame$/i,
+  /^photo$/i,
+  /photo[_-]?bytes/i,
+  /raw[_-]?image/i,
+  /^jpe?g$/i,
+  /^png$/i,
+  /^bytes$/i,
+  /^blob$/i,
+  /pixels/i,
+];
+
+// Origin-binding and event-descriptor fields shared by every accepted event
+// type. These are also the fields the sensor-cognition bridge reads to resolve
+// a satellite/place origin and normalize presence/identity-claim perceptions.
+const TELEMETRY_COMMON_PAYLOAD_KEYS: ReadonlySet<string> = new Set([
+  'satelliteId', 'satellite_id',
+  'placeId', 'place_id',
+  'siteId', 'site_id',
+  'affordanceId', 'affordance_id',
+  'origin', 'satellite', 'site', 'sensor',
+  'channelId',
+  'type', 'kind', 'event', 'eventType', 'action', 'state', 'status',
+  'timestamp', 'ts', 'sequence', 'seq',
+]);
+
+const TELEMETRY_PAYLOAD_KEYS_BY_EVENT_TYPE: ReadonlyMap<string, ReadonlySet<string>> = new Map([
+  ['external.telemetry.heartbeat', new Set([
+    'uptime', 'uptimeMs', 'uptime_ms', 'load', 'cpu', 'cpuLoad',
+    'memory', 'memoryMb', 'battery', 'batteryPct', 'rssi', 'signal',
+    'firmware', 'version', 'online', 'healthy',
+  ])],
+  ['external.telemetry.status', new Set([
+    // presence + identity-claim perceptions ride the status event type
+    'present', 'detected', 'occupied', 'presence',
+    'confidence', 'score', 'probability',
+    'occupancyCount', 'occupancy_count', 'count',
+    'identityClaim', 'identity_claim', 'claim',
+    'hubIdentityId', 'hub_identity_id',
+    'load', 'battery', 'online', 'healthy', 'detail', 'message',
+  ])],
+  ['external.telemetry.incident', new Set([
+    'severity', 'level', 'code', 'category',
+    'message', 'detail', 'reason', 'error',
+    'count', 'confidence',
+  ])],
+]);
+
+export interface TelemetryPayloadScreenFailure {
+  ok: false;
+  errorType: string;
+  message: string;
+}
+
+export type TelemetryPayloadScreenResult = { ok: true } | TelemetryPayloadScreenFailure;
+
+function keyMatchesAny(key: string, patterns: readonly RegExp[]): boolean {
+  return patterns.some((pattern) => pattern.test(key));
+}
+
+function screenTelemetryPayloadNode(
+  value: unknown,
+  depth: number,
+): TelemetryPayloadScreenFailure | undefined {
+  if (depth > TELEMETRY_PAYLOAD_MAX_DEPTH) {
+    return {
+      ok: false,
+      errorType: 'payload_shape_invalid',
+      message: `payload nesting exceeds ${TELEMETRY_PAYLOAD_MAX_DEPTH} levels`,
+    };
+  }
+
+  if (typeof value === 'string') {
+    if (value.length > TELEMETRY_PAYLOAD_MAX_STRING_LENGTH) {
+      return {
+        ok: false,
+        errorType: 'biometric_payload_rejected',
+        message: 'payload contains an oversized string (possible raw media/biometric blob)',
+      };
+    }
+    return undefined;
+  }
+
+  if (Array.isArray(value)) {
+    if (value.length > TELEMETRY_PAYLOAD_MAX_ARRAY_LENGTH) {
+      return {
+        ok: false,
+        errorType: 'payload_shape_invalid',
+        message: `payload array exceeds ${TELEMETRY_PAYLOAD_MAX_ARRAY_LENGTH} elements`,
+      };
+    }
+    if (
+      value.length >= TELEMETRY_PAYLOAD_NUMERIC_VECTOR_THRESHOLD
+      && value.every((entry) => typeof entry === 'number')
+    ) {
+      return {
+        ok: false,
+        errorType: 'biometric_payload_rejected',
+        message: 'payload contains a numeric vector (possible embedding/descriptor)',
+      };
+    }
+    for (const entry of value) {
+      const failure = screenTelemetryPayloadNode(entry, depth + 1);
+      if (failure) return failure;
+    }
+    return undefined;
+  }
+
+  if (value !== null && typeof value === 'object') {
+    for (const [key, nested] of Object.entries(value as Record<string, unknown>)) {
+      if (keyMatchesAny(key, TELEMETRY_BIOMETRIC_KEY_PATTERNS)) {
+        return {
+          ok: false,
+          errorType: 'biometric_payload_rejected',
+          message: `payload key "${key}" is a raw-biometric-shaped field and is not accepted`,
+        };
+      }
+      if (keyMatchesAny(key, TELEMETRY_RAW_MEDIA_KEY_PATTERNS)) {
+        return {
+          ok: false,
+          errorType: 'biometric_payload_rejected',
+          message: `payload key "${key}" is a raw-media/blob field and is not accepted`,
+        };
+      }
+      const failure = screenTelemetryPayloadNode(nested, depth + 1);
+      if (failure) return failure;
+    }
+    return undefined;
+  }
+
+  return undefined;
+}
+
+function countTelemetryPayloadKeys(value: unknown): number {
+  if (Array.isArray(value)) {
+    return value.reduce<number>((total, entry) => total + countTelemetryPayloadKeys(entry), 0);
+  }
+  if (value !== null && typeof value === 'object') {
+    const entries = Object.entries(value as Record<string, unknown>);
+    return entries.reduce<number>(
+      (total, [, nested]) => total + 1 + countTelemetryPayloadKeys(nested),
+      0,
+    );
+  }
+  return 0;
+}
+
+export function screenTelemetryIngestPayload(
+  eventType: string,
+  payload: Record<string, unknown>,
+): TelemetryPayloadScreenResult {
+  // Size ceiling (well under the 1MB body limit): telemetry heartbeats/status/
+  // incidents are small. Anything larger is an exfiltration/blob vector.
+  const serializedBytes = Buffer.byteLength(JSON.stringify(payload), 'utf8');
+  if (serializedBytes > TELEMETRY_PAYLOAD_MAX_BYTES) {
+    return {
+      ok: false,
+      errorType: 'payload_too_large',
+      message: `payload exceeds ${TELEMETRY_PAYLOAD_MAX_BYTES} bytes`,
+    };
+  }
+  if (countTelemetryPayloadKeys(payload) > TELEMETRY_PAYLOAD_MAX_KEYS) {
+    return {
+      ok: false,
+      errorType: 'payload_shape_invalid',
+      message: `payload exceeds ${TELEMETRY_PAYLOAD_MAX_KEYS} keys`,
+    };
+  }
+
+  // Biometric / raw-media / vector screening across the whole object graph.
+  const structuralFailure = screenTelemetryPayloadNode(payload, 0);
+  if (structuralFailure) return structuralFailure;
+
+  // Per-eventType top-level shape allowlist (fail closed on unknown fields).
+  const allowedForEventType = TELEMETRY_PAYLOAD_KEYS_BY_EVENT_TYPE.get(eventType);
+  if (!allowedForEventType) {
+    return {
+      ok: false,
+      errorType: 'event_type_not_allowed',
+      message: `no payload shape is defined for eventType ${eventType}`,
+    };
+  }
+  for (const key of Object.keys(payload)) {
+    if (TELEMETRY_COMMON_PAYLOAD_KEYS.has(key)) continue;
+    if (allowedForEventType.has(key)) continue;
+    return {
+      ok: false,
+      errorType: 'payload_field_not_allowed',
+      message: `payload key "${key}" is not allowed for eventType ${eventType}`,
+    };
+  }
+
+  return { ok: true };
+}
+
 export interface ApiServerConfig {
   port: number;
   host?: string;
@@ -121,6 +365,26 @@ export interface ApiServerConfig {
   externalChannelProfiles?: Partial<Record<ChannelType, ExternalChannelProfileConfig>>;
   satelliteRegistry?: SatelliteRegistryConfig;
   sensorIngest?: SensorIngestPort;
+  /**
+   * Per-satellite bearer credentials (`API_SATELLITE_KEYS`), each yielding a
+   * distinct satellite-scoped principal (Sprint-10 finding H4).
+   */
+  satelliteApiKeys?: string[];
+  /**
+   * Shared secret a TLS-terminating proxy must present in
+   * `X-PSFN-Trusted-Proxy-Token` for its `X-PSFN-Client-Cert-*` headers to be
+   * honored (`API_TRUSTED_PROXY_CLIENT_CERT_TOKEN`). Unset means
+   * header-asserted client certificates are never accepted.
+   */
+  trustedProxyClientCertToken?: string;
+  /** Direct-TLS listener config (`API_TLS_CERT_PATH`/`API_TLS_KEY_PATH`/`API_TLS_CLIENT_CA_PATH`). */
+  tls?: ApiHttpServerTlsConfig;
+  /**
+   * htm9.9: document ingestion for OpenAI-compatible `file` content parts
+   * (personal-files root + intake screening). Absent means file parts fail
+   * closed into soft in-content notices.
+   */
+  documentIngest?: ApiDocumentIngestConfig | null;
 }
 
 export class ApiServer implements ChannelAdapterPort {
@@ -143,7 +407,7 @@ export class ApiServer implements ChannelAdapterPort {
   readonly gateway: ChannelGatewayAdapter;
   readonly prompt: ChannelPromptAdapter;
 
-  private server: Server;
+  private server: ApiHttpServer;
   private port: number;
   private host: string;
   private eventBus: EventBus;
@@ -152,6 +416,8 @@ export class ApiServer implements ChannelAdapterPort {
   private runtime: ApiServerRuntime | null;
   private apiKey?: string;
   private adminToken?: string;
+  private satelliteApiKeys: string[];
+  private trustedProxyClientCertToken?: string;
   private allowInsecureWithoutAuth: boolean;
   private corsAllowedOrigins: ReturnType<typeof normalizeCorsAllowedOrigins>;
   private modelName: string;
@@ -175,6 +441,13 @@ export class ApiServer implements ChannelAdapterPort {
     this.runtime = config.runtime ?? null;
     this.apiKey = clampHeaderValue(config.apiKey, 512);
     this.adminToken = clampHeaderValue(config.adminToken, 512);
+    // Re-validate satellite keys at the trust boundary (fail closed on weak
+    // keys or collisions with the shared credentials), even when the caller
+    // already parsed them from env.
+    this.satelliteApiKeys = validateSatelliteApiKeys(config.satelliteApiKeys ?? [], {
+      reservedTokens: [this.apiKey, this.adminToken],
+    });
+    this.trustedProxyClientCertToken = parseTrustedProxyClientCertToken(config.trustedProxyClientCertToken);
     this.allowInsecureWithoutAuth = config.allowInsecureWithoutAuth === true;
     this.corsAllowedOrigins = normalizeCorsAllowedOrigins(config.corsAllowedOrigins);
     this.modelName = config.modelName ?? resolveCompanionIdFromConfig(config);
@@ -209,6 +482,7 @@ export class ApiServer implements ChannelAdapterPort {
       externalChannelProfiles: config.externalChannelProfiles ?? {},
       satelliteRegistry: config.satelliteRegistry,
       logger: log,
+      documentIngest: config.documentIngest ?? null,
     });
     this.config = {
       enabled: true,
@@ -229,7 +503,7 @@ export class ApiServer implements ChannelAdapterPort {
     this.server = createApiHttpServer({
       handleRequest: (req, res) => this.handleRequest(req, res),
       handleUpgrade: (req, socket, head) => this.handleUpgrade(req, socket, head),
-    });
+    }, config.tls);
   }
 
   async send(channelId: string, content: string): Promise<void> {
@@ -279,29 +553,57 @@ export class ApiServer implements ChannelAdapterPort {
       return;
     }
 
+    // Sprint-10 C1: derive the client-certificate identity from the ONLY
+    // trusted sources (real TLS peer cert, or a proxy that authenticated
+    // itself with the trusted-proxy token), then unconditionally strip the
+    // inbound X-PSFN-Client-Cert-* headers so nothing downstream can trust
+    // caller-supplied certificate assertions.
+    const clientCert = deriveClientCertIdentity(req, {
+      ...(this.trustedProxyClientCertToken ? { trustedProxyToken: this.trustedProxyClientCertToken } : {}),
+    });
+    stripClientCertHeaders(req.headers);
+
     const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);
     const path = url.pathname;
     const isTelemetryIngest = req.method === 'POST' && path === '/v1/telemetry/ingest';
     const principal = resolveApiServerRequestPrincipal(req, res, {
       apiKey: this.apiKey,
       adminToken: this.adminToken,
+      ...(this.satelliteApiKeys.length > 0 ? { satelliteApiKeys: this.satelliteApiKeys } : {}),
       allowInsecureWithoutAuth: this.allowInsecureWithoutAuth,
       isTelemetryIngest,
     });
     if (!principal) return;
+
+    // Satellite-scoped credentials are only valid on satellite surfaces
+    // (fail closed): claims-bearing chat turns, config pulls, and telemetry.
+    if (principal.scope === 'satellite') {
+      const satelliteSurface = (req.method === 'GET' && path === '/v1/satellites/config')
+        || (req.method === 'POST' && path === '/v1/chat/completions')
+        || isTelemetryIngest;
+      if (!satelliteSurface) {
+        sendApiError(
+          res,
+          403,
+          'satellite_scoped_principal_not_allowed',
+          'Satellite-scoped API keys may only access satellite surfaces',
+        );
+        return;
+      }
+    }
 
     if (req.method === 'GET' && path === '/v1/models') {
       handleModelsEndpoint(res, this.modelName);
     } else if (req.method === 'GET' && path === '/v1/identity') {
       this.handleIdentity(res);
     } else if (req.method === 'GET' && path === '/v1/satellites/config') {
-      this.handleSatelliteConfigPull(req, res, url, principal);
+      this.handleSatelliteConfigPull(res, url, principal, clientCert);
     } else if (req.method === 'GET' && path === '/health') {
       void this.handleHealth(res);
     } else if (req.method === 'POST' && path === '/v1/chat/completions') {
-      void this.chatCompletions.handle(req, res, principal);
+      void this.chatCompletions.handle(req, res, principal, clientCert);
     } else if (isTelemetryIngest) {
-      void this.handleTelemetryIngest(req, res);
+      void this.handleTelemetryIngest(req, res, principal, clientCert);
     } else {
       sendApiError(res, 404, 'not_found', `No route for ${req.method} ${path}`);
     }
@@ -337,18 +639,18 @@ export class ApiServer implements ChannelAdapterPort {
   }
 
   private handleSatelliteConfigPull(
-    req: IncomingMessage,
     res: ServerResponse,
     url: URL,
     principal: ApiAuthPrincipal,
+    clientCert: SatelliteClientCertIdentity | undefined,
   ): void {
     const resolution = resolveSatelliteConfigPull({
-      headers: req.headers,
       principal,
       registry: this.satelliteRegistry,
       satelliteId: url.searchParams.get('satelliteId') ?? undefined,
       endpointId: url.searchParams.get('endpointId') ?? undefined,
       claimType: url.searchParams.get('claimType') ?? undefined,
+      ...(clientCert ? { clientCert } : {}),
     });
     if (!resolution.ok) {
       sendApiError(res, resolution.status, resolution.type, resolution.message);
@@ -575,7 +877,12 @@ export class ApiServer implements ChannelAdapterPort {
     };
   }
 
-  private async handleTelemetryIngest(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  private async handleTelemetryIngest(
+    req: IncomingMessage,
+    res: ServerResponse,
+    principal: ApiAuthPrincipal,
+    clientCert: SatelliteClientCertIdentity | undefined,
+  ): Promise<void> {
     const parsedBody = await readJsonBodyWithLimit(req, res, {
       maxBytes: MAX_BODY_SIZE,
       logger: log,
@@ -595,10 +902,15 @@ export class ApiServer implements ChannelAdapterPort {
       return;
     }
 
-    await this.ingestTelemetryPayload(parsedBody.value, res);
+    await this.ingestTelemetryPayload(parsedBody.value, res, principal, clientCert);
   }
 
-  private async ingestTelemetryPayload(parsed: unknown, res: ServerResponse): Promise<void> {
+  private async ingestTelemetryPayload(
+    parsed: unknown,
+    res: ServerResponse,
+    principal: ApiAuthPrincipal,
+    clientCert: SatelliteClientCertIdentity | undefined,
+  ): Promise<void> {
     if (!Value.Check(telemetryIngestSchema, parsed)) {
       sendApiError(
         res,
@@ -618,6 +930,16 @@ export class ApiServer implements ChannelAdapterPort {
         'event_type_not_allowed',
         `eventType must be one of: ${Array.from(TELEMETRY_EVENT_TYPE_ALLOWLIST).join(', ')}`,
       );
+      return;
+    }
+
+    // Sprint-10 H5: screen the open payload for raw biometrics, oversized/blob
+    // shapes, and out-of-allowlist fields BEFORE it is copied verbatim into the
+    // emitted event. Biometrics must not cross the ingest door. Fail closed.
+    const payloadScreen = screenTelemetryIngestPayload(telemetry.eventType, telemetry.payload);
+    if (!payloadScreen.ok) {
+      const status = payloadScreen.errorType === 'payload_too_large' ? 413 : 400;
+      sendApiError(res, status, payloadScreen.errorType, payloadScreen.message);
       return;
     }
 
@@ -646,6 +968,15 @@ export class ApiServer implements ChannelAdapterPort {
     }
     this.seenTelemetryNonces.set(nonceKey, now);
 
+    // Sprint-10 04-M1: stamp the authenticated origin so downstream
+    // consumers (perception bridge) can bind any payload-claimed satelliteId
+    // to the credential that actually authenticated this request.
+    const authContext: SatelliteTelemetryAuthContext = {
+      principalId: principal.id,
+      principalMode: principal.mode,
+      satelliteScoped: principal.scope === 'satellite',
+      ...(clientCert ? { clientCert } : {}),
+    };
     const normalizedEvent: ExternalTelemetryEvent = {
       id: `ext-${randomUUID()}`,
       source: telemetry.source,
@@ -656,6 +987,7 @@ export class ApiServer implements ChannelAdapterPort {
       nonce: telemetry.nonce,
       channelId: telemetry.channelId,
       scope: telemetry.scope,
+      auth: authContext,
     };
 
     if (this.runtime) {

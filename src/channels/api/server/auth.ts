@@ -17,6 +17,8 @@ export interface ApiServerAuthConfig {
 export interface ResolveApiServerPrincipalOptions {
   apiKey?: string;
   adminToken?: string;
+  /** Per-satellite credentials; see `ResolveApiPrincipalOptions.satelliteApiKeys`. */
+  satelliteApiKeys?: readonly string[];
   allowInsecureWithoutAuth: boolean;
   isTelemetryIngest: boolean;
 }
@@ -53,6 +55,7 @@ export function resolveApiServerRequestPrincipal(
     apiKey: options.apiKey,
     alternateApiToken: options.adminToken,
     alternateCookieTokenNames: options.adminToken ? ['psfn_token'] : [],
+    ...(options.satelliteApiKeys ? { satelliteApiKeys: options.satelliteApiKeys } : {}),
     allowInsecureWithoutAuth: options.allowInsecureWithoutAuth,
     isTelemetryIngest: options.isTelemetryIngest,
   });

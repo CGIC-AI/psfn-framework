@@ -42,9 +42,13 @@ import {
 } from '../../system/lifecycle/turn-contention.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
 import {
-  appendDiscordDocumentIngestToContent,
-  ingestDiscordDocumentAttachments,
-} from './file-ingest.js';
+  appendDocumentIngestToContent,
+  ingestDocumentAttachments,
+  screenDocumentIngestSummary,
+} from '../../faculties/file-ingest/index.js';
+import { fetchRemoteResource } from '../backplane/safe-remote-fetch.js';
+import type { IntakeEnvelopeSnapshot } from '../../shared/contracts/intake-envelope.js';
+import type { IntakeScreeningService } from '../../core/cogsec/intake/screening.js';
 import {
   DISCORD_MAX_IMAGE_ATTACHMENTS_PER_MESSAGE,
   extractDiscordDocumentAttachmentCandidates,
@@ -65,6 +69,8 @@ const DISCORD_LISTEN_WINDOW_DEFAULT_MS = 120_000;
 const DISCORD_LISTEN_WINDOW_MIN_MS = 10_000;
 const DISCORD_LISTEN_WINDOW_MAX_MS = 600_000;
 const DISCORD_TRIGGER_OPT_OUT_PREFIX = '!i';
+/** Cap for outbound media re-uploads (Discord bot upload ceiling). */
+const DISCORD_OUTBOUND_MEDIA_MAX_BYTES = 25 * 1024 * 1024;
 const LONG_RUNNING_STATUS_INITIAL_DELAY_MS = 12_000;
 const LONG_RUNNING_STATUS_POLL_MS = 5_000;
 const LONG_RUNNING_STATUS_UPDATE_MIN_INTERVAL_MS = 20_000;
@@ -102,6 +108,12 @@ interface DiscordAdapterOptions {
   allowedBotUserIds?: string[];
   personalFilesDir?: string;
   account?: DiscordAdapterAccountBinding;
+  /**
+   * Cognition intake firewall (htm9.2): screens parsed document attachment
+   * text before it enters <parsed_attachment_text>. Absent when the firewall
+   * mode is 'off' — ingest behavior is then unchanged.
+   */
+  intakeScreening?: IntakeScreeningService;
 }
 
 interface LongRunningToolState {
@@ -202,12 +214,14 @@ export class DiscordAdapter implements ChannelAdapterPort {
   private personalFilesDir: string | null;
   private initialized = false;
   private readonly account: DiscordAdapterAccountBinding | null;
+  private readonly intakeScreening: IntakeScreeningService | null;
 
   constructor(config: SubstrateConfig, eventBus: EventBus, options: DiscordAdapterOptions = {}) {
     this.runtimeConfig = config;
     this.eventBus = eventBus;
     this.sessionStore = options.sessionStore ?? null;
     this.personalFilesDir = options.personalFilesDir?.trim() || null;
+    this.intakeScreening = options.intakeScreening ?? null;
     this.account = options.account ?? null;
     this.id = this.account ? `discord:${this.account.accountId}` : 'discord';
     this.name = this.id;
@@ -275,6 +289,8 @@ export class DiscordAdapter implements ChannelAdapterPort {
       eventBus,
       getHandler: () => this.voiceHandler ?? this.handler,
       eligibilityGate: options.eligibilityGate,
+      // htm9.9: voice transcripts are screened as 'audio_transcript' intake.
+      intakeScreening: this.intakeScreening,
     });
   }
 
@@ -405,13 +421,18 @@ export class DiscordAdapter implements ChannelAdapterPort {
       throw new Error('Discord media attachment URL is required');
     }
 
-    const response = await fetch(mediaUrl);
+    // SSRF-guarded, timeout-bounded, byte-capped fetch (Sprint-10 6ny2).
+    // Locally generated media never reaches this path — sendMediaInternal
+    // prefers media.localPath when the file exists.
+    const response = await fetchRemoteResource(mediaUrl, {
+      maxBytes: DISCORD_OUTBOUND_MEDIA_MAX_BYTES,
+    });
     if (!response.ok) {
       throw new Error(`Discord media fetch failed (${response.status})`);
     }
 
     return {
-      attachment: Buffer.from(await response.arrayBuffer()),
+      attachment: response.bytes,
       name: fileName,
     };
   }
@@ -761,17 +782,36 @@ export class DiscordAdapter implements ChannelAdapterPort {
       }
     }
     let content = this.sanitizeMessageContent(msg.content, runtimeBotId);
+    let intakeEnvelopes: IntakeEnvelopeSnapshot[] = [];
     const documentCandidates = extractDiscordDocumentAttachmentCandidates(msg);
     if (documentCandidates.length > 0 && this.personalFilesDir) {
-      const documentSummary = await ingestDiscordDocumentAttachments(documentCandidates, {
+      let documentSummary = await ingestDocumentAttachments(documentCandidates, {
+        channel: 'discord',
         personalFilesDir: this.personalFilesDir,
         channelId: msg.channelId,
         messageId: msg.id,
         authorId: msg.author.id,
         createdAt: msg.createdAt,
+        fetchResource: fetchRemoteResource,
       });
+      // htm9.2: screen accepted parsed text before it lands in
+      // <parsed_attachment_text>; the binary-level quarantine above stays.
+      if (this.intakeScreening && documentSummary.results.length > 0) {
+        const screened = await screenDocumentIngestSummary(
+          documentSummary,
+          this.intakeScreening,
+          {
+            channel: 'discord',
+            channelId: msg.channelId,
+            messageId: msg.id,
+            attachmentIndexBase: attachments.length,
+          },
+        );
+        documentSummary = screened.summary;
+        intakeEnvelopes = screened.snapshots;
+      }
       attachments.push(...documentSummary.results.map(result => result.attachment));
-      content = appendDiscordDocumentIngestToContent(content, documentSummary);
+      content = appendDocumentIngestToContent(content, documentSummary);
       if (documentSummary.failures.length > 0) {
         log.warn('Some Discord document attachments failed to ingest', {
           channelId: msg.channelId,
@@ -818,6 +858,9 @@ export class DiscordAdapter implements ChannelAdapterPort {
         // machine-intelligence auto-tagging. Consumed by author-context
         // resolution to mark the contact (operator corrections survive).
         ...(msg.author.bot ? { authorIsMachineIntelligence: true } : {}),
+        // htm9.2: intake-firewall envelope snapshots for screened parsed
+        // document attachments; the envelope journal stays authoritative.
+        ...(intakeEnvelopes.length > 0 ? { intakeEnvelopes } : {}),
       },
     };
   }

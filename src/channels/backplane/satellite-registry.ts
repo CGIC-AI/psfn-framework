@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import type { IncomingHttpHeaders } from 'node:http';
 import type {
   SatelliteCapability,
+  SatelliteClientCertIdentity,
   SatelliteConfigPullResponse,
   SatelliteConfig,
   SatelliteConfigRestartPolicy,
@@ -26,11 +27,14 @@ import {
   SATELLITE_RUNTIME_ENABLED_CAPABILITIES,
   SATELLITE_TELEMETRY_SCOPES,
   SATELLITE_TRANSPORT_MODES,
+  satelliteClientCertMatchesBinding,
+  satelliteEndpointAdmitsApiKeyPrincipal,
 } from '../../shared/contracts/satellite-registry.js';
 import type { ApiAuthPrincipal } from './http/auth.js';
 import { normalizeChannelPrivacy, type ChannelPrivacy } from '../../system/trust/context-envelope.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
 import { isRecord } from '../../shared/utils/types.js';
+import { assertNoUnknownKeys } from './config-validation.js';
 
 const ID_TOKEN_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u;
 const CLAIM_TYPE_PATTERN = /^[a-z0-9][a-z0-9._-]{0,63}$/u;
@@ -49,6 +53,11 @@ export const EMPTY_SATELLITE_REGISTRY_CONFIG: SatelliteRegistryConfig = Object.f
   satellites: [],
 });
 
+// NOTE (Sprint-10 C1): `X-PSFN-Client-Cert-*` headers are intentionally NOT
+// claim headers. Client-certificate identity is derived exclusively via
+// `deriveClientCertIdentity` (real TLS peer cert or token-authenticated
+// trusted proxy) and passed to the resolvers as `clientCert`; raw request
+// headers are never consulted for certificate matching.
 export const SATELLITE_CLAIM_HEADERS = {
   claimType: 'x-psfn-satellite-claim-type',
   satelliteId: 'x-psfn-satellite-id',
@@ -57,10 +66,6 @@ export const SATELLITE_CLAIM_HEADERS = {
   threadId: 'x-psfn-satellite-thread-id',
   capabilities: 'x-psfn-satellite-capabilities',
   telemetryScopes: 'x-psfn-satellite-telemetry-scopes',
-  clientCertFingerprintSha256: 'x-psfn-client-cert-fingerprint-sha256',
-  clientCertSpkiSha256: 'x-psfn-client-cert-spki-sha256',
-  clientCertSubject: 'x-psfn-client-cert-subject',
-  clientCertSan: 'x-psfn-client-cert-san',
 } as const;
 
 type HeaderMap = IncomingHttpHeaders | Record<string, string | string[] | undefined>;
@@ -199,6 +204,22 @@ function parseAuthConfig(value: unknown, fieldName: string): SatelliteEndpointAu
   if (!isRecord(value)) {
     throw new Error(`${fieldName} must be an object`);
   }
+  // Fail closed on unknown keys (H9/T1, 03-M2). These are the exact keys the
+  // C1/H4 per-endpoint credential logic reads: a typo'd `apiKeyPrincipalIds`
+  // or `clientCert*` binding must throw, never be silently dropped into an
+  // unauthenticated / over-broad auth posture.
+  assertNoUnknownKeys(
+    value,
+    [
+      'mode',
+      'apiKeyPrincipalIds',
+      'clientCertFingerprintSha256',
+      'clientCertSpkiSha256',
+      'clientCertSubject',
+      'clientCertSan',
+    ],
+    fieldName,
+  );
   const mode = parseConfiguredString(value.mode, `${fieldName}.mode`);
   if (mode !== 'api_key' && mode !== 'mtls') {
     throw new Error(`${fieldName}.mode must be one of: api_key, mtls`);
@@ -275,6 +296,7 @@ function parseEndpointTransportConfig(value: unknown, fieldName: string): Satell
   if (!isRecord(value)) {
     throw new Error(`${fieldName} must be an object`);
   }
+  assertNoUnknownKeys(value, ['mode', 'chatCompletionsPath', 'voiceWebSocketPath'], fieldName);
   const transport: SatelliteEndpointTransportConfig = {
     mode: parseTransportMode(value.mode, `${fieldName}.mode`),
     ...(value.chatCompletionsPath !== undefined
@@ -299,6 +321,11 @@ function parseEndpointAudioRuntimeConfig(value: unknown, fieldName: string): Sat
   if (!isRecord(value)) {
     throw new Error(`${fieldName} must be an object`);
   }
+  assertNoUnknownKeys(
+    value,
+    ['inputDevice', 'outputDevice', 'sampleRateHz', 'channelCount', 'frameMs', 'wakeWordEnabled'],
+    fieldName,
+  );
   return {
     ...(value.inputDevice !== undefined
       ? { inputDevice: parseConfiguredString(value.inputDevice, `${fieldName}.inputDevice`) }
@@ -325,6 +352,7 @@ function parseEndpointRefreshConfig(value: unknown, fieldName: string): Satellit
   if (!isRecord(value)) {
     throw new Error(`${fieldName} must be an object`);
   }
+  assertNoUnknownKeys(value, ['intervalMs', 'jitterMs', 'restartPolicy', 'restartGraceMs'], fieldName);
   const refresh: SatelliteEndpointRefreshConfig = {
     intervalMs: parsePositiveInteger(value.intervalMs, `${fieldName}.intervalMs`),
     ...(value.jitterMs !== undefined
@@ -346,6 +374,7 @@ function parseEndpointRuntimeConfig(value: unknown, fieldName: string): Satellit
   if (!isRecord(value)) {
     throw new Error(`${fieldName} must be an object`);
   }
+  assertNoUnknownKeys(value, ['schemaVersion', 'transport', 'audio', 'refresh'], fieldName);
   if (value.schemaVersion !== 1) {
     throw new Error(`${fieldName}.schemaVersion must be 1`);
   }
@@ -363,6 +392,21 @@ function parseEndpointConfig(value: unknown, fieldName: string): SatelliteEndpoi
   if (!isRecord(value)) {
     throw new Error(`${fieldName} must be an object`);
   }
+  assertNoUnknownKeys(
+    value,
+    [
+      'endpointId',
+      'displayName',
+      'claimTypes',
+      'promptChannelType',
+      'auth',
+      'defaultIdentity',
+      'maxCapabilities',
+      'telemetryScopes',
+      'runtime',
+    ],
+    fieldName,
+  );
   const endpointId = assertIdToken(parseConfiguredString(value.endpointId, `${fieldName}.endpointId`), `${fieldName}.endpointId`);
   const displayName = parseConfiguredString(value.displayName, `${fieldName}.displayName`);
   const claimTypes = parseStringArray(value.claimTypes, `${fieldName}.claimTypes`)
@@ -378,6 +422,13 @@ function parseEndpointConfig(value: unknown, fieldName: string): SatelliteEndpoi
   if (!isRecord(value.defaultIdentity)) {
     throw new Error(`${fieldName}.defaultIdentity must be an object`);
   }
+  // The identity object carries `channelPrivacy`; a typo'd key here would be
+  // the same privacy fail-open, so reject unknown keys (H9/T1).
+  assertNoUnknownKeys(
+    value.defaultIdentity,
+    ['authorId', 'authorName', 'canonicalContactId', 'channelPrivacy'],
+    `${fieldName}.defaultIdentity`,
+  );
   const defaultIdentity = {
     authorId: assertIdToken(
       parseConfiguredString(value.defaultIdentity.authorId, `${fieldName}.defaultIdentity.authorId`),
@@ -408,6 +459,11 @@ function parseSatelliteConfig(value: unknown, fieldName: string): SatelliteConfi
   if (!isRecord(value)) {
     throw new Error(`${fieldName} must be an object`);
   }
+  assertNoUnknownKeys(
+    value,
+    ['satelliteId', 'displayName', 'mobility', 'staticLocationLabel', 'placeId', 'endpoints'],
+    fieldName,
+  );
   const satelliteId = assertIdToken(
     parseConfiguredString(value.satelliteId, `${fieldName}.satelliteId`),
     `${fieldName}.satelliteId`,
@@ -470,6 +526,7 @@ export function parseSatelliteRegistryConfig(
   if (!isRecord(rawConfig)) {
     throw new Error(`${sourceLabel} must contain a JSON object at the root`);
   }
+  assertNoUnknownKeys(rawConfig, ['schemaVersion', 'enabled', 'satellites'], sourceLabel);
   if (rawConfig.schemaVersion !== 1) {
     throw new Error(`${sourceLabel}.schemaVersion must be 1`);
   }
@@ -774,49 +831,43 @@ function verifyApiKeyAuth(auth: SatelliteEndpointAuthConfig, principal: ApiAuthP
       message: 'Satellite claims require API key authentication',
     };
   }
-  if (auth.apiKeyPrincipalIds && !auth.apiKeyPrincipalIds.includes(principal.id)) {
+  if (!satelliteEndpointAdmitsApiKeyPrincipal(auth, {
+    id: principal.id,
+    satelliteScoped: principal.scope === 'satellite',
+  })) {
     return {
       ok: false,
       status: 403,
       type: 'satellite_principal_not_allowed',
-      message: 'API key principal is not allowed for this satellite endpoint',
+      message: principal.scope === 'satellite'
+        ? 'Satellite-scoped API key principal is not registered for this satellite endpoint'
+        : 'API key principal is not allowed for this satellite endpoint',
     };
   }
   return null;
 }
 
+/**
+ * mTLS endpoint verification (Sprint-10 C1): the identity comes from the
+ * terminated TLS peer certificate or a token-authenticated trusted proxy,
+ * never from raw request headers, and EVERY configured certificate binding
+ * must match — a single-attribute match does not pass.
+ */
 function verifyMtlsAuth(
   auth: SatelliteEndpointAuthConfig,
-  headers: HeaderMap,
+  clientCert: SatelliteClientCertIdentity | undefined,
   principal: ApiAuthPrincipal,
 ): SatelliteClaimErrorResolution | null {
   const apiKeyError = verifyApiKeyAuth(auth, principal);
   if (apiKeyError) return apiKeyError;
 
-  const presentedFingerprint = readHeader(headers, SATELLITE_CLAIM_HEADERS.clientCertFingerprintSha256, 160);
-  const presentedSpki = readHeader(headers, SATELLITE_CLAIM_HEADERS.clientCertSpkiSha256, 160);
-  const presentedSubject = readHeader(headers, SATELLITE_CLAIM_HEADERS.clientCertSubject, 512);
-  const presentedSan = readHeader(headers, SATELLITE_CLAIM_HEADERS.clientCertSan, 512);
-
-  const fingerprintMatches = auth.clientCertFingerprintSha256 && presentedFingerprint
-    ? normalizeSha256Hex(presentedFingerprint, 'X-PSFN-Client-Cert-Fingerprint-SHA256') === auth.clientCertFingerprintSha256
-    : false;
-  const spkiMatches = auth.clientCertSpkiSha256 && presentedSpki
-    ? normalizeSha256Hex(presentedSpki, 'X-PSFN-Client-Cert-SPKI-SHA256') === auth.clientCertSpkiSha256
-    : false;
-  const subjectMatches = auth.clientCertSubject && presentedSubject
-    ? presentedSubject === auth.clientCertSubject
-    : false;
-  const sanMatches = auth.clientCertSan && presentedSan
-    ? presentedSan === auth.clientCertSan
-    : false;
-
-  if (!fingerprintMatches && !spkiMatches && !subjectMatches && !sanMatches) {
+  const match = satelliteClientCertMatchesBinding(auth, clientCert);
+  if (!match.ok) {
     return {
       ok: false,
       status: 403,
-      type: 'satellite_certificate_not_allowed',
-      message: 'Satellite client certificate binding did not match the registry',
+      type: clientCert ? 'satellite_certificate_not_allowed' : 'satellite_client_certificate_required',
+      message: match.reason,
     };
   }
   return null;
@@ -824,13 +875,13 @@ function verifyMtlsAuth(
 
 function verifySatelliteAuth(
   auth: SatelliteEndpointAuthConfig,
-  headers: HeaderMap,
   principal: ApiAuthPrincipal,
+  clientCert: SatelliteClientCertIdentity | undefined,
 ): SatelliteClaimErrorResolution | null {
   if (auth.mode === 'api_key') {
     return verifyApiKeyAuth(auth, principal);
   }
-  return verifyMtlsAuth(auth, headers, principal);
+  return verifyMtlsAuth(auth, clientCert, principal);
 }
 
 function satelliteClaimError(status: number, type: string, message: string): SatelliteClaimResolution {
@@ -845,8 +896,14 @@ export function resolveSatelliteClaim(options: {
   headers: HeaderMap;
   principal: ApiAuthPrincipal;
   registry?: SatelliteRegistryConfig;
+  /**
+   * Authenticated client-certificate identity derived at the ingress via
+   * `deriveClientCertIdentity`. Required for mTLS-bound endpoints; raw
+   * request headers are never a substitute.
+   */
+  clientCert?: SatelliteClientCertIdentity;
 }): SatelliteClaimResolution {
-  const { headers, principal, registry } = options;
+  const { headers, principal, registry, clientCert } = options;
   if (!hasSatelliteClaimHeaders(headers)) {
     return satelliteClaimError(400, 'invalid_request', 'No satellite claim headers were provided');
   }
@@ -886,7 +943,7 @@ export function resolveSatelliteClaim(options: {
     return satelliteClaimError(403, 'satellite_claim_not_registered', 'Satellite claim is not registered for this satellite endpoint');
   }
 
-  const authError = verifySatelliteAuth(match.endpoint.auth, headers, principal);
+  const authError = verifySatelliteAuth(match.endpoint.auth, principal, clientCert);
   if (authError) return authError;
 
   let capabilities: SatelliteRoutingMetadata['capabilities'];
@@ -939,14 +996,15 @@ export function resolveSatelliteClaim(options: {
 }
 
 export function resolveSatelliteConfigPull(options: {
-  headers: HeaderMap;
   principal: ApiAuthPrincipal;
   registry?: SatelliteRegistryConfig;
   satelliteId: string | undefined;
   endpointId: string | undefined;
   claimType: string | undefined;
+  /** Authenticated client-certificate identity (see `resolveSatelliteClaim`). */
+  clientCert?: SatelliteClientCertIdentity;
 }): SatelliteConfigPullResolution {
-  const { headers, principal, registry } = options;
+  const { principal, registry, clientCert } = options;
   if (!registry?.enabled) {
     return satelliteConfigPullError(503, 'satellite_registry_not_configured', 'Satellite config pulls require an enabled satellites.json registry');
   }
@@ -974,7 +1032,7 @@ export function resolveSatelliteConfigPull(options: {
     return satelliteConfigPullError(403, 'satellite_config_not_registered', 'Satellite config pull is not registered for this satellite endpoint');
   }
 
-  const authError = verifySatelliteAuth(match.endpoint.auth, headers, principal);
+  const authError = verifySatelliteAuth(match.endpoint.auth, principal, clientCert);
   if (authError) {
     return satelliteConfigPullError(authError.status, authError.type, authError.message);
   }

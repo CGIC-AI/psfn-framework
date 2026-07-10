@@ -79,6 +79,156 @@ export interface SatelliteEndpointAuthConfig {
   clientCertSan?: string;
 }
 
+/**
+ * Client-certificate identity derived from an AUTHENTICATED source only:
+ *
+ * - `tls_peer`: read directly from the terminated TLS socket's peer
+ *   certificate (`getPeerCertificate`) on a `requestCert: true` listener.
+ * - `trusted_proxy`: asserted via `X-PSFN-Client-Cert-*` headers by a
+ *   TLS-terminating proxy that authenticated itself with the configured
+ *   trusted-proxy token. Without that token, client-cert headers are
+ *   stripped and never trusted.
+ *
+ * Raw request headers are NEVER a valid source for this identity (Sprint-10
+ * finding C1). `subject`/`san` are only populated when the certificate chain
+ * was actually validated (socket `authorized === true`, or a trusted proxy
+ * that validated the chain); `fingerprintSha256`/`spkiSha256` are
+ * self-authenticating pins and are always usable.
+ */
+export interface SatelliteClientCertIdentity {
+  source: 'tls_peer' | 'trusted_proxy';
+  fingerprintSha256?: string;
+  spkiSha256?: string;
+  subject?: string;
+  san?: string;
+}
+
+export type SatelliteClientCertMatch = { ok: true } | { ok: false; reason: string };
+
+/**
+ * Fail-closed client-certificate binding check: EVERY attribute configured on
+ * the endpoint must be present on the authenticated identity and match
+ * exactly. A single-attribute match never passes when more attributes are
+ * configured, and a missing identity always fails.
+ */
+export function satelliteClientCertMatchesBinding(
+  auth: SatelliteEndpointAuthConfig,
+  clientCert: SatelliteClientCertIdentity | undefined,
+): SatelliteClientCertMatch {
+  if (!clientCert) {
+    return {
+      ok: false,
+      reason: 'Satellite mTLS endpoints require a client certificate authenticated by the TLS listener '
+        + 'or an authenticated trusted proxy; client-certificate request headers alone are never accepted',
+    };
+  }
+  const bindings: Array<{ label: string; configured?: string; presented?: string }> = [
+    {
+      label: 'clientCertFingerprintSha256',
+      ...(auth.clientCertFingerprintSha256 !== undefined ? { configured: auth.clientCertFingerprintSha256 } : {}),
+      ...(clientCert.fingerprintSha256 !== undefined ? { presented: clientCert.fingerprintSha256 } : {}),
+    },
+    {
+      label: 'clientCertSpkiSha256',
+      ...(auth.clientCertSpkiSha256 !== undefined ? { configured: auth.clientCertSpkiSha256 } : {}),
+      ...(clientCert.spkiSha256 !== undefined ? { presented: clientCert.spkiSha256 } : {}),
+    },
+    {
+      label: 'clientCertSubject',
+      ...(auth.clientCertSubject !== undefined ? { configured: auth.clientCertSubject } : {}),
+      ...(clientCert.subject !== undefined ? { presented: clientCert.subject } : {}),
+    },
+    {
+      label: 'clientCertSan',
+      ...(auth.clientCertSan !== undefined ? { configured: auth.clientCertSan } : {}),
+      ...(clientCert.san !== undefined ? { presented: clientCert.san } : {}),
+    },
+  ];
+
+  let configuredCount = 0;
+  for (const binding of bindings) {
+    if (binding.configured === undefined) continue;
+    configuredCount += 1;
+    if (binding.presented === undefined) {
+      return {
+        ok: false,
+        reason: `Authenticated client certificate is missing required attribute ${binding.label}`,
+      };
+    }
+    if (binding.presented !== binding.configured) {
+      return {
+        ok: false,
+        reason: `Authenticated client certificate attribute ${binding.label} does not match the registry binding`,
+      };
+    }
+  }
+
+  if (configuredCount === 0) {
+    // Parser guarantees mTLS endpoints configure at least one binding; if a
+    // config bypassed the parser, fail closed rather than matching vacuously.
+    return { ok: false, reason: 'Satellite mTLS endpoint has no client certificate bindings configured' };
+  }
+  return { ok: true };
+}
+
+/**
+ * Principal used to authenticate a satellite claim. `satelliteScoped`
+ * principals derive from per-satellite API keys (`API_SATELLITE_KEYS`) and
+ * are only admitted by endpoints that EXPLICITLY list their principal id;
+ * they never inherit the shared-key default (Sprint-10 finding H4).
+ */
+export interface SatelliteApiKeyPrincipalRef {
+  id: string;
+  satelliteScoped: boolean;
+}
+
+export function satelliteEndpointAdmitsApiKeyPrincipal(
+  auth: SatelliteEndpointAuthConfig,
+  principal: SatelliteApiKeyPrincipalRef,
+): boolean {
+  if (principal.satelliteScoped) {
+    return auth.apiKeyPrincipalIds !== undefined && auth.apiKeyPrincipalIds.includes(principal.id);
+  }
+  if (auth.apiKeyPrincipalIds !== undefined) {
+    return auth.apiKeyPrincipalIds.includes(principal.id);
+  }
+  return true;
+}
+
+/**
+ * Authenticated origin context attached to external telemetry at the API
+ * ingress. The perception bridge uses this to bind a payload-claimed
+ * `satelliteId` to the credential that actually authenticated the request
+ * (Sprint-10 finding 04-M1): the claimed satellite must have at least one
+ * endpoint that admits this principal (and, for mTLS endpoints, whose cert
+ * binding matches the authenticated client certificate).
+ */
+export interface SatelliteTelemetryAuthContext {
+  principalId: string;
+  principalMode: 'api_key' | 'insecure_local';
+  satelliteScoped: boolean;
+  clientCert?: SatelliteClientCertIdentity;
+}
+
+export function satelliteAdmitsAuthenticatedOrigin(
+  satellite: SatelliteConfig,
+  auth: SatelliteTelemetryAuthContext,
+): boolean {
+  if (auth.principalMode !== 'api_key') return false;
+  return satellite.endpoints.some((endpoint) => {
+    if (!satelliteEndpointAdmitsApiKeyPrincipal(endpoint.auth, {
+      id: auth.principalId,
+      satelliteScoped: auth.satelliteScoped,
+    })) {
+      return false;
+    }
+    if (endpoint.auth.mode === 'mtls') {
+      return satelliteClientCertMatchesBinding(endpoint.auth, auth.clientCert).ok;
+    }
+    return true;
+  });
+}
+
 export interface SatelliteDefaultIdentityConfig {
   authorId: string;
   authorName: string;

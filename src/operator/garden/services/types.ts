@@ -191,9 +191,31 @@ export type {
   SettingsValidationError,
   ConfigUpdateResult,
   AdminSettingsService,
+  AdminIntakeSourceListMutationInput,
   AdminChannelEnvelopeRow,
   AdminChannelEnvelopeData,
 } from './types/settings.js';
+
+export type {
+  AdminIntakeQuarantineBeginResult,
+  AdminIntakeQuarantineDecisionRequest,
+  AdminIntakeQuarantineFlywheelTarget,
+  AdminIntakeQuarantineItemDetail,
+  AdminIntakeQuarantineItemView,
+  AdminIntakeQuarantineResolveResult,
+  AdminIntakeQuarantineService,
+  AdminIntakeQuarantineSourceListAction,
+} from './intake-quarantine-service.js';
+
+export type {
+  AdminDriftReviewListData,
+  AdminDriftReviewResolveRequest,
+  AdminDriftReviewResolveResult,
+  AdminDriftReviewService,
+  DriftReviewCard,
+  DriftReviewCardResolution,
+  SecondArrowReviewCard,
+} from './drift-review-service.js';
 
 export type {
   AdminContactListData,

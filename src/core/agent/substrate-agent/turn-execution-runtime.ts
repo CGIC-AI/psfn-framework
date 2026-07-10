@@ -5,6 +5,7 @@ import type { EventBus, EventMap } from '../../../shared/event-bus.js';
 import type { CostTelemetryPort } from '../../../shared/telemetry/cost-telemetry-port.js';
 import type { ComposeContext } from '../../identity/prompt-types.js';
 import type { ImageVisionReviewer } from '../../../primitives/images/types.js';
+import type { VisionIntakeImageScreenerPort } from './vision-attachments.js';
 import { resolveCompanionIdFromConfig } from '../../identity/companion-runtime.js';
 import { createComponentLogger } from '../../../shared/logger.js';
 import { toErrorMessage } from '../../../shared/utils/errors.js';
@@ -65,6 +66,10 @@ import {
   type PendingPaidDeliverable,
 } from '../../../shared/paid-deliverable-tracking.js';
 import {
+  SessionCanaryRegistry,
+  runWithCanaryContext,
+} from '../../cogsec/canary/canary-token.js';
+import {
   mergeChargedImageDeliverableSummaries,
   summarizeChargedImageDeliverables,
   summarizePendingPaidImageDeliverables,
@@ -85,6 +90,11 @@ import type { ConversationScopeSpeaker } from '../../session/conversation-scope.
 
 const log = createComponentLogger('SubstrateAgent');
 
+// htm9.18: process-scoped per-session canary registry. Keyed by the session
+// channel id so the same token is planted on every turn of a session and
+// rotates when a new session begins.
+const sessionCanaryRegistry = new SessionCanaryRegistry();
+
 function cloneComputedInternalStateForResponse(internalState: InternalState): InternalState {
   return JSON.parse(JSON.stringify(internalState)) as InternalState;
 }
@@ -101,6 +111,8 @@ export interface TurnExecutionRuntime {
   companionPresence?: CompanionPresenceTurnPort | null;
   llmClient: LLMProviderPort;
   imageVisionReviewer: ImageVisionReviewer | null;
+  /** htm9.8 vision intake screener; null when the firewall is not wired. */
+  visionIntakeScreener: VisionIntakeImageScreenerPort | null;
   sessionManager: SessionManager;
   config: CoreSubstrateConfig;
   runtimeMode: RuntimeMode;
@@ -792,6 +804,9 @@ export async function handleMessageForTurn(
       autoloadOutcome,
     );
     const responseStyle = runtime.resolveResponseStyle(message, channelType, channelMeta);
+    // htm9.18: resolve (or mint) this session's canary token. It is planted in
+    // the prompt below and rides with egress calls made during the invocation.
+    const canaryToken = sessionCanaryRegistry.ensure(emotionSessionId);
     const promptAssembly = await assembleTurnPrompt({
       runtime,
       message,
@@ -817,6 +832,7 @@ export async function handleMessageForTurn(
       turnSnapshot,
       memoryManifestSeed: preTurnState.memoryManifestSeed ?? observability.getMemoryManifestSeed(),
       ...(fatigueDecision ? { fatigue: fatigueDecision.metadata } : {}),
+      canaryToken,
       getRetrievalProvenanceRefs: observability.getRetrievalProvenanceRefs,
       getObservedTurnRetrievals: observability.getObservedTurnRetrievals,
       observability,
@@ -831,7 +847,9 @@ export async function handleMessageForTurn(
     // undelivered artifact and the in-turn response_control tool can refuse a
     // no-reply that would silently drop it.
     let scopedPendingPaidDeliverables: readonly PendingPaidDeliverable[] = [];
-    const invocationResult = await runWithPaidDeliverableTracking(async () => {
+    // htm9.18: the canary context wraps the whole invocation so every gateway
+    // egress RPC issued during the turn carries this session's token.
+    const invocationResult = await runWithCanaryContext(canaryToken, () => runWithPaidDeliverableTracking(async () => {
       try {
         return await invokeAgentForTurn({
           runtime,
@@ -859,7 +877,7 @@ export async function handleMessageForTurn(
         scopedPendingPaidDeliverables = listPendingPaidDeliverables();
         pendingPaidDeliverables = scopedPendingPaidDeliverables;
       }
-    });
+    }));
     pendingPaidDeliverables = scopedPendingPaidDeliverables;
     turnMessages = invocationResult.turnMessages;
     responseModel = invocationResult.responseModel;

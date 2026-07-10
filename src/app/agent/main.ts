@@ -55,6 +55,8 @@ import { CompanionPresenceRuntime } from '../../core/agent/companion-presence-ru
 import { registerCompanionRoomEntryNotes } from '../../core/agent/companion-room-entry.js';
 import { createCompanionRoomContentWindowPort } from '../../core/agent/companion-room-window.js';
 import {
+  resolveDriftReviewCardsPath,
+  resolveIntakeQuarantinePath,
   resolveOutreachOutboxLedgerPath,
   resolvePendingContactApprovalsPath,
   resolveSocialGraphProposalsPath,
@@ -96,6 +98,12 @@ import {
   writeStartupSessionMetadata,
 } from './session-activity.js';
 import { hydrateStartupActiveMemoryContexts } from '../../faculties/memory/startup-hydration.js';
+import { loadIntakePolicyConfig } from '../../system/config/intake-policy-config.js';
+import { maybeCreateIntakeScreeningService } from '../../core/cogsec/intake/screening.js';
+import { createIntakeQuarantineStore } from '../../core/cogsec/intake/quarantine-store.js';
+import { createDriftReviewCardStore } from '../../core/cogsec/drift/drift-review-card-store.js';
+import { createDriftVelocityEvidencePort } from '../../core/cogsec/drift/drift-evidence-adapters.js';
+import { createSecondArrowEvidencePort } from '../../core/cogsec/drift/second-arrow-evidence-adapters.js';
 import { hydrateStartupActiveCoreMemoryBlocks } from '../../faculties/core-memory/startup-hydration.js';
 import { enforceNetworkIsolationOnStartup } from './startup-guards.js';
 import {
@@ -339,6 +347,38 @@ async function main(): Promise<void> {
     log.info('Presence-windowed room content gate wired to session manager');
   }
 
+  // ── Cognition intake firewall (htm9.2): agent-side L1-only screening ──
+  // Screens tool outputs at session-entry recording time so persisted context
+  // (and its downstream consumers: emotion appraisal, memory extraction)
+  // carries screened/labeled content. Mode 'off' wires nothing; shadow mode
+  // (the default) records envelopes without altering content. The L1.5 ONNX
+  // classifier stays gateway-side; the agent process runs deterministic L1
+  // scanners only.
+  const intakePolicy = loadIntakePolicyConfig(pathSnapshot.systemDataDir);
+  const intakeScreening = maybeCreateIntakeScreeningService({
+    policy: intakePolicy,
+    actor: 'agent:intake-screening',
+    // Durable quarantine hold (htm9.11): agent-side quarantine decisions land
+    // in the same companion-data store the gateway writes and Garden reviews.
+    ...(intakePolicy.mode !== 'off'
+      ? {
+        quarantine: createIntakeQuarantineStore(
+          resolveIntakeQuarantinePath(pathSnapshot.companionDataDir),
+          {
+            itemTtlHours: intakePolicy.quarantine.itemTtlHours,
+            maxHeldItems: intakePolicy.quarantine.maxHeldItems,
+          },
+        ),
+      }
+      : {}),
+  });
+  sessionManager.intakeScreening = intakeScreening;
+  if (sessionManager.intakeScreening) {
+    log.info('Intake screening wired to session tool observations', {
+      mode: sessionManager.intakeScreening.mode,
+    });
+  }
+
   sessionManager.characterName = card.data.name;
   writeStartupSessionMetadata(
     sessionManager,
@@ -443,6 +483,9 @@ async function main(): Promise<void> {
 
   // Memory write/import tools — intentional memory creation
   const memoryWriter = new MemoryWriter(memoryStore, gateway);
+  // htm9.3: direct memory-write tools gate at the memory_write sink (explicit
+  // unscreened path until envelopes flow into tool params).
+  memoryWriter.intakeSinkGateProvider = () => sessionManager.intakeSinkGate;
   const episodicStore = companionEpisodicStore;
   // Episodic lane tuning is JSON-owned (scheduler.json episodeSynthesis /
   // sleepConsolidation / arcFormation) — no hardcoded cadences or windows.
@@ -581,8 +624,12 @@ async function main(): Promise<void> {
     roomEntryNoteSink: sessionManager,
     gatewayMode: true,
     resolveRequesterTrust: () => getRequestContext()?.viewerTrustLevel,
+    // Human-in-the-loop provenance for control Gate 2a: self-directed/heartbeat
+    // turns carry trustLevel 'primary' for scoping but no human requester, so
+    // effector control must read provenance, not trust level alone.
+    resolveRequesterProvenance: () => getRequestContext()?.requesterProvenance,
   });
-  log.info('World tool enabled (perceive/list/move live; control staged off, trust-gated)');
+  log.info('World tool enabled (perceive/list/move live; control staged off, human+trust-gated)');
 
   // Journal tools — durable markdown notes in the personal workspace.
   registerMarkdownJournalTools(agentLoop, pathSnapshot.workspaceRoot);
@@ -632,6 +679,12 @@ async function main(): Promise<void> {
     externalChannelProfiles: buildExternalChannelProfiles(channelsConfig),
     satelliteRegistry: satelliteRegistryConfig,
     onStreamDelta: (requestId, text) => gateway.notifyApiStreamDelta(requestId, text),
+    // htm9.9: OpenAI-compatible `file` content parts run the shared
+    // file-ingest pipeline with the agent-side (L1-only) intake screening.
+    documentIngest: {
+      personalFilesDir: pathSnapshot.workspaceRoot,
+      intakeScreening,
+    },
   });
   gateway.onApiChatCompletion((params) => apiBackend.handleChatCompletion(params));
   gateway.onApiChatCancel((params) => apiBackend.cancelChatCompletion(params));
@@ -944,6 +997,81 @@ async function main(): Promise<void> {
     ...(config.groupMemory ? { groupMemory: config.groupMemory } : {}),
   });
 
+  // ── Slow-poisoning drift-velocity review lane (htm9.14) ──
+  // Deterministic nightly aggregation (zero LLM, zero turn latency) over the
+  // per-contact valence series, memory-write rows, quarantine risk labels,
+  // and retrieval recency. Findings become operator review cards on the
+  // Garden Cognitive Security tab; the lane never mutates memories, trust,
+  // or emotion, and the companion never sees it.
+  const driftVelocityReview = intakePolicy.driftDetection.enabled
+    ? {
+      evidence: createDriftVelocityEvidencePort({
+        contactStore,
+        memoryStore,
+        quarantineStore: intakePolicy.mode !== 'off'
+          ? createIntakeQuarantineStore(
+            resolveIntakeQuarantinePath(pathSnapshot.companionDataDir),
+            {
+              itemTtlHours: intakePolicy.quarantine.itemTtlHours,
+              maxHeldItems: intakePolicy.quarantine.maxHeldItems,
+            },
+          )
+          : null,
+      }),
+      cardStore: createDriftReviewCardStore(
+        resolveDriftReviewCardsPath(pathSnapshot.companionDataDir),
+      ),
+      config: intakePolicy.driftDetection,
+      watermarks: {
+        getContactMaintenanceWatermark: (processor: string) =>
+          contactStore.getContactMaintenanceWatermark(processor),
+        setContactMaintenanceWatermark: (processor: string, lastRunAt: string) =>
+          contactStore.setContactMaintenanceWatermark(processor, lastRunAt),
+      },
+    }
+    : null;
+  if (!driftVelocityReview) {
+    log.info('Drift-velocity review lane disabled by intake-policy driftDetection.enabled');
+  }
+
+  // ── Second-arrow rumination review lane (htm9.15) ──
+  // Deterministic nightly clustering (zero LLM, zero turn latency) over
+  // recent memory writes' STORED embeddings, active concerns, and the
+  // per-contact affect series. Findings become operator review cards (same
+  // store, kind 'second_arrow') proposing consolidation of near-duplicate
+  // rumination stacks; the lane never mutates memories, concerns, or emotion.
+  const secondArrowEnabled = intakePolicy.driftDetection.enabled
+    && intakePolicy.driftDetection.secondArrow.enabled;
+  const secondArrowReview = secondArrowEnabled && memoryStore.listActiveMemoryEmbeddingsSince
+    ? {
+      evidence: createSecondArrowEvidencePort({
+        memoryStore,
+        contactStore,
+        concernStore: intentionRuntime.concernStore,
+      }),
+      cardStore: driftVelocityReview?.cardStore
+        ?? createDriftReviewCardStore(resolveDriftReviewCardsPath(pathSnapshot.companionDataDir)),
+      config: intakePolicy.driftDetection.secondArrow,
+      watermarks: {
+        getContactMaintenanceWatermark: (processor: string) =>
+          contactStore.getContactMaintenanceWatermark(processor),
+        setContactMaintenanceWatermark: (processor: string, lastRunAt: string) =>
+          contactStore.setContactMaintenanceWatermark(processor, lastRunAt),
+      },
+    }
+    : null;
+  if (!secondArrowReview) {
+    if (secondArrowEnabled) {
+      // Enabled but the store cannot serve stored embeddings: loud, never silent.
+      log.error(
+        'Second-arrow review lane NOT wired: memory store lacks listActiveMemoryEmbeddingsSince '
+        + '(stored-embedding reads); rumination detection is disabled until the store provides it',
+      );
+    } else {
+      log.info('Second-arrow review lane disabled by intake-policy driftDetection.secondArrow.enabled');
+    }
+  }
+
   // Heartbeat reflections — policy-driven multi-template reflection system
   await wireHeartbeatRuntime(
     agentLoop,
@@ -986,6 +1114,8 @@ async function main(): Promise<void> {
       episodicDiagnosticsStore: episodicStore,
       postTurnActions,
       episodicProcessingRestWindow: schedulerConfig.episodicProcessing,
+      driftVelocityReview,
+      secondArrowReview,
       orientationRewriteGate: schedulerConfig.orientationRewrite,
       reflectionNoveltyGate: schedulerConfig.reflectionNovelty,
       nearTurnMemoryCadence: schedulerConfig.nearTurnMemory,

@@ -198,7 +198,11 @@ export function normalizeTrustLevel(value: string): TrustLevel {
     case 'public':
       return value;
     default:
-      return 'regular';
+      // Sprint-10 privacy regression 07-L2: an unknown/invalid stored trust value
+      // fails CLOSED to the 'public' floor, never up to the disclosing 'regular'
+      // tier. Coercing garbage to 'regular' silently granted personal-tier
+      // disclosure to a record whose real trust could not be decoded.
+      return 'public';
   }
 }
 

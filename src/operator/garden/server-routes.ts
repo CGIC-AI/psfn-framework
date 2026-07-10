@@ -10,6 +10,7 @@ import type { SubstrateConfig } from '../../system/config/runtime-config-contrac
 import { GARDEN_PREFIX } from './server-request-routing.js';
 import { sendJson, sendRedirect } from '../../channels/backplane/http/primitives.js';
 import { sendGardenLoginPage } from './auth-pages.js';
+import { timingSafeStringEqual } from '../../shared/utils/secret-compare.js';
 import type {
   AdminAuditActionType,
   AdminAuditActor,
@@ -90,7 +91,7 @@ export function buildAdminRoutes(deps: AdminRouteDependencies): AdminRoute[] {
           }
           const params = new URLSearchParams(body);
           const token = params.get('token') ?? '';
-          if (token === deps.token) {
+          if (timingSafeStringEqual(token, deps.token)) {
             const encodedToken = encodeURIComponent(token);
             sendRedirect(res, GARDEN_PREFIX, 302, {
               'Set-Cookie': `psfn_token=${encodedToken}; Path=/; HttpOnly; SameSite=Strict; Max-Age=86400`,
@@ -148,6 +149,8 @@ export function buildAdminRoutes(deps: AdminRouteDependencies): AdminRoute[] {
       subsystemHealthService: deps.services.subsystemHealth ?? null,
       toolConformanceService: deps.services.toolConformance ?? null,
       settingsService: deps.services.settings,
+      intakeQuarantineService: deps.services.intakeQuarantine,
+      driftReviewService: deps.services.driftReviews,
       identityService: deps.services.identity,
       promptsService: deps.services.prompts,
       scheduler: deps.services.scheduler,

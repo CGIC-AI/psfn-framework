@@ -29,6 +29,7 @@ import type { CapabilityTier, CoreSubstrateConfig } from '../../system/config/ru
 import type { ContactStorePort } from '../contacts/contact-store-port.js';
 import type { ContactTrackingGate } from '../contacts/tracking-gate.js';
 import type { ImageVisionReviewer } from '../../primitives/images/types.js';
+import type { VisionIntakeImageScreenerPort } from './substrate-agent/vision-attachments.js';
 import type { LLMProviderPort, MemoryProvider, MemoryExtractor, ScratchpadProvider, WikiRetrievalPort } from './contracts.js';
 import type { TrustLevel } from '../../system/trust/types.js';
 import {
@@ -58,7 +59,16 @@ import type { ToolCategory } from './tool-registrar.js';
 import {
   gateToolWithCapabilities,
   type CapabilityAccess,
+  type EgressToolGuard,
 } from '../../system/capabilities/gate.js';
+import { assertToolCapabilityRequirementDeclared } from '../../system/capabilities/requirements.js';
+import { isCanonicalFirstPartyToolName } from './tool-surface/registry.js';
+import {
+  isEgressCapabilityToken,
+  type IntakeSinkGate,
+} from '../cogsec/intake/sink-gates.js';
+import { INTAKE_FIREWALL_NOTICE_TEMPLATES } from '../cogsec/intake-firewall-notice-templates.js';
+import type { IntakeEnvelopeSnapshot } from '../../shared/contracts/intake-envelope.js';
 import { CapabilityRuntime } from '../../system/capabilities/runtime.js';
 import { normalizeCapabilityTier, resolveTierCapabilityTokens } from '../../system/capabilities/tiers.js';
 import type { CapabilityToken } from '../../system/capabilities/tokens.js';
@@ -297,6 +307,19 @@ export class SubstrateAgent {
   // E8.3: supplemental wiki RAG — null until the pgvector projection is wired.
   wikiRetrieval: WikiRetrievalPort | null = null;
   scratchpadProvider: ScratchpadProvider | null = null;
+  /**
+   * Intake sink gate (htm9.3), assigned by composition alongside the session
+   * manager's. Drives the tool-egress sink: per-invocation lethal-trifecta
+   * checks over the current turn's intake envelopes. Null = firewall off.
+   */
+  intakeSinkGate: IntakeSinkGate | null = null;
+  /**
+   * Intake envelopes riding the CURRENT turn's message routing metadata
+   * (htm9.3). Set for the duration of handleMessage (same lifetime pattern as
+   * currentInternalState) so the egress guard sees the turn's intake context
+   * at tool-invocation time; empty outside a turn.
+   */
+  private currentTurnIntakeEnvelopes: readonly IntakeEnvelopeSnapshot[] = [];
   activeConcernProvider: ActiveConcernContextProvider | null = null;
   pendingFollowUpProvider: PendingFollowUpContextProvider | null = null;
   behavioralPatternProvider: BehavioralPatternContextProvider | null = null;
@@ -412,6 +435,8 @@ export class SubstrateAgent {
   // SKILL.md runtime — null until skills system is wired
   skillsRuntime: SkillsRuntime | null = null;
   imageVisionReviewer: ImageVisionReviewer | null = null;
+  /** htm9.8 vision intake screener (gateway-backed); null when not wired. */
+  visionIntakeScreener: VisionIntakeImageScreenerPort | null = null;
   observerEvalSidecar: ObserverEvalSidecarRuntime | null = null;
 
   constructor(
@@ -621,10 +646,56 @@ export class SubstrateAgent {
     return tools.map((tool) => {
       const cached = this.gatedToolCache.get(tool);
       if (cached) return cached;
-      const wrapped = gateToolWithCapabilities(tool, () => this.resolveCapabilityAccess());
+      // Fail closed at registration for audited first-party tools that forgot to
+      // declare a capability requirement (02-M2). Third-party/plugin tools are
+      // still refused, but at gate-evaluation time so one bad plugin cannot take
+      // down the whole runtime at startup.
+      if (isCanonicalFirstPartyToolName(tool.name)) {
+        assertToolCapabilityRequirementDeclared(tool);
+      }
+      const wrapped = gateToolWithCapabilities(
+        tool,
+        () => this.resolveCapabilityAccess(),
+        () => this.buildEgressToolGuard(),
+      );
       this.gatedToolCache.set(tool, wrapped);
       return wrapped;
     });
+  }
+
+  /**
+   * Tool-egress sink guard (htm9.3). Applies only to egress-capable
+   * invocations (INTAKE_EGRESS_CAPABILITY_TOKENS). Two checks, both audited
+   * by the gate: the tool_egress sink-access gate over the turn's intake
+   * envelopes (deny labels like exfil/canary_leak; explicit unscreened
+   * default when the turn carries none), then the lethal-trifecta invariant.
+   * `privateDataInPath` is structurally true for companion turns: core
+   * memory, persona, and session history are always assembled into the
+   * prompt, so any enveloped external content plus egress completes the
+   * trifecta. Hard tiers deny; soft tiers pass with a review-flagged audit.
+   */
+  private buildEgressToolGuard(): EgressToolGuard | null {
+    const gate = this.intakeSinkGate;
+    if (!gate) return null;
+    return {
+      evaluate: ({ toolName, requiredTokens }) => {
+        if (!requiredTokens.some(isEgressCapabilityToken)) return null;
+        const envelopes = this.currentTurnIntakeEnvelopes;
+        const access = gate.evaluate('tool_egress', envelopes, { toolName });
+        if (!access.allowed) {
+          return { allowed: false, noticeText: INTAKE_FIREWALL_NOTICE_TEMPLATES.sinkHeld };
+        }
+        const trifecta = gate.assessEgressTrifecta({
+          envelopes,
+          privateDataInPath: true,
+          egressDescription: `tool:${toolName}`,
+        });
+        if (!trifecta.allowed) {
+          return { allowed: false, noticeText: INTAKE_FIREWALL_NOTICE_TEMPLATES.sinkHeld };
+        }
+        return { allowed: true, noticeText: '' };
+      },
+    };
   }
 
   private normalizeTurnPromptOverride(message: SubstrateMessage): MessagePromptOverride {
@@ -919,6 +990,11 @@ export class SubstrateAgent {
       {
         ...recordOptions,
         trustLevel: authorContext.trustLevel,
+        // htm9.3: observed (no-turn) messages persist their adapter-screened
+        // intake envelopes too, so later context builds gate them.
+        ...(message.routing?.intakeEnvelopes && message.routing.intakeEnvelopes.length > 0
+          ? { intakeEnvelopes: message.routing.intakeEnvelopes }
+          : {}),
       },
     );
     log.debug('Observed message without model turn', {
@@ -1028,6 +1104,7 @@ export class SubstrateAgent {
       companionPresence: this.companionPresence,
       llmClient: this.llmClient,
       imageVisionReviewer: this.imageVisionReviewer,
+      visionIntakeScreener: this.visionIntakeScreener,
       sessionManager: this.sessionManager,
       config: this.config,
       runtimeMode: this.runtimeMode,
@@ -1220,20 +1297,28 @@ export class SubstrateAgent {
       },
     }), message);
 
-    if (!this.config.chargePolicy || getRunChargeContext()) {
-      return run();
-    }
+    // htm9.3: expose the message's intake envelopes to the egress tool guard
+    // for the duration of this turn (cleared in finally — never leaks into
+    // the next turn).
+    this.currentTurnIntakeEnvelopes = message.routing?.intakeEnvelopes ?? [];
+    try {
+      if (!this.config.chargePolicy || getRunChargeContext()) {
+        return await run();
+      }
 
-    return runWithChargeContext({
-      chargePolicy: this.config.chargePolicy,
-      eventBus: this.eventBus,
-      lane: 'interactive',
-      runId: message.id,
-      correlation: {
-        requestId: message.id,
-        channelId: message.channelId,
-      },
-    }, run);
+      return await runWithChargeContext({
+        chargePolicy: this.config.chargePolicy,
+        eventBus: this.eventBus,
+        lane: 'interactive',
+        runId: message.id,
+        correlation: {
+          requestId: message.id,
+          channelId: message.channelId,
+        },
+      }, run);
+    } finally {
+      this.currentTurnIntakeEnvelopes = [];
+    }
   }
 
   // ── Private helpers ──

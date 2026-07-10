@@ -22,6 +22,12 @@
       "apiKeyRef": {
         "kind": "env",
         "envName": "OPENROUTER_API_KEY"
+      },
+      "metadata": {
+        "webTools": {
+          "enabled": false,
+          "model": "openai/gpt-4o-mini"
+        }
       }
     }
   ]

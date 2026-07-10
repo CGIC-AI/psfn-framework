@@ -13,6 +13,11 @@ import {
 import type { ConfigStorePort } from '../../../system/config/config-store.js';
 import type { ChargePolicyConfig } from '../../../system/config/charge-policy-config.js';
 import {
+  applyIntakeSourceListMutation,
+  type IntakePolicyConfig,
+  type IntakeSourceListsConfig,
+} from '../../../system/config/intake-policy-config.js';
+import {
   applyProvidersRuntimeConfig,
 } from '../../../system/config/providers-config.js';
 import {
@@ -46,6 +51,7 @@ import {
 import type {
   AdminChannelEnvelopeData,
   AdminChannelEnvelopeRow,
+  AdminIntakeSourceListMutationInput,
   AdminSettingsData,
   AdminSettingsDivergence,
   AdminSettingsStatus,
@@ -1023,6 +1029,8 @@ export class AdminSettingsDataService implements AdminSettingsService {
           return JSON.stringify(this.deps.configStore.loadScheduler(), null, 2);
         case 'trust-policy':
           return JSON.stringify(this.deps.configStore.loadTrustPolicy(), null, 2);
+        case 'intake-policy':
+          return JSON.stringify(this.deps.configStore.loadIntakePolicy(), null, 2);
         case 'capabilities':
           return JSON.stringify(this.deps.configStore.loadCapabilityTier(), null, 2);
         case 'charge-policy':
@@ -1117,11 +1125,55 @@ export class AdminSettingsDataService implements AdminSettingsService {
           invalidatePromptCacheAfterOwnerMutation(this.deps.config, 'owner-file:trust-policy');
           return { ok: true, message: 'trust-policy.json saved' };
         }
+        case 'intake-policy': {
+          this.deps.configStore.saveIntakePolicy(parsed);
+          return { ok: true, message: 'intake-policy.json saved' };
+        }
         default:
           return { ok: false, message: `Unknown settings subsystem: ${key}` };
       }
     } catch (error) {
       return { ok: false, message: toErrorMessage(error) };
     }
+  }
+
+  // ── Intake source lists (htm9.13; the htm9.11 Garden tab builds on these) ──
+
+  /** Current trusted/denied site and people lists from intake-policy.json. */
+  getIntakeSourceLists(): IntakeSourceListsConfig {
+    return this.deps.configStore.loadIntakePolicy().sourceLists;
+  }
+
+  /**
+   * Applies one operator add/remove mutation to the source lists through the
+   * owner-file path: pattern normalization, duplicate/contradiction checks,
+   * and full config re-validation all fail closed before the save.
+   */
+  mutateIntakeSourceList(input: AdminIntakeSourceListMutationInput): ConfigUpdateResult {
+    try {
+      const current = this.deps.configStore.loadIntakePolicy();
+      const next = applyIntakeSourceListMutation(current, {
+        action: input.action,
+        list: input.list,
+        pattern: input.pattern,
+        ...(input.note !== undefined ? { note: input.note } : {}),
+        addedBy: 'operator',
+        atMs: Date.now(),
+      });
+      this.deps.configStore.saveIntakePolicy(next);
+      return {
+        ok: true,
+        message: input.action === 'add'
+          ? `intake-policy.json: added entry to sourceLists.${input.list}`
+          : `intake-policy.json: removed entry from sourceLists.${input.list}`,
+      };
+    } catch (error) {
+      return { ok: false, message: toErrorMessage(error) };
+    }
+  }
+
+  /** Read-only typed intake-policy view for the Garden firewall page (htm9.11). */
+  getIntakePolicyOverview(): IntakePolicyConfig {
+    return this.deps.configStore.loadIntakePolicy();
   }
 }

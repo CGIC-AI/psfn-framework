@@ -556,6 +556,7 @@ export async function invokeAgentForTurn(input: {
         runtimeMode: runtime.runtimeMode,
         logger: log,
         visionReviewer: runtime.imageVisionReviewer,
+        visionIntakeScreener: runtime.visionIntakeScreener,
       }),
     });
   } catch (error) {

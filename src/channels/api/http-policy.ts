@@ -1,10 +1,12 @@
 import type { IncomingMessage } from 'node:http';
 import {
+  getBearerToken,
   getCookieValue,
   getBearerPrincipal,
   INSECURE_LOCAL_API_PRINCIPAL,
   isExpectedApiToken,
   principalFromApiKeyToken,
+  principalFromSatelliteApiKeyToken,
   type ApiAuthPrincipal,
 } from '../backplane/http/auth.js';
 import { isLoopbackHost } from '../../shared/net/hosts.js';
@@ -81,6 +83,13 @@ export interface ResolveApiPrincipalOptions {
   apiKey?: string;
   alternateApiToken?: string;
   alternateCookieTokenNames?: readonly string[];
+  /**
+   * Per-satellite credentials (`API_SATELLITE_KEYS`). Each key resolves to a
+   * DISTINCT satellite-scoped principal id so `satellites.json`
+   * `auth.apiKeyPrincipalIds` can isolate endpoints from each other
+   * (Sprint-10 finding H4).
+   */
+  satelliteApiKeys?: readonly string[];
   allowInsecureWithoutAuth: boolean;
   isTelemetryIngest: boolean;
 }
@@ -469,13 +478,21 @@ export function resolveApiRequestPrincipal(
   req: IncomingMessage,
   options: ResolveApiPrincipalOptions,
 ): PrincipalResolution {
-  if (options.apiKey) {
-    const bearerPrincipal = getBearerPrincipal(req, options.apiKey)
-      ?? (options.alternateApiToken ? getBearerPrincipal(req, options.alternateApiToken) : null);
-    if (bearerPrincipal) {
-      return { ok: true, principal: bearerPrincipal };
+  const satelliteApiKeys = options.satelliteApiKeys ?? [];
+  if (options.apiKey || satelliteApiKeys.length > 0) {
+    if (options.apiKey) {
+      const bearerPrincipal = getBearerPrincipal(req, options.apiKey)
+        ?? (options.alternateApiToken ? getBearerPrincipal(req, options.alternateApiToken) : null);
+      if (bearerPrincipal) {
+        return { ok: true, principal: bearerPrincipal };
+      }
     }
-    if (options.alternateApiToken) {
+    const bearerToken = getBearerToken(req);
+    for (const satelliteKey of satelliteApiKeys) {
+      if (!isExpectedApiToken(bearerToken, satelliteKey)) continue;
+      return { ok: true, principal: principalFromSatelliteApiKeyToken(satelliteKey) };
+    }
+    if (options.apiKey && options.alternateApiToken) {
       for (const cookieName of options.alternateCookieTokenNames ?? []) {
         const cookieToken = getCookieValue(req, cookieName);
         if (!isExpectedApiToken(cookieToken, options.alternateApiToken)) continue;

@@ -80,8 +80,13 @@ import { createObserverEvalSidecarRuntimeFromConfig } from '../../core/eval/obse
 import type { ObserverEvalSidecarRuntime } from '../../core/eval/observer-sidecar/types.js';
 import {
   resolveContactsDir,
+  resolveContactBlockListPath,
   resolvePersonalSkillsDir,
 } from '../../persistence/layout.js';
+import { ContactBlockListStore } from '../../core/cogsec/contact-block-list.js';
+import { maybeCreateIntakeSinkGate } from '../../core/cogsec/intake/sink-gates.js';
+import { loadIntakePolicyConfig } from '../../system/config/intake-policy-config.js';
+import { createComponentLogger } from '../../shared/logger.js';
 import { createSelfStatusTool } from '../../core/tools/self-status.js';
 import {
   createPostgresModelUsageStoreFromConfig,
@@ -99,6 +104,8 @@ import { createPerceptionNoteDeliverer } from '../../core/agent/perception/prese
 import { createPresenceFollowSink } from '../../core/agent/perception/presence-follow.js';
 import { HubIdentityEnrollmentService } from '../../core/enrollment/service.js';
 import type { HubIdentityEnrollmentStorePort } from '../../core/enrollment/enrollment-store-port.js';
+
+const log = createComponentLogger('AgentCoreRuntime');
 
 export interface AgentCoreRuntimeOptions {
   config: CoreSubstrateConfig;
@@ -200,6 +207,25 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
   const { sessionStore, sessionManager } = sessionComposition;
   sessionManager.characterName = card.data.name;
 
+  // ── Cognition intake firewall sink gates (htm9.3) ──
+  // One gate instance per agent process, built from intake-policy.json
+  // (system-data owner file). Null when the firewall mode is 'off'. The gate
+  // is threaded to every consequential sink: session context assembly
+  // (prompt_assembly), memory candidacy (memory_write), the wiki tool
+  // (wiki_write), the identity tool (persona_mutation), the contact tool
+  // (trust_mutation), and the substrate agent's egress tool guard
+  // (tool_egress + lethal-trifecta invariant).
+  const intakeSinkGate = maybeCreateIntakeSinkGate({
+    policy: loadIntakePolicyConfig(pathSnapshot.systemDataDir),
+    actor: 'agent:intake-sink-gate',
+  });
+  sessionManager.intakeSinkGate = intakeSinkGate;
+  if (intakeSinkGate) {
+    log.info('Intake sink gates wired across consequential sinks', {
+      mode: intakeSinkGate.mode,
+    });
+  }
+
   const memoryStore = options.memoryStore
     ? createMemoryStorePort(options.memoryStore)
     : (() => {
@@ -240,6 +266,7 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
     ...(options.placesRegistryConfig ? { placesRegistryConfig: options.placesRegistryConfig } : {}),
   });
   agentLoop.scratchpadProvider = memoryStore;
+  agentLoop.intakeSinkGate = intakeSinkGate;
   agentLoop.setCapabilityRuntime(capabilityRuntime);
   wireDiagnosticsRuntime(eventBus);
   // E5.5: persistent active-memory refresh failure raises an operator alert
@@ -309,6 +336,10 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
   registerWebTools(agentLoop, new GatewayWebFetchOps(gatewayOps), {
     gatewayMode: true,
     searchQueryJson: createWebSearchQueryJson(llmProvider),
+    // Explicit backend selection (bead psfn-framework-htm9.10): when OpenRouter
+    // web tools are configured, the search action uses the gateway web.search
+    // server-tool path instead of the local-crawler LLM planner.
+    backend: config.openRouterWebTools?.enabled ? 'openrouter' : 'self_hosted',
   });
   registerFilesystemTools(agentLoop, new GatewayFilesystemOps(gatewayOps), { gatewayMode: true });
   const wikiRuntime = await wireWikiRuntime(agentLoop, pathSnapshot.workspaceRoot, {
@@ -318,6 +349,7 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
     eventBus,
     getConfig: () => config,
     getMultiCompanion: () => config.multiCompanion === true,
+    getIntakeSinkGate: () => intakeSinkGate,
   });
   // E8.3: attach the supplemental wiki RAG provider (null when the projection
   // is unavailable); pre-turn assembly consults it AFTER memory context.
@@ -332,6 +364,12 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
     referenceResolver: new ImageReferenceStore(pathSnapshot.companionDataDir),
   });
   agentLoop.imageVisionReviewer = imageVisionReviewer;
+  // htm9.8: vision intake screening — every inbound image attachment is
+  // screened via the gateway (`intake.screen_image`) before it can become a
+  // vision block; the gateway answers 'skipped' when the firewall is off.
+  agentLoop.visionIntakeScreener = {
+    screenImageIntake: (input) => gateway.screenImageIntake(input),
+  };
   const promptStore = wirePromptRuntime(
     agentLoop,
     pathSnapshot.companionDataDir,
@@ -342,6 +380,7 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
       identityCoolingOff,
       getCapabilityTier: () => capabilityRuntime.getTier(),
       invalidatePromptCache,
+      getIntakeSinkGate: () => intakeSinkGate,
     },
   );
   wireCharacterCardRuntime(agentLoop, cardVersionStore, {
@@ -355,6 +394,12 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
     // Reuse the shared confirmation queue (also used by card/module proposals)
     // so trusted-tier promotion proposals surface on the Garden Confirmations page.
     proposalQueue: cardProposalQueue,
+    // htm9.16: companion-initiated block list. Same on-disk store the gateway
+    // reads to drop blocked inbound before it reaches this agent process.
+    blockList: new ContactBlockListStore(
+      resolveContactBlockListPath(pathSnapshot.companionDataDir),
+    ),
+    getIntakeSinkGate: () => intakeSinkGate,
     ...(primaryTelegramUserId
       ? {
           bootstrapPrimaryIdentityLinks: [{

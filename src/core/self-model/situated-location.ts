@@ -15,6 +15,7 @@
 // depend on the sibling A2 contract change landing on another branch.
 
 import { isRecord } from '../../shared/utils/types.js';
+import { sanitizePromptEmbeddedText } from '../../shared/utils/escaping.js';
 import type { SubstrateMessage } from '../../shared/contracts/runtime.js';
 import type {
   PlaceConfig,
@@ -73,26 +74,40 @@ export function resolveTurnSituatedLocation(
   const presence = routing?.presence;
   const nowIso = input.now.toISOString();
 
+  // Cogsec (S10 finding 05-M1): the durable `label` persists into
+  // InternalState.situated and is re-rendered into prompt text every turn for
+  // up to 6h (`buildSituatedLocationPromptVariables`). It originates from
+  // registry display names or EXTERNAL presence hints, so sanitize it at
+  // WRITE time — a payload persisted once must never keep replaying.
   if (place) {
     return {
       placeId: place.placeId,
       siteId: place.siteId,
-      label: place.displayName.trim() || place.placeId,
+      label: sanitizePromptEmbeddedText(place.displayName) || place.placeId,
       kind: place.kind,
       updatedAt: nowIso,
     };
   }
 
   // No bound place resolved: fall back to honest presence-derived hints only.
-  const presenceLabel = presence?.label?.trim();
+  const presenceLabel = sanitizePromptEmbeddedText(presence?.label ?? '');
   const presenceSiteId = presence?.siteId?.trim();
   if (presenceLabel || presenceSiteId) {
     const site = presenceSiteId ? resolveSite(registry, presenceSiteId) : undefined;
-    const label = presenceLabel || site?.displayName.trim() || presenceSiteId || '';
+    const label = presenceLabel
+      || sanitizePromptEmbeddedText(site?.displayName ?? '')
+      || sanitizePromptEmbeddedText(presenceSiteId ?? '');
     if (label) {
+      // A registry-resolved siteId is a validated identifier; an unresolved
+      // presence siteId is external free-text that renders into prompt vars
+      // for up to 6h, so it is sanitized before persisting (same posture as
+      // `label`).
+      const durableSiteId = site
+        ? site.siteId
+        : (presenceSiteId ? sanitizePromptEmbeddedText(presenceSiteId) : '');
       return {
         placeId: null,
-        siteId: presenceSiteId ?? null,
+        siteId: durableSiteId || null,
         label,
         kind: site?.kind ?? null,
         updatedAt: nowIso,

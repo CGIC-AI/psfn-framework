@@ -7,7 +7,11 @@ import {
 import { createComponentLogger } from '../../shared/logger.js';
 import { writeJsonAtomic } from '../../shared/utils/fs.js';
 import { isRecord } from '../../shared/utils/types.js';
-import { SETTINGS_FILE_NAME, type EditableSettings } from './contracts.js';
+import {
+  SETTINGS_FILE_NAME,
+  validateObsidianCliPathSetting,
+  type EditableSettings,
+} from './contracts.js';
 import { normalizeEditableSettings, splitSettingsByDomain } from './schema.js';
 
 const log = createComponentLogger('Settings');
@@ -63,6 +67,11 @@ export function loadSettings(
 /** Atomic write: write to .tmp then rename. */
 export function saveSettings(dataDir: string, settings: EditableSettings): void {
   const path = join(dataDir, SETTINGS_FILE);
+  // Fail closed on a shell-injection payload before it is ever persisted
+  // (bead lget/w3pj). obsidianCliPath is admin-mutable and later spawned.
+  if (settings.obsidianCliPath !== undefined) {
+    validateObsidianCliPathSetting(settings.obsidianCliPath);
+  }
   const normalized = normalizeEditableSettings(settings);
   const split = splitSettingsByDomain(normalized);
   if (split.legacyKeys.length > 0) {

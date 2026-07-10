@@ -209,6 +209,7 @@ export const SETTINGS_GARDEN_RAW_EDITOR_SUBSYSTEM_BY_KEY = {
   skills: 'skills',
   scheduler: 'scheduler',
   'trust-policy': 'trustPolicy',
+  'intake-policy': 'intakePolicy',
   capabilities: 'capabilities',
   'charge-policy': 'chargePolicy',
   backup: 'backup',
@@ -234,6 +235,7 @@ export const SETTINGS_GARDEN_RAW_EDITOR_FALLBACK_FILE_BY_KEY: Record<GardenSetti
   skills: 'skills.json',
   scheduler: 'scheduler.json',
   'trust-policy': 'trust-policy.json',
+  'intake-policy': 'intake-policy.json',
   capabilities: 'capability-tier.json',
   'charge-policy': 'charge-policy.json',
   backup: 'backup.json',
@@ -249,6 +251,7 @@ export const SETTINGS_GARDEN_RAW_SUBSYSTEM_IDS = [
   'chargePolicy',
   'skills',
   'trustPolicy',
+  'intakePolicy',
   'backup',
 ] as const;
 

@@ -1,0 +1,220 @@
+{
+  "schemaVersion": 1,
+  "mode": "shadow",
+  "sourceRiskTiers": {
+    "operator": "trusted",
+    "primary_user": "trusted",
+    "trusted_contact": "standard",
+    "regular_contact": "standard",
+    "public_contact": "untrusted",
+    "web_fetch": "untrusted",
+    "web_search": "untrusted",
+    "document": "untrusted",
+    "image_ocr": "hostile",
+    "audio_transcript": "standard",
+    "tool_output": "untrusted",
+    "subagent_output": "untrusted",
+    "shard_foldback": "standard",
+    "mcp_tool_description": "hostile"
+  },
+  "sourceLists": {
+    "trustedSites": [],
+    "deniedSites": [],
+    "trustedPeople": [],
+    "deniedPeople": []
+  },
+  "quarantine": {
+    "itemTtlHours": 168,
+    "maxHeldItems": 500
+  },
+  "injectionClassifier": {
+    "labelThreshold": 0.5,
+    "scoreThresholdsByTier": {
+      "trusted": 0.98,
+      "standard": 0.9,
+      "untrusted": 0.75,
+      "hostile": 0.6
+    }
+  },
+  "l2Screener": {
+    "model": "google/gemini-2.5-flash-lite",
+    "escalationThresholdsByTier": {
+      "trusted": 0.95,
+      "standard": 0.85,
+      "untrusted": 0.6,
+      "hostile": 0.5
+    },
+    "mandatoryTiers": ["hostile"],
+    "failClosedActionByTier": {
+      "trusted": "l1_labels_only",
+      "standard": "l1_labels_only",
+      "untrusted": "quarantine",
+      "hostile": "quarantine"
+    },
+    "timeoutMs": 8000,
+    "maxContentChars": 24000
+  },
+  "l3Screener": {
+    "model": "z-ai/glm-4.5-air",
+    "dualModel": false,
+    "secondaryModel": null,
+    "escalationConfidenceThresholdsByTier": {
+      "trusted": 0.9,
+      "standard": 0.8,
+      "untrusted": 0.7,
+      "hostile": 0.6
+    },
+    "mandatoryTiers": ["hostile"],
+    "timeoutMs": 30000,
+    "maxContentChars": 48000,
+    "maxOutputTokens": 1200
+  },
+  "visionScreener": {
+    "enabled": true,
+    "model": "google/gemini-2.5-flash-lite",
+    "timeoutMs": 20000,
+    "maxOutputTokens": 1600
+  },
+  "sinkGates": {
+    "sinks": {
+      "prompt_assembly": {
+        "maxSourceRiskTier": "hostile",
+        "denyRiskLabels": [],
+        "unscreened": "allow"
+      },
+      "memory_write": {
+        "maxSourceRiskTier": "hostile",
+        "denyRiskLabels": [
+          "injection/override_attempt",
+          "injection/indirect",
+          "injection/encoded_smuggling",
+          "injection/role_confusion",
+          "injection/jailbreak_marker",
+          "persona/mutation_attempt",
+          "policy/security_modification",
+          "execution/executable_instruction",
+          "exfil/canary_leak",
+          "poisoning/memory_write_pressure",
+          "poisoning/trust_grooming",
+          "poisoning/source_drift"
+        ],
+        "unscreened": "allow"
+      },
+      "wiki_write": {
+        "maxSourceRiskTier": "hostile",
+        "denyRiskLabels": [
+          "injection/override_attempt",
+          "injection/indirect",
+          "injection/encoded_smuggling",
+          "injection/role_confusion",
+          "injection/jailbreak_marker",
+          "persona/mutation_attempt",
+          "policy/security_modification",
+          "execution/executable_instruction",
+          "exfil/canary_leak",
+          "poisoning/memory_write_pressure",
+          "poisoning/trust_grooming",
+          "poisoning/source_drift"
+        ],
+        "unscreened": "allow"
+      },
+      "persona_mutation": {
+        "maxSourceRiskTier": "standard",
+        "denyRiskLabels": [
+          "injection/override_attempt",
+          "injection/indirect",
+          "injection/encoded_smuggling",
+          "injection/invisible_text",
+          "injection/role_confusion",
+          "injection/jailbreak_marker",
+          "persona/mutation_attempt",
+          "policy/security_modification",
+          "execution/executable_instruction",
+          "exfil/canary_leak",
+          "poisoning/memory_write_pressure",
+          "poisoning/trust_grooming",
+          "poisoning/source_drift"
+        ],
+        "unscreened": "allow"
+      },
+      "trust_mutation": {
+        "maxSourceRiskTier": "standard",
+        "denyRiskLabels": [
+          "injection/override_attempt",
+          "injection/indirect",
+          "injection/encoded_smuggling",
+          "injection/invisible_text",
+          "injection/role_confusion",
+          "injection/jailbreak_marker",
+          "persona/mutation_attempt",
+          "policy/security_modification",
+          "execution/executable_instruction",
+          "exfil/canary_leak",
+          "poisoning/memory_write_pressure",
+          "poisoning/trust_grooming",
+          "poisoning/source_drift"
+        ],
+        "unscreened": "allow"
+      },
+      "tool_egress": {
+        "maxSourceRiskTier": "hostile",
+        "denyRiskLabels": [
+          "exfil/canary_leak"
+        ],
+        "unscreened": "allow"
+      }
+    },
+    "trifecta": {
+      "enforcementByTier": {
+        "trusted": "soft",
+        "standard": "soft",
+        "untrusted": "hard",
+        "hostile": "hard"
+      }
+    }
+  },
+  "driftDetection": {
+    "enabled": true,
+    "valenceVelocity": {
+      "shortWindowPoints": 6,
+      "minLongWindowPoints": 12,
+      "velocitySigmaThreshold": 3,
+      "monotonicityMin": 0.7,
+      "minBaselineStd": 0.05,
+      "minPointConfidence": 0.35
+    },
+    "memoryWriteRate": {
+      "recentWindowHours": 24,
+      "baselineWindowDays": 14,
+      "burstMultiplier": 4,
+      "minRecentWrites": 8
+    },
+    "labelFrequency": {
+      "windowDays": 7,
+      "minCount": 3
+    },
+    "retrievalShare": {
+      "windowHours": 48,
+      "minRetrievals": 10,
+      "maxLowTrustShare": 0.6
+    },
+    "secondArrow": {
+      "enabled": true,
+      "windowHours": 72,
+      "minClusterSize": 4,
+      "similarityThreshold": 0.87,
+      "baselineWindowDays": 14,
+      "velocityMultiplier": 3,
+      "minSelfSourcedShare": 0.5,
+      "concernSimilarityMin": 0.3,
+      "stressAttribution": {
+        "minPoints": 4,
+        "deltaSigmaThreshold": 1.5,
+        "minBaselineStd": 0.05
+      },
+      "selfNotice": {
+        "enabled": false
+      }
+    }
+  }
+}

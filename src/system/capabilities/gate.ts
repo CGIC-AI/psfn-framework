@@ -3,7 +3,7 @@ import type { TextContent } from '@mariozechner/pi-ai';
 import type { CapabilityTier } from '../config/runtime-config-contracts.js';
 import type { CapabilityAccess, CapabilityAccessProvider } from './access.js';
 import type { CapabilityToken } from './tokens.js';
-import { resolveToolRequiredCapabilities } from './requirements.js';
+import { resolveToolCapabilityRequirement } from './requirements.js';
 import { evaluateEligibilityDecision } from './eligibility.js';
 
 export type { CapabilityAccess, CapabilityAccessProvider } from './access.js';
@@ -12,6 +12,13 @@ export interface ToolCapabilityEligibility {
   allowed: boolean;
   requiredTokens: CapabilityToken[];
   missingTokens: CapabilityToken[];
+  /**
+   * True when the tool declares no capability-requirement path at all. Such a
+   * tool is refused fail-closed rather than treated as unrestricted (02-M2):
+   * an empty requirement set is otherwise allowed at every tier, so a tool with
+   * no resolver/annotation/static entry would silently bypass gating.
+   */
+  undeclared?: boolean;
 }
 
 export function evaluateToolCapabilityEligibility(
@@ -19,15 +26,23 @@ export function evaluateToolCapabilityEligibility(
   params: unknown,
   access: CapabilityAccess,
 ): ToolCapabilityEligibility {
-  const requiredTokens = resolveToolRequiredCapabilities(tool, params);
+  const resolution = resolveToolCapabilityRequirement(tool, params);
+  if (!resolution.declared) {
+    return {
+      allowed: false,
+      requiredTokens: [],
+      missingTokens: [],
+      undeclared: true,
+    };
+  }
   const decision = evaluateEligibilityDecision(
     access,
     { kind: 'tool.execute', toolName: tool.name },
-    { requiredTokens },
+    { requiredTokens: resolution.tokens },
   );
   return {
     allowed: decision.allowed,
-    requiredTokens,
+    requiredTokens: resolution.tokens,
     missingTokens: decision.missingTokens,
   };
 }
@@ -40,6 +55,23 @@ function toTextResult(
     content: [{ type: 'text', text }] satisfies TextContent[],
     details,
   };
+}
+
+function undeclaredResult(
+  toolName: string,
+  tier: CapabilityTier,
+): AgentToolResult<Record<string, unknown>> {
+  return toTextResult(
+    `Capability denied: tool "${toolName}" declares no capability requirement and is refused fail-closed. `
+    + `A tool must declare a required capability (or an explicit "no requirement") to be eligible; an `
+    + `undeclared tool would otherwise be allowed at every tier.`,
+    {
+      isError: true,
+      capabilityDenied: true,
+      capabilityUndeclared: true,
+      tier,
+    },
+  );
 }
 
 function deniedResult(
@@ -61,9 +93,27 @@ function deniedResult(
   );
 }
 
+/**
+ * Structural egress-guard port (htm9.3). The intake firewall's tool-egress
+ * sink gate plugs in here without this module importing cogsec internals.
+ * `evaluate` returns null when the guard does not apply to this invocation
+ * (non-egress tool, no guard active this turn); a non-null denied result
+ * carries the operator-reviewed notice text returned to the model instead of
+ * executing the tool.
+ */
+export interface EgressToolGuard {
+  evaluate(input: {
+    toolName: string;
+    requiredTokens: readonly CapabilityToken[];
+  }): { allowed: boolean; noticeText: string } | null;
+}
+
+export type EgressToolGuardProvider = () => EgressToolGuard | null;
+
 export function gateToolWithCapabilities<T extends AgentTool<any>>(
   tool: T,
   getAccess: CapabilityAccessProvider,
+  getEgressGuard?: EgressToolGuardProvider,
 ): T {
   const gated = {
     ...tool,
@@ -75,12 +125,34 @@ export function gateToolWithCapabilities<T extends AgentTool<any>>(
       const access = getAccess();
       const eligibility = evaluateToolCapabilityEligibility(tool, params, access);
       if (!eligibility.allowed) {
+        if (eligibility.undeclared) {
+          return undeclaredResult(tool.name, access.getTier());
+        }
         return deniedResult(
           tool.name,
           access.getTier(),
           eligibility.missingTokens,
           access.getGrantedTokens(),
         );
+      }
+
+      // htm9.3: tool-egress sink gate (lethal-trifecta invariant). Evaluated
+      // per invocation with the current turn's intake context; a denied
+      // egress returns the calm notice text instead of executing. Soft
+      // (review) verdicts return allowed=true from the guard and are audited
+      // there.
+      const egressGuard = getEgressGuard?.() ?? null;
+      if (egressGuard) {
+        const egressDecision = egressGuard.evaluate({
+          toolName: tool.name,
+          requiredTokens: eligibility.requiredTokens,
+        });
+        if (egressDecision && !egressDecision.allowed) {
+          return toTextResult(egressDecision.noticeText, {
+            egressGated: true,
+            toolName: tool.name,
+          });
+        }
       }
 
       // params is unknown from the gated wrapper; tool.execute expects Static<TSchema>

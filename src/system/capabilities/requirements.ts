@@ -130,6 +130,8 @@ const CONTACT_WRITE_ACTIONS = new Set([
   'link_identity',
   'set_channel_privacy',
   'set_machine_intelligence',
+  'block',
+  'unblock',
 ]);
 
 function resolveContactRequirement(
@@ -378,29 +380,79 @@ export function withCapabilityRequirement<T extends AgentTool<any>>(
   return tool;
 }
 
+export interface ToolCapabilityRequirementResolution {
+  /**
+   * True when the tool DECLARES a capability-requirement path: an explicit
+   * annotation, a unified action-aware resolver, or a static requirement entry
+   * (an explicit "no requirement" declaration counts). False only when the tool
+   * has no requirement path at all — that case must fail closed rather than be
+   * treated as "unrestricted", because an empty requirement set is allowed at
+   * every tier (02-M2).
+   */
+  declared: boolean;
+  tokens: CapabilityToken[];
+}
+
+export function resolveToolCapabilityRequirement(
+  tool: AgentTool<any>,
+  params: unknown,
+): ToolCapabilityRequirementResolution {
+  const normalizedParams = toRecord(params);
+  const annotated = (tool as AgentTool<any> & CapabilityAnnotatedTool).requiredCapability;
+  if (annotated !== undefined) {
+    if (typeof annotated === 'function') {
+      return { declared: true, tokens: normalizeRequirement(annotated(normalizedParams)) };
+    }
+    return { declared: true, tokens: normalizeRequirement(annotated) };
+  }
+
+  const resolver = UNIFIED_TOOL_REQUIREMENT_RESOLVERS[tool.name];
+  if (resolver) {
+    return {
+      declared: true,
+      tokens: normalizeRequirement(resolver(normalizeAction(normalizedParams), normalizedParams)),
+    };
+  }
+
+  if (Object.prototype.hasOwnProperty.call(STATIC_TOOL_REQUIREMENTS, tool.name)) {
+    return { declared: true, tokens: normalizeRequirement(STATIC_TOOL_REQUIREMENTS[tool.name]) };
+  }
+
+  return { declared: false, tokens: [] };
+}
+
 export function resolveToolRequiredCapabilities(
   tool: AgentTool<any>,
   params: unknown,
 ): CapabilityToken[] {
-  const normalizedParams = toRecord(params);
-  const annotatedTool = tool as AgentTool<any> & CapabilityAnnotatedTool;
-  if (hasAnnotatedCapabilityPolicy(tool)) {
-    const annotated = annotatedTool.requiredCapability;
-    if (typeof annotated === 'function') {
-      return normalizeRequirement(annotated(normalizedParams));
-    }
-    return normalizeRequirement(annotated);
+  const resolution = resolveToolCapabilityRequirement(tool, params);
+  if (!resolution.declared) {
+    assertToolHasDeclaredCapabilityPolicy(tool);
+    throw new Error(`Tool "${tool.name}" capability policy resolution failed`);
   }
+  return resolution.tokens;
+}
 
-  const unifiedResolver = UNIFIED_TOOL_REQUIREMENT_RESOLVERS[tool.name];
-  if (unifiedResolver) {
-    return normalizeRequirement(unifiedResolver(normalizeAction(normalizedParams), normalizedParams));
-  }
+/**
+ * Whether the tool declares any capability-requirement path. A tool that does
+ * not is refused fail-closed at gating time (and, for first-party tools, at
+ * registration time) instead of being silently allowed at every tier.
+ */
+export function toolHasDeclaredCapabilityRequirement(tool: AgentTool<any>): boolean {
+  return resolveToolCapabilityRequirement(tool, {}).declared;
+}
 
-  if (hasOwn(STATIC_TOOL_REQUIREMENTS, tool.name)) {
-    return normalizeRequirement(STATIC_TOOL_REQUIREMENTS[tool.name]);
-  }
-
-  assertToolHasDeclaredCapabilityPolicy(tool);
-  throw new Error(`Tool "${tool.name}" capability policy resolution failed`);
+/**
+ * Registration-time guard: throws (loud, fail-closed) when a tool has no
+ * declared capability requirement. Legitimately unrestricted tools must carry
+ * an explicit "no requirement" declaration to satisfy this.
+ */
+export function assertToolCapabilityRequirementDeclared(tool: AgentTool<any>): void {
+  if (toolHasDeclaredCapabilityRequirement(tool)) return;
+  throw new Error(
+    `Tool "${tool.name}" has no declared capability requirement. Every gated tool must declare one `
+    + `(an annotation, a unified action-aware resolver, or a static requirement entry); use an explicit `
+    + `empty declaration for legitimately unrestricted tools. Refusing to register a tool that would `
+      + `otherwise be allowed at every capability tier.`,
+  );
 }

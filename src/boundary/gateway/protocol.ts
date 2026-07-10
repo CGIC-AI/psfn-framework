@@ -167,6 +167,12 @@ export interface HomeAssistantCallServiceParams extends GatewayCorrelationParams
 
 export type HomeAssistantCheckConnectionParams = GatewayCorrelationParams;
 
+export interface WebSearchParams {
+  query: string;
+  maxResults?: number;
+}
+
+
 export interface FsReadParams {
   path: string;
   maxBytes?: number;
@@ -426,9 +432,26 @@ export interface DiscordTypingResult {
   success: boolean;
 }
 
+/**
+ * Cognition intake firewall (htm9.2): screening outcome attached to web
+ * content results. Absent when intake-policy mode is 'off'. In shadow mode
+ * the decision is recorded but `content` is unaltered; in enforce mode a
+ * quarantine decision replaces `content` with the fixed withheld-content
+ * placeholder (`withheld: true`).
+ */
+export interface WebIntakeScreeningSummary {
+  envelopeId: string;
+  action: 'pass' | 'sanitize' | 'quarantine' | 'block';
+  state: string;
+  riskLabels: string[];
+  mode: 'shadow' | 'enforce';
+  withheld: boolean;
+}
+
 export interface WebFetchResult {
   content: string;
   sanitized: boolean;
+  intake?: WebIntakeScreeningSummary;
 }
 
 export interface WebFetchBinaryResult {
@@ -469,6 +492,13 @@ export interface HomeAssistantCallServiceResult {
 export interface HomeAssistantCheckConnectionResult {
   ok: true;
   message: string;
+}
+
+export interface WebSearchResult {
+  content: string;
+  sanitized: boolean;
+  citations: string[];
+  intake?: WebIntakeScreeningSummary;
 }
 
 export interface FsReadResult {
@@ -685,6 +715,7 @@ export interface GatewayMethods {
   'home_assistant.get_states': [HomeAssistantGetStatesParams, HomeAssistantGetStatesResult];
   'home_assistant.call_service': [HomeAssistantCallServiceParams, HomeAssistantCallServiceResult];
   'home_assistant.check_connection': [HomeAssistantCheckConnectionParams, HomeAssistantCheckConnectionResult];
+  'web.search': [WebSearchParams, WebSearchResult];
   'shell.exec': [ShellExecParams, ShellExecResult];
   'vault.write': [VaultWriteParams, VaultWriteResult];
   'vault.read': [VaultReadParams, VaultReadResult];
@@ -836,4 +867,8 @@ export const GatewayErrors = {
   COMPANION_ROUTING_UNAVAILABLE: -32011,
   CONNECTION_ROLE_DENIED: -32012,
   COMPANION_AUTH_FAILED: -32013,
+  // htm9.18: an outbound action was HELD because the session canary token
+  // leaked into egress (prompt leak / hijack tripwire). The error message is
+  // the calm companion-facing soft notice.
+  EGRESS_HELD: -32014,
 } as const;

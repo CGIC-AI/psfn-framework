@@ -300,8 +300,8 @@ export const CANONICAL_FIRST_PARTY_TOOL_SURFACES: readonly CanonicalToolSurfaceE
     name: 'contact',
     domain: 'contacts',
     exposure: 'core',
-    description: 'Canonical contact, trust, note, identity-link, and channel-privacy surface.',
-    actions: ['list', 'lookup', 'note', 'set_trust', 'propose_trust', 'link_identity', 'set_channel_privacy', 'set_machine_intelligence'],
+    description: 'Canonical contact, trust, note, identity-link, channel-privacy, and blocking surface.',
+    actions: ['list', 'lookup', 'note', 'set_trust', 'propose_trust', 'link_identity', 'set_channel_privacy', 'set_machine_intelligence', 'block', 'unblock'],
     capabilityMetadata: { kind: 'action_aware', source: CAPABILITIES_REQUIREMENTS },
     retiredAliases: [
       retiredAlias('contact_list', 'contact', 'retired', 'list', 'Contact reads belong on contact.'),

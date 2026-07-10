@@ -18,8 +18,17 @@ import {
   GatewayErrors,
   type WebFetchBinaryParams,
   type WebFetchParams,
+  type WebIntakeScreeningSummary,
   type WebRequestBinaryParams,
+  type WebSearchParams,
 } from '../protocol.js';
+import type { IntakeSourceClass } from '../../../shared/contracts/intake-envelope.js';
+import type { WebBackendPolicy } from '../policy.js';
+import {
+  normalizeSearchMaxResults,
+  openRouterWebFetch,
+  openRouterWebSearch,
+} from './openrouter-web.js';
 import type { GatewayMethodRuntime, GatedMethodDescriptor } from './types.js';
 import { createComponentLogger } from '../../../shared/logger.js';
 import {
@@ -36,7 +45,12 @@ import {
 const log = createComponentLogger('GatewayWeb');
 const tlsBundleCache = new Map<string, string>();
 const WEB_FETCH_BINARY_MAX_BYTES_DEFAULT = 8 * 1024 * 1024;
+/** Hard cap for the text fetch lane (Sprint-10 H2): the text lane previously
+ *  buffered unbounded response bodies. Enforced DURING streaming. */
+export const WEB_FETCH_TEXT_MAX_BYTES = 8 * 1024 * 1024;
 const REDIRECT_STATUS_CODES = new Set([301, 302, 303, 307, 308]);
+/** Headers that must not survive an origin-changing redirect (Sprint-10 01-M1). */
+const SENSITIVE_REDIRECT_HEADERS = new Set(['authorization', 'cookie', 'proxy-authorization']);
 const WEB_CIRCUIT_BREAKER = new SlidingWindowCircuitBreaker({
   failureThreshold: 3,
   windowMs: 60_000,
@@ -316,6 +330,10 @@ async function requestText(
     headers?: Record<string, string>;
     method?: string;
     body?: Buffer;
+    /** Hard response-body cap enforced while streaming (Sprint-10 H2).
+     *  Never trusts content-length: cumulative received bytes are counted and
+     *  the socket is destroyed the moment the cap is exceeded. */
+    maxBodyBytes: number;
   },
 ): Promise<ResponseLike> {
   const parsed = new URL(url);
@@ -356,12 +374,24 @@ async function requestText(
       },
       (res) => {
         const chunks: Buffer[] = [];
+        let receivedBytes = 0;
         res.on('data', (chunk: Buffer | string) => {
-          if (typeof chunk === 'string') {
-            chunks.push(Buffer.from(chunk));
+          const buffer = typeof chunk === 'string' ? Buffer.from(chunk) : chunk;
+          receivedBytes += buffer.byteLength;
+          if (receivedBytes > options.maxBodyBytes) {
+            const capError = new Error(
+              `Response body too large: exceeded ${options.maxBodyBytes} bytes`,
+            );
+            (capError as { code?: string }).code = 'EMSGSIZE';
+            // Reject first so the deterministic cap error wins, then destroy
+            // the socket without an error argument: the teardown noise
+            // (ECONNRESET/premature close) is routed to the existing
+            // req/res error listeners and the promise is already settled.
+            rejectResponse(capError);
+            req.destroy();
             return;
           }
-          chunks.push(chunk);
+          chunks.push(buffer);
         });
         res.on('error', rejectResponse);
         res.on('end', () => {
@@ -423,8 +453,9 @@ async function fetchWithPolicyChecks(
   urlPolicyConfig: UrlPolicyConfig,
   tlsCaBundle: string | undefined,
   requestHeaders: Record<string, string>,
-  requestMethod?: string,
-  requestBody?: Buffer,
+  requestMethod: string | undefined,
+  requestBody: Buffer | undefined,
+  maxResponseBytes: number,
   dnsResolver?: DnsResolver,
 ): Promise<ResponseLike> {
   const urlCheck = evaluateUrlPolicy(url, urlPolicyConfig, lane);
@@ -466,6 +497,7 @@ async function fetchWithPolicyChecks(
       headers: requestHeaders,
       method: requestMethod,
       body: requestBody,
+      maxBodyBytes: maxResponseBytes,
     });
   } catch (err) {
     throw new JSONRPCErrorException(
@@ -484,6 +516,32 @@ export interface RedirectChainFetchResult {
 
 function isRedirectStatus(status: number): boolean {
   return REDIRECT_STATUS_CODES.has(status);
+}
+
+// ── Redirect credential hygiene (Sprint-10 01-M1) ──
+// A redirect that changes scheme, host, or (effective) port leaves the
+// original request origin; agent-supplied Authorization/Cookie material must
+// not be replayed to the new origin. Once stripped, headers stay stripped for
+// the rest of the chain (a bounce back to the first origin does not restore
+// them — the intermediate origin controlled the chain).
+
+function effectiveRedirectPort(parsed: URL): string {
+  if (parsed.port) return parsed.port;
+  return parsed.protocol === 'https:' ? '443' : '80';
+}
+
+function isSameRequestOrigin(a: URL, b: URL): boolean {
+  return a.protocol === b.protocol
+    && a.hostname === b.hostname
+    && effectiveRedirectPort(a) === effectiveRedirectPort(b);
+}
+
+function stripSensitiveRedirectHeaders(
+  headers: Record<string, string>,
+): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(headers).filter(([name]) => !SENSITIVE_REDIRECT_HEADERS.has(name.toLowerCase())),
+  );
 }
 
 async function recordRedirectChainAudit(
@@ -518,11 +576,19 @@ export async function fetchWithValidatedRedirectChain(
   requestHeaders: Record<string, string>,
   requestMethod: string | undefined,
   requestBody: Buffer | undefined,
+  maxResponseBytes: number,
   runtime: GatewayMethodRuntime,
   dnsResolver?: DnsResolver,
 ): Promise<RedirectChainFetchResult> {
+  if (!Number.isFinite(maxResponseBytes) || maxResponseBytes < 1) {
+    throw new JSONRPCErrorException(
+      'Fetch failed: maxResponseBytes must be a positive byte cap',
+      GatewayErrors.POLICY_DENIED,
+    );
+  }
   const maxRedirectHops = resolveMaxRedirectHops(urlPolicyConfig);
   let currentUrl = originUrl;
+  let currentHeaders = requestHeaders;
   let redirectHopCount = 0;
   const redirectChain = [originUrl];
   const visited = new Set<string>(redirectChain);
@@ -535,9 +601,10 @@ export async function fetchWithValidatedRedirectChain(
         lane,
         urlPolicyConfig,
         tlsCaBundle,
-        requestHeaders,
+        currentHeaders,
         requestMethod,
         requestBody,
+        maxResponseBytes,
         dnsResolver,
       );
       if (!isRedirectStatus(response.status)) {
@@ -591,6 +658,13 @@ export async function fetchWithValidatedRedirectChain(
         );
       }
 
+      // Drop credentials before re-issuing to a different origin (01-M1).
+      // Both URLs are known-parseable here: redirectUrl was just built with
+      // `new URL(...)` and currentUrl was successfully fetched.
+      if (!isSameRequestOrigin(new URL(currentUrl), new URL(redirectUrl))) {
+        currentHeaders = stripSensitiveRedirectHeaders(currentHeaders);
+      }
+
       visited.add(redirectUrl);
       redirectChain.push(redirectUrl);
       redirectHopCount += 1;
@@ -612,10 +686,123 @@ export async function fetchWithValidatedRedirectChain(
   }
 }
 
+// ── Cognition intake firewall wiring (bead psfn-framework-htm9.2) ──
+// Web content is screened AFTER sanitizeWebContent (regex strip stays as a
+// first pass) and BEFORE returning to the agent. Shadow mode records the
+// envelope decision in the gateway audit journal without altering content;
+// enforce mode substitutes the screening's effectiveText, so quarantined
+// pages never cross the RPC boundary into prompt/memory/emotion.
+async function screenWebContent(
+  runtime: GatewayMethodRuntime,
+  input: {
+    rpcMethod: 'web.fetch' | 'web.search';
+    sourceClass: IntakeSourceClass;
+    content: string;
+    originRef: string;
+  },
+): Promise<{ content: string; sanitizedByIntake: boolean; intake?: WebIntakeScreeningSummary }> {
+  const screening = runtime.intakeScreening;
+  if (!screening) {
+    return { content: input.content, sanitizedByIntake: false };
+  }
+  const startedAt = Date.now();
+  const screened = await screening.screen(input.content, {
+    sourceClass: input.sourceClass,
+    origin: { ref: input.originRef.slice(0, 2048) },
+    scope: 'context',
+  });
+  await runtime.recordAuditEvent?.({
+    method: `${input.rpcMethod}.intake_screening`,
+    decision: screened.withheld ? 'DENY' : 'ALLOW',
+    params: {
+      envelopeId: screened.envelope.id,
+      originRef: input.originRef.slice(0, 2048),
+      mode: screened.mode,
+      action: screened.action,
+      state: screened.envelope.state,
+      riskLabels: [...screened.envelope.riskLabels],
+      scores: screened.envelope.scores,
+      withheld: screened.withheld,
+      ...(screened.injectionScorerError ? { injectionScorerError: screened.injectionScorerError } : {}),
+    },
+    durationMs: Date.now() - startedAt,
+  });
+  return {
+    content: screened.effectiveText,
+    sanitizedByIntake: screened.effectiveText !== input.content,
+    intake: {
+      envelopeId: screened.envelope.id,
+      action: screened.action,
+      state: screened.envelope.state,
+      riskLabels: [...screened.envelope.riskLabels],
+      mode: screened.mode,
+      withheld: screened.withheld,
+    },
+  };
+}
+
+// ── Web backend selection (bead psfn-framework-htm9.10) ──
+// Explicit config selects the backend (providers.json openrouter.metadata.webTools);
+// there is no silent fallback. Absent config preserves the self-hosted direct/
+// crawler path so existing deployments and tests are unchanged.
+function resolveWebBackend(runtime: GatewayMethodRuntime): WebBackendPolicy {
+  return runtime.policyConfig.webBackend ?? { kind: 'self_hosted' };
+}
+
+function requireSearchQuery(value: unknown): string {
+  if (typeof value !== 'string' || value.trim().length === 0) {
+    throw new JSONRPCErrorException(
+      'web.search requires a non-empty query',
+      GatewayErrors.POLICY_DENIED,
+    );
+  }
+  return value.trim();
+}
+
+// Route web.fetch through OpenRouter's web_fetch server tool. Results still pass
+// sanitizeWebContent below; the caller then routes this sanitized output
+// through the htm9.2 intake screening (screenWebContent) — do not return an
+// unscreened path.
+async function fetchViaOpenRouter(
+  backend: Extract<WebBackendPolicy, { kind: 'openrouter' }>,
+  params: WebFetchParams,
+): Promise<{ content: string; sanitized: boolean }> {
+  let rawContent: string;
+  try {
+    rawContent = await openRouterWebFetch(backend.openRouter, params.url, params.prompt);
+  } catch (err) {
+    throw new JSONRPCErrorException(
+      formatFetchProviderError(err),
+      GatewayErrors.PROVIDER_ERROR,
+    );
+  }
+  const result = sanitizeWebContent(rawContent, params.url);
+  if (result.injectionPatternsFound > 0) {
+    log.warn(`Sanitized ${result.injectionPatternsFound} injection patterns from ${params.url} (openrouter)`);
+  }
+  return { content: result.content, sanitized: result.sanitized };
+}
+
 const webDescriptors: Array<GatedMethodDescriptor<any, unknown>> = [
   {
     name: 'web.fetch',
     handler: async (params: WebFetchParams, runtime) => {
+      const backend = resolveWebBackend(runtime);
+      if (backend.kind === 'openrouter') {
+        const fetched = await fetchViaOpenRouter(backend, params);
+        const screened = await screenWebContent(runtime, {
+          rpcMethod: 'web.fetch',
+          sourceClass: 'web_fetch',
+          content: fetched.content,
+          originRef: params.url,
+        });
+        return {
+          content: screened.content,
+          sanitized: fetched.sanitized || screened.sanitizedByIntake,
+          ...(screened.intake ? { intake: screened.intake } : {}),
+        };
+      }
+
       const lane = requireLane(params.lane);
       const urlPolicyConfig = resolveUrlPolicyConfig(runtime);
       const dnsResolver = resolveDnsResolver(runtime);
@@ -640,6 +827,7 @@ const webDescriptors: Array<GatedMethodDescriptor<any, unknown>> = [
           {},
           undefined,
           undefined,
+          WEB_FETCH_TEXT_MAX_BYTES,
           runtime,
           dnsResolver,
         );
@@ -655,7 +843,17 @@ const webDescriptors: Array<GatedMethodDescriptor<any, unknown>> = [
         if (result.injectionPatternsFound > 0) {
           log.warn(`Sanitized ${result.injectionPatternsFound} injection patterns from ${finalUrl}`);
         }
-        return { content: result.content, sanitized: result.sanitized };
+        const screened = await screenWebContent(runtime, {
+          rpcMethod: 'web.fetch',
+          sourceClass: 'web_fetch',
+          content: result.content,
+          originRef: finalUrl,
+        });
+        return {
+          content: screened.content,
+          sanitized: result.sanitized || screened.sanitizedByIntake,
+          ...(screened.intake ? { intake: screened.intake } : {}),
+        };
       });
     },
     summary: (p: WebFetchParams) => ({ url: p.url, lane: describeLane(p.lane) }),
@@ -691,6 +889,7 @@ const webDescriptors: Array<GatedMethodDescriptor<any, unknown>> = [
           requestHeaders,
           undefined,
           undefined,
+          maxBytes,
           runtime,
           dnsResolver,
         );
@@ -771,6 +970,7 @@ const webDescriptors: Array<GatedMethodDescriptor<any, unknown>> = [
           requestHeaders,
           requestMethod,
           requestBody,
+          maxBytes,
           runtime,
           dnsResolver,
         );
@@ -814,6 +1014,58 @@ const webDescriptors: Array<GatedMethodDescriptor<any, unknown>> = [
     }),
     approvalAction: 'fetch',
     approvalScope: (p: WebRequestBinaryParams) => `${describeLane(p.lane)}:${normalizeRequestMethod(p.method)}:${p.url}`,
+  },
+  {
+    // Web search via OpenRouter's web_search server tool (bead psfn-framework-htm9.10).
+    // Only available when the OpenRouter web backend is explicitly configured;
+    // self-hosted deployments keep discovery in the agent-side search planner
+    // (no silent fallback here — this method fails closed).
+    name: 'web.search',
+    handler: async (params: WebSearchParams, runtime) => {
+      const backend = resolveWebBackend(runtime);
+      if (backend.kind !== 'openrouter') {
+        throw new JSONRPCErrorException(
+          'web.search backend not configured: enable OpenRouter web tools '
+          + '(providers.json openrouter.metadata.webTools) to use gateway web search',
+          GatewayErrors.PROVIDER_ERROR,
+        );
+      }
+      const query = requireSearchQuery(params.query);
+      const maxResults = normalizeSearchMaxResults(params.maxResults);
+
+      let searchResult: Awaited<ReturnType<typeof openRouterWebSearch>>;
+      try {
+        searchResult = await openRouterWebSearch(backend.openRouter, query, maxResults);
+      } catch (err) {
+        throw new JSONRPCErrorException(
+          formatFetchProviderError(err),
+          GatewayErrors.PROVIDER_ERROR,
+        );
+      }
+
+      const result = sanitizeWebContent(searchResult.content, `search:${query}`);
+      if (result.injectionPatternsFound > 0) {
+        log.warn(`Sanitized ${result.injectionPatternsFound} injection patterns from web.search (openrouter)`);
+      }
+      const screened = await screenWebContent(runtime, {
+        rpcMethod: 'web.search',
+        sourceClass: 'web_search',
+        content: result.content,
+        originRef: `search:${query}`,
+      });
+      return {
+        content: screened.content,
+        sanitized: result.sanitized || screened.sanitizedByIntake,
+        citations: searchResult.citations,
+        ...(screened.intake ? { intake: screened.intake } : {}),
+      };
+    },
+    summary: (p: WebSearchParams) => ({
+      query: p.query,
+      maxResults: normalizeSearchMaxResults(p.maxResults),
+    }),
+    approvalAction: 'fetch',
+    approvalScope: (p: WebSearchParams) => `search:${typeof p.query === 'string' ? p.query : ''}`,
   },
 ];
 

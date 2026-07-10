@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { principalFromApiKeyToken } from './http/auth.js';
+import { principalFromApiKeyToken, principalFromSatelliteApiKeyToken } from './http/auth.js';
 import {
   loadSatelliteRegistryConfig,
   parseSatelliteRegistryConfig,
@@ -677,5 +677,372 @@ describe('saveSatelliteRegistryConfig', () => {
     saveSatelliteRegistryConfig(dataDir, next);
     const reloaded = loadSatelliteRegistryConfig(dataDir);
     expect(reloaded.satellites[0]?.placeId).toBe('kitchen');
+  });
+});
+
+// ── Sprint-10 C1: mTLS binding must come from an authenticated source ──
+
+describe('satellite mTLS authentication (Sprint-10 C1)', () => {
+  const FINGERPRINT = 'a1'.repeat(32);
+  const SPKI = 'b2'.repeat(32);
+  const SUBJECT = 'CN=pi-voice, O=PSFN';
+
+  function mtlsRegistry(auth: Record<string, unknown>) {
+    return parseSatelliteRegistryConfig({
+      schemaVersion: 1,
+      enabled: true,
+      satellites: [
+        {
+          satelliteId: 'pi-voice',
+          displayName: 'Kitchen Voice Pi',
+          mobility: 'static',
+          endpoints: [
+            {
+              endpointId: 'wyoming-voice',
+              displayName: 'Wyoming Voice Endpoint',
+              claimTypes: ['voice-pi'],
+              promptChannelType: 'voice_satellite',
+              auth: { mode: 'mtls', ...auth },
+              defaultIdentity: {
+                authorId: 'primary-user',
+                authorName: 'Primary User',
+                canonicalContactId: 'contact-primary-user',
+                channelPrivacy: 'private',
+              },
+              maxCapabilities: ['text'],
+              runtime: {
+                schemaVersion: 1,
+                transport: { mode: 'openhome_bridge' },
+                refresh: { intervalMs: 300000, restartPolicy: 'manual' },
+              },
+            },
+          ],
+        },
+      ],
+    });
+  }
+
+  const claimHeaders = {
+    'x-psfn-satellite-claim-type': 'voice-pi',
+    'x-psfn-satellite-id': 'pi-voice',
+    'x-psfn-satellite-endpoint-id': 'wyoming-voice',
+    'x-psfn-satellite-session-id': 'kitchen',
+  };
+
+  it('REJECTS a claim presenting only X-PSFN-Client-Cert-* request headers (no authenticated cert)', () => {
+    const registry = mtlsRegistry({ clientCertFingerprintSha256: FINGERPRINT });
+    // Attacker replays the (public) fingerprint as plain headers; no TLS peer
+    // cert and no trusted proxy means no clientCert identity is derived.
+    const result = resolveSatelliteClaim({
+      registry,
+      principal,
+      headers: {
+        ...claimHeaders,
+        'x-psfn-client-cert-fingerprint-sha256': FINGERPRINT,
+        'x-psfn-client-cert-subject': SUBJECT,
+      },
+    });
+    expect(result.ok).toBe(false);
+    expect(!result.ok && result.status).toBe(403);
+    expect(!result.ok && result.type).toBe('satellite_client_certificate_required');
+  });
+
+  it('REJECTS config pulls presenting only cert headers', () => {
+    const registry = mtlsRegistry({ clientCertFingerprintSha256: FINGERPRINT });
+    const result = resolveSatelliteConfigPull({
+      registry,
+      principal,
+      satelliteId: 'pi-voice',
+      endpointId: 'wyoming-voice',
+      claimType: 'voice-pi',
+    });
+    expect(result.ok).toBe(false);
+    expect(!result.ok && result.type).toBe('satellite_client_certificate_required');
+  });
+
+  it('requires ALL configured cert attributes to match: single-attribute match does not pass', () => {
+    const registry = mtlsRegistry({
+      clientCertFingerprintSha256: FINGERPRINT,
+      clientCertSubject: SUBJECT,
+    });
+
+    // Fingerprint matches, subject missing → rejected.
+    const missingSubject = resolveSatelliteClaim({
+      registry,
+      principal,
+      headers: claimHeaders,
+      clientCert: { source: 'tls_peer', fingerprintSha256: FINGERPRINT },
+    });
+    expect(missingSubject.ok).toBe(false);
+    expect(!missingSubject.ok && missingSubject.type).toBe('satellite_certificate_not_allowed');
+    expect(!missingSubject.ok && missingSubject.message).toContain('clientCertSubject');
+
+    // Fingerprint matches, subject mismatched → rejected.
+    const wrongSubject = resolveSatelliteClaim({
+      registry,
+      principal,
+      headers: claimHeaders,
+      clientCert: { source: 'tls_peer', fingerprintSha256: FINGERPRINT, subject: 'CN=evil' },
+    });
+    expect(wrongSubject.ok).toBe(false);
+    expect(!wrongSubject.ok && wrongSubject.type).toBe('satellite_certificate_not_allowed');
+
+    // All configured attributes match → allowed.
+    const allMatch = resolveSatelliteClaim({
+      registry,
+      principal,
+      headers: claimHeaders,
+      clientCert: { source: 'tls_peer', fingerprintSha256: FINGERPRINT, subject: SUBJECT },
+    });
+    expect(allMatch.ok).toBe(true);
+    expect(allMatch.ok && allMatch.value.satellite.auth.certBound).toBe(true);
+  });
+
+  it('accepts a trusted-proxy-derived identity matching all bindings', () => {
+    const registry = mtlsRegistry({
+      clientCertFingerprintSha256: FINGERPRINT,
+      clientCertSpkiSha256: SPKI,
+    });
+    const result = resolveSatelliteConfigPull({
+      registry,
+      principal,
+      satelliteId: 'pi-voice',
+      endpointId: 'wyoming-voice',
+      claimType: 'voice-pi',
+      clientCert: { source: 'trusted_proxy', fingerprintSha256: FINGERPRINT, spkiSha256: SPKI },
+    });
+    expect(result.ok).toBe(true);
+  });
+});
+
+// ── Sprint-10 H4: per-endpoint credentials must isolate endpoints ──
+
+describe('satellite per-endpoint credential isolation (Sprint-10 H4)', () => {
+  const keyA = 'satellite-key-alpha-0001';
+  const keyB = 'satellite-key-beta-0002';
+  const principalA = principalFromSatelliteApiKeyToken(keyA);
+  const principalB = principalFromSatelliteApiKeyToken(keyB);
+
+  function twoEndpointRegistry() {
+    return parseSatelliteRegistryConfig({
+      schemaVersion: 1,
+      enabled: true,
+      satellites: [
+        {
+          satelliteId: 'sat-a',
+          displayName: 'Satellite A',
+          mobility: 'static',
+          endpoints: [
+            {
+              endpointId: 'endpoint-a',
+              displayName: 'Endpoint A',
+              claimTypes: ['claim-a'],
+              promptChannelType: 'voice_satellite',
+              auth: { mode: 'api_key', apiKeyPrincipalIds: [principalA.id] },
+              defaultIdentity: {
+                authorId: 'user-a',
+                authorName: 'User A',
+                canonicalContactId: 'contact-a',
+                channelPrivacy: 'private',
+              },
+              maxCapabilities: ['text'],
+            },
+          ],
+        },
+        {
+          satelliteId: 'sat-b',
+          displayName: 'Satellite B',
+          mobility: 'static',
+          endpoints: [
+            {
+              endpointId: 'endpoint-b',
+              displayName: 'Endpoint B',
+              claimTypes: ['claim-b'],
+              promptChannelType: 'voice_satellite',
+              auth: { mode: 'api_key', apiKeyPrincipalIds: [principalB.id] },
+              defaultIdentity: {
+                authorId: 'user-b',
+                authorName: 'User B',
+                canonicalContactId: 'contact-b',
+                channelPrivacy: 'private',
+              },
+              maxCapabilities: ['text'],
+            },
+          ],
+        },
+      ],
+    });
+  }
+
+  function headersFor(satelliteId: string, endpointId: string, claimType: string) {
+    return {
+      'x-psfn-satellite-claim-type': claimType,
+      'x-psfn-satellite-id': satelliteId,
+      'x-psfn-satellite-endpoint-id': endpointId,
+      'x-psfn-satellite-session-id': 'session-1',
+    };
+  }
+
+  it('derives DISTINCT principal ids from distinct satellite keys', () => {
+    expect(principalA.id).not.toBe(principalB.id);
+    expect(principalA.scope).toBe('satellite');
+  });
+
+  it('admits each key only on its own endpoint; header swap cannot impersonate the other endpoint', () => {
+    const registry = twoEndpointRegistry();
+
+    const ownEndpoint = resolveSatelliteClaim({
+      registry,
+      principal: principalA,
+      headers: headersFor('sat-a', 'endpoint-a', 'claim-a'),
+    });
+    expect(ownEndpoint.ok).toBe(true);
+    expect(ownEndpoint.ok && ownEndpoint.value.authorId).toBe('user-a');
+
+    // Key A holder swaps the satellite headers to claim endpoint B's
+    // defaultIdentity → rejected.
+    const impersonation = resolveSatelliteClaim({
+      registry,
+      principal: principalA,
+      headers: headersFor('sat-b', 'endpoint-b', 'claim-b'),
+    });
+    expect(impersonation.ok).toBe(false);
+    expect(!impersonation.ok && impersonation.type).toBe('satellite_principal_not_allowed');
+  });
+
+  it('never admits satellite-scoped principals on endpoints without an explicit principal allowlist', () => {
+    const registry = parseSatelliteRegistryConfig({
+      schemaVersion: 1,
+      enabled: true,
+      satellites: [
+        {
+          satelliteId: 'open-sat',
+          displayName: 'Open Satellite',
+          mobility: 'static',
+          endpoints: [
+            {
+              endpointId: 'open-endpoint',
+              displayName: 'Open Endpoint',
+              claimTypes: ['open-claim'],
+              promptChannelType: 'voice_satellite',
+              auth: { mode: 'api_key' },
+              defaultIdentity: {
+                authorId: 'user-open',
+                authorName: 'User Open',
+                canonicalContactId: 'contact-open',
+                channelPrivacy: 'private',
+              },
+              maxCapabilities: ['text'],
+            },
+          ],
+        },
+      ],
+    });
+
+    const result = resolveSatelliteClaim({
+      registry,
+      principal: principalA,
+      headers: headersFor('open-sat', 'open-endpoint', 'open-claim'),
+    });
+    expect(result.ok).toBe(false);
+    expect(!result.ok && result.type).toBe('satellite_principal_not_allowed');
+
+    // The shared operator key (general scope) still passes endpoints without
+    // an allowlist — pre-existing behavior for single-key deployments.
+    const sharedKey = resolveSatelliteClaim({
+      registry,
+      principal,
+      headers: headersFor('open-sat', 'open-endpoint', 'open-claim'),
+    });
+    expect(sharedKey.ok).toBe(true);
+  });
+});
+
+describe('satellite registry unknown-key rejection (H9/T1, 03-M2)', () => {
+  const FINGERPRINT = 'a1'.repeat(32);
+
+  function registryWith(satelliteOverride: (base: Record<string, unknown>) => Record<string, unknown>) {
+    const baseSatellite: Record<string, unknown> = {
+      satelliteId: 'pi-voice',
+      displayName: 'Kitchen Voice Pi',
+      mobility: 'static',
+      endpoints: [
+        {
+          endpointId: 'wyoming-voice',
+          displayName: 'Wyoming Voice Endpoint',
+          claimTypes: ['voice-pi'],
+          promptChannelType: 'voice_satellite',
+          auth: { mode: 'mtls', clientCertFingerprintSha256: FINGERPRINT, apiKeyPrincipalIds: ['api-key-pi'] },
+          defaultIdentity: {
+            authorId: 'primary-user',
+            authorName: 'Primary User',
+            canonicalContactId: 'contact-primary-user',
+            channelPrivacy: 'private',
+          },
+          maxCapabilities: ['text'],
+        },
+      ],
+    };
+    return { schemaVersion: 1, enabled: true, satellites: [satelliteOverride(baseSatellite)] };
+  }
+
+  it('loads a VALID config exercising the C1/H4 per-endpoint credential keys (non-regression)', () => {
+    // Proves the unknown-key allowlist did NOT break the just-landed auth work:
+    // every credential key (apiKeyPrincipalIds + the clientCert* bindings) is
+    // legitimately read and must pass.
+    const registry = parseSatelliteRegistryConfig(registryWith((base) => {
+      (base.endpoints as Record<string, unknown>[])[0].auth = {
+        mode: 'mtls',
+        apiKeyPrincipalIds: ['api-key-pi'],
+        clientCertFingerprintSha256: FINGERPRINT,
+        clientCertSpkiSha256: 'b2'.repeat(32),
+        clientCertSubject: 'CN=pi-voice, O=PSFN',
+        clientCertSan: 'DNS:pi-voice.local',
+      };
+      return base;
+    }));
+    expect(registry.satellites[0]?.endpoints[0]?.auth).toMatchObject({
+      mode: 'mtls',
+      apiKeyPrincipalIds: ['api-key-pi'],
+      clientCertFingerprintSha256: FINGERPRINT,
+    });
+  });
+
+  it('throws naming a misspelled credential key in auth (a typo must never silently drop a binding)', () => {
+    expect(() => parseSatelliteRegistryConfig(registryWith((base) => {
+      (base.endpoints as Record<string, unknown>[])[0].auth = {
+        mode: 'mtls',
+        clientCertFingerprintSha256: FINGERPRINT,
+        apiKeyPrincipleIds: ['api-key-pi'], // typo: Principle vs Principal
+      };
+      return base;
+    }))).toThrow(/unknown key\(s\): "apiKeyPrincipleIds"/);
+  });
+
+  it('throws naming a misspelled channelPrivacy key in defaultIdentity', () => {
+    expect(() => parseSatelliteRegistryConfig(registryWith((base) => {
+      (base.endpoints as Record<string, unknown>[])[0].defaultIdentity = {
+        authorId: 'primary-user',
+        authorName: 'Primary User',
+        canonicalContactId: 'contact-primary-user',
+        chanelPrivacy: 'private', // typo
+      };
+      return base;
+    }))).toThrow(/unknown key\(s\): "chanelPrivacy"/);
+  });
+
+  it('throws on an unknown top-level satellite key', () => {
+    expect(() => parseSatelliteRegistryConfig(registryWith((base) => {
+      base.mobilty = 'static'; // typo
+      return base;
+    }))).toThrow(/unknown key\(s\): "mobilty"/);
+  });
+
+  it('throws on an unknown root registry key', () => {
+    expect(() => parseSatelliteRegistryConfig({
+      schemaVersion: 1,
+      enabled: true,
+      sattelites: [], // typo for satellites
+    })).toThrow(/unknown key\(s\): "sattelites"/);
   });
 });

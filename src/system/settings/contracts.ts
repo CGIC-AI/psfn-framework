@@ -39,6 +39,52 @@ export const REMOVED_RUNTIME_SETTINGS_KEYS = [
 
 export const MODEL_SLOT_KEY_PATTERN = /^[A-Za-z0-9._-]+$/;
 
+// Characters permitted in the Obsidian CLI executable path (bead lget / w3pj).
+// Same rule the vault runtime enforces in
+// src/boundary/integrations/vault/ops.ts (validateVaultCliPath): letters,
+// digits, dot, underscore, hyphen and forward slash only — every shell
+// metacharacter and whitespace is rejected. `obsidianCliPath` is admin-mutable
+// through the settings form, and is later handed to a process spawn, so it must
+// never be able to carry a shell-injection payload. This is defence-in-depth at
+// the config-write boundary (the runtime spawn is also gated and uses
+// shell:false / execFileSync).
+const OBSIDIAN_CLI_PATH_ALLOWED = /^[A-Za-z0-9._/-]+$/;
+
+/**
+ * Validate an admin-supplied `obsidianCliPath` before it is persisted to
+ * settings.json. Rejects shell metacharacters/whitespace and requires either a
+ * bare command name or an absolute path. Returns the value unchanged when valid.
+ *
+ * NOTE(w3pj): the fully-correct fix is to relocate `obsidianCliPath` out of the
+ * mutable settings.json into an admin-reviewed owner file. That relocation is
+ * blocked from this change's allowed file set: the only writers of
+ * `config.obsidianCliPath` live in out-of-scope assembly seams
+ * (bootstrap-helpers.ts / runtime-config.ts / startup-context.ts), and the
+ * settings contract guard requires this `surface: 'advanced'` field to remain
+ * runtime-owned (would need settings-contract.ts / settings-garden-contract.ts).
+ * Until then, this boundary validation prevents the settings form from ever
+ * storing an injection payload. See bead w3pj.
+ */
+export function validateObsidianCliPathSetting(value: string): string {
+  if (typeof value !== 'string' || value.length === 0) {
+    throw new Error('obsidianCliPath must be a non-empty string');
+  }
+  if (!OBSIDIAN_CLI_PATH_ALLOWED.test(value)) {
+    throw new Error(
+      `obsidianCliPath '${value}' contains characters outside [A-Za-z0-9._/-] `
+      + '(shell metacharacters and whitespace are not allowed)',
+    );
+  }
+  const isBareName = !value.includes('/');
+  const isAbsolute = value.startsWith('/');
+  if (!isBareName && !isAbsolute) {
+    throw new Error(
+      `obsidianCliPath '${value}' must be an absolute path or a bare command name`,
+    );
+  }
+  return value;
+}
+
 export interface SettingsDomainSplit {
   runtime: EditableSettings;
   models: EditableSettings;

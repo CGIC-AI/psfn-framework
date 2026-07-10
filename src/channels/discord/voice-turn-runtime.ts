@@ -2,6 +2,7 @@ import { AudioPlayerStatus, createAudioResource, EndBehaviorType, entersState } 
 import prism from 'prism-media';
 import { Readable } from 'node:stream';
 import type { SubstrateMessage } from '../../shared/contracts/runtime.js';
+import type { IntakeEnvelopeSnapshot } from '../../shared/contracts/intake-envelope.js';
 import {
   buildFallbackOrder,
   runWithVoiceStageBudget,
@@ -224,6 +225,27 @@ export async function handleVoiceUtterance(
     const handler = runtime.getHandler();
     if (!handler) return;
 
+    // htm9.9: a transcript becomes prompt text, so audio is a real injection
+    // channel — screen it through the intake firewall (sourceClass
+    // 'audio_transcript'). Shadow mode records the envelope without altering
+    // the transcript; enforce-mode quarantine substitutes the fixed
+    // withheld-content placeholder.
+    let effectiveTranscript = transcript;
+    let intakeEnvelopes: IntakeEnvelopeSnapshot[] | null = null;
+    if (runtime.intakeScreening) {
+      const screened = await runtime.intakeScreening.screen(transcript, {
+        sourceClass: 'audio_transcript',
+        origin: {
+          ref: `discord-voice:${turn.channel.id}:${turnId}`.slice(0, 2048),
+          detail: `speaker:${runtime.targetUserId}`.slice(0, 512),
+        },
+        scope: 'context',
+      });
+      effectiveTranscript = screened.effectiveText;
+      intakeEnvelopes = [screened.snapshot];
+    }
+    assertActiveVoiceTurn(runtime, turn);
+
     const member = turn.channel.members.get(runtime.targetUserId);
     const message: SubstrateMessage = {
       id: `voice-${Date.now()}`,
@@ -232,8 +254,9 @@ export async function handleVoiceUtterance(
       isDirectMessage: false,
       authorId: runtime.targetUserId,
       authorName: member?.displayName ?? member?.user.username ?? 'Voice User',
-      content: transcript,
+      content: effectiveTranscript,
       timestamp: new Date(),
+      ...(intakeEnvelopes ? { routing: { intakeEnvelopes } } : {}),
     };
 
     await runtime.eventBus.emit('message.received', { message });

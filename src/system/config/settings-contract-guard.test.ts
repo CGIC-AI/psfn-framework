@@ -86,6 +86,7 @@ describe('settings contract guard', () => {
       { rawEditorKey: 'skills', subsystemId: 'skills', ownerFile: 'skills.json' },
       { rawEditorKey: 'scheduler', subsystemId: 'scheduler', ownerFile: 'scheduler.json' },
       { rawEditorKey: 'trust-policy', subsystemId: 'trustPolicy', ownerFile: 'trust-policy.json' },
+      { rawEditorKey: 'intake-policy', subsystemId: 'intakePolicy', ownerFile: 'intake-policy.json' },
       { rawEditorKey: 'capabilities', subsystemId: 'capabilities', ownerFile: 'capability-tier.json' },
       { rawEditorKey: 'charge-policy', subsystemId: 'chargePolicy', ownerFile: 'charge-policy.json' },
       { rawEditorKey: 'backup', subsystemId: 'backup', ownerFile: 'backup.json' },
@@ -117,6 +118,16 @@ describe('settings contract guard', () => {
     expect(contractData.subsystems.chargePolicy).toEqual({
       id: 'chargePolicy',
       ownerFile: 'charge-policy.json',
+      mode: 'raw_only',
+    });
+  });
+
+  it('declares intake-policy as a raw-only owner-file subsystem', () => {
+    const contractData = buildSettingsContractData();
+
+    expect(contractData.subsystems.intakePolicy).toEqual({
+      id: 'intakePolicy',
+      ownerFile: 'intake-policy.json',
       mode: 'raw_only',
     });
   });

@@ -88,6 +88,7 @@ export class GatewayApiRuntime implements ApiServerRuntime {
         request: input.request,
         principal: input.principal,
         headers: input.headers,
+        ...(input.clientCert ? { clientCert: input.clientCert } : {}),
         timeoutMs: computeAgentChatTurnTimeoutMs(this.chatRequestTimeoutMs),
       }, this.chatRequestTimeoutMs);
     } finally {

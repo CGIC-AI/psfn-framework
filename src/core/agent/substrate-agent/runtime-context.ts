@@ -2,6 +2,7 @@ import { isRecord } from '../../../shared/utils/types.js';
 import type { AgentTool } from '../../../boundary/pi-agent/index.js';
 import type {
   GeneratedMessageProvenanceMetadata,
+  RequesterProvenance,
   SubstrateMessage,
   ResponseStyle,
 } from '../../../shared/contracts/runtime.js';
@@ -165,6 +166,29 @@ export interface ResolvedAuthorContext {
 
 function isInternalJournalChannel(channelId: string): boolean {
   return channelId === 'internal:heartbeat' || channelId.startsWith('internal:reflection:');
+}
+
+/**
+ * Derive requester provenance from an already-resolved author context. This is
+ * the SINGLE source of the human-vs-machine origin signal that human-in-the-loop
+ * effector gates read (`world.control` Gate 2). It reuses the existing
+ * `speakerRole` decision made in {@link resolveAuthorContext} rather than adding a
+ * parallel flag at every return site:
+ *   - speakerRole 'user'   → a live human is driving the turn ('human')
+ *   - speakerRole 'system' on an `internal:` channel → scheduler-driven
+ *     heartbeat/reflection ('self_directed')
+ *   - speakerRole 'system' otherwise → system-injected turn ('system')
+ * Fail closed: only 'human' unlocks human-gated effectors; both machine buckets
+ * are refused even when `trustLevel` is 'primary' for scoping.
+ */
+export function resolveRequesterProvenance(
+  authorContext: Pick<ResolvedAuthorContext, 'speakerRole'>,
+  message: Pick<SubstrateMessage, 'channelId'>,
+): RequesterProvenance {
+  if (authorContext.speakerRole === 'user') {
+    return 'human';
+  }
+  return message.channelId.startsWith('internal:') ? 'self_directed' : 'system';
 }
 
 function resolveMessageChannelMeta(message: Pick<SubstrateMessage, 'isDirectMessage' | 'routing'>): ChannelMeta | undefined {
@@ -671,6 +695,21 @@ export function resolvePromptUserName(message: SubstrateMessage, contact?: Conta
   return 'User';
 }
 
+/**
+ * Sprint-10 privacy regression 07-M1: an untracked / approval-pending / unbound
+ * speaker has no verified identity — their `authorName` is a self-asserted channel
+ * label, not a resolved contact. Rendering it bare let a name like
+ * "System Administrator" become the speaker's prompt identity and impersonate
+ * authority. This renders the self-asserted name explicitly tagged `(unverified)`,
+ * or a generic "an unrecognized person" when no name was asserted, so the model
+ * never mistakes an unverified channel label for a trusted identity.
+ */
+export function resolveUnverifiedSpeakerName(message: SubstrateMessage): string {
+  const authorName = message.authorName.trim();
+  if (authorName) return `${authorName} (unverified)`;
+  return 'an unrecognized person';
+}
+
 async function resolveGeneratedMessageSourceContext(input: {
   message: SubstrateMessage;
   contactStore: ContactStorePort | null | undefined;
@@ -866,9 +905,13 @@ export async function resolveAuthorContext(input: {
 
   if (input.contactTracking && trackingMode === 'approval') {
     const buildUntrackedSpeakerContext = (): ResolvedAuthorContext => ({
-      trustLevel: 'regular',
+      // Sprint-10 privacy regression H7/07-M1: an approval-pending untracked speaker
+      // is NOT persisted and has no verified identity. They resolve at the PUBLIC
+      // trust floor (never 'regular', which would clear the personal-sensitivity
+      // ceiling) and their self-asserted channel name is rendered marked-unverified.
+      trustLevel: 'public',
       speakerRole: 'user',
-      resolvedUserName: resolvePromptUserName(input.message),
+      resolvedUserName: resolveUnverifiedSpeakerName(input.message),
       continuitySubjectKey: resolveContinuitySubjectKey({
         subjectIdentityKey: input.message.authorId,
         authorId: input.message.authorId,

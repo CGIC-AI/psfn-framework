@@ -853,6 +853,58 @@ describe('DiscordVoiceRuntime', () => {
     expect(connectorMocks.ttsConnector.synthesizeStream).not.toHaveBeenCalled();
   });
 
+  // htm9.9: a transcript becomes prompt text, so audio is a real injection
+  // channel — the voice turn message must carry the screened transcript and
+  // the intake envelope snapshot.
+  it('screens voice transcripts through the intake firewall before the handler sees them', async () => {
+    connectorMocks.sttConnector.startStream.mockResolvedValue({
+      transcripts: makeFinalTranscriptStream('hello world'),
+      writeAudio: vi.fn(async () => {}),
+      endInput: vi.fn(async () => {}),
+      cancel: vi.fn(async () => {}),
+    });
+
+    const eventBus = new EventBus();
+    const seenMessages: any[] = [];
+    const handler = vi.fn(async (message: any) => {
+      seenMessages.push(message);
+      return {
+        content: '   ',
+        channelId: 'discord-voice:guild-1',
+        metadata: { model: 'test-model', inputTokens: 1, outputTokens: 1, durationMs: 1 },
+      };
+    });
+    const { runtime } = makeRuntimeHarness(eventBus, handler);
+    (runtime as any).decodeOpusToPcm = vi.fn(async () => Buffer.alloc(40_000, 1));
+
+    const screen = vi.fn(async (_text: string, input: any) => ({
+      effectiveText: '[screened transcript]',
+      snapshot: {
+        envelopeId: 'env-voice-1',
+        sourceClass: input.sourceClass,
+        sourceRiskTier: 'standard',
+        state: 'released',
+        riskLabels: [],
+        subject: { kind: 'body' },
+      },
+    }));
+    (runtime as any).intakeScreening = { mode: 'enforce', screen };
+
+    await (runtime as any).handleUtterance();
+
+    expect(screen).toHaveBeenCalledTimes(1);
+    expect(screen.mock.calls[0]![0]).toBe('hello world');
+    expect(screen.mock.calls[0]![1]).toMatchObject({
+      sourceClass: 'audio_transcript',
+      scope: 'context',
+    });
+    expect(seenMessages).toHaveLength(1);
+    expect(seenMessages[0].content).toBe('[screened transcript]');
+    expect(seenMessages[0].routing?.intakeEnvelopes).toEqual([
+      expect.objectContaining({ sourceClass: 'audio_transcript', state: 'released' }),
+    ]);
+  });
+
   it('emits playback observations and structured turn errors when playback fails', async () => {
     connectorMocks.sttConnector.startStream.mockResolvedValue({
       transcripts: makeFinalTranscriptStream('hello world'),

@@ -9,7 +9,7 @@ import type {
   HomeAssistantState,
 } from '../protocol.js';
 import { GatewayErrors } from '../protocol.js';
-import type { UrlPolicyConfig, UrlPolicyLane } from '../url-policy.js';
+import { effectiveUrlPort, type UrlPolicyConfig, type UrlPolicyLane } from '../url-policy.js';
 import type { GatewayMethodRuntime, GatedMethodDescriptor } from './types.js';
 import { registerGatedDescriptors } from './register.js';
 import { resolveOptionalEnvCredential } from '../../custody/credential-vault.js';
@@ -98,10 +98,14 @@ function buildHomeAssistantUrl(baseUrl: URL, apiPath: string): string {
 }
 
 function buildHomeAssistantUrlPolicy(baseUrl: URL): UrlPolicyConfig {
+  // Pin the allowlist to host AND effective port (Sprint-10 01-M2): a redirect
+  // to another port of the Home Assistant host must not stay "in allowlist"
+  // and replay the Bearer token. baseUrl.hostname keeps IPv6 brackets, which
+  // the allowlist entry parser understands ("[::1]:8123").
   return {
     allowHttp: baseUrl.protocol === 'http:',
     allowInternalNetwork: true,
-    hostAllowlist: [baseUrl.hostname],
+    hostAllowlist: [`${baseUrl.hostname}:${effectiveUrlPort(baseUrl)}`],
   };
 }
 
@@ -274,6 +278,7 @@ async function requestHomeAssistantJson(
         headers,
         options.method,
         requestBody,
+        MAX_HA_RESPONSE_BYTES,
         runtime,
         resolveDnsResolver(runtime),
       ));

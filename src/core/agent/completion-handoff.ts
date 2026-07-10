@@ -27,6 +27,11 @@ export type {
   CompletionHandoffStatus,
 } from '../../shared/contracts/completion-handoff.js';
 
+// TODO(htm9.2-followup): subagent completion summaries fold back into the
+// main agent with lifecycle audit but no content-risk gate. Screen the
+// summary text through the intake screening service (sourceClass
+// 'subagent_output'; derive the envelope from the ingested sources' envelopes
+// per the CaMeL taint rule) before it is emitted toward session context.
 const MAX_SUMMARY_CHARS = 700;
 const MAX_TRACKED_DEDUPE_KEYS = 4096;
 

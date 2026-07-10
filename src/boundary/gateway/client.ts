@@ -12,9 +12,33 @@ import {
   createWebSocketRpcClient,
 } from './transport.js';
 import { createComponentLogger } from '../../shared/logger.js';
+import { getActiveCanaryToken, CANARY_CARRIER_PARAM_KEY } from '../../core/cogsec/canary/canary-token.js';
+import { isEgressCanaryMethod } from '../../core/cogsec/canary/egress-scan.js';
 import { BoundedQueue, QueueOverflowError, type QueueOverflowPolicy } from './backpressure.js';
 import { registerReverseGatewayMethods } from './reverse-methods.js';
 const log = createComponentLogger('GatewayClient');
+
+/**
+ * htm9.18: attach the live session canary token to outbound egress requests so
+ * the gateway egress guard can scan for a prompt leak. Only egress methods and
+ * only when a turn-scoped canary context is active; the raw token rides in a
+ * reserved param the gateway strips before the handler and never logs. LLM and
+ * other non-egress calls are untouched (the canary lives in the prompt there
+ * legitimately).
+ */
+function attachCanaryToEgressRequest<T>(request: T): T {
+  const rpc = request as unknown as { method?: unknown; params?: unknown };
+  if (typeof rpc.method !== 'string' || !isEgressCanaryMethod(rpc.method)) {
+    return request;
+  }
+  const token = getActiveCanaryToken();
+  if (!token) return request;
+  if (!rpc.params || typeof rpc.params !== 'object' || Array.isArray(rpc.params)) {
+    return request;
+  }
+  (rpc.params as Record<string, unknown>)[CANARY_CARRIER_PARAM_KEY] = token;
+  return request;
+}
 import type { JournalIntegrityVerificationResult } from '../../persistence/journals/journal-utils.js';
 import type {
   ApiChatCompletionCancelRpcParams,
@@ -26,6 +50,7 @@ import type {
   ApiTelemetryIngestRpcResult,
 } from '../../channels/api/types.js';
 import type { SessionIntegrityProvider } from '../../persistence/sessions/store.js';
+import type { VisionIntakeImageScreenResult } from './intake/vision-screener.js';
 import type { JournalEntry } from '../../core/session/types.js';
 import type { ConfirmationResolveResult } from '../../system/capabilities/confirmation-queue.js';
 import type {
@@ -55,6 +80,7 @@ import type {
   WebFetchResult,
   WebFetchBinaryResult,
   WebRequestBinaryResult,
+  WebSearchResult,
   WebFetchLane,
   ShellExecResult,
   ShardBackendRequestParams,
@@ -236,7 +262,7 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
     // server handles incoming requests from gateway like discord.handleMessage)
     this.rpcInstance = new JSONRPCServerAndClient(
       new JSONRPCServer(),
-      new JSONRPCClient((request) => { this.conn.send(request); }),
+      new JSONRPCClient((request) => { this.conn.send(attachCanaryToEgressRequest(request)); }),
     );
 
     // Route incoming messages
@@ -554,6 +580,18 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
     return result.content;
   }
 
+  async webSearch(
+    query: string,
+    maxResults?: number,
+  ): Promise<WebSearchResult> {
+    return await this.rpcInstance.request('web.search', {
+      query,
+      ...(typeof maxResults === 'number' && Number.isFinite(maxResults)
+        ? { maxResults: Math.max(1, Math.floor(maxResults)) }
+        : {}),
+    }) as WebSearchResult;
+  }
+
   async webFetchBinary(
     url: string,
     options: {
@@ -570,6 +608,32 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
         : {}),
       ...(options.headers ? { headers: options.headers } : {}),
     }) as WebFetchBinaryResult;
+  }
+
+  /**
+   * htm9.8: screens one inbound image through the gateway's vision intake
+   * screener BEFORE it may become a vision block in the main model context.
+   * The gateway answers with the decision (withheld / promptBlock / notice);
+   * flagged transcripts never cross this boundary.
+   */
+  async screenImageIntake(input: {
+    imageUrl?: string;
+    imageBase64?: string;
+    mimeType?: string;
+    originRef: string;
+    originDetail?: string;
+    subjectIndex?: number;
+    canonicalContactId?: string;
+  }): Promise<VisionIntakeImageScreenResult> {
+    return await this.rpcInstance.request('intake.screen_image', {
+      ...(input.imageUrl ? { imageUrl: input.imageUrl } : {}),
+      ...(input.imageBase64 ? { imageBase64: input.imageBase64 } : {}),
+      ...(input.mimeType ? { mimeType: input.mimeType } : {}),
+      originRef: input.originRef,
+      ...(input.originDetail ? { originDetail: input.originDetail } : {}),
+      ...(typeof input.subjectIndex === 'number' ? { subjectIndex: input.subjectIndex } : {}),
+      ...(input.canonicalContactId ? { canonicalContactId: input.canonicalContactId } : {}),
+    }) as VisionIntakeImageScreenResult;
   }
 
   async webRequestBinary(

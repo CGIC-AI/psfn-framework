@@ -1,5 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import Database from 'better-sqlite3';
+import { createIntakeSinkGate } from '../../core/cogsec/intake/sink-gates.js';
+import { validateIntakePolicy } from '../../system/config/intake-policy-config.js';
 import * as sqliteVec from 'sqlite-vec';
 import { MemoryCandidacyPolicyError, MemoryWriter, MemoryWritePolicyError } from './writer.js';
 import type { MemoryWriteOptions } from './writer.js';
@@ -113,6 +117,50 @@ describe('MemoryWriter', () => {
     writer = new MemoryWriter(store as unknown as MemoryStorePort, embeddings);
   });
 
+  describe('intake sink gate (htm9.3)', () => {
+    function seedGate(mode: 'shadow' | 'enforce', mutate?: (raw: Record<string, unknown>) => void) {
+      const seed = JSON.parse(
+        readFileSync(join(process.cwd(), 'config', 'intake-policy.seed.json'), 'utf8'),
+      ) as Record<string, unknown>;
+      const raw = { ...seed, mode };
+      mutate?.(raw);
+      return createIntakeSinkGate({
+        policy: validateIntakePolicy(raw, 'intake-policy.test'),
+        actor: 'test:intake-sink-gate',
+      });
+    }
+
+    it('rejects writes covered by a quarantined intake envelope in enforce mode', async () => {
+      writer.intakeSinkGateProvider = () => seedGate('enforce');
+      await expect(writer.write({
+        text: 'An innocuous-looking fact extracted from held content.',
+        type: 'semantic',
+        intakeEnvelopes: [{
+          envelopeId: 'held-envelope-001',
+          sourceClass: 'web_fetch',
+          sourceRiskTier: 'untrusted',
+          state: 'quarantined',
+          riskLabels: ['injection/override_attempt'],
+          subject: { kind: 'body' },
+        }],
+      })).rejects.toBeInstanceOf(MemoryCandidacyPolicyError);
+      expect(store.insertMemory).not.toHaveBeenCalled();
+    });
+
+    it('never blocks in shadow mode and honors the explicit unscreened policy default', async () => {
+      writer.intakeSinkGateProvider = () => seedGate('shadow');
+      const shadowResult = await writer.write({ text: 'Ordinary fact.', type: 'semantic' });
+      expect(shadowResult.action).toBe('created');
+
+      writer.intakeSinkGateProvider = () => seedGate('enforce', (raw) => {
+        const sinkGates = raw.sinkGates as { sinks: Record<string, { unscreened: string }> };
+        sinkGates.sinks.memory_write.unscreened = 'deny';
+      });
+      await expect(writer.write({ text: 'Another ordinary fact.', type: 'semantic' }))
+        .rejects.toBeInstanceOf(MemoryCandidacyPolicyError);
+    });
+  });
+
   describe('write()', () => {
     it('inserts a new memory with correct fields', async () => {
       const opts: MemoryWriteOptions = {
@@ -172,6 +220,33 @@ describe('MemoryWriter', () => {
         toolName: 'memory_write',
         toolCallId: 'call-99',
       });
+    });
+
+    it('stamps the originating intake envelope id as a canonical provenance ref (htm9.1)', async () => {
+      const result = await writer.write({
+        text: 'Fact extracted from a screened web fetch',
+        type: 'semantic',
+        provenanceRefs: ['session:chan-1:42'],
+        intakeEnvelopeId: 'e1f5c1a2-4242-4141-9999-abcdefabcdef',
+      });
+
+      expect(result.memory.provenanceRefs).toEqual(expect.arrayContaining([
+        'session:chan-1:42',
+        'intake-envelope:e1f5c1a2-4242-4141-9999-abcdefabcdef',
+      ]));
+      const [insertedMemory] = store.insertMemory.mock.calls[0];
+      expect(insertedMemory.provenanceRefs).toContain(
+        'intake-envelope:e1f5c1a2-4242-4141-9999-abcdefabcdef',
+      );
+    });
+
+    it('fails closed on a malformed intake envelope id instead of dropping it', async () => {
+      await expect(writer.write({
+        text: 'Fact with a broken envelope stamp',
+        type: 'semantic',
+        intakeEnvelopeId: 'not a valid id!!',
+      })).rejects.toThrow(/Invalid intake envelope: id/);
+      expect(store.insertMemory).not.toHaveBeenCalled();
     });
 
     it('uses default values for optional fields', async () => {
@@ -842,6 +917,18 @@ describe('MemoryWriter', () => {
       expect(result.memory.text).toBe('A brand new fact');
       expect(result.memory.sourceRef).toBe('tool:memory_upsert');
       expect(store.insertMemory).toHaveBeenCalledOnce();
+    });
+
+    it('stamps the originating intake envelope id on upsert writes (htm9.1)', async () => {
+      const result = await writer.upsert({
+        text: 'Upserted fact from a screened document',
+        type: 'semantic',
+        intakeEnvelopeId: 'a1b2c3d4-1111-2222-3333-444455556666',
+      });
+
+      expect(result.memory.provenanceRefs).toContain(
+        'intake-envelope:a1b2c3d4-1111-2222-3333-444455556666',
+      );
     });
 
     it('applies durable retention semantics during upsert', async () => {

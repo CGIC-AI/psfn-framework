@@ -27,6 +27,7 @@ import type { MetacognitiveFlag } from '../../self-model/metacognition.js';
 import type { ContextBudgetTurnCharacteristics } from '../../../shared/context-budget.js';
 import type { ConversationScopeSpeaker } from '../../session/conversation-scope.js';
 import type { ImageVisionReviewer } from '../../../primitives/images/types.js';
+import type { VisionIntakeImageScreenerPort } from './vision-attachments.js';
 import type { ObserverEvalSidecarRuntime } from '../../eval/observer-sidecar/types.js';
 import type { FatigueBudgetPort } from '../fatigue/fatigue-budget.js';
 
@@ -145,6 +146,8 @@ export interface TurnExecutionAdapterOptions {
   companionPresence?: CompanionPresenceTurnPort | null;
   llmClient: LLMProviderPort;
   imageVisionReviewer: ImageVisionReviewer | null;
+  /** htm9.8 vision intake screener; null when the firewall is not wired. */
+  visionIntakeScreener: VisionIntakeImageScreenerPort | null;
   sessionManager: SessionManager;
   config: CoreSubstrateConfig;
   runtimeMode: RuntimeMode;
@@ -184,6 +187,7 @@ export function createTurnExecutionRuntimeAdapter(
     companionPresence: options.companionPresence ?? null,
     llmClient: options.llmClient,
     imageVisionReviewer: options.imageVisionReviewer,
+    visionIntakeScreener: options.visionIntakeScreener,
     sessionManager: options.sessionManager,
     config: options.config,
     runtimeMode: options.runtimeMode,

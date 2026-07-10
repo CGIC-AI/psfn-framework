@@ -87,6 +87,10 @@ import {
   normalizeToolObservation,
   type ToolObservationInput,
 } from './tool-observation.js';
+import { buildSessionMetadataWithIntakeScreening } from './intake-screening-metadata.js';
+// Type-only structural port: the session layer never imports cogsec runtime code.
+import type { IntakeScreeningService } from '../cogsec/intake/screening.js';
+import type { IntakeSinkGate } from '../cogsec/intake/sink-gates.js';
 import type { ContextManifestMemorySeed } from './context-manifest.js';
 import {
   applyFocusCompactionRanges,
@@ -195,6 +199,22 @@ export class SessionManager {
    * default) means every channel is unwindowed — byte-identical behavior.
    */
   private roomContentWindowPort: RoomContentWindowPort | null = null;
+  /**
+   * Intake firewall screening for persisted tool observations (htm9.2).
+   * Assigned by composition (agent main) from intake-policy.json; null means
+   * the firewall is off or predates this wiring — recording is unchanged.
+   * Must be an L1-only (synchronous) service: recordToolObservation is sync.
+   */
+  intakeScreening: Pick<IntakeScreeningService, 'mode' | 'screenSync'> | null = null;
+  /**
+   * Intake sink gate (htm9.3). Assigned by composition from
+   * intake-policy.json alongside `intakeScreening`; null means the firewall
+   * is off. Consumed at context build (prompt_assembly sink: entries whose
+   * intake envelopes fail the gate render as the withheld placeholder in
+   * enforce mode) and read by downstream memory-write gating through
+   * `sessionManager.intakeSinkGate`.
+   */
+  intakeSinkGate: IntakeSinkGate | null = null;
   private internalRoleEnvelopeLedger: InternalRoleEnvelopeLedger | null;
   private activeContextSessionId: string | null = null;
   private pendingAutoCompactions = new Map<string, Promise<void>>();
@@ -429,9 +449,30 @@ export class SessionManager {
         role: 'user',
       })
       : options.metadata;
-    const metadata = options.roleEnvelopePreview
+    const previewMetadata = options.roleEnvelopePreview
       ? buildSessionMetadataWithRoleEnvelopePreview(turnMetadata, options.roleEnvelopePreview)
       : turnMetadata;
+    // htm9.3: persist the message's intake-envelope snapshots (screened
+    // upstream by the channel adapter, e.g. Discord document ingest) onto the
+    // session entry, so context assembly and memory extraction can consult
+    // the prompt_assembly / memory_write sink gates without re-screening.
+    // Envelopes arriving with no screening service wired is an invariant
+    // break (both derive from the same intake-policy.json) — fail closed.
+    let metadata = previewMetadata;
+    if (options.intakeEnvelopes && options.intakeEnvelopes.length > 0) {
+      if (!this.intakeScreening) {
+        throw new Error(
+          'Session recording received intake envelope snapshots while intake screening is off; '
+          + 'refusing to persist unattributable screening state (fail closed)',
+        );
+      }
+      metadata = buildSessionMetadataWithIntakeScreening(previewMetadata, {
+        mode: this.intakeScreening.mode,
+        withheld: this.intakeScreening.mode === 'enforce'
+          && options.intakeEnvelopes.some((snapshot) => snapshot.state === 'quarantined'),
+        envelopes: options.intakeEnvelopes,
+      });
+    }
     const continuityKey = continuityUserId ?? authorId;
 
     // Authorship integrity guard (charter laws 17/19): internal-origin
@@ -792,9 +833,39 @@ export class SessionManager {
     const envelopeMetadata = options.roleEnvelopePreview
       ? buildSessionMetadataWithRoleEnvelopePreview(turnMetadata, options.roleEnvelopePreview)
       : turnMetadata;
-    const normalizedObservation = normalizeToolObservation(observation);
+
+    // htm9.2: screen the RAW tool output before it becomes persisted session
+    // content. What lands in the entry is the screening's effectiveText —
+    // shadow mode records the original (observe-only) while stamping the
+    // envelope snapshot; enforce-mode quarantine records only the fixed
+    // withheld-content placeholder, so raw hostile tool output never reaches
+    // context assembly, memory extraction, or the emotion-appraisal feed.
+    let observationForRecord = observation;
+    let metadataBase = envelopeMetadata;
+    if (this.intakeScreening) {
+      const toolCallSuffix = observation.toolCallId?.trim() ? `:${observation.toolCallId.trim()}` : '';
+      const screened = this.intakeScreening.screenSync(observation.content, {
+        sourceClass: 'tool_output',
+        origin: {
+          ref: `tool:${observation.toolName.trim()}${toolCallSuffix}`.slice(0, 2048),
+          detail: `channel:${resolvedChannelId}`.slice(0, 512),
+        },
+        scope: 'context',
+      });
+      observationForRecord = { ...observation, content: screened.effectiveText };
+      metadataBase = buildSessionMetadataWithIntakeScreening(envelopeMetadata, {
+        mode: screened.mode,
+        withheld: screened.withheld,
+        envelopes: [screened.snapshot],
+        // htm9.13: the marking plan rides the metadata so prompt assembly can
+        // apply it at read time (enforce) or audit it (shadow).
+        ...(screened.markingPlan ? { marking: screened.markingPlan } : {}),
+      });
+    }
+
+    const normalizedObservation = normalizeToolObservation(observationForRecord);
     const metadata = buildToolObservationMetadata(
-      envelopeMetadata,
+      metadataBase,
       normalizedObservation.metadata,
     );
 
@@ -1009,6 +1080,7 @@ export class SessionManager {
       compactionMode: 'deferred',
       pendingCompaction: this.pendingAutoCompactions.has(resolvedChannelId),
       wakeSummaryConfig: this.wakeSummaryConfig,
+      intakeSinkGate: this.intakeSinkGate,
     });
   }
 

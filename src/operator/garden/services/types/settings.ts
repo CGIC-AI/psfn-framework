@@ -15,6 +15,11 @@ import type { ProvidersRuntimeConfig } from '../../../../system/config/providers
 import type { SchedulerRuntimeConfig } from '../../../../system/config/scheduler-config.js';
 import type { SkillsRuntimeConfig } from '../../../../system/config/skills-config.js';
 import type { TrustPolicyConfig } from '../../../../system/config/trust-policy-config.js';
+import type {
+  IntakePolicyConfig,
+  IntakeSourceListName,
+  IntakeSourceListsConfig,
+} from '../../../../system/config/intake-policy-config.js';
 import type { EnvInfo } from '../../types.js';
 
 export interface SettingsConfigEditors {
@@ -90,6 +95,14 @@ export interface ConfigUpdateResult {
   status?: AdminSettingsStatus;
 }
 
+/** One add/remove mutation against the intake-policy source lists (htm9.13). */
+export interface AdminIntakeSourceListMutationInput {
+  action: 'add' | 'remove';
+  list: IntakeSourceListName;
+  pattern: string;
+  note?: string;
+}
+
 export interface AdminSettingsService {
   getSettingsData(): Promise<AdminSettingsData>;
   getSettingsContractData(): SettingsContractData;
@@ -98,6 +111,16 @@ export interface AdminSettingsService {
   saveSubConfigJson(key: string, json: string): ConfigUpdateResult;
   getChannelEnvelopeData(): AdminChannelEnvelopeData;
   saveChannelEnvelopeLabel(channelId: string, label: unknown): ConfigUpdateResult;
+  /** Intake-policy source lists (htm9.13); the htm9.11 Garden tab builds on these. */
+  getIntakeSourceLists(): IntakeSourceListsConfig;
+  mutateIntakeSourceList(input: AdminIntakeSourceListMutationInput): ConfigUpdateResult;
+  /**
+   * Read-only typed view of intake-policy.json (mode, tiers, thresholds,
+   * quarantine limits, sink gates) for the Garden Cognitive Security firewall
+   * page (htm9.11). Mutations go through the owner-file editor / source-list
+   * routes, never through this read.
+   */
+  getIntakePolicyOverview(): IntakePolicyConfig;
 }
 
 /**

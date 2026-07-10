@@ -124,6 +124,29 @@ describe('parsePlacesRegistryConfig', () => {
       /references unknown siteId "ghost_site"/u,
     );
   });
+
+  it('rejects an unknown key on a place naming the key (H9/T1)', () => {
+    const raw = exampleRegistry();
+    (raw.places as any)[0].privicy = 'private'; // typo for privacy
+    expect(() => parsePlacesRegistryConfig(raw)).toThrow(/unknown key\(s\): "privicy"/u);
+  });
+
+  it('rejects an unknown key on a site', () => {
+    const raw = exampleRegistry();
+    (raw.sites as any)[0].displyName = 'Home'; // typo
+    expect(() => parsePlacesRegistryConfig(raw)).toThrow(/unknown key\(s\): "displyName"/u);
+  });
+
+  it('rejects an unknown key on an affordance', () => {
+    const raw = exampleRegistry();
+    (raw.places as any)[0].affordances[0].entiyId = 'light.x'; // typo
+    expect(() => parsePlacesRegistryConfig(raw)).toThrow(/unknown key\(s\): "entiyId"/u);
+  });
+
+  it('rejects an unknown root-level key', () => {
+    expect(() => parsePlacesRegistryConfig({ schemaVersion: 1, placess: [] }))
+      .toThrow(/unknown key\(s\): "placess"/u);
+  });
 });
 
 describe('twin links (mirrorsPlaceId, vinz.29)', () => {

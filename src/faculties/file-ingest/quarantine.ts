@@ -1,3 +1,10 @@
+// ── Channel-agnostic attachment quarantine classification (htm9.9) ──
+//
+// Extracted verbatim from the Discord-only pipeline
+// (src/channels/discord/file-quarantine.ts): deterministic pre-parse risk
+// classification over attachment NAME + declared MIME + magic-byte sniff.
+// Never trusts the file extension or the declared content type alone.
+
 import { extname } from 'node:path';
 import {
   inferOfficeExpectedContentTypeFromName,
@@ -8,7 +15,7 @@ import {
 import { listZipEntryNames } from './zip-container.js';
 
 const QUARANTINE_STATUS = 'quarantined_pending_review';
-export const DISCORD_ATTACHMENT_QUARANTINE_STATUS = QUARANTINE_STATUS;
+export const ATTACHMENT_QUARANTINE_STATUS = QUARANTINE_STATUS;
 const ARCHIVE_EXTENSIONS = new Set([
   '.7z',
   '.bz2',
@@ -117,6 +124,7 @@ const CODE_OR_SCRIPT_CONTENT_TYPES = new Set([
 const EXPECTED_EXTENSION_CONTENT_TYPES: Readonly<Partial<Record<string, string>>> = Object.freeze({
   '.avif': 'image/avif',
   '.bmp': 'image/bmp',
+  '.csv': 'text/csv',
   '.gif': 'image/gif',
   '.heic': 'image/heic',
   '.heif': 'image/heif',
@@ -143,16 +151,16 @@ const SAFE_RASTER_IMAGE_CONTENT_TYPES = new Set([
 ]);
 const MAX_ARCHIVE_ENTRIES_TO_REPORT = 5;
 
-export type DiscordAttachmentQuarantineStatus = typeof QUARANTINE_STATUS;
+export type AttachmentQuarantineStatus = typeof QUARANTINE_STATUS;
 
-export interface DiscordAttachmentQuarantineDecision {
+export interface AttachmentQuarantineDecision {
   quarantined: boolean;
-  status: DiscordAttachmentQuarantineStatus;
+  status: AttachmentQuarantineStatus;
   reasons: string[];
   sniffedContentType?: string;
 }
 
-export function normalizeDiscordAttachmentContentType(value: string | null | undefined): string {
+export function normalizeAttachmentContentType(value: string | null | undefined): string {
   return (value ?? '')
     .split(';')[0]
     .trim()
@@ -299,7 +307,7 @@ interface SniffedAttachmentContent {
   officeQuarantineReasons?: string[];
 }
 
-function sniffDiscordAttachmentContent(bytes: Uint8Array): SniffedAttachmentContent {
+function sniffAttachmentContent(bytes: Uint8Array): SniffedAttachmentContent {
   if (hasShebang(bytes)) return { kind: 'script', contentType: 'text/x-shellscript' };
   if (startsWithBytes(bytes, [0x25, 0x50, 0x44, 0x46, 0x2d])) {
     return { kind: 'pdf', contentType: 'application/pdf' };
@@ -503,16 +511,16 @@ function appendArchiveEntryReasons(
   }
 }
 
-export function classifyDiscordAttachmentQuarantineRisk(input: {
+export function classifyAttachmentQuarantineRisk(input: {
   name: string;
   contentType?: string | null;
   declaredContentType?: string | null;
   bytes?: Uint8Array;
   mode?: number | null;
-}): DiscordAttachmentQuarantineDecision {
+}): AttachmentQuarantineDecision {
   const reasons = new Set<string>();
-  const contentType = normalizeDiscordAttachmentContentType(input.contentType);
-  const declaredContentType = normalizeDiscordAttachmentContentType(input.declaredContentType ?? input.contentType);
+  const contentType = normalizeAttachmentContentType(input.contentType);
+  const declaredContentType = normalizeAttachmentContentType(input.declaredContentType ?? input.contentType);
   appendNameQuarantineReasons(input.name, reasons);
   appendContentTypeQuarantineReasons(declaredContentType || contentType, reasons);
   appendDeclaredExtensionMismatchReasons(input.name, declaredContentType || contentType, reasons);
@@ -523,7 +531,7 @@ export function classifyDiscordAttachmentQuarantineRisk(input: {
 
   let sniffedContentType: string | undefined;
   if (input.bytes) {
-    const sniffed = sniffDiscordAttachmentContent(input.bytes);
+    const sniffed = sniffAttachmentContent(input.bytes);
     sniffedContentType = sniffed.contentType;
     if (sniffed.kind === 'script') addReason(reasons, 'shebang');
     if (sniffed.kind === 'archive' || sniffed.kind === 'tar') {
@@ -559,13 +567,13 @@ export function classifyDiscordAttachmentQuarantineRisk(input: {
   };
 }
 
-export function hasDiscordAttachmentMetadataQuarantineRisk(input: {
+export function hasAttachmentMetadataQuarantineRisk(input: {
   name?: string | null;
   contentType?: string | null;
   mode?: number | null;
 }): boolean {
   const name = input.name?.trim() || 'attachment';
-  return classifyDiscordAttachmentQuarantineRisk({
+  return classifyAttachmentQuarantineRisk({
     name,
     contentType: input.contentType,
     declaredContentType: input.contentType,

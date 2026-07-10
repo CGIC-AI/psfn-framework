@@ -67,11 +67,11 @@ graph TB
 
 ```text
 src/
-  app/            Process entrypoints + startup composition (gateway, agent, operator, cli, e2e, maintenance)
-  boundary/       Gateway security perimeter: RPC, policy/SSRF, audit, sandbox, host-tool adapters, credential vault
+  app/            Process entrypoints + startup composition (gateway, agent, operator, cert-manager, cli, e2e, maintenance)
+  boundary/       Gateway security perimeter: RPC, policy/SSRF, audit, sandbox, host-tool adapters, credential vault, intake screeners
   channels/       Discord, Telegram, OpenAI-compatible API, backplane (adapter registry, Satellite Hub)
-  core/           The mind: agent loop, session, identity/prompts, scheduler, contacts, intention, emotion, self-model, tools, cogsec, eval
-  faculties/      Memory (L0.1/L2, extraction, retrieval, consolidation, social-graph, wiki), skills, subagents, shards, values, north-star, core-memory
+  core/           The mind: agent loop, session, identity/prompts, scheduler, contacts, intention, emotion, self-model, tools, cogsec (incl. intake firewall), eval
+  faculties/      Memory (L0.1/L2, extraction, retrieval, consolidation, social-graph, wiki), skills, subagents, shards, values, north-star, core-memory, file-ingest
   operator/       Garden admin server: transport, route groups, ~35 services, audit/telemetry
   persistence/    Two-root layout + guards, Postgres stores/migrations, session JSONL, backups/restore, repair, cutover
   primitives/     LLM provider ports (routing/fallback/circuit-breaker), voice (STT/TTS registries + transports), images
@@ -96,6 +96,7 @@ Process entrypoints plus the shared composition library. `composition.ts` is a *
 - **Entry**: `gateway/main.ts` (loads dotenv, builds privileged core), `agent/main.ts` (955 lines; **no dotenv**, launched with `env -i` + allowlist), `operator/main.ts` (thin Garden surface).
 - **Composition**: `composition/composition.ts`, `composition/parity.ts` (parity-critical shared wiring), `composition/post-turn-actions.ts` (1355 lines — largest), `support/bootstrap-helpers.ts`, `support/startup-preflight.ts`, `support/shutdown-helpers.ts`, `support/signal-shutdown.ts`, `agent/startup-guards.ts` (`enforceNetworkIsolationOnStartup`).
 - **Run targets**: `npm run split|gateway|agent|operator|yolo|chat|e2e|agent:docker`; maintenance scripts under `app/maintenance/*` (layout migration, session/transcript repair, embeddings migration, character import).
+- **Cert-manager sidecar** (`app/cert-manager/`): a standalone private-CA process (`npm run cert-manager`, commands `init`/`serve`) that issues and auto-renews the satellite/backplane mTLS certificates `satellites.json` client-cert bindings use. Token-authenticated loopback API (default port 10070), requires `CERT_MANAGER_TOKEN`, shares only `src/shared/`. See `docs/certificates.md`.
 
 ### `src/shared` — cross-cutting infrastructure
 
@@ -126,7 +127,7 @@ Conversational timeline, turn observability, and relationship/trust modeling.
 
 - **Identity**: the single prompt-assembly path. `PromptComposer.composeSplit` (the *only* assembly entrypoint) returns a byte-stable `staticPrefix` + turn-volatile `dynamicSuffix`; `prompt-runtime.ts` enforces macro volatility (`static`/`session_stable`/`turn`) and fails closed if a turn-volatile macro leaks into the static (cache) prefix. `PromptLayerStore` (5 layer types base→operator→system_language→runtime→channel→task), character-card loading/import/versioning (CCv2/v3), `createIdentityTool`.
 - **Scheduler**: tick-driven `Scheduler` with eligibility gating; heartbeat template + post-turn runtimes (the big orchestrators, ~2.6k/1.6k lines); **durable scheduled prompts** persisted in Postgres and rehydrated at startup (survive agent restarts); temporal wakeup, free-time blocks, rest-window, weighted-thought outreach.
-- **CogSec**: cognitive-security remediation for tainted content (tombstone/revocation/regeneration/notice modes), lineage tracing, forensic archive. Mostly reactive from the Garden admin surface; the one always-on hook injects agent-visible notice text into every prompt via `context-builder.ts`.
+- **CogSec**: two halves. *Post-hoc remediation* — tombstone/revocation/regeneration/notice modes for tainted content, lineage tracing, forensic archive, driven from the Garden Remediation page. *Pre-hoc intake firewall* (htm9, `docs/cognitive-security.md`) — `intake/screening.ts` (L1 scanner pipeline + L1.5 score → `IntakeEnvelope` decision), `intake/scanners/` (deterministic, bounded-regex L1 scanners + hot-reloadable `config/intake-l1-rules.json` rule engine), `intake/sink-gates.ts` + `../session/intake-sink-gating.ts` (six consequential sinks, lethal-trifecta rule), `intake/quarantine-store.ts` (held items, `companion-data/state/intake-quarantine.json`), `intake/source-lists.ts`/`marking.ts` (trusted/denied lists, Spotlighting datamarking), `drift/` (nightly zero-LLM drift-velocity + second-arrow review lanes → operator cards), `canary/` (per-session egress tripwire), `contact-block-list.ts` (companion-initiated soft/hard blocks), `intake-firewall-notice-templates.ts` (fixed, load-time-verified companion notice wording whose signature phrase keys the emotion/memory exclusions). Envelope contract: `src/shared/contracts/intake-envelope.ts`; policy owner: `intake-policy.json` (`src/system/config/intake-policy-config.ts`).
 
 ### `src/core/emotion` + `self-model` + `intention` + `internal-role-envelopes`
 
@@ -155,6 +156,7 @@ Postgres/pgvector-backed, split into lanes (see `docs/memory.md`). **L0** = appe
 - **skills**: file-based workflow-guidance docs, eligibility-filtered (binaries/env/config), budgeted XML prompt block, unified `skill` tool; self-authoring `SkillStore`.
 - **values** / **north-star**: append-only values journal (read back into the prompt via `buildCompanionDerivedLayer`; surfaced through the `orient` tool, not a standalone tool) and a max-3-item `[North Star]` layer.
 - **core-memory**: the `orient` surface (persona/human/goals), deliberately **file-backed** (`core_memory.json`), not Postgres.
+- **file-ingest** (htm9.9): channel-agnostic document attachment ingestion extracted from the Discord-only pipeline — one parse + binary-quarantine + intake-screening path (`document-ingest.ts`, `quarantine.ts`, `office-document.ts`, `zip-container.ts`) shared by Discord, Telegram, and the API channel; the same fixture file must produce the same parsed text, envelope shape, and screening decision on every channel (`adapter-parity.test.ts`).
 - **context-feedback**: **dormant/unwired by design** (bead `psfn-framework-ls1k`) — needs a config-owned deterministic gate before composition. (There is no `faculties/media`; image tools live in `primitives/images`.)
 
 ### `src/boundary` — gateway security perimeter
@@ -162,7 +164,8 @@ Postgres/pgvector-backed, split into lanes (see `docs/memory.md`). **L0** = appe
 Host-side process holding all secrets. **Fail-closed policy**: `evaluatePolicy()` is a `switch` whose `default` is `DENY`; decisions are `ALLOW`/`DENY`/`NEEDS_APPROVAL` (approval auto-executes only at `autonomous` tier, else queues + pings operator).
 
 - **RPC**: `gateway/protocol.ts` (JSON-RPC contract), bidirectional — forward (agent→gateway: `llm.*`, `fs.*`, `git.*`, `shell.exec`, `web.*`, `vault.*`, `beads.*`, `image.*`, `discord.*`, `notify.*`) and reverse (gateway→agent: `voice.*`, `api.chat.*`). Transport: Unix socket or WSS+mTLS+SPIFFE (split-host shards).
-- **Defenses**: `url-policy.ts` (SSRF: private/metadata IP blocks + **post-DNS re-validation pinned to the resolved IP** to defeat rebinding), path allowlist with `realpath` canonicalization (defeats symlink escape), `sanitize.ts` (prompt-injection stripping of fetched content), append-only SQLite/Postgres audit.
+- **Defenses**: `url-policy.ts` (SSRF: private/metadata IP blocks + **post-DNS re-validation pinned to the resolved IP** to defeat rebinding), streamed response-body byte caps in `methods/web.ts` (8 MiB text/binary, socket destroyed on overrun), path allowlist with `realpath` canonicalization (defeats symlink escape), `sanitize.ts` (prompt-injection stripping of fetched content), append-only SQLite/Postgres audit.
+- **Intake screeners** (`gateway/intake/`): the gateway-side classifier layers of the cognition intake firewall — `compose-screening.ts` (builds the gateway `IntakeScreeningService` from `intake-policy.json`; missing ONNX weights = loud skip, broken weights = fail closed), `injection-classifier.ts` (L1.5 in-process ONNX DeBERTa-v3, provisioned via `npm run provision:injection-model`), `l2-screener.ts`/`l3-screener.ts` (tool-less OpenRouter escalation screeners over the shared `screener-transport.ts`, invoked gateway-side through the `IntakeEscalationPort` in `escalation.ts`; the agent process holds no escalation port and stays L1-only), `vision-screener.ts` (VLM OCR+description per inbound image, exposed as the `intake.screen_image` RPC; transcript re-screened as `image_ocr`, hostile tier). See `docs/cognitive-security.md`.
 - **Adapters** (`integrations/*`): each repeats `ops.ts` (contract) → `local-ops.ts`/`gateway-ops.ts` → `tools.ts` → `runtime-wiring.ts`. Note two unrelated "vaults": `custody/credential-vault.ts` (secrets, env/OpenBao) vs `integrations/vault` (Obsidian notes).
 - **Sandbox**: `analysis_workbench` code runs in a locked-down child (`--permission`, empty env, no code-gen-from-strings); `shell-runner.ts` uses a curated PATH and reserved-var denylist (`PATH`/`NODE_OPTIONS`/`LD_*`).
 
@@ -190,7 +193,9 @@ Host-side process holding all secrets. **Fail-closed policy**: `evaluatePolicy()
 
 ### `src/operator/garden` — admin server
 
-Two-tier split: `GardenOperatorSurface` (public-facing auth + SPA static + reverse proxy) and `GardenAdminTransportServer` (real API, Unix socket or mTLS+SPIFFE network). Both share `buildAdminApiRoutes` (~15 route groups over `/api/admin/*`) and ~35 `services/*` adapting core stores. Highlights: `AdminMemoryBodyGate` (session-scoped, TTL'd, honest-`[REDACTED]` sensitivity gating of high-intimacy memory bodies), audit-log-everything mutations (JSONL), live turn telemetry over WebSocket, read-only reflection journals (`/values`). Fail-closed auth (`validateAdminAuthStartupPolicy` requires `ADMIN_TOKEN` unless insecure+loopback).
+Two-tier split: `GardenOperatorSurface` (public-facing auth + SPA static + reverse proxy) and `GardenAdminTransportServer` (real API, Unix socket or mTLS+SPIFFE network). Both share `buildAdminApiRoutes` (~15 route groups over `/api/admin/*`) and ~35 `services/*` adapting core stores. Highlights: `AdminMemoryBodyGate` (session-scoped, TTL'd, honest-`[REDACTED]` sensitivity gating of high-intimacy memory bodies), audit-log-everything mutations (JSONL), live turn telemetry over WebSocket, read-only reflection journals (`/values`). Fail-closed auth (`validateAdminAuthStartupPolicy` requires `ADMIN_TOKEN` unless insecure+loopback; login token comparison is timing-safe via `timingSafeStringEqual`).
+
+Cognitive-security routes/services (htm9.11/.14/.15): `routes/intake-quarantine-routes.ts` (`/api/admin/intake/policy|quarantine`, two-step confirm/decide release with a server-side single-use confirm token) + `services/intake-quarantine-service.ts`; `routes/intake-source-list-routes.ts` (`/api/admin/intake/source-lists` flywheel CRUD); `routes/drift-review-routes.ts` (`/api/admin/intake/drift-reviews`, resolve `acknowledged|dismissed|consolidated`) + `services/drift-review-service.ts` (consolidation applies memory supersession only on operator approval); CogSec events/remediation ride `routes/session-routes.ts` (`/api/admin/session-routes/cogsec/*`). Admin-ui pages: `admin-ui/src/routes/cognitive-security/{approvals,firewall,drift,remediation}/+page.svelte`, registered as the `cognitive-security` nav group in `admin-ui/src/lib/nav.ts`.
 
 ## Data Flow
 
@@ -259,7 +264,7 @@ Patterns that recur across nearly every module:
 - **The `shard` tool is a stub** ("future canonical control plane"); `ShardManager` does double duty for shards and bounded subagents. `spawn_subagent` in `shards/tools.ts` is dead code — the live path is `subagent`.
 - **`context-feedback` is unwired by design** (bead `psfn-framework-ls1k`); `faculties/media` does not exist (image tools are in `primitives/images`).
 - **Naming traps**: `store/trust-filters.ts` builds scope SQL clauses (not trust gating); two unrelated "vaults" (credentials vs Obsidian notes); L2 `episodic` memory type ≠ L0.1 `l01_episodes`.
-- **CogSec is mostly operator-driven** — the only always-on hook injects notice text into the prompt each turn.
+- **CogSec has two halves with different postures** — remediation (tombstone/revocation/regeneration) is operator-driven from Garden, but the intake firewall is always-on once `intake-policy.json` mode is `shadow`/`enforce` (shadow screens and journals without changing delivered content). L2/L3 escalation runs gateway-side only, and is skipped when L1/L1.5 have already decided quarantine/block.
 
 ## Navigation Guide
 
@@ -276,6 +281,8 @@ Patterns that recur across nearly every module:
 | How does trust/privacy gate memory? | `src/system/trust/policy.ts` (`evaluateMemoryPolicy`), `context-envelope.ts` |
 | How is a channel added/activated? | `src/channels/backplane/`, `src/app/startup/composition/channel-runtime.ts` |
 | Where are admin APIs defined? | `src/operator/garden/api-routes.ts` + `routes/*` + `services/*` |
+| How is untrusted inbound content screened/quarantined? | `src/shared/contracts/intake-envelope.ts`, `src/core/cogsec/intake/screening.ts`, `src/boundary/gateway/intake/compose-screening.ts`, `docs/cognitive-security.md` |
+| How are satellite mTLS certs issued/renewed? | `src/app/cert-manager/main.ts`, `src/channels/backplane/http/client-cert.ts`, `docs/certificates.md` |
 | How are LLM calls routed/retried? | `src/primitives/llm/{client,routing,fallback,retry}.ts` |
 | What changed recently / project status? | `CHANGELOG.md`, `docs/development-status.md`, `bd ready` |
 

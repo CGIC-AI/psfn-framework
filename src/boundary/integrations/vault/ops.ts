@@ -2,7 +2,7 @@
 // Core operations for bounded external Obsidian vault access via the CLI.
 // All operations use the Obsidian CLI which communicates with the running desktop app via IPC.
 
-import { execSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import { createComponentLogger } from '../../../shared/logger.js';
 import { toErrorMessage } from '../../../shared/utils/errors.js';
 import { sleep } from '../../../shared/utils/timing.js';
@@ -16,6 +16,42 @@ const OBSIDIAN_SERVICES = [
 const OBSIDIAN_RESTART_WAIT_MS = 10_000;
 
 const log = createComponentLogger('VaultOps');
+
+// Characters permitted in an Obsidian CLI executable path. Deliberately narrow:
+// letters, digits, dot, underscore, hyphen, and forward slash only. Any shell
+// metacharacter (`; & | $ \` ( ) < > ' " * ? space`, etc.) is rejected. The
+// executable is spawned with `shell: false`, so this is defence-in-depth: it
+// stops an admin-supplied cliPath from ever naming anything but a plain binary.
+const CLI_PATH_ALLOWED = /^[A-Za-z0-9._/-]+$/;
+
+/**
+ * Validate the Obsidian CLI executable path before it is handed to
+ * `execFileSync`. Rejects shell metacharacters and requires either a bare
+ * command name (resolved via PATH) or an absolute path — never a relative path
+ * or anything containing separators that could smuggle in shell syntax.
+ *
+ * `cliPath` originates from admin-mutable settings, so this is the fail-closed
+ * gate that prevents command injection (bead lget).
+ */
+export function validateVaultCliPath(cliPath: string): string {
+  if (typeof cliPath !== 'string' || cliPath.length === 0) {
+    throw new Error('Obsidian CLI path is required and must be a non-empty string');
+  }
+  if (!CLI_PATH_ALLOWED.test(cliPath)) {
+    throw new Error(
+      `Refusing to use Obsidian CLI path '${cliPath}': it contains characters outside `
+      + '[A-Za-z0-9._/-] (shell metacharacters and whitespace are not allowed)',
+    );
+  }
+  const isBareName = !cliPath.includes('/');
+  const isAbsolute = cliPath.startsWith('/');
+  if (!isBareName && !isAbsolute) {
+    throw new Error(
+      `Refusing to use Obsidian CLI path '${cliPath}': it must be an absolute path or a bare command name`,
+    );
+  }
+  return cliPath;
+}
 
 export interface VaultWriteResult {
   name: string;
@@ -70,6 +106,8 @@ export class VaultOps implements VaultOperations {
     if (!this.config.vaultName) {
       throw new Error('VaultOps requires a vaultName');
     }
+    // Fail closed at construction: a poisoned cliPath never reaches a spawn.
+    validateVaultCliPath(this.config.cliPath);
   }
 
   async write(
@@ -81,22 +119,22 @@ export class VaultOps implements VaultOperations {
 
     if (mode === 'create') {
       const args = [
-        `vault=${this.shellEscape(this.config.vaultName)}`,
+        `vault=${this.config.vaultName}`,
         'create',
-        `name=${this.shellEscape(name)}`,
-        `content=${this.shellEscape(content)}`,
+        `name=${name}`,
+        `content=${content}`,
       ];
       if (opts?.folder) {
-        args.push(`path=${this.shellEscape(opts.folder)}`);
+        args.push(`path=${opts.folder}`);
       }
       await this.exec(args);
     } else {
       // append or prepend
       const args = [
-        `vault=${this.shellEscape(this.config.vaultName)}`,
+        `vault=${this.config.vaultName}`,
         mode,
-        `file=${this.shellEscape(name)}`,
-        `content=${this.shellEscape(content)}`,
+        `file=${name}`,
+        `content=${content}`,
       ];
       await this.exec(args);
     }
@@ -107,9 +145,9 @@ export class VaultOps implements VaultOperations {
 
   async read(nameOrPath: string): Promise<VaultReadResult> {
     const args = [
-      `vault=${this.shellEscape(this.config.vaultName)}`,
+      `vault=${this.config.vaultName}`,
       'read',
-      `file=${this.shellEscape(nameOrPath)}`,
+      `file=${nameOrPath}`,
     ];
     const content = await this.exec(args);
     return { name: nameOrPath, content: content.trim() };
@@ -117,9 +155,9 @@ export class VaultOps implements VaultOperations {
 
   async search(query: string, limit?: number): Promise<VaultSearchResult> {
     const args = [
-      `vault=${this.shellEscape(this.config.vaultName)}`,
+      `vault=${this.config.vaultName}`,
       'search',
-      `query=${this.shellEscape(query)}`,
+      `query=${query}`,
       'format=json',
     ];
     if (limit !== undefined && limit > 0) {
@@ -157,16 +195,16 @@ export class VaultOps implements VaultOperations {
 
     if (opts?.content) {
       const args = [
-        `vault=${this.shellEscape(this.config.vaultName)}`,
+        `vault=${this.config.vaultName}`,
         'daily:append',
-        `content=${this.shellEscape(opts.content)}`,
+        `content=${opts.content}`,
       ];
       await this.exec(args);
       return { date: today, mode: 'append' };
     }
 
     const args = [
-      `vault=${this.shellEscape(this.config.vaultName)}`,
+      `vault=${this.config.vaultName}`,
       'daily:read',
     ];
     const content = await this.exec(args);
@@ -176,12 +214,16 @@ export class VaultOps implements VaultOperations {
   // ── Private helpers ──
 
   private async exec(args: string[], isRetry = false): Promise<string> {
-    const cmd = `${this.config.cliPath} ${args.join(' ')}`;
+    // shell: false — the executable and every argument are passed as a raw argv
+    // array, so no shell parses cliPath or the args. Shell metacharacters in a
+    // note title, date, or query are handed to the CLI as literal argv tokens,
+    // never interpreted. cliPath was already validated at construction.
     try {
-      return execSync(cmd, {
+      return execFileSync(this.config.cliPath, args, {
         timeout: this.config.timeoutMs,
         encoding: 'utf-8',
         stdio: ['pipe', 'pipe', 'pipe'],
+        shell: false,
       });
     } catch (err) {
       const record = err as Record<string, unknown>;
@@ -216,9 +258,12 @@ export class VaultOps implements VaultOperations {
 
   private async restartObsidianServices(): Promise<boolean> {
     try {
-      execSync(`systemctl --user restart ${OBSIDIAN_SERVICES.join(' ')}`, {
+      // shell: false with a fixed argv — the service list is a hardcoded
+      // constant, never user input.
+      execFileSync('systemctl', ['--user', 'restart', ...OBSIDIAN_SERVICES], {
         timeout: 15_000,
         stdio: 'pipe',
+        shell: false,
       });
       log.info('Obsidian services restarted — waiting for startup', {
         services: OBSIDIAN_SERVICES,
@@ -230,9 +275,5 @@ export class VaultOps implements VaultOperations {
       log.warn('Failed to restart Obsidian services', { error: toErrorMessage(err) });
       return false;
     }
-  }
-
-  private shellEscape(str: string): string {
-    return "'" + str.replace(/'/g, "'\\''") + "'";
   }
 }

@@ -44,7 +44,23 @@ const SATELLITE_REGISTRY: SatelliteRegistryConfig = {
       displayName: 'Living Satellite',
       mobility: 'static',
       placeId: 'place.living',
-      endpoints: [],
+      endpoints: [
+        {
+          endpointId: 'telemetry',
+          displayName: 'Telemetry Endpoint',
+          claimTypes: ['sensor-telemetry'],
+          promptChannelType: 'telemetry_satellite',
+          auth: { mode: 'api_key' },
+          defaultIdentity: {
+            authorId: 'home-sensor',
+            authorName: 'Home Sensor',
+            canonicalContactId: 'contact-home',
+            channelPrivacy: 'invite_only',
+          },
+          maxCapabilities: ['telemetry', 'presence'],
+          telemetryScopes: ['presence'],
+        },
+      ],
     },
   ],
 };
@@ -64,6 +80,11 @@ function telemetryEvent(overrides: Partial<ExternalTelemetryEvent> = {}): Extern
     nonce: 'nonce-12345678',
     channelId: 'satellite:living:test-session',
     scope: 'presence',
+    auth: {
+      principalId: 'api-key-fixture-shared',
+      principalMode: 'api_key',
+      satelliteScoped: false,
+    },
     ...overrides,
   };
 }
@@ -173,6 +194,77 @@ describe('sensor cognition bridge normalization', () => {
       reason: 'raw_biometric_payload_rejected',
       satelliteId: 'sat.living',
       placeId: 'place.living',
+    });
+  });
+
+  it('fails closed via whitelist on non-biometric but non-whitelisted claim fields (04-M3)', () => {
+    const result = normalize(telemetryEvent({
+      id: 'event-extra-field',
+      scope: 'face',
+      payload: {
+        satelliteId: 'sat.living',
+        type: 'identity-claim.observed',
+        claim: {
+          hubIdentityId: 'hub.identity.sample',
+          confidence: 0.8,
+          // Not a denylisted biometric key, but not whitelisted either: a
+          // denylist would have missed this; the whitelist fails closed.
+          gaitSignature: 'abc',
+        },
+      },
+    }));
+
+    expect(result).toEqual({
+      ok: false,
+      kind: 'malformed',
+      reason: 'raw_biometric_payload_rejected',
+      satelliteId: 'sat.living',
+      placeId: 'place.living',
+    });
+  });
+
+  it('fails closed via whitelist on deeply nested non-whitelisted material (04-M3)', () => {
+    const result = normalize(telemetryEvent({
+      id: 'event-deep-nested',
+      scope: 'face',
+      payload: {
+        satelliteId: 'sat.living',
+        type: 'identity-claim.observed',
+        claim: {
+          hubIdentityId: 'hub.identity.sample',
+          confidence: 0.8,
+          // faceVector is not in the depth-4 legacy denylist key set; the
+          // whitelist rejects it regardless of nesting.
+          meta: { deep: { faceVector: [0.1, 0.2] } },
+        },
+      },
+    }));
+
+    expect(result.ok).toBe(false);
+    expect(result).toMatchObject({ kind: 'malformed', reason: 'raw_biometric_payload_rejected' });
+  });
+
+  it('accepts a whitelisted identity claim carrying only hubIdentityId + confidence (04-M3)', () => {
+    const result = normalize(telemetryEvent({
+      id: 'event-clean-claim',
+      scope: 'face',
+      payload: {
+        origin: { satelliteId: 'sat.living', siteId: 'site.home' },
+        type: 'identity-claim.observed',
+        claim: {
+          hubIdentityId: 'hub.identity.sample',
+          confidence: 0.77,
+        },
+      },
+    }));
+
+    expect(result).toMatchObject({
+      ok: true,
+      event: {
+        kind: 'identity_claim',
+        hubIdentityId: 'hub.identity.sample',
+        confidence: 0.77,
+      },
     });
   });
 
@@ -374,5 +466,120 @@ describe('sensor cognition bridge subscription', () => {
     expect(sink.handlePerceptionEvent).not.toHaveBeenCalled();
     expect(logger.warn).not.toHaveBeenCalled();
     expect(counters).toEqual([]);
+  });
+});
+
+describe('authenticated satellite origin binding (Sprint-10 04-M1)', () => {
+  it('fails closed when telemetry lacks an authenticated origin context', () => {
+    const event = telemetryEvent();
+    delete (event as Partial<ExternalTelemetryEvent>).auth;
+    const result = normalize(event);
+    expect(result).toEqual({
+      ok: false,
+      kind: 'malformed',
+      reason: 'missing_authenticated_origin',
+      satelliteId: 'sat.living',
+    });
+  });
+
+  it('rejects a payload-forged satelliteId when the authenticated principal is not admitted by that satellite', () => {
+    const result = normalize(telemetryEvent({
+      auth: {
+        principalId: 'api-key-of-a-different-satellite',
+        principalMode: 'api_key',
+        satelliteScoped: true,
+      },
+    }));
+    expect(result).toEqual({
+      ok: false,
+      kind: 'malformed',
+      reason: 'satellite_origin_not_authorized_for_principal',
+      satelliteId: 'sat.living',
+    });
+  });
+
+  it('rejects non-api-key principals claiming a satellite origin', () => {
+    const result = normalize(telemetryEvent({
+      auth: {
+        principalId: 'local-insecure',
+        principalMode: 'insecure_local',
+        satelliteScoped: false,
+      },
+    }));
+    expect(result).toMatchObject({
+      ok: false,
+      reason: 'satellite_origin_not_authorized_for_principal',
+    });
+  });
+
+  it('admits a satellite-scoped principal explicitly bound to the claimed satellite', () => {
+    const registry: SatelliteRegistryConfig = {
+      ...SATELLITE_REGISTRY,
+      satellites: [
+        {
+          ...SATELLITE_REGISTRY.satellites[0]!,
+          endpoints: [
+            {
+              ...SATELLITE_REGISTRY.satellites[0]!.endpoints[0]!,
+              auth: { mode: 'api_key', apiKeyPrincipalIds: ['api-key-sat-living'] },
+            },
+          ],
+        },
+      ],
+    };
+    const result = normalizeExternalTelemetryToPerceptionEvent({
+      event: telemetryEvent({
+        auth: {
+          principalId: 'api-key-sat-living',
+          principalMode: 'api_key',
+          satelliteScoped: true,
+        },
+      }),
+      satelliteRegistry: registry,
+      placesRegistry: PLACES_REGISTRY,
+    });
+    expect(result).toMatchObject({ ok: true, event: { satelliteId: 'sat.living' } });
+  });
+
+  it('requires a matching authenticated client certificate for mTLS-only satellites', () => {
+    const fingerprint = 'a1'.repeat(32);
+    const registry: SatelliteRegistryConfig = {
+      ...SATELLITE_REGISTRY,
+      satellites: [
+        {
+          ...SATELLITE_REGISTRY.satellites[0]!,
+          endpoints: [
+            {
+              ...SATELLITE_REGISTRY.satellites[0]!.endpoints[0]!,
+              auth: { mode: 'mtls', clientCertFingerprintSha256: fingerprint },
+            },
+          ],
+        },
+      ],
+    };
+
+    const withoutCert = normalizeExternalTelemetryToPerceptionEvent({
+      event: telemetryEvent(),
+      satelliteRegistry: registry,
+      placesRegistry: PLACES_REGISTRY,
+    });
+    expect(withoutCert).toMatchObject({
+      ok: false,
+      reason: 'satellite_origin_not_authorized_for_principal',
+    });
+
+    const withCert = normalizeExternalTelemetryToPerceptionEvent({
+      event: telemetryEvent({
+        auth: {
+          principalId: 'api-key-fixture-shared',
+          principalMode: 'api_key',
+          satelliteScoped: false,
+          clientCert: { source: 'tls_peer', fingerprintSha256: fingerprint },
+        },
+      }),
+      satelliteRegistry: registry,
+      placesRegistry: PLACES_REGISTRY,
+    });
+    expect(withCert).toMatchObject({ ok: true });
   });
 });

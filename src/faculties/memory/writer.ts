@@ -43,6 +43,9 @@ import {
   evaluateCogSecMemoryCandidacy,
   type CogSecMemoryCandidacyDecision,
 } from '../../core/cogsec/memory-candidacy.js';
+import { appendIntakeEnvelopeProvenanceRef } from '../../shared/contracts/intake-envelope.js';
+import type { IntakeEnvelopeSnapshot } from '../../shared/contracts/intake-envelope.js';
+import type { IntakeSinkGate } from '../../core/cogsec/intake/sink-gates.js';
 import {
   buildEvolutionLinkInput,
   chooseWriteAction,
@@ -90,6 +93,22 @@ export interface MemoryWriteOptions {
   scopeRef?: MemoryScopeRef;
   scopeTags?: string[];
   extractedAt?: number;
+  /**
+   * htm9.1: originating cognition-intake envelope id. When set, the write is
+   * stamped with the canonical `intake-envelope:<id>` provenance ref so a
+   * poisoned source's lineage stays excisable through the existing
+   * revocation/regeneration machinery (src/core/cogsec/lineage.ts).
+   * A malformed id fails the write (fail closed), never silently drops.
+   */
+  intakeEnvelopeId?: string;
+  /**
+   * htm9.3: intake envelope snapshots covering the SOURCE content this memory
+   * derives from. When the writer has an intake sink gate wired, these are
+   * evaluated at the `memory_write` sink before candidacy; an empty/absent
+   * list is explicit unscreened content and resolves per the sink's policy
+   * default.
+   */
+  intakeEnvelopes?: readonly IntakeEnvelopeSnapshot[];
 }
 
 export interface WriteResult {
@@ -221,6 +240,14 @@ export interface MemoryRedactionResult {
 
 export class MemoryWriter {
   private readonly maintenanceScheduler: MemoryMaintenanceScheduler | null;
+  /**
+   * Intake sink gate provider (htm9.3), late-bound by composition (the gate
+   * is constructed from intake-policy.json after stores exist). Null means
+   * the firewall is off or predates this wiring — candidacy behavior is
+   * unchanged. The provider shape lets the writer follow a gate that is
+   * assigned onto the session manager after this writer was constructed.
+   */
+  intakeSinkGateProvider: (() => IntakeSinkGate | null) | null = null;
 
   constructor(
     private memoryStore: MemoryStorePort,
@@ -297,12 +324,23 @@ export class MemoryWriter {
     opts: MemoryWriteOptions,
     options: { logRejection?: boolean } = {},
   ): void {
+    // htm9.3: the memory_write sink gate consumes the upstream envelope
+    // labels (or the explicit unscreened policy default) before candidacy.
+    const intakeSinkGate = this.intakeSinkGateProvider?.() ?? null;
+    const intakeGateDecision = intakeSinkGate
+      ? intakeSinkGate.evaluate('memory_write', opts.intakeEnvelopes ?? [], {
+        sourceRef: opts.sourceRef,
+        sourceType: opts.sourceType,
+        memoryType: opts.type,
+      })
+      : undefined;
     const decision = evaluateCogSecMemoryCandidacy({
       text: opts.text,
       type: opts.type,
       tags: opts.tags,
       sourceRef: opts.sourceRef,
       sourceType: opts.sourceType,
+      ...(intakeGateDecision ? { intakeGateDecision } : {}),
     });
     if (decision.disposition === 'allow') return;
     if (options.logRejection ?? true) {
@@ -383,12 +421,36 @@ export class MemoryWriter {
       fallbackRef: 'tool:memory_write',
     });
     const normalizedSourceRef = normalizedSource.sourceRef;
-    const incomingProvenanceRefs = normalizeProvenanceRefs(provenanceRefs, normalizedSourceRef);
+    const incomingProvenanceRefs = normalizeProvenanceRefs(
+      appendIntakeEnvelopeProvenanceRef(provenanceRefs, opts.intakeEnvelopeId),
+      normalizedSourceRef,
+    );
     const normalizedScopeRef = normalizeMemoryScopeRef(scopeRef);
     const normalizedScopeTags = normalizeMemoryScopeTags(scopeTags);
     const targetSalience = clampUnit(salience ?? importance, importance);
 
     // 1. Check for exact duplicates (high threshold per type)
+    //
+    // ── htm9.15 dedup-gap finding (second-arrow rumination incident) ──
+    // This stage suppresses a write ONLY when the embedding neighbor ALSO has
+    // byte-identical normalized text (whitespace/case-folded, below). A
+    // restated worry — same topic, new phrasing, cosine ~0.9 — fails the text
+    // equality every time, and stage 2 (evolution reconciliation) only
+    // supersedes on explicit heuristic cues ("now/changed", negation, higher
+    // confidence), so plain restatements insert as `created` rows. Three
+    // compounding gaps let the historical concern-stack grow: (a) the top-3
+    // neighbor limit here means an already-stacked topic crowds genuine
+    // duplicates out of view; (b) writes across different memory `type`s
+    // (emotional vs semantic restatements) are never compared; (c) extraction
+    // runs are fire-and-forget with no cross-run lock, so two concurrent runs
+    // can both pass this check before either persists (TOCTOU). These are
+    // DESIGN choices that keep healthy paraphrase evolution alive, not simple
+    // bugs — so they are deliberately NOT changed here. The near-duplicate
+    // maintenance reviews queued below already flag these stacks as
+    // merge_candidates, and the second-arrow drift lane
+    // (src/core/cogsec/drift/second-arrow-signals.ts) now detects the
+    // rumination shape and routes an operator-reviewed consolidation proposal
+    // through Garden instead of auto-tightening dedup.
     const duplicates = await this.memoryStore.searchByEmbedding(
       embedding,
       DEDUP_THRESHOLD[type],
@@ -672,7 +734,10 @@ export class MemoryWriter {
       fallbackRef: 'tool:memory_upsert',
     });
     const normalizedSourceRef = normalizedSource.sourceRef;
-    const normalizedProvenanceRefs = normalizeProvenanceRefs(provenanceRefs, normalizedSourceRef);
+    const normalizedProvenanceRefs = normalizeProvenanceRefs(
+      appendIntakeEnvelopeProvenanceRef(provenanceRefs, opts.intakeEnvelopeId),
+      normalizedSourceRef,
+    );
     const normalizedScopeRef = normalizeMemoryScopeRef(scopeRef);
     const normalizedScopeTags = normalizeMemoryScopeTags(scopeTags);
     const targetSalience = clampUnit(salience ?? importance, importance);

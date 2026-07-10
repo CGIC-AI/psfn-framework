@@ -49,6 +49,16 @@ import type { InternalState } from '../self-model/state.js';
 import type { MemoryExtractor } from '../agent/contracts.js';
 import type { PromptRegistryStatePort } from '../identity/prompt-state-port.js';
 import type { OutboundReplyGuardPort } from '../../system/lifecycle/outbound-reply-dedupe.js';
+import type {
+  DriftVelocityEvidencePort,
+  DriftVelocityWatermarkStore,
+} from '../cogsec/drift/drift-review-lane.js';
+import type { SecondArrowEvidencePort } from '../cogsec/drift/second-arrow-review-lane.js';
+import type { DriftReviewCardStore } from '../cogsec/drift/drift-review-card-store.js';
+import type {
+  IntakeDriftDetectionPolicyConfig,
+  IntakeSecondArrowPolicyConfig,
+} from '../../system/config/intake-policy-config.js';
 
 export const DEFERRED_HEARTBEAT_ACTION_KIND = 'heartbeat.run_template';
 
@@ -213,6 +223,31 @@ export interface HeartbeatRuntimeOptions {
   > | null;
   episodicDiagnosticsStore?: Pick<EpisodicStorePort, 'getMaintenanceDiagnostics'> | null;
   episodicProcessingRestWindow?: EpisodicProcessingRestWindowConfig;
+  /**
+   * Slow-poisoning drift-velocity review lane (htm9.14): pre-bound evidence
+   * reads, the operator review-card store, the intake-policy `driftDetection`
+   * knobs, and the durable daily watermark. Absent ⇒ the lane is not wired
+   * (logged, never silent).
+   */
+  driftVelocityReview?: {
+    evidence: DriftVelocityEvidencePort;
+    cardStore: DriftReviewCardStore;
+    config: IntakeDriftDetectionPolicyConfig;
+    watermarks: DriftVelocityWatermarkStore;
+  } | null;
+  /**
+   * Second-arrow rumination review lane (htm9.15): pre-bound evidence reads
+   * (memory embeddings, concerns, affect series), the SAME operator review-
+   * card store as the drift-velocity lane, the `driftDetection.secondArrow`
+   * knobs, and the durable daily watermark (own processor id). Absent ⇒ the
+   * lane is not wired (logged, never silent).
+   */
+  secondArrowReview?: {
+    evidence: SecondArrowEvidencePort;
+    cardStore: DriftReviewCardStore;
+    config: IntakeSecondArrowPolicyConfig;
+    watermarks: DriftVelocityWatermarkStore;
+  } | null;
   orientationRewriteGate?: OrientationRewriteGateConfig;
   intentionAppraisalEnabled?: boolean;
   postTurnActions?: PostTurnActionRuntime;

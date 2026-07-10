@@ -72,6 +72,37 @@ describe('WikiStore', () => {
     });
   });
 
+  it('stamps the originating intake envelope id as a canonical provenance ref (htm9.1)', () => {
+    const store = new WikiStore(makeWorkspace());
+
+    const created = store.upsert({
+      title: 'Screened Article Notes',
+      body: 'Distilled from a screened web fetch.',
+      sourceClass: 'parsed_document',
+      provenanceRefs: ['web:https://example.com/article'],
+      intakeEnvelopeId: 'e1f5c1a2-4242-4141-9999-abcdefabcdef',
+    });
+
+    expect(created.provenanceRefs).toEqual([
+      'web:https://example.com/article',
+      'intake-envelope:e1f5c1a2-4242-4141-9999-abcdefabcdef',
+    ]);
+    expect(store.get(created.id)?.provenanceRefs).toContain(
+      'intake-envelope:e1f5c1a2-4242-4141-9999-abcdefabcdef',
+    );
+  });
+
+  it('fails closed on a malformed intake envelope id instead of dropping it', () => {
+    const store = new WikiStore(makeWorkspace());
+
+    expect(() => store.upsert({
+      title: 'Broken Envelope Stamp',
+      body: 'Should never be written.',
+      intakeEnvelopeId: 'not a valid id!!',
+    })).toThrow(/Invalid intake envelope: id/);
+    expect(store.list()).toHaveLength(0);
+  });
+
   it('requires provenance for source-derived wiki documents', () => {
     const store = new WikiStore(makeWorkspace());
 

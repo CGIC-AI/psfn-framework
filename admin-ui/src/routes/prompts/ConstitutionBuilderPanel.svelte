@@ -33,8 +33,11 @@
     class="w-full px-5 py-3.5 flex items-center justify-between text-left hover:bg-bark-100 transition-colors"
   >
     <div>
-      <h2 class="text-base font-serif font-semibold text-shadow-800">Constitution Builder</h2>
-      <p class="text-sm text-shadow-600 mt-0.5">Immutable amendments are locked. Constitution content is fixed here; editable runtime/operator layers live in the composition stack below.</p>
+      <div class="flex items-center gap-2">
+        <h2 class="text-base font-serif font-semibold text-shadow-800">Constitution Builder</h2>
+        <span class="px-1.5 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider bg-bark-300 text-shadow-700">Read only</span>
+      </div>
+      <p class="text-sm text-shadow-600 mt-0.5">Immutable amendments are locked. Constitution content is fixed here; editable runtime/operator layers live in the Composition Stack tab.</p>
     </div>
     <svg class="w-4 h-4 text-shadow-600 transition-transform shrink-0 ml-4 {showConstitutionSection ? 'rotate-180' : ''}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
       <path d="M19 9l-7 7-7-7" />

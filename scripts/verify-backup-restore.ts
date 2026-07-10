@@ -21,6 +21,10 @@ import {
   SYSTEM_CONFIG_MANIFEST_NAME,
   verifySystemConfigSnapshot,
 } from '../src/persistence/backups/system-config-tree.js';
+import {
+  verifyKubernetesHelmSnapshot,
+} from '../src/persistence/backups/kubernetes-helm.js';
+import { verifyBackupContentsManifest } from '../src/persistence/backups/backup-contents.js';
 
 interface CliArgs {
   backupRootDir?: string;
@@ -218,6 +222,10 @@ async function main(): Promise<void> {
     const systemConfigVerification = existsSync(join(backupDir, SYSTEM_CONFIG_MANIFEST_NAME))
       ? verifySystemConfigSnapshot(backupDir)
       : undefined;
+    const backupContents = verifyBackupContentsManifest(backupDir);
+    const kubernetesHelmVerification = backupContents.kubernetesHelmRecovery === 'required'
+      ? verifyKubernetesHelmSnapshot(backupDir)
+      : undefined;
 
     console.log(JSON.stringify({
       backupDir: requestedBackupDir,
@@ -230,6 +238,7 @@ async function main(): Promise<void> {
       sessionSnapshotDir,
       expectedSessionFiles: expectedSessionFiles.length,
       verified: true,
+      backupContents,
       ...(postgresDumpPath
         ? {
           postgresDumpPath,
@@ -260,6 +269,14 @@ async function main(): Promise<void> {
         ? {
           systemConfigVerifiedFiles: systemConfigVerification.verifiedFileCount,
           systemConfigBytes: systemConfigVerification.totalBytes,
+        }
+        : {}),
+      ...(kubernetesHelmVerification
+        ? {
+          kubernetesHelmRelease: kubernetesHelmVerification.descriptor.release,
+          kubernetesHelmChart: kubernetesHelmVerification.descriptor.chart,
+          kubernetesHelmVerifiedFiles: kubernetesHelmVerification.chart.verifiedFileCount,
+          kubernetesHelmBytes: kubernetesHelmVerification.chart.totalBytes,
         }
         : {}),
     }, null, 2));

@@ -628,6 +628,20 @@ Live Pi cutover requires explicit operator confirmation and a service freeze
 window. Do not interrupt the live Purrsephone system during chart prep or test
 cluster shakedowns.
 
+The shared application image carries the repo-owned chart at
+`/app/deploy/helm/psfn`. The chart injects non-secret release, namespace,
+revision, chart-content digest, every workload's effective image reference, and
+source provenance into the agent. Scheduled encrypted backups therefore include
+a hash-verified `helm-recovery/` bundle automatically for Helm deployments. A
+checked-in `recovery-chart.sha256` binds the embedded chart to the chart rendered
+by the active release; selective shipping automatically adds an agent rollout
+when chart files changed. The bundle intentionally excludes documentation, live
+Helm values, rendered manifests, and Kubernetes Secrets. `backup-contents.json`
+marks Helm recovery as required inside the authenticated encrypted payload, so a
+missing bundle fails restore verification. Operators must re-provision
+credentials and review site-specific values instead of restoring stale secret
+material.
+
 Before cutover:
 
 1. Verify the current non-kube backup path: Postgres `pg_dump`, L0/session

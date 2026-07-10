@@ -80,7 +80,7 @@ Most AI companion frameworks treat conversations as throwaway. PSFN treats every
 - **Bidirectional RPC**: Voice turns get real agent responses via reverse RPC; WSS gateway/admin transports support SPIFFE mTLS validation
 - **SSRF Defenses**: Private IP blocking, DNS rebinding protection, redirect validation
 - **Scheduler**: Heartbeat, recurring tasks, restart-durable one-shot/scheduled prompts (persisted in Postgres and rehydrated at startup), temporal wakeups, free-time blocks, near-turn memory, rest-window memory consolidation, wiki passes, novelty-gated reflection cadences, and configurable maintenance
-- **Backups and Restore Verification**: Scheduled encrypted backup sets cover PostgreSQL dumps, companion files, workspace files, system owner files, and restore-fidelity checks
+- **Backups and Restore Verification**: Scheduled encrypted backup sets cover PostgreSQL dumps, companion files, workspace files, system owner files, and hash-verified non-secret Helm recovery bundles when deployed on Kubernetes
 - **Kubernetes and Helm**: Base manifests, overlays, Helm chart contracts, LiteLLM/TEI/LightLLM routes, model prefetching, and network-policy templates, plus a component-selective `ship:kube` lane (topology-aware pre-ship gate, contract-skew guard, values overlay, post-rollout validation)
 - **Lifecycle Notifications**: Discord messages on restart, ready, and shutdown
 - **Structured Logging and Resilience**: Winston component loggers, LLM circuit breakers, unreachable-route cooldowns, cost capture, and explicit degraded-state events

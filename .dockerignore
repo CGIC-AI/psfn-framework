@@ -24,5 +24,4 @@ working_docs/
 *.db
 
 docker-compose.override.yml
-deploy/helm/**/charts/
 deploy/helm/**/tmpcharts/

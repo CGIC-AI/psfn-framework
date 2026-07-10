@@ -224,6 +224,24 @@ spec:
               containerPort: {{ .Values.ports.agentAdmin }}
           env:
             {{- include "psfn.commonEnv" . | nindent 12 }}
+            - name: PSFN_HELM_BACKUP_AGENT_IMAGE_REPOSITORY
+              value: {{ default .Values.psfnAppImage.repository .Values.workloads.agent.image.repository | quote }}
+            - name: PSFN_HELM_BACKUP_AGENT_IMAGE_TAG
+              value: {{ default .Values.psfnAppImage.tag .Values.workloads.agent.image.tag | quote }}
+            - name: PSFN_HELM_BACKUP_AGENT_IMAGE_DIGEST
+              value: {{ default .Values.psfnAppImage.digest .Values.workloads.agent.image.digest | quote }}
+            - name: PSFN_HELM_BACKUP_GATEWAY_IMAGE_REPOSITORY
+              value: {{ default .Values.psfnAppImage.repository .Values.workloads.gateway.image.repository | quote }}
+            - name: PSFN_HELM_BACKUP_GATEWAY_IMAGE_TAG
+              value: {{ default .Values.psfnAppImage.tag .Values.workloads.gateway.image.tag | quote }}
+            - name: PSFN_HELM_BACKUP_GATEWAY_IMAGE_DIGEST
+              value: {{ default .Values.psfnAppImage.digest .Values.workloads.gateway.image.digest | quote }}
+            - name: PSFN_HELM_BACKUP_GARDEN_IMAGE_REPOSITORY
+              value: {{ default .Values.psfnAppImage.repository .Values.workloads.garden.image.repository | quote }}
+            - name: PSFN_HELM_BACKUP_GARDEN_IMAGE_TAG
+              value: {{ default .Values.psfnAppImage.tag .Values.workloads.garden.image.tag | quote }}
+            - name: PSFN_HELM_BACKUP_GARDEN_IMAGE_DIGEST
+              value: {{ default .Values.psfnAppImage.digest .Values.workloads.garden.image.digest | quote }}
             - name: GATEWAY_RPC_ENDPOINT
               value: {{ include "psfn.gatewayRpcUrlForClient" . | quote }}
             - name: GATEWAY_SESSION_INTEGRITY_AUTH_TOKEN

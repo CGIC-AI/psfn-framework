@@ -42,6 +42,18 @@ import {
   type SystemConfigSnapshotCaptureResult,
   type SystemConfigSnapshotVerificationResult,
 } from './system-config-tree.js';
+import {
+  captureKubernetesHelmSnapshot,
+  verifyKubernetesHelmSnapshot,
+  type KubernetesHelmBackupConfig,
+  type KubernetesHelmSnapshotCaptureResult,
+  type KubernetesHelmSnapshotVerificationResult,
+} from './kubernetes-helm.js';
+import {
+  createBackupContentsManifest,
+  verifyBackupContentsManifest,
+  type BackupContentsManifest,
+} from './backup-contents.js';
 import type { BackupRuntimeConfig } from './config.js';
 import { applyTieredRetention, type TieredRetentionResult } from './retention.js';
 import { assertValidPostgresSchemaName } from '../postgres.js';
@@ -99,6 +111,8 @@ export interface BackupRunOptions {
   workspaceProtectedPaths?: string[];
   /** System-data root containing JSON owner files such as settings.json and models.json. */
   systemDataDir?: string;
+  /** Immutable chart + non-secret deployment provenance for Kubernetes/Helm recovery. */
+  kubernetesHelm?: KubernetesHelmBackupConfig;
   sessionsDir: string;
   backupRootDir: string;
   /** @deprecated Use maxRotatingBackups */
@@ -140,6 +154,10 @@ export interface BackupRunResult {
   workspaceTreeVerification?: WorkspaceTreeVerificationResult;
   systemConfig?: SystemConfigSnapshotCaptureResult;
   systemConfigVerification?: SystemConfigSnapshotVerificationResult;
+  kubernetesHelm?: KubernetesHelmSnapshotCaptureResult;
+  kubernetesHelmVerification?: KubernetesHelmSnapshotVerificationResult;
+  backupContents: BackupContentsManifest;
+  backupContentsVerification?: BackupContentsManifest;
   l0JournalVerification?: { lineCount: number };
   encryptedBackup?: EncryptedBackupPackageResult;
   tieredRetention?: TieredRetentionResult;
@@ -154,6 +172,7 @@ export interface RegisterScheduledBackupTaskOptions {
   workspaceExcludePaths?: string[];
   workspaceProtectedPaths?: string[];
   systemDataDir?: string;
+  kubernetesHelm?: KubernetesHelmBackupConfig;
   sessionsDir: string;
   memoriesJournalPath?: string;
   characterCardPath?: string;
@@ -453,6 +472,19 @@ export async function runBackupCycle(
       });
     }
 
+    const kubernetesHelm = options.kubernetesHelm
+      ? captureKubernetesHelmSnapshot({
+        config: options.kubernetesHelm,
+        backupDir,
+        now,
+      })
+      : undefined;
+    const backupContents = createBackupContentsManifest({
+      backupDir,
+      kubernetesHelmRecovery: Boolean(kubernetesHelm),
+      now,
+    });
+
     const postgresDumpVerification = options.verifyRestore && postgresDumpPath
       ? await verifyPostgresDumpArchive(postgresDumpPath, options.postgres.pgRestoreBinary)
       : undefined;
@@ -479,6 +511,13 @@ export async function runBackupCycle(
 
     const systemConfigVerification = options.verifyRestore && systemConfig
       ? verifySystemConfigSnapshot(backupDir)
+      : undefined;
+
+    const kubernetesHelmVerification = options.verifyRestore && kubernetesHelm
+      ? verifyKubernetesHelmSnapshot(backupDir)
+      : undefined;
+    const backupContentsVerification = options.verifyRestore
+      ? verifyBackupContentsManifest(backupDir)
       : undefined;
 
     const l0JournalVerification = options.verifyRestore && memoriesJournalBackupPath
@@ -547,6 +586,10 @@ export async function runBackupCycle(
       workspaceTreeVerification,
       systemConfig,
       systemConfigVerification,
+      kubernetesHelm,
+      kubernetesHelmVerification,
+      backupContents,
+      backupContentsVerification,
       l0JournalVerification,
       encryptedBackup,
       tieredRetention,
@@ -582,6 +625,7 @@ export function registerScheduledBackupTask(
             workspaceExcludePaths: options.workspaceExcludePaths,
             workspaceProtectedPaths: options.workspaceProtectedPaths,
             systemDataDir: options.systemDataDir,
+            kubernetesHelm: options.kubernetesHelm,
             sessionsDir: options.sessionsDir,
             memoriesJournalPath: options.memoriesJournalPath,
             characterCardPath: options.characterCardPath,
@@ -623,6 +667,7 @@ export function registerScheduledBackupTask(
             prunedBackupDirs: result.prunedBackupDirs.length,
             mirrored: Boolean(result.mirrorDir),
             postgresRestoreVerified: Boolean(result.postgresRestoreVerification),
+            kubernetesHelmRecovery: Boolean(result.kubernetesHelm),
             encrypted: Boolean(result.encryptedBackup),
           },
         });
@@ -645,6 +690,8 @@ export function registerScheduledBackupTask(
           workspaceTreeVerifiedFiles: result.workspaceTreeVerification?.verifiedFileCount,
           systemConfigFiles: result.systemConfig?.fileCount,
           systemConfigVerifiedFiles: result.systemConfigVerification?.verifiedFileCount,
+          kubernetesHelmChartFiles: result.kubernetesHelm?.chart.fileCount,
+          kubernetesHelmVerifiedFiles: result.kubernetesHelmVerification?.chart.verifiedFileCount,
           l0JournalLines: result.l0JournalVerification?.lineCount,
           encrypted: Boolean(result.encryptedBackup),
           encryptedBackupBytes: result.encryptedBackup?.encryptedSizeBytes,
@@ -703,6 +750,8 @@ export interface FleetBackupRunOptions {
   companions: FleetBackupCompanionUnit[];
   /** System-data root captured into the cluster (or group) artifact. */
   systemDataDir: string;
+  /** System-level recovery artifact, captured only by cluster/group units. */
+  kubernetesHelm?: KubernetesHelmBackupConfig;
   /** Shared world schema dumped into the cluster artifact. Defaults to `shared`. */
   sharedSchema?: string;
   backupRootDir: string;
@@ -790,6 +839,7 @@ function fleetLayoutDoc(mode: 'per-companion' | 'group'): Record<string, string>
       artifact: `${FLEET_GROUP_DIR_NAME}/<timestamp>/`,
       database: 'whole-database pg_dump (custom format) covering every companion schema and the shared schema',
       systemConfig: 'system-config/ + manifest — system-data owner files',
+      helmRecovery: 'helm-recovery/ + manifest when running under Helm — content-bound recovery chart and non-secret release/workload-image descriptor',
       companionTree: 'companion-tree/ — the whole companion-data parent, i.e. every companion\'s files',
       restore: 'pg_restore the whole-database dump into a fresh cluster; unpack companion-tree into companion-data and system-config into system-data',
     };
@@ -802,6 +852,7 @@ function fleetLayoutDoc(mode: 'per-companion' | 'group'): Record<string, string>
     clusterArtifact: `${FLEET_CLUSTER_DIR_NAME}/<timestamp>/`,
     clusterDatabase: 'database/<db>.<sharedSchema>.dump — pg_dump --schema=<sharedSchema> (shared world data)',
     clusterSystemConfig: 'system-config/ + manifest — system-data owner files',
+    clusterHelmRecovery: 'helm-recovery/ + authenticated contents marker when running under Helm — stored only in the cluster artifact, never companion slices',
     restore: 'restore a companion slice by pg_restore of its schema dump into a target cluster + unpacking companion-tree into companion-data/<companionId>; restore shared+system from the cluster artifact',
   };
 }
@@ -899,6 +950,7 @@ export async function runFleetBackupCycle(
         postgres: basePostgres,
         companionDataDir: groupCompanionDataDir,
         systemDataDir: options.systemDataDir,
+        ...(options.kubernetesHelm ? { kubernetesHelm: options.kubernetesHelm } : {}),
         sessionsDir: noSessionsDir,
         backupRootDir: join(options.backupRootDir, FLEET_GROUP_DIR_NAME),
         ...retentionFields,
@@ -935,6 +987,7 @@ export async function runFleetBackupCycle(
       {
         postgres: { ...basePostgres, schema: sharedSchema },
         systemDataDir: options.systemDataDir,
+        ...(options.kubernetesHelm ? { kubernetesHelm: options.kubernetesHelm } : {}),
         sessionsDir: noSessionsDir,
         backupRootDir: join(options.backupRootDir, FLEET_CLUSTER_DIR_NAME),
         ...retentionFields,

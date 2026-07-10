@@ -18,6 +18,14 @@ import {
   runFleetBackupCycle,
   type FleetBackupCompanionUnit,
 } from './service.js';
+import {
+  KUBERNETES_HELM_RECOVERY_MANIFEST_NAME,
+  type KubernetesHelmBackupConfig,
+} from './kubernetes-helm.js';
+import {
+  KUBERNETES_HELM_CHART_DIGEST_FILE_NAME,
+  inspectKubernetesHelmRecoveryChart,
+} from './kubernetes-helm-chart.js';
 
 const FIXED_NOW = () => Date.UTC(2026, 1, 26, 10, 11, 12, 123);
 
@@ -69,6 +77,43 @@ function writeSystemOwnerFiles(systemDataDir: string): void {
   }), 'utf-8');
 }
 
+function writeTestHelmChart(root: string): KubernetesHelmBackupConfig {
+  const chartSourceDir = join(root, 'helm-chart');
+  mkdirSync(join(chartSourceDir, 'templates'), { recursive: true });
+  writeFileSync(
+    join(chartSourceDir, 'Chart.yaml'),
+    'apiVersion: v2\nname: psfn\nversion: 0.1.0\nappVersion: 0.1.0-kube\n',
+    'utf-8',
+  );
+  writeFileSync(join(chartSourceDir, 'values.yaml'), 'apiKey: CHANGE_ME_API_KEY\n', 'utf-8');
+  writeFileSync(join(chartSourceDir, 'templates', 'deployment.yaml'), 'kind: Deployment\n', 'utf-8');
+  const chartContentSha256 = inspectKubernetesHelmRecoveryChart(chartSourceDir).contentSha256;
+  writeFileSync(
+    join(chartSourceDir, KUBERNETES_HELM_CHART_DIGEST_FILE_NAME),
+    `${chartContentSha256}\n`,
+    'utf-8',
+  );
+  const image = {
+    repository: 'localhost/psfn-framework',
+    tag: '0.1.0-kube-ae758a4f',
+  };
+  return {
+    chartSourceDir,
+    releaseName: 'psfn',
+    namespace: 'psfn',
+    revision: 33,
+    chartName: 'psfn',
+    chartVersion: '0.1.0',
+    appVersion: '0.1.0-kube',
+    chartContentSha256,
+    images: {
+      agent: image,
+      gateway: image,
+      garden: image,
+    },
+  };
+}
+
 /**
  * Materializes a companion's data directory (files + a session JSONL) and
  * returns the fleet unit describing it.
@@ -108,6 +153,7 @@ describe('runFleetBackupCycle', () => {
     writeSystemOwnerFiles(systemDataDir);
     const backupRootDir = join(root, 'backups');
     const { stubPath, logPath } = writeSchemaLoggingStubPgDump(root);
+    const kubernetesHelm = writeTestHelmChart(root);
 
     const companions = [
       makeCompanion(root, COMPANION_A, 'companion_alpha'),
@@ -118,6 +164,7 @@ describe('runFleetBackupCycle', () => {
       postgres: { databaseUrl: 'postgresql://psfn:secret@127.0.0.1:5432/psfn', pgDumpBinary: stubPath },
       companions,
       systemDataDir,
+      kubernetesHelm,
       backupRootDir,
       now: FIXED_NOW,
     });
@@ -140,6 +187,7 @@ describe('runFleetBackupCycle', () => {
       expect(existsSync(join(artifactDir, 'companion-tree', 'vault', 'note.md'))).toBe(true);
       expect(existsSync(join(artifactDir, 'sessions', 'channel.jsonl'))).toBe(true);
       expect(existsSync(join(artifactDir, 'system-config'))).toBe(false);
+      expect(existsSync(join(artifactDir, KUBERNETES_HELM_RECOVERY_MANIFEST_NAME))).toBe(false);
     }
 
     // Cluster artifact holds the shared dump + system tree, no companion tree.
@@ -147,6 +195,7 @@ describe('runFleetBackupCycle', () => {
     const clusterDir = join(backupRootDir, clusterArtifact!);
     expect(existsSync(join(clusterDir, 'database', 'psfn.shared.dump'))).toBe(true);
     expect(existsSync(join(clusterDir, 'system-config', 'settings.json'))).toBe(true);
+    expect(existsSync(join(clusterDir, KUBERNETES_HELM_RECOVERY_MANIFEST_NAME))).toBe(true);
     expect(existsSync(join(clusterDir, 'companion-tree'))).toBe(false);
 
     // Per-schema dump args: one dump per companion schema + the shared schema.
@@ -173,6 +222,7 @@ describe('runFleetBackupCycle', () => {
     writeSystemOwnerFiles(systemDataDir);
     const backupRootDir = join(root, 'backups');
     const { stubPath, logPath } = writeSchemaLoggingStubPgDump(root);
+    const kubernetesHelm = writeTestHelmChart(root);
 
     const companions = [
       makeCompanion(root, COMPANION_A, 'companion_alpha'),
@@ -183,6 +233,7 @@ describe('runFleetBackupCycle', () => {
       postgres: { databaseUrl: 'postgresql://psfn:secret@127.0.0.1:5432/psfn', pgDumpBinary: stubPath },
       companions,
       systemDataDir,
+      kubernetesHelm,
       backupRootDir,
       groupMode: true,
       groupCompanionDataDir: join(root, 'companion-data'),
@@ -201,6 +252,7 @@ describe('runFleetBackupCycle', () => {
     expect(existsSync(join(groupDir, 'companion-tree', COMPANION_A, 'vault', 'note.md'))).toBe(true);
     expect(existsSync(join(groupDir, 'companion-tree', COMPANION_B, 'vault', 'note.md'))).toBe(true);
     expect(existsSync(join(groupDir, 'system-config', 'settings.json'))).toBe(true);
+    expect(existsSync(join(groupDir, KUBERNETES_HELM_RECOVERY_MANIFEST_NAME))).toBe(true);
 
     // Exactly one whole-database dump; no per-schema slices.
     const dumped = readFileSync(logPath, 'utf-8').trim().split('\n').map(line => line.split('\t')[0]);

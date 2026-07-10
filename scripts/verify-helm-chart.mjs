@@ -1,10 +1,15 @@
 #!/usr/bin/env node
 import { execFileSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const chartDir = resolve(repoRoot, 'deploy/helm/psfn');
+const recoveryChartDigest = readFileSync(
+  resolve(chartDir, 'recovery-chart.sha256'),
+  'utf8',
+).trim();
 
 function render(args = []) {
   return execFileSync('helm', [
@@ -174,8 +179,61 @@ assertIncludes(agentDeployment, 'name: psfn-postgres', 'agent Postgres startup w
 assertIncludes(agentDeployment, 'key: postgres-database-url', 'agent Postgres startup wait secret key');
 assertIncludes(agentDeployment, 'name: GATEWAY_SESSION_INTEGRITY_AUTH_TOKEN', 'agent isolated session-integrity proof env');
 assertIncludes(agentDeployment, 'key: GATEWAY_SESSION_INTEGRITY_AUTH_TOKEN', 'agent isolated session-integrity proof Secret key');
+for (const [name, value] of [
+  ['PSFN_KUBERNETES_BACKUP_ENABLED', 'true'],
+  ['PSFN_HELM_CHART_DIR', '/app/deploy/helm/psfn'],
+  ['PSFN_HELM_RELEASE_NAME', 'psfn'],
+  ['PSFN_HELM_NAMESPACE', 'psfn-test'],
+  ['PSFN_HELM_REVISION', '1'],
+  ['PSFN_HELM_CHART_NAME', 'psfn'],
+  ['PSFN_HELM_CHART_VERSION', '0.1.0'],
+  ['PSFN_HELM_APP_VERSION', '0.1.0-kube'],
+  ['PSFN_HELM_CHART_CONTENT_SHA256', recoveryChartDigest],
+  ['PSFN_IMAGE_TAG', '0.1.0-kube'],
+  ['PSFN_HELM_BACKUP_AGENT_IMAGE_REPOSITORY', 'localhost/psfn-framework'],
+  ['PSFN_HELM_BACKUP_AGENT_IMAGE_TAG', '0.1.0-kube'],
+  ['PSFN_HELM_BACKUP_GATEWAY_IMAGE_REPOSITORY', 'localhost/psfn-framework'],
+  ['PSFN_HELM_BACKUP_GATEWAY_IMAGE_TAG', '0.1.0-kube'],
+  ['PSFN_HELM_BACKUP_GARDEN_IMAGE_REPOSITORY', 'localhost/psfn-framework'],
+  ['PSFN_HELM_BACKUP_GARDEN_IMAGE_TAG', '0.1.0-kube'],
+]) {
+  assertIncludes(agentDeployment, `name: ${name}`, `agent Kubernetes backup ${name} env`);
+  assertIncludes(agentDeployment, `value: "${value}"`, `agent Kubernetes backup ${name} value`);
+}
 assertNotIncludes(agentDeployment, 'LITELLM_BASE_URL', 'agent LiteLLM endpoint env');
 assertNotIncludes(agentDeployment, 'LITELLM_API_KEY', 'agent LiteLLM credential env');
+
+const workloadImageOverrides = [
+  ['agent', 'a'],
+  ['gateway', 'b'],
+  ['garden', 'c'],
+];
+const agentImageOverrideRendered = render(workloadImageOverrides.flatMap(([workload, marker]) => [
+  '--set',
+  `workloads.${workload}.image.repository=registry.example.test/${workload}`,
+  '--set',
+  `workloads.${workload}.image.tag=0.1.0-${workload}-override`,
+  '--set',
+  `workloads.${workload}.image.digest=sha256:${marker.repeat(64)}`,
+]));
+const overriddenAgentDeployment = findDocumentByKindName(
+  agentImageOverrideRendered,
+  'Deployment',
+  'psfn-agent',
+);
+for (const [workload, marker] of workloadImageOverrides) {
+  for (const value of [
+    `registry.example.test/${workload}`,
+    `0.1.0-${workload}-override`,
+    `sha256:${marker.repeat(64)}`,
+  ]) {
+    assertIncludes(
+      overriddenAgentDeployment,
+      `value: "${value}"`,
+      `${workload} Helm recovery exact image override`,
+    );
+  }
+}
 
 const gardenDeployment = findDocumentByKindName(rendered, 'Deployment', 'psfn-garden');
 assertNotIncludes(gardenDeployment, 'name: wait-for-postgres', 'Garden direct Postgres startup wait');

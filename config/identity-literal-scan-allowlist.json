@@ -97,6 +97,18 @@
       "pattern": "identity-proper-name"
     },
     {
+      "path": "scripts/verify-kube-ship-chart-provenance.mjs",
+      "contains": "psfn",
+      "reason": "Kubernetes ship verification exercises the project-owned Helm chart path and temporary Git fixture.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "scripts/verify-kube-ship-chart-provenance.mjs",
+      "contains": "PSFN",
+      "reason": "Kubernetes ship verification uses project-specific Git fixture metadata.",
+      "pattern": "identity-proper-name"
+    },
+    {
       "path": "src/app/e2e/e2e-test.ts",
       "contains": "PSFN",
       "reason": "E2E banner text identifies the project under test.",

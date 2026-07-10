@@ -57,7 +57,7 @@ export type CompanionTreeManifest = TreeSnapshotManifest;
 export type WorkspaceTreeManifestEntry = TreeSnapshotManifestEntry;
 export type WorkspaceTreeManifest = TreeSnapshotManifest;
 
-interface CaptureTreeSnapshotOptions {
+export interface CaptureTreeSnapshotOptions {
   sourceDir: string;
   backupDir: string;
   treeDirName: string;
@@ -191,7 +191,7 @@ function hashVerifiedManifestFile(
   return hashFile(capturedPath);
 }
 
-function captureTreeSnapshot(options: CaptureTreeSnapshotOptions): TreeSnapshotCaptureResult {
+export function captureTreeSnapshot(options: CaptureTreeSnapshotOptions): TreeSnapshotCaptureResult {
   const sourceDir = options.sourceDir.trim();
   if (!sourceDir) {
     throw new Error(`captureTreeSnapshot requires ${options.sourceDescription}`);
@@ -323,6 +323,9 @@ export function verifyTreeSnapshot(
   const treeRealPath = realpathSync(treeDir);
 
   const manifest = JSON.parse(readFileSync(manifestPath, 'utf-8')) as TreeSnapshotManifest;
+  for (const entry of manifest.files) {
+    resolveManifestEntryPath(treeDir, entry.path, label);
+  }
   const manifestPaths = new Set(manifest.files.map(entry => entry.path));
 
   const presentPaths: string[] = [];

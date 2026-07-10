@@ -418,10 +418,26 @@ group: cert-manager.io
   value: {{ join "," .Values.beads.allowActions | quote }}
 {{- end }}
 {{- /* Deployment provenance for companion self-diagnosis (self_status diagnose). */}}
+- name: PSFN_KUBERNETES_BACKUP_ENABLED
+  value: "true"
+- name: PSFN_HELM_CHART_DIR
+  value: "/app/deploy/helm/psfn"
+- name: PSFN_HELM_RELEASE_NAME
+  value: {{ .Release.Name | quote }}
+- name: PSFN_HELM_NAMESPACE
+  value: {{ .Release.Namespace | quote }}
 - name: PSFN_IMAGE_TAG
   value: {{ .Values.psfnAppImage.tag | quote }}
 - name: PSFN_HELM_REVISION
   value: {{ .Release.Revision | quote }}
+- name: PSFN_HELM_CHART_NAME
+  value: {{ .Chart.Name | quote }}
+- name: PSFN_HELM_CHART_VERSION
+  value: {{ .Chart.Version | quote }}
+- name: PSFN_HELM_APP_VERSION
+  value: {{ .Chart.AppVersion | quote }}
+- name: PSFN_HELM_CHART_CONTENT_SHA256
+  value: {{ required "recovery-chart.sha256 must contain the recovery chart digest" (.Files.Get "recovery-chart.sha256" | trim) | quote }}
 - name: PSFN_GIT_COMMIT
   value: {{ .Values.psfnAppImage.gitCommit | default "" | quote }}
 - name: PSFN_PREVIOUS_GIT_COMMIT

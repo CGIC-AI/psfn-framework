@@ -23,6 +23,17 @@ import {
   verifySystemConfigSnapshot,
 } from './system-config-tree.js';
 import {
+  KUBERNETES_HELM_RECOVERY_DIR_NAME,
+  KUBERNETES_HELM_RECOVERY_MANIFEST_NAME,
+  verifyKubernetesHelmSnapshot,
+  type KubernetesHelmBackupConfig,
+} from './kubernetes-helm.js';
+import {
+  KUBERNETES_HELM_CHART_DIGEST_FILE_NAME,
+  inspectKubernetesHelmRecoveryChart,
+} from './kubernetes-helm-chart.js';
+import { verifyBackupContentsManifest } from './backup-contents.js';
+import {
   registerScheduledBackupTask,
   runBackupCycle,
   SCHEDULED_BACKUP_TASK_ID,
@@ -132,6 +143,50 @@ function writeSystemOwnerFiles(systemDataDir: string): void {
   writeFileSync(join(systemDataDir, '.env'), 'OPENROUTER_API_KEY=super-secret-env\n', 'utf-8');
 }
 
+function writeTestHelmChart(root: string): KubernetesHelmBackupConfig {
+  const chartSourceDir = join(root, 'helm-chart');
+  mkdirSync(join(chartSourceDir, 'templates'), { recursive: true });
+  writeFileSync(
+    join(chartSourceDir, 'Chart.yaml'),
+    'apiVersion: v2\nname: psfn\nversion: 0.1.0\nappVersion: 0.1.0-kube\n',
+    'utf-8',
+  );
+  writeFileSync(
+    join(chartSourceDir, 'values.yaml'),
+    'secrets:\n  values:\n    apiKey: CHANGE_ME_API_KEY\n',
+    'utf-8',
+  );
+  writeFileSync(join(chartSourceDir, 'templates', 'deployment.yaml'), 'kind: Deployment\n', 'utf-8');
+  const chartContentSha256 = inspectKubernetesHelmRecoveryChart(chartSourceDir).contentSha256;
+  writeFileSync(
+    join(chartSourceDir, KUBERNETES_HELM_CHART_DIGEST_FILE_NAME),
+    `${chartContentSha256}\n`,
+    'utf-8',
+  );
+  const image = {
+    repository: 'localhost/psfn-framework',
+    tag: '0.1.0-kube-ae758a4f',
+  };
+  return {
+    chartSourceDir,
+    releaseName: 'psfn',
+    namespace: 'psfn',
+    revision: 33,
+    chartName: 'psfn',
+    chartVersion: '0.1.0',
+    appVersion: '0.1.0-kube',
+    chartContentSha256,
+    images: {
+      agent: {
+        ...image,
+        gitCommit: 'ae758a4f099633a921b823f9cc651f252b58ca00',
+      },
+      gateway: image,
+      garden: image,
+    },
+  };
+}
+
 describe('runBackupCycle', () => {
   const roots: string[] = [];
 
@@ -176,6 +231,10 @@ describe('runBackupCycle', () => {
     expect(existsSync(join(result.backupDir, 'companion', 'character-card-history.jsonl'))).toBe(true);
     expect(result.copiedSessionFiles).toEqual(['alpha.jsonl']);
     expect(result.prunedBackupDirs).toEqual([]);
+    expect(result.kubernetesHelm).toBeUndefined();
+    expect(result.backupContents.kubernetesHelmRecovery).toBe('absent');
+    expect(verifyBackupContentsManifest(result.backupDir).kubernetesHelmRecovery).toBe('absent');
+    expect(existsSync(join(result.backupDir, KUBERNETES_HELM_RECOVERY_MANIFEST_NAME))).toBe(false);
   });
 
   it('prunes old backup directories by retention count', async () => {
@@ -527,6 +586,7 @@ describe('runBackupCycle', () => {
     const sessionsDir = join(companionDataDir, 'state', 'sessions');
     const backupRootDir = join(root, 'backups');
     const decryptDir = join(root, 'decrypted');
+    const kubernetesHelm = writeTestHelmChart(root);
     writeSystemOwnerFiles(systemDataDir);
     mkdirSync(sessionsDir, { recursive: true });
     mkdirSync(join(companionDataDir, 'journal'), { recursive: true });
@@ -540,6 +600,7 @@ describe('runBackupCycle', () => {
         pgRestoreBinary: writeStubPgRestore(root),
       },
       systemDataDir,
+      kubernetesHelm,
       companionDataDir,
       sessionsDir,
       backupRootDir,
@@ -551,6 +612,8 @@ describe('runBackupCycle', () => {
     expect(result.encryptedBackup).toBeDefined();
     expect(result.postgresDumpVerification?.tocEntryCount).toBe(2);
     expect(result.systemConfigVerification?.verifiedFileCount).toBe(4);
+    expect(result.kubernetesHelmVerification?.chart.verifiedFileCount).toBe(4);
+    expect(result.backupContentsVerification?.kubernetesHelmRecovery).toBe('required');
     expect(existsSync(join(result.backupDir, ENCRYPTED_BACKUP_MANIFEST_NAME))).toBe(true);
     expect(existsSync(join(result.backupDir, ENCRYPTED_BACKUP_PAYLOAD_NAME))).toBe(true);
     expect(existsSync(join(result.backupDir, 'database'))).toBe(false);
@@ -566,8 +629,16 @@ describe('runBackupCycle', () => {
     expect(existsSync(join(decryptDir, 'sessions', 'channel.jsonl'))).toBe(true);
     expect(existsSync(join(decryptDir, SYSTEM_CONFIG_DIR_NAME, 'settings.json'))).toBe(true);
     expect(existsSync(join(decryptDir, SYSTEM_CONFIG_DIR_NAME, '.env'))).toBe(false);
+    expect(existsSync(join(decryptDir, KUBERNETES_HELM_RECOVERY_MANIFEST_NAME))).toBe(true);
+    expect(verifyKubernetesHelmSnapshot(decryptDir).chart.verifiedFileCount).toBe(4);
+    expect(verifyBackupContentsManifest(decryptDir).kubernetesHelmRecovery).toBe('required');
     expect(readFileSync(join(decryptDir, 'companion-tree', 'journal', 'private.md'), 'utf-8'))
       .toBe('memory and chat are sensitive\n');
+    rmSync(join(decryptDir, KUBERNETES_HELM_RECOVERY_DIR_NAME), { recursive: true, force: true });
+    rmSync(join(decryptDir, KUBERNETES_HELM_RECOVERY_MANIFEST_NAME), { force: true });
+    expect(() => verifyBackupContentsManifest(decryptDir)).toThrow(
+      'requires a complete Kubernetes Helm recovery bundle',
+    );
   });
 
   it('fails closed when workspace backup root overlaps protected runtime or backup paths', async () => {

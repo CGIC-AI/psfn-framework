@@ -5,6 +5,7 @@ import {
   registerScheduledBackupTask,
 } from '../../persistence/backups/service.js';
 import { deriveRestoreVerifyDatabaseUrl } from '../../persistence/backups/postgres-restore.js';
+import { resolveKubernetesHelmBackupConfig } from '../../persistence/backups/kubernetes-helm.js';
 import {
   buildFleetBackupRunOptions,
   isFleetBackupLeader,
@@ -66,6 +67,8 @@ export interface BuildAgentSchedulerRuntimeOptions {
   concernStore?: ConcernStorePort | null;
   backupConfig: BackupRuntimeConfig;
   pathSnapshot: RuntimePathSnapshot;
+  /** Deployment wiring used only to resolve the optional Kubernetes recovery bundle. */
+  env?: NodeJS.ProcessEnv;
   /**
    * Cross-companion presence runtime (multi-companion only; null flag-off).
    * When present, the heartbeat lane bumps this agent's own presence row on the
@@ -142,6 +145,7 @@ export function buildAgentSchedulerRuntime(
       timestamp: Date.now(),
     });
   };
+  const kubernetesHelm = resolveKubernetesHelmBackupConfig(options.env ?? process.env);
 
   // ── Backup lane selection (sprint 10, W2) ──
   // Multi-companion: exactly ONE process — the fleet leader (first companion in
@@ -168,6 +172,7 @@ export function buildAgentSchedulerRuntime(
         systemDataDir: options.pathSnapshot.systemDataDir,
         postgres: { databaseUrl: postgresDatabaseUrl },
         backupConfig: options.backupConfig,
+        ...(kubernetesHelm ? { kubernetesHelm } : {}),
       });
       registerScheduledFleetBackupTask({
         scheduler,
@@ -182,6 +187,7 @@ export function buildAgentSchedulerRuntime(
         backupRootDir: options.backupConfig.rootDir,
         verifyRestore: options.backupConfig.verifyRestore,
         encryption: options.backupConfig.encryption.mode,
+        kubernetesHelmRecovery: Boolean(kubernetesHelm),
       });
     } else {
       log.info('Fleet backup delegated to leader companion; no backup lane registered in this follower process', {
@@ -214,6 +220,7 @@ export function buildAgentSchedulerRuntime(
         : {}),
       companionDataDir: options.pathSnapshot.companionDataDir,
       systemDataDir: options.pathSnapshot.systemDataDir,
+      ...(kubernetesHelm ? { kubernetesHelm } : {}),
       workspacePath: options.pathSnapshot.workspacePath,
       workspaceProtectedPaths: [
         options.pathSnapshot.systemDataDir,
@@ -240,6 +247,7 @@ export function buildAgentSchedulerRuntime(
       verifyRestore: options.backupConfig.verifyRestore,
       encryption: options.backupConfig.encryption.mode,
       workspacePath: options.pathSnapshot.workspacePath,
+      kubernetesHelmRecovery: Boolean(kubernetesHelm),
     });
   }
 

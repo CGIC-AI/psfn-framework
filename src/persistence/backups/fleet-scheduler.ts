@@ -10,6 +10,7 @@ import {
 import type { Scheduler } from '../../core/scheduler/scheduler.js';
 import type { CompanionsFleetConfig } from '../../system/config/companions-config.js';
 import type { BackupRuntimeConfig } from './config.js';
+import type { KubernetesHelmBackupConfig } from './kubernetes-helm.js';
 import { deriveRestoreVerifyDatabaseUrl } from './postgres-restore.js';
 import {
   FleetBackupPartialFailureError,
@@ -148,6 +149,7 @@ export interface BuildFleetBackupRunOptionsParams {
   systemDataDir: string;
   postgres: BackupPostgresOptions;
   backupConfig: BackupRuntimeConfig;
+  kubernetesHelm?: KubernetesHelmBackupConfig;
 }
 
 /**
@@ -206,6 +208,7 @@ export function buildFleetBackupRunOptions(
     postgres,
     companions,
     systemDataDir,
+    ...(params.kubernetesHelm ? { kubernetesHelm: params.kubernetesHelm } : {}),
     backupRootDir: backupConfig.rootDir,
     groupMode,
     ...(groupCompanionDataDir ? { groupCompanionDataDir } : {}),

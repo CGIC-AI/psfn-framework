@@ -111,6 +111,22 @@ TAG="0.1.0-kube-${SHORT_SHA}"
 BUILD_DIR="$(mktemp -d "${TMPDIR:-/tmp}/psfn-ship.XXXXXX")"
 trap 'rm -rf "$BUILD_DIR"' EXIT
 
+# The agent image is the immutable source for Helm recovery backups. If the
+# chart changed since that image's source commit, a selective gateway/Garden
+# ship must refresh the agent too; otherwise the new Helm revision would point
+# at a stale embedded chart. Unknown provenance fails closed.
+if [[ ! " ${SELECTED[*]} " == *" agent "* ]]; then
+  LIVE_AGENT_COMMIT="$(rkubectl exec deploy/psfn-agent -- sh -c 'echo "$PSFN_GIT_COMMIT"' 2>/dev/null | tr -d '[:space:]' || true)"
+  if [[ ! "$LIVE_AGENT_COMMIT" =~ ^[0-9a-f]{40}$ ]] || ! git cat-file -e "${LIVE_AGENT_COMMIT}^{commit}" 2>/dev/null; then
+    echo "FAIL: cannot prove the live agent chart provenance; use --components all" >&2
+    exit 1
+  fi
+  if ! git diff --quiet "$LIVE_AGENT_COMMIT" HEAD -- deploy/helm/psfn; then
+    echo "==> Helm chart changed since live agent ${LIVE_AGENT_COMMIT:0:8}; adding agent rollout"
+    SELECTED+=(agent)
+  fi
+fi
+
 NEW_HASH=""
 if [[ ${#SELECTED[@]} -gt 0 ]]; then
   echo "==> building ${IMAGE_NAME}:${TAG} (components to roll: ${SELECTED[*]})"
@@ -129,8 +145,10 @@ if [[ ${#SELECTED[@]} -gt 0 ]]; then
     "grep -q toolCallBlocksByIndex /app/node_modules/@mariozechner/pi-ai/dist/providers/openai-completions.js \
      && test -f /app/config/concern-softening.json \
      && test -f /app/config/intake-l1-rules.json \
+     && test -f /app/deploy/helm/psfn/Chart.yaml \
+     && test -f /app/deploy/helm/psfn/recovery-chart.sha256 \
      && command -v bd >/dev/null && command -v rg >/dev/null" \
-    || { echo "FAIL: in-image verification (pi-ai patch / runtime config / bd / rg)" >&2; exit 1; }
+    || { echo "FAIL: in-image verification (pi-ai patch / runtime config / recovery chart / bd / rg)" >&2; exit 1; }
   echo "    contract hash: $NEW_HASH"
 fi
 

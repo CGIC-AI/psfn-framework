@@ -1,0 +1,74 @@
+#!/usr/bin/env node
+import { execFileSync, spawnSync } from 'node:child_process';
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const shipScriptPath = join(repoRoot, 'scripts/ops/ship-kube-update.sh');
+const shipScript = readFileSync(shipScriptPath, 'utf-8');
+const provenanceGuard = 'git diff --quiet "$LIVE_AGENT_COMMIT" HEAD -- deploy/helm/psfn';
+const forceAgent = 'SELECTED+=(agent)';
+const guardIndex = shipScript.indexOf(provenanceGuard);
+const forceIndex = shipScript.indexOf(forceAgent);
+const buildIndex = shipScript.indexOf('docker buildx build');
+if (guardIndex < 0 || forceIndex < guardIndex || buildIndex < forceIndex) {
+  throw new Error('ship-kube-update.sh does not force an agent refresh before building when the chart changes');
+}
+
+const root = mkdtempSync(join(tmpdir(), 'psfn-kube-chart-provenance-'));
+const runGit = (...args) => execFileSync('git', args, {
+  cwd: root,
+  encoding: 'utf-8',
+  stdio: ['ignore', 'pipe', 'pipe'],
+}).trim();
+
+try {
+  runGit('init', '--initial-branch=main');
+  runGit('config', 'user.name', 'PSFN Verification');
+  runGit('config', 'user.email', 'verify@psfn.invalid');
+  mkdirSync(join(root, 'deploy/helm/psfn'), { recursive: true });
+  mkdirSync(join(root, 'src'), { recursive: true });
+  writeFileSync(join(root, 'deploy/helm/psfn/Chart.yaml'), 'version: 1\n', 'utf-8');
+  writeFileSync(join(root, 'src/runtime.ts'), 'export const revision = 1;\n', 'utf-8');
+  runGit('add', '.');
+  runGit('commit', '-m', 'initial chart');
+  const embeddedRevision = runGit('rev-parse', 'HEAD');
+
+  writeFileSync(join(root, 'src/runtime.ts'), 'export const revision = 2;\n', 'utf-8');
+  runGit('add', '.');
+  runGit('commit', '-m', 'runtime only');
+  const runtimeOnlyRevision = runGit('rev-parse', 'HEAD');
+  const unchanged = spawnSync(
+    'git',
+    ['diff', '--quiet', embeddedRevision, runtimeOnlyRevision, '--', 'deploy/helm/psfn'],
+    { cwd: root },
+  );
+  if (unchanged.status !== 0) {
+    throw new Error('runtime-only revision was incorrectly classified as a chart change');
+  }
+
+  writeFileSync(join(root, 'deploy/helm/psfn/Chart.yaml'), 'version: 2\n', 'utf-8');
+  runGit('add', '.');
+  runGit('commit', '-m', 'chart revision');
+  const chartRevision = runGit('rev-parse', 'HEAD');
+  const changed = spawnSync(
+    'git',
+    ['diff', '--quiet', embeddedRevision, chartRevision, '--', 'deploy/helm/psfn'],
+    { cwd: root },
+  );
+  if (changed.status !== 1) {
+    throw new Error('second chart revision did not force the chart-change path');
+  }
+} finally {
+  rmSync(root, { recursive: true, force: true });
+}
+
+console.log('Kubernetes selective-rollout chart provenance verification passed.');

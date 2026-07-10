@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onDestroy, onMount } from 'svelte';
   import { getSessionMessages, listSessions } from '$lib/api/endpoints/sessions';
+  import BoundedList from '$lib/components/garden/BoundedList.svelte';
   import PromptMonitorSelectedTurnTabs from '$lib/components/prompt-monitor/PromptMonitorSelectedTurnTabs.svelte';
   import {
     connectGardenEventBus,
@@ -162,6 +163,15 @@
     return value >= warningThreshold ? 'text-wilt-600' : 'text-moss-700';
   }
 
+  function stageTooltip(turn: PromptMonitorTurn): string {
+    return PROMPT_MONITOR_STAGE_ORDER
+      .map(stageName => {
+        const stage = turn.stages.find(candidate => candidate.stage === stageName);
+        return `${formatPromptMonitorStageLabel(stageName)}: ${stage ? formatDuration(stage.elapsedMs) : '—'}`;
+      })
+      .join('\n');
+  }
+
   function handlePromptEvent(event: Parameters<typeof mergePromptMonitorEvent>[1]): void {
     if (!selectedLogicalChannelId || event.correlation.channelId !== selectedLogicalChannelId) {
       return;
@@ -204,7 +214,7 @@
       <button
         type="button"
         onclick={() => void loadChannels()}
-        class="rounded-lg border border-bark-300 px-3 py-1.5 text-sm font-medium text-shadow-700 hover:bg-bark-100 transition-colors disabled:opacity-60"
+        class="rounded-lg border border-bark-300 px-2.5 py-1 text-sm font-medium text-shadow-700 hover:bg-bark-100 transition-colors disabled:opacity-60"
         disabled={loadingChannels}
       >
         {loadingChannels ? 'Refreshing…' : 'Refresh Sessions'}
@@ -212,7 +222,7 @@
       <button
         type="button"
         onclick={() => void refreshSelectedChannel()}
-        class="rounded-lg border border-gold-300 bg-gold-50 px-3 py-1.5 text-sm font-medium text-shadow-800 hover:bg-gold-100 transition-colors disabled:opacity-60"
+        class="rounded-lg border border-gold-300 bg-gold-50 px-2.5 py-1 text-sm font-medium text-shadow-800 hover:bg-gold-100 transition-colors disabled:opacity-60"
         disabled={!selectedSessionId || refreshingSelected}
       >
         {refreshingSelected ? 'Refreshing…' : 'Refresh Turn History'}
@@ -227,24 +237,56 @@
     </div>
   {/if}
 
-  <div class="grid grid-cols-1 xl:grid-cols-[18rem,minmax(0,1fr)] gap-4">
+  <div class="card-garden flex flex-wrap items-center gap-x-6 gap-y-2 px-4 py-2.5">
+    <div class="flex items-baseline gap-2" title="Mean `agent.turn.stage.prompt` duration across loaded turns">
+      <span class="text-xs font-medium uppercase tracking-wide text-shadow-600">Avg Prompt</span>
+      <span class="font-serif text-2xl leading-none {metricTone(summary.averagePromptDurationMs, 1_500)}">
+        {formatDuration(summary.averagePromptDurationMs)}
+      </span>
+    </div>
+    <div class="flex items-baseline gap-2" title="Mean time-to-first-token across loaded turns">
+      <span class="text-xs font-medium uppercase tracking-wide text-shadow-600">Avg TTFT</span>
+      <span class="font-serif text-2xl leading-none {metricTone(summary.averageTtftMs, 500)}">
+        {formatDuration(summary.averageTtftMs)}
+      </span>
+    </div>
+    <div class="h-6 w-px bg-bark-300" aria-hidden="true"></div>
+    <div class="flex items-baseline gap-2">
+      <span class="text-xs font-medium uppercase tracking-wide text-shadow-600">Turns</span>
+      <span class="text-base text-shadow-900">{summary.turnCount}</span>
+    </div>
+    <div class="flex items-baseline gap-2" title="Incomplete prompt traces still accumulating">
+      <span class="text-xs font-medium uppercase tracking-wide text-shadow-600">Live</span>
+      <span class="text-base text-shadow-900">{summary.liveTurnCount}</span>
+    </div>
+    <div class="ml-auto flex min-w-0 items-baseline gap-3 text-xs text-shadow-600">
+      <span class="truncate" title={selectedLogicalChannelId ?? undefined}>
+        {selectedLogicalChannelId ? truncateValue(selectedLogicalChannelId, 28) : 'No channel selected'}
+      </span>
+      <span class="truncate font-mono" title="Latest prompt stack pointer">
+        stack {truncateValue(summary.latestPromptVersionPointer, 16)}
+      </span>
+    </div>
+  </div>
+
+  <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
     <aside class="card-garden overflow-hidden">
-      <div class="border-b border-bark-300 bg-bark-100 px-4 py-3">
+      <div class="flex items-baseline justify-between gap-3 border-b border-bark-300 bg-bark-100 px-4 py-2">
         <p class="text-sm font-medium text-shadow-800">Sessions</p>
-        <p class="text-sm text-shadow-600">
-          {channels.length} visible . {liveEventCount} live prompt event{liveEventCount === 1 ? '' : 's'}
+        <p class="text-xs text-shadow-600">
+          {channels.length} visible · {liveEventCount} live prompt event{liveEventCount === 1 ? '' : 's'}
         </p>
       </div>
 
-      <div class="max-h-[36rem] overflow-y-auto">
+      <BoundedList maxHeight="13.5rem" label="Sessions">
         {#if loadingChannels}
-          <div class="space-y-2 p-4">
-            {#each Array(6) as _}
-              <div class="h-14 rounded-lg bg-bark-200 animate-pulse"></div>
+          <div class="space-y-2 p-3">
+            {#each Array(3) as _}
+              <div class="h-10 rounded-lg bg-bark-200 animate-pulse"></div>
             {/each}
           </div>
         {:else if channels.length === 0}
-          <div class="p-4 text-sm text-shadow-600">
+          <div class="p-3 text-sm text-shadow-600">
             No sessions with recorded turns yet.
           </div>
         {:else}
@@ -252,161 +294,94 @@
             <button
               type="button"
               onclick={() => selectChannel(channel.sessionId)}
-              class="w-full border-b border-bark-200 px-4 py-3 text-left transition-colors hover:bg-bark-100"
+              class="w-full border-b border-bark-200 px-3 py-2 text-left transition-colors hover:bg-bark-100"
               class:bg-gold-50={selectedSessionId === channel.sessionId}
               class:border-l-4={selectedSessionId === channel.sessionId}
               class:border-l-gold-400={selectedSessionId === channel.sessionId}
             >
-              <p class="truncate text-sm font-medium text-shadow-900" title={channel.channelId}>
-                {channelLabel(channel)}
-              </p>
-              <p class="mt-1 text-sm text-shadow-600">
-                {channel.messageCount} messages . {formatRelativeActivity(channel)}
-              </p>
-              {#if channel.sessionId !== channel.channelId}
-                <p class="mt-1 truncate font-mono text-sm text-shadow-600" title={channel.sessionId}>
-                  session: {channel.sessionId}
+              <div class="flex items-baseline justify-between gap-3">
+                <p class="min-w-0 truncate text-sm font-medium text-shadow-900" title={channel.channelId}>
+                  {channelLabel(channel)}
                 </p>
-              {/if}
-              {#if channel.linkedContactName}
-                <p class="mt-1 truncate text-sm text-moss-700">
-                  {channel.linkedContactName}
-                </p>
-              {/if}
+                <p class="shrink-0 text-xs text-shadow-600">{formatRelativeActivity(channel)}</p>
+              </div>
+              <p class="mt-0.5 truncate text-xs text-shadow-600">
+                {channel.messageCount} messages{channel.linkedContactName ? ` · ${channel.linkedContactName}` : ''}{channel.sessionId !== channel.channelId ? ` · session: ${channel.sessionId}` : ''}
+              </p>
             </button>
           {/each}
         {/if}
-      </div>
+      </BoundedList>
     </aside>
 
-    <div class="space-y-4 min-w-0">
-      <div class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
-        <div class="card-garden p-4">
-          <p class="text-sm font-medium uppercase tracking-wide text-shadow-600">Turns Loaded</p>
-          <p class="mt-1 font-serif text-3xl text-shadow-900">{summary.turnCount}</p>
-          <p class="mt-1 text-sm text-shadow-600">
-            {selectedLogicalChannelId ? truncateValue(selectedLogicalChannelId, 28) : 'No channel selected'}
-          </p>
-        </div>
-        <div class="card-garden p-4">
-          <p class="text-sm font-medium uppercase tracking-wide text-shadow-600">Live Turns</p>
-          <p class="mt-1 font-serif text-3xl text-shadow-900">{summary.liveTurnCount}</p>
-          <p class="mt-1 text-sm text-shadow-600">Incomplete prompt traces still accumulating</p>
-        </div>
-        <div class="card-garden p-4">
-          <p class="text-sm font-medium uppercase tracking-wide text-shadow-600">Avg Prompt Stage</p>
-          <p class="mt-1 font-serif text-3xl {metricTone(summary.averagePromptDurationMs, 1_500)}">
-            {formatDuration(summary.averagePromptDurationMs)}
-          </p>
-          <p class="mt-1 text-sm text-shadow-600">Mean `agent.turn.stage.prompt` duration</p>
-        </div>
-        <div class="card-garden p-4">
-          <p class="text-sm font-medium uppercase tracking-wide text-shadow-600">Avg TTFT</p>
-          <p class="mt-1 font-serif text-3xl {metricTone(summary.averageTtftMs, 500)}">
-            {formatDuration(summary.averageTtftMs)}
-          </p>
-          <p class="mt-1 text-sm text-shadow-600">
-            Latest stack {truncateValue(summary.latestPromptVersionPointer, 16)}
-          </p>
-        </div>
+    <section class="card-garden overflow-hidden">
+      <div class="flex items-baseline justify-between gap-3 border-b border-bark-300 bg-bark-100 px-4 py-2">
+        <p class="text-sm font-medium text-shadow-800">Turns</p>
+        <p class="min-w-0 truncate text-xs text-shadow-600" title={selectedLogicalChannelId ?? selectedSessionId ?? undefined}>
+          {#if selectedSessionId}
+            {turns.length} loaded · {selectedLogicalChannelId ?? selectedSessionId}
+          {:else}
+            no session selected
+          {/if}
+        </p>
       </div>
 
-      {#if !selectedSessionId}
-        <div class="card-garden p-8 text-center text-shadow-600">
-          Select a session to inspect prompt generation.
-        </div>
-      {:else if loadingTurns}
-        <div class="card-garden p-5 space-y-3">
-          {#each Array(4) as _}
-            <div class="h-24 rounded-lg bg-bark-200 animate-pulse"></div>
-          {/each}
-        </div>
-      {:else if turns.length === 0}
-        <div class="card-garden p-8 text-center">
-          <p class="font-serif text-lg text-shadow-800">No prompt traces yet</p>
-          <p class="mt-2 text-sm text-shadow-600">
-            This session has no recorded turn observability. Trigger a turn and the live bus will populate the monitor.
-          </p>
-        </div>
-      {:else}
-        <div class="grid grid-cols-1 2xl:grid-cols-[minmax(0,1.1fr),minmax(0,0.9fr)] gap-4">
-          <section class="card-garden overflow-hidden">
-            <div class="border-b border-bark-300 bg-bark-100 px-5 py-4">
-              <h2 class="font-serif text-lg text-shadow-900">Turn Ledger</h2>
-              <p class="mt-1 text-sm text-shadow-600">
-                Prompt snapshots and stage timings for {selectedLogicalChannelId ?? selectedSessionId}
+      <BoundedList maxHeight="13.5rem" label="Turn ledger">
+        {#if !selectedSessionId}
+          <div class="p-3 text-sm text-shadow-600">
+            Select a session to inspect prompt generation.
+          </div>
+        {:else if loadingTurns}
+          <div class="space-y-2 p-3">
+            {#each Array(3) as _}
+              <div class="h-10 rounded-lg bg-bark-200 animate-pulse"></div>
+            {/each}
+          </div>
+        {:else if turns.length === 0}
+          <div class="p-3 text-sm text-shadow-600">
+            No prompt traces yet. Trigger a turn and the live bus will populate the monitor.
+          </div>
+        {:else}
+          {#each turns as turn (turn.turnId)}
+            {@const metrics = resolvePromptMonitorMetrics(turn)}
+            <button
+              type="button"
+              onclick={() => selectedTurnId = turn.turnId}
+              title={stageTooltip(turn)}
+              class="w-full border-b border-bark-200 px-3 py-2 text-left transition-colors hover:bg-gold-50/50"
+              class:bg-gold-50={selectedTurnId === turn.turnId}
+              class:border-l-4={selectedTurnId === turn.turnId}
+              class:border-l-gold-400={selectedTurnId === turn.turnId}
+            >
+              <div class="flex items-baseline justify-between gap-3">
+                <p class="min-w-0 truncate font-mono text-sm text-shadow-900">
+                  {truncateValue(turn.turnId, 22)}
+                </p>
+                <span class="shrink-0 rounded-full px-2 py-0.5 text-xs font-medium
+                  {metrics.isComplete ? 'bg-bark-100 text-shadow-700' : 'bg-moss-50 text-moss-700'}">
+                  {metrics.isComplete ? 'recorded' : 'live'}
+                </span>
+              </div>
+              <p class="mt-0.5 flex flex-wrap items-baseline gap-x-3 text-xs text-shadow-600">
+                <span>TTFT <span class="text-sm font-medium {metricTone(metrics.ttftMs, 500)}">{formatDuration(metrics.ttftMs)}</span></span>
+                <span>Prompt <span class="text-sm font-medium {metricTone(metrics.promptDurationMs, 1_500)}">{formatDuration(metrics.promptDurationMs)}</span></span>
+                <span class="font-mono">{truncateValue(metrics.promptVersionPointer, 12)}</span>
+                <span>{metrics.promptMode ?? 'default'}</span>
+                <span>{formatTimestamp(turn.latestEventAt)}</span>
               </p>
-            </div>
-
-            <div class="max-h-[42rem] overflow-y-auto p-4 space-y-3">
-              {#each turns as turn (turn.turnId)}
-                {@const metrics = resolvePromptMonitorMetrics(turn)}
-                <button
-                  type="button"
-                  onclick={() => selectedTurnId = turn.turnId}
-                  class="w-full rounded-xl border p-4 text-left transition-colors hover:border-gold-300 hover:bg-gold-50/50"
-                  class:border-gold-400={selectedTurnId === turn.turnId}
-                  class:bg-gold-50={selectedTurnId === turn.turnId}
-                  class:border-bark-300={selectedTurnId !== turn.turnId}
-                >
-                  <div class="flex items-start justify-between gap-3">
-                    <div class="min-w-0">
-                      <p class="truncate font-mono text-sm text-shadow-900">
-                        {truncateValue(turn.turnId, 22)}
-                      </p>
-                      <p class="mt-1 text-sm text-shadow-600">
-                        {formatTimestamp(turn.latestEventAt)}
-                      </p>
-                    </div>
-                    <span class="shrink-0 rounded-full px-2.5 py-1 text-sm font-medium
-                      {metrics.isComplete ? 'bg-bark-100 text-shadow-700' : 'bg-moss-50 text-moss-700'}">
-                      {metrics.isComplete ? 'recorded' : 'live'}
-                    </span>
-                  </div>
-
-                  <div class="mt-3 grid grid-cols-2 gap-2 text-sm text-shadow-700 sm:grid-cols-4">
-                    <div>
-                      <span class="block text-shadow-600">TTFT</span>
-                      <span class="font-medium {metricTone(metrics.ttftMs, 500)}">{formatDuration(metrics.ttftMs)}</span>
-                    </div>
-                    <div>
-                      <span class="block text-shadow-600">Prompt</span>
-                      <span class="font-medium {metricTone(metrics.promptDurationMs, 1_500)}">{formatDuration(metrics.promptDurationMs)}</span>
-                    </div>
-                    <div>
-                      <span class="block text-shadow-600">Stack</span>
-                      <span class="font-mono text-shadow-800">{truncateValue(metrics.promptVersionPointer, 12)}</span>
-                    </div>
-                    <div>
-                      <span class="block text-shadow-600">Mode</span>
-                      <span class="text-shadow-800">{metrics.promptMode ?? 'default'}</span>
-                    </div>
-                  </div>
-
-                  <div class="mt-3 flex flex-wrap gap-2">
-                    {#each PROMPT_MONITOR_STAGE_ORDER as stageName}
-                      {@const stage = turn.stages.find(candidate => candidate.stage === stageName)}
-                      <span class="rounded-full border px-2.5 py-1 text-sm
-                        {stage ? 'border-gold-200 bg-gold-50 text-shadow-800' : 'border-bark-200 bg-white text-shadow-500'}">
-                        {formatPromptMonitorStageLabel(stageName)} {stage ? `· ${formatDuration(stage.elapsedMs)}` : ''}
-                      </span>
-                    {/each}
-                  </div>
-                </button>
-              {/each}
-            </div>
-          </section>
-
-          {#if selectedTurn}
-            <PromptMonitorSelectedTurnTabs
-              turn={selectedTurn}
-              metrics={selectedTurnMetrics}
-              selectedChannelEvents={selectedChannelEvents}
-              turns={turns}
-            />
-          {/if}
-        </div>
-      {/if}
-    </div>
+            </button>
+          {/each}
+        {/if}
+      </BoundedList>
+    </section>
   </div>
+
+  {#if selectedTurn}
+    <PromptMonitorSelectedTurnTabs
+      turn={selectedTurn}
+      metrics={selectedTurnMetrics}
+      selectedChannelEvents={selectedChannelEvents}
+      turns={turns}
+    />
+  {/if}
 </div>

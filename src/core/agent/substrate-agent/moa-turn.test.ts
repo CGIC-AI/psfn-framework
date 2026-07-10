@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { runMoaTurn, type ResolvedMoaSettings } from './moa-turn.js';
+import { buildMoaPrompt, runMoaTurn, type ResolvedMoaSettings } from './moa-turn.js';
 import { runDeliberation } from '../../../primitives/llm/deliberation.js';
 import type { LLMContext, ObservabilityCallType, SubstrateMessage } from '../../../shared/contracts/runtime.js';
 import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
@@ -117,6 +117,7 @@ describe('runMoaTurn', () => {
     const emitTelemetry = vi.fn();
 
     await runMoaTurn({
+      prompt: buildMoaPrompt(context, { role: 'user', content: 'current turn' }),
       llmClient: {} as any,
       context,
       message: { channelId: 'api:test' } as SubstrateMessage,
@@ -132,6 +133,7 @@ describe('runMoaTurn', () => {
     const prompt = mockedRunDeliberation.mock.calls[0]?.[1] as string;
     expect(prompt).toContain('user:\nHello');
     expect(prompt).toContain('assistant:\nHi');
+    expect(prompt).toContain('Current turn:\nuser:\ncurrent turn');
   });
 
   it('emits base round and consult charge events for MoA deliberation', async () => {
@@ -178,6 +180,7 @@ describe('runMoaTurn', () => {
     });
 
     await runMoaTurn({
+      prompt: 'current turn',
       llmClient: {} as any,
       context: {
         systemPrompt: 'You are a helper.',
@@ -251,6 +254,7 @@ describe('runMoaTurn', () => {
     });
 
     const result = await runMoaTurn({
+      prompt: 'current turn',
       llmClient: {} as any,
       context: {
         systemPrompt: 'You are a helper.',
@@ -327,6 +331,7 @@ describe('runMoaTurn', () => {
     const emitTelemetry = vi.fn();
 
     await runMoaTurn({
+      prompt: 'current turn',
       llmClient: {} as any,
       context: {
         systemPrompt: 'You are a helper.',

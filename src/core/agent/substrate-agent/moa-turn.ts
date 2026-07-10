@@ -71,7 +71,10 @@ export function resolveMoaSettings(config: SubstrateConfig, logger: MoaLogger): 
   };
 }
 
-function buildMoaPrompt(context: LLMContext): string {
+export function buildMoaPrompt(
+  context: LLMContext,
+  currentTurn: { role: 'user' | 'system'; content: string },
+): string {
   const transcript = context.messages
     .map(message => `${message.role}:\n${message.content}`)
     .join('\n\n');
@@ -79,6 +82,7 @@ function buildMoaPrompt(context: LLMContext): string {
     'Produce the best final assistant reply for the latest user turn.',
     `System instructions:\n${context.systemPrompt}`,
     transcript.length > 0 ? `Conversation transcript:\n${transcript}` : '',
+    `Current turn:\n${currentTurn.role}:\n${currentTurn.content}`,
     'Return only the assistant response text to send back.',
   ]
     .map(section => section.trim())
@@ -173,6 +177,7 @@ export async function runMoaTurn(input: {
   llmClient: LLMProviderPort;
   context: LLMContext;
   message: SubstrateMessage;
+  prompt: string;
   settings: ResolvedMoaSettings;
   config?: SubstrateConfig;
   turnId: TurnID;
@@ -222,7 +227,7 @@ export async function runMoaTurn(input: {
   };
   const deliberation = await runDeliberation(
     input.llmClient,
-    buildMoaPrompt(input.context),
+    input.prompt,
     {
       correlation: {
         turnId: input.turnId,

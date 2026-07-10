@@ -428,6 +428,7 @@ export async function computePreTurnState(input: {
   trustLevel: TrustLevel;
   emotionSessionId: string;
   turnBudgetCharacteristics: ContextBudgetTurnCharacteristics;
+  currentSessionEntryId: number | null;
   focusMemoryScopeQuery: MemoryScopeQuery | null;
   temporalRetrievalCallerContext: RetrievalCallerContext | undefined;
   temporalRetrievalMode: RetrievalModeInput | undefined;
@@ -448,6 +449,7 @@ export async function computePreTurnState(input: {
     trustLevel,
     emotionSessionId,
     turnBudgetCharacteristics,
+    currentSessionEntryId,
     focusMemoryScopeQuery,
     temporalRetrievalCallerContext,
     temporalRetrievalMode,
@@ -468,6 +470,7 @@ export async function computePreTurnState(input: {
     channelMeta,
     continuityFallbackUserIds: authorContext.continuityFallbackKeys,
     turnBudgetCharacteristics,
+    ...(currentSessionEntryId !== null ? { excludeSessionEntryId: currentSessionEntryId } : {}),
   });
   const memoryRetrievalContextText = buildMemoryRetrievalContextText(message, sessionContextSnapshot);
   const sessionChannelId = runtime.resolveSessionChannelId(message.channelId);

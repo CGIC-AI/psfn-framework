@@ -46,6 +46,7 @@ import { PromptCacheTurnRuntime } from './turn-execution/prompt-cache-runtime.js
 import { CompletionNoticeBuffer } from '../completion-notices.js';
 import type { ResolvedAuthorContext } from './runtime-context.js';
 import { runMoaTurn } from './moa-turn.js';
+import { buildTurnUserContent } from './vision-attachments.js';
 import { makeTestFatiguePolicyConfig } from '../../../test-support/charge-policy.js';
 
 vi.mock('./moa-turn.js', async () => {
@@ -56,7 +57,16 @@ vi.mock('./moa-turn.js', async () => {
   };
 });
 
+vi.mock('./vision-attachments.js', async () => {
+  const actual = await vi.importActual<typeof import('./vision-attachments.js')>('./vision-attachments.js');
+  return {
+    ...actual,
+    buildTurnUserContent: vi.fn(actual.buildTurnUserContent),
+  };
+});
+
 const mockedRunMoaTurn = vi.mocked(runMoaTurn);
+const mockedBuildTurnUserContent = vi.mocked(buildTurnUserContent);
 
 let tempDir: string | null = null;
 
@@ -69,6 +79,7 @@ afterEach(() => {
 
 beforeEach(() => {
   mockedRunMoaTurn.mockReset();
+  mockedBuildTurnUserContent.mockClear();
 });
 
 function makeTempDir(): string {
@@ -382,7 +393,10 @@ describe('handleMessageForTurn presence canonicalization', () => {
     const eventBus = new EventBus();
     const buildContext = vi.fn(async () => ({
       systemPrompt: 'System prompt',
-      messages: [],
+      messages: [
+        { role: 'user', content: 'Earlier request' },
+        { role: 'assistant', content: 'Earlier assistant reply' },
+      ],
       manifest: undefined,
     }));
     const scheduleAutoCompactionBetweenTurns = vi.fn(async () => undefined);
@@ -430,6 +444,17 @@ describe('handleMessageForTurn presence canonicalization', () => {
           }),
         }),
       }),
+    });
+    const moaPrompt = mockedRunMoaTurn.mock.calls[0]?.[0]?.prompt as string;
+    expect(moaPrompt).toContain('assistant:\nEarlier assistant reply');
+    expect(moaPrompt.match(/Hello there/g)).toHaveLength(1);
+    const buildTurnRecordMock = runtime.buildTurnRecord as ReturnType<typeof vi.fn>;
+    const recordedInput = buildTurnRecordMock.mock.calls[0]?.[0] as { turnSnapshot?: Record<string, unknown> };
+    const promptContext = recordedInput.turnSnapshot?.promptContext as Record<string, unknown> | undefined;
+    expect(promptContext?.currentTurnInput).toBe('Hello there');
+    expect(promptContext?.providerObservability).toMatchObject({
+      backendModel: 'moa-model',
+      providerWireMessages: [{ role: 'user', source: 'message', content: moaPrompt }],
     });
   });
 });
@@ -1867,6 +1892,20 @@ describe('handleMessageForTurn compaction scheduling', () => {
       type: 'systemNote',
       content: '[SYSTEM: Runtime] tool notify is unavailable; choose another route',
     });
+    const buildTurnRecordMock = runtime.buildTurnRecord as ReturnType<typeof vi.fn>;
+    const recordedInput = buildTurnRecordMock.mock.calls[0]?.[0] as { turnSnapshot?: Record<string, unknown> };
+    const promptContext = recordedInput.turnSnapshot?.promptContext as Record<string, unknown> | undefined;
+    const providerWireMessages = (promptContext?.providerObservability as {
+      providerWireMessages?: Array<{ role: string; source: string; content: string }>;
+    } | undefined)?.providerWireMessages;
+    expect(providerWireMessages?.filter(providerMessage => providerMessage.source === 'message')).toEqual([
+      expect.objectContaining({
+        role: 'assistant',
+        content: expect.stringContaining(
+          '[System note] [SYSTEM: Runtime] tool notify is unavailable; choose another route',
+        ),
+      }),
+    ]);
   });
 
   it('routes external turns through the canonical continuity subject instead of the session-local author id', async () => {
@@ -1995,6 +2034,25 @@ describe('handleMessageForTurn compaction scheduling', () => {
     runtime.getPersonaAdaptation = vi.fn(() => 'Persona hint');
     runtime.buildRuntimeContext = vi.fn(() => 'Runtime context block');
     runtime.buildScratchpadContextBlock = vi.fn(() => 'Scratchpad block');
+    const historyAtPrompt: unknown[][] = [];
+    runtime.agent.prompt = vi.fn(async (promptMessage: { role: string; content: string }) => {
+      historyAtPrompt.push(runtime.agent.state.messages.map(historyMessage => ({ ...historyMessage })));
+      runtime.agent.state.messages.push(
+        promptMessage,
+        {
+          role: 'assistant',
+          content: [{ type: 'toolCall', id: 'call-1', name: 'contact', arguments: { action: 'list' } }],
+        },
+        {
+          role: 'toolResult',
+          toolCallId: 'call-1',
+          toolName: 'contact',
+          content: [{ type: 'text', text: 'No contacts changed.' }],
+          isError: false,
+        },
+        { role: 'assistant', content: 'assistant reply' },
+      );
+    });
     (runtime.applyActiveToolsToAgentForTurn as ReturnType<typeof vi.fn>).mockImplementation(() => {
       runtime.agent.setTools([
         {
@@ -2074,6 +2132,17 @@ describe('handleMessageForTurn compaction scheduling', () => {
       content: 'assistant reply',
       model: 'test-model',
     });
+    expect(historyAtPrompt).toEqual([[
+      expect.objectContaining({
+        role: 'user',
+        content: 'Earlier user message',
+        timestamp: expect.any(Number),
+      }),
+      expect.objectContaining({
+        role: 'assistant',
+        content: [{ type: 'text', text: 'Earlier assistant reply' }],
+      }),
+    ]]);
     expect(promptContext?.providerObservability).toMatchObject({
       backendApi: 'openai-completions',
       routeKind: 'registered_model',
@@ -2084,6 +2153,7 @@ describe('handleMessageForTurn compaction scheduling', () => {
         { role: 'system', source: 'system_prompt', content: finalSystemPrompt },
         { role: 'user', source: 'message', content: 'Earlier user message' },
         { role: 'assistant', source: 'message', content: expect.stringContaining('Earlier assistant reply') },
+        { role: 'user', source: 'message', content: 'Hello there' },
       ],
     });
     expect(toolContext).toMatchObject({
@@ -2119,6 +2189,53 @@ describe('handleMessageForTurn compaction scheduling', () => {
     });
   });
 
+  it('passes the just-recorded entry id to context assembly and prompts current input once', async () => {
+    const eventBus = new EventBus();
+    const buildContext = vi.fn(async () => ({
+      systemPrompt: 'Final system prompt',
+      messages: [
+        { role: 'user', content: 'Earlier user message' },
+        { role: 'assistant', content: 'Earlier assistant reply' },
+      ],
+      manifest: undefined,
+    }));
+    const runtime = createRuntime({
+      eventBus,
+      sessionManager: {} as SessionManager,
+      buildContext,
+      scheduleAutoCompactionBetweenTurns: vi.fn(async () => undefined),
+      awaitPendingAutoCompaction: vi.fn(async () => undefined),
+      recordUserMessage: vi.fn(() => 77),
+      recordAssistantMessage: vi.fn(() => 2),
+    });
+    const historyAtPrompt: unknown[][] = [];
+    runtime.agent.prompt = vi.fn(async (promptMessage: { role: string; content: string }) => {
+      historyAtPrompt.push(runtime.agent.state.messages.map(historyMessage => ({ ...historyMessage })));
+      runtime.agent.state.messages.push(
+        promptMessage,
+        { role: 'assistant', content: 'assistant reply' },
+      );
+    });
+
+    await handleMessageForTurn(runtime, createMessage('msg-current-input-in-history'));
+
+    expect(buildContext.mock.calls[0]?.[11]).toBe(77);
+    expect(historyAtPrompt).toEqual([[
+      expect.objectContaining({
+        role: 'user',
+        content: 'Earlier user message',
+        timestamp: expect.any(Number),
+      }),
+      expect.objectContaining({
+        role: 'assistant',
+        content: [{ type: 'text', text: 'Earlier assistant reply' }],
+      }),
+    ]]);
+    expect(runtime.agent.state.messages.filter(message => (
+      message.role === 'user' && message.content === 'Hello there'
+    ))).toHaveLength(1);
+  });
+
   it('renders current group user attribution before the provider prompt without changing stored user content', async () => {
     const eventBus = new EventBus();
     const buildContext = vi.fn(async () => ({
@@ -2143,6 +2260,14 @@ describe('handleMessageForTurn compaction scheduling', () => {
         continuityFallbackKeys: [],
       })),
     });
+    const historyAtPrompt: unknown[][] = [];
+    runtime.agent.prompt = vi.fn(async (promptMessage: { role: string; content: string }) => {
+      historyAtPrompt.push(runtime.agent.state.messages.map(historyMessage => ({ ...historyMessage })));
+      runtime.agent.state.messages.push(
+        promptMessage,
+        { role: 'assistant', content: 'assistant reply' },
+      );
+    });
 
     await handleMessageForTurn(runtime, createMessage('msg-group-current', {
       channelId: '123456789012345678',
@@ -2153,6 +2278,7 @@ describe('handleMessageForTurn compaction scheduling', () => {
       isDirectMessage: false,
     }));
 
+    expect(historyAtPrompt).toEqual([[]]);
     expect(runtime.agent.prompt).toHaveBeenCalledWith(expect.objectContaining({
       role: 'user',
       content: 'Vega (discord:388908766306893854): can you hear us?',
@@ -2169,6 +2295,19 @@ describe('handleMessageForTurn compaction scheduling', () => {
       'regular',
       'contact-vega',
     );
+    const buildTurnRecordMock = runtime.buildTurnRecord as ReturnType<typeof vi.fn>;
+    const recordedInput = buildTurnRecordMock.mock.calls[0]?.[0] as { turnSnapshot?: Record<string, unknown> };
+    const promptContext = recordedInput.turnSnapshot?.promptContext as Record<string, unknown> | undefined;
+    const providerWireMessages = (promptContext?.providerObservability as {
+      providerWireMessages?: Array<{ role: string; source: string; content: string }>;
+    } | undefined)?.providerWireMessages;
+    expect(providerWireMessages?.filter(providerMessage => providerMessage.source === 'message')).toEqual([
+      {
+        role: 'user',
+        source: 'message',
+        content: 'Vega (discord:388908766306893854): can you hear us?',
+      },
+    ]);
   });
 
   it('moves system context into the prompt system lane instead of assistant history in observability snapshots', async () => {
@@ -2238,6 +2377,7 @@ describe('handleMessageForTurn compaction scheduling', () => {
       { role: 'system', source: 'system_prompt', content: mergedSystemPrompt },
       { role: 'user', source: 'message', content: 'Earlier user message' },
       { role: 'assistant', source: 'message', content: expect.stringContaining('Earlier assistant reply') },
+      { role: 'user', source: 'message', content: 'Hello there' },
     ]);
     expect(providerWireMessages?.some(message => message.role === 'assistant'
       && message.content.includes('Queue a private follow-up reminder.'))).toBe(false);
@@ -3305,6 +3445,43 @@ describe('handleMessageForTurn pre-response concurrency', () => {
     expect(buildTurnRecordMock.mock.calls[0]?.[0]?.persistedUserMessageContent).toBe(persistedUserContent);
   });
 
+  it('redacts inline image bytes from the persisted provider transcript', async () => {
+    const rawImageBytes = 'c2Vuc2l0aXZlLWltYWdlLWJ5dGVz';
+    const runtime = createRuntime({
+      eventBus: new EventBus(),
+      sessionManager: {} as SessionManager,
+      buildContext: vi.fn(async () => ({
+        systemPrompt: 'System prompt',
+        messages: [],
+        manifest: undefined,
+      })),
+      scheduleAutoCompactionBetweenTurns: vi.fn(async () => undefined),
+      awaitPendingAutoCompaction: vi.fn(async () => undefined),
+      recordUserMessage: vi.fn(() => 1),
+      recordAssistantMessage: vi.fn(() => 2),
+    });
+
+    await handleMessageForTurn(runtime, createMessage('msg-inline-image-observability', {
+      channelType: 'api',
+      content: 'look at this',
+      attachments: [{
+        url: 'https://example.test/current-image.png',
+        contentType: 'image/png',
+        name: 'current-image.png',
+        dataBase64: rawImageBytes,
+      }],
+    }));
+
+    const buildTurnRecordMock = runtime.buildTurnRecord as unknown as ReturnType<typeof vi.fn>;
+    const recordedInput = buildTurnRecordMock.mock.calls[0]?.[0] as { turnSnapshot?: Record<string, unknown> };
+    const promptContext = recordedInput.turnSnapshot?.promptContext as Record<string, unknown> | undefined;
+    const providerWireMessages = (promptContext?.providerObservability as {
+      providerWireMessages?: Array<{ content: string }>;
+    } | undefined)?.providerWireMessages;
+    expect(JSON.stringify(providerWireMessages)).not.toContain(rawImageBytes);
+    expect(JSON.stringify(providerWireMessages)).toContain('[omitted]');
+  });
+
   it('persists an unavailable image-description block when dedicated image review fails', async () => {
     const eventBus = new EventBus();
     const buildContext = vi.fn(async () => ({
@@ -3348,6 +3525,52 @@ describe('handleMessageForTurn pre-response concurrency', () => {
     expect(persistedUserContent).not.toContain('signed_url_secret');
     const buildTurnRecordMock = runtime.buildTurnRecord as unknown as ReturnType<typeof vi.fn>;
     expect(buildTurnRecordMock.mock.calls[0]?.[0]?.persistedUserMessageContent).toBe(persistedUserContent);
+    const recordedInput = buildTurnRecordMock.mock.calls[0]?.[0] as { turnSnapshot?: Record<string, unknown> };
+    const promptContext = recordedInput.turnSnapshot?.promptContext as Record<string, unknown> | undefined;
+    expect(JSON.stringify(promptContext)).not.toContain('signed_url_secret');
+  });
+
+  it('keeps outer vision content-build errors out of prompts and durable diagnostics', async () => {
+    mockedBuildTurnUserContent.mockRejectedValueOnce(
+      new Error('outer vision failure signed_url_secret=abc123'),
+    );
+    const runtime = createRuntime({
+      eventBus: new EventBus(),
+      sessionManager: {} as SessionManager,
+      buildContext: vi.fn(async () => ({
+        systemPrompt: 'System prompt',
+        messages: [],
+        manifest: undefined,
+      })),
+      scheduleAutoCompactionBetweenTurns: vi.fn(async () => undefined),
+      awaitPendingAutoCompaction: vi.fn(async () => undefined),
+      recordUserMessage: vi.fn(() => 1),
+      recordAssistantMessage: vi.fn(() => 2),
+    });
+
+    const response = await handleMessageForTurn(runtime, createMessage('msg-vision-outer-failure', {
+      channelType: 'discord',
+      content: 'what is in this image?',
+      attachments: [{
+        url: 'https://cdn.discordapp.com/attachments/1/2/current-image.png?ex=fresh',
+        contentType: 'image/png',
+        name: 'current-image.png',
+      }],
+    }));
+
+    const promptContent = (runtime.agent.prompt as ReturnType<typeof vi.fn>).mock.calls[0]?.[0]?.content;
+    expect(promptContent).toContain('Vision pipeline status: unavailable after runtime inspection attempts.');
+    expect(promptContent).not.toContain('signed_url_secret');
+    expect(JSON.stringify(response.metadata.diagnostics)).not.toContain('signed_url_secret');
+    expect(response.metadata.diagnostics).toMatchObject({
+      fallback: {
+        code: 'vision_content_unavailable',
+        previousErrorMessage: 'Vision content build failed.',
+      },
+    });
+    const buildTurnRecordMock = runtime.buildTurnRecord as unknown as ReturnType<typeof vi.fn>;
+    const recordedInput = buildTurnRecordMock.mock.calls[0]?.[0] as { turnSnapshot?: Record<string, unknown> };
+    expect(JSON.stringify(recordedInput.turnSnapshot?.promptContext)).not.toContain('signed_url_secret');
   });
 
   it('exposes current-turn image attachment context to tools during prompt execution', async () => {

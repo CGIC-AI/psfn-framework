@@ -309,6 +309,8 @@ function buildStructuredContinuityBlock(
 export function buildOrientationNoteTelemetry(params: {
   channelId: string;
   recentActivityEntries: SessionEntry[];
+  /** True when the caller has already removed the just-recorded current turn. */
+  currentTurnEntryExcluded?: boolean;
   continuityEntries: SessionEntry[];
   focusKnowledgeTexts: string[];
   characterName?: string;
@@ -341,7 +343,8 @@ export function buildOrientationNoteTelemetry(params: {
   const relevantRecentEntries = params.recentActivityEntries.filter(
     entry => entry.role === 'user' || entry.role === 'assistant',
   );
-  if (relevantRecentEntries.length <= 1) {
+  const minimumEntryCount = params.currentTurnEntryExcluded ? 1 : 2;
+  if (relevantRecentEntries.length < minimumEntryCount) {
     return {
       fired: false,
       reason: 'no_previous_activity',
@@ -351,7 +354,9 @@ export function buildOrientationNoteTelemetry(params: {
     };
   }
 
-  const priorEntries = relevantRecentEntries.slice(0, -1);
+  const priorEntries = params.currentTurnEntryExcluded
+    ? relevantRecentEntries
+    : relevantRecentEntries.slice(0, -1);
   const lastActivityAt = priorEntries.at(-1)?.timestamp;
   if (!lastActivityAt || !Number.isFinite(lastActivityAt) || lastActivityAt <= 0) {
     return {
@@ -388,11 +393,16 @@ export function buildOrientationNoteTelemetry(params: {
     ? params.continuitySummary.trim()
     : buildOrientationFallbackSummary(params.continuityEntries, params.characterName);
   let lastUserMessage: string | undefined;
-  for (let index = relevantRecentEntries.length - 1; index >= 0; index -= 1) {
-    const entry = relevantRecentEntries[index];
-    if (entry.role === 'user') {
-      lastUserMessage = entry.content;
-      break;
+  // When capture already removed the current entry, the last user message is
+  // historical context. Do not relabel it as the current turn in the wake
+  // orientation block; the actual current turn is supplied separately.
+  if (!params.currentTurnEntryExcluded) {
+    for (let index = relevantRecentEntries.length - 1; index >= 0; index -= 1) {
+      const entry = relevantRecentEntries[index];
+      if (entry.role === 'user') {
+        lastUserMessage = entry.content;
+        break;
+      }
     }
   }
 
@@ -452,6 +462,8 @@ export interface CaptureTurnSessionContextParams {
   /** Optional LLM provider for foreground history-budget summarization. */
   llmProvider?: LLMProviderPort;
   promptRegistry: PromptRegistryStatePort | null;
+  /** Exact just-recorded turn entry to remove before merging or summarizing. */
+  excludeSessionEntryId?: number;
   /**
    * Presence-windowed room content gate (psfn-framework-s10rm). Absent or
    * `unwindowed` keeps every surface byte-identical; `windowed`/`closed`
@@ -499,10 +511,16 @@ export async function captureTurnSessionContext(
   const roomWindow = params.roomContentWindow ?? { kind: 'unwindowed' as const };
   const roomWindowGated = roomWindow.kind !== 'unwindowed';
   const roomWindowFloor = roomContentWindowFloorMs(roomWindow);
-  const windowedEntries = roomWindowGated
+  const presenceWindowEntries = roomWindowGated
     ? collected.entries.filter(entry => entry.timestamp >= roomWindowFloor)
     : collected.entries;
-  const roomWindowFilteredEntryCount = collected.entries.length - windowedEntries.length;
+  const roomWindowFilteredEntryCount = collected.entries.length - presenceWindowEntries.length;
+  const excludedSessionEntryCount = params.excludeSessionEntryId === undefined
+    ? 0
+    : presenceWindowEntries.filter(entry => entry.id === params.excludeSessionEntryId).length;
+  const windowedEntries = params.excludeSessionEntryId === undefined
+    ? presenceWindowEntries
+    : presenceWindowEntries.filter(entry => entry.id !== params.excludeSessionEntryId);
   // Focus knowledge/ranges carry no timestamps we can gate on, so on a
   // windowed channel they are dropped wholesale (fail closed) rather than
   // risking pre-join derived content in the room context.
@@ -571,11 +589,14 @@ export async function captureTurnSessionContext(
     config: params.config,
     crossChannelContinuity: params.crossChannelContinuity,
   });
+  const priorOrientationRecentActivityEntries = params.excludeSessionEntryId === undefined
+    ? rawOrientationRecentActivityEntries
+    : rawOrientationRecentActivityEntries.filter(entry => entry.id !== params.excludeSessionEntryId);
   // The orientation scan reads the raw store and its summaries feed the wake
   // note — pre-window entries must not be summarized back into the room.
   const orientationRecentActivityEntries = roomWindowGated
-    ? rawOrientationRecentActivityEntries.filter(entry => entry.timestamp >= roomWindowFloor)
-    : rawOrientationRecentActivityEntries;
+    ? priorOrientationRecentActivityEntries.filter(entry => entry.timestamp >= roomWindowFloor)
+    : priorOrientationRecentActivityEntries;
   // A compaction summary minted in an earlier presence window summarizes
   // content from that window; gate on its creation time.
   const compactionSummaryTexts = params.store
@@ -585,6 +606,7 @@ export async function captureTurnSessionContext(
   const orientation = buildOrientationNoteTelemetry({
     channelId: params.channelId,
     recentActivityEntries: orientationRecentActivityEntries,
+    currentTurnEntryExcluded: params.excludeSessionEntryId !== undefined,
     continuityEntries: orientationContinuityEntries,
     focusKnowledgeTexts: effectiveFocusKnowledgeTexts,
     characterName: params.characterName,
@@ -593,7 +615,7 @@ export async function captureTurnSessionContext(
   return {
     channelId: params.channelId,
     recentEntries: recent.map(cloneSessionEntry),
-    sourceEntryCount: collected.sourceCount,
+    sourceEntryCount: Math.max(0, collected.sourceCount - excludedSessionEntryCount),
     ...(roomWindowGated
       ? {
         roomWindowFloorMs: roomWindowFloor,
@@ -672,6 +694,8 @@ interface BuildSessionContextParams {
    * re-derivation path (E2.2).
    */
   turnSessionContext: TurnSessionContextSnapshot;
+  /** Exact just-recorded turn entry to exclude from prior-history assembly. */
+  excludeSessionEntryId?: number;
   memoryManifestSeed?: ContextManifestMemorySeed;
   turnBudgetCharacteristics?: ContextBudgetTurnCharacteristics;
   compactionMode?: 'deferred' | 'foreground';
@@ -705,10 +729,19 @@ export async function buildSessionContext(params: BuildSessionContextParams): Pr
     ...(params.turnBudgetCharacteristics ? { turn: params.turnBudgetCharacteristics } : {}),
     adaptiveProfile: adaptiveBudgetProfile,
   });
-  let recent = params.turnSessionContext.recentEntries.map(cloneSessionEntry);
+  const capturedRecent = params.turnSessionContext.recentEntries.map(cloneSessionEntry);
+  const excludedSessionEntryCount = params.excludeSessionEntryId === undefined
+    ? 0
+    : capturedRecent.filter(entry => entry.id === params.excludeSessionEntryId).length;
+  let recent = params.excludeSessionEntryId === undefined
+    ? capturedRecent
+    : capturedRecent.filter(entry => entry.id !== params.excludeSessionEntryId);
   const historySummaryEntryCountFromSnapshot = params.turnSessionContext.historySummaryEntryCount ?? 0;
-  const sourceEntryCount = params.turnSessionContext.sourceEntryCount
-    ?? (recent.length + historySummaryEntryCountFromSnapshot);
+  const sourceEntryCount = Math.max(
+    0,
+    (params.turnSessionContext.sourceEntryCount
+      ?? (capturedRecent.length + historySummaryEntryCountFromSnapshot)) - excludedSessionEntryCount,
+  );
   const historySummaryText = params.turnSessionContext.historySummaryText?.trim() ?? '';
   const historySummaryEntryCount = historySummaryEntryCountFromSnapshot;
   const intentionAppraisalArtifactCount = countIntentionAppraisalArtifacts(recent);

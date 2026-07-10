@@ -50,6 +50,12 @@ const HUB_TO_CLIENT_TYPES: ReadonlySet<HubToClientMessage['type']> = new Set([
   'relay.error',
   'pong',
   'assistant.interrupted',
+  'approval.requested',
+  'approval.resolved',
+  'artifact.created',
+  'artifact.preview.result',
+  'artifact.preview.error',
+  'tool.activity',
 ]);
 
 const CLIENT_TO_HUB_TYPES: ReadonlySet<ClientToHubMessage['type']> = new Set([
@@ -63,6 +69,8 @@ const CLIENT_TO_HUB_TYPES: ReadonlySet<ClientToHubMessage['type']> = new Set([
   'relay.tts',
   'turn.start',
   'turn.end',
+  'approval.decision',
+  'artifact.preview',
 ]);
 
 
@@ -72,6 +80,124 @@ function readType(payload: unknown): unknown {
   }
   return payload['type'];
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Strict structural validators for the newer control/output-plane message
+// families (approvals, artifacts, tool activity). These fail closed: a frame
+// with a known `type` but a malformed body is REJECTED rather than coerced.
+// ─────────────────────────────────────────────────────────────────────────────
+
+function isStringField(record: Record<string, unknown>, key: string): boolean {
+  return typeof record[key] === 'string';
+}
+
+function isOptionalStringField(record: Record<string, unknown>, key: string): boolean {
+  const value = record[key];
+  return value === undefined || typeof value === 'string';
+}
+
+function isEnumField<T extends string>(
+  record: Record<string, unknown>,
+  key: string,
+  allowed: readonly T[],
+): boolean {
+  const value = record[key];
+  return typeof value === 'string' && (allowed as readonly string[]).includes(value);
+}
+
+function dataRecord(payload: unknown): Record<string, unknown> | null {
+  if (!isRecord(payload)) {
+    return null;
+  }
+  const data = payload['data'];
+  return isRecord(data) ? data : null;
+}
+
+/**
+ * Per-type body validators. Only types present here are structurally
+ * validated; anything absent is gated purely by its `type` discriminator as
+ * before. Returning false raises a HubFramingError at the call site.
+ */
+const STRICT_HUB_VALIDATORS: Partial<Record<HubToClientMessage['type'], (payload: unknown) => boolean>> = {
+  'approval.requested': (payload) => {
+    const data = dataRecord(payload);
+    return (
+      data !== null &&
+      isStringField(data, 'id') &&
+      isStringField(data, 'title') &&
+      isStringField(data, 'requestedAt') &&
+      isStringField(data, 'redactedContext') &&
+      isOptionalStringField(data, 'expiresAt') &&
+      data['status'] === 'pending'
+    );
+  },
+  'approval.resolved': (payload) => {
+    const data = dataRecord(payload);
+    return (
+      data !== null &&
+      isStringField(data, 'id') &&
+      isStringField(data, 'resolvedAt') &&
+      isEnumField(data, 'status', ['approved', 'denied', 'expired', 'blocked'])
+    );
+  },
+  'artifact.created': (payload) => {
+    const data = dataRecord(payload);
+    return (
+      data !== null &&
+      isStringField(data, 'id') &&
+      isStringField(data, 'label') &&
+      isStringField(data, 'mediaType') &&
+      isStringField(data, 'provenance') &&
+      isStringField(data, 'createdAt') &&
+      typeof data['previewable'] === 'boolean'
+    );
+  },
+  'artifact.preview.result': (payload) => {
+    return (
+      isRecord(payload) &&
+      isStringField(payload, 'requestId') &&
+      isStringField(payload, 'artifactId') &&
+      isStringField(payload, 'mediaType') &&
+      isStringField(payload, 'data')
+    );
+  },
+  'artifact.preview.error': (payload) => {
+    return (
+      isRecord(payload) &&
+      isStringField(payload, 'requestId') &&
+      isStringField(payload, 'artifactId') &&
+      isStringField(payload, 'message')
+    );
+  },
+  'tool.activity': (payload) => {
+    const data = dataRecord(payload);
+    return (
+      data !== null &&
+      isStringField(data, 'id') &&
+      isStringField(data, 'tool') &&
+      isStringField(data, 'timestamp') &&
+      isOptionalStringField(data, 'detail') &&
+      isEnumField(data, 'phase', ['started', 'progress', 'completed', 'failed'])
+    );
+  },
+};
+
+const STRICT_CLIENT_VALIDATORS: Partial<Record<ClientToHubMessage['type'], (payload: unknown) => boolean>> = {
+  'approval.decision': (payload) => {
+    return (
+      isRecord(payload) &&
+      isStringField(payload, 'id') &&
+      isEnumField(payload, 'decision', ['approve', 'deny'])
+    );
+  },
+  'artifact.preview': (payload) => {
+    return (
+      isRecord(payload) &&
+      isStringField(payload, 'requestId') &&
+      isStringField(payload, 'artifactId')
+    );
+  },
+};
 
 /**
  * Parse one inbound WS text frame into a typed hub->client message.
@@ -89,6 +215,10 @@ export function parseHubToClientMessage(raw: string): HubToClientMessage {
   if (typeof type !== 'string' || !HUB_TO_CLIENT_TYPES.has(type as HubToClientMessage['type'])) {
     throw new HubFramingError(`Unknown hub->client message type: ${String(type)}`);
   }
+  const validate = STRICT_HUB_VALIDATORS[type as HubToClientMessage['type']];
+  if (validate && !validate(payload)) {
+    throw new HubFramingError(`Malformed hub->client message body for type: ${type}`);
+  }
   return payload as HubToClientMessage;
 }
 
@@ -103,6 +233,10 @@ export function serializeClientToHubMessage(message: ClientToHubMessage): string
     !CLIENT_TO_HUB_TYPES.has(type as ClientToHubMessage['type'])
   ) {
     throw new HubFramingError(`Unknown client->hub message type: ${String(type)}`);
+  }
+  const validate = STRICT_CLIENT_VALIDATORS[type as ClientToHubMessage['type']];
+  if (validate && !validate(message)) {
+    throw new HubFramingError(`Malformed client->hub message body for type: ${type}`);
   }
   return JSON.stringify(message);
 }

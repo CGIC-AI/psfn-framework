@@ -64,6 +64,55 @@ describe('hub websocket framing', () => {
     },
     { type: 'pong', sentAt: 123 },
     { type: 'assistant.interrupted', sessionId: 'session-1' },
+    {
+      type: 'approval.requested',
+      data: {
+        id: 'ap-1',
+        title: 'Send outbound email',
+        requestedAt: '2026-06-17T00:00:01.000Z',
+        expiresAt: '2026-06-17T00:00:31.000Z',
+        redactedContext: 'Redacted action summary',
+        status: 'pending',
+      },
+    },
+    {
+      type: 'approval.resolved',
+      data: { id: 'ap-1', status: 'approved', resolvedAt: '2026-06-17T00:00:05.000Z' },
+    },
+    {
+      type: 'artifact.created',
+      data: {
+        id: 'art-1',
+        label: 'Report',
+        mediaType: 'image/png',
+        provenance: 'tool:renderer',
+        createdAt: '2026-06-17T00:00:01.000Z',
+        previewable: true,
+      },
+    },
+    {
+      type: 'artifact.preview.result',
+      requestId: 'req-1',
+      artifactId: 'art-1',
+      mediaType: 'image/png',
+      data: 'aGVsbG8=',
+    },
+    {
+      type: 'artifact.preview.error',
+      requestId: 'req-1',
+      artifactId: 'art-1',
+      message: 'Access denied',
+    },
+    {
+      type: 'tool.activity',
+      data: {
+        id: 'tool-1',
+        tool: 'renderer',
+        phase: 'started',
+        detail: 'rendering',
+        timestamp: '2026-06-17T00:00:02.000Z',
+      },
+    },
   ];
 
   const clientMessages: ClientToHubMessage[] = [
@@ -90,6 +139,8 @@ describe('hub websocket framing', () => {
     { type: 'relay.tts', requestId: 'tts-1', text: 'hello', voice: 'default' },
     { type: 'turn.start', interrupt: true },
     { type: 'turn.end', reason: 'typed_submit' },
+    { type: 'approval.decision', id: 'ap-1', decision: 'approve' },
+    { type: 'artifact.preview', requestId: 'req-1', artifactId: 'art-1' },
   ];
 
   it.each(hubMessages)('parses known hub message %s', (message) => {
@@ -112,6 +163,29 @@ describe('hub websocket framing', () => {
     const message = { type: 'session.reset' } as unknown as ClientToHubMessage;
 
     expect(() => serializeClientToHubMessage(message)).toThrow(HubFramingError);
+  });
+
+  const malformedHubFrames: Array<[string, string]> = [
+    ['approval.requested missing id', '{"type":"approval.requested","data":{"title":"t","requestedAt":"x","redactedContext":"y","status":"pending"}}'],
+    ['approval.requested wrong status', '{"type":"approval.requested","data":{"id":"1","title":"t","requestedAt":"x","redactedContext":"y","status":"approved"}}'],
+    ['approval.resolved bad status', '{"type":"approval.resolved","data":{"id":"1","status":"maybe","resolvedAt":"x"}}'],
+    ['artifact.created non-boolean previewable', '{"type":"artifact.created","data":{"id":"1","label":"l","mediaType":"m","provenance":"p","createdAt":"c","previewable":"yes"}}'],
+    ['artifact.preview.result missing data', '{"type":"artifact.preview.result","requestId":"r","artifactId":"a","mediaType":"m"}'],
+    ['artifact.preview.error missing message', '{"type":"artifact.preview.error","requestId":"r","artifactId":"a"}'],
+    ['tool.activity bad phase', '{"type":"tool.activity","data":{"id":"1","tool":"t","phase":"paused","timestamp":"ts"}}'],
+    ['tool.activity missing data', '{"type":"tool.activity"}'],
+  ];
+
+  it.each(malformedHubFrames)('fails closed on malformed hub frame: %s', (_label, frame) => {
+    expect(() => parseHubToClientMessage(frame)).toThrow(HubFramingError);
+  });
+
+  it('rejects malformed client control messages', () => {
+    const badDecision = { type: 'approval.decision', id: 'ap-1', decision: 'maybe' } as unknown as ClientToHubMessage;
+    expect(() => serializeClientToHubMessage(badDecision)).toThrow(HubFramingError);
+
+    const badPreview = { type: 'artifact.preview', artifactId: 'art-1' } as unknown as ClientToHubMessage;
+    expect(() => serializeClientToHubMessage(badPreview)).toThrow(HubFramingError);
   });
 });
 

@@ -35,7 +35,9 @@ export type ClientToHubMessage =
   | RelaySttRequestMessage
   | RelayTtsRequestMessage
   | TurnStartMessage
-  | TurnEndMessage;
+  | TurnEndMessage
+  | ApprovalDecisionMessage
+  | ArtifactPreviewRequestMessage;
 
 export interface HelloMessage {
   type: 'hello';
@@ -100,6 +102,27 @@ export interface TurnEndMessage {
   reason: string;
 }
 
+/**
+ * Approval decision (approve/deny) for a hub-issued approval request.
+ * Mirrors the hub control-plane message. The hub only relays approval
+ * families to satellites that advertise the `approvals` control capability.
+ */
+export interface ApprovalDecisionMessage {
+  type: 'approval.decision';
+  id: string;
+  decision: 'approve' | 'deny';
+}
+
+/**
+ * Request to read a scoped artifact preview. Correlated back to the client
+ * by `requestId` via `artifact.preview.result` / `artifact.preview.error`.
+ */
+export interface ArtifactPreviewRequestMessage {
+  type: 'artifact.preview';
+  requestId: string;
+  artifactId: string;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Hub -> Client
 // ─────────────────────────────────────────────────────────────────────────────
@@ -118,7 +141,13 @@ export type HubToClientMessage =
   | RelayTtsDoneMessage
   | RelayRequestErrorMessage
   | PongMessage
-  | AssistantInterruptedCompatMessage;
+  | AssistantInterruptedCompatMessage
+  | ApprovalRequestedMessage
+  | ApprovalResolvedMessage
+  | ArtifactCreatedMessage
+  | ArtifactPreviewResultMessage
+  | ArtifactPreviewErrorMessage
+  | ToolActivityMessage;
 
 export interface SessionReadyMessage {
   type: 'session.ready';
@@ -218,6 +247,85 @@ export interface PongMessage {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Approvals control plane (hub -> client). Relayed only to satellites that
+// advertise the `approvals` control capability.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export type ApprovalResolvedStatus = 'approved' | 'denied' | 'expired' | 'blocked';
+
+export interface ApprovalRequestedMessage {
+  type: 'approval.requested';
+  data: {
+    id: string;
+    title: string;
+    requestedAt: string;
+    expiresAt?: string;
+    redactedContext: string;
+    status: 'pending';
+  };
+}
+
+export interface ApprovalResolvedMessage {
+  type: 'approval.resolved';
+  data: {
+    id: string;
+    status: ApprovalResolvedStatus;
+    resolvedAt: string;
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Artifact output plane (hub -> client). Relayed only to satellites that
+// advertise the `artifact` output capability.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface ArtifactCreatedMessage {
+  type: 'artifact.created';
+  data: {
+    id: string;
+    label: string;
+    mediaType: string;
+    provenance: string;
+    createdAt: string;
+    previewable: boolean;
+  };
+}
+
+export interface ArtifactPreviewResultMessage {
+  type: 'artifact.preview.result';
+  requestId: string;
+  artifactId: string;
+  mediaType: string;
+  /** base64-encoded preview payload */
+  data: string;
+}
+
+export interface ArtifactPreviewErrorMessage {
+  type: 'artifact.preview.error';
+  requestId: string;
+  artifactId: string;
+  message: string;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Tool activity output plane (hub -> client). Relayed only to satellites that
+// advertise the `tool_activity` output capability.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export type ToolActivityPhase = 'started' | 'progress' | 'completed' | 'failed';
+
+export interface ToolActivityMessage {
+  type: 'tool.activity';
+  data: {
+    id: string;
+    tool: string;
+    phase: ToolActivityPhase;
+    detail?: string;
+    timestamp: string;
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Shared satellite capability + identity model (mirrors hub protocol.ts)
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -237,14 +345,17 @@ export type SatelliteOutputCapability =
   | 'action'
   | 'expression'
   | 'gaze'
-  | 'servo';
+  | 'servo'
+  | 'artifact'
+  | 'tool_activity';
 
 export type SatelliteControlCapability =
   | 'interrupt'
   | 'mute'
   | 'sleep_wake'
   | 'presence'
-  | 'session_attach';
+  | 'session_attach'
+  | 'approvals';
 
 export type SatelliteSafetyCapability =
   | 'action_allowlist'

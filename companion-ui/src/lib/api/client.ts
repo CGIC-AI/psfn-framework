@@ -274,6 +274,14 @@ export class SatelliteHubClient {
     this.send({ type: 'interrupt' });
   }
 
+  sendApprovalDecision(id: string, decision: 'approve' | 'deny'): void {
+    this.send({ type: 'approval.decision', id, decision });
+  }
+
+  sendArtifactPreviewRequest(requestId: string, artifactId: string): void {
+    this.send({ type: 'artifact.preview', requestId, artifactId });
+  }
+
   ping(sentAt = this.nowMs()): void {
     this.session.lastPingSentAt = sentAt;
     this.send({ type: 'ping', sentAt });
@@ -388,6 +396,15 @@ export class SatelliteHubClient {
       case 'relay.tts.done':
       case 'relay.error':
       case 'assistant.interrupted':
+      // Approval/artifact/tool-activity families are consumed by the stream
+      // store via the 'inbound' event above; the low-level client stays a
+      // pure transport for them.
+      case 'approval.requested':
+      case 'approval.resolved':
+      case 'artifact.created':
+      case 'artifact.preview.result':
+      case 'artifact.preview.error':
+      case 'tool.activity':
         return;
     }
   }

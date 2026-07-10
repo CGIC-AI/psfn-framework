@@ -7,6 +7,8 @@
     resolveSelectedDashboardCostWindowUsage,
   } from '$lib/dashboard/cost-window';
   import { resolveSessionContextPressureView } from '$lib/dashboard/session-context-pressure';
+  import ActiveConcernsCard from '$lib/components/garden/ActiveConcernsCard.svelte';
+  import ContextAllocationWidget from '$lib/components/garden/ContextAllocationWidget.svelte';
   import type { AdminDashboardData, DashboardCostWindow } from '$lib/types';
 
   let data = $state<AdminDashboardData | null>(null);
@@ -161,7 +163,7 @@
         <p class="text-sm text-shadow-600 mt-1">{stats.sessionUsage.turns} turns total</p>
       </a>
 
-      <div class="card-garden p-5">
+      <a href="/charge-budget" class="card-garden p-5 hover:border-gold-400 hover:shadow-md transition-all cursor-pointer block">
         <p class="text-sm text-shadow-700 uppercase tracking-wide font-medium">Total Tokens <span class="text-shadow-600 normal-case font-normal">(current session)</span></p>
         <p class="text-2xl font-serif text-shadow-900 mt-1">
           {formatTokens(stats.sessionUsage.inputTokens + stats.sessionUsage.outputTokens)}
@@ -169,12 +171,15 @@
         <p class="text-sm text-shadow-600 mt-1">
           {formatTokens(stats.sessionUsage.inputTokens)} in / {formatTokens(stats.sessionUsage.outputTokens)} out
         </p>
-      </div>
+      </a>
 
       <div class="card-garden p-5">
-        <p class="text-sm text-shadow-700 uppercase tracking-wide font-medium">
-          Estimated Cost <span class="text-shadow-600 normal-case font-normal">({costWindowHint(selectedCostWindow)})</span>
-        </p>
+        <div class="flex items-start justify-between gap-2">
+          <p class="text-sm text-shadow-700 uppercase tracking-wide font-medium">
+            Estimated Cost <span class="text-shadow-600 normal-case font-normal">({costWindowHint(selectedCostWindow)})</span>
+          </p>
+          <a href="/charge-budget" class="text-sm font-medium text-gold-700 hover:text-gold-800 whitespace-nowrap">Budget</a>
+        </div>
         <p class="text-2xl font-serif text-shadow-900 mt-1">
           {formatCost(selectedCostWindowUsage.estimatedCostUsd)}
         </p>
@@ -232,7 +237,10 @@
     <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
       <!-- Memory by type -->
       <div class="card-garden p-5">
-        <h2 class="font-serif text-lg text-shadow-900 mb-3">Memory Breakdown</h2>
+        <div class="flex items-center justify-between gap-3 mb-3">
+          <h2 class="font-serif text-lg text-shadow-900">Memory Breakdown</h2>
+          <a href="/memory" class="text-sm font-medium text-gold-700 hover:text-gold-800">Open Memory</a>
+        </div>
         <div class="space-y-2">
           {#each Object.entries(stats.memoryByType) as [type, count]}
             <a href="/memory?type={encodeURIComponent(type)}"
@@ -254,7 +262,10 @@
 
       <!-- Token usage breakdown (current session) -->
       <div class="card-garden p-5">
-        <h2 class="font-serif text-lg text-shadow-900 mb-3">Token Usage</h2>
+        <div class="flex items-center justify-between gap-3 mb-3">
+          <h2 class="font-serif text-lg text-shadow-900">Token Usage</h2>
+          <a href="/charge-budget" class="text-sm font-medium text-gold-700 hover:text-gold-800">Open Charge / Budget</a>
+        </div>
         {#if stats.sessionUsage.turns > 0}
           <div class="space-y-4">
             <div class="grid grid-cols-2 gap-3">
@@ -286,7 +297,8 @@
               </div>
             </div>
             <p class="text-sm text-shadow-600">
-              Current-session telemetry is shown here. Persisted per-model usage is available on Charge / Budget.
+              Current-session telemetry is shown here. Persisted per-model usage is available on
+              <a href="/charge-budget" class="font-medium text-gold-700 hover:text-gold-800">Charge / Budget</a>.
             </p>
           </div>
         {:else}
@@ -336,17 +348,17 @@
         <p class="text-sm text-shadow-700 uppercase tracking-wide font-medium">Scheduler Tasks</p>
         <p class="text-2xl font-serif text-shadow-900 mt-1">{stats.schedulerTasks}</p>
       </a>
-      <div class="card-garden p-5">
+      <a href="/shards" class="card-garden p-5 hover:border-gold-400 hover:shadow-md transition-all cursor-pointer block">
         <p class="text-sm text-shadow-700 uppercase tracking-wide font-medium">Active Shards</p>
         <p class="text-2xl font-serif text-shadow-900 mt-1">{stats.activeShards}</p>
-      </div>
-      <div class="card-garden p-5">
+      </a>
+      <a href="/sessions" class="card-garden p-5 hover:border-gold-400 hover:shadow-md transition-all cursor-pointer block">
         <p class="text-sm text-shadow-700 uppercase tracking-wide font-medium">
           Session Context Pressure <span class="text-shadow-600 normal-case font-normal">(active session)</span>
         </p>
         {#if sessionContextPressure.hasTelemetry && sessionContextPressure.isOverLimit}
           <p class="text-2xl font-serif mt-1 text-wilt-600">{sessionContextPressure.utilizationPct.toFixed(0)}%</p>
-          <p class="text-sm text-wilt-600 mt-1">Exceeds 100% -- check context window configuration</p>
+          <p class="text-sm text-wilt-600 mt-1">Exceeds 100% -- check context window configuration below</p>
         {:else if sessionContextPressure.hasTelemetry}
           <p class="text-2xl font-serif mt-1 text-shadow-900">
             {sessionContextPressure.utilizationPct.toFixed(0)}%
@@ -355,7 +367,19 @@
           <p class="text-2xl font-serif mt-1 text-shadow-900">0%</p>
           <p class="text-sm text-shadow-600 mt-1">No telemetry for the active session yet.</p>
         {/if}
-      </div>
+      </a>
     </div>
+
+    <!-- Context window allocation -->
+    <div class="card-garden p-5">
+      <div class="flex items-center justify-between gap-3 mb-3">
+        <h2 class="font-serif text-lg text-shadow-900">Context Window Allocation</h2>
+        <a href="/settings" class="text-sm font-medium text-gold-700 hover:text-gold-800">Configure in Settings</a>
+      </div>
+      <ContextAllocationWidget showVariants={false} />
+    </div>
+
+    <!-- Active concerns -->
+    <ActiveConcernsCard />
   {/if}
 </div>

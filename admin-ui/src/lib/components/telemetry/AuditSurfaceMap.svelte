@@ -125,7 +125,7 @@
           Operator directory for runtime events, persisted audits, and deeper review pages.
         </p>
       </div>
-      <span class="rounded-full border border-bark-300 bg-white px-3 py-1 text-sm text-shadow-700">
+      <span class="rounded-full border border-bark-300 bg-bark-50 px-3 py-1 text-sm text-shadow-700">
         {surfaces.length} surfaces indexed
       </span>
     </div>
@@ -133,7 +133,7 @@
 
   <div class="grid grid-cols-1 gap-3 p-4 xl:grid-cols-2">
     {#each surfaces as surface, index (surface.title)}
-      <article class="rounded-xl border border-bark-200 bg-white p-4">
+      <article class="rounded-xl border border-bark-200 bg-bark-50 p-4">
         <div class="flex flex-wrap items-start justify-between gap-3">
           <div class="min-w-0">
             <h3 class="text-sm font-semibold text-shadow-900">{surface.title}</h3>

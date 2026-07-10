@@ -257,7 +257,7 @@
           {:else}
             <div class="space-y-3">
               {#each detailModalData.scopeAssignments as assignment}
-                <div class="rounded-lg border border-bark-200 bg-white/70 p-3">
+                <div class="rounded-lg border border-bark-200 bg-bark-50/70 p-3">
                   <div class="flex flex-wrap items-center gap-2">
                     <span class="rounded-full bg-bark-200 px-2 py-0.5 text-xs text-shadow-700">
                       {scopeKindLabel(assignment.kind)}
@@ -286,14 +286,14 @@
                 value={scopeEditorRefLabel}
                 oninput={(event) => onScopeEditorRefLabelChange((event.currentTarget as HTMLInputElement).value)}
                 placeholder="Scope label"
-                class="px-3 py-2 rounded-lg border border-bark-300 bg-white text-shadow-800 text-sm"
+                class="px-3 py-2 rounded-lg border border-bark-300 bg-bark-50 text-shadow-800 text-sm"
               />
               <input
                 type="text"
                 value={scopeEditorTags}
                 oninput={(event) => onScopeEditorTagsChange((event.currentTarget as HTMLInputElement).value)}
                 placeholder="Comma-separated scope tags"
-                class="px-3 py-2 rounded-lg border border-bark-300 bg-white text-shadow-800 text-sm"
+                class="px-3 py-2 rounded-lg border border-bark-300 bg-bark-50 text-shadow-800 text-sm"
               />
               <button
                 onclick={() => { void onScopeSave(detailMemoryId); }}

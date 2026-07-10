@@ -11,22 +11,16 @@ export type SelectedTurnTab =
   | 'prompt'
   | 'context'
   | 'tools'
-  | 'exact'
-  | 'provider'
-  | 'cache'
   | 'diff'
   | 'timeline'
   | 'raw';
 
 export const selectedTurnTabs = [
   { id: 'summary', label: 'Summary', description: 'Route, prompt, timing, and outcome triage' },
-  { id: 'blocks', label: 'Blocks', description: 'Ordered PromptPlan blocks with producer, scope, volatility, and token estimates' },
-  { id: 'prompt', label: 'Prompt Assembly', description: 'Templates, rendered blocks, assembled prompt, and model context' },
-  { id: 'context', label: 'Context & Memory', description: 'Session inputs, memory retrievals, withholds, and metadata' },
+  { id: 'blocks', label: 'Blocks', description: 'Ordered PromptPlan blocks with volatility, cache regions, static-hash timeline, and provider cache telemetry' },
+  { id: 'prompt', label: 'Prompt Assembly', description: 'Prompt-soil layers, runtime additions, assembled prompt, model context, and provider wire' },
+  { id: 'context', label: 'Context & Memory', description: 'Session inputs, memory retrievals, withholds, capture, and metadata' },
   { id: 'tools', label: 'Tools', description: 'Shipped tool definitions (plan-backed) and adaptive activation state' },
-  { id: 'exact', label: 'Exact Payload', description: 'Exact provider input, tools, response, memory capture, and tool activity' },
-  { id: 'provider', label: 'Provider Wire', description: 'Serialized provider payload from the PromptPlan, routing, and response' },
-  { id: 'cache', label: 'Cache', description: 'Volatility regions, cache boundaries, static-prefix hash timeline, and provider cache telemetry' },
   { id: 'diff', label: 'Turn Diff', description: 'Block-level plan diff between this turn and a baseline turn' },
   { id: 'timeline', label: 'Timeline', description: 'Stage order, elapsed time, and stage payloads' },
   { id: 'raw', label: 'Raw Events', description: 'Record, snapshot, stage telemetry, and live bus envelopes' },

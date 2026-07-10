@@ -9,6 +9,7 @@ import {
   parseSkillDocument,
   resolveSkillDirectories,
   scanSkillFiles,
+  scanSkillRoots,
 } from './loader.js';
 
 function makeConfig(overrides?: Partial<SkillsRuntimeConfig>): SkillsRuntimeConfig {
@@ -125,6 +126,119 @@ description: vendor version
       expect(deduped.entries[0]?.relativePath).toContain('skills/conversation/SKILL.md');
       expect(deduped.skipped).toHaveLength(1);
       expect(deduped.skipped[0]?.kind).toBe('shadowed');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('reports per-root provenance and warns on a missing root instead of a silent empty scan', () => {
+    const root = mkdtempSync(join(tmpdir(), 'skills-loader-roots-'));
+    try {
+      writeSkill(root, 'skills/git-ops', `
+---
+name: git-ops
+description: git workflow helpers
+---
+# Git Ops
+`);
+
+      const directories = resolveSkillDirectories(makeConfig({
+        extraDirectories: ['vendor/skills'],
+      }), root);
+
+      const warnings: Array<{ message: string; context: Record<string, unknown> }> = [];
+      const scan = scanSkillRoots(directories, {
+        warnMissingRoot: (message, context) => warnings.push({ message, context }),
+      });
+
+      expect(scan.files).toHaveLength(1);
+      expect(scan.roots).toHaveLength(2);
+
+      const bundledRoot = scan.roots.find(r => r.path === 'skills');
+      expect(bundledRoot).toMatchObject({
+        exists: true,
+        skillCount: 1,
+        source: 'bundled',
+      });
+
+      const vendorRoot = scan.roots.find(r => r.path === 'vendor/skills');
+      expect(vendorRoot).toMatchObject({
+        exists: false,
+        skillCount: 0,
+        source: 'extra',
+      });
+
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0]?.message).toMatch(/skills root missing/i);
+      expect(warnings[0]?.message).toContain(join(root, 'vendor/skills'));
+      expect(warnings[0]?.context.path).toBe('vendor/skills');
+      expect(warnings[0]?.context.source).toBe('extra');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('warns when a skills root exists but is not a directory', () => {
+    const root = mkdtempSync(join(tmpdir(), 'skills-loader-notdir-'));
+    try {
+      mkdirSync(join(root, 'vendor'), { recursive: true });
+      writeFileSync(join(root, 'vendor', 'skills'), 'not a directory\n', 'utf-8');
+      writeSkill(root, 'skills/git-ops', `
+---
+name: git-ops
+description: git workflow helpers
+---
+# Git Ops
+`);
+
+      const directories = resolveSkillDirectories(makeConfig({
+        extraDirectories: ['vendor/skills'],
+      }), root);
+
+      const warnings: Array<{ message: string; context: Record<string, unknown> }> = [];
+      const scan = scanSkillRoots(directories, {
+        warnMissingRoot: (message, context) => warnings.push({ message, context }),
+      });
+
+      expect(scan.files).toHaveLength(1);
+      expect(scan.roots.find(r => r.path === 'vendor/skills')).toMatchObject({
+        exists: false,
+        skillCount: 0,
+      });
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0]?.message).toMatch(/not a directory/i);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('does not warn for a missing managed (custom) root but still reports it in provenance', () => {
+    const root = mkdtempSync(join(tmpdir(), 'skills-loader-custom-'));
+    try {
+      const warnings: string[] = [];
+      const scan = scanSkillRoots([
+        {
+          absolutePath: join(root, 'companion-data/skills'),
+          relativePath: 'companion-data/skills',
+          source: 'custom',
+          precedence: 0,
+        },
+      ], {
+        warnMissingRoot: (message) => warnings.push(message),
+      });
+
+      expect(scan.files).toHaveLength(0);
+      expect(scan.roots).toEqual([
+        {
+          path: 'companion-data/skills',
+          absolutePath: join(root, 'companion-data/skills'),
+          exists: false,
+          skillCount: 0,
+          source: 'custom',
+          precedence: 0,
+        },
+      ]);
+      expect(warnings).toHaveLength(0);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

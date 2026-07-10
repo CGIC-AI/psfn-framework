@@ -1,8 +1,10 @@
 <script lang="ts">
   import { onMount } from 'svelte';
+  import BoundedList from '$lib/components/garden/BoundedList.svelte';
   import {
     getCharges,
     type AdminChargeLedgerData,
+    type RunChargeLedgerEntry,
     type RunChargeRunSummary,
   } from '$lib/api/endpoints/charges';
   import {
@@ -21,11 +23,16 @@
     type ChargePolicySurface,
   } from '../../../../src/shared/contracts/charge-policy.js';
 
-  interface HistoricalWindow {
-    id: string;
-    label: string;
-    sinceMs: number;
-    data: AdminChargeLedgerData | null;
+  interface MergedRunRow {
+    runId: string;
+    rootRunId: string;
+    when: number;
+    amount: number;
+    eventCount: number;
+    lineageLabel: string;
+    models: string[];
+    entries: RunChargeLedgerEntry[];
+    summarized: boolean;
   }
 
   const now = () => Date.now();
@@ -39,7 +46,8 @@
   let modelUsage = $state<AdminModelUsageData | null>(null);
   let policy = $state<ChargePolicyConfig | null>(null);
   let activeTab = $state<'charges' | 'token-usage'>('charges');
-  let historicalWindows = $state<HistoricalWindow[]>([]);
+  let dayWindow = $state<AdminChargeLedgerData | null>(null);
+  let monthWindow = $state<AdminChargeLedgerData | null>(null);
   let loading = $state(true);
   let refreshing = $state(false);
   let errorMessage = $state('');
@@ -50,6 +58,7 @@
   let rawEditorOpen = $state(false);
   let rawJson = $state('');
   let initialPolicyJson = $state('');
+  let expandedRunIds = $state<string[]>([]);
 
   let policyValidationErrors = $derived.by(() => (
     policy ? validatePolicy(policy) : []
@@ -64,34 +73,80 @@
   let activeRun = $derived(charges?.activeRun ?? null);
   let recentRuns = $derived(charges?.recentRuns ?? []);
   let recentEvents = $derived(charges?.events ?? []);
-  let rollingWindow = $derived(historicalWindows.find(window => window.id === 'day')?.data ?? null);
   let recentModelUsageEvents = $derived(modelUsage?.recentEvents ?? []);
   let expensiveModelUsageEvents = $derived(modelUsage?.expensiveEvents ?? []);
+
+  let mergedRuns = $derived.by<MergedRunRow[]>(() => {
+    const entriesByRun = new Map<string, RunChargeLedgerEntry[]>();
+    for (const entry of recentEvents) {
+      const runId = entry.event.lineage.runId;
+      const bucket = entriesByRun.get(runId);
+      if (bucket) bucket.push(entry);
+      else entriesByRun.set(runId, [entry]);
+    }
+    for (const bucket of entriesByRun.values()) {
+      bucket.sort((left, right) => right.event.timestampMs - left.event.timestampMs);
+    }
+
+    const rows: MergedRunRow[] = recentRuns.map(run => ({
+      runId: run.runId,
+      rootRunId: run.rootRunId,
+      when: run.updatedAtMs,
+      amount: run.amount,
+      eventCount: run.eventCount,
+      lineageLabel: runLineageLabel(run),
+      models: run.models,
+      entries: entriesByRun.get(run.runId) ?? [],
+      summarized: true,
+    }));
+
+    const summarizedIds = new Set(recentRuns.map(run => run.runId));
+    for (const [runId, entries] of entriesByRun) {
+      if (summarizedIds.has(runId)) continue;
+      const lineage = entries[0]?.event.lineage;
+      const labels: string[] = [];
+      if (lineage && lineage.rootRunId !== runId) labels.push(`root ${shortId(lineage.rootRunId)}`);
+      if (lineage?.parentRunId) labels.push(`parent ${shortId(lineage.parentRunId)}`);
+      const models = [...new Set(
+        entries.map(entry => entry.metadata?.model).filter((model): model is string => Boolean(model)),
+      )];
+      rows.push({
+        runId,
+        rootRunId: lineage?.rootRunId ?? runId,
+        when: entries[0]?.event.timestampMs ?? 0,
+        amount: entries.reduce((sum, entry) => sum + entry.event.amount, 0),
+        eventCount: entries.length,
+        lineageLabel: labels.join(' | '),
+        models,
+        entries,
+        summarized: false,
+      });
+    }
+
+    return rows.sort((left, right) => right.when - left.when);
+  });
+
+  let mergedEventCount = $derived(mergedRuns.reduce((sum, row) => sum + row.entries.length, 0));
+  let lineageRootCount = $derived(new Set(mergedRuns.map(row => row.rootRunId)).size);
 
   async function loadAll(): Promise<void> {
     errorMessage = '';
     policyError = '';
     saveMessage = '';
     const timestamp = now();
-    const windows: HistoricalWindow[] = [
-      { id: 'day', label: 'Last 24h', sinceMs: timestamp - DAY_MS, data: null },
-      { id: 'week', label: 'Last 7d', sinceMs: timestamp - 7 * DAY_MS, data: null },
-      { id: 'month', label: 'Last 30d', sinceMs: timestamp - 30 * DAY_MS, data: null },
-    ];
 
     try {
-      const [chargeData, usageData, policyJson, ...windowData] = await Promise.all([
+      const [chargeData, usageData, policyJson, dayData, monthData] = await Promise.all([
         getCharges({ limit: 200 }),
         getModelUsage({ limit: 200, sinceMs: timestamp - 30 * DAY_MS }),
         getSubConfig('charge-policy'),
-        ...windows.map(window => getCharges({ limit: 500, sinceMs: window.sinceMs })),
+        getCharges({ limit: 500, sinceMs: timestamp - DAY_MS }),
+        getCharges({ limit: 500, sinceMs: timestamp - 30 * DAY_MS }),
       ]);
       charges = chargeData;
       modelUsage = usageData;
-      historicalWindows = windows.map((window, index) => ({
-        ...window,
-        data: windowData[index] ?? null,
-      }));
+      dayWindow = dayData;
+      monthWindow = monthData;
       rawJson = prettyJson(policyJson);
       initialPolicyJson = rawJson;
       policy = JSON.parse(rawJson) as ChargePolicyConfig;
@@ -171,14 +226,21 @@
 
   function runLineageLabel(run: RunChargeRunSummary): string {
     const labels = [`depth ${run.lineageDepth}`];
+    if (run.rootRunId !== run.runId) labels.push(`root ${shortId(run.rootRunId)}`);
     if (run.parentRunId) labels.push(`parent ${shortId(run.parentRunId)}`);
     if (run.shardIds.length > 0) labels.push(`shards ${run.shardIds.map(shortId).join(', ')}`);
     if (run.subagentIds.length > 0) labels.push(`subagents ${run.subagentIds.map(shortId).join(', ')}`);
     return labels.join(' | ');
   }
 
+  function toggleRun(runId: string): void {
+    expandedRunIds = expandedRunIds.includes(runId)
+      ? expandedRunIds.filter(id => id !== runId)
+      : [...expandedRunIds, runId];
+  }
+
   function rollingWindowLaneSpend(lane: ChargePolicyRuntimeLane): number {
-    return rollingWindow?.aggregates.byLane.find(item => item.key === lane)?.amount ?? 0;
+    return dayWindow?.aggregates.byLane.find(item => item.key === lane)?.amount ?? 0;
   }
 
   function quotaPercent(lane: ChargePolicyRuntimeLane): number {
@@ -324,7 +386,7 @@
       <p class="text-xs uppercase tracking-[0.2em] text-shadow-500">Runtime & Tools</p>
       <h1 class="mt-1 text-2xl font-serif font-bold text-shadow-900">Charge / Budget</h1>
       <p class="mt-1 max-w-3xl text-sm text-shadow-600">
-        Live run-charge ledger, rolling 24h lane quota, historical spend windows, and canonical charge-policy controls.
+        Canonical charge-policy controls, a merged run/event ledger, the rolling 24h lane quota, and one 30-day historical view.
       </p>
     </div>
     <button
@@ -353,211 +415,41 @@
       <button
         type="button"
         onclick={() => activeTab = 'charges'}
-        class="rounded-lg px-3 py-2 text-sm font-medium transition-colors {activeTab === 'charges' ? 'bg-shadow-900 text-white' : 'border border-bark-300 text-shadow-700 hover:bg-bark-100'}"
+        class="rounded-lg px-3 py-2 text-sm font-medium transition-colors {activeTab === 'charges' ? 'bg-shadow-900 text-bark-50' : 'border border-bark-300 text-shadow-700 hover:bg-bark-100'}"
       >
         Charge Policy
       </button>
       <button
         type="button"
         onclick={() => activeTab = 'token-usage'}
-        class="rounded-lg px-3 py-2 text-sm font-medium transition-colors {activeTab === 'token-usage' ? 'bg-shadow-900 text-white' : 'border border-bark-300 text-shadow-700 hover:bg-bark-100'}"
+        class="rounded-lg px-3 py-2 text-sm font-medium transition-colors {activeTab === 'token-usage' ? 'bg-shadow-900 text-bark-50' : 'border border-bark-300 text-shadow-700 hover:bg-bark-100'}"
       >
         Token Usage
       </button>
     </div>
 
     {#if activeTab === 'charges'}
-    <section class="space-y-4" aria-labelledby="charge-overview-heading">
-      <div>
-        <p class="text-xs font-semibold uppercase tracking-[0.2em] text-shadow-500">Ledger</p>
-        <h2 id="charge-overview-heading" class="mt-1 text-lg font-serif font-semibold text-shadow-900">
-          Active and recent spend
-        </h2>
-      </div>
-
-      <div class="grid gap-4 md:grid-cols-4">
-        <div class="card-garden p-5">
-          <p class="text-xs uppercase tracking-[0.18em] text-shadow-500">Active run</p>
-          <p class="mt-3 text-3xl font-serif font-bold text-shadow-900">
-            {activeRun ? formatCharge(activeRun.amount) : DASH}
-          </p>
-          <p class="mt-2 text-sm text-shadow-600">
-            {activeRun ? `${formatInteger(activeRun.eventCount)} charge events` : 'No charge events recorded'}
-          </p>
-        </div>
-        <div class="card-garden p-5">
-          <p class="text-xs uppercase tracking-[0.18em] text-shadow-500">Recent total</p>
-          <p class="mt-3 text-3xl font-serif font-bold text-petal-500">
-            {formatCharge(charges?.aggregates.amount)}
-          </p>
-          <p class="mt-2 text-sm text-shadow-600">{formatInteger(charges?.aggregates.eventCount)} events in the query window.</p>
-        </div>
-        <div class="card-garden p-5">
-          <p class="text-xs uppercase tracking-[0.18em] text-shadow-500">Runs</p>
-          <p class="mt-3 text-3xl font-serif font-bold text-moss-600">{formatInteger(recentRuns.length)}</p>
-          <p class="mt-2 text-sm text-shadow-600">Most recent run summaries returned by the charge ledger.</p>
-        </div>
-        <div class="card-garden p-5">
-          <p class="text-xs uppercase tracking-[0.18em] text-shadow-500">Lineage roots</p>
-          <p class="mt-3 text-3xl font-serif font-bold text-gold-600">
-            {formatInteger(new Set(recentRuns.map(run => run.rootRunId)).size)}
-          </p>
-          <p class="mt-2 text-sm text-shadow-600">Distinct root runs represented in recent lineage.</p>
-        </div>
-      </div>
-    </section>
-
-    <section class="grid gap-4 lg:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)]" aria-label="Charge quota and history">
-      <div class="card-garden overflow-hidden">
-        <div class="border-b border-bark-300 px-5 py-4">
-          <h2 class="font-serif text-lg font-semibold text-shadow-900">Rolling 24h quota by lane</h2>
-          <p class="mt-1 text-sm text-shadow-600">Uses Last 24h ledger spend against charge-policy lane quotas; each run also uses the same quota as a runaway guard.</p>
-        </div>
-        <div class="divide-y divide-bark-200">
-          {#each LANE_VALUES as lane}
-            {@const quota = policy?.runChargeQuotaByLane[lane] ?? 0}
-            {@const spent = rollingWindowLaneSpend(lane)}
-            {@const remaining = Math.max(0, quota - spent)}
-            <div class="px-5 py-4">
-              <div class="flex items-center justify-between gap-3">
-                <div>
-                  <p class="font-mono text-sm font-semibold text-shadow-800">{policyKey('runChargeQuotaByLane', lane)}</p>
-                  <p class="text-xs text-shadow-500">{labelize(lane)}</p>
-                  <p class="text-xs text-shadow-500">Spent {formatCharge(spent)} of {formatCharge(quota)}</p>
-                </div>
-                <p class="font-serif text-xl font-bold text-moss-600">{formatCharge(remaining)}</p>
-              </div>
-              <div class="mt-3 h-2 overflow-hidden rounded-full bg-bark-200">
-                <div class="h-full rounded-full bg-moss-400" style={`width: ${quotaPercent(lane)}%`}></div>
-              </div>
-            </div>
-          {/each}
-        </div>
-      </div>
-
-      <div class="card-garden overflow-hidden">
-        <div class="border-b border-bark-300 px-5 py-4">
-          <h2 class="font-serif text-lg font-semibold text-shadow-900">Historical windows</h2>
-          <p class="mt-1 text-sm text-shadow-600">Independent `/api/admin/charges` queries over fixed lookback windows.</p>
-        </div>
-        <div class="divide-y divide-bark-200">
-          {#each historicalWindows as window}
-            <div class="grid grid-cols-[1fr_auto] gap-3 px-5 py-4">
-              <div>
-                <p class="text-sm font-semibold text-shadow-800">{window.label}</p>
-                <p class="text-xs text-shadow-500">{formatInteger(window.data?.aggregates.eventCount)} events</p>
-              </div>
-              <p class="font-serif text-xl font-bold text-shadow-900">{formatCharge(window.data?.aggregates.amount)}</p>
-            </div>
-          {/each}
-        </div>
-      </div>
-    </section>
-
-    <section class="grid gap-4 lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]" aria-label="Calendar accrual">
-      <div class="card-garden p-5">
-        <p class="text-xs uppercase tracking-[0.18em] text-shadow-500">Month to date · {charges?.calendar.monthKey ?? DASH}</p>
-        <p class="mt-3 text-3xl font-serif font-bold text-gold-600">{formatCharge(charges?.calendar.monthToDateAmount)}</p>
-        <p class="mt-2 text-sm text-shadow-600">
-          {formatInteger(charges?.calendar.monthToDateEventCount)} charge events this calendar month. Daily accrual resets at UTC midnight and rolls up toward the monthly budget cap.
-        </p>
-      </div>
-      <div class="card-garden overflow-hidden">
-        <div class="border-b border-bark-300 px-5 py-4">
-          <h2 class="font-serif text-lg font-semibold text-shadow-900">Daily accrual</h2>
-          <p class="mt-1 text-sm text-shadow-600">Charge units per UTC calendar day over the last 31 days.</p>
-        </div>
-        <div class="max-h-80 divide-y divide-bark-200 overflow-y-auto">
-          {#each charges?.calendar.daily ?? [] as day}
-            <div class="flex items-center justify-between gap-4 px-5 py-3">
-              <div>
-                <p class="font-mono text-sm font-medium text-shadow-800">{day.dayKey}</p>
-                <p class="text-xs text-shadow-500">
-                  {#each day.byLane as lane, index}{index > 0 ? ' · ' : ''}{lane.key} {formatCharge(lane.amount)}{/each}
-                </p>
-              </div>
-              <p class="text-sm text-shadow-600">{formatCharge(day.amount)} / {formatInteger(day.eventCount)} events</p>
-            </div>
-          {:else}
-            <p class="px-5 py-4 text-sm text-shadow-600">No charges recorded in the last 31 days.</p>
-          {/each}
-        </div>
-      </div>
-    </section>
-
-    <section class="grid gap-4 lg:grid-cols-2" aria-label="Charge breakdowns">
-      <div class="card-garden overflow-hidden">
-        <div class="border-b border-bark-300 px-5 py-4">
-          <h2 class="font-serif text-lg font-semibold text-shadow-900">Per-lane breakdown</h2>
-        </div>
-        <div class="divide-y divide-bark-200">
-          {#each charges?.aggregates.byLane ?? [] as item}
-            <div class="flex items-center justify-between gap-4 px-5 py-3">
-              <div>
-                <p class="font-mono text-sm font-medium text-shadow-800">{item.key}</p>
-                <p class="text-xs text-shadow-500">{labelize(item.key)}</p>
-              </div>
-              <p class="text-sm text-shadow-600">{formatCharge(item.amount)} / {formatInteger(item.eventCount)} events</p>
-            </div>
-          {:else}
-            <p class="px-5 py-4 text-sm text-shadow-600">No lane charges recorded.</p>
-          {/each}
-        </div>
-      </div>
-
-      <div class="card-garden overflow-hidden">
-        <div class="border-b border-bark-300 px-5 py-4">
-          <h2 class="font-serif text-lg font-semibold text-shadow-900">Per-surface breakdown</h2>
-        </div>
-        <div class="max-h-80 divide-y divide-bark-200 overflow-y-auto">
-          {#each charges?.aggregates.bySurface ?? [] as item}
-            <div class="flex items-center justify-between gap-4 px-5 py-3">
-              <div>
-                <p class="font-mono text-sm font-medium text-shadow-800">{item.key}</p>
-                <p class="text-xs text-shadow-500">{labelize(item.key)}</p>
-              </div>
-              <p class="text-sm text-shadow-600">{formatCharge(item.amount)} / {formatInteger(item.eventCount)} events</p>
-            </div>
-          {:else}
-            <p class="px-5 py-4 text-sm text-shadow-600">No surface charges recorded.</p>
-          {/each}
-        </div>
-      </div>
-    </section>
-
-    <section class="card-garden overflow-hidden" aria-labelledby="lineage-heading">
-      <div class="border-b border-bark-300 px-5 py-4">
-        <h2 id="lineage-heading" class="font-serif text-lg font-semibold text-shadow-900">Run lineage</h2>
-        <p class="mt-1 text-sm text-shadow-600">Recent runs with shard and subagent labels from charge metadata.</p>
-      </div>
-      <div class="overflow-x-auto">
-        <table class="min-w-full divide-y divide-bark-200 text-left text-sm">
-          <thead class="bg-bark-50 text-xs uppercase tracking-[0.16em] text-shadow-500">
-            <tr>
-              <th class="px-5 py-3 font-semibold">Run</th>
-              <th class="px-5 py-3 font-semibold">Updated</th>
-              <th class="px-5 py-3 font-semibold">Spend</th>
-              <th class="px-5 py-3 font-semibold">Lineage labels</th>
-              <th class="px-5 py-3 font-semibold">Models</th>
-            </tr>
-          </thead>
-          <tbody class="divide-y divide-bark-200">
-            {#each recentRuns as run}
-              <tr>
-                <td class="px-5 py-3 font-mono text-xs text-shadow-700">{shortId(run.runId)}</td>
-                <td class="px-5 py-3 text-shadow-600">{formatTime(run.updatedAtMs)}</td>
-                <td class="px-5 py-3 font-semibold text-shadow-900">{formatCharge(run.amount)}</td>
-                <td class="px-5 py-3 text-shadow-600">{runLineageLabel(run)}</td>
-                <td class="px-5 py-3 text-shadow-600">{run.models.length ? run.models.join(', ') : DASH}</td>
-              </tr>
-            {:else}
-              <tr>
-                <td colspan="5" class="px-5 py-4 text-shadow-600">No recent runs recorded.</td>
-              </tr>
-            {/each}
-          </tbody>
-        </table>
-      </div>
+    <section class="flex flex-wrap items-center gap-2" aria-label="Quick charge stats">
+      <span class="inline-flex items-center gap-2 rounded-full border border-bark-300 bg-bark-50 px-3 py-1.5 text-xs font-medium text-shadow-700">
+        <span class="h-2 w-2 rounded-full {activeRun ? 'bg-moss-500' : 'bg-bark-300'}" aria-hidden="true"></span>
+        {#if activeRun}
+          Active run <span class="font-semibold text-shadow-900">{formatCharge(activeRun.amount)}</span>
+          <span class="text-shadow-500">· {formatInteger(activeRun.eventCount)} events</span>
+        {:else}
+          No active run
+        {/if}
+      </span>
+      <span class="inline-flex items-center gap-1.5 rounded-full border border-bark-300 bg-bark-50 px-3 py-1.5 text-xs font-medium text-shadow-700">
+        Last 24h <span class="font-semibold text-petal-500">{formatCharge(dayWindow?.aggregates.amount)}</span>
+        <span class="text-shadow-500">· {formatInteger(dayWindow?.aggregates.eventCount)} events</span>
+      </span>
+      {#each LANE_VALUES as lane}
+        <span class="inline-flex items-center gap-1.5 rounded-full border border-bark-300 bg-bark-50 px-3 py-1.5 text-xs font-medium text-shadow-700">
+          {labelize(lane)}
+          <span class="font-semibold text-shadow-900">{formatCharge(rollingWindowLaneSpend(lane))}</span>
+          <span class="text-shadow-500">/ {formatCharge(policy?.runChargeQuotaByLane[lane] ?? 0)}</span>
+        </span>
+      {/each}
     </section>
 
     <section class="card-garden overflow-hidden" aria-labelledby="policy-heading">
@@ -607,7 +499,7 @@
             value={rawJson}
             oninput={(event) => rawJson = (event.currentTarget as HTMLTextAreaElement).value}
             rows="20"
-            class="w-full resize-y border-0 bg-white p-4 font-mono text-sm text-shadow-800 focus:outline-none focus:ring-2 focus:ring-gold-300 focus:ring-inset"
+            class="w-full resize-y border-0 bg-bark-50 p-4 font-mono text-sm text-shadow-800 focus:outline-none focus:ring-2 focus:ring-gold-300 focus:ring-inset"
             spellcheck="false"
           ></textarea>
         {:else}
@@ -626,7 +518,7 @@
                       value={policy.runChargeQuotaByLane[lane]}
                       aria-label={`${policyKey('runChargeQuotaByLane', lane)} quota`}
                       oninput={(event) => setLaneQuota(lane, (event.currentTarget as HTMLInputElement).value)}
-                      class="mt-2 w-full rounded-lg border border-bark-300 bg-white px-3 py-2 text-sm text-shadow-800 focus:border-gold-400 focus:outline-none"
+                      class="mt-2 w-full rounded-lg border border-bark-300 bg-bark-50 px-3 py-2 text-sm text-shadow-800 focus:border-gold-400 focus:outline-none"
                     />
                   </label>
                 {/each}
@@ -645,7 +537,7 @@
                       <th class="px-4 py-3 font-semibold">Required rationale</th>
                     </tr>
                   </thead>
-                  <tbody class="divide-y divide-bark-200 bg-white">
+                  <tbody class="divide-y divide-bark-200 bg-bark-50">
                     {#each SURFACE_VALUES as surface}
                       <tr>
                         <td class="px-4 py-3">
@@ -700,7 +592,7 @@
                         value={policy.moa.perRoundMultiplierByReferenceModelClass[referenceClass]}
                         aria-label={`${policyKey('moa.perRoundMultiplierByReferenceModelClass', referenceClass)} multiplier`}
                         oninput={(event) => setMoaMultiplier(referenceClass, (event.currentTarget as HTMLInputElement).value)}
-                        class="w-32 rounded-lg border border-bark-300 bg-white px-3 py-2 text-sm focus:border-gold-400 focus:outline-none"
+                        class="w-32 rounded-lg border border-bark-300 bg-bark-50 px-3 py-2 text-sm focus:border-gold-400 focus:outline-none"
                       />
                     </label>
                   {/each}
@@ -727,7 +619,7 @@
                           value={policy.referenceModelClassPricing[referenceClass]}
                           aria-label={`${policyKey('referenceModelClassPricing', referenceClass)} price`}
                           oninput={(event) => setReferencePricing(referenceClass, (event.currentTarget as HTMLInputElement).value)}
-                          class="w-32 rounded-lg border border-bark-300 bg-white px-3 py-2 text-sm focus:border-gold-400 focus:outline-none"
+                          class="w-32 rounded-lg border border-bark-300 bg-bark-50 px-3 py-2 text-sm focus:border-gold-400 focus:outline-none"
                         />
                       </div>
                       <input
@@ -736,7 +628,7 @@
                         placeholder={policy.referenceModelClassPricing[referenceClass] > 0 ? 'Required pricing rationale' : 'Optional rationale'}
                         aria-label={`${policyKey('referenceModelClassPricingRationales', referenceClass)} rationale`}
                         oninput={(event) => setReferenceRationale(referenceClass, (event.currentTarget as HTMLInputElement).value)}
-                        class="mt-3 w-full rounded-lg border border-bark-300 bg-white px-3 py-2 text-sm focus:border-gold-400 focus:outline-none"
+                        class="mt-3 w-full rounded-lg border border-bark-300 bg-bark-50 px-3 py-2 text-sm focus:border-gold-400 focus:outline-none"
                         class:border-wilt-400={policy.referenceModelClassPricing[referenceClass] > 0 && !policy.referenceModelClassPricingRationales?.[referenceClass]?.trim()}
                       />
                     </div>
@@ -749,32 +641,164 @@
       {/if}
     </section>
 
-    <section class="card-garden overflow-hidden" aria-labelledby="recent-events-heading">
+    <section class="card-garden overflow-hidden" aria-labelledby="recent-runs-heading">
       <div class="border-b border-bark-300 px-5 py-4">
-        <h2 id="recent-events-heading" class="font-serif text-lg font-semibold text-shadow-900">Recent charge events</h2>
+        <h2 id="recent-runs-heading" class="font-serif text-lg font-semibold text-shadow-900">Recent runs & charge events</h2>
+        <p class="mt-1 text-sm text-shadow-600">
+          {formatInteger(mergedRuns.length)} runs · {formatInteger(mergedEventCount)} charge events · {formatInteger(lineageRootCount)} lineage roots.
+          Expand a run to see its individual charge events.
+        </p>
       </div>
-      <div class="max-h-96 divide-y divide-bark-200 overflow-y-auto">
-        {#each recentEvents as entry}
-          <div class="grid gap-2 px-5 py-3 text-sm md:grid-cols-[1fr_auto]">
+      <BoundedList maxHeight="28rem" label="Recent runs and charge events">
+        <div class="divide-y divide-bark-200">
+          {#each mergedRuns as row (row.runId)}
+            {@const expanded = expandedRunIds.includes(row.runId)}
             <div>
-              <p class="font-medium text-shadow-800">
-                {labelize(entry.event.surface)} on {labelize(entry.event.lane)}
-              </p>
-              <p class="mt-1 text-xs text-shadow-500">
-                run {shortId(entry.event.lineage.runId)}
-                {#if entry.metadata?.shardId} | shard {shortId(entry.metadata.shardId)}{/if}
-                {#if entry.metadata?.subagentId} | subagent {shortId(entry.metadata.subagentId)}{/if}
-                {#if entry.metadata?.model} | model {entry.metadata.model}{/if}
-              </p>
+              <button
+                type="button"
+                onclick={() => toggleRun(row.runId)}
+                aria-expanded={expanded}
+                class="grid w-full gap-2 px-5 py-3 text-left text-sm transition-colors hover:bg-bark-50 md:grid-cols-[1fr_auto_auto] md:items-center"
+              >
+                <div class="min-w-0">
+                  <p class="font-medium text-shadow-800">
+                    <span class="font-mono text-xs">{shortId(row.runId)}</span>
+                    {#if !row.summarized}
+                      <span class="text-xs text-shadow-500">(events only)</span>
+                    {/if}
+                  </p>
+                  {#if row.lineageLabel}
+                    <p class="mt-1 text-xs text-shadow-500">{row.lineageLabel}</p>
+                  {/if}
+                  <p class="mt-1 text-xs text-shadow-500">{row.models.length ? row.models.join(', ') : 'No models recorded'}</p>
+                </div>
+                <div class="text-left md:text-right">
+                  <p class="font-semibold text-shadow-900">{formatCharge(row.amount)}</p>
+                  <p class="text-xs text-shadow-500">{formatInteger(row.eventCount)} events · {formatTime(row.when)}</p>
+                </div>
+                <svg
+                  viewBox="0 0 24 24"
+                  aria-hidden="true"
+                  class="h-4 w-4 shrink-0 justify-self-end text-shadow-500 transition-transform {expanded ? 'rotate-180' : ''}"
+                >
+                  <path d="M6 9l6 6 6-6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+                </svg>
+              </button>
+              {#if expanded}
+                <div class="border-t border-bark-200 bg-bark-50 px-5 py-2">
+                  {#each row.entries as entry (entry.eventId)}
+                    <div class="grid gap-1 py-2 text-sm md:grid-cols-[1fr_auto]">
+                      <div>
+                        <p class="text-shadow-800">{labelize(entry.event.surface)} on {labelize(entry.event.lane)}</p>
+                        <p class="mt-0.5 text-xs text-shadow-500">
+                          {#if entry.metadata?.shardId}shard {shortId(entry.metadata.shardId)} | {/if}
+                          {#if entry.metadata?.subagentId}subagent {shortId(entry.metadata.subagentId)} | {/if}
+                          {#if entry.metadata?.model}model {entry.metadata.model} | {/if}
+                          lane remaining {formatCharge(entry.event.remainingAfter)} of {formatCharge(entry.event.quota)}
+                        </p>
+                      </div>
+                      <div class="text-left md:text-right">
+                        <p class="font-semibold text-shadow-900">{formatCharge(entry.event.amount)}</p>
+                        <p class="text-xs text-shadow-500">{formatTime(entry.event.timestampMs)}</p>
+                      </div>
+                    </div>
+                  {:else}
+                    <p class="py-2 text-sm text-shadow-600">No charge events for this run in the recent event window.</p>
+                  {/each}
+                </div>
+              {/if}
             </div>
-            <div class="text-left md:text-right">
-              <p class="font-semibold text-shadow-900">{formatCharge(entry.event.amount)}</p>
-              <p class="text-xs text-shadow-500">{formatTime(entry.event.timestampMs)}</p>
+          {:else}
+            <p class="px-5 py-4 text-sm text-shadow-600">No runs or charge events recorded.</p>
+          {/each}
+        </div>
+      </BoundedList>
+    </section>
+
+    <section class="grid gap-4 lg:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)]" aria-label="Charge quota and history">
+      <div class="card-garden overflow-hidden">
+        <div class="border-b border-bark-300 px-5 py-4">
+          <h2 class="font-serif text-lg font-semibold text-shadow-900">Rolling 24h quota by lane</h2>
+          <p class="mt-1 text-sm text-shadow-600">Uses Last 24h ledger spend against charge-policy lane quotas; each run also uses the same quota as a runaway guard.</p>
+        </div>
+        <div class="divide-y divide-bark-200">
+          {#each LANE_VALUES as lane}
+            {@const quota = policy?.runChargeQuotaByLane[lane] ?? 0}
+            {@const spent = rollingWindowLaneSpend(lane)}
+            {@const remaining = Math.max(0, quota - spent)}
+            <div class="px-5 py-4">
+              <div class="flex items-center justify-between gap-3">
+                <div>
+                  <p class="font-mono text-sm font-semibold text-shadow-800">{policyKey('runChargeQuotaByLane', lane)}</p>
+                  <p class="text-xs text-shadow-500">{labelize(lane)}</p>
+                  <p class="text-xs text-shadow-500">Spent {formatCharge(spent)} of {formatCharge(quota)}</p>
+                </div>
+                <p class="font-serif text-xl font-bold text-moss-600">{formatCharge(remaining)}</p>
+              </div>
+              <div class="mt-3 h-2 overflow-hidden rounded-full bg-bark-200">
+                <div class="h-full rounded-full bg-moss-400" style={`width: ${quotaPercent(lane)}%`}></div>
+              </div>
             </div>
+          {/each}
+        </div>
+      </div>
+
+      <div class="space-y-4">
+        <div class="grid gap-4 sm:grid-cols-2">
+          <div class="card-garden p-5">
+            <p class="text-xs uppercase tracking-[0.18em] text-shadow-500">Active run</p>
+            <p class="mt-3 text-3xl font-serif font-bold text-shadow-900">
+              {activeRun ? formatCharge(activeRun.amount) : DASH}
+            </p>
+            <p class="mt-2 text-sm text-shadow-600">
+              {activeRun ? `${formatInteger(activeRun.eventCount)} charge events` : 'No charge events recorded'}
+            </p>
           </div>
-        {:else}
-          <p class="px-5 py-4 text-sm text-shadow-600">No charge events recorded.</p>
-        {/each}
+          <div class="card-garden p-5">
+            <p class="text-xs uppercase tracking-[0.18em] text-shadow-500">Last 24h used</p>
+            <p class="mt-3 text-3xl font-serif font-bold text-petal-500">{formatCharge(dayWindow?.aggregates.amount)}</p>
+            <p class="mt-2 text-sm text-shadow-600">
+              {formatInteger(dayWindow?.aggregates.eventCount)} events counted against the rolling lane quotas.
+            </p>
+          </div>
+        </div>
+
+        <div class="card-garden overflow-hidden">
+          <div class="border-b border-bark-300 px-5 py-4">
+            <h2 class="font-serif text-lg font-semibold text-shadow-900">Last 30 days</h2>
+            <p class="mt-1 text-sm text-shadow-600">Single historical window with lane and surface breakdowns.</p>
+          </div>
+          <div class="flex items-baseline justify-between gap-4 px-5 py-4">
+            <p class="font-serif text-2xl font-bold text-gold-600">{formatCharge(monthWindow?.aggregates.amount)}</p>
+            <p class="text-sm text-shadow-600">{formatInteger(monthWindow?.aggregates.eventCount)} events</p>
+          </div>
+          <BoundedList maxHeight="16rem" label="30 day lane and surface breakdowns">
+            <div class="divide-y divide-bark-200 border-t border-bark-200">
+              {#each monthWindow?.aggregates.byLane ?? [] as item (`lane-${item.key}`)}
+                <div class="flex items-center justify-between gap-4 px-5 py-2.5">
+                  <div>
+                    <p class="font-mono text-sm font-medium text-shadow-800">{item.key}</p>
+                    <p class="text-xs uppercase tracking-[0.14em] text-shadow-500">Lane</p>
+                  </div>
+                  <p class="text-sm text-shadow-600">{formatCharge(item.amount)} / {formatInteger(item.eventCount)} events</p>
+                </div>
+              {/each}
+              {#each monthWindow?.aggregates.bySurface ?? [] as item (`surface-${item.key}`)}
+                <div class="flex items-center justify-between gap-4 px-5 py-2.5">
+                  <div>
+                    <p class="font-mono text-sm font-medium text-shadow-800">{item.key}</p>
+                    <p class="text-xs uppercase tracking-[0.14em] text-shadow-500">Surface</p>
+                  </div>
+                  <p class="text-sm text-shadow-600">{formatCharge(item.amount)} / {formatInteger(item.eventCount)} events</p>
+                </div>
+              {:else}
+                {#if (monthWindow?.aggregates.byLane ?? []).length === 0}
+                  <p class="px-5 py-4 text-sm text-shadow-600">No charges recorded in the last 30 days.</p>
+                {/if}
+              {/each}
+            </div>
+          </BoundedList>
+        </div>
       </div>
     </section>
     {:else}
@@ -824,76 +848,84 @@
           <div class="border-b border-bark-300 px-5 py-4">
             <h2 class="font-serif text-lg font-semibold text-shadow-900">By model</h2>
           </div>
-          <div class="divide-y divide-bark-200">
-            {#each modelUsage?.byModel ?? [] as item}
-              <div class="flex items-center justify-between gap-4 px-5 py-3">
-                <div>
-                  <p class="font-mono text-sm font-medium text-shadow-800">{item.key}</p>
-                  <p class="text-xs text-shadow-500">{formatInteger(item.calls)} calls</p>
+          <BoundedList label="Usage by model">
+            <div class="divide-y divide-bark-200">
+              {#each modelUsage?.byModel ?? [] as item}
+                <div class="flex items-center justify-between gap-4 px-5 py-3">
+                  <div>
+                    <p class="font-mono text-sm font-medium text-shadow-800">{item.key}</p>
+                    <p class="text-xs text-shadow-500">{formatInteger(item.calls)} calls</p>
+                  </div>
+                  <p class="text-sm text-shadow-600">{formatBreakdownCost(item)}</p>
                 </div>
-                <p class="text-sm text-shadow-600">{formatBreakdownCost(item)}</p>
-              </div>
-            {:else}
-              <p class="px-5 py-4 text-sm text-shadow-600">No model usage recorded.</p>
-            {/each}
-          </div>
+              {:else}
+                <p class="px-5 py-4 text-sm text-shadow-600">No model usage recorded.</p>
+              {/each}
+            </div>
+          </BoundedList>
         </div>
 
         <div class="card-garden overflow-hidden">
           <div class="border-b border-bark-300 px-5 py-4">
             <h2 class="font-serif text-lg font-semibold text-shadow-900">By purpose</h2>
           </div>
-          <div class="divide-y divide-bark-200">
-            {#each modelUsage?.byPurpose ?? [] as item}
-              <div class="flex items-center justify-between gap-4 px-5 py-3">
-                <div>
-                  <p class="font-mono text-sm font-medium text-shadow-800">{item.key}</p>
-                  <p class="text-xs text-shadow-500">{formatInteger(item.calls)} calls</p>
+          <BoundedList label="Usage by purpose">
+            <div class="divide-y divide-bark-200">
+              {#each modelUsage?.byPurpose ?? [] as item}
+                <div class="flex items-center justify-between gap-4 px-5 py-3">
+                  <div>
+                    <p class="font-mono text-sm font-medium text-shadow-800">{item.key}</p>
+                    <p class="text-xs text-shadow-500">{formatInteger(item.calls)} calls</p>
+                  </div>
+                  <p class="text-sm text-shadow-600">{formatBreakdownCost(item)}</p>
                 </div>
-                <p class="text-sm text-shadow-600">{formatBreakdownCost(item)}</p>
-              </div>
-            {:else}
-              <p class="px-5 py-4 text-sm text-shadow-600">No purpose usage recorded.</p>
-            {/each}
-          </div>
+              {:else}
+                <p class="px-5 py-4 text-sm text-shadow-600">No purpose usage recorded.</p>
+              {/each}
+            </div>
+          </BoundedList>
         </div>
 
         <div class="card-garden overflow-hidden">
           <div class="border-b border-bark-300 px-5 py-4">
             <h2 class="font-serif text-lg font-semibold text-shadow-900">By tool</h2>
           </div>
-          <div class="divide-y divide-bark-200">
-            {#each modelUsage?.byTool ?? [] as item}
-              <div class="flex items-center justify-between gap-4 px-5 py-3">
-                <div>
-                  <p class="font-mono text-sm font-medium text-shadow-800">{item.key}</p>
-                  <p class="text-xs text-shadow-500">{formatInteger(item.calls)} calls</p>
+          <BoundedList label="Usage by tool">
+            <div class="divide-y divide-bark-200">
+              {#each modelUsage?.byTool ?? [] as item}
+                <div class="flex items-center justify-between gap-4 px-5 py-3">
+                  <div>
+                    <p class="font-mono text-sm font-medium text-shadow-800">{item.key}</p>
+                    <p class="text-xs text-shadow-500">{formatInteger(item.calls)} calls</p>
+                  </div>
+                  <p class="text-sm text-shadow-600">{formatBreakdownCost(item)}</p>
                 </div>
-                <p class="text-sm text-shadow-600">{formatBreakdownCost(item)}</p>
-              </div>
-            {:else}
-              <p class="px-5 py-4 text-sm text-shadow-600">No tool usage recorded.</p>
-            {/each}
-          </div>
+              {:else}
+                <p class="px-5 py-4 text-sm text-shadow-600">No tool usage recorded.</p>
+              {/each}
+            </div>
+          </BoundedList>
         </div>
 
         <div class="card-garden overflow-hidden">
           <div class="border-b border-bark-300 px-5 py-4">
             <h2 class="font-serif text-lg font-semibold text-shadow-900">By call kind</h2>
           </div>
-          <div class="divide-y divide-bark-200">
-            {#each modelUsage?.byCallKind ?? [] as item}
-              <div class="flex items-center justify-between gap-4 px-5 py-3">
-                <div>
-                  <p class="font-mono text-sm font-medium text-shadow-800">{item.key}</p>
-                  <p class="text-xs text-shadow-500">{formatInteger(item.calls)} calls</p>
+          <BoundedList label="Usage by call kind">
+            <div class="divide-y divide-bark-200">
+              {#each modelUsage?.byCallKind ?? [] as item}
+                <div class="flex items-center justify-between gap-4 px-5 py-3">
+                  <div>
+                    <p class="font-mono text-sm font-medium text-shadow-800">{item.key}</p>
+                    <p class="text-xs text-shadow-500">{formatInteger(item.calls)} calls</p>
+                  </div>
+                  <p class="text-sm text-shadow-600">{formatBreakdownCost(item)}</p>
                 </div>
-                <p class="text-sm text-shadow-600">{formatBreakdownCost(item)}</p>
-              </div>
-            {:else}
-              <p class="px-5 py-4 text-sm text-shadow-600">No call-kind usage recorded.</p>
-            {/each}
-          </div>
+              {:else}
+                <p class="px-5 py-4 text-sm text-shadow-600">No call-kind usage recorded.</p>
+              {/each}
+            </div>
+          </BoundedList>
         </div>
       </section>
 
@@ -901,64 +933,68 @@
         <div class="border-b border-bark-300 px-5 py-4">
           <h2 id="expensive-model-events-heading" class="font-serif text-lg font-semibold text-shadow-900">Highest-cost calls</h2>
         </div>
-        <div class="overflow-x-auto">
-          <table class="min-w-full divide-y divide-bark-200 text-left text-sm">
-            <thead class="bg-bark-50 text-xs uppercase tracking-[0.16em] text-shadow-500">
-              <tr>
-                <th class="px-5 py-3 font-semibold">When</th>
-                <th class="px-5 py-3 font-semibold">Kind</th>
-                <th class="px-5 py-3 font-semibold">Model</th>
-                <th class="px-5 py-3 font-semibold">Purpose</th>
-                <th class="px-5 py-3 font-semibold">Tokens</th>
-                <th class="px-5 py-3 font-semibold">Cost</th>
-              </tr>
-            </thead>
-            <tbody class="divide-y divide-bark-200">
-              {#each expensiveModelUsageEvents as event}
+        <BoundedList maxHeight="24rem" label="Highest-cost calls">
+          <div class="overflow-x-auto">
+            <table class="min-w-full divide-y divide-bark-200 text-left text-sm">
+              <thead class="bg-bark-50 text-xs uppercase tracking-[0.16em] text-shadow-500">
                 <tr>
-                  <td class="px-5 py-3 text-shadow-600">{formatTime(event.recordedAtMs)}</td>
-                  <td class="px-5 py-3 font-mono text-xs text-shadow-700">{event.callKind}</td>
-                  <td class="px-5 py-3 text-shadow-600">{event.provider}:{event.model}</td>
-                  <td class="px-5 py-3 text-shadow-600">{event.purpose}</td>
-                  <td class="px-5 py-3 text-shadow-600">{formatInteger(event.totalTokens)}</td>
-                  <td class="px-5 py-3 font-semibold text-shadow-900">{formatUsd(event.providerCostUsd ?? event.estimatedCostUsd)}</td>
+                  <th class="px-5 py-3 font-semibold">When</th>
+                  <th class="px-5 py-3 font-semibold">Kind</th>
+                  <th class="px-5 py-3 font-semibold">Model</th>
+                  <th class="px-5 py-3 font-semibold">Purpose</th>
+                  <th class="px-5 py-3 font-semibold">Tokens</th>
+                  <th class="px-5 py-3 font-semibold">Cost</th>
                 </tr>
-              {:else}
-                <tr>
-                  <td colspan="6" class="px-5 py-4 text-shadow-600">No model usage calls recorded.</td>
-                </tr>
-              {/each}
-            </tbody>
-          </table>
-        </div>
+              </thead>
+              <tbody class="divide-y divide-bark-200">
+                {#each expensiveModelUsageEvents as event}
+                  <tr>
+                    <td class="px-5 py-3 text-shadow-600">{formatTime(event.recordedAtMs)}</td>
+                    <td class="px-5 py-3 font-mono text-xs text-shadow-700">{event.callKind}</td>
+                    <td class="px-5 py-3 text-shadow-600">{event.provider}:{event.model}</td>
+                    <td class="px-5 py-3 text-shadow-600">{event.purpose}</td>
+                    <td class="px-5 py-3 text-shadow-600">{formatInteger(event.totalTokens)}</td>
+                    <td class="px-5 py-3 font-semibold text-shadow-900">{formatUsd(event.providerCostUsd ?? event.estimatedCostUsd)}</td>
+                  </tr>
+                {:else}
+                  <tr>
+                    <td colspan="6" class="px-5 py-4 text-shadow-600">No model usage calls recorded.</td>
+                  </tr>
+                {/each}
+              </tbody>
+            </table>
+          </div>
+        </BoundedList>
       </section>
 
       <section class="card-garden overflow-hidden" aria-labelledby="recent-model-events-heading">
         <div class="border-b border-bark-300 px-5 py-4">
           <h2 id="recent-model-events-heading" class="font-serif text-lg font-semibold text-shadow-900">Recent model usage events</h2>
         </div>
-        <div class="max-h-96 divide-y divide-bark-200 overflow-y-auto">
-          {#each recentModelUsageEvents as event}
-            <div class="grid gap-2 px-5 py-3 text-sm md:grid-cols-[1fr_auto]">
-              <div>
-                <p class="font-medium text-shadow-800">{event.provider}:{event.model}</p>
-                <p class="mt-1 text-xs text-shadow-500">
-                  {event.callKind} | {event.callType} | {event.purpose}
-                  {#if event.toolName} | tool {event.toolName}{/if}
-                  {#if event.chargeRunId} | run {shortId(event.chargeRunId)}{/if}
-                </p>
+        <BoundedList maxHeight="24rem" label="Recent model usage events">
+          <div class="divide-y divide-bark-200">
+            {#each recentModelUsageEvents as event}
+              <div class="grid gap-2 px-5 py-3 text-sm md:grid-cols-[1fr_auto]">
+                <div>
+                  <p class="font-medium text-shadow-800">{event.provider}:{event.model}</p>
+                  <p class="mt-1 text-xs text-shadow-500">
+                    {event.callKind} | {event.callType} | {event.purpose}
+                    {#if event.toolName} | tool {event.toolName}{/if}
+                    {#if event.chargeRunId} | run {shortId(event.chargeRunId)}{/if}
+                  </p>
+                </div>
+                <div class="text-left md:text-right">
+                  <p class="font-semibold text-shadow-900">{formatInteger(event.totalTokens)} tokens</p>
+                  <p class="text-xs text-shadow-500">
+                    {formatUsd(event.providerCostUsd ?? event.estimatedCostUsd)} | {formatTime(event.recordedAtMs)}
+                  </p>
+                </div>
               </div>
-              <div class="text-left md:text-right">
-                <p class="font-semibold text-shadow-900">{formatInteger(event.totalTokens)} tokens</p>
-                <p class="text-xs text-shadow-500">
-                  {formatUsd(event.providerCostUsd ?? event.estimatedCostUsd)} | {formatTime(event.recordedAtMs)}
-                </p>
-              </div>
-            </div>
-          {:else}
-            <p class="px-5 py-4 text-sm text-shadow-600">No recent model usage events recorded.</p>
-          {/each}
-        </div>
+            {:else}
+              <p class="px-5 py-4 text-sm text-shadow-600">No recent model usage events recorded.</p>
+            {/each}
+          </div>
+        </BoundedList>
       </section>
     {/if}
   {/if}

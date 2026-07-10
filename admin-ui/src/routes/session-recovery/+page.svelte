@@ -123,11 +123,10 @@
   <title>Session Recovery</title>
 </svelte:head>
 
-<main class="min-h-screen bg-moss-50 px-4 py-6 text-shadow-950">
-  <div class="mx-auto flex w-full max-w-6xl flex-col gap-5">
-    <header class="flex flex-col gap-2 border-b border-moss-200 pb-4">
-      <p class="text-xs font-semibold uppercase text-moss-700">Review & Safety</p>
-      <h1 class="text-2xl font-semibold">Session Recovery</h1>
+<div class="flex w-full flex-col gap-5">
+    <header class="flex flex-col gap-2 border-b border-bark-200 pb-4">
+      <p class="text-xs font-semibold uppercase tracking-wide text-shadow-500">Review & Safety</p>
+      <h1 class="font-serif text-2xl font-semibold text-bark-900">Session Recovery</h1>
       <p class="max-w-3xl text-sm text-shadow-700">
         Start a fresh logical session for an existing source channel without deleting old L0 history.
         Future live context uses the new route; retained sessions stay available for explicit audit/search.
@@ -152,14 +151,14 @@
     {/if}
 
     <section class="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(320px,420px)]">
-      <div class="rounded border border-moss-200 bg-white p-4 shadow-sm">
+      <div class="card-garden p-4">
         <div class="mb-4 flex items-center justify-between gap-3">
           <div>
-            <h2 class="text-lg font-semibold">Active Routes</h2>
+            <h2 class="font-serif text-lg font-semibold text-shadow-900">Active Routes</h2>
             <p class="text-sm text-shadow-600">{routes.length} routed source channel{routes.length === 1 ? '' : 's'}</p>
           </div>
           <button
-            class="rounded border border-moss-300 px-3 py-2 text-sm font-medium text-moss-800 hover:bg-moss-50 disabled:opacity-50"
+            class="rounded border border-bark-300 px-3 py-2 text-sm font-medium text-shadow-700 hover:bg-bark-100 disabled:opacity-50"
             type="button"
             disabled={loading}
             onclick={loadRoutes}
@@ -175,7 +174,7 @@
         {:else}
           <div class="overflow-x-auto">
             <table class="w-full min-w-[760px] text-left text-sm">
-              <thead class="border-b border-moss-200 text-xs uppercase text-shadow-600">
+              <thead class="border-b border-bark-200 text-xs uppercase text-shadow-600">
                 <tr>
                   <th class="px-2 py-2 font-semibold">Source Channel</th>
                   <th class="px-2 py-2 font-semibold">Active Logical Session</th>
@@ -186,10 +185,10 @@
               </thead>
               <tbody>
                 {#each routes as route}
-                  <tr class="border-b border-moss-100 align-top">
+                  <tr class="border-b border-bark-100 align-top">
                     <td class="px-2 py-3">
                       <button
-                        class="text-left font-mono text-xs text-moss-800 underline-offset-2 hover:underline"
+                        class="text-left font-mono text-xs text-gold-700 underline-offset-2 hover:underline"
                         type="button"
                         onclick={() => { selectedSourceChannelId = route.sourceChannelId; }}
                       >
@@ -208,8 +207,8 @@
         {/if}
       </div>
 
-      <form class="rounded border border-moss-200 bg-white p-4 shadow-sm" onsubmit={(event) => { event.preventDefault(); void resetSession(); }}>
-        <h2 class="text-lg font-semibold">Start Fresh Lane</h2>
+      <form class="card-garden p-4" onsubmit={(event) => { event.preventDefault(); void resetSession(); }}>
+        <h2 class="font-serif text-lg font-semibold text-shadow-900">Start Fresh Lane</h2>
         <p class="mt-1 text-sm text-shadow-600">
           This retires the current active logical session for one physical source channel and creates a new live route.
         </p>
@@ -217,7 +216,7 @@
         <label class="mt-4 block text-sm font-medium text-shadow-800" for="source-channel">Source channel</label>
         <input
           id="source-channel"
-          class="mt-1 w-full rounded border border-moss-300 px-3 py-2 font-mono text-sm"
+          class="mt-1 w-full rounded border border-bark-300 px-3 py-2 font-mono text-sm"
           list="source-channel-options"
           bind:value={selectedSourceChannelId}
           placeholder="discord:channel-id"
@@ -229,7 +228,7 @@
         </datalist>
 
         <label class="mt-4 block text-sm font-medium text-shadow-800" for="mode">Mode</label>
-        <select id="mode" class="mt-1 w-full rounded border border-moss-300 px-3 py-2 text-sm" bind:value={mode}>
+        <select id="mode" class="mt-1 w-full rounded border border-bark-300 px-3 py-2 text-sm" bind:value={mode}>
           <option value="break_glass_quarantine">Break-glass quarantine</option>
           <option value="fresh_split">Fresh split</option>
         </select>
@@ -237,27 +236,27 @@
         <label class="mt-4 block text-sm font-medium text-shadow-800" for="actor">Actor</label>
         <input
           id="actor"
-          class="mt-1 w-full rounded border border-moss-300 px-3 py-2 text-sm"
+          class="mt-1 w-full rounded border border-bark-300 px-3 py-2 text-sm"
           bind:value={actor}
         />
 
         <label class="mt-4 block text-sm font-medium text-shadow-800" for="reason">Reason</label>
         <textarea
           id="reason"
-          class="mt-1 min-h-24 w-full rounded border border-moss-300 px-3 py-2 text-sm"
+          class="mt-1 min-h-24 w-full rounded border border-bark-300 px-3 py-2 text-sm"
           bind:value={reason}
           placeholder="Content poisoning, over-compressed context, bad live state, or other operator reason."
         ></textarea>
 
         {#if selectedRoute}
-          <div class="mt-4 rounded border border-moss-200 bg-moss-50 p-3 text-xs text-shadow-700">
+          <div class="mt-4 rounded border border-bark-200 bg-bark-50 p-3 text-xs text-shadow-700">
             <p><span class="font-semibold">Current active:</span> <span class="font-mono">{selectedRoute.activeLogicalSessionId}</span></p>
             <p class="mt-1"><span class="font-semibold">Retired sessions:</span> {selectedRoute.retiredSessions.length}</p>
           </div>
         {/if}
 
         <button
-          class="mt-5 w-full rounded bg-wilt-700 px-4 py-2 text-sm font-semibold text-white hover:bg-wilt-800 disabled:cursor-not-allowed disabled:opacity-50"
+          class="mt-5 w-full rounded bg-wilt-600 px-4 py-2 text-sm font-semibold text-white hover:bg-wilt-700 disabled:cursor-not-allowed disabled:opacity-50"
           type="submit"
           disabled={loading || submitting}
         >
@@ -265,5 +264,4 @@
         </button>
       </form>
     </section>
-  </div>
-</main>
+</div>

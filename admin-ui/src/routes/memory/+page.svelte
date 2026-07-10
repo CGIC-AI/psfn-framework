@@ -811,7 +811,7 @@
 
     <div class="flex flex-wrap gap-2 text-xs">
       {#each SENSITIVITY_LEVELS.filter(level => level) as level}
-        <span class="rounded-full border border-bark-200 bg-white px-2.5 py-1 font-medium text-shadow-700">
+        <span class="rounded-full border border-bark-200 bg-bark-50 px-2.5 py-1 font-medium text-shadow-700">
           {sensitivityCountLabel(level)}
         </span>
       {/each}
@@ -934,7 +934,7 @@
 
             <div class="space-y-3">
               {#each selectedManagedScopeDetail.memories as entry}
-                <div class="rounded-lg border border-bark-200 bg-white/60 p-3">
+                <div class="rounded-lg border border-bark-200 bg-bark-50/60 p-3">
                   <div class="flex items-start justify-between gap-3">
                     <div>
                       <p class="text-sm font-medium text-shadow-900">{entry.memory.id}</p>

@@ -1,0 +1,77 @@
+{
+  "schemaVersion": 1,
+  "sites": [
+    { "siteId": "test_home", "displayName": "Test Home", "kind": "physical" },
+    { "siteId": "test_latent", "displayName": "Test Latent Space", "kind": "virtual" },
+    { "siteId": "test_grove", "displayName": "Test Grove (VR)", "kind": "virtual" }
+  ],
+  "places": [
+    {
+      "placeId": "office",
+      "siteId": "test_home",
+      "displayName": "Test Office",
+      "kind": "physical",
+      "haAreaId": "office",
+      "description": "Satellite-active test room (presence + face). Twinned as 'latent_office'.",
+      "affordances": [
+        { "affordanceId": "office_presence", "role": "perceiver", "kind": "presence", "backend": "satellite", "displayName": "Office Presence (mmwave)" },
+        { "affordanceId": "office_face", "role": "perceiver", "kind": "camera", "backend": "satellite", "displayName": "Office Face Detection" },
+        { "affordanceId": "office_lights", "role": "effector", "kind": "light", "backend": "ha", "displayName": "Office Lights", "entityId": "light.test_office", "control": ["on", "off", "brightness"] },
+        { "affordanceId": "office_climate", "role": "effector", "kind": "climate", "backend": "ha", "displayName": "Office Thermostat", "entityId": "climate.test_office", "control": ["set_temperature"] }
+      ]
+    },
+    {
+      "placeId": "kitchen",
+      "siteId": "test_home",
+      "displayName": "Test Kitchen",
+      "kind": "physical",
+      "haAreaId": "kitchen",
+      "description": "Satellite-active test room. Twinned as 'latent_kitchen'.",
+      "affordances": [
+        { "affordanceId": "kitchen_presence", "role": "perceiver", "kind": "presence", "backend": "ha", "displayName": "Kitchen Presence", "entityId": "binary_sensor.test_kitchen_mmwave" },
+        { "affordanceId": "kitchen_lights", "role": "effector", "kind": "light", "backend": "ha", "displayName": "Kitchen Lights", "entityId": "light.test_kitchen", "control": ["on", "off"] },
+        { "affordanceId": "kitchen_speaker", "role": "effector", "kind": "media_player", "backend": "ha", "displayName": "Kitchen Speaker", "entityId": "media_player.test_kitchen", "control": ["play", "pause", "volume"] }
+      ]
+    },
+    {
+      "placeId": "workshop",
+      "siteId": "test_home",
+      "displayName": "Test Workshop",
+      "kind": "physical",
+      "haAreaId": "workshop",
+      "description": "No satellite, not mirrored — exercises the plain-physical rendering path.",
+      "affordances": [
+        { "affordanceId": "workshop_bench_power", "role": "effector", "kind": "switch", "backend": "ha", "displayName": "Bench Power", "entityId": "switch.test_workshop_bench", "control": ["on", "off"] },
+        { "affordanceId": "workshop_mic", "role": "perceiver", "kind": "mic", "backend": "satellite", "displayName": "Workshop Mic" }
+      ]
+    },
+    {
+      "placeId": "latent_office",
+      "siteId": "test_latent",
+      "displayName": "Office (latent)",
+      "kind": "virtual",
+      "description": "Virtual twin of physical placeId 'office' — exercises the latent_* twin badge.",
+      "affordances": []
+    },
+    {
+      "placeId": "latent_kitchen",
+      "siteId": "test_latent",
+      "displayName": "Kitchen (latent)",
+      "kind": "virtual",
+      "description": "Virtual twin of physical placeId 'kitchen', marked private — exercises the room-privacy rendering path.",
+      "privacy": "private",
+      "affordances": []
+    },
+    {
+      "placeId": "grove_clearing",
+      "siteId": "test_grove",
+      "displayName": "Grove Clearing",
+      "kind": "virtual",
+      "description": "Pure-VR place with virtual-object affordances — exercises the 'vr' backend rendering path.",
+      "affordances": [
+        { "affordanceId": "grove_campfire", "role": "effector", "kind": "virtual_object", "backend": "vr", "displayName": "Campfire", "entityId": "vobj.test_grove.campfire", "control": ["light", "extinguish"] },
+        { "affordanceId": "grove_presence", "role": "perceiver", "kind": "presence", "backend": "vr", "displayName": "Avatar Presence" }
+      ]
+    }
+  ]
+}

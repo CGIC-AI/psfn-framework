@@ -30,7 +30,7 @@
   }
 </script>
 
-<div class="rounded-xl border border-bark-200 bg-white p-4">
+<div class="rounded-xl border border-bark-200 bg-bark-50 p-4">
   <h3 class="font-medium text-shadow-900">{title}</h3>
   {#if entries.length === 0}
     <p class="mt-3 text-sm text-shadow-600">{emptyText}</p>

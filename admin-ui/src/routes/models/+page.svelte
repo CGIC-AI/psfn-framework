@@ -37,6 +37,7 @@
   } from './discovery-autofill';
   import DiscoveredModelsPanel from './DiscoveredModelsPanel.svelte';
   import ProviderWiringPanel from './ProviderWiringPanel.svelte';
+  import CollapsibleSection from '$lib/components/garden/CollapsibleSection.svelte';
   import {
     parseProviderRegistryJson,
     PROVIDER_TYPE_LABELS,
@@ -60,6 +61,8 @@
     TUNING_NUMBER_FIELDS,
     cloneModelEntry,
     discoverySearchText,
+    isOtherCompanionSlot,
+    otherCompanionSlotLabel,
     maxContext,
     maxResponse,
     moveEntry,
@@ -112,13 +115,25 @@
     });
   });
   let hasDiscoveredModels = $derived.by(() => discoveredModels.length > 0);
-  let enabledModelCount = $derived.by(() => models.filter(modelIsEnabled).length);
+  // Roster scoping: `models` keeps the full models.json array (foreign slots
+  // are preserved verbatim on save); the editable roster and all summaries
+  // present only this companion's slots. Foreign entries keep their original
+  // array index so index-based handlers keep operating on `models`.
+  let ownModelEntries = $derived.by(() => (
+    models
+      .map((entry, index) => ({ entry, index }))
+      .filter(({ entry }) => !isOtherCompanionSlot(entry))
+  ));
+  let otherCompanionSlots = $derived.by(() => models.filter(isOtherCompanionSlot));
+  let enabledModelCount = $derived.by(() => (
+    ownModelEntries.filter(({ entry }) => modelIsEnabled(entry)).length
+  ));
 
   let purposePrimaryCounts = $derived.by(() => {
     const counts = Object.fromEntries(
       CANONICAL_PURPOSES.map((purpose) => [purpose, 0]),
     ) as Record<CanonicalModelPurpose, number>;
-    for (const model of models) {
+    for (const { entry: model } of ownModelEntries) {
       if (!modelIsEnabled(model)) continue;
       for (const tag of model.purposes) {
         if (tag.primary) {
@@ -316,6 +331,9 @@
 
     if (currentTag.primary !== true) {
       models = models.map((entry, entryIndex) => {
+        // Never rewrite another companion's fixture slot; if one holds a
+        // conflicting primary the save-time validation reports it instead.
+        if (entryIndex !== index && isOtherCompanionSlot(entry)) return entry;
         const cloned = cloneModelEntry(entry);
         const nextPurposes = cloned.purposes.map((tag) => ({ ...tag }));
         const purposeIndex = nextPurposes.findIndex((tag) => tag.purpose === purpose);
@@ -642,6 +660,7 @@
   function backfillExistingModelsFromDiscovery(discovered: readonly DiscoveredModel[]): number {
     let backfilled = 0;
     const nextModels = models.map((entry) => {
+      if (isOtherCompanionSlot(entry)) return entry;
       const normalizedModel = entry.identity.model.trim();
       if (!normalizedModel) return entry;
       const matched = resolveDiscoveredModelSelection(normalizedModel, discovered);
@@ -749,6 +768,9 @@
       }
     }
 
+    // Server-side registry validation counts primaries across the entire
+    // models.json (including other companions' fixture slots), so this check
+    // must stay whole-registry even though the roster only shows own slots.
     for (const purpose of CANONICAL_PURPOSES) {
       const primaryCount = entries.reduce((count, entry) => (
         count + (
@@ -758,8 +780,20 @@
         )
       ), 0);
       if (primaryCount !== 1) {
+        const foreignPrimaryCount = entries.reduce((count, entry) => (
+          count + (
+            isOtherCompanionSlot(entry)
+              && modelIsEnabled(entry)
+              && entry.purposes.some((tag) => tag.purpose === purpose && tag.primary)
+              ? 1
+              : 0
+          )
+        ), 0);
+        const foreignNote = foreignPrimaryCount > 0
+          ? `, of which ${foreignPrimaryCount} on other companions' fixture slots`
+          : '';
         errors.push(
-          `Purpose "${purpose}" must have exactly one enabled primary model before save (found ${primaryCount}).`,
+          `Purpose "${purpose}" must have exactly one enabled primary model before save (found ${primaryCount}${foreignNote}).`,
         );
       }
     }
@@ -1032,7 +1066,7 @@
             inputmode="decimal"
             value={budgetPolicy.dailyUsdLimit}
             oninput={(event) => setBudgetPolicyLimit('dailyUsdLimit', (event.currentTarget as HTMLInputElement).value)}
-            class="mt-1 w-full rounded border border-bark-300 bg-white px-2 py-1 text-sm focus:border-gold-400 focus:outline-none"
+            class="mt-1 w-full rounded border border-bark-300 bg-bark-50 px-2 py-1 text-sm focus:border-gold-400 focus:outline-none"
           />
           <input
             type="range"
@@ -1054,7 +1088,7 @@
             inputmode="decimal"
             value={budgetPolicy.monthlyUsdLimit}
             oninput={(event) => setBudgetPolicyLimit('monthlyUsdLimit', (event.currentTarget as HTMLInputElement).value)}
-            class="mt-1 w-full rounded border border-bark-300 bg-white px-2 py-1 text-sm focus:border-gold-400 focus:outline-none"
+            class="mt-1 w-full rounded border border-bark-300 bg-bark-50 px-2 py-1 text-sm focus:border-gold-400 focus:outline-none"
           />
           <input
             type="range"
@@ -1120,7 +1154,7 @@
           <h2 class="text-sm font-serif font-semibold text-shadow-800">Model Registry</h2>
           <div class="flex flex-wrap items-center gap-2">
             <span class="rounded-full border border-bark-300 bg-bark-100 px-3 py-1 text-sm text-shadow-700">
-              {enabledModelCount} enabled / {models.length} total
+              {enabledModelCount} enabled / {ownModelEntries.length} total
             </span>
             <button
               onclick={addModel}
@@ -1131,7 +1165,7 @@
           </div>
         </div>
 
-        {#each models as entry, index (entry.id)}
+        {#each ownModelEntries as { entry, index } (entry.id)}
           {@const isExpanded = expandedModelIds.has(entry.id)}
           {@const currentDragOver = dragOverIndex === index}
           {@const modelEnabled = modelIsEnabled(entry)}
@@ -1155,7 +1189,7 @@
                         nextEntry.id = (event.target as HTMLInputElement).value;
                         return nextEntry;
                       })}
-                      class="px-2 py-1 rounded border border-bark-300 text-sm font-mono text-shadow-800 bg-white"
+                      class="px-2 py-1 rounded border border-bark-300 text-sm font-mono text-shadow-800 bg-bark-50"
                     />
                     <span class="px-2 py-0.5 rounded-full text-xs bg-bark-100 text-shadow-600 border border-bark-300">rank {entry.rank}</span>
                     <span class="px-2 py-0.5 rounded-full text-xs border {modelEnabled ? 'bg-moss-50 border-moss-300 text-moss-700' : 'bg-wilt-50 border-wilt-300 text-wilt-700'}">
@@ -1227,7 +1261,7 @@
                         ? 'bg-gold-100 border-gold-400 text-gold-800'
                         : (state === 'standard'
                           ? 'bg-moss-50 border-moss-300 text-moss-700'
-                          : 'bg-white border-bark-300 text-shadow-600 hover:bg-bark-100')}"
+                          : 'bg-bark-50 border-bark-300 text-shadow-600 hover:bg-bark-100')}"
                     title="Cycle: off → standard → primary"
                   >
                     {PURPOSE_LABELS[purpose]}{state === 'primary' ? ' ★' : ''}
@@ -1246,7 +1280,7 @@
                       list="provider-id-list"
                       value={entry.identity.provider}
                       onchange={(event) => setIdentityField(index, 'provider', (event.target as HTMLInputElement).value)}
-                      class="w-full px-3 py-2 rounded border border-bark-300 bg-white text-sm text-shadow-800 font-mono"
+                      class="w-full px-3 py-2 rounded border border-bark-300 bg-bark-50 text-sm text-shadow-800 font-mono"
                     />
                     <p class="mt-1 text-xs text-shadow-500">
                       {providerAvailability(providerForModel(entry))}{#if providerForModel(entry)} · {providerLabel(providerForModel(entry))}{/if}
@@ -1259,7 +1293,7 @@
                       list="discovered-model-list"
                       value={entry.identity.model}
                       oninput={(event) => setIdentityField(index, 'model', (event.target as HTMLInputElement).value)}
-                      class="w-full px-3 py-2 rounded border border-bark-300 bg-white text-sm text-shadow-800 font-mono"
+                      class="w-full px-3 py-2 rounded border border-bark-300 bg-bark-50 text-sm text-shadow-800 font-mono"
                     />
                   </div>
                   <div>
@@ -1268,7 +1302,7 @@
                       type="text"
                       value={entry.identity.family ?? ''}
                       onchange={(event) => setIdentityField(index, 'family', (event.target as HTMLInputElement).value)}
-                      class="w-full px-3 py-2 rounded border border-bark-300 bg-white text-sm text-shadow-800"
+                      class="w-full px-3 py-2 rounded border border-bark-300 bg-bark-50 text-sm text-shadow-800"
                     />
                   </div>
                   <div>
@@ -1278,7 +1312,7 @@
                       list="provider-type-list"
                       value={entry.identity.source.type}
                       onchange={(event) => setSourceField(index, 'type', (event.target as HTMLInputElement).value)}
-                      class="w-full px-3 py-2 rounded border border-bark-300 bg-white text-sm text-shadow-800 font-mono"
+                      class="w-full px-3 py-2 rounded border border-bark-300 bg-bark-50 text-sm text-shadow-800 font-mono"
                     />
                   </div>
                   <div>
@@ -1287,7 +1321,7 @@
                       type="text"
                       value={entry.identity.source.label ?? ''}
                       onchange={(event) => setSourceField(index, 'label', (event.target as HTMLInputElement).value)}
-                      class="w-full px-3 py-2 rounded border border-bark-300 bg-white text-sm text-shadow-800"
+                      class="w-full px-3 py-2 rounded border border-bark-300 bg-bark-50 text-sm text-shadow-800"
                     />
                   </div>
                   <div>
@@ -1296,7 +1330,7 @@
                       type="text"
                       value={entry.identity.source.baseUrl ?? ''}
                       onchange={(event) => setSourceField(index, 'baseUrl', (event.target as HTMLInputElement).value)}
-                      class="w-full px-3 py-2 rounded border border-bark-300 bg-white text-sm text-shadow-800 font-mono"
+                      class="w-full px-3 py-2 rounded border border-bark-300 bg-bark-50 text-sm text-shadow-800 font-mono"
                     />
                   </div>
                   <div class="md:col-span-2 xl:col-span-3">
@@ -1305,7 +1339,7 @@
                       type="text"
                       value={routingProviderOrderValue(entry)}
                       onchange={(event) => setRoutingProviderOrder(index, (event.target as HTMLInputElement).value)}
-                      class="w-full px-3 py-2 rounded border border-bark-300 bg-white text-sm text-shadow-800 font-mono"
+                      class="w-full px-3 py-2 rounded border border-bark-300 bg-bark-50 text-sm text-shadow-800 font-mono"
                       placeholder="comma-separated provider ids for fallback routing"
                     />
                     <div class="mt-2 flex flex-wrap gap-2">
@@ -1314,7 +1348,7 @@
                         <button
                           type="button"
                           onclick={() => toggleRoutingProvider(index, provider.id)}
-                          class="rounded-full border px-2.5 py-1 text-xs font-medium transition-colors {selected ? 'border-gold-400 bg-gold-100 text-gold-800' : 'border-bark-300 bg-white text-shadow-600 hover:bg-bark-100'}"
+                          class="rounded-full border px-2.5 py-1 text-xs font-medium transition-colors {selected ? 'border-gold-400 bg-gold-100 text-gold-800' : 'border-bark-300 bg-bark-50 text-shadow-600 hover:bg-bark-100'}"
                         >
                           {provider.id}
                         </button>
@@ -1330,7 +1364,7 @@
                       step="1"
                       value={numberFromContainer(entry, 'capabilities', 'contextWindow') ?? ''}
                       onchange={(event) => setContainerNumber(index, 'capabilities', 'contextWindow', (event.target as HTMLInputElement).value, true)}
-                      class="w-full px-3 py-2 rounded border border-bark-300 bg-white text-sm text-shadow-800 font-mono"
+                      class="w-full px-3 py-2 rounded border border-bark-300 bg-bark-50 text-sm text-shadow-800 font-mono"
                     />
                   </div>
                   <div>
@@ -1341,7 +1375,7 @@
                       step="1"
                       value={numberFromContainer(entry, 'capabilities', 'maxOutputTokens') ?? ''}
                       onchange={(event) => setContainerNumber(index, 'capabilities', 'maxOutputTokens', (event.target as HTMLInputElement).value, true)}
-                      class="w-full px-3 py-2 rounded border border-bark-300 bg-white text-sm text-shadow-800 font-mono"
+                      class="w-full px-3 py-2 rounded border border-bark-300 bg-bark-50 text-sm text-shadow-800 font-mono"
                     />
                   </div>
                   <div>
@@ -1352,7 +1386,7 @@
                       step="1"
                       value={numberFromContainer(entry, 'tuning', 'maxOutputTokens') ?? ''}
                       onchange={(event) => setContainerNumber(index, 'tuning', 'maxOutputTokens', (event.target as HTMLInputElement).value, true)}
-                      class="w-full px-3 py-2 rounded border border-bark-300 bg-white text-sm text-shadow-800 font-mono"
+                      class="w-full px-3 py-2 rounded border border-bark-300 bg-bark-50 text-sm text-shadow-800 font-mono"
                     />
                   </div>
                 </div>
@@ -1382,7 +1416,7 @@
                         step={field.step}
                         value={numberFromContainer(entry, 'tuning', field.key) ?? ''}
                         onchange={(event) => setContainerNumber(index, 'tuning', field.key, (event.target as HTMLInputElement).value, field.integer)}
-                        class="w-full px-3 py-2 rounded border border-bark-300 bg-white text-sm text-shadow-800 font-mono"
+                        class="w-full px-3 py-2 rounded border border-bark-300 bg-bark-50 text-sm text-shadow-800 font-mono"
                       />
                     </div>
                   {/each}
@@ -1394,7 +1428,7 @@
                       step="0.000001"
                       value={numberFromContainer(entry, 'cost', 'inputPer1MUsd') ?? ''}
                       onchange={(event) => setContainerNumber(index, 'cost', 'inputPer1MUsd', (event.target as HTMLInputElement).value)}
-                      class="w-full px-3 py-2 rounded border border-bark-300 bg-white text-sm text-shadow-800 font-mono"
+                      class="w-full px-3 py-2 rounded border border-bark-300 bg-bark-50 text-sm text-shadow-800 font-mono"
                     />
                   </div>
                   <div>
@@ -1405,7 +1439,7 @@
                       step="0.000001"
                       value={numberFromContainer(entry, 'cost', 'outputPer1MUsd') ?? ''}
                       onchange={(event) => setContainerNumber(index, 'cost', 'outputPer1MUsd', (event.target as HTMLInputElement).value)}
-                      class="w-full px-3 py-2 rounded border border-bark-300 bg-white text-sm text-shadow-800 font-mono"
+                      class="w-full px-3 py-2 rounded border border-bark-300 bg-bark-50 text-sm text-shadow-800 font-mono"
                     />
                   </div>
                 </div>
@@ -1414,6 +1448,29 @@
           </article>
         {/each}
       </div>
+
+      {#if otherCompanionSlots.length > 0}
+        <CollapsibleSection
+          title="Other companions' fixture slots"
+          subtitle="Managed in their own gardens — excluded from this garden's roster, purpose assignments, and counts"
+          count={otherCompanionSlots.length}
+        >
+          <ul class="space-y-2">
+            {#each otherCompanionSlots as entry (entry.id)}
+              <li class="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg border border-bark-200 bg-bark-50 px-3 py-2 text-sm">
+                <span class="font-mono text-shadow-800">{entry.id}</span>
+                <span class="min-w-0 truncate font-mono text-shadow-600">{entry.identity.model || 'unset'}</span>
+                <span class="ml-auto rounded-full border border-bark-300 bg-bark-100 px-2 py-0.5 text-xs text-shadow-600">
+                  {otherCompanionSlotLabel(entry)}
+                </span>
+              </li>
+            {/each}
+          </ul>
+          <p class="mt-3 text-xs text-shadow-500">
+            These slots were seeded by multi-companion fixtures and are read-only here. They are preserved unchanged when saving <span class="font-mono">models.json</span>.
+          </p>
+        </CollapsibleSection>
+      {/if}
     </div>
   {/if}
 </div>

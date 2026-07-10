@@ -14,6 +14,8 @@ import {
   sep,
 } from 'node:path';
 import type { SkillsRuntimeConfig } from '../../system/config/skills-config.js';
+import { createComponentLogger } from '../../shared/logger.js';
+import { createRateLimitedLogEmitter } from '../../shared/log-rate-limit.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
 import { isRecord } from '../../shared/utils/types.js';
 import type {
@@ -21,12 +23,40 @@ import type {
   SkillEntry,
   SkillFileCandidate,
   SkillFrontmatter,
+  SkillRootScan,
   SkillSkipRecord,
   SkillSource,
 } from './types.js';
 
 const SKILL_FILE_NAME = 'SKILL.md';
 const DEFAULT_DIRECTORIES = ['skills'];
+const MISSING_ROOT_WARN_WINDOW_MS = 10 * 60_000;
+
+const log = createComponentLogger('SkillsLoader');
+const missingRootWarnLimiter = createRateLimitedLogEmitter({
+  windowMs: MISSING_ROOT_WARN_WINDOW_MS,
+});
+
+export type SkillRootWarnFn = (
+  message: string,
+  context: { path: string; absolutePath: string; source: SkillSource },
+) => void;
+
+export interface ScanSkillRootsOptions {
+  /** Override the WARN emitter (tests). Defaults to a rate-limited component logger. */
+  warnMissingRoot?: SkillRootWarnFn;
+}
+
+export interface SkillScanResult {
+  files: SkillFileCandidate[];
+  roots: SkillRootScan[];
+}
+
+const defaultWarnMissingRoot: SkillRootWarnFn = (message, context) => {
+  missingRootWarnLimiter(`skills-root:${context.absolutePath}`, () => {
+    log.warn(message, context);
+  });
+};
 
 function toPosix(path: string): string {
   return path.split(sep).join('/');
@@ -397,12 +427,12 @@ function toDisplayPath(root: string, absolutePath: string): string {
   return toPosix(absolutePath);
 }
 
+/**
+ * Walk an existing skills root for SKILL.md files. Callers must verify the
+ * root is an existing directory first (scanSkillRoots does); a root that
+ * disappears mid-walk fails loudly via readdirSync rather than yielding [].
+ */
 function walkSkillFiles(baseDir: SkillDirectorySpec): SkillFileCandidate[] {
-  if (!existsSync(baseDir.absolutePath)) return [];
-
-  const stats = statSync(baseDir.absolutePath);
-  if (!stats.isDirectory()) return [];
-
   const files: SkillFileCandidate[] = [];
   const stack = [baseDir.absolutePath];
 
@@ -485,15 +515,74 @@ export function resolveSkillDirectories(
   });
 }
 
-export function scanSkillFiles(directories: SkillDirectorySpec[]): SkillFileCandidate[] {
-  return directories
-    .flatMap(directory => walkSkillFiles(directory))
-    .sort((left, right) => {
-      if (left.directory.precedence !== right.directory.precedence) {
-        return left.directory.precedence - right.directory.precedence;
+/**
+ * Scan every configured skills root and report per-root provenance alongside
+ * the discovered files. A missing (or non-directory) root is never a silent
+ * empty: it is recorded as exists=false and — for non-managed roots — emits a
+ * WARN naming the path. The managed ('custom') root is created lazily on
+ * first skill creation, so its absence is expected and only surfaced via the
+ * provenance payload.
+ */
+export function scanSkillRoots(
+  directories: SkillDirectorySpec[],
+  options: ScanSkillRootsOptions = {},
+): SkillScanResult {
+  const warnMissingRoot = options.warnMissingRoot ?? defaultWarnMissingRoot;
+  const roots: SkillRootScan[] = [];
+  const files: SkillFileCandidate[] = [];
+
+  for (const directory of directories) {
+    const exists = existsSync(directory.absolutePath);
+    const isDirectory = exists && statSync(directory.absolutePath).isDirectory();
+
+    if (!isDirectory) {
+      if (directory.source !== 'custom') {
+        warnMissingRoot(
+          exists
+            ? `Skills root is not a directory; no skills can load from it: ${directory.absolutePath}`
+            : `Skills root missing; no skills can load from it: ${directory.absolutePath}`,
+          {
+            path: directory.relativePath,
+            absolutePath: directory.absolutePath,
+            source: directory.source,
+          },
+        );
       }
-      return left.relativePath.localeCompare(right.relativePath);
+      roots.push({
+        path: directory.relativePath,
+        absolutePath: directory.absolutePath,
+        exists: false,
+        skillCount: 0,
+        source: directory.source,
+        precedence: directory.precedence,
+      });
+      continue;
+    }
+
+    const rootFiles = walkSkillFiles(directory);
+    roots.push({
+      path: directory.relativePath,
+      absolutePath: directory.absolutePath,
+      exists: true,
+      skillCount: rootFiles.length,
+      source: directory.source,
+      precedence: directory.precedence,
     });
+    files.push(...rootFiles);
+  }
+
+  files.sort((left, right) => {
+    if (left.directory.precedence !== right.directory.precedence) {
+      return left.directory.precedence - right.directory.precedence;
+    }
+    return left.relativePath.localeCompare(right.relativePath);
+  });
+
+  return { files, roots };
+}
+
+export function scanSkillFiles(directories: SkillDirectorySpec[]): SkillFileCandidate[] {
+  return scanSkillRoots(directories).files;
 }
 
 export function loadSkillEntries(files: SkillFileCandidate[]): {

@@ -61,7 +61,7 @@
           <p class="text-xs font-semibold uppercase tracking-[0.16em] text-shadow-500">Actions</p>
           <div class="mt-2 flex flex-wrap gap-2">
             {#each actionNames as action}
-              <code class="rounded-md border border-bark-200 bg-white px-2 py-1 text-xs text-shadow-800">{action}</code>
+              <code class="rounded-md border border-bark-200 bg-bark-50 px-2 py-1 text-xs text-shadow-800">{action}</code>
             {/each}
           </div>
         </div>
@@ -69,13 +69,13 @@
 
       {#if showFullDetail && (requiredParameters.length || requiredCapabilities.length)}
         <div class="grid gap-3 md:grid-cols-2">
-          <div class="rounded-2xl border border-bark-200 bg-white px-4 py-3">
+          <div class="rounded-2xl border border-bark-200 bg-bark-50 px-4 py-3">
             <p class="text-xs font-semibold uppercase tracking-[0.16em] text-shadow-500">Required Params</p>
             <p class="mt-2 text-sm text-shadow-700">
               {requiredParameters.length ? requiredParameters.join(', ') : 'none'}
             </p>
           </div>
-          <div class="rounded-2xl border border-bark-200 bg-white px-4 py-3">
+          <div class="rounded-2xl border border-bark-200 bg-bark-50 px-4 py-3">
             <p class="text-xs font-semibold uppercase tracking-[0.16em] text-shadow-500">Capabilities</p>
             <p class="mt-2 text-sm text-shadow-700">
               {requiredCapabilities.length ? requiredCapabilities.join(', ') : 'none'}
@@ -111,7 +111,7 @@
   {/if}
 
   <div class="mt-4 grid gap-3 md:grid-cols-2">
-    <div class="rounded-2xl border border-bark-200 bg-white px-4 py-3">
+    <div class="rounded-2xl border border-bark-200 bg-bark-50 px-4 py-3">
       <div class="flex items-center justify-between gap-3">
         <span class="text-xs font-semibold uppercase tracking-[0.16em] text-shadow-500">Chat</span>
         <span class="rounded-full border px-2 py-0.5 text-xs font-medium {AVAILABILITY_BADGE[tool.contexts.chat.status]}">
@@ -123,7 +123,7 @@
       {/if}
     </div>
 
-    <div class="rounded-2xl border border-bark-200 bg-white px-4 py-3">
+    <div class="rounded-2xl border border-bark-200 bg-bark-50 px-4 py-3">
       <div class="flex items-center justify-between gap-3">
         <span class="text-xs font-semibold uppercase tracking-[0.16em] text-shadow-500">Internal Heartbeat</span>
         <span class="rounded-full border px-2 py-0.5 text-xs font-medium {AVAILABILITY_BADGE[tool.contexts.internalHeartbeat.status]}">

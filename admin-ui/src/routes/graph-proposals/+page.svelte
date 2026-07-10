@@ -8,6 +8,8 @@
     type GraphProposal,
   } from '$lib/api/endpoints/graph-proposals';
   import { pushToast } from '$lib/stores/toast.svelte';
+  import BoundedList from '$lib/components/garden/BoundedList.svelte';
+  import CollapsibleSection from '$lib/components/garden/CollapsibleSection.svelte';
 
   let proposals = $state<GraphProposal[]>([]);
   let loading = $state(true);
@@ -114,51 +116,60 @@
       <p class="text-sm text-shadow-600">The graph-builder worker will surface proposed edges here as room evidence accumulates.</p>
     </div>
   {:else}
-    <div class="space-y-4">
-      {#each proposals as p (p.id)}
-        <div class="card-garden overflow-hidden">
-          <div class="px-5 py-4 border-b border-bark-100 bg-bark-50 flex items-center justify-between">
-            <h3 class="text-base font-semibold text-shadow-900">
-              {p.sourceDisplayName} &harr; {p.targetDisplayName}
-              <span class="text-shadow-600 font-normal">({p.relationshipType}{p.directional ? ', directed' : ''})</span>
-            </h3>
-            <span class="inline-block px-2.5 py-1 rounded-full text-sm font-medium {p.status === 'conflict' ? 'bg-wilt-100 text-wilt-600' : p.status === 'accepted' ? 'bg-moss-100 text-moss-700' : p.status === 'rejected' ? 'bg-bark-200 text-shadow-600' : 'bg-gold-100 text-gold-700'}">
-              {p.status}
-            </span>
-          </div>
-          <div class="px-5 py-4 space-y-3 text-sm">
-            <div class="grid grid-cols-1 md:grid-cols-2 gap-2">
-              <div><span class="text-shadow-600">Evidence:</span> <span class="text-shadow-800">{p.evidenceClass}</span></div>
-              <div><span class="text-shadow-600">Confidence:</span> <span class="text-shadow-800">{p.confidence.toFixed(2)}</span></div>
-              <div><span class="text-shadow-600">Sensitivity:</span> <span class="text-shadow-800">{p.sensitivity}</span></div>
-              <div><span class="text-shadow-600">Evidence memories:</span> <span class="text-shadow-800">{p.evidenceMemoryIds.length}</span></div>
-              {#if p.channelId}<div><span class="text-shadow-600">Room:</span> <code class="font-mono bg-bark-100 px-1 rounded">{p.channelId}</code></div>{/if}
-              <div><span class="text-shadow-600">Created:</span> <span class="text-shadow-800">{formatTimestamp(p.createdAt)}</span></div>
-            </div>
-            <p class="text-shadow-700">{p.rationale}</p>
-            {#if p.status === 'conflict'}
-              <p class="text-wilt-600">Conflicts with existing edge {p.conflictEdgeId} (type: {p.conflictEdgeType}). Approving overwrites nothing until you accept a type below.</p>
-            {/if}
-
-            {#if p.status === 'pending' || p.status === 'conflict'}
-              <div class="flex flex-wrap items-center gap-3 pt-2">
-                <label class="text-shadow-600">Type:
-                  <select bind:value={adjustType[p.id]} class="ml-1 rounded border border-bark-300 px-2 py-1 text-shadow-800">
-                    <option value={p.relationshipType}>{p.relationshipType} (proposed)</option>
-                    {#each SOCIAL_RELATIONSHIP_KINDS.filter(k => k !== p.relationshipType) as k}
-                      <option value={k}>{k}</option>
-                    {/each}
-                  </select>
-                </label>
-                <button onclick={() => handleApprove(p)} class="px-4 py-2 rounded-lg text-sm font-medium bg-moss-100 text-moss-700 hover:bg-moss-200 transition-colors border border-moss-300">Approve</button>
-                <button onclick={() => handleReject(p)} class="px-4 py-2 rounded-lg text-sm font-medium bg-wilt-100 text-wilt-600 hover:bg-wilt-200 transition-colors border border-wilt-200">Reject</button>
+    <CollapsibleSection
+      title="Proposed edges"
+      subtitle="Approve to write the edge; reject to keep it out"
+      count={proposals.length}
+      collapsed={false}
+    >
+      <BoundedList maxHeight="36rem" label="Graph proposals">
+        <div class="space-y-4 pr-1">
+          {#each proposals as p (p.id)}
+            <div class="card-garden overflow-hidden">
+              <div class="px-5 py-4 border-b border-bark-100 bg-bark-50 flex items-center justify-between">
+                <h3 class="text-base font-semibold text-shadow-900">
+                  {p.sourceDisplayName} &harr; {p.targetDisplayName}
+                  <span class="text-shadow-600 font-normal">({p.relationshipType}{p.directional ? ', directed' : ''})</span>
+                </h3>
+                <span class="inline-block px-2.5 py-1 rounded-full text-sm font-medium {p.status === 'conflict' ? 'bg-wilt-100 text-wilt-600' : p.status === 'accepted' ? 'bg-moss-100 text-moss-700' : p.status === 'rejected' ? 'bg-bark-200 text-shadow-600' : 'bg-gold-100 text-gold-700'}">
+                  {p.status}
+                </span>
               </div>
-            {:else}
-              <p class="text-shadow-600">Decided{p.decidedAt ? ` ${formatTimestamp(p.decidedAt)}` : ''}{p.decidedBy ? ` by ${p.decidedBy}` : ''}{p.acceptedRelationshipType ? ` as ${p.acceptedRelationshipType}` : ''}.</p>
-            {/if}
-          </div>
+              <div class="px-5 py-4 space-y-3 text-sm">
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-2">
+                  <div><span class="text-shadow-600">Evidence:</span> <span class="text-shadow-800">{p.evidenceClass}</span></div>
+                  <div><span class="text-shadow-600">Confidence:</span> <span class="text-shadow-800">{p.confidence.toFixed(2)}</span></div>
+                  <div><span class="text-shadow-600">Sensitivity:</span> <span class="text-shadow-800">{p.sensitivity}</span></div>
+                  <div><span class="text-shadow-600">Evidence memories:</span> <span class="text-shadow-800">{p.evidenceMemoryIds.length}</span></div>
+                  {#if p.channelId}<div><span class="text-shadow-600">Room:</span> <code class="font-mono bg-bark-100 px-1 rounded">{p.channelId}</code></div>{/if}
+                  <div><span class="text-shadow-600">Created:</span> <span class="text-shadow-800">{formatTimestamp(p.createdAt)}</span></div>
+                </div>
+                <p class="text-shadow-700">{p.rationale}</p>
+                {#if p.status === 'conflict'}
+                  <p class="text-wilt-600">Conflicts with existing edge {p.conflictEdgeId} (type: {p.conflictEdgeType}). Approving overwrites nothing until you accept a type below.</p>
+                {/if}
+
+                {#if p.status === 'pending' || p.status === 'conflict'}
+                  <div class="flex flex-wrap items-center gap-3 pt-2">
+                    <label class="text-shadow-600">Type:
+                      <select bind:value={adjustType[p.id]} class="ml-1 rounded border border-bark-300 px-2 py-1 text-shadow-800">
+                        <option value={p.relationshipType}>{p.relationshipType} (proposed)</option>
+                        {#each SOCIAL_RELATIONSHIP_KINDS.filter(k => k !== p.relationshipType) as k}
+                          <option value={k}>{k}</option>
+                        {/each}
+                      </select>
+                    </label>
+                    <button onclick={() => handleApprove(p)} class="px-4 py-2 rounded-lg text-sm font-medium bg-moss-100 text-moss-700 hover:bg-moss-200 transition-colors border border-moss-300">Approve</button>
+                    <button onclick={() => handleReject(p)} class="px-4 py-2 rounded-lg text-sm font-medium bg-wilt-100 text-wilt-600 hover:bg-wilt-200 transition-colors border border-wilt-200">Reject</button>
+                  </div>
+                {:else}
+                  <p class="text-shadow-600">Decided{p.decidedAt ? ` ${formatTimestamp(p.decidedAt)}` : ''}{p.decidedBy ? ` by ${p.decidedBy}` : ''}{p.acceptedRelationshipType ? ` as ${p.acceptedRelationshipType}` : ''}.</p>
+                {/if}
+              </div>
+            </div>
+          {/each}
         </div>
-      {/each}
-    </div>
+      </BoundedList>
+    </CollapsibleSection>
   {/if}
 </div>

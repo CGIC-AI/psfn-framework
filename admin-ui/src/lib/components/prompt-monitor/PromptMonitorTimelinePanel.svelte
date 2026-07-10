@@ -23,7 +23,7 @@
   let { turn }: Props = $props();
 </script>
 
-<div class="rounded-xl border border-bark-200 bg-white p-4">
+<div class="rounded-xl border border-bark-200 bg-bark-50 p-4">
   <div class="flex flex-wrap items-center justify-between gap-2">
     <h3 class="font-medium text-shadow-900">Stage Timeline</h3>
     <span class="text-xs text-shadow-600">
@@ -39,7 +39,7 @@
     {#each PROMPT_MONITOR_STAGE_ORDER as stageName}
       {@const stage = turn.stages.find(candidate => candidate.stage === stageName)}
       <div class="rounded-lg border px-3 py-2
-        {stage ? 'border-bark-200 bg-bark-50' : 'border-dashed border-bark-200 bg-white'}">
+        {stage ? 'border-bark-200 bg-bark-50' : 'border-dashed border-bark-200 bg-bark-50'}">
         <div class="flex items-start justify-between gap-3">
           <div>
             <p class="text-sm font-medium text-shadow-900">{formatPromptMonitorStageLabel(stageName)}</p>

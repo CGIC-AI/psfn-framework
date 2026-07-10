@@ -32,8 +32,8 @@
         onclick={() => onSelect(tab.id)}
         class="rounded-t-xl border px-3 py-2 text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-60
           {activeId === tab.id
-            ? 'border-gold-300 bg-white text-shadow-900 shadow-sm'
-            : 'border-bark-300 bg-bark-50 text-shadow-600 hover:bg-white hover:text-shadow-900'}"
+            ? 'border-gold-300 bg-bark-50 text-shadow-900 shadow-sm'
+            : 'border-bark-300 bg-bark-100 text-shadow-600 hover:bg-bark-50 hover:text-shadow-900'}"
       >
         {tab.label}
         {#if tab.count != null}

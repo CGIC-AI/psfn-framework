@@ -48,7 +48,7 @@
   }
 </script>
 
-<div class="rounded-xl border border-bark-200 bg-white p-4">
+<div class="rounded-xl border border-bark-200 bg-bark-50 p-4">
   <div class="flex flex-wrap items-center gap-2">
     <h3 class="font-medium text-shadow-900">{title}</h3>
     {#if cacheability}
@@ -56,7 +56,7 @@
         {cacheability.cacheability.replace('_', ' ')}
       </span>
       {#each cacheability.cacheBreakers as breaker (breaker)}
-        <span class="rounded-full border border-bark-300 bg-white px-2 py-0.5 text-xs text-shadow-700">
+        <span class="rounded-full border border-bark-300 bg-bark-50 px-2 py-0.5 text-xs text-shadow-700">
           {breaker.replace('_', ' ')}
         </span>
       {/each}
@@ -74,16 +74,16 @@
           <p class="text-xs font-medium uppercase tracking-wide text-shadow-600">{message.role}</p>
           {#if message.provenance}
             <div class="mt-2 flex flex-wrap gap-2 text-xs">
-              <span class="rounded border border-bark-300 bg-white px-2 py-0.5 text-shadow-700">
+              <span class="rounded border border-bark-300 bg-bark-50 px-2 py-0.5 text-shadow-700">
                 {formatProvenanceLabel(message.provenance)}
               </span>
-              <span class="rounded border border-bark-300 bg-white px-2 py-0.5 text-shadow-700">
+              <span class="rounded border border-bark-300 bg-bark-50 px-2 py-0.5 text-shadow-700">
                 {formatSafetyLabel(message.provenance)}
               </span>
-              <span class="rounded border border-bark-300 bg-white px-2 py-0.5 text-shadow-700">
+              <span class="rounded border border-bark-300 bg-bark-50 px-2 py-0.5 text-shadow-700">
                 detail loss: {message.provenance.detailLoss}
               </span>
-              <span class="rounded border border-bark-300 bg-white px-2 py-0.5 text-shadow-700">
+              <span class="rounded border border-bark-300 bg-bark-50 px-2 py-0.5 text-shadow-700">
                 emotion: {message.provenance.emotionalTexture}
               </span>
             </div>

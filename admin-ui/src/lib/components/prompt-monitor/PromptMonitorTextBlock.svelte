@@ -47,7 +47,7 @@
         {cacheability.cacheability.replace('_', ' ')}
       </span>
       {#each cacheability.cacheBreakers as breaker (breaker)}
-        <span class="rounded-full border border-bark-300 bg-white px-2 py-0.5 text-xs text-shadow-700">
+        <span class="rounded-full border border-bark-300 bg-bark-50 px-2 py-0.5 text-xs text-shadow-700">
           {breaker.replace('_', ' ')}
         </span>
       {/each}

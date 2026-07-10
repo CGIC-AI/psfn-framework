@@ -47,7 +47,7 @@
   }
 </script>
 
-<div class="rounded-xl border border-bark-200 bg-white p-4">
+<div class="rounded-xl border border-bark-200 bg-bark-50 p-4">
   <h3 class="font-medium text-shadow-900">{title}</h3>
   {#if sections.length === 0}
     <p class="mt-3 text-sm text-shadow-600">{emptyText}</p>
@@ -75,17 +75,17 @@
                 </span>
               {/if}
               {#if section.scopeProvenance.producer}
-                <span class="rounded-full border border-bark-300 bg-white px-2 py-0.5 font-mono text-shadow-700" title="Producer module">
+                <span class="rounded-full border border-bark-300 bg-bark-50 px-2 py-0.5 font-mono text-shadow-700" title="Producer module">
                   {section.scopeProvenance.producer}
                 </span>
               {/if}
               {#if section.scopeProvenance.volatility}
-                <span class="rounded-full border border-bark-300 bg-white px-2 py-0.5 uppercase tracking-wide text-shadow-600">
+                <span class="rounded-full border border-bark-300 bg-bark-50 px-2 py-0.5 uppercase tracking-wide text-shadow-600">
                   {section.scopeProvenance.volatility.replace('_', ' ')}
                 </span>
               {/if}
               {#if section.scopeProvenance.sourceHint}
-                <span class="rounded-full border border-bark-300 bg-white px-2 py-0.5 text-shadow-600" title="Source data hint">
+                <span class="rounded-full border border-bark-300 bg-bark-50 px-2 py-0.5 text-shadow-600" title="Source data hint">
                   {section.scopeProvenance.sourceHint}
                 </span>
               {/if}
@@ -93,16 +93,16 @@
           {/if}
           {#if section.provenance}
             <div class="mt-3 flex flex-wrap gap-2 text-xs">
-              <span class="rounded border border-bark-300 bg-white px-2 py-0.5 text-shadow-700">
+              <span class="rounded border border-bark-300 bg-bark-50 px-2 py-0.5 text-shadow-700">
                 {formatProvenanceLabel(section.provenance)}
               </span>
-              <span class="rounded border border-bark-300 bg-white px-2 py-0.5 text-shadow-700">
+              <span class="rounded border border-bark-300 bg-bark-50 px-2 py-0.5 text-shadow-700">
                 {formatSafetyLabel(section.provenance)}
               </span>
-              <span class="rounded border border-bark-300 bg-white px-2 py-0.5 text-shadow-700">
+              <span class="rounded border border-bark-300 bg-bark-50 px-2 py-0.5 text-shadow-700">
                 detail loss: {section.provenance.detailLoss}
               </span>
-              <span class="rounded border border-bark-300 bg-white px-2 py-0.5 text-shadow-700">
+              <span class="rounded border border-bark-300 bg-bark-50 px-2 py-0.5 text-shadow-700">
                 emotion: {section.provenance.emotionalTexture}
               </span>
             </div>

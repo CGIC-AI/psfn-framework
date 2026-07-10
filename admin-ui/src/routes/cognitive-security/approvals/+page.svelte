@@ -286,7 +286,7 @@
                 <span class="inline-block px-2 py-0.5 rounded-full font-medium {TIER_STYLES[item.sourceRiskTier] ?? 'bg-bark-200 text-shadow-700'}">
                   {item.sourceRiskTier}
                 </span>
-                <span class="inline-block px-2 py-0.5 rounded-full font-medium {item.mode === 'enforce' ? 'bg-shadow-800 text-white' : 'bg-bark-200 text-shadow-700'}">
+                <span class="inline-block px-2 py-0.5 rounded-full font-medium {item.mode === 'enforce' ? 'bg-shadow-800 text-bark-50' : 'bg-bark-200 text-shadow-700'}">
                   {item.mode === 'enforce' ? 'enforce (withheld)' : 'shadow (was delivered)'}
                 </span>
                 {#if item.status === 'held'}

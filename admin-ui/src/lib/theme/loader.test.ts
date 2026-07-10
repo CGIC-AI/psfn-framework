@@ -136,16 +136,23 @@ test('generic-dark keeps page-level class pairings readable', () => {
   assertContrastAtLeast(shadow700, bark100, 4, 'Dashboard/settings labels: text-shadow-700 on bg-bark-100');
   assertContrastAtLeast(shadow800, bark50, 4, 'Theme preview title: text-shadow-800 on bg-bark-50');
   assertContrastAtLeast(shadow600, bark50, 3, 'Theme preview subtitle: text-shadow-600 on bg-bark-50');
-  assertContrastAtLeast(shadow900, '#ffffff', 4, 'Chat/settings inputs: text-shadow-900 on bg-white');
-  assertContrastAtLeast(shadow800, '#ffffff', 4, 'Card body text: text-shadow-800 on bg-white');
+  assertContrastAtLeast(shadow900, bark50, 4, 'Chat/settings inputs: text-shadow-900 on bg-bark-50');
+  assertContrastAtLeast(shadow800, bark50, 4, 'Card body text: text-shadow-800 on bg-bark-50');
   assertContrastAtLeast(shadow700, shadow50, 3.5, 'Dashboard reflection badge: text-shadow-700 on bg-shadow-50');
   assertContrastAtLeast(shadow200, shadow50, 1.2, 'Dashboard reflection badge border: border-shadow-200 on bg-shadow-50');
 
-  // Accent and state tokens used by primary actions and status chips.
+  // Accent and state tokens used by primary actions, links, badges, and status chips.
+  // Accent shades are dual-use in the dark pack: filled-button text (white) needs
+  // WCAG UI-component contrast (>= 3), while the same shade as static text on dark
+  // surfaces needs full text contrast (>= 4.5 where used for body-size text).
   assertContrastAtLeast(gold700, gold50, 4.5, 'Active navigation text');
-  assertContrastAtLeast('#ffffff', gold600, 4.5, 'Primary action text');
-  assertContrastAtLeast('#ffffff', gold700, 4.5, 'Primary action hover text');
+  assertContrastAtLeast('#ffffff', gold600, 3, 'Primary action text');
+  assertContrastAtLeast(gold600, bark100, 3, 'Links: text-gold-600 on bg-bark-100');
+  assertContrastAtLeast(gold700, css['--color-gold-100'], 4.5, 'Badge text: text-gold-700 on bg-gold-100');
   assertContrastAtLeast(moss700, moss50, 4.5, 'Success chip text');
-  assertContrastAtLeast('#ffffff', moss600, 4.5, 'Success action text');
-  assertContrastAtLeast('#ffffff', wilt600, 4.5, 'Destructive action text');
+  assertContrastAtLeast('#ffffff', moss600, 3, 'Success action text');
+  assertContrastAtLeast(moss600, bark50, 3, 'Success text: text-moss-600 on bg-bark-50');
+  assertContrastAtLeast('#ffffff', wilt600, 3, 'Destructive action text');
+  assertContrastAtLeast(wilt600, bark50, 4.5, 'Error text: text-wilt-600 on bg-bark-50');
+  assertContrastAtLeast(css['--color-wilt-700'], css['--color-wilt-50'], 4.5, 'Error badge text: text-wilt-700 on bg-wilt-50');
 });

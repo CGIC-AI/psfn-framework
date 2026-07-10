@@ -41,7 +41,7 @@
         oninput={(event) => {
           setDiscoverySearch((event.currentTarget as HTMLInputElement).value);
         }}
-        class="w-full rounded border border-bark-300 bg-white px-3 py-2 text-sm text-shadow-800"
+        class="w-full rounded border border-bark-300 bg-bark-50 px-3 py-2 text-sm text-shadow-800"
         placeholder="model, provider, vision, zdr"
       />
     </div>
@@ -75,13 +75,13 @@
             {/if}
             <div class="mt-2 flex flex-wrap gap-1.5">
               {#if discovered.supportsVision}
-                <span class="rounded-full border border-bark-300 bg-white px-2 py-0.5 text-[11px] text-shadow-600">vision</span>
+                <span class="rounded-full border border-bark-300 bg-bark-50 px-2 py-0.5 text-[11px] text-shadow-600">vision</span>
               {/if}
               {#if discovered.supportsReasoning}
-                <span class="rounded-full border border-bark-300 bg-white px-2 py-0.5 text-[11px] text-shadow-600">reasoning</span>
+                <span class="rounded-full border border-bark-300 bg-bark-50 px-2 py-0.5 text-[11px] text-shadow-600">reasoning</span>
               {/if}
               {#if discovered.zdrAvailable}
-                <span class="rounded-full border border-moss-200 bg-white px-2 py-0.5 text-[11px] text-moss-700">
+                <span class="rounded-full border border-moss-200 bg-bark-50 px-2 py-0.5 text-[11px] text-moss-700">
                   {discoveryZdrProviderSummary(discovered)}
                 </span>
               {/if}

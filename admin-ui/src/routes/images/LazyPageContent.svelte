@@ -168,7 +168,7 @@
     <label class="block text-sm font-medium text-shadow-700">
       Search
       <input
-        class="mt-1 w-full rounded-lg border border-bark-300 bg-white px-3 py-2 text-sm text-shadow-900"
+        class="mt-1 w-full rounded-lg border border-bark-300 bg-bark-50 px-3 py-2 text-sm text-shadow-900"
         value={filterSearch}
         oninput={(event) => filterSearch = (event.currentTarget as HTMLInputElement).value}
       />
@@ -176,7 +176,7 @@
     <label class="block text-sm font-medium text-shadow-700">
       Tags
       <input
-        class="mt-1 w-full rounded-lg border border-bark-300 bg-white px-3 py-2 text-sm text-shadow-900"
+        class="mt-1 w-full rounded-lg border border-bark-300 bg-bark-50 px-3 py-2 text-sm text-shadow-900"
         value={filterTags}
         oninput={(event) => filterTags = (event.currentTarget as HTMLInputElement).value}
       />
@@ -282,7 +282,7 @@
               <div class="flex gap-2">
                 <input
                   id="tags-{image.id}"
-                  class="min-w-0 flex-1 rounded-lg border border-bark-300 bg-white px-2.5 py-1.5 text-sm text-shadow-900"
+                  class="min-w-0 flex-1 rounded-lg border border-bark-300 bg-bark-50 px-2.5 py-1.5 text-sm text-shadow-900"
                   value={tagDrafts[image.id] ?? ''}
                   oninput={(event) => updateTagDraft(image.id, (event.currentTarget as HTMLInputElement).value)}
                 />
@@ -302,7 +302,7 @@
               <textarea
                 id="moment-{image.id}"
                 rows="2"
-                class="w-full resize-y rounded-lg border border-bark-300 bg-white px-2.5 py-1.5 text-sm text-shadow-900"
+                class="w-full resize-y rounded-lg border border-bark-300 bg-bark-50 px-2.5 py-1.5 text-sm text-shadow-900"
                 value={momentDrafts[image.id] ?? ''}
                 oninput={(event) => updateMomentDraft(image.id, (event.currentTarget as HTMLTextAreaElement).value)}
               ></textarea>

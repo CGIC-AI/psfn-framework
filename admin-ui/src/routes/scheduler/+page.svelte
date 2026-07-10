@@ -692,7 +692,7 @@
                 bind:value={newTask.id}
                 placeholder="my-task"
                 class="w-full px-2.5 py-1.5 text-sm border border-bark-300 rounded-md
-                       bg-white text-shadow-800 focus:outline-none focus:ring-1 focus:ring-gold-400"
+                       bg-bark-50 text-shadow-800 focus:outline-none focus:ring-1 focus:ring-gold-400"
               />
             </div>
             <div>
@@ -703,7 +703,7 @@
                 bind:value={newTask.name}
                 placeholder="My Task"
                 class="w-full px-2.5 py-1.5 text-sm border border-bark-300 rounded-md
-                       bg-white text-shadow-800 focus:outline-none focus:ring-1 focus:ring-gold-400"
+                       bg-bark-50 text-shadow-800 focus:outline-none focus:ring-1 focus:ring-gold-400"
               />
             </div>
             <div>
@@ -712,7 +712,7 @@
                 id="new-task-type"
                 bind:value={newTask.type}
                 class="w-full px-2.5 py-1.5 text-sm border border-bark-300 rounded-md
-                       bg-white text-shadow-800 focus:outline-none focus:ring-1 focus:ring-gold-400"
+                       bg-bark-50 text-shadow-800 focus:outline-none focus:ring-1 focus:ring-gold-400"
               >
                 <option value="every">Recurring (every)</option>
                 <option value="one-shot">One-Shot</option>
@@ -727,7 +727,7 @@
                   bind:value={newTask.interval}
                   placeholder="1h, 30m, 5m 30s"
                   class="w-full px-2.5 py-1.5 text-sm border border-bark-300 rounded-md
-                         bg-white text-shadow-800 focus:outline-none focus:ring-1 focus:ring-gold-400"
+                         bg-bark-50 text-shadow-800 focus:outline-none focus:ring-1 focus:ring-gold-400"
                 />
               </div>
             {:else}
@@ -738,7 +738,7 @@
                   type="datetime-local"
                   bind:value={newTask.runAt}
                   class="w-full px-2.5 py-1.5 text-sm border border-bark-300 rounded-md
-                         bg-white text-shadow-800 focus:outline-none focus:ring-1 focus:ring-gold-400"
+                         bg-bark-50 text-shadow-800 focus:outline-none focus:ring-1 focus:ring-gold-400"
                 />
               </div>
             {/if}
@@ -791,7 +791,7 @@
                               updateCadenceEditor(task, { mode: (e.target as HTMLSelectElement).value as CadenceEditorMode });
                             }}
                             class="px-2 py-1 text-xs border border-bark-300 rounded
-                                   bg-white text-shadow-800 focus:outline-none focus:ring-1 focus:ring-gold-400"
+                                   bg-bark-50 text-shadow-800 focus:outline-none focus:ring-1 focus:ring-gold-400"
                           >
                             <option value="relative">Interval</option>
                             <option value="hourly">Hourly on minute</option>
@@ -810,7 +810,7 @@
                               value={editingIntervals[task.id] ?? msToHuman(task.intervalMs)}
                               oninput={(e) => { editingIntervals[task.id] = (e.target as HTMLInputElement).value; }}
                               class="w-24 px-2 py-1 text-sm font-mono border border-bark-300 rounded
-                                     bg-white text-shadow-800 focus:outline-none focus:ring-1 focus:ring-gold-400"
+                                     bg-bark-50 text-shadow-800 focus:outline-none focus:ring-1 focus:ring-gold-400"
                             />
                             <button
                               onclick={() => saveTaskCadence(task)}
@@ -834,7 +834,7 @@
                                 updateCadenceEditor(task, { minute: (e.target as HTMLInputElement).value });
                               }}
                               class="w-16 px-2 py-1 text-sm font-mono border border-bark-300 rounded
-                                     bg-white text-shadow-800 focus:outline-none focus:ring-1 focus:ring-gold-400"
+                                     bg-bark-50 text-shadow-800 focus:outline-none focus:ring-1 focus:ring-gold-400"
                             />
                             <select
                               value={cadenceEditor.timezone}
@@ -842,7 +842,7 @@
                                 updateCadenceEditor(task, { timezone: (e.target as HTMLSelectElement).value as SchedulerCadenceTimezone });
                               }}
                               class="px-2 py-1 text-xs border border-bark-300 rounded
-                                     bg-white text-shadow-800 focus:outline-none focus:ring-1 focus:ring-gold-400"
+                                     bg-bark-50 text-shadow-800 focus:outline-none focus:ring-1 focus:ring-gold-400"
                             >
                               <option value="local">Local</option>
                               <option value="utc">UTC</option>
@@ -869,7 +869,7 @@
                                 updateCadenceEditor(task, { hour: (e.target as HTMLInputElement).value });
                               }}
                               class="w-14 px-2 py-1 text-sm font-mono border border-bark-300 rounded
-                                     bg-white text-shadow-800 focus:outline-none focus:ring-1 focus:ring-gold-400"
+                                     bg-bark-50 text-shadow-800 focus:outline-none focus:ring-1 focus:ring-gold-400"
                             />
                             <span class="text-xs text-shadow-500">:</span>
                             <input
@@ -881,7 +881,7 @@
                                 updateCadenceEditor(task, { minute: (e.target as HTMLInputElement).value });
                               }}
                               class="w-14 px-2 py-1 text-sm font-mono border border-bark-300 rounded
-                                     bg-white text-shadow-800 focus:outline-none focus:ring-1 focus:ring-gold-400"
+                                     bg-bark-50 text-shadow-800 focus:outline-none focus:ring-1 focus:ring-gold-400"
                             />
                             <select
                               value={cadenceEditor.timezone}
@@ -889,7 +889,7 @@
                                 updateCadenceEditor(task, { timezone: (e.target as HTMLSelectElement).value as SchedulerCadenceTimezone });
                               }}
                               class="px-2 py-1 text-xs border border-bark-300 rounded
-                                     bg-white text-shadow-800 focus:outline-none focus:ring-1 focus:ring-gold-400"
+                                     bg-bark-50 text-shadow-800 focus:outline-none focus:ring-1 focus:ring-gold-400"
                             >
                               <option value="local">Local</option>
                               <option value="utc">UTC</option>
@@ -913,7 +913,7 @@
                                 updateCadenceEditor(task, { dayOfWeek: (e.target as HTMLSelectElement).value });
                               }}
                               class="px-2 py-1 text-xs border border-bark-300 rounded
-                                     bg-white text-shadow-800 focus:outline-none focus:ring-1 focus:ring-gold-400"
+                                     bg-bark-50 text-shadow-800 focus:outline-none focus:ring-1 focus:ring-gold-400"
                             >
                               {#each WEEKDAY_LABELS as label, index}
                                 <option value={String(index)}>{label}</option>
@@ -929,7 +929,7 @@
                                 updateCadenceEditor(task, { hour: (e.target as HTMLInputElement).value });
                               }}
                               class="w-14 px-2 py-1 text-sm font-mono border border-bark-300 rounded
-                                     bg-white text-shadow-800 focus:outline-none focus:ring-1 focus:ring-gold-400"
+                                     bg-bark-50 text-shadow-800 focus:outline-none focus:ring-1 focus:ring-gold-400"
                             />
                             <span class="text-xs text-shadow-500">:</span>
                             <input
@@ -941,7 +941,7 @@
                                 updateCadenceEditor(task, { minute: (e.target as HTMLInputElement).value });
                               }}
                               class="w-14 px-2 py-1 text-sm font-mono border border-bark-300 rounded
-                                     bg-white text-shadow-800 focus:outline-none focus:ring-1 focus:ring-gold-400"
+                                     bg-bark-50 text-shadow-800 focus:outline-none focus:ring-1 focus:ring-gold-400"
                             />
                             <select
                               value={cadenceEditor.timezone}
@@ -949,7 +949,7 @@
                                 updateCadenceEditor(task, { timezone: (e.target as HTMLSelectElement).value as SchedulerCadenceTimezone });
                               }}
                               class="px-2 py-1 text-xs border border-bark-300 rounded
-                                     bg-white text-shadow-800 focus:outline-none focus:ring-1 focus:ring-gold-400"
+                                     bg-bark-50 text-shadow-800 focus:outline-none focus:ring-1 focus:ring-gold-400"
                             >
                               <option value="local">Local</option>
                               <option value="utc">UTC</option>
@@ -973,7 +973,7 @@
                           value={editingIntervals[task.id] ?? msToHuman(task.intervalMs)}
                           oninput={(e) => { editingIntervals[task.id] = (e.target as HTMLInputElement).value; }}
                           class="w-24 px-2 py-1 text-sm font-mono border border-bark-300 rounded
-                                 bg-white text-shadow-800 focus:outline-none focus:ring-1 focus:ring-gold-400"
+                                 bg-bark-50 text-shadow-800 focus:outline-none focus:ring-1 focus:ring-gold-400"
                         />
                         <button
                           onclick={() => saveTaskInterval(task)}
@@ -1119,7 +1119,7 @@
                     bind:value={editingPrompts[tpl.id]}
                     rows="4"
                     class="w-full px-3 py-2 text-sm border border-bark-300 rounded-md
-                           bg-white text-shadow-800 focus:outline-none focus:ring-1 focus:ring-gold-400
+                           bg-bark-50 text-shadow-800 focus:outline-none focus:ring-1 focus:ring-gold-400
                            resize-y font-sans"
                   ></textarea>
                   <div class="flex items-center justify-between mt-2">

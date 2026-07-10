@@ -9,6 +9,7 @@ import {
   assembleSessionHistoryForContextWithLlmSummary,
   buildOrientationNoteTelemetry,
   buildSessionContext,
+  captureTurnSessionContext,
 } from './context-builder.js';
 import { collectRecentEntriesWithinHistorySpan } from '../manager-primitives.js';
 import type { SessionEntry } from '../types.js';
@@ -98,6 +99,232 @@ function makeCogSecEvent(overrides: Partial<CogSecEvent> = {}): CogSecEvent {
 }
 
 describe('orientation context surface wiring', () => {
+  it('excludes the exact current entry before consecutive user history is merged', async () => {
+    const recentEntries: SessionEntry[] = [
+      {
+        id: 41,
+        channelId: 'api:main',
+        role: 'user',
+        content: 'first message intentionally received no reply',
+        authorId: 'u1',
+        authorName: 'Vega',
+        timestamp: 1_700_000_000_000,
+      },
+      {
+        id: 42,
+        channelId: 'api:main',
+        role: 'user',
+        content: 'second message should be prompted once',
+        authorId: 'u1',
+        authorName: 'Vega',
+        timestamp: 1_700_000_001_000,
+      },
+    ];
+    const context = await buildSessionContext({
+      channelId: 'api:main',
+      systemPrompt: 'System prompt.',
+      coreMemoryBlock: '',
+      memoriesBlock: '',
+      userId: 'u1',
+      continuityFallbackUserIds: [],
+      store: {
+        getRecent: () => recentEntries,
+        getCompactionSummaries: () => [],
+      } as never,
+      config: makeConfig(),
+      eventBus: null,
+      promptRegistry: null,
+      preCompactionExtractionHandler: null,
+      crossChannelContinuity: { getMerged: () => [] },
+      wakeReturnArtifacts: [],
+      turnSessionContext: {
+        channelId: 'api:main',
+        recentEntries,
+        sourceEntryCount: recentEntries.length,
+        compactionSummaryTexts: [],
+        focusKnowledgeTexts: [],
+        continuityEntries: [],
+        versionPointer: 'test-current-entry-exclusion',
+      },
+      excludeSessionEntryId: 42,
+    });
+
+    expect(context.messages).toEqual([
+      expect.objectContaining({
+        role: 'user',
+        content: 'first message intentionally received no reply',
+      }),
+    ]);
+    expect(context.messages).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ content: expect.stringContaining('second message should be prompted once') }),
+    ]));
+    expect(context.manifest?.session).toMatchObject({
+      sourceEntryCount: 1,
+      finalEntryCount: 1,
+      finalMessageCount: 1,
+    });
+  });
+
+  it('excludes the exact current entry before history-budget summarization', async () => {
+    const currentContent = 'CURRENT_ENTRY_MUST_NOT_ENTER_SUMMARY';
+    const recentEntries: SessionEntry[] = Array.from({ length: 12 }, (_, index) => ({
+      id: index + 1,
+      channelId: 'api:main',
+      role: 'user' as const,
+      content: index === 11
+        ? currentContent
+        : `Earlier message ${index + 1} with enough detail to consume the deliberately tiny history budget.`,
+      authorId: 'u1',
+      authorName: 'Vega',
+      timestamp: 1_700_000_000_000 + index,
+    }));
+    const store = {
+      getRecent: () => recentEntries,
+      getCompactionSummaries: () => [],
+    } as never;
+    const snapshot = await captureTurnSessionContext({
+      channelId: 'api:main',
+      sourceChannelId: 'api:main',
+      userId: 'u1',
+      continuityFallbackUserIds: [],
+      config: makeConfig({
+        defaultContextWindow: 256,
+        sessionHistoryBudgetPct: 20,
+        modelRoster: {
+          chat: { model: 'test-model', provider: 'test', maxTokens: 128, contextWindow: 256 },
+        },
+      }),
+      store,
+      activityStore: store,
+      crossChannelContinuity: { getMerged: () => [] },
+      focusCompactionRanges: [],
+      focusKnowledgeTexts: [],
+      wakeReturnArtifacts: [],
+      compactionPromptText: 'Summarize history.',
+      promptRegistry: null,
+      excludeSessionEntryId: 12,
+    });
+
+    expect(JSON.stringify(snapshot)).not.toContain(currentContent);
+    expect(snapshot.sourceEntryCount).toBe(11);
+  });
+
+  it('measures orientation from the latest prior activity after excluding the current turn', async () => {
+    const nowMs = Date.now();
+    const latestPriorActivityAt = nowMs - (4 * 60 * 60 * 1000);
+    const currentContent = 'CURRENT_ORIENTATION_ENTRY_MUST_BE_EXCLUDED';
+    const recentEntries: SessionEntry[] = [
+      {
+        id: 21,
+        channelId: 'api:main',
+        role: 'user',
+        content: 'Earlier user activity.',
+        timestamp: latestPriorActivityAt - 60_000,
+      },
+      {
+        id: 22,
+        channelId: 'api:main',
+        role: 'assistant',
+        content: 'Latest prior assistant activity.',
+        timestamp: latestPriorActivityAt,
+      },
+      {
+        id: 23,
+        channelId: 'api:main',
+        role: 'user',
+        content: currentContent,
+        timestamp: nowMs,
+      },
+    ];
+    const store = {
+      getRecent: () => recentEntries,
+      getCompactionSummaries: () => [],
+    } as never;
+
+    const snapshot = await captureTurnSessionContext({
+      channelId: 'api:main',
+      sourceChannelId: 'api:main',
+      userId: 'u1',
+      continuityFallbackUserIds: [],
+      config: makeConfig(),
+      store,
+      activityStore: store,
+      crossChannelContinuity: { getMerged: () => [] },
+      focusCompactionRanges: [],
+      focusKnowledgeTexts: [],
+      wakeReturnArtifacts: [],
+      compactionPromptText: 'Summarize history.',
+      promptRegistry: null,
+      excludeSessionEntryId: 23,
+    });
+
+    expect(snapshot.orientation).toMatchObject({
+      fired: true,
+      reason: 'idle_gap_exceeded',
+      lastActivityAt: latestPriorActivityAt,
+    });
+    expect(snapshot.orientation?.lastUserMessage).toBeUndefined();
+    expect(snapshot.orientation?.idleGapMs).toBeGreaterThanOrEqual(4 * 60 * 60 * 1000);
+    expect(JSON.stringify(snapshot)).not.toContain(currentContent);
+  });
+
+  it('can orient from one prior intentional-no-reply user turn without relabeling it as current', async () => {
+    const priorActivityAt = 1_710_000_000_000;
+    const observedAt = priorActivityAt + (4 * 60 * 60 * 1000);
+    const orientation = buildOrientationNoteTelemetry({
+      channelId: 'api:main',
+      recentActivityEntries: [{
+        id: 31,
+        channelId: 'api:main',
+        role: 'user',
+        content: 'A prior turn that intentionally received no reply.',
+        timestamp: priorActivityAt,
+      }],
+      currentTurnEntryExcluded: true,
+      continuityEntries: [],
+      focusKnowledgeTexts: [],
+      nowMs: observedAt,
+    });
+
+    expect(orientation).toMatchObject({
+      fired: true,
+      reason: 'idle_gap_exceeded',
+      lastActivityAt: priorActivityAt,
+      idleGapMs: observedAt - priorActivityAt,
+    });
+    expect(orientation.lastUserMessage).toBeUndefined();
+
+    const context = await buildSessionContext({
+      channelId: 'api:main',
+      systemPrompt: 'System prompt.',
+      coreMemoryBlock: '',
+      memoriesBlock: '',
+      userId: 'u1',
+      continuityFallbackUserIds: [],
+      store: {
+        getRecent: () => [],
+        getCompactionSummaries: () => [],
+      } as never,
+      config: makeConfig(),
+      eventBus: null,
+      promptRegistry: null,
+      preCompactionExtractionHandler: null,
+      crossChannelContinuity: { getMerged: () => [] },
+      wakeReturnArtifacts: [],
+      turnSessionContext: {
+        channelId: 'api:main',
+        recentEntries: [],
+        sourceEntryCount: 1,
+        compactionSummaryTexts: [],
+        focusKnowledgeTexts: [],
+        continuityEntries: [],
+        orientation,
+        versionPointer: 'test-intentional-no-reply-orientation',
+      },
+    });
+    expect(context.systemPrompt).not.toContain('<current_turn_user_message>');
+  });
+
   it('threads orientation telemetry into a dedicated runtime prompt section', () => {
     const builderSource = readFileSync(resolve('src/core/session/manager/context-builder.ts'), 'utf-8');
     const manifestSource = readFileSync(resolve('src/core/session/context-manifest.ts'), 'utf-8');

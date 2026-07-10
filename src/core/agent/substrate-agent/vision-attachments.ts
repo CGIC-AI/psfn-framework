@@ -5,6 +5,7 @@ import type { RuntimeMode } from '../tool-wiring-validator.js';
 import type { ImageVisionReviewer } from '../../../primitives/images/types.js';
 import type { CurrentTurnVisionReviewContext } from '../../../primitives/images/request-context.js';
 import { inferImageMimeTypeFromAttachmentCandidate } from '../substrate-agent-helpers.js';
+import { sanitizeDiagnosticText } from '../../../shared/diagnostics/redaction.js';
 import { toErrorMessage } from '../../../shared/utils/errors.js';
 import { INTAKE_FIREWALL_NOTICE_TEMPLATES } from '../../cogsec/intake-firewall-notice-templates.js';
 
@@ -293,7 +294,7 @@ export async function buildTurnUserContent(input: {
         },
       };
     } catch (error) {
-      const errorMessage = toErrorMessage(error);
+      const errorMessage = sanitizeDiagnosticText(toErrorMessage(error));
       input.logger.warn('Dedicated current-turn image review failed', {
         channelId: message.channelId,
         channelType: message.channelType,
@@ -303,7 +304,6 @@ export async function buildTurnUserContent(input: {
       return {
         content: buildVisionReviewFailureText({
           semanticText,
-          errorMessage,
           extraNotes: intakeNotes,
         }),
         persistedUserContent: buildPersistedVisionUnavailableUserContent(message),
@@ -669,7 +669,7 @@ async function analyzeWithDedicatedVisionRetry(input: {
         imageUrls: input.imageUrls,
         attempt,
         maxAttempts: DEDICATED_VISION_REVIEW_MAX_ATTEMPTS,
-        error: toErrorMessage(error),
+        error: sanitizeDiagnosticText(toErrorMessage(error)),
       });
     }
   }
@@ -867,7 +867,7 @@ async function resolveVisionAttachmentContent(input: {
         },
       };
     } catch (error) {
-      const errorMessage = toErrorMessage(error);
+      const errorMessage = sanitizeDiagnosticText(toErrorMessage(error));
       input.logger.warn('Gateway binary fetch for live image attachment failed', {
         channelId: input.message.channelId,
         channelType: input.message.channelType,
@@ -1060,12 +1060,11 @@ function buildReviewedVisionTurnText(input: {
 
 function buildVisionReviewFailureText(input: {
   semanticText: string;
-  errorMessage: string;
   extraNotes?: readonly string[];
 }): string {
   const textParts = [
     DEDICATED_VISION_REVIEW_FAILURE_INSTRUCTION,
-    `Vision pipeline status: ${input.errorMessage}`,
+    'Vision pipeline status: unavailable after dedicated review attempts.',
   ];
   for (const note of input.extraNotes ?? []) {
     textParts.push(`[Runtime note] ${note}`);

@@ -19,6 +19,7 @@ import type {
   TurnUsage,
 } from '../../../../shared/contracts/runtime.js';
 import { createComponentLogger } from '../../../../shared/logger.js';
+import { sanitizeDiagnosticText } from '../../../../shared/diagnostics/redaction.js';
 import { toErrorMessage } from '../../../../shared/utils/errors.js';
 import type { TurnSnapshot, TurnPromptResponseSnapshot } from '../../../turns/snapshot.js';
 import { MESSAGE_CLASSES } from '../../message-classes.js';
@@ -43,10 +44,14 @@ import {
   hasVisionTurnInputs,
 } from '../vision-attachments.js';
 import {
+  buildMoaPrompt,
   resolveMoaSettings,
   runMoaTurn,
 } from '../moa-turn.js';
 import type { TurnExecutionObservability } from './observability.js';
+import {
+  rebuildProviderWireMessagesForPrompt,
+} from './prompt-invocation-history.js';
 
 const log = createComponentLogger('SubstrateAgent');
 // Covers attachment fetch (with gateway DNS retries) plus the vision model call;
@@ -54,6 +59,9 @@ const log = createComponentLogger('SubstrateAgent');
 const VISION_TURN_TIMEOUT_MS = 120_000;
 const VISION_RECOVERY_REPLAY_MAX_ATTEMPTS = 3;
 const RUNTIME_FALLBACK_MODEL = 'runtime-fallback';
+const VISION_CONTENT_BUILD_FAILURE_DIAGNOSTIC = 'Vision content build failed.';
+const VISION_PROMPT_FAILURE_DIAGNOSTIC = 'Vision prompt failed.';
+const VISION_RECOVERY_FAILURE_DIAGNOSTIC = 'Vision recovery replay failed.';
 type TurnExecutionRuntime = import('../turn-execution-runtime.js').TurnExecutionRuntime;
 type RuntimeContradictionDiagnostic = NonNullable<
 NonNullable<AgentResponse['metadata']['diagnostics']>['runtimeContradiction']
@@ -183,6 +191,14 @@ function shouldRenderCurrentTurnGroupAttribution(message: SubstrateMessage): boo
 
 function formatCurrentTurnUserContentForPrompt(
   message: SubstrateMessage,
+  content: string,
+): string;
+function formatCurrentTurnUserContentForPrompt(
+  message: SubstrateMessage,
+  content: UserMessage['content'],
+): UserMessage['content'];
+function formatCurrentTurnUserContentForPrompt(
+  message: SubstrateMessage,
   content: UserMessage['content'],
 ): UserMessage['content'] {
   if (!shouldRenderCurrentTurnGroupAttribution(message)) return content;
@@ -274,7 +290,9 @@ function buildPromptResponseSnapshot(input: {
       : input.stopReason
         ? { stopReason: input.stopReason }
         : {}),
-    ...(input.assistantMessage?.errorMessage ? { errorMessage: input.assistantMessage.errorMessage } : {}),
+    ...(input.assistantMessage?.errorMessage
+      ? { errorMessage: sanitizeDiagnosticText(input.assistantMessage.errorMessage) }
+      : {}),
     ...(reasoning ? { reasoning } : {}),
     ...(toolCallCount !== undefined ? { toolCallCount } : {}),
   };
@@ -311,7 +329,6 @@ function countImageAttachments(message: SubstrateMessage): number {
 
 function buildVisionUnavailablePromptContent(input: {
   message: SubstrateMessage;
-  errorMessage: string;
 }): UserMessage['content'] {
   const imageCount = countImageAttachments(input.message);
   const semanticText = input.message.content.trim();
@@ -321,7 +338,7 @@ function buildVisionUnavailablePromptContent(input: {
     'You cannot reliably see the current image contents.',
     'Do not pretend you saw them.',
     'Reply to the user from the text that is available, acknowledge that image inspection failed, and ask them to resend the image if visual details matter.',
-    `Runtime failure: ${input.errorMessage}`,
+    'Vision pipeline status: unavailable after runtime inspection attempts.',
   ].join(' ');
 
   return semanticText.length > 0
@@ -432,6 +449,13 @@ export async function invokeAgentForTurn(input: {
 
   const moaSettings = resolveMoaSettings(runtime.config, log);
   if (moaSettings) {
+    const moaCurrentTurn = {
+      role: speakerRole,
+      content: speakerRole === 'system'
+        ? formatAttributedSystemContent(message.content, message.authorName)
+        : formatCurrentTurnUserContentForPrompt(message, message.content),
+    };
+    const moaProviderPrompt = buildMoaPrompt(context, moaCurrentTurn);
     const moaResult = await runWithVisionTurnTimeout({
       channelId: message.channelId,
       deadlineAt: visionTurnDeadlineAt,
@@ -440,6 +464,7 @@ export async function invokeAgentForTurn(input: {
         llmClient: runtime.llmClient,
         context,
         message,
+        prompt: moaProviderPrompt,
         settings: moaSettings,
         config: runtime.config,
         turnId,
@@ -465,6 +490,15 @@ export async function invokeAgentForTurn(input: {
     responseModel = moaResult.model;
     responseText = moaResult.output;
     if (turnSnapshot.promptContext) {
+      turnSnapshot.promptContext.currentTurnInput = moaCurrentTurn.content;
+      if (turnSnapshot.promptContext.providerObservability) {
+        turnSnapshot.promptContext.providerObservability.backendModel = moaResult.model;
+        turnSnapshot.promptContext.providerObservability.providerWireMessages = [{
+          role: 'user',
+          source: 'message',
+          content: moaProviderPrompt,
+        }];
+      }
       turnSnapshot.promptContext.response = {
         content: moaResult.output,
         model: moaResult.model,
@@ -492,8 +526,9 @@ export async function invokeAgentForTurn(input: {
   );
   const activeTools = readActiveTurnToolSchemas(runtime.agent);
   if (turnSnapshot.plan) {
-    // The plan carries exactly what ships to the provider: bind the resolved
-    // tool definitions before the snapshot is (re-)emitted and persisted.
+    // Bind resolved tool definitions to the assembled context plan before the
+    // snapshot is (re-)emitted and persisted. The current message is supplied
+    // separately through agent.prompt below.
     turnSnapshot.plan.toolDefinitions = activeTools;
   }
   if (activeTools.length > 0 || adaptiveToolSnapshot) {
@@ -508,9 +543,6 @@ export async function invokeAgentForTurn(input: {
   }
 
   const agentMessages: AgentMessage[] = piMessages;
-  const historyMessages = agentMessages.length > 0 ? agentMessages.slice(0, -1) : [];
-  runtime.agent.state.messages = historyMessages;
-  mutableState.turnStartMessageIndex = runtime.agent.state.messages.length;
 
   let streamFirstTokenAt: number | null = null;
   const streamTelemetryBus = runtime.eventBus as unknown as {
@@ -564,7 +596,7 @@ export async function invokeAgentForTurn(input: {
       clearInitialPromptContext();
       throw error;
     }
-    const errorMessage = toErrorMessage(error);
+    const errorMessage = sanitizeDiagnosticText(toErrorMessage(error));
     log.warn('Vision content build failed; falling back to a text-only unavailable-image prompt', {
       channelId: message.channelId,
       channelType: message.channelType,
@@ -577,16 +609,31 @@ export async function invokeAgentForTurn(input: {
         strategy: 'text_only_unavailable_notice',
         attempts: 0,
         finalContentEmpty: false,
-        previousErrorMessage: errorMessage,
+        previousErrorMessage: VISION_CONTENT_BUILD_FAILURE_DIAGNOSTIC,
       },
     };
     turnUserContentBuildResult = {
       content: buildVisionUnavailablePromptContent({
         message,
-        errorMessage,
       }),
       persistedUserContent: buildPersistedVisionUnavailableUserContent(message),
     };
+  }
+  const currentPromptMessage = buildPromptMessage(
+    message,
+    speakerRole,
+    turnUserContentBuildResult.content,
+  );
+  const historyMessages = agentMessages.slice();
+  runtime.agent.state.messages = historyMessages;
+  mutableState.turnStartMessageIndex = runtime.agent.state.messages.length;
+  if (turnSnapshot.promptContext?.providerObservability) {
+    const providerObservability = turnSnapshot.promptContext.providerObservability;
+    providerObservability.providerWireMessages = rebuildProviderWireMessagesForPrompt(
+      providerObservability.providerWireMessages,
+      historyMessages,
+      currentPromptMessage,
+    );
   }
   const selfieAppearanceContext = activeTools.some((tool) => tool.name === 'selfie_create')
     ? resolveAppearanceContextFromTemplateVariables(templateVariables)
@@ -621,9 +668,7 @@ export async function invokeAgentForTurn(input: {
         },
         async () => runWithVisionToolRequestContext(
           visionToolRequestContext,
-          async () => runtime.agent.prompt(
-            buildPromptMessage(message, speakerRole, turnUserContentBuildResult.content),
-          ),
+          async () => runtime.agent.prompt(currentPromptMessage),
         ),
       ),
     });
@@ -631,7 +676,7 @@ export async function invokeAgentForTurn(input: {
     if (!isVisionTurn) {
       throw error;
     }
-    const errorMessage = toErrorMessage(error);
+    const errorMessage = sanitizeDiagnosticText(toErrorMessage(error));
     log.warn('Vision prompt failed; emitting non-fabricating runtime fallback reply', {
       channelId: message.channelId,
       channelType: message.channelType,
@@ -645,7 +690,7 @@ export async function invokeAgentForTurn(input: {
         strategy: 'runtime_nonfabricating_notice',
         attempts: 0,
         finalContentEmpty: false,
-        previousErrorMessage: errorMessage,
+        previousErrorMessage: VISION_PROMPT_FAILURE_DIAGNOSTIC,
         runtimeFallbackApplied: true,
       },
     };
@@ -719,9 +764,7 @@ export async function invokeAgentForTurn(input: {
           },
           async () => runWithVisionToolRequestContext(
             visionToolRequestContext,
-            async () => runtime.agent.prompt(
-              buildPromptMessage(message, speakerRole, turnUserContentBuildResult.content),
-            ),
+            async () => runtime.agent.prompt(currentPromptMessage),
           ),
         ),
       });
@@ -871,10 +914,11 @@ export async function invokeAgentForTurn(input: {
         });
       }
     } catch (error) {
-      recoveryErrorMessage = toErrorMessage(error);
+      const sanitizedRecoveryError = sanitizeDiagnosticText(toErrorMessage(error));
+      recoveryErrorMessage = VISION_RECOVERY_FAILURE_DIAGNOSTIC;
       log.warn('Vision recovery replay failed; applying runtime fallback reply', {
         channelId: message.channelId,
-        error: recoveryErrorMessage,
+        error: sanitizedRecoveryError,
       });
     }
 
@@ -894,7 +938,9 @@ export async function invokeAgentForTurn(input: {
     }
 
     const finalContentEmpty = responseText.trim().length === 0;
-    const previousErrorMessage = assistantMessage?.errorMessage ?? recoveryErrorMessage;
+    const previousErrorMessage = assistantMessage?.errorMessage
+      ? 'Vision model returned an error.'
+      : recoveryErrorMessage;
     fallbackDiagnostics = {
       fallback: {
         code: 'vision_empty_response',

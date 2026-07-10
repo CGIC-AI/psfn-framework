@@ -965,6 +965,7 @@ export class SessionManager {
     turnBudgetCharacteristics?: ContextBudgetTurnCharacteristics;
     /** Optional LLM provider for foreground history-budget summarization. */
     llmProvider?: LLMProviderPort;
+    excludeSessionEntryId?: number;
   }): Promise<TurnSessionContextSnapshot> {
     const resolvedChannelId = this.resolveSessionChannelId(input.channelId);
     const sourceChannelId = this.resolveSourceChannelId(resolvedChannelId);
@@ -992,6 +993,9 @@ export class SessionManager {
       llmProvider: input.llmProvider,
       promptRegistry: this.promptRegistry,
       roomContentWindow: this.resolveRoomContentWindow(resolvedChannelId),
+      ...(input.excludeSessionEntryId !== undefined
+        ? { excludeSessionEntryId: input.excludeSessionEntryId }
+        : {}),
     });
   }
 
@@ -1007,6 +1011,7 @@ export class SessionManager {
     memoryManifestSeed?: ContextManifestMemorySeed,
     turnBudgetCharacteristics?: ContextBudgetTurnCharacteristics,
     conversationScope?: ConversationScope,
+    excludeSessionEntryId?: number,
   ): Promise<LLMContext> {
     const resolvedChannelId = this.resolveSessionChannelId(channelId);
     const sourceChannelId = this.resolveSourceChannelId(resolvedChannelId);
@@ -1035,6 +1040,7 @@ export class SessionManager {
         continuityFallbackUserIds,
         turnBudgetCharacteristics,
         llmProvider,
+        ...(excludeSessionEntryId !== undefined ? { excludeSessionEntryId } : {}),
       });
     const coreMemoryBlock = this.coreMemoryProvider
       ? this.coreMemoryProvider.formatForContext(
@@ -1075,6 +1081,7 @@ export class SessionManager {
       wakeReturnArtifacts,
       characterName: this.resolveContextCharacterName(),
       turnSessionContext: sessionContext,
+      ...(excludeSessionEntryId !== undefined ? { excludeSessionEntryId } : {}),
       memoryManifestSeed,
       turnBudgetCharacteristics,
       compactionMode: 'deferred',

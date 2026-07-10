@@ -53,7 +53,7 @@ describe('runtime diagnostics', () => {
       level: 'error',
       component: 'RedactionTest',
       observedAt: 1_700_000_000_000,
-      message: 'Bearer abc.def.ghi api_key=super-secret postgres://user:db-pass@localhost/db prompt: "private conversation about health"',
+      message: 'Bearer abc.def.ghi api_key=super-secret signed_url_secret=abc123 postgres://user:db-pass@localhost/db prompt: "private conversation about health"',
     });
 
     const payload = buildRuntimeDiagnosticsSnapshot({
@@ -67,6 +67,7 @@ describe('runtime diagnostics', () => {
     expect(serialized).toContain('[REDACTED_CONTENT]');
     expect(serialized).not.toContain('abc.def.ghi');
     expect(serialized).not.toContain('super-secret');
+    expect(serialized).not.toContain('abc123');
     expect(serialized).not.toContain('db-pass');
     expect(serialized).not.toContain('private conversation');
   });

@@ -175,6 +175,7 @@ export async function assembleTurnPrompt(input: {
    * canary is planted this turn (e.g. custom-prompt override paths).
    */
   canaryToken?: string;
+  currentSessionEntryId: number | null;
   memoryManifestSeed: ContextManifestMemorySeed | undefined;
   fatigue?: FatigueEnforcementMetadata;
   getRetrievalProvenanceRefs: () => string[];
@@ -204,6 +205,7 @@ export async function assembleTurnPrompt(input: {
     turnCorrelationBase,
     turnCallType,
     turnSnapshot,
+    currentSessionEntryId,
     memoryManifestSeed,
     fatigue,
     canaryToken,
@@ -491,8 +493,16 @@ export async function assembleTurnPrompt(input: {
       memoryManifestSeed,
       turnBudgetCharacteristics,
       conversationScope,
+      currentSessionEntryId ?? undefined,
     ),
   );
+  if (currentSessionEntryId !== null && context.messages.some(contextMessage => (
+    contextMessage.provenance?.sourceEntryIds?.includes(currentSessionEntryId) === true
+  ))) {
+    throw new Error(
+      `Current session entry ${currentSessionEntryId} leaked into prior-history prompt assembly.`,
+    );
+  }
   // ── Session-derived blocks emitted into the plan (same ordered sections the
   // context builder appended to context.systemPrompt).
   const SESSION_BLOCK_SCOPE_IDS: Record<string, string> = {

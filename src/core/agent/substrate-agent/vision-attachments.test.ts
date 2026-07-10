@@ -229,7 +229,8 @@ describe('buildTurnUserContent', () => {
 
     expect(result.content).toContain('dedicated vision pipeline failed');
     expect(result.content).toContain('You cannot reliably see the current image');
-    expect(result.content).toContain('404 Not Found');
+    expect(result.content).toContain('Vision pipeline status: unavailable after dedicated review attempts.');
+    expect(result.content).not.toContain('404 Not Found');
     expect(result.content).toContain('User text: My little satellite');
     expect(result.currentTurnVisionReview).toBeUndefined();
   });

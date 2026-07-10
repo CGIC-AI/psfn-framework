@@ -10,6 +10,7 @@
     type PromptMonitorTurn,
   } from '$lib/events/prompt-monitor';
   import type { AdminPromptPlanBlock, AdminPromptSectionCacheability } from '$lib/types';
+  import CollapsibleSection from '$lib/components/garden/CollapsibleSection.svelte';
   import PromptMonitorMemoryList from './PromptMonitorMemoryList.svelte';
   import PromptMonitorMessageList from './PromptMonitorMessageList.svelte';
   import PromptMonitorRawEventsPanel from './PromptMonitorRawEventsPanel.svelte';
@@ -63,7 +64,6 @@
   let diffBaselineTurnId = $state<string | null>(null);
   const promptLoom = $derived(resolvePromptMonitorPromptLoom(turn));
   const plan = $derived(resolvePromptMonitorPlan(turn));
-  const isLegacyTurn = $derived(plan === null);
   const companionName = $derived(getCompanionName());
   const LEGACY_TURN_LABEL = 'Legacy turn (pre-plan): this record predates the PromptPlan snapshot; views degrade to recorded strings.';
 
@@ -197,6 +197,10 @@
               <p class="mt-1 break-all text-shadow-900">{turn.snapshot?.promptContext?.providerObservability?.backendApi ?? '—'}</p>
             </div>
             <div>
+              <p class="text-shadow-600">Base URL</p>
+              <p class="mt-1 break-all text-shadow-900">{turn.snapshot?.promptContext?.providerObservability?.backendBaseUrl ?? '—'}</p>
+            </div>
+            <div>
               <p class="text-shadow-600">Prompt Mode</p>
               <p class="mt-1 text-shadow-900">{metrics?.promptMode ?? 'default'}</p>
             </div>
@@ -317,6 +321,18 @@
               <p class="mt-1 text-shadow-900">{turn.snapshot?.promptContext?.response?.errorMessage ?? '—'}</p>
             </div>
           </div>
+          <CollapsibleSection
+            title="Provider Response (raw)"
+            subtitle="Full recorded response object, including fields not surfaced above"
+            class="mt-3"
+          >
+            <PromptMonitorTextBlock
+              title="Provider Response"
+              value={formatJson(promptLoom.providerResult.response)}
+              emptyText="No provider response snapshot recorded."
+              maxHeightClass="max-h-[24rem]"
+            />
+          </CollapsibleSection>
         </div>
       </div>
 
@@ -350,7 +366,7 @@
           <p class="mt-1">{LEGACY_TURN_LABEL}</p>
           <p class="mt-1">
             Recorded prompt strings for this turn are available in the
-            <span class="font-medium">Prompt Assembly</span> and <span class="font-medium">Exact Payload</span> tabs.
+            <span class="font-medium">Prompt Assembly</span> tab.
           </p>
         </div>
       {:else}
@@ -389,22 +405,117 @@
             </div>
           {/each}
         </div>
+
+        <CollapsibleSection
+          title="Cache Regions"
+          count={plan.blocks.length}
+          subtitle="Ordered cache regions from the plan's cachePlan: static blocks, session-stable blocks, and per-turn re-renders"
+        >
+          <p class="text-xs text-shadow-600">
+            Blocks[0..{plan.cachePlan.staticBoundary}) are static,
+            blocks[{plan.cachePlan.staticBoundary}..{plan.cachePlan.sessionStableBoundary}) are
+            session-stable, the rest re-render every turn.
+          </p>
+          <div class="mt-3 space-y-3">
+            {#each cacheRegions as region (region.name)}
+              <div class="rounded-lg border border-bark-200 bg-bark-50 p-3">
+                <div class="flex flex-wrap items-center gap-2">
+                  <span class={`rounded-full border px-2 py-0.5 text-xs font-medium uppercase tracking-wide ${volatilityTone(region.name)}`}>
+                    {region.name.replace('_', ' ')}
+                  </span>
+                  <span class="text-sm text-shadow-700">
+                    {region.blocks.length} block{region.blocks.length === 1 ? '' : 's'} · {regionTokens(region.blocks)} tokens (est.)
+                  </span>
+                </div>
+                {#if region.blocks.length === 0}
+                  <p class="mt-2 text-sm text-shadow-600">No blocks in this region.</p>
+                {:else}
+                  <div class="mt-2 flex flex-wrap gap-2">
+                    {#each region.blocks as block (block.id)}
+                      <span class="rounded-full border border-bark-300 bg-white px-2 py-0.5 font-mono text-xs text-shadow-800" title={`producer ${block.producer} · scope ${block.scopeKey ?? '—'} · ${block.tokensEst} tokens (est.)`}>
+                        {block.id}
+                      </span>
+                    {/each}
+                  </div>
+                {/if}
+              </div>
+            {/each}
+          </div>
+        </CollapsibleSection>
       {/if}
+
+      <CollapsibleSection
+        title="Static-Prefix Hash Timeline"
+        count={staticHashTimeline.length}
+        subtitle="Static hash across the loaded recent turns (oldest first); a stable hash means the frozen prefix stayed byte-identical"
+      >
+        {#if staticHashTimeline.length === 0}
+          <p class="text-sm text-shadow-600">No turns loaded for this session.</p>
+        {:else}
+          <div class="space-y-2">
+            {#each staticHashTimeline as entry (entry.turnId)}
+              <div class="flex flex-wrap items-center justify-between gap-2 rounded-lg border px-3 py-2
+                {entry.turnId === turn.turnId ? 'border-gold-400 bg-gold-50' : 'border-bark-200 bg-white'}">
+                <div class="min-w-0">
+                  <p class="truncate font-mono text-sm text-shadow-900">{truncateValue(entry.turnId, 24)}</p>
+                  <p class="mt-0.5 font-mono text-xs text-shadow-600">{truncateValue(entry.staticHash, 24)}</p>
+                </div>
+                <span class={`shrink-0 rounded-full border px-2 py-0.5 text-xs font-medium ${
+                  entry.changedFromPrevious === null
+                    ? 'border-bark-300 bg-bark-100 text-shadow-600'
+                    : entry.changedFromPrevious
+                      ? 'border-wilt-300 bg-wilt-50 text-wilt-700'
+                      : 'border-moss-300 bg-moss-50 text-moss-700'
+                }`}>
+                  {entry.changedFromPrevious === null
+                    ? 'no prior hash'
+                    : entry.changedFromPrevious
+                      ? 'hash changed'
+                      : 'hash stable'}
+                </span>
+              </div>
+            {/each}
+          </div>
+        {/if}
+      </CollapsibleSection>
+
+      <CollapsibleSection
+        title="Provider Cache Telemetry"
+        subtitle="Whatever cache fields the runtime already records for this turn, absent-tolerant (full telemetry lands in E2.4)"
+      >
+        <div class="text-sm">
+          <PromptMonitorTextBlock
+            title="promptCaching (recorded)"
+            value={formatJson(providerCacheTelemetry)}
+            emptyText="No provider cache telemetry recorded for this turn (placeholder until E2.4)."
+            maxHeightClass="max-h-64"
+          />
+        </div>
+      </CollapsibleSection>
     {:else if activeTab === 'prompt'}
       <div class="grid grid-cols-1 gap-4 xl:grid-cols-2">
         <div class="rounded-xl border border-bark-200 bg-white p-4">
           <div class="flex flex-wrap items-center gap-2">
-            <h3 class="font-medium text-shadow-900">Template Snapshot</h3>
+            <h3 class="font-medium text-shadow-900">Prompt-Soil Layers</h3>
             <span class="rounded-full border border-gold-300 bg-gold-50 px-2 py-0.5 text-xs font-medium uppercase tracking-wide text-shadow-900">
               Historical Snapshot
+            </span>
+            <span class="rounded-full border border-bark-300 bg-bark-50 px-2 py-0.5 text-xs font-medium uppercase tracking-wide text-shadow-700">
+              {promptLoom.source.replace('_', ' ')}
             </span>
           </div>
           <p class="mt-1 text-xs text-shadow-600">{promptLoom.historicalSnapshot.label}</p>
           {#if promptLoom.historicalSnapshot.removedPromptLayerIds.length > 0}
-            <p class="mt-2 text-sm text-wilt-700">
-              Removed historical prompt layer data detected:
-              {promptLoom.historicalSnapshot.removedPromptLayerIds.join(', ')}
-            </p>
+            <div class="mt-3 rounded-lg border border-wilt-200 bg-wilt-50 p-3 text-sm text-wilt-800">
+              <p class="font-medium">Historical removed prompt layers</p>
+              <p class="mt-1">{promptLoom.historicalSnapshot.removedPromptLayerIds.join(', ')}</p>
+              <PromptMonitorTextBlock
+                title="Historical Snapshot Hits"
+                value={formatJson(promptLoom.historicalSnapshot.hits)}
+                emptyText="No removed historical prompt layer hits recorded."
+                maxHeightClass="max-h-48"
+              />
+            </div>
           {/if}
           <div class="mt-3 space-y-3 text-sm">
             <PromptMonitorTextBlock
@@ -414,22 +525,16 @@
               cacheability={cacheabilityFor('staticPrefixTemplate')}
             />
             <PromptMonitorTextBlock
-              title="Dynamic Suffix Template"
-              value={turn.snapshot?.prompt?.dynamicSuffixTemplate}
-              emptyText="No dynamic prompt snapshot recorded."
-              cacheability={cacheabilityFor('dynamicSuffixTemplate')}
-            />
-          </div>
-        </div>
-
-        <div class="rounded-xl border border-bark-200 bg-white p-4">
-          <h3 class="font-medium text-shadow-900">Resolved Prompt Context</h3>
-          <div class="mt-3 space-y-3 text-sm">
-            <PromptMonitorTextBlock
               title="Rendered Static Prefix"
               value={promptLoom.generatedPrompt.renderedStaticPrefix}
               emptyText="No rendered static prefix recorded."
               cacheability={cacheabilityFor('renderedStaticPrefix')}
+            />
+            <PromptMonitorTextBlock
+              title="Dynamic Suffix Template"
+              value={turn.snapshot?.prompt?.dynamicSuffixTemplate}
+              emptyText="No dynamic prompt snapshot recorded."
+              cacheability={cacheabilityFor('dynamicSuffixTemplate')}
             />
             <PromptMonitorTextBlock
               title="Rendered Dynamic Suffix"
@@ -437,6 +542,15 @@
               emptyText="No rendered dynamic suffix recorded."
               cacheability={cacheabilityFor('renderedDynamicSuffix')}
             />
+          </div>
+        </div>
+
+        <div class="rounded-xl border border-bark-200 bg-white p-4">
+          <h3 class="font-medium text-shadow-900">Runtime Additions</h3>
+          <p class="mt-1 text-xs text-shadow-600">
+            Per-turn context blocks the runtime folds into the layered prompt soil.
+          </p>
+          <div class="mt-3 space-y-3 text-sm">
             <PromptMonitorTextBlock
               title="Runtime Context Block"
               value={promptLoom.generatedPrompt.runtimeContext}
@@ -464,6 +578,10 @@
       <div class="grid grid-cols-1 gap-4 xl:grid-cols-2">
         <div class="rounded-xl border border-bark-200 bg-white p-4">
           <h3 class="font-medium text-shadow-900">Assembled Prompt</h3>
+          <p class="mt-1 text-xs text-shadow-600">
+            Pre-Session Prompt is the assembly before session-managed context folding; Final System
+            Prompt is the system block after session assembly.
+          </p>
           <div class="mt-3 space-y-3">
             <PromptMonitorTextBlock
               title="Pre-Session Prompt"
@@ -489,50 +607,116 @@
         />
       </div>
 
-      <div class="grid grid-cols-1 gap-4 xl:grid-cols-2">
-        <PromptMonitorSectionTelemetryList
-          title="Input Sections"
-          sections={turn.snapshot?.promptContext?.inputSections ?? []}
-          emptyText="No input section telemetry recorded."
-        />
-        <PromptMonitorSectionTelemetryList
-          title="Runtime Context Sections"
-          sections={turn.snapshot?.promptContext?.runtimeContextSections ?? []}
-          emptyText="No runtime context section telemetry recorded."
-        />
-        <PromptMonitorSectionTelemetryList
-          title="Memory Context Sections"
-          sections={turn.snapshot?.promptContext?.memoryContextSections ?? []}
-          emptyText="No memory context section telemetry recorded."
-        />
-        <PromptMonitorSectionTelemetryList
-          title="Final System Sections"
-          sections={turn.snapshot?.promptContext?.finalSystemSections ?? []}
-          emptyText="No final system section telemetry recorded."
-        />
-      </div>
-      <p class="text-xs text-shadow-600">
-        Each prompt block header shows its producer module and resolved scope key
-        (<span class="font-mono">dm:&lt;contactId&gt;</span> / <span class="font-mono">room:&lt;channelId&gt;</span> / <span class="font-mono">global</span>).
-      </p>
-
-      <div class="rounded-xl border border-bark-200 bg-white p-4">
-        <h3 class="font-medium text-shadow-900">Prompt Review Notes</h3>
-        <div class="mt-3 space-y-3 text-sm text-shadow-700">
-          <p>
-            <span class="font-medium text-shadow-900">Assembled Prompt</span> shows the prompt before session-managed context folding.
-          </p>
-          <p>
-            <span class="font-medium text-shadow-900">Final System Prompt</span> shows the system block after session assembly.
-          </p>
-          <p>
-            <span class="font-medium text-shadow-900">Model Context Messages</span> shows the canonical message list before provider transport decisions.
-          </p>
-          <p>
-            <span class="font-medium text-shadow-900">Section Telemetry</span> breaks wrapped prompt blocks into char and token counted sections.
-          </p>
+      <CollapsibleSection
+        title="Section Telemetry"
+        subtitle="Wrapped prompt blocks broken into char- and token-counted sections; each header shows its producer module and resolved scope key (dm:<contactId> / room:<channelId> / global)"
+      >
+        <div class="grid grid-cols-1 gap-4 xl:grid-cols-2">
+          <PromptMonitorSectionTelemetryList
+            title="Input Sections"
+            sections={turn.snapshot?.promptContext?.inputSections ?? []}
+            emptyText="No input section telemetry recorded."
+          />
+          <PromptMonitorSectionTelemetryList
+            title="Runtime Context Sections"
+            sections={turn.snapshot?.promptContext?.runtimeContextSections ?? []}
+            emptyText="No runtime context section telemetry recorded."
+          />
+          <PromptMonitorSectionTelemetryList
+            title="Memory Context Sections"
+            sections={turn.snapshot?.promptContext?.memoryContextSections ?? []}
+            emptyText="No memory context section telemetry recorded."
+          />
+          <PromptMonitorSectionTelemetryList
+            title="Final System Sections"
+            sections={turn.snapshot?.promptContext?.finalSystemSections ?? []}
+            emptyText="No final system section telemetry recorded."
+          />
         </div>
-      </div>
+      </CollapsibleSection>
+
+      <CollapsibleSection
+        title="Provider Wire (as shipped)"
+        count={promptLoom.providerWire.messages.length}
+        subtitle="Serialized system prompt, message array, and tool definitions exactly as sent to the provider"
+      >
+        <div class="flex flex-wrap items-center gap-2">
+          <span class="rounded-full border border-bark-300 bg-bark-50 px-2 py-0.5 text-xs font-medium uppercase tracking-wide text-shadow-700">
+            {promptLoom.providerWire.source === 'prompt_plan' ? 'from PromptPlan' : 'recorded snapshot'}
+          </span>
+          {#if promptLoom.providerWire.legacy}
+            <span class="rounded-full border border-gold-300 bg-gold-50 px-2 py-0.5 text-xs font-medium uppercase tracking-wide text-shadow-900">
+              legacy turn (pre-plan)
+            </span>
+          {/if}
+          {#if promptLoom.providerWire.systemRoleTransport}
+            <span class="rounded-full border border-bark-300 bg-white px-2 py-0.5 text-xs text-shadow-700">
+              transport: {promptLoom.providerWire.systemRoleTransport}
+            </span>
+          {/if}
+        </div>
+        <p class="mt-2 text-xs text-shadow-600">
+          {#if promptLoom.providerWire.source === 'prompt_plan'}
+            System prompt, message array, and tool definitions serialized from the persisted PromptPlan —
+            byte-equal to what shipped to the provider (single assembly path).
+          {:else}
+            {LEGACY_TURN_LABEL} The payload below is the recorded provider-wire capture.
+          {/if}
+        </p>
+
+        <div class="mt-3 rounded-lg border border-bark-200 bg-bark-50 p-3">
+          <h4 class="text-sm font-medium text-shadow-900">System Role Transport</h4>
+          <div class="mt-2 grid grid-cols-2 gap-3 text-sm">
+            <div>
+              <p class="text-shadow-600">System Transport</p>
+              <p class="mt-1 text-shadow-900">{humanizeToken(turn.snapshot?.promptContext?.providerObservability?.systemRole?.transport)}</p>
+            </div>
+            <div>
+              <p class="text-shadow-600">Supports System Role</p>
+              <p class="mt-1 text-shadow-900">{formatCapability(turn.snapshot?.promptContext?.providerObservability?.systemRole?.supportsSystemRole)}</p>
+            </div>
+            <div>
+              <p class="text-shadow-600">Supports Developer Role</p>
+              <p class="mt-1 text-shadow-900">{formatCapability(turn.snapshot?.promptContext?.providerObservability?.systemRole?.supportsDeveloperRole)}</p>
+            </div>
+            <div>
+              <p class="text-shadow-600">Out-of-Band System Prompt</p>
+              <p class="mt-1 text-shadow-900">{formatCapability(turn.snapshot?.promptContext?.providerObservability?.systemRole?.usesOutOfBandSystemPrompt)}</p>
+            </div>
+          </div>
+        </div>
+
+        <div class="mt-3 space-y-3 text-sm">
+          <PromptMonitorTextBlock
+            title="System Prompt (as shipped)"
+            value={promptLoom.providerWire.systemPrompt}
+            emptyText="No serialized system prompt recorded."
+            maxHeightClass="max-h-[28rem]"
+          />
+          <PromptMonitorTextBlock
+            title={`Tool Definitions (${promptLoom.providerWire.toolDefinitions.length}, as shipped)`}
+            value={formatJson(promptLoom.providerWire.toolDefinitions)}
+            emptyText="No tool definitions shipped this turn."
+            maxHeightClass="max-h-[24rem]"
+          />
+        </div>
+
+        <p class="mt-3 text-xs text-shadow-600">
+          Provider wire messages carry the full, untruncated content sent to the provider. If the
+          message set looks shorter than the raw session history, that reflects the real
+          session-budgeted context (compaction / history span), not a snapshot or UI cap.
+        </p>
+        <div class="mt-3">
+          <PromptMonitorMessageList
+            title={`Provider Wire Messages (${promptLoom.providerWire.messages.length})`}
+            messages={promptLoom.providerWire.messages.map(message => ({
+              role: `${humanizeToken(message.role)} · ${humanizeToken(message.source)}`,
+              content: message.content,
+            }))}
+            emptyText="No provider-wire message snapshot recorded."
+          />
+        </div>
+      </CollapsibleSection>
     {:else if activeTab === 'context'}
       <div class="grid grid-cols-1 gap-4 xl:grid-cols-2">
         <PromptMonitorSessionEntryList
@@ -655,6 +839,30 @@
           emptyText="No proactive candidates recorded."
         />
       </div>
+
+      <CollapsibleSection
+        title="Memory Capture"
+        subtitle="What the extraction pipeline saw this turn and which memory ids it produced"
+      >
+        <div class="grid grid-cols-1 gap-4 xl:grid-cols-2">
+          <div class="text-sm">
+            <PromptMonitorTextBlock
+              title="Memory Capture Input"
+              value={formatJson(promptLoom.memoryCapture.input)}
+              emptyText="No memory capture input recorded."
+              maxHeightClass="max-h-[24rem]"
+            />
+          </div>
+          <div class="text-sm">
+            <PromptMonitorTextBlock
+              title="Memory Capture Output"
+              value={formatJson(promptLoom.memoryCapture.output)}
+              emptyText="No memory capture output recorded."
+              maxHeightClass="max-h-[16rem]"
+            />
+          </div>
+        </div>
+      </CollapsibleSection>
     {:else if activeTab === 'tools'}
       <div class="rounded-xl border border-bark-200 bg-white p-3 text-xs text-shadow-700">
         <span class="font-medium text-shadow-900">Tool surface:</span>
@@ -807,404 +1015,6 @@
             {/each}
           </div>
         {/if}
-      </div>
-    {:else if activeTab === 'exact'}
-      <div class="rounded-xl border border-bark-200 bg-white p-4">
-        <div class="flex flex-wrap items-start justify-between gap-3">
-          <div>
-            <h3 class="font-medium text-shadow-900">Historical Snapshot Boundary</h3>
-            <p class="mt-1 text-sm text-shadow-600">{promptLoom.historicalSnapshot.label}</p>
-          </div>
-          <span class="rounded-full border border-bark-300 bg-bark-50 px-2 py-0.5 text-xs font-medium uppercase tracking-wide text-shadow-700">
-            {promptLoom.source.replace('_', ' ')}
-          </span>
-        </div>
-        {#if promptLoom.historicalSnapshot.removedPromptLayerIds.length > 0}
-          <div class="mt-3 rounded-lg border border-wilt-200 bg-wilt-50 p-3 text-sm text-wilt-800">
-            <p class="font-medium">Historical removed prompt layers</p>
-            <p class="mt-1">{promptLoom.historicalSnapshot.removedPromptLayerIds.join(', ')}</p>
-            <PromptMonitorTextBlock
-              title="Historical Snapshot Hits"
-              value={formatJson(promptLoom.historicalSnapshot.hits)}
-              emptyText="No removed historical prompt layer hits recorded."
-              maxHeightClass="max-h-48"
-            />
-          </div>
-        {/if}
-      </div>
-
-      <div class="grid grid-cols-1 gap-4 xl:grid-cols-2">
-        <div class="rounded-xl border border-bark-200 bg-white p-4">
-          <h3 class="font-medium text-shadow-900">Generated Prompt Sections</h3>
-          <div class="mt-3 space-y-3 text-sm">
-            <PromptMonitorTextBlock
-              title="Rendered Static Prefix"
-              value={promptLoom.generatedPrompt.renderedStaticPrefix}
-              emptyText="No rendered static prefix recorded."
-              maxHeightClass="max-h-56"
-            />
-            <PromptMonitorTextBlock
-              title="Rendered Dynamic Suffix"
-              value={promptLoom.generatedPrompt.renderedDynamicSuffix}
-              emptyText="No rendered dynamic suffix recorded."
-              maxHeightClass="max-h-56"
-            />
-            <PromptMonitorTextBlock
-              title="Section Telemetry"
-              value={formatJson({
-                inputSections: promptLoom.generatedPrompt.inputSections,
-                runtimeContextSections: promptLoom.generatedPrompt.runtimeContextSections,
-                finalSystemSections: promptLoom.generatedPrompt.finalSystemSections,
-              })}
-              emptyText="No generated prompt section telemetry recorded."
-              maxHeightClass="max-h-[28rem]"
-            />
-            <PromptMonitorTextBlock
-              title="Canonical Context Messages"
-              value={formatJson(promptLoom.generatedPrompt.contextMessages)}
-              emptyText="No canonical context messages recorded."
-              maxHeightClass="max-h-[28rem]"
-            />
-          </div>
-        </div>
-
-        <div class="rounded-xl border border-bark-200 bg-white p-4">
-          <h3 class="font-medium text-shadow-900">Final Provider Payload</h3>
-          <div class="mt-3 space-y-3 text-sm">
-            <PromptMonitorTextBlock
-              title="Final System Prompt"
-              value={promptLoom.providerPayload.finalSystemPrompt}
-              emptyText="No final provider system prompt recorded."
-              maxHeightClass="max-h-[28rem]"
-            />
-            <PromptMonitorTextBlock
-              title="Provider Message Array"
-              value={formatJson(promptLoom.providerPayload.providerMessages)}
-              emptyText="No provider message array recorded."
-              maxHeightClass="max-h-[28rem]"
-            />
-            <PromptMonitorTextBlock
-              title="Active Provider Tools"
-              value={formatJson(promptLoom.providerPayload.activeTools)}
-              emptyText="No active provider tool payload recorded."
-              maxHeightClass="max-h-[28rem]"
-            />
-          </div>
-        </div>
-      </div>
-
-      <div class="grid grid-cols-1 gap-4 xl:grid-cols-2">
-        <div class="rounded-xl border border-bark-200 bg-white p-4">
-          <h3 class="font-medium text-shadow-900">Provider Response & Rendered Chat</h3>
-          <div class="mt-3 space-y-3 text-sm">
-            <PromptMonitorTextBlock
-              title="Provider Response"
-              value={formatJson(promptLoom.providerResult.response)}
-              emptyText="No provider response snapshot recorded."
-              maxHeightClass="max-h-[24rem]"
-            />
-            <PromptMonitorTextBlock
-              title="Rendered Chat Output"
-              value={promptLoom.providerResult.renderedChatOutput}
-              emptyText="No rendered chat output recorded."
-              maxHeightClass="max-h-[20rem]"
-            />
-          </div>
-        </div>
-
-        <div class="rounded-xl border border-bark-200 bg-white p-4">
-          <h3 class="font-medium text-shadow-900">Memory Capture Input & Output</h3>
-          <div class="mt-3 space-y-3 text-sm">
-            <PromptMonitorTextBlock
-              title="Memory Capture Input"
-              value={formatJson(promptLoom.memoryCapture.input)}
-              emptyText="No memory capture input recorded."
-              maxHeightClass="max-h-[24rem]"
-            />
-            <PromptMonitorTextBlock
-              title="Memory Capture Output"
-              value={formatJson(promptLoom.memoryCapture.output)}
-              emptyText="No memory capture output recorded."
-              maxHeightClass="max-h-[16rem]"
-            />
-          </div>
-        </div>
-      </div>
-
-      <div class="grid grid-cols-1 gap-4 xl:grid-cols-2">
-        <div class="rounded-xl border border-bark-200 bg-white p-4">
-          <h3 class="font-medium text-shadow-900">Tool Calls</h3>
-          <div class="mt-3 text-sm">
-            <PromptMonitorTextBlock
-              title="Model-Emitted Tool Calls"
-              value={formatJson(promptLoom.toolActivity.toolCalls)}
-              emptyText="No model-emitted tool calls recorded."
-              maxHeightClass="max-h-[28rem]"
-            />
-          </div>
-        </div>
-
-        <div class="rounded-xl border border-bark-200 bg-white p-4">
-          <h3 class="font-medium text-shadow-900">Tool Results</h3>
-          <div class="mt-3 text-sm">
-            <PromptMonitorTextBlock
-              title="Tool Result Payloads"
-              value={formatJson(promptLoom.toolActivity.toolResults)}
-              emptyText="No tool results recorded."
-              maxHeightClass="max-h-[28rem]"
-            />
-          </div>
-        </div>
-      </div>
-    {:else if activeTab === 'provider'}
-      <div class="grid grid-cols-1 gap-4 xl:grid-cols-2">
-        <div class="rounded-xl border border-bark-200 bg-white p-4">
-          <h3 class="font-medium text-shadow-900">Provider Snapshot</h3>
-          <div class="mt-3 grid grid-cols-2 gap-3 text-sm">
-            <div>
-              <p class="text-shadow-600">Route Kind</p>
-              <p class="mt-1 text-shadow-900">{humanizeToken(turn.snapshot?.promptContext?.providerObservability?.routeKind)}</p>
-            </div>
-            <div>
-              <p class="text-shadow-600">Requested Provider</p>
-              <p class="mt-1 break-all text-shadow-900">{turn.snapshot?.promptContext?.providerObservability?.requestedProvider ?? '—'}</p>
-            </div>
-            <div>
-              <p class="text-shadow-600">Requested Model</p>
-              <p class="mt-1 break-all text-shadow-900">{turn.snapshot?.promptContext?.providerObservability?.requestedModel ?? '—'}</p>
-            </div>
-            <div>
-              <p class="text-shadow-600">Backend Provider</p>
-              <p class="mt-1 break-all text-shadow-900">{turn.snapshot?.promptContext?.providerObservability?.backendProvider ?? '—'}</p>
-            </div>
-            <div>
-              <p class="text-shadow-600">Backend Model</p>
-              <p class="mt-1 break-all text-shadow-900">{turn.snapshot?.promptContext?.providerObservability?.backendModel ?? '—'}</p>
-            </div>
-            <div>
-              <p class="text-shadow-600">Backend API</p>
-              <p class="mt-1 break-all text-shadow-900">{turn.snapshot?.promptContext?.providerObservability?.backendApi ?? '—'}</p>
-            </div>
-            <div>
-              <p class="text-shadow-600">Base URL</p>
-              <p class="mt-1 break-all text-shadow-900">{turn.snapshot?.promptContext?.providerObservability?.backendBaseUrl ?? '—'}</p>
-            </div>
-            <div>
-              <p class="text-shadow-600">Provider Wire Messages</p>
-              <p class="mt-1 text-shadow-900">{turn.snapshot?.promptContext?.providerObservability?.providerWireMessages?.length ?? 0}</p>
-            </div>
-          </div>
-        </div>
-
-        <div class="rounded-xl border border-bark-200 bg-white p-4">
-          <h3 class="font-medium text-shadow-900">System Role Transport</h3>
-          <div class="mt-3 grid grid-cols-2 gap-3 text-sm">
-            <div>
-              <p class="text-shadow-600">System Transport</p>
-              <p class="mt-1 text-shadow-900">{humanizeToken(turn.snapshot?.promptContext?.providerObservability?.systemRole?.transport)}</p>
-            </div>
-            <div>
-              <p class="text-shadow-600">Supports System Role</p>
-              <p class="mt-1 text-shadow-900">{formatCapability(turn.snapshot?.promptContext?.providerObservability?.systemRole?.supportsSystemRole)}</p>
-            </div>
-            <div>
-              <p class="text-shadow-600">Supports Developer Role</p>
-              <p class="mt-1 text-shadow-900">{formatCapability(turn.snapshot?.promptContext?.providerObservability?.systemRole?.supportsDeveloperRole)}</p>
-            </div>
-            <div>
-              <p class="text-shadow-600">Out-of-Band System Prompt</p>
-              <p class="mt-1 text-shadow-900">{formatCapability(turn.snapshot?.promptContext?.providerObservability?.systemRole?.usesOutOfBandSystemPrompt)}</p>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <div class="rounded-xl border border-bark-200 bg-white p-4">
-        <div class="flex flex-wrap items-center gap-2">
-          <h3 class="font-medium text-shadow-900">Serialized Provider Payload</h3>
-          <span class="rounded-full border border-bark-300 bg-bark-50 px-2 py-0.5 text-xs font-medium uppercase tracking-wide text-shadow-700">
-            {promptLoom.providerWire.source === 'prompt_plan' ? 'from PromptPlan' : 'recorded snapshot'}
-          </span>
-          {#if promptLoom.providerWire.legacy}
-            <span class="rounded-full border border-gold-300 bg-gold-50 px-2 py-0.5 text-xs font-medium uppercase tracking-wide text-shadow-900">
-              legacy turn (pre-plan)
-            </span>
-          {/if}
-          {#if promptLoom.providerWire.systemRoleTransport}
-            <span class="rounded-full border border-bark-300 bg-white px-2 py-0.5 text-xs text-shadow-700">
-              transport: {promptLoom.providerWire.systemRoleTransport}
-            </span>
-          {/if}
-        </div>
-        <p class="mt-1 text-xs text-shadow-600">
-          {#if promptLoom.providerWire.source === 'prompt_plan'}
-            System prompt, message array, and tool definitions serialized from the persisted PromptPlan —
-            byte-equal to what shipped to the provider (single assembly path).
-          {:else}
-            {LEGACY_TURN_LABEL} The payload below is the recorded provider-wire capture.
-          {/if}
-        </p>
-        <div class="mt-3 space-y-3 text-sm">
-          <PromptMonitorTextBlock
-            title="System Prompt (as shipped)"
-            value={promptLoom.providerWire.systemPrompt}
-            emptyText="No serialized system prompt recorded."
-            maxHeightClass="max-h-[28rem]"
-          />
-          <PromptMonitorTextBlock
-            title={`Tool Definitions (${promptLoom.providerWire.toolDefinitions.length}, as shipped)`}
-            value={formatJson(promptLoom.providerWire.toolDefinitions)}
-            emptyText="No tool definitions shipped this turn."
-            maxHeightClass="max-h-[24rem]"
-          />
-        </div>
-      </div>
-
-      <p class="text-xs text-shadow-600">
-        Provider wire messages carry the full, untruncated content sent to the provider. If the
-        message set looks shorter than the raw session history, that reflects the real
-        session-budgeted context (compaction / history span), not a snapshot or UI cap.
-      </p>
-      <div class="grid grid-cols-1 gap-4 xl:grid-cols-2">
-        <PromptMonitorMessageList
-          title={`Provider Wire Messages (${promptLoom.providerWire.messages.length})`}
-          messages={promptLoom.providerWire.messages.map(message => ({
-            role: `${humanizeToken(message.role)} · ${humanizeToken(message.source)}`,
-            content: message.content,
-          }))}
-          emptyText="No provider-wire message snapshot recorded."
-        />
-
-        <div class="rounded-xl border border-bark-200 bg-white p-4">
-          <h3 class="font-medium text-shadow-900">Provider Response</h3>
-          <div class="mt-3 grid grid-cols-2 gap-3 text-sm">
-            <div>
-              <p class="text-shadow-600">Response Model</p>
-              <p class="mt-1 break-all text-shadow-900">{turn.snapshot?.promptContext?.response?.model ?? '—'}</p>
-            </div>
-            <div>
-              <p class="text-shadow-600">Stop Reason</p>
-              <p class="mt-1 text-shadow-900">{turn.snapshot?.promptContext?.response?.stopReason ?? '—'}</p>
-            </div>
-            <div>
-              <p class="text-shadow-600">Tool Calls Requested</p>
-              <p class="mt-1 text-shadow-900">{turn.snapshot?.promptContext?.response?.toolCallCount ?? 0}</p>
-            </div>
-            <div>
-              <p class="text-shadow-600">Provider Error</p>
-              <p class="mt-1 text-shadow-900">{turn.snapshot?.promptContext?.response?.errorMessage ?? '—'}</p>
-            </div>
-          </div>
-          <div class="mt-4 space-y-3 text-sm">
-            <PromptMonitorTextBlock
-              title="Response Content"
-              value={turn.snapshot?.promptContext?.response?.content ?? turn.record?.assistantMessage?.content}
-              emptyText="No response content recorded."
-              maxHeightClass="max-h-[20rem]"
-            />
-            <PromptMonitorTextBlock
-              title="Provider Reasoning"
-              value={turn.snapshot?.promptContext?.response?.reasoning}
-              emptyText="No provider reasoning snapshot recorded."
-              maxHeightClass="max-h-[20rem]"
-            />
-          </div>
-        </div>
-      </div>
-    {:else if activeTab === 'cache'}
-      {#if !plan}
-        <div class="rounded-xl border border-gold-300 bg-gold-50 p-4 text-sm text-shadow-800">
-          <p class="font-medium text-shadow-900">Legacy turn (pre-plan)</p>
-          <p class="mt-1">{LEGACY_TURN_LABEL} No cache plan is recorded for this turn.</p>
-        </div>
-      {:else}
-        <div class="rounded-xl border border-bark-200 bg-white p-4">
-          <h3 class="font-medium text-shadow-900">Volatility Regions</h3>
-          <p class="mt-1 text-xs text-shadow-600">
-            Ordered cache regions from the plan's cachePlan: blocks[0..{plan.cachePlan.staticBoundary}) are
-            static, blocks[{plan.cachePlan.staticBoundary}..{plan.cachePlan.sessionStableBoundary}) are
-            session-stable, the rest re-render every turn.
-          </p>
-          <div class="mt-3 space-y-3">
-            {#each cacheRegions as region (region.name)}
-              <div class="rounded-lg border border-bark-200 bg-bark-50 p-3">
-                <div class="flex flex-wrap items-center gap-2">
-                  <span class={`rounded-full border px-2 py-0.5 text-xs font-medium uppercase tracking-wide ${volatilityTone(region.name)}`}>
-                    {region.name.replace('_', ' ')}
-                  </span>
-                  <span class="text-sm text-shadow-700">
-                    {region.blocks.length} block{region.blocks.length === 1 ? '' : 's'} · {regionTokens(region.blocks)} tokens (est.)
-                  </span>
-                </div>
-                {#if region.blocks.length === 0}
-                  <p class="mt-2 text-sm text-shadow-600">No blocks in this region.</p>
-                {:else}
-                  <div class="mt-2 flex flex-wrap gap-2">
-                    {#each region.blocks as block (block.id)}
-                      <span class="rounded-full border border-bark-300 bg-white px-2 py-0.5 font-mono text-xs text-shadow-800" title={`producer ${block.producer} · scope ${block.scopeKey ?? '—'} · ${block.tokensEst} tokens (est.)`}>
-                        {block.id}
-                      </span>
-                    {/each}
-                  </div>
-                {/if}
-              </div>
-            {/each}
-          </div>
-        </div>
-      {/if}
-
-      <div class="grid grid-cols-1 gap-4 xl:grid-cols-2">
-        <div class="rounded-xl border border-bark-200 bg-white p-4">
-          <h3 class="font-medium text-shadow-900">Static-Prefix Hash Timeline</h3>
-          <p class="mt-1 text-xs text-shadow-600">
-            Static hash across the loaded recent turns (oldest first). A stable hash means the frozen
-            static prefix stayed byte-identical turn over turn.
-          </p>
-          {#if staticHashTimeline.length === 0}
-            <p class="mt-3 text-sm text-shadow-600">No turns loaded for this session.</p>
-          {:else}
-            <div class="mt-3 space-y-2">
-              {#each staticHashTimeline as entry (entry.turnId)}
-                <div class="flex flex-wrap items-center justify-between gap-2 rounded-lg border px-3 py-2
-                  {entry.turnId === turn.turnId ? 'border-gold-400 bg-gold-50' : 'border-bark-200 bg-white'}">
-                  <div class="min-w-0">
-                    <p class="truncate font-mono text-sm text-shadow-900">{truncateValue(entry.turnId, 24)}</p>
-                    <p class="mt-0.5 font-mono text-xs text-shadow-600">{truncateValue(entry.staticHash, 24)}</p>
-                  </div>
-                  <span class={`shrink-0 rounded-full border px-2 py-0.5 text-xs font-medium ${
-                    entry.changedFromPrevious === null
-                      ? 'border-bark-300 bg-bark-100 text-shadow-600'
-                      : entry.changedFromPrevious
-                        ? 'border-wilt-300 bg-wilt-50 text-wilt-700'
-                        : 'border-moss-300 bg-moss-50 text-moss-700'
-                  }`}>
-                    {entry.changedFromPrevious === null
-                      ? 'no prior hash'
-                      : entry.changedFromPrevious
-                        ? 'hash changed'
-                        : 'hash stable'}
-                  </span>
-                </div>
-              {/each}
-            </div>
-          {/if}
-        </div>
-
-        <div class="rounded-xl border border-bark-200 bg-white p-4">
-          <h3 class="font-medium text-shadow-900">Provider Cache Telemetry</h3>
-          <p class="mt-1 text-xs text-shadow-600">
-            Provider cache hit/miss telemetry lands in E2.4. Whatever cache fields the runtime already
-            records for this turn are rendered below, absent-tolerant.
-          </p>
-          <div class="mt-3 text-sm">
-            <PromptMonitorTextBlock
-              title="promptCaching (recorded)"
-              value={formatJson(providerCacheTelemetry)}
-              emptyText="No provider cache telemetry recorded for this turn (placeholder until E2.4)."
-              maxHeightClass="max-h-64"
-            />
-          </div>
-        </div>
       </div>
     {:else if activeTab === 'diff'}
       <div class="rounded-xl border border-bark-200 bg-white p-4">

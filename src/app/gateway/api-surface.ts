@@ -30,6 +30,7 @@ import type { SubstrateConfig } from '../../system/config/runtime-config-contrac
 import { buildExternalChannelProfiles, type RuntimeChannelsConfig } from '../../channels/backplane/config.js';
 import { resolveCompanionNameFromConfig } from '../../core/identity/companion-runtime.js';
 import type { EventBus } from '../../shared/event-bus.js';
+import type { CompanionRelayHttpDeps } from '../../channels/api/server/companion-relay-routes.js';
 import type { SessionManager } from '../../core/session/manager.js';
 import type { SubstrateAgent } from '../../core/agent/substrate-agent.js';
 import type { SensorIngestPort } from '../../shared/telemetry/sensor-ingest-port.js';
@@ -60,6 +61,8 @@ export interface StartOptionalGatewayApiServerOptions extends GatewayApiSurfaceB
    * real injection channel. Null when the firewall mode is 'off'.
    */
   intakeScreening?: IntakeScreeningService | null;
+  /** Companion event relay surface (w9hj.1); `/v1/companion/*` 503s without it. */
+  companionRelay?: CompanionRelayHttpDeps;
 }
 
 /**
@@ -336,6 +339,8 @@ export async function startOptionalGatewayApiServer(
     externalChannelProfiles: options.channelsConfig
       ? buildExternalChannelProfiles(options.channelsConfig)
       : {},
+    ...(options.satelliteRegistry ? { satelliteRegistry: options.satelliteRegistry } : {}),
+    ...(options.companionRelay ? { companionRelay: options.companionRelay } : {}),
   });
   await apiServer.start();
   return apiServer;

@@ -31,12 +31,15 @@ import {
   type CanaryScanResult,
 } from '../../core/cogsec/canary/egress-scan.js';
 import type { CogSecEventStore } from '../../core/cogsec/events.js';
+import type { IntakeFirewallMode } from '../../system/config/intake-policy-config.js';
 
 export interface CanaryEgressGuardLogger {
   warn(message: string, meta?: Record<string, unknown>): void;
 }
 
 export interface CanaryEgressGuardDeps {
+  /** Shadow records would-hold findings but never blocks; enforce holds. */
+  mode?: Exclude<IntakeFirewallMode, 'off'>;
   /** Absent ⇒ the guard still HOLDS leaks, but records no durable CogSec event. */
   cogSecEvents?: Pick<CogSecEventStore, 'createEvent'>;
   log?: CanaryEgressGuardLogger;
@@ -71,6 +74,7 @@ function resolveSourceChannelId(method: string, params: unknown): string {
 export const CANARY_HELD_NOTICE = INTAKE_FIREWALL_NOTICE_TEMPLATES.sinkHeld;
 
 export function createCanaryEgressGuard(deps: CanaryEgressGuardDeps): CanaryEgressGuard {
+  const mode = deps.mode ?? 'enforce';
   const recordLeak = (method: string, token: string, params: unknown, scan: CanaryScanResult): void => {
     if (scan.leaked !== true) return;
     // The raw token NEVER enters an event, audit row, or log line — only its
@@ -78,8 +82,10 @@ export function createCanaryEgressGuard(deps: CanaryEgressGuardDeps): CanaryEgre
     const tokenHash = hashCanaryToken(token);
     deps.recordAudit?.({
       method,
-      decision: 'DENY',
-      params: { canaryEgressHeld: true, reason: scan.reason },
+      decision: mode === 'enforce' ? 'DENY' : 'ALLOW',
+      params: mode === 'enforce'
+        ? { canaryEgressHeld: true, reason: scan.reason }
+        : { canaryEgressWouldHold: true, reason: scan.reason },
     });
     if (!deps.cogSecEvents) return;
     try {
@@ -91,8 +97,9 @@ export function createCanaryEgressGuard(deps: CanaryEgressGuardDeps): CanaryEgre
         actor: 'cogsec:canary-egress',
         actions: [],
         sealedForensicPayloadHashes: [tokenHash],
-        safeAgentSummary:
-          `Outbound content on ${method} matched the session integrity marker and was held for review.`,
+        safeAgentSummary: mode === 'enforce'
+          ? `Outbound content on ${method} matched the session integrity marker and was held for review.`
+          : `Outbound content on ${method} matched the session integrity marker in shadow mode and was allowed.`,
       });
     } catch (error) {
       // Holding the action is what matters; a failed audit event is loud, not
@@ -117,11 +124,15 @@ export function createCanaryEgressGuard(deps: CanaryEgressGuardDeps): CanaryEgre
       const scan = scanEgressParamsForCanary(cleaned, token);
       if (scan.leaked) {
         recordLeak(method, token, cleaned, scan);
-        deps.log?.warn('Canary egress tripwire held an outbound action', {
+        deps.log?.warn(mode === 'enforce'
+          ? 'Canary egress tripwire held an outbound action'
+          : 'Canary egress tripwire observed a would-hold action in shadow mode', {
           method,
           reason: scan.reason,
         });
-        throw new JSONRPCErrorException(CANARY_HELD_NOTICE, GatewayErrors.EGRESS_HELD);
+        if (mode === 'enforce') {
+          throw new JSONRPCErrorException(CANARY_HELD_NOTICE, GatewayErrors.EGRESS_HELD);
+        }
       }
       return cleaned;
     },

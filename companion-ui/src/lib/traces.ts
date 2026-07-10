@@ -192,5 +192,90 @@ function eventToTrace(
           sessionId: message.sessionId,
         },
       };
+    case 'approval.requested':
+      return {
+        ...common,
+        operationClass: 'approval_request',
+        status: 'active',
+        summary: 'Approval requested',
+        metadata: {
+          approvalId: message.data.id,
+          title: message.data.title,
+          expiresAt: message.data.expiresAt ?? '',
+        },
+      };
+    case 'approval.resolved':
+      return {
+        ...common,
+        operationClass: 'approval_resolution',
+        status: message.data.status === 'approved' ? 'done' : 'failed',
+        summary: `Approval ${message.data.status}`,
+        metadata: {
+          approvalId: message.data.id,
+          status: message.data.status,
+        },
+      };
+    case 'artifact.created':
+      return {
+        ...common,
+        operationClass: 'artifact_created',
+        status: 'done',
+        summary: 'Artifact created',
+        metadata: {
+          artifactId: message.data.id,
+          label: message.data.label,
+          mediaType: message.data.mediaType,
+          previewable: message.data.previewable,
+        },
+      };
+    case 'artifact.preview.result':
+      return {
+        ...common,
+        operationClass: 'artifact_preview',
+        status: 'done',
+        summary: 'Artifact preview ready',
+        metadata: {
+          requestId: message.requestId,
+          artifactId: message.artifactId,
+          mediaType: message.mediaType,
+          encodedChars: message.data.length,
+        },
+      };
+    case 'artifact.preview.error':
+      return {
+        ...common,
+        operationClass: 'artifact_preview',
+        status: 'failed',
+        summary: message.message,
+        metadata: {
+          requestId: message.requestId,
+          artifactId: message.artifactId,
+        },
+      };
+    case 'tool.activity':
+      return {
+        ...common,
+        operationClass: 'tool_activity',
+        status: toolActivityStatus(message.data.phase),
+        summary: `${message.data.tool} ${message.data.phase}`,
+        metadata: {
+          toolActivityId: message.data.id,
+          tool: message.data.tool,
+          phase: message.data.phase,
+          detail: message.data.detail ?? '',
+        },
+      };
+  }
+}
+
+function toolActivityStatus(phase: 'started' | 'progress' | 'completed' | 'failed'): OperationalTraceStatus {
+  switch (phase) {
+    case 'started':
+    case 'progress':
+      return 'active';
+    case 'completed':
+      return 'done';
+    case 'failed':
+      return 'failed';
   }
 }

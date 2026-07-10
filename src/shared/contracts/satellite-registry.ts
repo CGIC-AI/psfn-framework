@@ -39,6 +39,11 @@ export const SATELLITE_TELEMETRY_SCOPES = [
   'ambient',
   'device',
   'status',
+  // Companion event relay scopes (w9hj.1). Deny by default: an endpoint
+  // receives companion events / may act on approvals only when granted here.
+  'approvals',
+  'artifacts',
+  'tool_activity',
 ] as const;
 
 export type SatelliteTelemetryScope = typeof SATELLITE_TELEMETRY_SCOPES[number];

@@ -71,6 +71,13 @@ import type { IntakeScreeningService } from '../../core/cogsec/intake/screening.
 import type { CogSecEventStore } from '../../core/cogsec/events.js';
 import { createCanaryEgressGuard, type CanaryEgressGuard } from './canary-egress-guard.js';
 import type { GatewayVisionIntakeScreener } from './intake/compose-screening.js';
+import type { EventBus } from '../../shared/event-bus.js';
+import type {
+  ConfirmationQueueHistoryEntry,
+  ConfirmationResolveResult,
+} from '../../system/capabilities/confirmation-queue.js';
+import type { AuditSummaryEntry } from './audit-port.js';
+import { parseCompanionRelayPublishParams } from '../../channels/backplane/companion-relay/relay.js';
 
 const log = createComponentLogger('Gateway');
 const DEFAULT_CONNECTION_HEALTHCHECK_STALE_AFTER_MS = 90_000;
@@ -221,6 +228,13 @@ export interface GatewayServerOptions {
    * and rejects every send.
    */
   companionChannels?: GatewayCompanionChannelLane;
+  /**
+   * Gateway-process event bus. Carries the redacted `companion.*` relay
+   * events: approval lifecycle emitted at the confirmation-queue choke
+   * points, plus agent-forwarded tool/artifact events re-published from
+   * `companion.event.publish` (w9hj.1).
+   */
+  eventBus: EventBus;
 }
 
 export class GatewayServer {
@@ -235,7 +249,7 @@ export class GatewayServer {
   private readonly wyomingShardRouting: WyomingShardRoutingConfig;
   private readonly ntfyNotifier: GatewayNtfyNotifier;
   private readonly approvalBoundary: ApprovalBoundaryService;
-  private readonly canaryEgressGuard: CanaryEgressGuard;
+  private readonly canaryEgressGuard: CanaryEgressGuard | null;
   private readonly runtimeHealthTracker: GatewayRuntimeHealthTracker;
   private readonly apiStreamListeners = new Map<string, Set<(text: string) => void>>();
   private readonly multiCompanion: GatewayMultiCompanionConfig;
@@ -275,10 +289,14 @@ export class GatewayServer {
     this.capabilityTierProvider = options.capabilityTierProvider ?? (() => 'nursery');
     this.wyomingShardRouting = options.wyomingShardRouting;
     this.ntfyNotifier = new GatewayNtfyNotifier(options.ntfy);
-    this.canaryEgressGuard = createCanaryEgressGuard({
-      ...(options.cogSecEvents ? { cogSecEvents: options.cogSecEvents } : {}),
-      log,
-    });
+    const cogSecMode = options.intakeScreening?.mode ?? 'off';
+    this.canaryEgressGuard = cogSecMode === 'off'
+      ? null
+      : createCanaryEgressGuard({
+          mode: cogSecMode,
+          ...(options.cogSecEvents ? { cogSecEvents: options.cogSecEvents } : {}),
+          log,
+        });
     this.approvalBoundary = createGatewayApprovalBoundaryService({
       policyConfig: options.policyConfig,
       ntfyNotifier: this.ntfyNotifier,
@@ -286,6 +304,7 @@ export class GatewayServer {
       capabilityTierProvider: this.capabilityTierProvider,
       confirmation: options.confirmation,
       canaryEgressGuard: this.canaryEgressGuard,
+      eventBus: options.eventBus,
       audit: this.audit.bind(this),
       auditComplete: this.auditComplete.bind(this),
       recordMethodSuccess: (method) => this.runtimeHealthTracker.recordMethodSuccess(method),
@@ -315,7 +334,9 @@ export class GatewayServer {
       // handler or any audit summary.
       let cleaned: P;
       try {
-        cleaned = this.canaryEgressGuard.inspect(method, params) as P;
+        cleaned = (this.canaryEgressGuard
+          ? this.canaryEgressGuard.inspect(method, params)
+          : params) as P;
       } catch (err) {
         this.runtimeHealthTracker.recordMethodFailure(method, err);
         const heldAuditId = await this.audit(method, 'DENY', { canaryEgressHeld: true });
@@ -428,6 +449,60 @@ export class GatewayServer {
       this.dispatchApiStreamDelta(params as ApiStreamDeltaNotification);
       return null;
     });
+    target.addMethod('companion.event.publish', async (params: unknown) => {
+      await this.dispatchCompanionEventPublish(params);
+      return null;
+    });
+  }
+
+  /**
+   * Agent-forwarded redacted companion events (tool activity, artifacts).
+   * The params are re-validated and payloads reconstructed field-by-field at
+   * this process boundary; malformed frames are rejected, never partially
+   * published. Approval events cannot arrive here — they originate inside
+   * the gateway approval boundary.
+   */
+  private async dispatchCompanionEventPublish(params: unknown): Promise<void> {
+    const parsed = parseCompanionRelayPublishParams(params);
+    if (parsed.kind === 'tool.activity') {
+      await this.options.eventBus.emit('companion.tool.activity', {
+        payload: parsed.payload,
+        ...(parsed.channelId ? { channelId: parsed.channelId } : {}),
+        timestamp: Date.now(),
+      });
+      return;
+    }
+    await this.options.eventBus.emit('companion.artifact.created', {
+      payload: parsed.payload,
+      ...(parsed.preview ? { preview: parsed.preview } : {}),
+      ...(parsed.channelId ? { channelId: parsed.channelId } : {}),
+      timestamp: Date.now(),
+    });
+  }
+
+  /**
+   * Companion relay approval surface (w9hj.1): decisions from the Satellite
+   * Hub resolve through the SAME approval boundary / confirmation queue as
+   * operator decisions — no bypass of the capability-tier path.
+   */
+  resolveCompanionApproval(params: {
+    id: string;
+    decision: 'approve' | 'deny';
+  }): Promise<ConfirmationResolveResult> {
+    return this.approvalBoundary.resolveConfirmation(params);
+  }
+
+  findConfirmationHistoryEntry(id: string): ConfirmationQueueHistoryEntry | null {
+    return this.approvalBoundary.listConfirmationHistory()
+      .find((entry) => entry.id === id) ?? null;
+  }
+
+  /** Fail-closed audit hook for companion relay decisions. */
+  async recordCompanionAuditSummary(entry: AuditSummaryEntry): Promise<void> {
+    if (!this.options.auditStore) {
+      throw new Error('Gateway audit store is not configured');
+    }
+    await this.options.auditStore.recordSummary(entry);
   }
 
   /** True when per-account discord routing (W1-P2 multi-account) is active. */

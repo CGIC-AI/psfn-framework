@@ -14,8 +14,8 @@ import {
   PSFN_SATELLITE_MOBILE_CHAT_APP_NAME,
 } from '../lib/api/auth.js';
 import { SatelliteHubClient } from '../lib/api/client.js';
-import { deriveApprovalPanelState } from '../lib/approvals.js';
-import { deriveArtifactShelfState } from '../lib/artifacts.js';
+import { deriveApprovalPanelState, submitApprovalDecision } from '../lib/approvals.js';
+import { deriveArtifactShelfState, readArtifactPreview } from '../lib/artifacts.js';
 import {
   createInitialHubStreamState,
   HubStreamStore,
@@ -46,6 +46,7 @@ export function App() {
   const [autoReconnect, setAutoReconnect] = useState('exponential');
   const [spriteEnabled, setSpriteEnabled] = useState(true);
   const [spriteAnimations, setSpriteAnimations] = useState(true);
+  const [now, setNow] = useState(() => Date.now());
   const composer = useComposerController();
   const storeRef = useRef<HubStreamStore | null>(null);
 
@@ -87,12 +88,23 @@ export function App() {
     return PSFN_SATELLITE_MOBILE_CHAT_APP_NAME;
   }, [streamState.session?.identity?.companion?.name, streamState.session?.identity?.user?.name]);
 
+  const hasPendingExpiry = useMemo(
+    () => streamState.approvals.some((entry) => entry.status === 'pending' && Boolean(entry.expiresAt)),
+    [streamState.approvals],
+  );
+
+  useEffect(() => {
+    if (!hasPendingExpiry) return undefined;
+    const interval = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(interval);
+  }, [hasPendingExpiry]);
+
   const traces = useMemo(() => deriveOperationalTraces(streamState), [streamState]);
   const filteredTraces = useMemo(
     () => traces.filter((trace) => traceMatchesFilter(trace, activityFilter)),
     [activityFilter, traces],
   );
-  const approvals = useMemo(() => deriveApprovalPanelState(streamState), [streamState]);
+  const approvals = useMemo(() => deriveApprovalPanelState(streamState, now), [streamState, now]);
   const artifacts = useMemo(() => deriveArtifactShelfState(streamState), [streamState]);
   const canSend = streamState.connection === 'ready' || streamState.connection === 'connected';
   const connectionTone = getConnectionTone(streamState.connection, connecting);
@@ -147,6 +159,26 @@ export function App() {
     storeRef.current?.interrupt();
   }
 
+  function decideApproval(id: string, decision: 'approve' | 'deny') {
+    const store = storeRef.current;
+    if (!store) return;
+    try {
+      submitApprovalDecision(store, streamState, id, decision);
+    } catch {
+      // Fail closed: transport/capability errors surface via the hub error path.
+    }
+  }
+
+  function previewArtifact(artifactId: string) {
+    const store = storeRef.current;
+    if (!store) return;
+    try {
+      readArtifactPreview(store, streamState, artifactId);
+    } catch {
+      // Fail closed: non-previewable / unsupported artifacts never fetch.
+    }
+  }
+
   return (
     <main className="app-shell">
       <div className="ornament ornament-left" aria-hidden />
@@ -189,6 +221,8 @@ export function App() {
         approvals={approvals}
         artifacts={artifacts}
         error={streamState.failure?.message ?? configError}
+        onApprovalDecision={decideApproval}
+        onArtifactPreview={previewArtifact}
         stacked={composer.pendingAttachments.length > 0}
         voiceNotice={composer.voiceNotice}
       />

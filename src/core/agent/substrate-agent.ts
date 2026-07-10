@@ -183,6 +183,7 @@ import { TurnSupportRuntime } from './substrate-agent/turn-support-runtime.js';
 import type { ObserverEvalSidecarRuntime } from '../eval/observer-sidecar/types.js';
 import type { FatigueBudgetPort } from './fatigue/fatigue-budget.js';
 import type { RuntimeServiceHealthStatus } from '../../operator/tool-health/types.js';
+import type { IntakeFirewallMode } from '../../system/config/intake-policy-config.js';
 
 const log = createComponentLogger('SubstrateAgent');
 
@@ -437,6 +438,8 @@ export class SubstrateAgent {
   imageVisionReviewer: ImageVisionReviewer | null = null;
   /** htm9.8 vision intake screener (gateway-backed); null when not wired. */
   visionIntakeScreener: VisionIntakeImageScreenerPort | null = null;
+  /** CogSec rollout posture; off keeps canary markers out of prompts entirely. */
+  cogSecMode: IntakeFirewallMode = 'off';
   observerEvalSidecar: ObserverEvalSidecarRuntime | null = null;
 
   constructor(
@@ -1105,6 +1108,7 @@ export class SubstrateAgent {
       llmClient: this.llmClient,
       imageVisionReviewer: this.imageVisionReviewer,
       visionIntakeScreener: this.visionIntakeScreener,
+      cogSecMode: this.cogSecMode,
       sessionManager: this.sessionManager,
       config: this.config,
       runtimeMode: this.runtimeMode,

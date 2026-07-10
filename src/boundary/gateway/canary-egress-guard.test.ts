@@ -77,6 +77,34 @@ describe('canary egress guard', () => {
     expect(store.inputs).toHaveLength(1);
   });
 
+  it('records but allows a would-hold leak in shadow mode', () => {
+    const token = generateCanaryToken();
+    const store = makeFakeEventStore();
+    const recordAudit = vi.fn();
+    const guard = createCanaryEgressGuard({
+      mode: 'shadow',
+      cogSecEvents: store,
+      recordAudit,
+    });
+
+    const cleaned = guard.inspect('discord.send', {
+      channelId: 'chan-shadow',
+      content: `observed ${token}`,
+      [CANARY_CARRIER_PARAM_KEY]: token,
+    });
+
+    expect(cleaned).toEqual({
+      channelId: 'chan-shadow',
+      content: `observed ${token}`,
+    });
+    expect(store.inputs).toHaveLength(1);
+    expect(recordAudit).toHaveBeenCalledWith(expect.objectContaining({
+      method: 'discord.send',
+      decision: 'ALLOW',
+      params: expect.objectContaining({ canaryEgressWouldHold: true }),
+    }));
+  });
+
   it('never exposes the raw token in the event or logs (cleartext-free)', () => {
     const token = generateCanaryToken();
     const store = makeFakeEventStore();

@@ -33,6 +33,7 @@ import { loadIntakePolicyConfig } from '../../../system/config/intake-policy-con
 import { resolveOptionalCredentialReference } from '../../custody/credential-vault.js';
 import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
 import {
+  assertInjectionModelProvisioned,
   createInjectionClassifier,
   INJECTION_CLASSIFIER_REQUIRED_FILES,
   INJECTION_CLASSIFIER_SCANNER_ID,
@@ -153,6 +154,11 @@ export async function composeGatewayIntakeScreening(input: {
       labelThreshold: policy.injectionClassifier.labelThreshold,
     });
     log.info('Intake L1.5 injection classifier loaded', { modelDir });
+  } else if (existsSync(modelDir)) {
+    // A partial footprint means provisioning began but did not complete.
+    // Treat it as broken state, not as the clean "not installed" case: an
+    // interrupted download must never silently downgrade live screening.
+    assertInjectionModelProvisioned(modelDir);
   } else {
     log.warn(
       'Intake L1.5 injection classifier weights are not provisioned; '

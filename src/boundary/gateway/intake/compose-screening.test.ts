@@ -1,6 +1,6 @@
 // ── Gateway intake screening composition tests (htm9.8 vision wiring) ──
 
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -79,5 +79,17 @@ describe('composeGatewayIntakeScreening vision wiring (htm9.8)', () => {
     });
     expect(composition.visionIntake).toBeNull();
     await composition.dispose();
+  });
+
+  it('fails startup when the optional L1.5 model directory is only partially provisioned', async () => {
+    const input = makeDataDirs('shadow', false);
+    const modelDir = input.env.PSFN_INJECTION_MODEL_DIR!;
+    mkdirSync(modelDir, { recursive: true });
+    writeFileSync(join(modelDir, 'config.json'), '{}');
+
+    await expect(composeGatewayIntakeScreening({
+      ...input,
+      screenerBackend: null,
+    })).rejects.toThrow(/model is not provisioned.*missing/iu);
   });
 });

@@ -509,6 +509,7 @@ function createRuntime(params: {
   observerEvalSidecar?: ObserverEvalSidecarRuntime | null;
   fatigueBudget?: FatigueBudgetPort | null;
   configOverrides?: Partial<SubstrateConfig>;
+  cogSecMode?: TurnExecutionRuntime['cogSecMode'];
 }) {
   const agentState = {
     messages: [] as any[],
@@ -534,6 +535,7 @@ function createRuntime(params: {
       complete: vi.fn(),
     },
     imageVisionReviewer: params.imageVisionReviewer ?? null,
+    cogSecMode: params.cogSecMode ?? 'enforce',
     sessionManager: {
       buildContext: params.buildContext,
       captureTurnSessionContext: vi.fn(async (input: { channelId: string }) => ({
@@ -2308,6 +2310,33 @@ describe('handleMessageForTurn compaction scheduling', () => {
         content: 'Vega (discord:388908766306893854): can you hear us?',
       },
     ]);
+  });
+
+  it('keeps off mode inert by omitting the canary marker from the prompt plan', async () => {
+    const eventBus = new EventBus();
+    const buildContext = vi.fn(async () => ({
+      systemPrompt: 'System prompt',
+      messages: [],
+      manifest: undefined,
+    }));
+    const runtime = createRuntime({
+      eventBus,
+      sessionManager: {} as SessionManager,
+      buildContext,
+      scheduleAutoCompactionBetweenTurns: vi.fn(async () => undefined),
+      awaitPendingAutoCompaction: vi.fn(async () => undefined),
+      recordUserMessage: vi.fn(() => 1),
+      recordAssistantMessage: vi.fn(() => 2),
+      cogSecMode: 'off',
+    });
+
+    await handleMessageForTurn(runtime, createMessage('msg-cogsec-off'));
+
+    const buildTurnRecordMock = runtime.buildTurnRecord as ReturnType<typeof vi.fn>;
+    const recordedInput = buildTurnRecordMock.mock.calls[0]?.[0] as { turnSnapshot?: Record<string, unknown> };
+    const plan = recordedInput.turnSnapshot?.plan as PromptPlan;
+    expect(getPromptPlanBlockText(plan, 'cogsec.canary')).toBe('');
+    expect(serializePromptPlanSystemPrompt(plan)).not.toContain('session-integrity');
   });
 
   it('moves system context into the prompt system lane instead of assistant history in observability snapshots', async () => {

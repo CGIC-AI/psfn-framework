@@ -87,6 +87,7 @@ import {
 import { hasVisionTurnInputs } from './vision-attachments.js';
 import type { SessionEntry } from '../../session/types.js';
 import type { ConversationScopeSpeaker } from '../../session/conversation-scope.js';
+import type { IntakeFirewallMode } from '../../../system/config/intake-policy-config.js';
 
 const log = createComponentLogger('SubstrateAgent');
 
@@ -113,6 +114,7 @@ export interface TurnExecutionRuntime {
   imageVisionReviewer: ImageVisionReviewer | null;
   /** htm9.8 vision intake screener; null when the firewall is not wired. */
   visionIntakeScreener: VisionIntakeImageScreenerPort | null;
+  cogSecMode: IntakeFirewallMode;
   sessionManager: SessionManager;
   config: CoreSubstrateConfig;
   runtimeMode: RuntimeMode;
@@ -805,9 +807,11 @@ export async function handleMessageForTurn(
       autoloadOutcome,
     );
     const responseStyle = runtime.resolveResponseStyle(message, channelType, channelMeta);
-    // htm9.18: resolve (or mint) this session's canary token. It is planted in
-    // the prompt below and rides with egress calls made during the invocation.
-    const canaryToken = sessionCanaryRegistry.ensure(emotionSessionId);
+    // htm9.18: off mode is genuinely inert — no marker in the prompt and no
+    // turn-scoped carrier. Shadow/enforce both observe; only enforce may hold.
+    const canaryToken = runtime.cogSecMode === 'off'
+      ? undefined
+      : sessionCanaryRegistry.ensure(emotionSessionId);
     const promptAssembly = await assembleTurnPrompt({
       runtime,
       message,
@@ -834,7 +838,7 @@ export async function handleMessageForTurn(
       currentSessionEntryId: userSessionEntryId,
       memoryManifestSeed: preTurnState.memoryManifestSeed ?? observability.getMemoryManifestSeed(),
       ...(fatigueDecision ? { fatigue: fatigueDecision.metadata } : {}),
-      canaryToken,
+      ...(canaryToken ? { canaryToken } : {}),
       getRetrievalProvenanceRefs: observability.getRetrievalProvenanceRefs,
       getObservedTurnRetrievals: observability.getObservedTurnRetrievals,
       observability,
@@ -849,9 +853,7 @@ export async function handleMessageForTurn(
     // undelivered artifact and the in-turn response_control tool can refuse a
     // no-reply that would silently drop it.
     let scopedPendingPaidDeliverables: readonly PendingPaidDeliverable[] = [];
-    // htm9.18: the canary context wraps the whole invocation so every gateway
-    // egress RPC issued during the turn carries this session's token.
-    const invocationResult = await runWithCanaryContext(canaryToken, () => runWithPaidDeliverableTracking(async () => {
+    const invokeWithPaidDeliverableTracking = () => runWithPaidDeliverableTracking(async () => {
       try {
         return await invokeAgentForTurn({
           runtime,
@@ -879,7 +881,12 @@ export async function handleMessageForTurn(
         scopedPendingPaidDeliverables = listPendingPaidDeliverables();
         pendingPaidDeliverables = scopedPendingPaidDeliverables;
       }
-    }));
+    });
+    // Shadow/enforce carry the marker for observation. Off bypasses the async
+    // canary context entirely so gateway client calls remain byte-identical.
+    const invocationResult = canaryToken
+      ? await runWithCanaryContext(canaryToken, invokeWithPaidDeliverableTracking)
+      : await invokeWithPaidDeliverableTracking();
     pendingPaidDeliverables = scopedPendingPaidDeliverables;
     turnMessages = invocationResult.turnMessages;
     responseModel = invocationResult.responseModel;

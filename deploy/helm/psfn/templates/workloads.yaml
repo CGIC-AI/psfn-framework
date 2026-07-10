@@ -127,6 +127,11 @@ spec:
             - name: companion-data
               mountPath: {{ .Values.runtime.companionDataDir }}
               readOnly: true
+            # Gateway owns CogSec quarantine/event writes under state while
+            # the rest of companion-data remains read-only.
+            - name: companion-data
+              mountPath: {{ printf "%s/state" .Values.runtime.companionDataDir }}
+              subPath: state
             - name: workspace
               mountPath: {{ .Values.runtime.workspacePath }}
             - name: runtime

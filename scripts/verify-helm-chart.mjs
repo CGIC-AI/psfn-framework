@@ -162,6 +162,9 @@ assertIncludes(
   'value: "/app/models/transformers/prompt-injection-v2"',
   'gateway intake classifier persistent model path',
 );
+assertIncludes(gatewayDeployment, 'mountPath: /app/companion-data\n              readOnly: true', 'gateway read-only companion-data root');
+assertIncludes(gatewayDeployment, 'mountPath: /app/companion-data/state', 'gateway writable CogSec state submount');
+assertIncludes(gatewayDeployment, 'subPath: state', 'gateway CogSec state PVC subPath');
 
 const agentDeployment = findDocumentByKindName(rendered, 'Deployment', 'psfn-agent');
 assertIncludes(agentDeployment, 'name: wait-for-postgres', 'agent Postgres startup wait init container');

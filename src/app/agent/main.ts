@@ -7,6 +7,7 @@ import { ensureActiveTimezone } from '../../shared/time/active-timezone.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import { GatewayClient } from '../../boundary/gateway/client.js';
 import { formatGatewayRpcEndpoint } from '../../boundary/gateway/transport.js';
+import { attachCompanionEventForwarder } from '../../channels/backplane/companion-relay/agent-forwarder.js';
 import { parsePositiveIntEnv } from '../../shared/utils/env.js';
 import { MemoryWriter } from '../../faculties/memory/writer.js';
 import { EpisodicSynthesizer } from '../../faculties/memory/episodic/index.js';
@@ -373,6 +374,7 @@ async function main(): Promise<void> {
       : {}),
   });
   sessionManager.intakeScreening = intakeScreening;
+  agentLoop.cogSecMode = intakePolicy.mode;
   if (sessionManager.intakeScreening) {
     log.info('Intake screening wired to session tool observations', {
       mode: sessionManager.intakeScreening.mode,
@@ -691,6 +693,14 @@ async function main(): Promise<void> {
   gateway.onApiTelemetryIngest((params) => apiBackend.handleTelemetryIngest(params));
   gateway.onApiHealth(() => apiBackend.handleHealth());
 
+  // ── Companion event relay forwarding (w9hj.1) ──
+  // Redacts tool lifecycle + generated-artifact events at emission and
+  // forwards them to the gateway relay for the Satellite Hub SSE stream.
+  const detachCompanionEventForwarder = attachCompanionEventForwarder({
+    eventBus,
+    publisher: gateway,
+  });
+
   // ── Admin transport (optional) ──
 
   const outreachOutbox = createFileOutreachOutboxStore(
@@ -774,6 +784,7 @@ async function main(): Promise<void> {
     apiBackend.dispose();
   };
   stopFn = async () => {
+    detachCompanionEventForwarder();
     disposeApiBackend();
     // Graceful shutdown removes our own shared presence row (crash cleanup is
     // the read-side staleness TTL — see companion-presence-runtime.ts).

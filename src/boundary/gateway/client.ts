@@ -53,6 +53,7 @@ import type { SessionIntegrityProvider } from '../../persistence/sessions/store.
 import type { VisionIntakeImageScreenResult } from './intake/vision-screener.js';
 import type { JournalEntry } from '../../core/session/types.js';
 import type { ConfirmationResolveResult } from '../../system/capabilities/confirmation-queue.js';
+import type { CompanionRelayPublishParams } from '../../channels/backplane/companion-relay/relay.js';
 import type {
   GitCommitResult,
   GitDiffResult,
@@ -1081,6 +1082,20 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
       jsonrpc: '2.0',
       method: 'api.stream.delta',
       params: { requestId, text },
+    });
+  }
+
+  /**
+   * Forwards a REDACTED companion event (tool activity / artifact created)
+   * to the gateway relay (w9hj.1). Payloads must already have passed through
+   * `channels/backplane/companion-relay/redaction.ts`; the gateway re-validates
+   * and reconstructs them at the process boundary.
+   */
+  publishCompanionEvent(params: CompanionRelayPublishParams): void {
+    this.conn.send({
+      jsonrpc: '2.0',
+      method: 'companion.event.publish',
+      params,
     });
   }
 

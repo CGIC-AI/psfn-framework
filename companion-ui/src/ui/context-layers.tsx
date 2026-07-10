@@ -8,20 +8,24 @@ import {
   Paperclip,
   X,
 } from 'lucide-react';
-import type { ApprovalPanelState } from '../lib/approvals.js';
-import type { ArtifactShelfState } from '../lib/artifacts.js';
+import type { ApprovalPanelState, ApprovalRequestView } from '../lib/approvals.js';
+import type { ArtifactShelfItem, ArtifactShelfState } from '../lib/artifacts.js';
 import type { AttachmentKind, PendingAttachment } from './types.js';
 
 export function ToastLayer({
   approvals,
   artifacts,
   error,
+  onApprovalDecision,
+  onArtifactPreview,
   stacked,
   voiceNotice,
 }: {
   approvals: ApprovalPanelState;
   artifacts: ArtifactShelfState;
   error: string | null;
+  onApprovalDecision: (id: string, decision: 'approve' | 'deny') => void;
+  onArtifactPreview: (artifactId: string) => void;
   stacked: boolean;
   voiceNotice: string | null;
 }) {
@@ -49,32 +53,130 @@ export function ToastLayer({
         </article>
       )}
       {approvals.requests.map((request) => (
-        <article className="context-toast approval-toast" key={request.id}>
-          <LockKeyhole aria-hidden />
-          <div>
-            <strong>Approval Request</strong>
-            <p>{request.redactedContext}</p>
-            <div className="toast-actions">
-              <button type="button" disabled>Deny</button>
-              <button type="button" disabled>Approve</button>
-            </div>
-          </div>
-        </article>
+        <ApprovalCard key={request.id} request={request} onDecision={onApprovalDecision} />
       ))}
       {artifacts.items.map((item) => (
-        <article className="context-toast artifact-toast" key={item.id}>
-          <FileText aria-hidden />
-          <div>
-            <strong>Artifact Created</strong>
-            <p>{item.label} · {item.mediaType}</p>
-            <div className="toast-actions">
-              <button type="button" disabled>View</button>
-            </div>
-          </div>
-        </article>
+        <ArtifactCard key={item.id} item={item} onPreview={onArtifactPreview} />
       ))}
     </section>
   );
+}
+
+function ApprovalCard({
+  request,
+  onDecision,
+}: {
+  request: ApprovalRequestView;
+  onDecision: (id: string, decision: 'approve' | 'deny') => void;
+}) {
+  const pending = request.status === 'pending';
+  return (
+    <article className={`context-toast approval-toast ${request.status}`}>
+      <LockKeyhole aria-hidden />
+      <div>
+        <strong>Approval Request</strong>
+        <p>{request.title}</p>
+        <p>{request.redactedContext}</p>
+        {pending ? (
+          <>
+            {request.expiresInSeconds !== null && (
+              <p className="approval-expiry" aria-live="polite">
+                Expires in {request.expiresInSeconds}s
+              </p>
+            )}
+            <div className="toast-actions">
+              <button type="button" onClick={() => onDecision(request.id, 'deny')}>
+                Deny
+              </button>
+              <button type="button" onClick={() => onDecision(request.id, 'approve')}>
+                Approve
+              </button>
+            </div>
+          </>
+        ) : (
+          <p className={`approval-resolution ${request.status}`}>
+            {approvalStatusLabel(request.status)}
+          </p>
+        )}
+      </div>
+    </article>
+  );
+}
+
+function ArtifactCard({
+  item,
+  onPreview,
+}: {
+  item: ArtifactShelfItem;
+  onPreview: (artifactId: string) => void;
+}) {
+  const { preview } = item;
+  const canFetch = item.previewable && (preview.state === 'idle' || preview.state === 'error');
+  return (
+    <article className="context-toast artifact-toast">
+      <FileText aria-hidden />
+      <div>
+        <strong>Artifact Created</strong>
+        <p>{item.label} · {item.mediaType}</p>
+        <p className="artifact-provenance">{item.provenance}</p>
+        <ArtifactPreview item={item} />
+        {(canFetch || preview.state === 'loading') && (
+          <div className="toast-actions">
+            <button
+              type="button"
+              onClick={() => onPreview(item.id)}
+              disabled={preview.state === 'loading'}
+            >
+              {preview.state === 'loading' ? 'Loading…' : preview.state === 'error' ? 'Retry' : 'View'}
+            </button>
+          </div>
+        )}
+      </div>
+    </article>
+  );
+}
+
+function ArtifactPreview({ item }: { item: ArtifactShelfItem }) {
+  const { preview } = item;
+  switch (preview.state) {
+    case 'ready':
+      if (preview.mediaType?.startsWith('image/') && preview.data) {
+        return (
+          <img
+            className="artifact-preview-image"
+            src={`data:${preview.mediaType};base64,${preview.data}`}
+            alt={`Preview of ${item.label}`}
+          />
+        );
+      }
+      return <p className="artifact-preview-note">Preview ready ({preview.mediaType ?? item.mediaType})</p>;
+    case 'denied':
+      return <p className="artifact-preview-note denied">Preview denied by hub</p>;
+    case 'expired':
+      return <p className="artifact-preview-note expired">Preview expired</p>;
+    case 'error':
+      return <p className="artifact-preview-note error">{preview.message ?? 'Preview failed'}</p>;
+    case 'unavailable':
+      return <p className="artifact-preview-note">Preview unavailable</p>;
+    case 'loading':
+    case 'idle':
+      return null;
+  }
+}
+
+function approvalStatusLabel(status: ApprovalRequestView['status']): string {
+  switch (status) {
+    case 'approved':
+      return 'Approved';
+    case 'denied':
+      return 'Denied';
+    case 'expired':
+      return 'Expired';
+    case 'blocked':
+      return 'Blocked';
+    case 'pending':
+      return 'Pending';
+  }
 }
 
 export function AttachmentTray({

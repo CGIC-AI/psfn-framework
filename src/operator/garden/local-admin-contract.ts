@@ -250,6 +250,7 @@ export function createInProcessGardenAdminContract(
   const settingsService = new AdminSettingsDataService({
     config: options.config,
     configStore,
+    ...(options.getCredentialPresence ? { getCredentialPresence: options.getCredentialPresence } : {}),
   });
 
   // ── Intake quarantine approval queue (htm9.11 Cognitive Security tab) ──

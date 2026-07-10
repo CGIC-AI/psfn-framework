@@ -159,6 +159,7 @@ export async function buildGatewayPrivilegedCore(
       wyomingShardRouting: input.bootstrap.server.wyomingShardRouting,
       multiCompanion: input.bootstrap.server.multiCompanion,
       credentialPresence: input.bootstrap.server.credentialPresence,
+      eventBus,
     }),
   };
 }

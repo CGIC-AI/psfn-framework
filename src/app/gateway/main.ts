@@ -37,11 +37,13 @@ import { loadSatelliteRegistryConfig } from '../../channels/backplane/satellite-
 import { assertSatellitePlaceBindings, loadPlacesRegistryConfig } from '../../channels/backplane/places-registry.js';
 import { GatewayCompanionChannelLane } from '../../boundary/gateway/companion-channels.js';
 import { PostgresCompanionPresenceStore } from '../../persistence/postgres/companion-presence-store.js';
+import { CompanionEventRelay } from '../../channels/backplane/companion-relay/relay.js';
 import { CHARGE_POLICY_FILE_NAME } from '../../system/config/charge-policy-config.js';
 import {
   ensurePersonalFilesLayout,
   resolveCogSecEventsPath,
   resolveContactBlockListPath,
+  resolveGeneratedImagesDir,
 } from '../../persistence/layout.js';
 import { ContactBlockListStore } from '../../core/cogsec/contact-block-list.js';
 import { CogSecEventStore } from '../../core/cogsec/events.js';
@@ -285,6 +287,16 @@ async function main(): Promise<void> {
     ...(config.companionFleet ? { fleet: config.companionFleet.companions } : {}),
     source: gateway,
   });
+
+  // Companion event relay (w9hj.1): fan-out hub for redacted operational
+  // events. Approval events arrive on the gateway bus from the confirmation
+  // queue; tool/artifact events arrive from the agent over
+  // `companion.event.publish` and are re-published on the same bus.
+  const companionRelay = new CompanionEventRelay({
+    eventBus,
+    previewRoots: [resolveGeneratedImagesDir(startupHydration.companionDataDir)],
+  });
+
   const apiServer = await startOptionalGatewayApiServer({
     apiHost,
     apiPort,
@@ -298,6 +310,14 @@ async function main(): Promise<void> {
     satelliteRegistry: satelliteRegistryConfig,
     // htm9.9: voice transcripts are screened as 'audio_transcript' intake.
     intakeScreening: privilegedCore.intakeScreening.screening,
+    companionRelay: {
+      relay: companionRelay,
+      approvals: {
+        resolve: (params) => gateway.resolveCompanionApproval(params),
+        findHistory: (id) => gateway.findConfirmationHistoryEntry(id),
+      },
+      audit: (entry) => gateway.recordCompanionAuditSummary(entry),
+    },
   });
   await voiceSurfaces.start();
   await startGatewayChannelSurfaces(channelSurfaces, bootstrap, log);
@@ -318,6 +338,7 @@ async function main(): Promise<void> {
       await runShutdownSequence([
         { step: 'stop debug observer', action: () => stopDebugObserver() },
         { step: 'stop fleet status server', action: () => fleetStatusServer?.stop() },
+        { step: 'stop companion event relay', action: () => companionRelay.stop() },
         { step: 'stop public api server', action: () => apiServer?.stop() },
         { step: 'stop voice surfaces', action: () => voiceSurfaces.stop() },
         { step: 'stop gateway server', action: () => gateway.stop() },

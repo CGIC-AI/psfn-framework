@@ -30,6 +30,7 @@ import type { ImageVisionReviewer } from '../../../primitives/images/types.js';
 import type { VisionIntakeImageScreenerPort } from './vision-attachments.js';
 import type { ObserverEvalSidecarRuntime } from '../../eval/observer-sidecar/types.js';
 import type { FatigueBudgetPort } from '../fatigue/fatigue-budget.js';
+import type { IntakeFirewallMode } from '../../../system/config/intake-policy-config.js';
 
 interface TurnExecutionAdapterCallbacks {
   resolveTaskKind: (message: SubstrateMessage) => string | undefined;
@@ -148,6 +149,7 @@ export interface TurnExecutionAdapterOptions {
   imageVisionReviewer: ImageVisionReviewer | null;
   /** htm9.8 vision intake screener; null when the firewall is not wired. */
   visionIntakeScreener: VisionIntakeImageScreenerPort | null;
+  cogSecMode: IntakeFirewallMode;
   sessionManager: SessionManager;
   config: CoreSubstrateConfig;
   runtimeMode: RuntimeMode;
@@ -188,6 +190,7 @@ export function createTurnExecutionRuntimeAdapter(
     llmClient: options.llmClient,
     imageVisionReviewer: options.imageVisionReviewer,
     visionIntakeScreener: options.visionIntakeScreener,
+    cogSecMode: options.cogSecMode,
     sessionManager: options.sessionManager,
     config: options.config,
     runtimeMode: options.runtimeMode,

@@ -466,6 +466,7 @@ group: cert-manager.io
       mkdir -p \
         {{ .Values.runtime.systemDataDir }} \
         {{ .Values.runtime.companionDataDir }} \
+        {{ .Values.runtime.companionDataDir }}/state \
         {{ .Values.runtime.workspacePath }} \
         {{ .Values.runtime.logsDir }} \
         {{ .Values.runtime.tempDir }} \

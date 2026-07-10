@@ -332,6 +332,14 @@ unlisted principal id → `403` on satellite surfaces; a claim type missing from
 `claimTypes` → claim rejection; missing relay scopes →
 `companion_relay_not_registered` / scope-denied SSE.
 
+Expected benign warning: the hub probes `GET /v1/identity` for display
+metadata, which is not a satellite surface, so the satellite-scoped key gets
+`403` and the hub logs `PSFN identity endpoint failed (403)` once and
+continues with a null identity (non-fatal by hub design). If the companion
+display name matters on hub-served UIs, admitting `GET /v1/identity` to the
+satellite surface allowlist in `src/channels/api/server.ts` is a small
+framework follow-up.
+
 ## Repo Validation (before shipping chart changes)
 
 ```bash

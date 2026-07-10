@@ -618,11 +618,14 @@ metadata:
   labels:
     {{- include "psfn.labels" . | nindent 4 }}
 spec:
-  type: ClusterIP
+  type: {{ .Values.companionUiTest.service.type }}
   ports:
     - name: http-ui
       port: {{ .Values.ports.companionUiTest }}
       targetPort: http-ui
+{{- if and (eq .Values.companionUiTest.service.type "NodePort") .Values.companionUiTest.service.nodePort }}
+      nodePort: {{ .Values.companionUiTest.service.nodePort }}
+{{- end }}
   selector:
     {{- include "psfn.componentLabels" (dict "root" . "component" "companion-ui-test") | nindent 4 }}
 ---

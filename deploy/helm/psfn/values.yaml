@@ -536,6 +536,13 @@ companionUiTest:
   # outbound calls: the browser talks to the hub directly. This is a stopgap
   # test surface, to be replaced by a packaged app.
   enabled: false
+  # Service exposure. ClusterIP (default) suits ingress-backed clusters; on a
+  # single-node cluster without an ingress controller (the Pi has no Traefik)
+  # set type: NodePort plus a nodePort (30000-32767) so LAN browsers can reach
+  # http://<node>:<nodePort> directly.
+  service:
+    type: ClusterIP
+    nodePort: null
   image:
     # Build with docker/companion-ui/build-image.sh, then set repository plus a
     # pinned tag or digest. Floating tags such as latest/main are rejected when

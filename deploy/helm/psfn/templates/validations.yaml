@@ -92,3 +92,16 @@ never back a ClusterIssuer. */ -}}
 {{- fail "secrets.values.extraSatelliteApiKeys entries must each be at least 16 characters" -}}
 {{- end -}}
 {{- end -}}
+{{- if .Values.companionUiTest.enabled -}}
+{{- if not (has .Values.companionUiTest.service.type (list "ClusterIP" "NodePort")) -}}
+{{- fail "companionUiTest.service.type must be ClusterIP or NodePort" -}}
+{{- end -}}
+{{- with .Values.companionUiTest.service.nodePort -}}
+{{- if ne $.Values.companionUiTest.service.type "NodePort" -}}
+{{- fail "companionUiTest.service.nodePort requires companionUiTest.service.type=NodePort" -}}
+{{- end -}}
+{{- if or (lt (int .) 30000) (gt (int .) 32767) -}}
+{{- fail "companionUiTest.service.nodePort must be within 30000-32767" -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}

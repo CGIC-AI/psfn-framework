@@ -821,6 +821,9 @@ function testHubConfig(overrides: {
     },
     hermes: null,
     companion: null,
+    homeAssistant: null,
+    control: null,
+    deviceRegistry: null,
     voxta: {
       enabled: true,
       satelliteId: "voxta-vam",

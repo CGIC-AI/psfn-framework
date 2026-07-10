@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 
@@ -51,6 +52,12 @@ import {
   SPOKEN_SEGMENT_FLUSH_OPTIONS,
   takeFlushChunk,
 } from "../shared/text.js";
+import {
+  authenticateHubDevice,
+  intersectCapabilities,
+  type HubDeviceRegistry,
+} from "./device-registry.js";
+import type { PsfnChannelContext } from "./embodied-session.js";
 
 export class RealtimeHubServer {
   private readonly httpServer: http.Server;
@@ -119,6 +126,7 @@ export class RealtimeHubServer {
         this.agent,
         this.tts,
         this.companion,
+        this.config.deviceRegistry,
       );
       connection.run().catch((error) => {
         console.error("Realtime connection failed:", error);
@@ -226,6 +234,8 @@ class RealtimeConnection {
   private replyTask: Promise<void> | null = null;
   private messageChain: Promise<void> = Promise.resolve();
   private identityTask: Promise<RuntimeIdentity | undefined> | null = null;
+  private claimIdentity: PsfnChannelContext["claimIdentity"];
+  private authenticated: boolean;
   private unsubscribeCompanion: (() => void) | null = null;
 
   constructor(
@@ -236,15 +246,22 @@ class RealtimeConnection {
     private readonly agent: AgentRuntimeAdapter,
     private readonly tts: ElevenLabsStream,
     private readonly companion: CompanionBridge | null = null,
+    private readonly deviceRegistry: HubDeviceRegistry | null = null,
   ) {
-    this.attachSatellite();
-    this.unsubscribeCompanion = this.companion?.addListener((event) => {
+    this.authenticated = !this.deviceRegistry;
+    if (!this.deviceRegistry) this.attachSatellite();
+    if (!this.deviceRegistry) this.subscribeCompanion();
+  }
+
+  private subscribeCompanion(): void {
+    if (this.unsubscribeCompanion || !this.companion) return;
+    this.unsubscribeCompanion = this.companion.addListener((event) => {
       this.messageChain = this.messageChain
         .then(() => this.relayCompanionEvent(event))
         .catch((error) => {
           console.error("Companion event relay failed:", error);
         });
-    }) ?? null;
+    });
   }
 
   async run(): Promise<void> {
@@ -265,6 +282,10 @@ class RealtimeConnection {
     });
 
     console.log("Realtime client connected");
+    if (!this.deviceRegistry) await this.sendSessionReady();
+  }
+
+  private async sendSessionReady(): Promise<void> {
     await this.send({
       type: "session.ready",
       sessionId: this.sessionId,
@@ -278,14 +299,64 @@ class RealtimeConnection {
   }
 
   private async handleMessage(message: ClientToHubMessage): Promise<void> {
+    if (!this.authenticated && message.type !== "hello") {
+      await this.send({ type: "error-event", data: { message: "Satellite device authentication required" } });
+      this.socket.close(1008, "device authentication required");
+      return;
+    }
+    if (this.deviceRegistry && this.authenticated && message.type === "hello") {
+      await this.send({ type: "error-event", data: { message: "Satellite hello was already accepted" } });
+      this.socket.close(1008, "duplicate hello");
+      return;
+    }
     switch (message.type) {
       case "hello":
-        this.deviceId = message.deviceId;
-        this.deviceName = message.deviceName;
-        this.sessionId = message.sessionId?.trim() || `realtime:${this.deviceId}`;
-        this.satelliteId = message.satelliteId?.trim() || this.deviceId;
-        this.satelliteName = message.satelliteName?.trim() || this.deviceName;
-        this.attachSatellite(message.channelId, message.capabilities);
+        if (this.deviceRegistry) {
+          const device = authenticateHubDevice(this.deviceRegistry, message.credential);
+          if (!device || message.deviceId !== device.deviceId) {
+            await this.send({
+              type: "error-event",
+              data: { message: "Satellite device authentication failed" },
+            });
+            this.socket.close(1008, "device authentication failed");
+            return;
+          }
+          this.deviceId = device.deviceId;
+          this.deviceName = device.deviceName;
+          this.satelliteId = device.satelliteId;
+          this.satelliteName = device.satelliteName;
+          this.claimIdentity = {
+            satelliteId: device.satelliteId,
+            endpointId: device.endpointId,
+            claimType: device.claimType,
+            displayName: device.satelliteName,
+          };
+          this.sessionId = deriveAuthenticatedSessionId(device.deviceId, message.sessionId);
+          try {
+            this.attachSatellite(
+              undefined,
+              intersectCapabilities(message.capabilities, device.maxCapabilities),
+              this.claimIdentity,
+            );
+          } catch {
+            await this.send({
+              type: "error-event",
+              data: { message: "Satellite capability authorization failed" },
+            });
+            this.socket.close(1008, "capability authorization failed");
+            return;
+          }
+          this.authenticated = true;
+          this.subscribeCompanion();
+          await this.sendSessionReady();
+        } else {
+          this.deviceId = message.deviceId;
+          this.deviceName = message.deviceName;
+          this.sessionId = message.sessionId?.trim() || `realtime:${this.deviceId}`;
+          this.satelliteId = message.satelliteId?.trim() || this.deviceId;
+          this.satelliteName = message.satelliteName?.trim() || this.deviceName;
+          this.attachSatellite(message.channelId, message.capabilities);
+        }
         this.sessions.touch(this.sessionId);
         console.log(`hello device=${this.deviceId} session=${this.sessionId}`);
         await this.send({
@@ -911,17 +982,29 @@ class RealtimeConnection {
     this.socket.send(JSON.stringify(message));
   }
 
-  private attachSatellite(channelId?: string, capabilities?: SatelliteCapabilities): void {
+  private attachSatellite(
+    channelId?: string,
+    capabilities?: SatelliteCapabilities,
+    claimIdentity?: PsfnChannelContext["claimIdentity"],
+  ): void {
     const attachment = this.embodiedSessions.attachSatellite({
       sessionId: this.sessionId,
       channelId,
       satelliteId: this.satelliteId,
       satelliteName: this.satelliteName,
       capabilities,
+      ...(claimIdentity ? { claimIdentity } : {}),
     });
     this.channelId = attachment.session.channelId;
     this.capabilities = attachment.satellite.capabilities;
   }
+}
+
+function deriveAuthenticatedSessionId(deviceId: string, requested: string | undefined): string {
+  const requestedSession = requested?.trim();
+  if (!requestedSession) return `realtime:${deviceId}`;
+  const digest = createHash("sha256").update(requestedSession, "utf8").digest("hex").slice(0, 20);
+  return `realtime:${deviceId}:${digest}`;
 }
 
 async function* singleValueStream(text: string): AsyncGenerator<string, void, void> {

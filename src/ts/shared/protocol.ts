@@ -43,6 +43,8 @@ export interface HelloMessage {
   satelliteId?: string;
   satelliteName?: string;
   capabilities?: SatelliteCapabilities;
+  /** Per-device secret; consumed during hello and never echoed or logged. */
+  credential?: string;
 }
 
 export interface AudioMessage {

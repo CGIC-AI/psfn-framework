@@ -47,6 +47,17 @@ const HUB_ENV_KEYS = [
   "PSFN_COMPANION_PREVIEW_MAX_BYTES",
   "PSFN_COMPANION_RECONNECT_BASE_MS",
   "PSFN_COMPANION_RECONNECT_MAX_MS",
+  "HOME_ASSISTANT_ENABLED",
+  "HOME_ASSISTANT_BASE_URL",
+  "HOME_ASSISTANT_TOKEN",
+  "HOME_ASSISTANT_RECONNECT_BASE_MS",
+  "HOME_ASSISTANT_RECONNECT_MAX_MS",
+  "HOME_ASSISTANT_REQUEST_TIMEOUT_MS",
+  "HUB_CONTROL_BIND_HOST",
+  "HUB_CONTROL_PORT",
+  "HUB_CONTROL_TOKEN",
+  "HUB_CONTROL_MAX_BODY_BYTES",
+  "HUB_DEVICE_REGISTRY_PATH",
 ] as const;
 
 test("loadPsfnRuntime reads registry claim identity and certificate paths", () => {
@@ -115,6 +126,60 @@ test("loadHubConfig supports text-only mode without voice provider secrets", () 
     assert.equal(config.elevenlabsVoiceId, null);
     assert.equal(config.psfn?.baseUrl, "http://127.0.0.1:10053/v1");
     assert.equal(config.companion, null);
+    assert.equal(config.homeAssistant, null);
+    assert.equal(config.control, null);
+  });
+});
+
+test("loadHubConfig loads paired Home Assistant and private control config", () => {
+  const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), "psfn-hub-runtime-"));
+  fs.writeFileSync(path.join(projectRoot, "devices.json"), JSON.stringify({
+    schemaVersion: 1,
+    devices: [{
+      deviceId: "bedroom-pi",
+      deviceName: "Bedroom Pi",
+      satelliteId: "bedroom",
+      satelliteName: "Bedroom",
+      endpointId: "bedroom-pi",
+      claimType: "room-satellite",
+      credentialSha256: "d8e7fca2dc7d6155537b49964e4b01c8b5d4c7fd18d75e1376e1e0f8f460f7a5",
+      maxCapabilities: { input: ["text"], output: ["text"], control: [], safety: ["local_only"] },
+    }],
+  }));
+  withEnv(HUB_ENV_KEYS, {
+    AGENT_RUNTIME: "psfn",
+    HUB_TEXT_ONLY: "true",
+    PSFN_API_BASE_URL: "http://127.0.0.1:10053/v1",
+    HOME_ASSISTANT_ENABLED: "true",
+    HOME_ASSISTANT_BASE_URL: "http://192.168.1.205:8123/",
+    HOME_ASSISTANT_TOKEN: "ha-secret",
+    HUB_CONTROL_BIND_HOST: "127.0.0.1",
+    HUB_CONTROL_PORT: "8788",
+    HUB_CONTROL_TOKEN: "0123456789abcdef",
+    HUB_DEVICE_REGISTRY_PATH: "devices.json",
+  }, () => {
+    const config = loadHubConfig(projectRoot);
+    assert.equal(config.homeAssistant?.baseUrl, "http://192.168.1.205:8123");
+    assert.equal(config.homeAssistant?.token, "ha-secret");
+    assert.equal(config.control?.bindHost, "127.0.0.1");
+    assert.equal(config.control?.port, 8788);
+  });
+});
+
+test("loadHubConfig rejects enabled Home Assistant without the private control plane", () => {
+  const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), "psfn-hub-runtime-"));
+  withEnv(HUB_ENV_KEYS, {
+    AGENT_RUNTIME: "psfn",
+    HUB_TEXT_ONLY: "true",
+    PSFN_API_BASE_URL: "http://127.0.0.1:10053/v1",
+    HOME_ASSISTANT_ENABLED: "true",
+    HOME_ASSISTANT_BASE_URL: "http://192.168.1.205:8123",
+    HOME_ASSISTANT_TOKEN: "ha-secret",
+  }, () => {
+    assert.throws(
+      () => loadHubConfig(projectRoot),
+      /HUB_CONTROL_BIND_HOST, HUB_CONTROL_PORT, and HUB_CONTROL_TOKEN must all be set/,
+    );
   });
 });
 

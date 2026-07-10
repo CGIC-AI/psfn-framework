@@ -37,6 +37,7 @@ export interface EmbodiedSession {
   channelType: string;
   channelId: string;
   satellites: AttachedSatellite[];
+  claimIdentities?: Record<string, NonNullable<PsfnChannelContext["claimIdentity"]>>;
   createdAt: string;
   updatedAt: string;
 }
@@ -47,6 +48,12 @@ export interface PsfnChannelContext {
   channelId: string;
   sourceSatelliteId: string;
   sourceSatelliteName: string;
+  claimIdentity?: {
+    satelliteId: string;
+    endpointId: string;
+    claimType: string;
+    displayName: string;
+  };
   activeSatellites: Array<{
     id: string;
     name: string;
@@ -82,6 +89,7 @@ export interface AttachSatelliteInput {
   satelliteId: string;
   satelliteName: string;
   capabilities?: SatelliteCapabilities;
+  claimIdentity?: PsfnChannelContext["claimIdentity"];
 }
 
 export class EmbodiedSessionRegistry {
@@ -112,6 +120,12 @@ export class EmbodiedSessionRegistry {
       channelType: this.channelType,
       channelId,
       satellites,
+      ...((current?.claimIdentities || input.claimIdentity) ? {
+        claimIdentities: {
+          ...(current?.claimIdentities ?? {}),
+          ...(input.claimIdentity ? { [satelliteId]: input.claimIdentity } : {}),
+        },
+      } : {}),
       createdAt: current?.createdAt ?? now,
       updatedAt: now,
     };
@@ -184,6 +198,9 @@ function contextFromSession(session: EmbodiedSession, sourceSatellite: AttachedS
     channelId: session.channelId,
     sourceSatelliteId: sourceSatellite.id,
     sourceSatelliteName: sourceSatellite.name,
+    ...(session.claimIdentities?.[sourceSatellite.id]
+      ? { claimIdentity: session.claimIdentities[sourceSatellite.id] }
+      : {}),
     activeSatellites: session.satellites.map((satellite) => ({
       id: satellite.id,
       name: satellite.name,
@@ -194,7 +211,7 @@ function contextFromSession(session: EmbodiedSession, sourceSatellite: AttachedS
 }
 
 function uniqueOrDefault<T extends string>(values: readonly T[] | undefined, fallback: readonly T[]): T[] {
-  const source = values && values.length > 0 ? values : fallback;
+  const source = values ?? fallback;
   return [...new Set(source.map((value) => value.trim()).filter(Boolean) as T[])];
 }
 

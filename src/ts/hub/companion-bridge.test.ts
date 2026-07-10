@@ -814,6 +814,9 @@ function testHubConfig(): HubConfig {
     },
     hermes: null,
     companion: null,
+    homeAssistant: null,
+    control: null,
+    deviceRegistry: null,
     voxta: {
       enabled: false,
       satelliteId: "voxta-vam",

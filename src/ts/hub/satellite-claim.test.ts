@@ -106,3 +106,40 @@ test("satellite claim envelope carries current capabilities without granting per
     "X-PSFN-Satellite-Telemetry-Scopes": "presence,status",
   });
 });
+
+test("authenticated channel identity overrides client-independent hub claim headers", () => {
+  const config = normalizeSatelliteClaimConfig({
+    capabilityProfile: "text-only",
+    satelliteId: "hub-default",
+    endpointId: "hub-default",
+  });
+  const envelope = buildSatelliteClaimEnvelope({
+    config,
+    conversationId: "room:office",
+    channel: {
+      sessionId: "room:office",
+      channelType: "satellite.endpoint",
+      channelId: "satellite.endpoint:room:office",
+      sourceSatelliteId: "office",
+      sourceSatelliteName: "Office",
+      claimIdentity: {
+        satelliteId: "office",
+        endpointId: "office-device",
+        claimType: "room-satellite",
+        displayName: "Office",
+      },
+      activeSatellites: [{
+        id: "office", name: "Office", transport: "websocket",
+        capabilities: { input: ["text"], output: ["text"], control: [], safety: ["local_only"] },
+      }],
+    },
+  });
+  assert.deepEqual(buildSatelliteRegistryHeaders({ config, satelliteClaim: envelope }), {
+    "X-PSFN-Satellite-Claim-Type": "room-satellite",
+    "X-PSFN-Satellite-ID": "office",
+    "X-PSFN-Satellite-Endpoint-ID": "office-device",
+    "X-PSFN-Satellite-Session-ID": "room:office",
+    "X-PSFN-Satellite-Thread-ID": "room:office",
+    "X-PSFN-Satellite-Capabilities": "text",
+  });
+});

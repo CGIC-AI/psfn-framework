@@ -213,6 +213,7 @@ export interface GatewayServerOptions {
    * and rejects every send.
    */
   companionChannels?: GatewayCompanionChannelLane;
+  /**
    * Gateway-process event bus. Carries the redacted `companion.*` relay
    * events: approval lifecycle emitted at the confirmation-queue choke
    * points, plus agent-forwarded tool/artifact events re-published from

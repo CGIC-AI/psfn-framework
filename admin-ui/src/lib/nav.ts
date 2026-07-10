@@ -46,7 +46,6 @@ export const navGroups: NavGroup[] = [
     { id: 'values', path: '/values', defaultLabel: 'Values', icon: '\u{1F4D6}' },
   ]),
   navGroup('runtime', 'Runtime & Tools', [
-    { id: 'model-room', path: '/model-room', defaultLabel: 'Model Room', icon: '\u{1F9E0}' },
     { id: 'models', path: '/models', defaultLabel: 'Models', icon: '\u{1F9EA}' },
     { id: 'charge-budget', path: '/charge-budget', defaultLabel: 'Charge / Budget', icon: '\u{1F4B0}' },
     { id: 'tools', path: '/tools', defaultLabel: 'Tools', icon: '\u{1F527}' },

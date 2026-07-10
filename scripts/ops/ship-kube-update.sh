@@ -127,8 +127,10 @@ if [[ ${#SELECTED[@]} -gt 0 ]]; then
   [[ -n "$NEW_HASH" ]] || { echo "FAIL: image carries no contract hash" >&2; exit 1; }
   docker run --rm --platform "$PLATFORM" --entrypoint sh "${IMAGE_NAME}:${TAG}" -c \
     "grep -q toolCallBlocksByIndex /app/node_modules/@mariozechner/pi-ai/dist/providers/openai-completions.js \
-     && test -f /app/config/concern-softening.json && command -v bd >/dev/null && command -v rg >/dev/null" \
-    || { echo "FAIL: in-image verification (pi-ai patch / config / bd / rg)" >&2; exit 1; }
+     && test -f /app/config/concern-softening.json \
+     && test -f /app/config/intake-l1-rules.json \
+     && command -v bd >/dev/null && command -v rg >/dev/null" \
+    || { echo "FAIL: in-image verification (pi-ai patch / runtime config / bd / rg)" >&2; exit 1; }
   echo "    contract hash: $NEW_HASH"
 fi
 

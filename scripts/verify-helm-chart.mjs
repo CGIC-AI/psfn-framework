@@ -171,6 +171,8 @@ assertIncludes(agentDeployment, 'name: wait-for-postgres', 'agent Postgres start
 assertIncludes(agentDeployment, 'pg_isready -d "$POSTGRES_DATABASE_URL"', 'agent Postgres startup wait command');
 assertIncludes(agentDeployment, 'name: psfn-postgres', 'agent Postgres startup wait secret name');
 assertIncludes(agentDeployment, 'key: postgres-database-url', 'agent Postgres startup wait secret key');
+assertIncludes(agentDeployment, 'name: GATEWAY_SESSION_INTEGRITY_AUTH_TOKEN', 'agent isolated session-integrity proof env');
+assertIncludes(agentDeployment, 'key: GATEWAY_SESSION_INTEGRITY_AUTH_TOKEN', 'agent isolated session-integrity proof Secret key');
 assertNotIncludes(agentDeployment, 'LITELLM_BASE_URL', 'agent LiteLLM endpoint env');
 assertNotIncludes(agentDeployment, 'LITELLM_API_KEY', 'agent LiteLLM credential env');
 

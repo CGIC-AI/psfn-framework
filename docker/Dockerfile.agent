@@ -81,6 +81,7 @@ COPY --from=build /app/contract-hash.txt ./contract-hash.txt
 COPY --from=build /app/admin-ui/build/ ./admin-ui/build/
 COPY config/*.seed.json ./config/
 COPY config/concern-softening.json ./config/concern-softening.json
+COPY config/intake-l1-rules.json ./config/intake-l1-rules.json
 COPY scripts/ops/ ./scripts/ops/
 
 RUN git init /app \

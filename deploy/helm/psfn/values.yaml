@@ -194,6 +194,10 @@ secrets:
     apiKey: CHANGE_ME_API_KEY
     adminToken: CHANGE_ME_ADMIN_TOKEN
     gatewaySessionHmacKey: CHANGE_ME_GATEWAY_SESSION_HMAC_KEY
+    # Role-bound worker proof derived from gatewaySessionHmacKey for
+    # COMPANION_ID. Production operators may supply it through an existing
+    # Secret instead of persisting it in Helm values.
+    gatewaySessionIntegrityAuthToken: ""
     openRouterApiKey: ""
     openAiApiKey: ""
     liteLlmApiKey: CHANGE_ME_LITELLM_API_KEY
@@ -210,6 +214,7 @@ secrets:
     apiKey: API_KEY
     adminToken: ADMIN_TOKEN
     gatewaySessionHmacKey: GATEWAY_SESSION_HMAC_KEY
+    gatewaySessionIntegrityAuthToken: GATEWAY_SESSION_INTEGRITY_AUTH_TOKEN
     openRouterApiKey: OPENROUTER_API_KEY
     openAiApiKey: OPENAI_API_KEY
     liteLlmApiKey: LITELLM_API_KEY

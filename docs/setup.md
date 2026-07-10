@@ -175,6 +175,13 @@ the normal agent role. A direct `npm run agent` launch must provide
 `GATEWAY_SESSION_INTEGRITY_AUTH_TOKEN`; in multi-companion mode it must also
 provide the exact fleet tuple and `GATEWAY_COMPANION_AUTH_TOKEN`.
 
+The Helm deployment reads the isolated-worker proof from the application
+Secret key named by `secrets.keys.gatewaySessionIntegrityAuthToken` (default
+`GATEWAY_SESSION_INTEGRITY_AUTH_TOKEN`). Derive it for the configured
+`COMPANION_ID` with the same gateway HMAC keyring used by the gateway, and
+provision it without logging the token. It is a distinct role-bound proof, not
+the raw `GATEWAY_SESSION_HMAC_KEY` and not the normal companion-agent proof.
+
 ## Common Launch Commands
 
 ```bash

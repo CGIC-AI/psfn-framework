@@ -215,6 +215,11 @@ spec:
             {{- include "psfn.commonEnv" . | nindent 12 }}
             - name: GATEWAY_RPC_ENDPOINT
               value: {{ include "psfn.gatewayRpcUrlForClient" . | quote }}
+            - name: GATEWAY_SESSION_INTEGRITY_AUTH_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "psfn.appSecretName" . }}
+                  key: {{ .Values.secrets.keys.gatewaySessionIntegrityAuthToken }}
             - name: GATEWAY_RPC_TLS_CA_PATH
               value: {{ printf "%s/gateway-rpc/ca.crt" .Values.certificates.mountBasePath | quote }}
             - name: GATEWAY_RPC_TLS_CERT_PATH

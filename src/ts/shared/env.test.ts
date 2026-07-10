@@ -39,6 +39,9 @@ const HUB_ENV_KEYS = [
   "PSFN_API_KEY",
   "PSFN_MODEL",
   "PSFN_CAPABILITY_PROFILE",
+  "PSFN_SATELLITE_ID",
+  "PSFN_ENDPOINT_ID",
+  "PSFN_CLAIM_TYPE",
   "PSFN_COMPANION_BASE_URL",
   "PSFN_COMPANION_API_KEY",
   "PSFN_COMPANION_PREVIEW_MAX_BYTES",
@@ -123,16 +126,43 @@ test("loadHubConfig loads the companion bridge config with PSFN auth fallback", 
     HUB_TEXT_ONLY: "true",
     PSFN_API_BASE_URL: "http://127.0.0.1:10053/v1",
     PSFN_API_KEY: "psfn-key",
-    PSFN_COMPANION_BASE_URL: "http://127.0.0.1:10054/backplane/",
+    PSFN_CAPABILITY_PROFILE: "text-only",
+    PSFN_SATELLITE_ID: "hub-main",
+    PSFN_ENDPOINT_ID: "hub-endpoint",
+    PSFN_CLAIM_TYPE: "companion-hub",
+    PSFN_COMPANION_BASE_URL: "http://127.0.0.1:10053/v1/",
     PSFN_COMPANION_PREVIEW_MAX_BYTES: "2048",
   }, () => {
     const config = loadHubConfig(projectRoot);
 
-    assert.equal(config.companion?.baseUrl, "http://127.0.0.1:10054/backplane");
+    assert.equal(config.companion?.baseUrl, "http://127.0.0.1:10053/v1");
     assert.equal(config.companion?.apiKey, "psfn-key");
+    assert.deepEqual(config.companion?.identity, {
+      satelliteId: "hub-main",
+      endpointId: "hub-endpoint",
+      claimType: "companion-hub",
+    });
     assert.equal(config.companion?.previewMaxBytes, 2048);
     assert.equal(config.companion?.reconnectBaseMs, 1000);
     assert.equal(config.companion?.reconnectMaxMs, 30000);
+  });
+});
+
+test("loadHubConfig reuses the satellite claim identity defaults for the companion bridge", () => {
+  const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), "psfn-hub-runtime-"));
+
+  withEnv(HUB_ENV_KEYS, {
+    AGENT_RUNTIME: "psfn",
+    HUB_TEXT_ONLY: "true",
+    PSFN_API_BASE_URL: "http://127.0.0.1:10053/v1",
+    PSFN_COMPANION_BASE_URL: "http://127.0.0.1:10053/v1",
+  }, () => {
+    const config = loadHubConfig(projectRoot);
+    assert.deepEqual(config.companion?.identity, {
+      satelliteId: config.psfn?.satelliteClaim.satelliteId,
+      endpointId: config.psfn?.satelliteClaim.endpointId,
+      claimType: config.psfn?.satelliteClaim.type,
+    });
   });
 });
 

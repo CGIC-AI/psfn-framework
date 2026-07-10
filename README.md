@@ -264,8 +264,9 @@ Important settings for the Python ESPHome fallback path:
 - `PSFN_CHANNEL_TYPE` for the compatibility channel header, defaulting to the claim namespace instead of an authoritative endpoint type
 - `PSFN_CLIENT_CERT_PATH`, `PSFN_CLIENT_KEY_PATH`, and optional `PSFN_CA_CERT_PATH` for PSFN client certificate identity
 - `PSFN_TELEMETRY_MODE` and `PSFN_TELEMETRY_CATEGORIES` for configured telemetry advertisement
-- `PSFN_COMPANION_BASE_URL` enables the companion backplane bridge (approvals, artifact events, tool activity relay) on the TS realtime path; unset disables the bridge and the hub relays nothing
-- `PSFN_COMPANION_API_KEY` for companion backplane bearer auth, defaulting to `PSFN_API_KEY`
+- `PSFN_COMPANION_BASE_URL` enables the companion backplane bridge (approvals, artifact events, tool activity relay) on the TS realtime path; the endpoints live on the same gateway API edge as `/v1/chat/completions`, so this is typically the same `<gateway>/v1` value as `PSFN_API_BASE_URL`; unset disables the bridge and the hub relays nothing
+- `PSFN_COMPANION_API_KEY` for companion backplane bearer auth, defaulting to `PSFN_API_KEY`; the key's principal must be listed on the hub's endpoint entry in PSFN's `satellites.json` and granted the `approvals`, `artifacts`, and `tool_activity` telemetry scopes
+- the companion bridge identifies itself on `GET` requests with `satelliteId`/`endpointId`/`claimType` query params taken from the existing `PSFN_SATELLITE_ID`, `PSFN_ENDPOINT_ID`, and `PSFN_CLAIM_TYPE`/`PSFN_CAPABILITY_PROFILE` registry identity; an incomplete identity fails closed at startup
 - `PSFN_COMPANION_PREVIEW_MAX_BYTES` caps artifact preview payloads relayed to satellites, defaulting to 1048576
 - `PSFN_COMPANION_RECONNECT_BASE_MS` and `PSFN_COMPANION_RECONNECT_MAX_MS` tune the companion SSE reconnect backoff
 - `HERMES_API_BASE_URL` or `HERMES_API_SERVER_URL` for `AGENT_RUNTIME=hermes`, defaulting to `http://127.0.0.1:8642/v1`

@@ -38,6 +38,12 @@ const PLAIN_CAPABILITIES: SatelliteCapabilities = {
   safety: [],
 };
 
+const TEST_IDENTITY = {
+  satelliteId: "hub-companion-test",
+  endpointId: "companion-test",
+  claimType: "text-only",
+};
+
 test("SseStreamParser reassembles events across chunk boundaries", () => {
   const parser = new SseStreamParser();
   const first = parser.push("event: companion\ndata: {\"a\":");
@@ -130,6 +136,28 @@ test("parseCompanionEventData rejects invalid envelopes", () => {
   );
 });
 
+test("parseCompanionEventData accepts upstream-mapped approval.resolved statuses", () => {
+  for (const status of ["approved", "denied", "expired", "blocked"]) {
+    const event = parseCompanionEventData(JSON.stringify({
+      kind: "approval.resolved",
+      payload: { id: "appr-1", status, resolvedAt: "2026-07-09T00:00:03Z" },
+      channelId: "satellite.endpoint:companion-test:demo",
+      emittedAt: "2026-07-09T00:00:03Z",
+    }));
+    assert.equal(event.kind, "approval.resolved");
+    assert.equal((event.payload as { status: string }).status, status);
+  }
+});
+
+test("companion bridge refuses to start without a complete registry identity", () => {
+  assert.throws(
+    () => new CompanionBridge(bridgeConfig("http://127.0.0.1:1", {
+      identity: { satelliteId: "", endpointId: "companion-test", claimType: "text-only" },
+    })),
+    /complete satellite registry identity/,
+  );
+});
+
 test("reconnectDelayMs backs off exponentially up to the cap", () => {
   const config = { reconnectBaseMs: 100, reconnectMaxMs: 1_000 };
   assert.equal(reconnectDelayMs(config, 1), 100);
@@ -149,6 +177,7 @@ test("companion bridge consumes SSE events and reconnects after stream loss", as
     bridge.start();
     await waitFor(() => backplane.sseConnectionCount === 1, "first SSE connection");
     assert.equal(backplane.lastEventsAuthorization, "Bearer companion-key");
+    assert.deepEqual(backplane.lastEventsQuery, TEST_IDENTITY);
 
     backplane.emit({
       kind: "tool.activity",
@@ -200,8 +229,19 @@ test("companion bridge proxies approval decisions and surfaces backplane failure
       deviceId: "dev-1",
     });
 
+    const failureBodies: Record<number, string> = {
+      403: JSON.stringify({ error: { message: "Unknown endpoint or missing scope", type: "forbidden" } }),
+      404: JSON.stringify({ error: { message: "Approval not found", type: "not_found" } }),
+      409: JSON.stringify({
+        error: {
+          message: "Approval already resolved",
+          type: "conflict",
+          details: { id: "appr-2", status: "expired" },
+        },
+      }),
+    };
     for (const status of [403, 404, 409]) {
-      backplane.approvalResponse = { status, body: JSON.stringify({ error: "nope" }) };
+      backplane.approvalResponse = { status, body: failureBodies[status] ?? "{}" };
       await assert.rejects(
         bridge.submitApprovalDecision({
           approvalId: "appr-2",
@@ -232,6 +272,7 @@ test("companion bridge enforces the artifact preview size cap and relays denials
     const preview = await bridge.fetchArtifactPreview("art-1");
     assert.equal(preview.mediaType, "image/png");
     assert.equal(Buffer.from(preview.dataBase64, "base64").toString("utf8"), "tiny-png-bytes");
+    assert.deepEqual(backplane.lastPreviewQuery, TEST_IDENTITY);
 
     backplane.previewResponse = {
       status: 200,
@@ -404,7 +445,18 @@ test("hub proxies approval decisions with satellite attribution and relays failu
     });
 
     for (const status of [403, 404, 409]) {
-      backplane.approvalResponse = { status, body: JSON.stringify({ error: "refused" }) };
+      backplane.approvalResponse = {
+        status,
+        body: status === 409
+          ? JSON.stringify({
+            error: {
+              message: "Approval already resolved",
+              type: "conflict",
+              details: { id: `appr-${status}`, status: "expired" },
+            },
+          })
+          : JSON.stringify({ error: { message: "refused", type: "forbidden" } }),
+      };
       client.clearMessages();
       client.send({ type: "approval.decision", id: `appr-${status}`, decision: "deny" });
       const error = await client.waitForMessage("error-event");
@@ -603,6 +655,8 @@ class FakeBackplane {
   readonly previewRequests: string[] = [];
   sseConnectionCount = 0;
   lastEventsAuthorization: string | undefined;
+  lastEventsQuery: Record<string, string> | undefined;
+  lastPreviewQuery: Record<string, string> | undefined;
 
   private readonly server: http.Server;
   private readonly sseResponses = new Set<http.ServerResponse>();
@@ -648,8 +702,13 @@ class FakeBackplane {
   private async handle(request: http.IncomingMessage, response: http.ServerResponse): Promise<void> {
     const url = new URL(request.url ?? "/", "http://127.0.0.1");
     if (request.method === "GET" && url.pathname === "/companion/events") {
+      if (!hasIdentityQuery(url)) {
+        this.rejectMissingIdentity(response);
+        return;
+      }
       this.sseConnectionCount += 1;
       this.lastEventsAuthorization = request.headers.authorization;
+      this.lastEventsQuery = identityQueryOf(url);
       response.writeHead(200, {
         "Content-Type": "text/event-stream",
         "Cache-Control": "no-cache",
@@ -676,7 +735,12 @@ class FakeBackplane {
     }
     const previewMatch = url.pathname.match(/^\/companion\/artifacts\/([^/]+)\/preview$/);
     if (request.method === "GET" && previewMatch?.[1]) {
+      if (!hasIdentityQuery(url)) {
+        this.rejectMissingIdentity(response);
+        return;
+      }
       this.previewRequests.push(decodeURIComponent(previewMatch[1]));
+      this.lastPreviewQuery = identityQueryOf(url);
       response.writeHead(this.previewResponse.status, {
         ...(this.previewResponse.contentType ? { "Content-Type": this.previewResponse.contentType } : {}),
         "Content-Length": String(this.previewResponse.body.byteLength),
@@ -687,12 +751,36 @@ class FakeBackplane {
     response.writeHead(404, { "Content-Type": "application/json" });
     response.end("{\"error\":\"unknown route\"}");
   }
+
+  private rejectMissingIdentity(response: http.ServerResponse): void {
+    response.writeHead(403, { "Content-Type": "application/json" });
+    response.end(JSON.stringify({
+      error: { message: "Missing satellite registry identity query", type: "forbidden" },
+    }));
+  }
+}
+
+function hasIdentityQuery(url: URL): boolean {
+  return Boolean(
+    url.searchParams.get("satelliteId")
+    && url.searchParams.get("endpointId")
+    && url.searchParams.get("claimType"),
+  );
+}
+
+function identityQueryOf(url: URL): Record<string, string> {
+  return {
+    satelliteId: url.searchParams.get("satelliteId") ?? "",
+    endpointId: url.searchParams.get("endpointId") ?? "",
+    claimType: url.searchParams.get("claimType") ?? "",
+  };
 }
 
 function bridgeConfig(baseUrl: string, overrides: Partial<CompanionBridgeConfig> = {}): CompanionBridgeConfig {
   return {
     baseUrl,
     apiKey: "companion-key",
+    identity: { ...TEST_IDENTITY },
     previewMaxBytes: 1_048_576,
     reconnectBaseMs: 10,
     reconnectMaxMs: 40,

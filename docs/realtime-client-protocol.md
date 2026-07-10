@@ -158,11 +158,25 @@ tests.
 ## Companion Approvals, Artifacts, And Tool Activity
 
 The hub can bridge a PSFN companion backplane (`PSFN_COMPANION_BASE_URL`) into
-the realtime websocket path. PSFN owns approvals, artifacts, and tool events;
-the hub only relays the redacted payloads PSFN emits and proxies decisions and
-preview reads back. If the backplane is unconfigured or unreachable, the hub
-relays nothing and rejects the client requests below — there is no fake or
-cached data.
+the realtime websocket path. The backplane endpoints live on the same gateway
+API edge as `/v1/chat/completions`, so the base URL is typically the same
+`<gateway>/v1` value as `PSFN_API_BASE_URL`. PSFN owns approvals, artifacts,
+and tool events; the hub only relays the redacted payloads PSFN emits and
+proxies decisions and preview reads back. If the backplane is unconfigured or
+unreachable, the hub relays nothing and rejects the client requests below —
+there is no fake or cached data.
+
+Backplane access is deny-by-default at the satellite registry. The hub
+authenticates with `Authorization: Bearer <key>`; the key's principal must be
+listed on the hub's endpoint entry in PSFN's `satellites.json` and granted the
+`approvals`, `artifacts`, and `tool_activity` telemetry scopes. Both backplane
+`GET` endpoints additionally require the hub's registry identity as query
+parameters (`satelliteId`, `endpointId`, `claimType`), which the hub takes
+from its existing `PSFN_SATELLITE_ID` / `PSFN_ENDPOINT_ID` /
+`PSFN_CLAIM_TYPE`-or-`PSFN_CAPABILITY_PROFILE` configuration; PSFN answers
+`401` for a bad bearer and `403` for an unknown endpoint/principal or a
+missing scope. An incomplete identity disables the bridge at startup — fail
+closed.
 
 All of these message families are capability-gated through `hello`:
 
@@ -210,9 +224,11 @@ the hub never adds transcript or raw payload content.
 }
 ```
 
-`status` is one of `approved`, `denied`, `expired`, or `blocked`. Resolution is
-broadcast to every approvals-capable satellite, including after a decision the
-same satellite submitted.
+`status` is one of `approved`, `denied`, `expired`, or `blocked`. PSFN maps
+its internal queue outcomes into this enum upstream (a `failed` stream arrives
+as `blocked`, a `modified` stream as `approved`); the hub relays whatever
+status PSFN emits. Resolution is broadcast to every approvals-capable
+satellite, including after a decision the same satellite submitted.
 
 `artifact.created`
 
@@ -289,10 +305,13 @@ optional and already redacted by PSFN.
 ```
 
 The hub forwards the decision to PSFN with the submitting satellite and device
-identity attached. Success produces no direct reply; the authoritative
-`approval.resolved` event follows over the relay. Failures (unauthorized,
-unknown approval, already resolved, expired) come back as `error-event` to the
-submitting satellite only.
+identity attached. Success (`200` with `{id, status}`) produces no direct
+reply; the authoritative `approval.resolved` event follows over the relay.
+Failures come back as `error-event` to the submitting satellite only. The hub
+classifies failures by HTTP status code, not body shape: `401`/`403` for
+auth/scope problems, `404` for an unknown approval, and `409` for an
+already-resolved or expired approval, where PSFN returns its standard API
+error envelope with `details.{id, status}`.
 
 `artifact.preview`
 

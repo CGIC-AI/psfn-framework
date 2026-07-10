@@ -60,7 +60,14 @@ export class CompanionBridge {
   private runTask: Promise<void> | null = null;
   private stopped = false;
 
-  constructor(private readonly config: CompanionBridgeConfig) {}
+  constructor(private readonly config: CompanionBridgeConfig) {
+    const { satelliteId, endpointId, claimType } = config.identity;
+    if (!satelliteId.trim() || !endpointId.trim() || !claimType.trim()) {
+      throw new Error(
+        "Companion bridge requires a complete satellite registry identity (satelliteId, endpointId, claimType)",
+      );
+    }
+  }
 
   start(): void {
     if (this.runTask) {
@@ -135,7 +142,7 @@ export class CompanionBridge {
     }
     const controller = new AbortController();
     const response = await fetch(
-      `${this.config.baseUrl}/companion/artifacts/${encodeURIComponent(normalizedId)}/preview`,
+      `${this.config.baseUrl}/companion/artifacts/${encodeURIComponent(normalizedId)}/preview?${this.identityQuery()}`,
       {
         method: "GET",
         headers: this.buildHeaders(),
@@ -197,6 +204,14 @@ export class CompanionBridge {
     return headers;
   }
 
+  private identityQuery(): string {
+    return new URLSearchParams({
+      satelliteId: this.config.identity.satelliteId,
+      endpointId: this.config.identity.endpointId,
+      claimType: this.config.identity.claimType,
+    }).toString();
+  }
+
   private async runEventLoop(): Promise<void> {
     let attempt = 0;
     while (!this.stopped) {
@@ -221,7 +236,7 @@ export class CompanionBridge {
 
   private async consumeEventStream(): Promise<boolean> {
     const signal = this.abortController?.signal;
-    const response = await fetch(`${this.config.baseUrl}/companion/events`, {
+    const response = await fetch(`${this.config.baseUrl}/companion/events?${this.identityQuery()}`, {
       method: "GET",
       headers: {
         ...this.buildHeaders(),

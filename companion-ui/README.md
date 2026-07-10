@@ -54,8 +54,11 @@ deviceId: psfn-satellite-mobile-chat-app
 deviceName: PSFN Satellite Mobile Chat App
 ```
 
-Default capabilities are text input, text/subtitle output, interrupt, presence,
-session attach, confirmation-required safety, and local-only safety.
+Default capabilities are text input; text, subtitle, artifact, and
+tool-activity output; interrupt, presence, session-attach, and approvals
+control; and confirmation-required plus local-only safety. The hub only relays
+the approval, artifact, and tool-activity families to satellites that advertise
+them, so absent an ack those surfaces stay fail-closed.
 
 ## Development
 
@@ -117,6 +120,8 @@ Client to hub messages currently used by this UI include:
 - `turn.end`
 - `interrupt`
 - `ping`
+- `approval.decision`
+- `artifact.preview`
 
 Hub to client messages consumed by the UI include:
 
@@ -126,8 +131,14 @@ Hub to client messages consumed by the UI include:
 - `status`
 - `error-event`
 - `pong`
+- `approval.requested` / `approval.resolved`
+- `artifact.created` / `artifact.preview.result` / `artifact.preview.error`
+- `tool.activity`
 
-Unknown hub message types fail closed during framing.
+Unknown hub message types fail closed during framing. The newer approval,
+artifact, and tool-activity families are additionally validated structurally:
+a frame with a known `type` but a malformed body is rejected rather than
+coerced.
 
 ## Current UI Surfaces
 
@@ -186,10 +197,13 @@ conversation record. Browser audio capture and TTS transport are shown
 fail-closed until the hub/client voice path is implemented.
 
 Approval and artifact UI is contextual only. It does not live as a permanent
-section on the main page. Until the hub exposes those protocol events, the
-client keeps them fail-closed.
+section on the main page. Approval cards (approve/deny with an expiry
+countdown and resolved state) and the artifact shelf (with scoped preview
+fetch) render in the contextual toast layer above the composer once the hub
+acks the matching capability; absent that ack they stay fail-closed and empty.
+Tool-activity lifecycle events fold into the redacted Activity drawer.
 
-Open follow-up beads for those hub protocol gaps:
+The client side is wired against the pinned hub contract in:
 
 - `psfn-framework-qa4`: approval request/decision messages
 - `psfn-framework-3eh`: scoped artifact events and read access

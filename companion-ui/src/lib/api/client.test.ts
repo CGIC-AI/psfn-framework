@@ -60,8 +60,8 @@ describe('satellite hub auth', () => {
       satelliteName: PSFN_SATELLITE_MOBILE_CHAT_APP_NAME,
       capabilities: {
         input: ['text'],
-        output: ['text', 'subtitle'],
-        control: ['interrupt', 'presence', 'session_attach'],
+        output: ['text', 'subtitle', 'artifact', 'tool_activity'],
+        control: ['interrupt', 'presence', 'session_attach', 'approvals'],
         safety: ['confirmation_required', 'local_only'],
       },
     });

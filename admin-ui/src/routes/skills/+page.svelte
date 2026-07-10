@@ -261,6 +261,12 @@
     return [...sources].sort();
   });
 
+  // Missing scan roots (excluding the lazily-created managed 'custom' root)
+  // explain a mysteriously empty skills list, so surface them prominently.
+  let missingScanRoots = $derived.by(() =>
+    (snapshot?.roots ?? []).filter(r => !r.exists && r.source !== 'custom'),
+  );
+
   function formatRequires(entry: SkillEntry): string {
     const parts: string[] = [];
     if (entry.requires.binaries.length > 0) parts.push(`bin:${entry.requires.binaries.join(',')}`);
@@ -436,6 +442,20 @@
         </div>
       </div>
     </div>
+
+    <!-- Missing Scan Roots Warning -->
+    {#if missingScanRoots.length > 0}
+      <div class="card-garden p-4 border-l-4 border-l-wilt-400">
+        <p class="text-sm text-wilt-700">
+          {missingScanRoots.length} skills root{missingScanRoots.length === 1 ? ' is' : 's are'} missing on disk
+          and cannot contribute skills:
+          {#each missingScanRoots as root, i (root.absolutePath)}
+            {#if i > 0},{/if}
+            <code class="font-mono bg-wilt-50 px-1 py-0.5 rounded">{root.path}</code>
+          {/each}
+        </p>
+      </div>
+    {/if}
 
     <!-- Create Skill Form -->
     {#if showCreateForm}
@@ -759,8 +779,30 @@
       </div>
     {/if}
 
-    <!-- Discovery Directories -->
-    {#if snapshot.directories.length > 0}
+    <!-- Discovery Directories (scan provenance) -->
+    {#if snapshot.roots?.length}
+      <div class="card-garden p-5">
+        <h2 class="text-base font-serif font-semibold text-shadow-900 mb-3">Discovery Directories</h2>
+        <ul class="space-y-1.5">
+          {#each snapshot.roots as root (root.absolutePath)}
+            <li class="text-sm text-shadow-800 flex items-center gap-2 flex-wrap">
+              <code class="font-mono bg-bark-100 px-1.5 py-0.5 rounded text-shadow-700">{root.path}</code>
+              <span class="text-shadow-600">({root.source})</span>
+              {#if root.exists}
+                <span class="inline-block px-2 py-0.5 rounded-full text-xs font-medium bg-moss-100 text-moss-700">
+                  {root.skillCount} skill{root.skillCount === 1 ? '' : 's'}
+                </span>
+              {:else}
+                <span class="inline-block px-2 py-0.5 rounded-full text-xs font-medium bg-wilt-100 text-wilt-600">
+                  missing
+                </span>
+              {/if}
+            </li>
+          {/each}
+        </ul>
+      </div>
+    {:else if snapshot.directories.length > 0}
+      <!-- Fallback for gateways that predate scan provenance -->
       <div class="card-garden p-5">
         <h2 class="text-base font-serif font-semibold text-shadow-900 mb-3">Discovery Directories</h2>
         <ul class="space-y-1">

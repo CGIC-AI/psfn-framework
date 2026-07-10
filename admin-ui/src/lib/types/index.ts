@@ -155,6 +155,7 @@ export type {
 export type {
   SkillDirectorySpec,
   SkillEntry,
+  SkillRootScan,
   SkillSkipRecord,
   SkillSnapshot,
 } from '../../../../src/faculties/skills/types.js';

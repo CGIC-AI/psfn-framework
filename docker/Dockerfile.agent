@@ -83,13 +83,17 @@ COPY config/*.seed.json ./config/
 COPY config/concern-softening.json ./config/concern-softening.json
 COPY config/intake-l1-rules.json ./config/intake-l1-rules.json
 COPY scripts/ops/ ./scripts/ops/
+# Repo-root skills tree: the skills runtime scans <repoRoot>/skills at
+# runtime (repoRoot = /app in the image); without this COPY the global
+# skills root is missing and the loader reports it as absent.
+COPY skills/ ./skills/
 
 RUN git init /app \
     && git config user.name "PSFN Runtime Image" \
     && git config user.email "runtime-image@psfn.local" \
     && git config --system --add safe.directory /app \
     && printf 'node_modules/\nadmin-ui/node_modules/\n' > .gitignore \
-    && git add .gitignore package*.json admin-ui/package*.json dist admin-ui/build config scripts/ops \
+    && git add .gitignore package*.json admin-ui/package*.json dist admin-ui/build config scripts/ops skills \
     && git commit -m "Runtime image snapshot"
 
 # Non-root user for defense in depth. Keep the numeric ID aligned with the

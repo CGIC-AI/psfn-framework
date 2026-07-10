@@ -17,11 +17,15 @@ function writeSkill(path: string, description: string, body: string): void {
   ].join('\n'), 'utf-8');
 }
 
-function writeSkillsConfig(dataDir: string, seedDir: string): void {
+function writeSkillsConfig(
+  dataDir: string,
+  seedDir: string,
+  overrides?: { extraDirectories?: string[] },
+): void {
   const payload = {
     enabled: true,
     directories: ['skills'],
-    extraDirectories: [],
+    extraDirectories: overrides?.extraDirectories ?? [],
     maxLoadedSkills: 32,
     maxSkillChars: 100_000,
     disabledSkills: [],
@@ -133,6 +137,56 @@ describe('skills runtime', () => {
         owner: 'personal',
         managedRoot: 'purrsephone/skills',
         configPath: 'companion-data/skills.json',
+      });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('exposes scan provenance for every skills root in the snapshot', () => {
+    const root = mkdtempSync(join(tmpdir(), 'skills-runtime-provenance-'));
+    const dataDir = join(root, 'data');
+    const seedDir = join(root, 'config');
+    const skillDir = join(root, 'skills', 'memory-management');
+
+    mkdirSync(dataDir, { recursive: true });
+    mkdirSync(seedDir, { recursive: true });
+    mkdirSync(skillDir, { recursive: true });
+
+    writeSkillsConfig(dataDir, seedDir, { extraDirectories: ['vendor/skills'] });
+    writeSkill(join(skillDir, 'SKILL.md'), 'provenance proof', '# Memory provenance');
+
+    try {
+      const runtime = new SkillsRuntime({
+        dataDir,
+        seedDir,
+        repoRoot: root,
+        isBinaryAvailable: () => true,
+      });
+
+      const snapshot = runtime.getSnapshot();
+
+      // managed (custom) root + configured 'skills' + missing 'vendor/skills'
+      expect(snapshot.roots).toHaveLength(3);
+
+      const managedRoot = snapshot.roots.find(r => r.source === 'custom');
+      expect(managedRoot).toBeDefined();
+      expect(managedRoot?.exists).toBe(false);
+      expect(managedRoot?.skillCount).toBe(0);
+
+      const bundledRoot = snapshot.roots.find(r => r.path === 'skills');
+      expect(bundledRoot).toMatchObject({
+        exists: true,
+        skillCount: 1,
+        source: 'bundled',
+        absolutePath: join(root, 'skills'),
+      });
+
+      const vendorRoot = snapshot.roots.find(r => r.path === 'vendor/skills');
+      expect(vendorRoot).toMatchObject({
+        exists: false,
+        skillCount: 0,
+        source: 'extra',
       });
     } finally {
       rmSync(root, { recursive: true, force: true });

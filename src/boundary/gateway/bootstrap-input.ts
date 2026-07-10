@@ -24,6 +24,7 @@ import {
   resolveOptionalEnvCredential,
 } from '../custody/credential-vault.js';
 import { requireGatewaySessionHmacKeyring } from './session-hmac-env.js';
+import { loadPlacesRegistryConfig } from '../../channels/backplane/places-registry.js';
 import { setRuntimeChannelEnvelopeLabels } from '../../system/trust/runtime-channel-labels.js';
 import {
   buildRuntimeChannelsConfigOverrides,
@@ -297,6 +298,7 @@ function buildGatewayPolicyConfig(
   env: GatewayBootstrapOptions['env'],
   workspaceRoot: string,
   codebaseRoot: string,
+  systemDataDir: string,
 ): PolicyConfig {
   const fullCodebaseReadRoot = resolveFullCodebaseReadRootFromEnv(env, codebaseRoot);
   const discoveryLaneConfig = resolveDiscoveryLaneConfig({
@@ -354,12 +356,14 @@ function buildGatewayPolicyConfig(
     },
     homeAssistant: {
       enabled: config.homeAssistantEnabled === true,
-      ...(config.homeAssistantBaseUrl?.trim()
-        ? { baseUrl: config.homeAssistantBaseUrl.trim() }
+      ...(env.SATELLITE_HUB_CONTROL_BASE_URL?.trim()
+        ? { hubBaseUrl: env.SATELLITE_HUB_CONTROL_BASE_URL.trim() }
         : {}),
+      autonomousControlEnabled: config.capabilityTier === 'autonomous',
+      placesRegistry: loadPlacesRegistryConfig(systemDataDir),
       tokenConfigured: Boolean(resolveOptionalEnvCredential(
         config.credentialVault,
-        'HOME_ASSISTANT_TOKEN',
+        'SATELLITE_HUB_CONTROL_TOKEN',
         env,
       )),
     },
@@ -457,7 +461,13 @@ export function resolveGatewayBootstrapInput(
     auditDbPath,
     fullCodebaseReadRoot: resolveFullCodebaseReadRootFromEnv(env, codebaseRoot),
     channelsConfig,
-    policyConfig: buildGatewayPolicyConfig(config, env, workspaceRoot, codebaseRoot),
+    policyConfig: buildGatewayPolicyConfig(
+      config,
+      env,
+      workspaceRoot,
+      codebaseRoot,
+      startupHydration.systemDataDir,
+    ),
     server: {
       sessionHmacKeyring,
       wyomingShardRouting,

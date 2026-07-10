@@ -99,6 +99,15 @@ spec:
                 secretKeyRef:
                   name: {{ include "psfn.appSecretName" . }}
                   key: {{ .Values.secrets.keys.gatewaySessionHmacKey }}
+            {{- if and .Values.satelliteHub.enabled .Values.satelliteHub.homeAssistant.enabled }}
+            - name: SATELLITE_HUB_CONTROL_BASE_URL
+              value: {{ printf "http://%s:%v" (include "psfn.satelliteHubServiceName" .) .Values.ports.satelliteHubControl | quote }}
+            - name: SATELLITE_HUB_CONTROL_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "psfn.appSecretName" . }}
+                  key: {{ .Values.secrets.keys.satelliteHubControlToken }}
+            {{- end }}
             {{- /* Per-satellite bearer keys (Sprint-10 H4): each key yields a
                  distinct satellite-scoped principal referenced by
                  satellites.json auth.apiKeyPrincipalIds. Optional like the
@@ -469,6 +478,11 @@ spec:
     - name: hub-ws
       port: {{ .Values.ports.satelliteHub }}
       targetPort: hub-ws
+    {{- if .Values.satelliteHub.homeAssistant.enabled }}
+    - name: hub-control
+      port: {{ .Values.ports.satelliteHubControl }}
+      targetPort: hub-control
+    {{- end }}
   selector:
     {{- include "psfn.componentLabels" (dict "root" . "component" "satellite-hub") | nindent 4 }}
 ---
@@ -519,6 +533,10 @@ spec:
               hostIP: {{ . | quote }}
               {{- end }}
               {{- end }}
+            {{- if .Values.satelliteHub.homeAssistant.enabled }}
+            - name: hub-control
+              containerPort: {{ .Values.ports.satelliteHubControl }}
+            {{- end }}
           env:
             - name: AGENT_RUNTIME
               value: {{ .Values.satelliteHub.agentRuntime | quote }}
@@ -558,6 +576,28 @@ spec:
                  behavior, commit 9999af5). */}}
             - name: PSFN_COMPANION_BASE_URL
               value: {{ include "psfn.gatewayApiBaseUrl" . | quote }}
+            {{- end }}
+            {{- if .Values.satelliteHub.homeAssistant.enabled }}
+            - name: HOME_ASSISTANT_ENABLED
+              value: "true"
+            - name: HOME_ASSISTANT_BASE_URL
+              value: {{ required "satelliteHub.homeAssistant.baseUrl is required when Home Assistant is enabled" .Values.satelliteHub.homeAssistant.baseUrl | quote }}
+            - name: HOME_ASSISTANT_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "psfn.appSecretName" . }}
+                  key: {{ .Values.secrets.keys.homeAssistantToken }}
+            - name: HUB_CONTROL_BIND_HOST
+              value: "0.0.0.0"
+            - name: HUB_CONTROL_PORT
+              value: {{ .Values.ports.satelliteHubControl | quote }}
+            - name: HUB_CONTROL_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "psfn.appSecretName" . }}
+                  key: {{ .Values.secrets.keys.satelliteHubControlToken }}
+            - name: HUB_DEVICE_REGISTRY_PATH
+              value: /app/config/hub-devices.json
             {{- end }}
             {{- if .Values.satelliteHub.textOnly }}
             {{- /* Text-only mode: voice providers are genuinely optional
@@ -619,6 +659,12 @@ spec:
             - name: psfn-client-tls
               mountPath: {{ printf "%s/psfn-client" .Values.certificates.mountBasePath }}
               readOnly: true
+            {{- if .Values.satelliteHub.homeAssistant.enabled }}
+            - name: hub-device-registry
+              mountPath: /app/config/hub-devices.json
+              subPath: hub-devices.json
+              readOnly: true
+            {{- end }}
       volumes:
         - name: runtime
           persistentVolumeClaim:
@@ -626,6 +672,11 @@ spec:
         - name: psfn-client-tls
           secret:
             secretName: {{ include "psfn.satelliteHubClientCertSecretName" . }}
+        {{- if .Values.satelliteHub.homeAssistant.enabled }}
+        - name: hub-device-registry
+          configMap:
+            name: {{ include "psfn.fullname" . }}-hub-devices
+        {{- end }}
 {{- end }}
 {{- if .Values.companionUiTest.enabled }}
 ---

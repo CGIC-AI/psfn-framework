@@ -3,6 +3,7 @@ import { createComponentLogger } from '../../shared/logger.js';
 import type { BeadsAction, PolicyContext, PolicyDecision } from './protocol.js';
 import type { VaultOperations } from '../integrations/vault/ops.js';
 import type { ShellExecPolicyConfig } from '../sandbox/execution/shell-policy-config.js';
+import type { PlacesRegistryConfig } from '../../shared/contracts/places-registry.js';
 
 const log = createComponentLogger('Policy');
 import { evaluateUrlPolicy, type UrlPolicyConfig, type UrlPolicyLane } from './url-policy.js';
@@ -20,8 +21,10 @@ export interface BeadsPolicyConfig {
 
 export interface HomeAssistantPolicyConfig {
   enabled?: boolean;
-  baseUrl?: string;
+  hubBaseUrl?: string;
   tokenConfigured?: boolean;
+  autonomousControlEnabled?: boolean;
+  placesRegistry?: Pick<PlacesRegistryConfig, 'places'>;
 }
 
 export type VaultPolicyAction = 'write' | 'read' | 'search' | 'daily';
@@ -346,17 +349,31 @@ export function evaluatePolicy(ctx: PolicyContext, policyConfig: PolicyConfig): 
       return 'ALLOW';
 
     case 'home_assistant.get_states':
-    case 'home_assistant.check_connection':
-      return 'ALLOW';
+    case 'home_assistant.check_connection': {
+      const ha = policyConfig.homeAssistant;
+      return ha?.enabled === true && Boolean(ha.hubBaseUrl?.trim()) && ha.tokenConfigured === true
+        ? 'ALLOW'
+        : 'DENY';
+    }
 
     case 'home_assistant.call_service': {
       const ha = policyConfig.homeAssistant;
       const configured =
-        ha?.enabled === true && Boolean(ha.baseUrl?.trim()) && ha.tokenConfigured === true;
-      // Fail closed: when Home Assistant is not fully configured the policy layer
-      // itself must DENY rather than defer to the handler recheck. A configured
-      // service call is human-gated via NEEDS_APPROVAL.
-      return configured ? 'NEEDS_APPROVAL' : 'DENY';
+        ha?.enabled === true && Boolean(ha.hubBaseUrl?.trim()) && ha.tokenConfigured === true;
+      if (!configured) return 'DENY';
+      const request = params as Record<string, unknown>;
+      const registeredAffordance = ha.placesRegistry?.places
+        .find((place) => place.placeId === request.placeId)
+        ?.affordances.find((affordance) => affordance.affordanceId === request.affordanceId);
+      const autonomousLight = ha.autonomousControlEnabled === true
+        && registeredAffordance?.kind === 'light'
+        && registeredAffordance.role === 'effector'
+        && registeredAffordance.backend === 'ha'
+        && registeredAffordance.entityId === request.entityId
+        && typeof request.reason === 'string'
+        && request.reason.trim().length > 0
+        && typeof request.intent === 'string';
+      return autonomousLight ? 'ALLOW' : 'NEEDS_APPROVAL';
     }
 
     case 'vault.write':

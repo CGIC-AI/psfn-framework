@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { JSONRPCErrorException } from 'json-rpc-2.0';
 import type {
   HomeAssistantCallServiceParams,
@@ -9,30 +10,22 @@ import type {
   HomeAssistantState,
 } from '../protocol.js';
 import { GatewayErrors } from '../protocol.js';
-import { effectiveUrlPort, type UrlPolicyConfig, type UrlPolicyLane } from '../url-policy.js';
 import type { GatewayMethodRuntime, GatedMethodDescriptor } from './types.js';
 import { registerGatedDescriptors } from './register.js';
 import { resolveOptionalEnvCredential } from '../../custody/credential-vault.js';
 import { isRecord } from '../../../shared/utils/types.js';
 import { toErrorMessage } from '../../../shared/utils/errors.js';
-import {
-  fetchWithValidatedRedirectChain,
-  formatFetchFailureDetails,
-  loadTlsBundle,
-  normalizeRequestHeaders,
-  resolveDnsResolver,
-  resolveTlsCertPaths,
-  withWebCircuit,
-  type WebCircuitMethodName,
-} from './web.js';
+import { worldAutonomyLimiter } from '../world-autonomy-limiter.js';
 
-const HOME_ASSISTANT_TOKEN_ENV = 'HOME_ASSISTANT_TOKEN';
-const HOME_ASSISTANT_LANE: UrlPolicyLane = 'home_assistant';
-const MAX_HA_RESPONSE_BYTES = 1_000_000;
-const MAX_HA_REQUEST_BYTES = 64 * 1024;
+const HUB_CONTROL_TOKEN_ENV = 'SATELLITE_HUB_CONTROL_TOKEN';
+const MAX_RESPONSE_BYTES = 1_000_000;
+const MAX_REQUEST_BYTES = 64 * 1024;
 const MAX_ENTITY_IDS = 50;
-const DOMAIN_SERVICE_PATTERN = /^[a-z][a-z0-9_]*$/;
-const ENTITY_ID_PATTERN = /^[a-z][a-z0-9_]*\.[A-Za-z0-9_]+$/;
+const ENTITY_ID_PATTERN = /^[a-z][a-z0-9_]*\.[A-Za-z0-9_]+$/u;
+const DOMAIN_SERVICE_PATTERN = /^[a-z][a-z0-9_]*$/u;
+const ALLOWED_DOMAINS = new Set(['light', 'switch', 'media_player']);
+const ALLOWED_SERVICES = new Set(['turn_on', 'turn_off', 'toggle']);
+const ALLOWED_INTENTS = new Set(['direct', 'presence_enter', 'presence_exit', 'attention', 'sleep', 'wake']);
 
 function deny(message: string): never {
   throw new JSONRPCErrorException(message, GatewayErrors.POLICY_DENIED);
@@ -42,419 +35,218 @@ function providerError(message: string): never {
   throw new JSONRPCErrorException(message, GatewayErrors.PROVIDER_ERROR);
 }
 
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
-}
-
-function redactHomeAssistantSecrets(message: string, token?: string): string {
-  let redacted = message.replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/giu, 'Bearer [REDACTED]');
-  if (token) {
-    redacted = redacted.replace(new RegExp(escapeRegExp(token), 'gu'), '[REDACTED]');
-  }
-  return redacted;
-}
-
-function normalizeBaseUrl(runtime: GatewayMethodRuntime): URL {
+function resolveHub(runtime: GatewayMethodRuntime): { baseUrl: URL; token: string } {
   const config = runtime.policyConfig.homeAssistant;
-  if (config?.enabled !== true) {
-    deny('Home Assistant gateway methods are disabled in settings.json (homeAssistantEnabled=false)');
+  if (config?.enabled !== true || !config.hubBaseUrl?.trim() || config.tokenConfigured !== true) {
+    deny('Satellite Hub world transport is not fully configured');
   }
-
-  const rawBaseUrl = config.baseUrl?.trim();
-  if (!rawBaseUrl) {
-    deny('Home Assistant gateway methods require homeAssistantBaseUrl in settings.json');
-  }
-
-  let parsed: URL;
+  let baseUrl: URL;
   try {
-    parsed = new URL(rawBaseUrl);
+    baseUrl = new URL(config.hubBaseUrl);
   } catch {
-    deny('Home Assistant base URL is invalid');
+    deny('Satellite Hub control URL is invalid');
   }
-
-  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-    deny('Home Assistant base URL must use http or https');
+  if (!['http:', 'https:'].includes(baseUrl.protocol) || baseUrl.username || baseUrl.password) {
+    deny('Satellite Hub control URL must be an http(s) URL without embedded credentials');
   }
-  if (parsed.username || parsed.password) {
-    deny('Home Assistant base URL must not include credentials');
-  }
-  if (!parsed.hostname.trim()) {
-    deny('Home Assistant base URL must include a host');
-  }
-
-  parsed.search = '';
-  parsed.hash = '';
-  parsed.pathname = parsed.pathname.replace(/\/+$/u, '');
-  return parsed;
-}
-
-function buildHomeAssistantUrl(baseUrl: URL, apiPath: string): string {
-  const basePath = baseUrl.pathname.replace(/\/+$/u, '');
-  const url = new URL(baseUrl.toString());
-  url.pathname = `${basePath}${apiPath}`;
-  url.search = '';
-  url.hash = '';
-  return url.toString();
-}
-
-function buildHomeAssistantUrlPolicy(baseUrl: URL): UrlPolicyConfig {
-  // Pin the allowlist to host AND effective port (Sprint-10 01-M2): a redirect
-  // to another port of the Home Assistant host must not stay "in allowlist"
-  // and replay the Bearer token. baseUrl.hostname keeps IPv6 brackets, which
-  // the allowlist entry parser understands ("[::1]:8123").
-  return {
-    allowHttp: baseUrl.protocol === 'http:',
-    allowInternalNetwork: true,
-    hostAllowlist: [`${baseUrl.hostname}:${effectiveUrlPort(baseUrl)}`],
-  };
-}
-
-function resolveHomeAssistantToken(runtime: GatewayMethodRuntime): string {
-  const token = resolveOptionalEnvCredential(
-    runtime.credentialVault,
-    HOME_ASSISTANT_TOKEN_ENV,
-  );
-  if (!token) {
-    deny(`Home Assistant token is not configured in gateway credential vault (${HOME_ASSISTANT_TOKEN_ENV})`);
-  }
-  return token;
+  baseUrl.search = '';
+  baseUrl.hash = '';
+  baseUrl.pathname = baseUrl.pathname.replace(/\/+$/u, '');
+  const token = resolveOptionalEnvCredential(runtime.credentialVault, HUB_CONTROL_TOKEN_ENV);
+  if (!token) deny(`Satellite Hub control credential is missing (${HUB_CONTROL_TOKEN_ENV})`);
+  return { baseUrl, token };
 }
 
 function parseEntityId(value: unknown, field: string): string {
-  if (typeof value !== 'string') {
-    deny(`${field} must be a string`);
-  }
-  const entityId = value.trim();
-  if (!ENTITY_ID_PATTERN.test(entityId) || entityId.length > 128) {
+  if (typeof value !== 'string' || !ENTITY_ID_PATTERN.test(value.trim()) || value.trim().length > 128) {
     deny(`${field} must be a valid Home Assistant entity_id`);
   }
-  return entityId;
+  return value.trim();
 }
 
-function parseOptionalEntityIds(params: HomeAssistantCallServiceParams): string[] {
-  const entityIds: string[] = [];
-  if (params.entityId !== undefined) {
-    entityIds.push(parseEntityId(params.entityId, 'entityId'));
-  }
-  if (params.entityIds !== undefined) {
-    if (!Array.isArray(params.entityIds)) {
-      deny('entityIds must be an array of Home Assistant entity_id strings');
-    }
-    for (const entry of params.entityIds) {
-      entityIds.push(parseEntityId(entry, 'entityIds[]'));
-    }
-  }
-  const unique = [...new Set(entityIds)];
-  if (unique.length > MAX_ENTITY_IDS) {
-    deny(`entityIds exceeds max length (${MAX_ENTITY_IDS})`);
+function parseEntityIds(params: HomeAssistantCallServiceParams): string[] {
+  const ids = [
+    ...(params.entityId === undefined ? [] : [parseEntityId(params.entityId, 'entityId')]),
+    ...(Array.isArray(params.entityIds)
+      ? params.entityIds.map((entry) => parseEntityId(entry, 'entityIds[]'))
+      : []),
+  ];
+  if (params.entityIds !== undefined && !Array.isArray(params.entityIds)) deny('entityIds must be an array');
+  const unique = [...new Set(ids)];
+  if (unique.length === 0 || unique.length > MAX_ENTITY_IDS) {
+    deny(`entityIds must contain 1-${MAX_ENTITY_IDS} entries`);
   }
   return unique;
 }
 
-function parseDomainOrService(value: unknown, field: 'domain' | 'service'): string {
-  if (typeof value !== 'string') {
-    deny(`${field} must be a string`);
-  }
+function parseToken(value: unknown, field: string): string {
+  if (typeof value !== 'string') deny(`${field} must be a string`);
   const normalized = value.trim().toLowerCase();
-  if (!DOMAIN_SERVICE_PATTERN.test(normalized) || normalized.length > 64) {
-    deny(`${field} contains invalid characters`);
-  }
+  if (!DOMAIN_SERVICE_PATTERN.test(normalized) || normalized.length > 64) deny(`${field} is invalid`);
   return normalized;
 }
 
-function normalizeServiceData(
-  params: HomeAssistantCallServiceParams,
-  entityIds: readonly string[],
-): Record<string, unknown> {
-  const rawData = params.data ?? {};
-  if (!isRecord(rawData)) {
-    deny('data must be an object when provided');
+function resolveRegisteredAffordance(runtime: GatewayMethodRuntime, params: HomeAssistantCallServiceParams): void {
+  const placeId = params.placeId.trim();
+  const affordanceId = params.affordanceId.trim();
+  if (!placeId || !affordanceId) deny('world control requires placeId and affordanceId');
+  const place = runtime.policyConfig.homeAssistant?.placesRegistry?.places
+    .find((candidate) => candidate.placeId === placeId);
+  const affordance = place?.affordances.find((candidate) => candidate.affordanceId === affordanceId);
+  if (!place || !affordance || affordance.role !== 'effector' || affordance.backend !== 'ha') {
+    deny('world control target is not a registered Home Assistant effector');
   }
-  if (entityIds.length > 0 && Object.hasOwn(rawData, 'entity_id')) {
-    deny('entity_id must be provided through entityId/entityIds, not duplicated in data');
+  const entityIds = parseEntityIds(params);
+  if (!affordance.entityId || entityIds.length !== 1 || entityIds[0] !== affordance.entityId) {
+    deny('world control entity does not match the registered affordance');
   }
+  const entityDomain = affordance.entityId.split('.')[0];
+  if (entityDomain !== params.domain) deny('world control domain does not match the registered entity');
+  if (affordance.kind !== params.domain && !(affordance.kind === 'light' && params.domain === 'switch')) {
+    deny('world control domain is incompatible with affordance kind');
+  }
+  const command = params.service === 'turn_on' ? 'on' : params.service === 'turn_off' ? 'off' : 'toggle';
+  if (affordance.control && !affordance.control.includes(command)) {
+    deny('world control command is not allowed by the registered affordance');
+  }
+}
 
-  const payload: Record<string, unknown> = { ...rawData };
-  if (entityIds.length === 1) {
-    payload.entity_id = entityIds[0];
-  } else if (entityIds.length > 1) {
-    payload.entity_id = [...entityIds];
+async function requestHub(
+  runtime: GatewayMethodRuntime,
+  path: string,
+  method: 'GET' | 'POST',
+  body?: Record<string, unknown>,
+): Promise<unknown> {
+  const { baseUrl, token } = resolveHub(runtime);
+  const url = new URL(baseUrl);
+  url.pathname = `${baseUrl.pathname.replace(/\/+$/u, '')}${path}`;
+  const encoded = body ? JSON.stringify(body) : undefined;
+  if (encoded && Buffer.byteLength(encoded) > MAX_REQUEST_BYTES) deny('Satellite Hub request is too large');
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      method,
+      redirect: 'error',
+      signal: AbortSignal.timeout(10_000),
+      headers: {
+        Accept: 'application/json',
+        Authorization: `Bearer ${token}`,
+        ...(encoded ? { 'Content-Type': 'application/json' } : {}),
+      },
+      ...(encoded ? { body: encoded } : {}),
+    });
+  } catch (error) {
+    providerError(`Satellite Hub request failed: ${toErrorMessage(error)}`);
   }
-
-  const encoded = Buffer.from(JSON.stringify(payload), 'utf8');
-  if (encoded.byteLength > MAX_HA_REQUEST_BYTES) {
-    deny(`Home Assistant service payload exceeds ${MAX_HA_REQUEST_BYTES} bytes`);
+  const bytes = await readBoundedResponse(response);
+  let payload: unknown;
+  try {
+    payload = JSON.parse(bytes.toString('utf8')) as unknown;
+  } catch {
+    providerError('Satellite Hub returned malformed JSON');
+  }
+  if (!response.ok) {
+    const detail = isRecord(payload) && isRecord(payload.error) && typeof payload.error.message === 'string'
+      ? payload.error.message
+      : `${response.status} ${response.statusText}`;
+    providerError(`Satellite Hub rejected world request: ${detail}`);
   }
   return payload;
 }
 
-async function parseJsonResponse(response: { arrayBuffer(): Promise<ArrayBuffer> }): Promise<unknown> {
-  const bytes = Buffer.from(await response.arrayBuffer());
-  if (bytes.byteLength > MAX_HA_RESPONSE_BYTES) {
-    providerError(`Home Assistant response exceeded ${MAX_HA_RESPONSE_BYTES} bytes`);
+async function readBoundedResponse(response: Response): Promise<Buffer> {
+  const declaredLength = Number(response.headers.get('content-length'));
+  if (Number.isFinite(declaredLength) && declaredLength > MAX_RESPONSE_BYTES) {
+    providerError('Satellite Hub response is too large');
   }
-  const raw = bytes.toString('utf8').trim();
-  if (!raw) {
-    providerError('Home Assistant returned an empty response');
-  }
-  try {
-    return JSON.parse(raw) as unknown;
-  } catch (error) {
-    providerError(`Home Assistant returned malformed JSON: ${toErrorMessage(error)}`);
-  }
-}
-
-function validateStateRecord(value: unknown, fieldPath: string): HomeAssistantState {
-  if (!isRecord(value)) {
-    providerError(`Malformed Home Assistant response: ${fieldPath} must be an object`);
-  }
-  if (typeof value.entity_id !== 'string' || !value.entity_id.trim()) {
-    providerError(`Malformed Home Assistant response: ${fieldPath}.entity_id must be a string`);
-  }
-  if (typeof value.state !== 'string') {
-    providerError(`Malformed Home Assistant response: ${fieldPath}.state must be a string`);
-  }
-  return value as HomeAssistantState;
-}
-
-function validateStatesPayload(payload: unknown, entityId: string | undefined): HomeAssistantState[] {
-  if (entityId) {
-    return [validateStateRecord(payload, 'state')];
-  }
-  if (!Array.isArray(payload)) {
-    providerError('Malformed Home Assistant response: states must be an array');
-  }
-  return payload.map((entry, index) => validateStateRecord(entry, `states[${index}]`));
-}
-
-function validateConnectionPayload(payload: unknown): string {
-  if (!isRecord(payload)) {
-    providerError('Malformed Home Assistant response: connection check must be an object');
-  }
-  if (typeof payload.message !== 'string' || !payload.message.trim()) {
-    providerError('Malformed Home Assistant response: connection check message must be a string');
-  }
-  return payload.message;
-}
-
-async function requestHomeAssistantJson(
-  runtime: GatewayMethodRuntime,
-  rpcMethod: WebCircuitMethodName,
-  apiPath: string,
-  options: {
-    method: 'GET' | 'POST';
-    body?: Record<string, unknown>;
-  },
-): Promise<unknown> {
-  const baseUrl = normalizeBaseUrl(runtime);
-  const token = resolveHomeAssistantToken(runtime);
-  const url = buildHomeAssistantUrl(baseUrl, apiPath);
-  const urlPolicyConfig = buildHomeAssistantUrlPolicy(baseUrl);
-  const requestBody = options.body
-    ? Buffer.from(JSON.stringify(options.body), 'utf8')
-    : undefined;
-  const headers = normalizeRequestHeaders({
-    Accept: 'application/json',
-    Authorization: `Bearer ${token}`,
-    ...(requestBody ? { 'Content-Type': 'application/json' } : {}),
-  });
-
-  let tlsCaBundle: string | undefined;
-  try {
-    tlsCaBundle = loadTlsBundle(resolveTlsCertPaths(runtime));
-  } catch (error) {
-    providerError(`Home Assistant TLS setup failed: ${formatFetchFailureDetails(error)}`);
-  }
-
-  return await withWebCircuit(rpcMethod, HOME_ASSISTANT_LANE, url, async () => {
-    let response: Awaited<ReturnType<typeof fetchWithValidatedRedirectChain>>['response'];
-    try {
-      ({ response } = await fetchWithValidatedRedirectChain(
-        rpcMethod,
-        url,
-        HOME_ASSISTANT_LANE,
-        urlPolicyConfig,
-        tlsCaBundle,
-        headers,
-        options.method,
-        requestBody,
-        MAX_HA_RESPONSE_BYTES,
-        runtime,
-        resolveDnsResolver(runtime),
-      ));
-    } catch (error) {
-      if (error instanceof JSONRPCErrorException) {
-        const redacted = redactHomeAssistantSecrets(error.message, token);
-        if (redacted === error.message) {
-          throw error;
-        }
-        throw new JSONRPCErrorException(redacted, error.code, error.data);
-      }
-      providerError(`Home Assistant request failed: ${
-        redactHomeAssistantSecrets(formatFetchFailureDetails(error), token)
-      }`);
+  if (!response.body) return Buffer.alloc(0);
+  const reader = response.body.getReader();
+  const chunks: Buffer[] = [];
+  let total = 0;
+  while (total <= MAX_RESPONSE_BYTES) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > MAX_RESPONSE_BYTES) {
+      await reader.cancel();
+      providerError('Satellite Hub response is too large');
     }
-
-    if (!response.ok) {
-      providerError(`Home Assistant request failed: ${response.status} ${response.statusText}`);
-    }
-    return await parseJsonResponse(response);
-  });
-}
-
-async function recordHomeAssistantAudit(
-  runtime: GatewayMethodRuntime,
-  event: Record<string, unknown>,
-  durationMs: number,
-  error?: string,
-): Promise<void> {
-  await runtime.recordAuditEvent?.({
-    method: 'home_assistant.action',
-    decision: error ? 'DENY' : 'ALLOW',
-    params: event,
-    durationMs,
-    ...(error ? { error } : {}),
-  });
-}
-
-async function executeHomeAssistantAction<T>(
-  runtime: GatewayMethodRuntime,
-  event: Record<string, unknown>,
-  action: () => Promise<T>,
-): Promise<T> {
-  const startedAt = Date.now();
-  try {
-    const result = await action();
-    await recordHomeAssistantAudit(runtime, { ...event, result: 'success' }, Date.now() - startedAt);
-    return result;
-  } catch (error) {
-    const message = redactHomeAssistantSecrets(toErrorMessage(error));
-    await recordHomeAssistantAudit(
-      runtime,
-      { ...event, result: 'error' },
-      Date.now() - startedAt,
-      message,
-    );
-    throw error;
+    chunks.push(Buffer.from(value));
   }
+  return Buffer.concat(chunks, total);
 }
 
-function summaryEntity(value: unknown): string | undefined {
-  return typeof value === 'string' && value.trim() ? value.trim().slice(0, 128) : undefined;
+function parseStates(payload: unknown): HomeAssistantState[] {
+  if (!isRecord(payload) || !Array.isArray(payload.states)) providerError('Malformed Satellite Hub states response');
+  return payload.states.map((state) => {
+    if (!isRecord(state) || typeof state.entity_id !== 'string' || typeof state.state !== 'string') {
+      providerError('Malformed Satellite Hub state record');
+    }
+    return state as HomeAssistantState;
+  });
 }
 
-const homeAssistantDescriptors: Array<GatedMethodDescriptor<any, unknown>> = [
+const descriptors: Array<GatedMethodDescriptor<any, unknown>> = [
   {
     name: 'home_assistant.get_states',
     handler: async (params: HomeAssistantGetStatesParams, runtime): Promise<HomeAssistantGetStatesResult> => {
-      const entityId = params.entityId === undefined
-        ? undefined
-        : parseEntityId(params.entityId, 'entityId');
-      const apiPath = entityId
-        ? `/api/states/${encodeURIComponent(entityId)}`
-        : '/api/states';
-      return await executeHomeAssistantAction(
-        runtime,
-        {
-          action: 'get_states',
-          entityId: entityId ?? null,
-        },
-        async () => {
-          const payload = await requestHomeAssistantJson(
-            runtime,
-            'home_assistant.get_states',
-            apiPath,
-            { method: 'GET' },
-          );
-          const states = validateStatesPayload(payload, entityId);
-          return {
-            states,
-            count: states.length,
-            ...(entityId ? { entityId } : {}),
-          };
-        },
-      );
+      const entityIds = params.entityId === undefined ? [] : [parseEntityId(params.entityId, 'entityId')];
+      const payload = await requestHub(runtime, '/internal/v1/home-assistant/states', 'POST', { entityIds });
+      const states = parseStates(payload);
+      return { states, count: states.length, ...(params.entityId ? { entityId: params.entityId } : {}) };
     },
-    summary: (params: HomeAssistantGetStatesParams) => ({
-      action: 'get_states',
-      entityId: summaryEntity(params.entityId) ?? null,
-    }),
+    summary: (params: HomeAssistantGetStatesParams) => ({ action: 'get_states', entityId: params.entityId ?? null }),
     approvalAction: 'home_assistant.read',
-    approvalScope: (params: HomeAssistantGetStatesParams) => (
-      summaryEntity(params.entityId) ?? 'all_states'
-    ),
+    approvalScope: (params: HomeAssistantGetStatesParams) => params.entityId ?? 'all_states',
   },
   {
     name: 'home_assistant.call_service',
-    handler: async (
-      params: HomeAssistantCallServiceParams,
-      runtime,
-    ): Promise<HomeAssistantCallServiceResult> => {
-      const domain = parseDomainOrService(params.domain, 'domain');
-      const service = parseDomainOrService(params.service, 'service');
-      const entityIds = parseOptionalEntityIds(params);
-      const body = normalizeServiceData(params, entityIds);
-      return await executeHomeAssistantAction(
-        runtime,
-        {
-          action: 'call_service',
-          domain,
-          service,
-          entityIds,
-        },
-        async () => {
-          const response = await requestHomeAssistantJson(
-            runtime,
-            'home_assistant.call_service',
-            `/api/services/${encodeURIComponent(domain)}/${encodeURIComponent(service)}`,
-            { method: 'POST', body },
-          );
-          return {
-            domain,
-            service,
-            ...(entityIds.length > 0 ? { entityIds } : {}),
-            response,
-          };
-        },
-      );
+    handler: async (params: HomeAssistantCallServiceParams, runtime): Promise<HomeAssistantCallServiceResult> => {
+      const domain = parseToken(params.domain, 'domain');
+      const service = parseToken(params.service, 'service');
+      if (!ALLOWED_DOMAINS.has(domain) || !ALLOWED_SERVICES.has(service)) deny('world control domain or service is not allowed');
+      if (typeof params.reason !== 'string' || !params.reason.trim() || params.reason.trim().length > 240) {
+        deny('world control requires a reason of at most 240 characters');
+      }
+      if (typeof params.intent !== 'string' || !ALLOWED_INTENTS.has(params.intent)) {
+        deny('world control requires a recognized intent');
+      }
+      resolveRegisteredAffordance(runtime, { ...params, domain, service });
+      const entityIds = parseEntityIds(params);
+      if (runtime.policyConfig.homeAssistant?.autonomousControlEnabled === true) {
+        worldAutonomyLimiter.authorize(`${params.placeId}:${params.affordanceId}`);
+      }
+      if (params.data !== undefined && !isRecord(params.data)) deny('data must be an object');
+      const payload = await requestHub(runtime, '/internal/v1/home-assistant/call-service', 'POST', {
+        requestId: params.requestId?.trim() || randomUUID(),
+        domain,
+        service,
+        entityIds,
+        ...(params.data ? { data: params.data } : {}),
+      });
+      return { domain, service, entityIds, response: payload };
     },
     summary: (params: HomeAssistantCallServiceParams) => ({
       action: 'call_service',
-      domain: typeof params.domain === 'string' ? params.domain.trim().toLowerCase() : '<invalid>',
-      service: typeof params.service === 'string' ? params.service.trim().toLowerCase() : '<invalid>',
-      entityId: summaryEntity(params.entityId) ?? null,
-      entityCount: Array.isArray(params.entityIds) ? params.entityIds.length : 0,
-      hasData: isRecord(params.data) && Object.keys(params.data).length > 0,
+      placeId: params.placeId,
+      affordanceId: params.affordanceId,
+      domain: params.domain,
+      service: params.service,
+      intent: params.intent ?? null,
+      reason: params.reason.slice(0, 240),
     }),
     approvalAction: 'home_assistant.control',
-    approvalScope: (params: HomeAssistantCallServiceParams) => {
-      const domain = typeof params.domain === 'string' ? params.domain.trim().toLowerCase() : 'unknown';
-      const service = typeof params.service === 'string' ? params.service.trim().toLowerCase() : 'unknown';
-      const entity = summaryEntity(params.entityId);
-      return entity ? `${domain}.${service}:${entity}` : `${domain}.${service}`;
-    },
+    approvalScope: (params: HomeAssistantCallServiceParams) => `${params.placeId}:${params.affordanceId}`,
   },
   {
     name: 'home_assistant.check_connection',
-    handler: async (
-      _params: HomeAssistantCheckConnectionParams,
-      runtime,
-    ): Promise<HomeAssistantCheckConnectionResult> => await executeHomeAssistantAction(
-      runtime,
-      { action: 'check_connection' },
-      async () => {
-        const payload = await requestHomeAssistantJson(
-          runtime,
-          'home_assistant.check_connection',
-          '/api/',
-          { method: 'GET' },
-        );
-        return {
-          ok: true,
-          message: validateConnectionPayload(payload),
-        };
-      },
-    ),
+    handler: async (_params: HomeAssistantCheckConnectionParams, runtime): Promise<HomeAssistantCheckConnectionResult> => {
+      const payload = await requestHub(runtime, '/internal/v1/home-assistant/health', 'GET');
+      if (!isRecord(payload) || payload.connected !== true || payload.status !== 'ready') {
+        providerError('Satellite Hub Home Assistant transport is not ready');
+      }
+      return { ok: true, message: 'Satellite Hub Home Assistant transport is ready' };
+    },
     summary: () => ({ action: 'check_connection' }),
     approvalAction: 'home_assistant.read',
     approvalScope: () => 'connection',
@@ -462,5 +254,5 @@ const homeAssistantDescriptors: Array<GatedMethodDescriptor<any, unknown>> = [
 ];
 
 export function registerHomeAssistantMethods(runtime: GatewayMethodRuntime): void {
-  registerGatedDescriptors(runtime, homeAssistantDescriptors);
+  registerGatedDescriptors(runtime, descriptors);
 }

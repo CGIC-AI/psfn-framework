@@ -346,6 +346,16 @@ describe('evaluatePolicy', () => {
     )).toBe('DENY');
   });
 
+  it('denies Home Assistant reads when Satellite Hub transport is not configured', () => {
+    expect(evaluatePolicy({ method: 'home_assistant.get_states', params: {} }, policyConfig)).toBe('DENY');
+    expect(evaluatePolicy({ method: 'home_assistant.check_connection', params: {} }, policyConfig)).toBe('DENY');
+    const configured = {
+      ...policyConfig,
+      homeAssistant: { enabled: true, hubBaseUrl: 'http://hub.local:8788', tokenConfigured: true },
+    };
+    expect(evaluatePolicy({ method: 'home_assistant.get_states', params: {} }, configured)).toBe('ALLOW');
+  });
+
   it('denies home_assistant.call_service when config is incomplete', () => {
     // enabled but no base URL
     expect(evaluatePolicy(
@@ -355,14 +365,14 @@ describe('evaluatePolicy', () => {
     // base URL present but token not configured
     expect(evaluatePolicy(
       { method: 'home_assistant.call_service', params: {} },
-      { ...policyConfig, homeAssistant: { enabled: true, baseUrl: 'http://ha.local:8123' } },
+      { ...policyConfig, homeAssistant: { enabled: true, hubBaseUrl: 'http://hub.local:8788' } },
     )).toBe('DENY');
     // disabled outright
     expect(evaluatePolicy(
       { method: 'home_assistant.call_service', params: {} },
       {
         ...policyConfig,
-        homeAssistant: { enabled: false, baseUrl: 'http://ha.local:8123', tokenConfigured: true },
+        homeAssistant: { enabled: false, hubBaseUrl: 'http://hub.local:8788', tokenConfigured: true },
       },
     )).toBe('DENY');
   });
@@ -372,9 +382,43 @@ describe('evaluatePolicy', () => {
       { method: 'home_assistant.call_service', params: { domain: 'light', service: 'turn_on' } },
       {
         ...policyConfig,
-        homeAssistant: { enabled: true, baseUrl: 'http://ha.local:8123', tokenConfigured: true },
+        homeAssistant: { enabled: true, hubBaseUrl: 'http://hub.local:8788', tokenConfigured: true },
       },
     )).toBe('NEEDS_APPROVAL');
+  });
+
+  it('allows reasoned light control without approval only at autonomous tier', () => {
+    const configured = {
+      ...policyConfig,
+      homeAssistant: {
+        enabled: true,
+        hubBaseUrl: 'http://hub.local:8788',
+        tokenConfigured: true,
+        autonomousControlEnabled: true,
+        placesRegistry: {
+          places: [{
+            placeId: 'office', siteId: 'home', displayName: 'Office', kind: 'physical',
+            affordances: [{
+              affordanceId: 'office-light', role: 'effector', kind: 'light', backend: 'ha', entityId: 'switch.office_light',
+            }],
+          }],
+        },
+      },
+    };
+    expect(evaluatePolicy({
+      method: 'home_assistant.call_service',
+      params: {
+        domain: 'switch', service: 'turn_on', placeId: 'office', affordanceId: 'office-light',
+        entityId: 'switch.office_light', intent: 'attention', reason: 'Get attention',
+      },
+    }, configured)).toBe('ALLOW');
+    expect(evaluatePolicy({
+      method: 'home_assistant.call_service',
+      params: {
+        domain: 'switch', service: 'turn_on', placeId: 'office', affordanceId: 'missing',
+        entityId: 'switch.office_light', intent: 'attention', reason: 'Get attention',
+      },
+    }, configured)).toBe('NEEDS_APPROVAL');
   });
 
   // ── Filesystem: workspace paths ──

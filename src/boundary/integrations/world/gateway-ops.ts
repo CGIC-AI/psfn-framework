@@ -14,8 +14,8 @@ import type {
 
 /**
  * Gateway-backed `WorldOperations`: forwards the agent-side world tool's read
- * and control calls to the privileged Home Assistant gateway methods (bead .8).
- * The gateway holds the HA token and enforces the SSRF lane; this class only
+ * and control calls to the privileged Satellite-Hub-backed gateway methods.
+ * The gateway holds the Hub control credential; this class only
  * marshals already-validated `entity_id`/`service` payloads across the RPC.
  */
 export class GatewayWorldOps implements WorldOperations {

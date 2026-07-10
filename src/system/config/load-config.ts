@@ -457,7 +457,6 @@ function loadConfigForMode(mode: LoadConfigMode, env: NodeJS.ProcessEnv = proces
     webFetchAllowHttp: false,
     webFetchAllowInternalNetwork: false,
     homeAssistantEnabled: false,
-    homeAssistantBaseUrl: undefined,
     webFetchLocalCrawlerEnabled: false,
     webFetchLocalCrawlerAllowHttp: false,
     ...(gatewayTlsCaPath ? { gatewayTlsCaPath } : {}),

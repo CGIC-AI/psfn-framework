@@ -121,7 +121,6 @@ export const SETTINGS_GARDEN_FIELD_EXPOSURE = {
   webFetchDomainAllowlist: { sectionId: 'fetch', surface: 'advanced' },
   webFetchAllowInternalNetwork: { sectionId: 'fetch', surface: 'advanced' },
   homeAssistantEnabled: { sectionId: 'fetch', surface: 'advanced' },
-  homeAssistantBaseUrl: { sectionId: 'fetch', surface: 'advanced' },
   webFetchTlsCaCertPaths: { sectionId: 'fetch', surface: 'advanced' },
   voiceEnabled: { sectionId: 'voice', surface: 'advanced' },
   ttsProvider: { sectionId: 'voice', surface: 'advanced' },

@@ -39,15 +39,13 @@ export interface RegisterWorldToolsOptions {
   /** Context-system-note sink for the room-entry note fired by `move`. */
   roomEntryNoteSink?: RoomEntryNoteSink;
   /**
-   * Staged-off gate for `action=control`. Defaults to
-   * `WORLD_CONTROL_RUNTIME_ENABLED` (false) when omitted.
+   * Runtime master gate for `action=control`.
    */
   controlEnabled?: boolean;
   /** Resolves the current requester's trust level for effector-control gating. */
   resolveRequesterTrust?: () => TrustLevel | undefined;
   /**
-   * Resolves the current requester's provenance (human vs machine/self-directed)
-   * for the human-in-the-loop half of effector-control gating (Gate 2a).
+   * Resolves requester provenance for direct versus reasoned autonomous control.
    */
   resolveRequesterProvenance?: () => RequesterProvenance | undefined;
   /** In gateway mode, attach requiredGatewayMethods so the wiring validator can check them. */
@@ -75,7 +73,7 @@ export function registerWorldTools(
   // `world` is registered as an extended first-party surface in
   // CANONICAL_FIRST_PARTY_TOOL_SURFACES (action-aware capabilityMetadata).
   // Capability gating (world.read / world.control) resolves through
-  // resolveWorldRequirement; trust + staged-off control gate inside the tool.
+  // resolveWorldRequirement; trust + runtime control gates live inside the tool.
   // `move` gates read-tier alongside perceive/list, NOT with control.
   target.registerTool(tool, 'extended');
 }

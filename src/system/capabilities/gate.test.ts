@@ -868,14 +868,15 @@ describe('undeclared capability fail-closed (02-M2)', () => {
 });
 
 describe('world capability gating', () => {
-  it('grants world.read from apprentice up and withholds world.control from every default tier', () => {
+  it('grants world.control only at autonomous tier', () => {
     expect(resolveTierCapabilityTokens('nursery')).not.toContain('world.read');
     expect(resolveTierCapabilityTokens('apprentice')).toContain('world.read');
     expect(resolveTierCapabilityTokens('autonomous')).toContain('world.read');
 
-    for (const tier of ['nursery', 'apprentice', 'autonomous'] as const) {
+    for (const tier of ['nursery', 'apprentice'] as const) {
       expect(resolveTierCapabilityTokens(tier)).not.toContain('world.control');
     }
+    expect(resolveTierCapabilityTokens('autonomous')).toContain('world.control');
   });
 
   it('resolves per-action world requirements: perceive/list/move -> world.read, control -> world.control', () => {
@@ -891,8 +892,7 @@ describe('world capability gating', () => {
 
   it('hides control when world.control is absent while keeping perceive/list live', async () => {
     const world = createTool('world');
-    // Autonomous grants world.read but never world.control.
-    const gated = gateToolWithCapabilities(world.tool, () => accessForTier('autonomous'));
+    const gated = gateToolWithCapabilities(world.tool, () => accessForTier('apprentice'));
 
     await gated.execute('world-perceive', { action: 'perceive', placeId: 'place.living-room' });
     await gated.execute('world-list', { action: 'list' });

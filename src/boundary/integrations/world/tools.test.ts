@@ -249,6 +249,10 @@ describe('world tool', () => {
     expect(ops.callService).toHaveBeenCalledWith({
       domain: 'light',
       service: 'turn_off',
+      placeId: 'place.living-room',
+      affordanceId: 'lr_lights',
+      reason: 'Direct request from a trusted human',
+      intent: 'direct',
       entityId: 'light.living_room',
     });
     expect(payload.action).toBe('control');
@@ -303,9 +307,9 @@ describe('world tool', () => {
     expect(resultText(result)).toContain('requires command as one of: on, off, toggle');
   });
 
-  it('stages control off by default: refuses control fail-closed while perceive/list stay live', async () => {
+  it('fails closed without requester context while perceive/list stay live', async () => {
     const ops = createMockOps();
-    // Default deps: no controlEnabled, no resolveRequesterTrust ⇒ control OFF.
+    // Default deps: control is enabled, but no requester provenance/trust exists.
     const tool = createWorldTool(ops, {
       placesRegistry: REGISTRY,
       resolveSituatedPlaceId: () => 'place.living-room',
@@ -318,7 +322,7 @@ describe('world tool', () => {
     });
     expect(ops.callService).not.toHaveBeenCalled();
     expect(control.details?.isError).toBe(true);
-    expect(resultText(control)).toContain('staged off');
+    expect(resultText(control)).toContain('known requester provenance');
 
     // Read paths are unaffected by the staged-off control gate.
     const perceive = await tool.execute('call-perceive', { action: 'perceive' });
@@ -375,7 +379,7 @@ describe('world tool', () => {
     });
     expect(ops.callService).not.toHaveBeenCalled();
     expect(result.details?.isError).toBe(true);
-    expect(resultText(result)).toContain('requires a live human requester');
+    expect(resultText(result)).toContain('requires explicit intent and reason');
     expect(resultText(result)).toContain('self_directed');
   });
 
@@ -388,7 +392,7 @@ describe('world tool', () => {
       command: 'on',
     });
     expect(ops.callService).not.toHaveBeenCalled();
-    expect(resultText(result)).toContain('requires a live human requester');
+    expect(resultText(result)).toContain('requires explicit intent and reason');
   });
 
   it('with control enabled and no provenance resolver wired, refuses control fail-closed', async () => {
@@ -406,7 +410,25 @@ describe('world tool', () => {
       command: 'on',
     });
     expect(ops.callService).not.toHaveBeenCalled();
-    expect(resultText(result)).toContain('requires a live human requester');
+    expect(resultText(result)).toContain('known requester provenance');
+  });
+
+  it('allows a self-directed light cue with explicit autonomous intent and reason', async () => {
+    const ops = createMockOps();
+    const tool = createControlTool(ops, 'primary', 'self_directed');
+    const result = await tool.execute('call-control', {
+      action: 'control',
+      affordanceId: 'lr_lights',
+      command: 'on',
+      intent: 'attention',
+      reason: 'Flash the living-room lights to get the operator\'s attention',
+    });
+    expect(result.details?.isError).toBeFalsy();
+    expect(ops.callService).toHaveBeenCalledWith(expect.objectContaining({
+      domain: 'light',
+      intent: 'attention',
+      reason: 'Flash the living-room lights to get the operator\'s attention',
+    }));
   });
 
   it('with control enabled, allows primary and trusted requesters to drive effectors', async () => {

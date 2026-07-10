@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "devices": [
+    {
+      "deviceId": "office-device",
+      "deviceName": "Office Satellite",
+      "satelliteId": "office",
+      "satelliteName": "Office",
+      "endpointId": "office-device",
+      "claimType": "room-satellite",
+      "credentialSha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "maxCapabilities": {
+        "input": ["text", "microphone_pcm", "final_transcript", "wake_event"],
+        "output": ["text", "subtitle", "streamed_audio", "action"],
+        "control": ["interrupt", "mute", "sleep_wake", "presence", "session_attach"],
+        "safety": ["local_only"]
+      }
+    }
+  ]
+}

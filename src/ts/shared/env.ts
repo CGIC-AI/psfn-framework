@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 
 import dotenv from "dotenv";
+import { loadHubDeviceRegistry, type HubDeviceRegistry } from "../hub/device-registry.js";
 
 import {
   CAPABILITY_PROFILE_DEFAULTS,
@@ -54,6 +55,21 @@ export interface CompanionBridgeConfig {
   reconnectMaxMs: number;
 }
 
+export interface HomeAssistantConfig {
+  baseUrl: string;
+  token: string;
+  reconnectBaseMs: number;
+  reconnectMaxMs: number;
+  requestTimeoutMs: number;
+}
+
+export interface HubControlConfig {
+  bindHost: string;
+  port: number;
+  token: string;
+  maxBodyBytes: number;
+}
+
 export interface HubConfig {
   agentRuntime: "psfn" | "hermes";
   textOnlyMode: boolean;
@@ -67,6 +83,9 @@ export interface HubConfig {
   psfn: PsfnRuntimeConfig | null;
   hermes: HermesRuntimeConfig | null;
   companion: CompanionBridgeConfig | null;
+  homeAssistant: HomeAssistantConfig | null;
+  control: HubControlConfig | null;
+  deviceRegistry: HubDeviceRegistry | null;
   voxta: VoxtaFacadeConfig;
   sessionTtlSeconds: number;
 }
@@ -92,6 +111,8 @@ export interface VoxtaFacadeConfig {
 
 export interface PiClientConfig {
   hubUrl: string;
+  deviceCredential?: string;
+  relayDeviceCredential?: string;
   deviceId: string;
   deviceName: string;
   conversationId?: string;
@@ -254,6 +275,16 @@ export function loadHubConfig(projectRoot: string): HubConfig {
   const psfn = agentRuntime === "psfn" ? loadPsfnRuntime(projectRoot) : null;
   const hermes = agentRuntime === "hermes" ? loadHermesRuntime(projectRoot) : null;
   const companion = loadCompanionBridgeConfig(psfn?.satelliteClaim ?? null);
+  const homeAssistant = loadHomeAssistantConfig();
+  const control = loadHubControlConfig(homeAssistant !== null);
+  const deviceRegistry = loadHubDeviceRegistry(
+    optional("HUB_DEVICE_REGISTRY_PATH")
+      ? resolveExistingFile(projectRoot, required("HUB_DEVICE_REGISTRY_PATH"), "HUB_DEVICE_REGISTRY_PATH")
+      : undefined,
+  );
+  if (homeAssistant && !deviceRegistry) {
+    throw new Error("HOME_ASSISTANT_ENABLED=true requires HUB_DEVICE_REGISTRY_PATH for trusted room identity");
+  }
   const textOnlyMode = process.env.HUB_TEXT_ONLY?.trim() === "true";
 
   return {
@@ -269,9 +300,84 @@ export function loadHubConfig(projectRoot: string): HubConfig {
     psfn,
     hermes,
     companion,
+    homeAssistant,
+    control,
+    deviceRegistry,
     voxta: loadVoxtaFacadeConfig(projectRoot),
     sessionTtlSeconds: Number.parseInt(process.env.SESSION_TTL_SECONDS || "300", 10),
   };
+}
+
+export function loadHomeAssistantConfig(): HomeAssistantConfig | null {
+  const enabled = optional("HOME_ASSISTANT_ENABLED");
+  if (enabled !== undefined && enabled !== "true" && enabled !== "false") {
+    throw new Error("HOME_ASSISTANT_ENABLED must be 'true' or 'false'");
+  }
+  if (enabled !== "true") {
+    return null;
+  }
+
+  const baseUrl = new URL(required("HOME_ASSISTANT_BASE_URL"));
+  if (baseUrl.protocol !== "http:" && baseUrl.protocol !== "https:") {
+    throw new Error("HOME_ASSISTANT_BASE_URL must use http or https");
+  }
+  if (baseUrl.username || baseUrl.password || baseUrl.search || baseUrl.hash) {
+    throw new Error("HOME_ASSISTANT_BASE_URL must not include credentials, query, or fragment");
+  }
+  const reconnectBaseMs = parsePositiveIntegerEnv("HOME_ASSISTANT_RECONNECT_BASE_MS", 1_000);
+  const reconnectMaxMs = parsePositiveIntegerEnv("HOME_ASSISTANT_RECONNECT_MAX_MS", 30_000);
+  if (reconnectMaxMs < reconnectBaseMs) {
+    throw new Error("HOME_ASSISTANT_RECONNECT_MAX_MS must be greater than or equal to HOME_ASSISTANT_RECONNECT_BASE_MS");
+  }
+
+  return {
+    baseUrl: baseUrl.toString().replace(/\/$/, ""),
+    token: required("HOME_ASSISTANT_TOKEN"),
+    reconnectBaseMs,
+    reconnectMaxMs,
+    requestTimeoutMs: parsePositiveIntegerEnv("HOME_ASSISTANT_REQUEST_TIMEOUT_MS", 10_000),
+  };
+}
+
+export function loadHubControlConfig(requiredForHomeAssistant: boolean): HubControlConfig | null {
+  const bindHost = optional("HUB_CONTROL_BIND_HOST");
+  const portValue = optional("HUB_CONTROL_PORT");
+  const token = optional("HUB_CONTROL_TOKEN");
+  const configured = Boolean(bindHost || portValue || token);
+  if (configured && !requiredForHomeAssistant) {
+    throw new Error("HUB_CONTROL_* configuration requires HOME_ASSISTANT_ENABLED=true");
+  }
+  if (!configured && !requiredForHomeAssistant) {
+    return null;
+  }
+  if (!bindHost || !portValue || !token) {
+    throw new Error(
+      "HUB_CONTROL_BIND_HOST, HUB_CONTROL_PORT, and HUB_CONTROL_TOKEN must all be set when Home Assistant is enabled",
+    );
+  }
+  if (token.length < 16) {
+    throw new Error("HUB_CONTROL_TOKEN must be at least 16 characters");
+  }
+  const port = Number.parseInt(portValue, 10);
+  if (!Number.isInteger(port) || port <= 0 || port > 65535) {
+    throw new Error("HUB_CONTROL_PORT must be a valid TCP port");
+  }
+  return {
+    bindHost,
+    port,
+    token,
+    maxBodyBytes: parsePositiveIntegerEnv("HUB_CONTROL_MAX_BODY_BYTES", 64 * 1024),
+  };
+}
+
+function parsePositiveIntegerEnv(name: string, fallback: number): number {
+  const raw = optional(name);
+  if (!raw) return fallback;
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    throw new Error(`${name} must be a positive integer`);
+  }
+  return parsed;
 }
 
 function loadAgentRuntime(): HubConfig["agentRuntime"] {
@@ -348,6 +454,8 @@ export function loadPiClientConfig(projectRoot: string): PiClientConfig {
 
   return {
     hubUrl: required("HUB_WS_URL"),
+    deviceCredential: optional("HUB_DEVICE_TOKEN"),
+    relayDeviceCredential: optional("HUB_RELAY_DEVICE_TOKEN"),
     deviceId: required("DEVICE_ID"),
     deviceName: required("DEVICE_NAME"),
     conversationId: optional("CONVERSATION_ID"),

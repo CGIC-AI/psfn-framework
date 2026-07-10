@@ -234,6 +234,7 @@ export function buildSatelliteClaimEnvelope(input: {
   apiKey?: string;
 }): SatelliteClaimEnvelope {
   const source = input.channel.activeSatellites.find((satellite) => satellite.id === input.channel.sourceSatelliteId);
+  const identity = input.channel.claimIdentity;
   const currentCapabilities = source?.capabilities ?? defaultCapabilitiesForProfile(input.config.capabilityProfile);
   const fingerprint = certificateFingerprint(input.config.tls?.certPath);
   const clientCertificateConfigured = Boolean(input.config.tls?.certPath && input.config.tls?.keyPath);
@@ -241,14 +242,14 @@ export function buildSatelliteClaimEnvelope(input: {
     protocolVersion: "satellite-claim.v1",
     claim: {
       namespace: input.config.namespace,
-      type: input.config.type,
-      satelliteId: input.config.satelliteId,
-      endpointId: input.config.endpointId,
+      type: identity?.claimType ?? input.config.type,
+      satelliteId: identity?.satelliteId ?? input.config.satelliteId,
+      endpointId: identity?.endpointId ?? input.config.endpointId,
       sessionId: input.channel.sessionId,
       threadId: input.conversationId,
       channelId: input.channel.channelId,
       deviceClass: input.config.endpointClass,
-      displayName: input.config.displayName,
+      displayName: identity?.displayName ?? input.config.displayName,
       locationMode: input.config.locationMode,
     },
     capabilities: {
@@ -280,9 +281,9 @@ export function buildSatelliteRegistryHeaders(input: {
   const capabilities = frameworkCapabilitiesForSatelliteCapabilities(input.satelliteClaim.capabilities.current);
   const telemetryScopes = frameworkTelemetryScopesForConfig(input.config.telemetry);
   const headers: Record<string, string> = {
-    "X-PSFN-Satellite-Claim-Type": input.config.type,
-    "X-PSFN-Satellite-ID": input.config.satelliteId,
-    "X-PSFN-Satellite-Endpoint-ID": input.config.endpointId,
+    "X-PSFN-Satellite-Claim-Type": input.satelliteClaim.claim.type,
+    "X-PSFN-Satellite-ID": input.satelliteClaim.claim.satelliteId,
+    "X-PSFN-Satellite-Endpoint-ID": input.satelliteClaim.claim.endpointId,
     "X-PSFN-Satellite-Session-ID": input.satelliteClaim.claim.sessionId,
     "X-PSFN-Satellite-Thread-ID": input.satelliteClaim.claim.threadId,
   };

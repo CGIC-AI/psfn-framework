@@ -112,6 +112,7 @@ export class PiRealtimeClient {
         type: "hello",
         deviceId: this.config.deviceId,
         deviceName: this.config.deviceName,
+        ...(this.config.deviceCredential ? { credential: this.config.deviceCredential } : {}),
         ...(this.config.conversationId ? { sessionId: this.config.conversationId } : {}),
       });
       console.log("Connected to hub:", this.config.hubUrl);

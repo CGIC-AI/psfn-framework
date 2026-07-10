@@ -137,6 +137,7 @@ export class HubOpenAiRelayClient {
         type: "hello",
         deviceId: `${this.config.deviceId}-relay`,
         deviceName: `${this.config.deviceName} OpenAI Relay`,
+        ...(this.config.relayDeviceCredential ? { credential: this.config.relayDeviceCredential } : {}),
         sessionId: `${this.config.conversationId?.trim() || `realtime:${this.config.deviceId}`}:relay`,
       });
       console.log("Relay client connected to hub:", this.config.hubUrl);

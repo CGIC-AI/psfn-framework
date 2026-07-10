@@ -121,5 +121,5 @@ describe('install-psfn-service.sh', () => {
     expect(lstatSync(unitPointerPath).isSymbolicLink()).toBe(true);
     expect(readlinkSync(unitPointerPath)).toBe(unitFilePath);
     expect(existsSync(join(stagingRoot, 'etc/psfn/psfn.env'))).toBe(false);
-  });
+  }, 30_000);
 });

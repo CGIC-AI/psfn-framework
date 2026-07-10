@@ -156,6 +156,12 @@ assertIncludes(gatewayDeployment, 'key: postgres-database-url', 'gateway Postgre
 assertIncludes(gatewayDeployment, 'name: LITELLM_BASE_URL', 'gateway LiteLLM endpoint env');
 assertIncludes(gatewayDeployment, 'value: "http://psfn-litellm.psfn-test.svc:4000/v1"', 'gateway in-cluster LiteLLM base URL');
 assertIncludes(gatewayDeployment, 'name: LITELLM_API_KEY', 'gateway LiteLLM credential env');
+assertIncludes(gatewayDeployment, 'name: PSFN_INJECTION_MODEL_DIR', 'gateway intake classifier model env');
+assertIncludes(
+  gatewayDeployment,
+  'value: "/app/models/transformers/prompt-injection-v2"',
+  'gateway intake classifier persistent model path',
+);
 
 const agentDeployment = findDocumentByKindName(rendered, 'Deployment', 'psfn-agent');
 assertIncludes(agentDeployment, 'name: wait-for-postgres', 'agent Postgres startup wait init container');

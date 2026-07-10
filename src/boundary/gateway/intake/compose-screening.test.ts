@@ -13,6 +13,7 @@ const tempDirs: string[] = [];
 function makeDataDirs(mode: 'shadow' | 'enforce', visionEnabled: boolean): {
   systemDataDir: string;
   companionDataDir: string;
+  env: NodeJS.ProcessEnv;
 } {
   const systemDataDir = mkdtempSync(join(tmpdir(), 'psfn-intake-system-'));
   const companionDataDir = mkdtempSync(join(tmpdir(), 'psfn-intake-companion-'));
@@ -26,7 +27,15 @@ function makeDataDirs(mode: 'shadow' | 'enforce', visionEnabled: boolean): {
     join(systemDataDir, 'intake-policy.json'),
     JSON.stringify({ ...seed, mode, visionScreener }, null, 2),
   );
-  return { systemDataDir, companionDataDir };
+  return {
+    systemDataDir,
+    companionDataDir,
+    // Vision composition tests must not implicitly load a developer's local
+    // L1.5 model from the repository-default path.
+    env: {
+      PSFN_INJECTION_MODEL_DIR: join(systemDataDir, 'unprovisioned-injection-model'),
+    },
+  };
 }
 
 afterEach(() => {

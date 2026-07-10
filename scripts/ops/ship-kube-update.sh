@@ -119,6 +119,7 @@ if [[ ${#SELECTED[@]} -gt 0 ]]; then
   docker buildx build --platform "$PLATFORM" -f "$BUILD_DIR/docker/Dockerfile.agent" \
     --cache-from "type=local,src=$CACHE_DIR" \
     --cache-to "type=local,dest=$CACHE_DIR,mode=max" \
+    --label "org.opencontainers.image.revision=${FULL_SHA}" \
     -t "${IMAGE_NAME}:${TAG}" --load "$BUILD_DIR"
 
   echo "==> in-image verification"

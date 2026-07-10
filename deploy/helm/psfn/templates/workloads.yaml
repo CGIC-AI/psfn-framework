@@ -78,6 +78,10 @@ spec:
           env:
             {{- include "psfn.commonEnv" . | nindent 12 }}
             {{- include "psfn.providerSecretEnv" . | nindent 12 }}
+            {{- if .Values.persistence.modelCache.enabled }}
+            - name: PSFN_INJECTION_MODEL_DIR
+              value: {{ printf "%s/prompt-injection-v2" .Values.runtime.modelCacheDir | quote }}
+            {{- end }}
             {{- if .Values.liteLlm.enabled }}
             - name: LITELLM_BASE_URL
               value: {{ include "psfn.liteLlmBaseUrl" . | quote }}

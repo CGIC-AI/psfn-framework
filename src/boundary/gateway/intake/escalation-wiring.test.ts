@@ -102,12 +102,22 @@ function seedPolicy(overrides: Record<string, unknown>): Record<string, unknown>
 function makeDataDirs(policy: Record<string, unknown>): {
   systemDataDir: string;
   companionDataDir: string;
+  env: NodeJS.ProcessEnv;
 } {
   const systemDataDir = mkdtempSync(join(tmpdir(), 'psfn-escalation-system-'));
   const companionDataDir = mkdtempSync(join(tmpdir(), 'psfn-escalation-companion-'));
   tempDirs.push(systemDataDir, companionDataDir);
   writeFileSync(join(systemDataDir, 'intake-policy.json'), JSON.stringify(policy, null, 2));
-  return { systemDataDir, companionDataDir };
+  return {
+    systemDataDir,
+    companionDataDir,
+    // This suite exercises L2/L3 wiring, not the optional L1.5 model. Keep
+    // it deterministic even when a developer has provisioned the real model
+    // at the repository-default path.
+    env: {
+      PSFN_INJECTION_MODEL_DIR: join(systemDataDir, 'unprovisioned-injection-model'),
+    },
+  };
 }
 
 type ModelBehavior = { verdict: unknown } | { rejectWith: string };

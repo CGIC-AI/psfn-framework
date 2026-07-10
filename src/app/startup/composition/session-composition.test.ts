@@ -104,6 +104,23 @@ describe('session runtime composition transcript projection wiring', () => {
     })).rejects.toThrow('requires config.postgresDatabaseUrl');
   });
 
+  it('accepts an explicit database credential alongside secret-sanitized core config', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'psfn-session-composition-explicit-postgres-'));
+    dirs.push(root);
+    const companionDataDir = join(root, 'companion-data');
+
+    const composition = await composeSessionRuntimeAsync({
+      config: {
+        companionDataDir,
+        dataDir: companionDataDir,
+        persistenceBackend: 'postgres',
+      } as any,
+      postgresDatabaseUrl: 'postgres://postgres:secret@localhost:5432/psfn_test',
+    });
+
+    await expect(composition.sessionManager.searchByKeywords('anything', 5)).resolves.toEqual([]);
+  });
+
   it('composes postgres memory store without creating a legacy sqlite database', async () => {
     const root = mkdtempSync(join(tmpdir(), 'psfn-memory-composition-postgres-'));
     dirs.push(root);

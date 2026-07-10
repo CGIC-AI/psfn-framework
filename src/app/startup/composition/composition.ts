@@ -103,6 +103,12 @@ export interface SessionComposition {
 
 export interface SessionCompositionOptions {
   config: SubstrateConfig;
+  /**
+   * Explicit database credential for callers whose core config is
+   * intentionally secret-sanitized. When absent, legacy/full-config callers
+   * may still supply config.postgresDatabaseUrl.
+   */
+  postgresDatabaseUrl?: string;
   eventBus?: EventBus;
   sessionsDir?: string;
   enableContinuity?: boolean;
@@ -152,7 +158,8 @@ export async function composeSessionRuntimeAsync(
   if (options.config.persistenceBackend !== 'postgres') {
     throw new Error('PostgreSQL session composition requires config.persistenceBackend=postgres');
   }
-  const databaseUrl = options.config.postgresDatabaseUrl?.trim();
+  const databaseUrl = options.postgresDatabaseUrl?.trim()
+    || options.config.postgresDatabaseUrl?.trim();
   if (!databaseUrl) {
     throw new Error('PostgreSQL session composition requires config.postgresDatabaseUrl');
   }

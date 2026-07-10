@@ -55,6 +55,8 @@ export interface BootstrappedAgentCoreRuntime {
 
 export interface BootstrapAgentCoreRuntimeOptions {
   config: CoreSubstrateConfig;
+  /** Database credential kept outside the secret-sanitized core config. */
+  postgresDatabaseUrl: string;
   pathSnapshot: RuntimePathSnapshot;
   eventBus: EventBus;
   gateway: GatewayClient;
@@ -79,6 +81,7 @@ export async function bootstrapAgentCoreRuntime(
 ): Promise<BootstrappedAgentCoreRuntime> {
   const {
     config,
+    postgresDatabaseUrl,
     pathSnapshot,
     eventBus,
     gateway,
@@ -128,6 +131,7 @@ export async function bootstrapAgentCoreRuntime(
 
   const coreRuntime = await buildAgentCoreRuntime({
     config,
+    postgresDatabaseUrl,
     pathSnapshot,
     eventBus,
     gateway,

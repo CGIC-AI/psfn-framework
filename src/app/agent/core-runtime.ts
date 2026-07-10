@@ -109,6 +109,8 @@ const log = createComponentLogger('AgentCoreRuntime');
 
 export interface AgentCoreRuntimeOptions {
   config: CoreSubstrateConfig;
+  /** Database credential kept outside the secret-sanitized core config. */
+  postgresDatabaseUrl: string;
   pathSnapshot: RuntimePathSnapshot;
   eventBus: EventBus;
   gateway: GatewayClient;
@@ -166,6 +168,7 @@ export interface AgentCoreRuntime {
 export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): Promise<AgentCoreRuntime> {
   const {
     config,
+    postgresDatabaseUrl,
     pathSnapshot,
     eventBus,
     gateway,
@@ -198,6 +201,7 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
   const observerEvalSidecar = createObserverEvalSidecarRuntimeFromConfig(config);
   const sessionComposition = await composeSessionRuntimeAsync({
     config,
+    postgresDatabaseUrl,
     eventBus,
     enableContinuity: true,
     promptRegistry,
@@ -288,7 +292,10 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
   let cachedModelUsageStore: PostgresModelUsageStore | null | undefined;
   const getModelUsageQuery = (): ModelUsageQueryPort | null => {
     if (cachedModelUsageStore === undefined) {
-      cachedModelUsageStore = createPostgresModelUsageStoreFromConfig(config);
+      cachedModelUsageStore = createPostgresModelUsageStoreFromConfig({
+        persistenceBackend: config.persistenceBackend,
+        postgresDatabaseUrl,
+      });
     }
     return cachedModelUsageStore;
   };
@@ -343,7 +350,7 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
   });
   registerFilesystemTools(agentLoop, new GatewayFilesystemOps(gatewayOps), { gatewayMode: true });
   const wikiRuntime = await wireWikiRuntime(agentLoop, pathSnapshot.workspaceRoot, {
-    ...(config.postgresDatabaseUrl?.trim() ? { databaseUrl: config.postgresDatabaseUrl.trim() } : {}),
+    databaseUrl: postgresDatabaseUrl,
     ...(config.postgresSchema?.trim() ? { postgresSchema: config.postgresSchema.trim() } : {}),
     embedding: gateway,
     eventBus,

@@ -266,6 +266,11 @@ async function main(): Promise<void> {
 
   // ── Load identity (mounted read-only in container) ──
 
+  const postgresDatabaseUrl = config.postgresDatabaseUrl?.trim();
+  if (!postgresDatabaseUrl) {
+    throw new Error('Agent core runtime requires POSTGRES_DATABASE_URL');
+  }
+
   const {
     card,
     systemPrompt,
@@ -277,6 +282,7 @@ async function main(): Promise<void> {
     safeguardSurfaces,
   } = await bootstrapAgentCoreRuntime({
     config: coreConfig,
+    postgresDatabaseUrl,
     pathSnapshot,
     eventBus,
     gateway,

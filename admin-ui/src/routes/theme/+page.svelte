@@ -8,6 +8,7 @@
     getSelectedThemeId,
     saveSelectedTheme,
   } from '$lib/stores/ui-preferences.svelte';
+  import CardGrid from '$lib/components/garden/CardGrid.svelte';
   import { resolveThemeTemplate } from '$lib/theme/loader';
   import type { ThemePackDefinition } from '$lib/theme/schema';
 
@@ -68,7 +69,7 @@
     </div>
   {/if}
 
-  <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
+  <CardGrid>
     {#each availableThemes as theme}
       <section class="card-garden p-4 flex flex-col gap-3">
         <div class="flex items-start justify-between gap-3">
@@ -103,5 +104,5 @@
         </button>
       </section>
     {/each}
-  </div>
+  </CardGrid>
 </div>

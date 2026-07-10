@@ -22,6 +22,33 @@ export const CAPABILITY_BOOLEAN_FIELDS = [
 
 export const MODEL_SLOT_KEY_PATTERN = /^[A-Za-z0-9._-]+$/;
 
+/**
+ * Companion-scoping discriminator for the Conservatory roster.
+ *
+ * Multi-companion fixture tooling seeds model slots for OTHER companions into
+ * the same models.json (e.g. the monastery fixtures). Those slots are marked
+ * with `metadata.fixture` and/or `metadata.characterCardFile`; this
+ * deployment's own slots carry neither marker. The models.json contract has
+ * no per-slot companion owner field yet (that belongs to the multi-companion
+ * epic), so this is deliberately a conservative positive-marker heuristic:
+ * a slot is treated as another companion's ONLY when one of these markers is
+ * present and non-empty.
+ */
+export function otherCompanionSlotLabel(entry: ModelRegistryEntry): string | undefined {
+  if (!isRecord(entry.metadata)) return undefined;
+  const fixture = typeof entry.metadata.fixture === 'string' ? entry.metadata.fixture.trim() : '';
+  const characterCard = typeof entry.metadata.characterCardFile === 'string'
+    ? entry.metadata.characterCardFile.trim()
+    : '';
+  if (fixture.length === 0 && characterCard.length === 0) return undefined;
+  if (fixture.length > 0 && characterCard.length > 0) return `${fixture} · ${characterCard}`;
+  return fixture.length > 0 ? fixture : characterCard;
+}
+
+export function isOtherCompanionSlot(entry: ModelRegistryEntry): boolean {
+  return otherCompanionSlotLabel(entry) !== undefined;
+}
+
 export function toErrorMessage(value: unknown, fallback: string): string {
   if (value instanceof Error && value.message.trim().length > 0) {
     return value.message.trim();

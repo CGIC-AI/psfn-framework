@@ -447,6 +447,10 @@ Hub configuration surface:
 - `satelliteHub.textOnly=true` sets `HUB_TEXT_ONLY=true`; Deepgram/ElevenLabs
   secrets and `satelliteHub.elevenLabsVoiceId` become optional. Voice mode
   requires all three.
+- With Home Assistant enabled under the default NetworkPolicy, set
+  `satelliteHub.homeAssistant.egressCIDRs` to the exact HA host/subnet and
+  `satelliteHub.homeAssistant.egressPort` to its API/WebSocket port. Private
+  LAN egress remains denied for every address not explicitly listed.
 - `hostPorts.satelliteHub` exposes `ws://<node>:8787` for LAN satellite
   devices, following the same single-node hostPort mechanism as the gateway
   API; set `sourceCIDRs` to the trusted subnet.

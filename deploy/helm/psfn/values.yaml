@@ -528,6 +528,11 @@ satelliteHub:
   homeAssistant:
     enabled: false
     baseUrl: ""
+    # NetworkPolicy is deny-by-default for private LANs. When HA is enabled,
+    # name every trusted HA host/subnet explicitly and pin its websocket/API
+    # port. Example: ["192.168.1.205/32"] and 8123.
+    egressCIDRs: []
+    egressPort: 8123
     # Server-owned device identities. credentialSha256 is a digest, never the
     # plaintext HUB_DEVICE_TOKEN used by the satellite.
     devices: []

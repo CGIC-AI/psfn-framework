@@ -71,6 +71,14 @@ never back a ClusterIssuer. */ -}}
 {{- if and .Values.satelliteHub.enabled (ne .Values.satelliteHub.agentRuntime "psfn") -}}
 {{- fail "satelliteHub.agentRuntime must be psfn so the hub uses the in-cluster Gateway Service" -}}
 {{- end -}}
+{{- if and .Values.satelliteHub.enabled .Values.satelliteHub.homeAssistant.enabled .Values.networkPolicy.enabled -}}
+{{- if eq (len .Values.satelliteHub.homeAssistant.egressCIDRs) 0 -}}
+{{- fail "satelliteHub.homeAssistant.egressCIDRs must list the trusted Home Assistant host/subnet when networkPolicy.enabled=true" -}}
+{{- end -}}
+{{- if or (lt (int .Values.satelliteHub.homeAssistant.egressPort) 1) (gt (int .Values.satelliteHub.homeAssistant.egressPort) 65535) -}}
+{{- fail "satelliteHub.homeAssistant.egressPort must be within 1-65535" -}}
+{{- end -}}
+{{- end -}}
 {{- if and .Values.satelliteHub.enabled (not .Values.satelliteHub.textOnly) .Values.secrets.create (not .Values.secrets.existingSecret) (not .Values.secrets.allowMissingRequired) -}}
 {{- $_ := required "secrets.values.deepgramApiKey is required for satelliteHub.enabled=true with satelliteHub.textOnly=false when secrets.allowMissingRequired=false" .Values.secrets.values.deepgramApiKey -}}
 {{- $_ := required "secrets.values.elevenLabsApiKey is required for satelliteHub.enabled=true with satelliteHub.textOnly=false when secrets.allowMissingRequired=false" .Values.secrets.values.elevenLabsApiKey -}}

@@ -451,6 +451,16 @@ spec:
       ports:
         - port: {{ .Values.ports.gatewayApi }}
           protocol: TCP
+    {{- if .Values.satelliteHub.homeAssistant.enabled }}
+    - to:
+        {{- range .Values.satelliteHub.homeAssistant.egressCIDRs }}
+        - ipBlock:
+            cidr: {{ . | quote }}
+        {{- end }}
+      ports:
+        - port: {{ .Values.satelliteHub.homeAssistant.egressPort }}
+          protocol: TCP
+    {{- end }}
     {{- if .Values.networkPolicy.satelliteHub.allowExternalEgress }}
     - to:
         - ipBlock:

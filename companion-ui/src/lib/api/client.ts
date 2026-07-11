@@ -174,7 +174,7 @@ export class SatelliteHubClient {
       state: this.state,
       ready: this.ready,
       url: this.options.url,
-      hello: { ...this.hello, capabilities: cloneCapabilities(this.hello.capabilities) },
+      hello: redactHello(this.hello),
       session: {
         ...this.session,
         capabilities: cloneCapabilities(this.session.capabilities),
@@ -295,7 +295,7 @@ export class SatelliteHubClient {
     }
     const frame = serializeClientToHubMessage(message);
     socket.send(frame);
-    this.emit('outbound', { message });
+    this.emit('outbound', { message: redactClientMessage(message) });
   }
 
   private createSocket(url: string): SatelliteHubWebSocketLike {
@@ -517,6 +517,18 @@ function cloneCapabilities(capabilities: SatelliteCapabilities | undefined): Sat
     control: capabilities.control ? [...capabilities.control] : undefined,
     safety: capabilities.safety ? [...capabilities.safety] : undefined,
   };
+}
+
+function redactHello(message: HelloMessage): HelloMessage {
+  const { credential: _credential, ...redacted } = message;
+  return {
+    ...redacted,
+    capabilities: cloneCapabilities(message.capabilities),
+  };
+}
+
+function redactClientMessage(message: ClientToHubMessage): ClientToHubMessage {
+  return message.type === 'hello' ? redactHello(message) : message;
 }
 
 function cloneIdentity(identity: RuntimeIdentity | undefined): RuntimeIdentity | undefined {

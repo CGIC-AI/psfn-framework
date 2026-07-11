@@ -23,7 +23,7 @@ const MAX_REQUEST_BYTES = 64 * 1024;
 const MAX_ENTITY_IDS = 50;
 const ENTITY_ID_PATTERN = /^[a-z][a-z0-9_]*\.[A-Za-z0-9_]+$/u;
 const DOMAIN_SERVICE_PATTERN = /^[a-z][a-z0-9_]*$/u;
-const ALLOWED_DOMAINS = new Set(['light', 'switch', 'media_player']);
+const ALLOWED_DOMAINS = new Set(['light', 'fan', 'switch', 'media_player']);
 const ALLOWED_SERVICES = new Set(['turn_on', 'turn_off', 'toggle']);
 const ALLOWED_INTENTS = new Set(['direct', 'presence_enter', 'presence_exit', 'attention', 'sleep', 'wake']);
 

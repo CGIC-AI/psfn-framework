@@ -48,6 +48,8 @@ export interface HelloMessage {
   satelliteId?: string;
   satelliteName?: string;
   capabilities?: SatelliteCapabilities;
+  /** Per-device enrollment secret; sent only in the initial hello frame. */
+  credential?: string;
 }
 
 export interface AudioMessage {

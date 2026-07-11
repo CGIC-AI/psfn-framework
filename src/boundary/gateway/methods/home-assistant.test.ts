@@ -17,6 +17,16 @@ const PLACES = {
       entityId: 'switch.kitchen_light',
       control: ['on', 'off'],
     }],
+  }, {
+    placeId: 'bedroom',
+    affordances: [{
+      affordanceId: 'bedroom_fan',
+      role: 'effector' as const,
+      kind: 'fan' as const,
+      backend: 'ha' as const,
+      entityId: 'fan.main_bedroom',
+      control: ['on', 'off'],
+    }],
   }],
 };
 
@@ -115,6 +125,25 @@ describe('Satellite Hub world transport', () => {
     const body = JSON.parse((fetchMock.mock.calls[0]?.[1] as RequestInit).body as string);
     expect(body).toMatchObject({
       requestId: 'req-1', domain: 'switch', service: 'turn_on', entityIds: ['switch.kitchen_light'],
+    });
+  });
+
+  it('allows a registered fan domain through for deliberate approved control', async () => {
+    const fetchMock = vi.fn(async () => json({ requestId: 'fan-1', response: null }));
+    vi.stubGlobal('fetch', fetchMock);
+    await harness().invoke('home_assistant.call_service', {
+      requestId: 'fan-1',
+      domain: 'fan',
+      service: 'turn_off',
+      placeId: 'bedroom',
+      affordanceId: 'bedroom_fan',
+      entityId: 'fan.main_bedroom',
+      intent: 'direct',
+      reason: 'Owner asked to turn off the bedroom fan',
+    });
+    const body = JSON.parse((fetchMock.mock.calls[0]?.[1] as RequestInit).body as string);
+    expect(body).toMatchObject({
+      requestId: 'fan-1', domain: 'fan', service: 'turn_off', entityIds: ['fan.main_bedroom'],
     });
   });
 

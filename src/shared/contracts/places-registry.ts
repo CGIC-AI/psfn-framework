@@ -16,7 +16,7 @@
 //   must not. Treat them like primary keys.
 //
 // An affordance is either a PERCEIVER (sensor: presence, face, mic, camera) or
-// an EFFECTOR (actuator: light, media_player, switch, climate, virtual_object).
+// an EFFECTOR (actuator: light, fan, media_player, switch, climate, virtual_object).
 // Physical affordances resolve to Home Assistant entities (`backend: 'ha'`) or
 // a satellite-local capability (`backend: 'satellite'`); virtual affordances
 // resolve to virtual-object ids (`backend: 'vr'`). One namespaced vocabulary,
@@ -50,11 +50,12 @@ export type AffordanceBackend = 'ha' | 'satellite' | 'vr';
 /**
  * Frozen allowlist of affordance kinds. Unknown kinds fail closed at parse time.
  * `presence`, `face`, `mic`, `camera` are typically perceivers; `light`,
- * `media_player`, `switch`, `climate`, `virtual_object` are typically effectors.
+ * `fan`, `media_player`, `switch`, `climate`, `virtual_object` are typically effectors.
  * The role is declared explicitly per affordance and is not inferred from kind.
  */
 export const AFFORDANCE_KINDS = Object.freeze([
   'light',
+  'fan',
   'media_player',
   'switch',
   'climate',

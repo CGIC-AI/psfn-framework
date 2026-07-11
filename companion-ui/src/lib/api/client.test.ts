@@ -66,6 +66,13 @@ describe('satellite hub auth', () => {
       },
     });
   });
+
+  it('adds a trimmed device credential only when one is provided', () => {
+    expect(buildSatelliteHello({ credential: '  office-device-secret  ' })).toMatchObject({
+      credential: 'office-device-secret',
+    });
+    expect(buildSatelliteHello({ credential: '   ' })).not.toHaveProperty('credential');
+  });
 });
 
 describe('satellite hub websocket client', () => {
@@ -88,6 +95,25 @@ describe('satellite hub websocket client', () => {
       deviceName: PSFN_SATELLITE_MOBILE_CHAT_APP_NAME,
       satelliteName: PSFN_SATELLITE_MOBILE_CHAT_APP_NAME,
     });
+  });
+
+  it('sends enrollment credentials without exposing them to snapshots or outbound observers', async () => {
+    const socket = new FakeSocket();
+    const client = new SatelliteHubClient({
+      url: 'ws://127.0.0.1:8787/',
+      credential: 'office-device-secret',
+      webSocketFactory: () => socket,
+    });
+    const outbound: unknown[] = [];
+    client.on('outbound', (event) => outbound.push(event.message));
+
+    const connecting = client.connect();
+    socket.open();
+    await connecting;
+
+    expect(JSON.parse(socket.sent[0] ?? '')).toMatchObject({ credential: 'office-device-secret' });
+    expect(client.snapshot().hello).not.toHaveProperty('credential');
+    expect(outbound[0]).not.toHaveProperty('credential');
   });
 
   it('surfaces session identity from hello ack without owning it', async () => {

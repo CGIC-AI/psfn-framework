@@ -11,6 +11,7 @@ export interface SatelliteHelloOptions {
   satelliteId?: string;
   satelliteName?: string;
   capabilities?: SatelliteCapabilities;
+  credential?: string;
 }
 
 export const MOBILE_CHAT_APP_CAPABILITIES: Required<SatelliteCapabilities> = {
@@ -27,6 +28,7 @@ export function buildSatelliteHello(options: SatelliteHelloOptions = {}): HelloM
   const satelliteId = normalizeOptional(options.satelliteId) ?? deviceId;
   const satelliteName = normalizeOptional(options.satelliteName) ?? deviceName;
   const channelId = normalizeOptional(options.channelId);
+  const credential = normalizeOptional(options.credential);
 
   const hello: HelloMessage = {
     type: 'hello',
@@ -40,6 +42,9 @@ export function buildSatelliteHello(options: SatelliteHelloOptions = {}): HelloM
 
   if (channelId) {
     hello.channelId = channelId;
+  }
+  if (credential) {
+    hello.credential = credential;
   }
 
   return hello;

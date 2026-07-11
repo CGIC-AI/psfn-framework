@@ -14,6 +14,7 @@ export function SettingsDrawer({
   autoReconnect,
   channelId,
   connecting,
+  deviceCredential,
   hubUrl,
   micMode,
   sessionId,
@@ -26,6 +27,7 @@ export function SettingsDrawer({
   onClose,
   onConnect,
   onDisconnect,
+  onDeviceCredentialChange,
   onHubUrlChange,
   onMicModeChange,
   onSessionIdChange,
@@ -36,6 +38,7 @@ export function SettingsDrawer({
   autoReconnect: string;
   channelId: string;
   connecting: boolean;
+  deviceCredential: string;
   hubUrl: string;
   micMode: MicMode;
   sessionId: string;
@@ -48,6 +51,7 @@ export function SettingsDrawer({
   onClose: () => void;
   onConnect: () => void;
   onDisconnect: () => void;
+  onDeviceCredentialChange: (value: string) => void;
   onHubUrlChange: (value: string) => void;
   onMicModeChange: (value: MicMode) => void;
   onSessionIdChange: (value: string) => void;
@@ -63,6 +67,14 @@ export function SettingsDrawer({
           <LabelledInput label="Hub URL" value={hubUrl} onChange={onHubUrlChange} placeholder="ws://hub.local:8787/" />
           <LabelledInput label="Session" value={sessionId} onChange={onSessionIdChange} />
           <LabelledInput label="Channel" value={channelId} onChange={onChannelIdChange} placeholder="optional" />
+          <LabelledInput
+            label="Device enrollment token"
+            value={deviceCredential}
+            onChange={onDeviceCredentialChange}
+            placeholder="required for room identity"
+            type="password"
+          />
+          <p>The token stays in this page's memory and is sent only during connection.</p>
           <ToggleRow label="Auto-connect on start" checked={autoConnect} onChange={onAutoConnectChange} />
           <label className="field-label">
             <span>Reconnect behavior</span>
@@ -153,17 +165,25 @@ function LabelledInput({
   label,
   onChange,
   placeholder,
+  type = 'text',
   value,
 }: {
   label: string;
   onChange: (value: string) => void;
   placeholder?: string;
+  type?: 'password' | 'text';
   value: string;
 }) {
   return (
     <label className="field-label">
       <span>{label}</span>
-      <input value={value} onChange={(event) => onChange(event.target.value)} placeholder={placeholder} />
+      <input
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        placeholder={placeholder}
+        type={type}
+        autoComplete={type === 'password' ? 'off' : undefined}
+      />
     </label>
   );
 }

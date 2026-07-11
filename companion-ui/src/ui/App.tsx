@@ -38,6 +38,7 @@ export function App() {
   const [hubUrl, setHubUrl] = useState('');
   const [sessionId, setSessionId] = useState('psfn-satellite-mobile-chat-app');
   const [channelId, setChannelId] = useState('');
+  const [deviceCredential, setDeviceCredential] = useState('');
   const [streamState, setStreamState] = useState<HubStreamState>(() => createInitialHubStreamState());
   const [connecting, setConnecting] = useState(false);
   const [overlay, setOverlay] = useState<OverlayDrawer>(null);
@@ -123,6 +124,7 @@ export function App() {
       url: hubUrl,
       sessionId,
       channelId: channelId.trim() || undefined,
+      credential: deviceCredential.trim() || undefined,
     });
     const store = new HubStreamStore(client);
     storeRef.current = store;
@@ -251,6 +253,7 @@ export function App() {
               autoReconnect={autoReconnect}
               channelId={channelId}
               connecting={connecting}
+              deviceCredential={deviceCredential}
               hubUrl={hubUrl}
               micMode={composer.micMode}
               sessionId={sessionId}
@@ -263,6 +266,7 @@ export function App() {
               onClose={() => setOverlay(null)}
               onConnect={() => void connect()}
               onDisconnect={disconnect}
+              onDeviceCredentialChange={setDeviceCredential}
               onHubUrlChange={setHubUrl}
               onMicModeChange={composer.selectMicMode}
               onSessionIdChange={setSessionId}

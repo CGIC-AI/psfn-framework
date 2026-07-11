@@ -421,6 +421,15 @@ spec:
       ports:
         - port: {{ .Values.ports.satelliteHub }}
           protocol: TCP
+    {{- if .Values.satelliteHub.homeAssistant.enabled }}
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "psfn.componentLabels" (dict "root" . "component" "gateway") | nindent 14 }}
+      ports:
+        - port: {{ .Values.ports.satelliteHubControl }}
+          protocol: TCP
+    {{- end }}
     {{- if and .Values.hostPorts.satelliteHub.enabled .Values.hostPorts.satelliteHub.sourceCIDRs }}
     - from:
         {{- range .Values.hostPorts.satelliteHub.sourceCIDRs }}

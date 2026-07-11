@@ -451,6 +451,8 @@ Hub configuration surface:
   `satelliteHub.homeAssistant.egressCIDRs` to the exact HA host/subnet and
   `satelliteHub.homeAssistant.egressPort` to its API/WebSocket port. Private
   LAN egress remains denied for every address not explicitly listed.
+  The private Hub control port is admitted only from the in-cluster Gateway
+  pod selector; it is not added to hostPort or Ingress exposure.
 - `hostPorts.satelliteHub` exposes `ws://<node>:8787` for LAN satellite
   devices, following the same single-node hostPort mechanism as the gateway
   API; set `sourceCIDRs` to the trusted subnet.

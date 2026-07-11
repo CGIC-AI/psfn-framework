@@ -85,6 +85,15 @@ test("private control server authenticates, validates, and deduplicates service 
     assert.equal(conflict.status, 409);
     assert.equal(mock.serviceCallCount, 1);
 
+    const fan = await post(baseUrl, "/internal/v1/home-assistant/call-service", {
+      requestId: "human:bedroom-fan:1",
+      domain: "fan",
+      service: "turn_off",
+      entityIds: ["fan.main_bedroom"],
+    });
+    assert.equal(fan.status, 200);
+    assert.equal(mock.serviceCallCount, 2);
+
     const denied = await post(baseUrl, "/internal/v1/home-assistant/call-service", {
       requestId: "dangerous:1",
       domain: "lock",
@@ -92,7 +101,7 @@ test("private control server authenticates, validates, and deduplicates service 
       entityIds: ["lock.front_door"],
     });
     assert.equal(denied.status, 400);
-    assert.equal(mock.serviceCallCount, 1);
+    assert.equal(mock.serviceCallCount, 2);
   } finally {
     await control.close();
     await client.close();

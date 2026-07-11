@@ -88,6 +88,15 @@ spec:
         - port: {{ .Values.ports.liteLlm }}
           protocol: TCP
     {{- end }}
+    {{- if and .Values.satelliteHub.enabled .Values.satelliteHub.homeAssistant.enabled }}
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "psfn.componentLabels" (dict "root" . "component" "satellite-hub") | nindent 14 }}
+      ports:
+        - port: {{ .Values.ports.satelliteHubControl }}
+          protocol: TCP
+    {{- end }}
     {{- if .Values.networkPolicy.gateway.allowExternalEgress }}
     - to:
         - ipBlock:

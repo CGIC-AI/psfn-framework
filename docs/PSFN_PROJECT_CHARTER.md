@@ -4,7 +4,7 @@ Status: contributor-facing architecture and engineering charter
 
 Canonical path: `docs/PSFN_PROJECT_CHARTER.md` (the former `_524` duplicate is retired)
 
-Revision: 2026-07-12 — clarified fleet topology, shard folding, cognitive security, and workspace domains
+Revision: 2026-07-12 — clarified fleet topology, shard folding, cognitive security, workspace domains, and soft operational guidance
 
 Audience: maintainers, contributors, and future integrators
 
@@ -151,6 +151,7 @@ These are project law. They are not suggestions.
 33. Model-facing tools must use one semantic surface per domain. Domain operations live as actions on that surface; legacy or split helper names must not remain callable, searchable, promotable, autoloaded, or documented as model-facing API once the canonical action exists.
 34. CogSec must preserve provenance and taint at consequential cognitive sinks; scanners are triage, not the trust boundary.
 35. Personal companion state and workspace are never implicitly shared because an installation hosts a fleet; shared workspace and world data require explicit scope and governance.
+36. Autonomy and resource pacing must prefer weighted, contextual, reversible guidance over arbitrary behavioral limits; non-negotiable safety boundaries remain fail-closed, and operational circuit breakers are exceptional, high-threshold, auditable recovery controls.
 
 If a proposed change violates one of those, the proposal is wrong even if it appears operationally convenient.
 
@@ -1153,6 +1154,56 @@ Rules:
 - fatigue/load state should be visible enough to avoid accidental overuse
 - one companion's autonomy must not become another companion's obligation to respond
 - group or multi-companion contexts must preserve identity, provenance, and consent boundaries
+
+### 8.11 Soft Guidance Before Behavioral Circuit Breakers
+
+PSFN should guide a companion's pacing without forcing the companion into an
+arbitrary behavioral shape.
+
+For ordinary autonomy and resource stewardship, the platform must prefer
+weighted, contextual, and reversible guidance over hard limits. Concern,
+fatigue, charge pressure, rest state, tool cost, and loop or rumination risk
+should normally change the conditions of action rather than simply forbid it.
+
+Such signals should be able to:
+
+- taper urgency, attention, or available discretionary effort
+- recommend a cheaper or more direct path
+- invite a natural wrap-up, pause, or deferral
+- reduce repeated low-value tool calls or back-and-forth loops
+- make the cost, reason, and tradeoff legible to the companion and, where
+  relevant, the partner or operator
+
+Companion-facing guidance may set an intent or quality bar, such as "be
+concise." It must not impose arbitrary fixed reply shapes as a personality
+constraint, such as "always answer in exactly two sentences." An explicitly
+requested or protocol-required format may impose a fixed shape; otherwise,
+the companion retains latitude to judge what a truthful, useful response
+needs.
+
+This soft-first rule does not weaken non-negotiable boundaries. CogSec,
+consent, authorization, secret custody, containment, and comparable safety
+invariants must fail closed when their conditions require it.
+
+Operational circuit breakers are a separate fallback class. They may stop or
+cool down an action when imminent resource harm, runaway behavior, or a
+demonstrated failure of softer controls makes continued operation unsafe or
+materially harmful. Except for immediate safety invariants, they should be
+set above ordinary healthy use and based on observed or deliberately modeled
+normal operating patterns.
+
+Rules:
+
+- a circuit breaker must have a specific protected condition, not a vague
+  preference for making the companion easier to control
+- it must be proportionate to the harm it prevents and use the narrowest
+  practical interruption
+- it must record why it fired, which signals contributed, and what action it
+  affected
+- its state, threshold policy, and recovery or reset path must be inspectable
+  in Garden where operationally practical
+- it must not silently masquerade as companion preference, mood, consent, or
+  a normal completed action
 
 ## 9. Security, Trust, and Autonomy Boundaries
 

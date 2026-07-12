@@ -1,0 +1,35 @@
+{
+  "schemaVersion": 1,
+  "capturedAt": "2026-07-12",
+  "sources": {
+    "esphome": {
+      "kind": "python-package",
+      "version": "2026.6.5"
+    },
+    "esphome-intercom": {
+      "repository": "https://github.com/n-IA-hane/esphome-intercom.git",
+      "revision": "db245966160d3f3758af76909599d0952e40432c",
+      "license": "MIT"
+    },
+    "esphome-voip-stack": {
+      "repository": "https://github.com/n-IA-hane/esphome-voip-stack.git",
+      "revision": "dd5fa025e92e2fadd8067369253aba1d589c16a2"
+    },
+    "esphome-audio-stack": {
+      "repository": "https://github.com/n-IA-hane/esphome-audio-stack.git",
+      "revision": "f1c8de5e9d60654e78653034397f69f6dbbe8c01"
+    },
+    "esphome-runtime-controller": {
+      "repository": "https://github.com/n-IA-hane/esphome-runtime-controller.git",
+      "revision": "edd608df2687d32190d471f95ae415aee9f650f3"
+    },
+    "material-design-webfont": {
+      "repository": "https://github.com/Templarian/MaterialDesign-Webfont.git",
+      "revision": "57b567a448bd579892174cd47c47f9e187ea56c6"
+    },
+    "google-fonts": {
+      "repository": "https://github.com/google/fonts.git",
+      "revision": "ec0464b978de222073645d6d3366f3fdf03376d8"
+    }
+  }
+}

@@ -15,6 +15,11 @@ worktrees/
 .agent/
 .agents/hermes/
 
+# Per-satellite ESPHome build state and local credentials
+satellites/**/.esphome/
+satellites/**/.generated/
+satellites/**/secrets.yaml
+
 # .NET relay build outputs
 bin/
 obj/

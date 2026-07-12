@@ -1,6 +1,6 @@
 # Development Status
 
-Last updated: 2026-07-07
+Last updated: 2026-07-12
 Package version: `0.1.0`
 Code audit anchor: `sprint_9_final` at `1956b844`; this document may be updated by later doc-only commits. Foundation-branch delta through `82b66467` (2026-07-07) is summarized in [`CHANGELOG.md`](../CHANGELOG.md).
 
@@ -34,10 +34,10 @@ Current operational shape:
 | Group-room memory | Direct/group/auto extraction modes, attribution, salience gates, backfill controls, telemetry, and Garden diagnostics landed. | Shipped |
 | Backup/restore coverage | Backups now include pg_dump, companion tree, system owner files, workspace tree, encrypted retention, and restore verification. | Shipped |
 | Charge budget | Run-scoped charge accounting, lane quotas, cost visibility, and Garden charge page are wired. | Shipped |
-| Values loop | Values journal read-back into prompt composition is wired and covered by acceptance tests. | Shipped |
+| Values loop | Values evolution ledger read-back into prompt composition is wired and covered by acceptance tests. | Shipped |
 | Minimal proactive outbound | Appraisal can produce guarded outbound actions through the proactive dispatcher for configured allowlisted delivery. | Shipped minimal slice |
 | Live Pi NVMe migration | Write-heavy live paths are bind-mounted from `/mnt/psfn-nvme`; service registration caveats are documented in operations. | Shipped operationally |
-| Live-deploy ship lane | Component-selective `ship:kube` targets a live Kubernetes shard with a topology-aware pre-ship gate, contract-skew guard, in-image tool pinning, two-way companion beads sync, and an operator-side post-rollout validation gate. | Shipped operationally |
+| Live-deploy ship lane | Component-selective `ship:kube` targets a live Kubernetes runtime/cluster with a topology-aware pre-ship gate, contract-skew guard, in-image tool pinning, two-way companion beads sync, and an operator-side post-rollout validation gate. | Shipped operationally |
 | Companion self-diagnosis | `self_status` self-diagnosis surface plus a bounded, redacted runtime diagnostics service behind the agent admin transport, with a live tool-surface conformance harness. | Shipped |
 | Durable scheduled prompts | Scheduled/one-shot prompts persist in Postgres (`scheduler_scheduled_prompts`) and rehydrate at startup, so they survive frequent agent restarts; completion is recorded only after successful delivery. | Shipped |
 | Deliberate trust ratchet | Nightly contact trust-drift review lane derives behavior signals; trusted-tier promotions require human-in-the-loop approval; social-graph edges are backed by persisted memory provenance. | Shipped |

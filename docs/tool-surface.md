@@ -220,8 +220,14 @@ The current runtime already exposes a unified model-facing `skill` tool for skil
 - `list` preserves discovery metadata, eligibility outcomes, and filtered-skill reasons
 - `view` loads one skill's full YAML + Markdown body on demand
 - Global deployment skills live in the repository root `skills/` directory and are provided to the companion through `skills.json`
-- `create` and `update` write personal managed skills under `WORKSPACE_PATH/skills/<category>/<name>/SKILL.md` and refresh the runtime snapshot; personal skills remain separate from repo-global skills
+- `create` and `update` write personal managed skills under that companion's `WORKSPACE_PATH/skills/<category>/<name>/SKILL.md` and refresh the runtime snapshot; personal skills remain separate from repo-global skills
 - Creator workflows such as image creation, music creation, and future media variants belong here as creator-category skills loaded with `skill action="view"`
+
+A future Shared Companion Workspace or Companion Library may expose common
+reference material and default skill seeds, but visible shared files must never
+auto-load as executable skills or modules. Shared skill publication requires
+explicit ownership, review, and capability policy; it is not an implicit way
+for one peer companion to change another's tool context.
 
 ## Canonical Image Surface
 
@@ -268,24 +274,37 @@ once it lands (seam marked in `src/boundary/gateway/methods/web.ts`).
 
 ## Canonical Wiki Surface
 
-The canonical model-facing `wiki` surface is the canonical PSFN-owned knowledge-base for durable reference documents and personal knowledge notes.
+The canonical model-facing `wiki` surface is the PSFN-owned personal
+knowledge-base for durable reference documents and personal knowledge notes.
 
 - Actions: `list`, `read`, `search`, `write`, `import`
-- Authored documents live under `WORKSPACE_PATH/knowledge/wiki/`
+- Authored personal documents live under that companion's `WORKSPACE_PATH/knowledge/wiki/`
 - Imported/source-derived documents require source class and provenance references
 - Wiki results must be labeled as authored/imported/reference knowledge, not transcript memory or lived relationship memory
 - Wiki storage stays distinct from L0 session history, L0.1 episodic landmarks, L2 typed memory, scratchpad, journal files, and active orientation
 
 This keeps durable reference creation, retrieval, search, and import on one semantic surface. Stable facts or relational knowledge still belong in `memory`; temporary working context stays in `scratchpad`; active operational state stays in `orient`.
 
+The site-scoped Shared-world Wiki is operator-owned and is not directly writable
+through this personal surface. A future Shared Companion Workspace is likewise
+not a general extension of `wiki` or a substitute for personal workspace
+isolation.
+
 ## Canonical Journal Surface
 
-The canonical model-facing `journal` surface is for durable companion-authored markdown notes, reflections, and longer-lived context that should remain narrative but should not become active orientation, typed memory, or same-turn scratch work.
+The canonical model-facing `journal` surface is for durable
+companion-authored personal Markdown: narrative notes and longer-lived context
+that should not become active orientation, typed memory, or same-turn scratch
+work.
 
 - Actions: `list`, `read`, `write`, `append`, `search`
 - Journal notes are durable markdown files managed by the runtime journal operations.
 - Use separate notes for separate topics; append only when continuing an existing note.
 - Use `scratchpad` for temporary excerpts or working hypotheses, `orient` for active concerns/open threads, `wiki` for curated reference knowledge, and `memory` for typed recall facts.
+
+The `journal` surface does not own scheduled reflection ledgers, L0 session
+archives, memory mutation ledgers, or CogSec audit trails. Those are
+runtime-owned records with distinct provenance and retention semantics.
 
 ## Legacy External Vault Surface
 
@@ -324,7 +343,11 @@ The `shard` registry entry is reserved for long-horizon shard work and fold-back
 - Shard internals already include `ShardManager`, fold-review records, lineage tagging, artifact review policy, active/degraded/offline lifecycle state, charge accounting, and satellite delegation hooks.
 - Future direct shard control should converge on this one surface rather than reintroducing `spawn_shard` or shard-specific micro-tools.
 
-This keeps long-horizon shard execution, operator-visible shard runtime state, and explicit fold-back delivery on one semantic surface while preserving shard-specific concurrency scheduling and merge-review semantics.
+This keeps long-horizon shard execution, operator-visible shard runtime state,
+and explicit fold-package/Folding delivery on one semantic surface while
+preserving shard-specific concurrency scheduling and merge-review semantics. It
+does not mean the reserved surface already provides an isolated state clone or
+remote Docker/Kubernetes/SSH executor; that remains target work.
 
 ### Hidden Or Background-Only Surfaces
 

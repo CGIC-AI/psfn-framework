@@ -130,7 +130,11 @@ Startup verifies the seed-backed owner files before the split runtime comes up. 
 
 - Default mode when `PSFN_RUNTIME_LAYOUT_MODE` is unset.
 - Uses the legacy shared root (`DATA_DIR`, default `./data`) for both system and companion data.
-- Uses `WORKSPACE_PATH` as the personal files root for documents, downloads, generated images, journal/scratchpad files, knowledge-base notes, authored skills, modules, and experiments. In the live Purrsephone deployment this is repo-root `./purrsephone`.
+- Uses `WORKSPACE_PATH` as one companion's Personal Workspace for documents,
+  downloads, generated images, personal journal/scratchpad files,
+  knowledge-base notes, authored skills, modules, and experiments. It is not a
+  runtime-state root or a general shared-files root. In the live Purrsephone
+  deployment this is repo-root `./purrsephone`.
 - Good for local development and smoke testing.
 - This shared-root support is an alpha migration boundary item that survives only until beta. Do not build new setup or runtime behavior that depends on shared-root fallback.
 
@@ -174,6 +178,17 @@ proofs in both topologies so the isolated session-integrity worker never shares
 the normal agent role. A direct `npm run agent` launch must provide
 `GATEWAY_SESSION_INTEGRITY_AUTH_TOKEN`; in multi-companion mode it must also
 provide the exact fleet tuple and `GATEWAY_COMPANION_AUTH_TOKEN`.
+
+### Multi-companion workspace limitation
+
+Personal Workspace isolation is a target contract, not current fleet behavior.
+Today the supervisor forwards one inherited `WORKSPACE_PATH` to every agent;
+`companions.json` has no workspace field. Do not run a fleet on the assumption
+that personal journals, personal wikis, managed skills, modules, or other
+workspace files are private to one companion. The target layout is one Personal
+Workspace per companion plus a separately governed Shared Companion Workspace;
+do not invent environment variables or paths for it before the runtime contract
+lands. See [`docs/multi-companion.md`](./multi-companion.md#workspace-scopes-current-behavior-and-target-contract).
 
 The Helm deployment reads the isolated-worker proof from the application
 Secret key named by `secrets.keys.gatewaySessionIntegrityAuthToken` (default

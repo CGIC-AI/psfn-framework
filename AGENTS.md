@@ -94,7 +94,21 @@ Mutable runtime settings belong in canonical JSON owner files in the system-owne
 
 Companion state belongs under `companion-data`.
 
-`WORKSPACE_PATH` is the personal writable files root, not a runtime-state root. For the live Purrsephone deployment, this is repo-root `purrsephone/`. Personal documents, generated/saved images, downloads, personal knowledge-base notes, scratchpad/journal files, authored personal skills, modules, and experiments belong there. Runtime owner files, databases, L0/session state, telemetry, backups, active identity artifacts, and system/default skill config belong in `DATA_DIR` or split system/companion runtime roots.
+`WORKSPACE_PATH` is one companion's Personal Workspace, not a runtime-state
+root or a general shared-files root. For the live Purrsephone deployment, this
+is repo-root `purrsephone/`. Personal documents, generated/saved images,
+downloads, personal knowledge-base notes, scratchpad/journal files, authored
+personal skills, modules, and experiments belong there. Runtime owner files,
+databases, L0/session state, telemetry, backups, active identity artifacts, and
+system/default skill config belong in `DATA_DIR` or split system/companion
+runtime roots.
+
+In the current multi-companion runtime, `WORKSPACE_PATH` is still inherited
+globally by the fleet launcher, so it is not yet a per-companion isolation
+boundary. The target contract is one validated Personal Workspace per companion
+plus an explicitly governed Shared Companion Workspace; do not create ad hoc
+shared roots or claim personal-workspace isolation until that runtime contract
+exists.
 
 Guardrails:
 

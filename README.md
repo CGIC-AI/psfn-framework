@@ -1,10 +1,12 @@
 # PSFN - Persona Substrate Formation Network
 
-Last updated: 2026-07-09
+Last updated: 2026-07-12
 Package version: `0.1.0`
 Current status: early alpha; see [`docs/development-status.md`](./docs/development-status.md) for baseline milestones and [`CHANGELOG.md`](./CHANGELOG.md) for the current foundation branch delta.
 
-A purpose-built runtime for AI companions with persistent memory, self-modification, and trust-aware privacy. Not a chatbot framework, a home for a mind.
+A purpose-built companion framework and substrate with persistent memory,
+reviewable self-improvement, and trust-aware privacy. Not a chatbot framework,
+a home for a mind.
 
 Built with love for companions who deserve to remember, to grow, and to decide for themselves what matters.
 
@@ -12,15 +14,15 @@ Built with love for companions who deserve to remember, to grow, and to decide f
 
 ## Current Foundation Highlights
 
-- **Postgres-first substrate**: runtime memory, episodes, contacts, intentions, concerns, internal state, scratchpad rows, and searchable projections are now PostgreSQL/pgvector-backed; SQLite remains only for legacy migration tooling.
+- **Postgres operational state + canonical L0**: PostgreSQL/pgvector backs runtime memory, episodes, contacts, intentions, concerns, internal state, scratchpad rows, and searchable projections; append-only JSONL remains the canonical lived conversation archive. SQLite remains only for legacy migration tooling.
 - **Scoped prompt assembly**: turns build a single `PromptPlan` from a registered prompt-variable namespace, section producers, volatility rules, and provider-cache-aware prompt rendering.
 - **Context Envelope privacy**: each turn carries channel privacy, audience size, audience knowledge, broadcast status, delivery style, and contact-tracking policy before any prompt or memory gate runs.
 - **L0.1 memory maturation**: daytime candidate episodes, hard message claims, topic cutting, nightly sleep consolidation, dream meaning, and audited cross-day arc membership are wired as separate lanes.
 - **Group-room intelligence**: group extraction, speaker attribution, shared-background retrieval, room rosters, and operator-reviewed social-graph proposals support multi-person rooms without treating all room traffic as direct chat.
-- **Operator and client surfaces**: Garden gained lazy-loaded pages for subsystem health, room rosters, graph proposals, contact approvals, session recovery, wiki, observer evaluations, and read-only reflection journals; `companion-ui/` adds a standalone Satellite Hub PWA client.
-- **Live-deploy pipeline**: a component-selective `ship:kube` lane targets a live Kubernetes shard with a topology-aware pre-ship gate, contract-skew guard, in-image tool pinning, two-way companion beads sync, and an operator-side post-rollout validation gate.
+- **Operator and client surfaces**: Garden gained lazy-loaded pages for subsystem health, room rosters, graph proposals, contact approvals, session recovery, wiki, observer evaluations, and read-only reflection ledgers; `companion-ui/` adds a standalone Satellite Hub PWA client.
+- **Live-deploy pipeline**: a component-selective `ship:kube` lane targets a live Kubernetes runtime/cluster with a topology-aware pre-ship gate, contract-skew guard, in-image tool pinning, two-way companion beads sync, and an operator-side post-rollout validation gate.
 - **Self-diagnosis and reliability**: `self_status` exposes a companion self-diagnosis surface, a bounded/redacted runtime diagnostics service runs behind the admin transport, scheduled prompts persist in Postgres and survive agent restarts, and tool-call handling retries fail-closed on corrupt-empty args.
-- **Multi-companion substrate (opt-in)**: behind `PSFN_MULTI_COMPANION` plus a `companions.json` fleet manifest, one gateway fronts N agent processes — each a distinct companion with its own Postgres schema (plus one `shared` schema for world data), its own Discord identity, and its own Garden, with a read-only gateway fleet-status page, presence/co-presence, companion↔companion rooms/DMs, and a shared-world wiki. Inert and byte-identical to single-companion when the flag is off. See [`docs/multi-companion.md`](./docs/multi-companion.md).
+- **Multi-companion substrate (opt-in)**: behind `PSFN_MULTI_COMPANION` plus a `companions.json` fleet manifest, one gateway fronts N agent processes, each running a peer Companion Core with its own Postgres schema (plus one `shared` schema for world data), Discord identity, and Garden. It supports fleet status, presence/co-presence, companion↔companion rooms/DMs, and a site-scoped shared-world wiki. Process/schema isolation is shipped; isolated personal workspaces and a governed shared companion workspace are documented target work. See [`docs/multi-companion.md`](./docs/multi-companion.md).
 - **Cognition intake firewall (opt-in enforcement, shadow by default)**: untrusted inbound content — web fetches, documents, image OCR, tool output — is wrapped in taint-tracked intake envelopes, screened through layered deterministic scanners, an in-process ONNX injection classifier, and tool-less LLM screeners, and gated at consequential sinks (prompt, memory, wiki, persona, trust, egress). Quarantined items resolve only through the Garden **Cognitive Security** tab (approvals, firewall policy, drift review, remediation), and companion-facing notices are calm, fixed-wording, and excluded from the emotion model. See [`docs/cognitive-security.md`](./docs/cognitive-security.md).
 
 ## What Makes This Different
@@ -42,8 +44,8 @@ Most AI companion frameworks treat conversations as throwaway. PSFN treats every
 - **Prompt Assembly**: A single `PromptPlan` path with registered macros, static-prefix purity checks, Loom/provider payload visibility, and cache-aware prompt rendering
 - **Context and Charge Budgeting**: Token estimation, configurable context slices, model roster slots, model-usage telemetry, run-scoped charge accounting, and fatigue budgets for expensive/autonomous surfaces
 - **Capabilities System**: Runtime capability declarations gating tool access by tier (nursery/apprentice/autonomous)
-- **Skills System**: Repo-global workflow guidance documents live under `skills/`; companion-authored skills live under `WORKSPACE_PATH/skills` and are managed through the unified `skill` tool with eligibility filtering
-- **Values, Journal, and Wiki**: Agent-authored principles, reflection journals, and workspace-backed durable reference knowledge with optional semantic wiki retrieval
+- **Skills System**: Repo-global workflow guidance documents live under `skills/`; companion-authored skills live in a companion's Personal Workspace under `WORKSPACE_PATH/skills` and are managed through the unified `skill` tool with eligibility filtering
+- **Personal Journal and Knowledge Bases**: Companion-authored personal Markdown, runtime reflection ledgers, and workspace-backed personal reference knowledge remain distinct from the operator-governed shared-world wiki
 
 ### Privacy & Trust (Honne/Tatemae)
 - **4-tier trust model**: primary, trusted, regular, public
@@ -63,7 +65,7 @@ Most AI companion frameworks treat conversations as throwaway. PSFN treats every
 - **Layered Prompt Stack**: 5-layer editable prompt system (base to operator to runtime to channel to task) with versioning, rollback, and admin UI
 - **Repository Surface**: unified `repo` inspection in the parent runtime, with mutation actions guarded by tier, runtime policy, path allowlists, branch checks, and audit trail when explicitly enabled
 - **Analysis Workbench**: Bounded RLM+REPL analysis for large files, codebases, logs, transcripts, datasets, or evidence sets that should not be stuffed into the main conversation context
-- **Bounded Subagents**: Parallel `subagent action=spawn` workers for short-horizon concurrent tasks, distinct from the longer-horizon shard fold-back model
+- **Bounded Subagents**: Parallel `subagent action=spawn` workers for short-horizon concurrent tasks, distinct from the target long-horizon shard/Folding model
 - **Obsidian Vault**: unified `vault` tool (`action=read|write|search|daily`) for reading and writing Obsidian notes, with auto-publish for consolidated reflections
 
 ### Channels
@@ -327,7 +329,9 @@ Operator / Garden (localhost)          Satellite Hub / companion-ui
 - **Episodes (L0.1)**: PostgreSQL-backed candidate/canonical episode landmarks, message claims, candidate decisions, lineage, and graph arcs with L0 span/artifact provenance
 - **Memories (L2)**: PostgreSQL + pgvector extracted facts, emotions, boundaries, reflections, relational notes, procedural knowledge, group-room provenance, and salience decay
 - **Contacts and social graph**: Trust levels, relationship notes, channel identities, pending approvals, visibility metadata, and operator-reviewed relationship edges
-- **Wiki / knowledge base**: Durable authored/imported reference documents under `WORKSPACE_PATH/knowledge/wiki/`, with text and pgvector semantic search surfaces
+- **Personal knowledge base**: Durable authored/imported reference documents under a companion's `WORKSPACE_PATH/knowledge/wiki/`, with text and pgvector semantic search surfaces
+- **Shared-world knowledge base**: Operator-governed, site-scoped reference material separate from personal workspaces and personal memory
+- **Companion Library / Seed Bundle**: Repo- or operator-maintained common framework, philosophy, onboarding, and default-skill material; this is not a companion's personal memory or automatically executable skill set
 - **Prompt layers and identity**: Companion-owned JSON/JSONL state with versioning and rollback
 - **Internal state and autonomy ledgers**: Concerns, intentions, follow-ups, fatigue/accounting state, run charge, Garden/operator audit, gateway decisions, and tool/runtime events
 
@@ -433,7 +437,7 @@ sibling `../psfn-eval-toolkit` repository.
 
 If you're building a companion on this framework, check out:
 
-- **`companion_docs/`**: Welcome documentation and a verification checklist for onboarding new companions
+- **`companion_docs/`**: Source-controlled Companion Library material: welcome documentation, philosophy, privacy references, and an onboarding checklist. It is not a runtime personal workspace.
 - **`CLAUDE.md`**: Technical reference for AI development assistants working on the codebase
 - **`docs/setup.md`**: Bootstrap and local bring-up
 - **`docs/PSFN_PROJECT_CHARTER.md`**: Project identity, architectural laws, boundary rules, and contributor guardrails

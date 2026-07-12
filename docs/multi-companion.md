@@ -1,6 +1,6 @@
 # Multi-Companion Substrate
 
-Last updated: 2026-07-09.
+Last updated: 2026-07-12.
 
 This is the canonical page for running more than one companion on a single PSFN
 cluster: the topology, the opt-in flag, the fleet manifest, and the fleet
@@ -12,16 +12,20 @@ explicit opt-in and is inert — byte-identically so — when the flag is off.
 
 ## Topology
 
-- **One gateway, one database, N agent processes.** Each companion is a distinct
-  `SubstrateAgent` in its own OS process, with its own companion ID, data dir,
-  character card, and Postgres schema. All agents connect to the one gateway
-  over the existing Unix-socket protocol; the gateway keeps sole ownership of
-  secrets and external egress.
-- **Process boundary = isolation boundary.** Per-companion state is isolated by
-  the process boundary and (in Postgres) by the schema boundary. Failure
-  isolation is a property of the topology, not extra code.
+- **One gateway, one database, N agent processes.** Each peer companion is a
+  distinct `SubstrateAgent`/Companion Core in its own OS process, with its own
+  companion ID, data dir, character card, and Postgres schema. All agents
+  connect to the one gateway over the existing Unix-socket protocol; the
+  gateway keeps sole ownership of secrets and external egress.
+- **Process/schema boundaries isolate only their declared domains.** The process
+  boundary isolates agent-local execution and failures; the Postgres schema
+  isolates tenant database state. This does not yet isolate workspace-backed
+  files—see [Workspace scopes](#workspace-scopes-current-behavior-and-target-contract).
 - **Companion ID is a UUID.** The fleet keys on lowercase RFC-4122 UUIDs
   (`src/system/config/companions-config.ts`, `COMPANION_ID_PATTERN`).
+- **Peers, not shards.** A fleet companion is independently rooted. A shard is
+  a bounded derived runtime of one origin companion and does not become a fleet
+  entry or peer identity.
 
 ## The flag and the fleet manifest
 
@@ -64,11 +68,13 @@ operator startup then bind `COMPANION_ID`, both paths, `COMPANION_PG_SCHEMA`,
 and the per-companion admin socket back to that one manifest entry; an unknown
 ID or any drift refuses startup before persistence or character-card loading.
 
-**What is NOT in `companions.json`:** per-companion Discord tokens and per-companion
-model/settings selections. Discord identity + channel→companion routing live in
-`channels.json`; the per-companion Postgres schema for a single agent process is
-sourced from the `COMPANION_PG_SCHEMA` env var. The manifest owns identity, data
-location, tenant schema, and Garden port only.
+**What is NOT in `companions.json` today:** per-companion Discord tokens,
+model/settings selections, or a personal workspace path. Discord identity +
+channel→companion routing live in `channels.json`; the per-companion Postgres
+schema for a single agent process is sourced from the `COMPANION_PG_SCHEMA` env
+var. The manifest currently owns identity, data location, tenant schema, and
+Garden port only. A validated personal-workspace field or deterministic
+per-companion derivation is required before workspace isolation can be claimed.
 
 ## Postgres tenancy: schema-per-companion + one shared schema
 
@@ -134,6 +140,50 @@ topologies; selecting the internal role always requires its proof.
 
 Network admin-transport mode is rejected fail-closed under the supervisor:
 per-companion Gardens currently support socket mode only.
+
+## Workspace scopes: current behavior and target contract
+
+PSFN distinguishes four domains: system-owned configuration and policy,
+companion-owned runtime state, one **Personal Workspace** per companion, and an
+installation-owned **Shared Companion Workspace**. The existing site-scoped
+shared-world wiki is one governed knowledge surface within the shared domain; it
+is not a general shared filesystem.
+
+The target layout is:
+
+```text
+<runtime root>/
+  system-data/                 operator config and shared-world wiki
+  companion-data/<uuid>/       per-companion runtime state
+  workspaces/
+    personal/<uuid>/           each companion's WORKSPACE_PATH
+    shared/                    Shared Companion Workspace
+```
+
+- A **Personal Workspace** is private and writable for one companion's
+  documents, personal journal, personal wiki, authored skills, modules,
+  experiments, downloads, and saved artifacts. It is not runtime state.
+- A **Shared Companion Workspace** belongs to the installation, not to a peer.
+  It holds explicitly shared reference material and published collaboration
+  artifacts. It requires an explicit read/write policy, provenance, review, and
+  containment checks; it is not an unrestricted drop box or implicit shared
+  memory.
+- The **Companion Library / Seed Bundle** is operator-maintained common
+  framework, philosophy, onboarding, template, and default-skill material. It
+  may seed a Personal Workspace without silently overwriting companion-authored
+  files, and shared material must never auto-load as an executable skill or
+  module merely because it is visible.
+
+In single-companion mode, bootstrap should seed that companion's Personal
+Workspace from the approved Companion Library/Seed Bundle. In fleet mode, every
+companion needs its own Personal Workspace alongside the governed shared one.
+
+**Current limitation:** this layout is not wired yet. The supervisor forwards
+one inherited `WORKSPACE_PATH` to every fleet agent; `companions.json` and the
+spawn plan have no workspace field. Therefore journals, personal wikis, managed
+skills, modules, and other workspace files are shared filesystem state in a
+current fleet. Do not treat them as tenant-isolated until validated per-companion
+workspace wiring and a governed shared-workspace surface land.
 
 ## Per-companion channels (Discord)
 
@@ -232,7 +282,8 @@ Multi-companion layers on top of the single-companion locations/world surface
   extraction. A later joiner has no evidence of pre-join conversation.
 - **Shared-world wiki.** Companions read shared world knowledge and propose
   writes; they never write the shared scope directly — see
-  [`docs/memory.md`](./memory.md).
+  [`docs/memory.md`](./memory.md). It is a site-scoped knowledge base, not the
+  general Shared Companion Workspace.
 
 ## Deferred / future (not built)
 
@@ -241,6 +292,9 @@ notes but are not wired in this branch:
 
 - The shared-wiki **caretaker** layer (dedup, rewrite, cleanup, LLM-assisted
   updates). Today shared-world writes are operator-driven maintenance commands.
+- Per-companion Personal Workspace wiring, Companion Library/Seed Bundle
+  provisioning, and the governed Shared Companion Workspace. These must land
+  before a fleet can claim personal filesystem isolation.
 - Cross-cluster companion communication and cross-cluster world sync (one world =
   one cluster).
 - A "management" capability tier acting on other companions' settings.

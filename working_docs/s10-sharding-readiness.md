@@ -20,12 +20,12 @@ PSFN currently uses “shard” for several unrelated things. Keeping these term
 | Term | Meaning | Current status |
 | --- | --- | --- |
 | **Origin companion** | The continuing companion whose identity, authoritative durable state, and external relationships must remain protected. | Real runtime model. |
-| **Companion shard** | The target concept: a temporary, isolated copy/fragment of one origin with a declared purpose, durable local work, and a later selective fold into the origin. | Charter-defined; not yet operationally implemented. |
+| **Companion shard** | The target concept: a time- and task-bounded isolated derived runtime of one origin, seeded from a declared snapshot and returning a selective fold package. | Charter-defined; not yet operationally implemented. |
 | **Task shard / current `ShardManager` worker** | A local `SubstrateAgent` created for bounded task execution, with a derived ID and isolated channel ID. | Implemented, but not an isolated companion copy. |
 | **Bounded subagent** | A short-horizon worker. The current `executeSubagent()` delegates to `ShardManager.spawn()`, so the mechanics are still partly shared. | Implemented. |
 | **Fleet companion** | A separately configured, stable companion in the opt-in multi-companion topology. | Implemented locally; not a temporary copy of an origin. |
 | **Satellite** | An embodiment/endpoint or channel transport. The charter says satellites are not separate minds. | Implemented as an endpoint path, not remote compute. |
-| **“Kubernetes shard” / deployment target** | Existing operator wording for a cluster/host deployment target. | Operational infrastructure, not a companion shard. |
+| **Kubernetes deployment target** | Existing operator wording for a cluster/host deployment target. | Operational infrastructure, not a companion shard. Reserve “shard” for the companion-derived runtime. |
 | **Episode consolidation fold** | The L0.1 memory operation that consolidates candidate episodes into a canonical episode. | Implemented memory operation; unrelated to companion fold-back. |
 
 In code and docs, reserve **fold-back** for a shard-to-origin merge. Call the L0.1 operation **episode consolidation**. Rename or clearly qualify “task shard” wherever a reader could mistake it for a copy of a companion.
@@ -34,11 +34,11 @@ In code and docs, reserve **fold-back** for a shard-to-origin merge. Call the L0
 
 The charter is unusually close to the requested concept:
 
-- A shard is a long-horizon, task-scoped fragment that may cross hardware/network boundaries, run for days, and eventually fold back into core: `docs/PSFN_PROJECT_CHARTER.md:436-464`.
-- The intended fold includes a scoped seed, purpose, shard-local work log, tagged L0 and L2 outputs, artifacts/code, and an audited merge: `docs/PSFN_PROJECT_CHARTER.md:465-488`.
-- It requires origin and shard provenance, preserves the origin as authoritative for emotional/relational truth, and requires explicit conflict policy rather than overwrite: `docs/PSFN_PROJECT_CHARTER.md:479-488`.
-- It requires derived shard IDs that preserve parent-child lineage: `docs/PSFN_PROJECT_CHARTER.md:490-505`.
-- Direct core self-modification is forbidden; self-modification must run in isolated shard-scoped environments and return artifacts or PR-style outputs: `docs/PSFN_PROJECT_CHARTER.md:106-120`, `1000-1014`, and `1279-1295`.
+- A shard is a time- and task-bounded derived runtime that may cross hardware/network boundaries, run for days, and return to its origin through Folding: Charter §6.12.
+- The intended fold package includes a scoped seed, purpose, shard-local work log, provenance-bearing return items, memory/reference candidates, durable artifacts or code/configuration proposals, and origin-side audited review: Charter §6.13.
+- It requires origin/shard/snapshot/source/taint/review provenance, preserves the origin as authoritative for emotional/relational/identity/trust truth, and requires explicit conflict policy rather than overwrite: Charter §6.13.
+- It requires a stable peer `CompanionId` and a distinct opaque `ShardInstanceId`; a display label such as `Purrsephone / shard 01` is not an authority key: Charter §6.14.
+- Direct core self-modification is forbidden; software self-modification must run in isolated shard-scoped environments and return reviewable artifacts or PR-style outputs: Charter Law 15 and §9.5.
 
 There is one necessary refinement to the requested language that protects PSFN’s truthfulness rules. A successful fold can make a shard’s verified work part of the origin’s continuing experience, but it should never forge raw shard text into the origin’s L0 conversation as though the origin personally said or directly witnessed it. The origin should receive a provenance-preserving **folded-experience record**: a reviewed, attributed account linked to the source shard, snapshot, work log, and selected evidence. This satisfies the charter’s prohibition on fabricated companion-authored speech, belief, emotion, consent, or memory while still allowing the origin to learn from its own extension.
 
@@ -184,7 +184,7 @@ The current image-only artifact return cannot satisfy that requirement.
 
 The gateway understands two possible backend names—`container` and `orchestrated`—but returns an explicit unavailable result because no Docker- or kubectl-backed executor is wired: `src/boundary/gateway/methods/shard-backends.ts:43-83`. The dedicated test proves that failure mode: `src/boundary/gateway/methods/shard-backends.test.ts:68-81`.
 
-This is a good place to attach a future executor interface. It is also decisive evidence that no Docker/Kubernetes shard implementation should be inferred from the presence of the RPC method.
+This is a good place to attach a future executor interface. It is also decisive evidence that no Docker/Kubernetes companion-shard executor should be inferred from the presence of the RPC method.
 
 ### Standard local split runtime and multi-companion
 
@@ -224,7 +224,7 @@ The operational ship lane can build, transfer, Helm-upgrade, validate, and smoke
 
 The satellite architecture is valuable for authentication and embodiment but is not remote companion execution:
 
-- The charter explicitly classifies satellites as embodiments/emanations, not separate minds: `docs/PSFN_PROJECT_CHARTER.md:105-120`.
+- The charter explicitly classifies satellites as endpoints rather than separate minds, and distinguishes satellite, embodiment, and emanation: Charter Laws 10–11 and §6.10.
 - `delegateSatelliteSession()` creates a local runtime config and calls the same local `executeShard()`: `src/faculties/shards/manager.ts:329-416` and `542-599`.
 - The satellite runbook uses a scoped satellite credential and endpoint registry, which is good security groundwork: `docs/satellite-hub-kube.md:13-45`.
 

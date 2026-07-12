@@ -2,7 +2,7 @@
 
 This document is the compact contract for how the live runtime is supposed to behave. When this file disagrees with code, prefer the code in the order listed below.
 
-Last updated: 2026-06-29.
+Last updated: 2026-07-12.
 
 ## Source Of Truth Order
 
@@ -98,6 +98,31 @@ Legacy env values for JSON-owned settings are ignored, and startup hydration mig
 - production mutable roots must not overlap
 - companion and system roots must be different paths
 
+### Workspace scopes
+
+`WORKSPACE_PATH` means one companion's **Personal Workspace**: writable
+documents, journal, personal knowledge base, authored skills, modules,
+experiments, downloads, images, and other personal durable files. It is not a
+runtime-state root and not a general shared-files root.
+
+The target multi-companion layout has one validated Personal Workspace per
+companion plus an installation-owned **Shared Companion Workspace** for
+explicitly published collaboration artifacts and common reference material. The
+shared-world wiki remains a narrower, site-scoped operator-owned knowledge
+surface—not a general shared filesystem.
+
+Current fleet wiring has no per-entry workspace path and forwards one inherited
+`WORKSPACE_PATH` to all fleet agents. This means personal workspace isolation is
+not shipped under multi-companion yet. Do not add a `SHARED_WORKSPACE_PATH` env
+setting, derive paths ad hoc, or claim workspace tenancy until the owner-file,
+path-containment, gateway-policy, backup, and tests contracts land together.
+
+When implemented, personal and shared workspace roots must be canonicalized,
+non-overlapping with each other and with system/companion/runtime roots, and
+contained beneath the configured runtime root. Shared writes require explicit
+actor and provenance records, review policy, atomic writes, containment checks,
+and CogSec screening before shared material can reach prompts, wikis, or memory.
+
 ## Artifact Ownership
 
 ### System-owned
@@ -111,11 +136,25 @@ Legacy env values for JSON-owned settings are ignored, and startup hydration mig
 - character card
 - PostgreSQL-backed companion runtime state
 - append-only session JSONL archives
-- notes, reflections, scratchpad mirror, values journal
+- notes, reflections, scratchpad mirror, values evolution ledger
 - prompt layers and prompt registry
 - core memory and north-star state
 - images and identity assets
 - safeguard audit trail and post-turn queue
+
+### Personal-workspace-owned
+
+- one companion's authored documents, personal journal, personal knowledge base,
+  managed skills, modules, experiments, downloads, and saved artifacts
+- these files are companion-private by default and are not runtime state
+
+### Shared-workspace-owned (target contract)
+
+- installation-owned collaboration artifacts and common reference material
+- a Companion Library / Seed Bundle of approved documentation, templates, and
+  default skills
+- never personal memory, session archives, identity assets, credentials, or
+  mutable runtime configuration
 
 Path helpers for these artifacts live in `src/persistence/layout.ts`.
 

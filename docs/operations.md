@@ -2,7 +2,7 @@
 
 This is the operator-facing runtime guide for the current repo-owned deployment model.
 
-Last updated: 2026-07-09.
+Last updated: 2026-07-12.
 
 ## Daily Runtime Commands
 
@@ -55,6 +55,13 @@ Manifest-relative data/card paths are resolved to absolute strict subpaths of
 launcher also derives separate role-bound gateway proofs for the agent and its
 session-integrity worker in both single- and multi-companion topologies. These
 proofs are not printed by `--dry-run` and are never passed to Garden operators.
+
+**Workspace warning:** the current plan does not carry a per-companion
+`WORKSPACE_PATH`; the launcher forwards one inherited workspace value to every
+fleet agent. Do not treat personal journals, wikis, managed skills, modules, or
+other workspace files as fleet-isolated. A validated Personal Workspace per
+companion plus a governed Shared Companion Workspace is target work, documented
+in [`docs/multi-companion.md`](./multi-companion.md#workspace-scopes-current-behavior-and-target-contract).
 
 Per-companion Gardens use socket admin transport only; network admin-transport
 mode is rejected fail-closed under the supervisor.
@@ -221,7 +228,11 @@ The live alpha migration boundary is defined in [`docs/specifications.md`](./spe
 
 - Use `npm run migrate:persistence-layout` for legacy shared-root data. Do not keep the old shared root mounted as a runtime fallback after cutover.
 - Use continuous/local `DATA_DIR` only for local development and smoke testing. Production must use split roots and fail closed on shared-root or partial split-root wiring.
-- Keep `WORKSPACE_PATH` as the personal files root. It must not overlap runtime data roots; live Purrsephone personal files live under repo-root `purrsephone/`, while active config, databases, sessions, telemetry, and identity artifacts remain under runtime data.
+- Keep `WORKSPACE_PATH` as one companion's Personal Workspace. It must not
+  overlap runtime data roots; live Purrsephone personal files live under
+  repo-root `purrsephone/`, while active config, databases, sessions, telemetry,
+  and identity artifacts remain under runtime data. In a current fleet this is
+  not yet a per-companion isolation boundary; see the workspace warning above.
 - Treat owner-file drift warnings as cleanup signals, not as permission to keep `.env` as mutable config authority.
 - Review config, startup, persistence, and tool-surface changes against the live boundary. If a compatibility path is not named there, reject it, make it fail closed, or track it for beta removal before expanding it.
 - When migration-boundary guidance changes, run `npm run verify:settings-contract` and `npm run verify:startup-owner-files` in addition to the affected runtime validation.
@@ -329,18 +340,18 @@ Fatigue evaluation is always wired and always runs, but it only ever SPENDS on m
 
 - Backup cadence and retention live in `backup.json` and `scheduler.json`.
 - Backups are encrypted at rest. `backup.json` declares `encryption.mode: "required"` and an env key reference; the actual key material stays in `PSFN_BACKUP_ENCRYPTION_KEY` or another configured env secret. Startup fails closed when the key is missing.
-- Under the PostgreSQL runtime backend the scheduled backup stages a `pg_dump` custom-format archive (requires `pg_dump`/`pg_restore` on PATH) plus session JSONL, memory journal, and character-card files; the scheduler refuses to start without a database backup source.
+- Under the PostgreSQL runtime backend the scheduled backup stages a `pg_dump` custom-format archive (requires `pg_dump`/`pg_restore` on PATH) plus session JSONL, memory mutation ledger, and character-card files; the scheduler refuses to start without a database backup source.
 - The scheduled backup also stages the full companion-data file tree (journals, generated media/selfies, vault notes, prompt and card history, scratchpad) into `companion-tree/` with a per-file sha256 manifest; the walk is exhaustive except for sessions (captured separately), backup targets, and repair snapshots, so new companion-authored file classes can never silently fall out of scope.
 - System-data JSON owner files are staged into `system-config/` with a per-file sha256 manifest. This includes `settings.json`, `models.json`, `providers.json`, `scheduler.json`, `capability-tier.json`, `channels.json`, `backup.json`, `skills.json`, `trust-policy.json`, `charge-policy.json`, and `intake-policy.json` when present. `.env`, generated systemd env files, and raw provider/channel secrets are not copied by this system-config snapshot.
 - Helm deployments also stage `helm-recovery/`: the recovery-safe deployable files from the repo-owned `deploy/helm/psfn` chart plus a versioned descriptor containing release name, namespace, Helm revision, an exact chart-content digest, and the effective agent/gateway/Garden image references. Documentation files, live Helm values, rendered manifests, Kubernetes Secret objects, and secret material are deliberately excluded. Real YAML parsing rejects secret-bearing values regardless of quoting, inline-map, or snake-case syntax; unsupported overlays, packed/opaque subcharts, special files, and source/destination overlap fail closed before capture writes anything. The chart has a per-file sha256 manifest and is verified before encryption and again by `verify:backup-restore`.
 - Every snapshot contains `backup-contents.json`, which records whether Helm recovery is `required` or `absent`. In production this marker is inside the authenticated encrypted payload, so deleting the entire Helm subtree cannot make a Kubernetes backup masquerade as a non-Kubernetes backup. Restore operators still re-provision credentials and review deployment-specific overrides rather than replaying stale secrets.
-- `WORKSPACE_PATH` is staged separately into `workspace-tree/` with its own sha256 manifest. This covers personal docs, downloads, images, journal/scratchpad files, authored skills/modules, experiments, and the canonical `knowledge/wiki/` store. Runtime roots, backup targets, VCS metadata, dependency directories, caches, and temp directories are excluded and recorded in the manifest.
+- The configured `WORKSPACE_PATH` is staged separately into `workspace-tree/` with its own sha256 manifest. This covers its configured docs, downloads, images, journal/scratchpad files, authored skills/modules, experiments, and the canonical `knowledge/wiki/` store. In a current fleet it is one shared configured tree, not a per-companion backup unit. Runtime roots, backup targets, VCS metadata, dependency directories, caches, and temp directories are excluded and recorded in the manifest.
 - Workspace backup fails closed if `WORKSPACE_PATH` overlaps runtime data roots, logs, temp, backup output, the mirror target, or other protected runtime paths. Keep personal wiki/reference documents under `WORKSPACE_PATH/knowledge/wiki/`; do not rely on the external Obsidian bridge for canonical storage or backup coverage.
-- With `verifyRestore` enabled, every scheduled cycle verifies the plaintext staging area before encryption: it restores the dump into a dedicated scratch database (`<dbname>_restore_verify`, derived from the runtime database URL) and asserts schema, pgvector functionality on restored vectors, critical-table presence, and that tables populated at the source restored non-empty. One-time setup: `CREATE DATABASE <dbname>_restore_verify OWNER <runtime-role>` and `CREATE EXTENSION vector` in it as superuser (the extension survives wipes; user tables/sequences/views are dropped each run). The dump archive table of contents is also checked via `pg_restore --list`; companion-tree, workspace-tree, system-config, backup-contents, and Helm manifests are re-verified; and the L0 journal snapshot must parse as JSONL.
+- With `verifyRestore` enabled, every scheduled cycle verifies the plaintext staging area before encryption: it restores the dump into a dedicated scratch database (`<dbname>_restore_verify`, derived from the runtime database URL) and asserts schema, pgvector functionality on restored vectors, critical-table presence, and that tables populated at the source restored non-empty. One-time setup: `CREATE DATABASE <dbname>_restore_verify OWNER <runtime-role>` and `CREATE EXTENSION vector` in it as superuser (the extension survives wipes; user tables/sequences/views are dropped each run). The dump archive table of contents is also checked via `pg_restore --list`; companion-tree, workspace-tree, system-config, backup-contents, and Helm manifests are re-verified; and the L0 session-archive snapshot must parse as JSONL.
 - After verification, the retained backup set contains `encrypted-backup.json` plus `snapshot.tar.gz.enc`; the plaintext staging directory is removed. Mirrors receive the encrypted package, not the plaintext tree.
 - `npm run verify:backup-restore -- --backup-dir <snapshot> --postgres-restore-url <scratch-url> [--postgres-source-url <url>]` decrypts encrypted backup sets using the manifest key reference and runs the same fidelity verification (the decant rehearsal).
 - A failed scheduled backup logs an error and emits a `backup.failed` event on the runtime event bus.
-- Under the multi-companion topology, backups are per-companion by default: each companion is captured as its own slice (its own `postgresSchema` dump plus its own companion-data tree) so a single companion can be moved to another cluster as a slice. A separate `cluster` artifact captures the shared-world schema (`shared`), system-data owner files, and the Helm recovery bundle when applicable; Helm files never leak into companion slices. Enabling `groupMode` (`backup.json`, env override `BACKUP_GROUP_MODE`) instead collapses the fleet into one whole-database family artifact containing that system-level bundle. Exactly one process runs the fleet backup cycle: the leader is deterministic — the first companion in `companions.json` order (`isFleetBackupLeader`, `src/persistence/backups/fleet-scheduler.ts`), no distributed lock — and followers register no backup lane. Partial failure (`FleetBackupPartialFailureError`) is recorded and re-thrown, never swallowed. Per-companion fleet restore build-out is a tracked follow-up.
+- Under the multi-companion topology, backups are per-companion by default: each companion is captured as its own slice (its own `postgresSchema` dump plus its own companion-data tree) so a single companion can be moved to another cluster as a slice. A separate `cluster` artifact captures the shared-world schema (`shared`), system-data owner files, and the Helm recovery bundle when applicable; Helm files never leak into companion slices. Enabling `groupMode` (`backup.json`, env override `BACKUP_GROUP_MODE`) instead collapses the fleet into one whole-database family artifact containing that system-level bundle. Exactly one process runs the fleet backup cycle: the leader is deterministic — the first companion in `companions.json` order (`isFleetBackupLeader`, `src/persistence/backups/fleet-scheduler.ts`), no distributed lock — and followers register no backup lane. Partial failure (`FleetBackupPartialFailureError`) is recorded and re-thrown, never swallowed. Per-companion fleet restore build-out is a tracked follow-up. Fleet backups do not yet have separate Personal Workspace or Shared Companion Workspace units; those must be added with the workspace-isolation implementation rather than assumed covered by the current shared `WORKSPACE_PATH`.
 - Startup skips SQLite integrity checks for the PostgreSQL runtime backend.
 - Embedding-dimension mismatches are surfaced at startup.
 - Use this verification when backup behavior changes:
@@ -497,6 +508,10 @@ and propose entries through the normal wiki pass; they never write the
 non-personal write fail-closed). The dedicated caretaker layer described in the
 design notes is not built yet — shared-world writes happen only through these
 operator maintenance commands:
+
+This site-scoped knowledge base is not the future Shared Companion Workspace;
+that broader installation-owned file domain remains unwired and must not be
+simulated by putting personal files under `system-data`.
 
 ```bash
 npm run wiki:publish:places          # dry-run: report only

@@ -1,6 +1,6 @@
 # Architecture
 
-Last updated: 2026-07-09.
+Last updated: 2026-07-12.
 
 This is the current runtime shape. For the component graph, see [`docs/architecture-diagram.mmd`](./architecture-diagram.mmd). For the end-to-end anatomy of a single chat turn (inbound queueing, in-turn continuations, reply disposition, post-turn lanes), see [`docs/chat-turn-lifecycle.md`](./chat-turn-lifecycle.md). For the post-Sprint 8 source-backed snapshot, see [`docs/sprint-8-architecture-report.md`](./sprint-8-architecture-report.md); for current feature status and active work, see [`docs/development-status.md`](./development-status.md).
 
@@ -31,6 +31,20 @@ Agent process
         v
 PostgreSQL + JSONL/session files + owner-file roots
 ```
+
+### Runtime terminology
+
+A **PSFN installation** may host one or more peer Companion Cores. A
+**Companion Core** is the authoritative mind of exactly one companion; the
+isolated OS process that runs it is an **agent process**. A peer companion has
+its own root identity and is not a shard, subagent, or satellite.
+
+The **Gateway** is the Core's privileged policy/credential edge. The
+**Satellite Hub** is an endpoint transport and relay service; a **satellite** is
+a device/app endpoint, an **embodiment** is the form through which a companion
+is perceived, and **emanation** is that companion's active situated presence in
+an embodiment. CogSec is the cross-boundary cognitive-security system; its
+intake firewall is only its pre-hoc half.
 
 ## Composition Layer
 
@@ -184,6 +198,10 @@ model, layer-by-layer contract, quarantine lifecycle, and operator runbook.
 
 - System-owned mutable config lives under `system-data/`.
 - Companion-owned state lives under `companion-data/`.
+- `WORKSPACE_PATH` is one companion's Personal Workspace, not runtime state.
+- A governed Shared Companion Workspace is planned for explicitly shared files
+  and common reference material; the existing Shared-world Wiki is a narrower,
+  site-scoped operator-owned knowledge surface.
 - Continuous mode can still use the legacy shared `data/` root.
 - Production mode forbids overlapping mutable roots and fails closed on partial split-root configuration.
 
@@ -191,19 +209,25 @@ The path contract is defined in `src/persistence/layout.ts` and summarized in [`
 
 ## Multi-Companion Topology
 
-The default topology is one gateway, one agent, one companion. An opt-in
-multi-companion topology runs N agent processes behind the one gateway — each a
-distinct companion with its own companion ID, data dir, character card, and
-Postgres schema, all connecting to the single gateway over the existing socket
-protocol. It is selected by the `PSFN_MULTI_COMPANION` env flag plus a
-system-owned `companions.json` fleet manifest, and is inert (byte-identical to
-single-companion) when the flag is off.
+The default topology is one gateway, one agent process, one Companion Core, and
+one companion. An opt-in multi-companion topology runs N agent processes behind
+the one gateway, each running a peer Companion Core. Each companion has its own
+companion ID, data dir, character card, and Postgres schema, all connecting to
+the single gateway over the existing socket protocol. It is selected by the
+`PSFN_MULTI_COMPANION` env flag plus a system-owned `companions.json` fleet
+manifest, and is inert (byte-identical to single-companion) when the flag is
+off.
 
 Tenancy is schema-per-companion (`config.postgresSchema` pins each agent's
 Postgres `search_path`) plus one `shared` schema for cross-companion world data.
 Operability adds one Garden per companion and a read-only gateway fleet-status
 page. The full topology, flag/manifest contract, launcher supervisor mode, and
 fleet operations are documented in [`docs/multi-companion.md`](./multi-companion.md).
+
+Process and schema isolation do not yet isolate workspace-backed files: the
+current supervisor forwards one `WORKSPACE_PATH` to every fleet agent. Personal
+workspace isolation and a governed Shared Companion Workspace are target work;
+do not equate fleet process isolation with total personal-state isolation.
 Key files: `src/system/config/companions-config.ts`,
 `src/persistence/postgres.ts`, `src/persistence/runtime-factory.ts`,
 `src/boundary/gateway/fleet-status.ts`, `scripts/start-gateway-agent.sh`.

@@ -6,7 +6,7 @@ empirically grounded rules from Anthropic's global-workspace paper
 Audited at the tip of `foundation_e0_e2` after the E6.2 first-person re-voicing of the
 reflection surface (which this audit builds on rather than replaces).
 
-Charter anchor: **Law 30** (`docs/PSFN_PROJECT_CHARTER_524.md` §4):
+Charter anchor: **Law 30** (`docs/PSFN_PROJECT_CHARTER.md` §4):
 *"Reflection prompts must not lead the companion toward narrative coherence over
 accuracy; evidence presentation precedes narrative invitation."* The workspace paper
 supplies the mechanism: reflection prompts are behavioral interventions, not just
@@ -287,7 +287,7 @@ Before adding or editing any reflection/introspection/check-in prompt:
    downstream consumer may treat an empty reflection or warning-free guardrail run as
    evidence of absence.
 9. **Check downstream consumers before changing output shape.** Reflection text flows
-   into journals, values journal, vault publishing, memory writes, guardrail regexes
+   into personal journals, the values evolution ledger, vault publishing, memory writes, guardrail regexes
    (`INACTIVITY_CLAIM_PATTERNS`), and macro re-injection
    (`runtime_emotion_appraisal_*`). Since E6.2, raw machinery (ids, scores, schema
    fields) is deliberately excluded from her reflection text — do not reintroduce

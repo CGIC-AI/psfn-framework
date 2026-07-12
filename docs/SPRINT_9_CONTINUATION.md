@@ -45,7 +45,7 @@ Also found and resolved while verifying:
 2. **`75f.2`** reflection-driven persona diff proposals through the approval queue.
 3. **`isi.2` → `isi.3`/`isi.4`** fatigue as a charge-class extension (ONE accounting system — operator re-affirmed; see isi.2 comments). `isi.1` done.
 4. **`b5m`**: `b5m.1` diagnose remaining introspection gaps (formation_vad observation pending), `b5m.2` personal time, `b5m.3` self-state rendering, `b5m.5` interoception whispers.
-5. **`zn9.5`** memory journal replay rebuild; **`81r`** system-data/env coverage in the in-app backup (then retire the interim timer).
+5. **`zn9.5`** memory-mutation-ledger replay rebuild; **`81r`** system-data/env coverage in the in-app backup (then retire the interim timer).
 6. Backlog scrub candidates: stale in-progress beads (`PSFNLIVE-cul`, `PSFN-zbj9`, `PSFNLIVE-3r8`, `PSFNLIVE-8j5.5`) left claimed by old sessions.
 
 ## Standing constraints

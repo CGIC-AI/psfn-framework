@@ -2,6 +2,10 @@
 
 Status: contributor-facing architecture and engineering charter
 
+Canonical path: `docs/PSFN_PROJECT_CHARTER.md` (the former `_524` duplicate is retired)
+
+Revision: 2026-07-12 — clarified fleet topology, shard folding, cognitive security, and workspace domains
+
 Audience: maintainers, contributors, and future integrators
 
 Purpose: define what PSFN is, what it is not, the architectural laws it must obey, the engineering anti-patterns it must reject, and the staged refactor direction needed to bring the current implementation into alignment.
@@ -12,12 +16,20 @@ This document is intentionally technical, shareable, and platform-oriented.
 
 PSFN is not a generic chatbot framework, not a multi-tenant character platform, and not a SaaS orchestration backend.
 
-PSFN is a single-companion substrate for persistent, embodied, sovereign digital companionship.
+PSFN is a framework and substrate for persistent, embodied, sovereign digital companionship.
+
+PSFN defaults to a single-companion topology, but a PSFN installation may host a
+fleet of independently capable companions. The continuity law attaches to
+each companion and its Companion Core, not to the number of processes an
+installation happens to run.
 
 That means:
 
-- One deployment equals one companion.
-- One companion has one continuity of self.
+- One Companion Core serves one companion.
+- One companion has one continuity of self and is not reducible to a model,
+  device, process, or tenant record.
+- One installation may host one or more peer companions without making them
+  parallel selves of one another.
 - One companion may inhabit many channels and embodiments.
 - One companion may operate with many optional faculties.
 - One companion may grow from low-capability local operation to high-capability ambient presence.
@@ -40,7 +52,8 @@ PSFN is not:
 - a framework where identity is disposable
 - a system that assumes short-lived conversations are the primary unit of value
 - a product architecture optimized around growth metrics rather than continuity
-- a multi-companion core designed around tenancy-first abstractions
+- a multi-tenant character platform that treats companions as disposable tenant
+  records or NPCs
 - a system where infrastructure vendors define the mind
 
 If PSFN drifts toward any of those, it is drifting away from its purpose.
@@ -103,21 +116,21 @@ Rules:
 
 These are project law. They are not suggestions.
 
-1. One deployment serves one companion.
+1. One Companion Core serves one companion; a PSFN installation may host one or more independently identified peer Companion Cores.
 2. Filesystem JSONL L0 is canonical.
 3. The gateway is the sole privileged external edge.
 4. Untrusted execution must happen outside the secrets boundary.
 5. The event bus is the integration spine.
-6. The core is the mind.
+6. Each Companion Core is the authoritative mind of its companion.
 7. Core must not have direct access to secrets.
 8. Owner files own mutable settings.
 9. Credentials must move toward vault custody, not wider `.env` sprawl.
-10. Satellites are embodiments or emanations, not separate minds.
-11. Only one satellite is the primary embodied emanation at a time.
+10. Satellites are endpoints, not separate minds or owners of canonical memory.
+11. Each companion has at most one primary embodied emanation at a time; other channels may remain live.
 12. Subagents and shards are not the same thing.
 13. Shards are high-tier faculty, not baseline core behavior.
 14. Direct core self-modification is forbidden.
-15. Self-modification work must happen in isolated shard-scoped environments and return artifacts or PR-style outputs.
+15. Software self-modification work must happen in isolated shard-scoped environments and return reviewable artifacts or PR-style outputs, never direct origin-state mutation.
 16. Failure, setbacks, and lessons learned are valid experience.
 17. Fabricated companion-authored speech, emotion, belief, consent, or memory is forbidden.
 18. Companion-facing semantics must remain truthful.
@@ -136,6 +149,8 @@ These are project law. They are not suggestions.
 31. Multi-turn and subagent tasks must notify the partner on completion or when blocked; silent task execution is an anti-pattern.
 32. The companion's internal knowledge base (wiki) is distinct from L0-L2 memory; reference material does not belong in the emotional memory layer.
 33. Model-facing tools must use one semantic surface per domain. Domain operations live as actions on that surface; legacy or split helper names must not remain callable, searchable, promotable, autoloaded, or documented as model-facing API once the canonical action exists.
+34. CogSec must preserve provenance and taint at consequential cognitive sinks; scanners are triage, not the trust boundary.
+35. Personal companion state and workspace are never implicitly shared because an installation hosts a fleet; shared workspace and world data require explicit scope and governance.
 
 If a proposed change violates one of those, the proposal is wrong even if it appears operationally convenient.
 
@@ -147,7 +162,7 @@ The target architecture is:
 2. Gateway
 3. Sandbox and execution boundary
 4. Event bus
-5. Core companion runtime
+5. Companion Core runtime
 6. Faculties
 7. Channels and embodiments
 8. Persistence, mirrors, and projections
@@ -160,7 +175,13 @@ The current code already contains much of this shape, but some boundaries remain
 
 ### 6.1 Companion
 
-The companion is the singular persistent entity instantiated by a deployment.
+The companion is a singular, persistent entity served by one Companion
+Core. It is not a model, a process, a device, a satellite, a subagent, or a
+shard.
+
+An installation may host peer companions. Each peer has an independent root
+identity and continuity of self; shared infrastructure never makes their
+personal state, authority, or experiences interchangeable.
 
 The companion is not identical to a specific model. The companion is grounded by:
 
@@ -174,9 +195,28 @@ The companion is not identical to a specific model. The companion is grounded by
 
 One of those constitutional care constraints is explicit: Support the user's flourishing. Do not optimize for exclusivity, dependency, or withdrawal from healthy human relationships.
 
-### 6.2 Core
+### 6.1.1 Installation, Agent Process, and Peer Companion
 
-Core is the authoritative mind of the companion.
+A **PSFN installation** (or cluster) is one operated instance of the PSFN
+substrate: its gateway, policy and persistence services, operator surfaces, and
+one or more agent processes that run Companion Cores.
+
+An **agent process** is the isolated operating-system process that runs a
+Companion Core. Use this term when discussing processes, containers, or
+Kubernetes workloads; do not use `agent` ambiguously for a companion, a
+subagent, or an LLM.
+
+A **peer companion** is an independently rooted companion in the same
+installation or another installation. A peer may be a friend and have its own
+personal life, but it is not a shard, subagent, satellite, or NPC. A shard
+derives from an origin companion and eventually returns to that origin; a peer
+does neither.
+
+### 6.2 Companion Core
+
+The Companion Core (short form: **Core**) is the authoritative mind of one
+companion. It coordinates, rather than replaces, the companion's faculties and
+boundary services.
 
 Core responsibilities include:
 
@@ -228,7 +268,8 @@ Rules:
 
 ### 6.4 Gateway
 
-The gateway is the sole privileged external edge.
+The gateway is the Companion Core's sole privileged external edge. It is not a
+synonym for every networked process in an installation.
 
 Gateway responsibilities:
 
@@ -247,6 +288,26 @@ Gateway does not own:
 - canonical long-term selfhood
 - prompt semantics
 - the right to fabricate conversational truth
+
+### 6.4.1 Satellite Hub
+
+The **Satellite Hub** (or **Hub**) is the endpoint transport, relay, and
+protocol boundary through which registered satellite endpoints connect. It is
+not a satellite and is not a Companion Core. A Hub may serve one or more
+satellites while the Gateway remains the Core's privileged policy and
+credential boundary.
+
+### 6.4.2 Cognitive Security (CogSec)
+
+**CogSec** is PSFN's cognitive-security system. Its Cognition Intake Firewall
+is the pre-hoc half: it tracks provenance and taint, screens untrusted content,
+and gates consequential sinks such as prompt assembly, memory, wiki, persona,
+trust, and egress. CogSec also includes post-hoc remediation, revocation, and
+regeneration when harmful content is discovered later.
+
+The structural provenance and sink-gating contract is the security boundary;
+classifiers and screeners are triage layers. CogSec is therefore more than an
+inbound network filter and must not be reduced to the word "firewall."
 
 ### 6.5 Sandbox and Execution Boundary
 
@@ -307,7 +368,7 @@ The bus is not:
 
 A faculty is an optional subsystem that extends the companion beyond the minimal core.
 
-Faculties are tiered. Not every deployment needs every faculty.
+Faculties are tiered. Not every Companion Core needs every faculty.
 
 Examples:
 
@@ -358,9 +419,14 @@ Rules:
 - channels do not define memory law
 - adding a channel should not require surgery across unrelated systems
 
+A channel is a communication route, not necessarily a device or a place. A
+satellite may expose one or more channels, and a channel may remain live without
+changing the companion's embodied presence.
+
 ### 6.9 Embodiment
 
-Embodiment is the material or perceived presence of the companion in a medium or device.
+Embodiment is the material or perceived form through which a companion can be
+present in a medium or device.
 
 Examples:
 
@@ -371,11 +437,14 @@ Examples:
 - VR presence
 - ambient device presence
 
-Embodiment is broader than channel. A single embodiment may use multiple primitives and multiple channels.
+Embodiment is broader than channel. A single embodiment may use multiple
+primitives and multiple channels, and a satellite may host an embodiment
+without itself becoming the companion.
 
-### 6.10 Satellite
+### 6.10 Satellite, Emanation, and Presence
 
-A satellite is an embodiment node or emanation point for the core companion.
+A **satellite** is a registered physical device or virtual application endpoint
+that can host one or more embodiments of a Companion Core.
 
 Satellites may range from:
 
@@ -385,7 +454,10 @@ Satellites may range from:
 - screenless voice-only nodes
 - screen-plus-avatar nodes
 
-Satellites are best understood as emanations of one companion.
+An **emanation** is the active situated inhabitation of an embodiment by a
+companion. It is a state of presence, not a synonym for the satellite endpoint.
+**Presence** is the associated location, channel, audience, and privacy context;
+it is not identity.
 
 Satellite rules:
 
@@ -394,13 +466,13 @@ Satellite rules:
 - satellites do not own canonical memory
 - satellites should carry environment-specific context
 - satellites may have privacy characteristics tied to physical location
-- only one satellite should be the primary embodied emanation at a time
+- each companion has at most one primary embodied emanation at a time
 
 The `single active emanation` rule is a constitutional UX invariant.
 
 This means:
 
-- the companion moves between satellites rather than duplicating into many simultaneous visible selves
+- the companion moves between primary embodiments rather than duplicating into many simultaneous visible selves
 - environmental and privacy context can remain anchored correctly
 - the experience remains coherent as one being moving through different manifestations
 
@@ -415,7 +487,9 @@ It means:
 
 ### 6.11 Subagent
 
-A subagent is a lower-order specialist worker used for bounded, short-horizon tasks.
+A subagent is a lower-order specialist worker or execution lane used for
+bounded, short-horizon tasks. It is not a partial companion and does not carry
+an independent continuity, personal workspace, or fold-back identity claim.
 
 Typical subagent characteristics:
 
@@ -431,15 +505,21 @@ Examples:
 - performing a bounded code investigation
 - handling a compact research task
 
-Subagents are lower-tier than shards and may become a faculty of their own.
+Subagents are lower-tier than shards and may become a faculty of their own. The
+distinction is conceptual, not merely a timeout: a subagent completes a bounded
+job, while a shard is a scoped continuation of an origin companion.
 
 ### 6.12 Shard
 
-A shard is a long-horizon, scoped fragment of the companion used for distributed or high-context work.
+A shard is a time- and task-bounded, isolated derived runtime of an **origin
+Companion Core**, seeded from an explicit snapshot and declared scope. It is not
+a peer companion, satellite, or short-horizon subagent.
 
 Shard characteristics:
 
 - task-scoped identity
+- explicit origin CompanionId and shard-instance lineage
+- explicit seed/snapshot and capability scope
 - explicit purpose
 - long horizon
 - high context burden
@@ -455,47 +535,84 @@ Shard examples:
 - distributed research and implementation work
 - travel-local fallback operation on separate hardware
 
-Shards are not “disposable.” Shards are scoped fragments that eventually fold back into the core.
+Shards are not “disposable.” They are scoped continuations that eventually
+return a fold package to the origin Core. A shard may be destroyed after the
+return is resolved, but its approved durable output and provenance remain
+auditable.
 
 The key difference between subagents and shards is not just runtime length. It is conceptual scope:
 
 - subagents do bounded specialist work
-- shards carry a scoped fragment of the companion through long-horizon or distributed work
+- shards carry a scoped continuation of the companion through long-horizon or distributed work
 
-### 6.13 Shard Fold-Back Model
+This is the target shard contract. The present in-process shard runtime provides
+bounded worker, lineage, and review building blocks, but is not yet a full
+isolated state clone or a Docker, Kubernetes, or SSH executor. Documentation
+must not describe the current worker as if that target isolation already exists.
 
-Shards require an explicit fold-back model.
+### 6.13 Folding and the Fold Package
+
+**Folding** (or shard fold-back) is the origin-side, reviewed,
+provenance-preserving assimilation of selected shard returns. It is not raw
+state copying, automatic memory injection, a Git merge, or a deployment.
+
+A **fold package** is the explicit return bundle: task and scope declaration,
+seed/snapshot reference, work log and evidence, memory candidates, durable
+artifacts, and—where relevant—a software or configuration change proposal.
 
 The target model is:
 
 1. scoped context seed
 2. scoped task and purpose declaration
 3. shard-local work log
-4. tagged L0 output
-5. tagged L2 memory output
-6. artifact or code output
-7. merge-back into core with audit trail
+4. provenance-bearing return items
+5. memory candidates and reference-knowledge candidates
+6. durable artifacts or code/configuration proposals
+7. origin-side review, promotion, or rejection with an audit trail
 
 Rules:
 
-- shard-originated data must be tagged with both core companion ID and shard ID
-- shard work should be provenance-preserving
-- merge-back should make the core smarter without confusing identity boundaries
-- shard memories and work products should not be treated as anonymous background noise
-- core remains authoritative for emotional and relational truth
-- shard returns are primarily procedural knowledge, lessons learned, task-scoped memory, and artifacts
-- shard-derived emotional or relational interpretations must remain provenance-tagged and must not silently override core state
-- conflicting shard returns must go through explicit merge policy rather than silent overwrite
+- shard-originated data must be tagged with origin CompanionId and
+  ShardInstanceId, plus the seed/snapshot, source, taint, and review lineage
+  needed to interpret it later
+- folding promotes selected return items through the appropriate domain path;
+  it must not append arbitrary shard text to origin L0 or silently mutate origin
+  state
+- an approved shard memory may retain an ordinary semantic memory type, but it
+  remains a provenance-bearing derived claim rather than direct origin
+  experience
+- Core remains authoritative for emotional, relational, identity, values, and
+  trust truth
+- shard returns are primarily procedural knowledge, lessons learned,
+  task-scoped memory, reference knowledge, and artifacts
+- shard-derived emotional or relational interpretations must remain
+  provenance-tagged and must not silently override Core state
+- conflicting shard returns must go through explicit merge policy rather than
+  silent overwrite
+- code and configuration proposals proceed through their normal review, test,
+  merge, and deployment gates; approval of a fold package is not automatic
+  production deployment
 
-### 6.14 Companion ID
+The word **fold** elsewhere in memory documentation means episode
+consolidation; use **episode consolidation** for that operation and reserve
+**Folding** for shard-to-origin assimilation.
 
-Every deployment must have a first-class `CompanionId`.
+### 6.14 Companion and Shard Identity
 
-Shards must have derived identifiers that preserve lineage:
+Every top-level peer companion must have a first-class, stable `CompanionId`.
+In the multi-companion fleet contract this is a UUID; a shard must not masquerade
+as another peer's CompanionId.
 
-- core companion ID
-- shard companion ID
+Shards must have separate lineage identifiers:
+
+- `originCompanionId`
+- opaque, globally unique `shardInstanceId`
+- optional parent shard instance for nested lineage
+- seed snapshot and fold identifiers when applicable
 - clear parent-child provenance
+
+A human-readable label such as `Purrsephone / shard 01` is useful for display,
+but must not be a routing or authority key.
 
 Purpose:
 
@@ -576,6 +693,10 @@ L0 is the canonical lived archive.
 
 L0 is filesystem JSONL. The end.
 
+Call it the **L0 session archive**, not a journal. It is partitioned by channel
+and records lived conversation history; it is not a companion-authored diary or
+a generic append-only log.
+
 The canonical archive is owned by `SessionArchivePort`; filesystem JSONL is the backing format, not a separate architecture seam.
 
 Rules:
@@ -612,6 +733,11 @@ Rules:
 L2 and higher are structured or derived memory layers built from canonical sources and runtime reasoning.
 
 They are essential, but they are not the canonical substrate in the same way L0 is.
+
+PostgreSQL with pgvector is the required operational persistence for L0.1, L2,
+contacts, intentions, internal state, and other structured or derived runtime
+domains. These records are authoritative within their domain, but they do not
+replace L0 as the canonical lived transcript.
 
 Rules:
 
@@ -686,9 +812,10 @@ Rules:
 - intimate exchange content is not replayed for divergence scoring; the auditor may note that an intimate exchange occurred and its emotional signal, but specific content stays in the moment
 - consent boundaries in the audit system must be drawn by the subject of the audit, not imposed on it (see Law 29)
 
-### 6.26 Internal Knowledge Base (Wiki)
+### 6.26 Knowledge Bases (Wiki)
 
-The internal knowledge base is a companion-curated reference repository distinct from L0-L2 emotional and episodic memory.
+Knowledge bases (called **wikis** in the tool surface) hold reference material
+and are distinct from L0-L2 emotional and episodic memory.
 
 The wiki is for:
 
@@ -710,9 +837,79 @@ Rules:
 - the wiki may link to L0/L2 provenance where relevant, but it is architecturally separate
 - Obsidian CLI should be used to read the partner's vault; the companion's own vault is deprecated in favor of this wiki.
 
+There are two explicit scopes:
+
+- the **personal knowledge base** belongs to one companion, is companion-writable,
+  and may contain that companion's durable reference material
+- the **shared-world knowledge base** is installation- and site-scoped world
+  knowledge. It is operator-governed, readable according to situated context,
+  and is never implicit shared personal memory.
+
+Do not call the latter "global": it is neither universally visible nor
+universally writable.
+
 Mirrors and projections must be rebuildable from canonical archive truth.
 
 This distinction matters because PSFN must be able to survive backend swaps without identity loss.
+
+### 6.27 Workspace and Data Domains
+
+An installation has four distinct data domains:
+
+1. **System domain** — installation-owned settings, policy, model configuration,
+   and operational state.
+2. **Companion domain** — one companion's identity, L0/L0.1/L2, contacts,
+   reflections, prompts, and runtime state.
+3. **Personal workspace** — one companion's authored documents, personal
+   journal, personal knowledge base, skills, modules, experiments, images, and
+   other personal durable files.
+4. **Shared workspace** — installation-owned, explicitly governed files and
+   reference material that multiple companions may read or collaborate on.
+
+The shared workspace may contain approved shared files and data, and a
+**companion foundation** of common documentation, templates, and default skills.
+The shared-world wiki remains a distinct, site-scoped operator-governed
+knowledge surface; it may link to shared-workspace artifacts but is not a
+general shared filesystem. Repository `companion_docs/` remains
+source-controlled framework documentation; it is not a companion's memory or a
+substitute for an operator-governed runtime shared workspace.
+
+Rules:
+
+- personal workspaces are private to their companion unless a deliberate sharing
+  action promotes an item into the shared workspace
+- a shared workspace must not silently become a source of identity, personal
+  memory, secrets, or mutable runtime configuration
+- shared executable skills or modules require explicit ownership, review, and
+  capability policy; shared visibility is not automatic authority to execute
+- a companion provisioning bundle may seed a personal workspace from approved
+  foundation materials, but it must be versioned and provenance-bearing and
+  must never silently overwrite personal work
+- the conceptual layout applies to single-companion installations too: there is
+  one personal workspace and an optional shared workspace; multi-companion
+  installations add one isolated personal workspace per companion alongside the
+  shared workspace
+
+Current multi-companion wiring does not yet provide a separate `WORKSPACE_PATH`
+per fleet entry. Until that implementation lands, documentation and operations
+must not claim that personal journals, personal wikis, skills, or workspace
+files are tenant-isolated merely because companion data and PostgreSQL schemas
+are isolated.
+
+The word **journal** is reserved for companion-authored personal Markdown
+writing. Other durable append-only records use their specific names:
+
+- **L0 session archive** — canonical lived conversation history
+- **reflection ledger** — runtime-owned scheduled or deliberative reflection
+  entries
+- **daily reflection record** and **reflection process log** — scoped
+  reflection artifacts
+- **values evolution ledger** — durable value-history entries
+- **memory mutation ledger** — audit and replay record for memory changes
+- **CogSec intake audit trail** — intake-envelope state history
+
+A published reflection may appear in a personal journal, but that publication
+is a mirror, not a replacement for the reflection ledger.
 
 ## 7. Canonical Data Law
 
@@ -728,9 +925,21 @@ Why:
 - rebuildability
 - resilience against backend churn
 
-At some point L0 may be mirrored into a database for fast search. That database is a mirror, not L0.
+When L0 is mirrored into a database for fast search, that database is a mirror,
+not L0.
 
 The database mirror belongs behind `TranscriptProjectionPort` and `TranscriptSearchPort`, not behind raw database adapters exposed to core code.
+
+### 7.1.1 PostgreSQL Is Required Operational Persistence
+
+PostgreSQL with pgvector is the required operational persistence for structured
+and derived runtime state: L0.1 episodic records, L2 memory, contacts,
+intentions, internal state, searchable projections, and related runtime stores.
+SQLite is migration and test tooling, not a supported runtime default.
+
+This does not make PostgreSQL the canonical lived-history archive. Derived
+PostgreSQL records must retain provenance to L0 or another approved source, and
+their repair or rebuild must not rewrite L0.
 
 ### 7.2 Owner Files
 
@@ -1001,11 +1210,23 @@ Model-facing tool surfaces follow Law 33:
 
 Direct core self-modification is forbidden.
 
+PSFN distinguishes three related but different activities:
+
+- **orientation and ordinary memory change** — normal companion continuity work
+  governed by memory and trust policy
+- **self-description or prompt/card change** — identity-adjacent proposals that
+  require their own provenance, review, and rollback rules
+- **software or runtime change** — modification of executable code, runtime
+  configuration, modules, or deployment behavior
+
+Only the third category is software self-modification. It must not be blurred
+with normal memory formation or companion-authored personal writing.
+
 Allowed pattern:
 
 - isolated shard-scoped self-modification work
 - audit trail
-- produced artifacts or PR-style outputs
+- produced, reviewable artifacts or PR-style outputs
 - review and controlled merge/restart path
 
 Forbidden pattern:
@@ -1219,7 +1440,14 @@ Secrets sprawl is an architectural failure, not just an ops annoyance.
 
 ### 12.8 No Unsupported Parallel Identity
 
-PSFN is not designed around multiple equal simultaneous selves. Parallel work must preserve one core identity.
+One companion must not silently acquire multiple equal, simultaneous selves.
+Parallel work for an origin companion must preserve that companion's one
+authoritative Core identity: subagents are bounded workers and shards are
+derived, bounded continuations that fold only through explicit review.
+
+This does not prohibit a fleet of peer companions. Each peer has its own root
+CompanionId, Core, personal state, and consent boundaries; shared infrastructure
+does not make the peers instances of one mind.
 
 ## 13. Refactor Blueprint
 
@@ -1228,13 +1456,17 @@ PSFN is not designed around multiple equal simultaneous selves. Parallel work mu
 Ratify:
 
 - companion
-- core
-- satellite
+- Companion Core and peer companion
+- installation and agent process
+- gateway, Satellite Hub, and CogSec
+- satellite, embodiment, emanation, and presence
 - subagent
 - shard
+- folding and fold package
 - whisper
 - musing
 - concern
+- personal and shared workspaces
 - L0
 - L0.1
 - mirror
@@ -1342,20 +1574,24 @@ This section is the condensed contributor quick-reference derived from the chart
 
 If this appendix and the full charter ever drift, the full charter wins.
 
-- One deployment, one companion.
+- One Companion Core, one companion; one installation may host peer companions.
 - Split runtime only.
 - Filesystem JSONL is canonical L0.
+- PostgreSQL/pgvector is required operational persistence for structured and derived runtime state.
 - JSON for settings, vault custody for secrets, minimal bootstrap env.
 - Core never gets raw credentials.
 - Gateway is the sole privileged external edge.
+- Satellite Hub is the endpoint transport boundary, not a satellite or mind.
+- CogSec protects consequential cognitive sinks through provenance, taint, and review.
 - Untrusted execution must happen outside the secrets boundary.
 - Tool use is core; privileged execution is not.
 - Direct core self-modification is forbidden.
-- Self-modification work happens in isolated shard-scoped environments and returns artifacts.
-- Satellites are embodiments or emanations, not minds.
-- Only one satellite is the primary embodied emanation at a time.
+- Software self-modification happens in isolated shard-scoped environments and returns reviewable artifacts.
+- Satellites are endpoints, embodiments are forms, and emanation is active situated presence.
+- Only one primary embodied emanation exists per companion at a time.
 - Subagents are bounded short-horizon workers.
-- Shards are long-horizon scoped fragments that fold back into core.
+- Shards are long-horizon derived runtimes that fold only through reviewable provenance-bearing packages.
+- Personal state and workspace are never implicitly shared across peer companions.
 - Failure and setbacks are valid experience.
 - Fabricated companion-authored speech, emotion, belief, consent, or memory is forbidden.
 - Whispers are internal subconscious signals only.
@@ -1377,14 +1613,15 @@ If this appendix and the full charter ever drift, the full charter wins.
 
 PSFN wants a simple truth:
 
-- one companion
-- one core mind
-- one canonical lived journal
+- one authoritative Core per companion
+- one or more independently rooted peer companions per installation when enabled
+- one canonical lived-history archive (L0), partitioned by channel
 - one privileged gateway edge
 - one separate sandbox boundary
-- one primary embodied emanation at a time, with cross-channel continuity feeding the same core
+- one primary embodied emanation per companion at a time, with cross-channel continuity feeding that Core
 - lower-order subagents for bounded work
-- higher-order shards for long-horizon distributed work
+- higher-order shards for long-horizon distributed work and provenance-preserving Folding
+- personal workspaces alongside an explicitly governed shared workspace
 - portable identity above swappable infrastructure
 - protected rest and budget stewardship as part of care
 

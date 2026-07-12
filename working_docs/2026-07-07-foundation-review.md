@@ -152,7 +152,7 @@ Option A (HEAD-only surgery) is cheaper but leaves emails/IP/names permanently e
 - `docs/SPRINT_9_CONTINUATION.md` (ssh alias, real emails) and `SPRINT_9_FABLE_REVIEW.md` — remove from docs/ (violates AGENTS.md's own planning-docs rule L295–303).
 
 ### P1 accuracy
-- **Two byte-identical charter files** (`PSFN_PROJECT_CHARTER.md` == `PSFN_PROJECT_CHARTER_524.md`); README links one, CLAUDE.md the other. Dedupe before they diverge.
+- **Resolved: duplicate charter files.** The byte-identical `_524` copy was retired; `PSFN_PROJECT_CHARTER.md` is the sole canonical charter.
 - **Config source-of-truth disagreement across the three contract docs.** Resolved ✔︎: `src/system/config/*` (load-config, settings-contract-guard, startup-owner-files) is the canonical authority — it loads/validates owner files and imports `src/system/settings/*` underneath; `settings.ts` is a façade over the domain library. CLAUDE.md is right; align AGENTS.md L57–61 + specifications.md L15–18.
 - **AGENTS.md owner-file list omits 3 of 10** (`providers.json`, `charge-policy.json`, `backup.json`).
 - **Implemented but zero-doc charter concepts:** weighted thoughts (`core/intention/weighted-thoughts.ts` + outreach lane), satellite/single-active-emanation (`satellite-adapter-port.ts`, `active-emanation-state.ts` — a *constitutional invariant* with no doc), `CompanionId` (`shared/routing/envelope.ts:3`).

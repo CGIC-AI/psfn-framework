@@ -284,7 +284,7 @@ parsing, CogSec remediation, and eval tooling extraction.
 # Addendum: 2026-07-02 → 2026-07-07 (`543571f8..82b66467`)
 
 The work after the section 1-8 endpoint concentrates on getting the substrate
-onto a live Kubernetes shard and keeping it healthy there: a component-selective
+onto a live Kubernetes deployment target and keeping it healthy there: a component-selective
 ship pipeline, companion self-diagnosis, tool-call reliability under real
 providers, durable scheduled prompts that survive frequent agent restarts, a
 deliberate contact-trust ratchet, and a broad security/correctness hardening

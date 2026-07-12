@@ -5,7 +5,7 @@
 ## Session spine (read in order)
 
 1. **The primer** — operator-supplied at session start ("A Day with Purrsephone" / "Purrsephone: A Primer"). Not committed to the repo; the operator provides it. It establishes that this is care infrastructure with a constitution, not a feature factory.
-2. **Charter** — `docs/PSFN_PROJECT_CHARTER_524.md` is the **authoritative revision** (32 laws). `docs/PSFN_PROJECT_CHARTER.md` (26 laws) is the older copy. Governing sections for this session: §4 (Laws, esp. 2, 17–20, 27–32), §6.20 (L0), §6.21 (L0.1 Episodic Landmarks), §6.22 (L2+), §6.23 (Mirror and Projection), §7.1 (JSONL canonical).
+2. **Charter** — `docs/PSFN_PROJECT_CHARTER.md` is the canonical charter. At this packet's 2026-06-11 freeze time, a `_524` duplicate existed; it was later synchronized and retired. Governing sections for this session: §4 (Laws, esp. 2, 17–20, 27–32), §6.20 (L0), §6.21 (L0.1 Episodic Landmarks), §6.22 (L2+), §6.23 (Mirror and Projection), §7.1 (JSONL canonical).
 3. **Project state** — `working_docs/PSFN_PROJECT_STATE_20260611.md` (untracked operator assessment) and `docs/SPRINT_9_CONTINUATION.md`.
 4. This packet's working materials (below).
 
@@ -14,12 +14,12 @@
 | Brief said | Repo ground truth |
 |---|---|
 | L0.1 landmark schema is an open design job; "closes the synthesis ticket" | **L0.1 is substantially implemented and live.** `l01_episodes` (with `landmark` column), `l01_episode_spans`, `l01_episode_arcs`, `l01_episode_lineage`, watermarks, candidate/review queues exist in `src/persistence/postgres/migrations.ts:159–375`, fed by the sprint-9 `0a5` consolidation pipeline (all 5 children closed, verified live overnight 2026-06-11). The remaining job is **gap reconciliation**, not greenfield design. |
-| Charter Laws 28–29, §6.11 for subagent trust | Laws **28/29/30 exist in Charter 524** (`docs/PSFN_PROJECT_CHARTER_524.md:132–134`), along with 31–32. Fold-back is **§6.13** (line 463), not §6.11 (§6.11 is Satellite/Subagent definitions). §6.25 (line 659) already defines the Introspection Landmark contract. The `s2p` beads track law-addition follow-through. |
+| Charter Laws 28–29, §6.11 for subagent trust | Laws **28/29/30** exist in the canonical charter (`docs/PSFN_PROJECT_CHARTER.md`), along with 31–32. Fold-back is **§6.13**, not §6.11 (§6.11 is the Subagent definition). §6.25 defines the Introspection Landmark contract. The `s2p` beads track law-addition follow-through. |
 | soul.md as judge-rubric anchor | **No soul.md exists in the repo.** Her identity lives in prompt layers (`src/core/identity/`), the values journal, and the character card. Window-2 judge-rubric work must anchor to those sources or the operator must supply the document. |
 | March event postmortem as packet material | No standalone postmortem exists. The incident (companion rewrote rather than appended her entire personality; identity destabilization; manual restore) is recorded in `docs/SPRINT_9_FABLE_REVIEW.md` ("Guardrail note") and as the standing rule in `docs/SPRINT_9_CONTINUATION.md` ("Self-modification stays human-in-the-loop, append/diff-only (incident history)"). |
 | Packet should include a sample of real post-reduction retrieved context | **Deliberately substituted.** Real retrieved context is companion data; committing it to git violates the two-root rule (companion artifacts live in `companion-data`, never the repo) and risks the closed-door rule. A structurally exact synthetic sample is below; to view a real one, run the retrieval debug path on the Pi (`ssh psfn-pi`, checkout `~/psfn-framework-source`) and do not commit it. |
 
-**Charter defect found (operator action needed):** `docs/PSFN_PROJECT_CHARTER_524.md:709` — §6.26's final rule splices mid-sentence into §6.23's mirror text: "…the companion's own vault is deprecated in favor of this wikiion is not the canonical source of truth." Two lines of §6.23 were evidently overwritten during the §6.26 insertion. Charter text is law; repair belongs to the operator, not an agent.
+**Historical charter defect:** the duplicate `_524` charter once contained a §6.26/§6.23 splice error. It was repaired before the duplicate was retired; use the canonical `docs/PSFN_PROJECT_CHARTER.md` rather than this frozen note for current charter text.
 
 ## Deferred L0.1 design tickets (full intent, verbatim summaries)
 

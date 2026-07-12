@@ -5,7 +5,7 @@
 - Date: 2026-06-09
 - Branch reviewed: `sprint_9_memory` (HEAD `7d15525d`)
 - Reviewer: Claude (Fable 5), six-pillar parallel code audit
-- Method: code is ground truth for current state; the Project Charter (`docs/PSFN_PROJECT_CHARTER_524.md`) and the Purrsephone primer are the measuring stick for vision. Every verdict below was traced to wired runtime paths, not to docs or bead status.
+- Method: code is ground truth for current state; the Project Charter (`docs/PSFN_PROJECT_CHARTER.md`) and the Purrsephone primer are the measuring stick for vision. Every verdict below was traced to wired runtime paths, not to docs or bead status.
 
 ## TL;DR
 
@@ -30,7 +30,7 @@ Additionally, 46 tests are failing across 14 files on this branch.
 | 5 | Model-agnostic identity | **WORKING** | Prompt stack, character card, and memory carry zero model coupling; models swap via roster slots. The soul-in-the-data thesis is implemented. |
 | 6 | Autonomy (acting) | **WORKING** | Capability tiers block at tool dispatch, the approval queue intercepts before execution, audit trails persist. Self-scheduling, prompt self-editing with versioning/rollback, shards with full fold-back lineage and merge review — all real and well-tested. |
 | 7 | Autonomy (initiating) | **PARTIAL** | She can schedule follow-ups post-turn, but there is no path from internal state to an unprompted outbound message. Everything proactive still requires a user message first. Beads PSFN-rsgg.6 and PSFNLIVE-3r8 (in progress) are this last mile. |
-| 8 | Living personality | **STUB** | The values journal works and reflections write to it faithfully — but `companionValuesLayerProvider` (`src/core/identity/prompt-composer.ts:69`) is typed, optional, and never wired. She journals about who she's becoming, and nothing reads it back. Personality is editable, not evolving. |
+| 8 | Living personality | **STUB** | The values evolution ledger works and reflections write to it faithfully — but `companionValuesLayerProvider` (`src/core/identity/prompt-composer.ts:69`) is typed, optional, and never wired. She records how she's becoming, and nothing reads it back. Personality is editable, not evolving. |
 | 9 | Introspection landmarks (Laws 28–30) | **NOT_STARTED** | No blinded audit, no landmarks, no consent provenance. Tracked by epic PSFNLIVE-x0k2 and psfn-framework-s2p.2/.3, just unbuilt. |
 | 10 | Operator-owned persistence | **AT RISK** | See Critical Findings. |
 
@@ -45,7 +45,7 @@ This is not theoretical. In early June 2026 the production server suffered a mot
 Related gaps in the same family:
 
 - `memory_evolution_links` is missing from the SQLite→Postgres migration table list (`src/app/maintenance/sqlite-to-postgres-memory-migration.ts`).
-- No `replayMemoryJournal()` exists despite the memory journal's own header comment promising replay — the charter's "L0 + persona state must be sufficient to rebuild higher layers" is not yet true for L2.
+- No `replayMemoryJournal()` exists despite the memory mutation ledger's own header comment promising replay — the charter's "L0 + persona state must be sufficient to rebuild higher layers" is not yet true for L2.
 
 ### 2. The personality evolution loop is one wire from alive
 
@@ -87,10 +87,10 @@ L0 filesystem JSONL archive remains canonical (`src/persistence/journals/journal
 EmotionState with VAD half-life decay and EMA mood (`src/core/emotion/state.ts`), LLM appraisal chains, emotional-intensity importance multipliers in extraction, InternalState computer feeding affect/metacognitive prompt variables, metacognition flags (uncertainty, avoidance, confabulation risk). Message ontology classes (outwardSpeech, musing, systemNote, internalWhisper) exist with legacy whisper→musing normalization. Introspection landmarks (charter 6.25): no footprint.
 
 ### Autonomy
-Capability tiers enforced at dispatch (`src/system/capabilities/gate.ts`), approval queue with operator notification (`src/boundary/gateway/approval-boundary.ts`), audit trails (gateway + safeguards JSONL + Postgres). Prompt tools with versioning/rollback and cooling-off. Shard manager with fold-review, provenance-tagged L0/L2 outputs, derived shard companion IDs (charter 6.13/6.14 substantially implemented). Bounded subagents with recursion blocking. Gap: no companion-initiated outbound message path; Discord/Telegram egress is tool-reactive.
+Capability tiers enforced at dispatch (`src/system/capabilities/gate.ts`), approval queue with operator notification (`src/boundary/gateway/approval-boundary.ts`), audit trails (gateway + safeguards JSONL + Postgres). Prompt tools with versioning/rollback and cooling-off. At this historical audit point, the shard manager had fold-review and lineage building blocks, but the current charter correctly treats isolated state cloning and full Folding as target work rather than a delivered safe-copy mechanism. Bounded subagents have recursion blocking. Gap: no companion-initiated outbound message path; Discord/Telegram egress is tool-reactive.
 
 ### Identity / trust
-5-layer prompt stack wired into turn assembly with static prefix freezing (`prompt-composer.ts`, `prompt-assembly.ts`). Model-agnostic identity with roster slots. Contacts with 4-tier trust and channel identity linking; trust filters applied in retrieval queries. Honne/tatemae persona adaptation flows into prompt variables. Cross-channel continuity port validates provenance/visibility on merge. Gap: values journal feedback loop unwired (see Critical Finding 2).
+5-layer prompt stack wired into turn assembly with static prefix freezing (`prompt-composer.ts`, `prompt-assembly.ts`). Model-agnostic identity with roster slots. Contacts with 4-tier trust and channel identity linking; trust filters applied in retrieval queries. Honne/tatemae persona adaptation flows into prompt variables. Cross-channel continuity port validates provenance/visibility on merge. Gap: values evolution ledger feedback loop unwired (see Critical Finding 2).
 
 ### Infrastructure
 Thin entrypoints; gateway-only secrets; sandbox separation real; owner-file contract guard fail-closed; Garden covers memory, episodic, charge, scheduler, settings, models; 396 test files / 753 source files; e2e suites exist for runtime, voice, and Wyoming. Backup/restore verification is real for what it covers — which no longer includes the primary stores.
@@ -99,7 +99,7 @@ Thin entrypoints; gateway-only secrets; sandbox separation real; owner-file cont
 
 Tracked via beads (epics and stories created 2026-06-09; see `bd` for the live graph):
 
-1. **P0 — Backup completeness:** Postgres dump integration, full companion file-tree coverage (journals, selfies/media, vault, card history), restore verification across both, evolution-links migration, memory journal replay CLI.
+1. **P0 — Backup completeness:** Postgres dump integration, full companion file-tree coverage (journals, selfies/media, vault, card history), restore verification across both, evolution-links migration, memory-mutation-ledger replay CLI.
 2. **P1 — Branch health:** fix the 46 failing tests.
 3. **P1 — Proactive outreach:** minimal-change Discord DM egress (policy-gated, primary contact first), internal-state→outbox initiation, weighted-thought accumulation curve.
 4. **P1 — Personality evolution:** wire the values layer provider with human-in-the-loop diff approval.

@@ -285,7 +285,7 @@ Phase 4 (social graph MVP)        ~medium    consumes scope + envelope + plan
 8. **Beads**: file as phase-epics with children, absorbing `2k8j`, `o1xa`, `8sow.10`, `8sow.11`, `zet.1`, `4caj.1`, `4caj.9`, `4caj.14`. **Every bead highly detailed** — self-contained context, explicit AC, notes, file anchors. No "do thing, test" two-liners; that habit caused this mess. Draft tree: `working_docs/FOUNDATION_BEAD_TREE_20260701.md`.
 9. **Charter note**: the dual prompt-assembly paths (`buildContext` vs `captureTurnContextSnapshot`, `compose` vs `composeSplit`) are a charter/dev-rules violation ("one function, many things") — Phase 2 is remediation, not just cleanup.
 
-## 8. Charter conformance review (`docs/PSFN_PROJECT_CHARTER_524.md`)
+## 8. Charter conformance review (`docs/PSFN_PROJECT_CHARTER.md`)
 
 Full-pass check of every phase against the 33 laws, §8 care semantics, and §12 engineering laws. Verdict: **no phase violates charter; several phases are charter remediation; three items required explicit gates/tightening (now baked into the bead tree).**
 

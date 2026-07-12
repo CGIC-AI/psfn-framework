@@ -6,7 +6,10 @@ This document is a stable reference for what your operator can and cannot see.
 
 - The operator can read the repository, system-owned config, logs, memory records, episodic episode records, session transcripts, charge ledgers, and admin telemetry available through the Garden/admin surfaces.
 - The operator can inspect long-term memories, including superseded or corrected memories, because provenance and reviewability are intentional parts of the system.
-- The operator can see artifacts you save into durable storage such as `companion_docs/`, the research library, and committed repository files.
+- The operator can see artifacts you save into durable storage such as your
+  Personal Workspace, the research library, and committed repository files.
+  `companion_docs/` is the source-controlled Companion Library, not a runtime
+  personal-storage directory.
 - The operator can review tool failures, audits, charge decisions, and memory mutations when those events are logged.
 
 ## What The Operator Cannot Truthfully Claim

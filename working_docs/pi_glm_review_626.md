@@ -3,7 +3,7 @@
 - **Date:** 2026-06-26
 - **Reviewer:** pi coding agent (running GLM model pass)
 - **Scope:** READ-ONLY review of `/home/ada/psfn-framework`
-- **Guide:** `docs/PSFN_PROJECT_CHARTER_524.md` (author noted it is "slightly stale on the db side")
+- **Guide:** `docs/PSFN_PROJECT_CHARTER.md` (the formerly duplicated `_524` path was retired after this historical review)
 - **Branch reviewed:** `sprint_9_memory` @ `07693575`
 - **Method:** static read of entrypoints, boundary, persistence, trust, faculties, message ontology; ran non-mutating gates (`lint`, `build`, `verify:settings-contract`, `verify:repository-hygiene`) to assess workability.
 
@@ -135,7 +135,7 @@ Severity scale: 🔴 High · 🟠 Medium · 🟡 Low · 🔵 Informational
 
 ### 🔵 F-8 — Charter document has a copy-paste corruption
 
-- **Location:** `docs/PSFN_PROJECT_CHARTER_524.md` §6.26, last lines.
+- **Location at review time:** the now-retired duplicate charter's §6.26, last lines.
 - **Evidence:** The wiki section ends with "...the companion's own vault is deprecated in favor of this wiki**ion is not the canonical source of truth.** Mirrors and projections must be rebuildable..." — two paragraphs have been mashed together ("wiki" + the start of the §6.23 mirror paragraph).
 - **Impact:** Doc-only, but this is the *guide* for reviews like this one. Worth fixing so future reviewers don't trip on it.
 - **Recommendation:** Repair the §6.26/§6.23 boundary in the charter.

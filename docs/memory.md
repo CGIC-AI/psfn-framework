@@ -1,12 +1,14 @@
 # Memory
 
-PSFN memory is not a single store. The runtime combines append-only session history, typed long-term memories, continuity artifacts, contact state, and a few small high-priority ledgers.
+PSFN memory is not a single store. The runtime combines an append-only lived
+session archive, typed long-term memories, continuity artifacts, contact state,
+and a few small high-priority ledgers.
 
-Last updated: 2026-06-29.
+Last updated: 2026-07-12.
 
 ## Layers That Exist Today
 
-### L0: Session history
+### L0: Session archive
 
 - Per-channel append-only JSONL in `sessions/`
 - Built by `SessionStore` and assembled by `SessionManager`
@@ -44,13 +46,18 @@ Last updated: 2026-06-29.
 ### Parallel memory/state artifacts
 
 - `contacts/` continuity files
-- reflection journal entries under `notes/reflections/journal.jsonl`
-- append-only daily reflection journals under `notes/reflections/daily/`
+- reflection ledger entries under `notes/reflections/journal.jsonl`
+- append-only daily reflection records under `notes/reflections/daily/`
 - append-only long-process reflection logs under `notes/reflections/process-logs/`
 - active orientation persisted in `core_memory.json`
 - contact profiles, social graph state, concerns, intentions, internal state, and follow-ups in PostgreSQL stores
 - scratchpad mirror at `notes/scratchpad.json`
-- memory mutation journal at `notes/memories.jsonl`
+- memory mutation ledger at `notes/memories.jsonl`
+
+The model-facing **personal journal** is separate: it contains companion-authored
+Markdown under `WORKSPACE_PATH/journal/`. A reflection publication copied there
+is a mirror of the runtime reflection ledger, not its replacement. Do not call
+L0 or generic audit logs "the journal."
 
 ## Orientation, Long-Term Memory, And Scratchpad
 
@@ -74,7 +81,7 @@ Scratchpad is a separate semantic surface, not a subtype of long-term memory.
   - durable operator-authored notes, imported documents, and artifacts go to `wiki` or repo docs
   - active self-orientation belongs in `orient`
 
-### Wiki / Knowledge Base
+### Personal Knowledge Base (Wiki)
 
 Wiki documents are stable reference knowledge, not lived memory.
 
@@ -87,7 +94,7 @@ Wiki documents are stable reference knowledge, not lived memory.
 
 The legacy `vault`/Obsidian surface is an optional external source bridge. It is not the canonical personal long-term storage surface.
 
-### Wiki Scopes: Personal vs Shared-World (multi-companion)
+### Knowledge-Base Scopes: Personal vs Shared-World (multi-companion)
 
 Wiki documents carry an optional scope dimension (`WikiScope`,
 `src/faculties/wiki/scope.ts`). Absent means `personal` — the default for every
@@ -96,8 +103,11 @@ byte-identical to a pre-scope document. The non-personal scope is
 `shared_world:<siteId>`: world knowledge tied to a place-registry site, shared
 across the companions on a cluster.
 
-- **Personal wiki stays per-companion and companion-writable.** It lives under
-  `WORKSPACE_PATH/knowledge/wiki/` as before.
+- **Personal wiki is intended to be per-companion and companion-writable.** It
+  lives under that companion's `WORKSPACE_PATH/knowledge/wiki/`. This is already
+  true in single-companion mode, but current fleet wiring forwards one shared
+  `WORKSPACE_PATH` to all agents; do not claim fleet isolation for workspace
+  files until Personal Workspace wiring lands.
 - **Shared-world wiki is operator-owned.** Companions read the shared scope and
   *propose* entries through the normal wiki pass; they never write it directly.
   The personal `WikiStore` rejects any non-personal write fail-closed
@@ -121,6 +131,12 @@ across the companions on a cluster.
   (`mergeWikiSemanticMatches`) and fails closed to personal-only if the shared
   store is unavailable. Publication/import project into this store in the same
   operation — see [`docs/operations.md`](./operations.md).
+
+The Shared-world Wiki is not a general **Shared Companion Workspace**. The
+latter is a future installation-governed file domain for explicitly published
+collaboration artifacts and common reference material; it must never turn a
+peer's personal journal, wiki, skills, or runtime state into shared data by
+default. See [`docs/multi-companion.md`](./multi-companion.md#workspace-scopes-current-behavior-and-target-contract).
 
 ## Memory Types
 
@@ -336,7 +352,7 @@ Below the minimum the lane holds and accumulates: the watermark does not advance
 
 **Sleeptime (rest-window scheduler lane)** — actual sleeptime: nightly scheduler-owned work, like dreaming. Sleep consolidation, arc weaving, the dream-meaning pass, and the orientation-block rewrite run ONLY from the `memory.sleeptime.rest-window` scheduler task inside the `episodicProcessing` rest window (default 00:00–09:00 plus 60 min of inactivity). No code path from turn cadence can reach them — the sleeptime agent has no turn-based inference surface and fails closed at construction without a rest-window config; unreachability is test-enforced. Heavy-pass tuning is JSON-owned: `sleepConsolidation` (`reviewWindowDays`, `refinementWindowHours`, `adjacencyGapMinutes`, `maxRefinementsPerRun`, `maxConsolidationsPerRun`), `orientationRewrite` (`minNewEntriesSinceRewrite`, `refreshAfterQuietDays`; the orient rewrite is gated on deterministic evidence of change — see "Deterministic pre-LLM gating" below), and `arcFormation` (`passIntervalDays`, `reviewWindowDays`, `minConfidence`, `maxArcsPerRun`, `maxEpisodesPerRun`). Arc weaving links CANONICAL episodes only (candidates wait for consolidation) into cross-day thematic threads; arc membership is mutable (join/leave/re-point) with a full audit trail in `l01_episode_arc_audit`, and consolidation supersession re-points arc memberships onto the consolidated episode so no arc dangles on a non-live episode.
 
-Sleep consolidation runs the candidate-then-consolidate model (m58.1). Daytime synthesis output is CANDIDATE episodes (`l01_episodes.status = 'candidate'`): fully live for retrieval — they are the only record of the day — but identifiable until a sleep cycle rules on them. The nightly pass clusters same-scope overlapping/adjacent candidates, asks a schema-bound LLM thematic grouping which candidates form one episode ("this whole stretch was us discussing X"; a mis-joined distinct-topic fragment goes to its own group), and folds each multi-candidate group into a new consolidated canonical episode: spans, artifacts, and provenance are unioned deterministically (every covered L0 transcript span keeps an `l0_span` provenance ref), message claims move via `transferEpisodeMessageClaims`, and the source candidates are marked superseded — never deleted, with lineage (`canonicalizes`) and candidate-decision rows recording the fold. Lone candidates are confirmed canonical deterministically with zero LLM spend. Malformed or failed grouping output fails closed per cluster: a typed `memory.sleep_consolidation.failure` event fires and the candidates stay untouched for the next night. LLM grouping work per run is bounded by `maxConsolidationsPerRun`. The deterministic adjacent-merge repair only touches claim-free canonical episodes (the pre-claiming historical backlog); claim-holding episodes are products of deliberate thematic consolidation and are never blindly re-merged.
+Sleep consolidation runs the candidate-then-consolidate model (m58.1). Daytime synthesis output is CANDIDATE episodes (`l01_episodes.status = 'candidate'`): fully live for retrieval — they are the only record of the day — but identifiable until a sleep cycle rules on them. The nightly pass clusters same-scope overlapping/adjacent candidates, asks a schema-bound LLM thematic grouping which candidates form one episode ("this whole stretch was us discussing X"; a mis-joined distinct-topic fragment goes to its own group), and consolidates each multi-candidate group into a new canonical episode: spans, artifacts, and provenance are unioned deterministically (every covered L0 transcript span keeps an `l0_span` provenance ref), message claims move via `transferEpisodeMessageClaims`, and the source candidates are marked superseded — never deleted, with lineage (`canonicalizes`) and candidate-decision rows recording the consolidation. Lone candidates are confirmed canonical deterministically with zero LLM spend. Malformed or failed grouping output fails closed per cluster: a typed `memory.sleep_consolidation.failure` event fires and the candidates stay untouched for the next night. LLM grouping work per run is bounded by `maxConsolidationsPerRun`. The deterministic adjacent-merge repair only touches claim-free canonical episodes (the pre-claiming historical backlog); claim-holding episodes are products of deliberate thematic consolidation and are never blindly re-merged. This is **episode consolidation**, not shard Folding.
 
 Note: the old `scheduler.json` `sleeptime` cadence key was removed with no legacy alias; configs still carrying it fail validation with rename guidance.
 

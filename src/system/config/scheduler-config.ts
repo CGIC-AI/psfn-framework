@@ -248,6 +248,15 @@ export interface TemporalWakeupMorningConfig {
   timezone: 'local' | 'utc';
   /** Habit-mode estimator tuning (E7.2); only consulted when timing = 'habit'. */
   habit: TemporalWakeupHabitConfig;
+  /**
+   * Partner-idle recency guard for the morning wake (minutes). At wake time,
+   * partner activity younger than this means the temporal frame is already
+   * current — the partner is actively conversing — so the morning note is
+   * suppressed. Only a partner speaking right now blocks the note: a partner who
+   * spoke overnight (e.g. 00:42 before an 08:00 wake) does NOT. 0 disables the
+   * guard entirely. Non-negative.
+   */
+  minPartnerIdleMinutes: number;
   /** Max recent session entries fed to the shared catch-up summarizer. */
   catchUpEntryLimit: number;
   /** Token budget for the shared catch-up summary. */
@@ -354,6 +363,7 @@ export const DEFAULT_TEMPORAL_WAKEUP_CONFIG: TemporalWakeupConfig = {
       upperQuantile: 0.75,
       maxSamplesScanned: 2000,
     },
+    minPartnerIdleMinutes: 60,
     catchUpEntryLimit: 32,
     catchUpSummaryMaxTokens: 160,
     fullTurnMaxIdleHours: 72,
@@ -1057,6 +1067,11 @@ function validateTemporalWakeupConfig(
       localTime: toLocalTime(morningRaw.localTime ?? morningDefaults.localTime, 'temporalWakeup.morningWake.localTime'),
       timezone: toCadenceTimezone(morningRaw.timezone ?? morningDefaults.timezone, 'temporalWakeup.morningWake.timezone'),
       habit: validateTemporalWakeupHabitConfig(morningRaw.habit, sourcePath),
+      minPartnerIdleMinutes: toNumberAtLeast(
+        morningRaw.minPartnerIdleMinutes ?? morningDefaults.minPartnerIdleMinutes,
+        'temporalWakeup.morningWake.minPartnerIdleMinutes',
+        0,
+      ),
       catchUpEntryLimit: toPositiveInteger(
         morningRaw.catchUpEntryLimit ?? morningDefaults.catchUpEntryLimit,
         'temporalWakeup.morningWake.catchUpEntryLimit',

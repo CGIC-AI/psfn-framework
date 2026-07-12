@@ -138,6 +138,7 @@ describe('evaluateMorningWakeEligibility', () => {
         entry({ role: 'assistant', timestamp: DAY1_NIGHT }),
       ],
       fullTurnMaxIdleMs: 72 * 60 * 60_000,
+      minPartnerIdleMs: 60 * 60_000,
       nowMs: DAY2_MORNING,
     });
     expect(decision).toMatchObject({
@@ -156,6 +157,7 @@ describe('evaluateMorningWakeEligibility', () => {
       session,
       recentEntries: [entry({ role: 'user', timestamp: staleAt })],
       fullTurnMaxIdleMs: 72 * 60 * 60_000,
+      minPartnerIdleMs: 60 * 60_000,
       nowMs: DAY2_MORNING,
     });
     expect(decision).toMatchObject({
@@ -165,23 +167,68 @@ describe('evaluateMorningWakeEligibility', () => {
     });
   });
 
-  it('skips when the partner already spoke today', () => {
+  it('fires for a partner who spoke overnight before the wake slot', () => {
+    // Partner at 00:42 local, wake at 08:05 the SAME calendar day: the old
+    // calendar-date guard suppressed this every night; the recency guard allows it.
+    const partnerAt = Date.parse('2026-06-11T00:42:00.000Z');
     expect(evaluateMorningWakeEligibility({
       session,
-      recentEntries: [entry({ role: 'user', timestamp: DAY2_MORNING - 35 * 60_000 })],
+      recentEntries: [entry({ role: 'user', timestamp: partnerAt })],
       fullTurnMaxIdleMs: 72 * 60 * 60_000,
+      minPartnerIdleMs: 60 * 60_000,
       nowMs: DAY2_MORNING,
-    })).toMatchObject({ allowed: false, reason: 'partner_already_active_today' });
+    })).toMatchObject({ allowed: true, lastPartnerActivityAtMs: partnerAt });
   });
 
-  it('anti-loops when a wake note already landed today', () => {
+  it('skips when the partner is conversing right now', () => {
+    expect(evaluateMorningWakeEligibility({
+      session,
+      recentEntries: [entry({ role: 'user', timestamp: DAY2_MORNING - 30 * 60_000 })],
+      fullTurnMaxIdleMs: 72 * 60 * 60_000,
+      minPartnerIdleMs: 60 * 60_000,
+      nowMs: DAY2_MORNING,
+    })).toMatchObject({ allowed: false, reason: 'partner_recently_active' });
+  });
+
+  it('disables the recency guard when minPartnerIdleMs is 0', () => {
+    expect(evaluateMorningWakeEligibility({
+      session,
+      recentEntries: [entry({ role: 'user', timestamp: DAY2_MORNING - 60_000 })],
+      fullTurnMaxIdleMs: 72 * 60 * 60_000,
+      minPartnerIdleMs: 0,
+      nowMs: DAY2_MORNING,
+    })).toMatchObject({ allowed: true });
+  });
+
+  it('anti-loops when a MORNING wake note already landed today', () => {
     expect(evaluateMorningWakeEligibility({
       session,
       recentEntries: [entry({ role: 'user', timestamp: DAY1_EVENING })],
       fullTurnMaxIdleMs: 72 * 60 * 60_000,
+      minPartnerIdleMs: 60 * 60_000,
       nowMs: DAY2_MORNING,
       lastWakeupNoteAtMs: DAY2_MORNING - 2 * 60 * 60_000,
     })).toMatchObject({ allowed: false, reason: 'anti_loop_note_today' });
+  });
+
+  it('fires even when only an idle-refresher note landed overnight (source-filtered anti-loop)', () => {
+    // The runtime feeds the anti-loop a morning-only scan, so a refresher note
+    // timestamped after midnight never self-cancels the daily wake.
+    const refresherAt = Date.parse('2026-06-11T02:34:00.000Z');
+    const persisted = [wakeNoteEntry(refresherAt, TEMPORAL_WAKEUP_REFRESHER_NOTE_SOURCE)];
+    const morningOnly = new Set([TEMPORAL_WAKEUP_MORNING_NOTE_SOURCE]);
+    // Combined scan sees the refresher note; the morning-only scan does not.
+    expect(findLatestTemporalWakeupNoteAt(persisted)).toBe(refresherAt);
+    const morningNoteAt = findLatestTemporalWakeupNoteAt(persisted, morningOnly);
+    expect(morningNoteAt).toBeUndefined();
+    expect(evaluateMorningWakeEligibility({
+      session,
+      recentEntries: [entry({ role: 'user', timestamp: DAY1_EVENING })],
+      fullTurnMaxIdleMs: 72 * 60 * 60_000,
+      minPartnerIdleMs: 60 * 60_000,
+      nowMs: DAY2_MORNING,
+      ...(morningNoteAt !== undefined ? { lastWakeupNoteAtMs: morningNoteAt } : {}),
+    })).toMatchObject({ allowed: true });
   });
 
   it('requires partner activity and blocks internal/public sessions', () => {
@@ -189,6 +236,7 @@ describe('evaluateMorningWakeEligibility', () => {
       session,
       recentEntries: [entry({ role: 'assistant', timestamp: DAY1_NIGHT })],
       fullTurnMaxIdleMs: 1,
+      minPartnerIdleMs: 60 * 60_000,
       nowMs: DAY2_MORNING,
     })).toMatchObject({ allowed: false, reason: 'no_partner_activity' });
 
@@ -196,6 +244,7 @@ describe('evaluateMorningWakeEligibility', () => {
       session: { sessionId: 'internal:reflection:daily', channelType: 'api', timestamp: DAY1_NIGHT },
       recentEntries: [entry({ role: 'user', timestamp: DAY1_EVENING })],
       fullTurnMaxIdleMs: 1,
+      minPartnerIdleMs: 60 * 60_000,
       nowMs: DAY2_MORNING,
     })).toMatchObject({ allowed: false, reason: 'internal_session' });
 
@@ -203,6 +252,7 @@ describe('evaluateMorningWakeEligibility', () => {
       session: { sessionId: 'twitter:timeline', channelType: 'api', timestamp: DAY1_NIGHT },
       recentEntries: [entry({ channelId: 'twitter:timeline', role: 'user', timestamp: DAY1_EVENING })],
       fullTurnMaxIdleMs: 1,
+      minPartnerIdleMs: 60 * 60_000,
       nowMs: DAY2_MORNING,
     })).toMatchObject({ allowed: false, reason: 'privacy_boundary' });
   });
@@ -457,6 +507,7 @@ describe('morning wake lane (simulated clock, real session manager)', () => {
       session: mgr.resolveStartupSessionMetadata('reuse_latest_session'),
       recentEntries: mgr.getRecentMessages('api:main', 16),
       fullTurnMaxIdleMs: 72 * 60 * 60_000,
+      minPartnerIdleMs: 60 * 60_000,
       nowMs: probeAt,
     });
     expect(wakeProbe).toMatchObject({
@@ -466,13 +517,18 @@ describe('morning wake lane (simulated clock, real session manager)', () => {
     });
 
     // Re-firing is prevented by the persisted-note anti-loop scan, exactly as
-    // the runtime resolves it (findLatestTemporalWakeupNoteAt over the store).
-    const persistedNoteAt = findLatestTemporalWakeupNoteAt(mgr.getRecentSessionEntries('api:main', 32));
+    // the runtime resolves it: a MORNING-only scan over the store (a refresher
+    // note would be ignored here).
+    const persistedNoteAt = findLatestTemporalWakeupNoteAt(
+      mgr.getRecentSessionEntries('api:main', 32),
+      new Set([TEMPORAL_WAKEUP_MORNING_NOTE_SOURCE]),
+    );
     expect(persistedNoteAt).toBe(DAY2_MORNING);
     expect(evaluateMorningWakeEligibility({
       session: mgr.resolveStartupSessionMetadata('reuse_latest_session'),
       recentEntries: mgr.getRecentMessages('api:main', 16),
       fullTurnMaxIdleMs: 72 * 60 * 60_000,
+      minPartnerIdleMs: 60 * 60_000,
       nowMs: probeAt,
       lastWakeupNoteAtMs: persistedNoteAt,
     })).toMatchObject({ allowed: false, reason: 'anti_loop_note_today' });

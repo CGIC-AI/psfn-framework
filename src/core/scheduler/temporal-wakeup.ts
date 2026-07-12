@@ -71,12 +71,21 @@ const WAKEUP_NOTE_SOURCES: ReadonlySet<string> = new Set([
   TEMPORAL_WAKEUP_REFRESHER_NOTE_SOURCE,
 ]);
 
+// Morning-lane anti-loop scans MORNING notes only, so a nightly idle-refresher
+// note (which lands most nights) can never self-cancel the daily morning wake.
+const MORNING_WAKEUP_NOTE_SOURCES: ReadonlySet<string> = new Set([
+  TEMPORAL_WAKEUP_MORNING_NOTE_SOURCE,
+]);
+
 const HOUR_MS = 60 * 60_000;
 const MINUTE_MS = 60_000;
 
 // ── Shared helpers ──
 
-function parseWakeupNoteTimestamp(entry: SessionEntry): number | null {
+function parseWakeupNoteTimestamp(
+  entry: SessionEntry,
+  sources: ReadonlySet<string>,
+): number | null {
   if (entry.role !== 'system' || !entry.metadata) return null;
   let parsed: unknown;
   try {
@@ -88,13 +97,21 @@ function parseWakeupNoteTimestamp(entry: SessionEntry): number | null {
   const lane = (parsed as { sessionLane?: unknown }).sessionLane;
   if (typeof lane !== 'object' || lane === null || Array.isArray(lane)) return null;
   const source = (lane as { source?: unknown }).source;
-  return typeof source === 'string' && WAKEUP_NOTE_SOURCES.has(source) ? entry.timestamp : null;
+  return typeof source === 'string' && sources.has(source) ? entry.timestamp : null;
 }
 
-export function findLatestTemporalWakeupNoteAt(entries: readonly SessionEntry[]): number | undefined {
+/**
+ * Latest wake-lane note timestamp in `entries`. `sources` selects which lane's
+ * notes count: the combined set (default) for refresher spacing, or a
+ * morning-only set for the morning anti-loop so refresher notes are ignored.
+ */
+export function findLatestTemporalWakeupNoteAt(
+  entries: readonly SessionEntry[],
+  sources: ReadonlySet<string> = WAKEUP_NOTE_SOURCES,
+): number | undefined {
   let latest: number | undefined;
   for (const entry of entries) {
-    const timestamp = parseWakeupNoteTimestamp(entry);
+    const timestamp = parseWakeupNoteTimestamp(entry, sources);
     if (timestamp === null) continue;
     latest = latest === undefined ? timestamp : Math.max(latest, timestamp);
   }
@@ -330,7 +347,7 @@ export type MorningWakeSkipReason =
   | 'internal_session'
   | 'privacy_boundary'
   | 'no_partner_activity'
-  | 'partner_already_active_today'
+  | 'partner_recently_active'
   | 'anti_loop_note_today';
 
 export type MorningWakeDecision =
@@ -356,6 +373,12 @@ export interface MorningWakeEvaluateInput {
   session: StartupSessionMetadata | null;
   recentEntries: readonly SessionEntry[];
   fullTurnMaxIdleMs: number;
+  /**
+   * Partner-idle recency guard (ms). Suppresses the note when the partner spoke
+   * more recently than this — they are actively conversing, so the temporal
+   * frame is already current. 0 disables the guard.
+   */
+  minPartnerIdleMs: number;
   nowMs?: number;
   timeZone?: string;
   lastWakeupNoteAtMs?: number;
@@ -385,16 +408,21 @@ export function evaluateMorningWakeEligibility(
     return { allowed: false, reason: 'no_partner_activity', nowMs, sessionId };
   }
 
-  const todayKey = localDateKey(nowMs, timeZone);
-  if (localDateKey(lastPartner.timestamp, timeZone) === todayKey) {
-    // The partner already spoke today; the temporal frame is current.
-    return { allowed: false, reason: 'partner_already_active_today', nowMs, sessionId };
+  const partnerIdleMs = Math.max(0, nowMs - lastPartner.timestamp);
+  // Recency guard, not a calendar-date guard: only a partner conversing right
+  // now suppresses the note. A partner who spoke overnight (before the wake
+  // slot) is exactly who the new-day frame is for.
+  if (partnerIdleMs < Math.max(0, input.minPartnerIdleMs)) {
+    return { allowed: false, reason: 'partner_recently_active', nowMs, sessionId };
   }
+  const todayKey = localDateKey(nowMs, timeZone);
   if (
     input.lastWakeupNoteAtMs !== undefined
     && Number.isFinite(input.lastWakeupNoteAtMs)
     && localDateKey(input.lastWakeupNoteAtMs, timeZone) === todayKey
   ) {
+    // A MORNING note already landed today (the runtime feeds morning-source
+    // notes only) — the double-fire guard.
     return { allowed: false, reason: 'anti_loop_note_today', nowMs, sessionId };
   }
 
@@ -404,7 +432,6 @@ export function evaluateMorningWakeEligibility(
     observedAtMs: nowMs,
     timeZone,
   });
-  const partnerIdleMs = Math.max(0, nowMs - lastPartner.timestamp);
 
   return {
     allowed: true,
@@ -676,8 +703,9 @@ interface ResolvedWakeupSessionContext {
 
 function resolveWakeupSessionContext(
   options: TemporalWakeupRuntimeOptions,
-  lastRecordedBySession: Map<string, number>,
+  inMemoryNoteBySession: Map<string, number>,
   recentLimit: number,
+  noteSources: ReadonlySet<string> = WAKEUP_NOTE_SOURCES,
 ): ResolvedWakeupSessionContext {
   const session = options.sessionManager.resolveStartupSessionMetadata('reuse_latest_session');
   const sessionId = session?.sessionId;
@@ -687,8 +715,8 @@ function resolveWakeupSessionContext(
   const persistedEntries = sessionId && options.sessionManager.getRecentSessionEntries
     ? options.sessionManager.getRecentSessionEntries(sessionId, 64)
     : [];
-  const persistedLastNoteAt = findLatestTemporalWakeupNoteAt(persistedEntries);
-  const inMemoryLastNoteAt = sessionId ? lastRecordedBySession.get(sessionId) : undefined;
+  const persistedLastNoteAt = findLatestTemporalWakeupNoteAt(persistedEntries, noteSources);
+  const inMemoryLastNoteAt = sessionId ? inMemoryNoteBySession.get(sessionId) : undefined;
   const lastWakeupNoteAtMs = Math.max(persistedLastNoteAt ?? 0, inMemoryLastNoteAt ?? 0) || undefined;
   return {
     session,
@@ -790,7 +818,12 @@ export function registerTemporalWakeupTasks(options: TemporalWakeupRuntimeOption
     return;
   }
 
-  const lastRecordedBySession = new Map<string, number>();
+  // Anti-loop in-memory tracking. The morning lane's anti-loop must see only
+  // morning notes; the refresher's spacing must see both lanes' notes. Every
+  // injection updates the combined map; only morning injections update the
+  // morning-only map.
+  const morningNoteBySession = new Map<string, number>();
+  const combinedNoteBySession = new Map<string, number>();
   const morning = options.config.morningWake;
   const refresher = options.config.idleRefresher;
 
@@ -832,19 +865,23 @@ export function registerTemporalWakeupTasks(options: TemporalWakeupRuntimeOption
       handler: async () => {
         const context = resolveWakeupSessionContext(
           options,
-          lastRecordedBySession,
+          morningNoteBySession,
           Math.max(morning.catchUpEntryLimit, 8),
+          MORNING_WAKEUP_NOTE_SOURCES,
         );
         const decision = evaluateMorningWakeEligibility({
           session: context.session,
           recentEntries: context.recentEntries,
           fullTurnMaxIdleMs: morning.fullTurnMaxIdleHours * HOUR_MS,
+          minPartnerIdleMs: morning.minPartnerIdleMinutes * MINUTE_MS,
           ...(context.lastWakeupNoteAtMs !== undefined
             ? { lastWakeupNoteAtMs: context.lastWakeupNoteAtMs }
             : {}),
         });
         if (!decision.allowed) {
-          log.debug('Morning wake skipped', {
+          // Fires at most once per day; log at info so a skipped morning wake is
+          // visible without turning on debug.
+          log.info('Morning wake skipped', {
             reason: decision.reason,
             sessionId: decision.sessionId,
           });
@@ -870,7 +907,8 @@ export function registerTemporalWakeupTasks(options: TemporalWakeupRuntimeOption
           note,
           TEMPORAL_WAKEUP_MORNING_NOTE_SOURCE,
         );
-        lastRecordedBySession.set(decision.sessionId, decision.nowMs);
+        morningNoteBySession.set(decision.sessionId, decision.nowMs);
+        combinedNoteBySession.set(decision.sessionId, decision.nowMs);
         log.info('Morning wake note injected', {
           sessionId: decision.sessionId,
           texture: decision.timeTexture.kind,
@@ -900,7 +938,7 @@ export function registerTemporalWakeupTasks(options: TemporalWakeupRuntimeOption
       type: 'every',
       intervalMs: Math.max(1_000, refresher.checkIntervalMs),
       handler: async () => {
-        const context = resolveWakeupSessionContext(options, lastRecordedBySession, 32);
+        const context = resolveWakeupSessionContext(options, combinedNoteBySession, 32);
         const decision = evaluateIdleRefresherEligibility({
           session: context.session,
           recentEntries: context.recentEntries,
@@ -947,7 +985,7 @@ export function registerTemporalWakeupTasks(options: TemporalWakeupRuntimeOption
           note,
           TEMPORAL_WAKEUP_REFRESHER_NOTE_SOURCE,
         );
-        lastRecordedBySession.set(decision.sessionId, decision.nowMs);
+        combinedNoteBySession.set(decision.sessionId, decision.nowMs);
         log.info('Idle time-of-day refresher note injected', {
           sessionId: decision.sessionId,
           kind: decision.kind,

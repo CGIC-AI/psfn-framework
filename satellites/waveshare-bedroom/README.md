@@ -57,6 +57,11 @@ The local override keeps executable code and the large read-only UI assets in
 flash; the upstream setting attempted to copy more than 9 MB into 8 MB PSRAM
 and rebooted before `setup()`.
 
+The encrypted native API exposes `start_voice_turn` and `stop_voice_turn` as a
+stable push-to-talk seam. A Pi-side transport probe invoked the start action and
+captured more than 1.4 MB of live microphone PCM. The borrowed Alexa wake model
+still needs tuning or replacement; this does not block touch-to-talk.
+
 This full upstream image uses a single large factory application partition and
 therefore cannot perform OTA recovery or updates. USB serial remains the update
 path until the unused SIP/VoIP and artwork surface is removed and a dual-slot

@@ -24,6 +24,17 @@ esp32:
 api:
   encryption:
     key: !secret api_encryption_key
+  actions:
+    # Native push-to-talk seam used by the Purrsephone face and by transport
+    # diagnostics. This intentionally bypasses the borrowed intercom runtime
+    # controller while retaining ESPHome's on-device silence detection.
+    - action: start_voice_turn
+      then:
+        - voice_assistant.start:
+            silence_detection: true
+    - action: stop_voice_turn
+      then:
+        - voice_assistant.stop:
 
 ota:
   - platform: esphome

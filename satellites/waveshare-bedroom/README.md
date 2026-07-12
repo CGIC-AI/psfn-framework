@@ -41,9 +41,23 @@ use floating `main`, `master`, or `latest` references.
 
 ## Local Configuration
 
-Copy `secrets.example.yaml` to `secrets.yaml` and fill the local values.
-`secrets.yaml` is ignored by git.
+Copy `esphome/secrets.example.yaml` to `esphome/secrets.yaml` and fill the local
+values. `secrets.yaml` is ignored by git.
 
 The factory image is backed up outside git under
 `.artifacts/hardware/waveshare-1.85c-v2/` before replacement. Chunk files retain
 their flash offsets in their filenames so they can be restored independently.
+
+## Verified Baseline
+
+The pinned profile compiles with ESPHome 2026.6.5 and has been flashed over
+native USB. Boot logs confirm Wi-Fi association, ES7210 input, ES8311 output,
+TDM audio startup, and more than 7 MB free PSRAM after audio initialization.
+The local override keeps executable code and the large read-only UI assets in
+flash; the upstream setting attempted to copy more than 9 MB into 8 MB PSRAM
+and rebooted before `setup()`.
+
+This full upstream image uses a single large factory application partition and
+therefore cannot perform OTA recovery or updates. USB serial remains the update
+path until the unused SIP/VoIP and artwork surface is removed and a dual-slot
+partition layout fits.

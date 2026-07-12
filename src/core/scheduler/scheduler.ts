@@ -14,6 +14,7 @@ import type {
 } from './types.js';
 import { DEFAULT_SCHEDULER_CONFIG } from './types.js';
 import { createComponentLogger } from '../../shared/logger.js';
+import { resolveActiveTimezone } from '../../shared/time/active-timezone.js';
 import type {
   EligibilityDecision,
   EligibilityGate,
@@ -61,62 +62,156 @@ function validateRecurringCadence(taskId: string, cadence: RecurringCadence | un
   }
 }
 
+const HOUR_MS = 3_600_000;
+const DAY_MS = 86_400_000;
+
+const WEEKDAY_INDEX: Record<string, number> = {
+  Sun: 0,
+  Mon: 1,
+  Tue: 2,
+  Wed: 3,
+  Thu: 4,
+  Fri: 5,
+  Sat: 6,
+};
+
+interface ZoneWallClock {
+  year: number;
+  month: number;
+  day: number;
+  hour: number;
+  minute: number;
+  second: number;
+  weekday: number;
+}
+
+// Wall-clock parts for an instant as observed in `timeZone` (DST-aware via Intl).
+function zoneWallClockParts(epochMs: number, timeZone: string): ZoneWallClock {
+  const parts = Object.fromEntries(
+    new Intl.DateTimeFormat('en-US', {
+      timeZone,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: false,
+      weekday: 'short',
+    })
+      .formatToParts(new Date(epochMs))
+      .filter(part => part.type !== 'literal')
+      .map(part => [part.type, part.value]),
+  );
+  return {
+    year: Number(parts.year),
+    month: Number(parts.month),
+    day: Number(parts.day),
+    hour: Number(parts.hour) % 24,
+    minute: Number(parts.minute),
+    second: Number(parts.second),
+    weekday: WEEKDAY_INDEX[parts.weekday as string] ?? 0,
+  };
+}
+
+// Offset (ms) of `timeZone` at `epochMs`: (wall-clock-as-if-UTC) − epoch.
+function zoneOffsetMs(epochMs: number, timeZone: string): number {
+  const p = zoneWallClockParts(epochMs, timeZone);
+  const asUtc = Date.UTC(p.year, p.month - 1, p.day, p.hour, p.minute, p.second);
+  return asUtc - epochMs;
+}
+
+// Epoch ms for a wall-clock time in `timeZone`. The second offset lookup refines
+// the guess across DST transitions; nonexistent spring-forward wall times resolve
+// deterministically to the pre-transition offset instant.
+function zonedWallClockToEpoch(
+  timeZone: string,
+  year: number,
+  month: number,
+  day: number,
+  hour: number,
+  minute: number,
+): number {
+  const asUtc = Date.UTC(year, month - 1, day, hour, minute, 0);
+  const offset = zoneOffsetMs(asUtc, timeZone);
+  const epoch = asUtc - offset;
+  const refinedOffset = zoneOffsetMs(epoch, timeZone);
+  return refinedOffset === offset ? epoch : asUtc - refinedOffset;
+}
+
+// Wall-clock slot boundaries computed in the active timezone (or UTC), using Intl
+// rather than process-local Date math so the slot is correct regardless of the
+// process TZ. `cadence.timezone === 'local'` resolves to the settings-owned
+// active timezone; `'utc'` pins to UTC.
 function getCurrentSlotStart(
   now: number,
   cadence: HourlyRecurringCadence | DailyRecurringCadence | WeeklyRecurringCadence,
 ): number {
-  const slot = new Date(now);
+  const timeZone = cadence.timezone === 'utc' ? 'UTC' : resolveActiveTimezone();
+  const nowParts = zoneWallClockParts(now, timeZone);
 
   if (cadence.kind === 'hourly') {
-    if (cadence.timezone === 'utc') {
-      slot.setUTCMinutes(cadence.minute, 0, 0);
-      if (slot.getTime() > now) {
-        slot.setUTCHours(slot.getUTCHours() - 1);
-      }
-      return slot.getTime();
-    }
-
-    slot.setMinutes(cadence.minute, 0, 0);
-    if (slot.getTime() > now) {
-      slot.setHours(slot.getHours() - 1);
-    }
-    return slot.getTime();
+    const slot = zonedWallClockToEpoch(
+      timeZone,
+      nowParts.year,
+      nowParts.month,
+      nowParts.day,
+      nowParts.hour,
+      cadence.minute,
+    );
+    // Wall-clock hourly slots recur every physical hour, so a single physical
+    // hour step lands on the previous slot even across DST transitions.
+    return slot > now ? slot - HOUR_MS : slot;
   }
 
   if (cadence.kind === 'weekly') {
-    if (cadence.timezone === 'utc') {
-      slot.setUTCHours(cadence.hour, cadence.minute, 0, 0);
-      const daysSinceSlot = (slot.getUTCDay() - cadence.dayOfWeek + 7) % 7;
-      slot.setUTCDate(slot.getUTCDate() - daysSinceSlot);
-      if (slot.getTime() > now) {
-        slot.setUTCDate(slot.getUTCDate() - 7);
-      }
-      return slot.getTime();
+    const daysSinceSlot = (nowParts.weekday - cadence.dayOfWeek + 7) % 7;
+    const slotDate = zoneWallClockParts(now - daysSinceSlot * DAY_MS, timeZone);
+    const slot = zonedWallClockToEpoch(
+      timeZone,
+      slotDate.year,
+      slotDate.month,
+      slotDate.day,
+      cadence.hour,
+      cadence.minute,
+    );
+    if (slot <= now) {
+      return slot;
     }
-
-    slot.setHours(cadence.hour, cadence.minute, 0, 0);
-    const daysSinceSlot = (slot.getDay() - cadence.dayOfWeek + 7) % 7;
-    slot.setDate(slot.getDate() - daysSinceSlot);
-    if (slot.getTime() > now) {
-      slot.setDate(slot.getDate() - 7);
-    }
-    return slot.getTime();
+    const priorDate = zoneWallClockParts(now - (daysSinceSlot + 7) * DAY_MS, timeZone);
+    return zonedWallClockToEpoch(
+      timeZone,
+      priorDate.year,
+      priorDate.month,
+      priorDate.day,
+      cadence.hour,
+      cadence.minute,
+    );
   }
 
-  if (cadence.timezone === 'utc') {
-    slot.setUTCHours(cadence.hour, cadence.minute, 0, 0);
-    if (slot.getTime() > now) {
-      slot.setUTCDate(slot.getUTCDate() - 1);
-    }
-    return slot.getTime();
+  const slot = zonedWallClockToEpoch(
+    timeZone,
+    nowParts.year,
+    nowParts.month,
+    nowParts.day,
+    cadence.hour,
+    cadence.minute,
+  );
+  if (slot <= now) {
+    return slot;
   }
-
-  slot.setHours(cadence.hour, cadence.minute, 0, 0);
-  if (slot.getTime() > now) {
-    slot.setDate(slot.getDate() - 1);
-  }
-  return slot.getTime();
+  const priorDate = zoneWallClockParts(now - DAY_MS, timeZone);
+  return zonedWallClockToEpoch(
+    timeZone,
+    priorDate.year,
+    priorDate.month,
+    priorDate.day,
+    cadence.hour,
+    cadence.minute,
+  );
 }
+
+export { getCurrentSlotStart };
 
 function isWallClockTaskDue(
   now: number,

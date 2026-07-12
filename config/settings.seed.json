@@ -15,6 +15,7 @@
   "sessionMirrorChannelOverrides": {},
   "continuityMessageLimit": 10,
   "sessionRestartBehavior": "reuse_latest_session",
+  "activeTimezone": "America/New_York",
   "extractionInterval": 5,
   "extractionThresholdPct": 30,
   "compactionThresholdPct": 70,

@@ -1,4 +1,15 @@
+import { createComponentLogger } from '../logger.js';
+
+const log = createComponentLogger('ActiveTimezone');
+
 const DEFAULT_ACTIVE_TIMEZONE = 'America/New_York';
+
+// Settings-owned active timezone override. Precedence for resolveActiveTimezone():
+//   settings.json activeTimezone (installed via setActiveTimezone) >
+//   process.env.TZ (bootstrap only) >
+//   DEFAULT_ACTIVE_TIMEZONE.
+// The override is set once settings load (startup) and on admin settings updates.
+let configuredTimezone: string | undefined;
 
 function normalizeOffset(raw: string): string {
   const trimmed = raw.trim();
@@ -54,13 +65,45 @@ function resolveOffset(now: Date, timeZone: string): string {
 }
 
 export function resolveActiveTimezone(): string {
-  return process.env.TZ?.trim() || DEFAULT_ACTIVE_TIMEZONE;
+  return configuredTimezone ?? (process.env.TZ?.trim() || DEFAULT_ACTIVE_TIMEZONE);
 }
 
 export function validateActiveTimezone(timeZone: string): void {
   // Intl throws RangeError on invalid IANA names.
   // This call is also cheap enough to reuse in startup paths.
   void new Intl.DateTimeFormat('en-US', { timeZone }).format(new Date());
+}
+
+/**
+ * Install the settings.json-owned active timezone. Validates the IANA name and
+ * fails closed on invalid input. Also writes process.env.TZ so process-local
+ * `Date` stays consistent with the active timezone. When the incoming settings
+ * value conflicts with the bootstrap env TZ, logs at info that settings wins.
+ */
+export function setActiveTimezone(timeZone: string): string {
+  const candidate = timeZone.trim();
+  if (candidate === '') {
+    throw new Error('Active timezone must be a non-empty IANA timezone name');
+  }
+  validateActiveTimezone(candidate);
+  const currentProcessTz = process.env.TZ?.trim();
+  if (currentProcessTz && currentProcessTz !== candidate) {
+    log.info('settings.json active timezone overrides process TZ', {
+      settingsTimezone: candidate,
+      processTimezone: currentProcessTz,
+    });
+  }
+  configuredTimezone = candidate;
+  process.env.TZ = candidate;
+  return candidate;
+}
+
+/**
+ * Clear the settings-owned override so precedence falls back to env/default.
+ * Intended for tests; production only ever installs an override.
+ */
+export function resetActiveTimezone(): void {
+  configuredTimezone = undefined;
 }
 
 export function ensureActiveTimezone(): string {

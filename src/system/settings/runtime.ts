@@ -26,6 +26,10 @@ import {
 } from '../capabilities/compositional-policy.js';
 import { isCapabilityTier } from '../capabilities/tiers.js';
 import {
+  resolveActiveTimezone,
+  setActiveTimezone,
+} from '../../shared/time/active-timezone.js';
+import {
   normalizeSttProvider,
   normalizeTtsProvider,
   resolveRuntimeSttProvider,
@@ -334,6 +338,7 @@ function getWebAndGardenSettingsSnapshot(config: SubstrateConfig) {
         .chatApiBaseUrl ?? null,
     comfyUiBaseUrl: config.comfyUiBaseUrl ?? null,
     imageWorkflows: cloneImageWorkflowSettings(config.imageWorkflows),
+    activeTimezone: config.activeTimezone ?? resolveActiveTimezone(),
     uiThemeId: toNonEmptyString(config.uiThemeId) ?? DEFAULT_UI_THEME_ID,
   } satisfies SnapshotSection<
     | 'compositionalPolicy'
@@ -351,6 +356,7 @@ function getWebAndGardenSettingsSnapshot(config: SubstrateConfig) {
     | 'chatApiBaseUrl'
     | 'comfyUiBaseUrl'
     | 'imageWorkflows'
+    | 'activeTimezone'
     | 'uiThemeId'
   >;
 }
@@ -703,6 +709,15 @@ function applyWebAndGardenSettings(
   }
   if ('observerEvalSidecar' in settings) {
     config.observerEvalSidecar = structuredClone(settings.observerEvalSidecar);
+  }
+  if ('activeTimezone' in settings) {
+    const activeTimezone = settings.activeTimezone?.trim();
+    if (activeTimezone) {
+      // Fail closed: setActiveTimezone validates the IANA name and throws on
+      // invalid input. Installs the override so every consumer of
+      // resolveActiveTimezone reflects the settings value (startup + hot reload).
+      config.activeTimezone = setActiveTimezone(activeTimezone);
+    }
   }
   if ('uiThemeId' in settings) {
     const trimmedThemeId = settings.uiThemeId?.trim() ?? '';

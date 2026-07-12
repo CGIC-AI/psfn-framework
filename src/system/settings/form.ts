@@ -7,6 +7,7 @@ import {
   SESSION_HISTORY_BUDGET_PCT_RANGE,
 } from '../../shared/context-budget.js';
 import { isCapabilityTier } from '../capabilities/tiers.js';
+import { validateActiveTimezone } from '../../shared/time/active-timezone.js';
 import {
   toBoolean,
   toEmbeddingProvider,
@@ -403,6 +404,21 @@ export function parseSettingsForm(
     const uiThemeIdRaw = params.get('uiThemeId');
     if (uiThemeIdRaw !== null) {
       settings.uiThemeId = uiThemeIdRaw.trim() || DEFAULT_UI_THEME_ID;
+    }
+
+    const activeTimezoneRaw = params.get('activeTimezone');
+    if (activeTimezoneRaw !== null) {
+      const timeZone = activeTimezoneRaw.trim();
+      if (!timeZone) {
+        errors.push('activeTimezone must be a non-empty IANA timezone');
+      } else {
+        try {
+          validateActiveTimezone(timeZone);
+          settings.activeTimezone = timeZone;
+        } catch {
+          errors.push(`activeTimezone '${timeZone}' is not a valid IANA timezone`);
+        }
+      }
     }
 
     const capabilityTierRaw = params.get('capabilityTier');

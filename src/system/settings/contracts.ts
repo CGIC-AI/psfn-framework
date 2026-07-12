@@ -209,6 +209,8 @@ export interface EditableSettings {
   chatApiBaseUrl?: string;
   comfyUiBaseUrl?: string;
   imageWorkflows?: ImageWorkflowSettings;
+  /** Active IANA timezone. Precedence: settings.json > env TZ (bootstrap) > default. */
+  activeTimezone?: string;
   uiThemeId?: string;
 
   // Voice / TTS (non-secret config only — API keys stay in .env)
@@ -333,6 +335,7 @@ export const RUNTIME_SETTINGS_KEYS = [
   'chatApiBaseUrl',
   'comfyUiBaseUrl',
   'imageWorkflows',
+  'activeTimezone',
   'uiThemeId',
   // Voice / TTS
   'voiceEnabled',

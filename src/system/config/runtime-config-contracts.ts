@@ -234,6 +234,13 @@ export interface SubstrateConfig {
   discordTriggerReactions?: string[];
   discordTriggerListenWindowMs?: number;
   characterName?: string;
+  /**
+   * Companion's active IANA timezone (settings.json-owned). Precedence, fail-closed:
+   * settings.json activeTimezone (validated IANA) > env TZ (bootstrap only, validated)
+   * > 'America/New_York' default. Installed into the shared active-timezone module at
+   * settings load; consumed live by every formatter, the scheduler, and rest windows.
+   */
+  activeTimezone?: string;
   uiThemeId?: string;
   voiceTargetGuildId?: string;
   voiceTargetUserId?: string;

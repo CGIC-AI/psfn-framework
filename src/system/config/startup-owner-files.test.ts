@@ -164,6 +164,7 @@ describe('startup owner-file loaders', () => {
           timing: 'fixed',
           localTime: '08:00',
           timezone: 'local',
+          minPartnerIdleMinutes: 60,
           habit: {
             recentWindowDays: 7,
             extendedWindowDays: 30,

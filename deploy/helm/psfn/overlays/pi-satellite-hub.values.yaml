@@ -28,8 +28,8 @@ satelliteHub:
   # Registry-aligned identity: must match the satellites.json endpoint entry
   # that lists the hub's satellite-scoped principal id.
   identity:
-    satelliteId: hub-pi
-    endpointId: hub-pi-main
+    satelliteId: hub
+    endpointId: hub
     claimType: text-only
   capabilityProfile: text-only
   # Ship text-only first: no Deepgram/ElevenLabs required. For voice mode set

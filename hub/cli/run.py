@@ -69,6 +69,7 @@ async def _run_esphome_runtime(
                         speech_rms_threshold=config.voice_speech_rms_threshold,
                         min_speech_chunks_for_endpointing=config.voice_min_speech_chunks_for_endpointing,
                         media_player_key=media_player_key,
+                        default_conversation_id=config.voice_conversation_id,
                     )
                     unsubscribe = session.subscribe_voice_assistant(
                         handle_start=runtime.handle_start,

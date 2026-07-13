@@ -69,6 +69,7 @@ class StreamingVoiceAssistantRuntime:
         min_speech_chunks_for_endpointing: int,
         media_player_key: int | None = None,
         audio_transcoder: StreamingAudioTranscoder | None = None,
+        default_conversation_id: str | None = None,
     ) -> None:
         self._session = session
         self._stt = stt
@@ -88,6 +89,7 @@ class StreamingVoiceAssistantRuntime:
         self._min_speech_chunks_for_endpointing = min_speech_chunks_for_endpointing
         self._media_player_key = media_player_key
         self._audio_transcoder = audio_transcoder or FfmpegMp3ToFlacTranscoder()
+        self._default_conversation_id = (default_conversation_id or "").strip() or None
         self._active: ActiveTurn | None = None
         self._last_session_id: str | None = None
         self._watchdog_task: asyncio.Task[None] | None = None
@@ -501,6 +503,9 @@ class StreamingVoiceAssistantRuntime:
         if conversation_id:
             self._last_session_id = conversation_id
             return conversation_id
+        if self._default_conversation_id:
+            self._last_session_id = self._default_conversation_id
+            return self._default_conversation_id
         if self._last_session_id and self._session_cache.get(self._last_session_id):
             return self._last_session_id
         session_id = f"session-{uuid.uuid4().hex[:12]}"

@@ -79,6 +79,7 @@ class HubRuntimeConfig:
     psfn_author_id: str | None
     psfn_author_name: str | None
     psfn_satellite_claim: SatelliteClaimConfig
+    voice_conversation_id: str
     psfn_client_certificate: ClientCertificateConfig | None
     audio_bind_host: str
     audio_public_host: str
@@ -155,6 +156,12 @@ def load_runtime_config(project_root: Path) -> HubRuntimeConfig:
         raise ValueError("PSFN_AUTHOR_ID and PSFN_AUTHOR_NAME must both be set when either is configured")
     psfn_client_certificate = _load_psfn_client_certificate(project_root)
     psfn_satellite_claim = _load_psfn_satellite_claim(psfn_client_certificate)
+    voice_conversation_id = (
+        os.getenv("VOICE_CONVERSATION_ID")
+        or psfn_satellite_claim.satellite_id
+    ).strip()
+    if not voice_conversation_id:
+        raise ValueError("VOICE_CONVERSATION_ID must be non-empty")
     artifacts_root = _resolve_path(project_root, os.getenv("ARTIFACT_ROOT", ".artifacts/runtime"))
 
     return HubRuntimeConfig(
@@ -176,6 +183,7 @@ def load_runtime_config(project_root: Path) -> HubRuntimeConfig:
         psfn_author_id=psfn_author_id,
         psfn_author_name=psfn_author_name,
         psfn_satellite_claim=psfn_satellite_claim,
+        voice_conversation_id=voice_conversation_id,
         psfn_client_certificate=psfn_client_certificate,
         audio_bind_host=audio_bind_host,
         audio_public_host=audio_public_host,

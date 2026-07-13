@@ -130,6 +130,7 @@ def _make_streaming_runtime(
     endpointing_grace: float = 0.0,
     silence_timeout: float = 0.0,
     min_speech_chunks_for_endpointing: int = 4,
+    default_conversation_id: str | None = None,
 ) -> tuple[StreamingVoiceAssistantRuntime, _FakeClient, _FakeAudioServer]:
     client = _FakeClient(announcement_delay=announcement_delay)
     audio_server = _FakeAudioServer()
@@ -153,8 +154,31 @@ def _make_streaming_runtime(
         min_speech_chunks_for_endpointing=min_speech_chunks_for_endpointing,
         media_player_key=42,
         audio_transcoder=_PassthroughTranscoder(),
+        default_conversation_id=default_conversation_id,
     )
     return runtime, client, audio_server
+
+
+@pytest.mark.anyio
+async def test_empty_device_conversation_uses_stable_configured_channel(tmp_path: Path) -> None:
+    runtime, _, _ = _make_streaming_runtime(
+        tmp_path,
+        agent_steps=[(0.0, "unused")],
+        announcement_delay=0.0,
+        reply_timeout=0.05,
+        default_conversation_id="bedroom",
+    )
+
+    await runtime.handle_start(
+        conversation_id="",
+        flags=0,
+        audio_settings=VoiceAssistantAudioSettings(),
+        wake_word_phrase="Purrsephone",
+    )
+
+    assert runtime._active is not None
+    assert runtime._active.session_id == "bedroom"
+    assert runtime._stt.started_sessions == ["bedroom"]
 
 
 @pytest.mark.parametrize("runtime_cls", [VoiceAssistantRuntime, StreamingVoiceAssistantRuntime])

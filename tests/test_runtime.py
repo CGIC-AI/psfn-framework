@@ -34,6 +34,7 @@ def test_load_runtime_config_reads_psfn_and_project_env(tmp_path: Path, monkeypa
         "PSFN_CLIENT_CERT_PATH",
         "PSFN_CLIENT_KEY_PATH",
         "PSFN_CA_CERT_PATH",
+        "VOICE_CONVERSATION_ID",
     ):
         monkeypatch.delenv(name, raising=False)
 
@@ -64,6 +65,7 @@ def test_load_runtime_config_reads_psfn_and_project_env(tmp_path: Path, monkeypa
     assert config.psfn_satellite_claim.channel_type == "satellite.endpoint"
     assert config.psfn_satellite_claim.capability_profile == "voice-only"
     assert config.psfn_satellite_claim.telemetry.mode == "disabled"
+    assert config.voice_conversation_id == "hub"
     assert config.elevenlabs_model_id == "eleven_flash_v2_5"
     assert config.reply_timeout_seconds == 30.0
     assert config.voice_initial_silence_timeout_seconds == 4.0
@@ -97,6 +99,7 @@ def test_load_runtime_config_supports_realtime_mode_without_esphome_target(tmp_p
         "PSFN_CLIENT_CERT_PATH",
         "PSFN_CLIENT_KEY_PATH",
         "PSFN_CA_CERT_PATH",
+        "VOICE_CONVERSATION_ID",
     ):
         monkeypatch.delenv(name, raising=False)
 
@@ -143,6 +146,7 @@ def test_load_runtime_config_reads_satellite_claim_and_cert_settings(tmp_path: P
         "PSFN_CLIENT_CERT_PATH",
         "PSFN_CLIENT_KEY_PATH",
         "PSFN_CA_CERT_PATH",
+        "VOICE_CONVERSATION_ID",
     ):
         monkeypatch.delenv(name, raising=False)
 
@@ -160,6 +164,7 @@ def test_load_runtime_config_reads_satellite_claim_and_cert_settings(tmp_path: P
         "PSFN_SATELLITE_ID=phone-sat\n"
         "PSFN_ENDPOINT_ID=phone-browser\n"
         "PSFN_ENDPOINT_NAME=Phone Browser\n"
+        "VOICE_CONVERSATION_ID=phone-primary\n"
         "PSFN_TELEMETRY_MODE=event\n"
         "PSFN_TELEMETRY_CATEGORIES=location,timezone,battery\n"
         "PSFN_CLIENT_CERT_PATH=client.pem\n"
@@ -176,6 +181,7 @@ def test_load_runtime_config_reads_satellite_claim_and_cert_settings(tmp_path: P
     assert config.psfn_satellite_claim.endpoint_id == "phone-browser"
     assert config.psfn_satellite_claim.endpoint_class == "mobile"
     assert config.psfn_satellite_claim.location_mode == "mobile"
+    assert config.voice_conversation_id == "phone-primary"
     assert config.psfn_satellite_claim.telemetry.categories == ("location", "timezone", "battery")
     assert config.psfn_client_certificate is not None
     assert config.psfn_client_certificate.cert_path == tmp_path / "client.pem"

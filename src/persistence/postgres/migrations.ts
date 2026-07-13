@@ -1389,6 +1389,26 @@ export const POSTGRES_SHARED_MIGRATIONS: readonly string[] = [
   VALUES (4, 'icp-autonomy-control-plane')
   ON CONFLICT (version) DO NOTHING;
   `,
+  // Version 5 (s10mc.6.2): durable invalidation generations serialize permit
+  // issue/consume against DND, block, disconnect, fleet, and operator changes.
+  // The row lock is the lifecycle linearization point shared by every gateway
+  // process; last_reason_code lets a stale operation fail closed truthfully.
+  `
+  CREATE TABLE IF NOT EXISTS icp_autonomy_invalidation_fences (
+    companion_id UUID PRIMARY KEY,
+    generation BIGINT NOT NULL DEFAULT 0 CHECK (generation >= 0),
+    invalidated_at_ms BIGINT,
+    last_reason_code TEXT,
+    CHECK ((generation = 0) = (invalidated_at_ms IS NULL)),
+    CHECK ((generation = 0) = (last_reason_code IS NULL)),
+    CHECK (invalidated_at_ms IS NULL OR invalidated_at_ms >= 0)
+  );
+  `,
+  `
+  INSERT INTO shared_schema_migrations (version, name)
+  VALUES (5, 'icp-autonomy-invalidation-fences')
+  ON CONFLICT (version) DO NOTHING;
+  `,
 ];
 
 // Version 3 (sprint 10, s10f9): shared-world wiki chunk projection. A

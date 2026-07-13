@@ -1,10 +1,15 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import type {
+  IcpAutonomyInvalidationFence,
   IcpPermitConsumptionInput,
   IcpPermitConsumptionResult,
   IcpSharedAutonomyStorePort,
   IcpConversationTransitionInput,
+} from '../../core/icp/autonomy-store-ports.js';
+import {
+  IcpAutonomyInvalidationConflictError,
+  IcpOutstandingInvitationConflictError,
 } from '../../core/icp/autonomy-store-ports.js';
 import type { IcpInitiationCandidateSharedMetadata } from '../../core/icp/initiation-candidate.js';
 import type {
@@ -69,6 +74,10 @@ class MemoryStore implements IcpSharedAutonomyStorePort {
   availability = new Map<string, IcpAvailabilityLease>();
   episodes = new Map<string, IcpConversationEpisode>();
   permits = new Map<string, IcpInitiationPermit>();
+  invalidationGenerations = new Map<string, number>();
+  invalidationReasons = new Map<string, IcpAutonomyReasonCode>();
+  beforeCreateEpisodeAndIssuePermit?: () => Promise<void>;
+  beforeConsumePermit?: () => Promise<void>;
 
   async publishAvailability(lease: IcpAvailabilityLease): Promise<IcpAvailabilityLease> {
     const current = this.availability.get(lease.companionId);
@@ -124,13 +133,38 @@ class MemoryStore implements IcpSharedAutonomyStorePort {
     return next;
   }
 
-  async issuePermit(permit: IcpInitiationPermit): Promise<IcpInitiationPermit> {
+  async captureInvalidationFence(
+    firstCompanionId: string,
+    secondCompanionId: string,
+  ): Promise<IcpAutonomyInvalidationFence> {
+    const pair = [firstCompanionId, secondCompanionId].sort();
+    return { companions: [
+      { companionId: pair[0]!, generation: this.invalidationGenerations.get(pair[0]!) ?? 0 },
+      { companionId: pair[1]!, generation: this.invalidationGenerations.get(pair[1]!) ?? 0 },
+    ] };
+  }
+
+  assertInvalidationFence(fence: IcpAutonomyInvalidationFence): void {
+    for (const entry of fence.companions) {
+      if ((this.invalidationGenerations.get(entry.companionId) ?? 0) === entry.generation) continue;
+      throw new IcpAutonomyInvalidationConflictError(
+        this.invalidationReasons.get(entry.companionId) ?? 'operator_cancelled',
+      );
+    }
+  }
+
+  async issuePermit(input: {
+    permit: IcpInitiationPermit;
+    expectedInvalidationFence: IcpAutonomyInvalidationFence;
+  }): Promise<IcpInitiationPermit> {
+    this.assertInvalidationFence(input.expectedInvalidationFence);
+    const { permit } = input;
     const outstanding = await this.findOutstandingPermitBetween(
       permit.senderCompanionId,
       permit.recipientCompanionId,
       permit.issuedAtMs,
     );
-    if (outstanding) throw new Error('outstanding invitation');
+    if (outstanding) throw new IcpOutstandingInvitationConflictError();
     this.permits.set(permit.permitId, permit);
     return permit;
   }
@@ -138,10 +172,16 @@ class MemoryStore implements IcpSharedAutonomyStorePort {
   async createEpisodeAndIssuePermit(input: {
     episode: IcpConversationEpisode;
     permit: IcpInitiationPermit;
+    expectedInvalidationFence: IcpAutonomyInvalidationFence;
   }): Promise<{ episode: IcpConversationEpisode; permit: IcpInitiationPermit }> {
+    await this.beforeCreateEpisodeAndIssuePermit?.();
+    this.assertInvalidationFence(input.expectedInvalidationFence);
     const episode = await this.createEpisode(input.episode);
     try {
-      const permit = await this.issuePermit(input.permit);
+      const permit = await this.issuePermit({
+        permit: input.permit,
+        expectedInvalidationFence: input.expectedInvalidationFence,
+      });
       return { episode, permit };
     } catch (error) {
       this.episodes.delete(episode.conversationId);
@@ -154,6 +194,7 @@ class MemoryStore implements IcpSharedAutonomyStorePort {
   }
 
   async consumePermit(input: IcpPermitConsumptionInput): Promise<IcpPermitConsumptionResult> {
+    await this.beforeConsumePermit?.();
     const permit = this.permits.get(input.permitId);
     if (!permit) return { outcome: 'not_found', permit: null };
     if (permit.senderCompanionId !== input.senderCompanionId
@@ -168,6 +209,7 @@ class MemoryStore implements IcpSharedAutonomyStorePort {
     if (permit.status === 'revoked') {
       return { outcome: 'revoked', permit, reasonCode: 'permit_revoked' };
     }
+    this.assertInvalidationFence(input.expectedInvalidationFence);
     const consumed: IcpInitiationPermit = {
       ...permit,
       status: 'consumed',
@@ -217,6 +259,11 @@ class MemoryStore implements IcpSharedAutonomyStorePort {
     revokedAtMs: number,
     reasonCode: IcpAutonomyReasonCode,
   ): Promise<IcpInitiationPermit[]> {
+    this.invalidationGenerations.set(
+      companionId,
+      (this.invalidationGenerations.get(companionId) ?? 0) + 1,
+    );
+    this.invalidationReasons.set(companionId, reasonCode);
     const revoked: IcpInitiationPermit[] = [];
     for (const permit of this.permits.values()) {
       if (permit.status !== 'issued'
@@ -243,6 +290,14 @@ class MemoryStore implements IcpSharedAutonomyStorePort {
     for (const permit of this.permits.values()) {
       if (permit.status !== 'issued'
         || (known.has(permit.senderCompanionId) && known.has(permit.recipientCompanionId))) continue;
+      for (const companionId of [permit.senderCompanionId, permit.recipientCompanionId]) {
+        if (known.has(companionId)) continue;
+        this.invalidationGenerations.set(
+          companionId,
+          (this.invalidationGenerations.get(companionId) ?? 0) + 1,
+        );
+        this.invalidationReasons.set(companionId, 'unknown_participant');
+      }
       const next: IcpInitiationPermit = {
         ...permit,
         status: 'revoked',
@@ -298,6 +353,65 @@ async function makeAvailable(store: MemoryStore, companionId = B): Promise<void>
     source: 'companion',
     revision: 1,
   });
+}
+
+function deferred(): { reached: Promise<void>; release: () => void; wait: () => Promise<void> } {
+  let markReached!: () => void;
+  let release!: () => void;
+  const reached = new Promise<void>(resolve => { markReached = resolve; });
+  const released = new Promise<void>(resolve => { release = resolve; });
+  return {
+    reached,
+    release,
+    wait: async () => {
+      markReached();
+      await released;
+    },
+  };
+}
+
+type InvalidationRaceKind =
+  | 'dnd'
+  | 'sender_block'
+  | 'recipient_block'
+  | 'disconnect'
+  | 'operator_cancel';
+
+const INVALIDATION_RACES: readonly [
+  kind: InvalidationRaceKind,
+  reasonCode: IcpAutonomyReasonCode,
+][] = [
+  ['dnd', 'peer_do_not_disturb'],
+  ['sender_block', 'peer_blocked'],
+  ['recipient_block', 'peer_blocked'],
+  ['disconnect', 'peer_offline'],
+  ['operator_cancel', 'operator_cancelled'],
+];
+
+async function triggerInvalidationRace(
+  broker: GatewayIcpAutonomyBroker,
+  kind: InvalidationRaceKind,
+): Promise<void> {
+  switch (kind) {
+    case 'dnd':
+      await broker.publishAvailability(B, {
+        state: 'do_not_disturb',
+        expiresAtMs: NOW + 30_000,
+        revision: 2,
+      });
+      return;
+    case 'sender_block':
+      await broker.invalidateForCompanion(A, 'peer_blocked');
+      return;
+    case 'recipient_block':
+      await broker.invalidateForCompanion(B, 'peer_blocked');
+      return;
+    case 'disconnect':
+      await broker.invalidateForCompanion(B, 'peer_offline');
+      return;
+    case 'operator_cancel':
+      await broker.invalidateForCompanion(B, 'operator_cancelled');
+  }
 }
 
 describe('GatewayIcpAutonomyBroker', () => {
@@ -418,6 +532,81 @@ describe('GatewayIcpAutonomyBroker', () => {
         reasonClass: 'deferrable',
       });
   });
+
+  it('preserves unrelated store failures even when an invitation is outstanding', async () => {
+    const { broker, store } = makeBroker();
+    await makeAvailable(store);
+    const input = {
+      candidate: candidate(),
+      channelId: CHANNEL,
+      permitExpiresAtMs: NOW + 30_000,
+    };
+    await expect(broker.issuePermit(A, input)).resolves.toMatchObject({
+      decision: { eligible: true },
+    });
+
+    const databaseFailure = new Error('database unavailable');
+    vi.spyOn(store, 'findOutstandingPermitBetween').mockResolvedValueOnce(null);
+    vi.spyOn(store, 'createEpisodeAndIssuePermit').mockRejectedValueOnce(databaseFailure);
+    await expect(broker.issuePermit(A, {
+      ...input,
+      candidate: candidate({ candidateId: C }),
+    })).rejects.toBe(databaseFailure);
+  });
+
+  it.each(INVALIDATION_RACES)(
+    'linearizes permit issue against %s invalidation',
+    async (kind, reasonCode) => {
+      const { broker, store } = makeBroker();
+      await makeAvailable(store);
+      const gate = deferred();
+      store.beforeCreateEpisodeAndIssuePermit = gate.wait;
+      const issuing = broker.issuePermit(A, {
+        candidate: candidate(),
+        channelId: CHANNEL,
+        permitExpiresAtMs: NOW + 30_000,
+      });
+      await gate.reached;
+      await triggerInvalidationRace(broker, kind);
+      gate.release();
+
+      await expect(issuing).resolves.toMatchObject({
+        decision: { eligible: false, reasonCode },
+      });
+      expect(store.permits.size).toBe(0);
+      expect(store.episodes.size).toBe(0);
+    },
+  );
+
+  it.each(INVALIDATION_RACES)(
+    'linearizes permit consumption against %s invalidation',
+    async (kind, reasonCode) => {
+      const { broker, store } = makeBroker();
+      await makeAvailable(store);
+      const issued = await broker.issuePermit(A, {
+        candidate: candidate(),
+        channelId: CHANNEL,
+        permitExpiresAtMs: NOW + 30_000,
+      });
+      expect(issued.permit).toBeDefined();
+      const gate = deferred();
+      store.beforeConsumePermit = gate.wait;
+      const consuming = broker.consumePermit(A, {
+        permitId: PERMIT_ID,
+        conversationId: CONVERSATION_ID,
+        recipientCompanionId: B,
+        channelId: CHANNEL,
+      });
+      await gate.reached;
+      await triggerInvalidationRace(broker, kind);
+      gate.release();
+
+      await expect(consuming).resolves.toMatchObject({
+        outcome: 'revoked',
+        permit: { status: 'revoked', reasonCode },
+      });
+    },
+  );
 
   it('preserves operator overrides and invalidates pending permits on DND/clear/disconnect', async () => {
     const { broker, store } = makeBroker();

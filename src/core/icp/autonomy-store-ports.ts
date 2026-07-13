@@ -11,6 +11,32 @@ import type {
   IcpInitiationCandidateStatus,
 } from './initiation-candidate.js';
 
+export class IcpOutstandingInvitationConflictError extends Error {
+  constructor() {
+    super('ICP outstanding invitation conflict for companion pair');
+    this.name = 'IcpOutstandingInvitationConflictError';
+  }
+}
+
+export interface IcpAutonomyInvalidationFenceEntry {
+  companionId: string;
+  generation: number;
+}
+
+export interface IcpAutonomyInvalidationFence {
+  companions: readonly [
+    IcpAutonomyInvalidationFenceEntry,
+    IcpAutonomyInvalidationFenceEntry,
+  ];
+}
+
+export class IcpAutonomyInvalidationConflictError extends Error {
+  constructor(readonly reasonCode: IcpAutonomyReasonCode) {
+    super(`ICP autonomy invalidated during permit operation: ${reasonCode}`);
+    this.name = 'IcpAutonomyInvalidationConflictError';
+  }
+}
+
 export interface IcpAvailabilityStorePort {
   publishAvailability(lease: IcpAvailabilityLease): Promise<IcpAvailabilityLease>;
   getAvailability(companionId: string): Promise<IcpAvailabilityLease | null>;
@@ -44,6 +70,7 @@ export interface IcpPermitConsumptionInput {
   recipientCompanionId: string;
   channelId: string;
   consumedAtMs: number;
+  expectedInvalidationFence: IcpAutonomyInvalidationFence;
 }
 
 export type IcpPermitConsumptionOutcome =
@@ -61,7 +88,14 @@ export interface IcpPermitConsumptionResult {
 }
 
 export interface IcpInitiationPermitStorePort {
-  issuePermit(permit: IcpInitiationPermit): Promise<IcpInitiationPermit>;
+  captureInvalidationFence(
+    firstCompanionId: string,
+    secondCompanionId: string,
+  ): Promise<IcpAutonomyInvalidationFence>;
+  issuePermit(input: {
+    permit: IcpInitiationPermit;
+    expectedInvalidationFence: IcpAutonomyInvalidationFence;
+  }): Promise<IcpInitiationPermit>;
   getPermit(permitId: string): Promise<IcpInitiationPermit | null>;
   consumePermit(input: IcpPermitConsumptionInput): Promise<IcpPermitConsumptionResult>;
   revokePermit(
@@ -93,6 +127,7 @@ export interface IcpSharedAutonomyStorePort extends
   createEpisodeAndIssuePermit(input: {
     episode: IcpConversationEpisode;
     permit: IcpInitiationPermit;
+    expectedInvalidationFence: IcpAutonomyInvalidationFence;
   }): Promise<{ episode: IcpConversationEpisode; permit: IcpInitiationPermit }>;
   close(): Promise<void>;
 }

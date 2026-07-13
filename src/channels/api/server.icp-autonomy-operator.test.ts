@@ -90,4 +90,30 @@ describe('ApiServer ICP autonomy operator lifecycle route', () => {
     expect(cancelForCompanion).toHaveBeenCalledOnce();
     expect(cancelForCompanion).toHaveBeenCalledWith(COMPANION_ID);
   });
+
+  it('returns 503 when the gateway did not configure ICP autonomy', async () => {
+    server = new ApiServer({
+      port,
+      host: '127.0.0.1',
+      companionId: COMPANION_ID,
+      agentLoop: { handleMessage: vi.fn() } as unknown as SubstrateAgent,
+      eventBus: new EventBus(),
+      sessionManager: { recordAssistantMessage: vi.fn() } as unknown as SessionManager,
+      apiKey: API_TOKEN,
+      adminToken: ADMIN_TOKEN,
+    });
+    await server.start();
+
+    await expect(request(port, COMPANION_ID, ADMIN_TOKEN)).resolves.toEqual({
+      status: 503,
+      body: {
+        error: {
+          type: 'icp_autonomy_not_configured',
+          message: 'ICP autonomy lifecycle control is not configured',
+          code: null,
+          param: null,
+        },
+      },
+    });
+  });
 });

@@ -58,6 +58,7 @@ export interface StartOptionalGatewayApiServerOptions extends GatewayApiSurfaceB
     | 'subscribeApiStream'
     | 'requestAgentVoiceStream'
     | 'invalidateIcpAutonomyForCompanion'
+    | 'isIcpAutonomyConfigured'
   >;
   channelsConfig?: RuntimeChannelsConfig;
   satelliteRegistry?: SatelliteRegistryConfig;
@@ -347,10 +348,14 @@ export async function startOptionalGatewayApiServer(
       : {},
     ...(options.satelliteRegistry ? { satelliteRegistry: options.satelliteRegistry } : {}),
     ...(options.companionRelay ? { companionRelay: options.companionRelay } : {}),
-    icpAutonomyOperator: {
-      cancelForCompanion: async companionId => await options.gateway
-        .invalidateIcpAutonomyForCompanion(companionId, 'operator_cancelled'),
-    },
+    ...(options.gateway.isIcpAutonomyConfigured()
+      ? {
+          icpAutonomyOperator: {
+            cancelForCompanion: async companionId => await options.gateway
+              .invalidateIcpAutonomyForCompanion(companionId, 'operator_cancelled'),
+          },
+        }
+      : {}),
   });
   await apiServer.start();
   return apiServer;

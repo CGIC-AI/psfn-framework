@@ -1,6 +1,10 @@
 import { randomUUID } from 'node:crypto';
 
-import type { IcpSharedAutonomyStorePort } from '../../core/icp/autonomy-store-ports.js';
+import {
+  IcpAutonomyInvalidationConflictError,
+  IcpOutstandingInvitationConflictError,
+  type IcpSharedAutonomyStorePort,
+} from '../../core/icp/autonomy-store-ports.js';
 import {
   parseIcpAvailabilityLease,
   type IcpAutonomyReasonCode,
@@ -65,9 +69,8 @@ export class GatewayIcpAutonomyBroker {
       revision: input.revision,
     }, { nowMs, requireCurrent: true });
     const published = await this.options.store.publishAvailability(lease);
-    if (published.state === 'busy' || published.state === 'resting' || published.state === 'do_not_disturb') {
-      await this.invalidateForCompanion(companionId, availabilityReason(published.state));
-    }
+    const reasonCode = availabilityReason(published.state);
+    if (reasonCode) await this.invalidateForCompanion(companionId, reasonCode);
     await this.options.eventBus.emit('icp.availability.changed', {
       companionId,
       action: 'published',
@@ -154,10 +157,23 @@ export class GatewayIcpAutonomyBroker {
     senderCompanionId: string,
     input: IcpInitiationPermitIssueInput,
   ): Promise<IcpInitiationPermitIssueResult> {
+    const canCaptureFence = input.candidate.localCompanionId === senderCompanionId
+      && input.candidate.peerCompanionId !== senderCompanionId
+      && this.options.fleetCompanionIds.has(senderCompanionId)
+      && this.options.fleetCompanionIds.has(input.candidate.peerCompanionId);
+    const expectedInvalidationFence = canCaptureFence
+      ? await this.options.store.captureInvalidationFence(
+          senderCompanionId,
+          input.candidate.peerCompanionId,
+        )
+      : undefined;
     const decision = await this.evaluate(senderCompanionId, input);
     if (!decision.eligible) {
       await this.emitGate(input, senderCompanionId, decision);
       return { decision };
+    }
+    if (!expectedInvalidationFence) {
+      throw new Error('Eligible ICP initiation is missing a participant invalidation fence');
     }
 
     const nowMs = this.now();
@@ -195,14 +211,15 @@ export class GatewayIcpAutonomyBroker {
       ({ permit } = await this.options.store.createEpisodeAndIssuePermit({
         episode,
         permit: pendingPermit,
+        expectedInvalidationFence,
       }));
     } catch (error) {
-      const outstanding = await this.options.store.findOutstandingPermitBetween(
-        senderCompanionId,
-        input.candidate.peerCompanionId,
-        nowMs,
-      );
-      if (!outstanding) throw error;
+      if (error instanceof IcpAutonomyInvalidationConflictError) {
+        const closed = closedDecision(error.reasonCode, invalidationReasonClass(error.reasonCode));
+        await this.emitGate(input, senderCompanionId, closed);
+        return { decision: closed };
+      }
+      if (!(error instanceof IcpOutstandingInvitationConflictError)) throw error;
       const closed = closedDecision('invitation_outstanding', 'deferrable');
       await this.emitGate(input, senderCompanionId, closed);
       return { decision: closed };
@@ -230,6 +247,10 @@ export class GatewayIcpAutonomyBroker {
     },
   ) {
     this.requireDistinctFleetPair(senderCompanionId, input.recipientCompanionId);
+    const expectedInvalidationFence = await this.options.store.captureInvalidationFence(
+      senderCompanionId,
+      input.recipientCompanionId,
+    );
     const senderReady = this.options.isCompanionReady(senderCompanionId);
     const recipientReady = this.options.isCompanionReady(input.recipientCompanionId);
     if (!senderReady || !recipientReady) {
@@ -242,6 +263,7 @@ export class GatewayIcpAutonomyBroker {
       ...input,
       senderCompanionId,
       consumedAtMs: this.now(),
+      expectedInvalidationFence,
     });
     await this.options.eventBus.emit('icp.permit.lifecycle', {
       candidateId: result.permit?.candidateId ?? '[unknown]',
@@ -441,6 +463,18 @@ function closedDecision(
   reasonClass: IcpGateReasonClass,
 ): IcpInitiationGateDecision {
   return { eligible: false, reasonCode, reasonClass };
+}
+
+function invalidationReasonClass(reasonCode: IcpAutonomyReasonCode): IcpGateReasonClass {
+  switch (reasonCode) {
+    case 'peer_do_not_disturb':
+    case 'peer_blocked':
+    case 'operator_cancelled':
+    case 'unknown_participant':
+      return 'terminal';
+    default:
+      return 'deferrable';
+  }
 }
 
 function availabilityReason(state: IcpAvailabilityState): IcpAutonomyReasonCode | undefined {

@@ -18,6 +18,9 @@ const mocks = vi.hoisted(() => ({
   executeQuery: vi.fn(async () => ({ rowCount: 1 })),
   queryOne: vi.fn(async () => undefined as unknown),
   queryRows: vi.fn(async () => [] as unknown[]),
+  clientQuery: vi.fn(async () => ({ rows: [] as unknown[], rowCount: 0 })),
+  withPostgresClient: vi.fn(async (_pool: unknown, handler: (client: unknown) => Promise<unknown>) =>
+    await handler({ query: mocks.clientQuery })),
 }));
 
 vi.mock('../postgres.js', () => ({
@@ -25,6 +28,7 @@ vi.mock('../postgres.js', () => ({
   executeQuery: mocks.executeQuery,
   queryOne: mocks.queryOne,
   queryRows: mocks.queryRows,
+  withPostgresClient: mocks.withPostgresClient,
 }));
 vi.mock('./shared-schema.js', () => ({ ensureSharedSchema: mocks.ensureSharedSchema }));
 
@@ -66,11 +70,24 @@ const PERMIT_ROW = {
   reason_code: null,
   revision: '1',
 };
+const FENCE_ROWS = [A, B].map(companionId => ({
+  companion_id: companionId,
+  generation: '0',
+  invalidated_at_ms: null,
+  last_reason_code: null,
+}));
+const FENCE = {
+  companions: [
+    { companionId: A, generation: 0 },
+    { companionId: B, generation: 0 },
+  ] as const,
+};
 
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.executeQuery.mockResolvedValue({ rowCount: 1 });
   mocks.queryRows.mockResolvedValue([]);
+  mocks.clientQuery.mockResolvedValue({ rows: [], rowCount: 0 });
 });
 
 async function connect(): Promise<PostgresIcpSharedAutonomyStore> {
@@ -190,25 +207,34 @@ describe('PostgresIcpSharedAutonomyStore', () => {
   });
 
   it('issues only a content-free permit bound to an existing episode', async () => {
-    mocks.queryOne.mockResolvedValue(PERMIT_ROW);
     const store = await connect();
+    mocks.clientQuery.mockReset();
+    mocks.clientQuery
+      .mockResolvedValueOnce({ rows: FENCE_ROWS, rowCount: 2 })
+      .mockResolvedValueOnce({ rows: [], rowCount: 0 })
+      .mockResolvedValueOnce({ rows: [PERMIT_ROW], rowCount: 1 });
     await store.issuePermit({
-      permitId: PERMIT_ID,
-      candidateId: PERMIT_ROW.candidate_id,
-      conversationId: CONVERSATION_ID,
-      senderCompanionId: A,
-      recipientCompanionId: B,
-      channelId: CHANNEL,
-      provenanceRef: PERMIT_ROW.provenance_ref,
-      issuedAtMs: 10_000,
-      expiresAtMs: 70_000,
-      status: 'issued',
-      revision: 1,
+      permit: {
+        permitId: PERMIT_ID,
+        candidateId: PERMIT_ROW.candidate_id,
+        conversationId: CONVERSATION_ID,
+        senderCompanionId: A,
+        recipientCompanionId: B,
+        channelId: CHANNEL,
+        provenanceRef: PERMIT_ROW.provenance_ref,
+        issuedAtMs: 10_000,
+        expiresAtMs: 70_000,
+        status: 'issued',
+        revision: 1,
+      },
+      expectedInvalidationFence: FENCE,
     });
-    const [, sql] = mocks.queryOne.mock.calls[0] as [unknown, string];
+    const [sql] = mocks.clientQuery.mock.calls[2] as [string];
     expect(sql).toContain('INSERT INTO icp_initiation_permits');
     expect(sql).toContain('FROM icp_conversation_episodes');
     expect(sql).toContain('participant_companion_ids @>');
+    expect(sql).toContain('LEAST(sender_companion_id, recipient_companion_id)');
+    expect(sql).toContain("WHERE status = 'issued' DO NOTHING");
     expect(sql).not.toContain('reason_summary');
   });
 
@@ -219,8 +245,11 @@ describe('PostgresIcpSharedAutonomyStore', () => {
       consumed_at_ms: '11000',
       revision: '2',
     };
-    mocks.queryOne.mockResolvedValueOnce(consumedRow);
     const store = await connect();
+    mocks.clientQuery.mockReset();
+    mocks.clientQuery
+      .mockResolvedValueOnce({ rows: FENCE_ROWS, rowCount: 2 })
+      .mockResolvedValueOnce({ rows: [consumedRow], rowCount: 1 });
     await expect(store.consumePermit({
       permitId: PERMIT_ID,
       conversationId: CONVERSATION_ID,
@@ -228,12 +257,16 @@ describe('PostgresIcpSharedAutonomyStore', () => {
       recipientCompanionId: B,
       channelId: CHANNEL,
       consumedAtMs: 11_000,
+      expectedInvalidationFence: FENCE,
     })).resolves.toMatchObject({ outcome: 'consumed' });
-    expect((mocks.queryOne.mock.calls[0] as [unknown, string])[1])
+    expect((mocks.clientQuery.mock.calls[1] as [string])[0])
       .toContain("WHERE permit_id = $1 AND status = 'issued'");
 
-    mocks.queryOne.mockReset();
-    mocks.queryOne.mockResolvedValueOnce(undefined).mockResolvedValueOnce(consumedRow);
+    mocks.clientQuery.mockReset();
+    mocks.clientQuery
+      .mockResolvedValueOnce({ rows: FENCE_ROWS, rowCount: 2 })
+      .mockResolvedValueOnce({ rows: [], rowCount: 0 })
+      .mockResolvedValueOnce({ rows: [consumedRow], rowCount: 1 });
     await expect(store.consumePermit({
       permitId: PERMIT_ID,
       conversationId: CONVERSATION_ID,
@@ -241,12 +274,31 @@ describe('PostgresIcpSharedAutonomyStore', () => {
       recipientCompanionId: B,
       channelId: CHANNEL,
       consumedAtMs: 11_001,
+      expectedInvalidationFence: FENCE,
     })).resolves.toMatchObject({ outcome: 'replayed', reasonCode: 'permit_replayed' });
   });
 
   it('fails a mismatched permit binding closed', async () => {
-    mocks.queryOne.mockResolvedValueOnce(undefined).mockResolvedValueOnce(PERMIT_ROW);
     const store = await connect();
+    const fenceAc = {
+      companions: [
+        { companionId: A, generation: 0 },
+        { companionId: C, generation: 0 },
+      ] as const,
+    };
+    mocks.clientQuery.mockReset();
+    mocks.clientQuery
+      .mockResolvedValueOnce({
+        rows: [A, C].map(companionId => ({
+          companion_id: companionId,
+          generation: '0',
+          invalidated_at_ms: null,
+          last_reason_code: null,
+        })),
+        rowCount: 2,
+      })
+      .mockResolvedValueOnce({ rows: [], rowCount: 0 })
+      .mockResolvedValueOnce({ rows: [PERMIT_ROW], rowCount: 1 });
     await expect(store.consumePermit({
       permitId: PERMIT_ID,
       conversationId: CONVERSATION_ID,
@@ -254,6 +306,7 @@ describe('PostgresIcpSharedAutonomyStore', () => {
       recipientCompanionId: C,
       channelId: `companion-dm:${A}:${C}`,
       consumedAtMs: 11_000,
+      expectedInvalidationFence: fenceAc,
     })).resolves.toMatchObject({ outcome: 'mismatch', reasonCode: 'permit_mismatch' });
   });
 
@@ -273,6 +326,7 @@ describe('PostgresIcpSharedAutonomyStore', () => {
   it('finds one current outstanding pair after lazily expiring old permits', async () => {
     mocks.queryOne.mockResolvedValue(PERMIT_ROW);
     const store = await connect();
+    mocks.executeQuery.mockClear();
     await expect(store.findOutstandingPermitBetween(A, B, 11_000)).resolves.toMatchObject({
       permitId: PERMIT_ID,
     });
@@ -286,17 +340,28 @@ describe('PostgresIcpSharedAutonomyStore', () => {
 
   it('atomically revokes every outstanding permit involving a disconnected companion', async () => {
     const store = await connect();
-    mocks.queryRows.mockClear();
-    mocks.queryRows.mockResolvedValue([{
+    mocks.clientQuery.mockReset();
+    const revokedRow = {
       ...PERMIT_ROW,
       status: 'revoked',
       revoked_at_ms: '11000',
       reason_code: 'peer_offline',
       revision: '2',
-    }]);
+    };
+    mocks.clientQuery
+      .mockResolvedValueOnce({
+        rows: [{
+          companion_id: B,
+          generation: '1',
+          invalidated_at_ms: '11000',
+          last_reason_code: 'peer_offline',
+        }],
+        rowCount: 1,
+      })
+      .mockResolvedValueOnce({ rows: [revokedRow], rowCount: 1 });
     await expect(store.revokeOutstandingPermitsForCompanion(B, 11_000, 'peer_offline'))
       .resolves.toEqual([expect.objectContaining({ status: 'revoked', reasonCode: 'peer_offline' })]);
-    const [, sql] = mocks.queryRows.mock.calls[0] as [unknown, string];
+    const [sql] = mocks.clientQuery.mock.calls[1] as [string];
     expect(sql).toContain("SET status = 'revoked'");
     expect(sql).toContain('(sender_companion_id = $1 OR recipient_companion_id = $1)');
   });

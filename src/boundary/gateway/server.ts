@@ -270,6 +270,7 @@ export class GatewayServer {
   private readonly companionViolationLog: CompanionViolationEvent[] = [];
   private readonly companionDeliveryFailureReceipts = new CompanionDeliveryFailureReceipts();
   private readonly icpAutonomyBroker: GatewayIcpAutonomyBroker | null;
+  private readonly pendingIcpInvalidations = new Map<string, Promise<number>>();
 
   constructor(options: GatewayServerOptions) {
     this.options = options;
@@ -538,13 +539,18 @@ export class GatewayServer {
   }
 
   /** Operator/fleet-reload hook: revoke pending autonomy before removing identity. */
+  isIcpAutonomyConfigured(): boolean {
+    return this.icpAutonomyBroker !== null;
+  }
+
   async invalidateIcpAutonomyForCompanion(
     companionId: string,
     reasonCode: 'operator_cancelled' | 'unknown_participant' = 'operator_cancelled',
   ): Promise<number> {
-    if (!this.icpAutonomyBroker) return 0;
-    const revoked = await this.icpAutonomyBroker.invalidateForCompanion(companionId, reasonCode);
-    return revoked.length;
+    if (!this.icpAutonomyBroker) {
+      throw new Error('ICP autonomy lifecycle control is not configured');
+    }
+    return await this.queueIcpInvalidation(companionId, reasonCode);
   }
 
   /** Fail-closed audit hook for companion relay decisions. */
@@ -1367,7 +1373,7 @@ export class GatewayServer {
     if (status?.companionId && this.companionConnections.get(status.companionId) === conn) {
       this.companionConnections.delete(status.companionId);
       log.info('Companion connection unbound', { companionId: status.companionId });
-      void this.icpAutonomyBroker?.invalidateForCompanion(status.companionId, 'peer_offline')
+      void this.queueIcpInvalidation(status.companionId, 'peer_offline')
         .catch((error: unknown) => {
           log.error('Failed to invalidate ICP permits after companion disconnect', {
             companionId: status.companionId,
@@ -1378,6 +1384,26 @@ export class GatewayServer {
     this.connections.delete(conn);
     this.rpcClients.delete(conn);
     this.connectionStatuses.delete(conn);
+  }
+
+  private queueIcpInvalidation(
+    companionId: string,
+    reasonCode: 'peer_offline' | 'operator_cancelled' | 'unknown_participant',
+  ): Promise<number> {
+    if (!this.icpAutonomyBroker) return Promise.resolve(0);
+    const previous = this.pendingIcpInvalidations.get(companionId);
+    const invalidate = async (): Promise<number> => {
+      const revoked = await this.icpAutonomyBroker!.invalidateForCompanion(companionId, reasonCode);
+      return revoked.length;
+    };
+    const next = previous ? previous.then(invalidate) : invalidate();
+    const tracked = next.finally(() => {
+      if (this.pendingIcpInvalidations.get(companionId) === tracked) {
+        this.pendingIcpInvalidations.delete(companionId);
+      }
+    });
+    this.pendingIcpInvalidations.set(companionId, tracked);
+    return tracked;
   }
 
   private async handleMalformedFrame(
@@ -1623,10 +1649,10 @@ export class GatewayServer {
     return this.runtimeHealthTracker.getSnapshot(this.getConnectionSummary());
   }
 
-  private identifyConnection(
+  private async identifyConnection(
     conn: GatewayRpcConnection,
     params: unknown,
-  ): { success: true; role: GatewayConnectionRole; companionId?: string } {
+  ): Promise<{ success: true; role: GatewayConnectionRole; companionId?: string }> {
     if (!isRecord(params) || !isIdentifiableGatewayConnectionRole(params.role)) {
       throw new Error('gateway.client.identify requires a valid role');
     }
@@ -1701,6 +1727,9 @@ export class GatewayServer {
     }
 
     if (this.multiCompanion.enabled) {
+      if (!companionId) {
+        throw new Error('Multi-companion identification requires an authenticated companionId');
+      }
       if (status.companionId && status.companionId !== companionId) {
         this.alarmCompanionViolation(
           'identify_rebind_rejected',
@@ -1712,6 +1741,8 @@ export class GatewayServer {
         );
       }
       if (params.role === 'agent') {
+        const pendingInvalidation = this.pendingIcpInvalidations.get(companionId);
+        if (pendingInvalidation) await pendingInvalidation;
         const existing = this.companionConnections.get(companionId);
         if (existing && existing !== conn) {
           if (this.connections.has(existing)) {
@@ -1749,8 +1780,12 @@ export class GatewayServer {
 
   async stop(): Promise<void> {
     if (this.icpAutonomyBroker) {
-      await Promise.all([...this.companionConnections.keys()].map(async companionId => {
-        await this.icpAutonomyBroker!.invalidateForCompanion(companionId, 'peer_offline');
+      const companionIds = new Set([
+        ...this.companionConnections.keys(),
+        ...this.pendingIcpInvalidations.keys(),
+      ]);
+      await Promise.all([...companionIds].map(async companionId => {
+        await this.queueIcpInvalidation(companionId, 'peer_offline');
       }));
     }
     for (const conn of this.connections) {

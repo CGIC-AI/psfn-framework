@@ -13,6 +13,7 @@ import { createPostgresContactStore } from '../../core/contacts/postgres-adapter
 import { ContactBlockListStore } from '../../core/cogsec/contact-block-list.js';
 import { resolveContactBlockListPath } from '../layout.js';
 import { toIcpInitiationCandidateSharedMetadata } from '../../core/icp/initiation-candidate.js';
+import { IcpAutonomyInvalidationConflictError } from '../../core/icp/autonomy-store-ports.js';
 import { PostgresIcpInitiationCandidateStore } from './icp-initiation-candidate-store.js';
 import { PostgresIcpInitiationPolicyAuthority } from './icp-initiation-policy-authority.js';
 import { PostgresIcpSharedAutonomyStore } from './icp-shared-autonomy-store.js';
@@ -55,6 +56,73 @@ async function freshDatabaseUrl(): Promise<string> {
 }
 
 describe('ICP autonomy Postgres persistence', () => {
+  it('rejects stale issue and consume operations after durable invalidation advances', async () => {
+    const databaseUrl = await freshDatabaseUrl();
+    const knownCompanionIds = [A, B];
+    const storeA = await PostgresIcpSharedAutonomyStore.connect(databaseUrl, { knownCompanionIds });
+    const storeB = await PostgresIcpSharedAutonomyStore.connect(databaseUrl, { knownCompanionIds });
+    const issueInput = {
+      episode: {
+        conversationId: CONVERSATION_ID,
+        channelId: CHANNEL,
+        participantCompanionIds: [A, B],
+        rootInitiationId: ROOT_ID,
+        initiatedByCompanionId: A,
+        initiationSource: 'foreground' as const,
+        provenanceRef: PROVENANCE_HANDLE,
+        openedAtMs: 10_000,
+        lastActivityAtMs: 10_000,
+        status: 'invited' as const,
+        revision: 1,
+      },
+      permit: {
+        permitId: PERMIT_ID,
+        candidateId: CANDIDATE_ID,
+        conversationId: CONVERSATION_ID,
+        senderCompanionId: A,
+        recipientCompanionId: B,
+        channelId: CHANNEL,
+        provenanceRef: PROVENANCE_HANDLE,
+        issuedAtMs: 10_000,
+        expiresAtMs: 70_000,
+        status: 'issued' as const,
+        revision: 1,
+      },
+    };
+    try {
+      const staleIssueFence = await storeA.captureInvalidationFence(A, B);
+      await storeB.revokeOutstandingPermitsForCompanion(B, 9_000, 'peer_do_not_disturb');
+      await expect(storeA.createEpisodeAndIssuePermit({
+        ...issueInput,
+        expectedInvalidationFence: staleIssueFence,
+      })).rejects.toBeInstanceOf(IcpAutonomyInvalidationConflictError);
+      await expect(storeA.getEpisode(CONVERSATION_ID)).resolves.toBeNull();
+
+      const issueFence = await storeA.captureInvalidationFence(A, B);
+      await storeA.createEpisodeAndIssuePermit({
+        ...issueInput,
+        expectedInvalidationFence: issueFence,
+      });
+      const staleConsumeFence = await storeA.captureInvalidationFence(A, B);
+      await storeB.revokeOutstandingPermitsForCompanion(A, 11_000, 'peer_blocked');
+      await expect(storeA.consumePermit({
+        permitId: PERMIT_ID,
+        conversationId: CONVERSATION_ID,
+        senderCompanionId: A,
+        recipientCompanionId: B,
+        channelId: CHANNEL,
+        consumedAtMs: 12_000,
+        expectedInvalidationFence: staleConsumeFence,
+      })).resolves.toMatchObject({
+        outcome: 'revoked',
+        permit: { status: 'revoked', reasonCode: 'peer_blocked' },
+      });
+    } finally {
+      await storeA.close();
+      await storeB.close();
+    }
+  }, TIMEOUT_MS);
+
   it('derives initiation policy from canonical companion owners and bilateral blocks', async () => {
     const databaseUrl = await freshDatabaseUrl();
     const dataRoot = mkdtempSync(join(tmpdir(), 'psfn-icp-policy-'));
@@ -300,20 +368,25 @@ describe('ICP autonomy Postgres persistence', () => {
         status: 'invited',
         revision: 1,
       });
+      const initialFence = await storeA.captureInvalidationFence(A, B);
       await storeA.issuePermit({
-        permitId: PERMIT_ID,
-        candidateId: CANDIDATE_ID,
-        conversationId: CONVERSATION_ID,
-        senderCompanionId: A,
-        recipientCompanionId: B,
-        channelId: CHANNEL,
-        provenanceRef: PROVENANCE_HANDLE,
-        issuedAtMs: 10_000,
-        expiresAtMs: 70_000,
-        status: 'issued',
-        revision: 1,
+        permit: {
+          permitId: PERMIT_ID,
+          candidateId: CANDIDATE_ID,
+          conversationId: CONVERSATION_ID,
+          senderCompanionId: A,
+          recipientCompanionId: B,
+          channelId: CHANNEL,
+          provenanceRef: PROVENANCE_HANDLE,
+          issuedAtMs: 10_000,
+          expiresAtMs: 70_000,
+          status: 'issued',
+          revision: 1,
+        },
+        expectedInvalidationFence: initialFence,
       });
 
+      const consumptionFence = await storeA.captureInvalidationFence(A, B);
       const input = {
         permitId: PERMIT_ID,
         conversationId: CONVERSATION_ID,
@@ -321,6 +394,7 @@ describe('ICP autonomy Postgres persistence', () => {
         recipientCompanionId: B,
         channelId: CHANNEL,
         consumedAtMs: 11_000,
+        expectedInvalidationFence: consumptionFence,
       };
       const results = await Promise.all([
         storeA.consumePermit(input),
@@ -372,17 +446,20 @@ describe('ICP autonomy Postgres persistence', () => {
         revision: 1,
       });
       await storeA.issuePermit({
-        permitId: SECOND_PERMIT_ID,
-        candidateId: SECOND_CANDIDATE_ID,
-        conversationId: SECOND_CONVERSATION_ID,
-        senderCompanionId: A,
-        recipientCompanionId: B,
-        channelId: CHANNEL,
-        provenanceRef: SECOND_PROVENANCE_HANDLE,
-        issuedAtMs: 20_000,
-        expiresAtMs: 80_000,
-        status: 'issued',
-        revision: 1,
+        permit: {
+          permitId: SECOND_PERMIT_ID,
+          candidateId: SECOND_CANDIDATE_ID,
+          conversationId: SECOND_CONVERSATION_ID,
+          senderCompanionId: A,
+          recipientCompanionId: B,
+          channelId: CHANNEL,
+          provenanceRef: SECOND_PROVENANCE_HANDLE,
+          issuedAtMs: 20_000,
+          expiresAtMs: 80_000,
+          status: 'issued',
+          revision: 1,
+        },
+        expectedInvalidationFence: await storeA.captureInvalidationFence(A, B),
       });
       await expect(storeA.revokePermit(
         SECOND_PERMIT_ID,
@@ -404,6 +481,7 @@ describe('ICP autonomy Postgres persistence', () => {
         candidateId: string,
         senderCompanionId: string,
         recipientCompanionId: string,
+        expectedInvalidationFence: Awaited<ReturnType<typeof storeA.captureInvalidationFence>>,
       ) => ({
         episode: {
           conversationId,
@@ -431,7 +509,9 @@ describe('ICP autonomy Postgres persistence', () => {
           status: 'issued' as const,
           revision: 1,
         },
+        expectedInvalidationFence,
       });
+      const raceFence = await storeA.captureInvalidationFence(A, B);
       const permitRace = await Promise.allSettled([
         storeA.createEpisodeAndIssuePermit(raceInput(
           RACE_CONVERSATION_A,
@@ -439,6 +519,7 @@ describe('ICP autonomy Postgres persistence', () => {
           RACE_CANDIDATE_A,
           A,
           B,
+          raceFence,
         )),
         storeB.createEpisodeAndIssuePermit(raceInput(
           RACE_CONVERSATION_B,
@@ -446,6 +527,7 @@ describe('ICP autonomy Postgres persistence', () => {
           RACE_CANDIDATE_B,
           B,
           A,
+          raceFence,
         )),
       ]);
       expect(permitRace.filter(result => result.status === 'fulfilled')).toHaveLength(1);
@@ -563,17 +645,20 @@ describe('ICP autonomy Postgres persistence', () => {
         revision: 1,
       });
       await storeA.issuePermit({
-        permitId: fleetPermitId,
-        candidateId: fleetCandidateId,
-        conversationId: fleetConversationId,
-        senderCompanionId: A,
-        recipientCompanionId: C,
-        channelId: CHANNEL_AC,
-        provenanceRef: fleetProvenanceHandle,
-        issuedAtMs: fleetIssuedAtMs,
-        expiresAtMs: fleetIssuedAtMs + 60_000,
-        status: 'issued',
-        revision: 1,
+        permit: {
+          permitId: fleetPermitId,
+          candidateId: fleetCandidateId,
+          conversationId: fleetConversationId,
+          senderCompanionId: A,
+          recipientCompanionId: C,
+          channelId: CHANNEL_AC,
+          provenanceRef: fleetProvenanceHandle,
+          issuedAtMs: fleetIssuedAtMs,
+          expiresAtMs: fleetIssuedAtMs + 60_000,
+          status: 'issued',
+          revision: 1,
+        },
+        expectedInvalidationFence: await storeA.captureInvalidationFence(A, C),
       });
     } finally {
       await storeA.close();

@@ -2,10 +2,15 @@ import { EventEmitter } from 'node:events';
 import { describe, expect, it, vi } from 'vitest';
 
 import type {
+  IcpAutonomyInvalidationFence,
   IcpConversationTransitionInput,
   IcpPermitConsumptionInput,
   IcpPermitConsumptionResult,
   IcpSharedAutonomyStorePort,
+} from '../../core/icp/autonomy-store-ports.js';
+import {
+  IcpAutonomyInvalidationConflictError,
+  IcpOutstandingInvitationConflictError,
 } from '../../core/icp/autonomy-store-ports.js';
 import type {
   IcpAutonomyReasonCode,
@@ -54,6 +59,9 @@ class RpcMemoryStore implements IcpSharedAutonomyStorePort {
   availability = new Map<string, IcpAvailabilityLease>();
   episodes = new Map<string, IcpConversationEpisode>();
   permits = new Map<string, IcpInitiationPermit>();
+  invalidationGenerations = new Map<string, number>();
+  invalidationReasons = new Map<string, IcpAutonomyReasonCode>();
+  beforeInvalidate?: () => Promise<void>;
 
   async publishAvailability(lease: IcpAvailabilityLease): Promise<IcpAvailabilityLease> {
     const current = this.availability.get(lease.companionId);
@@ -104,12 +112,37 @@ class RpcMemoryStore implements IcpSharedAutonomyStorePort {
     return next;
   }
 
-  async issuePermit(permit: IcpInitiationPermit): Promise<IcpInitiationPermit> {
+  async captureInvalidationFence(
+    firstCompanionId: string,
+    secondCompanionId: string,
+  ): Promise<IcpAutonomyInvalidationFence> {
+    const pair = [firstCompanionId, secondCompanionId].sort();
+    return { companions: [
+      { companionId: pair[0]!, generation: this.invalidationGenerations.get(pair[0]!) ?? 0 },
+      { companionId: pair[1]!, generation: this.invalidationGenerations.get(pair[1]!) ?? 0 },
+    ] };
+  }
+
+  assertInvalidationFence(fence: IcpAutonomyInvalidationFence): void {
+    for (const entry of fence.companions) {
+      if ((this.invalidationGenerations.get(entry.companionId) ?? 0) === entry.generation) continue;
+      throw new IcpAutonomyInvalidationConflictError(
+        this.invalidationReasons.get(entry.companionId) ?? 'operator_cancelled',
+      );
+    }
+  }
+
+  async issuePermit(input: {
+    permit: IcpInitiationPermit;
+    expectedInvalidationFence: IcpAutonomyInvalidationFence;
+  }): Promise<IcpInitiationPermit> {
+    this.assertInvalidationFence(input.expectedInvalidationFence);
+    const { permit } = input;
     if (await this.findOutstandingPermitBetween(
       permit.senderCompanionId,
       permit.recipientCompanionId,
       permit.issuedAtMs,
-    )) throw new Error('outstanding invitation');
+    )) throw new IcpOutstandingInvitationConflictError();
     this.permits.set(permit.permitId, permit);
     return permit;
   }
@@ -117,10 +150,15 @@ class RpcMemoryStore implements IcpSharedAutonomyStorePort {
   async createEpisodeAndIssuePermit(input: {
     episode: IcpConversationEpisode;
     permit: IcpInitiationPermit;
+    expectedInvalidationFence: IcpAutonomyInvalidationFence;
   }): Promise<{ episode: IcpConversationEpisode; permit: IcpInitiationPermit }> {
+    this.assertInvalidationFence(input.expectedInvalidationFence);
     const episode = await this.createEpisode(input.episode);
     try {
-      const permit = await this.issuePermit(input.permit);
+      const permit = await this.issuePermit({
+        permit: input.permit,
+        expectedInvalidationFence: input.expectedInvalidationFence,
+      });
       return { episode, permit };
     } catch (error) {
       this.episodes.delete(episode.conversationId);
@@ -147,6 +185,7 @@ class RpcMemoryStore implements IcpSharedAutonomyStorePort {
     if (current.status === 'revoked') {
       return { outcome: 'revoked', permit: current, reasonCode: 'permit_revoked' };
     }
+    this.assertInvalidationFence(input.expectedInvalidationFence);
     const consumed: IcpInitiationPermit = {
       ...current,
       status: 'consumed',
@@ -196,6 +235,12 @@ class RpcMemoryStore implements IcpSharedAutonomyStorePort {
     revokedAtMs: number,
     reasonCode: IcpAutonomyReasonCode,
   ): Promise<IcpInitiationPermit[]> {
+    await this.beforeInvalidate?.();
+    this.invalidationGenerations.set(
+      companionId,
+      (this.invalidationGenerations.get(companionId) ?? 0) + 1,
+    );
+    this.invalidationReasons.set(companionId, reasonCode);
     const rows: IcpInitiationPermit[] = [];
     for (const permit of this.permits.values()) {
       if (permit.status !== 'issued'
@@ -222,6 +267,14 @@ class RpcMemoryStore implements IcpSharedAutonomyStorePort {
     for (const permit of this.permits.values()) {
       if (permit.status !== 'issued'
         || (known.has(permit.senderCompanionId) && known.has(permit.recipientCompanionId))) continue;
+      for (const companionId of [permit.senderCompanionId, permit.recipientCompanionId]) {
+        if (known.has(companionId)) continue;
+        this.invalidationGenerations.set(
+          companionId,
+          (this.invalidationGenerations.get(companionId) ?? 0) + 1,
+        );
+        this.invalidationReasons.set(companionId, 'unknown_participant');
+      }
       const revoked: IcpInitiationPermit = {
         ...permit,
         status: 'revoked',
@@ -319,6 +372,21 @@ function candidate(candidateId: string, localCompanionId = A, peerCompanionId = 
     expiresAtMs: now + 120_000,
     status: 'pending' as const,
     revision: 1,
+  };
+}
+
+function deferred(): { reached: Promise<void>; release: () => void; wait: () => Promise<void> } {
+  let markReached!: () => void;
+  let release!: () => void;
+  const reached = new Promise<void>(resolve => { markReached = resolve; });
+  const released = new Promise<void>(resolve => { release = resolve; });
+  return {
+    reached,
+    release,
+    wait: async () => {
+      markReached();
+      await released;
+    },
   };
 }
 
@@ -497,5 +565,44 @@ describe('GatewayServer ICP autonomy RPC', () => {
       status: 'revoked',
       reasonCode: 'peer_offline',
     }));
+  });
+
+  it('does not admit a reconnect until durable disconnect invalidation completes', async () => {
+    const { connect, store } = await setup();
+    const a = connect();
+    const b = connect();
+    await identify(a, A, 30);
+    await identify(b, B, 31);
+    await invoke(b, 32, 'companion.availability.publish', {
+      companionId: B,
+      state: 'open_to_chat',
+      expiresAtMs: Date.now() + 120_000,
+      revision: 1,
+    });
+    const issue = await invoke(a, 33, 'companion.initiation.permit.issue', {
+      companionId: A,
+      candidate: candidate('88888888-8888-4888-8888-888888888888'),
+      channelId: CHANNEL,
+      permitExpiresAtMs: Date.now() + 60_000,
+    });
+    const permitId = issue.result.permit.permitId as string;
+
+    const gate = deferred();
+    store.beforeInvalidate = gate.wait;
+    b.emitClose();
+    await gate.reached;
+
+    const replacement = connect();
+    let identified = false;
+    const identifying = identify(replacement, B, 34).then(() => { identified = true; });
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(identified).toBe(false);
+
+    gate.release();
+    await identifying;
+    expect(store.permits.get(permitId)).toMatchObject({
+      status: 'revoked',
+      reasonCode: 'peer_offline',
+    });
   });
 });

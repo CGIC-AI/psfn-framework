@@ -5,6 +5,7 @@ from datetime import timedelta
 from pathlib import Path
 
 import typer
+from aioesphomeapi.model import MediaPlayerInfo
 
 from hub.adapters.agent.psfn_streaming import PsfnStreamingProvider
 from hub.adapters.stt.deepgram_live import DeepgramLiveSTTProvider
@@ -45,6 +46,11 @@ async def _run_esphome_runtime(
             try:
                 async with ESPHomeSession(config.esphome_target) as session:
                     device_info = await session.device_info()
+                    entities, _ = await session.list_entities_services()
+                    media_player_key = next(
+                        (entity.key for entity in entities if isinstance(entity, MediaPlayerInfo)),
+                        None,
+                    )
                     runtime = StreamingVoiceAssistantRuntime(
                         session=session,
                         stt=stt,
@@ -62,6 +68,7 @@ async def _run_esphome_runtime(
                         max_turn_seconds=config.voice_max_turn_seconds,
                         speech_rms_threshold=config.voice_speech_rms_threshold,
                         min_speech_chunks_for_endpointing=config.voice_min_speech_chunks_for_endpointing,
+                        media_player_key=media_player_key,
                     )
                     unsubscribe = session.subscribe_voice_assistant(
                         handle_start=runtime.handle_start,

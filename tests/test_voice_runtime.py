@@ -7,7 +7,7 @@ import json
 from pathlib import Path
 
 import pytest
-from aioesphomeapi.model import VoiceAssistantAudioSettings, VoiceAssistantEventType
+from aioesphomeapi.model import MediaPlayerCommand, VoiceAssistantAudioSettings, VoiceAssistantEventType
 
 from hub.adapters.interfaces import TranscriptResult
 from hub.devices.voice_runtime import VoiceAssistantRuntime
@@ -21,6 +21,7 @@ class _FakeClient:
         self.announcement_delay = announcement_delay
         self.events: list[tuple[object, object]] = []
         self.announcements: list[tuple[str, bool]] = []
+        self.media_commands: list[tuple[int, object]] = []
 
     def send_voice_assistant_event(self, event_type, data) -> None:
         self.events.append((event_type, data))
@@ -35,6 +36,9 @@ class _FakeClient:
         self.announcements.append((media_id, start_conversation))
         await asyncio.sleep(self.announcement_delay)
 
+    def media_player_command(self, key: int, *, command) -> None:
+        self.media_commands.append((key, command))
+
 
 class _FakeSession:
     def __init__(self, client: _FakeClient) -> None:
@@ -42,8 +46,9 @@ class _FakeSession:
 
 
 class _FakeStream:
-    def __init__(self) -> None:
+    def __init__(self, *, content_type: str) -> None:
         self.url = "http://example.test/stream"
+        self.content_type = content_type
         self.writes: list[bytes] = []
         self.closed = False
 
@@ -59,7 +64,7 @@ class _FakeAudioServer:
         self.streams: list[_FakeStream] = []
 
     def open_stream(self, *, content_type: str = "audio/mpeg") -> _FakeStream:
-        stream = _FakeStream()
+        stream = _FakeStream(content_type=content_type)
         self.streams.append(stream)
         return stream
 
@@ -108,6 +113,12 @@ class _FakeTTS:
             yield item.encode("utf-8")
 
 
+class _PassthroughTranscoder:
+    async def transcode(self, chunks):
+        async for chunk in chunks:
+            yield chunk
+
+
 def _make_streaming_runtime(
     tmp_path: Path,
     *,
@@ -140,6 +151,8 @@ def _make_streaming_runtime(
         max_turn_seconds=10.0,
         speech_rms_threshold=1.0,
         min_speech_chunks_for_endpointing=min_speech_chunks_for_endpointing,
+        media_player_key=42,
+        audio_transcoder=_PassthroughTranscoder(),
     )
     return runtime, client, audio_server
 
@@ -173,6 +186,7 @@ async def test_stream_agent_reply_allows_playback_to_finish_after_reply_timeout_
     assert client.events[0][0] == VoiceAssistantEventType.VOICE_ASSISTANT_TTS_STREAM_START
     assert client.events[-1][0] == VoiceAssistantEventType.VOICE_ASSISTANT_TTS_STREAM_END
     assert audio_server.streams[0].closed is True
+    assert audio_server.streams[0].content_type == "audio/flac"
     assert b"Fast response." in b"".join(audio_server.streams[0].writes)
 
 
@@ -191,7 +205,7 @@ async def test_stream_agent_reply_still_times_out_before_first_delta(tmp_path: P
 
 @pytest.mark.anyio
 async def test_handle_start_interrupts_active_response_pipeline(tmp_path: Path) -> None:
-    runtime, _, _ = _make_streaming_runtime(
+    runtime, client, _ = _make_streaming_runtime(
         tmp_path,
         agent_steps=[(0.0, "unused")],
         announcement_delay=0.0,
@@ -207,6 +221,7 @@ async def test_handle_start_interrupts_active_response_pipeline(tmp_path: Path) 
     )
 
     assert runtime._response_task is None or runtime._response_task.done()
+    assert client.media_commands == [(42, MediaPlayerCommand.STOP)]
 
 
 @pytest.mark.anyio

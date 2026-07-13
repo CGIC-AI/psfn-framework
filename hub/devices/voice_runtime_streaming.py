@@ -13,12 +13,13 @@ from pathlib import Path
 import uuid
 import wave
 
-from aioesphomeapi.model import VoiceAssistantAudioSettings, VoiceAssistantEventType
+from aioesphomeapi.model import MediaPlayerCommand, VoiceAssistantAudioSettings, VoiceAssistantEventType
 
 from hub.adapters.agent.psfn_streaming import PsfnStreamingProvider
 from hub.adapters.stt.deepgram_live import DeepgramLiveSTTProvider
 from hub.adapters.tts.elevenlabs_streaming import ElevenLabsStreamingTTS
 from hub.devices.esphome_session import ESPHomeSession
+from hub.media.audio_transcoder import FfmpegMp3ToFlacTranscoder, StreamingAudioTranscoder
 from hub.media.http_audio import LiveAudioStream, StaticAudioServer
 from hub.storage.session_cache import SessionCache
 from hub.util import ensure_directory, isoformat_z, to_jsonable, utc_now, write_json
@@ -66,6 +67,8 @@ class StreamingVoiceAssistantRuntime:
         max_turn_seconds: float,
         speech_rms_threshold: float,
         min_speech_chunks_for_endpointing: int,
+        media_player_key: int | None = None,
+        audio_transcoder: StreamingAudioTranscoder | None = None,
     ) -> None:
         self._session = session
         self._stt = stt
@@ -83,6 +86,8 @@ class StreamingVoiceAssistantRuntime:
         self._max_turn_seconds = max_turn_seconds
         self._speech_rms_threshold = speech_rms_threshold
         self._min_speech_chunks_for_endpointing = min_speech_chunks_for_endpointing
+        self._media_player_key = media_player_key
+        self._audio_transcoder = audio_transcoder or FfmpegMp3ToFlacTranscoder()
         self._active: ActiveTurn | None = None
         self._last_session_id: str | None = None
         self._watchdog_task: asyncio.Task[None] | None = None
@@ -101,7 +106,13 @@ class StreamingVoiceAssistantRuntime:
             _LOGGER.warning("Replacing active turn %s", self._active.session_id)
             await self._finish_turn(abort=True, stop_reason="superseded")
         self._cancel_watchdog()
+        was_responding = self._response_task is not None and not self._response_task.done()
         await self._cancel_response_task(reason="new_start")
+        if was_responding and self._media_player_key is not None:
+            self._session.client.media_player_command(
+                self._media_player_key,
+                command=MediaPlayerCommand.STOP,
+            )
 
         session_id = self._resolve_session_id(conversation_id)
         started_at = utc_now()
@@ -401,7 +412,7 @@ class StreamingVoiceAssistantRuntime:
     async def _stream_agent_reply(self, session_id: str, transcript: str) -> str:
         response_text = ""
         text_chunks: asyncio.Queue[str | None] = asyncio.Queue()
-        stream = self._audio_server.open_stream(content_type="audio/mpeg")
+        stream = self._audio_server.open_stream(content_type="audio/flac")
         reply_stream = self._agent.stream_reply(text=transcript, conversation_id=session_id)
         self._session.client.send_voice_assistant_event(
             VoiceAssistantEventType.VOICE_ASSISTANT_TTS_STREAM_START,
@@ -451,7 +462,7 @@ class StreamingVoiceAssistantRuntime:
 
     async def _stream_speech(self, text: str) -> None:
         text_chunks: asyncio.Queue[str | None] = asyncio.Queue()
-        stream = self._audio_server.open_stream(content_type="audio/mpeg")
+        stream = self._audio_server.open_stream(content_type="audio/flac")
         self._session.client.send_voice_assistant_event(
             VoiceAssistantEventType.VOICE_ASSISTANT_TTS_STREAM_START,
             None,
@@ -482,7 +493,8 @@ class StreamingVoiceAssistantRuntime:
             )
 
     async def _pipe_tts(self, text_chunks: "asyncio.Queue[str | None]", stream: LiveAudioStream) -> None:
-        async for audio_chunk in self._tts.stream_text(text_chunks=text_chunks):
+        mp3_chunks = self._tts.stream_text(text_chunks=text_chunks)
+        async for audio_chunk in self._audio_transcoder.transcode(mp3_chunks):
             stream.write(audio_chunk)
 
     def _resolve_session_id(self, conversation_id: str) -> str:

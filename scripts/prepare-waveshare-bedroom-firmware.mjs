@@ -143,6 +143,15 @@ replaceRequired(
   "    - id: muted_page\n      bg_color: 0x000000\n      on_swipe_up:\n        - script.execute: swipe_to_voip\n      widgets:\n        - image:\n            align: CENTER\n            src: purrsephone_sleeping\n",
   "muted sprite",
 );
+
+// A deliberate tap on Purrsephone's idle face starts the same local
+// voice-assistant/VAD flow as the wake word. LVGL suppresses click events for
+// recognized swipes, so navigation gestures remain independent.
+replaceRequired(
+  "    - id: idle_page\n      bg_color: 0x000000\n      on_swipe_up:\n        - script.execute: swipe_to_voip\n",
+  "    - id: idle_page\n      bg_color: 0x000000\n      on_click:\n        - voice_assistant.start:\n            silence_detection: true\n      on_swipe_up:\n        - script.execute: swipe_to_voip\n",
+  "idle tap-to-talk action",
+);
 // The optional artwork package depends on a mutable ESPHome pull-request head.
 // The base profile already supplies a deterministic neutral-art fallback, so
 // omit remote album artwork until the component exists in a pinned release.

@@ -28,6 +28,14 @@ speaking, and error. A deliberate tap on the head is a headpat. Horizontal
 swipes enter a bedroom-device carousel; only configured room affordances may be
 controlled.
 
+The exact live Home Assistant affordances are recorded in
+`home-assistant.rooms.json`. The bedroom satellite is anchored to the physical
+`bedroom` place and presents bedroom/upstairs controls first, followed by the
+office/downstairs group. Indicator lights, timers, configuration entities,
+cameras, and sirens are deliberately excluded. The two PIRs are local room
+state only: they are mutually exclusive hints with a hold and transition quiet
+period, and do not create chat turns or raw PSFN event traffic.
+
 Presence sensing is not part of this sealed-unit build. The LD2410C requires a
 5 V supply capable of more than 200 mA, which the exposed 3.3 V breakout cannot
 provide safely.

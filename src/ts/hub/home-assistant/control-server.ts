@@ -3,6 +3,7 @@ import http from "node:http";
 import type { AddressInfo } from "node:net";
 
 import type { HubControlConfig } from "../../shared/env.js";
+import { authenticateHubDevice, type HubDeviceIdentity, type HubDeviceRegistry } from "../device-registry.js";
 import { HomeAssistantClient } from "./client.js";
 import {
   HOME_ASSISTANT_ALLOWED_DOMAINS,
@@ -26,6 +27,7 @@ const ALLOWED_SERVICE_DATA_KEYS = new Set([
   "rgb_color",
   "transition",
   "volume_level",
+  "percentage",
 ]);
 
 interface IdempotencyEntry {
@@ -40,6 +42,7 @@ export class HomeAssistantControlServer {
   constructor(
     private readonly config: HubControlConfig,
     private readonly client: HomeAssistantClient,
+    private readonly deviceRegistry: HubDeviceRegistry,
   ) {
     this.server = http.createServer((request, response) => {
       void this.handle(request, response).catch((error) => {
@@ -72,14 +75,16 @@ export class HomeAssistantControlServer {
   private async handle(request: http.IncomingMessage, response: http.ServerResponse): Promise<void> {
     response.setHeader("Cache-Control", "no-store");
     response.setHeader("Content-Type", "application/json; charset=utf-8");
-    if (!this.authorized(request.headers.authorization)) {
+    const url = new URL(request.url ?? "/", "http://hub-control.invalid");
+    const isHealthRequest = request.method === "GET" && url.pathname === "/internal/v1/home-assistant/health";
+    const device = isHealthRequest ? null : this.authenticateDevice(request.headers.authorization);
+    if (isHealthRequest ? !this.authorizedControlToken(request.headers.authorization) : !device) {
       response.statusCode = 401;
       response.setHeader("WWW-Authenticate", "Bearer");
       response.end(JSON.stringify({ error: { type: "unauthorized", message: "Invalid Hub control credential" } }));
       return;
     }
 
-    const url = new URL(request.url ?? "/", "http://hub-control.invalid");
     if (request.method === "GET" && url.pathname === "/internal/v1/home-assistant/health") {
       response.statusCode = 200;
       response.end(JSON.stringify(this.client.health()));
@@ -88,14 +93,17 @@ export class HomeAssistantControlServer {
     if (request.method === "POST" && url.pathname === "/internal/v1/home-assistant/states") {
       const body = await this.readJsonBody(request);
       const entityIds = body.entityIds === undefined ? [] : parseEntityIds(body.entityIds, true);
+      const authorizedIds = entityIds.length === 0 ? device!.homeAssistantEntityIds : entityIds;
+      this.assertEntitiesAllowed(device!, authorizedIds);
       response.statusCode = 200;
-      const states = this.client.getStates(entityIds);
+      const states = this.client.getStates(authorizedIds);
       response.end(JSON.stringify({ states, count: states.length }));
       return;
     }
     if (request.method === "POST" && url.pathname === "/internal/v1/home-assistant/call-service") {
       const body = await this.readJsonBody(request);
       const input = parseCallService(body);
+      this.assertEntitiesAllowed(device!, input.entityIds);
       const bodyHash = hashCanonical(input);
       const prior = this.idempotency.get(input.requestId);
       if (prior) {
@@ -121,11 +129,24 @@ export class HomeAssistantControlServer {
     response.end(JSON.stringify({ error: { type: "not_found", message: "Unknown Hub control route" } }));
   }
 
-  private authorized(raw: string | undefined): boolean {
+  private authorizedControlToken(raw: string | undefined): boolean {
     if (!raw?.startsWith("Bearer ")) return false;
     const supplied = Buffer.from(raw.slice("Bearer ".length), "utf8");
     const expected = Buffer.from(this.config.token, "utf8");
     return supplied.length === expected.length && timingSafeEqual(supplied, expected);
+  }
+
+  private authenticateDevice(raw: string | undefined): HubDeviceIdentity | null {
+    if (!raw?.startsWith("Bearer ")) return null;
+    return authenticateHubDevice(this.deviceRegistry, raw.slice("Bearer ".length));
+  }
+
+  private assertEntitiesAllowed(device: HubDeviceIdentity, entityIds: readonly string[]): void {
+    for (const entityId of entityIds) {
+      if (!device.homeAssistantEntityIds.includes(entityId)) {
+        throw new HttpInputError(403, "entity_not_allowed", `Home Assistant entity is not allowed for ${device.deviceId}: ${entityId}`);
+      }
+    }
   }
 
   private async readJsonBody(request: http.IncomingMessage): Promise<Record<string, unknown>> {
@@ -196,6 +217,9 @@ function parseCallService(body: Record<string, unknown>): HomeAssistantCallServi
   const requestId = parseRequestId(body.requestId);
   const domain = parseEnum(body.domain, HOME_ASSISTANT_ALLOWED_DOMAINS, "domain") as HomeAssistantAllowedDomain;
   const service = parseEnum(body.service, HOME_ASSISTANT_ALLOWED_SERVICES, "service") as HomeAssistantAllowedService;
+  if (service === "set_percentage" && domain !== "fan") {
+    throw new HttpInputError(400, "invalid_service_domain", "set_percentage is only allowed for fan entities");
+  }
   const entityIds = parseEntityIds(body.entityIds, false);
   for (const entityId of entityIds) {
     if (!entityId.startsWith(`${domain}.`)) {
@@ -235,6 +259,14 @@ function parseServiceData(value: unknown): Record<string, unknown> | undefined {
     if (!ALLOWED_SERVICE_DATA_KEYS.has(key)) {
       throw new HttpInputError(400, "service_data_key_denied", `Home Assistant service data key is not allowed: ${key}`);
     }
+  }
+  if ("percentage" in value && (
+    typeof value.percentage !== "number"
+    || !Number.isFinite(value.percentage)
+    || value.percentage < 0
+    || value.percentage > 100
+  )) {
+    throw new HttpInputError(400, "invalid_service_data", "percentage must be a number from 0 through 100");
   }
   return { ...value };
 }

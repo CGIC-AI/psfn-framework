@@ -71,6 +71,7 @@ function config(): HubConfig {
       deviceId: "office-device", deviceName: "Office Device", satelliteId: "office",
       satelliteName: "Office", endpointId: "office-device", claimType: "room-satellite",
       credentialSha256: createHash("sha256").update(credential).digest("hex"),
+      homeAssistantEntityIds: [],
       maxCapabilities: { input: ["text"], output: ["text"], control: [], safety: ["local_only"] },
     }] },
     voxta: { enabled: false, satelliteId: "voxta", satelliteName: "Voxta", sessionId: null,

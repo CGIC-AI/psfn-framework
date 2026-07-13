@@ -32,12 +32,17 @@ test("device registry authenticates a credential without storing plaintext", () 
         control: ["interrupt", "presence"],
         safety: ["local_only"],
       },
+      homeAssistantEntityIds: ["light.main_bedroom", "fan.main_bedroom_2"],
     }],
   }));
 
   const registry = loadHubDeviceRegistry(filePath);
   assert.ok(registry);
   assert.equal(authenticateHubDevice(registry, credential)?.satelliteId, "bedroom");
+  assert.deepEqual(authenticateHubDevice(registry, credential)?.homeAssistantEntityIds, [
+    "light.main_bedroom",
+    "fan.main_bedroom_2",
+  ]);
   assert.equal(authenticateHubDevice(registry, "wrong"), null);
   assert.equal(JSON.stringify(registry).includes(credential), false);
 });
@@ -86,4 +91,5 @@ test("device registry preserves explicit empty maximum capability lists", () => 
   assert.deepEqual(loadHubDeviceRegistry(filePath)?.devices[0]?.maxCapabilities, {
     input: [], output: [], control: [], safety: [],
   });
+  assert.deepEqual(loadHubDeviceRegistry(filePath)?.devices[0]?.homeAssistantEntityIds, []);
 });

@@ -9,6 +9,10 @@
       "endpointId": "office-device",
       "claimType": "room-satellite",
       "credentialSha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "homeAssistantEntityIds": [
+        "light.office",
+        "binary_sensor.office_motion"
+      ],
       "maxCapabilities": {
         "input": ["text", "microphone_pcm", "final_transcript", "wake_event"],
         "output": ["text", "subtitle", "streamed_audio", "action"],

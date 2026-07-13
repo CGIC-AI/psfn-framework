@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 import test from "node:test";
@@ -8,8 +9,24 @@ import WebSocket, { WebSocketServer } from "ws";
 import type { HomeAssistantConfig, HubControlConfig } from "../../shared/env.js";
 import { HomeAssistantClient } from "./client.js";
 import { HomeAssistantControlServer } from "./control-server.js";
+import type { HubDeviceRegistry } from "../device-registry.js";
 
 const CONTROL_TOKEN = "hub-control-test-token";
+const DEVICE_TOKEN = "office-device-test-token";
+const DEVICE_REGISTRY: HubDeviceRegistry = {
+  schemaVersion: 1,
+  devices: [{
+    deviceId: "office-device",
+    deviceName: "Office Device",
+    satelliteId: "office",
+    satelliteName: "Office",
+    endpointId: "office-device",
+    claimType: "room-satellite",
+    credentialSha256: createHash("sha256").update(DEVICE_TOKEN).digest("hex"),
+    maxCapabilities: { input: [], output: [], control: [], safety: ["local_only"] },
+    homeAssistantEntityIds: ["light.office", "fan.main_bedroom"],
+  }],
+};
 
 test("HomeAssistantClient authenticates, hydrates state, subscribes, and calls a service", async () => {
   const mock = await MockHomeAssistant.start();
@@ -46,7 +63,7 @@ test("private control server authenticates, validates, and deduplicates service 
     token: CONTROL_TOKEN,
     maxBodyBytes: 4096,
   };
-  const control = new HomeAssistantControlServer(controlConfig, client);
+  const control = new HomeAssistantControlServer(controlConfig, client, DEVICE_REGISTRY);
   client.start();
   await control.start();
   try {
@@ -59,7 +76,7 @@ test("private control server authenticates, validates, and deduplicates service 
 
     const states = await post(baseUrl, "/internal/v1/home-assistant/states", {
       entityIds: ["light.office"],
-    });
+    }, DEVICE_TOKEN);
     assert.equal(states.status, 200);
     assert.equal((await states.json() as { states: Array<{ state: string }> }).states[0]?.state, "off");
 
@@ -70,10 +87,10 @@ test("private control server authenticates, validates, and deduplicates service 
       entityIds: ["light.office"],
       data: { brightness_pct: 20, transition: 2 },
     };
-    const first = await post(baseUrl, "/internal/v1/home-assistant/call-service", body);
+    const first = await post(baseUrl, "/internal/v1/home-assistant/call-service", body, DEVICE_TOKEN);
     assert.equal(first.status, 200);
     assert.equal((await first.json() as { replayed: boolean }).replayed, false);
-    const replay = await post(baseUrl, "/internal/v1/home-assistant/call-service", body);
+    const replay = await post(baseUrl, "/internal/v1/home-assistant/call-service", body, DEVICE_TOKEN);
     assert.equal(replay.status, 200);
     assert.equal((await replay.json() as { replayed: boolean }).replayed, true);
     assert.equal(mock.serviceCallCount, 1);
@@ -81,17 +98,37 @@ test("private control server authenticates, validates, and deduplicates service 
     const conflict = await post(baseUrl, "/internal/v1/home-assistant/call-service", {
       ...body,
       service: "turn_off",
-    });
+    }, DEVICE_TOKEN);
     assert.equal(conflict.status, 409);
     assert.equal(mock.serviceCallCount, 1);
 
     const fan = await post(baseUrl, "/internal/v1/home-assistant/call-service", {
       requestId: "human:bedroom-fan:1",
       domain: "fan",
-      service: "turn_off",
+      service: "set_percentage",
       entityIds: ["fan.main_bedroom"],
-    });
+      data: { percentage: 50 },
+    }, DEVICE_TOKEN);
     assert.equal(fan.status, 200);
+    assert.equal(mock.serviceCallCount, 2);
+
+    const outsideRoom = await post(baseUrl, "/internal/v1/home-assistant/states", {
+      entityIds: ["light.kitchen"],
+    }, DEVICE_TOKEN);
+    assert.equal(outsideRoom.status, 403);
+
+    const sharedTokenCannotControl = await post(baseUrl, "/internal/v1/home-assistant/call-service", body);
+    assert.equal(sharedTokenCannotControl.status, 401);
+    assert.equal(mock.serviceCallCount, 2);
+
+    const invalidFanService = await post(baseUrl, "/internal/v1/home-assistant/call-service", {
+      requestId: "invalid:light-percentage:1",
+      domain: "light",
+      service: "set_percentage",
+      entityIds: ["light.office"],
+      data: { percentage: 50 },
+    }, DEVICE_TOKEN);
+    assert.equal(invalidFanService.status, 400);
     assert.equal(mock.serviceCallCount, 2);
 
     const denied = await post(baseUrl, "/internal/v1/home-assistant/call-service", {
@@ -99,7 +136,7 @@ test("private control server authenticates, validates, and deduplicates service 
       domain: "lock",
       service: "turn_on",
       entityIds: ["lock.front_door"],
-    });
+    }, DEVICE_TOKEN);
     assert.equal(denied.status, 400);
     assert.equal(mock.serviceCallCount, 2);
   } finally {
@@ -119,11 +156,11 @@ function configFor(baseUrl: string): HomeAssistantConfig {
   };
 }
 
-async function post(baseUrl: string, path: string, body: unknown): Promise<Response> {
+async function post(baseUrl: string, path: string, body: unknown, token = CONTROL_TOKEN): Promise<Response> {
   return await fetch(`${baseUrl}${path}`, {
     method: "POST",
     headers: {
-      Authorization: `Bearer ${CONTROL_TOKEN}`,
+      Authorization: `Bearer ${token}`,
       "Content-Type": "application/json",
     },
     body: JSON.stringify(body),

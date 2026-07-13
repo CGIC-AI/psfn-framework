@@ -1,5 +1,5 @@
 export const HOME_ASSISTANT_ALLOWED_DOMAINS = ["light", "fan", "switch", "media_player"] as const;
-export const HOME_ASSISTANT_ALLOWED_SERVICES = ["turn_on", "turn_off", "toggle"] as const;
+export const HOME_ASSISTANT_ALLOWED_SERVICES = ["turn_on", "turn_off", "toggle", "set_percentage"] as const;
 
 export type HomeAssistantAllowedDomain = typeof HOME_ASSISTANT_ALLOWED_DOMAINS[number];
 export type HomeAssistantAllowedService = typeof HOME_ASSISTANT_ALLOWED_SERVICES[number];

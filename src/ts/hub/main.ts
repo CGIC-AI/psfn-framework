@@ -11,8 +11,8 @@ async function main(): Promise<void> {
   fs.mkdirSync(config.artifactsRoot, { recursive: true });
   const server = new RealtimeHubServer(config);
   const homeAssistant = config.homeAssistant ? new HomeAssistantClient(config.homeAssistant) : null;
-  const control = config.control && homeAssistant
-    ? new HomeAssistantControlServer(config.control, homeAssistant)
+  const control = config.control && homeAssistant && config.deviceRegistry
+    ? new HomeAssistantControlServer(config.control, homeAssistant, config.deviceRegistry)
     : null;
   homeAssistant?.start();
   await control?.start();

@@ -20,6 +20,7 @@ export interface HubDeviceIdentity {
   claimType: string;
   credentialSha256: string;
   maxCapabilities: Required<SatelliteCapabilities>;
+  homeAssistantEntityIds: string[];
 }
 
 export interface HubDeviceRegistry {
@@ -86,7 +87,23 @@ function parseDevice(value: unknown, index: number): HubDeviceIdentity {
     claimType: field("claimType"),
     credentialSha256,
     maxCapabilities: parseMaximumCapabilities(value.maxCapabilities, index),
+    homeAssistantEntityIds: parseEntityIds(value.homeAssistantEntityIds, index),
   };
+}
+
+function parseEntityIds(value: unknown, index: number): string[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) {
+    throw new Error(`devices[${index}].homeAssistantEntityIds must be an array`);
+  }
+  const entityIds: string[] = [];
+  for (const item of value) {
+    if (typeof item !== "string" || !/^[a-z][a-z0-9_]*\.[a-z0-9_]+$/.test(item)) {
+      throw new Error(`devices[${index}].homeAssistantEntityIds contains an invalid entity id`);
+    }
+    if (!entityIds.includes(item)) entityIds.push(item);
+  }
+  return entityIds;
 }
 
 function parseMaximumCapabilities(

@@ -150,6 +150,33 @@ describe('registerLLMMethods', () => {
     })).rejects.toThrow('non-empty shard identifier');
   });
 
+  it('propagates private telemetry generically and strips source identifiers', async () => {
+    const harness = createHarness();
+
+    await harness.invoke('llm.complete', {
+      model: '',
+      provider: '',
+      messages: [{ role: 'user', content: 'private work' }],
+      systemPrompt: 'private',
+      purpose: 'background',
+      turnId: 'source-turn',
+      requestId: 'source-request',
+      channelId: 'source-channel',
+      originStage: 'revealing.private.operation',
+      telemetryVisibility: 'companion_private',
+    });
+
+    const correlation = harness.complete.mock.calls[0]?.[0].correlation;
+    expect(correlation).toEqual({
+      requestId: 'companion-private',
+      callType: 'background',
+      purpose: 'companion_private.background',
+      originType: 'background',
+      originStage: 'companion_private.background',
+      telemetryVisibility: 'companion_private',
+    });
+  });
+
   it('preserves model knob fields from llm.chat params into provider context hints', async () => {
     const harness = createHarness();
 

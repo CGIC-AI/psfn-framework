@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { LLMProviderPort } from '../../core/agent/contracts.js';
 import type { LLMContext, LLMResponse } from '../../shared/contracts/runtime.js';
+import { COMPANION_PRIVATE_BACKGROUND_TELEMETRY } from '../../shared/telemetry/model-usage.js';
 import {
   createLLMValuesConsistencyEvaluator,
   IntrospectionValuesConsistencyRuntime,
@@ -32,10 +33,12 @@ describe('introspection values-consistency runtime', () => {
   it('consumes typed landmarks without exposing source conversation or an operator surface', async () => {
     root = mkdtempSync(join(tmpdir(), 'introspection-values-'));
     const contexts: LLMContext[] = [];
+    const correlations: unknown[] = [];
     const llmProvider: LLMProviderPort = {
       stream: vi.fn(async () => response('')),
-      complete: vi.fn(async (context) => {
+      complete: vi.fn(async (context, _purpose, options) => {
         contexts.push(context);
+        correlations.push(options?.correlation);
         return response(JSON.stringify({
           status: 'conditional',
           finding: 'Care remained claimed but became conditional under disagreement.',
@@ -72,6 +75,7 @@ describe('introspection values-consistency runtime', () => {
     expect(JSON.stringify(contexts)).toContain('Care should remain');
     expect(JSON.stringify(contexts)).not.toContain('SOURCE_CONVERSATION_SENTINEL');
     expect(contexts[0]?.tools).toBeUndefined();
+    expect(correlations).toEqual([COMPANION_PRIVATE_BACKGROUND_TELEMETRY]);
     expect(findings.list()).toEqual([expect.objectContaining({
       landmarkId: 'landmark-1',
       status: 'conditional',

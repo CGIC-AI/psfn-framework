@@ -64,6 +64,7 @@ function makeUsageData(): ModelUsageData {
       callKind: 'completion',
       callType: 'background',
       purpose: 'background',
+      telemetryVisibility: 'operator_visible',
       provider: 'litellm',
       model: 'deepseek/deepseek-v4-pro',
       requestedProvider: 'litellm',
@@ -82,6 +83,71 @@ function makeUsageData(): ModelUsageData {
 }
 
 describe('AdminModelUsageDataService', () => {
+  it('keeps private usage in aggregate totals while excluding every private detail surface', async () => {
+    const aggregate = makeUsageData();
+    aggregate.totals = {
+      ...aggregate.totals,
+      calls: 2,
+      successfulCalls: 2,
+      inputTokens: 1400,
+      outputTokens: 700,
+      totalTokens: 2100,
+      providerCostUsd: 0.6,
+      totalCostUsd: 0.6,
+    };
+    aggregate.byModel.push({
+      key: 'litellm:private-model',
+      calls: 1,
+      inputTokens: 400,
+      outputTokens: 200,
+      totalTokens: 600,
+      totalCostUsd: 0.5,
+    });
+    aggregate.byPurpose.push({
+      key: 'companion_private.background',
+      calls: 1,
+      inputTokens: 400,
+      outputTokens: 200,
+      totalTokens: 600,
+      totalCostUsd: 0.5,
+    });
+    const privateEvent = {
+      ...aggregate.recentEvents[0]!,
+      id: 'usage-private',
+      logicalCallId: 'llm:private',
+      telemetryVisibility: 'companion_private' as const,
+      purpose: 'background',
+      originStage: 'companion_private.background',
+      model: 'private-model',
+      requestedModel: 'private-model',
+      providerCostUsd: 0.5,
+      metadata: { privateOutcome: 'must-not-reach-garden' },
+    };
+    aggregate.recentEvents.push(privateEvent);
+    aggregate.expensiveEvents.push(privateEvent);
+
+    const visible = makeUsageData();
+    const store: ModelUsageQueryPort = {
+      getUsageData: vi.fn(async query => (
+        query?.telemetryVisibility === 'operator_visible' ? visible : aggregate
+      )),
+    };
+    const service = new AdminModelUsageDataService(store);
+
+    const data = await service.getModelUsageData({ limit: 10 });
+
+    expect(data.totals).toEqual(aggregate.totals);
+    expect(data.byModel).toEqual(visible.byModel);
+    expect(data.byPurpose).toEqual(visible.byPurpose);
+    expect(data.byTool).toEqual(visible.byTool);
+    expect(data.byCallKind).toEqual(visible.byCallKind);
+    expect(data.recentEvents).toEqual(visible.recentEvents);
+    expect(data.expensiveEvents).toEqual(visible.expensiveEvents);
+    expect(JSON.stringify(data)).not.toContain('companion_private');
+    expect(JSON.stringify(data)).not.toContain('must-not-reach-garden');
+    expect(store.getUsageData).toHaveBeenCalledWith({ limit: 10, telemetryVisibility: 'operator_visible' });
+  });
+
   it('hydrates missing usage costs from discovery pricing', async () => {
     const store: ModelUsageQueryPort = {
       getUsageData: vi.fn(async () => makeUsageData()),

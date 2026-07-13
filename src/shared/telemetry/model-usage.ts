@@ -1,4 +1,9 @@
-import type { ObservabilityCallType } from '../contracts/runtime.js';
+import {
+  COMPANION_PRIVATE_BACKGROUND_PURPOSE,
+  type CorrelationMetadata,
+  type ObservabilityCallType,
+  type TelemetryVisibility,
+} from '../contracts/runtime.js';
 import type {
   ChargePolicyRuntimeLane,
   ChargePolicySurface,
@@ -15,6 +20,17 @@ export const MODEL_USAGE_CALL_KINDS = [
 export type ModelUsageCallKind = typeof MODEL_USAGE_CALL_KINDS[number];
 export type ModelUsageStatus = 'success' | 'failure';
 export type ModelUsageCostSource = 'provider' | 'estimate' | 'none';
+
+export const COMPANION_PRIVATE_BACKGROUND_TELEMETRY = Object.freeze({
+  callType: 'background',
+  purpose: COMPANION_PRIVATE_BACKGROUND_PURPOSE,
+  originType: 'background',
+  originStage: COMPANION_PRIVATE_BACKGROUND_PURPOSE,
+  telemetryVisibility: 'companion_private',
+}) satisfies Pick<
+  CorrelationMetadata,
+  'callType' | 'purpose' | 'originType' | 'originStage' | 'telemetryVisibility'
+>;
 
 export interface ModelUsageCostBreakdown {
   input?: number;
@@ -38,6 +54,7 @@ export interface ModelUsageEventInput {
   callKind: ModelUsageCallKind;
   callType: ObservabilityCallType;
   purpose: string;
+  telemetryVisibility?: TelemetryVisibility;
   originType?: ObservabilityCallType;
   originStage?: string;
   service?: string;
@@ -83,6 +100,7 @@ export interface ModelUsageEvent extends Required<Pick<
   | 'callKind'
   | 'callType'
   | 'purpose'
+  | 'telemetryVisibility'
   | 'provider'
   | 'model'
   | 'inputTokens'
@@ -132,6 +150,8 @@ export interface ModelUsageQuery {
   toolName?: string;
   callKind?: ModelUsageCallKind;
   runId?: string;
+  /** Internal detail filter. Operator services force this to operator_visible. */
+  telemetryVisibility?: TelemetryVisibility;
 }
 
 export interface ModelUsageTotals {

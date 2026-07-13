@@ -1009,6 +1009,7 @@ export const POSTGRES_MODEL_USAGE_MIGRATIONS = [
     call_kind TEXT NOT NULL,
     call_type TEXT NOT NULL,
     purpose TEXT NOT NULL,
+    telemetry_visibility TEXT NOT NULL DEFAULT 'operator_visible',
     origin_type TEXT,
     origin_stage TEXT,
     service TEXT,
@@ -1043,15 +1044,34 @@ export const POSTGRES_MODEL_USAGE_MIGRATIONS = [
     metadata_json JSONB NOT NULL DEFAULT '{}'::jsonb,
     CHECK (status IN ('success', 'failure')),
     CHECK (call_kind IN ('chat', 'completion', 'embedding', 'image_create', 'image_edit')),
+    CHECK (telemetry_visibility IN ('operator_visible', 'companion_private')),
     CHECK (cost_source IN ('provider', 'estimate', 'none')),
     UNIQUE (logical_call_id, attempt)
   );
+  `,
+  `ALTER TABLE model_usage_events ADD COLUMN IF NOT EXISTS telemetry_visibility TEXT NOT NULL DEFAULT 'operator_visible';`,
+  `
+  DO $$
+  BEGIN
+    IF NOT EXISTS (
+      SELECT 1
+      FROM pg_constraint
+      WHERE conname = 'model_usage_events_telemetry_visibility_check'
+        AND conrelid = 'model_usage_events'::regclass
+    ) THEN
+      ALTER TABLE model_usage_events
+        ADD CONSTRAINT model_usage_events_telemetry_visibility_check
+        CHECK (telemetry_visibility IN ('operator_visible', 'companion_private'));
+    END IF;
+  END
+  $$;
   `,
   `CREATE INDEX IF NOT EXISTS idx_model_usage_events_recorded_at ON model_usage_events(recorded_at_ms DESC, id DESC);`,
   `CREATE INDEX IF NOT EXISTS idx_model_usage_events_day ON model_usage_events(day_key, recorded_at_ms DESC);`,
   `CREATE INDEX IF NOT EXISTS idx_model_usage_events_month ON model_usage_events(month_key, recorded_at_ms DESC);`,
   `CREATE INDEX IF NOT EXISTS idx_model_usage_events_model ON model_usage_events(provider, model, recorded_at_ms DESC);`,
   `CREATE INDEX IF NOT EXISTS idx_model_usage_events_purpose ON model_usage_events(call_kind, purpose, recorded_at_ms DESC);`,
+  `CREATE INDEX IF NOT EXISTS idx_model_usage_events_visibility ON model_usage_events(telemetry_visibility, recorded_at_ms DESC);`,
   `CREATE INDEX IF NOT EXISTS idx_model_usage_events_tool ON model_usage_events(tool_name, recorded_at_ms DESC) WHERE tool_name IS NOT NULL;`,
   `CREATE INDEX IF NOT EXISTS idx_model_usage_events_request ON model_usage_events(request_id, turn_id, tool_call_id);`,
   `CREATE INDEX IF NOT EXISTS idx_model_usage_events_charge ON model_usage_events(charge_root_run_id, charge_run_id, recorded_at_ms DESC) WHERE charge_root_run_id IS NOT NULL;`,

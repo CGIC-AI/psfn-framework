@@ -42,6 +42,7 @@ const llmDescriptors: Array<AuditedMethodDescriptor<any, unknown>> = [
         toolName: params.toolName,
         toolCallId: params.toolCallId,
         purpose,
+        telemetryVisibility: params.telemetryVisibility,
       });
       const captured = await withGatewayLLMCostCapture(
         async () => await runtime.llmProvider.stream(
@@ -89,6 +90,7 @@ const llmDescriptors: Array<AuditedMethodDescriptor<any, unknown>> = [
         toolName: p.toolName,
         toolCallId: p.toolCallId,
         purpose: normalizePurpose(p.purpose) ?? (resolveShardChannelRouting(p.channelId) ? 'shard.execution' : 'chat'),
+        telemetryVisibility: p.telemetryVisibility,
       })),
     }),
   },
@@ -110,6 +112,7 @@ const llmDescriptors: Array<AuditedMethodDescriptor<any, unknown>> = [
         toolName: params.toolName,
         toolCallId: params.toolCallId,
         purpose: params.purpose,
+        telemetryVisibility: params.telemetryVisibility,
       });
       const captured = await withGatewayLLMCostCapture(
         async () => await runtime.llmProvider.complete(
@@ -154,6 +157,7 @@ const llmDescriptors: Array<AuditedMethodDescriptor<any, unknown>> = [
         toolName: p.toolName,
         toolCallId: p.toolCallId,
         purpose: p.purpose,
+        telemetryVisibility: p.telemetryVisibility,
       })),
     }),
   },
@@ -217,6 +221,7 @@ function buildCorrelation(params: {
   toolName?: string;
   toolCallId?: string;
   purpose: string;
+  telemetryVisibility?: CorrelationMetadata['telemetryVisibility'];
 }): CorrelationMetadata {
   return resolveCorrelationMetadata(
     {
@@ -229,6 +234,7 @@ function buildCorrelation(params: {
       ...(params.toolName ? { toolName: params.toolName } : {}),
       ...(params.toolCallId ? { toolCallId: params.toolCallId } : {}),
       purpose: params.purpose,
+      ...(params.telemetryVisibility ? { telemetryVisibility: params.telemetryVisibility } : {}),
     },
     undefined,
     params.purpose === 'chat' ? 'chat' : 'background',

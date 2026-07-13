@@ -1,5 +1,6 @@
 import type { LLMProviderPort } from '../../core/agent/contracts.js';
 import type { LLMContext } from '../../shared/contracts/runtime.js';
+import { COMPANION_PRIVATE_BACKGROUND_TELEMETRY } from '../../shared/telemetry/model-usage.js';
 import { isRecord } from '../../shared/utils/types.js';
 import type { IntrospectionAuditConfig } from '../../system/config/scheduler-config.js';
 import type {
@@ -72,12 +73,7 @@ export function createLLMIntrospectionAuditor(
         'background',
         {
           modelHint: { maxTokens: config.estimatorMaxTokens, temperature: 0 },
-          correlation: {
-            turnId: candidate.turnId,
-            channelId: candidate.channelId,
-            purpose: 'introspection.audit.stable_estimate',
-            callType: 'background',
-          },
+          correlation: COMPANION_PRIVATE_BACKGROUND_TELEMETRY,
         },
       );
       const parsed = parseJsonObject(response.content, 'stable reply estimator');
@@ -103,12 +99,7 @@ export function createLLMIntrospectionAuditor(
         'background',
         {
           modelHint: { maxTokens: config.comparisonMaxTokens, temperature: 0 },
-          correlation: {
-            turnId: candidate.turnId,
-            channelId: candidate.channelId,
-            purpose: 'introspection.audit.comparison',
-            callType: 'background',
-          },
+          correlation: COMPANION_PRIVATE_BACKGROUND_TELEMETRY,
         },
       );
       const parsed = parseJsonObject(response.content, 'divergence comparator');
@@ -156,10 +147,7 @@ export function createLLMCompanionLandmarkReflector(
         'background',
         {
           modelHint: { maxTokens: config.reflectionMaxTokens },
-          correlation: {
-            purpose: 'introspection.companion_reflection',
-            callType: 'background',
-          },
+          correlation: COMPANION_PRIVATE_BACKGROUND_TELEMETRY,
         },
       );
       const parsed = parseJsonObject(response.content, 'companion landmark reflection');

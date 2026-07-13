@@ -209,6 +209,9 @@ export type ObservabilityCallType =
   | 'background'
   | 'scheduled';
 
+export type TelemetryVisibility = 'operator_visible' | 'companion_private';
+export const COMPANION_PRIVATE_BACKGROUND_PURPOSE = 'companion_private.background';
+
 export interface LLMRequestMetadata {
   turnId?: string;
   requestId?: string;
@@ -217,6 +220,11 @@ export interface LLMRequestMetadata {
   toolCallId?: string;
   originType?: ObservabilityCallType;
   originStage?: string;
+  /**
+   * Controls whether per-call telemetry may appear on operator surfaces.
+   * Companion-private work still contributes to aggregate cost accounting.
+   */
+  telemetryVisibility?: TelemetryVisibility;
 }
 
 /**

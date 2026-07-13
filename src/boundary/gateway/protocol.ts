@@ -11,6 +11,7 @@ import type {
   ModelThinkingEffort,
   ObservabilityCallType,
   SubstrateMessage,
+  TelemetryVisibility,
   ToolSchema,
 } from '../../shared/contracts/runtime.js';
 import type {
@@ -69,6 +70,7 @@ export interface GatewayCorrelationParams {
   toolName?: string;
   toolCallId?: string;
   purpose?: string;
+  telemetryVisibility?: TelemetryVisibility;
 }
 
 export interface LLMChatParams extends GatewayCorrelationParams {

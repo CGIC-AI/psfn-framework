@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import type { LLMProviderPort } from '../../core/agent/contracts.js';
 import { appendJsonLine } from '../../persistence/jsonl.js';
+import { COMPANION_PRIVATE_BACKGROUND_TELEMETRY } from '../../shared/telemetry/model-usage.js';
 import { isRecord } from '../../shared/utils/types.js';
 import type { IntrospectionDivergenceType } from './contracts.js';
 
@@ -166,10 +167,7 @@ export function createLLMValuesConsistencyEvaluator(options: {
         }],
       }, 'background', {
         modelHint: { maxTokens: options.maxTokens },
-        correlation: {
-          purpose: 'introspection.values_consistency',
-          callType: 'background',
-        },
+        correlation: COMPANION_PRIVATE_BACKGROUND_TELEMETRY,
       });
       let parsed: unknown;
       try {

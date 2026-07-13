@@ -349,6 +349,7 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
     const purpose = context.correlation?.purpose
       ?? context.correlation?.originStage
       ?? 'chat';
+    const companionPrivate = context.correlation?.telemetryVisibility === 'companion_private';
     const modelHint = normalizeGatewayModelHint(context.modelHint);
     const hintedModel = normalizeCorrelationText(modelHint?.model);
     const hintedProvider = normalizeCorrelationText(modelHint?.provider);
@@ -381,14 +382,15 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
         ...(modelHint?.frequencyPenalty !== undefined ? { frequencyPenalty: modelHint.frequencyPenalty } : {}),
         ...(modelHint?.repetitionPenalty !== undefined ? { repetitionPenalty: modelHint.repetitionPenalty } : {}),
         requestId,
-        ...(context.correlation?.turnId ? { turnId: context.correlation.turnId } : {}),
-        ...(context.correlation?.channelId ? { channelId: context.correlation.channelId } : {}),
-        ...(context.correlation?.toolName ? { toolName: context.correlation.toolName } : {}),
-        ...(context.correlation?.toolCallId ? { toolCallId: context.correlation.toolCallId } : {}),
+        ...(!companionPrivate && context.correlation?.turnId ? { turnId: context.correlation.turnId } : {}),
+        ...(!companionPrivate && context.correlation?.channelId ? { channelId: context.correlation.channelId } : {}),
+        ...(!companionPrivate && context.correlation?.toolName ? { toolName: context.correlation.toolName } : {}),
+        ...(!companionPrivate && context.correlation?.toolCallId ? { toolCallId: context.correlation.toolCallId } : {}),
         callType,
         ...(context.correlation?.originType ? { originType: context.correlation.originType } : {}),
         ...(context.correlation?.originStage ? { originStage: context.correlation.originStage } : {}),
         purpose,
+        ...(companionPrivate ? { telemetryVisibility: 'companion_private' as const } : {}),
         ...(context.tools?.length ? { tools: context.tools } : {}),
       }) as LLMChatResult;
 
@@ -428,6 +430,7 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
       ...(context.correlation ?? {}),
       ...(options.correlation ?? {}),
     };
+    const companionPrivate = correlation.telemetryVisibility === 'companion_private';
     const modelHint = mergeGatewayModelHints(context.modelHint, options.modelHint);
     const hintedModel = normalizeCorrelationText(modelHint?.model);
     const hintedProvider = normalizeCorrelationText(modelHint?.provider);
@@ -455,14 +458,15 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
         ...(modelHint?.topK !== undefined ? { topK: modelHint.topK } : {}),
         ...(modelHint?.frequencyPenalty !== undefined ? { frequencyPenalty: modelHint.frequencyPenalty } : {}),
         ...(modelHint?.repetitionPenalty !== undefined ? { repetitionPenalty: modelHint.repetitionPenalty } : {}),
-        ...(correlation.turnId ? { turnId: correlation.turnId } : {}),
-        ...(correlation.requestId ? { requestId: correlation.requestId } : {}),
-        ...(correlation.channelId ? { channelId: correlation.channelId } : {}),
-        ...(correlation.toolName ? { toolName: correlation.toolName } : {}),
-        ...(correlation.toolCallId ? { toolCallId: correlation.toolCallId } : {}),
+        ...(!companionPrivate && correlation.turnId ? { turnId: correlation.turnId } : {}),
+        ...(!companionPrivate && correlation.requestId ? { requestId: correlation.requestId } : {}),
+        ...(!companionPrivate && correlation.channelId ? { channelId: correlation.channelId } : {}),
+        ...(!companionPrivate && correlation.toolName ? { toolName: correlation.toolName } : {}),
+        ...(!companionPrivate && correlation.toolCallId ? { toolCallId: correlation.toolCallId } : {}),
         ...(correlation.callType ? { callType: correlation.callType } : {}),
         ...(correlation.originType ? { originType: correlation.originType } : {}),
         ...(correlation.originStage ? { originStage: correlation.originStage } : {}),
+        ...(companionPrivate ? { telemetryVisibility: 'companion_private' as const } : {}),
       },
       options.signal,
     );

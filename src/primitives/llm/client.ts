@@ -626,13 +626,16 @@ export class LLMClient {
     attempt: number,
   ): string {
     this.usageCallCounter += 1;
+    const requestCorrelation = correlation?.telemetryVisibility === 'companion_private'
+      ? 'companion-private'
+      : (correlation?.requestId ?? 'unknown');
     return [
       'llm',
       process.pid,
       this.usageCallCounter,
       callKind,
       purpose,
-      correlation?.requestId ?? 'unknown',
+      requestCorrelation,
       correlation?.toolCallId ?? 'none',
       candidate.provider,
       candidate.model,
@@ -658,6 +661,7 @@ export class LLMClient {
       metadata?: Record<string, unknown>;
     },
   ): void {
+    const companionPrivate = correlation?.telemetryVisibility === 'companion_private';
     const service = this.resolveBudgetService(purpose, correlation);
     const process = this.resolveBudgetProcess(purpose, correlation);
     const budgetRecord = this.budgetController.recordUsage({
@@ -702,15 +706,16 @@ export class LLMClient {
       callKind,
       callType: correlation?.callType ?? (callKind === 'chat' ? 'chat' : 'background'),
       purpose,
+      telemetryVisibility: companionPrivate ? 'companion_private' : 'operator_visible',
       ...(correlation?.originType ? { originType: correlation.originType } : {}),
       ...(correlation?.originStage ? { originStage: correlation.originStage } : {}),
       service,
       process,
-      ...(correlation?.turnId ? { turnId: correlation.turnId } : {}),
-      ...(correlation?.requestId ? { requestId: correlation.requestId } : {}),
-      ...(correlation?.channelId ? { channelId: correlation.channelId } : {}),
-      ...(correlation?.toolName ? { toolName: correlation.toolName } : {}),
-      ...(correlation?.toolCallId ? { toolCallId: correlation.toolCallId } : {}),
+      ...(!companionPrivate && correlation?.turnId ? { turnId: correlation.turnId } : {}),
+      ...(!companionPrivate && correlation?.requestId ? { requestId: correlation.requestId } : {}),
+      ...(!companionPrivate && correlation?.channelId ? { channelId: correlation.channelId } : {}),
+      ...(!companionPrivate && correlation?.toolName ? { toolName: correlation.toolName } : {}),
+      ...(!companionPrivate && correlation?.toolCallId ? { toolCallId: correlation.toolCallId } : {}),
       ...(chargeSnapshot
         ? {
             chargeLane: chargeSnapshot.lane,

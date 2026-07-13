@@ -27,19 +27,44 @@ export class AdminModelUsageDataService implements AdminModelUsageService {
   ) {}
 
   async getModelUsageData(query: ModelUsageQuery = {}): Promise<ModelUsageData> {
-    const data = await this.store.getUsageData(query);
-    if (!this.modelDiscovery) return data;
+    const aggregateQuery = { ...query };
+    delete aggregateQuery.telemetryVisibility;
+    const [aggregateData, operatorData] = await Promise.all([
+      this.store.getUsageData(aggregateQuery),
+      this.store.getUsageData({ ...aggregateQuery, telemetryVisibility: 'operator_visible' }),
+    ]);
+    if (!this.modelDiscovery) {
+      return combineAggregateTotalsWithOperatorDetails(aggregateData, operatorData);
+    }
     try {
       const pricingLookup = buildPricingLookup(await this.modelDiscovery.getAvailableModels());
-      if (pricingLookup.size === 0) return data;
-      return hydrateMissingModelUsageCosts(data, pricingLookup);
+      if (pricingLookup.size === 0) {
+        return combineAggregateTotalsWithOperatorDetails(aggregateData, operatorData);
+      }
+      return combineAggregateTotalsWithOperatorDetails(
+        hydrateMissingModelUsageCosts(aggregateData, pricingLookup),
+        hydrateMissingModelUsageCosts(operatorData, pricingLookup),
+      );
     } catch (error) {
       log.warn('Failed to hydrate model usage costs from discovery pricing', {
         error: error instanceof Error ? error.message : String(error),
       });
-      return data;
+      return combineAggregateTotalsWithOperatorDetails(aggregateData, operatorData);
     }
   }
+}
+
+function combineAggregateTotalsWithOperatorDetails(
+  aggregateData: ModelUsageData,
+  operatorData: ModelUsageData,
+): ModelUsageData {
+  return {
+    ...operatorData,
+    query: aggregateData.query,
+    totals: aggregateData.totals,
+    recentEvents: operatorData.recentEvents.filter(event => event.telemetryVisibility !== 'companion_private'),
+    expensiveEvents: operatorData.expensiveEvents.filter(event => event.telemetryVisibility !== 'companion_private'),
+  };
 }
 
 function normalizeLookupKey(value: unknown): string | undefined {

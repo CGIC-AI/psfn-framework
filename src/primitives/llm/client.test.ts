@@ -41,6 +41,7 @@ import {
   CircuitOpenError,
   SlidingWindowCircuitBreaker,
 } from '../../shared/resilience/circuit-breaker.js';
+import { COMPANION_PRIVATE_BACKGROUND_TELEMETRY } from '../../shared/telemetry/model-usage.js';
 
 function createDeferred<T>() {
   let resolve!: (value: T | PromiseLike<T>) => void;
@@ -2225,6 +2226,50 @@ describe('LLMClient model budget gates and usage metering', () => {
     mocks.getProviders.mockReturnValue(['openrouter']);
     mocks.getModels.mockReturnValue([]);
     mocks.getEnvApiKey.mockReturnValue(undefined);
+  });
+
+  it('cost-accounts companion-private calls without persisting source correlation', async () => {
+    const usageRecorder = { recordUsageEvent: vi.fn(async () => undefined) };
+    const client = new LLMClient(makeConfig(), {
+      litellmBaseUrl: 'http://litellm.test/v1',
+      usageRecorder,
+    });
+    mocks.completeSimple.mockResolvedValue({
+      content: [{ type: 'text', text: 'private result' }],
+      model: 'deepseek/deepseek-v3.2',
+      usage: { input: 25, output: 5, cost: 0.123 },
+      stopReason: 'stop',
+    });
+
+    await client.complete(
+      {
+        systemPrompt: 'System',
+        messages: [{ role: 'user', content: 'Private background work' }],
+      },
+      'background',
+      {
+        disableRetry: true,
+        correlation: {
+          ...COMPANION_PRIVATE_BACKGROUND_TELEMETRY,
+          turnId: 'source-turn',
+          requestId: 'source-request',
+          channelId: 'source-channel',
+        },
+      },
+    );
+
+    expect(usageRecorder.recordUsageEvent).toHaveBeenCalledTimes(1);
+    const event = usageRecorder.recordUsageEvent.mock.calls[0]?.[0];
+    expect(event).toMatchObject({
+      telemetryVisibility: 'companion_private',
+      inputTokens: 25,
+      outputTokens: 5,
+      providerCostUsd: 0.123,
+    });
+    expect(event?.logicalCallId).not.toContain('source-request');
+    expect(event).not.toHaveProperty('turnId');
+    expect(event).not.toHaveProperty('requestId');
+    expect(event).not.toHaveProperty('channelId');
   });
 
   it('keeps pi-ai 0.73 streaming usage buckets stable in provider cost telemetry', async () => {

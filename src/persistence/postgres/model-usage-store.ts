@@ -41,6 +41,7 @@ interface ModelUsageEventRow {
   call_kind: ModelUsageCallKind;
   call_type: ModelUsageEvent['callType'];
   purpose: string;
+  telemetry_visibility: NonNullable<ModelUsageEvent['telemetryVisibility']>;
   origin_type: ModelUsageEvent['originType'] | null;
   origin_stage: string | null;
   service: string | null;
@@ -113,6 +114,14 @@ function normalizeText(value: string | undefined, fallback: string): string {
 function optionalText(value: string | undefined): string | undefined {
   const normalized = value?.trim();
   return normalized && normalized.length > 0 ? normalized : undefined;
+}
+
+function normalizeTelemetryVisibility(
+  value: ModelUsageEventInput['telemetryVisibility'],
+): NonNullable<ModelUsageEvent['telemetryVisibility']> {
+  if (value === undefined || value === 'operator_visible') return 'operator_visible';
+  if (value === 'companion_private') return 'companion_private';
+  throw new Error(`Unsupported model usage telemetry visibility: ${String(value)}`);
 }
 
 function asNumber(value: unknown): number {
@@ -203,6 +212,8 @@ function normalizeEvent(input: ModelUsageEventInput): ModelUsageEvent {
   const estimatedCostUsd = nonNegativeCost(input.estimatedCostUsd) ?? 0;
   const logicalCallId = normalizeText(input.logicalCallId, `usage-${recordedAtMs}`);
   const attempt = nonNegativeInteger(input.attempt);
+  const telemetryVisibility = normalizeTelemetryVisibility(input.telemetryVisibility);
+  const operatorVisible = telemetryVisibility === 'operator_visible';
 
   return {
     id: normalizeText(input.id, `${logicalCallId}:${attempt}`),
@@ -219,15 +230,16 @@ function normalizeEvent(input: ModelUsageEventInput): ModelUsageEvent {
     callKind: input.callKind,
     callType: input.callType,
     purpose: normalizeText(input.purpose, 'unknown'),
+    telemetryVisibility,
     ...(input.originType ? { originType: input.originType } : {}),
     ...(optionalText(input.originStage) ? { originStage: optionalText(input.originStage) } : {}),
     ...(optionalText(input.service) ? { service: optionalText(input.service) } : {}),
     ...(optionalText(input.process) ? { process: optionalText(input.process) } : {}),
-    ...(optionalText(input.turnId) ? { turnId: optionalText(input.turnId) } : {}),
-    ...(optionalText(input.requestId) ? { requestId: optionalText(input.requestId) } : {}),
-    ...(optionalText(input.channelId) ? { channelId: optionalText(input.channelId) } : {}),
-    ...(optionalText(input.toolName) ? { toolName: optionalText(input.toolName) } : {}),
-    ...(optionalText(input.toolCallId) ? { toolCallId: optionalText(input.toolCallId) } : {}),
+    ...(operatorVisible && optionalText(input.turnId) ? { turnId: optionalText(input.turnId) } : {}),
+    ...(operatorVisible && optionalText(input.requestId) ? { requestId: optionalText(input.requestId) } : {}),
+    ...(operatorVisible && optionalText(input.channelId) ? { channelId: optionalText(input.channelId) } : {}),
+    ...(operatorVisible && optionalText(input.toolName) ? { toolName: optionalText(input.toolName) } : {}),
+    ...(operatorVisible && optionalText(input.toolCallId) ? { toolCallId: optionalText(input.toolCallId) } : {}),
     ...(input.chargeLane ? { chargeLane: input.chargeLane } : {}),
     ...(input.chargeSurface ? { chargeSurface: input.chargeSurface } : {}),
     ...(optionalText(input.chargeRunId) ? { chargeRunId: optionalText(input.chargeRunId) } : {}),
@@ -267,6 +279,7 @@ function mapEventRow(row: ModelUsageEventRow): ModelUsageEvent {
     callKind: row.call_kind,
     callType: row.call_type,
     purpose: row.purpose,
+    telemetryVisibility: normalizeTelemetryVisibility(row.telemetry_visibility),
     provider: row.provider,
     model: row.model,
     inputTokens: nonNegativeInteger(row.input_tokens),
@@ -366,7 +379,7 @@ export class PostgresModelUsageStore implements ModelUsageRecorder, ModelUsageQu
       INSERT INTO model_usage_events (
         id, logical_call_id, attempt, recorded_at_ms, started_at_ms, completed_at_ms,
         duration_ms, ttft_ms, day_key, month_key, status, call_kind, call_type,
-        purpose, origin_type, origin_stage, service, process, turn_id, request_id,
+        purpose, telemetry_visibility, origin_type, origin_stage, service, process, turn_id, request_id,
         channel_id, tool_name, tool_call_id, charge_lane, charge_surface,
         charge_run_id, charge_root_run_id, charge_parent_run_id, provider, model,
         slot_key, requested_provider, requested_model, input_tokens, output_tokens,
@@ -377,13 +390,13 @@ export class PostgresModelUsageStore implements ModelUsageRecorder, ModelUsageQu
       VALUES (
         $1, $2, $3, $4, $5, $6,
         $7, $8, $9, $10, $11, $12, $13,
-        $14, $15, $16, $17, $18, $19, $20,
-        $21, $22, $23, $24, $25,
-        $26, $27, $28, $29, $30,
-        $31, $32, $33, $34, $35,
-        $36, $37, $38, $39,
-        $40, $41, $42, $43, $44,
-        $45, $46::jsonb
+        $14, $15, $16, $17, $18, $19, $20, $21,
+        $22, $23, $24, $25, $26,
+        $27, $28, $29, $30, $31,
+        $32, $33, $34, $35, $36,
+        $37, $38, $39, $40,
+        $41, $42, $43, $44, $45,
+        $46, $47::jsonb
       )
       ON CONFLICT (logical_call_id, attempt) DO NOTHING
     `, [
@@ -401,6 +414,7 @@ export class PostgresModelUsageStore implements ModelUsageRecorder, ModelUsageQu
       event.callKind,
       event.callType,
       event.purpose,
+      event.telemetryVisibility,
       event.originType ?? null,
       event.originStage ?? null,
       event.service ?? null,
@@ -524,6 +538,7 @@ function normalizeQuery(query: ModelUsageQuery): ModelUsageQuery {
     ...(optionalText(query.toolName) ? { toolName: optionalText(query.toolName) } : {}),
     ...(query.callKind ? { callKind: query.callKind } : {}),
     ...(optionalText(query.runId) ? { runId: optionalText(query.runId) } : {}),
+    ...(query.telemetryVisibility ? { telemetryVisibility: query.telemetryVisibility } : {}),
   };
 }
 
@@ -540,6 +555,7 @@ function buildWhere(query: ModelUsageQuery): SqlWhere {
   if (query.model) push('model =', query.model);
   if (query.toolName) push('tool_name =', query.toolName);
   if (query.callKind) push('call_kind =', query.callKind);
+  if (query.telemetryVisibility) push('telemetry_visibility =', query.telemetryVisibility);
   if (query.runId) {
     values.push(query.runId);
     const index = values.length;

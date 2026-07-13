@@ -1024,6 +1024,7 @@ export function createContactTool(
       'Unified contact surface for browsing, searching, lookup, notes, trust, identity linking, and channel privacy. '
       + 'Use action=list to browse contactId values, action=search with query to find contacts by name/handle/channel/notes, '
       + 'then action=lookup with exact contactId for details. action=note and action=set_trust also require contactId. '
+      + 'Exact lookup of a canonical machine-intelligence contact includes coarse peer availability when the gateway mapping is valid. '
       + 'set_trust can only apply low-tier trust changes autonomously; to promote a contact to trusted, use '
       + 'action=propose_trust with contactId and rationale — this queues a proposal for operator approval in Garden and '
       + 'never changes trust directly. '

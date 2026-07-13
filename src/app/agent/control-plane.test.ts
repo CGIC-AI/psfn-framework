@@ -24,6 +24,9 @@ describe('agent control plane', () => {
     expect(controlPlaneSource).toContain('createSystemTool(');
     expect(controlPlaneSource).toContain('createNotifyDispatcher(');
     expect(controlPlaneSource).toContain('createNotifyTool(');
+    expect(controlPlaneSource).toContain('registerDeferredCompanionOutreachRuntime');
+    expect(controlPlaneSource).toContain("capabilityRuntime.has('external.companion')");
+    expect(controlPlaneSource).toContain("tool.toolName === 'notify'");
     expect(controlPlaneSource).toContain('createGatewayDiscordNotifySender(');
     expect(controlPlaneSource).toContain('runShutdownSequence(');
     expect(controlPlaneSource).toContain('resolveRuntimeCommandInvocation');

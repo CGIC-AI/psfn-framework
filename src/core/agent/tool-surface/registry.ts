@@ -300,7 +300,7 @@ export const CANONICAL_FIRST_PARTY_TOOL_SURFACES: readonly CanonicalToolSurfaceE
     name: 'contact',
     domain: 'contacts',
     exposure: 'core',
-    description: 'Canonical contact, trust, note, identity-link, channel-privacy, and blocking surface.',
+    description: 'Canonical contact, trust, identity-link, blocking, and known-peer coarse-availability surface.',
     actions: ['list', 'search', 'lookup', 'note', 'set_trust', 'propose_trust', 'link_identity', 'set_channel_privacy', 'set_machine_intelligence', 'block', 'unblock'],
     capabilityMetadata: { kind: 'action_aware', source: CAPABILITIES_REQUIREMENTS },
     retiredAliases: [
@@ -337,7 +337,7 @@ export const CANONICAL_FIRST_PARTY_TOOL_SURFACES: readonly CanonicalToolSurfaceE
     name: 'self_status',
     domain: 'system',
     exposure: 'core',
-    description: 'Canonical companion-facing safe runtime self-status surface.',
+    description: 'Canonical companion-facing safe runtime status and coarse availability-control surface.',
     actions: ['snapshot', 'diagnose', 'logs', 'conformance', 'availability_read', 'availability_publish', 'availability_clear', 'availability_list_peers'],
     capabilityMetadata: { kind: 'action_aware', source: CAPABILITIES_REQUIREMENTS },
     retiredAliases: [],
@@ -423,7 +423,7 @@ export const CANONICAL_FIRST_PARTY_TOOL_SURFACES: readonly CanonicalToolSurfaceE
     name: 'notify',
     domain: 'notification',
     exposure: 'extended',
-    description: 'Canonical notification surface.',
+    description: 'Canonical notification and governed companion-outreach surface.',
     actions: ['brief', 'send', 'approval_request'],
     capabilityMetadata: { kind: 'action_aware', source: CAPABILITIES_REQUIREMENTS },
     retiredAliases: [

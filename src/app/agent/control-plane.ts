@@ -99,6 +99,12 @@ export function buildAgentControlPlane(
         agentLoop,
         postTurnActions,
         runtime: icpAutonomyRuntime,
+        isExecutionAuthorized: () => (
+          capabilityRuntime.has('external.companion')
+          && agentLoop.getAdaptiveToolRuntimeState().activeTools.some(
+            tool => tool.toolName === 'notify',
+          )
+        ),
       })
     : () => undefined;
 

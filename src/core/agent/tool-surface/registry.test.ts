@@ -80,6 +80,12 @@ describe('first-party tool surface registry', () => {
     expect(missing, `canonical tools missing capability policy: ${missing.join(', ')}`).toEqual([]);
   });
 
+  it('keeps companion-autonomy registry descriptions free of sensitive control-plane details', () => {
+    for (const toolName of ['contact', 'self_status', 'notify']) {
+      expect(getCanonicalToolSurface(toolName)?.description).not.toMatch(/\b(?:permit|private|fleet)\b/iu);
+    }
+  });
+
   it('maps every retired alias to a canonical surface without name collisions', () => {
     const retiredAliases = listRetiredToolAliases();
     const retiredNames = retiredAliases.map(entry => entry.alias);

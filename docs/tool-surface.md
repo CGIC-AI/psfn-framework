@@ -186,7 +186,7 @@ This keeps transcript lookup, gentle checkpointing, wake/return recaps, and focu
 
 The canonical model-facing `contact` surface collapses relationship operations and canonical contact continuity into one tool.
 
-- Actions: `list`, `lookup`, `note`, `set_trust`, `propose_trust`, `link_identity`, `set_channel_privacy`, `set_machine_intelligence`
+- Actions: `list`, `search`, `lookup`, `note`, `set_trust`, `propose_trust`, `link_identity`, `set_channel_privacy`, `set_machine_intelligence`, `block`, `unblock`
 - Retired aliases that must not be model-facing:
   `contact_list` -> `list`
   `contact_lookup` -> `lookup`
@@ -197,18 +197,57 @@ The canonical model-facing `contact` surface collapses relationship operations a
 
 This keeps contact lookup, typed notes, trust drift handling, cross-channel identity linking, and per-channel privacy on one semantic relationship surface instead of scattering them across micro-tools. Trust/disclosure invariants and typed contact semantics remain enforced by the underlying contact store.
 
+For a known machine-intelligence contact, `lookup` may also show the exact
+canonical `companion` identity and coarse gateway availability. The mapping is
+exposed only when the contact is marked as machine intelligence, has exactly
+one valid companion identity, and that identity reverse-resolves to the same
+canonical contact. This is an availability hint, not full initiation
+eligibility: block, bilateral trust, provenance, channel, fatigue, charge, and
+permit gates remain authoritative in the gateway broker. The tool never accepts
+an arbitrary companion UUID as a lookup or outreach target.
+
 `set_trust` can only apply low-tier trust changes autonomously; high-tier promotion stays blocked (policy/store guards). To promote a contact to `trusted`, the agent uses `propose_trust` (requires `contactId` and `rationale`), which enqueues a proposal onto the shared confirmation queue for operator approval in the Garden Confirmations page. The write happens only on approval, under a manual-authorized `operator:` actor, and is audited like any other trust mutation. `primary` can never be proposed — it remains owner-only.
 
 ## Canonical Notify Surface
 
-The canonical model-facing `notify` surface collapses operator briefs, lightweight outbound delivery, and approval escalation into one tool.
+The canonical model-facing `notify` surface collapses operator briefs, lightweight outbound delivery, approval escalation, and permit-governed companion outreach into one tool.
 
 - Actions: `brief`, `send`, `approval_request`
 - `brief` is the direct replacement for legacy `notify_operator`
-- `send` requires an explicit delivery channel and explicit external target; it does not infer the current channel
+- external `send` requires an explicit delivery channel and explicit external target; it does not infer the current channel
+- companion `send` requires exactly `target_kind=companion`, an exact canonical `contact_id` obtained from `contact`, and a broker-issued `initiation_permit`
 - `approval_request` keeps operator-review details explicit instead of hiding them behind implicit side effects
 
-The surface keeps lightweight visible tool output separate from the heavier internal delivery work. Briefs remain fail-closed for scheduled/internal contexts, outbound sends require explicit delivery targets, and approval escalation stays explicit about what is awaiting review.
+The companion form never accepts `message`, `delivery_channel`, or
+`delivery_target`. It queues a durable post-turn handoff; the ordinary target
+channel turn loads its own context, authors the peer-visible content, and lets
+the gateway atomically consume the exact permit. ICP-correlated inbound turns
+cannot use this form to recursively open another channel. Ordinary same-channel
+replies do not use `notify` and remain automatic. Companion egress requires the
+dedicated `external.companion` capability (granted by default only to the
+autonomous tier), plus the active tool overlay and all broker policy checks.
+Permit values and private candidate reasoning are never returned in tool output
+or audit summaries.
+
+The surface keeps lightweight visible tool output separate from the heavier internal delivery work. Briefs remain fail-closed for scheduled/internal contexts, external outbound sends require explicit delivery targets, and approval escalation stays explicit about what is awaiting review.
+
+## Canonical Self-Status Surface
+
+`self_status` remains the companion-facing safe runtime and coarse-presence
+surface. Runtime lifecycle and settings stay on `system`.
+
+- Runtime actions: `snapshot`, `diagnose`, `logs`, `conformance`
+- Availability actions: `availability_read`, `availability_publish`, `availability_clear`, `availability_list_peers`
+- `availability_read` explains the effective lease source and whether a live operator override prevents companion mutation
+- `availability_publish` writes one bounded, expiring, revision-checked lease for this authenticated companion
+- `availability_clear` requires the current revision and fails closed against stale revisions or authoritative overrides
+- `availability_list_peers` reads only canonical machine-intelligence contacts already present in the local contact store; it never enumerates the gateway fleet
+
+Peer listings contain only contact identity plus coarse connection, eligibility,
+state, source, expiry, revision, and typed reason codes. They omit private
+candidate text, provenance internals, permits, conversation content, and raw
+fleet discovery. Listing is blocked during ICP-correlated turns. Read/list
+actions require `internal.read`; publish/clear require `external.companion`.
 
 ## Canonical Skill Surface
 

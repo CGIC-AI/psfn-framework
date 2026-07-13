@@ -142,6 +142,7 @@ export function registerDeferredCompanionOutreachRuntime(input: {
   };
   postTurnActions: PostTurnActionRuntime;
   runtime: AgentFacingIcpAutonomyRuntime;
+  isExecutionAuthorized(): boolean;
 }): () => void {
   const unregisterInferer = input.agentLoop.registerPostTurnActionInferer?.(
     inferDeferredCompanionOutreachActions,
@@ -149,6 +150,9 @@ export function registerDeferredCompanionOutreachRuntime(input: {
   const unregisterHandler = input.postTurnActions.registerHandler(
     DEFERRED_COMPANION_OUTREACH_ACTION_KIND,
     async (action) => {
+      if (!input.isExecutionAuthorized()) {
+        throw new Error('Deferred companion outreach is no longer capability/tool-overlay authorized');
+      }
       const payload = parseDeferredPayload(action.payload);
       if (!payload) throw new Error('Deferred companion outreach payload is malformed');
       await input.runtime.executeCompanionOutreach(payload.contactId, payload.permitId);

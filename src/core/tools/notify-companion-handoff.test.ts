@@ -146,6 +146,7 @@ describe('permit-governed notify companion handoff', () => {
         }),
       } as never,
       runtime: owner,
+      isExecutionAuthorized: () => true,
     });
     await handler?.({
       id: 'action-1',
@@ -156,5 +157,27 @@ describe('permit-governed notify companion handoff', () => {
     dispose();
     expect(unregisterHandler).toHaveBeenCalledOnce();
     expect(unregisterInferer).toHaveBeenCalledOnce();
+  });
+
+  it('rechecks capability and tool-overlay authorization before deferred execution', async () => {
+    const owner = runtime();
+    let handler: PostTurnActionHandler | undefined;
+    registerDeferredCompanionOutreachRuntime({
+      agentLoop: {},
+      postTurnActions: {
+        registerHandler: vi.fn((_kind, callback) => {
+          handler = callback;
+          return () => undefined;
+        }),
+      } as never,
+      runtime: owner,
+      isExecutionAuthorized: () => false,
+    });
+    await expect(handler?.({
+      id: 'action-disabled',
+      kind: DEFERRED_COMPANION_OUTREACH_ACTION_KIND,
+      payload: { contactId: 'peer-contact-b', permitId: PERMIT_ID },
+    } as InferredPostTurnAction)).rejects.toThrow(/no longer capability\/tool-overlay authorized/i);
+    expect(owner.executeCompanionOutreach).not.toHaveBeenCalled();
   });
 });

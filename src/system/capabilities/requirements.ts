@@ -41,7 +41,7 @@ const GIT_READ_WRITE = ['git.read', 'git.write'] as const;
 const ISSUE_REQUIREMENTS = ['issue.read', 'issue.write', 'issue.close'] as const;
 const LIFECYCLE_REQUIREMENTS = ['internal.read', 'lifecycle.restart', 'lifecycle.rebuild'] as const;
 const MEMORY_REQUIREMENTS = ['identity.read', 'memory.write', 'memory.delete'] as const;
-const NOTIFY_REQUIREMENTS = ['external.web', 'external.discord', 'external.email', 'external.companion'] as const;
+const NOTIFY_REQUIREMENTS = ['external.web', 'external.discord', 'external.email'] as const;
 
 function actionIn(action: string | null, actions: ReadonlySet<string>): boolean {
   return action !== null && actions.has(action);

@@ -122,7 +122,7 @@ describe('agent-facing ICP autonomy runtime', () => {
 
   it('prepares and executes the exact permit/contact binding through the target command', async () => {
     const { runtime, gateway, command } = setup();
-    await runtime.executeCompanionOutreach('peer-contact-b', PERMIT_ID);
+    await runtime.executeCompanionOutreach('peer-contact-b', PERMIT_ID, 'research');
     expect(gateway.companionPrepareInitiationHandoff).toHaveBeenCalledWith({
       permitId: PERMIT_ID,
       peerContactId: 'peer-contact-b',
@@ -131,6 +131,7 @@ describe('agent-facing ICP autonomy runtime', () => {
       permit: permit(),
       rootInitiationId: '22222222-2222-4222-8222-222222222222',
       peerContactId: 'peer-contact-b',
+      continuationTaskKind: 'research',
     });
   });
 
@@ -149,7 +150,7 @@ describe('agent-facing ICP autonomy runtime', () => {
   it('rechecks capability and tool-overlay authorization after broker preparation', async () => {
     const { runtime, gateway, command } = setup();
     const authorized = vi.fn().mockReturnValue(false);
-    await expect(runtime.executeCompanionOutreach('peer-contact-b', PERMIT_ID, authorized))
+    await expect(runtime.executeCompanionOutreach('peer-contact-b', PERMIT_ID, undefined, authorized))
       .rejects.toThrow(/authorization changed/i);
     expect(gateway.companionPrepareInitiationHandoff).toHaveBeenCalledOnce();
     expect(authorized).toHaveBeenCalledOnce();

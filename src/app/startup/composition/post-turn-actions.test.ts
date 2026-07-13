@@ -1006,6 +1006,7 @@ describe('wirePostTurnActionRuntime', () => {
           payload: {
             contactId: 'contact-b',
             permitId: COMPANION_OUTREACH_PERMIT_ID,
+            continuationTaskKind: 'research',
             authorization: COMPANION_OUTREACH_AUTHORIZATION,
           },
           dedupeKey: `${actionKind}:fingerprint`,
@@ -1058,6 +1059,7 @@ describe('wirePostTurnActionRuntime', () => {
       expect(executeCompanionOutreach).toHaveBeenCalledWith(
         'contact-b',
         COMPANION_OUTREACH_PERMIT_ID,
+        'research',
         expect.any(Function),
       );
       expect(readPersistedQueue(persistencePath).entries).toHaveLength(0);

@@ -16,6 +16,7 @@ import { createEventBusCostTelemetryPort } from '../../shared/telemetry/cost-tel
 import {
   getRunChargeContext,
   runWithChargeContext,
+  type DurableRunChargeProbe,
   type DurableRunChargeRecorder,
 } from '../../shared/telemetry/run-charge.js';
 import { createMemoryAppCache } from '../../shared/cache/memory-cache.js';
@@ -279,6 +280,7 @@ export class SubstrateAgent {
   private readonly fatigueBudget: FatigueBudgetPort | null;
   private readonly fatigueRegulationReservations: IcpFatigueRegulationReservationPort | null;
   private durableChargeRecorder: DurableRunChargeRecorder | null = null;
+  private durableChargeProbe: DurableRunChargeProbe | null = null;
   private currentInternalState: InternalState | null = null;
   private currentInternalStateSnapshotRef: string | null = null;
   private currentMetacognitiveFlags: MetacognitiveFlag[] = [];
@@ -1040,8 +1042,12 @@ export class SubstrateAgent {
   }
 
   /** Late-wired by the agent entrypoint before any message callback is exposed. */
-  setDurableChargeRecorder(recorder: DurableRunChargeRecorder): void {
+  setDurableChargeRecorder(
+    recorder: DurableRunChargeRecorder,
+    probe: DurableRunChargeProbe,
+  ): void {
     this.durableChargeRecorder = recorder;
+    this.durableChargeProbe = probe;
   }
 
   setSelfModelRuntimeRequired(required: boolean): void {
@@ -1126,6 +1132,7 @@ export class SubstrateAgent {
       eventBus: this.eventBus,
       costTelemetry: createEventBusCostTelemetryPort(this.eventBus),
       durableChargeRecorder: this.durableChargeRecorder,
+      durableChargeProbe: this.durableChargeProbe,
       fatigueBudget: this.fatigueBudget,
       fatigueRegulationReservations: this.fatigueRegulationReservations,
       satellitePresence: this.satellitePresencePort,

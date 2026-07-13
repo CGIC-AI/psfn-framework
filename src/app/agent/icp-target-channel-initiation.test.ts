@@ -478,9 +478,18 @@ describe('ICP target-channel initiation', () => {
       permit: permit(),
       rootInitiationId: ROOT,
       peerContactId: CONTACT_ID,
-    })).rejects.toThrow('already durably suppressed');
+    })).resolves.toMatchObject({
+      disposition: 'suppressed',
+      recoveredTurn: true,
+      correlation: expect.objectContaining({
+        conversationId: CONVERSATION,
+        rootInitiationId: ROOT,
+      }),
+    });
     expect(harness.handleMessage).toHaveBeenCalledTimes(1);
     expect(harness.consumeInitiationPermit).toHaveBeenCalledTimes(1);
+    expect(harness.sendInitiation).not.toHaveBeenCalled();
+    expect(harness.recordDeliveryObservation).toHaveBeenCalledTimes(3);
   });
 
   it('reconciles a consumed suppression after the local observation write was interrupted', async () => {
@@ -521,6 +530,39 @@ describe('ICP target-channel initiation', () => {
     expect(harness.recordDeliveryObservation).toHaveBeenCalledWith(expect.objectContaining({
       status: 'suppressed',
     }));
+  });
+
+  it('rejects contradictory terminal suppression evidence before replaying any side effect', async () => {
+    const harness = createHarness();
+    const durableCorrelation = correlation();
+    const deliverableResponse = response({
+      id: durableCorrelation.requestId,
+      channelId: CHANNEL,
+      channelType: 'companion',
+      authorId: 'system:icp-initiation',
+      authorName: 'ICP Initiation',
+      content: 'private trigger',
+      timestamp: new Date(),
+      routing: { source: 'companion', icpCorrelation: durableCorrelation },
+    });
+    harness.findIcpDeliveryObservation.mockResolvedValueOnce({
+      channelId: CHANNEL,
+      sourceMessageId: durableCorrelation.messageId,
+      status: 'suppressed',
+      recoveryResponse: deliverableResponse,
+      turnCompleted: true,
+    });
+
+    await expect(harness.initiator.initiate({
+      permit: consumedPermit(),
+      rootInitiationId: ROOT,
+      peerContactId: CONTACT_ID,
+    })).rejects.toThrow(/suppressed recovery contains a deliverable response/i);
+
+    expect(harness.handleMessage).not.toHaveBeenCalled();
+    expect(harness.consumeInitiationPermit).not.toHaveBeenCalled();
+    expect(harness.sendInitiation).not.toHaveBeenCalled();
+    expect(harness.recordDeliveryObservation).not.toHaveBeenCalled();
   });
 
   it('fails closed when a consumed permit has no durable assistant or prepared observation', async () => {

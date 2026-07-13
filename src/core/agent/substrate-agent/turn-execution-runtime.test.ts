@@ -524,6 +524,7 @@ function createRuntime(params: {
   fatigueBudget?: FatigueBudgetPort | null;
   fatigueRegulationReservations?: IcpFatigueRegulationReservationPort | null;
   durableChargeRecorder?: TurnExecutionRuntime['durableChargeRecorder'];
+  durableChargeProbe?: TurnExecutionRuntime['durableChargeProbe'];
   configOverrides?: Partial<SubstrateConfig>;
   cogSecMode?: TurnExecutionRuntime['cogSecMode'];
 }) {
@@ -545,6 +546,7 @@ function createRuntime(params: {
     eventBus: params.eventBus,
     costTelemetry: createEventBusCostTelemetryPort(params.eventBus),
     durableChargeRecorder: params.durableChargeRecorder ?? vi.fn(async () => undefined),
+    durableChargeProbe: params.durableChargeProbe ?? vi.fn(async () => 'absent'),
     fatigueBudget: params.fatigueBudget ?? null,
     fatigueRegulationReservations: params.fatigueRegulationReservations ?? null,
     satellitePresence: createActiveEmanationSatellitePresencePort(),
@@ -3275,6 +3277,9 @@ describe('handleMessageForTurn compaction scheduling', () => {
       type: 'systemNote',
       content: `[SYSTEM: ${taskKind === 'heartbeat' ? 'Scheduler' : 'Whisper'}] ${taskKind} run`,
     });
+    expect(runtime.inferPostTurnActions).toHaveBeenCalledWith(expect.objectContaining({
+      taskKind,
+    }));
   });
 
   it('routes runtime-authored repair guidance through system session + prompt lanes', async () => {

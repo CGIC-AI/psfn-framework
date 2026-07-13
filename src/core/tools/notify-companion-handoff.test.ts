@@ -148,6 +148,7 @@ describe('permit-governed notify companion handoff', () => {
       ],
       turnId: 'turn-1' as never,
       completedAt: 1_000,
+      taskKind: 'research',
     }, 'extended_loaded');
     expect(actions).toHaveLength(1);
     expect(actions[0]).toMatchObject({
@@ -155,6 +156,7 @@ describe('permit-governed notify companion handoff', () => {
       payload: {
         contactId: 'peer-contact-b',
         permitId: PERMIT_ID,
+        continuationTaskKind: 'research',
         authorization: ORIGIN_AUTHORIZATION,
       },
       maxRetries: 2,
@@ -194,6 +196,41 @@ describe('permit-governed notify companion handoff', () => {
     })).toEqual([]);
   });
 
+  it('does not promote free-form task labels into privileged continuation evidence', () => {
+    const actions = inferDeferredCompanionOutreachActions({
+      message: { id: 'source-1', channelId: 'discord:owner' } as never,
+      response: {} as never,
+      turnMessages: [
+        {
+          role: 'assistant',
+          content: [{
+            type: 'toolCall',
+            id: 'call-outreach',
+            name: 'notify',
+            arguments: {
+              action: 'send',
+              target_kind: 'companion',
+              contact_id: 'peer-contact-b',
+              initiation_permit: PERMIT_ID,
+            },
+          }],
+        } as never,
+        {
+          role: 'toolResult',
+          toolCallId: 'call-outreach',
+          toolName: 'notify',
+          isError: false,
+          content: [{ type: 'text', text: COMPANION_NOTIFY_QUEUED_TEXT }],
+        } as never,
+      ],
+      turnId: 'turn-1' as never,
+      completedAt: 1_000,
+      taskKind: 'research requested in motivation prose',
+    }, 'extended_loaded');
+
+    expect(actions[0]?.payload).not.toHaveProperty('continuationTaskKind');
+  });
+
   it('registers a background post-turn handler that revalidates before W3 execution', async () => {
     const owner = runtime();
     let handler: PostTurnActionHandler | undefined;
@@ -218,12 +255,14 @@ describe('permit-governed notify companion handoff', () => {
       payload: {
         contactId: 'peer-contact-b',
         permitId: PERMIT_ID,
+        continuationTaskKind: 'research',
         authorization: ORIGIN_AUTHORIZATION,
       },
     } as InferredPostTurnAction);
     expect(owner.executeCompanionOutreach).toHaveBeenCalledWith(
       'peer-contact-b',
       PERMIT_ID,
+      'research',
       expect.any(Function),
     );
     dispose();

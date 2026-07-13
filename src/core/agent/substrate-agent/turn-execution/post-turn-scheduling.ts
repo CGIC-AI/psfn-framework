@@ -263,6 +263,7 @@ export async function schedulePostTurnWork(input: {
     turnMessages,
     turnId,
     completedAt,
+    ...(taskKind ? { taskKind } : {}),
     contextManifest: context.manifest,
     ...(canonicalContactKey ? { canonicalContactKey } : {}),
   });

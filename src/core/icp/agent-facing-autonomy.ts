@@ -11,6 +11,7 @@ import type {
   IcpAvailabilityState,
   IcpInitiationPermit,
 } from '../../shared/contracts/icp-autonomy.js';
+import type { IcpContinuationTaskKind } from '../../shared/contracts/runtime.js';
 import { isRfc4122Uuid } from '../../shared/utils/types.js';
 
 export interface KnownCompanionPeer {
@@ -55,6 +56,7 @@ export interface IcpTargetChannelCommandPort {
     permit: IcpInitiationPermit;
     rootInitiationId: string;
     peerContactId: string;
+    continuationTaskKind?: IcpContinuationTaskKind;
   }): Promise<unknown>;
 }
 
@@ -73,6 +75,7 @@ export interface AgentFacingIcpAutonomyRuntime {
   executeCompanionOutreach(
     contactId: string,
     permitId: string,
+    continuationTaskKind?: IcpContinuationTaskKind,
     isExecutionAuthorized?: () => boolean,
   ): Promise<void>;
 }
@@ -208,7 +211,12 @@ export function createAgentFacingIcpAutonomyRuntime(input: {
     async prepareCompanionOutreach(contactId, permitId) {
       await prepare(contactId, permitId);
     },
-    async executeCompanionOutreach(contactId, permitId, isExecutionAuthorized) {
+    async executeCompanionOutreach(
+      contactId,
+      permitId,
+      continuationTaskKind,
+      isExecutionAuthorized,
+    ) {
       const { peer, handoff } = await prepare(contactId, permitId);
       if (isExecutionAuthorized && !isExecutionAuthorized()) {
         throw new Error('companion outreach authorization changed during broker preparation');
@@ -217,6 +225,7 @@ export function createAgentFacingIcpAutonomyRuntime(input: {
         permit: handoff.permit,
         rootInitiationId: handoff.rootInitiationId,
         peerContactId: peer.contactId,
+        ...(continuationTaskKind ? { continuationTaskKind } : {}),
       });
     },
   };

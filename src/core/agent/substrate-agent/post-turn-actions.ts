@@ -11,6 +11,8 @@ export interface PostTurnInferenceContext {
   turnMessages: AgentMessage[];
   turnId: TurnID;
   completedAt: number;
+  /** Scheduler-owned structured task class; never inferred from model prose. */
+  taskKind?: string;
   contextManifest?: ContextManifest;
   canonicalContactKey?: string;
 }

@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import type { AgentMessage } from '../../boundary/pi-agent/index.js';
 import type { PostTurnActionRuntime } from '../agent/post-turn-action-runtime.js';
 import type {
+  IcpContinuationTaskKind,
   PostTurnActionCandidate,
 } from '../../shared/contracts/runtime.js';
 import type { PostTurnInferenceContext } from '../agent/substrate-agent/post-turn-actions.js';
@@ -47,6 +48,7 @@ export interface DeferredCompanionOutreachAuthorizationRuntime {
 interface DeferredCompanionOutreachPayload {
   contactId: string;
   permitId: string;
+  continuationTaskKind?: IcpContinuationTaskKind;
   authorization: DeferredCompanionOutreachAuthorizationEvidence;
 }
 
@@ -59,6 +61,14 @@ const COMPANION_NOTIFY_OVERLAY_ACTIVATION_SOURCES: ReadonlySet<string> = new Set
 
 function isExactNonEmptyString(value: unknown): value is string {
   return typeof value === 'string' && value.length > 0 && value.trim() === value;
+}
+
+function parseContinuationTaskKind(value: unknown): IcpContinuationTaskKind | undefined | null {
+  if (value === undefined) return undefined;
+  if (value === 'work' || value === 'research' || value === 'problem_solving') {
+    return value;
+  }
+  return null;
 }
 
 function parseDeferredAuthorizationEvidence(
@@ -157,7 +167,7 @@ function parseDeferredPayload(value: unknown): DeferredCompanionOutreachPayload 
   try {
     assertNoUnknownKeys(
       value,
-      ['contactId', 'permitId', 'authorization'],
+      ['contactId', 'permitId', 'continuationTaskKind', 'authorization'],
       'deferred companion outreach payload',
     );
   } catch {
@@ -165,11 +175,18 @@ function parseDeferredPayload(value: unknown): DeferredCompanionOutreachPayload 
   }
   const contactId = value.contactId;
   const permitId = value.permitId;
+  const continuationTaskKind = parseContinuationTaskKind(value.continuationTaskKind);
   const authorization = parseDeferredAuthorizationEvidence(value.authorization);
   if (typeof contactId !== 'string' || !contactId || contactId.trim() !== contactId) return null;
   if (!isRfc4122Uuid(permitId)) return null;
+  if (continuationTaskKind === null) return null;
   if (!authorization) return null;
-  return { contactId, permitId, authorization };
+  return {
+    contactId,
+    permitId,
+    ...(continuationTaskKind ? { continuationTaskKind } : {}),
+    authorization,
+  };
 }
 
 export async function executeCompanionNotify(input: {
@@ -212,6 +229,7 @@ export function inferDeferredCompanionOutreachActions(
   originActivationSource: CompanionNotifyOverlayActivationSource | null = null,
 ): PostTurnActionCandidate[] {
   if (!originActivationSource) return [];
+  const continuationTaskKind = parseContinuationTaskKind(context.taskKind);
   const requestedByToolCallId = new Map<string, DeferredCompanionOutreachPayload>();
   for (const message of context.turnMessages) {
     if (message.role !== 'assistant' || !Array.isArray(message.content)) continue;
@@ -224,6 +242,7 @@ export function inferDeferredCompanionOutreachActions(
         requestedByToolCallId.set(content.id, {
           contactId: params.contact_id,
           permitId: params.initiation_permit,
+          ...(continuationTaskKind ? { continuationTaskKind } : {}),
           authorization: {
             version: 1,
             toolName: 'notify',
@@ -282,6 +301,7 @@ export function registerDeferredCompanionOutreachRuntime(input: {
       await input.runtime.executeCompanionOutreach(
         payload.contactId,
         payload.permitId,
+        payload.continuationTaskKind,
         revalidate,
       );
     },

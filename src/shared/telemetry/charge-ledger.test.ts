@@ -181,6 +181,7 @@ describe('RunChargeLedger', () => {
       runId: 'durable-failure-run',
     }, async () => await chargeSurfaceDurably('externalModelConsult', {
       eventId: 'durable-failure-event',
+      probeChargeEvent: async () => 'absent',
       recordChargeEvent,
     }))).rejects.toThrow('ledger append failed');
 
@@ -201,6 +202,7 @@ describe('RunChargeLedger', () => {
     }, async () => {
       await chargeSurfaceDurably('externalModelConsult', {
         eventId,
+        probeChargeEvent: (event) => firstLedger.probeChargeEvent(event),
         recordChargeEvent: (event) => {
           return firstLedger.commitChargeEvent(event).outcome;
         },
@@ -212,6 +214,9 @@ describe('RunChargeLedger', () => {
     resetRunChargeRollingWindowForTests();
     vi.setSystemTime(firstTimestampMs + 24 * 60 * 60_000 + 1);
     const restartedLedger = new RunChargeLedger(ledgerPath);
+    const replayProbe = vi.fn((event: RunChargeEvent) => {
+      return restartedLedger.probeChargeEvent(event);
+    });
     const replayRecorder = vi.fn((event: RunChargeEvent) => {
       return restartedLedger.commitChargeEvent(event).outcome;
     });
@@ -220,15 +225,31 @@ describe('RunChargeLedger', () => {
       lane: 'interactive',
       runId: 'stable-charge-run',
     }, async () => {
+      chargeSurface('externalModelConsult');
+      chargeSurface('externalModelConsult');
+      chargeSurface('externalModelConsult');
       await chargeSurfaceDurably('externalModelConsult', {
         eventId,
+        probeChargeEvent: replayProbe,
         recordChargeEvent: replayRecorder,
       });
+      await expect(chargeSurfaceDurably('externalModelConsult', {
+        eventId: 'unknown-charge-at-full-quota',
+        probeChargeEvent: replayProbe,
+        recordChargeEvent: replayRecorder,
+      })).rejects.toThrow('Charge quota exceeded');
+      await expect(chargeSurfaceDurably('externalModelConsult', {
+        eventId,
+        details: { changedBinding: true },
+        probeChargeEvent: replayProbe,
+        recordChargeEvent: replayRecorder,
+      })).rejects.toThrow('identity collision');
     });
 
-    expect(replayRecorder).toHaveBeenCalledOnce();
+    expect(replayProbe).toHaveBeenCalledTimes(3);
+    expect(replayRecorder).not.toHaveBeenCalled();
     expect(readFileSync(ledgerPath, 'utf8').trim().split('\n')).toHaveLength(1);
-    expect(getRunChargeRollingWindowSnapshot().entryCount).toBe(0);
+    expect(getRunChargeRollingWindowSnapshot().entryCount).toBe(3);
   });
 
   it('hydrates rolling charge enforcement from persisted ledger events after restart', async () => {

@@ -3,7 +3,10 @@ import type { AssistantMessage } from '@mariozechner/pi-ai';
 import { classifyBroadcastDraft } from '../../../system/trust/broadcast-safety.js';
 import type { EventBus, EventMap } from '../../../shared/event-bus.js';
 import type { CostTelemetryPort } from '../../../shared/telemetry/cost-telemetry-port.js';
-import type { DurableRunChargeRecorder } from '../../../shared/telemetry/run-charge.js';
+import type {
+  DurableRunChargeProbe,
+  DurableRunChargeRecorder,
+} from '../../../shared/telemetry/run-charge.js';
 import type { ComposeContext } from '../../identity/prompt-types.js';
 import type { ImageVisionReviewer } from '../../../primitives/images/types.js';
 import type { VisionIntakeImageScreenerPort } from './vision-attachments.js';
@@ -125,6 +128,7 @@ export interface TurnExecutionRuntime {
   eventBus: EventBus;
   costTelemetry: CostTelemetryPort;
   durableChargeRecorder?: DurableRunChargeRecorder | null;
+  durableChargeProbe?: DurableRunChargeProbe | null;
   fatigueBudget?: FatigueBudgetPort | null;
   fatigueRegulationReservations?: IcpFatigueRegulationReservationPort | null;
   satellitePresence: SatellitePresencePort;
@@ -1143,6 +1147,7 @@ export async function handleMessageForTurn(
       fatigue: fatigueDecision?.metadata,
       invoke: invokeWithCanary,
       recordChargeEvent: runtime.durableChargeRecorder,
+      probeChargeEvent: runtime.durableChargeProbe,
       turnId,
       withCorrelationPurpose: runtime.withCorrelationPurpose,
     });

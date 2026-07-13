@@ -533,10 +533,15 @@ export function chargeSurface(
 }
 
 export type DurableRunChargeCommitOutcome = 'recorded' | 'replayed';
+export type DurableRunChargeProbeOutcome = 'absent' | 'replayed';
 
 export type DurableRunChargeRecorder = (
   event: RunChargeEvent,
 ) => DurableRunChargeCommitOutcome | void | Promise<DurableRunChargeCommitOutcome | void>;
+
+export type DurableRunChargeProbe = (
+  event: RunChargeEvent,
+) => DurableRunChargeProbeOutcome | Promise<DurableRunChargeProbeOutcome>;
 
 /**
  * Persist a charge before exposing it to the in-memory quota account or the
@@ -548,6 +553,7 @@ export async function chargeSurfaceDurably(
   surface: ChargePolicySurface,
   input: RunChargeChargeInput & {
     eventId: string;
+    probeChargeEvent: DurableRunChargeProbe;
     recordChargeEvent: DurableRunChargeRecorder;
   },
 ): Promise<RunChargeEvent | null> {
@@ -558,19 +564,6 @@ export async function chargeSurfaceDurably(
   const context = getRunChargeContext();
   const inspection = inspectChargeSurface(surface, input);
   if (!inspection) return null;
-  const replayed = rollingChargeWindowEntries.find(entry => entry.eventId === eventId);
-  if (replayed) {
-    if (replayed.lane !== inspection.lane
-      || replayed.surface !== inspection.surface
-      || replayed.amount !== inspection.amount) {
-      throw new Error(`Durable charge event identity collision for ${eventId}`);
-    }
-    return null;
-  }
-  if (!inspection.allowed) {
-    throw createChargeQuotaExceededError(inspection);
-  }
-
   const lineage = {
     runId: input.runId?.trim() || context?.lineage.runId || resolveBaseRunId(context),
     rootRunId: input.rootRunId?.trim() || context?.lineage.rootRunId
@@ -596,6 +589,18 @@ export async function chargeSurfaceDurably(
     timestampMs: Date.now(),
     quota: inspection.quota,
   });
+
+  // The append-only ledger is the durable idempotency authority. Probe the
+  // full event binding before quota rejection so a committed retry remains a
+  // replay even after its rolling-window entry has aged out and current quota
+  // has subsequently filled. Unknown identities still fail before append.
+  const probeOutcome = await input.probeChargeEvent(event);
+  if (probeOutcome === 'replayed') {
+    return null;
+  }
+  if (!inspection.allowed) {
+    throw createChargeQuotaExceededError(inspection);
+  }
 
   const commitOutcome = await input.recordChargeEvent(event);
   if (commitOutcome === 'replayed') {

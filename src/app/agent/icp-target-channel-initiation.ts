@@ -215,11 +215,6 @@ export function createIcpTargetChannelInitiator(input: {
       );
     }
     const recorded = await input.agent.findRecordedIcpInitiation(permit.channelId, sourceMessageId);
-    if (!recorded
-      && previousObservation?.turnCompleted
-      && previousObservation.status === 'suppressed') {
-      throw new Error('ICP target-channel initiation was already durably suppressed');
-    }
     let recoveredTurn = recorded !== null;
     let content: string;
     let correlation: IcpConversationCorrelation;
@@ -239,6 +234,19 @@ export function createIcpTargetChannelInitiator(input: {
       }
       return parsed;
     };
+
+    if (!recorded
+      && previousObservation?.turnCompleted
+      && previousObservation.status === 'suppressed') {
+      correlation = validateRecordedCorrelation(
+        previousObservation.recoveryResponse.metadata.icpCorrelation,
+      );
+      return {
+        disposition: 'suppressed',
+        recoveredTurn: true,
+        correlation,
+      };
+    }
 
     const finalizeDelivery = async (): Promise<IcpTargetChannelInitiationResult> => {
       if (lastDeliveryObservation?.status === 'delivered') {
@@ -408,7 +416,7 @@ export function createIcpTargetChannelInitiator(input: {
       };
       if (previousObservation?.turnCompleted) {
         if (previousObservation.status === 'suppressed') {
-          throw new Error('ICP target-channel initiation was already durably suppressed');
+          return { disposition: 'suppressed', recoveredTurn: true, correlation };
         }
         if (previousObservation.status === 'delivered') {
           return await finalizeDelivery();

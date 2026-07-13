@@ -559,6 +559,19 @@ export class RunChargeLedger {
     return { outcome: 'recorded', entry };
   }
 
+  probeChargeEvent(event: RunChargeEvent): 'absent' | 'replayed' {
+    const eventId = normalizeOptionalString(event.eventId);
+    if (!eventId) {
+      throw new Error('Charge ledger probe requires an event identity');
+    }
+    const existing = this.entries.find(candidate => candidate.eventId === eventId);
+    if (!existing) return 'absent';
+    if (durableEventBinding(existing.event) !== durableEventBinding(event)) {
+      throw new Error(`Charge ledger event identity collision for ${eventId}`);
+    }
+    return 'replayed';
+  }
+
   listEntries(query: RunChargeLedgerQuery = {}): RunChargeLedgerEntry[] {
     const limit = normalizeLimit(query.limit);
     return this.entries

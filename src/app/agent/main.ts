@@ -696,9 +696,10 @@ async function main(): Promise<void> {
     resolveChargeLedgerPath(pathSnapshot.companionDataDir),
     eventBus,
   );
-  agentLoop.setDurableChargeRecorder((event) => {
-    return chargeLedger.commitChargeEvent(event).outcome;
-  });
+  agentLoop.setDurableChargeRecorder(
+    event => chargeLedger.commitChargeEvent(event).outcome,
+    event => chargeLedger.probeChargeEvent(event),
+  );
 
   const apiBackend = new AgentApiBackend({
     agentLoop,

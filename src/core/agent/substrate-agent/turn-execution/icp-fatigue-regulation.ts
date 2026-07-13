@@ -12,6 +12,7 @@ import {
   chargeSurfaceDurably,
   getRunChargeContext,
   runWithChargeContext,
+  type DurableRunChargeProbe,
   type DurableRunChargeRecorder,
 } from '../../../../shared/telemetry/run-charge.js';
 import type { IcpFatigueRegulationReservationPort } from '../../fatigue/regulation-reservation.js';
@@ -177,6 +178,7 @@ export async function invokeWithCompanionSocialCharge<T>(input: {
   fatigue: FatigueEnforcementMetadata | null | undefined;
   invoke: () => Promise<T>;
   recordChargeEvent: DurableRunChargeRecorder | null | undefined;
+  probeChargeEvent: DurableRunChargeProbe | null | undefined;
   turnId: string;
   withCorrelationPurpose: (
     correlation: CorrelationMetadata,
@@ -193,6 +195,9 @@ export async function invokeWithCompanionSocialCharge<T>(input: {
   if (!input.recordChargeEvent) {
     throw new Error('Companion social continuation requires durable charge-ledger persistence');
   }
+  if (!input.probeChargeEvent) {
+    throw new Error('Companion social continuation requires durable charge-ledger identity lookup');
+  }
   return await runWithChargeContext({
     lane: 'companion_social',
     runId: `${input.turnId}:companion-social`,
@@ -203,6 +208,7 @@ export async function invokeWithCompanionSocialCharge<T>(input: {
   }, async () => {
     await chargeSurfaceDurably('companionSocialContinuation', {
       eventId: `${input.turnId}:companion-social`,
+      probeChargeEvent: input.probeChargeEvent,
       recordChargeEvent: input.recordChargeEvent,
       details: {
         regulationState: regulation.state,

@@ -26,7 +26,10 @@ describe('agent control plane', () => {
     expect(controlPlaneSource).toContain('createNotifyTool(');
     expect(controlPlaneSource).toContain('registerDeferredCompanionOutreachRuntime');
     expect(controlPlaneSource).toContain("capabilityRuntime.has('external.companion')");
-    expect(controlPlaneSource).toContain("tool.toolName === 'notify'");
+    expect(controlPlaneSource).toContain("tool.name === 'notify'");
+    expect(controlPlaneSource).toContain("getExtendedToolTurnClass('notify') === 'overlay'");
+    expect(controlPlaneSource).toContain('resolveCompanionOutreachOriginActivationSource');
+    expect(controlPlaneSource).toContain('isDeferredCompanionOutreachExecutionAuthorized');
     expect(controlPlaneSource).toContain('createGatewayDiscordNotifySender(');
     expect(controlPlaneSource).toContain('runShutdownSequence(');
     expect(controlPlaneSource).toContain('resolveRuntimeCommandInvocation');
@@ -41,11 +44,17 @@ describe('agent control plane', () => {
   it('registers deferred handlers and the target command before starting restored actions', () => {
     const agentMainSource = readSource('main.ts');
     const controlPlaneIndex = agentMainSource.indexOf('buildAgentControlPlane({');
+    const lateValidationIndex = agentMainSource.indexOf(
+      "agentLoop.validateToolWiring('gateway'",
+      controlPlaneIndex,
+    );
     const commandIndex = agentMainSource.indexOf('registerIcpTargetChannelInitiationCommand(');
     const schedulerStartIndex = agentMainSource.indexOf('scheduler.start();');
     expect(controlPlaneIndex).toBeGreaterThan(-1);
+    expect(lateValidationIndex).toBeGreaterThan(controlPlaneIndex);
     expect(commandIndex).toBeGreaterThan(controlPlaneIndex);
     expect(schedulerStartIndex).toBeGreaterThan(commandIndex);
+    expect(schedulerStartIndex).toBeGreaterThan(lateValidationIndex);
     expect(readSource('scheduler-runtime.ts')).not.toContain('scheduler.start();');
   });
 });

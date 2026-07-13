@@ -797,6 +797,10 @@ async function main(): Promise<void> {
       ? { icpAutonomyRuntime: coreRuntime.icpAutonomyRuntime }
       : {}),
   });
+  // Control-plane tools are registered after module loading. Validate them
+  // before restored durable actions can execute so a wiring-disabled notify
+  // surface is absent from the current registration-policy check.
+  agentLoop.validateToolWiring('gateway', gateway, DEFAULT_GATEWAY_TOOL_METADATA_COVERAGE);
   const { lifecycleNotifier } = controlPlane;
   let apiBackendDisposed = false;
   const disposeApiBackend = () => {

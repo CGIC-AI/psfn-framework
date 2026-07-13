@@ -8,6 +8,7 @@ import type { PostTurnInferenceContext } from '../agent/substrate-agent/post-tur
 import { assertNoUnknownKeys, isRecord, isRfc4122Uuid } from '../../shared/utils/types.js';
 import { getRequestContext } from '../../primitives/llm/request-context.js';
 import type { AgentFacingIcpAutonomyRuntime } from '../icp/agent-facing-autonomy.js';
+import type { AdaptiveToolActivationSource } from '../agent/adaptive-tools-telemetry.js';
 import { textResult, textResultWithError } from './results.js';
 
 export const COMPANION_NOTIFY_TARGET_KIND = 'companion' as const;
@@ -21,9 +22,108 @@ export interface CompanionNotifyParams {
   initiation_permit: string;
 }
 
+export type CompanionNotifyOverlayActivationSource = Exclude<
+  AdaptiveToolActivationSource,
+  'core'
+>;
+
+export interface DeferredCompanionOutreachAuthorizationEvidence {
+  version: 1;
+  toolName: 'notify';
+  toolScope: 'extended';
+  activationSource: CompanionNotifyOverlayActivationSource;
+  requiredCapability: 'external.companion';
+  originToolCallId: string;
+  originTurnId: string;
+}
+
+export interface DeferredCompanionOutreachAuthorizationRuntime {
+  hasExternalCompanionCapability(): boolean;
+  isNotifyToolRegistered(): boolean;
+  isNotifyOverlayEligible(): boolean;
+  getNotifyActivationSource(): CompanionNotifyOverlayActivationSource | null;
+}
+
 interface DeferredCompanionOutreachPayload {
   contactId: string;
   permitId: string;
+  authorization: DeferredCompanionOutreachAuthorizationEvidence;
+}
+
+const COMPANION_NOTIFY_OVERLAY_ACTIVATION_SOURCES: ReadonlySet<string> = new Set([
+  'promoted',
+  'extended_loaded',
+  'autoload',
+  'deferred',
+]);
+
+function isExactNonEmptyString(value: unknown): value is string {
+  return typeof value === 'string' && value.length > 0 && value.trim() === value;
+}
+
+function parseDeferredAuthorizationEvidence(
+  value: unknown,
+): DeferredCompanionOutreachAuthorizationEvidence | null {
+  if (!isRecord(value)) return null;
+  try {
+    assertNoUnknownKeys(value, [
+      'version',
+      'toolName',
+      'toolScope',
+      'activationSource',
+      'requiredCapability',
+      'originToolCallId',
+      'originTurnId',
+    ], 'deferred companion outreach authorization');
+  } catch {
+    return null;
+  }
+  if (value.version !== 1
+    || value.toolName !== 'notify'
+    || value.toolScope !== 'extended'
+    || typeof value.activationSource !== 'string'
+    || !COMPANION_NOTIFY_OVERLAY_ACTIVATION_SOURCES.has(value.activationSource)
+    || value.requiredCapability !== 'external.companion'
+    || !isExactNonEmptyString(value.originToolCallId)
+    || !isExactNonEmptyString(value.originTurnId)) {
+    return null;
+  }
+  return {
+    version: 1,
+    toolName: 'notify',
+    toolScope: 'extended',
+    activationSource: value.activationSource as CompanionNotifyOverlayActivationSource,
+    requiredCapability: 'external.companion',
+    originToolCallId: value.originToolCallId,
+    originTurnId: value.originTurnId,
+  };
+}
+
+function isCurrentDeferredExecutionPolicyAuthorized(
+  runtime: DeferredCompanionOutreachAuthorizationRuntime,
+): boolean {
+  return runtime.hasExternalCompanionCapability()
+    && runtime.isNotifyToolRegistered()
+    && runtime.isNotifyOverlayEligible();
+}
+
+export function resolveCompanionOutreachOriginActivationSource(
+  runtime: DeferredCompanionOutreachAuthorizationRuntime,
+): CompanionNotifyOverlayActivationSource | null {
+  if (!isCurrentDeferredExecutionPolicyAuthorized(runtime)) return null;
+  return runtime.getNotifyActivationSource();
+}
+
+export function isDeferredCompanionOutreachExecutionAuthorized(
+  evidence: unknown,
+  runtime: DeferredCompanionOutreachAuthorizationRuntime,
+): boolean {
+  // `loadedExtended`/active overlay state is turn-local and intentionally empty
+  // after restart. Exact persisted origin evidence proves prior activation;
+  // current capability, registration, and overlay policy remain live revocation
+  // points and are rechecked again immediately before the W3 target command.
+  return parseDeferredAuthorizationEvidence(evidence) !== null
+    && isCurrentDeferredExecutionPolicyAuthorized(runtime);
 }
 
 function parseCompanionNotifyParams(value: unknown): CompanionNotifyParams {
@@ -55,15 +155,21 @@ function parseCompanionNotifyParams(value: unknown): CompanionNotifyParams {
 function parseDeferredPayload(value: unknown): DeferredCompanionOutreachPayload | null {
   if (!isRecord(value)) return null;
   try {
-    assertNoUnknownKeys(value, ['contactId', 'permitId'], 'deferred companion outreach payload');
+    assertNoUnknownKeys(
+      value,
+      ['contactId', 'permitId', 'authorization'],
+      'deferred companion outreach payload',
+    );
   } catch {
     return null;
   }
   const contactId = value.contactId;
   const permitId = value.permitId;
+  const authorization = parseDeferredAuthorizationEvidence(value.authorization);
   if (typeof contactId !== 'string' || !contactId || contactId.trim() !== contactId) return null;
   if (!isRfc4122Uuid(permitId)) return null;
-  return { contactId, permitId };
+  if (!authorization) return null;
+  return { contactId, permitId, authorization };
 }
 
 export async function executeCompanionNotify(input: {
@@ -103,7 +209,9 @@ function isSuccessfulCompanionNotifyResult(message: AgentMessage): boolean {
 
 export function inferDeferredCompanionOutreachActions(
   context: PostTurnInferenceContext,
+  originActivationSource: CompanionNotifyOverlayActivationSource | null = null,
 ): PostTurnActionCandidate[] {
+  if (!originActivationSource) return [];
   const requestedByToolCallId = new Map<string, DeferredCompanionOutreachPayload>();
   for (const message of context.turnMessages) {
     if (message.role !== 'assistant' || !Array.isArray(message.content)) continue;
@@ -116,6 +224,15 @@ export function inferDeferredCompanionOutreachActions(
         requestedByToolCallId.set(content.id, {
           contactId: params.contact_id,
           permitId: params.initiation_permit,
+          authorization: {
+            version: 1,
+            toolName: 'notify',
+            toolScope: 'extended',
+            activationSource: originActivationSource,
+            requiredCapability: 'external.companion',
+            originToolCallId: content.id,
+            originTurnId: context.turnId,
+          },
         });
       } catch {
         // Invalid calls cannot produce a successful marker and are never queued.
@@ -147,23 +264,25 @@ export function registerDeferredCompanionOutreachRuntime(input: {
   };
   postTurnActions: PostTurnActionRuntime;
   runtime: AgentFacingIcpAutonomyRuntime;
-  isExecutionAuthorized(): boolean;
+  resolveOriginActivationSource(): CompanionNotifyOverlayActivationSource | null;
+  isExecutionAuthorized(evidence: DeferredCompanionOutreachAuthorizationEvidence): boolean;
 }): () => void {
-  const unregisterInferer = input.agentLoop.registerPostTurnActionInferer?.(
-    inferDeferredCompanionOutreachActions,
-  ) ?? (() => undefined);
+  const unregisterInferer = input.agentLoop.registerPostTurnActionInferer?.((context) => (
+    inferDeferredCompanionOutreachActions(context, input.resolveOriginActivationSource())
+  )) ?? (() => undefined);
   const unregisterHandler = input.postTurnActions.registerHandler(
     DEFERRED_COMPANION_OUTREACH_ACTION_KIND,
     async (action) => {
-      if (!input.isExecutionAuthorized()) {
-        throw new Error('Deferred companion outreach is no longer capability/tool-overlay authorized');
-      }
       const payload = parseDeferredPayload(action.payload);
       if (!payload) throw new Error('Deferred companion outreach payload is malformed');
+      const revalidate = () => input.isExecutionAuthorized(payload.authorization);
+      if (!revalidate()) {
+        throw new Error('Deferred companion outreach is no longer capability/tool-policy authorized');
+      }
       await input.runtime.executeCompanionOutreach(
         payload.contactId,
         payload.permitId,
-        input.isExecutionAuthorized,
+        revalidate,
       );
     },
     { executionMode: 'background' },

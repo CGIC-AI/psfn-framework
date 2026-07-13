@@ -16,6 +16,23 @@ import {
   wirePostTurnActionRuntime,
 } from './post-turn-actions.js';
 import { resetCompletionHandoffDedupeForTests } from '../../../core/agent/completion-handoff.js';
+import {
+  isDeferredCompanionOutreachExecutionAuthorized,
+  registerDeferredCompanionOutreachRuntime,
+  type DeferredCompanionOutreachAuthorizationEvidence,
+  type DeferredCompanionOutreachAuthorizationRuntime,
+} from '../../../core/tools/notify-companion-handoff.js';
+
+const COMPANION_OUTREACH_PERMIT_ID = '44444444-4444-4444-8444-444444444444';
+const COMPANION_OUTREACH_AUTHORIZATION: DeferredCompanionOutreachAuthorizationEvidence = {
+  version: 1,
+  toolName: 'notify',
+  toolScope: 'extended',
+  activationSource: 'extended_loaded',
+  requiredCapability: 'external.companion',
+  originToolCallId: 'call-outreach-before-restart',
+  originTurnId: 'turn-before-restart',
+};
 
 function createDeferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
   let resolve!: (value: T) => void;
@@ -962,7 +979,7 @@ describe('wirePostTurnActionRuntime', () => {
     }
   });
 
-  it('executes a due restored companion outreach when its handler is registered before start', async () => {
+  it('executes restored companion outreach through the real handler with an empty adaptive overlay cache', async () => {
     const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(1_700_000_250_000);
     const tempDir = mkdtempSync(join(tmpdir(), 'psfn-post-turn-outreach-restart-'));
     const persistencePath = join(tempDir, 'queue.json');
@@ -986,7 +1003,11 @@ describe('wirePostTurnActionRuntime', () => {
         actions: [makeAction({
           id: 'persisted-companion-outreach',
           kind: actionKind,
-          payload: { contactId: 'contact-b', permitId: 'permit-redacted-in-test' },
+          payload: {
+            contactId: 'contact-b',
+            permitId: COMPANION_OUTREACH_PERMIT_ID,
+            authorization: COMPANION_OUTREACH_AUTHORIZATION,
+          },
           dedupeKey: `${actionKind}:fingerprint`,
           runAt: 1_700_000_250_000,
         })],
@@ -1004,15 +1025,41 @@ describe('wirePostTurnActionRuntime', () => {
         intervalMs: 1,
         persistencePath,
       });
-      const handler = vi.fn().mockResolvedValue(undefined);
-      restartedRuntime.registerHandler(actionKind, handler, { executionMode: 'background' });
+      const executeCompanionOutreach = vi.fn().mockResolvedValue(undefined);
+      const restartedAdaptiveState = { activeTools: [] as Array<{ toolName: string }> };
+      const authorizationRuntime: DeferredCompanionOutreachAuthorizationRuntime = {
+        hasExternalCompanionCapability: () => true,
+        isNotifyToolRegistered: () => true,
+        isNotifyOverlayEligible: () => true,
+        getNotifyActivationSource: () => {
+          const active = restartedAdaptiveState.activeTools.find(tool => tool.toolName === 'notify');
+          return active ? 'extended_loaded' : null;
+        },
+      };
+      const dispose = registerDeferredCompanionOutreachRuntime({
+        agentLoop: {},
+        postTurnActions: restartedRuntime,
+        runtime: { executeCompanionOutreach } as never,
+        resolveOriginActivationSource: () => null,
+        isExecutionAuthorized: evidence => isDeferredCompanionOutreachExecutionAuthorized(
+          evidence,
+          authorizationRuntime,
+        ),
+      });
       restartedScheduler.start();
       try {
-        await vi.waitFor(() => expect(handler).toHaveBeenCalledOnce());
+        await vi.waitFor(() => expect(executeCompanionOutreach).toHaveBeenCalledOnce());
       } finally {
         await restartedScheduler.stop();
+        dispose();
       }
 
+      expect(restartedAdaptiveState.activeTools).toEqual([]);
+      expect(executeCompanionOutreach).toHaveBeenCalledWith(
+        'contact-b',
+        COMPANION_OUTREACH_PERMIT_ID,
+        expect.any(Function),
+      );
       expect(readPersistedQueue(persistencePath).entries).toHaveLength(0);
     } finally {
       nowSpy.mockRestore();

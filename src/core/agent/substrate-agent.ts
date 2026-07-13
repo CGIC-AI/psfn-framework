@@ -79,6 +79,7 @@ import {
 } from './tool-wiring-validator.js';
 import {
   type ExtendedToolAutoloadPolicy,
+  type ExtendedToolTurnClass,
 } from './extended-tool-autoload-policy.js';
 import type {
   AdaptiveLoadedExtendedToolState,
@@ -801,6 +802,10 @@ export class SubstrateAgent {
 
   getToolCatalogSnapshot(): RuntimeToolCatalogSnapshot {
     return this.toolRuntimeFacade.getToolCatalogSnapshot();
+  }
+
+  getExtendedToolTurnClass(toolName: string): ExtendedToolTurnClass {
+    return this.toolRuntimeFacade.classifyExtendedToolForTurn(toolName);
   }
 
   getToolHealthStatusByName(): ReadonlyMap<string, RuntimeServiceHealthStatus> {

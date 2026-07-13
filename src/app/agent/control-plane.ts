@@ -27,7 +27,12 @@ import type { Lifecycle } from '../../shared/contracts/runtime.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type { PostTurnActionRuntime } from '../../core/agent/post-turn-action-runtime.js';
 import type { AgentFacingIcpAutonomyRuntime } from '../../core/icp/agent-facing-autonomy.js';
-import { registerDeferredCompanionOutreachRuntime } from '../../core/tools/notify-companion-handoff.js';
+import {
+  isDeferredCompanionOutreachExecutionAuthorized,
+  registerDeferredCompanionOutreachRuntime,
+  resolveCompanionOutreachOriginActivationSource,
+  type DeferredCompanionOutreachAuthorizationRuntime,
+} from '../../core/tools/notify-companion-handoff.js';
 
 const log = createComponentLogger('AgentControlPlane');
 const DEFAULT_EXTRACTION_DRAIN_TIMEOUT_MS = 10_000;
@@ -94,16 +99,30 @@ export function buildAgentControlPlane(
     icpAutonomyRuntime,
   } = options;
   let stopPromise: Promise<void> | null = null;
+  const deferredCompanionOutreachAuthorizationRuntime: DeferredCompanionOutreachAuthorizationRuntime = {
+    hasExternalCompanionCapability: () => capabilityRuntime.has('external.companion'),
+    isNotifyToolRegistered: () => agentLoop.getToolCatalog().extended.some(
+      tool => tool.name === 'notify',
+    ),
+    isNotifyOverlayEligible: () => agentLoop.getExtendedToolTurnClass('notify') === 'overlay',
+    getNotifyActivationSource: () => {
+      const active = agentLoop.getAdaptiveToolRuntimeState().activeTools.find(
+        tool => tool.toolName === 'notify',
+      );
+      return active && active.source !== 'core' ? active.source : null;
+    },
+  };
   const unregisterDeferredCompanionOutreach = icpAutonomyRuntime
     ? registerDeferredCompanionOutreachRuntime({
         agentLoop,
         postTurnActions,
         runtime: icpAutonomyRuntime,
-        isExecutionAuthorized: () => (
-          capabilityRuntime.has('external.companion')
-          && agentLoop.getAdaptiveToolRuntimeState().activeTools.some(
-            tool => tool.toolName === 'notify',
-          )
+        resolveOriginActivationSource: () => resolveCompanionOutreachOriginActivationSource(
+          deferredCompanionOutreachAuthorizationRuntime,
+        ),
+        isExecutionAuthorized: evidence => isDeferredCompanionOutreachExecutionAuthorized(
+          evidence,
+          deferredCompanionOutreachAuthorizationRuntime,
         ),
       })
     : () => undefined;

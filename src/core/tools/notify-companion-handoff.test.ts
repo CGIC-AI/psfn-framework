@@ -9,10 +9,22 @@ import {
   COMPANION_NOTIFY_QUEUED_TEXT,
   DEFERRED_COMPANION_OUTREACH_ACTION_KIND,
   inferDeferredCompanionOutreachActions,
+  isDeferredCompanionOutreachExecutionAuthorized,
   registerDeferredCompanionOutreachRuntime,
+  type DeferredCompanionOutreachAuthorizationEvidence,
+  type DeferredCompanionOutreachAuthorizationRuntime,
 } from './notify-companion-handoff.js';
 
 const PERMIT_ID = '44444444-4444-4444-8444-444444444444';
+const ORIGIN_AUTHORIZATION: DeferredCompanionOutreachAuthorizationEvidence = {
+  version: 1,
+  toolName: 'notify',
+  toolScope: 'extended',
+  activationSource: 'extended_loaded',
+  requiredCapability: 'external.companion',
+  originToolCallId: 'call-outreach',
+  originTurnId: 'turn-1',
+};
 
 function text(result: { content: Array<{ text: string }> }): string {
   return result.content.map(part => part.text).join('');
@@ -136,14 +148,50 @@ describe('permit-governed notify companion handoff', () => {
       ],
       turnId: 'turn-1' as never,
       completedAt: 1_000,
-    });
+    }, 'extended_loaded');
     expect(actions).toHaveLength(1);
     expect(actions[0]).toMatchObject({
       kind: DEFERRED_COMPANION_OUTREACH_ACTION_KIND,
-      payload: { contactId: 'peer-contact-b', permitId: PERMIT_ID },
+      payload: {
+        contactId: 'peer-contact-b',
+        permitId: PERMIT_ID,
+        authorization: ORIGIN_AUTHORIZATION,
+      },
       maxRetries: 2,
     });
     expect(actions[0]?.dedupeKey).not.toContain(PERMIT_ID);
+  });
+
+  it('does not persist outreach without current origin overlay evidence', () => {
+    expect(inferDeferredCompanionOutreachActions({
+      message: { id: 'source-1', channelId: 'discord:owner' } as never,
+      response: {} as never,
+      turnMessages: [
+        {
+          role: 'assistant',
+          content: [{
+            type: 'toolCall',
+            id: 'call-outreach',
+            name: 'notify',
+            arguments: {
+              action: 'send',
+              target_kind: 'companion',
+              contact_id: 'peer-contact-b',
+              initiation_permit: PERMIT_ID,
+            },
+          }],
+        } as never,
+        {
+          role: 'toolResult',
+          toolCallId: 'call-outreach',
+          toolName: 'notify',
+          isError: false,
+          content: [{ type: 'text', text: COMPANION_NOTIFY_QUEUED_TEXT }],
+        } as never,
+      ],
+      turnId: 'turn-1' as never,
+      completedAt: 1_000,
+    })).toEqual([]);
   });
 
   it('registers a background post-turn handler that revalidates before W3 execution', async () => {
@@ -161,12 +209,17 @@ describe('permit-governed notify companion handoff', () => {
         }),
       } as never,
       runtime: owner,
+      resolveOriginActivationSource: () => 'extended_loaded',
       isExecutionAuthorized: () => true,
     });
     await handler?.({
       id: 'action-1',
       kind: DEFERRED_COMPANION_OUTREACH_ACTION_KIND,
-      payload: { contactId: 'peer-contact-b', permitId: PERMIT_ID },
+      payload: {
+        contactId: 'peer-contact-b',
+        permitId: PERMIT_ID,
+        authorization: ORIGIN_AUTHORIZATION,
+      },
     } as InferredPostTurnAction);
     expect(owner.executeCompanionOutreach).toHaveBeenCalledWith(
       'peer-contact-b',
@@ -190,13 +243,18 @@ describe('permit-governed notify companion handoff', () => {
         }),
       } as never,
       runtime: owner,
+      resolveOriginActivationSource: () => null,
       isExecutionAuthorized: () => false,
     });
     await expect(handler?.({
       id: 'action-disabled',
       kind: DEFERRED_COMPANION_OUTREACH_ACTION_KIND,
-      payload: { contactId: 'peer-contact-b', permitId: PERMIT_ID },
-    } as InferredPostTurnAction)).rejects.toThrow(/no longer capability\/tool-overlay authorized/i);
+      payload: {
+        contactId: 'peer-contact-b',
+        permitId: PERMIT_ID,
+        authorization: ORIGIN_AUTHORIZATION,
+      },
+    } as InferredPostTurnAction)).rejects.toThrow(/no longer capability\/tool-policy authorized/i);
     expect(owner.executeCompanionOutreach).not.toHaveBeenCalled();
   });
 
@@ -212,12 +270,71 @@ describe('permit-governed notify companion handoff', () => {
         }),
       } as never,
       runtime: owner,
+      resolveOriginActivationSource: () => null,
       isExecutionAuthorized: () => true,
     });
     await expect(handler?.({
       id: 'action-malformed',
       kind: DEFERRED_COMPANION_OUTREACH_ACTION_KIND,
-      payload: { contactId: 'peer-contact-b', permitId: PERMIT_ID, message: 'forbidden' },
+      payload: {
+        contactId: 'peer-contact-b',
+        permitId: PERMIT_ID,
+        authorization: ORIGIN_AUTHORIZATION,
+        message: 'forbidden',
+      },
+    } as InferredPostTurnAction)).rejects.toThrow(/payload is malformed/i);
+    expect(owner.executeCompanionOutreach).not.toHaveBeenCalled();
+  });
+
+  it('uses durable origin evidence after restart without requiring the ephemeral active overlay', () => {
+    const authorizationRuntime: DeferredCompanionOutreachAuthorizationRuntime = {
+      hasExternalCompanionCapability: () => true,
+      isNotifyToolRegistered: () => true,
+      isNotifyOverlayEligible: () => true,
+      getNotifyActivationSource: () => null,
+    };
+    expect(isDeferredCompanionOutreachExecutionAuthorized(
+      ORIGIN_AUTHORIZATION,
+      authorizationRuntime,
+    )).toBe(true);
+  });
+
+  it.each([
+    { name: 'capability revocation', capability: false, registered: true, overlay: true },
+    { name: 'tool removal or wiring disable', capability: true, registered: false, overlay: true },
+    { name: 'overlay policy disable', capability: true, registered: true, overlay: false },
+  ])('fails closed on current $name', ({ capability, registered, overlay }) => {
+    const authorizationRuntime: DeferredCompanionOutreachAuthorizationRuntime = {
+      hasExternalCompanionCapability: () => capability,
+      isNotifyToolRegistered: () => registered,
+      isNotifyOverlayEligible: () => overlay,
+      getNotifyActivationSource: () => null,
+    };
+    expect(isDeferredCompanionOutreachExecutionAuthorized(
+      ORIGIN_AUTHORIZATION,
+      authorizationRuntime,
+    )).toBe(false);
+  });
+
+  it('rejects a persisted action without exact origin authorization evidence', async () => {
+    const owner = runtime();
+    let handler: PostTurnActionHandler | undefined;
+    registerDeferredCompanionOutreachRuntime({
+      agentLoop: {},
+      postTurnActions: {
+        registerHandler: vi.fn((_kind, callback) => {
+          handler = callback;
+          return () => undefined;
+        }),
+      } as never,
+      runtime: owner,
+      resolveOriginActivationSource: () => null,
+      isExecutionAuthorized: () => true,
+    });
+    await expect(handler?.({
+      id: 'action-no-origin',
+      kind: DEFERRED_COMPANION_OUTREACH_ACTION_KIND,
+      payload: { contactId: 'peer-contact-b', permitId: PERMIT_ID },
     } as InferredPostTurnAction)).rejects.toThrow(/payload is malformed/i);
     expect(owner.executeCompanionOutreach).not.toHaveBeenCalled();
   });

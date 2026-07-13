@@ -36,8 +36,8 @@ export interface CompanionReplyDeliveryLifecycle {
 /**
  * Owns the durable write-ahead/delivery/completion protocol for one correlated
  * companion reply. Transport is at-least-once under a lost acknowledgement;
- * the deterministic gateway message id plus the recipient's durable source-id
- * lookup are the cross-process idempotency boundary.
+ * the deterministic gateway message id plus the recipient's durable source
+ * envelope binding are the cross-process idempotency boundary.
  */
 export function createCompanionReplyDeliveryLifecycle(input: {
   message: SubstrateMessage;

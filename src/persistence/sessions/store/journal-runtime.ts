@@ -485,6 +485,7 @@ export class SessionJournalRuntime {
     if (limit <= 0) return [];
     const result = this.archivePort.readJournalMatchingEntriesBackward(archive, {
       limit,
+      stopAfter: entry => entry.id < startId,
       matches: (entry) => {
         const message = journalToSessionEntry(entry);
         return message !== null && message.id >= startId && message.id <= endId;

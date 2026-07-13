@@ -181,7 +181,9 @@ export function scanJournalLinesBackward(
 
     const buffer = Buffer.allocUnsafe(DEFAULT_JOURNAL_SCAN_CHUNK_BYTES);
     let position = fileSize;
-    let remainder = '';
+    // Keep the incomplete leading line as bytes. Decoding each chunk on its
+    // own corrupts a UTF-8 code point split across the 64 KiB boundary.
+    let remainder = Buffer.alloc(0);
 
     while (position > 0) {
       const bytesToRead = Math.min(DEFAULT_JOURNAL_SCAN_CHUNK_BYTES, position);
@@ -190,20 +192,27 @@ export function scanJournalLinesBackward(
       const bytesRead = readSync(fd, buffer, 0, bytesToRead, position);
       if (bytesRead <= 0) break;
 
-      const chunk = buffer.toString('utf8', 0, bytesRead);
-      const parts = (chunk + remainder).split('\n');
-      remainder = parts.shift() ?? '';
-
-      for (let index = parts.length - 1; index >= 0; index--) {
-        if (onLine(parts[index])) {
+      const chunk = Buffer.from(buffer.subarray(0, bytesRead));
+      const combined = remainder.length > 0
+        ? Buffer.concat([chunk, remainder])
+        : chunk;
+      let lineEnd = combined.length;
+      let leadingBytes = combined.length;
+      for (let index = combined.length - 1; index >= 0; index--) {
+        if (combined[index] !== 0x0a) continue;
+        const line = combined.subarray(index + 1, lineEnd).toString('utf8');
+        if (onLine(line)) {
           stoppedEarly = true;
           return stoppedEarly;
         }
+        lineEnd = index;
+        leadingBytes = index;
       }
+      remainder = Buffer.from(combined.subarray(0, leadingBytes));
     }
 
     if (remainder.length > 0) {
-      if (onLine(remainder)) {
+      if (onLine(remainder.toString('utf8'))) {
         stoppedEarly = true;
       }
     }
@@ -485,6 +494,7 @@ export function readJournalMatchingEntriesBackward(
       state.awaitingBoundary = null;
       if (matches.length >= limit) return true;
     }
+    if (options.stopAfter?.(entry)) return true;
     if (options.matches(entry)) state.awaitingBoundary = entry;
     return false;
   });

@@ -46,6 +46,12 @@ export interface ReadJournalTailResult {
 export interface ReadJournalMatchingOptions {
   limit: number;
   matches: (entry: JournalEntry) => boolean;
+  /**
+   * Stop after this entry has supplied any pending integrity-chain boundary.
+   * Backward range readers use this once monotonically increasing entry IDs
+   * have passed below their requested window.
+   */
+  stopAfter?: (entry: JournalEntry) => boolean;
 }
 
 export interface JournalBackwardMatch {

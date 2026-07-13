@@ -135,6 +135,15 @@ describe('ICP L0 restart continuity', () => {
     ]));
     expect(restartedSender.getRecentMessages(CHANNEL, 10)).toEqual([]);
     expect(restartedRecipient.hasRecordedSourceMessage(CHANNEL, GATEWAY_ID)).toBe(true);
+    expect(restartedRecipient.findRecordedCompanionSourceMessage(CHANNEL, GATEWAY_ID)).toEqual({
+      channelId: CHANNEL,
+      sourceMessageId: GATEWAY_ID,
+      content: assistantContent,
+      authorId: SENDER,
+      authorName: 'Selene',
+      timestampMs: expect.any(Number),
+      correlation,
+    });
     expect(restartedRecipient.getRecentSessionEntries(CHANNEL, 10)).toEqual([
       expect.objectContaining({
         role: 'user',

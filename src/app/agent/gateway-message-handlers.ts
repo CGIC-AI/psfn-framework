@@ -27,11 +27,15 @@ import {
   type IcpTargetChannelInitiator,
   type RecordedIcpInitiationTurn,
 } from './icp-target-channel-initiation.js';
-import type { IcpConversationCorrelation } from '../../shared/contracts/icp-autonomy.js';
+import {
+  parseIcpConversationCorrelation,
+  type IcpConversationCorrelation,
+} from '../../shared/contracts/icp-autonomy.js';
 import {
   CompanionReplyDeliveryError,
   createCompanionReplyDeliveryLifecycle,
 } from './companion-reply-delivery-recovery.js';
+import type { RecordedCompanionSourceMessage } from '../../core/session/icp-delivery-recovery.js';
 
 const DUPLICATE_MESSAGE_WINDOW_MS = 2 * 60_000;
 const AGENT_BUSY_PATTERN = /already processing a prompt/i;
@@ -51,6 +55,44 @@ function buildMessageDedupKey(route: 'handle' | 'discord' | 'companion', message
   const messageId = message.id.trim();
   if (!messageId) return null;
   return `${route}:${message.channelId}:${messageId}`;
+}
+
+function normalizeTransportTimestamp(message: SubstrateMessage): void {
+  const timestamp = message.timestamp instanceof Date
+    ? new Date(message.timestamp.getTime())
+    : new Date(String(message.timestamp));
+  if (!Number.isFinite(timestamp.getTime())) {
+    throw new Error('Companion transport timestamp is invalid');
+  }
+  message.timestamp = timestamp;
+}
+
+function bindRecordedCompanionSourceEnvelope(
+  message: SubstrateMessage,
+  recorded: RecordedCompanionSourceMessage,
+): void {
+  const incomingCorrelation = parseIcpConversationCorrelation(message.routing?.icpCorrelation);
+  if (!recorded.correlation
+    || JSON.stringify(incomingCorrelation) !== JSON.stringify(recorded.correlation)
+    || recorded.channelId !== message.channelId
+    || recorded.sourceMessageId !== message.id
+    || recorded.content !== message.content
+    || recorded.authorId !== message.authorId
+    || recorded.authorName !== message.authorName) {
+    throw new Error('Companion replay envelope does not match its durable source entry');
+  }
+  const timestamp = new Date(recorded.timestampMs);
+  if (!Number.isFinite(timestamp.getTime())) {
+    throw new Error('Recorded companion source timestamp is invalid');
+  }
+  message.content = recorded.content;
+  message.authorId = recorded.authorId;
+  message.authorName = recorded.authorName;
+  message.timestamp = timestamp;
+  message.routing = {
+    ...message.routing,
+    icpCorrelation: recorded.correlation,
+  };
 }
 
 export interface GatewayMessageGateway {
@@ -121,7 +163,10 @@ export interface GatewayMessageAgentLoop {
   ): Promise<IcpDeliveryObservation | null>
     | IcpDeliveryObservation
     | null;
-  hasRecordedSourceMessage(channelId: string, sourceMessageId: string): Promise<boolean> | boolean;
+  findRecordedCompanionSourceMessage(
+    channelId: string,
+    sourceMessageId: string,
+  ): Promise<RecordedCompanionSourceMessage | null> | RecordedCompanionSourceMessage | null;
   recordIcpDeliveryObservation(observation: IcpDeliveryObservation): Promise<void> | void;
 }
 
@@ -807,9 +852,16 @@ export function registerGatewayMessageHandlers(
     }
     let handedToPump = false;
     try {
-      let alreadyRecorded: boolean;
+      let recordedSource: RecordedCompanionSourceMessage | null;
       try {
-        alreadyRecorded = await agentLoop.hasRecordedSourceMessage(message.channelId, message.id);
+        normalizeTransportTimestamp(message);
+        recordedSource = await agentLoop.findRecordedCompanionSourceMessage(
+          message.channelId,
+          message.id,
+        );
+        if (recordedSource && message.routing?.icpCorrelation) {
+          bindRecordedCompanionSourceEnvelope(message, recordedSource);
+        }
       } catch (error) {
         const errorText = toErrorMessage(error);
         log.error('Failed to read durable companion message dedupe state', {
@@ -844,7 +896,7 @@ export function registerGatewayMessageHandlers(
         }
         return;
       }
-      if (alreadyRecorded) {
+      if (recordedSource) {
         if (message.routing?.icpCorrelation) {
           const recordedReply = await agentLoop.findRecordedIcpInitiation(message.channelId, message.id);
           const deliveryObservation = await agentLoop.findIcpDeliveryObservation(
@@ -854,12 +906,20 @@ export function registerGatewayMessageHandlers(
           if (deliveryObservation?.turnCompleted) {
             // The same source id already completed its ordinary delivery-gated
             // turn; fall through to the durable duplicate audit below.
-          } else if (recordedReply) {
+          } else if (recordedReply || deliveryObservation?.recoveryResponse) {
             const recoveryResponse = deliveryObservation?.recoveryResponse
-              ?? recordedReply.recoveryResponse;
+              ?? recordedReply?.recoveryResponse;
+            if (!recoveryResponse?.metadata.icpCorrelation) {
+              throw new Error('Durable ICP recovery response is missing correlation');
+            }
+            if (recordedReply
+              && JSON.stringify(recordedReply.correlation)
+                !== JSON.stringify(recoveryResponse.metadata.icpCorrelation)) {
+              throw new Error('Durable ICP recovery sources disagree on reply lineage');
+            }
             message.routing = {
               ...message.routing,
-              icpCorrelation: recordedReply.correlation,
+              icpCorrelation: recoveryResponse.metadata.icpCorrelation,
             };
             const lifecycle = buildCompanionReplyDeliveryLifecycle(
               message,
@@ -892,11 +952,6 @@ export function registerGatewayMessageHandlers(
           disposition: 'durable',
         });
         return;
-      }
-
-      // Deserialize Date if it came as string (gateway serializes for transport).
-      if (typeof message.timestamp === 'string') {
-        message.timestamp = new Date(message.timestamp);
       }
 
       log.info(`Companion message from ${message.authorName}: ${message.content.slice(0, 50)}...`, {

@@ -802,7 +802,8 @@ export class GatewayServer {
     if (stableIcpMessageId) {
       // Collapse an identical retry while this gateway process still owns the
       // result. On restart the cache is empty and at-least-once redelivery is
-      // intentional; the recipient's durable source-id gate is authoritative.
+      // intentional; the recipient's durable source-envelope binding is
+      // authoritative across gateway process restarts.
       const delivered = this.deliveredIcpMessages.get(stableIcpMessageId);
       if (delivered) {
         if (delivered.content !== content

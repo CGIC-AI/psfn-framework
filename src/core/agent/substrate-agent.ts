@@ -1348,6 +1348,14 @@ export class SubstrateAgent {
     return this.sessionManager.findIcpDeliveryObservation(channelId, sourceMessageId);
   }
 
+  /** Durable recipient envelope used to bind restart replay to original L0 truth. */
+  findRecordedCompanionSourceMessage(
+    channelId: string,
+    sourceMessageId: string,
+  ): import('../session/icp-delivery-recovery.js').RecordedCompanionSourceMessage | null {
+    return this.sessionManager.findRecordedCompanionSourceMessage(channelId, sourceMessageId);
+  }
+
   /** Durable recipient-side source-id check; survives agent process restart. */
   hasRecordedSourceMessage(channelId: string, sourceMessageId: string): boolean {
     return this.sessionManager.hasRecordedSourceMessage(channelId, sourceMessageId);

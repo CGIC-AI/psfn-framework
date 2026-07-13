@@ -1234,6 +1234,49 @@ describe('SessionStore', () => {
     expect(fullReadSpy).not.toHaveBeenCalled();
   });
 
+  it('stops a bounded range scan below the requested IDs when the range contains a marker', () => {
+    const channelId = 'api:bounded-range-marker';
+    appendSessionMessages(store, channelId, 1_490);
+    store.insertExtractionMarker(channelId, 1_490);
+    appendSessionMessages(store, channelId, 9, 'Tail');
+
+    const archivePort = createFilesystemSessionArchivePort();
+    const originalRead = archivePort.readJournalMatchingEntriesBackward.bind(archivePort);
+    const visitedIds = new Set<number>();
+    vi.spyOn(archivePort, 'readJournalMatchingEntriesBackward').mockImplementation((archive, options) => (
+      originalRead(archive, {
+        ...options,
+        matches: (entry) => {
+          visitedIds.add(entry.id);
+          return options.matches(entry);
+        },
+        stopAfter: (entry) => {
+          visitedIds.add(entry.id);
+          return options.stopAfter?.(entry) ?? false;
+        },
+      })
+    ));
+    const fullReadSpy = vi.spyOn(archivePort, 'readJournalFile');
+    const reloaded = new SessionStore(dir, { sessionArchivePort: archivePort });
+    fullReadSpy.mockClear();
+
+    expect(reloaded.getEntriesInRange(channelId, 1_490, 1_500).map(entry => entry.id)).toEqual([
+      1_490,
+      1_492,
+      1_493,
+      1_494,
+      1_495,
+      1_496,
+      1_497,
+      1_498,
+      1_499,
+      1_500,
+    ]);
+    expect(Math.min(...visitedIds)).toBe(1_489);
+    expect(visitedIds.size).toBeLessThanOrEqual(12);
+    expect(fullReadSpy).not.toHaveBeenCalled();
+  });
+
   it('caches lightweight session tails across repeated unchanged reads', () => {
     const channelId = 'api:tail-cache-repeat';
     appendSessionMessages(store, channelId, 8);

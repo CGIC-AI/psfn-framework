@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { AgentResponse, Attachment, SubstrateMessage } from '../../shared/contracts/runtime.js';
+import type {
+  AgentResponse,
+  Attachment,
+  SubstrateMessage,
+  TurnID,
+} from '../../shared/contracts/runtime.js';
 import type { SatelliteRoutingMetadata } from '../../core/agent/satellite-adapter-port.js';
 import { createNoopSatelliteRoutingPort } from '../../core/agent/satellite-adapter-port.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
@@ -11,7 +16,11 @@ import type {
   CompanionMessageDeliveryFailureNotification,
   CompanionMessageFailureReportParams,
 } from '../../boundary/gateway/protocol.js';
-import type { IcpConversationCorrelation } from '../../shared/contracts/icp-autonomy.js';
+import {
+  deriveIcpTransportMessageId,
+  type IcpConversationCorrelation,
+} from '../../shared/contracts/icp-autonomy.js';
+import type { RecordedCompanionSourceMessage } from '../../core/session/icp-delivery-recovery.js';
 
 function makeMessage(overrides?: Record<string, unknown>): SubstrateMessage {
   return {
@@ -91,7 +100,10 @@ function createHarness(overrides?: {
   }>;
   companionSendInitiation?: (input: Record<string, unknown>) => Promise<any>;
   companionReportFailure?: (params: CompanionMessageFailureReportParams) => Promise<unknown>;
-  hasRecordedSourceMessage?: (channelId: string, sourceMessageId: string) => Promise<boolean> | boolean;
+  findRecordedCompanionSourceMessage?: (
+    channelId: string,
+    sourceMessageId: string,
+  ) => Promise<RecordedCompanionSourceMessage | null> | RecordedCompanionSourceMessage | null;
   findRecordedIcpInitiation?: (
     channelId: string,
     sourceMessageId: string,
@@ -166,7 +178,9 @@ function createHarness(overrides?: {
     waitForIdle: vi.fn(overrides?.waitForIdle ?? (async () => {})),
     findRecordedIcpInitiation: vi.fn(overrides?.findRecordedIcpInitiation ?? (async () => null)),
     findIcpDeliveryObservation: vi.fn(overrides?.findIcpDeliveryObservation ?? (async () => null)),
-    hasRecordedSourceMessage: vi.fn(overrides?.hasRecordedSourceMessage ?? (async () => false)),
+    findRecordedCompanionSourceMessage: vi.fn(
+      overrides?.findRecordedCompanionSourceMessage ?? (async () => null),
+    ),
     recordIcpDeliveryObservation: vi.fn(
       overrides?.recordIcpDeliveryObservation ?? (async () => {}),
     ),
@@ -850,6 +864,7 @@ describe('registerGatewayMessageHandlers', () => {
   const ICP_A = '11111111-1111-4111-8111-111111111111';
   const ICP_B = '22222222-2222-4222-8222-222222222222';
   const ICP_CHANNEL = `companion-dm:${ICP_A}:${ICP_B}`;
+  const ICP_CANDIDATE = '33333333-3333-4333-8333-333333333333';
   const inboundIcpCorrelation: IcpConversationCorrelation = {
     conversationId: '44444444-4444-4444-8444-444444444444',
     rootInitiationId: '99999999-9999-4999-8999-999999999999',
@@ -859,26 +874,29 @@ describe('registerGatewayMessageHandlers', () => {
     peerContactId: 'contact-b',
     channelId: ICP_CHANNEL,
     turnId: '018f22a2-52b8-7a3a-8c16-25b7b14f7081',
-    messageId: 'companion-initiation-reply-test',
-    requestId: 'companion-initiation-reply-test',
+    messageId: `icp-initiation:${ICP_CANDIDATE}`,
+    requestId: `icp-initiation:${ICP_CANDIDATE}`,
     chargeLane: 'companion_social',
     surface: 'companion_dm',
     costPurpose: 'conversation_turn',
     costOriginStage: 'initiation',
     fatigueDecision: 'allow',
   };
+  const INBOUND_ICP_MESSAGE_ID = deriveIcpTransportMessageId(inboundIcpCorrelation);
   const replyIcpCorrelation: IcpConversationCorrelation = {
     ...inboundIcpCorrelation,
     localCompanionId: ICP_B,
     peerCompanionId: ICP_A,
     peerContactId: 'contact-a',
     turnId: '018f22a2-52b8-7a3a-8c16-25b7b14f7082',
+    messageId: INBOUND_ICP_MESSAGE_ID,
+    requestId: INBOUND_ICP_MESSAGE_ID,
     costOriginStage: 'reply',
   };
 
-  function makeCorrelatedCompanionMessage(): SubstrateMessage {
+  function makeCorrelatedCompanionMessage(overrides?: Record<string, unknown>): SubstrateMessage {
     return makeCompanionMessage({
-      id: inboundIcpCorrelation.messageId,
+      id: INBOUND_ICP_MESSAGE_ID,
       channelId: ICP_CHANNEL,
       authorId: ICP_A,
       isDirectMessage: true,
@@ -887,7 +905,25 @@ describe('registerGatewayMessageHandlers', () => {
         authorIsMachineIntelligence: true,
         icpCorrelation: inboundIcpCorrelation,
       },
+      ...overrides,
     });
+  }
+
+  function makeRecordedSource(
+    message: SubstrateMessage,
+    timestampMs = Date.parse('2026-03-02T00:00:00.000Z'),
+  ): RecordedCompanionSourceMessage {
+    return {
+      channelId: message.channelId,
+      sourceMessageId: message.id,
+      content: message.content,
+      authorId: message.authorId,
+      authorName: message.authorName,
+      timestampMs,
+      ...(message.routing?.icpCorrelation
+        ? { correlation: message.routing.icpCorrelation }
+        : {}),
+    };
   }
 
   it('delivery-gates a correlated companion reply and carries episode lineage', async () => {
@@ -929,7 +965,7 @@ describe('registerGatewayMessageHandlers', () => {
     );
     expect(harness.agentLoop.recordIcpDeliveryObservation).toHaveBeenCalledWith(expect.objectContaining({
       channelId: ICP_CHANNEL,
-      sourceMessageId: inboundIcpCorrelation.messageId,
+      sourceMessageId: INBOUND_ICP_MESSAGE_ID,
       status: 'delivered',
       gatewayMessageId: 'companion-reply-delivered',
       deliveredTo: [ICP_A],
@@ -966,7 +1002,7 @@ describe('registerGatewayMessageHandlers', () => {
     await vi.waitFor(() => {
       expect(first.gateway.companionReportFailure).toHaveBeenCalledWith({
         channelId: ICP_CHANNEL,
-        messageId: inboundIcpCorrelation.messageId,
+        messageId: INBOUND_ICP_MESSAGE_ID,
         reason: 'reply_delivery_failed',
       });
     });
@@ -980,7 +1016,9 @@ describe('registerGatewayMessageHandlers', () => {
     let recoveredPostTurnStarted = 0;
     const restarted = createHarness({
       config: { companionId: ICP_B } as SubstrateConfig,
-      hasRecordedSourceMessage: async () => true,
+      findRecordedCompanionSourceMessage: async () => (
+        makeRecordedSource(makeCorrelatedCompanionMessage())
+      ),
       findRecordedIcpInitiation: async () => ({
         content: reply.content,
         correlation: replyIcpCorrelation,
@@ -1001,7 +1039,9 @@ describe('registerGatewayMessageHandlers', () => {
       }),
     });
 
-    await restarted.onCompanionMessage(makeCorrelatedCompanionMessage());
+    await restarted.onCompanionMessage(makeCorrelatedCompanionMessage({
+      timestamp: '2026-03-02T05:00:00.000Z',
+    }));
 
     expect(restarted.agentLoop.handleMessage).toHaveBeenCalledTimes(1);
     expect(recoveredPostTurnStarted).toBe(1);
@@ -1025,7 +1065,9 @@ describe('registerGatewayMessageHandlers', () => {
     let recoveredPostTurnStarted = 0;
     const restarted = createHarness({
       config: { companionId: ICP_B } as SubstrateConfig,
-      hasRecordedSourceMessage: async () => true,
+      findRecordedCompanionSourceMessage: async () => (
+        makeRecordedSource(makeCorrelatedCompanionMessage())
+      ),
       findRecordedIcpInitiation: async () => ({
         content: reply.content,
         correlation: replyIcpCorrelation,
@@ -1046,13 +1088,113 @@ describe('registerGatewayMessageHandlers', () => {
       }),
     });
 
-    await restarted.onCompanionMessage(makeCorrelatedCompanionMessage());
+    await restarted.onCompanionMessage(makeCorrelatedCompanionMessage({
+      timestamp: '2026-03-02T05:00:00.000Z',
+    }));
 
     expect(restarted.agentLoop.handleMessage).toHaveBeenCalledTimes(1);
     expect(recoveredPostTurnStarted).toBe(1);
     expect(restarted.gateway.companionSend).toHaveBeenCalledTimes(1);
     expect(restarted.agentLoop.recordIcpDeliveryObservation).toHaveBeenLastCalledWith(
       expect.objectContaining({ status: 'delivered', turnCompleted: true }),
+    );
+    const handled = restarted.agentLoop.handleMessage.mock.calls[0][0] as SubstrateMessage;
+    expect(handled.timestamp).toEqual(new Date('2026-03-02T00:00:00.000Z'));
+  });
+
+  it('completes a delivered restart replay from its durable response without resending', async () => {
+    const reply = {
+      ...makeResponse('already delivered reply'),
+      channelId: ICP_CHANNEL,
+      metadata: {
+        ...makeResponse('').metadata,
+        turnId: replyIcpCorrelation.turnId,
+        requestId: replyIcpCorrelation.requestId,
+        icpCorrelation: replyIcpCorrelation,
+      },
+    };
+    const deliveredObservation = {
+      channelId: ICP_CHANNEL,
+      sourceMessageId: INBOUND_ICP_MESSAGE_ID,
+      status: 'delivered' as const,
+      gatewayMessageId: 'already-delivered-message',
+      deliveredTo: [ICP_A],
+      recoveryResponse: reply,
+    };
+    const restarted = createHarness({
+      config: { companionId: ICP_B } as SubstrateConfig,
+      findRecordedCompanionSourceMessage: async () => (
+        makeRecordedSource(makeCorrelatedCompanionMessage())
+      ),
+      findIcpDeliveryObservation: async () => deliveredObservation,
+      handleMessage: async (_message, lifecycle) => {
+        expect(lifecycle?.recoveredResponse).toEqual(reply);
+        await lifecycle?.finalizeDelivery(reply);
+        return reply;
+      },
+    });
+
+    await restarted.onCompanionMessage(makeCorrelatedCompanionMessage({
+      timestamp: '2026-03-02T05:00:00.000Z',
+    }));
+
+    expect(restarted.gateway.companionSend).not.toHaveBeenCalled();
+    expect(restarted.agentLoop.recordIcpDeliveryObservation).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        status: 'delivered',
+        gatewayMessageId: 'already-delivered-message',
+        turnCompleted: true,
+      }),
+    );
+  });
+
+  it('recovers a durably suppressed turn without regenerating or sending a reply', async () => {
+    const suppressed = {
+      ...makeResponse(''),
+      channelId: ICP_CHANNEL,
+      metadata: {
+        ...makeResponse('').metadata,
+        turnId: replyIcpCorrelation.turnId,
+        requestId: replyIcpCorrelation.requestId,
+        icpCorrelation: replyIcpCorrelation,
+        noReply: {
+          schemaVersion: 1 as const,
+          disposition: 'intentional_no_reply' as const,
+          source: 'response_control_tool' as const,
+          auditId: 'no-reply-restart',
+          decidedAt: Date.parse('2026-03-02T00:00:00.000Z'),
+          turnId: replyIcpCorrelation.turnId as TurnID,
+          requestId: replyIcpCorrelation.requestId,
+          channelId: ICP_CHANNEL,
+        },
+      },
+    };
+    const restarted = createHarness({
+      config: { companionId: ICP_B } as SubstrateConfig,
+      findRecordedCompanionSourceMessage: async () => (
+        makeRecordedSource(makeCorrelatedCompanionMessage())
+      ),
+      findIcpDeliveryObservation: async () => ({
+        channelId: ICP_CHANNEL,
+        sourceMessageId: INBOUND_ICP_MESSAGE_ID,
+        status: 'suppressed',
+        recoveryResponse: suppressed,
+      }),
+      handleMessage: async (_message, lifecycle) => {
+        expect(lifecycle?.recoveredResponse).toEqual(suppressed);
+        await lifecycle?.finalizeDelivery(suppressed);
+        return suppressed;
+      },
+    });
+
+    await restarted.onCompanionMessage(makeCorrelatedCompanionMessage({
+      timestamp: '2026-03-02T05:00:00.000Z',
+    }));
+
+    expect(restarted.agentLoop.handleMessage).toHaveBeenCalledOnce();
+    expect(restarted.gateway.companionSend).not.toHaveBeenCalled();
+    expect(restarted.agentLoop.recordIcpDeliveryObservation).toHaveBeenLastCalledWith(
+      expect.objectContaining({ status: 'suppressed', turnCompleted: true }),
     );
   });
 
@@ -1069,7 +1211,9 @@ describe('registerGatewayMessageHandlers', () => {
     };
     const restarted = createHarness({
       config: { companionId: ICP_B } as SubstrateConfig,
-      hasRecordedSourceMessage: async () => true,
+      findRecordedCompanionSourceMessage: async () => (
+        makeRecordedSource(makeCorrelatedCompanionMessage())
+      ),
       findRecordedIcpInitiation: async () => null,
       handleMessage: async (_message, lifecycle) => {
         expect(lifecycle?.sourceAlreadyPersisted).toBe(true);
@@ -1085,17 +1229,49 @@ describe('registerGatewayMessageHandlers', () => {
       }),
     });
 
-    await restarted.onCompanionMessage(makeCorrelatedCompanionMessage());
+    await restarted.onCompanionMessage(makeCorrelatedCompanionMessage({
+      timestamp: '2026-03-02T05:00:00.000Z',
+    }));
 
     expect(restarted.agentLoop.handleMessage).toHaveBeenCalledTimes(1);
     expect(restarted.gateway.companionSend).toHaveBeenCalledTimes(1);
     expect(restarted.agentLoop.recordIcpDeliveryObservation).toHaveBeenLastCalledWith(
       expect.objectContaining({ status: 'delivered', turnCompleted: true }),
     );
+    const handled = restarted.agentLoop.handleMessage.mock.calls[0][0] as SubstrateMessage;
+    expect(handled.timestamp).toEqual(new Date('2026-03-02T00:00:00.000Z'));
+  });
+
+  it('rejects a restart replay whose stable source id carries a changed durable envelope', async () => {
+    const original = makeCorrelatedCompanionMessage();
+    const harness = createHarness({
+      config: { companionId: ICP_B } as SubstrateConfig,
+      findRecordedCompanionSourceMessage: async () => makeRecordedSource(original),
+    });
+
+    await harness.onCompanionMessage(makeCorrelatedCompanionMessage({
+      content: 'changed after gateway restart',
+      timestamp: '2026-03-02T05:00:00.000Z',
+    }));
+
+    expect(harness.agentLoop.handleMessage).not.toHaveBeenCalled();
+    expect(harness.gateway.companionReportFailure).toHaveBeenCalledWith({
+      channelId: ICP_CHANNEL,
+      messageId: INBOUND_ICP_MESSAGE_ID,
+      reason: 'processing_failed',
+    });
+    expect(harness.safeguardAuditTrail.append).toHaveBeenCalledWith(
+      'companion.message.durable_dedupe_error',
+      expect.objectContaining({
+        channelId: ICP_CHANNEL,
+        messageId: INBOUND_ICP_MESSAGE_ID,
+        error: 'Companion replay envelope does not match its durable source entry',
+      }),
+    );
   });
 
   it('owns a correlated envelope before awaiting durable recovery state', async () => {
-    const durableLookup = createDeferred<boolean>();
+    const durableLookup = createDeferred<RecordedCompanionSourceMessage | null>();
     const reply = {
       ...makeResponse('single raced reply'),
       channelId: ICP_CHANNEL,
@@ -1108,7 +1284,7 @@ describe('registerGatewayMessageHandlers', () => {
     };
     const harness = createHarness({
       config: { companionId: ICP_B } as SubstrateConfig,
-      hasRecordedSourceMessage: async () => await durableLookup.promise,
+      findRecordedCompanionSourceMessage: async () => await durableLookup.promise,
       handleMessage: async (_message, lifecycle) => {
         if (!lifecycle) throw new Error('test expected delivery lifecycle');
         await lifecycle.finalizeDelivery(reply);
@@ -1126,9 +1302,9 @@ describe('registerGatewayMessageHandlers', () => {
     await Promise.resolve();
     await Promise.resolve();
     await harness.onCompanionMessage(makeCorrelatedCompanionMessage());
-    expect(harness.agentLoop.hasRecordedSourceMessage).toHaveBeenCalledTimes(1);
+    expect(harness.agentLoop.findRecordedCompanionSourceMessage).toHaveBeenCalledTimes(1);
 
-    durableLookup.resolve(false);
+    durableLookup.resolve(null);
     await first;
     await vi.waitFor(() => expect(harness.agentLoop.handleMessage).toHaveBeenCalledTimes(1));
     expect(harness.gateway.companionSend).toHaveBeenCalledTimes(1);
@@ -1207,12 +1383,12 @@ describe('registerGatewayMessageHandlers', () => {
   });
 
   it('drops a gateway replay already present in durable recipient L0 after restart', async () => {
+    const message = makeCompanionMessage({ id: 'companion-initiation-restart-safe' });
     const harness = createHarness({
-      hasRecordedSourceMessage: async (_channelId, sourceMessageId) => (
-        sourceMessageId === 'companion-initiation-restart-safe'
+      findRecordedCompanionSourceMessage: async (_channelId, sourceMessageId) => (
+        sourceMessageId === message.id ? makeRecordedSource(message) : null
       ),
     });
-    const message = makeCompanionMessage({ id: 'companion-initiation-restart-safe' });
 
     await harness.onCompanionMessage(message);
 
@@ -1228,7 +1404,7 @@ describe('registerGatewayMessageHandlers', () => {
 
   it('reports a deterministic failure when durable companion dedupe cannot be read', async () => {
     const harness = createHarness({
-      hasRecordedSourceMessage: async () => {
+      findRecordedCompanionSourceMessage: async () => {
         throw new Error('journal unavailable');
       },
     });

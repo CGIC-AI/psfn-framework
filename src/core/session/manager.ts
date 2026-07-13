@@ -86,8 +86,12 @@ import {
   parseIcpDeliveryObservation,
   serializeIcpDeliveryObservation,
   type IcpDeliveryObservation,
+  type RecordedCompanionSourceMessage,
 } from './icp-delivery-recovery.js';
-import type { IcpConversationCorrelation } from '../../shared/contracts/icp-autonomy.js';
+import {
+  deriveIcpTransportMessageId,
+  type IcpConversationCorrelation,
+} from '../../shared/contracts/icp-autonomy.js';
 import type {
   PreCompactionExtractionContext,
   PreCompactionExtractionHandler,
@@ -1223,16 +1227,45 @@ export class SessionManager {
     return null;
   }
 
-  hasRecordedSourceMessage(channelId: string, sourceMessageId: string): boolean {
-    return this.store.findLatestEntries(
-      this.resolveSessionChannelId(channelId),
+  findRecordedCompanionSourceMessage(
+    channelId: string,
+    sourceMessageId: string,
+  ): RecordedCompanionSourceMessage | null {
+    const resolvedChannelId = this.resolveSessionChannelId(channelId);
+    const entries = this.store.findLatestEntries(
+      resolvedChannelId,
       (entry) => {
         if (entry.role !== 'user' && entry.role !== 'system') return false;
         if (!entry.metadata?.includes(sourceMessageId)) return false;
         return resolveSessionEntryTurnContext(entry).sourceMessageId === sourceMessageId;
       },
       1,
-    ).length > 0;
+    );
+    const entry = entries.at(0);
+    if (!entry) return null;
+    if (typeof entry.authorId !== 'string' || !entry.authorId.trim()
+      || typeof entry.authorName !== 'string' || !entry.authorName.trim()
+      || !Number.isFinite(entry.timestamp) || entry.timestamp <= 0) {
+      throw new Error('Recorded companion source envelope is malformed');
+    }
+    const correlation = parseSessionIcpCorrelation(entry.metadata);
+    if (correlation && (correlation.channelId !== resolvedChannelId
+      || deriveIcpTransportMessageId(correlation) !== sourceMessageId)) {
+      throw new Error('Recorded companion source envelope has mismatched ICP lineage');
+    }
+    return {
+      channelId: resolvedChannelId,
+      sourceMessageId,
+      content: entry.content,
+      authorId: entry.authorId.trim(),
+      authorName: entry.authorName.trim(),
+      timestampMs: entry.timestamp,
+      ...(correlation ? { correlation } : {}),
+    };
+  }
+
+  hasRecordedSourceMessage(channelId: string, sourceMessageId: string): boolean {
+    return this.findRecordedCompanionSourceMessage(channelId, sourceMessageId) !== null;
   }
 
   recordIcpDeliveryObservation(observation: IcpDeliveryObservation): void {

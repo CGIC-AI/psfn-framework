@@ -19,6 +19,7 @@ const CONTACT_ID = '66666666-6666-4666-8666-666666666666';
 const CHANNEL = `companion-dm:${SENDER}:${RECIPIENT}`;
 
 function permit(): IcpInitiationPermit {
+  const nowMs = Date.now();
   return {
     permitId: PERMIT_ID,
     candidateId: CANDIDATE,
@@ -27,10 +28,20 @@ function permit(): IcpInitiationPermit {
     recipientCompanionId: RECIPIENT,
     channelId: CHANNEL,
     provenanceRef: 'icp-prov:77777777-7777-4777-8777-777777777777',
-    issuedAtMs: Date.parse('2026-07-13T12:00:00.000Z'),
-    expiresAtMs: Date.parse('2026-07-13T12:10:00.000Z'),
+    issuedAtMs: nowMs - 60_000,
+    expiresAtMs: nowMs + 10 * 60_000,
     status: 'issued',
     revision: 1,
+  };
+}
+
+function consumedPermit(): IcpInitiationPermit {
+  const issued = permit();
+  return {
+    ...issued,
+    status: 'consumed',
+    consumedAtMs: issued.issuedAtMs + 60_000,
+    revision: 2,
   };
 }
 
@@ -212,7 +223,7 @@ describe('ICP target-channel initiation', () => {
     });
 
     const result = await restartedHarness.initiator.initiate({
-      permit: { ...permit(), status: 'consumed', consumedAtMs: Date.parse('2026-07-13T12:01:00.000Z'), revision: 2 },
+      permit: consumedPermit(),
       rootInitiationId: ROOT,
       peerContactId: CONTACT_ID,
     });
@@ -246,12 +257,7 @@ describe('ICP target-channel initiation', () => {
     });
 
     await expect(restarted.initiator.initiate({
-      permit: {
-        ...permit(),
-        status: 'consumed',
-        consumedAtMs: Date.parse('2026-07-13T12:01:00.000Z'),
-        revision: 2,
-      },
+      permit: consumedPermit(),
       rootInitiationId: ROOT,
       peerContactId: CONTACT_ID,
     })).resolves.toMatchObject({ disposition: 'delivered', recoveredTurn: true });
@@ -290,12 +296,7 @@ describe('ICP target-channel initiation', () => {
     });
 
     await restarted.initiator.initiate({
-      permit: {
-        ...permit(),
-        status: 'consumed',
-        consumedAtMs: Date.parse('2026-07-13T12:01:00.000Z'),
-        revision: 2,
-      },
+      permit: consumedPermit(),
       rootInitiationId: ROOT,
       peerContactId: CONTACT_ID,
     });
@@ -398,12 +399,7 @@ describe('ICP target-channel initiation', () => {
     });
 
     await expect(harness.initiator.initiate({
-      permit: {
-        ...permit(),
-        status: 'consumed',
-        consumedAtMs: Date.parse('2026-07-13T12:01:00.000Z'),
-        revision: 2,
-      },
+      permit: consumedPermit(),
       rootInitiationId: ROOT,
       peerContactId: CONTACT_ID,
     })).resolves.toMatchObject({ disposition: 'suppressed', recoveredTurn: true });
@@ -423,12 +419,7 @@ describe('ICP target-channel initiation', () => {
     const harness = createHarness();
 
     await expect(harness.initiator.initiate({
-      permit: {
-        ...permit(),
-        status: 'consumed',
-        consumedAtMs: Date.parse('2026-07-13T12:01:00.000Z'),
-        revision: 2,
-      },
+      permit: consumedPermit(),
       rootInitiationId: ROOT,
       peerContactId: CONTACT_ID,
     })).rejects.toThrow(/missing durable prepared suppression recovery evidence/i);

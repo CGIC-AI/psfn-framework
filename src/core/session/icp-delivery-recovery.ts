@@ -4,6 +4,7 @@ import {
 } from '../../shared/contracts/icp-autonomy.js';
 import type { AgentResponse, Attachment } from '../../shared/contracts/runtime.js';
 import { isRecord } from '../../shared/utils/types.js';
+import { parseIcpRecoveryResponseMetadata } from './icp-recovery-response-metadata.js';
 
 const OBSERVATION_KEYS = new Set([
   'schemaVersion',
@@ -20,24 +21,6 @@ const OBSERVATION_KEYS = new Set([
 ]);
 
 const RESPONSE_KEYS = new Set(['content', 'channelId', 'attachments', 'metadata']);
-const RESPONSE_METADATA_KEYS = new Set([
-  'model',
-  'inputTokens',
-  'outputTokens',
-  'durationMs',
-  'turnId',
-  'requestId',
-  'icpCorrelation',
-  'noReply',
-  'internalState',
-  'internalStateSnapshotRef',
-  'metacognitiveFlags',
-  'retrievalProvenanceRefs',
-  'diagnostics',
-  'broadcastSafety',
-  'fatigue',
-  'fatiguePendingSpend',
-]);
 const ATTACHMENT_KEYS = new Set([
   'url',
   'contentType',
@@ -59,18 +42,22 @@ export interface IcpDeliveryObservation {
   turnCompleted?: true;
 }
 
+/** Durable recipient-side source envelope used to bind restart replay. */
+export interface RecordedCompanionSourceMessage {
+  channelId: string;
+  sourceMessageId: string;
+  content: string;
+  authorId: string;
+  authorName: string;
+  timestampMs: number;
+  correlation?: IcpConversationCorrelation;
+}
+
 function sameCorrelation(
   left: IcpConversationCorrelation,
   right: IcpConversationCorrelation,
 ): boolean {
   return JSON.stringify(left) === JSON.stringify(right);
-}
-
-function requireNonNegativeFiniteNumber(value: unknown, label: string): number {
-  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
-    throw new Error(`${label} must be a non-negative finite number`);
-  }
-  return value;
 }
 
 function parseRecoveryAttachments(value: unknown, label: string): Attachment[] | undefined {
@@ -115,39 +102,24 @@ export function parseIcpRecoveryResponse(
   if (!isRecord(value)
     || typeof value.content !== 'string'
     || typeof value.channelId !== 'string'
-    || !isRecord(value.metadata)
-    || typeof value.metadata.model !== 'string'
-    || !value.metadata.model.trim()) {
+    || !isRecord(value.metadata)) {
     throw new Error(`${options.label} is malformed`);
   }
   const unknownResponseKeys = Object.keys(value).filter(key => !RESPONSE_KEYS.has(key));
   if (unknownResponseKeys.length > 0) {
     throw new Error(`${options.label} contains unknown fields: ${unknownResponseKeys.join(', ')}`);
   }
-  const unknownMetadataKeys = Object.keys(value.metadata)
-    .filter(key => !RESPONSE_METADATA_KEYS.has(key));
-  if (unknownMetadataKeys.length > 0) {
-    throw new Error(`${options.label}.metadata contains unknown fields: ${unknownMetadataKeys.join(', ')}`);
-  }
-  const inputTokens = requireNonNegativeFiniteNumber(
-    value.metadata.inputTokens,
-    `${options.label}.metadata.inputTokens`,
+  const metadata = parseIcpRecoveryResponseMetadata(
+    value.metadata,
+    `${options.label}.metadata`,
   );
-  const outputTokens = requireNonNegativeFiniteNumber(
-    value.metadata.outputTokens,
-    `${options.label}.metadata.outputTokens`,
-  );
-  const durationMs = requireNonNegativeFiniteNumber(
-    value.metadata.durationMs,
-    `${options.label}.metadata.durationMs`,
-  );
-  const correlation = parseIcpConversationCorrelation(value.metadata.icpCorrelation);
+  const correlation = parseIcpConversationCorrelation(metadata.icpCorrelation);
   if ((options.expectedCorrelation && !sameCorrelation(correlation, options.expectedCorrelation))
     || value.channelId !== (options.expectedChannelId ?? correlation.channelId)
     || (options.expectedSourceMessageId !== undefined
       && correlation.messageId !== options.expectedSourceMessageId)
-    || value.metadata.turnId !== correlation.turnId
-    || value.metadata.requestId !== correlation.requestId) {
+    || metadata.turnId !== correlation.turnId
+    || metadata.requestId !== correlation.requestId) {
     throw new Error(`${options.label} does not match its durable ICP lineage`);
   }
   const attachments = parseRecoveryAttachments(value.attachments, `${options.label}.attachments`);
@@ -155,14 +127,7 @@ export function parseIcpRecoveryResponse(
     content: value.content,
     channelId: value.channelId,
     ...(attachments ? { attachments } : {}),
-    metadata: {
-      ...value.metadata,
-      model: value.metadata.model.trim(),
-      inputTokens,
-      outputTokens,
-      durationMs,
-      icpCorrelation: correlation,
-    },
+    metadata,
   };
   return structuredClone(response);
 }

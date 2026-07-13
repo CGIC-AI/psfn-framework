@@ -10,6 +10,7 @@ export {
   readJournalFile,
   readJournalFirstEntry,
   readJournalTailEntries,
+  scanJournalLinesBackward,
   scanJournalFileMetadata,
   writeJournalFileAtomic,
 } from './journal/file-io.js';

@@ -100,17 +100,21 @@ test files / 8,217 tests, build, lint, settings-contract, repository-hygiene,
 and two independent reviews with no findings.
 
 W6 fatigue and social-charge regulation (`s10mc.6.6`) is implemented at
-`484072be`. It extends the existing per-companion fatigue engine with decaying
+`484072be` and review-hardened at `c730a9c2`. It extends the existing per-companion fatigue engine with decaying
 relationship pressure, causal-root anti-reset across DMs/rooms/episodes,
 progressive prompt-visible regulation, a real `companion_social` charge lane,
 bounded closeout reserve, and zero-model suppression. A shared Postgres
 reservation fence serializes the last charged/closeout slot across processes
 and restarts while preserving each companion's directional choice; decline,
 defer, and unanswered pressure decay continuously rather than resetting on a
-calendar day. The fixed point passed build/DTS, lint, settings-contract,
-repository-hygiene, three Postgres reservation tests, and the full suite (716
-files; 8,231 passed, 3 skipped). Immutable independent-review evidence and the
-final closure reason are tracked on the child bead.
+calendar day. Review remediation replaced wall-clock pending-turn reclamation
+with bounded Postgres session leases, added a durable `delivering` fence and
+restart-safe recovery, rebased runtime decisions on the authoritative locked
+snapshot before prompt assembly, and unified social surface cost with its
+marginal charge. The hardened fixed point passed build/DTS, lint,
+settings-contract, repository-hygiene, seven Postgres reservation integration
+tests, and the full suite (716 files; 8,244 passed, 3 skipped). Two immutable
+independent re-reviews are pending before the child bead is closed.
 
 This is an implementation-wave checkpoint, not completion of the ICP epic or
 release validation. W5 and W7-W9 (`s10mc.6.5`, `.6.7` through `.6.9`) remain
@@ -187,7 +191,7 @@ In rough value order once the critical path (§2) and hardening (§3) are done:
 | `psfn-framework-s10mc.3` | W3 config scoping — phase 1 (`companions.json` + flag) @ `99ebd9c1`, supervisor @ `cf3dc9d1`; **open**: per-companion trust/charge/tier/settings owners |
 | `psfn-framework-s10mc.4` | W4 Gardens + fleet view — implemented @ `6608579f` per git log; bead notes/status not yet updated to reflect the merge |
 | `psfn-framework-s10mc.5` | W5 location deltas — presence @ `ac389e5b`, wiki scopes @ `53033de6`; **open**: caretaker (`s10d5`), shared-schema chunk storage, world-tool `move` wiring (`s10wm`) |
-| `psfn-framework-s10mc.6` | ICP autonomy epic — isolated feature branch is complete through W4 plus W6 fatigue/social regulation @ `484072be`; W5 and W7-W9 remain open; not merged or live-tested |
+| `psfn-framework-s10mc.6` | ICP autonomy epic — isolated feature branch is complete through W4 plus W6 fatigue/social regulation @ `484072be`, review-hardened @ `c730a9c2`; W5 and W7-W9 remain open; not merged or live-tested |
 | `psfn-framework-s10mc.7` | W7 voice/satellite binding rules — **not started** |
 | `psfn-framework-s10mc.8` | Spike — crossover correctness proven under test; **pending**: live two-process demo on real infra (§2f) |
 | `psfn-framework-s10rm` | Room mechanics — entry-event note merged @ `98e964eb`; **open**: presence-windowed delivery, public-room semantics, memory-tag tweaks (§2e) |

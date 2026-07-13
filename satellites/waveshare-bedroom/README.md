@@ -66,3 +66,21 @@ This full upstream image uses a single large factory application partition and
 therefore cannot perform OTA recovery or updates. USB serial remains the update
 path until the unused SIP/VoIP and artwork surface is removed and a dual-slot
 partition layout fits.
+
+## Purrsephone Sprites
+
+Firmware-ready 360x360 RGBA assets live under `assets/sprites/`. The preparation
+script flood-removes only near-white background pixels connected to an image
+edge, which removes the baked checkerboard without erasing her white hair or
+clothes:
+
+```bash
+uv run --with pillow python scripts/prepare-waveshare-sprites.py \
+  /path/to/source-sprites satellites/waveshare-bedroom/assets/sprites
+```
+
+The current baseline displays idle art while idle, listening, or disconnected;
+thinking art during inference; talking art during reply playback; and sleeping
+art while offline. Tool-use and sleeping are also embedded for the custom
+three-page runtime to select explicitly once the borrowed intercom controller is
+removed.

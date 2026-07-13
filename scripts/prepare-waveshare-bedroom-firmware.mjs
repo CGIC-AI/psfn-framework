@@ -78,6 +78,25 @@ profile = profile.replaceAll(
   path.join(outputRoot, "partitions_16mb_huge_factory.csv"),
 );
 profile = profile.replace("timezone: Europe/Rome", "timezone: America/New_York");
+
+const replaceRequired = (search, replacement, label) => {
+  if (!profile.includes(search)) throw new Error(`Prepared profile is missing ${label}`);
+  profile = profile.replace(search, replacement);
+};
+
+// Preserve the upstream widget IDs and lifecycle scripts while replacing its
+// borrowed character art with the repo-owned Purrsephone state sprites.
+const idleAnimation = /(        - animimg:\n            id: idle_anim[\s\S]*?            src:\n)[\s\S]*?(            duration: 6600ms)/;
+if (!idleAnimation.test(profile)) throw new Error("Prepared profile is missing the idle animation");
+profile = profile.replace(idleAnimation, "$1              - purrsephone_idle\n$2");
+replaceRequired("src: assistant_gui_listening", "src: purrsephone_idle", "listening sprite");
+replaceRequired("src: assistant_gui_thinking", "src: purrsephone_thinking", "thinking sprite");
+replaceRequired("src: error_no_ha", "src: purrsephone_idle", "disconnected sprite");
+replaceRequired("src: error_no_wifi", "src: purrsephone_sleeping", "offline sprite");
+replaceRequired("src: mood_neutral", "src: purrsephone_talking", "replying sprite");
+profile = profile.replaceAll("id(mood_neutral)", "id(purrsephone_talking)");
+profile = profile.replaceAll("id(mood_happy)", "id(purrsephone_talking)");
+profile = profile.replaceAll("id(mood_angry)", "id(purrsephone_talking)");
 // The optional artwork package depends on a mutable ESPHome pull-request head.
 // The base profile already supplies a deterministic neutral-art fallback, so
 // omit remote album artwork until the component exists in a pinned release.

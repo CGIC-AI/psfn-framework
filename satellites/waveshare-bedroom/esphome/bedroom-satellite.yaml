@@ -21,6 +21,28 @@ esp32:
       CONFIG_SPIRAM_FETCH_INSTRUCTIONS: "n"
       CONFIG_SPIRAM_RODATA: "n"
 
+image:
+  - file: ../assets/sprites/purrsephone-idle-360.png
+    id: purrsephone_idle
+    type: RGB565
+    transparency: alpha_channel
+  - file: ../assets/sprites/purrsephone-thinking-360.png
+    id: purrsephone_thinking
+    type: RGB565
+    transparency: alpha_channel
+  - file: ../assets/sprites/purrsephone-sleeping-360.png
+    id: purrsephone_sleeping
+    type: RGB565
+    transparency: alpha_channel
+  - file: ../assets/sprites/purrsephone-tool-use-360.png
+    id: purrsephone_tool_use
+    type: RGB565
+    transparency: alpha_channel
+  - file: ../assets/sprites/purrsephone-talking-360.png
+    id: purrsephone_talking
+    type: RGB565
+    transparency: alpha_channel
+
 api:
   encryption:
     key: !secret api_encryption_key

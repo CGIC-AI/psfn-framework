@@ -5,23 +5,16 @@ import type {
   FatigueBudgetReason,
   FatigueEnforcementMetadata,
 } from '../../../shared/contracts/runtime.js';
+import {
+  isFatigueWorkIntent,
+  resolveFatigueOverchargeDeterministicBlockedReasons,
+} from './policy.js';
 
-const OVERCHARGE_REASONS = new Set([
-  'recent_human_participation',
-  'work_intent_wrapup',
-]);
 const OVERCHARGE_REASON_ORDER = [
   'recent_human_participation',
   'work_intent_wrapup',
 ] as const;
-const OVERCHARGE_BLOCKED_REASONS = new Set([
-  'overcharge_disabled',
-  'peer_not_machine_intelligence',
-  'turn_does_not_spend_fatigue',
-  'normal_allowance_not_exhausted',
-  'no_qualifying_overcharge_trigger',
-  'overcharge_reserve_exhausted',
-]);
+const OVERCHARGE_REASONS = new Set<string>(OVERCHARGE_REASON_ORDER);
 const OVERCHARGE_BLOCKED_REASON_ORDER = [
   'overcharge_disabled',
   'peer_not_machine_intelligence',
@@ -30,6 +23,7 @@ const OVERCHARGE_BLOCKED_REASON_ORDER = [
   'no_qualifying_overcharge_trigger',
   'overcharge_reserve_exhausted',
 ] as const;
+const OVERCHARGE_BLOCKED_REASONS = new Set<string>(OVERCHARGE_BLOCKED_REASON_ORDER);
 const FATIGUE_DAY_KEY_PATTERN = /^\d{4}-\d{2}-\d{2}$/u;
 
 export interface FatigueSpendUnit {
@@ -149,10 +143,6 @@ function hasCanonicalOrder(
     previousIndex = index;
   }
   return true;
-}
-
-function isWorkIntent(intent: FatigueEnforcementMetadata['intent']): boolean {
-  return intent === 'work' || intent === 'research' || intent === 'problem_solving';
 }
 
 function assertSnapshotInvariants(metadata: FatigueEnforcementMetadata): void {
@@ -283,7 +273,7 @@ export function assertFatigueEnforcementMetadataInvariants(
     )) {
     fail('overcharge blocked reasons');
   }
-  const workIntent = isWorkIntent(metadata.intent);
+  const workIntent = isFatigueWorkIntent(metadata.intent);
   if (metadata.overchargeEligible) {
     if (metadata.policyState !== 'overcharge_eligible'
       || metadata.policyBaseState !== 'hard_exhausted'
@@ -306,13 +296,18 @@ export function assertFatigueEnforcementMetadataInvariants(
       && metadata.overchargeBlockedReasons.includes('no_qualifying_overcharge_trigger'))) {
     fail('ineligible overcharge policy');
   }
-  const expectedBlockedCouplings = [
-    ['peer_not_machine_intelligence', !peerIsMachineIntelligence],
-    ['turn_does_not_spend_fatigue', baseSpend.decision === 'free'],
-    ['normal_allowance_not_exhausted', metadata.policyBaseState !== 'hard_exhausted'],
-  ] as const;
-  for (const [reason, expected] of expectedBlockedCouplings) {
-    if (metadata.overchargeBlockedReasons.includes(reason) !== expected) {
+  const deterministicBlockedReasons = resolveFatigueOverchargeDeterministicBlockedReasons({
+    peerIsMachineIntelligence,
+    turnSpendsFatigue: baseSpend.decision === 'charged',
+    baseState: metadata.policyBaseState,
+  });
+  for (const reason of [
+    'peer_not_machine_intelligence',
+    'turn_does_not_spend_fatigue',
+    'normal_allowance_not_exhausted',
+  ] as const) {
+    if (metadata.overchargeBlockedReasons.includes(reason)
+      !== deterministicBlockedReasons.includes(reason)) {
       fail(`${reason} overcharge block`);
     }
   }

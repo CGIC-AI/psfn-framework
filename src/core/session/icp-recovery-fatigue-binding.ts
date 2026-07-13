@@ -9,6 +9,52 @@ function sameJson(left: unknown, right: unknown): boolean {
   return JSON.stringify(left) === JSON.stringify(right);
 }
 
+const ICP_ROOM_FATIGUE_CHANNEL_SETTINGS = new Set([
+  'busy_human_group',
+  'one_human_companion_hosted',
+  'quiet_companion_room',
+]);
+
+function assertRecordedEventBinding(input: {
+  recordedEvent: NonNullable<FatigueEnforcementMetadata['recordedEvent']>;
+  pendingSpend: FatiguePendingSpendMetadata;
+  label: string;
+}): void {
+  const { recordedEvent, pendingSpend, label } = input;
+  const normalSpentAfter = recordedEvent.normalSpentAfter;
+  const overchargeSpentAfter = recordedEvent.overchargeSpentAfter;
+  const overchargeAllowance = recordedEvent.overchargeAllowance;
+  const remainingOvercharge = recordedEvent.remainingOvercharge;
+  const responseCounts = [
+    recordedEvent.spentAfter,
+    recordedEvent.remainingAllowance,
+    normalSpentAfter,
+    overchargeSpentAfter,
+    overchargeAllowance,
+    remainingOvercharge,
+  ];
+  if (responseCounts.some(value => value === undefined
+      || !Number.isInteger(value)
+      || value < 0)
+    || normalSpentAfter === undefined
+    || overchargeSpentAfter === undefined
+    || overchargeAllowance === undefined
+    || remainingOvercharge === undefined
+    || recordedEvent.spentAfter !== normalSpentAfter + overchargeSpentAfter
+    || recordedEvent.remainingAllowance
+      !== Math.max(0, pendingSpend.limits.hardLimit - normalSpentAfter)
+    || overchargeAllowance !== pendingSpend.limits.overchargeLimit
+    || remainingOvercharge !== Math.max(0, overchargeAllowance - overchargeSpentAfter)
+    || recordedEvent.softState
+      !== (normalSpentAfter >= pendingSpend.limits.softLimit
+        ? 'soft_limit_reached'
+        : 'clear')
+    || recordedEvent.hardState
+      !== (normalSpentAfter >= pendingSpend.limits.hardLimit ? 'exhausted' : 'available')) {
+    throw new Error(`${label}.fatigue recorded event derived state is inconsistent`);
+  }
+}
+
 export function assertFatigueRecoveryBinding(input: {
   fatigue: FatigueEnforcementMetadata | undefined;
   pendingSpend: FatiguePendingSpendMetadata | undefined;
@@ -30,6 +76,11 @@ export function assertFatigueRecoveryBinding(input: {
     || fatigue.scope.channelId !== correlation.channelId
     || fatigue.peer.contactId !== correlation.peerContactId) {
     throw new Error(`${label}.fatigue binding does not match its ICP correlation`);
+  }
+  if ((correlation.surface === 'companion_dm' && fatigue.channelSetting !== 'dm')
+    || (correlation.surface === 'companion_room'
+      && !ICP_ROOM_FATIGUE_CHANNEL_SETTINGS.has(fatigue.channelSetting))) {
+    throw new Error(`${label}.fatigue channel setting binding does not match its ICP surface`);
   }
   if (!pendingSpend && fatigue.recordedEvent) {
     throw new Error(`${label}.fatigue recorded event binding requires pending spend`);
@@ -76,5 +127,8 @@ export function assertFatigueRecoveryBinding(input: {
       || recordedEvent.reason !== pendingSpend.reason
       || recordedEvent.reason !== fatigue.spendReason)) {
     throw new Error(`${label}.fatigue recorded event binding is inconsistent`);
+  }
+  if (recordedEvent) {
+    assertRecordedEventBinding({ recordedEvent, pendingSpend, label });
   }
 }

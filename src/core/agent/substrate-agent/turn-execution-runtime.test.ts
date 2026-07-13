@@ -1285,9 +1285,9 @@ describe('handleMessageForTurn fatigue enforcement', () => {
       spentAfter: 99,
       remainingAllowance: 0,
       normalSpentAfter: 99,
-      overchargeSpentAfter: 99,
+      overchargeSpentAfter: 0,
       overchargeAllowance: pendingSpend.limits.overchargeLimit,
-      remainingOvercharge: 0,
+      remainingOvercharge: pendingSpend.limits.overchargeLimit,
       softState: 'soft_limit_reached' as const,
       hardState: 'exhausted' as const,
     };

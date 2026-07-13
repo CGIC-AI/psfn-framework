@@ -92,6 +92,26 @@ export interface FatiguePolicyOverchargeResult {
   inputs: FatiguePolicyOverchargeInputs;
 }
 
+export function isFatigueWorkIntent(intent: FatiguePolicyIntent): boolean {
+  return intent === 'work' || intent === 'research' || intent === 'problem_solving';
+}
+
+export function resolveFatigueOverchargeDeterministicBlockedReasons(input: {
+  peerIsMachineIntelligence: boolean;
+  turnSpendsFatigue: boolean;
+  baseState: Exclude<FatiguePolicyState, 'overcharge_eligible'>;
+}): FatiguePolicyOverchargeBlockedReason[] {
+  return [
+    ...(!input.peerIsMachineIntelligence
+      ? ['peer_not_machine_intelligence' as const]
+      : []),
+    ...(!input.turnSpendsFatigue ? ['turn_does_not_spend_fatigue' as const] : []),
+    ...(input.baseState !== 'hard_exhausted'
+      ? ['normal_allowance_not_exhausted' as const]
+      : []),
+  ];
+}
+
 export interface FatiguePolicyEvaluation {
   peerContactId: string;
   relationshipClass: FatiguePolicyRelationshipClass;
@@ -283,9 +303,7 @@ function computeOvercharge(input: {
   const hasRecentHumanParticipation = hasKnownRecentHumanMessage
     && input.recentHumanParticipation.messageCount >= input.config.overcharge.minRecentHumanMessages
     && input.recentHumanParticipation.participantCount >= input.config.overcharge.minRecentHumanParticipants;
-  const hasWorkIntentWrapup = input.intent === 'work'
-    || input.intent === 'research'
-    || input.intent === 'problem_solving';
+  const hasWorkIntentWrapup = isFatigueWorkIntent(input.intent);
 
   const inputs: FatiguePolicyOverchargeInputs = {
     enabled: input.config.overcharge.enabled,
@@ -306,15 +324,11 @@ function computeOvercharge(input: {
   if (!input.config.overcharge.enabled) {
     blockedReasons.push('overcharge_disabled');
   }
-  if (!input.peerIsMachineIntelligence) {
-    blockedReasons.push('peer_not_machine_intelligence');
-  }
-  if (!input.spend.spendsFatigue) {
-    blockedReasons.push('turn_does_not_spend_fatigue');
-  }
-  if (input.baseState !== 'hard_exhausted') {
-    blockedReasons.push('normal_allowance_not_exhausted');
-  }
+  blockedReasons.push(...resolveFatigueOverchargeDeterministicBlockedReasons({
+    peerIsMachineIntelligence: input.peerIsMachineIntelligence,
+    turnSpendsFatigue: input.spend.spendsFatigue,
+    baseState: input.baseState,
+  }));
   if (!hasRecentHumanParticipation && !hasWorkIntentWrapup) {
     blockedReasons.push('no_qualifying_overcharge_trigger');
   }

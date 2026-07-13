@@ -1148,25 +1148,23 @@ describe('registerGatewayMessageHandlers', () => {
   });
 
   it.each([
-    ['status', {
+    ['suppressed content', {
       status: 'suppressed',
       correlation: replyIcpCorrelation,
       content: 'forged suppressed reply',
-    }],
-    ['content', {
-      status: 'suppressed',
-      correlation: { ...replyIcpCorrelation, fatigueDecision: 'suppress' },
-      content: 'forged suppressed reply',
+      expectedError: /suppressed recovery contains a deliverable response/i,
     }],
     ['delivered transport content', {
       status: 'delivered',
       correlation: replyIcpCorrelation,
       content: ' \n\t ',
+      expectedError: /delivered recovery is missing transport content/i,
     }],
     ['failed transport content', {
       status: 'failed',
       correlation: replyIcpCorrelation,
       content: ' \n\t ',
+      expectedError: /failed recovery is missing transport content/i,
     }],
   ])('rejects contradictory recovery %s before execution', async (_label, fixture) => {
     const response = {
@@ -1194,7 +1192,7 @@ describe('registerGatewayMessageHandlers', () => {
 
     await expect(restarted.onCompanionMessage(makeCorrelatedCompanionMessage({
       timestamp: '2026-03-02T05:00:00.000Z',
-    }))).rejects.toThrow(/suppressed|status.*fatigue|transport content|fatigue.*not_evaluated/i);
+    }))).rejects.toThrow(fixture.expectedError);
     expect(restarted.agentLoop.handleMessage).not.toHaveBeenCalled();
     expect(restarted.gateway.companionSend).not.toHaveBeenCalled();
   });

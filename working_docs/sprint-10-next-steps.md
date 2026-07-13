@@ -1,8 +1,92 @@
 # Sprint 10 — Next Steps
 
-Status: 2026-07-08. Companion doc to [`sprint-10-multi-companion.md`](./sprint-10-multi-companion.md) (the plan, v2) and [`SPRINT_10_LOCATIONS.md`](./SPRINT_10_LOCATIONS.md) (the locations plan). Those two answer "what are we building and why"; this one answers "what happens next, in what order, before this ships." Bead ids below are enumerated in [`sprint-10-multi-companion-beads.jsonl`](./sprint-10-multi-companion-beads.jsonl) (26 beads, epic `psfn-framework-s10mc` + `psfn-framework-vinz` children + future-idea beads).
+Status: 2026-07-08; **§0 added 2026-07-12** (post-triage grilling session — decided priority order, operator decisions, and corrections; where §0 and the older sections disagree, §0 wins). Companion doc to [`sprint-10-multi-companion.md`](./sprint-10-multi-companion.md) (the plan, v2) and [`SPRINT_10_LOCATIONS.md`](./SPRINT_10_LOCATIONS.md) (the locations plan). Those two answer "what are we building and why"; this one answers "what happens next, in what order, before this ships." Bead ids below are enumerated in [`sprint-10-multi-companion-beads.jsonl`](./sprint-10-multi-companion-beads.jsonl) (26 beads, epic `psfn-framework-s10mc` + `psfn-framework-vinz` children + future-idea beads).
 
 The headline fact governing everything below: the multi-companion substrate is **code-complete** on `feat/multi-companion` @ `6608579f` (45 commits ahead of `main`), gated at every merge with build + lint + targeted vitest. It is **not yet validated** — no full runtime has booted the branch, because the implementation sandbox has no `.env` secrets and Docker there cannot publish ports. Code-complete and validated are different claims; §1 keeps them visually distinct, and closing that gap (`psfn-framework-s10f8`) is the first gate in §2.
+
+## 0. 2026-07-12 update — decided priority order
+
+Outcome of the 2026-07-12 triage + grilling session. Tracker was reconciled the
+same day (13 beads closed with evidence, 2 stale claims demoted, a 90-bead
+stale sweep validated 78 as real remaining work), the ICP epic
+(`psfn-framework-s10mc.6`, plan: [`s10-icp-autonomy.md`](./s10-icp-autonomy.md))
+was dependency-wired end to end, and the release path got tracker structure.
+`bd ready` now surfaces the true entry points; the graph below is enforced by
+`bd dep` edges, not just prose.
+
+### 0.1 Operator decisions (recorded on the beads)
+
+- **Room ontology** (on `s10rm`): group **text** channels = scrollback history,
+  no presence/location gating. **Location-bound rooms** (Discord voice now,
+  Unreal-world rooms later) are the only chat surfaces with location mapping:
+  sender must be present to post (**close the sender-presence hole**, with a
+  narrow stale-reply carve-out — may finish an active exchange, may not
+  initiate absent), single occupancy (one room at a time, mirroring
+  single-emanation), temporal-gated (miss it = miss that context). **ICP direct
+  chat** is its own DM-like channel, location-FREE ("texting a friend while in
+  a room with other people"). No companion↔companion Discord DMs.
+- **Cluster-sibling trust** (on `s10mc.6`): same-cluster companions are
+  MI-marked contacts with baseline trust one notch above default; fatigue fully
+  applies; relationship level is earned or scenario-seeded on top of the floor.
+  (This resolves the §3 "sibling-contact trust onboarding defaults" gap.)
+- **Charter items ride the MC lane**: `z7qe.4` (brand CompanionId) now blocks
+  `s10mc.1` + `s10mc.2`; `z7qe.1` (SQLite sweep) blocks `s10mc.2`. Rest of the
+  charter-gap epic stays parked.
+- **Deliberately deferred**: `cam` cost-accounting review (accepted tail risk —
+  it blocks only ICP `6.7` breaker + `6.9` cert), `lpro` kube lane (operator
+  reboot approval), `opl1` fleet SSO, `c337` workspaces, `0ggv.4` Artie link
+  (hardware being assembled; ICP epic lands first). `w05a` experiment window
+  closes 2026-07-20 and resurfaces its own decision beads.
+
+### 0.2 Priority order
+
+**Unblocked now (entry points):**
+
+1. `s10mc.6.1` — ICP W1 contracts (heads the ICP chain)
+2. `s10rm` — sender-presence gate + presence-windowed delivery remainder
+   (blocks ICP `6.3` and `6.9`)
+3. `z7qe.4` — brand CompanionId (blocks `s10mc.1`/`s10mc.2`)
+4. `z7qe.1` — SQLite remnant sweep (blocks `s10mc.2`)
+5. `s10f8` — full-runtime validation flag-off/flag-on (entry gate for deploy;
+   one activity with the `s10mc.8` live demo)
+6. Operator-only queue: `efc2` psfn-test preview review (committed
+   ~2026-07-19), `kz0i`/`i698` morning live observations, `lpro.1` reboot.
+
+**ICP chain (wired):** `6.1` → `6.2` broker ∥ `6.6` fatigue/social-charge →
+`6.3` target-channel turns (← `s10rm`) → `6.4` tools → `6.5` source adapters →
+`6.7` USD breaker (← `cam`, deferred) → `6.8` owner config/Garden → `6.9`
+two-real-agent certification.
+
+**MC substrate (parallel once charter items land):** `s10mc.1` (← `z7qe.4`),
+`s10mc.2` flagship cutover (← `z7qe.4`, `z7qe.1`, and restore proof `s10d7` —
+§2d hard gate unchanged), `s10mc.3` per-companion owners, `s10mc.8`/`s10f8`
+live demo.
+
+**Companion app lane (`w9hj`, second half of "app running solid"):** `u24q`
+service-worker stale-shell fix and `8ora` first-class PWA channel are now
+children of `w9hj`; `mmo9.1` SSE first-chunk fix rides in `mmo9` wave 1.
+Satellite side: `343f` (empty satellite replies — first step is the
+discriminating two-model live capture) blocks `6kr8` enrollment.
+
+**Release path (new tracker structure):** `65rk` release-shakedown epic
+(local dual + docker + kube variants, includes `mmo9.4` compaction-cliff and
+Pi-class runs) → `wckv` setup/bootstrap docs epic → `upx0.1`/`.2`/`.3` →
+`upx0.5` history rewrite → public flip. No committed date, by design.
+
+### 0.3 Corrections to the 2026-07-08 text below
+
+- §2c "W6 not started / last unbuilt workstream" is superseded: `s10mc.6` is
+  now a nine-child epic with a full implementation plan
+  ([`s10-icp-autonomy.md`](./s10-icp-autonomy.md)) and wired dependencies.
+- The presence/locations branches (`mc/w5a-companion-presence`,
+  `mc/vinz29-dual-presence`, `mc/vinz2021-presence-follow`) are **merged to
+  main** — the locations threshold `s10mc` sequenced behind is met.
+- 2026-07-12 audits confirmed still open on every branch: `u24q`, `mmo9.1`,
+  `lghd` (unbounded re-prompt retry is intentional design, no bounded abort
+  exists; stays P1 in the working set), `343f`. `sj4d` and `nw90` were fixed
+  2026-07-09 and are closed.
+- Live experience is good post-S9/S10; the binding constraint is follow-through
+  on testing and the less-used surfaces, hence the shakedown epic.
 
 ## 1. Where things stand
 

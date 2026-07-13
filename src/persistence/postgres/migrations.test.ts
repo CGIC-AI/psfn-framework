@@ -124,6 +124,8 @@ describe('Postgres live schema migrations', () => {
     expect(sharedSql).toContain("VALUES (4, 'icp-autonomy-control-plane')");
     expect(sharedSql).toContain('participant_companion_ids UUID[] NOT NULL');
     expect(sharedSql).toContain('UNIQUE (candidate_id)');
+    expect(sharedSql).toContain('idx_icp_initiation_permits_outstanding_pair');
+    expect(sharedSql).toContain("WHERE status = 'issued'");
     expect(sharedSql).not.toContain('reason_summary');
 
     expect(localSql).toContain('CREATE TABLE IF NOT EXISTS icp_initiation_candidates');

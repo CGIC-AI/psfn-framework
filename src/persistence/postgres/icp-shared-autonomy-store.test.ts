@@ -250,4 +250,34 @@ describe('PostgresIcpSharedAutonomyStore', () => {
     const [, sql] = mocks.queryOne.mock.calls[0] as [unknown, string];
     expect(sql).toContain('issued_at_ms <= $3');
   });
+
+  it('finds one current outstanding pair after lazily expiring old permits', async () => {
+    mocks.queryOne.mockResolvedValue(PERMIT_ROW);
+    const store = await connect();
+    await expect(store.findOutstandingPermitBetween(A, B, 11_000)).resolves.toMatchObject({
+      permitId: PERMIT_ID,
+    });
+    const [, expirySql] = mocks.executeQuery.mock.calls[0] as [unknown, string];
+    expect(expirySql).toContain("SET status = 'expired'");
+    expect(expirySql).toContain('LEAST(sender_companion_id, recipient_companion_id)');
+    const [, lookupSql] = mocks.queryOne.mock.calls[0] as [unknown, string];
+    expect(lookupSql).toContain("WHERE status = 'issued'");
+    expect(lookupSql).toContain('GREATEST(sender_companion_id, recipient_companion_id)');
+  });
+
+  it('atomically revokes every outstanding permit involving a disconnected companion', async () => {
+    mocks.queryRows.mockResolvedValue([{
+      ...PERMIT_ROW,
+      status: 'revoked',
+      revoked_at_ms: '11000',
+      reason_code: 'peer_offline',
+      revision: '2',
+    }]);
+    const store = await connect();
+    await expect(store.revokeOutstandingPermitsForCompanion(B, 11_000, 'peer_offline'))
+      .resolves.toEqual([expect.objectContaining({ status: 'revoked', reasonCode: 'peer_offline' })]);
+    const [, sql] = mocks.queryRows.mock.calls[0] as [unknown, string];
+    expect(sql).toContain("SET status = 'revoked'");
+    expect(sql).toContain('(sender_companion_id = $1 OR recipient_companion_id = $1)');
+  });
 });

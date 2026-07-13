@@ -55,6 +55,11 @@ const CANDIDATE_KEYS = [
   'peerCompanionId', 'preferredChannel', 'source', 'provenanceRef', 'reasonSummary',
   'createdAtMs', 'expiresAtMs', 'status', 'reasonCode', 'revision',
 ] as const;
+const SHARED_CANDIDATE_KEYS = [
+  'candidateId', 'rootInitiationId', 'localCompanionId', 'peerCompanionId',
+  'preferredChannel', 'source', 'provenanceRef', 'createdAtMs', 'expiresAtMs',
+  'status', 'reasonCode', 'revision',
+] as const;
 
 const TRANSITIONS: Readonly<Record<IcpInitiationCandidateStatus, readonly IcpInitiationCandidateStatus[]>> = {
   pending: ['deferred', 'declined', 'rejected', 'permitted', 'expired', 'cancelled'],
@@ -183,4 +188,28 @@ export function toIcpInitiationCandidateSharedMetadata(
     ...(candidate.reasonCode !== undefined ? { reasonCode: candidate.reasonCode } : {}),
     revision: candidate.revision,
   };
+}
+
+/**
+ * Parse the only candidate projection permitted at the gateway boundary.
+ * Private peer-contact identifiers and motivation text are rejected as unknown
+ * fields before validation, so callers cannot accidentally leak either into
+ * shared arbitration, telemetry, or audit state.
+ */
+export function parseIcpInitiationCandidateSharedMetadata(
+  value: unknown,
+  options: { nowMs?: number; requireCurrent?: boolean } = {},
+): IcpInitiationCandidateSharedMetadata {
+  if (!isRecord(value)) {
+    throw new Error('ICP shared initiation candidate must be an object');
+  }
+  assertNoUnknownKeys(value, SHARED_CANDIDATE_KEYS, 'ICP shared initiation candidate');
+  const candidate = parseIcpInitiationCandidate({
+    ...value,
+    // Validation-only sentinels. They are immediately removed by the explicit
+    // shared projection and can never enter the returned object.
+    peerContactId: '[private]',
+    reasonSummary: '[private]',
+  }, options);
+  return toIcpInitiationCandidateSharedMetadata(candidate);
 }

@@ -19,6 +19,12 @@ const PERMIT_ID = '44444444-4444-4444-8444-444444444444';
 const SECOND_CONVERSATION_ID = '55555555-5555-4555-8555-555555555555';
 const SECOND_PERMIT_ID = '66666666-6666-4666-8666-666666666666';
 const SECOND_CANDIDATE_ID = '77777777-7777-4777-8777-777777777777';
+const RACE_CONVERSATION_A = '88888888-8888-4888-8888-888888888888';
+const RACE_CONVERSATION_B = '99999999-9999-4999-8999-999999999999';
+const RACE_PERMIT_A = 'aaaaaaaa-1111-4111-8111-111111111111';
+const RACE_PERMIT_B = 'bbbbbbbb-2222-4222-8222-222222222222';
+const RACE_CANDIDATE_A = 'cccccccc-3333-4333-8333-333333333333';
+const RACE_CANDIDATE_B = 'dddddddd-4444-4444-8444-444444444444';
 const CHANNEL = `companion-dm:${A}:${B}`;
 
 let harness: PostgresTestHarness | null = null;
@@ -241,6 +247,72 @@ describe('ICP autonomy Postgres persistence', () => {
         'operator_cancelled',
       );
       expect(revoked.status).toBe('revoked');
+
+      const raceInput = (
+        conversationId: string,
+        permitId: string,
+        candidateId: string,
+        senderCompanionId: string,
+        recipientCompanionId: string,
+      ) => ({
+        episode: {
+          conversationId,
+          channelId: CHANNEL,
+          participantCompanionIds: [A, B],
+          rootInitiationId: ROOT_ID,
+          initiatedByCompanionId: senderCompanionId,
+          initiationSource: 'foreground' as const,
+          provenanceRef: `foreground:race:${conversationId}`,
+          openedAtMs: 30_000,
+          lastActivityAtMs: 30_000,
+          status: 'invited' as const,
+          revision: 1,
+        },
+        permit: {
+          permitId,
+          candidateId,
+          conversationId,
+          senderCompanionId,
+          recipientCompanionId,
+          channelId: CHANNEL,
+          provenanceRef: `foreground:race:${conversationId}`,
+          issuedAtMs: 30_000,
+          expiresAtMs: 90_000,
+          status: 'issued' as const,
+          revision: 1,
+        },
+      });
+      const permitRace = await Promise.allSettled([
+        storeA.createEpisodeAndIssuePermit(raceInput(
+          RACE_CONVERSATION_A,
+          RACE_PERMIT_A,
+          RACE_CANDIDATE_A,
+          A,
+          B,
+        )),
+        storeB.createEpisodeAndIssuePermit(raceInput(
+          RACE_CONVERSATION_B,
+          RACE_PERMIT_B,
+          RACE_CANDIDATE_B,
+          B,
+          A,
+        )),
+      ]);
+      expect(permitRace.filter(result => result.status === 'fulfilled')).toHaveLength(1);
+      expect(permitRace.filter(result => result.status === 'rejected')).toHaveLength(1);
+      const raceEpisodes = await Promise.all([
+        storeA.getEpisode(RACE_CONVERSATION_A),
+        storeA.getEpisode(RACE_CONVERSATION_B),
+      ]);
+      expect(raceEpisodes.filter(Boolean)).toHaveLength(1);
+      expect(await storeA.findOutstandingPermitBetween(A, B, 31_000)).not.toBeNull();
+      const invalidated = await storeB.revokeOutstandingPermitsForCompanion(
+        B,
+        31_000,
+        'peer_offline',
+      );
+      expect(invalidated).toHaveLength(1);
+      expect(invalidated[0]).toMatchObject({ status: 'revoked', reasonCode: 'peer_offline' });
     } finally {
       await storeA.close();
       await storeB.close();
@@ -252,6 +324,12 @@ describe('ICP autonomy Postgres persistence', () => {
     try {
       expect((await restarted.getEpisode(CONVERSATION_ID))?.status).toBe('active');
       expect((await restarted.getPermit(PERMIT_ID))?.status).toBe('consumed');
+      expect(await restarted.findOutstandingPermitBetween(A, B, 31_001)).toBeNull();
+      const racePermits = await Promise.all([
+        restarted.getPermit(RACE_PERMIT_A),
+        restarted.getPermit(RACE_PERMIT_B),
+      ]);
+      expect(racePermits.filter(permit => permit?.status === 'revoked')).toHaveLength(1);
     } finally {
       await restarted.close();
     }

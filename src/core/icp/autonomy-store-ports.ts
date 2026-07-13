@@ -65,12 +65,26 @@ export interface IcpInitiationPermitStorePort {
     revokedAtMs: number,
     reasonCode: IcpAutonomyReasonCode,
   ): Promise<IcpInitiationPermit>;
+  findOutstandingPermitBetween(
+    firstCompanionId: string,
+    secondCompanionId: string,
+    nowMs: number,
+  ): Promise<IcpInitiationPermit | null>;
+  revokeOutstandingPermitsForCompanion(
+    companionId: string,
+    revokedAtMs: number,
+    reasonCode: IcpAutonomyReasonCode,
+  ): Promise<IcpInitiationPermit[]>;
 }
 
 export interface IcpSharedAutonomyStorePort extends
   IcpAvailabilityStorePort,
   IcpConversationEpisodeStorePort,
   IcpInitiationPermitStorePort {
+  createEpisodeAndIssuePermit(input: {
+    episode: IcpConversationEpisode;
+    permit: IcpInitiationPermit;
+  }): Promise<{ episode: IcpConversationEpisode; permit: IcpInitiationPermit }>;
   close(): Promise<void>;
 }
 

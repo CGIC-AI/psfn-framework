@@ -91,6 +91,35 @@ export interface DeterministicGateEvent {
 }
 
 export interface EventMap {
+  'icp.availability.changed': {
+    companionId: string;
+    action: 'published' | 'cleared';
+    state?: import('./contracts/icp-autonomy.js').IcpAvailabilityState;
+    source?: import('./contracts/icp-autonomy.js').IcpAvailabilitySource;
+    revision: number;
+    expiresAtMs?: number;
+    timestamp: number;
+  };
+  'icp.initiation.gate': {
+    candidateId: string;
+    senderCompanionId: string;
+    recipientCompanionId: string;
+    channelId: string;
+    outcome: 'open' | 'closed';
+    reasonCode?: import('./contracts/icp-autonomy.js').IcpAutonomyReasonCode;
+    reasonClass?: 'deferrable' | 'terminal';
+    timestamp: number;
+  };
+  'icp.permit.lifecycle': {
+    candidateId: string;
+    conversationId: string;
+    senderCompanionId: string;
+    recipientCompanionId: string;
+    channelId: string;
+    action: 'issued' | 'consumed' | 'revoked' | 'expired' | 'replayed' | 'mismatch' | 'not_found';
+    reasonCode?: import('./contracts/icp-autonomy.js').IcpAutonomyReasonCode;
+    timestamp: number;
+  };
   'message.received': { message: SubstrateMessage } & EventCorrelationFields;
   'message.sent': { response: AgentResponse } & EventCorrelationFields;
   'agent.turn.start': { message: SubstrateMessage } & EventCorrelationFields;

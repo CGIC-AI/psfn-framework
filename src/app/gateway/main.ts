@@ -37,6 +37,7 @@ import { loadSatelliteRegistryConfig } from '../../channels/backplane/satellite-
 import { assertSatellitePlaceBindings, loadPlacesRegistryConfig } from '../../channels/backplane/places-registry.js';
 import { GatewayCompanionChannelLane } from '../../boundary/gateway/companion-channels.js';
 import { PostgresCompanionPresenceStore } from '../../persistence/postgres/companion-presence-store.js';
+import { PostgresIcpSharedAutonomyStore } from '../../persistence/postgres/icp-shared-autonomy-store.js';
 import { CompanionEventRelay } from '../../channels/backplane/companion-relay/relay.js';
 import { CHARGE_POLICY_FILE_NAME } from '../../system/config/charge-policy-config.js';
 import {
@@ -210,6 +211,7 @@ async function main(): Promise<void> {
   // the fleet manifest. Flag-off, none of this exists and companion sends fail
   // closed at the RPC surface.
   let companionPresenceStore: PostgresCompanionPresenceStore | null = null;
+  let icpAutonomyStore: PostgresIcpSharedAutonomyStore | null = null;
   let companionChannelLane: GatewayCompanionChannelLane | undefined;
   if (config.multiCompanion === true) {
     const databaseUrl = config.postgresDatabaseUrl?.trim();
@@ -219,11 +221,15 @@ async function main(): Promise<void> {
     if (!config.companionFleet) {
       throw new Error('Multi-companion inter-companion channels require the companions.json fleet manifest');
     }
+    const fleetCompanionIds = config.companionFleet.companions.map((entry) => entry.companionId);
     companionPresenceStore = await PostgresCompanionPresenceStore.connect(databaseUrl);
+    icpAutonomyStore = await PostgresIcpSharedAutonomyStore.connect(databaseUrl, {
+      knownCompanionIds: fleetCompanionIds,
+    });
     companionChannelLane = new GatewayCompanionChannelLane({
       placesRegistry: placesRegistryConfig,
       presence: companionPresenceStore,
-      fleetCompanionIds: new Set(config.companionFleet.companions.map((entry) => entry.companionId)),
+      fleetCompanionIds: new Set(fleetCompanionIds),
     });
     log.info('Inter-companion channel lane enabled', {
       fleetSize: config.companionFleet.companions.length,
@@ -235,6 +241,7 @@ async function main(): Promise<void> {
     discordAdapter: discord,
     ...(discordAccountDocks ? { discordAccountDocks } : {}),
     ...(companionChannelLane ? { companionChannels: companionChannelLane } : {}),
+    ...(icpAutonomyStore ? { icpAutonomyStore } : {}),
   });
   const {
     apiHost,
@@ -343,6 +350,7 @@ async function main(): Promise<void> {
         { step: 'stop voice surfaces', action: () => voiceSurfaces.stop() },
         { step: 'stop gateway server', action: () => gateway.stop() },
         { step: 'close companion presence reader', action: async () => { await companionPresenceStore?.close(); } },
+        { step: 'close ICP autonomy store', action: async () => { await icpAutonomyStore?.close(); } },
         { step: 'stop channel adapters', action: () => stopGatewayChannelSurfaces(channelSurfaces) },
         { step: 'dispose intake screening', action: () => privilegedCore.intakeScreening.dispose() },
       ], log);

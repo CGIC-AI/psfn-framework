@@ -50,6 +50,20 @@ import type {
 } from '../../channels/api/types.js';
 import type { RuntimeServiceHealthSnapshot } from '../../operator/tool-health/types.js';
 import type { NotificationSenderMetadata } from './notification-sender.js';
+import type {
+  IcpInitiationGateDecision,
+  IcpInitiationPermitIssueInput,
+  IcpInitiationPermitIssueResult,
+  IcpInitiationPreflightInput,
+  IcpPermitConsumeResult,
+  IcpPeerAvailabilityResult,
+} from './icp-autonomy-contract.js';
+export type { IcpPermitConsumeResult } from './icp-autonomy-contract.js';
+import type {
+  IcpAvailabilityLease,
+  IcpAvailabilityState,
+  IcpAutonomyReasonCode,
+} from '../../shared/contracts/icp-autonomy.js';
 
 // ── Request parameter types (agent → gateway) ──
 
@@ -700,6 +714,58 @@ export interface CompanionMessageNotification {
   message: SubstrateMessage;
 }
 
+// ── ICP autonomy control plane (sprint 10, s10mc.6.2) ──
+
+export interface IcpAvailabilityPublishParams {
+  state: IcpAvailabilityState;
+  expiresAtMs: number;
+  revision: number;
+  companionId?: string;
+}
+
+export interface IcpAvailabilityClearParams {
+  expectedRevision: number;
+  companionId?: string;
+}
+
+export interface IcpPeerAvailabilityReadParams {
+  peerCompanionId: string;
+  companionId?: string;
+}
+
+export type IcpInitiationPreflightParams = IcpInitiationPreflightInput & {
+  companionId?: string;
+};
+
+export type IcpInitiationPermitIssueParams = IcpInitiationPermitIssueInput & {
+  companionId?: string;
+};
+
+export interface IcpPermitConsumeParams {
+  permitId: string;
+  conversationId: string;
+  recipientCompanionId: string;
+  channelId: string;
+  companionId?: string;
+}
+
+export interface IcpPermitRevokeParams {
+  permitId: string;
+  expectedRevision: number;
+  companionId?: string;
+}
+
+export interface IcpPermitRevokeResult {
+  status: 'revoked';
+  revision: number;
+  reasonCode: IcpAutonomyReasonCode;
+}
+
+export interface IcpPermitInvalidateSelfParams {
+  reasonCode: 'peer_blocked';
+  companionId?: string;
+}
+
 // ── Method map for typed RPC ──
 
 export interface GatewayMethods {
@@ -713,6 +779,14 @@ export interface GatewayMethods {
   'discord.typing': [DiscordTypingParams, DiscordTypingResult];
   'companion.message.send': [CompanionMessageSendParams, CompanionMessageSendResult];
   'companion.message.report_failure': [CompanionMessageFailureReportParams, CompanionMessageFailureReportResult];
+  'companion.availability.publish': [IcpAvailabilityPublishParams, IcpAvailabilityLease];
+  'companion.availability.clear': [IcpAvailabilityClearParams, { cleared: boolean }];
+  'companion.availability.read_peer': [IcpPeerAvailabilityReadParams, IcpPeerAvailabilityResult];
+  'companion.initiation.preflight': [IcpInitiationPreflightParams, IcpInitiationGateDecision];
+  'companion.initiation.permit.issue': [IcpInitiationPermitIssueParams, IcpInitiationPermitIssueResult];
+  'companion.initiation.permit.consume': [IcpPermitConsumeParams, IcpPermitConsumeResult];
+  'companion.initiation.permit.revoke': [IcpPermitRevokeParams, IcpPermitRevokeResult];
+  'companion.initiation.permit.invalidate_for_self': [IcpPermitInvalidateSelfParams, { revokedCount: number }];
   'web.fetch': [WebFetchParams, WebFetchResult];
   'web.fetch_binary': [WebFetchBinaryParams, WebFetchBinaryResult];
   'web.request_binary': [WebRequestBinaryParams, WebRequestBinaryResult];

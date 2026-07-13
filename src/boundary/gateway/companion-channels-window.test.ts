@@ -132,3 +132,50 @@ describe('private-room presence-windowed delivery (psfn-framework-s10rm)', () =>
     expect('windowExcluded' in resolution && resolution.windowExcluded).toBeFalsy();
   });
 });
+
+describe('autonomous initiation room resolution', () => {
+  it('requires both sender and selected peer to be current room members', async () => {
+    const lane = makeLane({
+      'vhome/living_room': [
+        { companionId: 'comp-a', updatedAt: FRESH },
+        { companionId: 'comp-b', updatedAt: FRESH },
+      ],
+    });
+    await expect(lane.resolveInitiation(
+      'comp-a',
+      'comp-b',
+      'companion-room:living_room',
+    )).resolves.toMatchObject({
+      ok: true,
+      kind: 'room',
+      recipients: ['comp-b'],
+    });
+
+    const senderAbsent = makeLane({
+      'vhome/living_room': [{ companionId: 'comp-b', updatedAt: FRESH }],
+    });
+    await expect(senderAbsent.resolveInitiation(
+      'comp-a',
+      'comp-b',
+      'companion-room:living_room',
+    )).resolves.toMatchObject({
+      ok: false,
+      violation: { event: 'companion_initiation_room_membership_mismatch' },
+    });
+
+    const peerStale = makeLane({
+      'vhome/living_room': [
+        { companionId: 'comp-a', updatedAt: FRESH },
+        { companionId: 'comp-b', updatedAt: STALE },
+      ],
+    });
+    await expect(peerStale.resolveInitiation(
+      'comp-a',
+      'comp-b',
+      'companion-room:living_room',
+    )).resolves.toMatchObject({
+      ok: false,
+      violation: { event: 'companion_initiation_room_membership_mismatch' },
+    });
+  });
+});

@@ -21,6 +21,7 @@ import { GatewayServer } from './server.js';
 import { CogSecEventStore } from '../../core/cogsec/events.js';
 import { resolveCogSecEventsPath } from '../../persistence/layout.js';
 import type { StartupConfigHydrationResult } from '../../app/startup/support/bootstrap-helpers.js';
+import type { IcpSharedAutonomyStorePort } from '../../core/icp/autonomy-store-ports.js';
 
 export interface GatewayPrivilegedCoreBuildInput {
   config: SubstrateConfig;
@@ -51,6 +52,8 @@ export interface GatewayPrivilegedCore {
     discordAccountDocks?: ReadonlyMap<string, ChannelOutboundDock>;
     /** Inter-companion channel lane (W6); multi-companion only. */
     companionChannels?: GatewayCompanionChannelLane;
+    /** Shared durable authority for the ICP autonomy broker. */
+    icpAutonomyStore?: IcpSharedAutonomyStorePort;
   }): GatewayServer;
 }
 
@@ -124,9 +127,15 @@ export async function buildGatewayPrivilegedCore(
     privilegedServices,
     intakeScreening,
     auditDb: null,
-    createGatewayServer: ({ discordAdapter, discordAccountDocks, companionChannels }) => new GatewayServer({
+    createGatewayServer: ({
+      discordAdapter,
+      discordAccountDocks,
+      companionChannels,
+      icpAutonomyStore,
+    }) => new GatewayServer({
       ...(discordAccountDocks ? { discordAccountDocks } : {}),
       ...(companionChannels ? { companionChannels } : {}),
+      ...(icpAutonomyStore ? { icpAutonomyStore } : {}),
       socketPath: input.bootstrap.socketPath,
       gatewayRpcEndpoint: input.bootstrap.gatewayRpcEndpoint,
       llmProvider: privilegedServices.llmClient,

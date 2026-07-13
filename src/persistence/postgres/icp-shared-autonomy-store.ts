@@ -20,7 +20,13 @@ import {
 } from '../../shared/contracts/icp-autonomy.js';
 import { parseCompanionChannelId } from '../../shared/contracts/companion-channels.js';
 import { isRfc4122Uuid } from '../../shared/utils/types.js';
-import { createPostgresPool, executeQuery, queryOne } from '../postgres.js';
+import {
+  createPostgresPool,
+  executeQuery,
+  queryOne,
+  queryRows,
+  withPostgresClient,
+} from '../postgres.js';
 import { SHARED_SCHEMA_NAME } from './migrations.js';
 import { ensureSharedSchema } from './shared-schema.js';
 
@@ -353,6 +359,16 @@ export class PostgresIcpSharedAutonomyStore implements IcpSharedAutonomyStorePor
     if (permit.status !== 'issued' || permit.revision !== 1) {
       throw new Error('A new ICP initiation permit must start issued at revision 1');
     }
+    // Lazy expiry happens at the same durable boundary used for issuance. The
+    // partial unique pair index then makes the outstanding-invitation check
+    // race-safe even when opposite-direction initiations arrive together.
+    await executeQuery(this.pool, `
+      UPDATE icp_initiation_permits
+      SET status = 'expired', reason_code = 'permit_expired', revision = revision + 1
+      WHERE status = 'issued' AND expires_at_ms <= $3
+        AND LEAST(sender_companion_id, recipient_companion_id) = LEAST($1::uuid, $2::uuid)
+        AND GREATEST(sender_companion_id, recipient_companion_id) = GREATEST($1::uuid, $2::uuid)
+    `, [permit.senderCompanionId, permit.recipientCompanionId, permit.issuedAtMs]);
     const row = await queryOne<PermitRow>(this.pool, `
       INSERT INTO icp_initiation_permits (
         permit_id, candidate_id, conversation_id, sender_companion_id,
@@ -365,6 +381,7 @@ export class PostgresIcpSharedAutonomyStore implements IcpSharedAutonomyStorePor
         AND channel_id = $6
         AND participant_companion_ids @> ARRAY[$4::uuid, $5::uuid]
         AND status = 'invited'
+      ON CONFLICT DO NOTHING
       RETURNING ${PERMIT_COLUMNS}
     `, [
       permit.permitId,
@@ -380,9 +397,121 @@ export class PostgresIcpSharedAutonomyStore implements IcpSharedAutonomyStorePor
       permit.revision,
     ]);
     if (!row) {
-      throw new Error('ICP permit conversation/channel/participant binding mismatch');
+      const outstanding = await this.findOutstandingPermitBetween(
+        permit.senderCompanionId,
+        permit.recipientCompanionId,
+        permit.issuedAtMs,
+      );
+      if (outstanding) throw new Error('ICP outstanding invitation conflict for companion pair');
+      throw new Error('ICP permit conversation/channel/participant/candidate binding mismatch');
     }
     return mapPermit(row);
+  }
+
+  async createEpisodeAndIssuePermit(input: {
+    episode: IcpConversationEpisode;
+    permit: IcpInitiationPermit;
+  }): Promise<{ episode: IcpConversationEpisode; permit: IcpInitiationPermit }> {
+    const episode = parseIcpConversationEpisode(input.episode, {
+      knownCompanionIds: this.knownCompanionIds,
+    });
+    const permit = parseIcpInitiationPermit(input.permit);
+    if (episode.status !== 'invited' || episode.revision !== 1) {
+      throw new Error('A new ICP conversation episode must start invited at revision 1');
+    }
+    if (permit.status !== 'issued' || permit.revision !== 1) {
+      throw new Error('A new ICP initiation permit must start issued at revision 1');
+    }
+    if (permit.conversationId !== episode.conversationId
+      || permit.channelId !== episode.channelId
+      || permit.senderCompanionId !== episode.initiatedByCompanionId
+      || !episode.participantCompanionIds.includes(permit.senderCompanionId)
+      || !episode.participantCompanionIds.includes(permit.recipientCompanionId)
+      || permit.provenanceRef !== episode.provenanceRef
+      || permit.issuedAtMs !== episode.openedAtMs) {
+      throw new Error('ICP atomic episode/permit binding mismatch');
+    }
+
+    return await withPostgresClient(this.pool, async client => {
+      await client.query(`
+        UPDATE icp_initiation_permits
+        SET status = 'expired', reason_code = 'permit_expired', revision = revision + 1
+        WHERE status = 'issued' AND expires_at_ms <= $3
+          AND LEAST(sender_companion_id, recipient_companion_id) = LEAST($1::uuid, $2::uuid)
+          AND GREATEST(sender_companion_id, recipient_companion_id) = GREATEST($1::uuid, $2::uuid)
+      `, [permit.senderCompanionId, permit.recipientCompanionId, permit.issuedAtMs]);
+
+      const episodeResult = await client.query<ConversationRow>(`
+        INSERT INTO icp_conversation_episodes (
+          conversation_id, channel_id, participant_companion_ids, root_initiation_id,
+          initiated_by_companion_id, initiation_source, provenance_ref, opened_at_ms,
+          last_activity_at_ms, status, close_reason_code, revision
+        ) VALUES ($1, $2, $3::uuid[], $4, $5, $6, $7, $8, $9, $10, $11, $12)
+        RETURNING ${CONVERSATION_COLUMNS}
+      `, [
+        episode.conversationId,
+        episode.channelId,
+        episode.participantCompanionIds,
+        episode.rootInitiationId,
+        episode.initiatedByCompanionId,
+        episode.initiationSource,
+        episode.provenanceRef,
+        episode.openedAtMs,
+        episode.lastActivityAtMs,
+        episode.status,
+        episode.closeReasonCode ?? null,
+        episode.revision,
+      ]);
+
+      const permitResult = await client.query<PermitRow>(`
+        INSERT INTO icp_initiation_permits (
+          permit_id, candidate_id, conversation_id, sender_companion_id,
+          recipient_companion_id, channel_id, provenance_ref, issued_at_ms,
+          expires_at_ms, status, consumed_at_ms, revoked_at_ms, reason_code, revision
+        )
+        SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NULL, NULL, NULL, $11
+        FROM icp_conversation_episodes
+        WHERE conversation_id = $3
+          AND channel_id = $6
+          AND participant_companion_ids @> ARRAY[$4::uuid, $5::uuid]
+          AND status = 'invited'
+        ON CONFLICT DO NOTHING
+        RETURNING ${PERMIT_COLUMNS}
+      `, [
+        permit.permitId,
+        permit.candidateId,
+        permit.conversationId,
+        permit.senderCompanionId,
+        permit.recipientCompanionId,
+        permit.channelId,
+        permit.provenanceRef,
+        permit.issuedAtMs,
+        permit.expiresAtMs,
+        permit.status,
+        permit.revision,
+      ]);
+      const permitRow = permitResult.rows[0];
+      if (!permitRow) {
+        const outstandingResult = await client.query<PermitRow>(`
+          SELECT ${PERMIT_COLUMNS}
+          FROM icp_initiation_permits
+          WHERE status = 'issued' AND issued_at_ms <= $3 AND expires_at_ms > $3
+            AND LEAST(sender_companion_id, recipient_companion_id) = LEAST($1::uuid, $2::uuid)
+            AND GREATEST(sender_companion_id, recipient_companion_id) = GREATEST($1::uuid, $2::uuid)
+          LIMIT 1
+        `, [permit.senderCompanionId, permit.recipientCompanionId, permit.issuedAtMs]);
+        if (outstandingResult.rows[0]) {
+          throw new Error('ICP outstanding invitation conflict for companion pair');
+        }
+        throw new Error('ICP permit conversation/channel/participant/candidate binding mismatch');
+      }
+      const episodeRow = episodeResult.rows[0];
+      if (!episodeRow) throw new Error('Failed to create ICP conversation episode atomically');
+      return {
+        episode: mapConversation(episodeRow, this.knownCompanionIds),
+        permit: mapPermit(permitRow),
+      };
+    });
   }
 
   async getPermit(permitId: string): Promise<IcpInitiationPermit | null> {
@@ -464,6 +593,54 @@ export class PostgresIcpSharedAutonomyStore implements IcpSharedAutonomyStorePor
     ]);
     if (!row) throw new Error(`ICP permit revocation conflict for ${permitId}`);
     return mapPermit(row);
+  }
+
+  async findOutstandingPermitBetween(
+    firstCompanionId: string,
+    secondCompanionId: string,
+    nowMs: number,
+  ): Promise<IcpInitiationPermit | null> {
+    const first = requireUuid(firstCompanionId, 'firstCompanionId');
+    const second = requireUuid(secondCompanionId, 'secondCompanionId');
+    if (first === second) throw new Error('Outstanding permit lookup requires distinct companions');
+    const now = requireTimestamp(nowMs, 'nowMs');
+    await executeQuery(this.pool, `
+      UPDATE icp_initiation_permits
+      SET status = 'expired', reason_code = 'permit_expired', revision = revision + 1
+      WHERE status = 'issued' AND expires_at_ms <= $3
+        AND LEAST(sender_companion_id, recipient_companion_id) = LEAST($1::uuid, $2::uuid)
+        AND GREATEST(sender_companion_id, recipient_companion_id) = GREATEST($1::uuid, $2::uuid)
+    `, [first, second, now]);
+    const row = await queryOne<PermitRow>(this.pool, `
+      SELECT ${PERMIT_COLUMNS}
+      FROM icp_initiation_permits
+      WHERE status = 'issued' AND issued_at_ms <= $3 AND expires_at_ms > $3
+        AND LEAST(sender_companion_id, recipient_companion_id) = LEAST($1::uuid, $2::uuid)
+        AND GREATEST(sender_companion_id, recipient_companion_id) = GREATEST($1::uuid, $2::uuid)
+      LIMIT 1
+    `, [first, second, now]);
+    return row ? mapPermit(row) : null;
+  }
+
+  async revokeOutstandingPermitsForCompanion(
+    companionId: string,
+    revokedAtMs: number,
+    reasonCodeInput: IcpAutonomyReasonCode,
+  ): Promise<IcpInitiationPermit[]> {
+    const reasonCode = requireReasonCode(reasonCodeInput, 'reasonCode');
+    const rows = await queryRows<PermitRow>(this.pool, `
+      UPDATE icp_initiation_permits
+      SET status = 'revoked', revoked_at_ms = GREATEST($2, issued_at_ms),
+          reason_code = $3, revision = revision + 1
+      WHERE status = 'issued'
+        AND (sender_companion_id = $1 OR recipient_companion_id = $1)
+      RETURNING ${PERMIT_COLUMNS}
+    `, [
+      requireUuid(companionId, 'companionId'),
+      requireTimestamp(revokedAtMs, 'revokedAtMs'),
+      reasonCode,
+    ]);
+    return rows.map(mapPermit);
   }
 
   async close(): Promise<void> {

@@ -78,6 +78,12 @@ import type {
 } from '../../system/capabilities/confirmation-queue.js';
 import type { AuditSummaryEntry } from './audit-port.js';
 import { parseCompanionRelayPublishParams } from '../../channels/backplane/companion-relay/relay.js';
+import type { IcpSharedAutonomyStorePort } from '../../core/icp/autonomy-store-ports.js';
+import type { GatewayIcpAutonomyBroker } from './icp-autonomy-broker.js';
+import {
+  createGatewayIcpAutonomyBroker,
+  registerGatewayIcpAutonomyRpc,
+} from './icp-autonomy-rpc.js';
 
 const log = createComponentLogger('Gateway');
 const DEFAULT_CONNECTION_HEALTHCHECK_STALE_AFTER_MS = 90_000;
@@ -228,6 +234,8 @@ export interface GatewayServerOptions {
    * and rejects every send.
    */
   companionChannels?: GatewayCompanionChannelLane;
+  /** Durable shared-schema authority for the content-free ICP autonomy broker. */
+  icpAutonomyStore?: IcpSharedAutonomyStorePort;
   /**
    * Gateway-process event bus. Carries the redacted `companion.*` relay
    * events: approval lifecycle emitted at the confirmation-queue choke
@@ -258,6 +266,7 @@ export class GatewayServer {
   private readonly companionLastSeen = new Map<string, number>();
   private readonly companionViolationLog: CompanionViolationEvent[] = [];
   private readonly companionDeliveryFailureReceipts = new CompanionDeliveryFailureReceipts();
+  private readonly icpAutonomyBroker: GatewayIcpAutonomyBroker | null;
 
   constructor(options: GatewayServerOptions) {
     this.options = options;
@@ -270,6 +279,22 @@ export class GatewayServer {
         + 'the inter-companion lane must not exist in single-companion topology',
       );
     }
+    if (options.icpAutonomyStore && !this.multiCompanion.enabled) {
+      throw new Error(
+        'GatewayServer received an icpAutonomyStore while multi-companion is disabled; '
+        + 'the autonomy broker must not exist in single-companion topology',
+      );
+    }
+    this.icpAutonomyBroker = options.icpAutonomyStore
+      ? createGatewayIcpAutonomyBroker({
+          store: options.icpAutonomyStore,
+          fleetCompanionIds: this.fleetCompanionIds,
+          companionChannels: options.companionChannels,
+          isCompanionReady: companionId => this.resolveReadyCompanionConnection(companionId) !== null,
+          eventBus: options.eventBus,
+          alarm: (event, message, details) => this.alarmCompanionViolation(event, message, details),
+        })
+      : null;
     if (this.multiCompanion.enabled) {
       log.info('Multi-companion gateway routing enabled', {
         channelRouting: this.multiCompanion.channelRouting,
@@ -414,6 +439,12 @@ export class GatewayServer {
     };
 
     registerGatewayMethods(runtime);
+    registerGatewayIcpAutonomyRpc({
+      target,
+      broker: this.icpAutonomyBroker,
+      requireAuthenticatedCompanionId: () => this.requireAuthenticatedAgentCompanionId(conn),
+      audited: (method, handler, paramsSummary) => this.audited(method, handler, paramsSummary),
+    });
     target.addMethod('gateway.client.identify', (params: unknown) => this.identifyConnection(conn, params));
     target.addMethod('companion.message.send', this.audited(
       'companion.message.send',
@@ -495,6 +526,16 @@ export class GatewayServer {
   findConfirmationHistoryEntry(id: string): ConfirmationQueueHistoryEntry | null {
     return this.approvalBoundary.listConfirmationHistory()
       .find((entry) => entry.id === id) ?? null;
+  }
+
+  /** Operator/fleet-reload hook: revoke pending autonomy before removing identity. */
+  async invalidateIcpAutonomyForCompanion(
+    companionId: string,
+    reasonCode: 'operator_cancelled' | 'unknown_participant' = 'operator_cancelled',
+  ): Promise<number> {
+    if (!this.icpAutonomyBroker) return 0;
+    const revoked = await this.icpAutonomyBroker.invalidateForCompanion(companionId, reasonCode);
+    return revoked.length;
   }
 
   /** Fail-closed audit hook for companion relay decisions. */
@@ -802,6 +843,14 @@ export class GatewayServer {
       return null;
     }
     return conn;
+  }
+
+  private requireAuthenticatedAgentCompanionId(conn: GatewayRpcConnection): string {
+    const status = this.connectionStatuses.get(conn);
+    if (status?.role !== 'agent' || !status.companionId) {
+      throw new Error('ICP autonomy RPC requires an authenticated agent companion connection');
+    }
+    return status.companionId;
   }
 
   // ── Connection management ──
@@ -1309,6 +1358,13 @@ export class GatewayServer {
     if (status?.companionId && this.companionConnections.get(status.companionId) === conn) {
       this.companionConnections.delete(status.companionId);
       log.info('Companion connection unbound', { companionId: status.companionId });
+      void this.icpAutonomyBroker?.invalidateForCompanion(status.companionId, 'peer_offline')
+        .catch((error: unknown) => {
+          log.error('Failed to invalidate ICP permits after companion disconnect', {
+            companionId: status.companionId,
+            error: toErrorMessage(error),
+          });
+        });
     }
     this.connections.delete(conn);
     this.rpcClients.delete(conn);
@@ -1683,6 +1739,11 @@ export class GatewayServer {
   }
 
   async stop(): Promise<void> {
+    if (this.icpAutonomyBroker) {
+      await Promise.all([...this.companionConnections.keys()].map(async companionId => {
+        await this.icpAutonomyBroker!.invalidateForCompanion(companionId, 'peer_offline');
+      }));
+    }
     for (const conn of this.connections) {
       conn.destroy();
     }

@@ -1379,6 +1379,11 @@ export const POSTGRES_SHARED_MIGRATIONS: readonly string[] = [
     ON icp_initiation_permits (conversation_id, status, expires_at_ms, permit_id);`,
   `CREATE INDEX IF NOT EXISTS idx_icp_initiation_permits_expiry
     ON icp_initiation_permits (status, expires_at_ms, permit_id);`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_icp_initiation_permits_outstanding_pair
+    ON icp_initiation_permits (
+      LEAST(sender_companion_id, recipient_companion_id),
+      GREATEST(sender_companion_id, recipient_companion_id)
+    ) WHERE status = 'issued';`,
   `
   INSERT INTO shared_schema_migrations (version, name)
   VALUES (4, 'icp-autonomy-control-plane')

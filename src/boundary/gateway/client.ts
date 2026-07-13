@@ -133,7 +133,23 @@ import type {
   HomeAssistantCallServiceParams,
   HomeAssistantCallServiceResult,
   ImageGenerationRpcResult,
+  IcpAvailabilityPublishParams,
+  IcpAvailabilityClearParams,
+  IcpPeerAvailabilityReadParams,
+  IcpInitiationPreflightParams,
+  IcpInitiationPermitIssueParams,
+  IcpPermitConsumeParams,
+  IcpPermitConsumeResult,
+  IcpPermitRevokeParams,
+  IcpPermitRevokeResult,
+  IcpPermitInvalidateSelfParams,
 } from './protocol.js';
+import type {
+  IcpInitiationGateDecision,
+  IcpInitiationPermitIssueResult,
+  IcpPeerAvailabilityResult,
+} from './icp-autonomy-contract.js';
+import type { IcpAvailabilityLease } from '../../shared/contracts/icp-autonomy.js';
 import { GatewayErrors } from './protocol.js';
 import {
   SESSION_INTEGRITY_RESPONSE_BUFFER_BYTES,
@@ -564,6 +580,81 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
       ...params,
       ...(this.companionId ? { companionId: this.companionId } : {}),
     }) as CompanionMessageFailureReportResult;
+  }
+
+  // ── ICP autonomy control plane (s10mc.6.2) ──
+
+  async companionPublishAvailability(
+    params: Omit<IcpAvailabilityPublishParams, 'companionId'>,
+  ): Promise<IcpAvailabilityLease> {
+    return await this.rpcInstance.request('companion.availability.publish', {
+      ...params,
+      ...(this.companionId ? { companionId: this.companionId } : {}),
+    }) as IcpAvailabilityLease;
+  }
+
+  async companionClearAvailability(
+    params: Omit<IcpAvailabilityClearParams, 'companionId'>,
+  ): Promise<{ cleared: boolean }> {
+    return await this.rpcInstance.request('companion.availability.clear', {
+      ...params,
+      ...(this.companionId ? { companionId: this.companionId } : {}),
+    }) as { cleared: boolean };
+  }
+
+  async companionReadPeerAvailability(
+    params: Omit<IcpPeerAvailabilityReadParams, 'companionId'>,
+  ): Promise<IcpPeerAvailabilityResult> {
+    return await this.rpcInstance.request('companion.availability.read_peer', {
+      ...params,
+      ...(this.companionId ? { companionId: this.companionId } : {}),
+    }) as IcpPeerAvailabilityResult;
+  }
+
+  async companionInitiationPreflight(
+    params: Omit<IcpInitiationPreflightParams, 'companionId'>,
+  ): Promise<IcpInitiationGateDecision> {
+    return await this.rpcInstance.request('companion.initiation.preflight', {
+      ...params,
+      ...(this.companionId ? { companionId: this.companionId } : {}),
+    }) as IcpInitiationGateDecision;
+  }
+
+  async companionIssueInitiationPermit(
+    params: Omit<IcpInitiationPermitIssueParams, 'companionId'>,
+  ): Promise<IcpInitiationPermitIssueResult> {
+    return await this.rpcInstance.request('companion.initiation.permit.issue', {
+      ...params,
+      ...(this.companionId ? { companionId: this.companionId } : {}),
+    }) as IcpInitiationPermitIssueResult;
+  }
+
+  async companionConsumeInitiationPermit(
+    params: Omit<IcpPermitConsumeParams, 'companionId'>,
+  ): Promise<IcpPermitConsumeResult> {
+    return await this.rpcInstance.request('companion.initiation.permit.consume', {
+      ...params,
+      ...(this.companionId ? { companionId: this.companionId } : {}),
+    }) as IcpPermitConsumeResult;
+  }
+
+  async companionRevokeInitiationPermit(
+    params: Omit<IcpPermitRevokeParams, 'companionId'>,
+  ): Promise<IcpPermitRevokeResult> {
+    return await this.rpcInstance.request('companion.initiation.permit.revoke', {
+      ...params,
+      ...(this.companionId ? { companionId: this.companionId } : {}),
+    }) as IcpPermitRevokeResult;
+  }
+
+  /** Invalidate every pending permit involving this companion after a block change. */
+  async companionInvalidateInitiationPermitsForBlock(
+    params: Omit<IcpPermitInvalidateSelfParams, 'companionId'> = { reasonCode: 'peer_blocked' },
+  ): Promise<{ revokedCount: number }> {
+    return await this.rpcInstance.request('companion.initiation.permit.invalidate_for_self', {
+      ...params,
+      ...(this.companionId ? { companionId: this.companionId } : {}),
+    }) as { revokedCount: number };
   }
 
   // ── Web fetch ──

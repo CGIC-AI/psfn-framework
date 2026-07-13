@@ -197,6 +197,75 @@ export class GatewayCompanionChannelLane {
       ...(roomPrivacy === 'private' ? { windowExcluded } : {}),
     };
   }
+
+  /**
+   * Stricter resolution used only for a new autonomous initiation. Ordinary
+   * replies may keep routing after the sender's presence row goes stale, but a
+   * `current_room` initiation requires both the authenticated sender and the
+   * selected peer to be current members at preflight time.
+   */
+  async resolveInitiation(
+    senderCompanionId: string,
+    peerCompanionId: string,
+    channelId: string,
+  ): Promise<CompanionDeliveryResolution> {
+    if (!this.fleetCompanionIds.has(senderCompanionId)
+      || !this.fleetCompanionIds.has(peerCompanionId)) {
+      return violation(
+        'companion_initiation_unknown_participant',
+        'Companion initiation requires two current fleet participants',
+        { senderCompanionId, peerCompanionId, channelId },
+      );
+    }
+    const parsed = parseCompanionChannelId(channelId);
+    if (!parsed) {
+      return violation(
+        'companion_channel_unparseable',
+        'Companion channelId is not a well-formed room or DM address',
+        { senderCompanionId, peerCompanionId, channelId },
+      );
+    }
+    if (parsed.kind === 'dm') {
+      const resolution = await this.resolveDelivery(senderCompanionId, channelId);
+      if (!resolution.ok) return resolution;
+      if (resolution.recipients.length !== 1 || resolution.recipients[0] !== peerCompanionId) {
+        return violation(
+          'companion_initiation_peer_substitution',
+          'Companion initiation peer does not match the canonical DM channel',
+          { senderCompanionId, peerCompanionId, channelId },
+        );
+      }
+      return resolution;
+    }
+
+    const place = this.placesRegistry.places.find((entry) => entry.placeId === parsed.placeId);
+    if (!place) {
+      return violation(
+        'companion_unknown_place',
+        `Companion room addresses unknown placeId "${parsed.placeId}"`,
+        { senderCompanionId, peerCompanionId, channelId, placeId: parsed.placeId },
+      );
+    }
+    const staleCutoffMs = this.now() - this.staleTtlMs;
+    const rows = await this.presence.listByPlace(place.siteId, place.placeId);
+    const currentMembers = new Set(rows
+      .filter(row => Date.parse(row.updatedAt) >= staleCutoffMs)
+      .map(row => row.companionId));
+    if (!currentMembers.has(senderCompanionId) || !currentMembers.has(peerCompanionId)) {
+      return violation(
+        'companion_initiation_room_membership_mismatch',
+        'Companion room initiation requires sender and peer to be current room members',
+        { senderCompanionId, peerCompanionId, channelId },
+      );
+    }
+    return {
+      ok: true,
+      kind: 'room',
+      channelId,
+      recipients: [peerCompanionId],
+      roomPrivacy: resolvePlacePrivacy(place),
+    };
+  }
 }
 
 function violation(

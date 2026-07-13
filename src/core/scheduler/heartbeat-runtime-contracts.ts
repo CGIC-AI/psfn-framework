@@ -59,6 +59,7 @@ import type {
   IntakeDriftDetectionPolicyConfig,
   IntakeSecondArrowPolicyConfig,
 } from '../../system/config/intake-policy-config.js';
+import type { IntrospectionValuesEvidencePort } from '../../faculties/introspection/values-consistency.js';
 
 export const DEFERRED_HEARTBEAT_ACTION_KIND = 'heartbeat.run_template';
 
@@ -93,6 +94,7 @@ export interface HeartbeatRuntimeOptions {
   characterPromptVariablesProvider?: () => Record<string, string>;
   memoryWriter?: Pick<MemoryWriter, 'write'>;
   promptRegistry?: PromptRegistryStatePort | null;
+  introspectionValuesEvidence?: IntrospectionValuesEvidencePort | null;
   reflectionStore?: ReflectionMetacognitionJournalStore;
   sessionManager?: Pick<SessionManager, 'resolveSessionChannelId' | 'getRecentMessages'> & Partial<Pick<SessionManager, 'recordSystemMessage' | 'recordAssistantMessage'>>;
   emotionState?: { getState(): EmotionStateSnapshot };

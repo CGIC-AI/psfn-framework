@@ -315,6 +315,9 @@ export function hydrateCanonicalStartupConfig(
         relevanceFloor: persistedScheduler.weightedThoughtOutreach.lifecycle.relevanceFloor,
       },
     },
+    ...(persistedScheduler.introspectionAudit
+      ? { introspectionAudit: { ...persistedScheduler.introspectionAudit } }
+      : {}),
   };
   config.maintenanceIntervalMs = schedulerConfig.salienceDecayIntervalMs;
   const chargePolicyConfig = configStore.loadStartupChargePolicy();

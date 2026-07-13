@@ -57,6 +57,45 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
       .filter(line => line.startsWith('- '));
   }
 
+  it('feeds private landmark evidence only into values-consistency reflections', async () => {
+    tempDir = mkdtempSync(join(tmpdir(), 'heartbeat-template-introspection-values-'));
+    const policyStore = new HeartbeatPolicyStore(resolveHeartbeatPolicyPath(tempDir));
+    const policy = policyStore.load();
+    const weekly = policy.templates.find(template => template.id === 'weekly-review');
+    if (!weekly) throw new Error('weekly-review template missing');
+    weekly.mode = 'standard';
+    weekly.internalStateInput = false;
+    weekly.sendToDiscord = false;
+    policyStore.save(policy);
+    const prompts: string[] = [];
+    const runtime = createHeartbeatTemplateRuntime({
+      scheduler: new Scheduler(new EventBus(), { tickIntervalMs: 100, heartbeatIntervalMs: 1_000 }),
+      agentLoop: {
+        handleMessage: vi.fn(async (message: { content: string }) => {
+          prompts.push(message.content);
+          return { content: 'I will hold the contradiction with care.' };
+        }),
+      },
+      sender: { send: vi.fn(async () => undefined) },
+      dataDir: tempDir,
+      runtimeOptions: {
+        introspectionValuesEvidence: {
+          buildEvidence: vi.fn(async () => ({
+            content: '[Introspection Landmarks]\nTYPED_LANDMARK_SENTINEL\n[/Introspection Landmarks]',
+            provenanceRefs: ['introspection-landmark:landmark-1'],
+          })),
+        },
+      },
+    });
+
+    await runtime.runTemplateNow('weekly-review', {
+      sendToDiscordOverride: false,
+      deferIfBusy: false,
+    });
+
+    expect(prompts[0]).toContain('TYPED_LANDMARK_SENTINEL');
+  });
+
   it('includes companion-readable ACAC self-report clues in heartbeat prompts and persisted telemetry', async () => {
     tempDir = mkdtempSync(join(tmpdir(), 'heartbeat-template-runtime-'));
     const capturedPrompts: string[] = [];

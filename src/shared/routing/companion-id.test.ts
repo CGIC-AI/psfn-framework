@@ -2,6 +2,7 @@ import { describe, expect, expectTypeOf, it } from 'vitest';
 import {
   createCompanionId,
   createShardCompanionId,
+  parseCompanionId,
   type CompanionId,
   type ShardCompanionId,
 } from './companion-id.js';
@@ -25,6 +26,20 @@ describe('CompanionId', () => {
       .toBe('companion-alpha::shard-42');
     expect(() => createShardCompanionId('companion-alpha'))
       .toThrow('wire format');
+  });
+
+  it('offers a nonthrowing parser for untrusted core identities', () => {
+    expect(parseCompanionId('  companion-alpha  ')).toBe('companion-alpha');
+    expect(parseCompanionId('companion:alpha')).toBeNull();
+    expect(parseCompanionId('x'.repeat(129))).toBeNull();
+    expect(parseCompanionId(null)).toBeNull();
+  });
+
+  it('reconstructs both shard wire forms from canonical validated tokens', () => {
+    expect(createShardCompanionId('  companion-alpha :: shard-42  '))
+      .toBe('companion-alpha::shard-42');
+    expect(createShardCompanionId('  companion-alpha /shards/ shard-42  '))
+      .toBe('companion-alpha/shards/shard-42');
   });
 
   it('is not assignable from an unvalidated string', () => {

@@ -24,10 +24,28 @@ export type ShardCompanionId = string & { readonly [shardCompanionIdBrand]: true
 
 export type RuntimeCompanionId = CompanionId | ShardCompanionId;
 
+/** Shared option contract for boundaries that require a core routing identity. */
+export interface CompanionRoutingBinding {
+  companionId: CompanionId;
+}
+
+/** Shared option contract for boundaries where identity binding is optional. */
+export interface OptionalCompanionRoutingBinding {
+  companionId?: CompanionId;
+}
+
 function isCompanionIdToken(value: string): boolean {
   return value.length <= COMPANION_ID_MAX_LENGTH
     && COMPANION_ID_TOKEN_PATTERN.test(value)
     && /[A-Za-z0-9]/u.test(value);
+}
+
+/** Parse an untrusted core companion identity without throwing. */
+export function parseCompanionId(value: unknown): CompanionId | null {
+  if (typeof value !== 'string') return null;
+  const normalized = value.trim();
+  if (!normalized || !isCompanionIdToken(normalized)) return null;
+  return normalized as CompanionId;
 }
 
 export function createCompanionId(
@@ -41,13 +59,14 @@ export function createCompanionId(
   if (!normalized) {
     throw new Error(`${fieldName} must be a non-empty string`);
   }
-  if (!isCompanionIdToken(normalized)) {
+  const parsed = parseCompanionId(normalized);
+  if (!parsed) {
     throw new Error(
       `${fieldName} must be a 1-${COMPANION_ID_MAX_LENGTH} character companion-id token `
       + 'containing only letters, digits, ".", "_", or "-"',
     );
   }
-  return normalized as CompanionId;
+  return parsed;
 }
 
 export function createShardCompanionId(
@@ -66,11 +85,9 @@ export function createShardCompanionId(
       + 'or "<companionId>::<shardId>" wire format',
     );
   }
-  createCompanionId(parts[0], `${fieldName} core companionId`);
-  if (!isCompanionIdToken(parts[1])) {
-    throw new Error(`${fieldName} shardId must use the companion-id token grammar`);
-  }
-  return normalized as ShardCompanionId;
+  const coreCompanionId = createCompanionId(parts[0], `${fieldName} core companionId`);
+  const shardId = createCompanionId(parts[1], `${fieldName} shardId`);
+  return `${coreCompanionId}${separator}${shardId}` as ShardCompanionId;
 }
 
 export function createRuntimeCompanionId(

@@ -10,7 +10,6 @@ import type {
 } from '../../channels/api/types.js';
 import type {
   VoiceHandleMessageResult,
-  VoiceStreamStartParams,
   VoiceStreamChunkParams,
   VoiceStreamEndParams,
   VoiceStreamCancelParams,
@@ -23,7 +22,7 @@ import { isRecord } from '../../shared/utils/types.js';
 export interface ReverseGatewayMethodRuntime {
   target: JSONRPCServerAndClient;
   dispatchHandleMessage(message: unknown): Promise<VoiceHandleMessageResult>;
-  handleVoiceStreamStart(params: VoiceStreamStartParams): VoiceStreamAckResult;
+  handleVoiceStreamStart(params: unknown): VoiceStreamAckResult;
   handleVoiceStreamChunk(params: VoiceStreamChunkParams): VoiceStreamAckResult;
   handleVoiceStreamEnd(params: VoiceStreamEndParams): Promise<VoiceStreamEndResult>;
   handleVoiceStreamCancel(params: VoiceStreamCancelParams): Promise<VoiceStreamCancelResult>;
@@ -50,7 +49,7 @@ const reverseDescriptors: Array<ReverseGatewayMethodDescriptor<any, unknown>> = 
   },
   {
     names: ['voice.stream.start'],
-    handler: (params: VoiceStreamStartParams, runtime) => runtime.handleVoiceStreamStart(params),
+    handler: (params: unknown, runtime) => runtime.handleVoiceStreamStart(params),
   },
   {
     names: ['voice.stream.chunk'],

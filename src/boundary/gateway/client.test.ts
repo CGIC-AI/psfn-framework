@@ -516,6 +516,115 @@ describe('GatewayClient reverse RPC (onHandleMessage)', () => {
     boundClient.destroy();
   });
 
+  it('rejects an unrouted voice.stream.start before ACK or stream-state creation', async () => {
+    client.onHandleMessage(vi.fn());
+    const message = {
+      id: 'voice-stream-unrouted',
+      channelId: 'discord-voice:123',
+      channelType: 'discord',
+      authorId: 'user-1',
+      authorName: 'TestUser',
+      content: '',
+      timestamp: '2025-01-01T00:00:00.000Z',
+    };
+
+    conn._emit({
+      jsonrpc: '2.0',
+      id: 45,
+      method: 'voice.stream.start',
+      params: {
+        correlationId: 'corr-unrouted',
+        streamId: 'stream-unrouted',
+        sequence: 0,
+        message: { ...message, routing: {} },
+      },
+    });
+    await new Promise(r => setTimeout(r, 20));
+
+    expect(getRpcResponse(conn.sent, 45)).toMatchObject({
+      error: { message: expect.stringContaining('routing.gateway') },
+    });
+
+    // Reusing the same key succeeds once the envelope is valid, proving the
+    // rejected frame was never ACKed or inserted into voiceStreams.
+    conn._emit({
+      jsonrpc: '2.0',
+      id: 46,
+      method: 'voice.stream.start',
+      params: {
+        correlationId: 'corr-unrouted',
+        streamId: 'stream-unrouted',
+        sequence: 0,
+        message: { ...message, routing: TEST_GATEWAY_ROUTING },
+      },
+    });
+    await new Promise(r => setTimeout(r, 20));
+
+    expect(getRpcResponse(conn.sent, 46)).toMatchObject({
+      result: { accepted: true, sequence: 0 },
+    });
+  });
+
+  it('rejects a cross-companion voice.stream.start before ACK or stream-state creation', async () => {
+    const boundConn = createMockConnection();
+    const boundClient = new GatewayClient(boundConn.conn, 1024, {
+      companionId: createCompanionId('companion-alpha'),
+    });
+    boundClient.onHandleMessage(vi.fn());
+    const message = {
+      id: 'voice-stream-misrouted',
+      channelId: 'discord-voice:123',
+      channelType: 'discord',
+      authorId: 'user-1',
+      authorName: 'TestUser',
+      content: '',
+      timestamp: '2025-01-01T00:00:00.000Z',
+    };
+
+    boundConn._emit({
+      jsonrpc: '2.0',
+      id: 47,
+      method: 'voice.stream.start',
+      params: {
+        correlationId: 'corr-misrouted',
+        streamId: 'stream-misrouted',
+        sequence: 0,
+        message: {
+          ...message,
+          routing: { gateway: { schemaVersion: 1, companionId: 'companion-beta' } },
+        },
+      },
+    });
+    await new Promise(r => setTimeout(r, 20));
+
+    expect(getRpcResponse(boundConn.sent, 47)).toMatchObject({
+      error: { message: expect.stringContaining('does not match this gateway client binding') },
+    });
+
+    boundConn._emit({
+      jsonrpc: '2.0',
+      id: 48,
+      method: 'voice.stream.start',
+      params: {
+        correlationId: 'corr-misrouted',
+        streamId: 'stream-misrouted',
+        sequence: 0,
+        message: {
+          ...message,
+          routing: {
+            gateway: { schemaVersion: 1, companionId: 'companion-alpha' },
+          },
+        },
+      },
+    });
+    await new Promise(r => setTimeout(r, 20));
+
+    expect(getRpcResponse(boundConn.sent, 48)).toMatchObject({
+      result: { accepted: true, sequence: 0 },
+    });
+    boundClient.destroy();
+  });
+
   it('handles voice.stream.start/chunk/end reverse RPC flow', async () => {
     const handler = vi.fn().mockResolvedValue({
       content: 'assembled response',

@@ -21,6 +21,7 @@ import {
   createGatewayRoutingEnvelope,
   type CompanionId,
 } from '../../shared/routing/envelope.js';
+import type { CompanionRoutingBinding } from '../../shared/routing/companion-id.js';
 
 const DEFAULT_VOICE_CHUNK_SIZE = 120;
 const DEFAULT_VOICE_QUEUE_SIZE = 32;
@@ -55,7 +56,7 @@ export interface VoiceStreamRequestOptions {
   signal?: AbortSignal;
 }
 
-export interface RequestAgentVoiceStreamOptions {
+export interface RequestAgentVoiceStreamOptions extends CompanionRoutingBinding {
   client: JSONRPCServerAndClient;
   message: SubstrateMessage;
   options?: VoiceStreamRequestOptions;

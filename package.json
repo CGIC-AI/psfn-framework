@@ -5,7 +5,7 @@
   "type": "module",
   "main": "dist/index.js",
   "scripts": {
-    "build": "tsup",
+    "build": "npm run verify:companion-id-types && tsup",
     "postinstall": "patch-package && npm install --prefix admin-ui",
     "dev": "./scripts/start-gateway-agent.sh",
     "start": "./scripts/start-gateway-agent.sh",

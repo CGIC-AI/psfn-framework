@@ -1,4 +1,5 @@
 import type { PlaceKind } from '../../shared/contracts/places-registry.js';
+import { LOWERCASE_RFC4122_COMPANION_ID_PATTERN } from '../../shared/routing/companion-id.js';
 
 // ── Cross-companion presence store port (sprint 10, W5a) ──
 //
@@ -17,7 +18,7 @@ import type { PlaceKind } from '../../shared/contracts/places-registry.js';
  * than as an opaque database type error.
  */
 export const COMPANION_PRESENCE_COMPANION_ID_PATTERN =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
+  LOWERCASE_RFC4122_COMPANION_ID_PATTERN;
 
 /**
  * Read-side staleness TTL. A presence row not refreshed within this window is

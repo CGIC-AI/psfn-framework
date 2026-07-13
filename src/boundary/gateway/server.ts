@@ -78,7 +78,11 @@ import type {
 } from '../../system/capabilities/confirmation-queue.js';
 import type { AuditSummaryEntry } from './audit-port.js';
 import { parseCompanionRelayPublishParams } from '../../channels/backplane/companion-relay/relay.js';
-import { createCompanionId, type CompanionId } from '../../shared/routing/companion-id.js';
+import {
+  createCompanionId,
+  type CompanionId,
+  type OptionalCompanionRoutingBinding,
+} from '../../shared/routing/companion-id.js';
 
 const log = createComponentLogger('Gateway');
 const DEFAULT_CONNECTION_HEALTHCHECK_STALE_AFTER_MS = 90_000;
@@ -177,7 +181,7 @@ export { requireGatewaySessionHmacKeyring, resolveGatewaySessionHmacKeyring } fr
 
 // ── Gateway Server Class ──
 
-export interface GatewayServerOptions {
+export interface GatewayServerOptions extends OptionalCompanionRoutingBinding {
   socketPath: string;
   gatewayRpcEndpoint?: GatewayRpcEndpoint;
   llmProvider: LLMProviderPort;

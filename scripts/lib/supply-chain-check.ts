@@ -16,6 +16,8 @@
  * `allowOffline`, which downgrades to a loud warning.
  */
 
+import { isRecord } from '../../src/shared/utils/types.js';
+
 export const OSV_BATCH_URL = 'https://api.osv.dev/v1/querybatch';
 export const OSV_VULN_URL = 'https://api.osv.dev/v1/vulns';
 export const NPM_ECOSYSTEM = 'npm';
@@ -72,10 +74,6 @@ export interface CheckOptions {
   fetchImpl: FetchLike;
   allowOffline?: boolean;
   requestTimeoutMs?: number;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 /**

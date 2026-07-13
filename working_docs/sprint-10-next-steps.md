@@ -1,6 +1,6 @@
 # Sprint 10 — Next Steps
 
-Status: 2026-07-08; **§0 added 2026-07-12** (post-triage grilling session — decided priority order, operator decisions, and corrections; where §0 and the older sections disagree, §0 wins). Companion doc to [`sprint-10-multi-companion.md`](./sprint-10-multi-companion.md) (the plan, v2) and [`SPRINT_10_LOCATIONS.md`](./SPRINT_10_LOCATIONS.md) (the locations plan). Those two answer "what are we building and why"; this one answers "what happens next, in what order, before this ships." Bead ids below are enumerated in [`sprint-10-multi-companion-beads.jsonl`](./sprint-10-multi-companion-beads.jsonl) (26 beads, epic `psfn-framework-s10mc` + `psfn-framework-vinz` children + future-idea beads).
+Status: 2026-07-08; **§0 added 2026-07-12** (post-triage grilling session — decided priority order, operator decisions, and corrections), with the CompanionId dependency status refreshed in §0.4 on 2026-07-13. Where §0 and the older sections disagree, §0 wins. Companion doc to [`sprint-10-multi-companion.md`](./sprint-10-multi-companion.md) (the plan, v2) and [`SPRINT_10_LOCATIONS.md`](./SPRINT_10_LOCATIONS.md) (the locations plan). Those two answer "what are we building and why"; this one answers "what happens next, in what order, before this ships." Bead ids below are enumerated in [`sprint-10-multi-companion-beads.jsonl`](./sprint-10-multi-companion-beads.jsonl) (26 beads, epic `psfn-framework-s10mc` + `psfn-framework-vinz` children + future-idea beads).
 
 The headline fact governing everything below: the multi-companion substrate is **code-complete** on `feat/multi-companion` @ `6608579f` (45 commits ahead of `main`), gated at every merge with build + lint + targeted vitest. It is **not yet validated** — no full runtime has booted the branch, because the implementation sandbox has no `.env` secrets and Docker there cannot publish ports. Code-complete and validated are different claims; §1 keeps them visually distinct, and closing that gap (`psfn-framework-s10f8`) is the first gate in §2.
 
@@ -29,9 +29,11 @@ was dependency-wired end to end, and the release path got tracker structure.
   MI-marked contacts with baseline trust one notch above default; fatigue fully
   applies; relationship level is earned or scenario-seeded on top of the floor.
   (This resolves the §3 "sibling-contact trust onboarding defaults" gap.)
-- **Charter items ride the MC lane**: `z7qe.4` (brand CompanionId) now blocks
-  `s10mc.1` + `s10mc.2`; `z7qe.1` (SQLite sweep) blocks `s10mc.2`. Rest of the
-  charter-gap epic stays parked.
+- **Charter items ride the MC lane**: `z7qe.4` (brand CompanionId) was the type-
+  safety prerequisite for `s10mc.1` + `s10mc.2` and is now code-complete and
+  independently approved on `feat/companion-id-branding` (§0.4); closing it
+  satisfies that dependency. `z7qe.1` (SQLite sweep) still blocks `s10mc.2`.
+  Rest of the charter-gap epic stays parked.
 - **Deliberately deferred**: `cam` cost-accounting review (accepted tail risk —
   it blocks only ICP `6.7` breaker + `6.9` cert), `lpro` kube lane (operator
   reboot approval), `opl1` fleet SSO, `c337` workspaces, `0ggv.4` Artie link
@@ -45,11 +47,10 @@ was dependency-wired end to end, and the release path got tracker structure.
 1. `s10mc.6.1` — ICP W1 contracts (heads the ICP chain)
 2. `s10rm` — sender-presence gate + presence-windowed delivery remainder
    (blocks ICP `6.3` and `6.9`)
-3. `z7qe.4` — brand CompanionId (blocks `s10mc.1`/`s10mc.2`)
-4. `z7qe.1` — SQLite remnant sweep (blocks `s10mc.2`)
-5. `s10f8` — full-runtime validation flag-off/flag-on (entry gate for deploy;
+3. `z7qe.1` — SQLite remnant sweep (blocks `s10mc.2`)
+4. `s10f8` — full-runtime validation flag-off/flag-on (entry gate for deploy;
    one activity with the `s10mc.8` live demo)
-6. Operator-only queue: `efc2` psfn-test preview review (committed
+5. Operator-only queue: `efc2` psfn-test preview review (committed
    ~2026-07-19), `kz0i`/`i698` morning live observations, `lpro.1` reboot.
 
 **ICP chain (wired):** `6.1` → `6.2` broker ∥ `6.6` fatigue/social-charge →
@@ -57,10 +58,11 @@ was dependency-wired end to end, and the release path got tracker structure.
 `6.7` USD breaker (← `cam`, deferred) → `6.8` owner config/Garden → `6.9`
 two-real-agent certification.
 
-**MC substrate (parallel once charter items land):** `s10mc.1` (← `z7qe.4`),
-`s10mc.2` flagship cutover (← `z7qe.4`, `z7qe.1`, and restore proof `s10d7` —
-§2d hard gate unchanged), `s10mc.3` per-companion owners, `s10mc.8`/`s10f8`
-live demo.
+**MC substrate (parallel once charter items land):** the `z7qe.4` dependency is
+satisfied by the reviewed CompanionId branch (§0.4); `s10mc.1` is already
+code-complete. `s10mc.2` flagship cutover remains blocked by `z7qe.1` and
+restore proof `s10d7` (§2d hard gate unchanged). `s10mc.3` per-companion owners
+and the `s10mc.8`/`s10f8` live demo remain open.
 
 **Companion app lane (`w9hj`, second half of "app running solid"):** `u24q`
 service-worker stale-shell fix and `8ora` first-class PWA channel are now
@@ -87,6 +89,25 @@ Pi-class runs) → `wckv` setup/bootstrap docs epic → `upx0.1`/`.2`/`.3` →
   2026-07-09 and are closed.
 - Live experience is good post-S9/S10; the binding constraint is follow-through
   on testing and the less-used surfaces, hence the shakedown epic.
+
+### 0.4 CompanionId dependency completed (2026-07-13)
+
+`psfn-framework-z7qe.4` is code-complete and independently approved on
+`feat/companion-id-branding`. The three implementation/review snapshots are
+`24711f4d`, `2dd81816`, and `d5878664`. The delivered contract includes distinct
+branded core and shard identities, validating and nonthrowing constructors,
+canonical preservation of both existing shard wire forms, branded gateway and
+channel routing, fail-closed claimed-vs-bound enforcement, reverse voice routing
+validation before ACK/state creation, and a negative compile-time fixture wired
+into every production build. Persisted IDs and wire formats were not renamed.
+
+Final branch evidence: 280/280 focused tests passed across gateway, channel,
+presence, shard, and type-gate seams; `npm run verify:companion-id-types`,
+`npm run build` (ESM + DTS), `npm run lint`, and `git diff --check` passed. The
+final independent review approved `d5878664`. No live-runtime validation was
+claimed or performed for this type-safety branch. The `z7qe.4` dependency is
+therefore satisfied; the feature branch still requires the planned operator
+merge/integration step before it is present on `feat/multi-companion` or `main`.
 
 ## 1. Where things stand
 
@@ -178,3 +199,4 @@ In rough value order once the critical path (§2) and hardening (§3) are done:
 | `psfn-framework-s10f6` | P2 open: ~76 pre-existing `main` test failures, independently confirmed as pre-existing |
 | `psfn-framework-s10f7` | P2 open: fleet status page needs a fatigue/charge posture column |
 | `psfn-framework-s10f8` | P1 open: full-runtime validation, flag-off then flag-on — entry gate for §2 |
+| `psfn-framework-z7qe.4` | CompanionId branding — code-complete and independently approved on `feat/companion-id-branding` @ `d5878664`; dependency satisfied, pending operator merge/integration |

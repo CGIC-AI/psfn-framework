@@ -33,7 +33,6 @@ export interface AppendIntrospectionConsentInput {
   reason: string;
   createdAt?: string;
 }
-
 function assertExactKeys(record: Record<string, unknown>, keys: ReadonlySet<string>, label: string): void {
   for (const key of Object.keys(record)) {
     if (!keys.has(key)) {
@@ -223,4 +222,3 @@ export class IntrospectionConsentStore {
     return record;
   }
 }
-

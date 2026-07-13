@@ -1,4 +1,4 @@
-import type { Pool, QueryResultRow } from "pg";
+import type { Pool, PoolClient, QueryResultRow } from "pg";
 
 import type {
   IcpFatigueRegulationReservationPort,
@@ -35,6 +35,10 @@ const RESERVATION_COLUMNS = `
   peer_companion_id, peer_contact_id, channel_id, decision, amount,
   reserved_at_ms, finalized_at_ms, outcome
 `;
+
+const FATIGUE_LEASE_LOCK_SEED = 1;
+const FATIGUE_LEASE_POOL_MAX = 8;
+const FATIGUE_LEASE_ACQUIRE_TIMEOUT_MS = 5_000;
 
 function requirePositiveInteger(value: number, field: string): number {
   if (!Number.isSafeInteger(value) || value < 1) {
@@ -133,21 +137,35 @@ function assertFinalizationMatches(
  * charged/closeout slots across processes, channels, and restarts.
  */
 export class PostgresIcpFatigueRegulationReservationStore implements IcpFatigueRegulationReservationPort {
-  private constructor(private readonly pool: Pool) {}
+  private readonly leases = new Map<string, PoolClient>();
+  private closed = false;
+  private closePromise: Promise<void> | null = null;
+
+  private constructor(
+    private readonly pool: Pool,
+    private readonly leasePool: Pool,
+  ) {}
 
   static async connect(
     databaseUrl: string,
   ): Promise<PostgresIcpFatigueRegulationReservationStore> {
     const pool = createPostgresPool(databaseUrl, {
-      applicationName: "psfn-icp-fatigue-regulation",
+      applicationName: "companion-icp-fatigue-regulation",
       allowExitOnIdle: true,
+      schema: SHARED_SCHEMA_NAME,
+    });
+    const leasePool = createPostgresPool(databaseUrl, {
+      applicationName: "companion-icp-fatigue-regulation-lease",
+      allowExitOnIdle: true,
+      connectionTimeoutMillis: FATIGUE_LEASE_ACQUIRE_TIMEOUT_MS,
+      max: FATIGUE_LEASE_POOL_MAX,
       schema: SHARED_SCHEMA_NAME,
     });
     try {
       await ensureSharedSchema(pool);
-      return new PostgresIcpFatigueRegulationReservationStore(pool);
+      return new PostgresIcpFatigueRegulationReservationStore(pool, leasePool);
     } catch (error) {
-      await pool.end();
+      await Promise.allSettled([pool.end(), leasePool.end()]);
       throw error;
     }
   }
@@ -177,9 +195,9 @@ export class PostgresIcpFatigueRegulationReservationStore implements IcpFatigueR
       input.relationshipPressureWindowMs,
       "reservation.relationshipPressureWindowMs",
     );
-    const reservationTtlMs = requirePositiveInteger(
-      input.reservationTtlMs,
-      "reservation.reservationTtlMs",
+    const unansweredInitiationAfterMs = requirePositiveInteger(
+      input.unansweredInitiationAfterMs,
+      "reservation.unansweredInitiationAfterMs",
     );
     requireNonNegativeFinite(
       input.declinedPressureUnits,
@@ -199,97 +217,147 @@ export class PostgresIcpFatigueRegulationReservationStore implements IcpFatigueR
       );
     }
 
-    return await withPostgresClient(this.pool, async (client) => {
-      await client.query(
-        "SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))",
-        [
-          canonicalPairKey(
+    const normalizedInput: IcpFatigueReservationInput = {
+      ...input,
+      correlation,
+      timestampMs,
+      amount,
+      hardLimit,
+      overchargeLimit,
+      relationshipPressureHalfLifeMs: halfLifeMs,
+      relationshipPressureWindowMs: windowMs,
+      unansweredInitiationAfterMs,
+    };
+    const lease = await this.acquireLease(correlation.turnId);
+    try {
+      const transaction = await withPostgresClient(this.pool, async (client) => {
+        await client.query(
+          "SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))",
+          [
+            canonicalPairKey(
+              correlation.localCompanionId,
+              correlation.peerCompanionId,
+            ),
+          ],
+        );
+        const existingResult = await client.query<ReservationRow>(
+          `
+          SELECT ${RESERVATION_COLUMNS}
+          FROM icp_fatigue_turn_reservations
+          WHERE turn_id = $1
+          FOR UPDATE
+        `,
+          [correlation.turnId],
+        );
+        const existing = existingResult.rows.at(0);
+        if (existing && existing.outcome !== "failed") {
+          assertReplayMatches(existing, normalizedInput);
+          return {
+            result: await this.snapshotResult(
+              client,
+              normalizedInput,
+              "replayed",
+              correlation.turnId,
+            ),
+            keepLease: existing.outcome === "pending",
+          };
+        }
+
+        // A pending turn is reclaimable only when its dedicated database
+        // session no longer owns the advisory lease. No wall clock participates.
+        await client.query(
+          `
+          WITH orphaned AS (
+            SELECT turn_id
+            FROM icp_fatigue_turn_reservations
+            WHERE local_companion_id = $1 AND peer_companion_id = $2
+              AND outcome = 'pending' AND turn_id <> $3::uuid
+              AND pg_try_advisory_xact_lock(
+                hashtextextended(turn_id::text, ${FATIGUE_LEASE_LOCK_SEED})
+              )
+          )
+          UPDATE icp_fatigue_turn_reservations AS reservation
+          SET outcome = 'failed', finalized_at_ms = $4
+          FROM orphaned
+          WHERE reservation.turn_id = orphaned.turn_id
+        `,
+          [
             correlation.localCompanionId,
             correlation.peerCompanionId,
-          ),
-        ],
-      );
-      const existingResult = await client.query<ReservationRow>(
-        `
-        SELECT ${RESERVATION_COLUMNS}
-        FROM icp_fatigue_turn_reservations
-        WHERE turn_id = $1
-        FOR UPDATE
-      `,
-        [correlation.turnId],
-      );
-      const existing = existingResult.rows.at(0);
-      if (existing && existing.outcome !== "failed") {
-        assertReplayMatches(existing, { ...input, correlation });
-        return await this.snapshotResult(client, input, "replayed");
-      }
-
-      await client.query(
-        `
-        UPDATE icp_fatigue_turn_reservations
-        SET outcome = 'failed', finalized_at_ms = $3
-        WHERE local_companion_id = $1 AND peer_companion_id = $2
-          AND outcome = 'pending'
-          AND reserved_at_ms < $3::bigint - $4::bigint
-      `,
-        [
-          correlation.localCompanionId,
-          correlation.peerCompanionId,
-          timestampMs,
-          reservationTtlMs,
-        ],
-      );
-      const snapshot = await this.snapshotResult(client, input, "reserved");
-      const exhausted =
-        input.decision === "charged"
-          ? snapshot.normalSpentBefore >= hardLimit
-          : snapshot.overchargeSpentBefore >= overchargeLimit;
-      if (exhausted) return { ...snapshot, outcome: "exhausted" };
-
-      const insertResult = await client.query<ReservationRow>(
-        `
-        INSERT INTO icp_fatigue_turn_reservations (
-          turn_id, conversation_id, root_initiation_id, local_companion_id,
-          peer_companion_id, peer_contact_id, channel_id, decision, amount,
-          reserved_at_ms, finalized_at_ms, outcome
-        )
-        SELECT $1, episode.conversation_id, episode.root_initiation_id, $4, $5,
-          $6, episode.channel_id, $8, $9, $10, NULL, 'pending'
-        FROM icp_conversation_episodes AS episode
-        WHERE episode.conversation_id = $2
-          AND episode.root_initiation_id = $3
-          AND episode.channel_id = $7
-          AND episode.participant_companion_ids @> ARRAY[$4::uuid, $5::uuid]
-          AND episode.status IN ('invited', 'active')
-        ON CONFLICT (turn_id) DO UPDATE SET
-          reserved_at_ms = EXCLUDED.reserved_at_ms,
-          finalized_at_ms = NULL,
-          outcome = 'pending'
-        WHERE icp_fatigue_turn_reservations.outcome = 'failed'
-        RETURNING ${RESERVATION_COLUMNS}
-      `,
-        [
-          correlation.turnId,
-          correlation.conversationId,
-          correlation.rootInitiationId,
-          correlation.localCompanionId,
-          correlation.peerCompanionId,
-          correlation.peerContactId,
-          correlation.channelId,
-          input.decision,
-          amount,
-          timestampMs,
-        ],
-      );
-      const inserted = insertResult.rows.at(0);
-      if (!inserted) {
-        throw new Error(
-          "ICP fatigue reservation episode/channel/participant binding mismatch",
+            correlation.turnId,
+            timestampMs,
+          ],
         );
+        const snapshot = await this.snapshotResult(
+          client,
+          normalizedInput,
+          "reserved",
+        );
+        const exhausted =
+          input.decision === "charged"
+            ? snapshot.normalSpentBefore >= hardLimit
+            : snapshot.overchargeSpentBefore >= overchargeLimit;
+        if (exhausted) {
+          return {
+            result: { ...snapshot, outcome: "exhausted" as const },
+            keepLease: false,
+          };
+        }
+
+        const insertResult = await client.query<ReservationRow>(
+          `
+          INSERT INTO icp_fatigue_turn_reservations (
+            turn_id, conversation_id, root_initiation_id, local_companion_id,
+            peer_companion_id, peer_contact_id, channel_id, decision, amount,
+            reserved_at_ms, finalized_at_ms, outcome
+          )
+          SELECT $1, episode.conversation_id, episode.root_initiation_id, $4, $5,
+            $6, episode.channel_id, $8, $9, $10, NULL, 'pending'
+          FROM icp_conversation_episodes AS episode
+          WHERE episode.conversation_id = $2
+            AND episode.root_initiation_id = $3
+            AND episode.channel_id = $7
+            AND episode.participant_companion_ids @> ARRAY[$4::uuid, $5::uuid]
+            AND episode.status IN ('invited', 'active')
+          ON CONFLICT (turn_id) DO UPDATE SET
+            reserved_at_ms = EXCLUDED.reserved_at_ms,
+            finalized_at_ms = NULL,
+            outcome = 'pending'
+          WHERE icp_fatigue_turn_reservations.outcome = 'failed'
+          RETURNING ${RESERVATION_COLUMNS}
+        `,
+          [
+            correlation.turnId,
+            correlation.conversationId,
+            correlation.rootInitiationId,
+            correlation.localCompanionId,
+            correlation.peerCompanionId,
+            correlation.peerContactId,
+            correlation.channelId,
+            input.decision,
+            amount,
+            timestampMs,
+          ],
+        );
+        const inserted = insertResult.rows.at(0);
+        if (!inserted) {
+          throw new Error(
+            "ICP fatigue reservation episode/channel/participant binding mismatch",
+          );
+        }
+        assertReplayMatches(inserted, normalizedInput);
+        return { result: snapshot, keepLease: true };
+      });
+      if (!transaction.keepLease) {
+        await this.releaseLease(correlation.turnId);
       }
-      assertReplayMatches(inserted, { ...input, correlation });
-      return snapshot;
-    });
+      return transaction.result;
+    } catch (error) {
+      if (lease.created) {
+        await this.releaseLease(correlation.turnId);
+      }
+      throw error;
+    }
   }
 
   async readInitiationPressure(
@@ -368,6 +436,64 @@ export class PostgresIcpFatigueRegulationReservationStore implements IcpFatigueR
     });
   }
 
+  async prepareDelivery(
+    input: Parameters<IcpFatigueRegulationReservationPort["prepareDelivery"]>[0],
+  ): Promise<void> {
+    const correlation = parseIcpConversationCorrelation(input.correlation);
+    const lease = this.leases.get(correlation.turnId);
+    if (lease) {
+      await lease.query("SELECT 1");
+    }
+    await withPostgresClient(this.pool, async (client) => {
+      await client.query(
+        "SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))",
+        [
+          canonicalPairKey(
+            correlation.localCompanionId,
+            correlation.peerCompanionId,
+          ),
+        ],
+      );
+      const result = await client.query<ReservationRow>(
+        `
+        SELECT ${RESERVATION_COLUMNS}
+        FROM icp_fatigue_turn_reservations
+        WHERE turn_id = $1
+        FOR UPDATE
+      `,
+        [correlation.turnId],
+      );
+      const row = result.rows.at(0);
+      if (!row || !["pending", "delivering"].includes(row.outcome)) {
+        throw new Error(
+          `ICP fatigue delivery preparation conflict for turn ${correlation.turnId}`,
+        );
+      }
+      if (row.outcome === "pending" && !lease) {
+        throw new Error(
+          `ICP fatigue delivery preparation requires the live reservation lease for turn ${correlation.turnId}`,
+        );
+      }
+      assertFinalizationMatches(row, correlation, input.fatigue, "delivered");
+      if (row.outcome === "pending") {
+        await client.query(
+          `
+          UPDATE icp_fatigue_turn_reservations
+          SET outcome = 'delivering'
+          WHERE turn_id = $1 AND outcome = 'pending'
+        `,
+          [correlation.turnId],
+        );
+      }
+    });
+    await this.releaseLease(correlation.turnId);
+  }
+
+  async handoff(correlationInput: IcpConversationCorrelation): Promise<void> {
+    const correlation = parseIcpConversationCorrelation(correlationInput);
+    await this.releaseLease(correlation.turnId);
+  }
+
   async finalize(
     input: Parameters<IcpFatigueRegulationReservationPort["finalize"]>[0],
   ): Promise<void> {
@@ -385,6 +511,15 @@ export class PostgresIcpFatigueRegulationReservationStore implements IcpFatigueR
         "ICP fatigue reservation finalization metadata binding mismatch",
       );
     }
+    if (input.outcome === "failed") {
+      const lease = this.leases.get(correlation.turnId);
+      if (!lease) {
+        throw new Error(
+          `ICP fatigue failure finalization requires the live reservation lease for turn ${correlation.turnId}`,
+        );
+      }
+      await lease.query("SELECT 1");
+    }
     await withPostgresClient(this.pool, async (client) => {
       await client.query(
         "SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))",
@@ -395,14 +530,15 @@ export class PostgresIcpFatigueRegulationReservationStore implements IcpFatigueR
           ),
         ],
       );
+      const sourceOutcome = input.outcome === "failed" ? "pending" : "delivering";
       const result = await client.query<ReservationRow>(
         `
         UPDATE icp_fatigue_turn_reservations
         SET outcome = $2, finalized_at_ms = $3
-        WHERE turn_id = $1 AND outcome = 'pending'
+        WHERE turn_id = $1 AND outcome = $4
         RETURNING ${RESERVATION_COLUMNS}
       `,
-        [correlation.turnId, input.outcome, finalizedAtMs],
+        [correlation.turnId, input.outcome, finalizedAtMs, sourceOutcome],
       );
       const finalized = result.rows.at(0);
       if (finalized) {
@@ -437,10 +573,92 @@ export class PostgresIcpFatigueRegulationReservationStore implements IcpFatigueR
         );
       }
     });
+    await this.releaseLease(correlation.turnId);
+  }
+
+  private async acquireLease(
+    turnId: string,
+  ): Promise<{ client: PoolClient; created: boolean }> {
+    if (this.closed) {
+      throw new Error("ICP fatigue reservation store is closed");
+    }
+    const existing = this.leases.get(turnId);
+    if (existing) {
+      try {
+        await existing.query("SELECT 1");
+        return { client: existing, created: false };
+      } catch {
+        await this.releaseLease(turnId);
+      }
+    }
+    let client: PoolClient;
+    try {
+      client = await this.leasePool.connect();
+    } catch (error) {
+      throw new Error(
+        `ICP fatigue reservation lease capacity unavailable: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+    try {
+      const result = await client.query<{ acquired: boolean }>(
+        `SELECT pg_try_advisory_lock(
+          hashtextextended($1::text, ${FATIGUE_LEASE_LOCK_SEED})
+        ) AS acquired`,
+        [turnId],
+      );
+      if (result.rows.at(0)?.acquired !== true) {
+        throw new Error(
+          `ICP fatigue reservation turn ${turnId} is already active in another process`,
+        );
+      }
+      this.leases.set(turnId, client);
+      return { client, created: true };
+    } catch (error) {
+      client.release(true);
+      throw error;
+    }
+  }
+
+  private async releaseLease(turnId: string): Promise<void> {
+    const client = this.leases.get(turnId);
+    if (!client) return;
+    this.leases.delete(turnId);
+    try {
+      await client.query(
+        `SELECT pg_advisory_unlock(
+          hashtextextended($1::text, ${FATIGUE_LEASE_LOCK_SEED})
+        )`,
+        [turnId],
+      );
+      client.release();
+    } catch (error) {
+      client.release(true);
+      throw error;
+    }
   }
 
   async close(): Promise<void> {
-    await this.pool.end();
+    if (this.closePromise) return await this.closePromise;
+    this.closed = true;
+    this.closePromise = this.closeResources();
+    return await this.closePromise;
+  }
+
+  private async closeResources(): Promise<void> {
+    const turnIds = [...this.leases.keys()];
+    const releases = await Promise.allSettled(turnIds.map(async (turnId) => {
+      await this.releaseLease(turnId);
+    }));
+    const pools = await Promise.allSettled([this.pool.end(), this.leasePool.end()]);
+    const failures = [...releases, ...pools]
+      .filter((result): result is PromiseRejectedResult => result.status === "rejected")
+      .map((result) => result.reason);
+    if (failures.length > 0) {
+      throw new AggregateError(
+        failures,
+        "Failed to close ICP fatigue reservation resources",
+      );
+    }
   }
 
   private async snapshotResult(
@@ -450,6 +668,7 @@ export class PostgresIcpFatigueRegulationReservationStore implements IcpFatigueR
       IcpFatigueReservationResult["outcome"],
       "reserved" | "replayed"
     >,
+    excludedTurnId?: string,
   ): Promise<IcpFatigueReservationResult> {
     const correlation = input.correlation;
     const snapshot = await this.pressureSnapshot(client, {
@@ -459,11 +678,11 @@ export class PostgresIcpFatigueRegulationReservationStore implements IcpFatigueR
       timestampMs: input.timestampMs,
       relationshipPressureHalfLifeMs: input.relationshipPressureHalfLifeMs,
       relationshipPressureWindowMs: input.relationshipPressureWindowMs,
-      unansweredAfterMs: input.reservationTtlMs,
+      unansweredAfterMs: input.unansweredInitiationAfterMs,
       declinedPressureUnits: input.declinedPressureUnits,
       deferredPressureUnits: input.deferredPressureUnits,
       unansweredPressureUnits: input.unansweredPressureUnits,
-    });
+    }, excludedTurnId);
     return {
       outcome,
       normalSpentBefore: Math.max(
@@ -473,12 +692,15 @@ export class PostgresIcpFatigueRegulationReservationStore implements IcpFatigueR
       overchargeSpentBefore: snapshot.rootOverchargeSpent,
       relationshipPressure: snapshot.relationshipPressure,
       rootNormalSpent: snapshot.rootNormalSpent,
+      rootOverchargeSpent: snapshot.rootOverchargeSpent,
+      contributingReservationCount: snapshot.contributingReservationCount,
     };
   }
 
   private async pressureSnapshot(
     client: Pick<Pool, "query">,
     input: IcpInitiationPressureInput & { rootInitiationId?: string },
+    excludedTurnId?: string,
   ): Promise<{
     rootNormalSpent: number;
     rootOverchargeSpent: number;
@@ -512,7 +734,8 @@ export class PostgresIcpFatigueRegulationReservationStore implements IcpFatigueR
         FROM icp_fatigue_turn_reservations
         WHERE local_companion_id = $1 AND peer_companion_id = $2
           AND root_initiation_id = $3::uuid
-          AND outcome IN ('pending', 'delivered', 'no_reply')
+          AND outcome IN ('pending', 'delivering', 'delivered', 'no_reply')
+          AND ($11::uuid IS NULL OR turn_id <> $11::uuid)
       ), reservation_pressure AS (
         SELECT
           COALESCE(SUM(
@@ -523,8 +746,9 @@ export class PostgresIcpFatigueRegulationReservationStore implements IcpFatigueR
           COUNT(*) FILTER (WHERE decision = 'charged') AS reservation_count
         FROM icp_fatigue_turn_reservations
         WHERE local_companion_id = $1 AND peer_companion_id = $2
-          AND outcome IN ('pending', 'delivered', 'no_reply')
+          AND outcome IN ('pending', 'delivering', 'delivered', 'no_reply')
           AND reserved_at_ms BETWEEN $5::bigint AND $4::bigint
+          AND ($11::uuid IS NULL OR turn_id <> $11::uuid)
       ), episode_pressure AS (
         SELECT
           COALESCE(SUM(CASE WHEN status = 'declined' THEN
@@ -562,6 +786,7 @@ export class PostgresIcpFatigueRegulationReservationStore implements IcpFatigueR
         input.deferredPressureUnits,
         input.unansweredPressureUnits,
         input.unansweredAfterMs,
+        excludedTurnId ?? null,
       ],
     );
     const row = result.rows.at(0);

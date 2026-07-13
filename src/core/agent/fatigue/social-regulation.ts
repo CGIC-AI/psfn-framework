@@ -60,6 +60,7 @@ export function projectFatigueSocialRegulation(input: {
   taskKind?: string;
   hasRecentHumanParticipation: boolean;
   explicitPeerInvitation?: boolean;
+  continuationEvidenceOverride?: readonly FatigueContinuationEvidence[];
   stateBefore: FatigueBudgetState;
   amount: number;
 }): FatigueSocialRegulationMetadata {
@@ -70,11 +71,13 @@ export function projectFatigueSocialRegulation(input: {
     && (structuredTaskKind === 'work'
       || structuredTaskKind === 'research'
       || structuredTaskKind === 'problem_solving');
-  const continuationEvidence = resolveContinuationEvidence({
-    recentHumanParticipation: input.hasRecentHumanParticipation,
-    trustedStructuredWorkIntent,
-    explicitPeerInvitation: input.explicitPeerInvitation === true,
-  });
+  const continuationEvidence = input.continuationEvidenceOverride
+    ? [...input.continuationEvidenceOverride]
+    : resolveContinuationEvidence({
+        recentHumanParticipation: input.hasRecentHumanParticipation,
+        trustedStructuredWorkIntent,
+        explicitPeerInvitation: input.explicitPeerInvitation === true,
+      });
   const state = resolveState({
     decision: input.decision,
     policyBaseState: input.policyBaseState,

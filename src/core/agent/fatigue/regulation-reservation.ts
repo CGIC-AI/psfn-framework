@@ -16,7 +16,7 @@ export interface IcpFatigueReservationInput {
   overchargeLimit: number;
   relationshipPressureHalfLifeMs: number;
   relationshipPressureWindowMs: number;
-  reservationTtlMs: number;
+  unansweredInitiationAfterMs: number;
   declinedPressureUnits: number;
   deferredPressureUnits: number;
   unansweredPressureUnits: number;
@@ -28,6 +28,8 @@ export interface IcpFatigueReservationResult {
   overchargeSpentBefore: number;
   relationshipPressure: number;
   rootNormalSpent: number;
+  rootOverchargeSpent: number;
+  contributingReservationCount: number;
 }
 
 export interface IcpInitiationPressureInput {
@@ -60,6 +62,16 @@ export interface IcpFatigueRegulationReservationPort {
   readInitiationPressure(
     input: IcpInitiationPressureInput,
   ): Promise<IcpInitiationPressureSnapshot>;
+  /**
+   * Durably fence a recorded response before external delivery. Pending rows
+   * retain a live database-session lease; delivering rows are never reclaimed.
+   */
+  prepareDelivery(input: {
+    correlation: IcpConversationCorrelation;
+    fatigue: FatigueEnforcementMetadata;
+  }): Promise<void>;
+  /** Release this process's pending-turn lease for crash/recovery handoff. */
+  handoff(correlation: IcpConversationCorrelation): Promise<void>;
   finalize(input: {
     correlation: IcpConversationCorrelation;
     outcome: Exclude<IcpFatigueReservationOutcome, "pending">;

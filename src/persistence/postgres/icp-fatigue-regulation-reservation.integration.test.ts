@@ -8,6 +8,8 @@ import {
 import type { FatigueEnforcementMetadata } from "../../shared/contracts/runtime.js";
 import { PostgresIcpSharedAutonomyStore } from "./icp-shared-autonomy-store.js";
 import { PostgresIcpFatigueRegulationReservationStore } from "./icp-fatigue-regulation-reservation-store.js";
+import { createPostgresPool, withPostgresClient } from "../postgres.js";
+import { POSTGRES_SHARED_MIGRATIONS } from "./migrations.js";
 
 const TIMEOUT_MS = 120_000;
 const A = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
@@ -77,7 +79,7 @@ function reservationInput(
     overchargeLimit: 2,
     relationshipPressureHalfLifeMs: HALF_LIFE_MS,
     relationshipPressureWindowMs: WINDOW_MS,
-    reservationTtlMs: 15 * 60_000,
+    unansweredInitiationAfterMs: 15 * 60_000,
     declinedPressureUnits: 3,
     deferredPressureUnits: 2,
     unansweredPressureUnits: 1,
@@ -176,6 +178,54 @@ function finalizationFatigue(
 
 describe("Postgres ICP fatigue regulation reservations", () => {
   it(
+    "upgrades an already-provisioned version-6 reservation table idempotently",
+    async () => {
+      if (!harness)
+        throw new Error("Postgres integration harness is unavailable");
+      const databaseUrl = (await harness.createDatabase()).databaseUrl;
+      const bootstrapPool = createPostgresPool(databaseUrl, {
+        applicationName: "companion-icp-fatigue-v6-upgrade-test",
+        allowExitOnIdle: true,
+      });
+      try {
+        await withPostgresClient(bootstrapPool, async (client) => {
+          await client.query("CREATE SCHEMA shared");
+          await client.query("SET LOCAL search_path TO shared, public");
+          for (const statement of POSTGRES_SHARED_MIGRATIONS.slice(0, -2)) {
+            await client.query(statement);
+          }
+        });
+        const first =
+          await PostgresIcpFatigueRegulationReservationStore.connect(databaseUrl);
+        await first.close();
+        const second =
+          await PostgresIcpFatigueRegulationReservationStore.connect(databaseUrl);
+        await second.close();
+        const result = await bootstrapPool.query<{
+          definition: string;
+          version_count: string;
+        }>(`
+          SELECT pg_get_constraintdef(constraint_row.oid) AS definition,
+            (SELECT COUNT(*)::text FROM shared.shared_schema_migrations
+              WHERE version = 7) AS version_count
+          FROM pg_constraint AS constraint_row
+          WHERE constraint_row.conrelid = 'shared.icp_fatigue_turn_reservations'::regclass
+            AND constraint_row.conname = 'icp_fatigue_turn_reservations_lifecycle_check'
+        `);
+        expect(result.rows).toEqual([
+          expect.objectContaining({
+            definition: expect.stringContaining("delivering"),
+            version_count: "1",
+          }),
+        ]);
+      } finally {
+        await bootstrapPool.end();
+      }
+    },
+    TIMEOUT_MS,
+  );
+
+  it(
     "serializes DM/room last-slot races, survives restart, and preserves per-companion choice",
     async () => {
       if (!harness)
@@ -237,7 +287,12 @@ describe("Postgres ICP fatigue regulation reservations", () => {
           "reserved",
         ]);
         const winner = raced[0].outcome === "reserved" ? dmTurn : roomTurn;
-        await first.finalize({
+        const winningStore = raced[0].outcome === "reserved" ? first : second;
+        await winningStore.prepareDelivery({
+          correlation: winner,
+          fatigue: finalizationFatigue(winner),
+        });
+        await winningStore.finalize({
           correlation: winner,
           outcome: "delivered",
           finalizedAtMs: 11_000,
@@ -264,6 +319,33 @@ describe("Postgres ICP fatigue regulation reservations", () => {
               )
             ).outcome,
           ).toBe("exhausted");
+
+          const overchargeDm = correlation({
+            conversationId: DM_CONVERSATION,
+            channelId: DM,
+            turnId: "77777777-7777-7777-8777-777777777776",
+          });
+          const overchargeRoom = correlation({
+            conversationId: ROOM_CONVERSATION,
+            channelId: ROOM,
+            turnId: "77777777-7777-7777-8777-777777777777",
+          });
+          const overchargeRace = await Promise.all([
+            restarted.reserve({
+              ...reservationInput(overchargeDm, 13_000),
+              decision: "overcharge",
+              overchargeLimit: 1,
+            }),
+            second.reserve({
+              ...reservationInput(overchargeRoom, 13_000),
+              decision: "overcharge",
+              overchargeLimit: 1,
+            }),
+          ]);
+          expect(overchargeRace.map((result) => result.outcome).sort()).toEqual([
+            "exhausted",
+            "reserved",
+          ]);
 
           const peerChoice = correlation({
             conversationId: DM_CONVERSATION,
@@ -322,9 +404,15 @@ describe("Postgres ICP fatigue regulation reservations", () => {
         expect((await store.reserve(reservationInput(turn))).outcome).toBe(
           "reserved",
         );
-        expect((await store.reserve(reservationInput(turn))).outcome).toBe(
-          "replayed",
-        );
+        const replay = await store.reserve(reservationInput(turn));
+        expect(replay).toMatchObject({
+          outcome: "replayed",
+          normalSpentBefore: 0,
+          overchargeSpentBefore: 0,
+          rootNormalSpent: 0,
+          rootOverchargeSpent: 0,
+          contributingReservationCount: 0,
+        });
         await expect(
           store.finalize({
             correlation: turn,
@@ -339,6 +427,10 @@ describe("Postgres ICP fatigue regulation reservations", () => {
             },
           }),
         ).rejects.toThrow("metadata binding mismatch");
+        await store.prepareDelivery({
+          correlation: turn,
+          fatigue: finalizationFatigue(turn),
+        });
         await expect(
           store.finalize({
             correlation: turn,
@@ -358,6 +450,201 @@ describe("Postgres ICP fatigue regulation reservations", () => {
         ).rejects.toThrow("replay mismatch");
       } finally {
         await Promise.all([episodes.close(), store.close()]);
+      }
+    },
+    TIMEOUT_MS,
+  );
+
+  it(
+    "keeps a live long-running lease across elapsed time and recovers a delivering crash",
+    async () => {
+      if (!harness)
+        throw new Error("Postgres integration harness is unavailable");
+      const databaseUrl = (await harness.createDatabase()).databaseUrl;
+      const episodes = await PostgresIcpSharedAutonomyStore.connect(databaseUrl, {
+        knownCompanionIds: [A, B],
+      });
+      const active =
+        await PostgresIcpFatigueRegulationReservationStore.connect(databaseUrl);
+      const racer =
+        await PostgresIcpFatigueRegulationReservationStore.connect(databaseUrl);
+      let recovery: PostgresIcpFatigueRegulationReservationStore | null = null;
+      try {
+        for (const episode of [
+          { conversationId: DM_CONVERSATION, channelId: DM },
+          { conversationId: ROOM_CONVERSATION, channelId: ROOM },
+        ]) {
+          await episodes.createEpisode({
+            conversationId: episode.conversationId,
+            channelId: episode.channelId,
+            participantCompanionIds: [A, B],
+            rootInitiationId: ROOT,
+            initiatedByCompanionId: A,
+            initiationSource: "foreground",
+            provenanceRef: `icp-prov:${episode.conversationId}`,
+            openedAtMs: 1_000,
+            lastActivityAtMs: 1_000,
+            status: "invited",
+            revision: 1,
+          });
+        }
+        const activeTurn = correlation({
+          conversationId: DM_CONVERSATION,
+          channelId: DM,
+          turnId: "77777777-7777-7777-8777-777777777778",
+        });
+        const elapsedRacer = correlation({
+          conversationId: ROOM_CONVERSATION,
+          channelId: ROOM,
+          turnId: "77777777-7777-7777-8777-777777777779",
+        });
+        await expect(active.reserve(reservationInput(activeTurn, 10_000)))
+          .resolves.toMatchObject({ outcome: "reserved" });
+        await expect(
+          racer.reserve(reservationInput(elapsedRacer, 10_000 + WINDOW_MS)),
+        ).resolves.toMatchObject({ outcome: "exhausted" });
+
+        await active.prepareDelivery({
+          correlation: activeTurn,
+          fatigue: finalizationFatigue(activeTurn),
+        });
+        await active.close();
+
+        recovery =
+          await PostgresIcpFatigueRegulationReservationStore.connect(databaseUrl);
+        await expect(recovery.reserve(reservationInput(activeTurn, 10_000)))
+          .resolves.toMatchObject({
+            outcome: "replayed",
+            normalSpentBefore: 0,
+          });
+        await expect(recovery.prepareDelivery({
+          correlation: activeTurn,
+          fatigue: finalizationFatigue(activeTurn),
+        })).resolves.toBeUndefined();
+        await expect(recovery.finalize({
+          correlation: activeTurn,
+          outcome: "delivered",
+          finalizedAtMs: 11_000,
+          fatigue: finalizationFatigue(activeTurn),
+        })).resolves.toBeUndefined();
+        await expect(
+          racer.reserve(reservationInput(elapsedRacer, 10_000 + WINDOW_MS)),
+        ).resolves.toMatchObject({ outcome: "exhausted" });
+      } finally {
+        await Promise.allSettled([
+          episodes.close(),
+          active.close(),
+          racer.close(),
+          recovery?.close(),
+        ]);
+      }
+    },
+    TIMEOUT_MS,
+  );
+
+  it(
+    "reclaims an orphan pending row only after shutdown releases its session lease",
+    async () => {
+      if (!harness)
+        throw new Error("Postgres integration harness is unavailable");
+      const databaseUrl = (await harness.createDatabase()).databaseUrl;
+      const episodes = await PostgresIcpSharedAutonomyStore.connect(databaseUrl, {
+        knownCompanionIds: [A, B],
+      });
+      const owner =
+        await PostgresIcpFatigueRegulationReservationStore.connect(databaseUrl);
+      const successor =
+        await PostgresIcpFatigueRegulationReservationStore.connect(databaseUrl);
+      try {
+        await episodes.createEpisode({
+          conversationId: DM_CONVERSATION,
+          channelId: DM,
+          participantCompanionIds: [A, B],
+          rootInitiationId: ROOT,
+          initiatedByCompanionId: A,
+          initiationSource: "foreground",
+          provenanceRef: "icp-prov:11111111-1111-4111-8111-111111111111",
+          openedAtMs: 1_000,
+          lastActivityAtMs: 1_000,
+          status: "invited",
+          revision: 1,
+        });
+        const abandoned = correlation({
+          conversationId: DM_CONVERSATION,
+          channelId: DM,
+          turnId: "77777777-7777-7777-8777-777777777780",
+        });
+        const successorTurn = correlation({
+          conversationId: DM_CONVERSATION,
+          channelId: DM,
+          turnId: "77777777-7777-7777-8777-777777777781",
+        });
+        await expect(owner.reserve(reservationInput(abandoned)))
+          .resolves.toMatchObject({ outcome: "reserved" });
+        await owner.close();
+        await expect(successor.reserve(reservationInput(successorTurn, 20_000)))
+          .resolves.toMatchObject({
+            outcome: "reserved",
+            normalSpentBefore: 0,
+          });
+      } finally {
+        await Promise.allSettled([
+          episodes.close(),
+          owner.close(),
+          successor.close(),
+        ]);
+      }
+    },
+    TIMEOUT_MS,
+  );
+
+  it(
+    "bounds dedicated lease connections and fails closed when capacity is full",
+    async () => {
+      if (!harness)
+        throw new Error("Postgres integration harness is unavailable");
+      const databaseUrl = (await harness.createDatabase()).databaseUrl;
+      const episodes = await PostgresIcpSharedAutonomyStore.connect(databaseUrl, {
+        knownCompanionIds: [A, B],
+      });
+      const store =
+        await PostgresIcpFatigueRegulationReservationStore.connect(databaseUrl);
+      try {
+        const turns: ReturnType<typeof correlation>[] = [];
+        for (let index = 1; index <= 9; index += 1) {
+          const suffix = String(index).padStart(12, "0");
+          const conversationId = `55555555-5555-4555-8555-${suffix}`;
+          await episodes.createEpisode({
+            conversationId,
+            channelId: DM,
+            participantCompanionIds: [A, B],
+            rootInitiationId: ROOT,
+            initiatedByCompanionId: A,
+            initiationSource: "foreground",
+            provenanceRef: `icp-prov:${conversationId}`,
+            openedAtMs: 1_000,
+            lastActivityAtMs: 1_000,
+            status: "invited",
+            revision: 1,
+          });
+          turns.push(correlation({
+            conversationId,
+            channelId: DM,
+            turnId: `77777777-7777-4777-8777-${suffix}`,
+          }));
+        }
+        for (const turn of turns.slice(0, 8)) {
+          await expect(store.reserve({
+            ...reservationInput(turn),
+            hardLimit: 100,
+          })).resolves.toMatchObject({ outcome: "reserved" });
+        }
+        await expect(store.reserve({
+          ...reservationInput(turns[8]!),
+          hardLimit: 100,
+        })).rejects.toThrow("lease capacity unavailable");
+      } finally {
+        await Promise.allSettled([episodes.close(), store.close()]);
       }
     },
     TIMEOUT_MS,

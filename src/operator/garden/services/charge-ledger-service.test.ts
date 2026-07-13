@@ -163,7 +163,7 @@ describe('AdminChargeLedgerDataService', () => {
     }));
     expect(data.fatigueSocialPolicy).toEqual(expect.objectContaining({
       relationshipPressureHalfLifeMs: 6 * 60 * 60_000,
-      reservationTtlMs: 15 * 60_000,
+      unansweredInitiationAfterMs: 15 * 60_000,
       marginalChargeUnits: 1,
     }));
   });

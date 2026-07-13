@@ -71,7 +71,7 @@ describe("IcpFatigueInitiationCapacityAuthority", () => {
         peerCompanionId: B,
         declinedPressureUnits:
           policy.fatigue.socialRegulation.declinedPressureUnits,
-        unansweredAfterMs: policy.fatigue.socialRegulation.reservationTtlMs,
+        unansweredAfterMs: policy.fatigue.socialRegulation.unansweredInitiationAfterMs,
       }),
     );
   });

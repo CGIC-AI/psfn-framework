@@ -126,6 +126,8 @@ describe('Postgres live schema migrations', () => {
     expect(sharedSql).toContain("VALUES (4, 'icp-autonomy-control-plane')");
     expect(sharedSql).toContain("VALUES (5, 'icp-autonomy-invalidation-fences')");
     expect(sharedSql).toContain("VALUES (6, 'icp-fatigue-turn-reservations')");
+    expect(sharedSql).toContain("VALUES (7, 'icp-fatigue-delivery-fence')");
+    expect(sharedSql).toContain("'delivering'");
     expect(sharedSql).toContain('participant_companion_ids UUID[] NOT NULL');
     expect(sharedSql).toContain('UNIQUE (candidate_id)');
     expect(sharedSql).toContain('idx_icp_initiation_permits_outstanding_pair');

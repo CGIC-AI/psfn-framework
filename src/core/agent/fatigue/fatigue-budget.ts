@@ -676,3 +676,81 @@ export function createOverchargeFatigueEvaluation(
     }),
   };
 }
+
+/**
+ * Rebase a local evaluation onto the pre-turn snapshot serialized by the
+ * shared reservation store. This is pure policy-state reconciliation: the
+ * durable store supplies counts, while the existing evaluation retains the
+ * trusted actor, scope, limits, intent, and correlation inputs.
+ */
+export function rebaseFatigueEvaluation(input: {
+  evaluation: FatigueBudgetEvaluation;
+  decision: Extract<FatigueBudgetDecision, 'charged' | 'overcharge'>;
+  reason: Extract<
+    FatigueBudgetReason,
+    | 'machine_intelligence_response'
+    | 'overcharge_recent_human_participation'
+    | 'overcharge_work_intent_wrapup'
+  >;
+  normalSpentBefore: number;
+  overchargeSpentBefore: number;
+  relationshipPressure: number;
+  rootNormalSpent: number;
+  rootOverchargeSpent: number;
+  contributingEventCount: number;
+}): FatigueBudgetEvaluation {
+  const evaluation = input.evaluation;
+  const limits = {
+    softLimit: evaluation.stateBefore.softLimit,
+    hardLimit: evaluation.stateBefore.allowance,
+    overchargeLimit: evaluation.stateBefore.overchargeAllowance,
+  };
+  const regulation = evaluation.stateBefore.regulation
+    ? {
+        ...evaluation.stateBefore.regulation,
+        relationshipPressure: input.relationshipPressure,
+        rootNormalSpent: input.rootNormalSpent,
+        rootOverchargeSpent: input.rootOverchargeSpent,
+        contributingEventCount: input.contributingEventCount,
+      }
+    : undefined;
+  const stateBefore = createState({
+    scope: cloneScope(evaluation.scope),
+    normalSpent: input.normalSpentBefore,
+    overchargeSpent: input.overchargeSpentBefore,
+    limits,
+    ...(regulation ? { regulation } : {}),
+    lastEvent: evaluation.stateBefore.lastEvent,
+  });
+  const stateAfter = createState({
+    scope: cloneScope(evaluation.scope),
+    normalSpent: input.normalSpentBefore
+      + (input.decision === 'charged' ? evaluation.amount : 0),
+    overchargeSpent: input.overchargeSpentBefore
+      + (input.decision === 'overcharge' ? evaluation.amount : 0),
+    limits,
+    ...(regulation ? { regulation } : {}),
+    lastEvent: evaluation.stateBefore.lastEvent,
+  });
+  return {
+    ...evaluation,
+    decision: input.decision,
+    reason: input.reason,
+    stateBefore,
+    stateAfter,
+    ...(evaluation.details
+      ? {
+          details: {
+            ...evaluation.details,
+            authoritativeReservationSnapshot: true,
+            overchargePermitted: input.decision === 'overcharge',
+          },
+        }
+      : {
+          details: {
+            authoritativeReservationSnapshot: true,
+            overchargePermitted: input.decision === 'overcharge',
+          },
+        }),
+  };
+}

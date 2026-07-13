@@ -31,7 +31,7 @@ export class IcpFatigueInitiationCapacityAuthority implements IcpInitiationCapac
       timestampMs: input.nowMs,
       relationshipPressureHalfLifeMs: regulation.relationshipPressureHalfLifeMs,
       relationshipPressureWindowMs: regulation.relationshipPressureWindowMs,
-      unansweredAfterMs: regulation.reservationTtlMs,
+      unansweredAfterMs: regulation.unansweredInitiationAfterMs,
       declinedPressureUnits: regulation.declinedPressureUnits,
       deferredPressureUnits: regulation.deferredPressureUnits,
       unansweredPressureUnits: regulation.unansweredPressureUnits,
@@ -64,10 +64,8 @@ export class IcpFatigueInitiationCapacityAuthority implements IcpInitiationCapac
       spent,
       triggerAuthorKind: "machine_intelligence",
     });
-    const socialChargeCost = Math.max(
-      regulation.marginalChargeUnits,
-      this.chargePolicy.surfaceCosts.companionSocialContinuation,
-    );
+    const socialChargeCost =
+      this.chargePolicy.surfaceCosts.companionSocialContinuation;
     return {
       socialPressureAllows: spent < policy.softTarget,
       chargeAllows:

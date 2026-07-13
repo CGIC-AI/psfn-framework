@@ -171,6 +171,7 @@ describe('Postgres schema tenancy plumbing', () => {
           { version: 4, name: 'icp-autonomy-control-plane' },
           { version: 5, name: 'icp-autonomy-invalidation-fences' },
           { version: 6, name: 'icp-fatigue-turn-reservations' },
+          { version: 7, name: 'icp-fatigue-delivery-fence' },
         ]);
 
         const sharedTables = await pool.query<{ table_name: string }>(
@@ -191,7 +192,7 @@ describe('Postgres schema tenancy plumbing', () => {
         const versionAgain = await pool.query<{ count: string }>(
           `SELECT COUNT(*)::text AS count FROM shared.shared_schema_migrations`,
         );
-        expect(versionAgain.rows[0]?.count).toBe('5');
+        expect(versionAgain.rows[0]?.count).toBe('6');
       } finally {
         await pool.end();
       }

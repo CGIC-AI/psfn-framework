@@ -320,6 +320,9 @@ export function buildDynamicPromptTemplateVariables(
   const now = input.now ?? new Date();
   const analysisWorkbenchAvailable = input.analysisWorkbenchAvailable === true;
   const emotionSnapshot = input.internalState ? toEmotionSnapshotFromInternalState(input.internalState) : null;
+  const chargeLaneOverride = input.message.routing?.icpCorrelation
+    ? parseIcpConversationCorrelation(input.message.routing.icpCorrelation).chargeLane
+    : undefined;
   const extendedToolGuide = buildExtendedToolGuide({
     capabilityTier: input.capabilityTier,
     extendedTools: input.extendedTools,
@@ -347,6 +350,7 @@ export function buildDynamicPromptTemplateVariables(
     ...buildChargePromptVariables({
       chargePolicy: resolveChargePolicyConfig(input.config),
       chargeSnapshot: getRunChargeSnapshot(),
+      ...(chargeLaneOverride ? { laneOverride: chargeLaneOverride } : {}),
       analysisWorkbenchAvailable,
     }),
     ...buildTurnBindingPromptVariables({

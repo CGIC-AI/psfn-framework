@@ -153,7 +153,7 @@
     "socialRegulation": {
       "relationshipPressureHalfLifeMs": 21600000,
       "relationshipPressureWindowMs": 172800000,
-      "reservationTtlMs": 900000,
+      "unansweredInitiationAfterMs": 900000,
       "conversationMaturingRatio": 0.5,
       "marginalChargeUnits": 1,
       "declinedPressureUnits": 3,

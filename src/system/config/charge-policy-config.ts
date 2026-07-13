@@ -366,7 +366,7 @@ function parseFatigueSocialRegulationConfig(
   assertNoUnknownKeys(raw, [
     'relationshipPressureHalfLifeMs',
     'relationshipPressureWindowMs',
-    'reservationTtlMs',
+    'unansweredInitiationAfterMs',
     'conversationMaturingRatio',
     'marginalChargeUnits',
     'declinedPressureUnits',
@@ -394,9 +394,9 @@ function parseFatigueSocialRegulationConfig(
   return {
     relationshipPressureHalfLifeMs,
     relationshipPressureWindowMs,
-    reservationTtlMs: parsePositiveInteger(
-      raw.reservationTtlMs,
-      `${fieldPath}.reservationTtlMs`,
+    unansweredInitiationAfterMs: parsePositiveInteger(
+      raw.unansweredInitiationAfterMs,
+      `${fieldPath}.unansweredInitiationAfterMs`,
     ),
     conversationMaturingRatio,
     marginalChargeUnits: parsePositiveInteger(
@@ -547,6 +547,15 @@ function validateChargePolicyConfig(
     `${sourcePath}.referenceModelClassPricing`,
     `${sourcePath}.referenceModelClassPricingRationales`,
   );
+  const fatigue = parseFatiguePolicyConfig(raw.fatigue, `${sourcePath}.fatigue`);
+  if (
+    fatigue.socialRegulation.marginalChargeUnits !==
+    surfaceCosts.companionSocialContinuation
+  ) {
+    throw new Error(
+      `Invalid charge policy at ${sourcePath}: fatigue.socialRegulation.marginalChargeUnits must equal surfaceCosts.companionSocialContinuation`,
+    );
+  }
 
   return {
     schemaVersion: 1,
@@ -564,7 +573,7 @@ function validateChargePolicyConfig(
     ...(referenceModelClassPricingRationales !== undefined
       ? { referenceModelClassPricingRationales }
       : {}),
-    fatigue: parseFatiguePolicyConfig(raw.fatigue, `${sourcePath}.fatigue`),
+    fatigue,
   };
 }
 

@@ -1425,23 +1425,77 @@ export const POSTGRES_SHARED_MIGRATIONS: readonly string[] = [
     amount BIGINT NOT NULL CHECK (amount > 0),
     reserved_at_ms BIGINT NOT NULL CHECK (reserved_at_ms >= 0),
     finalized_at_ms BIGINT,
-    outcome TEXT NOT NULL CHECK (outcome IN ('pending', 'delivered', 'no_reply', 'failed')),
+    outcome TEXT NOT NULL CONSTRAINT icp_fatigue_turn_reservations_outcome_check
+      CHECK (outcome IN ('pending', 'delivering', 'delivered', 'no_reply', 'failed')),
     CHECK (local_companion_id <> peer_companion_id),
-    CHECK ((outcome = 'pending') = (finalized_at_ms IS NULL)),
+    CONSTRAINT icp_fatigue_turn_reservations_lifecycle_check
+      CHECK ((outcome IN ('pending', 'delivering')) = (finalized_at_ms IS NULL)),
     CHECK (finalized_at_ms IS NULL OR finalized_at_ms >= reserved_at_ms)
   );
   `,
   `CREATE INDEX IF NOT EXISTS idx_icp_fatigue_reservations_relationship
     ON icp_fatigue_turn_reservations (
       local_companion_id, peer_companion_id, reserved_at_ms, turn_id
-    ) WHERE outcome IN ('pending', 'delivered', 'no_reply');`,
+    ) WHERE outcome IN ('pending', 'delivering', 'delivered', 'no_reply');`,
   `CREATE INDEX IF NOT EXISTS idx_icp_fatigue_reservations_root
     ON icp_fatigue_turn_reservations (
       local_companion_id, peer_companion_id, root_initiation_id, decision, turn_id
-    ) WHERE outcome IN ('pending', 'delivered', 'no_reply');`,
+    ) WHERE outcome IN ('pending', 'delivering', 'delivered', 'no_reply');`,
   `
   INSERT INTO shared_schema_migrations (version, name)
   VALUES (6, 'icp-fatigue-turn-reservations')
+  ON CONFLICT (version) DO NOTHING;
+  `,
+  // Version 7 (s10mc.6.6 review remediation): a recorded response is fenced
+  // as delivering before egress. This forward migration also upgrades local
+  // databases that already exercised the earlier unmerged version-6 shape.
+  `
+  DO $$
+  DECLARE
+    lifecycle_constraint_name TEXT;
+  BEGIN
+    IF NOT EXISTS (
+      SELECT 1 FROM shared_schema_migrations WHERE version = 7
+    ) THEN
+      SELECT constraint_row.conname INTO lifecycle_constraint_name
+      FROM pg_constraint AS constraint_row
+      WHERE constraint_row.conrelid = 'icp_fatigue_turn_reservations'::regclass
+        AND constraint_row.contype = 'c'
+        AND POSITION('outcome' IN pg_get_constraintdef(constraint_row.oid)) > 0
+        AND POSITION('pending' IN pg_get_constraintdef(constraint_row.oid)) > 0
+        AND POSITION('finalized_at_ms' IN pg_get_constraintdef(constraint_row.oid)) > 0
+      LIMIT 1;
+      IF lifecycle_constraint_name IS NOT NULL THEN
+        EXECUTE format(
+          'ALTER TABLE icp_fatigue_turn_reservations DROP CONSTRAINT %I',
+          lifecycle_constraint_name
+        );
+      END IF;
+      ALTER TABLE icp_fatigue_turn_reservations
+        DROP CONSTRAINT IF EXISTS icp_fatigue_turn_reservations_outcome_check,
+        DROP CONSTRAINT IF EXISTS icp_fatigue_turn_reservations_lifecycle_check;
+      ALTER TABLE icp_fatigue_turn_reservations
+        ADD CONSTRAINT icp_fatigue_turn_reservations_outcome_check
+          CHECK (outcome IN ('pending', 'delivering', 'delivered', 'no_reply', 'failed')),
+        ADD CONSTRAINT icp_fatigue_turn_reservations_lifecycle_check
+          CHECK ((outcome IN ('pending', 'delivering')) = (finalized_at_ms IS NULL));
+      DROP INDEX IF EXISTS idx_icp_fatigue_reservations_relationship;
+      DROP INDEX IF EXISTS idx_icp_fatigue_reservations_root;
+      CREATE INDEX idx_icp_fatigue_reservations_relationship
+        ON icp_fatigue_turn_reservations (
+          local_companion_id, peer_companion_id, reserved_at_ms, turn_id
+        ) WHERE outcome IN ('pending', 'delivering', 'delivered', 'no_reply');
+      CREATE INDEX idx_icp_fatigue_reservations_root
+        ON icp_fatigue_turn_reservations (
+          local_companion_id, peer_companion_id, root_initiation_id, decision, turn_id
+        ) WHERE outcome IN ('pending', 'delivering', 'delivered', 'no_reply');
+    END IF;
+  END
+  $$;
+  `,
+  `
+  INSERT INTO shared_schema_migrations (version, name)
+  VALUES (7, 'icp-fatigue-delivery-fence')
   ON CONFLICT (version) DO NOTHING;
   `,
 ];

@@ -106,7 +106,7 @@ export function makeTestFatiguePolicyConfig(): FatiguePolicyConfig {
     socialRegulation: {
       relationshipPressureHalfLifeMs: 6 * 60 * 60_000,
       relationshipPressureWindowMs: 48 * 60 * 60_000,
-      reservationTtlMs: 15 * 60_000,
+      unansweredInitiationAfterMs: 15 * 60_000,
       conversationMaturingRatio: 0.5,
       marginalChargeUnits: 1,
       declinedPressureUnits: 3,

@@ -94,6 +94,7 @@ import {
 import {
   invokeWithCompanionSocialCharge,
   reserveIcpFatigueRegulation,
+  resumeIcpFatigueRegulation,
 } from './turn-execution/icp-fatigue-regulation.js';
 import { hasVisionTurnInputs } from './vision-attachments.js';
 import type { SessionEntry } from '../../session/types.js';
@@ -810,6 +811,7 @@ export async function handleMessageForTurn(
   let fatigueDecision: FatigueTurnDecision | null = null;
   let durableFatigueReservation: NonNullable<SubstrateMessage['routing']>['icpCorrelation'] | null = null;
   let durableDeliveryFinalized = false;
+  let durableRecoveryResponsePersisted = recoveredResponse !== undefined;
   const invocationState: AgentInvocationMutableState = {
     turnMessages,
     turnStartMessageIndex: null,
@@ -836,6 +838,20 @@ export async function handleMessageForTurn(
 
   try {
     const channelType = runtime.resolveChannelType(message);
+    if (recoveredResponse?.metadata.fatiguePendingSpend) {
+      if (!message.routing?.icpCorrelation
+        || !runtime.fatigueRegulationReservations
+        || !runtime.config.chargePolicy) {
+        throw new Error('Recovered ICP fatigue spend requires its durable reservation runtime');
+      }
+      await resumeIcpFatigueRegulation({
+        correlation: message.routing.icpCorrelation,
+        pendingSpend: recoveredResponse.metadata.fatiguePendingSpend,
+        reservationPort: runtime.fatigueRegulationReservations,
+        fatiguePolicy: runtime.config.chargePolicy.fatigue,
+      });
+      durableFatigueReservation = message.routing.icpCorrelation;
+    }
     fatigueDecision = recoveredResponse
       ? null
       : evaluateRuntimeFatigue({
@@ -874,7 +890,7 @@ export async function handleMessageForTurn(
           fatigueDecision,
           multiCompanion: runtime.config.multiCompanion === true,
           reservationPort: runtime.fatigueRegulationReservations,
-          regulationConfig: runtime.config.chargePolicy!.fatigue.socialRegulation,
+          fatiguePolicy: runtime.config.chargePolicy!.fatigue,
         });
         fatigueDecision = reconciliation.fatigueDecision;
         durableFatigueReservation = reconciliation.durableReservation;
@@ -1345,6 +1361,7 @@ export async function handleMessageForTurn(
         preTurnState.emotionSnapshot,
         durableRecoveryResponse,
       );
+      durableRecoveryResponsePersisted = durableRecoveryResponse !== undefined;
     }
 
     if (fatigueDecision?.shouldRecordSpend) {
@@ -1407,6 +1424,15 @@ export async function handleMessageForTurn(
           },
         }
       : buildGeneratedResponse();
+    if (runtime.fatigueRegulationReservations
+      && message.routing?.icpCorrelation
+      && durableFatigueReservation
+      && responseFatigueMetadata) {
+      await runtime.fatigueRegulationReservations.prepareDelivery({
+        correlation: message.routing.icpCorrelation,
+        fatigue: responseFatigueMetadata,
+      });
+    }
     await deliveryLifecycle?.finalizeDelivery(agentResponse);
     durableDeliveryFinalized = true;
     if (runtime.fatigueRegulationReservations
@@ -1480,6 +1506,7 @@ export async function handleMessageForTurn(
     return agentResponse;
   } catch (error) {
     if (!durableDeliveryFinalized
+      && !durableRecoveryResponsePersisted
       && durableFatigueReservation
       && runtime.fatigueRegulationReservations
       && fatigueDecision) {
@@ -1494,6 +1521,16 @@ export async function handleMessageForTurn(
         log.error('Failed to release durable ICP fatigue reservation after turn failure', {
           turnId,
           error: toErrorMessage(finalizeError),
+        });
+      }
+    }
+    if (durableFatigueReservation && runtime.fatigueRegulationReservations) {
+      try {
+        await runtime.fatigueRegulationReservations.handoff(durableFatigueReservation);
+      } catch (handoffError) {
+        log.error('Failed to hand off durable ICP fatigue reservation after turn failure', {
+          turnId,
+          error: toErrorMessage(handoffError),
         });
       }
       durableFatigueReservation = null;

@@ -61,6 +61,7 @@ function formatChargeAmount(value: number): string {
 export function buildChargePromptVariables(input: {
   chargePolicy: ChargePolicyConfig | null;
   chargeSnapshot: RunChargeSnapshot | undefined;
+  laneOverride?: ChargePolicyRuntimeLane;
   analysisWorkbenchAvailable?: boolean;
 }): Record<string, string> {
   const chargePolicy = input.chargePolicy;
@@ -75,9 +76,11 @@ export function buildChargePromptVariables(input: {
   }
 
   const snapshot = input.chargeSnapshot;
-  const lane = snapshot?.lane && isChargePolicyRuntimeLane(snapshot.lane)
-    ? snapshot.lane
-    : 'interactive';
+  const lane = input.laneOverride && isChargePolicyRuntimeLane(input.laneOverride)
+    ? input.laneOverride
+    : snapshot?.lane && isChargePolicyRuntimeLane(snapshot.lane)
+      ? snapshot.lane
+      : 'interactive';
   const quota = chargePolicy.runChargeQuotaByLane[lane];
   const spent = snapshot?.quotaSpentByLane[lane] ?? 0;
   const remaining = Math.max(0, quota - spent);

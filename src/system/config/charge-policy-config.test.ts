@@ -216,6 +216,35 @@ describe('charge policy config', () => {
     }
   });
 
+  it('fails closed when social fatigue charge disagrees with the canonical surface cost', () => {
+    const root = mkdtempSync(join(tmpdir(), 'charge-policy-social-cost-'));
+    const dataDir = join(root, 'data');
+    const seedDir = join(root, 'seed');
+    mkdirSync(dataDir, { recursive: true });
+    mkdirSync(seedDir, { recursive: true });
+
+    try {
+      const policy = getDefaultSeedPolicy();
+      writeJson(join(seedDir, CHARGE_POLICY_SEED_FILE_NAME), policy);
+      writeJson(join(dataDir, CHARGE_POLICY_FILE_NAME), {
+        ...policy,
+        fatigue: {
+          ...policy.fatigue,
+          socialRegulation: {
+            ...policy.fatigue.socialRegulation,
+            marginalChargeUnits: 2,
+          },
+        },
+      });
+
+      expect(() => loadChargePolicyConfig(dataDir, { seedDir })).toThrow(
+        'fatigue.socialRegulation.marginalChargeUnits must equal surfaceCosts.companionSocialContinuation',
+      );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it('validates and saves the canonical owner-file shape', () => {
     const root = mkdtempSync(join(tmpdir(), 'charge-policy-save-'));
     const dataDir = join(root, 'data');

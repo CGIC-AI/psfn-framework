@@ -140,8 +140,8 @@ export interface FatigueSocialRegulationConfig {
   relationshipPressureHalfLifeMs: number;
   /** Bounded history horizon used to keep local ledger reads finite. */
   relationshipPressureWindowMs: number;
-  /** Pending pre-model reservations older than this stop blocking new work. */
-  reservationTtlMs: number;
+  /** Age after which an unanswered invitation contributes relationship pressure. */
+  unansweredInitiationAfterMs: number;
   /** Fraction of the soft allowance at which prompt-visible maturation begins. */
   conversationMaturingRatio: number;
   /** Charge-policy units spent by an MI continuation after the soft allowance. */

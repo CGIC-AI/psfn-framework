@@ -131,6 +131,7 @@ const TEST_CHARGE_POLICY: ChargePolicyConfig = {
   schemaVersion: 1,
   runChargeQuotaByLane: {
     interactive: 24,
+    companion_social: 12,
     background: 16,
     maintenance: 0,
     subagent: 6,
@@ -150,8 +151,11 @@ const TEST_CHARGE_POLICY: ChargePolicyConfig = {
     shardLaunch: 8,
     externalModelConsult: 1,
     moaRoundBase: 1,
+    companionSocialContinuation: 1,
   },
-  surfaceRationales: {},
+  surfaceRationales: {
+    companionSocialContinuation: 'Autonomous companion continuation spends relationship-sensitive social budget.',
+  },
   moa: {
     perRoundMultiplierByReferenceModelClass: {
       local: 1,
@@ -486,6 +490,20 @@ describe('charge producer', () => {
     expect(variables.runtime_charge_lane).toBe('interactive');
     expect(variables.runtime_charge_remaining).toBe('24');
     expect(variables.runtime_charge_cost_lines).toContain('analysis_workbench extension pass after the first iteration: 4');
+  });
+
+  it('renders an explicitly reconciled companion-social lane instead of the outer interactive lane', () => {
+    const variables = buildChargePromptVariables({
+      chargePolicy: TEST_CHARGE_POLICY,
+      chargeSnapshot: {
+        lane: 'interactive',
+        quotaSpentByLane: { interactive: 5, companion_social: 2 },
+      } as RunChargeSnapshot,
+      laneOverride: 'companion_social',
+    });
+    expect(variables.runtime_charge_lane).toBe('companion_social');
+    expect(variables.runtime_charge_quota).toBe('12');
+    expect(variables.runtime_charge_remaining).toBe('10');
   });
 });
 

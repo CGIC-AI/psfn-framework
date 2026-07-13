@@ -156,7 +156,9 @@ describe('two-companion fatigue loop (E7.3 end-to-end)', () => {
       overchargeSpentBefore: 0,
       relationshipPressure: 5,
       rootNormalSpent: 5,
-    });
+      rootOverchargeSpent: 0,
+      contributingReservationCount: 5,
+    }, makeLoopConfig());
 
     expect(suppressed).toMatchObject({
       decision: 'suppressed_hard_exhausted',

@@ -146,6 +146,7 @@ const TEST_CHARGE_POLICY = {
   schemaVersion: 1,
   runChargeQuotaByLane: {
     interactive: 24,
+    companion_social: 12,
     background: 16,
     maintenance: 0,
     subagent: 6,
@@ -165,6 +166,7 @@ const TEST_CHARGE_POLICY = {
     shardLaunch: 8,
     externalModelConsult: 1,
     moaRoundBase: 1,
+    companionSocialContinuation: 1,
   },
   surfaceRationales: {
     paidImageGeneration: 'External image generation spends paid provider credits.',
@@ -173,6 +175,7 @@ const TEST_CHARGE_POLICY = {
     shardLaunch: 'Launching a shard consumes worker coordination overhead.',
     externalModelConsult: 'Consulting an external model uses a paid API boundary.',
     moaRoundBase: 'Each MOA round carries coordination overhead even before model spend.',
+    companionSocialContinuation: 'Autonomous companion continuation spends relationship-sensitive social budget.',
   },
   moa: {
     perRoundMultiplierByReferenceModelClass: {
@@ -936,6 +939,72 @@ describe('runtime subject identity', () => {
     expect(rendered).toContain('analysis_workbench extension pass after the first iteration: 4');
     expect(rendered).not.toContain('analysis_workbench first pass: 0 charge units');
     expect(rendered).not.toContain('Use analysis_workbench only');
+  });
+
+  it('renders the reconciled social lane before a post-allowance ICP prompt', async () => {
+    const localCompanionId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+    const peerCompanionId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+    const channelId = `companion-dm:${localCompanionId}:${peerCompanionId}`;
+    const rendered = await runWithChargeContext({
+      chargePolicy: TEST_CHARGE_POLICY,
+      lane: 'interactive',
+      runId: 'outer-interactive-icp-turn',
+    }, async () => renderPromptOwnedRuntimeLayers({
+      message: makeMessage({
+        channelId,
+        channelType: 'companion',
+        authorId: peerCompanionId,
+        authorName: 'Peer MI',
+        isDirectMessage: true,
+        routing: {
+          source: 'companion',
+          icpCorrelation: {
+            conversationId: '44444444-4444-4444-8444-444444444444',
+            rootInitiationId: '99999999-9999-4999-8999-999999999999',
+            initiatedByCompanionId: peerCompanionId,
+            localCompanionId,
+            peerCompanionId,
+            peerContactId: 'contact-peer',
+            channelId,
+            turnId: '77777777-7777-4777-8777-777777777778',
+            messageId: 'message-icp-social',
+            requestId: 'request-icp-social',
+            chargeLane: 'companion_social',
+            surface: 'companion_dm',
+            costPurpose: 'conversation_turn',
+            costOriginStage: 'reply',
+            fatigueDecision: 'allow',
+          },
+        },
+      }),
+      resolvedUserName: 'Peer MI',
+      trustLevel: 'trusted',
+      channelType: 'companion',
+      responseStyle: 'concise',
+      now: new Date('2026-03-17T12:00:00Z'),
+      templateVariables: {},
+      modelId: 'test-model',
+      capabilityTier: 'autonomous',
+      activeToolCounts: {
+        core: 6,
+        promoted: 0,
+        extendedLoaded: 0,
+        autoload: 0,
+        deferred: 0,
+        total: 6,
+      },
+      extendedTools: [],
+      coreToolNames: new Set<string>(),
+      loadedExtended: new Map(),
+      classifyExtendedToolForTurn: () => 'overlay',
+      promotedExtendedToolNames: new Set(),
+      config: { chargePolicy: TEST_CHARGE_POLICY },
+    }));
+
+    expect(rendered).toContain(
+      'You have 12 of 12 run-charge units left for the companion_social lane/window.',
+    );
+    expect(rendered).not.toContain('left for the interactive lane/window');
   });
 
   it('renders satellite endpoint capability context for registered mobile speech turns', () => {

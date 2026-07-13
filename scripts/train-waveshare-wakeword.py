@@ -89,7 +89,7 @@ def augment_corpus(workspace: Path, generator: Path) -> None:
                     "random.seed(42); np.random.seed(42); "
                     "runpy.run_module('piper_sample_generator.augment', run_name='__main__')"
                 ),
-                "--sample-rate", "22050",
+                "--sample-rate", "16000",
                 str(source),
                 str(output),
             ],

@@ -43,7 +43,9 @@
     },
     "piper-libritts-r-medium": {
       "url": "https://github.com/rhasspy/piper-sample-generator/releases/download/v2.0.0/en_US-libritts_r-medium.pt",
-      "sha256": "e95ee53770bf598c354a6e6dbfc95ccb259aeeb501d35a86be8a767429ab0ff6"
+      "sha256": "e95ee53770bf598c354a6e6dbfc95ccb259aeeb501d35a86be8a767429ab0ff6",
+      "configUrl": "https://raw.githubusercontent.com/rhasspy/piper-sample-generator/2971426a55072f7d22fec416ca7800df8bd23207/models/en_US-libritts_r-medium.pt.json",
+      "configSha256": "119118e510d0b8a7a0c8649a0668640d6db9b00239e874169d964853a8d15848"
     },
     "micro-wake-word-negative-features": {
       "urlRoot": "https://huggingface.co/datasets/kahrendt/microwakeword/resolve/main/",

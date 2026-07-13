@@ -241,7 +241,7 @@ test('one ordinary reload migrates the actual legacy client to B and remains ava
   }
 });
 
-test('generated A to B keeps active state, reaches B in one reload, and remains available offline', async ({
+test('generated A to B ignores a legacy cache, keeps active state, and remains available offline', async ({
   context,
   page,
 }) => {
@@ -267,9 +267,12 @@ test('generated A to B keeps active state, reaches B in one reload, and remains 
       mimeType: 'text/plain',
       buffer: Buffer.from('active attachment'),
     });
+    await page.evaluate(async () => {
+      await caches.open('psfn-satellite-mobile-chat-app-v1');
+    });
 
     server.use(buildB.directory);
-    await waitForWorkerRevision(page, buildB.revision);
+    await waitForWorkerRevision(page, buildB.revision, 'psfn-satellite-mobile-chat-app-v1');
 
     await expect(page.locator('html')).toHaveAttribute('data-test-build', buildA.marker);
     await expect(session).toHaveValue('active-session');

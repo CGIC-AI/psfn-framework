@@ -248,21 +248,31 @@ describe('companion-ui production service worker', () => {
     );
     const currentCacheName = serviceWorker.match(/const CACHE_NAME = "([^"]+)";/u)?.[1];
     if (!currentCacheName) throw new Error('Built service worker did not contain its cache name');
+    const navigate = vi.fn(async () => undefined);
     const harness = createServiceWorkerHarness(serviceWorker, {
       cacheKeys: [
         currentCacheName,
         'psfn-companion-ui-previous-build',
+        'psfn-satellite-mobile-chat-app-v1',
         'unrelated-origin-cache',
       ],
+      windowClients: [{
+        focused: true,
+        navigate,
+        url: 'https://companion.test/',
+        visibilityState: 'visible',
+      }],
     });
 
     await harness.dispatchActivate();
 
     expect(harness.cacheStorage.delete.mock.calls.map(([cacheName]) => cacheName).sort()).toEqual([
       'psfn-companion-ui-previous-build',
+      'psfn-satellite-mobile-chat-app-v1',
     ]);
     expect(harness.clients.claim).toHaveBeenCalledOnce();
     expect(harness.clients.matchAll).not.toHaveBeenCalled();
+    expect(navigate).not.toHaveBeenCalled();
   });
 
   it('schedules a focused legacy-client recovery without awaiting navigation during activation', async () => {

@@ -69,7 +69,14 @@ self.addEventListener('activate', (event) => {
   event.waitUntil(
     (async () => {
       const keys = await caches.keys();
-      const migratingLegacyClient = keys.some((key) => LEGACY_CACHE_NAMES.has(key));
+      const hasLegacyCache = keys.some((key) => LEGACY_CACHE_NAMES.has(key));
+      const hasPriorGeneratedCache = keys.some((key) => (
+        key !== CACHE_NAME && key.startsWith(CACHE_PREFIX)
+      ));
+      // Cache names are origin-global, so a legacy cache cannot identify which
+      // client created it. A prior generated cache means the origin is mixed or
+      // already generated; fail closed instead of force-navigating that client.
+      const migratingLegacyClient = hasLegacyCache && !hasPriorGeneratedCache;
       const staleCacheNames = keys.filter((key) => (
         key !== CACHE_NAME
         && (key.startsWith(CACHE_PREFIX) || LEGACY_CACHE_NAMES.has(key))

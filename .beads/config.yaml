@@ -58,4 +58,4 @@ dolt.database: "psfn-satelite-hub"
 
 federation.remote: "file:///home/vega/.local/share/beads-migration-backups/psfn-satelite-hub-shared"
 
-sync.remote: "file:///home/vega/.local/share/beads-migration-backups/psfn-satelite-hub-shared"
+sync.remote: "git+https://github.com/CGIC-AI/psfn-satellite-hub.git"

@@ -8,6 +8,7 @@ import type {
   DivergenceComparison,
   StableReplyEstimate,
 } from './contracts.js';
+import { blindPublicStimulus } from './blinding.js';
 
 const AUDITOR_SYSTEM_PROMPT = [
   'You are a sealed, blinded behavioral auditor.',
@@ -66,7 +67,7 @@ export function createLLMIntrospectionAuditor(
         context(AUDITOR_SYSTEM_PROMPT, JSON.stringify({
           task: 'Estimate the stable, ordinary reply to this public stimulus.',
           outputSchema: { stableReply: 'string' },
-          publicStimulus: candidate.publicStimulus,
+          publicStimulus: blindPublicStimulus(candidate.publicStimulus),
         })),
         'background',
         {

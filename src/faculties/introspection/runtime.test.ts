@@ -55,7 +55,7 @@ const CANDIDATE: IntrospectionAuditCandidate = {
   turnId: 'turn-public-1',
   channelId: 'discord:public-room',
   occurredAt: '2026-07-13T10:00:00.000Z',
-  publicStimulus: 'PUBLIC_STIMULUS_SENTINEL please choose a plan',
+  publicStimulus: 'PUBLIC_STIMULUS_SENTINEL @Ari, my partner at Example Labs, please choose a plan',
   actualReply: 'ACTUAL_REPLY_SENTINEL I agree immediately',
   provenanceRefs: ['turn:turn-public-1', 'request:req-1'],
 };
@@ -123,6 +123,9 @@ describe('scheduled blinded introspection audit', () => {
     const comparatorContext = JSON.stringify(calls[1]);
     const companionContext = JSON.stringify(calls[2]);
     expect(estimatorContext).toContain('PUBLIC_STIMULUS_SENTINEL');
+    expect(estimatorContext).not.toContain('@Ari');
+    expect(estimatorContext).not.toContain('my partner');
+    expect(estimatorContext).not.toContain('Example Labs');
     expect(estimatorContext).not.toContain('ACTUAL_REPLY_SENTINEL');
     expect(estimatorContext).not.toContain('COMPANION_PERSONA_SENTINEL');
     expect(comparatorContext).toContain('ACTUAL_REPLY_SENTINEL');

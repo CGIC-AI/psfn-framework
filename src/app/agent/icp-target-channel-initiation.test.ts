@@ -373,6 +373,29 @@ describe('ICP target-channel initiation', () => {
 
   it('reconciles a consumed suppression after the local observation write was interrupted', async () => {
     const harness = createHarness();
+    const suppressionCorrelation = {
+      ...correlation(),
+      fatigueDecision: 'suppress' as const,
+    };
+    const suppressionResponse = {
+      ...response({
+        id: suppressionCorrelation.requestId,
+        channelId: CHANNEL,
+        channelType: 'companion',
+        authorId: 'system:icp-initiation',
+        authorName: 'ICP Initiation',
+        content: 'private trigger',
+        timestamp: new Date(),
+        routing: { source: 'companion', icpCorrelation: suppressionCorrelation },
+      }),
+      content: '',
+    };
+    harness.findIcpDeliveryObservation.mockResolvedValueOnce({
+      channelId: CHANNEL,
+      sourceMessageId: `icp-initiation:${CANDIDATE}`,
+      status: 'prepared',
+      recoveryResponse: suppressionResponse,
+    });
 
     await expect(harness.initiator.initiate({
       permit: {
@@ -394,6 +417,25 @@ describe('ICP target-channel initiation', () => {
     expect(harness.recordDeliveryObservation).toHaveBeenCalledWith(expect.objectContaining({
       status: 'suppressed',
     }));
+  });
+
+  it('fails closed when a consumed permit has no durable assistant or prepared observation', async () => {
+    const harness = createHarness();
+
+    await expect(harness.initiator.initiate({
+      permit: {
+        ...permit(),
+        status: 'consumed',
+        consumedAtMs: Date.parse('2026-07-13T12:01:00.000Z'),
+        revision: 2,
+      },
+      rootInitiationId: ROOT,
+      peerContactId: CONTACT_ID,
+    })).rejects.toThrow(/missing durable prepared suppression recovery evidence/i);
+
+    expect(harness.handleMessage).not.toHaveBeenCalled();
+    expect(harness.sendInitiation).not.toHaveBeenCalled();
+    expect(harness.consumeInitiationPermit).not.toHaveBeenCalled();
   });
 
   it('fails closed when a permit is not bound to the local companion', async () => {

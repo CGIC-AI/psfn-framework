@@ -136,6 +136,61 @@ describe('DeterministicFatigueBudgetPort', () => {
     }));
   });
 
+  it('records a durable pending spend once across recovery replay', () => {
+    const { ledger, port } = makePort();
+    const evaluation = port.evaluate({
+      localCompanionId: 'purrsephone',
+      channelId: 'dm-artemis',
+      peer: { contactId: 'artemis', isMachineIntelligence: true },
+      triggeringAuthor: {
+        role: 'machine_intelligence',
+        contactId: 'artemis',
+        isMachineIntelligence: true,
+      },
+      limits: LIMITS_WITH_OVERCHARGE,
+      correlation: {
+        turnId: 'turn-recovery-1',
+        requestId: 'request-recovery-1',
+        callType: 'chat',
+        purpose: 'agent.fatigue.record',
+      },
+    });
+    const pending = {
+      schemaVersion: 1 as const,
+      timestampMs: evaluation.timestampMs,
+      decision: evaluation.decision,
+      reason: evaluation.reason,
+      amount: evaluation.amount,
+      scope: evaluation.scope,
+      peer: evaluation.peer,
+      triggeringAuthor: evaluation.triggeringAuthor,
+      limits: {
+        softLimit: evaluation.stateAfter.softLimit,
+        hardLimit: evaluation.stateAfter.allowance,
+        overchargeLimit: evaluation.stateAfter.overchargeAllowance,
+      },
+      correlation: evaluation.correlation ?? {},
+    };
+
+    const first = port.recordPendingSpend(pending);
+    const replay = port.recordPendingSpend(pending);
+
+    expect(replay).toEqual(first);
+    expect(ledger.listFatigueEvents()).toHaveLength(1);
+    expect(port.readState({
+      localCompanionId: 'purrsephone',
+      peerContactId: 'artemis',
+      channelId: 'dm-artemis',
+      dayKey: evaluation.dayKey,
+      limits: LIMITS_WITH_OVERCHARGE,
+    }).spent).toBe(1);
+    expect(() => port.recordPendingSpend({
+      ...pending,
+      amount: Number.NaN,
+    })).toThrow(/malformed/i);
+    expect(ledger.listFatigueEvents()).toHaveLength(1);
+  });
+
   it('keeps the same MI peer isolated by channel and accumulates within one channel', () => {
     const { port } = makePort();
 

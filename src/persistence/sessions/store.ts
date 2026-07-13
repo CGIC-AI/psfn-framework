@@ -696,6 +696,10 @@ export class SessionStore implements TranscriptSearchPort {
   appendTurnRecord(record: TurnRecord): void {
     this.turnRecordStore.appendTurnRecord(record);
   }
+  findTurnRecord(channelId: string, turnId: string): TurnRecord | null {
+    const sessionId = this.resolveSessionId(channelId) ?? channelId;
+    return this.turnRecordStore.findTurnRecord(sessionId, turnId);
+  }
   getRecentTurnRecords(channelId: string, limit: number): TurnRecord[] {
     const sessionId = this.resolveSessionId(channelId) ?? channelId;
     const cached = this.channels.get(sessionId) ?? this.loadExistingChannelCache(channelId);
@@ -823,9 +827,28 @@ export class SessionStore implements TranscriptSearchPort {
     const normalizedStart = Math.max(0, Math.floor(Math.min(startId, endId)));
     const normalizedEnd = Math.max(0, Math.floor(Math.max(startId, endId)));
     if (normalizedEnd < normalizedStart) return [];
-    const cache = this.ensureChannelFullyLoaded(channelId);
-    if (!cache) return [];
-    return cache.entries.filter(entry => entry.id >= normalizedStart && entry.id <= normalizedEnd);
+    const sessionId = this.resolveSessionId(channelId) ?? channelId;
+    const cached = this.channels.get(sessionId) ?? this.loadExistingChannelCache(channelId);
+    if (cached?.fullyLoaded || (cached?.activeTurnTombstoneCount ?? 0) > 0) {
+      const full = cached?.fullyLoaded ? cached : this.ensureChannelFullyLoaded(channelId);
+      return full
+        ? full.entries.filter(entry => entry.id >= normalizedStart && entry.id <= normalizedEnd)
+        : [];
+    }
+    const resolved = cached
+      ? { channelId: cached.channelId, filePath: cached.resolvedPath }
+      : this.resolveExistingSession(channelId);
+    if (!resolved) return [];
+    const found = this.journalRuntime.findEntriesInRange(
+      this.journalRuntime.openArchive(resolved.channelId, resolved.filePath),
+      normalizedStart,
+      normalizedEnd,
+    );
+    if (found) return found;
+    const full = this.ensureChannelFullyLoaded(channelId);
+    return full
+      ? full.entries.filter(entry => entry.id >= normalizedStart && entry.id <= normalizedEnd)
+      : [];
   }
   applyCogSecTombstones(options: CogSecL0TombstoneOptions): CogSecL0TombstoneResult {
     const caseId = normalizeCogSecCaseId(options.caseId);

@@ -69,6 +69,7 @@ function createHarness(overrides?: {
     message: SubstrateMessage,
     deliveryLifecycle?: {
       recoveredResponse?: AgentResponse;
+      sourceAlreadyPersisted?: true;
       finalizeDelivery(response: AgentResponse): Promise<void>;
     },
   ) => Promise<AgentResponse>;
@@ -1053,6 +1054,84 @@ describe('registerGatewayMessageHandlers', () => {
     expect(restarted.agentLoop.recordIcpDeliveryObservation).toHaveBeenLastCalledWith(
       expect.objectContaining({ status: 'delivered', turnCompleted: true }),
     );
+  });
+
+  it('resumes a correlated turn when only the inbound source row survived the crash', async () => {
+    const reply = {
+      ...makeResponse('reply after source-only recovery'),
+      channelId: ICP_CHANNEL,
+      metadata: {
+        ...makeResponse('').metadata,
+        turnId: replyIcpCorrelation.turnId,
+        requestId: replyIcpCorrelation.requestId,
+        icpCorrelation: replyIcpCorrelation,
+      },
+    };
+    const restarted = createHarness({
+      config: { companionId: ICP_B } as SubstrateConfig,
+      hasRecordedSourceMessage: async () => true,
+      findRecordedIcpInitiation: async () => null,
+      handleMessage: async (_message, lifecycle) => {
+        expect(lifecycle?.sourceAlreadyPersisted).toBe(true);
+        if (!lifecycle) throw new Error('test expected delivery lifecycle');
+        await lifecycle.finalizeDelivery(reply);
+        return reply;
+      },
+      companionSend: async channelId => ({
+        channelId,
+        messageId: 'companion-reply-source-only-recovery',
+        deliveredTo: [ICP_A],
+        skippedOffline: [],
+      }),
+    });
+
+    await restarted.onCompanionMessage(makeCorrelatedCompanionMessage());
+
+    expect(restarted.agentLoop.handleMessage).toHaveBeenCalledTimes(1);
+    expect(restarted.gateway.companionSend).toHaveBeenCalledTimes(1);
+    expect(restarted.agentLoop.recordIcpDeliveryObservation).toHaveBeenLastCalledWith(
+      expect.objectContaining({ status: 'delivered', turnCompleted: true }),
+    );
+  });
+
+  it('owns a correlated envelope before awaiting durable recovery state', async () => {
+    const durableLookup = createDeferred<boolean>();
+    const reply = {
+      ...makeResponse('single raced reply'),
+      channelId: ICP_CHANNEL,
+      metadata: {
+        ...makeResponse('').metadata,
+        turnId: replyIcpCorrelation.turnId,
+        requestId: replyIcpCorrelation.requestId,
+        icpCorrelation: replyIcpCorrelation,
+      },
+    };
+    const harness = createHarness({
+      config: { companionId: ICP_B } as SubstrateConfig,
+      hasRecordedSourceMessage: async () => await durableLookup.promise,
+      handleMessage: async (_message, lifecycle) => {
+        if (!lifecycle) throw new Error('test expected delivery lifecycle');
+        await lifecycle.finalizeDelivery(reply);
+        return reply;
+      },
+      companionSend: async channelId => ({
+        channelId,
+        messageId: 'companion-reply-race-owner',
+        deliveredTo: [ICP_A],
+        skippedOffline: [],
+      }),
+    });
+
+    const first = harness.onCompanionMessage(makeCorrelatedCompanionMessage());
+    await Promise.resolve();
+    await Promise.resolve();
+    await harness.onCompanionMessage(makeCorrelatedCompanionMessage());
+    expect(harness.agentLoop.hasRecordedSourceMessage).toHaveBeenCalledTimes(1);
+
+    durableLookup.resolve(false);
+    await first;
+    await vi.waitFor(() => expect(harness.agentLoop.handleMessage).toHaveBeenCalledTimes(1));
+    expect(harness.gateway.companionSend).toHaveBeenCalledTimes(1);
   });
 
   it('runs companion messages through the normal turn pipeline and replies via the companion lane', async () => {

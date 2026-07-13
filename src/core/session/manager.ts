@@ -82,9 +82,12 @@ import {
   parseSessionIcpRecoveryResponse,
 } from './icp-correlation-metadata.js';
 import {
-  parseIcpConversationCorrelation,
-  type IcpConversationCorrelation,
-} from '../../shared/contracts/icp-autonomy.js';
+  isIcpDeliveryObservationCandidate,
+  parseIcpDeliveryObservation,
+  serializeIcpDeliveryObservation,
+  type IcpDeliveryObservation,
+} from './icp-delivery-recovery.js';
+import type { IcpConversationCorrelation } from '../../shared/contracts/icp-autonomy.js';
 import type {
   PreCompactionExtractionContext,
   PreCompactionExtractionHandler,
@@ -102,7 +105,6 @@ import { buildSessionMetadataWithIntakeScreening } from './intake-screening-meta
 import type { IntakeScreeningService } from '../cogsec/intake/screening.js';
 import type { IntakeSinkGate } from '../cogsec/intake/sink-gates.js';
 import type { ContextManifestMemorySeed } from './context-manifest.js';
-import { isRecord } from '../../shared/utils/types.js';
 import {
   applyFocusCompactionRanges,
   FocusKnowledgeStore,
@@ -901,6 +903,13 @@ export class SessionManager {
     this.store.appendTurnRecord(record);
   }
 
+  hasRecordedTurn(channelId: string, turnId: string): boolean {
+    const resolvedChannelId = this.resolveSessionChannelId(channelId);
+    // Recovery markers must not age out behind an arbitrary recent-turn cap:
+    // an old lost acknowledgement can replay after any number of newer turns.
+    return this.store.findTurnRecord(resolvedChannelId, turnId)?.status === 'completed';
+  }
+
   getRoleEnvelopeRefsForEntries(channelId: string, sessionEntryIds: readonly number[]): string[] {
     const resolvedChannelId = this.resolveSessionChannelId(channelId);
     const refs: string[] = [];
@@ -1197,99 +1206,19 @@ export class SessionManager {
   findIcpDeliveryObservation(
     channelId: string,
     sourceMessageId: string,
-  ): {
-    channelId: string;
-    sourceMessageId: string;
-    status: 'prepared' | 'delivered' | 'failed' | 'suppressed';
-    gatewayMessageId?: string;
-    deliveredTo?: readonly string[];
-    permitOutcome?: 'consumed' | 'replayed';
-    error?: string;
-    recoveryResponse?: AgentResponse;
-    turnCompleted?: true;
-  } | null {
+  ): IcpDeliveryObservation | null {
+    const resolvedChannelId = this.resolveSessionChannelId(channelId);
     const entries = this.store.findLatestEntries(
-      this.resolveSessionChannelId(channelId),
-      (entry) => {
-        if (entry.role !== 'system' || !entry.content.startsWith('{')) return false;
-        try {
-          const candidate: unknown = JSON.parse(entry.content);
-          return isRecord(candidate)
-            && candidate.kind === 'icp_delivery'
-            && candidate.sourceMessageId === sourceMessageId;
-        } catch {
-          return false;
-        }
-      },
+      resolvedChannelId,
+      entry => entry.role === 'system'
+        && isIcpDeliveryObservationCandidate(entry.content, sourceMessageId),
       1,
     );
     for (const entry of entries) {
-      if (entry.role !== 'system' || !entry.content.startsWith('{')) continue;
-      let parsed: unknown;
-      try {
-        parsed = JSON.parse(entry.content);
-      } catch {
-        continue;
-      }
-      if (!isRecord(parsed) || parsed.kind !== 'icp_delivery') continue;
-      if (parsed.schemaVersion !== 1
-        || typeof parsed.sourceMessageId !== 'string'
-        || typeof parsed.channelId !== 'string'
-        || (parsed.status !== 'delivered'
-          && parsed.status !== 'failed'
-          && parsed.status !== 'suppressed'
-          && parsed.status !== 'prepared')
-        || (parsed.gatewayMessageId !== undefined && typeof parsed.gatewayMessageId !== 'string')
-        || (parsed.deliveredTo !== undefined
-          && (!Array.isArray(parsed.deliveredTo)
-            || parsed.deliveredTo.some(value => typeof value !== 'string')))
-        || (parsed.permitOutcome !== undefined
-          && parsed.permitOutcome !== 'consumed'
-          && parsed.permitOutcome !== 'replayed')
-        || (parsed.error !== undefined && typeof parsed.error !== 'string')
-        || (parsed.turnCompleted !== undefined && parsed.turnCompleted !== true)) {
-        throw new Error('Recorded ICP delivery observation is malformed');
-      }
-      if (parsed.sourceMessageId === sourceMessageId) {
-        let recoveryResponse: AgentResponse | undefined;
-        if (parsed.recoveryResponse !== undefined) {
-          if (!isRecord(parsed.recoveryResponse)
-            || typeof parsed.recoveryResponse.content !== 'string'
-            || typeof parsed.recoveryResponse.channelId !== 'string'
-            || !isRecord(parsed.recoveryResponse.metadata)
-            || typeof parsed.recoveryResponse.metadata.model !== 'string'
-            || typeof parsed.recoveryResponse.metadata.inputTokens !== 'number'
-            || typeof parsed.recoveryResponse.metadata.outputTokens !== 'number'
-            || typeof parsed.recoveryResponse.metadata.durationMs !== 'number') {
-            throw new Error('Recorded ICP delivery recovery response is malformed');
-          }
-          const correlation = parseIcpConversationCorrelation(
-            parsed.recoveryResponse.metadata.icpCorrelation,
-          );
-          recoveryResponse = structuredClone({
-            ...parsed.recoveryResponse,
-            metadata: {
-              ...parsed.recoveryResponse.metadata,
-              icpCorrelation: correlation,
-            },
-          }) as AgentResponse;
-        }
-        return {
-          channelId: parsed.channelId,
-          sourceMessageId: parsed.sourceMessageId,
-          status: parsed.status,
-          ...(typeof parsed.gatewayMessageId === 'string' ? { gatewayMessageId: parsed.gatewayMessageId } : {}),
-          ...(Array.isArray(parsed.deliveredTo)
-            ? { deliveredTo: parsed.deliveredTo as string[] }
-            : {}),
-          ...(parsed.permitOutcome === 'consumed' || parsed.permitOutcome === 'replayed'
-            ? { permitOutcome: parsed.permitOutcome }
-            : {}),
-          ...(typeof parsed.error === 'string' ? { error: parsed.error } : {}),
-          ...(recoveryResponse ? { recoveryResponse } : {}),
-          ...(parsed.turnCompleted === true ? { turnCompleted: true as const } : {}),
-        };
-      }
+      return parseIcpDeliveryObservation(entry.content, {
+        channelId: resolvedChannelId,
+        sourceMessageId,
+      });
     }
     return null;
   }
@@ -1306,20 +1235,10 @@ export class SessionManager {
     ).length > 0;
   }
 
-  recordIcpDeliveryObservation(observation: {
-    channelId: string;
-    sourceMessageId: string;
-    status: 'prepared' | 'delivered' | 'failed' | 'suppressed';
-    gatewayMessageId?: string;
-    deliveredTo?: readonly string[];
-    permitOutcome?: 'consumed' | 'replayed';
-    error?: string;
-    recoveryResponse?: AgentResponse;
-    turnCompleted?: true;
-  }): void {
+  recordIcpDeliveryObservation(observation: IcpDeliveryObservation): void {
     this.appendSystemNote(
       observation.channelId,
-      JSON.stringify({ schemaVersion: 1, kind: 'icp_delivery', ...observation }),
+      serializeIcpDeliveryObservation(observation),
       'icp_delivery',
     );
   }

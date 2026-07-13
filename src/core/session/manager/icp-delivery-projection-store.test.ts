@@ -3,6 +3,42 @@ import type { SessionStore } from '../../../persistence/sessions/store.js';
 import type { SessionEntry } from '../types.js';
 import { createIcpDeliveryProjectionStore } from './icp-delivery-projection-store.js';
 
+const LOCAL_COMPANION_ID = '11111111-1111-4111-8111-111111111111';
+const PEER_COMPANION_ID = '22222222-2222-4222-8222-222222222222';
+
+function buildRecoveryResponse(channelId: string, sourceMessageId: string) {
+  const correlation = {
+    conversationId: '44444444-4444-4444-8444-444444444444',
+    rootInitiationId: '99999999-9999-4999-8999-999999999999',
+    initiatedByCompanionId: LOCAL_COMPANION_ID,
+    localCompanionId: LOCAL_COMPANION_ID,
+    peerCompanionId: PEER_COMPANION_ID,
+    peerContactId: 'contact-nova',
+    channelId,
+    turnId: '018f22a2-52b8-7a3a-8c16-25b7b14f7081',
+    messageId: sourceMessageId,
+    requestId: sourceMessageId,
+    chargeLane: 'companion_social' as const,
+    surface: 'companion_dm' as const,
+    costPurpose: 'conversation_turn' as const,
+    costOriginStage: 'reply' as const,
+    fatigueDecision: 'not_evaluated' as const,
+  };
+  return {
+    content: 'Completed reply',
+    channelId,
+    metadata: {
+      model: 'projection-test-model',
+      inputTokens: 1,
+      outputTokens: 1,
+      durationMs: 1,
+      turnId: correlation.turnId,
+      requestId: correlation.requestId,
+      icpCorrelation: correlation,
+    },
+  };
+}
+
 describe('ICP delivery projection store', () => {
   it('projects a delivered assistant entry when its observation is over 5,000 rows behind the tail', () => {
     const channelId = 'companion-dm:11111111-1111-4111-8111-111111111111:22222222-2222-4222-8222-222222222222';
@@ -24,8 +60,10 @@ describe('ICP delivery projection store', () => {
       content: JSON.stringify({
         schemaVersion: 1,
         kind: 'icp_delivery',
+        channelId,
         sourceMessageId,
         status: 'delivered',
+        gatewayMessageId: 'companion:stable-delivery-1',
       }),
       timestamp: 2,
     }];
@@ -39,15 +77,13 @@ describe('ICP delivery projection store', () => {
       });
     }
     const getEntriesInRange = vi.fn(
-      (_requestedChannelId: string, startId: number, endId: number) => {
-        if (startId !== 1 || endId !== 1) {
-          throw new Error('projection must not full-scan the channel');
-        }
-        return entries.filter(entry => entry.id >= startId && entry.id <= endId);
-      },
+      (_requestedChannelId: string, startId: number, endId: number) => (
+        entries.filter(entry => entry.id >= startId && entry.id <= endId)
+      ),
     );
     const rawStore = {
       getRecent: (_requestedChannelId: string, limit: number) => entries.slice(-limit),
+      getLastEntry: () => entries.at(-1),
       getEntriesInRange,
       findLatestEntries: (
         _requestedChannelId: string,
@@ -69,7 +105,10 @@ describe('ICP delivery projection store', () => {
         content: 'Durably delivered reply',
       }),
     ]));
-    expect(getEntriesInRange).toHaveBeenCalledTimes(1);
+    expect(getEntriesInRange.mock.calls).toContainEqual([channelId, 1, 1]);
+    expect(getEntriesInRange.mock.calls.every(([, startId, endId]) => (
+      Number(endId) - Number(startId) + 1 <= 256
+    ))).toBe(true);
   });
 
   it('treats a delivered observation with turn completion as delivered', () => {
@@ -92,14 +131,18 @@ describe('ICP delivery projection store', () => {
       content: JSON.stringify({
         schemaVersion: 1,
         kind: 'icp_delivery',
+        channelId,
         sourceMessageId,
         status: 'delivered',
+        gatewayMessageId: 'companion:stable-delivery-completed',
+        recoveryResponse: buildRecoveryResponse(channelId, sourceMessageId),
         turnCompleted: true,
       }),
       timestamp: 2,
     }];
     const rawStore = {
       getRecent: (_requestedChannelId: string, limit: number) => entries.slice(-limit),
+      getLastEntry: () => entries.at(-1),
       getEntriesInRange: (_requestedChannelId: string, startId: number, endId: number) => (
         entries.filter(entry => entry.id >= startId && entry.id <= endId)
       ),

@@ -294,8 +294,7 @@ export async function schedulePostTurnWork(input: {
         }
       : {}),
   });
-  runtime.sessionManager.recordTurn(
-    runtime.buildTurnRecord({
+  const turnRecord = runtime.buildTurnRecord({
       message,
       turnId,
       requestId,
@@ -321,8 +320,7 @@ export async function schedulePostTurnWork(input: {
         ...(observability.getObservedTurnSnapshot() ? { snapshot: observability.getObservedTurnSnapshot() } : {}),
       },
       internalStateSnapshotRef,
-    }),
-  );
+    });
 
   await runtime.eventBus.emit('agent.turn.end', {
     message,
@@ -484,4 +482,8 @@ export async function schedulePostTurnWork(input: {
     work: postTurnBackgroundWork,
     correlation: turnCorrelationBase,
   });
+  // This is the durable completion marker for post-turn scheduling. Keep it
+  // last: a recovery may skip this whole scheduler only after every awaited
+  // effect ran and every background task was handed to the runtime owner.
+  runtime.sessionManager.recordTurn(turnRecord);
 }

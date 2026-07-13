@@ -8,6 +8,9 @@ import {
 } from '../../shared/contracts/icp-autonomy.js';
 import type { AgentResponse, SubstrateMessage } from '../../shared/contracts/runtime.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
+import type { IcpDeliveryObservation } from '../../core/session/icp-delivery-recovery.js';
+
+export type { IcpDeliveryObservation } from '../../core/session/icp-delivery-recovery.js';
 
 export const ICP_TARGET_TURN_PROMPT =
   'Initiate one natural message to the peer in this channel, using the ordinary channel context.';
@@ -16,20 +19,6 @@ export interface RecordedIcpInitiationTurn {
   content: string;
   correlation: IcpConversationCorrelation;
   recoveryResponse: AgentResponse;
-}
-
-export interface IcpDeliveryObservation {
-  channelId: string;
-  sourceMessageId: string;
-  status: 'prepared' | 'delivered' | 'failed' | 'suppressed';
-  gatewayMessageId?: string;
-  deliveredTo?: readonly string[];
-  permitOutcome?: 'consumed' | 'replayed';
-  error?: string;
-  /** Durable generated response needed to resume post-turn work without another model call. */
-  recoveryResponse?: AgentResponse;
-  /** Written only after the ordinary turn completion path returns. */
-  turnCompleted?: true;
 }
 
 export interface IcpTargetChannelAgentPort {
@@ -167,28 +156,6 @@ function buildPrivateTurnMessage(correlation: IcpConversationCorrelation): Subst
   };
 }
 
-function buildSuppressionRecoveryResponse(
-  correlation: IcpConversationCorrelation,
-): AgentResponse {
-  const suppressedCorrelation = parseIcpConversationCorrelation({
-    ...correlation,
-    fatigueDecision: 'suppress',
-  });
-  return {
-    content: '',
-    channelId: correlation.channelId,
-    metadata: {
-      model: 'runtime/icp-suppression-recovery',
-      inputTokens: 0,
-      outputTokens: 0,
-      durationMs: 0,
-      turnId: suppressedCorrelation.turnId,
-      requestId: suppressedCorrelation.requestId,
-      icpCorrelation: suppressedCorrelation,
-    },
-  };
-}
-
 export function createIcpTargetChannelInitiator(input: {
   localCompanionId: string;
   agent: IcpTargetChannelAgentPort;
@@ -242,21 +209,23 @@ export function createIcpTargetChannelInitiator(input: {
           if (!turnResponse) {
             throw new Error('ICP suppression finalization requires a durable recovery response');
           }
-          await input.agent.recordIcpDeliveryObservation({
-            channelId: permit.channelId,
-            sourceMessageId,
-            status: 'prepared',
-            recoveryResponse: turnResponse,
-          });
-          const consumption = await input.gateway.consumeInitiationPermit({
-            permitId: permit.permitId,
-            conversationId: permit.conversationId,
-            recipientCompanionId: permit.recipientCompanionId,
-            channelId: permit.channelId,
-            rootInitiationId: request.rootInitiationId,
-          });
-          if (consumption.outcome !== 'consumed' && consumption.outcome !== 'replayed') {
-            throw new Error(`ICP suppression permit consumption rejected: ${consumption.outcome}`);
+          if (!(permit.status === 'consumed' && lastDeliveryObservation?.status === 'prepared')) {
+            await input.agent.recordIcpDeliveryObservation({
+              channelId: permit.channelId,
+              sourceMessageId,
+              status: 'prepared',
+              recoveryResponse: turnResponse,
+            });
+            const consumption = await input.gateway.consumeInitiationPermit({
+              permitId: permit.permitId,
+              conversationId: permit.conversationId,
+              recipientCompanionId: permit.recipientCompanionId,
+              channelId: permit.channelId,
+              rootInitiationId: request.rootInitiationId,
+            });
+            if (consumption.outcome !== 'consumed' && consumption.outcome !== 'replayed') {
+              throw new Error(`ICP suppression permit consumption rejected: ${consumption.outcome}`);
+            }
           }
           lastDeliveryObservation = {
             channelId: permit.channelId,
@@ -406,27 +375,19 @@ export function createIcpTargetChannelInitiator(input: {
     }
 
     if (permit.status === 'consumed') {
-      recoveredTurn = true;
-      const observationCorrelation = previousObservation?.recoveryResponse?.metadata.icpCorrelation;
-      correlation = observationCorrelation
-        ? validateRecordedCorrelation(observationCorrelation)
-        : buildCorrelation({
-            permit,
-            localCompanionId,
-            peerContactId,
-            rootInitiationId: request.rootInitiationId,
-          });
-      turnResponse = previousObservation?.recoveryResponse
-        ?? buildSuppressionRecoveryResponse(correlation);
-      content = turnResponse.content;
-      if (!previousObservation) {
-        lastDeliveryObservation = {
-          channelId: permit.channelId,
-          sourceMessageId,
-          status: 'suppressed',
-          recoveryResponse: turnResponse,
-        };
+      if (!previousObservation?.recoveryResponse
+        || (previousObservation.status !== 'prepared'
+          && previousObservation.status !== 'suppressed')) {
+        throw new Error(
+          'Consumed ICP permit is missing durable prepared suppression recovery evidence',
+        );
       }
+      recoveredTurn = true;
+      correlation = validateRecordedCorrelation(
+        previousObservation.recoveryResponse.metadata.icpCorrelation,
+      );
+      turnResponse = previousObservation.recoveryResponse;
+      content = turnResponse.content;
       return await resumeOrdinaryTurn();
     }
 

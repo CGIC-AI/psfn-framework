@@ -292,6 +292,14 @@ export class GatewayServer {
   private readonly companionDeliveryFailureReceipts = new CompanionDeliveryFailureReceipts();
   private readonly icpAutonomyBroker: GatewayIcpAutonomyBroker | null;
   private readonly pendingIcpInvalidations = new Map<string, PendingIcpInvalidation>();
+  /**
+   * Same-process retry accelerator only. This map deliberately is not the
+   * durable exactly-once boundary: an RPC acknowledgement can be lost across
+   * a gateway restart, so correlated sends retain one deterministic message
+   * id and may be notified again. Recipient agents must claim that id before
+   * durable recovery reads and use their L0 source-id lookup for cross-process
+   * idempotency.
+   */
   private readonly deliveredIcpMessages = new Map<string, {
     content: string;
     correlation: string;
@@ -792,6 +800,9 @@ export class GatewayServer {
       if (delivered.expiresAtMs <= now) this.deliveredIcpMessages.delete(cachedMessageId);
     }
     if (stableIcpMessageId) {
+      // Collapse an identical retry while this gateway process still owns the
+      // result. On restart the cache is empty and at-least-once redelivery is
+      // intentional; the recipient's durable source-id gate is authoritative.
       const delivered = this.deliveredIcpMessages.get(stableIcpMessageId);
       if (delivered) {
         if (delivered.content !== content

@@ -1,8 +1,10 @@
 import type { SessionStore } from '../../../persistence/sessions/store.js';
 import { isRecord } from '../../../shared/utils/types.js';
+import { parseIcpDeliveryObservation } from '../icp-delivery-recovery.js';
 import type { SessionEntry } from '../types.js';
 
 type IcpDeliveryStatus = 'prepared' | 'delivered' | 'failed' | 'suppressed';
+const RECENT_PROJECTION_PAGE_SIZE = 256;
 
 function parseJsonObject(value: string, label: string): Record<string, unknown> {
   let parsed: unknown;
@@ -36,26 +38,26 @@ function parseDeliveryObservation(entry: SessionEntry): {
   sourceMessageId: string;
   status: IcpDeliveryStatus;
 } | null {
-  if (entry.role !== 'system' || !entry.content.startsWith('{')) return null;
-  let value: Record<string, unknown>;
+  if (entry.role !== 'system'
+    || !entry.content.startsWith('{"schemaVersion":1,"kind":"icp_delivery"')) return null;
+  let value: unknown;
   try {
-    value = parseJsonObject(entry.content, 'ICP delivery observation');
+    value = JSON.parse(entry.content);
   } catch {
-    return null;
+    throw new Error('ICP delivery observation is malformed JSON');
   }
-  if (value.kind !== 'icp_delivery') return null;
-  if (value.schemaVersion !== 1
+  if (!isRecord(value)
     || typeof value.sourceMessageId !== 'string'
-    || !value.sourceMessageId.trim()
-    || (value.status !== 'delivered'
-      && value.status !== 'failed'
-      && value.status !== 'suppressed'
-      && value.status !== 'prepared')) {
+    || !value.sourceMessageId.trim()) {
     throw new Error('ICP delivery observation is malformed');
   }
-  return {
+  const observation = parseIcpDeliveryObservation(entry.content, {
+    channelId: entry.channelId,
     sourceMessageId: value.sourceMessageId.trim(),
-    status: value.status,
+  });
+  return {
+    sourceMessageId: observation.sourceMessageId,
+    status: observation.status,
   };
 }
 
@@ -96,38 +98,30 @@ export function createIcpDeliveryProjectionStore(store: SessionStore): SessionSt
         return (channelId: string, limit: number): SessionEntry[] => {
           const normalizedLimit = Math.max(0, Math.floor(limit));
           if (normalizedLimit <= 0) return [];
-          const statuses = new Map<string, IcpDeliveryStatus | null>();
-          const resolveStatus = (sourceMessageId: string): IcpDeliveryStatus | null => {
-            if (!statuses.has(sourceMessageId)) {
-              statuses.set(sourceMessageId, findDeliveryStatus(target, channelId, sourceMessageId));
-            }
-            return statuses.get(sourceMessageId) ?? null;
-          };
-          let fetchLimit = normalizedLimit;
-          for (;;) {
-            const raw = target.getRecent(channelId, fetchLimit);
-            const projected = filterUndeliveredIcpAssistantEntries(raw, resolveStatus);
-            if (raw.length < fetchLimit || projected.length >= normalizedLimit) {
-              return projected.slice(-normalizedLimit);
-            }
-            fetchLimit = Math.max(fetchLimit + 1, fetchLimit * 2);
+          const lastEntry = target.getLastEntry(channelId);
+          if (!lastEntry) return [];
+          let cursor = lastEntry.id;
+          let projected: SessionEntry[] = [];
+          while (cursor > 0 && projected.length < normalizedLimit) {
+            const pageStart = Math.max(1, cursor - RECENT_PROJECTION_PAGE_SIZE + 1);
+            const page = filterUndeliveredIcpAssistantEntries(
+              target.getEntriesInRange(channelId, pageStart, cursor),
+              sourceMessageId => findDeliveryStatus(target, channelId, sourceMessageId),
+            );
+            projected = [...page, ...projected].slice(-normalizedLimit);
+            cursor = pageStart - 1;
           }
+          return projected;
         };
       }
 
       if (property === 'getEntriesInRange') {
-        return (channelId: string, startId: number, endId: number): SessionEntry[] => {
-          const statuses = new Map<string, IcpDeliveryStatus | null>();
-          return filterUndeliveredIcpAssistantEntries(
+        return (channelId: string, startId: number, endId: number): SessionEntry[] => (
+          filterUndeliveredIcpAssistantEntries(
             target.getEntriesInRange(channelId, startId, endId),
-            (sourceMessageId) => {
-              if (!statuses.has(sourceMessageId)) {
-                statuses.set(sourceMessageId, findDeliveryStatus(target, channelId, sourceMessageId));
-              }
-              return statuses.get(sourceMessageId) ?? null;
-            },
-          );
-        };
+            sourceMessageId => findDeliveryStatus(target, channelId, sourceMessageId),
+          )
+        );
       }
 
       const value = Reflect.get(target, property, receiver);

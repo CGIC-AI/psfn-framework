@@ -4,6 +4,7 @@ import {
 } from '../../shared/contracts/icp-autonomy.js';
 import type { AgentResponse } from '../../shared/contracts/runtime.js';
 import { isRecord } from '../../shared/utils/types.js';
+import { parseIcpRecoveryResponse } from './icp-delivery-recovery.js';
 
 interface SessionMetadataEnvelope {
   icpCorrelation?: unknown;
@@ -65,38 +66,17 @@ export function parseSessionIcpRecoveryResponse(
     throw new Error('Session ICP delivery metadata is malformed');
   }
   const value = envelope.icpDelivery.recoveryResponse;
-  if (!isRecord(value)
-    || typeof value.content !== 'string'
-    || typeof value.channelId !== 'string'
-    || !isRecord(value.metadata)
-    || typeof value.metadata.model !== 'string'
-    || typeof value.metadata.inputTokens !== 'number'
-    || typeof value.metadata.outputTokens !== 'number'
-    || typeof value.metadata.durationMs !== 'number'
-    || !Number.isFinite(value.metadata.inputTokens)
-    || !Number.isFinite(value.metadata.outputTokens)
-    || !Number.isFinite(value.metadata.durationMs)
-    || value.metadata.inputTokens < 0
-    || value.metadata.outputTokens < 0
-    || value.metadata.durationMs < 0) {
+  if (value === undefined) {
     throw new Error('Pending ICP assistant entry is missing its durable recovery response');
   }
-  const correlation = parseIcpConversationCorrelation(value.metadata.icpCorrelation);
   const outerCorrelation = parseSessionIcpCorrelation(metadata);
-  if (!outerCorrelation
-    || JSON.stringify(correlation) !== JSON.stringify(outerCorrelation)
-    || value.channelId !== correlation.channelId
-    || (value.metadata.turnId !== undefined && value.metadata.turnId !== correlation.turnId)
-    || (value.metadata.requestId !== undefined && value.metadata.requestId !== correlation.requestId)) {
-    throw new Error('Pending ICP recovery response does not match its assistant entry correlation');
-  }
-  return structuredClone({
-    ...value,
-    metadata: {
-      ...value.metadata,
-      icpCorrelation: correlation,
-    },
-  }) as AgentResponse;
+  if (!outerCorrelation) throw new Error('Pending ICP assistant entry is missing correlation');
+  return parseIcpRecoveryResponse(value, {
+    label: 'Pending ICP recovery response',
+    expectedCorrelation: outerCorrelation,
+    expectedChannelId: outerCorrelation.channelId,
+    expectedSourceMessageId: outerCorrelation.messageId,
+  });
 }
 
 export function parseSessionIcpCorrelation(

@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest';
 import type { TurnRecord } from '../../shared/contracts/runtime.js';
 import type { TurnRecordStorePort } from './turn-record-store-port.js';
 import { createFilesystemTurnRecordStorePort } from './turn-records.js';
+import { backfillLegacyTurnId } from '../../core/turns/id.js';
 
 function createTurnRecord(overrides: Partial<TurnRecord> = {}): TurnRecord {
   return {
@@ -77,5 +78,22 @@ describe('turn-records', () => {
     const read = turnRecordStore.readRecentTurnRecords(record.channelId, 5);
     expect(read).toEqual([record]);
     expect(read[0]).not.toHaveProperty('location');
+  });
+
+  it('finds an old durable completion marker without a recent-record cap', () => {
+    const sessionsDir = mkdtempSync(join(tmpdir(), 'psfn-turn-records-marker-'));
+    const turnRecordStore = createFilesystemTurnRecordStorePort(sessionsDir);
+    const old = createTurnRecord({ turnId: backfillLegacyTurnId('old-completion-marker') });
+    turnRecordStore.appendTurnRecord(old);
+    for (let index = 0; index < 40; index += 1) {
+      turnRecordStore.appendTurnRecord(createTurnRecord({
+        turnId: backfillLegacyTurnId(`newer-turn-${index}`),
+        requestId: `newer-request-${index}`,
+        startedAt: old.startedAt + index + 1,
+        completedAt: old.completedAt + index + 1,
+      }));
+    }
+
+    expect(turnRecordStore.findTurnRecord(old.channelId, old.turnId)).toEqual(old);
   });
 });

@@ -1344,17 +1344,7 @@ export class SubstrateAgent {
   findIcpDeliveryObservation(
     channelId: string,
     sourceMessageId: string,
-  ): {
-    channelId: string;
-    sourceMessageId: string;
-    status: 'prepared' | 'delivered' | 'failed' | 'suppressed';
-    gatewayMessageId?: string;
-    deliveredTo?: readonly string[];
-    permitOutcome?: 'consumed' | 'replayed';
-    error?: string;
-    recoveryResponse?: AgentResponse;
-    turnCompleted?: true;
-  } | null {
+  ): import('../session/icp-delivery-recovery.js').IcpDeliveryObservation | null {
     return this.sessionManager.findIcpDeliveryObservation(channelId, sourceMessageId);
   }
 
@@ -1368,17 +1358,9 @@ export class SubstrateAgent {
    * It never becomes peer speech and therefore cannot imply a failed send was
    * mutually witnessed.
    */
-  recordIcpDeliveryObservation(observation: {
-    channelId: string;
-    sourceMessageId: string;
-    status: 'prepared' | 'delivered' | 'failed' | 'suppressed';
-    gatewayMessageId?: string;
-    deliveredTo?: readonly string[];
-    permitOutcome?: 'consumed' | 'replayed';
-    error?: string;
-    recoveryResponse?: AgentResponse;
-    turnCompleted?: true;
-  }): void {
+  recordIcpDeliveryObservation(
+    observation: import('../session/icp-delivery-recovery.js').IcpDeliveryObservation,
+  ): void {
     this.sessionManager.recordIcpDeliveryObservation(observation);
   }
 

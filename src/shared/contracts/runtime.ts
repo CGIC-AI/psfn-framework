@@ -519,6 +519,28 @@ export interface FatigueEnforcementMetadata {
   recordedEvent?: FatigueRecordedEventMetadata;
 }
 
+/**
+ * Durable write-ahead description of the one fatigue spend owned by a turn.
+ * ICP recovery can replay this operation without re-evaluating policy or
+ * charging the same stable turn twice.
+ */
+export interface FatiguePendingSpendMetadata {
+  schemaVersion: 1;
+  timestampMs: number;
+  decision: FatigueBudgetDecision;
+  reason: FatigueBudgetReason;
+  amount: number;
+  scope: FatigueBudgetScopeSnapshot;
+  peer: FatigueBudgetPeerSnapshot;
+  triggeringAuthor: FatigueBudgetActorSnapshot;
+  limits: {
+    softLimit: number;
+    hardLimit: number;
+    overchargeLimit: number;
+  };
+  correlation: Partial<CorrelationMetadata>;
+}
+
 export interface FatigueBudgetScopeSnapshot {
   localCompanionId: string;
   peerContactId: string;
@@ -568,6 +590,7 @@ export interface ResponseMetadata {
     provenanceRefs: string[];
   };
   fatigue?: FatigueEnforcementMetadata;
+  fatiguePendingSpend?: FatiguePendingSpendMetadata;
 }
 
 export interface IntentionalNoReplyMetadata {

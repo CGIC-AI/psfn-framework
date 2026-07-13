@@ -1215,6 +1215,25 @@ describe('SessionStore', () => {
     expect(index.channels[channelId].lastTimestamp).toBe(baseTimestamp + 1499);
   });
 
+  it('reads a bounded entry-id range without fully loading a large channel', () => {
+    const channelId = 'api:bounded-range';
+    appendSessionMessages(store, channelId, 1_500);
+    const archivePort = createFilesystemSessionArchivePort();
+    const fullReadSpy = vi.spyOn(archivePort, 'readJournalFile');
+    const matchingReadSpy = vi.spyOn(archivePort, 'readJournalMatchingEntriesBackward');
+    const reloaded = new SessionStore(dir, { sessionArchivePort: archivePort });
+    fullReadSpy.mockClear();
+    matchingReadSpy.mockClear();
+
+    expect(reloaded.getEntriesInRange(channelId, 10, 12).map(entry => entry.id)).toEqual([
+      10,
+      11,
+      12,
+    ]);
+    expect(matchingReadSpy).toHaveBeenCalledOnce();
+    expect(fullReadSpy).not.toHaveBeenCalled();
+  });
+
   it('caches lightweight session tails across repeated unchanged reads', () => {
     const channelId = 'api:tail-cache-repeat';
     appendSessionMessages(store, channelId, 8);

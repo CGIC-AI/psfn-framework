@@ -39,6 +39,8 @@ const recoveryResponse = {
     inputTokens: 1,
     outputTokens: 1,
     durationMs: 1,
+    turnId: correlation.turnId as TurnID,
+    requestId: correlation.requestId,
     icpCorrelation: correlation,
   },
 };
@@ -184,6 +186,29 @@ describe('ICP L0 restart continuity', () => {
         content: 'This must not enter context before delivery.',
       }),
     ]);
+  });
+
+  it('fails closed on the newest malformed observation instead of using older delivery truth', () => {
+    const root = mkdtempSync(join(tmpdir(), 'psfn-icp-malformed-observation-'));
+    roots.push(root);
+    const sender = manager(root, 'sender');
+    sender.recordIcpDeliveryObservation({
+      channelId: CHANNEL,
+      sourceMessageId: SOURCE_ID,
+      status: 'delivered',
+      gatewayMessageId: GATEWAY_ID,
+      deliveredTo: [RECIPIENT],
+    });
+    sender.appendSystemNote(
+      CHANNEL,
+      `{"schemaVersion":1,"kind":"icp_delivery","channelId":${JSON.stringify(CHANNEL)},`
+        + `"sourceMessageId":${JSON.stringify(SOURCE_ID)},"status":`,
+      'icp_delivery',
+    );
+
+    const restarted = manager(root, 'sender');
+    expect(() => restarted.findIcpDeliveryObservation(CHANNEL, SOURCE_ID))
+      .toThrow(/malformed JSON/i);
   });
 
   it('recovers ICP initiation, observation, and source attribution beyond 5,000 later rows', () => {

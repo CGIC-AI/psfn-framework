@@ -1,6 +1,8 @@
 import { isRecord } from '../../shared/utils/types.js';
+import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { appendJsonLine, readJsonLines } from '../jsonl.js';
+import { scanJournalLinesBackward } from '../journals/journal/file-io.js';
 import { CHANNEL_TYPES, type ChannelType, type TurnID, type TurnRecord, type TurnRecordLocation, type TurnRecordMessage, type TurnRecordToolCall, type TurnRecordVersionPointers } from '../../shared/contracts/runtime.js';
 import { sanitizeChannelId } from './store-file-contracts.js';
 import { backfillLegacyTurnId, parseTurnId } from '../../core/turns/id.js';
@@ -483,6 +485,30 @@ function readRecentTurnRecordsFromPath(
   return records.slice(-limit);
 }
 
+function findTurnRecordFromPath(
+  path: string,
+  channelId: string,
+  turnId: string,
+): TurnRecord | null {
+  let found: TurnRecord | null = null;
+  if (!existsSync(path)) return null;
+  scanJournalLinesBackward(path, (rawLine) => {
+    const line = rawLine.trim();
+    if (!line) return false;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(line);
+    } catch {
+      throw new Error(`TurnRecord JSON parse failed for channel ${channelId}`);
+    }
+    const record = normalizeTurnRecord(parsed, channelId);
+    if (record.turnId !== turnId) return false;
+    found = record;
+    return true;
+  });
+  return found;
+}
+
 export function createFilesystemTurnRecordStorePort(sessionsDir: string): TurnRecordStorePort {
   return {
     appendTurnRecord: (record) => {
@@ -491,6 +517,9 @@ export function createFilesystemTurnRecordStorePort(sessionsDir: string): TurnRe
     },
     readRecentTurnRecords: (channelId, limit) => (
       readRecentTurnRecordsFromPath(turnRecordPath(sessionsDir, channelId), channelId, limit)
+    ),
+    findTurnRecord: (channelId, turnId) => (
+      findTurnRecordFromPath(turnRecordPath(sessionsDir, channelId), channelId, turnId)
     ),
   };
 }

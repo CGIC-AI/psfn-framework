@@ -169,7 +169,7 @@ function scanJournalLinesForward(
   return stoppedEarly;
 }
 
-function scanJournalLinesBackward(
+export function scanJournalLinesBackward(
   filePath: string,
   onLine: (line: string) => boolean | void,
 ): boolean {

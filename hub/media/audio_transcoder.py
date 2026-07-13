@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncIterable, AsyncIterator
 from contextlib import suppress
+import shutil
 from typing import Protocol
 
 
@@ -14,7 +15,12 @@ class FfmpegMp3ToFlacTranscoder:
     """Convert ElevenLabs MP3 chunks to the Waveshare's 48 kHz mono FLAC."""
 
     def __init__(self, *, executable: str = "ffmpeg") -> None:
-        self._executable = executable
+        resolved = shutil.which(executable)
+        if resolved is None:
+            raise RuntimeError(
+                "ffmpeg is required for Waveshare voice playback (ElevenLabs MP3 to 48 kHz mono FLAC)",
+            )
+        self._executable = resolved
 
     async def transcode(self, chunks: AsyncIterable[bytes]) -> AsyncIterator[bytes]:
         process = await asyncio.create_subprocess_exec(

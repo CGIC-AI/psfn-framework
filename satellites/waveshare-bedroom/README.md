@@ -77,6 +77,9 @@ near-name exclusions under `wakeword/`. Its training recipe selects checkpoints
 by ambient false activations before recall; touch-to-talk remains available
 independently of the wake detector.
 
+The physical GPIO0 button remains the push-to-talk fallback. A short press on
+the idle face is reserved for headpats and is not repurposed for voice input.
+
 The compiled runtime binds the repo-owned bare `Purrsephone` model directly to
 ESPHome's local microWakeWord component. Detection starts the ESPHome native
 voice-assistant stream, which is consumed by the Pi-side Satellite Hub fallback
@@ -84,6 +87,8 @@ bridge. Home Assistant Assist is not in the conversation path. The bridge runs
 as `psfn-waveshare-bedroom.service`, performs streaming Deepgram STT, sends the
 turn through the authenticated PSFN bedroom endpoint, and returns Purrsephone's
 ElevenLabs stream to the onboard speaker.
+The bridge requires `ffmpeg` to convert ElevenLabs MP3 chunks into the 48 kHz
+mono FLAC format advertised by this firmware's speaker pipeline.
 
 This full upstream image uses a single large factory application partition and
 therefore cannot perform OTA recovery or updates. USB serial remains the update

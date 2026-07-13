@@ -134,6 +134,14 @@ Install Python dependencies for the ESPHome fallback path:
 uv sync --dev
 ```
 
+ESPHome speaker endpoints that advertise FLAC-only playback, including the
+Waveshare bedroom build, also require `ffmpeg` on the bridge host. On Debian or
+Raspberry Pi OS:
+
+```bash
+sudo apt-get update && sudo apt-get install -y ffmpeg
+```
+
 Install TypeScript dependencies for the realtime hub/client path:
 
 ```bash

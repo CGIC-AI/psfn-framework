@@ -103,6 +103,22 @@ replaceRequired(
   "upstream Alexa wake-word model",
 );
 
+// The upstream mute switch only powered the NS4150B amplifier when it was
+// toggled off during active playback. On a normal boot the switch already
+// starts off, leaving GPIO15 low while the media player reports PLAYING. Power
+// the amplifier whenever either playback pipeline starts; explicit mute still
+// turns it off.
+replaceRequired(
+  "    on_announcement:\n      - runtime_controller.event:\n          id: runtime\n          event: announcement_started\n",
+  "    on_announcement:\n      - if:\n          condition:\n            switch.is_off: speaker_mute\n          then:\n            - output.turn_on: speaker_enable\n            - delay: 50ms\n      - runtime_controller.event:\n          id: runtime\n          event: announcement_started\n",
+  "announcement amplifier enable",
+);
+replaceRequired(
+  "    on_play:\n      - runtime_controller.event:\n          id: runtime\n          event: media_playing\n",
+  "    on_play:\n      - if:\n          condition:\n            switch.is_off: speaker_mute\n          then:\n            - output.turn_on: speaker_enable\n            - delay: 50ms\n      - runtime_controller.event:\n          id: runtime\n          event: media_playing\n",
+  "media amplifier enable",
+);
+
 // Preserve the upstream widget IDs and lifecycle scripts while replacing its
 // borrowed character art with the repo-owned Purrsephone state sprites.
 const idleAnimation = /(        - animimg:\n            id: idle_anim[\s\S]*?            src:\n)[\s\S]*?(            duration: 6600ms)/;
@@ -144,14 +160,6 @@ replaceRequired(
   "muted sprite",
 );
 
-// A deliberate tap on Purrsephone's idle face starts the same local
-// voice-assistant/VAD flow as the wake word. LVGL suppresses click events for
-// recognized swipes, so navigation gestures remain independent.
-replaceRequired(
-  "    - id: idle_page\n      bg_color: 0x000000\n      on_swipe_up:\n        - script.execute: swipe_to_voip\n",
-  "    - id: idle_page\n      bg_color: 0x000000\n      on_click:\n        - voice_assistant.start:\n            silence_detection: true\n      on_swipe_up:\n        - script.execute: swipe_to_voip\n",
-  "idle tap-to-talk action",
-);
 // The optional artwork package depends on a mutable ESPHome pull-request head.
 // The base profile already supplies a deterministic neutral-art fallback, so
 // omit remote album artwork until the component exists in a pinned release.

@@ -18,6 +18,14 @@ export class IcpOutstandingInvitationConflictError extends Error {
   }
 }
 
+/** Generic optimistic revocation conflict; never carries the bearer permit id. */
+export class IcpPermitRevocationConflictError extends Error {
+  constructor() {
+    super('ICP permit revocation conflict');
+    this.name = 'IcpPermitRevocationConflictError';
+  }
+}
+
 export interface IcpAutonomyInvalidationFenceEntry {
   companionId: string;
   generation: number;

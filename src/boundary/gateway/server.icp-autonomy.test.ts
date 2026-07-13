@@ -1,5 +1,9 @@
 import { EventEmitter } from 'node:events';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
+import Database from 'better-sqlite3';
 
 import type {
   IcpAutonomyInvalidationFence,
@@ -11,7 +15,11 @@ import type {
 import {
   IcpAutonomyInvalidationConflictError,
   IcpOutstandingInvitationConflictError,
+  IcpPermitRevocationConflictError,
 } from '../../core/icp/autonomy-store-ports.js';
+import { ContactBlockListStore } from '../../core/cogsec/contact-block-list.js';
+import { ContactStore } from '../../core/contacts/store.js';
+import { createContactTool } from '../../core/contacts/tools.js';
 import type {
   IcpAutonomyReasonCode,
   IcpAvailabilityLease,
@@ -24,6 +32,7 @@ import { deriveCompanionAuthToken } from './companion-auth.js';
 import { GatewayCompanionChannelLane } from './companion-channels.js';
 import type { GatewayMultiCompanionConfig } from './multi-companion.js';
 import { GatewayServer, type GatewayServerOptions } from './server.js';
+import type { GatewayAuditStorePort } from './audit-port.js';
 import type { GatewayRpcConnection } from './transport.js';
 
 vi.mock('./transport.js', () => ({
@@ -62,6 +71,7 @@ class RpcMemoryStore implements IcpSharedAutonomyStorePort {
   invalidationGenerations = new Map<string, number>();
   invalidationReasons = new Map<string, IcpAutonomyReasonCode>();
   beforeInvalidate?: () => Promise<void>;
+  beforeConsume?: () => Promise<void>;
 
   async publishAvailability(lease: IcpAvailabilityLease): Promise<IcpAvailabilityLease> {
     return this.publishAvailabilityNow(lease);
@@ -215,6 +225,7 @@ class RpcMemoryStore implements IcpSharedAutonomyStorePort {
   }
 
   async consumePermit(input: IcpPermitConsumptionInput): Promise<IcpPermitConsumptionResult> {
+    await this.beforeConsume?.();
     const current = this.permits.get(input.permitId);
     if (!current) return { outcome: 'not_found', permit: null };
     if (current.conversationId !== input.conversationId
@@ -248,7 +259,7 @@ class RpcMemoryStore implements IcpSharedAutonomyStorePort {
   ): Promise<IcpInitiationPermit> {
     const current = this.permits.get(permitId);
     if (!current || current.status !== 'issued' || current.revision !== expectedRevision) {
-      throw new Error('revocation conflict');
+      throw new IcpPermitRevocationConflictError();
     }
     const revoked: IcpInitiationPermit = {
       ...current,
@@ -442,7 +453,30 @@ function deferred(): { reached: Promise<void>; release: () => void; wait: () => 
   };
 }
 
-async function setup(policy = OPEN_POLICY) {
+function createMockAuditStore(): {
+  store: GatewayAuditStorePort;
+  complete: ReturnType<typeof vi.fn>;
+} {
+  let nextId = 1;
+  const complete = vi.fn(async (_id: number, _durationMs: number, _error?: string) => {});
+  const store: GatewayAuditStorePort = {
+    append: vi.fn(async () => nextId++),
+    complete,
+    recordSummary: vi.fn(async () => nextId++),
+    createSummaryHook: vi.fn(() => async () => {}),
+    enforceRotation: vi.fn(async () => {}),
+    getRecent: vi.fn(async () => []),
+    getByMethod: vi.fn(async () => []),
+    getApprovalEvents: vi.fn(async () => []),
+    count: vi.fn(async () => 0),
+  };
+  return { store, complete };
+}
+
+async function setup(
+  policy = OPEN_POLICY,
+  overrides: Pick<GatewayServerOptions, 'auditStore'> = {},
+) {
   const eventBus = new EventBus();
   const store = new RpcMemoryStore();
   const llmProvider = { stream: vi.fn(), complete: vi.fn() };
@@ -464,6 +498,7 @@ async function setup(policy = OPEN_POLICY) {
     icpAutonomyStore: store,
     icpInitiationPolicyAuthority: { resolve: async () => policy },
     eventBus,
+    ...overrides,
   };
   let onConnection: ((conn: GatewayRpcConnection) => void) | undefined;
   mockedCreateSocketServer.mockImplementation((_path, callback) => {
@@ -617,6 +652,145 @@ describe('GatewayServer ICP autonomy RPC', () => {
       status: 'revoked',
       reasonCode: 'peer_offline',
     }));
+  });
+
+  it.each([
+    ['sender', A],
+    ['recipient', B],
+  ] as const)(
+    'linearizes the real contact block tool against permit consumption when the %s blocks',
+    async (_side, blockerId) => {
+      const { connect, store } = await setup();
+      const a = connect();
+      const b = connect();
+      await identify(a, A, 120);
+      await identify(b, B, 121);
+      await invoke(b, 122, 'companion.availability.publish', {
+        companionId: B,
+        state: 'open_to_chat',
+        expiresAtMs: Date.now() + 120_000,
+        revision: 1,
+      });
+      const issue = await invoke(a, 123, 'companion.initiation.permit.issue', {
+        companionId: A,
+        candidate: candidate('12121212-1212-4212-8212-121212121212'),
+        channelId: CHANNEL,
+        permitExpiresAtMs: Date.now() + 60_000,
+      });
+      expect(issue.result.decision).toEqual({ eligible: true });
+      const permit = issue.result.permit as IcpInitiationPermit;
+
+      const consumeGate = deferred();
+      store.beforeConsume = consumeGate.wait;
+      const consuming = invoke(a, 124, 'companion.initiation.permit.consume', {
+        companionId: A,
+        permitId: permit.permitId,
+        conversationId: permit.conversationId,
+        recipientCompanionId: B,
+        channelId: CHANNEL,
+      });
+      await consumeGate.reached;
+
+      const dir = mkdtempSync(join(tmpdir(), 'psfn-icp-block-race-'));
+      const db = new Database(':memory:');
+      const blockList = new ContactBlockListStore(join(dir, 'contact-block-list.json'));
+      const blockerConnection = blockerId === A ? a : b;
+      const peerId = blockerId === A ? B : A;
+      let invalidationCall = 0;
+      let racedPermitId: string | undefined;
+      const tool = createContactTool(new ContactStore(db, blockerId), {
+        blockList,
+        permitInvalidation: {
+          invalidatePendingInitiationPermitsForBlock: async () => {
+            invalidationCall += 1;
+            const response = await invoke(
+              blockerConnection,
+              invalidationCall === 1 ? 125 : 127,
+              'companion.initiation.permit.invalidate_for_self',
+              { companionId: blockerId, reasonCode: 'peer_blocked' },
+            );
+            if (response.error) throw new Error(response.error.message);
+            if (invalidationCall === 1) {
+              const racedIssue = await invoke(a, 126, 'companion.initiation.permit.issue', {
+                companionId: A,
+                candidate: candidate('14141414-1414-4414-8414-141414141414'),
+                channelId: CHANNEL,
+                permitExpiresAtMs: Date.now() + 60_000,
+              });
+              expect(racedIssue.result.decision).toEqual({ eligible: true });
+              racedPermitId = racedIssue.result.permit.permitId as string;
+            }
+            return response.result;
+          },
+        },
+      });
+
+      try {
+        const blocked = await tool.execute('block-peer', {
+          action: 'block',
+          channel: 'companion',
+          channelUserId: peerId,
+          blockMode: 'hard',
+        });
+        expect(blocked.details?.isError).not.toBe(true);
+        expect(blockList.get('companion', peerId)).toMatchObject({ mode: 'hard' });
+        expect(store.permits.get(permit.permitId)).toMatchObject({
+          status: 'revoked',
+          reasonCode: 'peer_blocked',
+        });
+        expect(racedPermitId).toBeDefined();
+        expect(store.permits.get(racedPermitId!)).toMatchObject({
+          status: 'revoked',
+          reasonCode: 'peer_blocked',
+        });
+
+        consumeGate.release();
+        await expect(consuming).resolves.toMatchObject({
+          result: { outcome: 'revoked', reasonCode: 'permit_revoked' },
+        });
+      } finally {
+        consumeGate.release();
+        db.close();
+        rmSync(dir, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it('keeps permit bearer values out of revocation conflict responses and gateway audit errors', async () => {
+    const audit = createMockAuditStore();
+    const { connect } = await setup(OPEN_POLICY, { auditStore: audit.store });
+    const a = connect();
+    const b = connect();
+    await identify(a, A, 130);
+    await identify(b, B, 131);
+    await invoke(b, 132, 'companion.availability.publish', {
+      companionId: B,
+      state: 'open_to_chat',
+      expiresAtMs: Date.now() + 120_000,
+      revision: 1,
+    });
+    const issue = await invoke(a, 133, 'companion.initiation.permit.issue', {
+      companionId: A,
+      candidate: candidate('13131313-1313-4313-8313-131313131313'),
+      channelId: CHANNEL,
+      permitExpiresAtMs: Date.now() + 60_000,
+    });
+    const permitId = issue.result.permit.permitId as string;
+
+    const conflict = await invoke(a, 134, 'companion.initiation.permit.revoke', {
+      companionId: A,
+      permitId,
+      expectedRevision: 2,
+    });
+
+    expect(conflict.error).toBeDefined();
+    expect(JSON.stringify(conflict.error)).toContain('ICP permit revocation conflict');
+    expect(JSON.stringify(conflict.error)).not.toContain(permitId);
+    const auditErrors = audit.complete.mock.calls
+      .map((call: unknown[]) => call[2])
+      .filter((error): error is string => typeof error === 'string');
+    expect(auditErrors).toContain('ICP permit revocation conflict');
+    expect(auditErrors.join('\n')).not.toContain(permitId);
   });
 
   it('does not admit a reconnect until durable disconnect invalidation completes', async () => {

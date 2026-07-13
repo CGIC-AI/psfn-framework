@@ -3,6 +3,7 @@ import type { Pool, PoolClient, QueryResultRow } from 'pg';
 import {
   IcpAutonomyInvalidationConflictError,
   IcpOutstandingInvitationConflictError,
+  IcpPermitRevocationConflictError,
   type IcpAutonomyInvalidationFence,
   IcpPermitConsumptionInput,
   IcpPermitConsumptionResult,
@@ -23,7 +24,7 @@ import {
   type IcpInitiationPermit,
 } from '../../shared/contracts/icp-autonomy.js';
 import { parseCompanionChannelId } from '../../shared/contracts/companion-channels.js';
-import { isRfc4122Uuid } from '../../shared/utils/types.js';
+import { isRecord, isRfc4122Uuid } from '../../shared/utils/types.js';
 import {
   createPostgresPool,
   executeQuery,
@@ -162,7 +163,7 @@ function safeInteger(value: string | number, field: string): number {
   return parsed;
 }
 
-function requireUuid(value: string, field: string): string {
+function requireUuid(value: unknown, field: string): string {
   if (!isRfc4122Uuid(value)) throw new Error(`${field} must be a lowercase RFC-4122 UUID`);
   return value;
 }
@@ -277,7 +278,7 @@ function permitMatches(permit: IcpInitiationPermit, input: IcpPermitConsumptionI
 }
 
 function normalizeFence(
-  input: IcpAutonomyInvalidationFence,
+  input: unknown,
   firstCompanionId: string,
   secondCompanionId: string,
 ): IcpAutonomyInvalidationFence {
@@ -286,24 +287,29 @@ function normalizeFence(
     requireUuid(secondCompanionId, 'secondCompanionId'),
   ].sort();
   if (pair[0] === pair[1]) throw new Error('Invalidation fence requires distinct companions');
-  if (!input || !Array.isArray(input.companions) || input.companions.length !== 2) {
+  if (!isRecord(input) || !Array.isArray(input.companions) || input.companions.length !== 2) {
     throw new Error('expectedInvalidationFence must contain exactly two companions');
   }
-  const entries = input.companions.map((entry, index) => ({
-    companionId: requireUuid(entry.companionId, `expectedInvalidationFence.companions[${index}].companionId`),
-    generation: requireNonNegativeInteger(
-      entry.generation,
-      `expectedInvalidationFence.companions[${index}].generation`,
-    ),
-  })).sort((left, right) => left.companionId.localeCompare(right.companionId));
+  const entries = input.companions.map((entry, index) => {
+    if (!isRecord(entry)) {
+      throw new Error(`expectedInvalidationFence.companions[${index}] must be an object`);
+    }
+    return {
+      companionId: requireUuid(entry.companionId, `expectedInvalidationFence.companions[${index}].companionId`),
+      generation: requireNonNegativeInteger(
+        entry.generation,
+        `expectedInvalidationFence.companions[${index}].generation`,
+      ),
+    };
+  }).sort((left, right) => left.companionId.localeCompare(right.companionId));
   if (entries[0]?.companionId !== pair[0] || entries[1]?.companionId !== pair[1]) {
     throw new Error('expectedInvalidationFence does not match permit participants');
   }
   return { companions: [entries[0], entries[1]] };
 }
 
-function requireNonNegativeInteger(value: number, field: string): number {
-  if (!Number.isSafeInteger(value) || value < 0) {
+function requireNonNegativeInteger(value: unknown, field: string): number {
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) {
     throw new Error(`${field} must be a non-negative safe integer`);
   }
   return value;
@@ -902,7 +908,7 @@ export class PostgresIcpSharedAutonomyStore implements IcpSharedAutonomyStorePor
       requireTimestamp(revokedAtMs, 'revokedAtMs'),
       reasonCode,
     ]);
-    if (!row) throw new Error(`ICP permit revocation conflict for ${permitId}`);
+    if (!row) throw new IcpPermitRevocationConflictError();
     return mapPermit(row);
   }
 

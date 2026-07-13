@@ -647,8 +647,8 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
     }) as IcpPermitRevokeResult;
   }
 
-  /** Invalidate every pending permit involving this companion after a block change. */
-  async companionInvalidateInitiationPermitsForBlock(
+  /** Fence and revoke pending permits while linearizing a companion contact block. */
+  async invalidatePendingInitiationPermitsForBlock(
     params: Omit<IcpPermitInvalidateSelfParams, 'companionId'> = { reasonCode: 'peer_blocked' },
   ): Promise<{ revokedCount: number }> {
     return await this.rpcInstance.request('companion.initiation.permit.invalidate_for_self', {

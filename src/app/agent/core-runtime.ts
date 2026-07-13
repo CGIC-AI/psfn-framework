@@ -408,6 +408,7 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
     blockList: new ContactBlockListStore(
       resolveContactBlockListPath(pathSnapshot.companionDataDir),
     ),
+    ...(config.multiCompanion === true ? { permitInvalidation: gateway } : {}),
     getIntakeSinkGate: () => intakeSinkGate,
     ...(primaryTelegramUserId
       ? {

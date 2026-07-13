@@ -25,6 +25,7 @@ import { withCapabilityRequirement } from '../../system/capabilities/requirement
 import { INTAKE_FIREWALL_NOTICE_TEMPLATES } from '../cogsec/intake-firewall-notice-templates.js';
 import type { IntakeSinkGate } from '../cogsec/intake/sink-gates.js';
 import { tagToolWithReversibility } from '../../system/capabilities/safeguards.js';
+import type { ContactBlockPermitInvalidationPort } from './contact-block-permit-invalidation-port.js';
 
 const CONTACT_ACTION_NAMES = [
   'list',
@@ -707,6 +708,7 @@ async function executeUnifiedContactAction(
   params: ContactToolParams = {},
   proposalQueue?: ApprovalQueuePort,
   blockList?: ContactBlockListStore,
+  permitInvalidation?: ContactBlockPermitInvalidationPort,
   getIntakeSinkGate?: () => IntakeSinkGate | null,
 ): Promise<AgentToolResult<{ isError?: boolean }>> {
   const action = normalizeContactAction(params);
@@ -731,7 +733,7 @@ async function executeUnifiedContactAction(
     case 'set_machine_intelligence':
       return await executeContactSetMachineIntelligence(contactStore, params);
     case 'block':
-      return await executeContactBlock(contactStore, blockList, params);
+      return await executeContactBlock(contactStore, blockList, permitInvalidation, params);
     case 'unblock':
       return await executeContactUnblock(contactStore, blockList, params);
   }
@@ -766,9 +768,25 @@ function collectContactBlockTargets(contact: Contact): Array<{ channel: string; 
   return [...targets.values()];
 }
 
+function isCompanionBlockChannel(channel: string): boolean {
+  return channel.trim().toLowerCase() === 'companion';
+}
+
+async function invalidatePendingPermitsForCompanionBlock(
+  targets: ReadonlyArray<{ channel: string }>,
+  permitInvalidation: ContactBlockPermitInvalidationPort | undefined,
+): Promise<void> {
+  if (!targets.some(target => isCompanionBlockChannel(target.channel))) return;
+  if (!permitInvalidation) {
+    throw new Error('Companion block permit invalidation is unavailable in this runtime');
+  }
+  await permitInvalidation.invalidatePendingInitiationPermitsForBlock();
+}
+
 async function executeContactBlock(
   contactStore: ContactStorePort,
   blockList: ContactBlockListStore | undefined,
+  permitInvalidation: ContactBlockPermitInvalidationPort | undefined,
   params: ContactToolParams,
 ): Promise<AgentToolResult<{ isError?: boolean }>> {
   if (!blockList) {
@@ -791,6 +809,8 @@ async function executeContactBlock(
     const contact = params.contactId
       ? await lookupContact(contactStore, params.contactId.trim())
       : undefined;
+    const targets = [{ channel }];
+    await invalidatePendingPermitsForCompanionBlock(targets, permitInvalidation);
     blockList.block({
       channelType: channel,
       contactId: channelUserId,
@@ -800,6 +820,9 @@ async function executeContactBlock(
       ...(reason ? { reason } : {}),
       actor,
     });
+    // Drain permits issued after the first fence but before the block became
+    // visible to deterministic policy evaluation.
+    await invalidatePendingPermitsForCompanionBlock(targets, permitInvalidation);
     return textResult(
       `Blocked ${channel}:${channelUserId} (${mode} block, scope=${scope}). `
       + 'Reversible with action=unblock; the operator sees soft-block drops in the cogsec tab.',
@@ -825,6 +848,7 @@ async function executeContactBlock(
       true,
     );
   }
+  await invalidatePendingPermitsForCompanionBlock(targets, permitInvalidation);
   for (const target of targets) {
     blockList.block({
       channelType: target.channel,
@@ -837,6 +861,7 @@ async function executeContactBlock(
       actor,
     });
   }
+  await invalidatePendingPermitsForCompanionBlock(targets, permitInvalidation);
   const summary = targets.map((t) => `${t.channel}:${t.userId}`).join(', ');
   return textResult(
     `Blocked ${contact.displayName} (${contact.id}) across ${targets.length} identity(ies): ${summary}. `
@@ -947,6 +972,12 @@ export interface CreateContactToolOptions {
    */
   blockList?: ContactBlockListStore;
   /**
+   * Gateway-owned ICP permit invalidation seam. Required when action=block
+   * targets a companion identity. A pre-write failure aborts persistence; a
+   * post-write failure is surfaced while the safer fail-closed block remains.
+   */
+  permitInvalidation?: ContactBlockPermitInvalidationPort;
+  /**
    * Intake sink gate provider (htm9.3): trust_mutation gate evaluated before
    * action=set_trust applies. Null/absent = firewall off.
    */
@@ -959,6 +990,7 @@ export function createContactTool(
 ): SubstrateAgentTool {
   const proposalQueue = options.proposalQueue;
   const blockList = options.blockList;
+  const permitInvalidation = options.permitInvalidation;
   const getIntakeSinkGate = options.getIntakeSinkGate;
   const tool: SubstrateAgentTool = {
     name: 'contact',
@@ -1062,7 +1094,14 @@ export function createContactTool(
       let actionForError = typeof params.action === 'string' ? params.action : undefined;
       try {
         actionForError = normalizeContactAction(params);
-        return await executeUnifiedContactAction(contactStore, params, proposalQueue, blockList, getIntakeSinkGate);
+        return await executeUnifiedContactAction(
+          contactStore,
+          params,
+          proposalQueue,
+          blockList,
+          permitInvalidation,
+          getIntakeSinkGate,
+        );
       } catch (error) {
         const suffix = actionForError ? ` for action=${actionForError}` : '';
         return textResultWithError(`contact failed${suffix}: ${errorMessage(error)}`, true);

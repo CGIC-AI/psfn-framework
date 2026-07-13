@@ -1429,16 +1429,20 @@ export class GatewayServer {
   }
 
   private async awaitIcpInvalidationBeforeReconnect(companionId: string): Promise<void> {
-    while (true) {
-      const pending = this.pendingIcpInvalidations.get(companionId);
-      if (!pending) return;
+    let pending = this.pendingIcpInvalidations.get(companionId);
+    while (pending) {
       const outcome = await pending.completion;
-      if (this.pendingIcpInvalidations.get(companionId) !== pending) continue;
+      const current = this.pendingIcpInvalidations.get(companionId);
+      if (current !== pending) {
+        pending = current;
+        continue;
+      }
       if (outcome.ok) {
         this.pendingIcpInvalidations.delete(companionId);
         return;
       }
       await this.queueIcpInvalidation(companionId, pending.reasonCode);
+      pending = this.pendingIcpInvalidations.get(companionId);
     }
   }
 

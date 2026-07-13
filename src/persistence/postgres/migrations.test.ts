@@ -115,6 +115,7 @@ describe('Postgres live schema migrations', () => {
     const localSql = migrationSql(POSTGRES_INTENTION_MIGRATIONS);
 
     for (const table of [
+      'icp_autonomy_invalidation_fences',
       'icp_availability_leases',
       'icp_conversation_episodes',
       'icp_initiation_permits',
@@ -122,6 +123,7 @@ describe('Postgres live schema migrations', () => {
       expect(sharedSql).toContain(`CREATE TABLE IF NOT EXISTS ${table}`);
     }
     expect(sharedSql).toContain("VALUES (4, 'icp-autonomy-control-plane')");
+    expect(sharedSql).toContain("VALUES (5, 'icp-autonomy-invalidation-fences')");
     expect(sharedSql).toContain('participant_companion_ids UUID[] NOT NULL');
     expect(sharedSql).toContain('UNIQUE (candidate_id)');
     expect(sharedSql).toContain('idx_icp_initiation_permits_outstanding_pair');

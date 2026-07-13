@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { IcpPermitRevocationConflictError } from '../../core/icp/autonomy-store-ports.js';
 import { PostgresIcpSharedAutonomyStore } from './icp-shared-autonomy-store.js';
 import { SHARED_SCHEMA_NAME } from './migrations.js';
 
@@ -416,7 +417,15 @@ describe('PostgresIcpSharedAutonomyStore', () => {
       1,
       9_999,
       'operator_cancelled',
-    )).rejects.toThrow('revocation conflict');
+    )).rejects.toBeInstanceOf(IcpPermitRevocationConflictError);
+    expect(mocks.queryOne).toHaveBeenCalledOnce();
+    mocks.queryOne.mockResolvedValue(undefined);
+    await expect(store.revokePermit(
+      PERMIT_ID,
+      1,
+      9_999,
+      'operator_cancelled',
+    )).rejects.toThrow('ICP permit revocation conflict');
     const [, sql] = mocks.queryOne.mock.calls[0] as [unknown, string];
     expect(sql).toContain('issued_at_ms <= $3');
   });

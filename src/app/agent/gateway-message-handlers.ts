@@ -166,6 +166,7 @@ export interface GatewayMessageGateway {
     recipientCompanionId: string;
     channelId: string;
     rootInitiationId: string;
+    peerContactId: string;
   }): Promise<{ outcome: string }>;
   companionReportFailure(params: CompanionMessageFailureReportParams): Promise<unknown>;
   onCompanionDeliveryFailure(

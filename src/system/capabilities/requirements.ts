@@ -144,7 +144,9 @@ function resolveContactRequirement(
       parameterNames.length === 0
       || (parameterNames.length === 1 && typeof params.contactId === 'string')
     );
-  if (legacyLookupShape || action === 'list' || action === 'lookup') return 'identity.read';
+  if (legacyLookupShape || action === 'list' || action === 'search' || action === 'lookup') {
+    return 'identity.read';
+  }
   if (actionIn(action, CONTACT_WRITE_ACTIONS)) return 'identity.write.runtime';
   return IDENTITY_READ_RUNTIME_WRITE;
 }

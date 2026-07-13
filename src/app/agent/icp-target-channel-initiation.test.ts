@@ -45,6 +45,18 @@ function consumedPermit(): IcpInitiationPermit {
   };
 }
 
+function expiredConsumedPermit(): IcpInitiationPermit {
+  const nowMs = Date.now();
+  return {
+    ...permit(),
+    issuedAtMs: nowMs - 120_000,
+    expiresAtMs: nowMs - 30_000,
+    status: 'consumed',
+    consumedAtMs: nowMs - 60_000,
+    revision: 2,
+  };
+}
+
 function correlation(
   turnId = '018f22a2-52b8-7a3a-8c16-25b7b14f7089',
 ): IcpConversationCorrelation {
@@ -238,6 +250,49 @@ describe('ICP target-channel initiation', () => {
     expect(result).toMatchObject({ disposition: 'delivered', recoveredTurn: true });
   });
 
+  it('recovers an expired consumed permit only from exact durable delivery evidence', async () => {
+    const durableCorrelation = correlation();
+    const durableResponse = response({
+      id: durableCorrelation.requestId,
+      channelId: CHANNEL,
+      channelType: 'companion',
+      authorId: 'system:icp-initiation',
+      authorName: 'ICP Initiation',
+      content: 'private trigger',
+      timestamp: new Date(),
+      routing: { source: 'companion', icpCorrelation: durableCorrelation },
+    });
+    const restarted = createHarness({
+      content: durableResponse.content,
+      correlation: durableCorrelation,
+      recoveryResponse: durableResponse,
+    });
+    restarted.findIcpDeliveryObservation.mockResolvedValueOnce({
+      channelId: CHANNEL,
+      sourceMessageId: durableCorrelation.messageId,
+      status: 'failed',
+      error: 'gateway restarted after consumption',
+      recoveryResponse: durableResponse,
+    });
+
+    await expect(restarted.initiator.initiate({
+      permit: expiredConsumedPermit(),
+      rootInitiationId: ROOT,
+      peerContactId: CONTACT_ID,
+    })).resolves.toMatchObject({ disposition: 'delivered', recoveredTurn: true });
+    expect(restarted.handleMessage).toHaveBeenCalledTimes(1);
+    expect(restarted.sendInitiation).toHaveBeenCalledTimes(1);
+
+    const missingEvidence = createHarness();
+    await expect(missingEvidence.initiator.initiate({
+      permit: expiredConsumedPermit(),
+      rootInitiationId: ROOT,
+      peerContactId: CONTACT_ID,
+    })).rejects.toThrow(/missing durable/i);
+    expect(missingEvidence.handleMessage).not.toHaveBeenCalled();
+    expect(missingEvidence.sendInitiation).not.toHaveBeenCalled();
+  });
+
   it('rejects a failed restart with whitespace-only transport content before execution', async () => {
     const durableCorrelation = correlation();
     const whitespaceResponse = {
@@ -386,6 +441,7 @@ describe('ICP target-channel initiation', () => {
       recipientCompanionId: RECIPIENT,
       channelId: CHANNEL,
       rootInitiationId: ROOT,
+      peerContactId: CONTACT_ID,
     });
     expect(harness.sendInitiation).not.toHaveBeenCalled();
     expect(harness.recordDeliveryObservation).toHaveBeenCalledWith(expect.objectContaining({

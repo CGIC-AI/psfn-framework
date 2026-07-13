@@ -67,6 +67,10 @@ export interface IcpOwnAvailabilityResult {
   mutableByCompanion: boolean;
 }
 
+export interface IcpOwnAvailabilityReadParams {
+  companionId?: string;
+}
+
 export type IcpInitiationHandoffPrepareResult =
   | {
       authorized: true;
@@ -207,6 +211,15 @@ export function parseIcpPeerAvailabilityReadParams(value: unknown): { peerCompan
   return { peerCompanionId: requireUuid(value.peerCompanionId, 'peerCompanionId') };
 }
 
+export function parseIcpOwnAvailabilityReadParams(value: unknown): IcpOwnAvailabilityReadParams {
+  if (!isRecord(value)) throw new Error('ICP own availability params must be an object');
+  assertNoUnknownKeys(value, ['companionId'], 'ICP own availability params');
+  if (value.companionId !== undefined) {
+    requireUuid(value.companionId, 'companionId');
+  }
+  return value.companionId === undefined ? {} : { companionId: value.companionId };
+}
+
 export function parseIcpInitiationHandoffPrepareParams(value: unknown): {
   permitId: string;
   peerContactId: string;
@@ -229,6 +242,7 @@ export function parseIcpPermitConsumeParams(value: unknown): {
   recipientCompanionId: string;
   channelId: string;
   rootInitiationId: string;
+  peerContactId: string;
 } {
   if (!isRecord(value)) throw new Error('ICP permit consume params must be an object');
   assertNoUnknownKeys(
@@ -239,6 +253,7 @@ export function parseIcpPermitConsumeParams(value: unknown): {
       'recipientCompanionId',
       'channelId',
       'rootInitiationId',
+      'peerContactId',
       'companionId',
     ],
     'ICP permit consume params',
@@ -249,6 +264,7 @@ export function parseIcpPermitConsumeParams(value: unknown): {
     recipientCompanionId: requireUuid(value.recipientCompanionId, 'recipientCompanionId'),
     channelId: requireTrimmedString(value.channelId, 'channelId'),
     rootInitiationId: requireUuid(value.rootInitiationId, 'rootInitiationId'),
+    peerContactId: requireTrimmedString(value.peerContactId, 'peerContactId'),
   };
 }
 

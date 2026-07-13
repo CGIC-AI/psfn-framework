@@ -110,6 +110,16 @@ describe('agent-facing ICP autonomy runtime', () => {
     expect(gateway.companionReadPeerAvailability).not.toHaveBeenCalled();
   });
 
+  it.each(['lookup', 'list'])('propagates contact-store infrastructure failures during %s', async mode => {
+    const { runtime, store, gateway } = setup();
+    vi.mocked(store.getByChannelIdentity).mockRejectedValue(new Error('postgres connection lost'));
+    const operation = mode === 'lookup'
+      ? runtime.readKnownPeerAvailability(contact())
+      : runtime.listKnownPeerAvailability();
+    await expect(operation).rejects.toThrow('postgres connection lost');
+    expect(gateway.companionReadPeerAvailability).not.toHaveBeenCalled();
+  });
+
   it('prepares and executes the exact permit/contact binding through the target command', async () => {
     const { runtime, gateway, command } = setup();
     await runtime.executeCompanionOutreach('peer-contact-b', PERMIT_ID);
@@ -133,6 +143,16 @@ describe('agent-facing ICP autonomy runtime', () => {
     });
     await expect(runtime.executeCompanionOutreach('peer-contact-b', PERMIT_ID))
       .rejects.toThrow(/recipient does not match/i);
+    expect(command.execute).not.toHaveBeenCalled();
+  });
+
+  it('rechecks capability and tool-overlay authorization after broker preparation', async () => {
+    const { runtime, gateway, command } = setup();
+    const authorized = vi.fn().mockReturnValue(false);
+    await expect(runtime.executeCompanionOutreach('peer-contact-b', PERMIT_ID, authorized))
+      .rejects.toThrow(/authorization changed/i);
+    expect(gateway.companionPrepareInitiationHandoff).toHaveBeenCalledOnce();
+    expect(authorized).toHaveBeenCalledOnce();
     expect(command.execute).not.toHaveBeenCalled();
   });
 });

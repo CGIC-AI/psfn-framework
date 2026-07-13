@@ -56,6 +56,7 @@ import type {
   IcpInitiationPermitIssueInput,
   IcpInitiationPermitIssueResult,
   IcpInitiationPreflightInput,
+  IcpOwnAvailabilityReadParams,
   IcpOwnAvailabilityResult,
   IcpPermitConsumeResult,
   IcpPeerAvailabilityResult,
@@ -772,6 +773,7 @@ export interface IcpPermitConsumeParams {
   recipientCompanionId: string;
   channelId: string;
   rootInitiationId: string;
+  peerContactId: string;
   companionId?: string;
 }
 
@@ -808,7 +810,7 @@ export interface GatewayMethods {
   'companion.availability.publish': [IcpAvailabilityPublishParams, IcpAvailabilityLease];
   'companion.availability.clear': [IcpAvailabilityClearParams, { cleared: boolean }];
   'companion.availability.read_peer': [IcpPeerAvailabilityReadParams, IcpPeerAvailabilityResult];
-  'companion.availability.read_self': [Record<string, never>, IcpOwnAvailabilityResult];
+  'companion.availability.read_self': [IcpOwnAvailabilityReadParams, IcpOwnAvailabilityResult];
   'companion.initiation.preflight': [IcpInitiationPreflightParams, IcpInitiationGateDecision];
   'companion.initiation.permit.issue': [IcpInitiationPermitIssueParams, IcpInitiationPermitIssueResult];
   'companion.initiation.permit.prepare_handoff': [IcpInitiationHandoffPrepareParams, IcpInitiationHandoffPrepareResult];

@@ -54,6 +54,11 @@ function parseCompanionNotifyParams(value: unknown): CompanionNotifyParams {
 
 function parseDeferredPayload(value: unknown): DeferredCompanionOutreachPayload | null {
   if (!isRecord(value)) return null;
+  try {
+    assertNoUnknownKeys(value, ['contactId', 'permitId'], 'deferred companion outreach payload');
+  } catch {
+    return null;
+  }
   const contactId = value.contactId;
   const permitId = value.permitId;
   if (typeof contactId !== 'string' || !contactId || contactId.trim() !== contactId) return null;
@@ -155,7 +160,11 @@ export function registerDeferredCompanionOutreachRuntime(input: {
       }
       const payload = parseDeferredPayload(action.payload);
       if (!payload) throw new Error('Deferred companion outreach payload is malformed');
-      await input.runtime.executeCompanionOutreach(payload.contactId, payload.permitId);
+      await input.runtime.executeCompanionOutreach(
+        payload.contactId,
+        payload.permitId,
+        input.isExecutionAuthorized,
+      );
     },
     { executionMode: 'background' },
   );

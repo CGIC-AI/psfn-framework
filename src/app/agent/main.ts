@@ -1190,6 +1190,10 @@ async function main(): Promise<void> {
     await stopRegisteredRuntime();
   };
 
+  // Start only after every restored post-turn action kind has a handler and
+  // the target-channel command is registered. Otherwise the first scheduler
+  // tick can terminally discard a due durable action as `missing_handler`.
+  scheduler.start();
   await eventBus.emit('system.init', {});
   await eventBus.emit('system.ready', {});
 

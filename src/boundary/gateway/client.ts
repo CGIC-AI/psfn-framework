@@ -149,6 +149,7 @@ import type {
   IcpInitiationGateDecision,
   IcpInitiationHandoffPrepareResult,
   IcpInitiationPermitIssueResult,
+  IcpOwnAvailabilityReadParams,
   IcpOwnAvailabilityResult,
   IcpPeerAvailabilityResult,
 } from './icp-autonomy-contract.js';
@@ -652,9 +653,11 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
   }
 
   async companionReadOwnAvailability(): Promise<IcpOwnAvailabilityResult> {
-    return await this.rpcInstance.request('companion.availability.read_self', {
+    const params: IcpOwnAvailabilityReadParams = {
       ...(this.companionId ? { companionId: this.companionId } : {}),
-    }) as IcpOwnAvailabilityResult;
+    };
+    return await this.rpcInstance.request('companion.availability.read_self', params) as
+      IcpOwnAvailabilityResult;
   }
 
   async companionInitiationPreflight(

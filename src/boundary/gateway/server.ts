@@ -748,6 +748,7 @@ export class GatewayServer {
         recipientCompanionId: initiation.recipientCompanionId,
         channelId,
         rootInitiationId: correlation.rootInitiationId,
+        peerContactId: correlation.peerContactId,
       });
       if ((consumption.outcome !== 'consumed' && consumption.outcome !== 'replayed')
         || !consumption.permit) {

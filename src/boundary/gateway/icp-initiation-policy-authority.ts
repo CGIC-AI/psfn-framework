@@ -24,12 +24,21 @@ export interface IcpInitiationHandoffPolicyDecision {
   reasonCode?: IcpAutonomyReasonCode;
 }
 
+export type IcpAuthorizedHandoffOperationResult<T> =
+  | { decision: IcpInitiationHandoffPolicyDecision & { eligible: false } }
+  | { decision: IcpInitiationHandoffPolicyDecision & { eligible: true }; result: T };
+
 /** Trusted gateway-owned resolver for every deterministic pre-LLM policy fact. */
 export interface GatewayIcpInitiationPolicyAuthority {
   resolve(input: IcpInitiationPolicyAuthorityInput): Promise<IcpInitiationPolicySnapshot>;
   authorizeHandoff(
     input: IcpInitiationHandoffPolicyInput,
   ): Promise<IcpInitiationHandoffPolicyDecision>;
+  /** Hold canonical candidate/contact/trust locks through the final permit operation. */
+  runAuthorizedHandoff<T>(
+    input: IcpInitiationHandoffPolicyInput,
+    operation: () => Promise<T>,
+  ): Promise<IcpAuthorizedHandoffOperationResult<T>>;
   close(): Promise<void>;
 }
 

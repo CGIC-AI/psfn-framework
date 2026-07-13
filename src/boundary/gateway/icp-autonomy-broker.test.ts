@@ -399,6 +399,25 @@ function makeBroker(input: {
               ? { reasonCode: 'policy_denied' as const }
               : {}),
       }),
+      runAuthorizedHandoff: async (_input, operation) => {
+        const eligible = input.policy?.canonicalPeerContact !== false
+          && input.policy?.trustAllows !== false
+          && input.policy?.senderBlocksPeer !== true
+          && input.policy?.peerBlocksSender !== true;
+        if (!eligible) {
+          return {
+            decision: {
+              eligible: false as const,
+              reasonCode: input.policy?.canonicalPeerContact === false
+                ? 'invalid_identity' as const
+                : input.policy?.senderBlocksPeer === true || input.policy?.peerBlocksSender === true
+                  ? 'peer_blocked' as const
+                  : 'policy_denied' as const,
+            },
+          };
+        }
+        return { decision: { eligible: true as const }, result: await operation() };
+      },
     },
     eventBus,
     alarm,
@@ -703,6 +722,7 @@ describe('GatewayIcpAutonomyBroker', () => {
       recipientCompanionId: B,
       channelId: CHANNEL,
       rootInitiationId: ROOT_ID,
+      peerContactId: 'contact-b',
     };
     await expect(broker.consumePermit(A, { ...consumeInput, rootInitiationId: C }))
       .resolves.toMatchObject({ outcome: 'mismatch' });
@@ -716,6 +736,28 @@ describe('GatewayIcpAutonomyBroker', () => {
       expect.any(String),
       expect.objectContaining({ senderCompanionId: A }),
     );
+  });
+
+  it('revalidates canonical handoff policy while the final permit operation is guarded', async () => {
+    const policy = { ...OPEN_POLICY };
+    const { broker, store } = makeBroker({ policy });
+    await makeAvailable(store);
+    await expect(broker.issuePermit(A, {
+      candidate: candidate(),
+      channelId: CHANNEL,
+      permitExpiresAtMs: NOW + 30_000,
+    })).resolves.toMatchObject({ decision: { eligible: true } });
+    policy.trustAllows = false;
+
+    await expect(broker.consumePermit(A, {
+      permitId: PERMIT_ID,
+      conversationId: CONVERSATION_ID,
+      recipientCompanionId: B,
+      channelId: CHANNEL,
+      rootInitiationId: ROOT_ID,
+      peerContactId: 'contact-b',
+    })).resolves.toMatchObject({ outcome: 'mismatch', reasonCode: 'policy_denied' });
+    expect(store.permits.get(PERMIT_ID)).toMatchObject({ status: 'issued', revision: 1 });
   });
 
   it('allows only one outstanding invitation per unordered pair', async () => {
@@ -801,6 +843,7 @@ describe('GatewayIcpAutonomyBroker', () => {
         recipientCompanionId: B,
         channelId: CHANNEL,
         rootInitiationId: ROOT_ID,
+        peerContactId: 'contact-b',
       });
       await gate.reached;
       await triggerInvalidationRace(broker, kind);

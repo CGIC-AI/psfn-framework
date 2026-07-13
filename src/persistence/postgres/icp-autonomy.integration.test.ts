@@ -56,6 +56,21 @@ async function freshDatabaseUrl(): Promise<string> {
   return (await harness.createDatabase()).databaseUrl;
 }
 
+function deferred(): { reached: Promise<void>; release: () => void; wait: () => Promise<void> } {
+  let markReached!: () => void;
+  let release!: () => void;
+  const reached = new Promise<void>(resolve => { markReached = resolve; });
+  const released = new Promise<void>(resolve => { release = resolve; });
+  return {
+    reached,
+    release,
+    wait: async () => {
+      markReached();
+      await released;
+    },
+  };
+}
+
 describe('ICP autonomy Postgres persistence', () => {
   it('rejects stale issue and consume operations after durable invalidation advances', async () => {
     const databaseUrl = await freshDatabaseUrl();
@@ -423,6 +438,79 @@ describe('ICP autonomy Postgres persistence', () => {
         permit: handoffPermit,
         nowMs,
       })).resolves.toEqual({ eligible: false, reasonCode: 'invalid_identity' });
+
+      const assertMutationWaitsForAuthorization = async (
+        mutate: () => Promise<unknown>,
+        expectedDenial: 'invalid_identity' | 'policy_denied' | 'stale_provenance',
+        restore: () => Promise<unknown>,
+      ): Promise<void> => {
+        const consumeGate = deferred();
+        const authorized = authority.runAuthorizedHandoff({
+          senderCompanionId: A,
+          peerContactId: peerForA.id,
+          permit: handoffPermit,
+          nowMs,
+        }, async () => {
+          await consumeGate.wait();
+          return 'permit-consumed';
+        });
+        await consumeGate.reached;
+        let mutationSettled = false;
+        const mutation = mutate().finally(() => { mutationSettled = true; });
+        await new Promise<void>(resolve => setTimeout(resolve, 25));
+        expect(mutationSettled).toBe(false);
+        consumeGate.release();
+        await expect(authorized).resolves.toEqual({
+          decision: { eligible: true },
+          result: 'permit-consumed',
+        });
+        await mutation;
+        await expect(authority.authorizeHandoff({
+          senderCompanionId: A,
+          peerContactId: peerForA.id,
+          permit: handoffPermit,
+          nowMs,
+        })).resolves.toEqual({ eligible: false, reasonCode: expectedDenial });
+        await restore();
+      };
+
+      await assertMutationWaitsForAuthorization(
+        async () => await poolA.query(
+          'UPDATE contacts SET trust_level = $1 WHERE id = $2',
+          ['public', peerForA.id],
+        ),
+        'policy_denied',
+        async () => await poolA.query(
+          'UPDATE contacts SET trust_level = $1 WHERE id = $2',
+          ['regular', peerForA.id],
+        ),
+      );
+      await assertMutationWaitsForAuthorization(
+        async () => await poolA.query(`
+          UPDATE contact_channel_ids
+          SET channel_user_id = $1
+          WHERE contact_id = $2 AND channel = 'companion' AND channel_user_id = $3
+        `, [C, peerForA.id, B]),
+        'invalid_identity',
+        async () => await poolA.query(`
+          UPDATE contact_channel_ids
+          SET channel_user_id = $1
+          WHERE contact_id = $2 AND channel = 'companion' AND channel_user_id = $3
+        `, [B, peerForA.id, C]),
+      );
+      await assertMutationWaitsForAuthorization(
+        async () => await poolA.query(`
+          UPDATE icp_initiation_candidates
+          SET status = 'deferred', revision = revision + 1
+          WHERE candidate_id = $1
+        `, [CANDIDATE_ID]),
+        'stale_provenance',
+        async () => await poolA.query(`
+          UPDATE icp_initiation_candidates
+          SET status = 'pending', revision = revision + 1
+          WHERE candidate_id = $1
+        `, [CANDIDATE_ID]),
+      );
 
       new ContactBlockListStore(resolveContactBlockListPath(companionBDataDir)).block({
         channelType: 'companion',

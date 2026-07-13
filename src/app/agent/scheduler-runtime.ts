@@ -354,7 +354,6 @@ export function buildAgentSchedulerRuntime(
     });
   });
 
-  scheduler.start();
   log.info(`Memory system enabled (${options.gateway.dims}d embeddings via gateway)`);
   return {
     scheduler,

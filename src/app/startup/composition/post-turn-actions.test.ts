@@ -962,6 +962,64 @@ describe('wirePostTurnActionRuntime', () => {
     }
   });
 
+  it('executes a due restored companion outreach when its handler is registered before start', async () => {
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(1_700_000_250_000);
+    const tempDir = mkdtempSync(join(tmpdir(), 'psfn-post-turn-outreach-restart-'));
+    const persistencePath = join(tempDir, 'queue.json');
+    const actionKind = 'notify.companion_outreach';
+    try {
+      const firstBus = new EventBus();
+      const firstScheduler = new Scheduler(firstBus, {
+        tickIntervalMs: 5,
+        heartbeatIntervalMs: 1_000,
+      });
+      wirePostTurnActionRuntime({
+        eventBus: firstBus,
+        scheduler: firstScheduler,
+        agentLoop: { waitForIdle: vi.fn().mockResolvedValue(undefined) },
+        intervalMs: 1,
+        persistencePath,
+      });
+      await firstBus.emit('agent.post_turn.actions.inferred', {
+        message: makeMessage(),
+        response: makeResponse(),
+        actions: [makeAction({
+          id: 'persisted-companion-outreach',
+          kind: actionKind,
+          payload: { contactId: 'contact-b', permitId: 'permit-redacted-in-test' },
+          dedupeKey: `${actionKind}:fingerprint`,
+          runAt: 1_700_000_250_000,
+        })],
+      });
+
+      const restartedBus = new EventBus();
+      const restartedScheduler = new Scheduler(restartedBus, {
+        tickIntervalMs: 5,
+        heartbeatIntervalMs: 1_000,
+      });
+      const restartedRuntime = wirePostTurnActionRuntime({
+        eventBus: restartedBus,
+        scheduler: restartedScheduler,
+        agentLoop: { waitForIdle: vi.fn().mockResolvedValue(undefined) },
+        intervalMs: 1,
+        persistencePath,
+      });
+      const handler = vi.fn().mockResolvedValue(undefined);
+      restartedRuntime.registerHandler(actionKind, handler, { executionMode: 'background' });
+      restartedScheduler.start();
+      try {
+        await vi.waitFor(() => expect(handler).toHaveBeenCalledOnce());
+      } finally {
+        await restartedScheduler.stop();
+      }
+
+      expect(readPersistedQueue(persistencePath).entries).toHaveLength(0);
+    } finally {
+      nowSpy.mockRestore();
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it('fails closed when persisted queue entries are invalid', async () => {
     const tempDir = mkdtempSync(join(tmpdir(), 'psfn-post-turn-actions-invalid-'));
     const persistencePath = join(tempDir, 'queue.json');

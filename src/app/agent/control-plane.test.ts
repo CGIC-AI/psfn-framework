@@ -37,4 +37,15 @@ describe('agent control plane', () => {
     expect(controlPlaneSource).toContain('close app cache');
     expect(readSource('main.ts')).toContain('shutdownTargets.appCache = appCache');
   });
+
+  it('registers deferred handlers and the target command before starting restored actions', () => {
+    const agentMainSource = readSource('main.ts');
+    const controlPlaneIndex = agentMainSource.indexOf('buildAgentControlPlane({');
+    const commandIndex = agentMainSource.indexOf('registerIcpTargetChannelInitiationCommand(');
+    const schedulerStartIndex = agentMainSource.indexOf('scheduler.start();');
+    expect(controlPlaneIndex).toBeGreaterThan(-1);
+    expect(commandIndex).toBeGreaterThan(controlPlaneIndex);
+    expect(schedulerStartIndex).toBeGreaterThan(commandIndex);
+    expect(readSource('scheduler-runtime.ts')).not.toContain('scheduler.start();');
+  });
 });

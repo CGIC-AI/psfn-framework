@@ -42,7 +42,10 @@ export interface GatewayIcpAutonomyBrokerOptions {
     peerCompanionId: string,
     channelId: string,
   ): Promise<IcpInitiationChannelResolution>;
-  policyAuthority: Pick<GatewayIcpInitiationPolicyAuthority, 'resolve' | 'authorizeHandoff'>;
+  policyAuthority: Pick<
+    GatewayIcpInitiationPolicyAuthority,
+    'resolve' | 'authorizeHandoff' | 'runAuthorizedHandoff'
+  >;
   eventBus: EventBus;
   alarm(event: string, message: string, details: Record<string, unknown>): void;
   now?: () => number;
@@ -385,6 +388,7 @@ export class GatewayIcpAutonomyBroker {
       recipientCompanionId: string;
       channelId: string;
       rootInitiationId: string;
+      peerContactId: string;
     },
   ) {
     this.requireDistinctFleetPair(senderCompanionId, input.recipientCompanionId);
@@ -410,6 +414,19 @@ export class GatewayIcpAutonomyBroker {
         episode,
       };
     }
+    const permit = await this.options.store.getPermit(input.permitId);
+    if (!permit
+      || permit.senderCompanionId !== senderCompanionId
+      || permit.recipientCompanionId !== input.recipientCompanionId
+      || permit.conversationId !== input.conversationId
+      || permit.channelId !== input.channelId) {
+      return {
+        outcome: 'mismatch' as const,
+        permit,
+        reasonCode: 'permit_mismatch' as const,
+        episode,
+      };
+    }
     const expectedInvalidationFence = await this.options.store.captureInvalidationFence(
       senderCompanionId,
       input.recipientCompanionId,
@@ -422,12 +439,30 @@ export class GatewayIcpAutonomyBroker {
         : senderCompanionId;
       await this.invalidateForCompanion(unavailableCompanionId, 'peer_offline');
     }
-    const result = await this.options.store.consumePermit({
-      ...input,
+    const consumedAtMs = this.now();
+    const guarded = await this.options.policyAuthority.runAuthorizedHandoff({
       senderCompanionId,
-      consumedAtMs: this.now(),
+      peerContactId: input.peerContactId,
+      permit,
+      nowMs: consumedAtMs,
+    }, async () => await this.options.store.consumePermit({
+      permitId: input.permitId,
+      conversationId: input.conversationId,
+      recipientCompanionId: input.recipientCompanionId,
+      channelId: input.channelId,
+      senderCompanionId,
+      consumedAtMs,
       expectedInvalidationFence,
-    });
+    }));
+    if (!guarded.decision.eligible) {
+      return {
+        outcome: 'mismatch' as const,
+        permit,
+        reasonCode: guarded.decision.reasonCode ?? 'policy_denied',
+        episode,
+      };
+    }
+    const result = guarded.result;
     await this.options.eventBus.emit('icp.permit.lifecycle', {
       candidateId: result.permit?.candidateId ?? '[unknown]',
       conversationId: input.conversationId,

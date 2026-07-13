@@ -73,6 +73,7 @@ export interface IcpTargetChannelGatewayPort {
     recipientCompanionId: string;
     channelId: string;
     rootInitiationId: string;
+    peerContactId: string;
   }): Promise<{ outcome: 'consumed' | 'replayed' | string }>;
 }
 
@@ -250,6 +251,7 @@ export function createIcpTargetChannelInitiator(input: {
               recipientCompanionId: permit.recipientCompanionId,
               channelId: permit.channelId,
               rootInitiationId: request.rootInitiationId,
+              peerContactId,
             });
             if (consumption.outcome !== 'consumed' && consumption.outcome !== 'replayed') {
               throw new Error(`ICP suppression permit consumption rejected: ${consumption.outcome}`);
@@ -442,7 +444,7 @@ export function createIcpTargetChannelInitiator(input: {
       if (permit.status !== 'issued' && permit.status !== 'consumed') {
         throw new Error(`ICP target-channel initiation cannot use a ${permit.status} permit`);
       }
-      if (Date.now() >= permit.expiresAtMs) {
+      if (permit.status === 'issued' && Date.now() >= permit.expiresAtMs) {
         throw new Error('ICP target-channel initiation retry window has expired');
       }
       const key = `${permit.channelId}\0${permit.candidateId}`;

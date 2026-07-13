@@ -217,6 +217,7 @@ describe('capability tool gating', () => {
 
   it('resolves canonical action-aware requirements for consolidated tool domains', () => {
     expect(resolveToolRequiredCapabilities(createTool('contact').tool, { action: 'lookup', contactId: 'contact-1' })).toEqual(['identity.read']);
+    expect(resolveToolRequiredCapabilities(createTool('contact').tool, { action: 'search', query: 'peer' })).toEqual(['identity.read']);
     expect(resolveToolRequiredCapabilities(createTool('memory').tool, { action: 'timeline' })).toEqual(['identity.read']);
     expect(resolveToolRequiredCapabilities(createTool('contact').tool, { action: 'note', contactId: 'contact-1' })).toEqual(['identity.write.runtime']);
     expect(resolveToolRequiredCapabilities(createTool('generate_image').tool, { action: 'generate' })).toEqual([]);

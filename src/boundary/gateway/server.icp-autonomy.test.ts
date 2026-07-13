@@ -508,6 +508,10 @@ async function setup(
     icpInitiationPolicyAuthority: {
       resolve: async () => policy,
       authorizeHandoff: async () => ({ eligible: true }),
+      runAuthorizedHandoff: async (_input, operation) => ({
+        decision: { eligible: true },
+        result: await operation(),
+      }),
     },
     eventBus,
     ...overrides,
@@ -578,7 +582,7 @@ async function setup(
 
 describe('GatewayServer ICP autonomy RPC', () => {
   it('runs initiator → gateway → concrete client → recipient with durable restart truth', async () => {
-    const { connectClient } = await setup();
+    const { connectClient, store } = await setup();
     const clientA = await connectClient(A);
     const clientB = await connectClient(B);
     const root = mkdtempSync(join(tmpdir(), 'psfn-icp-production-shape-'));
@@ -795,6 +799,54 @@ describe('GatewayServer ICP autonomy RPC', () => {
           content: 'A production-shape reply from B to A.',
         }),
       ]));
+
+      const consumedPermit = store.permits.get(issue.permit.permitId);
+      if (!consumedPermit || consumedPermit.status !== 'consumed') {
+        throw new Error('test expected a consumed permit before restart recovery');
+      }
+      const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(consumedPermit.expiresAtMs + 1);
+      try {
+        const preparedRecovery = await clientA.companionPrepareInitiationHandoff({
+          permitId: consumedPermit.permitId,
+          peerContactId: 'sender-contact-b',
+        });
+        if (!preparedRecovery.authorized) {
+          throw new Error(`test expected expired consumed recovery: ${preparedRecovery.reasonCode}`);
+        }
+        const recoverySend = vi.fn(input => clientA.companionSendInitiation(input));
+        const recoveredInitiator = createIcpTargetChannelInitiator({
+          localCompanionId: A,
+          agent: {
+            handleMessage: vi.fn(async (_message, lifecycle) => {
+              if (!lifecycle.recoveredResponse) throw new Error('recovery response is required');
+              await lifecycle.finalizeDelivery(lifecycle.recoveredResponse);
+              return lifecycle.recoveredResponse;
+            }),
+            findRecordedIcpInitiation: (channelId, sourceMessageId) => (
+              restartedSender.findRecordedIcpInitiation(channelId, sourceMessageId)
+            ),
+            findIcpDeliveryObservation: (channelId, sourceMessageId) => (
+              restartedSender.findIcpDeliveryObservation(channelId, sourceMessageId)
+            ),
+            recordIcpDeliveryObservation: observation => (
+              restartedSender.recordIcpDeliveryObservation(observation)
+            ),
+          },
+          gateway: {
+            sendInitiation: recoverySend,
+            consumeInitiationPermit: input => clientA.companionConsumeInitiationPermit(input),
+          },
+          authorName: 'Alpha',
+        });
+        await expect(recoveredInitiator.initiate({
+          permit: preparedRecovery.permit,
+          rootInitiationId: preparedRecovery.rootInitiationId,
+          peerContactId: 'sender-contact-b',
+        })).resolves.toMatchObject({ disposition: 'delivered', recoveredTurn: true });
+        expect(recoverySend).not.toHaveBeenCalled();
+      } finally {
+        nowSpy.mockRestore();
+      }
     } finally {
       clientA.destroy();
       clientB.destroy();
@@ -900,6 +952,11 @@ describe('GatewayServer ICP autonomy RPC', () => {
       mutableByCompanion: true,
       lease: { companionId: B, state: 'open_to_chat' },
     });
+    const malformedOwn = await invoke(b, 32, 'companion.availability.read_self', {
+      companionId: B,
+      peerCompanionId: A,
+    });
+    expect(malformedOwn.error?.message).toMatch(/unknown key/i);
 
     const gates: unknown[] = [];
     eventBus.on('icp.initiation.gate', event => { gates.push(event); });
@@ -1169,6 +1226,7 @@ describe('GatewayServer ICP autonomy RPC', () => {
         recipientCompanionId: B,
         channelId: CHANNEL,
         rootInitiationId: ROOT,
+        peerContactId: 'sender-contact-b',
       });
       await consumeGate.reached;
 

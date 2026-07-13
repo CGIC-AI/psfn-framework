@@ -11,6 +11,7 @@ import {
   parseIcpInitiationHandoffPrepareParams,
   parseIcpInitiationPermitIssueInput,
   parseIcpInitiationPreflightInput,
+  parseIcpOwnAvailabilityReadParams,
   parseIcpPeerAvailabilityReadParams,
   parseIcpPermitConsumeParams,
   parseIcpPermitInvalidateSelfParams,
@@ -24,7 +25,10 @@ interface GatewayIcpAutonomyRpcOptions {
   fleetCompanionIds: ReadonlySet<string>;
   companionChannels?: GatewayCompanionChannelLane;
   isCompanionReady(companionId: string): boolean;
-  policyAuthority: Pick<GatewayIcpInitiationPolicyAuthority, 'resolve' | 'authorizeHandoff'>;
+  policyAuthority: Pick<
+    GatewayIcpInitiationPolicyAuthority,
+    'resolve' | 'authorizeHandoff' | 'runAuthorizedHandoff'
+  >;
   eventBus: EventBus;
   alarm(event: string, message: string, details: Record<string, unknown>): void;
 }
@@ -107,15 +111,7 @@ export function registerGatewayIcpAutonomyRpc(input: RegisterGatewayIcpAutonomyR
   input.target.addMethod('companion.availability.read_self', input.audited(
     'companion.availability.read_self',
     async (params: unknown) => {
-      if (params !== undefined) {
-        if (typeof params !== 'object' || params === null || Array.isArray(params)) {
-          throw new Error('ICP own availability params must be an object');
-        }
-        const keys = Object.keys(params as Record<string, unknown>);
-        if (keys.some(key => key !== 'companionId')) {
-          throw new Error(`ICP own availability params contains unknown key "${keys.find(key => key !== 'companionId')}"`);
-        }
-      }
+      parseIcpOwnAvailabilityReadParams(params);
       return await requireBroker().readOwnAvailability(input.requireAuthenticatedCompanionId());
     },
     () => ({ companionId: input.requireAuthenticatedCompanionId() }),

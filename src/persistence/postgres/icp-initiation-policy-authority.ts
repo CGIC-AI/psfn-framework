@@ -1,9 +1,10 @@
-import type { Pool, QueryResultRow } from 'pg';
+import type { Pool, PoolClient, QueryResultRow } from 'pg';
 
 import type {
   GatewayIcpInitiationPolicyAuthority,
   IcpInitiationHandoffPolicyDecision,
   IcpInitiationHandoffPolicyInput,
+  IcpAuthorizedHandoffOperationResult,
   IcpInitiationCapacityPolicyAuthority,
   IcpInitiationCausalityAuthority,
   IcpInitiationPolicyAuthorityInput,
@@ -12,7 +13,11 @@ import type { IcpInitiationPolicySnapshot } from '../../boundary/gateway/icp-aut
 import { ContactBlockListStore } from '../../core/cogsec/contact-block-list.js';
 import { evaluateProactiveOutboundTimeGate, type ProactiveQuietHoursConfig } from '../../core/intention/proactive-time-gate.js';
 import { resolveContactBlockListPath } from '../layout.js';
-import { createPostgresPool, assertValidPostgresSchemaName } from '../postgres.js';
+import {
+  createPostgresPool,
+  assertValidPostgresSchemaName,
+  withPostgresClient,
+} from '../postgres.js';
 import { TRUST_LEVELS, trustAtLeast, type TrustLevel } from '../../system/trust/types.js';
 
 interface FleetPolicyOwner {
@@ -135,8 +140,13 @@ export class PostgresIcpInitiationPolicyAuthority implements GatewayIcpInitiatio
 
     const [senderContact, peerContact] = candidateRow
       ? await Promise.all([
-          this.resolveContact(sender, candidateRow.peer_contact_id, input.candidate.peerCompanionId),
-          this.resolveContact(peer, null, input.senderCompanionId),
+          this.resolveContact(
+            this.pool,
+            sender,
+            candidateRow.peer_contact_id,
+            input.candidate.peerCompanionId,
+          ),
+          this.resolveContact(this.pool, peer, null, input.senderCompanionId),
         ])
       : [null, null];
     const canonicalPeerContact = canonicalCandidate
@@ -195,14 +205,42 @@ export class PostgresIcpInitiationPolicyAuthority implements GatewayIcpInitiatio
   async authorizeHandoff(
     input: IcpInitiationHandoffPolicyInput,
   ): Promise<IcpInitiationHandoffPolicyDecision> {
+    return await this.authorizeHandoffWithQuery(this.pool, input, false);
+  }
+
+  async runAuthorizedHandoff<T>(
+    input: IcpInitiationHandoffPolicyInput,
+    operation: () => Promise<T>,
+  ): Promise<IcpAuthorizedHandoffOperationResult<T>> {
+    return await withPostgresClient(this.pool, async client => {
+      const decision = await this.authorizeHandoffWithQuery(client, input, true);
+      if (!decision.eligible) {
+        return {
+          decision: {
+            eligible: false,
+            ...(decision.reasonCode ? { reasonCode: decision.reasonCode } : {}),
+          },
+        };
+      }
+      const result = await operation();
+      return { decision: { eligible: true }, result };
+    });
+  }
+
+  private async authorizeHandoffWithQuery(
+    query: Pool | PoolClient,
+    input: IcpInitiationHandoffPolicyInput,
+    lockCanonicalRows: boolean,
+  ): Promise<IcpInitiationHandoffPolicyDecision> {
     const sender = this.requireOwner(input.senderCompanionId);
     const peer = this.requireOwner(input.permit.recipientCompanionId);
-    const candidateResult = await this.pool.query<CandidatePolicyRow>(`
+    const candidateResult = await query.query<CandidatePolicyRow>(`
       SELECT candidate_id, root_initiation_id, local_companion_id, peer_contact_id,
         peer_companion_id, preferred_channel, source, provenance_ref, created_at_ms,
         expires_at_ms, status, reason_code, revision
       FROM ${quoteSchema(sender.postgresSchema)}.icp_initiation_candidates
       WHERE candidate_id = $1
+      ${lockCanonicalRows ? 'FOR SHARE' : ''}
     `, [input.permit.candidateId]);
     const candidate = candidateResult.rows.at(0);
     if (!candidate
@@ -221,8 +259,14 @@ export class PostgresIcpInitiationPolicyAuthority implements GatewayIcpInitiatio
     }
 
     const [senderContact, peerContact] = await Promise.all([
-      this.resolveContact(sender, input.peerContactId, input.permit.recipientCompanionId),
-      this.resolveContact(peer, null, input.senderCompanionId),
+      this.resolveContact(
+        query,
+        sender,
+        input.peerContactId,
+        input.permit.recipientCompanionId,
+        lockCanonicalRows,
+      ),
+      this.resolveContact(query, peer, null, input.senderCompanionId, lockCanonicalRows),
     ]);
     if (!senderContact || !peerContact) {
       return { eligible: false, reasonCode: 'invalid_identity' };
@@ -257,11 +301,13 @@ export class PostgresIcpInitiationPolicyAuthority implements GatewayIcpInitiatio
   }
 
   private async resolveContact(
+    query: Pool | PoolClient,
     owner: FleetPolicyOwner,
     expectedContactId: string | null,
     peerCompanionId: string,
+    lockCanonicalRows = false,
   ): Promise<{ trustLevel: TrustLevel } | null> {
-    const result = await this.pool.query<ContactPolicyRow>(`
+    const result = await query.query<ContactPolicyRow>(`
       SELECT c.id, c.trust_level, c.is_machine_intelligence
       FROM ${quoteSchema(owner.postgresSchema)}.contacts AS c
       JOIN ${quoteSchema(owner.postgresSchema)}.contact_channel_ids AS identity
@@ -269,6 +315,7 @@ export class PostgresIcpInitiationPolicyAuthority implements GatewayIcpInitiatio
       WHERE identity.channel = 'companion' AND identity.channel_user_id = $1
         AND ($2::text IS NULL OR c.id = $2)
       LIMIT 1
+      ${lockCanonicalRows ? 'FOR SHARE OF c, identity' : ''}
     `, [peerCompanionId, expectedContactId]);
     const row = result.rows.at(0);
     if (!row || !row.is_machine_intelligence) return null;

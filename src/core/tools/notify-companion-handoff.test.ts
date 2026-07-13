@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { Value } from '@sinclair/typebox/value';
 import type { InferredPostTurnAction } from '../../shared/contracts/runtime.js';
 import { runWithRequestContext } from '../../primitives/llm/request-context.js';
 import type { AgentFacingIcpAutonomyRuntime } from '../icp/agent-facing-autonomy.js';
@@ -42,6 +43,20 @@ function ordinaryContext<T>(fn: () => Promise<T>): Promise<T> {
 }
 
 describe('permit-governed notify companion handoff', () => {
+  it('advertises an exact companion variant that excludes raw delivery fields', () => {
+    const schema = tool(runtime()).parameters;
+    const exact = {
+      action: 'send',
+      target_kind: 'companion',
+      contact_id: 'peer-contact-b',
+      initiation_permit: PERMIT_ID,
+    };
+    expect(Value.Check(schema, exact)).toBe(true);
+    expect(Value.Check(schema, { ...exact, message: 'forbidden raw content' })).toBe(false);
+    expect(Value.Check(schema, { ...exact, delivery_channel: 'discord' })).toBe(false);
+    expect(Value.Check(schema, { ...exact, delivery_target: 'guessed-peer' })).toBe(false);
+  });
+
   it('queues a content-free exact contact/permit handoff and redacts the permit from output', async () => {
     const owner = runtime();
     const result = await ordinaryContext(async () => await tool(owner).execute('call-1', {
@@ -153,7 +168,11 @@ describe('permit-governed notify companion handoff', () => {
       kind: DEFERRED_COMPANION_OUTREACH_ACTION_KIND,
       payload: { contactId: 'peer-contact-b', permitId: PERMIT_ID },
     } as InferredPostTurnAction);
-    expect(owner.executeCompanionOutreach).toHaveBeenCalledWith('peer-contact-b', PERMIT_ID);
+    expect(owner.executeCompanionOutreach).toHaveBeenCalledWith(
+      'peer-contact-b',
+      PERMIT_ID,
+      expect.any(Function),
+    );
     dispose();
     expect(unregisterHandler).toHaveBeenCalledOnce();
     expect(unregisterInferer).toHaveBeenCalledOnce();
@@ -178,6 +197,28 @@ describe('permit-governed notify companion handoff', () => {
       kind: DEFERRED_COMPANION_OUTREACH_ACTION_KIND,
       payload: { contactId: 'peer-contact-b', permitId: PERMIT_ID },
     } as InferredPostTurnAction)).rejects.toThrow(/no longer capability\/tool-overlay authorized/i);
+    expect(owner.executeCompanionOutreach).not.toHaveBeenCalled();
+  });
+
+  it('rejects unknown persisted payload fields before execution', async () => {
+    const owner = runtime();
+    let handler: PostTurnActionHandler | undefined;
+    registerDeferredCompanionOutreachRuntime({
+      agentLoop: {},
+      postTurnActions: {
+        registerHandler: vi.fn((_kind, callback) => {
+          handler = callback;
+          return () => undefined;
+        }),
+      } as never,
+      runtime: owner,
+      isExecutionAuthorized: () => true,
+    });
+    await expect(handler?.({
+      id: 'action-malformed',
+      kind: DEFERRED_COMPANION_OUTREACH_ACTION_KIND,
+      payload: { contactId: 'peer-contact-b', permitId: PERMIT_ID, message: 'forbidden' },
+    } as InferredPostTurnAction)).rejects.toThrow(/payload is malformed/i);
     expect(owner.executeCompanionOutreach).not.toHaveBeenCalled();
   });
 });

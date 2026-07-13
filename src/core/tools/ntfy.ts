@@ -631,6 +631,60 @@ export interface NotifyToolOptions {
   companionOutreach?: AgentFacingIcpAutonomyRuntime;
 }
 
+const notifyToolParameters = Type.Union([
+  Type.Object({
+    action: Type.Literal('brief'),
+    message: Type.String({ description: 'Body text for the operator brief.' }),
+    title: Type.Optional(Type.String({ description: 'Optional ntfy title.' })),
+    priority: Type.Optional(Type.Integer({ minimum: 1, maximum: 5 })),
+    topic: Type.Optional(Type.String({ description: 'Optional ntfy topic override.' })),
+    budget_channel: Type.Optional(Type.Unsafe<ExternalCommunicationChannel>({
+      type: 'string',
+      enum: ['discord', 'email'],
+      description: 'Optional safeguard budget to charge. Default: discord.',
+    })),
+  }, { additionalProperties: false }),
+  Type.Object({
+    action: Type.Literal('send'),
+    target_kind: Type.Optional(Type.Literal('external')),
+    message: Type.String({ description: 'Body text for the outbound notification.' }),
+    delivery_channel: Type.Unsafe<NotifyDeliveryChannel>({
+      type: 'string',
+      enum: ['discord', 'email'],
+    }),
+    delivery_target: Type.String({
+      minLength: 1,
+      description: 'Explicit external channel id or address.',
+    }),
+  }, { additionalProperties: false }),
+  Type.Object({
+    action: Type.Literal('send'),
+    target_kind: Type.Literal(COMPANION_NOTIFY_TARGET_KIND),
+    contact_id: Type.String({
+      minLength: 1,
+      description: 'Exact canonical contact ID from contact lookup.',
+    }),
+    initiation_permit: Type.String({
+      minLength: 1,
+      description: 'Broker-issued one-use UUID.',
+    }),
+  }, { additionalProperties: false }),
+  Type.Object({
+    action: Type.Literal('approval_request'),
+    approval_id: Type.String({ minLength: 1 }),
+    approval_method: Type.String({ minLength: 1 }),
+    approval_action: Type.String({ minLength: 1 }),
+    approval_scope: Type.String({ minLength: 1 }),
+    approval_reason: Type.String({ minLength: 1 }),
+    approval_expires_at: Type.Optional(Type.Integer({
+      description: 'Optional approval expiry as epoch milliseconds.',
+    })),
+    review_path: Type.Optional(Type.String({
+      description: 'Optional admin review path. Default: /confirmations.',
+    })),
+  }, { additionalProperties: false }),
+]);
+
 export function createNotifyTool(
   dispatcher: NotifyDispatcher,
   options: NotifyToolOptions = {},
@@ -642,103 +696,7 @@ export function createNotifyTool(
       'Unified notification surface for operator briefs, lightweight outbound sends, approval escalation, and permit-governed companion outreach. '
       + 'For a known companion peer, use exactly {"action":"send","target_kind":"companion","contact_id":"<exact contactId from contact lookup>","initiation_permit":"<broker-issued UUID>"}. '
       + 'Companion outreach never accepts message content; the ordinary target-channel turn authors it.',
-    parameters: Type.Object({
-      action: Type.Union([
-        Type.Literal('brief'),
-        Type.Literal('send'),
-        Type.Literal('approval_request'),
-      ], {
-        description: 'Notification action: brief, send, or approval_request.',
-      }),
-      target_kind: Type.Optional(Type.Union([
-        Type.Literal('external'),
-        Type.Literal('companion'),
-      ], { description: 'For send: external (default) or permit-governed companion.' })),
-      contact_id: Type.Optional(Type.String({
-        minLength: 1,
-        description: 'Required only for target_kind=companion. Exact canonical contact ID from contact lookup.',
-      })),
-      initiation_permit: Type.Optional(Type.String({
-        minLength: 1,
-        description: 'Required only for target_kind=companion. Broker-issued one-use permit UUID.',
-      })),
-      message: Type.Optional(
-        Type.String({
-          description: 'Required for brief/send. Body text for the notification.',
-        }),
-      ),
-      title: Type.Optional(
-        Type.String({
-          description: 'Optional ntfy title for brief notifications.',
-        }),
-      ),
-      priority: Type.Optional(
-        Type.Integer({
-          minimum: 1,
-          maximum: 5,
-          description: 'Optional ntfy priority for brief notifications.',
-        }),
-      ),
-      topic: Type.Optional(
-        Type.String({
-          description: 'Optional ntfy topic override for brief notifications.',
-        }),
-      ),
-      budget_channel: Type.Optional(
-        Type.Unsafe<ExternalCommunicationChannel>({
-          type: 'string',
-          enum: ['discord', 'email'],
-          description: 'Optional safeguard budget to charge for brief notifications. Default: discord.',
-        }),
-      ),
-      delivery_channel: Type.Optional(
-        Type.Unsafe<NotifyDeliveryChannel>({
-          type: 'string',
-          enum: ['discord', 'email'],
-          description: 'Required for send. Explicit outbound delivery channel.',
-        }),
-      ),
-      delivery_target: Type.Optional(
-        Type.String({
-          description: 'Required for send. Explicit external channel id or address.',
-        }),
-      ),
-      approval_id: Type.Optional(
-        Type.String({
-          description: 'Required for approval_request. Stable approval or confirmation id.',
-        }),
-      ),
-      approval_method: Type.Optional(
-        Type.String({
-          description: 'Required for approval_request. Underlying method awaiting review.',
-        }),
-      ),
-      approval_action: Type.Optional(
-        Type.String({
-          description: 'Required for approval_request. Human-readable action awaiting review.',
-        }),
-      ),
-      approval_scope: Type.Optional(
-        Type.String({
-          description: 'Required for approval_request. Scope awaiting approval.',
-        }),
-      ),
-      approval_reason: Type.Optional(
-        Type.String({
-          description: 'Required for approval_request. Why operator review is needed.',
-        }),
-      ),
-      approval_expires_at: Type.Optional(
-        Type.Integer({
-          description: 'Optional approval expiry as epoch milliseconds.',
-        }),
-      ),
-      review_path: Type.Optional(
-        Type.String({
-          description: 'Optional admin review path. Default: /confirmations.',
-        }),
-      ),
-    }),
+    parameters: notifyToolParameters,
     execute: async (
       _toolCallId: string,
       rawParams: NotifyToolParams,

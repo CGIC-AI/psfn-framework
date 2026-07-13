@@ -13,9 +13,18 @@ export interface IntrospectionTurnRecordReader {
   listRecentSessions(limit?: number, offset?: number): RecentSessionSummary[];
   getRecentTurnRecords(channelId: string, limit: number, offset?: number): TurnRecord[];
   isSessionRetiredOrQuarantined(sessionId: string): boolean;
+  isSourceTurnRecordEligible(
+    sourceChannelId: string,
+    ownerSessionId: string,
+    turnId: string,
+  ): boolean;
 }
 
-function toCandidate(record: TurnRecord, maxSourceChars: number): IntrospectionAuditCandidate | null {
+function toCandidate(
+  record: TurnRecord,
+  ownerSessionId: string,
+  maxSourceChars: number,
+): IntrospectionAuditCandidate | null {
   if (
     record.status !== 'completed'
     || record.auditPrivacy?.contentMode !== 'verbatim_public'
@@ -44,6 +53,7 @@ function toCandidate(record: TurnRecord, maxSourceChars: number): IntrospectionA
     sourceRef: `turn:${record.turnId}`,
     turnId: record.turnId,
     channelId: record.channelId,
+    ownerSessionId,
     occurredAt: new Date(record.completedAt).toISOString(),
     publicStimulus,
     actualReply,
@@ -93,7 +103,7 @@ export function createTurnRecordIntrospectionSource(
           if (!allowed.has(record.channelId) || record.channelId !== session.sourceChannelId) continue;
           const ownerSessionId = record.sessionId ?? session.sourceChannelId;
           if (reader.isSessionRetiredOrQuarantined(ownerSessionId)) continue;
-          const candidate = toCandidate(record, input.maxSourceChars);
+          const candidate = toCandidate(record, ownerSessionId, input.maxSourceChars);
           if (candidate) candidates.push(candidate);
         }
       }
@@ -103,5 +113,13 @@ export function createTurnRecordIntrospectionSource(
           all.findIndex(entry => entry.sourceRef === candidate.sourceRef) === index
         ));
     },
+    isCandidateStillEligible: candidate => (
+      !reader.isSessionRetiredOrQuarantined(candidate.ownerSessionId)
+      && reader.isSourceTurnRecordEligible(
+        candidate.channelId,
+        candidate.ownerSessionId,
+        candidate.turnId,
+      )
+    ),
   };
 }

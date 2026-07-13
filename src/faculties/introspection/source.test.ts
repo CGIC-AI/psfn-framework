@@ -1,11 +1,14 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { SessionManager } from '../../core/session/manager.js';
 import { SessionStore } from '../../persistence/sessions/store.js';
 import type { TurnRecord } from '../../shared/contracts/runtime.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
+import { DEFAULT_INTROSPECTION_AUDIT_CONFIG } from '../../system/config/scheduler-config.js';
+import { IntrospectionConsentStore } from './consent-store.js';
+import { IntrospectionAuditRuntime } from './runtime.js';
 import { createTurnRecordIntrospectionSource } from './source.js';
 
 function makeConfig(dataDir: string): SubstrateConfig {
@@ -113,6 +116,7 @@ describe('turn-record introspection source', () => {
           userMessage: { role: 'user', content: intimateSentinel, timestamp: 1_700_000_000_000 },
         })],
       isSessionRetiredOrQuarantined: () => false,
+      isSourceTurnRecordEligible: () => true,
     });
 
     const candidates = source.listCandidates({
@@ -131,6 +135,7 @@ describe('turn-record introspection source', () => {
       listRecentSessions: () => [{ sessionId: 'discord:public-room', sourceChannelId: 'discord:public-room' }],
       getRecentTurnRecords: () => [record({ auditPrivacy: undefined })],
       isSessionRetiredOrQuarantined: () => false,
+      isSourceTurnRecordEligible: () => true,
     });
     expect(source.listCandidates({
       allowedPublicChannelIds: ['discord:public-room'],
@@ -150,6 +155,7 @@ describe('turn-record introspection source', () => {
         ? [record({ sessionId: 'session:logical-after-reset' })]
         : [],
       isSessionRetiredOrQuarantined: () => false,
+      isSourceTurnRecordEligible: () => true,
     });
     const input = {
       recentSessionLimit: 10,
@@ -172,7 +178,7 @@ describe('turn-record introspection source', () => {
 
   it.each(['break_glass_quarantine', 'fresh_split'] as const)(
     'excludes retired and ownerless source records after a %s route reload',
-    (mode) => {
+    async (mode) => {
       const root = mkdtempSync(join(tmpdir(), 'introspection-route-reload-'));
       try {
         const sessionsDir = join(root, 'sessions');
@@ -211,19 +217,25 @@ describe('turn-record introspection source', () => {
           completedAt: 1_700_000_000_300,
         });
         store.appendTurnRecord(freshTurn);
-        store.appendTurnRecord(record({
+        const missingOwnerTurn = record({
           turnId: '019d2326-d9e1-701d-bcee-250d2cbb0e42',
           requestId: 'request-missing-owner',
           sessionId: 'session:missing-owner',
           channelId: sourceChannelId,
           userMessage: { role: 'user', content: missingOwnerSentinel, timestamp: 1_700_000_000_400 },
           completedAt: 1_700_000_000_500,
-        }));
+        });
+        store.appendTurnRecord(missingOwnerTurn);
 
         const reloadedStore = new SessionStore(sessionsDir);
         const reloadedManager = new SessionManager(reloadedStore, config);
         expect(reloadedStore.getRecentSourceTurnRecords(sourceChannelId, 10).map(entry => entry.turnId))
           .toEqual([oldTurn.turnId, freshTurn.turnId]);
+        expect(reloadedStore.isSourceTurnRecordEligible(
+          sourceChannelId,
+          missingOwnerTurn.sessionId ?? sourceChannelId,
+          missingOwnerTurn.turnId,
+        )).toBe(false);
 
         const source = createTurnRecordIntrospectionSource({
           listRecentSessions: (limit, offset) => (
@@ -240,6 +252,9 @@ describe('turn-record introspection source', () => {
           isSessionRetiredOrQuarantined: sessionId => (
             reloadedManager.isSessionRetiredOrQuarantined(sessionId)
           ),
+          isSourceTurnRecordEligible: (channelId, ownerSessionId, turnId) => (
+            reloadedStore.isSourceTurnRecordEligible(channelId, ownerSessionId, turnId)
+          ),
         });
         const candidates = source.listCandidates({
           allowedPublicChannelIds: [sourceChannelId],
@@ -252,6 +267,64 @@ describe('turn-record introspection source', () => {
         expect(JSON.stringify(candidates)).not.toContain(oldPoisonedSentinel);
         expect(JSON.stringify(candidates)).not.toContain(missingOwnerSentinel);
         expect(JSON.stringify(candidates)).toContain(freshSentinel);
+        const freshCandidate = candidates[0];
+        expect(source.isCandidateStillEligible(freshCandidate)).toBe(true);
+
+        const consentStore = new IntrospectionConsentStore(join(root, 'introspection-consent.jsonl'));
+        consentStore.append({
+          enabled: true,
+          allowedPublicChannelIds: [sourceChannelId],
+          actor: { kind: 'companion', turnId: 'consent-turn', requestId: 'consent-request' },
+          reason: 'Enable the exact public source for the route-race regression.',
+          createdAt: '2026-07-13T09:00:00.000Z',
+        });
+        let signalLookupStarted: (() => void) | undefined;
+        const lookupStarted = new Promise<void>((resolve) => {
+          signalLookupStarted = resolve;
+        });
+        let resolveLookup: ((value: boolean) => void) | undefined;
+        const lookup = new Promise<boolean>((resolve) => {
+          resolveLookup = resolve;
+        });
+        const estimateStableReply = vi.fn();
+        const compareReplies = vi.fn();
+        const reflect = vi.fn();
+        const appendAuditDecision = vi.fn();
+        const appendLandmark = vi.fn();
+        const runtime = new IntrospectionAuditRuntime({
+          config: { ...DEFAULT_INTROSPECTION_AUDIT_CONFIG, enabled: true },
+          consentStore,
+          source,
+          auditor: { estimateStableReply, compareReplies },
+          reflector: { reflect },
+          persistence: {
+            hasAuditedSource: async () => {
+              signalLookupStarted?.();
+              return await lookup;
+            },
+            appendAuditDecision,
+            appendLandmark,
+          },
+        });
+
+        const running = runtime.runOnce();
+        await lookupStarted;
+
+        reloadedManager.resetSourceChannelSession({
+          sourceChannelId,
+          actor: 'operator:test',
+          reason: 'retire the enumerated candidate during audit',
+          mode,
+        });
+        resolveLookup?.(false);
+
+        await expect(running).rejects.toThrow(/source.*no longer eligible/i);
+        expect(source.isCandidateStillEligible(freshCandidate)).toBe(false);
+        expect(estimateStableReply).not.toHaveBeenCalled();
+        expect(compareReplies).not.toHaveBeenCalled();
+        expect(reflect).not.toHaveBeenCalled();
+        expect(appendAuditDecision).not.toHaveBeenCalled();
+        expect(appendLandmark).not.toHaveBeenCalled();
       } finally {
         rmSync(root, { recursive: true, force: true });
       }
@@ -276,6 +349,7 @@ describe('turn-record introspection source', () => {
         return turns.slice(Math.max(0, end - limit), end);
       },
       isSessionRetiredOrQuarantined: () => false,
+      isSourceTurnRecordEligible: () => true,
     });
 
     const input = {

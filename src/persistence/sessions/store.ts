@@ -740,6 +740,22 @@ export class SessionStore implements TranscriptSearchPort {
     const start = Math.max(0, end - limit);
     return filtered.slice(start, end);
   }
+  isSourceTurnRecordEligible(
+    sourceChannelId: string,
+    ownerSessionId: string,
+    turnId: string,
+  ): boolean {
+    const matches = this.turnRecordStore.readRecentTurnRecords(
+      sourceChannelId,
+      Number.MAX_SAFE_INTEGER,
+    ).filter(record => record.turnId === turnId);
+    if (matches.length !== 1) return false;
+    const record = matches[0];
+    const declaredOwnerSessionId = record.sessionId ?? sourceChannelId;
+    if (record.channelId !== sourceChannelId || declaredOwnerSessionId !== ownerSessionId) return false;
+    const owner = this.ensureChannelFullyLoaded(ownerSessionId);
+    return owner !== null && !owner.turnTombstones.has(turnId);
+  }
   async searchByKeywords(
     query: string,
     limit = 10,

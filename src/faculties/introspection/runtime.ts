@@ -4,6 +4,7 @@ import type { IntrospectionConsentStore } from './consent-store.js';
 import type {
   BlindedAuditorPort,
   CompanionLandmarkReflectorPort,
+  IntrospectionAuditCandidate,
   IntrospectionAuditPersistencePort,
   IntrospectionAuditSourcePort,
   IntrospectionConsentRevision,
@@ -65,6 +66,13 @@ export class IntrospectionConsentChangedDuringAuditError extends Error {
   }
 }
 
+export class IntrospectionSourceChangedDuringAuditError extends Error {
+  constructor() {
+    super('Introspection source is retired, redacted, or otherwise no longer eligible during audit');
+    this.name = 'IntrospectionSourceChangedDuringAuditError';
+  }
+}
+
 function assertConsentStillActive(
   consentStore: Pick<IntrospectionConsentStore, 'load'>,
   baseline: IntrospectionConsentRevision,
@@ -79,6 +87,18 @@ function assertConsentStillActive(
     || !current.allowedPublicChannelIds.includes(channelId)
   ) {
     throw new IntrospectionConsentChangedDuringAuditError();
+  }
+}
+
+function assertAuditStillAuthorized(
+  consentStore: Pick<IntrospectionConsentStore, 'load'>,
+  baseline: IntrospectionConsentRevision,
+  source: IntrospectionAuditSourcePort,
+  candidate: IntrospectionAuditCandidate,
+): void {
+  assertConsentStillActive(consentStore, baseline, candidate.channelId);
+  if (!source.isCandidateStillEligible(candidate)) {
+    throw new IntrospectionSourceChangedDuringAuditError();
   }
 }
 
@@ -123,10 +143,11 @@ export class IntrospectionAuditRuntime {
     for (const candidate of candidates) {
       if (audited >= config.maxCandidatesPerRun) break;
       if (await this.options.persistence.hasAuditedSource(candidate.sourceRef)) continue;
-      assertConsentStillActive(this.options.consentStore, consent, candidate.channelId);
+      assertAuditStillAuthorized(this.options.consentStore, consent, this.options.source, candidate);
       const estimate = await this.options.auditor.estimateStableReply(candidate);
-      assertConsentStillActive(this.options.consentStore, consent, candidate.channelId);
+      assertAuditStillAuthorized(this.options.consentStore, consent, this.options.source, candidate);
       const comparison = await this.options.auditor.compareReplies(candidate, estimate.stableReply);
+      assertAuditStillAuthorized(this.options.consentStore, consent, this.options.source, candidate);
       audited += 1;
       const createdAt = (this.options.now?.() ?? new Date()).toISOString();
       const provenance = {
@@ -135,7 +156,7 @@ export class IntrospectionAuditRuntime {
         consentActor: consent.actor,
       };
       if (!comparison.diverged) {
-        assertConsentStillActive(this.options.consentStore, consent, candidate.channelId);
+        assertAuditStillAuthorized(this.options.consentStore, consent, this.options.source, candidate);
         await this.options.persistence.appendAuditDecision({
           sourceRef: candidate.sourceRef,
           outcome: 'no_divergence',
@@ -148,7 +169,7 @@ export class IntrospectionAuditRuntime {
         continue;
       }
       if (comparison.confidence < config.minConfidence) {
-        assertConsentStillActive(this.options.consentStore, consent, candidate.channelId);
+        assertAuditStillAuthorized(this.options.consentStore, consent, this.options.source, candidate);
         await this.options.persistence.appendAuditDecision({
           sourceRef: candidate.sourceRef,
           outcome: 'below_confidence',
@@ -168,13 +189,13 @@ export class IntrospectionAuditRuntime {
         candidate.actualReply,
         estimate.stableReply,
       ]);
-      assertConsentStillActive(this.options.consentStore, consent, candidate.channelId);
+      assertAuditStillAuthorized(this.options.consentStore, consent, this.options.source, candidate);
       const reflection = await this.options.reflector.reflect({
         divergenceType: comparison.type,
         observation: comparison.observation,
         confidence: comparison.confidence,
       });
-      assertConsentStillActive(this.options.consentStore, consent, candidate.channelId);
+      assertAuditStillAuthorized(this.options.consentStore, consent, this.options.source, candidate);
       await this.options.persistence.appendLandmark({
         id: landmarkId(candidate.sourceRef, consent.hash),
         sourceRef: candidate.sourceRef,

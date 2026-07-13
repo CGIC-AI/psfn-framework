@@ -488,6 +488,9 @@ async function main(): Promise<void> {
       isSessionRetiredOrQuarantined: sessionId => (
         sessionManager.isSessionRetiredOrQuarantined(sessionId)
       ),
+      isSourceTurnRecordEligible: (sourceChannelId, ownerSessionId, turnId) => (
+        sessionStore.isSourceTurnRecordEligible(sourceChannelId, ownerSessionId, turnId)
+      ),
     }),
     auditor: createLLMIntrospectionAuditor(llmProvider, introspectionAuditConfig),
     reflector: createLLMCompanionLandmarkReflector(

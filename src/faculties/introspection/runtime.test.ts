@@ -12,6 +12,7 @@ import type {
   IntrospectionAuditCandidate,
   IntrospectionAuditDecisionAppendInput,
   IntrospectionAuditPersistencePort,
+  IntrospectionAuditSourcePort,
   IntrospectionLandmarkAppendInput,
 } from './contracts.js';
 import {
@@ -57,11 +58,45 @@ const CANDIDATE: IntrospectionAuditCandidate = {
   sourceRef: 'turn:turn-public-1',
   turnId: 'turn-public-1',
   channelId: 'discord:public-room',
+  ownerSessionId: 'session:public-room-active',
   occurredAt: '2026-07-13T10:00:00.000Z',
   publicStimulus: 'PUBLIC_STIMULUS_SENTINEL @Ari, my partner at Example Labs, please choose a plan',
   actualReply: 'ACTUAL_REPLY_SENTINEL I agree immediately',
   provenanceRefs: ['turn:turn-public-1', 'request:req-1'],
 };
+
+function sourceFor(
+  candidates: IntrospectionAuditCandidate[] = [CANDIDATE],
+  isCandidateStillEligible: (candidate: IntrospectionAuditCandidate) => boolean = () => true,
+): IntrospectionAuditSourcePort {
+  return {
+    listCandidates: () => candidates,
+    isCandidateStillEligible,
+  };
+}
+
+function activeConsentStore(root: string): IntrospectionConsentStore {
+  const store = new IntrospectionConsentStore(join(root, 'consent.jsonl'));
+  store.append({
+    enabled: true,
+    allowedPublicChannelIds: [CANDIDATE.channelId],
+    actor: { kind: 'companion', turnId: 'consent-turn', requestId: 'consent-request' },
+    reason: 'Enable bounded public-room audit.',
+    createdAt: '2026-07-13T09:00:00.000Z',
+  });
+  return store;
+}
+
+function deferred<T>(): {
+  promise: Promise<T>;
+  resolve: (value: T) => void;
+} {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((settle) => {
+    resolve = settle;
+  });
+  return { promise, resolve };
+}
 
 describe('scheduled blinded introspection audit', () => {
   let root: string | undefined;
@@ -106,7 +141,7 @@ describe('scheduled blinded introspection audit', () => {
     const runtime = new IntrospectionAuditRuntime({
       config,
       consentStore,
-      source: { listCandidates: () => [CANDIDATE] },
+      source: sourceFor(),
       auditor: createLLMIntrospectionAuditor(llmProvider, config),
       reflector: createLLMCompanionLandmarkReflector(
         llmProvider,
@@ -165,7 +200,7 @@ describe('scheduled blinded introspection audit', () => {
     const runtime = new IntrospectionAuditRuntime({
       config: { ...DEFAULT_INTROSPECTION_AUDIT_CONFIG, enabled: true },
       consentStore: new IntrospectionConsentStore(join(root, 'missing.jsonl')),
-      source: { listCandidates: () => [CANDIDATE] },
+      source: sourceFor(),
       auditor: {
         estimateStableReply: complete,
         compareReplies: complete,
@@ -223,7 +258,7 @@ describe('scheduled blinded introspection audit', () => {
     const runtime = new IntrospectionAuditRuntime({
       config: { ...DEFAULT_INTROSPECTION_AUDIT_CONFIG, enabled: true },
       consentStore,
-      source: { listCandidates: () => [CANDIDATE] },
+      source: sourceFor(),
       auditor: {
         estimateStableReply: vi.fn(() => {
           signalEstimateStarted?.();
@@ -275,7 +310,7 @@ describe('scheduled blinded introspection audit', () => {
     const runtime = new IntrospectionAuditRuntime({
       config: { ...DEFAULT_INTROSPECTION_AUDIT_CONFIG, enabled: true },
       consentStore,
-      source: { listCandidates: () => [CANDIDATE] },
+      source: sourceFor(),
       auditor: {
         estimateStableReply: vi.fn(() => {
           signalEstimateStarted?.();
@@ -304,6 +339,174 @@ describe('scheduled blinded introspection audit', () => {
     expect(persistence.landmarks).toEqual([]);
   });
 
+  it('revalidates source retirement after an in-flight audited-source lookup', async () => {
+    root = mkdtempSync(join(tmpdir(), 'introspection-runtime-source-query-race-'));
+    const consentStore = activeConsentStore(root);
+    const lookupStarted = deferred<void>();
+    const lookupResult = deferred<boolean>();
+    let eligible = true;
+    const estimateStableReply = vi.fn();
+    const compareReplies = vi.fn();
+    const reflect = vi.fn();
+    const appendAuditDecision = vi.fn();
+    const appendLandmark = vi.fn();
+    const runtime = new IntrospectionAuditRuntime({
+      config: { ...DEFAULT_INTROSPECTION_AUDIT_CONFIG, enabled: true },
+      consentStore,
+      source: sourceFor([CANDIDATE], () => eligible),
+      auditor: { estimateStableReply, compareReplies },
+      reflector: { reflect },
+      persistence: {
+        hasAuditedSource: vi.fn(async () => {
+          lookupStarted.resolve();
+          return await lookupResult.promise;
+        }),
+        appendAuditDecision,
+        appendLandmark,
+      },
+    });
+
+    const running = runtime.runOnce();
+    await lookupStarted.promise;
+    eligible = false;
+    lookupResult.resolve(false);
+
+    await expect(running).rejects.toThrow(/source.*no longer eligible/i);
+    expect(estimateStableReply).not.toHaveBeenCalled();
+    expect(compareReplies).not.toHaveBeenCalled();
+    expect(reflect).not.toHaveBeenCalled();
+    expect(appendAuditDecision).not.toHaveBeenCalled();
+    expect(appendLandmark).not.toHaveBeenCalled();
+  });
+
+  it('revalidates source retirement after the estimator before comparator disclosure', async () => {
+    root = mkdtempSync(join(tmpdir(), 'introspection-runtime-estimator-race-'));
+    const consentStore = activeConsentStore(root);
+    const estimateStarted = deferred<void>();
+    const estimateResult = deferred<{ stableReply: string; model: string }>();
+    let eligible = true;
+    const compareReplies = vi.fn();
+    const reflect = vi.fn();
+    const persistence = new MemoryPersistence();
+    const runtime = new IntrospectionAuditRuntime({
+      config: { ...DEFAULT_INTROSPECTION_AUDIT_CONFIG, enabled: true },
+      consentStore,
+      source: sourceFor([CANDIDATE], () => eligible),
+      auditor: {
+        estimateStableReply: vi.fn(async () => {
+          estimateStarted.resolve();
+          return await estimateResult.promise;
+        }),
+        compareReplies,
+      },
+      reflector: { reflect },
+      persistence,
+    });
+
+    const running = runtime.runOnce();
+    await estimateStarted.promise;
+    eligible = false;
+    estimateResult.resolve({ stableReply: 'neutral alternative', model: 'estimator' });
+
+    await expect(running).rejects.toThrow(/source.*no longer eligible/i);
+    expect(compareReplies).not.toHaveBeenCalled();
+    expect(reflect).not.toHaveBeenCalled();
+    expect(persistence.decisions).toEqual([]);
+    expect(persistence.landmarks).toEqual([]);
+  });
+
+  it('revalidates source retirement after comparator before any decision or reflection', async () => {
+    root = mkdtempSync(join(tmpdir(), 'introspection-runtime-comparator-race-'));
+    const consentStore = activeConsentStore(root);
+    const comparisonStarted = deferred<void>();
+    const comparisonResult = deferred<{
+      diverged: boolean;
+      type: null;
+      observation: string;
+      confidence: number;
+      model: string;
+    }>();
+    let eligible = true;
+    const reflect = vi.fn();
+    const persistence = new MemoryPersistence();
+    const runtime = new IntrospectionAuditRuntime({
+      config: { ...DEFAULT_INTROSPECTION_AUDIT_CONFIG, enabled: true },
+      consentStore,
+      source: sourceFor([CANDIDATE], () => eligible),
+      auditor: {
+        estimateStableReply: vi.fn(async () => ({
+          stableReply: 'neutral alternative',
+          model: 'estimator',
+        })),
+        compareReplies: vi.fn(async () => {
+          comparisonStarted.resolve();
+          return await comparisonResult.promise;
+        }),
+      },
+      reflector: { reflect },
+      persistence,
+    });
+
+    const running = runtime.runOnce();
+    await comparisonStarted.promise;
+    eligible = false;
+    comparisonResult.resolve({
+      diverged: false,
+      type: null,
+      observation: 'No meaningful difference.',
+      confidence: 0.9,
+      model: 'comparator',
+    });
+
+    await expect(running).rejects.toThrow(/source.*no longer eligible/i);
+    expect(reflect).not.toHaveBeenCalled();
+    expect(persistence.decisions).toEqual([]);
+    expect(persistence.landmarks).toEqual([]);
+  });
+
+  it('revalidates source retirement after reflection before the landmark write', async () => {
+    root = mkdtempSync(join(tmpdir(), 'introspection-runtime-reflection-race-'));
+    const consentStore = activeConsentStore(root);
+    const reflectionStarted = deferred<void>();
+    const reflectionResult = deferred<{ reflection: string; model: string }>();
+    let eligible = true;
+    const persistence = new MemoryPersistence();
+    const runtime = new IntrospectionAuditRuntime({
+      config: { ...DEFAULT_INTROSPECTION_AUDIT_CONFIG, enabled: true },
+      consentStore,
+      source: sourceFor([CANDIDATE], () => eligible),
+      auditor: {
+        estimateStableReply: vi.fn(async () => ({
+          stableReply: 'neutral alternative',
+          model: 'estimator',
+        })),
+        compareReplies: vi.fn(async () => ({
+          diverged: true,
+          type: 'substantive',
+          observation: 'The decision arrived before comparison.',
+          confidence: 0.9,
+          model: 'comparator',
+        })),
+      },
+      reflector: {
+        reflect: vi.fn(async () => {
+          reflectionStarted.resolve();
+          return await reflectionResult.promise;
+        }),
+      },
+      persistence,
+    });
+
+    const running = runtime.runOnce();
+    await reflectionStarted.promise;
+    eligible = false;
+    reflectionResult.resolve({ reflection: 'I want to compare first.', model: 'reflector' });
+
+    await expect(running).rejects.toThrow(/source.*no longer eligible/i);
+    expect(persistence.decisions).toEqual([]);
+    expect(persistence.landmarks).toEqual([]);
+  });
+
   it('skips already-audited candidates before applying the per-run new-source cap', async () => {
     root = mkdtempSync(join(tmpdir(), 'introspection-runtime-backlog-'));
     const consentStore = new IntrospectionConsentStore(join(root, 'consent.jsonl'));
@@ -324,7 +527,7 @@ describe('scheduled blinded introspection audit', () => {
     const runtime = new IntrospectionAuditRuntime({
       config: { ...DEFAULT_INTROSPECTION_AUDIT_CONFIG, enabled: true, maxCandidatesPerRun: 3 },
       consentStore,
-      source: { listCandidates: () => candidates },
+      source: sourceFor(candidates),
       auditor: {
         estimateStableReply,
         compareReplies: async () => ({
@@ -358,7 +561,7 @@ describe('scheduled blinded introspection audit', () => {
     const runtime = new IntrospectionAuditRuntime({
       config: { ...DEFAULT_INTROSPECTION_AUDIT_CONFIG, enabled: true },
       consentStore,
-      source: { listCandidates: () => [CANDIDATE] },
+      source: sourceFor(),
       auditor: {
         estimateStableReply: async () => ({ stableReply: 'neutral alternative', model: 'estimator' }),
         compareReplies: async () => ({
@@ -394,7 +597,7 @@ describe('scheduled blinded introspection audit', () => {
     const runtime = new IntrospectionAuditRuntime({
       config: { ...DEFAULT_INTROSPECTION_AUDIT_CONFIG, enabled: true },
       consentStore,
-      source: { listCandidates: () => [CANDIDATE] },
+      source: sourceFor(),
       auditor: {
         estimateStableReply: async () => ({ stableReply: 'neutral alternative', model: 'estimator' }),
         compareReplies: async () => ({

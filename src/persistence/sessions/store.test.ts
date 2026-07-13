@@ -605,16 +605,24 @@ describe('SessionStore', () => {
 
     expect(store.getRecentSourceTurnRecords(sourceChannelId, 10).map(record => record.sessionId))
       .toEqual([logicalSessionId, logicalSessionId]);
+    expect(store.isSourceTurnRecordEligible(sourceChannelId, logicalSessionId, redactedTurnId))
+      .toBe(true);
     store.redactTurn(logicalSessionId, redactedTurnId, {
       actor: 'admin:test',
       reason: 'privacy request',
     });
     expect(store.getRecentSourceTurnRecords(sourceChannelId, 10).map(record => record.turnId))
       .toEqual([visibleTurnId]);
+    expect(store.isSourceTurnRecordEligible(sourceChannelId, logicalSessionId, redactedTurnId))
+      .toBe(false);
+    expect(store.isSourceTurnRecordEligible(sourceChannelId, logicalSessionId, visibleTurnId))
+      .toBe(true);
 
     const reloaded = new SessionStore(dir);
     expect(reloaded.getRecentSourceTurnRecords(sourceChannelId, 10).map(record => record.turnId))
       .toEqual([visibleTurnId]);
+    expect(reloaded.isSourceTurnRecordEligible(sourceChannelId, logicalSessionId, redactedTurnId))
+      .toBe(false);
   });
 
   it('indexes appended messages for FTS keyword search across channels', async () => {

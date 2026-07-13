@@ -213,6 +213,7 @@ describe('IntrospectionLandmarkPostgresStore integration', () => {
               ? records
               : [],
             isSessionRetiredOrQuarantined: () => false,
+            isSourceTurnRecordEligible: () => true,
           });
           const contexts: LLMContext[] = [];
           const completions = [

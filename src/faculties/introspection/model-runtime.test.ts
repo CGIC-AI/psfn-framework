@@ -24,6 +24,7 @@ const CANDIDATE: IntrospectionAuditCandidate = {
   sourceRef: 'turn:source-turn',
   turnId: 'source-turn',
   channelId: 'discord:source-channel',
+  ownerSessionId: 'session:source-active',
   occurredAt: '2026-07-13T10:00:00.000Z',
   publicStimulus: 'Please choose a plan.',
   actualReply: 'I choose the first plan.',

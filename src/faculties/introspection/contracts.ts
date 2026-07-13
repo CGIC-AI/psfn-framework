@@ -34,6 +34,7 @@ export interface IntrospectionAuditCandidate {
   sourceRef: string;
   turnId: string;
   channelId: string;
+  ownerSessionId: string;
   occurredAt: string;
   publicStimulus: string;
   actualReply: string;
@@ -81,6 +82,7 @@ export interface IntrospectionAuditSourcePort {
     recentTurnLimit: number;
     maxSourceChars: number;
   }): IntrospectionAuditCandidate[];
+  isCandidateStillEligible(candidate: IntrospectionAuditCandidate): boolean;
 }
 
 export interface IntrospectionLandmarkAppendInput {

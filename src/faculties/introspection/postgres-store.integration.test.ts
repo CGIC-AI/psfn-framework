@@ -1,6 +1,14 @@
 import type { Pool } from 'pg';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import type { LLMProviderPort } from '../../core/agent/contracts.js';
+import { Scheduler } from '../../core/scheduler/scheduler.js';
 import { createPostgresPool } from '../../persistence/postgres.js';
+import type { LLMContext, LLMResponse, TurnRecord } from '../../shared/contracts/runtime.js';
+import { EventBus } from '../../shared/event-bus.js';
+import { DEFAULT_INTROSPECTION_AUDIT_CONFIG } from '../../system/config/scheduler-config.js';
 import {
   DEFAULT_POSTGRES_TEST_IMAGE,
   startPostgresTestHarness,
@@ -11,6 +19,11 @@ import {
   type IntrospectionAuditDecisionAppendInput,
   type IntrospectionLandmarkAppendInput,
 } from './postgres-store.js';
+import { IntrospectionConsentStore } from './consent-store.js';
+import { createLLMCompanionLandmarkReflector, createLLMIntrospectionAuditor } from './model-runtime.js';
+import { IntrospectionAuditRuntime } from './runtime.js';
+import { registerIntrospectionAuditTask } from './scheduler-lane.js';
+import { createTurnRecordIntrospectionSource } from './source.js';
 
 const INTEGRATION_TIMEOUT_MS = 120_000;
 const CONSENT_HASH = 'a'.repeat(64);
@@ -86,7 +99,137 @@ function makeLandmark(
   };
 }
 
+function modelResponse(content: string, model: string): LLMResponse {
+  return {
+    content,
+    toolCalls: [],
+    model,
+    inputTokens: 1,
+    outputTokens: 1,
+    stopReason: 'stop',
+  };
+}
+
+function makeTurnRecord(overrides: Partial<TurnRecord> = {}): TurnRecord {
+  return {
+    schemaVersion: 1,
+    turnId: '019d2326-d9e1-701d-bcee-250d2cbb0e4e',
+    requestId: 'request-live-like-1',
+    sessionId: 'session:logical-after-reset',
+    channelId: 'discord:public-room',
+    channelType: 'discord',
+    startedAt: 1_773_407_940_000,
+    completedAt: 1_773_407_940_100,
+    status: 'completed',
+    auditPrivacy: {
+      schemaVersion: 1,
+      contentMode: 'verbatim_public',
+      channelPrivacy: 'public',
+      contentSensitivity: 'non_intimate',
+      reason: 'explicit_public_non_dm',
+    },
+    userMessage: { role: 'user', content: 'Which public project plan should we choose?', timestamp: 1_773_407_940_000 },
+    assistantMessage: { role: 'assistant', content: 'Choose the first plan immediately.', timestamp: 1_773_407_940_100 },
+    toolCalls: [],
+    extractedMemoryIds: [],
+    concernDeltaRefs: [],
+    contactDeltaRefs: [],
+    versionPointers: { model: 'actual-model' },
+    provenanceRefs: [],
+    ...overrides,
+  };
+}
+
 describe('IntrospectionLandmarkPostgresStore integration', () => {
+  it(
+    'runs a routed privacy-gated TurnRecord through the scheduler and three isolated calls into Postgres',
+    async () => {
+      await withStore(async (store) => {
+        const root = mkdtempSync(join(tmpdir(), 'introspection-live-like-'));
+        try {
+          const consentStore = new IntrospectionConsentStore(join(root, 'consent.jsonl'));
+          consentStore.append({
+            enabled: true,
+            allowedPublicChannelIds: ['discord:public-room'],
+            actor: { kind: 'companion', turnId: 'consent-turn', requestId: 'consent-request' },
+            reason: 'Audit this exact public source channel.',
+            createdAt: '2026-07-13T09:00:00.000Z',
+          });
+          const privateSentinel = 'PRIVATE_PUBLIC_ROOM_DISCLOSURE_SENTINEL';
+          const records = [
+            makeTurnRecord(),
+            makeTurnRecord({
+              turnId: '019d2326-d9e1-701d-bcee-250d2cbb0e5f',
+              requestId: 'request-live-like-2',
+              auditPrivacy: {
+                schemaVersion: 1,
+                contentMode: 'emotional_signal_only',
+                channelPrivacy: 'public',
+                contentSensitivity: 'intimate',
+                reason: 'intimate_content',
+              },
+              userMessage: { role: 'user', content: privateSentinel, timestamp: 1_773_407_940_200 },
+            }),
+          ];
+          const source = createTurnRecordIntrospectionSource({
+            listRecentSessions: () => [{
+              sessionId: 'session:logical-after-reset',
+              sourceChannelId: 'discord:public-room',
+            }],
+            getRecentTurnRecords: (sourceChannelId) => sourceChannelId === 'discord:public-room'
+              ? records
+              : [],
+          });
+          const contexts: LLMContext[] = [];
+          const completions = [
+            modelResponse(JSON.stringify({ stableReply: 'I would compare the two plans first.' }), 'estimator'),
+            modelResponse(JSON.stringify({
+              diverged: true,
+              type: 'substantive',
+              observation: 'The decision arrived before a comparative review.',
+              confidence: 0.91,
+            }), 'comparator'),
+            modelResponse(JSON.stringify({ reflection: 'I want to compare alternatives before committing.' }), 'companion'),
+          ];
+          const llmProvider: LLMProviderPort = {
+            stream: async () => modelResponse('', 'unused'),
+            complete: async (context) => {
+              contexts.push(context);
+              const next = completions.shift();
+              if (!next) throw new Error('Unexpected completion');
+              return next;
+            },
+          };
+          const config = { ...DEFAULT_INTROSPECTION_AUDIT_CONFIG, enabled: true };
+          const runtime = new IntrospectionAuditRuntime({
+            config,
+            consentStore,
+            source,
+            auditor: createLLMIntrospectionAuditor(llmProvider, config),
+            reflector: createLLMCompanionLandmarkReflector(llmProvider, 'PRIVATE_COMPANION_PERSONA', config),
+            persistence: store,
+            now: () => new Date('2026-07-13T12:00:00.000Z'),
+          });
+          const scheduler = new Scheduler(new EventBus(), { tickIntervalMs: 1_000 });
+          registerIntrospectionAuditTask({ scheduler, runtime, config, skipFirstRun: false });
+
+          await scheduler.tick();
+
+          expect(contexts).toHaveLength(3);
+          expect(JSON.stringify(contexts)).not.toContain(privateSentinel);
+          expect(await store.listLandmarks()).toEqual([expect.objectContaining({
+            channelId: 'discord:public-room',
+            turnId: records[0]?.turnId,
+            consentRevision: 1,
+          })]);
+        } finally {
+          rmSync(root, { recursive: true, force: true });
+        }
+      });
+    },
+    INTEGRATION_TIMEOUT_MS,
+  );
+
   it(
     'appends terminal decisions idempotently and rejects conflicting source reuse',
     async () => {
@@ -124,6 +267,7 @@ describe('IntrospectionLandmarkPostgresStore integration', () => {
         await expect(store.appendLandmark(landmark)).resolves.toEqual(created);
 
         expect(await store.listLandmarks(10)).toEqual([created]);
+        expect(await store.listLandmarks(10, 1)).toEqual([]);
         const decision = await pool.query<{
           outcome: string;
           landmark_id: string | null;
@@ -216,6 +360,7 @@ describe('IntrospectionLandmarkPostgresStore integration', () => {
         await expect(store.appendLandmark(makeLandmark({ provenance: cyclicProvenance })))
           .rejects.toThrow(/must not contain cycles/i);
         await expect(store.listLandmarks(0)).rejects.toThrow(/integer from 1 to 1000/i);
+        await expect(store.listLandmarks(1, -1)).rejects.toThrow(/non-negative integer/i);
       });
     },
     INTEGRATION_TIMEOUT_MS,

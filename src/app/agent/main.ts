@@ -477,8 +477,14 @@ async function main(): Promise<void> {
     config: introspectionAuditConfig,
     consentStore: introspectionConsentStore,
     source: createTurnRecordIntrospectionSource({
-      listRecentSessions: (limit) => sessionManager.listRecentSessions(limit),
-      getRecentTurnRecords: (channelId, limit) => sessionStore.getRecentTurnRecords(channelId, limit),
+      listRecentSessions: (limit) => sessionManager.listRecentSessions(limit).map((session) => ({
+        sessionId: session.sessionId,
+        sourceChannelId: sessionManager.getSessionRouteForLogicalSession(session.sessionId)?.sourceChannelId
+          ?? session.channelId,
+      })),
+      getRecentTurnRecords: (sourceChannelId, limit) => (
+        sessionStore.getRecentSourceTurnRecords(sourceChannelId, limit)
+      ),
     }),
     auditor: createLLMIntrospectionAuditor(llmProvider, introspectionAuditConfig),
     reflector: createLLMCompanionLandmarkReflector(

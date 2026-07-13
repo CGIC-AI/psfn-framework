@@ -718,6 +718,15 @@ export class SessionStore implements TranscriptSearchPort {
     if (filtered.length <= limit) return filtered;
     return filtered.slice(-limit);
   }
+  /**
+   * Reads the physical turn-record stream for an exact source channel without
+   * resolving it through a logical-session alias. Introspection consent is
+   * channel-exact, so routed sessions must use this path instead of widening a
+   * source-channel decision to the whole logical session.
+   */
+  getRecentSourceTurnRecords(sourceChannelId: string, limit: number): TurnRecord[] {
+    return this.turnRecordStore.readRecentTurnRecords(sourceChannelId, limit);
+  }
   async searchByKeywords(
     query: string,
     limit = 10,

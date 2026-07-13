@@ -87,10 +87,13 @@ export interface TurnRecordAuditPrivacy {
   schemaVersion: 1;
   contentMode: 'verbatim_public' | 'emotional_signal_only';
   channelPrivacy?: ChannelPrivacy;
+  contentSensitivity: 'non_intimate' | 'intimate' | 'ambiguous';
   reason:
     | 'explicit_public_non_dm'
     | 'direct_message'
     | 'non_public_channel'
+    | 'intimate_content'
+    | 'missing_or_ambiguous_content_sensitivity'
     | 'missing_or_ambiguous_privacy';
 }
 
@@ -98,6 +101,8 @@ export interface TurnRecord {
   schemaVersion: 1;
   turnId: TurnID;
   requestId: string;
+  /** Logical session that owned the turn; distinct from the exact source channel. */
+  sessionId?: string;
   channelId: string;
   channelType: ChannelType;
   startedAt: number;
@@ -286,6 +291,13 @@ export interface MessageRoutingMetadata {
   satellite?: SatelliteRoutingMetadata;
   broadcast?: BroadcastRoutingMetadata;
   channelPrivacy?: ChannelPrivacy;
+  /**
+   * Trusted write-time classification for introspection replay. Ingress clients
+   * cannot claim this field directly: only an in-process, policy-owned producer
+   * may stamp it. Absence is ambiguous and therefore never permits verbatim
+   * replay, even on an explicitly public channel.
+   */
+  auditContentSensitivity?: 'non_intimate' | 'intimate' | 'ambiguous';
   modelOverride?: MessageModelOverride;
   promptOverride?: MessagePromptOverride;
   responseStyle?: ResponseStyle;

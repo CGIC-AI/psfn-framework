@@ -695,6 +695,7 @@ export class TurnSupportRuntime {
     );
     return buildTurnRecordForTurn({
       ...input,
+      sessionId: this.sessionManager.resolveSessionChannelId(input.message.channelId),
       roleEnvelopeRefs,
       hashPromptText: this.hashPromptText,
     });

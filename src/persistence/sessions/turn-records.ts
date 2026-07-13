@@ -142,6 +142,8 @@ function parseOptionalAuditPrivacy(value: unknown): TurnRecordAuditPrivacy | und
     'explicit_public_non_dm',
     'direct_message',
     'non_public_channel',
+    'intimate_content',
+    'missing_or_ambiguous_content_sensitivity',
     'missing_or_ambiguous_privacy',
   ];
   if (!validReasons.includes(reason as TurnRecordAuditPrivacy['reason'])) {
@@ -151,16 +153,29 @@ function parseOptionalAuditPrivacy(value: unknown): TurnRecordAuditPrivacy | und
   if (channelPrivacy !== undefined && !isChannelPrivacy(channelPrivacy)) {
     throw new Error('TurnRecord field "auditPrivacy.channelPrivacy" is invalid');
   }
+  const contentSensitivity = value.contentSensitivity;
+  if (
+    contentSensitivity !== 'non_intimate'
+    && contentSensitivity !== 'intimate'
+    && contentSensitivity !== 'ambiguous'
+  ) {
+    throw new Error('TurnRecord field "auditPrivacy.contentSensitivity" is invalid');
+  }
   if (
     contentMode === 'verbatim_public'
-    && (channelPrivacy !== 'public' || reason !== 'explicit_public_non_dm')
+    && (
+      channelPrivacy !== 'public'
+      || contentSensitivity !== 'non_intimate'
+      || reason !== 'explicit_public_non_dm'
+    )
   ) {
-    throw new Error('TurnRecord auditPrivacy verbatim mode requires explicit public provenance');
+    throw new Error('TurnRecord auditPrivacy verbatim mode requires explicit non-intimate public provenance');
   }
   return {
     schemaVersion: 1,
     contentMode,
     ...(channelPrivacy ? { channelPrivacy } : {}),
+    contentSensitivity,
     reason: reason as TurnRecordAuditPrivacy['reason'],
   };
 }
@@ -442,6 +457,9 @@ function normalizeTurnRecord(raw: unknown, expectedChannelId: string): TurnRecor
 
   const turnId = parseTurnIdOrBackfill(raw, channelId);
   const requestId = parseRequiredString(raw.requestId, 'requestId');
+  const sessionId = raw.sessionId === undefined
+    ? undefined
+    : parseRequiredString(raw.sessionId, 'sessionId');
   const startedAt = parseRequiredTimestamp(raw.startedAt, 'startedAt');
   const completedAt = parseRequiredTimestamp(raw.completedAt, 'completedAt');
 
@@ -461,6 +479,7 @@ function normalizeTurnRecord(raw: unknown, expectedChannelId: string): TurnRecor
   const observability = parseTurnObservability(raw.observability, {
     turnId,
     requestId,
+    ...(sessionId ? { sessionId } : {}),
     channelId,
   });
   const roleEnvelopeRefs = parseOptionalStringArray(raw.roleEnvelopeRefs, 'roleEnvelopeRefs');

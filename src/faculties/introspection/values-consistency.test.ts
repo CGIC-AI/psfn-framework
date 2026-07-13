@@ -108,4 +108,52 @@ describe('introspection values-consistency runtime', () => {
     expect(complete).not.toHaveBeenCalled();
     expect(findings.list()[0]?.status).toBe('insufficient_evidence');
   });
+
+  it('paginates past an already-evaluated newest page to consume older landmarks', async () => {
+    root = mkdtempSync(join(tmpdir(), 'introspection-values-pagination-'));
+    const findings = new ValuesConsistencyFindingStore(join(root, 'values-findings.jsonl'));
+    const landmarks = Array.from({ length: 13 }, (_, index) => ({
+      id: `landmark-${index + 1}`,
+      divergenceType: 'substantive' as const,
+      observation: `Abstract observation ${index + 1}`,
+      confidence: 0.8,
+      companionReflection: `Private reflection ${index + 1}`,
+      createdAt: new Date(Date.UTC(2026, 6, 13, 12, 0, 13 - index)).toISOString(),
+    }));
+    for (const landmark of landmarks.slice(0, 12)) {
+      findings.append({
+        schemaVersion: 1,
+        landmarkId: landmark.id,
+        status: 'supported',
+        finding: 'Already evaluated.',
+        confidence: 0.8,
+        claimedValueRefs: ['values-1'],
+        model: 'earlier-model',
+        createdAt: '2026-07-13T13:00:00.000Z',
+      });
+    }
+    const evaluate = vi.fn(async () => ({
+      status: 'conditional' as const,
+      finding: 'Older evidence was evaluated.',
+      confidence: 0.7,
+      model: 'values-model',
+    }));
+    const runtime = new IntrospectionValuesConsistencyRuntime({
+      landmarks: {
+        listLandmarks: async (limit = 12, offset = 0) => landmarks.slice(offset, offset + limit),
+      },
+      claimedValues: {
+        list: () => [{ id: 'values-1', reflection: 'Care is a claimed value.' }],
+      },
+      findings,
+      evaluator: { evaluate },
+      now: () => new Date('2026-07-13T14:00:00.000Z'),
+    });
+
+    await expect(runtime.runOnce()).resolves.toEqual({ evaluated: 1 });
+    expect(evaluate).toHaveBeenCalledWith(expect.objectContaining({
+      landmark: expect.objectContaining({ id: 'landmark-13' }),
+    }));
+    expect(findings.hasLandmark('landmark-13')).toBe(true);
+  });
 });

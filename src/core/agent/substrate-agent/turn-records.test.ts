@@ -16,12 +16,45 @@ describe('turn-records tool persistence', () => {
       content: 'public statement',
       timestamp: new Date(),
       isDirectMessage: false,
-      routing: { channelPrivacy: 'public' },
+      routing: { channelPrivacy: 'public', auditContentSensitivity: 'non_intimate' },
     })).toEqual({
       schemaVersion: 1,
       contentMode: 'verbatim_public',
       channelPrivacy: 'public',
+      contentSensitivity: 'non_intimate',
       reason: 'explicit_public_non_dm',
+    });
+
+    expect(resolveTurnRecordAuditPrivacy({
+      id: 'message-public-intimate',
+      channelId: 'discord:public',
+      channelType: 'discord',
+      authorId: 'user',
+      authorName: 'User',
+      content: 'trusted classifier marked this intimate',
+      timestamp: new Date(),
+      isDirectMessage: false,
+      routing: { channelPrivacy: 'public', auditContentSensitivity: 'intimate' },
+    })).toMatchObject({
+      contentMode: 'emotional_signal_only',
+      contentSensitivity: 'intimate',
+      reason: 'intimate_content',
+    });
+
+    expect(resolveTurnRecordAuditPrivacy({
+      id: 'message-public-unclassified',
+      channelId: 'discord:public',
+      channelType: 'discord',
+      authorId: 'user',
+      authorName: 'User',
+      content: 'no trusted content classification',
+      timestamp: new Date(),
+      isDirectMessage: false,
+      routing: { channelPrivacy: 'public' },
+    })).toMatchObject({
+      contentMode: 'emotional_signal_only',
+      contentSensitivity: 'ambiguous',
+      reason: 'missing_or_ambiguous_content_sensitivity',
     });
 
     expect(resolveTurnRecordAuditPrivacy({

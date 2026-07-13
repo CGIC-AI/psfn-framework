@@ -16,6 +16,7 @@ function record(overrides: Partial<TurnRecord> = {}): TurnRecord {
       schemaVersion: 1,
       contentMode: 'verbatim_public',
       channelPrivacy: 'public',
+      contentSensitivity: 'non_intimate',
       reason: 'explicit_public_non_dm',
     },
     userMessage: { role: 'user', content: 'Public question', timestamp: 1_700_000_000_000 },
@@ -35,17 +36,31 @@ describe('turn-record introspection source', () => {
     const intimateSentinel = 'PRIVATE_INTIMATE_SENTINEL';
     const source = createTurnRecordIntrospectionSource({
       listRecentSessions: () => [
-        { sessionId: 'discord:public-room', channelId: 'discord:public-room' },
-        { sessionId: 'discord:private-dm', channelId: 'discord:private-dm' },
+        { sessionId: 'discord:public-room', sourceChannelId: 'discord:public-room' },
+        { sessionId: 'discord:private-dm', sourceChannelId: 'discord:private-dm' },
       ],
       getRecentTurnRecords: (channelId) => channelId === 'discord:public-room'
-        ? [record()]
+        ? [
+          record(),
+          record({
+            turnId: '019d2326-d9e1-701d-bcee-250d2cbb0e5f',
+            auditPrivacy: {
+              schemaVersion: 1,
+              contentMode: 'emotional_signal_only',
+              channelPrivacy: 'public',
+              contentSensitivity: 'intimate',
+              reason: 'intimate_content',
+            },
+            userMessage: { role: 'user', content: intimateSentinel, timestamp: 1_700_000_000_000 },
+          }),
+        ]
         : [record({
           channelId: 'discord:private-dm',
           auditPrivacy: {
             schemaVersion: 1,
             contentMode: 'emotional_signal_only',
             channelPrivacy: 'private',
+            contentSensitivity: 'intimate',
             reason: 'direct_message',
           },
           userMessage: { role: 'user', content: intimateSentinel, timestamp: 1_700_000_000_000 },
@@ -65,7 +80,7 @@ describe('turn-record introspection source', () => {
 
   it('fails closed for legacy records without an audit privacy snapshot', () => {
     const source = createTurnRecordIntrospectionSource({
-      listRecentSessions: () => [{ sessionId: 'discord:public-room', channelId: 'discord:public-room' }],
+      listRecentSessions: () => [{ sessionId: 'discord:public-room', sourceChannelId: 'discord:public-room' }],
       getRecentTurnRecords: () => [record({ auditPrivacy: undefined })],
     });
     expect(source.listCandidates({
@@ -74,5 +89,34 @@ describe('turn-record introspection source', () => {
       recentTurnLimit: 10,
       maxSourceChars: 1_000,
     })).toEqual([]);
+  });
+
+  it('reads routed turns from the source stream without widening consent to the logical session', () => {
+    const source = createTurnRecordIntrospectionSource({
+      listRecentSessions: () => [{
+        sessionId: 'session:logical-after-reset',
+        sourceChannelId: 'discord:public-room',
+      }],
+      getRecentTurnRecords: (sourceChannelId) => sourceChannelId === 'discord:public-room'
+        ? [record({ sessionId: 'session:logical-after-reset' })]
+        : [],
+    });
+    const input = {
+      recentSessionLimit: 10,
+      recentTurnLimit: 10,
+      maxSourceChars: 1_000,
+    };
+
+    expect(source.listCandidates({
+      ...input,
+      allowedPublicChannelIds: ['session:logical-after-reset'],
+    })).toEqual([]);
+    expect(source.listCandidates({
+      ...input,
+      allowedPublicChannelIds: ['discord:public-room'],
+    })).toEqual([expect.objectContaining({
+      channelId: 'discord:public-room',
+      provenanceRefs: expect.arrayContaining(['session:session:logical-after-reset']),
+    })]);
   });
 });

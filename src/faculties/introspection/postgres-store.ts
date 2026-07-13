@@ -255,7 +255,7 @@ export class IntrospectionLandmarkPostgresStore implements IntrospectionAuditPer
     return row.audited;
   }
 
-  async listLandmarks(limit = 100): Promise<IntrospectionLandmarkRecord[]> {
+  async listLandmarks(limit = 100, offset = 0): Promise<IntrospectionLandmarkRecord[]> {
     if (
       !Number.isSafeInteger(limit)
       || limit < 1
@@ -264,6 +264,9 @@ export class IntrospectionLandmarkPostgresStore implements IntrospectionAuditPer
       throw new Error(
         `Introspection landmark list limit must be an integer from 1 to ${MAX_INTROSPECTION_LANDMARK_LIST_LIMIT}`,
       );
+    }
+    if (!Number.isSafeInteger(offset) || offset < 0) {
+      throw new Error('Introspection landmark list offset must be a non-negative integer');
     }
     const rows = await queryRows<IntrospectionLandmarkRow>(this.pool, `
       SELECT
@@ -275,7 +278,8 @@ export class IntrospectionLandmarkPostgresStore implements IntrospectionAuditPer
       FROM introspection_landmarks
       ORDER BY created_at DESC, id DESC
       LIMIT $1
-    `, [limit]);
+      OFFSET $2
+    `, [limit, offset]);
     return rows.map(mapLandmarkRow);
   }
 

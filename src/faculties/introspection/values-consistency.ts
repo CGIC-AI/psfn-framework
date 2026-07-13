@@ -199,7 +199,9 @@ export function createLLMValuesConsistencyEvaluator(options: {
 
 export class IntrospectionValuesConsistencyRuntime {
   constructor(private readonly options: {
-    landmarks: { listLandmarks(limit?: number): Promise<ValuesConsistencyLandmarkEvidence[]> };
+    landmarks: {
+      listLandmarks(limit?: number, offset?: number): Promise<ValuesConsistencyLandmarkEvidence[]>;
+    };
     claimedValues: { list(options?: { limit?: number }): Array<{ id: string; reflection: string }> };
     findings: ValuesConsistencyFindingStore;
     evaluator: ValuesConsistencyEvaluatorPort;
@@ -212,20 +214,29 @@ export class IntrospectionValuesConsistencyRuntime {
       reflection: entry.reflection,
     }));
     let evaluated = 0;
-    for (const landmark of await this.options.landmarks.listLandmarks(12)) {
-      if (this.options.findings.hasLandmark(landmark.id)) continue;
-      const result = await this.options.evaluator.evaluate({ landmark, claimedValues });
-      this.options.findings.append({
-        schemaVersion: 1,
-        landmarkId: landmark.id,
-        status: result.status,
-        finding: result.finding,
-        confidence: result.confidence,
-        claimedValueRefs: claimedValues.map(value => value.id),
-        model: result.model,
-        createdAt: (this.options.now?.() ?? new Date()).toISOString(),
-      });
-      evaluated += 1;
+    const pageSize = 12;
+    let offset = 0;
+    while (evaluated < pageSize) {
+      const page = await this.options.landmarks.listLandmarks(pageSize, offset);
+      if (page.length === 0) break;
+      for (const landmark of page) {
+        if (evaluated >= pageSize) break;
+        if (this.options.findings.hasLandmark(landmark.id)) continue;
+        const result = await this.options.evaluator.evaluate({ landmark, claimedValues });
+        this.options.findings.append({
+          schemaVersion: 1,
+          landmarkId: landmark.id,
+          status: result.status,
+          finding: result.finding,
+          confidence: result.confidence,
+          claimedValueRefs: claimedValues.map(value => value.id),
+          model: result.model,
+          createdAt: (this.options.now?.() ?? new Date()).toISOString(),
+        });
+        evaluated += 1;
+      }
+      offset += page.length;
+      if (page.length < pageSize) break;
     }
     return { evaluated };
   }

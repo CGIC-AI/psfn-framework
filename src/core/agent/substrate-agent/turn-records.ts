@@ -39,20 +39,49 @@ function resolveSessionChannelMeta(message: SubstrateMessage): ChannelMeta | und
 
 export function resolveTurnRecordAuditPrivacy(message: SubstrateMessage): TurnRecordAuditPrivacy {
   const channelPrivacy = normalizeChannelPrivacy(message.routing?.channelPrivacy);
+  const claimedContentSensitivity = message.routing?.auditContentSensitivity;
+  const contentSensitivity = claimedContentSensitivity === 'non_intimate'
+    || claimedContentSensitivity === 'intimate'
+    ? claimedContentSensitivity
+    : 'ambiguous';
   if (message.isDirectMessage === true) {
     return {
       schemaVersion: 1,
       contentMode: 'emotional_signal_only',
       ...(channelPrivacy ? { channelPrivacy } : {}),
+      contentSensitivity,
       reason: 'direct_message',
     };
   }
-  if (channelPrivacy === 'public' && message.isDirectMessage === false) {
+  if (
+    channelPrivacy === 'public'
+    && message.isDirectMessage === false
+    && contentSensitivity === 'non_intimate'
+  ) {
     return {
       schemaVersion: 1,
       contentMode: 'verbatim_public',
       channelPrivacy,
+      contentSensitivity,
       reason: 'explicit_public_non_dm',
+    };
+  }
+  if (contentSensitivity === 'intimate') {
+    return {
+      schemaVersion: 1,
+      contentMode: 'emotional_signal_only',
+      ...(channelPrivacy ? { channelPrivacy } : {}),
+      contentSensitivity,
+      reason: 'intimate_content',
+    };
+  }
+  if (contentSensitivity === 'ambiguous') {
+    return {
+      schemaVersion: 1,
+      contentMode: 'emotional_signal_only',
+      ...(channelPrivacy ? { channelPrivacy } : {}),
+      contentSensitivity,
+      reason: 'missing_or_ambiguous_content_sensitivity',
     };
   }
   if (channelPrivacy) {
@@ -60,12 +89,14 @@ export function resolveTurnRecordAuditPrivacy(message: SubstrateMessage): TurnRe
       schemaVersion: 1,
       contentMode: 'emotional_signal_only',
       channelPrivacy,
+      contentSensitivity,
       reason: 'non_public_channel',
     };
   }
   return {
     schemaVersion: 1,
     contentMode: 'emotional_signal_only',
+    contentSensitivity,
     reason: 'missing_or_ambiguous_privacy',
   };
 }
@@ -73,6 +104,7 @@ export function resolveTurnRecordAuditPrivacy(message: SubstrateMessage): TurnRe
 export function recordUserMessage(input: {
   sessionManager: SessionManager;
   message: SubstrateMessage;
+  sessionId?: string;
   turnId: TurnID;
   requestId: string;
   trustLevel: TrustLevel;
@@ -255,6 +287,7 @@ export function buildTurnRecord(input: {
     schemaVersion: 1,
     turnId: input.turnId,
     requestId: input.requestId,
+    ...(input.sessionId?.trim() ? { sessionId: input.sessionId.trim() } : {}),
     channelId: input.message.channelId,
     channelType: input.message.channelType,
     startedAt: input.startedAt,

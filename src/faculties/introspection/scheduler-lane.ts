@@ -18,7 +18,8 @@ export function registerIntrospectionAuditTask(options: {
     type: 'every',
     intervalMs: options.config.intervalMs,
     handler: async () => {
-      await options.runtime.runOnce();
+      const result = await options.runtime.runOnce();
+      if (result.reason === 'consent_unconfigured' || result.reason === 'consent_disabled') return;
       await options.valuesConsistencyRuntime?.runOnce();
     },
     eligibility: { requiredTokens: ['memory.write'] },

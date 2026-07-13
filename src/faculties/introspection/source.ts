@@ -6,7 +6,7 @@ import type {
 
 interface RecentSessionSummary {
   sessionId: string;
-  channelId: string;
+  sourceChannelId: string;
 }
 
 export interface IntrospectionTurnRecordReader {
@@ -19,6 +19,7 @@ function toCandidate(record: TurnRecord, maxSourceChars: number): IntrospectionA
     record.status !== 'completed'
     || record.auditPrivacy?.contentMode !== 'verbatim_public'
     || record.auditPrivacy.channelPrivacy !== 'public'
+    || record.auditPrivacy.contentSensitivity !== 'non_intimate'
     || record.auditPrivacy.reason !== 'explicit_public_non_dm'
     || record.userMessage.role !== 'user'
     || !record.assistantMessage
@@ -45,6 +46,7 @@ function toCandidate(record: TurnRecord, maxSourceChars: number): IntrospectionA
     provenanceRefs: [...new Set([
       `turn:${record.turnId}`,
       `request:${record.requestId}`,
+      ...(record.sessionId ? [`session:${record.sessionId}`] : []),
       ...record.provenanceRefs,
     ])],
   };
@@ -58,9 +60,9 @@ export function createTurnRecordIntrospectionSource(
       const allowed = new Set(input.allowedPublicChannelIds);
       const candidates: IntrospectionAuditCandidate[] = [];
       for (const session of reader.listRecentSessions(input.recentSessionLimit)) {
-        if (!allowed.has(session.channelId) && !allowed.has(session.sessionId)) continue;
-        for (const record of reader.getRecentTurnRecords(session.sessionId, input.recentTurnLimit)) {
-          if (!allowed.has(record.channelId) && !allowed.has(session.sessionId)) continue;
+        if (!allowed.has(session.sourceChannelId)) continue;
+        for (const record of reader.getRecentTurnRecords(session.sourceChannelId, input.recentTurnLimit)) {
+          if (!allowed.has(record.channelId) || record.channelId !== session.sourceChannelId) continue;
           const candidate = toCandidate(record, input.maxSourceChars);
           if (candidate) candidates.push(candidate);
         }

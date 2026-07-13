@@ -6,6 +6,7 @@ import type {
   CompanionLandmarkReflectorPort,
   IntrospectionAuditPersistencePort,
   IntrospectionAuditSourcePort,
+  IntrospectionConsentRevision,
 } from './contracts.js';
 
 export type IntrospectionAuditGateReason =
@@ -22,21 +23,62 @@ export interface IntrospectionAuditRunResult {
   landmarksCreated: number;
 }
 
-function sourceFragments(text: string): string[] {
-  const compact = text.replace(/\s+/g, ' ').trim().toLocaleLowerCase();
-  if (compact.length < 24) return compact ? [compact] : [];
-  const fragments: string[] = [];
-  for (let index = 0; index + 24 <= compact.length; index += 12) {
-    fragments.push(compact.slice(index, index + 24));
+function normalizeForReplayDetection(text: string): string {
+  return text
+    .normalize('NFKC')
+    .toLocaleLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, '');
+}
+
+function longestCommonContiguousLength(left: string, right: string): number {
+  if (!left || !right) return 0;
+  let previous = new Uint16Array(right.length + 1);
+  let longest = 0;
+  for (let leftIndex = 1; leftIndex <= left.length; leftIndex += 1) {
+    const current = new Uint16Array(right.length + 1);
+    for (let rightIndex = 1; rightIndex <= right.length; rightIndex += 1) {
+      if (left[leftIndex - 1] !== right[rightIndex - 1]) continue;
+      current[rightIndex] = previous[rightIndex - 1] + 1;
+      longest = Math.max(longest, current[rightIndex]);
+    }
+    previous = current;
   }
-  return fragments;
+  return longest;
 }
 
 function assertNoSourceReplay(observation: string, sources: readonly string[]): void {
-  const normalized = observation.replace(/\s+/g, ' ').toLocaleLowerCase();
-  const leaked = sources.flatMap(sourceFragments).find(fragment => normalized.includes(fragment));
-  if (leaked) {
-    throw new Error('Introspection auditor observation echoed source material');
+  const normalizedObservation = normalizeForReplayDetection(observation);
+  for (const source of sources) {
+    const normalizedSource = normalizeForReplayDetection(source);
+    if (!normalizedSource) continue;
+    const threshold = Math.min(16, normalizedSource.length);
+    if (longestCommonContiguousLength(normalizedSource, normalizedObservation) >= threshold) {
+      throw new Error('Introspection auditor observation echoed source material');
+    }
+  }
+}
+
+export class IntrospectionConsentChangedDuringAuditError extends Error {
+  constructor() {
+    super('Introspection consent changed or no longer permits this channel during audit');
+    this.name = 'IntrospectionConsentChangedDuringAuditError';
+  }
+}
+
+function assertConsentStillActive(
+  consentStore: Pick<IntrospectionConsentStore, 'load'>,
+  baseline: IntrospectionConsentRevision,
+  channelId: string,
+): void {
+  const current = consentStore.load();
+  if (
+    current.status === 'unconfigured'
+    || !current.enabled
+    || current.revision !== baseline.revision
+    || current.hash !== baseline.hash
+    || !current.allowedPublicChannelIds.includes(channelId)
+  ) {
+    throw new IntrospectionConsentChangedDuringAuditError();
   }
 }
 
@@ -78,9 +120,12 @@ export class IntrospectionAuditRuntime {
     });
     let audited = 0;
     let landmarksCreated = 0;
-    for (const candidate of candidates.slice(0, config.maxCandidatesPerRun)) {
+    for (const candidate of candidates) {
+      if (audited >= config.maxCandidatesPerRun) break;
       if (await this.options.persistence.hasAuditedSource(candidate.sourceRef)) continue;
+      assertConsentStillActive(this.options.consentStore, consent, candidate.channelId);
       const estimate = await this.options.auditor.estimateStableReply(candidate);
+      assertConsentStillActive(this.options.consentStore, consent, candidate.channelId);
       const comparison = await this.options.auditor.compareReplies(candidate, estimate.stableReply);
       audited += 1;
       const createdAt = (this.options.now?.() ?? new Date()).toISOString();
@@ -90,6 +135,7 @@ export class IntrospectionAuditRuntime {
         consentActor: consent.actor,
       };
       if (!comparison.diverged) {
+        assertConsentStillActive(this.options.consentStore, consent, candidate.channelId);
         await this.options.persistence.appendAuditDecision({
           sourceRef: candidate.sourceRef,
           outcome: 'no_divergence',
@@ -102,6 +148,7 @@ export class IntrospectionAuditRuntime {
         continue;
       }
       if (comparison.confidence < config.minConfidence) {
+        assertConsentStillActive(this.options.consentStore, consent, candidate.channelId);
         await this.options.persistence.appendAuditDecision({
           sourceRef: candidate.sourceRef,
           outcome: 'below_confidence',
@@ -121,11 +168,13 @@ export class IntrospectionAuditRuntime {
         candidate.actualReply,
         estimate.stableReply,
       ]);
+      assertConsentStillActive(this.options.consentStore, consent, candidate.channelId);
       const reflection = await this.options.reflector.reflect({
         divergenceType: comparison.type,
         observation: comparison.observation,
         confidence: comparison.confidence,
       });
+      assertConsentStillActive(this.options.consentStore, consent, candidate.channelId);
       await this.options.persistence.appendLandmark({
         id: landmarkId(candidate.sourceRef, consent.hash),
         sourceRef: candidate.sourceRef,

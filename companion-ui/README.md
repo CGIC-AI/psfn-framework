@@ -87,8 +87,11 @@ Preview the production build:
 npm run preview
 ```
 
-Build output goes to `dist/`. The PWA manifest and service worker are in
-`public/`.
+Build output goes to `dist/`. Static manifest and icon sources are in `public/`.
+Vite renders the production `dist/sw.js` from `service-worker/sw.js`, injects
+the current hashed asset list, and versions its cache with
+`COMPANION_UI_BUILD_REVISION`. Container builds set that value to the pinned
+source commit; local builds fall back to a deterministic bundle hash.
 
 ## In-Cluster Test Deployment
 

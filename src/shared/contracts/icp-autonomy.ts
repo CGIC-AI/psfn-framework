@@ -400,6 +400,20 @@ export function assertIcpConversationStatusTransition(
   }
 }
 
+export function assertIcpConversationActivityTransition(
+  previousLastActivityAtMs: number,
+  nextLastActivityAtMs: number,
+): void {
+  const previous = requireTimestamp(
+    previousLastActivityAtMs,
+    'ICP conversation previousLastActivityAtMs',
+  );
+  const next = requireTimestamp(nextLastActivityAtMs, 'ICP conversation nextLastActivityAtMs');
+  if (next < previous) {
+    throw new Error('ICP conversation lastActivityAtMs must not regress');
+  }
+}
+
 export function parseIcpInitiationPermit(
   value: unknown,
   options: IcpPermitValidationOptions = {},
@@ -441,6 +455,15 @@ export function parseIcpInitiationPermit(
   }
   if (status !== 'revoked' && revokedAtMs !== undefined) {
     throw new Error('Only a revoked ICP initiation permit may carry revokedAtMs');
+  }
+  if (consumedAtMs !== undefined && consumedAtMs < issuedAtMs) {
+    throw new Error('ICP initiation permit.consumedAtMs must not predate issuedAtMs');
+  }
+  if (consumedAtMs !== undefined && consumedAtMs >= expiresAtMs) {
+    throw new Error('ICP initiation permit.consumedAtMs must precede expiresAtMs');
+  }
+  if (revokedAtMs !== undefined && revokedAtMs < issuedAtMs) {
+    throw new Error('ICP initiation permit.revokedAtMs must not predate issuedAtMs');
   }
   if (options.requireUsable === true) {
     const nowMs = requireTimestamp(options.nowMs, 'ICP permit validation nowMs');
@@ -504,16 +527,22 @@ export function parseIcpConversationCorrelation(value: unknown): IcpConversation
     raw.fatigueReasonCode,
     'ICP conversation correlation.fatigueReasonCode',
   );
+  const initiatedByCompanionId = requireUuid(
+    raw.initiatedByCompanionId,
+    'ICP conversation correlation.initiatedByCompanionId',
+  );
+  if (initiatedByCompanionId !== localCompanionId && initiatedByCompanionId !== peerCompanionId) {
+    throw new Error(
+      'ICP conversation correlation.initiatedByCompanionId must be the local or peer companion',
+    );
+  }
   return {
     conversationId: requireUuid(raw.conversationId, 'ICP conversation correlation.conversationId'),
     rootInitiationId: requireUuid(
       raw.rootInitiationId,
       'ICP conversation correlation.rootInitiationId',
     ),
-    initiatedByCompanionId: requireUuid(
-      raw.initiatedByCompanionId,
-      'ICP conversation correlation.initiatedByCompanionId',
-    ),
+    initiatedByCompanionId,
     localCompanionId,
     peerCompanionId,
     peerContactId: requireString(raw.peerContactId, 'ICP conversation correlation.peerContactId'),

@@ -4,6 +4,7 @@ import {
   assertIcpInitiationCandidateStatusTransition,
   parseIcpInitiationCandidate,
   toIcpInitiationCandidateSharedMetadata,
+  type IcpInitiationCandidate,
 } from './initiation-candidate.js';
 
 const COMPANION_A = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
@@ -52,6 +53,14 @@ describe('private ICP initiation candidate contract', () => {
     expect(shared).not.toHaveProperty('peerContactId');
     expect(JSON.stringify(shared)).not.toContain('shared research');
     expect(shared.candidateId).toBe(rawCandidate.candidateId);
+
+    const hostile = {
+      ...parseIcpInitiationCandidate(rawCandidate),
+      hostileExtra: 'must-not-cross',
+    } as IcpInitiationCandidate;
+    const hostileProjection = toIcpInitiationCandidateSharedMetadata(hostile);
+    expect(hostileProjection).not.toHaveProperty('hostileExtra');
+    expect(JSON.stringify(hostileProjection)).not.toContain('must-not-cross');
   });
 
   it('enforces candidate lifecycle transitions', () => {

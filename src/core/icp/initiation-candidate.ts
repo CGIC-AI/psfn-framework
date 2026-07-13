@@ -169,6 +169,18 @@ export function assertIcpInitiationCandidateStatusTransition(
 export function toIcpInitiationCandidateSharedMetadata(
   candidate: IcpInitiationCandidate,
 ): IcpInitiationCandidateSharedMetadata {
-  const { peerContactId: _peerContactId, reasonSummary: _reasonSummary, ...shared } = candidate;
-  return shared;
+  return {
+    candidateId: candidate.candidateId,
+    rootInitiationId: candidate.rootInitiationId,
+    localCompanionId: candidate.localCompanionId,
+    peerCompanionId: candidate.peerCompanionId,
+    preferredChannel: candidate.preferredChannel,
+    source: candidate.source,
+    provenanceRef: candidate.provenanceRef,
+    createdAtMs: candidate.createdAtMs,
+    expiresAtMs: candidate.expiresAtMs,
+    status: candidate.status,
+    ...(candidate.reasonCode !== undefined ? { reasonCode: candidate.reasonCode } : {}),
+    revision: candidate.revision,
+  };
 }

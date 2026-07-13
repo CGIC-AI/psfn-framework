@@ -1368,7 +1368,11 @@ export const POSTGRES_SHARED_MIGRATIONS: readonly string[] = [
     UNIQUE (candidate_id),
     CHECK (sender_companion_id <> recipient_companion_id),
     CHECK ((status = 'consumed') = (consumed_at_ms IS NOT NULL)),
-    CHECK ((status = 'revoked') = (revoked_at_ms IS NOT NULL))
+    CHECK ((status = 'revoked') = (revoked_at_ms IS NOT NULL)),
+    CHECK (consumed_at_ms IS NULL OR (
+      consumed_at_ms >= issued_at_ms AND consumed_at_ms < expires_at_ms
+    )),
+    CHECK (revoked_at_ms IS NULL OR revoked_at_ms >= issued_at_ms)
   );
   `,
   `CREATE INDEX IF NOT EXISTS idx_icp_initiation_permits_conversation

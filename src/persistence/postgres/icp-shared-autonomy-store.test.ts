@@ -73,7 +73,9 @@ beforeEach(() => {
 });
 
 async function connect(): Promise<PostgresIcpSharedAutonomyStore> {
-  return await PostgresIcpSharedAutonomyStore.connect('postgres://example');
+  return await PostgresIcpSharedAutonomyStore.connect('postgres://example', {
+    knownCompanionIds: [A, B],
+  });
 }
 
 describe('PostgresIcpSharedAutonomyStore', () => {
@@ -84,6 +86,29 @@ describe('PostgresIcpSharedAutonomyStore', () => {
       expect.objectContaining({ schema: SHARED_SCHEMA_NAME }),
     );
     expect(mocks.ensureSharedSchema).toHaveBeenCalledWith(mocks.pool);
+  });
+
+  it('requires a known fleet and rejects unknown episode participants before SQL', async () => {
+    await expect(PostgresIcpSharedAutonomyStore.connect('postgres://example', {
+      knownCompanionIds: [A],
+    })).rejects.toThrow('at least two known companion IDs');
+
+    const store = await connect();
+    mocks.queryOne.mockClear();
+    await expect(store.createEpisode({
+      conversationId: CONVERSATION_ID,
+      channelId: `companion-dm:${A}:${C}`,
+      participantCompanionIds: [A, C],
+      rootInitiationId: EPISODE_ROW.root_initiation_id,
+      initiatedByCompanionId: A,
+      initiationSource: 'free_time',
+      provenanceRef: EPISODE_ROW.provenance_ref,
+      openedAtMs: 10_000,
+      lastActivityAtMs: 10_000,
+      status: 'invited',
+      revision: 1,
+    })).rejects.toThrow(`unknown participant ${C}`);
+    expect(mocks.queryOne).not.toHaveBeenCalled();
   });
 
   it('publishes availability only as a monotonic revision', async () => {
@@ -134,11 +159,14 @@ describe('PostgresIcpSharedAutonomyStore', () => {
       conversationId: CONVERSATION_ID,
       expectedStatus: 'invited',
       expectedRevision: 1,
+      expectedLastActivityAtMs: 10_000,
       status: 'active',
       lastActivityAtMs: 11_000,
     });
     const [, sql] = mocks.queryOne.mock.calls[0] as [unknown, string];
     expect(sql).toContain('status = $2 AND revision = $3');
+    expect(sql).toContain('last_activity_at_ms = $4');
+    expect(sql).toContain('$6 >= last_activity_at_ms');
     expect(active.revision).toBe(2);
   });
 
@@ -208,5 +236,18 @@ describe('PostgresIcpSharedAutonomyStore', () => {
       channelId: `companion-dm:${A}:${C}`,
       consumedAtMs: 11_000,
     })).resolves.toMatchObject({ outcome: 'mismatch', reasonCode: 'permit_mismatch' });
+  });
+
+  it('rejects revocation timestamps before issuance at the atomic SQL boundary', async () => {
+    mocks.queryOne.mockResolvedValue(undefined);
+    const store = await connect();
+    await expect(store.revokePermit(
+      PERMIT_ID,
+      1,
+      9_999,
+      'operator_cancelled',
+    )).rejects.toThrow('revocation conflict');
+    const [, sql] = mocks.queryOne.mock.calls[0] as [unknown, string];
+    expect(sql).toContain('issued_at_ms <= $3');
   });
 });

@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import {
+  DEFAULT_POSTGRES_TEST_IMAGE,
   startPostgresTestHarness,
   type PostgresTestHarness,
 } from '../../test-support/postgres-test-harness.js';
@@ -8,7 +9,6 @@ import { createPostgresPool } from '../postgres.js';
 import { PostgresIcpInitiationCandidateStore } from './icp-initiation-candidate-store.js';
 import { PostgresIcpSharedAutonomyStore } from './icp-shared-autonomy-store.js';
 
-const TEST_IMAGE = 'postgres:16-alpine';
 const TIMEOUT_MS = 120_000;
 const A = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 const B = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
@@ -16,12 +16,15 @@ const CANDIDATE_ID = '11111111-1111-4111-8111-111111111111';
 const CONVERSATION_ID = '22222222-2222-4222-8222-222222222222';
 const ROOT_ID = '33333333-3333-4333-8333-333333333333';
 const PERMIT_ID = '44444444-4444-4444-8444-444444444444';
+const SECOND_CONVERSATION_ID = '55555555-5555-4555-8555-555555555555';
+const SECOND_PERMIT_ID = '66666666-6666-4666-8666-666666666666';
+const SECOND_CANDIDATE_ID = '77777777-7777-4777-8777-777777777777';
 const CHANNEL = `companion-dm:${A}:${B}`;
 
 let harness: PostgresTestHarness | null = null;
 
 beforeAll(async () => {
-  harness = await startPostgresTestHarness({ image: TEST_IMAGE });
+  harness = await startPostgresTestHarness({ image: DEFAULT_POSTGRES_TEST_IMAGE });
 }, TIMEOUT_MS);
 
 afterAll(async () => {
@@ -98,8 +101,9 @@ describe('ICP autonomy Postgres persistence', () => {
 
   it('round-trips shared state and permits exactly one concurrent consumer', async () => {
     const databaseUrl = await freshDatabaseUrl();
-    const storeA = await PostgresIcpSharedAutonomyStore.connect(databaseUrl);
-    const storeB = await PostgresIcpSharedAutonomyStore.connect(databaseUrl);
+    const knownCompanionIds = [A, B];
+    const storeA = await PostgresIcpSharedAutonomyStore.connect(databaseUrl, { knownCompanionIds });
+    const storeB = await PostgresIcpSharedAutonomyStore.connect(databaseUrl, { knownCompanionIds });
     try {
       await storeA.publishAvailability({
         companionId: B,
@@ -173,6 +177,7 @@ describe('ICP autonomy Postgres persistence', () => {
         conversationId: CONVERSATION_ID,
         expectedStatus: 'invited',
         expectedRevision: 1,
+        expectedLastActivityAtMs: 10_000,
         status: 'active',
         lastActivityAtMs: 11_000,
       });
@@ -181,16 +186,69 @@ describe('ICP autonomy Postgres persistence', () => {
         conversationId: CONVERSATION_ID,
         expectedStatus: 'invited',
         expectedRevision: 1,
+        expectedLastActivityAtMs: 10_000,
         status: 'declined',
         lastActivityAtMs: 11_000,
         closeReasonCode: 'conversation_declined',
       })).rejects.toThrow('transition conflict');
+
+      await expect(storeA.transitionEpisode({
+        conversationId: CONVERSATION_ID,
+        expectedStatus: 'active',
+        expectedRevision: 2,
+        expectedLastActivityAtMs: 10_000,
+        status: 'ended',
+        lastActivityAtMs: 10_500,
+        closeReasonCode: 'conversation_ended',
+      })).rejects.toThrow('transition conflict');
+
+      await storeA.createEpisode({
+        conversationId: SECOND_CONVERSATION_ID,
+        channelId: CHANNEL,
+        participantCompanionIds: [A, B],
+        rootInitiationId: ROOT_ID,
+        initiatedByCompanionId: A,
+        initiationSource: 'foreground',
+        provenanceRef: 'foreground:turn:18',
+        openedAtMs: 20_000,
+        lastActivityAtMs: 20_000,
+        status: 'invited',
+        revision: 1,
+      });
+      await storeA.issuePermit({
+        permitId: SECOND_PERMIT_ID,
+        candidateId: SECOND_CANDIDATE_ID,
+        conversationId: SECOND_CONVERSATION_ID,
+        senderCompanionId: A,
+        recipientCompanionId: B,
+        channelId: CHANNEL,
+        provenanceRef: 'foreground:turn:18',
+        issuedAtMs: 20_000,
+        expiresAtMs: 80_000,
+        status: 'issued',
+        revision: 1,
+      });
+      await expect(storeA.revokePermit(
+        SECOND_PERMIT_ID,
+        1,
+        19_999,
+        'operator_cancelled',
+      )).rejects.toThrow('revocation conflict');
+      const revoked = await storeA.revokePermit(
+        SECOND_PERMIT_ID,
+        1,
+        20_001,
+        'operator_cancelled',
+      );
+      expect(revoked.status).toBe('revoked');
     } finally {
       await storeA.close();
       await storeB.close();
     }
 
-    const restarted = await PostgresIcpSharedAutonomyStore.connect(databaseUrl);
+    const restarted = await PostgresIcpSharedAutonomyStore.connect(databaseUrl, {
+      knownCompanionIds: [A, B],
+    });
     try {
       expect((await restarted.getEpisode(CONVERSATION_ID))?.status).toBe('active');
       expect((await restarted.getPermit(PERMIT_ID))?.status).toBe('consumed');

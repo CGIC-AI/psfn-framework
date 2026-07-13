@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   assertIcpConversationStatusTransition,
+  assertIcpConversationActivityTransition,
   parseIcpAvailabilityLease,
   parseIcpConversationCorrelation,
   parseIcpConversationEpisode,
@@ -73,6 +74,8 @@ describe('ICP autonomy shared contracts', () => {
     expect(() => assertIcpConversationStatusTransition('active', 'ended')).not.toThrow();
     expect(() => assertIcpConversationStatusTransition('ended', 'active'))
       .toThrow('Invalid ICP conversation status transition');
+    expect(() => assertIcpConversationActivityTransition(11_000, 10_999))
+      .toThrow('lastActivityAtMs must not regress');
   });
 
   it('strictly binds and redacts a one-use permit', () => {
@@ -102,6 +105,17 @@ describe('ICP autonomy shared contracts', () => {
       ...permit,
       status: 'consumed',
     })).toThrow('consumedAtMs');
+    expect(() => parseIcpInitiationPermit({
+      ...permit,
+      status: 'consumed',
+      consumedAtMs: 9_999,
+    })).toThrow('consumedAtMs must not predate issuedAtMs');
+    expect(() => parseIcpInitiationPermit({
+      ...permit,
+      status: 'revoked',
+      revokedAtMs: 9_999,
+      reasonCode: 'operator_cancelled',
+    })).toThrow('revokedAtMs must not predate issuedAtMs');
     expect(() => parseIcpInitiationPermit(permit, { nowMs: 70_000, requireUsable: true }))
       .toThrow('expired');
   });
@@ -133,5 +147,9 @@ describe('ICP autonomy shared contracts', () => {
       ...correlation,
       channelId: `companion-dm:${COMPANION_A}:${COMPANION_C}`,
     })).toThrow('must bind exactly to the DM channel participants');
+    expect(() => parseIcpConversationCorrelation({
+      ...correlation,
+      initiatedByCompanionId: COMPANION_C,
+    })).toThrow('initiatedByCompanionId must be the local or peer companion');
   });
 });

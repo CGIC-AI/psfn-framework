@@ -20,6 +20,7 @@ export interface IcpConversationTransitionInput {
   conversationId: string;
   expectedStatus: IcpConversationStatus;
   expectedRevision: number;
+  expectedLastActivityAtMs: number;
   status: IcpConversationStatus;
   lastActivityAtMs: number;
   closeReasonCode?: IcpAutonomyReasonCode;

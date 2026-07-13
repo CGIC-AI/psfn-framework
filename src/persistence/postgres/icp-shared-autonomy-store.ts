@@ -8,6 +8,7 @@ import type {
 } from '../../core/icp/autonomy-store-ports.js';
 import {
   ICP_AUTONOMY_REASON_CODES,
+  assertIcpConversationActivityTransition,
   assertIcpConversationStatusTransition,
   parseIcpAvailabilityLease,
   parseIcpConversationEpisode,
@@ -103,6 +104,20 @@ function requireReasonCode(value: IcpAutonomyReasonCode, field: string): IcpAuto
   return value;
 }
 
+function normalizeKnownCompanionIds(values: readonly string[]): ReadonlySet<string> {
+  if (!Array.isArray(values)) {
+    throw new Error('ICP shared autonomy store requires knownCompanionIds');
+  }
+  const known = new Set(values.map((value, index) => requireUuid(value, `knownCompanionIds[${index}]`)));
+  if (known.size < 2) {
+    throw new Error('ICP shared autonomy store requires at least two known companion IDs');
+  }
+  if (known.size !== values.length) {
+    throw new Error('ICP shared autonomy store knownCompanionIds must not contain duplicates');
+  }
+  return known;
+}
+
 function mapAvailability(row: AvailabilityRow): IcpAvailabilityLease {
   return parseIcpAvailabilityLease({
     companionId: row.companion_id,
@@ -114,7 +129,10 @@ function mapAvailability(row: AvailabilityRow): IcpAvailabilityLease {
   });
 }
 
-function mapConversation(row: ConversationRow): IcpConversationEpisode {
+function mapConversation(
+  row: ConversationRow,
+  knownCompanionIds: ReadonlySet<string>,
+): IcpConversationEpisode {
   return parseIcpConversationEpisode({
     conversationId: row.conversation_id,
     channelId: row.channel_id,
@@ -128,7 +146,7 @@ function mapConversation(row: ConversationRow): IcpConversationEpisode {
     status: row.status,
     ...(row.close_reason_code !== null ? { closeReasonCode: row.close_reason_code } : {}),
     revision: safeInteger(row.revision, 'episode.revision'),
-  });
+  }, { knownCompanionIds });
 }
 
 function mapPermit(row: PermitRow): IcpInitiationPermit {
@@ -181,9 +199,16 @@ function permitMatches(permit: IcpInitiationPermit, input: IcpPermitConsumptionI
 }
 
 export class PostgresIcpSharedAutonomyStore implements IcpSharedAutonomyStorePort {
-  private constructor(private readonly pool: Pool) {}
+  private constructor(
+    private readonly pool: Pool,
+    private readonly knownCompanionIds: ReadonlySet<string>,
+  ) {}
 
-  static async connect(databaseUrl: string): Promise<PostgresIcpSharedAutonomyStore> {
+  static async connect(
+    databaseUrl: string,
+    options: { knownCompanionIds: readonly string[] },
+  ): Promise<PostgresIcpSharedAutonomyStore> {
+    const knownCompanionIds = normalizeKnownCompanionIds(options.knownCompanionIds);
     const pool = createPostgresPool(databaseUrl, {
       applicationName: 'psfn-icp-autonomy-shared',
       allowExitOnIdle: true,
@@ -191,7 +216,7 @@ export class PostgresIcpSharedAutonomyStore implements IcpSharedAutonomyStorePor
     });
     try {
       await ensureSharedSchema(pool);
-      return new PostgresIcpSharedAutonomyStore(pool);
+      return new PostgresIcpSharedAutonomyStore(pool, knownCompanionIds);
     } catch (error) {
       await pool.end().catch(() => undefined);
       throw error;
@@ -251,7 +276,9 @@ export class PostgresIcpSharedAutonomyStore implements IcpSharedAutonomyStorePor
   }
 
   async createEpisode(episodeInput: IcpConversationEpisode): Promise<IcpConversationEpisode> {
-    const episode = parseIcpConversationEpisode(episodeInput);
+    const episode = parseIcpConversationEpisode(episodeInput, {
+      knownCompanionIds: this.knownCompanionIds,
+    });
     if (episode.status !== 'invited' || episode.revision !== 1) {
       throw new Error('A new ICP conversation episode must start invited at revision 1');
     }
@@ -277,7 +304,7 @@ export class PostgresIcpSharedAutonomyStore implements IcpSharedAutonomyStorePor
       episode.revision,
     ]);
     if (!row) throw new Error(`Failed to create ICP conversation ${episode.conversationId}`);
-    return mapConversation(row);
+    return mapConversation(row, this.knownCompanionIds);
   }
 
   async getEpisode(conversationId: string): Promise<IcpConversationEpisode | null> {
@@ -286,32 +313,39 @@ export class PostgresIcpSharedAutonomyStore implements IcpSharedAutonomyStorePor
       FROM icp_conversation_episodes
       WHERE conversation_id = $1
     `, [requireUuid(conversationId, 'conversationId')]);
-    return row ? mapConversation(row) : null;
+    return row ? mapConversation(row, this.knownCompanionIds) : null;
   }
 
   async transitionEpisode(input: IcpConversationTransitionInput): Promise<IcpConversationEpisode> {
     assertIcpConversationStatusTransition(input.expectedStatus, input.status);
+    assertIcpConversationActivityTransition(
+      input.expectedLastActivityAtMs,
+      input.lastActivityAtMs,
+    );
     const reasonCode = input.closeReasonCode === undefined
       ? null
       : requireReasonCode(input.closeReasonCode, 'closeReasonCode');
     const row = await queryOne<ConversationRow>(this.pool, `
       UPDATE icp_conversation_episodes
-      SET status = $4,
-          last_activity_at_ms = $5,
-          close_reason_code = $6,
+      SET status = $5,
+          last_activity_at_ms = $6,
+          close_reason_code = $7,
           revision = revision + 1
       WHERE conversation_id = $1 AND status = $2 AND revision = $3
+        AND last_activity_at_ms = $4
+        AND $6 >= last_activity_at_ms
       RETURNING ${CONVERSATION_COLUMNS}
     `, [
       requireUuid(input.conversationId, 'conversationId'),
       input.expectedStatus,
       requirePositiveInteger(input.expectedRevision, 'expectedRevision'),
+      requireTimestamp(input.expectedLastActivityAtMs, 'expectedLastActivityAtMs'),
       input.status,
       requireTimestamp(input.lastActivityAtMs, 'lastActivityAtMs'),
       reasonCode,
     ]);
     if (!row) throw new Error(`ICP conversation transition conflict for ${input.conversationId}`);
-    return mapConversation(row);
+    return mapConversation(row, this.knownCompanionIds);
   }
 
   async issuePermit(permitInput: IcpInitiationPermit): Promise<IcpInitiationPermit> {
@@ -420,6 +454,7 @@ export class PostgresIcpSharedAutonomyStore implements IcpSharedAutonomyStorePor
       UPDATE icp_initiation_permits
       SET status = 'revoked', revoked_at_ms = $3, reason_code = $4, revision = revision + 1
       WHERE permit_id = $1 AND revision = $2 AND status = 'issued'
+        AND issued_at_ms <= $3
       RETURNING ${PERMIT_COLUMNS}
     `, [
       requireUuid(permitId, 'permitId'),

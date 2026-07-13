@@ -4,6 +4,8 @@ import type {
   IcpInitiationPermit,
 } from '../../shared/contracts/icp-autonomy.js';
 import type { IcpInitiationPolicySnapshot } from './icp-autonomy-contract.js';
+import type { RelationshipType } from '../../core/contacts/types.js';
+import type { TrustLevel } from '../../system/trust/types.js';
 
 export interface IcpInitiationPolicyAuthorityInput {
   senderCompanionId: string;
@@ -49,13 +51,24 @@ export interface IcpInitiationCapacityPolicyDecision {
   costAllows: boolean;
 }
 
+export interface IcpInitiationCapacityPolicyInput extends IcpInitiationPolicyAuthorityInput {
+  senderRelationship: {
+    trustLevel: TrustLevel;
+    relationshipType: RelationshipType;
+  };
+  peerRelationship: {
+    trustLevel: TrustLevel;
+    relationshipType: RelationshipType;
+  };
+}
+
 /**
  * Capacity policy is deliberately separate from identity/provenance. Until the
  * later ICP charge/fatigue/cost owners exist, production leaves this absent and
  * the gateway authority fails those gates closed.
  */
 export interface IcpInitiationCapacityPolicyAuthority {
-  resolve(input: IcpInitiationPolicyAuthorityInput): Promise<IcpInitiationCapacityPolicyDecision>;
+  resolve(input: IcpInitiationCapacityPolicyInput): Promise<IcpInitiationCapacityPolicyDecision>;
 }
 
 /** Independent-root proof supplied by the canonical provenance/causality owner. */

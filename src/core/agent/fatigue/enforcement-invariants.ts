@@ -6,6 +6,10 @@ import type {
   FatigueEnforcementMetadata,
 } from '../../../shared/contracts/runtime.js';
 import {
+  FATIGUE_CONTINUATION_EVIDENCE_VALUES,
+  FATIGUE_REGULATION_STATE_VALUES,
+} from '../../../shared/contracts/charge-policy.js';
+import {
   isFatigueWorkIntent,
   resolveFatigueOverchargeDeterministicBlockedReasons,
 } from './policy.js';
@@ -212,10 +216,58 @@ function assertBudgetInvariants(metadata: FatigueEnforcementMetadata): void {
   }
 }
 
+function assertSocialRegulationInvariants(metadata: FatigueEnforcementMetadata): void {
+  const regulation = metadata.socialRegulation;
+  if (!FATIGUE_REGULATION_STATE_VALUES.includes(regulation.state)
+    || !['interactive', 'companion_social'].includes(regulation.chargeLane)
+    || [
+      regulation.relationshipPressure,
+      regulation.rootNormalSpent,
+      regulation.rootOverchargeSpent,
+      regulation.contributingEventCount,
+      regulation.marginalChargeUnits,
+      regulation.closeoutReserveRemainingBefore,
+      regulation.closeoutReserveRemainingAfterProjected,
+    ].some(value => !Number.isFinite(value) || value < 0)
+    || !Number.isInteger(regulation.rootNormalSpent)
+    || !Number.isInteger(regulation.rootOverchargeSpent)
+    || !Number.isInteger(regulation.contributingEventCount)
+    || !Number.isInteger(regulation.marginalChargeUnits)
+    || !Number.isInteger(regulation.closeoutReserveRemainingBefore)
+    || !Number.isInteger(regulation.closeoutReserveRemainingAfterProjected)
+    || !hasUniqueValues(regulation.continuationEvidence)
+    || regulation.continuationEvidence.some(evidence => (
+      !FATIGUE_CONTINUATION_EVIDENCE_VALUES.includes(evidence)
+    ))) {
+    fail('social regulation metadata');
+  }
+  const afterAllowance = regulation.state === 'charge_lane_active'
+    || regulation.state === 'wrap_up_allowed'
+    || regulation.state === 'hard_exhausted'
+    || regulation.state === 'overcharge_closeout'
+    || regulation.state === 'final_closeout';
+  const icpRegulated = regulation.rootInitiationId !== undefined;
+  if ((regulation.chargeLane === 'companion_social') !== (afterAllowance && icpRegulated)
+    || (regulation.marginalChargeUnits > 0) !== (afterAllowance && icpRegulated)
+    || (regulation.state === 'suppressed') !== (metadata.modelDisposition === 'suppressed')
+    || regulation.closeoutReserveRemainingBefore !== metadata.budget.overchargeRemainingBefore
+    || regulation.closeoutReserveRemainingAfterProjected
+      !== metadata.budget.overchargeRemainingAfterProjected) {
+    fail('social regulation decision coupling');
+  }
+  const expectedAlert = metadata.modelDisposition === 'allowed'
+    && metadata.decision !== 'allowed_free'
+    && regulation.state !== 'normal';
+  if (metadata.alertInjected !== expectedAlert) {
+    fail('social regulation prompt guidance');
+  }
+}
+
 export function assertFatigueEnforcementMetadataInvariants(
   metadata: FatigueEnforcementMetadata,
 ): FatigueEnforcementContract {
   const contract = DECISION_CONTRACTS[metadata.decision];
+  assertSocialRegulationInvariants(metadata);
   assertSnapshotInvariants(metadata);
   const actorIsMachineIntelligence = metadata.triggeringAuthor.isMachineIntelligence === true;
   if ((metadata.triggeringAuthor.role === 'machine_intelligence')
@@ -244,13 +296,13 @@ export function assertFatigueEnforcementMetadataInvariants(
   const expectedAmount = contract.spendDecision === 'free' ? 0 : 1;
   const expectedShouldRecordSpend = contract.pendingSpend === 'required';
   if (metadata.modelDisposition !== contract.modelDisposition
-    || metadata.alertInjected !== contract.alertInjected
     || metadata.shouldRecordSpend !== expectedShouldRecordSpend
     || metadata.spendDecision !== contract.spendDecision
     || metadata.spendReason !== expectedReason
     || metadata.budget.amount !== expectedAmount
     || metadata.overchargePermitted !== contract.overchargePermitted
-    || !contract.policyBaseStates.includes(metadata.policyBaseState)) {
+    || !(contract.policyBaseStates as readonly FatigueEnforcementMetadata['policyBaseState'][])
+      .includes(metadata.policyBaseState)) {
     fail('decision coupling');
   }
   if (metadata.decision === 'allowed_free' && baseSpend.decision !== 'free') {

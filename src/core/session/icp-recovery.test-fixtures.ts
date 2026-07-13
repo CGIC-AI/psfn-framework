@@ -21,7 +21,7 @@ export const correlation = {
   turnId: '018f22a2-52b8-7a3a-8c16-25b7b14f7081',
   messageId: SOURCE,
   requestId: SOURCE,
-  chargeLane: 'companion_social' as const,
+  chargeLane: 'interactive' as const,
   surface: 'companion_dm' as const,
   costPurpose: 'conversation_turn' as const,
   costOriginStage: 'reply' as const,
@@ -109,6 +109,19 @@ export const fatigueMetadata = {
   peer: fatiguePeer,
   triggeringAuthor: fatigueActor,
   budget: fatigueBudget,
+  socialRegulation: {
+    state: 'normal',
+    chargeLane: 'interactive',
+    relationshipPressure: 0,
+    rootNormalSpent: 0,
+    rootOverchargeSpent: 0,
+    contributingEventCount: 0,
+    marginalChargeUnits: 0,
+    closeoutReserveRemainingBefore: 2,
+    closeoutReserveRemainingAfterProjected: 2,
+    continuationEvidence: [],
+    rootInitiationId: correlation.rootInitiationId,
+  },
 } satisfies FatigueEnforcementMetadata;
 
 export const fatiguePendingSpend = {

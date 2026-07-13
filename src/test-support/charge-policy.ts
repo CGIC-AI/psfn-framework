@@ -1,4 +1,7 @@
-import type { FatiguePolicyConfig } from '../shared/contracts/charge-policy.js';
+import type {
+  ChargePolicyConfig,
+  FatiguePolicyConfig,
+} from '../shared/contracts/charge-policy.js';
 
 export function makeTestFatiguePolicyConfig(): FatiguePolicyConfig {
   return {
@@ -100,5 +103,60 @@ export function makeTestFatiguePolicyConfig(): FatiguePolicyConfig {
       minRecentHumanMessages: 1,
       minRecentHumanParticipants: 1,
     },
+    socialRegulation: {
+      relationshipPressureHalfLifeMs: 6 * 60 * 60_000,
+      relationshipPressureWindowMs: 48 * 60 * 60_000,
+      reservationTtlMs: 15 * 60_000,
+      conversationMaturingRatio: 0.5,
+      marginalChargeUnits: 1,
+      declinedPressureUnits: 3,
+      deferredPressureUnits: 2,
+      unansweredPressureUnits: 1,
+    },
+  };
+}
+
+export function makeTestChargePolicyConfig(): ChargePolicyConfig {
+  return {
+    schemaVersion: 1,
+    runChargeQuotaByLane: {
+      interactive: 24,
+      companion_social: 12,
+      background: 16,
+      maintenance: 0,
+      subagent: 6,
+      shard: 12,
+    },
+    surfaceCosts: {
+      ownerFileInspection: 0,
+      localFilesystem: 0,
+      memoryRead: 0,
+      memoryWrite: 0,
+      localEmbedding: 0,
+      externalEmbedding: 0,
+      localImageGeneration: 0,
+      paidImageGeneration: 6,
+      analysisWorkbenchExtensionBand: 4,
+      subagentLaunch: 1,
+      shardLaunch: 8,
+      externalModelConsult: 1,
+      moaRoundBase: 1,
+      companionSocialContinuation: 1,
+    },
+    moa: {
+      perRoundMultiplierByReferenceModelClass: {
+        local: 1,
+        subscription: 1,
+        cheap_cloud: 1,
+        premium_cloud: 2,
+      },
+    },
+    referenceModelClassPricing: {
+      local: 0,
+      subscription: 0,
+      cheap_cloud: 1,
+      premium_cloud: 4,
+    },
+    fatigue: makeTestFatiguePolicyConfig(),
   };
 }

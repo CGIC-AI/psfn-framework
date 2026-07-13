@@ -3,6 +3,8 @@ import {
   FATIGUE_POLICY_INTENT_VALUES,
   FATIGUE_POLICY_RELATIONSHIP_VALUES,
   FATIGUE_POLICY_STATE_VALUES,
+  FATIGUE_CONTINUATION_EVIDENCE_VALUES,
+  FATIGUE_REGULATION_STATE_VALUES,
 } from '../../shared/contracts/charge-policy.js';
 import { parseIcpConversationCorrelation } from '../../shared/contracts/icp-autonomy.js';
 import type {
@@ -14,6 +16,7 @@ import type {
   FatigueEnforcementMetadata,
   FatiguePendingSpendMetadata,
   FatigueRecordedEventMetadata,
+  FatigueSocialRegulationMetadata,
 } from '../../shared/contracts/runtime.js';
 import { parseTurnId } from '../turns/id.js';
 import { isChannelPrivacy } from '../../system/trust/context-envelope.js';
@@ -39,6 +42,74 @@ function parseScope(value: unknown, label: string): FatigueBudgetScopeSnapshot {
     peerContactId: requireString(raw.peerContactId, `${label}.peerContactId`),
     channelId: requireString(raw.channelId, `${label}.channelId`),
     dayKey: requireString(raw.dayKey, `${label}.dayKey`),
+  };
+}
+
+function parseSocialRegulation(
+  value: unknown,
+  label: string,
+): FatigueSocialRegulationMetadata {
+  const raw = requireRecord(value, label);
+  assertExactKeys(raw, new Set([
+    'state',
+    'chargeLane',
+    'relationshipPressure',
+    'rootNormalSpent',
+    'rootOverchargeSpent',
+    'contributingEventCount',
+    'marginalChargeUnits',
+    'closeoutReserveRemainingBefore',
+    'closeoutReserveRemainingAfterProjected',
+    'continuationEvidence',
+    'rootInitiationId',
+  ]), label);
+  const continuationEvidence = parseStringArray(
+    raw.continuationEvidence,
+    `${label}.continuationEvidence`,
+  );
+  for (const evidence of continuationEvidence) {
+    if (!FATIGUE_CONTINUATION_EVIDENCE_VALUES.includes(
+      evidence as typeof FATIGUE_CONTINUATION_EVIDENCE_VALUES[number],
+    )) {
+      throw new Error(`${label}.continuationEvidence contains an unknown value`);
+    }
+  }
+  return {
+    state: requireEnum(raw.state, FATIGUE_REGULATION_STATE_VALUES, `${label}.state`),
+    chargeLane: requireEnum(
+      raw.chargeLane,
+      ['interactive', 'companion_social'],
+      `${label}.chargeLane`,
+    ),
+    relationshipPressure: requireFinite(
+      raw.relationshipPressure,
+      `${label}.relationshipPressure`,
+    ),
+    rootNormalSpent: requireFinite(raw.rootNormalSpent, `${label}.rootNormalSpent`),
+    rootOverchargeSpent: requireFinite(
+      raw.rootOverchargeSpent,
+      `${label}.rootOverchargeSpent`,
+    ),
+    contributingEventCount: requireFinite(
+      raw.contributingEventCount,
+      `${label}.contributingEventCount`,
+    ),
+    marginalChargeUnits: requireFinite(
+      raw.marginalChargeUnits,
+      `${label}.marginalChargeUnits`,
+    ),
+    closeoutReserveRemainingBefore: requireFinite(
+      raw.closeoutReserveRemainingBefore,
+      `${label}.closeoutReserveRemainingBefore`,
+    ),
+    closeoutReserveRemainingAfterProjected: requireFinite(
+      raw.closeoutReserveRemainingAfterProjected,
+      `${label}.closeoutReserveRemainingAfterProjected`,
+    ),
+    continuationEvidence: continuationEvidence as FatigueSocialRegulationMetadata['continuationEvidence'],
+    ...(raw.rootInitiationId !== undefined
+      ? { rootInitiationId: requireString(raw.rootInitiationId, `${label}.rootInitiationId`) }
+      : {}),
   };
 }
 function parsePeer(value: unknown, label: string): FatigueBudgetPeerSnapshot {
@@ -230,6 +301,7 @@ export function parseFatigue(value: unknown, label: string): FatigueEnforcementM
     'peer',
     'triggeringAuthor',
     'budget',
+    'socialRegulation',
     'recordedEvent',
   ]), label);
   if (raw.schemaVersion !== 1) throw new Error(`${label}.schemaVersion must be 1`);
@@ -303,6 +375,10 @@ export function parseFatigue(value: unknown, label: string): FatigueEnforcementM
     peer: parsePeer(raw.peer, `${label}.peer`),
     triggeringAuthor: parseActor(raw.triggeringAuthor, `${label}.triggeringAuthor`),
     budget: parseFatigueBudget(raw.budget, `${label}.budget`),
+    socialRegulation: parseSocialRegulation(
+      raw.socialRegulation,
+      `${label}.socialRegulation`,
+    ),
     ...(raw.recordedEvent !== undefined
       ? { recordedEvent: parseRecordedEvent(raw.recordedEvent, `${label}.recordedEvent`) }
       : {}),

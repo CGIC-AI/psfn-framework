@@ -7,9 +7,16 @@ import type {
   RunChargeRunSummary,
 } from '../../../../../src/shared/telemetry/charge-ledger.js';
 import type { RunChargeEvent, RunChargeLineage } from '../../../../../src/shared/contracts/runtime.js';
+import type { FatigueLedgerData } from '../../../../../src/shared/telemetry/fatigue-ledger.js';
+import type { FatigueTuningReport } from '../../../../../src/core/agent/fatigue/adaptive-tuning.js';
+import type { FatiguePolicyConfig } from '../../../../../src/shared/contracts/charge-policy.js';
 
 export type ChargeLedgerQuery = RunChargeLedgerQuery;
-export type AdminChargeLedgerData = RunChargeLedgerData;
+export type AdminChargeLedgerData = RunChargeLedgerData & {
+  fatigue?: FatigueLedgerData;
+  fatigueTuning?: FatigueTuningReport;
+  fatigueSocialPolicy?: FatiguePolicyConfig['socialRegulation'];
+};
 export type {
   RunChargeEvent,
   RunChargeLedgerEntry,

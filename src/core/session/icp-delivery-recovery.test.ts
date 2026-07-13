@@ -48,6 +48,13 @@ function suppressedRecovery(overrides: Record<string, unknown> = {}) {
           normalSpentBefore: 8,
           normalSpentAfterProjected: 9,
         },
+        socialRegulation: {
+          ...fatigueMetadata.socialRegulation,
+          state: 'suppressed',
+          relationshipPressure: 8,
+          rootNormalSpent: 8,
+          contributingEventCount: 8,
+        },
       },
     },
     ...overrides,

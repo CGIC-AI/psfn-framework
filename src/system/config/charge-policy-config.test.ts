@@ -25,6 +25,7 @@ function getDefaultSeedPolicy() {
     schemaVersion: 1,
     runChargeQuotaByLane: {
       interactive: 24,
+      companion_social: 12,
       background: 16,
       maintenance: 0,
       subagent: 6,
@@ -44,6 +45,7 @@ function getDefaultSeedPolicy() {
       shardLaunch: 8,
       externalModelConsult: 1,
       moaRoundBase: 1,
+      companionSocialContinuation: 1,
     },
     surfaceRationales: {
       paidImageGeneration: 'External image generation spends paid provider credits.',
@@ -52,6 +54,7 @@ function getDefaultSeedPolicy() {
       shardLaunch: 'Launching a shard consumes worker coordination overhead.',
       externalModelConsult: 'Consulting an external model uses a paid API boundary.',
       moaRoundBase: 'Each MOA round carries coordination overhead even before model spend.',
+      companionSocialContinuation: 'After the soft allowance, each autonomous companion continuation spends marginal social charge.',
     },
     moa: {
       perRoundMultiplierByReferenceModelClass: {
@@ -224,6 +227,7 @@ describe('charge policy config', () => {
         ...defaultSeed,
         runChargeQuotaByLane: {
           interactive: 18,
+          companion_social: 9,
           background: 6,
           maintenance: 0,
           subagent: 4,
@@ -385,6 +389,39 @@ describe('charge policy config', () => {
           },
         },
       })).toThrow('fatigue.overcharge.reserveResponses must be <= 10');
+
+      expect(() => saveChargePolicyConfig(dataDir, {
+        ...defaultSeed,
+        fatigue: {
+          ...defaultSeed.fatigue,
+          socialRegulation: {
+            ...defaultSeed.fatigue.socialRegulation,
+            conversationMaturingRatio: 1,
+          },
+        },
+      })).toThrow('fatigue.socialRegulation.conversationMaturingRatio must be > 0 and < 1');
+
+      expect(() => saveChargePolicyConfig(dataDir, {
+        ...defaultSeed,
+        fatigue: {
+          ...defaultSeed.fatigue,
+          socialRegulation: {
+            ...defaultSeed.fatigue.socialRegulation,
+            relationshipPressureWindowMs: 1,
+          },
+        },
+      })).toThrow('fatigue.socialRegulation.relationshipPressureWindowMs must be >=');
+
+      expect(() => saveChargePolicyConfig(dataDir, {
+        ...defaultSeed,
+        fatigue: {
+          ...defaultSeed.fatigue,
+          socialRegulation: {
+            ...defaultSeed.fatigue.socialRegulation,
+            dailyMessageQuota: 8,
+          },
+        },
+      })).toThrow('fatigue.socialRegulation contains unknown keys: dailyMessageQuota');
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

@@ -25,6 +25,7 @@ export class AdminChargeLedgerDataService implements AdminChargeLedgerService {
   async getChargeLedgerData(query: RunChargeLedgerQuery & FatigueLedgerQuery = {}): Promise<RunChargeLedgerData & {
     fatigue?: FatigueLedgerData;
     fatigueTuning?: FatigueTuningReport;
+    fatigueSocialPolicy?: FatiguePolicyConfig['socialRegulation'];
   }> {
     const data = this.ledger.getData(query);
     if (!this.fatigueLedger) {
@@ -40,6 +41,7 @@ export class AdminChargeLedgerDataService implements AdminChargeLedgerService {
               events: fatigue.events.map(entry => entry.event),
               policy: this.fatiguePolicy,
             }),
+            fatigueSocialPolicy: { ...this.fatiguePolicy.socialRegulation },
           }
         : {}),
     };

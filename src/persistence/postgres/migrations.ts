@@ -1409,6 +1409,41 @@ export const POSTGRES_SHARED_MIGRATIONS: readonly string[] = [
   VALUES (5, 'icp-autonomy-invalidation-fences')
   ON CONFLICT (version) DO NOTHING;
   `,
+  // Version 6 (s10mc.6.6): content-free, durable pre-model fatigue
+  // reservations. The canonical pair lock serializes DM/room continuations;
+  // local_companion_id keeps the two companions' fatigue choices independent.
+  `
+  CREATE TABLE IF NOT EXISTS icp_fatigue_turn_reservations (
+    turn_id UUID PRIMARY KEY,
+    conversation_id UUID NOT NULL REFERENCES icp_conversation_episodes(conversation_id) ON DELETE RESTRICT,
+    root_initiation_id UUID NOT NULL,
+    local_companion_id UUID NOT NULL,
+    peer_companion_id UUID NOT NULL,
+    peer_contact_id TEXT NOT NULL,
+    channel_id TEXT NOT NULL,
+    decision TEXT NOT NULL CHECK (decision IN ('charged', 'overcharge')),
+    amount BIGINT NOT NULL CHECK (amount > 0),
+    reserved_at_ms BIGINT NOT NULL CHECK (reserved_at_ms >= 0),
+    finalized_at_ms BIGINT,
+    outcome TEXT NOT NULL CHECK (outcome IN ('pending', 'delivered', 'no_reply', 'failed')),
+    CHECK (local_companion_id <> peer_companion_id),
+    CHECK ((outcome = 'pending') = (finalized_at_ms IS NULL)),
+    CHECK (finalized_at_ms IS NULL OR finalized_at_ms >= reserved_at_ms)
+  );
+  `,
+  `CREATE INDEX IF NOT EXISTS idx_icp_fatigue_reservations_relationship
+    ON icp_fatigue_turn_reservations (
+      local_companion_id, peer_companion_id, reserved_at_ms, turn_id
+    ) WHERE outcome IN ('pending', 'delivered', 'no_reply');`,
+  `CREATE INDEX IF NOT EXISTS idx_icp_fatigue_reservations_root
+    ON icp_fatigue_turn_reservations (
+      local_companion_id, peer_companion_id, root_initiation_id, decision, turn_id
+    ) WHERE outcome IN ('pending', 'delivered', 'no_reply');`,
+  `
+  INSERT INTO shared_schema_migrations (version, name)
+  VALUES (6, 'icp-fatigue-turn-reservations')
+  ON CONFLICT (version) DO NOTHING;
+  `,
 ];
 
 // Version 3 (sprint 10, s10f9): shared-world wiki chunk projection. A

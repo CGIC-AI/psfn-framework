@@ -45,6 +45,7 @@ import type { EventBridge } from '../event-bridge.js';
 import type { RuntimeMode } from '../tool-wiring-validator.js';
 import type { LLMProviderPort, MemoryExtractor, MemoryProvider, WikiRetrievalPort } from '../contracts.js';
 import type { FatigueBudgetPort } from '../fatigue/fatigue-budget.js';
+import type { IcpFatigueRegulationReservationPort } from '../fatigue/regulation-reservation.js';
 import {
   attachRecordedFatigueEvent,
   evaluateFatigueForTurn,
@@ -90,6 +91,10 @@ import {
   collectTurnResponseAttachments,
   schedulePostTurnWork,
 } from './turn-execution/post-turn-scheduling.js';
+import {
+  invokeWithCompanionSocialCharge,
+  reserveIcpFatigueRegulation,
+} from './turn-execution/icp-fatigue-regulation.js';
 import { hasVisionTurnInputs } from './vision-attachments.js';
 import type { SessionEntry } from '../../session/types.js';
 import type { ConversationScopeSpeaker } from '../../session/conversation-scope.js';
@@ -111,6 +116,7 @@ export interface TurnExecutionRuntime {
   eventBus: EventBus;
   costTelemetry: CostTelemetryPort;
   fatigueBudget?: FatigueBudgetPort | null;
+  fatigueRegulationReservations?: IcpFatigueRegulationReservationPort | null;
   satellitePresence: SatellitePresencePort;
   /**
    * Cross-companion presence (sprint 10, W5a). Absent/null (single-companion,
@@ -469,6 +475,7 @@ function summarizeFatigue(metadata: FatigueEnforcementMetadata): Record<string, 
     overchargeBlockedReasons: metadata.overchargeBlockedReasons,
     scope: metadata.scope,
     budget: metadata.budget,
+    socialRegulation: metadata.socialRegulation,
   };
 }
 
@@ -801,6 +808,8 @@ export async function handleMessageForTurn(
   let internalStateSnapshotRef: string | undefined;
   let persistedUserMessageContent: string | undefined;
   let fatigueDecision: FatigueTurnDecision | null = null;
+  let durableFatigueReservation: NonNullable<SubstrateMessage['routing']>['icpCorrelation'] | null = null;
+  let durableDeliveryFinalized = false;
   const invocationState: AgentInvocationMutableState = {
     turnMessages,
     turnStartMessageIndex: null,
@@ -851,11 +860,31 @@ export async function handleMessageForTurn(
           icpCorrelation: {
             ...message.routing.icpCorrelation,
             fatigueDecision: finalFatigueDecision,
+            chargeLane: fatigueDecision.metadata.socialRegulation.chargeLane,
           },
         };
         turnCorrelationBase = {
           ...turnCorrelationBase,
           icpCorrelation: message.routing.icpCorrelation,
+        };
+      }
+      if (fatigueDecision.shouldRecordSpend && message.routing?.icpCorrelation) {
+        const reconciliation = await reserveIcpFatigueRegulation({
+          correlation: message.routing.icpCorrelation,
+          fatigueDecision,
+          multiCompanion: runtime.config.multiCompanion === true,
+          reservationPort: runtime.fatigueRegulationReservations,
+          regulationConfig: runtime.config.chargePolicy!.fatigue.socialRegulation,
+        });
+        fatigueDecision = reconciliation.fatigueDecision;
+        durableFatigueReservation = reconciliation.durableReservation;
+        message.routing = {
+          ...message.routing,
+          icpCorrelation: reconciliation.correlation,
+        };
+        turnCorrelationBase = {
+          ...turnCorrelationBase,
+          icpCorrelation: reconciliation.correlation,
         };
       }
       emitFatigueDecision({
@@ -1055,9 +1084,17 @@ export async function handleMessageForTurn(
           turnIntent: null,
         }
       : null;
-    const invocationResult = recoveredInvocationResult ?? (canaryToken
-      ? await runWithCanaryContext(canaryToken, invokeWithPaidDeliverableTracking)
-      : await invokeWithPaidDeliverableTracking());
+    const invokeWithCanary = () => canaryToken
+      ? runWithCanaryContext(canaryToken, invokeWithPaidDeliverableTracking)
+      : invokeWithPaidDeliverableTracking();
+    const invocationResult = recoveredInvocationResult ?? await invokeWithCompanionSocialCharge({
+      chargePolicy: runtime.config.chargePolicy,
+      correlation: turnCorrelationBase,
+      fatigue: fatigueDecision?.metadata,
+      invoke: invokeWithCanary,
+      turnId,
+      withCorrelationPurpose: runtime.withCorrelationPurpose,
+    });
     pendingPaidDeliverables = scopedPendingPaidDeliverables;
     turnMessages = invocationResult.turnMessages;
     responseModel = invocationResult.responseModel;
@@ -1324,6 +1361,7 @@ export async function handleMessageForTurn(
             policyBaseState: fatigueDecision.metadata.policyBaseState,
             overchargePermitted: fatigueDecision.metadata.overchargePermitted,
             overchargeReasons: fatigueDecision.metadata.overchargeReasons,
+            socialRegulation: fatigueDecision.metadata.socialRegulation,
             responseChars: responseText.length,
             model: responseModel,
           },
@@ -1370,6 +1408,19 @@ export async function handleMessageForTurn(
         }
       : buildGeneratedResponse();
     await deliveryLifecycle?.finalizeDelivery(agentResponse);
+    durableDeliveryFinalized = true;
+    if (runtime.fatigueRegulationReservations
+      && message.routing?.icpCorrelation
+      && (durableFatigueReservation || recoveredResponse?.metadata.fatiguePendingSpend)
+      && responseFatigueMetadata) {
+      await runtime.fatigueRegulationReservations.finalize({
+        correlation: message.routing.icpCorrelation,
+        outcome: honorNoReply ? 'no_reply' : 'delivered',
+        finalizedAtMs: Date.now(),
+        fatigue: responseFatigueMetadata,
+      });
+      durableFatigueReservation = null;
+    }
 
     const postTurnAlreadyScheduled = recoveredResponse !== undefined
       && runtime.sessionManager.hasRecordedTurn(message.channelId, turnId);
@@ -1428,6 +1479,25 @@ export async function handleMessageForTurn(
 
     return agentResponse;
   } catch (error) {
+    if (!durableDeliveryFinalized
+      && durableFatigueReservation
+      && runtime.fatigueRegulationReservations
+      && fatigueDecision) {
+      try {
+        await runtime.fatigueRegulationReservations.finalize({
+          correlation: durableFatigueReservation,
+          outcome: 'failed',
+          finalizedAtMs: Date.now(),
+          fatigue: fatigueDecision.metadata,
+        });
+      } catch (finalizeError) {
+        log.error('Failed to release durable ICP fatigue reservation after turn failure', {
+          turnId,
+          error: toErrorMessage(finalizeError),
+        });
+      }
+      durableFatigueReservation = null;
+    }
     const err = error instanceof Error ? error : new Error(String(error));
     const observedFailureTurnMessages = invocationState.turnMessages.length > 0
       ? invocationState.turnMessages

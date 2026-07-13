@@ -820,6 +820,10 @@ async function main(): Promise<void> {
   };
   shutdownTargets.adminTransport = adminTransport;
   shutdownTargets.appCache = appCache;
+  if (coreRuntime.fatigueRegulationReservations) {
+    shutdownTargets.fatigueRegulationReservations =
+      coreRuntime.fatigueRegulationReservations;
+  }
   const gatewaySender = {
     send: (channelId: string, content: string) => gateway.discordSend(channelId, content),
   };

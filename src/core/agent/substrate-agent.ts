@@ -184,6 +184,7 @@ import { createResponseControlTool } from './no-reply-tool.js';
 import { TurnSupportRuntime } from './substrate-agent/turn-support-runtime.js';
 import type { ObserverEvalSidecarRuntime } from '../eval/observer-sidecar/types.js';
 import type { FatigueBudgetPort } from './fatigue/fatigue-budget.js';
+import type { IcpFatigueRegulationReservationPort } from './fatigue/regulation-reservation.js';
 import type { RuntimeServiceHealthStatus } from '../../operator/tool-health/types.js';
 import type { IntakeFirewallMode } from '../../system/config/intake-policy-config.js';
 
@@ -232,6 +233,7 @@ export interface SubstrateAgentOptions {
   selfModelRuntime?: SelfModelRuntimeWiring;
   observerEvalSidecar?: ObserverEvalSidecarRuntime;
   fatigueBudget?: FatigueBudgetPort | null;
+  fatigueRegulationReservations?: IcpFatigueRegulationReservationPort | null;
   streamTransport?: SubstrateStreamTransport;
   appCache?: AppCache;
   /** Contact-tracking policy gate (E3.4). Absent gate behaves as 'auto' everywhere. */
@@ -271,6 +273,7 @@ export class SubstrateAgent {
   private selfModelRuntimeRequired = false;
   private readonly emotionSelfModelRuntime: EmotionSelfModelRuntime;
   private readonly fatigueBudget: FatigueBudgetPort | null;
+  private readonly fatigueRegulationReservations: IcpFatigueRegulationReservationPort | null;
   private currentInternalState: InternalState | null = null;
   private currentInternalStateSnapshotRef: string | null = null;
   private currentMetacognitiveFlags: MetacognitiveFlag[] = [];
@@ -468,6 +471,7 @@ export class SubstrateAgent {
     this.selfModelRuntimeRequired = options?.selfModelRuntime?.requireWiring ?? false;
     this.observerEvalSidecar = options?.observerEvalSidecar ?? null;
     this.fatigueBudget = options?.fatigueBudget ?? null;
+    this.fatigueRegulationReservations = options?.fatigueRegulationReservations ?? null;
     this.contactTrackingGate = options?.contactTrackingGate ?? null;
     this.placesRegistryConfig = options?.placesRegistryConfig;
     this.virtualRoomFollower = createVirtualRoomFollower({
@@ -1112,6 +1116,7 @@ export class SubstrateAgent {
       eventBus: this.eventBus,
       costTelemetry: createEventBusCostTelemetryPort(this.eventBus),
       fatigueBudget: this.fatigueBudget,
+      fatigueRegulationReservations: this.fatigueRegulationReservations,
       satellitePresence: this.satellitePresencePort,
       companionPresence: this.companionPresence,
       llmClient: this.llmClient,

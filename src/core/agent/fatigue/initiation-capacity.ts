@@ -1,0 +1,80 @@
+import type {
+  IcpInitiationCapacityPolicyAuthority,
+  IcpInitiationCapacityPolicyDecision,
+  IcpInitiationCapacityPolicyInput,
+} from "../../../boundary/gateway/icp-initiation-policy-authority.js";
+import type { ChargePolicyConfig } from "../../../shared/contracts/charge-policy.js";
+import type { IcpFatigueRegulationReservationPort } from "./regulation-reservation.js";
+import { evaluateFatiguePolicy } from "./policy.js";
+
+/**
+ * Content-free deterministic initiation pressure. Cost remains a separate W7
+ * authority, so this composite deliberately reports costAllows=false until
+ * that owner is supplied rather than manufacturing a permissive fallback.
+ */
+export class IcpFatigueInitiationCapacityAuthority implements IcpInitiationCapacityPolicyAuthority {
+  constructor(
+    private readonly pressure: Pick<
+      IcpFatigueRegulationReservationPort,
+      "readInitiationPressure"
+    >,
+    private readonly chargePolicy: ChargePolicyConfig,
+  ) {}
+
+  async resolve(
+    input: IcpInitiationCapacityPolicyInput,
+  ): Promise<IcpInitiationCapacityPolicyDecision> {
+    const regulation = this.chargePolicy.fatigue.socialRegulation;
+    const snapshot = await this.pressure.readInitiationPressure({
+      localCompanionId: input.senderCompanionId,
+      peerCompanionId: input.candidate.peerCompanionId,
+      timestampMs: input.nowMs,
+      relationshipPressureHalfLifeMs: regulation.relationshipPressureHalfLifeMs,
+      relationshipPressureWindowMs: regulation.relationshipPressureWindowMs,
+      unansweredAfterMs: regulation.reservationTtlMs,
+      declinedPressureUnits: regulation.declinedPressureUnits,
+      deferredPressureUnits: regulation.deferredPressureUnits,
+      unansweredPressureUnits: regulation.unansweredPressureUnits,
+    });
+    const spent = Math.ceil(snapshot.relationshipPressure);
+    const policy = evaluateFatiguePolicy({
+      config: this.chargePolicy.fatigue,
+      peer: {
+        contactId: input.candidate.peerContactId,
+        isMachineIntelligence: true,
+        relationshipType: input.senderRelationship.relationshipType,
+        trustLevel: input.senderRelationship.trustLevel,
+      },
+      channel: {
+        channelId: input.channelId,
+        type: input.channelId.startsWith("companion-dm:")
+          ? "dm"
+          : "companion_room",
+        companionFocused: true,
+        companionHosted: true,
+        humanParticipantCount: 0,
+        machineIntelligenceParticipantCount: 2,
+        recentMessageCount: 0,
+        recentHumanMessageCount: 0,
+      },
+      recentHumanParticipation: { messageCount: 0, participantCount: 0 },
+      // Private candidate content is not visible at the gateway. Do not infer
+      // a privileged work/research allowance from source labels.
+      intent: "social",
+      spent,
+      triggerAuthorKind: "machine_intelligence",
+    });
+    const socialChargeCost = Math.max(
+      regulation.marginalChargeUnits,
+      this.chargePolicy.surfaceCosts.companionSocialContinuation,
+    );
+    return {
+      socialPressureAllows: spent < policy.softTarget,
+      chargeAllows:
+        this.chargePolicy.runChargeQuotaByLane.companion_social >=
+        socialChargeCost,
+      fatigueAllows: spent < policy.hardCap,
+      costAllows: false,
+    };
+  }
+}

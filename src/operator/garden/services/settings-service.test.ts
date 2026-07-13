@@ -777,6 +777,7 @@ describe('AdminSettingsDataService', () => {
       schemaVersion: 1,
       runChargeQuotaByLane: {
         interactive: 20,
+        companion_social: 12,
         background: 8,
         maintenance: 0,
         subagent: 5,
@@ -796,6 +797,7 @@ describe('AdminSettingsDataService', () => {
         shardLaunch: 7,
         externalModelConsult: 1,
         moaRoundBase: 1,
+        companionSocialContinuation: 1,
       },
       surfaceRationales: {
         paidImageGeneration: 'External image generation spends paid provider credits.',
@@ -804,6 +806,7 @@ describe('AdminSettingsDataService', () => {
         shardLaunch: 'Launching a shard consumes worker coordination overhead.',
         externalModelConsult: 'Consulting an external model uses a paid API boundary.',
         moaRoundBase: 'Each MOA round carries coordination overhead even before model spend.',
+        companionSocialContinuation: 'Autonomous companion continuation spends relationship-sensitive social budget.',
       },
       moa: {
         perRoundMultiplierByReferenceModelClass: {

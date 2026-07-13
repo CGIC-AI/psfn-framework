@@ -39,6 +39,8 @@ import { GatewayCompanionChannelLane } from '../../boundary/gateway/companion-ch
 import { PostgresCompanionPresenceStore } from '../../persistence/postgres/companion-presence-store.js';
 import { PostgresIcpSharedAutonomyStore } from '../../persistence/postgres/icp-shared-autonomy-store.js';
 import { PostgresIcpInitiationPolicyAuthority } from '../../persistence/postgres/icp-initiation-policy-authority.js';
+import { PostgresIcpFatigueRegulationReservationStore } from '../../persistence/postgres/icp-fatigue-regulation-reservation-store.js';
+import { IcpFatigueInitiationCapacityAuthority } from '../../core/agent/fatigue/initiation-capacity.js';
 import { CompanionEventRelay } from '../../channels/backplane/companion-relay/relay.js';
 import { CHARGE_POLICY_FILE_NAME } from '../../system/config/charge-policy-config.js';
 import {
@@ -213,6 +215,7 @@ async function main(): Promise<void> {
   // closed at the RPC surface.
   let companionPresenceStore: PostgresCompanionPresenceStore | null = null;
   let icpAutonomyStore: PostgresIcpSharedAutonomyStore | null = null;
+  let icpFatigueRegulationStore: PostgresIcpFatigueRegulationReservationStore | null = null;
   let icpInitiationPolicyAuthority: PostgresIcpInitiationPolicyAuthority | null = null;
   let companionChannelLane: GatewayCompanionChannelLane | undefined;
   if (config.multiCompanion === true) {
@@ -228,9 +231,15 @@ async function main(): Promise<void> {
     icpAutonomyStore = await PostgresIcpSharedAutonomyStore.connect(databaseUrl, {
       knownCompanionIds: fleetCompanionIds,
     });
+    icpFatigueRegulationStore =
+      await PostgresIcpFatigueRegulationReservationStore.connect(databaseUrl);
     icpInitiationPolicyAuthority = new PostgresIcpInitiationPolicyAuthority(databaseUrl, {
       fleet: config.companionFleet.companions,
       quietHours: startupHydration.schedulerConfig.episodicProcessing,
+      capacityAuthority: new IcpFatigueInitiationCapacityAuthority(
+        icpFatigueRegulationStore,
+        startupHydration.chargePolicyConfig,
+      ),
     });
     companionChannelLane = new GatewayCompanionChannelLane({
       placesRegistry: placesRegistryConfig,
@@ -358,6 +367,7 @@ async function main(): Promise<void> {
         { step: 'stop gateway server', action: () => gateway.stop() },
         { step: 'close companion presence reader', action: async () => { await companionPresenceStore?.close(); } },
         { step: 'close ICP autonomy store', action: async () => { await icpAutonomyStore?.close(); } },
+        { step: 'close ICP fatigue regulation store', action: async () => { await icpFatigueRegulationStore?.close(); } },
         { step: 'close ICP initiation policy authority', action: async () => { await icpInitiationPolicyAuthority?.close(); } },
         { step: 'stop channel adapters', action: () => stopGatewayChannelSurfaces(channelSurfaces) },
         { step: 'dispose intake screening', action: () => privilegedCore.intakeScreening.dispose() },

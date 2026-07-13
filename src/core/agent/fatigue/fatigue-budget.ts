@@ -37,6 +37,23 @@ export interface FatigueBudgetLimits {
   overchargeLimit?: number;
 }
 
+export interface FatigueBudgetRegulationInput {
+  rootInitiationId: string;
+  timestampMs: number;
+  relationshipPressureHalfLifeMs: number;
+  relationshipPressureWindowMs: number;
+}
+
+export interface FatigueBudgetRegulationState {
+  rootInitiationId: string;
+  relationshipPressure: number;
+  rootNormalSpent: number;
+  rootOverchargeSpent: number;
+  contributingEventCount: number;
+  oldestContributingEventAtMs?: number;
+  latestContributingEventAtMs?: number;
+}
+
 export interface FatigueBudgetState {
   scope: FatigueBudgetScope;
   spent: number;
@@ -49,6 +66,7 @@ export interface FatigueBudgetState {
   remainingOvercharge: number;
   softState: FatigueBudgetSoftState;
   hardState: FatigueBudgetHardState;
+  regulation?: FatigueBudgetRegulationState;
   lastEvent?: FatigueBudgetEvent;
 }
 
@@ -62,6 +80,7 @@ export interface FatigueBudgetEvaluationInput {
   correlation?: Partial<CorrelationMetadata>;
   lineage?: RunChargeLineage;
   details?: Record<string, unknown>;
+  regulation?: FatigueBudgetRegulationInput;
 }
 
 export interface FatigueBudgetRecordInput {
@@ -84,6 +103,7 @@ export interface FatigueBudgetEvaluation {
   correlation?: Partial<CorrelationMetadata>;
   lineage?: RunChargeLineage;
   details?: Record<string, unknown>;
+  regulation?: FatigueBudgetRegulationInput;
 }
 
 export interface FatigueBudgetEventQuery {
@@ -92,6 +112,8 @@ export interface FatigueBudgetEventQuery {
   channelId?: string;
   dayKey?: string;
   decision?: FatigueBudgetDecision;
+  sinceMs?: number;
+  untilMs?: number;
   limit?: number;
 }
 
@@ -104,6 +126,7 @@ export interface FatigueBudgetPort {
   readState(scope: Omit<FatigueBudgetScope, 'dayKey'> & {
     dayKey?: string;
     limits: FatigueBudgetLimits;
+    regulation?: FatigueBudgetRegulationInput;
   }): FatigueBudgetState;
   evaluate(input: FatigueBudgetEvaluationInput): FatigueBudgetEvaluation;
   recordFinalDecision(
@@ -191,6 +214,7 @@ function createState(input: {
   normalSpent: number;
   overchargeSpent?: number;
   limits: FatigueBudgetLimits;
+  regulation?: FatigueBudgetRegulationState;
   lastEvent?: FatigueBudgetEvent;
 }): FatigueBudgetState {
   const allowance = input.limits.hardLimit;
@@ -215,7 +239,77 @@ function createState(input: {
     remainingOvercharge: Math.max(0, overchargeAllowance - overchargeSpent),
     softState,
     hardState,
+    ...(input.regulation ? { regulation: { ...input.regulation } } : {}),
     ...(input.lastEvent ? { lastEvent: cloneEvent(input.lastEvent) } : {}),
+  };
+}
+
+function normalizeRegulation(
+  value: FatigueBudgetRegulationInput,
+): FatigueBudgetRegulationInput {
+  const rootInitiationId = normalizeRequiredString(value.rootInitiationId, 'rootInitiationId');
+  if (!Number.isSafeInteger(value.timestampMs) || value.timestampMs < 0) {
+    throw new Error('Fatigue budget regulation timestampMs must be a non-negative safe integer');
+  }
+  if (!Number.isSafeInteger(value.relationshipPressureHalfLifeMs)
+    || value.relationshipPressureHalfLifeMs < 1) {
+    throw new Error('Fatigue budget regulation relationshipPressureHalfLifeMs must be a positive safe integer');
+  }
+  if (!Number.isSafeInteger(value.relationshipPressureWindowMs)
+    || value.relationshipPressureWindowMs < value.relationshipPressureHalfLifeMs) {
+    throw new Error('Fatigue budget regulation relationshipPressureWindowMs must be at least one half-life');
+  }
+  return {
+    rootInitiationId,
+    timestampMs: value.timestampMs,
+    relationshipPressureHalfLifeMs: value.relationshipPressureHalfLifeMs,
+    relationshipPressureWindowMs: value.relationshipPressureWindowMs,
+  };
+}
+
+function resolveRegulatedState(input: {
+  events: FatigueBudgetEvent[];
+  regulation: FatigueBudgetRegulationInput;
+}): {
+  normalSpent: number;
+  overchargeSpent: number;
+  regulation: FatigueBudgetRegulationState;
+  lastEvent?: FatigueBudgetEvent;
+} {
+  const rootEvents = input.events.filter(event => (
+    event.icpCorrelation?.rootInitiationId === input.regulation.rootInitiationId
+  ));
+  const chargedEvents = input.events.filter(event => event.decision === 'charged');
+  const relationshipPressure = chargedEvents.reduce((total, event) => {
+    const ageMs = Math.max(0, input.regulation.timestampMs - event.timestampMs);
+    return total + event.amount * (2 ** (-ageMs / input.regulation.relationshipPressureHalfLifeMs));
+  }, 0);
+  const rootNormalSpent = rootEvents
+    .filter(event => event.decision === 'charged')
+    .reduce((total, event) => total + event.amount, 0);
+  const rootOverchargeSpent = rootEvents
+    .filter(event => event.decision === 'overcharge')
+    .reduce((total, event) => total + event.amount, 0);
+  const sorted = [...input.events].sort((left, right) => left.timestampMs - right.timestampMs);
+  const oldest = sorted.at(0);
+  const latest = sorted.at(-1);
+  const regulation: FatigueBudgetRegulationState = {
+    rootInitiationId: input.regulation.rootInitiationId,
+    relationshipPressure,
+    rootNormalSpent,
+    rootOverchargeSpent,
+    contributingEventCount: input.events.length,
+    ...(oldest ? { oldestContributingEventAtMs: oldest.timestampMs } : {}),
+    ...(latest ? { latestContributingEventAtMs: latest.timestampMs } : {}),
+  };
+  return {
+    // A causal root never replenishes while channel hopping or recursively
+    // opening another episode. Independent roots inherit decaying recent
+    // relationship pressure instead of a UTC-day reset.
+    normalSpent: Math.max(rootNormalSpent, Math.ceil(relationshipPressure)),
+    overchargeSpent: rootOverchargeSpent,
+    regulation,
+    ...(latest ? { lastEvent: latest } : {}),
   };
 }
 
@@ -341,6 +435,7 @@ export class DeterministicFatigueBudgetPort implements FatigueBudgetPort {
   readState(input: Omit<FatigueBudgetScope, 'dayKey'> & {
     dayKey?: string;
     limits: FatigueBudgetLimits;
+    regulation?: FatigueBudgetRegulationInput;
   }): FatigueBudgetState {
     const limits = normalizeLimits(input.limits);
     const scope = {
@@ -349,12 +444,27 @@ export class DeterministicFatigueBudgetPort implements FatigueBudgetPort {
       channelId: normalizeRequiredString(input.channelId, 'channelId'),
       dayKey: input.dayKey?.trim() || makeFatigueDayKey(this.options.now?.() ?? Date.now()),
     };
-    const events = this.history.listFatigueEvents({
-      localCompanionId: scope.localCompanionId,
-      peerContactId: scope.peerContactId,
-      channelId: scope.channelId,
-      dayKey: scope.dayKey,
-    });
+    const regulation = input.regulation ? normalizeRegulation(input.regulation) : undefined;
+    const events = this.history.listFatigueEvents(regulation
+      ? {
+          localCompanionId: scope.localCompanionId,
+          peerContactId: scope.peerContactId,
+          sinceMs: Math.max(0, regulation.timestampMs - regulation.relationshipPressureWindowMs),
+          untilMs: regulation.timestampMs,
+        }
+      : {
+          localCompanionId: scope.localCompanionId,
+          peerContactId: scope.peerContactId,
+          channelId: scope.channelId,
+          dayKey: scope.dayKey,
+        });
+    if (regulation) {
+      return createState({
+        scope,
+        limits,
+        ...resolveRegulatedState({ events, regulation }),
+      });
+    }
     const normalSpent = events
       .filter(event => event.decision === 'charged')
       .reduce((total, event) => total + event.amount, 0);
@@ -378,6 +488,7 @@ export class DeterministicFatigueBudgetPort implements FatigueBudgetPort {
       channelId: input.channelId,
       dayKey,
       limits,
+      ...(input.regulation ? { regulation: input.regulation } : {}),
     });
     const decision = resolveFatigueSpendUnit({ peer, triggeringAuthor });
     const stateAfter = createState({
@@ -385,6 +496,7 @@ export class DeterministicFatigueBudgetPort implements FatigueBudgetPort {
       normalSpent: stateBefore.normalSpent + decision.amount,
       overchargeSpent: stateBefore.overchargeSpent,
       limits,
+      ...(stateBefore.regulation ? { regulation: stateBefore.regulation } : {}),
       lastEvent: stateBefore.lastEvent,
     });
 
@@ -402,6 +514,7 @@ export class DeterministicFatigueBudgetPort implements FatigueBudgetPort {
       ...(input.correlation ? { correlation: { ...input.correlation } } : {}),
       ...(input.lineage ? { lineage: { ...input.lineage } } : {}),
       ...(input.details ? { details: { ...input.details } } : {}),
+      ...(input.regulation ? { regulation: normalizeRegulation(input.regulation) } : {}),
     };
   }
 
@@ -417,8 +530,10 @@ export class DeterministicFatigueBudgetPort implements FatigueBudgetPort {
       ? this.history.listFatigueEvents({
           localCompanionId: evaluation.scope.localCompanionId,
           peerContactId: evaluation.scope.peerContactId,
-          channelId: evaluation.scope.channelId,
-          dayKey: evaluation.scope.dayKey,
+          ...(evaluation.regulation ? {} : {
+            channelId: evaluation.scope.channelId,
+            dayKey: evaluation.scope.dayKey,
+          }),
         }).find(event => event.turnId === correlation.turnId)
       : undefined;
     if (existing) {
@@ -439,6 +554,7 @@ export class DeterministicFatigueBudgetPort implements FatigueBudgetPort {
         hardLimit: evaluation.stateAfter.allowance,
         overchargeLimit: evaluation.stateAfter.overchargeAllowance,
       },
+      ...(evaluation.regulation ? { regulation: evaluation.regulation } : {}),
     });
     const recordedStateAfter = createState({
       scope: cloneScope(currentState.scope),
@@ -449,6 +565,7 @@ export class DeterministicFatigueBudgetPort implements FatigueBudgetPort {
         hardLimit: evaluation.stateAfter.allowance,
         overchargeLimit: evaluation.stateAfter.overchargeAllowance,
       },
+      ...(currentState.regulation ? { regulation: currentState.regulation } : {}),
       lastEvent: currentState.lastEvent,
     });
     const details = {
@@ -540,6 +657,9 @@ export function createOverchargeFatigueEvaluation(
         hardLimit: evaluation.stateBefore.allowance,
         overchargeLimit: evaluation.stateBefore.overchargeAllowance,
       },
+      ...(evaluation.stateBefore.regulation
+        ? { regulation: evaluation.stateBefore.regulation }
+        : {}),
       lastEvent: evaluation.stateBefore.lastEvent,
     }),
     ...(evaluation.details ? {

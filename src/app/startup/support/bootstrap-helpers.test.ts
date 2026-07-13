@@ -1173,6 +1173,7 @@ describe('hydrateCanonicalStartupConfig', () => {
       schemaVersion: 1,
       runChargeQuotaByLane: {
         interactive: 30,
+        companion_social: 12,
         background: 10,
         maintenance: 0,
         subagent: 5,
@@ -1192,6 +1193,7 @@ describe('hydrateCanonicalStartupConfig', () => {
         shardLaunch: 8,
         externalModelConsult: 1,
         moaRoundBase: 1,
+        companionSocialContinuation: 1,
       },
       surfaceRationales: {
         paidImageGeneration: 'External image generation spends paid provider credits.',
@@ -1200,6 +1202,7 @@ describe('hydrateCanonicalStartupConfig', () => {
         shardLaunch: 'Launching a shard consumes worker coordination overhead.',
         externalModelConsult: 'Consulting an external model uses a paid API boundary.',
         moaRoundBase: 'Each MOA round carries coordination overhead even before model spend.',
+        companionSocialContinuation: 'Autonomous companion continuation spends relationship-sensitive social budget.',
       },
       moa: {
         perRoundMultiplierByReferenceModelClass: {

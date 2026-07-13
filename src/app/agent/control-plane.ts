@@ -41,6 +41,7 @@ export interface AgentControlPlaneShutdownTargets {
   apiServer?: ApiServer;
   adminTransport?: Lifecycle;
   appCache?: { close?: () => Promise<void> };
+  fatigueRegulationReservations?: { close: () => Promise<void> };
 }
 
 export interface BuildAgentControlPlaneOptions {
@@ -171,6 +172,7 @@ export function buildAgentControlPlane(
         { step: 'stop API server', action: () => shutdownTargets.apiServer?.stop() },
         { step: 'stop admin server', action: () => shutdownTargets.adminTransport?.stop() },
         { step: 'close app cache', action: () => shutdownTargets.appCache?.close?.() },
+        { step: 'close ICP fatigue regulation reservations', action: () => shutdownTargets.fatigueRegulationReservations?.close() },
         { step: 'destroy gateway client', action: () => gateway.destroy() },
         { step: 'close database', action: () => closeDatabase() },
       ], log);

@@ -77,6 +77,7 @@ function buildFatigueDecisionFixture(input: {
   const icpCorrelation: IcpConversationCorrelation = {
     ...correlation,
     fatigueDecision: input.fatigueDecision,
+    chargeLane: input.fatigue.socialRegulation.chargeLane,
   };
   return {
     label: input.label,
@@ -216,6 +217,15 @@ const fatigueDecisionFixtures: FatigueDecisionFixture[] = [
         'no_qualifying_overcharge_trigger',
       ],
       budget: wrapBudget,
+      socialRegulation: {
+        ...fatigueMetadata.socialRegulation,
+        state: 'charge_lane_active',
+        chargeLane: 'companion_social',
+        relationshipPressure: 6,
+        rootNormalSpent: 6,
+        contributingEventCount: 6,
+        marginalChargeUnits: 1,
+      },
     },
   }),
   buildFatigueDecisionFixture({
@@ -236,6 +246,17 @@ const fatigueDecisionFixtures: FatigueDecisionFixture[] = [
       overchargeBlockedReasons: [],
       overchargeReasons: ['work_intent_wrapup'],
       budget: overchargeBudget,
+      socialRegulation: {
+        ...fatigueMetadata.socialRegulation,
+        state: 'overcharge_closeout',
+        chargeLane: 'companion_social',
+        relationshipPressure: 8,
+        rootNormalSpent: 8,
+        contributingEventCount: 8,
+        marginalChargeUnits: 1,
+        closeoutReserveRemainingAfterProjected: 1,
+        continuationEvidence: ['active_work_or_research'],
+      },
     },
   }),
   buildFatigueDecisionFixture({
@@ -255,6 +276,17 @@ const fatigueDecisionFixtures: FatigueDecisionFixture[] = [
       overchargeBlockedReasons: [],
       overchargeReasons: ['recent_human_participation'],
       budget: overchargeBudget,
+      socialRegulation: {
+        ...fatigueMetadata.socialRegulation,
+        state: 'overcharge_closeout',
+        chargeLane: 'companion_social',
+        relationshipPressure: 8,
+        rootNormalSpent: 8,
+        contributingEventCount: 8,
+        marginalChargeUnits: 1,
+        closeoutReserveRemainingAfterProjected: 1,
+        continuationEvidence: ['recent_human_participation'],
+      },
     },
   }),
   buildFatigueDecisionFixture({
@@ -275,6 +307,20 @@ const fatigueDecisionFixtures: FatigueDecisionFixture[] = [
       overchargeBlockedReasons: [],
       overchargeReasons: ['recent_human_participation', 'work_intent_wrapup'],
       budget: overchargeBudget,
+      socialRegulation: {
+        ...fatigueMetadata.socialRegulation,
+        state: 'overcharge_closeout',
+        chargeLane: 'companion_social',
+        relationshipPressure: 8,
+        rootNormalSpent: 8,
+        contributingEventCount: 8,
+        marginalChargeUnits: 1,
+        closeoutReserveRemainingAfterProjected: 1,
+        continuationEvidence: [
+          'recent_human_participation',
+          'active_work_or_research',
+        ],
+      },
     },
   }),
   buildFatigueDecisionFixture({
@@ -294,6 +340,17 @@ const fatigueDecisionFixtures: FatigueDecisionFixture[] = [
       overchargeBlockedReasons: ['overcharge_reserve_exhausted'],
       overchargeReasons: ['work_intent_wrapup'],
       budget: suppressedBudget,
+      socialRegulation: {
+        ...fatigueMetadata.socialRegulation,
+        state: 'suppressed',
+        relationshipPressure: 8,
+        rootNormalSpent: 8,
+        rootOverchargeSpent: 2,
+        contributingEventCount: 10,
+        closeoutReserveRemainingBefore: 0,
+        closeoutReserveRemainingAfterProjected: 0,
+        continuationEvidence: ['active_work_or_research'],
+      },
     },
   }),
 ];

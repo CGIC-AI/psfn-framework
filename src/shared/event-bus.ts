@@ -152,7 +152,7 @@ export interface EventMap {
       | 'post_turn_appraisal'
       | 'background_continuation'
       | 'maintenance_reflection';
-    chargeLane: 'interactive' | 'background' | 'maintenance' | 'subagent' | 'shard';
+    chargeLane: 'interactive' | 'companion_social' | 'background' | 'maintenance' | 'subagent' | 'shard';
     phase:
       | 'queued'
       | 'deduplicated'

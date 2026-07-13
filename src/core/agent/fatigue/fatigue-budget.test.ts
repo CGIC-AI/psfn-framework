@@ -44,6 +44,31 @@ const LIMITS_WITH_OVERCHARGE = {
   overchargeLimit: 2,
 } satisfies FatigueBudgetLimits;
 
+const ROOT_A = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+const ROOT_B = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+const REGULATION_WINDOW_MS = 48 * 60 * 60_000;
+const REGULATION_HALF_LIFE_MS = 6 * 60 * 60_000;
+
+function makeIcpCorrelation(rootInitiationId: string, channelId: string, turnId: string) {
+  return {
+    conversationId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+    rootInitiationId,
+    initiatedByCompanionId: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd',
+    localCompanionId: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee',
+    peerCompanionId: 'ffffffff-ffff-4fff-8fff-ffffffffffff',
+    peerContactId: 'artemis',
+    channelId,
+    turnId,
+    messageId: `message-${turnId}`,
+    requestId: `request-${turnId}`,
+    chargeLane: 'interactive' as const,
+    surface: 'companion_dm' as const,
+    costPurpose: 'conversation_turn' as const,
+    costOriginStage: 'reply' as const,
+    fatigueDecision: 'allow' as const,
+  };
+}
+
 describe('DeterministicFatigueBudgetPort', () => {
   afterEach(() => {
     for (const dir of tempDirs.splice(0)) {
@@ -310,6 +335,152 @@ describe('DeterministicFatigueBudgetPort', () => {
     expect(nextDayEvaluation.dayKey).toBe('2027-01-16');
     expect(nextDayEvaluation.stateBefore.spent).toBe(0);
     secondLedger.close();
+  });
+
+  it('keeps ICP root spend across DM/room hopping and UTC rollover while leaving legacy scope unchanged', () => {
+    const ledgerPath = join(makeTempDir(), 'fatigue-ledger.jsonl');
+    const beforeMidnightMs = Date.parse('2027-01-15T23:59:00.000Z');
+    const afterMidnightMs = Date.parse('2027-01-16T00:01:00.000Z');
+    const first = makePort({ ledgerPath, nowMs: beforeMidnightMs });
+    const regulation = {
+      rootInitiationId: ROOT_A,
+      timestampMs: beforeMidnightMs,
+      relationshipPressureHalfLifeMs: REGULATION_HALF_LIFE_MS,
+      relationshipPressureWindowMs: REGULATION_WINDOW_MS,
+    };
+    first.port.recordFinalDecision(first.port.evaluate({
+      localCompanionId: 'purrsephone',
+      channelId: 'companion-dm:a:b',
+      peer: { contactId: 'artemis', isMachineIntelligence: true },
+      triggeringAuthor: { role: 'machine_intelligence', isMachineIntelligence: true },
+      limits: LIMITS_WITH_OVERCHARGE,
+      timestampMs: beforeMidnightMs,
+      regulation,
+      correlation: {
+        turnId: 'turn-root-a-1',
+        icpCorrelation: makeIcpCorrelation(ROOT_A, 'companion-dm:a:b', 'turn-root-a-1'),
+      },
+    }));
+    first.ledger.close();
+
+    const second = makePort({ ledgerPath, nowMs: afterMidnightMs });
+    const state = second.port.readState({
+      localCompanionId: 'purrsephone',
+      peerContactId: 'artemis',
+      channelId: 'companion-room:elsewhere',
+      dayKey: '2027-01-16',
+      limits: LIMITS_WITH_OVERCHARGE,
+      regulation: { ...regulation, timestampMs: afterMidnightMs },
+    });
+    expect(state.normalSpent).toBe(1);
+    expect(state.regulation).toMatchObject({
+      rootInitiationId: ROOT_A,
+      rootNormalSpent: 1,
+      contributingEventCount: 1,
+    });
+    expect(state.scope.channelId).toBe('companion-room:elsewhere');
+    second.ledger.close();
+  });
+
+  it('inherits elapsed-decayed relationship pressure on a new root but never decays the active root', () => {
+    const startMs = Date.parse('2027-01-15T12:00:00.000Z');
+    const { port } = makePort({ nowMs: startMs });
+    const rootRegulation = {
+      rootInitiationId: ROOT_A,
+      timestampMs: startMs,
+      relationshipPressureHalfLifeMs: REGULATION_HALF_LIFE_MS,
+      relationshipPressureWindowMs: REGULATION_WINDOW_MS,
+    };
+    port.recordFinalDecision(port.evaluate({
+      localCompanionId: 'purrsephone',
+      channelId: 'dm-a',
+      peer: { contactId: 'artemis', isMachineIntelligence: true },
+      triggeringAuthor: { role: 'machine_intelligence', isMachineIntelligence: true },
+      limits: LIMITS_WITH_OVERCHARGE,
+      timestampMs: startMs,
+      regulation: rootRegulation,
+      correlation: {
+        turnId: 'turn-pressure-1',
+        icpCorrelation: makeIcpCorrelation(ROOT_A, 'dm-a', 'turn-pressure-1'),
+      },
+    }));
+
+    const afterHalfLife = startMs + REGULATION_HALF_LIFE_MS;
+    const sameRoot = port.readState({
+      localCompanionId: 'purrsephone',
+      peerContactId: 'artemis',
+      channelId: 'room-b',
+      limits: LIMITS_WITH_OVERCHARGE,
+      regulation: { ...rootRegulation, timestampMs: afterHalfLife },
+    });
+    const newRoot = port.readState({
+      localCompanionId: 'purrsephone',
+      peerContactId: 'artemis',
+      channelId: 'room-b',
+      limits: LIMITS_WITH_OVERCHARGE,
+      regulation: {
+        ...rootRegulation,
+        rootInitiationId: ROOT_B,
+        timestampMs: afterHalfLife,
+      },
+    });
+    expect(sameRoot.normalSpent).toBe(1);
+    expect(sameRoot.regulation?.rootNormalSpent).toBe(1);
+    expect(newRoot.regulation?.rootNormalSpent).toBe(0);
+    expect(newRoot.regulation?.relationshipPressure).toBeCloseTo(0.5, 5);
+    expect(newRoot.normalSpent).toBe(1);
+
+    const afterWindow = port.readState({
+      localCompanionId: 'purrsephone',
+      peerContactId: 'artemis',
+      channelId: 'room-b',
+      limits: LIMITS_WITH_OVERCHARGE,
+      regulation: {
+        ...rootRegulation,
+        rootInitiationId: ROOT_B,
+        timestampMs: startMs + REGULATION_WINDOW_MS + 1,
+      },
+    });
+    expect(afterWindow.normalSpent).toBe(0);
+    expect(afterWindow.regulation?.contributingEventCount).toBe(0);
+  });
+
+  it('keeps fatigue choices independent per local companion for the same relationship root', () => {
+    const nowMs = Date.parse('2027-01-15T12:00:00.000Z');
+    const { port } = makePort({ nowMs });
+    const regulation = {
+      rootInitiationId: ROOT_A,
+      timestampMs: nowMs,
+      relationshipPressureHalfLifeMs: REGULATION_HALF_LIFE_MS,
+      relationshipPressureWindowMs: REGULATION_WINDOW_MS,
+    };
+    port.recordFinalDecision(port.evaluate({
+      localCompanionId: 'purrsephone',
+      channelId: 'dm-a',
+      peer: { contactId: 'artemis', isMachineIntelligence: true },
+      triggeringAuthor: { role: 'machine_intelligence', isMachineIntelligence: true },
+      limits: LIMITS_WITH_OVERCHARGE,
+      timestampMs: nowMs,
+      regulation,
+      correlation: {
+        turnId: 'turn-local-a',
+        icpCorrelation: makeIcpCorrelation(ROOT_A, 'dm-a', 'turn-local-a'),
+      },
+    }));
+    expect(port.readState({
+      localCompanionId: 'purrsephone',
+      peerContactId: 'artemis',
+      channelId: 'dm-a',
+      limits: LIMITS_WITH_OVERCHARGE,
+      regulation,
+    }).normalSpent).toBe(1);
+    expect(port.readState({
+      localCompanionId: 'artemis',
+      peerContactId: 'purrsephone',
+      channelId: 'dm-a',
+      limits: LIMITS_WITH_OVERCHARGE,
+      regulation,
+    }).normalSpent).toBe(0);
   });
 
   it('tracks overcharge reserve separately from normal fatigue spend', () => {

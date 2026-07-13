@@ -30,6 +30,7 @@ import type { ImageVisionReviewer } from '../../../primitives/images/types.js';
 import type { VisionIntakeImageScreenerPort } from './vision-attachments.js';
 import type { ObserverEvalSidecarRuntime } from '../../eval/observer-sidecar/types.js';
 import type { FatigueBudgetPort } from '../fatigue/fatigue-budget.js';
+import type { IcpFatigueRegulationReservationPort } from '../fatigue/regulation-reservation.js';
 import type { IntakeFirewallMode } from '../../../system/config/intake-policy-config.js';
 
 interface TurnExecutionAdapterCallbacks {
@@ -142,6 +143,7 @@ export interface TurnExecutionAdapterOptions {
   eventBus: EventBus;
   costTelemetry: CostTelemetryPort;
   fatigueBudget?: FatigueBudgetPort | null;
+  fatigueRegulationReservations?: IcpFatigueRegulationReservationPort | null;
   satellitePresence: SatellitePresencePort;
   /** Cross-companion presence (W5a); absent/null skips presence writes. */
   companionPresence?: CompanionPresenceTurnPort | null;
@@ -185,6 +187,7 @@ export function createTurnExecutionRuntimeAdapter(
     eventBus: options.eventBus,
     costTelemetry: options.costTelemetry,
     fatigueBudget: options.fatigueBudget ?? null,
+    fatigueRegulationReservations: options.fatigueRegulationReservations ?? null,
     satellitePresence: options.satellitePresence,
     companionPresence: options.companionPresence ?? null,
     llmClient: options.llmClient,

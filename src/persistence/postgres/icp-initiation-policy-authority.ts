@@ -19,6 +19,10 @@ import {
   withPostgresClient,
 } from '../postgres.js';
 import { TRUST_LEVELS, trustAtLeast, type TrustLevel } from '../../system/trust/types.js';
+import {
+  VALID_RELATIONSHIP_TYPES,
+  type RelationshipType,
+} from '../../core/contacts/types.js';
 
 interface FleetPolicyOwner {
   companionId: string;
@@ -45,6 +49,7 @@ interface CandidatePolicyRow extends QueryResultRow {
 interface ContactPolicyRow extends QueryResultRow {
   id: string;
   trust_level: string;
+  relationship_type: string;
   is_machine_intelligence: boolean;
 }
 
@@ -74,6 +79,13 @@ function parseTrustLevel(value: string): TrustLevel {
     throw new Error(`Unknown canonical contact trust level ${JSON.stringify(value)}`);
   }
   return value as TrustLevel;
+}
+
+function parseRelationshipType(value: string): RelationshipType {
+  if (!VALID_RELATIONSHIP_TYPES.includes(value as RelationshipType)) {
+    throw new Error(`Unknown canonical contact relationship type ${JSON.stringify(value)}`);
+  }
+  return value as RelationshipType;
 }
 
 function candidateMatches(row: CandidatePolicyRow, input: IcpInitiationPolicyAuthorityInput): boolean {
@@ -185,8 +197,12 @@ export class PostgresIcpInitiationPolicyAuthority implements GatewayIcpInitiatio
     const independentRoot = canonicalCandidate && this.options.causalityAuthority
       ? await this.options.causalityAuthority.isIndependentRoot(input)
       : false;
-    const capacity = this.options.capacityAuthority
-      ? await this.options.capacityAuthority.resolve(input)
+    const capacity = this.options.capacityAuthority && canonicalPeerContact
+      ? await this.options.capacityAuthority.resolve({
+          ...input,
+          senderRelationship: senderContact,
+          peerRelationship: peerContact,
+        })
       : {
           socialPressureAllows: false,
           chargeAllows: false,
@@ -310,14 +326,14 @@ export class PostgresIcpInitiationPolicyAuthority implements GatewayIcpInitiatio
     expectedContactId: string | null,
     peerCompanionId: string,
     lockCanonicalRows = false,
-  ): Promise<{ trustLevel: TrustLevel } | null> {
+  ): Promise<{ trustLevel: TrustLevel; relationshipType: RelationshipType } | null> {
     // A final authorization takes FOR UPDATE on the canonical parent contact.
     // The channel-identity FK takes FOR KEY SHARE for inserts, so this parent
     // lock prevents a second companion identity from appearing until the
     // authorized operation commits. The follow-up read must still require
     // exact cardinality because ambiguity committed before the lock is valid.
     const contactResult = await query.query<ContactPolicyRow>(`
-      SELECT c.id, c.trust_level, c.is_machine_intelligence
+      SELECT c.id, c.trust_level, c.relationship_type, c.is_machine_intelligence
       FROM ${quoteSchema(owner.postgresSchema)}.contacts AS c
       WHERE c.id = CASE
         WHEN $2::text IS NOT NULL THEN $2
@@ -343,7 +359,10 @@ export class PostgresIcpInitiationPolicyAuthority implements GatewayIcpInitiatio
       || identityResult.rows[0]?.channel_user_id !== peerCompanionId) {
       return null;
     }
-    return { trustLevel: parseTrustLevel(contact.trust_level) };
+    return {
+      trustLevel: parseTrustLevel(contact.trust_level),
+      relationshipType: parseRelationshipType(contact.relationship_type),
+    };
   }
 
   private isBlocked(companionId: string, peerCompanionId: string, isDirectMessage: boolean): boolean {

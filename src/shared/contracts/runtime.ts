@@ -8,10 +8,12 @@ import type { ModelContextBudgetConfig } from '../context-budget-contracts.js';
 import type {
   ChargePolicyRuntimeLane,
   ChargePolicySurface,
+  FatigueContinuationEvidence,
   FatiguePolicyChannelSetting,
   FatiguePolicyIntent,
   FatiguePolicyRelationshipClass,
   FatiguePolicyState,
+  FatigueRegulationState,
 } from './charge-policy.js';
 import type { SatelliteRoutingMetadata } from './satellite-registry.js';
 import type { GatewayRoutingEnvelope } from '../routing/envelope.js';
@@ -495,6 +497,20 @@ export interface FatigueRecordedEventMetadata {
   hardState: FatigueBudgetHardState;
 }
 
+export interface FatigueSocialRegulationMetadata {
+  state: FatigueRegulationState;
+  chargeLane: Extract<ChargePolicyRuntimeLane, 'interactive' | 'companion_social'>;
+  relationshipPressure: number;
+  rootNormalSpent: number;
+  rootOverchargeSpent: number;
+  contributingEventCount: number;
+  marginalChargeUnits: number;
+  closeoutReserveRemainingBefore: number;
+  closeoutReserveRemainingAfterProjected: number;
+  continuationEvidence: FatigueContinuationEvidence[];
+  rootInitiationId?: string;
+}
+
 export interface FatigueEnforcementMetadata {
   schemaVersion: 1;
   decision: FatigueEnforcementDecision;
@@ -516,6 +532,7 @@ export interface FatigueEnforcementMetadata {
   peer: FatigueBudgetPeerSnapshot;
   triggeringAuthor: FatigueBudgetActorSnapshot;
   budget: FatigueEnforcementBudgetMetadata;
+  socialRegulation: FatigueSocialRegulationMetadata;
   recordedEvent?: FatigueRecordedEventMetadata;
 }
 

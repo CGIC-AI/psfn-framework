@@ -44,6 +44,7 @@ import {
   type FatigueBudgetHistoryPort,
   type FatigueBudgetPort,
 } from '../fatigue/fatigue-budget.js';
+import type { IcpFatigueRegulationReservationPort } from '../fatigue/regulation-reservation.js';
 import type { TurnExecutionRuntime } from './turn-execution-runtime.js';
 import { handleMessageForTurn } from './turn-execution-runtime.js';
 import { PromptCacheTurnRuntime } from './turn-execution/prompt-cache-runtime.js';
@@ -142,6 +143,7 @@ function makeChargePolicy(): ChargePolicyConfig {
     schemaVersion: 1,
     runChargeQuotaByLane: {
       interactive: 100,
+      companion_social: 100,
       background: 100,
       maintenance: 0,
       subagent: 100,
@@ -161,6 +163,7 @@ function makeChargePolicy(): ChargePolicyConfig {
       shardLaunch: 8,
       externalModelConsult: 1,
       moaRoundBase: 1,
+      companionSocialContinuation: 1,
     },
     moa: {
       perRoundMultiplierByReferenceModelClass: {
@@ -514,6 +517,7 @@ function createRuntime(params: {
   emotionSelfModelRuntimeOverrides?: Partial<TurnExecutionRuntime['emotionSelfModelRuntime']>;
   observerEvalSidecar?: ObserverEvalSidecarRuntime | null;
   fatigueBudget?: FatigueBudgetPort | null;
+  fatigueRegulationReservations?: IcpFatigueRegulationReservationPort | null;
   configOverrides?: Partial<SubstrateConfig>;
   cogSecMode?: TurnExecutionRuntime['cogSecMode'];
 }) {
@@ -535,6 +539,7 @@ function createRuntime(params: {
     eventBus: params.eventBus,
     costTelemetry: createEventBusCostTelemetryPort(params.eventBus),
     fatigueBudget: params.fatigueBudget ?? null,
+    fatigueRegulationReservations: params.fatigueRegulationReservations ?? null,
     satellitePresence: createActiveEmanationSatellitePresencePort(),
     llmClient: {
       stream: vi.fn(),
@@ -1084,6 +1089,7 @@ describe('handleMessageForTurn generated media delivery', () => {
 describe('handleMessageForTurn fatigue enforcement', () => {
   function createFatigueRuntime(params: {
     fatigueBudget: FatigueBudgetPort;
+    fatigueRegulationReservations?: IcpFatigueRegulationReservationPort;
     eventBus?: EventBus;
     buildContext?: ReturnType<typeof vi.fn>;
     resolveAuthorContext?: ReturnType<typeof vi.fn>;
@@ -1105,6 +1111,9 @@ describe('handleMessageForTurn fatigue enforcement', () => {
       recordUserMessage: vi.fn(() => 1),
       recordAssistantMessage: params.recordAssistantMessage ?? vi.fn(() => 2),
       fatigueBudget: params.fatigueBudget,
+      ...(params.fatigueRegulationReservations
+        ? { fatigueRegulationReservations: params.fatigueRegulationReservations }
+        : {}),
       configOverrides: params.configOverrides,
       countResolvableSpeakerContacts: vi.fn(async () => 0),
       resolveParticipantRelationships: vi.fn(async () => []),
@@ -1139,6 +1148,167 @@ describe('handleMessageForTurn fatigue enforcement', () => {
       peerContactId: 'contact-mi',
       channelId: 'ch1',
     });
+  });
+
+  it('suppresses before the model when the durable cross-channel reservation loses the last slot', async () => {
+    const { fatigueBudget, history } = createFatigueBudgetHarness();
+    const localCompanionId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+    const peerCompanionId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+    const channelId = `companion-dm:${localCompanionId}:${peerCompanionId}`;
+    const reserve = vi.fn(async () => ({
+      outcome: 'exhausted' as const,
+      normalSpentBefore: 5,
+      overchargeSpentBefore: 0,
+      relationshipPressure: 5,
+      rootNormalSpent: 5,
+    }));
+    const reservations: IcpFatigueRegulationReservationPort = {
+      reserve,
+      readInitiationPressure: vi.fn(),
+      finalize: vi.fn(),
+      close: vi.fn(),
+    };
+    const { runtime } = createFatigueRuntime({
+      fatigueBudget,
+      fatigueRegulationReservations: reservations,
+      configOverrides: { multiCompanion: true, companionId: localCompanionId },
+    });
+    const inboundCorrelation = {
+      conversationId: '44444444-4444-4444-8444-444444444444',
+      rootInitiationId: '99999999-9999-4999-8999-999999999999',
+      initiatedByCompanionId: peerCompanionId,
+      localCompanionId: peerCompanionId,
+      peerCompanionId: localCompanionId,
+      peerContactId: 'peer-local-contact',
+      channelId,
+      turnId: '77777777-7777-4777-8777-777777777777',
+      messageId: 'companion-initiation:33333333-3333-4333-8333-333333333333',
+      requestId: 'companion-initiation:33333333-3333-4333-8333-333333333333',
+      chargeLane: 'interactive' as const,
+      surface: 'companion_dm' as const,
+      costPurpose: 'conversation_turn' as const,
+      costOriginStage: 'initiation' as const,
+      fatigueDecision: 'allow' as const,
+    };
+
+    const response = await handleMessageForTurn(runtime, createMessage('inbound-icp-last-slot', {
+      channelId,
+      channelType: 'companion',
+      isDirectMessage: true,
+      authorId: peerCompanionId,
+      authorName: 'Peer MI',
+      routing: {
+        source: 'companion',
+        canonicalContactId: 'contact-mi',
+        authorIsMachineIntelligence: true,
+        icpCorrelation: inboundCorrelation,
+      },
+    }));
+
+    expect(reserve).toHaveBeenCalledOnce();
+    expect(runtime.agent.prompt).not.toHaveBeenCalled();
+    expect(response.content).toBe('');
+    expect(response.metadata.fatigue).toMatchObject({
+      decision: 'suppressed_hard_exhausted',
+      modelDisposition: 'suppressed',
+      shouldRecordSpend: false,
+      socialRegulation: {
+        state: 'suppressed',
+        relationshipPressure: 5,
+      },
+    });
+    expect(response.metadata.icpCorrelation).toMatchObject({
+      fatigueDecision: 'suppress',
+      fatigueReasonCode: 'fatigue_exhausted',
+    });
+    expect(history.events).toHaveLength(0);
+  });
+
+  it('reserves before the model and finalizes the exact spend after durable delivery', async () => {
+    const { fatigueBudget, history } = createFatigueBudgetHarness();
+    const localCompanionId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+    const peerCompanionId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+    const channelId = `companion-dm:${localCompanionId}:${peerCompanionId}`;
+    const correlation = {
+      conversationId: '44444444-4444-4444-8444-444444444444',
+      rootInitiationId: '99999999-9999-4999-8999-999999999999',
+      initiatedByCompanionId: peerCompanionId,
+      localCompanionId: peerCompanionId,
+      peerCompanionId: localCompanionId,
+      peerContactId: 'peer-local-contact',
+      channelId,
+      turnId: '77777777-7777-4777-8777-777777777778',
+      messageId: 'companion-initiation:33333333-3333-4333-8333-333333333334',
+      requestId: 'companion-initiation:33333333-3333-4333-8333-333333333334',
+      chargeLane: 'companion_social' as const,
+      surface: 'companion_dm' as const,
+      costPurpose: 'conversation_turn' as const,
+      costOriginStage: 'reply' as const,
+      fatigueDecision: 'allow' as const,
+    };
+    const reserve = vi.fn(async () => ({
+      outcome: 'reserved' as const,
+      normalSpentBefore: 0,
+      overchargeSpentBefore: 0,
+      relationshipPressure: 0,
+      rootNormalSpent: 0,
+    }));
+    const finalize = vi.fn(async () => undefined);
+    const reservations: IcpFatigueRegulationReservationPort = {
+      reserve,
+      readInitiationPressure: vi.fn(),
+      finalize,
+      close: vi.fn(),
+    };
+    const { runtime } = createFatigueRuntime({
+      fatigueBudget,
+      fatigueRegulationReservations: reservations,
+      configOverrides: { multiCompanion: true, companionId: localCompanionId },
+    });
+    const finalizeDelivery = vi.fn(async () => undefined);
+
+    const response = await handleMessageForTurn(runtime, createMessage(correlation.requestId, {
+      channelId,
+      channelType: 'companion',
+      isDirectMessage: true,
+      authorId: peerCompanionId,
+      authorName: 'Peer MI',
+      routing: {
+        source: 'companion',
+        canonicalContactId: 'contact-mi',
+        authorIsMachineIntelligence: true,
+        icpCorrelation: correlation,
+      },
+    }), { finalizeDelivery });
+
+    expect(reserve).toHaveBeenCalledOnce();
+    expect(runtime.agent.prompt).toHaveBeenCalledOnce();
+    expect(finalizeDelivery).toHaveBeenCalledOnce();
+    expect(finalize).toHaveBeenCalledWith(expect.objectContaining({
+      correlation: expect.objectContaining({
+        conversationId: correlation.conversationId,
+        rootInitiationId: correlation.rootInitiationId,
+        localCompanionId,
+        peerCompanionId,
+        peerContactId: 'contact-mi',
+      }),
+      outcome: 'delivered',
+      fatigue: expect.objectContaining({
+        spendDecision: 'charged',
+        recordedEvent: expect.objectContaining({ amount: 1, decision: 'charged' }),
+        socialRegulation: expect.objectContaining({
+          rootInitiationId: correlation.rootInitiationId,
+        }),
+      }),
+    }));
+    expect(reserve.mock.invocationCallOrder[0]).toBeLessThan(
+      (runtime.agent.prompt as ReturnType<typeof vi.fn>).mock.invocationCallOrder[0]!,
+    );
+    expect(finalizeDelivery.mock.invocationCallOrder[0]).toBeLessThan(
+      finalize.mock.invocationCallOrder[0]!,
+    );
+    expect(response.metadata.fatigue?.recordedEvent).toMatchObject({ amount: 1 });
+    expect(history.events).toHaveLength(1);
   });
 
   it('recovers the pending fatigue spend after the assistant row survives a crash', async () => {

@@ -14,6 +14,7 @@ import {
 } from './fatigue-budget.js';
 import {
   evaluateFatigueForTurn,
+  suppressFatigueAfterReservationExhaustion,
   type FatigueAuthorPolicyContext,
   type FatigueRecentHumanParticipation,
 } from './runtime-enforcement.js';
@@ -147,6 +148,30 @@ function runTurn(
 }
 
 describe('two-companion fatigue loop (E7.3 end-to-end)', () => {
+  it('turns a losing durable last-slot race into invariant-valid zero-model suppression', () => {
+    const decision = runTurn(createHarness(), { config: makeLoopConfig() });
+    const suppressed = suppressFatigueAfterReservationExhaustion(decision.metadata, {
+      outcome: 'exhausted',
+      normalSpentBefore: 5,
+      overchargeSpentBefore: 0,
+      relationshipPressure: 5,
+      rootNormalSpent: 5,
+    });
+
+    expect(suppressed).toMatchObject({
+      decision: 'suppressed_hard_exhausted',
+      modelDisposition: 'suppressed',
+      shouldRecordSpend: false,
+      policyBaseState: 'hard_exhausted',
+      socialRegulation: {
+        state: 'suppressed',
+        chargeLane: 'interactive',
+        relationshipPressure: 5,
+        rootNormalSpent: 5,
+      },
+    });
+  });
+
   it('walks the budget states and terminates within budget on machine-to-machine turns', () => {
     const harness = createHarness();
     const config = makeLoopConfig();

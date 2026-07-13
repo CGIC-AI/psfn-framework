@@ -356,6 +356,68 @@ function parseFatigueOverchargeConfig(
   };
 }
 
+function parseFatigueSocialRegulationConfig(
+  raw: unknown,
+  fieldPath: string,
+): FatiguePolicyConfig['socialRegulation'] {
+  if (!isRecord(raw)) {
+    throw new Error(`Invalid charge policy: ${fieldPath} must be an object`);
+  }
+  assertNoUnknownKeys(raw, [
+    'relationshipPressureHalfLifeMs',
+    'relationshipPressureWindowMs',
+    'reservationTtlMs',
+    'conversationMaturingRatio',
+    'marginalChargeUnits',
+    'declinedPressureUnits',
+    'deferredPressureUnits',
+    'unansweredPressureUnits',
+  ], fieldPath);
+  const relationshipPressureHalfLifeMs = parsePositiveInteger(
+    raw.relationshipPressureHalfLifeMs,
+    `${fieldPath}.relationshipPressureHalfLifeMs`,
+  );
+  const relationshipPressureWindowMs = parsePositiveInteger(
+    raw.relationshipPressureWindowMs,
+    `${fieldPath}.relationshipPressureWindowMs`,
+  );
+  if (relationshipPressureWindowMs < relationshipPressureHalfLifeMs) {
+    throw new Error(`Invalid charge policy: ${fieldPath}.relationshipPressureWindowMs must be >= ${fieldPath}.relationshipPressureHalfLifeMs`);
+  }
+  const conversationMaturingRatio = parseNonNegativeNumber(
+    raw.conversationMaturingRatio,
+    `${fieldPath}.conversationMaturingRatio`,
+  );
+  if (conversationMaturingRatio <= 0 || conversationMaturingRatio >= 1) {
+    throw new Error(`Invalid charge policy: ${fieldPath}.conversationMaturingRatio must be > 0 and < 1`);
+  }
+  return {
+    relationshipPressureHalfLifeMs,
+    relationshipPressureWindowMs,
+    reservationTtlMs: parsePositiveInteger(
+      raw.reservationTtlMs,
+      `${fieldPath}.reservationTtlMs`,
+    ),
+    conversationMaturingRatio,
+    marginalChargeUnits: parsePositiveInteger(
+      raw.marginalChargeUnits,
+      `${fieldPath}.marginalChargeUnits`,
+    ),
+    declinedPressureUnits: parseNonNegativeNumber(
+      raw.declinedPressureUnits,
+      `${fieldPath}.declinedPressureUnits`,
+    ),
+    deferredPressureUnits: parseNonNegativeNumber(
+      raw.deferredPressureUnits,
+      `${fieldPath}.deferredPressureUnits`,
+    ),
+    unansweredPressureUnits: parseNonNegativeNumber(
+      raw.unansweredPressureUnits,
+      `${fieldPath}.unansweredPressureUnits`,
+    ),
+  };
+}
+
 function parseFatiguePolicyConfig(
   raw: unknown,
   fieldPath: string,
@@ -372,6 +434,7 @@ function parseFatiguePolicyConfig(
       'activityThresholds',
       'stateThresholds',
       'overcharge',
+      'socialRegulation',
     ],
     fieldPath,
   );
@@ -406,6 +469,10 @@ function parseFatiguePolicyConfig(
     overcharge: parseFatigueOverchargeConfig(
       raw.overcharge,
       `${fieldPath}.overcharge`,
+    ),
+    socialRegulation: parseFatigueSocialRegulationConfig(
+      raw.socialRegulation,
+      `${fieldPath}.socialRegulation`,
     ),
   };
 }

@@ -29,6 +29,7 @@ const CHARGE_SURFACE_PROMPT_LABELS: Record<ChargePolicySurface, string> = {
   shardLaunch: 'shard launch',
   externalModelConsult: 'external model consult',
   moaRoundBase: 'multi-model deliberation round',
+  companionSocialContinuation: 'autonomous companion social continuation after soft allowance',
 };
 
 const ANALYSIS_WORKBENCH_EXTENSION_SURFACE: ChargePolicySurface = 'analysisWorkbenchExtensionBand';

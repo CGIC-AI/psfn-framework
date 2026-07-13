@@ -1,0 +1,24 @@
+[Unit]
+Description=PSFN Waveshare bedroom voice bridge
+After=network-online.target k3s.service
+Wants=network-online.target
+RequiresMountsFor=/home/psfn/psfn-satellite-hub
+
+[Service]
+Type=simple
+User=psfn
+Group=psfn
+WorkingDirectory=/home/psfn/psfn-satellite-hub
+Environment=HOME=/home/psfn
+Environment=PATH=/home/psfn/psfn-satellite-hub/.venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+ExecStart=/home/psfn/psfn-satellite-hub/.venv/bin/hub run
+Restart=on-failure
+RestartSec=5
+KillMode=mixed
+TimeoutStopSec=30
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=psfn-waveshare-bedroom
+
+[Install]
+WantedBy=multi-user.target

@@ -94,6 +94,15 @@ const replaceRequired = (search, replacement, label) => {
   profile = profile.replace(search, replacement);
 };
 
+// Keep wake detection on the ESP32 and bind it to the repo-owned model. The
+// ESPHome voice-assistant transport is consumed by the Satellite Hub fallback
+// bridge; Home Assistant Assist is not part of this turn path.
+replaceRequired(
+  "    - model: alexa",
+  `    - model: ${path.join(targetRoot, "wakeword", "purrsephone.json")}`,
+  "upstream Alexa wake-word model",
+);
+
 // Preserve the upstream widget IDs and lifecycle scripts while replacing its
 // borrowed character art with the repo-owned Purrsephone state sprites.
 const idleAnimation = /(        - animimg:\n            id: idle_anim[\s\S]*?            src:\n)[\s\S]*?(            duration: 6600ms)/;
@@ -147,6 +156,7 @@ const forbidden = [
   "github://pr#",
   "assets/images/assistant/",
   "assistant_gui_",
+  "model: alexa",
   "id: mood_happy",
   "id: mood_neutral",
   "id: mood_angry",

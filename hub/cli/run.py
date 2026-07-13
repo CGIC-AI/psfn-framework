@@ -41,40 +41,47 @@ async def _run_esphome_runtime(
     )
 
     try:
-        async with ESPHomeSession(config.esphome_target) as session:
-            device_info = await session.device_info()
-            runtime = StreamingVoiceAssistantRuntime(
-                session=session,
-                stt=stt,
-                agent=agent,
-                tts=tts,
-                audio_server=audio_server,
-                session_cache=session_cache,
-                artifacts_root=config.artifacts_root,
-                continue_conversation=config.continue_conversation,
-                announcement_timeout_seconds=config.announcement_timeout_seconds,
-                reply_timeout_seconds=config.reply_timeout_seconds,
-                initial_silence_timeout_seconds=config.voice_initial_silence_timeout_seconds,
-                endpointing_grace_seconds=config.voice_endpointing_grace_seconds,
-                silence_timeout_seconds=config.voice_silence_timeout_seconds,
-                max_turn_seconds=config.voice_max_turn_seconds,
-                speech_rms_threshold=config.voice_speech_rms_threshold,
-                min_speech_chunks_for_endpointing=config.voice_min_speech_chunks_for_endpointing,
-            )
-            unsubscribe = session.subscribe_voice_assistant(
-                handle_start=runtime.handle_start,
-                handle_stop=runtime.handle_stop,
-                handle_audio=runtime.handle_audio,
-            )
+        while True:
             try:
-                typer.echo(
-                    f"Connected to {device_info.friendly_name or device_info.name} at "
-                    f"{config.esphome_target.host}:{config.esphome_target.port}"
-                )
-                while True:
-                    await asyncio.sleep(3600)
-            finally:
-                unsubscribe()
+                async with ESPHomeSession(config.esphome_target) as session:
+                    device_info = await session.device_info()
+                    runtime = StreamingVoiceAssistantRuntime(
+                        session=session,
+                        stt=stt,
+                        agent=agent,
+                        tts=tts,
+                        audio_server=audio_server,
+                        session_cache=session_cache,
+                        artifacts_root=config.artifacts_root,
+                        continue_conversation=config.continue_conversation,
+                        announcement_timeout_seconds=config.announcement_timeout_seconds,
+                        reply_timeout_seconds=config.reply_timeout_seconds,
+                        initial_silence_timeout_seconds=config.voice_initial_silence_timeout_seconds,
+                        endpointing_grace_seconds=config.voice_endpointing_grace_seconds,
+                        silence_timeout_seconds=config.voice_silence_timeout_seconds,
+                        max_turn_seconds=config.voice_max_turn_seconds,
+                        speech_rms_threshold=config.voice_speech_rms_threshold,
+                        min_speech_chunks_for_endpointing=config.voice_min_speech_chunks_for_endpointing,
+                    )
+                    unsubscribe = session.subscribe_voice_assistant(
+                        handle_start=runtime.handle_start,
+                        handle_stop=runtime.handle_stop,
+                        handle_audio=runtime.handle_audio,
+                    )
+                    try:
+                        typer.echo(
+                            f"Connected to {device_info.friendly_name or device_info.name} at "
+                            f"{config.esphome_target.host}:{config.esphome_target.port}"
+                        )
+                        await session.wait_disconnected()
+                    finally:
+                        unsubscribe()
+                typer.echo("ESPHome connection lost; reconnecting in 2 seconds")
+            except Exception as exc:
+                typer.echo(f"ESPHome connection failed: {exc}; reconnecting in 5 seconds")
+                await asyncio.sleep(5)
+                continue
+            await asyncio.sleep(2)
     finally:
         audio_server.stop()
         await agent.aclose()

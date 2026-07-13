@@ -48,7 +48,7 @@ def test_load_runtime_config_reads_psfn_and_project_env(tmp_path: Path, monkeypa
         "ELEVENLABS_API_KEY=project-eleven\n"
         "PSFN_API_BASE_URL=http://psfn.example:3100/v1\n"
         "PSFN_PROVIDER=openrouter\n"
-        "PSFN_MODEL=psfn\n",
+        "PSFN_MODEL=z-ai/glm-5.2:nitro\n",
         encoding="utf-8",
     )
 
@@ -63,7 +63,7 @@ def test_load_runtime_config_reads_psfn_and_project_env(tmp_path: Path, monkeypa
     assert config.psfn_api_base_url == "http://psfn.example:3100/v1"
     assert config.psfn_api_key is None
     assert config.psfn_provider == "openrouter"
-    assert config.psfn_model == "psfn"
+    assert config.psfn_model == "z-ai/glm-5.2:nitro"
     assert config.psfn_satellite_claim.namespace == "satellite.endpoint"
     assert config.psfn_satellite_claim.channel_type == "satellite.endpoint"
     assert config.psfn_satellite_claim.capability_profile == "voice-only"
@@ -214,6 +214,32 @@ def test_load_runtime_config_requires_public_host_in_realtime_mode(tmp_path: Pat
     with pytest.raises(
         ValueError,
         match="AUDIO_PUBLIC_HOST or REALTIME_VOICE_PUBLIC_HOST is required when DEVICE_TRANSPORT=realtime",
+    ):
+        load_runtime_config(tmp_path)
+
+
+def test_load_runtime_config_requires_concrete_model_with_provider(tmp_path: Path, monkeypatch) -> None:
+    for name in (
+        "ESPHOME_HOST",
+        "DEEPGRAM_API_KEY",
+        "ELEVENLABS_API_KEY",
+        "PSFN_PROVIDER",
+        "PSFN_MODEL",
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+    (tmp_path / ".env").write_text(
+        "ESPHOME_HOST=esphome.example\n"
+        "DEEPGRAM_API_KEY=project-deepgram\n"
+        "ELEVENLABS_API_KEY=project-eleven\n"
+        "PSFN_PROVIDER=openrouter\n"
+        "PSFN_MODEL=psfn\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="PSFN_MODEL must name a concrete provider model when PSFN_PROVIDER is set",
     ):
         load_runtime_config(tmp_path)
 

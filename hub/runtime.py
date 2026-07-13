@@ -152,6 +152,8 @@ def load_runtime_config(project_root: Path) -> HubRuntimeConfig:
     psfn_api_key = os.getenv("PSFN_API_KEY") or None
     psfn_provider = (os.getenv("PSFN_PROVIDER") or "").strip().lower() or None
     psfn_model = os.getenv("PSFN_MODEL", "psfn").strip()
+    if psfn_provider and (not psfn_model or psfn_model == "psfn"):
+        raise ValueError("PSFN_MODEL must name a concrete provider model when PSFN_PROVIDER is set")
     psfn_author_id = os.getenv("PSFN_AUTHOR_ID") or None
     psfn_author_name = os.getenv("PSFN_AUTHOR_NAME") or None
     if bool(psfn_author_id) != bool(psfn_author_name):

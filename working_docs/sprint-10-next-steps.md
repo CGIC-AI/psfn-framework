@@ -1,6 +1,6 @@
 # Sprint 10 — Next Steps
 
-Status: 2026-07-08; **§0 added 2026-07-12** (post-triage grilling session — decided priority order, operator decisions, and corrections; where §0 and the older sections disagree, §0 wins). Companion doc to [`sprint-10-multi-companion.md`](./sprint-10-multi-companion.md) (the plan, v2) and [`SPRINT_10_LOCATIONS.md`](./SPRINT_10_LOCATIONS.md) (the locations plan). Those two answer "what are we building and why"; this one answers "what happens next, in what order, before this ships." Bead ids below are enumerated in [`sprint-10-multi-companion-beads.jsonl`](./sprint-10-multi-companion-beads.jsonl) (26 beads, epic `psfn-framework-s10mc` + `psfn-framework-vinz` children + future-idea beads).
+Status: 2026-07-08; **§0 added 2026-07-12; §0.4 added 2026-07-13** (post-triage grilling session — decided priority order, operator decisions, and corrections; where §0 and the older sections disagree, §0 wins). Companion doc to [`sprint-10-multi-companion.md`](./sprint-10-multi-companion.md) (the plan, v2) and [`SPRINT_10_LOCATIONS.md`](./SPRINT_10_LOCATIONS.md) (the locations plan). Those two answer "what are we building and why"; this one answers "what happens next, in what order, before this ships." Bead ids below are enumerated in [`sprint-10-multi-companion-beads.jsonl`](./sprint-10-multi-companion-beads.jsonl) (26 beads, epic `psfn-framework-s10mc` + `psfn-framework-vinz` children + future-idea beads).
 
 The headline fact governing everything below: the multi-companion substrate is **code-complete** on `feat/multi-companion` @ `6608579f` (45 commits ahead of `main`), gated at every merge with build + lint + targeted vitest. It is **not yet validated** — no full runtime has booted the branch, because the implementation sandbox has no `.env` secrets and Docker there cannot publish ports. Code-complete and validated are different claims; §1 keeps them visually distinct, and closing that gap (`psfn-framework-s10f8`) is the first gate in §2.
 
@@ -87,6 +87,35 @@ Pi-class runs) → `wckv` setup/bootstrap docs epic → `upx0.1`/`.2`/`.3` →
   2026-07-09 and are closed.
 - Live experience is good post-S9/S10; the binding constraint is follow-through
   on testing and the less-used surfaces, hence the shakedown epic.
+
+### 0.4 2026-07-13 completed feature branch — introspection landmarks
+
+- `feat/introspection-landmarks` is complete at reviewed code head `86cc6618`;
+  child bead `psfn-framework-z7qe.2` is closed. Parent charter epic `z7qe`
+  remains open because it still has live children (`z7qe.1`, `.3`, `.5`, `.6`,
+  `.7`, `.8`, and `.9`).
+- Delivered companion-owned append-only consent, a scheduled three-call blinded
+  divergence audit with auditor/companion context separation, append-only
+  Postgres landmark and terminal-decision ledgers, private values-consistency
+  findings, and private model-usage telemetry. Intimate or untrusted turns fail
+  closed and are never replayed into the audit.
+- The final privacy hardening binds each candidate to its exact logical-session
+  owner and revalidates route retirement, physical TurnRecord ownership,
+  owner loadability, and tombstones after every awaited disclosure boundary and
+  before durable writes. Deterministic disk-reload races cover both
+  `break_glass_quarantine` and `fresh_split` with zero subsequent model or write
+  calls.
+- Validation at `86cc6618`: 477/477 tests across all 24 changed-surface test
+  files, including seven real local Postgres cases; `npm run lint`, ESM+DTS
+  `npm run build`, `npm run verify:settings-contract`, and `git diff --check`
+  passed. The same independent adversarial reviewer that found the route and
+  in-flight retirement bugs gave final PASS (225 focused tests, Postgres 6/6,
+  lint green).
+- Repository-hygiene note: `npm run verify:repository-hygiene` still stops at
+  the inherited identity-literal baseline (the existing PSFN/`psfn` findings;
+  no introspection file or new feature literal is reported). Public-sanitize
+  passes. This is recorded as inherited branch baseline, not claimed as a green
+  hygiene gate and not expanded into this feature.
 
 ## 1. Where things stand
 

@@ -234,6 +234,10 @@ function parseMetadata(value: unknown): Record<string, unknown> {
 }
 
 function normalizeEvent(input: ModelUsageEventInput): ModelUsageEvent {
+  const declaredCurrency = optionalText(input.currency)?.toUpperCase();
+  if (declaredCurrency && declaredCurrency !== 'USD') {
+    throw new Error('currency must be USD until explicit currency conversion is implemented');
+  }
   const recordedAtMs = inputNonNegativeInteger(input.recordedAtMs, 'recordedAtMs', Date.now());
   const startedAtMs = inputNonNegativeInteger(input.startedAtMs, 'startedAtMs', recordedAtMs);
   const completedAtMs = input.completedAtMs !== undefined
@@ -318,8 +322,8 @@ function normalizeEvent(input: ModelUsageEventInput): ModelUsageEvent {
     estimatedCost: accounting.estimatedCost,
     effectiveCost: accounting.effectiveCost,
     costSource: accounting.costSource,
-    ...(optionalText(input.currency ?? accounting.effectiveCost.currency ?? accounting.providerCost.currency ?? accounting.estimatedCost.currency)
-      ? { currency: optionalText(input.currency ?? accounting.effectiveCost.currency ?? accounting.providerCost.currency ?? accounting.estimatedCost.currency) }
+    ...(optionalText(declaredCurrency ?? accounting.effectiveCost.currency ?? accounting.providerCost.currency ?? accounting.estimatedCost.currency)
+      ? { currency: optionalText(declaredCurrency ?? accounting.effectiveCost.currency ?? accounting.providerCost.currency ?? accounting.estimatedCost.currency) }
       : {}),
     ...(optionalText(input.stopReason) ? { stopReason: optionalText(input.stopReason) } : {}),
     ...(optionalText(input.errorCode) ? { errorCode: optionalText(input.errorCode) } : {}),

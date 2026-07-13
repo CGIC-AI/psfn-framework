@@ -7,6 +7,9 @@ export interface GatewayCapturedLLMCost {
 
 interface GatewayLLMCostCaptureContext {
   captures: GatewayCapturedLLMCost[];
+  consumedCaptureCount: number;
+  attemptConsumptionCount: number;
+  lastConsumedProviderCost: LLMUsageCostDetails | undefined;
 }
 
 const captureStorage = new AsyncLocalStorage<GatewayLLMCostCaptureContext>();
@@ -31,7 +34,7 @@ function parseNonNegativeCost(value: unknown): number | undefined {
   return Number.isFinite(numeric) && numeric >= 0 ? numeric : undefined;
 }
 
-function providerCostFromHeaders(headers: Headers): LLMUsageCostDetails | undefined {
+export function extractGatewayProviderCostFromHeaders(headers: Headers): LLMUsageCostDetails | undefined {
   for (const name of COST_HEADER_NAMES) {
     const cost = parseNonNegativeCost(headers.get(name));
     if (cost !== undefined) return { total: cost, currency: 'USD' };
@@ -179,7 +182,7 @@ function ensureGatewayLLMCostCaptureInstalled(): void {
     if (!context) return response;
 
     const capture: GatewayCapturedLLMCost = {};
-    recordProviderCost(capture, providerCostFromHeaders(response.headers));
+    recordProviderCost(capture, extractGatewayProviderCostFromHeaders(response.headers));
     context.captures.push(capture);
     await inspectJsonBody(response, capture);
     return wrapStreamingBody(response, capture);
@@ -190,14 +193,30 @@ function ensureGatewayLLMCostCaptureInstalled(): void {
 
 export async function withGatewayLLMCostCapture<T>(
   operation: () => Promise<T>,
-): Promise<{ result: T; captures: GatewayCapturedLLMCost[] }> {
+): Promise<{
+  result: T;
+  captures: GatewayCapturedLLMCost[];
+  finalAttemptProviderCost?: LLMUsageCostDetails;
+}> {
   if (typeof globalThis.fetch !== 'function') {
     return { result: await operation(), captures: [] };
   }
   ensureGatewayLLMCostCaptureInstalled();
-  const context: GatewayLLMCostCaptureContext = { captures: [] };
+  const context: GatewayLLMCostCaptureContext = {
+    captures: [],
+    consumedCaptureCount: 0,
+    attemptConsumptionCount: 0,
+    lastConsumedProviderCost: undefined,
+  };
   const result = await captureStorage.run(context, operation);
-  return { result, captures: context.captures };
+  const finalAttemptProviderCost = context.attemptConsumptionCount > 0
+    ? context.lastConsumedProviderCost
+    : latestGatewayCapturedProviderCost(context.captures);
+  return {
+    result,
+    captures: context.captures,
+    ...(finalAttemptProviderCost ? { finalAttemptProviderCost } : {}),
+  };
 }
 
 export function latestGatewayCapturedProviderCostUsd(
@@ -220,16 +239,20 @@ export function latestGatewayCapturedProviderCost(
   return undefined;
 }
 
-export function activeGatewayCapturedProviderCost(): LLMUsageCostDetails | undefined {
+export function consumeActiveGatewayCapturedProviderCost(): LLMUsageCostDetails | undefined {
   const context = captureStorage.getStore();
-  return context ? latestGatewayCapturedProviderCost(context.captures) : undefined;
+  if (!context) return undefined;
+  const attemptCaptures = context.captures.slice(context.consumedCaptureCount);
+  context.consumedCaptureCount = context.captures.length;
+  context.attemptConsumptionCount += 1;
+  context.lastConsumedProviderCost = latestGatewayCapturedProviderCost(attemptCaptures);
+  return context.lastConsumedProviderCost;
 }
 
 export function applyGatewayCapturedProviderCost<T extends LLMResponse>(
   response: T,
-  captures: readonly GatewayCapturedLLMCost[],
+  providerCost: LLMUsageCostDetails | undefined,
 ): T {
-  const providerCost = latestGatewayCapturedProviderCost(captures);
   if (!providerCost) return response;
   const usageDetails = response.usageDetails ?? {
     input: response.inputTokens,

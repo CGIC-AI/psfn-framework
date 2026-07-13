@@ -41,10 +41,11 @@ function restoreEnv(): void {
   }
 }
 
-function okJson(payload: unknown) {
+function okJson(payload: unknown, headers: Record<string, string> = {}) {
   return {
     ok: true,
     status: 200,
+    headers: new Headers(headers),
     json: async () => payload,
     text: async () => JSON.stringify(payload),
   };
@@ -351,6 +352,65 @@ describe('embedding providers', () => {
         input: 0.0000011,
         total: 0.0000011,
         currency: 'USD',
+      },
+    });
+  });
+
+  it('captures LiteLLM embedding cost headers as bounded provider evidence', async () => {
+    fetchMock.mockResolvedValue(okJson({
+      data: [{ index: 0, embedding: [1, 2, 3] }],
+      usage: {
+        prompt_tokens: 11,
+        total_tokens: 11,
+      },
+    }, {
+      'x-litellm-response-cost': '0.0000011',
+    }));
+    const provider = new ApiEmbeddingProvider({
+      endpoint: 'https://embeddings.example/v1/embeddings',
+      model: 'text-embedding-3-small',
+      dims: 3,
+    });
+
+    const result = await provider.embedBatchWithUsage(['first']);
+
+    expect(result.usageDetails).toMatchObject({
+      input: 11,
+      totalTokens: 11,
+      cost: { total: 0.0000011, currency: 'USD' },
+      raw: {
+        providerCostEvidence: {
+          headers: { total: 0.0000011, currency: 'USD' },
+        },
+      },
+    });
+  });
+
+  it('captures top-level embedding provider cost as bounded provider evidence', async () => {
+    fetchMock.mockResolvedValue(okJson({
+      data: [{ index: 0, embedding: [1, 2, 3] }],
+      usage: {
+        prompt_tokens: 11,
+        total_tokens: 11,
+      },
+      cost: 0.0000011,
+    }));
+    const provider = new ApiEmbeddingProvider({
+      endpoint: 'https://embeddings.example/v1/embeddings',
+      model: 'text-embedding-3-small',
+      dims: 3,
+    });
+
+    const result = await provider.embedBatchWithUsage(['first']);
+
+    expect(result.usageDetails).toMatchObject({
+      input: 11,
+      totalTokens: 11,
+      cost: { total: 0.0000011, currency: 'USD' },
+      raw: {
+        providerCostEvidence: {
+          body: { total: 0.0000011, currency: 'USD' },
+        },
       },
     });
   });

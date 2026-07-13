@@ -18,6 +18,10 @@ import { toErrorMessage } from '../../shared/utils/errors.js';
 import type { LLMUsageDetails } from '../../shared/contracts/runtime.js';
 import { normalizeLLMUsageDetails } from '../../primitives/llm/client-response-helpers.js';
 import { isRecord } from '../../shared/utils/types.js';
+import {
+  extractGatewayProviderCost,
+  extractGatewayProviderCostFromHeaders,
+} from '../../boundary/gateway/llm-cost-capture.js';
 
 export type EmbeddingProviderKind = 'ollama' | 'transformers' | 'api';
 
@@ -456,9 +460,35 @@ export class ApiEmbeddingProvider extends HttpEmbeddingProvider {
       throw new Error(`API embedding error ${response.status}: ${body}`);
     }
 
+    const providerCostFromHeaders = extractGatewayProviderCostFromHeaders(response.headers);
     const json = await response.json() as unknown;
-    const usageDetails = isRecord(json) && Object.hasOwn(json, 'usage')
+    const normalizedUsage = isRecord(json) && Object.hasOwn(json, 'usage')
       ? normalizeLLMUsageDetails(json.usage, 0, 0)
+      : undefined;
+    const providerCostFromBody = extractGatewayProviderCost(json);
+    const providerCost = normalizedUsage?.cost || providerCostFromBody || providerCostFromHeaders
+      ? {
+          ...(normalizedUsage?.cost ?? {}),
+          ...(providerCostFromBody ?? {}),
+          ...(providerCostFromHeaders ?? {}),
+        }
+      : undefined;
+    const usageDetails = normalizedUsage || providerCost
+      ? {
+          ...(normalizedUsage ?? normalizeLLMUsageDetails(undefined, 0, 0)),
+          ...(providerCost ? { cost: providerCost } : {}),
+          ...(providerCostFromBody || providerCostFromHeaders
+            ? {
+                raw: {
+                  ...(normalizedUsage?.raw ?? {}),
+                  providerCostEvidence: {
+                    ...(providerCostFromBody ? { body: providerCostFromBody } : {}),
+                    ...(providerCostFromHeaders ? { headers: providerCostFromHeaders } : {}),
+                  },
+                },
+              }
+            : {}),
+        }
       : undefined;
     return {
       embeddings: toFloat32Embeddings(json),

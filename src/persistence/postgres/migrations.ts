@@ -1060,6 +1060,7 @@ export const POSTGRES_MODEL_USAGE_MIGRATIONS = [
     CHECK (settlement IN ('complete', 'partial', 'unknown')),
     CHECK (call_kind IN ('chat', 'completion', 'embedding', 'image_create', 'image_edit')),
     CHECK (cost_source IN ('provider', 'estimate', 'none')),
+    CONSTRAINT model_usage_events_usd_currency_check CHECK (currency IS NULL OR currency = 'USD'),
     CONSTRAINT model_usage_events_token_accounting_check CHECK (
       attempt >= 0
       AND input_tokens >= 0
@@ -1097,6 +1098,83 @@ export const POSTGRES_MODEL_USAGE_MIGRATIONS = [
     event_fingerprint = COALESCE(event_fingerprint, 'legacy:' || id)
   WHERE event_fingerprint IS NULL OR effective_cost_usd IS NULL;
   `,
+  `
+  UPDATE model_usage_events
+  SET currency = 'USD'
+  WHERE currency IS NOT NULL
+    AND UPPER(BTRIM(currency)) = 'USD'
+    AND currency <> 'USD';
+  `,
+  `
+  UPDATE model_usage_events
+  SET
+    metadata_json = jsonb_set(
+      COALESCE(metadata_json, '{}'::jsonb),
+      '{_accountingMigration}',
+      COALESCE(metadata_json -> '_accountingMigration', '{}'::jsonb)
+        || jsonb_build_object(
+          'nonUsdCostQuarantined', TRUE,
+          'currency', currency,
+          'providerCost', jsonb_strip_nulls(jsonb_build_object(
+            'input', provider_input_cost_usd,
+            'output', provider_output_cost_usd,
+            'cacheRead', provider_cache_read_cost_usd,
+            'cacheWrite', provider_cache_write_cost_usd,
+            'total', provider_cost_usd
+          )),
+          'estimatedCost', jsonb_strip_nulls(jsonb_build_object(
+            'input', estimated_input_cost_usd,
+            'output', estimated_output_cost_usd,
+            'cacheRead', estimated_cache_read_cost_usd,
+            'cacheWrite', estimated_cache_write_cost_usd,
+            'total', estimated_cost_usd
+          )),
+          'effectiveCost', jsonb_strip_nulls(jsonb_build_object(
+            'input', effective_input_cost_usd,
+            'output', effective_output_cost_usd,
+            'cacheRead', effective_cache_read_cost_usd,
+            'cacheWrite', effective_cache_write_cost_usd,
+            'total', effective_cost_usd
+          ))
+        ),
+      TRUE
+    ),
+    provider_input_cost_usd = NULL,
+    provider_output_cost_usd = NULL,
+    provider_cache_read_cost_usd = NULL,
+    provider_cache_write_cost_usd = NULL,
+    provider_cost_usd = NULL,
+    estimated_input_cost_usd = NULL,
+    estimated_output_cost_usd = NULL,
+    estimated_cache_read_cost_usd = NULL,
+    estimated_cache_write_cost_usd = NULL,
+    estimated_cost_usd = 0,
+    effective_input_cost_usd = NULL,
+    effective_output_cost_usd = NULL,
+    effective_cache_read_cost_usd = NULL,
+    effective_cache_write_cost_usd = NULL,
+    effective_cost_usd = NULL,
+    cost_source = 'none',
+    currency = NULL
+  WHERE currency IS NOT NULL
+    AND UPPER(BTRIM(currency)) <> 'USD';
+  `,
+  `
+  UPDATE model_usage_events
+  SET
+    metadata_json = jsonb_set(
+      COALESCE(metadata_json, '{}'::jsonb),
+      '{_accountingMigration}',
+      COALESCE(metadata_json -> '_accountingMigration', '{}'::jsonb)
+        || jsonb_build_object(
+          'legacyTotalTokens', total_tokens,
+          'canonicalTotalTokens', input_tokens + output_tokens + cache_read_tokens + cache_write_tokens
+        ),
+      TRUE
+    ),
+    total_tokens = input_tokens + output_tokens + cache_read_tokens + cache_write_tokens
+  WHERE total_tokens <> input_tokens + output_tokens + cache_read_tokens + cache_write_tokens;
+  `,
   `ALTER TABLE model_usage_events ALTER COLUMN event_fingerprint SET NOT NULL;`,
   `
   DO $$
@@ -1112,6 +1190,21 @@ export const POSTGRES_MODEL_USAGE_MIGRATIONS = [
     END IF;
   END $$;
   `,
+  `
+  DO $$
+  BEGIN
+    IF NOT EXISTS (
+      SELECT 1 FROM pg_constraint
+      WHERE conname = 'model_usage_events_usd_currency_check'
+        AND conrelid = 'model_usage_events'::regclass
+    ) THEN
+      ALTER TABLE model_usage_events
+        ADD CONSTRAINT model_usage_events_usd_currency_check
+        CHECK (currency IS NULL OR currency = 'USD') NOT VALID;
+    END IF;
+  END $$;
+  `,
+  `ALTER TABLE model_usage_events VALIDATE CONSTRAINT model_usage_events_usd_currency_check;`,
   `
   DO $$
   BEGIN
@@ -1133,6 +1226,7 @@ export const POSTGRES_MODEL_USAGE_MIGRATIONS = [
     END IF;
   END $$;
   `,
+  `ALTER TABLE model_usage_events VALIDATE CONSTRAINT model_usage_events_token_accounting_check;`,
   `CREATE INDEX IF NOT EXISTS idx_model_usage_events_recorded_at ON model_usage_events(recorded_at_ms DESC, id DESC);`,
   `CREATE INDEX IF NOT EXISTS idx_model_usage_events_day ON model_usage_events(day_key, recorded_at_ms DESC);`,
   `CREATE INDEX IF NOT EXISTS idx_model_usage_events_month ON model_usage_events(month_key, recorded_at_ms DESC);`,

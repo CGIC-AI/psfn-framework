@@ -73,9 +73,12 @@ function normalizeMoney(value: number | undefined, field: string): number | unde
   return value;
 }
 
-function normalizeCurrency(value: string | undefined): string {
+function normalizeCurrency(value: string | undefined, field: string): string {
   const currency = value?.trim().toUpperCase();
-  return currency || 'USD';
+  if (currency && currency !== 'USD') {
+    throw new Error(`${field} must be USD until explicit currency conversion is implemented`);
+  }
+  return 'USD';
 }
 
 function roundUsd(value: number): number {
@@ -106,25 +109,26 @@ function normalizeUsage(input: ModelUsageTokenBucketsInput): ModelUsageTokenBuck
 
 function normalizeCost(
   input: ModelUsageCostBreakdown | undefined,
+  field: string,
 ): ModelUsageCostBreakdown {
   if (!input) return {};
   return {
-    ...(normalizeMoney(input.input, 'cost.input') !== undefined
-      ? { input: normalizeMoney(input.input, 'cost.input') }
+    ...(normalizeMoney(input.input, `${field}.input`) !== undefined
+      ? { input: normalizeMoney(input.input, `${field}.input`) }
       : {}),
-    ...(normalizeMoney(input.output, 'cost.output') !== undefined
-      ? { output: normalizeMoney(input.output, 'cost.output') }
+    ...(normalizeMoney(input.output, `${field}.output`) !== undefined
+      ? { output: normalizeMoney(input.output, `${field}.output`) }
       : {}),
-    ...(normalizeMoney(input.cacheRead, 'cost.cacheRead') !== undefined
-      ? { cacheRead: normalizeMoney(input.cacheRead, 'cost.cacheRead') }
+    ...(normalizeMoney(input.cacheRead, `${field}.cacheRead`) !== undefined
+      ? { cacheRead: normalizeMoney(input.cacheRead, `${field}.cacheRead`) }
       : {}),
-    ...(normalizeMoney(input.cacheWrite, 'cost.cacheWrite') !== undefined
-      ? { cacheWrite: normalizeMoney(input.cacheWrite, 'cost.cacheWrite') }
+    ...(normalizeMoney(input.cacheWrite, `${field}.cacheWrite`) !== undefined
+      ? { cacheWrite: normalizeMoney(input.cacheWrite, `${field}.cacheWrite`) }
       : {}),
-    ...(normalizeMoney(input.total, 'cost.total') !== undefined
-      ? { total: normalizeMoney(input.total, 'cost.total') }
+    ...(normalizeMoney(input.total, `${field}.total`) !== undefined
+      ? { total: normalizeMoney(input.total, `${field}.total`) }
       : {}),
-    currency: normalizeCurrency(input.currency),
+    currency: normalizeCurrency(input.currency, `${field}.currency`),
   };
 }
 
@@ -134,7 +138,7 @@ function estimateCost(
 ): ModelUsageCostBreakdown {
   if (!rates) return {};
   const estimated: ModelUsageCostBreakdown = {
-    currency: normalizeCurrency(rates.currency),
+    currency: normalizeCurrency(rates.currency, 'estimatedRates.currency'),
   };
   let allBillableBucketsKnown = true;
   let total = 0;
@@ -161,12 +165,13 @@ function estimateCost(
   return estimated;
 }
 
-function deriveCompleteProviderTotal(
+function reconcileCompleteCostTotal(
   cost: ModelUsageCostBreakdown,
   usage: ModelUsageTokenBuckets,
+  field: string,
 ): ModelUsageCostBreakdown {
-  if (cost.total !== undefined) return cost;
-  if (!COST_BUCKETS.some(bucket => cost[bucket.cost] !== undefined)) return cost;
+  const hasComponents = COST_BUCKETS.some(bucket => cost[bucket.cost] !== undefined);
+  if (!hasComponents) return cost;
   const completed = { ...cost };
   let total = 0;
   for (const bucket of COST_BUCKETS) {
@@ -178,7 +183,11 @@ function deriveCompleteProviderTotal(
     if (usage[bucket.tokens] > 0) return cost;
     completed[bucket.cost] = 0;
   }
-  completed.total = roundUsd(total);
+  const componentTotal = roundUsd(total);
+  if (cost.total !== undefined && roundUsd(cost.total) !== componentTotal) {
+    throw new Error(`${field}.total must equal the fully allocated component total (${componentTotal})`);
+  }
+  completed.total = cost.total ?? componentTotal;
   return completed;
 }
 
@@ -186,15 +195,15 @@ export function reconcileModelUsageAccounting(
   input: ReconcileModelUsageAccountingInput,
 ): ReconciledModelUsageAccounting {
   const usage = normalizeUsage(input.usage);
-  const normalizedProviderCost = normalizeCost(input.providerCost);
+  const normalizedProviderCost = normalizeCost(input.providerCost, 'providerCost');
   const providerCost = input.providerCost
-    ? deriveCompleteProviderTotal(normalizedProviderCost, usage)
+    ? reconcileCompleteCostTotal(normalizedProviderCost, usage, 'providerCost')
     : normalizedProviderCost;
   if (input.estimatedCost && input.estimatedRates) {
     throw new Error('Provide estimatedCost or estimatedRates, not both');
   }
   const estimatedCost = input.estimatedCost
-    ? normalizeCost(input.estimatedCost)
+    ? reconcileCompleteCostTotal(normalizeCost(input.estimatedCost, 'estimatedCost'), usage, 'estimatedCost')
     : estimateCost(usage, input.estimatedRates);
   const providerTotal = providerCost.total;
   const estimatedTotal = estimatedCost.total;
@@ -205,7 +214,7 @@ export function reconcileModelUsageAccounting(
     ? 'provider'
     : (estimatedTotal !== undefined && estimatedTotal > 0 ? 'estimate' : 'none');
   const effectiveCost = input.effectiveCost
-    ? normalizeCost(input.effectiveCost)
+    ? reconcileCompleteCostTotal(normalizeCost(input.effectiveCost, 'effectiveCost'), usage, 'effectiveCost')
     : resolvedEffectiveCost;
   if (effectiveCost.total !== resolvedEffectiveCost.total) {
     throw new Error('effectiveCost.total must follow provider-total then estimated-total precedence');

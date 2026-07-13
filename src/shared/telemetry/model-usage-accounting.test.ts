@@ -117,4 +117,30 @@ describe('reconcileModelUsageAccounting', () => {
       },
     })).toThrow('totalTokens must equal input + output + cacheRead + cacheWrite (125)');
   });
+
+  it('rejects a provider total that contradicts fully allocated components', () => {
+    expect(() => reconcileModelUsageAccounting({
+      usage: {
+        inputTokens: 10,
+        outputTokens: 5,
+        cacheReadTokens: 3,
+        cacheWriteTokens: 2,
+      },
+      providerCost: {
+        input: 0.4,
+        output: 0.3,
+        cacheRead: 0.05,
+        cacheWrite: 0.2,
+        total: 0.9,
+        currency: 'USD',
+      },
+    })).toThrow('providerCost.total must equal the fully allocated component total (0.95)');
+  });
+
+  it('rejects non-USD provider costs instead of labeling them as USD', () => {
+    expect(() => reconcileModelUsageAccounting({
+      usage: { inputTokens: 10, outputTokens: 5 },
+      providerCost: { total: 0.25, currency: 'EUR' },
+    })).toThrow('providerCost.currency must be USD');
+  });
 });

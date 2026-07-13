@@ -75,7 +75,7 @@ const requiredWiring = [
   },
   {
     file: 'src/boundary/gateway/privileged-services.ts',
-    patterns: [/createProviderRuntimeServices\(/, /activeGatewayCapturedProviderCost/],
+    patterns: [/createProviderRuntimeServices\(/, /consumeActiveGatewayCapturedProviderCost/],
   },
   {
     file: 'src/app/cli/chat-cli.ts',

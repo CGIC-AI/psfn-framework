@@ -104,13 +104,28 @@ function normalizeModelIdLoose(model: string): string {
 function cloneTotals(source?: ModelUsageTotals): ModelUsageTotals {
   return source
     ? { ...source }
-    : { calls: 0, inputTokens: 0, outputTokens: 0, estimatedCostUsd: 0 };
+    : {
+        calls: 0,
+        inputTokens: 0,
+        outputTokens: 0,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+        estimatedCostUsd: 0,
+      };
 }
 
-function mergeTotals(target: ModelUsageTotals, record: Pick<ModelUsageLedgerRecord, 'inputTokens' | 'outputTokens' | 'estimatedCostUsd'>): void {
+function mergeTotals(
+  target: ModelUsageTotals,
+  record: Pick<
+    ModelUsageLedgerRecord,
+    'inputTokens' | 'outputTokens' | 'cacheReadTokens' | 'cacheWriteTokens' | 'estimatedCostUsd'
+  >,
+): void {
   target.calls += 1;
   target.inputTokens += record.inputTokens;
   target.outputTokens += record.outputTokens;
+  target.cacheReadTokens = (target.cacheReadTokens ?? 0) + (record.cacheReadTokens ?? 0);
+  target.cacheWriteTokens = (target.cacheWriteTokens ?? 0) + (record.cacheWriteTokens ?? 0);
   target.estimatedCostUsd += record.estimatedCostUsd;
 }
 
@@ -259,6 +274,7 @@ export function resolveModelUsageCostRates(
   const currency = typeof entry.cost.currency === 'string'
     ? entry.cost.currency.trim().toUpperCase()
     : 'USD';
+  if (currency !== 'USD') return undefined;
   const rate = (value: unknown): number | undefined => (
     typeof value === 'number' && Number.isFinite(value) && value >= 0
       ? value

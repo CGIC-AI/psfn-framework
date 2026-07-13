@@ -122,6 +122,33 @@ describe('ModelBudgetController', () => {
     expect(snapshot.totalsByServiceProcess['chat:agent.turn.prompt'].calls).toBe(1);
   });
 
+  it('does not record non-USD registry rates in the USD budget ledger', () => {
+    const dataDir = makeTempDir();
+    const baseConfig = makeConfig(dataDir);
+    const controller = new ModelBudgetController({
+      ...baseConfig,
+      modelRegistry: {
+        ...baseConfig.modelRegistry!,
+        models: baseConfig.modelRegistry!.models.map((entry) => entry.id === 'chat'
+          ? { ...entry, cost: { ...entry.cost, currency: 'EUR' } }
+          : entry),
+      },
+    });
+
+    controller.recordUsage({
+      candidate: { provider: 'openrouter', model: 'z-ai/glm-5', maxTokens: 4096, slotKey: 'chat' },
+      purpose: 'chat',
+      service: 'chat',
+      process: 'agent.turn.prompt',
+      inputTokens: 1_000,
+      outputTokens: 1_000,
+      nowMs: Date.parse('2026-03-06T12:00:00.000Z'),
+    });
+
+    const snapshot = controller.getUsageSnapshot(Date.parse('2026-03-06T18:00:00.000Z'));
+    expect(snapshot.dailyTotals.estimatedCostUsd).toBe(0);
+  });
+
   it('blocks when projected daily budget would be exceeded', () => {
     const dataDir = makeTempDir();
     const baseRegistry = makeConfig(dataDir).modelRegistry!;

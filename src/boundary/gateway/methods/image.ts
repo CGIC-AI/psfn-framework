@@ -35,6 +35,7 @@ async function recordImageProviderAttempt(
     imageCount,
     inputImageCount,
     fallbackUsed: result?.fallbackUsed ?? false,
+    costAvailability: 'unknown_provider_not_exposed',
   };
   if (result?.fallbackReason) metadata.fallbackReason = result.fallbackReason;
   if (result?.requestId) metadata.requestId = result.requestId;
@@ -48,7 +49,7 @@ async function recordImageProviderAttempt(
     completedAtMs: providerAttempt.completedAtMs,
     durationMs: Math.max(0, providerAttempt.completedAtMs - providerAttempt.startedAtMs),
     status: providerAttempt.status,
-    settlement: providerAttempt.status === 'success' ? 'complete' : 'unknown',
+    settlement: 'unknown',
     callKind,
     callType: 'tool',
     purpose: sourceToolName ?? callKind,

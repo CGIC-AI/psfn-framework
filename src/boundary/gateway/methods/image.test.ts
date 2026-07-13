@@ -98,12 +98,15 @@ describe('registerImageMethods model usage accounting', () => {
       {
         attempt: 2,
         status: 'success',
-        settlement: 'complete',
+        settlement: 'unknown',
         provider: 'fal',
         model: 'xai/grok-imagine-image',
         requestedProvider: 'auto',
         requestedModel: 'default',
         costSource: 'none',
+        metadata: {
+          costAvailability: 'unknown_provider_not_exposed',
+        },
       },
     ]);
   });

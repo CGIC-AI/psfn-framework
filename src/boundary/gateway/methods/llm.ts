@@ -64,7 +64,10 @@ const llmDescriptors: Array<AuditedMethodDescriptor<any, unknown>> = [
           } : undefined,
         ),
       );
-      const response = applyGatewayCapturedProviderCost(captured.result, captured.captures);
+      const response = applyGatewayCapturedProviderCost(
+        captured.result,
+        captured.finalAttemptProviderCost,
+      );
       return {
         content: response.content,
         ...(response.reasoning ? { reasoning: response.reasoning } : {}),
@@ -127,7 +130,10 @@ const llmDescriptors: Array<AuditedMethodDescriptor<any, unknown>> = [
           params.purpose,
         ),
       );
-      const response = applyGatewayCapturedProviderCost(captured.result, captured.captures);
+      const response = applyGatewayCapturedProviderCost(
+        captured.result,
+        captured.finalAttemptProviderCost,
+      );
       return {
         content: response.content,
         ...(response.reasoning ? { reasoning: response.reasoning } : {}),

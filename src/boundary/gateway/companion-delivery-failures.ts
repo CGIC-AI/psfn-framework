@@ -1,10 +1,7 @@
 import { isRecord } from '../../shared/utils/types.js';
-import { DEFAULT_COMPANION_PRESENCE_STALE_TTL_MS } from '../../core/agent/companion-presence-store-port.js';
 import type { CompanionDeliveryFailureReason } from './protocol.js';
 
 const DELIVERY_RECEIPT_TTL_MS = 60 * 60_000;
-/** Small grace for a reply generation that began while present and crossed staleness. */
-export const COMPANION_ROOM_STALE_REPLY_GRACE_MS = 2 * 60_000;
 const FAILURE_REASONS = new Set<CompanionDeliveryFailureReason>([
   'processing_failed',
   'reply_delivery_failed',
@@ -16,10 +13,9 @@ export interface CompanionDeliveryReceipt {
   senderCompanionId: string;
   recipientCompanionId: string;
   deliveredAt: number;
-  /** Room recipients only: exact accepted row at delivery time. */
-  roomPresence?: {
+  /** Room recipients only: stable presence epoch accepted at delivery time. */
+  roomPresenceEpoch?: {
     since: string;
-    updatedAt: string;
   };
 }
 
@@ -35,12 +31,12 @@ function receiptKey(recipientCompanionId: string, messageId: string): string {
 
 export class CompanionDeliveryFailureReceipts {
   private readonly receipts = new Map<string, CompanionDeliveryReceipt>();
-  private readonly claimedRoomReplies = new Set<string>();
+  private readonly claimedReplies = new Set<string>();
 
   record(receipt: CompanionDeliveryReceipt): void {
     this.prune(receipt.deliveredAt);
     const key = receiptKey(receipt.recipientCompanionId, receipt.messageId);
-    this.claimedRoomReplies.delete(key);
+    this.claimedReplies.delete(key);
     this.receipts.set(key, receipt);
   }
 
@@ -55,12 +51,13 @@ export class CompanionDeliveryFailureReceipts {
   }
 
   /**
-   * Claim the one reply capability created by a gateway delivery. The tuple
-   * is gateway-authored and recipient-bound, the capability expires at the
-   * room-presence staleness boundary, and claiming is atomic/single-use.
-   * Failure-report verification remains available after a reply claim.
+   * Claim the one reply capability created by any gateway delivery. The tuple
+   * is gateway-authored, recipient- and channel-bound, expires with the
+   * delivery receipt, and is atomically single-use. Presence privilege, when
+   * needed for a room, is separately decided by the channel lane.
+   * Failure-report verification remains available after this claim.
    */
-  claimRoomReply(
+  claimReply(
     replyingCompanionId: string,
     channelId: string,
     replyToMessageId: string,
@@ -68,42 +65,31 @@ export class CompanionDeliveryFailureReceipts {
   ): CompanionDeliveryReceipt | null {
     this.prune(now);
     const key = receiptKey(replyingCompanionId, replyToMessageId);
-    if (this.claimedRoomReplies.has(key)) return null;
+    if (this.claimedReplies.has(key)) return null;
     const receipt = this.receipts.get(key);
-    const presenceUpdatedAtMs = receipt?.roomPresence
-      ? Date.parse(receipt.roomPresence.updatedAt)
-      : Number.NaN;
-    const presenceSinceMs = receipt?.roomPresence
-      ? Date.parse(receipt.roomPresence.since)
-      : Number.NaN;
-    const staleAt = presenceUpdatedAtMs + DEFAULT_COMPANION_PRESENCE_STALE_TTL_MS;
     if (
       !receipt
       || receipt.channelId !== channelId
-      || !Number.isFinite(presenceSinceMs)
-      || !Number.isFinite(presenceUpdatedAtMs)
-      || presenceSinceMs > presenceUpdatedAtMs
-      || presenceSinceMs > receipt.deliveredAt
-      || receipt.deliveredAt < presenceUpdatedAtMs
-      || receipt.deliveredAt > staleAt
-      || now <= staleAt
-      || now > staleAt + COMPANION_ROOM_STALE_REPLY_GRACE_MS
+      || !Number.isFinite(now)
+      || !Number.isFinite(receipt.deliveredAt)
+      || receipt.deliveredAt > now
+      || receipt.deliveredAt < now - DELIVERY_RECEIPT_TTL_MS
     ) {
       return null;
     }
-    this.claimedRoomReplies.add(key);
+    this.claimedReplies.add(key);
     return receipt;
   }
 
   consume(recipientCompanionId: string, messageId: string): void {
     const key = receiptKey(recipientCompanionId, messageId);
     this.receipts.delete(key);
-    this.claimedRoomReplies.delete(key);
+    this.claimedReplies.delete(key);
   }
 
   clear(): void {
     this.receipts.clear();
-    this.claimedRoomReplies.clear();
+    this.claimedReplies.clear();
   }
 
   private prune(now: number): void {
@@ -111,7 +97,7 @@ export class CompanionDeliveryFailureReceipts {
     for (const [key, receipt] of this.receipts.entries()) {
       if (receipt.deliveredAt < oldestAllowed) {
         this.receipts.delete(key);
-        this.claimedRoomReplies.delete(key);
+        this.claimedReplies.delete(key);
       }
     }
   }

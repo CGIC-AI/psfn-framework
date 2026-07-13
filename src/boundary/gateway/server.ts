@@ -35,10 +35,7 @@ import {
   type GatewayMultiCompanionConfig,
 } from './multi-companion.js';
 import type { GatewayCompanionChannelLane } from './companion-channels.js';
-import {
-  COMPANION_CHANNEL_TYPE,
-  parseCompanionChannelId,
-} from '../../shared/contracts/companion-channels.js';
+import { COMPANION_CHANNEL_TYPE } from '../../shared/contracts/companion-channels.js';
 import type { GitOperations } from '../integrations/git/ops.js';
 import type { ImageRuntimeConfig } from '../../primitives/images/types.js';
 import type { ModelDiscoveryBackend } from '../../primitives/llm/discovery.js';
@@ -632,19 +629,29 @@ export class GatewayServer {
     // recipient's presence `since` against this exact instant, so the window
     // check and the delivered envelope can never disagree on the clock.
     const mintedAt = new Date(this.options.companionChannelNow?.() ?? Date.now());
-    const parsedChannel = parseCompanionChannelId(channelId);
-    const senderReplyReceipt = parsedChannel?.kind === 'room' && replyToMessageId !== undefined
-      ? this.companionDeliveryFailureReceipts.claimRoomReply(
+    const senderReplyReceipt = replyToMessageId !== undefined
+      ? this.companionDeliveryFailureReceipts.claimReply(
         senderCompanionId,
         channelId,
         replyToMessageId,
         mintedAt.getTime(),
       )
       : null;
+    if (replyToMessageId !== undefined && !senderReplyReceipt) {
+      this.alarmCompanionViolation(
+        'companion_reply_unverified',
+        'Companion reply does not match an unclaimed gateway delivery receipt',
+        { senderCompanionId, channelId, replyToMessageId },
+      );
+      throw new JSONRPCErrorException(
+        'Companion reply does not match an unclaimed gateway delivery receipt',
+        GatewayErrors.COMPANION_ROUTING_UNAVAILABLE,
+      );
+    }
     const resolution = await lane.resolveDelivery(senderCompanionId, channelId, {
       messageTimestampMs: mintedAt.getTime(),
-      ...(senderReplyReceipt?.roomPresence
-        ? { senderReplyPresence: senderReplyReceipt.roomPresence }
+      ...(senderReplyReceipt?.roomPresenceEpoch
+        ? { senderReplyPresenceEpoch: senderReplyReceipt.roomPresenceEpoch }
         : {}),
     });
     if (!resolution.ok) {
@@ -687,7 +694,7 @@ export class GatewayServer {
           }
           : {}),
       },
-      ...(replyToMessageId ? { replyToMessageId } : {}),
+      ...(senderReplyReceipt ? { replyToMessageId: senderReplyReceipt.messageId } : {}),
     };
 
     this.refreshConnectionHealth();
@@ -717,8 +724,8 @@ export class GatewayServer {
         skippedOffline.push(recipientId);
         continue;
       }
-      const roomPresence = resolution.kind === 'room'
-        ? resolution.recipientPresence[recipientId]
+      const roomPresenceEpoch = resolution.kind === 'room'
+        ? resolution.recipientPresenceEpochs[recipientId]
         : undefined;
       this.companionDeliveryFailureReceipts.record({
         channelId,
@@ -726,7 +733,7 @@ export class GatewayServer {
         senderCompanionId,
         recipientCompanionId: recipientId,
         deliveredAt: mintedAt.getTime(),
-        ...(roomPresence ? { roomPresence } : {}),
+        ...(roomPresenceEpoch ? { roomPresenceEpoch } : {}),
       });
       try {
         this.notifyOne(recipientConn, 'companion.message', { message });

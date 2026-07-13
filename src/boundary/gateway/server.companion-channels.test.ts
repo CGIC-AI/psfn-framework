@@ -410,10 +410,16 @@ describe('companion.message.send routing (W6)', () => {
     });
     expect(opening.result.deliveredTo).toEqual(['comp-b']);
 
+    now += 5 * 60_000;
+    const refreshedAt = new Date(now).toISOString();
+    presenceRows['vhome/living_room'] = [
+      { companionId: 'comp-a', updatedAt: refreshedAt, since: presenceSince },
+      { companionId: 'comp-b', updatedAt: refreshedAt, since: presenceSince },
+    ];
     now += 15 * 60_000 + 1;
     presenceRows['vhome/living_room'] = [
       { companionId: 'comp-a', updatedAt: new Date(now).toISOString(), since: presenceSince },
-      { companionId: 'comp-b', updatedAt, since: presenceSince },
+      { companionId: 'comp-b', updatedAt: refreshedAt, since: presenceSince },
     ];
     const reply = await invokeRpc(agentB, 14, 'companion.message.send', {
       channelId: 'companion-room:living_room',
@@ -474,6 +480,105 @@ describe('companion.message.send routing (W6)', () => {
     await vi.waitFor(() => {
       expect(auditedEvents(auditStore)).toContain('gateway.companion.companion_room_sender_not_present');
     });
+  });
+
+  it('consumes a valid room reply receipt on first use while the sender is still present', async () => {
+    let now = NOW;
+    const presenceSince = new Date(NOW - 60_000).toISOString();
+    const presenceRows: Record<string, CompanionPresenceReadRow[]> = {
+      'vhome/living_room': [
+        { companionId: 'comp-a', updatedAt: new Date(now).toISOString(), since: presenceSince },
+        { companionId: 'comp-b', updatedAt: new Date(now).toISOString(), since: presenceSince },
+      ],
+    };
+    const { connect } = await setupServer({
+      ...createMinimalOptions(),
+      multiCompanion: multiCompanion(),
+      companionChannels: makeLane({ presenceRows, now: () => now }),
+      companionChannelNow: () => now,
+    });
+    const agentA = await connect();
+    const agentB = await connect();
+    await identifyAgent(agentA, 'comp-a');
+    await identifyAgent(agentB, 'comp-b', 901);
+
+    const opening = await invokeRpc(agentA, 60, 'companion.message.send', {
+      channelId: 'companion-room:living_room',
+      content: 'opening',
+      companionId: 'comp-a',
+    });
+    const firstReply = await invokeRpc(agentB, 61, 'companion.message.send', {
+      channelId: 'companion-room:living_room',
+      content: 'reply while present',
+      companionId: 'comp-b',
+      replyToMessageId: opening.result.messageId,
+    });
+    expect(firstReply.result.deliveredTo).toEqual(['comp-a']);
+
+    now += 15 * 60_000 + 1;
+    presenceRows['vhome/living_room'] = [
+      { companionId: 'comp-a', updatedAt: new Date(now).toISOString(), since: presenceSince },
+      { companionId: 'comp-b', updatedAt: new Date(NOW).toISOString(), since: presenceSince },
+    ];
+    const replay = await invokeRpc(agentB, 62, 'companion.message.send', {
+      channelId: 'companion-room:living_room',
+      content: 'must not reuse the reply id',
+      companionId: 'comp-b',
+      replyToMessageId: opening.result.messageId,
+    });
+    expect(replay.error?.code).toBe(GatewayErrors.COMPANION_ROUTING_UNAVAILABLE);
+    expect(methodFrames(agentA, 'companion.message')
+      .some(frame => frame.params.message.content === 'must not reuse the reply id')).toBe(false);
+  });
+
+  it('rejects arbitrary and expired room reply lineage even while the sender is present', async () => {
+    let now = NOW;
+    const presenceSince = new Date(NOW - 60_000).toISOString();
+    const presenceRows: Record<string, CompanionPresenceReadRow[]> = {
+      'vhome/living_room': [
+        { companionId: 'comp-a', updatedAt: new Date(now).toISOString(), since: presenceSince },
+        { companionId: 'comp-b', updatedAt: new Date(now).toISOString(), since: presenceSince },
+      ],
+    };
+    const { connect } = await setupServer({
+      ...createMinimalOptions(),
+      multiCompanion: multiCompanion(),
+      companionChannels: makeLane({ presenceRows, now: () => now }),
+      companionChannelNow: () => now,
+    });
+    const agentA = await connect();
+    const agentB = await connect();
+    await identifyAgent(agentA, 'comp-a');
+    await identifyAgent(agentB, 'comp-b', 901);
+
+    const arbitrary = await invokeRpc(agentB, 63, 'companion.message.send', {
+      channelId: 'companion-room:living_room',
+      content: 'forged lineage',
+      companionId: 'comp-b',
+      replyToMessageId: 'companion-never-delivered',
+    });
+    expect(arbitrary.error?.code).toBe(GatewayErrors.COMPANION_ROUTING_UNAVAILABLE);
+
+    const opening = await invokeRpc(agentA, 64, 'companion.message.send', {
+      channelId: 'companion-room:living_room',
+      content: 'expires before reply',
+      companionId: 'comp-a',
+    });
+    now += 60 * 60_000 + 1;
+    presenceRows['vhome/living_room'] = [
+      { companionId: 'comp-a', updatedAt: new Date(now).toISOString(), since: presenceSince },
+      { companionId: 'comp-b', updatedAt: new Date(now).toISOString(), since: presenceSince },
+    ];
+    const expired = await invokeRpc(agentB, 65, 'companion.message.send', {
+      channelId: 'companion-room:living_room',
+      content: 'expired lineage',
+      companionId: 'comp-b',
+      replyToMessageId: opening.result.messageId,
+    });
+    expect(expired.error?.code).toBe(GatewayErrors.COMPANION_ROUTING_UNAVAILABLE);
+    expect(methodFrames(agentA, 'companion.message')
+      .some(frame => frame.params.message.content === 'forged lineage'
+        || frame.params.message.content === 'expired lineage')).toBe(false);
   });
 
   it('fails closed on a room addressed at an unknown place', async () => {
@@ -551,10 +656,23 @@ describe('companion.message.send routing (W6)', () => {
       channelId: 'companion-dm:comp-a:comp-b',
       content: 'heard you',
       companionId: 'comp-b',
+      replyToMessageId: response.result.messageId,
     });
     expect(reply.result).toMatchObject({ deliveredTo: ['comp-a'] });
-    expect(methodFrames(agentA, 'companion.message')[0].params.message.channelId)
-      .toBe('companion-dm:comp-a:comp-b');
+    expect(methodFrames(agentA, 'companion.message')[0].params.message).toMatchObject({
+      channelId: 'companion-dm:comp-a:comp-b',
+      replyToMessageId: response.result.messageId,
+    });
+
+    const forged = await invokeRpc(agentB, 22, 'companion.message.send', {
+      channelId: 'companion-dm:comp-a:comp-b',
+      content: 'forged dm lineage',
+      companionId: 'comp-b',
+      replyToMessageId: 'companion-never-delivered',
+    });
+    expect(forged.error?.code).toBe(GatewayErrors.COMPANION_ROUTING_UNAVAILABLE);
+    expect(methodFrames(agentA, 'companion.message')
+      .some(frame => frame.params.message.content === 'forged dm lineage')).toBe(false);
   });
 
   it('routes a verified delivery failure to the original sender as a structured notification', async () => {

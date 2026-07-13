@@ -63,11 +63,13 @@ export interface CompanionPresenceReadPort {
   listByPlace(siteId: string, placeId: string): Promise<CompanionPresenceReadRow[]>;
 }
 
-/** Exact uninterrupted presence row captured for room delivery/reply proof. */
-export interface CompanionRoomPresenceProof {
+/** Stable uninterrupted presence epoch captured for room delivery/reply proof. */
+export interface CompanionRoomPresenceEpoch {
   since: string;
-  updatedAt: string;
 }
+
+/** Narrow grace for a reply generation that began during the same presence epoch. */
+export const COMPANION_ROOM_STALE_REPLY_GRACE_MS = 2 * 60_000;
 
 export interface GatewayCompanionChannelLaneOptions {
   placesRegistry: Pick<PlacesRegistryConfig, 'places'>;
@@ -102,11 +104,11 @@ export type CompanionDeliveryResolution =
      */
     windowExcluded?: string[];
     /**
-     * Room only: exact accepted recipient rows used by the gateway to mint a
-     * reply proof. Recipients without parseable row timestamps still receive
-     * public-room delivery but never gain a stale-presence reply capability.
+     * Room only: stable accepted recipient epochs used by the gateway to mint
+     * a reply proof. Recipients without a parseable epoch still receive
+     * public-room delivery but never gain stale-presence reply privilege.
      */
-    recipientPresence: Record<string, CompanionRoomPresenceProof>;
+    recipientPresenceEpochs: Record<string, CompanionRoomPresenceEpoch>;
   }
   | {
     ok: true;
@@ -128,7 +130,7 @@ export interface CompanionDeliveryResolveOptions {
    * after the sender's room presence went stale. Callers must never derive
    * this from an untrusted boolean in the agent payload.
    */
-  senderReplyPresence?: CompanionRoomPresenceProof;
+  senderReplyPresenceEpoch?: CompanionRoomPresenceEpoch;
 }
 
 export class GatewayCompanionChannelLane {
@@ -211,22 +213,23 @@ export class GatewayCompanionChannelLane {
       const updatedAtMs = Date.parse(row.updatedAt);
       return Number.isFinite(updatedAtMs) && updatedAtMs >= staleCutoffMs;
     });
-    const senderReplyPresence = options?.senderReplyPresence;
+    const senderReplyPresenceEpoch = options?.senderReplyPresenceEpoch;
     const senderReplyCrossedFreshnessBoundary = !senderPresent
-      && senderReplyPresence !== undefined
+      && senderReplyPresenceEpoch !== undefined
       && rows.some((row) => {
         if (row.companionId !== senderCompanionId) return false;
         const rowSinceMs = typeof row.since === 'string' ? Date.parse(row.since) : Number.NaN;
         const rowUpdatedAtMs = Date.parse(row.updatedAt);
-        const proofSinceMs = Date.parse(senderReplyPresence.since);
-        const proofUpdatedAtMs = Date.parse(senderReplyPresence.updatedAt);
+        const proofSinceMs = Date.parse(senderReplyPresenceEpoch.since);
+        const staleAtMs = rowUpdatedAtMs + this.staleTtlMs;
         return Number.isFinite(rowSinceMs)
           && Number.isFinite(rowUpdatedAtMs)
           && Number.isFinite(proofSinceMs)
-          && Number.isFinite(proofUpdatedAtMs)
-          && rowUpdatedAtMs < staleCutoffMs
-          && rowSinceMs === proofSinceMs
-          && rowUpdatedAtMs === proofUpdatedAtMs;
+          && rowSinceMs <= rowUpdatedAtMs
+          && proofSinceMs <= referenceNowMs
+          && referenceNowMs > staleAtMs
+          && referenceNowMs <= staleAtMs + COMPANION_ROOM_STALE_REPLY_GRACE_MS
+          && rowSinceMs === proofSinceMs;
       });
     if (!senderPresent && !senderReplyCrossedFreshnessBoundary) {
       return violation(
@@ -237,7 +240,7 @@ export class GatewayCompanionChannelLane {
     }
     const recipients: string[] = [];
     const windowExcluded: string[] = [];
-    const recipientPresence: Record<string, CompanionRoomPresenceProof> = {};
+    const recipientPresenceEpochs: Record<string, CompanionRoomPresenceEpoch> = {};
     for (const row of rows) {
       if (row.companionId === senderCompanionId) continue; // never echo the sender
       const updatedAtMs = Date.parse(row.updatedAt);
@@ -259,9 +262,8 @@ export class GatewayCompanionChannelLane {
         && sinceMs <= updatedAtMs
         && sinceMs <= referenceNowMs
       ) {
-        recipientPresence[row.companionId] = {
+        recipientPresenceEpochs[row.companionId] = {
           since: new Date(sinceMs).toISOString(),
-          updatedAt: new Date(updatedAtMs).toISOString(),
         };
       }
     }
@@ -272,7 +274,7 @@ export class GatewayCompanionChannelLane {
       placeId: place.placeId,
       recipients,
       roomPrivacy,
-      recipientPresence,
+      recipientPresenceEpochs,
       ...(roomPrivacy === 'private' ? { windowExcluded } : {}),
     };
   }

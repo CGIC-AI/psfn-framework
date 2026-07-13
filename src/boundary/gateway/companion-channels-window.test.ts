@@ -5,6 +5,7 @@
 
 import { describe, expect, it } from 'vitest';
 import {
+  COMPANION_ROOM_STALE_REPLY_GRACE_MS,
   GatewayCompanionChannelLane,
   type CompanionPresenceReadRow,
 } from './companion-channels.js';
@@ -196,7 +197,7 @@ describe('private-room presence-windowed delivery (psfn-framework-s10rm)', () =>
     };
 
     await expect(lane.resolveDelivery('comp-a', 'companion-room:living_room', {
-      senderReplyPresence: { since: presenceSince, updatedAt: FRESH },
+      senderReplyPresenceEpoch: { since: presenceSince },
     })).resolves.toMatchObject({
       ok: true,
       recipients: ['comp-b'],
@@ -204,7 +205,7 @@ describe('private-room presence-windowed delivery (psfn-framework-s10rm)', () =>
   });
 
   it('rejects a reply proof after explicit leave or when it belongs to another presence window', async () => {
-    const proof = { since: JOINED_BEFORE_MINT, updatedAt: STALE };
+    const proof = { since: JOINED_BEFORE_MINT };
     const leftRoom = makeLane({
       'vhome/living_room': [
         { companionId: 'comp-b', updatedAt: FRESH },
@@ -222,13 +223,32 @@ describe('private-room presence-windowed delivery (psfn-framework-s10rm)', () =>
     });
 
     await expect(leftRoom.resolveDelivery('comp-a', 'companion-room:living_room', {
-      senderReplyPresence: proof,
+      senderReplyPresenceEpoch: proof,
     })).resolves.toMatchObject({
       ok: false,
       violation: { event: 'companion_room_sender_not_present' },
     });
     await expect(differentWindow.resolveDelivery('comp-a', 'companion-room:living_room', {
-      senderReplyPresence: proof,
+      senderReplyPresenceEpoch: proof,
+    })).resolves.toMatchObject({
+      ok: false,
+      violation: { event: 'companion_room_sender_not_present' },
+    });
+  });
+
+  it('rejects a stale reply after the narrow presence-boundary grace', async () => {
+    const staleAt = Date.parse(FRESH) + 15 * 60_000;
+    const afterGrace = staleAt + COMPANION_ROOM_STALE_REPLY_GRACE_MS + 1;
+    const lane = makeLane({
+      'vhome/living_room': [
+        { companionId: 'comp-a', updatedAt: FRESH, since: JOINED_BEFORE_MINT },
+        { companionId: 'comp-b', updatedAt: new Date(afterGrace).toISOString() },
+      ],
+    });
+
+    await expect(lane.resolveDelivery('comp-a', 'companion-room:living_room', {
+      messageTimestampMs: afterGrace,
+      senderReplyPresenceEpoch: { since: JOINED_BEFORE_MINT },
     })).resolves.toMatchObject({
       ok: false,
       violation: { event: 'companion_room_sender_not_present' },
@@ -246,8 +266,8 @@ describe('private-room presence-windowed delivery (psfn-framework-s10rm)', () =>
     await expect(lane.resolveDelivery('comp-a', 'companion-room:living_room'))
       .resolves.toMatchObject({
         ok: true,
-        recipientPresence: {
-          'comp-b': { since: JOINED_BEFORE_MINT, updatedAt: FRESH },
+        recipientPresenceEpochs: {
+          'comp-b': { since: JOINED_BEFORE_MINT },
         },
       });
   });

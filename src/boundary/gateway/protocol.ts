@@ -63,6 +63,7 @@ import type {
   IcpAvailabilityLease,
   IcpAvailabilityState,
   IcpAutonomyReasonCode,
+  IcpConversationCorrelation,
 } from '../../shared/contracts/icp-autonomy.js';
 
 // ── Request parameter types (agent → gateway) ──
@@ -671,6 +672,17 @@ export interface CompanionMessageSendParams {
   authorName?: string;
   /** Client-stamped companion identity; verified against the connection binding. */
   companionId?: string;
+  /**
+   * Optional autonomous-initiation binding. This still uses the ordinary
+   * companion.message.send lane; the gateway consumes the permit before
+   * routing and mints a stable message id for replay-safe recipient handling.
+   */
+  initiation?: {
+    permitId: string;
+    conversationId: string;
+    recipientCompanionId: string;
+    correlation: IcpConversationCorrelation;
+  };
 }
 
 export interface CompanionMessageSendResult {
@@ -679,6 +691,7 @@ export interface CompanionMessageSendResult {
   deliveredTo: string[];
   /** Room recipients present at the place but without a live agent connection. */
   skippedOffline: string[];
+  permitOutcome?: 'consumed' | 'replayed';
 }
 
 export type CompanionDeliveryFailureReason = 'processing_failed' | 'reply_delivery_failed';

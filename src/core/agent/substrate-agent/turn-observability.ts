@@ -43,6 +43,9 @@ export function buildTurnCorrelation(
     purpose: 'agent.turn',
     originType: callType,
     originStage: 'agent.turn',
+    ...(message.routing?.icpCorrelation
+      ? { icpCorrelation: message.routing.icpCorrelation }
+      : {}),
   };
 }
 

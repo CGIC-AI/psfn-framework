@@ -74,7 +74,10 @@ import {
   buildSessionMetadataWithTurn,
   buildSessionMetadataWithRoleEnvelopePreview,
   resolveSessionEntryRoleEnvelopePreview,
+  resolveSessionEntryTurnContext,
 } from './turn-provenance.js';
+import { parseSessionIcpCorrelation } from './icp-correlation-metadata.js';
+import type { IcpConversationCorrelation } from '../../shared/contracts/icp-autonomy.js';
 import type {
   PreCompactionExtractionContext,
   PreCompactionExtractionHandler,
@@ -1150,6 +1153,49 @@ export class SessionManager {
   getRecentSessionEntries(channelId: string, limit: number): SessionEntry[] {
     const resolvedChannelId = this.resolveSessionChannelId(channelId);
     return this.store.getRecent(resolvedChannelId, limit);
+  }
+
+  findRecordedIcpInitiation(
+    channelId: string,
+    sourceMessageId: string,
+  ): { content: string; correlation: IcpConversationCorrelation } | null {
+    const entries = this.getRecentSessionEntries(channelId, 5_000);
+    for (let index = entries.length - 1; index >= 0; index -= 1) {
+      const entry = entries[index];
+      if (!entry || entry.role !== 'assistant') continue;
+      const turn = resolveSessionEntryTurnContext(entry);
+      if (turn.sourceMessageId !== sourceMessageId) continue;
+      const correlation = parseSessionIcpCorrelation(entry.metadata);
+      if (!correlation) {
+        throw new Error('Recorded ICP initiation assistant entry is missing correlation metadata');
+      }
+      return { content: entry.content, correlation };
+    }
+    return null;
+  }
+
+  hasRecordedSourceMessage(channelId: string, sourceMessageId: string): boolean {
+    return this.getRecentSessionEntries(channelId, 5_000).some((entry) => {
+      if (entry.role !== 'user' && entry.role !== 'system') return false;
+      if (!entry.metadata?.includes(sourceMessageId)) return false;
+      return resolveSessionEntryTurnContext(entry).sourceMessageId === sourceMessageId;
+    });
+  }
+
+  recordIcpDeliveryObservation(observation: {
+    channelId: string;
+    sourceMessageId: string;
+    status: 'delivered' | 'failed' | 'suppressed';
+    gatewayMessageId?: string;
+    deliveredTo?: readonly string[];
+    permitOutcome?: 'consumed' | 'replayed';
+    error?: string;
+  }): void {
+    this.appendSystemNote(
+      observation.channelId,
+      JSON.stringify({ schemaVersion: 1, kind: 'icp_delivery', ...observation }),
+      'icp_delivery',
+    );
   }
 
   setPreCompactionExtractionHandler(handler: PreCompactionExtractionHandler | null): void {

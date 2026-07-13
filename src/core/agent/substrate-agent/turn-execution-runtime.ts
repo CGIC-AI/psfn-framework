@@ -30,7 +30,8 @@ import type { ContextBudgetTurnCharacteristics } from '../../../shared/context-b
 import { isTemporalContextBudgetTurn } from '../../../shared/context-budget.js';
 import type { ObserverEvalSidecarRuntime } from '../../eval/observer-sidecar/types.js';
 import type { ContextManifest } from '../../session/context-manifest.js';
-import { createTurnId } from '../../turns/id.js';
+import { createTurnId, parseTurnId } from '../../turns/id.js';
+import { parseIcpConversationCorrelation } from '../../../shared/contracts/icp-autonomy.js';
 import type { TurnObservabilityRecord } from '../../turns/observability.js';
 import type {
   TurnPromptSnapshot,
@@ -584,6 +585,13 @@ function buildSuppressedFatigueResponse(input: {
       outputTokens: 0,
       durationMs: input.completedAt - input.startTime,
       fatigue: input.fatigue,
+      ...(input.message.routing?.icpCorrelation
+        ? {
+            turnId: input.message.routing.icpCorrelation.turnId as TurnID,
+            requestId: input.message.routing.icpCorrelation.requestId,
+            icpCorrelation: input.message.routing.icpCorrelation,
+          }
+        : {}),
     },
   };
 }
@@ -593,7 +601,23 @@ export async function handleMessageForTurn(
   message: SubstrateMessage,
 ): Promise<AgentResponse> {
   const requestId = message.id;
-  const turnId = createTurnId();
+  const privateIcpCorrelation = message.routing?.privateTurnTrigger === true
+    ? parseIcpConversationCorrelation(message.routing.icpCorrelation)
+    : null;
+  if (privateIcpCorrelation) {
+    if (message.channelType !== 'companion'
+      || message.authorId !== 'system:icp-initiation'
+      || privateIcpCorrelation.localCompanionId !== resolveCompanionIdFromConfig(runtime.config)
+      || privateIcpCorrelation.channelId !== message.channelId
+      || privateIcpCorrelation.requestId !== requestId
+      || privateIcpCorrelation.messageId !== requestId) {
+      throw new Error('Private ICP target turn is not bound to this runtime message');
+    }
+  }
+  const turnId = privateIcpCorrelation
+    ? parseTurnId(privateIcpCorrelation.turnId, 'ICP target turn correlation.turnId')
+    : createTurnId();
+  if (!turnId) throw new Error('Private ICP target turn requires a UUIDv7 turnId');
   const deferredContinuationId = parseDeferredToolHandoffActionId(message.id);
   const taskKind = runtime.resolveTaskKind(message);
   const turnBudgetCharacteristics = runtime.buildTurnBudgetCharacteristics(message, taskKind);
@@ -610,7 +634,7 @@ export async function handleMessageForTurn(
     ...(taskKind ? { taskKind } : {}),
     ...(deferredContinuationId ? { deferredContinuationId } : {}),
   });
-  const turnCorrelationBase = runtime.buildTurnCorrelation(message, turnCallType, turnId, requestId);
+  let turnCorrelationBase = runtime.buildTurnCorrelation(message, turnCallType, turnId, requestId);
   await runtime.awaitPostTurnDrain({
     channelId: message.channelId,
     turnId,
@@ -658,6 +682,33 @@ export async function handleMessageForTurn(
     canonicalContactKey,
     conversationScope,
   } = identityState;
+  const inboundIcpOrigin = message.routing?.icpCorrelation;
+  if (inboundIcpOrigin && !privateIcpCorrelation) {
+    const localCompanionId = resolveCompanionIdFromConfig(runtime.config);
+    if (inboundIcpOrigin.localCompanionId !== message.authorId
+      || inboundIcpOrigin.peerCompanionId !== localCompanionId
+      || inboundIcpOrigin.channelId !== message.channelId
+      || !canonicalContactKey
+      || !authorContext.speakingWithIsMachineIntelligence) {
+      throw new Error('Inbound ICP initiation correlation does not match recipient identity/contact routing');
+    }
+    const recipientCorrelation = parseIcpConversationCorrelation({
+      ...inboundIcpOrigin,
+      localCompanionId,
+      peerCompanionId: message.authorId,
+      peerContactId: canonicalContactKey,
+      turnId,
+      messageId: message.id,
+      requestId,
+      costOriginStage: 'reply',
+      fatigueDecision: 'not_evaluated',
+    });
+    message.routing = {
+      ...message.routing,
+      icpCorrelation: recipientCorrelation,
+    };
+    turnCorrelationBase = runtime.buildTurnCorrelation(message, turnCallType, turnId, requestId);
+  }
   let promptMode: MessagePromptOverrideMode = 'default';
   let fullPrompt = '';
   let contextMessageCount = 0;
@@ -710,6 +761,24 @@ export async function handleMessageForTurn(
       timestampMs: startTime,
     });
     if (fatigueDecision) {
+      if (message.routing?.icpCorrelation) {
+        const finalFatigueDecision = fatigueDecision.metadata.decision === 'suppressed_hard_exhausted'
+          ? 'suppress'
+          : fatigueDecision.metadata.decision === 'overcharge_charged'
+            ? 'allow_overcharge'
+            : 'allow';
+        message.routing = {
+          ...message.routing,
+          icpCorrelation: {
+            ...message.routing.icpCorrelation,
+            fatigueDecision: finalFatigueDecision,
+          },
+        };
+        turnCorrelationBase = {
+          ...turnCorrelationBase,
+          icpCorrelation: message.routing.icpCorrelation,
+        };
+      }
       emitFatigueDecision({
         runtime,
         message,
@@ -1130,6 +1199,11 @@ export async function handleMessageForTurn(
         inputTokens: turnUsage.inputTokens,
         outputTokens: turnUsage.outputTokens,
         durationMs: completedAt - startTime,
+        turnId,
+        requestId,
+        ...(message.routing?.icpCorrelation
+          ? { icpCorrelation: message.routing.icpCorrelation }
+          : {}),
         internalState: cloneComputedInternalStateForResponse(internalState),
         internalStateSnapshotRef,
         metacognitiveFlags: cloneMetacognitiveFlags(metacognitiveFlags),

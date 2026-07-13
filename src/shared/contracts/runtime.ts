@@ -16,6 +16,7 @@ import type {
 import type { SatelliteRoutingMetadata } from './satellite-registry.js';
 import type { GatewayRoutingEnvelope } from '../routing/envelope.js';
 import type { IntakeEnvelopeSnapshot } from './intake-envelope.js';
+import type { IcpConversationCorrelation } from './icp-autonomy.js';
 
 // ── Channel-agnostic message types ──
 
@@ -100,6 +101,8 @@ export interface TurnRecord {
   observability?: import('../../core/turns/observability.js').TurnObservabilityRecord;
   versionPointers: TurnRecordVersionPointers;
   provenanceRefs: string[];
+  /** Same-cluster autonomous-conversation lineage, when this is an ICP turn. */
+  icpCorrelation?: IcpConversationCorrelation;
 }
 
 export interface WyomingShardDelegationHint {
@@ -224,6 +227,8 @@ export interface CorrelationMetadata extends LLMRequestMetadata {
   viewerChannelPrivacy?: ChannelPrivacy;
   viewerIsDirectMessage?: boolean;
   embodimentContext?: EmbodimentPresenceMetadata;
+  /** Preserved across the turn, its nested model/tool calls, and post-turn work. */
+  icpCorrelation?: IcpConversationCorrelation;
 }
 
 export interface GeneratedMessageProvenanceMetadata {
@@ -287,6 +292,18 @@ export interface MessageRoutingMetadata {
    * leaves the existing DM/internal reflection binding byte-identical.
    */
   reflectionScope?: ReflectionScopeHint;
+  /**
+   * Fully-bound ICP lineage for an ordinary companion-channel turn. The
+   * gateway and target-turn entrypoint validate this before it reaches the
+   * prompt/runtime. It is metadata, never a parallel dispatch path.
+   */
+  icpCorrelation?: IcpConversationCorrelation;
+  /**
+   * Internal target-turn trigger: participates in prompt assembly but is not
+   * persisted as partner/system transcript speech. Only valid with a strict
+   * `icpCorrelation` on a companion channel.
+   */
+  privateTurnTrigger?: true;
   workerExecution?: {
     lane: string;
     profileClass: string;
@@ -514,6 +531,9 @@ export interface ResponseMetadata {
   inputTokens: number;
   outputTokens: number;
   durationMs: number;
+  turnId?: TurnID;
+  requestId?: string;
+  icpCorrelation?: IcpConversationCorrelation;
   noReply?: IntentionalNoReplyMetadata;
   internalState?: import('../../core/self-model/state.js').InternalState;
   internalStateSnapshotRef?: string;

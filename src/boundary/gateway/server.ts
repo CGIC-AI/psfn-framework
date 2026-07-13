@@ -1,4 +1,4 @@
-import { isRecord } from '../../shared/utils/types.js';
+import { assertNoUnknownKeys, isRecord } from '../../shared/utils/types.js';
 // ── Gateway Server ──
 // Host-side process that holds secrets and proxies all external interactions.
 
@@ -85,6 +85,10 @@ import {
   createGatewayIcpAutonomyBroker,
   registerGatewayIcpAutonomyRpc,
 } from './icp-autonomy-rpc.js';
+import {
+  parseIcpConversationCorrelation,
+  type IcpConversationCorrelation,
+} from '../../shared/contracts/icp-autonomy.js';
 
 const log = createComponentLogger('Gateway');
 const DEFAULT_CONNECTION_HEALTHCHECK_STALE_AFTER_MS = 90_000;
@@ -286,6 +290,11 @@ export class GatewayServer {
   private readonly companionDeliveryFailureReceipts = new CompanionDeliveryFailureReceipts();
   private readonly icpAutonomyBroker: GatewayIcpAutonomyBroker | null;
   private readonly pendingIcpInvalidations = new Map<string, PendingIcpInvalidation>();
+  private readonly deliveredIcpInitiations = new Map<string, {
+    content: string;
+    expiresAtMs: number;
+    result: CompanionMessageSendResult;
+  }>();
 
   constructor(options: GatewayServerOptions) {
     this.options = options;
@@ -691,7 +700,79 @@ export class GatewayServer {
       throw new Error('companion.message.send requires an identified agent companion connection');
     }
 
-    const { channelId, content, authorName } = parseCompanionMessageSendParams(params);
+    const { channelId, content, authorName, initiation } = parseCompanionMessageSendParams(params);
+    let initiationPermitOutcome: 'consumed' | 'replayed' | undefined;
+    let initiationCandidateId: string | undefined;
+    let initiationPermitExpiresAtMs: number | undefined;
+    if (initiation) {
+      if (!this.icpAutonomyBroker) {
+        throw new JSONRPCErrorException(
+          'ICP autonomy broker is not configured',
+          GatewayErrors.COMPANION_ROUTING_UNAVAILABLE,
+        );
+      }
+      const { correlation } = initiation;
+      if (correlation.localCompanionId !== senderCompanionId
+        || correlation.peerCompanionId !== initiation.recipientCompanionId
+        || correlation.initiatedByCompanionId !== senderCompanionId
+        || correlation.channelId !== channelId
+        || correlation.conversationId !== initiation.conversationId) {
+        this.alarmCompanionViolation(
+          'icp_initiation_delivery_mismatch',
+          'ICP initiation delivery correlation does not match the authenticated sender binding',
+          { senderCompanionId, channelId, recipientCompanionId: initiation.recipientCompanionId },
+        );
+        throw new Error('ICP initiation delivery correlation mismatch');
+      }
+      const consumption = await this.icpAutonomyBroker.consumePermit(senderCompanionId, {
+        permitId: initiation.permitId,
+        conversationId: initiation.conversationId,
+        recipientCompanionId: initiation.recipientCompanionId,
+        channelId,
+      });
+      if ((consumption.outcome !== 'consumed' && consumption.outcome !== 'replayed')
+        || !consumption.permit) {
+        throw new JSONRPCErrorException(
+          `ICP initiation permit delivery rejected: ${consumption.reasonCode ?? consumption.outcome}`,
+          GatewayErrors.COMPANION_ROUTING_UNAVAILABLE,
+        );
+      }
+      if (correlation.messageId !== `icp-initiation:${consumption.permit.candidateId}`
+        || correlation.requestId !== correlation.messageId) {
+        this.alarmCompanionViolation(
+          'icp_initiation_delivery_mismatch',
+          'ICP initiation delivery correlation does not match the consumed permit',
+          { senderCompanionId, channelId, conversationId: initiation.conversationId },
+        );
+        throw new Error('ICP initiation delivery permit/correlation mismatch');
+      }
+      initiationPermitOutcome = consumption.outcome;
+      initiationCandidateId = consumption.permit.candidateId;
+      initiationPermitExpiresAtMs = consumption.permit.expiresAtMs;
+    }
+
+    const stableInitiationMessageId = initiationCandidateId
+      ? `companion-initiation-${initiationCandidateId}`
+      : undefined;
+    if (stableInitiationMessageId) {
+      for (const [messageId, delivered] of this.deliveredIcpInitiations.entries()) {
+        if (delivered.expiresAtMs <= Date.now()) this.deliveredIcpInitiations.delete(messageId);
+      }
+    }
+    if (stableInitiationMessageId && initiationPermitOutcome === 'replayed') {
+      const delivered = this.deliveredIcpInitiations.get(stableInitiationMessageId);
+      if (delivered) {
+        if (delivered.content !== content) {
+          this.alarmCompanionViolation(
+            'icp_initiation_delivery_mismatch',
+            'Replayed ICP initiation changed the already-delivered content',
+            { senderCompanionId, channelId, messageId: stableInitiationMessageId },
+          );
+          throw new Error('Replayed ICP initiation content mismatch');
+        }
+        return { ...delivered.result, permitOutcome: 'replayed' };
+      }
+    }
 
     // The envelope timestamp is minted BEFORE recipient resolution and handed
     // to the lane: private-room windowing (psfn-framework-s10rm) compares each
@@ -712,6 +793,12 @@ export class GatewayServer {
         GatewayErrors.COMPANION_ROUTING_UNAVAILABLE,
       );
     }
+    if (initiation && !resolution.recipients.includes(initiation.recipientCompanionId)) {
+      throw new JSONRPCErrorException(
+        'ICP initiation recipient is outside the current channel delivery window',
+        GatewayErrors.COMPANION_ROUTING_UNAVAILABLE,
+      );
+    }
 
     // Gateway-authoritative message envelope: id and timestamp are minted
     // here, the author identity is the verified sender companionId, and the
@@ -720,7 +807,9 @@ export class GatewayServer {
     // relationship classes apply on the recipient with no trust in
     // sender-supplied metadata.
     const message = {
-      id: `companion-${randomUUID()}`,
+      id: stableInitiationMessageId
+        ? stableInitiationMessageId
+        : `companion-${randomUUID()}`,
       channelId,
       channelType: COMPANION_CHANNEL_TYPE,
       authorId: senderCompanionId,
@@ -731,6 +820,7 @@ export class GatewayServer {
       routing: {
         source: 'companion',
         authorIsMachineIntelligence: true,
+        ...(initiation ? { icpCorrelation: initiation.correlation } : {}),
       },
     };
 
@@ -798,12 +888,21 @@ export class GatewayServer {
       skippedOffline,
     });
 
-    return {
+    const result: CompanionMessageSendResult = {
       channelId,
       messageId: message.id,
       deliveredTo,
       skippedOffline,
+      ...(initiationPermitOutcome ? { permitOutcome: initiationPermitOutcome } : {}),
     };
+    if (stableInitiationMessageId && initiationPermitExpiresAtMs !== undefined) {
+      this.deliveredIcpInitiations.set(stableInitiationMessageId, {
+        content,
+        expiresAtMs: initiationPermitExpiresAtMs,
+        result,
+      });
+    }
+    return result;
   }
 
   private async handleCompanionMessageFailureReport(
@@ -1894,6 +1993,12 @@ function parseCompanionMessageSendParams(params: unknown): {
   channelId: string;
   content: string;
   authorName?: string;
+  initiation?: {
+    permitId: string;
+    conversationId: string;
+    recipientCompanionId: string;
+    correlation: IcpConversationCorrelation;
+  };
 } {
   if (!isRecord(params)) {
     throw new Error('companion.message.send requires an object params payload');
@@ -1923,7 +2028,48 @@ function parseCompanionMessageSendParams(params: unknown): {
       );
     }
   }
-  return { channelId, content, ...(authorName ? { authorName } : {}) };
+  let initiation: {
+    permitId: string;
+    conversationId: string;
+    recipientCompanionId: string;
+    correlation: IcpConversationCorrelation;
+  } | undefined;
+  if (params.initiation !== undefined) {
+    if (!isRecord(params.initiation)) {
+      throw new Error('companion.message.send initiation must be an object');
+    }
+    assertNoUnknownKeys(
+      params.initiation,
+      ['permitId', 'conversationId', 'recipientCompanionId', 'correlation'] as const,
+      'companion.message.send initiation',
+    );
+    const permitId = typeof params.initiation.permitId === 'string'
+      ? params.initiation.permitId.trim()
+      : '';
+    const conversationId = typeof params.initiation.conversationId === 'string'
+      ? params.initiation.conversationId.trim()
+      : '';
+    const recipientCompanionId = typeof params.initiation.recipientCompanionId === 'string'
+      ? params.initiation.recipientCompanionId.trim()
+      : '';
+    if (!permitId || !conversationId || !recipientCompanionId) {
+      throw new Error(
+        'companion.message.send initiation requires permitId, conversationId, and recipientCompanionId',
+      );
+    }
+    initiation = {
+      permitId,
+      conversationId,
+      recipientCompanionId,
+      correlation: parseIcpConversationCorrelation(params.initiation.correlation),
+    };
+  }
+  return {
+    channelId,
+    content,
+    ...(authorName ? { authorName } : {}),
+    ...(initiation ? { initiation } : {}),
+  };
 }
 
 function extractGatewayCorrelation(

@@ -21,6 +21,13 @@ import {
   type DiscordDeliveryCheckpoint,
   type DiscordFailureStage,
 } from './discord-reply-delivery.js';
+import {
+  createIcpTargetChannelInitiator,
+  type IcpDeliveryObservation,
+  type IcpTargetChannelInitiator,
+  type RecordedIcpInitiationTurn,
+} from './icp-target-channel-initiation.js';
+import type { IcpConversationCorrelation } from '../../shared/contracts/icp-autonomy.js';
 
 const DUPLICATE_MESSAGE_WINDOW_MS = 2 * 60_000;
 const AGENT_BUSY_PATTERN = /already processing a prompt/i;
@@ -50,6 +57,21 @@ export interface GatewayMessageGateway {
   /** Inter-companion lane (sprint 10, W6): inbound peer messages + outbound replies. */
   onCompanionMessage(handler: (message: SubstrateMessage) => void | Promise<void>): void;
   companionSend(channelId: string, content: string, authorName?: string): Promise<unknown>;
+  companionSendInitiation(input: {
+    channelId: string;
+    content: string;
+    authorName?: string;
+    permitId: string;
+    conversationId: string;
+    recipientCompanionId: string;
+    correlation: IcpConversationCorrelation;
+  }): Promise<{
+    channelId: string;
+    messageId: string;
+    deliveredTo: string[];
+    skippedOffline: string[];
+    permitOutcome: 'consumed' | 'replayed';
+  }>;
   companionReportFailure(params: CompanionMessageFailureReportParams): Promise<unknown>;
   onCompanionDeliveryFailure(
     handler: (notification: CompanionMessageDeliveryFailureNotification) => void | Promise<void>,
@@ -61,6 +83,12 @@ export interface GatewayMessageAgentLoop {
   observeMessage(message: SubstrateMessage): Promise<void>;
   /** Resolves when the agent has finished all in-flight work (prompt + steering + follow-ups). */
   waitForIdle(): Promise<void>;
+  findRecordedIcpInitiation(
+    channelId: string,
+    sourceMessageId: string,
+  ): Promise<RecordedIcpInitiationTurn | null> | RecordedIcpInitiationTurn | null;
+  hasRecordedSourceMessage(channelId: string, sourceMessageId: string): Promise<boolean> | boolean;
+  recordIcpDeliveryObservation(observation: IcpDeliveryObservation): Promise<void> | void;
 }
 
 export type GatewayMessageShardManager = Pick<ShardExecutionPort, 'delegateSatelliteSession'>;
@@ -102,7 +130,13 @@ export interface GatewayMessageHandlersDeps {
   companionAuthorName?: string;
 }
 
-export function registerGatewayMessageHandlers(deps: GatewayMessageHandlersDeps): void {
+export interface RegisteredGatewayMessageHandlers {
+  icpTargetChannelInitiator: IcpTargetChannelInitiator;
+}
+
+export function registerGatewayMessageHandlers(
+  deps: GatewayMessageHandlersDeps,
+): RegisteredGatewayMessageHandlers {
   const {
     gateway,
     agentLoop,
@@ -681,10 +715,23 @@ export function registerGatewayMessageHandlers(deps: GatewayMessageHandlersDeps)
     }
   };
 
-  gateway.onCompanionMessage((message: SubstrateMessage) => {
+  gateway.onCompanionMessage(async (message: SubstrateMessage) => {
     const dedupeKey = buildMessageDedupKey('companion', message);
     const now = Date.now();
     pruneDuplicateCaches(now);
+    if (await agentLoop.hasRecordedSourceMessage(message.channelId, message.id)) {
+      log.warn('Dropping restart-replayed companion notification already present in L0', {
+        channelId: message.channelId,
+        messageId: message.id,
+      });
+      safeguardAuditTrail.append('gateway.message.duplicate', {
+        route: 'companion',
+        channelId: message.channelId,
+        messageId: message.id,
+        disposition: 'durable',
+      });
+      return;
+    }
     if (dedupeKey) {
       const seenAt = recentCompanionMessages.get(dedupeKey);
       if ((seenAt && now - seenAt < DUPLICATE_MESSAGE_WINDOW_MS) || inFlightCompanionMessages.has(dedupeKey)) {
@@ -763,4 +810,15 @@ export function registerGatewayMessageHandlers(deps: GatewayMessageHandlersDeps)
       });
     }
   });
+
+  return {
+    icpTargetChannelInitiator: createIcpTargetChannelInitiator({
+      localCompanionId: resolveCompanionIdFromConfig(config),
+      agent: agentLoop,
+      gateway: {
+        sendInitiation: (input) => gateway.companionSendInitiation(input),
+      },
+      ...(companionAuthorName ? { authorName: companionAuthorName } : {}),
+    }),
+  };
 }

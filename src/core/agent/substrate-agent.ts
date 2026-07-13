@@ -1325,6 +1325,36 @@ export class SubstrateAgent {
     }
   }
 
+  /** Restart-safe recovery for a sender-side target-channel initiation turn. */
+  findRecordedIcpInitiation(
+    channelId: string,
+    sourceMessageId: string,
+  ): { content: string; correlation: import('../../shared/contracts/icp-autonomy.js').IcpConversationCorrelation } | null {
+    return this.sessionManager.findRecordedIcpInitiation(channelId, sourceMessageId);
+  }
+
+  /** Durable recipient-side source-id check; survives agent process restart. */
+  hasRecordedSourceMessage(channelId: string, sourceMessageId: string): boolean {
+    return this.sessionManager.hasRecordedSourceMessage(channelId, sourceMessageId);
+  }
+
+  /**
+   * Records local transport truth in the channel journal's hidden system lane.
+   * It never becomes peer speech and therefore cannot imply a failed send was
+   * mutually witnessed.
+   */
+  recordIcpDeliveryObservation(observation: {
+    channelId: string;
+    sourceMessageId: string;
+    status: 'delivered' | 'failed' | 'suppressed';
+    gatewayMessageId?: string;
+    deliveredTo?: readonly string[];
+    permitOutcome?: 'consumed' | 'replayed';
+    error?: string;
+  }): void {
+    this.sessionManager.recordIcpDeliveryObservation(observation);
+  }
+
   // ── Private helpers ──
 
   /**

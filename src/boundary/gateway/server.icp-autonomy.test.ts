@@ -549,6 +549,81 @@ describe('GatewayServer ICP autonomy RPC', () => {
     ]);
   });
 
+  it('atomically consumes initiation permits on the ordinary message lane and replays without duplicate delivery', async () => {
+    const { connect, store } = await setup();
+    const a = connect();
+    const b = connect();
+    await identify(a, A, 200);
+    await identify(b, B, 201);
+    await invoke(b, 202, 'companion.availability.publish', {
+      companionId: B,
+      state: 'open_to_chat',
+      expiresAtMs: Date.now() + 120_000,
+      revision: 1,
+    });
+    const candidateId = '20202020-2020-4020-8020-202020202020';
+    const issue = await invoke(a, 203, 'companion.initiation.permit.issue', {
+      companionId: A,
+      candidate: candidate(candidateId),
+      channelId: CHANNEL,
+      permitExpiresAtMs: Date.now() + 60_000,
+    });
+    const permit = issue.result.permit as IcpInitiationPermit;
+    const correlation = {
+      conversationId: permit.conversationId,
+      rootInitiationId: ROOT,
+      initiatedByCompanionId: A,
+      localCompanionId: A,
+      peerCompanionId: B,
+      peerContactId: 'sender-local-contact-b',
+      channelId: CHANNEL,
+      turnId: '018f22a2-52b8-7a3a-8c16-25b7b14f7081',
+      messageId: `icp-initiation:${candidateId}`,
+      requestId: `icp-initiation:${candidateId}`,
+      chargeLane: 'companion_social',
+      surface: 'companion_dm',
+      costPurpose: 'conversation_turn',
+      costOriginStage: 'initiation',
+      fatigueDecision: 'not_evaluated',
+    };
+    const sendParams = {
+      companionId: A,
+      channelId: CHANNEL,
+      content: 'A normal first companion-channel message',
+      initiation: {
+        permitId: permit.permitId,
+        conversationId: permit.conversationId,
+        recipientCompanionId: B,
+        correlation,
+      },
+    };
+
+    const first = await invoke(a, 204, 'companion.message.send', sendParams);
+    expect(first.result).toMatchObject({
+      channelId: CHANNEL,
+      messageId: `companion-initiation-${candidateId}`,
+      deliveredTo: [B],
+      permitOutcome: 'consumed',
+    });
+    expect(store.permits.get(permit.permitId)).toMatchObject({ status: 'consumed', revision: 2 });
+    const delivered = b.sent.filter(frame => frame.method === 'companion.message');
+    expect(delivered).toHaveLength(1);
+    expect(delivered[0]?.params.message).toMatchObject({
+      id: `companion-initiation-${candidateId}`,
+      channelId: CHANNEL,
+      authorId: A,
+      content: 'A normal first companion-channel message',
+      routing: { source: 'companion', icpCorrelation: correlation },
+    });
+
+    const replay = await invoke(a, 205, 'companion.message.send', sendParams);
+    expect(replay.result).toMatchObject({
+      messageId: `companion-initiation-${candidateId}`,
+      permitOutcome: 'replayed',
+    });
+    expect(b.sent.filter(frame => frame.method === 'companion.message')).toHaveLength(1);
+  });
+
   it('disconnects identity spoofing and alarms exact channel/peer substitution', async () => {
     const { connect, store } = await setup();
     const a = connect();

@@ -13,6 +13,7 @@ import { buildSessionMetadataWithEmotionState } from '../../emotion/session-meta
 import type { TurnToolSummary } from '../../../faculties/skills/reflection-nudge.js';
 import { normalizeRoleEnvelopeRefs } from '../../internal-role-envelopes/projections.js';
 import { normalizeToolArguments } from '../../../shared/tool-argument-normalization.js';
+import { buildSessionMetadataWithIcpCorrelation } from '../../session/icp-correlation-metadata.js';
 
 const INTERNAL_SHARD_SOURCE_PARAM = '__psfnShardSource';
 const REASONING_PLACEHOLDER_VALUES = new Set(['none', 'null', 'n/a', 'na', 'nil', 'undefined']);
@@ -51,12 +52,16 @@ export function recordUserMessage(input: {
   // the routing metadata; persisting them onto the session entry lets the
   // prompt_assembly and memory_write sink gates consult them downstream.
   const intakeEnvelopes = input.message.routing?.intakeEnvelopes;
+  const icpMetadata = input.message.routing?.icpCorrelation
+    ? buildSessionMetadataWithIcpCorrelation(undefined, input.message.routing.icpCorrelation)
+    : undefined;
   const recordOptions = {
     trustLevel: input.trustLevel,
     turnId: input.turnId,
     requestId: input.requestId,
     sourceMessageId: input.message.id,
     channelMeta: resolveSessionChannelMeta(input.message),
+    ...(icpMetadata ? { metadata: icpMetadata } : {}),
     ...(intakeEnvelopes && intakeEnvelopes.length > 0 ? { intakeEnvelopes } : {}),
   };
   if (input.continuityUserId) {
@@ -92,9 +97,16 @@ export function recordAssistantMessage(input: {
   continuityUserId?: string;
   emotionSnapshot?: EmotionStateSnapshot | null;
 }): number | null {
-  const metadata = input.emotionSnapshot
+  let metadata = input.emotionSnapshot
     ? buildSessionMetadataWithEmotionState(undefined, input.emotionSnapshot)
     : undefined;
+  if (input.message.routing?.icpCorrelation) {
+    metadata = buildSessionMetadataWithIcpCorrelation(
+      metadata,
+      input.message.routing.icpCorrelation,
+      { deliveryStatus: 'pending' },
+    );
+  }
 
   if (input.continuityUserId) {
     return input.sessionManager.recordAssistantMessage(
@@ -280,6 +292,9 @@ export function buildTurnRecord(input: {
         : {}),
     },
     provenanceRefs,
+    ...(input.message.routing?.icpCorrelation
+      ? { icpCorrelation: input.message.routing.icpCorrelation }
+      : {}),
   };
 }
 

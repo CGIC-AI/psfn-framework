@@ -316,7 +316,10 @@ export async function prepareTurnIdentityState(input: {
   runtime.emotionSelfModelRuntime.assertSelfModelRuntimeConfigured();
   await runtime.sessionManager.awaitPendingAutoCompaction(message.channelId);
 
-  const userSessionEntryId = deferSessionEntryPersistence
+  const privateTurnTrigger = message.routing?.privateTurnTrigger === true;
+  const userSessionEntryId = privateTurnTrigger
+    ? null
+    : deferSessionEntryPersistence
     ? null
     : authorContext.speakerRole === 'system'
       ? runtime.recordSystemMessage(

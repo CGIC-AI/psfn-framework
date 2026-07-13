@@ -2163,7 +2163,6 @@ describe('SubstrateAgent.handleMessage', () => {
     const agent = new SubstrateAgent(
       new EventBus(), makeMockLLMProvider(), sessionManager, 'test', config,
     );
-
     await agent.handleMessage(makeMessage());
 
     expect(sessionManager.recordUserMessage).toHaveBeenCalledWith(
@@ -2223,6 +2222,87 @@ describe('SubstrateAgent.handleMessage', () => {
       }),
     );
     expect(sessionManager.recordAssistantMessage).not.toHaveBeenCalled();
+  });
+
+  it('runs a private ICP initiation through the ordinary turn without persisting the trigger', async () => {
+    const config = makeConfig({ companionId: '11111111-1111-4111-8111-111111111111' });
+    const sessionManager = makeMockSessionManager();
+    const agent = new SubstrateAgent(
+      new EventBus(), makeMockLLMProvider(), sessionManager, 'test', config,
+    );
+    agent.contactStore = {
+      getById: vi.fn(async () => ({
+        id: 'contact-nova',
+        displayName: 'Nova',
+        trustLevel: 'trusted',
+        relationshipType: 'ai_companion',
+        isMachineIntelligence: true,
+        firstSeen: '2026-07-01T00:00:00.000Z',
+        lastSeen: '2026-07-13T00:00:00.000Z',
+      })),
+      getEmotionalSnapshot: vi.fn(async () => undefined),
+    } as unknown as ContactStore;
+    const correlation = {
+      conversationId: '44444444-4444-4444-8444-444444444444',
+      rootInitiationId: '33333333-3333-4333-8333-333333333333',
+      initiatedByCompanionId: '11111111-1111-4111-8111-111111111111',
+      localCompanionId: '11111111-1111-4111-8111-111111111111',
+      peerCompanionId: '22222222-2222-4222-8222-222222222222',
+      peerContactId: 'contact-nova',
+      channelId: 'companion-dm:11111111-1111-4111-8111-111111111111:22222222-2222-4222-8222-222222222222',
+      turnId: '018f22a2-52b8-7a3a-8c16-25b7b14f7081',
+      messageId: 'icp-initiation:33333333-3333-4333-8333-333333333333',
+      requestId: 'icp-initiation:33333333-3333-4333-8333-333333333333',
+      chargeLane: 'companion_social' as const,
+      surface: 'companion_dm' as const,
+      costPurpose: 'conversation_turn' as const,
+      costOriginStage: 'initiation' as const,
+      fatigueDecision: 'not_evaluated' as const,
+    };
+
+    const result = await agent.handleMessage(makeMessage({
+      id: correlation.requestId,
+      channelId: correlation.channelId,
+      channelType: 'companion',
+      authorId: 'system:icp-initiation',
+      authorName: 'ICP Initiation',
+      content: 'private target turn trigger',
+      isDirectMessage: true,
+      routing: {
+        source: 'companion',
+        canonicalContactId: correlation.peerContactId,
+        authorIsMachineIntelligence: true,
+        privateTurnTrigger: true,
+        icpCorrelation: correlation,
+      },
+    }));
+
+    expect(sessionManager.recordUserMessage).not.toHaveBeenCalled();
+    expect(sessionManager.recordSystemMessage).not.toHaveBeenCalled();
+    expect(sessionManager.recordAssistantMessage).toHaveBeenCalledTimes(1);
+    expect(sessionManager.recordAssistantMessage).toHaveBeenCalledWith(
+      correlation.channelId,
+      TEST_ASSISTANT_RESPONSE,
+      'system:icp-initiation',
+      true,
+      'contact-nova',
+      expect.objectContaining({
+        requestId: correlation.requestId,
+        sourceMessageId: correlation.messageId,
+        turnId: correlation.turnId,
+        metadata: expect.stringContaining('"icpCorrelation"'),
+      }),
+    );
+    expect(sessionManager.recordTurn).toHaveBeenCalledWith(expect.objectContaining({
+      turnId: correlation.turnId,
+      icpCorrelation: correlation,
+      userMessage: expect.objectContaining({ role: 'system' }),
+    }));
+    expect(result.metadata).toMatchObject({
+      turnId: correlation.turnId,
+      requestId: correlation.requestId,
+      icpCorrelation: correlation,
+    });
   });
 
   it('records assistant message in session after LLM call', async () => {

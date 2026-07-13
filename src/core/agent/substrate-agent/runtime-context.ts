@@ -53,6 +53,7 @@ import { applyObservedMachineIntelligence } from '../../contacts/observed-machin
 import { resolveActiveTimezone } from '../../../shared/time/active-timezone.js';
 import { wrapPromptSectionXml } from '../../identity/prompt-sections.js';
 import { getRunChargeSnapshot } from '../../../shared/telemetry/run-charge.js';
+import { parseIcpConversationCorrelation } from '../../../shared/contracts/icp-autonomy.js';
 import { trimNonEmptyString } from './runtime-context-sections/section-format.js';
 import {
   buildCurrentDatetimePromptVariables,
@@ -847,6 +848,39 @@ export async function resolveAuthorContext(input: {
       canonicalContactKey: input.message.authorId,
       continuitySubjectKey: input.message.authorId,
       continuityFallbackKeys: [],
+    };
+  }
+
+  if (input.message.authorId === 'system:icp-initiation'
+    && input.message.routing?.privateTurnTrigger === true) {
+    const correlation = parseIcpConversationCorrelation(input.message.routing.icpCorrelation);
+    if (correlation.localCompanionId !== input.companionIdentityKey
+      || correlation.channelId !== input.message.channelId
+      || correlation.requestId !== input.message.id
+      || correlation.peerContactId !== input.message.routing.canonicalContactId) {
+      throw new Error('Private ICP target turn correlation does not match runtime identity/routing');
+    }
+    if (!input.contactStore) {
+      throw new Error('Private ICP target turn requires the canonical contact store');
+    }
+    const contact = await input.contactStore.getById(correlation.peerContactId);
+    if (!contact || !contact.isMachineIntelligence) {
+      throw new Error('Private ICP target turn peerContactId must resolve to a machine-intelligence contact');
+    }
+    return {
+      trustLevel: contact.trustLevel,
+      speakerRole: 'system',
+      resolvedUserName: resolvePromptUserName(input.message, contact),
+      speakingWithIsMachineIntelligence: true,
+      relationshipType: contact.relationshipType,
+      ...(resolveContactRuntimeTimezone(contact) ? { timezone: resolveContactRuntimeTimezone(contact) } : {}),
+      canonicalContactKey: contact.id,
+      continuitySubjectKey: contact.id,
+      continuityFallbackKeys: collectContinuityFallbackKeys(
+        correlation.peerCompanionId,
+        contact.id,
+        contact,
+      ),
     };
   }
 

@@ -149,7 +149,10 @@ import type {
   IcpInitiationPermitIssueResult,
   IcpPeerAvailabilityResult,
 } from './icp-autonomy-contract.js';
-import type { IcpAvailabilityLease } from '../../shared/contracts/icp-autonomy.js';
+import type {
+  IcpAvailabilityLease,
+  IcpConversationCorrelation,
+} from '../../shared/contracts/icp-autonomy.js';
 import { GatewayErrors } from './protocol.js';
 import {
   SESSION_INTEGRITY_RESPONSE_BUFFER_BYTES,
@@ -570,6 +573,30 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
       ...(authorName ? { authorName } : {}),
       ...(this.companionId ? { companionId: this.companionId } : {}),
     }) as CompanionMessageSendResult;
+  }
+
+  /** Permit-bound first message through the same ordinary companion lane. */
+  async companionSendInitiation(input: {
+    channelId: string;
+    content: string;
+    authorName?: string;
+    permitId: string;
+    conversationId: string;
+    recipientCompanionId: string;
+    correlation: IcpConversationCorrelation;
+  }): Promise<CompanionMessageSendResult & { permitOutcome: 'consumed' | 'replayed' }> {
+    return await this.rpcInstance.request('companion.message.send', {
+      channelId: input.channelId,
+      content: input.content,
+      ...(input.authorName ? { authorName: input.authorName } : {}),
+      initiation: {
+        permitId: input.permitId,
+        conversationId: input.conversationId,
+        recipientCompanionId: input.recipientCompanionId,
+        correlation: input.correlation,
+      },
+      ...(this.companionId ? { companionId: this.companionId } : {}),
+    }) as CompanionMessageSendResult & { permitOutcome: 'consumed' | 'replayed' };
   }
 
   /** Report a failed inbound companion turn without creating a reply turn. */

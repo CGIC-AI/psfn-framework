@@ -71,7 +71,9 @@ function createHarness(overrides?: {
   discordSend?: (channelId: string, content: string) => Promise<void>;
   discordSendMedia?: (channelId: string, media: Attachment) => Promise<void>;
   companionSend?: (channelId: string, content: string, authorName?: string) => Promise<unknown>;
+  companionSendInitiation?: (input: Record<string, unknown>) => Promise<any>;
   companionReportFailure?: (params: CompanionMessageFailureReportParams) => Promise<unknown>;
+  hasRecordedSourceMessage?: (channelId: string, sourceMessageId: string) => Promise<boolean> | boolean;
   outboundReplyGuard?: {
     noteDelivered: ReturnType<typeof vi.fn>;
     evaluate: ReturnType<typeof vi.fn>;
@@ -108,12 +110,22 @@ function createHarness(overrides?: {
     discordSend: vi.fn(overrides?.discordSend ?? (async () => {})),
     discordSendMedia: vi.fn(overrides?.discordSendMedia ?? (async () => {})),
     companionSend: vi.fn(overrides?.companionSend ?? (async () => ({}))),
+    companionSendInitiation: vi.fn(overrides?.companionSendInitiation ?? (async () => ({
+      channelId: 'companion-dm:test',
+      messageId: 'companion-initiation-test',
+      deliveredTo: [],
+      skippedOffline: [],
+      permitOutcome: 'consumed',
+    }))),
     companionReportFailure: vi.fn(overrides?.companionReportFailure ?? (async () => ({}))),
   };
   const agentLoop = {
     handleMessage: vi.fn(overrides?.handleMessage ?? (async () => makeResponse('primary response'))),
     observeMessage: vi.fn(overrides?.observeMessage ?? (async () => {})),
     waitForIdle: vi.fn(overrides?.waitForIdle ?? (async () => {})),
+    findRecordedIcpInitiation: vi.fn(async () => null),
+    hasRecordedSourceMessage: vi.fn(overrides?.hasRecordedSourceMessage ?? (async () => false)),
+    recordIcpDeliveryObservation: vi.fn(async () => {}),
   };
   const shardManager = {
     delegateSatelliteSession: vi.fn(
@@ -861,6 +873,26 @@ describe('registerGatewayMessageHandlers', () => {
       disposition: 'cached',
     });
     expect(harness.agentLoop.handleMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it('drops a gateway replay already present in durable recipient L0 after restart', async () => {
+    const harness = createHarness({
+      hasRecordedSourceMessage: async (_channelId, sourceMessageId) => (
+        sourceMessageId === 'companion-initiation-restart-safe'
+      ),
+    });
+    const message = makeCompanionMessage({ id: 'companion-initiation-restart-safe' });
+
+    await harness.onCompanionMessage(message);
+
+    expect(harness.agentLoop.handleMessage).not.toHaveBeenCalled();
+    expect(harness.gateway.companionSend).not.toHaveBeenCalled();
+    expect(harness.safeguardAuditTrail.append).toHaveBeenCalledWith('gateway.message.duplicate', {
+      route: 'companion',
+      channelId: message.channelId,
+      messageId: 'companion-initiation-restart-safe',
+      disposition: 'durable',
+    });
   });
 
   it('reports companion turn failures and keeps the source message retryable', async () => {

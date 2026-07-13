@@ -10,8 +10,8 @@ interface RecentSessionSummary {
 }
 
 export interface IntrospectionTurnRecordReader {
-  listRecentSessions(limit?: number): RecentSessionSummary[];
-  getRecentTurnRecords(channelId: string, limit: number): TurnRecord[];
+  listRecentSessions(limit?: number, offset?: number): RecentSessionSummary[];
+  getRecentTurnRecords(channelId: string, limit: number, offset?: number): TurnRecord[];
 }
 
 function toCandidate(record: TurnRecord, maxSourceChars: number): IntrospectionAuditCandidate | null {
@@ -59,13 +59,27 @@ export function createTurnRecordIntrospectionSource(
     listCandidates: (input) => {
       const allowed = new Set(input.allowedPublicChannelIds);
       const candidates: IntrospectionAuditCandidate[] = [];
-      for (const session of reader.listRecentSessions(input.recentSessionLimit)) {
-        if (!allowed.has(session.sourceChannelId)) continue;
-        for (const record of reader.getRecentTurnRecords(session.sourceChannelId, input.recentTurnLimit)) {
-          if (!allowed.has(record.channelId) || record.channelId !== session.sourceChannelId) continue;
-          const candidate = toCandidate(record, input.maxSourceChars);
-          if (candidate) candidates.push(candidate);
+      for (let sessionOffset = 0; ; sessionOffset += input.recentSessionLimit) {
+        const sessions = reader.listRecentSessions(input.recentSessionLimit, sessionOffset);
+        if (sessions.length === 0) break;
+        for (const session of sessions) {
+          if (!allowed.has(session.sourceChannelId)) continue;
+          for (let turnOffset = 0; ; turnOffset += input.recentTurnLimit) {
+            const records = reader.getRecentTurnRecords(
+              session.sourceChannelId,
+              input.recentTurnLimit,
+              turnOffset,
+            );
+            if (records.length === 0) break;
+            for (const record of records) {
+              if (!allowed.has(record.channelId) || record.channelId !== session.sourceChannelId) continue;
+              const candidate = toCandidate(record, input.maxSourceChars);
+              if (candidate) candidates.push(candidate);
+            }
+            if (records.length < input.recentTurnLimit) break;
+          }
         }
+        if (sessions.length < input.recentSessionLimit) break;
       }
       return candidates
         .sort((left, right) => left.occurredAt.localeCompare(right.occurredAt))

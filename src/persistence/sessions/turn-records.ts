@@ -490,6 +490,7 @@ function normalizeTurnRecord(raw: unknown, expectedChannelId: string): TurnRecor
     schemaVersion: TURN_RECORD_SCHEMA_VERSION,
     turnId,
     requestId,
+    ...(sessionId ? { sessionId } : {}),
     channelId,
     channelType: channelType as ChannelType,
     startedAt,
@@ -526,8 +527,9 @@ function readRecentTurnRecordsFromPath(
   path: string,
   channelId: string,
   limit: number,
+  offset: number,
 ): TurnRecord[] {
-  if (limit <= 0) return [];
+  if (limit <= 0 || offset < 0) return [];
   const records = readJsonLines<TurnRecord>(
     path,
     raw => normalizeTurnRecord(raw, channelId),
@@ -541,8 +543,9 @@ function readRecentTurnRecordsFromPath(
     },
   ).entries;
 
-  if (records.length <= limit) return records;
-  return records.slice(-limit);
+  const end = Math.max(0, records.length - offset);
+  const start = Math.max(0, end - limit);
+  return records.slice(start, end);
 }
 
 export function createFilesystemTurnRecordStorePort(sessionsDir: string): TurnRecordStorePort {
@@ -551,8 +554,8 @@ export function createFilesystemTurnRecordStorePort(sessionsDir: string): TurnRe
       const normalized = normalizeTurnRecord(record, record.channelId);
       appendJsonLine(turnRecordPath(sessionsDir, record.channelId), normalized);
     },
-    readRecentTurnRecords: (channelId, limit) => (
-      readRecentTurnRecordsFromPath(turnRecordPath(sessionsDir, channelId), channelId, limit)
+    readRecentTurnRecords: (channelId, limit, offset = 0) => (
+      readRecentTurnRecordsFromPath(turnRecordPath(sessionsDir, channelId), channelId, limit, offset)
     ),
   };
 }

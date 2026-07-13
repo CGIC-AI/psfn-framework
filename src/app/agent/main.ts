@@ -477,13 +477,13 @@ async function main(): Promise<void> {
     config: introspectionAuditConfig,
     consentStore: introspectionConsentStore,
     source: createTurnRecordIntrospectionSource({
-      listRecentSessions: (limit) => sessionManager.listRecentSessions(limit).map((session) => ({
+      listRecentSessions: (limit, offset) => sessionManager.listRecentSessions(limit, offset).map((session) => ({
         sessionId: session.sessionId,
         sourceChannelId: sessionManager.getSessionRouteForLogicalSession(session.sessionId)?.sourceChannelId
           ?? session.channelId,
       })),
-      getRecentTurnRecords: (sourceChannelId, limit) => (
-        sessionStore.getRecentSourceTurnRecords(sourceChannelId, limit)
+      getRecentTurnRecords: (sourceChannelId, limit, offset) => (
+        sessionStore.getRecentSourceTurnRecords(sourceChannelId, limit, offset)
       ),
     }),
     auditor: createLLMIntrospectionAuditor(llmProvider, introspectionAuditConfig),

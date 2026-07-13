@@ -368,11 +368,11 @@ export class SessionManager {
     await pending;
   }
 
-  listRecentSessions(limit?: number): SessionActivitySummary[] {
+  listRecentSessions(limit?: number, offset = 0): SessionActivitySummary[] {
     if (limit === undefined) {
-      return this.store.listSessionsByRecentActivity();
+      return this.store.listSessionsByRecentActivity(20, offset);
     }
-    return this.store.listSessionsByRecentActivity(limit);
+    return this.store.listSessionsByRecentActivity(limit, offset);
   }
 
   getSessionActivity(sessionId: string): SessionActivitySummary | null {

@@ -67,6 +67,24 @@ describe('turn-records', () => {
     expect(read[0]?.location).toEqual({ placeId: 'living_room', satelliteId: 'pi-voice' });
   });
 
+  it('round-trips logical session provenance and pages past the newest records', () => {
+    const sessionsDir = mkdtempSync(join(tmpdir(), 'psfn-turn-records-session-provenance-'));
+    const turnRecordStore = createFilesystemTurnRecordStorePort(sessionsDir);
+    const records = Array.from({ length: 4 }, (_, index) => createTurnRecord({
+      turnId: `019d2326-d9e1-701d-bcee-250d2cbb0e${index + 1}e`,
+      requestId: `request-${index + 1}`,
+      sessionId: 'session:logical-after-reset',
+      completedAt: 1_700_000_000_100 + index,
+    }));
+    for (const record of records) turnRecordStore.appendTurnRecord(record);
+
+    expect(turnRecordStore.readRecentTurnRecords(records[0]!.channelId, 2, 0)).toEqual(records.slice(2));
+    expect(turnRecordStore.readRecentTurnRecords(records[0]!.channelId, 2, 2)).toEqual(records.slice(0, 2));
+    expect(turnRecordStore.readRecentTurnRecords(records[0]!.channelId, 2, 4)).toEqual([]);
+    expect(turnRecordStore.readRecentTurnRecords(records[0]!.channelId, 1)[0]?.sessionId)
+      .toBe('session:logical-after-reset');
+  });
+
   it('omits location for turns that carried no place binding (legacy rows load fine)', () => {
     const sessionsDir = mkdtempSync(join(tmpdir(), 'psfn-turn-records-nolocation-'));
     const record = createTurnRecord();

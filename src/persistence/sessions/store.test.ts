@@ -566,6 +566,57 @@ describe('SessionStore', () => {
     ]);
   });
 
+  it('applies logical-session tombstones to routed physical-source records after disk reload', () => {
+    const sourceChannelId = 'discord:public-room';
+    const logicalSessionId = 'session:logical-after-reset';
+    const redactedTurnId = createTurnId(1_700_000_000_000);
+    const visibleTurnId = createTurnId(1_700_000_000_100);
+    store.append({
+      channelId: logicalSessionId,
+      role: 'user',
+      content: 'logical session owner',
+      timestamp: 1_700_000_000_000,
+      turnId: redactedTurnId,
+    });
+    for (const [turnId, requestId, completedAt] of [
+      [redactedTurnId, 'req-redacted', 1_700_000_000_010],
+      [visibleTurnId, 'req-visible', 1_700_000_000_110],
+    ] as const) {
+      store.appendTurnRecord({
+        schemaVersion: 1,
+        turnId,
+        requestId,
+        sessionId: logicalSessionId,
+        channelId: sourceChannelId,
+        channelType: 'discord',
+        startedAt: completedAt - 10,
+        completedAt,
+        status: 'completed',
+        userMessage: { role: 'user', content: requestId, timestamp: completedAt - 10 },
+        assistantMessage: { role: 'assistant', content: 'reply', timestamp: completedAt },
+        toolCalls: [],
+        extractedMemoryIds: [],
+        concernDeltaRefs: [],
+        contactDeltaRefs: [],
+        versionPointers: { model: 'test/model' },
+        provenanceRefs: [],
+      });
+    }
+
+    expect(store.getRecentSourceTurnRecords(sourceChannelId, 10).map(record => record.sessionId))
+      .toEqual([logicalSessionId, logicalSessionId]);
+    store.redactTurn(logicalSessionId, redactedTurnId, {
+      actor: 'admin:test',
+      reason: 'privacy request',
+    });
+    expect(store.getRecentSourceTurnRecords(sourceChannelId, 10).map(record => record.turnId))
+      .toEqual([visibleTurnId]);
+
+    const reloaded = new SessionStore(dir);
+    expect(reloaded.getRecentSourceTurnRecords(sourceChannelId, 10).map(record => record.turnId))
+      .toEqual([visibleTurnId]);
+  });
+
   it('indexes appended messages for FTS keyword search across channels', async () => {
     const searchStore = new SessionStore(dir, { transcriptProjection: createSqliteTranscriptProjection(join(dir, 'session-search.sqlite')) });
     searchStore.append({

@@ -724,22 +724,20 @@ export class SessionStore implements TranscriptSearchPort {
    * channel-exact, so routed sessions must use this path instead of widening a
    * source-channel decision to the whole logical session.
    */
-  getRecentSourceTurnRecords(sourceChannelId: string, limit: number): TurnRecord[] {
-    const sessionId = this.resolveSessionId(sourceChannelId) ?? sourceChannelId;
-    const cached = this.channels.get(sessionId) ?? this.loadExistingChannelCache(sourceChannelId);
-    const hasTombstones = (cached?.activeTurnTombstoneCount ?? 0) > 0;
+  getRecentSourceTurnRecords(sourceChannelId: string, limit: number, offset = 0): TurnRecord[] {
+    if (limit <= 0 || offset < 0) return [];
     const records = this.turnRecordStore.readRecentTurnRecords(
       sourceChannelId,
-      hasTombstones ? Number.MAX_SAFE_INTEGER : limit,
+      Number.MAX_SAFE_INTEGER,
     );
-    if (!hasTombstones) return records;
-
-    const loaded = this.ensureChannelFullyLoaded(sourceChannelId);
-    if (!loaded || loaded.turnTombstones.size === 0) {
-      return records.length <= limit ? records : records.slice(-limit);
-    }
-    const filtered = records.filter(record => !loaded.turnTombstones.has(record.turnId));
-    return filtered.length <= limit ? filtered : filtered.slice(-limit);
+    const filtered = records.filter((record) => {
+      const ownerSessionId = record.sessionId ?? sourceChannelId;
+      const owner = this.ensureChannelFullyLoaded(ownerSessionId);
+      return !owner?.turnTombstones.has(record.turnId);
+    });
+    const end = Math.max(0, filtered.length - offset);
+    const start = Math.max(0, end - limit);
+    return filtered.slice(start, end);
   }
   async searchByKeywords(
     query: string,
@@ -1140,8 +1138,8 @@ export class SessionStore implements TranscriptSearchPort {
       lastMessagePreview: normalizeOptionalString(indexEntry.lastMessagePreview) ?? '',
     };
   }
-  listSessionsByRecentActivity(limit = 20): SessionActivitySummary[] {
-    if (limit <= 0) return [];
+  listSessionsByRecentActivity(limit = 20, offset = 0): SessionActivitySummary[] {
+    if (limit <= 0 || offset < 0) return [];
     this.primeChannelIndexFromDisk();
     const sessions: SessionActivitySummary[] = [];
 
@@ -1166,7 +1164,7 @@ export class SessionStore implements TranscriptSearchPort {
       return left.sessionId.localeCompare(right.sessionId);
     });
 
-    return sessions.slice(0, limit);
+    return sessions.slice(offset, offset + limit);
   }
   getLatestSessionByTimestamp(): LatestSessionSummary | null {
     const latest = this.listSessionsByRecentActivity(1)[0];

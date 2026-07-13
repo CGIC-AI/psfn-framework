@@ -119,4 +119,35 @@ describe('turn-record introspection source', () => {
       provenanceRefs: expect.arrayContaining(['session:session:logical-after-reset']),
     })]);
   });
+
+  it('paginates through older sessions and turns instead of stranding the audit backlog', () => {
+    const sessions = [
+      { sessionId: 'discord:newer-room', sourceChannelId: 'discord:newer-room' },
+      { sessionId: 'discord:public-room', sourceChannelId: 'discord:public-room' },
+    ];
+    const turns = Array.from({ length: 5 }, (_, index) => record({
+      turnId: `019d2326-d9e1-701d-bcee-250d2cbb0e${index + 1}e`,
+      requestId: `request-${index + 1}`,
+      completedAt: 1_700_000_000_100 + index,
+    }));
+    const source = createTurnRecordIntrospectionSource({
+      listRecentSessions: (limit = 1, offset = 0) => sessions.slice(offset, offset + limit),
+      getRecentTurnRecords: (channelId, limit, offset = 0) => {
+        if (channelId !== 'discord:public-room') return [];
+        const end = Math.max(0, turns.length - offset);
+        return turns.slice(Math.max(0, end - limit), end);
+      },
+    });
+
+    const candidates = source.listCandidates({
+      allowedPublicChannelIds: ['discord:public-room'],
+      recentSessionLimit: 1,
+      recentTurnLimit: 2,
+      maxSourceChars: 1_000,
+    });
+
+    expect(candidates.map(candidate => candidate.sourceRef)).toEqual(
+      turns.map(turn => `turn:${turn.turnId}`),
+    );
+  });
 });

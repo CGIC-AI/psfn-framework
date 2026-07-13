@@ -80,6 +80,10 @@ test("private control server authenticates, validates, and deduplicates service 
     assert.equal(states.status, 200);
     assert.equal((await states.json() as { states: Array<{ state: string }> }).states[0]?.state, "off");
 
+    const gatewayStates = await post(baseUrl, "/internal/v1/home-assistant/states", { entityIds: [] });
+    assert.equal(gatewayStates.status, 200);
+    assert.equal((await gatewayStates.json() as { states: Array<{ entity_id: string }> }).states[0]?.entity_id, "light.office");
+
     const body = {
       requestId: "autonomy:office:1",
       domain: "light",
@@ -117,9 +121,18 @@ test("private control server authenticates, validates, and deduplicates service 
     }, DEVICE_TOKEN);
     assert.equal(outsideRoom.status, 403);
 
-    const sharedTokenCannotControl = await post(baseUrl, "/internal/v1/home-assistant/call-service", body);
-    assert.equal(sharedTokenCannotControl.status, 401);
-    assert.equal(mock.serviceCallCount, 2);
+    const sharedTokenCanControlRegisteredEntity = await post(
+      baseUrl,
+      "/internal/v1/home-assistant/call-service",
+      { ...body, requestId: "gateway:office:1" },
+    );
+    assert.equal(sharedTokenCanControlRegisteredEntity.status, 200);
+    assert.equal(mock.serviceCallCount, 3);
+
+    const sharedTokenCannotEscapeRegistry = await post(baseUrl, "/internal/v1/home-assistant/states", {
+      entityIds: ["light.kitchen"],
+    });
+    assert.equal(sharedTokenCannotEscapeRegistry.status, 403);
 
     const invalidFanService = await post(baseUrl, "/internal/v1/home-assistant/call-service", {
       requestId: "invalid:light-percentage:1",
@@ -129,7 +142,7 @@ test("private control server authenticates, validates, and deduplicates service 
       data: { percentage: 50 },
     }, DEVICE_TOKEN);
     assert.equal(invalidFanService.status, 400);
-    assert.equal(mock.serviceCallCount, 2);
+    assert.equal(mock.serviceCallCount, 3);
 
     const denied = await post(baseUrl, "/internal/v1/home-assistant/call-service", {
       requestId: "dangerous:1",
@@ -138,7 +151,7 @@ test("private control server authenticates, validates, and deduplicates service 
       entityIds: ["lock.front_door"],
     }, DEVICE_TOKEN);
     assert.equal(denied.status, 400);
-    assert.equal(mock.serviceCallCount, 2);
+    assert.equal(mock.serviceCallCount, 3);
   } finally {
     await control.close();
     await client.close();

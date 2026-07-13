@@ -35,6 +35,11 @@ interface IdempotencyEntry {
   result: HomeAssistantCallServiceResult;
 }
 
+interface HomeAssistantPrincipal {
+  id: string;
+  entityIds: readonly string[];
+}
+
 export class HomeAssistantControlServer {
   private readonly server: http.Server;
   private readonly idempotency = new Map<string, IdempotencyEntry>();
@@ -77,8 +82,8 @@ export class HomeAssistantControlServer {
     response.setHeader("Content-Type", "application/json; charset=utf-8");
     const url = new URL(request.url ?? "/", "http://hub-control.invalid");
     const isHealthRequest = request.method === "GET" && url.pathname === "/internal/v1/home-assistant/health";
-    const device = isHealthRequest ? null : this.authenticateDevice(request.headers.authorization);
-    if (isHealthRequest ? !this.authorizedControlToken(request.headers.authorization) : !device) {
+    const principal = isHealthRequest ? null : this.authenticatePrincipal(request.headers.authorization);
+    if (isHealthRequest ? !this.authorizedControlToken(request.headers.authorization) : !principal) {
       response.statusCode = 401;
       response.setHeader("WWW-Authenticate", "Bearer");
       response.end(JSON.stringify({ error: { type: "unauthorized", message: "Invalid Hub control credential" } }));
@@ -93,8 +98,8 @@ export class HomeAssistantControlServer {
     if (request.method === "POST" && url.pathname === "/internal/v1/home-assistant/states") {
       const body = await this.readJsonBody(request);
       const entityIds = body.entityIds === undefined ? [] : parseEntityIds(body.entityIds, true);
-      const authorizedIds = entityIds.length === 0 ? device!.homeAssistantEntityIds : entityIds;
-      this.assertEntitiesAllowed(device!, authorizedIds);
+      const authorizedIds = entityIds.length === 0 ? principal!.entityIds : entityIds;
+      this.assertEntitiesAllowed(principal!, authorizedIds);
       response.statusCode = 200;
       const states = this.client.getStates(authorizedIds);
       response.end(JSON.stringify({ states, count: states.length }));
@@ -103,7 +108,7 @@ export class HomeAssistantControlServer {
     if (request.method === "POST" && url.pathname === "/internal/v1/home-assistant/call-service") {
       const body = await this.readJsonBody(request);
       const input = parseCallService(body);
-      this.assertEntitiesAllowed(device!, input.entityIds);
+      this.assertEntitiesAllowed(principal!, input.entityIds);
       const bodyHash = hashCanonical(input);
       const prior = this.idempotency.get(input.requestId);
       if (prior) {
@@ -141,10 +146,21 @@ export class HomeAssistantControlServer {
     return authenticateHubDevice(this.deviceRegistry, raw.slice("Bearer ".length));
   }
 
-  private assertEntitiesAllowed(device: HubDeviceIdentity, entityIds: readonly string[]): void {
+  private authenticatePrincipal(raw: string | undefined): HomeAssistantPrincipal | null {
+    if (this.authorizedControlToken(raw)) {
+      return {
+        id: "PSFN gateway",
+        entityIds: [...new Set(this.deviceRegistry.devices.flatMap((device) => device.homeAssistantEntityIds))],
+      };
+    }
+    const device = this.authenticateDevice(raw);
+    return device ? { id: device.deviceId, entityIds: device.homeAssistantEntityIds } : null;
+  }
+
+  private assertEntitiesAllowed(principal: HomeAssistantPrincipal, entityIds: readonly string[]): void {
     for (const entityId of entityIds) {
-      if (!device.homeAssistantEntityIds.includes(entityId)) {
-        throw new HttpInputError(403, "entity_not_allowed", `Home Assistant entity is not allowed for ${device.deviceId}: ${entityId}`);
+      if (!principal.entityIds.includes(entityId)) {
+        throw new HttpInputError(403, "entity_not_allowed", `Home Assistant entity is not allowed for ${principal.id}: ${entityId}`);
       }
     }
   }

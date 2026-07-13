@@ -612,6 +612,61 @@ describe('createSubstrateStreamFn', () => {
     });
   });
 
+  it('records fully cached stream usage in the model budget ledger', async () => {
+    const config = makeConfig();
+    config.modelRegistry = {
+      ...config.modelRegistry!,
+      models: config.modelRegistry!.models.map((entry) => (
+        entry.id === 'chat'
+          ? {
+            ...entry,
+            cost: {
+              inputPer1MUsd: 10,
+              outputPer1MUsd: 20,
+              cacheReadPer1MUsd: 2,
+              cacheWritePer1MUsd: 4,
+              currency: 'USD',
+            },
+          }
+          : entry
+      )),
+    };
+    const streamFn = makeStreamFn(config);
+
+    streamAdapterMocks.transportStream.mockResolvedValue({
+      content: 'cached response',
+      toolCalls: [],
+      model: 'openrouter/deepseek/deepseek-v3.2',
+      inputTokens: 100,
+      outputTokens: 5,
+      usageDetails: {
+        input: 0,
+        output: 5,
+        cacheRead: 100,
+        cacheWrite: 20,
+        totalTokens: 125,
+      },
+      stopReason: 'stop',
+    });
+
+    const stream = await streamFn(resolveModel(config, 'chat'), {
+      systemPrompt: 'System',
+      messages: [{ role: 'user', content: 'reuse the cached prompt' }],
+    } as any, {});
+    await collectStreamEvents(stream as AsyncIterable<unknown>);
+
+    const raw = readFileSync(join(config.dataDir, MODEL_USAGE_LEDGER_FILE_NAME), 'utf-8');
+    const parsed = JSON.parse(raw) as { records: Array<Record<string, unknown>> };
+    expect(parsed.records).toHaveLength(1);
+    expect(parsed.records[0]).toMatchObject({
+      inputTokens: 0,
+      outputTokens: 5,
+      cacheReadTokens: 100,
+      cacheWriteTokens: 20,
+    });
+    expect(parsed.records[0]?.estimatedCostUsd).toBeCloseTo(0.00038, 8);
+  });
+
   it('limits budget preflight token estimation to prompt messages while recording provider usage', async () => {
     const baseConfig = makeConfig();
     const baseRegistry = baseConfig.modelRegistry!;

@@ -296,4 +296,53 @@ describe('resolveModelUsageCostRatesForIdentity', () => {
       model: 'text-embedding-3-small',
     })).toBeUndefined();
   });
+
+  it('fails closed for ambiguous exact identities regardless of registry order', () => {
+    const dataDir = '/tmp/psfn-model-budget-ambiguous-rate-resolution';
+    const base = makeConfig(dataDir);
+    const pricedEntry = {
+      id: 'embedding-priced',
+      rank: 30,
+      identity: {
+        provider: 'api',
+        model: 'text-embedding-3-small',
+        source: { type: 'api' as const },
+      },
+      purposes: [{ purpose: 'memory' as const, primary: true }],
+      cost: {
+        inputPer1MUsd: 2,
+        currency: 'USD',
+      },
+    };
+    const unpricedEntry = {
+      id: 'embedding-unpriced',
+      rank: 40,
+      identity: {
+        provider: 'api',
+        model: 'text-embedding-3-small',
+        source: { type: 'api' as const },
+      },
+      purposes: [{ purpose: 'chat' as const, primary: false }],
+    };
+
+    for (const ambiguousEntries of [
+      [pricedEntry, unpricedEntry],
+      [unpricedEntry, pricedEntry],
+    ]) {
+      const config = makeConfig(dataDir, {
+        modelRegistry: {
+          ...base.modelRegistry!,
+          models: [
+            ...base.modelRegistry!.models,
+            ...ambiguousEntries,
+          ],
+        },
+      });
+
+      expect(resolveModelUsageCostRatesForIdentity(config, {
+        provider: 'api',
+        model: 'text-embedding-3-small',
+      })).toBeUndefined();
+    }
+  });
 });

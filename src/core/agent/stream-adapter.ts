@@ -250,6 +250,8 @@ function executeStreamCandidate(params: ExecuteStreamCandidateParams): AsyncGene
               process: params.processName,
               inputTokens: toUsageCount(event.message.usage.input),
               outputTokens: toUsageCount(event.message.usage.output),
+              cacheReadTokens: toUsageCount(event.message.usage.cacheRead),
+              cacheWriteTokens: toUsageCount(event.message.usage.cacheWrite),
               correlation: params.requestContext,
             });
 

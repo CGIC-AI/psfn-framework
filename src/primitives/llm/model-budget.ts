@@ -248,7 +248,10 @@ function resolveRegistryEntryForIdentity(
   }
 
   const candidateKey = toModelKey(identity.provider, identity.model);
-  return registry.models.find((entry) => toModelKey(entry.identity.provider, entry.identity.model) === candidateKey);
+  const matches = registry.models.filter(
+    (entry) => toModelKey(entry.identity.provider, entry.identity.model) === candidateKey,
+  );
+  return matches.length === 1 ? matches[0] : undefined;
 }
 
 function resolveUsdCostRates(

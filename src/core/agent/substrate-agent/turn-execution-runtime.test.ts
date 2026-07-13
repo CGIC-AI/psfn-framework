@@ -1154,8 +1154,8 @@ describe('handleMessageForTurn fatigue enforcement', () => {
       durableResponse = args.at(-1) as AgentResponse;
       return 2;
     });
-    const localCompanionId = '11111111-1111-4111-8111-111111111111';
-    const peerCompanionId = '22222222-2222-4222-8222-222222222222';
+    const localCompanionId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+    const peerCompanionId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
     const channelId = `companion-dm:${localCompanionId}:${peerCompanionId}`;
     const correlation = {
       conversationId: '44444444-4444-4444-8444-444444444444',
@@ -1345,8 +1345,8 @@ describe('handleMessageForTurn fatigue enforcement', () => {
 
   it('uses the durable completed-turn marker to avoid scheduling post-turn work twice', async () => {
     const { fatigueBudget } = createFatigueBudgetHarness();
-    const localCompanionId = '11111111-1111-4111-8111-111111111111';
-    const peerCompanionId = '22222222-2222-4222-8222-222222222222';
+    const localCompanionId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+    const peerCompanionId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
     const channelId = `companion-dm:${localCompanionId}:${peerCompanionId}`;
     const sourceMessageId = 'companion-initiation:33333333-3333-4333-8333-333333333333';
     const correlation = {
@@ -1978,18 +1978,18 @@ describe('handleMessageForTurn compaction scheduling', () => {
       awaitPendingAutoCompaction: vi.fn(async () => undefined),
       recordUserMessage: vi.fn(() => null),
       recordAssistantMessage: vi.fn(() => 2),
-      configOverrides: { companionId: '11111111-1111-4111-8111-111111111111' },
+      configOverrides: { companionId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' },
     });
     const maybeExtract = vi.fn(async () => undefined);
     runtime.memoryExtractor = { maybeExtract };
     const correlation = {
       conversationId: '44444444-4444-4444-8444-444444444444',
       rootInitiationId: '99999999-9999-4999-8999-999999999999',
-      initiatedByCompanionId: '11111111-1111-4111-8111-111111111111',
-      localCompanionId: '11111111-1111-4111-8111-111111111111',
-      peerCompanionId: '22222222-2222-4222-8222-222222222222',
+      initiatedByCompanionId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      localCompanionId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      peerCompanionId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
       peerContactId: 'contact-nova',
-      channelId: 'companion-dm:11111111-1111-4111-8111-111111111111:22222222-2222-4222-8222-222222222222',
+      channelId: 'companion-dm:aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa:bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
       turnId: '018f22a2-52b8-7a3a-8c16-25b7b14f7081',
       messageId: 'icp-initiation:33333333-3333-4333-8333-333333333333',
       requestId: 'icp-initiation:33333333-3333-4333-8333-333333333333',

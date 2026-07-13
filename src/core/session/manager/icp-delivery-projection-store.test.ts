@@ -3,8 +3,8 @@ import type { SessionStore } from '../../../persistence/sessions/store.js';
 import type { SessionEntry } from '../types.js';
 import { createIcpDeliveryProjectionStore } from './icp-delivery-projection-store.js';
 
-const LOCAL_COMPANION_ID = '11111111-1111-4111-8111-111111111111';
-const PEER_COMPANION_ID = '22222222-2222-4222-8222-222222222222';
+const LOCAL_COMPANION_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+const PEER_COMPANION_ID = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
 
 function buildRecoveryResponse(channelId: string, sourceMessageId: string) {
   const correlation = {
@@ -41,7 +41,7 @@ function buildRecoveryResponse(channelId: string, sourceMessageId: string) {
 
 describe('ICP delivery projection store', () => {
   it('projects a delivered assistant entry when its observation is over 5,000 rows behind the tail', () => {
-    const channelId = 'companion-dm:11111111-1111-4111-8111-111111111111:22222222-2222-4222-8222-222222222222';
+    const channelId = 'companion-dm:aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa:bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
     const sourceMessageId = 'companion-source-1';
     const entries: SessionEntry[] = [{
       id: 1,
@@ -113,7 +113,7 @@ describe('ICP delivery projection store', () => {
   });
 
   it('treats a delivered observation with turn completion as delivered', () => {
-    const channelId = 'companion-dm:11111111-1111-4111-8111-111111111111:22222222-2222-4222-8222-222222222222';
+    const channelId = 'companion-dm:aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa:bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
     const sourceMessageId = 'companion-source-completed';
     const entries: SessionEntry[] = [{
       id: 1,

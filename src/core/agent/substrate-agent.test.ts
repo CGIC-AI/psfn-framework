@@ -2226,7 +2226,7 @@ describe('SubstrateAgent.handleMessage', () => {
   });
 
   it('runs a private ICP initiation through the ordinary turn without persisting the trigger', async () => {
-    const config = makeConfig({ companionId: '11111111-1111-4111-8111-111111111111' });
+    const config = makeConfig({ companionId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' });
     const sessionManager = makeMockSessionManager();
     const agent = new SubstrateAgent(
       new EventBus(), makeMockLLMProvider(), sessionManager, 'test', config,
@@ -2246,11 +2246,11 @@ describe('SubstrateAgent.handleMessage', () => {
     const correlation = {
       conversationId: '44444444-4444-4444-8444-444444444444',
       rootInitiationId: '33333333-3333-4333-8333-333333333333',
-      initiatedByCompanionId: '11111111-1111-4111-8111-111111111111',
-      localCompanionId: '11111111-1111-4111-8111-111111111111',
-      peerCompanionId: '22222222-2222-4222-8222-222222222222',
+      initiatedByCompanionId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      localCompanionId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      peerCompanionId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
       peerContactId: 'contact-nova',
-      channelId: 'companion-dm:11111111-1111-4111-8111-111111111111:22222222-2222-4222-8222-222222222222',
+      channelId: 'companion-dm:aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa:bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
       turnId: '018f22a2-52b8-7a3a-8c16-25b7b14f7081',
       messageId: 'icp-initiation:33333333-3333-4333-8333-333333333333',
       requestId: 'icp-initiation:33333333-3333-4333-8333-333333333333',
@@ -2315,7 +2315,7 @@ describe('SubstrateAgent.handleMessage', () => {
   });
 
   it('does not start private ICP post-turn work when delivery finalization fails', async () => {
-    const config = makeConfig({ companionId: '11111111-1111-4111-8111-111111111111' });
+    const config = makeConfig({ companionId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' });
     const sessionManager = makeMockSessionManager();
     const agent = new SubstrateAgent(
       new EventBus(), makeMockLLMProvider(), sessionManager, 'test', config,
@@ -2335,11 +2335,11 @@ describe('SubstrateAgent.handleMessage', () => {
     const correlation = {
       conversationId: '44444444-4444-4444-8444-444444444444',
       rootInitiationId: '33333333-3333-4333-8333-333333333333',
-      initiatedByCompanionId: '11111111-1111-4111-8111-111111111111',
-      localCompanionId: '11111111-1111-4111-8111-111111111111',
-      peerCompanionId: '22222222-2222-4222-8222-222222222222',
+      initiatedByCompanionId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      localCompanionId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      peerCompanionId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
       peerContactId: 'contact-nova',
-      channelId: 'companion-dm:11111111-1111-4111-8111-111111111111:22222222-2222-4222-8222-222222222222',
+      channelId: 'companion-dm:aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa:bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
       turnId: '018f22a2-52b8-7a3a-8c16-25b7b14f7081',
       messageId: 'icp-initiation:33333333-3333-4333-8333-333333333333',
       requestId: 'icp-initiation:33333333-3333-4333-8333-333333333333',

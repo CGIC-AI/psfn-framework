@@ -1221,9 +1221,48 @@ describe('handleMessageForTurn fatigue enforcement', () => {
       },
     });
     const forgedContactRecovery = structuredClone(durableResponse);
-    forgedContactRecovery.metadata.icpCorrelation = {
+    const forgedCorrelation = {
       ...correlation,
       peerContactId: 'forged-contact',
+    };
+    forgedContactRecovery.metadata.icpCorrelation = forgedCorrelation;
+    if (!forgedContactRecovery.metadata.fatigue
+      || !forgedContactRecovery.metadata.fatiguePendingSpend) {
+      throw new Error('test expected fatigue metadata for forged contact recovery');
+    }
+    forgedContactRecovery.metadata.fatigue = {
+      ...forgedContactRecovery.metadata.fatigue,
+      scope: {
+        ...forgedContactRecovery.metadata.fatigue.scope,
+        peerContactId: 'forged-contact',
+      },
+      peer: {
+        ...forgedContactRecovery.metadata.fatigue.peer,
+        contactId: 'forged-contact',
+      },
+      triggeringAuthor: {
+        ...forgedContactRecovery.metadata.fatigue.triggeringAuthor,
+        contactId: 'forged-contact',
+      },
+    };
+    forgedContactRecovery.metadata.fatiguePendingSpend = {
+      ...forgedContactRecovery.metadata.fatiguePendingSpend,
+      scope: {
+        ...forgedContactRecovery.metadata.fatiguePendingSpend.scope,
+        peerContactId: 'forged-contact',
+      },
+      peer: {
+        ...forgedContactRecovery.metadata.fatiguePendingSpend.peer,
+        contactId: 'forged-contact',
+      },
+      triggeringAuthor: {
+        ...forgedContactRecovery.metadata.fatiguePendingSpend.triggeringAuthor,
+        contactId: 'forged-contact',
+      },
+      correlation: {
+        ...forgedContactRecovery.metadata.fatiguePendingSpend.correlation,
+        icpCorrelation: forgedCorrelation,
+      },
     };
     const promptCallsBeforeForgedRecovery = runtime.agent.prompt.mock.calls.length;
     await expect(handleMessageForTurn(runtime, message, {
@@ -1233,12 +1272,37 @@ describe('handleMessageForTurn fatigue enforcement', () => {
     expect(runtime.agent.prompt).toHaveBeenCalledTimes(promptCallsBeforeForgedRecovery);
     expect(history.events).toHaveLength(0);
 
+    const pendingSpend = durableResponse.metadata.fatiguePendingSpend;
+    const fatigue = durableResponse.metadata.fatigue;
+    if (!pendingSpend || !fatigue) {
+      throw new Error('test expected durable fatigue recovery metadata');
+    }
+    const suppliedRecordedEvent = {
+      timestampMs: pendingSpend.timestampMs,
+      amount: pendingSpend.amount,
+      decision: pendingSpend.decision,
+      reason: pendingSpend.reason,
+      spentAfter: 99,
+      remainingAllowance: 0,
+      normalSpentAfter: 99,
+      overchargeSpentAfter: 99,
+      overchargeAllowance: pendingSpend.limits.overchargeLimit,
+      remainingOvercharge: 0,
+      softState: 'soft_limit_reached' as const,
+      hardState: 'exhausted' as const,
+    };
+    const markedRecovery = structuredClone(durableResponse);
+    markedRecovery.metadata.fatigue = {
+      ...fatigue,
+      recordedEvent: suppliedRecordedEvent,
+    };
+    const recordPendingSpend = vi.spyOn(fatigueBudget, 'recordPendingSpend');
     const recovered = await handleMessageForTurn(runtime, message, {
-      recoveredResponse: durableResponse,
+      recoveredResponse: markedRecovery,
       finalizeDelivery: async () => undefined,
     });
     const replayedRecovery = await handleMessageForTurn(runtime, message, {
-      recoveredResponse: durableResponse,
+      recoveredResponse: markedRecovery,
       finalizeDelivery: async () => undefined,
     });
     const parsedRecovered = parseIcpRecoveryResponse(recovered, {
@@ -1247,23 +1311,35 @@ describe('handleMessageForTurn fatigue enforcement', () => {
       expectedSourceMessageId: correlation.messageId,
     });
 
-    const pendingSpend = durableResponse.metadata.fatiguePendingSpend;
-    expect(pendingSpend).toBeDefined();
-    expect(parsedRecovered.metadata.fatigue?.recordedEvent).toMatchObject({
-      timestampMs: pendingSpend?.timestampMs,
-      amount: pendingSpend?.amount,
-      decision: pendingSpend?.decision,
-      reason: pendingSpend?.reason,
-      spentAfter: 1,
-    });
+    expect(recordPendingSpend).toHaveBeenCalledTimes(2);
+    expect(history.events).toHaveLength(1);
+    const ledgerEvent = history.events[0];
+    expect(ledgerEvent).toBeDefined();
+    const authoritativeRecordedEvent = {
+      timestampMs: ledgerEvent.timestampMs,
+      amount: ledgerEvent.amount,
+      decision: ledgerEvent.decision,
+      reason: ledgerEvent.reason,
+      spentAfter: ledgerEvent.spentAfter,
+      remainingAllowance: ledgerEvent.remainingAllowance,
+      normalSpentAfter: ledgerEvent.normalSpentAfter,
+      overchargeSpentAfter: ledgerEvent.overchargeSpentAfter,
+      overchargeAllowance: ledgerEvent.overchargeAllowance,
+      remainingOvercharge: ledgerEvent.remainingOvercharge,
+      softState: ledgerEvent.softState,
+      hardState: ledgerEvent.hardState,
+    };
+    expect(parsedRecovered.metadata.fatigue?.recordedEvent)
+      .toEqual(authoritativeRecordedEvent);
+    expect(parsedRecovered.metadata.fatigue?.recordedEvent)
+      .not.toEqual(suppliedRecordedEvent);
     expect(replayedRecovery.metadata.fatigue?.recordedEvent)
       .toEqual(parsedRecovered.metadata.fatigue?.recordedEvent);
-    expect(history.events).toHaveLength(1);
     expect(history.events[0]).toMatchObject({
-      timestampMs: pendingSpend?.timestampMs,
-      amount: pendingSpend?.amount,
-      decision: pendingSpend?.decision,
-      reason: pendingSpend?.reason,
+      timestampMs: pendingSpend.timestampMs,
+      amount: pendingSpend.amount,
+      decision: pendingSpend.decision,
+      reason: pendingSpend.reason,
     });
   });
 

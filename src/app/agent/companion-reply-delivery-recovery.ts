@@ -60,6 +60,12 @@ export function createCompanionReplyDeliveryLifecycle(input: {
       if (!correlation) {
         throw new Error('Correlated companion reply is missing response ICP correlation');
       }
+      if (deliveryObservation?.status === 'delivered') {
+        if (!response.content.trim()) {
+          throw new Error('Delivered companion reply is missing transport content');
+        }
+        return;
+      }
       if (!response.content.trim()) {
         if (deliveryObservation?.status !== 'suppressed') {
           await input.agent.recordIcpDeliveryObservation({
@@ -78,8 +84,6 @@ export function createCompanionReplyDeliveryLifecycle(input: {
         }
         return;
       }
-
-      if (deliveryObservation?.status === 'delivered') return;
 
       let delivery: Awaited<ReturnType<CompanionReplyDeliveryGatewayPort['companionSend']>>;
       try {

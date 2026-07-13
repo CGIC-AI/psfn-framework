@@ -64,6 +64,7 @@ describe('ICP delivery projection store', () => {
         sourceMessageId,
         status: 'delivered',
         gatewayMessageId: 'companion:stable-delivery-1',
+        recoveryResponse: buildRecoveryResponse(channelId, sourceMessageId),
       }),
       timestamp: 2,
     }];

@@ -94,6 +94,7 @@ import { hasVisionTurnInputs } from './vision-attachments.js';
 import type { SessionEntry } from '../../session/types.js';
 import type { ConversationScopeSpeaker } from '../../session/conversation-scope.js';
 import type { IntakeFirewallMode } from '../../../system/config/intake-policy-config.js';
+import { parseIcpRecoveryResponse } from '../../session/icp-delivery-recovery.js';
 
 const log = createComponentLogger('SubstrateAgent');
 
@@ -622,7 +623,13 @@ export async function handleMessageForTurn(
   deliveryLifecycle?: TurnDeliveryLifecycle,
 ): Promise<AgentResponse> {
   const requestId = message.id;
-  const recoveredResponse = deliveryLifecycle?.recoveredResponse;
+  const recoveredResponse = deliveryLifecycle?.recoveredResponse
+    ? parseIcpRecoveryResponse(deliveryLifecycle.recoveredResponse, {
+        label: 'Recovered turn response',
+        expectedChannelId: message.channelId,
+        expectedSourceMessageId: message.id,
+      })
+    : undefined;
   const privateIcpCorrelation = message.routing?.privateTurnTrigger === true
     ? parseIcpConversationCorrelation(message.routing.icpCorrelation)
     : null;
@@ -1336,8 +1343,7 @@ export async function handleMessageForTurn(
         decision: responseFatigueMetadata.decision,
         ...runtime.withCorrelationPurpose(turnCorrelationBase, 'agent.fatigue.recorded'),
       });
-    } else if (recoveredResponse?.metadata.fatiguePendingSpend
-      && !recoveredResponse.metadata.fatigue?.recordedEvent) {
+    } else if (recoveredResponse?.metadata.fatiguePendingSpend) {
       if (!runtime.fatigueBudget || !responseFatigueMetadata) {
         throw new Error('Recovered fatigue spend requires budget runtime and enforcement metadata');
       }

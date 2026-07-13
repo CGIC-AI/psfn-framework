@@ -103,6 +103,7 @@ describe('ICP L0 restart continuity', () => {
       sourceMessageId: SOURCE_ID,
       status: 'failed',
       error: 'peer route unavailable',
+      recoveryResponse,
     });
     recipient.recordUserMessage(
       CHANNEL,
@@ -186,6 +187,7 @@ describe('ICP L0 restart continuity', () => {
       gatewayMessageId: GATEWAY_ID,
       deliveredTo: [RECIPIENT],
       permitOutcome: 'consumed',
+      recoveryResponse,
     });
 
     const restarted = manager(root, 'sender');
@@ -244,6 +246,7 @@ describe('ICP L0 restart continuity', () => {
       status: 'delivered',
       gatewayMessageId: GATEWAY_ID,
       deliveredTo: [RECIPIENT],
+      recoveryResponse,
     });
     sender.appendSystemNote(
       CHANNEL,
@@ -255,6 +258,37 @@ describe('ICP L0 restart continuity', () => {
     const restarted = manager(root, 'sender');
     expect(() => restarted.findIcpDeliveryObservation(CHANNEL, SOURCE_ID))
       .toThrow(/malformed JSON/i);
+  });
+
+  it.each([
+    ['delivered without recovery evidence', {
+      status: 'delivered',
+      gatewayMessageId: GATEWAY_ID,
+    }],
+    ['failed without recovery evidence', {
+      status: 'failed',
+      error: 'peer route unavailable',
+    }],
+    ['delivered with whitespace-only transport content', {
+      status: 'delivered',
+      gatewayMessageId: GATEWAY_ID,
+      recoveryResponse: { ...recoveryResponse, content: ' \n\t ' },
+    }],
+  ])('fails closed after restart for %s', (_label, fields) => {
+    const root = mkdtempSync(join(tmpdir(), 'psfn-icp-invalid-delivery-evidence-'));
+    roots.push(root);
+    const sender = manager(root, 'sender');
+    sender.appendSystemNote(CHANNEL, JSON.stringify({
+      schemaVersion: 1,
+      kind: 'icp_delivery',
+      channelId: CHANNEL,
+      sourceMessageId: SOURCE_ID,
+      ...fields,
+    }), 'icp_delivery');
+
+    const restarted = manager(root, 'sender');
+    expect(() => restarted.findIcpDeliveryObservation(CHANNEL, SOURCE_ID))
+      .toThrow(/missing recovery response|transport content/i);
   });
 
   it('recovers ICP initiation, observation, and source attribution beyond 5,000 later rows', () => {
@@ -285,6 +319,7 @@ describe('ICP L0 restart continuity', () => {
       sourceMessageId: SOURCE_ID,
       status: 'failed',
       error: 'old failed delivery',
+      recoveryResponse,
     });
     sender.recordUserMessage(CHANNEL, 'Old replayed recipient input', SENDER, 'Selene', true, undefined, {
       turnId: '018f22a2-52b8-7a3a-8c16-25b7b14f7083' as TurnID,
@@ -306,6 +341,7 @@ describe('ICP L0 restart continuity', () => {
       sourceMessageId: SOURCE_ID,
       status: 'failed',
       error: 'old failed delivery',
+      recoveryResponse,
     });
     expect(restarted.hasRecordedSourceMessage(CHANNEL, recipientSourceId)).toBe(true);
   }, 60_000);
@@ -347,6 +383,7 @@ describe('ICP L0 restart continuity', () => {
       sourceMessageId: SOURCE_ID,
       status: 'failed',
       error: 'peer unavailable',
+      recoveryResponse,
     });
     for (let index = 0; index < 8; index += 1) {
       sender.recordUserMessage(CHANNEL, `Ordinary user context ${index} ${'A'.repeat(80)}`, 'user', 'User');

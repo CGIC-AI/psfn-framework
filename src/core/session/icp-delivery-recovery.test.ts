@@ -397,6 +397,88 @@ describe('ICP delivery recovery codec', () => {
   });
 
   it.each([
+    ['allowed charged without pending spend', recoveryWithFatigue({
+      fatigue: { ...fatigueMetadata, shouldRecordSpend: false },
+      fatiguePendingSpend: undefined,
+    })],
+    ['allowed charged with suppressed model disposition', recoveryWithFatigue({
+      fatigue: { ...fatigueMetadata, modelDisposition: 'suppressed' },
+    })],
+    ['allowed charged with a free spend decision', recoveryWithFatigue({
+      fatigue: {
+        ...fatigueMetadata,
+        spendDecision: 'free',
+        spendReason: 'peer_not_machine_intelligence',
+        budget: { ...fatigueBudget, amount: 0 },
+      },
+      fatiguePendingSpend: {
+        ...fatiguePendingSpend,
+        decision: 'free',
+        reason: 'peer_not_machine_intelligence',
+        amount: 0,
+      },
+    })],
+    ['wrap-up charged without pending spend', recoveryWithFatigue({
+      fatigue: {
+        ...fatigueMetadata,
+        decision: 'wrap_up_charged',
+        shouldRecordSpend: false,
+      },
+      fatiguePendingSpend: undefined,
+    })],
+    ['overcharge charged without pending spend', recoveryWithFatigue({
+      icpCorrelation: { ...correlation, fatigueDecision: 'allow_overcharge' },
+      fatigue: {
+        ...fatigueMetadata,
+        decision: 'overcharge_charged',
+        shouldRecordSpend: false,
+        spendDecision: 'overcharge',
+        spendReason: 'overcharge_work_intent_wrapup',
+      },
+      fatiguePendingSpend: undefined,
+    })],
+    ['allowed free with pending spend', recoveryWithFatigue({
+      fatigue: {
+        ...fatigueMetadata,
+        decision: 'allowed_free',
+        shouldRecordSpend: true,
+        spendDecision: 'free',
+        spendReason: 'peer_not_machine_intelligence',
+        budget: { ...fatigueBudget, amount: 0 },
+      },
+      fatiguePendingSpend: {
+        ...fatiguePendingSpend,
+        decision: 'free',
+        reason: 'peer_not_machine_intelligence',
+        amount: 0,
+      },
+    })],
+    ['suppression with pending spend', {
+      ...recoveryWithFatigue({
+        icpCorrelation: { ...correlation, fatigueDecision: 'suppress' },
+        fatigue: {
+          ...fatigueMetadata,
+          decision: 'suppressed_hard_exhausted',
+          modelDisposition: 'suppressed',
+          shouldRecordSpend: true,
+        },
+        fatiguePendingSpend: {
+          ...fatiguePendingSpend,
+          correlation: {
+            ...fatiguePendingSpend.correlation,
+            icpCorrelation: { ...correlation, fatigueDecision: 'suppress' },
+          },
+        },
+      }),
+      content: '',
+    }],
+  ])('rejects contradictory fatigue decision matrix: %s', (_label, malformed) => {
+    expect(() => parseIcpRecoveryResponse(malformed, {
+      label: 'test recovery response',
+    })).toThrow(/fatigue.*decision matrix/i);
+  });
+
+  it.each([
     ['visible content', { content: 'forged deliverable text' }],
     ['an attachment', {
       attachments: [{
@@ -428,6 +510,35 @@ describe('ICP delivery recovery codec', () => {
       channelId: CHANNEL,
       sourceMessageId: SOURCE,
     })).toThrow(/suppressed.*deliverable|status.*fatigue decision/i);
+  });
+
+  it.each([
+    ['delivered without recovery evidence', {
+      status: 'delivered',
+      gatewayMessageId: 'companion-reply-stable',
+    }],
+    ['failed without recovery evidence', {
+      status: 'failed',
+      error: 'transport failed',
+    }],
+    ['delivered with whitespace-only transport content', {
+      status: 'delivered',
+      gatewayMessageId: 'companion-reply-stable',
+      recoveryResponse: { ...recoveryResponse, content: ' \n\t ' },
+    }],
+  ])('rejects %s', (_label, fields) => {
+    const observation = JSON.stringify({
+      schemaVersion: 1,
+      kind: 'icp_delivery',
+      channelId: CHANNEL,
+      sourceMessageId: SOURCE,
+      ...fields,
+    });
+
+    expect(() => parseIcpDeliveryObservation(observation, {
+      channelId: CHANNEL,
+      sourceMessageId: SOURCE,
+    })).toThrow(/missing recovery response|transport content/i);
   });
 
   it('requires internal state and snapshot reference as a verified pair', () => {

@@ -204,6 +204,21 @@ export function createIcpTargetChannelInitiator(input: {
     };
 
     const finalizeDelivery = async (): Promise<IcpTargetChannelInitiationResult> => {
+      if (lastDeliveryObservation?.status === 'delivered') {
+        if (!content.trim()) {
+          throw new Error('Delivered ICP observation is missing transport content');
+        }
+        if (!lastDeliveryObservation.gatewayMessageId || !lastDeliveryObservation.deliveredTo) {
+          throw new Error('Delivered ICP observation is missing gateway delivery facts');
+        }
+        return {
+          disposition: 'delivered',
+          recoveredTurn,
+          correlation,
+          gatewayMessageId: lastDeliveryObservation.gatewayMessageId,
+          deliveredTo: [...lastDeliveryObservation.deliveredTo],
+        };
+      }
       if (!content.trim()) {
         if (lastDeliveryObservation?.status !== 'suppressed') {
           if (!turnResponse) {
@@ -236,19 +251,6 @@ export function createIcpTargetChannelInitiator(input: {
           await input.agent.recordIcpDeliveryObservation(lastDeliveryObservation);
         }
         return { disposition: 'suppressed', recoveredTurn, correlation };
-      }
-
-      if (lastDeliveryObservation?.status === 'delivered') {
-        if (!lastDeliveryObservation.gatewayMessageId || !lastDeliveryObservation.deliveredTo) {
-          throw new Error('Delivered ICP observation is missing gateway delivery facts');
-        }
-        return {
-          disposition: 'delivered',
-          recoveredTurn,
-          correlation,
-          gatewayMessageId: lastDeliveryObservation.gatewayMessageId,
-          deliveredTo: [...lastDeliveryObservation.deliveredTo],
-        };
       }
 
       try {

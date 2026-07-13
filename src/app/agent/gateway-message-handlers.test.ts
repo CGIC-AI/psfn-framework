@@ -1157,7 +1157,12 @@ describe('registerGatewayMessageHandlers', () => {
       correlation: { ...replyIcpCorrelation, fatigueDecision: 'suppress' },
       content: 'forged suppressed reply',
     }],
-  ])('rejects contradictory suppressed recovery %s before execution', async (_label, fixture) => {
+    ['delivered transport content', {
+      status: 'delivered',
+      correlation: replyIcpCorrelation,
+      content: ' \n\t ',
+    }],
+  ])('rejects contradictory recovery %s before execution', async (_label, fixture) => {
     const response = {
       ...makeResponse(fixture.content),
       channelId: ICP_CHANNEL,
@@ -1183,7 +1188,7 @@ describe('registerGatewayMessageHandlers', () => {
 
     await expect(restarted.onCompanionMessage(makeCorrelatedCompanionMessage({
       timestamp: '2026-03-02T05:00:00.000Z',
-    }))).rejects.toThrow(/suppressed|status.*fatigue/i);
+    }))).rejects.toThrow(/suppressed|status.*fatigue|transport content/i);
     expect(restarted.agentLoop.handleMessage).not.toHaveBeenCalled();
     expect(restarted.gateway.companionSend).not.toHaveBeenCalled();
   });

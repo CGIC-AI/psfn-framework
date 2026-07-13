@@ -63,6 +63,9 @@ export function assertIcpRecoveryStatusBinding(
     && (response.content.trim().length > 0 || (response.attachments?.length ?? 0) > 0)) {
     throw new Error(`${label} suppressed recovery contains a deliverable response`);
   }
+  if (status === 'delivered' && response.content.trim().length === 0) {
+    throw new Error(`${label} delivered recovery is missing transport content`);
+  }
   if (status !== undefined
     && correlation.fatigueDecision === 'suppress'
     && status !== 'suppressed') {
@@ -218,13 +221,10 @@ export function parseIcpDeliveryObservation(
         expectedChannelId: expected.channelId,
         expectedSourceMessageId: expected.sourceMessageId,
       });
-  if ((status === 'prepared' || status === 'suppressed' || parsed.turnCompleted === true)
-    && !recoveryResponse) {
-    throw new Error(`Recorded ${status} ICP observation is missing recoveryResponse`);
+  if (!recoveryResponse) {
+    throw new Error(`Recorded ${status} ICP observation is missing recovery response`);
   }
-  if (recoveryResponse) {
-    assertIcpRecoveryStatusBinding(status, recoveryResponse, 'Recorded ICP delivery');
-  }
+  assertIcpRecoveryStatusBinding(status, recoveryResponse, 'Recorded ICP delivery');
   return {
     channelId: expected.channelId,
     sourceMessageId: expected.sourceMessageId,
@@ -239,7 +239,7 @@ export function parseIcpDeliveryObservation(
       ? { permitOutcome: parsed.permitOutcome }
       : {}),
     ...(typeof parsed.error === 'string' ? { error: parsed.error.trim() } : {}),
-    ...(recoveryResponse ? { recoveryResponse } : {}),
+    recoveryResponse,
     ...(parsed.turnCompleted === true ? { turnCompleted: true as const } : {}),
   };
 }

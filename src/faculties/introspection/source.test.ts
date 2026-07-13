@@ -3,10 +3,12 @@ import type { TurnRecord } from '../../shared/contracts/runtime.js';
 import { createTurnRecordIntrospectionSource } from './source.js';
 
 function record(overrides: Partial<TurnRecord> = {}): TurnRecord {
+  const turnId = overrides.turnId ?? '019d2326-d9e1-701d-bcee-250d2cbb0e4e';
+  const requestId = overrides.requestId ?? 'request-1';
   return {
     schemaVersion: 1,
-    turnId: '019d2326-d9e1-701d-bcee-250d2cbb0e4e',
-    requestId: 'request-1',
+    turnId,
+    requestId,
     channelId: 'discord:public-room',
     channelType: 'discord',
     startedAt: 1_700_000_000_000,
@@ -17,6 +19,11 @@ function record(overrides: Partial<TurnRecord> = {}): TurnRecord {
       contentMode: 'verbatim_public',
       channelPrivacy: 'public',
       contentSensitivity: 'non_intimate',
+      contentSensitivityActor: {
+        kind: 'companion',
+        turnId,
+        requestId,
+      },
       reason: 'explicit_public_non_dm',
     },
     userMessage: { role: 'user', content: 'Public question', timestamp: 1_700_000_000_000 },
@@ -120,7 +127,7 @@ describe('turn-record introspection source', () => {
     })]);
   });
 
-  it('paginates through older sessions and turns instead of stranding the audit backlog', () => {
+  it('advances a bounded cursor through older sessions and turns across repeated runs', () => {
     const sessions = [
       { sessionId: 'discord:newer-room', sourceChannelId: 'discord:newer-room' },
       { sessionId: 'discord:public-room', sourceChannelId: 'discord:public-room' },
@@ -139,15 +146,16 @@ describe('turn-record introspection source', () => {
       },
     });
 
-    const candidates = source.listCandidates({
+    const input = {
       allowedPublicChannelIds: ['discord:public-room'],
       recentSessionLimit: 1,
       recentTurnLimit: 2,
       maxSourceChars: 1_000,
-    });
+    };
+    const candidates = Array.from({ length: 6 }, () => source.listCandidates(input)).flat();
 
-    expect(candidates.map(candidate => candidate.sourceRef)).toEqual(
-      turns.map(turn => `turn:${turn.turnId}`),
+    expect([...new Set(candidates.map(candidate => candidate.sourceRef))].sort()).toEqual(
+      turns.map(turn => `turn:${turn.turnId}`).sort(),
     );
   });
 });

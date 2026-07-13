@@ -8,6 +8,7 @@ import { SessionStore } from '../../../persistence/sessions/store.js';
 import { createTurnId } from '../../turns/id.js';
 import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
 import { TurnSupportRuntime } from './turn-support-runtime.js';
+import { IntrospectionTurnSensitivityDecisions } from '../../../faculties/introspection/turn-sensitivity.js';
 
 function createDeferred<T>() {
   let resolve!: (value: T | PromiseLike<T>) => void;
@@ -152,6 +153,67 @@ describe('TurnSupportRuntime role-envelope projections', () => {
     });
 
     expect(record.roleEnvelopeRefs).toEqual(['turn_record_summary:env_runtime_projection_1']);
+  });
+
+  it('consumes only a companion-owned current-turn sensitivity decision into durable privacy provenance', () => {
+    const runtime = new TurnSupportRuntime({
+      eventBus: new EventBus(),
+      sessionManager,
+      hashPromptText: (text) => `hash:${text.length}`,
+      resolveContextWindow: () => 1_000,
+    });
+    const decisions = new IntrospectionTurnSensitivityDecisions();
+    runtime.setIntrospectionTurnSensitivityDecisions(decisions);
+    const turnId = createTurnId();
+    const requestId = 'runtime-audit-sensitivity-turn';
+    decisions.mark({ turnId, requestId, sensitivity: 'non_intimate' });
+    const input = {
+      message: {
+        id: requestId,
+        channelId: 'api:public-room',
+        channelType: 'api' as const,
+        authorId: 'user-1',
+        authorName: 'User',
+        content: 'Compare these public project plans.',
+        timestamp: new Date('2026-07-13T14:00:00.000Z'),
+        isDirectMessage: false,
+        routing: { channelPrivacy: 'public' as const },
+      },
+      turnId,
+      requestId,
+      startedAt: 1_773_669_600_000,
+      completedAt: 1_773_669_600_050,
+      userSessionEntryId: null,
+      assistantSessionEntryId: null,
+      response: {
+        content: 'I would compare cost and reversibility first.',
+        channelId: 'api:public-room',
+        metadata: {
+          model: 'test-model',
+          inputTokens: 10,
+          outputTokens: 10,
+          durationMs: 50,
+        },
+      },
+      turnMessages: [],
+      promptMode: 'default' as const,
+      promptText: 'System prompt',
+      contextMessageCount: 1,
+      memoryContextChars: 0,
+      trustLevel: 'regular' as const,
+      speakerRole: 'user' as const,
+      retrievalProvenanceRefs: [],
+    };
+
+    expect(runtime.buildTurnRecord(input).auditPrivacy).toMatchObject({
+      contentMode: 'verbatim_public',
+      contentSensitivity: 'non_intimate',
+      contentSensitivityActor: { kind: 'companion', turnId, requestId },
+    });
+    expect(runtime.buildTurnRecord(input).auditPrivacy).toMatchObject({
+      contentMode: 'emotional_signal_only',
+      contentSensitivity: 'ambiguous',
+    });
   });
 });
 

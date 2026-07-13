@@ -88,6 +88,12 @@ export interface TurnRecordAuditPrivacy {
   contentMode: 'verbatim_public' | 'emotional_signal_only';
   channelPrivacy?: ChannelPrivacy;
   contentSensitivity: 'non_intimate' | 'intimate' | 'ambiguous';
+  /** Present only when the companion classified this exact current turn. */
+  contentSensitivityActor?: {
+    kind: 'companion';
+    turnId: TurnID;
+    requestId: string;
+  };
   reason:
     | 'explicit_public_non_dm'
     | 'direct_message'
@@ -278,7 +284,7 @@ export type ReflectionScopeHint =
   | { kind: 'group'; roomId: string; roomName?: string };
 
 export interface MessageRoutingMetadata {
-  source?: 'wyoming' | 'discord' | 'api' | 'psfn-amica' | 'satellite' | 'companion' | 'unknown';
+  source?: 'wyoming' | 'discord' | 'telegram' | 'api' | 'psfn-amica' | 'satellite' | 'companion' | 'unknown';
   /**
    * Transport-level response disposition. `observe` messages are recorded as
    * context but must not trigger model response generation or channel egress.
@@ -299,13 +305,6 @@ export interface MessageRoutingMetadata {
   satellite?: SatelliteRoutingMetadata;
   broadcast?: BroadcastRoutingMetadata;
   channelPrivacy?: ChannelPrivacy;
-  /**
-   * Trusted write-time classification for introspection replay. Ingress clients
-   * cannot claim this field directly: only an in-process, policy-owned producer
-   * may stamp it. Absence is ambiguous and therefore never permits verbatim
-   * replay, even on an explicitly public channel.
-   */
-  auditContentSensitivity?: 'non_intimate' | 'intimate' | 'ambiguous';
   modelOverride?: MessageModelOverride;
   promptOverride?: MessagePromptOverride;
   responseStyle?: ResponseStyle;

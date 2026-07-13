@@ -1,13 +1,16 @@
 import type { Pool } from 'pg';
+import type { IncomingMessage } from 'node:http';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { LLMProviderPort } from '../../core/agent/contracts.js';
+import { buildTurnRecord } from '../../core/agent/substrate-agent/turn-records.js';
 import { Scheduler } from '../../core/scheduler/scheduler.js';
 import { createPostgresPool } from '../../persistence/postgres.js';
-import type { LLMContext, LLMResponse, TurnRecord } from '../../shared/contracts/runtime.js';
+import type { LLMContext, LLMResponse, TurnID } from '../../shared/contracts/runtime.js';
 import { EventBus } from '../../shared/event-bus.js';
+import { buildSubstrateMessage } from '../../channels/api/server/session.js';
 import { DEFAULT_INTROSPECTION_AUDIT_CONFIG } from '../../system/config/scheduler-config.js';
 import {
   DEFAULT_POSTGRES_TEST_IMAGE,
@@ -24,6 +27,7 @@ import { createLLMCompanionLandmarkReflector, createLLMIntrospectionAuditor } fr
 import { IntrospectionAuditRuntime } from './runtime.js';
 import { registerIntrospectionAuditTask } from './scheduler-lane.js';
 import { createTurnRecordIntrospectionSource } from './source.js';
+import { IntrospectionTurnSensitivityDecisions } from './turn-sensitivity.js';
 
 const INTEGRATION_TIMEOUT_MS = 120_000;
 const CONSENT_HASH = 'a'.repeat(64);
@@ -110,34 +114,68 @@ function modelResponse(content: string, model: string): LLMResponse {
   };
 }
 
-function makeTurnRecord(overrides: Partial<TurnRecord> = {}): TurnRecord {
-  return {
-    schemaVersion: 1,
-    turnId: '019d2326-d9e1-701d-bcee-250d2cbb0e4e',
-    requestId: 'request-live-like-1',
-    sessionId: 'session:logical-after-reset',
-    channelId: 'discord:public-room',
-    channelType: 'discord',
-    startedAt: 1_773_407_940_000,
-    completedAt: 1_773_407_940_100,
-    status: 'completed',
-    auditPrivacy: {
-      schemaVersion: 1,
-      contentMode: 'verbatim_public',
+function makeTurnRecord(overrides: {
+  turnId?: TurnID;
+  requestId?: string;
+  content?: string;
+  sensitivity?: 'non_intimate' | 'intimate';
+  startedAt?: number;
+} = {}) {
+  const turnId = overrides.turnId ?? '019d2326-d9e1-701d-bcee-250d2cbb0e4e';
+  const requestId = overrides.requestId ?? 'request-live-like-1';
+  const startedAt = overrides.startedAt ?? 1_773_407_940_000;
+  const message = {
+    ...buildSubstrateMessage({
+      channelId: 'discord:public-room',
+      channelType: 'discord',
+      source: 'discord',
+      content: overrides.content ?? 'Which public project plan should we choose?',
+      authorId: 'public-user',
+      authorName: 'Public User',
+      req: { headers: {} } as IncomingMessage,
+      overrides: {},
       channelPrivacy: 'public',
-      contentSensitivity: 'non_intimate',
-      reason: 'explicit_public_non_dm',
-    },
-    userMessage: { role: 'user', content: 'Which public project plan should we choose?', timestamp: 1_773_407_940_000 },
-    assistantMessage: { role: 'assistant', content: 'Choose the first plan immediately.', timestamp: 1_773_407_940_100 },
-    toolCalls: [],
-    extractedMemoryIds: [],
-    concernDeltaRefs: [],
-    contactDeltaRefs: [],
-    versionPointers: { model: 'actual-model' },
-    provenanceRefs: [],
-    ...overrides,
+    }),
+    timestamp: new Date(startedAt),
   };
+  const decisions = new IntrospectionTurnSensitivityDecisions();
+  decisions.mark({
+    turnId,
+    requestId,
+    sensitivity: overrides.sensitivity ?? 'non_intimate',
+  });
+  const introspectionSensitivityDecision = decisions.consume({ turnId, requestId });
+  if (!introspectionSensitivityDecision) throw new Error('Expected current-turn sensitivity decision');
+  return buildTurnRecord({
+    message,
+    sessionId: 'session:logical-after-reset',
+    turnId,
+    requestId,
+    startedAt,
+    completedAt: startedAt + 100,
+    userSessionEntryId: null,
+    assistantSessionEntryId: null,
+    response: {
+      content: 'Choose the first plan immediately.',
+      channelId: message.channelId,
+      metadata: {
+        model: 'actual-model',
+        inputTokens: 10,
+        outputTokens: 10,
+        durationMs: 100,
+      },
+    },
+    turnMessages: [],
+    promptMode: 'default',
+    promptText: 'test prompt',
+    contextMessageCount: 1,
+    memoryContextChars: 0,
+    trustLevel: 'regular',
+    speakerRole: 'user',
+    retrievalProvenanceRefs: [],
+    hashPromptText: text => `hash:${text.length}`,
+    introspectionSensitivityDecision,
+  });
 }
 
 describe('IntrospectionLandmarkPostgresStore integration', () => {
@@ -161,14 +199,9 @@ describe('IntrospectionLandmarkPostgresStore integration', () => {
             makeTurnRecord({
               turnId: '019d2326-d9e1-701d-bcee-250d2cbb0e5f',
               requestId: 'request-live-like-2',
-              auditPrivacy: {
-                schemaVersion: 1,
-                contentMode: 'emotional_signal_only',
-                channelPrivacy: 'public',
-                contentSensitivity: 'intimate',
-                reason: 'intimate_content',
-              },
-              userMessage: { role: 'user', content: privateSentinel, timestamp: 1_773_407_940_200 },
+              sensitivity: 'intimate',
+              content: privateSentinel,
+              startedAt: 1_773_407_940_200,
             }),
           ];
           const source = createTurnRecordIntrospectionSource({

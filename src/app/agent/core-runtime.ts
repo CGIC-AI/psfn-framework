@@ -85,6 +85,7 @@ import {
   resolvePersonalSkillsDir,
 } from '../../persistence/layout.js';
 import { IntrospectionConsentStore } from '../../faculties/introspection/consent-store.js';
+import { IntrospectionTurnSensitivityDecisions } from '../../faculties/introspection/turn-sensitivity.js';
 import { ContactBlockListStore } from '../../core/cogsec/contact-block-list.js';
 import { maybeCreateIntakeSinkGate } from '../../core/cogsec/intake/sink-gates.js';
 import { loadIntakePolicyConfig } from '../../system/config/intake-policy-config.js';
@@ -485,12 +486,15 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
   // Read the complete append-only chain at startup. Corruption or tampering is
   // fatal; an absent ledger remains safely unconfigured/disabled.
   introspectionConsentStore.load();
+  const introspectionTurnSensitivityDecisions = new IntrospectionTurnSensitivityDecisions();
+  agentLoop.setIntrospectionTurnSensitivityDecisions(introspectionTurnSensitivityDecisions);
   const coreMemoryStore = wireCoreMemoryRuntime({
     agentLoop,
     sessionManager,
     config,
     concernStore: intentionRuntime.concernStore,
     introspectionConsentStore,
+    introspectionTurnSensitivityDecisions,
   });
   wireSelfModelRuntime(agentLoop);
   const intentionAppraisalHooks = createIntentionAppraisalHooks(

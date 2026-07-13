@@ -161,11 +161,28 @@ function parseOptionalAuditPrivacy(value: unknown): TurnRecordAuditPrivacy | und
   ) {
     throw new Error('TurnRecord field "auditPrivacy.contentSensitivity" is invalid');
   }
+  const contentSensitivityActor = value.contentSensitivityActor;
+  if (contentSensitivityActor !== undefined && (
+    !isRecord(contentSensitivityActor)
+    || contentSensitivityActor.kind !== 'companion'
+    || Object.keys(contentSensitivityActor).length !== 3
+    || Object.keys(contentSensitivityActor).some(key => !['kind', 'turnId', 'requestId'].includes(key))
+  )) {
+    throw new Error('TurnRecord field "auditPrivacy.contentSensitivityActor" is invalid');
+  }
+  const normalizedSensitivityActor = contentSensitivityActor === undefined
+    ? undefined
+    : {
+      kind: 'companion' as const,
+      turnId: parseRequiredString(contentSensitivityActor.turnId, 'auditPrivacy.contentSensitivityActor.turnId') as TurnID,
+      requestId: parseRequiredString(contentSensitivityActor.requestId, 'auditPrivacy.contentSensitivityActor.requestId'),
+    };
   if (
     contentMode === 'verbatim_public'
     && (
       channelPrivacy !== 'public'
       || contentSensitivity !== 'non_intimate'
+      || !normalizedSensitivityActor
       || reason !== 'explicit_public_non_dm'
     )
   ) {
@@ -176,6 +193,7 @@ function parseOptionalAuditPrivacy(value: unknown): TurnRecordAuditPrivacy | und
     contentMode,
     ...(channelPrivacy ? { channelPrivacy } : {}),
     contentSensitivity,
+    ...(normalizedSensitivityActor ? { contentSensitivityActor: normalizedSensitivityActor } : {}),
     reason: reason as TurnRecordAuditPrivacy['reason'],
   };
 }
@@ -485,6 +503,15 @@ function normalizeTurnRecord(raw: unknown, expectedChannelId: string): TurnRecor
   const roleEnvelopeRefs = parseOptionalStringArray(raw.roleEnvelopeRefs, 'roleEnvelopeRefs');
   const location = parseOptionalLocation(raw.location);
   const auditPrivacy = parseOptionalAuditPrivacy(raw.auditPrivacy);
+  if (
+    auditPrivacy?.contentSensitivityActor
+    && (
+      auditPrivacy.contentSensitivityActor.turnId !== turnId
+      || auditPrivacy.contentSensitivityActor.requestId !== requestId
+    )
+  ) {
+    throw new Error('TurnRecord auditPrivacy sensitivity actor must match the owning turn');
+  }
 
   return {
     schemaVersion: TURN_RECORD_SCHEMA_VERSION,

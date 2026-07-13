@@ -34,6 +34,7 @@ import {
   emitTurnContentionTelemetry,
   type TurnContentionPolicy,
 } from '../../system/lifecycle/turn-contention.js';
+import { classifyChannelEnvelope } from '../../system/trust/policy.js';
 
 const log = createComponentLogger('Telegram');
 
@@ -792,19 +793,25 @@ export class TelegramAdapter implements ChannelAdapterPort {
       channelId,
       messageId,
     });
+    const isDirectMessage = message.chat.type === 'private';
+    const channelPrivacy = classifyChannelEnvelope(channelId, { isDirectMessage }).privacy;
     const substrateMessage: SubstrateMessage = {
       id: messageId,
       channelId,
       channelType: 'telegram',
-      isDirectMessage: message.chat.type === 'private',
+      isDirectMessage,
       authorId: String(message.from.id),
       authorName: resolveAuthorName(message.from),
       content: prepared.content,
       ...(prepared.attachments.length > 0 ? { attachments: prepared.attachments } : {}),
       timestamp: new Date(message.date * 1000),
-      ...(prepared.intakeEnvelopes.length > 0
-        ? { routing: { intakeEnvelopes: prepared.intakeEnvelopes } }
-        : {}),
+      routing: {
+        source: 'telegram',
+        channelPrivacy,
+        ...(prepared.intakeEnvelopes.length > 0
+          ? { intakeEnvelopes: prepared.intakeEnvelopes }
+          : {}),
+      },
     };
     const replyContext: OutboundContext = {
       channelId,

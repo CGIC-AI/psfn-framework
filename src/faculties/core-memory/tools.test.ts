@@ -10,6 +10,7 @@ import type { ActiveConcern } from '../../core/intention/concerns.js';
 import type { ConcernStorePort } from '../../core/intention/concern-store-port.js';
 import { ValuesJournalStore } from '../values/store.js';
 import { IntrospectionConsentStore } from '../introspection/consent-store.js';
+import { IntrospectionTurnSensitivityDecisions } from '../introspection/turn-sensitivity.js';
 import type {
   CoreMemoryAppendOptions,
   CoreMemoryBlock,
@@ -652,5 +653,46 @@ describe('orient tool', () => {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  });
+
+  it('lets only the active companion turn classify its own introspection sensitivity', async () => {
+    const decisions = new IntrospectionTurnSensitivityDecisions();
+    const tool = createOrientTool({
+      append: vi.fn(),
+      replace: vi.fn(),
+      rethink: vi.fn(),
+    }, { introspectionTurnSensitivityDecisions: decisions });
+    const turnId = '019d2326-d9e1-701d-bcee-250d2cbb0e4e';
+    const requestId = 'request-sensitivity-1';
+
+    const withoutTurn = await tool.execute('sensitivity-missing-context', {
+      action: 'introspection_turn_sensitivity_set',
+      auditContentSensitivity: 'non_intimate',
+    });
+    expect(withoutTurn.details.isError).toBe(true);
+
+    const configured = await runWithRequestContext({
+      turnId,
+      requestId,
+      callType: 'tool',
+    }, () => tool.execute('sensitivity-active-turn', {
+      action: 'introspection_turn_sensitivity_set',
+      auditContentSensitivity: 'non_intimate',
+    }));
+    expect(configured.details.isError).not.toBe(true);
+    expect(decisions.consume({ turnId, requestId })).toEqual({
+      sensitivity: 'non_intimate',
+      actor: { kind: 'companion', turnId, requestId },
+    });
+
+    const background = await runWithRequestContext({
+      turnId,
+      requestId: 'request-sensitivity-background',
+      callType: 'background',
+    }, () => tool.execute('sensitivity-background', {
+      action: 'introspection_turn_sensitivity_set',
+      auditContentSensitivity: 'non_intimate',
+    }));
+    expect(background.details.isError).toBe(true);
   });
 });

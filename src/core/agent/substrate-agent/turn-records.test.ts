@@ -5,6 +5,20 @@ import {
   sanitizePersistedReasoningText,
 } from './turn-records.js';
 
+const AUDIT_TURN_ID = '019d2326-d9e1-701d-bcee-250d2cbb0e4e';
+const AUDIT_REQUEST_ID = 'request-audit-privacy';
+
+function sensitivityDecision(sensitivity: 'non_intimate' | 'intimate') {
+  return {
+    sensitivity,
+    actor: {
+      kind: 'companion' as const,
+      turnId: AUDIT_TURN_ID,
+      requestId: AUDIT_REQUEST_ID,
+    },
+  };
+}
+
 describe('turn-records tool persistence', () => {
   it('captures verbatim audit eligibility only for explicitly public non-DM turns', () => {
     expect(resolveTurnRecordAuditPrivacy({
@@ -16,12 +30,13 @@ describe('turn-records tool persistence', () => {
       content: 'public statement',
       timestamp: new Date(),
       isDirectMessage: false,
-      routing: { channelPrivacy: 'public', auditContentSensitivity: 'non_intimate' },
-    })).toEqual({
+      routing: { channelPrivacy: 'public' },
+    }, AUDIT_TURN_ID, AUDIT_REQUEST_ID, sensitivityDecision('non_intimate'))).toEqual({
       schemaVersion: 1,
       contentMode: 'verbatim_public',
       channelPrivacy: 'public',
       contentSensitivity: 'non_intimate',
+      contentSensitivityActor: sensitivityDecision('non_intimate').actor,
       reason: 'explicit_public_non_dm',
     });
 
@@ -34,8 +49,8 @@ describe('turn-records tool persistence', () => {
       content: 'trusted classifier marked this intimate',
       timestamp: new Date(),
       isDirectMessage: false,
-      routing: { channelPrivacy: 'public', auditContentSensitivity: 'intimate' },
-    })).toMatchObject({
+      routing: { channelPrivacy: 'public' },
+    }, AUDIT_TURN_ID, AUDIT_REQUEST_ID, sensitivityDecision('intimate'))).toMatchObject({
       contentMode: 'emotional_signal_only',
       contentSensitivity: 'intimate',
       reason: 'intimate_content',
@@ -51,7 +66,7 @@ describe('turn-records tool persistence', () => {
       timestamp: new Date(),
       isDirectMessage: false,
       routing: { channelPrivacy: 'public' },
-    })).toMatchObject({
+    }, AUDIT_TURN_ID, AUDIT_REQUEST_ID)).toMatchObject({
       contentMode: 'emotional_signal_only',
       contentSensitivity: 'ambiguous',
       reason: 'missing_or_ambiguous_content_sensitivity',
@@ -67,7 +82,7 @@ describe('turn-records tool persistence', () => {
       timestamp: new Date(),
       isDirectMessage: true,
       routing: { channelPrivacy: 'private' },
-    }).contentMode).toBe('emotional_signal_only');
+    }, AUDIT_TURN_ID, AUDIT_REQUEST_ID).contentMode).toBe('emotional_signal_only');
 
     expect(resolveTurnRecordAuditPrivacy({
       id: 'message-ambiguous',
@@ -77,7 +92,45 @@ describe('turn-records tool persistence', () => {
       authorName: 'User',
       content: 'ambiguous statement',
       timestamp: new Date(),
-    }).contentMode).toBe('emotional_signal_only');
+    }, AUDIT_TURN_ID, AUDIT_REQUEST_ID).contentMode).toBe('emotional_signal_only');
+  });
+
+  it('ignores transport-provided sensitivity claims and mismatched companion decisions', () => {
+    const message = {
+      id: 'message-untrusted-sensitivity',
+      channelId: 'discord:public',
+      channelType: 'discord' as const,
+      authorId: 'user',
+      authorName: 'User',
+      content: 'transport claim must not authorize replay',
+      timestamp: new Date(),
+      isDirectMessage: false,
+      routing: {
+        channelPrivacy: 'public' as const,
+        auditContentSensitivity: 'non_intimate',
+      },
+    };
+
+    expect(resolveTurnRecordAuditPrivacy(
+      message,
+      AUDIT_TURN_ID,
+      AUDIT_REQUEST_ID,
+    )).toMatchObject({
+      contentMode: 'emotional_signal_only',
+      contentSensitivity: 'ambiguous',
+    });
+    expect(resolveTurnRecordAuditPrivacy(
+      message,
+      AUDIT_TURN_ID,
+      AUDIT_REQUEST_ID,
+      {
+        ...sensitivityDecision('non_intimate'),
+        actor: { ...sensitivityDecision('non_intimate').actor, requestId: 'different-request' },
+      },
+    )).toMatchObject({
+      contentMode: 'emotional_signal_only',
+      contentSensitivity: 'ambiguous',
+    });
   });
 
   it('keeps concise persisted reasoning that is useful to operators', () => {

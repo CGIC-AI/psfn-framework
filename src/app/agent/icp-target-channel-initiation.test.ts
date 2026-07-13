@@ -378,6 +378,229 @@ describe('ICP target-channel initiation', () => {
     expect(restarted.recordDeliveryObservation).not.toHaveBeenCalled();
   });
 
+  it.each([
+    {
+      name: 'peer initiator',
+      mutate: (value: IcpConversationCorrelation) => ({
+        ...value,
+        initiatedByCompanionId: RECIPIENT,
+      }),
+    },
+    {
+      name: 'wrong local companion',
+      mutate: (value: IcpConversationCorrelation) => ({
+        ...value,
+        localCompanionId: '88888888-8888-4888-8888-888888888888',
+      }),
+    },
+    {
+      name: 'wrong peer companion',
+      mutate: (value: IcpConversationCorrelation) => ({
+        ...value,
+        peerCompanionId: '88888888-8888-4888-8888-888888888888',
+      }),
+    },
+    {
+      name: 'wrong peer contact',
+      mutate: (value: IcpConversationCorrelation) => ({
+        ...value,
+        peerContactId: '88888888-8888-4888-8888-888888888888',
+      }),
+    },
+    {
+      name: 'wrong channel',
+      mutate: (value: IcpConversationCorrelation) => ({
+        ...value,
+        channelId: 'companion-room:study',
+        surface: 'companion_room' as const,
+      }),
+    },
+    {
+      name: 'wrong conversation',
+      mutate: (value: IcpConversationCorrelation) => ({
+        ...value,
+        conversationId: '88888888-8888-4888-8888-888888888888',
+      }),
+    },
+    {
+      name: 'wrong root lineage',
+      mutate: (value: IcpConversationCorrelation) => ({
+        ...value,
+        rootInitiationId: '88888888-8888-4888-8888-888888888888',
+      }),
+    },
+    {
+      name: 'wrong candidate message lineage',
+      mutate: (value: IcpConversationCorrelation) => ({
+        ...value,
+        messageId: 'icp-initiation:88888888-8888-4888-8888-888888888888',
+      }),
+    },
+    {
+      name: 'wrong candidate request lineage',
+      mutate: (value: IcpConversationCorrelation) => ({
+        ...value,
+        requestId: 'icp-initiation:88888888-8888-4888-8888-888888888888',
+      }),
+    },
+    {
+      name: 'unrelated durable turn',
+      mutate: (value: IcpConversationCorrelation) => ({
+        ...value,
+        turnId: '018f22a2-52b8-7a3a-8c16-25b7b14f7099',
+      }),
+    },
+    {
+      name: 'interactive charge lane',
+      mutate: (value: IcpConversationCorrelation) => ({
+        ...value,
+        chargeLane: 'interactive' as const,
+      }),
+    },
+    {
+      name: 'wrong channel surface',
+      mutate: (value: IcpConversationCorrelation) => ({
+        ...value,
+        surface: 'companion_room' as const,
+      }),
+    },
+    {
+      name: 'wrong cost purpose',
+      mutate: (value: IcpConversationCorrelation) => ({
+        ...value,
+        costPurpose: 'tool' as const,
+      }),
+    },
+    {
+      name: 'reply-stage correlation',
+      mutate: (value: IcpConversationCorrelation) => ({
+        ...value,
+        costOriginStage: 'reply' as const,
+      }),
+    },
+  ])('rejects observation-only recovery with $name before every side effect', async ({ mutate }) => {
+    const invalidCorrelation = mutate(correlation());
+    const durableResponse: AgentResponse = {
+      content: 'Durable response that must never be replayed for an invalid binding.',
+      channelId: invalidCorrelation.channelId,
+      metadata: {
+        model: 'deterministic-test-model',
+        inputTokens: 12,
+        outputTokens: 9,
+        durationMs: 3,
+        turnId: invalidCorrelation.turnId,
+        requestId: invalidCorrelation.requestId,
+        icpCorrelation: invalidCorrelation,
+      },
+    };
+    const restarted = createHarness(null);
+    restarted.findIcpDeliveryObservation.mockResolvedValueOnce({
+      channelId: CHANNEL,
+      sourceMessageId: `icp-initiation:${CANDIDATE}`,
+      status: 'failed',
+      error: 'transport failed before restart',
+      recoveryResponse: durableResponse,
+    });
+
+    await expect(restarted.initiator.initiate({
+      permit: permit(),
+      rootInitiationId: ROOT,
+      peerContactId: CONTACT_ID,
+    })).rejects.toThrow();
+
+    expect(restarted.handleMessage).not.toHaveBeenCalled();
+    expect(restarted.consumeInitiationPermit).not.toHaveBeenCalled();
+    expect(restarted.sendInitiation).not.toHaveBeenCalled();
+    expect(restarted.recordDeliveryObservation).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      name: 'wrong observation channel source',
+      observation: () => ({
+        channelId: 'companion-room:study',
+        sourceMessageId: `icp-initiation:${CANDIDATE}`,
+      }),
+    },
+    {
+      name: 'wrong observation candidate source id',
+      observation: () => ({
+        channelId: CHANNEL,
+        sourceMessageId: 'icp-initiation:88888888-8888-4888-8888-888888888888',
+      }),
+    },
+  ])('rejects observation-only recovery with $name before every side effect', async ({ observation }) => {
+    const durableCorrelation = correlation();
+    const durableResponse: AgentResponse = {
+      content: 'Durable response with a mismatched observation envelope.',
+      channelId: CHANNEL,
+      metadata: {
+        model: 'deterministic-test-model',
+        inputTokens: 12,
+        outputTokens: 9,
+        durationMs: 3,
+        turnId: durableCorrelation.turnId,
+        requestId: durableCorrelation.requestId,
+        icpCorrelation: durableCorrelation,
+      },
+    };
+    const restarted = createHarness(null);
+    restarted.findIcpDeliveryObservation.mockResolvedValueOnce({
+      ...observation(),
+      status: 'failed',
+      error: 'transport failed before restart',
+      recoveryResponse: durableResponse,
+    });
+
+    await expect(restarted.initiator.initiate({
+      permit: permit(),
+      rootInitiationId: ROOT,
+      peerContactId: CONTACT_ID,
+    })).rejects.toThrow(/source binding/i);
+
+    expect(restarted.handleMessage).not.toHaveBeenCalled();
+    expect(restarted.consumeInitiationPermit).not.toHaveBeenCalled();
+    expect(restarted.sendInitiation).not.toHaveBeenCalled();
+    expect(restarted.recordDeliveryObservation).not.toHaveBeenCalled();
+  });
+
+  it('replays an exact observation-only failed response without another model turn', async () => {
+    const durableCorrelation = correlation();
+    const durableResponse: AgentResponse = {
+      content: 'Durable response recovered without an assistant row.',
+      channelId: CHANNEL,
+      metadata: {
+        model: 'deterministic-test-model',
+        inputTokens: 12,
+        outputTokens: 9,
+        durationMs: 3,
+        turnId: durableCorrelation.turnId,
+        requestId: durableCorrelation.requestId,
+        icpCorrelation: durableCorrelation,
+      },
+    };
+    const restarted = createHarness(null);
+    restarted.findIcpDeliveryObservation.mockResolvedValueOnce({
+      channelId: CHANNEL,
+      sourceMessageId: `icp-initiation:${CANDIDATE}`,
+      status: 'failed',
+      error: 'transport failed before restart',
+      recoveryResponse: durableResponse,
+    });
+
+    await expect(restarted.initiator.initiate({
+      permit: permit(),
+      rootInitiationId: ROOT,
+      peerContactId: CONTACT_ID,
+    })).resolves.toMatchObject({ disposition: 'delivered', recoveredTurn: true });
+
+    expect(restarted.handleMessage).toHaveBeenCalledTimes(1);
+    expect(restarted.handleMessage.mock.calls[0]?.[1]).toMatchObject({
+      recoveredResponse: durableResponse,
+    });
+    expect(restarted.sendInitiation).toHaveBeenCalledTimes(1);
+  });
+
   it('reconstructs one stable social-charge identity after a pre-response process crash', async () => {
     const tempDir = mkdtempSync(join(tmpdir(), 'psfn-icp-pre-response-charge-'));
     const ledgerPath = join(tempDir, 'charge-ledger.jsonl');

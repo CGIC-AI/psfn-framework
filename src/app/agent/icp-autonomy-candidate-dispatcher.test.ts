@@ -6,6 +6,7 @@ import { createIcpAutonomyCandidateDispatcher } from './icp-autonomy-candidate-d
 const NOW_MS = 2_000;
 const LOCAL = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 const PEER = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+const OTHER_SENDER = '77777777-7777-4777-8777-777777777777';
 const CANDIDATE_ID = '11111111-1111-4111-8111-111111111111';
 const ROOT_ID = '22222222-2222-4222-8222-222222222222';
 const PERMIT_ID = '44444444-4444-4444-8444-444444444444';
@@ -50,16 +51,16 @@ function permit(): IcpInitiationPermit {
 
 describe('production ICP autonomy candidate dispatcher', () => {
   it('runs one canonical private scheduler turn with exact local notify arguments', async () => {
-    const handleMessage = vi.fn(async () => ({ content: 'done' }));
+    const runCandidateTurn = vi.fn(async () => ({ content: 'done' }));
     const dispatcher = createIcpAutonomyCandidateDispatcher({
-      agentLoop: { handleMessage },
+      runCandidateTurn,
       now: () => new Date(NOW_MS),
     });
 
     await dispatcher.dispatch({ candidate: candidate(), permit: permit() });
 
-    expect(handleMessage).toHaveBeenCalledTimes(1);
-    const message = handleMessage.mock.calls[0]?.[0];
+    expect(runCandidateTurn).toHaveBeenCalledTimes(1);
+    const message = runCandidateTurn.mock.calls[0]?.[0];
     expect(message).toMatchObject({
       id: `icp-autonomy-candidate:${CANDIDATE_ID}`,
       channelId: `internal:icp-autonomy:${CANDIDATE_ID}`,
@@ -95,8 +96,8 @@ describe('production ICP autonomy candidate dispatcher', () => {
       name: 'sender companion',
       mutate: (value: IcpInitiationPermit) => ({
         ...value,
-        senderCompanionId: '77777777-7777-4777-8777-777777777777',
-        channelId: 'companion-dm:77777777-7777-4777-8777-777777777777:bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+        senderCompanionId: OTHER_SENDER,
+        channelId: `companion-dm:${OTHER_SENDER}:${PEER}`,
       }),
     },
     {
@@ -122,9 +123,9 @@ describe('production ICP autonomy candidate dispatcher', () => {
       }),
     },
   ])('rejects a permit with mismatched $name before a model turn', async ({ mutate }) => {
-    const handleMessage = vi.fn();
+    const runCandidateTurn = vi.fn();
     const dispatcher = createIcpAutonomyCandidateDispatcher({
-      agentLoop: { handleMessage },
+      runCandidateTurn,
       now: () => new Date(NOW_MS),
     });
 
@@ -133,7 +134,7 @@ describe('production ICP autonomy candidate dispatcher', () => {
       permit: mutate(permit()),
     })).rejects.toThrow(/candidate|permit|channel/i);
 
-    expect(handleMessage).not.toHaveBeenCalled();
+    expect(runCandidateTurn).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -159,21 +160,21 @@ describe('production ICP autonomy candidate dispatcher', () => {
       }),
     },
   ])('rejects an $name before a model turn', async ({ binding }) => {
-    const handleMessage = vi.fn();
+    const runCandidateTurn = vi.fn();
     const dispatcher = createIcpAutonomyCandidateDispatcher({
-      agentLoop: { handleMessage },
+      runCandidateTurn,
       now: () => new Date(NOW_MS),
     });
 
     await expect(dispatcher.dispatch(binding())).rejects.toThrow(/candidate|permit/i);
 
-    expect(handleMessage).not.toHaveBeenCalled();
+    expect(runCandidateTurn).not.toHaveBeenCalled();
   });
 
   it('rejects extra dispatch fields before a model turn', async () => {
-    const handleMessage = vi.fn();
+    const runCandidateTurn = vi.fn();
     const dispatcher = createIcpAutonomyCandidateDispatcher({
-      agentLoop: { handleMessage },
+      runCandidateTurn,
       now: () => new Date(NOW_MS),
     });
 
@@ -183,6 +184,23 @@ describe('production ICP autonomy candidate dispatcher', () => {
       reasonSummary: 'forbidden parallel authority',
     } as never)).rejects.toThrow(/unknown key/i);
 
-    expect(handleMessage).not.toHaveBeenCalled();
+    expect(runCandidateTurn).not.toHaveBeenCalled();
+  });
+
+  it('propagates a trusted turn-activation failure without starting the agent loop', async () => {
+    const runCandidateTurn = vi.fn(async () => {
+      throw new Error('notify candidate turn activation is no longer authorized');
+    });
+    const dispatcher = createIcpAutonomyCandidateDispatcher({
+      runCandidateTurn,
+      now: () => new Date(NOW_MS),
+    });
+
+    await expect(dispatcher.dispatch({
+      candidate: candidate(),
+      permit: permit(),
+    })).rejects.toThrow('activation is no longer authorized');
+
+    expect(runCandidateTurn).toHaveBeenCalledTimes(1);
   });
 });

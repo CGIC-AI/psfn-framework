@@ -24,7 +24,8 @@ describe('agent control plane', () => {
     expect(controlPlaneSource).toContain('createSystemTool(');
     expect(controlPlaneSource).toContain('createNotifyDispatcher(');
     expect(controlPlaneSource).toContain('createNotifyTool(');
-    expect(controlPlaneSource).toContain('createIcpAutonomyCandidateDispatcher({ agentLoop })');
+    expect(controlPlaneSource).toContain('createIcpAutonomyCandidateDispatcher({');
+    expect(controlPlaneSource).toContain('handleIcpAutonomyCandidateTurn');
     expect(controlPlaneSource).toContain('registerDeferredCompanionOutreachRuntime');
     expect(controlPlaneSource).toContain("capabilityRuntime.has('external.companion')");
     expect(controlPlaneSource).toContain("tool.name === 'notify'");
@@ -65,12 +66,15 @@ describe('agent control plane', () => {
       'agentLoop.registerTool(createNotifyTool(',
     );
     const candidateDispatcherIndex = controlPlaneSource.indexOf(
-      'createIcpAutonomyCandidateDispatcher({ agentLoop })',
+      'createIcpAutonomyCandidateDispatcher({',
     );
     expect(notifyRegistrationIndex).toBeGreaterThan(-1);
     expect(candidateDispatcherIndex).toBeGreaterThan(notifyRegistrationIndex);
     expect(controlPlaneSource).toContain(
       'icpAutonomyCandidateDispatcher?: IcpAutonomyCandidateDispatcher',
+    );
+    expect(controlPlaneSource).toContain(
+      'handleIcpAutonomyCandidateTurn(message)',
     );
   });
 });

@@ -19,7 +19,10 @@ function makeTool(name: string, execute = vi.fn(async () => ({
   } as AgentTool<any>;
 }
 
-function createFacade(taskKind: string | null = null) {
+function createFacade(
+  taskKind: string | null = null,
+  grantedTokens: readonly string[] = ['external.companion'],
+) {
   // pi-agent-core 0.73 replaced Agent.setTools() with assignment to
   // agent.state.tools; the mock records each assignment via setTools so the
   // existing call-style assertions keep working.
@@ -46,7 +49,11 @@ function createFacade(taskKind: string | null = null) {
   const facade = new ToolRuntimeFacade({
     config: {} as never,
     agent: agent as never,
-    resolveCapabilityAccess: () => ({}) as never,
+    resolveCapabilityAccess: () => ({
+      getTier: () => grantedTokens.includes('external.companion') ? 'autonomous' : 'nursery',
+      getGrantedTokens: () => new Set(grantedTokens),
+      has: (token: string) => grantedTokens.includes(token),
+    }) as never,
     withCapabilityGates: tools => tools,
     withCorrelationPurpose: (correlation, purpose) => ({ ...correlation, purpose }),
     withAdaptiveCorrelation: (correlation, purpose) => ({
@@ -74,6 +81,49 @@ function createFacade(taskKind: string | null = null) {
 }
 
 describe('ToolRuntimeFacade maintenance core tool policy', () => {
+  it('activates a trusted extended tool only for the exact turn scope', () => {
+    const { facade, agent } = createFacade();
+    facade.registerTool(withCapabilityRequirement(
+      makeTool('notify'),
+      'external.companion',
+    ), 'extended');
+
+    const scope = facade.beginIcpAutonomyCandidateNotifyScope({
+      source: 'autoload',
+      taskKind: 'research',
+      intent: 'ops',
+    });
+
+    expect(facade.getAdaptiveToolRuntimeState().activeTools).toContainEqual({
+      toolName: 'notify',
+      source: 'autoload',
+    });
+    expect((agent.setTools.mock.calls.at(-1)?.[0] as AgentTool<any>[])
+      .map(tool => tool.name)).toContain('notify');
+
+    facade.endIcpAutonomyCandidateNotifyScope(scope);
+
+    expect(facade.getAdaptiveToolRuntimeState().activeTools).not.toContainEqual(
+      expect.objectContaining({ toolName: 'notify' }),
+    );
+    expect((agent.setTools.mock.calls.at(-1)?.[0] as AgentTool<any>[])
+      .map(tool => tool.name)).not.toContain('notify');
+  });
+
+  it('refuses trusted turn-scoped activation when live capability policy revokes the tool', () => {
+    const { facade } = createFacade(null, []);
+    facade.registerTool(withCapabilityRequirement(
+      makeTool('notify'),
+      'external.companion',
+    ), 'extended');
+
+    expect(() => facade.beginIcpAutonomyCandidateNotifyScope())
+      .toThrow('not capability authorized');
+    expect(facade.getAdaptiveToolRuntimeState().activeTools).not.toContainEqual(
+      expect.objectContaining({ toolName: 'notify' }),
+    );
+  });
+
   it('fails startup validation for an unclassified executable tool', () => {
     const { facade } = createFacade(null);
     facade.registerTool(makeTool('unclassified_plugin_tool'), 'extended');

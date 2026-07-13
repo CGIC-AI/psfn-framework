@@ -32,6 +32,7 @@ import type { AgentResponse, CorrelationMetadata, ModelBudgetBlockedEvent, Messa
 import type { PlacesRegistryConfig } from '../../shared/contracts/places-registry.js';
 import type { CapabilityTier, CoreSubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type { ContactStorePort } from '../contacts/contact-store-port.js';
+import { resolveIcpAutonomyCandidateSchedulerOrigin } from '../icp/candidate-scheduler-origin.js';
 import type { ContactTrackingGate } from '../contacts/tracking-gate.js';
 import type { ImageVisionReviewer } from '../../primitives/images/types.js';
 import type { VisionIntakeImageScreenerPort } from './substrate-agent/vision-attachments.js';
@@ -1354,6 +1355,24 @@ export class SubstrateAgent {
       }, run);
     } finally {
       this.currentTurnIntakeEnvelopes = [];
+    }
+  }
+
+  async handleIcpAutonomyCandidateTurn(message: SubstrateMessage): Promise<AgentResponse> {
+    const candidateOrigin = resolveIcpAutonomyCandidateSchedulerOrigin(message);
+    if (!candidateOrigin) {
+      throw new Error('Trusted ICP autonomy candidate turn requires a validated scheduler origin');
+    }
+    await this.agent.waitForIdle();
+    const scope = this.toolRuntimeFacade.beginIcpAutonomyCandidateNotifyScope({
+      source: 'autoload',
+      taskKind: candidateOrigin.continuationTaskKind,
+      intent: 'ops',
+    });
+    try {
+      return await this.handleMessage(message);
+    } finally {
+      this.toolRuntimeFacade.endIcpAutonomyCandidateNotifyScope(scope);
     }
   }
 

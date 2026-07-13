@@ -19,6 +19,7 @@ import {
 import {
   deriveStableIcpTargetTurnId,
   validateIcpTargetCorrelationBinding,
+  validateObservedIcpTargetRecovery,
   validateRecordedIcpTargetRecovery,
   type IcpTargetRecoveryBinding,
   type RecordedIcpInitiationTurn,
@@ -206,26 +207,6 @@ export function createIcpTargetChannelInitiator(input: {
       request.continuationTaskKind,
     );
     const sourceMessageId = `icp-initiation:${permit.candidateId}`;
-    const previousObservation = await input.agent.findIcpDeliveryObservation(
-      permit.channelId,
-      sourceMessageId,
-    );
-    if (previousObservation) {
-      if (!previousObservation.recoveryResponse) {
-        throw new Error('Durable ICP observation is missing recovery evidence');
-      }
-      assertIcpRecoveryStatusBinding(
-        previousObservation.status,
-        previousObservation.recoveryResponse,
-        'ICP target-channel recovery',
-      );
-    }
-    const recorded = await input.agent.findRecordedIcpInitiation(permit.channelId, sourceMessageId);
-    let recoveredTurn = recorded !== null;
-    let content: string;
-    let correlation: IcpConversationCorrelation;
-    let turnResponse: AgentResponse | undefined;
-    let lastDeliveryObservation: IcpDeliveryObservation | null = previousObservation;
     const recoveryBinding: IcpTargetRecoveryBinding = {
       permit,
       localCompanionId,
@@ -233,6 +214,22 @@ export function createIcpTargetChannelInitiator(input: {
       rootInitiationId: request.rootInitiationId,
       sourceMessageId,
     };
+    const previousObservation = await input.agent.findIcpDeliveryObservation(
+      permit.channelId,
+      sourceMessageId,
+    );
+    const observedRecovery = previousObservation
+      ? validateObservedIcpTargetRecovery({
+          observation: previousObservation,
+          binding: recoveryBinding,
+        })
+      : null;
+    const recorded = await input.agent.findRecordedIcpInitiation(permit.channelId, sourceMessageId);
+    let recoveredTurn = recorded !== null;
+    let content: string;
+    let correlation: IcpConversationCorrelation;
+    let turnResponse: AgentResponse | undefined;
+    let lastDeliveryObservation: IcpDeliveryObservation | null = previousObservation;
     const validateRecordedCorrelation = (
       value: IcpConversationCorrelation,
     ): IcpConversationCorrelation => validateIcpTargetCorrelationBinding(
@@ -243,9 +240,8 @@ export function createIcpTargetChannelInitiator(input: {
     if (!recorded
       && previousObservation?.turnCompleted
       && previousObservation.status === 'suppressed') {
-      correlation = validateRecordedCorrelation(
-        previousObservation.recoveryResponse.metadata.icpCorrelation,
-      );
+      if (!observedRecovery) throw new Error('Suppressed ICP recovery evidence is missing');
+      correlation = observedRecovery.correlation;
       return {
         disposition: 'suppressed',
         recoveredTurn: true,
@@ -431,6 +427,22 @@ export function createIcpTargetChannelInitiator(input: {
             turnResponse,
             'ICP target-channel recovery',
           );
+          return { disposition: 'suppressed', recoveredTurn: true, correlation };
+        }
+        if (previousObservation.status === 'delivered') {
+          return await finalizeDelivery();
+        }
+      }
+      return await resumeOrdinaryTurn();
+    }
+
+    if (previousObservation && observedRecovery) {
+      recoveredTurn = true;
+      correlation = observedRecovery.correlation;
+      turnResponse = observedRecovery.recoveryResponse;
+      content = turnResponse.content;
+      if (previousObservation.turnCompleted) {
+        if (previousObservation.status === 'suppressed') {
           return { disposition: 'suppressed', recoveredTurn: true, correlation };
         }
         if (previousObservation.status === 'delivered') {

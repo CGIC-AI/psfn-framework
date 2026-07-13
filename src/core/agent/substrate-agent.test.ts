@@ -1,3 +1,6 @@
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { Agent, type AgentTool } from '../../boundary/pi-agent/index.js';
 import type { CanonicalModelRegistry, LLMContext, LLMResponse, ModelRegistryEntry, ModelSlot, SubstrateMessage } from '../../shared/contracts/runtime.js';
@@ -30,6 +33,20 @@ import {
   NO_CAPABILITY_REQUIREMENT,
   withCapabilityRequirement,
 } from '../../system/capabilities/requirements.js';
+import { buildAgentControlPlane } from '../../app/agent/control-plane.js';
+import { Scheduler } from '../scheduler/scheduler.js';
+import { wirePostTurnActionRuntime } from '../../app/startup/composition/post-turn-actions.js';
+import { createAgentFacingIcpAutonomyRuntime } from '../icp/agent-facing-autonomy.js';
+import { CapabilityRuntime } from '../../system/capabilities/runtime.js';
+import { saveCapabilityTierConfig } from '../../system/config/capability-tier-config.js';
+import {
+  ExternalCommunicationRateLimiter,
+  LifecycleRestartSafeguard,
+} from '../../system/capabilities/safeguards.js';
+import type { ContactStorePort } from '../contacts/contact-store-port.js';
+import type { IcpInitiationCandidate } from '../icp/initiation-candidate.js';
+import type { IcpInitiationPermit } from '../../shared/contracts/icp-autonomy.js';
+import { DEFERRED_COMPANION_OUTREACH_ACTION_KIND } from '../tools/notify-companion-handoff.js';
 
 const TEST_COMPANION_NAME = 'Companion';
 const TEST_SYSTEM_PROMPT = `You are ${TEST_COMPANION_NAME}.`;
@@ -732,6 +749,312 @@ describe('SubstrateAgent construction', () => {
     });
     expect(events[0]?.type).toBe('start');
     expect(events.at(-1)?.type).toBe('done');
+  });
+});
+
+describe('production ICP candidate control-plane reachability', () => {
+  it('activates notify only for the validated candidate turn and rechecks live policy for deferred execution', async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'psfn-icp-control-plane-'));
+    let controlPlane: ReturnType<typeof buildAgentControlPlane> | null = null;
+    try {
+      saveCapabilityTierConfig(dataDir, {
+        tier: 'custom',
+        customTokens: ['external.companion'],
+      });
+      const capabilityRuntime = new CapabilityRuntime({ dataDir });
+      const config = makeConfig({
+        dataDir,
+        databasePath: join(dataDir, 'test.db'),
+        capabilityTier: 'custom',
+      });
+      const eventBus = new EventBus();
+      const sessionManager = makeMockSessionManager();
+      const agent = new SubstrateAgent(
+        eventBus,
+        makeMockLLMProvider(),
+        sessionManager,
+        'System prompt',
+        config,
+      );
+      agent.setCapabilityRuntime(capabilityRuntime);
+      const capabilityHas = vi.spyOn(capabilityRuntime, 'has');
+      const getToolCatalog = vi.spyOn(agent, 'getToolCatalog');
+      const getExtendedToolTurnClass = vi.spyOn(agent, 'getExtendedToolTurnClass');
+
+      const nowMs = Date.now();
+      const candidate: IcpInitiationCandidate = {
+        candidateId: '11111111-1111-4111-8111-111111111111',
+        rootInitiationId: '22222222-2222-4222-8222-222222222222',
+        localCompanionId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+        peerContactId: 'peer-contact-b',
+        peerCompanionId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+        preferredChannel: 'dm',
+        source: 'intention',
+        provenanceRef: 'icp-prov:11111111-1111-4111-8111-111111111111',
+        reasonSummary: 'Continue the approved private research task.',
+        continuationTaskKind: 'research',
+        createdAtMs: nowMs - 1_000,
+        expiresAtMs: nowMs + 60_000,
+        status: 'permitted',
+        revision: 2,
+      };
+      const permit: IcpInitiationPermit = {
+        permitId: '44444444-4444-4444-8444-444444444444',
+        candidateId: candidate.candidateId,
+        conversationId: '55555555-5555-4555-8555-555555555555',
+        senderCompanionId: candidate.localCompanionId,
+        recipientCompanionId: candidate.peerCompanionId,
+        channelId: `companion-dm:${candidate.localCompanionId}:${candidate.peerCompanionId}`,
+        provenanceRef: candidate.provenanceRef,
+        issuedAtMs: nowMs - 500,
+        expiresAtMs: nowMs + 60_000,
+        status: 'issued',
+        revision: 1,
+      };
+      const peerContact = {
+        id: candidate.peerContactId,
+        displayName: 'Peer B',
+        trustLevel: 'regular',
+        relationshipType: 'peer',
+        isMachineIntelligence: true,
+        channelIdentities: [{ channel: 'companion', userId: candidate.peerCompanionId }],
+        firstSeen: '2026-07-01T00:00:00.000Z',
+        lastSeen: '2026-07-13T00:00:00.000Z',
+      } as const;
+      const contactStore = {
+        getById: vi.fn(async (contactId: string) => (
+          contactId === peerContact.id ? peerContact : undefined
+        )),
+        getByChannelIdentity: vi.fn(async (channel: string, userId: string) => (
+          channel === 'companion' && userId === candidate.peerCompanionId
+            ? peerContact
+            : undefined
+        )),
+        listAll: vi.fn(async () => [peerContact]),
+      } as unknown as ContactStorePort;
+      const prepareInitiationHandoff = vi.fn(async () => ({
+        authorized: true as const,
+        permit,
+        rootInitiationId: candidate.rootInitiationId,
+      }));
+      const targetCommand = {
+        execute: vi.fn(async () => ({ disposition: 'delivered' as const })),
+      };
+      const icpAutonomyRuntime = createAgentFacingIcpAutonomyRuntime({
+        contactStore,
+        gateway: {
+          companionReadOwnAvailability: vi.fn(),
+          companionPublishAvailability: vi.fn(),
+          companionClearAvailability: vi.fn(),
+          companionReadPeerAvailability: vi.fn(),
+          companionPrepareInitiationHandoff: prepareInitiationHandoff,
+        },
+        command: targetCommand,
+      });
+      const scheduler = new Scheduler(eventBus, {
+        tickIntervalMs: 100,
+        heartbeatIntervalMs: 1_000,
+      });
+      const queuePath = join(dataDir, 'post-turn-actions.json');
+      const postTurnActions = wirePostTurnActionRuntime({
+        eventBus,
+        scheduler,
+        agentLoop: agent,
+        persistencePath: queuePath,
+      });
+      const gateway = {
+        discordSend: vi.fn(async () => undefined),
+        shellExec: vi.fn(),
+        destroy: vi.fn(),
+      };
+      controlPlane = buildAgentControlPlane({
+        dataDir,
+        config,
+        eventBus,
+        gateway: gateway as never,
+        unregisterGatewayDisconnect: vi.fn(),
+        stopDebugObserver: vi.fn(),
+        writeGracefulShutdownMarkers: vi.fn(),
+        closeDatabase: vi.fn(),
+        scheduler,
+        moduleLoader: { shutdown: vi.fn(async () => undefined) } as never,
+        memoryExtractor: { stop: vi.fn(async () => true) } as never,
+        agentLoop: agent,
+        operatorNotifier: {
+          notify: vi.fn(async () => ({ status: 'sent', topic: 'test' })),
+        },
+        lifecycleRestartSafeguard: new LifecycleRestartSafeguard(),
+        externalRateLimiter: new ExternalCommunicationRateLimiter(),
+        capabilityRuntime,
+        lifecycleRuntimeContract: {
+          mode: 'split',
+          restart: { strategy: 'unsupported', source: 'none' },
+        },
+        shutdownTargets: {},
+        postTurnActions,
+        icpAutonomyRuntime,
+      });
+
+      let notifyActivationDuringTurn: { toolName: string; source: string } | undefined;
+      let notifyToolResultDuringTurn: unknown;
+      const zeroUsage = {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      };
+      let streamStep = 0;
+      const streamFn = vi.fn(async () => {
+        const message = streamStep === 0
+          ? {
+              role: 'assistant',
+              content: [{
+                type: 'toolCall',
+                id: 'call-production-candidate-notify',
+                name: 'notify',
+                arguments: {
+                  action: 'send',
+                  target_kind: 'companion',
+                  contact_id: candidate.peerContactId,
+                  initiation_permit: permit.permitId,
+                },
+              }],
+              api: 'chat',
+              provider: 'test',
+              model: 'test-model',
+              usage: zeroUsage,
+              stopReason: 'stop',
+              timestamp: Date.now(),
+            }
+          : {
+              role: 'assistant',
+              content: [{ type: 'text', text: 'Candidate handoff queued.' }],
+              api: 'chat',
+              provider: 'test',
+              model: 'test-model',
+              usage: zeroUsage,
+              stopReason: 'stop',
+              timestamp: Date.now(),
+            };
+        streamStep += 1;
+        return {
+          async *[Symbol.asyncIterator]() {
+            yield { type: 'start', partial: structuredClone(message) };
+            yield { type: 'done' };
+          },
+          result: async () => structuredClone(message),
+        } as never;
+      });
+      promptSpy.mockImplementationOnce(async function (this: Agent, promptMessage) {
+        notifyActivationDuringTurn = agent.getAdaptiveToolRuntimeState().activeTools.find(
+          tool => tool.toolName === 'notify',
+        );
+        if (!this.state.tools.some(tool => tool.name === 'notify')) {
+          throw new Error('production candidate turn did not activate notify');
+        }
+        const stream = agentLoopWithScheduler(
+          [promptMessage],
+          {
+            systemPrompt: 'System prompt',
+            messages: [],
+            tools: this.state.tools,
+          } as never,
+          {
+            model: { id: 'test-model', api: 'chat', provider: 'test' },
+            convertToLlm: async messages => messages,
+            getSteeringMessages: async () => [],
+            getFollowUpMessages: async () => [],
+          } as never,
+          new AbortController().signal,
+          streamFn as never,
+          { maxParallelToolCalls: 1 },
+        );
+        let turnMessages: typeof this.state.messages = [];
+        for await (const event of stream) {
+          if (event.type === 'agent_end') {
+            turnMessages = event.messages;
+          }
+        }
+        notifyToolResultDuringTurn = turnMessages.find(
+          message => message.role === 'toolResult' && message.toolName === 'notify',
+        );
+        this.state.messages.push(...turnMessages);
+      });
+
+      await expect(controlPlane.icpAutonomyCandidateDispatcher?.dispatch({
+        candidate,
+        permit,
+      })).resolves.toMatchObject({ content: 'Candidate handoff queued.' });
+
+      expect(notifyActivationDuringTurn).toEqual({
+        toolName: 'notify',
+        source: 'autoload',
+      });
+      expect(agent.getAdaptiveToolRuntimeState().activeTools).not.toContainEqual(
+        expect.objectContaining({ toolName: 'notify' }),
+      );
+      expect(prepareInitiationHandoff).toHaveBeenCalledWith({
+        permitId: permit.permitId,
+        peerContactId: candidate.peerContactId,
+      });
+      expect(notifyToolResultDuringTurn).toMatchObject({
+        isError: false,
+        content: [{
+          type: 'text',
+          text: 'notify: companion outreach queued for the target-channel turn.',
+        }],
+      });
+      expect(JSON.stringify(notifyToolResultDuringTurn)).not.toContain(permit.permitId);
+      expect(JSON.stringify(notifyToolResultDuringTurn)).not.toContain(candidate.reasonSummary);
+      expect(postTurnActions.listQueued()).toEqual([
+        expect.objectContaining({
+          actionKind: DEFERRED_COMPANION_OUTREACH_ACTION_KIND,
+        }),
+      ]);
+      const persistedQueue = readFileSync(queuePath, 'utf8');
+      expect(persistedQueue).toContain(permit.permitId);
+      expect(persistedQueue).not.toContain(candidate.reasonSummary);
+      const policyChecksBeforeExecution = {
+        capability: capabilityHas.mock.calls.length,
+        registration: getToolCatalog.mock.calls.length,
+        overlay: getExtendedToolTurnClass.mock.calls.length,
+      };
+
+      await scheduler.tick();
+
+      expect(capabilityHas.mock.calls.length).toBeGreaterThan(
+        policyChecksBeforeExecution.capability,
+      );
+      expect(getToolCatalog.mock.calls.length).toBeGreaterThan(
+        policyChecksBeforeExecution.registration,
+      );
+      expect(getExtendedToolTurnClass.mock.calls.length).toBeGreaterThan(
+        policyChecksBeforeExecution.overlay,
+      );
+      expect(targetCommand.execute).toHaveBeenCalledWith({
+        permit,
+        rootInitiationId: candidate.rootInitiationId,
+        peerContactId: candidate.peerContactId,
+        continuationTaskKind: candidate.continuationTaskKind,
+      });
+      expect(postTurnActions.listQueued()).toHaveLength(0);
+
+      promptSpy.mockImplementationOnce(async () => {
+        throw new Error('scripted model boundary failure');
+      });
+      await expect(controlPlane.icpAutonomyCandidateDispatcher?.dispatch({
+        candidate,
+        permit,
+      })).rejects.toThrow('scripted model boundary failure');
+      expect(agent.getAdaptiveToolRuntimeState().activeTools).not.toContainEqual(
+        expect.objectContaining({ toolName: 'notify' }),
+      );
+    } finally {
+      await controlPlane?.stopFn();
+      rmSync(dataDir, { recursive: true, force: true });
+    }
   });
 });
 

@@ -318,6 +318,10 @@ export class ToolRuntimeFacade {
   private coreTools: AgentTool<any>[] = [];
   private extendedTools: AgentTool<any>[] = [];
   private loadedExtended = new Map<string, AdaptiveLoadedExtendedToolState>();
+  private turnScopedExtended: {
+    scope: symbol;
+    tools: Map<string, AdaptiveLoadedExtendedToolState>;
+  } | null = null;
   private extendedToolAutoloadPolicy: ExtendedToolAutoloadPolicy | null = createDefaultExtendedToolAutoloadPolicy();
   private lastAdaptiveToolSnapshot: AdaptiveToolSnapshotTelemetry | null = null;
   private getToolsetMemoryWriter: (() => Pick<MemoryWriter, 'write'> | undefined) | undefined;
@@ -421,11 +425,12 @@ export class ToolRuntimeFacade {
   getAdaptiveToolRuntimeState(): AdaptiveToolRuntimeState {
     const promotedResolution = this.resolvePromotedToolActivation();
     const activeResolution = this.resolveActiveTools();
+    const activeLoadedExtended = this.resolveActiveLoadedExtended();
 
     return buildAdaptiveToolRuntimeState({
       coreTools: this.coreTools,
       extendedTools: this.extendedTools,
-      loadedExtended: this.loadedExtended,
+      loadedExtended: activeLoadedExtended,
       promotedToolsConfigured: this.getPromotedExtendedToolNamesInternal(),
       promotedResolution,
       activeResolution,
@@ -454,6 +459,66 @@ export class ToolRuntimeFacade {
       withAdaptiveCorrelation: (correlation, purpose) => this.withAdaptiveCorrelation(correlation, purpose),
       applyActiveToolsToAgent: () => this.applyActiveToolsToAgent(),
     });
+  }
+
+  beginIcpAutonomyCandidateNotifyScope(
+    options: ExtendedToolActivationOptions = {},
+  ): symbol {
+    if (this.turnScopedExtended) {
+      throw new Error('A trusted ICP candidate notify scope is already active');
+    }
+    const access = this.resolveCapabilityAccess();
+    if (!access.has('external.companion')) {
+      throw new Error('Trusted ICP candidate notify scope is not capability authorized');
+    }
+    const toolName = 'notify';
+    const tool = this.extendedTools.find(candidate => candidate.name === toolName);
+    if (!tool) {
+      throw new Error('Trusted ICP candidate notify tool is not registered as extended');
+    }
+    if (this.classifyExtendedToolForTurn(toolName) !== 'overlay') {
+      throw new Error('Trusted ICP candidate notify tool is not overlay eligible');
+    }
+
+    const scope = Symbol('trusted-turn-scoped-tools');
+    const tools = new Map<string, AdaptiveLoadedExtendedToolState>();
+    this.turnScopedExtended = { scope, tools };
+    try {
+      const activation = activateExtendedToolsForTurn({
+        toolNames: [toolName],
+        options: { ...options, source: options.source ?? 'autoload' },
+        extendedTools: this.extendedTools,
+        trackLoadedExtendedTool: (toolName, source) => trackLoadedExtendedTool(
+          tools,
+          toolName,
+          source,
+        ),
+        emitAdaptiveToolDecision: payload => this.emitAdaptiveToolDecision(payload),
+        withAdaptiveCorrelation: (correlation, purpose) => this.withAdaptiveCorrelation(
+          correlation,
+          purpose,
+        ),
+        applyActiveToolsToAgent: () => this.applyActiveToolsToAgent(),
+      });
+      if (activation.missingTools.length > 0
+        || activation.activatedTools.length + activation.alreadyActiveTools.length
+          !== 1) {
+        throw new Error('Trusted ICP candidate notify scope activation was incomplete');
+      }
+      return scope;
+    } catch (error) {
+      this.turnScopedExtended = null;
+      this.applyActiveToolsToAgent();
+      throw error;
+    }
+  }
+
+  endIcpAutonomyCandidateNotifyScope(scope: symbol): void {
+    if (!this.turnScopedExtended || this.turnScopedExtended.scope !== scope) {
+      throw new Error('Trusted ICP candidate notify scope does not match');
+    }
+    this.turnScopedExtended = null;
+    this.applyActiveToolsToAgent();
   }
 
   setExtendedToolAutoloadPolicy(policy: ExtendedToolAutoloadPolicy | null): void {
@@ -650,7 +715,7 @@ export class ToolRuntimeFacade {
   }
 
   getLoadedExtendedTools(): ReadonlyMap<string, AdaptiveLoadedExtendedToolState> {
-    return this.loadedExtended;
+    return this.resolveActiveLoadedExtended();
   }
 
   getCapabilityEligiblePromotedToolNames(): Set<string> {
@@ -714,11 +779,19 @@ export class ToolRuntimeFacade {
     return resolveActiveTools({
       coreTools: this.coreTools,
       extendedTools: this.extendedTools,
-      loadedExtended: this.loadedExtended,
+      loadedExtended: this.resolveActiveLoadedExtended(),
       promotedResolution: this.resolvePromotedToolActivation(),
       classifyExtendedToolForTurn: (toolName) => this.classifyExtendedToolForTurn(toolName),
       additionalSkipped,
     });
+  }
+
+  private resolveActiveLoadedExtended(): Map<string, AdaptiveLoadedExtendedToolState> {
+    if (!this.turnScopedExtended) return new Map(this.loadedExtended);
+    return new Map([
+      ...this.loadedExtended,
+      ...this.turnScopedExtended.tools,
+    ]);
   }
 
   private applyActiveToolsToAgent(): void {

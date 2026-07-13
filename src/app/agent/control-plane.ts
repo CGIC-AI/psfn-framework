@@ -27,6 +27,7 @@ import type { Lifecycle } from '../../shared/contracts/runtime.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type { PostTurnActionRuntime } from '../../core/agent/post-turn-action-runtime.js';
 import type { AgentFacingIcpAutonomyRuntime } from '../../core/icp/agent-facing-autonomy.js';
+import { resolveIcpAutonomyCandidateSchedulerOrigin } from '../../core/icp/candidate-scheduler-origin.js';
 import type { RunChargeLedger } from '../../shared/telemetry/charge-ledger.js';
 import {
   isDeferredCompanionOutreachExecutionAuthorized,
@@ -230,7 +231,19 @@ export function buildAgentControlPlane(
   }), 'extended');
 
   const icpAutonomyCandidateDispatcher = icpAutonomyRuntime
-    ? createIcpAutonomyCandidateDispatcher({ agentLoop })
+    ? createIcpAutonomyCandidateDispatcher({
+        runCandidateTurn: async message => {
+          if (!resolveIcpAutonomyCandidateSchedulerOrigin(message)) {
+            throw new Error('ICP candidate dispatcher lost its validated internal origin');
+          }
+          if (!deferredCompanionOutreachAuthorizationRuntime.hasExternalCompanionCapability()
+            || !deferredCompanionOutreachAuthorizationRuntime.isNotifyToolRegistered()
+            || !deferredCompanionOutreachAuthorizationRuntime.isNotifyOverlayEligible()) {
+            throw new Error('ICP candidate notify turn activation is no longer authorized');
+          }
+          return await agentLoop.handleIcpAutonomyCandidateTurn(message);
+        },
+      })
     : undefined;
 
   return {

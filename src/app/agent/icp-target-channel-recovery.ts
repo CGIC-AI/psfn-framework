@@ -1,5 +1,6 @@
 import { backfillLegacyTurnId } from '../../core/turns/id.js';
 import {
+  assertIcpRecoveryStatusBinding,
   parseIcpRecoveryResponse,
   type IcpDeliveryObservation,
 } from '../../core/session/icp-delivery-recovery.js';
@@ -89,6 +90,38 @@ function validateRecoveryResponse(
     expectedChannelId: binding.permit.channelId,
     expectedSourceMessageId: binding.sourceMessageId,
   });
+}
+
+export function validateObservedIcpTargetRecovery(input: {
+  observation: IcpDeliveryObservation;
+  binding: IcpTargetRecoveryBinding;
+}): {
+  correlation: IcpConversationCorrelation;
+  recoveryResponse: AgentResponse;
+} {
+  if (input.observation.channelId !== input.binding.permit.channelId
+    || input.observation.sourceMessageId !== input.binding.sourceMessageId) {
+    throw new Error('Durable ICP delivery observation does not match the permit source binding');
+  }
+  if (!input.observation.recoveryResponse) {
+    throw new Error('Durable ICP observation is missing recovery evidence');
+  }
+  assertIcpRecoveryStatusBinding(
+    input.observation.status,
+    input.observation.recoveryResponse,
+    'ICP target-channel recovery',
+  );
+  const correlation = validateIcpTargetCorrelationBinding(
+    input.observation.recoveryResponse.metadata.icpCorrelation,
+    input.binding,
+  );
+  const recoveryResponse = validateRecoveryResponse(
+    input.observation.recoveryResponse,
+    correlation,
+    input.binding,
+    'Durable ICP delivery observation recovery response',
+  );
+  return { correlation, recoveryResponse };
 }
 
 export function validateRecordedIcpTargetRecovery(input: {

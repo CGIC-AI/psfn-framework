@@ -89,8 +89,17 @@ turn through the authenticated PSFN bedroom endpoint, and returns Purrsephone's
 ElevenLabs stream to the onboard speaker.
 The bridge requires `ffmpeg` to convert ElevenLabs MP3 chunks into the 48 kHz
 mono FLAC format advertised by this firmware's speaker pipeline.
-All voice turns use the stable `bedroom` conversation id, producing one
-`voice_satellite:bedroom` PSFN channel across wake cycles and bridge restarts.
+All voice turns use the stable `bedroom` conversation id, producing the single
+registry-canonical `satellite:voice-only:bedroom` PSFN channel across wake
+cycles and bridge restarts. The bridge host's ignored `.env` must contain:
+
+```dotenv
+PSFN_CLAIM_TYPE=voice-only
+PSFN_CHANNEL_TYPE=voice_satellite
+PSFN_SATELLITE_ID=bedroom
+PSFN_ENDPOINT_ID=waveshare-bedroom
+VOICE_CONVERSATION_ID=bedroom
+```
 
 This full upstream image uses a single large factory application partition and
 therefore cannot perform OTA recovery or updates. USB serial remains the update

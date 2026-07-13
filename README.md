@@ -269,6 +269,7 @@ Important settings for the Python ESPHome fallback path:
 - `PSFN_CLAIM_NAMESPACE` and `PSFN_CLAIM_TYPE` for the registry claim namespace/type, defaulting to `satellite.endpoint` and the selected capability profile
 - `PSFN_CAPABILITY_PROFILE` for the current endpoint class: `voice-only`, `text-only`, `voxta-avatar`, `vision-capable`, `telemetry-only`, or `mobile-location`
 - `PSFN_SATELLITE_ID`, `PSFN_ENDPOINT_ID`, and `PSFN_ENDPOINT_NAME` for the configured endpoint identity
+- `VOICE_CONVERSATION_ID` pins every ESPHome turn to one PSFN channel suffix; defaults to `PSFN_SATELLITE_ID` and overrides device-provided conversation ids
 - `PSFN_CHANNEL_TYPE` for the compatibility channel header, defaulting to the claim namespace instead of an authoritative endpoint type
 - `PSFN_CLIENT_CERT_PATH`, `PSFN_CLIENT_KEY_PATH`, and optional `PSFN_CA_CERT_PATH` for PSFN client certificate identity
 - `PSFN_TELEMETRY_MODE` and `PSFN_TELEMETRY_CATEGORIES` for configured telemetry advertisement

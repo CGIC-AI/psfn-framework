@@ -23,7 +23,7 @@ import {
   fatigueScope,
   recoveryResponse,
   recoveryWithFatigue,
-} from './icp-recovery-test-fixtures.js';
+} from './icp-recovery.test-fixtures.js';
 
 function suppressedRecovery(overrides: Record<string, unknown> = {}) {
   return {

@@ -14,7 +14,7 @@ import {
   fatigueBudget,
   fatigueMetadata,
   recoveryResponse,
-} from './icp-recovery-test-fixtures.js';
+} from './icp-recovery.test-fixtures.js';
 interface FatigueRecoveryTestResponse {
   content: string;
   channelId: string;

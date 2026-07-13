@@ -238,6 +238,45 @@ describe('ICP target-channel initiation', () => {
     expect(result).toMatchObject({ disposition: 'delivered', recoveredTurn: true });
   });
 
+  it('rejects a failed restart with whitespace-only transport content before execution', async () => {
+    const durableCorrelation = correlation();
+    const whitespaceResponse = {
+      ...response({
+        id: durableCorrelation.requestId,
+        channelId: CHANNEL,
+        channelType: 'companion',
+        authorId: 'system:icp-initiation',
+        authorName: 'ICP Initiation',
+        content: 'private trigger',
+        timestamp: new Date(),
+        routing: { source: 'companion', icpCorrelation: durableCorrelation },
+      }),
+      content: ' \n\t ',
+    };
+    const restarted = createHarness({
+      content: whitespaceResponse.content,
+      correlation: durableCorrelation,
+      recoveryResponse: whitespaceResponse,
+    });
+    restarted.findIcpDeliveryObservation.mockResolvedValueOnce({
+      channelId: CHANNEL,
+      sourceMessageId: durableCorrelation.messageId,
+      status: 'failed',
+      error: 'transport failed',
+      recoveryResponse: whitespaceResponse,
+    });
+
+    await expect(restarted.initiator.initiate({
+      permit: consumedPermit(),
+      rootInitiationId: ROOT,
+      peerContactId: CONTACT_ID,
+    })).rejects.toThrow(/failed.*transport content/i);
+
+    expect(restarted.handleMessage).not.toHaveBeenCalled();
+    expect(restarted.sendInitiation).not.toHaveBeenCalled();
+    expect(restarted.recordDeliveryObservation).not.toHaveBeenCalled();
+  });
+
   it('recovers from the assistant row when the process died before any delivery observation', async () => {
     const durableCorrelation = correlation();
     const durableResponse = response({
@@ -374,10 +413,7 @@ describe('ICP target-channel initiation', () => {
 
   it('reconciles a consumed suppression after the local observation write was interrupted', async () => {
     const harness = createHarness();
-    const suppressionCorrelation = {
-      ...correlation(),
-      fatigueDecision: 'suppress' as const,
-    };
+    const suppressionCorrelation = correlation();
     const suppressionResponse = {
       ...response({
         id: suppressionCorrelation.requestId,

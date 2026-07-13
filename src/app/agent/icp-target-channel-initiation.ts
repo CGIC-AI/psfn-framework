@@ -8,7 +8,10 @@ import {
 } from '../../shared/contracts/icp-autonomy.js';
 import type { AgentResponse, SubstrateMessage } from '../../shared/contracts/runtime.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
-import type { IcpDeliveryObservation } from '../../core/session/icp-delivery-recovery.js';
+import {
+  assertIcpRecoveryStatusBinding,
+  type IcpDeliveryObservation,
+} from '../../core/session/icp-delivery-recovery.js';
 
 export type { IcpDeliveryObservation } from '../../core/session/icp-delivery-recovery.js';
 
@@ -177,6 +180,16 @@ export function createIcpTargetChannelInitiator(input: {
       permit.channelId,
       sourceMessageId,
     );
+    if (previousObservation) {
+      if (!previousObservation.recoveryResponse) {
+        throw new Error('Durable ICP observation is missing recovery evidence');
+      }
+      assertIcpRecoveryStatusBinding(
+        previousObservation.status,
+        previousObservation.recoveryResponse,
+        'ICP target-channel recovery',
+      );
+    }
     const recorded = await input.agent.findRecordedIcpInitiation(permit.channelId, sourceMessageId);
     if (!recorded
       && previousObservation?.turnCompleted

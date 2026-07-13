@@ -892,6 +892,7 @@ describe('registerGatewayMessageHandlers', () => {
     messageId: INBOUND_ICP_MESSAGE_ID,
     requestId: INBOUND_ICP_MESSAGE_ID,
     costOriginStage: 'reply',
+    fatigueDecision: 'not_evaluated',
   };
 
   function makeCorrelatedCompanionMessage(overrides?: Record<string, unknown>): SubstrateMessage {
@@ -1162,6 +1163,11 @@ describe('registerGatewayMessageHandlers', () => {
       correlation: replyIcpCorrelation,
       content: ' \n\t ',
     }],
+    ['failed transport content', {
+      status: 'failed',
+      correlation: replyIcpCorrelation,
+      content: ' \n\t ',
+    }],
   ])('rejects contradictory recovery %s before execution', async (_label, fixture) => {
     const response = {
       ...makeResponse(fixture.content),
@@ -1188,7 +1194,7 @@ describe('registerGatewayMessageHandlers', () => {
 
     await expect(restarted.onCompanionMessage(makeCorrelatedCompanionMessage({
       timestamp: '2026-03-02T05:00:00.000Z',
-    }))).rejects.toThrow(/suppressed|status.*fatigue|transport content/i);
+    }))).rejects.toThrow(/suppressed|status.*fatigue|transport content|fatigue.*not_evaluated/i);
     expect(restarted.agentLoop.handleMessage).not.toHaveBeenCalled();
     expect(restarted.gateway.companionSend).not.toHaveBeenCalled();
   });

@@ -63,8 +63,9 @@ export function assertIcpRecoveryStatusBinding(
     && (response.content.trim().length > 0 || (response.attachments?.length ?? 0) > 0)) {
     throw new Error(`${label} suppressed recovery contains a deliverable response`);
   }
-  if (status === 'delivered' && response.content.trim().length === 0) {
-    throw new Error(`${label} delivered recovery is missing transport content`);
+  if ((status === 'delivered' || status === 'failed')
+    && response.content.trim().length === 0) {
+    throw new Error(`${label} ${status} recovery is missing transport content`);
   }
   if (status !== undefined
     && correlation.fatigueDecision === 'suppress'

@@ -1364,7 +1364,7 @@ describe('handleMessageForTurn fatigue enforcement', () => {
       surface: 'companion_dm' as const,
       costPurpose: 'conversation_turn' as const,
       costOriginStage: 'initiation' as const,
-      fatigueDecision: 'suppress' as const,
+      fatigueDecision: 'not_evaluated' as const,
     };
     const recoveredResponse: AgentResponse = {
       content: '',

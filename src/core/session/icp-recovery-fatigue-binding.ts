@@ -3,57 +3,11 @@ import type {
   FatigueEnforcementMetadata,
   FatiguePendingSpendMetadata,
 } from '../../shared/contracts/runtime.js';
+import { assertFatigueEnforcementMetadataInvariants } from '../agent/fatigue/enforcement-invariants.js';
 
 function sameJson(left: unknown, right: unknown): boolean {
   return JSON.stringify(left) === JSON.stringify(right);
 }
-
-const FATIGUE_DECISION_MATRIX = {
-  allowed_free: {
-    modelDisposition: 'allowed',
-    correlationDecision: 'allow',
-    spendDecision: 'free',
-    pendingSpend: 'forbidden',
-    amount: 'zero',
-  },
-  allowed_charged: {
-    modelDisposition: 'allowed',
-    correlationDecision: 'allow',
-    spendDecision: 'charged',
-    pendingSpend: 'required',
-    amount: 'positive',
-  },
-  wrap_up_charged: {
-    modelDisposition: 'allowed',
-    correlationDecision: 'allow',
-    spendDecision: 'charged',
-    pendingSpend: 'required',
-    amount: 'positive',
-  },
-  overcharge_charged: {
-    modelDisposition: 'allowed',
-    correlationDecision: 'allow_overcharge',
-    spendDecision: 'overcharge',
-    pendingSpend: 'required',
-    amount: 'positive',
-  },
-  suppressed_hard_exhausted: {
-    modelDisposition: 'suppressed',
-    correlationDecision: 'suppress',
-    spendDecision: 'charged',
-    pendingSpend: 'forbidden',
-    amount: 'positive',
-  },
-} as const satisfies Record<
-  FatigueEnforcementMetadata['decision'],
-  {
-    modelDisposition: FatigueEnforcementMetadata['modelDisposition'];
-    correlationDecision: IcpConversationCorrelation['fatigueDecision'];
-    spendDecision: FatigueEnforcementMetadata['spendDecision'];
-    pendingSpend: 'required' | 'forbidden';
-    amount: 'zero' | 'positive';
-  }
->;
 
 export function assertFatigueRecoveryBinding(input: {
   fatigue: FatigueEnforcementMetadata | undefined;
@@ -66,6 +20,9 @@ export function assertFatigueRecoveryBinding(input: {
   const { fatigue, pendingSpend, correlation, turnId, requestId, label } = input;
   if (!fatigue) {
     if (pendingSpend) throw new Error(`${label}.fatigue binding requires enforcement metadata`);
+    if (correlation.fatigueDecision !== 'not_evaluated') {
+      throw new Error(`${label}.fatigue must be not_evaluated without enforcement metadata`);
+    }
     return;
   }
   if (fatigue.scope.localCompanionId !== correlation.localCompanionId
@@ -77,18 +34,12 @@ export function assertFatigueRecoveryBinding(input: {
   if (!pendingSpend && fatigue.recordedEvent) {
     throw new Error(`${label}.fatigue recorded event binding requires pending spend`);
   }
-  const expected = FATIGUE_DECISION_MATRIX[fatigue.decision];
+  const expected = assertFatigueEnforcementMetadataInvariants(fatigue);
   const expectsPendingSpend = expected.pendingSpend === 'required';
-  const amountMatches = expected.amount === 'zero'
-    ? fatigue.budget.amount === 0
-    : fatigue.budget.amount > 0;
-  if (fatigue.modelDisposition !== expected.modelDisposition
-    || correlation.fatigueDecision !== expected.correlationDecision
-    || fatigue.spendDecision !== expected.spendDecision
-    || fatigue.shouldRecordSpend !== expectsPendingSpend
+  if (correlation.fatigueDecision !== expected.correlationDecision
     || (pendingSpend !== undefined) !== expectsPendingSpend
-    || !amountMatches) {
-    throw new Error(`${label}.fatigue decision matrix binding is inconsistent`);
+    || fatigue.shouldRecordSpend !== expectsPendingSpend) {
+    throw new Error(`${label}.fatigue production invariant binding is inconsistent`);
   }
   if (!pendingSpend) {
     return;

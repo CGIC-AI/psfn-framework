@@ -1,6 +1,9 @@
 import type { AgentResponse, SubstrateMessage } from '../../shared/contracts/runtime.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
-import type { IcpDeliveryObservation } from '../../core/session/icp-delivery-recovery.js';
+import {
+  assertIcpRecoveryStatusBinding,
+  type IcpDeliveryObservation,
+} from '../../core/session/icp-delivery-recovery.js';
 
 interface CompanionReplyDeliveryGatewayPort {
   companionSend(
@@ -60,10 +63,12 @@ export function createCompanionReplyDeliveryLifecycle(input: {
       if (!correlation) {
         throw new Error('Correlated companion reply is missing response ICP correlation');
       }
+      assertIcpRecoveryStatusBinding(
+        deliveryObservation?.status,
+        response,
+        'Companion reply delivery',
+      );
       if (deliveryObservation?.status === 'delivered') {
-        if (!response.content.trim()) {
-          throw new Error('Delivered companion reply is missing transport content');
-        }
         return;
       }
       if (!response.content.trim()) {

@@ -11,6 +11,7 @@ import type {
   RunChargeLineage,
 } from '../../../shared/contracts/runtime.js';
 import { isRecord } from '../../../shared/utils/types.js';
+import { resolveFatigueSpendUnit } from './enforcement-invariants.js';
 
 const FATIGUE_DECISIONS = new Set(['charged', 'free', 'overcharge']);
 const FATIGUE_REASONS = new Set([
@@ -218,19 +219,6 @@ function createState(input: {
   };
 }
 
-function resolveDecision(input: {
-  peer: FatigueBudgetPeerSnapshot;
-  triggeringAuthor: FatigueBudgetActorSnapshot;
-}): { decision: FatigueBudgetDecision; reason: FatigueBudgetReason; amount: number } {
-  if (input.peer.isMachineIntelligence !== true) {
-    return { decision: 'free', reason: 'peer_not_machine_intelligence', amount: 0 };
-  }
-  if (input.triggeringAuthor.isMachineIntelligence !== true) {
-    return { decision: 'free', reason: 'triggering_author_not_machine_intelligence', amount: 0 };
-  }
-  return { decision: 'charged', reason: 'machine_intelligence_response', amount: 1 };
-}
-
 function cloneScope(scope: FatigueBudgetScope): FatigueBudgetScope {
   return { ...scope };
 }
@@ -391,7 +379,7 @@ export class DeterministicFatigueBudgetPort implements FatigueBudgetPort {
       dayKey,
       limits,
     });
-    const decision = resolveDecision({ peer, triggeringAuthor });
+    const decision = resolveFatigueSpendUnit({ peer, triggeringAuthor });
     const stateAfter = createState({
       scope: cloneScope(stateBefore.scope),
       normalSpent: stateBefore.normalSpent + decision.amount,

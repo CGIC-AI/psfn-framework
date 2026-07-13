@@ -20,6 +20,7 @@ import {
   type FatigueBudgetEvaluation,
   type FatigueBudgetPort,
 } from './fatigue-budget.js';
+import { assertFatigueEnforcementMetadataInvariants } from './enforcement-invariants.js';
 import {
   evaluateFatiguePolicy,
   type FatiguePolicyChannelType,
@@ -186,7 +187,7 @@ function createMetadata(input: {
   const shouldRecordSpend = !suppressModel
     && input.policy.spend.spendsFatigue
     && input.evaluation.amount > 0;
-  return {
+  const metadata: FatigueEnforcementMetadata = {
     schemaVersion: 1,
     decision: input.decision,
     modelDisposition: suppressModel ? 'suppressed' : 'allowed',
@@ -224,6 +225,8 @@ function createMetadata(input: {
       overchargeRemainingAfterProjected: input.evaluation.stateAfter.remainingOvercharge,
     },
   };
+  assertFatigueEnforcementMetadataInvariants(metadata);
+  return metadata;
 }
 
 function resolveRecentHumanParticipation(input: {

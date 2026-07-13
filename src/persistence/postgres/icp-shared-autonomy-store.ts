@@ -863,14 +863,14 @@ export class PostgresIcpSharedAutonomyStore implements IcpSharedAutonomyStorePor
       if (!permitMatches(existing, input)) {
         return { outcome: 'mismatch', permit: existing, reasonCode: 'permit_mismatch' };
       }
-      if (existing.status === 'consumed') {
-        return { outcome: 'replayed', permit: existing, reasonCode: 'permit_replayed' };
-      }
       if (existing.status === 'revoked') {
         return { outcome: 'revoked', permit: existing, reasonCode: 'permit_revoked' };
       }
       if (invalidationReason) {
         throw new IcpAutonomyInvalidationConflictError(invalidationReason);
+      }
+      if (existing.status === 'consumed') {
+        return { outcome: 'replayed', permit: existing, reasonCode: 'permit_replayed' };
       }
       if (existing.status === 'expired' || existing.expiresAtMs <= input.consumedAtMs) {
         if (existing.status === 'issued') {

@@ -498,6 +498,58 @@ describe('ICP autonomy Postgres persistence', () => {
           WHERE contact_id = $2 AND channel = 'companion' AND channel_user_id = $3
         `, [B, peerForA.id, C]),
       );
+
+      const identityInserter = await poolA.connect();
+      let identityInsertionOpen = false;
+      try {
+        await identityInserter.query('BEGIN');
+        identityInsertionOpen = true;
+        const observedAt = new Date(nowMs).toISOString();
+        await identityInserter.query(`
+          INSERT INTO contact_channel_ids (
+            contact_id, channel, channel_user_id, privacy_level, first_seen, last_seen
+          ) VALUES ($1, 'companion', $2, 'invite_only', $3, $3)
+        `, [peerForA.id, C, observedAt]);
+
+        let deliveryCount = 0;
+        let authorizationSettled = false;
+        const authorization = authority.runAuthorizedHandoff({
+          senderCompanionId: A,
+          peerContactId: peerForA.id,
+          permit: handoffPermit,
+          nowMs,
+        }, async () => {
+          deliveryCount += 1;
+          return 'permit-consumed';
+        });
+        void authorization.then(
+          () => { authorizationSettled = true; },
+          () => { authorizationSettled = true; },
+        );
+        await new Promise<void>(resolve => setTimeout(resolve, 25));
+        expect(authorizationSettled).toBe(false);
+
+        await identityInserter.query('COMMIT');
+        identityInsertionOpen = false;
+        await expect(authorization).resolves.toEqual({
+          decision: { eligible: false, reasonCode: 'invalid_identity' },
+        });
+        expect(deliveryCount).toBe(0);
+        await expect(authority.authorizeHandoff({
+          senderCompanionId: A,
+          peerContactId: peerForA.id,
+          permit: handoffPermit,
+          nowMs,
+        })).resolves.toEqual({ eligible: false, reasonCode: 'invalid_identity' });
+      } finally {
+        if (identityInsertionOpen) await identityInserter.query('ROLLBACK');
+        identityInserter.release();
+        await poolA.query(`
+          DELETE FROM contact_channel_ids
+          WHERE contact_id = $1 AND channel = 'companion' AND channel_user_id = $2
+        `, [peerForA.id, C]);
+      }
+
       await assertMutationWaitsForAuthorization(
         async () => await poolA.query(`
           UPDATE icp_initiation_candidates
@@ -637,6 +689,13 @@ describe('ICP autonomy Postgres persistence', () => {
     const knownCompanionIds = [A, B];
     const storeA = await PostgresIcpSharedAutonomyStore.connect(databaseUrl, { knownCompanionIds });
     const storeB = await PostgresIcpSharedAutonomyStore.connect(databaseUrl, { knownCompanionIds });
+    const invalidationPool = createPostgresPool(databaseUrl, {
+      schema: SHARED_SCHEMA_NAME,
+      allowExitOnIdle: true,
+      max: 1,
+    });
+    const invalidator = await invalidationPool.connect();
+    let invalidationOpen = false;
     try {
       await storeA.publishAvailability({
         companionId: B,
@@ -711,6 +770,33 @@ describe('ICP autonomy Postgres persistence', () => {
       ]);
       expect(results.map(result => result.outcome).sort()).toEqual(['consumed', 'replayed']);
       expect((await storeA.getPermit(PERMIT_ID))?.status).toBe('consumed');
+
+      await invalidator.query('BEGIN');
+      invalidationOpen = true;
+      await invalidator.query(`
+        UPDATE icp_autonomy_invalidation_fences
+        SET generation = generation + 1,
+            invalidated_at_ms = $2,
+            last_reason_code = 'peer_blocked'
+        WHERE companion_id = $1
+      `, [A, 11_500]);
+      let deliveryCount = 0;
+      let recoverySettled = false;
+      const recovery = (async () => {
+        const result = await storeA.consumePermit(input);
+        deliveryCount += 1;
+        return result;
+      })();
+      void recovery.then(
+        () => { recoverySettled = true; },
+        () => { recoverySettled = true; },
+      );
+      await new Promise<void>(resolve => setTimeout(resolve, 25));
+      expect(recoverySettled).toBe(false);
+      await invalidator.query('COMMIT');
+      invalidationOpen = false;
+      await expect(recovery).rejects.toBeInstanceOf(IcpAutonomyInvalidationConflictError);
+      expect(deliveryCount).toBe(0);
 
       const active = await storeB.transitionEpisode({
         conversationId: CONVERSATION_ID,
@@ -855,6 +941,9 @@ describe('ICP autonomy Postgres persistence', () => {
       expect(invalidated).toHaveLength(1);
       expect(invalidated[0]).toMatchObject({ status: 'revoked', reasonCode: 'peer_offline' });
     } finally {
+      if (invalidationOpen) await invalidator.query('ROLLBACK');
+      invalidator.release();
+      await invalidationPool.end();
       await storeA.close();
       await storeB.close();
     }

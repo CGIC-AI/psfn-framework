@@ -48,6 +48,10 @@ interface ContactPolicyRow extends QueryResultRow {
   is_machine_intelligence: boolean;
 }
 
+interface ContactIdentityPolicyRow extends QueryResultRow {
+  channel_user_id: string;
+}
+
 export interface PostgresIcpInitiationPolicyAuthorityOptions {
   fleet: readonly FleetPolicyOwner[];
   quietHours: ProactiveQuietHoursConfig;
@@ -307,19 +311,39 @@ export class PostgresIcpInitiationPolicyAuthority implements GatewayIcpInitiatio
     peerCompanionId: string,
     lockCanonicalRows = false,
   ): Promise<{ trustLevel: TrustLevel } | null> {
-    const result = await query.query<ContactPolicyRow>(`
+    // A final authorization takes FOR UPDATE on the canonical parent contact.
+    // The channel-identity FK takes FOR KEY SHARE for inserts, so this parent
+    // lock prevents a second companion identity from appearing until the
+    // authorized operation commits. The follow-up read must still require
+    // exact cardinality because ambiguity committed before the lock is valid.
+    const contactResult = await query.query<ContactPolicyRow>(`
       SELECT c.id, c.trust_level, c.is_machine_intelligence
       FROM ${quoteSchema(owner.postgresSchema)}.contacts AS c
-      JOIN ${quoteSchema(owner.postgresSchema)}.contact_channel_ids AS identity
-        ON identity.contact_id = c.id
-      WHERE identity.channel = 'companion' AND identity.channel_user_id = $1
-        AND ($2::text IS NULL OR c.id = $2)
-      LIMIT 1
-      ${lockCanonicalRows ? 'FOR SHARE OF c, identity' : ''}
+      WHERE c.id = CASE
+        WHEN $2::text IS NOT NULL THEN $2
+        ELSE (
+          SELECT identity.contact_id
+          FROM ${quoteSchema(owner.postgresSchema)}.contact_channel_ids AS identity
+          WHERE identity.channel = 'companion' AND identity.channel_user_id = $1
+        )
+      END
+      ${lockCanonicalRows ? 'FOR UPDATE OF c' : ''}
     `, [peerCompanionId, expectedContactId]);
-    const row = result.rows.at(0);
-    if (!row || !row.is_machine_intelligence) return null;
-    return { trustLevel: parseTrustLevel(row.trust_level) };
+    const contact = contactResult.rows.at(0);
+    if (!contact || !contact.is_machine_intelligence) return null;
+
+    const identityResult = await query.query<ContactIdentityPolicyRow>(`
+      SELECT identity.channel_user_id
+      FROM ${quoteSchema(owner.postgresSchema)}.contact_channel_ids AS identity
+      WHERE identity.contact_id = $1 AND identity.channel = 'companion'
+      ORDER BY identity.channel_user_id
+      ${lockCanonicalRows ? 'FOR SHARE OF identity' : ''}
+    `, [contact.id]);
+    if (identityResult.rows.length !== 1
+      || identityResult.rows[0]?.channel_user_id !== peerCompanionId) {
+      return null;
+    }
+    return { trustLevel: parseTrustLevel(contact.trust_level) };
   }
 
   private isBlocked(companionId: string, peerCompanionId: string, isDirectMessage: boolean): boolean {

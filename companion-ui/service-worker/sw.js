@@ -55,12 +55,6 @@ self.addEventListener('activate', (event) => {
       ));
       await Promise.all(staleCacheNames.map((key) => caches.delete(key)));
       await self.clients.claim();
-      if (staleCacheNames.length === 0) return;
-      const windows = await self.clients.matchAll({
-        includeUncontrolled: true,
-        type: 'window',
-      });
-      await Promise.all(windows.map((client) => client.navigate(client.url)));
     })(),
   );
 });

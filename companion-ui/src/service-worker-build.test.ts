@@ -21,7 +21,6 @@ interface ServiceWorkerHarnessOptions {
   cachedResponse?: TestResponse;
   fetchResponse?: TestResponse;
   fetchError?: Error;
-  windowClients?: Array<{ navigate: ReturnType<typeof vi.fn>; url: string }>;
 }
 
 function testResponse(label: string): TestResponse {
@@ -70,7 +69,7 @@ function createServiceWorkerHarness(
   });
   const clients = {
     claim: vi.fn(async () => undefined),
-    matchAll: vi.fn(async () => options.windowClients ?? []),
+    matchAll: vi.fn(async () => []),
   };
   const self = {
     addEventListener: (type: string, listener: (event: unknown) => void) => {
@@ -237,13 +236,12 @@ describe('companion-ui production service worker', () => {
     expect(harness.fetch).toHaveBeenCalledOnce();
   });
 
-  it('activates an update without deleting unrelated caches and reloads open clients', async () => {
+  it('activates an update without deleting unrelated caches or navigating open clients', async () => {
     const { serviceWorker } = await buildCompanionUi(
       'dddddddddddddddddddddddddddddddddddddddd',
     );
     const currentCacheName = serviceWorker.match(/const CACHE_NAME = "([^"]+)";/u)?.[1];
     if (!currentCacheName) throw new Error('Built service worker did not contain its cache name');
-    const navigate = vi.fn(async () => undefined);
     const harness = createServiceWorkerHarness(serviceWorker, {
       cacheKeys: [
         currentCacheName,
@@ -251,7 +249,6 @@ describe('companion-ui production service worker', () => {
         'psfn-satellite-mobile-chat-app-v1',
         'unrelated-origin-cache',
       ],
-      windowClients: [{ navigate, url: 'https://companion.test/conversation' }],
     });
 
     await harness.dispatchActivate();
@@ -261,7 +258,7 @@ describe('companion-ui production service worker', () => {
       'psfn-satellite-mobile-chat-app-v1',
     ]);
     expect(harness.clients.claim).toHaveBeenCalledOnce();
-    expect(navigate).toHaveBeenCalledWith('https://companion.test/conversation');
+    expect(harness.clients.matchAll).not.toHaveBeenCalled();
   });
 
   it('falls back to the current cached shell when a navigation is offline', async () => {

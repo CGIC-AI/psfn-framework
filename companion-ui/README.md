@@ -92,6 +92,9 @@ Vite renders the production `dist/sw.js` from `service-worker/sw.js`, injects
 the current hashed asset list, and versions its cache with
 `COMPANION_UI_BUILD_REVISION`. Container builds set that value to the pinned
 source commit; local builds fall back to a deterministic bundle hash.
+Updates activate without navigating an open client. The current page keeps its
+draft, selected attachments, connection fields, and live session state, and
+shows an update-ready notice so the operator can reload at a safe point.
 
 ## In-Cluster Test Deployment
 
@@ -118,11 +121,17 @@ Use these checks for this package:
 
 ```bash
 npm run test
+npm run test:browser
 npm run typecheck
 npm run lint
 npm run build
 npm audit --omit=dev
 ```
+
+The browser gate runs the legacy-worker-to-current-worker migration in real
+Chromium, then verifies one ordinary reload reaches the current shell and an
+offline reload still works. Install the pinned Playwright Chromium runtime once
+with `npx playwright install chromium` when preparing a fresh test machine.
 
 For tracked repo work, the parent repository requires `npm run lint` before
 closing the bead. Run that from the repo root:

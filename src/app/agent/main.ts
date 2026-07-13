@@ -108,6 +108,15 @@ import { createDriftVelocityEvidencePort } from '../../core/cogsec/drift/drift-e
 import { createSecondArrowEvidencePort } from '../../core/cogsec/drift/second-arrow-evidence-adapters.js';
 import { hydrateStartupActiveCoreMemoryBlocks } from '../../faculties/core-memory/startup-hydration.js';
 import { enforceNetworkIsolationOnStartup } from './startup-guards.js';
+import { DEFAULT_INTROSPECTION_AUDIT_CONFIG } from '../../system/config/scheduler-config.js';
+import {
+  createLLMCompanionLandmarkReflector,
+  createLLMIntrospectionAuditor,
+} from '../../faculties/introspection/model-runtime.js';
+import { IntrospectionAuditRuntime } from '../../faculties/introspection/runtime.js';
+import { registerIntrospectionAuditTask } from '../../faculties/introspection/scheduler-lane.js';
+import { createTurnRecordIntrospectionSource } from '../../faculties/introspection/source.js';
+import { createIntrospectionValuesEvidencePort } from '../../faculties/introspection/values-consistency.js';
 import {
   createOptionalJournalAutoPublisher,
   registerMarkdownJournalTools,
@@ -315,6 +324,7 @@ async function main(): Promise<void> {
     memoryStore,
     contactStore,
     coreMemoryStore,
+    introspectionConsentStore,
     intentionRuntime,
     intentionAppraisalHooks,
     intentionBehavioralHooks,
@@ -453,6 +463,31 @@ async function main(): Promise<void> {
     socialGraphProposalStore,
     socialGraphWatermarkStore,
   });
+  const introspectionAuditConfig = schedulerConfig.introspectionAudit
+    ?? DEFAULT_INTROSPECTION_AUDIT_CONFIG;
+  const introspectionAuditRuntime = new IntrospectionAuditRuntime({
+    config: introspectionAuditConfig,
+    consentStore: introspectionConsentStore,
+    source: createTurnRecordIntrospectionSource({
+      listRecentSessions: (limit) => sessionManager.listRecentSessions(limit),
+      getRecentTurnRecords: (channelId, limit) => sessionStore.getRecentTurnRecords(channelId, limit),
+    }),
+    auditor: createLLMIntrospectionAuditor(llmProvider, introspectionAuditConfig),
+    reflector: createLLMCompanionLandmarkReflector(
+      llmProvider,
+      systemPrompt,
+      introspectionAuditConfig,
+    ),
+    persistence: persistenceRuntime.introspectionLandmarkStore,
+  });
+  registerIntrospectionAuditTask({
+    scheduler,
+    runtime: introspectionAuditRuntime,
+    config: introspectionAuditConfig,
+  });
+  const introspectionValuesEvidence = createIntrospectionValuesEvidencePort(
+    persistenceRuntime.introspectionLandmarkStore,
+  );
 
   const moduleLoader = new ModuleLoader({
     eventBus,
@@ -780,7 +815,7 @@ async function main(): Promise<void> {
         log.info('Wrote graceful shutdown markers', { channels: markedChannels });
       }
     },
-    closeDatabase: () => {},
+    closeDatabase: () => persistenceRuntime.introspectionLandmarkStore.close(),
     scheduler,
     moduleLoader,
     memoryExtractor,
@@ -1115,6 +1150,7 @@ async function main(): Promise<void> {
       characterPromptVariablesProvider: buildCharacterPromptVariablesProvider(cardVersionStore),
       memoryWriter,
       promptRegistry: promptState.registry,
+      introspectionValuesEvidence,
       reflectionStore,
       sessionManager,
       emotionState,

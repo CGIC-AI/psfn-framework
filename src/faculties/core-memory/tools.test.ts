@@ -9,6 +9,7 @@ import { runWithRequestContext } from '../../primitives/llm/request-context.js';
 import type { ActiveConcern } from '../../core/intention/concerns.js';
 import type { ConcernStorePort } from '../../core/intention/concern-store-port.js';
 import { ValuesJournalStore } from '../values/store.js';
+import { IntrospectionConsentStore } from '../introspection/consent-store.js';
 import type {
   CoreMemoryAppendOptions,
   CoreMemoryBlock,
@@ -594,5 +595,62 @@ describe('orient tool', () => {
     expect(payload.required).toBe('concernId or concernIds');
     expect(payload.hint).toContain('concernId or concernIds');
     expect(payload.hint).toContain('Do not use tool_search');
+  });
+
+  it('lets only an active companion turn set exact introspection consent', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'orient-introspection-consent-'));
+    try {
+      const consentStore = new IntrospectionConsentStore(join(root, 'consent.jsonl'));
+      const tool = createOrientTool({
+        append: vi.fn(),
+        replace: vi.fn(),
+        rethink: vi.fn(),
+      }, { introspectionConsentStore: consentStore });
+
+      const withoutTurn = await tool.execute('consent-missing-context', {
+        action: 'introspection_consent_set',
+        enabled: true,
+        allowedPublicChannelIds: ['discord:public-room'],
+        reason: 'bounded self-reflection',
+      });
+      expect(withoutTurn.details.isError).toBe(true);
+      expect(consentStore.load()).toMatchObject({ status: 'unconfigured', enabled: false });
+
+      const configured = await runWithRequestContext({
+        turnId: '019d2326-d9e1-701d-bcee-250d2cbb0e4e',
+        requestId: 'request-consent-1',
+        callType: 'tool',
+      }, () => tool.execute('consent-active-turn', {
+        action: 'introspection_consent_set',
+        enabled: true,
+        allowedPublicChannelIds: ['discord:public-room'],
+        reason: 'bounded self-reflection',
+      }));
+      expect(configured.details.isError).not.toBe(true);
+      expect(consentStore.load()).toMatchObject({
+        enabled: true,
+        allowedPublicChannelIds: ['discord:public-room'],
+        actor: {
+          kind: 'companion',
+          turnId: '019d2326-d9e1-701d-bcee-250d2cbb0e4e',
+          requestId: 'request-consent-1',
+        },
+      });
+
+      const background = await runWithRequestContext({
+        turnId: '019d2326-d9e1-701d-bcee-250d2cbb0e4e',
+        requestId: 'request-consent-background',
+        callType: 'background',
+      }, () => tool.execute('consent-background', {
+        action: 'introspection_consent_set',
+        enabled: false,
+        allowedPublicChannelIds: [],
+        reason: 'background revocation attempt',
+      }));
+      expect(background.details.isError).toBe(true);
+      expect(consentStore.load()).toMatchObject({ revision: 1, enabled: true });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });

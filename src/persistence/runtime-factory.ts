@@ -41,6 +41,7 @@ import type { ScheduledPromptStorePort } from '../core/scheduler/scheduled-promp
 import { PostgresCompanionPresenceStore } from './postgres/companion-presence-store.js';
 import type { CompanionPresenceStorePort } from '../core/agent/companion-presence-store-port.js';
 import { createPostgresPool, ensurePostgresSchemaExists } from './postgres.js';
+import { IntrospectionLandmarkPostgresStore } from '../faculties/introspection/postgres-store.js';
 
 export interface AgentPersistenceRuntime {
   backend: PersistenceBackend;
@@ -61,6 +62,7 @@ export interface AgentPersistenceRuntime {
   internalStateStore: InternalStateStorePort;
   participantTrendStore: ParticipantTrendStorePort;
   scheduledPromptStore: ScheduledPromptStorePort;
+  introspectionLandmarkStore: IntrospectionLandmarkPostgresStore;
   /**
    * Shared-schema cross-companion presence store (sprint 10, W5a). Present
    * ONLY when multi-companion mode is enabled; flag-off never touches the
@@ -150,6 +152,7 @@ export async function createAgentPersistenceRuntime(
     internalStateStore: await PostgresInternalStateStore.connect(databaseUrl, { schema }),
     participantTrendStore: await PostgresParticipantTrendStore.connect(databaseUrl, { schema }),
     scheduledPromptStore: await PostgresScheduledPromptStore.connect(databaseUrl, { schema }),
+    introspectionLandmarkStore: await IntrospectionLandmarkPostgresStore.connect(databaseUrl, { schema }),
     ...(companionPresenceStore ? { companionPresenceStore } : {}),
   };
 }

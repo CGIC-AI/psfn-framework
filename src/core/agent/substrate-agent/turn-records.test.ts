@@ -1,7 +1,52 @@
 import { describe, expect, it } from 'vitest';
-import { buildTurnRecord, sanitizePersistedReasoningText } from './turn-records.js';
+import {
+  buildTurnRecord,
+  resolveTurnRecordAuditPrivacy,
+  sanitizePersistedReasoningText,
+} from './turn-records.js';
 
 describe('turn-records tool persistence', () => {
+  it('captures verbatim audit eligibility only for explicitly public non-DM turns', () => {
+    expect(resolveTurnRecordAuditPrivacy({
+      id: 'message-public',
+      channelId: 'discord:public',
+      channelType: 'discord',
+      authorId: 'user',
+      authorName: 'User',
+      content: 'public statement',
+      timestamp: new Date(),
+      isDirectMessage: false,
+      routing: { channelPrivacy: 'public' },
+    })).toEqual({
+      schemaVersion: 1,
+      contentMode: 'verbatim_public',
+      channelPrivacy: 'public',
+      reason: 'explicit_public_non_dm',
+    });
+
+    expect(resolveTurnRecordAuditPrivacy({
+      id: 'message-private',
+      channelId: 'discord:private',
+      channelType: 'discord',
+      authorId: 'user',
+      authorName: 'User',
+      content: 'private statement',
+      timestamp: new Date(),
+      isDirectMessage: true,
+      routing: { channelPrivacy: 'private' },
+    }).contentMode).toBe('emotional_signal_only');
+
+    expect(resolveTurnRecordAuditPrivacy({
+      id: 'message-ambiguous',
+      channelId: 'api:ambiguous',
+      channelType: 'api',
+      authorId: 'user',
+      authorName: 'User',
+      content: 'ambiguous statement',
+      timestamp: new Date(),
+    }).contentMode).toBe('emotional_signal_only');
+  });
+
   it('keeps concise persisted reasoning that is useful to operators', () => {
     expect(sanitizePersistedReasoningText('Need the memory tool first.')).toBe('Need the memory tool first.');
   });

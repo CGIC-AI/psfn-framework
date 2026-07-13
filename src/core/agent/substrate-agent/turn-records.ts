@@ -1,7 +1,7 @@
 import type { AgentMessage } from '../../../boundary/pi-agent/index.js';
 import type { AssistantMessage, TextContent, ToolResultMessage } from '@mariozechner/pi-ai';
 import type { SessionManager } from '../../session/manager.js';
-import type { AgentResponse, MessagePromptOverrideMode, SubstrateMessage, TurnID, TurnRecord, TurnRecordToolCall, TurnUsage } from '../../../shared/contracts/runtime.js';
+import type { AgentResponse, MessagePromptOverrideMode, SubstrateMessage, TurnID, TurnRecord, TurnRecordAuditPrivacy, TurnRecordToolCall, TurnUsage } from '../../../shared/contracts/runtime.js';
 import type { TrustLevel } from '../../../system/trust/types.js';
 import { normalizeChannelPrivacy } from '../../../system/trust/context-envelope.js';
 import type { ChannelMeta } from '../../../system/trust/policy.js';
@@ -34,6 +34,39 @@ function resolveSessionChannelMeta(message: SubstrateMessage): ChannelMeta | und
   return {
     ...(message.isDirectMessage !== undefined ? { isDirectMessage: message.isDirectMessage } : {}),
     ...(privacyLevel ? { privacyLevel } : {}),
+  };
+}
+
+export function resolveTurnRecordAuditPrivacy(message: SubstrateMessage): TurnRecordAuditPrivacy {
+  const channelPrivacy = normalizeChannelPrivacy(message.routing?.channelPrivacy);
+  if (message.isDirectMessage === true) {
+    return {
+      schemaVersion: 1,
+      contentMode: 'emotional_signal_only',
+      ...(channelPrivacy ? { channelPrivacy } : {}),
+      reason: 'direct_message',
+    };
+  }
+  if (channelPrivacy === 'public' && message.isDirectMessage === false) {
+    return {
+      schemaVersion: 1,
+      contentMode: 'verbatim_public',
+      channelPrivacy,
+      reason: 'explicit_public_non_dm',
+    };
+  }
+  if (channelPrivacy) {
+    return {
+      schemaVersion: 1,
+      contentMode: 'emotional_signal_only',
+      channelPrivacy,
+      reason: 'non_public_channel',
+    };
+  }
+  return {
+    schemaVersion: 1,
+    contentMode: 'emotional_signal_only',
+    reason: 'missing_or_ambiguous_privacy',
   };
 }
 
@@ -228,6 +261,7 @@ export function buildTurnRecord(input: {
     completedAt: Math.max(input.startedAt, input.completedAt),
     status,
     ...(location ? { location } : {}),
+    auditPrivacy: resolveTurnRecordAuditPrivacy(input.message),
     userMessage: {
       role: input.speakerRole,
       content: input.persistedUserMessageContent ?? input.message.content,

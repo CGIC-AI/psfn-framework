@@ -1,7 +1,8 @@
 import { isRecord } from '../../shared/utils/types.js';
 import { join } from 'node:path';
 import { appendJsonLine, readJsonLines } from '../jsonl.js';
-import { CHANNEL_TYPES, type ChannelType, type TurnID, type TurnRecord, type TurnRecordLocation, type TurnRecordMessage, type TurnRecordToolCall, type TurnRecordVersionPointers } from '../../shared/contracts/runtime.js';
+import { CHANNEL_TYPES, type ChannelType, type TurnID, type TurnRecord, type TurnRecordAuditPrivacy, type TurnRecordLocation, type TurnRecordMessage, type TurnRecordToolCall, type TurnRecordVersionPointers } from '../../shared/contracts/runtime.js';
+import { isChannelPrivacy } from '../../system/trust/context-envelope.js';
 import { sanitizeChannelId } from './store-file-contracts.js';
 import { backfillLegacyTurnId, parseTurnId } from '../../core/turns/id.js';
 import type {
@@ -121,6 +122,46 @@ function parseOptionalLocation(value: unknown): TurnRecordLocation | undefined {
   return {
     ...(placeId ? { placeId } : {}),
     ...(satelliteId ? { satelliteId } : {}),
+  };
+}
+
+function parseOptionalAuditPrivacy(value: unknown): TurnRecordAuditPrivacy | undefined {
+  if (value === undefined) return undefined;
+  if (!isRecord(value)) {
+    throw new Error('TurnRecord field "auditPrivacy" must be an object');
+  }
+  if (value.schemaVersion !== 1) {
+    throw new Error('TurnRecord field "auditPrivacy.schemaVersion" must be 1');
+  }
+  const contentMode = value.contentMode;
+  if (contentMode !== 'verbatim_public' && contentMode !== 'emotional_signal_only') {
+    throw new Error('TurnRecord field "auditPrivacy.contentMode" is invalid');
+  }
+  const reason = value.reason;
+  const validReasons: TurnRecordAuditPrivacy['reason'][] = [
+    'explicit_public_non_dm',
+    'direct_message',
+    'non_public_channel',
+    'missing_or_ambiguous_privacy',
+  ];
+  if (!validReasons.includes(reason as TurnRecordAuditPrivacy['reason'])) {
+    throw new Error('TurnRecord field "auditPrivacy.reason" is invalid');
+  }
+  const channelPrivacy = value.channelPrivacy;
+  if (channelPrivacy !== undefined && !isChannelPrivacy(channelPrivacy)) {
+    throw new Error('TurnRecord field "auditPrivacy.channelPrivacy" is invalid');
+  }
+  if (
+    contentMode === 'verbatim_public'
+    && (channelPrivacy !== 'public' || reason !== 'explicit_public_non_dm')
+  ) {
+    throw new Error('TurnRecord auditPrivacy verbatim mode requires explicit public provenance');
+  }
+  return {
+    schemaVersion: 1,
+    contentMode,
+    ...(channelPrivacy ? { channelPrivacy } : {}),
+    reason: reason as TurnRecordAuditPrivacy['reason'],
   };
 }
 
@@ -424,6 +465,7 @@ function normalizeTurnRecord(raw: unknown, expectedChannelId: string): TurnRecor
   });
   const roleEnvelopeRefs = parseOptionalStringArray(raw.roleEnvelopeRefs, 'roleEnvelopeRefs');
   const location = parseOptionalLocation(raw.location);
+  const auditPrivacy = parseOptionalAuditPrivacy(raw.auditPrivacy);
 
   return {
     schemaVersion: TURN_RECORD_SCHEMA_VERSION,
@@ -435,6 +477,7 @@ function normalizeTurnRecord(raw: unknown, expectedChannelId: string): TurnRecor
     completedAt,
     status: status as TurnRecord['status'],
     ...(location ? { location } : {}),
+    ...(auditPrivacy ? { auditPrivacy } : {}),
     userMessage,
     ...(assistantMessage ? { assistantMessage } : {}),
     toolCalls,

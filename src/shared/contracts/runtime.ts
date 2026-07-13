@@ -77,6 +77,23 @@ export interface TurnRecordLocation {
   satelliteId?: string;
 }
 
+/**
+ * Write-time privacy decision for later introspection auditing. The audit
+ * runner never infers eligibility from legacy transcript text: only an
+ * explicitly public, non-DM turn may expose verbatim content. Every other
+ * shape is retained as emotional-signal-only and cannot be replayed.
+ */
+export interface TurnRecordAuditPrivacy {
+  schemaVersion: 1;
+  contentMode: 'verbatim_public' | 'emotional_signal_only';
+  channelPrivacy?: ChannelPrivacy;
+  reason:
+    | 'explicit_public_non_dm'
+    | 'direct_message'
+    | 'non_public_channel'
+    | 'missing_or_ambiguous_privacy';
+}
+
 export interface TurnRecord {
   schemaVersion: 1;
   turnId: TurnID;
@@ -88,6 +105,7 @@ export interface TurnRecord {
   status: 'completed' | 'failed';
   /** Durable satellite/place origin; absent on non-satellite (or unbound) turns. */
   location?: TurnRecordLocation;
+  auditPrivacy?: TurnRecordAuditPrivacy;
   userMessage: TurnRecordMessage;
   assistantMessage?: TurnRecordMessage;
   toolCalls: TurnRecordToolCall[];

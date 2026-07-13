@@ -117,7 +117,7 @@ function optionalText(value: string | undefined): string | undefined {
 }
 
 function normalizeTelemetryVisibility(
-  value: ModelUsageEventInput['telemetryVisibility'],
+  value: unknown,
 ): NonNullable<ModelUsageEvent['telemetryVisibility']> {
   if (value === undefined || value === 'operator_visible') return 'operator_visible';
   if (value === 'companion_private') return 'companion_private';

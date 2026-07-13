@@ -127,6 +127,7 @@ export interface SessionMessageRecordOptions {
   turnId?: TurnID;
   requestId?: string;
   sourceMessageId?: string;
+  replyToMessageId?: string;
   metadata?: string;
   roleEnvelopePreview?: SessionRoleEnvelopePreview;
   channelMeta?: ChannelMeta;

@@ -36,7 +36,10 @@ import {
   resolveEmotionalSalienceThreshold,
   resolveRoleName,
 } from './manager-primitives.js';
-import { resolveSessionEntryRoleEnvelopePreview } from './turn-provenance.js';
+import {
+  resolveSessionEntryRoleEnvelopePreview,
+  resolveSessionEntryTurnContext,
+} from './turn-provenance.js';
 import type { TranscriptSearchPort } from '../../persistence/sessions/transcript-search-port.js';
 
 function makeConfig(overrides?: Partial<SubstrateConfig>): SubstrateConfig {
@@ -861,6 +864,35 @@ describe('SessionManager', () => {
 
     await expect(searchableStore.searchByKeywords('quiet follow-up', 10)).resolves.toHaveLength(1);
     await expect(searchableStore.searchByKeywords(hiddenBody, 10)).resolves.toHaveLength(0);
+  });
+
+  it('persists room privacy and direct-reply lineage with the user turn', () => {
+    const mgr = new SessionManager(store, makeConfig());
+    const turnId = createTurnId();
+    mgr.recordUserMessage(
+      'companion-room:den',
+      'following up',
+      'comp-b',
+      'Companion B',
+      false,
+      undefined,
+      {
+        turnId,
+        requestId: 'req-room-reply',
+        sourceMessageId: 'msg-reply',
+        replyToMessageId: 'msg-opening',
+        channelMeta: { privacyLevel: 'private' },
+      },
+    );
+
+    const [entry] = store.getRecent('companion-room:den', 1);
+    expect(entry.channelVisibility).toBe('private');
+    expect(resolveSessionEntryTurnContext(entry)).toMatchObject({
+      turnId,
+      requestId: 'req-room-reply',
+      sourceMessageId: 'msg-reply',
+      replyToMessageId: 'msg-opening',
+    });
   });
 
   it('derives role-envelope refs from persisted preview metadata', () => {

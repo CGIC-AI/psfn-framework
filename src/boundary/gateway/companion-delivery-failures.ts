@@ -3,6 +3,8 @@ import { DEFAULT_COMPANION_PRESENCE_STALE_TTL_MS } from '../../core/agent/compan
 import type { CompanionDeliveryFailureReason } from './protocol.js';
 
 const DELIVERY_RECEIPT_TTL_MS = 60 * 60_000;
+/** Small grace for a reply generation that began while present and crossed staleness. */
+export const COMPANION_ROOM_STALE_REPLY_GRACE_MS = 2 * 60_000;
 const FAILURE_REASONS = new Set<CompanionDeliveryFailureReason>([
   'processing_failed',
   'reply_delivery_failed',
@@ -14,6 +16,11 @@ export interface CompanionDeliveryReceipt {
   senderCompanionId: string;
   recipientCompanionId: string;
   deliveredAt: number;
+  /** Room recipients only: exact accepted row at delivery time. */
+  roomPresence?: {
+    since: string;
+    updatedAt: string;
+  };
 }
 
 export interface CompanionMessageFailureReport {
@@ -63,11 +70,24 @@ export class CompanionDeliveryFailureReceipts {
     const key = receiptKey(replyingCompanionId, replyToMessageId);
     if (this.claimedRoomReplies.has(key)) return null;
     const receipt = this.receipts.get(key);
+    const presenceUpdatedAtMs = receipt?.roomPresence
+      ? Date.parse(receipt.roomPresence.updatedAt)
+      : Number.NaN;
+    const presenceSinceMs = receipt?.roomPresence
+      ? Date.parse(receipt.roomPresence.since)
+      : Number.NaN;
+    const staleAt = presenceUpdatedAtMs + DEFAULT_COMPANION_PRESENCE_STALE_TTL_MS;
     if (
       !receipt
       || receipt.channelId !== channelId
-      || receipt.deliveredAt > now
-      || receipt.deliveredAt < now - DEFAULT_COMPANION_PRESENCE_STALE_TTL_MS
+      || !Number.isFinite(presenceSinceMs)
+      || !Number.isFinite(presenceUpdatedAtMs)
+      || presenceSinceMs > presenceUpdatedAtMs
+      || presenceSinceMs > receipt.deliveredAt
+      || receipt.deliveredAt < presenceUpdatedAtMs
+      || receipt.deliveredAt > staleAt
+      || now <= staleAt
+      || now > staleAt + COMPANION_ROOM_STALE_REPLY_GRACE_MS
     ) {
       return null;
     }

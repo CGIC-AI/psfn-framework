@@ -800,7 +800,16 @@ describe('registerGatewayMessageHandlers', () => {
     const harness = createHarness({
       handleMessage: async () => makeResponse('companion reply'),
     });
-    const message = makeCompanionMessage({ timestamp: '2026-03-02T02:00:00.000Z' });
+    const message = makeCompanionMessage({
+      timestamp: '2026-03-02T02:00:00.000Z',
+      replyToMessageId: 'cmsg-opening',
+      routing: {
+        source: 'companion',
+        authorIsMachineIntelligence: true,
+        channelPrivacy: 'private',
+        room: { placeId: 'living_room', privacy: 'private' },
+      },
+    });
 
     await harness.onCompanionMessage(message);
 
@@ -816,6 +825,11 @@ describe('registerGatewayMessageHandlers', () => {
     // Timestamp deserialized before the turn pipeline sees it.
     const handled = harness.agentLoop.handleMessage.mock.calls[0][0] as SubstrateMessage;
     expect(handled.timestamp).toBeInstanceOf(Date);
+    expect(handled.replyToMessageId).toBe('cmsg-opening');
+    expect(handled.routing).toMatchObject({
+      channelPrivacy: 'private',
+      room: { placeId: 'living_room', privacy: 'private' },
+    });
     expect(harness.trackSessionActivity).toHaveBeenCalledTimes(1);
     // The reply never leaks onto another channel surface.
     expect(harness.gateway.discordSend).not.toHaveBeenCalled();

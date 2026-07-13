@@ -63,6 +63,12 @@ export interface CompanionPresenceReadPort {
   listByPlace(siteId: string, placeId: string): Promise<CompanionPresenceReadRow[]>;
 }
 
+/** Exact uninterrupted presence row captured for room delivery/reply proof. */
+export interface CompanionRoomPresenceProof {
+  since: string;
+  updatedAt: string;
+}
+
 export interface GatewayCompanionChannelLaneOptions {
   placesRegistry: Pick<PlacesRegistryConfig, 'places'>;
   presence: CompanionPresenceReadPort;
@@ -83,24 +89,38 @@ export interface CompanionDeliveryViolation {
 export type CompanionDeliveryResolution =
   | {
     ok: true;
-    kind: 'room' | 'dm';
+    kind: 'room';
     channelId: string;
+    placeId: string;
     recipients: string[];
-    /** Room only: the addressed place's privacy classification. */
-    roomPrivacy?: PlacePrivacy;
+    /** The addressed place's privacy classification. */
+    roomPrivacy: PlacePrivacy;
     /**
      * Private room only: present companions excluded because their window
      * opened after the message was minted (join race) or their row carried
      * no `since` (fail closed).
      */
     windowExcluded?: string[];
+    /**
+     * Room only: exact accepted recipient rows used by the gateway to mint a
+     * reply proof. Recipients without parseable row timestamps still receive
+     * public-room delivery but never gain a stale-presence reply capability.
+     */
+    recipientPresence: Record<string, CompanionRoomPresenceProof>;
+  }
+  | {
+    ok: true;
+    kind: 'dm';
+    channelId: string;
+    recipients: string[];
   }
   | { ok: false; violation: CompanionDeliveryViolation };
 
 export interface CompanionDeliveryResolveOptions {
   /**
-   * Epoch ms the message envelope is minted with. Private-room recipients
-   * whose `since` is after this instant are excluded. Defaults to now().
+   * Epoch ms the message envelope is minted with. This single timestamp drives
+   * sender/recipient freshness and private-room join-window checks so those
+   * decisions cannot disagree across separate clock reads. Defaults to now().
    */
   messageTimestampMs?: number;
   /**
@@ -108,7 +128,7 @@ export interface CompanionDeliveryResolveOptions {
    * after the sender's room presence went stale. Callers must never derive
    * this from an untrusted boolean in the agent payload.
    */
-  senderReplyAuthorized?: boolean;
+  senderReplyPresence?: CompanionRoomPresenceProof;
 }
 
 export class GatewayCompanionChannelLane {
@@ -169,28 +189,46 @@ export class GatewayCompanionChannelLane {
     }
 
     const roomPrivacy = resolvePlacePrivacy(place);
+    const referenceNowMs = options?.messageTimestampMs ?? this.now();
+    if (!Number.isFinite(referenceNowMs)) {
+      return violation(
+        'companion_room_message_timestamp_invalid',
+        'Companion-room delivery requires a finite message timestamp',
+        { senderCompanionId, channelId, messageTimestampMs: referenceNowMs },
+      );
+    }
     // Private rooms deliver presence-WINDOWED (psfn-framework-s10rm): the
     // recipient must have joined (their `since`) no later than the message
     // mint. Public rooms never consult `since` — byte-identical behavior.
     const windowCutoffMs = roomPrivacy === 'private'
-      ? options?.messageTimestampMs ?? this.now()
+      ? referenceNowMs
       : null;
-    if (windowCutoffMs !== null && !Number.isFinite(windowCutoffMs)) {
-      return violation(
-        'companion_room_message_timestamp_invalid',
-        'Private companion-room delivery requires a finite message timestamp',
-        { senderCompanionId, channelId, messageTimestampMs: windowCutoffMs },
-      );
-    }
 
     const rows = await this.presence.listByPlace(place.siteId, place.placeId);
-    const staleCutoffMs = this.now() - this.staleTtlMs;
+    const staleCutoffMs = referenceNowMs - this.staleTtlMs;
     const senderPresent = rows.some((row) => {
       if (row.companionId !== senderCompanionId) return false;
       const updatedAtMs = Date.parse(row.updatedAt);
       return Number.isFinite(updatedAtMs) && updatedAtMs >= staleCutoffMs;
     });
-    if (!senderPresent && options?.senderReplyAuthorized !== true) {
+    const senderReplyPresence = options?.senderReplyPresence;
+    const senderReplyCrossedFreshnessBoundary = !senderPresent
+      && senderReplyPresence !== undefined
+      && rows.some((row) => {
+        if (row.companionId !== senderCompanionId) return false;
+        const rowSinceMs = typeof row.since === 'string' ? Date.parse(row.since) : Number.NaN;
+        const rowUpdatedAtMs = Date.parse(row.updatedAt);
+        const proofSinceMs = Date.parse(senderReplyPresence.since);
+        const proofUpdatedAtMs = Date.parse(senderReplyPresence.updatedAt);
+        return Number.isFinite(rowSinceMs)
+          && Number.isFinite(rowUpdatedAtMs)
+          && Number.isFinite(proofSinceMs)
+          && Number.isFinite(proofUpdatedAtMs)
+          && rowUpdatedAtMs < staleCutoffMs
+          && rowSinceMs === proofSinceMs
+          && rowUpdatedAtMs === proofUpdatedAtMs;
+      });
+    if (!senderPresent && !senderReplyCrossedFreshnessBoundary) {
       return violation(
         'companion_room_sender_not_present',
         `Companion room sender "${senderCompanionId}" is not present at place "${place.placeId}"`,
@@ -199,6 +237,7 @@ export class GatewayCompanionChannelLane {
     }
     const recipients: string[] = [];
     const windowExcluded: string[] = [];
+    const recipientPresence: Record<string, CompanionRoomPresenceProof> = {};
     for (const row of rows) {
       if (row.companionId === senderCompanionId) continue; // never echo the sender
       const updatedAtMs = Date.parse(row.updatedAt);
@@ -214,13 +253,26 @@ export class GatewayCompanionChannelLane {
         }
       }
       recipients.push(row.companionId);
+      const sinceMs = typeof row.since === 'string' ? Date.parse(row.since) : Number.NaN;
+      if (
+        Number.isFinite(sinceMs)
+        && sinceMs <= updatedAtMs
+        && sinceMs <= referenceNowMs
+      ) {
+        recipientPresence[row.companionId] = {
+          since: new Date(sinceMs).toISOString(),
+          updatedAt: new Date(updatedAtMs).toISOString(),
+        };
+      }
     }
     return {
       ok: true,
       kind: 'room',
       channelId,
+      placeId: place.placeId,
       recipients,
       roomPrivacy,
+      recipientPresence,
       ...(roomPrivacy === 'private' ? { windowExcluded } : {}),
     };
   }

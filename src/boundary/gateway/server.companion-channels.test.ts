@@ -42,13 +42,23 @@ const STALE = new Date(NOW - 60 * 60_000).toISOString();
 const PLACES: PlacesRegistryConfig = {
   schemaVersion: 1,
   sites: [{ siteId: 'vhome', displayName: 'Virtual Home', kind: 'virtual' }],
-  places: [{
-    placeId: 'living_room',
-    siteId: 'vhome',
-    displayName: 'Living Room',
-    kind: 'virtual',
-    affordances: [],
-  }],
+  places: [
+    {
+      placeId: 'living_room',
+      siteId: 'vhome',
+      displayName: 'Living Room',
+      kind: 'virtual',
+      affordances: [],
+    },
+    {
+      placeId: 'den',
+      siteId: 'vhome',
+      displayName: 'Den',
+      kind: 'virtual',
+      privacy: 'private',
+      affordances: [],
+    },
+  ],
 };
 
 type MockConnection = {
@@ -136,6 +146,7 @@ function multiCompanion(): GatewayMultiCompanionConfig {
 function makeLane(input: {
   presenceRows?: Record<string, CompanionPresenceReadRow[]>;
   fleet?: string[];
+  now?: () => number;
 }): GatewayCompanionChannelLane {
   return new GatewayCompanionChannelLane({
     placesRegistry: PLACES,
@@ -143,7 +154,7 @@ function makeLane(input: {
       listByPlace: async (siteId, placeId) => input.presenceRows?.[`${siteId}/${placeId}`] ?? [],
     },
     fleetCompanionIds: new Set(input.fleet ?? []),
-    now: () => NOW,
+    now: input.now ?? (() => NOW),
   });
 }
 
@@ -280,6 +291,7 @@ describe('companion.message.send routing (W6)', () => {
       ...createMinimalOptions(),
       multiCompanion: multiCompanion(),
       companionChannels: lane,
+      companionChannelNow: () => NOW,
       auditStore,
     });
     const agentA = await connect();
@@ -333,19 +345,57 @@ describe('companion.message.send routing (W6)', () => {
     });
   });
 
-  it('requires sender presence but permits one verified reply after the sender row goes stale', async () => {
-    const auditStore = createMockAuditStore();
-    const presenceRows: Record<string, CompanionPresenceReadRow[]> = {
-      'vhome/living_room': [
-        { companionId: 'comp-a', updatedAt: FRESH },
-        { companionId: 'comp-b', updatedAt: FRESH },
-      ],
-    };
-    const lane = makeLane({ presenceRows });
+  it('stamps private room privacy and place metadata on the authoritative envelope', async () => {
+    const lane = makeLane({
+      presenceRows: {
+        'vhome/den': [
+          { companionId: 'comp-a', updatedAt: FRESH, since: new Date(NOW - 60_000).toISOString() },
+          { companionId: 'comp-b', updatedAt: FRESH, since: new Date(NOW - 60_000).toISOString() },
+        ],
+      },
+    });
     const { connect } = await setupServer({
       ...createMinimalOptions(),
       multiCompanion: multiCompanion(),
       companionChannels: lane,
+      companionChannelNow: () => NOW,
+    });
+    const agentA = await connect();
+    const agentB = await connect();
+    await identifyAgent(agentA, 'comp-a');
+    await identifyAgent(agentB, 'comp-b', 901);
+
+    const response = await invokeRpc(agentA, 11, 'companion.message.send', {
+      channelId: 'companion-room:den',
+      content: 'private room line',
+      companionId: 'comp-a',
+    });
+
+    expect(response.result.deliveredTo).toEqual(['comp-b']);
+    expect(methodFrames(agentB, 'companion.message')[0]?.params.message.routing).toMatchObject({
+      source: 'companion',
+      channelPrivacy: 'private',
+      room: { placeId: 'den', privacy: 'private' },
+    });
+  });
+
+  it('requires sender presence but permits one verified reply after the sender row goes stale', async () => {
+    const auditStore = createMockAuditStore();
+    let now = NOW;
+    const presenceSince = new Date(NOW - 60_000).toISOString();
+    const updatedAt = new Date(now).toISOString();
+    const presenceRows: Record<string, CompanionPresenceReadRow[]> = {
+      'vhome/living_room': [
+        { companionId: 'comp-a', updatedAt, since: presenceSince },
+        { companionId: 'comp-b', updatedAt, since: presenceSince },
+      ],
+    };
+    const lane = makeLane({ presenceRows, now: () => now });
+    const { connect } = await setupServer({
+      ...createMinimalOptions(),
+      multiCompanion: multiCompanion(),
+      companionChannels: lane,
+      companionChannelNow: () => now,
       auditStore,
     });
     const agentA = await connect();
@@ -360,9 +410,10 @@ describe('companion.message.send routing (W6)', () => {
     });
     expect(opening.result.deliveredTo).toEqual(['comp-b']);
 
+    now += 15 * 60_000 + 1;
     presenceRows['vhome/living_room'] = [
-      { companionId: 'comp-a', updatedAt: FRESH },
-      { companionId: 'comp-b', updatedAt: STALE },
+      { companionId: 'comp-a', updatedAt: new Date(now).toISOString(), since: presenceSince },
+      { companionId: 'comp-b', updatedAt, since: presenceSince },
     ];
     const reply = await invokeRpc(agentB, 14, 'companion.message.send', {
       channelId: 'companion-room:living_room',
@@ -371,6 +422,13 @@ describe('companion.message.send routing (W6)', () => {
       replyToMessageId: opening.result.messageId,
     });
     expect(reply.result.deliveredTo).toEqual(['comp-a']);
+    expect(methodFrames(agentA, 'companion.message').at(-1)?.params.message).toMatchObject({
+      replyToMessageId: opening.result.messageId,
+      routing: {
+        channelPrivacy: 'public',
+        room: { placeId: 'living_room', privacy: 'public' },
+      },
+    });
 
     const replay = await invokeRpc(agentB, 15, 'companion.message.send', {
       channelId: 'companion-room:living_room',
@@ -386,6 +444,33 @@ describe('companion.message.send routing (W6)', () => {
       companionId: 'comp-b',
     });
     expect(absentInitiation.error?.code).toBe(GatewayErrors.COMPANION_ROUTING_UNAVAILABLE);
+
+    now += 1;
+    presenceRows['vhome/living_room'] = [
+      { companionId: 'comp-a', updatedAt: new Date(now).toISOString(), since: presenceSince },
+      { companionId: 'comp-b', updatedAt: new Date(now).toISOString(), since: presenceSince },
+    ];
+    const secondOpening = await invokeRpc(agentA, 17, 'companion.message.send', {
+      channelId: 'companion-room:living_room',
+      content: 'one more question',
+      companionId: 'comp-a',
+    });
+    expect(secondOpening.result.deliveredTo).toEqual(['comp-b']);
+
+    now += 15 * 60_000 + 1;
+    presenceRows['vhome/living_room'] = [
+      { companionId: 'comp-a', updatedAt: new Date(now).toISOString(), since: presenceSince },
+      { companionId: 'comp-c', updatedAt: new Date(now).toISOString(), since: new Date(now).toISOString() },
+    ];
+    const afterLeave = await invokeRpc(agentB, 18, 'companion.message.send', {
+      channelId: 'companion-room:living_room',
+      content: 'must not reach the new occupant',
+      companionId: 'comp-b',
+      replyToMessageId: secondOpening.result.messageId,
+    });
+    expect(afterLeave.error?.code).toBe(GatewayErrors.COMPANION_ROUTING_UNAVAILABLE);
+    expect(methodFrames(agentA, 'companion.message')
+      .some(frame => frame.params.message.content === 'must not reach the new occupant')).toBe(false);
     await vi.waitFor(() => {
       expect(auditedEvents(auditStore)).toContain('gateway.companion.companion_room_sender_not_present');
     });

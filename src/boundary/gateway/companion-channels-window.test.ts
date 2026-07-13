@@ -39,14 +39,17 @@ const PLACES: PlacesRegistryConfig = {
   ],
 };
 
-function makeLane(rows: Record<string, CompanionPresenceReadRow[]>): GatewayCompanionChannelLane {
+function makeLane(
+  rows: Record<string, CompanionPresenceReadRow[]>,
+  now: () => number = () => NOW,
+): GatewayCompanionChannelLane {
   return new GatewayCompanionChannelLane({
     placesRegistry: PLACES,
     presence: {
       listByPlace: async (siteId, placeId) => rows[`${siteId}/${placeId}`] ?? [],
     },
     fleetCompanionIds: new Set(['comp-a', 'comp-b', 'comp-c']),
-    now: () => NOW,
+    now,
   });
 }
 
@@ -115,6 +118,22 @@ describe('private-room presence-windowed delivery (psfn-framework-s10rm)', () =>
     expect(resolution).toMatchObject({ ok: true, recipients: ['comp-b'], windowExcluded: ['comp-c'] });
   });
 
+  it('uses the supplied envelope timestamp as the single freshness clock', async () => {
+    const lane = makeLane({
+      'vhome/living_room': [
+        { companionId: 'comp-a', updatedAt: FRESH, since: JOINED_BEFORE_MINT },
+        { companionId: 'comp-b', updatedAt: FRESH, since: JOINED_BEFORE_MINT },
+      ],
+    }, () => NOW + 24 * 60 * 60_000);
+
+    await expect(lane.resolveDelivery('comp-a', 'companion-room:living_room', {
+      messageTimestampMs: NOW,
+    })).resolves.toMatchObject({
+      ok: true,
+      recipients: ['comp-b'],
+    });
+  });
+
   it('public rooms (default privacy) ignore since entirely — byte-identical recipients', async () => {
     const rows: CompanionPresenceReadRow[] = [
       { companionId: 'comp-a', updatedAt: FRESH, since: JOINED_BEFORE_MINT },
@@ -161,17 +180,75 @@ describe('private-room presence-windowed delivery (psfn-framework-s10rm)', () =>
   });
 
   it('allows an absent sender only through a gateway-verified stale-reply carveout', async () => {
-    const lane = makeLane({
+    let now = NOW;
+    const presenceSince = JOINED_BEFORE_MINT;
+    const rows = {
       'vhome/living_room': [
+        { companionId: 'comp-a', updatedAt: FRESH, since: presenceSince },
         { companionId: 'comp-b', updatedAt: FRESH },
       ],
-    });
+    };
+    const lane = makeLane(rows, () => now);
+    now += 15 * 60_000 + 1;
+    rows['vhome/living_room'][1] = {
+      companionId: 'comp-b',
+      updatedAt: new Date(now).toISOString(),
+    };
 
     await expect(lane.resolveDelivery('comp-a', 'companion-room:living_room', {
-      senderReplyAuthorized: true,
+      senderReplyPresence: { since: presenceSince, updatedAt: FRESH },
     })).resolves.toMatchObject({
       ok: true,
       recipients: ['comp-b'],
     });
+  });
+
+  it('rejects a reply proof after explicit leave or when it belongs to another presence window', async () => {
+    const proof = { since: JOINED_BEFORE_MINT, updatedAt: STALE };
+    const leftRoom = makeLane({
+      'vhome/living_room': [
+        { companionId: 'comp-b', updatedAt: FRESH },
+      ],
+    });
+    const differentWindow = makeLane({
+      'vhome/living_room': [
+        {
+          companionId: 'comp-a',
+          updatedAt: STALE,
+          since: new Date(Date.parse(JOINED_BEFORE_MINT) + 1).toISOString(),
+        },
+        { companionId: 'comp-b', updatedAt: FRESH },
+      ],
+    });
+
+    await expect(leftRoom.resolveDelivery('comp-a', 'companion-room:living_room', {
+      senderReplyPresence: proof,
+    })).resolves.toMatchObject({
+      ok: false,
+      violation: { event: 'companion_room_sender_not_present' },
+    });
+    await expect(differentWindow.resolveDelivery('comp-a', 'companion-room:living_room', {
+      senderReplyPresence: proof,
+    })).resolves.toMatchObject({
+      ok: false,
+      violation: { event: 'companion_room_sender_not_present' },
+    });
+  });
+
+  it('returns the exact accepted recipient presence rows for gateway reply receipts', async () => {
+    const lane = makeLane({
+      'vhome/living_room': [
+        { companionId: 'comp-a', updatedAt: FRESH, since: JOINED_BEFORE_MINT },
+        { companionId: 'comp-b', updatedAt: FRESH, since: JOINED_BEFORE_MINT },
+      ],
+    });
+
+    await expect(lane.resolveDelivery('comp-a', 'companion-room:living_room'))
+      .resolves.toMatchObject({
+        ok: true,
+        recipientPresence: {
+          'comp-b': { since: JOINED_BEFORE_MINT, updatedAt: FRESH },
+        },
+      });
   });
 });

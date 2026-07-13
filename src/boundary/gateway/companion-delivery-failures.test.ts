@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  COMPANION_ROOM_STALE_REPLY_GRACE_MS,
   CompanionDeliveryFailureReceipts,
   parseCompanionMessageFailureReport,
 } from './companion-delivery-failures.js';
@@ -57,6 +58,10 @@ describe('CompanionDeliveryFailureReceipts', () => {
       senderCompanionId: 'comp-a',
       recipientCompanionId: 'comp-b',
       deliveredAt: 1_000,
+      roomPresence: {
+        since: new Date(100).toISOString(),
+        updatedAt: new Date(1_000).toISOString(),
+      },
     });
 
     expect(receipts.claimRoomReply(
@@ -75,21 +80,49 @@ describe('CompanionDeliveryFailureReceipts', () => {
       'comp-b',
       'companion-room:living_room',
       'companion-reply-source',
-      1_001,
+      1_000 + 15 * 60_000,
+    )).toBeNull();
+    expect(receipts.claimRoomReply(
+      'comp-b',
+      'companion-room:living_room',
+      'companion-reply-source',
+      1_000 + 15 * 60_000 + 1,
     )).toMatchObject({ senderCompanionId: 'comp-a' });
     expect(receipts.claimRoomReply(
       'comp-b',
       'companion-room:living_room',
       'companion-reply-source',
-      1_002,
+      1_000 + 15 * 60_000 + 2,
     )).toBeNull();
   });
 
-  it('expires room reply authorization at the presence-staleness boundary', () => {
+  it('expires room reply authorization after the narrow post-staleness grace', () => {
     const receipts = new CompanionDeliveryFailureReceipts();
     receipts.record({
       channelId: 'companion-room:living_room',
       messageId: 'companion-old-reply-source',
+      senderCompanionId: 'comp-a',
+      recipientCompanionId: 'comp-b',
+      deliveredAt: 1_000,
+      roomPresence: {
+        since: new Date(100).toISOString(),
+        updatedAt: new Date(1_000).toISOString(),
+      },
+    });
+
+    expect(receipts.claimRoomReply(
+      'comp-b',
+      'companion-room:living_room',
+      'companion-old-reply-source',
+      1_000 + 15 * 60_000 + COMPANION_ROOM_STALE_REPLY_GRACE_MS + 1,
+    )).toBeNull();
+  });
+
+  it('never authorizes a room reply from a delivery without an accepted presence row', () => {
+    const receipts = new CompanionDeliveryFailureReceipts();
+    receipts.record({
+      channelId: 'companion-room:living_room',
+      messageId: 'companion-no-presence-proof',
       senderCompanionId: 'comp-a',
       recipientCompanionId: 'comp-b',
       deliveredAt: 1_000,
@@ -98,7 +131,25 @@ describe('CompanionDeliveryFailureReceipts', () => {
     expect(receipts.claimRoomReply(
       'comp-b',
       'companion-room:living_room',
-      'companion-old-reply-source',
+      'companion-no-presence-proof',
+      1_000 + 15 * 60_000 + 1,
+    )).toBeNull();
+
+    receipts.record({
+      channelId: 'companion-room:living_room',
+      messageId: 'companion-impossible-presence-proof',
+      senderCompanionId: 'comp-a',
+      recipientCompanionId: 'comp-b',
+      deliveredAt: 1_000,
+      roomPresence: {
+        since: new Date(1_001).toISOString(),
+        updatedAt: new Date(1_000).toISOString(),
+      },
+    });
+    expect(receipts.claimRoomReply(
+      'comp-b',
+      'companion-room:living_room',
+      'companion-impossible-presence-proof',
       1_000 + 15 * 60_000 + 1,
     )).toBeNull();
   });

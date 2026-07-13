@@ -231,6 +231,8 @@ export interface GatewayServerOptions {
    * and rejects every send.
    */
   companionChannels?: GatewayCompanionChannelLane;
+  /** Shared clock for companion room delivery/reply boundary tests. */
+  companionChannelNow?: () => number;
   /**
    * Gateway-process event bus. Carries the redacted `companion.*` relay
    * events: approval lifecycle emitted at the confirmation-queue choke
@@ -629,19 +631,21 @@ export class GatewayServer {
     // to the lane: private-room windowing (psfn-framework-s10rm) compares each
     // recipient's presence `since` against this exact instant, so the window
     // check and the delivered envelope can never disagree on the clock.
-    const mintedAt = new Date();
+    const mintedAt = new Date(this.options.companionChannelNow?.() ?? Date.now());
     const parsedChannel = parseCompanionChannelId(channelId);
-    const senderReplyAuthorized = parsedChannel?.kind === 'room' && replyToMessageId !== undefined
+    const senderReplyReceipt = parsedChannel?.kind === 'room' && replyToMessageId !== undefined
       ? this.companionDeliveryFailureReceipts.claimRoomReply(
         senderCompanionId,
         channelId,
         replyToMessageId,
         mintedAt.getTime(),
-      ) !== null
-      : false;
+      )
+      : null;
     const resolution = await lane.resolveDelivery(senderCompanionId, channelId, {
       messageTimestampMs: mintedAt.getTime(),
-      senderReplyAuthorized,
+      ...(senderReplyReceipt?.roomPresence
+        ? { senderReplyPresence: senderReplyReceipt.roomPresence }
+        : {}),
     });
     if (!resolution.ok) {
       this.alarmCompanionViolation(
@@ -673,7 +677,17 @@ export class GatewayServer {
       routing: {
         source: 'companion',
         authorIsMachineIntelligence: true,
+        ...(resolution.kind === 'room'
+          ? {
+            channelPrivacy: resolution.roomPrivacy,
+            room: {
+              placeId: resolution.placeId,
+              privacy: resolution.roomPrivacy,
+            },
+          }
+          : {}),
       },
+      ...(replyToMessageId ? { replyToMessageId } : {}),
     };
 
     this.refreshConnectionHealth();
@@ -703,12 +717,16 @@ export class GatewayServer {
         skippedOffline.push(recipientId);
         continue;
       }
+      const roomPresence = resolution.kind === 'room'
+        ? resolution.recipientPresence[recipientId]
+        : undefined;
       this.companionDeliveryFailureReceipts.record({
         channelId,
         messageId: message.id,
         senderCompanionId,
         recipientCompanionId: recipientId,
         deliveredAt: mintedAt.getTime(),
+        ...(roomPresence ? { roomPresence } : {}),
       });
       try {
         this.notifyOne(recipientConn, 'companion.message', { message });

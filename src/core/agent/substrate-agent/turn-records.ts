@@ -13,6 +13,7 @@ import { buildSessionMetadataWithEmotionState } from '../../emotion/session-meta
 import type { TurnToolSummary } from '../../../faculties/skills/reflection-nudge.js';
 import { normalizeRoleEnvelopeRefs } from '../../internal-role-envelopes/projections.js';
 import { normalizeToolArguments } from '../../../shared/tool-argument-normalization.js';
+import { resolveMessagePlaceId } from './message-location.js';
 
 const INTERNAL_SHARD_SOURCE_PARAM = '__psfnShardSource';
 const REASONING_PLACEHOLDER_VALUES = new Set(['none', 'null', 'n/a', 'na', 'nil', 'undefined']);
@@ -56,6 +57,9 @@ export function recordUserMessage(input: {
     turnId: input.turnId,
     requestId: input.requestId,
     sourceMessageId: input.message.id,
+    ...(input.message.replyToMessageId
+      ? { replyToMessageId: input.message.replyToMessageId }
+      : {}),
     channelMeta: resolveSessionChannelMeta(input.message),
     ...(intakeEnvelopes && intakeEnvelopes.length > 0 ? { intakeEnvelopes } : {}),
   };
@@ -204,11 +208,11 @@ export function buildTurnRecord(input: {
 
   const observability = cloneTurnObservabilityForRecord(input.turnObservability);
 
-  // Durable satellite/place origin. Fail-closed: only recorded when the turn
-  // actually carried a bound placeId (see satellite→place binding). Nothing is
-  // fabricated for non-satellite or unbound turns.
+  // Durable room/satellite place origin. Fail-closed: only recorded when the
+  // authoritative routing envelope carried a non-empty placeId.
   const satelliteRouting = input.message.routing?.satellite;
-  const boundPlaceId = satelliteRouting?.placeId?.trim();
+  const boundPlaceId = resolveMessagePlaceId(input.message);
+  const channelPrivacy = normalizeChannelPrivacy(input.message.routing?.channelPrivacy);
   const location = boundPlaceId
     ? {
       placeId: boundPlaceId,
@@ -228,6 +232,7 @@ export function buildTurnRecord(input: {
     completedAt: Math.max(input.startedAt, input.completedAt),
     status,
     ...(location ? { location } : {}),
+    ...(channelPrivacy ? { channelPrivacy } : {}),
     userMessage: {
       role: input.speakerRole,
       content: input.persistedUserMessageContent ?? input.message.content,
@@ -235,6 +240,9 @@ export function buildTurnRecord(input: {
       sourceMessageId: input.message.id,
       authorId: input.message.authorId,
       authorName: input.message.authorName,
+      ...(input.message.replyToMessageId
+        ? { replyToMessageId: input.message.replyToMessageId }
+        : {}),
       ...(input.userSessionEntryId != null ? { sessionEntryId: input.userSessionEntryId } : {}),
     },
     ...(assistantMessageContent

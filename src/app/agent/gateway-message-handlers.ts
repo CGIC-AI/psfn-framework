@@ -39,6 +39,11 @@ import type { RecordedCompanionSourceMessage } from '../../core/session/icp-deli
 
 const DUPLICATE_MESSAGE_WINDOW_MS = 2 * 60_000;
 const AGENT_BUSY_PATTERN = /already processing a prompt/i;
+const CANONICAL_COMPANION_ROUTING_KEYS = new Set([
+  'source',
+  'authorIsMachineIntelligence',
+  'icpCorrelation',
+]);
 
 interface QueuedDiscordMessage {
   message: SubstrateMessage;
@@ -72,13 +77,20 @@ function bindRecordedCompanionSourceEnvelope(
   recorded: RecordedCompanionSourceMessage,
 ): void {
   const incomingCorrelation = parseIcpConversationCorrelation(message.routing?.icpCorrelation);
+  const expectedIsDirectMessage = incomingCorrelation.surface === 'companion_dm';
+  const routingKeys = Object.keys(message.routing ?? {});
   if (!recorded.correlation
     || JSON.stringify(incomingCorrelation) !== JSON.stringify(recorded.correlation)
     || recorded.channelId !== message.channelId
     || recorded.sourceMessageId !== message.id
     || recorded.content !== message.content
     || recorded.authorId !== message.authorId
-    || recorded.authorName !== message.authorName) {
+    || recorded.authorName !== message.authorName
+    || message.channelType !== 'companion'
+    || message.isDirectMessage !== expectedIsDirectMessage
+    || message.routing?.source !== 'companion'
+    || message.routing.authorIsMachineIntelligence !== true
+    || routingKeys.some(key => !CANONICAL_COMPANION_ROUTING_KEYS.has(key))) {
     throw new Error('Companion replay envelope does not match its durable source entry');
   }
   const timestamp = new Date(recorded.timestampMs);
@@ -89,9 +101,23 @@ function bindRecordedCompanionSourceEnvelope(
   message.authorId = recorded.authorId;
   message.authorName = recorded.authorName;
   message.timestamp = timestamp;
+  message.channelType = 'companion';
+  message.isDirectMessage = expectedIsDirectMessage;
   message.routing = {
-    ...message.routing,
+    source: 'companion',
+    authorIsMachineIntelligence: true,
     icpCorrelation: recorded.correlation,
+  };
+}
+
+function bindCompanionRecoveryCorrelation(
+  message: SubstrateMessage,
+  correlation: IcpConversationCorrelation,
+): void {
+  message.routing = {
+    source: 'companion',
+    authorIsMachineIntelligence: true,
+    icpCorrelation: correlation,
   };
 }
 
@@ -859,7 +885,7 @@ export function registerGatewayMessageHandlers(
           message.channelId,
           message.id,
         );
-        if (recordedSource && message.routing?.icpCorrelation) {
+        if (recordedSource && (recordedSource.correlation || message.routing?.icpCorrelation)) {
           bindRecordedCompanionSourceEnvelope(message, recordedSource);
         }
       } catch (error) {
@@ -917,10 +943,10 @@ export function registerGatewayMessageHandlers(
                 !== JSON.stringify(recoveryResponse.metadata.icpCorrelation)) {
               throw new Error('Durable ICP recovery sources disagree on reply lineage');
             }
-            message.routing = {
-              ...message.routing,
-              icpCorrelation: recoveryResponse.metadata.icpCorrelation,
-            };
+            bindCompanionRecoveryCorrelation(
+              message,
+              recoveryResponse.metadata.icpCorrelation,
+            );
             const lifecycle = buildCompanionReplyDeliveryLifecycle(
               message,
               recoveryResponse,

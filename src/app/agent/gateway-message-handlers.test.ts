@@ -1240,6 +1240,20 @@ describe('registerGatewayMessageHandlers', () => {
     );
     const handled = restarted.agentLoop.handleMessage.mock.calls[0][0] as SubstrateMessage;
     expect(handled.timestamp).toEqual(new Date('2026-03-02T00:00:00.000Z'));
+    expect(handled).toMatchObject({
+      channelType: 'companion',
+      isDirectMessage: true,
+      routing: {
+        source: 'companion',
+        authorIsMachineIntelligence: true,
+        icpCorrelation: inboundIcpCorrelation,
+      },
+    });
+    expect(Object.keys(handled.routing ?? {}).sort()).toEqual([
+      'authorIsMachineIntelligence',
+      'icpCorrelation',
+      'source',
+    ]);
   });
 
   it('rejects a restart replay whose stable source id carries a changed durable envelope', async () => {
@@ -1268,6 +1282,58 @@ describe('registerGatewayMessageHandlers', () => {
         error: 'Companion replay envelope does not match its durable source entry',
       }),
     );
+  });
+
+  it.each([
+    ['channel type', { channelType: 'api' }],
+    ['DM flag', { isDirectMessage: false }],
+    ['routing source', {
+      routing: {
+        source: 'api',
+        authorIsMachineIntelligence: true,
+        icpCorrelation: inboundIcpCorrelation,
+      },
+    }],
+    ['machine-intelligence identity', {
+      routing: {
+        source: 'companion',
+        authorIsMachineIntelligence: false,
+        icpCorrelation: inboundIcpCorrelation,
+      },
+    }],
+    ['ICP correlation', {
+      routing: {
+        source: 'companion',
+        authorIsMachineIntelligence: true,
+      },
+    }],
+    ['extra trust routing', {
+      routing: {
+        source: 'companion',
+        authorIsMachineIntelligence: true,
+        channelPrivacy: 'public',
+        canonicalContactId: 'wrong-contact',
+        icpCorrelation: inboundIcpCorrelation,
+      },
+    }],
+  ])('rejects restart replay with changed canonical %s', async (_label, overrides) => {
+    const original = makeCorrelatedCompanionMessage();
+    const harness = createHarness({
+      config: { companionId: ICP_B } as SubstrateConfig,
+      findRecordedCompanionSourceMessage: async () => makeRecordedSource(original),
+    });
+
+    await harness.onCompanionMessage(makeCorrelatedCompanionMessage({
+      ...overrides,
+      timestamp: '2026-03-02T05:00:00.000Z',
+    }));
+
+    expect(harness.agentLoop.handleMessage).not.toHaveBeenCalled();
+    expect(harness.gateway.companionReportFailure).toHaveBeenCalledWith({
+      channelId: ICP_CHANNEL,
+      messageId: INBOUND_ICP_MESSAGE_ID,
+      reason: 'processing_failed',
+    });
   });
 
   it('owns a correlated envelope before awaiting durable recovery state', async () => {

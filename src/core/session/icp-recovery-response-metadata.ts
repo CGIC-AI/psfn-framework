@@ -3,8 +3,10 @@ import type {
   ResponseMetadata,
 } from '../../shared/contracts/runtime.js';
 import { parseIcpConversationCorrelation } from '../../shared/contracts/icp-autonomy.js';
+import { isRecord } from '../../shared/utils/types.js';
 import { parseTurnId } from '../turns/id.js';
 import {
+  buildInternalStateSnapshotRef,
   cloneInternalState,
   type InternalState,
 } from '../self-model/state.js';
@@ -26,6 +28,7 @@ import {
   parseFatigue,
   parsePendingSpend,
 } from './icp-recovery-fatigue-metadata.js';
+import { assertFatigueRecoveryBinding } from './icp-recovery-fatigue-binding.js';
 
 const METADATA_KEYS = new Set([
   'model',
@@ -310,6 +313,33 @@ export function parseIcpRecoveryResponseMetadata(value: unknown, label: string):
   if (!turnId || turnId !== correlation.turnId || requestId !== correlation.requestId) {
     throw new Error(`${label} does not match its durable ICP lineage`);
   }
+  const internalState = raw.internalState === undefined
+    ? undefined
+    : parseInternalState(raw.internalState, `${label}.internalState`);
+  const internalStateSnapshotRef = raw.internalStateSnapshotRef === undefined
+    ? undefined
+    : requireString(raw.internalStateSnapshotRef, `${label}.internalStateSnapshotRef`);
+  if ((internalState === undefined) !== (internalStateSnapshotRef === undefined)) {
+    throw new Error(`${label} internal state and snapshot reference must be a pair`);
+  }
+  if (internalState && internalStateSnapshotRef
+    && buildInternalStateSnapshotRef(internalState) !== internalStateSnapshotRef) {
+    throw new Error(`${label} snapshot reference does not match its internal state`);
+  }
+  const fatigue = raw.fatigue === undefined
+    ? undefined
+    : parseFatigue(raw.fatigue, `${label}.fatigue`);
+  const fatiguePendingSpend = raw.fatiguePendingSpend === undefined
+    ? undefined
+    : parsePendingSpend(raw.fatiguePendingSpend, `${label}.fatiguePendingSpend`);
+  assertFatigueRecoveryBinding({
+    fatigue,
+    pendingSpend: fatiguePendingSpend,
+    correlation,
+    turnId,
+    requestId,
+    label,
+  });
   return {
     model,
     inputTokens,
@@ -327,16 +357,11 @@ export function parseIcpRecoveryResponseMetadata(value: unknown, label: string):
           }),
         }
       : {}),
-    ...(raw.internalState !== undefined
-      ? { internalState: parseInternalState(raw.internalState, `${label}.internalState`) }
+    ...(internalState !== undefined
+      ? { internalState }
       : {}),
-    ...(raw.internalStateSnapshotRef !== undefined
-      ? {
-          internalStateSnapshotRef: requireString(
-            raw.internalStateSnapshotRef,
-            `${label}.internalStateSnapshotRef`,
-          ),
-        }
+    ...(internalStateSnapshotRef !== undefined
+      ? { internalStateSnapshotRef }
       : {}),
     ...(raw.metacognitiveFlags !== undefined
       ? {
@@ -365,16 +390,11 @@ export function parseIcpRecoveryResponseMetadata(value: unknown, label: string):
           ),
         }
       : {}),
-    ...(raw.fatigue !== undefined
-      ? { fatigue: parseFatigue(raw.fatigue, `${label}.fatigue`) }
+    ...(fatigue !== undefined
+      ? { fatigue }
       : {}),
-    ...(raw.fatiguePendingSpend !== undefined
-      ? {
-          fatiguePendingSpend: parsePendingSpend(
-            raw.fatiguePendingSpend,
-            `${label}.fatiguePendingSpend`,
-          ),
-        }
+    ...(fatiguePendingSpend !== undefined
+      ? { fatiguePendingSpend }
       : {}),
   };
 }

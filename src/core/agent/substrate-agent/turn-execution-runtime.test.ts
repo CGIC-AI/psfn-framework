@@ -53,6 +53,7 @@ import { runMoaTurn } from './moa-turn.js';
 import { buildTurnUserContent } from './vision-attachments.js';
 import { makeTestFatiguePolicyConfig } from '../../../test-support/charge-policy.js';
 import { backfillLegacyTurnId } from '../../turns/id.js';
+import { parseIcpRecoveryResponse } from '../../session/icp-delivery-recovery.js';
 
 vi.mock('./moa-turn.js', async () => {
   const actual = await vi.importActual<typeof import('./moa-turn.js')>('./moa-turn.js');
@@ -1205,6 +1206,20 @@ describe('handleMessageForTurn fatigue enforcement', () => {
       correlation: { turnId: correlation.turnId },
     });
     if (!durableResponse) throw new Error('test expected durable recovery response');
+    const parsedDurableResponse = parseIcpRecoveryResponse(durableResponse, {
+      label: 'runtime durable recovery response',
+      expectedChannelId: channelId,
+      expectedSourceMessageId: correlation.messageId,
+    });
+    expect(parsedDurableResponse).toMatchObject({
+      content: durableResponse.content,
+      channelId,
+      metadata: {
+        internalStateSnapshotRef: durableResponse.metadata.internalStateSnapshotRef,
+        fatigue: durableResponse.metadata.fatigue,
+        fatiguePendingSpend: durableResponse.metadata.fatiguePendingSpend,
+      },
+    });
 
     const recovered = await handleMessageForTurn(runtime, message, {
       recoveredResponse: durableResponse,

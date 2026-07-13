@@ -197,6 +197,43 @@ describe('ICP L0 restart continuity', () => {
     ]);
   });
 
+  it('fails closed after restart when durable recovery state has a detached snapshot reference', () => {
+    const root = mkdtempSync(join(tmpdir(), 'psfn-icp-detached-recovery-state-'));
+    roots.push(root);
+    const sender = manager(root, 'sender');
+
+    sender.recordAssistantMessage(
+      CHANNEL,
+      recoveryResponse.content,
+      'contact-nova',
+      true,
+      'contact-nova',
+      {
+        turnId: correlation.turnId as TurnID,
+        requestId: SOURCE_ID,
+        sourceMessageId: SOURCE_ID,
+        metadata: buildSessionMetadataWithIcpCorrelation(
+          undefined,
+          correlation,
+          {
+            deliveryStatus: 'pending',
+            recoveryResponse: {
+              ...recoveryResponse,
+              metadata: {
+                ...recoveryResponse.metadata,
+                internalStateSnapshotRef: 'internal-state-v1:detached',
+              },
+            },
+          },
+        ),
+      },
+    );
+
+    const restarted = manager(root, 'sender');
+    expect(() => restarted.findRecordedIcpInitiation(CHANNEL, SOURCE_ID))
+      .toThrow(/internal state and snapshot reference must be a pair/i);
+  });
+
   it('fails closed on the newest malformed observation instead of using older delivery truth', () => {
     const root = mkdtempSync(join(tmpdir(), 'psfn-icp-malformed-observation-'));
     roots.push(root);

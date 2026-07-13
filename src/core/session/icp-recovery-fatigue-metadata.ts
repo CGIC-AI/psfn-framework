@@ -462,6 +462,7 @@ export function parsePendingSpend(value: unknown, label: string): FatiguePending
     'triggering_author_not_machine_intelligence',
   ], `${label}.reason`);
   const amount = requireFinite(raw.amount, `${label}.amount`);
+  const timestampMs = requireFinite(raw.timestampMs, `${label}.timestampMs`);
   const scope = parseScope(raw.scope, `${label}.scope`);
   const peer = parsePeer(raw.peer, `${label}.peer`);
   const triggeringAuthor = parseActor(raw.triggeringAuthor, `${label}.triggeringAuthor`);
@@ -482,6 +483,7 @@ export function parsePendingSpend(value: unknown, label: string): FatiguePending
   const correlation = parseCorrelation(raw.correlation, `${label}.correlation`);
   if (!correlation.turnId
     || (correlation.channelId !== undefined && correlation.channelId !== scope.channelId)
+    || scope.dayKey !== new Date(timestampMs).toISOString().slice(0, 10)
     || limits.softLimit > limits.hardLimit
     || (decision === 'free' && amount !== 0)
     || (decision !== 'free' && amount <= 0)) {
@@ -497,7 +499,7 @@ export function parsePendingSpend(value: unknown, label: string): FatiguePending
   if (!reasonMatches) throw new Error(`${label}.reason does not match its decision`);
   return {
     schemaVersion: 1,
-    timestampMs: requireFinite(raw.timestampMs, `${label}.timestampMs`),
+    timestampMs,
     decision,
     reason,
     amount,

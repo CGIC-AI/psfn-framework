@@ -1,0 +1,65 @@
+import type { IcpConversationCorrelation } from '../../shared/contracts/icp-autonomy.js';
+import type {
+  FatigueEnforcementMetadata,
+  FatiguePendingSpendMetadata,
+} from '../../shared/contracts/runtime.js';
+
+function sameJson(left: unknown, right: unknown): boolean {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
+function expectedFatigueDecision(
+  fatigue: FatigueEnforcementMetadata,
+): IcpConversationCorrelation['fatigueDecision'] {
+  if (fatigue.decision === 'suppressed_hard_exhausted') return 'suppress';
+  if (fatigue.decision === 'overcharge_charged') return 'allow_overcharge';
+  return 'allow';
+}
+
+export function assertFatigueRecoveryBinding(input: {
+  fatigue: FatigueEnforcementMetadata | undefined;
+  pendingSpend: FatiguePendingSpendMetadata | undefined;
+  correlation: IcpConversationCorrelation;
+  turnId: string;
+  requestId: string;
+  label: string;
+}): void {
+  const { fatigue, pendingSpend, correlation, turnId, requestId, label } = input;
+  if (!fatigue) {
+    if (pendingSpend) throw new Error(`${label}.fatigue binding requires enforcement metadata`);
+    return;
+  }
+  if (fatigue.scope.localCompanionId !== correlation.localCompanionId
+    || fatigue.scope.peerContactId !== correlation.peerContactId
+    || fatigue.scope.channelId !== correlation.channelId
+    || fatigue.peer.contactId !== correlation.peerContactId
+    || correlation.fatigueDecision !== expectedFatigueDecision(fatigue)) {
+    throw new Error(`${label}.fatigue binding does not match its ICP correlation`);
+  }
+  if (fatigue.shouldRecordSpend !== (pendingSpend !== undefined)) {
+    throw new Error(`${label}.fatigue binding does not match pending spend ownership`);
+  }
+  if (!pendingSpend) return;
+
+  const pendingCorrelation = pendingSpend.correlation;
+  if (pendingSpend.scope.localCompanionId !== correlation.localCompanionId
+    || pendingSpend.scope.peerContactId !== correlation.peerContactId
+    || pendingSpend.scope.channelId !== correlation.channelId
+    || pendingSpend.scope.dayKey !== fatigue.scope.dayKey
+    || pendingSpend.peer.contactId !== correlation.peerContactId
+    || pendingCorrelation.turnId !== turnId
+    || pendingCorrelation.requestId !== requestId
+    || pendingCorrelation.channelId !== correlation.channelId
+    || !sameJson(pendingCorrelation.icpCorrelation, correlation)
+    || pendingSpend.decision !== fatigue.spendDecision
+    || pendingSpend.reason !== fatigue.spendReason
+    || pendingSpend.amount !== fatigue.budget.amount
+    || !sameJson(pendingSpend.scope, fatigue.scope)
+    || !sameJson(pendingSpend.peer, fatigue.peer)
+    || !sameJson(pendingSpend.triggeringAuthor, fatigue.triggeringAuthor)
+    || pendingSpend.limits.softLimit !== fatigue.budget.softLimit
+    || pendingSpend.limits.hardLimit !== fatigue.budget.hardLimit
+    || pendingSpend.limits.overchargeLimit !== fatigue.budget.overchargeAllowance) {
+    throw new Error(`${label}.fatigue binding does not match its executable pending spend`);
+  }
+}

@@ -34,6 +34,7 @@ async def _run_esphome_runtime(
     agent = PsfnStreamingProvider(
         api_base_url=config.psfn_api_base_url,
         api_key=config.psfn_api_key,
+        provider_name=config.psfn_provider,
         model_name=config.psfn_model,
         author_id=config.psfn_author_id,
         author_name=config.psfn_author_name,
@@ -115,6 +116,7 @@ async def _run_realtime_runtime(
         elevenlabs_model_id=config.elevenlabs_model_id,
         psfn_api_base_url=config.psfn_api_base_url,
         psfn_api_key=config.psfn_api_key,
+        psfn_provider=config.psfn_provider,
         psfn_model=config.psfn_model,
         psfn_author_id=config.psfn_author_id,
         psfn_author_name=config.psfn_author_name,
@@ -138,6 +140,8 @@ async def _run_runtime(project_root: Path) -> None:
 
     typer.echo(f"Device transport: {config.device_transport}")
     typer.echo(f"PSFN API base: {config.psfn_api_base_url}")
+    if config.psfn_provider:
+        typer.echo(f"PSFN provider override: {config.psfn_provider}")
     typer.echo(f"PSFN model: {config.psfn_model}")
     if config.psfn_author_id and config.psfn_author_name:
         typer.echo(f"PSFN author assertion: {config.psfn_author_name} ({config.psfn_author_id})")

@@ -265,7 +265,8 @@ Important settings for the Python ESPHome fallback path:
 - `ELEVENLABS_API_KEY`
 - `PSFN_API_BASE_URL`
 - `PSFN_API_KEY`
-- `PSFN_MODEL`
+- `PSFN_PROVIDER` optionally selects an explicit provider while retaining PSFN's full companion prompt pipeline
+- `PSFN_MODEL`; with `PSFN_PROVIDER` set, this may be a provider model/variant such as `z-ai/glm-5.2:nitro`
 - `PSFN_CLAIM_NAMESPACE` and `PSFN_CLAIM_TYPE` for the registry claim namespace/type, defaulting to `satellite.endpoint` and the selected capability profile
 - `PSFN_CAPABILITY_PROFILE` for the current endpoint class: `voice-only`, `text-only`, `voxta-avatar`, `vision-capable`, `telemetry-only`, or `mobile-location`
 - `PSFN_SATELLITE_ID`, `PSFN_ENDPOINT_ID`, and `PSFN_ENDPOINT_NAME` for the configured endpoint identity

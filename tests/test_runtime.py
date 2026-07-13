@@ -19,6 +19,7 @@ def test_load_runtime_config_reads_psfn_and_project_env(tmp_path: Path, monkeypa
         "AUDIO_PUBLIC_HOST",
         "PSFN_API_BASE_URL",
         "PSFN_API_KEY",
+        "PSFN_PROVIDER",
         "PSFN_MODEL",
         "PSFN_CLAIM_NAMESPACE",
         "PSFN_CLAIM_TYPE",
@@ -46,6 +47,7 @@ def test_load_runtime_config_reads_psfn_and_project_env(tmp_path: Path, monkeypa
         "DEEPGRAM_API_KEY=project-deepgram\n"
         "ELEVENLABS_API_KEY=project-eleven\n"
         "PSFN_API_BASE_URL=http://psfn.example:3100/v1\n"
+        "PSFN_PROVIDER=openrouter\n"
         "PSFN_MODEL=psfn\n",
         encoding="utf-8",
     )
@@ -60,6 +62,7 @@ def test_load_runtime_config_reads_psfn_and_project_env(tmp_path: Path, monkeypa
     assert config.audio_public_host == "voice.example"
     assert config.psfn_api_base_url == "http://psfn.example:3100/v1"
     assert config.psfn_api_key is None
+    assert config.psfn_provider == "openrouter"
     assert config.psfn_model == "psfn"
     assert config.psfn_satellite_claim.namespace == "satellite.endpoint"
     assert config.psfn_satellite_claim.channel_type == "satellite.endpoint"
@@ -84,6 +87,7 @@ def test_load_runtime_config_supports_realtime_mode_without_esphome_target(tmp_p
         "REALTIME_VOICE_PUBLIC_HOST",
         "PSFN_API_BASE_URL",
         "PSFN_API_KEY",
+        "PSFN_PROVIDER",
         "PSFN_MODEL",
         "PSFN_CLAIM_NAMESPACE",
         "PSFN_CLAIM_TYPE",
@@ -131,6 +135,7 @@ def test_load_runtime_config_reads_satellite_claim_and_cert_settings(tmp_path: P
         "ELEVENLABS_API_KEY",
         "AUDIO_PUBLIC_HOST",
         "PSFN_API_BASE_URL",
+        "PSFN_PROVIDER",
         "PSFN_MODEL",
         "PSFN_CLAIM_NAMESPACE",
         "PSFN_CLAIM_TYPE",

@@ -116,3 +116,57 @@ async def test_psfn_streaming_provider_streams_deltas_and_persists_history() -> 
 
     await provider.aclose()
     await client.aclose()
+
+
+@pytest.mark.anyio
+async def test_provider_override_keeps_full_companion_prompt_pipeline() -> None:
+    requests: list[dict[str, object]] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(json.loads(request.content.decode("utf-8")))
+        return httpx.Response(
+            200,
+            content=(
+                'data: {"choices":[{"delta":{"content":"Fast"},"finish_reason":null}]}\n\n'
+                "data: [DONE]\n\n"
+            ).encode("utf-8"),
+            headers={"Content-Type": "text/event-stream"},
+            request=request,
+        )
+
+    client = httpx.AsyncClient(
+        base_url="http://psfn.test/v1",
+        transport=httpx.MockTransport(handler),
+    )
+    provider = PsfnStreamingProvider(
+        api_base_url="http://psfn.test/v1",
+        api_key=None,
+        provider_name="openrouter",
+        model_name="z-ai/glm-5.2:nitro",
+        claim_config=normalize_claim_config(
+            capability_profile="voice-only",
+            satellite_id="bedroom",
+            endpoint_id="waveshare-bedroom",
+            display_name="Purrsephone Bedroom",
+        ),
+        client=client,
+    )
+
+    chunks = [chunk async for chunk in provider.stream_reply(text="hello", conversation_id="bedroom")]
+
+    assert chunks == ["Fast"]
+    assert len(requests) == 1
+    payload = requests[0]
+    assert payload["provider"] == "openrouter"
+    assert payload["model"] == "z-ai/glm-5.2:nitro"
+    assert payload["stream"] is True
+    assert payload["max_tokens"] == 80
+    assert payload["system_prompt_mode"] == "default"
+    assert payload["response_style"] == "concise"
+    assert payload["user"] == "bedroom"
+    assert payload["messages"] == [{"role": "user", "content": "hello"}]
+    assert payload["satellite_claim"]["claim"]["channelId"] == "satellite.endpoint:bedroom"
+    assert "system_prompt" not in payload
+
+    await provider.aclose()
+    await client.aclose()

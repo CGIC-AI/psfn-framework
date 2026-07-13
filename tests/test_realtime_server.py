@@ -85,6 +85,7 @@ async def test_realtime_connection_streams_text_and_audio(monkeypatch, tmp_path:
         elevenlabs_model_id="model",
         psfn_api_base_url="http://127.0.0.1:3100/v1",
         psfn_api_key=None,
+        psfn_provider=None,
         psfn_model="model",
         psfn_author_id=None,
         psfn_author_name=None,

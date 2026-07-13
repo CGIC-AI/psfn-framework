@@ -56,6 +56,7 @@ class _RealtimeConnection:
         elevenlabs_model_id: str,
         psfn_api_base_url: str,
         psfn_api_key: str | None,
+        psfn_provider: str | None,
         psfn_model: str,
         psfn_author_id: str | None,
         psfn_author_name: str | None,
@@ -75,6 +76,7 @@ class _RealtimeConnection:
         self._agent = PsfnStreamingProvider(
             api_base_url=psfn_api_base_url,
             api_key=psfn_api_key,
+            provider_name=psfn_provider,
             model_name=psfn_model,
             author_id=psfn_author_id,
             author_name=psfn_author_name,
@@ -435,6 +437,7 @@ class RealtimeVoiceServer:
         elevenlabs_model_id: str,
         psfn_api_base_url: str,
         psfn_api_key: str | None,
+        psfn_provider: str | None,
         psfn_model: str,
         psfn_author_id: str | None,
         psfn_author_name: str | None,
@@ -452,6 +455,7 @@ class RealtimeVoiceServer:
         self._elevenlabs_model_id = elevenlabs_model_id
         self._psfn_api_base_url = psfn_api_base_url
         self._psfn_api_key = psfn_api_key
+        self._psfn_provider = psfn_provider
         self._psfn_model = psfn_model
         self._psfn_author_id = psfn_author_id
         self._psfn_author_name = psfn_author_name
@@ -488,6 +492,7 @@ class RealtimeVoiceServer:
             elevenlabs_model_id=self._elevenlabs_model_id,
             psfn_api_base_url=self._psfn_api_base_url,
             psfn_api_key=self._psfn_api_key,
+            psfn_provider=self._psfn_provider,
             psfn_model=self._psfn_model,
             psfn_author_id=self._psfn_author_id,
             psfn_author_name=self._psfn_author_name,

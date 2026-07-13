@@ -33,6 +33,7 @@ class PsfnStreamingProvider:
         *,
         api_base_url: str,
         model_name: str,
+        provider_name: str | None = None,
         api_key: str | None = None,
         author_id: str | None = None,
         author_name: str | None = None,
@@ -64,6 +65,7 @@ class PsfnStreamingProvider:
         self._owns_client = client is None
         self._request_headers = headers
         self._model_name = model_name
+        self._provider_name = (provider_name or "").strip().lower() or None
         self._author_id = author_id.strip() if author_id else None
         self._author_name = author_name.strip() if author_name else None
         self._history_by_conversation: dict[str, list[dict[str, str]]] = {}
@@ -196,12 +198,16 @@ class PsfnStreamingProvider:
             "messages": messages,
             "stream": stream,
             "max_tokens": 80,
-            "system_prompt_mode": "custom",
-            "system_prompt": _DEFAULT_SYSTEM_PROMPT,
             "response_style": "concise",
             "user": conversation_id,
             "satellite_claim": satellite_claim,
         }
+        if self._provider_name:
+            payload["provider"] = self._provider_name
+            payload["system_prompt_mode"] = "default"
+        else:
+            payload["system_prompt_mode"] = "custom"
+            payload["system_prompt"] = _DEFAULT_SYSTEM_PROMPT
         return payload
 
     def _build_satellite_claim(self, conversation_id: str) -> dict[str, object]:

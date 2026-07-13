@@ -75,6 +75,7 @@ class HubRuntimeConfig:
     elevenlabs_model_id: str
     psfn_api_base_url: str
     psfn_api_key: str | None
+    psfn_provider: str | None
     psfn_model: str
     psfn_author_id: str | None
     psfn_author_name: str | None
@@ -149,6 +150,7 @@ def load_runtime_config(project_root: Path) -> HubRuntimeConfig:
 
     psfn_api_base_url = os.getenv("PSFN_API_BASE_URL", "http://127.0.0.1:3100/v1").strip()
     psfn_api_key = os.getenv("PSFN_API_KEY") or None
+    psfn_provider = (os.getenv("PSFN_PROVIDER") or "").strip().lower() or None
     psfn_model = os.getenv("PSFN_MODEL", "psfn").strip()
     psfn_author_id = os.getenv("PSFN_AUTHOR_ID") or None
     psfn_author_name = os.getenv("PSFN_AUTHOR_NAME") or None
@@ -179,6 +181,7 @@ def load_runtime_config(project_root: Path) -> HubRuntimeConfig:
         elevenlabs_model_id=os.getenv("ELEVENLABS_MODEL_ID", "eleven_flash_v2_5"),
         psfn_api_base_url=psfn_api_base_url,
         psfn_api_key=psfn_api_key,
+        psfn_provider=psfn_provider,
         psfn_model=psfn_model,
         psfn_author_id=psfn_author_id,
         psfn_author_name=psfn_author_name,
